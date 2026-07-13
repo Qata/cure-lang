@@ -50,9 +50,10 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
         syntax one becomes 42
         syntax liftit <name: ModuleName> <body: raw until dedent> becomes lift module name
           behaviour GenServer
+          callback init(arg: Int) -> arg
           body
       liftit Cure.Generated.Worker
-        fn init(arg: Int) -> Int = one
+        fn helper(arg: Int) -> Int = one
     """
 
     assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
@@ -60,7 +61,7 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
     assert {:lift_module, meta, []} = List.last(children)
     assert meta[:module] == "Cure.Generated.Worker"
     assert [{:function_def, function_meta, [{:literal, _, 42}]}] = meta[:declarations]
-    assert function_meta[:name] == "init"
+    assert function_meta[:name] == "helper"
   end
 
   test "a transparent macro can compile a parsed raw body splice" do
@@ -70,9 +71,10 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
         syntax one becomes 42
         syntax liftit <name: ModuleName> <body: raw until dedent> becomes lift module name
           behaviour GenServer
+          callback init(arg: Int) -> arg
           body
       liftit Cure.Generated.Worker
-        fn init(arg: Int) -> Int = one
+        fn helper(arg: Int) -> Int = one
     """
 
     assert {:ok, main} = Cure.Compiler.compile_and_load(source, emit_events: false)
@@ -135,10 +137,20 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
       {:container, [],
        [
          {:lift_module,
-          [module: "Cure.A", behaviour: :GenServer, callbacks: [], declarations: [{:import, [source: "Cure.B"], []}]],
+          [
+            module: "Cure.A",
+            behaviour: :GenServer,
+            callbacks: [%{name: :init, arity: 1}],
+            declarations: [{:import, [source: "Cure.B"], []}]
+          ],
           []},
          {:lift_module,
-          [module: "Cure.B", behaviour: :GenServer, callbacks: [], declarations: [{:import, [source: "Cure.A"], []}]],
+          [
+            module: "Cure.B",
+            behaviour: :GenServer,
+            callbacks: [%{name: :init, arity: 1}],
+            declarations: [{:import, [source: "Cure.A"], []}]
+          ],
           []}
        ]}
 

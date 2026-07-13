@@ -26,6 +26,13 @@ defmodule Cure.Compiler.OtpMacroTest do
     assert {:error, {:unknown_behaviour, :Other}} = OtpMacro.validate_callbacks(:Other, [])
   end
 
+  test "lifted modules enforce required callbacks for each behaviour" do
+    assert {:error, {:missing_callback, :init, :GenServer}} =
+             OtpMacro.validate_required_callbacks(:GenServer, [])
+
+    assert :ok = OtpMacro.validate_required_callbacks(:GenServer, [%{name: :init, arity: 1}])
+  end
+
   test "callback constructors are closed and callback values retain quoted bodies" do
     assert {:ok, constructors} = OtpMacro.callback_constructors(:GenServer)
     assert %{name: :handle_call, arity: 3, constructor: :HandleCall} in constructors
@@ -43,7 +50,12 @@ defmodule Cure.Compiler.OtpMacroTest do
              OtpMacro.lift_module("Generated", :Supervisor, [], [])
 
     assert {:error, :invalid_lift_declaration} =
-             OtpMacro.lift_module("Cure.Generated.Supervisor", :Supervisor, [], [:not_a_declaration])
+             OtpMacro.lift_module(
+               "Cure.Generated.Supervisor",
+               :Supervisor,
+               [%{name: :init, arity: 1}],
+               [:not_a_declaration]
+             )
   end
 
   test "supervisor builder emits a pure validated init callback module value" do

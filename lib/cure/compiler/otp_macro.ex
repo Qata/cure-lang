@@ -28,6 +28,13 @@ defmodule Cure.Compiler.OtpMacro do
     }
   }
 
+  @required_callbacks %{
+    GenStatem: [:callback_mode, :init, :handle_event],
+    GenServer: [:init],
+    Supervisor: [:init],
+    Application: [:start, :stop]
+  }
+
   @type callback :: %{
           name: atom(),
           arity: non_neg_integer(),
@@ -85,6 +92,19 @@ defmodule Cure.Compiler.OtpMacro do
     end
   end
 
+  @doc "Validate the required portion of one closed OTP behavior contract."
+  @spec validate_required_callbacks(atom(), [map()]) :: :ok | {:error, term()}
+  def validate_required_callbacks(behaviour, callbacks) when is_list(callbacks) do
+    with {:ok, _signatures} <- callback_signatures(behaviour) do
+      present = MapSet.new(callbacks, &Map.get(&1, :name))
+
+      case Enum.find(Map.fetch!(@required_callbacks, behaviour), &(not MapSet.member?(present, &1))) do
+        nil -> :ok
+        missing -> {:error, {:missing_callback, missing, behaviour}}
+      end
+    end
+  end
+
   @spec lift_module(String.t(), atom(), [map()], [tuple()], keyword()) :: {:ok, map()} | {:error, term()}
   def lift_module(name, behaviour, callbacks, declarations)
       when is_binary(name) and is_list(callbacks) and is_list(declarations) do
@@ -98,6 +118,7 @@ defmodule Cure.Compiler.OtpMacro do
 
     with :ok <- validate_module_name(name),
          :ok <- validate_callbacks(behaviour, callbacks),
+         :ok <- validate_required_callbacks(behaviour, callbacks),
          :ok <- validate_declarations(declarations),
          :ok <- validate_imports(imports) do
       {:ok,

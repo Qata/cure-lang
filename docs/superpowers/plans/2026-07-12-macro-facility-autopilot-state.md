@@ -1083,9 +1083,11 @@ proof gate validates `lift_module` as a closed checked value and uses a
 validated `ModuleName` filler category for generated proofs. Lifted module
 imports now carry dependency metadata; generated units are deterministically
 topologically ordered, generated-module cycles are rejected before emission,
-and source provenance is retained on each quoted module. Remaining Phase 2
-work is richer provenance chains, quoted-syntax opacity, delayed callback
-context, and transparent replacement of the OTP marker path.
+and source provenance is retained on each quoted module. Required callbacks
+are validated against the closed behavior vocabulary before ordinary module
+emission. Remaining Phase 2 work is richer provenance chains, quoted-syntax
+opacity, delayed callback context, and transparent replacement of the OTP
+marker path.
 
 Build the generic expansion and lifted-module infrastructure before writing
 `beam_ops`:
