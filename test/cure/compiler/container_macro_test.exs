@@ -121,6 +121,14 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert apply(module, :stop, [7]) == :ok
   end
 
+  test "app root syntax emits an ordinary supervisor startup callback" do
+    source = "app Cure.RootApp root :root_supervisor\n"
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.RootApp"
+    assert function_exported?(module, :start, 2)
+  end
+
   test "typed app lifecycle annotations reject mismatched callback bodies" do
     source = """
     macro TypedApp
