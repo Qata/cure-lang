@@ -38,6 +38,7 @@ defmodule Cure.Compiler.MacroSyntax do
           {:syn_node, atom, [{atom, synlit}], [repr]}
           | {:syn_leaf, atom, [{atom, synlit}], synlit}
           | {:syn_raw, synlit}
+          | {:syn_quoted, repr}
           | {:syn_failure, atom, [repr]}
 
   # -- to_syntax: parser AST -> repr -----------------------------------------
@@ -54,6 +55,8 @@ defmodule Cure.Compiler.MacroSyntax do
   # named-implicit 4-tuple) reflect opaquely, same as an irreducible native
   # term (e.g. a compiled regex) -- honest, not a crash.
   @spec to_syntax(term()) :: repr
+  def to_syntax({:quoted_syntax, _meta, [inner]}), do: {:syn_quoted, to_syntax(inner)}
+
   def to_syntax({tag, meta, third}) when is_list(third) do
     {:syn_node, tag, attrs(meta), Enum.map(third, &to_syntax/1)}
   end
@@ -108,6 +111,8 @@ defmodule Cure.Compiler.MacroSyntax do
 
   def from_syntax({:syn_raw, lit}), do: from_synlit(lit)
 
+  def from_syntax({:syn_quoted, repr}), do: {:quoted_syntax, [], [from_syntax(repr)]}
+
   def from_syntax({:syn_failure, name, args}),
     do: {:macro_failure, name, Enum.map(args, &from_syntax/1)}
 
@@ -137,6 +142,8 @@ defmodule Cure.Compiler.MacroSyntax do
     do: ctor(:Leaf, [atom(tag), to_core_attrs(attrs), to_core_synlit(lit)])
 
   def to_core({:syn_raw, lit}), do: ctor(:Raw, [to_core_synlit(lit)])
+
+  def to_core({:syn_quoted, syntax}), do: ctor(:Quoted, [to_core(syntax)])
 
   def to_core({:syn_failure, name, args}),
     do: ctor(:Failure, [atom(name), to_core_list(Enum.map(args, &to_core/1))])
@@ -174,6 +181,13 @@ defmodule Cure.Compiler.MacroSyntax do
     case from_core_synlit(lit) do
       {:ok, lit} -> {:syn_raw, lit}
       error -> error
+    end
+  end
+
+  def from_core({:ctor, :Quoted, [syntax]}) do
+    case from_core(syntax) do
+      {:error, _} = error -> error
+      syntax -> {:syn_quoted, syntax}
     end
   end
 
@@ -289,6 +303,7 @@ defmodule Cure.Compiler.MacroSyntax do
   defp syntax_repr?({:syn_node, _, _, _}), do: true
   defp syntax_repr?({:syn_leaf, _, _, _}), do: true
   defp syntax_repr?({:syn_raw, _}), do: true
+  defp syntax_repr?({:syn_quoted, _}), do: true
   defp syntax_repr?({:syn_failure, _, _}), do: true
   defp syntax_repr?(_), do: false
 

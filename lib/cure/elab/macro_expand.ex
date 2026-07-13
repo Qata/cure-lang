@@ -50,6 +50,7 @@ defmodule Cure.Elab.MacroExpand do
   @doc "True when an AST contains a deferred Tier-3 use-site."
   @spec contains_computed_use?(term()) :: boolean()
   def contains_computed_use?({:computed_use, _meta, _children}), do: true
+  def contains_computed_use?({:quoted_syntax, _meta, _children}), do: false
 
   def contains_computed_use?(term) when is_tuple(term),
     do: term |> Tuple.to_list() |> Enum.any?(&contains_computed_use?/1)
@@ -75,6 +76,10 @@ defmodule Cure.Elab.MacroExpand do
          {:ok, state} <- end_expansion(node, state) do
       {:ok, expanded, state}
     end
+  end
+
+  defp expand_node({:quoted_syntax, _meta, _children} = quoted, _env, state) do
+    with {:ok, state} <- visit_node(state), do: {:ok, quoted, state}
   end
 
   defp expand_node(term, env, state) when is_tuple(term) do

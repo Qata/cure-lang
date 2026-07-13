@@ -68,4 +68,12 @@ defmodule Cure.Elab.MacroRecursiveExpansionTest do
     assert {:error, {:macro_expansion_budget, :expansion_count, [%{keyword: "outer", line: 21, col: 2}]}} =
              MacroExpand.expand(node, env, max_expansions: 0)
   end
+
+  test "quoted syntax is not recursively expanded" do
+    assert {:ok, env} = Program.elaborate("mod M\n  fn f() -> Int = 0\n")
+
+    quoted = {:quoted_syntax, [], [{:computed_use, [keyword: "inner"], []}]}
+    assert {:ok, ^quoted} = MacroExpand.expand(quoted, env)
+    refute MacroExpand.contains_computed_use?(quoted)
+  end
 end

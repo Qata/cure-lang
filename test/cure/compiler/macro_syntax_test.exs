@@ -53,6 +53,20 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     end
   end
 
+  test "quoted syntax survives reflection as an opaque syntax value" do
+    ast = {:quoted_syntax, [line: 3], [{:computed_use, [keyword: "inner"], []}]}
+
+    repr = MacroSyntax.to_syntax(ast)
+    assert {:syn_quoted, {:syn_node, :computed_use, _, []}} = repr
+    assert MacroSyntax.from_syntax(repr) == {:quoted_syntax, [], [{:computed_use, [keyword: "inner"], []}]}
+  end
+
+  test "quoted syntax round-trips through the closed Core bridge" do
+    repr = {:syn_quoted, {:syn_leaf, :literal, [], {:s_int, 1}}}
+
+    assert MacroSyntax.from_core(MacroSyntax.to_core(repr)) == repr
+  end
+
   test "an exotic scalar value (regex tuple) reflects opaquely without crashing" do
     ast = expr!("~r/foo/")
     # Node tag is :literal (subtype: :regex in meta), NOT a bare :regex tag —

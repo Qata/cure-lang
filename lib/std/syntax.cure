@@ -18,6 +18,7 @@ mod Std.Syntax
     | Node(Atom, List(Attr), List(Syntax))
     | Leaf(Atom, List(Attr), SynLit)
     | Raw(SynLit)
+    | Quoted(Syntax)
     | Failure(Atom, List(Syntax))
 
   type Attr = KV(Atom, SynLit)
