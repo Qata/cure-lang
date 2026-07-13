@@ -171,8 +171,9 @@ defmodule Cure.Compiler.WithParseTest do
     refute Enum.any?(arms, &match?({:with_rematch_arm, _, _}, &1))
   end
 
-  # Regression: `with` is still the FSM/actor payload-binder identifier.
-  test "`actor Name with Payload` still parses (with-abstraction is contextual)" do
+  # Regression: `with` remains the actor payload binder while the macro expands
+  # to an ordinary lifted module.
+  test "`actor Name with Payload` preserves the payload in transparent syntax" do
     src = """
     actor Counter with 0
       on_message
@@ -183,13 +184,15 @@ defmodule Cure.Compiler.WithParseTest do
 
     node =
       collect(ast, [])
-      |> Enum.find(fn t -> match?({:container, _, _}, t) end)
+      |> Enum.find(fn t -> match?({:lift_module, _, _}, t) end)
 
-    assert {:container, meta, _body} = node
-    assert Keyword.get(meta, :container_type) == :actor
-    # The payload came from the `with 0` clause.
-    assert {:literal, lit_meta, 0} = Keyword.get(meta, :init)
-    assert Keyword.get(lit_meta, :subtype) == :integer
+    assert {:lift_module, meta, []} = node
+    assert Keyword.get(meta, :module) == "Counter"
+
+    assert Enum.any?(Keyword.get(meta, :declarations), fn
+             {:function_def, fn_meta, _body} -> Keyword.get(fn_meta, :name) == "start_link"
+             _ -> false
+           end)
   end
 
   # ---- Multiple-with surface sugar -----------------------------------------

@@ -1,15 +1,20 @@
 @group(:concurrency)
 mod Std.Actor
-  ## `actor` is a standard-library macro. Its raw body is reparsed by the
-  ## ordinary Cure parser and lowered by the generic OTP backend.
+  ## `actor` is a transparent standard-library macro. The base actor is an
+  ## ordinary lifted GenServer module; message-code derivation and user
+  ## handlers are layered on top of this floor.
   macro ActorContainers
-    syntax actor <name: Identifier> (with <payload: Code>)? <body: raw until dedent> becomes __otp_container(:actor, name, payload, body)
-      example actor Cure.Example expands actor Cure.Example
-    explain
-      Identifier => "an actor name is required"
-      Code => "an actor payload must be a Cure expression"
-      keyword "with" => "actor payloads are introduced with the with keyword"
-      keyword "actor" => "starts an OTP actor container"
+    syntax actor <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module name
+      use Std.Otp
+      behaviour GenServer
+      callback init(initial: p) -> %[:ok, initial]
+      callback handle_call(request: r, from: f, state: p) -> %[:reply, :ok, state]
+      callback handle_cast(message: m, state: p) -> %[:noreply, state]
+      callback handle_info(message: i, state: p) -> %[:noreply, state]
+      callback terminate(reason: e, state: p) -> :ok
+      callback code_change(old: v, state: p, extra: x) -> %[:ok, state]
+      fn start_link(initial: p) -> Effect(Tuple) = Std.Otp.start_link(name, [initial])
+      body
 
   ## Typed-actor runtime operations: spawn, stop, send, introspect.
   ##

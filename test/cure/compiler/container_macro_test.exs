@@ -14,7 +14,7 @@ defmodule Cure.Compiler.ContainerMacroTest do
       assert {:ok, ast} = Cure.Compiler.parse_source(source, file: "container_macro.cure")
 
       case keyword do
-        "sup" ->
+        keyword when keyword in ["sup", "actor"] ->
           assert {:lift_module, meta, []} = ast
           assert meta[:module] == name
 
@@ -40,7 +40,9 @@ defmodule Cure.Compiler.ContainerMacroTest do
       assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
 
       expected_module =
-        if keyword == "sup", do: String.to_atom(name), else: Module.concat(String.split(name, "."))
+        if keyword in ["sup", "actor"],
+          do: String.to_atom(name),
+          else: Module.concat(String.split(name, "."))
 
       assert module == expected_module
       assert match?({:ok, _}, apply(module, fun, args))
