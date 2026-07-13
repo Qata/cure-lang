@@ -1208,6 +1208,12 @@ ordinary declarations.
 
 #### Phase 4d — `app`
 
+**STATUS: IN PROGRESS (2026-07-13).** The public `app` syntax now expands to
+an ordinary lifted `Application` module with checked `start/2` and `stop/1`
+callbacks, and the generic Unix/AtomVM packaging path is exercised. Root
+supervisor startup, payload preservation, start phases, and effectful
+lifecycle-body context remain required.
+
 Define `app` in `lib/std/app.cure`. Emit `Application` lifecycle callbacks,
 optional phases, ordinary startup/shutdown bodies, and checked supervision
 results.
