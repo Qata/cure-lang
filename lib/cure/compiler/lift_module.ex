@@ -61,7 +61,8 @@ defmodule Cure.Compiler.LiftModule do
             {:error, _} = error -> {:halt, error}
           end
 
-        _ -> {:cont, {:ok, acc}}
+        _ ->
+          {:cont, {:ok, acc}}
       end
     end)
     |> reverse_result()
@@ -84,9 +85,7 @@ defmodule Cure.Compiler.LiftModule do
   defp ordinary_module_ast(%{module: module, callbacks: callbacks, declarations: declarations}) do
     with {:ok, module_name} <- ordinary_module_name(module),
          {:ok, callback_defs} <- callback_definitions(callbacks) do
-      {:ok,
-       {:container, [container_type: :module, name: module_name, language: :cure],
-        callback_defs ++ declarations}}
+      {:ok, {:container, [container_type: :module, name: module_name, language: :cure], callback_defs ++ declarations}}
     end
   end
 
