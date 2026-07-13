@@ -2,12 +2,12 @@ defmodule Cure.Doc.Mermaid do
   @moduledoc """
   Mermaid diagram emission for `cure doc` (v0.27.0).
 
-  Given a MetaAST container node -- an FSM, a supervisor, or an
+  Given a lifted module node -- a state machine, supervisor, or
   application -- return a Mermaid source string. The shapes are:
 
-    * FSM (`container_type: :fsm`)         -> `stateDiagram-v2`
-    * Supervisor (`container_type: :sup`)  -> `graph TD`
-    * Application (`container_type: :app`) -> `graph LR`
+    * GenStatem lifted module -> `stateDiagram-v2`
+    * Supervisor lifted module -> `graph TD`
+    * Application lifted module -> `graph LR`
 
   ## FSM rendering
 
@@ -45,17 +45,17 @@ defmodule Cure.Doc.Mermaid do
   @spec render(tuple(), keyword()) :: String.t() | nil
   def render(ast, opts \\ [])
 
-  def render({:container, meta, body}, opts) when is_list(meta) do
-    kind = Keyword.get(meta, :container_type)
-    name = Keyword.get(meta, :name, "Unknown")
+  def render({:lift_module, meta, body}, opts) when is_list(meta) do
+    kind = Keyword.get(meta, :behaviour)
+    name = Keyword.get(meta, :module, "Unknown") |> to_string()
     file = Keyword.get(opts, :file, "nofile")
     line = Keyword.get(meta, :line, 1)
 
     src =
       case kind do
-        :fsm -> render_fsm(name, meta, body)
-        :sup -> render_sup(name, meta, body)
-        :app -> render_app(name, meta, body)
+        :gen_statem -> render_fsm(name, meta, body)
+        :supervisor -> render_sup(name, meta, body)
+        :application -> render_app(name, meta, body)
         _ -> nil
       end
 
@@ -71,23 +71,12 @@ defmodule Cure.Doc.Mermaid do
     src
   end
 
-  def render({:lift_module, meta, _body}, _opts) when is_list(meta) do
-    name = Keyword.get(meta, :module, "Unknown") |> to_string()
-
-    case Keyword.get(meta, :behaviour) do
-      :gen_statem -> render_fsm(name, [], [])
-      :supervisor -> render_sup(name, [strategy: :one_for_one], [])
-      :application -> render_app(name, [], [])
-      _ -> nil
-    end
-  end
-
   def render(_other, _opts), do: nil
 
   # -- FSM --------------------------------------------------------------------
 
-  defp render_fsm(_name, meta, body) do
-    transitions = extract_transitions(body)
+  defp render_fsm(_name, meta, _body) do
+    transitions = Keyword.get(meta, :transitions, [])
     terminal = Keyword.get(meta, :terminal_states, [])
 
     states =
@@ -139,40 +128,14 @@ defmodule Cure.Doc.Mermaid do
     |> Enum.join("\n")
   end
 
-  defp extract_transitions(body) do
-    Enum.flat_map(body, fn
-      {:function_call, fmeta, _} ->
-        if Keyword.get(fmeta, :name) == "transition" do
-          [
-            %{
-              from: Keyword.get(fmeta, :from, "*"),
-              event: Keyword.get(fmeta, :event, ""),
-              to: Keyword.get(fmeta, :to, ""),
-              event_kind: Keyword.get(fmeta, :event_kind, :normal)
-            }
-          ]
-        else
-          []
-        end
-
-      _ ->
-        []
-    end)
-  end
-
   defp state_id(s), do: String.replace(to_string(s), ~r/[^A-Za-z0-9_]/, "_")
 
   # -- Supervisor -------------------------------------------------------------
 
-  defp render_sup(name, meta, body) do
+  defp render_sup(name, meta, _body) do
     strategy = Keyword.get(meta, :strategy, :one_for_one)
 
-    children =
-      body
-      |> Enum.flat_map(fn
-        {:sup_child, cmeta, _} -> [cmeta]
-        _ -> []
-      end)
+    children = Keyword.get(meta, :children, [])
 
     header = "graph TD"
 

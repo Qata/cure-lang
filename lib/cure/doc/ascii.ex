@@ -7,7 +7,7 @@ defmodule Cure.Doc.Ascii do
 
   ## Public API
 
-  * `render/2` -- accepts a `{:container, meta, body}` AST node and
+  * `render/2` -- accepts a `{:lift_module, meta, body}` AST node and
     returns the diagram source. Returns `nil` for non-FSM/sup/app
     containers.
   * `render_file/2` -- parses a `.cure` source file and renders every
@@ -41,21 +41,21 @@ defmodule Cure.Doc.Ascii do
 
   alias Cure.Pipeline.Events
 
-  @doc "Render a single container AST node as ASCII. Returns `nil` if not a diagram container."
+  @doc "Render a single lifted module AST node as ASCII. Returns `nil` if not diagrammable."
   @spec render(tuple(), keyword()) :: String.t() | nil
   def render(ast, opts \\ [])
 
-  def render({:container, meta, body}, opts) when is_list(meta) do
-    kind = Keyword.get(meta, :container_type)
-    name = Keyword.get(meta, :name, "Unknown")
+  def render({:lift_module, meta, body}, opts) when is_list(meta) do
+    kind = Keyword.get(meta, :behaviour)
+    name = Keyword.get(meta, :module, "Unknown") |> to_string()
     file = Keyword.get(opts, :file, "nofile")
     line = Keyword.get(meta, :line, 1)
 
     src =
       case kind do
-        :fsm -> render_fsm(name, meta, body)
-        :sup -> render_sup(name, meta, body)
-        :app -> render_app(name, meta, body)
+        :gen_statem -> render_fsm(name, meta, body)
+        :supervisor -> render_sup(name, meta, body)
+        :application -> render_app(name, meta, body)
         _ -> nil
       end
 
@@ -69,17 +69,6 @@ defmodule Cure.Doc.Ascii do
     end
 
     src
-  end
-
-  def render({:lift_module, meta, _body}, _opts) when is_list(meta) do
-    name = Keyword.get(meta, :module, "Unknown") |> to_string()
-
-    case Keyword.get(meta, :behaviour) do
-      :gen_statem -> render_fsm(name, [], [])
-      :supervisor -> render_sup(name, [strategy: :one_for_one], [])
-      :application -> render_app(name, [], [])
-      _ -> nil
-    end
   end
 
   def render(_other, _opts), do: nil
@@ -115,10 +104,6 @@ defmodule Cure.Doc.Ascii do
     end
   end
 
-  defp collect_containers({:container, meta, _body} = c) when is_list(meta) do
-    [c]
-  end
-
   defp collect_containers({:lift_module, meta, _body} = module) when is_list(meta) do
     if Keyword.get(meta, :behaviour) in [:gen_statem, :supervisor, :application], do: [module], else: []
   end
@@ -130,10 +115,6 @@ defmodule Cure.Doc.Ascii do
   defp collect_containers(_), do: []
 
   defp filter_kind?(_node, :all), do: true
-
-  defp filter_kind?({:container, meta, _}, kind) do
-    Keyword.get(meta, :container_type) == kind
-  end
 
   defp filter_kind?({:lift_module, meta, _}, kind) do
     case Keyword.get(meta, :behaviour) do
@@ -148,8 +129,8 @@ defmodule Cure.Doc.Ascii do
   # FSM
   # ============================================================================
 
-  defp render_fsm(name, meta, body) do
-    transitions = extract_transitions(body)
+  defp render_fsm(name, meta, _body) do
+    transitions = Keyword.get(meta, :transitions, [])
     terminal = Keyword.get(meta, :terminal_states, []) |> List.wrap()
 
     states =
@@ -203,40 +184,14 @@ defmodule Cure.Doc.Ascii do
   defp event_suffix(:soft), do: "?"
   defp event_suffix(_), do: ""
 
-  defp extract_transitions(body) do
-    Enum.flat_map(body, fn
-      {:function_call, fmeta, _} ->
-        if Keyword.get(fmeta, :name) == "transition" do
-          [
-            %{
-              from: Keyword.get(fmeta, :from, "*"),
-              event: Keyword.get(fmeta, :event, ""),
-              to: Keyword.get(fmeta, :to, ""),
-              event_kind: Keyword.get(fmeta, :event_kind, :normal)
-            }
-          ]
-        else
-          []
-        end
-
-      _ ->
-        []
-    end)
-  end
-
   # ============================================================================
   # Supervisor
   # ============================================================================
 
-  defp render_sup(name, meta, body) do
+  defp render_sup(name, meta, _body) do
     strategy = Keyword.get(meta, :strategy, :one_for_one)
 
-    children =
-      body
-      |> Enum.flat_map(fn
-        {:sup_child, cmeta, _} -> [cmeta]
-        _ -> []
-      end)
+    children = Keyword.get(meta, :children, [])
 
     header = "sup #{name} (strategy: #{strategy})"
     underline = String.duplicate("=", String.length(header))

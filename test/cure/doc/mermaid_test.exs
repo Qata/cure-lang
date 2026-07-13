@@ -6,11 +6,11 @@ defmodule Cure.Doc.MermaidTest do
   describe "FSM rendering" do
     test "emits stateDiagram-v2 with initial, edges, and event suffix" do
       transitions = [
-        {:function_call, [name: "transition", from: "Locked", event: "coin", to: "Unlocked", event_kind: :normal], []},
-        {:function_call, [name: "transition", from: "Unlocked", event: "push!", to: "Locked", event_kind: :hard], []}
+        %{from: "Locked", event: "coin", to: "Unlocked", event_kind: :normal},
+        %{from: "Unlocked", event: "push!", to: "Locked", event_kind: :hard}
       ]
 
-      ast = {:container, [container_type: :fsm, name: "Turnstile", line: 1], transitions}
+      ast = {:lift_module, [behaviour: :gen_statem, module: "Cure.Turnstile", transitions: transitions, line: 1], []}
       out = Mermaid.render(ast)
 
       assert out =~ "stateDiagram-v2"
@@ -21,11 +21,12 @@ defmodule Cure.Doc.MermaidTest do
 
     test "renders terminal states into a sink edge" do
       transitions = [
-        {:function_call, [name: "transition", from: "Running", event: "stop", to: "Done", event_kind: :normal], []}
+        %{from: "Running", event: "stop", to: "Done", event_kind: :normal}
       ]
 
       ast =
-        {:container, [container_type: :fsm, name: "Job", terminal_states: ["Done"], line: 1], transitions}
+        {:lift_module,
+         [behaviour: :gen_statem, module: "Cure.Job", terminal_states: ["Done"], transitions: transitions, line: 1], []}
 
       out = Mermaid.render(ast)
       assert out =~ "Done --> [*]"
@@ -38,31 +39,36 @@ defmodule Cure.Doc.MermaidTest do
 
   describe "supervisor rendering" do
     test "renders children as labelled nodes linked from the supervisor" do
-      children = [
-        {:sup_child, [id: "worker", module: "WorkerActor", restart: :permanent], []},
-        {:sup_child, [id: "echo", module: "EchoActor", restart: :transient], []}
-      ]
-
       ast =
-        {:container, [container_type: :sup, name: "Colony", strategy: :one_for_one, line: 1], children}
+        {:lift_module,
+         [
+           behaviour: :supervisor,
+           module: "Cure.Colony",
+           strategy: :one_for_one,
+           children: [
+             [id: "worker", module: "WorkerActor", restart: :permanent],
+             [id: "echo", module: "EchoActor", restart: :transient]
+           ],
+           line: 1
+         ], []}
 
       out = Mermaid.render(ast)
       assert out =~ "graph TD"
       assert out =~ "Colony"
       assert out =~ "WorkerActor"
       assert out =~ "EchoActor"
-      assert out =~ "Colony --> worker"
-      assert out =~ "Colony --> echo"
+      assert out =~ "Cure_Colony --> worker"
+      assert out =~ "Cure_Colony --> echo"
     end
   end
 
   describe "application rendering" do
     test "labels the app node with vsn and draws the root edge" do
       ast =
-        {:container,
+        {:lift_module,
          [
-           container_type: :app,
-           name: "CureAtelier",
+           behaviour: :application,
+           module: "Cure.CureAtelier",
            vsn: "0.27.0",
            root: "Atelier.Root",
            applications: ["logger", "cure"],
