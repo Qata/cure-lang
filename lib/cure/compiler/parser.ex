@@ -1054,9 +1054,9 @@ defmodule Cure.Compiler.Parser do
       end)
 
     case Map.get(value, :body) do
-      {:delayed_raw_tokens, _raw_meta, tokens} when is_list(tokens) ->
+      body when not is_nil(body) ->
         context = Map.get(value, :callback_context)
-        Map.put(value, :body, parse_delayed_callback_body(tokens, state, context))
+        Map.put(value, :body, resolve_delayed_raw(body, state, context))
 
       _ ->
         value
@@ -1081,6 +1081,26 @@ defmodule Cure.Compiler.Parser do
         error
     end
   end
+
+  # Delayed slots can occur below ordinary expression nodes (for example, a
+  # callback body that guards a phase with `match`). Resolve them only after
+  # the lifted callback has introduced its lexical context, then let the
+  # normal parser/elaborator validate the resulting expression.
+  defp resolve_delayed_raw({:delayed_raw_tokens, _raw_meta, tokens}, state, context)
+       when is_list(tokens),
+       do: parse_delayed_callback_body(tokens, state, context)
+
+  defp resolve_delayed_raw({tag, meta, children}, state, context) when is_list(children) do
+    {tag, meta, Enum.map(children, &resolve_delayed_raw(&1, state, context))}
+  end
+
+  defp resolve_delayed_raw(list, state, context) when is_list(list),
+    do: Enum.map(list, &resolve_delayed_raw(&1, state, context))
+
+  defp resolve_delayed_raw(map, state, context) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {key, resolve_delayed_raw(value, state, context)} end)
+
+  defp resolve_delayed_raw(value, _state, _context), do: value
 
   defp subst_lift_module_value_meta(meta, bindings, state, module_hole, module_name) when is_list(meta) do
     Enum.map(meta, fn

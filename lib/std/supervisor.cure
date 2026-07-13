@@ -109,7 +109,7 @@ mod Std.Supervisor
   ## Start a compiled Cure supervisor with an explicit initial
   ## argument that is threaded into its `init/1` callback.
   @extern(Elixir.Cure.Sup.Builtins, :sup_start_with, 2)
-  fn start_with(sup_module: Atom, init: Any) -> Pid
+  fn start_with({a: Type}, sup_module: Atom, init: a) -> Pid
 
   ## Stop a running supervisor tree.
   @extern(Elixir.Cure.Sup.Builtins, :sup_stop, 1)

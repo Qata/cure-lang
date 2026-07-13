@@ -190,13 +190,22 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
   test "app phase syntax emits an ordinary start phase callback" do
     source = """
     app Cure.PhasedApp phase :warm_cache
-      :ok
+      :started
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert module == :"Cure.PhasedApp"
     assert function_exported?(module, :start_phase, 3)
-    assert apply(module, :start_phase, [:warm_cache, :normal, []]) == :ok
+    assert apply(module, :start_phase, [:warm_cache, :normal, []]) == :started
+    assert apply(module, :start_phase, [:other_phase, :normal, []]) == :ok
+  end
+
+  test "app root syntax preserves a typed startup payload" do
+    source = "app Cure.PayloadRootApp root :root_supervisor with [:boot]\n"
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.PayloadRootApp"
+    assert function_exported?(module, :start, 2)
   end
 
   test "app phase syntax rejects an effectful body with an atom callback result" do
