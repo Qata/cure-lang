@@ -139,6 +139,7 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
     assert apply(module, :build, []) ==
              {:worker, {:worker_module, :start_link, []}, :transient, 1000, :worker, [:worker_module]}
   end
