@@ -866,6 +866,16 @@ the existing scaffolding as complete:
     while compatibility tests are added.
 12. **Runtime parity is not proven by unit expansion tests.** Generic Unix and
     AtomVM execution must exercise generated modules and cross-module calls.
+13. **Direct effectful case motives are incomplete.** The current kernel
+    accepts `Effect(T)` everywhere else required by the effect design, but its
+    case-motive result classifier does not recognize a direct `Effect(T)` value
+    as a type. Consequently a `match` whose branches perform effects fails with
+    `:bad_motive`; a transparent source-level `typealias` to `Effect(T)` makes
+    the same checked term pass, but that is only a compatibility bridge and
+    does not close the kernel completeness gap. The macro work must not replace
+    this with an opaque runner or compiler special case. This remains open
+    under the standing zero-TCB-delta rule until an approved language-level
+    solution exists.
 
 Each gap is a tracked implementation item. No gap may be silently converted
 into a compiler special case.

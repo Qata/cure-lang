@@ -1306,7 +1306,17 @@ context remain required. Supervisor child startup now also has a checked
 (`12f483b8`). Delayed callback bodies now resolve recursively through nested
 AST nodes, phase callbacks guard on their declared phase, and app root payloads
 flow through a polymorphic startup wrapper (`77bee942`). Multiple phase
-declarations and effect sequencing remain required.
+declarations and effect sequencing remain required. The latest phase floor
+defines an ordinary source-level `PhaseResult = Effect(Atom)` alias, promotes
+pure values in effectful conditional, literal-match, and nested branch
+positions, and lets an annotated `let pid: Pid(Atom) = beam_ops self` check its
+RHS against `Effect(Pid(Atom))` while binding the payload (`769f2077`). The
+focused transparent-object suite is 41 passing tests and
+`mix compile --warnings-as-errors` is clean. Direct `Effect(T)` case motives
+still expose the existing kernel `:bad_motive` completeness gap; the alias is
+recorded as a transparent compatibility bridge, not as closure of that gate.
+An approved no-workaround resolution and multiple phase declarations remain
+required.
 
 Define `app` in `lib/std/app.cure`. Emit `Application` lifecycle callbacks,
 optional phases, ordinary startup/shutdown bodies, and checked supervision
