@@ -112,6 +112,28 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert apply(module, :handle_info, [:tick, 7]) == {:noreply, 7}
   end
 
+  test "actor messages syntax shares an explicit message type with handle_info" do
+    source = """
+    actor Cure.TypedMessageActor state Int messages Tuple(Atom, Int) handle_info
+      let pid: Pid(Tuple(Atom, Int)) = beam_ops self
+      %[:noreply, state]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :handle_info, [[:ping, 1], 7]) == {:noreply, 7}
+  end
+
+  test "actor messages syntax rejects an operation typed for another message" do
+    source = """
+    actor Cure.InvalidMessageActor state Int messages Tuple(Atom, Int) handle_info
+      let pid: Pid(Tuple(Atom, Int)) = beam_ops self
+      let sent: Effect(Unit) = beam_ops tell pid :wrong
+      %[:noreply, state]
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "actor call syntax keeps request and reply types distinct" do
     source = """
     actor Cure.TypedCallActor state Int call Int returns Bool
@@ -200,6 +222,16 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert apply(module, :handle_event, [:info, :tick, :ready, 7]) == :keep_state_and_data
+  end
+
+  test "fsm events syntax shares an explicit event type with handle_event" do
+    source = """
+    fsm Cure.TypedEventFsm state Int events Tuple(Atom, Int) handle_event
+      :keep_state_and_data
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :handle_event, [:info, [:ping, 1], :ready, 7]) == :keep_state_and_data
   end
 
   test "fsm callback syntax rejects a body with a non-atom transition result" do
