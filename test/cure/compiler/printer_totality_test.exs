@@ -175,6 +175,33 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     assert parse!(out, "assert.cure")
   end
 
+  test "the nil symbol round-trips as :nil" do
+    src = """
+    mod M
+      fn initial() -> Atom = :nil
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "nil_symbol.cure"))
+    assert out =~ "= :nil"
+    assert parse!(out, "nil_symbol.cure")
+  end
+
+  test "a lifted callback block stays inside the callback when printed" do
+    src = """
+    lift module Cure.BlockPrinter
+      behaviour gen_server
+      callback handle_cast(message: Atom, state: Atom) ->
+        let tag = message
+        pickup
+          tag == :stop -> %[:noreply, state]
+          else -> %[:noreply, state]
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "callback_block.cure"))
+    assert out =~ "callback handle_cast(message: Atom, state: Atom) ->\n"
+    assert parse!(out, "callback_block.cure")
+  end
+
   test "hole round-trips as ?name" do
     src = """
     mod M

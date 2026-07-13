@@ -5290,6 +5290,7 @@ defmodule Cure.Compiler.Parser do
       end
 
     state = if return_type, do: expect(state, :assign), else: expect(state, :arrow)
+    state = skip_newlines(state)
     {body, state} = parse_expr_or_block(state)
 
     callback = %{

@@ -324,6 +324,9 @@ defmodule Cure.Compiler.Printer do
     Enum.map_join(children, sep <> " ", &to_string(&1, depth, indent))
   end
 
+  defp symbol_to_string(nil), do: ":nil"
+  defp symbol_to_string(value), do: ":#{value}"
+
   # -- Literals --------------------------------------------------------------
 
   defp to_string({:literal, meta, value}, _depth, _indent) do
@@ -333,7 +336,7 @@ defmodule Cure.Compiler.Printer do
       :string -> ~s("#{escape_string(value)}")
       :boolean -> Atom.to_string(value)
       :null -> "nil"
-      :symbol -> ":#{value}"
+      :symbol -> symbol_to_string(value)
       :regex -> regex_to_string(value)
       :char -> char_to_string(value)
       :bytes -> bytes_to_string(meta, value)
@@ -1197,7 +1200,17 @@ defmodule Cure.Compiler.Printer do
   defp lift_module_name_to_string(name), do: to_string(name)
 
   defp lift_callback_to_string(%{name: name, params: params, body: body}, depth, indent) do
-    "callback #{name}(#{typed_params_to_string(params, depth, indent)}) -> #{render(body, depth, indent)}"
+    header = "callback #{name}(#{typed_params_to_string(params, depth, indent)}) ->"
+
+    case body do
+      {:block, _meta, _exprs} ->
+        body_depth = depth + 1
+        pad = String.duplicate(indent, body_depth)
+        header <> "\n" <> pad <> render(body, body_depth, indent)
+
+      _ ->
+        header <> " " <> render(body, depth, indent)
+    end
   end
 
   defp macro_rule_lines(%{kind: kind, keyword: keyword, segments: segments, template: template} = rule, depth, indent)
