@@ -4,7 +4,16 @@ mod Std.Fsm
   ## an ordinary lifted GenStatem module; transition derivation and handlers
   ## are layered on top of this floor.
   macro FsmContainers
-    syntax fsm <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module name
+    syntax fsm <name: ModuleName> with <payload: Code> <body: raw until dedent> becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      callback callback_mode() -> :handle_event_function
+      callback init(initial: p) -> %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: e, state: s, data: p) -> :keep_state_and_data
+      fn start_link() -> Effect(Tuple) = Std.Otp.start_statem(name, [payload])
+      body
+
+    syntax fsm <name: ModuleName> <body: raw until dedent> becomes lift module name
       use Std.Otp
       behaviour gen_statem
       callback callback_mode() -> :handle_event_function
