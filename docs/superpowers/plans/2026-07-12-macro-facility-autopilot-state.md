@@ -1297,6 +1297,17 @@ source-level effect result aliases and negative state-result coverage. These
 callbacks are reparsed, elaborated, and emitted through the same lifted-module
 path (`9a4e47bc`, 59 focused object tests).
 
+The actor floor now also has a generic `handle_cast` form without a forced
+payload literal, preserving the ordinary polymorphic state/message relationship
+for user-defined actors whose initial state is supplied by `start_link/1`.
+The FSM floor now has an explicit `initial <state>` plus `transition` callback
+form whose checked result is the full `{next_state, state, data}` tuple. These
+forms keep payload-preserving transition actions in Cure source rather than
+requiring a compiler-owned handler representation; focused tests cover both
+the generic actor runtime loop and the explicit FSM transition result. The
+remaining callback work is to derive message codes and complete the example
+behavior migrations.
+
 Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
 emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
 inside start, message, and stop bodies. The generic callback floor now carries

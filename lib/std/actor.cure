@@ -84,6 +84,17 @@ mod Std.Actor
       callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name initial
 
+    syntax actor <name: ModuleName> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_server
+      callback init(initial: p) returns Effect(Tuple(Atom, p)) = %[:ok, initial]
+      callback handle_call(request: r, from: f, state: p) returns Effect(Tuple(Atom, Atom, p)) = %[:reply, :ok, state]
+      callback handle_cast(message: m, state: p) returns Effect(Tuple(Atom, p)) = cast_body
+      callback handle_info(message: m, state: p) returns Effect(Tuple(Atom, p)) = %[:noreply, state]
+      callback terminate(reason: e, state: p) returns Effect(Atom) = :ok
+      callback code_change(old: v, state: p, extra: x) returns Effect(Tuple(Atom, p)) = %[:ok, state]
+      fn start_link(initial: p) -> Effect(Tuple) = beam_ops start_link name initial
+
     syntax actor <name: ModuleName> state <state_type: Type> messages <message_type: Type> handle_info <info_body: delayed raw until dedent> contextual becomes lift module name
       use Std.Otp
       behaviour gen_server

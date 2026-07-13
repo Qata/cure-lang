@@ -197,6 +197,20 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "polymorphic actor payload syntax checks a custom cast body" do
+    source = """
+    actor Cure.PolymorphicCast handle_cast
+      %[:noreply, state + 1]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :handle_cast, [:inc, 4]) == {:noreply, 5}
+    assert {:ok, pid} = apply(module, :start_link, [0])
+    :gen_server.cast(pid, :inc)
+    assert :sys.get_state(pid) == 1
+    :gen_server.stop(pid)
+  end
+
   test "actor call syntax keeps request and reply types distinct" do
     source = """
     actor Cure.TypedCallActor state Int call Int returns Bool
@@ -351,6 +365,21 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert apply(module, :handle_event, [:info, [:ping, 1], :ready, 7]) == :keep_state_and_data
+  end
+
+  test "fsm transition syntax preserves an explicit initial state and payload" do
+    source = """
+    fsm Cure.PayloadTransition state Int initial :locked events Atom transition
+      pickup
+        event == :coin -> %[:next_state, :unlocked, data + 1]
+        else -> %[:next_state, state, data]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :init, [0]) == {:ok, :locked, 0}
+
+    assert apply(module, :handle_event, [:info, :coin, :locked, 0]) ==
+             {:next_state, :unlocked, 1}
   end
 
   test "fsm handle_event pickup bodies use the transparent effect result alias" do
