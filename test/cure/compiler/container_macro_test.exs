@@ -73,6 +73,22 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert match?({:ok, _}, apply(module, :start_link, []))
   end
 
+  test "supervisor child syntax is a typed transparent callback result" do
+    source = "sup Cure.ChildRoot children [Std.Supervisor.child(:worker_module, :worker)]\n"
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.ChildRoot"
+    assert {:ok, {strategy, children}} = apply(module, :init, [[]])
+    assert strategy == {:one_for_one, 3, 5}
+    assert [{:worker, {:worker_module, :start_link, []}, :permanent, 5000, :worker, [:worker_module]}] = children
+  end
+
+  test "supervisor child constructors reject non-atom modules" do
+    source = "sup Cure.InvalidChildRoot children [Std.Supervisor.child(1, :worker)]\n"
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "no per-container compiler modules remain in the lowering path" do
     refute Code.ensure_loaded?(Cure.Actor.Compiler)
     refute Code.ensure_loaded?(Cure.FSM.Compiler)

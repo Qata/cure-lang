@@ -4,6 +4,13 @@ mod Std.Supervisor
   ## is a normal lifted module; child-spec declarations are added as checked
   ## syntax in the next algebra slice.
   macro SupervisorContainers
+    syntax sup <name: ModuleName> children <children: Code> contextual becomes lift module name
+      use Std.Otp
+      use Std.Supervisor
+      behaviour supervisor
+      callback init(arg: List(p)) returns Tuple(Atom, Tuple(Tuple(Atom, Int, Int), List(ChildSpec))) = %[:ok, %[%[:one_for_one, 3, 5], children]]
+      fn start_link() -> Effect(Tuple) = Std.Otp.start_supervisor(name)
+
     syntax sup <name: ModuleName> with <payload: Code> <body: raw until dedent> becomes lift module name
       use Std.Otp
       behaviour supervisor
@@ -17,6 +24,11 @@ mod Std.Supervisor
       callback init(arg: List(p)) returns Tuple(Atom, Tuple(Tuple(Atom, Int, Int), List(Atom))) = %[:ok, %[%[:one_for_one, 3, 5], assert_type [] : List(Atom)]]
       fn start_link() -> Effect(Tuple) = Std.Otp.start_supervisor(name)
       body
+
+  typealias ChildSpec = Tuple(Atom, Tuple(Atom, Atom, List(Atom)), Atom, Int, Atom, List(Atom))
+
+  fn child(module: Atom, id: Atom) -> ChildSpec =
+    %[id, %[module, :start_link, []], :permanent, 5000, :worker, [module]]
 
   ## Start, stop, and introspect Cure supervisor trees.
   ##
