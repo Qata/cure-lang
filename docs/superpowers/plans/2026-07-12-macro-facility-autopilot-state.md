@@ -1241,6 +1241,11 @@ the ordinary checker rejects a mismatched callback result. The bootstrap and
 typed floors are tested structurally and through the generic Unix runtime
 path.
 
+The actor floor also has explicit `init` and `handle_info` callback-body forms
+with delayed single-expression bodies, sharing the module-local state alias
+and ordinary callback result checking (`92b9ec43`). Full message-code
+derivation, request/reply handlers, and callback effect context remain open.
+
 Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
 emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
 inside start, message, and stop bodies. The generic callback floor now carries
