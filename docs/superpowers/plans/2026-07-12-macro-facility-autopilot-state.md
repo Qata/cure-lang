@@ -1284,9 +1284,11 @@ by application start and stop; ordinary elaboration rejects mismatched start
 results. Root supervisor startup is now transparent: the `root` form emits an
 ordinary `start/2` callback that calls the checked `Std.Supervisor.start/1`
 operation, with a compiler regression proving the generated callback is
-available through the common lift/emission path (`66302bb2`). Payload
-preservation, start phases, and effectful lifecycle-body context remain
-required.
+available through the common lift/emission path (`66302bb2`). A phase form now
+emits an ordinary `start_phase/3` callback with a delayed, single-expression
+body reparsed under application callback context (`7b13fe7d`). Payload
+preservation, multiple phase declarations, and effectful lifecycle-body
+context remain required.
 
 Define `app` in `lib/std/app.cure`. Emit `Application` lifecycle callbacks,
 optional phases, ordinary startup/shutdown bodies, and checked supervision
