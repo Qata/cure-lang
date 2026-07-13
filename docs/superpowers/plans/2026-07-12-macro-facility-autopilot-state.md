@@ -1278,6 +1278,10 @@ bodies. Its callback result is a source-level effect alias, so ordinary
 `pickup` message dispatch can be checked without hiding the body in a
 compiler callback implementation; legal and wrong-state results are covered
 by the focused suite (`94a0540e`, 53 tests).
+The typed actor/FSM starters now pass scalar initial state data directly to
+the OTP `init/1` callback instead of introducing an extra list layer. Unix
+runtime assertions and the generic-unix AtomVM package proof cover the
+corrected state shape (`dd1afe6b`, 55 focused object tests).
 
 Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
 emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
