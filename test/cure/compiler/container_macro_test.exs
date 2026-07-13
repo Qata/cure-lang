@@ -280,6 +280,27 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "supervisor strategy policies reject negative intensity and period literals" do
+    source = """
+    mod Main
+      use Std.Supervisor
+      fn build() -> StrategySpec = Std.Supervisor.supervision_strategy(Std.Supervisor.one_for_one(), -1, 5)
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
+  test "supervisor shutdown policies reject unrestricted integer variables" do
+    source = """
+    mod Main
+      use Std.Supervisor
+      fn build(timeout: Int) -> ChildSpec =
+        Std.Supervisor.child_with(:worker_module, :worker, Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(timeout), Std.Supervisor.worker())
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "supervisor child constructors reject non-atom modules" do
     source = "sup Cure.InvalidChildRoot children [Std.Supervisor.child(1, :worker)]\n"
 
