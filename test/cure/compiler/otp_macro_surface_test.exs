@@ -31,7 +31,8 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
     source = """
     mod M
       macro Lift
-        syntax liftit <name: Identifier> becomes lift module name
+        syntax liftit <name: ModuleName> becomes lift module name
+          behaviour GenServer
       liftit Cure.Generated.Worker
     """
 
@@ -39,6 +40,44 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
     assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
     assert {:lift_module, meta, []} = List.last(children)
     assert meta[:module] == "Cure.Generated.Worker"
+  end
+
+  test "a transparent macro parses a raw body splice into ordinary declarations" do
+    source = """
+    mod M
+      macro Lift
+        syntax one becomes 42
+        syntax liftit <name: ModuleName> <body: raw until dedent> becomes lift module name
+          behaviour GenServer
+          body
+      liftit Cure.Generated.Worker
+        fn init(arg: Int) -> Int = one
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
+    assert {:lift_module, meta, []} = List.last(children)
+    assert meta[:module] == "Cure.Generated.Worker"
+    assert [{:function_def, function_meta, [{:literal, _, 42}]}] = meta[:declarations]
+    assert function_meta[:name] == "init"
+  end
+
+  test "a transparent macro can compile a parsed raw body splice" do
+    source = """
+    mod Main
+      macro Lift
+        syntax one becomes 42
+        syntax liftit <name: ModuleName> <body: raw until dedent> becomes lift module name
+          behaviour GenServer
+          body
+      liftit Cure.Generated.Worker
+        fn init(arg: Int) -> Int = one
+    """
+
+    assert {:ok, main} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert main == :"Cure.Main"
+    assert function_exported?(:"Cure.Generated.Worker", :init, 1)
+    assert apply(:"Cure.Generated.Worker", :init, [42]) == 42
   end
 
   test "lifted modules compile as independent units through the common emitter" do

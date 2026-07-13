@@ -10,7 +10,7 @@ defmodule Cure.Compiler.MacroFuzz do
   alias Antigen.{Challenge, Gen, Shrink}
   alias Antigen.Backend.StreamData, as: Backend
   alias Antigen.Generators.{SigMenu, Term}
-  alias Cure.Compiler.{Lexer, Parser, Token}
+  alias Cure.Compiler.{Lexer, OtpMacro, Parser, Token}
   alias Cure.Core.{Context, Eval, Inductive, Kernel, Normalise}
   alias Cure.Elab.{Elaborator, MacroExpand}
 
@@ -105,6 +105,21 @@ defmodule Cure.Compiler.MacroFuzz do
            ctx: ctx,
            goal: nil,
            generator: Gen.member_of([{:ctor, :Example, []}, {:ctor, :Worker, []}])
+         }}
+
+      "ModuleName" ->
+        {:ok,
+         %{
+           category: category,
+           domain: :module_name,
+           env: generation_env,
+           ctx: ctx,
+           goal: nil,
+           generator:
+             Gen.member_of([
+               {:raw_text, "Cure.Example"},
+               {:raw_text, "Cure.Worker"}
+             ])
          }}
 
       "Kind" ->
@@ -418,8 +433,19 @@ defmodule Cure.Compiler.MacroFuzz do
             :ok
 
           {:error, reason} ->
-            {:error,
+             {:error,
              {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
+        end
+
+      {:lift_module, _meta, []} ->
+        case OtpMacro.lift_module_ast(expansion) do
+          {:ok, _quoted_module} ->
+            :ok
+
+          {:error, reason} ->
+            {:error,
+             {:expansion_ill_typed,
+              %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
         end
 
       _ ->
@@ -657,6 +683,16 @@ defmodule Cure.Compiler.MacroFuzz do
 
   defp check_samples(%{domain: :identifier}, terms) do
     case Enum.find(terms, &(not match?({:ctor, name, []} when is_atom(name), &1))) do
+      nil -> :ok
+      bad -> {:error, {:generated_hole_not_well_typed, bad}}
+    end
+  end
+
+  defp check_samples(%{domain: :module_name}, terms) do
+    case Enum.find(terms, fn
+           {:raw_text, name} -> not Regex.match?(~r/^Cure\.[A-Z][A-Za-z0-9_]*(?:\.[A-Z][A-Za-z0-9_]*)*$/, name)
+           _ -> true
+         end) do
       nil -> :ok
       bad -> {:error, {:generated_hole_not_well_typed, bad}}
     end

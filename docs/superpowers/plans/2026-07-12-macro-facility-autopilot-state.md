@@ -1073,9 +1073,13 @@ lift-module parser also preserves a substituted identifier hole instead of
 flattening it into a literal module-name string. A generic lift-module collector
 now turns parsed callbacks into ordinary Cure functions, validates/checks them,
 emits behavior-tagged independent units, rejects duplicate module names, and
-loads/writes them through the common BeamWriter path. Remaining Phase 2 work is
-dependency ordering/collision integration, provenance, quoted-syntax opacity,
-and transparent replacement of the OTP marker path.
+loads/writes them through the common BeamWriter path. Raw body holes are
+reparsed with the enclosing macro environment, so nested syntax macros inside
+generated lifted declarations are normalized before validation. The macro
+proof gate validates `lift_module` as a closed checked value and uses a
+validated `ModuleName` filler category for generated proofs. Remaining Phase 2
+work is dependency ordering/collision integration, provenance, quoted-syntax
+opacity, and transparent replacement of the OTP marker path.
 
 Build the generic expansion and lifted-module infrastructure before writing
 `beam_ops`:

@@ -618,7 +618,7 @@ defmodule Cure.Compiler.Parser do
 
   defp expand_template_rule(rule, bindings, state) do
     {freshened, state} = freshen(rule.template, state)
-    expanded = subst_holes(freshened, bindings)
+    expanded = subst_holes(freshened, bindings, state)
 
     case Cure.Compiler.MacroSyntax.lower_internal(expanded) do
       {:ok, ast} ->
@@ -714,44 +714,88 @@ defmodule Cure.Compiler.Parser do
 
   defp apply_freshening_value(v, _rename), do: v
 
-  defp subst_holes({:variable, _meta, name} = v, bindings) do
+  defp subst_holes({:variable, _meta, name} = v, bindings, _state) do
     case Map.fetch(bindings, name) do
       {:ok, args} when is_list(args) -> {:list, [generated_by: :macro_repeat], args}
+      {:ok, {:raw_tokens, _raw_meta, _tokens} = raw} -> raw
       {:ok, arg} -> arg
       :error -> v
     end
   end
 
-  defp subst_holes({t, meta, children}, bindings) when is_list(children) do
-    {t, subst_holes_meta(meta, bindings), Enum.map(children, &subst_holes(&1, bindings))}
+  defp subst_holes({t, meta, children}, bindings, state) when is_list(children) do
+    {t, subst_holes_meta(meta, bindings, state), Enum.map(children, &subst_holes(&1, bindings, state))}
   end
 
-  defp subst_holes(other, _bindings), do: other
+  defp subst_holes(other, _bindings, _state), do: other
+
+  defp parse_raw_hole(tokens, parser_state) do
+    eof = %Token{type: :eof, value: nil, line: 0, col: 0}
+
+    state = %__MODULE__{
+      tokens: tokens ++ [eof],
+      file: parser_state.file,
+      emit_events: false,
+      edition: parser_state.edition,
+      builtin_macros: parser_state.builtin_macros,
+      active_macros: parser_state.active_macros,
+      computed_macros: parser_state.computed_macros,
+      literal_macros: parser_state.literal_macros
+    }
+
+    {exprs, state} = parse_program(state)
+
+    case state.errors do
+      [] -> {:raw_splice, exprs}
+      errors -> {:macro_error, [reason: {:raw_hole_parse_error, Enum.reverse(errors)}], []}
+    end
+  end
 
   # Not every child AST lives in a node's `children` list: `match_arm` stashes
   # its `pattern`/`guard` in the node's `meta` keyword list instead. A hole
   # referenced from one of those would otherwise survive expansion unbound.
   # Walk meta's values too, substituting into anything AST-shaped and leaving
   # plain data (lines/cols/names/flags) untouched.
-  defp subst_holes_meta(meta, bindings) when is_list(meta) do
+  defp subst_holes_meta(meta, bindings, state) when is_list(meta) do
     Enum.map(meta, fn
-      {k, v} -> {k, subst_holes_meta_value(v, bindings)}
+      {k, v} -> {k, subst_holes_meta_value(v, bindings, state)}
       other -> other
     end)
   end
 
-  defp subst_holes_meta(meta, _bindings), do: meta
+  defp subst_holes_meta(meta, _bindings, _state), do: meta
 
-  defp subst_holes_meta_value({:macro_hole, name}, bindings) do
+  defp subst_holes_meta_value({:macro_hole, name}, bindings, _state) do
     case Map.fetch(bindings, name) do
       {:ok, value} -> module_name_from_ast(value)
       :error -> {:macro_hole, name}
     end
   end
 
-  defp subst_holes_meta_value(v, bindings) when is_tuple(v), do: subst_holes(v, bindings)
-  defp subst_holes_meta_value(v, bindings) when is_list(v), do: Enum.map(v, &subst_holes_meta_value(&1, bindings))
-  defp subst_holes_meta_value(v, _bindings), do: v
+  defp subst_holes_meta_value({:variable, _meta, name} = variable, bindings, state) do
+    case Map.fetch(bindings, name) do
+      {:ok, {:raw_tokens, _raw_meta, tokens}} -> parse_raw_hole(tokens, state)
+      {:ok, _value} -> subst_holes(variable, bindings, state)
+      :error -> variable
+    end
+  end
+
+  defp subst_holes_meta_value({:raw_tokens, _raw_meta, tokens}, _bindings, state),
+    do: parse_raw_hole(tokens, state)
+
+  defp subst_holes_meta_value(v, bindings, state) when is_tuple(v),
+    do: subst_holes(v, bindings, state)
+
+  defp subst_holes_meta_value(v, bindings, state) when is_list(v) do
+    Enum.flat_map(v, fn item ->
+      case subst_holes_meta_value(item, bindings, state) do
+        {:raw_splice, nodes} -> nodes
+        expanded -> [expanded]
+      end
+    end)
+  end
+
+  defp subst_holes_meta_value(v, _bindings, _state), do: v
 
   defp module_name_from_ast({:variable, _meta, name}), do: name
   defp module_name_from_ast({:literal, _meta, name}) when is_binary(name), do: name
