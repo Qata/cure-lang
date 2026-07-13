@@ -8,14 +8,14 @@ mod Std.Supervisor
       use Std.Otp
       use Std.Supervisor
       behaviour supervisor
-      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(ChildSpec)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), children]]
+      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(ChildSpec)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, more(4)), children]]
       fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name
 
     syntax sup <name: ModuleName> with <payload: Code> <body: raw until dedent> becomes lift module name
       use Std.Otp
       use Std.Supervisor
       behaviour supervisor
-      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(Atom)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), assert_type [] : List(Atom)]]
+      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(Atom)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, more(4)), assert_type [] : List(Atom)]]
       fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name [payload]
       body
 
@@ -23,7 +23,7 @@ mod Std.Supervisor
       use Std.Otp
       use Std.Supervisor
       behaviour supervisor
-      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(Atom)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), assert_type [] : List(Atom)]]
+      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(Atom)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, more(4)), assert_type [] : List(Atom)]]
       fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name
       body
 
@@ -31,6 +31,7 @@ mod Std.Supervisor
   type Shutdown = Brutal | Timeout(Nat)
   type ChildType = Worker | Supervisor
   type Strategy = OneForOne | OneForAll | RestForOne
+  type Positive = One | More(Nat)
 
   typealias StrategySpec = Tuple(Atom, Nat, Nat)
   typealias ChildSpec = Tuple(Atom, Tuple(Atom, Atom, List(Atom)), Atom, Nat, Atom, List(Atom))
@@ -49,13 +50,24 @@ mod Std.Supervisor
   fn one_for_all() -> Strategy = OneForAll()
   fn rest_for_one() -> Strategy = RestForOne()
 
+  fn one() -> Positive = One()
+  fn more(n: Nat) -> Positive = More(n)
+
   ## Convert the closed strategy vocabulary to the ordinary supervisor tuple.
   ## The strategy itself cannot be an arbitrary atom at a checked call site.
-  fn supervision_strategy(strategy: Strategy, intensity: Nat, period: Nat) -> StrategySpec =
+  ## OTP permits zero restart intensity, but its restart period must be
+  ## strictly positive. `Positive` encodes that distinction without an
+  ## assertion or unchecked integer conversion.
+  local fn positive_nat(period: Positive) -> Nat =
+    match period
+      One() -> S(Z())
+      More(n) -> S(n)
+
+  fn supervision_strategy(strategy: Strategy, intensity: Nat, period: Positive) -> StrategySpec =
     match strategy
-      OneForOne() -> %[:one_for_one, intensity, period]
-      OneForAll() -> %[:one_for_all, intensity, period]
-      RestForOne() -> %[:rest_for_one, intensity, period]
+      OneForOne() -> %[:one_for_one, intensity, positive_nat(period)]
+      OneForAll() -> %[:one_for_all, intensity, positive_nat(period)]
+      RestForOne() -> %[:rest_for_one, intensity, positive_nat(period)]
 
   local fn restart_atom(restart: Restart) -> Atom =
     match restart

@@ -441,7 +441,7 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     source = """
     mod Main
       use Std.Supervisor
-      fn build() -> StrategySpec = Std.Supervisor.supervision_strategy(Std.Supervisor.one_for_all(), 2, 10)
+      fn build() -> StrategySpec = Std.Supervisor.supervision_strategy(Std.Supervisor.one_for_all(), 2, Std.Supervisor.more(9))
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
@@ -459,7 +459,7 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     source = """
     mod Main
       use Std.Supervisor
-      fn build() -> StrategySpec = Std.Supervisor.supervision_strategy(:one_for_all, 2, 10)
+      fn build() -> StrategySpec = Std.Supervisor.supervision_strategy(:one_for_all, 2, Std.Supervisor.more(9))
     """
 
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
@@ -470,6 +470,16 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     mod Main
       use Std.Supervisor
       fn build() -> StrategySpec = Std.Supervisor.supervision_strategy(Std.Supervisor.one_for_one(), -1, 5)
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
+  test "supervisor strategy policies reject a zero restart period" do
+    source = """
+    mod Main
+      use Std.Supervisor
+      fn build() -> StrategySpec = Std.Supervisor.supervision_strategy(Std.Supervisor.one_for_one(), 0, 0)
     """
 
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
