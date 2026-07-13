@@ -15,8 +15,9 @@ defmodule Cure.Compiler.AtomVMContainerTest do
 
       on_exit(fn -> File.rm_rf!(out) end)
 
-      assert {:ok, :"Cure.AtomVMTestSup", _} =
-               Cure.Compiler.compile_string("sup Cure.AtomVMTestSup\n",
+      assert {:ok, :"Cure.Main", _} =
+               Cure.Compiler.compile_string(
+                 "use Std.Supervisor\nactor Cure.AtomVMTestWorker with 0\nsup Cure.AtomVMTestSup children [child_spec Cure.AtomVMTestWorker :worker]\n",
                  output_dir: out,
                  emit_events: false
                )
@@ -34,7 +35,8 @@ defmodule Cure.Compiler.AtomVMContainerTest do
                )
 
       assert {:ok, :"Cure.AtomVMTestFsm", _} =
-               Cure.Compiler.compile_string("fsm Cure.AtomVMTestFsm with 0\n",
+               Cure.Compiler.compile_string(
+                 "fsm Cure.AtomVMTestFsm state Int transitions [transition :ready :tick :ready]\n",
                  output_dir: out,
                  emit_events: false
                )
@@ -49,7 +51,7 @@ defmodule Cure.Compiler.AtomVMContainerTest do
               remote_call(:"Cure.AtomVMTestSup", :start_link, []),
               remote_call(:"Cure.AtomVMTestApp", :start, [{:atom, 1, :normal}, {nil, 1}]),
               remote_call(:"Cure.AtomVMTestActor", :start_link, []),
-              remote_call(:"Cure.AtomVMTestFsm", :start_link, []),
+              remote_call(:"Cure.AtomVMTestFsm", :start_link, [{:integer, 1, 0}]),
               remote_call(:io, :format, [{:string, 1, ~c"CURE_ATOMVM_PROOF_OK~n"}, {nil, 1}])
             ]}
          ]}
@@ -65,6 +67,7 @@ defmodule Cure.Compiler.AtomVMContainerTest do
       beams =
         [
           Path.join(out, "Cure.AtomVMTestSup.beam"),
+          Path.join(out, "Cure.AtomVMTestWorker.beam"),
           Path.join(out, "Cure.AtomVMTestApp.beam"),
           Path.join(out, "Cure.AtomVMTestActor.beam"),
           Path.join(out, "Cure.AtomVMTestFsm.beam")
