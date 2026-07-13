@@ -123,6 +123,30 @@ defmodule Cure.Story.Outline do
     acc
   end
 
+  defp walk_node({:lift_module, meta, _body}, file, acc) when is_list(meta) do
+    name = Keyword.get(meta, :module, "Unknown") |> to_string()
+
+    case Keyword.get(meta, :behaviour) do
+      :application ->
+        %{acc | apps: [%{name: name, file: file, supervisors: [], actors: []} | acc.apps]}
+
+      :supervisor ->
+        node = %{name: name, file: file, strategy: :one_for_one, children: []}
+        %{acc | supervisors: [node | acc.supervisors]}
+
+      :gen_server ->
+        node = %{name: name, file: file, effects: [], messages: []}
+        %{acc | actors: [node | acc.actors]}
+
+      :gen_statem ->
+        node = %{name: name, file: file, states: [], transitions: []}
+        %{acc | fsms: [node | acc.fsms]}
+
+      _ ->
+        acc
+    end
+  end
+
   defp walk_node({:type_annotation, meta, _}, file, acc) when is_list(meta) do
     node = %{
       name: Keyword.get(meta, :name, "Unknown"),
