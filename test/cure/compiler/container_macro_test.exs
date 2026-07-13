@@ -134,6 +134,28 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "actor cast syntax runs a checked transparent message handler" do
+    source = """
+    actor Cure.CastActor state Int messages Atom handle_cast
+      pickup
+        message == :inc -> %[:noreply, state + 1]
+        else -> %[:noreply, state]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :handle_cast, [:inc, 4]) == {:noreply, 5}
+    assert apply(module, :handle_cast, [:other, 4]) == {:noreply, 4}
+  end
+
+  test "actor cast syntax rejects a body with the wrong state result" do
+    source = """
+    actor Cure.InvalidCastActor state Int messages Atom handle_cast
+      %[:noreply, true]
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "actor call syntax keeps request and reply types distinct" do
     source = """
     actor Cure.TypedCallActor state Int call Int returns Bool
