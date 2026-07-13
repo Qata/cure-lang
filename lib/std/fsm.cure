@@ -4,6 +4,18 @@ mod Std.Fsm
   ## an ordinary lifted GenStatem module; transition derivation and handlers
   ## are layered on top of this floor.
   macro FsmContainers
+    syntax transition <from: Atom> <event: Atom> <to: Atom> becomes Std.Fsm.transition(from, event, to)
+
+    syntax fsm <name: ModuleName> state <state_type: Type> transitions <table: Code> contextual becomes lift module name
+      use Std.Otp
+      use Std.Fsm
+      behaviour gen_statem
+      typealias State = state_type
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: Atom, state: Atom, data: State) returns Effect(Tuple(Atom, Atom, State)) = Std.Fsm.dispatch(table, state, event, data)
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name [initial]
+
     syntax fsm <name: ModuleName> state <state_type: Type> init <init_body: delayed raw until dedent> contextual becomes lift module name
       use Std.Otp
       behaviour gen_statem
@@ -69,6 +81,22 @@ mod Std.Fsm
       callback handle_event(event_type: Atom, event: e, state: s, data: p) returns Effect(Atom) = :keep_state_and_data
       fn start_link(initial: p) -> Effect(Tuple) = beam_ops start_statem name [initial]
       body
+
+  type Transition = Row(Atom, Atom, Atom)
+
+  ## A transition row is ordinary data. The macro surface above expands rows to
+  ## this checked ADT so users can compose, inspect, and transform tables with
+  ## normal Cure functions.
+  fn transition(from: Atom, event: Atom, to: Atom) -> Transition = Row(from, event, to)
+
+  fn dispatch(transitions: List(Transition), state: Atom, event: Atom, data: a) -> Tuple(Atom, Atom, a) =
+    match transitions
+      [] -> %[:next_state, state, data]
+      [Row(from, expected, next) | rest] -> match state == from
+        true -> match event == expected
+          true -> %[:next_state, next, data]
+          false -> dispatch(rest, state, event, data)
+        false -> dispatch(rest, state, event, data)
 
   ## FSM runtime operations: spawn, stop, send events, get state.
   ##

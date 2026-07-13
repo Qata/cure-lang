@@ -213,6 +213,23 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert apply(module, :handle_event, [:info, :tick, :ready, 7]) == :keep_state_and_data
   end
 
+  test "fsm transition syntax lowers rows and dispatches through ordinary Cure code" do
+    source = """
+    fsm Cure.TransitionFsm state Int transitions [transition :locked :coin :unlocked, transition :unlocked :push :locked]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert apply(module, :handle_event, [:info, :coin, :locked, 0]) ==
+             {:next_state, :unlocked, 0}
+
+    assert apply(module, :handle_event, [:info, :push, :unlocked, 0]) ==
+             {:next_state, :locked, 0}
+
+    assert apply(module, :handle_event, [:info, :push, :locked, 0]) ==
+             {:next_state, :locked, 0}
+  end
+
   test "fsm callback bodies sequence beam operations through an erased effect result" do
     source = """
     fsm Cure.EffectFsm state Int handle_event
