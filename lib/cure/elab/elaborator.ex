@@ -5552,6 +5552,18 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A byte generator is an ordinary list generator after the standard-library
+  # byte view has been applied. Sized/typed bit segments remain a deliberate
+  # unsupported extension until their runtime representation exists.
+  defp desugar_comprehension([{:binary_generator, _gm, [pattern, source]} | rest], body, line) do
+    with {:ok, param} <- binary_generator_param(pattern),
+         {:ok, inner} <- desugar_comprehension(rest, body, line) do
+      lambda = {:lambda, [params: [param], line: line], [inner]}
+      bytes = {:function_call, [name: "to_bytes", line: line], [source]}
+      {:ok, {:function_call, [name: "flat_map", line: line], [bytes, lambda]}}
+    end
+  end
+
   defp desugar_comprehension([qual | rest], body, line) do
     cond_ast =
       case qual do
@@ -5568,6 +5580,19 @@ defmodule Cure.Elab.Elaborator do
   # generator (`{a, b} <- xs`) is rejected rather than silently mistyped.
   defp generator_param({:variable, _m, name}), do: {:ok, {:param, [], name}}
   defp generator_param(other), do: {:error, {:unsupported_comprehension_pattern, other}}
+
+  defp binary_generator_param({:literal, meta, [{:bin_segment, segment_meta, [pattern]}]}) do
+    if Keyword.get(meta, :subtype) == :bytes and
+         is_nil(Keyword.get(segment_meta, :size)) and
+         is_nil(Keyword.get(segment_meta, :type)) do
+      generator_param(pattern)
+    else
+      {:error, {:unsupported_binary_generator_pattern, pattern}}
+    end
+  end
+
+  defp binary_generator_param(pattern),
+    do: {:error, {:unsupported_binary_generator_pattern, pattern}}
 
   # `%{k: v, …}` → nested `Std.Map.put(k, v, …)` over `Std.Map.new()`. `%{}`
   # folds to a bare `new()`. Shared by the typed and checked map clauses.

@@ -27,6 +27,10 @@ mod Std.Binary
   ## The BEAM binary as a primitive base type — its visible, inspectable home.
   @builtin(:binary) primitive Binary
 
+  ## Byte comprehensions consume a list view of a binary. Keep this helper in
+  ## the standard library so the surface syntax reuses ordinary list lowering.
+  use Std.List
+
   ## `Char` lives in its own module (`Std.Char`); import it for the `List(Char)`
   ## signatures below.
   use Std.Char
@@ -60,6 +64,10 @@ mod Std.Binary
   ## The byte (0–255) at zero-based `index`; delegates to `:binary.at/2`.
   @extern(:binary, :at, 2)
   fn byte_at(b: Binary, index: Int) -> Int
+
+  ## The eager byte view used by `for <<b <- binary>>`.
+  fn to_bytes(b: Binary) -> List(Int) =
+    flat_map(range_upto(0, byte_size(b)), fn(i) -> [byte_at(b, i)])
 
   ## The sub-binary `[start, start + len)`; delegates to `:binary.part/3`.
   @extern(:binary, :part, 3)
