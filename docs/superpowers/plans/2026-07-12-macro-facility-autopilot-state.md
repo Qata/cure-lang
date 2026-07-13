@@ -1083,9 +1083,11 @@ proof gate validates `lift_module` as a closed checked value and uses a
 validated `ModuleName` filler category for generated proofs. Lifted module
 imports now carry dependency metadata; generated units are deterministically
 topologically ordered, generated-module cycles are rejected before emission,
-and source provenance is retained on each quoted module. Required callbacks
-are validated against the closed behavior vocabulary before ordinary module
-emission (`430b1a04`, 17 lifted-module surface tests). Dynamic module-name
+and source provenance is retained on each quoted module. Generic callback
+shape validation remains in the collector; behavior names, callback
+vocabularies, and callback semantics stay in Cure standard-library macros so
+the compiler remains OTP-agnostic (`408191ad`, 15 lifted-module surface
+tests). Dynamic module-name
 holes are also substituted as checked atom
 literals inside generated ordinary declarations, which gives transparent
 `start_link`/registry helpers a normal Cure value to consume. The main compiler
