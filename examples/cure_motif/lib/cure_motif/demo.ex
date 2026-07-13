@@ -97,7 +97,7 @@ defmodule CureMotif.Demo do
     after
       # Let any lingering notifications flush before we stop.
       _ = :sys.get_state(pid)
-      Cure.Actor.Runtime.stop_actor(pid)
+      GenServer.stop(pid)
     end
   end
 end
