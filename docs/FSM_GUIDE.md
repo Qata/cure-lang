@@ -63,6 +63,23 @@ The `event_type`, `event`, `state`, and `data` names are available in the
 callback body. The body must elaborate to the declared `Effect(Atom)` result.
 Nested macros are expanded before the callback is checked.
 
+## Transition Tables
+
+Transition rows are ordinary checked Cure ADT values. They are not parsed by a
+compiler-owned transition grammar:
+
+```cure
+fsm Cure.Light state Int transitions [
+  transition :locked :coin :unlocked,
+  transition :unlocked :push :locked
+]
+```
+
+The generated callback calls the polymorphic `Std.Fsm.dispatch/4` function.
+Matching rows return the ordinary `{:next_state, state, data}` tuple; an
+unmatched row keeps the current state. Additional lifecycle and payload
+policies belong in standard-library macros over this vocabulary.
+
 ## Runtime
 
 The generated module is an ordinary BEAM module and can be started through its
