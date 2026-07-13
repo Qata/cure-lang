@@ -1245,8 +1245,12 @@ emitter, and the printer round-trips transparent lift syntax.
 The current child-spec argument floor intentionally remains `List(Atom)`: the
 language has no general ordinary-value `Any` type, so widening this field would
 be an unsound workaround rather than a typed raw-term boundary. A first-class
-raw BEAM term boundary is still required before arbitrary typed startup args
-can be admitted.
+raw BEAM term boundary is still required before heterogeneous supervisor child
+lists can admit arbitrary typed startup args. The underlying checked
+`child_with_args` constructor now supports a homogeneous `List(a)` directly,
+with a focused non-atom payload proof; the transparent macro child-list floor
+remains intentionally `List(Atom)` until that existential/raw-term boundary is
+implemented (`6ffe5937`, 56 focused object tests).
 
 Define `sup` in `lib/std/supervisor.cure` using `Supervisor`, `callback`, and
 `lift module`. Validate child specs, strategy, intensity, period, restart,
