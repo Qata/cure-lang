@@ -1333,6 +1333,13 @@ special case.
 Transition-table `init/1` now derives its initial state from the first checked
 row, and a generic Unix `gen_statem.cast` probe confirms that a table beginning
 at `:locked` enters `:unlocked` on `:coin` (`6d3a29ad`, 53 focused tests).
+Custom FSM callback bodies now also use source-level `InitResult` and
+`EventResult` aliases for their erased effect contracts. This keeps direct
+`pickup` callback expressions in the transparent Cure source while preserving
+ordinary result checking; a focused `handle_event` pickup test covers the
+alias-backed path (`3019b4bc`, 56 focused object tests). The direct
+`Effect(T)` case-motive kernel gap remains open and is not treated as solved by
+these aliases.
 
 #### Phase 4d — `app`
 
