@@ -1431,9 +1431,12 @@ actor/FSM/supervisor/application container nodes (`fca7fd18`, `f6c1f340`).
 The user-facing application, FSM, supervision, and language-spec guides now
 describe the transparent `app`, `fsm`, `sup`, and `actor` macros, checked
 `beam_ops`, and lifted modules; the tutorial follows the same callback floor
-(`0984209a`, 31 documentation tests). Remaining legacy examples and replay/
-observation references must either be migrated to that surface or explicitly
-isolated as historical data before the forbidden-remnant gate can close.
+(`0984209a`, 31 documentation tests). Current example READMEs, the FSM guide,
+glossary, and replay reference now use the transparent macro/algebra surface
+(`217bacc5`, 23 documentation tests plus the glossary telescope check). Dated
+changelog and site-post material remains historical release data and is excluded
+from the present-tense forbidden-remnant gate; stale host harnesses in older
+example projects remain an explicit migration surface, not current proofs.
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new
