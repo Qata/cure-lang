@@ -38,6 +38,7 @@ defmodule Cure.Compiler.ContainerMacroTest do
     for {keyword, name, fun, args} <- @containers do
       source = "#{keyword} #{name}\n"
       assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
       expected_module =
         if keyword == "sup", do: String.to_atom(name), else: Module.concat(String.split(name, "."))
 
