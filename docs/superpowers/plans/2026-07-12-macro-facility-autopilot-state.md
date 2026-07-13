@@ -1417,7 +1417,8 @@ audit is to migrate stale documentation/examples/tests and complete the
 forbidden-remnant search. The stale compiler diagnostics and genericized
 compiler comments/formatter/parser surface were cleaned in
 `87b2669c` and `6633b27d`; ASCII/Mermaid documentation now consumes
-lifted-module metadata only, and the story outline no longer walks retired
+only the generic lifted-module metadata contract, with the draw CLI accepting
+`lifted|all`, in `8f5af31b`; the story outline no longer walks retired
 actor/FSM/supervisor/application container nodes (`fca7fd18`, `f6c1f340`).
 The user-facing application, FSM, supervision, and language-spec guides now
 describe the transparent `app`, `fsm`, `sup`, and `actor` macros, checked
