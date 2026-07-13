@@ -1229,10 +1229,10 @@ path. Restart intensity may be zero while restart period is represented by the
 closed positive `Positive` type and rejects zero through ordinary elaboration
 (`93d71a66`, 48 focused object tests). Typed child startup arguments and full
 runtime supervision parity remain to be implemented before this sub-phase is
-complete. A transparent `child_spec` syntax macro now captures a
-`ModuleName` and lowers it to the generated child module atom through the
-generic macro matcher; the common runtime proof starts a generated actor under
-a generated supervisor (`27b3554d`, 49 focused object tests). Top-level lifted
+complete. Transparent `child_spec` syntax now also captures a checked startup
+argument list and lowers it through `child_with_args`; the common runtime proof
+starts a generated actor under a generated supervisor (`27b3554d`,
+`648c75bf`, 50 focused object tests). Top-level lifted
 sources now emit the lifted unit as the primary
 module, imported standard-library calls route remotely through the common
 emitter, and the printer round-trips transparent lift syntax.
