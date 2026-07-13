@@ -387,6 +387,21 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert [{:worker, {:worker_module, :start_link, []}, :permanent, 5000, :worker, [:worker_module]}] = children
   end
 
+  test "transparent supervisor starts a generated actor child through the common runtime" do
+    source = """
+    use Std.Supervisor
+    actor Cure.SupervisedWorker with 0
+    sup Cure.SupervisedRoot children [child_spec Cure.SupervisedWorker :worker]
+    """
+
+    assert {:ok, _main} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ok, supervisor} = apply(:"Cure.SupervisedRoot", :start_link, [])
+    assert [{:worker, worker, :worker, [:"Cure.SupervisedWorker"]}] = :supervisor.which_children(supervisor)
+    assert is_pid(worker)
+    assert Process.alive?(worker)
+    :supervisor.stop(supervisor)
+  end
+
   test "supervisor child policies are closed typed values" do
     source = """
     mod Main

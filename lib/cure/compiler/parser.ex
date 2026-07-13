@@ -592,6 +592,12 @@ defmodule Cure.Compiler.Parser do
     match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
   end
 
+  defp match_segments(state, [{:hole, %{name: name, kind: "ModuleName"}} | rest], bindings, progress) do
+    {module_name, state} = parse_dotted_name(state)
+    module = {:literal, [subtype: :symbol], String.to_atom(module_name)}
+    match_segments(state, rest, Map.put(bindings, name, module), progress + 1)
+  end
+
   defp match_segments(state, [{:hole, %{name: name}} | rest], bindings, progress) do
     {arg, state} = parse_expr(state, 0)
     match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)

@@ -107,6 +107,17 @@ defmodule Cure.Compiler.MacroFuzz do
            generator: Gen.member_of([{:ctor, :Example, []}, {:ctor, :Worker, []}])
          }}
 
+      "Atom" ->
+        {:ok,
+         %{
+           category: category,
+           domain: :atom,
+           env: generation_env,
+           ctx: ctx,
+           goal: nil,
+           generator: Gen.member_of([{:raw_text, ":example"}, {:raw_text, ":worker"}])
+         }}
+
       "ModuleName" ->
         {:ok,
          %{
@@ -683,6 +694,16 @@ defmodule Cure.Compiler.MacroFuzz do
 
   defp check_samples(%{domain: :identifier}, terms) do
     case Enum.find(terms, &(not match?({:ctor, name, []} when is_atom(name), &1))) do
+      nil -> :ok
+      bad -> {:error, {:generated_hole_not_well_typed, bad}}
+    end
+  end
+
+  defp check_samples(%{domain: :atom}, terms) do
+    case Enum.find(terms, fn
+           {:raw_text, text} -> not Regex.match?(~r/^:[a-z][A-Za-z0-9_@!?]*$/, text)
+           _ -> true
+         end) do
       nil -> :ok
       bad -> {:error, {:generated_hole_not_well_typed, bad}}
     end
