@@ -1299,7 +1299,9 @@ representation (`136bb396`). A phase form now
 emits an ordinary `start_phase/3` callback with a delayed, single-expression
 body reparsed under application callback context (`7b13fe7d`). Payload
 preservation, multiple phase declarations, and effectful lifecycle-body
-context remain required.
+context remain required. Supervisor child startup now also has a checked
+`child_with_args/6` path whose MFA arguments are `List(Atom)`
+(`12f483b8`).
 
 Define `app` in `lib/std/app.cure`. Emit `Application` lifecycle callbacks,
 optional phases, ordinary startup/shutdown bodies, and checked supervision
