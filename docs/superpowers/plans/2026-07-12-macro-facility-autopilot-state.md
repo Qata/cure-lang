@@ -1414,7 +1414,9 @@ behavior-verifier stage catalogs and stale OTP-specific compiler comments were
 removed in `f191d8b6`. Project and LSP tooling that pattern-matched the old
 application/FSM shapes was genericized in `00943ad4`; the remaining Phase 5
 audit is to migrate stale documentation/examples/tests and complete the
-forbidden-remnant search. ASCII/Mermaid documentation now consumes
+forbidden-remnant search. The stale compiler diagnostics and genericized
+compiler comments/formatter/parser surface were cleaned in
+`87b2669c` and `6633b27d`; ASCII/Mermaid documentation now consumes
 lifted-module metadata only, and the story outline no longer walks retired
 actor/FSM/supervisor/application container nodes (`fca7fd18`, `f6c1f340`).
 The user-facing application, FSM, supervision, and language-spec guides now
