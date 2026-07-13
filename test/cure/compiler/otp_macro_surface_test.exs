@@ -74,6 +74,28 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
     assert {:error, _} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "known lifted behaviors reject unknown callbacks" do
+    source = """
+    lift module Cure.Generated.BadCallbackName
+      behaviour GenServer
+      callback not_a_gen_server_callback() -> :ok
+    """
+
+    assert {:error, {:codegen_error, {:invalid_lift_callback, :gen_server, :not_a_gen_server_callback, 0}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
+  test "known lifted behaviors reject callback arity mismatches" do
+    source = """
+    lift module Cure.Generated.BadCallbackArity
+      behaviour supervisor
+      callback init(arg: Int, extra: Int) -> arg
+    """
+
+    assert {:error, {:codegen_error, {:invalid_lift_callback, :supervisor, :init, 2}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "a transparent macro can substitute an identifier into lift module" do
     source = """
     mod M
@@ -168,7 +190,7 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
       macro Lift
         syntax make <name: ModuleName> becomes lift module name
           behaviour custom_behavior
-          fn build() -> StrategySpec = supervision_strategy(one_for_all(), 2, 9)
+          fn build() -> StrategySpec = supervision_strategy(one_for_all(), 2, more(8))
       make Cure.Generated.BareNames
     """
 
@@ -183,7 +205,7 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
       macro Lift
         syntax make <name: ModuleName> becomes lift module name
           behaviour custom_behavior
-          fn build() -> Sup.StrategySpec = Sup.supervision_strategy(Sup.one_for_all(), 2, 9)
+          fn build() -> Sup.StrategySpec = Sup.supervision_strategy(Sup.one_for_all(), 2, Sup.more(8))
       make Cure.Generated.AliasedNames
     """
 

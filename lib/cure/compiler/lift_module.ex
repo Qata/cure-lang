@@ -9,6 +9,13 @@ defmodule Cure.Compiler.LiftModule do
 
   alias Cure.Elab.{Emit, Program}
 
+  @callback_contracts %{
+    gen_server: %{init: 1, handle_call: 3, handle_cast: 2, handle_info: 2, terminate: 2, code_change: 3},
+    gen_statem: %{callback_mode: 0, init: 1, handle_event: 4},
+    supervisor: %{init: 1},
+    application: %{start: 2, stop: 1, start_phase: 3}
+  }
+
   @type unit :: %{
           module: module(),
           forms: [tuple()],
@@ -35,7 +42,7 @@ defmodule Cure.Compiler.LiftModule do
          declarations when is_list(declarations) <- Keyword.get(meta, :declarations, []),
          :ok <- validate_module_name(module),
          :ok <- validate_behaviour(behaviour),
-         :ok <- validate_callbacks(callbacks),
+         :ok <- validate_callbacks(behaviour, callbacks),
          :ok <- validate_declarations(declarations),
          imports = Keyword.get(meta, :imports, imports_from_declarations(declarations)),
          :ok <- validate_imports(imports) do
@@ -51,6 +58,7 @@ defmodule Cure.Compiler.LiftModule do
          source_provenance: Keyword.get(meta, :source_provenance)
        }}
     else
+      {:error, _} = error -> error
       _ -> {:error, :invalid_lift_module_ast}
     end
   end
@@ -243,8 +251,36 @@ defmodule Cure.Compiler.LiftModule do
   defp validate_behaviour(behaviour) when is_atom(behaviour) and not is_nil(behaviour), do: :ok
   defp validate_behaviour(behaviour), do: {:error, {:invalid_behaviour, behaviour}}
 
-  defp validate_callbacks(callbacks) do
-    if Enum.all?(callbacks, &valid_callback?/1), do: :ok, else: {:error, :invalid_lift_callback}
+  defp validate_callbacks(behaviour, callbacks) do
+    with true <- Enum.all?(callbacks, &valid_callback?/1),
+         :ok <- validate_known_callbacks(behaviour, callbacks) do
+      :ok
+    else
+      false -> {:error, :invalid_lift_callback}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp validate_known_callbacks(behaviour, callbacks) do
+    case Map.get(@callback_contracts, normalize_behaviour(behaviour)) do
+      nil -> :ok
+
+      contract ->
+        case Enum.find(callbacks, fn callback -> Map.get(contract, callback.name) != callback.arity end) do
+          nil -> :ok
+          %{name: name, arity: arity} -> {:error, {:invalid_lift_callback, normalize_behaviour(behaviour), name, arity}}
+        end
+    end
+  end
+
+  defp normalize_behaviour(behaviour) when is_atom(behaviour) do
+    case behaviour do
+      :GenServer -> :gen_server
+      :GenStatem -> :gen_statem
+      :Supervisor -> :supervisor
+      :Application -> :application
+      other -> other
+    end
   end
 
   defp valid_callback?(%{name: name, arity: arity}) when is_atom(name) and is_integer(arity) and arity >= 0,
