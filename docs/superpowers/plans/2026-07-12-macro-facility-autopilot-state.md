@@ -974,7 +974,7 @@ The following slices have now landed in this worktree:
 - SP6 has a pure parse-grammar builder with duplicate and left-recursion validation.
 - The standard library now auto-preludes a `lens first`/`lens second` macro surface from `Std.Optic`; both expand to ordinary typed optic calls and are covered by parser and runtime tests.
 - The generated expansion-proof gate now runs for the dependent pipeline and the transitional classic `compile_string` path; the classic soundness negative control and the full suite pass.
-- Final verification in this worktree: `mix compile --warnings-as-errors` passed; `mix test` passed with `4239 passed (3 doctests, 4236 tests), 2 skipped`, `141` immune responses, and Antigen shape coverage `328/328` across 36 manifests.
+- Final verification before the transparent BEAM continuation: `mix compile --warnings-as-errors` passed; the current full gate passes with `4051 passed (3 doctests, 4048 tests), 1 skipped`, `138` immune responses, and Antigen shape coverage `318/318` across 31 manifests.
 - SP3's built-in lexical categories now use native domains: numeric literal generators for `Number`/`Duration`, mixed typed expression generators for `Code`, and type-term generation for `Kind`. Unsupported categories remain explicit coverage errors.
 
 The remaining work before the DONE criterion is genuinely satisfied is governed by
@@ -1484,6 +1484,15 @@ The Colony and Forge example READMEs and compile tasks now describe lifted
 module emission and no longer advertise source-string compiler loading
 (`b4bf53cb`). Their older Elixir facades/tests still need a full behavioral
 migration before the example-project gate can close.
+The current forbidden-remnant audit confirms that the active compiler path is
+clean: no `__otp_container`, `ContainerMacro`, `OtpMacro`, `Code.compile_string`,
+or direct code-server loading remains in compiler/elaborator modules. The
+remaining non-historical matches are limited to the older Turnstile, Moneta,
+Motif, Colony, and Forge host facades/tests, which still mention retired
+`Cure.FSM.*`, `Cure.Actor.Runtime`, or compiler-owned naming in their prose and
+helpers. The Motif compile task also contained a stale description of eager
+source-string/container compilation. These are the remaining example-project
+migration surface; they are not compiler-path evidence.
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new
@@ -1502,7 +1511,9 @@ Suggested commit:
    The generic-unix AtomVM package proof now includes a generated actor child
    under the generated supervisor and a transition-table FSM, with the typed
    FSM starter invoked using its initial state (`3cc076b9`, 1 test passed after
-   a clean AtomVM rebuild).
+   a clean AtomVM rebuild). The current focused object suite is 62 passing,
+   the algebra suite is 17 passing, the AtomVM package proof is 1 passing, and
+   the full repository gate is 4051 passing with 1 skipped.
 4. Complete remaining callback vocabulary and embedded surface families.
 5. Complete indexed reducer/view/flow integration and remaining SP6 gaps.
 6. Run skeptical review to two clean passes.
