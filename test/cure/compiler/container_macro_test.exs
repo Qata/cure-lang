@@ -242,6 +242,8 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
 
+    assert apply(module, :init, [0]) == {:ok, :locked, 0}
+
     assert apply(module, :handle_event, [:info, :coin, :locked, 0]) ==
              {:next_state, :unlocked, 0}
 

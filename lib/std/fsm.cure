@@ -12,7 +12,7 @@ mod Std.Fsm
       behaviour gen_statem
       typealias State = state_type
       callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, Std.Fsm.first_state(table), initial]
       callback handle_event(event_type: Atom, event: Atom, state: Atom, data: State) returns Effect(Tuple(Atom, Atom, State)) = Std.Fsm.dispatch(table, state, event, data)
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name [initial]
 
@@ -88,6 +88,11 @@ mod Std.Fsm
   ## this checked ADT so users can compose, inspect, and transform tables with
   ## normal Cure functions.
   fn transition(from: Atom, event: Atom, to: Atom) -> Transition = Row(from, event, to)
+
+  fn first_state(transitions: List(Transition)) -> Atom =
+    match transitions
+      [] -> :initial
+      [Row(from, _, _) | _] -> from
 
   fn dispatch(transitions: List(Transition), state: Atom, event: Atom, data: a) -> Tuple(Atom, Atom, a) =
     match transitions
