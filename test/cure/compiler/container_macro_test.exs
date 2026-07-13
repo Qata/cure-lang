@@ -430,6 +430,16 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
              {:worker, {:worker_module, :start_link, [:boot]}, :permanent, 1000, :worker, [:worker_module]}
   end
 
+  test "transparent child_spec syntax preserves checked startup arguments" do
+    source = "sup Cure.ArgRoot children [child_spec Cure.ArgWorker :worker with [:boot]]\n"
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ok, {_strategy, [child]}} = apply(module, :init, [[]])
+
+    assert child ==
+             {:worker, {:"Cure.ArgWorker", :start_link, [:boot]}, :permanent, 5000, :worker, [:"Cure.ArgWorker"]}
+  end
+
   test "supervisor child startup rejects non-atom argument lists" do
     source = """
     mod Main
