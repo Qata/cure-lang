@@ -1093,6 +1093,16 @@ macro proof checking no longer consults that branch, and the OTP container
 parser fallback has been removed. Remaining Phase 2 work is richer provenance
 chains, quoted-syntax opacity, and full delayed callback context threading.
 
+Standard-library macro loading now performs a generic harvest pass followed by
+a parse with the complete harvested grammar, so one standard-library macro may
+invoke another without a compiler-owned composition case. This enables the
+transparent actor, FSM, and supervisor starters to use `beam_ops` directly;
+the startup vocabulary now includes `start_link`, `start_statem`, and both
+zero-argument and argument-bearing supervisor startup forms. The full suite
+after this slice passed 4007 tests, 3 doctests, and 1 skipped test, with
+Antigen coverage 318/318. Remaining Phase 2 work is richer provenance chains,
+quoted-syntax opacity, and full delayed callback context threading.
+
 Build the generic expansion and lifted-module infrastructure before writing
 `beam_ops`:
 
@@ -1156,9 +1166,11 @@ public and raw OTP wrappers bind every phantom type index as an explicit erased
 parameter, so a concrete `Effect(Pid(Atom))` goal solves the raw operation rather
 than relying on a rigid free type global. `beam_ops self` is contextual because
 an unannotated standalone polymorphic self operation has no sound message index.
-The remaining operation work must introduce an explicit behavior context so those
-wrappers can mint `Pid(m)` with the callback's message code instead of leaving `m`
-undetermined:
+Startup operations are now also exposed through the closed `beam_ops`
+vocabulary and are used by the transparent actor, FSM, and supervisor
+templates. The remaining operation work must introduce an explicit behavior
+context so those wrappers can mint `Pid(m)` with the callback's message code
+instead of leaving `m` undetermined:
 
 1. Add a closed operation vocabulary for `self`, `send`/`tell`, `call`,
    `cast`, `spawn`, `start_link`, `stop`, timers, monitors, and links.
