@@ -1126,7 +1126,8 @@ Suggested commit:
 transparent `beam_ops` rule: `beam_ops self` expands to ordinary
 `Std.Otp.self()` syntax and is proven marker-free. The raw process-creation
 floor is present (`raw_spawn`/`raw_spawn_link` plus ordinary `Std.Otp`
-wrappers), along with an effect-typed `gen_server:start_link/4` wrapper that
+wrappers), along with effect-typed `gen_server:start_link/4` and
+`gen_statem:start_link/4` wrappers that
 preserves the OTP result tuple. The elaborator now threads expected result types through
 qualified calls carrying lambda arguments. The remaining operation work must
 introduce an explicit behavior context so those wrappers can mint `Pid(m)` with
@@ -1174,6 +1175,11 @@ module emits and runs through the common path.
 
 #### Phase 4b — `actor`
 
+**STATUS: IN PROGRESS (2026-07-13).** The public `actor` syntax now expands
+to an ordinary lifted `GenServer` module and starts through the typed
+`Std.Otp.start_link` wrapper. The bootstrap floor is tested structurally and
+through the generic Unix runtime path.
+
 Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
 emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
 inside start, message, and stop bodies. The initial transparent floor must not
@@ -1187,6 +1193,13 @@ these relationships. Add positive and negative tests proving that callback
 state/result mismatches are rejected before this sub-phase is complete.
 
 #### Phase 4c — `fsm`
+
+**STATUS: IN PROGRESS (2026-07-13).** The public `fsm` syntax now expands to
+an ordinary lifted `GenStatem` module and starts through the typed
+`Std.Otp.start_statem` wrapper. The bootstrap floor is tested structurally and
+through the generic Unix runtime path. Transition-table lowering, payload
+preservation, event/state derivation, and callback-context typing remain
+required.
 
 Define `fsm` in `lib/std/fsm.cure`. Preserve transition-table and callback
 mode compatibility, derive shared message/state information, emit the
