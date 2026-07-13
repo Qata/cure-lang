@@ -1204,6 +1204,12 @@ instead of leaving `m` undetermined:
 Gate: `beam_ops` is a standard-library macro, its output is ordinary checked
 AST, and its generated code contains no compiler-only OTP marker.
 
+The operation vocabulary now has focused positive coverage for messaging,
+startup, lifecycle, timers, monitors, and links (`1c40e265`, 17 algebra tests).
+The current public guides and observability/journal docs also describe the
+transparent macro/lifted-module surface rather than retired generated classes
+(`88ba711e`, 33 documentation/observability tests plus the glossary gate).
+
 Suggested commit:
 `feat(std): define beam_ops over the checked process algebra`
 
