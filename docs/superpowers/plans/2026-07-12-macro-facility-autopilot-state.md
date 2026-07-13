@@ -977,37 +977,230 @@ The following slices have now landed in this worktree:
 - Final verification in this worktree: `mix compile --warnings-as-errors` passed; `mix test` passed with `4239 passed (3 doctests, 4236 tests), 2 skipped`, `141` immune responses, and Antigen shape coverage `328/328` across 36 manifests.
 - SP3's built-in lexical categories now use native domains: numeric literal generators for `Number`/`Duration`, mixed typed expression generators for `Code`, and type-term generation for `Kind`. Unsupported categories remain explicit coverage errors.
 
-The remaining work before the DONE criterion is genuinely satisfied is:
+The remaining work before the DONE criterion is genuinely satisfied is governed by
+the ordered transparent BEAM plan below. The earlier SP1-SP6 work is an upstream
+foundation; it does not satisfy the BEAM algebra, recursive expansion, or OTP
+macro replacement gates by itself.
 
-- Parameterized/indexed module-category generation now covers nullary constructors with typed parameter-result substitution; families requiring dependent constructor-field synthesis remain explicit coverage gaps.
-- Extend the generated-proof gate to any future macro compilation path introduced after the current dependent and transitional classic paths.
-- Extend SP4 from the current declaration bundle to index-aware reducer/view/flow lowering and end-to-end concrete-library integration.
-- Extend SP5 beyond the generic-unix supervisor/application proof to any remaining callback vocabulary and runtime behavior required by the concrete embedded surfaces.
-- Extend SP6 concrete libraries beyond the current packet, board, protocol, driver, units, checks, and parse helpers to the remaining embedded surface families.
-- Perform the final end-to-end proof after the AtomVM runtime gate and remaining embedded surface families land; skeptical review, full test gate, and Antigen verification are complete for the current implementation.
+- Preserve the existing indexed module-category and generated-proof coverage gaps
+  as explicit sub-tasks in the final SP6 verification pass.
+- Complete the transparent BEAM plan in order, committing every phase before the
+  next phase begins.
+- Finish the AtomVM runtime gate, remaining embedded surface families, skeptical
+  review, full test gate, and Antigen verification only after the replacement
+  phases have landed.
 
 Do not mark the DONE criterion complete until every item above is implemented and verified.
+
+## ORDERED TRANSPARENT BEAM PLAN — 2026-07-13
+
+Source of truth:
+`docs/superpowers/specs/2026-07-13-transparent-beam-algebra-otp-macros-design.md`.
+
+This is the execution order. Do not start a later phase while an earlier phase
+has an unverified gate or uncommitted changes. Every phase ends with focused
+tests, review, a clean worktree, and a highly descriptive commit.
+
+### Phase 0 — Integrate the kernel-parity branch sequence
+
+This is a prerequisite to implementing against the final compiler shape:
+
+1. Inspect the user changes in
+   `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/kernel-parity-batch`.
+2. Merge branch `autopilot/kernel-parity-batch` into `idris-parity`.
+3. Resolve and test that merge on `idris-parity`; preserve the branch's deletion
+   of bespoke container types and all unrelated user changes.
+4. Merge the verified `idris-parity` result into `core-let-binder`.
+5. Resolve integration conflicts in favor of the transparent macro architecture,
+   not by restoring deleted compiler-owned OTP classes.
+6. Run the focused compiler/elaborator suite and record the exact baseline.
+
+Gate: both merges are complete in the specified order, no conflict markers
+remain, tests identify any expected parity failures, and the worktree is clean.
+
+### Phase 1 — Establish the checked BEAM algebra
+
+Implement the foundation in standard-library code over `Std.Otp.Raw`:
+
+1. Inventory and lock the honest raw extern boundary: identity, messaging,
+   calls/casts, process creation, lifecycle, supervision, application,
+   monitors, timers, links, and registry operations.
+2. Add or complete erased message/reply codes and typed handles such as
+   `Pid(messages)` and `GenServer(requests, replies)`.
+3. Derive codes from declared message ADTs and callback patterns where the
+   existing type machinery permits; record unsupported dependent cases instead
+   of adding an `Any` escape.
+4. Implement checked typed wrappers and explicit code computations for tag
+   lookup, subset, union, and reply lookup.
+5. Preserve the inert `Effect(T)` design and direct effect-chain lowering.
+6. Add positive and negative tests for legal messages, wrong tags, wrong
+   payloads, request/reply mismatches, effect order, and runtime erasure.
+
+Gate: the algebra compiles as ordinary Cure, the raw boundary is the only
+asserted foreign surface, negative typing tests fail for the intended reasons,
+and no `lib/cure/core/*` change is needed.
+
+Suggested commit:
+`feat(std): establish the checked BEAM process algebra over raw OTP externs`
+
+### Phase 2 — Make macro expansion transparent and recursively inside out
+
+Build the generic expansion and lifted-module infrastructure before writing
+`beam_ops`:
+
+1. Change macro interpretation to return parsed AST or closed compile-time
+   values containing parsed AST, never source strings, raw forms, or loaded
+   modules.
+2. Implement recursive normalization to a fixed point. For
+   `outer(inner(value))`, normalize `inner` before `outer` receives it; recurse
+   again through every AST generated by `outer`.
+3. Traverse function bodies, patterns, declarations, `callback` bodies, and
+   every `lift module` compilation unit. Keep explicit quoted syntax opaque.
+4. Add delayed syntax slots for callback bodies whose behavior context is
+   introduced by an outer transparent `lift module`; expand those slots after
+   entering the context and before callback elaboration.
+5. Add expansion identity, cycle detection, invocation/AST-size budgets,
+   hygiene, deterministic fresh names, and source-to-generated provenance.
+6. Finish checked `behaviour`, `callback`, and `lift module` parsing,
+   elaboration, validation, module collection, dependency ordering, collision
+   checks, and common multi-module emission.
+7. Add nested expansion, quoted syntax, delayed context, cycle, provenance,
+   hygiene, duplicate-module, and deterministic-repeat tests.
+
+Gate: generated syntax is fully expanded before elaboration, all generated
+code uses the ordinary checker, lifted modules are emitted without code-server
+side effects, and no `__otp_container` behavior is required by the new path.
+
+Suggested commit:
+`feat(compiler): add transparent inside-out macro expansion and lifted modules`
+
+### Phase 3 — Implement `beam_ops` over the algebra
+
+Define the operation macro in the standard library:
+
+1. Add a closed operation vocabulary for `self`, `send`/`tell`, `call`,
+   `cast`, `spawn`, `start_link`, `stop`, timers, monitors, and links.
+2. Expand each operation to ordinary typed `Std.Otp` calls and effect
+   sequencing; do not emit raw BEAM forms.
+3. Thread process, request/reply, state, and callback-result context through
+   expansion and elaboration.
+4. Reject unknown operations, illegal targets/messages, wrong replies, and
+   operations used in an invalid callback context.
+5. Prove nested operation arguments and generated operation sequences expand
+   inside out with source-order effect preservation.
+
+Gate: `beam_ops` is a standard-library macro, its output is ordinary checked
+AST, and its generated code contains no compiler-only OTP marker.
+
+Suggested commit:
+`feat(std): define beam_ops over the checked process algebra`
+
+### Phase 4 — Replace the four OTP forms in their Cure files
+
+Implement these in dependency order, using the generic Phase 2 primitives and
+Phase 3 operations:
+
+#### Phase 4a — `sup` capability proof
+
+Define `sup` in `lib/std/supervisor.cure` using `Supervisor`, `callback`, and
+`lift module`. Validate child specs, strategy, intensity, period, restart,
+shutdown, and child type through closed values. Prove a generated supervisor
+module emits and runs through the common path.
+
+#### Phase 4b — `actor`
+
+Define `actor` in `lib/std/actor.cure`. Derive message codes from handlers,
+emit `GenServer` callbacks and ordinary helpers, and expand nested `beam_ops`
+inside start, message, and stop bodies.
+
+#### Phase 4c — `fsm`
+
+Define `fsm` in `lib/std/fsm.cure`. Preserve transition-table and callback
+mode compatibility, derive shared message/state information, emit the
+appropriate closed behavior callbacks, and express dispatch and helpers as
+ordinary declarations.
+
+#### Phase 4d — `app`
+
+Define `app` in `lib/std/app.cure`. Emit `Application` lifecycle callbacks,
+optional phases, ordinary startup/shutdown bodies, and checked supervision
+results.
+
+For every sub-phase:
+
+1. preserve existing syntax and compatibility behavior;
+2. add structural expansion tests proving transparent output;
+3. add negative callback/algebra tests;
+4. add generic-unix runtime tests;
+5. add nested `beam_ops` callback tests;
+6. commit before the next sub-phase.
+
+Suggested commits:
+
+- `feat(std): replace supervisor container compiler with transparent macro`
+- `feat(std): replace actor container compiler with transparent macro`
+- `feat(std): replace fsm container compiler with transparent macro`
+- `feat(std): replace application container compiler with transparent macro`
+
+### Phase 5 — Remove bespoke OTP compiler paths
+
+Only after Phase 4 parity is proven:
+
+1. delete `__otp_container` and its parser fallback;
+2. delete the compiler dispatch branch for container markers;
+3. delete `ContainerMacro` OTP semantics and the four bespoke object classes;
+4. delete source-string compilation and direct code-server loading from the
+   former actor/fsm/sup/app paths;
+5. retain only generic quoted-module collection and the common BEAM writer;
+6. update tests so they exercise the standard-library macros and common path;
+7. search for forbidden remnants and justify every remaining generic match.
+
+Gate: no public OTP macro or compiler path can bypass parse, recursive
+expansion, elaboration, validation, and common emission.
+
+Suggested commit:
+`refactor(compiler): remove bespoke OTP object compilation after macro parity`
+
+### Phase 6 — End-to-end verification and remaining macro program work
+
+1. Build the generic-unix AtomVM from
+   `/Users/ch/Develop/esp32-beam/AtomVM`.
+2. Package generated Cure modules with the required estdlib beams.
+3. Run generated supervisor/application and all four macro runtime proofs.
+4. Complete remaining callback vocabulary and embedded surface families.
+5. Complete indexed reducer/view/flow integration and remaining SP6 gaps.
+6. Run skeptical review to two clean passes.
+7. Run `mix compile --warnings-as-errors`, the full `mix test` gate, Antigen
+   verification, and formatting checks.
+8. Confirm the worktree is clean and update the live state with exact counts.
+
+Gate: no replacement, merge conflict, legacy regression, missing new test,
+runtime failure, or implementation gap remains. Only then may the DONE
+criterion be marked complete.
+
+Suggested commit:
+`test: verify transparent OTP macros across Unix and AtomVM end to end`
+
+### Standing rules for every phase
+
+- TCB delta is zero; do not modify `lib/cure/core/*`.
+- Run commands from the worktree root, never the parent clone.
+- Run one `mix` suite at a time.
+- Use explicit pathspecs for staging and preserve unrelated user changes.
+- Revert Antigen seed/corpus banking noise before commits.
+- Commit every phase or sub-phase with a highly descriptive message.
+- Do not return control or declare completion while a gate is open.
 
 ## CRITICAL CONTINUATION DIRECTIVE — 2026-07-13
 
 ABSOLUTELY CRITICAL: Continue this autopilot without returning control to the
-user until the following work is genuinely complete and verified end to end:
-
-- Build macro replacements for the `actor`, `fsm`, `sup`, and `app` containers,
-  removing the need for bespoke compiler object classes for those containers.
-- Preserve and extend the existing actor/fsm/supervisor/application test suites;
-  add new macro replacement and runtime tests.
-- Build and run the generic-unix AtomVM from `/Users/ch/Develop/esp32-beam/AtomVM`
-  and execute the generated supervisor/application proof on it.
-- Merge the kernel-parity worktree (currently named
-  `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/kernel-parity-batch`,
-  branch `autopilot/kernel-parity-batch`; it contains user changes that must be
-  preserved) into `idris-parity` first, resolve and verify that merge, then merge
-  `idris-parity` into `core-let-binder`. Do not merge it directly into
-  `core-let-binder`; understand its deletion of the bespoke container types and
-  resolve all integration conflicts before the second merge.
-- Do not declare DONE while any replacement, merge conflict, failing legacy test,
-  missing new test, or end-to-end runtime proof remains.
+user until every phase in `## ORDERED TRANSPARENT BEAM PLAN` is genuinely
+complete and verified end to end. The plan includes the required merge order:
+`kernel-parity-batch` into `idris-parity`, then `idris-parity` into
+`core-let-binder`. Do not merge directly into `core-let-binder`, restore deleted
+bespoke container classes, or declare DONE while any replacement, merge
+conflict, failing legacy test, missing new test, runtime proof, or listed
+implementation gap remains.
 
 This directive applies for the entirety of the session and every context
 compaction. Commit every implementation phase with a highly descriptive commit
