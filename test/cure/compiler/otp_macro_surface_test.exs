@@ -136,6 +136,21 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
     assert apply(:"Cure.Generated.Worker", :module_name, []) == :"Cure.Generated.Worker"
   end
 
+  test "macro lexical imports qualify bare types and functions in lifted output" do
+    source = """
+    mod Host
+      use Std.Supervisor
+      macro Lift
+        syntax make <name: ModuleName> becomes lift module name
+          behaviour custom_behavior
+          fn build() -> StrategySpec = supervision_strategy(one_for_all(), 2, 9)
+      make Cure.Generated.BareNames
+    """
+
+    assert {:ok, _host} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.BareNames", :build, []) == {:one_for_all, 2, 9}
+  end
+
   test "a transparent lift can start its generated gen_server through Std.Otp" do
     source = """
     mod Main

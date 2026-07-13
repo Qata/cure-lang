@@ -179,7 +179,7 @@ defmodule Cure.Compiler.Parser do
                  {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
                  {:ok, ast} <- parse(tokens, file: path, emit_events: false, prelude_macros: false) do
               ast
-              |> collect_macro_defs()
+              |> collect_macro_defs_with_scope()
               |> Enum.reduce(acc, fn {:macro_def, _meta, rules}, macro_acc ->
                 Enum.reduce(rules, macro_acc, fn
                   %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
@@ -252,7 +252,7 @@ defmodule Cure.Compiler.Parser do
   # `mod` is still a local macro of that module).
   defp harvest_active_macros(exprs) do
     exprs
-    |> collect_macro_defs()
+    |> collect_macro_defs_with_scope()
     |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
       Enum.reduce(rules, acc, fn
         %{kind: :syntax, keyword: kw} = rule, acc2 when is_binary(kw) ->
@@ -269,7 +269,7 @@ defmodule Cure.Compiler.Parser do
   # mistaken for Tier-2 templates that can expand before elaboration.
   defp harvest_computed_macros(exprs) do
     exprs
-    |> collect_macro_defs()
+    |> collect_macro_defs_with_scope()
     |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
       Enum.reduce(rules, acc, fn
         %{kind: :computed, keyword: kw} = rule, acc2 when is_binary(kw) ->
@@ -285,7 +285,7 @@ defmodule Cure.Compiler.Parser do
   # dispatch suffix. Malformed literal rules (no suffix) are skipped.
   defp harvest_literal_macros(exprs) do
     exprs
-    |> collect_macro_defs()
+    |> collect_macro_defs_with_scope()
     |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
       Enum.reduce(rules, acc, fn
         %{kind: :literal, suffix: s} = rule, acc2 when is_binary(s) ->
@@ -297,10 +297,45 @@ defmodule Cure.Compiler.Parser do
     end)
   end
 
-  defp collect_macro_defs(node) when is_list(node), do: Enum.flat_map(node, &collect_macro_defs/1)
-  defp collect_macro_defs({:macro_def, _, _} = m), do: [m]
-  defp collect_macro_defs({_t, _m, children}) when is_list(children), do: collect_macro_defs(children)
-  defp collect_macro_defs(_), do: []
+  # Macro rules inherit the imports visible where their definition lives. A
+  # generated lifted module is a new compilation unit, so those imports must be
+  # carried across the quotation boundary before its types and function bodies
+  # are elaborated. This is lexical scope propagation, not an OTP-specific name
+  # table: any user-defined macro can use the same mechanism.
+  defp collect_macro_defs_with_scope(node, imports \\ [])
+
+  defp collect_macro_defs_with_scope(node, imports) when is_list(node),
+    do: Enum.flat_map(node, &collect_macro_defs_with_scope(&1, imports))
+
+  defp collect_macro_defs_with_scope({:macro_def, meta, rules}, imports) do
+    rules = Enum.map(rules, &Map.put_new(&1, :lexical_imports, imports))
+    [{:macro_def, meta, rules}]
+  end
+
+  defp collect_macro_defs_with_scope({:container, meta, children}, imports) when is_list(meta) do
+    imports =
+      case Keyword.get(meta, :container_type) do
+        :module -> imports ++ direct_import_sources(children)
+        _ -> imports
+      end
+
+    Enum.flat_map(children, &collect_macro_defs_with_scope(&1, imports))
+  end
+
+  defp collect_macro_defs_with_scope({_type, _meta, children}, imports) when is_list(children),
+    do: Enum.flat_map(children, &collect_macro_defs_with_scope(&1, imports))
+
+  defp collect_macro_defs_with_scope(_other, _imports), do: []
+
+  defp direct_import_sources(children) when is_list(children) do
+    for {:import, meta, _} <- children,
+        is_list(meta),
+        source = Keyword.get(meta, :source),
+        is_binary(source),
+        do: source
+  end
+
+  defp direct_import_sources(_children), do: []
 
   # A use-site of an active macro keyword. Milestone-2 handles a single rule per
   # keyword; the rule's segments are matched against the use-site tokens, binding
@@ -634,6 +669,7 @@ defmodule Cure.Compiler.Parser do
   defp expand_template_rule(rule, bindings, state) do
     {freshened, state} = freshen(rule.template, state)
     expanded = subst_holes(freshened, bindings, state)
+    expanded = attach_lexical_imports(expanded, Map.get(rule, :lexical_imports, []))
 
     case Cure.Compiler.MacroSyntax.lower_internal(expanded) do
       {:ok, ast} ->
@@ -643,6 +679,21 @@ defmodule Cure.Compiler.Parser do
         {expanded, state}
     end
   end
+
+  defp attach_lexical_imports({:lift_module, meta, children}, imports) when is_list(meta) and is_list(imports) do
+    declarations = Keyword.get(meta, :declarations, [])
+    existing = MapSet.new(direct_import_sources(declarations))
+
+    generated_imports =
+      for source <- imports,
+          is_binary(source),
+          not MapSet.member?(existing, source),
+          do: {:import, [source: source, import_type: :use, language: :cure], []}
+
+    {:lift_module, Keyword.put(meta, :declarations, generated_imports ++ declarations), children}
+  end
+
+  defp attach_lexical_imports(ast, _imports), do: ast
 
   # Mint one deterministic gensym per distinct declared fresh name, then rewrite
   # markers and plain references of those names. Counter lives in parser state so

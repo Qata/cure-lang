@@ -1130,6 +1130,10 @@ so bare type and function references are resolved against the defining standard
 library environment and emitted through the ordinary qualified-owner path. This
 keeps macro authors from spelling every helper as `Std.Module.name`; a regression
 now covers bare supervisor strategy helpers across an independent lifted module.
+The parser now records direct imports visible around each macro definition and
+propagates them into generated lifted modules automatically, including macros
+defined inside user modules. This is generic lexical-scope propagation and does
+not encode any standard-library or OTP name table.
 
 Suggested commit:
 `feat(compiler): add transparent inside-out macro expansion and lifted modules`
