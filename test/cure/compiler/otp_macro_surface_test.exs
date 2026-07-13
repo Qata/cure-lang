@@ -42,6 +42,7 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
     assert {:lift_module, meta, []} = List.last(children)
     assert meta[:module] == "Cure.Generated.Worker"
     assert meta[:source_provenance].file == "nofile"
+
     assert [{:function_def, _, [{:literal, [subtype: :symbol], :"Cure.Generated.Worker"}]}] =
              meta[:declarations]
   end
@@ -64,10 +65,12 @@ defmodule Cure.Compiler.OtpMacroSurfaceTest do
     assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
     assert {:lift_module, meta, []} = List.last(children)
     assert meta[:module] == "Cure.Generated.Worker"
+
     assert [
              {:function_def, module_meta, [{:literal, [subtype: :symbol], :"Cure.Generated.Worker"}]},
              {:function_def, helper_meta, [{:literal, _, 42}]}
            ] = meta[:declarations]
+
     assert module_meta[:name] == "module_name"
     assert helper_meta[:name] == "helper"
   end

@@ -731,11 +731,13 @@ defmodule Cure.Compiler.Parser do
           meta = subst_lift_module_meta(meta, bindings, state, module_hole, module_name)
           {:lift_module, meta, Enum.map(children, &subst_holes(&1, bindings, state))}
         else
-          _ -> { :lift_module, subst_holes_meta(meta, bindings, state), Enum.map(children, &subst_holes(&1, bindings, state)) }
+          _ ->
+            {:lift_module, subst_holes_meta(meta, bindings, state),
+             Enum.map(children, &subst_holes(&1, bindings, state))}
         end
 
       _ ->
-        { :lift_module, subst_holes_meta(meta, bindings, state), Enum.map(children, &subst_holes(&1, bindings, state)) }
+        {:lift_module, subst_holes_meta(meta, bindings, state), Enum.map(children, &subst_holes(&1, bindings, state))}
     end
   end
 
@@ -783,11 +785,20 @@ defmodule Cure.Compiler.Parser do
 
   defp subst_lift_module_meta(meta, bindings, state, module_hole, module_name) do
     Enum.map(meta, fn
-      {:module, {:macro_hole, ^module_hole}} -> {:module, module_name}
-      {:declarations, declarations} -> {:declarations, subst_lift_module_value(declarations, bindings, state, module_hole, module_name)}
-      {:callbacks, callbacks} -> {:callbacks, subst_lift_module_value(callbacks, bindings, state, module_hole, module_name)}
-      {key, value} -> {key, subst_holes_meta_value(value, bindings, state)}
-      other -> other
+      {:module, {:macro_hole, ^module_hole}} ->
+        {:module, module_name}
+
+      {:declarations, declarations} ->
+        {:declarations, subst_lift_module_value(declarations, bindings, state, module_hole, module_name)}
+
+      {:callbacks, callbacks} ->
+        {:callbacks, subst_lift_module_value(callbacks, bindings, state, module_hole, module_name)}
+
+      {key, value} ->
+        {key, subst_holes_meta_value(value, bindings, state)}
+
+      other ->
+        other
     end)
   end
 
