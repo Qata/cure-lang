@@ -1319,12 +1319,13 @@ positions, and lets an annotated `let pid: Pid(Atom) = beam_ops self` check its
 RHS against `Effect(Pid(Atom))` while binding the payload (`769f2077`). The
 focused transparent-object suite is 41 passing tests and
 `mix compile --warnings-as-errors` is clean; the focused transparent-object
-suite is now 43 passing tests and the algebra and lifted-module suites pass 16
-and 15 tests respectively. Direct `Effect(T)` case motives still expose the
-existing kernel `:bad_motive` completeness gap; the alias is
+suite is now 44 passing tests and the algebra and lifted-module suites pass 16
+and 15 tests respectively. A `phases` form now supports multiple transparent
+phase/result pairs through ordinary Cure recursion and pattern matching, with
+unmatched phases returning `:ok` (`1c079498`). Direct `Effect(T)` case motives
+still expose the existing kernel `:bad_motive` completeness gap; the alias is
 recorded as a transparent compatibility bridge, not as closure of that gate.
-An approved no-workaround resolution and multiple phase declarations remain
-required.
+An approved no-workaround resolution remains required.
 
 Define `app` in `lib/std/app.cure`. Emit `Application` lifecycle callbacks,
 optional phases, ordinary startup/shutdown bodies, and checked supervision
