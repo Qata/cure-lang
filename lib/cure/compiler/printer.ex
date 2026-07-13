@@ -1193,6 +1193,7 @@ defmodule Cure.Compiler.Printer do
   end
 
   defp lift_module_name_to_string({:macro_hole, name}), do: name
+  defp lift_module_name_to_string({:macro_path_hole, prefix, name}), do: prefix <> "." <> name
   defp lift_module_name_to_string(name), do: to_string(name)
 
   defp lift_callback_to_string(%{name: name, params: params, body: body}, depth, indent) do
