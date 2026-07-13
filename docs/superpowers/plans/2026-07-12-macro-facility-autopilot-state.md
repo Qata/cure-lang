@@ -1249,7 +1249,7 @@ explicit raw BEAM terms. `child_spec ... with ...` checks one element type and
 maps each element through `raw_arg`; heterogeneous lists require the distinct
 `child_spec ... raw with [raw_arg(...), ...]` form. `ChildSpec` stores
 `List(RawTerm)`, while direct `child_with_args` remains homogeneous and
-preserves its `List(a)` result for typed callers (`6bd50db9`, `5b4424da`, 82
+preserves its `List(a)` result for typed callers (`6bd50db9`, `5b4424da`, 83
 focused transparent-object tests).
 
 Define `sup` in `lib/std/supervisor.cure` using `Supervisor`, `callback`, and
