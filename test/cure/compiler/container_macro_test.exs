@@ -112,6 +112,28 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "typed app syntax shares one lifecycle state type" do
+    source = "app Cure.TypedApp state Int\n"
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.TypedApp"
+    assert apply(module, :start, [:normal, 7]) == {:ok, 7}
+    assert apply(module, :stop, [7]) == :ok
+  end
+
+  test "typed app lifecycle annotations reject mismatched callback bodies" do
+    source = """
+    macro TypedApp
+      syntax typed_app <name: ModuleName> state <state_type: Type> becomes lift module name
+        behaviour application
+        typealias State = state_type
+        callback start(kind: t, args: State) returns Tuple(Atom, State) = %[:ok, true]
+    typed_app Cure.InvalidTypedApp state Int
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "supervisor payload syntax expands to a zero-argument starter" do
     assert {:ok, module} =
              Cure.Compiler.compile_and_load("sup Cure.PayloadSup with 0\n", emit_events: false)

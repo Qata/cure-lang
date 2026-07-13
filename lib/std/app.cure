@@ -4,6 +4,22 @@ mod Std.App
   ## an ordinary lifted Application module; root-supervisor startup and
   ## lifecycle phases are layered on top of this floor.
   macro AppContainers
+    syntax app <name: ModuleName> state <state_type: Type> with <payload: Code> <body: raw until dedent> becomes lift module name
+      use Std.Otp
+      behaviour application
+      typealias State = state_type
+      callback start(kind: t, args: State) returns Tuple(Atom, State) = %[:ok, payload]
+      callback stop(state: State) returns Atom = :ok
+      body
+
+    syntax app <name: ModuleName> state <state_type: Type> <body: raw until dedent> becomes lift module name
+      use Std.Otp
+      behaviour application
+      typealias State = state_type
+      callback start(kind: t, args: State) returns Tuple(Atom, State) = %[:ok, args]
+      callback stop(state: State) returns Atom = :ok
+      body
+
     syntax app <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module name
       use Std.Otp
       behaviour application
