@@ -141,6 +141,35 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "fsm init syntax emits a checked user callback body" do
+    source = """
+    fsm Cure.InitializedFsm state Int init
+      %[:ok, :ready, 7]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :init, [0]) == {:ok, :ready, 7}
+  end
+
+  test "fsm handle_event syntax emits a checked user callback body" do
+    source = """
+    fsm Cure.EventFsm state Int handle_event
+      :keep_state_and_data
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :handle_event, [:info, :tick, :ready, 7]) == :keep_state_and_data
+  end
+
+  test "fsm callback syntax rejects a body with a non-atom transition result" do
+    source = """
+    fsm Cure.InvalidEventFsm state Int handle_event
+      true
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "typed app syntax shares one lifecycle state type" do
     source = "app Cure.TypedApp state Int\n"
 
