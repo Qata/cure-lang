@@ -1116,6 +1116,9 @@ Build the generic expansion and lifted-module infrastructure before writing
 Gate: generated syntax is fully expanded before elaboration, all generated
 code uses the ordinary checker, lifted modules are emitted without code-server
 side effects, and no `__otp_container` behavior is required by the new path.
+The generic compiler must not acquire knowledge of OTP behavior names,
+callback vocabularies, actor/FSM/supervisor/application semantics, or OTP
+specific lowering while implementing this infrastructure.
 
 Suggested commit:
 `feat(compiler): add transparent inside-out macro expansion and lifted modules`
@@ -1234,7 +1237,7 @@ Suggested commits:
 - `feat(std): replace fsm container compiler with transparent macro`
 - `feat(std): replace application container compiler with transparent macro`
 
-### Phase 5 — Remove bespoke OTP compiler paths
+### Phase 5 — Remove bespoke OTP compiler paths and OTP knowledge
 
 Only after Phase 4 parity is proven:
 
@@ -1245,10 +1248,16 @@ Only after Phase 4 parity is proven:
    former actor/fsm/sup/app paths;
 5. retain only generic quoted-module collection and the common BEAM writer;
 6. update tests so they exercise the standard-library macros and common path;
-7. search for forbidden remnants and justify every remaining generic match.
+7. remove compiler-owned OTP behavior maps, callback contracts, behavior-name
+   translation, OTP-specific module validation, and any other OTP vocabulary
+   from the generic compiler; the standard library and user-defined macros
+   must be able to define an actor-like abstraction without compiler changes;
+8. search for forbidden remnants and justify every remaining generic match.
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
-expansion, elaboration, validation, and common emission.
+expansion, elaboration, validation, and common emission, and compiling a new
+user-defined behavior/macro must not require adding an OTP-specific compiler
+case.
 
 Suggested commit:
 `refactor(compiler): remove bespoke OTP object compilation after macro parity`
