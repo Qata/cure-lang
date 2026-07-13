@@ -1068,7 +1068,7 @@ Suggested commit:
 
 ### Phase 2 — Make macro expansion transparent and recursively inside out
 
-**STATUS: IN PROGRESS (2026-07-13).** The first compiler slice now expands
+**STATUS: COMPLETE (2026-07-13).** The compiler now expands
 computed syntax inside out before the outer invocation, uses stack-scoped
 structural cycle identities with source positions removed, defaults resource
 budgets to infinity, and accepts explicit finite budgets for hosts/tests. The
@@ -1095,11 +1095,14 @@ invocation provenance through execution, cycle, and finite-budget diagnostics
 (`703e6536`). A generic delayed-slot floor now preserves delayed raw holes,
 threads lexical behavior/callback/arity context through lifted callbacks, and
 reparses delayed bodies after context introduction (`64bf2a79`). Remaining
-Phase 2 now has an explicit language-level `Std.Syntax.Quoted` opacity boundary
-through the reflection/Core bridge and recursive expander (`79d7ac46`). The
-remaining Phase 2 item is an end-to-end delayed callback body that exercises a
-contextual `beam_ops` operation through ordinary callback elaboration; the
-context plumbing is not that final behavior contract.
+Phase 2 also has an explicit language-level `Std.Syntax.Quoted` opacity
+boundary through the reflection/Core bridge and recursive expander
+(`79d7ac46`). Delayed callback slots now require exactly one body expression
+and have an end-to-end proof where `beam_ops self` is reparsed after callback
+context introduction and passes ordinary callback elaboration (`cd0943e8`).
+The full compiler suite passed 693 tests and `mix compile --warnings-as-errors`
+is clean. Phase 2's remaining gate is closed; typed operation-context
+semantics continue in Phase 3.
 
 Standard-library macro loading now performs a generic harvest pass followed by
 a parse with the complete harvested grammar, so one standard-library macro may
@@ -1109,10 +1112,8 @@ the startup vocabulary now includes `start_link`, `start_statem`, and both
 zero-argument and argument-bearing supervisor startup forms. The full suite
 after this slice passed 4007 tests, 3 doctests, and 1 skipped test, with
 Antigen coverage 318/318. Computed expansion provenance, delayed callback
-context, and quoted-syntax opacity are covered by `703e6536`, `64bf2a79`, and
-`79d7ac46`. Remaining Phase 2 work is an end-to-end delayed callback body that
-exercises a contextual `beam_ops` operation through ordinary callback
-elaboration.
+context, quoted-syntax opacity, and the delayed callback `beam_ops` proof are
+covered by `703e6536`, `64bf2a79`, `79d7ac46`, and `cd0943e8`.
 
 Build the generic expansion and lifted-module infrastructure before writing
 `beam_ops`:
@@ -1280,8 +1281,12 @@ callbacks, and the generic Unix/AtomVM packaging path is exercised. In
 addition to the bootstrap form, the standard-library macro accepts an
 explicit `state <Type>` clause and emits a module-local `State` alias shared
 by application start and stop; ordinary elaboration rejects mismatched start
-results. Root supervisor startup, payload preservation, start phases, and
-effectful lifecycle-body context remain required.
+results. Root supervisor startup is now transparent: the `root` form emits an
+ordinary `start/2` callback that calls the checked `Std.Supervisor.start/1`
+operation, with a compiler regression proving the generated callback is
+available through the common lift/emission path (`66302bb2`). Payload
+preservation, start phases, and effectful lifecycle-body context remain
+required.
 
 Define `app` in `lib/std/app.cure`. Emit `Application` lifecycle callbacks,
 optional phases, ordinary startup/shutdown bodies, and checked supervision
