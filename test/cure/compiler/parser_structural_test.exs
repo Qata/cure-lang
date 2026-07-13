@@ -227,36 +227,25 @@ defmodule Cure.Compiler.ParserStructuralTest do
     end
   end
 
-  # ── FSM Definitions ─────────────────────────────────────────────────
+  # ── Transparent FSM Definitions ─────────────────────────────────────
 
   describe "FSM definitions" do
-    test "simple FSM with transitions" do
+    test "an FSM expands to an ordinary lifted GenStatem module" do
       source =
-        "fsm TrafficLight with TrafficPayload{}\n  Red --timer--> Green\n  Green --timer--> Yellow\n  Yellow --timer--> Red"
+        "fsm TrafficLight\n  fn helper(x: Int) -> Int = x"
 
       ast = parse!(source)
-      assert {:container, meta, transitions} = ast
-      assert meta[:container_type] == :fsm
-      assert meta[:name] == "TrafficLight"
-      assert [_, _, _] = transitions
+      assert {:lift_module, meta, []} = ast
+      assert meta[:module] == "TrafficLight"
+      assert meta[:behaviour] == :GenStatem
+      assert Enum.any?(meta[:declarations], &match?({:function_def, _, _}, &1))
     end
 
-    test "FSM transition has from/event/to metadata" do
-      source = "fsm Counter with Payload{}\n  Idle --start--> Running"
+    test "an FSM body is reparsed by the ordinary parser" do
+      source = "fsm Counter\n  fn helper(x: Int) -> Int = x + 1"
       ast = parse!(source)
-      assert {:container, _, [t]} = ast
-      assert {:function_call, t_meta, []} = t
-      assert t_meta[:from] == "Idle"
-      assert t_meta[:event] == "start"
-      assert t_meta[:to] == "Running"
-    end
-
-    test "FSM with guarded transition" do
-      source = "fsm Counter with Payload{}\n  Counting --increment when value < 100--> Counting"
-      ast = parse!(source)
-      assert {:container, _, [t]} = ast
-      assert {:function_call, t_meta, []} = t
-      assert t_meta[:guard] != nil
+      assert {:lift_module, meta, []} = ast
+      assert Enum.any?(meta[:declarations], &match?({:function_def, _, _}, &1))
     end
   end
 

@@ -28,10 +28,18 @@ defmodule Cure.Compiler.LiftModule do
   end
 
   @spec strip(term()) :: term()
-  def strip({:container, meta, body}) when is_list(meta) and is_list(body) do
-    {:container, meta, Enum.reject(body, &match?({:lift_module, _, _}, &1))}
+  def strip({:lift_module, _meta, _children} = node), do: node
+
+  def strip({tag, meta, children}) when is_list(children) do
+    children =
+      children
+      |> Enum.map(&strip/1)
+      |> Enum.reject(&match?({:lift_module, _, _}, &1))
+
+    {tag, meta, children}
   end
 
+  def strip(list) when is_list(list), do: Enum.map(list, &strip/1)
   def strip(ast), do: ast
 
   @spec emit(map()) :: {:ok, unit()} | {:error, term()}
@@ -62,17 +70,21 @@ defmodule Cure.Compiler.LiftModule do
     end
   end
 
-  defp collect_node({:container, meta, body}, acc) when is_list(meta) and is_list(body) do
-    Enum.reduce_while(body, {:ok, acc}, fn child, {:ok, acc} ->
-      case child do
-        {:lift_module, _, _} ->
-          case collect_node(child, acc) do
-            {:ok, acc} -> {:cont, {:ok, acc}}
-            {:error, _} = error -> {:halt, error}
-          end
+  defp collect_node({tag, _meta, children}, acc) when is_atom(tag) and is_list(children) do
+    Enum.reduce_while(children, {:ok, acc}, fn child, {:ok, acc} ->
+      case collect_node(child, acc) do
+        {:ok, acc} -> {:cont, {:ok, acc}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> reverse_result()
+  end
 
-        _ ->
-          {:cont, {:ok, acc}}
+  defp collect_node(list, acc) when is_list(list) do
+    Enum.reduce_while(list, {:ok, acc}, fn child, {:ok, acc} ->
+      case collect_node(child, acc) do
+        {:ok, acc} -> {:cont, {:ok, acc}}
+        {:error, _} = error -> {:halt, error}
       end
     end)
     |> reverse_result()

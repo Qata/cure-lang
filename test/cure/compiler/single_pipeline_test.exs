@@ -20,14 +20,13 @@ defmodule Cure.Compiler.SinglePipelineTest do
   test "an fsm container is lowered by the auto-preluded macro" do
     src = """
     mod F
-      fsm Light
-        Red --go--> Green
-        Green --stop--> Red
-      end
+      fsm Cure.Light
+    end
     end
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(src, emit_events: false)
-    assert match?({:ok, _pid}, apply(module, :start_link, [0]))
+    assert module == :"Cure.F"
+    assert match?({:ok, _pid}, apply(:"Cure.Light", :start_link, [0]))
   end
 end
