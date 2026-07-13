@@ -197,10 +197,10 @@ defmodule Cure.Audit.UnresolvedTest do
 
     # All 17 bridge axioms are typed with names that do not exist in Core.
     # `Pid`, `Any`, `Map` and `Tuple` are surface-only spellings the dependent
-    # pathway never defines; `String` is the #29 String→List(Char) migration.
+    # pathway never defines. String is now resolved by the stdlib prelude.
     assert text =~ "AXIOMS — CURE BRIDGE (17)"
-    assert text =~ "UNRESOLVED (5)"
-    assert text =~ "Any, Map, Pid, String, Tuple"
+    assert text =~ "UNRESOLVED (4)"
+    assert text =~ "Any, Map, Pid, Tuple"
   end
 
   test "the four other bridge modules audit without crashing" do

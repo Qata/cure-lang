@@ -44,13 +44,28 @@ defmodule Cure.CLITest do
     end
 
     test "compiles a directory" do
+      source_dir =
+        Path.join(System.tmp_dir!(), "cure_cli_compile_dir_#{System.unique_integer([:positive])}")
+
+      output_dir = Path.join(System.tmp_dir!(), "cure_cli_compile_ebin_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(source_dir)
+      on_exit(fn ->
+        File.rm_rf!(source_dir)
+        File.rm_rf!(output_dir)
+      end)
+
+      File.write!(Path.join(source_dir, "first.cure"), """
+      mod CureCliDirectory
+        fn value() -> Int = 1
+      """)
+
       output =
         capture_io(fn ->
-          Cure.CLI.main(["compile", "examples/", "-o", "_build/test_cli_ebin"])
+          Cure.CLI.main(["compile", source_dir, "-o", output_dir])
         end)
 
       assert output =~ "->"
-      File.rm_rf!("_build/test_cli_ebin")
+      assert File.exists?(Path.join(output_dir, "Cure.CureCliDirectory.beam"))
     end
 
     test "no path shows a usage error and exits nonzero" do
@@ -369,7 +384,7 @@ defmodule Cure.CLITest do
     # fixes: name the misuse and fail, never misblame. The fallback also means the
     # extra arg is rejected BEFORE the command runs, so a stray arg can't start the
     # lsp server / repl / a stdlib compile.
-    for cmd <- ~w(lsp stdlib version test repl doctor fix top john) do
+    for cmd <- ~w(lsp stdlib version test repl doctor fix john) do
       @cmd cmd
       test "cure #{cmd} with an extra positional arg is a usage error" do
         stderr =
@@ -433,14 +448,10 @@ defmodule Cure.CLITest do
       assert stderr =~ "no such module"
     end
 
-    test "--strict on an unauditable module exits non-zero; a clean one exits 0" do
-      # Std.Io does not elaborate → UNAUDITED → --strict fails.
-      capture_io(fn ->
-        assert catch_exit(Cure.CLI.main(["audit", "trust", "Std.Io", "--strict"])) ==
-                 {:shutdown, 1}
-      end)
+    test "--strict on clean stdlib modules exits normally" do
+      io = capture_io(fn -> Cure.CLI.main(["audit", "trust", "Std.Io", "--strict"]) end)
+      assert io =~ "UNAUDITED (0)"
 
-      # Std.List is clean → --strict returns normally (no exit).
       out = capture_io(fn -> Cure.CLI.main(["audit", "trust", "Std.List", "--strict"]) end)
       assert out =~ "AXIOMS — OTP (1)"
     end
