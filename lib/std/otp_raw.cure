@@ -37,6 +37,12 @@ mod Std.Otp.Raw
   @extern(:erlang, :spawn_link, 1)
   fn raw_spawn_link(thunk: () -> Unit) -> Effect(RawPid(m, m))
 
+  ## Start a gen_server through its standard callback module. The raw return is
+  ## deliberately the OTP `{ok, pid}`/error tuple; a behavior-specific wrapper
+  ## narrows that contract after the callback context is established.
+  @extern(:gen_server, :start_link, 4)
+  fn raw_start_link(name: Tuple(Atom, Atom), module: Atom, args: List(a), opts: List(Atom)) -> Effect(Tuple)
+
   ## Send `msg` to `dest`. Fire-and-forget; the effect is performing the send.
   @extern(:erlang, :send, 2)
   fn raw_send(dest: RawPid(m, r), msg: m) -> Effect(Unit)

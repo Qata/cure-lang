@@ -1126,7 +1126,8 @@ Suggested commit:
 transparent `beam_ops` rule: `beam_ops self` expands to ordinary
 `Std.Otp.self()` syntax and is proven marker-free. The raw process-creation
 floor is present (`raw_spawn`/`raw_spawn_link` plus ordinary `Std.Otp`
-wrappers), and the elaborator now threads expected result types through
+wrappers), along with an effect-typed `gen_server:start_link/4` wrapper that
+preserves the OTP result tuple. The elaborator now threads expected result types through
 qualified calls carrying lambda arguments. The remaining operation work must
 introduce an explicit behavior context so those wrappers can mint `Pid(m)` with
 the callback's message code instead of leaving `m` undetermined:

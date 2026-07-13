@@ -92,6 +92,11 @@ mod Std.Otp
   ## Spawn and link a nullary process function to the calling process.
   fn spawn_link(thunk: () -> Unit) -> Effect(Pid(m)) = raw_spawn_link(thunk)
 
+  ## Start a gen_server callback module. The generic floor preserves OTP's
+  ## result tuple; transparent behavior macros provide the typed specialization.
+  fn start_link(module: Atom, args: List(a)) -> Effect(Tuple) =
+    raw_start_link(%[:local, module], module, args, assert_type [] : List(Atom))
+
   ## Send a well-typed message: `msg : m` must match `dest`'s accepted type `m`,
   ## so a `Pid(Command)` can never be sent a `Telemetry`. (Named `tell`, not
   ## `send`: `send` is the reserved Melquiades keyword — a later macro can reclaim
