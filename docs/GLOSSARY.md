@@ -60,7 +60,7 @@ examples read themselves.
 - `[1, 2, 3]`, `[head | tail]`, `[]` — list literal, cons, empty.
 - `%[a, b]` — a tuple literal.
 - `Point{x: 1, y: 2}`, `p.x`, `Point{p | x: 3}` — build / read / copy-update a record.
-- `:ok`, `:"Cure.FSM.Turnstile"` — **atoms** (interned symbolic constants).
+- `:ok`, `:"Cure.Turnstile"` — **atoms** (interned symbolic constants).
 - `## text` is a doc comment; `# text` is an inline comment (used for `# => result`).
 - `@extern(...)`, `@group(:g)`, `@builtin(:nat)`, `@derive(JSON)` — **attributes**
   attached to the declaration below them.

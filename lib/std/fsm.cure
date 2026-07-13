@@ -100,9 +100,8 @@ mod Std.Fsm
 
   ## FSM runtime operations: spawn, stop, send events, get state.
   ##
-  ## Runtime surface for FSM modules compiled from `fsm` containers.
-  ## Every entry delegates to `Cure.FSM.Builtins`, which wraps
-  ## `Cure.FSM.Runtime`. Spawning captures the calling process as the
+  ## Raw compatibility helpers for already-running process modules. New state
+  ## machines use the transparent `fsm` macro and `Std.Otp` algebra. Spawning captures the calling process as the
   ## FSM's `:caller` so lifecycle hooks can notify it via
   ## `Std.Fsm.notify/1`.
   ##
@@ -111,8 +110,8 @@ mod Std.Fsm
   ## ```cure
   ## use Std.Fsm
   ##
-  ## # Assume a compiled `Cure.FSM.TrafficLight` with Red -> Green -> Yellow -> Red.
-  ## let pid = spawn(:"Cure.FSM.TrafficLight")
+  ## # Assume a compiled `TrafficLight` with Red -> Green -> Yellow -> Red.
+  ## let pid = Std.Otp.start_statem(:"TrafficLight", [])
   ## send(pid, :timer)
   ## state(pid)                              # => :green
   ## stop(pid)
@@ -122,7 +121,7 @@ mod Std.Fsm
   ## use Std.Fsm
   ##
   ## # Drive the FSM through a batch of events.
-  ## let pid = spawn_named(:"Cure.FSM.TrafficLight", "main")
+  ## let pid = spawn_named(:"TrafficLight", "main")
   ## send_batch(pid, [:timer, :timer, :timer])
   ## history(pid)                            # => [:timer, :timer, :timer]
   ## ```

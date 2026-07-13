@@ -303,40 +303,20 @@ defmodule Cure.MCP.Server do
     """
     === Finite State Machines ===
 
-    ## Simple mode (gen_statem, backward-compatible)
-    fsm TrafficLight
-      Red    --timer-->     Green
-      Green  --timer-->     Yellow
-      Yellow --timer-->     Red
-      *      --emergency--> Red
+    ## Transition-table mode
+    fsm Cure.TrafficLight state Atom transitions [
+      transition :red :timer :green,
+      transition :green :timer :yellow,
+      transition :yellow :timer :red
+    ]
 
-    # * is a wildcard matching any state
-    # Guards: --event when guard-->
-    # Actions: --event do expr-->
+    ## Callback mode
+    fsm Cure.Turnstile state Int events Atom handle_event
+      :keep_state_and_data
 
-    ## Callback mode (GenServer with on_transition)
-    fsm Turnstile with Integer
-      Locked   --coin-->  Unlocked
-      Unlocked --push-->  Locked
-
-      on_transition
-        (:locked, :coin, _payload, data) -> {:ok, :unlocked, data + 1}
-        (:unlocked, :push, _payload, data) -> {:ok, :locked, data}
-        (_, _, _, data) -> {:ok, :__same__, data}
-
-    # on_transition clauses: (state, event, event_payload, state_payload)
-    # Return {:ok, next_state, new_payload} or {:error, reason}
-    # :__same__ keeps the current state
-
-    ## Event suffixes
-    # event!  -- hard/determined: auto-fires when sole outgoing event
-    # event?  -- soft: failed transitions silently swallowed
-
-    ## Lifecycle callbacks (callback mode)
-    # on_enter  -- after entering a state
-    # on_exit   -- before leaving a state
-    # on_failure -- on transition failure (non-soft)
-    # on_timer  -- periodic callback (with @timer annotation)
+    # Transition rows are checked Cure ADT values and dispatch is an ordinary
+    # recursive standard-library function. Callback bodies are reparsed under
+    # the lifted module's GenStatem context.
     """
   end
 

@@ -21,12 +21,13 @@ Cure.OTel.start(
 When started, the bridge subscribes to every stage of the pipeline
 event registry (`:lexer`, `:parser`, `:type_checker`, `:codegen`,
 `:fsm_verifier`, `:sup_verifier`, `:app_verifier`, `:registry`) and
-re-emits each event as a span.
+re-emits each event as a span. Macro expansion and lifted-module emission are
+reported through the generic parser, elaborator, and writer stages.
 
 Library code can also open manual spans through `Cure.OTel.span/3`:
 
 ```elixir
-Cure.OTel.span("cure.actor.send", %{"inbox" => "Ping.Pong"}, fn ->
+Cure.OTel.span("cure.process.send", %{"inbox" => "Ping.Pong"}, fn ->
   pid |> send(message)
 end)
 ```
@@ -44,7 +45,7 @@ tests and from the REPL via `:all/0`, `:flush/0`, `:count/0`.
 ## cure top
 
 `cure top` prints a point-in-time snapshot of every running
-supervisor, actor, and FSM:
+supervisor and lifted process module:
 
 ```sh
 mix cure.top           # or `cure top` when the escript is installed
@@ -56,12 +57,10 @@ Output:
 ```text
 cure top  2026-04-21T15:20:00Z              procs=85  reductions=12345
 Supervisors (1)
-  - Cure.Sup.Atelier.Root  (2 children)
-Actors (2)
-  - painter_1 (Cure.Actor.Painter)  mbox=0  mem=9184  reds=301
-  - curator_1 (Cure.Actor.Curator)  mbox=0  mem=9032  reds=212
-FSMs (1)
-  - exhibit_1 (Cure.FSM.Exhibit)  state=Closed  events=0  uptime_ms=42
+  - Atelier.Root  (2 children)
+Processes (2)
+  - painter_1 (Atelier.Painter)  mbox=0  mem=9184  reds=301
+  - exhibit_1 (Atelier.Exhibit)  state=Closed  events=0  uptime_ms=42
 ```
 
 Pair with `watch`, `entr`, or `keep` for a refresh-every-N-seconds

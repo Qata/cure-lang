@@ -23,7 +23,7 @@ mod Std.Process
   ## use Std.Process
   ##
   ## # Monitor a child and wait for its down message.
-  ## let child = Std.Actor.spawn(:"Cure.Actor.Echo")
+  ## let child = Std.Otp.spawn(fn() -> unit())
   ## let ref   = monitor(child)
   ## trap_exit(true)
   ## ```
@@ -65,4 +65,3 @@ mod Std.Process
   ## Is `pid` still alive on this node?
   @extern(:erlang, :is_process_alive, 1)
   fn is_alive(pid: Pid) -> Bool
-

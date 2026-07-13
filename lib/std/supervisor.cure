@@ -99,20 +99,16 @@ mod Std.Supervisor
 
   ## Start, stop, and introspect Cure supervisor trees.
   ##
-  ## Each Cure `sup` container compiles to a loaded BEAM module that
-  ## implements the `:supervisor` behaviour. The functions below
-  ## delegate to `Cure.Sup.Runtime`, which wraps `:supervisor` with
-  ## a tiny ETS registry so a tree can be reached by its compiled
-  ## module atom without threading pids through user code.
+  ## Each Cure `sup` declaration compiles to a loaded BEAM module that
+  ## implements the `:supervisor` behaviour. New declarations start through
+  ## the transparent `beam_ops start_supervisor` operation.
   ##
   ## ## Examples
   ##
   ## ```cure
   ## use Std.Supervisor
   ##
-  ## start(:"Cure.Sup.MyRoot")
-  ## which_children(:"Cure.Sup.MyRoot")
-  ## stop(:"Cure.Sup.MyRoot")
+  ## beam_ops start_supervisor :"MyApp.Root"
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
