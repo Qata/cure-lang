@@ -115,6 +115,7 @@ defmodule Cure.Compiler.Parser do
     emit? = Keyword.get(opts, :emit_events, true)
     edition = Keyword.get(opts, :edition, Cure.Edition.current())
     prelude? = Keyword.get(opts, :prelude_macros, true)
+    supplied_macros = Keyword.get(opts, :builtin_macros)
 
     # Phase 1 (harvest): parse once with NO active macros, keep only the local
     # macro grammars. Use-sites may mis-parse here; we discard everything but
@@ -131,7 +132,12 @@ defmodule Cure.Compiler.Parser do
       file: file,
       emit_events: emit?,
       edition: edition,
-      builtin_macros: if(prelude?, do: prelude_macros(), else: %{}),
+      builtin_macros:
+        cond do
+          is_map(supplied_macros) -> supplied_macros
+          prelude? -> prelude_macros()
+          true -> %{}
+        end,
       active_macros: active,
       computed_macros: computed,
       literal_macros: literal
@@ -174,30 +180,47 @@ defmodule Cure.Compiler.Parser do
         _ ->
           stdlib_macro_paths = Path.wildcard(Path.expand("../../std/*.cure", __DIR__))
 
-          Enum.reduce(stdlib_macro_paths, %{}, fn path, acc ->
-            with {:ok, source} <- File.read(path),
-                 {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
-                 {:ok, ast} <- parse(tokens, file: path, emit_events: false, prelude_macros: false) do
-              ast
-              |> collect_macro_defs_with_scope()
-              |> Enum.reduce(acc, fn {:macro_def, _meta, rules}, macro_acc ->
-                Enum.reduce(rules, macro_acc, fn
-                  %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
-                    Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
-
-                  _, acc2 ->
-                    acc2
-                end)
-              end)
-            else
-              _ -> acc
-            end
-          end)
+          # First harvest every standard-library macro without any builtin
+          # rules. A second parse uses that complete grammar set so one
+          # standard-library macro can transparently invoke another (for
+          # example, actor/fsm/sup starters invoking `beam_ops`).
+          harvested = collect_stdlib_macro_rules(stdlib_macro_paths, %{})
+          collect_stdlib_macro_rules(stdlib_macro_paths, %{}, harvested)
       end
 
     :persistent_term.put({__MODULE__, :prelude_macros}, rules)
     Process.delete(:cure_loading_prelude)
     rules
+  end
+
+  defp collect_stdlib_macro_rules(paths, acc, builtin_macros \\ %{}) do
+    Enum.reduce(paths, acc, fn path, rules ->
+      with {:ok, source} <- File.read(path),
+           {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
+           {:ok, ast} <-
+             parse(tokens,
+               file: path,
+               emit_events: false,
+               prelude_macros: false,
+               builtin_macros: builtin_macros
+             ) do
+        collect_macro_rules(ast, rules)
+      else
+        _ -> rules
+      end
+    end)
+  end
+
+  defp collect_macro_rules(ast, acc) do
+    Enum.reduce(collect_macro_defs_with_scope(ast), acc, fn {:macro_def, _meta, rules}, macro_acc ->
+      Enum.reduce(rules, macro_acc, fn
+        %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
+          Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
+
+        _, acc2 ->
+          acc2
+      end)
+    end)
   end
 
   @doc """

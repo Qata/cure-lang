@@ -14,7 +14,7 @@ mod Std.Actor
       callback handle_info(message: i, state: State) returns Tuple(Atom, State) = %[:noreply, state]
       callback terminate(reason: e, state: State) returns Atom = :ok
       callback code_change(old: v, state: State, extra: x) returns Tuple(Atom, State) = %[:ok, state]
-      fn start_link() -> Effect(Tuple) = Std.Otp.start_link(name, [payload])
+      fn start_link() -> Effect(Tuple) = beam_ops start_link name [payload]
       body
 
     syntax actor <name: ModuleName> state <state_type: Type> <body: raw until dedent> becomes lift module name
@@ -27,7 +27,7 @@ mod Std.Actor
       callback handle_info(message: i, state: State) returns Tuple(Atom, State) = %[:noreply, state]
       callback terminate(reason: e, state: State) returns Atom = :ok
       callback code_change(old: v, state: State, extra: x) returns Tuple(Atom, State) = %[:ok, state]
-      fn start_link(initial: State) -> Effect(Tuple) = Std.Otp.start_link(name, [initial])
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name [initial]
       body
 
     syntax actor <name: ModuleName> with <payload: Code> <body: raw until dedent> becomes lift module name
@@ -39,7 +39,7 @@ mod Std.Actor
       callback handle_info(message: i, state: p) returns Tuple(Atom, p) = %[:noreply, state]
       callback terminate(reason: e, state: p) returns Atom = :ok
       callback code_change(old: v, state: p, extra: x) returns Tuple(Atom, p) = %[:ok, state]
-      fn start_link() -> Effect(Tuple) = Std.Otp.start_link(name, [payload])
+      fn start_link() -> Effect(Tuple) = beam_ops start_link name [payload]
       body
 
     syntax actor <name: ModuleName> <body: raw until dedent> becomes lift module name
@@ -51,7 +51,7 @@ mod Std.Actor
       callback handle_info(message: i, state: p) returns Tuple(Atom, p) = %[:noreply, state]
       callback terminate(reason: e, state: p) returns Atom = :ok
       callback code_change(old: v, state: p, extra: x) returns Tuple(Atom, p) = %[:ok, state]
-      fn start_link(initial: p) -> Effect(Tuple) = Std.Otp.start_link(name, [initial])
+      fn start_link(initial: p) -> Effect(Tuple) = beam_ops start_link name [initial]
       body
 
   ## Typed-actor runtime operations: spawn, stop, send, introspect.

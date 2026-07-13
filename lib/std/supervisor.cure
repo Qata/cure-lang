@@ -9,14 +9,14 @@ mod Std.Supervisor
       use Std.Supervisor
       behaviour supervisor
       callback init(arg: List(p)) returns Tuple(Atom, Tuple(Tuple(Atom, Int, Int), List(ChildSpec))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), children]]
-      fn start_link() -> Effect(Tuple) = Std.Otp.start_supervisor(name)
+      fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name
 
     syntax sup <name: ModuleName> with <payload: Code> <body: raw until dedent> becomes lift module name
       use Std.Otp
       use Std.Supervisor
       behaviour supervisor
       callback init(arg: List(p)) returns Tuple(Atom, Tuple(Tuple(Atom, Int, Int), List(Atom))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), assert_type [] : List(Atom)]]
-      fn start_link() -> Effect(Tuple) = Std.Otp.start_supervisor_with(name, [payload])
+      fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name [payload]
       body
 
     syntax sup <name: ModuleName> <body: raw until dedent> becomes lift module name
@@ -24,7 +24,7 @@ mod Std.Supervisor
       use Std.Supervisor
       behaviour supervisor
       callback init(arg: List(p)) returns Tuple(Atom, Tuple(Tuple(Atom, Int, Int), List(Atom))) = %[:ok, %[supervision_strategy(one_for_one(), 3, 5), assert_type [] : List(Atom)]]
-      fn start_link() -> Effect(Tuple) = Std.Otp.start_supervisor(name)
+      fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name
       body
 
   type Restart = Permanent | Temporary | Transient

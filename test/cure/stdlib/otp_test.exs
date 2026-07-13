@@ -110,6 +110,21 @@ defmodule Cure.Stdlib.OtpTest do
     refute inspect(Cure.Compiler.parse_source(source, emit_events: false)) =~ "__otp_container"
   end
 
+  test "beam_ops expands behavior-specific startup operations" do
+    source = """
+    mod App
+      use Std.Otp
+      fn server(module: Atom) -> Effect(Tuple) = beam_ops start_link module [0]
+      fn statem(module: Atom) -> Effect(Tuple) = beam_ops start_statem module [0]
+      fn supervisor(module: Atom) -> Effect(Tuple) = beam_ops start_supervisor module [0]
+    """
+
+    assert {:ok, _} = Program.elaborate(source)
+    expanded = Cure.Compiler.parse_source(source, emit_events: false)
+    refute inspect(expanded) =~ "beam_ops"
+    refute inspect(expanded) =~ "__otp_container"
+  end
+
   test "beam_ops rejects a message with the wrong typed target" do
     source = """
     mod App
