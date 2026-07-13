@@ -277,6 +277,19 @@ defmodule Cure.LSP.LspTest do
       assert symbol["detail"] == "lifted gen_server module"
       assert Enum.any?(symbol["children"], &(&1["name"] == "callback init/1"))
     end
+
+    test "does not synthesize retired FSM metadata from generic containers" do
+      ast =
+        {:container, [container_type: :module, name: "Plain", line: 1],
+         [
+           {:function_call, [name: "transition", from: "Idle", event: "go", to: "Done", line: 2], []}
+         ]}
+
+      [symbol] = Symbols.extract(ast)
+
+      assert symbol["detail"] == "module"
+      assert symbol["children"] == []
+    end
   end
 
   # ============================================================================

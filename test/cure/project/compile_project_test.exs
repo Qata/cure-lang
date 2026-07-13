@@ -59,7 +59,7 @@ defmodule Cure.Project.CompileProjectTest do
 
   describe "Cure.Project.detect_app/2" do
     @tag :tmp_dir
-    test "returns nil when no app container exists", %{tmp_dir: tmp} do
+    test "returns nil when no application macro exists", %{tmp_dir: tmp} do
       setup_project(tmp, [
         {"Cure.toml", "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n"},
         {"lib/lib.cure", "mod Demo\n  fn hello() -> Atom = :ok\n"}
@@ -71,7 +71,7 @@ defmodule Cure.Project.CompileProjectTest do
     end
 
     @tag :tmp_dir
-    test "returns the single app container when there is exactly one", %{tmp_dir: tmp} do
+    test "returns the single application macro when there is exactly one", %{tmp_dir: tmp} do
       setup_project(tmp, [
         {"Cure.toml", "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n"},
         {"lib/app.cure", "app Demo\n"}
@@ -214,7 +214,7 @@ defmodule Cure.Project.CompileProjectTest do
     end
 
     @tag :tmp_dir
-    test "rejects two app containers under E051", %{tmp_dir: tmp} do
+    test "rejects two application macros under E051", %{tmp_dir: tmp} do
       setup_project(tmp, [
         {"Cure.toml", "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n"},
         {"lib/foo.cure", "app Foo\n"},
