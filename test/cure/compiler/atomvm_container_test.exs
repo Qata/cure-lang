@@ -3,7 +3,7 @@ defmodule Cure.Compiler.AtomVMContainerTest do
 
   @moduletag :atomvm
 
-  test "generic supervisor and application macros run on generic-unix AtomVM" do
+  test "all transparent OTP macros run on generic-unix AtomVM" do
     atomvm_root = System.get_env("ATOMVM_ROOT", "/Users/ch/Develop/esp32-beam/AtomVM")
     atomvm = Path.join(atomvm_root, "build/src/AtomVM")
     packbeam = Path.join(atomvm_root, "build/tools/packbeam/packbeam")
@@ -27,6 +27,18 @@ defmodule Cure.Compiler.AtomVMContainerTest do
                  emit_events: false
                )
 
+      assert {:ok, :"Cure.AtomVMTestActor", _} =
+               Cure.Compiler.compile_string("actor Cure.AtomVMTestActor with 0\n",
+                 output_dir: out,
+                 emit_events: false
+               )
+
+      assert {:ok, :"Cure.AtomVMTestFsm", _} =
+               Cure.Compiler.compile_string("fsm Cure.AtomVMTestFsm with 0\n",
+                 output_dir: out,
+                 emit_events: false
+               )
+
       forms = [
         {:attribute, 1, :module, :cure_atomvm_probe},
         {:attribute, 1, :export, [{:start, 0}]},
@@ -36,6 +48,8 @@ defmodule Cure.Compiler.AtomVMContainerTest do
             [
               remote_call(:"Cure.AtomVMTestSup", :start_link, []),
               remote_call(:"Cure.AtomVMTestApp", :start, [{:atom, 1, :normal}, {nil, 1}]),
+              remote_call(:"Cure.AtomVMTestActor", :start_link, []),
+              remote_call(:"Cure.AtomVMTestFsm", :start_link, []),
               remote_call(:io, :format, [{:string, 1, ~c"CURE_ATOMVM_PROOF_OK~n"}, {nil, 1}])
             ]}
          ]}
@@ -47,7 +61,16 @@ defmodule Cure.Compiler.AtomVMContainerTest do
 
       beams = [probe | Path.wildcard(Path.join(estdlib, "*.beam"))]
       beams = beams ++ Path.wildcard(Path.join(File.cwd!(), "_build/cure/ebin/Cure.Std.*.beam"))
-      beams = [Path.join(out, "Cure.AtomVMTestSup.beam"), Path.join(out, "Cure.AtomVMTestApp.beam") | beams]
+
+      beams =
+        [
+          Path.join(out, "Cure.AtomVMTestSup.beam"),
+          Path.join(out, "Cure.AtomVMTestApp.beam"),
+          Path.join(out, "Cure.AtomVMTestActor.beam"),
+          Path.join(out, "Cure.AtomVMTestFsm.beam")
+          | beams
+        ]
+
       archive = Path.join(out, "cure_atomvm_proof.avm")
 
       {_output, 0} =
