@@ -49,6 +49,7 @@ defmodule Cure.CLITest do
 
       output_dir = Path.join(System.tmp_dir!(), "cure_cli_compile_ebin_#{System.unique_integer([:positive])}")
       File.mkdir_p!(source_dir)
+
       on_exit(fn ->
         File.rm_rf!(source_dir)
         File.rm_rf!(output_dir)
