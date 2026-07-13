@@ -348,15 +348,14 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_macro_use(state, keyword, registry) do
     rules = Map.fetch!(registry, keyword)
-    rule = select_macro_rule(rules, state)
     # consume the keyword token
     state = advance(state)
 
-    case match_segments(state, rule.segments, %{}, 0) do
-      {:ok, bindings, _progress, state} ->
+    case match_macro_rule(rules, state) do
+      {:ok, rule, bindings, state} ->
         expand_rule(rule, bindings, state)
 
-      {:error, progress, state} ->
+      {:error, rule, progress, state} ->
         t = peek(state)
 
         state =
@@ -375,15 +374,27 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp select_macro_rule([first | rest], state) do
-    Enum.find(rest, first, fn rule -> macro_rule_head_matches?(rule, state) end)
+  # Rules sharing a dispatch keyword may overlap (for example, a specific
+  # `with` form and a general body form). Try each complete grammar match from
+  # the same post-keyword state so a failed partial match cannot consume input
+  # or prevent a later rule from being considered.
+  defp match_macro_rule([rule | rest], state) do
+    case match_segments(state, rule.segments, %{}, 0) do
+      {:ok, bindings, _progress, matched_state} ->
+        {:ok, rule, bindings, matched_state}
+
+      {:error, progress, failed_state} ->
+        case match_macro_rule(rest, state) do
+          {:error, _last_rule, _last_progress, _last_state} ->
+            {:error, rule, progress, failed_state}
+
+          success ->
+            success
+        end
+    end
   end
 
-  defp macro_rule_head_matches?(%{segments: [{:lit, literal} | _]}, state) do
-    lit_token_matches?(peek_at(state, 1), literal)
-  end
-
-  defp macro_rule_head_matches?(_rule, _state), do: false
+  defp match_macro_rule([], state), do: {:error, %{segments: []}, 0, state}
 
   # Tier-3 use-sites are matched at parse time, but their elab runs only after
   # the dependent environment exists. Preserve the elab reference and the
