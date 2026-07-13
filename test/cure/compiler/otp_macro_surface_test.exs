@@ -94,6 +94,24 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
              meta[:declarations]
   end
 
+  test "a delayed callback body expands beam_ops after the callback context is introduced" do
+    source = """
+    mod Host
+      use Std.Otp
+      macro Lift
+        syntax lift <name: ModuleName> <body: delayed raw until dedent> contextual becomes lift module name
+          use Std.Otp
+          behaviour custom_behavior
+          callback ping(arg: Int) returns Effect(Pid(Atom)) = body
+      lift Cure.Generated.Contextual
+        beam_ops self
+    """
+
+    assert {:ok, main} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert main == :"Cure.Host"
+    assert function_exported?(:"Cure.Generated.Contextual", :ping, 1)
+  end
+
   test "a transparent macro parses a raw body splice into ordinary declarations" do
     source = """
     mod M

@@ -1056,7 +1056,7 @@ defmodule Cure.Compiler.Parser do
     case Map.get(value, :body) do
       {:delayed_raw_tokens, _raw_meta, tokens} when is_list(tokens) ->
         context = Map.get(value, :callback_context)
-        Map.put(value, :body, parse_raw_hole(tokens, state, context))
+        Map.put(value, :body, parse_delayed_callback_body(tokens, state, context))
 
       _ ->
         value
@@ -1065,6 +1065,22 @@ defmodule Cure.Compiler.Parser do
 
   defp subst_lift_module_value(value, bindings, state, _module_hole, _module_name),
     do: subst_holes_meta_value(value, bindings, state)
+
+  defp parse_delayed_callback_body(tokens, state, context) do
+    case parse_raw_hole(tokens, state, context) do
+      {:raw_splice, [body]} ->
+        body
+
+      {:raw_splice, []} ->
+        {:macro_error, [reason: :delayed_callback_requires_one_expression], []}
+
+      {:raw_splice, _body} ->
+        {:macro_error, [reason: :delayed_callback_requires_one_expression], []}
+
+      error ->
+        error
+    end
+  end
 
   defp subst_lift_module_value_meta(meta, bindings, state, module_hole, module_name) when is_list(meta) do
     Enum.map(meta, fn
