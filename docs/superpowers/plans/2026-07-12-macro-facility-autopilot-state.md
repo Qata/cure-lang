@@ -1307,6 +1307,12 @@ printer, precedence, `with`, and corpus round-trip verification passes.
 The compiler lexer also no longer recognizes `--event-->` or carries FSM
 transition state; transition-shaped text is ordinary punctuation and identifier
 tokens, leaving any higher-level transition vocabulary to Cure macros.
+The compiler diagnostics module also no longer formats the retired application,
+release, or FSM-verifier error families; those are project/runtime concerns and
+must not remain compiler-owned vocabulary. Parser comments and helper names now
+describe generic macro dispatch and lifted-module collection. The remaining
+Phase 5 audit still has to remove stale catalog prose and genericize legacy
+project/documentation tooling that pattern-matches the old AST shapes.
 
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new

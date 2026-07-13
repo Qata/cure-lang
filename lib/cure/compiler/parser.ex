@@ -76,7 +76,7 @@ defmodule Cure.Compiler.Parser do
   ]
 
   # Names parse_prefix/1's :identifier case already dispatches on via a
-  # hard-coded clause (the soft-keyword container forms sup/app/macro/with,
+  # hard-coded clause (the soft-keyword forms sup/app/macro/with,
   # plus the assert_type/rewrite builtins). A local macro can never claim one
   # of these: the guarded macro-use clause is checked FIRST, so an unguarded
   # collision would silently disable the existing form for the rest of the
@@ -2277,7 +2277,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp container_macro_head?(state) do
+  defp macro_head?(state) do
     case peek_at(state, 1) do
       %Token{type: type} when type in [:identifier, :atom, :quoted_identifier] -> true
       _ -> false
@@ -2291,7 +2291,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp prelude_macro_head?(state, _name), do: container_macro_head?(state)
+  defp prelude_macro_head?(state, _name), do: macro_head?(state)
 
   defp macro_use_head?(state, "lens"), do: prelude_macro_head?(state, "lens")
   defp macro_use_head?(_state, _name), do: true
@@ -4902,8 +4902,9 @@ defmodule Cure.Compiler.Parser do
   end
 
   # Pure surface representation for §14's `lift module` value. The resulting
-  # node contains quoted callback bodies and declarations; the OTP frontend
-  # validates it later and the compiler remains the only code-loading boundary.
+  # node contains quoted callback bodies and declarations; the generic module
+  # collector validates and emits it later, with the compiler as the only
+  # code-loading boundary.
   defp parse_lift_module(state, token) do
     state = advance(state)
     state = advance(state)
