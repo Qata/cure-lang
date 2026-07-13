@@ -60,9 +60,7 @@ defmodule Cure.Elab.MacroRecursiveExpansionTest do
       {:computed_use, [keyword: "outer", line: 21, col: 2],
        [{:variable, [scope: :local], "missing_builder"}, {:macro_input, [], []}]}
 
-    assert {:error,
-            {:macro_expansion_budget, :expansion_count,
-             [%{keyword: "outer", line: 21, col: 2}]}} =
+    assert {:error, {:macro_expansion_budget, :expansion_count, [%{keyword: "outer", line: 21, col: 2}]}} =
              MacroExpand.expand(node, env, max_expansions: 0)
   end
 end
