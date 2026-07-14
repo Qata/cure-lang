@@ -44,10 +44,12 @@ mod Std.Otp
   ##                          extern) — a wrong request AND a wrong reply are both
   ##                          caught.
   ##
-  ## Every operation performs a BEAM side effect, so it returns `Effect(T)`: the
-  ## effect discipline forbids duplicating, dropping, or reordering a
-  ## `tell`/`call`/`cast`. Messages are POLYMORPHIC (the narrow point for a message
-  ## set), never `Any`.
+  ## Every operation performs a BEAM side effect, so it returns `Effect(T)`. The effect
+  ## discipline forbids duplicating, dropping, or reordering an OPERATION — a statement
+  ## about the PROGRAM'S EFFECT SEQUENCE, not about the mailbox. The BEAM promises no
+  ## delivery at all (a `tell` to a dead process silently succeeds) and orders signals only
+  ## PAIRWISE, from one sender to one target; nothing in this module claims more. Messages
+  ## are POLYMORPHIC (the narrow point for a message set), never `Any`.
   ##
   ## The typed layer calls the raw externs through ordinary qualified Cure
   ## definitions. The only foreign declarations are in `Std.Otp.Raw`; the
@@ -145,6 +147,11 @@ mod Std.Otp
 
   ## Synchronous `gen_server` call: send request `q`, block for reply `r`. Both the
   ## request AND the reply are checked against the server's type.
+  ##
+  ## ⚠ PARTIAL. On timeout (default 5000 ms) or server death the CALLER EXITS. `Effect(r)`
+  ## is sound — no value is ever returned at the wrong type — but it is NOT total: there is
+  ## simply no continuation. A `try_call` reifying the failure as a value needs a try/catch
+  ## shim and is deferred (audit §6).
   fn call({q: Type}, {r: Type}, server: GenServer(q, r), request: q) -> Effect(r) =
     raw_call(server, request)
 

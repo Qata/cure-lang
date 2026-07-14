@@ -344,6 +344,10 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
+  # `()` — the unit value, the sole inhabitant of `Unit`. The parser produces its own
+  # node kind for it rather than a `:literal`, so it needs its own clause here.
+  defp to_string({:unit_value, _meta}, _depth, _indent), do: "()"
+
   # -- Variables -------------------------------------------------------------
 
   defp to_string({:variable, _meta, name}, _depth, _indent), do: name

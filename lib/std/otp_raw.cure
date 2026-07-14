@@ -7,9 +7,23 @@ mod Std.Otp.Raw
   ## algebra (`Pid(m)`, session channels) and is the sanctioned surface; nothing
   ## here is meant for direct use. Every operation that performs a BEAM side
   ## effect returns `Effect(T)` (design 2026-07-09-effect-type-former §3.3,
-  ## 2026-07-10-checked-beam-concurrency §2): the effect discipline forbids
-  ## duplicating, dropping, or reordering a `send`/`call`, which the old pure
-  ## `@extern` types (the "purity lie") silently allowed.
+  ## 2026-07-10-checked-beam-concurrency §2), which the old pure `@extern` types
+  ## (the "purity lie") did not.
+  ##
+  ## The effect discipline forbids duplicating, dropping, or reordering an
+  ## OPERATION — that is a statement about the PROGRAM'S EFFECT SEQUENCE, not
+  ## about the mailbox. The BEAM itself guarantees far less, and nothing here may
+  ## assume otherwise:
+  ##
+  ##   * NO DELIVERY. A `send` to a dead process silently succeeds. Nothing here
+  ##     promises a message arrives, and no typed op sequences on arrival.
+  ##   * ORDERING IS PAIRWISE ONLY. Signals from the SAME sender to the SAME
+  ##     target arrive in order — messages and exit signals alike. Order between
+  ##     DIFFERENT senders is unspecified.
+  ##
+  ## (Bereczky/Horpácsi/Thompson, *A Formalisation of Core Erlang*, Thm. 2 and Ex. 3;
+  ## verified against AtomVM in
+  ## docs/research/process-types/raw-algebra-conformance-checklist.md.)
   ##
   ## Messages and replies are POLYMORPHIC, not `Any`: the type variable is the
   ## narrow point where `Std.Otp` supplies the message-set code `m`. Payloads must
@@ -82,6 +96,12 @@ mod Std.Otp.Raw
   ## Start a gen_server through its standard callback module. The raw return is
   ## deliberately the OTP `{ok, pid}`/error tuple; a behavior-specific wrapper
   ## narrows that contract after the callback context is established.
+  ##
+  ## ⚠ The return is typed `Effect(Tuple)`, which is honest on AtomVM (whose gen_server init
+  ## result is `{ok, State} | {stop, Reason}`) but NOT on OTP, where an `init/1` returning
+  ## `ignore` makes `start_link` return the BARE ATOM `ignore`. Typing that honestly means
+  ## producing a TYPED handle from an untyped BEAM tuple — the same unfounded assertion as
+  ## F-1, and deferred with it (audit §6). This applies to every op in the family below.
   @extern(:gen_server, :start_link, 4)
   fn raw_start_link({a: Type}, name: Tuple(Atom, Atom), module: Atom, args: a, opts: List(Atom)) -> Effect(Tuple)
 
@@ -114,6 +134,11 @@ mod Std.Otp.Raw
   ## Synchronous `gen_server` call — the reply type is where `Std.Otp` threads
   ## the dependent `ReplyOf(req)`; here it is a free (return-polymorphic) result.
   ## `Server`-only: calling a plain process blocks the caller for 5s and then exits it.
+  ##
+  ## ⚠ PARTIAL. On timeout (default 5000 ms) or server death the CALLER EXITS. No value is
+  ## returned at the wrong type — there is simply no continuation — so `Effect(r)` is sound
+  ## but not total. A `try_call` that reifies the failure needs a try/catch shim and is
+  ## deferred (audit §6).
   @extern(:gen_server, :call, 2)
   fn raw_call({q: Type}, {r: Type}, server: RawPid(q, r, Server), req: q) -> Effect(r)
 
