@@ -57,6 +57,13 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
     assert request.behaviour == :custom_behavior
   end
 
+  test "computed syntax may provide a reflected atom module name" do
+    ast = {:lift_module, [module: :"Cure.Generated.Atom", behaviour: :custom_behavior], []}
+
+    assert {:ok, request} = LiftModule.request_ast(ast)
+    assert request.module == "Cure.Generated.Atom"
+  end
+
   test "lifted callback return types are preserved as ordinary function annotations" do
     source = """
     lift module Cure.Generated.Typed

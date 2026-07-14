@@ -136,7 +136,7 @@ defmodule Cure.Compiler.LiftModule do
   @doc "Validate and normalize a generic quoted module value."
   @spec request_ast(tuple()) :: {:ok, map()} | {:error, term()}
   def request_ast({:lift_module, meta, []}) when is_list(meta) do
-    with module when is_binary(module) <- Keyword.get(meta, :module),
+    with {:ok, module} <- normalize_module_name(Keyword.get(meta, :module)),
          behaviour when is_atom(behaviour) <- Keyword.get(meta, :behaviour),
          callbacks when is_list(callbacks) <- Keyword.get(meta, :callbacks, []),
          declarations when is_list(declarations) <- Keyword.get(meta, :declarations, []),
@@ -163,6 +163,14 @@ defmodule Cure.Compiler.LiftModule do
   end
 
   def request_ast(_other), do: {:error, :invalid_lift_module_ast}
+
+  # Computed macros reflect module names as syntax literals. Keep this
+  # normalization generic: quoted source may use either the parser's existing
+  # binary form or an atom produced by `Std.Syntax`, and neither form carries
+  # behavior-specific meaning here.
+  defp normalize_module_name(module) when is_binary(module), do: {:ok, module}
+  defp normalize_module_name(module) when is_atom(module), do: {:ok, Atom.to_string(module)}
+  defp normalize_module_name(_module), do: {:error, :invalid_lift_module_ast}
 
   @spec strip(term()) :: term()
   def strip({:lift_module, _meta, _children} = node), do: node
