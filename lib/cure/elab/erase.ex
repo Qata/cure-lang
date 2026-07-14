@@ -197,5 +197,9 @@ defmodule Cure.Elab.Erase do
   def has_hole?({:case, s, m, branches}),
     do: has_hole?(s) or has_hole?(m) or Enum.any?(branches, fn {_c, _ar, b} -> has_hole?(b) end)
 
+  def has_hole?({:effect_type, inner}), do: has_hole?(inner)
+  def has_hole?({:effect_pure, value}), do: has_hole?(value)
+  def has_hole?({:effect_bind, effect, continuation}), do: has_hole?(effect) or has_hole?(continuation)
+
   def has_hole?(_term), do: false
 end

@@ -77,7 +77,8 @@ defmodule Cure.Elab.Resolve do
   @spec dict_value(Env.t(), atom(), atom(), term()) :: {:ok, term(), term()} | {:error, term()}
   def dict_value(env, iface, head, ctx) do
     with {:ok, term} <- dict_term(env, iface, head) do
-      type = Eval.eval({:data, iface, [head_type_core(head)], []}, Context.env(ctx))
+      iface_key = Env.resolve_key(env, env.families, iface)
+      type = Eval.eval({:data, iface_key, [head_type_core(head)], []}, Context.env(ctx))
       {:ok, term, type}
     end
   end
@@ -178,7 +179,7 @@ defmodule Cure.Elab.Resolve do
   # project the method field off it, and apply to the arguments (checking each so a
   # lambda argument is honoured).
   defp abstract(env, desc, method, args, lvl, names, ctx) do
-    case find_dict_binder(ctx, names, desc.name, lvl) do
+    case find_dict_binder(ctx, names, desc.name, lvl, env) do
       {:ok, dict_name} ->
         with {:ok, proj, ptype} <-
                Elaborator.project_record_field(
@@ -198,7 +199,8 @@ defmodule Cure.Elab.Resolve do
 
   # The surface name of the in-scope binder whose type value is exactly
   # `Iface(<rigid var at level lvl>)`, or `:error` if none.
-  defp find_dict_binder(ctx, names, iface, lvl) do
+  defp find_dict_binder(ctx, names, iface, lvl, env) do
+    iface = Env.resolve_key(env, env.families, iface)
     target = {:vdata, iface, [{:vneutral, {:nvar, lvl}}]}
     n = Context.length(ctx)
 
@@ -234,7 +236,7 @@ defmodule Cure.Elab.Resolve do
               {:cont, {:ok, acc ++ [{:dict_value, spec.iface, head}]}}
 
             {:rigid, lvl} ->
-              case find_dict_binder(ctx, names, spec.iface, lvl) do
+              case find_dict_binder(ctx, names, spec.iface, lvl, env) do
                 {:ok, dname} -> {:cont, {:ok, acc ++ [{:variable, [], dname}]}}
                 :error -> {:halt, {:error, {:no_instance, spec.iface, {:rigid, lvl}}}}
               end
@@ -283,12 +285,13 @@ defmodule Cure.Elab.Resolve do
         eta_expand(env, Map.fetch!(ref.methods, m), arity)
       end)
 
-    {:ctor, iface, fields}
+    {:ctor, Env.resolve_key(env, env.ctors, iface), fields}
   end
 
   @doc "The Core type `Iface(head)` of a dictionary value for `iface` at `head`."
-  @spec dict_type_term(atom(), atom()) :: term()
-  def dict_type_term(iface, head), do: {:data, iface, [head_type_core(head)], []}
+  @spec dict_type_term(Env.t(), atom(), atom()) :: term()
+  def dict_type_term(env, iface, head),
+    do: {:data, Env.resolve_key(env, env.families, iface), [head_type_core(head)], []}
 
   # `λ(d0).…λ(d_{n-1}). gname(v0, …, v_{n-1})` — the global eta-expanded to arity
   # `n`, taking each binder domain from the global's own Π type (closed for a

@@ -90,8 +90,10 @@ defmodule Cure.Core.Env do
   erasure (M8.3 / M9).
   """
   @spec add_def(t(), atom(), Cure.Core.Term.t(), def_body(), [atom()] | nil) :: t()
-  def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities),
-    do: %{
+  def add_def(%__MODULE__{} = env, name, type_term, body_term, quantities) do
+    name = owned_name(env, name)
+
+    %{
       env
       | defs:
           Map.put(env.defs, name, %{
@@ -101,10 +103,48 @@ defmodule Cure.Core.Env do
             quantities: quantities
           })
     }
+  end
 
   @doc "The global definition `%{name, type, body}` for `name`, or nil."
   @spec get_def(t(), atom()) :: map() | nil
-  def get_def(%__MODULE__{defs: defs}, name), do: Map.get(defs, name)
+  def get_def(%__MODULE__{} = env, name), do: Map.get(env.defs, resolve_key(env, env.defs, name))
+
+  @doc "Return the owner-qualified key for a declaration in the current module."
+  @spec owned_name(t(), atom() | String.t()) :: atom()
+  def owned_name(%__MODULE__{module_owner: owner}, name) when is_binary(name),
+    do: owned_name(%__MODULE__{module_owner: owner}, String.to_atom(name))
+
+  def owned_name(%__MODULE__{module_owner: nil}, name), do: name
+
+  def owned_name(%__MODULE__{module_owner: owner}, name) when is_atom(name) do
+    if Cure.Elab.Name.qualified?(name), do: name, else: Cure.Elab.Name.qualify(owner, name)
+  end
+
+  @doc "Resolve a bare key against the current module's canonical key first."
+  @spec resolve_key(t(), map(), atom() | String.t()) :: atom()
+  def resolve_key(%__MODULE__{} = env, table, name) when is_binary(name),
+    do: resolve_key(env, table, String.to_atom(name))
+
+  def resolve_key(%__MODULE__{} = env, table, name) when is_atom(name) do
+    owned = owned_name(env, name)
+
+    cond do
+      Map.has_key?(table, owned) ->
+        owned
+
+      Map.has_key?(table, name) ->
+        name
+
+      true ->
+        case Enum.filter(Map.keys(table), fn key ->
+               is_atom(key) and Cure.Elab.Name.qualified?(key) and
+                 Cure.Elab.Name.base(key) == Atom.to_string(name)
+             end) do
+          [key] -> key
+          _ -> name
+        end
+    end
+  end
 
   @doc "Register a primitive base type: surface name → its Core type node."
   @spec put_primitive(t(), String.t(), tuple()) :: t()
@@ -144,11 +184,11 @@ defmodule Cure.Core.Env do
   """
   @spec put_constrained(t(), atom(), [map()]) :: t()
   def put_constrained(%__MODULE__{constrained: c} = env, name, specs),
-    do: %{env | constrained: Map.put(c, name, specs)}
+    do: %{env | constrained: Map.put(c, owned_name(env, name), specs)}
 
   @doc "The interface-constraint descriptors for global `name`, or nil."
   @spec constrained(t(), atom()) :: [map()] | nil
-  def constrained(%__MODULE__{constrained: c}, name), do: Map.get(c, name)
+  def constrained(%__MODULE__{} = env, name), do: Map.get(env.constrained, resolve_key(env, env.constrained, name))
 
   @doc """
   Mark a global as totality-certified (δ may unfold it). See M7.2.
@@ -162,6 +202,8 @@ defmodule Cure.Core.Env do
   """
   @spec certify(t(), atom()) :: t()
   def certify(%__MODULE__{certified: c} = env, name) do
+    name = resolve_key(env, env.defs, name)
+
     case get_def(env, name) do
       %{body: body} ->
         unless Cure.Core.Term.closed?(body) do
@@ -179,7 +221,7 @@ defmodule Cure.Core.Env do
 
   @doc "Is the global `name` certified total (δ-reducible)?"
   @spec certified?(t(), atom()) :: boolean()
-  def certified?(%__MODULE__{certified: c}, name), do: MapSet.member?(c, name)
+  def certified?(%__MODULE__{} = env, name), do: MapSet.member?(env.certified, resolve_key(env, env.defs, name))
 
   @doc """
   Mark an already-registered global def as a builtin arithmetic/comparison op,
@@ -192,7 +234,7 @@ defmodule Cure.Core.Env do
   """
   @spec register_builtin_op(t(), atom(), atom()) :: t()
   def register_builtin_op(%__MODULE__{defs: defs} = env, name, op_key),
-    do: %{env | defs: Map.update!(defs, name, &Map.put(&1, :builtin_op, op_key))}
+    do: %{env | defs: Map.update!(defs, resolve_key(env, defs, name), &Map.put(&1, :builtin_op, op_key))}
 
   @doc """
   The builtin-op key for `name` (`:add`, `:lt`, …), or nil. Tolerates a nil
@@ -219,7 +261,7 @@ defmodule Cure.Core.Env do
   """
   @spec register_inline_hint(t(), atom(), atom()) :: t()
   def register_inline_hint(%__MODULE__{defs: defs} = env, name, key),
-    do: %{env | defs: Map.update!(defs, name, &Map.put(&1, :inline_hint, key))}
+    do: %{env | defs: Map.update!(defs, resolve_key(env, defs, name), &Map.put(&1, :inline_hint, key))}
 
   @doc """
   The emit-inline key for `name` (`:and`, `:sigma_first`, …), or nil.
@@ -288,6 +330,8 @@ defmodule Cure.Core.Inductive do
   """
   @spec register_builtin(Env.t(), atom(), atom()) :: Env.t()
   def register_builtin(%Env{builtins: b} = env, key, family_id) when is_map_key(b, key) do
+    family_id = Env.resolve_key(env, env.families, family_id)
+
     case Map.fetch!(b, key) do
       ^family_id ->
         env
@@ -299,6 +343,7 @@ defmodule Cure.Core.Inductive do
   end
 
   def register_builtin(%Env{} = env, key, family_id) do
+    family_id = Env.resolve_key(env, env.families, family_id)
     %{env | builtins: Map.put(env.builtins, key, family_id)}
   end
 
@@ -357,9 +402,14 @@ defmodule Cure.Core.Inductive do
   @doc "Register a family and its constructors in the env."
   @spec declare(Env.t(), family(), [ctor()]) :: Env.t()
   def declare(%Env{} = env, %{name: fname} = family, ctors) do
+    fname = Env.owned_name(env, fname)
+    family = %{family | name: fname}
     env = %{env | families: Map.put(env.families, fname, family)}
 
     Enum.reduce(ctors, env, fn %{name: cname} = c, acc ->
+      cname = Env.owned_name(acc, cname)
+      c = %{c | name: cname}
+
       %{
         acc
         | ctors: Map.put(acc.ctors, cname, c),
@@ -372,7 +422,7 @@ defmodule Cure.Core.Inductive do
 
   @doc "Is `name` a registered family?"
   @spec family?(Env.t(), atom()) :: boolean()
-  def family?(%Env{families: fs}, name), do: Map.has_key?(fs, name)
+  def family?(%Env{} = env, name), do: Map.has_key?(env.families, Env.resolve_key(env, env.families, name))
 
   @doc """
   Is `name` an OPAQUE (postulate) family? The `opaque: true` marker — not the
@@ -389,15 +439,16 @@ defmodule Cure.Core.Inductive do
 
   @doc "The family signature for `name`, or nil."
   @spec get_family(Env.t(), atom()) :: family() | nil
-  def get_family(%Env{families: fs}, name), do: Map.get(fs, name)
+  def get_family(%Env{} = env, name), do: Map.get(env.families, Env.resolve_key(env, env.families, name))
 
   @doc "The constructor signature for `name`, or nil."
   @spec get_ctor(Env.t(), atom()) :: ctor() | nil
-  def get_ctor(%Env{ctors: cs}, name), do: Map.get(cs, name)
+  def get_ctor(%Env{} = env, name), do: Map.get(env.ctors, Env.resolve_key(env, env.ctors, name))
 
   @doc "The family a constructor belongs to."
   @spec ctor_family(Env.t(), atom()) :: atom() | nil
-  def ctor_family(%Env{ctor_to_family: m}, cname), do: Map.get(m, cname)
+  def ctor_family(%Env{} = env, cname),
+    do: Map.get(env.ctor_to_family, Env.resolve_key(env, env.ctor_to_family, cname))
 
   @doc "A constructor's result index terms."
   @spec ctor_result_indices(Env.t(), atom()) :: [Cure.Core.Term.t()] | nil
@@ -475,7 +526,12 @@ defmodule Cure.Core.Inductive do
 
   @doc "All constructors registered for the family `fname`."
   @spec ctors_of(Env.t(), atom()) :: [ctor()]
-  def ctors_of(%Env{ctors: cs, ctor_to_family: c2f}, fname) do
+  def ctors_of(%Env{} = env, fname) do
+    fname = Env.resolve_key(env, env.families, fname)
+
+    cs = env.ctors
+    c2f = env.ctor_to_family
+
     cs
     |> Map.values()
     |> Enum.filter(fn %{name: n} -> Map.get(c2f, n) == fname end)

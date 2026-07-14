@@ -48,6 +48,8 @@ mod Std.Syntax
     Quoted(_) -> :quoted
     Failure(name, _) -> name
 
+  fn has_tag(syntax: Syntax, expected: Atom) -> Bool = tag(syntax) == expected
+
   fn attrs(syntax: Syntax) -> List(Attr) = match syntax
     Node(_, values, _) -> values
     Leaf(_, values, _) -> values
@@ -61,6 +63,10 @@ mod Std.Syntax
     Raw(_) -> []
     Quoted(inner) -> [inner]
     Failure(_, values) -> values
+
+  fn leaf_value(syntax: Syntax) -> SynLit = match syntax
+    Leaf(_, _, value) -> value
+    _ -> SOpaque
 
   fn attr(values: List(Attr), key: Atom) -> AttrResult = match values
     [] -> Missing
@@ -81,3 +87,37 @@ mod Std.Syntax
   fn syntax_string(value: String) -> SynLit = SStr(value)
   fn syntax_bool(value: Bool) -> SynLit = SBool(value)
   fn syntax_int(value: Int) -> SynLit = SInt(value)
+
+  fn syntax_list(items: List(Syntax)) -> SynLit = match items
+    [] -> SList([])
+    [head | rest] ->
+      match syntax_list(rest)
+        SList(values) -> SList([SSyntax(head) | values])
+        _ -> SList([])
+
+  fn variable(name: String) -> Syntax =
+    Leaf(:variable, [KV(:scope, SAtom(:local))], SStr(name))
+
+  fn integer(value: Int) -> Syntax =
+    Leaf(:literal, [KV(:subtype, SAtom(:integer))], SInt(value))
+
+  fn alias_node(name: String, rhs: Syntax) -> Syntax =
+    Node(:type_annotation, [KV(:name, SStr(name))], [rhs])
+
+  fn enum_type(name: String, variants: List(Syntax)) -> Syntax =
+    Node(:container, [
+      KV(:container_type, SAtom(:enum)),
+      KV(:name, SStr(name))
+    ], variants)
+
+  fn enum_variant(name: String) -> Syntax =
+    Leaf(:variable, [KV(:variant, SBool(true))], SStr(name))
+
+  fn block(items: List(Syntax)) -> Syntax = Node(:block, [], items)
+
+  fn lift_module(module: SynLit, behaviour: Atom, declarations: List(Syntax)) -> Syntax =
+    Node(:lift_module, [
+      KV(:module, module),
+      KV(:behaviour, SAtom(behaviour)),
+      KV(:declarations, syntax_list(declarations))
+    ], [])

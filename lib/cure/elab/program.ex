@@ -355,7 +355,15 @@ defmodule Cure.Elab.Program do
   @spec expand_declaration_uses(tuple() | list()) :: {:ok, term()} | {:error, term()}
   def expand_declaration_uses(ast) do
     if declaration_computed_use?(ast) do
-      with {:ok, env} <- check_ast_elixir_core(ast) do
+      # Prepare the macro execution environment without checking unrelated
+      # function bodies yet. A declaration macro may introduce a nominal type
+      # that later functions use; checking those functions before expansion
+      # would report the generated name as unknown and make the declaration
+      # pass order-dependent. Computed elaborator functions themselves remain
+      # in the preparation AST so local macro definitions keep working.
+      prep_ast = declaration_expansion_prep(ast)
+
+      with {:ok, env} <- check_ast_elixir_core(prep_ast) do
         expand_declaration_nodes(ast, env)
       end
     else
@@ -379,8 +387,61 @@ defmodule Cure.Elab.Program do
 
   defp declaration_computed_use?(_other), do: false
 
-  defp expand_declaration_nodes({:computed_use, _meta, _children} = node, env),
-    do: MacroExpand.expand(node, env)
+  defp declaration_expansion_prep(ast) do
+    names = declaration_expansion_elab_names(ast)
+    declaration_expansion_prep(ast, names)
+  end
+
+  defp declaration_expansion_elab_names(ast) do
+    ast
+    |> collect_declaration_expansion_elab_names([])
+    |> MapSet.new()
+  end
+
+  defp collect_declaration_expansion_elab_names({:computed_use, _meta, [elab | _]}, acc) do
+    case elab do
+      {:variable, _meta, name} when is_binary(name) -> [String.to_atom(name) | acc]
+      {:variable, _meta, name} when is_atom(name) -> [name | acc]
+      _ -> acc
+    end
+  end
+
+  defp collect_declaration_expansion_elab_names({tag, _meta, children}, acc)
+       when is_atom(tag) and is_list(children),
+       do: Enum.reduce(children, acc, &collect_declaration_expansion_elab_names/2)
+
+  defp collect_declaration_expansion_elab_names(list, acc) when is_list(list),
+    do: Enum.reduce(list, acc, &collect_declaration_expansion_elab_names/2)
+
+  defp collect_declaration_expansion_elab_names(_other, acc), do: acc
+
+  defp declaration_expansion_prep({:function_def, meta, _body} = node, names) when is_list(meta) do
+    name = Keyword.get(meta, :name)
+    name = if is_binary(name), do: String.to_atom(name), else: name
+    if MapSet.member?(names, name), do: node, else: nil
+  end
+
+  defp declaration_expansion_prep({tag, meta, children}, names)
+       when is_atom(tag) and is_list(meta) and is_list(children) do
+    children =
+      children
+      |> Enum.map(&declaration_expansion_prep(&1, names))
+      |> Enum.reject(&is_nil/1)
+
+    {tag, meta, children}
+  end
+
+  defp declaration_expansion_prep(list, names) when is_list(list) do
+    list
+    |> Enum.map(&declaration_expansion_prep(&1, names))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp declaration_expansion_prep(other, _names), do: other
+
+  defp expand_declaration_nodes({:computed_use, _meta, _children} = node, env) do
+    MacroExpand.expand(node, env)
+  end
 
   defp expand_declaration_nodes({:function_def, _meta, _body} = node, _env), do: {:ok, node}
   defp expand_declaration_nodes({:macro_def, _meta, _rules} = node, _env), do: {:ok, node}
@@ -433,15 +494,18 @@ defmodule Cure.Elab.Program do
   # `Unit` shadows this (the local declaration overwrites the same key), same as any
   # seeded builtin. `unit : Unit` is a plain nullary inductive.
   defp seed_with_telescope_support(ast) do
-    seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast))
+    owner = find_module_name(ast) || "Main"
+    seeded = Cure.Core.Builtins.seed(Env.with_owner(Env.empty(), owner), declared_type_names(ast))
 
     if MapSet.member?(declared_type_names(ast), :Unit) do
       seeded
     else
+      unit_env = Env.with_owner(seeded, "Std.Unit")
+
       Inductive.declare(
         seeded,
-        Inductive.family(:Unit, [], [], 0),
-        [Inductive.ctor(:unit, [], [])]
+        Inductive.family(Env.owned_name(unit_env, :Unit), [], [], 0),
+        [Inductive.ctor(Env.owned_name(unit_env, :unit), [], [])]
       )
     end
   end
@@ -834,6 +898,12 @@ defmodule Cure.Elab.Program do
   # produced a module that called a function it never defined.
   defp global_refs({:let, _g, ty, val, body}),
     do: global_refs(ty) ++ global_refs(val) ++ global_refs(body)
+
+  defp global_refs({:effect_type, inner}), do: global_refs(inner)
+  defp global_refs({:effect_pure, value}), do: global_refs(value)
+
+  defp global_refs({:effect_bind, effect, continuation}),
+    do: global_refs(effect) ++ global_refs(continuation)
 
   defp global_refs(_leaf), do: []
 
@@ -1252,10 +1322,14 @@ defmodule Cure.Elab.Program do
          :ok <- check_declarations(ast),
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
          seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
-         {:ok, env0} <- merge_env(seeded, imported),
+         {:ok, env0_base} <- merge_env(seeded, imported),
+         env0 = Map.put(env0_base, :import_modules, direct_import_ids(imports(ast))),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
-      {:ok, mark_inline_hints(certified, find_module_name(ast))}
+      direct_ids = direct_import_ids(imports(ast))
+      {:ok, certified |> Map.put(:import_modules, direct_ids) |> mark_inline_hints(find_module_name(ast))}
+    else
+      {:error, _reason} = error -> error
     end
   end
 
@@ -1405,15 +1479,23 @@ defmodule Cure.Elab.Program do
            :ok <- check_declarations(ast),
            {:ok, imported} <- import_env(imports(ast), MapSet.put(seen, module_name)),
            seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
-           {:ok, env0} <- merge_env(seeded, imported),
+           {:ok, env0_base} <- merge_env(seeded, imported),
+           env0 = Map.put(env0_base, :import_modules, direct_import_ids(imports(ast))),
            {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
         with {:ok, certified} <- TotalityClosure.certify_type_level(env) do
-          {:ok, mark_inline_hints(certified, module_name)}
+          direct_ids = direct_import_ids(imports(ast))
+          {:ok, certified |> Map.put(:import_modules, direct_ids) |> mark_inline_hints(module_name)}
         end
       else
         {:error, reason} -> {:error, {:dependent_import_failed, module_name, reason}}
       end
     end
+  end
+
+  defp direct_import_ids(sources) do
+    sources
+    |> distinct_import_modules()
+    |> MapSet.new(fn {module_id, _path} -> module_id end)
   end
 
   # Emit-inline markers for the prelude defs whose saturated applications lower
@@ -1720,8 +1802,11 @@ defmodule Cure.Elab.Program do
 
     Enum.reduce_while(plain ++ computed, {:ok, env}, fn decl, {:ok, acc} ->
       case Declarations.elaborate_function_body(decl, acc) do
-        {:ok, acc2} -> {:cont, {:ok, acc2}}
-        {:error, _} = err -> {:halt, err}
+        {:ok, acc2} ->
+          {:cont, {:ok, acc2}}
+
+        {:error, _reason} = err ->
+          {:halt, err}
       end
     end)
   end

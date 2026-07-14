@@ -134,7 +134,7 @@ defmodule Cure.Elab.Elaborator do
         end
 
       Inductive.get_ctor(env, cname) != nil ->
-        cname
+        Env.resolve_key(env, env.ctors, cname)
 
       true ->
         case Cure.Elab.Resolution.resolve_bare_shadowed(env, cname) do
@@ -189,7 +189,7 @@ defmodule Cure.Elab.Elaborator do
           end
 
         Inductive.get_ctor(env, atom) != nil ->
-          atom
+          Env.resolve_key(env, env.ctors, atom)
 
         true ->
           case Cure.Elab.Resolution.resolve_bare_shadowed(env, atom) do
@@ -227,9 +227,11 @@ defmodule Cure.Elab.Elaborator do
         # over the witness's type/value — and have the kernel `check` the ctor
         # against it (validating that `x` inhabits `a` and the indices unify).
         with {:ok, arg_term, arg_type} <- elaborate_expr_typed(arg, names, ctx, env),
-             term = {:ctor, :reflexive, [arg_term]},
+             reflexive = resolve_ctor_key(env, :reflexive),
+             equivalent = Inductive.ctor_family(env, reflexive),
+             term = {:ctor, reflexive, [arg_term]},
              arg_val = Eval.eval(arg_term, Context.env(ctx)),
-             type = {:vdata, :Equivalent, [arg_type, arg_val, arg_val]},
+             type = {:vdata, equivalent, [arg_type, arg_val, arg_val]},
              :ok <- Kernel.check(ctx, term, type) do
           {:ok, term, type}
         end
@@ -311,7 +313,7 @@ defmodule Cure.Elab.Elaborator do
       # `resolve_bare_shadowed` (which feeds `resolved`) resolves toward imports and
       # would otherwise redirect a recursive self-call to a same-named import.
       implicit_def?(env, if(Env.get_def(env, atom), do: atom, else: resolved)) ->
-        key = if Env.get_def(env, atom), do: atom, else: resolved
+        key = if Env.get_def(env, atom), do: Env.resolve_key(env, env.defs, atom), else: resolved
 
         result =
           with {:ok, present} <- map_present_args(args, names, ctx, env) do
@@ -537,7 +539,7 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:literal, meta, value} = expr, names, ctx, env) do
     case Keyword.get(meta, :subtype) do
       :boolean when is_boolean(value) ->
-        ctor = if value, do: :True, else: :False
+        ctor = resolve_ctor_key(env, if(value, do: :True, else: :False))
         {:ok, {:ctor, ctor, []}, Kernel.bool_type_value(Context.signature(ctx))}
 
       :integer when is_integer(value) ->
@@ -701,6 +703,8 @@ defmodule Cure.Elab.Elaborator do
   # motive it builds is effectively constant — correct for inference position.
   def elaborate_expr_typed({:pattern_match, meta, [scrut | arms]} = expr, names, ctx, env)
       when is_list(meta) do
+    arms = desugar_list_patterns(arms)
+
     if special_match_arms?(arms) do
       with {:ok, desugared} <- desugar_special_match(scrut, arms, Keyword.get(meta, :line, 0)) do
         elaborate_expr_typed(desugared, names, ctx, env)
@@ -745,8 +749,8 @@ defmodule Cure.Elab.Elaborator do
   # `()` — the unit value (Swift-style), the sole inhabitant of `Unit`. It is the
   # nullary `unit` constructor of the seeded `Unit` family; the same node emit
   # already understands as the empty-telescope terminator.
-  def elaborate_expr_typed({:unit_value, _meta}, _names, _ctx, _env) do
-    {:ok, {:ctor, :unit, []}, {:data, :Unit, [], []}}
+  def elaborate_expr_typed({:unit_value, _meta}, _names, _ctx, env) do
+    {:ok, {:ctor, unit_ctor_name(env), []}, {:data, unit_family_name(env), [], []}}
   end
 
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
@@ -849,8 +853,10 @@ defmodule Cure.Elab.Elaborator do
   defp build_telescope_value(parts, _ctx, env) do
     mk_pair = sigma_ctor_name(env)
     fam = Inductive.builtin(env, :sigma)
+    unit_ctor = unit_ctor_name(env)
+    unit_family = unit_family_name(env)
 
-    Enum.reduce(Enum.reverse(parts), {{:ctor, :unit, []}, {:data, :Unit, [], []}}, fn
+    Enum.reduce(Enum.reverse(parts), {{:ctor, unit_ctor, []}, {:data, unit_family, [], []}}, fn
       {core, type_term}, {val_acc, type_acc} ->
         value = {:ctor, mk_pair, [core, val_acc]}
         cod = {:lam, Cure.Core.Grade.unrestricted(), type_term, Cure.Core.Term.shift(type_acc, 1)}
@@ -1208,7 +1214,7 @@ defmodule Cure.Elab.Elaborator do
             # back to a Core term (family param/index split recovered via the sig)
             # before walking the Σ spine.
             type_term = Quote.reify(type_value, Context.length(ctx), Context.signature(ctx))
-            count_tele(type_term, ctx, sigma_fam, 0)
+            count_tele(type_term, ctx, sigma_fam, unit_family_name(env), unit_ctor_name(env), 0)
         end
 
       _ ->
@@ -1218,13 +1224,13 @@ defmodule Cure.Elab.Elaborator do
 
   # Walk the Σ spine, instantiating each codomain (non-dependent for a telescope,
   # so the applied argument is discarded) until a `Unit` terminator is reached.
-  defp count_tele(type, ctx, sigma_fam, n) do
+  defp count_tele(type, ctx, sigma_fam, unit_fam, unit_ctor, n) do
     case Kernel.normalize(ctx, type) do
       {:data, ^sigma_fam, [_dom, cod], []} ->
-        tail = Kernel.normalize(ctx, {:app, cod, {:ctor, :unit, []}})
-        count_tele(tail, ctx, sigma_fam, n + 1)
+        tail = Kernel.normalize(ctx, {:app, cod, {:ctor, unit_ctor, []}})
+        count_tele(tail, ctx, sigma_fam, unit_fam, unit_ctor, n + 1)
 
-      {:data, :Unit, [], []} when n >= 1 ->
+      {:data, ^unit_fam, [], []} when n >= 1 ->
         {:telescope, n}
 
       _ ->
@@ -1358,7 +1364,8 @@ defmodule Cure.Elab.Elaborator do
         # Checking-mode `reflexive(x)` — see the infer-mode note above. Build the
         # inductive ctor and let the kernel check it against the expected type.
         with {:ok, arg_term, _type} <- elaborate_expr_typed(arg, names, ctx, env),
-             term = {:ctor, :reflexive, [arg_term]},
+             reflexive = resolve_ctor_key(env, :reflexive),
+             term = {:ctor, reflexive, [arg_term]},
              :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
           {:ok, term}
         end
@@ -1532,7 +1539,7 @@ defmodule Cure.Elab.Elaborator do
     depth = Context.length(ctx)
 
     with {:ok, proof_term, proof_type} <- elaborate_expr_typed(proof_ast, names, ctx, env),
-         {:ok, ty_value, a_value, b_value} <- eq_parts(proof_type),
+         {:ok, ty_value, a_value, b_value} <- eq_parts(proof_type, Context.signature(ctx)),
          ty = Kernel.normalize(ctx, Quote.reify(ty_value, depth)),
          a = Kernel.normalize(ctx, Quote.reify(a_value, depth)),
          b = Kernel.normalize(ctx, Quote.reify(b_value, depth)),
@@ -1560,9 +1567,14 @@ defmodule Cure.Elab.Elaborator do
         elaborate_expr_checked(desugared, expected_core, names, ctx, env)
       end
     else
-      with {:ok, term} <- elaborate_match(scrut, arms, expected_core, names, ctx, env),
-           :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-        {:ok, term}
+      case elaborate_match(scrut, arms, expected_core, names, ctx, env) do
+        {:ok, term} ->
+          with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+            {:ok, term}
+          end
+
+        {:error, _reason} = error ->
+          error
       end
     end
   end
@@ -1779,9 +1791,11 @@ defmodule Cure.Elab.Elaborator do
   #     `Cod[a]` directly (no `unit`). Preserves the landed `Sigma(x:T,U)` ABI.
   #
   # An empty run against `Unit` yields `unit` (the telescope terminator itself).
-  defp check_tuple_against([], expected_core, _names, ctx, _env) do
+  defp check_tuple_against([], expected_core, _names, ctx, env) do
+    unit_family = unit_family_name(env)
+
     case Kernel.normalize(ctx, expected_core) do
-      {:data, :Unit, [], []} -> {:ok, {:ctor, :unit, []}}
+      {:data, ^unit_family, [], []} -> {:ok, {:ctor, unit_ctor_name(env), []}}
       other -> {:error, {:tuple_arity_mismatch, :expected_more, other}}
     end
   end
@@ -1820,9 +1834,11 @@ defmodule Cure.Elab.Elaborator do
   # closed probe term and normalizing β-reduces a non-dependent tail to its body;
   # a dependent tail that mentions its argument won't reduce to `Unit` anyway. This
   # is the sole signal separating a telescope layer from a bare dependent pair.
-  defp telescope_terminator?(b_fn, ctx, _env) do
-    case Kernel.normalize(ctx, {:app, b_fn, {:ctor, :unit, []}}) do
-      {:data, :Unit, [], []} -> true
+  defp telescope_terminator?(b_fn, ctx, env) do
+    unit_family = unit_family_name(env)
+
+    case Kernel.normalize(ctx, {:app, b_fn, {:ctor, unit_ctor_name(env), []}}) do
+      {:data, ^unit_family, [], []} -> true
       _ -> false
     end
   end
@@ -2053,8 +2069,11 @@ defmodule Cure.Elab.Elaborator do
   # its `ty`/endpoints are that param and the two indices. The primitive `{:veq}`
   # form is still produced by the internal transport machinery (retired later), so
   # both are accepted.
-  defp eq_parts({:vdata, :Equivalent, [ty, a, b]}), do: {:ok, ty, a, b}
-  defp eq_parts(_other), do: {:error, :rewrite_proof_not_equality}
+  defp eq_parts({:vdata, family, [ty, a, b]}, sig) do
+    if family == Inductive.builtin(sig, :eq), do: {:ok, ty, a, b}, else: {:error, :rewrite_proof_not_equality}
+  end
+
+  defp eq_parts(_other, _sig), do: {:error, :rewrite_proof_not_equality}
 
   # Build the inductive identity type `Equivalent(ty, a, b)` and its `reflexive(x)`
   # proof (spec 2026-07-04). The elaborator's transport/motive machinery constructs
@@ -2064,12 +2083,12 @@ defmodule Cure.Elab.Elaborator do
   # elaborate to. As of Phase B the `{:rewrite}` eliminator node has NO producers
   # left: every transport is the J/subst `transport_case` below (the kernel's
   # `{:rewrite}` rule and elab traversal clauses are stripped in Phase C).
-  defp mk_eq(ty, a, b), do: {:data, :Equivalent, [ty], [a, b]}
+  defp mk_eq(ty, a, b), do: {:data, :"Std.Equivalent#Equivalent", [ty], [a, b]}
   # Checking-position reflexive: fields-only spine; the expected type supplies the
   # parameter (M8.3 checking mode). (The inference-position params-on-spine form
   # `{:ctor, :reflexive, [ty, x]}` — K6 §E.1 — lost its last elaborator consumer
   # when bridge_step was deleted (B2); the kernel capability remains.)
-  defp mk_refl(x), do: {:ctor, :reflexive, [x]}
+  defp mk_refl(x), do: {:ctor, :"Std.Equivalent#reflexive", [x]}
 
   # Env-gated tracing for the rewrite-planning path (`CURE_REWRITE_LOG=1`). Off by
   # default so ordinary elaboration is untouched; used to diagnose non-termination
@@ -2115,7 +2134,7 @@ defmodule Cure.Elab.Elaborator do
     # the scrutinee p. Under x,y the scrutinee annotation's param shifts by 2;
     # under x,y,p the arrow domain sees x at de Bruijn 2; the (non-dependent)
     # codomain sits under one more binder, so y is also at de Bruijn 2 there.
-    scrut_ty = {:data, :Equivalent, [Subst.shift(ty, 2, 0)], [{:var, 1}, {:var, 0}]}
+    scrut_ty = {:data, :"Std.Equivalent#Equivalent", [Subst.shift(ty, 2, 0)], [{:var, 1}, {:var, 0}]}
 
     arrow =
       {:pi, Cure.Core.Grade.unrestricted(), {:app, Subst.shift(motive, 3, 0), {:var, 2}},
@@ -2127,7 +2146,9 @@ defmodule Cure.Elab.Elaborator do
         {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
 
     id_dom = {:app, Subst.shift(motive, 1, 0), Subst.shift(l, 1, 0)}
-    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), id_dom, {:var, 0}}}]}
+
+    {:case, proof, arrow_motive,
+     [{:"Std.Equivalent#reflexive", 1, {:lam, Cure.Core.Grade.unrestricted(), id_dom, {:var, 0}}}]}
   end
 
   # Plan a `rewrite p in t` whose proof `p : Eq(ty, a, b)` transports along the
@@ -3867,9 +3888,12 @@ defmodule Cure.Elab.Elaborator do
   # constant motive `λ_:Bool. motive_body_type` (both branches share the type).
   # The kernel re-checks the assembled `:case`, so nothing built here is trusted.
   defp bool_case(scrut_term, motive_body_type, tt, ff, ctx) do
-    bool_ty = bool_type_term(Context.signature(ctx))
+    sig = Context.signature(ctx)
+    bool_ty = bool_type_term(sig)
+    true_ctor = resolve_ctor_key(sig, :True)
+    false_ctor = resolve_ctor_key(sig, :False)
     motive = {:lam, Cure.Core.Grade.unrestricted(), bool_ty, Cure.Core.Term.shift(motive_body_type, 1, 0)}
-    {:case, scrut_term, motive, [{:True, 0, tt}, {:False, 0, ff}]}
+    {:case, scrut_term, motive, [{true_ctor || :True, 0, tt}, {false_ctor || :False, 0, ff}]}
   end
 
   # A Bool scrutinee is now the inductive family (`{:vdata, :Bool, []}`), resolved
@@ -3938,8 +3962,10 @@ defmodule Cure.Elab.Elaborator do
 
   defp lit_core(v, :int), do: {:int_lit, v}
   defp lit_core(v, :float), do: {:float_lit, v}
-  defp lit_core(v, :bool), do: {:ctor, if(v, do: :True, else: :False), []}
   defp lit_core(v, :bounded), do: {:bounded_lit, v}
+
+  defp lit_core(v, :bool, env), do: {:ctor, resolve_ctor_key(env, if(v, do: :True, else: :False)), []}
+  defp lit_core(v, prim, _env), do: lit_core(v, prim)
 
   # The final (catch-all) arm: the chain's innermost default branch.
   defp literal_chain(scrut_expr, _scrut_term, _scrut_type, _prim, [{pat, body}], expected, names, ctx, env) do
@@ -3977,7 +4003,7 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, body_core} <- elaborate_match_body(body, expected, names, ctx, env),
          {:ok, rest_core} <-
            literal_chain(scrut_expr, scrut_term, scrut_type, prim, rest, expected, names, ctx, env) do
-      test = eq_test_core(prim, scrut_term, lit_core(v, prim), scrut_type, ctx)
+      test = eq_test_core(prim, scrut_term, lit_core(v, prim, env), scrut_type, ctx)
       {:ok, bool_case(test, expected, body_core, rest_core, ctx)}
     end
   end
@@ -7326,6 +7352,8 @@ defmodule Cure.Elab.Elaborator do
     do: {:error, :too_many_arguments}
 
   defp finish_global_app({:ok, mctx, chosen, []}, name, codomain, ctx, env, expected) do
+    name = Env.resolve_key(env, env.defs, name)
+
     # When an expected result type is threaded in from checking mode, unify the
     # instantiated codomain against it BEFORE the `has_meta?` rejection below. This
     # lets an implicit determined by NEITHER argument — only by the expected return
@@ -7374,6 +7402,14 @@ defmodule Cure.Elab.Elaborator do
   defp has_meta?({:app, f, x}), do: has_meta?(f) or has_meta?(x)
   defp has_meta?({:pi, _g, d, c}), do: has_meta?(d) or has_meta?(c)
   defp has_meta?({:lam, _g, d, b}), do: has_meta?(d) or has_meta?(b)
+  defp has_meta?({:let, _g, t, v, b}), do: has_meta?(t) or has_meta?(v) or has_meta?(b)
+
+  defp has_meta?({:case, s, m, branches}),
+    do: has_meta?(s) or has_meta?(m) or Enum.any?(branches, fn {_ctor, _arity, body} -> has_meta?(body) end)
+
+  defp has_meta?({:effect_type, inner}), do: has_meta?(inner)
+  defp has_meta?({:effect_pure, value}), do: has_meta?(value)
+  defp has_meta?({:effect_bind, effect, continuation}), do: has_meta?(effect) or has_meta?(continuation)
   defp has_meta?(_), do: false
 
   # -- parameters / binders ---------------------------------------------------
@@ -7440,21 +7476,36 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr({:literal, meta, value} = expr, scope, env) do
     case Keyword.get(meta, :subtype) do
-      :boolean when is_boolean(value) -> {:ok, {:ctor, if(value, do: :True, else: :False), []}}
-      :integer when is_integer(value) -> {:ok, {:int_lit, value}}
-      :float when is_float(value) -> {:ok, {:float_lit, value}}
+      :boolean when is_boolean(value) ->
+        {:ok, {:ctor, resolve_ctor_key(env, if(value, do: :True, else: :False)), []}}
+
+      :integer when is_integer(value) ->
+        {:ok, {:int_lit, value}}
+
+      :float when is_float(value) ->
+        {:ok, {:float_lit, value}}
+
       # The guard is required, not cosmetic: an unguarded negative `{:bounded_lit,
       # k}` reaching the kernel raises an uncaught `FunctionClauseError`
       # (`Kernel.infer/2` has no catch-all) — see spec §3.4.
-      :char when is_integer(value) and value >= 0 and value <= 0x10FFFF -> {:ok, {:bounded_lit, value}}
-      :char when is_integer(value) -> {:error, {:char_literal_out_of_range, value}}
+      :char when is_integer(value) and value >= 0 and value <= 0x10FFFF ->
+        {:ok, {:bounded_lit, value}}
+
+      :char when is_integer(value) ->
+        {:error, {:char_literal_out_of_range, value}}
+
       # A string literal argument IS `List(Char)` — desugar to its char-literal
       # list and re-enter, exactly as the typed/checked paths do (so `f("hi")`
       # and `f(['h','i'])` build the identical Cons spine).
-      :string when is_binary(value) -> elaborate_expr(desugar_string(value, meta), scope, env)
+      :string when is_binary(value) ->
+        elaborate_expr(desugar_string(value, meta), scope, env)
+
       # A symbol literal argument `:ok` is an `Atom` value (Core `{:atom_lit, a}`).
-      :symbol when is_atom(value) -> {:ok, {:atom_lit, value}}
-      _ -> {:error, {:unsupported_expression, expr}}
+      :symbol when is_atom(value) ->
+        {:ok, {:atom_lit, value}}
+
+      _ ->
+        {:error, {:unsupported_expression, expr}}
     end
   end
 
@@ -7475,6 +7526,10 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  defp unit_family_name(env), do: Env.resolve_key(env, env.families, :Unit)
+
+  defp unit_ctor_name(env), do: Env.resolve_key(env, env.ctors, :unit)
+
   defp elaborate_named_call_scoped(meta, args, scope, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
@@ -7482,13 +7537,15 @@ defmodule Cure.Elab.Elaborator do
     with {:ok, core_args} <- map_elaborate(args, scope, env, &elaborate_expr/3) do
       cond do
         Inductive.get_ctor(env, atom) ->
+          ctor_key = Env.resolve_key(env, env.ctors, atom)
+
           # A constructor head applied to arguments is a saturated constructor, not
           # a chain of `{:app, …}`. Mirror `elaborate_type/3`'s ctor-aware clause:
           # this saturated-call clause builds the saturated ctor directly, while
           # `resolve_free` eta-expands bare positive-arity ctors (all-present,
           # unindexed) into lambdas and yields the nullary `{:ctor, atom, []}`
           # form otherwise.
-          {:ok, {:ctor, atom, core_args}}
+          {:ok, {:ctor, ctor_key, core_args}}
 
         # A type FAMILY applied in EXPRESSION position — a type-level function body
         # such as `fn F(a) -> Type = Option(a)`, or a large-elim selector branch
@@ -7502,8 +7559,9 @@ defmodule Cure.Elab.Elaborator do
         # `{:app}`-chained OUTSIDE it, so the kernel saw a 0-parameter data node
         # where the family needs parameters → a false `:arg_arity`.
         name not in scope and Inductive.family?(env, atom) ->
-          {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
-          {:ok, {:data, atom, params, indices}}
+          family_key = Env.resolve_key(env, env.families, atom)
+          {params, indices} = Enum.split(core_args, Inductive.param_count(env, family_key))
+          {:ok, {:data, family_key, params, indices}}
 
         true ->
           with {:ok, head} <- elaborate_expr({:variable, [], name}, scope, env) do
@@ -7519,10 +7577,10 @@ defmodule Cure.Elab.Elaborator do
 
     cond do
       Inductive.get_ctor(env, atom) ->
-        eta_expand_bare_ctor(env, atom)
+        eta_expand_bare_ctor(env, Env.resolve_key(env, env.ctors, atom))
 
       Inductive.family?(env, atom) ->
-        {:ok, {:data, atom, [], []}}
+        {:ok, {:data, Env.resolve_key(env, env.families, atom), [], []}}
 
       # A machine PRIMITIVE base type (Int/Float/Binary/Atom) in value position
       # is a first-class value of type `Type` — the same first-classness families
@@ -7544,8 +7602,8 @@ defmodule Cure.Elab.Elaborator do
       # kept its bare key): keep it. `resolve_bare_shadowed/2`'s contract requires
       # this bare-absence check before the shadowed-import fallback, otherwise a
       # re-keyed sibling (`Std.Nat#plus`) would override a local `plus`.
-      Map.has_key?(env.defs, atom) ->
-        {:ok, {:global, atom}}
+      Env.get_def(env, atom) ->
+        {:ok, {:global, Env.resolve_key(env, env.defs, atom)}}
 
       # No local winner, no ambiguity: if exactly one re-keyed import provides
       # the name, resolve to that qualified key; else keep the bare global.

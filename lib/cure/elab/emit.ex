@@ -420,7 +420,7 @@ defmodule Cure.Elab.Emit do
         end
 
       list_ctor?(env, name) ->
-        case {name, args} do
+        case {base_name(name), args} do
           {:Nil, []} -> {nil, @line}
           {:Cons, [h, t]} -> {:cons, @line, lower(env, h, ctx), lower(env, t, ctx)}
         end
@@ -779,7 +779,9 @@ defmodule Cure.Elab.Emit do
   # for a bare `Sigma(x:T,U)` pair (whose tail is an ordinary value, not `unit`).
   # This is the emit-time reader of the `unit` marker: it decides flat-vs-nested for
   # BOTH values (here) and telescope patterns (`telescope_pattern_cars/2`).
-  defp telescope_cars(_env, {:ctor, :unit, []}), do: {:telescope, []}
+  defp telescope_cars(_env, {:ctor, name, []}) when is_atom(name) do
+    if base_name(name) == :unit, do: {:telescope, []}, else: :not_telescope
+  end
 
   defp telescope_cars(env, {:ctor, name, [car, cdr]}) do
     if sigma_ctor?(env, name) do
@@ -829,18 +831,24 @@ defmodule Cure.Elab.Emit do
   # last field, so `[tail, head | ctx]`). A nested list pattern is lowered by the
   # elaborator's matrix compiler into a chain of these single-level Cons/Nil
   # branches, so native cons cells select correctly at every level.
-  defp list_branch_clause(env, {:Nil, 0, body}, ctx) do
-    {:clause, @line, [{nil, @line}], [], [lower(env, body, ctx)]}
+  defp list_branch_clause(env, {cname, 0, body}, ctx) do
+    if base_name(cname) == :Nil,
+      do: {:clause, @line, [{nil, @line}], [], [lower(env, body, ctx)]},
+      else: generic_branch_clause(env, {cname, 0, body}, ctx)
   end
 
-  defp list_branch_clause(env, {:Cons, 2, body}, ctx) do
-    base = length(ctx)
-    vh = :"V#{base}"
-    vt = :"V#{base + 1}"
-    body_form = lower(env, body, [vt, vh | ctx])
-    ph = underscore_if_unused({:var, @line, vh}, body_form)
-    pt = underscore_if_unused({:var, @line, vt}, body_form)
-    {:clause, @line, [{:cons, @line, ph, pt}], [], [body_form]}
+  defp list_branch_clause(env, {cname, 2, body}, ctx) do
+    if base_name(cname) == :Cons do
+      base = length(ctx)
+      vh = :"V#{base}"
+      vt = :"V#{base + 1}"
+      body_form = lower(env, body, [vt, vh | ctx])
+      ph = underscore_if_unused({:var, @line, vh}, body_form)
+      pt = underscore_if_unused({:var, @line, vt}, body_form)
+      {:clause, @line, [{:cons, @line, ph, pt}], [], [body_form]}
+    else
+      generic_branch_clause(env, {cname, 2, body}, ctx)
+    end
   end
 
   # case-on-Nat (spec §2.2): the zero ctor's branch matches literal 0; the succ
@@ -997,8 +1005,13 @@ defmodule Cure.Elab.Emit do
     fam != nil and Inductive.ctor_family(env, name) == fam
   end
 
-  defp bool_atom(:True), do: true
-  defp bool_atom(:False), do: false
+  defp bool_atom(name) do
+    case base_name(name) do
+      :True -> true
+      :False -> false
+      other -> other
+    end
+  end
 
   defp bool_atom_or_self(env, name) do
     if bool_ctor?(env, name), do: bool_atom(name), else: name
@@ -1011,9 +1024,15 @@ defmodule Cure.Elab.Emit do
   # (`Ok(value) -> {:ok, value}`, `None() -> :none`). Applied at BOTH the
   # construction and the pattern site so the tags agree. Every other constructor
   # keeps its declared (PascalCase) tag; records stay tagged tuples `{:Point,…}`.
-  defp otp_tag(:Ok), do: :ok
-  defp otp_tag(:Error), do: :error
-  defp otp_tag(:Some), do: :some
-  defp otp_tag(:None), do: :none
-  defp otp_tag(name), do: name
+  defp otp_tag(name) do
+    case base_name(name) do
+      :Ok -> :ok
+      :Error -> :error
+      :Some -> :some
+      :None -> :none
+      other -> other
+    end
+  end
+
+  defp base_name(name), do: name |> Cure.Elab.Name.base() |> String.to_atom()
 end

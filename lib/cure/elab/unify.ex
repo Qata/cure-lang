@@ -265,6 +265,15 @@ defmodule Cure.Elab.Unify do
      Enum.map(brs, fn {cn, ar, b} -> {cn, ar, mabs(b, dep, vs, n, l + ar)} end)}
   end
 
+  defp mabs({:let, g, ty, value, body}, dep, vs, n, l),
+    do: {:let, g, mabs(ty, dep, vs, n, l), mabs(value, dep, vs, n, l), mabs(body, dep, vs, n, l + 1)}
+
+  defp mabs({:effect_type, inner}, dep, vs, n, l), do: {:effect_type, mabs(inner, dep, vs, n, l)}
+  defp mabs({:effect_pure, value}, dep, vs, n, l), do: {:effect_pure, mabs(value, dep, vs, n, l)}
+
+  defp mabs({:effect_bind, effect, continuation}, dep, vs, n, l),
+    do: {:effect_bind, mabs(effect, dep, vs, n, l), mabs(continuation, dep, vs, n, l)}
+
   defp mabs({:meta, _} = m, _dep, _vs, _n, _l), do: m
   defp mabs(leaf, _dep, _vs, _n, _l), do: leaf
 

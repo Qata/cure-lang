@@ -16,7 +16,7 @@ defmodule Cure.Elab.Implementation do
   instance clause nor a default is a `:missing_method` error.
   """
 
-  alias Cure.Core.Env
+  alias Cure.Core.{Env, Inductive}
   alias Cure.Elab.{Coherence, Declarations, Resolve}
 
   @doc """
@@ -74,7 +74,7 @@ defmodule Cure.Elab.Implementation do
           head_atom(body, env, MapSet.put(seen, head), head)
 
         _ ->
-          head
+          if Inductive.family?(env, head), do: Env.resolve_key(env, env.families, head), else: head
       end
     end
   end
@@ -342,7 +342,7 @@ defmodule Cure.Elab.Implementation do
 
   defp bind_named_instance(env, %{head_kind: :type}, iface, head, name, ref) do
     term = Resolve.dict_term_from_ref(env, iface, ref)
-    {:ok, Env.add_def(env, String.to_atom(name), Resolve.dict_type_term(iface, head), term)}
+    {:ok, Env.add_def(env, String.to_atom(name), Resolve.dict_type_term(env, iface, head), term)}
   end
 
   defp bind_named_instance(env, _desc, _iface, _head, _name, _ref), do: {:ok, env}

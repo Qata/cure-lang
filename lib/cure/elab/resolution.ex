@@ -388,6 +388,13 @@ defmodule Cure.Elab.Resolution do
   """
   @spec resolve_bare_shadowed(Env.t(), atom()) :: {:ok, atom()} | :none | {:ambiguous, [String.t()]}
   def resolve_bare_shadowed(%Env{families: families, ctors: ctors, defs: defs} = env, bare) do
+    case local_canonical_key(env, bare) do
+      {:ok, key} -> {:ok, key}
+      :none -> resolve_bare_shadowed_import(env, families, ctors, defs, bare)
+    end
+  end
+
+  defp resolve_bare_shadowed_import(env, families, ctors, defs, bare) do
     suffix = "#" <> Atom.to_string(bare)
 
     matches =
@@ -402,6 +409,16 @@ defmodule Cure.Elab.Resolution do
       [] -> :none
       many -> {:ambiguous, Enum.map(many, fn {mod, _k} -> mod end)}
     end
+  end
+
+  defp local_canonical_key(%Env{module_owner: nil}, _bare), do: :none
+
+  defp local_canonical_key(%Env{module_owner: owner} = env, bare) do
+    key = Cure.Elab.Name.qualify(owner, bare)
+
+    if Map.has_key?(env.families, key) or Map.has_key?(env.ctors, key) or Map.has_key?(env.defs, key),
+      do: {:ok, key},
+      else: :none
   end
 
   # A directly-imported module's own name wins the unqualified spelling over a
@@ -423,7 +440,14 @@ defmodule Cure.Elab.Resolution do
   exists (the name is genuinely unknown, not shadowed).
   """
   @spec shadowed_origin(Env.t(), atom()) :: {:ok, String.t(), atom()} | :error
-  def shadowed_origin(%Env{ctors: ctors, families: families, ctor_to_family: c2f}, bare) do
+  def shadowed_origin(%Env{} = env, bare) do
+    case local_canonical_key(env, bare) do
+      {:ok, _key} -> :error
+      :none -> shadowed_origin_import(env, bare)
+    end
+  end
+
+  defp shadowed_origin_import(%Env{ctors: ctors, families: families, ctor_to_family: c2f}, bare) do
     suffix = "#" <> Atom.to_string(bare)
 
     match =
@@ -466,7 +490,7 @@ defmodule Cure.Elab.Resolution do
   """
   @spec ambiguous_modules(Env.t(), atom()) :: [String.t()]
   def ambiguous_modules(%Env{families: families, defs: defs} = env, bare) do
-    if Map.has_key?(families, bare) or Map.has_key?(defs, bare) do
+    if local_canonical_key(env, bare) != :none or Map.has_key?(families, bare) or Map.has_key?(defs, bare) do
       []
     else
       suffix = "#" <> Atom.to_string(bare)

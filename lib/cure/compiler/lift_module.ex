@@ -170,6 +170,11 @@ defmodule Cure.Compiler.LiftModule do
   # behavior-specific meaning here.
   defp normalize_module_name(module) when is_binary(module), do: {:ok, module}
   defp normalize_module_name(module) when is_atom(module), do: {:ok, Atom.to_string(module)}
+
+  defp normalize_module_name(module) when is_list(module) do
+    if Enum.all?(module, &is_integer/1), do: {:ok, List.to_string(module)}, else: {:error, :invalid_lift_module_ast}
+  end
+
   defp normalize_module_name(_module), do: {:error, :invalid_lift_module_ast}
 
   @spec strip(term()) :: term()

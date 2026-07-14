@@ -64,6 +64,12 @@ defmodule Cure.Elab.Subst do
   defp replace({:effect_type, inner}, env, k, depth),
     do: {:effect_type, replace(inner, env, k, depth)}
 
+  defp replace({:effect_pure, value}, env, k, depth),
+    do: {:effect_pure, replace(value, env, k, depth)}
+
+  defp replace({:effect_bind, effect, continuation}, env, k, depth),
+    do: {:effect_bind, replace(effect, env, k, depth), replace(continuation, env, k, depth)}
+
   defp replace({:ctor, n, args}, env, k, depth),
     do: {:ctor, n, Enum.map(args, &replace(&1, env, k, depth))}
 
@@ -103,6 +109,12 @@ defmodule Cure.Elab.Subst do
 
   def shift({:effect_type, inner}, amount, cutoff),
     do: {:effect_type, shift(inner, amount, cutoff)}
+
+  def shift({:effect_pure, value}, amount, cutoff),
+    do: {:effect_pure, shift(value, amount, cutoff)}
+
+  def shift({:effect_bind, effect, continuation}, amount, cutoff),
+    do: {:effect_bind, shift(effect, amount, cutoff), shift(continuation, amount, cutoff)}
 
   def shift({:ctor, n, args}, amount, cutoff),
     do: {:ctor, n, Enum.map(args, &shift(&1, amount, cutoff))}

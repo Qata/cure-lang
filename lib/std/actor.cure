@@ -1,9 +1,14 @@
 @group(:concurrency)
 mod Std.Actor
+  use Std.Syntax
+  use Std.List
+
   ## `actor` is a transparent standard-library macro. The base actor is an
   ## ordinary lifted GenServer module; message-code derivation and user
   ## handlers are layered on top of this floor.
   macro ActorContainers
+    syntax actor <name: ModuleName> state <state_type: Type> derive <cast_body: Code> computed by derive_actor
+
     syntax actor <name: ModuleName> state <state_type: Type> call <request_type: Type> returns <reply_type: Type> <call_body: delayed raw until dedent> contextual becomes lift module name
       use Std.Otp
       behaviour gen_server
@@ -198,6 +203,21 @@ mod Std.Actor
       callback code_change(old: v, state: p, extra: x) returns Effect(Tuple(Atom, p)) = %[:ok, state]
       fn start_link(initial: p) -> Effect(Tuple) = beam_ops start_link name initial
       body
+
+  fn derive_actor(input: ActorSyntax) -> Syntax =
+    let classify: Syntax -> Syntax = fn(arm) -> match arm { Node(_, arm_attrs, _) -> match attr(arm_attrs, :pattern) { Found(SSyntax(pattern)) -> match pattern { Leaf(_, _, SStr(name)) -> enum_variant(name), Node(_, pattern_attrs, _) -> match attr(pattern_attrs, :name) { Found(SStr(name)) -> enum_variant(name), _ -> enum_variant("Message") }, _ -> enum_variant("Message") }, _ -> enum_variant("Message") }, _ -> enum_variant("Message") }
+    let module_name = match input.name
+      Leaf(_, _, SAtom(name)) -> SAtom(name)
+      _ -> SStr("Cure.Generated.Actor")
+    let message_type = match children(input.cast_body)
+      [_scrutinee | arms] -> enum_type("ActorMessage", map(arms, classify))
+      _ -> enum_type("ActorMessage", [enum_variant("Message")])
+    block([
+      message_type,
+      lift_module(module_name, :gen_server, [
+        alias_node("Message", variable("ActorMessage"))
+      ])
+    ])
 
   ## Typed-actor runtime operations: spawn, stop, send, introspect.
   ##

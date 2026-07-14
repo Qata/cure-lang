@@ -448,6 +448,12 @@ defmodule Cure.Elab.Relevance do
       Enum.sum(Enum.map(brs, fn {_c, ar, b} -> count_level(b, depth + ar, t) end))
   end
 
+  defp count_level({:effect_type, inner}, depth, t), do: count_level(inner, depth, t)
+  defp count_level({:effect_pure, value}, depth, t), do: count_level(value, depth, t)
+
+  defp count_level({:effect_bind, effect, continuation}, depth, t),
+    do: count_level(effect, depth, t) + count_level(continuation, depth, t)
+
   defp count_level(_leaf, _depth, _t), do: 0
 
   # Un-join: check the shared continuation ONCE (unscaled), then combine it as one

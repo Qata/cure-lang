@@ -12,7 +12,7 @@ defmodule Cure.Compiler.MacroFuzz do
   alias Antigen.Generators.{SigMenu, Term}
   alias Cure.Compiler.{Lexer, LiftModule, Parser, Token}
   alias Cure.Core.{Context, Eval, Inductive, Kernel, Normalise}
-  alias Cure.Elab.{Elaborator, MacroExpand}
+  alias Cure.Elab.{Elaborator, MacroExpand, Program}
 
   @default_draws 32
   @cache_key :cure_macro_fuzz_cache_state
@@ -449,6 +449,9 @@ defmodule Cure.Compiler.MacroFuzz do
 
   defp check_expansion(keyword, input, expansion, env) do
     case expansion do
+      {:block, _meta, items} when is_list(items) ->
+        check_block_expansion(keyword, input, expansion, env)
+
       {:lift_module, _meta, []} ->
         case LiftModule.request_ast(expansion) do
           {:ok, _quoted_module} ->
@@ -463,6 +466,38 @@ defmodule Cure.Compiler.MacroFuzz do
         check_expression_expansion(keyword, input, expansion, env)
     end
   end
+
+  # A declaration macro may return a type declaration alongside a lifted
+  # module. Check the enclosing declarations and the lifted unit through their
+  # ordinary generic paths so the proof exercises the same two scopes as the
+  # real declaration pass.
+  defp check_block_expansion(keyword, input, expansion, _env) do
+    declarations = expansion |> LiftModule.strip() |> block_items()
+
+    proof_module =
+      {:container, [container_type: :module, name: "MacroExpansionProof", language: :cure], declarations}
+
+    with {:ok, _env} <- Program.check_ast(proof_module),
+         {:ok, requests} <- LiftModule.collect(expansion),
+         :ok <- emit_proof_lifted_requests(requests) do
+      :ok
+    else
+      {:error, reason} ->
+        {:error, {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
+    end
+  end
+
+  defp emit_proof_lifted_requests(requests) do
+    Enum.reduce_while(requests, :ok, fn request, :ok ->
+      case LiftModule.emit(request) do
+        {:ok, _unit} -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp block_items({:block, _meta, items}) when is_list(items), do: items
+  defp block_items(item), do: [item]
 
   defp check_expression_expansion(keyword, input, expansion, env) do
     case Elaborator.elaborate_expr_typed(expansion, [], Context.empty(env), env) do

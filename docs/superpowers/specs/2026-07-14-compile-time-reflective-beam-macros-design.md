@@ -390,7 +390,12 @@ v1** and belong on the roadmap, in priority order:
   residual of a commutative-regex mailbox pattern. This is the only discipline
   that structurally exceeds a constructor set, and the primary future target;
   it is also the most inference-hungry (Special Delivery names inference as the
-  open usability problem).
+  open usability problem). Note too that the BEAM mailbox is ordered by arrival
+  with selective receive on *every* BEAM (not just AtomVM — this is the standard
+  concurrent-Core-Erlang semantics, machine-checked in Bereczky et al.,
+  `docs/research/process-types/`), whereas the mailbox-type theory above is
+  stated for *unordered* interactions; the commutative-regex residual therefore
+  does not transfer to BEAM without first reconciling that ordering gap.
 - *multiplicity* — bounds on how many of each message may be pending (e.g. "at
   most one `Config`").
 - *junk-freedom* — a static guarantee that no message is left unconsumed.
@@ -499,3 +504,7 @@ External research:
 - https://arxiv.org/abs/1801.04167 (Mailbox Types for Unordered Interactions)
 - https://arxiv.org/abs/2306.12935 (Special Delivery: Programming with Mailbox
   Types)
+- https://arxiv.org/abs/2311.10482 (Bereczky, Horpácsi & Thompson, *A
+  Formalisation of Core Erlang, a Concurrent Actor Language*) — reference
+  operational semantics for the sealed raw process base; see
+  `docs/research/process-types/raw-algebra-conformance-checklist.md`

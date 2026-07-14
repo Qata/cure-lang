@@ -156,7 +156,10 @@ defmodule Cure.Compiler.MacroSyntaxTest do
       {:syn_node, :literal, [{:subtype, {:s_atom, :integer}}], [{:syn_leaf, :literal, [], {:s_int, 7}}]}
 
     core = MacroSyntax.to_core(repr)
-    assert {:ctor, :Node, [{:atom_lit, :literal}, {:ctor, :Cons, _}, {:ctor, :Cons, _}]} = core
+
+    assert {:ctor, :"Std.Syntax#Node",
+            [{:atom_lit, :literal}, {:ctor, :"Std.List#Cons", _}, {:ctor, :"Std.List#Cons", _}]} = core
+
     assert MacroSyntax.from_core(core) == repr
   end
 
@@ -178,7 +181,8 @@ defmodule Cure.Compiler.MacroSyntaxTest do
   test "a derived rule record encodes reflected syntax fields as a Core constructor" do
     input = {:syn_node, :macro_input, [], [{:syn_leaf, :variable, [], {:s_str, "n"}}]}
 
-    assert {:ctor, :MkSyntax, [{:ctor, :Leaf, _}, {:ctor, :Raw, [{:ctor, :SOpaque, []}]}]} =
+    assert {:ctor, :MkSyntax,
+            [{:ctor, :"Std.Syntax#Leaf", _}, {:ctor, :"Std.Syntax#Raw", [{:ctor, :"Std.Syntax#SOpaque", []}]}]} =
              MacroSyntax.to_core_record("MkSyntax", ["x"], input)
 
     assert {:ctor, :EmptySyntax, [{:ctor, :Raw, [{:ctor, :SOpaque, []}]}]} =
@@ -189,10 +193,11 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     context = %{behaviour: :gen_server, callback: :handle_cast, arity: 2}
     input = MacroSyntax.with_context({:syn_node, :macro_input, [], []}, context)
 
-    assert {:ctor, :SelfSyntax, [{:ctor, :Node, [{:atom_lit, :callback_context}, attrs, {:ctor, :Nil, []}]}]} =
+    assert {:ctor, :SelfSyntax,
+            [{:ctor, :"Std.Syntax#Node", [{:atom_lit, :callback_context}, attrs, {:ctor, :"Std.List#Nil", []}]}]} =
              MacroSyntax.to_core_record("SelfSyntax", [], input)
 
-    assert {:ctor, :Cons, _} = attrs
+    assert {:ctor, :"Std.List#Cons", _} = attrs
   end
 
   test "a rule with no expansion context reflects a total, absent context" do

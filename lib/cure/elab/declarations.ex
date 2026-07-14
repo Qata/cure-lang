@@ -1705,13 +1705,11 @@ defmodule Cure.Elab.Declarations do
   # the ctx is NULLed under their binders (spec §7.3 item 4). `Sigma(x: D, U)`
   # lowers to the builtin inductive `Sigma(D, λx:D. U)`: `body` was elaborated with
   # `bname` in scope, so it is already in the frame of one new lambda binder, and
-  # wrapping it under `{:lam, Cure.Core.Grade.unrestricted(), dom, body}` is exactly that frame. `:Sigma` is the
-  # canonical family name (only Std.Sigma registers `@builtin(:sigma)`), used as a
-  # literal so `Sigma(..)` lowers even in a raw-`Env.empty()` elaboration.
+  # wrapping it under `{:lam, Cure.Core.Grade.unrestricted(), dom, body}` is exactly that frame.
   defp idx_to_core({:sigma_type, [binder: bname], [dom_ast, body_ast]}, scope, fam, env, _ctx) do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
-      {:ok, {:data, :Sigma, [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
+      {:ok, {:data, sigma_family_name(env), [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
     end
   end
 
@@ -1901,6 +1899,7 @@ defmodule Cure.Elab.Declarations do
         {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
 
       atom == fam or Inductive.family?(env, atom) ->
+        atom = Env.resolve_key(env, env.families, atom)
         # Split the applied arguments into the family's parameters (prefix) and
         # indices (suffix); the kernel checks each slot against its own
         # telescope. param_count is 0 for parameter-free families (all indices).
@@ -1908,9 +1907,10 @@ defmodule Cure.Elab.Declarations do
         {:ok, {:data, atom, params, indices}}
 
       Inductive.get_ctor(env, atom) ->
-        {:ok, {:ctor, atom, core_args}}
+        {:ok, {:ctor, Env.resolve_key(env, env.ctors, atom), core_args}}
 
       true ->
+        atom = Env.resolve_key(env, env.defs, atom)
         {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
     end
   end
@@ -2022,14 +2022,17 @@ defmodule Cure.Elab.Declarations do
 
   defp beta_substitute(other, _depth, _arg), do: other
 
-  defp build_telescope_type([], _scope, _fam, _env), do: {:ok, {:data, :Unit, [], []}}
+  defp build_telescope_type([], _scope, _fam, env),
+    do: {:ok, {:data, Env.resolve_key(env, env.families, :Unit), [], []}}
 
   defp build_telescope_type([{bname, ast} | rest], scope, fam, env) do
     with {:ok, dom} <- idx_to_core(ast, scope, fam, env),
          {:ok, body} <- build_telescope_type(rest, [bname | scope], fam, env) do
-      {:ok, {:data, :Sigma, [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
+      {:ok, {:data, sigma_family_name(env), [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
     end
   end
+
+  defp sigma_family_name(env), do: Inductive.builtin(env, :sigma) || :Sigma
 
   # `(D1, …, Dn) -> R` (surface `Function(D1,…,Dn,R)`, tagged `function_type`)
   # becomes the non-dependent Π `Π(_:D1). … Π(_:Dn). R` — the native Core arrow the
@@ -2081,17 +2084,22 @@ defmodule Cure.Elab.Declarations do
         Env.primitive(env, name)
 
       Inductive.family?(env, atom) ->
-        {:data, atom, [], []}
+        {:data, Env.resolve_key(env, env.families, atom), [], []}
 
       Inductive.get_ctor(env, atom) ->
-        {:ctor, atom, []}
+        {:ctor, Env.resolve_key(env, env.ctors, atom), []}
 
       # A bare name reachable only under a single re-keyed `:"Mod#name"` variant
       # (shadowed-but-present, spec §3.3). Exactly-one resolves; ≥2 (ambiguous)
       # falls through to `{:global, atom}` here and is caught by R7 (Task 10).
       match?({:ok, _}, Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)) ->
         {:ok, key} = Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)
-        if Inductive.family?(env, key), do: {:data, key, [], []}, else: {:ctor, key, []}
+
+        cond do
+          Inductive.family?(env, key) -> {:data, key, [], []}
+          Env.get_def(env, key) -> {:global, key}
+          true -> {:ctor, key, []}
+        end
 
       # ≥2 distinct re-keyed origins, no local/unshadowed winner: unqualified use
       # is ambiguous (R7). The caller turns this marker into an error.
