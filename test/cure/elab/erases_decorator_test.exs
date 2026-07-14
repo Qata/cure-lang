@@ -63,4 +63,41 @@ defmodule Cure.Elab.ErasesDecoratorTest do
 
     assert {:error, {:erases_on_non_opaque, :Colour}} = Program.elaborate(src)
   end
+
+  # A malformed `@erases(...)` shape must not be silently treated as "no erasure
+  # declared" — that would let a typo (missing colon, wrong arity) through with zero
+  # diagnostic, and the carrier would fail much later inside union discrimination with
+  # an unrelated `:unsupported`-class message instead of naming the real cause.
+  test "@erases() with no argument is a compile error, not a silently-absent declaration" do
+    src = """
+    mod M
+      @erases()
+      opaque type Handle
+    end
+    """
+
+    assert {:error, {:unknown_erasure_class, :Handle, _}} = Program.elaborate(src)
+  end
+
+  test "@erases with more than one argument is a compile error" do
+    src = """
+    mod M
+      @erases(:pid, :reference)
+      opaque type Handle
+    end
+    """
+
+    assert {:error, {:unknown_erasure_class, :Handle, _}} = Program.elaborate(src)
+  end
+
+  test "@erases(bare_identifier) without the atom colon is a compile error" do
+    src = """
+    mod M
+      @erases(pid)
+      opaque type Handle
+    end
+    """
+
+    assert {:error, {:unknown_erasure_class, :Handle, _}} = Program.elaborate(src)
+  end
 end

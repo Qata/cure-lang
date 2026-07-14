@@ -2140,9 +2140,27 @@ defmodule Cure.Elab.Declarations do
     case Keyword.get(meta, :decorator) do
       {:erases, [{:literal, _, class}]} when class in @erasure_classes -> {:ok, class}
       {:erases, [{:literal, _, class}]} -> {:error, {:unknown_erasure_class, name, class}}
-      _ -> {:ok, nil}
+      # Any other `@erases(...)` shape — zero args, more than one arg, or an argument
+      # that isn't an atom literal (e.g. a bare identifier missing its `:`) — is a
+      # malformed decorator, not an absent one. Falling through to the "no decorator"
+      # case below would silently discard the declaration; there is no later checkpoint
+      # that would catch the typo, since a `nil` erasure just reads as "undeclared".
+      {:erases, other_args} ->
+        {:error, {:unknown_erasure_class, name, malformed_erases_arg(other_args)}}
+
+      _ ->
+        {:ok, nil}
     end
   end
+
+  # A short, readable stand-in for the malformed `@erases(...)` argument list, so the
+  # `:unknown_erasure_class` message names the actual mistake instead of dumping the
+  # raw parser AST (line/col meta and all) at the caller. The single-atom-literal shape
+  # is handled by the two clauses above `erasure_class` dispatches through before
+  # reaching this fallback, so only the genuinely malformed shapes land here.
+  defp malformed_erases_arg([]), do: :missing_argument
+  defp malformed_erases_arg([_, _ | _] = args), do: {:too_many_arguments, length(args)}
+  defp malformed_erases_arg([_not_a_literal]), do: :not_an_atom_literal
 
   # `@erases` asserts the runtime shape of a carrier that has NO constructors and so
   # no inferable erasure. A type WITH constructors erases to a bare atom (nullary) or
