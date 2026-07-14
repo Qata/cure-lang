@@ -42,10 +42,12 @@ These were probed against the compiler while planning. Do not re-derive them; do
 
 **Elaborator (new capability):**
 - `lib/cure/compiler/parser.ex` — attach a decorator to an `opaque type`.
-- `lib/cure/elab/declarations.ex` — read and validate `@erases(:class)`; let an `@extern` return `Effect(<union>)`.
+- `lib/cure/elab/declarations.ex` — read and validate `@erases(:class)`; let an `@extern` return `Effect(<union>)`; update its two callers of the now-`env`-first `Union.discriminable/2` and `Union.family_key/2`.
 - `lib/cure/core/inductive.ex` — `opaque_family/4` carries an `erasure` field.
 - `lib/cure/elab/union.ex` — resolve a member's runtime class from the declared erasure; `:pid`/`:reference` classes and their overlap rules; `env` threaded to the class resolver.
 - `lib/cure/elab/emit.ex` — `env` threaded to the union-dispatch emitter; `is_pid`/`is_reference` guards; look through `Effect` when re-tagging.
+- `lib/cure/elab/resolution.ex` — update its one caller of the now-`env`-first `Union.family_key/2`.
+- `lib/cure/compiler/errors.ex` — a `format_error` clause naming the admissible `@erases` classes (spec §4 item 2).
 
 **Stdlib (the repairs):**
 - `lib/std/otp_raw.cure` — the sealed raw base.
@@ -67,12 +69,14 @@ These were probed against the compiler while planning. Do not re-derive them; do
 - Modify: `lib/cure/compiler/parser.ex` (`parse_at_attach/4`, ~line 6466)
 - Modify: `lib/cure/elab/declarations.ex` (the `:opaque` declaration branch, ~line 100)
 - Modify: `lib/cure/core/inductive.ex` (`opaque_family/3`, line 322)
+- Modify: `lib/cure/compiler/errors.ex` — a `format_error` clause for `:unknown_erasure_class` (spec §4 item 2 requires the error to name the admissible set; see Step 5b).
 - Test: `test/cure/elab/erases_decorator_test.exs` (create)
 
 **Interfaces:**
 - Produces: `Cure.Core.Inductive.opaque_family(name, param_tele, level, erasure \\ nil)` — the family map gains `erasure: nil | :pid | :reference | :integer | :float | :binary | :atom | :boolean | :list`.
 - Produces: `@erasure_classes` in `declarations.ex` — the admissible set.
 - Produces: errors `{:unknown_erasure_class, name, class}` and `{:erases_on_non_opaque, name}`.
+- Produces: `Cure.Compiler.Errors.format_error({:unknown_erasure_class, name, class}, file)` — names the admissible set in the rendered message (spec §4 item 2).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -124,6 +128,16 @@ defmodule Cure.Elab.ErasesDecoratorTest do
     assert {:error, {:unknown_erasure_class, :Handle, :banana}} = Program.elaborate(src)
   end
 
+  test "the unrecognised-class error names the admissible set (spec §4 item 2)" do
+    error = {:unknown_erasure_class, :Handle, :banana}
+    message = Cure.Compiler.Errors.format_error(error, "test.cure")
+
+    for class <- [:pid, :reference, :integer, :float, :binary, :atom, :boolean, :list] do
+      assert message =~ Atom.to_string(class),
+             "the rendered message must name every admissible class; missing #{class}:\n#{message}"
+    end
+  end
+
   test "@erases on a type WITH constructors is a compile error" do
     src = """
     mod M
@@ -140,7 +154,7 @@ end
 - [ ] **Step 2: Run it and confirm it fails**
 
 Run: `mix test test/cure/elab/erases_decorator_test.exs`
-Expected: all four FAIL. The first two on the missing `erasure` key; the last two because `@erases` is silently dropped — `parse_at_attach/4` has no `:opaque` branch, so elaboration returns `{:ok, _}`.
+Expected: all five FAIL. The first two on the missing `erasure` key; the third and fourth because `@erases` is silently dropped — `parse_at_attach/4` has no `:opaque` branch, so elaboration returns `{:ok, _}`; the fifth (admissible-set message) because `Cure.Compiler.Errors.format_error/2` has no clause for `:unknown_erasure_class` yet and falls through to the generic `inspect(error)` catch-all, which does not name any class.
 
 - [ ] **Step 3: Carry the erasure on the family record**
 
@@ -228,15 +242,20 @@ Confirm the decorator's argument shape by reading `attach_decorator/3` — if an
 literal arrives as something other than `{:literal, _, class}`, match what it actually
 produces.
 
-Widen the level-search helper (~line 2169) to carry `erasure`. Read its current bodies and
-change only the arity and the `opaque_family` call:
+Widen the level-search helper (~line 2169) to carry `erasure`. Its current body is
+**not** a single checked call — `Inductive.declare/3` returns `Env.t()` directly (no
+`:ok`/`:error` tuple), and well-formedness is a *separate* `Kernel.check_family/2` call
+against the freshly-declared family. Read its current bodies and change only the arity,
+the `opaque_family` call, and the extra `erasure` argument threaded through the
+recursive/ceiling calls:
 
 ```elixir
   defp declare_opaque_at_min_level(env, name, param_tele, level, erasure) when level <= @ceiling do
     family = Inductive.opaque_family(name, param_tele, level, erasure)
+    env2 = Inductive.declare(env, family, [])
 
-    case Inductive.declare_checked(env, family, []) do
-      {:ok, env2} ->
+    case Kernel.check_family(env2, Inductive.get_family(env2, name)) do
+      :ok ->
         {:ok, env2}
 
       {:error, :universe_level} ->
@@ -248,7 +267,7 @@ change only the arity and the `opaque_family` call:
   end
 
   defp declare_opaque_at_min_level(_env, _name, _param_tele, _level, _erasure),
-    do: {:error, {:universe_level, :opaque}}
+    do: {:error, :universe_ceiling}
 ```
 
 Then reject `@erases` on a type that has constructors — such a type already has an
@@ -273,10 +292,55 @@ and call it as the first step of the container-declaration entry point — the f
 `case` selects `:opaque` / `:enum` / `:struct` / `:primitive` — so every non-opaque branch
 is covered by one check rather than three.
 
+- [ ] **Step 5b: Name the admissible set in the rendered error**
+
+Spec §4 item 2 requires the unrecognised-class error to name the admissible set, not just
+the one bad value. `errors.ex` has an exact precedent for this: `known_editions_hint/0`
+synthesises the valid-editions list at render time for `:edition_pragma_unknown` /
+`:edition_error` (`lib/cure/compiler/errors.ex:237-256`) — the error tuple itself does not
+carry the list; the `format_error` clause looks it up independently. Follow the same shape.
+No existing elaborator-level error (`:extern_union_indistinct`, `:union_member_not_ground`,
+etc.) has a dedicated `format_error` clause — they fall through to the generic
+`inspect(error)` catch-all at the bottom of the file — so this is a new clause, not an
+existing one to extend.
+
+In `lib/cure/elab/declarations.ex`, export the admissible set so `errors.ex` can read it
+without duplicating the list:
+
+```elixir
+  # Exposed for Cure.Compiler.Errors — the admissible @erases(<class>) set, named in the
+  # :unknown_erasure_class message.
+  def erasure_classes, do: @erasure_classes
+```
+
+In `lib/cure/compiler/errors.ex`, beside `known_editions_hint/0`, add:
+
+```elixir
+  def format_error({:unknown_erasure_class, name, class}, file) do
+    format_diagnostic(
+      "error",
+      "unknown erasure class",
+      file,
+      0,
+      "`@erases(#{inspect(class)})` on `#{name}` is not a known erasure class; " <>
+        "known classes: #{known_erasure_classes_hint()}"
+    )
+  end
+```
+
+```elixir
+  defp known_erasure_classes_hint,
+    do: Cure.Elab.Declarations.erasure_classes() |> Enum.map_join(", ", &to_string/1)
+```
+
+Place the `format_error` clause with the other elaborator-error clauses (near
+`{:type_mismatch, …}`), not with the parse/edition clauses — it is a semantic error, not a
+lexical one. `known_erasure_classes_hint/0` belongs beside `known_editions_hint/0`.
+
 - [ ] **Step 6: Run the test and confirm it passes**
 
 Run: `mix test test/cure/elab/erases_decorator_test.exs`
-Expected: 4 tests, 0 failures.
+Expected: 5 tests, 0 failures.
 
 - [ ] **Step 7: Run the suites that could regress**
 
@@ -286,7 +350,7 @@ Expected: 0 failures. `opaque_family/4`'s new argument defaults, so existing cal
 - [ ] **Step 8: Commit**
 
 ```bash
-git add lib/cure/compiler/parser.ex lib/cure/elab/declarations.ex lib/cure/core/inductive.ex test/cure/elab/erases_decorator_test.exs
+git add lib/cure/compiler/parser.ex lib/cure/elab/declarations.ex lib/cure/core/inductive.ex lib/cure/compiler/errors.ex test/cure/elab/erases_decorator_test.exs
 git commit -m "feat(elab): @erases(<class>) declares an opaque carrier's runtime shape
 
 An opaque type has zero constructors and so no inferable erasure. Its runtime shape
@@ -302,12 +366,38 @@ must be declared before it can be discriminated inside an anonymous union."
 **Files:**
 - Modify: `lib/cure/elab/union.ex`
 - Modify: `lib/cure/elab/emit.ex`
+- Modify: `lib/cure/elab/declarations.ex` — two external callers of the widened functions
+  (see below).
+- Modify: `lib/cure/elab/resolution.ex` — one external caller of `family_key`.
 - Test: `test/cure/elab/union_test.exs` (extend)
 
 **Interfaces:**
 - Consumes: `Inductive.get_family(env, name).erasure` (Task 1).
 - Produces: `Union.runtime_class(env, member)`, `Union.disjoint_only?(env, members)`, `Union.family_key(env, members)`, `Union.discriminable(env, members)`, `Union.discrimination_order(env, members)` — every class-dependent function takes `env` **first**.
 - Produces: `Emit.class_guard(:pid) → :is_pid`, `Emit.class_guard(:reference) → :is_reference`.
+
+**Real external callers that break, and must be fixed in the same task.** `discriminable/1`
+and `family_key/1` are called *outside* `union.ex`/`emit.ex` today, at three call sites —
+verified by grepping the tree, not assumed:
+- `lib/cure/elab/declarations.ex:441`, inside `check_extern_not_union/2`:
+  `case Cure.Elab.Union.discriminable(Cure.Elab.Union.members_of(env, ukey)) do`. `env` is
+  already bound in that function. Change to
+  `Cure.Elab.Union.discriminable(env, Cure.Elab.Union.members_of(env, ukey))`.
+- `lib/cure/elab/declarations.ex:1800`, inside `idx_to_core/5` (the anonymous-union index
+  case): `{:ok, {:data, Cure.Elab.Union.family_key(ms), [], []}}`. `env` is a parameter of
+  the enclosing clause. Change to
+  `{:ok, {:data, Cure.Elab.Union.family_key(env, ms), [], []}}`.
+- `lib/cure/elab/resolution.ex:231`: `new_key = Cure.Elab.Union.family_key(members)`. Confirm
+  `env` is in scope in that function (it rekeys families during shadowing resolution); if the
+  enclosing function does not already bind `env`, thread it in from its caller rather than
+  widening `family_key`'s contract to make this one caller easier — the function-level
+  `env` binding is the existing pattern used everywhere else in this task.
+
+Without these three edits, `union.ex` compiles but the tree does not: `mix compile` fails
+before a single test can run, because Elixir resolves `Union.discriminable/1` and
+`Union.family_key/1` at compile time against the now-`/2` definitions. Step 7 below exists
+specifically to catch a *missed* caller, not to serve as the mechanism for fixing these
+three *known* ones — they are fixed here, in Step 5, alongside the rest of the widening.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -461,6 +551,13 @@ to take `env` first and pass it to `runtime_class/2`. `canonicalise/3`, `declare
 `declare_family/2` already bind `env`, so their internal calls are a mechanical widening.
 `specificity/1` is applied to the *result* of `runtime_class` and needs no change.
 
+Then fix the three external callers this widening breaks (listed above, under **Files**),
+in the same step — these are compile-time breaks, not test failures, so they cannot be
+deferred to Step 7:
+- `lib/cure/elab/declarations.ex:441` — `Union.discriminable(members)` → `Union.discriminable(env, members)`.
+- `lib/cure/elab/declarations.ex:1800` — `Union.family_key(ms)` → `Union.family_key(env, ms)`.
+- `lib/cure/elab/resolution.ex:231` — `Union.family_key(members)` → `Union.family_key(env, members)`.
+
 In `lib/cure/elab/emit.ex`, thread `env` from `function_form/2` (which already binds it)
 down the chain that has none: `extern_form/4` → `union_dispatch/2` → `type_clause/1` →
 `class_test/1` → `Union.runtime_class/2`, and `union_dispatch/2` → `Union.discrimination_order/2`.
@@ -481,12 +578,17 @@ Expected: 0 failures.
 - [ ] **Step 7: Run the full suite once**
 
 Run: `mix test`
-Expected: 0 failures. `Union`'s public functions changed arity; any caller outside `union.ex`/`emit.ex` fails to compile, which this run surfaces.
+Expected: 0 failures — Step 5 already fixed the three known external callers
+(`declarations.ex:441`, `declarations.ex:1800`, `resolution.ex:231`). This run's job is to
+catch a caller *missed* by that grep, not to be the mechanism that fixes a known one: `mix
+test` cannot even start if a caller fails to compile, so a failure here means Step 5 missed
+a site — go back and grep again (`grep -rn "Union\.\(discriminable\|family_key\|disjoint_only?\|discrimination_order\)\b" lib/`
+excluding `union.ex`/`emit.ex`), fix it, and rerun.
 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add lib/cure/elab/union.ex lib/cure/elab/emit.ex test/cure/elab/union_test.exs
+git add lib/cure/elab/union.ex lib/cure/elab/emit.ex lib/cure/elab/declarations.ex lib/cure/elab/resolution.ex test/cure/elab/union_test.exs
 git commit -m "feat(elab): :pid and :reference union member classes
 
 A union resolves a member's runtime class from the family's declared @erases first,
@@ -742,7 +844,19 @@ Give every raw op that mentions a `RawPid` the third argument. `raw_self`, `raw_
   fn raw_link({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Unit)
 ```
 
-…and the same shape for `raw_unlink`, `raw_exit`, `raw_is_alive`, `raw_register`, `raw_monitor`, `raw_send_after`.
+…and the same shape for `raw_unlink`, `raw_is_alive`, `raw_register`, `raw_monitor`, `raw_send_after` — widen only the pid parameter to `RawPid(m, r, k)` and add `{k: Type}`, exactly as `raw_link` does above.
+
+`raw_exit` is **not** the same shape as `raw_link` — it additionally takes the reason
+parameter (`{x: Type}, reason: x`), which is not part of this task's change and must
+survive it. Only the pid parameter widens:
+
+```cure
+  @extern(:erlang, :exit, 2)
+  fn raw_exit({m: Type}, {r: Type}, {k: Type}, {x: Type}, pid: RawPid(m, r, k), reason: x) -> Effect(Unit)
+```
+
+(Task 6 later narrows this op's *return* type to `Effect(Bool)` — the signature above is
+this task's contribution, the parameter list, unchanged from here on.)
 
 `raw_cast`, `raw_call`, `raw_stop` are `Server`-only:
 
@@ -774,7 +888,18 @@ In `lib/std/otp.cure`:
   typealias GenServer(q, r) = RawPid(q, r, Server)
 ```
 
-`call`, `cast` and `stop` keep their existing `GenServer(q, r)` signatures — the alias split alone makes them `Server`-only. Make `tell`, `send_after`, `link`, `unlink`, `monitor`, `exit`, `is_alive`, `register` tag-polymorphic so they accept both handles:
+`call` and `cast` already declare `server: GenServer(q, r)` — the alias split alone makes
+them `Server`-only, no signature edit needed. `stop` does **not**: today it is
+`fn stop({m: Type}, pid: Pid(m)) -> Effect(Unit) = raw_stop(pid)` — it takes a `Pid(m)`
+only because `Pid(m)` and `GenServer(q,r)` are currently the same constructor. After the
+alias split `Pid(m)` is `RawPid(m, m, Plain)`, which no longer unifies with `raw_stop`'s
+new `RawPid(q, r, Server)` requirement, so `stop` needs an explicit rewrite:
+
+```cure
+  fn stop({q: Type}, {r: Type}, server: GenServer(q, r)) -> Effect(Unit) = raw_stop(server)
+```
+
+Make `tell`, `send_after`, `link`, `unlink`, `monitor`, `exit`, `is_alive`, `register` tag-polymorphic so they accept both handles:
 
 ```cure
   ## Send a well-typed message. Accepts BOTH handles: a raw send to a gen_server is
