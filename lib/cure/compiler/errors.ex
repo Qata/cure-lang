@@ -43,6 +43,28 @@ defmodule Cure.Compiler.Errors do
     format_diagnostic("error", "unbound variable", file, line, message)
   end
 
+  def format_error({:unknown_erasure_class, name, class}, file) do
+    format_diagnostic(
+      "error",
+      "unknown erasure class",
+      file,
+      0,
+      "`@erases(#{inspect(class)})` on `#{name}` is not a known erasure class; " <>
+        "known classes: #{known_erasure_classes_hint()}"
+    )
+  end
+
+  def format_error({:erases_on_non_opaque, name}, file) do
+    format_diagnostic(
+      "error",
+      "@erases on a non-opaque type",
+      file,
+      0,
+      "`#{name}` has constructors, so its erasure is already determined; `@erases` " <>
+        "declares the runtime shape of a CONSTRUCTOR-LESS carrier (`opaque type`)"
+    )
+  end
+
   def format_error({:unsupported_async, message, meta}, file) do
     line = Keyword.get(meta, :line, 0)
     format_diagnostic("error", "unsupported asynchronous primitive", file, line, message)
@@ -382,6 +404,9 @@ defmodule Cure.Compiler.Errors do
   end
 
   defp known_editions_hint, do: Enum.join(Cure.Edition.all(), ", ")
+
+  defp known_erasure_classes_hint,
+    do: Cure.Elab.Declarations.erasure_classes() |> Enum.map_join(", ", &to_string/1)
 
   defp describe_point({:hole_kind, k}), do: "a `#{k}` hole"
   defp describe_point({:keyword, w}), do: "the keyword `#{w}`"
