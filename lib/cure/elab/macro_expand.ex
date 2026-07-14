@@ -232,9 +232,22 @@ defmodule Cure.Elab.MacroExpand do
       global_names(motive) ++ Enum.flat_map(branches, fn {_name, _arity, body} -> global_names(body) end)
   end
 
+  defp global_names({:let, _grade, type, value, body}),
+    do: global_names(type) ++ global_names(value) ++ global_names(body)
+
+  defp global_names({:effect_type, inner}), do: global_names(inner)
+  defp global_names({:effect_pure, value}), do: global_names(value)
+
+  defp global_names({:effect_bind, effect, continuation}),
+    do: global_names(effect) ++ global_names(continuation)
+
   defp global_names({:ctor, _name, args}), do: Enum.flat_map(args, &global_names/1)
   defp global_names({:data, _name, params, indices}), do: Enum.flat_map(params ++ indices, &global_names/1)
   defp global_names(term) when is_list(term), do: Enum.flat_map(term, &global_names/1)
+
+  defp global_names(term) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.flat_map(&global_names/1)
+
   defp global_names(_term), do: []
 
   defp execute_application(context, elab_core, [input_core | fallback]) do
