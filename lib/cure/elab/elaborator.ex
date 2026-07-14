@@ -267,24 +267,32 @@ defmodule Cure.Elab.Elaborator do
       # both plain and implicit defs. Guarded on the dot so bare def calls keep
       # their existing paths.
       String.contains?(name, ".") and Map.has_key?(env.defs, resolved) ->
-        result =
-          if Enum.any?(args, &match?({:lambda, _m, _b}, &1)) do
-            elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx)
-          else
+        if Enum.any?(args, &match?({:lambda, _m, _b}, &1)) do
+          # A lambda argument needs a checking-mode expected type, so the bidirectional
+          # elaborator is the ONLY path here. It used to be run, and then — on failure —
+          # run a second time with identical arguments, which can only reproduce the same
+          # error. One attempt, one verdict.
+          elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx)
+        else
+          result =
             with {:ok, present} <- map_present_args(args, names, ctx, env) do
               elaborate_global_app(env, resolved, present, ctx)
             end
+
+          case result do
+            {:ok, _, _} = ok ->
+              ok
+
+            {:error, _} = orig ->
+              # This retry IS load-bearing: the attempt above used a different algorithm
+              # (direct application of already-elaborated args), so the bidirectional
+              # elaborator can still succeed where it failed — e.g. when an implicit
+              # argument only becomes solvable in checking mode.
+              case elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx) do
+                {:ok, _, _} = ok -> ok
+                {:error, _} -> orig
+              end
           end
-
-        case result do
-          {:ok, _, _} = ok ->
-            ok
-
-          {:error, _} = orig ->
-            case elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx) do
-              {:ok, _, _} = ok -> ok
-              {:error, _} -> orig
-            end
         end
 
       # A bare name provided by ≥2 distinct re-keyed imports with no local/

@@ -15,6 +15,32 @@ defmodule Cure.Elab.Erase do
 
   alias Cure.Core.{Grade, Inductive}
 
+  # Leaves of `Core.Term` — no subterms, so `has_hole?/1` has nothing to descend into.
+  # `{:hole, _}` is deliberately absent: it has its own clause, and it answers `true`.
+  #
+  # `:extern` is the Env body marker for an `@extern` declaration, not a Core former;
+  # `has_hole?/1` meets it because `Program.hole_goals/1` folds over every def body. An MFA
+  # holds no holes.
+  defguardp is_leaf(t)
+            when is_tuple(t) and
+                   elem(t, 0) in [
+                     :var,
+                     :meta,
+                     :extern,
+                     :type,
+                     :global,
+                     :int_type,
+                     :int_lit,
+                     :nat_lit,
+                     :bounded_lit,
+                     :float_type,
+                     :float_lit,
+                     :binary_type,
+                     :atom_type,
+                     :atom_lit,
+                     :absurd
+                   ]
+
   @doc "Erase a Core term to its runtime form (drop erased constructor arguments)."
   @spec erase(Cure.Core.Env.t(), Cure.Core.Term.t()) :: Cure.Core.Term.t()
   def erase(env, {:ctor, cname, args}) do
@@ -197,5 +223,28 @@ defmodule Cure.Elab.Erase do
   def has_hole?({:case, s, m, branches}),
     do: has_hole?(s) or has_hole?(m) or Enum.any?(branches, fn {_c, _ar, b} -> has_hole?(b) end)
 
-  def has_hole?(_term), do: false
+  # The Effect family carries arbitrary subterms; without these, a hole inside one was
+  # reported as no hole at all. No source program can put a hole there today (the surface
+  # admits `?x` only as a whole function body), but `Antigen.Assays.Erasure` synthesises Core
+  # directly, and its `hole_introduced` property is only as strong as this predicate.
+  def has_hole?({:effect_type, t}), do: has_hole?(t)
+  def has_hole?({:effect_pure, a}), do: has_hole?(a)
+  def has_hole?({:effect_bind, e, k}), do: has_hole?(e) or has_hole?(k)
+
+  # A body-less declaration (`%{body: nil}`) is not a term at all — `Program.hole_goals/1`
+  # folds over every def, including those. An absent body holds no holes.
+  def has_hole?(nil), do: false
+
+  def has_hole?(leaf) when is_leaf(leaf), do: false
+  def has_hole?(other), do: unrecognised_former!(other, "has_hole?/1")
+
+  # FAIL CLOSED. "I don't recognise this former, so it contains no holes" is exactly how the
+  # gap above was introduced.
+  @spec unrecognised_former!(term(), String.t()) :: no_return()
+  defp unrecognised_former!(other, fun) do
+    raise ArgumentError,
+          "Cure.Elab.Erase.#{fun}: unrecognised Core former #{inspect(other, limit: 3)}. " <>
+            "Every former in Core.Term.t() must be enumerated here — treating a compound " <>
+            "former as a leaf reports every hole inside it as absent."
+  end
 end
