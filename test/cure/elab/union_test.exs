@@ -948,7 +948,7 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert union_families(env) == [:"Union<Atom#:undefined|Handle>"]
+      assert union_families(env) == [:"Union<Atom#:undefined|OPQ1#Handle>"]
     end
 
     test "a pid carrier and a reference carrier are told apart, not collided" do
@@ -969,7 +969,7 @@ defmodule Cure.Elab.UnionTest do
 
       # Distinct classes (is_pid vs is_reference) ⇒ disjoint erasures ⇒ `Union<…>`, not
       # `Disjoint<…>`. Two `:unsupported` members would have been rejected outright.
-      assert union_families(env) == [:"Union<Handle|Ref>"]
+      assert union_families(env) == [:"Union<OPQ2#Handle|OPQ2#Ref>"]
     end
 
     test "a declared-erasure member is discriminated at runtime by its guard" do
@@ -990,11 +990,11 @@ defmodule Cure.Elab.UnionTest do
       # erlang:whereis/1 hands back an untagged pid; the boundary must re-tag it, which it
       # can only do if `Handle` resolves to the `is_pid` guard.
       assert apply(:"Cure.OPQ3", :look, [:cure_union_pid_probe]) ==
-               {:"Union<Atom#:undefined|Handle>$Handle", self()}
+               {:"Union<Atom#:undefined|OPQ3#Handle>$OPQ3#Handle", self()}
 
       # ...and an unregistered name comes back as the literal member.
       assert apply(:"Cure.OPQ3", :look, [:cure_union_no_such_name]) ==
-               :"Union<Atom#:undefined|Handle>$Atom#:undefined"
+               :"Union<Atom#:undefined|OPQ3#Handle>$Atom#:undefined"
     end
 
     test "an opaque member WITHOUT @erases is still rejected — its shape is unknown" do
@@ -1067,10 +1067,10 @@ defmodule Cure.Elab.UnionTest do
       Process.register(self(), :cure_union_effect_probe)
 
       assert apply(:"Cure.EFU4", :look, [:cure_union_effect_probe]) ==
-               {:"Union<Atom#:undefined|Handle>$Handle", self()}
+               {:"Union<Atom#:undefined|EFU4#Handle>$EFU4#Handle", self()}
 
       assert apply(:"Cure.EFU4", :look, [:cure_union_no_such_name]) ==
-               :"Union<Atom#:undefined|Handle>$Atom#:undefined"
+               :"Union<Atom#:undefined|EFU4#Handle>$Atom#:undefined"
     end
   end
 end
