@@ -11,15 +11,16 @@ defmodule Cure.Elab.BoolConnectiveLoweringTest do
   use ExUnit.Case, async: true
 
   alias Cure.Elab.Program
+  alias Cure.Core.Env
 
   # Body of a nullary top-level fn `name` (no lambda wrapper).
   defp body(src, name) do
     {:ok, env} = Program.elaborate("mod M\n  use Std.Bool\n" <> src <> "end\n")
-    env.defs[name].body
+    Env.get_def(env, name).body
   end
 
-  @tt {:ctor, :True, []}
-  @ff {:ctor, :False, []}
+  @tt {:ctor, :"Std.Bool#True", []}
+  @ff {:ctor, :"Std.Bool#False", []}
 
   test "`and` lowers to an `and` application, not a :and prim" do
     assert body("  fn t() -> Bool = true and false\n", :t) ==

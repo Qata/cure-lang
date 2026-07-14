@@ -11,7 +11,7 @@ defmodule Cure.Compiler.MacroFuzz do
   alias Antigen.Backend.StreamData, as: Backend
   alias Antigen.Generators.{SigMenu, Term}
   alias Cure.Compiler.{Lexer, LiftModule, Parser, Token}
-  alias Cure.Core.{Context, Eval, Inductive, Kernel, Normalise}
+  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Normalise}
   alias Cure.Elab.{Elaborator, MacroExpand, Program}
 
   @default_draws 32
@@ -191,7 +191,7 @@ defmodule Cure.Compiler.MacroFuzz do
             [ctor | _] ->
               result_params = instantiate_result_terms(ctor.result_params, params, 0)
               result_indices = instantiate_result_terms(ctor.result_indices, params, 0)
-              goal = {:data, family_name, result_params, result_indices}
+              goal = {:data, family.name, result_params, result_indices}
 
               {:ok,
                %{
@@ -227,7 +227,10 @@ defmodule Cure.Compiler.MacroFuzz do
     end)
   end
 
-  defp canonical_parameter(_ctx, {:type, _level}), do: {:ok, SigMenu.nat()}
+  defp canonical_parameter(%Context{} = ctx, {:type, _level}) do
+    env = Context.signature(ctx)
+    {:ok, {:data, Env.resolve_key(env, env.families, :Nat), [], []}}
+  end
 
   defp canonical_parameter(ctx, type) do
     try do

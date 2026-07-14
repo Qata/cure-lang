@@ -32,11 +32,13 @@ defmodule Cure.Elab.JoinGradeTest do
   end
 
   defp calls(env, name, callee) do
+    key = Env.resolve_key(env, env.defs, callee)
+
     env
     |> Env.get_def(name)
     |> Map.fetch!(:body)
     |> Validator.nodes()
-    |> Enum.count(&match?({:global, ^callee}, &1))
+    |> Enum.count(&match?({:global, ^key}, &1))
   end
 
   @enum "type C = A | B | D | E | G | H\n"

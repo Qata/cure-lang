@@ -668,12 +668,14 @@ defmodule Cure.Elab.Program do
 
   defp restrict_env_to(%Env{} = env, %MapSet{} = names) do
     name_list = MapSet.to_list(names)
-    fam_names = Enum.filter(name_list, &Map.has_key?(env.families, &1))
+    def_names = Enum.map(name_list, &Env.resolve_key(env, env.defs, &1))
+    fam_names = Enum.map(name_list, &Env.resolve_key(env, env.families, &1))
+    fam_names = Enum.filter(fam_names, &Map.has_key?(env.families, &1))
     kept_ctors = for {c, f} <- env.ctor_to_family, f in fam_names, into: %{}, do: {c, f}
 
     %Env{
       Env.empty()
-      | defs: Map.take(env.defs, name_list ++ Map.keys(kept_ctors)),
+      | defs: Map.take(env.defs, def_names ++ Map.keys(kept_ctors)),
         families: Map.take(env.families, fam_names),
         ctors: Map.take(env.ctors, Map.keys(kept_ctors)),
         ctor_to_family: kept_ctors,

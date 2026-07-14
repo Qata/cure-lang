@@ -24,7 +24,7 @@ defmodule Cure.Elab.Name do
 
   def owner(name) when is_binary(name) do
     case String.split(name, @separator, parts: 2) do
-      [owner, _base] when owner != "" -> owner
+      [owner, _base] -> if valid_owner?(owner), do: owner, else: nil
       _ -> nil
     end
   end
@@ -37,7 +37,7 @@ defmodule Cure.Elab.Name do
 
   def base(name) when is_binary(name) do
     case String.split(name, @separator, parts: 2) do
-      [_owner, base] -> base
+      [owner, base] -> if valid_owner?(owner), do: base, else: name
       [bare] -> bare
     end
   end
@@ -53,4 +53,8 @@ defmodule Cure.Elab.Name do
 
   defp normalize_base(base) when is_atom(base), do: Atom.to_string(base)
   defp normalize_base(base) when is_binary(base), do: base
+
+  defp valid_owner?(owner) do
+    owner != "" and String.match?(owner, ~r/^[A-Za-z_][A-Za-z0-9_.]*$/)
+  end
 end

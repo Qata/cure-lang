@@ -64,4 +64,18 @@ defmodule Cure.Elab.UnionIdentityTest do
     refute Enum.any?(Map.keys(env.families), fn key -> key in [:Bool, :Nat] end)
     refute Enum.any?(Map.keys(env.ctors), fn key -> key in [:True, :False, :Z, :S] end)
   end
+
+  test "anonymous union identity is not qualified by its enclosing module" do
+    src = """
+    mod M
+      fn mk(n: Int) -> Int | Bool = n
+    end
+    """
+
+    assert {:ok, env} = Program.elaborate(src)
+
+    assert Map.has_key?(env.families, :"Union<Int|Std.Bool#Bool>")
+    refute Enum.any?(Map.keys(env.families), &String.starts_with?(Atom.to_string(&1), "M#Union<"))
+    assert Map.has_key?(env.ctors, :"Union<Int|Std.Bool#Bool>$Int")
+  end
 end

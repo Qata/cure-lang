@@ -62,7 +62,7 @@ defmodule Cure.Elab.UnionCanonicalTest do
 
     test "the key is sorted lexically" do
       env = base_env()
-      assert key("Int | Bool", env) == :"Union<Bool|Int>"
+      assert key("Int | Bool", env) == :"Union<Int|Std.Bool#Bool>"
     end
 
     test "Int | Int dedupes to a single member (caller collapses to Int)" do
@@ -72,7 +72,7 @@ defmodule Cure.Elab.UnionCanonicalTest do
 
     test "an applied type keys with its arguments" do
       env = base_env()
-      assert key("List(Int) | Int", env) == :"Union<Int|List(Int)>"
+      assert key("List(Int) | Int", env) == :"Union<Int|Std.List#List(Int)>"
     end
   end
 
@@ -124,7 +124,7 @@ defmodule Cure.Elab.UnionCanonicalTest do
         """)
 
       assert key("B2(idn(Z())) | Bool", env) == key("B2(Z()) | Bool", env)
-      assert key("B2(Z()) | Bool", env) == :"Union<B2(Z)|Bool>"
+      assert key("B2(Z()) | Bool", env) == :"Union<B2(Std.Nat#Z)|Std.Bool#Bool>"
     end
   end
 
@@ -167,9 +167,9 @@ defmodule Cure.Elab.UnionCanonicalTest do
       env = base_env()
 
       # Int / Bool  — integers vs the atoms true/false. Nothing is both.
-      assert key("Int | Bool", env) == :"Union<Bool|Int>"
+      assert key("Int | Bool", env) == :"Union<Int|Std.Bool#Bool>"
       # Int / List(Int) — integers vs lists.
-      assert key("Int | List(Int)", env) == :"Union<Int|List(Int)>"
+      assert key("Int | List(Int)", env) == :"Union<Int|Std.List#List(Int)>"
       # a literal whose class no type member occupies
       assert key(":north | Int", env) == :"Union<Atom#:north|Int>"
     end
@@ -179,7 +179,7 @@ defmodule Cure.Elab.UnionCanonicalTest do
 
       # {3} subset-of Int: a value can be BOTH, so the tag is what separates them.
       assert key("Int | 3", env) == :"Disjoint<Int|Int#3>"
-      assert key("3 | Nat", env) == :"Disjoint<Int#3|Nat>"
+      assert key("3 | Nat", env) == :"Disjoint<Int#3|Std.Nat#Nat>"
       assert key(":north | Atom", env) == :"Disjoint<Atom|Atom#:north>"
     end
 
@@ -187,16 +187,16 @@ defmodule Cure.Elab.UnionCanonicalTest do
       env = base_env()
 
       # true/false are atoms, so Bool and Atom overlap.
-      assert key("Bool | Atom", env) == :"Disjoint<Atom|Bool>"
+      assert key("Bool | Atom", env) == :"Disjoint<Atom|Std.Bool#Bool>"
       # ...and it propagates through a wider union.
-      assert key("Int | Bool | Atom", env) == :"Disjoint<Atom|Bool|Int>"
+      assert key("Int | Bool | Atom", env) == :"Disjoint<Atom|Int|Std.Bool#Bool>"
     end
 
     test "two type members sharing a class are Disjoint" do
       env = base_env()
 
       # Both erase to Erlang integers.
-      assert key("Int | Nat", env) == :"Disjoint<Int|Nat>"
+      assert key("Int | Nat", env) == :"Disjoint<Int|Std.Nat#Nat>"
     end
 
     test "union_family?/1 recognises BOTH prefixes" do
@@ -213,7 +213,7 @@ defmodule Cure.Elab.UnionCanonicalTest do
       fk = Union.family_key(ms)
       int_m = Enum.find(ms, &(&1.key == "Int"))
 
-      assert Union.ctor_key(fk, int_m) == :"Union<Bool|Int>$Int"
+      assert Union.ctor_key(fk, int_m) == :"Union<Int|Std.Bool#Bool>$Int"
     end
 
     test "union_family?/1 recognises a generated key and rejects a user type name" do

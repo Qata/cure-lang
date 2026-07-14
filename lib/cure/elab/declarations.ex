@@ -737,7 +737,16 @@ defmodule Cure.Elab.Declarations do
   """
   @spec declare_generated_family(Env.t(), atom(), [map()]) :: {:ok, Env.t()} | {:error, term()}
   def declare_generated_family(env, name, ctors) do
-    declare_indexed_at_min_level(env, name, [], [], ctors, 0)
+    # Anonymous unions derive their identity from their canonical member set,
+    # so an enclosing module must not become part of the generated family or
+    # constructor keys.  Keep the caller's owner on the returned environment;
+    # only this compiler-generated registration is ownerless.
+    generated_env = Env.with_owner(env, nil)
+
+    case declare_indexed_at_min_level(generated_env, name, [], [], ctors, 0) do
+      {:ok, result} -> {:ok, Env.with_owner(result, Env.owner(env))}
+      {:error, _} = error -> error
+    end
   end
 
   @doc """

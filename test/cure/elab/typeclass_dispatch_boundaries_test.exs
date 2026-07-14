@@ -93,8 +93,8 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
 
       def_ = Env.get_def(env, :strictInt)
       refute is_nil(def_), "a named implementation must be bound as an ordinary global value"
-      assert def_.type == {:data, :Eqs, [{:int_type}], []}
-      assert {:ctor, :Eqs, [_eqs_method]} = def_.body
+      assert def_.type == {:data, :"M#Eqs", [{:int_type}], []}
+      assert {:ctor, :"M#Eqs", [_eqs_method]} = def_.body
     end
 
     test "a caller can name it" do
@@ -222,7 +222,7 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
           "  fn use_it(a: Col, b: Col) -> Bool = eqs(a, b)\nend\n"
 
       assert {:ok, env} = Program.elaborate(src)
-      assert {:ok, %{head: :Col}} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :Col)
+      assert {:ok, %{head: :"M#Col"}} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :"M#Col")
     end
   end
 end

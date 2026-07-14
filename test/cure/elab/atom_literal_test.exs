@@ -5,11 +5,12 @@ defmodule Cure.Elab.AtomLiteralTest do
   of type `Atom`, and runs on the BEAM as the native atom `:ok`.
   """
   use ExUnit.Case, async: true
+  alias Cure.Core.Env
   alias Cure.Elab.{Program, Emit}
 
   test "an atom literal elaborates to {:atom_lit, _} : Atom" do
     {:ok, env} = Program.elaborate("mod M\n  fn tag() -> Atom = :ok\nend\n")
-    d = env.defs[:tag]
+    d = Env.get_def(env, :tag)
     assert d.type == {:atom_type}
     assert d.body == {:atom_lit, :ok}
   end

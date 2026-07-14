@@ -10,11 +10,12 @@ defmodule Cure.Elab.BitwiseOpsTest do
   """
   use ExUnit.Case, async: true
 
+  alias Cure.Core.Env
   alias Cure.Elab.{Emit, Program}
 
   defp body(src, name) do
     {:ok, env} = Program.elaborate("mod M\n" <> src <> "end\n")
-    env.defs[name].body
+    Env.get_def(env, name).body
   end
 
   defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
@@ -31,7 +32,9 @@ defmodule Cure.Elab.BitwiseOpsTest do
 
   test "`band` lowers to an int_band global spine (Int-directed)" do
     b = body("  fn f(x: Int) -> Int = x band 6\n", :f)
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(:int_band, {:var, 0}, {:int_lit, 6})} == b
+
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(:int_band, {:var, 0}, {:int_lit, 6})} ==
+             b
   end
 
   test "infix bitwise binops evaluate to the BEAM bitwise BIFs" do

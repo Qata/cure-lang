@@ -51,6 +51,8 @@ defmodule Cure.Core.Env do
 
   @doc "Attach the source-module owner used for canonical declaration identity."
   @spec with_owner(t(), String.t() | atom() | nil) :: t()
+  def with_owner(%__MODULE__{} = env, nil), do: %{env | module_owner: nil}
+
   def with_owner(%__MODULE__{} = env, owner) when is_atom(owner),
     do: with_owner(env, Atom.to_string(owner))
 

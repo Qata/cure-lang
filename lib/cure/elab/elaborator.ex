@@ -5367,7 +5367,8 @@ defmodule Cure.Elab.Elaborator do
     do: {:error, {:unsupported_block, other}}
 
   defp elaborate_macro_failure(meta, args, names, ctx, env) do
-    syntax_type = {:data, :Syntax, [], []}
+    syntax_family = Env.resolve_key(env, env.families, :Syntax)
+    syntax_type = {:data, syntax_family, [], []}
 
     with {:ok, arg_terms} <-
            Enum.reduce_while(args, {:ok, []}, fn arg, {:ok, acc} ->
@@ -5376,9 +5377,9 @@ defmodule Cure.Elab.Elaborator do
                {:error, _} = error -> {:halt, error}
              end
            end),
-         %{name: :Failure} <- Inductive.get_ctor(env, :Failure) do
+         %{name: failure_ctor} <- Inductive.get_ctor(env, :Failure) do
       name = Keyword.get(meta, :name, "?")
-      {:ok, {:ctor, :Failure, [{:atom_lit, String.to_atom(name)}, core_list(Enum.reverse(arg_terms))]}}
+      {:ok, {:ctor, failure_ctor, [{:atom_lit, String.to_atom(name)}, core_list(Enum.reverse(arg_terms))]}}
     else
       nil -> {:error, {:unknown_macro_failure, Keyword.get(meta, :name, "?")}}
     end

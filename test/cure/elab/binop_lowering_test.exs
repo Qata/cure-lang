@@ -20,7 +20,7 @@ defmodule Cure.Elab.BinopLoweringTest do
   # Body of a top-level fn `name`.
   defp body(src, name) do
     {:ok, env} = Program.elaborate("mod M\n  use Std.Bool\n" <> src <> "end\n")
-    env.defs[name].body
+    Env.get_def(env, name).body
   end
 
   defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
@@ -66,9 +66,9 @@ defmodule Cure.Elab.BinopLoweringTest do
   test "A1: ADT `==` lowers to struct_eq applied to the quoted operand type (not prim, not error)" do
     b = body("  fn t(a: Nat, b: Nat) -> Bool = a == b\n", :t)
 
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []},
-            {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []},
-             app3(:struct_eq, {:data, :Nat, [], []}, {:var, 1}, {:var, 0})}} == b
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
+            {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
+             app3(:struct_eq, {:data, :"Std.Nat#Nat", [], []}, {:var, 1}, {:var, 0})}} == b
 
     assert no_prim?(b)
   end
@@ -76,9 +76,9 @@ defmodule Cure.Elab.BinopLoweringTest do
   test "A1: ADT `!=` lowers to struct_ne" do
     b = body("  fn t(a: Nat, b: Nat) -> Bool = a != b\n", :t)
 
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []},
-            {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []},
-             app3(:struct_ne, {:data, :Nat, [], []}, {:var, 1}, {:var, 0})}} == b
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
+            {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
+             app3(:struct_ne, {:data, :"Std.Nat#Nat", [], []}, {:var, 1}, {:var, 0})}} == b
   end
 
   test "non-numeric arithmetic still rejects (unchanged from decision 3)" do

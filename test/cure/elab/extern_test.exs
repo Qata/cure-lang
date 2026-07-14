@@ -42,7 +42,7 @@ defmodule Cure.Elab.ExternTest do
 
     # Reachability (falsifiability): :extdec must actually be in the closure,
     # or this test would pass vacuously.
-    assert MapSet.member?(TotalityClosure.type_level_fns(env), :extdec)
+    assert MapSet.member?(TotalityClosure.type_level_fns(env), :"M#extdec")
 
     # The mechanism: certify_type_level must succeed (not
     # {:error, {:totality_required, :extdec}}), because an extern is skipped.

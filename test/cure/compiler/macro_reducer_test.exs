@@ -21,7 +21,7 @@ defmodule Cure.Compiler.MacroReducerTest do
                env
              )
 
-    flag_type = Eval.eval({:data, :Flag, [], []}, env)
+    flag_type = Eval.eval({:data, :"M#Flag", [], []}, Context.env(Context.empty(env)))
     ctx = Context.extend(Context.empty(env), flag_type)
     assert {:ok, _term, {:vint_type}} = Elaborator.elaborate_expr_typed(ast, ["flag"], ctx, env)
   end
@@ -30,7 +30,7 @@ defmodule Cure.Compiler.MacroReducerTest do
     assert {:ok, env} = Program.elaborate("mod M\n  type Flag = Off | On\n")
     body = {:literal, [subtype: :integer], 0}
 
-    assert {:error, {:incomplete_reducer, [:On]}} =
+    assert {:error, {:incomplete_reducer, [:"M#On"]}} =
              MacroReducer.build_match("Flag", {:variable, [], "flag"}, [%{constructor: :Off, body: body}], env)
 
     assert {:error, :duplicate_reducer_constructor} =
@@ -62,7 +62,7 @@ defmodule Cure.Compiler.MacroReducerTest do
     assert {:ok, flow_ast} = MacroReducer.build_flow("Flag", scrutinee, arms, env)
     assert {:pattern_match, [generated_by: :macro_flow], [^scrutinee | _]} = flow_ast
 
-    flag_type = Eval.eval({:data, :Flag, [], []}, env)
+    flag_type = Eval.eval({:data, :"M#Flag", [], []}, Context.env(Context.empty(env)))
     ctx = Context.extend(Context.empty(env), flag_type)
     assert {:ok, _term, {:vint_type}} = Elaborator.elaborate_expr_typed(flow_ast, ["flag"], ctx, env)
   end

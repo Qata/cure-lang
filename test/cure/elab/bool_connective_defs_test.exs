@@ -27,7 +27,8 @@ defmodule Cure.Elab.BoolConnectiveDefsTest do
     assert {:ok, env} = Program.elaborate(src)
 
     for name <- @connectives do
-      assert Map.has_key?(env.defs, name), "expected Std.Bool.#{name} to be a certified global"
+      assert Map.has_key?(env.defs, Cure.Elab.Name.qualify("Std.Bool", name)),
+             "expected Std.Bool.#{name} to be a certified global"
     end
   end
 

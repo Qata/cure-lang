@@ -37,11 +37,11 @@ defmodule Cure.Compiler.MacroFuzzTest do
 
   test "module-aware generation resolves closed user enum categories" do
     assert {:ok, env} = Program.elaborate("mod M\n  type Flag = Off | On\n")
-    assert {:ok, %{goal: {:data, :Flag, [], []}}, terms} = MacroFuzz.sample_holes("Flag", 10, 23, env)
-    goal_value = Eval.eval({:data, :Flag, [], []}, env)
+    assert {:ok, %{goal: {:data, :"M#Flag", [], []}}, terms} = MacroFuzz.sample_holes("Flag", 10, 23, env)
+    goal_value = Eval.eval({:data, :"M#Flag", [], []}, Context.env(Context.empty(env)))
 
     assert Enum.all?(terms, &(Kernel.check(Context.empty(env), &1, goal_value) == :ok))
-    assert Enum.all?(terms, &match?({:ctor, name, []} when name in [:Off, :On], &1))
+    assert Enum.all?(terms, &match?({:ctor, name, []} when name in [:"M#Off", :"M#On"], &1))
   end
 
   test "module-aware generation resolves nullary parameterized and indexed families" do
@@ -53,12 +53,17 @@ defmodule Cure.Compiler.MacroFuzzTest do
                  empty : Ix(a, D)
              """)
 
-    assert {:ok, %{goal: {:data, :Ix, [{:data, :Nat, [], []}], [{:ctor, :D, []}]}}, terms} =
+    assert {:ok, %{goal: {:data, :"M#Ix", [{:data, :"Std.Nat#Nat", [], []}], [{:ctor, :"M#D", []}]}}, terms} =
              MacroFuzz.sample_holes("Ix", 4, 29, env)
 
-    goal = {:data, :Ix, [{:data, :Nat, [], []}], [{:ctor, :D, []}]}
-    assert Enum.all?(terms, &(Kernel.check(Context.empty(env), &1, Eval.eval(goal, env)) == :ok))
-    assert Enum.all?(terms, &match?({:ctor, :empty, []}, &1))
+    goal = {:data, :"M#Ix", [{:data, :"Std.Nat#Nat", [], []}], [{:ctor, :"M#D", []}]}
+
+    assert Enum.all?(
+             terms,
+             &(Kernel.check(Context.empty(env), &1, Eval.eval(goal, Context.env(Context.empty(env)))) == :ok)
+           )
+
+    assert Enum.all?(terms, &match?({:ctor, :"M#empty", []}, &1))
   end
 
   test "category coverage reports module domains and open extensions" do

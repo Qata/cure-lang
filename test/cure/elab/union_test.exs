@@ -24,7 +24,7 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert Inductive.family?(env, :"Union<Bool|Int>")
+      assert Inductive.family?(env, :"Union<Int|Std.Bool#Bool>")
     end
 
     test "the family has one constructor per member, family-qualified" do
@@ -37,9 +37,15 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, env} = Program.elaborate(src)
 
       names =
-        env |> Inductive.ctors_of(:"Union<Bool|Int>") |> Enum.map(& &1.name) |> Enum.sort()
+        env
+        |> Inductive.ctors_of(:"Union<Int|Std.Bool#Bool>")
+        |> Enum.map(& &1.name)
+        |> Enum.sort()
 
-      assert names == [:"Union<Bool|Int>$Bool", :"Union<Bool|Int>$Int"]
+      assert names == [
+               :"Union<Int|Std.Bool#Bool>$Int",
+               :"Union<Int|Std.Bool#Bool>$Std.Bool#Bool"
+             ]
     end
 
     test "a type member's ctor takes one payload argument; a literal member's takes none" do
@@ -70,7 +76,7 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert union_families(env) == [:"Union<Bool|Int>"]
+      assert union_families(env) == [:"Union<Int|Std.Bool#Bool>"]
     end
 
     test "a one-member union collapses to the member itself — no family is generated" do
@@ -94,10 +100,13 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, env} = Program.elaborate(src)
 
-      assert Inductive.family?(env, :"Disjoint<Atom|Bool|Int>")
+      assert Inductive.family?(env, :"Disjoint<Atom|Int|Std.Bool#Bool>")
 
       ctors =
-        env |> Inductive.ctors_of(:"Disjoint<Atom|Bool|Int>") |> Enum.map(& &1.name) |> Enum.sort()
+        env
+        |> Inductive.ctors_of(:"Disjoint<Atom|Int|Std.Bool#Bool>")
+        |> Enum.map(& &1.name)
+        |> Enum.sort()
 
       assert length(ctors) == 3
     end
@@ -194,7 +203,7 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, env} = Program.elaborate(src)
       body = Env.get_def(env, :f).body |> unwrap_lams()
 
-      assert {:ctor, :"Union<Bool|Int>$Int", [{:var, 0}]} = body
+      assert {:ctor, :"Union<Int|Std.Bool#Bool>$Int", [{:var, 0}]} = body
     end
 
     test "a literal is injected into its literal member constructor" do
@@ -237,7 +246,10 @@ defmodule Cure.Elab.UnionTest do
       # One branch per ctor of the NARROW family, each remapped to its counterpart
       # in the wide one. This is a real function, not a cast.
       assert branches |> Enum.map(fn {c, ar, _} -> {c, ar} end) |> Enum.sort() ==
-               [{:"Union<Bool|Int>$Bool", 1}, {:"Union<Bool|Int>$Int", 1}]
+               [
+                 {:"Union<Int|Std.Bool#Bool>$Int", 1},
+                 {:"Union<Int|Std.Bool#Bool>$Std.Bool#Bool", 1}
+               ]
     end
 
     test "widening to a union that lacks a source member is rejected" do
@@ -268,7 +280,10 @@ defmodule Cure.Elab.UnionTest do
       assert {:case, _scrut, _motive, branches} = body
 
       assert branches |> Enum.map(fn {c, ar, _} -> {c, ar} end) |> Enum.sort() ==
-               [{:"Union<Bool|Int>$Bool", 1}, {:"Union<Bool|Int>$Int", 1}]
+               [
+                 {:"Union<Int|Std.Bool#Bool>$Int", 1},
+                 {:"Union<Int|Std.Bool#Bool>$Std.Bool#Bool", 1}
+               ]
     end
 
     test "a literal member is matched as a bare literal and binds nothing" do
@@ -376,7 +391,7 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
-      assert apply(:"Cure.UTM", :wrap, [7]) == {:"Union<Bool|Int>$Int", 7}
+      assert apply(:"Cure.UTM", :wrap, [7]) == {:"Union<Int|Std.Bool#Bool>$Int", 7}
     end
 
     test "a literal member erases to its family-qualified NULLARY ctor atom" do
@@ -702,10 +717,10 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
       # true/false take the more specific Bool clause...
-      assert apply(:"Cure.EXN2", :raw, [[true]]) == {:"Disjoint<Atom|Bool>$Bool", true}
-      assert apply(:"Cure.EXN2", :raw, [[false]]) == {:"Disjoint<Atom|Bool>$Bool", false}
+      assert apply(:"Cure.EXN2", :raw, [[true]]) == {:"Disjoint<Atom|Std.Bool#Bool>$Std.Bool#Bool", true}
+      assert apply(:"Cure.EXN2", :raw, [[false]]) == {:"Disjoint<Atom|Std.Bool#Bool>$Std.Bool#Bool", false}
       # ...and every other atom falls through to Atom.
-      assert apply(:"Cure.EXN2", :raw, [[:other]]) == {:"Disjoint<Atom|Bool>$Atom", :other}
+      assert apply(:"Cure.EXN2", :raw, [[:other]]) == {:"Disjoint<Atom|Std.Bool#Bool>$Atom", :other}
     end
 
     # NOT admissible — and for a reason that has nothing to do with the FFI. `:north`'s
@@ -743,8 +758,8 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
-      assert apply(:"Cure.EXN3", :raw, [-3]) == :"Disjoint<Int#3|Nat>$Int#3"
-      assert apply(:"Cure.EXN3", :raw, [-7]) == {:"Disjoint<Int#3|Nat>$Nat", 7}
+      assert apply(:"Cure.EXN3", :raw, [-3]) == :"Disjoint<Int#3|Std.Nat#Nat>$Int#3"
+      assert apply(:"Cure.EXN3", :raw, [-7]) == {:"Disjoint<Int#3|Std.Nat#Nat>$Std.Nat#Nat", 7}
     end
 
     test "STILL REJECTS two class members that share a guard: List(Int) | List(Bool)" do
@@ -773,9 +788,9 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
-      assert apply(:"Cure.EX3", :raw, [[true]]) == {:"Disjoint<Atom|Bool|Int>$Bool", true}
-      assert apply(:"Cure.EX3", :raw, [[:other]]) == {:"Disjoint<Atom|Bool|Int>$Atom", :other}
-      assert apply(:"Cure.EX3", :raw, [[7]]) == {:"Disjoint<Atom|Bool|Int>$Int", 7}
+      assert apply(:"Cure.EX3", :raw, [[true]]) == {:"Disjoint<Atom|Int|Std.Bool#Bool>$Std.Bool#Bool", true}
+      assert apply(:"Cure.EX3", :raw, [[:other]]) == {:"Disjoint<Atom|Int|Std.Bool#Bool>$Atom", :other}
+      assert apply(:"Cure.EX3", :raw, [[7]]) == {:"Disjoint<Atom|Int|Std.Bool#Bool>$Int", 7}
     end
 
     test "a union in an @extern's ARGUMENT position is unaffected" do
@@ -908,7 +923,7 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
       # non-negative: tagged Nat
-      assert apply(:"Cure.NG", :raw, [[7]]) == {:"Union<Binary|Nat>$Nat", 7}
+      assert apply(:"Cure.NG", :raw, [[7]]) == {:"Union<Binary|Std.Nat#Nat>$Std.Nat#Nat", 7}
 
       # negative: NOT a Nat, and not a Binary either — the extern lied, so the honest
       # outcome is a CaseClauseError, not a fabricated Nat(-7).

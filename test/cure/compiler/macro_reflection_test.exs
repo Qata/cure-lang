@@ -12,9 +12,9 @@ defmodule Cure.Compiler.MacroReflectionTest do
     """
 
     assert {:ok, env} = Program.elaborate(source)
-    assert {:ok, %{kind: :definition, name: :id, type: _}} = MacroReflection.resolve(env, "id")
+    assert {:ok, %{kind: :definition, name: :"M#id", type: _}} = MacroReflection.resolve(env, "id")
     assert {:ok, constructors} = MacroReflection.constructors(env, "Flag")
-    assert Enum.map(constructors, & &1.name) == [:Off, :On]
+    assert Enum.map(constructors, & &1.name) |> Enum.sort() == [:"M#Off", :"M#On"]
     assert {:error, :not_found} = MacroReflection.resolve(env, "missing")
   end
 

@@ -56,7 +56,7 @@ defmodule Cure.Elab.Slice1ConformanceTest do
   end
 
   test "negative #3: a non-total function used in a type" do
-    assert {:error, {:totality_required, :andd}} =
+    assert {:error, {:totality_required, :"Main#andd"}} =
              negative("fn andd(x: Dec, y: Dec) -> Dec = x", "fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)")
   end
 
@@ -72,6 +72,6 @@ defmodule Cure.Elab.Slice1ConformanceTest do
 
   test "negative #5: the program has an unfilled hole and is refused for codegen" do
     {:ok, env} = Program.elaborate(File.read!(@fixture))
-    assert {:error, {:unfilled_hole, :sketch}} = Program.check_codegen_ready(env)
+    assert {:error, {:unfilled_hole, :"Main#sketch"}} = Program.check_codegen_ready(env)
   end
 end
