@@ -1416,24 +1416,40 @@ defmodule Cure.Elab.Elaborator do
         # original error if it too fails, so inference-position behaviour (no
         # expected type) is byte-for-byte unchanged.
         #
-        # EXCEPTION — an anonymous-union goal must thread the expected type in FROM THE
-        # START rather than inferring first. Inferring `Std.Map.put(:a, 1, …)` succeeds;
-        # it just succeeds WRONGLY, solving the map's implicit `v := Int` from the value
-        # argument. The retry below only fires on `:unsolved_metavariables`, and a
-        # wrong-but-solved implicit is not that — it surfaces as a `:conversion_failure`
-        # against the goal, with no container covariance to rescue it. Threading the goal
-        # first solves `v` from the GOAL, so each value is checked against the union and
-        # injected. Falls back to the ordinary path if it does not pan out.
-        union_first =
-          if union_goal?(expected_core) and not Unify.has_meta?(expected_core) do
-            case elaborate_global_app_expected(
-                   env,
-                   resolve_def_key(env, name, atom),
-                   args,
-                   names,
-                   ctx,
-                   expected_core
-                 ) do
+        # ONE goal-first pre-pass. This was three (`implicit_first`, `lambda_first`,
+        # `union_first`) with byte-identical bodies and different guards, tried in
+        # sequence — so a call satisfying two guards ran the same elaboration twice and
+        # discarded the first result. Three guesses in a row is not a solving strategy;
+        # they are a single rule, and the guard is their disjunction: when the goal can
+        # inform solving, thread it in FROM THE START instead of inferring and re-checking.
+        #
+        # Each disjunct earns its place:
+        #   * a concrete goal + an implicit def — an implicit determined by NEITHER
+        #     argument, only by the return type (`mk : {a} -> {b} -> a -> Const(a, b)`
+        #     at `-> Const(Nat, Bool)` solves `b` from the goal);
+        #   * a lambda argument, whose domain the goal may fix.
+        #
+        # The former anonymous-union disjunct is GONE, not merged: an implicit def at a
+        # concrete goal already covers it (a union goal that reaches here is a container
+        # implicit — `Std.Map.put`'s `v` — so the first disjunct fires). It mattered only
+        # because inferring a union-goal call SUCCEEDS but wrongly (solving `v := Int`
+        # from the value argument), and a wrong-but-solved implicit is not
+        # `:unsolved_metavariables`, so the retry below never fired. Threading the goal
+        # first is what fixes that — and that is now the rule, not an exception to it.
+        # Union INJECTION is untouched: it is a check-position coercion, not an ordering.
+        #
+        # Additive: falls back to the ordinary infer-then-check path on any failure, so
+        # inference-position behaviour (no expected type) is unchanged.
+        resolved = resolve_def_key(env, name, atom)
+        concrete_goal? = not Unify.has_meta?(expected_core)
+
+        goal_first? =
+          (concrete_goal? and implicit_def?(env, resolved)) or
+            (Enum.any?(args, &match?({:lambda, _m, _b}, &1)) and Map.has_key?(env.defs, resolved))
+
+        goal_first =
+          if goal_first? do
+            case elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core) do
               {:ok, term, _type} ->
                 case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
                   :ok -> {:ok, term}
@@ -1445,76 +1461,16 @@ defmodule Cure.Elab.Elaborator do
             end
           end
 
-        lambda_first =
-          if Enum.any?(args, &match?({:lambda, _m, _b}, &1)) do
-            resolved = resolve_def_key(env, name, atom)
-
-            if Map.has_key?(env.defs, resolved) do
-              case elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core) do
-                {:ok, term, _type} ->
-                  case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-                    :ok -> {:ok, term}
-                    {:error, _} -> nil
-                  end
-
-                {:error, _} ->
-                  nil
-              end
-            end
-          end
-
-        implicit_first =
-          if not Unify.has_meta?(expected_core) do
-            resolved = resolve_def_key(env, name, atom)
-
-            if implicit_def?(env, resolved) do
-              result = elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core)
-
-              case result do
-                {:ok, term, _type} ->
-                  case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-                    :ok -> {:ok, term}
-                    {:error, _} -> nil
-                  end
-
-                {:error, _} ->
-                  nil
-              end
-            end
-          end
-
-        case implicit_first || lambda_first || union_first ||
-               elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
-          {:ok, _} = ok ->
-            ok
-
-          {:error, {:unsolved_metavariables, _}} = orig ->
-            # Resolve a qualified (`Std.Map.keys`) or bare-shadowed name to its
-            # registry key BEFORE the implicit-def retry, mirroring the inference
-            # dispatch (`resolved` at the top of `elaborate_named_call_scoped`).
-            # Without this, a dotted call's `atom` (`:"Std.Map.keys"`) is not a def
-            # key, so `implicit_def?` is false and the expected return type is never
-            # threaded in — leaving a return-only implicit (e.g. `keys : {k} -> ... ->
-            # List(k)`) unsolved even though the goal `List(t)` determines it.
-            resolved = resolve_def_key(env, name, atom)
-
-            if implicit_def?(env, resolved) and not Unify.has_meta?(expected_core) do
-              case elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core) do
-                {:ok, term, _type} ->
-                  with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-                    {:ok, term}
-                  end
-
-                {:error, _} ->
-                  orig
-              end
-            else
-              orig
-            end
-
-          {:error, _} = orig ->
-            orig
-        end
+        # No post-hoc retry. There used to be one here, firing on
+        # `:unsolved_metavariables` under the guard `implicit_def?(resolved) and not
+        # has_meta?(expected_core)` — which is EXACTLY the first disjunct of
+        # `goal_first?` above. Whenever it fired, the identical
+        # `elaborate_global_app_expected` had therefore already run and failed, so it
+        # could only fail again. It was dead the moment the goal-first pre-pass was
+        # introduced, and stayed in the file because each new attempt was bolted on in
+        # front of the previous one instead of replacing it. Solving happens once, up
+        # front, where the goal is known.
+        goal_first || elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
     end
   end
 
