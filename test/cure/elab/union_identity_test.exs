@@ -30,7 +30,7 @@ defmodule Cure.Elab.UnionIdentityTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert union_families(env) == [:"Union<Bool|Int>"]
+      assert union_families(env) == [:"Union<Int|Std.Bool#Bool>"]
     end
 
     test "a union value built in A typechecks and eliminates in B" do

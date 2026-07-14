@@ -185,7 +185,7 @@ defmodule Cure.Compiler.MacroSyntaxTest do
             [{:ctor, :"Std.Syntax#Leaf", _}, {:ctor, :"Std.Syntax#Raw", [{:ctor, :"Std.Syntax#SOpaque", []}]}]} =
              MacroSyntax.to_core_record("MkSyntax", ["x"], input)
 
-    assert {:ctor, :EmptySyntax, [{:ctor, :Raw, [{:ctor, :SOpaque, []}]}]} =
+    assert {:ctor, :EmptySyntax, [{:ctor, :"Std.Syntax#Raw", [{:ctor, :"Std.Syntax#SOpaque", []}]}]} =
              MacroSyntax.to_core_record("EmptySyntax", [], {:syn_node, :macro_input, [], []})
   end
 

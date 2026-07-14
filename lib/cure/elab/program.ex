@@ -9,7 +9,7 @@ defmodule Cure.Elab.Program do
 
   alias Cure.Compiler.{Lexer, MacroSyntax, MacroValidate, Parser}
   alias Cure.Core.{Env, Inductive, Validator}
-  alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, Resolution, TotalityClosure}
+  alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, TotalityClosure}
   alias Cure.Stdlib.Paths
 
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
@@ -1277,38 +1277,13 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  # Family names DECLARED in a module's own source (transitive imports excluded).
-  defp owned_family_names(path) do
-    with {:ok, source} <- File.read(path),
-         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
-      declared_type_names(ast)
-    else
-      _ -> MapSet.new()
-    end
-  end
-
   # Function names DECLARED in a module's own source (transitive imports
-  # excluded). Mirror of `owned_family_names/1`, reusing the public
-  # `local_def_names/1` scanner in place of `declared_type_names/1`.
+  # excluded), used to build the legacy codegen import-origin compatibility map.
   defp owned_def_names(path) do
     with {:ok, source} <- File.read(path),
          {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
       MapSet.new(local_def_names(ast))
-    else
-      _ -> MapSet.new()
-    end
-  end
-
-  # Constructor names DECLARED in a module's own source (transitive imports excluded). Mirror of
-  # `owned_family_names/1`. Constructor names are their OWN namespace: a bare `Ok` may collide
-  # with an imported `Ok` while the families (`Res` vs `Result`) never do.
-  defp owned_ctor_names(path) do
-    with {:ok, source} <- File.read(path),
-         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
-      declared_ctor_names(ast)
     else
       _ -> MapSet.new()
     end
@@ -1333,111 +1308,19 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  # Delete residual bare keys for a colliding family name left by transitive copies.
-  defp drop_bare_family(%Env{} = env, name) do
-    ctors = for {c, f} <- env.ctor_to_family, f == name, into: [], do: c
-
-    %Env{
-      env
-      | families: Map.delete(env.families, name),
-        ctors: Map.drop(env.ctors, ctors),
-        ctor_to_family: Map.drop(env.ctor_to_family, [name | ctors]),
-        builtins:
-          env.builtins
-          |> Enum.reject(fn {_key, fid} -> fid == name end)
-          |> Map.new()
-    }
-  end
-
-  # The full shadow-aware imported-env builder.
+  # Canonical imported-env builder. Module-owned families, constructors, and
+  # definitions already carry their owner-qualified identities when their
+  # slices are elaborated, so merging is now a pure identity-preserving map
+  # operation. Ambiguity is diagnosed later by Resolution against canonical
+  # suffixes and the direct-import set.
   defp shadow_resolved_imports(ast) do
-    # Dedup by module identity: a module that is BOTH auto-preluded and named in an
-    # explicit `use` (e.g. `char.cure` says `use Std.Bounded`, which is also in the
-    # auto-prelude) must be a SINGLE provider. Otherwise the shadow resolver sees the
-    # same family supplied "twice" and re-keys it to `Mod#Type` as if two distinct
-    # modules collided — dragging a builtin-owning prelude's key (`:bounded`) onto
-    # `Std.Bounded#Bounded`, which then clashes with the prelude source's own
-    # canonical `@builtin` self-registration. Auto-prelude entries come first so an
-    # explicit duplicate is the one dropped.
     sources = Enum.uniq(auto_prelude_imports(ast) ++ imports(ast))
     modules = distinct_import_modules(sources)
 
-    # Ownership scans the FULL transitive closure (not `modules`, which is
-    # direct-only) — see the Design note + `transitive_import_modules/1` doc.
-    # Family AND def ownership in ONE transitive walk (avoid re-walking): both are
-    # `%{name => MapSet.t(owner_mod)}` maps fed to the shape-generic `classify/2`.
-    #
-    # The module being elaborated is dropped from the owner walk: the auto-prelude
-    # chain can transitively re-enter THIS module (e.g. Std.Bounded is reached via
-    # Std.Binary → Std.Char → Std.Bounded), and that self-import is not a foreign
-    # provider — it is the same module as the local declaration. Counting it would
-    # make `classify` see a family both locally declared AND "imported" (n_sources
-    # ≥ 2) and re-key the module's own family against itself, so `@builtin(:bounded)`
-    # would clash with the leaked `:"Std.Bounded#Bounded"`. Self contributes only
-    # through `local` below.
-    #
-    # Family, def AND constructor ownership in ONE transitive walk. Constructor names are their
-    # own namespace: a bare `Ok` collides with an imported `Ok` even when the families never do.
-    self_mod = find_module_name(ast)
-
-    {family_owners, def_owners, ctor_owners} =
-      sources
-      |> transitive_import_modules()
-      |> Enum.reject(fn {mod_id, _path} -> mod_id == self_mod end)
-      |> Enum.reduce({%{}, %{}, %{}}, fn {mod_id, path}, {fam_acc, def_acc, ctor_acc} ->
-        add = fn names, acc ->
-          Enum.reduce(names, acc, fn name, a ->
-            Map.update(a, name, MapSet.new([mod_id]), &MapSet.put(&1, mod_id))
-          end)
-        end
-
-        {add.(owned_family_names(path), fam_acc), add.(owned_def_names(path), def_acc),
-         add.(owned_ctor_names(path), ctor_acc)}
-      end)
-
-    local = declared_type_names(ast)
-    local_ctors = declared_ctor_names(ast)
-    local_defs = MapSet.new(local_def_names(ast))
-    %{losers: losers, ambiguous: ambiguous} = Resolution.classify(family_owners, local)
-    # Def ambiguity (no local winner) is enforced at resolution time (Task 3 via
-    # `ambiguous_modules/2`); here we only need the losers to re-key their keys.
-    %{losers: def_losers} = Resolution.classify(def_owners, local_defs)
-    %{losers: ctor_losers} = Resolution.classify(ctor_owners, local_ctors)
-
-    collisions =
-      losers |> Map.values() |> Enum.reduce(MapSet.new(), &MapSet.union/2)
-
     with {:ok, merged} <-
-           Enum.reduce_while(modules, {:ok, Env.empty()}, fn {mod_id, path}, {:ok, acc} ->
+           Enum.reduce_while(modules, {:ok, Env.empty()}, fn {_module_id, path}, {:ok, acc} ->
              case module_slice_env(path) do
                {:ok, slice} ->
-                 reachable =
-                   [mod_id]
-                   |> transitive_import_modules()
-                   |> Enum.map(fn {owner, _path} -> owner end)
-                   |> MapSet.new()
-
-                 owner_mods =
-                   [losers, def_losers, ctor_losers]
-                   |> Enum.map(&MapSet.new(Map.keys(&1)))
-                   |> Enum.reduce(&MapSet.union/2)
-
-                 slice =
-                   Enum.reduce(owner_mods, slice, fn owner_mod, s ->
-                     if MapSet.member?(reachable, owner_mod) do
-                       Resolution.rekey_module_env(
-                         s,
-                         owner_mod,
-                         Map.get(losers, owner_mod, MapSet.new()),
-                         local_ctors,
-                         Map.get(def_losers, owner_mod, MapSet.new()),
-                         Map.get(ctor_losers, owner_mod, MapSet.new())
-                       )
-                     else
-                       s
-                     end
-                   end)
-
                  case merge_env(acc, slice) do
                    {:ok, merged} -> {:cont, {:ok, merged}}
                    {:error, _} = err -> {:halt, err}
@@ -1447,23 +1330,8 @@ defmodule Cure.Elab.Program do
                  {:halt, err}
              end
            end) do
-      # Drop residual bare copies of every collision name (transitive leftovers)
-      # plus local family names supplied only by imported slices as seeded helper
-      # builtins. Real imported owners have already been re-keyed above, preserving
-      # their non-shadowed constructors under their own family id.
-      cleaned =
-        collisions
-        |> MapSet.union(local)
-        |> Enum.reduce(merged, fn name, e -> drop_bare_family(e, name) end)
-
-      # Record the DIRECT import set so bare-name resolution can prefer a direct
-      # owner over a name reachable only through a module's transitive re-export
-      # (`use Std.List` + `use Std.Core`: `map` resolves to Std.List's own `map`,
-      # not the Std.Option `map` that Core merely re-exports). `modules` is the
-      # direct list (explicit `use` + auto-prelude); transitive-only modules are
-      # deliberately excluded.
-      direct_ids = MapSet.new(modules, fn {mod_id, _path} -> mod_id end)
-      {:ok, %{cleaned | import_modules: direct_ids}, ambiguous}
+      direct_ids = MapSet.new(modules, fn {module_id, _path} -> module_id end)
+      {:ok, %{merged | import_modules: direct_ids}, MapSet.new()}
     end
   end
 
