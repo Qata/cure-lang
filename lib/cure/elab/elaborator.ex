@@ -5132,16 +5132,29 @@ defmodule Cure.Elab.Elaborator do
   # its arms with `:unsupported_expression`, or an inner `[]` fails infer-only with
   # `{:unsolved_metavariables, :Nil}`. Matches ANY arity ≥ 2: the 2-tuple is a bare
   # dependent pair, arity ≥ 3 is the flat telescope (#35) — both check identically.
+  #
+  # Under an `Effect(R)` goal the type to check against is `R`, not `Effect(R)` —
+  # there is no effect head to check a Σ against — and the pure value is then
+  # lifted with `pure`. `elaborate_effect_branch` does exactly that.
   defp elaborate_branch_body({:tuple, _meta, elems} = expr, expected, names, ctx, env)
-       when length(elems) >= 2,
-       do: elaborate_expr_checked(expr, expected, names, ctx, env)
+       when length(elems) >= 2 do
+    if effect_goal?(expected, ctx),
+      do: elaborate_effect_branch(expr, expected, names, ctx, env),
+      else: elaborate_expr_checked(expr, expected, names, ctx, env)
+  end
 
   # A `[] -> []` (or `[a,b] -> [...]`) arm body: check it against the branch goal
   # so a bare `[]` arm pins its element type from the goal instead of failing
   # infer-only with `{:unsolved_metavariables, :Nil}` (Finding A). `expected` here
   # is the refined branch goal; `elaborate_expr_checked` self-desugars the `:list`.
-  defp elaborate_branch_body({:list, _, _} = expr, expected, names, ctx, env),
-    do: elaborate_expr_checked(expr, expected, names, ctx, env)
+  # Under an `Effect(R)` goal the element type lives in `R`, so the same detour
+  # through the pure-lift applies (a bare `[]` arm would otherwise fail with
+  # `{:unsolved_metavariables, :Nil}`).
+  defp elaborate_branch_body({:list, _, _} = expr, expected, names, ctx, env) do
+    if effect_goal?(expected, ctx),
+      do: elaborate_effect_branch(expr, expected, names, ctx, env),
+      else: elaborate_expr_checked(expr, expected, names, ctx, env)
+  end
 
   # The general branch body: inferred. `maybe_inject_union/5` is a strict no-op unless
   # this branch's goal is a generated anonymous-union family — in which case the
@@ -5157,6 +5170,14 @@ defmodule Cure.Elab.Elaborator do
         {:ok, maybe_inject_union(term, type, expected, ctx, env)}
       end
     end
+  end
+
+  # `R` of an `Effect(R)` goal, as a Core type. Only call under `effect_goal?/2`.
+  defp effect_result_type(expected, ctx) do
+    sig = Context.signature(ctx)
+    {:veffect_type, result_value} = Normalise.whnf_value(Eval.eval(expected, Context.env(ctx)), sig)
+
+    Quote.reify(result_value, Context.length(ctx), sig)
   end
 
   @doc false
@@ -5194,10 +5215,7 @@ defmodule Cure.Elab.Elaborator do
                   {:error, checked_error}
 
                 {:ok, _term, type} ->
-                  expected_value = Eval.eval(expected, Context.env(ctx))
-                  {:veffect_type, result_value} = Normalise.whnf_value(expected_value, Context.signature(ctx))
-
-                  result_type = Quote.reify(result_value, Context.length(ctx), Context.signature(ctx))
+                  result_type = effect_result_type(expected, ctx)
 
                   with {:ok, pure_term} <- elaborate_expr_checked(expr, result_type, names, ctx, env) do
                     {:ok, {:effect_pure, maybe_inject_union(pure_term, type, result_type, ctx, env)}}
@@ -5205,8 +5223,19 @@ defmodule Cure.Elab.Elaborator do
                     {:error, _} -> {:error, checked_error}
                   end
 
+                # Inference failed — but an INTRODUCTION FORM has no inference rule
+                # at all (a bare data constructor is `:ctor_requires_checking_mode`;
+                # a bare `[]` is `{:unsolved_metavariables, :Nil}`), so a pure branch
+                # body like `%[:noreply, state]` is never inferable and would never
+                # reach the lift above. Check it at the result type and lift, exactly
+                # as the trailing expression of an effectful `let`-block does.
                 {:error, _} ->
-                  {:error, checked_error}
+                  result_type = effect_result_type(expected, ctx)
+
+                  case elaborate_expr_checked(expr, result_type, names, ctx, env) do
+                    {:ok, pure_term} -> {:ok, effect_pure_for_bind(pure_term, result_type, ctx)}
+                    {:error, _} -> {:error, checked_error}
+                  end
               end
           end
       end

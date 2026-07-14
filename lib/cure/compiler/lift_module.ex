@@ -19,12 +19,81 @@ defmodule Cure.Compiler.LiftModule do
 
   @spec collect(term()) :: {:ok, [map()]} | {:error, term()}
   def collect(ast) do
+    inherited = unit_declarations(strip(ast))
+
     with {:ok, requests} <- collect_node(ast, []),
          :ok <- reject_duplicate_modules(requests),
+         requests = Enum.map(requests, &inherit_scope(&1, inherited)),
          {:ok, requests} <- order_requests(requests) do
       {:ok, requests}
     end
   end
+
+  # A lifted module is generated INSIDE a compilation unit, so it sees that
+  # unit's scope: its imports, its types, and its functions. Without this an
+  # `actor` is sealed off from its own file — it can only speak in structural
+  # types (`Atom`, `Tuple(Atom, Int)`) and can never name a type the program
+  # declares, which is precisely what a derived message type would be.
+  #
+  # The lifted module's own definitions win: a template binds names of its own
+  # (`State`, `Message`, `start_link`) that its callbacks are written against,
+  # and an enclosing definition of the same name must not displace them.
+  defp inherit_scope(request, inherited) do
+    taken = taken_names(request)
+
+    inherited =
+      Enum.reject(inherited, fn node ->
+        name = declared_name(node)
+        name != nil and name in taken
+      end)
+
+    # Inherited declarations come FIRST: they lexically precede the lifted module
+    # in the source, and the template's own declarations refer to them (a
+    # `typealias Message = Tick` needs `Tick` already bound — unlike an inductive,
+    # a type alias has no forward-reference pre-pass).
+    declarations = inherited ++ request.declarations
+    imports = Enum.uniq(request.imports ++ imports_from_declarations(inherited))
+
+    %{request | declarations: declarations, imports: imports, dependencies: imports}
+  end
+
+  defp taken_names(request) do
+    callback_names = Enum.map(request.callbacks, &to_string(Map.get(&1, :name)))
+    declared = request.declarations |> Enum.map(&declared_name/1) |> Enum.reject(&is_nil/1)
+
+    MapSet.new(callback_names ++ declared)
+  end
+
+  # The declarations of the enclosing unit, unwrapping its module container the
+  # way the elaborator's own declaration stream does.
+  defp unit_declarations({:block, _meta, items}) when is_list(items),
+    do: Enum.flat_map(items, &unit_declarations/1)
+
+  defp unit_declarations({:container, meta, body} = node) when is_list(meta) do
+    if Keyword.get(meta, :container_type) == :module,
+      do: body |> List.wrap() |> Enum.flat_map(&unit_declarations/1),
+      else: [node]
+  end
+
+  defp unit_declarations({tag, meta, _} = node)
+       when tag in [:import, :indexed_type, :function_def] and is_list(meta),
+       do: [node]
+
+  defp unit_declarations({:type_annotation, meta, _} = node) when is_list(meta) do
+    if Keyword.has_key?(meta, :name) and not Keyword.get(meta, :refinement, false),
+      do: [node],
+      else: []
+  end
+
+  defp unit_declarations(_other), do: []
+
+  defp declared_name({:import, _meta, _children}), do: nil
+
+  defp declared_name({tag, meta, _children})
+       when tag in [:container, :indexed_type, :function_def, :type_annotation] and is_list(meta),
+       do: Keyword.get(meta, :name)
+
+  defp declared_name(_other), do: nil
 
   @doc "Validate and normalize a generic quoted module value."
   @spec request_ast(tuple()) :: {:ok, map()} | {:error, term()}
