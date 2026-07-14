@@ -1063,6 +1063,12 @@ Gate: the algebra compiles as ordinary Cure, the raw boundary is the only
 asserted foreign surface, negative typing tests fail for the intended reasons,
 and no `lib/cure/core/*` change is needed.
 
+#### Tier-3 hygiene audit (2026-07-14)
+
+The dedicated audit of `Cure.Elab.MacroExpand` found no recursive-expansion or cycle-stack omission, but it identified a scope-model boundary that must be closed before declaration-producing macros are complete. `MacroSyntax.from_syntax/1` reconstructs generated identifiers as ordinary surface names and discards their generated origin. Existing `<fresh Name>` protects Tier-2 parser templates only; computed `Std.Syntax.variable/1` output has no scope mark or gensym contract. Generated binders, callback helpers, nominal declarations, and lifted-module names can therefore collide with use-site bindings. This is a hygiene gap in the macro bridge, not a kernel or evaluator defect.
+
+The Tier-3 hygiene phase must add origin-aware syntax metadata, freshen generated binders and declaration names before use-site syntax is spliced, preserve the intended scope of reflected user syntax, and add capture, nested-expansion, duplicate-name, and deterministic-repeat tests. String post-processing or runtime renaming is not an acceptable substitute for scope information.
+
 Suggested commit:
 `feat(std): establish the checked BEAM process algebra over raw OTP externs`
 
