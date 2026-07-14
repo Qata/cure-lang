@@ -304,8 +304,10 @@ defmodule Cure.Core.Eval do
   # the Task-10 antibody enforces agreement with Builtins.@schemas / seed/1).
   def fold(:eq, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a == b)}
   def fold(:eq, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a == b)}
+  def fold(:eq, [{:vatom, a}, {:vatom, b}]), do: {:ok, vbool(a == b)}
   def fold(:ne, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a != b)}
   def fold(:ne, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a != b)}
+  def fold(:ne, [{:vatom, a}, {:vatom, b}]), do: {:ok, vbool(a != b)}
   def fold(:lt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a < b)}
   def fold(:lt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a < b)}
   def fold(:le, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a <= b)}

@@ -91,6 +91,39 @@ defmodule Cure.Core.BuiltinOpTest do
       assert {:ctor, :True, []} = t2
     end
 
+    test "struct_eq and struct_ne fold on Atom literals" do
+      assert {:ctor, :True, []} =
+               Normalise.nf(
+                 ctx(),
+                 app3(:struct_eq, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :node}),
+                 delta: :certified
+               )
+
+      assert {:ctor, :False, []} =
+               Normalise.nf(
+                 ctx(),
+                 app3(:struct_eq, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :leaf}),
+                 delta: :certified
+               )
+
+      assert {:ctor, :True, []} =
+               Normalise.nf(
+                 ctx(),
+                 app3(:struct_ne, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :leaf}),
+                 delta: :certified
+               )
+    end
+
+    test "Atom equality remains neutral for open and cross-kind values" do
+      ctx = Context.extend(ctx(), {:vatom_type})
+      open = app3(:struct_eq, {:atom_type}, {:var, 0}, {:atom_lit, :node})
+
+      assert ^open = Normalise.nf(ctx, open, delta: :certified)
+
+      mixed = app3(:struct_eq, {:atom_type}, {:atom_lit, :node}, {:int_lit, 1})
+      assert ^mixed = Normalise.nf(ctx(), mixed, delta: :certified)
+    end
+
     test "struct_eq stays NEUTRAL on constructor args (ADT equality never computes in-kernel)" do
       spine = app3(:struct_eq, {:data, :Nat, [], []}, {:ctor, :Z, []}, {:ctor, :Z, []})
       assert spine == Normalise.nf(ctx(), spine, delta: :certified)
