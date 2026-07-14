@@ -266,5 +266,4 @@ defmodule CureForge do
   end
 
   defp send_sync(nil, _msg), do: :no_target
-
 end

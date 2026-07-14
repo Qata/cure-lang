@@ -189,7 +189,12 @@ defmodule CureMoneta do
   end
 
   defp from_cure_money({:Money, amount, currency, fractional_units}) do
-    %{__struct__: :money, amount: amount, currency: currency |> Atom.to_string() |> String.downcase() |> String.to_atom() |> then(&{&1}), fractional_units: fractional_units}
+    %{
+      __struct__: :money,
+      amount: amount,
+      currency: currency |> Atom.to_string() |> String.downcase() |> String.to_atom() |> then(&{&1}),
+      fractional_units: fractional_units
+    }
   end
 
   defp map_money_result({:ok, money}), do: {:ok, from_cure_money(money)}

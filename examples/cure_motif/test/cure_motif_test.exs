@@ -319,7 +319,6 @@ defmodule CureMotifTest do
                {:release, :silent}
              ]
     end
-
   end
 
   # ==========================================================================
