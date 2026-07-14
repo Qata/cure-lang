@@ -206,8 +206,29 @@ mod Std.Otp
     let unlinked = raw_unlink(pid)
     ()
 
-  fn exit({m: Type}, {r: Type}, {k: Type}, {x: Type}, pid: RawPid(m, r, k), reason: x) -> Effect(Unit) =
-    let signalled = raw_exit(pid, reason)
+  ## Why a process is being asked to exit. The BEAM's three exit rules turn on exactly this
+  ## distinction, crossed with the target's trap_exit flag and the signal's link flag:
+  ##
+  ##   * `Normal`          — dropped by a non-trapping target (unless it is the caller
+  ##                         itself, which does terminate).
+  ##   * `Kill`            — untrappable when sent explicitly with `exit/2`: the target dies
+  ##                         and propagates the reason `killed`. (Sent THROUGH A LINK it is
+  ##                         trappable — but this op only ever sends explicitly.)
+  ##   * `Because(reason)` — terminates a non-trapping target; a trapping target receives
+  ##                         `{'EXIT', From, reason}` at the END of its mailbox.
+  type ExitReason = Normal | Kill | Because(Atom)
+
+  local fn exit_atom(reason: ExitReason) -> Atom =
+    match reason
+      Normal() -> :normal
+      Kill() -> :kill
+      Because(why) -> why
+
+  ## Send an exit signal. Makes NO type-level claim that the target dies — correctly: which
+  ## of the three outcomes occurs depends on the target's trap_exit flag, which the sender
+  ## cannot see. A polymorphic reason could not even state the distinction.
+  fn exit({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k), reason: ExitReason) -> Effect(Unit) =
+    let signalled = raw_exit(pid, exit_atom(reason))
     ()
 
   fn is_alive({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Bool) =

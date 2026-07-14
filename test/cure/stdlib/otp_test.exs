@@ -309,4 +309,21 @@ defmodule Cure.Stdlib.OtpTest do
       assert {:ok, _} = app("  fn go(r: MonitorRef) -> Effect(Unit) =\n    demonitor(r)\n")
     end
   end
+
+  # F-3. The BEAM's three exit rules case on `normal | kill | other` crossed with the
+  # target's trap_exit flag. A fully polymorphic reason erases that distinction, so no
+  # typed statement about which of the three outcomes an `exit` can have is even sayable.
+  describe "the exit reason is a precise sum (F-3)" do
+    test "the three reasons the semantics distinguishes are accepted" do
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    exit(p, Normal())\n")
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    exit(p, Kill())\n")
+
+      assert {:ok, _} =
+               app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    exit(p, Because(:shutdown))\n")
+    end
+
+    test "an arbitrary term is no longer a valid exit reason" do
+      assert {:error, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    exit(p, 5)\n")
+    end
+  end
 end
