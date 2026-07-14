@@ -382,3 +382,106 @@ F-1 (code derivation grounding the pid index), the honest `start_link` return, `
 over a `cure_std_otp` shim, and retargeting `send_after` at `start_timer/3`. All four
 need either Rung 2 or a runtime shim with its own AtomVM verification. They are recorded
 in §6 of the audit and remain there.
+
+---
+
+## 7. Planning amendments (2026-07-14)
+
+Four of this spec's constructions were probed against the actual compiler while writing
+the implementation plan. Three do not elaborate as written. The defects they close are
+unchanged; the mechanisms are corrected here, and the plan implements *these*.
+
+### 7.1 `PidKind` is a pair of phantom TAGS, not a kind
+
+§3.3 declares `opaque type RawPid(m, r, k: PidKind)`. **Kinded type parameters do not
+exist** — not on opaque types and not on ordinary ones. `type Box(a, b, k: Kind)` is
+rejected with `{:conversion_failure, {:data, :Kind, [], []}, {:type, 0}}`: a type
+parameter is always at kind `Type`. (Only *indices* may be kinded by a data type.)
+
+Adding kinded parameters is a real language feature and is not in this batch's budget.
+The same distinction is carried by **phantom tags at kind `Type`** — the standard
+Haskell/Idris encoding that predates DataKinds:
+
+```cure
+opaque type Plain
+opaque type Server
+opaque type RawPid(m, r, k)          # k : Type, the default
+```
+
+`typealias Pid(m) = RawPid(m, m, Plain)` and `typealias GenServer(q, r) = RawPid(q, r, Server)`
+are then distinct types, which is the entire content of F-2a. Kind-polymorphic ops
+quantify `{k: Type}`.
+
+What is lost: `k` may be instantiated with any type, so `RawPid(Cmd, Cmd, Int)` is
+well-formed nonsense. It is **unreachable** nonsense — no operation produces one and no
+typealias names one — and admitting it costs no soundness. Verified to elaborate:
+ground union member, kind-polymorphic op, and `Server`-only op all check.
+
+### 7.2 `whereis` returns an UNSENDABLE pid, not `Option(Pid(m))`
+
+§3.2 declares `raw_whereis({m}, name: Atom) -> Effect(RawPid(m, m, Plain) | :undefined)`.
+**A union member must be ground.** A member mentioning the type variable `m` is rejected
+with `{:union_member_not_ground, …}`, and the restriction is principled: a union family is
+generated per member *key*, so `RawPid(m, …)` would key by the variable's spelling and two
+callers' unrelated `m`s would collide in one family. Loosening it means parameterised union
+families — a feature, not a fix.
+
+So the union cannot mention the message type, and the message type cannot be re-attached
+afterwards either: `believe_me` was **deleted** with `Std.Access` (see `lib/std/optic.cure:6`),
+and no BEAM identity BIF exists to smuggle a cast through an `@extern`.
+
+This is not an obstacle to route around — it is the spec having tried to fix half a lie.
+Today's `whereis` asserts **two** things: that the lookup succeeds (F-2c) *and* that the
+result carries messages of type `m` (F-1). Nothing associates a registered name with a
+message type; that association is precisely what F-1's code derivation would build, and
+F-1 is deferred (§6). Fixing F-2c while preserving the `m` claim is therefore impossible
+by construction.
+
+The honest type drops both lies:
+
+```cure
+type NoMessage = |                                    # uninhabited
+typealias BarePid = RawPid(NoMessage, NoMessage, Plain)
+
+@extern(:erlang, :whereis, 1)
+fn raw_whereis(name: Atom) -> Effect(BarePid | :undefined)
+
+fn whereis(name: Atom) -> Effect(Option(BarePid))
+```
+
+`BarePid` is ground, so it is a legal union member. It is not a crippled type: `link`,
+`unlink`, `monitor`, `exit` and `is_alive` accept it unchanged, because they are
+message-type-polymorphic and never cared about `m`. Only `tell` becomes uncallable — it
+would demand a `NoMessage` argument, and `NoMessage` has no constructors. That is the
+correct and complete statement of what the BEAM registry gives you: *a handle you may
+supervise but must not send to, until something founds its message type.*
+
+This **removes** an unsound capability rather than preserving it, which is this batch's
+mandate. Nothing in the tree uses the old signature (`lib/std/otp.cure:170` is the
+definition; the only other mention is a name in a test list).
+
+### 7.3 An `@extern` may return `Effect(<union>)` — new prerequisite
+
+Every operation in `Std.Otp.Raw` is `Effect`-typed, and §3.2/§3.4 give two of them union
+returns. **A union under `Effect` is currently rejected** with
+`{:extern_returns_union, …}`: both the declaration check (`declarations.ex:437`) and the
+wrapper emitter (`emit.ex:233`) match the codomain against a union family *exactly*, and
+neither looks through `Effect`.
+
+`Effect(T)` has no runtime representation — the elaborator injects `{:effect_pure, …}` and
+`emit.ex` lowers it away — so an extern declared `Effect(Int | Bool)` hands back exactly the
+same untagged Erlang value as one declared `Int | Bool`, and the re-tagging wrapper is
+byte-for-byte identical. Both sites strip a single `{:effect_type, _}` before the check.
+
+A union nested in a real structure (`List(Int | Bool)`) stays rejected — re-tagging would
+have to walk the structure. `Effect` is not a structure.
+
+This is a load-bearing prerequisite: **without it neither F-2c nor F-4's `cancel_timer`
+is expressible at all**, since both need a union return on an `Effect`-typed extern.
+
+### 7.4 A union match has no catch-all
+
+§3.2 and §3.4 sketch `match … _ -> None()`. Union elimination requires **one arm per
+member** — a type member as `n: Int -> …`, a literal member as the bare literal
+`:undefined -> …` — and a non-exhaustive match is rejected by the coverage check. The
+wildcard arms are replaced with exhaustive ones.
