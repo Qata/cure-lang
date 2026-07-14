@@ -188,20 +188,17 @@ defmodule Cure.Elab.Emit do
   defp emitted_name(name), do: Map.get(emit_aliases(), name, emit_name_for_key(name))
 
   # Resolve a source `{:global, name}` to a REMOTE `{module, fun}` target or
-  # `:local`. A `#`-mangled qualified name (`Std.List#map`, from a qualified
-  # call or an `implementation` method body) carries its owner in the name; a
-  # bare name is looked up in the import `origins`; everything else stays local
-  # (this module's own def, or an auto-imported BEAM BIF).
+  # `:local`. Every ordinary global is owner-qualified during elaboration.
+  # Local keys are recorded in `emit_aliases`; any remaining qualified key is a
+  # remote call. The origins fallback remains only for the compatibility /4 API
+  # while old direct emitter tests migrate to canonical environments.
   defp remote_target(name, origins) do
-    s = Atom.to_string(name)
-
     cond do
       Map.has_key?(emit_aliases(), name) ->
         :local
 
-      String.contains?(s, "#") ->
-        [mod, fun] = String.split(s, "#", parts: 2)
-        {String.to_atom("Cure." <> mod), String.to_atom(fun)}
+      (owner = Cure.Elab.Name.owner(name)) != nil ->
+        {String.to_atom("Cure." <> owner), String.to_atom(Cure.Elab.Name.base(name))}
 
       (mod = Map.get(origins, name)) != nil ->
         {mod, name}

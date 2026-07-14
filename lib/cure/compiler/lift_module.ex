@@ -196,8 +196,7 @@ defmodule Cure.Compiler.LiftModule do
   def emit(%{module: module, behaviour: behaviour} = request) do
     with {:ok, module_ast} <- ordinary_module_ast(request),
          {:ok, env, local_defs} <- Program.check_ast_with_locals(module_ast),
-         origins = Program.import_origins(module_ast),
-         {:ok, forms} <- Emit.compile_forms(env, Program.module_atom(module_ast), local_defs, origins) do
+         {:ok, forms} <- Emit.compile_forms(env, Program.module_atom(module_ast), local_defs) do
       {:ok,
        %{
          module: Program.module_atom(module_ast),
