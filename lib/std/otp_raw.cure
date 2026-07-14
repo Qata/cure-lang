@@ -45,8 +45,19 @@ mod Std.Otp.Raw
   ## name-to-code association nothing builds yet; that is F-1 (see the audit, §6).
   typealias BarePid = RawPid(NoMessage, NoMessage, Plain)
 
-  ## An opaque monitor/timer reference — the raw `erlang:reference()`.
+  ## An opaque BEAM reference — the raw `erlang:reference()`. Kept as the honest raw type
+  ## of `erlang:demonitor/1`, which accepts any reference; the typed layer never uses it.
   opaque type Ref
+
+  ## A monitor reference — the `erlang:reference()` returned by `erlang:monitor/2`.
+  ## DISTINCT from `TimerRef`: cancelling a monitor or demonitoring a timer is nonsense,
+  ## and the BEAM will not tell you. Both erase to the same runtime reference.
+  @erases(:reference)
+  opaque type MonitorRef
+
+  ## A timer reference — the `erlang:reference()` returned by `erlang:send_after/3`.
+  @erases(:reference)
+  opaque type TimerRef
 
   ## An explicitly marked erased BEAM term. This is the only standard-library
   ## boundary that admits a value whose static type is intentionally forgotten;
@@ -106,9 +117,9 @@ mod Std.Otp.Raw
   @extern(:gen_server, :call, 2)
   fn raw_call({q: Type}, {r: Type}, server: RawPid(q, r, Server), req: q) -> Effect(r)
 
-  ## Establish a monitor on `pid`; the returned `Ref` tags the `DOWN` message.
+  ## Establish a monitor on `pid`; the returned `MonitorRef` tags the `DOWN` message.
   @extern(:erlang, :monitor, 2)
-  fn raw_monitor({m: Type}, {r: Type}, {k: Type}, kind: Atom, pid: RawPid(m, r, k)) -> Effect(Ref)
+  fn raw_monitor({m: Type}, {r: Type}, {k: Type}, kind: Atom, pid: RawPid(m, r, k)) -> Effect(MonitorRef)
 
   ## Stop a generic OTP process. The reason is intentionally polymorphic at
   ## this raw boundary; typed lifecycle wrappers choose the narrower reason
@@ -119,17 +130,24 @@ mod Std.Otp.Raw
 
   ## Schedule a message for a process and receive an opaque timer reference.
   @extern(:erlang, :send_after, 3)
-  fn raw_send_after({m: Type}, {r: Type}, {k: Type}, delay: Int, pid: RawPid(m, r, k), msg: m) -> Effect(Ref)
+  fn raw_send_after({m: Type}, {r: Type}, {k: Type}, delay: Int, pid: RawPid(m, r, k), msg: m) -> Effect(TimerRef)
 
   ## Cancel a timer. `erlang:cancel_timer/1` returns the REMAINING MILLISECONDS, or
   ## `false` once the timer has already fired or been cancelled. It is not `Unit` and
   ## never was — the sharpest of the `Effect(Unit)` lies.
   @extern(:erlang, :cancel_timer, 1)
-  fn raw_cancel_timer(ref: Ref) -> Effect(Int | Bool)
+  fn raw_cancel_timer(ref: TimerRef) -> Effect(Int | Bool)
 
-  ## Remove a monitor. Returns `true`.
+  ## Remove a monitor. Returns `true`. Honest over the bare `Ref` — `erlang:demonitor/1`
+  ## accepts any reference — and drives no typed wrapper: the typed `demonitor` flushes.
   @extern(:erlang, :demonitor, 1)
   fn raw_demonitor(ref: Ref) -> Effect(Bool)
+
+  ## `erlang:demonitor/2` with `[flush]` — removes the monitor AND discards a `DOWN` that
+  ## has already been delivered. The option list is a real parameter, not baked in. With
+  ## `flush` and no `info`, the BIF always returns `true`.
+  @extern(:erlang, :demonitor, 2)
+  fn raw_demonitor_flush(ref: MonitorRef, opts: List(Atom)) -> Effect(Bool)
 
   ## Link and unlink the current process to a target. Both return `true`.
   @extern(:erlang, :link, 1)

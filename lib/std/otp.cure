@@ -154,9 +154,9 @@ mod Std.Otp
     let acked = raw_cast(server, request)
     ()
 
-  ## Typed lifecycle and observation wrappers over the raw effect boundary.
-  typealias MonitorRef = Ref
-  typealias TimerRef = Ref
+  ## Typed lifecycle and observation wrappers over the raw effect boundary. `MonitorRef`
+  ## and `TimerRef` are the raw base's own DISTINCT carriers (imported, not aliased): they
+  ## used to be two names for one `Ref`, which made `cancel_timer(monitor_ref)` well-typed.
   typealias BeamTerm = RawTerm
 
   ## Stop a `gen_server`. `Server`-only — `gen_server:stop` on a plain process blocks
@@ -168,7 +168,7 @@ mod Std.Otp
   ## The signal-layer operations below accept BOTH handles: linking, monitoring,
   ## exiting, naming and timing are properties of a BEAM PROCESS, not of the protocol
   ## it speaks. They are tag-polymorphic in `k`.
-  fn send_after({m: Type}, {r: Type}, {k: Type}, delay: Int, pid: RawPid(m, r, k), msg: m) -> Effect(Ref) =
+  fn send_after({m: Type}, {r: Type}, {k: Type}, delay: Int, pid: RawPid(m, r, k), msg: m) -> Effect(TimerRef) =
     raw_send_after(delay, pid, msg)
 
   ## Cancel a timer, surfacing what the BIF actually reports: `Some(ms)` when the timer
@@ -180,17 +180,20 @@ mod Std.Otp
   ## it returns (timer_manager.erl:87-91), so on AtomVM cancelling a `send_after` ref always
   ## yields `None` AND THE MESSAGE STILL FIRES. Cancellation is reliable on OTP; on AtomVM it
   ## is not. See the audit, §5.
-  fn cancel_timer(ref: Ref) -> Effect(Option(Int)) =
+  fn cancel_timer(ref: TimerRef) -> Effect(Option(Int)) =
     let remaining = raw_cancel_timer(ref)
     match remaining
       ms: Int -> Some(ms)
       already: Bool -> None()
 
-  fn monitor({m: Type}, {r: Type}, {k: Type}, kind: Atom, pid: RawPid(m, r, k)) -> Effect(Ref) =
+  fn monitor({m: Type}, {r: Type}, {k: Type}, kind: Atom, pid: RawPid(m, r, k)) -> Effect(MonitorRef) =
     raw_monitor(kind, pid)
 
-  fn demonitor(ref: Ref) -> Effect(Unit) =
-    let removed = raw_demonitor(ref)
+  ## Remove a monitor AND flush any `DOWN` already sitting in the mailbox. Without `flush`
+  ## a stale `DOWN` outlives the call, and every receiving `match` has to carry an arm for
+  ## a monitor the caller believes it already removed.
+  fn demonitor(ref: MonitorRef) -> Effect(Unit) =
+    let removed = raw_demonitor_flush(ref, [:flush])
     ()
 
   ## `erlang:link/1`, `unlink/1` and `register/2` all answer the constant `true` — there is

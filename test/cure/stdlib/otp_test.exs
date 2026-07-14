@@ -115,10 +115,10 @@ defmodule Cure.Stdlib.OtpTest do
     mod App
       use Std.Otp
       use Std.Option
-      fn timer(p: Pid(Atom)) -> Effect(Ref) = beam_ops send_after 10 p :tick
-      fn cancel(r: Ref) -> Effect(Option(Int)) = beam_ops cancel_timer r
-      fn observe(p: Pid(Atom)) -> Effect(Ref) = beam_ops monitor :process p
-      fn unobserve(r: Ref) -> Effect(Unit) = beam_ops demonitor r
+      fn timer(p: Pid(Atom)) -> Effect(TimerRef) = beam_ops send_after 10 p :tick
+      fn cancel(r: TimerRef) -> Effect(Option(Int)) = beam_ops cancel_timer r
+      fn observe(p: Pid(Atom)) -> Effect(MonitorRef) = beam_ops monitor :process p
+      fn unobserve(r: MonitorRef) -> Effect(Unit) = beam_ops demonitor r
       fn connect(p: Pid(Atom)) -> Effect(Unit) = beam_ops link p
       fn disconnect(p: Pid(Atom)) -> Effect(Unit) = beam_ops unlink p
     """
@@ -277,7 +277,7 @@ defmodule Cure.Stdlib.OtpTest do
   describe "honest raw result types (F-4)" do
     test "cancel_timer surfaces the remaining milliseconds as an Option" do
       assert {:ok, _} =
-               app("  fn go(t: Ref) -> Effect(Option(Int)) =\n    cancel_timer(t)\n")
+               app("  fn go(t: TimerRef) -> Effect(Option(Int)) =\n    cancel_timer(t)\n")
     end
 
     test "the typed wrappers still return Unit — the raw result is discarded" do
@@ -286,6 +286,27 @@ defmodule Cure.Stdlib.OtpTest do
 
       assert {:ok, _} =
                app("  fn go(s: GenServer(Cmd, Int)) -> Effect(Unit) =\n    cast(s, Inc())\n")
+    end
+  end
+
+  # F-5. `MonitorRef` and `TimerRef` were two typealiases of one `Ref`, so they were the
+  # SAME type and `cancel_timer(monitor_ref)` typechecked. They are now distinct opaque
+  # carriers, both erasing to `:reference`.
+  describe "monitor and timer references are distinct types (F-5)" do
+    test "cancelling a monitor ref is a compile error" do
+      assert {:error, _} =
+               app("  fn go(r: MonitorRef) -> Effect(Option(Int)) =\n    cancel_timer(r)\n")
+    end
+
+    test "demonitoring a timer ref is a compile error" do
+      assert {:error, _} = app("  fn go(r: TimerRef) -> Effect(Unit) =\n    demonitor(r)\n")
+    end
+
+    test "each ref is accepted by its own operation" do
+      assert {:ok, _} =
+               app("  fn go(r: TimerRef) -> Effect(Option(Int)) =\n    cancel_timer(r)\n")
+
+      assert {:ok, _} = app("  fn go(r: MonitorRef) -> Effect(Unit) =\n    demonitor(r)\n")
     end
   end
 end
