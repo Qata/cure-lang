@@ -20,9 +20,19 @@ mod Std.Otp.Raw
   ## function boundary is the honest raw representation of a fresh BEAM
   ## process; typed wrappers choose the indexed handle exposed to callers.
 
+  ## Which BEAM protocol a process handle speaks — a PHANTOM TAG, carried as `RawPid`'s
+  ## third type argument. A plain process answers only raw sends; a `gen_server`
+  ## additionally answers `call`/`cast`/`stop`. Neither tag has values and neither
+  ## reaches the BEAM: the distinction is erased entirely.
+  opaque type Plain
+  opaque type Server
+
   ## An opaque process identifier — the raw `erlang:pid()`. `Std.Otp` selectively
   ## imports this indexed carrier and supplies the typed operation vocabulary.
-  opaque type RawPid(m, r)
+  ## `@erases(:pid)` declares the guard that recognises it, which is what lets it
+  ## appear in a union (see `raw_whereis`).
+  @erases(:pid)
+  opaque type RawPid(m, r, k)
 
   ## An opaque monitor/timer reference — the raw `erlang:reference()`.
   opaque type Ref
@@ -36,15 +46,16 @@ mod Std.Otp.Raw
   @extern(:erlang, :element, 2)
   fn raw_term({a: Type}, index: Int, boxed: Tuple(a, Atom)) -> RawTerm
 
-  ## The calling process's own pid.
+  ## The calling process's own pid. A process the VM spawned for us speaks no
+  ## gen_server protocol, so the handle is `Plain`.
   @extern(:erlang, :self, 0)
-  fn raw_self({m: Type}) -> Effect(RawPid(m, m))
+  fn raw_self({m: Type}) -> Effect(RawPid(m, m, Plain))
 
   @extern(:erlang, :spawn, 1)
-  fn raw_spawn({m: Type}, thunk: () -> Unit) -> Effect(RawPid(m, m))
+  fn raw_spawn({m: Type}, thunk: () -> Unit) -> Effect(RawPid(m, m, Plain))
 
   @extern(:erlang, :spawn_link, 1)
-  fn raw_spawn_link({m: Type}, thunk: () -> Unit) -> Effect(RawPid(m, m))
+  fn raw_spawn_link({m: Type}, thunk: () -> Unit) -> Effect(RawPid(m, m, Plain))
 
   ## Start a gen_server through its standard callback module. The raw return is
   ## deliberately the OTP `{ok, pid}`/error tuple; a behavior-specific wrapper
@@ -68,31 +79,36 @@ mod Std.Otp.Raw
   fn raw_supervisor_start_link({a: Type}, name: Tuple(Atom, Atom), module: Atom, args: List(a)) -> Effect(Tuple)
 
   ## Send `msg` to `dest`. Fire-and-forget; the effect is performing the send.
+  ## Tag-polymorphic: a raw send to a gen_server is legitimate — it lands in
+  ## `handle_info`.
   @extern(:erlang, :send, 2)
-  fn raw_send({m: Type}, {r: Type}, dest: RawPid(m, r), msg: m) -> Effect(Unit)
+  fn raw_send({m: Type}, {r: Type}, {k: Type}, dest: RawPid(m, r, k), msg: m) -> Effect(Unit)
 
-  ## Asynchronous `gen_server` cast — no reply.
+  ## Asynchronous `gen_server` cast — no reply. `Server`-only: a plain process does
+  ## not implement the gen_server protocol.
   @extern(:gen_server, :cast, 2)
-  fn raw_cast({q: Type}, {r: Type}, server: RawPid(q, r), msg: q) -> Effect(Unit)
+  fn raw_cast({q: Type}, {r: Type}, server: RawPid(q, r, Server), msg: q) -> Effect(Unit)
 
   ## Synchronous `gen_server` call — the reply type is where `Std.Otp` threads
   ## the dependent `ReplyOf(req)`; here it is a free (return-polymorphic) result.
+  ## `Server`-only: calling a plain process blocks the caller for 5s and then exits it.
   @extern(:gen_server, :call, 2)
-  fn raw_call({q: Type}, {r: Type}, server: RawPid(q, r), req: q) -> Effect(r)
+  fn raw_call({q: Type}, {r: Type}, server: RawPid(q, r, Server), req: q) -> Effect(r)
 
   ## Establish a monitor on `pid`; the returned `Ref` tags the `DOWN` message.
   @extern(:erlang, :monitor, 2)
-  fn raw_monitor({m: Type}, {r: Type}, kind: Atom, pid: RawPid(m, r)) -> Effect(Ref)
+  fn raw_monitor({m: Type}, {r: Type}, {k: Type}, kind: Atom, pid: RawPid(m, r, k)) -> Effect(Ref)
 
   ## Stop a generic OTP process. The reason is intentionally polymorphic at
   ## this raw boundary; typed lifecycle wrappers choose the narrower reason
-  ## type required by their behavior.
+  ## type required by their behavior. `Server`-only, like the rest of the
+  ## gen_server protocol.
   @extern(:gen_server, :stop, 1)
-  fn raw_stop({m: Type}, {r: Type}, pid: RawPid(m, r)) -> Effect(Unit)
+  fn raw_stop({q: Type}, {r: Type}, pid: RawPid(q, r, Server)) -> Effect(Unit)
 
   ## Schedule a message for a process and receive an opaque timer reference.
   @extern(:erlang, :send_after, 3)
-  fn raw_send_after({m: Type}, {r: Type}, delay: Int, pid: RawPid(m, r), msg: m) -> Effect(Ref)
+  fn raw_send_after({m: Type}, {r: Type}, {k: Type}, delay: Int, pid: RawPid(m, r, k), msg: m) -> Effect(Ref)
 
   ## Cancel a timer or remove a monitor reference.
   @extern(:erlang, :cancel_timer, 1)
@@ -103,27 +119,27 @@ mod Std.Otp.Raw
 
   ## Link and unlink the current process to a target.
   @extern(:erlang, :link, 1)
-  fn raw_link({m: Type}, {r: Type}, pid: RawPid(m, r)) -> Effect(Unit)
+  fn raw_link({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Unit)
 
   @extern(:erlang, :unlink, 1)
-  fn raw_unlink({m: Type}, {r: Type}, pid: RawPid(m, r)) -> Effect(Unit)
+  fn raw_unlink({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Unit)
 
   ## Send an exit signal and query process liveness.
   @extern(:erlang, :exit, 2)
-  fn raw_exit({m: Type}, {r: Type}, {x: Type}, pid: RawPid(m, r), reason: x) -> Effect(Unit)
+  fn raw_exit({m: Type}, {r: Type}, {k: Type}, {x: Type}, pid: RawPid(m, r, k), reason: x) -> Effect(Unit)
 
   @extern(:erlang, :is_process_alive, 1)
-  fn raw_is_alive({m: Type}, {r: Type}, pid: RawPid(m, r)) -> Effect(Bool)
+  fn raw_is_alive({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Bool)
 
   ## The registry operations deliberately remain raw and effect-typed. A
   ## higher layer may expose a name-indexed handle without asserting that a
   ## dynamic registry lookup is always successful.
   @extern(:erlang, :register, 2)
-  fn raw_register({m: Type}, {r: Type}, name: Atom, pid: RawPid(m, r)) -> Effect(Unit)
+  fn raw_register({m: Type}, {r: Type}, {k: Type}, name: Atom, pid: RawPid(m, r, k)) -> Effect(Unit)
 
   @extern(:erlang, :unregister, 1)
   fn raw_unregister(name: Atom) -> Effect(Unit)
 
   @extern(:erlang, :whereis, 1)
-  fn raw_whereis({m: Type}, name: Atom) -> Effect(RawPid(m, m))
+  fn raw_whereis({m: Type}, name: Atom) -> Effect(RawPid(m, m, Plain))
 end

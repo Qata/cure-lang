@@ -103,7 +103,7 @@ defmodule Cure.Stdlib.OtpTest do
       fn send_it(p: Pid(Cmd)) -> Effect(Unit) = beam_ops tell p Inc()
       fn call_it(s: GenServer(Cmd, Int)) -> Effect(Int) = beam_ops call s Dec()
       fn cast_it(s: GenServer(Cmd, Int)) -> Effect(Unit) = beam_ops cast s Inc()
-      fn stop_it(p: Pid(Cmd)) -> Effect(Unit) = beam_ops stop p
+      fn stop_it(s: GenServer(Cmd, Int)) -> Effect(Unit) = beam_ops stop s
     """
 
     assert {:ok, _} = Program.elaborate(source)
@@ -194,5 +194,46 @@ defmodule Cure.Stdlib.OtpTest do
                  let u = tell(p, Inc())
                  call(s, Dec())
              """)
+  end
+
+  # F-2a. `call`/`cast`/`stop` are gen_server PROTOCOL operations. A plain spawned
+  # process does not answer them: `gen_server:call` on one blocks the caller for 5s and
+  # then exits it with `timeout`. The two handles were typealiases of the SAME
+  # constructor, so the type system could not tell them apart and said yes.
+  describe "Pid(m) and GenServer(q,r) are distinct (F-2a)" do
+    # `Effect(Cmd)`, not `Effect(Int)`: a `Pid(Cmd)` is `RawPid(Cmd, Cmd)`, so under the
+    # old aliases it WAS a `GenServer(Cmd, Cmd)` and this call typechecked. Asking for
+    # `Effect(Int)` would fail on the reply type alone and pass this test without the
+    # phantom tag doing any work at all.
+    test "call on a plain Pid is a compile error" do
+      assert {:error, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Cmd) =\n    call(p, Dec())\n")
+    end
+
+    test "cast on a plain Pid is a compile error" do
+      assert {:error, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    cast(p, Inc())\n")
+    end
+
+    test "stop on a plain Pid is a compile error" do
+      assert {:error, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    stop(p)\n")
+    end
+
+    test "call on a GenServer still succeeds" do
+      assert {:ok, _} =
+               app("  fn go(s: GenServer(Cmd, Int)) -> Effect(Int) =\n    call(s, Dec())\n")
+    end
+
+    test "tell accepts BOTH handles — a raw send to a gen_server lands in handle_info" do
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    tell(p, Inc())\n")
+
+      assert {:ok, _} =
+               app("  fn go(s: GenServer(Cmd, Int)) -> Effect(Unit) =\n    tell(s, Inc())\n")
+    end
+
+    test "link accepts both handles" do
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    link(p)\n")
+
+      assert {:ok, _} =
+               app("  fn go(s: GenServer(Cmd, Int)) -> Effect(Unit) =\n    link(s)\n")
+    end
   end
 end

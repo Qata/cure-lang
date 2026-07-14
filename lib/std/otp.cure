@@ -53,11 +53,15 @@ mod Std.Otp
   ## imported opaque carrier preserves erased runtime identity while the public
   ## aliases below attach message and request/reply indices.
 
-  ## A typed process handle accepting messages of type `m`.
-  typealias Pid(m) = RawPid(m, m)
+  ## A typed handle to a plain BEAM process accepting messages of type `m`. It answers
+  ## raw sends, and nothing else.
+  typealias Pid(m) = RawPid(m, m, Plain)
 
-  ## A typed `gen_server` taking requests `q`, replying `r`.
-  typealias GenServer(q, r) = RawPid(q, r)
+  ## A typed `gen_server` taking requests `q`, replying `r`. DISTINCT from `Pid(m)`:
+  ## `call`/`cast`/`stop` are gen_server protocol operations, and a plain spawned process
+  ## cannot answer them — it would block the caller for 5s and then exit it. The `Plain`
+  ## / `Server` tag is a phantom at kind `Type`: no values, no runtime cost.
+  typealias GenServer(q, r) = RawPid(q, r, Server)
 
   ## A process message set. The first algebra floor stores tag and arity
   ## shapes; typed ADT payload derivation is added by the transparent macro
@@ -128,7 +132,11 @@ mod Std.Otp
   ## so a `Pid(Command)` can never be sent a `Telemetry`. (Named `tell`, not
   ## `send`: `send` is the reserved Melquiades keyword — a later macro can reclaim
   ## the `p ! msg` surface and lower it to this.)
-  fn tell({m: Type}, dest: Pid(m), msg: m) -> Effect(Unit) = raw_send(dest, msg)
+  ##
+  ## Accepts BOTH handles: a raw send to a gen_server is legitimate BEAM practice —
+  ## it lands in `handle_info`.
+  fn tell({m: Type}, {r: Type}, {k: Type}, dest: RawPid(m, r, k), msg: m) -> Effect(Unit) =
+    raw_send(dest, msg)
 
   ## Synchronous `gen_server` call: send request `q`, block for reply `r`. Both the
   ## request AND the reply are checked against the server's type.
@@ -144,26 +152,35 @@ mod Std.Otp
   typealias TimerRef = Ref
   typealias BeamTerm = RawTerm
 
-  fn stop({m: Type}, pid: Pid(m)) -> Effect(Unit) = raw_stop(pid)
+  ## Stop a `gen_server`. `Server`-only — `gen_server:stop` on a plain process blocks
+  ## and then exits the caller.
+  fn stop({q: Type}, {r: Type}, server: GenServer(q, r)) -> Effect(Unit) = raw_stop(server)
 
-  fn send_after({m: Type}, delay: Int, pid: Pid(m), msg: m) -> Effect(Ref) =
+  ## The signal-layer operations below accept BOTH handles: linking, monitoring,
+  ## exiting, naming and timing are properties of a BEAM PROCESS, not of the protocol
+  ## it speaks. They are tag-polymorphic in `k`.
+  fn send_after({m: Type}, {r: Type}, {k: Type}, delay: Int, pid: RawPid(m, r, k), msg: m) -> Effect(Ref) =
     raw_send_after(delay, pid, msg)
 
   fn cancel_timer(ref: Ref) -> Effect(Unit) = raw_cancel_timer(ref)
 
-  fn monitor({m: Type}, kind: Atom, pid: Pid(m)) -> Effect(Ref) = raw_monitor(kind, pid)
+  fn monitor({m: Type}, {r: Type}, {k: Type}, kind: Atom, pid: RawPid(m, r, k)) -> Effect(Ref) =
+    raw_monitor(kind, pid)
 
   fn demonitor(ref: Ref) -> Effect(Unit) = raw_demonitor(ref)
 
-  fn link({m: Type}, pid: Pid(m)) -> Effect(Unit) = raw_link(pid)
+  fn link({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Unit) = raw_link(pid)
 
-  fn unlink({m: Type}, pid: Pid(m)) -> Effect(Unit) = raw_unlink(pid)
+  fn unlink({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Unit) = raw_unlink(pid)
 
-  fn exit({m: Type}, {r: Type}, pid: Pid(m), reason: r) -> Effect(Unit) = raw_exit(pid, reason)
+  fn exit({m: Type}, {r: Type}, {k: Type}, {x: Type}, pid: RawPid(m, r, k), reason: x) -> Effect(Unit) =
+    raw_exit(pid, reason)
 
-  fn is_alive({m: Type}, pid: Pid(m)) -> Effect(Bool) = raw_is_alive(pid)
+  fn is_alive({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Bool) =
+    raw_is_alive(pid)
 
-  fn register({m: Type}, name: Atom, pid: Pid(m)) -> Effect(Unit) = raw_register(name, pid)
+  fn register({m: Type}, {r: Type}, {k: Type}, name: Atom, pid: RawPid(m, r, k)) -> Effect(Unit) =
+    raw_register(name, pid)
 
   fn unregister(name: Atom) -> Effect(Unit) = raw_unregister(name)
 
