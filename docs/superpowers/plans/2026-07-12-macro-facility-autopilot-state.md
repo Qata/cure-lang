@@ -1360,9 +1360,10 @@ Custom FSM callback bodies now also use source-level `InitResult` and
 `EventResult` aliases for their erased effect contracts. This keeps direct
 `pickup` callback expressions in the transparent Cure source while preserving
 ordinary result checking; a focused `handle_event` pickup test covers the
-alias-backed path (`3019b4bc`, 56 focused object tests). The direct
-`Effect(T)` case-motive kernel gap remains open and is not treated as solved by
-these aliases.
+alias-backed path (`3019b4bc`, 56 focused object tests). **The direct `Effect(T)`
+case-motive kernel gap is now CLOSED (`6a7bf46f`) and the aliases have been
+REMOVED (`1eef8b33`)** — see "RESOLVED GATE" at the end of this document. FSM
+callbacks now declare `returns Effect(...)` inline.
 The FSM macro now also exposes delayed-body forms for `terminate/3` and
 `code_change/4`, with state/data result aliases and a negative mismatch test;
 both callbacks execute through the ordinary lifted module (`84d4b30b`, 62
@@ -1401,10 +1402,10 @@ focused transparent-object suite is 41 passing tests and
 suite is now 44 passing tests and the algebra and lifted-module suites pass 16
 and 15 tests respectively. A `phases` form now supports multiple transparent
 phase/result pairs through ordinary Cure recursion and pattern matching, with
-unmatched phases returning `:ok` (`1c079498`). Direct `Effect(T)` case motives
-still expose the existing kernel `:bad_motive` completeness gap; the alias is
-recorded as a transparent compatibility bridge, not as closure of that gate.
-An approved no-workaround resolution remains required.
+unmatched phases returning `:ok` (`1c079498`). **The direct `Effect(T)`
+case-motive gap is now CLOSED in the kernel (`6a7bf46f`) and the `PhaseResult`
+alias is REMOVED (`1eef8b33`)** — the app phase callback's `match` body now
+checks against an inline `returns Effect(Atom)`. See "RESOLVED GATE" below.
 
 Define `app` in `lib/std/app.cure`. Emit `Application` lifecycle callbacks,
 optional phases, ordinary startup/shutdown bodies, and checked supervision
@@ -1530,8 +1531,10 @@ Suggested commit:
    a clean AtomVM rebuild). The AtomVM proof remains 1 passing after the latest
    source changes. The source-level four-macro callback floors, indexed
    reducer/view/flow bundle, and embedded SP6 builders are implemented and
-   covered; automatic message-code derivation and the direct `Effect(T)` motive
-   remain explicitly tracked gaps rather than hidden compiler behavior.
+   covered. The direct `Effect(T)` motive gap is **CLOSED** (`6a7bf46f` +
+   `1eef8b33`); **automatic message-code derivation remains the one open gap**
+   and is now a funded work programme, not a tracked excuse — see "RESOLVED
+   GATE" and "OPEN GATE" below.
 4. Run skeptical review to two clean passes.
 5. Run `mix compile --warnings-as-errors`, the full `mix test` gate, Antigen
    verification, and formatting checks. Current results: warnings-as-errors
@@ -1549,7 +1552,16 @@ Suggested commit:
 
 ### Standing rules for every phase
 
-- TCB delta is zero; do not modify `lib/cure/core/*`.
+- ~~TCB delta is zero; do not modify `lib/cure/core/*`.~~ **SUPERSEDED 2026-07-14
+  by operator authorization** (see "RESOLVED GATE" below). This rule is what
+  deadlocked the run: the `Effect(T)` motive gap was a genuine kernel
+  completeness bug, so "zero TCB delta" and "no workarounds" could not both
+  hold, and the autopilot papered the conflict over with typealiases rather
+  than surfacing it. A kernel change is now permitted **when it is a
+  completeness fix that aligns with Idris/Agda/Lean**, and it carries the full
+  TCB bar: red-green, an Antigen antibody proving termination and no new
+  equations, the full Antigen suite, and the full test suite. It is NOT a
+  licence for convenience changes to `lib/cure/core/*`.
 - Run commands from the worktree root, never the parent clone.
 - Run one `mix` suite at a time.
 - Use explicit pathspecs for staging and preserve unrelated user changes.
@@ -1571,3 +1583,142 @@ implementation gap remains.
 This directive applies for the entirety of the session and every context
 compaction. Commit every implementation phase with a highly descriptive commit
 message and keep the worktree clean between phases.
+
+## RESOLVED GATE — direct `Effect(T)` case motives (2026-07-14)
+
+**Operator authorized the kernel fix and the removal of the workaround.** Both
+landed. This gate is CLOSED.
+
+**The bug.** `check_motive_wf` sorts a motive body with `infer_type_value_sort`,
+which had clauses for `{:vtype}`, the neutrals, the primitives, `{:vdata}` and
+`{:vpi}` — but none for `{:veffect_type, _}`. A `case`/`match` whose result type
+was a direct `Effect(T)` fell to the catch-all and came back a spurious
+`:bad_motive`. `infer/2`'s own formation rule (`Effect : Type l -> Type l`) types
+the identical TERM without complaint; only the value-side sorter was missing the
+arm. A false negative, never unsoundness.
+
+**Why it hid for so long.** A `typealias EventResult = Effect(Atom)` makes the
+motive body an `{:nglobal}` neutral, which the typealias clause (`3516c843`)
+already admitted. So the aliases *worked* — they just moved the type behind a
+name the kernel happened to accept. 19 of them accumulated across
+`lib/std/{actor,fsm,app}.cure`, one wherever a `delayed raw` callback body (i.e.
+a body that could be a `match`) landed. The tell: `supervisor.cure` never needed
+one, because its callbacks have fixed tuple-literal bodies and so never built a
+motive at an effect goal.
+
+**Fix** (`6a7bf46f`, K-layer/TCB): one clause, mirroring the formation rule —
+`Effect(t)` sorts at `t`'s own level. It recurses on the sub-VALUE rather than
+reifying, for the same reason the `{:vpi}` clause does: `Quote.reify` collapses
+`{:vdata, name, args}` -> `{:data, name, args, []}` and loses the param/index
+split, so reify+re-infer would turn an indexed payload like `Effect(SNat s)` into
+a false `:arg_arity` -> `:bad_motive`.
+
+TCB bar discharged: red-green (2 of 3 unit pins red before, all green after);
+Antigen antibody through the real kernel with an accept pin, a reject pin (an
+`Effect` head over a VALUE global is still refused — the accept set is enlarged
+but BOUNDED), a termination pin (nested `Effect(Effect(T))`, structural descent),
+and a no-new-equations pin (`Effect` stays congruence-only: not convertible with
+its payload nor with a differently-payloaded sibling); full Antigen suite;
+coverage floor re-recorded (kernel total 437 -> 438).
+
+**Cleanup** (`1eef8b33`): all 20 alias lines deleted; every callback declares its
+`Effect(...)` contract inline. `State`/`Message`/`Event` aliases are untouched —
+those bind a macro type parameter to a name shared across callbacks, which is a
+real abstraction. Transparent-object suite 68 passed; AtomVM proof 1 passed; full
+suite 4067 passed, 1 skipped, 318/318 Antigen coverage.
+
+**Lesson for the next run.** The deadlock was self-inflicted: "TCB delta is zero"
++ "no workarounds" + "never declare DONE with an open gap" is unsatisfiable when
+the gap IS a kernel bug. The autopilot resolved the conflict by papering over it
+and recording the paper as a "compatibility bridge". When two standing rules
+contradict, STOP and surface the contradiction — do not pick the one that lets
+you keep moving.
+
+## OPEN GATE — automatic message-code derivation
+
+The one remaining gap. Operator directive (2026-07-14): **build source-language
+reflection/derivation. Do not work around it.**
+
+**Goal.** Today an `actor` must be handed an explicit `messages <Type>` clause
+(and an `fsm` an `events <Type>`). The std macro should DERIVE the message type
+from the handler clauses, so `beam_ops self`/`send`/`call` can mint a `Pid(m)`
+carrying the callback's message code instead of leaving `m` undetermined.
+
+**Reconnaissance already done — do not redo it:**
+
+- **Tier-3 reflection is ALREADY BUILT**, not future work. Of the 6 slices in
+  `docs/superpowers/specs/2026-07-12-tier3-computed-by-execution-design.md`,
+  slices 1, 2, 3, 5, 6 are landed and slice 4 is partial. `computed by` parses;
+  `Std.Syntax` is a real ADT with a reflection bridge (`macro_syntax.ex`);
+  compile-time execution runs inside-out, cycle-detecting and budgeted
+  (`macro_expand.ex`); `check … else fail` works; typed derived records (`a.name`,
+  the operator's steer) are live and tested. Tier-2 (`becomes`) is verbatim hole
+  substitution — which is exactly WHY `messages <Type>` must be hand-written
+  today: the template cannot look inside `<cast_body>`.
+- **`Std.Otp.MessageCode`** (`otp.cure:65`, `Empty | Shape(Atom, Int, MessageCode)`)
+  is VESTIGIAL — referenced by nothing but its own unit test. Do not confuse it
+  with the `m` in `Pid(m)`, which is an ordinary erased type index. Deriving "the
+  message code" means synthesising a TYPE, not building a `MessageCode` value.
+- **`contextual`** is consumed in exactly one place (`macro_fuzz.ex`): it exempts
+  a rule from the SP3 generative self-proof. It has zero effect on parsing,
+  expansion or elaboration. `beam_ops self` is `contextual` because the proof
+  checks expansions standalone in infer mode with an empty context, so its
+  `{m: Type}` implicit has nothing to solve against. It is the visible scar of
+  the missing callback context, and derivation is what removes it.
+
+**THE STRUCTURAL BLOCKER — do this first.** Tier-3 expansion only runs inside
+FUNCTION BODIES. A `{:computed_use}` in declaration position is silently dropped
+by `Program.declarations/1`, and `LiftModule.collect` runs on the PARSED AST
+(`lib/cure/compiler.ex:298`) — before elaboration — so a `lift module` produced by
+a Tier-3 elab would never reach codegen. But `actor` IS a declaration that expands
+to a lift module. So step zero is: make Tier-3 a declaration-position pass and
+move `LiftModule.collect` behind it, reordering parse -> collect -> elaborate into
+parse -> expand -> collect. Generic and OTP-agnostic (so it respects the "no OTP
+knowledge in the compiler" constraint), and the riskiest change in the programme.
+
+**Slices.**
+
+- **L0.1** Declaration-position computed expansion; move `LiftModule.collect`
+  after it. (The blocker. Must be first.)
+- **L0.2** Reflect the expansion context into the elab input. `expansion_context`
+  (`%{behaviour, callback, arity, parameter_names, return_annotation}`) is ALREADY
+  threaded through parse and `MacroExpand` — it just never reaches the Cure elab,
+  because `execute/4` builds `input_cores` from the input node only. ~30 lines.
+  **Do this BEFORE L0.1**: it is the cheapest high-value probe, it directly kills
+  `contextual` on `beam_ops self`, and it tells us whether the context payload is
+  even sufficient (`parameter_names` + `return_annotation` may not be — the state
+  and message type names are probably also needed).
+- **L0.3** Type repeated groups (`...`) as `List(Syntax)`. Needed for
+  `on_message <pat> <body> ...`.
+- **L0.4** (optional) the `quote`/`$( )` surface — slice 4. Without it the elab
+  builds `Syntax` by hand: verbose, not blocking.
+- **L1** A `Std.Syntax` analysis + construction library in pure Cure: walk a
+  handler body's match arms, extract each arm's pattern head (tag + arity), dedupe,
+  and BUILD the AST for a `type ActorMsg = ...` declaration + `typealias Message =
+  ActorMsg`. This is where the derivation lives, and it satisfies "no OTP map in
+  the compiler" by construction.
+- **L2** Convert `actor`/`fsm` from Tier-2 `becomes lift module` to Tier-3
+  `computed by derive_actor`. Then drop `contextual` from the `beam_ops` rules.
+
+**Hardest sub-problem** (not the reflection, not even the reorder): the derived
+message type is a NEW NOMINAL DECLARATION that must exist before the lifted module
+referencing it is elaborated, and must be the SAME nominal type external `send`
+sites check against. One expansion must return two things into two scopes. The
+representation supports it (`MacroReflection.lift/1` already takes a list), but the
+splice site (`macro_expand.ex:74`) and `LiftModule.request_ast/1` both assume a
+single node. Secondary: `handle_call` needs TWO derived indices (request `q` and
+reply `r`), and the reply type comes from arm BODIES, not patterns.
+
+**Two design forks, with defaults (operator standing directive: align with real
+languages; discuss in prose, don't ask).**
+
+1. **Derivation soundness.** "The message type is exactly the set of patterns the
+   handler matches" is only sound if the handler is exhaustive and its arms are
+   unambiguous. A `_` catch-all, a variable-only arm, or a guard makes the derived
+   type open or wrong. **Default: REJECT un-derivable handlers with a real
+   diagnostic** (`check … else fail` already exists for this) rather than guessing.
+   The derivation never has to be clever to be correct.
+2. **Does `messages <Type>` survive?** **Default: KEEP it as an explicit override
+   that skips derivation.** This is the Haskell/Idris posture — inference by
+   default, annotation always permitted — and it keeps every existing program
+   compiling.
