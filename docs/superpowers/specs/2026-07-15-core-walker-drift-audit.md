@@ -1,16 +1,25 @@
 # Core Walker Drift — Defect Audit
 
-**Status:** LIVE. Findings are being added as audit agents complete.
+**Status:** COMPLETE (first pass). All 40 audit agents in, synthesis and completeness
+critic folded in, every surviving finding hand-verified. No fix has been attempted and no
+probe has been run.
 **Date:** 2026-07-15
 **Scope:** `lib/cure/elab/*` (E) and `lib/cure/core/*` (K). The non-dependent
 `lib/cure/compiler/{codegen,pattern_compiler}.ex` and `lib/cure/types/*` are out of scope
 and any finding located there is void.
 
-**Provenance.** Eight parallel audit agents, one lens each, each candidate finding then
-attacked by two independent skeptics instructed to refute it. Every defect recorded below
-under §4 has additionally been **re-verified by hand against the source** — the agents
-supplied leads, not facts. Claims still resting only on an agent's word are marked
-`UNVERIFIED` and quarantined in §7.
+**Provenance.** Eight parallel audit agents, one lens each; every candidate finding then
+attacked by two independent skeptics instructed to refute it; then a synthesiser and a
+completeness critic over the survivors. 40 agents, 15 candidates, 13 survived the skeptics.
+Every defect recorded under §4 has additionally been **re-verified by hand against the
+source** — the agents supplied leads, not facts.
+
+**The adversarial pass earned its keep, and the proof is that it killed one of my own
+findings.** The first draft of this document filed `has_meta?` as CRITICAL. Both skeptics
+independently refuted it, and they were right (§9). It also *split* on the QTT-grade finding
+— one skeptic refuted it, the synthesiser ranked it #1 CRITICAL. Both were correct about
+different halves of the same function, and reconciling them (§4.2) produced the most serious
+defect in this audit. **Read §9 before re-reporting anything.**
 
 ---
 
@@ -50,27 +59,34 @@ function today (§4.6).
 
 ## 1b. Bottom line
 
-Twenty-five Core walkers screened. Twelve fail open. **Six are live, six are inert** — and the
-thing that separates them is not fail-open-ness at all, it is whether the walker traverses
-**values** or only **types** (§3a). Triage on that axis first.
+Twenty-five Core walkers screened. Twelve fail open. **Two of those are live and critical,
+four are live and minor, six are inert.** The thing that separates live from inert is *not*
+fail-open-ness — it is whether the walker traverses **values** or only **types** (§3a), and,
+for the headline defect, whether **anything downstream re-derives what the walker destroyed**
+(§3c). Triage on those two axes before assigning any severity.
 
 | # | defect | severity | live? |
 |---|---|---|---|
-| §4.0 | `Subst` skips `effect_pure`/`effect_bind` → erasure fails to strengthen outer vars → **wrong BEAM code, never re-checked** | **CRITICAL** | ✅ live, hand-verified |
-| §4.1 | `has_meta?` blind to `:case`/`:let`/`Effect` → unsolved metavariable can reach the kernel | **CRITICAL** | ✅ live (trigger needs a probe) |
-| §4.2 | `Subst` **discards every QTT grade**, resetting erased binders to ω | **HIGH** | ✅ live |
+| §4.2 | `Subst.shift` **launders the QTT grade off every `let`**, and `Relevance` is the *only* thing that ever enforces one → **an `:erased` proof can be used at runtime; a `:linear` value can be dropped or duplicated** | **CRITICAL — soundness** | ✅ live, chain hand-verified end to end |
+| §4.0 | `Subst` skips `effect_pure`/`effect_bind` → erasure fails to strengthen outer vars → **wrong BEAM code, never re-checked** | **CRITICAL — miscompilation** | ✅ live, hand-verified |
 | §4.4 | TCB: `subst_params` / `replace_branch_vars` fail open on `:let`/`Effect` | **HIGH** ¹ | ✅ live |
-| §4.7 | `count_level` returns 0 for `Effect` → `{0,ω}` gate **permits** an unsafe optimisation | **HIGH** | ✅ live |
-| §4.6 | `global_refs` misses `Effect` → emitted module calls a function it never defines | **MEDIUM** | ✅ live |
-| §4.5 | `mabs` skips `:let`/`Effect` | — | ⬜ inert (types only) |
-| §4.8 | `has_hole?` skips `Effect` | — | ⬜ inert (holes unreachable in effects) |
+| §4.7 | `count_level` returns 0 for `Effect` → un-join gate **permits** an optimisation it must forbid | **MEDIUM** ² | ✅ live |
+| §4.6 | `global_refs` misses `Effect` → `reachable_def_names/2` omits a real dependency | **LOW** ³ | ✅ live, tooling/tests only |
 | §4.9 | dead retry on the dotted-qualified path | LOW | ✅ live, waste only |
-| §8 | `totality_closure` certifying a non-total function; `Validator` missing effects; `Relevance.walk` on `Effect(T)` | — | ❌ **refuted** |
+| §4.5 | `mabs` skips `:let`/`Effect` | — | ⬜ inert (types only) |
+| §4.8 | `has_hole?` skips `Effect` | — | ⬜ inert (no route for a hole into an effect body; and emit is separately protected — `check_codegen_ready` routes through `Validator`, which is fail-closed) |
+| §9 | **`has_meta?`** · `Relevance.walk` on `Effect(T)` · `totality_closure` · `Validator` · the **`:pi`/`:lam` half of §4.2** | — | ❌ **refuted** |
 
-¹ severity pending a probe — it is in the TCB and the direction of failure is argued, not proven.
+¹ TCB, and the *direction* of failure is argued, not proven. Probe before believing either way.
+² Unsound-accept is narrowed to the `:affine` grade specifically (`Grade.leq(:erased, :affine)` is
+`true` by design); for `:linear` the outcome is a spurious rejection, which is safe.
+³ Confirmed by the critic: the production `.cure`→BEAM path (`compiler.ex:411`) does **not** call
+`reachable_def_names`; it emits every declared def. Nothing in `lib/` calls it. Test-harness only.
 
-The two CRITICALs are independent and neither is the bug we shipped last week. Both are
-**silent**: one emits wrong code, one hands the kernel a term with a hole in it.
+**The two CRITICALs are independent, both silent, and neither is the bug we shipped last week.**
+One defeats the erasure/linearity discipline at the type level; the other emits wrong code. They
+share a single root cause — `lib/cure/elab/subst.ex`, a 116-line file, is wrong in **two
+unrelated ways at once**, and is the single highest-leverage file in the repo to fix.
 
 ---
 
@@ -199,6 +215,51 @@ are where silent miscompilation lives, and they should be fixed first.**
 
 ---
 
+## 3c. The second discriminator: is the destroyed information **re-derivable**?
+
+§3a and §3b were enough to triage *structural* gaps (a former the walker never looked
+inside). They are **not** enough for a *destructive* walker — one that looks at a node and
+writes back something different. For those, the question is:
+
+> **After this walker corrupts the field, does anything downstream reconstruct it from an
+> independent source of truth?**
+
+This is the axis that resolved the audit's one genuinely split verdict, and it is worth
+stating plainly because the two skeptics who disagreed were **both right**.
+
+`Cure.Elab.Subst` discards the QTT grade on **all three** binder formers — `:pi`, `:lam` and
+`:let` — hardcoding `Grade.unrestricted()` in each. One skeptic refuted this as inert; the
+synthesiser ranked it the #1 CRITICAL. The reconciliation:
+
+- **For `:pi` and `:lam`, the grade is re-derivable, so the corruption is INERT.** The
+  refutation is correct and its mechanism is exact: `Kernel.infer(ctx, {:app, f, a})`
+  (`kernel.ex:155-166`) re-infers `f`'s type **from the registered declaration** via
+  `Context.signature/1`, reached through the *trusted* `Core.Term.subst` — never through
+  `Elab.Subst`. The grade compared at `kernel.ex:324-329` therefore comes from the real
+  signature, not from any `Subst`-corrupted intermediate. The elaborator is untrusted by
+  design, and here that design holds: a wrong grade on a Pi is caught, not believed.
+
+- **For `:let`, the grade is re-derivable from NOTHING, so the corruption is CRITICAL.** A
+  `let`'s grade is not in any signature. It exists **only in the term itself**. And the term
+  is the one thing `Subst` just rewrote. Hand-verified:
+  - `Kernel.infer(ctx, {:let, _g, …})` — `kernel.ex:126` — **binds the grade to `_g` and
+    ignores it.**
+  - `Kernel.check(ctx, {:let, _g, …}, exp)` — `kernel.ex:349` — **same.**
+  - `Erase.erase({:let, _g, …})` — `erase.ex:48` — **discards it and rewrites to ω.**
+  - `Relevance.walk({:let, g, …})` — `relevance.ex:260` — **the only reader in the codebase.**
+
+  The kernel is deliberately quantity-blind (`declarations.ex:532`: *"E-layer; the kernel
+  stays quantity-blind"*). That is a defensible design — **but it means the E-layer's single
+  usage check is load-bearing for soundness, and it means an E-layer walker that overwrites
+  a grade is not "untrusted scratch." It is the last word.**
+
+**Generalised rule.** *A walker that only omits structure is bounded by §3a/§3b. A walker
+that overwrites a field is only safe if some later, independent authority re-derives that
+field. Find the re-deriver before you call it inert — and if the field's sole authority is
+the term, there is no re-deriver.*
+
+---
+
 ## 4. Confirmed defects
 
 All hand-verified. Ordered by severity.
@@ -298,82 +359,104 @@ lives in the `lam` it contains), exactly like `:app`.
 
 ---
 
-### 4.1 `has_meta?` — an unsolved metavariable can reach the kernel  · **CRITICAL**
-`lib/cure/elab/elaborator.ex:7344-7350`
+### 4.2 `Subst.shift` launders the grade off a `let`, defeating the only check that reads it · **CRITICAL — soundness**
+`lib/cure/elab/subst.ex:93-95` (`shift`) and `:53-55` (`replace`)
+
+**This is the most serious defect in the audit, it was ranked below three other findings in
+the first draft, and the thing that surfaced it was §3c.** The whole chain below is
+hand-verified against the source.
 
 ```elixir
-defp has_meta?({:meta, _}), do: true
-defp has_meta?({:data, _n, ps, is}), do: Enum.any?(ps ++ is, &has_meta?/1)
-defp has_meta?({:ctor, _n, args}), do: Enum.any?(args, &has_meta?/1)
-defp has_meta?({:app, f, x}), do: has_meta?(f) or has_meta?(x)
-defp has_meta?({:pi, _g, d, c}), do: has_meta?(d) or has_meta?(c)
-defp has_meta?({:lam, _g, d, b}), do: has_meta?(d) or has_meta?(b)
-defp has_meta?(_), do: false          # <-- :case, :let, :effect_* ALL land here
+def shift({:let, _g, t, v, b}, amount, cutoff),
+  do: {:let, Cure.Core.Grade.unrestricted(), shift(t, ...), shift(v, ...), shift(b, ...)}
+#            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the binder's grade, overwritten
 ```
 
-Handles 5 of 10 compound formers. **Missing `:case`, `:let`, `:effect_type`,
-`:effect_pure`, `:effect_bind`.**
+Every binder clause in `replace/4` and `shift/3` binds the incoming grade to `_g` and
+hardcodes `Grade.unrestricted()`. Per §3c, on `:pi`/`:lam` this is inert — the kernel
+re-derives those grades from the declaration. **On `:let` nothing re-derives anything.** The
+grade lives only in the term, and `Subst` just overwrote it.
 
-**What it silently does.** This function *is* the gate enforcing the invariant that
-`Cure.Elab.Subst`'s own moduledoc declares: *"metavariables never reach the kernel."* At
-`:7332` its verdict decides between `{:error, {:unsolved_metavariables, name}}` and handing
-the term to `Kernel.check/3`. A residual `{:meta, id}` nested inside a `case` branch, a `let`
-body, or an effect node makes `has_meta?` answer **`false`** — indistinguishable from "fully
-solved" — and the elaborator then submits a term **with a hole in it** to the trusted kernel.
+**The chain, link by link.**
 
-`{:meta, _}` is not a `Core.Term.t()`. The kernel is being asked to judge a term outside its
-own grammar. Whether that surfaces as a crash, a `Validator` rejection, or something worse
-depends on which kernel path receives it, and **that is exactly the question that must not be
-left to chance.** Severity is CRITICAL on the strength of the broken invariant alone.
+1. **A user can write a graded `let`.** The parser accepts one (`parser.ex:2589-2619`) and
+   attaches the grade to the binder — `let pf :erased = proof_of(x)`. Grades are
+   `:erased | :linear | :affine | :unrestricted` (`grade.ex:60`). `elaborator.ex:5344`/`:5495`
+   build `{:let, grade, …}` carrying the **real** grade.
 
-**Trigger (to be confirmed by probe):** any call whose implicit argument is only ever
-determined inside a `case`/`let`/`do`-block subterm — i.e. precisely the shapes the recent
-`:let` and `Effect` work introduced.
+2. **`wrap_join` shifts every branch body of a join-eligible `case`** (`elaborator.ex:4617-4620`):
 
-**Fix:** enumerate all ten compound formers, or replace with a generic tuple-descent
-catch-all (Class A is correct here — `has_meta?` tracks no depth).
+   ```elixir
+   {c, arity, body} -> {c, arity, Subst.shift(body, 1, arity)}
+   ```
+
+   "Join-eligible" is an *ordinary* match: a default arm, ≥2 uncovered constructors, no
+   carried index, non-dependent motive (`join_point?`, `:4582`). So: **any graded `let`
+   inside a matched arm of an ordinary `case` goes through `Subst.shift` — and comes out `ω`.**
+
+3. **`Relevance` is the only thing in the codebase that ever reads a `let` grade** (§3c):
+   `kernel.ex:126` and `:349` bind `_g` and ignore it; `erase.ex:48` rewrites it to ω.
+   `relevance.ex:260` is the sole reader, and it runs on the **final assembled body**
+   (`declarations.ex:536`, `Relevance.check(env, sig.name, quantities, body_term)`) —
+   i.e. **strictly after** `wrap_join` has already laundered the term.
+
+4. **With the grade now `ω`, the check disarms itself.** `Grade.restricted?(:unrestricted)`
+   is `false`, and `admits?(:unrestricted, used)` is `true` for **every** usage count
+   (`grade.ex:132`). So the binder carries no obligation: an `:erased` binder may be
+   returned, scrutinised, or passed in a present position; a `:linear` binder may be dropped
+   or used twice. **Undetected, with no diagnostic, in a program that compiles.**
+
+**Why this is damning rather than merely bad.** Read `relevance.ex:260`'s own comment:
+
+> A user-written `let g :linear = λ …` that happens to match the join shape has a restricted
+> grade `g`, so it takes the generic path below, where `check_binder(st, depth, g, …)`
+> enforces g's own obligation (**found by the un-join red-team: skipping it accepted a linear
+> closure dropped in some branch**).
+
+A red team **already found this failure mode**, and the fix they landed was to branch on
+`Grade.restricted?(g)` — i.e. **to trust the grade in the term**. That fix is correct and it
+is defeated upstream: by the time `Relevance` reads `g`, `Subst.shift` has set it to `ω`, so
+`restricted?/1` answers `false` and the guard never fires. **The guard is sound; the term it
+guards has been laundered before it arrives.**
+
+This is the audit's thesis in its purest form. The bug is not that someone forgot a clause —
+it is that a walker nobody thought of as authoritative (a de Bruijn renumberer!) is silently
+the last writer of a field that a *soundness check* is the only reader of.
+
+**Blast radius.** This is the discipline that makes erasure safe. `relevance.ex:4-7` says so:
+the `{0,ω}` check exists because *erasure will drop the `:erased` slots, so reject any body
+that uses one relevantly.* Defeat it and an erased proof term is dropped by `Erase` and then
+referenced at runtime.
+
+**Trigger (needs a red test — §7.1):** a graded `let` in a matched arm of an ordinary
+`case` with a default arm and ≥2 uncovered constructors. Nothing exotic:
+
+```cure
+match c
+  A(x) -> let pf :erased = proof_of(x)   # grade → ω on the way to Relevance
+          use(pf)                        # relevant use of an erased binder: ACCEPTED
+  _    -> fallback()
+```
+
+**Fix.** Thread `g`. Six clauses, one substitution each — `{:let, g, …}` instead of
+`{:let, Grade.unrestricted(), …}`, exactly as the trusted `Core.Term.shift`/`subst`
+(`term.ex:190-191`, `:277-278`) already do. This is E-layer, zero TCB. **Do not fix it
+without the red test in hand first** — a fix this small must be *proven* to have closed
+something.
+
+*Note: `Erase.erase`'s identical grade-discard (`erase.ex:48`) is harmless — erasure runs
+after the last grade reader, so the output grade is dead data. Leave it or thread it for
+hygiene, but it is not part of this defect.*
 
 ---
 
-### 4.2 `Cure.Elab.Subst` destroys every QTT grade it touches  · **HIGH**
-`lib/cure/elab/subst.ex:47-56` (`replace`) and `:87-96` (`shift`)
+### 4.1 `has_meta?` — **REFUTED.** See §9.
 
-```elixir
-defp replace({:pi, _g, d, c}, env, k, depth),
-  do: {:pi, Cure.Core.Grade.unrestricted(), replace(d, ...), replace(c, ...)}
-#           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ incoming grade DISCARDED
-```
-
-Every binder clause in both functions — `:pi`, `:lam`, `:let`, in `replace` **and** in
-`shift` — pattern-matches the grade as `_g` and then **hardcodes
-`Grade.unrestricted()`** in the reconstruction.
-
-**What it silently does.** It rewrites erasure information. A grade-`0` (erased) binder that
-passes through *any* elaborator substitution or shift comes out grade-`ω` (runtime-relevant).
-Nothing reports this; the term looks well-formed.
-
-**Why this is not cosmetic.** Two facts make it live:
-
-1. The **kernel's own** `Term.shift`/`Term.subst` (`core/term.ex:187-191`, `:271-278`)
-   correctly thread `g` through. So the elaborator's meta-aware copy is not merely a
-   specialisation of the kernel's — it *disagrees with it* on the semantics of a binder.
-2. **`Conv` compares grades by equality**, deliberately (`core/conv.ex:77-79`: *"Grades are
-   compared by EQUALITY, never by `Grade.leq/2`"*).
-
-So a λ whose grade was reset to ω, checked against a Π that legitimately says `0`, is
-**rejected by the kernel** on a grade mismatch — surfacing as an inscrutable conversion
-failure far from the cause. `Subst.shift` is called on *solved metavariable solutions* every
-time one is read back across a binder (`unify.ex:146-153`), so these grade-mangled terms are
-embedded in the final Core the kernel judges.
-
-The reverse direction is the one to worry about and is **not yet ruled out**: if an ω-ified
-*type* reaches the `{0,ω}` relevance check, that check would see a relevant binder where the
-real signature says erased, and would **not** enforce the erasure discipline — accepting a
-program that scrutinises an erased value. Whether `relevance.ex` reads a `Subst`-processed
-type is **OPEN** (§7.1). If it does, this is CRITICAL, not HIGH.
-
-**Fix:** thread `g`. One-character-per-clause change, six clauses. It is difficult to see
-this as anything but a copy-paste from a pre-QTT version of the file.
+Filed as CRITICAL in the first draft. Both skeptics refuted it independently and they were
+right; the reachability argument is recorded in §9 so it is not re-litigated. What survives
+is tech debt, not a defect: the local `has_meta?` is structurally incomplete *and* a complete
+`Unify.has_meta?/1` already exists and is used elsewhere in the same file. Swap the call, for
+consistency and defence in depth — but do not report it as a bug found.
 
 ---
 
@@ -433,42 +516,62 @@ next to it did not. Flip `mabs`'s catch-all to fail closed and the asymmetry dis
 
 ---
 
-### 4.6 `global_refs` — the `:let` reachability bug, reintroduced for `Effect`  · **MEDIUM**
+### 4.6 `global_refs` — the `:let` reachability bug, reintroduced for `Effect`  · **LOW** (tooling only)
 `lib/cure/elab/program.ex:838` · catch-all `do: []`
 
-The most instructive finding in the audit, because the fix for its twin is **three lines
-above it** (quoted in §1). `global_refs` now handles `:let`. It does **not** handle
-`effect_type` / `effect_pure` / `effect_bind`.
+**The most instructive finding in the audit, and — after the critic's reachability check —
+one of the least dangerous.** Both facts matter.
 
-**What it silently does.** A def whose body sequences effects — `x <- helper(); pure(x)`,
-elaborating to `{:effect_bind, {:global, :helper}, {:lam, …}}` — reports **no global
-references at all** for the effectful spine. `reachable_def_names/2` therefore omits
-`helper`, and, in the words of the existing comment about the identical `:let` failure,
-*"co-emitting such a closure produced a module that called a function it never defined."*
+The fix for its twin is **three lines above it** (quoted in §1). `global_refs` now handles
+`:let`. It does **not** handle `effect_type` / `effect_pure` / `effect_bind`. A def whose
+body sequences effects — `x <- helper(); pure(x)`, elaborating to
+`{:effect_bind, {:app, {:global, :helper}, _}, {:lam, …}}` — reports **no global reference to
+`helper`**, so `reachable_def_names/2` omits it.
 
-Given the effect surface **is** the concurrency surface (fsm/actor/sup), this is squarely on
-the path the language is built for.
+**Downgraded from MEDIUM on a verified reachability finding.** The critic checked the actual
+consumer, and I confirmed it: **nothing in `lib/` calls `reachable_def_names/2`.** The
+production `.cure`→BEAM path (`compiler.ex:411`) emits every syntactically-declared def
+regardless of reachability, so no compiled program can be affected. The function's only
+consumers are **test/tooling harnesses** (`Emit.compile_and_load(env, functions:
+Program.reachable_def_names(env, roots))`, e.g. `test/cure/elab/reachability_let_test.exs`).
+There it reproduces the original failure mode exactly — silently omits a real dependency,
+`UndefinedFunctionError` later — but it cannot ship wrong code to a user.
+
+Keep it in §4 anyway, at LOW, because **it is the audit's clearest proof that the bug class
+regenerates**: someone diagnosed this precisely, wrote the diagnosis down, fixed one former
+in one walker, and did not sweep. The next former walked straight back into it.
 
 ---
 
-### 4.7 `count_level` — the `{0,ω}` un-join safety gate is blind to `Effect`  · **HIGH**
-*(raised from MEDIUM: two independent lenses found it and both skeptics graded it real, one at
-HIGH, on the grounds that its polarity is permit-too-much rather than reject-too-much.)*
+### 4.7 `count_level` — the un-join safety gate is blind to `Effect`  · **MEDIUM**
+*(Found by two independent lenses. Severity **settled at MEDIUM**, not the HIGH of the first
+draft: the unsound-accept outcome exists but is narrower than "permits too much" implied.)*
 `lib/cure/elab/relevance.ex:451` · catch-all `do: 0`
 
 `count_level` answers "how many times does variable `t` occur here?" and `join_binder_safe?`
-consumes it as a **safety gate**, whose contract (moduledoc `:403-413`) requires a branch to
-be *provably free* of the join binder before the un-join optimisation may fire.
+(`:414-430`) consumes it as a **safety gate**: a branch must be *provably free* of the join
+binder before `walk_join_branches` may count that binder's captures **once, unscaled** instead
+of ω-scaled.
 
 **What it silently does.** For any `Effect`-wrapped subterm it returns **`0`** — "the variable
-does not occur" — which is indistinguishable from a genuine absence. An occurrence **hidden
-inside an effect node** therefore reads as absent, and the gate **authorises an optimisation
-it is supposed to forbid**.
+does not occur" — indistinguishable from genuine absence. And the trigger is *ordinary*, not
+contrived: a sequential-effect branch (`B -> let r = some_effect(); cont(r)`) elaborates via
+`effectful_let_bind` (`elaborator.ex:5510-5518`) to a body whose **top-level** former is
+`{:effect_bind, …}`. `count_level` zeroes the entire branch out **without ever looking at
+whether the join binder occurs in it.**
 
-Note the polarity: this is not a gate that rejects too much. It is a gate that **permits too
-much**, on the basis of an answer it did not actually compute. That is the same shape as
-`escapes?` returning `false` for an unenumerated form — the very thing `escapes?`'s comment
-says must never happen.
+Its sibling `walk/4` **in the same file** (`:353-373`) was already patched for these three
+formers, with a comment describing this exact class of bug (*"Without this clause … NO usage
+inside it … was ever counted"*). `count_level`, a few dozen lines below, was not.
+
+**Why MEDIUM and not HIGH — the polarity is grade-dependent.** For a `:linear` capture the
+outcome is a **spurious rejection** (`Grade.leq(:erased, :linear)` is `false`) — annoying,
+safe. The unsound direction requires `:affine` specifically: `Grade.leq(:erased, :affine)` is
+`true` **by design** (`grade.ex:147`, the deliberate 0-or-1 subusaging exception), so a
+genuinely double-used affine capture can pass a check whose whole job is to reject exactly
+that. Real, but narrow.
+
+**Fix:** give `count_level` the same three Effect clauses `walk/4` already has.
 
 ---
 
@@ -497,13 +600,24 @@ them would have been the easy, wrong outcome.*
 
 ---
 
-### 4.9 Dead retry on the dotted-qualified call path  · **LOW** (`UNVERIFIED` — agent lead)
-`lib/cure/elab/elaborator.ex:269`
+### 4.9 Dead retry on the dotted-qualified call path  · **LOW**
+`lib/cure/elab/elaborator.ex:269-288`
 
-Reported as a sibling of the dead retry deleted in `a8b4e7e9`: a lambda-bearing
-dotted-qualified call retries the identical `elaborate_implicit_app_bidirectional` call that
-has just failed, and so can only fail again. Behaviour-preserving waste, not a wrong answer.
-**Not yet hand-verified** — pending §7.3.
+A sibling of the dead retry deleted in `a8b4e7e9`, and the same shape: in
+`elaborate_named_call/5`'s qualified-plain-global clause, when `args` contains a lambda,
+`:272` calls `elaborate_implicit_app_bidirectional(env, resolved, args, names, ctx)`; on
+`{:error, _}`, `:284` calls **the same function with the same five bindings** — both omitting
+the optional 6th `expected`, which defaults to `nil` identically. Nothing is reassigned
+between them, and the function is pure (fresh `MetaCtx.new/0`, no process state that could
+flip an error to success). The retry is **guaranteed** to fail identically.
+
+Wasted work only — the surfaced error is unchanged — but it re-runs Miller-pattern solving
+over the whole argument list on every such failure.
+
+**Fix:** drop the retry **in the lambda sub-branch only**. The non-lambda sub-branch's retry
+is *legitimate* and must stay: it runs a genuinely different algorithm
+(`map_present_args` + `elaborate_global_app` vs. `elaborate_implicit_app_bidirectional`).
+Deleting both would be the easy wrong fix.
 
 ---
 
@@ -579,45 +693,164 @@ contract the kernel already implements in `core/term.ex`, not changing it.
 
 ---
 
-## 7. Open questions / pending verification
+## 7. What to do next — probes, in order
 
-Nothing below is settled. Each is a **probe**, not an argument — the audit's own house rule is
-that "I could not construct a counterexample" is not a proof, and every one of these is a place
-where I currently have only an argument.
+The house rule is that *"I could not construct a counterexample"* is not a proof. Everything
+below is a **probe**, not an argument.
 
-1. **§4.0 — write the red test first.** The `Equivalent`/`reflexive` + `do`-block shape in
-   §4.0 should fail *today*, at emit, with a wrong or unbound variable. Confirm the failure
-   before fixing, and keep it as the regression test. **This is the highest-value single
-   action in this document.**
-2. **§4.1 trigger.** Construct a program in which an unsolved metavariable is genuinely
-   nested inside a `:case`/`:let`/effect subterm of a chosen argument, and observe what the
-   kernel does with `{:meta, id}` — crash, validator rejection, or worse. The severity is
-   CRITICAL on the broken invariant alone, but the *consequence* is unknown, and that is not
-   an acceptable place to leave it.
-3. **§4.2 severity.** Does any `Subst`-processed (hence ω-ified) **type** reach the `{0,ω}`
-   relevance check? If yes → the erasure discipline is not enforced on substituted types →
-   **CRITICAL, soundness**. If no → HIGH, completeness (a conversion failure, since
-   `conv.ex:77` compares grades by equality). **Must be settled.**
-4. **§4.4 direction.** TCB. Can skipping index refinement inside a `let`/effect in a branch
+**No fix should be attempted before its red test exists.** Both CRITICALs are one-line-per-clause
+fixes in a 116-line file, which is exactly the situation in which a fix silently changes nothing
+and everyone declares victory.
+
+1. **§4.2 — the red test, first, before anything else.** A graded `let` in a matched arm of a
+   join-eligible `case` that *relevantly uses an erased binder*. It should **compile today**
+   (that is the bug) and be **rejected by `Relevance` after the fix**. This is the highest-value
+   single action in this document: it is a soundness hole, the trigger is an ordinary surface
+   shape, and the fix is six clauses.
+2. **§4.0 — the second red test.** The `Equivalent`/`reflexive` + `do`-block shape should fail
+   *today* at emit, with a wrong or unbound variable. Confirm the failure before fixing; keep
+   it as the regression test.
+3. **§4.4 direction — TCB.** Can skipping index refinement inside a `let`/effect in a branch
    body ever make an ill-typed program *check*, or only make a well-typed one fail? Settle by
-   probe. Any fix here needs an Antigen antibody + the full gate, per standing rule.
-5. **§4.9** unverified; hand-check the retry guard for subsumption.
-6. **`do_unify_struct`** fits none of the three classes — its fallthrough (`unify.ex:316`)
+   probe, not argument. Any fix needs an Antigen antibody + the full gate, per standing rule.
+4. **`do_unify_struct`** fits none of the three classes — its fallthrough (`unify.ex:316`)
    attempts δ-conversion rather than returning a verdict. Given §3a it is probably inert, but
    it has not been read.
-7. **Antigen — the real indictment.** None of these twelve were caught. The shape-coverage
-   manifest reports **318/318 cells**, and that number is *true* and *useless here*: it
-   measures **kernel** shapes, and every live defect in this document is in an **E-layer
-   walker** that no cell exercises. A coverage cell per **(walker × former)** — mechanically
-   enumerable from `Core.Term.t()` — would have caught all twelve on the day each former
-   landed. **The metric was green while the bug class was wide open, which is the most
-   important thing the audit found.**
+5. **The systemic fix (§6).** Do it *after* the two red tests are green, not instead of them.
+
+### 7b. Antigen — the real indictment
+
+**None of these were caught.** The shape-coverage manifest reports **318/318 cells**, and that
+number is *true* and *useless here*: it measures **kernel** shapes, and every live defect in
+this document is in an **E-layer walker** that no cell exercises. A coverage cell per
+**(walker × former)** — mechanically enumerable from `Core.Term.t()` — would have caught all of
+them on the day each former landed.
+
+**The metric was green while the bug class was wide open.** That is the most important single
+thing the audit found, and it is not a bug in any walker.
 
 ---
 
-## 8. Findings NOT confirmed (recorded so they are not re-litigated)
+## 8. What this audit did NOT cover
+
+*(From the completeness critic, kept because an audit that does not say where it did not look is
+a marketing document. Nothing below is a finding — these are **un-searched areas**, ranked by how
+much it would hurt to be wrong about them.)*
+
+The 13 surviving findings cite **six files**. `lib/cure/elab` is 19 files / 17,222 lines;
+`lib/cure/core` is 17 files / 6,325 lines. In `core/`, only `kernel.ex` was grazed — two lines.
+Everything else has **zero findings anchored in it**, and mostly zero attention.
+
+1. **`core/kernel.ex` (1,629 lines) — the TCB's own exhaustiveness was never the target.** Every
+   finding here treats `kernel.ex` as the *ground truth* to diff E-layer walkers **against**;
+   nobody asked whether its own matches over `Core.Term`/`Core.Value` are exhaustive. This is the
+   worst possible place for a fail-open catch-all, because there is **no re-check downstream of
+   the kernel**. And there is direct evidence the authors have been bitten here before:
+   `check_coverage` (`:1042`) carries **two hand-added, explicitly-documented "coverage soundness
+   hole" bridges** (`{:nat_lit,_}`↔`Z/S` at `:1281`; `{:bounded_lit,_}`↔`First/Next` at `:1298`).
+   A third literal/constructor duality — or the next Core former — hitting `unify_one`'s generic
+   rigid-head-clash fallback would be verdicted `:impossible` when it is actually reachable, and
+   `check_coverage` would accept a `case` that omits a real constructor.
+2. **`core/certificate.ex` (664) — `terminating?/3`, the structural-termination checker, is
+   entirely unaudited.** `Kernel.validate_certificate/2` (`:630`) calls it to decide whether a def
+   may be δ-certified. If *its* walker fails open on a call shape it doesn't recognise — say, a
+   recursive call inside a `:let` or an `:effect_bind` continuation, **the exact two formers every
+   finding in this document shows getting dropped** — it certifies a non-terminating function for
+   type-level computation. That is non-normalising δ-reduction feeding the conversion checker.
+   Note the contrast that makes this sharp: `totality_closure.ex` *was* checked and **is**
+   hardened (fails closed, with a comment naming this bug class and citing
+   `Certificate.walk_node/4` as an already-patched sibling). Its neighbour — the file
+   `walk_node/4` actually lives in — was never opened.
+3. **`core/conv.ex` (285) — definitional equality itself was never a target.** If `conv`'s
+   dispatch over paired `Value` shapes treats an unrecognised pair as *convertible* rather than
+   rejecting, that is the most direct unsoundness available. This is not hypothetical: it is
+   **literally the mechanism of the `Effect(T)` motive bug already in the memory index**
+   (`infer_type_value_sort` lacking a `{:veffect_type}` case) — the same shape of bug, one layer
+   over.
+4. **`elab/coherence.ex` (92) + `implementation.ex` (358)** — typeclass coherence / instance
+   overlap. Named in the task brief; no lens ran. If the `(iface, head)` key computation under- or
+   over-normalises through transparent synonyms, two conflicting anonymous instances register
+   without error and dictionary resolution silently picks one.
+5. **`elab/resolve.ex` (319) + the bulk of `resolution.ex` (508)** — import/qualified-name
+   resolution. Only `rekey_term`'s catch-all was cited, and only as someone else's known bug.
+   Memory already flags this area as fragile twice over. A qualified call resolving to the local
+   shadowing def instead of the imported one is *wrong semantics, no crash*.
+6. **`elab/macro_expand.ex` (263)** — zero coverage, and per the memory index this is the last
+   open macro gap. Nightmare: hygienic renaming misses a binder shape a macro introduces, so a
+   macro-injected variable silently captures a user variable. **Note for the macro branch: none
+   of §4's defects are in macro code** (expansion is surface→surface at `program.ex:383` and
+   never touches `Elab.Subst`), so it is not blocked by this audit — but macro-*generated*
+   effectful code is exposed to §4.0 like any other code, and this file is the obvious place to
+   point the next audit.
+7. **`elab/union.ex` (658) + `guard_lint.ex` (249)** — anonymous-union coverage and pattern-guard
+   exhaustiveness, both adjacent to coverage checking, no lens. Anonymous ADTs are recent.
+
+### 8b. The one suspicious silence
+
+Eight lenses were declared. **Seven produced findings. "Metavariable lifecycle (zonk/occurs/
+scope)" produced none — and never appears as a lens tag at all.**
+
+The critic checked the obvious targets rather than trusting the silence: `Unify.zonk/2`
+(`:465`) is a generic tuple/list walk, `Inductive.occurs?/4` (`:696-721`) is a generic walk with
+a fail-closed leaf default. Both look deliberately hardened, so the silence *may* be legitimate.
+
+**But nothing demonstrates that lens ever ran against `solve/4`'s Miller-vs-first-order dispatch,
+or against how a coherence/dictionary metavariable gets zonked before crossing into kernel-checked
+code. And this cycle's headline bug — `bidir_app_slot`/`resolve_deferred_slots` — *was* a
+metavariable-lifecycle defect.** A second instance of that exact shape is the single most
+plausible thing still hiding, and no finding in this document rules it out.
+
+---
+
+## 9. Findings NOT confirmed (recorded so they are not re-litigated)
 
 Kept deliberately, with the refuting argument, so nobody "rediscovers" them.
+
+- **`has_meta?` letting an unsolved metavariable reach the kernel** (`elaborator.ex:7344-7350`)
+  — filed **CRITICAL in the first draft of this document**, and **REFUTED** by both skeptics
+  independently. I hand-checked their argument and they are right.
+
+  The *textual* claim is entirely true: the local `has_meta?` handles 5 of 10 compound formers
+  and falls to `_ -> false` for `:case`/`:let`/`effect_*`, while a structurally-complete
+  `Unify.has_meta?/1` (`unify.ex:456`) exists **in the same file** and is used at five other
+  call sites. What is false is the **trigger**. A `:case`/`:let` term can never reach an outer
+  `has_meta?` gate while still carrying a live meta, because **every construction site
+  kernel-checks itself before returning**: `elaborate_expr_typed({:pattern_match,…})` calls
+  `Kernel.check(ctx, term, result_type_val)` at `:723-724` *inside the same clause*, before
+  `{:ok, term, …}` is returned (verified directly); `elaborate_expr_checked({:pattern_match,…})`
+  does the same at `:1518-1519`; `elaborate_expr_typed({:block,…})` at `:600-601`; and
+  `declarations.ex:588-593` re-checks the whole assembled body regardless. `Kernel.infer` has no
+  `{:meta,_}` clause and no catch-all, so a live meta nested in a branch **aborts there**. And a
+  meta that is a *direct* element of `chosen` — which is what the deferred-slot machinery
+  actually produces — is caught by `has_meta?`'s **first clause**, no recursion needed.
+
+  Worst case is therefore a `FunctionClauseError` instead of a clean `:unsolved_metavariables`,
+  in a scenario neither skeptic could show is reachable at all. **Not a soundness finding.**
+  Residual action: swap the local `has_meta?` for `Unify.has_meta?` — defence in depth and one
+  less misleading bespoke walker. **File it as tech debt, not as a bug.**
+
+  *Why I got it wrong: I reasoned from the broken invariant ("this gate is incomplete, and the
+  gate's job is soundness") and never asked whether anything else already enforced it. The
+  elaborator's comments say the caller re-checks; I read that as an empty promise. It is not.*
+
+- **`Subst` discarding the QTT grade on `:pi` and `:lam`** — **REFUTED as inert**, and this
+  refutation is *correct and important*: it is what allowed §4.2 to be stated precisely instead
+  of as a vague "grades get mangled." The kernel re-derives Pi/Lam grades from the registered
+  declaration via `Context.signature/1` and the trusted `Core.Term.subst`, and compares at
+  `kernel.ex:324-329` — never consulting `Elab.Subst`'s output. A wrong grade on a Pi is caught,
+  not believed. The elaborator being untrusted is doing real work here.
+
+  **This does NOT extend to `:let`** (§3c, §4.2): a let's grade is re-derivable from nothing,
+  and the same refutation, applied there, is false. *Both skeptics who touched this were partly
+  right; the file is wrong in one place and harmless in two others.*
+
+- **`mabs/5` skipping `:let`/`Effect`** (`unify.ex:269`) — **REFUTED as unreachable**, twice, and
+  re-verified by the synthesiser reading the source directly rather than re-asserting the prior
+  verdict. Every `Unify.unify` operand is built either through `idx_to_core`'s closed grammar
+  (`declarations.ex:1658-1805`, whose catch-all *rejects* anything outside its 7 forms, including
+  let/do syntax) or via `Quote.reify` of a semantic `Value` (which has no `:vlet`). Neither can
+  produce a `:let`/`effect_pure`/`effect_bind` in type position. Real code, structurally dead.
+  See §4.5 — worth fixing as insurance, not reportable as a bug.
 
 - **`totality_closure.collect` skipping recursive calls inside `Effect` nodes** — the audit's
   worst-case hypothesis (**a non-total function certified total**). **REFUTED**: `collect/1` is
