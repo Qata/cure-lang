@@ -1730,6 +1730,19 @@ splice site (`macro_expand.ex:74`) and `LiftModule.request_ast/1` both assume a
 single node. Secondary: `handle_call` needs TWO derived indices (request `q` and
 reply `r`), and the reply type comes from arm BODIES, not patterns.
 
+**Shared macro definitions (2026-07-14).** Reflection provides a typed view of
+one macro invocation; it is not itself a container-level inheritance or
+definition-sharing mechanism. Common callback construction, state plumbing,
+behaviour declarations, and syntax normalization therefore belong in ordinary
+Cure functions over `Std.Syntax`. The `actor`, `fsm`, `sup`, and `app` macros
+will remain thin source-level adapters that normalize their inputs and call
+those shared builders. A builder may return a syntax block containing shared
+declarations and specialized callbacks, allowing definitions to be reused
+lexically across macro expansions without adding a compiler-owned OTP object
+model. A local macro remains useful for strictly textual repetition, but it is
+not a substitute for the typed `Std.Syntax` analysis/construction layer needed
+to derive message types and validate handler shapes.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 
