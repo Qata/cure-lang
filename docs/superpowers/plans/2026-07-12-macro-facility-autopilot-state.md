@@ -1713,6 +1713,14 @@ produce a runnable `lift module`; a companion test proves function-body
 computed uses remain unconsumed by the declaration pass. (`7edd6847` plus the
 follow-up declaration-expansion phase.)
 
+**L0.3 status (2026-07-14).** Repeated Tier-3 holes now carry explicit
+`syntax_repeated_fields` metadata. Their generated input records declare
+`List(Syntax)` fields, and `MacroSyntax.to_core_record/4` encodes the captured
+values as an actual Cure list of reflected syntax values. Ordinary fields and
+the reserved context field retain their previous encoding. Coverage includes
+parser metadata, compile-time pattern matching over a repeated field, and
+runtime execution of the resulting function.
+
 **Hardest sub-problem** (not the reflection, not even the reorder): the derived
 message type is a NEW NOMINAL DECLARATION that must exist before the lifted module
 referencing it is elaborated, and must be the SAME nominal type external `send`

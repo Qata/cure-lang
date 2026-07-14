@@ -91,7 +91,7 @@ defmodule Cure.Compiler.LiftModule do
         |> Map.get(:syntax_fields, [])
         |> MacroSyntax.record_fields()
         |> Enum.map(fn field ->
-          {:param, [type: {:variable, [scope: :local], "Syntax"}], field}
+          {:param, [type: macro_syntax_field_type(field, rule)], field}
         end)
 
       {:container,
@@ -116,6 +116,14 @@ defmodule Cure.Compiler.LiftModule do
   end
 
   defp unit_declarations(_other), do: []
+
+  defp macro_syntax_field_type(field, rule) do
+    if field in Map.get(rule, :syntax_repeated_fields, []) do
+      {:function_call, [name: "List"], [{:variable, [scope: :local], "Syntax"}]}
+    else
+      {:variable, [scope: :local], "Syntax"}
+    end
+  end
 
   defp declared_name({:import, _meta, _children}), do: nil
 

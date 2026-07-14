@@ -1058,7 +1058,7 @@ defmodule Cure.Elab.Program do
         |> Map.get(:syntax_fields, [])
         |> MacroSyntax.record_fields()
         |> Enum.map(fn field ->
-          {:param, [type: {:variable, [scope: :local], "Syntax"}], field}
+          {:param, [type: macro_syntax_field_type(field, rule)], field}
         end)
 
       {:container,
@@ -1089,6 +1089,14 @@ defmodule Cure.Elab.Program do
   end
 
   defp declarations(_other), do: []
+
+  defp macro_syntax_field_type(field, rule) do
+    if field in Map.get(rule, :syntax_repeated_fields, []) do
+      {:function_call, [name: "List"], [{:variable, [scope: :local], "Syntax"}]}
+    else
+      {:variable, [scope: :local], "Syntax"}
+    end
+  end
 
   defp imports({:block, _meta, items}) when is_list(items),
     do: Enum.flat_map(items, &imports/1)

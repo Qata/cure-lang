@@ -199,9 +199,19 @@ defmodule Cure.Compiler.MacroSyntax do
   `context` hole owns the name, and no extra argument is appended.
   """
   @spec to_core_record(String.t() | atom(), [String.t()], repr()) :: Cure.Core.Term.t()
-  def to_core_record(type_name, syntax_fields, {:syn_node, _tag, attrs, kids}) do
+  def to_core_record(type_name, syntax_fields, repr),
+    do: to_core_record(type_name, syntax_fields, [], repr)
+
+  @spec to_core_record(String.t() | atom(), [String.t()], [String.t()], repr()) :: Cure.Core.Term.t()
+  def to_core_record(type_name, syntax_fields, repeated_fields, {:syn_node, _tag, attrs, kids}) do
     name = if is_binary(type_name), do: String.to_atom(type_name), else: type_name
-    args = Enum.map(kids, &to_core/1)
+
+    args =
+      syntax_fields
+      |> Enum.zip(kids)
+      |> Enum.map(fn {field, kid} ->
+        if field in repeated_fields, do: to_core_syntax_list(kid), else: to_core(kid)
+      end)
 
     args =
       if @context_field in syntax_fields,
@@ -210,6 +220,22 @@ defmodule Cure.Compiler.MacroSyntax do
 
     {:ctor, name, args}
   end
+
+  # The parser keeps one child slot per grammar field, so a repeated field is
+  # represented as an outer one-element list containing the captured values.
+  # Unwrap that field slot before constructing the reflected Cure list.
+  defp to_core_syntax_list({:syn_raw, {:s_list, [{:s_list, items}]}}) do
+    to_core_list(Enum.map(items, &to_core_syntax_item/1))
+  end
+
+  defp to_core_syntax_list({:syn_raw, {:s_list, items}}) do
+    to_core_list(Enum.map(items, &to_core_syntax_item/1))
+  end
+
+  defp to_core_syntax_list(repr), do: to_core_list([to_core(repr)])
+
+  defp to_core_syntax_item({:s_syntax, repr}), do: to_core(repr)
+  defp to_core_syntax_item(lit), do: to_core({:syn_raw, lit})
 
   defp context_attr(attrs) do
     case List.keyfind(attrs, :expansion_context, 0) do

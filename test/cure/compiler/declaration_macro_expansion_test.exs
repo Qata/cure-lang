@@ -28,6 +28,7 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     source = """
     mod M
       use Std.Syntax
+      use Std.List
 
       macro Mk
         syntax mk computed by build
@@ -42,6 +43,27 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert {:ok, ast} = Cure.Compiler.parse_source(source)
     assert {:ok, expanded} = Program.expand_declaration_uses(ast)
     assert find_computed_use(expanded)
+  end
+
+  test "repeated computed holes are typed and reflected as List(Syntax)" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro Gather
+        syntax gather <items: Code>... computed by build
+
+      fn build(input: GatherSyntax) -> Syntax =
+        match input.items
+          [] -> Leaf(:literal, [KV(:subtype, SAtom(:integer))], SInt(0))
+          [_ | _] -> Leaf(:literal, [KV(:subtype, SAtom(:integer))], SInt(1))
+
+      fn result() -> Int = gather 1 2 3
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == 1
   end
 
   defp find_computed_use({:computed_use, _meta, _children}), do: true

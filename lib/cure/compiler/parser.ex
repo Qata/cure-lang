@@ -472,6 +472,7 @@ defmodule Cure.Compiler.Parser do
           keyword: keyword,
           syntax_type: macro_syntax_type(keyword),
           syntax_fields: macro_syntax_fields(rule.segments),
+          syntax_repeated_fields: macro_syntax_repeated_fields(rule.segments),
           line: keyword_token.line,
           col: keyword_token.col
         ]
@@ -5473,6 +5474,7 @@ defmodule Cure.Compiler.Parser do
       segments: segments,
       syntax_type: macro_syntax_type(keyword),
       syntax_fields: macro_syntax_fields(segments),
+      syntax_repeated_fields: macro_syntax_repeated_fields(segments),
       elab: elab,
       examples: examples,
       category: category,
@@ -5506,11 +5508,24 @@ defmodule Cure.Compiler.Parser do
     |> Enum.uniq()
   end
 
+  defp macro_syntax_repeated_fields(segments) do
+    segments
+    |> Enum.flat_map(&segment_repeated_hole_names/1)
+    |> Enum.uniq()
+  end
+
   defp segment_hole_names({:hole, %{name: name}}), do: [name]
   defp segment_hole_names({:raw_hole, %{name: name}}), do: [name]
   defp segment_hole_names({:repeat, segment}), do: segment_hole_names(segment)
   defp segment_hole_names({:optional, segments}), do: Enum.flat_map(segments, &segment_hole_names/1)
   defp segment_hole_names(_segment), do: []
+
+  defp segment_repeated_hole_names({:repeat, segment}), do: segment_hole_names(segment)
+
+  defp segment_repeated_hole_names({:optional, segments}),
+    do: Enum.flat_map(segments, &segment_repeated_hole_names/1)
+
+  defp segment_repeated_hole_names(_segment), do: []
 
   defp segment_inputs({:hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]

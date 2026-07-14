@@ -38,7 +38,15 @@ defmodule Cure.Compiler.MacroComputedTest do
       end
     end
 
-    assert {:computed_use, [keyword: "mk", syntax_type: "MkSyntax", syntax_fields: [], line: _, col: _], _} =
+    assert {:computed_use,
+            [
+              keyword: "mk",
+              syntax_type: "MkSyntax",
+              syntax_fields: [],
+              syntax_repeated_fields: [],
+              line: _,
+              col: _
+            ], _} =
              find.(find, node)
   end
 
@@ -65,7 +73,15 @@ defmodule Cure.Compiler.MacroComputedTest do
       end
     end
 
-    assert {:computed_use, [keyword: "mk", syntax_type: "MkSyntax", syntax_fields: [], line: _, col: _],
+    assert {:computed_use,
+            [
+              keyword: "mk",
+              syntax_type: "MkSyntax",
+              syntax_fields: [],
+              syntax_repeated_fields: [],
+              line: _,
+              col: _
+            ],
             [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
              find.(find, node)
   end

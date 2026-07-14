@@ -199,7 +199,12 @@ defmodule Cure.Elab.MacroExpand do
 
         syntax_type ->
           [
-            MacroSyntax.to_core_record(syntax_type, Keyword.get(meta, :syntax_fields, []), input_repr),
+            MacroSyntax.to_core_record(
+              syntax_type,
+              Keyword.get(meta, :syntax_fields, []),
+              Keyword.get(meta, :syntax_repeated_fields, []),
+              input_repr
+            ),
             MacroSyntax.to_core(input_repr)
           ]
       end
