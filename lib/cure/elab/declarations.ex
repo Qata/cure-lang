@@ -452,7 +452,7 @@ defmodule Cure.Elab.Declarations do
     case codomain do
       {:data, ukey, [], []} ->
         if Cure.Elab.Union.union_family?(ukey) do
-          case Cure.Elab.Union.discriminable(Cure.Elab.Union.members_of(env, ukey)) do
+          case Cure.Elab.Union.discriminable(Cure.Elab.Union.members_of(env, ukey), env) do
             :ok -> :ok
             {:error, reason} -> {:error, {:extern_union_indistinct, sig.name, reason}}
           end
@@ -1811,7 +1811,7 @@ defmodule Cure.Elab.Declarations do
     with {:ok, ms} <- Cure.Elab.Union.canonicalise(members, scope, env) do
       case ms do
         [%{payload: payload}] when payload != nil -> {:ok, payload}
-        _ -> {:ok, {:data, Cure.Elab.Union.family_key(ms), [], []}}
+        _ -> {:ok, {:data, Cure.Elab.Union.family_key(ms, env), [], []}}
       end
     end
   end

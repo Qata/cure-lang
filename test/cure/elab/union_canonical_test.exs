@@ -51,7 +51,7 @@ defmodule Cure.Elab.UnionCanonicalTest do
 
   defp key(src, env) do
     {:ok, ms} = members(src, env)
-    Union.family_key(ms)
+    Union.family_key(ms, env)
   end
 
   describe "set semantics" do
@@ -210,7 +210,7 @@ defmodule Cure.Elab.UnionCanonicalTest do
     test "ctor names are qualified by the family key" do
       env = base_env()
       {:ok, ms} = members("Int | Bool", env)
-      fk = Union.family_key(ms)
+      fk = Union.family_key(ms, env)
       int_m = Enum.find(ms, &(&1.key == "Int"))
 
       assert Union.ctor_key(fk, int_m) == :"Union<Bool|Int>$Int"

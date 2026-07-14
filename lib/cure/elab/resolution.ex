@@ -208,7 +208,7 @@ defmodule Cure.Elab.Resolution do
           case c.args do
             # A nullary ctor is a LITERAL member — its key is a value, never a type name,
             # so nothing can re-key it. Rebuild the CANONICAL member shape (payload +
-            # lit_type_key): `Union.family_key/1` now inspects it to decide the
+            # lit_type_key): `Union.family_key/2` now inspects it to decide the
             # `Union<…>` vs `Disjoint<…>` prefix.
             [] ->
               key = strip_prefix(c.name, old_prefix)
@@ -228,7 +228,10 @@ defmodule Cure.Elab.Resolution do
         end)
         |> Enum.sort_by(& &1.key)
 
-      new_key = Cure.Elab.Union.family_key(members)
+      # The PRE-rekey `env`: a member's payload names are already rewritten, but the
+      # families themselves are still registered under their bare names, and it is the
+      # family (not the member) that carries an `@erases` class.
+      new_key = Cure.Elab.Union.family_key(members, env)
 
       if new_key == old_key do
         {amap, fams, ctors}

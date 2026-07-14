@@ -915,4 +915,84 @@ defmodule Cure.Elab.UnionTest do
       assert_raise CaseClauseError, fn -> apply(:"Cure.NG", :raw, [[-7]]) end
     end
   end
+
+  # An `opaque type` has no constructors, so nothing about its runtime shape can be
+  # inferred — which is exactly why `@erases(<class>)` exists. A carrier that DECLARES
+  # its erasure is a first-class union member: its class comes from the declaration
+  # instead of the built-in name table, and `is_pid`/`is_reference` discriminate it.
+  describe "opaque carriers with a declared erasure" do
+    test "an @erases(:pid) carrier is a legal union member" do
+      src = """
+      mod OPQ1
+        @erases(:pid)
+        opaque type Handle
+
+        @extern(:erlang, :whereis, 1)
+        fn look(name: Atom) -> Handle | :undefined
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      assert union_families(env) == [:"Union<Atom#:undefined|Handle>"]
+    end
+
+    test "a pid carrier and a reference carrier are told apart, not collided" do
+      src = """
+      mod OPQ2
+        @erases(:pid)
+        opaque type Handle
+
+        @erases(:reference)
+        opaque type Ref
+
+        @extern(:erlang, :hd, 1)
+        fn raw(xs: List(Atom)) -> Handle | Ref
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+
+      # Distinct classes (is_pid vs is_reference) ⇒ disjoint erasures ⇒ `Union<…>`, not
+      # `Disjoint<…>`. Two `:unsupported` members would have been rejected outright.
+      assert union_families(env) == [:"Union<Handle|Ref>"]
+    end
+
+    test "a declared-erasure member is discriminated at runtime by its guard" do
+      src = """
+      mod OPQ3
+        @erases(:pid)
+        opaque type Handle
+
+        @extern(:erlang, :whereis, 1)
+        fn look(name: Atom) -> Handle | :undefined
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      Process.register(self(), :cure_union_pid_probe)
+
+      # erlang:whereis/1 hands back an untagged pid; the boundary must re-tag it, which it
+      # can only do if `Handle` resolves to the `is_pid` guard.
+      assert apply(:"Cure.OPQ3", :look, [:cure_union_pid_probe]) ==
+               {:"Union<Atom#:undefined|Handle>$Handle", self()}
+
+      # ...and an unregistered name comes back as the literal member.
+      assert apply(:"Cure.OPQ3", :look, [:cure_union_no_such_name]) ==
+               :"Union<Atom#:undefined|Handle>$Atom#:undefined"
+    end
+
+    test "an opaque member WITHOUT @erases is still rejected — its shape is unknown" do
+      src = """
+      mod OPQ4
+        opaque type Bare
+
+        @extern(:erlang, :whereis, 1)
+        fn look(name: Atom) -> Bare | :undefined
+      end
+      """
+
+      assert {:error, {:extern_union_indistinct, :look, _}} = Program.elaborate(src)
+    end
+  end
 end

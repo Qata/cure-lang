@@ -99,9 +99,9 @@ defmodule Cure.Elab.Union do
   `<`, `>` and `|` are not producible by the type-name lexer, so neither key can collide
   with a user-declared type.
   """
-  @spec family_key([member()]) :: atom()
-  def family_key(members) do
-    prefix = if disjoint_only?(members), do: @disjoint_prefix, else: @union_prefix
+  @spec family_key([member()], Env.t()) :: atom()
+  def family_key(members, env) do
+    prefix = if disjoint_only?(members, env), do: @disjoint_prefix, else: @union_prefix
     inner = members |> Enum.map(& &1.key) |> Enum.join("|")
 
     String.to_atom(prefix <> inner <> ">")
@@ -115,10 +115,10 @@ defmodule Cure.Elab.Union do
   members overlap when their runtime classes coincide, when one refines the other
   (`Bool` ⊂ `Atom`), or when a literal falls inside a type member's class (`3` ∈ `Int`).
   """
-  @spec disjoint_only?([member()]) :: boolean()
-  def disjoint_only?(members) do
+  @spec disjoint_only?([member()], Env.t()) :: boolean()
+  def disjoint_only?(members, env) do
     Enum.any?(members, fn a ->
-      Enum.any?(members, fn b -> a.key < b.key and members_overlap?(a, b) end)
+      Enum.any?(members, fn b -> a.key < b.key and members_overlap?(a, b, env) end)
     end)
   end
 
@@ -127,10 +127,11 @@ defmodule Cure.Elab.Union do
   # the integer 65; Bool `true` and Atom `:true` are both the atom `true`. Assuming
   # "two literals never overlap" made `discriminable/1` certify a union it cannot
   # discriminate, and named it `Union<…>` when the tag was in fact load-bearing.
-  defp members_overlap?(%{payload: nil} = a, %{payload: nil} = b),
+  defp members_overlap?(%{payload: nil} = a, %{payload: nil} = b, _env),
     do: literal_value(a.key) == literal_value(b.key)
 
-  defp members_overlap?(a, b), do: class_overlap?(runtime_class(a), runtime_class(b))
+  defp members_overlap?(a, b, env),
+    do: class_overlap?(runtime_class(env, a), runtime_class(env, b))
 
   # A user ADT (`:unsupported`) erases to a bare atom when nullary, so it overlaps `Atom`.
   # Two DIFFERENT ADTs never overlap — constructor names are globally unique — and an ADT
@@ -226,17 +227,46 @@ defmodule Cure.Elab.Union do
   `:unsupported` for anything whose erasure is not a single recognisable shape — a user
   ADT erases to a bare atom when nullary and a tagged tuple otherwise, so it is BOTH
   shapes at once and no single guard recognises it.
-  """
-  @spec runtime_class(member()) :: atom()
-  def runtime_class(%{payload: nil, lit_type_key: t}), do: class_of_type_key(t)
-  def runtime_class(%{payload: ty}), do: class_of_core(ty)
 
-  defp class_of_core({:int_type}), do: :integer
-  defp class_of_core({:float_type}), do: :float
-  defp class_of_core({:binary_type}), do: :binary
-  defp class_of_core({:atom_type}), do: :atom
-  defp class_of_core({:data, name, _p, _i}), do: class_of_data_name(bare_family_name(name))
-  defp class_of_core(_other), do: :unsupported
+  Takes `env` because a family's class is not always a function of its NAME. An
+  `opaque type` has no constructors, so its erasure cannot be inferred from anything —
+  it is DECLARED, with `@erases(<class>)`, and that declaration lives on the family in
+  `env`. A member cannot cache its own class, either: `members_of/2` rebuilds members
+  from the family key, so the class must be re-derivable from the key plus `env`.
+  """
+  @spec runtime_class(Env.t(), member()) :: atom()
+  def runtime_class(_env, %{payload: nil, lit_type_key: t}), do: class_of_type_key(t)
+  def runtime_class(env, %{payload: ty}), do: class_of_core(env, ty)
+
+  defp class_of_core(_env, {:int_type}), do: :integer
+  defp class_of_core(_env, {:float_type}), do: :float
+  defp class_of_core(_env, {:binary_type}), do: :binary
+  defp class_of_core(_env, {:atom_type}), do: :atom
+
+  defp class_of_core(env, {:data, name, _p, _i}) do
+    declared_erasure(env, name) || class_of_data_name(bare_family_name(name))
+  end
+
+  defp class_of_core(_env, _other), do: :unsupported
+
+  # The `@erases(<class>)` a sealed FFI module declared for an opaque carrier. Only an
+  # opaque family can carry one (`Declarations.reject_erases_on_non_opaque/1`), so this
+  # never overrides a class the erasure of a real constructor set already determines.
+  #
+  # Looked up under the name AS WRITTEN first, then under the bare name: after
+  # `Resolution.rekey_module_env/3` the family is registered under its qualified
+  # `:"<module_id>#<name>"` key and the member payload names it that way too, but the
+  # rekey PASS itself recomputes `family_key/2` against the pre-rekey `env`, where only
+  # the bare name is registered.
+  defp declared_erasure(env, name) do
+    family =
+      Inductive.get_family(env, name) || Inductive.get_family(env, bare_family_name(name))
+
+    case family do
+      nil -> nil
+      f -> Map.get(f, :erasure)
+    end
+  end
 
   defp class_of_data_name(:Bool), do: :boolean
   defp class_of_data_name(:Nat), do: :integer
@@ -306,18 +336,18 @@ defmodule Cure.Elab.Union do
   `Int | Nat` (both integers), `String | List(Int)` (both lists). No order separates
   those, so they are rejected.
   """
-  @spec discriminable([member()]) :: :ok | {:error, term()}
-  def discriminable(members) do
+  @spec discriminable([member()], Env.t()) :: :ok | {:error, term()}
+  def discriminable(members, env) do
     {lits, types} = Enum.split_with(members, &(&1.payload == nil))
 
-    classes = Enum.map(types ++ lits, &{&1.key, runtime_class(&1)})
+    classes = Enum.map(types ++ lits, &{&1.key, runtime_class(env, &1)})
     unsupported = for {k, :unsupported} <- classes, do: k
 
     # Only TYPE members can collide: a literal is an exact-value test, which refines any
     # class guard and is emitted first.
     collisions =
-      for {ka, ca} <- Enum.map(types, &{&1.key, runtime_class(&1)}),
-          {kb, cb} <- Enum.map(types, &{&1.key, runtime_class(&1)}),
+      for {ka, ca} <- Enum.map(types, &{&1.key, runtime_class(env, &1)}),
+          {kb, cb} <- Enum.map(types, &{&1.key, runtime_class(env, &1)}),
           ka < kb,
           ca == cb or (not refines?(ca, cb) and not refines?(cb, ca) and ca == cb),
           do: {ka, kb, ca}
@@ -393,8 +423,8 @@ defmodule Cure.Elab.Union do
   Members ordered for runtime discrimination: literals (exact value) first, then type
   members with refining guards ahead of the guards they refine.
   """
-  @spec discrimination_order([member()]) :: [member()]
-  def discrimination_order(members) do
+  @spec discrimination_order([member()], Env.t()) :: [member()]
+  def discrimination_order(members, env) do
     {lits, types} = Enum.split_with(members, &(&1.payload == nil))
 
     # Sort by an explicit SPECIFICITY RANK, not by `refines?/2` directly.
@@ -404,7 +434,7 @@ defmodule Cure.Elab.Union do
     # unrelated members is then undefined, and the one invariant that MUST hold — a
     # refining guard precedes the guard it refines — would be guaranteed only by luck of
     # the merge-sort internals rather than by contract. A rank is a total order, so it is.
-    lits ++ Enum.sort_by(types, &specificity(runtime_class(&1)))
+    lits ++ Enum.sort_by(types, &specificity(runtime_class(env, &1)))
   end
 
   # Lower rank = tested earlier. `is_boolean` must precede `is_atom`; every other guard is
@@ -465,7 +495,7 @@ defmodule Cure.Elab.Union do
   end
 
   defp declare_family(members, env) do
-    key = family_key(members)
+    key = family_key(members, env)
 
     if Inductive.family?(env, key) do
       # Idempotent: the key is content-derived, so re-declaring an identical family

@@ -220,7 +220,13 @@ defmodule Cure.Elab.Emit do
   defp function_form(env, name) do
     case Env.get_def(env, name) do
       %{body: {:extern, {mod, fun, _arity}}} = def ->
-        extern_form(name, {mod, fun}, present_arity(env, name), extern_union_members(env, def))
+        extern_form(
+          name,
+          {mod, fun},
+          present_arity(env, name),
+          extern_union_members(env, def),
+          env
+        )
 
       def ->
         real_function_form(name, def, env)
@@ -257,14 +263,14 @@ defmodule Cure.Elab.Emit do
   # reaches the BEAM. `Declarations.check_extern_arity/2` rejects a literal that disagrees, so
   # the two agree by construction; reading the quantities here keeps that true by construction
   # rather than by convention.
-  defp extern_form(fn_atom, {mod, fun}, arity, union_members) do
+  defp extern_form(fn_atom, {mod, fun}, arity, union_members, env) do
     param_forms = for i <- 0..(arity - 1)//1, do: {:var, @line, :"V#{i}"}
     remote = {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, param_forms}
 
     body =
       case union_members do
         nil -> remote
-        members -> union_dispatch(remote, members)
+        members -> union_dispatch(remote, members, env)
       end
 
     {:function, @line, fn_atom, arity, [{:clause, @line, param_forms, [], [body]}]}
@@ -281,13 +287,13 @@ defmodule Cure.Elab.Emit do
   #
   # Literal members are matched by EXACT VALUE and come first — they are strictly more
   # specific than a type member's guard.
-  defp union_dispatch(remote, members) do
+  defp union_dispatch(remote, members, env) do
     clauses =
       members
-      |> Cure.Elab.Union.discrimination_order()
+      |> Cure.Elab.Union.discrimination_order(env)
       |> Enum.map(fn
         %{payload: nil} = lit -> literal_clause(lit)
-        type -> type_clause(type)
+        type -> type_clause(type, env)
       end)
 
     {:case, @line, remote, clauses}
@@ -304,7 +310,7 @@ defmodule Cure.Elab.Emit do
 
   # `R when is_integer(R) -> {:'Union<…>$Int', R}` — a type member is a 1-ary ctor, so it
   # erases to a tagged 2-tuple carrying the raw value.
-  defp type_clause(%{ctor: ctor} = member) do
+  defp type_clause(%{ctor: ctor} = member, env) do
     body = {:tuple, @line, [{:atom, @line, ctor}, {:var, @line, :R}]}
 
     # The guard sequence is a CONJUNCTION. A class test alone is not always enough: it must
@@ -313,13 +319,13 @@ defmodule Cure.Elab.Emit do
     # negatives — a raw -7 was being tagged Nat(-7). `Bounded(n)` (hence `Char`) is an
     # integer confined to 0..n-1.
     guards =
-      [class_test(member) | bound_tests(Cure.Elab.Union.value_bounds(member))]
+      [class_test(member, env) | bound_tests(Cure.Elab.Union.value_bounds(member))]
 
     {:clause, @line, [{:var, @line, :R}], [guards], [body]}
   end
 
-  defp class_test(member) do
-    test = class_guard(Cure.Elab.Union.runtime_class(member))
+  defp class_test(member, env) do
+    test = class_guard(Cure.Elab.Union.runtime_class(env, member))
     {:call, @line, {:atom, @line, test}, [{:var, @line, :R}]}
   end
 
@@ -334,15 +340,20 @@ defmodule Cure.Elab.Emit do
       {:op, @line, :<, {:var, @line, :R}, {:integer, @line, max}}
     ]
 
-  # `is_boolean` strictly refines `is_atom`, and `Union.discrimination_order/1` puts it
+  # `is_boolean` strictly refines `is_atom`, and `Union.discrimination_order/2` puts it
   # first — so `true`/`false` take the Bool clause and every other atom falls through to
   # Atom. That is why `Bool | Atom` is admissible rather than a collision.
+  #
+  # `:pid`/`:reference` are reachable only through an `opaque type` that DECLARED its
+  # erasure with `@erases(<class>)` — no inferable Cure type erases to either.
   defp class_guard(:boolean), do: :is_boolean
   defp class_guard(:atom), do: :is_atom
   defp class_guard(:integer), do: :is_integer
   defp class_guard(:float), do: :is_float
   defp class_guard(:binary), do: :is_binary
   defp class_guard(:list), do: :is_list
+  defp class_guard(:pid), do: :is_pid
+  defp class_guard(:reference), do: :is_reference
 
   defp literal_form(v) when is_integer(v), do: {:integer, @line, v}
   defp literal_form(v) when is_float(v), do: {:float, @line, v}
