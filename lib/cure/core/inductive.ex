@@ -19,7 +19,8 @@ defmodule Cure.Core.Env do
             coherence: nil,
             constrained: %{},
             primitives: %{},
-            import_modules: MapSet.new()
+            import_modules: MapSet.new(),
+            module_owner: nil
 
   @type t :: %__MODULE__{
           families: %{atom() => map()},
@@ -32,6 +33,10 @@ defmodule Cure.Core.Env do
           coherence: term(),
           constrained: %{atom() => [map()]},
           primitives: %{String.t() => tuple()},
+          # The source module whose declarations are currently being
+          # elaborated. Imported environments retain their own owner until
+          # their canonical entries are merged into the importing environment.
+          module_owner: String.t() | nil,
           # Inert elaborator metadata (the kernel never reads it): the set of
           # module-ids DIRECTLY imported by the module this env belongs to
           # (explicit `use` + auto-prelude). Bare-name resolution prefers a
@@ -43,6 +48,18 @@ defmodule Cure.Core.Env do
   @doc "An empty signature."
   @spec empty() :: t()
   def empty, do: %__MODULE__{certified: MapSet.new()}
+
+  @doc "Attach the source-module owner used for canonical declaration identity."
+  @spec with_owner(t(), String.t() | atom() | nil) :: t()
+  def with_owner(%__MODULE__{} = env, owner) when is_atom(owner),
+    do: with_owner(env, Atom.to_string(owner))
+
+  def with_owner(%__MODULE__{} = env, owner) when is_binary(owner) or is_nil(owner),
+    do: %{env | module_owner: owner}
+
+  @doc "Return the source-module owner for the current elaboration environment."
+  @spec owner(t()) :: String.t() | nil
+  def owner(%__MODULE__{module_owner: owner}), do: owner
 
   @doc """
   Register a global function definition (declared type + Core body). The kernel
