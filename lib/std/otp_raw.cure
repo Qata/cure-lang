@@ -192,18 +192,19 @@ mod Std.Otp.Raw
   ## higher layer may expose a name-indexed handle without asserting that a
   ## dynamic registry lookup is always successful.
   ##
-  ## `whereis` returns the bare atom `undefined` when the name is not registered — that
-  ## is the BIF's real contract, and typing it as a pid would let a well-typed handle BE
-  ## the atom `undefined`. The FFI boundary re-tags the union: `:undefined` by exact
-  ## value, the pid by the `is_pid` guard `@erases(:pid)` declares. `Std.Otp.whereis`
-  ## turns that into an `Option`.
-  ## Both return `true`.
+  ## `register`/`unregister` both answer the constant atom `true` — there is no
+  ## failure they report by value (they raise instead).
   @extern(:erlang, :register, 2)
   fn raw_register({m: Type}, {r: Type}, {k: Type}, name: Atom, pid: RawPid(m, r, k)) -> Effect(Bool)
 
   @extern(:erlang, :unregister, 1)
   fn raw_unregister(name: Atom) -> Effect(Bool)
 
+  ## `whereis` returns the bare atom `undefined` when the name is not registered — that
+  ## is the BIF's real contract, and typing it as a pid would let a well-typed handle BE
+  ## the atom `undefined`. The FFI boundary re-tags the union: `:undefined` by exact
+  ## value, the pid by the `is_pid` guard `@erases(:pid)` declares. `Std.Otp.whereis`
+  ## turns that into an `Option`.
   @extern(:erlang, :whereis, 1)
   fn raw_whereis(name: Atom) -> Effect(BarePid | :undefined)
 end
