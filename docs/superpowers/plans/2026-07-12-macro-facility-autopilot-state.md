@@ -1700,6 +1700,19 @@ knowledge in the compiler" constraint), and the riskiest change in the programme
 - **L2** Convert `actor`/`fsm` from Tier-2 `becomes lift module` to Tier-3
   `computed by derive_actor`. Then drop `contextual` from the `beam_ops` rules.
 
+**L0.1 status (2026-07-14).** Declaration-position expansion is now generic and
+landed before lifted-module collection. `Program.expand_declaration_uses/1`
+first checks the ordinary macro implementation environment, then expands only
+computed uses in declaration position; function bodies remain deferred to the
+ordinary declaration elaborator so callback expansion context is preserved.
+The compiler invokes this pass after parse/migration and before
+`LiftModule.collect`. Lifted modules inherit enclosing declarations, imports,
+macro-generated computed-input records, and ordinary functions, with local
+template names still winning. End-to-end coverage proves a computed use can
+produce a runnable `lift module`; a companion test proves function-body
+computed uses remain unconsumed by the declaration pass. (`7edd6847` plus the
+follow-up declaration-expansion phase.)
+
 **Hardest sub-problem** (not the reflection, not even the reorder): the derived
 message type is a NEW NOMINAL DECLARATION that must exist before the lifted module
 referencing it is elaborated, and must be the SAME nominal type external `send`

@@ -7,6 +7,7 @@ defmodule Cure.Compiler.LiftModule do
   through the same dependent elaborator and emitter as the enclosing module.
   """
 
+  alias Cure.Compiler.MacroSyntax
   alias Cure.Elab.{Emit, Program}
 
   @type unit :: %{
@@ -73,6 +74,35 @@ defmodule Cure.Compiler.LiftModule do
     if Keyword.get(meta, :container_type) == :module,
       do: body |> List.wrap() |> Enum.flat_map(&unit_declarations/1),
       else: [node]
+  end
+
+  # A computed macro's typed input record is synthesized by Program.declarations/1
+  # from the macro definition rather than stored as a standalone parser node. A
+  # lifted module inherits the same declaration stream, so reproduce that generic
+  # record here; otherwise an inherited macro builder's `input.field` projection
+  # is rechecked without the record family in the lifted environment.
+  defp unit_declarations({:macro_def, meta, rules}) when is_list(meta) and is_list(rules) do
+    rules
+    |> Enum.filter(&(&1[:kind] == :computed))
+    |> Enum.uniq_by(&Map.get(&1, :syntax_type))
+    |> Enum.map(fn rule ->
+      fields =
+        rule
+        |> Map.get(:syntax_fields, [])
+        |> MacroSyntax.record_fields()
+        |> Enum.map(fn field ->
+          {:param, [type: {:variable, [scope: :local], "Syntax"}], field}
+        end)
+
+      {:container,
+       [
+         container_type: :struct,
+         name: Map.fetch!(rule, :syntax_type),
+         macro_generated: true,
+         line: Keyword.get(meta, :line, 0),
+         col: Keyword.get(meta, :col, 0)
+       ], fields}
+    end)
   end
 
   defp unit_declarations({tag, meta, _} = node)

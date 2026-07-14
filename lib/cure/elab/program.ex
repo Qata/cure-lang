@@ -351,6 +351,62 @@ defmodule Cure.Elab.Program do
     end
   end
 
+  @doc "Expand Tier-3 computed uses that occur in declaration position."
+  @spec expand_declaration_uses(tuple() | list()) :: {:ok, term()} | {:error, term()}
+  def expand_declaration_uses(ast) do
+    if declaration_computed_use?(ast) do
+      with {:ok, env} <- check_ast_elixir_core(ast) do
+        expand_declaration_nodes(ast, env)
+      end
+    else
+      {:ok, ast}
+    end
+  end
+
+  # Declaration expansion must not descend into function bodies. Those uses are
+  # expanded by Declarations with the callback context already attached to the
+  # function metadata; expanding them here would erase that lexical context.
+  defp declaration_computed_use?({:computed_use, _meta, _children}), do: true
+  defp declaration_computed_use?({:function_def, _meta, _body}), do: false
+  defp declaration_computed_use?({:macro_def, _meta, _rules}), do: false
+
+  defp declaration_computed_use?({tag, _meta, children})
+       when tag in [:block, :container] and is_list(children),
+       do: Enum.any?(children, &declaration_computed_use?/1)
+
+  defp declaration_computed_use?(list) when is_list(list),
+    do: Enum.any?(list, &declaration_computed_use?/1)
+
+  defp declaration_computed_use?(_other), do: false
+
+  defp expand_declaration_nodes({:computed_use, _meta, _children} = node, env),
+    do: MacroExpand.expand(node, env)
+
+  defp expand_declaration_nodes({:function_def, _meta, _body} = node, _env), do: {:ok, node}
+  defp expand_declaration_nodes({:macro_def, _meta, _rules} = node, _env), do: {:ok, node}
+
+  defp expand_declaration_nodes({tag, meta, children}, env)
+       when tag in [:block, :container] and is_list(children) do
+    with {:ok, children} <- expand_declaration_nodes(children, env) do
+      {:ok, {tag, meta, children}}
+    end
+  end
+
+  defp expand_declaration_nodes(list, env) when is_list(list) do
+    Enum.reduce_while(list, {:ok, []}, fn node, {:ok, acc} ->
+      case expand_declaration_nodes(node, env) do
+        {:ok, expanded} -> {:cont, {:ok, [expanded | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, nodes} -> {:ok, Enum.reverse(nodes)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp expand_declaration_nodes(node, _env), do: {:ok, node}
+
   @doc false
   @spec local_def_names(tuple() | list()) :: [atom()]
   def local_def_names(ast) do

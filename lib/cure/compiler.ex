@@ -93,6 +93,7 @@ defmodule Cure.Compiler do
            {:ok, tokens} <- lex(source, file, emit?, edition),
            {:ok, ast} <- parse(tokens, file, emit?, edition),
            {:ok, ast} <- migrate_warn(ast, file),
+           {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
            {:ok, units, cg_warnings} <- codegen(ast, file, emit?, output_dir, declared_phases) do
         write_beam_units(units, output_dir, emit?, file, cg_warnings)
       end
@@ -201,6 +202,7 @@ defmodule Cure.Compiler do
       with {:ok, edition} <- resolve_edition(source, opts),
            {:ok, tokens} <- lex(source, file, emit?, edition),
            {:ok, ast} <- parse(tokens, file, emit?, edition),
+           {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
            {:ok, units, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
         # compile_and_load/2 intentionally does NOT persist bytecode to
         # disk -- it only loads into the current VM.
