@@ -1015,6 +1015,20 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # `Effect(t)` in type position — a `case`/`match` whose result type is a callback's
+  # effect contract. Mirrors `infer/2`'s formation rule (`Effect : Type ℓ → Type ℓ`,
+  # level-preserving): the head contributes nothing, so the sort is the payload's own.
+  # Recursing on the sub-VALUE rather than reifying is deliberate, for the same reason
+  # the `{:vpi}` clause does it: `Quote.reify` collapses `{:vdata, name, args}` →
+  # `{:data, name, args, []}`, losing the param/index split, so reify+re-infer would
+  # turn an indexed payload like `Effect(SNat s)` into a false `:arg_arity` →
+  # `:bad_motive`. Bottoming out in the existing clauses keeps acceptance exactly what
+  # a non-lossy reify+infer would decide: a payload that is not a type still falls to
+  # `:not_a_type_value`, so an `Effect` head cannot launder a non-type.
+  defp infer_type_value_sort(ctx, {:veffect_type, payload}) do
+    infer_type_value_sort(ctx, payload)
+  end
+
   defp infer_type_value_sort(_ctx, _value), do: {:error, :not_a_type_value}
 
   # Coverage (§7 / §E.2): every declared constructor must either HAVE a branch or
