@@ -2155,8 +2155,12 @@ defmodule Cure.Elab.Declarations do
   # with an unrelated message.
   defp erasure_class(meta, name) do
     case Keyword.get(meta, :decorator) do
-      {:erases, [{:literal, _, class}]} when class in @erasure_classes -> {:ok, class}
-      {:erases, [{:literal, _, class}]} -> {:error, {:unknown_erasure_class, name, class}}
+      {:erases, [{:literal, _, class}]} when class in @erasure_classes ->
+        {:ok, class}
+
+      {:erases, [{:literal, _, class}]} ->
+        {:error, {:unknown_erasure_class, name, class}}
+
       # Any other `@erases(...)` shape — zero args, more than one arg, or an argument
       # that isn't an atom literal (e.g. a bare identifier missing its `:`) — is a
       # malformed decorator, not an absent one. Falling through to the "no decorator"

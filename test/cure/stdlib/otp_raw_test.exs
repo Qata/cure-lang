@@ -45,8 +45,7 @@ defmodule Cure.Stdlib.OtpRawTest do
   test "raw_self binds its erased message index before returning Effect(RawPid(m, m, Plain))",
        %{env: env} do
     assert {:pi, :erased, {:type, 0},
-            {:effect_type,
-             {:data, :RawPid, [{:var, 0}, {:var, 0}, {:data, :Plain, [], []}], []}}} =
+            {:effect_type, {:data, :RawPid, [{:var, 0}, {:var, 0}, {:data, :Plain, [], []}], []}}} =
              Env.get_def(env, :raw_self).type
   end
 

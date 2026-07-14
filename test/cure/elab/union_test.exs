@@ -1073,5 +1073,4 @@ defmodule Cure.Elab.UnionTest do
                :"Union<Atom#:undefined|Handle>$Atom#:undefined"
     end
   end
-
 end
