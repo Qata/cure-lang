@@ -81,8 +81,7 @@ defmodule Cure.Compiler.MacroComputedTest do
               syntax_repeated_fields: [],
               line: _,
               col: _
-            ],
-            [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
+            ], [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
              find.(find, node)
   end
 
