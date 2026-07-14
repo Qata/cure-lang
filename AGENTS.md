@@ -1,5 +1,23 @@
 # ABSOLUTELY CRITICAL SESSION DIRECTIVE
 
+## Current authoritative macro specification
+
+Follow:
+
+`docs/superpowers/specs/2026-07-14-compile-time-reflective-beam-macros-design.md`
+
+for the remaining macro and BEAM work. It is now the authoritative design
+document for the implementation. The autopilot plan below remains the ordered
+execution ledger, but older open-gate wording must be interpreted through this
+specification. In particular, macros are compile-time-only: generated runtime
+code must contain direct compiled behavior and must not contain a syntax
+interpreter, runtime macro dispatcher, opaque OTP container, or other
+indirection layer introduced by macro expansion.
+
+The specification's ordered implementation phases are mandatory. Continue
+through them and their verification gates without returning control while any
+phase or documented gap remains.
+
 Continue executing every phase and gate in the ordered plan in:
 
 `docs/superpowers/plans/2026-07-12-macro-facility-autopilot-state.md`
@@ -22,8 +40,11 @@ a passing intermediate test suite.
 Maintain the repository's existing constraints throughout:
 
 - Commit after every phase with a highly descriptive commit message.
-- Keep the TCB delta at zero; do not modify trusted Core behavior under
-  `lib/cure/core/*`.
+- Do not modify trusted Core behavior under `lib/cure/core/*` for convenience
+  or to add macro-specific behavior. A principled primitive-reduction
+  completeness fix, such as compile-time Atom-literal equality, is permitted
+  only when it follows the new specification and passes its full TCB,
+  termination, Antigen, and full-suite gates.
 - Run focused verification during each phase and the full test gate before
   declaring completion.
 - Preserve unrelated user changes and never use destructive git operations.
