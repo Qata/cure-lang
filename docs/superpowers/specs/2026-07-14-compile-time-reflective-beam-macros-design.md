@@ -141,10 +141,39 @@ papers:
 - Hu and Pientka, *DeLaM: A Dependent Layered Modal Type Theory for
   Meta-programming* (`2404.17065`): typed, layered code inspection and
   recursive code manipulation can coexist with decidable conversion.
+- Christiansen and Brady, *Elaborator Reflection: Extending Idris in Idris*
+  (ICFP 2016): a metaprogram inspects reflected clauses (`lookupFunDefnExact`
+  returns a function's defining clauses) and emits top-level declarations
+  (`declareDatatype`, `defineFunction`) through the same elaborator that
+  checks handwritten code. The representation is typed core syntax (`Raw`
+  elaborated to `TT`), not a semantic domain. This is the closest living
+  precedent for `derive_actor`, and — since Cure targets Idris parity — the
+  primary model to follow.
+- Altenkirch and Kaposi, *Normalisation by Evaluation for Type Theory, in
+  Type Theory* (`1612.02462`): normalisation-by-evaluation yields decidability
+  of definitional equality for dependent type theory. This is the
+  conversion-decidability foundation the reflection layer must respect, and an
+  exemplar of the tradition beneath Kovacs's staging-by-evaluation. Its theory
+  has no primitive-literal layer, so it does not by itself license reducing
+  `atom == atom` — that is a separate primitive-reduction completeness fix
+  (§5).
 
-The Cure consequence is that the next reflection work should be a typed,
-staged semantic interface, not a runtime `Syntax` evaluator. The existing
-`Std.Syntax` ADT and `MacroSyntax` bridge are the beginning of this interface.
+These papers do not agree; the corpus splits into two camps. The
+*semantic/staging* route (Kovacs; Altenkirch-Kaposi underneath) buys decidable
+conversion precisely by **forbidding** intensional inspection of object code.
+The *typed-syntactic/modal* route (Christiansen-Brady's Idris reflection,
+DeLaM, Moebius; and pragmatically Lean 4 macros) keeps decidable conversion
+**while** inspecting code, by working over typed modal or contextual *syntax*
+rather than a semantic domain.
+
+Cure's design inspects code: `derive_actor` traverses a `Std.Syntax` ADT,
+classifies handler arms, and emits declarations. It therefore belongs to the
+typed-syntactic camp, not the semantic one. The correct consequence is that
+the next reflection work is a typed, **compile-time syntactic** reflection
+interface (Idris-elaborator-reflection-shaped), never a *runtime* `Syntax`
+evaluator, and it must preserve decidable conversion in the Altenkirch-Kaposi /
+Kovacs sense. The existing `Std.Syntax` ADT and `MacroSyntax` bridge are the
+beginning of this interface.
 
 ## 5. Atom equality normalization
 
@@ -164,8 +193,15 @@ one macro is not a complete language solution.
 ### 5.2 Correct solution
 
 Atom equality must be implemented as a normal compile-time computation in the
-semantic reduction layer, subject to the same termination and conversion rules
-as existing primitive literal reductions. It must:
+primitive-reduction layer, subject to the same termination and conversion rules
+as existing primitive literal reductions. Concretely: `==`/`!=` on non-numeric
+operands already elaborate to the polymorphic `struct_eq`/`struct_ne` global,
+whose reduction fold currently fires only for numeric literals (`{:vint,_}` /
+`{:vfloat,_}`). The fix is to extend that existing fold with an `{:vatom,_}`
+clause, mirroring the numeric case — not to introduce a new atom-specific
+reduction rule. (Atom *values* are already compared in the conversion layer;
+this closes the parallel gap in `==`/`struct_eq` reduction.) The reduction
+must:
 
 - reduce equality of two known equal atom literals to `true`;
 - reduce equality of two known distinct atom literals to `false`;
@@ -228,8 +264,19 @@ available, and source provenance for diagnostics.
 
 The context must be explicit in the reflected input, not recovered by an
 OTP-specific compiler branch. If a callback needs more context, extend the
-generic staged input record rather than marking the callback `contextual` and
-leaving a metavariable unsolved.
+generic staged input record so the context is supplied as typed input.
+
+Note on `contextual`: in the current implementation `contextual` is a
+macro-*rule* flag, not a callback marker. Its only operational effect is to
+exempt the rule from the standalone expansion-soundness proof — the MacroFuzz
+generative firewall records such rules as `deferred` rather than proving them
+in isolation — because the rule's template contains free type holes that are
+only resolvable once a use site supplies the enclosing types. It does not defer
+elaboration and does not leave a metavariable unsolved. The goal is to retire
+the *need* for this proof exemption by deriving message/callback types (§9), so
+that the transparent rules either disappear or become provable standalone — not
+to "unmark" a callback. Retiring `contextual` therefore depends on the
+derivation work and cannot precede it (see §11).
 
 ### 7.2 Structural analysis
 
@@ -312,6 +359,45 @@ Cure functions. They are not actor-specific compiler helpers. A local macro or
 shared builder may return a syntax block, but it must remain transparent and
 must not hide an opaque container call.
 
+### 9.4 Reply channels
+
+`handle_call` induces a request-reply exchange, and its reply type is part of
+the derived contract. The reply is not a bare value type; it is a one-shot
+typed channel. Following the typed-actor idiom (mailbox types,
+`docs/research/process-types/`), the caller allocates a fresh single-use
+process reference typed to accept exactly one reply message `Reply(T)`, and
+passes the *output* capability to the actor as a payload of the call message;
+the caller retains the *input* capability and waits on it. The derived message
+type for a `handle_call` clause therefore carries a `Pid(Reply(T))`-typed
+field, where `T` is the reply type inferred from the clause body. This typing
+yields forgotten-reply and caller self-deadlock detection, and erases to an
+ordinary BEAM reference at runtime.
+
+### 9.5 Scope of the message discipline
+
+`Pid(m)` for v1 is a nominal message type — the closed set of message
+constructors an actor accepts — plus the one-shot reply channels of §9.4. This
+is a legitimate "typed channels v1": it delivers **send-conformance** (a
+`send`/`call` cannot carry a constructor the actor does not handle), which is
+the primary safety property, and it is exactly what the derivation produces. A
+constructor set is therefore not under-powered for v1.
+
+The following richer mailbox-type disciplines are explicitly **out of scope for
+v1** and belong on the roadmap, in priority order:
+
+- *typestate / protocol state* — a message type that evolves as messages are
+  consumed (e.g. "handle `Init` before any `Request`"), expressible as the
+  residual of a commutative-regex mailbox pattern. This is the only discipline
+  that structurally exceeds a constructor set, and the primary future target;
+  it is also the most inference-hungry (Special Delivery names inference as the
+  open usability problem).
+- *multiplicity* — bounds on how many of each message may be pending (e.g. "at
+  most one `Config`").
+- *junk-freedom* — a static guarantee that no message is left unconsumed.
+
+Adopting any of these must not weaken the v1 send-conformance guarantee or
+introduce a runtime mailbox interpreter.
+
 ## 10. BEAM algebra and direct lowering
 
 The checked BEAM algebra remains a standard-library layer over honest raw
@@ -342,8 +428,11 @@ Implement in this order; do not use a later layer to paper over an earlier gap:
 
 1. **Core primitive reduction:** add and prove compile-time Atom equality.
 2. **Staged name resolution:** ensure callback globals are fully qualified.
-3. **Typed callback context:** remove the remaining `contextual` escape caused
-   by missing context.
+3. **Typed callback context:** supply the enclosing declaration/callback
+   context as explicit typed staged input, so no callback relies on context
+   recovered by a bespoke compiler branch. (Retiring the `contextual`
+   proof-exemption is *not* this step — it depends on derivation and lands in
+   step 10; see §7.1.)
 4. **Declaration bundles:** support generated nominal declarations plus lifted
    modules in one expansion.
 5. **Generic syntax analysis:** add the structural traversal and declaration
@@ -356,7 +445,10 @@ Implement in this order; do not use a later layer to paper over an earlier gap:
 9. **Supervisor and application parity:** complete `sup` and `app` using the
    same source vocabulary.
 10. **Compiler cleanup:** remove every bespoke OTP object path and forbidden
-    opaque helper.
+    opaque helper, and retire the `contextual` proof-exemption once the derived
+    rules (steps 6–7) have replaced the transparent templates that required it —
+    every remaining rule must then pass the standalone expansion-soundness
+    proof rather than being recorded `deferred`.
 11. **Branch integration:** merge `kernel-parity-batch` into `idris-parity`,
     then merge `idris-parity` into `core-let-binder`, resolving in favor of
     source-defined macros and the generic pipeline.
@@ -391,6 +483,7 @@ Repository references:
 - `docs/superpowers/specs/2026-07-13-transparent-beam-algebra-otp-macros-design.md`
 - `docs/superpowers/plans/2026-07-12-macro-facility-autopilot-state.md`
 - `docs/research/metaprogramming/`
+- `docs/research/process-types/`
 
 External research:
 
@@ -401,3 +494,8 @@ External research:
 - https://arxiv.org/abs/2209.09729
 - https://arxiv.org/abs/2404.17065
 - https://arxiv.org/abs/1612.02462
+- Christiansen and Brady, *Elaborator Reflection: Extending Idris in Idris*,
+  ICFP 2016
+- https://arxiv.org/abs/1801.04167 (Mailbox Types for Unordered Interactions)
+- https://arxiv.org/abs/2306.12935 (Special Delivery: Programming with Mailbox
+  Types)
