@@ -70,10 +70,13 @@ defmodule Antigen.EffectMotiveTest do
   # sorts exactly where `Nat` does.
   test "termination pin: a nested Effect(Effect(T)) motive body sorts" do
     body = {:effect_type, {:effect_type, @nat}}
-    kase = {:case, {:ctor, :Z, []}, {:lam, Grade.unrestricted(), @nat, body}, [
-      {:Z, 0, {:effect_pure, {:effect_pure, {:ctor, :Z, []}}}},
-      {:S, 1, {:effect_pure, {:effect_pure, {:ctor, :Z, []}}}}
-    ]}
+
+    kase =
+      {:case, {:ctor, :Z, []}, {:lam, Grade.unrestricted(), @nat, body},
+       [
+         {:Z, 0, {:effect_pure, {:effect_pure, {:ctor, :Z, []}}}},
+         {:S, 1, {:effect_pure, {:effect_pure, {:ctor, :Z, []}}}}
+       ]}
 
     assert {:ok, _} = Kernel.infer(Context.empty(env()), kase)
   end
