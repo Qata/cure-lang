@@ -236,4 +236,36 @@ defmodule Cure.Stdlib.OtpTest do
                app("  fn go(s: GenServer(Cmd, Int)) -> Effect(Unit) =\n    link(s)\n")
     end
   end
+
+  # F-2c. `erlang:whereis/1` returns the bare atom `undefined` for an unregistered name.
+  # Typing it as a pid let a well-typed `Pid(m)` BE that atom, and the next `tell` emitted
+  # `erlang:send(undefined, …)` → badarg. The lookup can fail, and the type must say so.
+  describe "whereis reintroduces the failure case (F-2c)" do
+    test "using the result of whereis WITHOUT matching is a compile error" do
+      assert {:error, _} =
+               app("  fn go() -> Effect(Unit) =\n    let p = whereis(:server)\n    link(p)\n")
+    end
+
+    test "matching the Option and linking the Some branch succeeds" do
+      assert {:ok, _} =
+               app("""
+                 fn go() -> Effect(Unit) =
+                   let found = whereis(:server)
+                   match found
+                     Some(p) -> link(p)
+                     None() -> unit()
+               """)
+    end
+
+    test "a looked-up pid cannot be SENT to — nothing founds its message type" do
+      assert {:error, _} =
+               app("""
+                 fn go() -> Effect(Unit) =
+                   let found = whereis(:server)
+                   match found
+                     Some(p) -> tell(p, Inc())
+                     None() -> unit()
+               """)
+    end
+  end
 end

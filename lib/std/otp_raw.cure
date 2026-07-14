@@ -34,6 +34,17 @@ mod Std.Otp.Raw
   @erases(:pid)
   opaque type RawPid(m, r, k)
 
+  ## An uninhabited message type. `BarePid` carries it, which is what makes a pid
+  ## recovered from the registry UNSENDABLE: `tell` would demand a `NoMessage` value and
+  ## no constructor produces one.
+  type NoMessage = |
+
+  ## A process handle with NO message-type claim — what a registry lookup can honestly
+  ## give you. Supervisable (`link`/`monitor`/`exit`/`is_alive` never cared about the
+  ## message type) but not sendable. Recovering a TYPED handle from a name needs a
+  ## name-to-code association nothing builds yet; that is F-1 (see the audit, §6).
+  typealias BarePid = RawPid(NoMessage, NoMessage, Plain)
+
   ## An opaque monitor/timer reference — the raw `erlang:reference()`.
   opaque type Ref
 
@@ -134,6 +145,12 @@ mod Std.Otp.Raw
   ## The registry operations deliberately remain raw and effect-typed. A
   ## higher layer may expose a name-indexed handle without asserting that a
   ## dynamic registry lookup is always successful.
+  ##
+  ## `whereis` returns the bare atom `undefined` when the name is not registered — that
+  ## is the BIF's real contract, and typing it as a pid would let a well-typed handle BE
+  ## the atom `undefined`. The FFI boundary re-tags the union: `:undefined` by exact
+  ## value, the pid by the `is_pid` guard `@erases(:pid)` declares. `Std.Otp.whereis`
+  ## turns that into an `Option`.
   @extern(:erlang, :register, 2)
   fn raw_register({m: Type}, {r: Type}, {k: Type}, name: Atom, pid: RawPid(m, r, k)) -> Effect(Unit)
 
@@ -141,5 +158,5 @@ mod Std.Otp.Raw
   fn raw_unregister(name: Atom) -> Effect(Unit)
 
   @extern(:erlang, :whereis, 1)
-  fn raw_whereis({m: Type}, name: Atom) -> Effect(RawPid(m, m, Plain))
+  fn raw_whereis(name: Atom) -> Effect(BarePid | :undefined)
 end

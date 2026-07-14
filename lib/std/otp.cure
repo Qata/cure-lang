@@ -2,6 +2,7 @@
 mod Std.Otp
   use Std.Otp.Raw
   use Std.Bool
+  use Std.Option
 
   ## Transparent process-operation syntax. Each rule produces ordinary Cure
   ## syntax; the checked algebra remains the only semantic implementation.
@@ -184,5 +185,15 @@ mod Std.Otp
 
   fn unregister(name: Atom) -> Effect(Unit) = raw_unregister(name)
 
-  fn whereis({m: Type}, name: Atom) -> Effect(Pid(m)) = raw_whereis(name)
+  ## Look up a registered name. `None` when the name is not registered — the BIF returns
+  ## the atom `undefined` there, and the old signature asserted a pid.
+  ##
+  ## The result is a `BarePid`: you may `link`, `monitor`, `exit` or `is_alive` it, but you
+  ## cannot `tell` to it. Nothing associates a registered NAME with a message TYPE, so a
+  ## typed handle cannot be recovered from one (audit F-1 / parent spec §13.7).
+  fn whereis(name: Atom) -> Effect(Option(BarePid)) =
+    let found = raw_whereis(name)
+    match found
+      p: BarePid -> Some(p)
+      :undefined -> None()
 end
