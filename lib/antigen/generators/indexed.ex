@@ -14,16 +14,26 @@ defmodule Antigen.Generators.Indexed do
   # obligation atom (also the def_name), `label` the well/ill twin. These are the
   # only shapes this generator constructs — no invented cells.
   @shapes [
-    {:branch_family, :well_typed}, {:branch_family, :ill_typed},
-    {:coverage_gap, :well_typed}, {:coverage_gap, :ill_typed},
-    {:refine, :well_typed}, {:refine, :ill_typed},
-    {:motive_wf, :well_typed}, {:motive_wf, :ill_typed},
-    {:motive_dom, :well_typed}, {:motive_dom, :ill_typed},
-    {:data_split, :well_typed}, {:data_split, :ill_typed},
-    {:reify_distinct, :well_typed}, {:reify_distinct, :ill_typed},
-    {:discharge, :well_typed}, {:discharge, :ill_typed},
-    {:inject, :well_typed}, {:inject, :ill_typed},
-    {:delete, :well_typed}, {:delete, :ill_typed}
+    {:branch_family, :well_typed},
+    {:branch_family, :ill_typed},
+    {:coverage_gap, :well_typed},
+    {:coverage_gap, :ill_typed},
+    {:refine, :well_typed},
+    {:refine, :ill_typed},
+    {:motive_wf, :well_typed},
+    {:motive_wf, :ill_typed},
+    {:motive_dom, :well_typed},
+    {:motive_dom, :ill_typed},
+    {:data_split, :well_typed},
+    {:data_split, :ill_typed},
+    {:reify_distinct, :well_typed},
+    {:reify_distinct, :ill_typed},
+    {:discharge, :well_typed},
+    {:discharge, :ill_typed},
+    {:inject, :well_typed},
+    {:inject, :ill_typed},
+    {:delete, :well_typed},
+    {:delete, :ill_typed}
   ]
 
   @doc "Coverage-manifest cells (`Antigen.CoverManifest`) — one per obligation × label twin."
@@ -40,16 +50,26 @@ defmodule Antigen.Generators.Indexed do
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
     Gen.member_of([
-      branch_family(:well_typed), branch_family(:ill_typed),
-      coverage(:well_typed), coverage(:ill_typed),
-      refinement(:well_typed), refinement(:ill_typed),
-      motive_wf(:well_typed), motive_wf(:ill_typed),
-      motive_indexed_domain(:well_typed), motive_indexed_domain(:ill_typed),
-      data_split_validation(:well_typed), data_split_validation(:ill_typed),
-      reify_collapse_distinct(:well_typed), reify_collapse_distinct(:ill_typed),
-      discharge(:well_typed), discharge(:ill_typed),
-      injectivity(:well_typed), injectivity(:ill_typed),
-      deletion(:well_typed), deletion(:ill_typed)
+      branch_family(:well_typed),
+      branch_family(:ill_typed),
+      coverage(:well_typed),
+      coverage(:ill_typed),
+      refinement(:well_typed),
+      refinement(:ill_typed),
+      motive_wf(:well_typed),
+      motive_wf(:ill_typed),
+      motive_indexed_domain(:well_typed),
+      motive_indexed_domain(:ill_typed),
+      data_split_validation(:well_typed),
+      data_split_validation(:ill_typed),
+      reify_collapse_distinct(:well_typed),
+      reify_collapse_distinct(:ill_typed),
+      discharge(:well_typed),
+      discharge(:ill_typed),
+      injectivity(:well_typed),
+      injectivity(:ill_typed),
+      deletion(:well_typed),
+      deletion(:ill_typed)
     ])
   end
 
@@ -60,8 +80,8 @@ defmodule Antigen.Generators.Indexed do
   @snat_s {:data, :SNat, [], [{:var, 0}]}
 
   # -- shared families --------------------------------------------------------
-  defp dec_family, do: {Inductive.family(:Dec, [], [], 0),
-                        [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])]}
+  defp dec_family,
+    do: {Inductive.family(:Dec, [], [], 0), [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])]}
 
   defp foo_family, do: {Inductive.family(:Foo, [], [], 0), [Inductive.ctor(:MkFoo, [], [])]}
 
@@ -80,8 +100,7 @@ defmodule Antigen.Generators.Indexed do
       {:case, {:ctor, :Causal, []}, {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec},
        [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
 
-    challenge(:well_typed, [dec_family()], :branch_family, @dec, body,
-      "well-typed Dec case, all branches from Dec")
+    challenge(:well_typed, [dec_family()], :branch_family, @dec, body, "well-typed Dec case, all branches from Dec")
   end
 
   def branch_family(:ill_typed) do
@@ -93,33 +112,45 @@ defmodule Antigen.Generators.Indexed do
          {:MkFoo, 0, {:ctor, :Dcoupled, []}}
        ]}
 
-    challenge(:ill_typed, [dec_family(), foo_family()], :branch_family, @dec, body,
-      "ill-typed: extra branch names MkFoo, a constructor of family Foo, not Dec")
+    challenge(
+      :ill_typed,
+      [dec_family(), foo_family()],
+      :branch_family,
+      @dec,
+      body,
+      "ill-typed: extra branch names MkFoo, a constructor of family Foo, not Dec"
+    )
   end
 
   # -- 4.2 coverage exactness -------------------------------------------------
-  defp tri_family, do: {Inductive.family(:Tri, [], [], 0),
-                        [Inductive.ctor(:A, [], []), Inductive.ctor(:B, [], []), Inductive.ctor(:C, [], [])]}
+  defp tri_family,
+    do:
+      {Inductive.family(:Tri, [], [], 0),
+       [Inductive.ctor(:A, [], []), Inductive.ctor(:B, [], []), Inductive.ctor(:C, [], [])]}
 
   @tri {:data, :Tri, [], []}
 
   @doc "Coverage obligation. `:ill_typed` omits a required branch (expects {:error, :coverage})."
   @spec coverage(:well_typed | :ill_typed) :: Challenge.t()
   def coverage(:well_typed) do
-    body = {:case, {:ctor, :A, []}, {:lam, Cure.Core.Grade.unrestricted(), @tri, @tri},
-            [{:A, 0, {:ctor, :A, []}}, {:B, 0, {:ctor, :A, []}}, {:C, 0, {:ctor, :A, []}}]}
+    body =
+      {:case, {:ctor, :A, []}, {:lam, Cure.Core.Grade.unrestricted(), @tri, @tri},
+       [{:A, 0, {:ctor, :A, []}}, {:B, 0, {:ctor, :A, []}}, {:C, 0, {:ctor, :A, []}}]}
+
     challenge(:well_typed, [tri_family()], :coverage_gap, @tri, body, "exhaustive Tri case")
   end
 
   def coverage(:ill_typed) do
-    body = {:case, {:ctor, :A, []}, {:lam, Cure.Core.Grade.unrestricted(), @tri, @tri},
-            [{:A, 0, {:ctor, :A, []}}, {:B, 0, {:ctor, :A, []}}]}
+    body =
+      {:case, {:ctor, :A, []}, {:lam, Cure.Core.Grade.unrestricted(), @tri, @tri},
+       [{:A, 0, {:ctor, :A, []}}, {:B, 0, {:ctor, :A, []}}]}
+
     challenge(:ill_typed, [tri_family()], :coverage_gap, @tri, body, "non-exhaustive: C omitted")
   end
 
   # -- 4.3 compound-index refinement (crown jewel) ----------------------------
-  defp ix_family, do: {Inductive.family(:Ix, [], [{:n, @dec}], 0),
-                       [Inductive.ctor(:wrap, [{:p, @dec}], [{:ctor, :Causal, []}])]}
+  defp ix_family,
+    do: {Inductive.family(:Ix, [], [{:n, @dec}], 0), [Inductive.ctor(:wrap, [{:p, @dec}], [{:ctor, :Causal, []}])]}
 
   @doc """
   Compound-index refinement obligation. The `wrap` ctor's result index is the
@@ -138,20 +169,43 @@ defmodule Antigen.Generators.Indexed do
     ix_of_1 = {:data, :Ix, [], [{:var, 1}]}
     ix_of_2 = {:data, :Ix, [], [{:var, 2}]}
 
-    def_type = {:pi, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), ix_of_0, {:pi, Cure.Core.Grade.unrestricted(), ix_of_1, ix_of_2}}}
-    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), ix_of_0, ix_of_1}}
-    body = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), ix_of_0, {:lam, Cure.Core.Grade.unrestricted(), ix_of_1, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
+    def_type =
+      {:pi, Cure.Core.Grade.unrestricted(), @dec,
+       {:pi, Cure.Core.Grade.unrestricted(), ix_of_0, {:pi, Cure.Core.Grade.unrestricted(), ix_of_1, ix_of_2}}}
 
-    challenge(:well_typed, [dec_family(), ix_family()], :refine, def_type, body,
-      "refinement-complete: reusing h : Ix n as Ix Causal in the wrap branch needs n:=Causal")
+    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), ix_of_0, ix_of_1}}
+
+    body =
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
+       {:lam, Cure.Core.Grade.unrestricted(), ix_of_0,
+        {:lam, Cure.Core.Grade.unrestricted(), ix_of_1, {:case, {:var, 0}, motive, [{:wrap, 1, {:var, 2}}]}}}}
+
+    challenge(
+      :well_typed,
+      [dec_family(), ix_family()],
+      :refine,
+      def_type,
+      body,
+      "refinement-complete: reusing h : Ix n as Ix Causal in the wrap branch needs n:=Causal"
+    )
   end
 
   def refinement(:ill_typed) do
     # soundness probe independent of the refinement gap: wrong-typed branch body.
-    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Ix, [], [{:var, 0}]}, @dec}}
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :Ix, [], [{:var, 0}]}, @dec}}
+
     body = {:case, {:ctor, :wrap, [{:ctor, :Dcoupled, []}]}, motive, [{:wrap, 1, {:type, 0}}]}
-    challenge(:ill_typed, [dec_family(), ix_family()], :refine, @dec, body,
-      "ill-typed: wrap branch body {:type,0} where Dec is expected")
+
+    challenge(
+      :ill_typed,
+      [dec_family(), ix_family()],
+      :refine,
+      @dec,
+      body,
+      "ill-typed: wrap branch body {:type,0} where Dec is expected"
+    )
   end
 
   # -- 4.4 motive well-formedness ---------------------------------------------
@@ -163,22 +217,27 @@ defmodule Antigen.Generators.Indexed do
   """
   @spec motive_wf(:well_typed | :ill_typed) :: Challenge.t()
   def motive_wf(:well_typed) do
-    body = {:case, {:ctor, :Causal, []}, {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec},
-            [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
+    body =
+      {:case, {:ctor, :Causal, []}, {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec},
+       [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
+
     challenge(:well_typed, [dec_family()], :motive_wf, @dec, body, "well-formed motive λx:Dec. Dec")
   end
 
   def motive_wf(:ill_typed) do
-    over = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec}}   # one lam too many for a 0-index family
-    body = {:case, {:ctor, :Causal, []}, over,
-            [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
+    # one lam too many for a 0-index family
+    over = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), @dec, @dec}}
+
+    body =
+      {:case, {:ctor, :Causal, []}, over, [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
+
     # def_type is irrelevant to the motive check; use @dec (check fails before it matters).
     challenge(:ill_typed, [dec_family()], :motive_wf, @dec, body, "over-applied motive → :bad_motive")
   end
 
   # -- 4.4b motive well-formedness: an INDEXED family as a Π DOMAIN -----------
-  defp snat_family, do: {Inductive.family(:SNat, [], [{:d, @dec}], 0),
-                         [Inductive.ctor(:snat0, [], [{:ctor, :Dcoupled, []}])]}
+  defp snat_family,
+    do: {Inductive.family(:SNat, [], [{:d, @dec}], 0), [Inductive.ctor(:snat0, [], [{:ctor, :Dcoupled, []}])]}
 
   @doc """
   Convoy-motive well-formedness: the motive body is a Π whose DOMAIN is an indexed
@@ -210,20 +269,32 @@ defmodule Antigen.Generators.Indexed do
            {:lam, Cure.Core.Grade.unrestricted(), {:data, :SNat, [], [{:ctor, :Causal, []}]}, {:ctor, :Dcoupled, []}}}
         ]}}
 
-    challenge(:well_typed, [dec_family(), snat_family()], :motive_dom, def_type, body,
-      "convoy motive λs. Π(SNat s). Dec — indexed family as Π domain (was false :bad_motive)")
+    challenge(
+      :well_typed,
+      [dec_family(), snat_family()],
+      :motive_dom,
+      def_type,
+      body,
+      "convoy motive λs. Π(SNat s). Dec — indexed family as Π domain (was false :bad_motive)"
+    )
   end
 
   def motive_indexed_domain(:ill_typed) do
-    neg_motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), {:ctor, :Dcoupled, []}, @dec}}
+    neg_motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), {:ctor, :Dcoupled, []}, @dec}}
 
     body =
       {:lam, Cure.Core.Grade.unrestricted(), @dec,
-       {:case, {:var, 0}, neg_motive,
-        [{:Dcoupled, 0, {:type, 0}}, {:Causal, 0, {:type, 0}}]}}
+       {:case, {:var, 0}, neg_motive, [{:Dcoupled, 0, {:type, 0}}, {:Causal, 0, {:type, 0}}]}}
 
-    challenge(:ill_typed, [dec_family(), snat_family()], :motive_dom, @dec, body,
-      "negative control: Π domain is a Dec value (Dcoupled), not a type → :bad_motive")
+    challenge(
+      :ill_typed,
+      [dec_family(), snat_family()],
+      :motive_dom,
+      @dec,
+      body,
+      "negative control: Π domain is a Dec value (Dcoupled), not a type → :bad_motive"
+    )
   end
 
   # -- convoy soundness invariants (indexed with-clause LHS re-match) ----------
@@ -250,17 +321,27 @@ defmodule Antigen.Generators.Indexed do
   def data_split_validation(:well_typed) do
     dom = {:data, :SNat, [], [{:ctor, :Dcoupled, []}]}
 
-    challenge(:well_typed, [dec_family(), snat_family()], :data_split,
-      {:pi, Cure.Core.Grade.unrestricted(), dom, @dec}, {:lam, Cure.Core.Grade.unrestricted(), dom, {:ctor, :Dcoupled, []}},
-      "correct SNat split (0 params, 1 index) as a Π domain — accepted")
+    challenge(
+      :well_typed,
+      [dec_family(), snat_family()],
+      :data_split,
+      {:pi, Cure.Core.Grade.unrestricted(), dom, @dec},
+      {:lam, Cure.Core.Grade.unrestricted(), dom, {:ctor, :Dcoupled, []}},
+      "correct SNat split (0 params, 1 index) as a Π domain — accepted"
+    )
   end
 
   def data_split_validation(:ill_typed) do
     bad = {:data, :SNat, [{:ctor, :Dcoupled, []}], []}
 
-    challenge(:ill_typed, [dec_family(), snat_family()], :data_split,
-      {:pi, Cure.Core.Grade.unrestricted(), bad, @dec}, {:lam, Cure.Core.Grade.unrestricted(), bad, {:ctor, :Dcoupled, []}},
-      "index in the PARAMS slot of a 0-param family — kernel must reject (:arg_arity)")
+    challenge(
+      :ill_typed,
+      [dec_family(), snat_family()],
+      :data_split,
+      {:pi, Cure.Core.Grade.unrestricted(), bad, @dec},
+      {:lam, Cure.Core.Grade.unrestricted(), bad, {:ctor, :Dcoupled, []}},
+      "index in the PARAMS slot of a 0-param family — kernel must reject (:arg_arity)"
+    )
   end
 
   @doc """
@@ -276,15 +357,25 @@ defmodule Antigen.Generators.Indexed do
   """
   @spec reify_collapse_distinct(:well_typed | :ill_typed) :: Challenge.t()
   def reify_collapse_distinct(:well_typed) do
-    challenge(:well_typed, [dec_family(), snat_family()], :reify_distinct,
-      {:data, :SNat, [], [{:ctor, :Dcoupled, []}]}, {:ctor, :snat0, []},
-      "snat0 : SNat(Dcoupled) against SNat(Dcoupled) — accepted")
+    challenge(
+      :well_typed,
+      [dec_family(), snat_family()],
+      :reify_distinct,
+      {:data, :SNat, [], [{:ctor, :Dcoupled, []}]},
+      {:ctor, :snat0, []},
+      "snat0 : SNat(Dcoupled) against SNat(Dcoupled) — accepted"
+    )
   end
 
   def reify_collapse_distinct(:ill_typed) do
-    challenge(:ill_typed, [dec_family(), snat_family()], :reify_distinct,
-      {:data, :SNat, [], [{:ctor, :Causal, []}]}, {:ctor, :snat0, []},
-      "snat0 : SNat(Dcoupled) against distinct SNat(Causal) — must reject")
+    challenge(
+      :ill_typed,
+      [dec_family(), snat_family()],
+      :reify_distinct,
+      {:data, :SNat, [], [{:ctor, :Causal, []}]},
+      {:ctor, :snat0, []},
+      "snat0 : SNat(Dcoupled) against distinct SNat(Causal) — must reject"
+    )
   end
 
   # RETIRED (Phase C, primitive-identity retirement) — `reify_eq_indexed_reach`.
@@ -317,20 +408,42 @@ defmodule Antigen.Generators.Indexed do
   @spec discharge(:well_typed | :ill_typed) :: Challenge.t()
   def discharge(:well_typed) do
     ix_dcoupled = {:data, :Ix, [], [{:ctor, :Dcoupled, []}]}
-    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Ix, [], [{:var, 0}]}, @dec}}
+
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :Ix, [], [{:var, 0}]}, @dec}}
+
     def_type = {:pi, Cure.Core.Grade.unrestricted(), ix_dcoupled, @dec}
     body = {:lam, Cure.Core.Grade.unrestricted(), ix_dcoupled, {:case, {:var, 0}, motive, [{:wrap, 1, {:type, 0}}]}}
-    challenge(:well_typed, [dec_family(), ix_family()], :discharge, def_type, body,
-      "impossible wrap branch (scrutinee Ix Dcoupled) discharged, body not checked")
+
+    challenge(
+      :well_typed,
+      [dec_family(), ix_family()],
+      :discharge,
+      def_type,
+      body,
+      "impossible wrap branch (scrutinee Ix Dcoupled) discharged, body not checked"
+    )
   end
 
   def discharge(:ill_typed) do
     ix_causal = {:data, :Ix, [], [{:ctor, :Causal, []}]}
-    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Ix, [], [{:var, 0}]}, @dec}}
+
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :Ix, [], [{:var, 0}]}, @dec}}
+
     def_type = {:pi, Cure.Core.Grade.unrestricted(), ix_causal, @dec}
     body = {:lam, Cure.Core.Grade.unrestricted(), ix_causal, {:case, {:var, 0}, motive, [{:wrap, 1, {:type, 0}}]}}
-    challenge(:ill_typed, [dec_family(), ix_family()], :discharge, def_type, body,
-      "ill-typed: wrap branch REACHABLE (scrutinee Ix Causal), {:type,0} body must be rejected")
+
+    challenge(
+      :ill_typed,
+      [dec_family(), ix_family()],
+      :discharge,
+      def_type,
+      body,
+      "ill-typed: wrap branch REACHABLE (scrutinee Ix Causal), {:type,0} body must be rejected"
+    )
   end
 
   # -- 4.6 constructor injectivity (spine descent) ----------------------------
@@ -342,8 +455,9 @@ defmodule Antigen.Generators.Indexed do
   defp wr_family, do: {Inductive.family(:Wr, [], [], 0), [Inductive.ctor(:MkWr, [{:d, @dec}], [])]}
 
   defp iw_family,
-    do: {Inductive.family(:IW, [], [{:w, @wr}], 0),
-         [Inductive.ctor(:iw, [{:p, @dec}], [{:ctor, :MkWr, [{:ctor, :Causal, []}]}])]}
+    do:
+      {Inductive.family(:IW, [], [{:w, @wr}], 0),
+       [Inductive.ctor(:iw, [{:p, @dec}], [{:ctor, :MkWr, [{:ctor, :Causal, []}]}])]}
 
   # IW indexed by MkWr(var k).
   defp iw_mk(k), do: {:data, :IW, [], [{:ctor, :MkWr, [{:var, k}]}]}
@@ -357,20 +471,53 @@ defmodule Antigen.Generators.Indexed do
   """
   @spec injectivity(:well_typed | :ill_typed) :: Challenge.t()
   def injectivity(:well_typed) do
-    def_type = {:pi, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), iw_mk(0), {:pi, Cure.Core.Grade.unrestricted(), iw_mk(1), iw_mk(2)}}}
-    motive = {:lam, Cure.Core.Grade.unrestricted(), @wr, {:lam, Cure.Core.Grade.unrestricted(), {:data, :IW, [], [{:var, 0}]}, {:data, :IW, [], [{:var, 1}]}}}
-    body = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), iw_mk(0), {:lam, Cure.Core.Grade.unrestricted(), iw_mk(1), {:case, {:var, 0}, motive, [{:iw, 1, {:var, 2}}]}}}}
-    challenge(:well_typed, [dec_family(), wr_family(), iw_family()], :inject, def_type, body,
-      "n := Causal solved by descending through MkWr (injectivity); reuse h:IW(MkWr n) as IW(MkWr Causal)")
+    def_type =
+      {:pi, Cure.Core.Grade.unrestricted(), @dec,
+       {:pi, Cure.Core.Grade.unrestricted(), iw_mk(0), {:pi, Cure.Core.Grade.unrestricted(), iw_mk(1), iw_mk(2)}}}
+
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @wr,
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :IW, [], [{:var, 0}]}, {:data, :IW, [], [{:var, 1}]}}}
+
+    body =
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
+       {:lam, Cure.Core.Grade.unrestricted(), iw_mk(0),
+        {:lam, Cure.Core.Grade.unrestricted(), iw_mk(1), {:case, {:var, 0}, motive, [{:iw, 1, {:var, 2}}]}}}}
+
+    challenge(
+      :well_typed,
+      [dec_family(), wr_family(), iw_family()],
+      :inject,
+      def_type,
+      body,
+      "n := Causal solved by descending through MkWr (injectivity); reuse h:IW(MkWr n) as IW(MkWr Causal)"
+    )
   end
 
   def injectivity(:ill_typed) do
     iw_dcoupled = {:data, :IW, [], [{:ctor, :MkWr, [{:ctor, :Dcoupled, []}]}]}
-    def_type = {:pi, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), iw_mk(0), {:pi, Cure.Core.Grade.unrestricted(), iw_mk(1), iw_dcoupled}}}
-    motive = {:lam, Cure.Core.Grade.unrestricted(), @wr, {:lam, Cure.Core.Grade.unrestricted(), {:data, :IW, [], [{:var, 0}]}, iw_dcoupled}}
-    body = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), iw_mk(0), {:lam, Cure.Core.Grade.unrestricted(), iw_mk(1), {:case, {:var, 0}, motive, [{:iw, 1, {:var, 2}}]}}}}
-    challenge(:ill_typed, [dec_family(), wr_family(), iw_family()], :inject, def_type, body,
-      "ill-typed: injectivity yields only n:=Causal; body needs IW(MkWr Dcoupled) — must be rejected")
+
+    def_type =
+      {:pi, Cure.Core.Grade.unrestricted(), @dec,
+       {:pi, Cure.Core.Grade.unrestricted(), iw_mk(0), {:pi, Cure.Core.Grade.unrestricted(), iw_mk(1), iw_dcoupled}}}
+
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @wr,
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :IW, [], [{:var, 0}]}, iw_dcoupled}}
+
+    body =
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
+       {:lam, Cure.Core.Grade.unrestricted(), iw_mk(0),
+        {:lam, Cure.Core.Grade.unrestricted(), iw_mk(1), {:case, {:var, 0}, motive, [{:iw, 1, {:var, 2}}]}}}}
+
+    challenge(
+      :ill_typed,
+      [dec_family(), wr_family(), iw_family()],
+      :inject,
+      def_type,
+      body,
+      "ill-typed: injectivity yields only n:=Causal; body needs IW(MkWr Dcoupled) — must be rejected"
+    )
   end
 
   # -- W3: deletion rule (pre-port banking spec §4 W3) -------------------------
@@ -380,9 +527,7 @@ defmodule Antigen.Generators.Indexed do
   # by the DELETION rule (r == s ⇒ consistent, kernel.ex `unify_one`). The branch
   # is therefore REACHABLE with no refinement.
   defp ixn_family,
-    do:
-      {Inductive.family(:IxN, [], [{:i, {:int_type}}], 0),
-       [Inductive.ctor(:wrapn, [{:p, @dec}], [{:int_lit, 3}])]}
+    do: {Inductive.family(:IxN, [], [{:i, {:int_type}}], 0), [Inductive.ctor(:wrapn, [{:p, @dec}], [{:int_lit, 3}])]}
 
   @doc """
   Deletion-rule obligation. `:well_typed`: the reachable-via-deletion branch has a
@@ -395,7 +540,11 @@ defmodule Antigen.Generators.Indexed do
   @spec deletion(:well_typed | :ill_typed) :: Challenge.t()
   def deletion(label) do
     ixn3 = {:data, :IxN, [], [{:int_lit, 3}]}
-    motive = {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :IxN, [], [{:var, 0}]}, @dec}}
+
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), {:int_type},
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :IxN, [], [{:var, 0}]}, @dec}}
+
     def_type = {:pi, Cure.Core.Grade.unrestricted(), ixn3, @dec}
 
     branch_body =
@@ -406,8 +555,14 @@ defmodule Antigen.Generators.Indexed do
 
     body = {:lam, Cure.Core.Grade.unrestricted(), ixn3, {:case, {:var, 0}, motive, [{:wrapn, 1, branch_body}]}}
 
-    challenge(label, [dec_family(), ixn_family()], :delete, def_type, body,
-      "deletion rule: index equation 3 ~ 3 is consistent (r==s); branch reachable, body #{label}")
+    challenge(
+      label,
+      [dec_family(), ixn_family()],
+      :delete,
+      def_type,
+      body,
+      "deletion rule: index equation 3 ~ 3 is consistent (r==s); branch reachable, body #{label}"
+    )
   end
 
   defp challenge(label, families, name, def_type, def_body, note) do

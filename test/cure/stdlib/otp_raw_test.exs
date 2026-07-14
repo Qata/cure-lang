@@ -28,16 +28,47 @@ defmodule Cure.Stdlib.OtpRawTest do
 
   test "the module elaborates on the dependent pipeline", %{locals: locals} do
     assert :raw_self in locals
+    assert :raw_spawn in locals
+    assert :raw_spawn_link in locals
+    assert :raw_start_link in locals
+    assert :raw_start_link_unnamed in locals
+    assert :raw_statem_start_link in locals
+    assert :raw_statem_start_link_unnamed in locals
+    assert :raw_supervisor_start_link in locals
     assert :raw_send in locals
     assert :raw_call in locals
   end
 
-  test "raw_self : Effect(Pid)", %{env: env} do
-    assert {:effect_type, {:data, :Pid, [], []}} = Env.get_def(env, :raw_self).type
+  test "raw_self binds its erased message index before returning Effect(RawPid(m, m))", %{env: env} do
+    assert {:pi, :erased, {:type, 0}, {:effect_type, {:data, :RawPid, [{:var, 0}, {:var, 0}], []}}} =
+             Env.get_def(env, :raw_self).type
   end
 
   test "every side-effecting op returns Effect(_) — the purity lie is closed", %{env: env} do
-    for name <- [:raw_send, :raw_cast, :raw_call, :raw_monitor] do
+    for name <- [
+          :raw_send,
+          :raw_spawn,
+          :raw_spawn_link,
+          :raw_start_link,
+          :raw_start_link_unnamed,
+          :raw_statem_start_link,
+          :raw_statem_start_link_unnamed,
+          :raw_supervisor_start_link,
+          :raw_cast,
+          :raw_call,
+          :raw_monitor,
+          :raw_stop,
+          :raw_send_after,
+          :raw_cancel_timer,
+          :raw_demonitor,
+          :raw_link,
+          :raw_unlink,
+          :raw_exit,
+          :raw_is_alive,
+          :raw_register,
+          :raw_unregister,
+          :raw_whereis
+        ] do
       assert effect_result?(Env.get_def(env, name).type),
              "#{name} must return Effect(_), got #{inspect(Env.get_def(env, name).type)}"
     end

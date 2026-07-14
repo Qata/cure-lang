@@ -92,7 +92,7 @@ defmodule Cure.Audit.Ledger do
           def = Map.fetch!(env.defs, name),
           match?({:extern, _}, def.body) do
         {:extern, mfa} = def.body
-        %Axiom{mfa: mfa, type: Printer.print(def.type), via: name, bucket: bucket(mfa)}
+        %Axiom{mfa: mfa, type: print_type(def.type), via: name, bucket: bucket(mfa)}
       end
       |> Enum.uniq_by(fn a -> {a.mfa, a.type} end)
       |> Enum.sort_by(&sort_key/1)
@@ -117,6 +117,18 @@ defmodule Cure.Audit.Ledger do
 
   # Sorted, stable, and independent of map iteration order.
   defp sort_key(%Axiom{mfa: {m, f, a}, type: t}), do: {Atom.to_string(m), Atom.to_string(f), a, t}
+
+  # `Effect(T)` is a valid Core type former, but the trusted Core printer is
+  # intentionally outside this audit module's ownership boundary. Keep audit
+  # reporting total by handling the former here and delegating every other
+  # type to the existing printer.
+  defp print_type({:effect_type, payload}), do: "Effect(#{print_type(payload)})"
+
+  defp print_type(type) do
+    Printer.print(type)
+  rescue
+    ArgumentError -> inspect(type)
+  end
 
   # Our own walk. NOT Program.reachable_def_names/2, whose collect_reachable/4
   # skips builtin_op defs and type-level defs — correct for codegen, and

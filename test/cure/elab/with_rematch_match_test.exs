@@ -55,6 +55,7 @@ defmodule Cure.Elab.WithRematchMatchTest do
 
   test "rejects a non-constructor (forced/arithmetic) restated pattern" do
     kpk = {:binary_op, [operator: :+], [v("k"), v("k")]}
+
     assert {:error, {:with_rematch_non_constructor_pattern, _}} =
              Elaborator.match_parent_lhs([v("n")], [kpk])
   end

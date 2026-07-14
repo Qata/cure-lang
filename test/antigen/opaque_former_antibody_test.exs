@@ -47,9 +47,7 @@ defmodule Antigen.OpaqueFormerAntibodyTest do
   # a genuine empty inductive Void — the three players in the contrast.
   defp sig do
     {:ok, env} =
-      Program.elaborate(
-        "mod M\n  opaque type Effect(a)\n  opaque type Widget(a)\n  type Void =\n    |\nend\n"
-      )
+      Program.elaborate("mod M\n  opaque type Effect(a)\n  opaque type Widget(a)\n  type Void =\n    |\nend\n")
 
     env
   end

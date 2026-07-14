@@ -34,7 +34,8 @@ defmodule Antigen.NfWellTypedAntibodyTest do
   test "B4.i: nf of an indexed-family TYPE term stays well-formed" do
     sig = base_sig()
     ctx = Context.empty(sig)
-    ty_term = {:data, :Equivalent, [@nat], [z(), z()]}   # Equivalent(Nat, Z, Z) : Type
+    # Equivalent(Nat, Z, Z) : Type
+    ty_term = {:data, :Equivalent, [@nat], [z(), z()]}
     assert {:ok, _sort} = Kernel.infer(ctx, ty_term)
     normal = Normalise.nf(ctx, ty_term)
     # Pre-B1: reify has no signature, so params++indices (1+2=3 combined values)

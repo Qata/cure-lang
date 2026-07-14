@@ -110,7 +110,10 @@ defmodule Antigen.Generators.Primitive do
   defp struct_eq_partial do
     Gen.bind(Gen.member_of(@struct_ops), fn g ->
       Gen.bind(Gen.member_of([{:int_type}, {:float_type}]), fn ty ->
-        Gen.return({{:app, {:global, g}, ty}, {:pi, Cure.Core.Grade.unrestricted(), ty, {:pi, Cure.Core.Grade.unrestricted(), ty, @bool_type}}})
+        Gen.return(
+          {{:app, {:global, g}, ty},
+           {:pi, Cure.Core.Grade.unrestricted(), ty, {:pi, Cure.Core.Grade.unrestricted(), ty, @bool_type}}}
+        )
       end)
     end)
   end

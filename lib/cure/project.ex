@@ -18,7 +18,7 @@ defmodule Cure.Project do
 
   ## Application and release sections (v0.26.0)
 
-  A project that ships an `app` container may additionally declare:
+  A project that ships an `app` macro may additionally declare:
 
       [application]
       name           = "my_app"
@@ -478,7 +478,7 @@ defmodule Cure.Project do
     include_erts = false
     applications = []
 
-    # The `app` container in lib/app.cure is `app #{mod}`; the
+    # The `app` macro in lib/app.cure is `app #{mod}`; the
     # compiler verifies that its name matches `[application].name`
     # above.
     """
@@ -555,7 +555,7 @@ defmodule Cure.Project do
     ## #{mod} application.
     ##
     ## Compiles to `:"Cure.App.#{mod}"`, an OTP `Application` callback
-    ## module. The compiler verifies that exactly one `app` container
+    ## module. The compiler verifies that exactly one `app` macro
     ## exists in the project and that its name matches
     ## `[application].name` in `Cure.toml`.
     app #{mod}
@@ -572,9 +572,8 @@ defmodule Cure.Project do
     File.write!(Path.join([name, "lib", "fsm.cure"]), """
     mod #{mod}.Fsm
 
-      fsm Switch
-        Off --on--> On
-        On  --off--> Off
+    fsm Cure.#{mod}.Fsm state Atom handle_event
+      :keep_state_and_data
     """)
   end
 
@@ -709,12 +708,12 @@ defmodule Cure.Project do
   @doc """
   Compile every `.cure` file under the project's `lib/` directory,
   enforcing the single-`app` invariant and emitting a `<name>.app`
-  resource file when an `app` container is present.
+  resource file when an `app` macro is present.
 
   Steps:
 
   1. Lex+parse every candidate file with a lightweight pre-pass
-     looking for `app` containers.
+     looking for lifted application modules.
   2. If more than one `app` is found, return
      `{:error, {:duplicate_app, [{path, name}, ...]}}` (surfaced as
      `E051`).
@@ -781,7 +780,14 @@ defmodule Cure.Project do
          {:ok, app_info} <- detect_app(cure_files, project),
          :ok <- verify_app_name(app_info, project),
          {:ok, modules} <-
-           compile_all_files(cure_files, output_dir, emit_events?, check?, declared_phases(project)),
+           compile_all_files(
+             cure_files,
+             output_dir,
+             emit_events?,
+             check?,
+             declared_phases(project),
+             extra_paths
+           ),
          :ok <- maybe_write_app_resource(app_info, modules, project, output_dir) do
       {:ok, %{modules: modules, app_module: app_module(app_info)}}
     end
@@ -790,12 +796,12 @@ defmodule Cure.Project do
   @doc false
   @spec detect_app([String.t()], t()) :: {:ok, map() | nil} | {:error, term()}
   def detect_app(files, _project) do
-    # Lex+parse only enough to find `app` containers. We intentionally
+    # Lex+parse only enough to find lifted application modules. We intentionally
     # emit no events during the pre-pass so the main compile pass
     # remains the sole emitter for LSP consumers.
     # Thread a project-root → edition cache so a project of N files sharing one
     # Cure.toml parses+validates that manifest ONCE, not N times (A1-F4).
-    {containers, _cache} =
+    {applications, _cache} =
       Enum.flat_map_reduce(files, %{}, fn file, cache ->
         case File.read(file) do
           {:ok, source} ->
@@ -812,7 +818,7 @@ defmodule Cure.Project do
                      Cure.Compiler.Lexer.tokenize(source, file: file, emit_events: false, edition: edition),
                    {:ok, ast} <-
                      Cure.Compiler.Parser.parse(tokens, file: file, emit_events: false, edition: edition) do
-                find_app_containers(ast, file)
+                find_application_modules(ast, file)
               else
                 _ -> []
               end
@@ -824,7 +830,7 @@ defmodule Cure.Project do
         end
       end)
 
-    case containers do
+    case applications do
       [] ->
         {:ok, nil}
 
@@ -880,18 +886,22 @@ defmodule Cure.Project do
     Enum.map(paths || ["lib"], &Path.join(root, &1))
   end
 
-  defp find_app_containers({:container, meta, _body}, file) do
-    case Keyword.get(meta, :container_type) do
-      :app -> [%{file: file, name: Keyword.get(meta, :name), meta: meta}]
-      _ -> []
+  defp find_application_modules({:lift_module, meta, _body}, file) when is_list(meta) do
+    if Keyword.get(meta, :behaviour) == :application do
+      case Keyword.get(meta, :module) do
+        "Cure.App." <> name -> [%{file: file, name: name, meta: meta}]
+        _ -> []
+      end
+    else
+      []
     end
   end
 
-  defp find_app_containers({:block, _, children}, file) when is_list(children) do
-    Enum.flat_map(children, &find_app_containers(&1, file))
+  defp find_application_modules({:block, _, children}, file) when is_list(children) do
+    Enum.flat_map(children, &find_application_modules(&1, file))
   end
 
-  defp find_app_containers(_, _), do: []
+  defp find_application_modules(_, _), do: []
 
   defp verify_app_name(nil, _project), do: :ok
 
@@ -927,7 +937,7 @@ defmodule Cure.Project do
 
   defp declared_phases(_), do: nil
 
-  defp compile_all_files(files, output_dir, emit?, check?, declared_phases) do
+  defp compile_all_files(files, output_dir, emit?, check?, declared_phases, source_roots) do
     base_opts = [
       output_dir: output_dir,
       emit_events: emit?,
@@ -939,12 +949,14 @@ defmodule Cure.Project do
         do: Keyword.put(base_opts, :declared_phases, declared_phases),
         else: base_opts
 
+    opts = Keyword.put(opts, :source_roots, source_roots)
+
     result =
       Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->
         case Cure.Compiler.compile_file(file, opts) do
           {:ok, module, _warnings} ->
-            # Best-effort: callback-mode/actor/sup/app containers load
-            # themselves during codegen and may have no beam on disk.
+            # Best-effort: lifted behavior modules load themselves during
+            # codegen and may have no beam on disk.
             _ = Cure.Compiler.load_emitted(module, output_dir)
             {:cont, {:ok, [module | acc]}}
 
@@ -965,12 +977,11 @@ defmodule Cure.Project do
     String.to_atom("Cure.App." <> name)
   end
 
-  # The `app` container feature (and its `.app`-resource writer) was removed with
-  # the classic pathway rip-out (#18). An `app` container no longer reaches a
-  # resource: it fails at dependent codegen as an unsupported container. This
-  # stays a no-op so the project builder does not error on the vestigial detect
-  # step; it is deleted wholesale when `app` detection is torn out.
-  defp maybe_write_app_resource(_app_info, _modules, _project, _output_dir), do: :ok
+  defp maybe_write_app_resource(nil, _modules, _project, _output_dir), do: :ok
+
+  defp maybe_write_app_resource(app_info, modules, project, output_dir) do
+    Cure.App.Resource.write(app_info, modules, project, output_dir: output_dir)
+  end
 
   # -- TOML Parser (minimal subset) -------------------------------------------
 

@@ -25,8 +25,131 @@ defmodule Cure.Stdlib.OtpTest do
     {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
     assert {:ok, env, locals} = Program.check_ast_with_locals(ast)
-    assert :self in locals and :tell in locals and :call in locals and :cast in locals
-    for op <- [:tell, :call, :cast], do: assert(effect_result?(Env.get_def(env, op).type))
+
+    assert :self in locals and :spawn in locals and :spawn_link in locals and :start_link in locals and
+             :start_statem in locals and
+             :start_supervisor in locals and
+             :tell in locals and :call in locals and :cast in locals
+
+    for op <- [:spawn, :spawn_link, :start_link, :start_statem, :start_supervisor, :tell, :call, :cast],
+        do: assert(effect_result?(Env.get_def(env, op).type))
+  end
+
+  test "the typed layer owns the public algebra; only Raw contains externs" do
+    src = File.read!("lib/std/otp.cure")
+    {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
+    {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
+    assert {:ok, env, locals} = Program.check_ast_with_locals(ast)
+
+    for op <- [
+          :self,
+          :spawn,
+          :spawn_link,
+          :start_link,
+          :start_supervisor,
+          :tell,
+          :call,
+          :cast,
+          :stop,
+          :send_after,
+          :cancel_timer,
+          :monitor,
+          :demonitor,
+          :link,
+          :unlink,
+          :exit,
+          :is_alive,
+          :register,
+          :unregister,
+          :whereis
+        ] do
+      assert op in locals
+
+      refute match?({:extern, _}, Env.get_def(env, op).body),
+             "#{op} must be an ordinary checked wrapper"
+    end
+  end
+
+  test "gen_server start_link preserves the raw OTP result tuple" do
+    assert {:ok, _} =
+             app("  fn start(module: Atom, args: List(Int)) -> Effect(Tuple) = Std.Otp.start_link(module, args)\n")
+  end
+
+  test "gen_statem start_link preserves the raw OTP result tuple" do
+    assert {:ok, _} =
+             app("  fn start(module: Atom, args: List(Int)) -> Effect(Tuple) = Std.Otp.start_statem(module, args)\n")
+  end
+
+  test "message codes are ordinary checked computations" do
+    assert {:ok, _} =
+             app("  fn accepts(code: MessageCode) -> Bool = handles(code, :ping, 0)\n")
+
+    assert {:ok, _} =
+             app("  fn combines(left: MessageCode, right: MessageCode) -> MessageCode = union(left, right)\n")
+  end
+
+  test "beam_ops self expands to ordinary Std.Otp syntax" do
+    source = "mod App\n  beam_ops self\n"
+    assert {:ok, ast} = Cure.Compiler.parse_source(source, emit_events: false)
+    assert inspect(ast) =~ "Std.Otp.self"
+    refute inspect(ast) =~ "__otp_container"
+  end
+
+  test "beam_ops expands every initial operation to ordinary algebra calls" do
+    source = """
+    mod App
+      use Std.Otp
+      type Cmd = Inc | Dec
+      fn send_it(p: Pid(Cmd)) -> Effect(Unit) = beam_ops tell p Inc()
+      fn call_it(s: GenServer(Cmd, Int)) -> Effect(Int) = beam_ops call s Dec()
+      fn cast_it(s: GenServer(Cmd, Int)) -> Effect(Unit) = beam_ops cast s Inc()
+      fn stop_it(p: Pid(Cmd)) -> Effect(Unit) = beam_ops stop p
+    """
+
+    assert {:ok, _} = Program.elaborate(source)
+    refute inspect(Cure.Compiler.parse_source(source, emit_events: false)) =~ "__otp_container"
+  end
+
+  test "beam_ops expands lifecycle, timer, monitor, and link operations" do
+    source = """
+    mod App
+      use Std.Otp
+      fn timer(p: Pid(Atom)) -> Effect(Ref) = beam_ops send_after 10 p :tick
+      fn cancel(r: Ref) -> Effect(Unit) = beam_ops cancel_timer r
+      fn observe(p: Pid(Atom)) -> Effect(Ref) = beam_ops monitor :process p
+      fn unobserve(r: Ref) -> Effect(Unit) = beam_ops demonitor r
+      fn connect(p: Pid(Atom)) -> Effect(Unit) = beam_ops link p
+      fn disconnect(p: Pid(Atom)) -> Effect(Unit) = beam_ops unlink p
+    """
+
+    assert {:ok, _} = Program.elaborate(source)
+    refute inspect(Cure.Compiler.parse_source(source, emit_events: false)) =~ "beam_ops"
+  end
+
+  test "beam_ops expands behavior-specific startup operations" do
+    source = """
+    mod App
+      use Std.Otp
+      fn server(module: Atom) -> Effect(Tuple) = beam_ops start_link module [0]
+      fn statem(module: Atom) -> Effect(Tuple) = beam_ops start_statem module [0]
+      fn supervisor(module: Atom) -> Effect(Tuple) = beam_ops start_supervisor module [0]
+    """
+
+    assert {:ok, _} = Program.elaborate(source)
+    expanded = Cure.Compiler.parse_source(source, emit_events: false)
+    refute inspect(expanded) =~ "beam_ops"
+    refute inspect(expanded) =~ "__otp_container"
+  end
+
+  test "beam_ops rejects a message with the wrong typed target" do
+    source = """
+    mod App
+      use Std.Otp
+      type Cmd = Inc | Dec
+      fn send_it(p: Pid(Cmd)) -> Effect(Unit) = beam_ops tell p 5
+    """
+
+    assert {:error, _} = Program.elaborate(source)
   end
 
   describe "Pid(m) — typed one-way messaging" do

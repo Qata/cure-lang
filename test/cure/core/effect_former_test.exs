@@ -101,8 +101,7 @@ defmodule Cure.Core.EffectFormerTest do
     test "bind never applies its continuation — pure's payload is not substituted" do
       # If `bind` reduced, the nf would mention `3` where `k` uses its arg; it
       # must instead keep `bind`/`pure`/`λ` structurally intact.
-      assert {:effect_bind, {:effect_pure, {:int_lit, 3}},
-              {:lam, @omega, {:int_type}, {:effect_pure, {:var, 0}}}} =
+      assert {:effect_bind, {:effect_pure, {:int_lit, 3}}, {:lam, @omega, {:int_type}, {:effect_pure, {:var, 0}}}} =
                Kernel.normalize(empty(), bind_ok())
     end
   end

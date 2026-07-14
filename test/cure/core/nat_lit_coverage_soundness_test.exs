@@ -16,13 +16,17 @@ defmodule Cure.Core.NatLitCoverageSoundnessTest do
   # Vone(n:Nat): vz : Vone(Z), vs : Vone(S k).
   defp env do
     Env.empty()
-    |> Inductive.declare(Inductive.family(:Nat, [], [], 0),
-         [Inductive.ctor(:Z, [], []), Inductive.ctor(:S, [{:n, @nat}], [])])
-    |> Inductive.declare(Inductive.family(:Vone, [], [{:n, @nat}], 0),
-         [
-           Inductive.ctor(:vz, [], [{:ctor, :Z, []}]),
-           Inductive.ctor(:vs, [{:k, @nat}], [{:ctor, :S, [{:var, 0}]}])
-         ])
+    |> Inductive.declare(
+      Inductive.family(:Nat, [], [], 0),
+      [Inductive.ctor(:Z, [], []), Inductive.ctor(:S, [{:n, @nat}], [])]
+    )
+    |> Inductive.declare(
+      Inductive.family(:Vone, [], [{:n, @nat}], 0),
+      [
+        Inductive.ctor(:vz, [], [{:ctor, :Z, []}]),
+        Inductive.ctor(:vs, [{:k, @nat}], [{:ctor, :S, [{:var, 0}]}])
+      ]
+    )
   end
 
   defp ctx, do: Context.empty(env())

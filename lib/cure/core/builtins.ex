@@ -1,5 +1,6 @@
 defmodule Cure.Core.Builtins do
   alias Cure.Core.Grade
+
   @moduledoc """
   Canonical builtin-inductive schemas and the programmatic seeder.
 

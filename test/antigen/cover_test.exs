@@ -1,14 +1,19 @@
 defmodule Antigen.CoverTest do
-  use ExUnit.Case, async: false   # :cover is node-wide global
+  # :cover is node-wide global
+  use ExUnit.Case, async: false
   alias Antigen.Cover
 
   test "cover_compilable? is true for a debug_info module, and with_cover cleans up" do
     assert Cover.cover_compilable?(Antigen.CoverFixture)
-    assert :cover.modules() == []   # not instrumented before
-    result = Cover.with_cover([Antigen.CoverFixture], fn ->
-      Antigen.CoverFixture.classify(5)
-      :ran
-    end)
+    # not instrumented before
+    assert :cover.modules() == []
+
+    result =
+      Cover.with_cover([Antigen.CoverFixture], fn ->
+        Antigen.CoverFixture.classify(5)
+        :ran
+      end)
+
     assert result == :ran
     # cover fully stopped afterward — instrumented module list is empty again.
     # (Confirmed against OTP: :cover.stop/0 does NOT stop the cover_server
@@ -32,13 +37,16 @@ defmodule Antigen.CoverTest do
     # returns false for the wrong reason, without exercising the real branch).
     dir = System.tmp_dir!()
     src_path = Path.join(dir, "antigen_no_debug_fixture.erl")
+
     File.write!(src_path, """
     -module(antigen_no_debug_fixture).
     -export([f/0]).
     f() -> ok.
     """)
+
     {:ok, :antigen_no_debug_fixture} =
       :compile.file(String.to_charlist(src_path), [{:outdir, String.to_charlist(dir)}])
+
     beam_no_ext = dir |> Path.join("antigen_no_debug_fixture") |> String.to_charlist()
     {:module, :antigen_no_debug_fixture} = :code.load_abs(beam_no_ext)
 
@@ -53,12 +61,14 @@ defmodule Antigen.CoverTest do
   test "line_coverage reports covered and cold lines, excluding the line-0 pseudo-entry" do
     cov =
       Cover.with_cover([Antigen.CoverFixture], fn ->
-        Antigen.CoverFixture.classify(5)   # hits :pos only
+        # hits :pos only
+        Antigen.CoverFixture.classify(5)
         Cover.line_coverage(Antigen.CoverFixture)
       end)
 
     assert cov.total > 0
-    assert cov.cold != []                  # :neg / :zero never executed
+    # :neg / :zero never executed
+    assert cov.cold != []
     assert Enum.all?(cov.covered ++ cov.cold, &is_integer/1)
     assert length(cov.covered) + length(cov.cold) == cov.total
     # :cover.analyse(mod, :coverage, :line) emits a {{Mod, 0}, {0, 1}}
@@ -84,7 +94,7 @@ defmodule Antigen.CoverTest do
     {coverage, report} = Antigen.Cover.run_report(opts)
 
     # every kernel module in @cover_modules gets a coverage entry
-    for m <- Antigen.Cover.cover_modules(), do: assert Map.has_key?(coverage, m)
+    for m <- Antigen.Cover.cover_modules(), do: assert(Map.has_key?(coverage, m))
     # a real campaign exercises the normalizer
     assert coverage[Cure.Core.Normalise].total > 0
     assert length(coverage[Cure.Core.Normalise].covered) > 0

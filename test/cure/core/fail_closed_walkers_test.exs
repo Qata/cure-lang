@@ -126,22 +126,34 @@ defmodule Cure.Core.FailClosedWalkersTest do
         ])
 
       # id(n) = case n of Z -> Z | S k -> S k   (no recursion at all)
-      body = {:lam, Cure.Core.Grade.unrestricted(), nat, {:case, {:var, 0}, nat, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:ctor, :S, [{:var, 0}]}}]}}
+      body =
+        {:lam, Cure.Core.Grade.unrestricted(), nat,
+         {:case, {:var, 0}, nat, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:ctor, :S, [{:var, 0}]}}]}}
 
-      assert Certificate.terminating?(:id, body, Env.add_def(env, :id, {:pi, Cure.Core.Grade.unrestricted(), nat, nat}, body))
+      assert Certificate.terminating?(
+               :id,
+               body,
+               Env.add_def(env, :id, {:pi, Cure.Core.Grade.unrestricted(), nat, nat}, body)
+             )
     end
   end
 
   describe "type-level reachability descends into unrecognized nodes" do
     test "a global reachable only through a :rewrite node enters the type-level closure" do
       dec = {:data, :Dec, [], []}
-      outer_body = {:lam, Cure.Core.Grade.unrestricted(), dec, {:rewrite, dec, dec, {:app, {:global, :inner}, {:var, 0}}}}
+
+      outer_body =
+        {:lam, Cure.Core.Grade.unrestricted(), dec, {:rewrite, dec, dec, {:app, {:global, :inner}, {:var, 0}}}}
 
       env =
         Env.empty()
         |> Inductive.declare(Inductive.family(:Dec, [], [], 0), [Inductive.ctor(:Dcoupled, [], [])])
         |> Env.add_def(:outer, {:pi, Cure.Core.Grade.unrestricted(), dec, dec}, outer_body)
-        |> Env.add_def(:inner, {:pi, Cure.Core.Grade.unrestricted(), dec, dec}, {:lam, Cure.Core.Grade.unrestricted(), dec, {:var, 0}})
+        |> Env.add_def(
+          :inner,
+          {:pi, Cure.Core.Grade.unrestricted(), dec, dec},
+          {:lam, Cure.Core.Grade.unrestricted(), dec, {:var, 0}}
+        )
         |> Inductive.declare(Inductive.family(:Wrap, [], [{:d, dec}], 0), [
           Inductive.ctor(:mkWrap, [{:x, dec}], [{:app, {:global, :outer}, {:var, 0}}])
         ])
@@ -151,13 +163,19 @@ defmodule Cure.Core.FailClosedWalkersTest do
 
     test "the Antigen completeness oracle sees it too — it must not share the subject's blind spot" do
       dec = {:data, :Dec, [], []}
-      outer_body = {:lam, Cure.Core.Grade.unrestricted(), dec, {:rewrite, dec, dec, {:app, {:global, :inner}, {:var, 0}}}}
+
+      outer_body =
+        {:lam, Cure.Core.Grade.unrestricted(), dec, {:rewrite, dec, dec, {:app, {:global, :inner}, {:var, 0}}}}
 
       env =
         Env.empty()
         |> Inductive.declare(Inductive.family(:Dec, [], [], 0), [Inductive.ctor(:Dcoupled, [], [])])
         |> Env.add_def(:outer, {:pi, Cure.Core.Grade.unrestricted(), dec, dec}, outer_body)
-        |> Env.add_def(:inner, {:pi, Cure.Core.Grade.unrestricted(), dec, dec}, {:lam, Cure.Core.Grade.unrestricted(), dec, {:var, 0}})
+        |> Env.add_def(
+          :inner,
+          {:pi, Cure.Core.Grade.unrestricted(), dec, dec},
+          {:lam, Cure.Core.Grade.unrestricted(), dec, {:var, 0}}
+        )
         |> Inductive.declare(Inductive.family(:Wrap, [], [{:d, dec}], 0), [
           Inductive.ctor(:mkWrap, [{:x, dec}], [{:app, {:global, :outer}, {:var, 0}}])
         ])

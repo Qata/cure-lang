@@ -36,6 +36,6 @@ defmodule Cure.Elab.StringLiteralTest do
 
   test "a multi-byte UTF-8 string decodes by Unicode codepoint" do
     # é = U+00E9 = 233, 😀 = U+1F600 = 128512 — one Char each, not their UTF-8 bytes.
-    assert run(~s|"é😀"|) == [233, 128512]
+    assert run(~s|"é😀"|) == [233, 128_512]
   end
 end

@@ -94,12 +94,16 @@ defmodule Cure.Compiler.DependentVecCodegenTest do
     # forms.) The behaviour — and every expected result below — is unchanged.
     assert apply(mod, :lookup, [xs, 0]) == 1
     assert apply(mod, :lookup, [xs, 1]) == 2
+
     assert apply(mod, :update, [xs, 1, fn x -> x + 100 end]) ==
              {:prepend, 1, {:prepend, 102, :empty}}
+
     assert apply(mod, :set, [xs, 0, 9]) == {:prepend, 9, {:prepend, 2, :empty}}
     assert apply(mod, :map, [xs, fn x -> x * 10 end]) == {:prepend, 10, {:prepend, 20, :empty}}
+
     assert apply(mod, :zip_with, [xs, {:prepend, 10, {:prepend, 20, :empty}}, fn x -> fn y -> x + y end end]) ==
              {:prepend, 11, {:prepend, 22, :empty}}
+
     assert apply(mod, :count, [xs]) == 2
     assert apply(mod, :length, [xs]) == 2
     assert apply(mod, :any, [xs, fn x -> x == 2 end]) == true

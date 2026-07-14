@@ -21,8 +21,7 @@ defmodule Cure.Core.PositivityAppHeadSoundnessTest do
 
   defp positive_of(field_type) do
     env =
-      Inductive.declare(base(), Inductive.family(:Bad, [], [], 0),
-        [Inductive.ctor(:mk, [{:f, field_type}], [])])
+      Inductive.declare(base(), Inductive.family(:Bad, [], [], 0), [Inductive.ctor(:mk, [{:f, field_type}], [])])
 
     Inductive.positive?(env, Inductive.get_family(env, :Bad))
   end

@@ -46,6 +46,10 @@ defmodule Cure.Audit.RefsTest do
     assert Refs.scan(nil) == %{globals: [], holes: [], absurd: 0}
   end
 
+  test "collects globals inside an effect type" do
+    assert Refs.globals({:effect_type, {:global, :Result}}) == [:Result]
+  end
+
   test "raises on an unknown node instead of silently returning []" do
     assert_raise ArgumentError, ~r/unknown Core term/, fn -> Refs.scan({:bogus}) end
   end

@@ -19,7 +19,7 @@ defmodule Cure.Compiler.LexerTest do
 
   describe "keywords" do
     test "all Cure keywords are recognized" do
-      keywords = ~w(mod fn let type rec proto impl fsm local use as
+      keywords = ~w(mod fn let type rec proto impl local use as
                     match if elif else then for do
                     in try catch finally throw return yield
                     spawn send receive after when where extern)
@@ -129,6 +129,7 @@ defmodule Cure.Compiler.LexerTest do
   describe "malformed numeric literals return errors, not crashes" do
     test "an all-underscore radix literal (0x_/0b_) errors instead of raising" do
       assert {:error, {:invalid_hex_literal, _, _}} = Lexer.tokenize("0x_", emit_events: false)
+
       assert {:error, {:invalid_binary_literal, _, _}} =
                Lexer.tokenize("0b_", emit_events: false)
     end
@@ -405,23 +406,20 @@ defmodule Cure.Compiler.LexerTest do
     end
   end
 
-  # ── FSM Transitions ──────────────────────────────────────────────────
+  # ── Ordinary minus punctuation ────────────────────────────────────────
 
-  describe "FSM transitions" do
-    test "simple transition --event-->" do
+  describe "ordinary minus punctuation" do
+    test "double minus is not a compiler-owned transition token" do
       tokens = lex!("--timer-->")
       token_types = types(tokens)
-      assert :transition_open in token_types
-      assert :transition_close in token_types
+      assert Enum.count(token_types, &(&1 == :minus)) == 3
       assert :identifier in token_types
     end
 
-    test "guarded transition --event when guard-->" do
+    test "transition-shaped text uses ordinary expression tokens" do
       tokens = lex!("--increment when value < 100-->")
       token_types = types(tokens)
-      assert :transition_open in token_types
-      assert :transition_close in token_types
-      # when
+      assert Enum.count(token_types, &(&1 == :minus)) == 3
       assert :keyword in token_types
     end
   end

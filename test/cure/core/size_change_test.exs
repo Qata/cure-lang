@@ -56,7 +56,8 @@ defmodule Cure.Core.SizeChangeTest do
         call2(:ack, v(0), s(z()))
       )
 
-    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, ncase(v(1), inner, s(v(0)))}}
+    {:lam, Cure.Core.Grade.unrestricted(), @nat,
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, ncase(v(1), inner, s(v(0)))}}
   end
 
   defp ack_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}
@@ -128,7 +129,8 @@ defmodule Cure.Core.SizeChangeTest do
   # The rebuilt S a / S b do NOT reconstruct any matched form (a,b unmatched),
   # so reconstruct-equal must NOT fire; all arcs unknown -> rejected.
   defp loop_body do
-    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, call2(:loop, s(v(1)), s(v(0)))}}
+    {:lam, Cure.Core.Grade.unrestricted(), @nat,
+     {:lam, Cure.Core.Grade.unrestricted(), @nat, call2(:loop, s(v(1)), s(v(0)))}}
   end
 
   defp loop_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}

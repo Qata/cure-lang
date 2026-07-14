@@ -43,8 +43,7 @@ defmodule Cure.Elab.JoinLambdaGradeLandmineTest do
   #                    in S branch (depth 4) j={:var,1}, v={:var,3}
   defp body do
     {:let, :unrestricted, @nat, {:var, 0},
-     {:let, :unrestricted, {:pi, :unrestricted, @nat, @nat},
-      {:lam, :erased, @nat, {:ctor, :Z, []}},
+     {:let, :unrestricted, {:pi, :unrestricted, @nat, @nat}, {:lam, :erased, @nat, {:ctor, :Z, []}},
       {:case, {:var, 1}, {:lam, :unrestricted, @nat, @nat},
        [
          {:Z, 0, {:app, {:var, 0}, {:var, 2}}},

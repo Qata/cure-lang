@@ -101,8 +101,8 @@ defmodule Cure.Compiler.ParserIndexedTypeTest do
     # scope for subsequent atoms.
     assert {:function_call, [name: "SNat"], [{:variable, [scope: :local], "k"}]} = second
 
-    assert {:function_call, [name: "NVv"],
-            [{:function_call, [name: "S"], [{:variable, [scope: :local], "k"}]}]} = result
+    assert {:function_call, [name: "NVv"], [{:function_call, [name: "S"], [{:variable, [scope: :local], "k"}]}]} =
+             result
   end
 
   test "unnamed ctor arg types are unchanged (no :named_dom wrapper)" do

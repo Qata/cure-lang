@@ -157,21 +157,17 @@ compiles and Erlang's `=` raises at runtime on a failed match.
 See `docs/BINARIES.md` for the authoritative reference and
 `examples/binary_destructuring.cure` for an end-to-end walk-through.
 ## 12. FSMs
-First-class finite state machines:
+`fsm` is an auto-preluded macro that creates a transparent lifted
+`gen_statem` module:
 ```cure
-fsm Turnstile with Integer
-  Locked   --coin-->  Unlocked
-  Unlocked --push-->  Locked
-  Unlocked --coin-->  Unlocked
-  Locked   --push-->  Locked
-
-  on_transition
-    (:locked, :coin, _payload, data) -> %[:ok, :unlocked, data + 1]
-    (:unlocked, :push, _payload, data) -> %[:ok, :locked, data]
-    (_, _, _, data) -> %[:ok, :__same__, data]
+fsm Cure.Turnstile state Int handle_event
+  let pid: Pid(Atom) = beam_ops self
+  :keep_state_and_data
 ```
-The compiler verifies reachability and deadlock freedom and emits a
-runnable `gen_statem` (or `GenServer` in callback mode) BEAM module.
+The callback body is checked as an erased `Effect(Atom)` result, so ordinary
+values and checked `beam_ops` sequences use the same path. Transition tables
+are a library-level macro built on this callback floor rather than compiler
+syntax.
 ## 13. Documenting your modules
 `cure doc` produces a browsable, ExDoc-like documentation site from
 your `.cure` sources. The layout has a persistent left sidebar with
@@ -279,9 +275,9 @@ See `docs/DOC.md` for the authoritative reference.
 - `docs/TYPE_SYSTEM.md` -- type checker details.
 - `docs/DEPENDENT_TYPES.md` -- the v0.17.0 dependent-typing layer.
 - `docs/FSM_GUIDE.md` -- FSM mechanics in depth.
-- `docs/SUPERVISION.md` -- typed actors, `sup` containers, the
+- `docs/SUPERVISION.md` -- typed actors, transparent `sup` modules, the
   Melquiades Operator `<-|` (v0.25.0).
-- `docs/APP.md` -- `app` containers, `Cure.toml` `[application]` /
+- `docs/APP.md` -- transparent `app` modules, `Cure.toml` `[application]` /
   `[release]` sections, and the `cure release` subcommand (v0.26.0).
 - `docs/DOC.md` -- `cure doc` pipeline, `[doc]` config, placeholder
   interpolation, Makeup highlighting, REPL Markdown renderer (v0.29.0).

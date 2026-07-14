@@ -86,8 +86,7 @@ defmodule Antigen.CycleRuleAntibodyTest do
       {"a (identity, reachable)", a_lvl(), {:var, 0}},
       {"Z (reachable a:=Z)", {:vctor, :Z, []}, {:ctor, :Z, []}},
       {"S(a) (cycle)", {:vctor, :S, [a_lvl()]}, {:ctor, :S, [{:var, 0}]}},
-      {"S(S(a)) (nested cycle)", {:vctor, :S, [{:vctor, :S, [a_lvl()]}]},
-       {:ctor, :S, [{:ctor, :S, [{:var, 0}]}]}},
+      {"S(S(a)) (nested cycle)", {:vctor, :S, [{:vctor, :S, [a_lvl()]}]}, {:ctor, :S, [{:ctor, :S, [{:var, 0}]}]}},
       {"S(S(S(a))) (deep cycle)", {:vctor, :S, [{:vctor, :S, [{:vctor, :S, [a_lvl()]}]}]},
        {:ctor, :S, [{:ctor, :S, [{:ctor, :S, [{:var, 0}]}]}]}}
     ]

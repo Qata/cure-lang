@@ -27,7 +27,8 @@ defmodule Mix.Tasks.Antigen.Migrate do
 
         case Corpus.decode_record(trimmed) do
           {:ok, c} -> Corpus.encode_record(c, Corpus.raw_key(trimmed))
-          _ -> trimmed                      # leave undecodable lines (e.g. blank) untouched
+          # leave undecodable lines (e.g. blank) untouched
+          _ -> trimmed
         end
       end)
 

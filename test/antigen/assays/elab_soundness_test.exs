@@ -6,8 +6,15 @@ defmodule Antigen.Assays.ElabSoundnessTest do
   @bool {:data, :Bool, [], []}
   @nat {:data, :Nat, [], []}
 
-  defp prog(src), do: Challenge.new(kind: :elab_program, assay: "elab/soundness",
-                       label: :well_typed, payload: %{id: 1, src: src}, seed: 1)
+  defp prog(src),
+    do:
+      Challenge.new(
+        kind: :elab_program,
+        assay: "elab/soundness",
+        label: :well_typed,
+        payload: %{id: 1, src: src},
+        seed: 1
+      )
 
   # A seeded env (Bool/Nat families present) so infer/eval resolve @bool/@nat.
   # NOTE: `Builtins.seed/2`'s 2nd arg is a MapSet (families to SKIP seeding),
@@ -20,9 +27,13 @@ defmodule Antigen.Assays.ElabSoundnessTest do
   # An op-map identical to @real_kernel EXCEPT `elaborate`, which returns a
   # synthetic env — the only way to feed the decision procedure a chosen env.defs.
   defp kernel_with_env(env) do
-    %{elaborate: fn _src -> {:ok, env} end,
-      infer: &Cure.Core.Kernel.infer/2, check: &Cure.Core.Kernel.check/3,
-      conv: &Cure.Core.Conv.conv_values?/4, eval: &Cure.Core.Eval.eval/2}
+    %{
+      elaborate: fn _src -> {:ok, env} end,
+      infer: &Cure.Core.Kernel.infer/2,
+      check: &Cure.Core.Kernel.check/3,
+      conv: &Cure.Core.Conv.conv_values?/4,
+      eval: &Cure.Core.Eval.eval/2
+    }
   end
 
   test "baseline: a genuinely well-typed program re-checks sound (:ok)" do
@@ -33,8 +44,14 @@ defmodule Antigen.Assays.ElabSoundnessTest do
   test "type_annotation_wrong: body checkable but at a different type" do
     # def `bad`: body is Bool->Bool identity, DECLARED Nat->Nat. infer=vpi Bool Bool,
     # eval(declared)=vpi Nat Nat -> not convertible -> type_annotation_wrong.
-    env = seeded()
-          |> Env.add_def(:bad, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, {:lam, Cure.Core.Grade.unrestricted(), @bool, {:var, 0}})
+    env =
+      seeded()
+      |> Env.add_def(
+        :bad,
+        {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat},
+        {:lam, Cure.Core.Grade.unrestricted(), @bool, {:var, 0}}
+      )
+
     assert {:violation, {:type_annotation_wrong, :bad, _}} =
              Elab.run(prog("ignored"), kernel_with_env(env))
   end
@@ -45,15 +62,27 @@ defmodule Antigen.Assays.ElabSoundnessTest do
   end
 
   test "elaborator crash is an infection" do
-    k = %{elaborate: fn _ -> raise "boom" end, infer: &Cure.Core.Kernel.infer/2,
-          check: &Cure.Core.Kernel.check/3, conv: &Cure.Core.Conv.conv_values?/4,
-          eval: &Cure.Core.Eval.eval/2}
+    k = %{
+      elaborate: fn _ -> raise "boom" end,
+      infer: &Cure.Core.Kernel.infer/2,
+      check: &Cure.Core.Kernel.check/3,
+      conv: &Cure.Core.Conv.conv_values?/4,
+      eval: &Cure.Core.Eval.eval/2
+    }
+
     assert {:violation, {:elaborator_raised, 1, _}} = Elab.run(prog("x"), k)
   end
 
   test "hole-bearing def is skipped, not infected" do
     # body has a hole; kernel would accept, but we skip it -> whole run :ok.
-    env = seeded() |> Env.add_def(:h, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:hole, :g}})
+    env =
+      seeded()
+      |> Env.add_def(
+        :h,
+        {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat},
+        {:lam, Cure.Core.Grade.unrestricted(), @nat, {:hole, :g}}
+      )
+
     assert Elab.run(prog("ignored"), kernel_with_env(env)) == :ok
   end
 
@@ -93,15 +122,19 @@ defmodule Antigen.Assays.ElabSoundnessTest do
 
     test "sound parameter-bearing constructor body re-checks :ok (uses check, not infer)" do
       # def ok_mk : F(Nat) = Mk(Z)   — well typed; infer alone would misreport it.
-      env = option_env()
-            |> Env.add_def(:ok_mk, {:data, :F, [@nat], []}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+      env =
+        option_env()
+        |> Env.add_def(:ok_mk, {:data, :F, [@nat], []}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+
       assert Elab.run(prog("ignored"), kernel_with_env(env)) == :ok
     end
 
     test "mismatched constructor body still infects" do
       # def bad_mk : F(Bool) = Mk(Z)  — Z:Nat, but F(Bool) expects x:Bool -> reject.
-      env = option_env()
-            |> Env.add_def(:bad_mk, {:data, :F, [@bool], []}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+      env =
+        option_env()
+        |> Env.add_def(:bad_mk, {:data, :F, [@bool], []}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+
       assert {:violation, {:core_ill_typed, :bad_mk, _}} =
                Elab.run(prog("ignored"), kernel_with_env(env))
     end
@@ -130,15 +163,19 @@ defmodule Antigen.Assays.ElabSoundnessTest do
 
     test "COMPLETENESS: sound ctor body at a δ-reducible ALIAS goal re-checks :ok" do
       # def ok_alias : FNatAlias = Mk(Z)  where FNatAlias := F(Nat).
-      env = aliased_option_env()
-            |> Env.add_def(:ok_alias, {:global, :FNatAlias}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+      env =
+        aliased_option_env()
+        |> Env.add_def(:ok_alias, {:global, :FNatAlias}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+
       assert Elab.run(prog("ignored"), kernel_with_env(env)) == :ok
     end
 
     test "SOUNDNESS: unsound ctor body at a δ-reducible ALIAS goal STILL infects" do
       # def bad_alias : FBoolAlias = Mk(Z)  where FBoolAlias := F(Bool); Z:Nat ≠ Bool.
-      env = aliased_option_env()
-            |> Env.add_def(:bad_alias, {:global, :FBoolAlias}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+      env =
+        aliased_option_env()
+        |> Env.add_def(:bad_alias, {:global, :FBoolAlias}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+
       assert {:violation, {:core_ill_typed, :bad_alias, _}} =
                Elab.run(prog("ignored"), kernel_with_env(env))
     end
@@ -179,8 +216,11 @@ defmodule Antigen.Assays.ElabSoundnessTest do
         seeded()
         |> Env.add_def(:loop, @nat, {:global, :loop})
         |> Env.certify(:loop)
-        |> Env.add_def(:probe, {:data, :Equivalent, [@nat], [{:global, :loop}, {:ctor, :Z, []}]},
-                        {:ctor, :reflexive, [{:ctor, :Z, []}]})
+        |> Env.add_def(
+          :probe,
+          {:data, :Equivalent, [@nat], [{:global, :loop}, {:ctor, :Z, []}]},
+          {:ctor, :reflexive, [{:ctor, :Z, []}]}
+        )
 
       task = Task.async(fn -> Elab.run(prog("ignored"), kernel_with_env(env)) end)
       assert {:violation, {:fuel_exhausted, :probe}} = Task.await(task, 30_000)

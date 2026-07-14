@@ -31,7 +31,10 @@ defmodule Cure.Core.CaseTypingTest do
   test "checks a case with per-branch index refinement (Box)" do
     ctx = ctx_with(Eval.eval({:data, :Box, [], [{:ctor, :Causal, []}]}, []))
     # motive = λ(d:Dec). λ(bx : Box d). Dec
-    motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Box, [], [{:var, 0}]}, @dec}}
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @dec,
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :Box, [], [{:var, 0}]}, @dec}}
+
     # mk branch: the body is the stored value x, whose type Dec matches the motive
     # after the index d is refined to x.
     branches = [{:mk, 1, {:var, 0}}]

@@ -13,6 +13,7 @@ defmodule Cure.Elab.SubstTest do
 
   test "substitutes metavariables as telescope values" do
     type = {:data, :SF, [], [{:var, 1}, {:var, 0}]}
+
     assert Subst.instantiate(type, [{:meta, 7}, {:ctor, :Causal, []}]) ==
              {:data, :SF, [], [{:meta, 7}, {:ctor, :Causal, []}]}
   end

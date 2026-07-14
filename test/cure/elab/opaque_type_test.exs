@@ -28,9 +28,7 @@ defmodule Cure.Elab.OpaqueTypeTest do
 
   test "an opaque value carries through uninspected (non-eliminable, still usable)" do
     assert {:ok, _} =
-             Program.elaborate(
-               "mod M\n  opaque type Effect(a)\n  fn id(e: Effect(a)) -> Effect(a) = e\nend\n"
-             )
+             Program.elaborate("mod M\n  opaque type Effect(a)\n  fn id(e: Effect(a)) -> Effect(a) = e\nend\n")
   end
 
   test "a genuine empty inductive is NOT marked opaque (the marker is the distinction)" do

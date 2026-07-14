@@ -16,8 +16,8 @@ defmodule Cure.Elab.Declarations do
   grammar); the kernel-side indexed-family machinery it targets is complete (M3).
   """
 
-  alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote}
-  alias Cure.Elab.{Elaborator, Relevance}
+  alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote, Term}
+  alias Cure.Elab.{Elaborator, MacroExpand, Relevance}
 
   @ceiling 2
 
@@ -298,9 +298,10 @@ defmodule Cure.Elab.Declarations do
       match?(%{type: {:type, _}}, Env.get_def(env, atom))
   end
 
-  # Type alias `typealias Name = RHS`: a nullary definition `Name : Type := RHS`.
-  # Conversion δ-unfolds `Name` to its right-hand side (a non-recursive alias is trivially
-  # total, so it certifies and δ becomes available). No new type former.
+  # Type alias `typealias Name(params?) = RHS`: a transparent definition whose
+  # parameters are erased Pi/lambda binders. Conversion δ-unfolds the alias to
+  # its right-hand side (a non-recursive alias is trivially total, so it
+  # certifies and δ becomes available). No new type former.
   #
   # The RHS must BE a type. It used to be installed with a hardcoded declared type of
   # `{:type, 0}`, and the only kernel check that ever ran on it was `maybe_certify/2` —
@@ -316,17 +317,27 @@ defmodule Cure.Elab.Declarations do
   # `typealias U = Type` is legal and lives at `Type 1`, not `Type 0`.
   defp elaborate_typealias({:type_annotation, meta, [rhs]}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+    type_params = Keyword.get(meta, :type_params, [])
+
+    params =
+      Enum.map(type_params, fn p ->
+        {:param, [type: {:variable, [scope: :local], "Type"}], p}
+      end)
 
     with :ok <- reject_reserved_family_name(name),
-         {:ok, rhs_core} <- idx_to_core(rhs, [], nil, env),
-         {:ok, level} <- typealias_universe(env, name, rhs_core) do
-      env1 = Env.add_def(env, name, {:type, level}, rhs_core, [])
+         {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
+         ctx = build_context(env, telescope),
+         {:ok, rhs_core} <- idx_to_core(rhs, scope, nil, env),
+         {:ok, level} <- typealias_universe(ctx, name, rhs_core) do
+      type_core = wrap_binders(:pi, telescope, quantities, {:type, level})
+      body = wrap_binders(:lam, telescope, quantities, rhs_core)
+      env1 = Env.add_def(env, name, type_core, body, quantities)
       {:ok, maybe_certify(env1, name)}
     end
   end
 
-  defp typealias_universe(env, name, rhs_core) do
-    case Kernel.infer(Context.empty(env), rhs_core) do
+  defp typealias_universe(ctx, name, rhs_core) do
+    case Kernel.infer(ctx, rhs_core) do
       {:ok, {:vtype, level}} -> {:ok, level}
       {:ok, other} -> {:error, {:typealias_not_a_type, name, Quote.reify(other, 0)}}
       {:error, reason} -> {:error, reason}
@@ -505,7 +516,9 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_real_body(meta, body, env) do
     body_expr = single_body(body)
 
-    with {:ok, sig} <- function_signature(meta, env) do
+    with {:ok, body_expr} <-
+           MacroExpand.expand(body_expr, env, callback_context: Keyword.get(meta, :callback_context)),
+         {:ok, sig} <- function_signature(meta, env) do
       ctx = build_context(env, sig.telescope)
 
       with {:ok, body_term, return_core, _return_value} <-
@@ -578,9 +591,17 @@ defmodule Cure.Elab.Declarations do
     return_value = Eval.eval(sig.return_core, Context.env(ctx))
 
     with {:ok, body_term} <-
-           elaborate_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
+           elaborate_declared_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
          :ok <- Kernel.check(ctx, body_term, return_value) do
       {:ok, body_term, sig.return_core, return_value}
+    end
+  end
+
+  defp elaborate_declared_body(body_expr, return_core, scope, ctx, env, params) do
+    if Elaborator.effect_goal?(return_core, ctx) do
+      Elaborator.elaborate_effect_branch(body_expr, return_core, scope, ctx, env)
+    else
+      elaborate_body(body_expr, return_core, scope, ctx, env, params)
     end
   end
 
@@ -1062,18 +1083,28 @@ defmodule Cure.Elab.Declarations do
     else
       fam = String.to_atom(Keyword.get(meta, :name, ""))
 
-      {pc, ptele} =
-        if Inductive.family?(env, fam),
-          do: {Inductive.param_count(env, fam), Inductive.param_telescope(env, fam) || []},
-          else: {0, []}
+      case Env.get_def(env, fam) do
+        %{type: type, body: body} when is_tuple(body) ->
+          if typealias_parameter_count(type) >= 0 do
+            Enum.reduce(args, acc, &collect_type_vars(&1, bound, env, &2))
+          else
+            acc
+          end
 
-      args
-      |> Enum.with_index()
-      |> Enum.reduce(acc, fn {arg, i}, acc2 ->
-        if i < pc and match?({:type, _}, elem(Enum.at(ptele, i, {nil, nil}), 1)),
-          do: collect_type_vars(arg, bound, env, acc2),
-          else: acc2
-      end)
+        _ ->
+          {pc, ptele} =
+            if Inductive.family?(env, fam),
+              do: {Inductive.param_count(env, fam), Inductive.param_telescope(env, fam) || []},
+              else: {0, []}
+
+          args
+          |> Enum.with_index()
+          |> Enum.reduce(acc, fn {arg, i}, acc2 ->
+            if i < pc and match?({:type, _}, elem(Enum.at(ptele, i, {nil, nil}), 1)),
+              do: collect_type_vars(arg, bound, env, acc2),
+              else: acc2
+          end)
+      end
     end
   end
 
@@ -1735,7 +1766,12 @@ defmodule Cure.Elab.Declarations do
       # A qualified TYPE reference like Std.Nat / Std.Nat.Nat (no call parens).
       is_binary(dotted) and match?({:ok, _}, Cure.Elab.Resolution.resolve_qualified(env, dotted, :type)) ->
         {:ok, key} = Cure.Elab.Resolution.resolve_qualified(env, dotted, :type)
-        {:ok, {:data, key, [], []}}
+
+        if Inductive.family?(env, key) do
+          {:ok, {:data, key, [], []}}
+        else
+          {:ok, {:global, key}}
+        end
 
       attr in ["1", "2"] and not is_nil(ctx) ->
         gname = if attr == "1", do: :sigma_first, else: :sigma_second
@@ -1794,80 +1830,197 @@ defmodule Cure.Elab.Declarations do
   # it carries the qualified-name degrade (`Std.Option` -> `Option`) that the
   # extracted base body did not have.
   defp lower_applied_type(fmeta, args, scope, fam, env, ctx) do
-        raw_name = Keyword.fetch!(fmeta, :name)
+    raw_name = Keyword.fetch!(fmeta, :name)
 
-        # A qualified head (`Std.Map`, from `Mod.Name(args)`) is first offered to the
-        # module-aware type resolver. When it places the name we emit `{:data, key, …}`
-        # in the cond below. When it can't — e.g. `Std.Option`, which lowers to a plain
-        # `{:global, :Option}` rather than a registered inductive family — the name
-        # DEGRADES to its bare tail (`Std.Option` → `Option`) so every downstream check
-        # (implicit-global, family, ctor, global) resolves it EXACTLY as the unqualified
-        # spelling would. Without this degrade a qualified applied type lowered to an
-        # opaque `{:global, :"Std.Option"}` that never converts against the unqualified
-        # `{:global, :Option}` — a silent qualified-vs-unqualified type split. For an
-        # unqualified name `String.split/2` returns `[name]`, so this is a no-op there.
-        qualified_key =
-          if String.contains?(raw_name, ".") do
-            Cure.Elab.Resolution.resolve_qualified(env, raw_name, :type)
-          else
-            :error
-          end
+    # A qualified head (`Std.Map`, from `Mod.Name(args)`) is first offered to the
+    # module-aware type resolver. When it places the name we emit `{:data, key, …}`
+    # in the cond below. When it can't — e.g. `Std.Option`, which lowers to a plain
+    # `{:global, :Option}` rather than a registered inductive family — the name
+    # DEGRADES to its bare tail (`Std.Option` → `Option`) so every downstream check
+    # (implicit-global, family, ctor, global) resolves it EXACTLY as the unqualified
+    # spelling would. Without this degrade a qualified applied type lowered to an
+    # opaque `{:global, :"Std.Option"}` that never converts against the unqualified
+    # `{:global, :Option}` — a silent qualified-vs-unqualified type split. For an
+    # unqualified name `String.split/2` returns `[name]`, so this is a no-op there.
+    qualified_key =
+      if String.contains?(raw_name, ".") do
+        Cure.Elab.Resolution.resolve_qualified(env, raw_name, :type)
+      else
+        :error
+      end
 
-        name =
-          case qualified_key do
-            {:ok, _} -> raw_name
-            :error -> raw_name |> String.split(".") |> List.last()
-          end
+    name =
+      case qualified_key do
+        {:ok, _} -> raw_name
+        :error -> raw_name |> String.split(".") |> List.last()
+      end
 
-        atom = String.to_atom(name)
+    atom = String.to_atom(name)
 
-        # Type-position implicit insertion (spec §7): a term-level global whose
-        # signature carries erased (implicit) parameters cannot lower as a bare
-        # explicit-args spine — the kernel would see an under-applied application
-        # (the `b(first(p))` motive gap). With a typing context threaded in
-        # (return-type lowering only), delegate the whole application to the
-        # term-position machinery. A local binder of the same name shadows the
-        # global (mirrors the applied-bound-var cond branch below), and families/
-        # ctors never carry def quantities, so this misses them by construction.
-        if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
-             implicit_global?(env, atom) do
-          with {:ok, term, _result_type} <-
-                 Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
-            {:ok, term}
-          end
-        else
-          with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
-            cond do
-              match?({:ok, _}, qualified_key) ->
-                {:ok, key} = qualified_key
-                {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
-                {:ok, {:data, key, params, indices}}
+    # Type-position implicit insertion (spec §7): a term-level global whose
+    # signature carries erased (implicit) parameters cannot lower as a bare
+    # explicit-args spine — the kernel would see an under-applied application
+    # (the `b(first(p))` motive gap). With a typing context threaded in
+    # (return-type lowering only), delegate the whole application to the
+    # term-position machinery. A local binder of the same name shadows the
+    # global (mirrors the applied-bound-var cond branch below), and families/
+    # ctors never carry def quantities, so this misses them by construction.
+    if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
+         implicit_global?(env, atom) do
+      with {:ok, term, _result_type} <-
+             Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
+        {:ok, term}
+      end
+    else
+      with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
+        case expand_typealias_application(env, atom, core_args) do
+          {:ok, expanded} ->
+            {:ok, expanded}
 
-              # An applied BOUND variable — e.g. a higher-order parameter used as
-              # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
-              # the head against the de Bruijn scope; a local binder shadows a global,
-              # so this is checked first. Without it `F(n)` became a dangling
-              # `{:global, :F}`, and the call site's implicit substitution could never
-              # turn `F` into a solvable metavariable (ledger #10 prerequisite).
-              idx = Enum.find_index(scope, &(&1 == name)) ->
-                {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
-
-              atom == fam or Inductive.family?(env, atom) ->
-                # Split the applied arguments into the family's parameters (prefix) and
-                # indices (suffix); the kernel checks each slot against its own
-                # telescope. param_count is 0 for parameter-free families (all indices).
-                {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
-                {:ok, {:data, atom, params, indices}}
-
-              Inductive.get_ctor(env, atom) ->
-                {:ok, {:ctor, atom, core_args}}
-
-              true ->
-                {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
-            end
-          end
+          :not_typealias ->
+            lower_applied_type_head(atom, raw_name, core_args, fam, env, qualified_key, scope)
         end
+      end
+    end
   end
+
+  defp lower_applied_type_head(atom, raw_name, core_args, fam, env, qualified_key, scope) do
+    cond do
+      match?({:ok, _}, qualified_key) ->
+        {:ok, key} = qualified_key
+        {params, indices} = Enum.split(core_args, Inductive.param_count(env, key))
+        {:ok, {:data, key, params, indices}}
+
+      # An applied BOUND variable — e.g. a higher-order parameter used as
+      # `F(n)` where `F` is an implicit type-family parameter in scope. Resolve
+      # the head against the de Bruijn scope; a local binder shadows a global,
+      # so this is checked first. Without it `F(n)` became a dangling
+      # `{:global, :F}`, and the call site's implicit substitution could never
+      # turn `F` into a solvable metavariable (ledger #10 prerequisite).
+      idx = Enum.find_index(scope, &(&1 == raw_name)) ->
+        {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
+
+      atom == fam or Inductive.family?(env, atom) ->
+        # Split the applied arguments into the family's parameters (prefix) and
+        # indices (suffix); the kernel checks each slot against its own
+        # telescope. param_count is 0 for parameter-free families (all indices).
+        {params, indices} = Enum.split(core_args, Inductive.param_count(env, atom))
+        {:ok, {:data, atom, params, indices}}
+
+      Inductive.get_ctor(env, atom) ->
+        {:ok, {:ctor, atom, core_args}}
+
+      true ->
+        {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
+    end
+  end
+
+  # Parameterized type aliases are transparent lambdas in the Core signature.
+  # Applied type lowering must beta-reduce those lambdas before the term reaches
+  # the kernel; otherwise `Alias(a, b)` is mistaken for a runtime global
+  # application and fails with `:unknown_global` (or, worse, can diverge from the
+  # nullary-alias conversion path). Only aliases whose declared type is a
+  # telescope of type parameters are unfolded here; ordinary term-level globals
+  # remain opaque applications in type position.
+  defp expand_typealias_application(env, name, args) do
+    case Env.get_def(env, name) do
+      %{type: type, body: body} when is_tuple(body) ->
+        if typealias_parameter_count(type) == length(args) do
+          expanded = beta_reduce_typealias(body, args)
+          {:ok, expanded}
+        else
+          :not_typealias
+        end
+
+      _ ->
+        :not_typealias
+    end
+  end
+
+  defp typealias_parameter_count({:pi, _grade, {:type, _level}, codomain}) do
+    1 + typealias_parameter_count(codomain)
+  end
+
+  defp typealias_parameter_count({:type, _level}), do: 0
+  defp typealias_parameter_count(_other), do: -1
+
+  defp beta_reduce_typealias(body, []) do
+    body
+  end
+
+  defp beta_reduce_typealias({:lam, _grade, _domain, body}, [arg | rest]) do
+    reduced = beta_substitute(body, 0, arg)
+    beta_reduce_typealias(reduced, rest)
+  end
+
+  defp beta_reduce_typealias(body, _args), do: body
+
+  # Binder-removing, capture-avoiding substitution for the alias beta step.
+  # `Term.subst/3` deliberately keeps the replaced binder's index space intact,
+  # which is correct for targeted unification substitution but not for reducing
+  # `(fn x => body) arg`. This reducer decrements variables above the removed
+  # binder and shifts inserted arguments only while crossing surviving binders.
+  defp beta_substitute({:var, index}, depth, arg) do
+    cond do
+      index == depth -> Term.shift(arg, depth, 0)
+      index > depth -> {:var, index - 1}
+      true -> {:var, index}
+    end
+  end
+
+  defp beta_substitute({:pi, grade, domain, codomain}, depth, arg) do
+    {:pi, grade, beta_substitute(domain, depth, arg), beta_substitute(codomain, depth + 1, arg)}
+  end
+
+  defp beta_substitute({:lam, grade, domain, body}, depth, arg) do
+    {:lam, grade, beta_substitute(domain, depth, arg), beta_substitute(body, depth + 1, arg)}
+  end
+
+  defp beta_substitute({:let, grade, type, value, body}, depth, arg) do
+    {:let, grade, beta_substitute(type, depth, arg), beta_substitute(value, depth, arg),
+     beta_substitute(body, depth + 1, arg)}
+  end
+
+  defp beta_substitute({:app, function, value}, depth, arg) do
+    {:app, beta_substitute(function, depth, arg), beta_substitute(value, depth, arg)}
+  end
+
+  defp beta_substitute({:data, name, params, indices}, depth, arg) do
+    {:data, name, Enum.map(params, &beta_substitute(&1, depth, arg)),
+     Enum.map(indices, &beta_substitute(&1, depth, arg))}
+  end
+
+  defp beta_substitute({:ctor, name, fields}, depth, arg) do
+    {:ctor, name, Enum.map(fields, &beta_substitute(&1, depth, arg))}
+  end
+
+  defp beta_substitute({:case, scrutinee, motive, branches}, depth, arg) do
+    {:case, beta_substitute(scrutinee, depth, arg), beta_substitute(motive, depth, arg),
+     Enum.map(branches, fn {name, arity, branch} ->
+       {name, arity, beta_substitute(branch, depth + arity, arg)}
+     end)}
+  end
+
+  defp beta_substitute({:effect_type, type}, depth, arg),
+    do: {:effect_type, beta_substitute(type, depth, arg)}
+
+  defp beta_substitute({:effect_pure, value}, depth, arg),
+    do: {:effect_pure, beta_substitute(value, depth, arg)}
+
+  defp beta_substitute({:effect_bind, effect, continuation}, depth, arg),
+    do: {:effect_bind, beta_substitute(effect, depth, arg), beta_substitute(continuation, depth, arg)}
+
+  defp beta_substitute(tuple, depth, arg) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.map(&beta_substitute(&1, depth, arg))
+    |> List.to_tuple()
+  end
+
+  defp beta_substitute(list, depth, arg) when is_list(list),
+    do: Enum.map(list, &beta_substitute(&1, depth, arg))
+
+  defp beta_substitute(other, _depth, _arg), do: other
 
   defp build_telescope_type([], _scope, _fam, _env), do: {:ok, {:data, :Unit, [], []}}
 
@@ -2026,7 +2179,6 @@ defmodule Cure.Elab.Declarations do
 
   defp declare_opaque_at_min_level(_env, _name, _param_tele, _level),
     do: {:error, :universe_ceiling}
-
 
   # -- declaration at the least well-formed universe level --------------------
 

@@ -30,17 +30,25 @@ defmodule Antigen.MutationMetaTest do
   end
 
   test "banked conversion corpus: both polarities present, replay to correct verdicts" do
-    banked = Corpus.stream(@seeds_path) |> Enum.flat_map(fn {:ok, c} -> [c]; _ -> [] end)
+    banked =
+      Corpus.stream(@seeds_path)
+      |> Enum.flat_map(fn
+        {:ok, c} -> [c]
+        _ -> []
+      end)
+
     m = Runner.conversion_metrics(banked)
     assert m.conv_carrier_diversity >= 2, "banked conv carriers #{m.conv_carrier_diversity} < 2"
     assert m.conv_both_polarities, "banked conversion missing a polarity"
 
     for c <- banked, c.kind == :mutant_term, Map.get(c.payload.fault, :witness) == :conv do
-      assert Antigen.Assays.Mutation.run(c) == :ok        # reject seeds are correctly rejected
+      # reject seeds are correctly rejected
+      assert Antigen.Assays.Mutation.run(c) == :ok
     end
 
     for c <- banked, Runner.conv_carrier_of(c) != nil do
-      assert Antigen.Assays.Term.run(c) == :ok            # accept seeds are correctly accepted
+      # accept seeds are correctly accepted
+      assert Antigen.Assays.Term.run(c) == :ok
     end
   end
 end

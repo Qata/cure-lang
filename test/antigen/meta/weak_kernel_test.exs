@@ -24,6 +24,7 @@ defmodule Antigen.Meta.WeakKernelTest do
 
   test "each single-key weakening overrides exactly its key, leaving the rest real" do
     r = WeakKernel.real()
+
     for {name, mapkey} <- @single do
       w = WeakKernel.weaken(name)
       refute Map.fetch!(w, mapkey) == Map.fetch!(r, mapkey)

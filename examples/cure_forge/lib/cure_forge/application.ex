@@ -3,7 +3,7 @@ defmodule CureForge.Application do
   OTP application callback for the Cure forge example.
 
   Conceptually, the OTP application for this project is the
-  `Cure.App.CureForge` module emitted by `cure_src/forge_app.cure`,
+  `Cure.CureForge` module emitted by `cure_src/forge_app.cure`,
   which is loaded into the VM by the `compile_cure` Mix task (see
   `lib/mix/tasks/compile_cure.ex`). That module is the artefact that
   `cure release` packages into `_build/cure/rel/cure_forge/`.
@@ -14,16 +14,15 @@ defmodule CureForge.Application do
   bridges the two worlds:
 
     * `start/2` starts a plain `Supervisor` that supervises
-      `:"Cure.Sup.Forge.Root"` (the BEAM module compiled from
+      `:"Cure.Forge.Root"` (the BEAM module compiled from
       `cure_src/forge_root.cure`). That supervisor in turn starts the
       four actors declared in the root `sup` container.
     * `start_phase/3` invokes the matching `start_phase/3` callback
-      on the Cure-compiled `Cure.App.CureForge` module so the
-      `on_phase :warm_cache` body runs exactly once at boot.
+      on the Cure-compiled `Cure.CureForge` module.
     * `stop/1` is a no-op.
 
   In production, none of this bridge is necessary: `cure release`
-  emits a boot script that lists `:"Cure.App.CureForge"` as the
+  emits a boot script that lists `:"Cure.CureForge"` as the
   application's `mod`, and OTP calls its `start/2` directly, bypassing
   this Elixir facade entirely.
   """
@@ -32,8 +31,8 @@ defmodule CureForge.Application do
 
   require Logger
 
-  @cure_sup :"Cure.Sup.Forge.Root"
-  @cure_app :"Cure.App.CureForge"
+  @cure_sup :"Cure.Forge.Root"
+  @cure_app :"Cure.CureForge"
 
   @impl Application
   def start(_type, _args) do

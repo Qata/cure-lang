@@ -30,8 +30,10 @@ defmodule Cure.CLI.MigrateEditionCLITest do
   test "--strict promotes fixable-tier (:machine/:review) warnings but never :manual (spec §8)" do
     # a :machine warning (module rename) is promoted under strict
     fixable = "mod M\n  use Std.Eq\n  fn f(x: Int) -> Bool = eq(x, x)\n"
+
     assert {:error, {:strict_violation, ids}} =
              Cure.CLI.plan_migration_source(fixable, target: "2026", strict: true)
+
     assert :W_module_rename in ids
 
     # a :manual warning (removed module) is NOT promoted — it stays a block, not a strict error

@@ -1,85 +1,39 @@
 # CureTurnstile
 
-An example application demonstrating Cure's first-class FSM support.
+A small Cure process example using the transparent FSM macro.
 
-A classic turnstile state machine is defined in Cure's FSM syntax and compiled
-to a BEAM `gen_statem` module. An Elixir `GenServer` wrapper adds coin and
-passage counting on top.
-
-## State Machine
-
-```
-  +--------+  coin   +----------+
-  | Locked |-------->| Unlocked |
-  +--------+         +----------+
-    ^  |  push(nop)   |  ^  coin(nop)
-    |  +-------+       |  +------+
-    |          |       |
-    +----------+-------+
-        push
-```
-
-Defined in `cure_src/turnstile.cure`:
+The source in `cure_src/turnstile.cure` is intentionally small:
 
 ```cure
-fsm Turnstile with Integer
-  Locked   --coin-->  Unlocked
-  Unlocked --push-->  Locked
-  Unlocked --coin-->  Unlocked
-  Locked   --push-->  Locked
-
-  on_transition
-    (:locked, :coin, _payload, data) -> {:ok, :unlocked, data + 1}
-    (:unlocked, :push, _payload, data) -> {:ok, :locked, data}
-    (:unlocked, :coin, _payload, data) -> {:ok, :unlocked, data + 1}
-    (_, _, _, data) -> {:ok, :__same__, data}
+fsm Cure.Turnstile with 0
+  fn initial_state() -> Atom = :locked
 ```
 
-The `on_transition` block contains pattern-matching clauses on
-`(current_state, event, event_payload, state_payload)` and returns
-`{:ok, next_state, new_payload}`. This keeps both the transition graph
-and the transition logic in the same `.cure` file -- inspired by
-Finitomata's approach.
+`fsm` is an auto-preluded standard-library macro. It expands to an ordinary
+lifted module and uses the checked `Std.Otp` process algebra for startup. There
+is no FSM-specific compiler object or source-string callback parser.
 
-This compiles to `:\"Cure.FSM.Turnstile\"`, a `GenServer`-based module
-with `start_link/0,1`, `send_event/2`, `get_state/1`, `transitions/0`,
-`allowed?/2`, and `responds?/2`.
-`start_link/1` accepts custom initial data (e.g. `0` for the counter).
+Transition tables can be defined in Cure data and dispatched by ordinary
+standard-library code:
 
-## Project Structure
-
+```cure
+fsm Cure.Light state Int transitions [
+  transition :locked :coin :unlocked,
+  transition :unlocked :push :locked
+]
 ```
-cure_turnstile/
-  cure_src/
-    turnstile.cure          -- FSM definition
-  lib/
-    cure_turnstile.ex       -- GenServer wrapper with coin/passage tracking
-    cure_turnstile/
-      application.ex        -- OTP Application
-    mix/tasks/
-      compile_cure.ex       -- Mix task to compile .cure sources
-  test/
-    cure_turnstile_test.exs -- Tests for raw FSM and wrapper
-```
+
+The generated module is named exactly as declared, `Cure.Turnstile`, and its
+callbacks are emitted by the common lifted-module writer.
 
 ## Usage
 
 ```bash
-# Fetch dependencies
+cd examples/cure_turnstile
 mix deps.get
-
-# Compile (runs .cure compilation first, then Elixir)
 mix compile
-
-# Run tests
 mix test
-
-# Interactive session
-iex -S mix
-
-iex> {:ok, t} = CureTurnstile.start_link()
-iex> CureTurnstile.insert_coin(t)
-iex> CureTurnstile.push(t)
-iex> CureTurnstile.stats(t)
-%{state: :locked, coins: 1, passages: 1}
 ```
+
+The Elixir wrapper in `lib/` remains ordinary application code. It is useful
+for demonstrating interop, but it does not implement the Cure FSM semantics.

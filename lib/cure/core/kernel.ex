@@ -101,7 +101,6 @@ defmodule Cure.Core.Kernel do
   # whose `case`/`else` cannot catch a raise — crashed on a legitimate mid-development term.
   def infer(_ctx, {:hole, name}), do: {:error, {:hole_in_inference_position, name}}
 
-
   def infer(ctx, {:pi, _g, dom, cod}) do
     with {:ok, l1} <- infer_sort(ctx, dom),
          dom_value = Eval.eval(dom, Context.env(ctx)),
@@ -541,8 +540,7 @@ defmodule Cure.Core.Kernel do
         depth = Context.length(ctx)
         sig = Context.signature(ctx)
 
-        {:error,
-         {:conversion_failure, Quote.reify(inferred, depth, sig), Quote.reify(expected, depth, sig)}}
+        {:error, {:conversion_failure, Quote.reify(inferred, depth, sig), Quote.reify(expected, depth, sig)}}
       end
     end
   end
@@ -713,15 +711,12 @@ defmodule Cure.Core.Kernel do
 
           if term == expected,
             do: {:cont, :ok},
-            else:
-              {:halt,
-               {:error, {:non_uniform_parameter, %{family: fname, ctor: cname, position: p}}}}
+            else: {:halt, {:error, {:non_uniform_parameter, %{family: fname, ctor: cname, position: p}}}}
         end)
     end
   end
 
   # -- helpers ----------------------------------------------------------------
-
 
   # Infer `term` and require its type to be a universe; return that level.
   defp infer_sort(ctx, term) do
@@ -901,8 +896,7 @@ defmodule Cure.Core.Kernel do
   # (e.g. checking a branch body, which IS written relative to the ambient ctx).
   defp extend_with_telescope(ctx, tele, param_vals) do
     {ctx_final, _local_vals, fresh_vals} =
-      Enum.reduce(tele, {ctx, Enum.reverse(param_vals), []}, fn {_name, type_term},
-                                                                {c, local_vals, fresh} ->
+      Enum.reduce(tele, {ctx, Enum.reverse(param_vals), []}, fn {_name, type_term}, {c, local_vals, fresh} ->
         level = Context.length(c)
         type_value = Eval.eval(type_term, local_vals)
         fresh_val = {:vneutral, {:nvar, level}}
@@ -987,7 +981,6 @@ defmodule Cure.Core.Kernel do
     end
   end
 
-
   defp infer_type_value_sort(_ctx, {:vint_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vfloat_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vbinary_type}), do: {:ok, 0}
@@ -1020,6 +1013,20 @@ defmodule Cure.Core.Kernel do
         {:ok, Universe.max(l1, l2)}
       end
     end
+  end
+
+  # `Effect(t)` in type position — a `case`/`match` whose result type is a callback's
+  # effect contract. Mirrors `infer/2`'s formation rule (`Effect : Type ℓ → Type ℓ`,
+  # level-preserving): the head contributes nothing, so the sort is the payload's own.
+  # Recursing on the sub-VALUE rather than reifying is deliberate, for the same reason
+  # the `{:vpi}` clause does it: `Quote.reify` collapses `{:vdata, name, args}` →
+  # `{:data, name, args, []}`, losing the param/index split, so reify+re-infer would
+  # turn an indexed payload like `Effect(SNat s)` into a false `:arg_arity` →
+  # `:bad_motive`. Bottoming out in the existing clauses keeps acceptance exactly what
+  # a non-lossy reify+infer would decide: a payload that is not a type still falls to
+  # `:not_a_type_value`, so an `Effect` head cannot launder a non-type.
+  defp infer_type_value_sort(ctx, {:veffect_type, payload}) do
+    infer_type_value_sort(ctx, payload)
   end
 
   defp infer_type_value_sort(_ctx, _value), do: {:error, :not_a_type_value}
@@ -1072,7 +1079,8 @@ defmodule Cure.Core.Kernel do
 
               case unify_indices(ctx, result_indices, scrut_indices, arity, scrut_params) do
                 :impossible ->
-                  {:cont, :ok}                         # unreachable branch: body NOT checked
+                  # unreachable branch: body NOT checked
+                  {:cont, :ok}
 
                 verdict ->
                   subst =
@@ -1093,6 +1101,7 @@ defmodule Cure.Core.Kernel do
                       result_indices,
                       &Eval.eval(&1, Enum.reverse(arg_vals) ++ Enum.reverse(scrut_params))
                     )
+
                   ctor_value = {:vctor, cname, arg_vals}
 
                   expected =
@@ -1222,9 +1231,7 @@ defmodule Cure.Core.Kernel do
     do: {:app, subst_params(f, pmap, depth), subst_params(a, pmap, depth)}
 
   defp subst_params({:data, n, ps, is}, pmap, depth),
-    do:
-      {:data, n, Enum.map(ps, &subst_params(&1, pmap, depth)),
-       Enum.map(is, &subst_params(&1, pmap, depth))}
+    do: {:data, n, Enum.map(ps, &subst_params(&1, pmap, depth)), Enum.map(is, &subst_params(&1, pmap, depth))}
 
   defp subst_params({:ctor, n, as}, pmap, depth),
     do: {:ctor, n, Enum.map(as, &subst_params(&1, pmap, depth))}
@@ -1237,7 +1244,7 @@ defmodule Cure.Core.Kernel do
   defp subst_params(other, _pmap, _depth), do: other
 
   defp reduce_index_pairs([], subst, _arity),
-    do: (if map_size(subst) == 0, do: :trivial, else: {:solved, subst})
+    do: if(map_size(subst) == 0, do: :trivial, else: {:solved, subst})
 
   defp reduce_index_pairs([{r, s} | rest], subst, arity) do
     case unify_one(r, s, arity, subst) do
@@ -1259,10 +1266,12 @@ defmodule Cure.Core.Kernel do
   # r-side vars are always < arity (ctor telescope); s-side vars always >= arity
   # (outer). Disjoint ranges ⇒ the solve direction is unambiguous.
   defp unify_one({:var, i}, s, arity, subst) when i < arity,
-    do: bind_index(i, s, arity, subst)                  # ctor arg := scrutinee term (Box case / prior behavior)
+    # ctor arg := scrutinee term (Box case / prior behavior)
+    do: bind_index(i, s, arity, subst)
 
   defp unify_one(r, {:var, j}, arity, subst) when j >= arity,
-    do: bind_index(j, r, arity, subst)                  # outer index var := ctor result index (4.3)
+    # outer index var := ctor result index (4.3)
+    do: bind_index(j, r, arity, subst)
 
   # Compact Nat literal ↔ Z/S bridge (mirrors conv.ex's cross-representation
   # arms): a `{:nat_lit, n}` index is a closed canonical Nat, definitionally
@@ -1338,7 +1347,8 @@ defmodule Cure.Core.Kernel do
        when length(ps) + length(is) == length(ps2) + length(is2),
        do: unify_spine(ps ++ is, ps2 ++ is2, arity, subst)
 
-  defp unify_one(r, s, _arity, subst) when r == s, do: {:ok, subst}   # syntactically equal → consistent
+  # syntactically equal → consistent
+  defp unify_one(r, s, _arity, subst) when r == s, do: {:ok, subst}
 
   defp unify_one(r, s, _arity, _subst) do
     cond do
@@ -1360,6 +1370,7 @@ defmodule Cure.Core.Kernel do
   defp var_cycle?(_, _), do: false
 
   defp unify_spine([], [], _arity, subst), do: {:ok, subst}
+
   defp unify_spine([a | as], [b | bs], arity, subst) do
     case unify_one(a, b, arity, subst) do
       :impossible -> :impossible
@@ -1391,15 +1402,30 @@ defmodule Cure.Core.Kernel do
     rterm = resolve_index_var(term, subst, 0)
 
     cond do
-      rterm == {:var, key} -> {:ok, subst}              # already same class ⇒ no-op (breaks cycles)
-      strongly_rigid_occurs?(key, rterm) -> :impossible # Agda Cycle rule: absurd (acyclicity)
-      occurs_index?(key, rterm) -> :undecided           # weakly-rigid cycle ⇒ conservative degrade
+      # already same class ⇒ no-op (breaks cycles)
+      rterm == {:var, key} ->
+        {:ok, subst}
+
+      # Agda Cycle rule: absurd (acyclicity)
+      strongly_rigid_occurs?(key, rterm) ->
+        :impossible
+
+      # weakly-rigid cycle ⇒ conservative degrade
+      occurs_index?(key, rterm) ->
+        :undecided
+
       Map.has_key?(subst, key) ->
         old = Map.get(subst, key)
+
         cond do
-          old == rterm -> {:ok, subst}                  # consistent
+          # consistent
+          old == rterm ->
+            {:ok, subst}
+
           rigid_index?(old) and rigid_index?(rterm) and head_key(old) != head_key(rterm) ->
-            :impossible                                 # same-key merge conflict ⇒ impossible
+            # same-key merge conflict ⇒ impossible
+            :impossible
+
           true ->
             # Resolve-before-bind (Agda Solution step): the key is already pinned to
             # `old`, so this pair really asserts `old =? rterm`. Re-unify them; for two
@@ -1407,7 +1433,9 @@ defmodule Cure.Core.Kernel do
             # the outer var (a forced equation).
             unify_one(old, rterm, arity, subst)
         end
-      true -> {:ok, Map.put(subst, key, rterm)}
+
+      true ->
+        {:ok, Map.put(subst, key, rterm)}
     end
   end
 

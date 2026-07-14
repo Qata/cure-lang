@@ -17,7 +17,13 @@ defmodule Cure.Elab.TypedExprTest do
   defp build_env do
     {:ok, toks} = Lexer.tokenize(@src, emit_events: false)
     {:ok, ast} = Parser.parse(toks, emit_events: false)
-    items = case ast do {:block, _, xs} -> xs; x -> [x] end
+
+    items =
+      case ast do
+        {:block, _, xs} -> xs
+        x -> [x]
+      end
+
     Enum.reduce(items, Env.empty(), fn decl, e ->
       {:ok, e2} = Declarations.elaborate(decl, e)
       e2
@@ -52,6 +58,7 @@ defmodule Cure.Elab.TypedExprTest do
              Elaborator.elaborate_expr_typed(expr, names, ctx, env)
 
     assert length(args) == 7
+
     assert Enum.take(args, 5) == [
              {:ctor, :SVNil, []},
              {:ctor, :SVNil, []},

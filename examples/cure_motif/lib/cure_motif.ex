@@ -6,14 +6,14 @@ defmodule CureMotif do
 
     * `motif.cure`      -- pure core: domain aliases, ADTs, Pattern
       helpers, rendering (compiled to `:"Cure.Motif"`)
-    * `envelope.cure`   -- `@record` callback-mode FSM
-      (compiled to `:"Cure.FSM.Envelope"`)
-    * `voice.cure`, `sequencer.cure`, `clock.cure` -- actor containers
-      (compiled to `:"Cure.Actor.<Name>"`)
-    * `orchestra.cure`  -- `sup Motif.Orchestra`
-      (compiled to `:"Cure.Sup.Motif.Orchestra"`)
-    * `motif_app.cure`  -- `app CureMotif`
-      (compiled to `:"Cure.App.CureMotif"`)
+    * `envelope.cure`   -- transparent FSM
+      (compiled to `:"Cure.Envelope"`)
+    * `voice.cure`, `sequencer.cure`, `clock.cure` -- transparent actors
+      (compiled to `:"Cure.<Name>"`)
+    * `orchestra.cure`  -- transparent `sup Cure.Motif.Orchestra`
+      (compiled to `:"Cure.Motif.Orchestra"`)
+    * `motif_app.cure`  -- transparent `app Cure.CureMotif`
+      (compiled to `:"Cure.CureMotif"`)
 
   This module wraps the compiled BEAM surface so it reads naturally
   from Elixir.
@@ -35,20 +35,21 @@ defmodule CureMotif do
       true
 
       iex> # Spawn a fresh FSM and drive the lifecycle manually:
-      iex> {:ok, pid} = :"Cure.FSM.Envelope".start_link(0)
-      iex> GenServer.cast(pid, {:event, :note_on, nil})
+      iex> {:ok, pid} = :"Cure.Envelope".start_link(0)
+      iex> :gen_statem.cast(pid, :note_on)
       iex> Process.sleep(60)
-      iex> elem(:"Cure.FSM.Envelope".get_state(pid), 0) in [:sustain, :release, :silent]
+      iex> elem(:sys.get_state(pid), 0) in [:sustain, :release, :silent]
       true
   """
 
   @motif :"Cure.Motif"
-  @envelope :"Cure.FSM.Envelope"
-  @sup_module :"Cure.Sup.Motif.Orchestra"
-  @app_module :"Cure.App.CureMotif"
-  @clock_module :"Cure.Actor.Clock"
-  @sequencer_module :"Cure.Actor.Sequencer"
-  @voice_module :"Cure.Actor.Voice"
+  @envelope :"Cure.Envelope"
+  @sup_module :"Cure.Motif.Orchestra"
+  @app_module :"Cure.CureMotif"
+  @clock_module :"Cure.Clock"
+  @sequencer_module :"Cure.Sequencer"
+  @voice_module :"Cure.Voice"
+  @sequencer_callers :cure_motif_sequencer_callers
 
   @compile {:no_warn_undefined, @motif}
   @compile {:no_warn_undefined, @envelope}
@@ -134,20 +135,20 @@ defmodule CureMotif do
   @spec pattern([tuple()]) :: tuple()
   def pattern(steps) when is_list(steps), do: @motif.pattern_from_steps(steps)
 
-  @doc "Length of a Pattern (delegates to `Std.Vector.length/1`)."
-  @spec pattern_length(tuple()) :: non_neg_integer()
+  @doc "Length of a Pattern list (delegates to the transparent Cure module)."
+  @spec pattern_length([tuple()]) :: non_neg_integer()
   def pattern_length(pattern), do: @motif.pattern_length(pattern)
 
   @doc "Concatenate two patterns; length is the sum of the parts."
-  @spec concat(tuple(), tuple()) :: tuple()
+  @spec concat([tuple()], [tuple()]) :: [tuple()]
   def concat(a, b), do: @motif.concat(a, b)
 
   @doc "Repeat a pattern `n` times (1 <= n <= 64); length is n * |p|."
-  @spec repeat(tuple(), pos_integer()) :: tuple()
+  @spec repeat([tuple()], pos_integer()) :: [tuple()]
   def repeat(p, n), do: @motif.repeat(p, n)
 
   @doc "Render a Pattern into a flat list of Event tuples."
-  @spec render(tuple(), non_neg_integer()) :: [term()]
+  @spec render([tuple()], non_neg_integer()) :: [term()]
   def render(p, channel), do: @motif.render(p, channel)
 
   @doc "Render a single Step into the flat Event list (exclusive of Tick)."
@@ -181,7 +182,17 @@ defmodule CureMotif do
   """
   @spec spawn_sequencer(pid()) :: {:ok, pid()} | {:error, term()}
   def spawn_sequencer(caller) when is_pid(caller) do
-    Cure.Actor.Runtime.spawn_actor(@sequencer_module, caller: caller)
+    ensure_sequencer_callers()
+    result = @sequencer_module.start_link()
+
+    case result do
+      {:ok, pid} = ok ->
+        :ets.insert(@sequencer_callers, {pid, caller})
+        ok
+
+      other ->
+        other
+    end
   end
 
   @doc """
@@ -191,7 +202,14 @@ defmodule CureMotif do
   """
   @spec emit(pid(), term()) :: :ok
   def emit(pid, event) do
-    send(pid, {:emit, event})
+    :gen_server.cast(pid, {:emit, event})
+    ensure_sequencer_callers()
+
+    case :ets.lookup(@sequencer_callers, pid) do
+      [{^pid, caller}] -> send(caller, {:event, event})
+      [] -> :ok
+    end
+
     _ = :sys.get_state(pid)
     :ok
   end
@@ -205,5 +223,19 @@ defmodule CureMotif do
   def drive(pid, events) when is_list(events) do
     Enum.each(events, fn event -> emit(pid, event) end)
     :ok
+  end
+
+  defp ensure_sequencer_callers do
+    case :ets.whereis(@sequencer_callers) do
+      :undefined ->
+        try do
+          :ets.new(@sequencer_callers, [:named_table, :public, :set])
+        rescue
+          ArgumentError -> @sequencer_callers
+        end
+
+      _tid ->
+        @sequencer_callers
+    end
   end
 end

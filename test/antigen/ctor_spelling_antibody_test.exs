@@ -24,10 +24,18 @@ defmodule Antigen.CtorSpellingAntibodyTest do
   # correct fields-only ι binds [w] and {:var,1} resolves to the outer env slot;
   # WITHOUT A1 the 2-arg spine binds [w, ty] and {:var,1} wrongly resolves to ty.
   test "A4.i: ι over a params-on-spine ctor term matches the fields-only result" do
-    env = [{:vint, 42}]  # a distinct outer binder value in the eval env
-    scrut = {:ctor, :reflexive, [@nat, z()]}         # K6 params-on-spine
-    motive = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Equivalent, [@nat], [{:var, 1}, {:var, 0}]}, @nat}}}
-    body = {:var, 1}                                  # branch-external reference
+    # a distinct outer binder value in the eval env
+    env = [{:vint, 42}]
+    # K6 params-on-spine
+    scrut = {:ctor, :reflexive, [@nat, z()]}
+
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @nat,
+       {:lam, Cure.Core.Grade.unrestricted(), @nat,
+        {:lam, Cure.Core.Grade.unrestricted(), {:data, :Equivalent, [@nat], [{:var, 1}, {:var, 0}]}, @nat}}}
+
+    # branch-external reference
+    body = {:var, 1}
     node = {:case, scrut, motive, [{:reflexive, 1, body}]}
     # Expected: the outer binder (42), NOT the coerced-away param (@nat value).
     assert Eval.eval(node, env) == {:vint, 42}
@@ -66,10 +74,16 @@ defmodule Antigen.CtorSpellingAntibodyTest do
   test "A4.iii: nf of the params-on-spine case, entered via Normalise.nf, agrees with fields-only" do
     sig = base_sig()
     # Context.extend/2 wants a VALUE, not a term — {:vdata, :Nat, []}, not @nat.
-    ctx = Context.extend(Context.empty(sig), {:vdata, :Nat, []})  # one outer binder
-    node = {:case, {:ctor, :reflexive, [@nat, z()]},
-            {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Equivalent, [@nat], [{:var,1},{:var,0}]}, @nat}}},
-            [{:reflexive, 1, {:var, 1}}]}
+    # one outer binder
+    ctx = Context.extend(Context.empty(sig), {:vdata, :Nat, []})
+
+    node =
+      {:case, {:ctor, :reflexive, [@nat, z()]},
+       {:lam, Cure.Core.Grade.unrestricted(), @nat,
+        {:lam, Cure.Core.Grade.unrestricted(), @nat,
+         {:lam, Cure.Core.Grade.unrestricted(), {:data, :Equivalent, [@nat], [{:var, 1}, {:var, 0}]}, @nat}}},
+       [{:reflexive, 1, {:var, 1}}]}
+
     # WITHOUT A1: the 2-arg spine binds [w, ty] ahead of the outer binder, so
     # {:var,1} wrongly resolves to `ty` (a Nat data value), not the outer var.
     # WITH A1: fields-only binds [w] only, so {:var,1} resolves to the outer

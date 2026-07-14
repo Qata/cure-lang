@@ -5,8 +5,10 @@ defmodule Cure.Migrate.EditionCrossingTest do
 
   test "rules_for_crossing includes every rule relevant to reaching the target, :manual included" do
     picked = Migrate.rules_for_crossing("2026", Migrate.rules()) |> Enum.map(& &1.id)
-    assert :W_module_rename in picked          # :machine, proactive (since <= target)
-    assert :W_uppercase_type_var in picked     # :review, proactive — must be included (§5.1/§7.2)
+    # :machine, proactive (since <= target)
+    assert :W_module_rename in picked
+    # :review, proactive — must be included (§5.1/§7.2)
+    assert :W_uppercase_type_var in picked
 
     # :manual is included too — NOT because it's tier-eligible for the
     # proactive clause (it isn't), but because its `enforced_in: "2026"` makes

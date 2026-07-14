@@ -46,7 +46,8 @@ defmodule Cure.Elab.ComputedIndexArgTest do
     # That is orthogonal to this implicit-inference fix; see the plan's Phase-6
     # note. Here the body is passed directly, isolating the fix under test.
     src =
-      "mod CIdx\n" <> @preamble <>
+      "mod CIdx\n" <>
+        @preamble <>
         "  fn wf({av: SList}, {bv: SList}, {cv: SList}, body: SF(app(av, cv), app(bv, cv), DDec)) -> SF(av, bv, DCau) = loop(body)\n" <>
         "end\n"
 
@@ -55,7 +56,8 @@ defmodule Cure.Elab.ComputedIndexArgTest do
 
   test "soundness control: causal feedback body is rejected (instantaneous cycle)" do
     src =
-      "mod CIdx\n" <> @preamble <>
+      "mod CIdx\n" <>
+        @preamble <>
         "  fn bad({av: SList}, {bv: SList}, {cv: SList}, body: SF(app(av, cv), app(bv, cv), DCau)) -> SF(av, bv, DCau) = loop(body)\n" <>
         "end\n"
 

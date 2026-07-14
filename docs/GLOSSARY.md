@@ -60,7 +60,7 @@ examples read themselves.
 - `[1, 2, 3]`, `[head | tail]`, `[]` — list literal, cons, empty.
 - `%[a, b]` — a tuple literal.
 - `Point{x: 1, y: 2}`, `p.x`, `Point{p | x: 3}` — build / read / copy-update a record.
-- `:ok`, `:"Cure.FSM.Turnstile"` — **atoms** (interned symbolic constants).
+- `:ok`, `:"Cure.Turnstile"` — **atoms** (interned symbolic constants).
 - `## text` is a doc comment; `# text` is an inline comment (used for `# => result`).
 - `@extern(...)`, `@group(:g)`, `@builtin(:nat)`, `@derive(JSON)` — **attributes**
   attached to the declaration below them.
@@ -739,8 +739,8 @@ arity)` compiles a Cure function to a *direct Erlang/BEAM call*. It's how axioms
 target real code — NIFs (`gpio`, `uart`), OTP, or Cure's own runtime helpers.
 
 ```cure
-@extern(Elixir.Cure.FSM.Builtins, :fsm_spawn, 1)
-fn spawn(fsm_module: Atom) -> Pid
+@extern(:erlang, :self, 0)
+fn raw_self() -> Any
 ```
 
 **believe_me** — An unchecked coercion that forces the compiler to accept a value at
@@ -771,20 +771,20 @@ demand (the *delta* reduction from Layer 5).
 ## Layer 11 — The BEAM: processes and concurrency
 
 Cure runs on the BEAM (the Erlang VM), so its concurrency is BEAM concurrency, made
-typed. Raw `spawn`/`receive` are rejected — you use the `fsm`/`actor` containers.
+typed. The checked `Std.Otp` algebra is the source-level process boundary.
 
 **Process** — An independent, isolated unit of execution with its own memory,
 communicating only by messages. The BEAM runs many cheaply.
 
 ```cure
-# Each spawned fsm/actor is its own process; a crash in one doesn't corrupt others.
+fn start() -> Effect(Tuple) = beam_ops start_link :worker []
 ```
 
 **Pid** — A **process identifier**: a handle to a running process, used to message
 or stop it.
 
 ```cure
-let pid = spawn(:"Cure.Actor.Echo")     # pid : Pid
+fn me() -> Effect(Pid(Atom)) = beam_ops self
 ```
 
 **Atom** — An interned symbolic constant, written `:name`. Cheap to compare; used for
@@ -792,66 +792,61 @@ tags, states, and module names.
 
 ```cure
 :ok
-:"Cure.FSM.Turnstile"                    # a module name as an atom
+:"Cure.Turnstile"                        # a module name as an atom
 ```
 
-**Any** — The opaque "some BEAM value of unchecked shape" type, used at the runtime
-boundary (e.g. a process's initial payload) where the static type isn't known.
+**Any** — The opaque "some BEAM value of unchecked shape" type, permitted only at an
+explicit raw BEAM or FFI boundary.
 
 ```cure
-fn spawn_with_payload(actor_module: Atom, payload: Any) -> Pid
+fn raw_boundary(value: Any) -> Any
 ```
 
-**Message / send** — Processes communicate by **sending** values (**messages**) to a
-`Pid`; the receiver handles them one at a time.
+**Message / send** — Processes communicate by sending values to a typed `Pid(m)`;
+the checker requires the message to have type `m`.
 
 ```cure
-send(pid, :coin)                         # send the atom :coin to pid
+beam_ops tell pid :coin                  # checked before emission
 ```
 
-**spawn** — Start a new process from a compiled `fsm`/`actor` module atom, returning
-its `Pid`. The spawner is recorded as the process's caller.
+**beam_ops** — An auto-preluded standard-library syntax macro that expands to
+ordinary checked `Std.Otp` calls. It has no compiler-owned operation table.
 
 ```cure
-let pid = spawn(:"Cure.FSM.Turnstile")
-state(pid)                               # => :locked
+fn start() -> Effect(Tuple) = beam_ops start_statem :"Cure.Turnstile" [0]
 ```
 
-**Effect (`! Io`)** — An annotation on a return type marking that a function *does
-something observable* (I/O, time, randomness), so callers must acknowledge it. Purity
-is the default; effects are opt-in and tracked.
+**Effect (`Effect(T)`)** — The inert type former for an effectful result. A BEAM
+operation returns `Effect(T)` and an effectful `let` sequences it.
 
 ```cure
-fn now() -> Instant ! Io                 # the ! Io says: this reads the clock
+fn current() -> Effect(Pid(Atom)) = beam_ops self
 ```
 
-**fsm (finite state machine)** — A container declaring named **states** and the
-event-driven **transitions** between them; the compiler turns it into a typed
-process. The safe replacement for hand-rolled `receive` loops.
+**fsm (finite state machine)** — An auto-preluded standard-library macro that
+expands to a generic lifted module with `gen_statem` callbacks. Transition rows
+are checked Cure values, not a compiler parser.
 
 ```cure
-fsm Turnstile with Integer
-  Locked   --coin-->  Unlocked
-  Unlocked --push-->  Locked
-  on_transition
-    (:locked,   :coin, _p, data) -> %[:ok, :unlocked, data]
-    (:unlocked, :push, _p, data) -> %[:ok, :locked,   data]
+fsm Cure.Turnstile state Int transitions [
+  transition :locked :coin :unlocked,
+  transition :unlocked :push :locked
+]
 ```
 
-**actor** — A container for a process that keeps state and handles arbitrary
-**messages** (more general than an `fsm`'s fixed states/events).
+**actor** — A standard-library macro that expands to a generic lifted module
+with checked `gen_server` callbacks and a typed message surface.
 
 ```cure
-actor Store with Atom
-  on_message
-    (msg, _old) -> msg        # new state = the message received
+actor Cure.Store state Atom messages Atom handle_info
+  %[:noreply, state]
 ```
 
-**supervisor** — A process whose job is to *watch* other processes and restart them
-on failure — the OTP "let it crash, then recover" pattern, as a typed container.
+**supervisor** — A standard-library macro that expands to a generic lifted module
+whose checked `init/1` returns ordinary BEAM child specifications.
 
 ```cure
-# A supervisor owns a set of child fsm/actor processes and restarts a child that dies.
+sup Cure.Root children [child_spec Cure.Worker :worker]
 ```
 
 ---

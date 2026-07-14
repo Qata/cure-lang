@@ -64,6 +64,7 @@ defmodule Cure.EditionTest do
     test "a non-space-indented ### inside a fence body does not close the fence" do
       for ws <- ["\t", "\f", "\v"] do
         src = "###\n#{ws}###\n@edition(\"2027\")\n###\ncode\n"
+
         assert Cure.Edition.pragma_edition(src) == nil,
                "ws #{inspect(ws)}: buried @edition wrongly read as a pragma"
       end

@@ -61,6 +61,16 @@ mod Std.Binary
   @extern(:binary, :at, 2)
   fn byte_at(b: Binary, index: Int) -> Int
 
+  ## The eager byte view used by `for <<b <- binary>>`. It recurses over a Nat
+  ## fuel value so Binary stays below the Std.List auto-prelude dependency edge.
+  fn to_bytes(b: Binary) -> List(Int) =
+    to_bytes_from(b, 0, of_int(byte_size(b)))
+
+  fn to_bytes_from(b: Binary, index: Int, remaining: Nat) -> List(Int) =
+    match remaining
+      Z() -> []
+      S(k) -> [byte_at(b, index) | to_bytes_from(b, index + 1, k)]
+
   ## The sub-binary `[start, start + len)`; delegates to `:binary.part/3`.
   @extern(:binary, :part, 3)
   fn part(b: Binary, start: Int, len: Int) -> Binary

@@ -71,6 +71,7 @@ defmodule Cure.Compiler.DepGraphTest do
 
       {:ok, graph} = DepGraph.scan([a])
       assert {:ok, [^a], []} = DepGraph.order(graph)
+
       assert graph.nodes[a].order_deps == [] or
                Enum.all?(graph.nodes[a].order_deps, &(&1.target in ["Std.List", "NotInSet"]))
     end
@@ -93,6 +94,15 @@ defmodule Cure.Compiler.DepGraphTest do
       a = write!(dir, "selfy.cure", "mod Selfy\n  use Selfy\n  fn f() -> Int = 1\n")
       {:ok, graph} = DepGraph.scan([a])
       assert {:ok, [^a], []} = DepGraph.order(graph)
+    end
+
+    test "generic lifted modules are discovered without OTP container kinds", %{tmp_dir: dir} do
+      worker = write!(dir, "worker.cure", "lift module Cure.Worker\n  behaviour custom\n")
+      root = write!(dir, "root.cure", "mod Cure.Root\n  use Cure.Worker\n")
+
+      {:ok, graph} = DepGraph.scan([root, worker])
+      assert graph.modules["Cure.Worker"] == worker
+      assert graph.modules["Cure.Root"] == root
     end
 
     # This test originally asserted the ordering property against the real

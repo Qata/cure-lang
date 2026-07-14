@@ -45,7 +45,8 @@ defmodule Antigen.Generators.SigMenuTest do
     env = SigMenu.env_of(:v1)
     # Γ = [ n : Nat, xs : Vec(n) ]  (kernel order: xs innermost = index 0)
     ctx = SigMenu.rebuild_context(env, [SigMenu.vec({:var, 0}), SigMenu.nat()])
-    goal = SigMenu.vec({:var, 1})       # Vec(n), n = index 1 from the body
+    # Vec(n), n = index 1 from the body
+    goal = SigMenu.vec({:var, 1})
     assert SigMenu.inhabitable?(ctx, goal)
     term = SigMenu.canon(ctx, goal)
     assert {:ok, _} = Kernel.infer(ctx, term)
@@ -77,8 +78,11 @@ defmodule Antigen.Generators.SigMenuTest do
     ctx = Context.empty(env)
     list_nat = {:data, :List, [SigMenu.nat()], []}
     nil_wrapped = {:app, {:lam, Cure.Core.Grade.unrestricted(), list_nat, {:var, 0}}, {:ctor, :Nil, []}}
-    cons_wrapped = {:app, {:lam, Cure.Core.Grade.unrestricted(), list_nat, {:var, 0}},
-                    {:ctor, :Cons, [{:ctor, :Z, []}, {:ctor, :Nil, []}]}}
+
+    cons_wrapped =
+      {:app, {:lam, Cure.Core.Grade.unrestricted(), list_nat, {:var, 0}},
+       {:ctor, :Cons, [{:ctor, :Z, []}, {:ctor, :Nil, []}]}}
+
     assert {:ok, _} = Kernel.infer(ctx, nil_wrapped)
     assert {:ok, _} = Kernel.infer(ctx, cons_wrapped)
   end
@@ -110,6 +114,7 @@ defmodule Antigen.Generators.SigMenuTest do
       for c <- list_samples do
         env = SigMenu.env_of(:v1)
         ctx = SigMenu.rebuild_context(env, c.payload.ctx)
+
         assert {:ok, _} = Kernel.infer(ctx, c.payload.term),
                "top-level List challenge term not infer-viable: #{inspect(c.payload.term)}"
       end

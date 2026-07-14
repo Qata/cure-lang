@@ -134,8 +134,7 @@ defmodule Antigen.Assays.Elab do
     if ok? do
       :ok
     else
-      {:violation,
-       {:dot_forcing_relation_wrong, p.id, p.transform, %{relation: rel, base: base, variant: variant}}}
+      {:violation, {:dot_forcing_relation_wrong, p.id, p.transform, %{relation: rel, base: base, variant: variant}}}
     end
   end
 
@@ -181,8 +180,7 @@ defmodule Antigen.Assays.Elab do
     if ok? do
       :ok
     else
-      {:violation,
-       {:guard_lint_relation_wrong, p.id, p.transform, %{relation: rel, base: base, variant: variant}}}
+      {:violation, {:guard_lint_relation_wrong, p.id, p.transform, %{relation: rel, base: base, variant: variant}}}
     end
   end
 
@@ -228,7 +226,8 @@ defmodule Antigen.Assays.Elab do
   def run(%Challenge{kind: :elab_program, assay: "elab/soundness", payload: p}, k) do
     case safe_elaborate(k, p.src) do
       {:ok, env} -> check_all_defs(env, k)
-      {:error, _} -> :ok                                   # reject -> elab/completeness' job
+      # reject -> elab/completeness' job
+      {:error, _} -> :ok
       {:raise, e} -> {:violation, {:elaborator_raised, p.id, e}}
     end
   end
@@ -292,6 +291,7 @@ defmodule Antigen.Assays.Elab do
 
       {:ok, inferred} ->
         ty_v = k.eval.(ty, [])
+
         if k.conv.(inferred, ty_v, Context.length(ctx), Context.signature(ctx)) do
           :ok
         else

@@ -31,6 +31,7 @@ defmodule Cure.Elab.ElaboratorTest do
   test "elaborates a two-parameter fn, resolving variables to de Bruijn indices" do
     # fn k(x: Type, y: Type) -> Type = x  ⇒  λλ. #1
     ast = parse_one("fn k(x: Type, y: Type) -> Type = x\n")
+
     assert {:ok, {:lam, _g1, {:type, 0}, {:lam, _g2, {:type, 0}, {:var, 1}}}, _} =
              Elaborator.elaborate(ast, Env.empty())
   end

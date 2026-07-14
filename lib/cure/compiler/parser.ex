@@ -36,7 +36,7 @@ defmodule Cure.Compiler.Parser do
       {:ok, ast} = Cure.Compiler.Parser.parse(tokens)
   """
 
-  alias Cure.Compiler.Token
+  alias Cure.Compiler.{MacroRaw, Token}
   alias Cure.Compiler.Parser.Precedence
   alias Cure.Pipeline.Events
 
@@ -50,9 +50,12 @@ defmodule Cure.Compiler.Parser do
     emit_events: false,
     edition: nil,
     seen_stmt?: false,
+    builtin_macros: %{},
     active_macros: %{},
+    computed_macros: %{},
     fresh_counter: 0,
-    literal_macros: %{}
+    literal_macros: %{},
+    expansion_context: nil
   ]
 
   # Keywords that can open a new top-level definition. Used by the
@@ -66,7 +69,6 @@ defmodule Cure.Compiler.Parser do
     :type,
     :use,
     :sup,
-    :app,
     :proto,
     :impl,
     :interface,
@@ -75,13 +77,13 @@ defmodule Cure.Compiler.Parser do
   ]
 
   # Names parse_prefix/1's :identifier case already dispatches on via a
-  # hard-coded clause (the soft-keyword container forms sup/app/macro/with,
+  # hard-coded clause (the soft-keyword forms sup/app/macro/with,
   # plus the assert_type/rewrite builtins). A local macro can never claim one
   # of these: the guarded macro-use clause is checked FIRST, so an unguarded
   # collision would silently disable the existing form for the rest of the
   # module with no error raised. Reserved names simply keep today's
   # soft-keyword behavior; they are never macro-usable.
-  @reserved_macro_keywords ~w(assert_type rewrite sup app with macro)
+  @reserved_macro_keywords ~w(assert_type rewrite with macro)
 
   # Decorators that describe the *module*, not the declaration that follows.
   # A `@name(...)` in this set NEVER attaches to the next `fn`/`rec`/`type`;
@@ -113,6 +115,8 @@ defmodule Cure.Compiler.Parser do
     file = Keyword.get(opts, :file, "nofile")
     emit? = Keyword.get(opts, :emit_events, true)
     edition = Keyword.get(opts, :edition, Cure.Edition.current())
+    prelude? = Keyword.get(opts, :prelude_macros, true)
+    supplied_macros = Keyword.get(opts, :builtin_macros)
 
     # Phase 1 (harvest): parse once with NO active macros, keep only the local
     # macro grammars. Use-sites may mis-parse here; we discard everything but
@@ -120,6 +124,7 @@ defmodule Cure.Compiler.Parser do
     harvest_state = %__MODULE__{tokens: tokens, file: file, emit_events: false, edition: edition}
     {harvest_exprs, _harvest_state} = parse_program(harvest_state)
     active = harvest_active_macros(harvest_exprs)
+    computed = harvest_computed_macros(harvest_exprs)
     literal = harvest_literal_macros(harvest_exprs)
 
     # Phase 2 (authoritative): parse with the macro grammars seeded so use-sites expand.
@@ -128,9 +133,17 @@ defmodule Cure.Compiler.Parser do
       file: file,
       emit_events: emit?,
       edition: edition,
+      builtin_macros:
+        cond do
+          is_map(supplied_macros) -> supplied_macros
+          prelude? -> prelude_macros()
+          true -> %{}
+        end,
       active_macros: active,
+      computed_macros: computed,
       literal_macros: literal
     }
+
     {exprs, state} = parse_program(state)
 
     ast =
@@ -149,6 +162,68 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp prelude_macros do
+    case {Process.get(:cure_loading_prelude), :persistent_term.get({__MODULE__, :prelude_macros}, :missing)} do
+      {true, _} -> %{}
+      {_, rules} when is_map(rules) -> rules
+      _ -> load_prelude_macros()
+    end
+  end
+
+  defp load_prelude_macros do
+    Process.put(:cure_loading_prelude, true)
+
+    rules =
+      case Application.get_env(:cure, :stdlib_macro_rules) do
+        rules when is_map(rules) ->
+          rules
+
+        _ ->
+          stdlib_macro_paths = Path.wildcard(Path.expand("../../std/*.cure", __DIR__))
+
+          # First harvest every standard-library macro without any builtin
+          # rules. A second parse uses that complete grammar set so one
+          # standard-library macro can transparently invoke another (for
+          # example, standard-library starters invoking another syntax macro).
+          harvested = collect_stdlib_macro_rules(stdlib_macro_paths, %{})
+          collect_stdlib_macro_rules(stdlib_macro_paths, %{}, harvested)
+      end
+
+    :persistent_term.put({__MODULE__, :prelude_macros}, rules)
+    Process.delete(:cure_loading_prelude)
+    rules
+  end
+
+  defp collect_stdlib_macro_rules(paths, acc, builtin_macros \\ %{}) do
+    Enum.reduce(paths, acc, fn path, rules ->
+      with {:ok, source} <- File.read(path),
+           {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
+           {:ok, ast} <-
+             parse(tokens,
+               file: path,
+               emit_events: false,
+               prelude_macros: false,
+               builtin_macros: builtin_macros
+             ) do
+        collect_macro_rules(ast, rules)
+      else
+        _ -> rules
+      end
+    end)
+  end
+
+  defp collect_macro_rules(ast, acc) do
+    Enum.reduce(collect_macro_defs_with_scope(ast), acc, fn {:macro_def, _meta, rules}, macro_acc ->
+      Enum.reduce(rules, macro_acc, fn
+        %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
+          Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
+
+        _, acc2 ->
+          acc2
+      end)
+    end)
+  end
+
   @doc """
   Expand a macro example's captured use-site tokens through the macro's own
   rules — the same expansion a real use-site gets (nested literal/`<fresh>`
@@ -159,6 +234,7 @@ defmodule Cure.Compiler.Parser do
   def expand_example(rules, use_site_tokens) do
     synthetic = [{:macro_def, [], rules}]
     active = harvest_active_macros(synthetic)
+    computed = harvest_computed_macros(synthetic)
     literal = harvest_literal_macros(synthetic)
 
     eof = %Token{type: :eof, value: nil, line: 0, col: 0}
@@ -167,12 +243,32 @@ defmodule Cure.Compiler.Parser do
       tokens: use_site_tokens ++ [eof],
       file: "example",
       emit_events: false,
+      builtin_macros: %{},
       active_macros: active,
+      computed_macros: computed,
       literal_macros: literal
     }
 
-    {ast, _state} = parse_expr(state, 0)
-    ast
+    {ast, state} = parse_expr(state, 0)
+
+    # A hole segment unconditionally parses ONE expr and binds it -- match_segments
+    # is satisfied the moment every declared segment is matched, regardless of
+    # whether every captured use-site token was consumed (that is correct for a
+    # REAL use-site, where anything left over is just the start of the next
+    # top-level form). An example's use-site has no such continuation: it is
+    # captured as "every token up to `expands`" specifically so it names ONE
+    # complete macro use. If tokens remain unconsumed here, the example's
+    # use-site does not correspond to a single full expansion -- wrap the
+    # result in a sentinel no hand-written pin can ever equal, so
+    # MacroValidate.check_examples reports example_mismatch instead of
+    # silently accepting a garbage-suffixed example.
+    case peek(state) do
+      %Token{type: :eof} -> ast
+      # Generated raw-hole proofs preserve the structural delimiter for the
+      # enclosing parser, so no ordinary example continuation remains.
+      %Token{type: :dedent} -> ast
+      _leftover -> {:example_use_site_not_fully_consumed, [], [ast]}
+    end
   end
 
   # Collect every local macro rule, indexed by the rule's leading keyword, from
@@ -180,10 +276,27 @@ defmodule Cure.Compiler.Parser do
   # `mod` is still a local macro of that module).
   defp harvest_active_macros(exprs) do
     exprs
-    |> collect_macro_defs()
+    |> collect_macro_defs_with_scope()
     |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
       Enum.reduce(rules, acc, fn
         %{kind: :syntax, keyword: kw} = rule, acc2 when is_binary(kw) ->
+          Map.update(acc2, kw, [rule], &(&1 ++ [rule]))
+
+        _rule, acc2 ->
+          acc2
+      end)
+    end)
+  end
+
+  # Tier-3 sibling of the parse-time syntax harvester. Computed rules are kept
+  # separate because their use-sites emit deferred AST nodes; they must not be
+  # mistaken for Tier-2 templates that can expand before elaboration.
+  defp harvest_computed_macros(exprs) do
+    exprs
+    |> collect_macro_defs_with_scope()
+    |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
+      Enum.reduce(rules, acc, fn
+        %{kind: :computed, keyword: kw} = rule, acc2 when is_binary(kw) ->
           Map.update(acc2, kw, [rule], &(&1 ++ [rule]))
 
         _rule, acc2 ->
@@ -196,7 +309,7 @@ defmodule Cure.Compiler.Parser do
   # dispatch suffix. Malformed literal rules (no suffix) are skipped.
   defp harvest_literal_macros(exprs) do
     exprs
-    |> collect_macro_defs()
+    |> collect_macro_defs_with_scope()
     |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
       Enum.reduce(rules, acc, fn
         %{kind: :literal, suffix: s} = rule, acc2 when is_binary(s) ->
@@ -208,10 +321,44 @@ defmodule Cure.Compiler.Parser do
     end)
   end
 
-  defp collect_macro_defs(node) when is_list(node), do: Enum.flat_map(node, &collect_macro_defs/1)
-  defp collect_macro_defs({:macro_def, _, _} = m), do: [m]
-  defp collect_macro_defs({_t, _m, children}) when is_list(children), do: collect_macro_defs(children)
-  defp collect_macro_defs(_), do: []
+  # Macro rules inherit the imports visible where their definition lives. A
+  # generated lifted module is a new compilation unit, so those imports must be
+  # carried across the quotation boundary before its types and function bodies
+  # are elaborated. This is lexical scope propagation, not a behavior-specific name
+  # table: any user-defined macro can use the same mechanism.
+  defp collect_macro_defs_with_scope(node, imports \\ [])
+
+  defp collect_macro_defs_with_scope(node, imports) when is_list(node),
+    do: Enum.flat_map(node, &collect_macro_defs_with_scope(&1, imports))
+
+  defp collect_macro_defs_with_scope({:macro_def, meta, rules}, imports) do
+    rules = Enum.map(rules, &Map.put_new(&1, :lexical_imports, imports))
+    [{:macro_def, meta, rules}]
+  end
+
+  defp collect_macro_defs_with_scope({:container, meta, children}, imports) when is_list(meta) do
+    imports =
+      case Keyword.get(meta, :container_type) do
+        :module -> imports ++ direct_import_declarations(children)
+        _ -> imports
+      end
+
+    Enum.flat_map(children, &collect_macro_defs_with_scope(&1, imports))
+  end
+
+  defp collect_macro_defs_with_scope({_type, _meta, children}, imports) when is_list(children),
+    do: Enum.flat_map(children, &collect_macro_defs_with_scope(&1, imports))
+
+  defp collect_macro_defs_with_scope(_other, _imports), do: []
+
+  defp direct_import_declarations(children) when is_list(children) do
+    for {:import, meta, _} = declaration <- children,
+        is_list(meta),
+        is_binary(Keyword.get(meta, :source)),
+        do: declaration
+  end
+
+  defp direct_import_declarations(_children), do: []
 
   # A use-site of an active macro keyword. Milestone-2 handles a single rule per
   # keyword; the rule's segments are matched against the use-site tokens, binding
@@ -254,13 +401,83 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_macro_use(state, keyword) do
-    [rule | _] = Map.fetch!(state.active_macros, keyword)
-    state = advance(state)  # consume the keyword token
+  defp parse_macro_use(state, keyword), do: parse_macro_use(state, keyword, state.active_macros)
+
+  defp parse_macro_use(state, keyword, registry) do
+    rules = Map.fetch!(registry, keyword)
+    # consume the keyword token
+    state = advance(state)
+
+    case match_macro_rule(rules, state) do
+      {:ok, rule, bindings, state} ->
+        expand_rule(rule, bindings, state)
+
+      {:error, rule, progress, state} ->
+        t = peek(state)
+
+        state =
+          add_error(
+            state,
+            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
+          )
+
+        # Recover: yield the bare keyword variable so the outer parse continues.
+        {variable(%Cure.Compiler.Token{
+           type: :identifier,
+           value: keyword,
+           line: t.line,
+           col: t.col
+         }), state}
+    end
+  end
+
+  # Rules sharing a dispatch keyword may overlap (for example, a specific
+  # `with` form and a general body form). Try each complete grammar match from
+  # the same post-keyword state so a failed partial match cannot consume input
+  # or prevent a later rule from being considered.
+  defp match_macro_rule([rule | rest], state) do
+    case match_segments(state, rule.segments, %{}, 0) do
+      {:ok, bindings, _progress, matched_state} ->
+        {:ok, rule, bindings, matched_state}
+
+      {:error, progress, failed_state} ->
+        case match_macro_rule(rest, state) do
+          {:error, _last_rule, _last_progress, _last_state} ->
+            {:error, rule, progress, failed_state}
+
+          success ->
+            success
+        end
+    end
+  end
+
+  defp match_macro_rule([], state), do: {:error, %{segments: []}, 0, state}
+
+  # Tier-3 use-sites are matched at parse time, but their elab runs only after
+  # the dependent environment exists. Preserve the elab reference and the
+  # matched inputs in a generic syntax-shaped node for the elaboration pass.
+  defp parse_computed_use(state, keyword) do
+    [rule | _] = Map.fetch!(state.computed_macros, keyword)
+    keyword_token = peek(state)
+    state = advance(state)
 
     case match_segments(state, rule.segments, %{}, 0) do
       {:ok, bindings, _progress, state} ->
-        expand_rule(rule, bindings, state)
+        inputs =
+          Enum.flat_map(rule.segments, &segment_inputs(&1, bindings))
+
+        input = {:macro_input, [keyword: keyword], inputs}
+
+        meta = [
+          keyword: keyword,
+          syntax_type: macro_syntax_type(keyword),
+          syntax_fields: macro_syntax_fields(rule.segments),
+          syntax_repeated_fields: macro_syntax_repeated_fields(rule.segments),
+          line: keyword_token.line,
+          col: keyword_token.col
+        ]
+
+        {{:computed_use, put_expansion_context(meta, state.expansion_context), [rule.elab, input]}, state}
 
       {:error, progress, state} ->
         t = peek(state)
@@ -268,11 +485,9 @@ defmodule Cure.Compiler.Parser do
         state =
           add_error(
             state,
-            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress),
-             macro_got_desc(t), t.line, t.col}
+            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
           )
 
-        # Recover: yield the bare keyword variable so the outer parse continues.
         {variable(%Cure.Compiler.Token{
            type: :identifier,
            value: keyword,
@@ -373,10 +588,105 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp match_segments(state, [{:hole, %{name: name, kind: "Type"}} | rest], bindings, progress) do
+    {arg, state} = parse_type_expr(state)
+    match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+  end
+
+  defp match_segments(state, [{:hole, %{name: name, kind: "ModuleName"}} | rest], bindings, progress) do
+    {module_name, state} = parse_dotted_name(state)
+    module = {:literal, [subtype: :symbol], String.to_atom(module_name)}
+    match_segments(state, rest, Map.put(bindings, name, module), progress + 1)
+  end
+
   defp match_segments(state, [{:hole, %{name: name}} | rest], bindings, progress) do
     {arg, state} = parse_expr(state, 0)
     match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
   end
+
+  # Raw holes are the reader-tier escape hatch: capture the token span without
+  # asking the ordinary expression parser to interpret it. Structural
+  # delimiters belong to the enclosing parser, so `dedent`/`newline` remain in
+  # the stream while punctuation delimiters are consumed by the macro rule.
+  defp match_segments(
+         state,
+         [{:raw_hole, %{name: name, delimiter: delimiter} = hole_meta} | rest],
+         bindings,
+         progress
+       ) do
+    remaining = Enum.drop(state.tokens, state.pos)
+
+    case MacroRaw.capture(remaining, delimiter) do
+      {:ok, captured, _rest} ->
+        state = advance_n(state, length(captured) + if(consume_raw_delimiter?(delimiter), do: 1, else: 0))
+        raw_meta = [line: raw_line(captured, state), delimiter: delimiter]
+        raw_meta = if hole_meta[:delayed], do: Keyword.put(raw_meta, :delayed, true), else: raw_meta
+        raw = {:raw_tokens, raw_meta, captured}
+        match_segments(state, rest, Map.put(bindings, name, raw), progress + 1)
+
+      {:error, {:missing_raw_delimiter, "dedent"}} ->
+        # A top-level built-in macro may end at EOF without an indentation
+        # delimiter. Treat the remaining newline/trivia as an empty body and
+        # leave EOF for the enclosing program parser.
+        captured = Enum.take_while(remaining, &match?(%Token{type: :newline}, &1))
+        state = advance_n(state, length(captured))
+        raw_meta = [line: raw_line(captured, state), delimiter: delimiter]
+        raw_meta = if hole_meta[:delayed], do: Keyword.put(raw_meta, :delayed, true), else: raw_meta
+        raw = {:raw_tokens, raw_meta, captured}
+        match_segments(state, rest, Map.put(bindings, name, raw), progress + 1)
+
+      {:error, _} ->
+        {:error, progress, state}
+    end
+  end
+
+  defp match_segments(state, [{:repeat, segment} | rest], bindings, progress) do
+    {values, state} = match_repeated_segment(state, segment, bindings, [])
+    bindings = put_repeated_binding(bindings, segment, values)
+    match_segments(state, rest, bindings, progress + 1)
+  end
+
+  defp match_segments(state, [{:optional, group} | rest], bindings, progress) do
+    case match_segments(state, group, bindings, progress) do
+      {:ok, bindings, _group_progress, matched_state} ->
+        match_segments(matched_state, rest, bindings, progress + 1)
+
+      {:error, _group_progress, _matched_state} ->
+        match_segments(state, rest, bindings, progress + 1)
+    end
+  end
+
+  defp match_repeated_segment(state, {:hole, %{name: name}}, bindings, acc) do
+    case peek(state) do
+      %Token{type: type} when type in [:newline, :dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      _ ->
+        {arg, state} = parse_expr(state, 0)
+        match_repeated_segment(state, {:hole, %{name: name}}, bindings, [arg | acc])
+    end
+  end
+
+  defp match_repeated_segment(state, {:lit, word}, _bindings, acc) do
+    if lit_token_matches?(peek(state), word) do
+      match_repeated_segment(advance(state), {:lit, word}, %{}, [word | acc])
+    else
+      {Enum.reverse(acc), state}
+    end
+  end
+
+  defp match_repeated_segment(state, _segment, _bindings, acc), do: {Enum.reverse(acc), state}
+
+  defp put_repeated_binding(bindings, {:hole, %{name: name}}, values), do: Map.put(bindings, name, values)
+  defp put_repeated_binding(bindings, _segment, _values), do: bindings
+
+  defp advance_n(state, 0), do: state
+  defp advance_n(state, count), do: advance_n(advance(state), count - 1)
+
+  defp consume_raw_delimiter?(delimiter), do: delimiter not in ["dedent", "newline"]
+
+  defp raw_line([%Token{line: line} | _], _state), do: line
+  defp raw_line([], state), do: peek(state).line
 
   # A literal segment matches a token whose text equals the segment word. Only
   # scalar token values (binary/atom/number) have text; a structured value —
@@ -393,9 +703,132 @@ defmodule Cure.Compiler.Parser do
   # then substitute the bound holes. Returns `{expanded_ast, state}` — the
   # freshening counter threads back out to the caller.
   defp expand_rule(rule, bindings, state) do
-    {freshened, state} = freshen(rule.template, state)
-    {subst_holes(freshened, bindings), state}
+    expand_template_rule(rule, bindings, state)
   end
+
+  defp expand_template_rule(rule, bindings, state) do
+    {freshened, state} = freshen(rule.template, state)
+    expanded = subst_holes(freshened, bindings, state)
+    expanded = attach_lexical_imports(expanded, Map.get(rule, :lexical_imports, []))
+
+    case Cure.Compiler.MacroSyntax.lower_internal(expanded) do
+      {:ok, ast} ->
+        {ast, state}
+
+      :not_internal ->
+        {expanded, state}
+    end
+  end
+
+  defp attach_lexical_imports({:lift_module, meta, children}, imports) when is_list(meta) and is_list(imports) do
+    declarations = Keyword.get(meta, :declarations, [])
+    existing = MapSet.new(declarations, &import_declaration_key/1)
+
+    generated_imports =
+      for {:import, _meta, _children} = declaration <- imports,
+          not MapSet.member?(existing, import_declaration_key(declaration)),
+          do: declaration
+
+    declarations = generated_imports ++ declarations
+    aliases = import_aliases(imports ++ declarations)
+    node = {:lift_module, Keyword.put(meta, :declarations, declarations), children}
+    qualify_lexical_aliases(node, aliases)
+  end
+
+  defp attach_lexical_imports(ast, _imports), do: ast
+
+  defp import_aliases(imports) do
+    for {:import, meta, _children} <- imports,
+        is_list(meta),
+        alias_name = Keyword.get(meta, :alias),
+        source = Keyword.get(meta, :source),
+        is_binary(alias_name),
+        is_binary(source),
+        into: %{} do
+      {alias_name, source}
+    end
+  end
+
+  defp qualify_lexical_aliases({:function_call, meta, children}, aliases) when is_list(meta) do
+    meta =
+      case Keyword.get(meta, :name) do
+        name when is_binary(name) -> Keyword.put(meta, :name, qualify_dotted_name(name, aliases))
+        _ -> meta
+      end
+
+    {:function_call, meta, Enum.map(children, &qualify_lexical_aliases(&1, aliases))}
+  end
+
+  defp qualify_lexical_aliases({:attribute_access, meta, [inner]}, aliases) when is_list(meta) do
+    node = {:attribute_access, meta, [qualify_lexical_aliases(inner, aliases)]}
+
+    case dotted_parts(node) do
+      [head | tail] when is_binary(head) and is_map_key(aliases, head) ->
+        build_dotted(String.split(Map.fetch!(aliases, head), ".") ++ tail)
+
+      _ ->
+        node
+    end
+  end
+
+  defp qualify_lexical_aliases({tag, meta, children}, aliases) when is_list(meta) and is_list(children),
+    do: {tag, qualify_lexical_aliases_meta(meta, aliases), Enum.map(children, &qualify_lexical_aliases(&1, aliases))}
+
+  defp qualify_lexical_aliases(list, aliases) when is_list(list),
+    do: Enum.map(list, &qualify_lexical_aliases(&1, aliases))
+
+  defp qualify_lexical_aliases(other, _aliases), do: other
+
+  defp qualify_lexical_aliases_meta(meta, aliases) do
+    Enum.map(meta, fn
+      {key, value} -> {key, qualify_lexical_aliases_meta_value(key, value, aliases)}
+      other -> other
+    end)
+  end
+
+  defp qualify_lexical_aliases_meta_value(:name, value, aliases) when is_binary(value),
+    do: qualify_dotted_name(value, aliases)
+
+  defp qualify_lexical_aliases_meta_value(_key, value, aliases) when is_tuple(value),
+    do: qualify_lexical_aliases(value, aliases)
+
+  defp qualify_lexical_aliases_meta_value(_key, value, aliases) when is_list(value),
+    do: Enum.map(value, &qualify_lexical_aliases_meta_value(nil, &1, aliases))
+
+  defp qualify_lexical_aliases_meta_value(_key, value, _aliases), do: value
+
+  defp qualify_dotted_name(name, aliases) do
+    case String.split(name, ".") do
+      [head | tail] when is_map_key(aliases, head) ->
+        Enum.join(String.split(Map.fetch!(aliases, head), ".") ++ tail, ".")
+
+      _ ->
+        name
+    end
+  end
+
+  defp dotted_parts({:variable, _meta, name}) when is_binary(name), do: [name]
+
+  defp dotted_parts({:attribute_access, meta, [inner]}) when is_list(meta) do
+    case dotted_parts(inner) do
+      nil -> nil
+      parts -> parts ++ [Keyword.get(meta, :attribute)]
+    end
+  end
+
+  defp dotted_parts(_other), do: nil
+
+  defp build_dotted([head | tail]) do
+    Enum.reduce(tail, {:variable, [scope: :local], head}, fn segment, acc ->
+      {:attribute_access, [attribute: segment], [acc]}
+    end)
+  end
+
+  defp import_declaration_key({:import, meta, _children}) when is_list(meta) do
+    {Keyword.get(meta, :source), Keyword.get(meta, :items, []), Keyword.get(meta, :alias)}
+  end
+
+  defp import_declaration_key(other), do: other
 
   # Mint one deterministic gensym per distinct declared fresh name, then rewrite
   # markers and plain references of those names. Counter lives in parser state so
@@ -475,36 +908,279 @@ defmodule Cure.Compiler.Parser do
 
   defp apply_freshening_value(v, _rename), do: v
 
-  defp subst_holes({:variable, _meta, name} = v, bindings) do
+  defp subst_holes({:variable, _meta, name} = v, bindings, _state) do
     case Map.fetch(bindings, name) do
+      {:ok, args} when is_list(args) -> {:list, [generated_by: :macro_repeat], args}
+      {:ok, {:raw_tokens, _raw_meta, _tokens} = raw} -> raw
       {:ok, arg} -> arg
       :error -> v
     end
   end
 
-  defp subst_holes({t, meta, children}, bindings) when is_list(children) do
-    {t, subst_holes_meta(meta, bindings), Enum.map(children, &subst_holes(&1, bindings))}
+  defp subst_holes({:lift_module, meta, children}, bindings, state) when is_list(meta) do
+    case Keyword.get(meta, :module) do
+      {:macro_hole, module_hole} ->
+        with {:ok, module_ast} <- Map.fetch(bindings, module_hole),
+             module_name when is_binary(module_name) <- module_name_from_ast(module_ast) do
+          meta = subst_lift_module_meta(meta, bindings, state, {:macro_hole, module_hole}, module_hole, module_name)
+          {:lift_module, meta, Enum.map(children, &subst_holes(&1, bindings, state))}
+        else
+          _ ->
+            {:lift_module, subst_holes_meta(meta, bindings, state),
+             Enum.map(children, &subst_holes(&1, bindings, state))}
+        end
+
+      {:macro_path_hole, prefix, module_hole} ->
+        with {:ok, module_ast} <- Map.fetch(bindings, module_hole),
+             captured_name when is_binary(captured_name) <- module_name_from_ast(module_ast),
+             module_name <- qualify_module_name(prefix, captured_name) do
+          meta =
+            subst_lift_module_meta(
+              meta,
+              bindings,
+              state,
+              {:macro_path_hole, prefix, module_hole},
+              module_hole,
+              module_name
+            )
+
+          {:lift_module, meta, Enum.map(children, &subst_holes(&1, bindings, state))}
+        else
+          _ ->
+            {:lift_module, subst_holes_meta(meta, bindings, state),
+             Enum.map(children, &subst_holes(&1, bindings, state))}
+        end
+
+      _ ->
+        {:lift_module, subst_holes_meta(meta, bindings, state), Enum.map(children, &subst_holes(&1, bindings, state))}
+    end
   end
 
-  defp subst_holes(other, _bindings), do: other
+  defp subst_holes({t, meta, children}, bindings, state) when is_list(children) do
+    {t, subst_holes_meta(meta, bindings, state), Enum.map(children, &subst_holes(&1, bindings, state))}
+  end
+
+  defp subst_holes(other, _bindings, _state), do: other
+
+  defp parse_raw_hole(tokens, parser_state, context \\ nil) do
+    eof = %Token{type: :eof, value: nil, line: 0, col: 0}
+    context = context || parser_state.expansion_context
+
+    state = %__MODULE__{
+      tokens: tokens ++ [eof],
+      file: parser_state.file,
+      emit_events: false,
+      edition: parser_state.edition,
+      builtin_macros: parser_state.builtin_macros,
+      active_macros: parser_state.active_macros,
+      computed_macros: parser_state.computed_macros,
+      literal_macros: parser_state.literal_macros,
+      expansion_context: context
+    }
+
+    {exprs, state} = parse_program(state)
+
+    case state.errors do
+      [] -> {:raw_splice, exprs}
+      errors -> {:macro_error, [reason: {:raw_hole_parse_error, Enum.reverse(errors)}], []}
+    end
+  end
 
   # Not every child AST lives in a node's `children` list: `match_arm` stashes
   # its `pattern`/`guard` in the node's `meta` keyword list instead. A hole
   # referenced from one of those would otherwise survive expansion unbound.
   # Walk meta's values too, substituting into anything AST-shaped and leaving
   # plain data (lines/cols/names/flags) untouched.
-  defp subst_holes_meta(meta, bindings) when is_list(meta) do
+  defp subst_holes_meta(meta, bindings, state) when is_list(meta) do
     Enum.map(meta, fn
-      {k, v} -> {k, subst_holes_meta_value(v, bindings)}
+      {k, v} -> {k, subst_holes_meta_value(v, bindings, state)}
       other -> other
     end)
   end
 
-  defp subst_holes_meta(meta, _bindings), do: meta
+  defp subst_holes_meta(meta, _bindings, _state), do: meta
 
-  defp subst_holes_meta_value(v, bindings) when is_tuple(v), do: subst_holes(v, bindings)
-  defp subst_holes_meta_value(v, bindings) when is_list(v), do: Enum.map(v, &subst_holes_meta_value(&1, bindings))
-  defp subst_holes_meta_value(v, _bindings), do: v
+  defp subst_lift_module_meta(meta, bindings, state, module_marker, module_hole, module_name) do
+    Enum.map(meta, fn
+      {:module, ^module_marker} ->
+        {:module, module_name}
+
+      {:declarations, declarations} ->
+        {:declarations, subst_lift_module_value(declarations, bindings, state, module_hole, module_name)}
+
+      {:callbacks, callbacks} ->
+        {:callbacks, subst_lift_module_value(callbacks, bindings, state, module_hole, module_name)}
+
+      {key, value} ->
+        {key, subst_holes_meta_value(value, bindings, state)}
+
+      other ->
+        other
+    end)
+  end
+
+  defp subst_lift_module_value({:variable, _meta, name}, _bindings, _state, module_hole, module_name)
+       when name == module_hole do
+    {:literal, [subtype: :symbol], String.to_atom(module_name)}
+  end
+
+  defp subst_lift_module_value({:raw_tokens, raw_meta, tokens}, _bindings, state, _module_hole, _module_name)
+       when is_list(raw_meta) and is_list(tokens) do
+    if Keyword.get(raw_meta, :delayed, false),
+      do: {:delayed_raw_tokens, raw_meta, tokens},
+      else: parse_raw_hole(tokens, state)
+  end
+
+  defp subst_lift_module_value({:delayed_raw_tokens, raw_meta, tokens}, _bindings, _state, _module_hole, _module_name),
+    do: {:delayed_raw_tokens, raw_meta, tokens}
+
+  defp subst_lift_module_value({type, meta, children}, bindings, state, module_hole, module_name)
+       when is_list(children) do
+    {type, subst_lift_module_value_meta(meta, bindings, state, module_hole, module_name),
+     Enum.flat_map(children, fn child ->
+       case subst_lift_module_value(child, bindings, state, module_hole, module_name) do
+         {:raw_splice, nodes} -> nodes
+         expanded -> [expanded]
+       end
+     end)}
+  end
+
+  defp subst_lift_module_value(value, bindings, state, module_hole, module_name) when is_list(value) do
+    Enum.flat_map(value, fn item ->
+      case subst_lift_module_value(item, bindings, state, module_hole, module_name) do
+        {:raw_splice, nodes} -> nodes
+        expanded -> [expanded]
+      end
+    end)
+  end
+
+  defp subst_lift_module_value(value, bindings, state, module_hole, module_name) when is_map(value) do
+    value =
+      Map.new(value, fn {key, item} ->
+        {key, subst_lift_module_value(item, bindings, state, module_hole, module_name)}
+      end)
+
+    case Map.get(value, :body) do
+      body when not is_nil(body) ->
+        context = Map.get(value, :callback_context)
+        Map.put(value, :body, resolve_delayed_raw(body, state, context))
+
+      _ ->
+        value
+    end
+  end
+
+  defp subst_lift_module_value(value, bindings, state, _module_hole, _module_name),
+    do: subst_holes_meta_value(value, bindings, state)
+
+  defp parse_delayed_callback_body(tokens, state, context) do
+    case parse_raw_hole(tokens, state, context) do
+      {:raw_splice, [body]} ->
+        body
+
+      {:raw_splice, []} ->
+        {:macro_error, [reason: :delayed_callback_requires_one_expression], []}
+
+      {:raw_splice, _body} ->
+        {:macro_error, [reason: :delayed_callback_requires_one_expression], []}
+
+      error ->
+        error
+    end
+  end
+
+  # Delayed slots can occur below ordinary expression nodes (for example, a
+  # callback body that guards a phase with `match`). Resolve them only after
+  # the lifted callback has introduced its lexical context, then let the
+  # normal parser/elaborator validate the resulting expression.
+  defp resolve_delayed_raw({:delayed_raw_tokens, _raw_meta, tokens}, state, context)
+       when is_list(tokens),
+       do: parse_delayed_callback_body(tokens, state, context)
+
+  defp resolve_delayed_raw({tag, meta, children}, state, context) when is_list(children) do
+    {tag, meta, Enum.map(children, &resolve_delayed_raw(&1, state, context))}
+  end
+
+  defp resolve_delayed_raw(list, state, context) when is_list(list),
+    do: Enum.map(list, &resolve_delayed_raw(&1, state, context))
+
+  defp resolve_delayed_raw(map, state, context) when is_map(map),
+    do: Map.new(map, fn {key, value} -> {key, resolve_delayed_raw(value, state, context)} end)
+
+  defp resolve_delayed_raw(value, _state, _context), do: value
+
+  defp subst_lift_module_value_meta(meta, bindings, state, module_hole, module_name) when is_list(meta) do
+    Enum.map(meta, fn
+      {key, value} -> {key, subst_lift_module_value(value, bindings, state, module_hole, module_name)}
+      other -> other
+    end)
+  end
+
+  defp subst_lift_module_value_meta(meta, _bindings, _state, _module_hole, _module_name), do: meta
+
+  defp subst_holes_meta_value({:macro_hole, name}, bindings, _state) do
+    case Map.fetch(bindings, name) do
+      {:ok, value} -> module_name_from_ast(value)
+      :error -> {:macro_hole, name}
+    end
+  end
+
+  defp subst_holes_meta_value({:variable, _meta, name} = variable, bindings, state) do
+    case Map.fetch(bindings, name) do
+      {:ok, {:raw_tokens, raw_meta, tokens}} when is_list(raw_meta) and is_list(tokens) ->
+        if Keyword.get(raw_meta, :delayed, false),
+          do: {:delayed_raw_tokens, raw_meta, tokens},
+          else: parse_raw_hole(tokens, state)
+
+      {:ok, _value} ->
+        subst_holes(variable, bindings, state)
+
+      :error ->
+        variable
+    end
+  end
+
+  defp subst_holes_meta_value({:raw_tokens, _raw_meta, tokens}, _bindings, state),
+    do: parse_raw_hole(tokens, state)
+
+  defp subst_holes_meta_value({:delayed_raw_tokens, raw_meta, tokens}, _bindings, _state),
+    do: {:delayed_raw_tokens, raw_meta, tokens}
+
+  defp subst_holes_meta_value(v, bindings, state) when is_tuple(v),
+    do: subst_holes(v, bindings, state)
+
+  defp subst_holes_meta_value(v, bindings, state) when is_list(v) do
+    Enum.flat_map(v, fn item ->
+      case subst_holes_meta_value(item, bindings, state) do
+        {:raw_splice, nodes} -> nodes
+        expanded -> [expanded]
+      end
+    end)
+  end
+
+  defp subst_holes_meta_value(v, _bindings, _state), do: v
+
+  defp put_expansion_context(meta, nil), do: meta
+  defp put_expansion_context(meta, context), do: Keyword.put(meta, :expansion_context, context)
+
+  defp module_name_from_ast({:variable, _meta, name}), do: name
+  defp module_name_from_ast({:literal, _meta, name}) when is_binary(name), do: name
+  defp module_name_from_ast({:literal, _meta, name}) when is_atom(name), do: Atom.to_string(name)
+
+  defp module_name_from_ast({:attribute_access, meta, [base]}) when is_list(meta) do
+    case {module_name_from_ast(base), Keyword.get(meta, :attribute)} do
+      {base, attr} when is_binary(base) and is_binary(attr) -> base <> "." <> attr
+      _ -> nil
+    end
+  end
+
+  defp module_name_from_ast(other), do: other
+
+  defp qualify_module_name(prefix, captured_name) do
+    if String.starts_with?(captured_name, "Cure."),
+      do: captured_name,
+      else: prefix <> "." <> captured_name
+  end
 
   # -- Program (top-level sequence) ------------------------------------------
 
@@ -637,8 +1313,8 @@ defmodule Cure.Compiler.Parser do
 
     if chained? do
       error =
-        {:non_associative, Precedence.operator_symbol(token.type), :chained_with,
-         Precedence.operator_symbol(next.type), next.line, next.col}
+        {:non_associative, Precedence.operator_symbol(token.type), :chained_with, Precedence.operator_symbol(next.type),
+         next.line, next.col}
 
       add_error(state, error)
     else
@@ -687,49 +1363,42 @@ defmodule Cure.Compiler.Parser do
       # Variables / identifiers
       :identifier ->
         case token.value do
+          # Standard-library syntax macros use the same segment matcher as
+          # user macros. Their raw body is parsed again by the ordinary parser.
+          name when is_map_key(state.builtin_macros, name) ->
+            if prelude_macro_head?(state, name) do
+              parse_macro_use(state, name, state.builtin_macros)
+            else
+              {variable(token), advance(state)}
+            end
+
           # A use-site of a locally-defined macro keyword. Checked FIRST so a
           # macro keyword wins, but guarded so non-macro identifiers are
           # untouched. (Reserved soft-keyword names are excluded below.)
           name when is_map_key(state.active_macros, name) and name not in @reserved_macro_keywords ->
-            parse_macro_use(state, name)
+            if macro_use_head?(state, name) do
+              parse_macro_use(state, name)
+            else
+              {variable(token), advance(state)}
+            end
+
+          name when is_map_key(state.computed_macros, name) and name not in @reserved_macro_keywords ->
+            parse_computed_use(state, name)
 
           "assert_type" ->
             parse_assert_type(state, token)
 
+          "check" ->
+            parse_macro_check(state, token)
+
           "rewrite" ->
             parse_rewrite(state, token)
 
-          # Soft keyword: `sup Name ...` at statement-prefix position is
-          # the supervisor container. When `sup` is followed by anything
-          # other than an identifier (`:`, `,`, `}`, `)`, etc.) we treat
-          # it as a plain variable, preserving legacy field/local uses.
-          "sup" ->
-            case peek_at(state, 1) do
-              %Token{type: :identifier} ->
-                parse_supervisor(state)
-
-              _ ->
-                {variable(token), advance(state)}
-            end
-
-          # Soft keyword: `app Name ...` at statement-prefix position is
-          # the application container. Everywhere else `app` remains a
-          # plain identifier, so pre-existing code that happens to use
-          # the name keeps parsing.
-          "app" ->
-            case peek_at(state, 1) do
-              %Token{type: :identifier} ->
-                parse_app_container(state)
-
-              _ ->
-                {variable(token), advance(state)}
-            end
-
           # Contextual keyword: `with e <arms>` is a with-abstraction only in
           # expression-prefix position and only when what follows `with` can
-          # begin a scrutinee. The FSM/actor payload-binder `with` is consumed
-          # inside parse_fsm/parse_actor before it reaches here, so those uses
-          # (and any bare `with` operand) keep their identifier meaning.
+          # begin a scrutinee. The container macro's payload-binder `with` is
+          # consumed before it reaches here, so those uses (and any bare
+          # `with` operand) keep their identifier meaning.
           "with" ->
             if with_scrutinee_ahead?(state) do
               parse_with_abs(state, token)
@@ -744,6 +1413,15 @@ defmodule Cure.Compiler.Parser do
             case peek_at(state, 1) do
               %Token{type: :identifier} ->
                 parse_macro_def(state)
+
+              _ ->
+                {variable(token), advance(state)}
+            end
+
+          "lift" ->
+            case peek_at(state, 1) do
+              %Token{type: :identifier, value: "module"} ->
+                parse_lift_module(state, token)
 
               _ ->
                 {variable(token), advance(state)}
@@ -833,8 +1511,7 @@ defmodule Cure.Compiler.Parser do
       # (comparisons) never reaches this prefix clause.
       :lt ->
         case {peek_at(state, 1), peek_at(state, 2), peek_at(state, 3)} do
-          {%Token{type: :identifier, value: "fresh"}, %Token{type: :identifier, value: name},
-           %Token{type: :gt}} ->
+          {%Token{type: :identifier, value: "fresh"}, %Token{type: :identifier, value: name}, %Token{type: :gt}} ->
             node = {:fresh_name, [line: token.line, col: token.col], name}
             state = state |> advance() |> advance() |> advance() |> advance()
             {node, state}
@@ -867,6 +1544,45 @@ defmodule Cure.Compiler.Parser do
     {type_ast, state} = parse_type_expr(state)
     ast = {:assert_type, [line: token.line, col: token.col], [expr, type_ast]}
     {ast, state}
+  end
+
+  # Tier-3 semantic guard: `check predicate else fail Name(args)`. The guard is
+  # represented explicitly so the dependent elaborator can turn it into a
+  # boolean case whose false branch carries the typed Syntax failure value.
+  defp parse_macro_check(state, token) do
+    state = advance(state)
+    {condition, state} = parse_expr(state, 0)
+
+    state =
+      case peek(state) do
+        %Token{type: :keyword, value: :else} ->
+          advance(state)
+
+        t ->
+          add_error(state, {:expected, :else, :got, t.type, t.line, t.col})
+      end
+
+    {failure_kw, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "fail"} -> {true, advance(state)}
+        _ -> {false, state}
+      end
+
+    {failure_call, state} = parse_expr(state, 0)
+
+    case {failure_kw, failure_call} do
+      {true, {:function_call, failure_meta, args}} ->
+        name = Keyword.get(failure_meta, :name, "?")
+        check_meta = [line: token.line, col: token.col, failure: name]
+        failure_meta = [line: token.line, col: token.col, name: name]
+        {{:macro_check, check_meta, [condition, {:macro_fail, failure_meta, args}]}, state}
+
+      _ ->
+        state =
+          add_error(state, {:expected, :failure_constructor, :got, peek(state).type, peek(state).line, peek(state).col})
+
+        {{:macro_check, [line: token.line, col: token.col], [condition, {:macro_fail, [name: "?"], []}]}, state}
+    end
   end
 
   # -- Propositional equality rewrite ---------------------------------------
@@ -1832,12 +2548,6 @@ defmodule Cure.Compiler.Parser do
       :implementation ->
         parse_implementation(state)
 
-      :fsm ->
-        parse_fsm(state)
-
-      :actor ->
-        parse_actor(state)
-
       :use ->
         parse_use(state)
 
@@ -1846,6 +2556,25 @@ defmodule Cure.Compiler.Parser do
         {variable(token), advance(state)}
     end
   end
+
+  defp macro_head?(state) do
+    case peek_at(state, 1) do
+      %Token{type: type} when type in [:identifier, :atom, :quoted_identifier] -> true
+      _ -> false
+    end
+  end
+
+  defp prelude_macro_head?(state, "lens") do
+    case peek_at(state, 1) do
+      %Token{type: :identifier, value: value} when value in ["first", "second"] -> true
+      _ -> false
+    end
+  end
+
+  defp prelude_macro_head?(state, _name), do: macro_head?(state)
+
+  defp macro_use_head?(state, "lens"), do: prelude_macro_head?(state, "lens")
+  defp macro_use_head?(_state, _name), do: true
 
   # -- Let Binding -----------------------------------------------------------
 
@@ -1859,10 +2588,12 @@ defmodule Cure.Compiler.Parser do
 
     # `: Type`, or a graded `:g [Type]` — the type is optional after a grade because
     # `let_inferred/8` synthesises it from the rhs (Idris `letBinder` does the same).
-    let_name = case pattern do
-      {:variable, _, n} -> n
-      _ -> "let binding"
-    end
+    let_name =
+      case pattern do
+        {:variable, _, n} -> n
+        _ -> "let binding"
+      end
+
     {grade, type_ann, state} = parse_binder_annotation(state, let_name, [:assign])
 
     # A grade attaches to a SIMPLE VARIABLE binder only. A destructuring `let` lowers
@@ -2866,8 +3597,8 @@ defmodule Cure.Compiler.Parser do
     # fn followed by identifier or (soft) keyword -> named function definition
     #
     # Some Cure keywords (spawn, send, receive, after) are ordinary
-    # function names in other languages, and `Std.Fsm` defines e.g.
-    # `fn spawn(fsm_module: Atom) -> Pid`. Let those keywords double as
+    # function names in other languages, and standard-library modules may define
+    # similarly named functions. Let those words double as
     # function-definition names; they still behave as keywords in
     # statement position.
     case peek(state) do
@@ -4430,11 +5161,11 @@ defmodule Cure.Compiler.Parser do
     {ast, state}
   end
 
-  # -- FSM  fsm Name with Payload{...} --------------------------------------
+  # -- macro-produced lifted module ------------------------------------------
 
   # -- macro container (SP1) --------------------------------------------------
   # `macro Name` … indented `syntax`/`literal` rules. Soft-keyword; closes by
-  # dedent (no `end`). Mirrors parse_fsm/parse_fsm_block; emits {:macro_def, …}.
+  # dedent (no `end`) and emits a {:macro_def, ...} AST node.
   defp parse_macro_def(state) do
     token = peek(state)
     state = advance(state)
@@ -4448,6 +5179,138 @@ defmodule Cure.Compiler.Parser do
 
     meta = [name: name, line: token.line, col: token.col]
     {{:macro_def, meta, rules}, state}
+  end
+
+  # Pure surface representation for §14's `lift module` value. The resulting
+  # node contains quoted callback bodies and declarations; the generic module
+  # collector validates and emits it later, with the compiler as the only
+  # code-loading boundary.
+  defp parse_lift_module(state, token) do
+    state = advance(state)
+    state = advance(state)
+    {name, state} = parse_dotted_name(state)
+
+    name =
+      case macro_module_marker(name) do
+        {:single, hole} -> {:macro_hole, hole}
+        {:path, prefix, hole} -> {:macro_path_hole, prefix, hole}
+        :none -> name
+      end
+
+    state = skip_newlines(state)
+
+    {behaviour, callbacks, declarations, state} =
+      case peek(state) do
+        %Token{type: :indent} ->
+          parse_lift_module_block(advance(state), nil, [], [])
+
+        _ ->
+          {nil, [], [], state}
+      end
+
+    meta = [
+      module: name,
+      behaviour: behaviour,
+      callbacks: callbacks,
+      declarations: declarations,
+      source_provenance: %{file: state.file, line: token.line, col: token.col},
+      line: token.line,
+      col: token.col
+    ]
+
+    {{:lift_module, meta, []}, state}
+  end
+
+  # A lower-case single-segment name in a macro template is a substituted
+  # identifier hole (`lift module name`). Ordinary lifted modules require a
+  # validated `Cure.X` name, so this marker cannot collide with a valid source
+  # module name and keeps the hole visible until macro substitution.
+  defp macro_module_marker(name) when is_binary(name) do
+    case String.split(name, ".") do
+      [hole] ->
+        if Regex.match?(~r/^[a-z][A-Za-z0-9_]*$/, hole), do: {:single, hole}, else: :none
+
+      segments when length(segments) > 1 ->
+        hole = List.last(segments)
+
+        if hole =~ ~r/^[a-z][A-Za-z0-9_]*$/,
+          do: {:path, Enum.drop(segments, -1) |> Enum.join("."), hole},
+          else: :none
+
+      _ ->
+        :none
+    end
+  end
+
+  defp macro_module_marker(_name), do: :none
+
+  defp parse_lift_module_block(state, behaviour, callbacks, declarations) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :dedent} ->
+        {behaviour, Enum.reverse(callbacks), Enum.reverse(declarations), advance(state)}
+
+      %Token{type: :eof} ->
+        {behaviour, Enum.reverse(callbacks), Enum.reverse(declarations), state}
+
+      %Token{type: :identifier, value: "behaviour"} ->
+        state = advance(state)
+        behaviour_token = peek(state)
+        behaviour = String.to_atom(to_string(behaviour_token.value))
+        parse_lift_module_block(advance(state), behaviour, callbacks, declarations)
+
+      %Token{type: :identifier, value: "callback"} ->
+        {callback, state} = parse_lift_callback(state, behaviour)
+        parse_lift_module_block(state, behaviour, [callback | callbacks], declarations)
+
+      _ ->
+        {declaration, state} = parse_expr_or_block(state)
+        parse_lift_module_block(state, behaviour, callbacks, [declaration | declarations])
+    end
+  end
+
+  defp parse_lift_callback(state, behaviour) do
+    token = peek(state)
+    state = advance(state)
+    name_token = peek(state)
+    name = String.to_atom(to_string(name_token.value))
+    state = advance(state)
+    state = expect(state, :lparen)
+    {params, state} = parse_typed_params(state)
+    state = expect(state, :rparen)
+
+    {return_type, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "returns"} ->
+          {return_type, state} = parse_type_expr(advance(state))
+          {return_type, state}
+
+        _ ->
+          {nil, state}
+      end
+
+    state = if return_type, do: expect(state, :assign), else: expect(state, :arrow)
+    state = skip_newlines(state)
+    {body, state} = parse_expr_or_block(state)
+
+    callback = %{
+      name: name,
+      arity: length(params),
+      params: params,
+      return_type: return_type,
+      body: body,
+      line: token.line,
+      callback_context: %{
+        behaviour: behaviour,
+        callback: name,
+        arity: length(params),
+        parameter_names: Enum.map(params, fn {:param, _, parameter} -> parameter end),
+        return_annotation: if(return_type, do: :declared, else: :inferred)
+      }
+    }
+
+    {callback, state}
   end
 
   defp parse_macro_block(state) do
@@ -4499,11 +5362,41 @@ defmodule Cure.Compiler.Parser do
         {entry, state} = parse_explain_block(state)
         parse_macro_rules(state, [entry | acc])
 
+      %Token{type: :identifier, value: "fail"} ->
+        {entry, state} = parse_fail_declaration(state)
+        parse_macro_rules(state, [entry | acc])
+
+      %Token{type: :identifier, value: "open"} ->
+        {entry, state} = parse_open_category(state)
+        parse_macro_rules(state, [entry | acc])
+
       other ->
         state = add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col})
         # Recover: skip a token so one bad line does not eat the block.
         parse_macro_rules(advance(state), acc)
     end
+  end
+
+  # `fail Name(args)` declares an author-defined semantic Diagnosis point for
+  # a Tier-3 computed elab. Retain its typed argument declarations in the
+  # macro AST; execution/lowering consumes them in the check/fail slice.
+  defp parse_fail_declaration(state) do
+    token = peek(state)
+    state = advance(state)
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+    state = expect(state, :lparen)
+    {params, state} = parse_typed_params(state)
+    state = expect(state, :rparen)
+
+    {%{kind: :fail, name: name, params: params, line: token.line}, state}
+  end
+
+  defp parse_open_category(state) do
+    token = peek(state)
+    {name, state} = parse_dotted_name(advance(state))
+    {%{kind: :open_category, name: name, line: token.line}, state}
   end
 
   defp parse_macro_rule(state) do
@@ -4515,7 +5408,25 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     {segments, state} = parse_rule_segments(state, [])
+    {category, state} = parse_rule_category(state)
 
+    {contextual, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "contextual"} -> {true, advance(state)}
+        _ -> {false, state}
+      end
+
+    case peek(state) do
+      %Token{type: :identifier, value: "computed"} ->
+        parse_computed_rule(state, kw_token, keyword, segments, category, contextual)
+
+      _ ->
+        parse_becomes_rule(state, kw_token, keyword, segments, category, contextual)
+    end
+  end
+
+  # Tier-2: `becomes <template>` (unchanged behaviour, just extracted).
+  defp parse_becomes_rule(state, kw_token, keyword, segments, category, contextual) do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "becomes"} -> advance(state)
@@ -4531,12 +5442,96 @@ defmodule Cure.Compiler.Parser do
       segments: segments,
       template: template,
       examples: examples,
+      category: category,
+      contextual: contextual,
+      module_rule: keyword == "module",
       progress: nil,
       line: kw_token.line
     }
 
     {rule, state}
   end
+
+  # Tier-3: `computed by <elab-fn>` (base design §3). Captures the elab
+  # reference; running it is a later slice. NOT harvested into active_macros
+  # (harvest filters kind: :syntax), so a computed macro's use-site is inert
+  # until the execution slice lands.
+  defp parse_computed_rule(state, kw_token, keyword, segments, category, contextual) do
+    state = advance(state)
+
+    state =
+      case peek(state) do
+        %Token{type: :identifier, value: "by"} -> advance(state)
+        t -> add_error(state, {:expected, :by, :got, t.type, t.line, t.col})
+      end
+
+    {elab, state} = parse_expr(state, 0)
+    {examples, state} = parse_rule_examples(state)
+
+    rule = %{
+      kind: :computed,
+      keyword: keyword,
+      segments: segments,
+      syntax_type: macro_syntax_type(keyword),
+      syntax_fields: macro_syntax_fields(segments),
+      syntax_repeated_fields: macro_syntax_repeated_fields(segments),
+      elab: elab,
+      examples: examples,
+      category: category,
+      contextual: contextual,
+      module_rule: keyword == "module",
+      progress: nil,
+      line: kw_token.line
+    }
+
+    {rule, state}
+  end
+
+  defp macro_syntax_type(keyword), do: String.capitalize(keyword) <> "Syntax"
+
+  # A rule may optionally declare the category it produces. Categories are
+  # metadata for the macro grammar; expansion remains ordinary AST rewriting.
+  defp parse_rule_category(state) do
+    case peek(state) do
+      %Token{type: :identifier, value: "is"} ->
+        state = advance(state)
+        {category, state} = parse_dotted_name(state)
+        {category, state}
+
+      _ ->
+        {nil, state}
+    end
+  end
+
+  defp macro_syntax_fields(segments) do
+    Enum.flat_map(segments, &segment_hole_names/1)
+    |> Enum.uniq()
+  end
+
+  defp macro_syntax_repeated_fields(segments) do
+    segments
+    |> Enum.flat_map(&segment_repeated_hole_names/1)
+    |> Enum.uniq()
+  end
+
+  defp segment_hole_names({:hole, %{name: name}}), do: [name]
+  defp segment_hole_names({:raw_hole, %{name: name}}), do: [name]
+  defp segment_hole_names({:repeat, segment}), do: segment_hole_names(segment)
+  defp segment_hole_names({:optional, segments}), do: Enum.flat_map(segments, &segment_hole_names/1)
+  defp segment_hole_names(_segment), do: []
+
+  defp segment_repeated_hole_names({:repeat, segment}), do: segment_hole_names(segment)
+
+  defp segment_repeated_hole_names({:optional, segments}),
+    do: Enum.flat_map(segments, &segment_repeated_hole_names/1)
+
+  defp segment_repeated_hole_names(_segment), do: []
+
+  defp segment_inputs({:hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
+  defp segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
+  defp segment_inputs({:repeat, segment}, bindings), do: [segment_inputs(segment, bindings)]
+  defp segment_inputs({:optional, segments}, bindings), do: Enum.flat_map(segments, &segment_inputs(&1, bindings))
+  defp segment_inputs(_segment, _bindings), do: []
 
   # After a syntax rule's template, an OPTIONAL indented block of `example …`
   # lines (self-proving §5). Consumes the nested indent/dedent so the macro-body
@@ -4717,813 +5712,114 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  # Ordered segments between a rule's keyword and `becomes`: literal tokens and
-  # typed holes `<name: Kind>` (window: :lt identifier :colon identifier :gt).
-  defp parse_rule_segments(state, acc) do
+  # Ordered segments between a rule's keyword and `becomes`: literal tokens,
+  # typed holes, line-oriented repetitions, and optional groups.
+  defp parse_rule_segments(state, acc), do: parse_rule_segments(state, acc, :rule)
+
+  defp parse_rule_segments(state, acc, mode) do
     case peek(state) do
-      %Token{type: :identifier, value: "becomes"} ->
+      %Token{type: :rparen} when mode == :group ->
+        {Enum.reverse(acc), state}
+
+      # Stop at either tier verb — `becomes` (Tier-2 template) or `computed`
+      # (Tier-3 elab). `contextual` declares that proof is deferred until the
+      # use site supplies an enclosing type/context. Without stopping at
+      # `computed`, it (and `by`) would be
+      # swallowed as literal segments and the verb branch could never fire.
+      #
+      # Deliberate restriction (parity with the pre-existing `becomes`
+      # behaviour, not new to this change): a rule's OWN segments can no
+      # longer contain a literal token spelled `computed` (e.g.
+      # `syntax do computed becomes X` used to parse `computed` as a plain
+      # `{:lit, "computed"}` segment; it now mis-stops and reports
+      # `{:expected, :by, ...}`). `becomes`/`computed`/`by` are reserved verbs
+      # across the whole rule grammar, not just after a rule's segments —
+      # same trade-off `becomes` already made alone. No known `.cure` source
+      # relies on `computed` as a matched token.
+      %Token{type: :identifier, value: v} when v in ["becomes", "computed", "is", "contextual"] ->
         {Enum.reverse(acc), state}
 
       %Token{type: type} when type in [:newline, :dedent, :eof] ->
         {Enum.reverse(acc), state}
 
       %Token{type: :lt} ->
-        with %Token{type: :identifier, value: name} <- peek_at(state, 1),
-             %Token{type: :colon} <- peek_at(state, 2),
-             %Token{type: :identifier, value: kind} <- peek_at(state, 3),
-             %Token{type: :gt} <- peek_at(state, 4) do
-          hole = {:hole, %{name: name, kind: kind, line: peek(state).line}}
-          state = state |> advance() |> advance() |> advance() |> advance() |> advance()
-          parse_rule_segments(state, [hole | acc])
-        else
+        case {peek_at(state, 1), peek_at(state, 2), peek_at(state, 3), peek_at(state, 4), peek_at(state, 5),
+              peek_at(state, 6), peek_at(state, 7)} do
+          {%Token{type: :identifier, value: name}, %Token{type: :colon}, %Token{type: :identifier, value: "delayed"},
+           %Token{type: :identifier, value: "raw"}, %Token{type: :identifier, value: "until"},
+           %Token{type: :identifier, value: delimiter}, %Token{type: :gt}} ->
+            hole =
+              {:raw_hole, %{name: name, delimiter: delimiter, delayed: true, line: peek(state).line}}
+
+            state = Enum.reduce(1..8, state, fn _, acc_state -> advance(acc_state) end)
+            parse_rule_segments(state, [hole | acc], mode)
+
+          {%Token{type: :identifier, value: name}, %Token{type: :colon}, %Token{type: :identifier, value: "raw"},
+           %Token{type: :identifier, value: "until"}, %Token{type: :identifier, value: delimiter}, %Token{type: :gt}, _} ->
+            hole = {:raw_hole, %{name: name, delimiter: delimiter, line: peek(state).line}}
+            state = Enum.reduce(1..7, state, fn _, acc_state -> advance(acc_state) end)
+            parse_rule_segments(state, [hole | acc], mode)
+
           _ ->
-            t = peek(state)
-            state = add_error(state, {:malformed_hole, t.line, t.col})
-            {Enum.reverse(acc), advance(state)}
+            with %Token{type: :identifier, value: name} <- peek_at(state, 1),
+                 %Token{type: :colon} <- peek_at(state, 2),
+                 %Token{type: :identifier, value: kind} <- peek_at(state, 3),
+                 %Token{type: :gt} <- peek_at(state, 4) do
+              hole = {:hole, %{name: name, kind: kind, line: peek(state).line}}
+              state = state |> advance() |> advance() |> advance() |> advance() |> advance()
+              parse_rule_segments(state, [hole | acc], mode)
+            else
+              _ ->
+                t = peek(state)
+                state = add_error(state, {:malformed_hole, t.line, t.col})
+                {Enum.reverse(acc), advance(state)}
+            end
+        end
+
+      %Token{type: :ellipsis} ->
+        case acc do
+          [segment | rest] ->
+            parse_rule_segments(advance(state), [{:repeat, segment} | rest], mode)
+
+          [] ->
+            parse_rule_segments(advance(state), [{:lit, "..."} | acc], mode)
+        end
+
+      %Token{type: :lparen} ->
+        if optional_group_start?(state) do
+          {group, state} = parse_rule_segments(advance(state), [], :group)
+          state = advance(state)
+          state = advance(state)
+          parse_rule_segments(state, [{:optional, group} | acc], mode)
+        else
+          parse_rule_segments(advance(state), [{:lit, "("} | acc], mode)
         end
 
       %Token{value: v} ->
-        parse_rule_segments(advance(state), [{:lit, to_string(v)} | acc])
+        parse_rule_segments(advance(state), [{:lit, to_string(v)} | acc], mode)
     end
   end
 
-  defp parse_fsm(state) do
-    token = peek(state)
-    state = advance(state)
-
-    name_token = peek(state)
-    name = to_string(name_token.value)
-    state = advance(state)
-
-    # Expect `with`
-    {payload, state} =
-      case peek(state) do
-        %Token{type: :keyword, value: :in} ->
-          # `with` is not a keyword; reuse `in` or handle identifier
-          state = advance(state)
-          {p, state} = parse_expr(state, 0)
-          {p, state}
-
-        %Token{type: :identifier, value: "with"} ->
-          state = advance(state)
-          {p, state} = parse_expr(state, 0)
-          {p, state}
-
-        _ ->
-          {nil, state}
-      end
-
-    state = skip_newlines(state)
-
-    # Parse indented body: transitions, @terminal, @invariant, @verify
-    {fsm_body, meta_additions, state} = parse_fsm_block(state)
-
-    meta =
-      [container_type: :fsm, name: name, line: token.line, col: token.col] ++ meta_additions
-
-    meta = if payload, do: Keyword.put(meta, :payload, payload), else: meta
-    ast = {:container, meta, fsm_body}
-    {ast, state}
-  end
-
-  defp parse_fsm_block(state) do
-    case peek(state) do
-      %Token{type: :indent} ->
-        state = advance(state)
-        {items, meta_acc, state} = parse_fsm_items(state, [], [])
-        state = expect_dedent(state)
-        {items, meta_acc, state}
-
-      _ ->
-        {[], [], state}
-    end
-  end
-
-  @fsm_callback_names ~w(on_transition on_enter on_exit on_failure on_timer on_start on_stop)
-
-  defp parse_fsm_items(state, items_acc, meta_acc) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(items_acc), meta_acc, state}
-
-      %Token{type: :at} ->
-        # @terminal, @invariant, @verify, @timer
-        {new_meta, state} = parse_fsm_annotation(state)
-        state = skip_newlines(state)
-        parse_fsm_items(state, items_acc, meta_acc ++ new_meta)
-
-      %Token{type: :identifier, value: cb_name} when cb_name in @fsm_callback_names ->
-        # Callback block: on_transition, on_enter, on_exit, on_failure, on_timer
-        {new_meta, state} = parse_fsm_callback(state)
-        state = skip_newlines(state)
-        parse_fsm_items(state, items_acc, meta_acc ++ new_meta)
-
-      _ ->
-        # Transition line: Source --event--> Target
-        {transition, state} = parse_fsm_transition(state)
-        state = skip_newlines(state)
-        parse_fsm_items(state, [transition | items_acc], meta_acc)
-    end
-  end
-
-  defp parse_fsm_annotation(state) do
-    state = advance(state)
-    name_token = peek(state)
-    name = to_string(name_token.value)
-    state = advance(state)
-
-    case name do
-      "terminal" ->
-        val_token = peek(state)
-        state = advance(state)
-        {[terminal_states: [to_string(val_token.value)]], state}
-
-      "invariant" ->
-        {expr, state} = parse_expr(state, 0)
-        {[invariants: [expr]], state}
-
-      "verify" ->
-        {expr, state} = parse_expr(state, 0)
-        {[verify: [expr]], state}
-
-      "timer" ->
-        val_token = peek(state)
-        state = advance(state)
-
-        ms =
-          case val_token do
-            %Token{type: :integer, value: v} -> v
-            _ -> String.to_integer(to_string(val_token.value))
+  defp optional_group_start?(%{tokens: tokens, pos: pos}) do
+    result =
+      tokens
+      |> Enum.drop(pos + 1)
+      |> Enum.with_index()
+      |> Enum.find_value(:not_found, fn
+        {%Token{type: :rparen}, index} ->
+          case Enum.at(tokens, pos + index + 2) do
+            %Token{type: :hole, value: ""} -> true
+            _ -> false
           end
 
-        {[timer: ms], state}
-
-      "initial" ->
-        # @initial :state_name  (optional: payload: expr, meta: expr)
-        state_name_token = peek(state)
-
-        initial_name =
-          case state_name_token do
-            %Token{type: :symbol, value: v} -> to_string(v)
-            _ -> to_string(state_name_token.value)
-          end
-
-        state = advance(state)
-        {[initial_state: initial_name], state}
-
-      "notify_transitions" ->
-        {[notify_transitions: true], state}
-
-      "auto_caller" ->
-        {[auto_caller: true], state}
-
-      _ ->
-        {[], state}
-    end
-  end
-
-  # -- FSM callback blocks: on_transition, on_enter, on_exit, on_failure, on_timer
-  #
-  # Clauses are written as:
-  #   (pattern1, pattern2, ...) -> body
-  # or with a guard:
-  #   (pattern1, pattern2, ...) when guard -> body
-  #
-  # The parenthesized patterns are parsed as comma-separated expressions and
-  # assembled into a {:tuple, [], [patterns...]} node to match the callback arity.
-
-  defp parse_fsm_callback(state) do
-    name_token = peek(state)
-    cb_name = String.to_atom(name_token.value)
-    state = advance(state)
-    state = skip_newlines(state)
-
-    {clauses, state} =
-      case peek(state) do
-        %Token{type: :indent} ->
-          state = advance(state)
-          {arms, state} = parse_fsm_callback_clauses(state)
-          state = expect_dedent(state)
-          {arms, state}
+        {%Token{type: type}, _index} when type in [:newline, :dedent, :eof] ->
+          :stop
 
         _ ->
-          {arm, state} = parse_fsm_callback_clause(state)
-          {[arm], state}
-      end
+          false
+      end)
 
-    {[{cb_name, clauses}], state}
-  end
-
-  defp parse_fsm_callback_clauses(state) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {[], state}
-
-      _ ->
-        {arm, state} = parse_fsm_callback_clause(state)
-        state = skip_newlines(state)
-        {rest, state} = parse_fsm_callback_clauses(state)
-        {[arm | rest], state}
-    end
-  end
-
-  # Parse a single FSM callback clause: (pat1, pat2, ...) [when guard] -> body
-  defp parse_fsm_callback_clause(state) do
-    # Expect opening paren
-    state = expect(state, :lparen)
-
-    # Parse comma-separated pattern expressions
-    {patterns, state} = parse_fsm_callback_params(state)
-
-    # Expect closing paren
-    state = expect(state, :rparen)
-    state = skip_newlines(state)
-
-    # Optional guard: when expr
-    {guard, state} =
-      case peek(state) do
-        %Token{type: :keyword, value: :when} ->
-          state = advance(state)
-          {g, state} = parse_expr(state, 0)
-          {g, state}
-
-        _ ->
-          {nil, state}
-      end
-
-    # Expect ->
-    state = expect(state, :arrow)
-    state = skip_newlines(state)
-
-    # Parse body
-    {body, state} = parse_expr_or_block(state)
-
-    # Assemble patterns into a tuple node
-    pattern = {:tuple, [], patterns}
-    meta = if guard, do: [pattern: pattern, guard: guard], else: [pattern: pattern]
-
-    {{:match_arm, meta, [body]}, state}
-  end
-
-  defp parse_fsm_callback_params(state) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: :rparen} ->
-        {[], state}
-
-      _ ->
-        {expr, state} = parse_expr(state, 0)
-        state = skip_newlines(state)
-
-        case peek(state) do
-          %Token{type: :comma} ->
-            state = advance(state)
-            state = skip_newlines(state)
-            {rest, state} = parse_fsm_callback_params(state)
-            {[expr | rest], state}
-
-          _ ->
-            {[expr], state}
-        end
-    end
-  end
-
-  defp parse_fsm_transition(state) do
-    # Source --event[!?] [when guard] [do actions]--> Target
-    # or * --event--> Target (wildcard)
-    from_token = peek(state)
-
-    from =
-      case from_token.type do
-        :star -> "*"
-        _ -> to_string(from_token.value)
-      end
-
-    state = advance(state)
-
-    # Expect transition_open (--)
-    state = expect(state, :transition_open)
-
-    # Event name and optional guard/action are lexed as tokens between -- and -->
-    {event, guard, action, state} = parse_transition_body(state)
-
-    # Detect event kind from suffix: ! = hard, ? = soft, otherwise normal
-    {event_base, event_kind} = classify_event(event)
-
-    # After transition_close (-->), parse target
-    target_token = peek(state)
-    target = to_string(target_token.value)
-    state = advance(state)
-
-    meta = [name: "transition", from: from, event: event_base, to: target, event_kind: event_kind]
-    meta = if guard, do: Keyword.put(meta, :guard, guard), else: meta
-    meta = if action, do: Keyword.put(meta, :action, action), else: meta
-
-    ast = {:function_call, meta, []}
-    {ast, state}
-  end
-
-  defp classify_event(event) when is_binary(event) do
-    cond do
-      String.ends_with?(event, "!") -> {String.trim_trailing(event, "!"), :hard}
-      String.ends_with?(event, "?") -> {String.trim_trailing(event, "?"), :soft}
-      true -> {event, :normal}
-    end
-  end
-
-  defp classify_event(event), do: {to_string(event), :normal}
-
-  defp parse_transition_body(state) do
-    # Read tokens until :transition_close
-    {event_name, state} = read_transition_event(state)
-
-    # Check for guard: when ...
-    {guard, state} =
-      case peek(state) do
-        %Token{type: :keyword, value: :when} ->
-          state = advance(state)
-          {g, state} = parse_until_transition_close_or_do(state)
-          {g, state}
-
-        _ ->
-          {nil, state}
-      end
-
-    # Check for action: do ...
-    {action, state} =
-      case peek(state) do
-        %Token{type: :keyword, value: :do} ->
-          state = advance(state)
-          {a, state} = parse_until_transition_close(state)
-          {a, state}
-
-        _ ->
-          {nil, state}
-      end
-
-    # Consume transition_close
-    state = expect(state, :transition_close)
-    state = skip_newlines(state)
-
-    {event_name, guard, action, state}
-  end
-
-  defp read_transition_event(state) do
-    token = peek(state)
-
-    case token.type do
-      :transition_close -> {"", state}
-      :keyword -> {to_string(token.value), advance(state)}
-      :identifier -> {token.value, advance(state)}
-      _ -> {to_string(token.value), advance(state)}
-    end
-  end
-
-  defp parse_until_transition_close_or_do(state) do
-    # Parse an expression, stopping before --> or `do`
-    {expr, state} = parse_expr(state, 0)
-    {expr, state}
-  end
-
-  defp parse_until_transition_close(state) do
-    {expr, state} = parse_expr(state, 0)
-    {expr, state}
-  end
-
-  # -- Actor container  actor Name [with InitExpr] --------------------------
-  #
-  # An `actor` introduces a typed process. The minimal grammar is:
-  #
-  #     actor Counter
-  #       on_start
-  #         (state) -> notify(:ready); state
-  #       on_message
-  #         (:inc, n) -> n + 1
-  #         (:dec, n) -> n - 1
-  #         (:get, n) -> notify(n); n
-  #       on_stop
-  #         (reason, state) -> ok
-  #
-  # Callback blocks are parsed with the existing `parse_fsm_callback/1`
-  # machinery so patterns, guards, and bodies behave exactly as they do
-  # for FSM lifecycle hooks. `@initial` (or `with Expr` after the
-  # header) selects the initial payload. The Cure.Actor.Compiler
-  # translates this container into a GenServer via string-template
-  # codegen, mirroring the FSM callback-mode path.
-  defp parse_actor(state) do
-    token = peek(state)
-    state = advance(state)
-
-    name_token = peek(state)
-    name = to_string(name_token.value)
-    state = advance(state)
-
-    # Optional initial payload: `with expr`.
-    {init, state} =
-      case peek(state) do
-        %Token{type: :identifier, value: "with"} ->
-          state = advance(state)
-          parse_expr(state, 0)
-
-        _ ->
-          {nil, state}
-      end
-
-    state = skip_newlines(state)
-    {body, meta_additions, state} = parse_actor_block(state)
-
-    meta =
-      [container_type: :actor, name: name, line: token.line, col: token.col] ++ meta_additions
-
-    meta = if init, do: Keyword.put(meta, :init, init), else: meta
-    ast = {:container, meta, body}
-    {ast, state}
-  end
-
-  @actor_callback_names ~w(on_message on_start on_stop)
-
-  defp parse_actor_block(state) do
-    case peek(state) do
-      %Token{type: :indent} ->
-        state = advance(state)
-        {items, meta_acc, state} = parse_actor_items(state, [], [])
-        state = expect_dedent(state)
-        {items, meta_acc, state}
-
-      _ ->
-        {[], [], state}
-    end
-  end
-
-  defp parse_actor_items(state, items_acc, meta_acc) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(items_acc), meta_acc, state}
-
-      %Token{type: :at} ->
-        # `@initial expr` and the same annotations an FSM supports.
-        {new_meta, state} = parse_fsm_annotation(state)
-        state = skip_newlines(state)
-        parse_actor_items(state, items_acc, meta_acc ++ new_meta)
-
-      %Token{type: :identifier, value: cb_name} when cb_name in @actor_callback_names ->
-        {new_meta, state} = parse_fsm_callback(state)
-        state = skip_newlines(state)
-        parse_actor_items(state, items_acc, meta_acc ++ new_meta)
-
-      _ ->
-        # Tolerate unknown top-level lines by consuming a single expression
-        # and discarding it. This keeps the parser forward-compatible
-        # with future actor directives (e.g. `inbox = A | B`, `state: T`).
-        {_expr, state} = parse_expr(state, 0)
-        state = skip_newlines(state)
-        parse_actor_items(state, items_acc, meta_acc)
-    end
-  end
-
-  # -- Supervisor container  sup Name ---------------------------------------
-  #
-  # Declares a supervisor module. The minimal grammar is:
-  #
-  #     sup MyApp.Root
-  #       strategy = :one_for_one
-  #       intensity = 3
-  #       period = 5
-  #       children
-  #         Counter as counter
-  #         Gateway as gateway (restart: :transient)
-  #         sup Workers as workers
-  #
-  # `strategy`, `intensity`, `period` are parsed as `name = value` lines
-  # and hoisted onto the container meta. The `children` block contains
-  # one `child_spec` node per line, each emitted as
-  # `{:child_spec, [module:, id:, restart:, shutdown:, ...], []}`.
-  defp parse_supervisor(state) do
-    token = peek(state)
-    state = advance(state)
-
-    {name, state} = parse_dotted_name(state)
-    state = skip_newlines(state)
-    {body, meta_additions, state} = parse_sup_block(state)
-
-    meta =
-      [container_type: :supervisor, name: name, line: token.line, col: token.col] ++
-        meta_additions
-
-    ast = {:container, meta, body}
-    {ast, state}
-  end
-
-  defp parse_sup_block(state) do
-    case peek(state) do
-      %Token{type: :indent} ->
-        state = advance(state)
-        {items, meta_acc, state} = parse_sup_items(state, [], [])
-        state = expect_dedent(state)
-        {items, meta_acc, state}
-
-      _ ->
-        {[], [], state}
-    end
-  end
-
-  @sup_settings ~w(strategy intensity period)
-
-  defp parse_sup_items(state, items_acc, meta_acc) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(items_acc), meta_acc, state}
-
-      %Token{type: :identifier, value: setting} when setting in @sup_settings ->
-        {new_meta, state} = parse_sup_setting(state, setting)
-        state = skip_newlines(state)
-        parse_sup_items(state, items_acc, meta_acc ++ new_meta)
-
-      %Token{type: :identifier, value: "children"} ->
-        state = advance(state)
-        state = skip_newlines(state)
-        {specs, state} = parse_sup_children_block(state)
-        state = skip_newlines(state)
-        parse_sup_items(state, Enum.reverse(specs) ++ items_acc, meta_acc)
-
-      _ ->
-        # Unknown leading token inside a supervisor body -- skip one
-        # expression and keep going so we don't deadlock.
-        {_, state} = parse_expr(state, 0)
-        state = skip_newlines(state)
-        parse_sup_items(state, items_acc, meta_acc)
-    end
-  end
-
-  defp parse_sup_setting(state, name) do
-    # Consume the identifier and the `=`.
-    state = advance(state)
-    state = expect(state, :assign)
-    state = skip_newlines(state)
-    {value, state} = parse_expr(state, 0)
-    {[{String.to_atom(name), value}], state}
-  end
-
-  defp parse_sup_children_block(state) do
-    case peek(state) do
-      %Token{type: :indent} ->
-        state = advance(state)
-        {specs, state} = parse_sup_child_specs(state, [])
-        state = expect_dedent(state)
-        {specs, state}
-
-      _ ->
-        {[], state}
-    end
-  end
-
-  defp parse_sup_child_specs(state, acc) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(acc), state}
-
-      _ ->
-        {spec, state} = parse_sup_child_spec(state)
-        state = skip_newlines(state)
-        parse_sup_child_specs(state, [spec | acc])
-    end
-  end
-
-  # A child spec line takes one of the forms:
-  #
-  #     Counter as counter
-  #     Counter as counter (restart: :transient, shutdown: 5000)
-  #     sup Workers as workers
-  #
-  # Emits `{:child_spec, meta, []}` where `meta` carries the child's
-  # `:module`, `:id`, and any options parsed from the trailing
-  # parenthesised keyword list.
-  defp parse_sup_child_spec(state) do
-    token = peek(state)
-
-    {module_kind, state} =
-      case token do
-        %Token{type: :identifier, value: "sup"} ->
-          {:supervisor, advance(state)}
-
-        _ ->
-          {:worker, state}
-      end
-
-    {module_path, state} = parse_dotted_name(state)
-
-    # Expect `as child_id`.
-    state = expect_keyword(state, :as)
-    id_token = peek(state)
-    id_name = to_string(id_token.value)
-    state = advance(state)
-
-    # Optional options: `(restart: :transient, shutdown: 5000)`.
-    {opts, state} =
-      case peek(state) do
-        %Token{type: :lparen} ->
-          state = advance(state)
-          {pairs, state} = parse_sup_child_opts(state)
-          state = expect(state, :rparen)
-          {pairs, state}
-
-        _ ->
-          {[], state}
-      end
-
-    meta =
-      [
-        module: module_path,
-        id: id_name,
-        kind: module_kind,
-        line: token.line,
-        col: token.col
-      ] ++ opts
-
-    {{:child_spec, meta, []}, state}
-  end
-
-  defp parse_sup_child_opts(state) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: :rparen} ->
-        {[], state}
-
-      _ ->
-        {pair, state} = parse_sup_child_opt(state)
-        state = skip_newlines(state)
-
-        case peek(state) do
-          %Token{type: :comma} ->
-            state = advance(state)
-            state = skip_newlines(state)
-            {rest, state} = parse_sup_child_opts(state)
-            {[pair | rest], state}
-
-          _ ->
-            {[pair], state}
-        end
-    end
-  end
-
-  defp parse_sup_child_opt(state) do
-    name_token = peek(state)
-    name = to_string(name_token.value)
-    state = advance(state)
-    state = expect(state, :colon)
-    state = skip_newlines(state)
-    {value, state} = parse_expr(state, 0)
-    {{String.to_atom(name), value}, state}
-  end
-
-  # -- Application container  app Name.Path ---------------------------------
-  #
-  # Declares an OTP application. The minimal grammar is:
-  #
-  #     app MyApp
-  #       vsn          = "0.1.0"
-  #       description  = "My humble application"
-  #       root         = sup MyApp.Root
-  #       applications = [:logger, :crypto]
-  #       env          = %{port: 4000, name: "dev"}
-  #       on_start
-  #         (type, args) -> do_start(type, args)
-  #       on_stop
-  #         (state) -> cleanup(state)
-  #       on_phase :init
-  #         (args, type, start_args) -> init_phase(args)
-  #       on_phase :warm_cache
-  #         (_args, _type, _start_args) -> Std.Cache.warm()
-  #
-  # `vsn`, `description`, `root`, `applications`, `included_applications`,
-  # `env`, and `registered` are parsed as `name = value` lines and hoisted
-  # onto the container meta. `on_start`, `on_stop`, and `on_phase :name`
-  # reuse the `parse_fsm_callback/1` machinery so patterns, guards, and
-  # bodies behave exactly as they do for FSM/actor lifecycle hooks.
-  #
-  # Compilation is handled by `Cure.App.Compiler` and produces an Elixir
-  # module `:"Cure.App.<Name>"` that `use Application` with `start/2`,
-  # `stop/1`, and `start_phase/3` callbacks.
-  defp parse_app_container(state) do
-    token = peek(state)
-    state = advance(state)
-
-    {name, state} = parse_dotted_name(state)
-    state = skip_newlines(state)
-    {body, meta_additions, state} = parse_app_block(state)
-
-    meta =
-      [container_type: :app, name: name, line: token.line, col: token.col] ++
-        meta_additions
-
-    ast = {:container, meta, body}
-    {ast, state}
-  end
-
-  defp parse_app_block(state) do
-    case peek(state) do
-      %Token{type: :indent} ->
-        state = advance(state)
-        {items, meta_acc, state} = parse_app_items(state, [], [])
-        state = expect_dedent(state)
-        {items, meta_acc, state}
-
-      _ ->
-        {[], [], state}
-    end
-  end
-
-  @app_settings ~w(vsn description root applications included_applications env registered)
-  @app_callback_names ~w(on_start on_stop)
-
-  defp parse_app_items(state, items_acc, meta_acc) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(items_acc), meta_acc, state}
-
-      %Token{type: :identifier, value: setting} when setting in @app_settings ->
-        {new_meta, state} = parse_app_setting(state, setting)
-        state = skip_newlines(state)
-        parse_app_items(state, items_acc, meta_acc ++ new_meta)
-
-      %Token{type: :identifier, value: cb_name} when cb_name in @app_callback_names ->
-        {new_meta, state} = parse_fsm_callback(state)
-        state = skip_newlines(state)
-        parse_app_items(state, items_acc, meta_acc ++ new_meta)
-
-      %Token{type: :identifier, value: "on_phase"} ->
-        {new_meta, state} = parse_app_on_phase(state)
-        state = skip_newlines(state)
-        parse_app_items(state, items_acc, meta_acc ++ new_meta)
-
-      _ ->
-        # Unknown leading token inside an app body -- skip one expression
-        # and keep going so we don't deadlock.
-        {_, state} = parse_expr(state, 0)
-        state = skip_newlines(state)
-        parse_app_items(state, items_acc, meta_acc)
-    end
-  end
-
-  defp parse_app_setting(state, name) do
-    # Consume the identifier and the `=`.
-    state = advance(state)
-    state = expect(state, :assign)
-    state = skip_newlines(state)
-    {value, state} = parse_expr(state, 0)
-    {[{String.to_atom(name), value}], state}
-  end
-
-  # `on_phase :phase_name` introduces a single callback whose arity is
-  # three: `(args, start_type, start_args)`. The phase atom is hoisted
-  # onto the container meta under `:on_phase => [{phase_atom, [clauses]}]`
-  # so verifier and compiler can dispatch by phase.
-  defp parse_app_on_phase(state) do
-    state = advance(state)
-    state = skip_newlines(state)
-
-    {phase_atom, state} =
-      case peek(state) do
-        %Token{type: :atom, value: v} ->
-          {String.to_atom(to_string(v)), advance(state)}
-
-        %Token{type: :identifier, value: v} ->
-          {String.to_atom(to_string(v)), advance(state)}
-
-        other ->
-          {String.to_atom(to_string(other.value)), advance(state)}
-      end
-
-    state = skip_newlines(state)
-
-    {clauses, state} =
-      case peek(state) do
-        %Token{type: :indent} ->
-          state = advance(state)
-          {arms, state} = parse_fsm_callback_clauses(state)
-          state = expect_dedent(state)
-          {arms, state}
-
-        _ ->
-          {arm, state} = parse_fsm_callback_clause(state)
-          {[arm], state}
-      end
-
-    {[{:on_phase, [{phase_atom, clauses}]}], state}
+    result == true
   end
 
   # -- Enhanced Type Expression Parser ----------------------------------------
@@ -6279,7 +6575,7 @@ defmodule Cure.Compiler.Parser do
 
   defp extract_literal_value({:literal, _, val}), do: val
 
-  # `@extern(Elixir.Cure.FSM.Builtins, :f, 1)` parses the first argument
+  # `@extern(Some.Foreign.Module, :f, 1)` parses the first argument
   # as a chain of attribute accesses rooted in a PascalCase variable.
   # Collapse that chain to an atom so codegen receives a literal atom.
   defp extract_literal_value({:attribute_access, _, _} = ast) do
@@ -6568,7 +6864,7 @@ defmodule Cure.Compiler.Parser do
         false
 
       %Token{type: :keyword, value: value}
-      when value in [:fn, :local, :type, :proto, :impl, :mod, :use, :actor, :fsm, :app, :supervisor] ->
+      when value in [:fn, :local, :type, :proto, :impl, :mod, :use] ->
         false
 
       _ ->

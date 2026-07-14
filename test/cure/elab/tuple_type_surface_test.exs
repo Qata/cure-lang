@@ -12,6 +12,7 @@ defmodule Cure.Elab.TupleTypeSurfaceTest do
       fn fst(a: Int, b: Int) -> Int = mk(a, b).1
       fn snd(a: Int, b: Int) -> Int = mk(a, b).2
     """
+
     assert {:ok, env} = Program.elaborate(src)
     {:ok, m} = Emit.compile_and_load(env, module: :"Cure.M", functions: [:mk, :fst, :snd])
     assert apply(m, :mk, [7, 9]) == {7, 9}
@@ -28,6 +29,7 @@ defmodule Cure.Elab.TupleTypeSurfaceTest do
         prepend : a -> Vector(a, n) -> Vector(a, Suc(n))
       fn one(v: Vector(Int, Suc(Zero))) -> Tuple(m: Nat, Vector(Int, m)) = %[Suc(Zero()), v]
     """
+
     assert {:ok, _env} = Program.elaborate(src)
   end
 end

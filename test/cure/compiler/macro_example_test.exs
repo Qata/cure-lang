@@ -29,9 +29,7 @@ defmodule Cure.Compiler.MacroExampleTest do
 
   test "a type-only example pin (`expands : Type`) is captured as {:type, _}" do
     node =
-      parse!(
-        "macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n    example every 500 expands : Int\n"
-      )
+      parse!("macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n    example every 500 expands : Int\n")
 
     rule = syntax_rule(node)
     assert [%{expected: {:type, _}}] = rule.examples
@@ -46,6 +44,7 @@ defmodule Cure.Compiler.MacroExampleTest do
 
   defp macro_def!(src) do
     node = parse!(src)
+
     find = fn find, n ->
       case n do
         {:macro_def, _, _} = m -> m
@@ -53,6 +52,7 @@ defmodule Cure.Compiler.MacroExampleTest do
         _ -> nil
       end
     end
+
     find.(find, node)
   end
 
@@ -77,10 +77,13 @@ defmodule Cure.Compiler.MacroExampleTest do
 
   test "only unpinned syntax rules are reported (mixed macro)" do
     md =
-      macro_def!(
-        "macro M\n  syntax a becomes X\n    example a expands X\n  syntax b becomes Y\n"
-      )
+      macro_def!("macro M\n  syntax a becomes X\n    example a expands X\n  syntax b becomes Y\n")
 
     assert {:error, {:rule_unpinned, ["b"]}} = MacroValidate.check_rules_pinned(md)
+  end
+
+  test "an unpinned computed rule is also rule_unpinned" do
+    md = macro_def!("macro Mk\n  syntax mk computed by build_it\n")
+    assert {:error, {:rule_unpinned, ["mk"]}} = MacroValidate.check_rules_pinned(md)
   end
 end

@@ -1,4 +1,6 @@
 defmodule Cure.Audit.ShimConformance do
+  @compile {:no_warn_undefined, :cure_std_regex}
+
   @moduledoc """
   Phase 1 of the axiom-surface program: mechanically check the `CURE RUNTIME`
   axioms against the Elixir that implements them.
@@ -241,8 +243,11 @@ defmodule Cure.Audit.ShimConformance do
       a({:cure_std_time, :format_iso8601, 1}, seq([instant()]), :binary),
       a({:cure_std_time, :add, 2}, seq([instant(), duration()]), inst),
       a({:cure_std_time, :diff, 2}, seq([instant(), instant()]), dur),
-      a({:cure_std_time, :zone, 2}, seq([instant(), {:member_of, ["UTC", "+01:00", "Bad/Zone"]}]),
-        {:result, :binary, :parse_error}),
+      a(
+        {:cure_std_time, :zone, 2},
+        seq([instant(), {:member_of, ["UTC", "+01:00", "Bad/Zone"]}]),
+        {:result, :binary, :parse_error}
+      ),
       a({:cure_std_time, :to_unix, 1}, seq([instant()]), :int),
       a({:cure_std_time, :of_unix, 1}, seq([int()]), inst)
     ]
@@ -260,8 +265,7 @@ defmodule Cure.Audit.ShimConformance do
       # Rewriting in Cure cannot fix it — the reference comes from the NIF. It
       # needs either the `Effect` former or a `Regex` whose equality is not
       # structural (an opaque family the kernel refuses to eliminate).
-      a({:cure_std_regex, :compile, 1}, seq([{:member_of, ["a+", "["]}]), {:result, rx, :any},
-        :effectful),
+      a({:cure_std_regex, :compile, 1}, seq([{:member_of, ["a+", "["]}]), {:result, rx, :any}, :effectful),
       a({:cure_std_regex, :compile_bang, 1}, seq([pattern()]), rx, :effectful),
       a({:cure_std_regex, :is_match, 2}, seq([regex(), text()]), :bool),
       a({:cure_std_regex, :run, 2}, seq([regex(), text()]), {:option, matched}),
@@ -274,9 +278,11 @@ defmodule Cure.Audit.ShimConformance do
   defp json do
     [
       a({:cure_std_json, :encode, 1}, seq([json_value()]), :binary),
-      a({:cure_std_json, :decode, 1},
+      a(
+        {:cure_std_json, :decode, 1},
         seq([{:member_of, ["[1,2]", "3", "null", "true", "\"s\"", "{\"k\":1}", "{oops"]}]),
-        {:result, :json, :binary}),
+        {:result, :json, :binary}
+      ),
       a({:cure_std_json, :num_of_int, 1}, seq([int()]), :json)
     ]
   end
@@ -290,8 +296,11 @@ defmodule Cure.Audit.ShimConformance do
 
   defp test_axioms do
     [
-      a({:cure_std_test, :forall_shrunk, 3}, seq([gen_fn(), prop_fn(), {:member_of, [0, 3, 5]}]),
-        {:result, :atom, :int})
+      a(
+        {:cure_std_test, :forall_shrunk, 3},
+        seq([gen_fn(), prop_fn(), {:member_of, [0, 3, 5]}]),
+        {:result, :atom, :int}
+      )
     ]
   end
 

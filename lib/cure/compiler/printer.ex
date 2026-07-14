@@ -19,12 +19,11 @@ defmodule Cure.Compiler.Printer do
   # name must be re-emitted backtick-quoted (`` `not` ``) to round-trip, since
   # the lexer only yields them as an `:identifier` inside backticks.
   @reserved_words ~w(
-    mod fn let type typealias indexed indices rec proto impl fsm local use as
+    mod fn let type typealias indexed indices rec proto impl local use as
     interface implementation deriving
     match pickup if elif else then for do end
     in try catch finally throw return yield
     spawn send receive after
-    actor
     when where and or not
     true false nil
     extern proof
@@ -156,8 +155,7 @@ defmodule Cure.Compiler.Printer do
 
       [first | rest] ->
         {pairs, _prev} =
-          Enum.reduce(rest, {[{render(first, child_depth, indent), false}], first}, fn e,
-                                                                                       {acc, prev} ->
+          Enum.reduce(rest, {[{render(first, child_depth, indent), false}], first}, fn e, {acc, prev} ->
             blank? = trailer_blank?(prev) or leading_blank?(e)
             {[{render(e, child_depth, indent), blank?} | acc], e}
           end)
@@ -326,6 +324,9 @@ defmodule Cure.Compiler.Printer do
     Enum.map_join(children, sep <> " ", &to_string(&1, depth, indent))
   end
 
+  defp symbol_to_string(nil), do: ":nil"
+  defp symbol_to_string(value), do: ":#{value}"
+
   # -- Literals --------------------------------------------------------------
 
   defp to_string({:literal, meta, value}, _depth, _indent) do
@@ -335,7 +336,7 @@ defmodule Cure.Compiler.Printer do
       :string -> ~s("#{escape_string(value)}")
       :boolean -> Atom.to_string(value)
       :null -> "nil"
-      :symbol -> ":#{value}"
+      :symbol -> symbol_to_string(value)
       :regex -> regex_to_string(value)
       :char -> char_to_string(value)
       :bytes -> bytes_to_string(meta, value)
@@ -387,7 +388,7 @@ defmodule Cure.Compiler.Printer do
     case op do
       :not -> "not #{inner}"
       # A leading `-` on the operand would abut into `--`, which the lexer reads
-      # as the start of an FSM transition (`-->`/`--|`) and fails on — so `-(-x)`
+      # as the start of a transition vocabulary (`-->`/`--|`) and fails on — so `-(-x)`
       # must reprint as `- -x`, not `--x`. Separate only when the operand's own
       # rendering starts with `-` (a nested unary minus / negative literal).
       :- -> if String.starts_with?(inner, "-"), do: "- #{inner}", else: "-#{inner}"
@@ -577,10 +578,6 @@ defmodule Cure.Compiler.Printer do
             "#{name}(#{call_args_to_string(args, depth, indent)})"
         end
 
-      # FSM transition
-      Keyword.get(meta, :from) != nil ->
-        fsm_transition_to_string(meta, depth, indent)
-
       # Pipe call. `|>` binds loosest (level 10, left-assoc), so a left operand
       # whose own precedence is lower — a bare `<-|` send, a conditional — must
       # be parenthesised or the reprint reparses differently.
@@ -722,7 +719,24 @@ defmodule Cure.Compiler.Printer do
     fn_def_to_string(meta, body, depth, indent)
   end
 
-  # -- Container (module, record, enum, protocol, trait, fsm) ----------------
+  defp to_string({:lift_module, meta, []}, depth, indent) do
+    name = lift_module_name_to_string(Keyword.get(meta, :module))
+    pad = String.duplicate(indent, depth + 1)
+
+    lines =
+      [
+        if(Keyword.get(meta, :behaviour), do: "behaviour #{Keyword.get(meta, :behaviour)}"),
+        Enum.map(Keyword.get(meta, :callbacks, []), &lift_callback_to_string(&1, depth + 1, indent)),
+        Enum.map(Keyword.get(meta, :declarations, []), &render(&1, depth + 1, indent))
+      ]
+      |> List.flatten()
+      |> Enum.reject(&is_nil/1)
+
+    body = Enum.join(lines, "\n#{pad}")
+    "lift module #{name}\n#{pad}#{body}"
+  end
+
+  # -- Container (module, record, enum, protocol, and trait) ----------------
 
   defp to_string({:container, meta, body}, depth, indent) do
     container_to_string(meta, body, depth, indent)
@@ -1134,32 +1148,6 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
-  # -- Supervisor child spec -------------------------------------------------
-  #
-  # `[sup ]Module as id [(restart: :x, shutdown: N)]`. All data lives in meta;
-  # `meta[:kind]` is `:supervisor` (prefix `sup `) or `:worker` (no prefix).
-
-  defp to_string({:child_spec, meta, _children}, depth, indent) do
-    module = Keyword.get(meta, :module)
-    id = Keyword.get(meta, :id)
-    kind = Keyword.get(meta, :kind)
-    prefix = if kind == :supervisor, do: "sup ", else: ""
-
-    opts = Keyword.drop(meta, [:module, :id, :kind, :line, :col])
-
-    opts_str =
-      if opts == [] do
-        ""
-      else
-        inner =
-          Enum.map_join(opts, ", ", fn {k, v} -> "#{k}: #{render(v, depth, indent)}" end)
-
-        " (#{inner})"
-      end
-
-    "#{prefix}#{module} as #{id}#{opts_str}"
-  end
-
   # -- Binary generator (`<<pat <- source>>`) --------------------------------
   #
   # A comprehension qualifier that iterates a bitstring. The pattern is a
@@ -1184,13 +1172,108 @@ defmodule Cure.Compiler.Printer do
     "rewrite " <> render(proof, depth, indent) <> " in " <> render(body, depth, indent)
   end
 
-  # -- Fallback --------------------------------------------------------------
+  # -- Macro definitions -----------------------------------------------------
+
+  defp to_string({:macro_def, meta, rules}, depth, indent) do
+    name = Keyword.get(meta, :name)
+    pad = String.duplicate(indent, depth + 1)
+
+    body =
+      rules
+      |> Enum.flat_map(&macro_rule_lines(&1, depth + 1, indent))
+      |> Enum.join("\n#{pad}")
+      |> String.split("\n")
+      |> Enum.reject(&(String.trim(&1) == ""))
+      |> Enum.join("\n")
+
+    "macro #{name}\n#{pad}#{body}"
+  end
 
   defp to_string(other, _depth, _indent) when is_binary(other), do: other
 
   defp to_string(other, _depth, _indent) do
     raise Cure.Compiler.Printer.UnprintableNodeError, node: other
   end
+
+  defp lift_module_name_to_string({:macro_hole, name}), do: name
+  defp lift_module_name_to_string({:macro_path_hole, prefix, name}), do: prefix <> "." <> name
+  defp lift_module_name_to_string(name), do: to_string(name)
+
+  defp lift_callback_to_string(%{name: name, params: params, body: body}, depth, indent) do
+    header = "callback #{name}(#{typed_params_to_string(params, depth, indent)}) ->"
+
+    case body do
+      {:block, _meta, _exprs} ->
+        body_depth = depth + 1
+        pad = String.duplicate(indent, body_depth)
+        header <> "\n" <> pad <> render(body, body_depth, indent)
+
+      _ ->
+        header <> " " <> render(body, depth, indent)
+    end
+  end
+
+  defp macro_rule_lines(%{kind: kind, keyword: keyword, segments: segments, template: template} = rule, depth, indent)
+       when kind in [:syntax, :computed] do
+    verb = if kind == :computed, do: "computed by", else: "becomes"
+    context = if rule[:contextual], do: " contextual", else: ""
+
+    head =
+      "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} #{verb} #{render(template, depth, indent)}"
+
+    examples =
+      rule
+      |> Map.get(:examples, [])
+      |> Enum.map(fn example ->
+        use_site = macro_use_site_to_string(example.use_site)
+        expected = render(elem(example.expected, 1), depth + 1, indent)
+        "#{String.duplicate(indent, max(depth - 1, 0))}example #{use_site} expands #{expected}"
+      end)
+
+    [head | examples]
+  end
+
+  defp macro_rule_lines(%{kind: :literal, segments: segments, template: template}, depth, indent),
+    do: ["literal #{macro_segments_to_string(segments)} becomes #{render(template, depth, indent)}"]
+
+  defp macro_rule_lines(%{kind: :explain, clauses: clauses}, depth, indent) do
+    pad = String.duplicate(indent, depth + 1)
+
+    lines =
+      Enum.map(clauses, fn %{point: point, body: body} ->
+        "#{macro_point_to_string(point)} => #{render(body, depth + 1, indent)}"
+      end)
+
+    ["explain\n#{pad}" <> Enum.join(lines, "\n#{pad}")]
+  end
+
+  defp macro_rule_lines(_rule, _depth, _indent), do: []
+
+  defp macro_segments_to_string(segments), do: Enum.map_join(segments, " ", &macro_segment_to_string/1)
+  defp macro_segment_to_string({:lit, word}), do: word
+  defp macro_segment_to_string({:hole, %{name: name, kind: kind}}), do: "<#{name}: #{kind}>"
+
+  defp macro_segment_to_string({:raw_hole, %{name: name, delimiter: delimiter}}),
+    do: "<#{name}: raw until #{delimiter}>"
+
+  defp macro_segment_to_string({:repeat, segment}), do: macro_segment_to_string(segment) <> "..."
+  defp macro_segment_to_string({:optional, segments}), do: "(#{macro_segments_to_string(segments)})?"
+  defp macro_segment_to_string(other), do: to_string(other)
+
+  defp macro_token_to_string(%Cure.Compiler.Token{value: value}) when is_binary(value), do: value
+  defp macro_token_to_string(%Cure.Compiler.Token{value: value}) when is_atom(value), do: Atom.to_string(value)
+  defp macro_token_to_string(%Cure.Compiler.Token{value: value}), do: to_string(value)
+  defp macro_token_to_string(other), do: to_string(other)
+
+  defp macro_use_site_to_string(tokens) do
+    tokens
+    |> Enum.map(&macro_token_to_string/1)
+    |> Enum.join(" ")
+    |> String.replace(" . ", ".")
+  end
+
+  defp macro_point_to_string({:category, category}), do: category
+  defp macro_point_to_string({:keyword, keyword}), do: "keyword \"#{keyword}\""
 
   # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -1376,7 +1459,9 @@ defmodule Cure.Compiler.Printer do
       |> Enum.map_join("\n", fn {arg, i} ->
         meta = trivia_meta(arg)
         comma = if i == last, do: "", else: ","
-        value_line = append_trailing(inner_pad <> to_string(arg, depth + 1, indent) <> comma, Keyword.get(meta, :trailing))
+
+        value_line =
+          append_trailing(inner_pad <> to_string(arg, depth + 1, indent) <> comma, Keyword.get(meta, :trailing))
 
         (leading_comment_lines(Keyword.get(meta, :leading), inner_pad) ++ [value_line])
         |> Enum.join("\n")
@@ -1561,8 +1646,8 @@ defmodule Cure.Compiler.Printer do
   defp maybe_prepend_decorator(result, _, _, _, _), do: result
 
   # An `@extern` module/function reference. A dotted or PascalCase module atom
-  # (`:"Elixir.Cure.Actor.Builtins"`) came from the bare dotted surface form
-  # `Elixir.Cure.Actor.Builtins` and must round-trip WITHOUT a leading colon
+  # (`:"Some.Foreign.Module"`) came from the bare dotted surface form
+  # `Some.Foreign.Module` and must round-trip WITHOUT a leading colon
   # (rendering `:Elixir.Cure...` would reparse as attribute-access, not an
   # atom). A plain lowercase atom (`:erlang`) keeps its symbol colon.
   defp extern_ref_to_string(ref) when is_atom(ref) do
@@ -1629,10 +1714,6 @@ defmodule Cure.Compiler.Printer do
         :enum -> enum_to_string(meta, body, depth, indent)
         :protocol -> protocol_to_string(meta, body, depth, indent)
         :trait -> impl_to_string(meta, body, depth, indent)
-        :fsm -> fsm_to_string(meta, body, depth, indent)
-        :supervisor -> supervisor_to_string(meta, body, depth, indent)
-        :actor -> actor_to_string(meta, body, depth, indent)
-        :app -> app_to_string(meta, body, depth, indent)
         :proof -> proof_to_string(meta, body, depth, indent)
         :primitive -> primitive_to_string(meta, body, depth, indent)
         :opaque -> opaque_to_string(meta, body, depth, indent)
@@ -1665,103 +1746,6 @@ defmodule Cure.Compiler.Printer do
     "opaque type #{Keyword.get(meta, :name)}#{tp_str}"
   end
 
-  # -- Supervisor container (`sup Name`) -------------------------------------
-  #
-  # Settings (`strategy`/`intensity`/`period`) live in meta; the body is a flat
-  # list of `child_spec` nodes that must be re-wrapped in a `children` block.
-  defp supervisor_to_string(meta, body, depth, indent) do
-    name = Keyword.get(meta, :name)
-    pad = String.duplicate(indent, depth + 1)
-    child_pad = String.duplicate(indent, depth + 2)
-
-    settings =
-      for key <- [:strategy, :intensity, :period],
-          (val = Keyword.get(meta, key)) != nil do
-        "#{key} = #{render(val, depth + 1, indent)}"
-      end
-
-    children_block =
-      case body do
-        [] ->
-          []
-
-        specs ->
-          specs_str =
-            specs
-            |> Enum.map(&render(&1, depth + 2, indent))
-            |> Enum.join("\n#{child_pad}")
-
-          ["children\n#{child_pad}#{specs_str}"]
-      end
-
-    lines = settings ++ children_block
-
-    case lines do
-      [] -> "sup #{name}"
-      _ -> "sup #{name}\n#{pad}" <> Enum.join(lines, "\n#{pad}")
-    end
-  end
-
-  # -- Actor container (`actor Name [with Init]`) ----------------------------
-  #
-  # The optional initial payload is in `meta[:init]`; `on_message`/`on_start`/
-  # `on_stop` callbacks are keyword lists of match-arm clauses in meta.
-  defp actor_to_string(meta, _body, depth, indent) do
-    name = Keyword.get(meta, :name)
-    init = Keyword.get(meta, :init)
-    pad = String.duplicate(indent, depth + 1)
-
-    init_str = if init, do: " with #{render(init, depth, indent)}", else: ""
-
-    callbacks =
-      callback_blocks_to_string(meta, [:on_start, :on_message, :on_stop], depth, indent)
-
-    "actor #{name}#{init_str}\n#{pad}#{callbacks}"
-  end
-
-  # -- Application container (`app Name`) ------------------------------------
-  #
-  # Settings and `on_start`/`on_stop`/`on_phase` callbacks all live in meta.
-  defp app_to_string(meta, _body, depth, indent) do
-    name = Keyword.get(meta, :name)
-    pad = String.duplicate(indent, depth + 1)
-
-    settings =
-      for key <- [:vsn, :description, :root, :applications, :included_applications, :env, :registered],
-          (val = Keyword.get(meta, key)) != nil do
-        "#{key} = #{render(val, depth + 1, indent)}"
-      end
-
-    callback_lines =
-      [:on_start, :on_stop]
-      |> Enum.flat_map(fn cb -> callback_block_lines(meta, cb, depth, indent) end)
-
-    phase_lines =
-      case Keyword.get(meta, :on_phase) do
-        phases when is_list(phases) and phases != [] ->
-          child_pad = String.duplicate(indent, depth + 2)
-
-          Enum.map(phases, fn {phase, clauses} ->
-            clauses_str =
-              clauses
-              |> Enum.map(&callback_clause_to_string(&1, depth + 2, indent))
-              |> Enum.join("\n#{child_pad}")
-
-            "on_phase :#{phase}\n#{child_pad}#{clauses_str}"
-          end)
-
-        _ ->
-          []
-      end
-
-    lines = settings ++ callback_lines ++ phase_lines
-
-    case lines do
-      [] -> "app #{name}"
-      _ -> "app #{name}\n#{pad}" <> Enum.join(lines, "\n#{pad}")
-    end
-  end
-
   # -- Proof container (`proof Name`) ----------------------------------------
   #
   # A proof container is a module-like block of function definitions.
@@ -1777,63 +1761,6 @@ defmodule Cure.Compiler.Printer do
     case body do
       [] -> "proof #{name}"
       _ -> "proof #{name}\n#{pad}#{body_str}"
-    end
-  end
-
-  # Render the named callback blocks (`on_message` etc.) that carry lists of
-  # match-arm clauses in meta, joined at the container-body indent.
-  defp callback_blocks_to_string(meta, cb_names, depth, indent) do
-    pad = String.duplicate(indent, depth + 1)
-
-    cb_names
-    |> Enum.flat_map(fn cb -> callback_block_lines(meta, cb, depth, indent) end)
-    |> Enum.join("\n#{pad}")
-  end
-
-  defp callback_block_lines(meta, cb, depth, indent) do
-    case Keyword.get(meta, cb) do
-      clauses when is_list(clauses) and clauses != [] ->
-        child_pad = String.duplicate(indent, depth + 2)
-
-        clauses_str =
-          clauses
-          |> Enum.map(&callback_clause_to_string(&1, depth + 2, indent))
-          |> Enum.join("\n#{child_pad}")
-
-        ["#{cb}\n#{child_pad}#{clauses_str}"]
-
-      _ ->
-        []
-    end
-  end
-
-  # A callback clause `(p1, p2) [when g] -> body`. A multi-statement body is
-  # rendered as an indented block so its later statements do not dedent onto
-  # the callback-clause column (which would reparse as a fresh clause).
-  defp callback_clause_to_string({:match_arm, meta, [body]}, depth, indent) do
-    pattern = Keyword.get(meta, :pattern)
-    guard = Keyword.get(meta, :guard)
-
-    head =
-      if guard do
-        render(pattern, depth, indent) <> " when " <> render(guard, depth, indent)
-      else
-        render(pattern, depth, indent)
-      end
-
-    case body do
-      {:block, _bmeta, exprs} when length(exprs) > 1 ->
-        inner_pad = String.duplicate(indent, depth + 1)
-
-        body_str =
-          exprs
-          |> Enum.map(&render(&1, depth + 1, indent))
-          |> Enum.join("\n#{inner_pad}")
-
-        head <> " ->\n#{inner_pad}#{body_str}"
-
-      _ ->
-        head <> " -> " <> render(body, depth, indent)
     end
   end
 
@@ -1965,65 +1892,6 @@ defmodule Cure.Compiler.Printer do
       |> Enum.join("\n#{pad}")
 
     "impl #{protocol} for #{for_type}#{constraints_str}\n#{pad}#{body_str}"
-  end
-
-  defp fsm_to_string(meta, body, depth, indent) do
-    name = Keyword.get(meta, :name)
-    payload = Keyword.get(meta, :payload)
-    timer = Keyword.get(meta, :timer)
-    pad = String.duplicate(indent, depth + 1)
-
-    payload_str =
-      if payload do
-        " with #{render(payload, depth, indent)}"
-      else
-        ""
-      end
-
-    transitions_str =
-      body
-      |> Enum.map(&render(&1, depth + 1, indent))
-      |> Enum.join("\n#{pad}")
-
-    # Annotations
-    annotations =
-      if timer, do: ["\n#{pad}@timer #{timer}"], else: []
-
-    # Callback blocks
-    callback_blocks =
-      ~w(on_transition on_enter on_exit on_failure on_timer)a
-      |> Enum.flat_map(fn cb_name ->
-        case Keyword.get(meta, cb_name) do
-          clauses when is_list(clauses) and clauses != [] ->
-            clauses_str =
-              clauses
-              |> Enum.map(&render(&1, depth + 2, indent))
-              |> Enum.join("\n#{String.duplicate(indent, depth + 2)}")
-
-            ["\n#{pad}#{cb_name}\n#{String.duplicate(indent, depth + 2)}#{clauses_str}"]
-
-          _ ->
-            []
-        end
-      end)
-
-    "fsm #{name}#{payload_str}\n#{pad}#{transitions_str}#{annotations}#{callback_blocks}"
-  end
-
-  defp fsm_transition_to_string(meta, _depth, _indent) do
-    from = Keyword.get(meta, :from)
-    event = Keyword.get(meta, :event)
-    to = Keyword.get(meta, :to)
-    event_kind = Keyword.get(meta, :event_kind, :normal)
-
-    suffix =
-      case event_kind do
-        :hard -> "!"
-        :soft -> "?"
-        _ -> ""
-      end
-
-    "#{from} --#{event}#{suffix}--> #{to}"
   end
 
   # -- Type Annotation -------------------------------------------------------

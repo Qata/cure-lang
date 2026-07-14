@@ -1,184 +1,113 @@
 # FSM Programming Guide
 
-FSMs are Cure's first-class shape for *state machines*. When you need a
-long-lived process whose behaviour is a flat message handler rather than
-a state transition graph, reach for [typed actors and supervision
-trees](SUPERVISION.md) instead: `actor` containers compile to loaded
-`GenServer` modules, `sup` containers compile to `Supervisor` behaviour
-modules, and the Melquiades Operator `<-|` sends messages to either.
-FSMs remain the right tool when the state machine itself is the
-primary abstraction.
+`fsm` is an auto-preluded standard-library macro. It expands to an ordinary
+`lift module` with a checked `gen_statem` callback surface; the compiler does
+not contain a separate FSM parser or object class.
 
-## Defining FSMs
+## Defining An FSM
 
-FSMs are first-class language constructs in Cure:
+The smallest form creates a lifted module with a default state payload:
 
 ```cure
-fsm TrafficLight
-  Red    --timer-->     Green
-  Green  --timer-->     Yellow
-  Yellow --timer-->     Red
-  *      --emergency--> Red
+fsm Cure.TrafficLight
 ```
 
-Each line defines a transition: `SourceState --event--> TargetState`.
-
-The `*` wildcard matches any source state.
-
-## Two Compilation Modes
-
-### Simple mode (no `on_transition`)
-
-FSMs without an `on_transition` block compile to OTP `gen_statem` BEAM modules.
-This is the original, backward-compatible behavior. Transitions can include
-inline `when` guards and `do` actions.
-
-### Callback mode (`on_transition` present)
-
-FSMs with an `on_transition` block compile to a `GenServer`-based module.
-The transition graph and the handler logic coexist in the same file,
-inspired by Finitomata.
+State and callback result types can be made explicit:
 
 ```cure
-fsm Turnstile with Integer
-  Locked   --coin-->  Unlocked
-  Unlocked --push-->  Locked
-  Unlocked --coin-->  Unlocked
-  Locked   --push-->  Locked
-
-  on_transition
-    (:locked, :coin, _payload, data) -> %[:ok, :unlocked, data + 1]
-    (:unlocked, :push, _payload, data) -> %[:ok, :locked, data]
-    (_, _, _, data) -> %[:ok, :__same__, data]
+fsm Cure.TrafficLight state Atom handle_event
+  :keep_state_and_data
 ```
 
-The `on_transition` clauses receive `(current_state, event, event_payload, state_payload)`
-and return `%[:ok, next_state, new_payload]` or `%[:error, reason]`.
-Return `:__same__` as next_state to stay in the current state.
-
-## Event Suffixes (Finitomata-inspired)
-
-### Hard events (`event!`)
-
-A `!`-suffixed event auto-fires when the FSM enters a state where that
-event is the sole outgoing event:
+The macro emits `callback_mode/0`, `init/1`, `handle_event/4`, and a typed
+`start_link/1`. The callback result is declared as `Effect(Atom)` and erased
+to the ordinary `gen_statem` return value after checking. A pure callback body
+is lifted automatically; an effectful body may sequence `beam_ops`:
 
 ```cure
-fsm Pipeline
-  Idle    --start-->   Setup
-  Setup   --init!-->   Ready
-  Ready   --process--> Done
+fsm Cure.Observed state Int handle_event
+  let pid: Pid(Atom) = beam_ops self
+  :keep_state_and_data
 ```
 
-After entering `Setup`, the `init!` event fires automatically via
-`{:continue, ...}`. The compiler verifies that hard events are the sole
-outgoing event from their source state.
+## Initial State And Payload
 
-### Soft events (`event?`)
-
-A `?`-suffixed event silently fails without logging or calling
-`on_failure`:
+`state T` gives the module-local `State` alias used by `init/1` and the data
+slot of `handle_event/4`. The explicit initializer form controls the returned
+state tuple:
 
 ```cure
-fsm Poller
-  Active --poll?-->  Active
-  Active --done-->   Finished
+fsm Cure.Ready state Int init
+  %[:ok, :ready, 0]
 ```
 
-If `poll?` fails, the FSM stays in its current state without noise.
-
-## Lifecycle Callbacks
-
-Optional callback blocks inside the FSM body:
-
-- `on_enter` -- called after entering a state
-- `on_exit` -- called before leaving a state
-- `on_failure` -- called when a normal (non-soft) transition fails
-- `on_timer` -- called periodically when `@timer <ms>` is set
+`with value` creates a zero-argument starter that passes the value as the
+initial callback argument:
 
 ```cure
-fsm MyFSM
-  Idle --go--> Active
-  Active --done--> Idle
-  @timer 5000
-
-  on_enter
-    (:active, _state) -> :ok
-
-  on_timer
-    (:active, state) -> {:ok, state.payload}
+fsm Cure.Payload with 0
 ```
 
-## Generated API
+## Event Callback
 
-Both modes export:
-
-- `start_link/0`, `start_link/1` -- start the FSM process
-- `send_event/2` -- send an event (cast)
-- `get_state/1` -- get current `{state, data}` (synchronous call)
-- `transitions/0` -- return the compiled transition table
-- `allowed/2` (simple) / `allowed?/2` (callback) -- check if a transition is valid
-- `responds?/2` (callback) -- check if an event is handled from a state
-
-## Compile-Time Verification
-
-The compiler automatically verifies:
-
-1. **Reachability**: every state is reachable from the initial state (BFS)
-2. **Deadlock freedom**: every non-terminal state has outgoing transitions
-3. **Terminal state validation**: declared terminal states exist in the graph
-4. **Hard event validation**: `!` events must be the sole outgoing event
-5. **Ambiguous transition warnings**: when `on_transition` is present, warns about
-   events that can lead to multiple target states
-
-## Using FSMs at Runtime
-
-With the FSM runtime (`Cure.FSM.Runtime`):
-
-```elixir
-# Spawn an FSM
-{:ok, pid} = Cure.FSM.Runtime.spawn_fsm(:"Cure.FSM.TrafficLight", name: "light1")
-
-# Send events
-Cure.FSM.Runtime.send_event(pid, :timer)
-
-# Get state
-{:ok, {:green, %{}}} = Cure.FSM.Runtime.get_state(pid)
-
-# Batch events
-Cure.FSM.Runtime.send_batch(pid, [:timer, :timer, :timer])
-
-# Query transition tables
-Cure.FSM.Runtime.allowed?(:"Cure.FSM.TrafficLight", :red, :timer)
-Cure.FSM.Runtime.responds?(:"Cure.FSM.TrafficLight", :red, :timer)
-
-# Registry lookup
-{:ok, pid} = Cure.FSM.Runtime.lookup("light1")
-
-# Stop
-Cure.FSM.Runtime.stop_fsm(pid)
-```
-
-## From Cure Code
-
-Using the `Std.Fsm` stdlib module:
+The callback form receives the standard `gen_statem` arguments:
 
 ```cure
-mod MyApp
-  fn run_light() -> Atom =
-    let pid = Std.Fsm.spawn(:"Cure.FSM.TrafficLight")
-    Std.Fsm.send(pid, :timer)
-    let state = Std.Fsm.state(pid)
-    Std.Fsm.stop(pid)
-    state
+fsm Cure.Counter state Int handle_event
+  match event
+    :increment -> :keep_state_and_data
+    _ -> :keep_state_and_data
 ```
 
-## Initial State
+The `event_type`, `event`, `state`, and `data` names are available in the
+callback body. The body must elaborate to the declared `Effect(Atom)` result.
+Nested macros are expanded before the callback is checked.
 
-The first non-wildcard source state in the definition becomes the
-initial state. In the traffic light example, `Red` is the initial state.
+## Transition Tables
 
-## Wildcard Transitions
+Transition rows are ordinary checked Cure ADT values. They are not parsed by a
+compiler-owned transition grammar:
 
-`* --event--> Target` creates a transition from every state to `Target`
-when `event` is received. Useful for emergency/reset transitions.
+```cure
+fsm Cure.Light state Int transitions [
+  transition :locked :coin :unlocked,
+  transition :unlocked :push :locked
+]
+```
+
+The generated callback calls the polymorphic `Std.Fsm.dispatch/4` function.
+Matching rows return the ordinary `{:next_state, state, data}` tuple; an
+unmatched row keeps the current state. Additional lifecycle and payload
+policies belong in standard-library macros over this vocabulary.
+
+## Runtime
+
+The generated module is an ordinary BEAM module and can be started through its
+checked helper:
+
+```cure
+mod Cure.Driver
+  use Std.Fsm
+
+  fn start() -> Effect(Tuple) =
+    beam_ops start_statem :"Cure.TrafficLight" [0]
+```
+
+For runtime registry and inspection helpers, use `Std.Fsm`:
+
+```cure
+let pid = Std.Fsm.spawn(:"Cure.TrafficLight")
+Std.Fsm.send(pid, :tick)
+let alive = Std.Fsm.is_alive(pid)
+Std.Fsm.stop(pid)
+```
+
+## Transparency
+
+The expansion is ordinary Cure syntax. It contains no `__otp_container`
+marker, raw-source compilation, or direct code-server load. Generated modules
+are collected and emitted by the same generic lifted-module path as any
+user-defined macro.
+
+Transition-table and richer event/state derivation remain language-level
+macro work built on this callback floor; they are not compiler-owned syntax.

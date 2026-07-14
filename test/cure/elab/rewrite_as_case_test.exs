@@ -45,6 +45,7 @@ defmodule Cure.Elab.RewriteAsCaseTest do
 
   test "(a) a variable-endpoint rewrite accepts and emits no {:rewrite} node" do
     assert {:ok, env} = Program.elaborate(@variable_src)
+
     assert rewrite_nodes(env, :plus_zero_right) == [],
            "plus_zero_right body must contain no {:rewrite, …} node after Phase B"
   end
@@ -67,6 +68,7 @@ defmodule Cure.Elab.RewriteAsCaseTest do
 
   test "(b) a computed-endpoint rewrite accepts and emits no {:rewrite} node" do
     assert {:ok, env} = Program.elaborate(@computed_src)
+
     assert rewrite_nodes(env, :appAssoc) == [],
            "appAssoc body (computed endpoints) must contain no {:rewrite, …} node after Phase B"
   end
@@ -93,6 +95,7 @@ defmodule Cure.Elab.RewriteAsCaseTest do
 
   test "(c) with-clause sibling transport accepts and emits no {:rewrite} node" do
     assert {:ok, env} = Program.elaborate(@with_src)
+
     assert rewrite_nodes(env, :foo) == [],
            "with-transport (wi05 shape) must contain no {:rewrite, …} node after Phase B"
   end
@@ -120,6 +123,7 @@ defmodule Cure.Elab.RewriteAsCaseTest do
 
   test "(d) carried-index sibling transport accepts and emits no {:rewrite} node" do
     assert {:ok, env} = Program.elaborate(@carried_src)
+
     assert rewrite_nodes(env, :keep) == [],
            "carried-eq transport must contain no {:rewrite, …} node after Phase B"
   end
@@ -167,6 +171,7 @@ defmodule Cure.Elab.RewriteAsCaseTest do
 
   test "(e) rw07's definitional-occurrence shape accepts without bridge_step, no {:rewrite} node" do
     assert {:ok, env} = Program.elaborate(@rw07_src)
+
     assert rewrite_nodes(env, :conv_occurrence) == [],
            "conv_occurrence must accept via contains_a with no {:rewrite, …} node"
   end

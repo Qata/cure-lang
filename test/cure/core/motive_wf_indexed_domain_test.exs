@@ -24,10 +24,14 @@ defmodule Cure.Core.MotiveWfIndexedDomainTest do
   # the family that appears as the Π *domain* inside the motive.
   defp base_env do
     Env.empty()
-    |> Inductive.declare(Inductive.family(:Dec, [], [], 0),
-         [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])])
-    |> Inductive.declare(Inductive.family(:SNat, [], [{:d, @dec}], 0),
-         [Inductive.ctor(:snat0, [], [{:ctor, :Dcoupled, []}])])
+    |> Inductive.declare(
+      Inductive.family(:Dec, [], [], 0),
+      [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])]
+    )
+    |> Inductive.declare(
+      Inductive.family(:SNat, [], [{:d, @dec}], 0),
+      [Inductive.ctor(:snat0, [], [{:ctor, :Dcoupled, []}])]
+    )
   end
 
   # SNat(s) with s = the motive/def binder (de Bruijn var0).
@@ -59,13 +63,14 @@ defmodule Cure.Core.MotiveWfIndexedDomainTest do
   # rejected both before and after the fix; it proves the new path is a real sort
   # check, not a blanket accept.
   test "a Π-domain motive whose domain is not a type is still rejected (:bad_motive)" do
-    neg_motive = {:lam, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), {:ctor, :Dcoupled, []}, @dec}}
+    neg_motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @dec, {:pi, Cure.Core.Grade.unrestricted(), {:ctor, :Dcoupled, []}, @dec}}
+
     def_type = {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}
 
     body =
       {:lam, Cure.Core.Grade.unrestricted(), @dec,
-       {:case, {:var, 0}, neg_motive,
-        [{:Dcoupled, 0, {:type, 0}}, {:Causal, 0, {:type, 0}}]}}
+       {:case, {:var, 0}, neg_motive, [{:Dcoupled, 0, {:type, 0}}, {:Causal, 0, {:type, 0}}]}}
 
     env = Env.add_def(base_env(), :probe, def_type, body)
     assert {:error, :bad_motive} = Kernel.check_def(env, :probe)

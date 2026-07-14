@@ -21,7 +21,8 @@ defmodule Antigen.CoverGuidedTest.CoverThenViolate do
 end
 
 defmodule Antigen.CoverGuidedTest do
-  use ExUnit.Case, async: false   # :cover (+ :cover.reset) is node-wide global
+  # :cover (+ :cover.reset) is node-wide global
+  use ExUnit.Case, async: false
   alias Antigen.{Cover, Triage, Challenge, Corpus}
 
   @nat {:data, :Nat, [], []}
@@ -42,16 +43,19 @@ defmodule Antigen.CoverGuidedTest do
 
   test "delta/2 reports newly-covered lines and is empty when nothing new is hit" do
     Cover.with_cover([Antigen.CoverFixture], fn ->
-      Antigen.CoverFixture.classify(5)          # hit the :pos branch
+      # hit the :pos branch
+      Antigen.CoverFixture.classify(5)
       s1 = Cover.covered_set([Antigen.CoverFixture])
 
-      Antigen.CoverFixture.classify(-1)         # hit :neg — a NEW line
+      # hit :neg — a NEW line
+      Antigen.CoverFixture.classify(-1)
       d1 = Cover.delta(s1, [Antigen.CoverFixture])
       assert MapSet.size(d1) > 0
       assert Enum.all?(d1, fn {m, l} -> m == Antigen.CoverFixture and is_integer(l) end)
 
       s2 = Cover.covered_set([Antigen.CoverFixture])
-      Antigen.CoverFixture.classify(-2)         # hit :neg again — nothing new
+      # hit :neg again — nothing new
+      Antigen.CoverFixture.classify(-2)
       d2 = Cover.delta(s2, [Antigen.CoverFixture])
       assert MapSet.size(d2) == 0
     end)
@@ -66,7 +70,8 @@ defmodule Antigen.CoverGuidedTest do
     # classify(0) contribute nothing novel, since line 6 is already covered — a
     # correct result that just doesn't exercise the "distinct novel" assertion.)
     Cover.with_cover([Antigen.CoverFixture], fn ->
-      Antigen.CoverFixture.classify(0)          # baseline: lines {4, 6}
+      # baseline: lines {4, 6}
+      Antigen.CoverFixture.classify(0)
       prev = Cover.covered_set([Antigen.CoverFixture])
 
       run = fn n -> Antigen.CoverFixture.classify(n) end
@@ -85,11 +90,13 @@ defmodule Antigen.CoverGuidedTest do
     on_exit(fn -> File.rm_rf!(path) end)
 
     lines = MapSet.new([{Cure.Core.Eval, 107}, {Cure.Core.Eval, 108}])
-    pred = fn _c -> true end   # always interesting → Triage shrinks maximally
+    # always interesting → Triage shrinks maximally
+    pred = fn _c -> true end
 
     {status1, banked, seen1} = Cover.bank_interesting(ch, lines, path, MapSet.new(), pred, 500)
     assert status1 == :appended
-    assert Triage.size(banked) < Triage.size(ch)      # actually minimized
+    # actually minimized
+    assert Triage.size(banked) < Triage.size(ch)
     assert Enum.count(Corpus.stream(path)) == 1
 
     # a second, different challenge carrying the SAME covered-line set is NOT
@@ -131,7 +138,8 @@ defmodule Antigen.CoverGuidedTest do
     Cover.refresh_seed_pool!(path)
 
     pool = Process.get(:antigen_seed_pool)
-    assert Map.has_key?(pool, type)   # crossover can now draw this type mid-run
+    # crossover can now draw this type mid-run
+    assert Map.has_key?(pool, type)
     assert Antigen.Generators.SeedPool.pool_gen(pool, type) != :none
   end
 

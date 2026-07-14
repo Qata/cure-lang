@@ -7,7 +7,7 @@ defmodule Antigen.Assays.MutationTest do
   defp sample(gen, n), do: B.interp(gen) |> Enum.take(n)
 
   test "run/1 returns :ok when the kernel correctly rejects the mutant" do
-    for c <- sample(Mutation.mutant(), 40), do: assert MA.run(c) == :ok
+    for c <- sample(Mutation.mutant(), 40), do: assert(MA.run(c) == :ok)
   end
 
   test "run/2 flags a violation when the (stubbed) kernel ACCEPTS an ill-typed term" do

@@ -237,8 +237,12 @@ defmodule Cure.Elab.Unify do
 
   defp mabs({:var, v}, depth, vars, n, local) do
     cond do
-      v < local -> {:var, v}
-      v - local >= depth -> {:var, n + v - depth}
+      v < local ->
+        {:var, v}
+
+      v - local >= depth ->
+        {:var, n + v - depth}
+
       true ->
         case Enum.find_index(vars, &(&1 == v - local)) do
           nil -> throw(:miller_escape)
@@ -274,6 +278,13 @@ defmodule Cure.Elab.Unify do
 
   defp do_unify_struct({:data, f, ps1, is1}, {:data, f, ps2, is2}, ctx, sig, depth),
     do: unify_lists(ps1 ++ is1, ps2 ++ is2, ctx, sig, depth)
+
+  # Effect is a type former, so expected-result solving must continue through
+  # it to reach return-only implicits in an effectful operation. Without this
+  # case, `Effect(RawPid(?m, ?m))` falls through to rigid conversion instead of
+  # solving `?m` from a concrete `Effect(Pid(Atom))` goal.
+  defp do_unify_struct({:effect_type, inner1}, {:effect_type, inner2}, ctx, sig, depth),
+    do: unify_d(inner1, inner2, ctx, sig, depth)
 
   defp do_unify_struct({:ctor, c, a1}, {:ctor, c, a2}, ctx, sig, depth),
     do: unify_lists(a1, a2, ctx, sig, depth)

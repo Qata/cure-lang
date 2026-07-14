@@ -5,7 +5,12 @@ defmodule Cure.Core.UnifyIndicesTest do
 
   @src "mod M\n  type Nat = Z | S(Nat)\n  type SameLen indices (n: Nat, m: Nat)\n    same : SameLen(k, k)\nend\n"
 
-  defp sig, do: (fn -> {:ok, s} = Program.elaborate(@src); s end).()
+  defp sig,
+    do:
+      (fn ->
+         {:ok, s} = Program.elaborate(@src)
+         s
+       end).()
 
   test "matching `same : SameLen(k,k)` against SameLen(a,b) forces b := a" do
     s = sig()
@@ -33,7 +38,12 @@ defmodule Cure.Core.UnifyIndicesTest do
   # exercises a rigid-head conflict.
   @guard_src "mod G\n  type Nat = Z | S(Nat)\n  type Box indices (n: Nat)\n    box : Box(k)\n  type Vone indices (n: Nat)\n    vs : Vone(S(k))\n    vz : Vone(Z)\nend\n"
 
-  defp guard_sig, do: (fn -> {:ok, s} = Program.elaborate(@guard_src); s end).()
+  defp guard_sig,
+    do:
+      (fn ->
+         {:ok, s} = Program.elaborate(@guard_src)
+         s
+       end).()
 
   defp one_var_ctx(s), do: Context.extend(Context.empty(s), {:vdata, :Nat, []})
 
@@ -102,7 +112,12 @@ defmodule Cure.Core.UnifyIndicesTest do
   # TCB path. The verdict must be a SOLVED, ACYCLIC substitution (i and j collapse
   # to a single representative), never a cycle.
   @cycle_src "mod C\n  type Nat = Z | S(Nat)\n  type T indices (i0: Nat, i1: Nat, i2: Nat, i3: Nat)\n    c : T(a, a, b, b)\nend\n"
-  defp cycle_sig, do: (fn -> {:ok, s} = Program.elaborate(@cycle_src); s end).()
+  defp cycle_sig,
+    do:
+      (fn ->
+         {:ok, s} = Program.elaborate(@cycle_src)
+         s
+       end).()
 
   # A substitution is cyclic iff chasing var-edges from some key revisits a key.
   defp acyclic?(subst) do

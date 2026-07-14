@@ -62,26 +62,94 @@ defmodule Antigen.Challenge do
   # in sync with the generator modules' fixed, literal name sets.
   @known_atoms [
     # kinds
-    :stub, :def_group, :family, :forcing_pair, :stuck_elim,
+    :stub,
+    :def_group,
+    :family,
+    :forcing_pair,
+    :stuck_elim,
     # labels
-    :terminating, :diverging, :positive, :negative, :none,
+    :terminating,
+    :diverging,
+    :positive,
+    :negative,
+    :none,
     # generator-produced names
-    :f, :g, :h, :plus, :total_id, :even, :odd, :ack, :Dec, :Nat, :Z, :S, :Causal,
-    :Natp, :Zp, :Sp, :pred, :Bad, :MkBad, :b, :unrestricted, :erased,
+    :f,
+    :g,
+    :h,
+    :plus,
+    :total_id,
+    :even,
+    :odd,
+    :ack,
+    :Dec,
+    :Nat,
+    :Z,
+    :S,
+    :Causal,
+    :Natp,
+    :Zp,
+    :Sp,
+    :pred,
+    :Bad,
+    :MkBad,
+    :b,
+    :unrestricted,
+    :erased,
     # indexed-case vertical: kind, labels, family/ctor/def names
-    :indexed_case, :well_typed, :ill_typed,
+    :indexed_case,
+    :well_typed,
+    :ill_typed,
     # reify / data-split verticals (lean-shape-matching): indexed-case def names
-    :data_split, :reify_distinct, :reify_eq,
-    :Dcoupled, :Foo, :MkFoo, :Box, :mk, :d, :x,
-    :probe, :branch_family, :coverage_gap, :refine, :motive_wf, :discharge, :inject,
-    :motive_dom, :SNat, :snat0,
-    :Tri, :A, :B, :C, :Ix, :wrap, :n, :p,
-    :Wr, :MkWr, :IW, :iw, :w, :IxN, :wrapn, :delete, :i,
+    :data_split,
+    :reify_distinct,
+    :reify_eq,
+    :Dcoupled,
+    :Foo,
+    :MkFoo,
+    :Box,
+    :mk,
+    :d,
+    :x,
+    :probe,
+    :branch_family,
+    :coverage_gap,
+    :refine,
+    :motive_wf,
+    :discharge,
+    :inject,
+    :motive_dom,
+    :SNat,
+    :snat0,
+    :Tri,
+    :A,
+    :B,
+    :C,
+    :Ix,
+    :wrap,
+    :n,
+    :p,
+    :Wr,
+    :MkWr,
+    :IW,
+    :iw,
+    :w,
+    :IxN,
+    :wrapn,
+    :delete,
+    :i,
     # rewrite/eq vertical: kind, def-names, motive family name, and the
     # inductive identity family the migrated builders declare (Phase C —
     # `Equivalent`/`reflexive` with param `a`, indices `x`/`y`, witness `w`)
-    :rewrite_eq, :eq_formation, :refl_typing, :rewrite_premise, :transport_type, :P,
-    :Equivalent, :reflexive, :y,
+    :rewrite_eq,
+    :eq_formation,
+    :refl_typing,
+    :rewrite_premise,
+    :transport_type,
+    :P,
+    :Equivalent,
+    :reflexive,
+    :y,
     # universes vertical
     :u,
     # erasure quantities: the ω annotation `:many` on a ctor field (siblings
@@ -92,129 +160,285 @@ defmodule Antigen.Challenge do
     :many,
     # tier-B typed-term vertical: kind, family/ctor/def names, sig version
     # (:MkF is the shrink-test family F's ctor — a bloated-ctor-arg pieces-bridge probe)
-    :typed_term, :v1, :Bd, :T, :F, :MkF, :Vec, :vnil, :vcons, :plus, :dbl, :x, :xs,
+    :typed_term,
+    :v1,
+    :Bd,
+    :T,
+    :F,
+    :MkF,
+    :Vec,
+    :vnil,
+    :vcons,
+    :plus,
+    :dbl,
+    :x,
+    :xs,
     # mutation corpus: kind, fault kinds, witness enum, extra type-former head
     # (:ill_typed already above; :Z/:S/:Nat/:Vec already interned above)
     :mutant_term,
-    :head_swap, :ctor_arg, :index_mismatch, :app_domain,
-    :out_of_scope_var, :proj_non_pair, :universe,
-    :pair_component, :app_result, :type_param_mismatch,
-    :head, :index, :level, :scope, :Sigma, :Bd,
+    :head_swap,
+    :ctor_arg,
+    :index_mismatch,
+    :app_domain,
+    :out_of_scope_var,
+    :proj_non_pair,
+    :universe,
+    :pair_component,
+    :app_result,
+    :type_param_mismatch,
+    :head,
+    :index,
+    :level,
+    :scope,
+    :Sigma,
+    :Bd,
     # fault-map KEY atoms (must be interned: the fault map rides through
     # binary_to_term [:safe] in the scaffold field — keys count, not just values)
-    :kind, :witness, :expected_head, :injected_head,
+    :kind,
+    :witness,
+    :expected_head,
+    :injected_head,
     # deep-propagation: wrapper kinds (values) + the two new fault-field keys.
     # :pair doubles as a Core term tag but must be listed for the [:safe] decode.
     # (:ctor_vec is NOT a wrapper here — dropped for Nat→Nat composability.)
-    :app_arg, :ctor_nat, :case_scrut, :case_branch, :pair, :depth, :wrap_path,
+    :app_arg,
+    :ctor_nat,
+    :case_scrut,
+    :case_branch,
+    :pair,
+    :depth,
+    :wrap_path,
     # conversion-at-depth: carrier kinds + witness + field keys/values
-    :conv_index, :conv_motive, :conv, :expected_index, :actual_index,
-    :reduction, :required, :carrier,
+    :conv_index,
+    :conv_motive,
+    :conv,
+    :expected_index,
+    :actual_index,
+    :reduction,
+    :required,
+    :carrier,
     # elaborator completeness/metamorphic vertical: kind + label
-    :elab_program, :well_typed,
+    :elab_program,
+    :well_typed,
     # totality-closure vertical (V5): kind + generator-produced env names
     # (:total_id, :i, :positive, :diverging already interned above)
-    :closure_env, :loop, :callee, :Vessel, :Wrap,
+    :closure_env,
+    :loop,
+    :callee,
+    :Vessel,
+    :Wrap,
     # erasure/relevance vertical (V4): kind + generator ctor/arg names
     # (:f, :g, :d, :b, :P already interned above)
-    :erasure_term, :MkQ, :MkP, :a,
+    :erasure_term,
+    :MkQ,
+    :MkP,
+    :a,
     # SMT-lint vertical (V6): kind (MetaAST predicate payloads use string keys/var
     # names, not atoms, so no extra generator atoms beyond the kind itself)
     :smt_query,
     # Tier-B reach expansion: List parametric family + param binder name
-    :List, :Nil, :Cons, :A,
+    :List,
+    :Nil,
+    :Cons,
+    :A,
     # Structure-directed levers (coverage campaign): Bool builtin ctors (Primitive
     # generator) + the through-constructor-positive subject ctor (Positivity).
     # Node tags (:prim/:eq/:refl/:rewrite/:int_lit/:float_lit) are fixed Serialize
     # dispatch atoms, already interned by the code; only dynamic ctor/family names
     # need listing here.
-    :Bool, :True, :False, :MkT,
+    :Bool,
+    :True,
+    :False,
+    :MkT,
     # parametric positivity generator: subject family + ctor/binder name pools
-    :Pgen, :PC0, :PC1, :pq0, :pq1, :pq2,
+    :Pgen,
+    :PC0,
+    :PC1,
+    :pq0,
+    :pq1,
+    :pq2,
     # S8: inert app-head used in app/lam-headed ctor field types
     :Fp,
     # family-level universe ceiling probe (Kernel.check_family range-check)
-    :Over, :MkOver,
+    :Over,
+    :MkOver,
     # totality: pending-sibling marker in a def-group payload (premature-cert guard)
     :pending,
     # Sq: two-index diagonal family (dependent-matching unification tail) + binder :j
-    :Sq, :mksq, :j,
+    :Sq,
+    :mksq,
+    :j,
     # Ty: Type0-indexed family (non-Nat rigid index unification) + its constructors
-    :Ty, :tnat, :tbd, :tint, :tflt, :tpi, :tsig, :tvec,
+    :Ty,
+    :tnat,
+    :tbd,
+    :tint,
+    :tflt,
+    :tpi,
+    :tsig,
+    :tvec,
     # IdxI: Int-indexed family (check_result_indices declaration-check driver)
-    :IdxI, :mki, :mkb,
+    :IdxI,
+    :mki,
+    :mkb,
     # P/pc: parameterized indexed family (check_uniform_params / check_ctor_args)
-    :P, :pc, :x,
+    :P,
+    :pc,
+    :x,
     # MyEqK/mreflK: Type-param family, generalized field repeated across ≥2 indices
     # (check_result_indices parameter-seeding path — the dp01/dp02 datatype)
-    :MyEqK, :mreflK,
+    :MyEqK,
+    :mreflK,
     # Tg/Tgf: Int/Float-value-indexed families (rigid_index? int_lit/float_lit)
-    :Tg, :tg0, :tg1, :Tgf, :tgf0, :tgf1,
+    :Tg,
+    :tg0,
+    :tg1,
+    :Tgf,
+    :tgf0,
+    :tgf1,
     # Malformed negative vertical: kind + undeclared names the kernel must reject
-    :malformed, :NoSuchFamily, :nosuchctor, :nosuchdef, :nosuchop,
+    :malformed,
+    :NoSuchFamily,
+    :nosuchctor,
+    :nosuchdef,
+    :nosuchop,
     # Serialization roundtrip vertical: kind + label
-    :serialize, :lossless,
+    :serialize,
+    :lossless,
     # Serialization decode-robustness vertical: kind + labels
-    :decode_probe, :valid_sexp, :invalid_sexp,
+    :decode_probe,
+    :valid_sexp,
+    :invalid_sexp,
     # Conversion-decision vertical: kind + labels
-    :conv_pair, :convertible, :distinct,
+    :conv_pair,
+    :convertible,
+    :distinct,
     # Branch-unification vertical: kind + verdict labels + crossing-family names
-    :branch_unify, :solved, :impossible, :trivial, :Cyc4, :mkcyc,
+    :branch_unify,
+    :solved,
+    :impossible,
+    :trivial,
+    :Cyc4,
+    :mkcyc,
     # Branch-unification dependent-matching TAILS (coverage-plateau follow-up):
     # occurs-check family, interleaved-crossing family, compact-Nat-literal family,
     # :case-headed and stuck-spine-headed and nested-:data-headed result-index
     # families, and the motive-probe payload's shape tag + verdict label.
-    :Cyc1, :idcyc, :Cyc4b, :mkcyc2, :Nl, :nlc, :nlt, :CaseIdx, :mkci,
-    :SpineU, :spu, :Dboth, :mkboth, :neutral, :nonfun, :bad_motive,
+    :Cyc1,
+    :idcyc,
+    :Cyc4b,
+    :mkcyc2,
+    :Nl,
+    :nlc,
+    :nlt,
+    :CaseIdx,
+    :mkci,
+    :SpineU,
+    :spu,
+    :Dboth,
+    :mkboth,
+    :neutral,
+    :nonfun,
+    :bad_motive,
     # Dot-forcing vertical (#24): kind + verdict labels + the carried-index family
     # H/hmk (its Sq/mksq + Vec/vcons siblings are interned above). These ride the
     # scaffold `family`/`cname` fields through `known_atom!` on decode.
-    :dot_forcing, :accept, :reject, :unforced, :H, :hmk,
+    :dot_forcing,
+    :accept,
+    :reject,
+    :unforced,
+    :H,
+    :hmk,
     # Check-mode vertical: kind + the Bd ctor T used in a reject case
-    :check_mode, :T,
+    :check_mode,
+    :T,
     # Delta-reduction vertical: kind + label + the certified global names
-    :delta_reduce, :reduces, :idnat, :kpair,
+    :delta_reduce,
+    :reduces,
+    :idnat,
+    :kpair,
     # Normalise fuel/opts + certified-δ tail (same delta_reduce kind): new
     # probe labels + a third certified global whose δ-unfold re-exposes a
     # STUCK case (the reduce_unfolded branch-miss twin of the direct-case
     # probe over idnat/kpair).
-    :fuel_probe, :opts_reject, :donly,
+    :fuel_probe,
+    :opts_reject,
+    :donly,
     # Inductive-Env-accessor roundtrip vertical (:family kind, reused — no new
     # kind): AntigenEnv/antigenA family+ctor names. Param/index/arg binder names
     # (:a, :n, :x, :y) are already interned above; the assay's own fixed probe
     # atoms (absent-name sentinels, the legacy record, the builtin-probe keys)
     # never ride through to_pieces/from_pieces so they need no entry here.
-    :AntigenEnv, :antigenA,
+    :AntigenEnv,
+    :antigenA,
     # Kernel def-level cold-line probe vertical (:kernel_probe kind). The kind +
     # label ride through to_pieces/from_pieces; the probe tag is the only payload
     # (stored as the scaffold "probe" string), so every probe name must intern.
-    :kernel_probe, :probe,
-    :infer_absurd, :infer_fields_only_ctor, :check_ctor_arity, :check_def_unknown,
-    :check_def_builtin_op, :validate_cert_builtin_op, :family_ceiling, :normalize_opts,
-    :validator_warn_emit, :remap_index_passthrough, :quote_foreign_vdata,
-    :positivity_through_ctor, :decode_unknown_symbol, :cert_under_application,
+    :kernel_probe,
+    :probe,
+    :infer_absurd,
+    :infer_fields_only_ctor,
+    :check_ctor_arity,
+    :check_def_unknown,
+    :check_def_builtin_op,
+    :validate_cert_builtin_op,
+    :family_ceiling,
+    :normalize_opts,
+    :validator_warn_emit,
+    :remap_index_passthrough,
+    :quote_foreign_vdata,
+    :positivity_through_ctor,
+    :decode_unknown_symbol,
+    :cert_under_application,
     :cert_dangling_callee,
     # Adversarial "backstop" probes: feed the kernel malformed input at a real
     # boundary (Eval.eval / Eval.apply / Conv.conv? / check_def) and prove the
     # defensive guard fires (raises the documented ι-error / rejects the hole body).
-    :eval_no_branch, :eval_nondata_scrutinee, :apply_nonfun,
-    :conv_unknown_ctor_fallback, :validator_rejects_hole_body,
+    :eval_no_branch,
+    :eval_nondata_scrutinee,
+    :apply_nonfun,
+    :conv_unknown_ctor_fallback,
+    :validator_rejects_hole_body,
     # Value-surface probes (atom / bounded / binary-type / bitwise family).
-    :eval_value_literals, :eval_negative_debruijn, :eval_bounded_no_branch,
-    :eval_bounded_iota, :eval_bounded_peel, :eval_bitwise_fold,
-    :quote_value_surface, :conv_atom_binary, :conv_bounded_crossrep,
-    :conv_no_delta_value_surface, :serialize_value_surface, :serialize_special_atoms,
-    :serialize_malformed_symbol, :infer_value_type_formers, :infer_bounded_unregistered,
-    :infer_bounded_registered, :check_bounded_in_range, :check_bounded_out_of_range,
-    :check_bounded_tower, :check_bounded_not_concrete, :check_bounded_wrong_family,
-    :check_ctor_via_infer, :sort_value_type_formers, :unify_bounded_bridge,
-    :unify_rigid_value_heads, :opaque_family_positivity, :positivity_alias_expansion,
-    :occurs_bare_global, :whnf_arity2_direct, :whnf_nested_fuel_restore,
-    :cert_unknown_tuple_node, :cert_unknown_list_node, :cert_nontuple_call_arg,
-    :cert_nontuple_list_elem, :cert_calls_nontuple_head,
+    :eval_value_literals,
+    :eval_negative_debruijn,
+    :eval_bounded_no_branch,
+    :eval_bounded_iota,
+    :eval_bounded_peel,
+    :eval_bitwise_fold,
+    :quote_value_surface,
+    :conv_atom_binary,
+    :conv_bounded_crossrep,
+    :conv_no_delta_value_surface,
+    :serialize_value_surface,
+    :serialize_special_atoms,
+    :serialize_malformed_symbol,
+    :infer_value_type_formers,
+    :infer_bounded_unregistered,
+    :infer_bounded_registered,
+    :check_bounded_in_range,
+    :check_bounded_out_of_range,
+    :check_bounded_tower,
+    :check_bounded_not_concrete,
+    :check_bounded_wrong_family,
+    :check_ctor_via_infer,
+    :sort_value_type_formers,
+    :unify_bounded_bridge,
+    :unify_rigid_value_heads,
+    :opaque_family_positivity,
+    :positivity_alias_expansion,
+    :occurs_bare_global,
+    :whnf_arity2_direct,
+    :whnf_nested_fuel_restore,
+    :cert_unknown_tuple_node,
+    :cert_unknown_list_node,
+    :cert_nontuple_call_arg,
+    :cert_nontuple_list_elem,
+    :cert_calls_nontuple_head,
     # Editions-facility probes (Cure.Edition.retired_keywords/2 keyword set +
     # Cure.Migrate.run_to_fixpoint/2 convergence).
-    :edition_retired_keywords, :migrate_fixpoint_converges
+    :edition_retired_keywords,
+    :migrate_fixpoint_converges
   ]
   @doc false
   def __known_atoms__, do: @known_atoms
@@ -283,7 +507,10 @@ defmodule Antigen.Challenge do
       |> Enum.flat_map(fn {ct, j} ->
         arg_pieces = ct.args |> Enum.with_index() |> Enum.map(fn {{_n, t}, k} -> {"ctor:#{j}:arg:#{k}", t} end)
         ridx_pieces = ct.result_indices |> Enum.with_index() |> Enum.map(fn {t, k} -> {"ctor:#{j}:ridx:#{k}", t} end)
-        rparam_pieces = ctor_result_params(ct) |> Enum.with_index() |> Enum.map(fn {t, k} -> {"ctor:#{j}:rparam:#{k}", t} end)
+
+        rparam_pieces =
+          ctor_result_params(ct) |> Enum.with_index() |> Enum.map(fn {t, k} -> {"ctor:#{j}:rparam:#{k}", t} end)
+
         arg_pieces ++ ridx_pieces ++ rparam_pieces
       end)
 
@@ -450,7 +677,12 @@ defmodule Antigen.Challenge do
       |> Enum.flat_map(fn {ct, j} ->
         args = ct.args |> Enum.with_index() |> Enum.map(fn {{_n, t}, k} -> {"#{prefix}:ctor:#{j}:arg:#{k}", t} end)
         ridx = ct.result_indices |> Enum.with_index() |> Enum.map(fn {t, k} -> {"#{prefix}:ctor:#{j}:ridx:#{k}", t} end)
-        rparam = ctor_result_params(ct) |> Enum.with_index() |> Enum.map(fn {t, k} -> {"#{prefix}:ctor:#{j}:rparam:#{k}", t} end)
+
+        rparam =
+          ctor_result_params(ct)
+          |> Enum.with_index()
+          |> Enum.map(fn {t, k} -> {"#{prefix}:ctor:#{j}:rparam:#{k}", t} end)
+
         args ++ ridx ++ rparam
       end)
 
@@ -479,7 +711,9 @@ defmodule Antigen.Challenge do
   # --- from_pieces: decoded record fields → challenge -------------------------
 
   @doc "Rebuild a challenge from a decoded record's fields, scaffold, and term pieces."
-  @spec from_pieces(atom(), String.t(), atom(), integer() | nil, String.t() | nil, map(), [{String.t(), Cure.Core.Term.t()}]) :: t()
+  @spec from_pieces(atom(), String.t(), atom(), integer() | nil, String.t() | nil, map(), [
+          {String.t(), Cure.Core.Term.t()}
+        ]) :: t()
   def from_pieces(:stub, assay, label, seed, note, _scaffold, [{"term", t}]),
     do: new(kind: :stub, assay: assay, label: label, payload: %{term: t}, seed: seed, note: note)
 
@@ -539,13 +773,14 @@ defmodule Antigen.Challenge do
   end
 
   def from_pieces(:rewrite_eq, assay, label, seed, note, scaffold, pieces),
-    do: from_pieces(:indexed_case, assay, label, seed, note, scaffold, pieces)
-        |> Map.put(:kind, :rewrite_eq)
+    do:
+      from_pieces(:indexed_case, assay, label, seed, note, scaffold, pieces)
+      |> Map.put(:kind, :rewrite_eq)
 
   def from_pieces(:typed_term, assay, label, seed, note, scaffold, pieces) do
     pmap = Map.new(pieces)
     len = scaffold["ctx_len"]
-    ctx = for i <- (if len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
+    ctx = for i <- if(len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
 
     payload = %{
       sig: known_atom!(scaffold["sig"]),
@@ -561,12 +796,21 @@ defmodule Antigen.Challenge do
     do: new(kind: :serialize, assay: assay, label: label, payload: %{term: t}, seed: seed, note: note)
 
   def from_pieces(:decode_probe, assay, label, seed, note, scaffold, _pieces),
-    do: new(kind: :decode_probe, assay: assay, label: label, payload: %{input: scaffold["input"]}, seed: seed, note: note)
+    do:
+      new(kind: :decode_probe, assay: assay, label: label, payload: %{input: scaffold["input"]}, seed: seed, note: note)
 
   def from_pieces(:kernel_probe, assay, label, seed, note, scaffold, _pieces) do
     probe = known_atom!(scaffold["probe"])
-    new(kind: :kernel_probe, assay: assay, label: label, payload: %{probe: probe},
-        seed: seed, note: note, cover_tag: probe)
+
+    new(
+      kind: :kernel_probe,
+      assay: assay,
+      label: label,
+      payload: %{probe: probe},
+      seed: seed,
+      note: note,
+      cover_tag: probe
+    )
   end
 
   def from_pieces(:conv_pair, assay, label, seed, note, scaffold, pieces) do
@@ -656,13 +900,20 @@ defmodule Antigen.Challenge do
   end
 
   def from_pieces(:delta_reduce, assay, :opts_reject, seed, note, scaffold, _pieces) do
-    new(kind: :delta_reduce, assay: assay, label: :opts_reject, payload: %{opts: scaffold["opts"]}, seed: seed, note: note)
+    new(
+      kind: :delta_reduce,
+      assay: assay,
+      label: :opts_reject,
+      payload: %{opts: scaffold["opts"]},
+      seed: seed,
+      note: note
+    )
   end
 
   def from_pieces(:malformed, assay, label, seed, note, scaffold, pieces) do
     pmap = Map.new(pieces)
     len = scaffold["ctx_len"]
-    ctx = for i <- (if len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
+    ctx = for i <- if(len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
 
     payload = %{sig: known_atom!(scaffold["sig"]), ctx: ctx, term: Map.fetch!(pmap, "term")}
     new(kind: :malformed, assay: assay, label: label, payload: payload, seed: seed, note: note)
@@ -671,7 +922,7 @@ defmodule Antigen.Challenge do
   def from_pieces(:mutant_term, assay, label, seed, note, scaffold, pieces) do
     pmap = Map.new(pieces)
     len = scaffold["ctx_len"]
-    ctx = for i <- (if len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
+    ctx = for i <- if(len == 0, do: [], else: 0..(len - 1)), do: Map.fetch!(pmap, "ctx#{i}")
 
     payload = %{
       sig: known_atom!(scaffold["sig"]),

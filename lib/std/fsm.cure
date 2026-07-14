@@ -1,0 +1,239 @@
+@group(:concurrency)
+mod Std.Fsm
+  ## `fsm` is a transparent standard-library macro. The base state-machine is
+  ## an ordinary lifted GenStatem module; transition derivation and handlers
+  ## are layered on top of this floor.
+  macro FsmContainers
+    syntax transition <from: Atom> <event: Atom> <to: Atom> becomes Std.Fsm.transition(from, event, to)
+
+    syntax fsm <name: ModuleName> state <state_type: Type> transitions <table: Code> contextual becomes lift module name
+      use Std.Otp
+      use Std.Fsm
+      behaviour gen_statem
+      typealias State = state_type
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, Std.Fsm.first_state(table), initial]
+      callback handle_event(event_type: Atom, event: Atom, state: Atom, data: State) returns Effect(Tuple(Atom, Atom, State)) = Std.Fsm.dispatch(table, state, event, data)
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
+
+    syntax fsm <name: ModuleName> state <state_type: Type> init <init_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      typealias State = state_type
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = init_body
+      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
+
+    syntax fsm <name: ModuleName> state <state_type: Type> terminate <terminate_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      typealias State = state_type
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
+      callback terminate(reason: r, state: s, data: State) returns Effect(Atom) = terminate_body
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
+
+    syntax fsm <name: ModuleName> state <state_type: Type> code_change <code_change_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      typealias State = state_type
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
+      callback code_change(old: v, state: s, data: State, extra: x) returns Effect(Tuple(Atom, Atom, State)) = code_change_body
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
+
+    syntax fsm <name: ModuleName> state <state_type: Type> events <event_type: Type> handle_event <event_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      typealias State = state_type
+      typealias Event = event_type
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: Event, state: s, data: State) returns Effect(Atom) = event_body
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
+
+    syntax fsm <name: ModuleName> state <state_type: Type> initial <initial_state: Code> events <event_type: Type> transition <transition_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      typealias State = state_type
+      typealias Event = event_type
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, initial_state, initial]
+      callback handle_event(event_type: Atom, event: Event, state: Atom, data: State) returns Effect(Tuple(Atom, Atom, State)) = transition_body
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
+
+    syntax fsm <name: ModuleName> state <state_type: Type> handle_event <event_body: delayed raw until dedent> contextual becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      typealias State = state_type
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = event_body
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
+
+    syntax fsm <name: ModuleName> state <state_type: Type> with <payload: Code> <body: raw until dedent> becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      typealias State = state_type
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
+      fn start_link() -> Effect(Tuple) = beam_ops start_statem name payload
+      body
+
+    syntax fsm <name: ModuleName> state <state_type: Type> <body: raw until dedent> becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      typealias State = state_type
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
+      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
+      body
+
+    syntax fsm <name: ModuleName> with <payload: Code> <body: raw until dedent> becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: p) returns Effect(Tuple(Atom, Atom, p)) = %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: e, state: s, data: p) returns Effect(Atom) = :keep_state_and_data
+      fn start_link() -> Effect(Tuple) = beam_ops start_statem name payload
+      body
+
+    syntax fsm <name: ModuleName> <body: raw until dedent> becomes lift module name
+      use Std.Otp
+      behaviour gen_statem
+      callback callback_mode() returns Atom = :handle_event_function
+      callback init(initial: p) returns Effect(Tuple(Atom, Atom, p)) = %[:ok, :initial, initial]
+      callback handle_event(event_type: Atom, event: e, state: s, data: p) returns Effect(Atom) = :keep_state_and_data
+      fn start_link(initial: p) -> Effect(Tuple) = beam_ops start_statem name initial
+      body
+
+  type Transition = Row(Atom, Atom, Atom)
+
+  ## A transition row is ordinary data. The macro surface above expands rows to
+  ## this checked ADT so users can compose, inspect, and transform tables with
+  ## normal Cure functions.
+  fn transition(from: Atom, event: Atom, to: Atom) -> Transition = Row(from, event, to)
+
+  fn first_state(transitions: List(Transition)) -> Atom =
+    match transitions
+      [] -> :initial
+      [Row(from, _, _) | _] -> from
+
+  fn dispatch(transitions: List(Transition), state: Atom, event: Atom, data: a) -> Tuple(Atom, Atom, a) =
+    match transitions
+      [] -> %[:next_state, state, data]
+      [Row(from, expected, next) | rest] -> match state == from
+        true -> match event == expected
+          true -> %[:next_state, next, data]
+          false -> dispatch(rest, state, event, data)
+        false -> dispatch(rest, state, event, data)
+
+  ## FSM runtime operations: spawn, stop, send events, get state.
+  ##
+  ## Raw compatibility helpers for already-running process modules. New state
+  ## machines use the transparent `fsm` macro and `Std.Otp` algebra. Spawning captures the calling process as the
+  ## FSM's `:caller` so lifecycle hooks can notify it via
+  ## `Std.Fsm.notify/1`.
+  ##
+  ## ## Examples
+  ##
+  ## ```cure
+  ## use Std.Fsm
+  ##
+  ## # Assume a compiled `TrafficLight` with Red -> Green -> Yellow -> Red.
+  ## let pid = Std.Otp.start_statem(:"TrafficLight", [])
+  ## send(pid, :timer)
+  ## state(pid)                              # => :green
+  ## stop(pid)
+  ## ```
+  ##
+  ## ```cure
+  ## use Std.Fsm
+  ##
+  ## # Drive the FSM through a batch of events.
+  ## let pid = spawn_named(:"TrafficLight", "main")
+  ## send_batch(pid, [:timer, :timer, :timer])
+  ## history(pid)                            # => [:timer, :timer, :timer]
+  ## ```
+
+  ## Group tag consumed by `Cure.Stdlib.Preload`.
+  ## Spawn an FSM instance from a compiled FSM module atom. The
+  ## spawning process is recorded as the FSM's caller automatically;
+  ## lifecycle hooks can reach it via `Std.Fsm.notify/1`.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_spawn, 1)
+  fn spawn(fsm_module: Atom) -> Pid
+
+  ## Spawn an FSM instance with an explicit initial payload.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_spawn_with_payload, 2)
+  fn spawn_with_payload(fsm_module: Atom, payload: Any) -> Pid
+
+  ## Spawn an FSM instance with a fully-specified initial state.
+  ## `init` may be a `%Cure.FSM.State{}` struct, a keyword list with
+  ## `:caller` / `:meta` / `:payload`, or a plain map in the same shape.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_spawn_with, 2)
+  fn spawn_with(fsm_module: Atom, init: Any) -> Pid
+
+  ## Spawn a named FSM instance. The `name` string is registered with
+  ## the runtime registry for later `lookup/1`.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_spawn_named, 2)
+  fn spawn_named(fsm_module: Atom, name: String) -> Pid
+
+  ## Stop a running FSM instance.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_stop, 1)
+  fn stop(pid: Pid) -> Atom
+
+  ## Send an event (without a payload) to an FSM.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_send, 2)
+  fn send(pid: Pid, event: Atom) -> Atom
+
+  ## Send an event carrying a payload to an FSM.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_send_with, 3)
+  fn send_with(pid: Pid, event: Atom, payload: Any) -> Atom
+
+  ## Send a batch of events; each is delivered in order.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_send_batch, 2)
+  fn send_batch(pid: Pid, events: List(Atom)) -> Atom
+
+  ## Get the current state of an FSM as `%[state_atom, payload]`.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_get_state, 1)
+  fn get_state(pid: Pid) -> Tuple
+
+  ## Get the full `%Cure.FSM.State{}` wrapped as
+  ## `%[state_atom, %FsmState{caller, meta, payload}]`.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_full_state, 1)
+  fn full_state(pid: Pid) -> Tuple
+
+  ## Get just the current state atom (no payload).
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_state, 1)
+  fn state(pid: Pid) -> Atom
+
+  ## `true` when the FSM process is still alive.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_is_alive, 1)
+  fn is_alive(pid: Pid) -> Bool
+
+  ## Get metadata about an FSM from the runtime registry.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_info, 1)
+  fn info(pid: Pid) -> Map
+
+  ## Get the event history of an FSM (most-recent-first list of atoms).
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_history, 1)
+  fn history(pid: Pid) -> List(Atom)
+
+  ## Look up an FSM by its registered name.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_lookup, 1)
+  fn lookup(name: String) -> Pid
+
+  ## Send `message` to the caller registered for the currently-executing
+  ## FSM. Intended to be called from inside a lifecycle-hook body; a
+  ## no-op returning `:no_caller` when invoked outside an FSM process.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_notify, 1)
+  fn notify(message: Any) -> Atom
+
+  ## Return the caller pid registered for a running FSM, or `nil`.
+  @extern(Elixir.Cure.FSM.Builtins, :fsm_caller, 1)
+  fn caller(pid: Pid) -> Pid

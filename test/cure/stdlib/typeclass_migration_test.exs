@@ -17,6 +17,7 @@ defmodule Cure.Stdlib.TypeclassMigrationTest do
         use Std.Functor
         fn bump(xs: List(Int)) -> List(Int) = fmap(xs, fn(x) -> x + 10)
       """
+
       # HKT resolution recovers the `List` head constructor from `f(a) = List(Int)`
       # and selects the imported instance's method — proving `interface`/`instance`
       # state crosses the `use` boundary (merge_env unions interfaces + coherence).
@@ -36,6 +37,7 @@ defmodule Cure.Stdlib.TypeclassMigrationTest do
         use Std.Functor
         fn bump(xs: List(Int)) -> List(Int) = fmap(xs, fn(x) -> x + 10)
       """
+
       {:ok, env} = Program.elaborate(src)
       impl = Map.get(env.defs, :__impl_Functor_List_fmap)
       body = inspect(impl.body)
@@ -50,6 +52,7 @@ defmodule Cure.Stdlib.TypeclassMigrationTest do
         use Std.Functor
         fn bump(xs: List(Int)) -> List(Int) = fmap(xs, fn(x) -> x + 10)
       """
+
       {:ok, env} = Program.elaborate(src)
       # Co-emit the transitive closure: bump -> impl fmap -> Std.List#map.
       roots = [:bump | Program.impl_def_names(env)]

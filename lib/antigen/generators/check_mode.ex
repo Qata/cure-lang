@@ -24,15 +24,13 @@ defmodule Antigen.Generators.CheckMode do
 
   # {ctx_vars, term, type_term, verdict, note}
   @cases [
-    {0, @cons, @list_nat, :accept,
-     "check Cons Z Nil : List Nat — parameter-bearing ctor (checking mode)"},
-    {0, @nilc, @list_nat, :accept,
-     "check Nil : List Nat — nullary parameter-bearing ctor"},
-    {0, {:hole, "h"}, @list_nat, :accept,
-     "check hole : List Nat — a hole is accepted at any goal type"},
-    {0, {:ctor, :mk_pair, [@z, @z]}, {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, :accept,
-     "check (Z, Z) : Σ Nat. Nat — Σ-introduction, second component ok"},
-    {0, {:ctor, :mk_pair, [@z, {:ctor, :T, []}]}, {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, :reject,
+    {0, @cons, @list_nat, :accept, "check Cons Z Nil : List Nat — parameter-bearing ctor (checking mode)"},
+    {0, @nilc, @list_nat, :accept, "check Nil : List Nat — nullary parameter-bearing ctor"},
+    {0, {:hole, "h"}, @list_nat, :accept, "check hole : List Nat — a hole is accepted at any goal type"},
+    {0, {:ctor, :mk_pair, [@z, @z]}, {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []},
+     :accept, "check (Z, Z) : Σ Nat. Nat — Σ-introduction, second component ok"},
+    {0, {:ctor, :mk_pair, [@z, {:ctor, :T, []}]},
+     {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}, :reject,
      "check (Z, T) : Σ Nat. Nat — second component Bd ≠ Nat (sigma_mismatch)"},
     {0, @cons, {:data, :List, [@bd], []}, :reject,
      "check Cons Z Nil : List Bd — element Z:Nat clashes the family param Bd (index_mismatch)"},

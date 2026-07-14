@@ -64,9 +64,12 @@ defmodule Antigen.CorpusTest do
   test "term pieces are stored as readable s-expressions, not Base64" do
     c =
       Challenge.new(
-        kind: :stub, assay: "stub", label: :none,
+        kind: :stub,
+        assay: "stub",
+        label: :none,
         payload: %{term: {:ctor, :vcons, [{:ctor, :Z, []}, {:ctor, :Z, []}, {:ctor, :vnil, []}]}},
-        seed: 7, note: "n"
+        seed: 7,
+        note: "n"
       )
 
     line = Corpus.encode_record(c)
@@ -83,8 +86,14 @@ defmodule Antigen.CorpusTest do
     legacy =
       Enum.join(
         [
-          "antigen-record", "kind=stub", "assay=stub", "label=none", "seed=1",
-          "note=aGk=", "scaffold=-", "key=" <> Base.encode64("k"),
+          "antigen-record",
+          "kind=stub",
+          "assay=stub",
+          "label=none",
+          "seed=1",
+          "note=aGk=",
+          "scaffold=-",
+          "key=" <> Base.encode64("k"),
           "pieces=term::" <> Base.encode64(Serialize.encode(term))
         ],
         "\t"
@@ -96,8 +105,7 @@ defmodule Antigen.CorpusTest do
 
   test "note is stored as readable plaintext and round-trips special chars" do
     for note <- ["negative occurrence: Bad left of an arrow", "has\ttab and % and\nnewline", "-", "plain", nil] do
-      c = Challenge.new(kind: :stub, assay: "stub", label: :none,
-                        payload: %{term: {:type, 0}}, seed: 1, note: note)
+      c = Challenge.new(kind: :stub, assay: "stub", label: :none, payload: %{term: {:type, 0}}, seed: 1, note: note)
       line = Corpus.encode_record(c)
       refute String.contains?(line, "\n"), "record must stay one line for note=#{inspect(note)}"
       assert {:ok, c2} = Corpus.decode_record(line)
@@ -106,8 +114,16 @@ defmodule Antigen.CorpusTest do
   end
 
   test "a real (non-nil) note is human-readable in the line (not Base64)" do
-    c = Challenge.new(kind: :stub, assay: "stub", label: :none,
-                      payload: %{term: {:type, 0}}, seed: 1, note: "negative occurrence")
+    c =
+      Challenge.new(
+        kind: :stub,
+        assay: "stub",
+        label: :none,
+        payload: %{term: {:type, 0}},
+        seed: 1,
+        note: "negative occurrence"
+      )
+
     line = Corpus.encode_record(c)
     assert line =~ "note=negative occurrence"
     refute line =~ "note=" <> Base.encode64("negative occurrence")
@@ -115,11 +131,20 @@ defmodule Antigen.CorpusTest do
 
   test "legacy Base64 note decodes to the original text (format inferred from Base64 pieces)" do
     term = {:type, 0}
+
     legacy =
       Enum.join(
-        ["antigen-record", "kind=stub", "assay=stub", "label=none", "seed=1",
-         "note=" <> Base.encode64("hello world"), "scaffold=-", "key=" <> Base.encode64("k"),
-         "pieces=term::" <> Base.encode64(Serialize.encode(term))],
+        [
+          "antigen-record",
+          "kind=stub",
+          "assay=stub",
+          "label=none",
+          "seed=1",
+          "note=" <> Base.encode64("hello world"),
+          "scaffold=-",
+          "key=" <> Base.encode64("k"),
+          "pieces=term::" <> Base.encode64(Serialize.encode(term))
+        ],
         "\t"
       )
 
@@ -130,7 +155,9 @@ defmodule Antigen.CorpusTest do
 
   defp mutant(fault, term \\ {:ctor, :Z, []}) do
     Challenge.new(
-      kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
+      kind: :mutant_term,
+      assay: "mutation/rejection",
+      label: :ill_typed,
       payload: %{sig: :v1, ctx: [], type: {:type, 0}, term: term, fault: fault}
     )
   end
@@ -138,17 +165,45 @@ defmodule Antigen.CorpusTest do
   test "mutant fault round-trips every value shape and is readable in the line" do
     faults = [
       # atom/integer/nil/list (head_swap + deepen)
-      %{kind: :head_swap, witness: :head, expected_head: :Nat, injected_head: :Vec,
-        scope: nil, depth: 3, wrap_path: [:app_arg, :case_branch]},
+      %{
+        kind: :head_swap,
+        witness: :head,
+        expected_head: :Nat,
+        injected_head: :Vec,
+        scope: nil,
+        depth: 3,
+        wrap_path: [:app_arg, :case_branch]
+      },
       # integer-pair scope (out_of_scope_var)
-      %{kind: :out_of_scope_var, witness: :scope, expected_head: nil,
-        injected_head: nil, scope: {2, 2}, depth: 0, wrap_path: []},
+      %{
+        kind: :out_of_scope_var,
+        witness: :scope,
+        expected_head: nil,
+        injected_head: nil,
+        scope: {2, 2},
+        depth: 0,
+        wrap_path: []
+      },
       # Core-term head values (universe)
-      %{kind: :universe, witness: :level, expected_head: {:type, 0},
-        injected_head: {:type, 1}, scope: nil, depth: 1, wrap_path: [:pair]},
+      %{
+        kind: :universe,
+        witness: :level,
+        expected_head: {:type, 0},
+        injected_head: {:type, 1},
+        scope: nil,
+        depth: 1,
+        wrap_path: [:pair]
+      },
       # conversion carrier fault (integers + atoms)
-      %{kind: :conv_index, witness: :conv, expected_index: 2, actual_index: 3,
-        reduction: :required, depth: 2, carrier: :conv_index}
+      %{
+        kind: :conv_index,
+        witness: :conv,
+        expected_index: 2,
+        actual_index: 3,
+        reduction: :required,
+        depth: 2,
+        carrier: :conv_index
+      }
     ]
 
     for f <- faults do
@@ -161,23 +216,39 @@ defmodule Antigen.CorpusTest do
   end
 
   test "non-mutant records carry no fault= field" do
-    c = Challenge.new(kind: :stub, assay: "stub", label: :none,
-                      payload: %{term: {:type, 0}}, seed: 1, note: "n")
+    c = Challenge.new(kind: :stub, assay: "stub", label: :none, payload: %{term: {:type, 0}}, seed: 1, note: "n")
     refute Corpus.encode_record(c) =~ "\tfault="
   end
 
   test "legacy fault-in-scaffold still decodes (dual-read)" do
     # a legacy mutant: Base64 pieces + fault inside the Base64 scaffold, no fault= field
-    fault = %{kind: :head_swap, witness: :head, expected_head: :Nat,
-              injected_head: :Vec, scope: nil, depth: 0, wrap_path: []}
+    fault = %{
+      kind: :head_swap,
+      witness: :head,
+      expected_head: :Nat,
+      injected_head: :Vec,
+      scope: nil,
+      depth: 0,
+      wrap_path: []
+    }
+
     scaffold = %{"sig" => "v1", "ctx_len" => 0, "fault" => fault}
+
     legacy =
       Enum.join(
-        ["antigen-record", "kind=mutant_term", "assay=mutation/rejection", "label=ill_typed",
-         "seed=1", "note=-", "scaffold=" <> Corpus.encode_scaffold(scaffold),
-         "key=" <> Base.encode64("k"),
-         "pieces=type::" <> Base.encode64(Serialize.encode({:type, 0})) <>
-           ";;term::" <> Base.encode64(Serialize.encode({:ctor, :Z, []}))],
+        [
+          "antigen-record",
+          "kind=mutant_term",
+          "assay=mutation/rejection",
+          "label=ill_typed",
+          "seed=1",
+          "note=-",
+          "scaffold=" <> Corpus.encode_scaffold(scaffold),
+          "key=" <> Base.encode64("k"),
+          "pieces=type::" <>
+            Base.encode64(Serialize.encode({:type, 0})) <>
+            ";;term::" <> Base.encode64(Serialize.encode({:ctor, :Z, []}))
+        ],
         "\t"
       )
 
@@ -187,11 +258,25 @@ defmodule Antigen.CorpusTest do
 
   test "migration is lossless and idempotent (keys, challenges, bytes)" do
     path = Path.join(@tmp, "mig.sexp")
+
     challenges = [
-      Challenge.new(kind: :stub, assay: "stub", label: :none,
-                    payload: %{term: {:ctor, :S, [{:ctor, :Z, []}]}}, seed: 1, note: "one"),
-      mutant(%{kind: :out_of_scope_var, witness: :scope, expected_head: nil,
-               injected_head: nil, scope: {1, 1}, depth: 0, wrap_path: []})
+      Challenge.new(
+        kind: :stub,
+        assay: "stub",
+        label: :none,
+        payload: %{term: {:ctor, :S, [{:ctor, :Z, []}]}},
+        seed: 1,
+        note: "one"
+      ),
+      mutant(%{
+        kind: :out_of_scope_var,
+        witness: :scope,
+        expected_head: nil,
+        injected_head: nil,
+        scope: {1, 1},
+        depth: 0,
+        wrap_path: []
+      })
     ]
 
     for c <- challenges, do: Corpus.append(path, c, Corpus.dedup_key(c, :antibody))
@@ -217,6 +302,7 @@ defmodule Antigen.CorpusTest do
 
   test "a banked mutant record in seeds.sexp is fully human-readable" do
     seeds = "test/antigen/seeds.sexp"
+
     line =
       seeds
       |> File.stream!()
@@ -252,8 +338,10 @@ defmodule Antigen.CorpusTest do
     # "fst on a Nat" spelled inductively (D2, projection case over mk_pair).
     fault_term =
       {:case, {:ctor, :Z, []},
-       {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
-       [{:mk_pair, 2, {:var, 1}}]}
+       {:lam, Cure.Core.Grade.unrestricted(),
+        {:data, :Sigma,
+         [{:data, :Nat, [], []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}],
+         []}, {:data, :Nat, [], []}}, [{:mk_pair, 2, {:var, 1}}]}
 
     {_deep, path} = B.interp(Mutation.deepen(ctx, fault_term, 3)) |> Enum.at(0)
     deep_fault = Map.merge(hd(op_faults), %{depth: 3, wrap_path: path})
@@ -263,8 +351,14 @@ defmodule Antigen.CorpusTest do
     conv_fault = conv.payload.fault
 
     for fault <- [deep_fault, conv_fault | op_faults] do
-      c = Challenge.new(kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
-                        payload: %{sig: :v1, ctx: [], type: {:type, 0}, term: {:ctor, :Z, []}, fault: fault})
+      c =
+        Challenge.new(
+          kind: :mutant_term,
+          assay: "mutation/rejection",
+          label: :ill_typed,
+          payload: %{sig: :v1, ctx: [], type: {:type, 0}, term: {:ctor, :Z, []}, fault: fault}
+        )
+
       assert {:ok, c2} = Corpus.decode_record(Corpus.encode_record(c))
       assert c2.payload.fault == fault, "fault codec lost a generator-emitted shape: #{inspect(fault)}"
     end

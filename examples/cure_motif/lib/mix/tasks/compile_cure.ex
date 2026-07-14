@@ -2,14 +2,12 @@ defmodule Mix.Tasks.CompileCure do
   @moduledoc """
   Compiles `.cure` source files for the Cure motif example.
 
-  The Cure actor, supervisor, FSM, and app compilers load their generated
-  modules eagerly via `Code.compile_string/2` or `:compile.forms/2`; some
-  containers emit a `.beam` under `_build/cure/ebin/`, others stay
-  memory-resident. In either case the Mix task needs to run before the
-  Elixir compile step (and before each test run) so every compiled module is
-  live in the VM when the application supervisor starts.
+  The Cure actor, supervisor, FSM, and app forms expand to ordinary lifted
+  modules. This task emits those generated units under `_build/cure/ebin/`
+  before the Elixir compile step (and before each test run) so every compiled
+  module is live in the VM when the application supervisor starts.
 
-  Actor and FSM containers have no forward references between files, so
+  Actor and FSM lifted modules have no forward references between files, so
   compile order matters only for readability. We compile the pure module
   first (it is the biggest and all other files refer to its types),
   then the FSM, the actor containers, the supervisor, and finally the app
@@ -63,7 +61,7 @@ defmodule Mix.Tasks.CompileCure do
         case Cure.Compiler.compile_file(path,
                output_dir: @output_dir,
                emit_events: false,
-               check_types: false
+               check_types: true
              ) do
           {:ok, module, _warnings} ->
             Mix.shell().info("Compiled #{path} -> #{module}")

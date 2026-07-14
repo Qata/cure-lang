@@ -16,6 +16,7 @@ defmodule Antigen.Generators.TermTest do
       # check-mode-only inhabitant (bare param-bearing `Nil`/`Cons` at a List
       # goal) is sound but has no infer path, so assert `check` at the goal value.
       goal_val = Eval.eval(goal, Context.env(ctx))
+
       for t <- sample(Term.gen_term(ctx, goal), 40) do
         assert Kernel.check(ctx, t, goal_val) == :ok
       end
@@ -28,7 +29,7 @@ defmodule Antigen.Generators.TermTest do
     goal = {:pi, Cure.Core.Grade.unrestricted(), SigMenu.nat(), SigMenu.nat()}
     ts = sample(Term.gen_term(ctx, goal), 40)
     assert Enum.any?(ts, &match?({:lam, _g, _, _}, &1))
-    for t <- ts, do: assert {:ok, _} = Kernel.infer(ctx, t)
+    for t <- ts, do: assert({:ok, _} = Kernel.infer(ctx, t))
   end
 
   test "a Type 0 goal yields a menu type former (the {:type,_} intro row)" do
@@ -43,14 +44,13 @@ defmodule Antigen.Generators.TermTest do
     goal = {:type, 0}
     ts = sample(Term.gen_term(ctx, goal), 40)
     assert Enum.all?(ts, &(&1 in [SigMenu.nat(), SigMenu.bd(), SigMenu.vec({:ctor, :Z, []})]))
-    for t <- ts, do: assert {:ok, _} = Kernel.infer(ctx, t)
+    for t <- ts, do: assert({:ok, _} = Kernel.infer(ctx, t))
   end
 
   test "generated terms exercise eliminations and firing redexes" do
     env = SigMenu.env_of(:v1)
     ctx = Context.empty(env)
-    pairs = for goal <- SigMenu.goal_types(),
-                t <- sample(Term.gen_term(ctx, goal), 80), do: {goal, t}
+    pairs = for goal <- SigMenu.goal_types(), t <- sample(Term.gen_term(ctx, goal), 80), do: {goal, t}
     ts = Enum.map(pairs, fn {_g, t} -> t end)
 
     # every term still checks at its goal (soundness across the full rule set);
@@ -69,14 +69,16 @@ defmodule Antigen.Generators.TermTest do
     env = SigMenu.env_of(:v1)
     ctx = SigMenu.rebuild_context(env, [SigMenu.vec({:var, 0}), SigMenu.nat()])
     goal = SigMenu.vec({:var, 1})
+
     for t <- sample(Term.gen_term(ctx, goal), 40) do
       assert {:ok, _} = Kernel.infer(ctx, t)
     end
   end
 
   defp contains_tag?(t, tag) when is_tuple(t) do
-    (elem(t, 0) == tag) or (t |> Tuple.to_list() |> tl() |> Enum.any?(&contains_tag?(&1, tag)))
+    elem(t, 0) == tag or t |> Tuple.to_list() |> tl() |> Enum.any?(&contains_tag?(&1, tag))
   end
+
   defp contains_tag?(l, tag) when is_list(l), do: Enum.any?(l, &contains_tag?(&1, tag))
   defp contains_tag?(_, _), do: false
 
@@ -99,11 +101,13 @@ defmodule Antigen.Generators.TermTest do
       xs -> 1 + Enum.max(xs)
     end
   end
+
   defp term_depth(l) when is_list(l), do: Enum.max([0 | Enum.map(l, &term_depth/1)])
   defp term_depth(_), do: 0
 
   test "typed_term/1 emits a well-typed :typed_term challenge for its assay id" do
     alias Antigen.Challenge
+
     for id <- ["term/infer_check", "term/subject_reduction", "term/normalization"] do
       for c <- sample(Term.typed_term(id), 20) do
         assert %Challenge{kind: :typed_term, assay: ^id, label: :well_typed, payload: p} = c

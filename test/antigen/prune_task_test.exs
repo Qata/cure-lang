@@ -16,8 +16,10 @@ defmodule Mix.Tasks.Antigen.PruneTest do
     corpus = Path.join(@tmp, "corpus.sexp")
     retired = Path.join(@tmp, "retired.sexp")
     keep = Corpus.encode_record(Challenge.stub({:type, 0}))
-    bad = Regex.replace(~r/pieces=.*$/, Corpus.encode_record(Challenge.stub({:type, 1})),
-                        "pieces=t::(zzz_unknown_node 1)")
+
+    bad =
+      Regex.replace(~r/pieces=.*$/, Corpus.encode_record(Challenge.stub({:type, 1})), "pieces=t::(zzz_unknown_node 1)")
+
     File.write!(corpus, keep <> "\n" <> bad <> "\n")
 
     out =

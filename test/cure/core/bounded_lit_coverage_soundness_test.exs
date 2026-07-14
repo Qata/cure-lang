@@ -58,9 +58,7 @@ defmodule Cure.Core.BoundedLitCoverageSoundnessTest do
   # shape.
   defp sig do
     {:ok, base} =
-      Program.elaborate(
-        "mod M\n  use Std.Bounded\n  fn f(x: Bounded(10)) -> Bounded(10) = x\nend\n"
-      )
+      Program.elaborate("mod M\n  use Std.Bounded\n  fn f(x: Bounded(10)) -> Bounded(10) = x\nend\n")
 
     bounded_fid = Inductive.builtin(base, :bounded)
     bounded10 = {:data, bounded_fid, [], [{:nat_lit, 10}]}
@@ -115,7 +113,9 @@ defmodule Cure.Core.BoundedLitCoverageSoundnessTest do
     bounded_fid = Inductive.builtin(signature, :bounded)
     bounded10 = {:data, bounded_fid, [], [{:nat_lit, 10}]}
     # motive : (k : Bounded(10)) -> Bx(k) -> Type, constant at Nat.
-    motive = {:lam, Cure.Core.Grade.unrestricted(), bounded10, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bx, [], [{:var, 0}]}, @nat}}
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), bounded10,
+       {:lam, Cure.Core.Grade.unrestricted(), {:data, :Bx, [], [{:var, 0}]}, @nat}}
 
     case_term = {:case, {:var, 0}, motive, [{:bx1, 0, {:ctor, :Z, []}}]}
 

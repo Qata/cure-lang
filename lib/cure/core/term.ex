@@ -115,6 +115,7 @@ defmodule Cure.Core.Term do
 
   def term?({:let, g, ty, val, body}),
     do: Grade.grade?(g) and term?(ty) and term?(val) and term?(body)
+
   def term?({:app, f, a}), do: term?(f) and term?(a)
 
   def term?({:data, name, params, indices}),
@@ -188,6 +189,7 @@ defmodule Cure.Core.Term do
   # `ty` and `val` live OUTSIDE the binder; only `body` is one deeper.
   def shift({:let, g, ty, val, body}, a, c),
     do: {:let, g, shift(ty, a, c), shift(val, a, c), shift(body, a, c + 1)}
+
   def shift({:app, f, x}, a, c), do: {:app, shift(f, a, c), shift(x, a, c)}
 
   def shift({:data, n, ps, is}, a, c),
@@ -202,8 +204,6 @@ defmodule Cure.Core.Term do
   def shift({:effect_type, t}, a, c), do: {:effect_type, shift(t, a, c)}
   def shift({:effect_pure, x}, a, c), do: {:effect_pure, shift(x, a, c)}
   def shift({:effect_bind, e, k}, a, c), do: {:effect_bind, shift(e, a, c), shift(k, a, c)}
-
-
 
   @doc """
   Is `term` closed (no free de Bruijn variables)?
@@ -220,11 +220,13 @@ defmodule Cure.Core.Term do
   def closed?(term), do: not has_free_var?(term, 0)
 
   defp has_free_var?({:var, k}, depth), do: k >= depth
+
   defp has_free_var?({:lam, _g, d, b}, depth),
     do: has_free_var?(d, depth) or has_free_var?(b, depth + 1)
 
   defp has_free_var?({:let, _g, t, v, b}, depth),
     do: has_free_var?(t, depth) or has_free_var?(v, depth) or has_free_var?(b, depth + 1)
+
   defp has_free_var?({:pi, _g, d, c}, depth),
     do: has_free_var?(d, depth) or has_free_var?(c, depth + 1)
 
@@ -292,7 +294,6 @@ defmodule Cure.Core.Term do
   def subst({:effect_pure, x}, j, r), do: {:effect_pure, subst(x, j, r)}
   def subst({:effect_bind, e, k}, j, r), do: {:effect_bind, subst(e, j, r), subst(k, j, r)}
 
-
   # -- serialization (commitment C2) ------------------------------------------
   #
   # A language-agnostic, JSON-able encoding (maps / lists / strings / ints) so
@@ -303,6 +304,7 @@ defmodule Cure.Core.Term do
   @spec to_external(t()) :: map()
   def to_external({:type, l}), do: %{"node" => "type", "level" => l}
   def to_external({:var, k}), do: %{"node" => "var", "index" => k}
+
   def to_external({:pi, g, d, c}),
     do: %{"node" => "pi", "grade" => grade_ext(g), "dom" => to_external(d), "cod" => to_external(c)}
 

@@ -30,8 +30,7 @@ defmodule Cure.Core.EvalBoundedCoverageTest do
 
   test "case-ι on a Bounded scrutinee whose branch IS covered still reduces" do
     case_term =
-      {:case, {:bounded_lit, 0}, {:type, 0},
-       [{:First, 1, {:bounded_lit, 42}}, {:Next, 2, {:bounded_lit, 99}}]}
+      {:case, {:bounded_lit, 0}, {:type, 0}, [{:First, 1, {:bounded_lit, 42}}, {:Next, 2, {:bounded_lit, 99}}]}
 
     assert Eval.eval(case_term, []) == {:vbounded, 42}
   end

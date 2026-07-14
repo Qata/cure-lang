@@ -35,7 +35,14 @@ defmodule Cure.Core.DefTest do
 
   test "negative: a body whose type differs from the declared type" do
     # body : Dec -> Type1, but declared Dec -> Dec
-    env = Env.add_def(base(), :bad, {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec}, {:lam, Cure.Core.Grade.unrestricted(), @dec, {:type, 0}})
+    env =
+      Env.add_def(
+        base(),
+        :bad,
+        {:pi, Cure.Core.Grade.unrestricted(), @dec, @dec},
+        {:lam, Cure.Core.Grade.unrestricted(), @dec, {:type, 0}}
+      )
+
     assert {:error, {:conversion_failure, _, _}} = Kernel.check_def(env, :bad)
   end
 

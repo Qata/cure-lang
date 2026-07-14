@@ -3,7 +3,7 @@ defmodule Cure.Compiler.Errors do
   Formats compiler errors into human-readable messages with source locations.
 
   Handles errors from every pipeline stage: lexer, parser, type checker,
-  codegen, and FSM verifier.
+  and code generation.
 
   ## Example output
 
@@ -45,7 +45,7 @@ defmodule Cure.Compiler.Errors do
 
   def format_error({:unsupported_async, message, meta}, file) do
     line = Keyword.get(meta, :line, 0)
-    format_diagnostic("error", "unsupported concurrency primitive (E043)", file, line, message)
+    format_diagnostic("error", "unsupported asynchronous primitive", file, line, message)
   end
 
   def format_error({:arity_mismatch, message, meta}, file) do
@@ -142,165 +142,6 @@ defmodule Cure.Compiler.Errors do
 
   def format_error({:unsupported_container, type}, file) do
     format_diagnostic("error", "codegen error", file, 0, "unsupported container type: #{type}")
-  end
-
-  # -- App / release errors (E051-E055) ----------------------------------------
-
-  def format_error({:app_verification_failed, errors}, file) when is_list(errors) do
-    Enum.map_join(errors, "\n\n", &format_error(&1, file))
-  end
-
-  def format_error({:duplicate_app, occurrences}, _file) do
-    paths = Enum.map_join(occurrences, "\n      | ", fn {p, n} -> "#{p} -> app #{n}" end)
-
-    format_diagnostic(
-      "error",
-      "duplicate application (E051)",
-      "Cure.toml",
-      0,
-      "more than one `app` container in the project:\n      | #{paths}"
-    )
-  end
-
-  def format_error({:app_name_mismatch, expected, actual}, _file) do
-    format_diagnostic(
-      "error",
-      "app name mismatch (E051)",
-      "Cure.toml",
-      0,
-      "`app #{actual}` does not match [application].name = \"#{expected}\""
-    )
-  end
-
-  def format_error({:missing_application, _info}, _file) do
-    format_diagnostic(
-      "error",
-      "missing application (E052)",
-      "Cure.toml",
-      0,
-      "`cure release` requires the project to declare exactly one `app` container"
-    )
-  end
-
-  def format_error({:start_phase_missing, phase, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-
-    format_diagnostic(
-      "error",
-      "start phase mismatch (E053)",
-      file,
-      line,
-      "phase #{inspect(phase)} declared in [application].start_phases has no `on_phase` clause"
-    )
-  end
-
-  def format_error({:start_phase_unexpected, phase, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-
-    format_diagnostic(
-      "error",
-      "start phase mismatch (E053)",
-      file,
-      line,
-      "`on_phase #{inspect(phase)}` has no matching entry in [application].start_phases"
-    )
-  end
-
-  def format_error({:invalid_root, ast, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-
-    format_diagnostic(
-      "error",
-      "unresolved root supervisor (E054)",
-      file,
-      line,
-      "`root = ...` must be a `sup Name`, dotted module path, or atom literal: #{inspect(ast)}"
-    )
-  end
-
-  def format_error({:invalid_app_name, value, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-
-    format_diagnostic(
-      "error",
-      "invalid application name",
-      file,
-      line,
-      "`app` container name must be a non-empty dotted path; got #{inspect(value)}"
-    )
-  end
-
-  def format_error({:invalid_applications, value, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-
-    format_diagnostic(
-      "error",
-      "invalid applications list",
-      file,
-      line,
-      "`applications = ...` must be a list of atom literals; got #{inspect(value)}"
-    )
-  end
-
-  def format_error({:invalid_included_applications, value, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-
-    format_diagnostic(
-      "error",
-      "invalid included_applications list",
-      file,
-      line,
-      "`included_applications = ...` must be a list of atom literals; got #{inspect(value)}"
-    )
-  end
-
-  def format_error({:invalid_env, value, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-
-    format_diagnostic(
-      "error",
-      "invalid env",
-      file,
-      line,
-      "`env = %{...}` must be a map with atom keys; got #{inspect(value)}"
-    )
-  end
-
-  def format_error({:release_build_failed, module, reason}, _file) do
-    format_diagnostic(
-      "error",
-      "release build failed (E055)",
-      "Cure.toml",
-      0,
-      "systools/#{module} reported: #{inspect(reason)}"
-    )
-  end
-
-  def format_error({:release_build_failed, reason}, _file) do
-    format_diagnostic(
-      "error",
-      "release build failed (E055)",
-      "Cure.toml",
-      0,
-      inspect(reason)
-    )
-  end
-
-  # -- FSM Verifier Errors -----------------------------------------------------
-
-  def format_error({:unreachable_state, message, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-    format_diagnostic("error", "unreachable state", file, line, message)
-  end
-
-  def format_error({:deadlock, message, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-    format_diagnostic("error", "deadlock", file, line, message)
-  end
-
-  def format_error({:invalid_terminal, message, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-    format_diagnostic("error", "invalid terminal state", file, line, message)
   end
 
   # -- File Errors -------------------------------------------------------------
@@ -463,6 +304,77 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
+  def format_error({:example_mismatch, mismatches}, file) do
+    listed = mismatches |> Enum.map(&"`#{&1.keyword}`") |> Enum.join(", ")
+
+    format_diagnostic(
+      "error",
+      "macro example does not match its expansion",
+      file,
+      0,
+      "these rules have an `example … expands …` whose stated result is not what the rule " <>
+        "actually produces: #{listed}. Fix the `expands` side to the real expansion (or the rule)."
+    )
+  end
+
+  def format_error({:example_type_mismatch, failures}, file) do
+    listed =
+      failures
+      |> Enum.map_join(", ", fn failure ->
+        "`#{failure.keyword}` (expected #{inspect(failure.expected)}, got #{inspect(failure.reason)})"
+      end)
+
+    format_diagnostic(
+      "error",
+      "macro example has the wrong type",
+      file,
+      0,
+      "these rules have a type-only example pin that their expansion does not satisfy: #{listed}"
+    )
+  end
+
+  def format_error({:computed_example_error, failures}, file) do
+    listed =
+      failures
+      |> Enum.map_join(", ", fn failure ->
+        "`#{failure.keyword}` (#{inspect(failure.reason)})"
+      end)
+
+    format_diagnostic(
+      "error",
+      "computed macro example failed",
+      file,
+      0,
+      "these computed rules could not execute their pinned examples: #{listed}"
+    )
+  end
+
+  def format_error({:computed_macro_error, meta, reason}, file) do
+    line = Keyword.get(meta, :line, 0)
+    keyword = Keyword.get(meta, :keyword, "computed")
+
+    format_diagnostic(
+      "error",
+      "computed macro failed",
+      file,
+      line,
+      "the `#{keyword}` computed macro could not produce a valid Syntax expansion: #{inspect(reason)}"
+    )
+  end
+
+  def format_error({:expansion_ill_typed, details}, file) do
+    keyword = Map.get(details, :keyword, "?")
+    reason = Map.get(details, :kernel_error)
+
+    format_diagnostic(
+      "error",
+      "macro expansion proof failed",
+      file,
+      0,
+      "the generated `#{keyword}` expansion was rejected by the dependent elaborator: #{inspect(reason)}"
+    )
+  end
+
   # -- Catch-all ---------------------------------------------------------------
 
   def format_error(error, file) do
@@ -473,6 +385,7 @@ defmodule Cure.Compiler.Errors do
 
   defp describe_point({:hole_kind, k}), do: "a `#{k}` hole"
   defp describe_point({:keyword, w}), do: "the keyword `#{w}`"
+  defp describe_point({:failure, name}), do: "the author failure `#{name}`"
 
   # Grammatical article for the macro hole-kind diagnostic ("a Duration" / "an
   # Int"). Placed after the format_error/2 clause group to keep those contiguous.
@@ -1217,213 +1130,6 @@ defmodule Cure.Compiler.Errors do
       literal sizes so the arithmetic can be emitted; otherwise accept
       that `rest` binds to plain `Bitstring` and let runtime pattern
       matching enforce the remaining invariants.
-    """,
-    "E043" => """
-    E043: Unsupported Concurrency Primitive
-
-    `spawn` and `receive` are raw, unverified process primitives. Cure models
-    concurrency through first-class `fsm` and `actor` constructs the compiler
-    can verify (reachability, exhaustiveness, typed inboxes). These primitives
-    have no code generation and previously compiled silently to `undefined`.
-
-    Example:
-      receive
-        :ping -> handle()
-
-    Fix: model the protocol as an `fsm` or `actor`, or call out to Erlang via
-    `@extern` for low-level interop.
-    """,
-    "E045" => """
-    E045: Untyped Send
-
-    The Melquiades operator `<-|` (or its unicode form `\u2709`) was
-    applied to a bare `Pid` receiver. Untyped sends bypass the
-    per-inbox protocol check and fall back to raw Erlang semantics.
-    The warning only fires under strict mode (`@strict_inbox true`)
-    so existing FFI callers remain undisturbed.
-
-    Example:
-      fn relay(pid: Pid, msg: Atom) -> Atom =
-        pid <-| msg       # warning under @strict_inbox
-
-    Fix: narrow the parameter to `Pid(Inbox)` where `Inbox` is the
-    actor's inbox ADT, or drop `@strict_inbox` for this module.
-    """,
-    "E046" => """
-    E046: Inbox Mismatch
-
-    A message type flowing into `<-|` is not a subtype of the
-    receiver's declared inbox ADT. The send would deliver a value the
-    actor's `on_message` cannot pattern-match.
-
-    Example:
-      actor Counter
-        on_message
-          (:inc, n) -> n + 1
-
-      fn bad(pid: Pid(Counter.Inbox)) -> Atom = pid <-| :reset
-      # Error: :reset is not one of {:inc, _} | {:dec, _}
-
-    Fix: send one of the declared inbox variants, or extend the
-    actor's inbox ADT to include the new message.
-    """,
-    "E047" => """
-    E047: Supervisor Unknown Child
-
-    A `sup` child spec references a module name that doesn't resolve
-    to a compiled actor, supervisor, FSM, or externally declared OTP
-    module. The runtime would crash at `start_link/1` time.
-
-    Example:
-      sup App.Root
-        children
-          Missing as worker   # Error: unknown module `Missing`
-
-    Fix: compile the referenced actor/supervisor first, or declare it
-    as external via the child spec's dotted form (`App.External as e`).
-    """,
-    "E048" => """
-    E048: Supervisor Cycle
-
-    A supervisor tree contains a cycle: either a supervisor lists
-    itself as a child, or two supervisors reference each other
-    transitively. Starting such a tree would recurse forever.
-
-    Example:
-      sup A
-        children
-          sup A as self   # Error: supervisor A lists itself
-
-    Fix: remove the self-reference, or restructure so the shared
-    subtree lives in a third, stand-alone supervisor.
-    """,
-    "E049" => """
-    E049: Actor Handler Non-Exhaustive
-
-    An actor's `on_message` clauses do not cover every variant of
-    the declared inbox ADT. Missing inbox messages would fall through
-    to the runtime's generic `handle_info/2`, leaving the actor in an
-    unexpected state.
-
-    Example:
-      actor Counter
-        inbox = Inc | Dec | Reset
-        on_message
-          Inc -> state(n + 1)
-          Dec -> state(n - 1)
-          # Warning: missing pattern `Reset`
-
-    Fix: add the missing clause, or a wildcard catch-all when falling
-    through is intentional.
-    """,
-    "E050" => """
-    E050: Invalid Supervisor Strategy
-
-    A `sup` container declared a `strategy`, `restart`, or `shutdown`
-    value outside the closed set the supervisor behaviour accepts.
-
-    Valid strategies: `:one_for_one`, `:one_for_all`, `:rest_for_one`,
-    `:simple_one_for_one`.
-    Valid restarts:  `:permanent`, `:transient`, `:temporary`.
-    Valid shutdowns: `:brutal_kill`, `:infinity`, or a positive
-    integer timeout in milliseconds.
-
-    Example:
-      sup App.Bad
-        strategy = :one_for_many   # Error: unknown strategy
-
-    Fix: pick one of the declared values listed above.
-    """,
-    "E051" => """
-    E051: Duplicate Application
-
-    A Cure project may declare at most one `app` container. The
-    project-wide compile driver scans every `.cure` file under `lib/`
-    and aborts with this error when it finds two or more.
-
-    Example:
-      lib/foo_app.cure:
-        app Foo
-      lib/bar_app.cure:
-        app Bar         # Error: duplicate application
-
-    The same code surfaces when the `app` container's name does not
-    match `[application].name` in `Cure.toml` (which itself defaults
-    to `[project].name`).
-
-    Fix: keep one `app` per project; if the mismatch was deliberate,
-    update either the `app` declaration or `[application].name`.
-    """,
-    "E052" => """
-    E052: Missing Application
-
-    `cure release` (or `mix cure.release`) was invoked against a
-    project that does not declare an `app` container. The release
-    boot script needs an `Application` callback module to start.
-
-    Fix: add an `app` container under `lib/`, or remove the
-    `[release]` table from `Cure.toml` if you only need a library.
-    """,
-    "E053" => """
-    E053: Start Phase Mismatch
-
-    `[application].start_phases` and the `app` container's
-    `on_phase :name` clauses disagree. Every declared phase needs a
-    handler, and every handler needs a declaration; otherwise the
-    OTP boot script would either crash on a missing callback or
-    silently never invoke a written one.
-
-    Example:
-      Cure.toml:
-        [application]
-        start_phases = ["init", "warm_cache"]
-
-      lib/app.cure:
-        app Demo
-          on_phase :init
-            (...) -> :ok
-          # Missing :warm_cache
-
-    Fix: add the missing handler or drop the entry from
-    `start_phases`.
-    """,
-    "E054" => """
-    E054: Unresolved Root Supervisor
-
-    The `root = ...` declaration inside an `app` container did not
-    resolve to a known supervisor module. `root` accepts:
-
-      * A `sup Name` soft-keyword form (resolves to `:"Cure.Sup.Name"`).
-      * A bare PascalCase identifier (also resolves to `:"Cure.Sup.Name"`).
-      * A dotted module path (`App.Root` -> `:"App.Root"`).
-      * An atom literal (`:my_app_sup`).
-
-    Example:
-      app Demo
-        root = 42        # Error: not a module reference
-
-    Fix: replace the value with one of the four accepted forms; for
-    a phase-only application without a root supervisor, omit the
-    `root` line entirely.
-    """,
-    "E055" => """
-    E055: Release Build Failed
-
-    `cure release` invoked `:systools.make_script/2` (or one of the
-    file-write steps that follow) and got back an error. The exact
-    payload is included in the diagnostic.
-
-    Common causes:
-      * A dependency listed under `[release].applications` is not
-        loaded -- `mix deps.compile` it first or remove it.
-      * `[release].vm_args` or `[release].sys_config` points at a
-        path that does not exist.
-      * The project's `.app` resource is malformed (typically when
-        `[application]` mixes types -- e.g. an integer in the
-        `applications` list).
-
-    Fix: address the underlying systools error, then re-run
-    `cure release`.
     """,
     "E056" => """
     E056: @extern Declaration Missing a Typed Head

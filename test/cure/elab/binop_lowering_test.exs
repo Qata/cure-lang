@@ -14,7 +14,8 @@ defmodule Cure.Elab.BinopLoweringTest do
 
   defp seeded, do: Builtins.seed(Env.empty())
 
-  @int2 {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+  @int2 {:pi, Cure.Core.Grade.unrestricted(), {:int_type},
+         {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
 
   # Body of a top-level fn `name`.
   defp body(src, name) do
@@ -103,8 +104,9 @@ defmodule Cure.Elab.BinopLoweringTest do
 
     test "1-arg PARTIAL builtin-op spine runs via wrapper + curried application" do
       body =
-        {:app, {:lam, Cure.Core.Grade.unrestricted(), {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}, {:app, {:var, 0}, {:int_lit, 4}}},
-         {:app, {:global, :int_add}, {:int_lit, 3}}}
+        {:app,
+         {:lam, Cure.Core.Grade.unrestricted(), {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}},
+          {:app, {:var, 0}, {:int_lit, 4}}}, {:app, {:global, :int_add}, {:int_lit, 3}}}
 
       env = Env.add_def(seeded(), :use_partial, {:int_type}, body, [])
 

@@ -7,9 +7,9 @@ defmodule Cure.Elab.Program do
   totality-certified signature.
   """
 
-  alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Compiler.{Lexer, MacroSyntax, MacroValidate, Parser}
   alias Cure.Core.{Env, Inductive, Validator}
-  alias Cure.Elab.{Coherence, Declarations, Erase, Resolution, TotalityClosure}
+  alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, Resolution, TotalityClosure}
   alias Cure.Stdlib.Paths
 
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
@@ -29,6 +29,46 @@ defmodule Cure.Elab.Program do
   """
   @spec check_ast(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast), do: check_ast(ast, [])
+
+  @doc "Validate that every `use Std.X` import names an available stdlib source."
+  @spec validate_stdlib_imports(tuple() | list()) :: :ok | {:error, term()}
+  def validate_stdlib_imports(ast) do
+    ast
+    |> imports()
+    |> Enum.find_value(:ok, fn source ->
+      case import_source_path(source) do
+        {:ok, module_name, _path} ->
+          if :code.ensure_loaded(String.to_atom("Cure." <> module_name)) ==
+               {:module, String.to_atom("Cure." <> module_name)} do
+            nil
+          else
+            missing_stdlib_error(module_name)
+          end
+
+        {:ok_user, _module_name, _path} ->
+          nil
+
+        {:error, {:missing_stdlib_source, source, _path}} ->
+          missing_stdlib_error(source)
+
+        {:error, {:missing_stdlib_source_dir, source}} ->
+          missing_stdlib_error(source)
+
+        :not_stdlib ->
+          nil
+      end
+    end)
+  end
+
+  defp missing_stdlib_error(source) do
+    module = String.to_atom("Cure." <> source)
+    user_name = String.replace_prefix(source, "Cure.", "")
+
+    {:error,
+     {:missing_stdlib_module, module,
+      "use #{user_name}: module '#{module}' not found. " <>
+        "Set [compiler] stdlib_path in Cure.toml or export CURE_LIB."}}
+  end
 
   @spec check_ast(tuple() | list(), keyword()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast, _opts) do
@@ -302,6 +342,7 @@ defmodule Cure.Elab.Program do
          {:ok, base} <- merge_env(seeded, prelude),
          {:ok, env0} <- merge_env(base, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
+         :ok <- MacroValidate.check_program(ast, env),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
       # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
       # defs so their intra-module uses keep inlining; any other module name
@@ -309,6 +350,62 @@ defmodule Cure.Elab.Program do
       {:ok, mark_inline_hints(certified, find_module_name(ast))}
     end
   end
+
+  @doc "Expand Tier-3 computed uses that occur in declaration position."
+  @spec expand_declaration_uses(tuple() | list()) :: {:ok, term()} | {:error, term()}
+  def expand_declaration_uses(ast) do
+    if declaration_computed_use?(ast) do
+      with {:ok, env} <- check_ast_elixir_core(ast) do
+        expand_declaration_nodes(ast, env)
+      end
+    else
+      {:ok, ast}
+    end
+  end
+
+  # Declaration expansion must not descend into function bodies. Those uses are
+  # expanded by Declarations with the callback context already attached to the
+  # function metadata; expanding them here would erase that lexical context.
+  defp declaration_computed_use?({:computed_use, _meta, _children}), do: true
+  defp declaration_computed_use?({:function_def, _meta, _body}), do: false
+  defp declaration_computed_use?({:macro_def, _meta, _rules}), do: false
+
+  defp declaration_computed_use?({tag, _meta, children})
+       when tag in [:block, :container] and is_list(children),
+       do: Enum.any?(children, &declaration_computed_use?/1)
+
+  defp declaration_computed_use?(list) when is_list(list),
+    do: Enum.any?(list, &declaration_computed_use?/1)
+
+  defp declaration_computed_use?(_other), do: false
+
+  defp expand_declaration_nodes({:computed_use, _meta, _children} = node, env),
+    do: MacroExpand.expand(node, env)
+
+  defp expand_declaration_nodes({:function_def, _meta, _body} = node, _env), do: {:ok, node}
+  defp expand_declaration_nodes({:macro_def, _meta, _rules} = node, _env), do: {:ok, node}
+
+  defp expand_declaration_nodes({tag, meta, children}, env)
+       when tag in [:block, :container] and is_list(children) do
+    with {:ok, children} <- expand_declaration_nodes(children, env) do
+      {:ok, {tag, meta, children}}
+    end
+  end
+
+  defp expand_declaration_nodes(list, env) when is_list(list) do
+    Enum.reduce_while(list, {:ok, []}, fn node, {:ok, acc} ->
+      case expand_declaration_nodes(node, env) do
+        {:ok, expanded} -> {:cont, {:ok, [expanded | acc]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+    |> case do
+      {:ok, nodes} -> {:ok, Enum.reverse(nodes)}
+      {:error, _} = error -> error
+    end
+  end
+
+  defp expand_declaration_nodes(node, _env), do: {:ok, node}
 
   @doc false
   @spec local_def_names(tuple() | list()) :: [atom()]
@@ -913,7 +1010,9 @@ defmodule Cure.Elab.Program do
     finding =
       Enum.find_value(defs, fn {name, %{body: body}} ->
         case Validator.validate(body, Validator.release_config()) do
-          {:ok, _warnings} -> nil
+          {:ok, _warnings} ->
+            nil
+
           {:error, rejections} ->
             if Enum.any?(rejections, &(&1.clause == :no_hole)), do: {name, rejections}
         end
@@ -944,6 +1043,35 @@ defmodule Cure.Elab.Program do
   defp declarations({:function_def, meta, body}) when is_list(meta),
     do: [{:function_def, meta, body}]
 
+  # A computed macro rule owns a typed record for its elab input. Keep the
+  # record in the ordinary declaration stream so the existing header pass,
+  # constructor registration, and projection checker remain authoritative.
+  # The fields are the rule's holes plus the reserved `context` field, which
+  # carries the reflected expansion context (`MacroSyntax.record_fields/1`).
+  defp declarations({:macro_def, meta, rules}) when is_list(meta) and is_list(rules) do
+    rules
+    |> Enum.filter(&(&1[:kind] == :computed))
+    |> Enum.uniq_by(&Map.get(&1, :syntax_type))
+    |> Enum.map(fn rule ->
+      fields =
+        rule
+        |> Map.get(:syntax_fields, [])
+        |> MacroSyntax.record_fields()
+        |> Enum.map(fn field ->
+          {:param, [type: macro_syntax_field_type(field, rule)], field}
+        end)
+
+      {:container,
+       [
+         container_type: :struct,
+         name: Map.fetch!(rule, :syntax_type),
+         macro_generated: true,
+         line: Keyword.get(meta, :line, 0),
+         col: Keyword.get(meta, :col, 0)
+       ], fields}
+    end)
+  end
+
   defp declarations({tag, _meta, _body} = node) when tag in [:container, :indexed_type], do: [node]
 
   # Compile-time typeclass declarations (Task 21). Both are top-level
@@ -961,6 +1089,14 @@ defmodule Cure.Elab.Program do
   end
 
   defp declarations(_other), do: []
+
+  defp macro_syntax_field_type(field, rule) do
+    if field in Map.get(rule, :syntax_repeated_fields, []) do
+      {:function_call, [name: "List"], [{:variable, [scope: :local], "Syntax"}]}
+    else
+      {:variable, [scope: :local], "Syntax"}
+    end
+  end
 
   defp imports({:block, _meta, items}) when is_list(items),
     do: Enum.flat_map(items, &imports/1)
@@ -1004,7 +1140,9 @@ defmodule Cure.Elab.Program do
             {:ok, merged} -> {:cont, {:ok, merged}}
             {:error, _} = err -> {:halt, err}
           end
-        {:error, _} = err -> {:halt, err}
+
+        {:error, _} = err ->
+          {:halt, err}
       end
     end)
   end
@@ -1018,6 +1156,7 @@ defmodule Cure.Elab.Program do
     |> Enum.map(&import_source_path/1)
     |> Enum.flat_map(fn
       {:ok, module_name, path} -> [{to_string(module_name), path}]
+      {:ok_user, module_name, path} -> [{to_string(module_name), path}]
       _ -> []
     end)
     |> Enum.uniq_by(fn {mod_id, _path} -> mod_id end)
@@ -1038,25 +1177,32 @@ defmodule Cure.Elab.Program do
   defp bfs_import_modules([source | rest], seen, acc) do
     case import_source_path(source) do
       {:ok, module_name, path} ->
-        mod_id = to_string(module_name)
+        bfs_import_modules_for_path(source, module_name, path, rest, seen, acc)
 
-        if MapSet.member?(seen, mod_id) do
-          bfs_import_modules(rest, seen, acc)
-        else
-          nested =
-            with {:ok, src} <- File.read(path),
-                 {:ok, tokens} <- Lexer.tokenize(src, emit_events: false),
-                 {:ok, nested_ast} <- Parser.parse(tokens, emit_events: false) do
-              imports(nested_ast)
-            else
-              _ -> []
-            end
-
-          bfs_import_modules(nested ++ rest, MapSet.put(seen, mod_id), [{mod_id, path} | acc])
-        end
+      {:ok_user, module_name, path} ->
+        bfs_import_modules_for_path(source, module_name, path, rest, seen, acc)
 
       _ ->
         bfs_import_modules(rest, seen, acc)
+    end
+  end
+
+  defp bfs_import_modules_for_path(_source, module_name, path, rest, seen, acc) do
+    mod_id = to_string(module_name)
+
+    if MapSet.member?(seen, mod_id) do
+      bfs_import_modules(rest, seen, acc)
+    else
+      nested =
+        with {:ok, src} <- File.read(path),
+             {:ok, tokens} <- Lexer.tokenize(src, emit_events: false),
+             {:ok, nested_ast} <- Parser.parse(tokens, emit_events: false) do
+          imports(nested_ast)
+        else
+          _ -> []
+        end
+
+      bfs_import_modules(nested ++ rest, MapSet.put(seen, mod_id), [{mod_id, path} | acc])
     end
   end
 
@@ -1248,7 +1394,7 @@ defmodule Cure.Elab.Program do
 
   defp import_source_env(:not_stdlib, _seen), do: {:ok, Env.empty()}
 
-  defp import_source_env({:ok, module_name, path}, seen) do
+  defp import_source_env({kind, module_name, path}, seen) when kind in [:ok, :ok_user] do
     if MapSet.member?(seen, module_name) do
       {:ok, Env.empty()}
     else
@@ -1306,24 +1452,57 @@ defmodule Cure.Elab.Program do
 
   defp import_source_path(source) do
     case String.split(source, ".") do
-      ["Std", name] ->
+      ["Std" | segments] when segments != [] ->
         case Paths.source_dir() do
           nil ->
-            {:error, {:missing_stdlib_source_dir, source}}
+            case user_source_path(source) do
+              {:ok, path} -> {:ok_user, source, path}
+              :not_found -> {:error, {:missing_stdlib_source_dir, source}}
+            end
 
           dir ->
-            path = Path.join(dir, String.downcase(name) <> ".cure")
+            path = Path.join(dir, String.downcase(Enum.join(segments, "_")) <> ".cure")
 
             if File.exists?(path) do
               {:ok, source, path}
             else
-              {:error, {:missing_stdlib_source, source, path}}
+              case user_source_path(source) do
+                {:ok, user_path} -> {:ok_user, source, user_path}
+                :not_found -> {:error, {:missing_stdlib_source, source, path}}
+              end
             end
         end
 
       _ ->
-        :not_stdlib
+        case user_source_path(source) do
+          {:ok, path} -> {:ok_user, source, path}
+          :not_found -> :not_stdlib
+        end
     end
+  end
+
+  # Project modules are source imports too. The dependent pipeline searches
+  # the configured source roots by declared module name rather than filename,
+  # so descriptive filenames such as `zz_lib.cure` remain valid imports.
+  defp user_source_path(source) do
+    Process.get(:cure_source_roots, [])
+    |> Enum.flat_map(fn root -> Path.wildcard(Path.join(root, "**/*.cure")) end)
+    |> Enum.uniq()
+    |> Enum.find_value(:not_found, fn path ->
+      case File.read(path) do
+        {:ok, contents} ->
+          with {:ok, tokens} <- Lexer.tokenize(contents, emit_events: false),
+               {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+               ^source <- find_module_name(ast) do
+            {:ok, path}
+          else
+            _ -> nil
+          end
+
+        {:error, _} ->
+          nil
+      end
+    end)
   end
 
   # Every `Env` field this function knows how to combine. `merge_env/2` builds a
@@ -1535,7 +1714,9 @@ defmodule Cure.Elab.Program do
   defp builtin_key([key]) when is_atom(key), do: key
 
   defp body_pass(fn_decls, env) do
-    Enum.reduce_while(fn_decls, {:ok, env}, fn decl, {:ok, acc} ->
+    {plain, computed} = Enum.split_with(fn_decls, &(not MacroExpand.contains_computed_use?(&1)))
+
+    Enum.reduce_while(plain ++ computed, {:ok, env}, fn decl, {:ok, acc} ->
       case Declarations.elaborate_function_body(decl, acc) do
         {:ok, acc2} -> {:cont, {:ok, acc2}}
         {:error, _} = err -> {:halt, err}

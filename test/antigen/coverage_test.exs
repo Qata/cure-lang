@@ -34,7 +34,9 @@ defmodule Antigen.CoverageTest do
     {_c, _b, flags1, _l} = Coverage.key(Challenge.stub(single))
     refute :has_shadowing in flags1
 
-    curried_pi = {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}}}
+    curried_pi =
+      {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:type, 0}}}
+
     {_c, _b, flags2, _l} = Coverage.key(Challenge.stub(curried_pi))
     assert :has_shadowing in flags2
   end
@@ -43,39 +45,65 @@ defmodule Antigen.CoverageTest do
     dec = {:data, :Dec, [], []}
     fam = Cure.Core.Inductive.family(:Box, [], [{:d, dec}], 0)
     ctors = [Cure.Core.Inductive.ctor(:mk, [{:x, dec}], [{:var, 0}])]
-    body = {:case, {:ctor, :mk, [{:ctor, :Causal, []}]}, {:lam, Cure.Core.Grade.unrestricted(), dec, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Box, [], [{:var, 0}]}, dec}},
-            [{:mk, 1, {:var, 0}}]}
 
-    c = Antigen.Challenge.new(kind: :indexed_case, assay: "indexed/case", label: :well_typed,
-          payload: %{families: [{fam, ctors}], def_name: :probe, def_type: dec, def_body: body})
+    body =
+      {:case, {:ctor, :mk, [{:ctor, :Causal, []}]},
+       {:lam, Cure.Core.Grade.unrestricted(), dec,
+        {:lam, Cure.Core.Grade.unrestricted(), {:data, :Box, [], [{:var, 0}]}, dec}}, [{:mk, 1, {:var, 0}}]}
+
+    c =
+      Antigen.Challenge.new(
+        kind: :indexed_case,
+        assay: "indexed/case",
+        label: :well_typed,
+        payload: %{families: [{fam, ctors}], def_name: :probe, def_type: dec, def_body: body}
+      )
 
     terms = Antigen.Coverage.terms_of(c)
-    assert dec in terms           # family index type
-    assert {:var, 0} in terms     # ctor result index
-    assert body in terms          # def body
+    # family index type
+    assert dec in terms
+    # ctor result index
+    assert {:var, 0} in terms
+    # def body
+    assert body in terms
   end
 
   test "terms_of extracts type, term and ctx for :mutant_term" do
     # "fst on a Nat" spelled inductively (D2): projection case over mk_pair.
     fault_term =
       {:case, {:ctor, :Z, []},
-       {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
-       [{:mk_pair, 2, {:var, 1}}]}
+       {:lam, Cure.Core.Grade.unrestricted(),
+        {:data, :Sigma,
+         [{:data, :Nat, [], []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}],
+         []}, {:data, :Nat, [], []}}, [{:mk_pair, 2, {:var, 1}}]}
 
-    c = Antigen.Challenge.new(
-      kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
-      payload: %{sig: :v1, ctx: [{:data, :Nat, [], []}],
-                 type: {:data, :Nat, [], []}, term: fault_term,
-                 fault: %{kind: :proj_non_pair, witness: :head,
-                          expected_head: :Sigma, injected_head: :Nat, scope: nil}}
-    )
+    c =
+      Antigen.Challenge.new(
+        kind: :mutant_term,
+        assay: "mutation/rejection",
+        label: :ill_typed,
+        payload: %{
+          sig: :v1,
+          ctx: [{:data, :Nat, [], []}],
+          type: {:data, :Nat, [], []},
+          term: fault_term,
+          fault: %{kind: :proj_non_pair, witness: :head, expected_head: :Sigma, injected_head: :Nat, scope: nil}
+        }
+      )
+
     ts = Antigen.Coverage.terms_of(c)
     assert fault_term in ts
     assert {:data, :Nat, [], []} in ts
   end
 
-  defp tt(term), do: Challenge.new(kind: :typed_term, assay: "term/infer_check", label: :well_typed,
-                                   payload: %{sig: :v1, ctx: [], type: {:data, :Nat, [], []}, term: term})
+  defp tt(term),
+    do:
+      Challenge.new(
+        kind: :typed_term,
+        assay: "term/infer_check",
+        label: :well_typed,
+        payload: %{sig: :v1, ctx: [], type: {:data, :Nat, [], []}, term: term}
+      )
 
   test "coverage key distinguishes terms that collide under the coarse key" do
     # `Coverage.constructors/1` folds `tag(node) = elem(node, 0)` over EVERY subterm,
@@ -83,16 +111,20 @@ defmodule Antigen.CoverageTest do
     # terms built from the SAME former-tag set (only :app/:global/:var), differing
     # only in :app *count*, collide today (same ctors, same :b0_2 bucket, same
     # {:app_present} flags, same label) but differ after the former-histogram enrichment.
-    a = tt({:app, {:global, :plus}, {:var, 0}})                              # one :app
-    b = tt({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 0}})           # two :app
+    # one :app
+    a = tt({:app, {:global, :plus}, {:var, 0}})
+    # two :app
+    b = tt({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 0}})
     refute Coverage.key(a) == Coverage.key(b)
     assert Coverage.key_string(Coverage.key(b)) =~ "former_app_nm"
   end
 
   test "enriched key still plateaus (bounded distinct keys over many terms)" do
-    terms = for d <- 0..40 do
-      Enum.reduce(0..rem(d, 6), {:ctor, :Z, []}, fn _, acc -> {:ctor, :S, [acc]} end)
-    end
+    terms =
+      for d <- 0..40 do
+        Enum.reduce(0..rem(d, 6), {:ctor, :Z, []}, fn _, acc -> {:ctor, :S, [acc]} end)
+      end
+
     keys = terms |> Enum.map(&Coverage.key(tt(&1))) |> Enum.uniq()
     assert length(keys) <= 12, "key space must saturate, got #{length(keys)}"
   end

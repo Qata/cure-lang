@@ -74,8 +74,7 @@ defmodule Antigen.Generators.Rewrite do
 
   # -- shared families (duplicated from Generators.Indexed; those are defp) ----
   defp dec_family,
-    do: {Inductive.family(:Dec, [], [], 0),
-         [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])]}
+    do: {Inductive.family(:Dec, [], [], 0), [Inductive.ctor(:Dcoupled, [], []), Inductive.ctor(:Causal, [], [])]}
 
   defp foo_family, do: {Inductive.family(:Foo, [], [], 0), [Inductive.ctor(:MkFoo, [], [])]}
 
@@ -87,8 +86,9 @@ defmodule Antigen.Generators.Rewrite do
   # Equivalent itself — byte-mirror of core/builtins.ex's eq_family/eq_ctors
   # (the challenge env is rebuilt from Env.empty, which has no builtins).
   defp eq_family,
-    do: {Inductive.family(:Equivalent, [a: {:type, 0}], [x: {:var, 0}, y: {:var, 1}], 0),
-         [Inductive.ctor(:reflexive, [w: {:var, 0}], [{:var, 0}, {:var, 0}], [:erased], [{:var, 1}])]}
+    do:
+      {Inductive.family(:Equivalent, [a: {:type, 0}], [x: {:var, 0}, y: {:var, 1}], 0),
+       [Inductive.ctor(:reflexive, [w: {:var, 0}], [{:var, 0}, {:var, 0}], [:erased], [{:var, 1}])]}
 
   @doc "Rebuild the Env: declare every family, then add the def under test."
   @spec env_of(Challenge.t()) :: Env.t()
@@ -102,8 +102,13 @@ defmodule Antigen.Generators.Rewrite do
   defp transport(proof, ty, motive, l) do
     scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
     arrow = {:pi, Cure.Core.Grade.unrestricted(), {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
-    arrow_motive = {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
-    {:case, proof, arrow_motive, [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
+
+    arrow_motive =
+      {:lam, Cure.Core.Grade.unrestricted(), ty,
+       {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
+
+    {:case, proof, arrow_motive,
+     [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
   end
 
   # -- 4.1 Equivalent formation ------------------------------------------------
@@ -114,16 +119,30 @@ defmodule Antigen.Generators.Rewrite do
   @spec eq_formation(:well_typed | :ill_typed) :: Challenge.t()
   def eq_formation(:well_typed) do
     eq = {:data, :Equivalent, [@dec], [@causal, @dcoupled]}
-    challenge(:well_typed, [dec_family(), eq_family()], :eq_formation,
-      {:pi, Cure.Core.Grade.unrestricted(), eq, @dec}, {:lam, Cure.Core.Grade.unrestricted(), eq, @causal},
-      "Equivalent Dec Causal Dcoupled — both endpoints : Dec", :eq_formation_well_typed)
+
+    challenge(
+      :well_typed,
+      [dec_family(), eq_family()],
+      :eq_formation,
+      {:pi, Cure.Core.Grade.unrestricted(), eq, @dec},
+      {:lam, Cure.Core.Grade.unrestricted(), eq, @causal},
+      "Equivalent Dec Causal Dcoupled — both endpoints : Dec",
+      :eq_formation_well_typed
+    )
   end
 
   def eq_formation(:ill_typed) do
     eq = {:data, :Equivalent, [@dec], [@causal, {:ctor, :MkFoo, []}]}
-    challenge(:ill_typed, [dec_family(), foo_family(), eq_family()], :eq_formation,
-      {:pi, Cure.Core.Grade.unrestricted(), eq, @dec}, {:lam, Cure.Core.Grade.unrestricted(), eq, @causal},
-      "ill-typed: Equivalent Dec Causal MkFoo — MkFoo : Foo, not Dec", :eq_formation_ill_typed)
+
+    challenge(
+      :ill_typed,
+      [dec_family(), foo_family(), eq_family()],
+      :eq_formation,
+      {:pi, Cure.Core.Grade.unrestricted(), eq, @dec},
+      {:lam, Cure.Core.Grade.unrestricted(), eq, @causal},
+      "ill-typed: Equivalent Dec Causal MkFoo — MkFoo : Foo, not Dec",
+      :eq_formation_ill_typed
+    )
   end
 
   # -- 4.2 reflexive typing + reflexive-conversion guard -----------------------
@@ -131,38 +150,63 @@ defmodule Antigen.Generators.Rewrite do
   # base: reflexive Causal : Equivalent Dec Causal Causal, checked in a def.
   def refl_typing(:base) do
     eq = {:data, :Equivalent, [@dec], [@causal, @causal]}
-    challenge(:well_typed, [dec_family(), eq_family()], :refl_typing,
-      eq, {:ctor, :reflexive, [@causal]},
-      "reflexive Causal : Equivalent Dec Causal Causal", :refl_typing_base)
+
+    challenge(
+      :well_typed,
+      [dec_family(), eq_family()],
+      :refl_typing,
+      eq,
+      {:ctor, :reflexive, [@causal]},
+      "reflexive Causal : Equivalent Dec Causal Causal",
+      :refl_typing_base
+    )
   end
 
   # redex: endpoint is a redex that normalizes to Causal — conv is up-to-nf.
   def refl_typing(:redex) do
     redex = {:app, {:lam, Cure.Core.Grade.unrestricted(), @dec, {:var, 0}}, @causal}
     eq = {:data, :Equivalent, [@dec], [@causal, redex]}
-    challenge(:well_typed, [dec_family(), eq_family()], :refl_typing,
-      eq, {:ctor, :reflexive, [@causal]},
+
+    challenge(
+      :well_typed,
+      [dec_family(), eq_family()],
+      :refl_typing,
+      eq,
+      {:ctor, :reflexive, [@causal]},
       "reflexive Causal against Equivalent Dec Causal ((λx.x) Causal) — conv up-to-normalization",
-      :refl_typing_redex)
+      :refl_typing_redex
+    )
   end
 
   # conjunct-1 violation: endpoints not convertible (Causal vs Dcoupled).
   def refl_typing(:conjunct1_violation) do
     eq = {:data, :Equivalent, [@dec], [@causal, @dcoupled]}
-    challenge(:ill_typed, [dec_family(), eq_family()], :refl_typing,
-      eq, {:ctor, :reflexive, [@causal]},
+
+    challenge(
+      :ill_typed,
+      [dec_family(), eq_family()],
+      :refl_typing,
+      eq,
+      {:ctor, :reflexive, [@causal]},
       "ill-typed: reflexive Causal : Equivalent Dec Causal Dcoupled — endpoints not convertible (conjunct 1)",
-      :refl_typing_conjunct1_violation)
+      :refl_typing_conjunct1_violation
+    )
   end
 
   # conjunct-2 violation: endpoints equal to each other (Dcoupled,Dcoupled) so
   # conjunct 1 holds, but reflexive's witness Causal isn't convertible to them.
   def refl_typing(:conjunct2_violation) do
     eq = {:data, :Equivalent, [@dec], [@dcoupled, @dcoupled]}
-    challenge(:ill_typed, [dec_family(), eq_family()], :refl_typing,
-      eq, {:ctor, :reflexive, [@causal]},
+
+    challenge(
+      :ill_typed,
+      [dec_family(), eq_family()],
+      :refl_typing,
+      eq,
+      {:ctor, :reflexive, [@causal]},
       "ill-typed: reflexive Causal : Equivalent Dec Dcoupled Dcoupled — conjunct 1 holds, witness≠endpoints (conjunct 2)",
-      :refl_typing_conjunct2_violation)
+      :refl_typing_conjunct2_violation
+    )
   end
 
   # -- 4.3 transport premise discipline -----------------------------------------
@@ -182,10 +226,18 @@ defmodule Antigen.Generators.Rewrite do
 
     body =
       {:lam, Cure.Core.Grade.unrestricted(), @eq_cd,
-       {:lam, Cure.Core.Grade.unrestricted(), @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
+       {:lam, Cure.Core.Grade.unrestricted(), @p_causal,
+        {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
 
-    challenge(:well_typed, [dec_family(), p_family(), eq_family()], :rewrite_premise, dt, body,
-      "transport p (λx.P x) h : P Dcoupled from h : P Causal", :rewrite_premise_well_typed)
+    challenge(
+      :well_typed,
+      [dec_family(), p_family(), eq_family()],
+      :rewrite_premise,
+      dt,
+      body,
+      "transport p (λx.P x) h : P Dcoupled from h : P Causal",
+      :rewrite_premise_well_typed
+    )
   end
 
   # proof is `h : P Causal`, not an equality → the reflexive branch cannot
@@ -196,9 +248,15 @@ defmodule Antigen.Generators.Rewrite do
     body =
       {:lam, Cure.Core.Grade.unrestricted(), @p_causal, {:app, transport({:var, 0}, @dec, @motive, @causal), {:var, 0}}}
 
-    challenge(:ill_typed, [dec_family(), p_family(), eq_family()], :rewrite_premise, dt, body,
+    challenge(
+      :ill_typed,
+      [dec_family(), p_family(), eq_family()],
+      :rewrite_premise,
+      dt,
+      body,
       "ill-typed: transport proof is h : P Causal, not an Equivalent — reflexive branch is foreign",
-      :rewrite_premise_proof_not_eq)
+      :rewrite_premise_proof_not_eq
+    )
   end
 
   # proof IS a genuine equality (so we reach the argument check), but the body
@@ -207,11 +265,18 @@ defmodule Antigen.Generators.Rewrite do
     dt = {:pi, Cure.Core.Grade.unrestricted(), @eq_cd, @p_dcoupled}
 
     body =
-      {:lam, Cure.Core.Grade.unrestricted(), @eq_cd, {:app, transport({:var, 0}, @dec, @motive, @causal), {:ctor, :Causal, []}}}
+      {:lam, Cure.Core.Grade.unrestricted(), @eq_cd,
+       {:app, transport({:var, 0}, @dec, @motive, @causal), {:ctor, :Causal, []}}}
 
-    challenge(:ill_typed, [dec_family(), p_family(), eq_family()], :rewrite_premise, dt, body,
+    challenge(
+      :ill_typed,
+      [dec_family(), p_family(), eq_family()],
+      :rewrite_premise,
+      dt,
+      body,
       "ill-typed: transported body Causal:Dec, not P Causal — premise check fails at the app",
-      :rewrite_premise_body_mismatch)
+      :rewrite_premise_body_mismatch
+    )
   end
 
   # -- 4.4 transport result-type correctness ----------------------------------
@@ -222,10 +287,18 @@ defmodule Antigen.Generators.Rewrite do
 
     body =
       {:lam, Cure.Core.Grade.unrestricted(), @eq_cd,
-       {:lam, Cure.Core.Grade.unrestricted(), @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
+       {:lam, Cure.Core.Grade.unrestricted(), @p_causal,
+        {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
 
-    challenge(:well_typed, [dec_family(), p_family(), eq_family()], :transport_type, dt, body,
-      "declared P Dcoupled; the transport's Π moves the type to M b", :transport_type_transport_correct)
+    challenge(
+      :well_typed,
+      [dec_family(), p_family(), eq_family()],
+      :transport_type,
+      dt,
+      body,
+      "declared P Dcoupled; the transport's Π moves the type to M b",
+      :transport_type_transport_correct
+    )
   end
 
   # refl coherence: transport (reflexive Causal) (λx.P x) @ h : P Causal (b = a).
@@ -240,8 +313,15 @@ defmodule Antigen.Generators.Rewrite do
     body =
       {:lam, Cure.Core.Grade.unrestricted(), @p_causal, {:app, transport(proof, @dec, @motive, @causal), {:var, 0}}}
 
-    challenge(:well_typed, [dec_family(), p_family(), eq_family()], :transport_type, dt, body,
-      "transport (reflexive Causal) M h : P Causal — vacuous transport", :transport_type_refl_coherence)
+    challenge(
+      :well_typed,
+      [dec_family(), p_family(), eq_family()],
+      :transport_type,
+      dt,
+      body,
+      "transport (reflexive Causal) M h : P Causal — vacuous transport",
+      :transport_type_refl_coherence
+    )
   end
 
   # left-at-source: SAME transport body but declared codomain P Causal (= M a).
@@ -251,11 +331,18 @@ defmodule Antigen.Generators.Rewrite do
 
     body =
       {:lam, Cure.Core.Grade.unrestricted(), @eq_cd,
-       {:lam, Cure.Core.Grade.unrestricted(), @p_causal, {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
+       {:lam, Cure.Core.Grade.unrestricted(), @p_causal,
+        {:app, transport({:var, 1}, @dec, @motive, @causal), {:var, 0}}}}
 
-    challenge(:ill_typed, [dec_family(), p_family(), eq_family()], :transport_type, dt, body,
+    challenge(
+      :ill_typed,
+      [dec_family(), p_family(), eq_family()],
+      :transport_type,
+      dt,
+      body,
       "ill-typed: declared P Causal but the transport yields P Dcoupled — accepting = no transport",
-      :transport_type_left_at_source)
+      :transport_type_left_at_source
+    )
   end
 
   defp challenge(label, families, name, def_type, def_body, note, cell) do

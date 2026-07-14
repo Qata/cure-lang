@@ -78,12 +78,14 @@ defmodule Cure.Elab.CharLiteralTest do
       # locus 1 (infer)
       assert {:error, {:char_literal_out_of_range, 0x110000}} =
                Elaborator.elaborate_expr_typed(char_node(0x110000), [], ctx, sig)
+
       assert {:error, {:char_literal_out_of_range, -1}} =
                Elaborator.elaborate_expr_typed(char_node(-1), [], ctx, sig)
 
       # locus 3 (scope-only) — the case that would otherwise crash the kernel
       assert {:error, {:char_literal_out_of_range, 0x110000}} =
                Elaborator.elaborate_expr(char_node(0x110000), [], sig)
+
       assert {:error, {:char_literal_out_of_range, -1}} =
                Elaborator.elaborate_expr(char_node(-1), [], sig)
     end

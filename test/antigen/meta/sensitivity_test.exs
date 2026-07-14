@@ -21,6 +21,7 @@ defmodule Antigen.Meta.SensitivityTest do
   test "row 2 — infer_wrong_type is CAUGHT by term/infer_check" do
     ch = typed_term_ch()
     assert :ok = Antigen.Assays.Term.run(ch, WeakKernel.real())
+
     assert {:violation, {:check_disagrees, _}} =
              Antigen.Assays.Term.run(ch, WeakKernel.weaken(:infer_wrong_type))
   end

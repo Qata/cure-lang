@@ -172,7 +172,6 @@ defmodule Cure.Core.Normalise do
   defp nf_struct({:vctor, name, args}, sig, depth, opts),
     do: {:vctor, name, Enum.map(args, &nf_value(&1, sig, depth, opts))}
 
-
   defp nf_struct({:vneutral, neutral}, sig, depth, opts),
     do: {:vneutral, nf_neutral(neutral, sig, depth, opts)}
 
@@ -212,8 +211,7 @@ defmodule Cure.Core.Normalise do
   defp nf_branch({c, arity, {:closure, env, body}}, sig, depth, opts),
     do:
       {c, arity,
-       {:closure, id_env(depth),
-        quote_nf(Eval.open_branch(env, body, arity, depth), sig, depth + arity, opts)}}
+       {:closure, id_env(depth), quote_nf(Eval.open_branch(env, body, arity, depth), sig, depth + arity, opts)}}
 
   defp quote_nf(value, sig, depth, opts), do: value |> nf_value(sig, depth, opts) |> Quote.reify(depth, sig)
 
@@ -351,13 +349,15 @@ defmodule Cure.Core.Normalise do
   # Amendment A1 (spec §1-A): struct_eq/struct_ne take [tyval, l, r] and
   # delegate to the SAME audited :eq/:ne fold over the two VALUE args — the type
   # argument is not consulted (and not forced for literalness). Folds iff both
-  # value args whnf to int/float literals (late-instantiated polymorphic
+  # value args whnf to int/float/atom literals (late-instantiated polymorphic
   # operands, same as today's prim); NEUTRAL otherwise — ADT equality never
   # computes in the kernel (R8c).
   defp builtin_op_fold(op, [_tyval, l, r], sig, opts) when op in [:struct_eq, :struct_ne] do
     vals = Enum.map([l, r], &whnf_value(&1, sig, opts))
 
-    if Enum.all?(vals, &(match?({:vint, _}, &1) or match?({:vfloat, _}, &1))) do
+    if Enum.all?(vals, fn value ->
+         match?({:vint, _}, value) or match?({:vfloat, _}, value) or match?({:vatom, _}, value)
+       end) do
       Eval.fold(if(op == :struct_eq, do: :eq, else: :ne), vals)
     else
       :stuck

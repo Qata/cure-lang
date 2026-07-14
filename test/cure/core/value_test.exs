@@ -26,10 +26,7 @@ defmodule Cure.Core.ValueTest do
     # Inductive Sigma (D2): a stuck projection is a stuck `{:ncase}` over the
     # neutral pair (covered by the `{:ncase}` row below) — no `{:nfst}`/`{:nsnd}`.
 
-    assert Value.neutral?(
-             {:ncase, {:nvar, 0}, {:closure, [], {:type, 0}},
-              [{:prim, 0, {:closure, [], {:type, 0}}}]}
-           )
+    assert Value.neutral?({:ncase, {:nvar, 0}, {:closure, [], {:type, 0}}, [{:prim, 0, {:closure, [], {:type, 0}}}]})
 
     refute Value.neutral?({:nvar, -1})
     refute Value.neutral?(:nope)

@@ -56,8 +56,14 @@ defmodule Cure.Core.BuiltinOpTest do
     # Register int_add as an ORDINARY def (constant-42 body) in a NON-seeded env:
     # the builtin marker comes only from Builtins.seed, so this def has none.
     # Env.certify/2 accepts it (closed lam body — inductive.ex:68-82).
-    ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
-    body = {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 42}}}
+    ty =
+      {:pi, Cure.Core.Grade.unrestricted(), {:int_type},
+       {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+
+    body =
+      {:lam, Cure.Core.Grade.unrestricted(), {:int_type},
+       {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 42}}}
+
     env = Env.empty() |> Env.add_def(:int_add, ty, body) |> Env.certify(:int_add)
     ctx = Context.empty(env)
     t = Normalise.nf(ctx, app2(:int_add, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
@@ -75,18 +81,47 @@ defmodule Cure.Core.BuiltinOpTest do
 
     test "struct_eq folds on two int literals (polymorphic instantiation)" do
       t =
-        Normalise.nf(ctx(), app3(:struct_eq, {:int_type}, {:int_lit, 3}, {:int_lit, 3}),
-          delta: :certified
-        )
+        Normalise.nf(ctx(), app3(:struct_eq, {:int_type}, {:int_lit, 3}, {:int_lit, 3}), delta: :certified)
 
       assert {:ctor, :True, []} = t
 
       t2 =
-        Normalise.nf(ctx(), app3(:struct_ne, {:int_type}, {:int_lit, 3}, {:int_lit, 4}),
-          delta: :certified
-        )
+        Normalise.nf(ctx(), app3(:struct_ne, {:int_type}, {:int_lit, 3}, {:int_lit, 4}), delta: :certified)
 
       assert {:ctor, :True, []} = t2
+    end
+
+    test "struct_eq and struct_ne fold on Atom literals" do
+      assert {:ctor, :True, []} =
+               Normalise.nf(
+                 ctx(),
+                 app3(:struct_eq, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :node}),
+                 delta: :certified
+               )
+
+      assert {:ctor, :False, []} =
+               Normalise.nf(
+                 ctx(),
+                 app3(:struct_eq, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :leaf}),
+                 delta: :certified
+               )
+
+      assert {:ctor, :True, []} =
+               Normalise.nf(
+                 ctx(),
+                 app3(:struct_ne, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :leaf}),
+                 delta: :certified
+               )
+    end
+
+    test "Atom equality remains neutral for open and cross-kind values" do
+      ctx = Context.extend(ctx(), {:vatom_type})
+      open = app3(:struct_eq, {:atom_type}, {:var, 0}, {:atom_lit, :node})
+
+      assert ^open = Normalise.nf(ctx, open, delta: :certified)
+
+      mixed = app3(:struct_eq, {:atom_type}, {:atom_lit, :node}, {:int_lit, 1})
+      assert ^mixed = Normalise.nf(ctx(), mixed, delta: :certified)
     end
 
     test "struct_eq stays NEUTRAL on constructor args (ADT equality never computes in-kernel)" do
@@ -95,8 +130,14 @@ defmodule Cure.Core.BuiltinOpTest do
     end
 
     test "R1 pin: a user-registered struct_eq with its OWN body is never builtin-folded" do
-      ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
-      body = {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 42}}}
+      ty =
+        {:pi, Cure.Core.Grade.unrestricted(), {:int_type},
+         {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+
+      body =
+        {:lam, Cure.Core.Grade.unrestricted(), {:int_type},
+         {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 42}}}
+
       env = Env.empty() |> Env.add_def(:struct_eq, ty, body) |> Env.certify(:struct_eq)
       ctx = Context.empty(env)
       t = Normalise.nf(ctx, app2(:struct_eq, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)

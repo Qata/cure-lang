@@ -31,8 +31,7 @@ defmodule Antigen.Generators.ElabGuardLint do
          x when x == b -> S(Z())
          x when x > b -> S(S(Z()))
      """},
-    {"exhaustive/complement", :exhaustive_complement, :accept, nil,
-     "two-guard complement over Int, no catch-all",
+    {"exhaustive/complement", :exhaustive_complement, :accept, nil, "two-guard complement over Int, no catch-all",
      """
        fn cmp(a: Int, b: Int) -> Nat = match a
          x when x < b -> Z()

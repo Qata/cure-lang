@@ -17,7 +17,7 @@ defmodule Cure.Profiler do
 
   alias Cure.Pipeline.Events
 
-  @stages [:lexer, :parser, :type_checker, :codegen, :fsm_verifier]
+  @stages [:lexer, :parser, :type_checker, :codegen]
 
   @doc """
   Profile the compilation of a .cure file.

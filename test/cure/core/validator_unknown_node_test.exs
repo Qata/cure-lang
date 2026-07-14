@@ -16,6 +16,7 @@ defmodule Cure.Core.ValidatorUnknownNodeTest do
     node = {:app, :one, {:global, :f}, {:hole, :arg}}
 
     assert {:error, diags} = Validator.validate(node, Validator.release_config())
+
     assert Enum.any?(diags, &(&1.clause == :no_hole)),
            "the nested hole must be discovered and rejected; got #{inspect(diags)}"
   end

@@ -55,8 +55,7 @@ defmodule Antigen.Generators.DotForcing do
   # Coverage cells are kept OUT of this tuple (in @case_cells, positionally aligned)
   # so the 8-tuple shape stays stable for the corpus-roundtrip / menu tests.
   @cases [
-    {0, :Vec, :vcons, [{:ctor, :S, [@z]}], "n", @z, :accept,
-     "Vec vcons {n=.Z} vs forced Z — syntactic match"},
+    {0, :Vec, :vcons, [{:ctor, :S, [@z]}], "n", @z, :accept, "Vec vcons {n=.Z} vs forced Z — syntactic match"},
     {0, :Vec, :vcons, [{:ctor, :S, [@z]}], "n", @lam_id_z, :accept,
      "Vec vcons {n=.((λx.x) Z)} vs forced Z — convertible, non-syntactic (Conv decides)"},
     {0, :Vec, :vcons, [{:ctor, :S, [@z]}], "n", {:ctor, :S, [@z]}, :reject,
@@ -67,10 +66,8 @@ defmodule Antigen.Generators.DotForcing do
      "Vec vcons {x=.Z} — x is a non-pinned field (named_implicit_unforced)"},
     {0, :Vec, :vcons, [{:ctor, :S, [@z]}], "bogus", @z, :unforced,
      "Vec vcons {bogus=.Z} — name absent from telescope (named_implicit_unforced)"},
-    {0, :Sq, :mksq, [@z, @z], "n", @z, :accept,
-     "Sq mksq {n=.Z} vs forced Z — multi-index family, diagonal pin"},
-    {0, :Sq, :mksq, [@z, @z], "n", {:ctor, :S, [@z]}, :reject,
-     "Sq mksq {n=.(S Z)} vs forced Z — multi-index reject"},
+    {0, :Sq, :mksq, [@z, @z], "n", @z, :accept, "Sq mksq {n=.Z} vs forced Z — multi-index family, diagonal pin"},
+    {0, :Sq, :mksq, [@z, @z], "n", {:ctor, :S, [@z]}, :reject, "Sq mksq {n=.(S Z)} vs forced Z — multi-index reject"},
     {0, :Vec, :vcons, [{:ctor, :S, [{:ctor, :S, [@z]}]}], "n", {:ctor, :S, [@z]}, :accept,
      "Vec vcons {n=.(S Z)} vs forced S Z — non-trivial forced value"},
     {0, :Vec, :vcons, [{:ctor, :S, [{:ctor, :S, [@z]}]}], "n", @z, :reject,

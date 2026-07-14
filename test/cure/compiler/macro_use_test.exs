@@ -25,11 +25,13 @@ defmodule Cure.Compiler.MacroUseTest do
     # `now` is defined as a macro; a later `now` use-site expands to Clock.now().
     node =
       parse!("mod M\n  macro Now\n    syntax now becomes Clock.now()\n  fn f() = now\n")
+
     # Find `f`'s body; it must be the expanded Clock.now() call, not a bare
     # `{:variable, _, "now"}`.
     body = find_fn_body(node, "f")
     assert {:function_call, meta, _} = body
-    assert Keyword.get(meta, :name) in ["Clock.now", "now"]  # Clock.now() call shape
+    # Clock.now() call shape
+    assert Keyword.get(meta, :name) in ["Clock.now", "now"]
     refute match?({:variable, _, "now"}, body)
   end
 
@@ -37,11 +39,13 @@ defmodule Cure.Compiler.MacroUseTest do
   defp find_fn_body({:function_def, meta, [body]}, name) do
     if to_string(Keyword.get(meta, :name)) == name, do: body, else: nil
   end
+
   defp find_fn_body({_t, _m, children}, name) when is_list(children),
     do: Enum.find_value(children, &find_fn_body(&1, name))
+
   defp find_fn_body(_, _), do: nil
 
-  test "a local macro cannot claim a reserved dispatch keyword (sup stays the supervisor container)" do
+  test "a local macro cannot claim a reserved dispatch keyword (sup stays the supervisor macro)" do
     # `sup` is one of parse_prefix/1's existing :identifier soft-keyword names.
     # A macro rule that claims it must NOT be able to shadow the supervisor
     # container: `sup Worker` must still produce it.
@@ -51,22 +55,21 @@ defmodule Cure.Compiler.MacroUseTest do
     assert has_supervisor?(node)
   end
 
-  # A container node is either the supervisor itself, or (e.g. the enclosing
-  # module) a container whose children must still be searched — so this clause
-  # must both check container_type AND recurse, never short-circuit.
-  defp has_supervisor?({:container, meta, children}) do
-    Keyword.get(meta, :container_type) == :supervisor or
-      (is_list(children) and Enum.any?(children, &has_supervisor?/1))
-  end
+  defp has_supervisor?({:lift_module, meta, _children}),
+    do: Keyword.get(meta, :behaviour) == :supervisor
+
+  defp has_supervisor?({:container, _meta, children}) when is_list(children),
+    do: Enum.any?(children, &has_supervisor?/1)
+
   defp has_supervisor?({_t, _m, children}) when is_list(children),
     do: Enum.any?(children, &has_supervisor?/1)
+
   defp has_supervisor?(_), do: false
 
   test "a one-hole local macro use-site binds the hole and substitutes it" do
     node =
-      parse!(
-        "mod M\n  macro Every\n    syntax every <t: Code> becomes Timer.repeat(t)\n  fn f() = every 500\n"
-      )
+      parse!("mod M\n  macro Every\n    syntax every <t: Code> becomes Timer.repeat(t)\n  fn f() = every 500\n")
+
     body = find_fn_body(node, "f")
     # every 500  ==>  Timer.repeat(500)
     assert {:function_call, meta, [arg]} = body
@@ -80,14 +83,32 @@ defmodule Cure.Compiler.MacroUseTest do
     # third sibling; segment matching must consume it so the container has
     # exactly the two real top-level forms (macro_def and fn f()).
     node =
-      parse!(
-        "mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say hello\n"
-      )
+      parse!("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say hello\n")
+
     {:container, _meta, children} = node
     assert length(children) == 2
     body = find_fn_body(node, "f")
     assert {:function_call, meta, []} = body
     assert Keyword.get(meta, :name) in ["Clock.now", "now"]
+  end
+
+  test "repeated and optional grammar segments expand as list and single bindings" do
+    source = """
+    macro Grammar
+      syntax list <item: Nat>... becomes item
+      syntax maybe (<value: Nat>)? becomes value
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:macro_def, _, rules}} = Parser.parse(tokens, emit_events: false)
+
+    list_rule = Enum.find(rules, &(&1.keyword == "list"))
+    assert {:ok, use_site} = Lexer.tokenize("list 1 2", emit_events: false)
+    assert {:list, [generated_by: :macro_repeat], [_one, _two]} = Parser.expand_example([list_rule], use_site)
+
+    maybe_rule = Enum.find(rules, &(&1.keyword == "maybe"))
+    assert {:ok, optional_use} = Lexer.tokenize("maybe (1)", emit_events: false)
+    assert {:literal, _meta, 1} = Parser.expand_example([maybe_rule], optional_use)
   end
 
   test "a macro use-site literal-segment mismatch records a :macro_use_mismatch error" do

@@ -41,7 +41,9 @@ defmodule Cure.Compiler.DepGraph do
           modules: %{String.t() => Path.t()}
         }
 
-  @module_container_types [:module, :proof, :fsm, :actor, :supervisor, :app]
+  # Behavior-shaped declarations are standard-library syntax macros and arrive
+  # here as generic `lift_module` values, never as compiler-owned object kinds.
+  @module_container_types [:module, :proof]
   @auto_prelude ["Std.Bool", "Std.Nat"]
   @auto_prelude_types %{"Std.Bool" => "Bool", "Std.Nat" => "Nat"}
 
@@ -265,6 +267,10 @@ defmodule Cure.Compiler.DepGraph do
     end
   end
 
+  defp find_module({:lift_module, meta, _body}) when is_list(meta) do
+    {Keyword.get(meta, :module), Keyword.get(meta, :line)}
+  end
+
   defp find_module(list) when is_list(list) do
     Enum.find_value(list, {nil, nil}, fn item ->
       case find_module(item) do
@@ -404,9 +410,7 @@ defmodule Cure.Compiler.DepGraph do
     nodes = edges |> Map.keys() |> Enum.sort()
 
     {_state, sccs} =
-      Enum.reduce(nodes, {%{index: %{}, low: %{}, stack: [], on: MapSet.new(), n: 0}, []}, fn v,
-                                                                                             {st,
-                                                                                              acc} ->
+      Enum.reduce(nodes, {%{index: %{}, low: %{}, stack: [], on: MapSet.new(), n: 0}, []}, fn v, {st, acc} ->
         if Map.has_key?(st.index, v), do: {st, acc}, else: strongconnect(v, edges, st, acc)
       end)
 

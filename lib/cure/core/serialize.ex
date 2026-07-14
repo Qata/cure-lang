@@ -29,6 +29,7 @@ defmodule Cure.Core.Serialize do
 
   defp enc({:let, g, t, v, b}),
     do: ["(let ", sym(g), " ", enc(t), " ", enc(v), " ", enc(b), ")"]
+
   defp enc({:app, f, a}), do: node("app", [f, a])
   defp enc({:hole, name}), do: ["(hole ", str(name), ")"]
   defp enc({:absurd}), do: "(absurd)"
@@ -160,11 +161,14 @@ defmodule Cure.Core.Serialize do
 
   defp classify(word) do
     case Integer.parse(word) do
-      {n, ""} -> {:int, n}
-      _ -> case Float.parse(word) do
-             {f, ""} -> {:float, f}
-             _ -> {:atom, word}
-           end
+      {n, ""} ->
+        {:int, n}
+
+      _ ->
+        case Float.parse(word) do
+          {f, ""} -> {:float, f}
+          _ -> {:atom, word}
+        end
     end
   end
 
@@ -219,12 +223,13 @@ defmodule Cure.Core.Serialize do
   defp build_node("app", [f, a]), do: binary(:app, f, a)
 
   defp build_node("ctor", [name | args]) do
-    with {:ok, a} <- sym_atom(name), {:ok, cargs} <- build_all(args),
-         do: {:ok, {:ctor, a, cargs}}
+    with {:ok, a} <- sym_atom(name), {:ok, cargs} <- build_all(args), do: {:ok, {:ctor, a, cargs}}
   end
 
   defp build_node("data", [name, {:sexp, ps}, {:sexp, is}]) do
-    with {:ok, a} <- sym_atom(name), {:ok, cps} <- build_all(ps), {:ok, cis} <- build_all(is),
+    with {:ok, a} <- sym_atom(name),
+         {:ok, cps} <- build_all(ps),
+         {:ok, cis} <- build_all(is),
          do: {:ok, {:data, a, cps, cis}}
   end
 
@@ -251,12 +256,13 @@ defmodule Cure.Core.Serialize do
   end
 
   defp graded2(tag, g, a, b) do
-    with {:ok, gg} <- decode_grade(g), {:ok, ta} <- build(a), {:ok, tb} <- build(b),
-         do: {:ok, {tag, gg, ta, tb}}
+    with {:ok, gg} <- decode_grade(g), {:ok, ta} <- build(a), {:ok, tb} <- build(b), do: {:ok, {tag, gg, ta, tb}}
   end
 
   defp graded3(tag, g, a, b, c) do
-    with {:ok, gg} <- decode_grade(g), {:ok, ta} <- build(a), {:ok, tb} <- build(b),
+    with {:ok, gg} <- decode_grade(g),
+         {:ok, ta} <- build(a),
+         {:ok, tb} <- build(b),
          {:ok, tc} <- build(c),
          do: {:ok, {tag, gg, ta, tb, tc}}
   end
@@ -264,7 +270,6 @@ defmodule Cure.Core.Serialize do
   defp binary(tag, a, b) do
     with {:ok, ta} <- build(a), {:ok, tb} <- build(b), do: {:ok, {tag, ta, tb}}
   end
-
 
   defp build_all(items) do
     Enum.reduce_while(items, {:ok, []}, fn item, {:ok, acc} ->

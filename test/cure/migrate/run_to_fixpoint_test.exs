@@ -16,12 +16,17 @@ defmodule Cure.Migrate.RunToFixpointTest do
   # trigger is exposed only after A runs — proving the fixpoint re-scans.
   defp append_when(id, needle, mark) do
     %Rule{
-      id: id, description: "t", phase: :syntactic, tier: :machine, since: "2026",
+      id: id,
+      description: "t",
+      phase: :syntactic,
+      tier: :machine,
+      since: "2026",
       warning_template: "m",
       detect_and_rewrite: fn {:block, m, ex}, _ctx ->
         has = Enum.any?(ex, &match?({:literal, _, ^needle}, &1))
         want = needle == nil or has
         already = Enum.any?(ex, &match?({:literal, _, ^mark}, &1))
+
         if want and not already,
           do: {:rewrite, {:block, m, ex ++ [{:literal, [subtype: :string], mark}]}},
           else: :no_change
@@ -40,22 +45,36 @@ defmodule Cure.Migrate.RunToFixpointTest do
 
   test "a non-monotone rule set (A:x->y, B:y->x) hits max_passes and errors with the culprits" do
     flip = fn from, to, id ->
-      %Rule{id: id, description: "t", phase: :syntactic, tier: :machine, since: "2026",
+      %Rule{
+        id: id,
+        description: "t",
+        phase: :syntactic,
+        tier: :machine,
+        since: "2026",
         warning_template: "m",
         detect_and_rewrite: fn {:block, m, ex}, _ctx ->
           if Enum.any?(ex, &match?({:literal, _, ^from}, &1)) do
-            ex2 = Enum.map(ex, fn {:literal, meta, ^from} -> {:literal, meta, to}; o -> o end)
+            ex2 =
+              Enum.map(ex, fn
+                {:literal, meta, ^from} -> {:literal, meta, to}
+                o -> o
+              end)
+
             {:rewrite, {:block, m, ex2}}
           else
             :no_change
           end
-        end}
+        end
+      }
     end
+
     ast = parse!("mod M\nfn f(x: Int) -> Int = 1\n")
     seed = {:block, elem(ast, 1), [{:literal, [subtype: :string], "x"}]}
     rules = [flip.("x", "y", :A), flip.("y", "x", :B)]
+
     assert {:error, {:no_convergence, culprits}} =
              Migrate.run_to_fixpoint(seed, rules: rules, max_passes: 4)
+
     assert :A in culprits or :B in culprits
   end
 
@@ -71,8 +90,12 @@ defmodule Cure.Migrate.RunToFixpointTest do
     # this recurses to find the :function_def node and strips its :leading
     # trivia there, rather than pattern-matching the top-level node directly.
     drop_comment_rule = %Rule{
-      id: :W_test_drops_comment, description: "t", phase: :syntactic, tier: :machine,
-      since: "2026", warning_template: "m",
+      id: :W_test_drops_comment,
+      description: "t",
+      phase: :syntactic,
+      tier: :machine,
+      since: "2026",
+      warning_template: "m",
       detect_and_rewrite: fn ast, _ctx ->
         case strip_leading(ast, false) do
           {new_ast, true} -> {:rewrite, new_ast}

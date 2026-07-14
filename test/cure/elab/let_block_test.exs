@@ -22,7 +22,8 @@ defmodule Cure.Elab.LetBlockTest do
 
   test "a let-bound value is usable at a dependent (indexed) type" do
     src =
-      "mod L\n" <> @nat <>
+      "mod L\n" <>
+        @nat <>
         "  type SNat indices (k: Nat)\n    szero : SNat(Z)\n    ssuc : SNat(k) -> SNat(S(k))\n" <>
         "  fn g(n: Nat, s: SNat(n)) -> SNat(S(n)) =\n    let t = ssuc(s)\n    t\n"
 
@@ -32,7 +33,8 @@ defmodule Cure.Elab.LetBlockTest do
   test "soundness control: a body ill-typed under the let binding is rejected" do
     # m : Nat; returning m where a SNat is required must still be rejected.
     src =
-      "mod L\n" <> @nat <>
+      "mod L\n" <>
+        @nat <>
         "  type SNat indices (k: Nat)\n    szero : SNat(Z)\n    ssuc : SNat(k) -> SNat(S(k))\n" <>
         "  fn bad(n: Nat) -> SNat(n) =\n    let m = S(n)\n    m\n"
 

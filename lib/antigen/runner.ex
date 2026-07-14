@@ -12,7 +12,11 @@ defmodule Antigen.Runner do
   # Adaptive-biasing round size (spec §4). `default_gen`'s 11-branch mix maps to
   # three challenge-KIND groups; only Group T / Group M are ever reweighted.
   @round_size 200
-  @group_table %{f: [1, 2, 3, 19, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35], t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29], m: [7, 8]}
+  @group_table %{
+    f: [1, 2, 3, 19, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 35],
+    t: [4, 5, 6, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 29],
+    m: [7, 8]
+  }
   def gen_group_table, do: @group_table
 
   # Bump every position in the low-health group(s); floor 1; Group F never bumped.
@@ -62,7 +66,8 @@ defmodule Antigen.Runner do
       end
 
     final =
-      Enum.reduce(challenges, %{infections: 0, seeds_banked: 0, rejected: 0, discards: 0, coverage: MapSet.new()}, fn c, acc ->
+      Enum.reduce(challenges, %{infections: 0, seeds_banked: 0, rejected: 0, discards: 0, coverage: MapSet.new()}, fn c,
+                                                                                                                      acc ->
         run_challenge(c, opts, acc, count)
       end)
 
@@ -133,7 +138,7 @@ defmodule Antigen.Runner do
         # Assays.Term's committed constant rather than inventing a second one.
         case Cure.Core.Normalise.nf(ctx, c.payload.term, fuel: Antigen.Assays.Term.assay_fuel()) do
           :fuel_exhausted -> {f, d, fx + 1}
-          nf -> {f + (if nf != c.payload.term, do: 1, else: 0), d + 1, fx}
+          nf -> {f + if(nf != c.payload.term, do: 1, else: 0), d + 1, fx}
         end
       end)
 
@@ -440,9 +445,15 @@ defmodule Antigen.Runner do
 
   defp bank_seed(c, opts, acc) do
     case Corpus.append(opts[:seeds_path], c, Corpus.dedup_key(c, :seed)) do
-      :appended -> %{acc | seeds_banked: acc.seeds_banked + 1}
-      :duplicate -> acc
-      {:rejected, e} -> report_unportable(c, e); %{acc | rejected: acc.rejected + 1}
+      :appended ->
+        %{acc | seeds_banked: acc.seeds_banked + 1}
+
+      :duplicate ->
+        acc
+
+      {:rejected, e} ->
+        report_unportable(c, e)
+        %{acc | rejected: acc.rejected + 1}
     end
   end
 
@@ -514,6 +525,7 @@ defmodule Antigen.Runner do
             :infection -> IO.puts(Report.breadcrumb(c_min, path, :infection))
             :immune_response -> Report.tally_immune_response()
           end
+
           case Corpus.append(opts[:corpus_path], c_min, Corpus.dedup_key(c_min, :antibody)) do
             {:rejected, e} -> report_unportable(c_min, e)
             _ -> :ok
@@ -592,6 +604,7 @@ defmodule Antigen.Runner do
       conv_accept_count: cm.conv_accept_count
     }
   end
+
   defp seed_of(c), do: c.seed || :erlang.phash2({c.kind, c.payload})
 
   @shrink_budget 2000

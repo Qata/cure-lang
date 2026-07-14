@@ -344,7 +344,6 @@ defmodule Cure.QuoteTest do
     test "type alias" do
       assert_round_trip("type Name = String")
     end
-
   end
 
   describe "Cure.quoted_to_string/2 imports" do

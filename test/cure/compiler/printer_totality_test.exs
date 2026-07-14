@@ -30,8 +30,10 @@ defmodule Cure.Compiler.PrinterTotalityTest do
   )a
 
   defp node_kinds(ast, acc \\ MapSet.new())
+
   defp node_kinds({k, _m, ch}, acc) when is_atom(k) and is_list(ch),
     do: Enum.reduce(ch, MapSet.put(acc, k), &node_kinds/2)
+
   defp node_kinds({k, _m, _v}, acc) when is_atom(k), do: MapSet.put(acc, k)
   defp node_kinds(l, acc) when is_list(l), do: Enum.reduce(l, acc, &node_kinds/2)
   defp node_kinds(_, acc), do: acc
@@ -129,7 +131,7 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     type_annotation unary_op variable yield
     pin as_pattern assert_type gadt_ctor indexed_type interface
     implementation pi_type sigma_type with_abs hole forced_pattern
-    child_spec binary_generator named_implicit_pat union_type typed_pattern
+    binary_generator named_implicit_pat union_type typed_pattern
   )a
 
   # ── Per-kind round-trip unit tests (Task 3) ──────────────────────────────
@@ -171,6 +173,33 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "assert.cure"))
     assert out =~ "assert_type 42 : Int"
     assert parse!(out, "assert.cure")
+  end
+
+  test "the nil symbol round-trips as :nil" do
+    src = """
+    mod M
+      fn initial() -> Atom = :nil
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "nil_symbol.cure"))
+    assert out =~ "= :nil"
+    assert parse!(out, "nil_symbol.cure")
+  end
+
+  test "a lifted callback block stays inside the callback when printed" do
+    src = """
+    lift module Cure.BlockPrinter
+      behaviour gen_server
+      callback handle_cast(message: Atom, state: Atom) ->
+        let tag = message
+        pickup
+          tag == :stop -> %[:noreply, state]
+          else -> %[:noreply, state]
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "callback_block.cure"))
+    assert out =~ "callback handle_cast(message: Atom, state: Atom) ->\n"
+    assert parse!(out, "callback_block.cure")
   end
 
   test "hole round-trips as ?name" do
@@ -299,18 +328,16 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     assert parse!(out, "with.cure")
   end
 
-  test "child spec round-trips inside a supervisor" do
+  test "ordinary declarations round-trip inside a lifted supervisor" do
     src = """
     mod M
       sup Root
-        children
-          Counter as counter
-          sup Workers as workers
+        fn helper() -> Int = 1
     """
 
     out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "child.cure"))
-    assert out =~ "Counter as counter"
-    assert out =~ "sup Workers as workers"
+    assert out =~ "lift module Root"
+    assert out =~ "fn helper() -> Int = 1"
     assert parse!(out, "child.cure")
   end
 
@@ -327,6 +354,7 @@ defmodule Cure.Compiler.PrinterTotalityTest do
 
   test "every node kind the parser can construct has a matching Printer clause (static, corpus-independent)" do
     missing = MapSet.difference(MapSet.new(@all_node_kinds), printer_handled_kinds())
+
     assert MapSet.to_list(missing) == [],
            "Printer is missing a to_string/3 clause for: #{inspect(MapSet.to_list(missing))}"
   end

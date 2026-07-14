@@ -50,6 +50,54 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert hole.kind == "Duration"
   end
 
+  test "a syntax rule records its declared category and module-rule marker" do
+    node =
+      parse!("macro Reducer\n  syntax module <decls: Code> is Reducer.Module becomes decls\n")
+
+    assert {:macro_def, _m, [rule]} = node
+    assert rule.category == "Reducer.Module"
+    assert rule.module_rule
+  end
+
+  test "a contextual syntax rule defers proof until its use-site context" do
+    node = parse!("macro Ops\n  syntax send <pid: Code> <message: Code> contextual becomes tell(pid, message)\n")
+    assert {:macro_def, _m, [rule]} = node
+    assert rule.contextual
+  end
+
+  test "an open category and qualified category extension are retained" do
+    node =
+      parse!(
+        "macro Reducer\n  open Reducer.ClauseModifier\n  syntax within <d: Duration> is Reducer.ClauseModifier becomes d\n"
+      )
+
+    assert {:macro_def, _meta, [open, rule]} = node
+    assert open.kind == :open_category
+    assert open.name == "Reducer.ClauseModifier"
+    assert rule.category == "Reducer.ClauseModifier"
+  end
+
+  test "repetition and optional groups are retained as grammar segments" do
+    node =
+      parse!("""
+      macro Grammar
+        syntax list <item: Nat>... becomes item
+        syntax maybe (<value: Nat>)? becomes value
+      """)
+
+    assert {:macro_def, _meta, [repeated, optional]} = node
+    assert [{:repeat, {:hole, %{name: "item", kind: "Nat"}}}] = repeated.segments
+    assert [{:optional, [{:hole, %{name: "value", kind: "Nat"}}]}] = optional.segments
+  end
+
+  test "a delayed raw hole retains its delayed-slot marker" do
+    node =
+      parse!("macro Lift\n  syntax lift <body: delayed raw until dedent> becomes body\n")
+
+    assert {:macro_def, _meta, [rule]} = node
+    assert [{:raw_hole, %{name: "body", delimiter: "dedent", delayed: true}}] = rule.segments
+  end
+
   test "a malformed hole (missing closing `>`) records a :malformed_hole error" do
     {:ok, tokens} =
       Lexer.tokenize("macro Bad\n  syntax every <t: Duration becomes x\n", emit_events: false)

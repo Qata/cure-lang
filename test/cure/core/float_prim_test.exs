@@ -15,9 +15,14 @@ defmodule Cure.Core.FloatPrimTest do
   defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
 
   test "certified delta folds float arithmetic" do
-    assert {:float_lit, 3.5} = Normalise.nf(ctx(), app2(:float_add, {:float_lit, 1.5}, {:float_lit, 2.0}), delta: :certified)
-    assert {:float_lit, 6.0} = Normalise.nf(ctx(), app2(:float_mul, {:float_lit, 2.0}, {:float_lit, 3.0}), delta: :certified)
-    assert {:float_lit, 3.5} = Normalise.nf(ctx(), app2(:float_div, {:float_lit, 7.0}, {:float_lit, 2.0}), delta: :certified)
+    assert {:float_lit, 3.5} =
+             Normalise.nf(ctx(), app2(:float_add, {:float_lit, 1.5}, {:float_lit, 2.0}), delta: :certified)
+
+    assert {:float_lit, 6.0} =
+             Normalise.nf(ctx(), app2(:float_mul, {:float_lit, 2.0}, {:float_lit, 3.0}), delta: :certified)
+
+    assert {:float_lit, 3.5} =
+             Normalise.nf(ctx(), app2(:float_div, {:float_lit, 7.0}, {:float_lit, 2.0}), delta: :certified)
   end
 
   test "float division by zero stays stuck rather than reducing (K2 §G.1 rule 1)" do

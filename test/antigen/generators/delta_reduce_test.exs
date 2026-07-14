@@ -10,6 +10,7 @@ defmodule Antigen.Generators.DeltaReduceTest do
     for %Challenge{} = c <- B.interp(DeltaReduce.gen()) |> Enum.take(@sample) do
       assert c.kind == :delta_reduce
       assert c.label in [:reduces, :fuel_probe, :opts_reject]
+
       assert Assays.DeltaReduce.run(c) == :ok,
              "oracle disagreed on #{c.note}"
     end

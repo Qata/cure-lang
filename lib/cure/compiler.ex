@@ -37,6 +37,8 @@ defmodule Cure.Compiler do
   - `:emit_events` -- whether to emit pipeline events (default: `true`)
   - `:check_types` -- whether to run the type checker (default: `true`).
     Set to `false` to skip type checking.
+  - `:source_roots` -- directories containing sibling `.cure` modules that may
+    be imported with `use` (default: the source file's directory)
   """
   @spec compile_file(String.t(), keyword()) ::
           {:ok, module(), list()} | {:error, term()}
@@ -58,7 +60,8 @@ defmodule Cure.Compiler do
   """
   @spec load_emitted(module(), Path.t()) :: :ok | {:error, term()}
   def load_emitted(module, output_dir) when is_atom(module) and is_binary(output_dir) do
-    path = Path.join(output_dir, "#{module}.beam")
+    module_name = module |> Atom.to_string() |> String.replace_prefix("Elixir.", "")
+    path = Path.join(output_dir, "#{module_name}.beam")
 
     with {:ok, binary} <- File.read(path),
          {:module, ^module} <- :code.load_binary(module, String.to_charlist(path), binary) do
@@ -85,13 +88,16 @@ defmodule Cure.Compiler do
     emit? = Keyword.get(opts, :emit_events, true)
     declared_phases = Keyword.get(opts, :declared_phases)
 
-    with {:ok, edition} <- resolve_edition(source, opts),
-         {:ok, tokens} <- lex(source, file, emit?, edition),
-         {:ok, ast} <- parse(tokens, file, emit?, edition),
-         {:ok, ast} <- migrate_warn(ast, file),
-         {:ok, forms, cg_warnings} <- codegen(ast, file, emit?, output_dir, declared_phases) do
-      write_beam_forms(forms, output_dir, emit?, file, cg_warnings)
-    end
+    with_source_roots(file, opts, fn ->
+      with {:ok, edition} <- resolve_edition(source, opts),
+           {:ok, tokens} <- lex(source, file, emit?, edition),
+           {:ok, ast} <- parse(tokens, file, emit?, edition),
+           {:ok, ast} <- migrate_warn(ast, file),
+           {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
+           {:ok, units, cg_warnings} <- codegen(ast, file, emit?, output_dir, declared_phases) do
+        write_beam_units(units, output_dir, emit?, file, cg_warnings)
+      end
+    end)
   end
 
   # `BeamWriter.compile_forms/2` returns `{:error, errors, warnings}` (3-tuple)
@@ -100,24 +106,37 @@ defmodule Cure.Compiler do
   # `{:error, reason}` (2-tuple). Normalize the BEAM-writer failure here so
   # downstream consumers (CLI, `cure check`, `mix cure.check.examples`, test
   # suites) can rely on the 2-tuple shape without `CaseClauseError` crashes.
-  defp write_beam_forms(forms, output_dir, emit?, file, cg_warnings) do
-    case BeamWriter.compile_forms(forms) do
-      {:ok, module, binary, warnings} ->
-        case BeamWriter.write_beam(module, binary, output_dir, emit_events: emit?, file: file) do
-          :ok -> {:ok, module, cg_warnings ++ warnings}
-          {:error, _} = err -> err
-        end
+  defp write_beam_units([{main_module, _main_forms} | _] = units, output_dir, emit?, file, cg_warnings) do
+    Enum.reduce_while(units, {:ok, main_module, cg_warnings}, fn {_module, forms}, {:ok, main, warnings} ->
+      case BeamWriter.compile_forms(forms) do
+        {:ok, module, binary, beam_warnings} ->
+          case BeamWriter.write_beam(module, binary, output_dir, emit_events: emit?, file: file) do
+            :ok -> {:cont, {:ok, main, warnings ++ beam_warnings}}
+            {:error, _} = err -> {:halt, err}
+          end
 
-      # Codegen warnings (e.g. W088 unresolved imports) get carried onto the
-      # lint-error path in a 3-tuple *only* when there are any, so no other
-      # caller's 2-tuple `{:beam_lint_error, errors}` match is disturbed.
-      {:error, errors, _warnings} when cg_warnings != [] ->
-        {:error, {:beam_lint_error, errors, cg_warnings}}
+        {:error, errors, _beam_warnings} when warnings != [] ->
+          {:halt, {:error, {:beam_lint_error, errors, warnings}}}
 
-      {:error, errors, _warnings} ->
-        {:error, {:beam_lint_error, errors}}
-    end
+        {:error, errors, _beam_warnings} ->
+          {:halt, {:error, {:beam_lint_error, errors}}}
+      end
+    end)
   end
+
+  defp write_beam_units([], _output_dir, _emit?, _file, _warnings),
+    do: {:error, {:codegen_error, :no_compilation_units}}
+
+  defp compile_and_load_units([{main_module, _main_forms} | _] = units) do
+    Enum.reduce_while(units, {:ok, main_module}, fn {_module, forms}, {:ok, main} ->
+      case BeamWriter.compile_and_load(forms) do
+        {:ok, _loaded} -> {:cont, {:ok, main}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp compile_and_load_units([]), do: {:error, {:codegen_error, :no_compilation_units}}
 
   @doc """
   Lex and parse a Cure source string into its raw parser AST.
@@ -179,15 +198,44 @@ defmodule Cure.Compiler do
     emit? = Keyword.get(opts, :emit_events, false)
     declared_phases = Keyword.get(opts, :declared_phases)
 
-    with {:ok, edition} <- resolve_edition(source, opts),
-         {:ok, tokens} <- lex(source, file, emit?, edition),
-         {:ok, ast} <- parse(tokens, file, emit?, edition),
-         {:ok, forms, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
-      # compile_and_load/2 intentionally does NOT persist bytecode to
-      # disk -- it only loads into the current VM.
-      BeamWriter.compile_and_load(forms)
+    with_source_roots(file, opts, fn ->
+      with {:ok, edition} <- resolve_edition(source, opts),
+           {:ok, tokens} <- lex(source, file, emit?, edition),
+           {:ok, ast} <- parse(tokens, file, emit?, edition),
+           {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
+           {:ok, units, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
+        # compile_and_load/2 intentionally does NOT persist bytecode to
+        # disk -- it only loads into the current VM.
+        compile_and_load_units(units)
+      end
+    end)
+  end
+
+  # The dependent elaborator resolves `use` imports from source, not from the
+  # BEAM loader. Keep roots process-local for one compilation so recursive
+  # imported-module elaboration and parallel callers cannot leak project state.
+  defp with_source_roots(file, opts, fun) do
+    roots =
+      Keyword.get(opts, :source_roots, default_source_roots(file))
+      |> List.wrap()
+      |> Enum.filter(&is_binary/1)
+      |> Enum.map(&Path.expand/1)
+      |> Enum.uniq()
+
+    previous = Process.get(:cure_source_roots)
+    Process.put(:cure_source_roots, roots)
+
+    try do
+      fun.()
+    after
+      if previous == nil,
+        do: Process.delete(:cure_source_roots),
+        else: Process.put(:cure_source_roots, previous)
     end
   end
+
+  defp default_source_roots(file) when file in [nil, "nofile"], do: []
+  defp default_source_roots(file), do: [Path.dirname(Path.expand(file))]
 
   # -- Pipeline Steps ----------------------------------------------------------
 
@@ -249,25 +297,69 @@ defmodule Cure.Compiler do
   end
 
   defp codegen(ast, _file, _emit?, _output_dir, _declared_phases) do
+    case Cure.Compiler.LiftModule.collect(ast) do
+      {:ok, lifted_requests} ->
+        codegen_modules(ast, Cure.Compiler.LiftModule.strip(ast), lifted_requests)
+
+      {:error, reason} ->
+        {:error, {:codegen_error, reason}}
+    end
+  end
+
+  defp codegen_modules(original_ast, main_ast, lifted_requests) do
+    if match?({:lift_module, _, _}, main_ast) do
+      case emit_lifted_modules(lifted_requests) do
+        {:ok, lifted_units} -> {:ok, lifted_units, []}
+        {:error, _} = error -> error
+      end
+    else
+      codegen_modules_with_main(original_ast, main_ast, lifted_requests)
+    end
+  end
+
+  defp codegen_modules_with_main(original_ast, main_ast, lifted_requests) do
     # Single pipeline: every module is lowered by the kernel (dependent codegen).
     # The classic `Cure.Compiler.Codegen` branch was deleted in the #18 rip-out.
     result =
-      case dependent_codegen(ast) do
-        {:ok, forms} -> {:ok, forms, []}
-        {:error, _} = err -> err
+      with :ok <- Cure.Elab.Program.validate_stdlib_imports(main_ast) do
+        case dependent_codegen(main_ast) do
+          {:ok, forms} -> {:ok, forms, []}
+          {:error, {:codegen_error, {:expansion_ill_typed, _} = reason}} -> {:error, reason}
+          {:error, _} = err -> err
+        end
+      else
+        {:error, reason} -> {:error, {:codegen_error, reason}}
       end
 
     # Inject the module's `@group(:g)` decorator as a BEAM `-group([:g]).`
-    # attribute. This runs once here so BOTH the classic and dependent
-    # pipelines get it from one mechanism. Container compilers that already
-    # emitted/loaded their module (fsm/actor/sup/app) return a marker tuple,
-    # not a forms list, so they pass through untouched.
+    # attribute after the ordinary dependent pipeline has produced forms.
     case result do
       {:ok, forms, warnings} when is_list(forms) ->
-        {:ok, inject_group_attribute(forms, ast), warnings}
+        with {:ok, lifted_units} <- emit_lifted_modules(lifted_requests) do
+          main_forms = inject_group_attribute(forms, original_ast)
+          {:ok, [{forms_module(main_forms), main_forms} | lifted_units], warnings}
+        end
 
       other ->
         other
+    end
+  end
+
+  defp emit_lifted_modules(requests) do
+    Enum.reduce_while(requests, {:ok, []}, fn request, {:ok, acc} ->
+      case Cure.Compiler.LiftModule.emit(request) do
+        {:ok, unit} -> {:cont, {:ok, acc ++ [{unit.module, unit.forms}]}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp forms_module([{:attribute, _line, :module, module} | _]), do: module
+
+  defp forms_module(forms) do
+    case Enum.find(forms, &match?({:attribute, _, :module, _}, &1)) do
+      {:attribute, _line, :module, module} -> module
+      _ -> raise ArgumentError, "compiled forms are missing a module attribute"
     end
   end
 

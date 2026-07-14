@@ -21,13 +21,16 @@ defmodule Antigen.Generators.ErasureTerm do
   defp ctor_env do
     Env.empty()
     |> Inductive.declare(Inductive.family(:P, [], [], 0), [
-         Inductive.ctor(:MkQ, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:unrestricted, :erased]),
-         Inductive.ctor(:MkP, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:erased, :unrestricted])
-       ])
+      Inductive.ctor(:MkQ, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:unrestricted, :erased]),
+      Inductive.ctor(:MkP, [{:a, {:int_type}}, {:b, {:int_type}}], [], [:erased, :unrestricted])
+    ])
   end
 
   defp app_env(env) do
-    ty = {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+    ty =
+      {:pi, Cure.Core.Grade.unrestricted(), {:int_type},
+       {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}}
+
     env |> Env.add_def(:f, ty, {:int_lit, 0}, [:unrestricted, :erased])
   end
 
@@ -88,15 +91,25 @@ defmodule Antigen.Generators.ErasureTerm do
       rel(e, {:app, {:var, 0}, il(0)}, :applied, 1),
       rel(e, {:case, {:var, 0}, il(0), []}, :scrutinee, 2),
       rel(cenv, {:ctor, :MkQ, [{:var, 0}, il(0)]}, :present_arg, 3),
-      Challenge.new(kind: :erasure_term, assay: "relevance/soundness", label: :positive,
-        payload: %{env: e, name: :d, quantities: [:erased], body: il(7), site: nil}, seed: 4,
-        cover_tag: :clean_control)
+      Challenge.new(
+        kind: :erasure_term,
+        assay: "relevance/soundness",
+        label: :positive,
+        payload: %{env: e, name: :d, quantities: [:erased], body: il(7), site: nil},
+        seed: 4,
+        cover_tag: :clean_control
+      )
     ]
   end
 
   defp rel(env, body, site, seed) do
-    Challenge.new(kind: :erasure_term, assay: "relevance/soundness", label: :negative,
-      payload: %{env: env, name: :d, quantities: [:erased], body: body, site: site}, seed: seed,
-      cover_tag: site)
+    Challenge.new(
+      kind: :erasure_term,
+      assay: "relevance/soundness",
+      label: :negative,
+      payload: %{env: env, name: :d, quantities: [:erased], body: body, site: site},
+      seed: seed,
+      cover_tag: site
+    )
   end
 end

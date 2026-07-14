@@ -24,8 +24,9 @@ defmodule Antigen.ChallengeTest do
       families: [{fam, ctors}],
       def_name: :probe,
       def_type: dec,
-      def_body: {:case, {:ctor, :Causal, []}, {:lam, Cure.Core.Grade.unrestricted(), dec, dec},
-                 [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
+      def_body:
+        {:case, {:ctor, :Causal, []}, {:lam, Cure.Core.Grade.unrestricted(), dec, dec},
+         [{:Dcoupled, 0, {:ctor, :Causal, []}}, {:Causal, 0, {:ctor, :Dcoupled, []}}]}
     }
 
     c = Antigen.Challenge.new(kind: :indexed_case, assay: "indexed/case", label: :well_typed, payload: payload)
@@ -40,18 +41,30 @@ defmodule Antigen.ChallengeTest do
   end
 
   test ":mutant_term round-trips through to_pieces/from_pieces incl the fault map" do
-    fault = %{kind: :proj_non_pair, witness: :head, expected_head: :Sigma,
-              injected_head: :Nat, scope: nil}
-    c = Challenge.new(
-      kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
-      payload: %{sig: :v1, ctx: [{:data, :Nat, [], []}],
-                 type: {:data, :Nat, [], []},
-                 # "fst on a Nat" spelled inductively (D2): projection case over
-                 # mk_pair scrutinising a Nat — same :proj_non_pair fault.
-                 term: {:case, {:ctor, :Z, []},
-                        {:lam, Cure.Core.Grade.unrestricted(), {:data, :Sigma, [{:data, :Nat, [], []}, {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}], []}, {:data, :Nat, [], []}},
-                        [{:mk_pair, 2, {:var, 1}}]}, fault: fault}
-    )
+    fault = %{kind: :proj_non_pair, witness: :head, expected_head: :Sigma, injected_head: :Nat, scope: nil}
+
+    c =
+      Challenge.new(
+        kind: :mutant_term,
+        assay: "mutation/rejection",
+        label: :ill_typed,
+        payload: %{
+          sig: :v1,
+          ctx: [{:data, :Nat, [], []}],
+          type: {:data, :Nat, [], []},
+          # "fst on a Nat" spelled inductively (D2): projection case over
+          # mk_pair scrutinising a Nat — same :proj_non_pair fault.
+          term:
+            {:case, {:ctor, :Z, []},
+             {:lam, Cure.Core.Grade.unrestricted(),
+              {:data, :Sigma,
+               [
+                 {:data, :Nat, [], []},
+                 {:lam, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:data, :Nat, [], []}}
+               ], []}, {:data, :Nat, [], []}}, [{:mk_pair, 2, {:var, 1}}]},
+          fault: fault
+        }
+      )
 
     {scaffold, pieces} = Challenge.to_pieces(c)
     # simulate the corpus scaffold codec (term_to_binary → binary_to_term [:safe])

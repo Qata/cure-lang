@@ -43,6 +43,7 @@ defmodule Cure.Core.TermLiteralsTest do
   test "shift/3 and subst/3 traverse literals nested inside compound terms" do
     nested = {:ctor, :wrapn, [{:int_lit, 3}, {:var, 0}]}
     assert Term.shift(nested, 2, 0) == {:ctor, :wrapn, [{:int_lit, 3}, {:var, 2}]}
+
     assert Term.subst(nested, 0, {:int_lit, 5}) ==
              {:ctor, :wrapn, [{:int_lit, 3}, {:int_lit, 5}]}
   end

@@ -4,11 +4,11 @@ defmodule CureMoneta do
 
   The heavy lifting lives in `cure_src/moneta.cure`, which compiles to the
   BEAM module `:"Cure.Moneta"`, and in `cure_src/transaction.cure`, which
-  compiles to `:"Cure.FSM.Transaction"` (a GenServer in callback mode).
+  compiles to `:"Cure.Transaction"` (a gen_statem in callback mode).
 
   This module:
 
-    * constructs Cure record maps from plain Elixir values,
+    * constructs plain Elixir values and converts them at the Cure boundary,
     * delegates arithmetic and ledger operations to the Cure module,
     * unwraps `Result` tuples (`{:ok, v}` / `{:error, reason}`),
     * exposes `begin_transaction/0` to spawn a supervised transaction FSM.
@@ -37,7 +37,7 @@ defmodule CureMoneta do
   """
 
   @moneta :"Cure.Moneta"
-  @tx_fsm :"Cure.FSM.Transaction"
+  @tx_fsm :"Cure.Transaction"
 
   @compile {:no_warn_undefined, @moneta}
   @compile {:no_warn_undefined, @tx_fsm}
@@ -70,25 +70,25 @@ defmodule CureMoneta do
 
   @doc "Render a Currency or Money value to a string (delegates to the Cure Show protocol)."
   @spec show(map() | tuple()) :: String.t()
-  def show(value), do: @moneta.show(value)
+  def show(value), do: @moneta.show(to_cure_money(value))
 
   @doc "Test equality of two Money or Currency values (delegates to the Cure Eq protocol)."
   @spec eq(map() | tuple(), map() | tuple()) :: boolean()
-  def eq(a, b), do: @moneta.eq(a, b)
+  def eq(a, b), do: @moneta.eq(to_cure_money(a), to_cure_money(b))
 
   # -- Arithmetic -------------------------------------------------------------
 
   @doc "Add two Money values of the same currency."
   @spec add(map(), map()) :: {:ok, map()} | {:error, String.t()}
-  def add(a, b), do: @moneta.add(a, b)
+  def add(a, b), do: @moneta.add(to_cure_money(a), to_cure_money(b)) |> map_money_result()
 
   @doc "Subtract `b` from `a`. Returns an error for currency mismatch or insufficient funds."
   @spec subtract(map(), map()) :: {:ok, map()} | {:error, String.t()}
-  def subtract(a, b), do: @moneta.subtract(a, b)
+  def subtract(a, b), do: @moneta.subtract(to_cure_money(a), to_cure_money(b)) |> map_money_result()
 
   @doc "Scale Money by a positive integer factor."
   @spec scale(map(), pos_integer()) :: map()
-  def scale(m, factor), do: @moneta.scale(m, factor)
+  def scale(m, factor), do: @moneta.scale(to_cure_money(m), factor) |> from_cure_money()
 
   @doc """
   Convert Money to `target_currency` at the given spot `rate`.
@@ -99,13 +99,13 @@ defmodule CureMoneta do
   @spec convert(map(), atom(), float()) :: map()
   def convert(m, target_currency, rate) when is_atom(target_currency) do
     frac = Map.fetch!(@frac_for, target_currency)
-    @moneta.convert(m, {target_currency}, rate, frac)
+    @moneta.convert(to_cure_money(m), currency_atom(target_currency), rate, frac) |> from_cure_money()
   end
 
   @doc "Convert Money with an explicit target `fractional_units`."
   @spec convert(map(), atom(), float(), pos_integer()) :: map()
   def convert(m, target_currency, rate, fractional_units) when is_atom(target_currency) do
-    @moneta.convert(m, {target_currency}, rate, fractional_units)
+    @moneta.convert(to_cure_money(m), currency_atom(target_currency), rate, fractional_units) |> from_cure_money()
   end
 
   # -- Ledger operations (via LedgerServer) -----------------------------------
@@ -169,9 +169,29 @@ defmodule CureMoneta do
 
   @doc "Send `event` to the transaction FSM at `pid` (async cast)."
   @spec tx_event(pid(), atom()) :: :ok
-  def tx_event(pid, event), do: @tx_fsm.send_event(pid, event)
+  def tx_event(pid, event) do
+    :gen_statem.cast(pid, event)
+    :ok
+  end
 
   @doc "Return `{state_atom, payload}` for the transaction FSM at `pid` (synchronous)."
   @spec tx_state(pid()) :: {atom(), term()}
-  def tx_state(pid), do: @tx_fsm.get_state(pid)
+  def tx_state(pid), do: :sys.get_state(pid)
+
+  defp currency_atom(currency) when is_atom(currency) do
+    currency |> Atom.to_string() |> String.upcase() |> String.to_atom()
+  end
+
+  defp to_cure_money({:Money, _amount, _currency, _fractional_units} = money), do: money
+
+  defp to_cure_money(%{__struct__: :money, amount: amount, currency: {currency}, fractional_units: fractional_units}) do
+    {:Money, amount, currency_atom(currency), fractional_units}
+  end
+
+  defp from_cure_money({:Money, amount, currency, fractional_units}) do
+    %{__struct__: :money, amount: amount, currency: currency |> Atom.to_string() |> String.downcase() |> String.to_atom() |> then(&{&1}), fractional_units: fractional_units}
+  end
+
+  defp map_money_result({:ok, money}), do: {:ok, from_cure_money(money)}
+  defp map_money_result({:error, _} = error), do: error
 end

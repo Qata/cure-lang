@@ -41,8 +41,16 @@ defmodule Cure.Compiler.BinaryComprehensionTest do
     end
   end
 
-  # The classic "codegen" describe block (asserting the `{:lc, …}` /
-  # `:b_generate` Erlang abstract form emitted by `Codegen.compile_expr/1`) was
-  # removed with the classic pathway (#18); it was white-box-coupled to that
-  # deleted lowerer. The parser coverage above stands.
+  test "byte generators compile and evaluate through the stdlib byte view" do
+    source = """
+    mod BinaryComprehensionTest
+      use Std.List
+      fn bytes(buf: Binary) -> List(Int) = [b for <<b <- buf>>]
+      fn sum(buf: Binary) -> Int = Std.List.foldl(bytes(buf), 0, fn(b) -> fn(acc) -> acc + b)
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :bytes, [<<1, 2, 3>>]) == [1, 2, 3]
+    assert apply(module, :sum, [<<1, 2, 3, 4>>]) == 10
+  end
 end

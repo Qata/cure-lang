@@ -290,7 +290,8 @@ defmodule Cure.Elab.Implementation do
       {^head_var, ctor} when is_binary(ctor) and is_binary(head_var) ->
         {:function_call, Keyword.put(m, :name, ctor), args}
 
-      _ -> {:function_call, m, args}
+      _ ->
+        {:function_call, m, args}
     end
   end
 

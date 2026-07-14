@@ -10,6 +10,7 @@ defmodule Antigen.TypedTermMetaTest do
       for c <- B.interp(Term.typed_term(id)) |> Enum.take(50) do
         env = SigMenu.env_of(:v1)
         ctx = SigMenu.rebuild_context(env, c.payload.ctx)
+
         assert {:ok, _} = Kernel.infer(ctx, c.payload.term),
                "unsound generated term for #{id}: #{inspect(c.payload.term)}"
       end
@@ -22,7 +23,8 @@ defmodule Antigen.TypedTermMetaTest do
     stuck_ctx = SigMenu.rebuild_context(env, [SigMenu.vec({:var, 0}), SigMenu.nat()])
 
     goals = [
-      {empty, SigMenu.nat()}, {empty, SigMenu.bd()},
+      {empty, SigMenu.nat()},
+      {empty, SigMenu.bd()},
       {empty, SigMenu.vec({:ctor, :Z, []})},
       {empty, SigMenu.vec({:ctor, :S, [{:ctor, :Z, []}]})},
       {empty, {:pi, Cure.Core.Grade.unrestricted(), SigMenu.nat(), SigMenu.nat()}},

@@ -17,8 +17,7 @@ defmodule Antigen.Bisect do
   def candidates(%Challenge{kind: k, payload: %{defs: defs} = p} = ch) when k in @def_kinds do
     for i <- index_range(defs) do
       dropped = Enum.at(defs, i).name
-      %{ch | payload: %{p | defs: List.delete_at(defs, i),
-                            focus: Map.get(p, :focus, []) -- [dropped]}}
+      %{ch | payload: %{p | defs: List.delete_at(defs, i), focus: Map.get(p, :focus, []) -- [dropped]}}
     end
   end
 

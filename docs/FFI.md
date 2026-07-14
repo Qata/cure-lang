@@ -28,7 +28,7 @@ The decorator takes exactly three arguments:
 
 | Argument | Meaning | Examples |
 |----------|---------|----------|
-| `<module>` | The target BEAM module | `:erlang`, `:io`, `:math`, `Elixir.Cure.FSM.Builtins` |
+| `<module>` | The target BEAM module | `:erlang`, `:io`, `:math`, `Elixir.MyApp.Native` |
 | `<function>` | The target function name (an atom) | `:abs`, `:put_chars`, `:fsm_spawn` |
 | `<arity>` | The function's arity; must equal the number of parameters in the head | `0`, `1`, `2` |
 
@@ -37,9 +37,9 @@ The decorator takes exactly three arguments:
 - **Erlang / OTP modules** are written as plain atoms: `:erlang`, `:io`,
   `:math`, `:lists`, `:maps`.
 - **Elixir modules** are written with their fully qualified dotted path under
-  the `Elixir.` namespace: `Elixir.Cure.FSM.Builtins`, `Elixir.Enum`. The
+  the `Elixir.` namespace: `Elixir.MyApp.Native`, `Elixir.Enum`. The
   parser converts the dotted path into the underlying module atom
-  (`:"Elixir.Cure.FSM.Builtins"`) for you.
+(`:"Elixir.MyApp.Native"`) for you.
 
 ### Visibility
 
@@ -182,23 +182,20 @@ fn sqrt(x: Float) -> Float
 fn print(s: String) -> Atom
 ```
 
-Elixir / `Cure.*.Builtins` helpers (note the dotted `Elixir.` module path):
+Elixir helpers (note the dotted `Elixir.` module path):
 
 ```cure
-@extern(Elixir.Cure.FSM.Builtins, :fsm_spawn, 1)
-fn spawn(fsm_module: Atom) -> Pid
-
-@extern(Elixir.Cure.FSM.Builtins, :fsm_spawn_with_payload, 2)
-fn spawn_with_payload(fsm_module: Atom, payload: Any) -> Pid
+@extern(Elixir.MyApp.Native, :read_counter, 1)
+fn read_counter(key: Atom) -> Int
 ```
 
 The same name may be bound at several arities, each its own `@extern`:
 
 ```cure
-@extern(Elixir.Cure.App.Builtins, :get_env, 2)
+@extern(Elixir.MyApp.Native, :get_env, 2)
 fn get_env(name: Atom, key: Atom) -> Any
 
-@extern(Elixir.Cure.App.Builtins, :get_env, 3)
+@extern(Elixir.MyApp.Native, :get_env, 3)
 fn get_env(name: Atom, key: Atom, default: Any) -> Any
 ```
 

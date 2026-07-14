@@ -3,11 +3,21 @@ defmodule Cure.Core.ConvTest do
   alias Cure.Core.Conv
 
   test "beta: (λ.#0) Type0 ≡ Type0" do
-    assert Conv.conv?({:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:type, 0}}, {:type, 0}, [], 0)
+    assert Conv.conv?(
+             {:app, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:type, 0}},
+             {:type, 0},
+             [],
+             0
+           )
   end
 
   test "reflexivity of a lambda" do
-    assert Conv.conv?({:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, [], 0)
+    assert Conv.conv?(
+             {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}},
+             {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}},
+             [],
+             0
+           )
   end
 
   test "eta: f ≡ λ. (f #0) at a function type" do
@@ -28,8 +38,19 @@ defmodule Cure.Core.ConvTest do
   end
 
   test "Pi types compare domain and codomain" do
-    assert Conv.conv?({:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, [], 0)
-    refute Conv.conv?({:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}}, {:pi, Cure.Core.Grade.unrestricted(), {:type, 1}, {:var, 0}}, [], 0)
+    assert Conv.conv?(
+             {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}},
+             {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}},
+             [],
+             0
+           )
+
+    refute Conv.conv?(
+             {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}},
+             {:pi, Cure.Core.Grade.unrestricted(), {:type, 1}, {:var, 0}},
+             [],
+             0
+           )
   end
 
   test "a stuck case on a neutral scrutinee is convertible to itself" do

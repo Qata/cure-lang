@@ -28,7 +28,8 @@ defmodule Antigen.RewriteSeedTest do
 
     for c <- challenges do
       assert :ok == Assays.Rewrite.run(c),
-        "assay must be :ok on correctly-labelled #{c.note}"
+             "assay must be :ok on correctly-labelled #{c.note}"
+
       Corpus.append(@seeds, c, Corpus.dedup_key(c, :seed))
     end
 
@@ -37,6 +38,7 @@ defmodule Antigen.RewriteSeedTest do
 
     rewrites = Enum.filter(results, fn r -> match?(%Antigen.Challenge{assay: "rewrite/eq"}, r.entry) end)
     refute rewrites == []
+
     assert Enum.all?(rewrites, fn r -> r.verdict == :ok end),
            "rewrite/eq replay produced a non-:ok verdict: " <>
              inspect(rewrites |> Enum.reject(&(&1.verdict == :ok)) |> Enum.map(& &1.verdict))

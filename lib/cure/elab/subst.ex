@@ -51,15 +51,18 @@ defmodule Cure.Elab.Subst do
     do: {:lam, Cure.Core.Grade.unrestricted(), replace(d, env, k, depth), replace(b, env, k, depth + 1)}
 
   defp replace({:let, _g, t, v, b}, env, k, depth),
-    do: {:let, Cure.Core.Grade.unrestricted(), replace(t, env, k, depth), replace(v, env, k, depth), replace(b, env, k, depth + 1)}
-
+    do:
+      {:let, Cure.Core.Grade.unrestricted(), replace(t, env, k, depth), replace(v, env, k, depth),
+       replace(b, env, k, depth + 1)}
 
   defp replace({:app, f, x}, env, k, depth),
     do: {:app, replace(f, env, k, depth), replace(x, env, k, depth)}
 
-
   defp replace({:data, n, ps, is}, env, k, depth),
     do: {:data, n, Enum.map(ps, &replace(&1, env, k, depth)), Enum.map(is, &replace(&1, env, k, depth))}
+
+  defp replace({:effect_type, inner}, env, k, depth),
+    do: {:effect_type, replace(inner, env, k, depth)}
 
   defp replace({:ctor, n, args}, env, k, depth),
     do: {:ctor, n, Enum.map(args, &replace(&1, env, k, depth))}
@@ -88,15 +91,18 @@ defmodule Cure.Elab.Subst do
     do: {:lam, Cure.Core.Grade.unrestricted(), shift(d, amount, cutoff), shift(b, amount, cutoff + 1)}
 
   def shift({:let, _g, t, v, b}, amount, cutoff),
-    do: {:let, Cure.Core.Grade.unrestricted(), shift(t, amount, cutoff), shift(v, amount, cutoff), shift(b, amount, cutoff + 1)}
-
+    do:
+      {:let, Cure.Core.Grade.unrestricted(), shift(t, amount, cutoff), shift(v, amount, cutoff),
+       shift(b, amount, cutoff + 1)}
 
   def shift({:app, f, x}, amount, cutoff),
     do: {:app, shift(f, amount, cutoff), shift(x, amount, cutoff)}
 
-
   def shift({:data, n, ps, is}, amount, cutoff),
     do: {:data, n, Enum.map(ps, &shift(&1, amount, cutoff)), Enum.map(is, &shift(&1, amount, cutoff))}
+
+  def shift({:effect_type, inner}, amount, cutoff),
+    do: {:effect_type, shift(inner, amount, cutoff)}
 
   def shift({:ctor, n, args}, amount, cutoff),
     do: {:ctor, n, Enum.map(args, &shift(&1, amount, cutoff))}

@@ -23,7 +23,8 @@ defmodule Mix.Tasks.AntigenTest do
     assert merged[:precise] == true
     assert merged[:edge_corpus] == "e.sexp"
     assert merged[:out] == "o.md"
-    assert merged[:corpus_path] == "c.sexp"   # runner_opts preserved
+    # runner_opts preserved
+    assert merged[:corpus_path] == "c.sexp"
 
     {mode2, merged2} = Mix.Tasks.Antigen.cover_dispatch([], runner_opts)
     assert mode2 == :report

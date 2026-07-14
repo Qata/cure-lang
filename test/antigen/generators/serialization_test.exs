@@ -25,8 +25,7 @@ defmodule Antigen.Generators.SerializationTest do
     # :sigma/:pair/:fst/:snd retired with the primitive Sigma, D2; :prim retired
     # with the builtin-op globals, K2 — those spellings serialize through the
     # :data/:ctor/:case/:app shapes.)
-    for h <- [:pi, :lam, :app,
-              :data, :ctor, :case, :type, :var, :int_lit, :float_lit, :global] do
+    for h <- [:pi, :lam, :app, :data, :ctor, :case, :type, :var, :int_lit, :float_lit, :global] do
       assert h in heads, "missing serialisable shape: #{h}"
     end
   end

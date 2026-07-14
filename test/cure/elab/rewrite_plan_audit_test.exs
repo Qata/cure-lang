@@ -46,7 +46,9 @@ defmodule Cure.Elab.RewritePlanAuditTest do
   # exactly as Idris separates `NotRewriteRule` from `RewriteNoChange`.
   test "a non-equality rewrite proof is a distinct error family from a no-op rewrite" do
     non_eq = "mod M\n  #{@nat}\n  fn f(n: Nat, m: Nat) -> Equivalent(Nat, m, m) = rewrite n in reflexive(m)\nend\n"
-    no_change = "mod M\n  #{@nat}\n  fn g(p: Equivalent(Nat, Z, Z), m: Nat) -> Equivalent(Nat, m, m) = rewrite p in reflexive(m)\nend\n"
+
+    no_change =
+      "mod M\n  #{@nat}\n  fn g(p: Equivalent(Nat, Z, Z), m: Nat) -> Equivalent(Nat, m, m) = rewrite p in reflexive(m)\nend\n"
 
     assert {:error, e1} = Program.elaborate(non_eq)
     assert {:error, e2} = Program.elaborate(no_change)

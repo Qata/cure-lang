@@ -1,17 +1,8 @@
-fsm Turnstile with Integer
-  Locked   --coin-->  Unlocked
-  Unlocked --push-->  Locked
-  Unlocked --coin-->  Unlocked
-  Locked   --push-->  Locked
+## Transparent FSM example with a tuple payload.
 
-  @notify_transitions
-
-  on_transition
-    (:locked, :coin, _payload, %{payload: p, meta: m}) ->
-      %[:ok, :unlocked, %{payload: p + 1, meta: m}]
-    (:unlocked, :push, _payload, %{payload: p, meta: m}) ->
-      %[:ok, :locked, %{payload: p, meta: %{passages: m.passages + 1}}]
-    (:unlocked, :coin, _payload, %{payload: p, meta: m}) ->
-      %[:ok, :unlocked, %{payload: p + 1, meta: m}]
-    (_, _, _, state) ->
-      %[:ok, :__same__, state]
+fsm Cure.Turnstile state Tuple(Int, Int) initial :locked events Atom transition
+  pickup
+    `and`(state == :locked, event == :coin) -> %[:next_state, :unlocked, %[data.1 + 1, data.2]]
+    `and`(state == :unlocked, event == :push) -> %[:next_state, :locked, %[data.1, data.2 + 1]]
+    `and`(state == :unlocked, event == :coin) -> %[:next_state, :unlocked, %[data.1 + 1, data.2]]
+    else -> %[:next_state, state, data]

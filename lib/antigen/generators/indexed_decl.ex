@@ -91,7 +91,11 @@ defmodule Antigen.Generators.IndexedDecl do
       indices = for i <- 0..(k - 1), do: {:n, {:var, i}}
       fam = Inductive.family(:MyEqK, [{:a, {:type, 0}}], indices, 0)
       ctor = Inductive.ctor(:mreflK, [{:w, {:var, 0}}], List.duplicate({:var, 0}, k), [:many], [{:var, 1}])
-      Gen.return({fam, :well_typed, [ctor], "dependent #{k}-index family, generalized var repeated (Type param)", :idx_dependent_eq})
+
+      Gen.return(
+        {fam, :well_typed, [ctor], "dependent #{k}-index family, generalized var repeated (Type param)",
+         :idx_dependent_eq}
+      )
     end)
   end
 
@@ -101,7 +105,15 @@ defmodule Antigen.Generators.IndexedDecl do
 
     Gen.frequency([
       {3, ctor_result(fam, :well_typed, :mki, single(lit(kind)), "nullary matching index", :idx_nullary_match)},
-      {2, ctor_result(fam, :ill_typed, :mkb, single(lit(other(kind))), "nullary mismatched-type index", :idx_nullary_mistype)},
+      {2,
+       ctor_result(
+         fam,
+         :ill_typed,
+         :mkb,
+         single(lit(other(kind))),
+         "nullary mismatched-type index",
+         :idx_nullary_mistype
+       )},
       {1, ctor_result(fam, :ill_typed, :mkb, arity_indices(kind), "nullary wrong-arity index", :idx_nullary_arity)}
     ])
   end

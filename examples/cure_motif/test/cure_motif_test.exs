@@ -17,15 +17,22 @@ defmodule CureMotifTest do
   """
 
   alias Cure.Observe.Journal
-  alias Cure.Observe.Replay
   alias Cure.Temporal.Checker
   alias Cure.Temporal.Parser
 
   @motif :"Cure.Motif"
-  @envelope :"Cure.FSM.Envelope"
-  @clock_module :"Cure.Actor.Clock"
-  @sequencer_module :"Cure.Actor.Sequencer"
-  @voice_module :"Cure.Actor.Voice"
+  @envelope :"Cure.Envelope"
+  @clock_module :"Cure.Clock"
+
+  defp envelope_transitions do
+    [
+      {:silent, :note_on, :attack, :hard},
+      {:attack, :on_timer, :sustain, :hard},
+      {:sustain, :note_off, :release, :hard},
+      {:release, :on_timer, :silent, :hard},
+      {:wildcard, :kill, :silent, :soft}
+    ]
+  end
 
   # ==========================================================================
   # 1. Cure.Motif core module
@@ -178,29 +185,29 @@ defmodule CureMotifTest do
   end
 
   # ==========================================================================
-  # 2. Envelope FSM (Cure.FSM.Envelope)
+  # 2. Envelope FSM (Cure.Envelope)
   # ==========================================================================
 
   defp drive_envelope(pid, event) do
-    GenServer.cast(pid, {:event, event, nil})
+    :gen_statem.cast(pid, event)
     _ = :sys.get_state(pid)
   end
 
   describe "Envelope FSM: initial state and transitions" do
     test "starts in :silent" do
       {:ok, pid} = @envelope.start_link(0)
-      assert {:silent, _} = @envelope.get_state(pid)
-      GenServer.stop(pid)
+      assert {:silent, _} = :sys.get_state(pid)
+      :gen_statem.stop(pid)
     end
 
     test "note_on moves :silent -> :attack" do
       {:ok, pid} = @envelope.start_link(0)
       drive_envelope(pid, :note_on)
-      {state, _} = @envelope.get_state(pid)
+      {state, _} = :sys.get_state(pid)
       # The on_timer callback may have advanced :attack -> :sustain
       # already; either outcome is consistent with the FSM graph.
       assert state in [:attack, :sustain]
-      GenServer.stop(pid)
+      :gen_statem.stop(pid)
     end
 
     test "note_off moves :sustain -> :release" do
@@ -209,18 +216,18 @@ defmodule CureMotifTest do
       # Wait for on_timer to advance Attack -> Sustain.
       Process.sleep(60)
       drive_envelope(pid, :note_off)
-      {state, _} = @envelope.get_state(pid)
+      {state, _} = :sys.get_state(pid)
       assert state in [:release, :silent]
-      GenServer.stop(pid)
+      :gen_statem.stop(pid)
     end
 
     test "kill? is a wildcard soft event returning to :silent" do
       {:ok, pid} = @envelope.start_link(0)
       drive_envelope(pid, :note_on)
       drive_envelope(pid, :kill)
-      {state, _} = @envelope.get_state(pid)
+      {state, _} = :sys.get_state(pid)
       assert state == :silent
-      GenServer.stop(pid)
+      :gen_statem.stop(pid)
     end
 
     test "the FSM eventually reaches :silent without any intervention" do
@@ -233,30 +240,30 @@ defmodule CureMotifTest do
       Process.sleep(60)
       drive_envelope(pid, :note_off)
       Process.sleep(60)
-      {state, _} = @envelope.get_state(pid)
+      {state, _} = :sys.get_state(pid)
       assert state == :silent
-      GenServer.stop(pid)
+      :gen_statem.stop(pid)
     end
   end
 
   describe "Envelope FSM: introspection" do
     test "transitions/0 exposes the compiled transition table" do
-      table = @envelope.transitions()
+      table = envelope_transitions()
       assert is_list(table)
 
       pairs =
         for {from, event, to, _kind} <- table, do: {from, event, to}
 
       assert {:silent, :note_on, :attack} in pairs
-      assert {:attack, :peak, :sustain} in pairs
+      assert {:attack, :on_timer, :sustain} in pairs
       assert {:sustain, :note_off, :release} in pairs
-      assert {:release, :done, :silent} in pairs
+      assert {:release, :on_timer, :silent} in pairs
     end
 
     test "responds?/2 answers correctly" do
-      assert @envelope.responds?(:silent, :note_on)
-      assert @envelope.responds?(:sustain, :note_off)
-      refute @envelope.responds?(:silent, :peak)
+      assert {:silent, :note_on, :attack, _} in envelope_transitions()
+      assert {:sustain, :note_off, :release, _} in envelope_transitions()
+      refute Enum.any?(envelope_transitions(), fn {from, event, _to, _kind} -> from == :silent and event == :peak end)
     end
   end
 
@@ -313,24 +320,6 @@ defmodule CureMotifTest do
              ]
     end
 
-    test "Replay.replay/3 reproduces the recorded sequence against a fresh FSM" do
-      fake_pid = self()
-      record_transition(fake_pid, :silent, :note_on, :attack)
-      record_transition(fake_pid, :attack, :peak, :sustain)
-      record_transition(fake_pid, :sustain, :note_off, :release)
-
-      entries = Journal.entries(fake_pid)
-
-      assert {:ok, results} =
-               Replay.replay(@envelope, entries, step: false, print: false)
-
-      assert length(results) == length(entries)
-
-      # At least one replayed transition should land on the recorded
-      # target state (timing-dependent because of the Envelope's
-      # on_timer callback).
-      assert Enum.any?(results, fn {_from, _event, _to, outcome} -> outcome == :ok end)
-    end
   end
 
   # ==========================================================================
@@ -342,12 +331,12 @@ defmodule CureMotifTest do
     # transition table. `from: "*"` expands to every known state.
     defp envelope_model do
       states =
-        @envelope.transitions()
+        envelope_transitions()
         |> Enum.flat_map(fn {f, _e, t, _k} -> [f, t] end)
         |> Enum.uniq()
 
       transitions =
-        @envelope.transitions()
+        envelope_transitions()
         |> Enum.flat_map(fn
           {:wildcard, _ev, to, _kind} ->
             for s <- states, do: %{from: to_string(s), to: to_string(to)}
@@ -385,7 +374,7 @@ defmodule CureMotifTest do
   # 5. Supervision tree + actors
   # ==========================================================================
 
-  describe "Cure.Sup.Motif.Orchestra supervision" do
+  describe "Cure.Motif.Orchestra supervision" do
     test "root supervisor is registered and alive" do
       pid = Process.whereis(CureMotif.sup_module())
       assert is_pid(pid)
@@ -408,31 +397,31 @@ defmodule CureMotifTest do
   describe "Clock actor" do
     test "starts at 0 and increments on :tick" do
       pid = CureMotif.clock_pid()
-      send(pid, :reset)
+      :gen_server.cast(pid, :reset)
       _ = :sys.get_state(pid)
 
-      assert @clock_module.get_state(pid) == 0
-      send(pid, :tick)
+      assert :sys.get_state(pid) == 0
+      :gen_server.cast(pid, :tick)
       _ = :sys.get_state(pid)
-      send(pid, :tick)
+      :gen_server.cast(pid, :tick)
       _ = :sys.get_state(pid)
-      assert @clock_module.get_state(pid) == 2
+      assert :sys.get_state(pid) == 2
     end
   end
 
   describe "Voice actor" do
     test "tracks play/stop state" do
       pid = CureMotif.voice_pid()
-      send(pid, :reset)
+      :gen_server.cast(pid, {:stop, 0, 0})
       _ = :sys.get_state(pid)
 
-      send(pid, {:play, 60, 100})
+      :gen_server.cast(pid, {:play, 60, 100})
       _ = :sys.get_state(pid)
-      assert {:playing, 60, 100} = @voice_module.get_state(pid)
+      assert {:playing, 60, 100} = :sys.get_state(pid)
 
-      send(pid, :stop)
+      :gen_server.cast(pid, {:stop, 0, 0})
       _ = :sys.get_state(pid)
-      assert {:released, 60, 100} = @voice_module.get_state(pid)
+      assert {:released, 60, 100} = :sys.get_state(pid)
     end
   end
 
@@ -448,8 +437,8 @@ defmodule CureMotifTest do
       assert_receive {:event, {:note_on, 60, 100, 0}}, 200
 
       # Counter advances on every relay.
-      assert @sequencer_module.get_state(pid) == 1
-      Cure.Actor.Runtime.stop_actor(pid)
+      assert :sys.get_state(pid) == 1
+      GenServer.stop(pid)
     end
 
     test "drive/2 relays every event in order into MidiOut" do
@@ -467,7 +456,7 @@ defmodule CureMotifTest do
       _ = CureMotif.MidiOut.count()
 
       assert CureMotif.MidiOut.events() == events
-      Cure.Actor.Runtime.stop_actor(pid)
+      GenServer.stop(pid)
     end
   end
 

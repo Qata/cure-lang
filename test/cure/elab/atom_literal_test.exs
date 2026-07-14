@@ -25,6 +25,7 @@ defmodule Cure.Elab.AtomLiteralTest do
     mod M
       fn same(a: Atom, b: Atom) -> Bool = a == b
     """
+
     {:ok, env} = Program.elaborate(src)
     {:ok, m} = Emit.compile_and_load(env, module: :"Cure.AtomEq", functions: [:same])
     assert apply(m, :same, [:ok, :ok]) == true

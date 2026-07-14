@@ -5,16 +5,52 @@ defmodule Antigen.Assays.TotalityClosureAssayTest do
   alias Cure.Core.Env
 
   defp int_arrow, do: {:pi, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_type}}
-  defp loop_def(env), do: Env.add_def(env, :loop, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :loop}, {:var, 0}}})
-  defp total_def(env), do: Env.add_def(env, :total_id, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
+
+  defp loop_def(env),
+    do:
+      Env.add_def(
+        env,
+        :loop,
+        int_arrow(),
+        {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :loop}, {:var, 0}}}
+      )
+
+  defp total_def(env),
+    do: Env.add_def(env, :total_id, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
+
   defp with_family_index(env, fam, g),
-    do: %{env | families: Map.put(env.families, fam, %{name: fam, params: [], indices: [{:i, {:app, {:global, g}, {:int_lit, 0}}}], level: 0})}
+    do: %{
+      env
+      | families:
+          Map.put(env.families, fam, %{
+            name: fam,
+            params: [],
+            indices: [{:i, {:app, {:global, g}, {:int_lit, 0}}}],
+            level: 0
+          })
+    }
+
   defp with_ctor_index(env, ct, g),
-    do: %{env | ctors: Map.put(env.ctors, ct, %{name: ct, args: [], result_indices: [{:app, {:global, g}, {:int_lit, 0}}], result_params: [], quantities: []})}
+    do: %{
+      env
+      | ctors:
+          Map.put(env.ctors, ct, %{
+            name: ct,
+            args: [],
+            result_indices: [{:app, {:global, g}, {:int_lit, 0}}],
+            result_params: [],
+            quantities: []
+          })
+    }
 
   defp snd_ch(env, expect) do
-    Challenge.new(kind: :closure_env, assay: "totality_closure/soundness", label: :diverging,
-      payload: %{env: env, expect: expect}, seed: 1)
+    Challenge.new(
+      kind: :closure_env,
+      assay: "totality_closure/soundness",
+      label: :diverging,
+      payload: %{env: env, expect: expect},
+      seed: 1
+    )
   end
 
   test "reject baseline: diverging :loop in a family index — real certify rejects" do
@@ -47,20 +83,34 @@ defmodule Antigen.Assays.TotalityClosureAssayTest do
     # exercised only implicitly by the accept-control test passing.
     env = Env.empty() |> total_def() |> with_family_index(:Vessel, :total_id)
     k = %{TotalityClosureAssay.__real__() | certify: fn _e -> {:error, {:totality_required, :total_id}} end}
+
     assert TotalityClosureAssay.run(snd_ch(env, :accept), k) ==
              {:violation, {:total_env_not_certified, {:error, {:totality_required, :total_id}}}}
   end
 
   describe "totality_closure/completeness (V5b)" do
     defp cmp_ch(env) do
-      Challenge.new(kind: :closure_env, assay: "totality_closure/completeness", label: :positive,
-        payload: %{env: env}, seed: 1)
+      Challenge.new(
+        kind: :closure_env,
+        assay: "totality_closure/completeness",
+        label: :positive,
+        payload: %{env: env},
+        seed: 1
+      )
     end
 
     # direct: :loop in a family index. transitive: :loop's body calls :callee, both must be reached.
-    defp callee_def(env), do: Env.add_def(env, :callee, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
+    defp callee_def(env),
+      do: Env.add_def(env, :callee, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:var, 0}})
+
     defp loop_calls_callee(env),
-      do: Env.add_def(env, :loop, int_arrow(), {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :callee}, {:var, 0}}})
+      do:
+        Env.add_def(
+          env,
+          :loop,
+          int_arrow(),
+          {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, {:app, {:global, :callee}, {:var, 0}}}
+        )
 
     test "baseline: direct type-position global is in type_level_fns" do
       env = Env.empty() |> loop_def() |> with_family_index(:Vessel, :loop)
@@ -80,7 +130,8 @@ defmodule Antigen.Assays.TotalityClosureAssayTest do
 
     test "negative control: a type_level_fns stub dropping the transitive callee" do
       env = Env.empty() |> callee_def() |> loop_calls_callee() |> with_family_index(:Vessel, :loop)
-      k = %{TotalityClosureAssay.__real__() | type_level_fns: fn _e -> MapSet.new([:loop]) end}  # drops :callee
+      # drops :callee
+      k = %{TotalityClosureAssay.__real__() | type_level_fns: fn _e -> MapSet.new([:loop]) end}
       assert {:violation, {:closure_missed, missing}} = TotalityClosureAssay.run(cmp_ch(env), k)
       assert :callee in missing
     end
@@ -90,7 +141,18 @@ defmodule Antigen.Assays.TotalityClosureAssayTest do
       # independent walk; this exercises reconciliation #2 in isolation, without
       # the real closure. (Re-spelled from the retired {:prim, :eq, …} row —
       # int_eq is a terminal call-graph node, :buried the payload.)
-      env = %{Env.empty() | families: %{P: %{name: :P, params: [], indices: [{:i, {:app, {:app, {:global, :int_eq}, {:global, :buried}}, {:int_lit, 0}}}], level: 0}}}
+      env = %{
+        Env.empty()
+        | families: %{
+            P: %{
+              name: :P,
+              params: [],
+              indices: [{:i, {:app, {:app, {:global, :int_eq}, {:global, :buried}}, {:int_lit, 0}}}],
+              level: 0
+            }
+          }
+      }
+
       assert :buried in TotalityClosureAssay.__reachable__(env)
     end
   end
@@ -101,8 +163,8 @@ defmodule Antigen.Assays.TotalityClosureAssayTest do
     test "each catalog is non-empty and correctly tagged" do
       assert ClosureEnv.soundness_challenges() != []
       assert ClosureEnv.completeness_challenges() != []
-      assert Enum.all?(ClosureEnv.soundness_challenges(), & &1.assay == "totality_closure/soundness")
-      assert Enum.all?(ClosureEnv.completeness_challenges(), & &1.assay == "totality_closure/completeness")
+      assert Enum.all?(ClosureEnv.soundness_challenges(), &(&1.assay == "totality_closure/soundness"))
+      assert Enum.all?(ClosureEnv.completeness_challenges(), &(&1.assay == "totality_closure/completeness"))
     end
 
     test "runner dispatches both totality_closure/ ids and the whole clean catalog is :ok" do

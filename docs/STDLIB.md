@@ -477,51 +477,49 @@ are not yet validated by `Cure.Core.Kernel` from Cure source.
 
 ## Concurrency and OTP
 ### Std.Actor (v0.25.0)
-Runtime-facing surface for typed actor modules compiled from `actor`
-containers. Every function delegates to `Cure.Actor.Builtins`, which
-in turn calls `Cure.Actor.Runtime`.
-- `spawn(actor_module) -> Pid`  -- start an actor; the caller is
-  recorded as its `:caller`.
-- `spawn_with_payload(actor_module, payload) -> Pid`.
-- `spawn_named(actor_module, name) -> Pid`  -- spawn and register
-  under a string name.
-- `stop(pid) -> Atom`  -- terminate the actor.
-- `send(pid, message) -> Any`  -- cast semantics; counterpart of the
-  Melquiades `<-|` operator (both lower to Erlang's `!`).
-- `get_state(pid) -> Any`  -- read the actor's user-visible payload.
-- `is_alive(pid) -> Bool`.
-- `lookup(name: String) -> Pid`  -- reverse lookup by registered
-  name.
+`actor` is a transparent standard-library macro. It emits an ordinary lifted
+`GenServer` module with checked state, message, call, cast, info, and lifecycle
+callbacks. Nested `beam_ops` expressions are expanded before the lifted module
+is elaborated. Use `Std.Otp` for process handles and operations:
+
+```cure
+actor Cure.Counter state Int messages Atom handle_cast
+  pickup
+    message == :inc -> %[:noreply, state + 1]
+    else -> %[:noreply, state]
+```
+
+The raw `Std.Actor` functions remain compatibility bindings for external
+process modules. New code should use `beam_ops`, `Pid(Message)`, and
+`GenServer(Request, Reply)` rather than an actor runtime registry.
 ### Std.Fsm
-Runtime surface for FSM modules compiled from `fsm` containers. All
-entries delegate to `Cure.FSM.Builtins`, which wraps
-`Cure.FSM.Runtime`.
+`fsm` is a transparent standard-library macro over the checked process
+algebra. Transition rows are ordinary Cure ADT values and dispatch is an
+ordinary recursive function in `Std.Fsm`:
+
+```cure
+fsm Cure.TrafficLight state Atom transitions [
+  transition :red :timer :green,
+  transition :green :timer :yellow,
+  transition :yellow :timer :red
+]
+```
+
+The raw `Std.Fsm` functions remain compatibility bindings for external
+process modules. Generated modules use `Std.Otp.start_statem` and common
+lifted-module emission.
 #### Lifecycle
-- `spawn(fsm_module) -> Pid`  -- start an instance; caller is the
-  recorded `:caller`.
-- `spawn_with_payload(fsm_module, payload) -> Pid`.
-- `spawn_with(fsm_module, init) -> Pid`  -- accepts a
-  `%Cure.FSM.State{}`, a keyword list, or a plain map containing
-  `:caller`, `:meta`, and `:payload`.
-- `spawn_named(fsm_module, name) -> Pid`, `stop(pid) -> Atom`.
+- `beam_ops start_statem module args -> Effect(Tuple)` -- start an instance.
+- `beam_ops stop pid -> Effect(Unit)` -- stop a process through its typed handle.
 #### Events
-- `send(pid, event) -> Atom`  -- deliver an event without payload.
-- `send_with(pid, event, payload) -> Atom`  -- deliver an event
-  carrying a payload.
-- `send_batch(pid, events) -> Atom`  -- deliver a list of events.
+- `beam_ops tell pid event -> Effect(Unit)` -- deliver a typed event.
 #### Introspection
-- `get_state(pid) -> Tuple`  -- `%[state, payload]`.
-- `full_state(pid) -> Tuple`  -- `%[state, %FsmState{...}]`.
-- `state(pid) -> Atom`  -- current state atom.
-- `is_alive(pid) -> Bool`, `info(pid) -> Map`,
-  `history(pid) -> List(Atom)`.
-- `lookup(name: String) -> Pid`.
+- `callback_mode/0`, `init/1`, and `handle_event/4` are ordinary lifted
+  callbacks, with the event/data types supplied by the macro declaration.
 #### Lifecycle-hook helpers
-- `notify(message) -> Atom`  -- send `message` back to the FSM's
-  registered caller. A no-op returning `:no_caller` outside an FSM
-  process.
-- `caller(pid) -> Pid`  -- return the caller pid registered for a
-  running FSM, or `nil`.
+Transition actions and lifecycle helpers are expressed as ordinary declarations
+and checked `beam_ops`; no transition parser or generated runtime class is
+involved.
 ### Std.Process (v0.25.0)
 Raw BEAM process primitives. Most entries are direct `@extern`
 wrappers around `:erlang` BIFs; `monitor/1` and `trap_exit/1` route
@@ -538,24 +536,15 @@ signatures can stay idiomatic.
 - `exit(pid, reason: Atom) -> Atom`.
 - `self() -> Pid`, `is_alive(pid) -> Bool`.
 ### Std.Supervisor (v0.25.0)
-Start, stop, and introspect Cure supervisor trees compiled from `sup`
-containers. Each `sup Name` compiles to a loaded `Cure.Sup.<Name>`
-module.
-- `start(sup_module) -> Pid`, `start_with(sup_module, init) -> Pid`
-  -- the latter threads `init` into the tree's `init/1`.
-- `stop(sup_module) -> Atom`.
-- `which_children(sup_module) -> List(Tuple)`  -- returns
-  `%[id, child_pid, type, modules]` tuples.
-- `count_children(sup_module) -> Map`  -- `%{type => count}`.
-- `lookup(sup_module) -> Pid`  -- pid or `nil`.
-- `list() -> List(Atom)`  -- every tracked supervisor module.
+`sup` is a transparent standard-library macro. It emits a lifted `Supervisor`
+module with checked strategy, restart, shutdown, child-kind, and child-start
+argument values. Start generated trees through `beam_ops start_supervisor` and
+use ordinary `child_spec` declarations.
 ### Std.App (v0.26.0)
-Cure-facing surface for the OTP application lifecycle. Each `app`
-container compiles to a loaded `Cure.App.<Name>` module implementing
-the `:application` behaviour (`start/2`, `stop/1`, and when
-`on_phase :name` clauses are present, `start_phase/3`). The helpers
-below wrap the Erlang `:application` BIFs via `Cure.App.Builtins`,
-returning plain atoms / values instead of OTP's `{:ok, _}` tuples.
+`app` is a transparent standard-library macro. It emits a lifted application
+module with checked `start/2`, `stop/1`, and optional `start_phase/3` callbacks.
+Root supervision uses `beam_ops start_supervisor`; phase bodies are ordinary
+Cure code reparsed in application callback context.
 - `ensure_all_started(name) -> Atom`  -- start the application and
   every transitive dependency.
 - `start(name) -> Atom`, `stop(name) -> Atom`  -- both idempotent.
@@ -566,7 +555,7 @@ returning plain atoms / values instead of OTP's `{:ok, _}` tuples.
   vsn], ...]` for every running application.
 - `loaded_applications() -> List(Atom)`.
 - `start_phase(name, phase, phase_args) -> Atom`  -- manually invoke
-  a `on_phase` callback (normally driven by the boot script; exposed
+  a `start_phase/3` callback (normally driven by the boot script; exposed
   for tests).
 
 Example:

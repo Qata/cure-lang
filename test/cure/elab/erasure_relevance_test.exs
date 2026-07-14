@@ -221,7 +221,10 @@ defmodule Cure.Elab.ErasureRelevanceTest do
       env = Cure.Core.Builtins.seed(Env.empty(), MapSet.new())
       body = {:ctor, :Causal, []}
       motive = {:lam, Cure.Core.Grade.unrestricted(), {:type, 0}, body}
-      id_branch = {:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, {:ctor, :Dcoupled, []}}, {:var, 0}}}
+
+      id_branch =
+        {:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, {:ctor, :Dcoupled, []}}, {:var, 0}}}
+
       t1 = {:app, {:case, {:ctor, :reflexive, [{:ctor, :Dcoupled, []}]}, motive, [id_branch]}, body}
       t2 = {:app, {:case, {:ctor, :reflexive, [{:ctor, :Causal, []}]}, motive, [id_branch]}, body}
 

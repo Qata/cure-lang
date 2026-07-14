@@ -75,6 +75,7 @@ defmodule Antigen.Generators.SelfTest do
   # record; Positivity.env_of declares every family in the payload.
   defp assert_well_formed(%Challenge{kind: :indexed_case, payload: %{families: fams}} = c) do
     assert %Env{} = Positivity.env_of(c)
+
     assert Enum.all?(fams, fn {_fam, ctors} ->
              Enum.all?(ctors, fn %{args: args} -> Enum.all?(args, fn {_n, ty} -> Term.term?(ty) end) end)
            end)

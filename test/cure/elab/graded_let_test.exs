@@ -43,7 +43,10 @@ defmodule Cure.Elab.GradedLetTest do
   defp elab(body), do: Program.elaborate(@preamble <> "  fn f() -> Int =\n" <> body <> "end\n")
 
   defp lets(env, name) do
-    env |> Env.get_def(name) |> Map.fetch!(:body) |> Validator.nodes()
+    env
+    |> Env.get_def(name)
+    |> Map.fetch!(:body)
+    |> Validator.nodes()
     |> Enum.filter(&match?({:let, _, _, _, _}, &1))
   end
 
@@ -70,7 +73,9 @@ defmodule Cure.Elab.GradedLetTest do
     end
 
     test "a graded let may carry a type as well" do
-      meta = assignment_metas(@preamble <> "  fn f() -> Int =\n    let c :linear Int = mk()\n    c\nend\n") |> List.first()
+      meta =
+        assignment_metas(@preamble <> "  fn f() -> Int =\n    let c :linear Int = mk()\n    c\nend\n") |> List.first()
+
       assert Keyword.get(meta, :grade) == :linear
       assert Keyword.has_key?(meta, :type_annotation)
     end
@@ -87,11 +92,13 @@ defmodule Cure.Elab.GradedLetTest do
 
   describe "there is exactly ONE spelling, and it binds a variable" do
     test ":unrestricted is not a spelling on a let either" do
-      assert {:error, _} = Compiler.parse_source(@preamble <> "  fn f() -> Int =\n    let c :unrestricted = mk()\n    c\nend\n")
+      assert {:error, _} =
+               Compiler.parse_source(@preamble <> "  fn f() -> Int =\n    let c :unrestricted = mk()\n    c\nend\n")
     end
 
     test "an unknown grade atom is a parse error" do
-      assert {:error, _} = Compiler.parse_source(@preamble <> "  fn f() -> Int =\n    let c :bogus = mk()\n    c\nend\n")
+      assert {:error, _} =
+               Compiler.parse_source(@preamble <> "  fn f() -> Int =\n    let c :bogus = mk()\n    c\nend\n")
     end
 
     test "a graded DESTRUCTURING let is a parse error, not a dropped annotation" do

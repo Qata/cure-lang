@@ -28,8 +28,10 @@ defmodule OracleReplayTest do
         for %{name: name, cure_path: cp, idr_path: ip} <- Oracle.pairs(@cluster) do
           entry = Map.fetch!(fixture, name)
           assert File.exists?(ip), "missing paired .idr for #{@cluster}/#{name}"
+
           assert Atom.to_string(Oracle.cure_verdict(cp)) == entry["cure"],
                  "Cure verdict drifted for #{@cluster}/#{name} — regenerate with `mix cure.oracle #{@cluster}`"
+
           assert Oracle.consistent(entry) == :ok,
                  "relation contract violated for #{@cluster}/#{name}: #{inspect(entry)}"
         end

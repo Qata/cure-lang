@@ -83,13 +83,20 @@ defmodule Antigen.Generators.Conversion do
       term = carrier_term(carrier, a, b, d + 1)
 
       fault = %{
-        kind: carrier, witness: :conv, expected_index: d, actual_index: d + 1,
-        reduction: :required, depth: d, carrier: carrier
+        kind: carrier,
+        witness: :conv,
+        expected_index: d,
+        actual_index: d + 1,
+        reduction: :required,
+        depth: d,
+        carrier: carrier
       }
 
       Gen.return(
         Challenge.new(
-          kind: :mutant_term, assay: "mutation/rejection", label: :ill_typed,
+          kind: :mutant_term,
+          assay: "mutation/rejection",
+          label: :ill_typed,
           payload: %{sig: :v1, ctx: [], type: vec(num(d)), term: term, fault: fault},
           cover_tag: carrier
         )
@@ -103,11 +110,14 @@ defmodule Antigen.Generators.Conversion do
   def conv_accept(assay) do
     Gen.bind(carrier_gen(), fn carrier ->
       Gen.bind(depth_split(), fn {d, a, b} ->
-        term = carrier_term(carrier, a, b, d)   # filler matches reduced index ⇒ accept
+        # filler matches reduced index ⇒ accept
+        term = carrier_term(carrier, a, b, d)
 
         Gen.return(
           Challenge.new(
-            kind: :typed_term, assay: assay, label: :well_typed,
+            kind: :typed_term,
+            assay: assay,
+            label: :well_typed,
             payload: %{sig: :v1, ctx: [], type: accept_type(carrier, d), term: term}
           )
         )

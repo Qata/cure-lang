@@ -40,13 +40,18 @@ defmodule Antigen.Assays.DeltaReduce do
   @kpair_sigma {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
   # donly's body re-exposes a case stuck on a missing S branch under
   # reduce_unfolded's post-unfold ι follow-through — see the generator moduledoc.
-  @donly_body {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:app, {:global, :idnat}, {:var, 0}}, @motive, [{:Z, 0, @z}]}}
+  @donly_body {:lam, Cure.Core.Grade.unrestricted(), @nat,
+               {:case, {:app, {:global, :idnat}, {:var, 0}}, @motive, [{:Z, 0, @z}]}}
 
   # v1 menu + three certified globals (see moduledoc). Declared here, not in the
   # shared SigMenu, because no other vertical needs global definitions.
   defp env do
     Generators.SigMenu.env_of(:v1)
-    |> Env.add_def(:idnat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}})
+    |> Env.add_def(
+      :idnat,
+      {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat},
+      {:lam, Cure.Core.Grade.unrestricted(), @nat, {:var, 0}}
+    )
     |> Env.certify(:idnat)
     |> Env.add_def(:kpair, @kpair_sigma, {:ctor, :mk_pair, [@z, {:ctor, :S, [@z]}]})
     |> Env.certify(:kpair)
@@ -84,8 +89,7 @@ defmodule Antigen.Assays.DeltaReduce do
         :ok
 
       true ->
-        {:violation,
-         {:fuel_probe_disagreement, %{term: term, opts: opts, want: want, expected: expected, got: result}}}
+        {:violation, {:fuel_probe_disagreement, %{term: term, opts: opts, want: want, expected: expected, got: result}}}
     end
   end
 

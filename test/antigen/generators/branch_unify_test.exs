@@ -10,6 +10,7 @@ defmodule Antigen.Generators.BranchUnifyTest do
     for %Challenge{} = c <- B.interp(BranchUnify.gen()) |> Enum.take(@sample) do
       assert c.kind == :branch_unify
       assert c.label in [:trivial, :solved, :impossible, :bad_motive]
+
       assert Assays.BranchUnify.run(c) == :ok,
              "verdict oracle disagreed on #{c.note} (#{c.label})"
     end
@@ -20,6 +21,7 @@ defmodule Antigen.Generators.BranchUnifyTest do
     assert MapSet.equal?(labels, MapSet.new([:trivial, :solved, :impossible]))
 
     notes = BranchUnify.cases() |> Enum.map(fn t -> elem(t, 5) end)
+
     for frag <- ["merge conflict", "forced equation", "rigid data/Type", "outer index var", "multi-key cycle"] do
       assert Enum.any?(notes, &String.contains?(&1, frag)), "missing arm: #{frag}"
     end

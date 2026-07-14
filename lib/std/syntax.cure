@@ -1,0 +1,83 @@
+@group(:core)
+mod Std.Syntax
+  ## The generic quoted-AST value a Tier-3 `computed by` elab receives and
+  ## returns (macro-facility design §3, generic layer). Reflects the parser's
+  ## `{tag, meta, third}` node: `Node` for a child list, `Leaf` for a scalar
+  ## third value, `Raw` for a node the parser produced that doesn't fit the
+  ## `{tag, meta, third}` shape at all (e.g. a bare `impossible`-body marker
+  ## or a non-conforming pattern tuple) -- reflected opaquely rather than
+  ## crashing. `attrs` carries the semantic meta (a function's name, an
+  ## operator, a literal's subtype) — dropping it would lose those. A meta
+  ## value need not be a plain scalar: `SynLit` also covers a list of values
+  ## (`SList`), a nested AST (`SSyntax`), and a lookup table (`SMap`), each
+  ## losslessly. Source positions are not represented (the expansion is
+  ## re-elaborated, K3 firewall).
+  use Std.String
+
+  type Syntax =
+    | Node(Atom, List(Attr), List(Syntax))
+    | Leaf(Atom, List(Attr), SynLit)
+    | Raw(SynLit)
+    | Quoted(Syntax)
+    | Failure(Atom, List(Syntax))
+
+  type Attr = KV(Atom, SynLit)
+
+  type SynLit =
+    | SInt(Int)
+    | SFloat(Float)
+    | SStr(String)
+    | SBool(Bool)
+    | SAtom(Atom)
+    | SList(List(SynLit))
+    | SSyntax(Syntax)
+    | SMap(List(SynPair))
+    | SOpaque
+
+  type SynPair = SPair(SynLit, SynLit)
+
+  type AttrResult = Found(SynLit) | Missing
+
+  ## Small, total operations used by source-defined syntax macros. These keep
+  ## syntax analysis in Cure instead of teaching the compiler about a macro's
+  ## domain-specific declarations.
+  fn tag(syntax: Syntax) -> Atom = match syntax
+    Node(name, _, _) -> name
+    Leaf(name, _, _) -> name
+    Raw(_) -> :raw
+    Quoted(_) -> :quoted
+    Failure(name, _) -> name
+
+  fn attrs(syntax: Syntax) -> List(Attr) = match syntax
+    Node(_, values, _) -> values
+    Leaf(_, values, _) -> values
+    Raw(_) -> []
+    Quoted(inner) -> attrs(inner)
+    Failure(_, _) -> []
+
+  fn children(syntax: Syntax) -> List(Syntax) = match syntax
+    Node(_, _, values) -> values
+    Leaf(_, _, _) -> []
+    Raw(_) -> []
+    Quoted(inner) -> [inner]
+    Failure(_, values) -> values
+
+  fn attr(values: List(Attr), key: Atom) -> AttrResult = match values
+    [] -> Missing
+    [KV(name, value) | rest] ->
+      match name == key
+        true -> Found(value)
+        false -> attr(rest, key)
+
+  fn node(name: Atom, values: List(Attr), terms: List(Syntax)) -> Syntax =
+    Node(name, values, terms)
+
+  fn leaf(name: Atom, values: List(Attr), value: SynLit) -> Syntax =
+    Leaf(name, values, value)
+
+  fn attr_value(name: Atom, value: SynLit) -> Attr = KV(name, value)
+
+  fn syntax_atom(value: Atom) -> SynLit = SAtom(value)
+  fn syntax_string(value: String) -> SynLit = SStr(value)
+  fn syntax_bool(value: Bool) -> SynLit = SBool(value)
+  fn syntax_int(value: Int) -> SynLit = SInt(value)

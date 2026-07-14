@@ -155,7 +155,7 @@ Two rules are enforced:
   so a `= ...` is dead code.
 
 Erlang/OTP modules are plain atoms (`:erlang`, `:io`); Elixir modules use their
-dotted `Elixir.` path (`Elixir.Cure.FSM.Builtins`). `@extern` composes with
+dotted `Elixir.` path (`Elixir.MyApp.Native`). `@extern` composes with
 `local` for private bindings.
 
 See `docs/FFI.md` for the full guide (module forms, effects, lowering, and
@@ -388,113 +388,50 @@ Protocol dispatch is compiled to guard-based multi-clause functions.
 
 ## FSMs (Finite State Machines)
 
-Cure supports two FSM compilation modes:
+`fsm` is an auto-preluded standard-library macro. It is transparent:
+the macro expands to a lifted module whose behavior declaration and
+callbacks are written in Cure using the checked BEAM algebra. The
+compiler does not recognize an FSM as a special object class.
 
-**Simple mode** (no `on_transition` block) compiles to a `gen_statem`
-module. The resulting machine carries a freeform data term that each
-transition's `do` action may replace.
-
-```cure
-fsm TrafficLight
-  Red    --timer-->     Green
-  Green  --timer-->     Yellow
-  Yellow --timer-->     Red
-  *      --emergency--> Red
-```
-
-**Callback mode** (v0.22.0, triggered by the presence of an
-`on_transition` block) compiles to a `GenServer` whose state is a
-fixed `%Cure.FSM.State{}` struct with three fields:
-
-- `:caller` -- the pid that spawned the FSM. Outbound notifications
-  (`Std.Fsm.notify/1`, `@notify_transitions`) reach this pid. Defaults
-  to the spawning process when `Std.Fsm.spawn/1` is used.
-- `:meta` -- FSM-private bookkeeping, invisible to callers.
-- `:payload` -- user-visible domain value; read by
-  `Std.Fsm.get_state/1`.
-
-Every lifecycle hook receives the struct as its last argument and may
-return either a full `%Cure.FSM.State{}`, a partial map with
-`:payload`/`:meta` keys that is merged into the current struct, or
-any bare value which is interpreted as the new payload.
+The current callback floor declares state and an event handler directly:
 
 ```cure
-fsm Counter
-  @notify_transitions
-
-  Idle --inc--> Idle
-  Idle --reset--> Idle
-
-  on_transition
-    (:idle, :inc,   _evp, %{payload: n, meta: m}) ->
-      %[:ok, :idle, %{payload: n + 1, meta: m}]
-    (:idle, :reset, _evp, %{payload: _, meta: m}) ->
-      %[:ok, :idle, %{payload: 0, meta: m}]
-    (_, _, _, state) -> %[:ok, :__same__, state]
-
-  on_start
-    (state) ->
-      notify(:started)
-      %[:ok, state]
+fsm TrafficLight state Atom handle_event
+  let pid: Pid(Atom) = beam_ops self
+  :keep_state_and_data
 ```
 
-### Lifecycle hooks
-
-- `on_start` -- called inside `init/1`. Receives the struct. May
-  return `:ok`, `{:ok, state}`, or `{:ok, partial}`.
-- `on_stop` -- called from `terminate/2`. Receives `(reason, state)`.
-- `on_transition` -- called on every accepted event. Receives
-  `(current_state, event, event_payload, %FsmState{})`.
-- `on_enter` -- called on entering a state. Receives
-  `(state, %FsmState{})`.
-- `on_exit` -- called on leaving a state. Receives
-  `(state, %FsmState{})`.
-- `on_failure` -- called when a transition is disallowed or the
-  handler returns `{:error, reason}`. Receives
-  `(event, event_payload, %FsmState{})`.
-- `on_timer` -- called every `@timer` milliseconds. Receives
-  `(state, %FsmState{})`.
-
-### Annotations
-
-- `@timer N` -- drive `on_timer` every `N` ms.
-- `@terminal State` -- mark a state as terminal (no outgoing
-  transitions required for deadlock freedom).
-- `@invariant expr` / `@verify expr` -- reserved for the verifier.
-- `@initial :state_name` -- override the initial state (default: the
-  first non-wildcard source).
-- `@notify_transitions` -- after every successful transition, send
-  `{:cure_fsm, pid, {:transition, from, event, to, payload}}` to the
-  caller.
-- `@auto_caller` -- when `:caller` is not explicitly provided, fall
-  back to the spawning process recorded under
-  `:cure_fsm_spawner` in the FSM's process dictionary.
-
-### Events with payloads
-
-Events may carry an arbitrary payload, threaded through to
-`on_transition` as the third argument:
+The generated module implements the standard `gen_statem` behavior. The
+`state T` clause supplies the callback state type, `init` supplies the
+initial callback result, and `handle_event` supplies the event result.
+Callback bodies may use `with` and `beam_ops` for effectful operations:
 
 ```cure
-let pid = Std.Fsm.spawn(:"Cure.FSM.Counter")
-Std.Fsm.send_with(pid, :inc, %{source: :button})
+fsm Counter state Int init
+  %[:ok, :idle, 0]
+
+fsm Counter state Int handle_event
+  with pid: Pid(Atom) <- beam_ops self
+  :keep_state_and_data
 ```
 
-### Notifying the outside world
+The `actor`, `sup`, and `app` macros use the same transparent callback
+and algebra vocabulary. `Std.Fsm` provides the runtime-facing helpers,
+including process startup and event delivery; it is a library API rather
+than compiler-owned FSM knowledge.
 
-Inside any lifecycle hook body, `notify(message)` sends `message` to
-the FSM's `:caller`. Callable as a bare identifier in Cure source; at
-the Elixir level it resolves to `Cure.FSM.State.notify_self/1`. When
-called outside a running FSM process, `notify/1` is a no-op returning
-`:no_caller`.
-
-The compiler verifies reachability, deadlock freedom, hard-event
-exclusivity, and terminal-state validity at compile time.
+Transition tables, payload derivation, lifecycle hooks, and verification
+policies are to be defined as ordinary Cure macros over this callback
+floor. They must expand recursively from the inside out into the same
+checked algebra and BEAM behavior declarations. They are not an alternate
+compiler parser or a hidden FSM lowering path.
 
 ## Actors and Supervisors (v0.25.0)
 
-Typed supervision trees live in two container shapes and a typed send
-operator. See `docs/SUPERVISION.md` for the authoritative reference.
+Typed supervision trees are auto-preluded standard-library macros over the
+checked BEAM algebra. See `docs/SUPERVISION.md` for the authoritative
+reference. They expand to generic lifted modules, not compiler-owned object
+classes.
 
 ### The Melquiades Operator `<-|` / `✉`
 
@@ -513,62 +450,27 @@ request
 |> worker_pid <-| _
 ```
 
-### `actor` containers
+### `actor`
 
 ```cure
-actor Counter with 0
-  on_start
-    (state) -> state
-  on_message
-    (:inc, n)   -> n + 1
-    (:dec, n)   -> n - 1
-    (:get, n) ->
-      notify(%[:value, n])
-      n
-  on_stop
-    (reason, _state) -> notify(%[:stopped, reason])
+actor Cure.Counter state Int handle_info
+  let pid: Pid(Atom) = beam_ops self
+  %[:noreply, state + 1]
 ```
 
-- `with <expr>` seeds the initial payload.
-- `on_start`, `on_message`, `on_stop` reuse the FSM callback-clause
-  grammar (pattern tuple, optional `when` guard, body).
-- Inside any clause body, `notify(message)` sends to the spawning
-  caller (resolved via the process dictionary).
-- The clause return value is the new payload; returning a full
-  `%Cure.Actor.State{}` struct replaces the whole runtime state.
-- Compiles to a loaded `GenServer` module named `Cure.Actor.<Name>`.
-- Spawned and managed by `Cure.Actor.Runtime` (ETS-backed registry,
-  automatic cleanup on `DOWN`); also reachable from Cure through
-  `Std.Actor`.
+`actor` emits ordinary `gen_server` callbacks. `state T` shares a module-local
+`State` alias, and callback results use erased `Effect(...)` types so pure and
+effectful bodies follow one checked path.
 
-### `sup` containers
+### `sup`
 
 ```cure
-sup App.Root
-  strategy  = :one_for_one
-  intensity = 3
-  period    = 5
-  children
-    Counter       as counter
-    Counter       as counter_b (restart: :transient)
-    App.External  as external  (restart: :permanent, shutdown: 10000)
-    sup Workers   as workers
+sup Cure.Root children [Std.Supervisor.child(:"Cure.Counter", :counter)]
 ```
 
-- `strategy` defaults to `:one_for_one` (also accepts `:one_for_all`,
-  `:rest_for_one`, `:simple_one_for_one`).
-- `intensity` defaults to `3`; `period` defaults to `5`.
-- `children` lists one child spec per line. Each line is
-  `Module as child_id` with an optional parenthesised keyword list of
-  `restart: ...`, `shutdown: ...`.
-- Child module resolution: dotted paths verbatim; bare names resolve
-  to `Cure.Actor.<Name>` (worker default) or `Cure.Sup.<Name>`
-  (with the soft-keyword prefix `sup <Name> as id`).
-- Compile-time verification rejects unknown strategies, invalid
-  `restart`/`shutdown` values, non-positive `period`, duplicate child
-  ids, and trivial self-reference cycles (codes `E047`/`E048`/`E050`).
-- Compiles to a `Supervisor`-behaviour module named `Cure.Sup.<Name>`;
-  managed from Cure via `Std.Supervisor`.
+Child policies use closed `Restart`, `Shutdown`, and `ChildType` values from
+`Std.Supervisor`; intensity and period use `Nat`. The generated `init/1` and
+`start_link/0` are ordinary checked declarations.
 
 ### Links, monitors, trap_exit
 
@@ -582,53 +484,28 @@ signatures stay idiomatic.
 ### Typed sends
 
 The type checker has a dedicated clause for `{:send, ...}` that
-unifies the message type against the receiver's declared inbox and
-emits `E046 Inbox Mismatch` on conflict. Bare `Pid` elaborates to
-`{:pid, :any}` so existing FFI code remains compatible.
+unifies the message type against `Pid(m)` and emits a normal elaboration error
+on conflict. `beam_ops tell` and `beam_ops call` are standard-library macros
+over the same typed operations.
 
 ## Applications (v0.26.0)
 
-The `app` container wraps an entire supervision tree into a first-class
-OTP application. See `docs/APP.md` for the authoritative reference.
+The auto-preluded `app` macro creates a transparent lifted OTP application.
+See `docs/APP.md` for the authoritative reference.
 
 ```cure
-app MyApp
-  vsn          = "0.1.0"
-  description  = "My humble application"
-  root         = sup MyApp.Root
-  applications = [:logger, :crypto]
-  env          = %{port: 4000}
-  on_start
-    (start_kind, args) -> do_start(start_kind, args)
-  on_stop
-    (state) -> cleanup(state)
-  on_phase :warm_cache
-    (_args, _kind, _start_args) -> Std.Cache.warm()
+app Cure.MyApp root :"Cure.Root"
+app Cure.Phased phase :warm_cache
+  let pid: Pid(Atom) = beam_ops self
+  :ok
+app Cure.MultiPhase phases [:warm_cache, :warmed, :ready, :started]
 ```
 
-- `vsn`, `description`, `root`, `applications`, `included_applications`,
-  `env`, and `registered` are top-level assignments inside the `app`
-  body. They override the corresponding values in the
-  `[application]` table of `Cure.toml` (with `applications` merged
-  instead of replaced).
-- `on_start` / `on_stop` reuse the actor / FSM callback-clause grammar
-  and produce the generated module's `start/2` and `stop/1` bodies.
-- Each `on_phase :name` block introduces one 3-argument clause
-  `(phase_args, start_kind, start_args)` feeding the generated
-  `start_phase/3` callback. Phase names must agree with
-  `[application].start_phases` in `Cure.toml` (code `E053`).
-- `root = ...` accepts four forms: `sup Name`, `Name`,
-  `App.Sub.Root`, and an atom literal (`:my_app_sup`). The first two
-  resolve to `:"Cure.Sup.<Name>"`; dotted paths and atoms are used
-  verbatim. A phase-only app may omit `root` entirely. Unresolved
-  roots surface as `E054`.
-- The container compiles to `:"Cure.App.<Name>"` (a loaded
-  `Application`-behaviour module). With `--output-dir`, the bytecode
-  and an OTP `<name>.app` resource file are persisted alongside every
-  other Cure module.
-- `Cure.Project.compile_project/2` enforces at most one `app`
-  container per project and cross-checks its name against
-  `[application].name` (code `E051`).
+The `phase` form accepts one delayed body and the `phases` form dispatches a
+flat list of phase/result atoms. Root startup uses `beam_ops start_supervisor`.
+All lifecycle results use erased `Effect(...)` contracts. Project discovery
+consumes lifted application metadata and enforces one application module per
+project.
 
 `cure release` (also `mix cure.release`) packages the compiled
 application as a bootable BEAM release under

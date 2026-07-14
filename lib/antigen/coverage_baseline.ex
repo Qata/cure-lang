@@ -84,7 +84,13 @@ defmodule Antigen.CoverageBaseline do
     end)
   end
 
-  defp records(path), do: Corpus.stream(path) |> Enum.flat_map(fn {:ok, c} -> [c]; _ -> [] end)
+  defp records(path),
+    do:
+      Corpus.stream(path)
+      |> Enum.flat_map(fn
+        {:ok, c} -> [c]
+        _ -> []
+      end)
 
   # A replay must never crash the gate: an ill-typed reconstructed record that the
   # live kernel rejects with a raise is not a coverage failure — it still warmed the

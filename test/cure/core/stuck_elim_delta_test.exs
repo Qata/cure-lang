@@ -28,7 +28,10 @@ defmodule Cure.Core.StuckElimDeltaTest do
     z_branch = {:Z, 0, {:var, 0}}
     # inside S-branch (arity 1): k = var 0, b = var 1
     s_branch = {:S, 1, s({:app, {:app, {:global, :plus}, {:var, 0}}, {:var, 1}})}
-    {:lam, Cure.Core.Grade.unrestricted(), @nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [z_branch, s_branch]}}}
+
+    {:lam, Cure.Core.Grade.unrestricted(), @nat,
+     {:lam, Cure.Core.Grade.unrestricted(), @nat,
+      {:case, {:var, 1}, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}, [z_branch, s_branch]}}}
   end
 
   defp plus_type, do: {:pi, Cure.Core.Grade.unrestricted(), @nat, {:pi, Cure.Core.Grade.unrestricted(), @nat, @nat}}

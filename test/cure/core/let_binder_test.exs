@@ -81,7 +81,10 @@ defmodule Cure.Core.LetBinderTest do
   describe "typing" do
     test "infer/2 types a let by its body's type" do
       assert {:ok, {:vint_type}} =
-               Kernel.infer(Context.empty(), {:let, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 3}, {:var, 0}})
+               Kernel.infer(
+                 Context.empty(),
+                 {:let, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 3}, {:var, 0}}
+               )
     end
 
     test "a let-bound TYPE variable is transparent in the body (the dependent let)" do
@@ -102,12 +105,18 @@ defmodule Cure.Core.LetBinderTest do
 
     test "the value is checked against the ascribed type" do
       assert {:error, _} =
-               Kernel.infer(Context.empty(), {:let, Cure.Core.Grade.unrestricted(), {:int_type}, {:type, 0}, {:int_lit, 1}})
+               Kernel.infer(
+                 Context.empty(),
+                 {:let, Cure.Core.Grade.unrestricted(), {:int_type}, {:type, 0}, {:int_lit, 1}}
+               )
     end
 
     test "the ascribed type must be a sort" do
       assert {:error, _} =
-               Kernel.infer(Context.empty(), {:let, Cure.Core.Grade.unrestricted(), {:int_lit, 1}, {:int_lit, 1}, {:int_lit, 1}})
+               Kernel.infer(
+                 Context.empty(),
+                 {:let, Cure.Core.Grade.unrestricted(), {:int_lit, 1}, {:int_lit, 1}, {:int_lit, 1}}
+               )
     end
   end
 

@@ -36,4 +36,17 @@ defmodule Cure.Elab.TypealiasAppliedFamilyTest do
     {:ok, m} = Emit.compile_and_load(env, module: :"Cure.TA", functions: [:f])
     assert apply(m, :f, []) == [?h, ?i]
   end
+
+  test "a parameterized typealias unfolds every argument before checking" do
+    src = """
+    mod TA
+      typealias First(a, b) = a
+      fn f(x: First(Int, Bool)) -> Int = x
+    end
+    """
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, m} = Emit.compile_and_load(env, module: :"Cure.TwoArgAlias", functions: [:f])
+    assert apply(m, :f, [41]) == 41
+  end
 end

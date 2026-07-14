@@ -54,7 +54,8 @@ defmodule Antigen.Assays.Term do
       not converges?(inferred_term, p.type, ctx) ->
         {:violation, {:inferred_type_mismatch, inferred_term, p.type}}
 
-      true -> :ok
+      true ->
+        :ok
     end
   end
 
@@ -66,7 +67,9 @@ defmodule Antigen.Assays.Term do
   # claim that fuel exhaustion is its own violation class.
   defp dispatch("term/subject_reduction", ctx, p, inferred, k) do
     case Normalise.nf(ctx, p.term, fuel: @assay_fuel) do
-      :fuel_exhausted -> {:violation, {:fuel_exhausted, :nf}}
+      :fuel_exhausted ->
+        {:violation, {:fuel_exhausted, :nf}}
+
       nf ->
         case k.check.(ctx, nf, inferred) do
           :ok -> :ok
@@ -128,8 +131,7 @@ defmodule Antigen.Assays.Term do
   end
 
   defp converges?(t1, t2, ctx) do
-    case Conv.conv_within?(t1, t2, Context.env(ctx), Context.length(ctx),
-           Context.signature(ctx), @assay_fuel) do
+    case Conv.conv_within?(t1, t2, Context.env(ctx), Context.length(ctx), Context.signature(ctx), @assay_fuel) do
       {:ok, true} -> true
       _ -> false
     end

@@ -156,9 +156,7 @@ defmodule Cure.Elab.Relevance do
           :ok
 
         used ->
-          {:error,
-           {:usage_violation,
-            %{def: st.name, binder: level, kind: kind, declared: declared, used: used}}}
+          {:error, {:usage_violation, %{def: st.name, binder: level, kind: kind, declared: declared, used: used}}}
       end
     else
       :ok
@@ -281,7 +279,6 @@ defmodule Cure.Elab.Relevance do
         end
     end
   end
-
 
   # Application spine: the head is `:applied`; an argument is walked iff a runtime
   # value exists for it (`Grade.present?/1` — the dual of `Erase.erase`'s
@@ -453,7 +450,6 @@ defmodule Cure.Elab.Relevance do
 
   defp count_level(_leaf, _depth, _t), do: 0
 
-
   # Un-join: check the shared continuation ONCE (unscaled), then combine it as one
   # alternative with the matched-arm usages. `alt` (agreement) then counts a captured
   # variable at most once across all branches — the Idris per-alternative result.
@@ -475,7 +471,6 @@ defmodule Cure.Elab.Relevance do
       end
     end
   end
-
 
   # Like `walk_branches/3`, but a branch that IS a join application `{:app, {:var,
   # arity}, s}` contributes the shared continuation's captures (already computed,

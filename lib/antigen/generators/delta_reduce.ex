@@ -46,8 +46,10 @@ defmodule Antigen.Generators.DeltaReduce do
   # Motive is the constant `Nat` (the pair is non-dependent); fields bind x=`{:var,1}`,
   # y=`{:var,0}` in the branch frame.
   @kpair_sigma {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
-  @kfst {:case, {:global, :kpair}, {:lam, Cure.Core.Grade.unrestricted(), @kpair_sigma, @nat}, [{:mk_pair, 2, {:var, 1}}]}
-  @ksnd {:case, {:global, :kpair}, {:lam, Cure.Core.Grade.unrestricted(), @kpair_sigma, @nat}, [{:mk_pair, 2, {:var, 0}}]}
+  @kfst {:case, {:global, :kpair}, {:lam, Cure.Core.Grade.unrestricted(), @kpair_sigma, @nat},
+         [{:mk_pair, 2, {:var, 1}}]}
+  @ksnd {:case, {:global, :kpair}, {:lam, Cure.Core.Grade.unrestricted(), @kpair_sigma, @nat},
+         [{:mk_pair, 2, {:var, 0}}]}
 
   # A direct `case` whose scrutinee is a certified global's application (neutral
   # at eval-time, resolves to `S Z` only once forced) and whose branch menu is
@@ -67,16 +69,11 @@ defmodule Antigen.Generators.DeltaReduce do
 
   # {term, expected_nf, note}
   @cases [
-    {{:app, {:global, :idnat}, @z}, @z,
-     "δ+β: idnat Z → Z (unfold certified global, then β)"},
-    {{:app, {:global, :idnat}, {:ctor, :S, [@z]}}, {:ctor, :S, [@z]},
-     "δ+β: idnat (S Z) → S Z"},
-    {@kfst, @z,
-     "δ+ι: fst kpair → Z (unfold to a pair, project first via ι-on-case)"},
-    {@ksnd, {:ctor, :S, [@z]},
-     "δ+ι: snd kpair → S Z (project second via ι-on-case)"},
-    {{:app, {:global, :idnat}, @kfst}, @z,
-     "nested: idnat (fst kpair) → Z (two unfolds + a projection)"},
+    {{:app, {:global, :idnat}, @z}, @z, "δ+β: idnat Z → Z (unfold certified global, then β)"},
+    {{:app, {:global, :idnat}, {:ctor, :S, [@z]}}, {:ctor, :S, [@z]}, "δ+β: idnat (S Z) → S Z"},
+    {@kfst, @z, "δ+ι: fst kpair → Z (unfold to a pair, project first via ι-on-case)"},
+    {@ksnd, {:ctor, :S, [@z]}, "δ+ι: snd kpair → S Z (project second via ι-on-case)"},
+    {{:app, {:global, :idnat}, @kfst}, @z, "nested: idnat (fst kpair) → Z (two unfolds + a projection)"},
     # idnat's δ-unfold exposes a `snd kpair` case under reduce_unfolded (not the
     # direct unfold_certified_head path the bare case takes) — the post-unfold ι
     # follow-through.
@@ -85,11 +82,9 @@ defmodule Antigen.Generators.DeltaReduce do
     # Builtin-op-fold (Amendment A1): struct_eq/struct_ne fold a SATURATED
     # literal spine via the audited table — the polymorphic-equality twin of the
     # int/float binop fold (already warm via the Primitive generator).
-    {{:app, {:app, {:app, {:global, :struct_eq}, @int_type}, {:int_lit, 3}}, {:int_lit, 4}},
-     {:ctor, :False, []},
+    {{:app, {:app, {:app, {:global, :struct_eq}, @int_type}, {:int_lit, 3}}, {:int_lit, 4}}, {:ctor, :False, []},
      "builtin/struct_eq: struct_eq Int 3 4 → False (δ-fold via the audited literal table)"},
-    {{:app, {:app, {:app, {:global, :struct_ne}, @int_type}, {:int_lit, 5}}, {:int_lit, 5}},
-     {:ctor, :False, []},
+    {{:app, {:app, {:app, {:global, :struct_ne}, @int_type}, {:int_lit, 5}}, {:int_lit, 5}}, {:ctor, :False, []},
      "builtin/struct_ne: struct_ne Int 5 5 → False (δ-fold via the audited literal table)"},
     # Unsaturated struct op (2 of 3 args) — neither builtin_op_fold clause
     # matches (not a full [_tyval,l,r] spine, and the op IS a struct op), so it
@@ -145,7 +140,8 @@ defmodule Antigen.Generators.DeltaReduce do
     {[delta: :whnf], "opts/reject: :delta must be :certified|:none (rejects a valid :mode atom used as :delta)"},
     {[mode: :certified], "opts/reject: :mode must be :whnf|:nf (rejects a valid :delta atom used as :mode)"},
     {[fuel: 0], "opts/reject: :fuel must be a positive integer or :infinity (0 is rejected)"},
-    {[stuck_cases: false], "opts/reject: :stuck_cases must be :preserve (any other value is rejected — MatchError, rescued and re-raised)"}
+    {[stuck_cases: false],
+     "opts/reject: :stuck_cases must be :preserve (any other value is rejected — MatchError, rescued and re-raised)"}
   ]
 
   @opts_reject_cells [:opts_reject_delta, :opts_reject_mode, :opts_reject_fuel, :opts_reject_stuck_cases]

@@ -1,4 +1,5 @@
 @group(:core)
+@prelude
 mod Std.Unit
   ## The unit type — exactly one value, carrying no information.
   ##

@@ -58,8 +58,10 @@ defmodule Cure.Elab.PiGradeSourceTest do
 
       # {a} erased, x present, dict demoted to erased.
       assert d.quantities == [:erased, :unrestricted, :erased]
+
       assert pi_grades(d.type) == d.quantities,
              "Pi grades #{inspect(pi_grades(d.type))} must match quantities #{inspect(d.quantities)}"
+
       assert lam_grades(d.body) == d.quantities
     end
 

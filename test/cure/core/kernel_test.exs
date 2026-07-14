@@ -13,7 +13,8 @@ defmodule Cure.Core.KernelTest do
     end
 
     test "infer Pi uses the max-level rule" do
-      assert {:ok, {:vtype, 1}} == Kernel.infer(Context.empty(), {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}})
+      assert {:ok, {:vtype, 1}} ==
+               Kernel.infer(Context.empty(), {:pi, Cure.Core.Grade.unrestricted(), {:type, 0}, {:var, 0}})
     end
 
     test "check is cumulative on sorts: Type0 : Type1 <= Type2" do

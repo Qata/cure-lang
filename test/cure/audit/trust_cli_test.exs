@@ -53,15 +53,13 @@ defmodule Cure.Audit.TrustCLITest do
     assert {:ok, _} = CLI.run("Std.List", strict: true)
   end
 
-  test "a module that does not elaborate lands in UNAUDITED" do
-    # Std.Io does not dependent-elaborate (blocked on `<>`/Semigroup String).
+  test "Std.Io elaborates and lands outside UNAUDITED" do
     assert {:ok, text} = CLI.run("Std.Io", [])
-    assert text =~ "UNAUDITED (1)"
-    assert text =~ "Std.Io"
+    assert text =~ "UNAUDITED (0)"
   end
 
-  test "--strict fails iff UNAUDITED is non-empty" do
-    assert {:strict_failure, _} = CLI.run("Std.Io", strict: true)
+  test "--strict succeeds when UNAUDITED is empty" do
+    assert {:ok, _} = CLI.run("Std.Io", strict: true)
     assert {:ok, _} = CLI.run("Std.Io", [])
   end
 
@@ -100,8 +98,8 @@ defmodule Cure.Audit.GoldenTest do
 
   ABSURD (0)
 
-  NOT PROVEN TOTAL (4)   — cannot be used in proofs; not assumptions
-    drop, last, reverse, take
+  NOT PROVEN TOTAL (3)   — cannot be used in proofs; not assumptions
+    drop, last, take
 
   UNRESOLVED (0)   — names a signature mentions that do not exist
 
@@ -113,12 +111,13 @@ defmodule Cure.Audit.GoldenTest do
     assert text == @expected
   end
 
-  test "not-proven-total lists exactly the four value defs, and no axioms" do
+  test "not-proven-total lists exactly the three value defs, and no axioms" do
     {:ok, text} = CLI.run("Std.List", [])
-    [_, tail] = String.split(text, "NOT PROVEN TOTAL (4)", parts: 2)
+    [_, tail] = String.split(text, "NOT PROVEN TOTAL (3)", parts: 2)
     [names, _] = String.split(tail, "\n\n", parts: 2)
 
-    for n <- ~w(reverse last drop take), do: assert(names =~ n)
+    for n <- ~w(last drop take), do: assert(names =~ n)
+    refute names =~ "reverse"
     # length/1 is an extern and struct_eq is a builtin op: neither belongs here.
     refute names =~ "length"
     refute names =~ "struct_eq"

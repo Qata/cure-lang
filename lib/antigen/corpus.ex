@@ -37,10 +37,12 @@ defmodule Antigen.Corpus do
         "seed=#{c.seed || "-"}",
         "note=#{enc_note(c.note)}",
         "scaffold=#{encode_scaffold(scaffold_rest)}"
-      ] ++ fault_field ++ [
-        "key=#{Base.encode64(key)}",
-        "pieces=#{piece_str}"
-      ],
+      ] ++
+        fault_field ++
+        [
+          "key=#{Base.encode64(key)}",
+          "pieces=#{piece_str}"
+        ],
       "\t"
     )
   end
@@ -64,7 +66,8 @@ defmodule Antigen.Corpus do
 
       scaffold =
         case m["fault"] do
-          nil -> base_scaffold                            # legacy: fault (if any) already in scaffold
+          # legacy: fault (if any) already in scaffold
+          nil -> base_scaffold
           f_str -> Map.put(base_scaffold, "fault", decode_fault(f_str))
         end
 
@@ -219,7 +222,7 @@ defmodule Antigen.Corpus do
 
   defp seen?(path, key) do
     File.exists?(path) and
-      (path |> File.stream!() |> Enum.any?(fn line -> extract_key(line) == key end))
+      path |> File.stream!() |> Enum.any?(fn line -> extract_key(line) == key end)
   end
 
   @doc "The Base64-decoded stored dedup key of one record line, or nil if absent."
@@ -250,8 +253,10 @@ defmodule Antigen.Corpus do
         [id, body] ->
           decoded =
             case body do
-              "(" <> _ -> Serialize.decode(body)                       # new: inline s-expr
-              _ -> Serialize.decode(Base.decode64!(body))              # legacy: Base64-wrapped
+              # new: inline s-expr
+              "(" <> _ -> Serialize.decode(body)
+              # legacy: Base64-wrapped
+              _ -> Serialize.decode(Base.decode64!(body))
             end
 
           case decoded do
@@ -291,6 +296,7 @@ defmodule Antigen.Corpus do
   defp enc_fault_val(v) when is_integer(v), do: Integer.to_string(v)
   defp enc_fault_val({a, b}) when is_integer(a) and is_integer(b), do: "(pair #{a} #{b})"
   defp enc_fault_val(v) when is_atom(v), do: Atom.to_string(v)
+
   defp enc_fault_val(v) when is_list(v),
     do: "(list " <> Enum.map_join(v, " ", &Atom.to_string/1) <> ")"
 
@@ -302,7 +308,8 @@ defmodule Antigen.Corpus do
 
   # decode_fault: parse the assoc-sexpr back into the flat map.
   defp decode_fault(str) do
-    {sexp, _rest} = read_sexp(str)  # sexp = list of [key | value-tokens] groups
+    # sexp = list of [key | value-tokens] groups
+    {sexp, _rest} = read_sexp(str)
 
     sexp
     |> Enum.map(fn [k | vtoks] -> {String.to_atom(k), dec_fault_val(vtoks)} end)
@@ -311,12 +318,14 @@ defmodule Antigen.Corpus do
 
   # a value is a single token (atom/int/"nil") or a nested group [tag | rest]
   defp dec_fault_val(["nil"]), do: nil
+
   defp dec_fault_val([tok]) when is_binary(tok) do
     case Integer.parse(tok) do
       {n, ""} -> n
       _ -> String.to_atom(tok)
     end
   end
+
   defp dec_fault_val([["pair", a, b]]), do: {String.to_integer(a), String.to_integer(b)}
   defp dec_fault_val([["list" | elems]]), do: Enum.map(elems, &String.to_atom/1)
   # a "(term X)" group parses to ["term", X] where X is the single nested term
@@ -332,10 +341,12 @@ defmodule Antigen.Corpus do
   # top-level list's children. Used only for the small, trusted fault field.
   defp read_sexp("(" <> rest), do: read_list(String.trim_leading(rest), [])
   defp read_list(")" <> rest, acc), do: {Enum.reverse(acc), rest}
+
   defp read_list("(" <> _ = s, acc) do
     {child, rest} = read_sexp(s)
     read_list(String.trim_leading(rest), [child | acc])
   end
+
   defp read_list(s, acc) do
     {word, rest} = read_word(s, [])
     read_list(String.trim_leading(rest), [word | acc])
@@ -343,11 +354,13 @@ defmodule Antigen.Corpus do
 
   defp read_word(<<c, _::binary>> = s, acc) when c in [?\s, ?(, ?)],
     do: {acc |> Enum.reverse() |> List.to_string(), s}
+
   defp read_word(<<>>, acc), do: {acc |> Enum.reverse() |> List.to_string(), <<>>}
   defp read_word(<<c, rest::binary>>, acc), do: read_word(rest, [c | acc])
 
   # Re-serialize an already-parsed token tree back to a flat Serialize string.
   defp reassemble_tok(tok) when is_binary(tok), do: tok
+
   defp reassemble_tok(list) when is_list(list),
     do: "(" <> Enum.map_join(list, " ", &reassemble_tok/1) <> ")"
 
@@ -357,6 +370,7 @@ defmodule Antigen.Corpus do
   # always carry ≥1 term piece, so this default is not exercised by live data.
   defp legacy_record?(nil), do: false
   defp legacy_record?(""), do: false
+
   defp legacy_record?(pieces_str) do
     case String.split(pieces_str, ";;", parts: 2) do
       [first | _] ->
@@ -372,6 +386,7 @@ defmodule Antigen.Corpus do
   # `%` MUST be escaped first (its own escape introduces further `%`).
   defp enc_note(nil), do: "-"
   defp enc_note("-"), do: "%2D"
+
   defp enc_note(s) do
     s
     |> String.replace("%", "%25")
@@ -380,6 +395,7 @@ defmodule Antigen.Corpus do
   end
 
   defp dec_note("-"), do: nil
+
   defp dec_note(s) do
     s
     |> String.replace("%2D", "-")

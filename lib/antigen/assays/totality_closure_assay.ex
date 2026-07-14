@@ -66,7 +66,10 @@ defmodule Antigen.Assays.TotalityClosureAssay do
 
   defp reach_seeds(%Env{families: fams, ctors: cts}) do
     from_fams = fams |> Map.values() |> Enum.flat_map(fn f -> tele(f.params) ++ tele(f.indices) end)
-    from_cts = cts |> Map.values() |> Enum.flat_map(fn c -> tele(c.args) ++ Enum.flat_map(c.result_indices, &globals/1) end)
+
+    from_cts =
+      cts |> Map.values() |> Enum.flat_map(fn c -> tele(c.args) ++ Enum.flat_map(c.result_indices, &globals/1) end)
+
     MapSet.new(from_fams ++ from_cts)
   end
 
@@ -91,7 +94,9 @@ defmodule Antigen.Assays.TotalityClosureAssay do
   defp globals({:app, f, a}), do: globals(f) ++ globals(a)
   defp globals({:data, _n, ps, is}), do: Enum.flat_map(ps, &globals/1) ++ Enum.flat_map(is, &globals/1)
   defp globals({:ctor, _n, args}), do: Enum.flat_map(args, &globals/1)
-  defp globals({:case, s, m, brs}), do: globals(s) ++ globals(m) ++ Enum.flat_map(brs, fn {_c, _ar, b} -> globals(b) end)
+
+  defp globals({:case, s, m, brs}),
+    do: globals(s) ++ globals(m) ++ Enum.flat_map(brs, fn {_c, _ar, b} -> globals(b) end)
 
   # Fail closed on an unrecognized node, exactly as `TotalityClosure.collect/1` does. This
   # walker is the INDEPENDENT oracle for that one, and a catch-all `[]` here reproduced the

@@ -23,7 +23,13 @@ defmodule Cure.Core.CycleRuleTest do
   # merged strongly-rigid cycle. This is EXACTLY the shape of oracle cyc01
   # (`MyEq(Nat, n, S(n))` vs `mrefl : MyEq(a, w, w)`).
   @same_src "mod M\n  type Nat = Z | S(Nat)\n  type SameLen indices (n: Nat, m: Nat)\n    same : SameLen(k, k)\nend\n"
-  defp same_sig, do: (fn -> {:ok, s} = Cure.Elab.Program.elaborate(@same_src); s end).()
+  defp same_sig,
+    do:
+      (fn ->
+         {:ok, s} = Cure.Elab.Program.elaborate(@same_src)
+         s
+       end).()
+
   defp one_var_ctx(s), do: Context.extend(Context.empty(s), {:vdata, :Nat, []})
 
   test "merged strongly-rigid cycle: `same : SameLen(k,k)` vs SameLen(a, S(a)) is :impossible" do
