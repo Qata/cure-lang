@@ -6882,7 +6882,24 @@ defmodule Cure.Elab.Elaborator do
         end
 
       if has_meta?(dom_inst) do
-        {:halt, {:error, {:unsolved_metavariables, :deferred_argument}}}
+        # A deferred LAMBDA whose Π domain a later sibling has now solved, but whose
+        # CODOMAIN no argument determines (`(Int) -> ?b`): solve the codomain UNDER
+        # the binder by inferring the body. This is the same Miller solve
+        # `bidir_app_slot` attempts eagerly — there it fell through because the
+        # domain was still `?a` at the time (`try_lambda_meta_pi` requires a meta-free
+        # domain), and nothing ever re-offered it. Retrying it HERE is the second half
+        # of the postponement: an argument is deferred precisely so a later sibling can
+        # solve what it needs, and a lambda needs its DOMAIN, not only its family
+        # indices (which is all `solve_deferred_domain` recovers). Without this,
+        # `app2(fn(x) -> x + 10, xs)` rejects while `app2(xs, fn(x) -> x + 10)`
+        # elaborates — argument ORDER decided typability.
+        case try_lambda_meta_pi(arg, dom_inst, mctx, names, ctx, env) do
+          {:ok, mctx, lam_term} ->
+            {:cont, {:ok, MetaCtx.put_solution(mctx, ph, lam_term)}}
+
+          :fallthrough ->
+            {:halt, {:error, {:unsolved_metavariables, :deferred_argument}}}
+        end
       else
         case elaborate_expr_checked(arg, dom_inst, names, ctx, env) do
           {:ok, term} -> {:cont, {:ok, MetaCtx.put_solution(mctx, ph, term)}}
