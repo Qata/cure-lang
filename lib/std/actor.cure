@@ -8,10 +8,8 @@ mod Std.Actor
       use Std.Otp
       behaviour gen_server
       typealias State = state_type
-      typealias InitResult = Effect(Tuple(Atom, State))
-      typealias CallResult = Effect(Tuple(Atom, reply_type, State))
-      callback init(initial: State) returns InitResult = %[:ok, initial]
-      callback handle_call(request: request_type, from: f, state: State) returns CallResult = call_body
+      callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
+      callback handle_call(request: request_type, from: f, state: State) returns Effect(Tuple(Atom, reply_type, State)) = call_body
       callback handle_cast(message: m, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
       callback handle_info(message: i, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
       callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
@@ -22,8 +20,7 @@ mod Std.Actor
       use Std.Otp
       behaviour gen_server
       typealias State = state_type
-      typealias InitResult = Effect(Tuple(Atom, State))
-      callback init(initial: State) returns InitResult = init_body
+      callback init(initial: State) returns Effect(Tuple(Atom, State)) = init_body
       callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
       callback handle_cast(message: m, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
       callback handle_info(message: i, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
@@ -35,12 +32,11 @@ mod Std.Actor
       use Std.Otp
       behaviour gen_server
       typealias State = state_type
-      typealias TerminateResult = Effect(Atom)
       callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
       callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
       callback handle_cast(message: m, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
       callback handle_info(message: i, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
-      callback terminate(reason: e, state: State) returns TerminateResult = terminate_body
+      callback terminate(reason: e, state: State) returns Effect(Atom) = terminate_body
       callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name initial
 
@@ -48,13 +44,12 @@ mod Std.Actor
       use Std.Otp
       behaviour gen_server
       typealias State = state_type
-      typealias CodeChangeResult = Effect(Tuple(Atom, State))
       callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
       callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
       callback handle_cast(message: m, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
       callback handle_info(message: i, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
       callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
-      callback code_change(old: v, state: State, extra: x) returns CodeChangeResult = code_change_body
+      callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = code_change_body
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name initial
 
     syntax actor <name: ModuleName> state <state_type: Type> messages <message_type: Type> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
@@ -62,10 +57,9 @@ mod Std.Actor
       behaviour gen_server
       typealias State = state_type
       typealias Message = message_type
-      typealias CastResult = Effect(Tuple(Atom, State))
       callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
       callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
-      callback handle_cast(message: Message, state: State) returns CastResult = cast_body
+      callback handle_cast(message: Message, state: State) returns Effect(Tuple(Atom, State)) = cast_body
       callback handle_info(message: Message, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
       callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
       callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
@@ -75,10 +69,9 @@ mod Std.Actor
       use Std.Otp
       behaviour gen_server
       typealias State = state_type
-      typealias CastResult = Effect(Tuple(Atom, State))
       callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
       callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
-      callback handle_cast(message: m, state: State) returns CastResult = cast_body
+      callback handle_cast(message: m, state: State) returns Effect(Tuple(Atom, State)) = cast_body
       callback handle_info(message: i, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
       callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
       callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
@@ -88,10 +81,9 @@ mod Std.Actor
       use Std.Otp
       behaviour gen_server
       typealias State = state_type
-      typealias CastResult = Effect(Tuple(Atom, State))
       callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, assert_type payload : State]
       callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
-      callback handle_cast(message: m, state: State) returns CastResult = cast_body
+      callback handle_cast(message: m, state: State) returns Effect(Tuple(Atom, State)) = cast_body
       callback handle_info(message: m, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
       callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
       callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
@@ -102,10 +94,9 @@ mod Std.Actor
       behaviour gen_server
       typealias State = state_type
       typealias Message = message_type
-      typealias CastResult = Effect(Tuple(Atom, State))
       callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, assert_type payload : State]
       callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
-      callback handle_cast(message: Message, state: State) returns CastResult = cast_body
+      callback handle_cast(message: Message, state: State) returns Effect(Tuple(Atom, State)) = cast_body
       callback handle_info(message: Message, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
       callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
       callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
@@ -138,11 +129,10 @@ mod Std.Actor
       behaviour gen_server
       typealias State = state_type
       typealias Message = message_type
-      typealias InfoResult = Effect(Tuple(Atom, State))
       callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
       callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
       callback handle_cast(message: Message, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
-      callback handle_info(message: Message, state: State) returns InfoResult = info_body
+      callback handle_info(message: Message, state: State) returns Effect(Tuple(Atom, State)) = info_body
       callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
       callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name initial
@@ -151,11 +141,10 @@ mod Std.Actor
       use Std.Otp
       behaviour gen_server
       typealias State = state_type
-      typealias InfoResult = Effect(Tuple(Atom, State))
       callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
       callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
       callback handle_cast(message: m, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
-      callback handle_info(message: i, state: State) returns InfoResult = info_body
+      callback handle_info(message: i, state: State) returns Effect(Tuple(Atom, State)) = info_body
       callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
       callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name [initial]

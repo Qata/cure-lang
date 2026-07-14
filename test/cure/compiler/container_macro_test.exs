@@ -395,7 +395,11 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
              {:next_state, :unlocked, 1}
   end
 
-  test "fsm handle_event pickup bodies use the transparent effect result alias" do
+  # The `pickup` body is a match, so its motive body is now a direct `{:veffect_type}`
+  # — the shape that used to be a spurious `:bad_motive` and forced this callback to
+  # launder its result through a `typealias EventResult = Effect(Atom)`. The alias is
+  # gone; the callback declares `returns Effect(Atom)` inline.
+  test "fsm handle_event pickup bodies check against a direct Effect result type" do
     source = """
     fsm Cure.MatchEventFsm state Int events Atom handle_event
       pickup

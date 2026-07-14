@@ -8,10 +8,9 @@ mod Std.App
       use Std.Otp
       use Std.App
       behaviour application
-      typealias PhaseResult = Effect(Atom)
       callback start(kind: t, args: a) returns Effect(Tuple(Atom, Atom)) = %[:ok, :undefined]
       callback stop(state: s) returns Effect(Atom) = :ok
-      callback start_phase(requested: Atom, kind: t, args: a) returns PhaseResult = match requested == phase
+      callback start_phase(requested: Atom, kind: t, args: a) returns Effect(Atom) = match requested == phase
         true -> phase_body
         false -> :ok
 
@@ -19,7 +18,6 @@ mod Std.App
       use Std.Otp
       use Std.App
       behaviour application
-      typealias PhaseResult = Effect(Atom)
       callback start(kind: t, args: a) returns Effect(Tuple(Atom, Atom)) = %[:ok, :undefined]
       callback stop(state: s) returns Effect(Atom) = :ok
       fn dispatch_phase(requested: Atom, remaining: List(Atom)) -> Atom = match remaining
@@ -29,7 +27,7 @@ mod Std.App
           [result | tail] -> match requested == declared
             true -> result
             false -> dispatch_phase(requested, tail)
-      callback start_phase(requested: Atom, kind: t, args: a) returns PhaseResult = dispatch_phase(requested, phases)
+      callback start_phase(requested: Atom, kind: t, args: a) returns Effect(Atom) = dispatch_phase(requested, phases)
 
     syntax app <name: ModuleName> root <root: Code> with <payload: Code> <body: raw until dedent> contextual becomes lift module Cure.App.name
       use Std.Otp
