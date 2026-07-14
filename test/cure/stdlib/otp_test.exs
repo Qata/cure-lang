@@ -103,7 +103,7 @@ defmodule Cure.Stdlib.OtpTest do
       fn send_it(p: Pid(Cmd)) -> Effect(Unit) = beam_ops tell p Inc()
       fn call_it(s: GenServer(Cmd, Int)) -> Effect(Int) = beam_ops call s Dec()
       fn cast_it(s: GenServer(Cmd, Int)) -> Effect(Unit) = beam_ops cast s Inc()
-      fn stop_it(p: Pid(Cmd)) -> Effect(Unit) = beam_ops stop p
+      fn stop_it(s: GenServer(Cmd, Int)) -> Effect(Unit) = beam_ops stop s
     """
 
     assert {:ok, _} = Program.elaborate(source)
@@ -114,10 +114,11 @@ defmodule Cure.Stdlib.OtpTest do
     source = """
     mod App
       use Std.Otp
-      fn timer(p: Pid(Atom)) -> Effect(Ref) = beam_ops send_after 10 p :tick
-      fn cancel(r: Ref) -> Effect(Unit) = beam_ops cancel_timer r
-      fn observe(p: Pid(Atom)) -> Effect(Ref) = beam_ops monitor :process p
-      fn unobserve(r: Ref) -> Effect(Unit) = beam_ops demonitor r
+      use Std.Option
+      fn timer(p: Pid(Atom)) -> Effect(TimerRef) = beam_ops send_after 10 p :tick
+      fn cancel(r: TimerRef) -> Effect(Option(Int)) = beam_ops cancel_timer r
+      fn observe(p: Pid(Atom)) -> Effect(MonitorRef) = beam_ops monitor :process p
+      fn unobserve(r: MonitorRef) -> Effect(Unit) = beam_ops demonitor r
       fn connect(p: Pid(Atom)) -> Effect(Unit) = beam_ops link p
       fn disconnect(p: Pid(Atom)) -> Effect(Unit) = beam_ops unlink p
     """
@@ -194,5 +195,135 @@ defmodule Cure.Stdlib.OtpTest do
                  let u = tell(p, Inc())
                  call(s, Dec())
              """)
+  end
+
+  # F-2a. `call`/`cast`/`stop` are gen_server PROTOCOL operations. A plain spawned
+  # process does not answer them: `gen_server:call` on one blocks the caller for 5s and
+  # then exits it with `timeout`. The two handles were typealiases of the SAME
+  # constructor, so the type system could not tell them apart and said yes.
+  describe "Pid(m) and GenServer(q,r) are distinct (F-2a)" do
+    # `Effect(Cmd)`, not `Effect(Int)`: a `Pid(Cmd)` is `RawPid(Cmd, Cmd)`, so under the
+    # old aliases it WAS a `GenServer(Cmd, Cmd)` and this call typechecked. Asking for
+    # `Effect(Int)` would fail on the reply type alone and pass this test without the
+    # phantom tag doing any work at all.
+    test "call on a plain Pid is a compile error" do
+      assert {:error, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Cmd) =\n    call(p, Dec())\n")
+    end
+
+    test "cast on a plain Pid is a compile error" do
+      assert {:error, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    cast(p, Inc())\n")
+    end
+
+    test "stop on a plain Pid is a compile error" do
+      assert {:error, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    stop(p)\n")
+    end
+
+    test "call on a GenServer still succeeds" do
+      assert {:ok, _} =
+               app("  fn go(s: GenServer(Cmd, Int)) -> Effect(Int) =\n    call(s, Dec())\n")
+    end
+
+    test "tell accepts BOTH handles — a raw send to a gen_server lands in handle_info" do
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    tell(p, Inc())\n")
+
+      assert {:ok, _} =
+               app("  fn go(s: GenServer(Cmd, Int)) -> Effect(Unit) =\n    tell(s, Inc())\n")
+    end
+
+    test "link accepts both handles" do
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    link(p)\n")
+
+      assert {:ok, _} =
+               app("  fn go(s: GenServer(Cmd, Int)) -> Effect(Unit) =\n    link(s)\n")
+    end
+  end
+
+  # F-2c. `erlang:whereis/1` returns the bare atom `undefined` for an unregistered name.
+  # Typing it as a pid let a well-typed `Pid(m)` BE that atom, and the next `tell` emitted
+  # `erlang:send(undefined, …)` → badarg. The lookup can fail, and the type must say so.
+  describe "whereis reintroduces the failure case (F-2c)" do
+    test "using the result of whereis WITHOUT matching is a compile error" do
+      assert {:error, _} =
+               app("  fn go() -> Effect(Unit) =\n    let p = whereis(:server)\n    link(p)\n")
+    end
+
+    test "matching the Option and linking the Some branch succeeds" do
+      assert {:ok, _} =
+               app("""
+                 fn go() -> Effect(Unit) =
+                   let found = whereis(:server)
+                   match found
+                     Some(p) -> link(p)
+                     None() -> unit()
+               """)
+    end
+
+    test "a looked-up pid cannot be SENT to — nothing founds its message type" do
+      assert {:error, _} =
+               app("""
+                 fn go() -> Effect(Unit) =
+                   let found = whereis(:server)
+                   match found
+                     Some(p) -> tell(p, Inc())
+                     None() -> unit()
+               """)
+    end
+  end
+
+  # F-4. Ten raw ops declared `Effect(Unit)` for BIFs that return real terms, and emit
+  # performs no result coercion — so the value inhabiting `Unit` was in fact the message,
+  # `true`, `ok`, or an integer. The typed wrappers discard the raw result; `cancel_timer`
+  # surfaces it, because the remaining milliseconds are worth having.
+  describe "honest raw result types (F-4)" do
+    test "cancel_timer surfaces the remaining milliseconds as an Option" do
+      assert {:ok, _} =
+               app("  fn go(t: TimerRef) -> Effect(Option(Int)) =\n    cancel_timer(t)\n")
+    end
+
+    test "the typed wrappers still return Unit — the raw result is discarded" do
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    tell(p, Inc())\n")
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    link(p)\n")
+
+      assert {:ok, _} =
+               app("  fn go(s: GenServer(Cmd, Int)) -> Effect(Unit) =\n    cast(s, Inc())\n")
+    end
+  end
+
+  # F-5. `MonitorRef` and `TimerRef` were two typealiases of one `Ref`, so they were the
+  # SAME type and `cancel_timer(monitor_ref)` typechecked. They are now distinct opaque
+  # carriers, both erasing to `:reference`.
+  describe "monitor and timer references are distinct types (F-5)" do
+    test "cancelling a monitor ref is a compile error" do
+      assert {:error, _} =
+               app("  fn go(r: MonitorRef) -> Effect(Option(Int)) =\n    cancel_timer(r)\n")
+    end
+
+    test "demonitoring a timer ref is a compile error" do
+      assert {:error, _} = app("  fn go(r: TimerRef) -> Effect(Unit) =\n    demonitor(r)\n")
+    end
+
+    test "each ref is accepted by its own operation" do
+      assert {:ok, _} =
+               app("  fn go(r: TimerRef) -> Effect(Option(Int)) =\n    cancel_timer(r)\n")
+
+      assert {:ok, _} = app("  fn go(r: MonitorRef) -> Effect(Unit) =\n    demonitor(r)\n")
+    end
+  end
+
+  # F-3. The BEAM's three exit rules case on `normal | kill | other` crossed with the
+  # target's trap_exit flag. A fully polymorphic reason erases that distinction, so no
+  # typed statement about which of the three outcomes an `exit` can have is even sayable.
+  describe "the exit reason is a precise sum (F-3)" do
+    test "the three reasons the semantics distinguishes are accepted" do
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    exit(p, Normal())\n")
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    exit(p, Kill())\n")
+
+      assert {:ok, _} =
+               app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    exit(p, Because(:shutdown))\n")
+    end
+
+    test "an arbitrary term is no longer a valid exit reason" do
+      assert {:error, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    exit(p, 5)\n")
+    end
   end
 end

@@ -6559,6 +6559,17 @@ defmodule Cure.Compiler.Parser do
         type_ast = attach_decorator(type_ast, dec_name, args)
         {type_ast, state}
 
+      # `@erases(:pid) opaque type Name` attaches the decorator to the opaque
+      # container. Like the `type` branch, parse_type_def/2 builds a {:container, …}
+      # node that attach_decorator/3's generic clause threads into :decorator meta —
+      # but the `opaque` keyword must be consumed first (see the statement
+      # dispatcher). Without this branch the decorator is silently dropped and the
+      # carrier is left with no declared erasure.
+      %Token{type: :keyword, value: :opaque} ->
+        {type_ast, state} = parse_type_def(advance(state), opaque: true)
+        type_ast = attach_decorator(type_ast, dec_name, args)
+        {type_ast, state}
+
       # `@builtin(:tag) primitive Name` attaches the decorator to the primitive
       # container (the generic {:container, …} attach_decorator clause writes it
       # into :decorator meta, like `@builtin(:key) type Name`).

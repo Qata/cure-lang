@@ -365,10 +365,23 @@ defmodule Cure.Core.Inductive do
   remains ex-falso-eliminable. An opaque type carries values (e.g. `@extern`
   BEAM ops) through the TCB to codegen without the kernel ever inspecting or
   unfolding them. Always parameter-only (no indices).
+
+  `erasure` is the runtime class its values take on the BEAM — declared by
+  `@erases(<class>)`, since a family with NO constructors has no erasure to infer.
+  `nil` means undeclared, which is what every opaque type that never crosses an
+  anonymous union wants. The kernel never reads it; it is elaborator metadata riding
+  on the family record.
   """
-  @spec opaque_family(atom(), telescope(), non_neg_integer()) :: family()
-  def opaque_family(name, param_tele, level),
-    do: %{name: name, params: param_tele, indices: [], level: level, opaque: true}
+  @spec opaque_family(atom(), telescope(), non_neg_integer(), atom() | nil) :: family()
+  def opaque_family(name, param_tele, level, erasure \\ nil),
+    do: %{
+      name: name,
+      params: param_tele,
+      indices: [],
+      level: level,
+      opaque: true,
+      erasure: erasure
+    }
 
   @doc """
   Build a constructor signature. Every argument defaults to runtime-relevant
