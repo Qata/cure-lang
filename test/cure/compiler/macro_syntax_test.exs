@@ -178,7 +178,35 @@ defmodule Cure.Compiler.MacroSyntaxTest do
   test "a derived rule record encodes reflected syntax fields as a Core constructor" do
     input = {:syn_node, :macro_input, [], [{:syn_leaf, :variable, [], {:s_str, "n"}}]}
 
-    assert {:ctor, :MkSyntax, [{:ctor, :Leaf, _}]} = MacroSyntax.to_core_record("MkSyntax", input)
-    assert {:ctor, :EmptySyntax, []} = MacroSyntax.to_core_record("EmptySyntax", {:syn_node, :macro_input, [], []})
+    assert {:ctor, :MkSyntax, [{:ctor, :Leaf, _}, {:ctor, :Raw, [{:ctor, :SOpaque, []}]}]} =
+             MacroSyntax.to_core_record("MkSyntax", ["x"], input)
+
+    assert {:ctor, :EmptySyntax, [{:ctor, :Raw, [{:ctor, :SOpaque, []}]}]} =
+             MacroSyntax.to_core_record("EmptySyntax", [], {:syn_node, :macro_input, [], []})
+  end
+
+  test "a derived rule record carries the reflected expansion context in its trailing field" do
+    context = %{behaviour: :gen_server, callback: :handle_cast, arity: 2}
+    input = MacroSyntax.with_context({:syn_node, :macro_input, [], []}, context)
+
+    assert {:ctor, :SelfSyntax, [{:ctor, :Node, [{:atom_lit, :callback_context}, attrs, {:ctor, :Nil, []}]}]} =
+             MacroSyntax.to_core_record("SelfSyntax", [], input)
+
+    assert {:ctor, :Cons, _} = attrs
+  end
+
+  test "a rule with no expansion context reflects a total, absent context" do
+    assert {:syn_raw, :s_opaque} = MacroSyntax.context_syntax(nil)
+    assert {:syn_node, :macro_input, [], []} = MacroSyntax.with_context({:syn_node, :macro_input, [], []}, nil)
+  end
+
+  test "the reflected expansion context round-trips through the Core bridge" do
+    context = %{behaviour: :gen_server, callback: :handle_info, arity: 2, parameter_names: ["msg", "state"]}
+    repr = MacroSyntax.context_syntax(context)
+
+    assert MacroSyntax.from_core(MacroSyntax.to_core(repr)) == repr
+    assert {:callback_context, attrs, []} = MacroSyntax.from_syntax(repr)
+    assert attrs[:behaviour] == :gen_server
+    assert attrs[:parameter_names] == ["msg", "state"]
   end
 end

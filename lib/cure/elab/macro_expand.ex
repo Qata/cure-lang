@@ -183,12 +183,25 @@ defmodule Cure.Elab.MacroExpand do
 
   defp execute(meta, elab_ast, input_ast, env) do
     context = Context.empty(env)
-    input_repr = MacroSyntax.to_syntax(input_ast)
+
+    # The elab sees WHERE it was invoked, not just what it was handed: the
+    # callback context travels with the input, as an attribute of the generic
+    # `Syntax` node and as the derived record's trailing `context` field.
+    input_repr =
+      input_ast
+      |> MacroSyntax.to_syntax()
+      |> MacroSyntax.with_context(Keyword.get(meta, :expansion_context))
 
     input_cores =
       case Keyword.get(meta, :syntax_type) do
-        nil -> [MacroSyntax.to_core(input_repr)]
-        syntax_type -> [MacroSyntax.to_core_record(syntax_type, input_repr), MacroSyntax.to_core(input_repr)]
+        nil ->
+          [MacroSyntax.to_core(input_repr)]
+
+        syntax_type ->
+          [
+            MacroSyntax.to_core_record(syntax_type, Keyword.get(meta, :syntax_fields, []), input_repr),
+            MacroSyntax.to_core(input_repr)
+          ]
       end
 
     with {:ok, elab_core, _elab_type} <-

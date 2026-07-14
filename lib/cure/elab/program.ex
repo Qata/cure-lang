@@ -7,7 +7,7 @@ defmodule Cure.Elab.Program do
   totality-certified signature.
   """
 
-  alias Cure.Compiler.{Lexer, MacroValidate, Parser}
+  alias Cure.Compiler.{Lexer, MacroSyntax, MacroValidate, Parser}
   alias Cure.Core.{Env, Inductive, Validator}
   alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, Resolution, TotalityClosure}
   alias Cure.Stdlib.Paths
@@ -990,13 +990,18 @@ defmodule Cure.Elab.Program do
   # A computed macro rule owns a typed record for its elab input. Keep the
   # record in the ordinary declaration stream so the existing header pass,
   # constructor registration, and projection checker remain authoritative.
+  # The fields are the rule's holes plus the reserved `context` field, which
+  # carries the reflected expansion context (`MacroSyntax.record_fields/1`).
   defp declarations({:macro_def, meta, rules}) when is_list(meta) and is_list(rules) do
     rules
     |> Enum.filter(&(&1[:kind] == :computed))
     |> Enum.uniq_by(&Map.get(&1, :syntax_type))
     |> Enum.map(fn rule ->
       fields =
-        Enum.map(Map.get(rule, :syntax_fields, []), fn field ->
+        rule
+        |> Map.get(:syntax_fields, [])
+        |> MacroSyntax.record_fields()
+        |> Enum.map(fn field ->
           {:param, [type: {:variable, [scope: :local], "Syntax"}], field}
         end)
 

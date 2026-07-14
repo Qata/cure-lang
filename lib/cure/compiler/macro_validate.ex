@@ -6,7 +6,7 @@ defmodule Cure.Compiler.MacroValidate do
   parsed `{:macro_def, …}` AST, upstream of the elaborator.
   """
 
-  alias Cure.Compiler.MacroFuzz
+  alias Cure.Compiler.{MacroFuzz, MacroSyntax}
 
   @type point :: {:hole_kind, String.t()} | {:keyword, String.t()} | {:failure, String.t()}
 
@@ -36,7 +36,8 @@ defmodule Cure.Compiler.MacroValidate do
     ast
     |> collect_macro_defs()
     |> Enum.reduce_while(:ok, fn macro_def, :ok ->
-      with :ok <- check_explain_if_declared(macro_def),
+      with :ok <- check_reserved_fields(macro_def),
+           :ok <- check_explain_if_declared(macro_def),
            :ok <- check_pins_if_explainable(macro_def),
            :ok <- check_examples(macro_def, env),
            :ok <- check_computed_examples(macro_def, env),
@@ -77,6 +78,28 @@ defmodule Cure.Compiler.MacroValidate do
         {:error, _} = error -> {:halt, error}
       end
     end)
+  end
+
+  @doc """
+  Check no `computed by` rule declares a hole named `context`.
+
+  A computed rule's derived record carries the reflected expansion context in a
+  trailing `context` field, so a hole of that name would take the field's place
+  and leave the elab silently blind to where it was invoked. Reserve the name
+  and say so, rather than let the hole win in silence.
+  """
+  @spec check_reserved_fields(tuple()) :: :ok | {:error, {:reserved_syntax_field, String.t(), [String.t()]}}
+  def check_reserved_fields({:macro_def, _meta, rules}) do
+    field = MacroSyntax.context_field()
+
+    rules
+    |> Enum.filter(&(&1[:kind] == :computed))
+    |> Enum.filter(&(field in Map.get(&1, :syntax_fields, [])))
+    |> Enum.map(& &1.keyword)
+    |> case do
+      [] -> :ok
+      keywords -> {:error, {:reserved_syntax_field, field, keywords}}
+    end
   end
 
   @doc """

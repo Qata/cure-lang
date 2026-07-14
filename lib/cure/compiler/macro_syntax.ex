@@ -67,6 +67,48 @@ defmodule Cure.Compiler.MacroSyntax do
 
   def to_syntax(other), do: {:syn_raw, synlit(other)}
 
+  # -- expansion context -----------------------------------------------------
+
+  @context_field "context"
+
+  @doc """
+  The field a computed rule's derived record carries in addition to its holes.
+
+  A Tier-3 elab is otherwise blind to where it was invoked, so a rule with no
+  holes (`beam_ops self`) would see nothing at all. The trailing field carries
+  the reflected expansion context; a rule that declares a hole of the same name
+  keeps its hole (and `MacroValidate` reports the collision).
+  """
+  @spec record_fields([String.t()]) :: [String.t()]
+  def record_fields(syntax_fields), do: Enum.uniq(syntax_fields ++ [@context_field])
+
+  @doc "The reserved derived-record field name."
+  @spec context_field() :: String.t()
+  def context_field, do: @context_field
+
+  @doc """
+  Reflect a macro's expansion context — the callback a use-site sits inside —
+  as an ordinary `Std.Syntax` value. `nil` (an ordinary, non-callback use-site)
+  reflects as `Raw(SOpaque)`, the same way any absent value does, so the elab's
+  field is total.
+  """
+  @spec context_syntax(map() | nil) :: repr()
+  def context_syntax(nil), do: {:syn_raw, :s_opaque}
+
+  def context_syntax(context) when is_map(context) do
+    attrs = for {key, value} <- Enum.sort(context), is_atom(key), do: {key, synlit(value)}
+    {:syn_node, :callback_context, attrs, []}
+  end
+
+  @doc "Attach a reflected expansion context to a macro input's attributes."
+  @spec with_context(repr(), map() | nil) :: repr()
+  def with_context(repr, nil), do: repr
+
+  def with_context({:syn_node, tag, attrs, kids}, context) when is_map(context),
+    do: {:syn_node, tag, attrs ++ [{:expansion_context, {:s_syntax, context_syntax(context)}}], kids}
+
+  def with_context(repr, _context), do: repr
+
   # A node whose semantic meta carries values; drop line/col, keep the rest as
   # {key, synlit}. Unrepresentable meta values become :s_opaque.
   defp attrs(meta) when is_list(meta) do
@@ -148,11 +190,32 @@ defmodule Cure.Compiler.MacroSyntax do
   def to_core({:syn_failure, name, args}),
     do: ctor(:Failure, [atom(name), to_core_list(Enum.map(args, &to_core/1))])
 
-  @doc "Encode the ordered children of a macro input as a derived syntax record."
-  @spec to_core_record(String.t() | atom(), repr()) :: Cure.Core.Term.t()
-  def to_core_record(type_name, {:syn_node, _tag, _attrs, kids}) do
+  @doc """
+  Encode the ordered children of a macro input as a derived syntax record.
+
+  The record's fields are the rule's holes followed by the reserved `context`
+  field (`record_fields/1`), so the encoded constructor carries one argument per
+  hole plus the reflected expansion context. A rule that declares its own
+  `context` hole owns the name, and no extra argument is appended.
+  """
+  @spec to_core_record(String.t() | atom(), [String.t()], repr()) :: Cure.Core.Term.t()
+  def to_core_record(type_name, syntax_fields, {:syn_node, _tag, attrs, kids}) do
     name = if is_binary(type_name), do: String.to_atom(type_name), else: type_name
-    {:ctor, name, Enum.map(kids, &to_core/1)}
+    args = Enum.map(kids, &to_core/1)
+
+    args =
+      if @context_field in syntax_fields,
+        do: args,
+        else: args ++ [to_core(context_attr(attrs))]
+
+    {:ctor, name, args}
+  end
+
+  defp context_attr(attrs) do
+    case List.keyfind(attrs, :expansion_context, 0) do
+      {:expansion_context, {:s_syntax, repr}} -> repr
+      _ -> {:syn_raw, :s_opaque}
+    end
   end
 
   @doc "Decode a normalized Core value of Std.Syntax into the mirror representation."
