@@ -338,7 +338,7 @@ defmodule Cure.Elab.Program do
   def check_ast_elixir_core(ast) do
     with {:ok, imported, _ambiguous} <- shadow_resolved_imports(ast),
          {:ok, prelude} <- prelude_slice_env(ast),
-         seeded = seed_with_telescope_support(ast),
+         seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
          {:ok, base} <- merge_env(seeded, prelude),
          {:ok, env0} <- merge_env(base, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
@@ -614,7 +614,8 @@ defmodule Cure.Elab.Program do
         ctors: Map.take(env.ctors, Map.keys(kept_ctors)),
         ctor_to_family: kept_ctors,
         primitives: Map.take(env.primitives, name_list),
-        certified: env.certified
+        certified: env.certified,
+        module_owner: env.module_owner
     }
   end
 
@@ -1250,7 +1251,7 @@ defmodule Cure.Elab.Program do
          {:ok, ast} <- Parser.parse(tokens, emit_events: false),
          :ok <- check_declarations(ast),
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
-         seeded = seed_with_telescope_support(ast),
+         seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
          {:ok, env0} <- merge_env(seeded, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
@@ -1403,7 +1404,7 @@ defmodule Cure.Elab.Program do
            {:ok, ast} <- Parser.parse(tokens, emit_events: false),
            :ok <- check_declarations(ast),
            {:ok, imported} <- import_env(imports(ast), MapSet.put(seen, module_name)),
-           seeded = seed_with_telescope_support(ast),
+           seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
            {:ok, env0} <- merge_env(seeded, imported),
            {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
         with {:ok, certified} <- TotalityClosure.certify_type_level(env) do
@@ -1512,7 +1513,7 @@ defmodule Cure.Elab.Program do
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
   @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
-                      primitives interfaces coherence constrained import_modules)a
+                      primitives interfaces coherence constrained import_modules module_owner)a
 
   @env_keys Map.keys(Map.from_struct(%Env{}))
   missing = @env_keys -- @merged_env_keys
@@ -1539,7 +1540,8 @@ defmodule Cure.Elab.Program do
          interfaces: Map.merge(left.interfaces, right.interfaces),
          coherence: coherence,
          constrained: Map.merge(left.constrained, right.constrained),
-         import_modules: MapSet.union(left.import_modules, right.import_modules)
+         import_modules: MapSet.union(left.import_modules, right.import_modules),
+         module_owner: left.module_owner || right.module_owner
        }}
     end
   end
