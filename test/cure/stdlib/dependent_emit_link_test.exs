@@ -16,7 +16,7 @@ defmodule Cure.Stdlib.DependentEmitLinkTest do
   every local call must resolve to a local function or a BIF, and every export be
   well-formed. Cross-module calls are now emitted as REMOTE calls
   (`'Cure.Std.Char':code_point/1`), which lint accepts, via
-  `Cure.Elab.Program.import_origins/1` threaded into `Emit.compile_forms/4`. A
+  canonical owner identities threaded directly into `Emit.compile_forms/3`. A
   module whose forms fail to lint is caught HERE, before rip-out, not mid-teardown.
 
   The `@green` list mirrors the emit/elaboration firewalls and only grows. The
@@ -38,16 +38,15 @@ defmodule Cure.Stdlib.DependentEmitLinkTest do
     system telescope test time tuple unit vector
   )
 
-  # Emit `lib/std/<name>.cure` through the dependent pipeline WITH import origins,
-  # then run the forms through the BEAM linter. Returns `:ok` when the module
+  # Emit `lib/std/<name>.cure` through the dependent pipeline using canonical
+  # owner identities, then run the forms through the BEAM linter. Returns `:ok` when the module
   # lints clean, `{:lint_error, errors}` when a call/export does not resolve.
   defp emit_and_lint(name) do
     src = File.read!(Path.join("lib/std", name <> ".cure"))
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
     {:ok, env, locals} = Program.check_ast_with_locals(ast)
-    origins = Program.import_origins(ast)
-    {:ok, forms} = Emit.compile_forms(env, Program.module_atom(ast), locals, origins)
+    {:ok, forms} = Emit.compile_forms(env, Program.module_atom(ast), locals)
 
     case :compile.forms(forms, [:return_errors, :return_warnings, :nowarn_unused_vars]) do
       {:ok, _mod, _bin} -> :ok

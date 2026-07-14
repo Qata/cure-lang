@@ -48,6 +48,33 @@ defmodule Cure.Elab.TotalityClosure do
     end)
   end
 
+  @doc """
+  Certify the ordinary total-function closure rooted at compile-time callbacks.
+
+  `computed by` executes a normal Cure function, so its reducer may need to
+  unfold imported helpers such as `Std.List.map` and source-level syntax
+  builders. Those helpers are not necessarily reachable from a type position;
+  certification therefore starts from the callback's elaborated Core globals
+  and follows the same kernel-checked closure discipline. This expands
+  reducibility for the untrusted compile-time evaluator without changing the
+  trusted Core or making runtime functions globally transparent.
+  """
+  @spec certify_roots(Env.t(), [atom()]) :: {:ok, Env.t()} | {:error, term()}
+  def certify_roots(%Env{} = env, roots) when is_list(roots) do
+    roots = Enum.filter(roots, &(Env.get_def(env, &1) != nil))
+
+    env
+    |> close(roots, MapSet.new(roots))
+    |> MapSet.to_list()
+    |> Enum.reject(&extern_def?(env, &1))
+    |> Enum.reduce_while({:ok, env}, fn name, {:ok, acc} ->
+      case Kernel.validate_certificate(acc, name) do
+        {:ok, acc2} -> {:cont, {:ok, acc2}}
+        {:error, reason} -> {:halt, {:error, {:compile_time_totality, name, reason}}}
+      end
+    end)
+  end
+
   defp extern_def?(env, name), do: match?(%{body: {:extern, _}}, Env.get_def(env, name))
 
   # -- seeds: globals appearing in family/constructor type positions ----------
@@ -94,6 +121,13 @@ defmodule Cure.Elab.TotalityClosure do
 
   defp collect({:case, s, m, brs}),
     do: collect(s) ++ collect(m) ++ Enum.flat_map(brs, fn {_c, _ar, b} -> collect(b) end)
+
+  defp collect({:let, _g, ty, value, body}),
+    do: collect(ty) ++ collect(value) ++ collect(body)
+
+  defp collect({:effect_type, inner}), do: collect(inner)
+  defp collect({:effect_pure, value}), do: collect(value)
+  defp collect({:effect_bind, effect, continuation}), do: collect(effect) ++ collect(continuation)
 
   # Fail closed, like `Validator.children/1` and `Certificate.walk_node/4`: descend into
   # every element of an unrecognized node that is itself a term-tuple or a list of them.

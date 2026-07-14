@@ -10,7 +10,7 @@ defmodule Cure.Elab.MacroExpand do
 
   alias Cure.Compiler.MacroSyntax
   alias Cure.Core.{Context, Kernel, Normalise}
-  alias Cure.Elab.Elaborator
+  alias Cure.Elab.{Elaborator, TotalityClosure}
 
   @normalise_fuel 10_000
   # Termination is guaranteed by active-stack cycle detection. Production
@@ -200,7 +200,7 @@ defmodule Cure.Elab.MacroExpand do
         syntax_type ->
           [
             MacroSyntax.to_core_record(
-              syntax_type,
+              Cure.Core.Env.resolve_key(env, env.ctors, syntax_type),
               Keyword.get(meta, :syntax_fields, []),
               Keyword.get(meta, :syntax_repeated_fields, []),
               input_repr
@@ -211,7 +211,8 @@ defmodule Cure.Elab.MacroExpand do
 
     with {:ok, elab_core, _elab_type} <-
            Elaborator.elaborate_expr_typed(elab_ast, [], context, env),
-         {:ok, result_ast} <- execute_application(context, elab_core, input_cores) do
+         {:ok, eval_env} <- TotalityClosure.certify_roots(env, global_names(elab_core)),
+         {:ok, result_ast} <- execute_application(Context.empty(eval_env), elab_core, input_cores) do
       {:ok, result_ast}
     else
       {:error, reason} -> {:error, {:computed_macro_error, meta, reason}}
@@ -220,6 +221,34 @@ defmodule Cure.Elab.MacroExpand do
   rescue
     error -> {:error, {:computed_macro_error, meta, {:host_exception, error.__struct__}}}
   end
+
+  defp global_names({:global, name}), do: [name]
+  defp global_names({:app, f, a}), do: global_names(f) ++ global_names(a)
+  defp global_names({:lam, _grade, domain, body}), do: global_names(domain) ++ global_names(body)
+  defp global_names({:pi, _grade, domain, codomain}), do: global_names(domain) ++ global_names(codomain)
+
+  defp global_names({:case, scrutinee, motive, branches}) do
+    global_names(scrutinee) ++
+      global_names(motive) ++ Enum.flat_map(branches, fn {_name, _arity, body} -> global_names(body) end)
+  end
+
+  defp global_names({:let, _grade, type, value, body}),
+    do: global_names(type) ++ global_names(value) ++ global_names(body)
+
+  defp global_names({:effect_type, inner}), do: global_names(inner)
+  defp global_names({:effect_pure, value}), do: global_names(value)
+
+  defp global_names({:effect_bind, effect, continuation}),
+    do: global_names(effect) ++ global_names(continuation)
+
+  defp global_names({:ctor, _name, args}), do: Enum.flat_map(args, &global_names/1)
+  defp global_names({:data, _name, params, indices}), do: Enum.flat_map(params ++ indices, &global_names/1)
+  defp global_names(term) when is_list(term), do: Enum.flat_map(term, &global_names/1)
+
+  defp global_names(term) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.flat_map(&global_names/1)
+
+  defp global_names(_term), do: []
 
   defp execute_application(context, elab_core, [input_core | fallback]) do
     application = {:app, elab_core, input_core}

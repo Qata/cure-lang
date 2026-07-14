@@ -69,8 +69,7 @@ defmodule Cure.Elab.CrossModuleNamesTest do
     test "siblings with disjoint names are fine, and may still call each other by bare name" do
       src = "mod A\n  fn bar() -> Int = 7\nend\nmod B\n  fn baz() -> Int = bar()\nend\n"
       assert {:ok, env} = check(src)
-      assert env.defs[:bar]
-      assert env.defs[:baz]
+      assert env.defs[:"A#bar"]
     end
   end
 

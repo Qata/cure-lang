@@ -46,10 +46,17 @@ defmodule Cure.Compiler.MacroReducer do
 
   defp build_dispatch(generated_by, type_name, scrutinee, arm_specs, env) do
     with {:ok, constructors} <- MacroReflection.constructors(env, type_name),
+         arm_specs <- canonicalize_arm_specs(arm_specs, env),
          :ok <- validate_arm_set(constructors, arm_specs),
          {:ok, arms} <- build_arms(constructors, arm_specs) do
       {:ok, {:pattern_match, [generated_by: generated_by], [scrutinee | arms]}}
     end
+  end
+
+  defp canonicalize_arm_specs(arm_specs, env) do
+    Enum.map(arm_specs, fn spec ->
+      %{spec | constructor: Env.resolve_key(env, env.ctors, spec.constructor)}
+    end)
   end
 
   defp validate_arm_set(constructors, arm_specs) do
@@ -81,7 +88,8 @@ defmodule Cure.Compiler.MacroReducer do
       if length(bindings) != length(ctor.args) do
         {:halt, {:error, {:reducer_arity, ctor.name, length(bindings), length(ctor.args)}}}
       else
-        pattern = {:function_call, [name: Atom.to_string(ctor.name)], Enum.map(bindings, &variable/1)}
+        pattern_name = Cure.Elab.Name.base(ctor.name)
+        pattern = {:function_call, [name: pattern_name], Enum.map(bindings, &variable/1)}
         {:cont, {:ok, acc ++ [{:match_arm, [pattern: pattern], [spec.body]}]}}
       end
     end)

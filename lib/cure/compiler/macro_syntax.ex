@@ -246,7 +246,9 @@ defmodule Cure.Compiler.MacroSyntax do
 
   @doc "Decode a normalized Core value of Std.Syntax into the mirror representation."
   @spec from_core(Cure.Core.Term.t()) :: repr() | {:error, term()}
-  def from_core({:ctor, :Node, [{:atom_lit, tag}, attrs, kids]}) do
+  def from_core(term), do: decode_core(canonicalize_core(term))
+
+  defp decode_core({:ctor, :"Std.Syntax#Node", [{:atom_lit, tag}, attrs, kids]}) do
     with {:ok, attrs} <- from_core_attrs(attrs),
          {:ok, kids} <- from_core_list(kids),
          {:ok, kids} <- map_results(kids, &from_core/1),
@@ -257,7 +259,7 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  def from_core({:ctor, :Leaf, [{:atom_lit, tag}, attrs, lit]}) do
+  defp decode_core({:ctor, :"Std.Syntax#Leaf", [{:atom_lit, tag}, attrs, lit]}) do
     with {:ok, attrs} <- from_core_attrs(attrs),
          {:ok, lit} <- from_core_synlit(lit) do
       {:syn_leaf, tag, attrs, lit}
@@ -266,21 +268,21 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  def from_core({:ctor, :Raw, [lit]}) do
+  defp decode_core({:ctor, :"Std.Syntax#Raw", [lit]}) do
     case from_core_synlit(lit) do
       {:ok, lit} -> {:syn_raw, lit}
       error -> error
     end
   end
 
-  def from_core({:ctor, :Quoted, [syntax]}) do
+  defp decode_core({:ctor, :"Std.Syntax#Quoted", [syntax]}) do
     case from_core(syntax) do
       {:error, _} = error -> error
       syntax -> {:syn_quoted, syntax}
     end
   end
 
-  def from_core({:ctor, :Failure, [{:atom_lit, name}, args]}) do
+  defp decode_core({:ctor, :"Std.Syntax#Failure", [{:atom_lit, name}, args]}) do
     with {:ok, args} <- from_core_list(args),
          {:ok, args} <- map_results(args, &from_core/1),
          true <- Enum.all?(args, &syntax_repr?/1) do
@@ -290,9 +292,58 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  def from_core(other), do: {:error, {:unsupported_syntax_core, other}}
+  defp decode_core(other), do: {:error, {:unsupported_syntax_core, other}}
 
-  defp ctor(name, args), do: {:ctor, name, args}
+  defp ctor(name, args), do: {:ctor, canonical_ctor(name), args}
+
+  defp canonical_ctor(name) when name in [:True, :False],
+    do: Cure.Elab.Name.qualify("Std.Bool", name)
+
+  defp canonical_ctor(name) when name in [:Nil, :Cons],
+    do: Cure.Elab.Name.qualify("Std.List", name)
+
+  defp canonical_ctor(name), do: Cure.Elab.Name.qualify("Std.Syntax", name)
+
+  defp canonicalize_core({:ctor, name, args}) do
+    base = Cure.Elab.Name.base(name) |> String.to_atom()
+    canonical_name = if syntax_ctor?(base), do: canonical_ctor(base), else: name
+    {:ctor, canonical_name, Enum.map(args, &canonicalize_core/1)}
+  end
+
+  defp canonicalize_core({:app, f, a}), do: {:app, canonicalize_core(f), canonicalize_core(a)}
+  defp canonicalize_core({:lam, g, d, b}), do: {:lam, g, canonicalize_core(d), canonicalize_core(b)}
+  defp canonicalize_core({:pi, g, d, c}), do: {:pi, g, canonicalize_core(d), canonicalize_core(c)}
+
+  defp canonicalize_core({:data, n, ps, is}),
+    do: {:data, n, Enum.map(ps, &canonicalize_core/1), Enum.map(is, &canonicalize_core/1)}
+
+  defp canonicalize_core(other), do: other
+
+  defp syntax_ctor?(name),
+    do:
+      name in [
+        :Node,
+        :Leaf,
+        :Raw,
+        :Quoted,
+        :Failure,
+        :KV,
+        :SInt,
+        :SFloat,
+        :SStr,
+        :SBool,
+        :SAtom,
+        :SList,
+        :SSyntax,
+        :SMap,
+        :SOpaque,
+        :SPair,
+        :True,
+        :False,
+        :Nil,
+        :Cons
+      ]
+
   defp atom(value), do: {:atom_lit, value}
 
   defp to_core_attrs(attrs),
@@ -323,7 +374,7 @@ defmodule Cure.Compiler.MacroSyntax do
     with {:ok, entries} <- from_core_list(core),
          {:ok, attrs} <-
            map_results(entries, fn
-             {:ctor, :KV, [{:atom_lit, key}, lit]} ->
+             {:ctor, :"Std.Syntax#KV", [{:atom_lit, key}, lit]} ->
                with {:ok, lit} <- from_core_synlit(lit), do: {key, lit}
 
              _ ->
@@ -335,18 +386,18 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  defp from_core_list({:ctor, :Nil, []}), do: {:ok, []}
+  defp from_core_list({:ctor, :"Std.List#Nil", []}), do: {:ok, []}
 
-  defp from_core_list({:ctor, :Cons, [head, tail]}) do
+  defp from_core_list({:ctor, :"Std.List#Cons", [head, tail]}) do
     with {:ok, rest} <- from_core_list(tail), do: {:ok, [head | rest]}
   end
 
   defp from_core_list(_), do: {:error, :invalid_syntax_list}
 
-  defp from_core_synlit({:ctor, :SInt, [{:int_lit, n}]}), do: {:ok, {:s_int, n}}
-  defp from_core_synlit({:ctor, :SFloat, [{:float_lit, f}]}), do: {:ok, {:s_float, f}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SInt", [{:int_lit, n}]}), do: {:ok, {:s_int, n}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SFloat", [{:float_lit, f}]}), do: {:ok, {:s_float, f}}
 
-  defp from_core_synlit({:ctor, :SStr, [chars]}) do
+  defp from_core_synlit({:ctor, :"Std.Syntax#SStr", [chars]}) do
     with {:ok, chars} <- from_core_list(chars),
          true <- Enum.all?(chars, &match?({:bounded_lit, n} when is_integer(n), &1)) do
       {:ok, {:s_str, chars |> Enum.map(fn {:bounded_lit, n} -> n end) |> List.to_string()}}
@@ -355,35 +406,35 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  defp from_core_synlit({:ctor, :SBool, [{:ctor, :True, []}]}), do: {:ok, {:s_bool, true}}
-  defp from_core_synlit({:ctor, :SBool, [{:ctor, :False, []}]}), do: {:ok, {:s_bool, false}}
-  defp from_core_synlit({:ctor, :SAtom, [{:atom_lit, a}]}), do: {:ok, {:s_atom, a}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SBool", [{:ctor, :"Std.Bool#True", []}]}), do: {:ok, {:s_bool, true}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SBool", [{:ctor, :"Std.Bool#False", []}]}), do: {:ok, {:s_bool, false}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SAtom", [{:atom_lit, a}]}), do: {:ok, {:s_atom, a}}
 
-  defp from_core_synlit({:ctor, :SList, [items]}) do
+  defp from_core_synlit({:ctor, :"Std.Syntax#SList", [items]}) do
     with {:ok, items} <- from_core_list(items),
          {:ok, items} <- map_results(items, &from_core_synlit/1) do
       {:ok, {:s_list, items}}
     end
   end
 
-  defp from_core_synlit({:ctor, :SSyntax, [syntax]}) do
+  defp from_core_synlit({:ctor, :"Std.Syntax#SSyntax", [syntax]}) do
     case from_core(syntax) do
       {:error, _} = error -> error
       syntax -> {:ok, {:s_syntax, syntax}}
     end
   end
 
-  defp from_core_synlit({:ctor, :SMap, [pairs]}) do
+  defp from_core_synlit({:ctor, :"Std.Syntax#SMap", [pairs]}) do
     with {:ok, pairs} <- from_core_list(pairs),
          {:ok, pairs} <- map_results(pairs, &from_core_pair/1) do
       {:ok, {:s_map, pairs}}
     end
   end
 
-  defp from_core_synlit({:ctor, :SOpaque, []}), do: {:ok, :s_opaque}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SOpaque", []}), do: {:ok, :s_opaque}
   defp from_core_synlit(_), do: {:error, :invalid_syntax_literal}
 
-  defp from_core_pair({:ctor, :SPair, [key, value]}) do
+  defp from_core_pair({:ctor, :"Std.Syntax#SPair", [key, value]}) do
     with {:ok, key} <- from_core_synlit(key), {:ok, value} <- from_core_synlit(value), do: {key, value}
   end
 

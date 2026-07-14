@@ -3,20 +3,17 @@ defmodule Cure.Elab.NameTest do
 
   alias Cure.Elab.Name
 
-  test "qualifies atom and string components with one canonical spelling" do
-    assert Name.qualify("Std.List", :map) == :"Std.List#map"
-    assert Name.qualify(:Client, "answer") == :"Client#answer"
+  test "preserves content-derived identities containing hash characters" do
+    name = :"Union<Int|Std.Bool#Bool>"
+
+    assert Name.owner(name) == nil
+    assert Name.base(name) == "Union<Int|Std.Bool#Bool>"
   end
 
-  test "decomposes a canonical identity without changing bare names" do
-    assert Name.owner(:"Std.List#map") == "Std.List"
-    assert Name.base(:"Std.List#map") == "map"
-    assert Name.owner(:map) == nil
-    assert Name.base(:map) == "map"
-  end
+  test "splits canonical owner-qualified names only at their owner separator" do
+    name = :"Std.Functor#__impl_Functor_Std.List#List_fmap"
 
-  test "qualified detection is independent of the atom representation" do
-    assert Name.qualified?("Std.List#map")
-    refute Name.qualified?(:map)
+    assert Name.owner(name) == "Std.Functor"
+    assert Name.base(name) == "__impl_Functor_Std.List#List_fmap"
   end
 end

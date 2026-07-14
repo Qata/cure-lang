@@ -34,7 +34,7 @@ defmodule Cure.Elab.ReachabilityEffectTest do
 
   test "a global referenced only inside an effect node is reachable" do
     {:ok, env} = Program.elaborate(@src)
-    assert :helper in Program.reachable_def_names(env, [:g])
+    assert :"M#helper" in Program.reachable_def_names(env, [:g])
   end
 
   test "co-emitting that closure produces a module that actually defines the callee" do

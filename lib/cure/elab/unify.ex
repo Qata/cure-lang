@@ -265,22 +265,14 @@ defmodule Cure.Elab.Unify do
      Enum.map(brs, fn {cn, ar, b} -> {cn, ar, mabs(b, dep, vs, n, l + ar)} end)}
   end
 
-  # `Effect(T)` is a TYPE, so it reaches `mabs` in a metavariable solution like any other
-  # type former. Without these clauses it was returned untouched — meaning a variable inside
-  # `T` was neither renumbered into the meta's scope NOR escape-checked, the two things this
-  # walker exists to do. No program has been constructed that observes it (the kernel
-  # re-checks the elaborated term, so a mis-scoped solution surfaces as a loud conversion
-  # failure rather than a silent one), but a walker that silently skips its own contract is
-  # not something to leave in the unifier on the strength of "something downstream catches
-  # it". These formers bind nothing, so every subterm is abstracted at the SAME level.
-  defp mabs({:effect_type, t}, dep, vs, n, l), do: {:effect_type, mabs(t, dep, vs, n, l)}
-  defp mabs({:effect_pure, a}, dep, vs, n, l), do: {:effect_pure, mabs(a, dep, vs, n, l)}
+  defp mabs({:let, g, ty, value, body}, dep, vs, n, l),
+    do: {:let, g, mabs(ty, dep, vs, n, l), mabs(value, dep, vs, n, l), mabs(body, dep, vs, n, l + 1)}
 
-  defp mabs({:effect_bind, e, k}, dep, vs, n, l),
-    do: {:effect_bind, mabs(e, dep, vs, n, l), mabs(k, dep, vs, n, l)}
+  defp mabs({:effect_type, inner}, dep, vs, n, l), do: {:effect_type, mabs(inner, dep, vs, n, l)}
+  defp mabs({:effect_pure, value}, dep, vs, n, l), do: {:effect_pure, mabs(value, dep, vs, n, l)}
 
-  defp mabs({:let, g, t, v, b}, dep, vs, n, l),
-    do: {:let, g, mabs(t, dep, vs, n, l), mabs(v, dep, vs, n, l), mabs(b, dep, vs, n, l + 1)}
+  defp mabs({:effect_bind, effect, continuation}, dep, vs, n, l),
+    do: {:effect_bind, mabs(effect, dep, vs, n, l), mabs(continuation, dep, vs, n, l)}
 
   defp mabs({:meta, _} = m, _dep, _vs, _n, _l), do: m
   defp mabs(leaf, _dep, _vs, _n, _l), do: leaf

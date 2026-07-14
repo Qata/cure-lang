@@ -14,6 +14,7 @@ defmodule Cure.Elab.LetBindOnceTest do
   of any private function.
   """
   use ExUnit.Case, async: true
+  alias Cure.Core.Env
   alias Cure.Elab.Program
 
   @nat "  type Nat = Z | S(Nat)\n"
@@ -39,7 +40,7 @@ defmodule Cure.Elab.LetBindOnceTest do
 
   defp body_of!(src, fname) do
     assert {:ok, env} = Program.elaborate(src)
-    %{body: body} = Map.fetch!(env.defs, fname)
+    %{body: body} = Env.get_def(env, fname)
     body
   end
 
@@ -54,7 +55,7 @@ defmodule Cure.Elab.LetBindOnceTest do
       body = body_of!(src, :f)
 
       # `S(n)` is the rhs. Under surface substitution it appears twice.
-      assert occurrences(body, {:ctor, :S, [{:var, 0}]}) == 1
+      assert occurrences(body, {:ctor, :"L#S", [{:var, 0}]}) == 1
       assert lets(body) == 1
     end
 
@@ -63,7 +64,7 @@ defmodule Cure.Elab.LetBindOnceTest do
       body = body_of!(src, :f)
 
       assert lets(body) == 1
-      assert occurrences(body, {:ctor, :S, [{:var, 0}]}) == 1
+      assert occurrences(body, {:ctor, :"L#S", [{:var, 0}]}) == 1
     end
 
     test "chained lets nest rather than duplicate" do

@@ -110,7 +110,13 @@ defmodule CureMoneta.LedgerServer do
   end
 
   defp map_money_result({:ok, {:Money, amount, currency, fractional_units}}) do
-    {:ok, %{__struct__: :money, amount: amount, currency: {currency |> Atom.to_string() |> String.downcase() |> String.to_atom()}, fractional_units: fractional_units}}
+    {:ok,
+     %{
+       __struct__: :money,
+       amount: amount,
+       currency: {currency |> Atom.to_string() |> String.downcase() |> String.to_atom()},
+       fractional_units: fractional_units
+     }}
   end
 
   defp map_money_result(other), do: other

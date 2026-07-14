@@ -5,9 +5,9 @@ defmodule Cure.Elab.BoolAlwaysResolvesTest do
   test "Bool as a type annotation resolves to the inductive family with no import" do
     src = "mod M\n  fn id(b: Bool) -> Bool = b\n"
     {:ok, env} = Cure.Elab.Program.elaborate(src)
-    assert Inductive.builtin(env, :bool) == :Bool
+    assert Inductive.builtin(env, :bool) == :"Std.Bool#Bool"
 
-    assert %{type: {:pi, _g, {:data, :Bool, [], []}, {:data, :Bool, [], []}}} =
+    assert %{type: {:pi, _g, {:data, :"Std.Bool#Bool", [], []}, {:data, :"Std.Bool#Bool", [], []}}} =
              Cure.Core.Env.get_def(env, :id)
   end
 

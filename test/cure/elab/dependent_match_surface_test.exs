@@ -37,7 +37,7 @@ defmodule Cure.Elab.DependentMatchSurfaceTest do
           empty() -> Z()
         """
 
-    assert {:error, {:missing_branch, :prepend}} = Program.elaborate(src)
+    assert {:error, {:missing_branch, :"Main#prepend"}} = Program.elaborate(src)
   end
 
   # Pre-impl: {:error, :unknown_global} (impossible lexes as an identifier body).
@@ -71,7 +71,9 @@ defmodule Cure.Elab.DependentMatchSurfaceTest do
 
     case_nodes = Enum.filter(nodes, &match?({:case, _, _, _}, &1))
 
-    assert Enum.any?(case_nodes, fn {:case, _, _, brs} -> Enum.map(brs, &elem(&1, 0)) == [:empty] end),
+    assert Enum.any?(case_nodes, fn {:case, _, _, brs} ->
+             Enum.map(brs, &elem(&1, 0)) == [:"Main#empty"]
+           end),
            "the case should carry only the reachable :empty branch"
   end
 
@@ -85,6 +87,6 @@ defmodule Cure.Elab.DependentMatchSurfaceTest do
           prepend(x, rest) -> impossible
         """
 
-    assert {:error, {:reachable_impossible, :prepend}} = Program.elaborate(src)
+    assert {:error, {:reachable_impossible, :"Main#prepend"}} = Program.elaborate(src)
   end
 end

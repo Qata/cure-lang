@@ -632,7 +632,7 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     source = """
     mod Main
       use Std.Supervisor
-      fn build() -> Tuple(Atom, Tuple(Atom, Atom, List(Std.Otp.RawTerm)), Atom, Nat, Atom, List(Atom)) =
+      fn build() -> Tuple(Atom, Tuple(Atom, Atom, List(Std.Otp.Raw.RawTerm)), Atom, Nat, Atom, List(Atom)) =
         Std.Supervisor.child_with_raw_args(:worker_module, :worker, [Std.Supervisor.raw_arg(1), Std.Supervisor.raw_arg(:boot)], Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
     """
 

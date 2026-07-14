@@ -9,38 +9,8 @@ defmodule Cure.Elab.Program do
 
   alias Cure.Compiler.{Lexer, MacroSyntax, MacroValidate, Parser}
   alias Cure.Core.{Env, Inductive, Validator}
-  alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, Resolution, TotalityClosure}
+  alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, TotalityClosure}
   alias Cure.Stdlib.Paths
-
-  # Leaves of `Core.Term` — no subterms, nothing for `global_refs/1` to descend into. See
-  # `global_refs/1` below: it is enumerated rather than wildcarded so that a NEW compound
-  # former cannot be silently mistaken for a leaf and have its globals dropped from the
-  # reachable closure. That has now happened twice here (`:let`, then the `Effect` family).
-  #
-  # `:extern` is not a `Core.Term` former at all — it is the Env body marker for an
-  # `@extern` declaration (`{:extern, {mod, fun, arity}}`), and `global_refs/1` sees it
-  # because it walks EVERY def body, externs included. It holds an MFA, not Core subterms,
-  # so it is a leaf. (Enumerating the leaves is what surfaced it: the wildcard had been
-  # quietly answering for it all along.)
-  defguardp is_leaf(t)
-            when is_tuple(t) and
-                   elem(t, 0) in [
-                     :var,
-                     :meta,
-                     :extern,
-                     :type,
-                     :int_type,
-                     :int_lit,
-                     :nat_lit,
-                     :bounded_lit,
-                     :float_type,
-                     :float_lit,
-                     :binary_type,
-                     :atom_type,
-                     :atom_lit,
-                     :hole,
-                     :absurd
-                   ]
 
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
   def elaborate(source) when is_binary(source) do
@@ -385,7 +355,15 @@ defmodule Cure.Elab.Program do
   @spec expand_declaration_uses(tuple() | list()) :: {:ok, term()} | {:error, term()}
   def expand_declaration_uses(ast) do
     if declaration_computed_use?(ast) do
-      with {:ok, env} <- check_ast_elixir_core(ast) do
+      # Prepare the macro execution environment without checking unrelated
+      # function bodies yet. A declaration macro may introduce a nominal type
+      # that later functions use; checking those functions before expansion
+      # would report the generated name as unknown and make the declaration
+      # pass order-dependent. Computed elaborator functions themselves remain
+      # in the preparation AST so local macro definitions keep working.
+      prep_ast = declaration_expansion_prep(ast)
+
+      with {:ok, env} <- check_ast_elixir_core(prep_ast) do
         expand_declaration_nodes(ast, env)
       end
     else
@@ -409,8 +387,61 @@ defmodule Cure.Elab.Program do
 
   defp declaration_computed_use?(_other), do: false
 
-  defp expand_declaration_nodes({:computed_use, _meta, _children} = node, env),
-    do: MacroExpand.expand(node, env)
+  defp declaration_expansion_prep(ast) do
+    names = declaration_expansion_elab_names(ast)
+    declaration_expansion_prep(ast, names)
+  end
+
+  defp declaration_expansion_elab_names(ast) do
+    ast
+    |> collect_declaration_expansion_elab_names([])
+    |> MapSet.new()
+  end
+
+  defp collect_declaration_expansion_elab_names({:computed_use, _meta, [elab | _]}, acc) do
+    case elab do
+      {:variable, _meta, name} when is_binary(name) -> [String.to_atom(name) | acc]
+      {:variable, _meta, name} when is_atom(name) -> [name | acc]
+      _ -> acc
+    end
+  end
+
+  defp collect_declaration_expansion_elab_names({tag, _meta, children}, acc)
+       when is_atom(tag) and is_list(children),
+       do: Enum.reduce(children, acc, &collect_declaration_expansion_elab_names/2)
+
+  defp collect_declaration_expansion_elab_names(list, acc) when is_list(list),
+    do: Enum.reduce(list, acc, &collect_declaration_expansion_elab_names/2)
+
+  defp collect_declaration_expansion_elab_names(_other, acc), do: acc
+
+  defp declaration_expansion_prep({:function_def, meta, _body} = node, names) when is_list(meta) do
+    name = Keyword.get(meta, :name)
+    name = if is_binary(name), do: String.to_atom(name), else: name
+    if MapSet.member?(names, name), do: node, else: nil
+  end
+
+  defp declaration_expansion_prep({tag, meta, children}, names)
+       when is_atom(tag) and is_list(meta) and is_list(children) do
+    children =
+      children
+      |> Enum.map(&declaration_expansion_prep(&1, names))
+      |> Enum.reject(&is_nil/1)
+
+    {tag, meta, children}
+  end
+
+  defp declaration_expansion_prep(list, names) when is_list(list) do
+    list
+    |> Enum.map(&declaration_expansion_prep(&1, names))
+    |> Enum.reject(&is_nil/1)
+  end
+
+  defp declaration_expansion_prep(other, _names), do: other
+
+  defp expand_declaration_nodes({:computed_use, _meta, _children} = node, env) do
+    MacroExpand.expand(node, env)
+  end
 
   defp expand_declaration_nodes({:function_def, _meta, _body} = node, _env), do: {:ok, node}
   defp expand_declaration_nodes({:macro_def, _meta, _rules} = node, _env), do: {:ok, node}
@@ -463,15 +494,18 @@ defmodule Cure.Elab.Program do
   # `Unit` shadows this (the local declaration overwrites the same key), same as any
   # seeded builtin. `unit : Unit` is a plain nullary inductive.
   defp seed_with_telescope_support(ast) do
-    seeded = Cure.Core.Builtins.seed(Env.empty(), declared_type_names(ast))
+    owner = find_module_name(ast) || "Main"
+    seeded = Cure.Core.Builtins.seed(Env.with_owner(Env.empty(), owner), declared_type_names(ast))
 
     if MapSet.member?(declared_type_names(ast), :Unit) do
       seeded
     else
+      unit_env = Env.with_owner(seeded, "Std.Unit")
+
       Inductive.declare(
         seeded,
-        Inductive.family(:Unit, [], [], 0),
-        [Inductive.ctor(:unit, [], [])]
+        Inductive.family(Env.owned_name(unit_env, :Unit), [], [], 0),
+        [Inductive.ctor(Env.owned_name(unit_env, :unit), [], [])]
       )
     end
   end
@@ -634,12 +668,14 @@ defmodule Cure.Elab.Program do
 
   defp restrict_env_to(%Env{} = env, %MapSet{} = names) do
     name_list = MapSet.to_list(names)
-    fam_names = Enum.filter(name_list, &Map.has_key?(env.families, &1))
+    def_names = Enum.map(name_list, &Env.resolve_key(env, env.defs, &1))
+    fam_names = Enum.map(name_list, &Env.resolve_key(env, env.families, &1))
+    fam_names = Enum.filter(fam_names, &Map.has_key?(env.families, &1))
     kept_ctors = for {c, f} <- env.ctor_to_family, f in fam_names, into: %{}, do: {c, f}
 
     %Env{
       Env.empty()
-      | defs: Map.take(env.defs, name_list ++ Map.keys(kept_ctors)),
+      | defs: Map.take(env.defs, def_names ++ Map.keys(kept_ctors)),
         families: Map.take(env.families, fam_names),
         ctors: Map.take(env.ctors, Map.keys(kept_ctors)),
         ctor_to_family: kept_ctors,
@@ -816,6 +852,8 @@ defmodule Cure.Elab.Program do
   end
 
   defp collect_reachable(env, defs, name, seen) do
+    name = Env.resolve_key(env, defs, name)
+
     cond do
       MapSet.member?(seen, name) ->
         seen
@@ -865,32 +903,13 @@ defmodule Cure.Elab.Program do
   defp global_refs({:let, _g, ty, val, body}),
     do: global_refs(ty) ++ global_refs(val) ++ global_refs(body)
 
-  # …and the same bug, one former over. The `Effect` family carries arbitrary subterms too,
-  # so a global referenced only inside an `effect_bind` — which is what every `let r = <an
-  # effect>` sequencing point lowers to — was equally invisible. Adding the `:let` clause
-  # above fixed an instance; it did not fix the class. Hence the closed catch-all below.
   defp global_refs({:effect_type, inner}), do: global_refs(inner)
-  defp global_refs({:effect_pure, a}), do: global_refs(a)
-  defp global_refs({:effect_bind, e, k}), do: global_refs(e) ++ global_refs(k)
+  defp global_refs({:effect_pure, value}), do: global_refs(value)
 
-  # A body-less declaration: `collect_reachable/4` flat-maps `global_refs/1` over
-  # `[d.type, d.body]`, and `d.body` is `nil` for defs that have only a signature. An absent
-  # body references nothing.
-  defp global_refs(nil), do: []
+  defp global_refs({:effect_bind, effect, continuation}),
+    do: global_refs(effect) ++ global_refs(continuation)
 
-  defp global_refs(leaf) when is_leaf(leaf), do: []
-  defp global_refs(other), do: unrecognised_former!(other, "global_refs/1")
-
-  # FAIL CLOSED. Reporting "no globals in here" for a former we have never been taught about
-  # is not a safe default: it silently shrinks the emitted closure, and the failure surfaces
-  # as a module that calls a function it never defined.
-  @spec unrecognised_former!(term(), String.t()) :: no_return()
-  defp unrecognised_former!(other, fun) do
-    raise ArgumentError,
-          "Cure.Elab.Program.#{fun}: unrecognised Core former #{inspect(other, limit: 3)}. " <>
-            "Every former in Core.Term.t() must be enumerated here — treating a compound " <>
-            "former as a leaf drops every global referenced inside it."
-  end
+  defp global_refs(_leaf), do: []
 
   @doc """
   Does a parsed program/AST use dependent constructs the kernel must check?
@@ -1262,38 +1281,13 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  # Family names DECLARED in a module's own source (transitive imports excluded).
-  defp owned_family_names(path) do
-    with {:ok, source} <- File.read(path),
-         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
-      declared_type_names(ast)
-    else
-      _ -> MapSet.new()
-    end
-  end
-
   # Function names DECLARED in a module's own source (transitive imports
-  # excluded). Mirror of `owned_family_names/1`, reusing the public
-  # `local_def_names/1` scanner in place of `declared_type_names/1`.
+  # excluded), used to build the legacy codegen import-origin compatibility map.
   defp owned_def_names(path) do
     with {:ok, source} <- File.read(path),
          {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
       MapSet.new(local_def_names(ast))
-    else
-      _ -> MapSet.new()
-    end
-  end
-
-  # Constructor names DECLARED in a module's own source (transitive imports excluded). Mirror of
-  # `owned_family_names/1`. Constructor names are their OWN namespace: a bare `Ok` may collide
-  # with an imported `Ok` while the families (`Res` vs `Result`) never do.
-  defp owned_ctor_names(path) do
-    with {:ok, source} <- File.read(path),
-         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
-      declared_ctor_names(ast)
     else
       _ -> MapSet.new()
     end
@@ -1307,118 +1301,30 @@ defmodule Cure.Elab.Program do
          :ok <- check_declarations(ast),
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
          seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
-         {:ok, env0} <- merge_env(seeded, imported),
+         {:ok, env0_base} <- merge_env(seeded, imported),
+         env0 = Map.put(env0_base, :import_modules, direct_import_ids(imports(ast))),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
-      {:ok, mark_inline_hints(certified, find_module_name(ast))}
+      direct_ids = direct_import_ids(imports(ast))
+      {:ok, certified |> Map.put(:import_modules, direct_ids) |> mark_inline_hints(find_module_name(ast))}
+    else
+      {:error, _reason} = error -> error
     end
   end
 
-  # Delete residual bare keys for a colliding family name left by transitive copies.
-  defp drop_bare_family(%Env{} = env, name) do
-    ctors = for {c, f} <- env.ctor_to_family, f == name, into: [], do: c
-
-    %Env{
-      env
-      | families: Map.delete(env.families, name),
-        ctors: Map.drop(env.ctors, ctors),
-        ctor_to_family: Map.drop(env.ctor_to_family, [name | ctors]),
-        builtins:
-          env.builtins
-          |> Enum.reject(fn {_key, fid} -> fid == name end)
-          |> Map.new()
-    }
-  end
-
-  # The full shadow-aware imported-env builder.
+  # Canonical imported-env builder. Module-owned families, constructors, and
+  # definitions already carry their owner-qualified identities when their
+  # slices are elaborated, so merging is now a pure identity-preserving map
+  # operation. Ambiguity is diagnosed later by Resolution against canonical
+  # suffixes and the direct-import set.
   defp shadow_resolved_imports(ast) do
-    # Dedup by module identity: a module that is BOTH auto-preluded and named in an
-    # explicit `use` (e.g. `char.cure` says `use Std.Bounded`, which is also in the
-    # auto-prelude) must be a SINGLE provider. Otherwise the shadow resolver sees the
-    # same family supplied "twice" and re-keys it to `Mod#Type` as if two distinct
-    # modules collided — dragging a builtin-owning prelude's key (`:bounded`) onto
-    # `Std.Bounded#Bounded`, which then clashes with the prelude source's own
-    # canonical `@builtin` self-registration. Auto-prelude entries come first so an
-    # explicit duplicate is the one dropped.
     sources = Enum.uniq(auto_prelude_imports(ast) ++ imports(ast))
     modules = distinct_import_modules(sources)
 
-    # Ownership scans the FULL transitive closure (not `modules`, which is
-    # direct-only) — see the Design note + `transitive_import_modules/1` doc.
-    # Family AND def ownership in ONE transitive walk (avoid re-walking): both are
-    # `%{name => MapSet.t(owner_mod)}` maps fed to the shape-generic `classify/2`.
-    #
-    # The module being elaborated is dropped from the owner walk: the auto-prelude
-    # chain can transitively re-enter THIS module (e.g. Std.Bounded is reached via
-    # Std.Binary → Std.Char → Std.Bounded), and that self-import is not a foreign
-    # provider — it is the same module as the local declaration. Counting it would
-    # make `classify` see a family both locally declared AND "imported" (n_sources
-    # ≥ 2) and re-key the module's own family against itself, so `@builtin(:bounded)`
-    # would clash with the leaked `:"Std.Bounded#Bounded"`. Self contributes only
-    # through `local` below.
-    #
-    # Family, def AND constructor ownership in ONE transitive walk. Constructor names are their
-    # own namespace: a bare `Ok` collides with an imported `Ok` even when the families never do.
-    self_mod = find_module_name(ast)
-
-    {family_owners, def_owners, ctor_owners} =
-      sources
-      |> transitive_import_modules()
-      |> Enum.reject(fn {mod_id, _path} -> mod_id == self_mod end)
-      |> Enum.reduce({%{}, %{}, %{}}, fn {mod_id, path}, {fam_acc, def_acc, ctor_acc} ->
-        add = fn names, acc ->
-          Enum.reduce(names, acc, fn name, a ->
-            Map.update(a, name, MapSet.new([mod_id]), &MapSet.put(&1, mod_id))
-          end)
-        end
-
-        {add.(owned_family_names(path), fam_acc), add.(owned_def_names(path), def_acc),
-         add.(owned_ctor_names(path), ctor_acc)}
-      end)
-
-    local = declared_type_names(ast)
-    local_ctors = declared_ctor_names(ast)
-    local_defs = MapSet.new(local_def_names(ast))
-    %{losers: losers, ambiguous: ambiguous} = Resolution.classify(family_owners, local)
-    # Def ambiguity (no local winner) is enforced at resolution time (Task 3 via
-    # `ambiguous_modules/2`); here we only need the losers to re-key their keys.
-    %{losers: def_losers} = Resolution.classify(def_owners, local_defs)
-    %{losers: ctor_losers} = Resolution.classify(ctor_owners, local_ctors)
-
-    collisions =
-      losers |> Map.values() |> Enum.reduce(MapSet.new(), &MapSet.union/2)
-
     with {:ok, merged} <-
-           Enum.reduce_while(modules, {:ok, Env.empty()}, fn {mod_id, path}, {:ok, acc} ->
+           Enum.reduce_while(modules, {:ok, Env.empty()}, fn {_module_id, path}, {:ok, acc} ->
              case module_slice_env(path) do
                {:ok, slice} ->
-                 reachable =
-                   [mod_id]
-                   |> transitive_import_modules()
-                   |> Enum.map(fn {owner, _path} -> owner end)
-                   |> MapSet.new()
-
-                 owner_mods =
-                   [losers, def_losers, ctor_losers]
-                   |> Enum.map(&MapSet.new(Map.keys(&1)))
-                   |> Enum.reduce(&MapSet.union/2)
-
-                 slice =
-                   Enum.reduce(owner_mods, slice, fn owner_mod, s ->
-                     if MapSet.member?(reachable, owner_mod) do
-                       Resolution.rekey_module_env(
-                         s,
-                         owner_mod,
-                         Map.get(losers, owner_mod, MapSet.new()),
-                         local_ctors,
-                         Map.get(def_losers, owner_mod, MapSet.new()),
-                         Map.get(ctor_losers, owner_mod, MapSet.new())
-                       )
-                     else
-                       s
-                     end
-                   end)
-
                  case merge_env(acc, slice) do
                    {:ok, merged} -> {:cont, {:ok, merged}}
                    {:error, _} = err -> {:halt, err}
@@ -1428,23 +1334,8 @@ defmodule Cure.Elab.Program do
                  {:halt, err}
              end
            end) do
-      # Drop residual bare copies of every collision name (transitive leftovers)
-      # plus local family names supplied only by imported slices as seeded helper
-      # builtins. Real imported owners have already been re-keyed above, preserving
-      # their non-shadowed constructors under their own family id.
-      cleaned =
-        collisions
-        |> MapSet.union(local)
-        |> Enum.reduce(merged, fn name, e -> drop_bare_family(e, name) end)
-
-      # Record the DIRECT import set so bare-name resolution can prefer a direct
-      # owner over a name reachable only through a module's transitive re-export
-      # (`use Std.List` + `use Std.Core`: `map` resolves to Std.List's own `map`,
-      # not the Std.Option `map` that Core merely re-exports). `modules` is the
-      # direct list (explicit `use` + auto-prelude); transitive-only modules are
-      # deliberately excluded.
-      direct_ids = MapSet.new(modules, fn {mod_id, _path} -> mod_id end)
-      {:ok, %{cleaned | import_modules: direct_ids}, ambiguous}
+      direct_ids = MapSet.new(modules, fn {module_id, _path} -> module_id end)
+      {:ok, %{merged | import_modules: direct_ids}, MapSet.new()}
     end
   end
 
@@ -1460,15 +1351,23 @@ defmodule Cure.Elab.Program do
            :ok <- check_declarations(ast),
            {:ok, imported} <- import_env(imports(ast), MapSet.put(seen, module_name)),
            seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
-           {:ok, env0} <- merge_env(seeded, imported),
+           {:ok, env0_base} <- merge_env(seeded, imported),
+           env0 = Map.put(env0_base, :import_modules, direct_import_ids(imports(ast))),
            {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)) do
         with {:ok, certified} <- TotalityClosure.certify_type_level(env) do
-          {:ok, mark_inline_hints(certified, module_name)}
+          direct_ids = direct_import_ids(imports(ast))
+          {:ok, certified |> Map.put(:import_modules, direct_ids) |> mark_inline_hints(module_name)}
         end
       else
         {:error, reason} -> {:error, {:dependent_import_failed, module_name, reason}}
       end
     end
+  end
+
+  defp direct_import_ids(sources) do
+    sources
+    |> distinct_import_modules()
+    |> MapSet.new(fn {module_id, _path} -> module_id end)
   end
 
   # Emit-inline markers for the prelude defs whose saturated applications lower
@@ -1775,8 +1674,11 @@ defmodule Cure.Elab.Program do
 
     Enum.reduce_while(plain ++ computed, {:ok, env}, fn decl, {:ok, acc} ->
       case Declarations.elaborate_function_body(decl, acc) do
-        {:ok, acc2} -> {:cont, {:ok, acc2}}
-        {:error, _} = err -> {:halt, err}
+        {:ok, acc2} ->
+          {:cont, {:ok, acc2}}
+
+        {:error, _reason} = err ->
+          {:halt, err}
       end
     end)
   end

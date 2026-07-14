@@ -51,6 +51,7 @@ defmodule Cure.Compiler.Parser do
     edition: nil,
     seen_stmt?: false,
     builtin_macros: %{},
+    builtin_computed_macros: %{},
     active_macros: %{},
     computed_macros: %{},
     fresh_counter: 0,
@@ -128,17 +129,20 @@ defmodule Cure.Compiler.Parser do
     literal = harvest_literal_macros(harvest_exprs)
 
     # Phase 2 (authoritative): parse with the macro grammars seeded so use-sites expand.
+    builtin_rules =
+      cond do
+        is_map(supplied_macros) -> supplied_macros
+        prelude? -> prelude_macros()
+        true -> %{}
+      end
+
     state = %__MODULE__{
       tokens: tokens,
       file: file,
       emit_events: emit?,
       edition: edition,
-      builtin_macros:
-        cond do
-          is_map(supplied_macros) -> supplied_macros
-          prelude? -> prelude_macros()
-          true -> %{}
-        end,
+      builtin_macros: syntax_macro_rules(builtin_rules),
+      builtin_computed_macros: computed_macro_rules(builtin_rules),
       active_macros: active,
       computed_macros: computed,
       literal_macros: literal
@@ -218,10 +222,28 @@ defmodule Cure.Compiler.Parser do
         %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
           Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
 
+        %{kind: :computed, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
+          Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
+
         _, acc2 ->
           acc2
       end)
     end)
+  end
+
+  defp syntax_macro_rules(rules) when is_map(rules), do: filter_macro_rules(rules, :syntax)
+  defp syntax_macro_rules(_rules), do: %{}
+
+  defp computed_macro_rules(rules) when is_map(rules), do: filter_macro_rules(rules, :computed)
+  defp computed_macro_rules(_rules), do: %{}
+
+  defp filter_macro_rules(rules, kind) do
+    for {keyword, candidates} <- rules,
+        selected = Enum.filter(List.wrap(candidates), &(&1[:kind] == kind)),
+        selected != [],
+        into: %{} do
+      {keyword, selected}
+    end
   end
 
   @doc """
@@ -244,6 +266,7 @@ defmodule Cure.Compiler.Parser do
       file: "example",
       emit_events: false,
       builtin_macros: %{},
+      builtin_computed_macros: %{},
       active_macros: active,
       computed_macros: computed,
       literal_macros: literal
@@ -457,7 +480,8 @@ defmodule Cure.Compiler.Parser do
   # the dependent environment exists. Preserve the elab reference and the
   # matched inputs in a generic syntax-shaped node for the elaboration pass.
   defp parse_computed_use(state, keyword) do
-    [rule | _] = Map.fetch!(state.computed_macros, keyword)
+    [rule | _] = computed_rules(state, keyword)
+    original_state = state
     keyword_token = peek(state)
     state = advance(state)
 
@@ -480,20 +504,52 @@ defmodule Cure.Compiler.Parser do
         {{:computed_use, put_expansion_context(meta, state.expansion_context), [rule.elab, input]}, state}
 
       {:error, progress, state} ->
-        t = peek(state)
+        case computed_macro_fallback(original_state, keyword) do
+          {:ok, ast, fallback_state} ->
+            {ast, fallback_state}
 
-        state =
-          add_error(
-            state,
-            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
-          )
+          :none ->
+            t = peek(state)
 
-        {variable(%Cure.Compiler.Token{
-           type: :identifier,
-           value: keyword,
-           line: t.line,
-           col: t.col
-         }), state}
+            state =
+              add_error(
+                state,
+                {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
+              )
+
+            {variable(%Cure.Compiler.Token{
+               type: :identifier,
+               value: keyword,
+               line: t.line,
+               col: t.col
+             }), state}
+        end
+    end
+  end
+
+  # A computed rule may deliberately share a keyword with an older transparent
+  # rule. Let the computed grammar win when it matches, but preserve the
+  # existing rule as a grammar fallback when it does not. The fallback starts
+  # from the original state so the failed computed match cannot consume input.
+  defp computed_macro_fallback(state, keyword) do
+    cond do
+      is_map_key(state.builtin_macros, keyword) and prelude_macro_head?(state, keyword) ->
+        {ast, state} = parse_macro_use(state, keyword, state.builtin_macros)
+        {:ok, ast, state}
+
+      is_map_key(state.active_macros, keyword) and macro_use_head?(state, keyword) ->
+        {ast, state} = parse_macro_use(state, keyword)
+        {:ok, ast, state}
+
+      true ->
+        :none
+    end
+  end
+
+  defp computed_rules(state, keyword) do
+    case Map.get(state.computed_macros, keyword) do
+      nil -> Map.get(state.builtin_computed_macros, keyword, [])
+      rules -> rules
     end
   end
 
@@ -597,6 +653,15 @@ defmodule Cure.Compiler.Parser do
     {module_name, state} = parse_dotted_name(state)
     module = {:literal, [subtype: :symbol], String.to_atom(module_name)}
     match_segments(state, rest, Map.put(bindings, name, module), progress + 1)
+  end
+
+  # Code holes may introduce an indented expression block after their marker
+  # (`derive` newline `match ...`). The ordinary expression parser owns the
+  # block tokens, so only the separator newline belongs to the grammar matcher.
+  defp match_segments(state, [{:hole, %{name: name, kind: "Code"}} | rest], bindings, progress) do
+    state = skip_newlines(state)
+    {arg, state} = parse_expr(state, 0)
+    match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
   end
 
   defp match_segments(state, [{:hole, %{name: name}} | rest], bindings, progress) do
@@ -972,6 +1037,7 @@ defmodule Cure.Compiler.Parser do
       emit_events: false,
       edition: parser_state.edition,
       builtin_macros: parser_state.builtin_macros,
+      builtin_computed_macros: parser_state.builtin_computed_macros,
       active_macros: parser_state.active_macros,
       computed_macros: parser_state.computed_macros,
       literal_macros: parser_state.literal_macros,
@@ -1363,6 +1429,14 @@ defmodule Cure.Compiler.Parser do
       # Variables / identifiers
       :identifier ->
         case token.value do
+          # Computed rules get first refusal when they share a public keyword
+          # with a transparent rule. A mismatch falls through to that rule in
+          # parse_computed_use/2, preserving existing grammar variants.
+          name
+          when (is_map_key(state.computed_macros, name) or is_map_key(state.builtin_computed_macros, name)) and
+                 name not in @reserved_macro_keywords ->
+            parse_computed_use(state, name)
+
           # Standard-library syntax macros use the same segment matcher as
           # user macros. Their raw body is parsed again by the ordinary parser.
           name when is_map_key(state.builtin_macros, name) ->
@@ -1381,9 +1455,6 @@ defmodule Cure.Compiler.Parser do
             else
               {variable(token), advance(state)}
             end
-
-          name when is_map_key(state.computed_macros, name) and name not in @reserved_macro_keywords ->
-            parse_computed_use(state, name)
 
           "assert_type" ->
             parse_assert_type(state, token)
@@ -6485,6 +6556,17 @@ defmodule Cure.Compiler.Parser do
       # form is still silently dropped — no attach_decorator clause today.
       %Token{type: :keyword, value: :type} ->
         {type_ast, state} = parse_type_def(state)
+        type_ast = attach_decorator(type_ast, dec_name, args)
+        {type_ast, state}
+
+      # `@erases(:pid) opaque type Name` attaches the decorator to the opaque
+      # container. Like the `type` branch, parse_type_def/2 builds a {:container, …}
+      # node that attach_decorator/3's generic clause threads into :decorator meta —
+      # but the `opaque` keyword must be consumed first (see the statement
+      # dispatcher). Without this branch the decorator is silently dropped and the
+      # carrier is left with no declared erasure.
+      %Token{type: :keyword, value: :opaque} ->
+        {type_ast, state} = parse_type_def(advance(state), opaque: true)
         type_ast = attach_decorator(type_ast, dec_name, args)
         {type_ast, state}
 

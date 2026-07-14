@@ -71,10 +71,9 @@ defmodule Cure.Elab.CrossModuleCoherenceTest do
     #
     # KNOWN GAP: the anonymous case cannot be detected the same way. An instance's
     # descriptor is `%{iface, head, methods, as}` and its method globals mangle to
-    # `__impl_<Iface>_<Head>_<method>` — neither carries module provenance, so two
-    # modules each declaring `implementation Eqs for Int` produce byte-identical
-    # descriptors that merge idempotently (and method defs that collide in `env.defs`).
-    # Detecting that requires threading the declaring module into the instance ref.
+    # Method globals carry their declaring module in the canonical identity, so
+    # two modules can no longer merge byte-identical anonymous descriptors by
+    # accident. Named-instance overlap remains a separate coherence rule.
     File.write!(Path.join(tmp, "coiface.cure"), """
     mod Std.CoIface
       interface Eqs(a)

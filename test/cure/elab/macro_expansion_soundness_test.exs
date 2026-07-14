@@ -66,7 +66,7 @@ defmodule Cure.Elab.MacroExpansionSoundnessTest do
                "mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n      example bad expands nonexistent_thing\n    explain\n      keyword \"bad\" =>\n        \"starts with bad\"\n  fn f() -> Int = bad\n"
              )
 
-    assert {:reject, {:conversion_failure, {:data, :Bool, [], []}, {:int_type}}} =
+    assert {:reject, {:conversion_failure, {:data, :"Std.Bool#Bool", [], []}, {:int_type}}} =
              verdict(
                "mod M\n  macro T\n    syntax tt becomes true\n      example tt expands true\n    explain\n      keyword \"tt\" =>\n        \"starts with tt\"\n  fn f() -> Int = tt\n"
              )

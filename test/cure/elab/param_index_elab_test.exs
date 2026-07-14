@@ -27,7 +27,7 @@ defmodule Cure.Elab.ParamIndexElabTest do
 
     # The applied result `Pair(a, Causal)` splits 1 param + 1 index.
     assert Inductive.ctor_result_params(env, :mk) |> length() == 1
-    assert Inductive.ctor_result_indices(env, :mk) == [{:ctor, :Causal, []}]
+    assert Inductive.ctor_result_indices(env, :mk) == [{:ctor, :"M#Causal", []}]
 
     # And the kernel accepts it: the restated `a` is a uniform parameter.
     fam = Inductive.get_family(env, :Pair)
@@ -80,7 +80,7 @@ defmodule Cure.Elab.ParamIndexElabTest do
     # domain is the scrutinee-binder type `D params̄ j̄`. Params must be the
     # actual scrutinee parameter (Dec), NOT [] — and the index slice is 2 wide.
     scrut_binder_type = motive |> lam_domains() |> List.last()
-    assert {:data, :Tagged, params, indices} = scrut_binder_type
+    assert {:data, :"M#Tagged", params, indices} = scrut_binder_type
     assert length(params) == 1, "motive dropped the parameter: #{inspect(scrut_binder_type)}"
     assert length(indices) == 2
   end

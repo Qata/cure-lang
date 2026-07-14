@@ -32,8 +32,7 @@ defmodule CureSite.Stdlib do
   # that are not listed below fall into the trailing "Other" bucket so
   # nothing gets silently dropped.
   @groups_for_modules [
-    {"Core",
-     ["Std.Core", "Std.Equal", "Std.Eq", "Std.Ord", "Std.Show", "Std.Functor"]},
+    {"Core", ["Std.Core", "Std.Equal", "Std.Eq", "Std.Ord", "Std.Show", "Std.Functor"]},
     {"Collections",
      [
        "Std.List",
@@ -48,8 +47,7 @@ defmodule CureSite.Stdlib do
     {"Text & Regex", ["Std.String", "Std.Regex"]},
     {"Numeric", ["Std.Math"]},
     {"I/O & System", ["Std.Io", "Std.System", "Std.Time"]},
-    {"Concurrency",
-     ["Std.Actor", "Std.Process", "Std.Supervisor", "Std.Fsm", "Std.App", "Std.CRDT"]},
+    {"Concurrency", ["Std.Actor", "Std.Process", "Std.Supervisor", "Std.Fsm", "Std.App", "Std.CRDT"]},
     {"Error & Option", ["Std.Option", "Std.Result"]},
     {"Testing & Proofs", ["Std.Test", "Std.Gen", "Std.Proof"]},
     {"Network", ["Std.Http", "Std.Json"]}

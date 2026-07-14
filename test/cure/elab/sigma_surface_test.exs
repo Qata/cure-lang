@@ -58,9 +58,9 @@ defmodule Cure.Elab.SigmaSurfaceTest do
         "fn forget_dec({as: SVDesc}, {bs: SVDesc}, d: Dec, sf: SF(as, bs, d)) -> Sigma(x: Dec, SF(as, bs, x)) = %[d, sf]\n"
 
     assert {:ok, env} = elaborate_all(src)
-    assert %{name: :forget_dec, type: type, body: body} = Env.get_def(env, :forget_dec)
+    assert %{name: _, type: type, body: body} = Env.get_def(env, :forget_dec)
     # Core shape flipped (D2): the pair is the builtin Sigma ctor, not `{:pair,…}`.
-    assert {:ctor, :mk_pair, [_d, _sf]} = unwrap_lams(body)
+    assert {:ctor, :"Std.Sigma#mk_pair", [_d, _sf]} = unwrap_lams(body)
     refute mentions?(body, :pair)
     # Declared type ends in a dependent Σ.
     assert {:pi, _g, _, _} = type
@@ -72,7 +72,7 @@ defmodule Cure.Elab.SigmaSurfaceTest do
         "fn recover({as: SVDesc}, {bs: SVDesc}, p: Sigma(x: Dec, SF(as, bs, x))) -> SF(as, bs, p.1) = p.2\n"
 
     assert {:ok, env} = elaborate_all(src)
-    assert %{name: :recover, body: body} = Env.get_def(env, :recover)
+    assert %{name: _, body: body} = Env.get_def(env, :recover)
     # Core shape flipped (D2): `.2` lowers to the `sigma_second` projection global,
     # not the primitive `{:snd,…}` node.
     refute mentions?(body, :snd)

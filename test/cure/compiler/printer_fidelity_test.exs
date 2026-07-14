@@ -106,4 +106,17 @@ defmodule Cure.Compiler.PrinterFidelityTest do
     assert out =~ "S(m) | VS(m)"
     assert out =~ "Z() | VZ()"
   end
+
+  test "the unit value round-trips as ()" do
+    # The parser gives `()` its own node kind (`:unit_value`), not a `:literal`, and the
+    # printer had no clause for it — so `cure fmt`/`migrate` RAISED on any file containing
+    # the unit value. No stdlib file used `()` until Std.Otp's discard shape did.
+    out = assert_roundtrips("mod M\n  fn nothing() -> Unit = ()\n")
+    assert out =~ "= ()"
+    refute out =~ "unit_value"
+
+    # The shape that exposed it: bind an effectful result, discard it, return unit.
+    discard = assert_roundtrips("mod M\n  fn go(p: Int) -> Unit =\n    let x = p\n    ()\n")
+    assert discard =~ "()"
+  end
 end

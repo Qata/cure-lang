@@ -6,6 +6,7 @@ defmodule Cure.Elab.PrimitiveResolveTest do
   env floor.
   """
   use ExUnit.Case, async: true
+  alias Cure.Core.Env
   alias Cure.Elab.Program
 
   for {name, node} <- [{"Int", {:int_type}}, {"Float", {:float_type}}, {"Binary", {:binary_type}}] do
@@ -13,7 +14,7 @@ defmodule Cure.Elab.PrimitiveResolveTest do
       {:ok, env} =
         Program.elaborate("mod M\n  fn f(x: #{unquote(name)}) -> #{unquote(name)} = x\nend\n")
 
-      assert env.defs[:f].type ==
+      assert Env.get_def(env, :f).type ==
                {:pi, Cure.Core.Grade.unrestricted(), unquote(Macro.escape(node)), unquote(Macro.escape(node))}
     end
   end
@@ -22,7 +23,7 @@ defmodule Cure.Elab.PrimitiveResolveTest do
     # Exercises the type_to_core path (enum field types), distinct from the
     # param/return resolve_index_name path above.
     {:ok, env} = Program.elaborate("mod M\n  type Boxed = Box(Int)\nend\n")
-    box = env.ctors[:Box]
+    box = Cure.Core.Inductive.get_ctor(env, :Box)
     assert [{_name, {:int_type}}] = box.args
   end
 end
