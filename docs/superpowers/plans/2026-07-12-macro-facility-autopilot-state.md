@@ -1165,7 +1165,7 @@ Suggested commit:
 
 ### Phase 3 — Implement `beam_ops` over the algebra
 
-**STATUS: IN PROGRESS (2026-07-13).** `Std.Otp` now defines a closed initial
+**STATUS: WAITING ON PHASE 2.5 (2026-07-14).** `Std.Otp` now defines a closed initial
 `beam_ops` vocabulary: `self`, messaging, call/cast, process creation, startup,
 lifecycle, timers, monitors, and links all expand to ordinary checked
 `Std.Otp` calls and are proven marker-free. The generic macro grammar now has a
@@ -1216,6 +1216,134 @@ transparent macro/lifted-module surface rather than retired generated classes
 
 Suggested commit:
 `feat(std): define beam_ops over the checked process algebra`
+
+### Phase 2.5 — Establish canonical owner identity before further macro work
+
+**STATUS: REQUIRED BEFORE PHASE 3 CONTINUES (2026-07-14).** The previous
+resolver experiment attempted to repair collisions after module slices had
+already been elaborated. That direction is rejected and must not be resumed.
+
+The defect is structural, not a missing clause in the rewriter. The current
+`Resolution.rekey_term/3` handles only seven Core formers while `Core.Term.t`
+contains twenty-three. In particular, `let`, `effect_type`, `effect_pure`, and
+`effect_bind` are traversed as opaque fallback values. An imported body such as
+`derive_actor` can therefore retain `{:global, :map}` inside a `let` after the
+`map` definition has been moved to `:"Std.List#map"`. This can either produce an
+unknown-global error or, worse, silently bind to an unrelated bare `map` from
+another slice. The ordinary emitter often hid this because non-local globals
+were routed through `import_origins`; compile-time evaluation is the first
+consumer that must read the definition table honestly.
+
+Do not add more `rekey_term/3` clauses. A second hand-maintained traversal of the
+trusted term language will drift again and fails open. Binding identity must be
+established while a module is elaborated and must never be reconstructed from
+already-elaborated Core syntax.
+
+#### 2.5a — Introduce one canonical name contract
+
+Add a small `Cure.Elab.Name` module that owns the spelling contract for global
+identities:
+
+- `qualify(owner, base)` produces the canonical atom, currently using the
+  `Owner#name` spelling;
+- `owner(canonical)` extracts the owner without open-coded string parsing;
+- `base(canonical)` extracts the surface basename for diagnostics and lookup;
+- builtins and deliberately ownerless primitives have explicit constructors and
+  are never inferred from a string heuristic.
+
+Keep Core's `{:global, atom()}` shape unchanged. The kernel treats the atom as
+opaque, so this is elaborator identity, not a TCB or Core representation change.
+Every new or moved global must use this module; no emitter, diagnostic, test
+fixture, or Antigen assay may hand-write `"Module#name"`.
+
+#### 2.5b — Canonicalize every namespace at registration
+
+Assign canonical owner-qualified identity to all module-owned families,
+constructors, and ordinary definitions, including a module's own definitions.
+Do not leave local definitions bare while qualifying only imports: two imported
+modules must be mergeable without collision by construction. Preserve `classify`
+and ambiguity tracking as diagnostic machinery, but do not use it to decide
+which already-built definition wins.
+
+Give compiler-generated anonymous instance methods the same owner provenance.
+`__impl_*` names currently lack module identity; `Implementation.register/2`
+must receive the current owner and register those globals canonically. A
+no-bare-globals invariant is false if this namespace remains an exception.
+
+Canonicalize references at the point they are elaborated, including references
+inside types, function bodies, patterns, effect terms, generated declarations,
+interface defaults, and instance methods. Preserve lexical locals and explicit
+qualified names. A canonicalized module slice must be independent of the module
+that later imports it.
+
+#### 2.5c — Remove fallback resolution instead of restricting it
+
+With canonical identities established at birth, delete the bare-name fallback
+from `resolve_qualified/3` rather than adding another gate around it. Delete
+`resolve_bare_shadowed/2` once all elaboration call sites use canonical lookup.
+The direct/transitive/ambiguous import rules remain real diagnostics, but they
+must resolve to canonical bindings before Core is produced.
+
+Update emission, erasure, totality certification, signing, coherence, inline
+hints, and `import_origins` to consume `Cure.Elab.Name.owner/1` or the canonical
+environment metadata. Do not recover ownership by parsing arbitrary atoms in
+each consumer.
+
+#### 2.5d — Delete post-hoc re-keying as one atomic change
+
+After canonical registration and reference resolution are green, delete all of
+the following together:
+
+- `Resolution.rekey_term/2-3`;
+- `Resolution.rekey_module_env/3-6` and its private re-key helpers;
+- `drop_bare_family/2` and any residual-bare cleanup;
+- `resolve_bare_shadowed/2` and the type-position workaround;
+- tests whose contract is that a loser is renamed after elaboration.
+
+Replace them with tests that prove canonical keys and fully traversed Core are
+correct at creation time. The deleted traversal must not be replaced by a new
+generic recursive walker.
+
+#### 2.5e — Cache only context-independent real-file slices
+
+Once canonical identities are assigned during module elaboration, cache parsed
+and elaborated slices by real source identity/hash. This is a consequence of
+context independence, not a workaround for recursive re-keying. Do not cache
+lifted or derived modules whose scope depends on an enclosing unit; those must
+remain explicitly non-cacheable until they have an independent identity.
+
+#### 2.5f — Required acceptance matrix
+
+Before Phase 3 resumes, pin all of these:
+
+1. An imported body containing `let`, `Effect`, and a shadowed global resolves
+   to the owning definition, with no dangling or wrong-binding reference.
+2. A diamond import of one owner is not ambiguous; two distinct owners are
+   ambiguous and produce a diagnostic.
+3. Auto-prelude duplicate imports deduplicate by module identity.
+4. The auto-prelude self-import cycle (`Std.Bounded` through `Std.Binary` and
+   `Std.Char`) terminates and does not self-requalify.
+5. Interface and instance method resolution works across modules, including
+   higher-kinded interfaces.
+6. A lifted module resolves inherited declarations in its enclosing scope and
+   is excluded from the real-file slice cache.
+7. A structural walk over every merged slice proves that no non-primitive bare
+   global remains before certification.
+8. Full legacy, macro, Antigen, emission, and runtime gates pass after the
+   deletion, not only the staged resolver tests.
+
+Suggested commits, in order:
+
+- `feat(elab): establish canonical owner-qualified global identities`
+- `refactor(elab): remove post-hoc global re-keying`
+- `perf(elab): cache context-independent module slices`
+- `test(elab): pin canonical identity and no-bare-global invariants`
+
+Gate: every family, constructor, definition, and anonymous instance method has
+canonical identity before Core production; no post-hoc Core rewriter exists;
+all consumers use the canonical owner contract; and the acceptance matrix is
+green. Only then may Phase 3's operation-context and automatic message-code
+derivation work continue.
 
 ### Phase 4 — Replace the four OTP forms in their Cure files
 
