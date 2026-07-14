@@ -98,6 +98,44 @@ mod Std.Syntax
   fn variable(name: String) -> Syntax =
     Leaf(:variable, [KV(:scope, SAtom(:local))], SStr(name))
 
+  fn atom_literal(value: Atom) -> Syntax =
+    Leaf(:literal, [KV(:subtype, SAtom(:symbol))], SAtom(value))
+
+  fn call(name: String, args: List(Syntax)) -> Syntax =
+    Node(:function_call, [KV(:name, SStr(name))], args)
+
+  fn use_module(name: String) -> Syntax =
+    Node(:import, [KV(:source, SStr(name)), KV(:import_type, SAtom(:use))], [])
+
+  fn tuple(items: List(Syntax)) -> Syntax = Node(:tuple, [], items)
+
+  fn tuple_type(items: List(Syntax)) -> Syntax =
+    Node(:tuple_type, [KV(:binders, parameter_names(items))], items)
+
+  fn parameter_names(items: List(Syntax)) -> SynLit =
+    match items
+      [] -> SList([])
+      [_head | rest] -> match parameter_names(rest)
+        SList(names) -> SList([SStr("_") | names])
+        _ -> SList([])
+
+  fn parameter(name: String, kind: Syntax) -> Syntax =
+    Node(:param, [KV(:name, SStr(name)), KV(:type, SSyntax(kind))], [])
+
+  fn parameter_literals(params: List(Syntax)) -> SynLit =
+    match params
+      [] -> SList([])
+      [head | rest] -> match parameter_literals(rest)
+        SList(values) -> SList([SSyntax(head) | values])
+        _ -> SList([])
+
+  fn function(name: String, params: List(Syntax), return_type: Syntax, body: Syntax) -> Syntax =
+    Node(:function_def, [
+      KV(:name, SStr(name)),
+      KV(:params, parameter_literals(params)),
+      KV(:return_type, SSyntax(return_type))
+    ], [body])
+
   fn integer(value: Int) -> Syntax =
     Leaf(:literal, [KV(:subtype, SAtom(:integer))], SInt(value))
 

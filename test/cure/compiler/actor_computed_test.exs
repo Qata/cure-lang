@@ -18,5 +18,8 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert module == :"Cure.M"
     assert Code.ensure_loaded?(:"Cure.Generated.Derived")
     assert apply(module, :make_message, []) == :Inc
+    assert apply(:"Cure.Generated.Derived", :init, [0]) == {:ok, 0}
+    assert apply(:"Cure.Generated.Derived", :handle_cast, [:Inc, 0]) == {:noreply, 0}
+    assert apply(:"Cure.Generated.Derived", :handle_info, [:Inc, 0]) == {:noreply, 0}
   end
 end

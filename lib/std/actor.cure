@@ -209,13 +209,28 @@ mod Std.Actor
     let module_name = match input.name
       Leaf(_, _, SAtom(name)) -> SAtom(name)
       _ -> SStr("Cure.Generated.Actor")
+    let module_expr = match input.name
+      Leaf(_, _, SAtom(name)) -> atom_literal(name)
+      _ -> atom_literal(:generated_actor)
     let message_type = match children(input.cast_body)
       [_scrutinee | arms] -> enum_type("ActorMessage", map(arms, classify))
       _ -> enum_type("ActorMessage", [enum_variant("Message")])
+    let result_type = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
+    let init_type = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
+    let start_type = call("Effect", [variable("Tuple")])
+    let default_state = tuple([atom_literal(:noreply), variable("state")])
     block([
       message_type,
       lift_module(module_name, :gen_server, [
-        alias_node("Message", variable("ActorMessage"))
+        use_module("Std.Otp"),
+        alias_node("State", input.state_type),
+        alias_node("Message", variable("ActorMessage")),
+        function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), variable("initial")])),
+        function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, default_state),
+        function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, default_state),
+        function("terminate", [parameter("reason", variable("Atom")), parameter("state", variable("State"))], call("Effect", [variable("Atom")]), atom_literal(:ok)),
+        function("code_change", [parameter("old", variable("Atom")), parameter("state", variable("State")), parameter("extra", variable("Atom"))], result_type, tuple([atom_literal(:ok), variable("state")])),
+        function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_link", [module_expr, variable("initial")]))
       ])
     ])
 

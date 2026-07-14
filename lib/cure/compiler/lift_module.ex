@@ -107,7 +107,7 @@ defmodule Cure.Compiler.LiftModule do
 
   defp unit_declarations({tag, meta, _} = node)
        when tag in [:import, :indexed_type, :function_def] and is_list(meta),
-       do: [node]
+       do: [normalize_generated_declaration(node)]
 
   defp unit_declarations({:type_annotation, meta, _} = node) when is_list(meta) do
     if Keyword.has_key?(meta, :name) and not Keyword.get(meta, :refinement, false),
@@ -116,6 +116,23 @@ defmodule Cure.Compiler.LiftModule do
   end
 
   defp unit_declarations(_other), do: []
+
+  defp normalize_generated_declaration({:function_def, meta, [body]}) do
+    params = Keyword.get(meta, :params, [])
+
+    if Enum.all?(params, &match?({:param, _, []}, &1)) do
+      params = Enum.map(params, &normalize_generated_param/1)
+      {:function_def, Keyword.put(meta, :params, params), [body]}
+    else
+      {:function_def, meta, [body]}
+    end
+  end
+
+  defp normalize_generated_declaration(node), do: node
+
+  defp normalize_generated_param({:param, meta, []}) do
+    {:param, [type: Keyword.fetch!(meta, :type)], Keyword.fetch!(meta, :name)}
+  end
 
   defp macro_syntax_field_type(field, rule) do
     if field in Map.get(rule, :syntax_repeated_fields, []) do
@@ -140,6 +157,7 @@ defmodule Cure.Compiler.LiftModule do
          behaviour when is_atom(behaviour) <- Keyword.get(meta, :behaviour),
          callbacks when is_list(callbacks) <- Keyword.get(meta, :callbacks, []),
          declarations when is_list(declarations) <- Keyword.get(meta, :declarations, []),
+         declarations = Enum.map(declarations, &normalize_generated_declaration/1),
          :ok <- validate_module_name(module),
          :ok <- validate_behaviour(behaviour),
          :ok <- validate_callbacks(callbacks),
