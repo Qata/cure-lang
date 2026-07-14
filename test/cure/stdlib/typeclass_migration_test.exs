@@ -22,8 +22,10 @@ defmodule Cure.Stdlib.TypeclassMigrationTest do
       # and selects the imported instance's method — proving `interface`/`instance`
       # state crosses the `use` boundary (merge_env unions interfaces + coherence).
       assert {:ok, env} = Program.elaborate(src)
-      assert :__impl_Functor_List_fmap in Program.impl_def_names(env)
-      assert inspect(Map.get(env.defs, :bump).body) =~ "__impl_Functor_List_fmap"
+      assert :"Std.Functor#__impl_Functor_Std.List#List_fmap" in Program.impl_def_names(env)
+
+      assert inspect(Map.get(env.defs, :"M#bump").body) =~
+               "__impl_Functor_Std.List#List_fmap"
     end
 
     test "the imported instance's delegate global is re-keyed to match the moved def" do
@@ -39,7 +41,7 @@ defmodule Cure.Stdlib.TypeclassMigrationTest do
       """
 
       {:ok, env} = Program.elaborate(src)
-      impl = Map.get(env.defs, :__impl_Functor_List_fmap)
+      impl = Map.get(env.defs, :"Std.Functor#__impl_Functor_Std.List#List_fmap")
       body = inspect(impl.body)
       assert body =~ "Std.List#map"
       refute body =~ "{:global, :map}"

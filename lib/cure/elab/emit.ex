@@ -132,6 +132,15 @@ defmodule Cure.Elab.Emit do
     # previous module's origins.
     Process.put(:cure_emit_origins, origins)
 
+    aliases =
+      Enum.flat_map(names, fn name ->
+        key = Env.resolve_key(env, env.defs, name)
+        emitted = emit_name_for_key(key)
+        [{name, emitted}, {key, emitted}]
+      end)
+
+    Process.put(:cure_emit_aliases, Map.new(aliases))
+
     try do
       fn_forms = Enum.map(names, &function_form(env, &1))
       exports = Enum.map(fn_forms, fn {:function, _l, name, arity, _cls} -> {name, arity} end)
@@ -143,6 +152,7 @@ defmodule Cure.Elab.Emit do
       ]
     after
       Process.delete(:cure_emit_origins)
+      Process.delete(:cure_emit_aliases)
     end
   end
 
@@ -166,6 +176,17 @@ defmodule Cure.Elab.Emit do
   # `module_forms/4`); `%{}` outside an emit or for a self-contained module.
   defp emit_origins, do: Process.get(:cure_emit_origins, %{})
 
+  defp emit_aliases, do: Process.get(:cure_emit_aliases, %{})
+
+  defp emit_name_for_key(name) do
+    case Cure.Elab.Name.base(name) do
+      nil -> name
+      base -> String.to_atom(base)
+    end
+  end
+
+  defp emitted_name(name), do: Map.get(emit_aliases(), name, emit_name_for_key(name))
+
   # Resolve a source `{:global, name}` to a REMOTE `{module, fun}` target or
   # `:local`. A `#`-mangled qualified name (`Std.List#map`, from a qualified
   # call or an `implementation` method body) carries its owner in the name; a
@@ -175,6 +196,9 @@ defmodule Cure.Elab.Emit do
     s = Atom.to_string(name)
 
     cond do
+      Map.has_key?(emit_aliases(), name) ->
+        :local
+
       String.contains?(s, "#") ->
         [mod, fun] = String.split(s, "#", parts: 2)
         {String.to_atom("Cure." <> mod), String.to_atom(fun)}
@@ -220,10 +244,10 @@ defmodule Cure.Elab.Emit do
   defp function_form(env, name) do
     case Env.get_def(env, name) do
       %{body: {:extern, {mod, fun, _arity}}} = def ->
-        extern_form(name, {mod, fun}, present_arity(env, name), extern_union_members(env, def))
+        extern_form(emitted_name(name), {mod, fun}, present_arity(env, name), extern_union_members(env, def))
 
       def ->
-        real_function_form(name, def, env)
+        real_function_form(emitted_name(name), def, env)
     end
   end
 
@@ -502,14 +526,14 @@ defmodule Cure.Elab.Emit do
         case present_arity(env, name) do
           0 ->
             case remote_target(name, emit_origins()) do
-              :local -> {:call, @line, {:atom, @line, name}, []}
+              :local -> {:call, @line, {:atom, @line, emitted_name(name)}, []}
               {mod, fun} -> {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, []}
             end
 
           n ->
             case remote_target(name, emit_origins()) do
               :local ->
-                {:fun, @line, {:function, name, n}}
+                {:fun, @line, {:function, emitted_name(name), n}}
 
               {mod, fun} ->
                 {:fun, @line, {:function, {:atom, @line, mod}, {:atom, @line, fun}, {:integer, @line, n}}}
@@ -724,7 +748,7 @@ defmodule Cure.Elab.Emit do
 
         callee =
           case remote_target(name, emit_origins()) do
-            :local -> {:atom, @line, name}
+            :local -> {:atom, @line, emitted_name(name)}
             {mod, fun} -> {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}
           end
 

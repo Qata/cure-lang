@@ -850,6 +850,8 @@ defmodule Cure.Elab.Program do
   end
 
   defp collect_reachable(env, defs, name, seen) do
+    name = Env.resolve_key(env, defs, name)
+
     cond do
       MapSet.member?(seen, name) ->
         seen

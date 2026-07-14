@@ -2092,8 +2092,8 @@ defmodule Cure.Elab.Declarations do
       # A bare name reachable only under a single re-keyed `:"Mod#name"` variant
       # (shadowed-but-present, spec §3.3). Exactly-one resolves; ≥2 (ambiguous)
       # falls through to `{:global, atom}` here and is caught by R7 (Task 10).
-      match?({:ok, _}, Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)) ->
-        {:ok, key} = Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)
+      match?({:ok, _}, Cure.Elab.Resolution.resolve_bare(env, atom)) ->
+        {:ok, key} = Cure.Elab.Resolution.resolve_bare(env, atom)
 
         cond do
           Inductive.family?(env, key) -> {:data, key, [], []}

@@ -137,7 +137,7 @@ defmodule Cure.Elab.Elaborator do
         Env.resolve_key(env, env.ctors, cname)
 
       true ->
-        case Cure.Elab.Resolution.resolve_bare_shadowed(env, cname) do
+        case Cure.Elab.Resolution.resolve_bare(env, cname) do
           {:ok, key} -> key
           _ -> cname
         end
@@ -192,7 +192,7 @@ defmodule Cure.Elab.Elaborator do
           Env.resolve_key(env, env.ctors, atom)
 
         true ->
-          case Cure.Elab.Resolution.resolve_bare_shadowed(env, atom) do
+          case Cure.Elab.Resolution.resolve_bare(env, atom) do
             {:ok, key} -> key
             _ -> atom
           end
@@ -310,7 +310,7 @@ defmodule Cure.Elab.Elaborator do
       # the lambda clause below, and mis-binds `xs : List(Int)` against the erased
       # `{t} : Type` slot (a `:conversion_failure`). Preferring `atom` when it is a
       # local def keeps a module's own `map`/`filter` bound to itself;
-      # `resolve_bare_shadowed` (which feeds `resolved`) resolves toward imports and
+      # `resolve_bare` (which feeds `resolved`) resolves toward imports and
       # would otherwise redirect a recursive self-call to a same-named import.
       implicit_def?(env, if(Env.get_def(env, atom), do: atom, else: resolved)) ->
         key = if Env.get_def(env, atom), do: Env.resolve_key(env, env.defs, atom), else: resolved
@@ -2337,7 +2337,7 @@ defmodule Cure.Elab.Elaborator do
         :error -> atom
       end
     else
-      case Cure.Elab.Resolution.resolve_bare_shadowed(env, atom) do
+      case Cure.Elab.Resolution.resolve_bare(env, atom) do
         {:ok, key} -> key
         _ -> atom
       end
@@ -7599,7 +7599,7 @@ defmodule Cure.Elab.Elaborator do
         {:error, {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}}
 
       # A bare def key present is the local winner (or a non-colliding import that
-      # kept its bare key): keep it. `resolve_bare_shadowed/2`'s contract requires
+      # kept its bare key): keep it. `resolve_bare/2`'s contract requires
       # this bare-absence check before the shadowed-import fallback, otherwise a
       # re-keyed sibling (`Std.Nat#plus`) would override a local `plus`.
       Env.get_def(env, atom) ->
@@ -7608,7 +7608,7 @@ defmodule Cure.Elab.Elaborator do
       # No local winner, no ambiguity: if exactly one re-keyed import provides
       # the name, resolve to that qualified key; else keep the bare global.
       true ->
-        case Cure.Elab.Resolution.resolve_bare_shadowed(env, atom) do
+        case Cure.Elab.Resolution.resolve_bare(env, atom) do
           {:ok, key} -> {:ok, {:global, key}}
           _ -> {:ok, {:global, atom}}
         end
