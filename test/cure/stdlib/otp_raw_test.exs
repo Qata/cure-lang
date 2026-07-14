@@ -46,8 +46,7 @@ defmodule Cure.Stdlib.OtpRawTest do
        %{env: env} do
     assert {:pi, :erased, {:type, 0},
             {:effect_type,
-             {:data, :"Std.Otp.Raw#RawPid",
-              [{:var, 0}, {:var, 0}, {:data, :"Std.Otp.Raw#Plain", [], []}], []}}} =
+             {:data, :"Std.Otp.Raw#RawPid", [{:var, 0}, {:var, 0}, {:data, :"Std.Otp.Raw#Plain", [], []}], []}}} =
              Env.get_def(env, :raw_self).type
   end
 

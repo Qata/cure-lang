@@ -42,8 +42,7 @@ defmodule Cure.Elab.EraseHasHoleEffectTest do
       assert Erase.has_hole?({:effect_bind, {:hole, "e"}, k})
 
       assert Erase.has_hole?(
-               {:effect_bind, {:effect_pure, {:int_lit, 1}},
-                {:lam, Grade.unrestricted(), {:int_type}, {:hole, "k"}}}
+               {:effect_bind, {:effect_pure, {:int_lit, 1}}, {:lam, Grade.unrestricted(), {:int_type}, {:hole, "k"}}}
              )
     end
 
@@ -54,10 +53,8 @@ defmodule Cure.Elab.EraseHasHoleEffectTest do
     test "an effectful term with no hole is still hole-free" do
       # The predicate must be REPAIRED, not made vacuously true.
       refute Erase.has_hole?(
-               {:effect_bind, {:effect_pure, {:int_lit, 1}},
-                {:lam, Grade.unrestricted(), {:int_type}, {:var, 0}}}
+               {:effect_bind, {:effect_pure, {:int_lit, 1}}, {:lam, Grade.unrestricted(), {:int_type}, {:var, 0}}}
              )
     end
   end
-
 end
