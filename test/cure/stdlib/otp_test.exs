@@ -114,8 +114,9 @@ defmodule Cure.Stdlib.OtpTest do
     source = """
     mod App
       use Std.Otp
+      use Std.Option
       fn timer(p: Pid(Atom)) -> Effect(Ref) = beam_ops send_after 10 p :tick
-      fn cancel(r: Ref) -> Effect(Unit) = beam_ops cancel_timer r
+      fn cancel(r: Ref) -> Effect(Option(Int)) = beam_ops cancel_timer r
       fn observe(p: Pid(Atom)) -> Effect(Ref) = beam_ops monitor :process p
       fn unobserve(r: Ref) -> Effect(Unit) = beam_ops demonitor r
       fn connect(p: Pid(Atom)) -> Effect(Unit) = beam_ops link p
@@ -266,6 +267,25 @@ defmodule Cure.Stdlib.OtpTest do
                      Some(p) -> tell(p, Inc())
                      None() -> unit()
                """)
+    end
+  end
+
+  # F-4. Ten raw ops declared `Effect(Unit)` for BIFs that return real terms, and emit
+  # performs no result coercion — so the value inhabiting `Unit` was in fact the message,
+  # `true`, `ok`, or an integer. The typed wrappers discard the raw result; `cancel_timer`
+  # surfaces it, because the remaining milliseconds are worth having.
+  describe "honest raw result types (F-4)" do
+    test "cancel_timer surfaces the remaining milliseconds as an Option" do
+      assert {:ok, _} =
+               app("  fn go(t: Ref) -> Effect(Option(Int)) =\n    cancel_timer(t)\n")
+    end
+
+    test "the typed wrappers still return Unit — the raw result is discarded" do
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    tell(p, Inc())\n")
+      assert {:ok, _} = app("  fn go(p: Pid(Cmd)) -> Effect(Unit) =\n    link(p)\n")
+
+      assert {:ok, _} =
+               app("  fn go(s: GenServer(Cmd, Int)) -> Effect(Unit) =\n    cast(s, Inc())\n")
     end
   end
 end

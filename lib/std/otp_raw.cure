@@ -91,14 +91,14 @@ mod Std.Otp.Raw
 
   ## Send `msg` to `dest`. Fire-and-forget; the effect is performing the send.
   ## Tag-polymorphic: a raw send to a gen_server is legitimate — it lands in
-  ## `handle_info`.
+  ## `handle_info`. `erlang:send/2` returns the MESSAGE, not `ok`.
   @extern(:erlang, :send, 2)
-  fn raw_send({m: Type}, {r: Type}, {k: Type}, dest: RawPid(m, r, k), msg: m) -> Effect(Unit)
+  fn raw_send({m: Type}, {r: Type}, {k: Type}, dest: RawPid(m, r, k), msg: m) -> Effect(m)
 
   ## Asynchronous `gen_server` cast — no reply. `Server`-only: a plain process does
-  ## not implement the gen_server protocol.
+  ## not implement the gen_server protocol. Returns the atom `ok`.
   @extern(:gen_server, :cast, 2)
-  fn raw_cast({q: Type}, {r: Type}, server: RawPid(q, r, Server), msg: q) -> Effect(Unit)
+  fn raw_cast({q: Type}, {r: Type}, server: RawPid(q, r, Server), msg: q) -> Effect(Atom)
 
   ## Synchronous `gen_server` call — the reply type is where `Std.Otp` threads
   ## the dependent `ReplyOf(req)`; here it is a free (return-polymorphic) result.
@@ -113,31 +113,34 @@ mod Std.Otp.Raw
   ## Stop a generic OTP process. The reason is intentionally polymorphic at
   ## this raw boundary; typed lifecycle wrappers choose the narrower reason
   ## type required by their behavior. `Server`-only, like the rest of the
-  ## gen_server protocol.
+  ## gen_server protocol. Returns the atom `ok`.
   @extern(:gen_server, :stop, 1)
-  fn raw_stop({q: Type}, {r: Type}, pid: RawPid(q, r, Server)) -> Effect(Unit)
+  fn raw_stop({q: Type}, {r: Type}, pid: RawPid(q, r, Server)) -> Effect(Atom)
 
   ## Schedule a message for a process and receive an opaque timer reference.
   @extern(:erlang, :send_after, 3)
   fn raw_send_after({m: Type}, {r: Type}, {k: Type}, delay: Int, pid: RawPid(m, r, k), msg: m) -> Effect(Ref)
 
-  ## Cancel a timer or remove a monitor reference.
+  ## Cancel a timer. `erlang:cancel_timer/1` returns the REMAINING MILLISECONDS, or
+  ## `false` once the timer has already fired or been cancelled. It is not `Unit` and
+  ## never was — the sharpest of the `Effect(Unit)` lies.
   @extern(:erlang, :cancel_timer, 1)
-  fn raw_cancel_timer(ref: Ref) -> Effect(Unit)
+  fn raw_cancel_timer(ref: Ref) -> Effect(Int | Bool)
 
+  ## Remove a monitor. Returns `true`.
   @extern(:erlang, :demonitor, 1)
-  fn raw_demonitor(ref: Ref) -> Effect(Unit)
+  fn raw_demonitor(ref: Ref) -> Effect(Bool)
 
-  ## Link and unlink the current process to a target.
+  ## Link and unlink the current process to a target. Both return `true`.
   @extern(:erlang, :link, 1)
-  fn raw_link({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Unit)
+  fn raw_link({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Bool)
 
   @extern(:erlang, :unlink, 1)
-  fn raw_unlink({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Unit)
+  fn raw_unlink({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Bool)
 
-  ## Send an exit signal and query process liveness.
+  ## Send an exit signal and query process liveness. `erlang:exit/2` returns `true`.
   @extern(:erlang, :exit, 2)
-  fn raw_exit({m: Type}, {r: Type}, {k: Type}, {x: Type}, pid: RawPid(m, r, k), reason: x) -> Effect(Unit)
+  fn raw_exit({m: Type}, {r: Type}, {k: Type}, {x: Type}, pid: RawPid(m, r, k), reason: x) -> Effect(Bool)
 
   @extern(:erlang, :is_process_alive, 1)
   fn raw_is_alive({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Bool)
@@ -151,11 +154,12 @@ mod Std.Otp.Raw
   ## the atom `undefined`. The FFI boundary re-tags the union: `:undefined` by exact
   ## value, the pid by the `is_pid` guard `@erases(:pid)` declares. `Std.Otp.whereis`
   ## turns that into an `Option`.
+  ## Both return `true`.
   @extern(:erlang, :register, 2)
-  fn raw_register({m: Type}, {r: Type}, {k: Type}, name: Atom, pid: RawPid(m, r, k)) -> Effect(Unit)
+  fn raw_register({m: Type}, {r: Type}, {k: Type}, name: Atom, pid: RawPid(m, r, k)) -> Effect(Bool)
 
   @extern(:erlang, :unregister, 1)
-  fn raw_unregister(name: Atom) -> Effect(Unit)
+  fn raw_unregister(name: Atom) -> Effect(Bool)
 
   @extern(:erlang, :whereis, 1)
   fn raw_whereis(name: Atom) -> Effect(BarePid | :undefined)
