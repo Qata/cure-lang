@@ -446,8 +446,17 @@ defmodule Cure.Elab.Declarations do
   #
   # The ARGUMENT direction needs no check: passing a union INTO Erlang hands it an
   # ordinary tagged tuple, which is a perfectly good Erlang term.
+  #
+  # A leading `Effect` is STRIPPED first. `Effect(T)` has no runtime representation — it
+  # erases to `T` exactly (`Emit.lower/3` drops `{:effect_pure, …}`) — so an effectful
+  # extern returning a union hands back the very same untagged value a pure one does, and
+  # takes the very same re-tagging wrapper. Only the HEAD is stripped, so a union buried
+  # inside the effect's payload (`Effect(List(Int | Binary))`) is still rejected below.
   defp check_extern_not_union(sig, env) do
-    codomain = extern_codomain(sig.pi, length(sig.quantities || []))
+    codomain =
+      sig.pi
+      |> extern_codomain(length(sig.quantities || []))
+      |> strip_effect()
 
     case codomain do
       {:data, ukey, [], []} ->
@@ -474,6 +483,12 @@ defmodule Cure.Elab.Declarations do
   defp extern_codomain(type, 0), do: type
   defp extern_codomain({:pi, _g, _dom, cod}, n), do: extern_codomain(cod, n - 1)
   defp extern_codomain(type, _n), do: type
+
+  # `Effect(T)` erases to `T`, so the RESULT SHAPE an FFI boundary sees is `T`'s. One
+  # layer only: `Effect` is not nestable in the surface language.
+  @doc false
+  def strip_effect({:effect_type, t}), do: t
+  def strip_effect(type), do: type
 
   defp check_extern_arity(sig, arity) do
     # PRESENT, not unrestricted. Slice 4a's rename left `== :unrestricted` here, which

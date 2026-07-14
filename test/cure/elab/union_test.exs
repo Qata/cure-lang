@@ -995,4 +995,68 @@ defmodule Cure.Elab.UnionTest do
       assert {:error, {:extern_union_indistinct, :look, _}} = Program.elaborate(src)
     end
   end
+
+  # `Effect(T)` has NO runtime representation — the elaborator injects `{:effect_pure, …}`
+  # and emit lowers it straight back to `T`. So an effectful extern returning a union
+  # erases to exactly the same untagged Erlang value a pure one does, and needs exactly
+  # the same re-tagging wrapper. Rejecting it (`:extern_returns_union`) forced every
+  # honest effectful FFI op — `whereis`, `cancel_timer` — to lie about its result type.
+  describe "@extern returning Effect(<union>)" do
+    test "the union under an Effect is re-tagged, not rejected" do
+      src = """
+      mod EFU1
+        @extern(:erlang, :abs, 1)
+        fn raw(n: Int) -> Effect(Int | Binary)
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+      assert apply(:"Cure.EFU1", :raw, [-5]) == {:"Union<Binary|Int>$Int", 5}
+    end
+
+    test "indistinct members under an Effect are still rejected" do
+      src = """
+      mod EFU2
+        @extern(:erlang, :abs, 1)
+        fn raw(n: Int) -> Effect(Int | Nat)
+      end
+      """
+
+      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+    end
+
+    test "a union NESTED under an Effect (not its head) is still rejected" do
+      src = """
+      mod EFU3
+        @extern(:erlang, :tl, 1)
+        fn raw(xs: List(Int)) -> Effect(List(Int | Binary))
+      end
+      """
+
+      assert {:error, {:extern_returns_union, :raw, _}} = Program.elaborate(src)
+    end
+
+    test "an effectful lookup returning a declared-erasure carrier or a literal" do
+      src = """
+      mod EFU4
+        @erases(:pid)
+        opaque type Handle
+
+        @extern(:erlang, :whereis, 1)
+        fn look(name: Atom) -> Effect(Handle | :undefined)
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      Process.register(self(), :cure_union_effect_probe)
+
+      assert apply(:"Cure.EFU4", :look, [:cure_union_effect_probe]) ==
+               {:"Union<Atom#:undefined|Handle>$Handle", self()}
+
+      assert apply(:"Cure.EFU4", :look, [:cure_union_no_such_name]) ==
+               :"Union<Atom#:undefined|Handle>$Atom#:undefined"
+    end
+  end
+
 end

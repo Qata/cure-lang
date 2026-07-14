@@ -235,8 +235,18 @@ defmodule Cure.Elab.Emit do
 
   # The members of an `@extern`'s union return type, tagged with their constructor names,
   # or nil when it does not return a union. Drives the discriminating wrapper below.
+  #
+  # A leading `Effect` is stripped: it has no runtime representation, so `Effect(A | B)`
+  # arrives from Erlang as exactly the untagged value `A | B` does and needs the same
+  # wrapper. `Declarations.check_extern_not_union/2` strips it the same way, so the two
+  # agree on what the boundary sees.
   defp extern_union_members(env, %{type: pi, quantities: quantities}) do
-    case codomain_of(pi, length(quantities || [])) do
+    codomain =
+      pi
+      |> codomain_of(length(quantities || []))
+      |> Cure.Elab.Declarations.strip_effect()
+
+    case codomain do
       {:data, ukey, [], []} ->
         if Cure.Elab.Union.union_family?(ukey) do
           env
