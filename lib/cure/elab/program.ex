@@ -12,6 +12,36 @@ defmodule Cure.Elab.Program do
   alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, Resolution, TotalityClosure}
   alias Cure.Stdlib.Paths
 
+  # Leaves of `Core.Term` — no subterms, nothing for `global_refs/1` to descend into. See
+  # `global_refs/1` below: it is enumerated rather than wildcarded so that a NEW compound
+  # former cannot be silently mistaken for a leaf and have its globals dropped from the
+  # reachable closure. That has now happened twice here (`:let`, then the `Effect` family).
+  #
+  # `:extern` is not a `Core.Term` former at all — it is the Env body marker for an
+  # `@extern` declaration (`{:extern, {mod, fun, arity}}`), and `global_refs/1` sees it
+  # because it walks EVERY def body, externs included. It holds an MFA, not Core subterms,
+  # so it is a leaf. (Enumerating the leaves is what surfaced it: the wildcard had been
+  # quietly answering for it all along.)
+  defguardp is_leaf(t)
+            when is_tuple(t) and
+                   elem(t, 0) in [
+                     :var,
+                     :meta,
+                     :extern,
+                     :type,
+                     :int_type,
+                     :int_lit,
+                     :nat_lit,
+                     :bounded_lit,
+                     :float_type,
+                     :float_lit,
+                     :binary_type,
+                     :atom_type,
+                     :atom_lit,
+                     :hole,
+                     :absurd
+                   ]
+
   @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
   def elaborate(source) when is_binary(source) do
     Cure.Elab.GuardLint.reset_warnings()
@@ -835,7 +865,32 @@ defmodule Cure.Elab.Program do
   defp global_refs({:let, _g, ty, val, body}),
     do: global_refs(ty) ++ global_refs(val) ++ global_refs(body)
 
-  defp global_refs(_leaf), do: []
+  # …and the same bug, one former over. The `Effect` family carries arbitrary subterms too,
+  # so a global referenced only inside an `effect_bind` — which is what every `let r = <an
+  # effect>` sequencing point lowers to — was equally invisible. Adding the `:let` clause
+  # above fixed an instance; it did not fix the class. Hence the closed catch-all below.
+  defp global_refs({:effect_type, inner}), do: global_refs(inner)
+  defp global_refs({:effect_pure, a}), do: global_refs(a)
+  defp global_refs({:effect_bind, e, k}), do: global_refs(e) ++ global_refs(k)
+
+  # A body-less declaration: `collect_reachable/4` flat-maps `global_refs/1` over
+  # `[d.type, d.body]`, and `d.body` is `nil` for defs that have only a signature. An absent
+  # body references nothing.
+  defp global_refs(nil), do: []
+
+  defp global_refs(leaf) when is_leaf(leaf), do: []
+  defp global_refs(other), do: unrecognised_former!(other, "global_refs/1")
+
+  # FAIL CLOSED. Reporting "no globals in here" for a former we have never been taught about
+  # is not a safe default: it silently shrinks the emitted closure, and the failure surfaces
+  # as a module that calls a function it never defined.
+  @spec unrecognised_former!(term(), String.t()) :: no_return()
+  defp unrecognised_former!(other, fun) do
+    raise ArgumentError,
+          "Cure.Elab.Program.#{fun}: unrecognised Core former #{inspect(other, limit: 3)}. " <>
+            "Every former in Core.Term.t() must be enumerated here — treating a compound " <>
+            "former as a leaf drops every global referenced inside it."
+  end
 
   @doc """
   Does a parsed program/AST use dependent constructs the kernel must check?

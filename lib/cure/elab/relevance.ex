@@ -89,6 +89,33 @@ defmodule Cure.Elab.Relevance do
 
   alias Cure.Core.{Env, Grade, Inductive}
 
+  # The leaves of `Core.Term` — formers with no subterms, so nothing for either walker
+  # below to descend into. Both `walk/4` and `count_level/3` used to end in a wildcard
+  # catch-all that ASSUMED anything unrecognised was one of these. That assumption is
+  # what let `{:effect_bind, …}` — which carries arbitrary subterms — be silently read
+  # as "no usages here" by `count_level`, certifying an un-join that was not safe.
+  # Enumerating the leaves instead means an unknown former reaches the raise below, and
+  # the next former added to `Core.Term` breaks THIS module rather than being counted as
+  # zero. `{:meta, _}` is elaborator-only and genuinely a leaf.
+  defguardp is_leaf(t)
+            when is_tuple(t) and
+                   elem(t, 0) in [
+                     :meta,
+                     :type,
+                     :global,
+                     :int_type,
+                     :int_lit,
+                     :nat_lit,
+                     :bounded_lit,
+                     :float_type,
+                     :float_lit,
+                     :binary_type,
+                     :atom_type,
+                     :atom_lit,
+                     :hole,
+                     :absurd
+                   ]
+
   @type site :: :returned | :present_arg | :scrutinee | :applied
   @type kind :: :param | :lambda | :let | :field
 
@@ -372,7 +399,8 @@ defmodule Cure.Elab.Relevance do
   defp walk({:effect_pure, a}, depth, site, st), do: walk(a, depth, site, st)
   defp walk({:effect_type, t}, depth, site, st), do: walk(t, depth, site, st)
 
-  defp walk(_leaf, _depth, _site, _st), do: {:ok, %{}}
+  defp walk(leaf, _depth, _site, _st) when is_leaf(leaf), do: {:ok, %{}}
+  defp walk(other, _depth, _site, _st), do: unrecognised!(other, "walk/4")
 
   # Recognise the join idiom AND prove it is sound to un-join: the `:let` value is a
   # λ, the body is a `case`, and the let binder (de Bruijn level `depth`) occurs in
@@ -448,7 +476,29 @@ defmodule Cure.Elab.Relevance do
       Enum.sum(Enum.map(brs, fn {_c, ar, b} -> count_level(b, depth + ar, t) end))
   end
 
-  defp count_level(_leaf, _depth, _t), do: 0
+  # Effect formers bind nothing of their own (the continuation's binder lives in the
+  # `:lam` that `effect_bind` carries), so every subterm is counted at the SAME depth.
+  # Omitting these made every occurrence of the join binder inside an effect node count
+  # as zero, which is what authorised an unsafe un-join.
+  defp count_level({:effect_type, inner}, depth, t), do: count_level(inner, depth, t)
+  defp count_level({:effect_pure, a}, depth, t), do: count_level(a, depth, t)
+
+  defp count_level({:effect_bind, e, k}, depth, t),
+    do: count_level(e, depth, t) + count_level(k, depth, t)
+
+  defp count_level(leaf, _depth, _t) when is_leaf(leaf), do: 0
+  defp count_level(other, _depth, _t), do: unrecognised!(other, "count_level/3")
+
+  # FAIL CLOSED. Counting an unknown former as zero occurrences is not conservative: it is
+  # the premise the un-join's soundness argument rests on, so a wrong zero here licenses a
+  # wrong optimisation. Refuse to guess.
+  @spec unrecognised!(term(), String.t()) :: no_return()
+  defp unrecognised!(other, fun) do
+    raise ArgumentError,
+          "Cure.Elab.Relevance.#{fun}: unrecognised Core former #{inspect(other, limit: 3)}. " <>
+            "Every former in Core.Term.t() must be enumerated here — treating a compound " <>
+            "former as a leaf reports zero usages for everything inside it."
+  end
 
   # Un-join: check the shared continuation ONCE (unscaled), then combine it as one
   # alternative with the matched-arm usages. `alt` (agreement) then counts a captured

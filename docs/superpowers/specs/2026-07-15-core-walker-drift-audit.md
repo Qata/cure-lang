@@ -1,9 +1,10 @@
 # Core Walker Drift — Defect Audit
 
-**Status:** COMPLETE (first pass). All 40 audit agents in, synthesis and completeness
-critic folded in, every surviving finding hand-verified. No fix has been attempted and no
-probe has been run.
-**Date:** 2026-07-15
+**Status:** AUDIT COMPLETE · **REMEDIATION COMPLETE** — see **§10**, which is the current
+truth. §4 below is preserved as the audit's *pre-probe* record: two of its severities were
+overturned by probing (§4.7 **up**, §4.4 **down**), and §10 says so. Where §4 and §10
+disagree, §10 wins.
+**Date:** 2026-07-15 (audit) · 2026-07-15 (remediation)
 **Scope:** `lib/cure/elab/*` (E) and `lib/cure/core/*` (K). The non-dependent
 `lib/cure/compiler/{codegen,pattern_compiler}.ex` and `lib/cure/types/*` are out of scope
 and any finding located there is void.
@@ -265,6 +266,7 @@ the term, there is no re-deriver.*
 All hand-verified. Ordered by severity.
 
 ### 4.0 `Subst` skips `effect_pure`/`effect_bind` → **silent miscompilation** · **CRITICAL**
+> **RESOLVED (§10).** Fixed in `lib/cure/elab/subst.ex`; `test/cure/elab/subst_effect_traversal_test.exs` (8) red→green.
 `lib/cure/elab/subst.ex:75` and `:115`
 
 *(This subsumes what was filed as §4.3 in the first draft; the adversarial pass established
@@ -360,6 +362,7 @@ lives in the `lam` it contains), exactly like `:app`.
 ---
 
 ### 4.2 `Subst.shift` launders the grade off a `let`, defeating the only check that reads it · **CRITICAL — soundness**
+> **RESOLVED (§10).** Fixed in `lib/cure/elab/subst.ex`; `test/cure/elab/subst_grade_laundering_test.exs` (5) red→green.
 `lib/cure/elab/subst.ex:93-95` (`shift`) and `:53-55` (`replace`)
 
 **This is the most serious defect in the audit, it was ranked below three other findings in
@@ -465,6 +468,11 @@ consistency and defence in depth — but do not report it as a bug found.
 ---
 
 ### 4.4 TCB · `subst_params` and `replace_branch_vars` fail open inside the kernel  · **HIGH** (severity pending probe)
+> **DOWNGRADED — NOT FIXED (§10.2).** The probe this section demanded was run and it
+> **exonerated the kernel**: both walkers are *fail-safe*, not fail-open-unsound. No red test
+> exists, so under the TCB HARD-STOP rule `kernel.ex` was left untouched. **Do not "fix" this
+> without first reading §10.2** — a naive repair changes kernel behaviour with no failing test
+> to justify it.
 `lib/cure/core/kernel.ex:1244` and `:1561`
 
 ```elixir
@@ -496,6 +504,8 @@ full Antigen suite, and the full gate.
 ---
 
 ### 4.5 `mabs/5` — Miller-pattern abstraction skips `:let` and `Effect`  · **LATENT, not live**
+> **REPAIRED (§10).** Clauses added in `lib/cure/elab/unify.ex`. Latent confirmed: no observable
+> defect, so no test. Its catch-all was deliberately left **open** — see §10.3.
 `lib/cure/elab/unify.ex:269` · catch-all `do: leaf`
 
 The gap is real: `mabs` abstracts pattern variables out of a term when solving `?F(x̄) := t`,
@@ -517,6 +527,7 @@ next to it did not. Flip `mabs`'s catch-all to fail closed and the asymmetry dis
 ---
 
 ### 4.6 `global_refs` — the `:let` reachability bug, reintroduced for `Effect`  · **LOW** (tooling only)
+> **RESOLVED (§10).** Fixed in `lib/cure/elab/program.ex`; `test/cure/elab/reachability_effect_test.exs` (2) red→green.
 `lib/cure/elab/program.ex:838` · catch-all `do: []`
 
 **The most instructive finding in the audit, and — after the critic's reachability check —
@@ -544,6 +555,11 @@ in one walker, and did not sweep. The next former walked straight back into it.
 ---
 
 ### 4.7 `count_level` — the un-join safety gate is blind to `Effect`  · **MEDIUM**
+> **UPGRADED to CONFIRMED SOUNDNESS HOLE, then RESOLVED (§10.1).** This section's own hedge —
+> "the unsound-accept outcome exists but is narrower than implied" — was too generous to the
+> code. A **working exploit** was built: an `:affine` parameter used **twice** and accepted.
+> Fixed in `lib/cure/elab/relevance.ex`; `test/cure/elab/relevance_count_level_effect_test.exs`
+> (3) red→green. This is the most serious defect the audit found, and it was ranked fifth.
 *(Found by two independent lenses. Severity **settled at MEDIUM**, not the HIGH of the first
 draft: the unsound-accept outcome exists but is narrower than "permits too much" implied.)*
 `lib/cure/elab/relevance.ex:451` · catch-all `do: 0`
@@ -576,6 +592,7 @@ that. Real, but narrow.
 ---
 
 ### 4.8 `has_hole?` — a hole inside an effect is invisible  · **LATENT, not live**
+> **RESOLVED (§10).** Fixed in `lib/cure/elab/erase.ex`; `test/cure/elab/erase_has_hole_effect_test.exs` (4) red→green (unit-contract, not surface — see that file's moduledoc).
 `lib/cure/elab/erase.ex:200` · catch-all `do: false`
 
 Handles `:let` (swept) but not the `Effect` family, while its sibling `erase/2` immediately
@@ -601,6 +618,8 @@ them would have been the easy, wrong outcome.*
 ---
 
 ### 4.9 Dead retry on the dotted-qualified call path  · **LOW**
+> **RESOLVED (§10).** Dead branch removed in `lib/cure/elab/elaborator.ex`. The *sibling* retry on the
+> non-lambda path is **load-bearing** and was kept — see §10.3.
 `lib/cure/elab/elaborator.ex:269-288`
 
 A sibling of the dead retry deleted in `a8b4e7e9`, and the same shape: in
@@ -874,3 +893,141 @@ Kept deliberately, with the refuting argument, so nobody "rediscovers" them.
 
 - **`Erase.has_hole?` under-reporting holes** — **REFUTED as live**; retained as latent hygiene.
   See §4.8 for the reachability argument.
+
+---
+
+## 10. Resolution — what was actually done (2026-07-15)
+
+Remediation followed the audit's own recommendation (§6 option 2): **fix the twelve, and make
+the Class C catch-alls fail closed** so former #25 breaks the build instead of the semantics.
+Strict red-green throughout — every fix that had an observable defect got a failing test first.
+
+**Two verdicts in §4 were overturned by probing, in opposite directions.** That is the single
+most important thing on this page:
+
+| § | audit said | probe said | outcome |
+|---|---|---|---|
+| §4.2 | CRITICAL — soundness | confirmed | **FIXED** (`subst.ex`) · 5 tests |
+| §4.0 | CRITICAL — miscompilation | confirmed | **FIXED** (`subst.ex`) · 8 tests |
+| **§4.7** | **MEDIUM**, unsound-accept "narrower than implied" | **CONFIRMED SOUNDNESS HOLE — exploit built** | **FIXED** (`relevance.ex`) · 3 tests |
+| **§4.4** | **HIGH**, TCB, "direction argued not proven" | **fail-SAFE, not fail-open-unsound** | **NOT FIXED — deliberately.** §10.2 |
+| §4.6 | LOW (tooling) | confirmed | **FIXED** (`program.ex`) · 2 tests |
+| §4.8 | LATENT | confirmed latent | **FIXED** (`erase.ex`) · 4 unit-contract tests |
+| §4.9 | LOW (waste) | confirmed, *and* half-refuted | **FIXED** (`elaborator.ex`) · §10.3 |
+| §4.5 | LATENT | confirmed latent | **REPAIRED** (`unify.ex`), no test · §10.3 |
+
+Files changed: `lib/cure/elab/{subst,relevance,program,erase,unify,elaborator}.ex`. **The TCB
+(`lib/cure/core/*`) was not touched.** Gate: **4122/4123**, `136 immune responses (expected)`,
+Antigen shape-coverage `318/318`. The single failure is a pre-existing stale Antigen coverage
+baseline (`Cure.Core.Eval` floor 89 vs 91, `Cure.Core.Normalise` 103 vs 104) in modules this
+work never edited; it was already red at HEAD and was deliberately **not** re-recorded here,
+because doing so inside this commit would launder whoever actually added those clauses.
+
+The coverage matrix in §5 is the **pre-fix** snapshot. It has not been re-derived; read it as
+the diagnosis, not the current state.
+
+### 10.1 §4.7 is the real finding, and the audit under-ranked it
+
+The audit ranked `count_level` **fifth**, MEDIUM, and softened its own claim to "the
+unsound-accept outcome exists but is narrower than implied." That was too kind to the code. The
+exploit is short and it is not contrived:
+
+```cure
+mod CA
+  @extern(:erlang, :display, 1)
+  fn lsink(v :linear Int) -> Effect(Int)
+  type Two = T | F
+  fn f(x: Two, n :affine Int) -> Effect(Int) =
+    let k : (Int) -> Effect(Int) = fn(y) -> lsink(n)
+    match x
+      T() ->
+        let a = k(0)
+        k(0)              # n is consumed TWICE on this path
+      F() -> k(0)
+```
+
+`n` is declared `:affine` — **at most one** use. On the `T` path it is used twice. Before the
+fix this **elaborated clean**. `count_level` met the branch bodies, whose top-level former is
+`{:effect_bind, …}` (that is just what `let r = <effect>; …` elaborates to), returned **`0`
+— "the join binder does not occur here"** — and `join_binder_safe?` therefore authorised the
+un-join, which counts `k`'s captures **once, unscaled** instead of ω-scaled. Two uses were
+counted as zero. After the fix it is
+`{:error, {:usage_violation, %{declared: :affine, kind: :param}}}`.
+
+Three properties of this finding are worth keeping:
+
+- **It is `:affine`, not `:linear`.** The walker under-counts *to zero*, and zero **satisfies**
+  affine (≤1) while **violating** linear (=1) — so at `:linear` the same bug produces a
+  spurious *rejection*, which is safe and therefore invisible. The audit's footnote ² guessed
+  this correctly; the exploit confirms it. Anyone hunting this class must probe at `:affine`.
+- **The pure twin is the control.** The identical program with `Int` in place of `Effect(Int)`
+  was *always* rejected. That isolates the cause to `count_level`'s missing `Effect` clauses and
+  nothing else.
+- **A one-shot control must stay ACCEPTED.** The third test pins a program the un-join is
+  genuinely entitled to optimise. Without it, "disable the un-join" would pass as a fix. The
+  optimisation was **repaired**, not disabled.
+
+### 10.2 §4.4 (TCB) — probed, exonerated, NOT changed
+
+The audit demanded a probe before settling this severity. The probe was run and it went the
+other way: `subst_params` is **fail-safe**.
+
+`unify_one` has no `effect_type` clause *either*, so two `Effect(…)` indices share a head key,
+never produce a rigid clash, and fall through to `:undecided` — and `reduce_index_pairs`
+**drops** `:undecided` pairs (documented sound, `kernel.ex:1246`). The case-checker skips a
+branch body only on `:impossible`. Net effect: the ill-typed branch is still **rejected** and
+the well-typed one still **accepted**. What is lost is index *refinement* — a completeness cost,
+not a soundness one. For `replace_branch_vars` no divergence could be constructed at all: the
+plain-`t` control fails **identically** to the `Effect(t)` case.
+
+So there is **no red test**, and under the standing TCB HARD-STOP rule a kernel edit without a
+failing test is not licensed. `kernel.ex` was left byte-for-byte unchanged. The two walkers are
+still *incomplete*, and a future former may well not enjoy the `:undecided` escape hatch that
+saves this one — but the fix belongs in a reviewed TCB run with an Antigen antibody, not
+smuggled into an E-layer sweep. **Its catch-alls were likewise left open on purpose:** making
+the kernel fail closed is itself a kernel behaviour change.
+
+### 10.3 Two places where "fix everything uniformly" would have been wrong
+
+The sweep was deliberately **not** applied mechanically, and twice the mechanical answer was the
+wrong one:
+
+- **`unify.ex mabs` (§4.5) keeps its OPEN catch-all.** Clauses for `:let` and the `Effect`
+  family were added, but the leaf catch-all was left permissive. `mabs` sits on the unifier's
+  hot path and there is no evidence about the full shape domain that reaches it; a fail-closed
+  raise there converts an unknown-but-currently-harmless shape into a hard crash on a path the
+  audit never characterised. Fail closed where the domain is known; do not fail closed to look
+  consistent.
+
+- **The §4.9 retry is only half dead.** The *lambda* sub-branch called
+  `elaborate_implicit_app_bidirectional/5` and then, on failure, called it **again, identically**
+  — genuinely dead, and removed. The *non-lambda* sub-branch's retry is **load-bearing** and was
+  kept: its first attempt runs a **different algorithm** (`elaborate_global_app`), so the retry
+  is a real fallback, not a repeat. Deleting both — the obvious reading of "remove the dead
+  retry" — would have been a regression.
+
+### 10.4 The fail-closed doctrine paid for itself during the fix
+
+Converting the Class C catch-alls to raise immediately surfaced **two body shapes that reach
+these walkers and appear nowhere in `Core.Term.t()`** — neither of which the audit knew about,
+and both of which the old catch-alls had been silently swallowing:
+
+- **`{:extern, {mod, fun, arity}}`** — the `Env` body marker for an `@extern` declaration. Not a
+  Core former at all, but `global_refs/1` and `has_hole?/1` fold over *every def body*, so they
+  meet it.
+- **`nil`** — the body of a signature-only declaration.
+
+Both are now **explicit clauses** (`:extern` in the leaf guards; `nil` in its own clause,
+deliberately *not* folded into the leaf guard, so that an unknown **former** still raises). The
+doctrine caught, on its first day, exactly the class of thing it exists to catch. Note the
+implication for §5: the coverage matrix enumerates the ten compound formers, but the real domain
+of a body-walker is **wider than `Core.Term.t()`**. Any future generic fold (§6 option 3) must
+account for that.
+
+### 10.5 Still open
+
+- **§6 option 3 (derive the traversals).** Not done. Fail-closed is a tripwire, not a cure: it
+  guarantees former #25 *breaks the build*, it does not guarantee anyone writes the right clause.
+- **The kernel's two walkers (§10.2)** remain incomplete-but-safe. Reach-pin, not a repair.
+- **The stale Antigen coverage baseline** (`Cure.Core.Eval`, `Cure.Core.Normalise`) predates this
+  work and is still red. It belongs to whoever added those clauses.
