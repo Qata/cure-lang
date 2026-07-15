@@ -6,14 +6,16 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
 
   @moduledoc false
 
-  # The MetaAST-conformance tripwire over the whole stdlib corpus.
+  # The MetaAST-conformance tripwire over the whole first-party .cure corpus
+  # (stdlib + examples + oracle probes + fixtures — every committed source).
   #
   # Metastatic's traversal loses a subterm in two ways — a `:bad_shape` tuple it
   # cannot enter, or a `:node_in_meta` subterm parked in a meta value it never
   # walks (see `Cure.MetaAST.Conformance`). The end-state invariant is ZERO of
-  # both. The corpus does not satisfy that yet (~2,600 node_in_meta + ~66
-  # bad_shape), and it cannot be flipped to a hard "zero violations" assertion
-  # without red-lighting the suite before the Option-C refactor exists.
+  # both. The corpus does not satisfy that yet (~7,000 node_in_meta + ~250
+  # bad_shape across the four trees), and it cannot be flipped to a hard "zero
+  # violations" assertion without red-lighting the suite before the Option-C
+  # refactor exists.
   #
   # So this is a SHRINKING ALLOWLIST. `@allowlist` is the set of {kind, tag, key}
   # buckets currently tolerated. The tripwire fails if:
@@ -31,9 +33,13 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
                {:bad_shape, :builtin, nil},
                {:bad_shape, :group, nil},
                {:bad_shape, :named_dom, nil},
+               {:bad_shape, :named_implicit_pat, nil},
+               {:node_in_meta, :bin_segment, :size},
                {:node_in_meta, :container, :decorator},
+               {:node_in_meta, :container, :for_type},
                {:node_in_meta, :function_call, :callee},
                {:node_in_meta, :function_def, :constraints},
+               {:node_in_meta, :function_def, :guards},
                {:node_in_meta, :function_def, :params},
                {:node_in_meta, :function_def, :return_type},
                {:node_in_meta, :implementation, :for_type},
@@ -41,13 +47,28 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
                {:node_in_meta, :indexed_type, :indices},
                {:node_in_meta, :indexed_type, :params},
                {:node_in_meta, :lambda, :params},
+               {:node_in_meta, :lift_module, :declarations},
+               {:node_in_meta, :match_arm, :guard},
                {:node_in_meta, :match_arm, :pattern},
-               {:node_in_meta, :param, :type}
+               {:node_in_meta, :param, :default},
+               {:node_in_meta, :param, :type},
+               {:node_in_meta, :with_rematch_arm, :parent_patterns},
+               {:node_in_meta, :with_rematch_arm, :pattern}
              ])
 
+  # Every committed first-party .cure tree. Detection is structural, so widening
+  # the corpus only ever adds buckets — it never changes how a node is judged.
+  @corpus_globs [
+    "lib/std/*.cure",
+    "examples/**/*.cure",
+    "test/oracle/**/*.cure",
+    "test/fixtures/*.cure"
+  ]
+
   defp corpus_buckets do
-    "lib/std/*.cure"
-    |> Path.wildcard()
+    @corpus_globs
+    |> Enum.flat_map(&Path.wildcard/1)
+    |> Enum.uniq()
     |> Enum.reduce({MapSet.new(), []}, fn file, {buckets, failed} ->
       with {:ok, toks} <- Lexer.tokenize(File.read!(file), emit_events: false),
            {:ok, ast} <- Parser.parse(toks, emit_events: false) do
@@ -58,9 +79,9 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
     end)
   end
 
-  test "every stdlib file parses (a parse failure would silently shrink coverage)" do
+  test "every first-party file parses (a parse failure would silently shrink coverage)" do
     {_buckets, failed} = corpus_buckets()
-    assert failed == [], "stdlib files failed to parse: #{Enum.join(failed, ", ")}"
+    assert failed == [], "files failed to parse: #{Enum.join(failed, ", ")}"
   end
 
   test "no MetaAST-conformance violation outside the allowlist" do
