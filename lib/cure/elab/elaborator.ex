@@ -6668,7 +6668,7 @@ defmodule Cure.Elab.Elaborator do
 
   defp solve_arg({{_name, _type_term}, grade}, {:ok, _mctx, _chosen, []}, _env)
        when grade in [:unrestricted, :linear, :affine],
-    do: {:halt, {:error, :too_few_arguments}}
+       do: {:halt, {:error, :too_few_arguments}}
 
   defp solve_arg(
          {{_name, type_term}, grade},

@@ -160,7 +160,9 @@ defmodule Cure.Elab.GradeSyntaxTest do
     end
 
     test "a global application accepts a linear explicit parameter" do
-      src = "mod Cure.LinearGlobalCall\n  fn sink(value :linear Int) -> Int = value\n  fn use(value: Int) -> Int = sink(value)\nend\n"
+      src =
+        "mod Cure.LinearGlobalCall\n  fn sink(value :linear Int) -> Int = value\n  fn use(value: Int) -> Int = sink(value)\nend\n"
+
       assert {:ok, _} = Compiler.compile_and_load(src, emit_events: false)
     end
   end
