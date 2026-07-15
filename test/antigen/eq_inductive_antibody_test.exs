@@ -59,8 +59,8 @@ defmodule Antigen.EqInductiveAntibodyTest do
   end
 
   # ---- term helpers (closed Core) -------------------------------------------
-  @nat {:data, :Nat, [], []}
-  @bool {:data, :Bool, [], []}
+  @nat {:data, :"Std.Nat#Nat", [], []}
+  @bool {:data, :"Std.Bool#Bool", [], []}
   defp z, do: {:ctor, :Z, []}
   defp s(n), do: {:ctor, :S, [n]}
   defp nat_lit(0), do: z()
@@ -68,7 +68,12 @@ defmodule Antigen.EqInductiveAntibodyTest do
   defp tru, do: {:ctor, :True, []}
   defp fls, do: {:ctor, :False, []}
 
-  defp eq_ty(sig, ty, a, b), do: Eval.eval({:data, :Equivalent, [ty], [a, b]}, Context.env(Context.empty(sig)))
+  defp eq_ty(sig, ty, a, b),
+    do:
+      Eval.eval(
+        {:data, :"Std.Equivalent#Equivalent", [ty], [a, b]},
+        Context.env(Context.empty(sig))
+      )
 
   # ---- SOUNDNESS: refl inhabits Equivalent(ty,x,y) IFF conv?(x,y) --------------------
 
@@ -121,7 +126,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
   # `transport/4` mirrors the elaborator's `transport_case/4` for CLOSED
   # ty/motive/l (de Bruijn shifts of closed terms elided).
   defp transport(proof, ty, motive, l) do
-    scrut_ty = {:data, :Equivalent, [ty], [{:var, 1}, {:var, 0}]}
+    scrut_ty = {:data, :"Std.Equivalent#Equivalent", [ty], [{:var, 1}, {:var, 0}]}
     arrow = {:pi, Cure.Core.Grade.unrestricted(), {:app, motive, {:var, 2}}, {:app, motive, {:var, 2}}}
 
     arrow_motive =
@@ -129,7 +134,9 @@ defmodule Antigen.EqInductiveAntibodyTest do
        {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
 
     {:case, proof, arrow_motive,
-     [{:reflexive, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
+     [
+       {:"Std.Equivalent#reflexive", 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}
+     ]}
   end
 
   test ":case transport over an inductive Equivalent(Nat,Z,S Z) hypothesis lands at motive @ b (not motive @ a)" do
@@ -137,7 +144,8 @@ defmodule Antigen.EqInductiveAntibodyTest do
     ctx = Context.extend(Context.empty(sig), eq_ty(sig, @nat, z(), s(z())))
 
     # Endpoint-distinguishing motive:  λ x:Nat. Equivalent(Nat, x, Z)
-    motive = {:lam, Cure.Core.Grade.unrestricted(), @nat, {:data, :Equivalent, [@nat], [{:var, 0}, z()]}}
+    motive =
+      {:lam, Cure.Core.Grade.unrestricted(), @nat, {:data, :"Std.Equivalent#Equivalent", [@nat], [{:var, 0}, z()]}}
 
     # transport (h : Eq Nat Z (S Z)) : (motive @ Z) -> (motive @ S Z), applied
     # to (refl Z : motive @ Z) — result must be motive @ b, never motive @ a.
@@ -256,7 +264,7 @@ defmodule Antigen.EqInductiveAntibodyTest do
 
       # discharge exactly per the unifier: distinct rigid indices ⇒ :impossible
       assert :impossible ==
-               Kernel.branch_unify(ctx, :Equivalent, :reflexive, [x_val, y_val]),
+               Kernel.branch_unify(ctx, :"Std.Equivalent#Equivalent", :reflexive, [x_val, y_val]),
              "reflexive branch on Equivalent(#{inspect(ty)}, #{inspect(x)}, #{inspect(y)}) " <>
                "must be discharged :impossible (distinct rigid endpoints)"
 
@@ -269,7 +277,8 @@ defmodule Antigen.EqInductiveAntibodyTest do
     # refine exactly per the unifier: convertible endpoints pin the witness
     z_val = Eval.eval(z(), Context.env(ctx))
 
-    assert Kernel.branch_unify(ctx, :Equivalent, :reflexive, [z_val, z_val]) != :impossible,
+    assert Kernel.branch_unify(ctx, :"Std.Equivalent#Equivalent", :reflexive, [z_val, z_val]) !=
+             :impossible,
            "a genuinely reflexive equation's branch must stay live"
   end
 
