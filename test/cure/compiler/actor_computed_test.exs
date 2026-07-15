@@ -45,6 +45,23 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert apply(:"Cure.Generated.Handler", :handle_cast, [:Stop, 4]) == {:noreply, 2}
   end
 
+  test "computed actor handlers retain enclosing declarations without importing macro scope" do
+    source = """
+    mod M
+      use Std.Actor
+
+      fn bump(value: Int) -> Int = value + 1
+
+      actor Cure.Generated.Enclosing state Int derive
+        match message
+          Inc -> bump(state)
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.Enclosing", :handle_cast, [:Inc, 4]) == {:noreply, 5}
+  end
+
   test "actor rejects duplicate handler arms after deriving the message type" do
     source = """
     mod M
