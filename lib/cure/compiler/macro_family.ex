@@ -74,8 +74,7 @@ defmodule Cure.Compiler.MacroFamily do
              module_rule: false,
              progress: nil,
              line: Keyword.get(meta, :line, 0),
-             lexical_imports:
-               Map.get(expands_entry, :lexical_imports, Map.get(accepts_entry, :lexical_imports, []))
+             lexical_imports: Map.get(expands_entry, :lexical_imports, Map.get(accepts_entry, :lexical_imports, []))
            }}
         else
           {:error, {:unknown_syntax_family, accepts_entry.family}}

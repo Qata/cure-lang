@@ -115,12 +115,15 @@ defmodule Cure.Compiler.MacroDefParseTest do
 
   test "a structured macro rejects duplicate family fields" do
     {:ok, tokens} =
-      Lexer.tokenize("""
-      macro Actor
-        syntax family Definition
-          state Type
-          state Type
-      """, emit_events: false)
+      Lexer.tokenize(
+        """
+        macro Actor
+          syntax family Definition
+            state Type
+            state Type
+        """,
+        emit_events: false
+      )
 
     assert {:error, errors} = Parser.parse(tokens, emit_events: false, prelude_macros: false)
 

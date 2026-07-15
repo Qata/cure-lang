@@ -967,9 +967,15 @@ defmodule Cure.Compiler.Parser do
     {fields, state} =
       Enum.map_reduce(family_meta.fields, state, fn field, state ->
         case Map.fetch(values, field.name) do
-          {:ok, value} -> {value, state}
-          :error when field.cardinality == :repeated -> {[], state}
-          :error when field.cardinality == :optional -> {nil, state}
+          {:ok, value} ->
+            {value, state}
+
+          :error when field.cardinality == :repeated ->
+            {[], state}
+
+          :error when field.cardinality == :optional ->
+            {nil, state}
+
           :error ->
             error = {:missing_syntax_family_field, family_meta.family, field.name, field.line, field.col}
             {nil, add_error(state, error)}
