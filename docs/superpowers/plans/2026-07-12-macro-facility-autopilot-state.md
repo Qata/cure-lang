@@ -2130,6 +2130,18 @@ by a later candidate's type error. This preserves source-defined macro
 diagnostics and prevents a generic fallback from masking them with an
 unrelated `foreign_ctor` or `unknown_global` error.
 
+**Reusable family composition status (2026-07-15).** `syntax family` declarations
+now support generic `includes OtherFamily` composition. Included fields are
+flattened into the accepted family's ordinary generated record, preserving each
+field's category and cardinality, while the parser remains unordered and the
+expander receives normal record/Option/List values. Composition is validated at
+the family boundary: unknown includes, inherited duplicate fields, and cycles
+are source diagnostics rather than late expander failures. This is language-level
+grammar reuse; it adds no OTP vocabulary, parser-side string substitution, or
+runtime dispatch. Positive end-to-end coverage proves a user-defined service
+family reuses a common state field, and parser coverage pins all three rejection
+classes.
+
 **Typed declaration builder status (2026-07-15).** `Std.Syntax` now exposes
 record-backed specifications and builders for parameters, linear parameters,
 functions, aliases, lifted modules, and match arms. Macro authors can construct

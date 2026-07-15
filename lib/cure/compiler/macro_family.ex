@@ -8,7 +8,7 @@ defmodule Cure.Compiler.MacroFamily do
   only syntax shape and staging; the expander still owns all domain semantics.
   """
 
-  @type family :: %{kind: :syntax_family, name: String.t(), fields: [map()]}
+  @type family :: map()
 
   @doc """
   Validate a structured macro declaration when both halves of the surface are
@@ -21,6 +21,7 @@ defmodule Cure.Compiler.MacroFamily do
     expanders = Enum.filter(rules, &(&1[:kind] == :expands_with))
 
     with :ok <- validate_families(families),
+         :ok <- validate_family_composition(families),
          :ok <- validate_structured_parts(families, accepts, expanders) do
       :ok
     end
@@ -39,48 +40,54 @@ defmodule Cure.Compiler.MacroFamily do
       {[], [], []} ->
         :none
 
-      {[family], [accepts_entry], [expands_entry]} ->
-        if accepts_entry.family == family.name do
-          leading_segments = Keyword.get(meta, :leading_segments, [])
-          leading_fields = leading_segments |> Enum.flat_map(&hole_names/1) |> Enum.uniq()
-          fields = leading_fields ++ ["definition"]
+      {families, [accepts_entry], [expands_entry]} when families != [] ->
+        case Enum.find(families, &(&1.name == accepts_entry.family)) do
+          nil ->
+            {:error, {:unknown_syntax_family, accepts_entry.family}}
 
-          {:ok,
-           %{
-             kind: :computed,
-             keyword: Keyword.get(meta, :name),
-             segments:
-               leading_segments ++
-                 [
-                   {:family,
-                    %{
-                      name: "definition",
-                      family: family.name,
-                      fields: family.fields,
-                      line: accepts_entry.line
-                    }}
-                 ],
-             syntax_type: syntax_type(Keyword.get(meta, :name)),
-             syntax_fields: fields,
-             syntax_repeated_fields: [],
-             syntax_field_types:
-               Map.put(leading_field_types(leading_segments), "definition", {
-                 :record,
-                 syntax_type(family.name),
-                 family.fields
-               }),
-             syntax_family: family,
-             elab: expands_entry.expander,
-             examples: [],
-             category: nil,
-             contextual: false,
-             module_rule: false,
-             progress: nil,
-             line: Keyword.get(meta, :line, 0),
-             lexical_imports: Map.get(expands_entry, :lexical_imports, Map.get(accepts_entry, :lexical_imports, []))
-           }}
-        else
-          {:error, {:unknown_syntax_family, accepts_entry.family}}
+          family ->
+            with {:ok, family} <- effective_family(family, families) do
+              leading_segments = Keyword.get(meta, :leading_segments, [])
+              leading_fields = leading_segments |> Enum.flat_map(&hole_names/1) |> Enum.uniq()
+              fields = leading_fields ++ ["definition"]
+
+              {:ok,
+               %{
+                 kind: :computed,
+                 keyword: Keyword.get(meta, :name),
+                 segments:
+                   leading_segments ++
+                     [
+                       {:family,
+                        %{
+                          name: "definition",
+                          family: family.name,
+                          fields: family.fields,
+                          line: accepts_entry.line
+                        }}
+                     ],
+                 syntax_type: syntax_type(Keyword.get(meta, :name)),
+                 syntax_fields: fields,
+                 syntax_repeated_fields: [],
+                 syntax_field_types:
+                   Map.put(leading_field_types(leading_segments), "definition", {
+                     :record,
+                     syntax_type(family.name),
+                     family.fields
+                   }),
+                 syntax_family: family,
+                 elab: expands_entry.expander,
+                 examples: [],
+                 category: nil,
+                 contextual: false,
+                 module_rule: false,
+                 progress: nil,
+                 line: Keyword.get(meta, :line, 0),
+                 lexical_imports: Map.get(expands_entry, :lexical_imports, Map.get(accepts_entry, :lexical_imports, []))
+               }}
+            else
+              {:error, reason} -> {:error, reason}
+            end
         end
 
       _ ->
@@ -269,11 +276,77 @@ defmodule Cure.Compiler.MacroFamily do
     end
   end
 
+  defp validate_family_composition(families) do
+    case Enum.find_value(families, fn family ->
+           case effective_family(family, families) do
+             {:ok, _family} -> nil
+             {:error, reason} -> {:error, reason}
+           end
+         end) do
+      nil -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp effective_family(family, families) do
+    family_map = Map.new(families, &{&1.name, &1})
+
+    with {:ok, fields} <- resolve_family_fields(family, family_map, []) do
+      {:ok, Map.put(family, :fields, fields)}
+    end
+  end
+
+  defp resolve_family_fields(family, families, stack) do
+    name = family.name
+
+    if name in stack do
+      {:error, {:syntax_family_cycle, Enum.reverse([name | stack])}}
+    else
+      with {:ok, included_fields} <- resolve_included_fields(family, families, [name | stack]),
+           :ok <- reject_duplicate_fields(included_fields, family.fields, name) do
+        {:ok, included_fields ++ family.fields}
+      end
+    end
+  end
+
+  defp resolve_included_fields(family, families, stack) do
+    family
+    |> Map.get(:includes, [])
+    |> Enum.reduce_while({:ok, []}, fn include, {:ok, fields} ->
+      include_name = include_name(include)
+
+      case Map.get(families, include_name) do
+        nil ->
+          {:halt, {:error, {:unknown_syntax_family, include_name}}}
+
+        included ->
+          case resolve_family_fields(included, families, stack) do
+            {:ok, included_fields} -> {:cont, {:ok, fields ++ included_fields}}
+            {:error, reason} -> {:halt, {:error, reason}}
+          end
+      end
+    end)
+  end
+
+  defp reject_duplicate_fields(included_fields, own_fields, family_name) do
+    duplicates =
+      (included_fields ++ own_fields)
+      |> Enum.map(& &1.name)
+      |> duplicate_values()
+
+    case duplicates do
+      [] -> :ok
+      names -> {:error, {:duplicate_syntax_family_field, Enum.map(names, &{family_name, &1})}}
+    end
+  end
+
+  defp include_name({name, _line, _col}), do: name
+  defp include_name(name), do: name
+
   defp validate_structured_parts([], [], []), do: :ok
 
   defp validate_structured_parts(families, accepts, expanders) do
     cond do
-      length(families) > 1 -> {:error, :multiple_syntax_families}
       families != [] and accepts == [] and expanders != [] -> {:error, :expander_without_accepts}
       accepts != [] and families == [] -> {:error, :accepts_without_syntax_family}
       accepts != [] and expanders == [] -> {:error, :accepts_without_expander}

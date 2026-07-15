@@ -5853,13 +5853,14 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :indent} ->
-        {fields, state} = parse_syntax_family_fields(advance(state), [])
+        {fields, includes, state} = parse_syntax_family_fields(advance(state), [], [])
         state = expect_dedent(state)
 
         {%{
            kind: :syntax_family,
            name: name,
            fields: fields,
+           includes: includes,
            line: family_token.line,
            col: family_token.col
          }, state}
@@ -5870,12 +5871,17 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_syntax_family_fields(state, acc) do
+  defp parse_syntax_family_fields(state, fields, includes) do
     state = skip_macro_trivia(state)
 
     case peek(state) do
       %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(acc), state}
+        {Enum.reverse(fields), Enum.reverse(includes), state}
+
+      %Token{type: :identifier, value: "includes"} = token ->
+        {include, state} = parse_dotted_name(advance(state))
+        state = consume_line_end(state)
+        parse_syntax_family_fields(state, fields, [{include, token.line, token.col} | includes])
 
       %Token{type: :identifier} = token ->
         {cardinality, state} = parse_family_cardinality(state)
@@ -5896,11 +5902,11 @@ defmodule Cure.Compiler.Parser do
           col: token.col
         }
 
-        parse_syntax_family_fields(state, [field_entry | acc])
+        parse_syntax_family_fields(state, [field_entry | fields], includes)
 
       other ->
         state = add_error(state, {:expected, :family_field, :got, other.type, other.line, other.col})
-        parse_syntax_family_fields(advance(state), acc)
+        parse_syntax_family_fields(advance(state), fields, includes)
     end
   end
 

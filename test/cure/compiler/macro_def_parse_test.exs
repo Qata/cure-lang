@@ -113,6 +113,71 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert {:variable, _, "derive_actor"} = expands.expander
   end
 
+  test "a family may include another family" do
+    node =
+      parse!("""
+      macro Service <name: ModuleName>
+        syntax family Common
+          state Type
+        syntax family ServiceDefinition
+          includes Common
+          optional timeout Int
+        accepts ServiceDefinition
+        expands with derive_service
+      """)
+
+    assert {:macro_def, _meta, [common, family, accepts, expands]} = node
+    assert common.name == "Common"
+    assert family.includes == [{"Common", 5, 5}]
+    assert accepts.family == "ServiceDefinition"
+    assert {:variable, _, "derive_service"} = expands.expander
+  end
+
+  test "family composition rejects unknown included families" do
+    {:ok, tokens} =
+      Lexer.tokenize(
+        """
+        macro Bad
+          syntax family Service
+            includes Missing
+            state Type
+          accepts Service
+          expands with build
+        """,
+        emit_events: false
+      )
+
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    assert Enum.any?(errors, fn
+             {:invalid_macro_family, {:unknown_syntax_family, "Missing"}, _, _} -> true
+             _ -> false
+           end)
+  end
+
+  test "family composition rejects cycles" do
+    {:ok, tokens} =
+      Lexer.tokenize(
+        """
+        macro Bad
+          syntax family First
+            includes Second
+          syntax family Second
+            includes First
+          accepts First
+          expands with build
+        """,
+        emit_events: false
+      )
+
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    assert Enum.any?(errors, fn
+             {:invalid_macro_family, {:syntax_family_cycle, ["First", "Second", "First"]}, _, _} -> true
+             _ -> false
+           end)
+  end
+
   test "a structured macro rejects duplicate family fields" do
     {:ok, tokens} =
       Lexer.tokenize(

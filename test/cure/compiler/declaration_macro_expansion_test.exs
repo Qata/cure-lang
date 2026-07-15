@@ -228,6 +228,38 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :result, []) == 9
   end
 
+  test "a structured family can include a reusable family without duplicating fields" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Option
+
+      macro service <name: ModuleName>
+        syntax family CommonDefinition
+          state Type
+
+        syntax family ServiceDefinition
+          includes CommonDefinition
+          optional limit Int
+
+        accepts ServiceDefinition
+        expands with derive_service
+
+      fn derive_service(name: ModuleNameSyntax, definition: ServiceDefinitionSyntax) -> Syntax =
+        match definition.limit
+          None() -> int_literal(0)
+          Some(value) -> int_literal(value)
+
+      fn result() -> Int = service Counter
+        state Int
+        limit 9
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == 9
+  end
+
   test "a primitive literal capture is passed as its semantic Cure value" do
     source = """
     mod M
