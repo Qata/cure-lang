@@ -2192,8 +2192,9 @@ the legacy FSM grammar remains the fallback path.
 a `SupervisorDefinition` family with a typed `children` section. Its
 source-defined expander emits a lifted supervisor with a concrete
 `List(ChildSpec)` initialization contract and the standard closed restart
-strategy. Empty-child initialization is covered end to end, and legacy `sup`
-forms remain available through grammar fallback.
+strategy. Empty-child initialization and recursive expansion of nested
+`child_spec` syntax are covered end to end, and legacy `sup` forms remain
+available through grammar fallback.
 
 **Structured application status (2026-07-15).** `Std.App` now declares an
 `ApplicationDefinition` family with a typed `root` section. Its source-defined

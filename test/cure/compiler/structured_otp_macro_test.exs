@@ -41,6 +41,26 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     assert apply(:"Cure.Generated.StructuredSup", :init, [[]]) == {:ok, {{:one_for_one, 3, 5}, []}}
   end
 
+  test "structured supervisor recursively expands nested child syntax" do
+    source = """
+    mod M
+      use Std.Supervisor
+
+      sup Cure.Generated.NestedSup
+        children [child_spec Cure.Generated.Child :worker]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+
+    assert {:ok, {{:one_for_one, 3, 5}, [child]} } =
+             apply(:"Cure.Generated.NestedSup", :init, [[]])
+
+    assert child ==
+             {:worker, {:"Cure.Generated.Child", :start_link, []}, :permanent, 5000, :worker,
+              [:"Cure.Generated.Child"]}
+  end
+
   test "application accepts the reusable structured family surface" do
     source = """
     mod M
