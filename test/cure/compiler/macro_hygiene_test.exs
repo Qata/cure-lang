@@ -55,4 +55,41 @@ defmodule Cure.Compiler.MacroHygieneTest do
     # and there is no leftover unexpanded marker ANYWHERE in the expanded body
     refute find_fresh(body)
   end
+
+  test "computed hygiene rewrites explicit markers without rewriting reflected input" do
+    generated =
+      {:tuple, [], [
+        {:fresh_name, [], "g"},
+        {:variable, [scope: :local], "g"}
+      ]}
+
+    {hygienic, next_counter} = Parser.freshen_generated(generated)
+
+    assert {:tuple, [], [{:variable, _, "g$0"}, {:variable, _, "g"}]} = hygienic
+    assert next_counter == 1
+  end
+
+  test "a computed syntax builder can request the same hygienic freshening pass" do
+    source = """
+    mod ComputedHygiene
+      use Std.Syntax
+
+      macro AddG
+        syntax addg <value: Code> computed by build
+
+      fn build(input: AddgSyntax) -> Syntax =
+        wrap(input.value)
+
+      fn wrap(value: Syntax) -> Syntax =
+        block([
+          Node(:assignment, [attr_value(:let, syntax_bool(true))], [fresh("g"), integer(100)]),
+          tuple([value, fresh("g")])
+        ])
+
+      fn f(g: Int) -> Tuple(Int, Int) = addg g
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :f, [7]) == {7, 100}
+  end
 end

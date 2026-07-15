@@ -1791,9 +1791,12 @@ inspect their reflected match arms, synthesize one shared nominal message/event
 declaration, and emit direct callback code in an isolated lifted unit. Tests now
 also prove that the generated `ActorMessage` crosses the lifted-unit boundary
 into an enclosing caller's `Pid(ActorMessage)` and `beam_ops tell` call. The
-remaining work is payload-bearing handler derivation with a sound typed payload
-view, plus retirement of the standalone proof exemption once the derived
-transparent operation templates are provable without a use-site context.
+computed-result path now shares the parser's compile-time hygiene protocol:
+explicit generated markers are freshened while reflected use-site syntax is
+left untouched. The remaining work is payload-bearing handler derivation with
+a sound typed payload view, plus retirement of the standalone proof exemption
+once the derived transparent operation templates are provable without a
+use-site context.
 
 **Goal.** Today an `actor` must be handed an explicit `messages <Type>` clause
 (and an `fsm` an `events <Type>`). The std macro should DERIVE the message type
@@ -1876,6 +1879,18 @@ values as an actual Cure list of reflected syntax values. Ordinary fields and
 the reserved context field retain their previous encoding. Coverage includes
 parser metadata, compile-time pattern matching over a repeated field, and
 runtime execution of the resulting function.
+
+**Computed-result hygiene status (2026-07-15).** `Std.Syntax.fresh` is the
+source-level marker for generated binders and references. `MacroExpand` now
+threads a deterministic fresh counter through recursive expansion and invokes
+the parser's existing marker walker on each computed result before ordinary
+elaboration. Computed-result freshening rewrites only explicit `fresh(...)`
+markers, because reflected use-site syntax is interleaved with generated AST
+and must remain outside the generated binding scope. Tier-2 templates retain
+their existing marker-plus-plain-reference behavior because hole substitution
+occurs after template freshening. Tests pin both the direct protocol boundary
+and a compiled computed macro that returns `{caller_value, generated_value}`
+without capture. Quoted syntax remains a hygiene boundary.
 
 **Hardest sub-problem** (not the reflection, not even the reorder): the derived
 message type is a NEW NOMINAL DECLARATION that must exist before the lifted module

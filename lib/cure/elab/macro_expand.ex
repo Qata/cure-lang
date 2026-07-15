@@ -8,7 +8,7 @@ defmodule Cure.Elab.MacroExpand do
   elaborated and kernel-checked by the ordinary declaration path.
   """
 
-  alias Cure.Compiler.MacroSyntax
+  alias Cure.Compiler.{MacroSyntax, Parser}
   alias Cure.Core.{Context, Kernel, Normalise}
   alias Cure.Elab.{Elaborator, TotalityClosure}
 
@@ -35,6 +35,7 @@ defmodule Cure.Elab.MacroExpand do
     state = %{
       expansions: 0,
       nodes: 0,
+      fresh_counter: 0,
       active: MapSet.new(),
       path: [],
       context: Keyword.get(opts, :callback_context),
@@ -71,7 +72,8 @@ defmodule Cure.Elab.MacroExpand do
            meta
            |> Keyword.put(:provenance, expansion_chain(state))
            |> put_expansion_context(state.context),
-         {:ok, expanded} <- execute(meta, elab, input, env),
+         {:ok, expanded, fresh_counter} <- execute(meta, elab, input, env, state.fresh_counter),
+         state = %{state | fresh_counter: fresh_counter},
          {:ok, expanded, state} <- expand_node(expanded, env, state),
          {:ok, state} <- end_expansion(node, state) do
       {:ok, expanded, state}
@@ -181,7 +183,7 @@ defmodule Cure.Elab.MacroExpand do
 
   defp expansion_frame(_), do: %{keyword: nil, line: nil, col: nil}
 
-  defp execute(meta, elab_ast, input_ast, env) do
+  defp execute(meta, elab_ast, input_ast, env, fresh_counter) do
     context = Context.empty(env)
 
     # The elab sees WHERE it was invoked, not just what it was handed: the
@@ -212,8 +214,9 @@ defmodule Cure.Elab.MacroExpand do
     with {:ok, elab_core, _elab_type} <-
            Elaborator.elaborate_expr_typed(elab_ast, [], context, env),
          {:ok, eval_env} <- TotalityClosure.certify_roots(env, global_names(elab_core)),
-         {:ok, result_ast} <- execute_application(Context.empty(eval_env), elab_core, input_cores) do
-      {:ok, result_ast}
+         {:ok, result_ast} <- execute_application(Context.empty(eval_env), elab_core, input_cores),
+         {result_ast, fresh_counter} <- Parser.freshen_generated(result_ast, fresh_counter) do
+      {:ok, result_ast, fresh_counter}
     else
       {:error, reason} -> {:error, {:computed_macro_error, meta, reason}}
       :fuel_exhausted -> {:error, {:computed_macro_error, meta, :normalization_fuel_exhausted}}

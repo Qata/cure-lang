@@ -105,6 +105,14 @@ mod Std.Syntax
   fn variable(name: String) -> Syntax =
     Leaf(:variable, [KV(:scope, SAtom(:local))], SStr(name))
 
+  ## Mark a generated binder or reference for the parser's existing hygienic
+  ## freshening pass. Use the marker at each generated occurrence that should
+  ## share a binding; syntax reflected from the caller remains untouched. The
+  ## marker is compile-time syntax and disappears before ordinary elaboration;
+  ## it is not a runtime name generator.
+  fn fresh(name: String) -> Syntax =
+    Leaf(:fresh_name, [], SStr(name))
+
   fn atom_literal(value: Atom) -> Syntax =
     Leaf(:literal, [KV(:subtype, SAtom(:symbol))], SAtom(value))
 

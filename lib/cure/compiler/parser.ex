@@ -97,6 +97,23 @@ defmodule Cure.Compiler.Parser do
   @type ast :: {atom(), keyword(), term()}
   @type result :: {ast(), t()}
 
+  @doc """
+  Apply the parser's hygiene protocol to AST produced by a computed macro.
+
+  Computed macros use the same `fresh(...)` marker as `becomes` templates, but
+  their result is produced after parsing and therefore cannot pass through the
+  normal template expansion path. This entry point keeps the protocol shared
+  and threads the caller's counter so nested and sibling expansions remain
+  distinct. Only explicit generated markers are rewritten; syntax reflected
+  from the use site remains opaque to the generated name mapping.
+  """
+  @spec freshen_generated(ast(), non_neg_integer()) :: {ast(), non_neg_integer()}
+  def freshen_generated(ast, fresh_counter \\ 0) when is_integer(fresh_counter) and fresh_counter >= 0 do
+    state = %__MODULE__{fresh_counter: fresh_counter}
+    freshen(ast, state, false)
+    |> then(fn {freshened, state} -> {freshened, state.fresh_counter} end)
+  end
+
   # -- Public API ------------------------------------------------------------
 
   @doc """
@@ -772,7 +789,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp expand_template_rule(rule, bindings, state) do
-    {freshened, state} = freshen(rule.template, state)
+    {freshened, state} = freshen(rule.template, state, true)
     expanded = subst_holes(freshened, bindings, state)
     expanded = attach_lexical_imports(expanded, Map.get(rule, :lexical_imports, []))
 
@@ -896,9 +913,10 @@ defmodule Cure.Compiler.Parser do
   defp import_declaration_key(other), do: other
 
   # Mint one deterministic gensym per distinct declared fresh name, then rewrite
-  # markers and plain references of those names. Counter lives in parser state so
-  # gensyms are stable within a build (design §5) and unique across use-sites.
-  defp freshen(template, state) do
+  # markers and, for templates, plain references of those names. Counter lives
+  # in parser state so gensyms are stable within a build (design §5) and unique
+  # across use-sites.
+  defp freshen(template, state, rewrite_plain?) do
     names = collect_fresh_names(template) |> MapSet.to_list() |> Enum.sort()
 
     {rename, state} =
@@ -906,7 +924,7 @@ defmodule Cure.Compiler.Parser do
         {Map.put(m, n, "#{n}$#{s.fresh_counter}"), %{s | fresh_counter: s.fresh_counter + 1}}
       end)
 
-    {apply_freshening(template, rename), state}
+    {apply_freshening(template, rename, rewrite_plain?), state}
   end
 
   defp collect_fresh_names({:fresh_name, _meta, name}), do: MapSet.new([name])
@@ -942,36 +960,46 @@ defmodule Cure.Compiler.Parser do
   # Rewrite: a marker becomes a variable of its gensym; a plain variable whose
   # name is a declared fresh name becomes its gensym; everything else recurses
   # (children AND meta, mirroring subst_holes).
-  defp apply_freshening({:fresh_name, meta, name}, rename),
+  defp apply_freshening({:fresh_name, meta, name}, rename, _rewrite_plain?),
     do: {:variable, meta, Map.get(rename, name, name)}
 
-  defp apply_freshening({:variable, meta, name} = v, rename) do
+  # A quoted syntax value is data, not part of the generated program being
+  # hygienized. Keep its inner representation available to the next macro
+  # stage unchanged, matching MacroExpand's quote boundary.
+  defp apply_freshening({:quoted_syntax, _meta, _children} = quoted, _rename, _rewrite_plain?), do: quoted
+
+  defp apply_freshening({:variable, _meta, _name} = v, _rename, false), do: v
+
+  defp apply_freshening({:variable, meta, name} = v, rename, true) do
     case Map.fetch(rename, name) do
       {:ok, g} -> {:variable, meta, g}
       :error -> v
     end
   end
 
-  defp apply_freshening({t, meta, ch}, rename) when is_list(ch),
-    do: {t, apply_freshening_meta(meta, rename), Enum.map(ch, &apply_freshening(&1, rename))}
+  defp apply_freshening({t, meta, ch}, rename, rewrite_plain?) when is_list(ch),
+    do:
+      {t, apply_freshening_meta(meta, rename, rewrite_plain?),
+       Enum.map(ch, &apply_freshening(&1, rename, rewrite_plain?))}
 
-  defp apply_freshening(other, _rename), do: other
+  defp apply_freshening(other, _rename, _rewrite_plain?), do: other
 
-  defp apply_freshening_meta(meta, rename) when is_list(meta) do
+  defp apply_freshening_meta(meta, rename, rewrite_plain?) when is_list(meta) do
     Enum.map(meta, fn
-      {k, v} -> {k, apply_freshening_value(v, rename)}
+      {k, v} -> {k, apply_freshening_value(v, rename, rewrite_plain?)}
       other -> other
     end)
   end
 
-  defp apply_freshening_meta(meta, _rename), do: meta
+  defp apply_freshening_meta(meta, _rename, _rewrite_plain?), do: meta
 
-  defp apply_freshening_value(v, rename) when is_tuple(v), do: apply_freshening(v, rename)
+  defp apply_freshening_value(v, rename, rewrite_plain?) when is_tuple(v),
+    do: apply_freshening(v, rename, rewrite_plain?)
 
-  defp apply_freshening_value(v, rename) when is_list(v),
-    do: Enum.map(v, &apply_freshening_value(&1, rename))
+  defp apply_freshening_value(v, rename, rewrite_plain?) when is_list(v),
+    do: Enum.map(v, &apply_freshening_value(&1, rename, rewrite_plain?))
 
-  defp apply_freshening_value(v, _rename), do: v
+  defp apply_freshening_value(v, _rename, _rewrite_plain?), do: v
 
   defp subst_holes({:variable, _meta, name} = v, bindings, _state) do
     case Map.fetch(bindings, name) do
