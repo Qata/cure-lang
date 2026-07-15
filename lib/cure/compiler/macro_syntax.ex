@@ -136,10 +136,17 @@ defmodule Cure.Compiler.MacroSyntax do
 
   def with_context(repr, _context), do: repr
 
-  # A node whose semantic meta carries values; drop line/col, keep the rest as
-  # {key, synlit}. Unrepresentable meta values become :s_opaque.
+  # Preserve source coordinates under dedicated mirror keys. They are not
+  # semantic syntax attributes, but carrying them through reflection lets
+  # generated-code diagnostics point back to authored syntax. Other semantic
+  # meta values remain {key, synlit}; unrepresentable values become opaque.
   defp attrs(meta) when is_list(meta) do
-    for {k, v} <- meta, k not in [:line, :col], do: {k, synlit(v)}
+    Enum.flat_map(meta, fn
+      {:line, value} -> [{:source_line, synlit(value)}]
+      {:col, value} -> [{:source_col, synlit(value)}]
+      {key, value} -> [{key, synlit(value)}]
+      _ -> []
+    end)
   end
 
   defp attrs(_), do: []
@@ -189,7 +196,13 @@ defmodule Cure.Compiler.MacroSyntax do
     do: {:macro_failure, name, Enum.map(args, &from_syntax/1)}
 
   defp from_attrs(attrs) do
-    for {k, lit} <- attrs, k not in [:pascal_case, :constructor_key, :variable_name], do: {k, from_synlit(lit)}
+    for {key, lit} <- attrs, key not in [:pascal_case, :constructor_key, :variable_name] do
+      case key do
+        :source_line -> {:line, from_synlit(lit)}
+        :source_col -> {:col, from_synlit(lit)}
+        _ -> {key, from_synlit(lit)}
+      end
+    end
   end
 
   defp from_synlit({:s_int, n}), do: n

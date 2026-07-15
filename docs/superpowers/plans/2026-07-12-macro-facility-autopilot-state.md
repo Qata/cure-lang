@@ -2115,6 +2115,13 @@ representation and add no compiler-owned declaration vocabulary. Semantic
 validation remains in the ordinary Cure elaborator, while malformed reflected
 representations are covered by the final expansion validation boundary.
 
+**Source provenance status (2026-07-15).** Syntax reflection now carries source
+line and column values through dedicated `source_line` and `source_col` mirror
+attributes, reconstructing ordinary parser metadata on the way back out. This
+keeps source coordinates distinct from semantic syntax attributes and gives
+later expansion-aware diagnostics a stable location channel without adding a
+runtime provenance object or changing generated code.
+
 **Raw expansion validation status (2026-07-15).** Raw construction is now
 explicitly separated from executable expansion. Before a computed result is
 converted back to parser AST, `MacroSyntax.validate_expansion/1` rejects raw and
