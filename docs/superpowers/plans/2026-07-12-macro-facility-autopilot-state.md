@@ -2218,13 +2218,14 @@ without an OTP-specific compiler exception, while preserving ordinary legacy
 fallback; the full 68-test transparent-container suite pins this behavior.
 
 **Structured actor status (2026-07-15).** `Std.Actor` now declares an
-`ActorDefinition` family with required `state` and `on_cast` sections and a
-source-defined `actor` expander. The expander uses the existing transparent
-syntax reflection and declaration builders to derive `ActorMessage` and emit
-an ordinary lifted GenServer module. A compiled integration test covers the
-structured surface alongside the legacy actor forms; the remaining actor
-sections and the FSM/supervisor/application family surfaces stay ordered
-follow-up work.
+`ActorDefinition` family with required `state` and `on_cast` sections, an
+optional explicit `messages Type` override, and a source-defined `actor`
+expander. The expander uses the existing transparent syntax reflection and
+declaration builders to derive `ActorMessage` by default, or reuse the
+caller-supplied nominal message type, and emits an ordinary lifted GenServer
+module. A compiled integration test covers both paths alongside the legacy
+actor forms; reply-channel derivation and the remaining callback-context gate
+stay ordered follow-up work.
 
 **Structured FSM status (2026-07-15).** `Std.Fsm` now declares an
 `FsmDefinition` family with required `state` and `events` sections. Its

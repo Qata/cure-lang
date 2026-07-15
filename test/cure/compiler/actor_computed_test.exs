@@ -49,6 +49,30 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert apply(:"Cure.Generated.Structured", :handle_cast, [:Inc, 0]) == {:noreply, 1}
   end
 
+  test "structured actor accepts an explicit message type override" do
+    source = """
+    mod M
+      use Std.Actor
+
+      type Command = Inc | Stop
+
+      actor Cure.Generated.ExplicitMessages
+        state Int
+        messages Command
+        on_cast
+          Inc -> state + 1
+          Stop -> state
+
+    fn make_message() -> Command = Inc
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(module, :make_message, []) == :Inc
+    assert apply(:"Cure.Generated.ExplicitMessages", :handle_cast, [:Inc, 0]) == {:noreply, 1}
+    assert apply(:"Cure.Generated.ExplicitMessages", :handle_cast, [:Stop, 3]) == {:noreply, 3}
+  end
+
   test "structured actor derives a typed call channel from an optional family section" do
     source = """
     mod M
