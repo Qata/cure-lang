@@ -212,7 +212,7 @@ defmodule Cure.Elab.MacroExpand do
             )
 
           direct =
-            if Keyword.get(meta, :direct_inputs, false),
+            if Keyword.get(meta, :direct_inputs, false) or primitive_field_types?(field_types),
               do: direct_input_cores(input_repr, Keyword.get(meta, :syntax_fields, []), field_types),
               else: []
 
@@ -251,6 +251,12 @@ defmodule Cure.Elab.MacroExpand do
   end
 
   defp resolve_field_types(_field_types, _env), do: %{}
+
+  defp primitive_field_types?(field_types) when is_map(field_types) do
+    Enum.any?(field_types, fn {_field, type} -> match?({:primitive, _shape}, type) end)
+  end
+
+  defp primitive_field_types?(_field_types), do: false
 
   defp global_names({:global, name}), do: [name]
   defp global_names({:app, f, a}), do: global_names(f) ++ global_names(a)

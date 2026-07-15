@@ -519,11 +519,15 @@ defmodule Cure.Compiler.Parser do
           syntax_type: Map.get(rule, :syntax_type, macro_syntax_type(keyword)),
           syntax_fields: Map.get(rule, :syntax_fields, macro_syntax_fields(rule.segments)),
           syntax_repeated_fields: Map.get(rule, :syntax_repeated_fields, macro_syntax_repeated_fields(rule.segments)),
-          direct_inputs: Map.get(rule, :direct_inputs, false),
           syntax_field_types: Map.get(rule, :syntax_field_types, %{}),
           line: keyword_token.line,
           col: keyword_token.col
         ]
+
+        meta =
+          if Map.get(rule, :direct_inputs, false),
+            do: Keyword.put(meta, :direct_inputs, true),
+            else: meta
 
         {{:computed_use, put_expansion_context(meta, state.expansion_context), [rule.elab, input]}, state}
 
