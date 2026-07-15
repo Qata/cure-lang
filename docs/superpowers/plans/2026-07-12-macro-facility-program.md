@@ -89,6 +89,65 @@ it. Then `actor`/`fsm` re-expressed (Gate 1) and their bespoke compilers deletab
 **Depends on:** SP2 (+ SP4 for callback-body elaboration). Ties back to the effect
 stack (already landed) — callback bodies are `Effect`-typed.
 
+> **SP5.1–SP5.3 are NON-OPTIONAL prerequisites for SP6.** They were previously
+> carried as deferred/optional enhancements (quasiquote "slice 4"; cross-module
+> import "T9"; auto-hygiene "T7b"). They are promoted here: SP6's *user-defined DSL
+> libraries* cannot be authored ergonomically, distributed across modules, or trusted
+> to be hygienic without them. They are independent of SP5's OTP-container work and of
+> each other, and each ships and gates on its own.
+
+### SP5.1 — Quasiquotation as the primary authoring surface (`quote` / `$( )`)
+**Ships:** a `quote { … }` surface that lifts ordinary Cure syntax to a `Syntax`
+value, with `$(expr)` single-node and `$(xs …)` repeated-group splices; splice
+position/category checking so a mis-spliced hole is a compile error, not malformed
+output. This becomes the DEFAULT authoring surface for `computed by` expanders; the
+`Std.Syntax` typed builders and `Std.Syntax.Raw` drop to the escape hatch they were
+always meant to be.
+**Includes:** reuse of the existing `to_syntax`/`from_syntax` bridge — the quoted body
+round-trips through the same reflected repr, so no second AST model is introduced.
+**Why non-optional:** expanders today build `Syntax` by hand (verbose, error-prone) —
+this was demoted to "optional slice 4." Every macro system people actually author in
+(Template Haskell, Lean 4, Scala 3, Racket) makes quote the default and hand-construction
+the escape hatch. Cure has it backwards; correct it.
+**Gate:** a `derive_actor`-class expander rewritten with `quote`/`$()` produces
+byte-identical Core to the hand-built version; a splice of the wrong syntax category is
+a compile error; full suite green.
+**Depends on:** SP2 (the reflection bridge + typed derived records).
+
+### SP5.2 — Cross-module macro import (formerly deferred T9)
+**Ships:** `use SomeModule` brings that module's `syntax` / `macro` / `syntax family`
+grammars into scope at the USE site, so macros can be published as ordinary library code
+and imported like any other definition.
+**The hard part:** expansion runs at PARSE time but import resolution runs at
+ELABORATION time (`import_source_env` / `module_slice_env`, `program.ex:699/799`) — so an
+imported macro's grammar is not available when the parser needs it. Imported-macro
+grammars require the PARSER to locate and parse imported modules, coupling the parser to
+import resolution. This is the one genuinely new architectural piece.
+**Why non-optional:** without it macros are effectively module-local or std-only — there
+is no macro *ecosystem*, and SP6's "user-defined DSL libraries" cannot be distributed or
+reused. It is a hard prerequisite for SP6, not a convenience.
+**Gate:** a DSL macro defined in module A, `use`d from module B, expands and kernel-checks
+in B; a same-keyword grammar conflict across imports produces a real diagnostic (not a raw
+parser error); full suite green.
+**Depends on:** SP1 (grammar + import scoping) + the elaboration-time import machinery
+(already landed).
+
+### SP5.3 — Scope-set hygiene (formerly deferred T7b)
+**Ships:** replaces the string-gensym hygiene with Flatt's set-of-scopes model
+(uncopyable scope marks), and turns on automatic full hygiene — every template binder is
+renamed with no annotation, and the `<capture>` escape hatch remains for intentional
+capture into caller scope.
+**Closes two characterized correctness holes:** (a) `<fresh e>` silently dropping the arg
+when `e` is also a hole; (b) backtick-gensym spoofing — a use-site `` `g$0` `` defeating
+the string gensym. Both are exploitable-in-principle, not cosmetic.
+**Why non-optional:** the current hygiene is *spoofable*. A macro system whose hygiene can
+be defeated is not sound in the way the rest of the facility is — this is correctness debt
+that must be retired before the facility can be called done.
+**Gate:** red fixtures reproducing both holes now pass; auto-hygiene renames template
+binders with no annotation; `<capture>` still binds into caller scope on demand; full
+suite green.
+**Depends on:** SP1 (the hygiene / `<fresh>` machinery it replaces).
+
 ### SP6 — Tier 5 + the concrete DSL libraries
 **Ships:** module rules + raw holes (§13.1–.2), then the sibling DSL specs
 (`packet`, `board`, `driver`, `protocol`, `parse`, …) as libraries on the finished
