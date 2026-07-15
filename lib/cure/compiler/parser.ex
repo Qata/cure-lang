@@ -730,14 +730,35 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp match_segments(state, [{:optional, group} | rest], bindings, progress) do
-    case match_segments(state, group, bindings, progress) do
-      {:ok, bindings, _group_progress, matched_state} ->
-        match_segments(matched_state, rest, bindings, progress + 1)
+    if optional_group_present?(state, group) do
+      case match_segments(state, group, bindings, progress) do
+        {:ok, bindings, _group_progress, matched_state} ->
+          match_segments(matched_state, rest, bindings, progress + 1)
 
-      {:error, _group_progress, _matched_state} ->
-        match_segments(state, rest, bindings, progress + 1)
+        {:error, _group_progress, _matched_state} ->
+          match_segments(state, rest, bindings, progress + 1)
+      end
+    else
+      match_segments(state, rest, bindings, progress + 1)
     end
   end
+
+  # Do not invoke an expression/raw parser merely to discover that an optional
+  # group is absent. At a structural boundary that parser would record a
+  # spurious error on the enclosing form, even though absence is valid.
+  defp optional_group_present?(state, [{:lit, word} | _]), do: lit_token_matches?(peek(state), word)
+
+  defp optional_group_present?(state, [{kind, _meta} | _]) when kind in [:hole, :raw_hole] do
+    not match?(%Token{type: type} when type in [:newline, :dedent, :eof], peek(state))
+  end
+
+  defp optional_group_present?(state, [{:repeat, segment} | _]),
+    do: optional_group_present?(state, [segment])
+
+  defp optional_group_present?(state, [{:optional, segments} | _]),
+    do: optional_group_present?(state, segments)
+
+  defp optional_group_present?(_state, []), do: false
 
   defp match_repeated_segment(state, {:hole, %{name: name}}, bindings, acc) do
     case peek(state) do
@@ -5635,8 +5656,22 @@ defmodule Cure.Compiler.Parser do
   defp segment_inputs({:hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:repeat, segment}, bindings), do: [segment_inputs(segment, bindings)]
-  defp segment_inputs({:optional, segments}, bindings), do: Enum.flat_map(segments, &segment_inputs(&1, bindings))
+  # Optional groups still occupy a stable reflected-record slot. An absent
+  # optional hole is represented by `nil`, which MacroSyntax reflects as
+  # `Raw(SOpaque)`; dropping the slot would shift every later field left and
+  # make the typed computed input unsound.
+  defp segment_inputs({:optional, segments}, bindings),
+    do: Enum.flat_map(segments, &optional_segment_inputs(&1, bindings))
+
   defp segment_inputs(_segment, _bindings), do: []
+
+  defp optional_segment_inputs({:hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
+  defp optional_segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
+  defp optional_segment_inputs({:repeat, segment}, bindings), do: optional_segment_inputs(segment, bindings)
+  defp optional_segment_inputs({:optional, segments}, bindings),
+    do: Enum.flat_map(segments, &optional_segment_inputs(&1, bindings))
+
+  defp optional_segment_inputs(_segment, _bindings), do: []
 
   # After a syntax rule's template, an OPTIONAL indented block of `example …`
   # lines (self-proving §5). Consumes the nested indent/dedent so the macro-body

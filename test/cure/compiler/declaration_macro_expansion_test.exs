@@ -66,6 +66,48 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :result, []) == 1
   end
 
+  test "absent optional computed holes retain their reflected field slot" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro Optional
+        syntax opt (<value: Code>)? computed by identity
+
+      fn identity(input: OptSyntax) -> Syntax = Leaf(:literal, [KV(:subtype, SAtom(:integer))], SInt(0))
+      fn result() -> Syntax = opt
+    end
+    """
+
+    assert {:ok, ast} = Cure.Compiler.parse_source(source)
+    assert {:ok, [nil]} = find_computed_input(ast)
+  end
+
+  defp find_computed_input({:computed_use, _meta, [_elab, {:macro_input, _input_meta, children}]}),
+    do: {:ok, children}
+
+  defp find_computed_input({:function_def, _meta, body}), do: find_computed_input(body)
+
+  defp find_computed_input({_tag, _meta, children}) when is_list(children) do
+    Enum.find_value(children, :not_found, fn child ->
+      case find_computed_input(child) do
+        :not_found -> nil
+        result -> result
+      end
+    end)
+  end
+
+  defp find_computed_input(list) when is_list(list) do
+    Enum.find_value(list, :not_found, fn child ->
+      case find_computed_input(child) do
+        :not_found -> nil
+        result -> result
+      end
+    end)
+  end
+
+  defp find_computed_input(_other), do: :not_found
+
   defp find_computed_use({:computed_use, _meta, _children}), do: true
   defp find_computed_use({:function_def, _meta, body}), do: find_computed_use(body)
 
