@@ -2088,6 +2088,18 @@ compatibility paths, and no result wrapper survives into generated runtime code.
 The decoder also accepts `Std.Result`'s `Ok(Syntax)` and `Error(Diagnostic)` forms
 as a convenience, without making `Result` part of the macro runtime protocol.
 
+**Beginner-surface triage status (2026-07-15).** The foundation slices selected
+for immediate implementation are semantic literal captures and explicit literal
+lifting, direct-first structured expander arguments, ordinary family records and
+repeated lists, and explicit `MacroResult`/`Std.Result` outcomes. The remaining
+required foundation slices are typed syntax templates with distinct splicing and
+lifting, definition-site hygiene with explicit name-intent operations, named
+typed declaration builders, source provenance, expansion-aware diagnostics, and
+the safe `Std.Syntax` versus advanced `Std.Syntax.Raw` boundary. Editor tooling,
+inline shorthand, aliases, grouping/plural spellings, custom syntax categories,
+syntax-pattern matching, and phase/export conveniences remain parked as later
+work; none is a prerequisite for transparent compiled expansion.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 
