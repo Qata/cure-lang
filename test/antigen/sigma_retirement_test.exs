@@ -16,24 +16,28 @@ defmodule Antigen.SigmaRetirementTest do
   use ExUnit.Case, async: true
   alias Cure.Core.{Builtins, Context, Env, Eval, Inductive, Kernel, Normalise, Validator}
 
-  @nat {:data, :Nat, [], []}
-  @z {:ctor, :Z, []}
-  @sz {:ctor, :S, [@z]}
-  @sigma {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
+  @nat {:data, :"Std.Nat#Nat", [], []}
+  @z {:ctor, :"Std.Nat#Z", []}
+  @sz {:ctor, :"Std.Nat#S", [@z]}
+  @sigma {:data, :"Std.Sigma#Sigma", [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
 
   defp seeded_ctx, do: Context.empty(Builtins.seed(Env.empty()))
 
   test "(a) mk_pair intro checks against the inductive Sigma and projections ι-reduce" do
     ctx = seeded_ctx()
-    assert Inductive.builtin(Context.signature(ctx), :sigma) == :Sigma
+    assert Inductive.builtin(Context.signature(ctx), :sigma) == :"Std.Sigma#Sigma"
 
-    pair = {:ctor, :mk_pair, [@z, @sz]}
+    pair = {:ctor, :"Std.Sigma#mk_pair", [@z, @sz]}
     sigma_value = Eval.eval(@sigma, Context.env(ctx))
     assert :ok = Kernel.check(ctx, pair, sigma_value)
 
     # First/second projections as single-branch case: ι-reduce to the components.
-    fst = {:case, pair, {:lam, Cure.Core.Grade.unrestricted(), @sigma, @nat}, [{:mk_pair, 2, {:var, 1}}]}
-    snd = {:case, pair, {:lam, Cure.Core.Grade.unrestricted(), @sigma, @nat}, [{:mk_pair, 2, {:var, 0}}]}
+    fst =
+      {:case, pair, {:lam, Cure.Core.Grade.unrestricted(), @sigma, @nat}, [{:"Std.Sigma#mk_pair", 2, {:var, 1}}]}
+
+    snd =
+      {:case, pair, {:lam, Cure.Core.Grade.unrestricted(), @sigma, @nat}, [{:"Std.Sigma#mk_pair", 2, {:var, 0}}]}
+
     assert Normalise.nf(ctx, fst) == @z
     assert Normalise.nf(ctx, snd) == @sz
   end

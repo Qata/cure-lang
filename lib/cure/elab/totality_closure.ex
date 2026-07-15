@@ -75,6 +75,43 @@ defmodule Cure.Elab.TotalityClosure do
     end)
   end
 
+  @doc """
+  Re-certify runtime defs that a *declaration-order* deferral left uncertified.
+
+  `Certificate.terminating?/3` deliberately defers (stays uncertified) a def with a
+  still-`{:hole, "__pending__"}` callee, because that callee's onward calls are
+  invisible and the SCC cannot be trusted (mutual-recursion soundness). The per-def
+  `maybe_certify` in `Declarations` runs in declaration order, so a total function
+  that calls a helper declared *below* it — `reverse` → `reverse_acc` — is certified
+  while the helper is still pending and is deferred. `certify_type_level/1` only
+  re-certifies functions reachable from a type position, so a runtime-only total
+  function stays uncertified forever.
+
+  This sweep runs once every body is present. It resubmits every uncertified,
+  non-extern, non-builtin def with a real (non-pending) body to the kernel. It is a
+  no-op for genuinely partial functions: the kernel re-derives the certificate and
+  rejects them exactly as before. No fixpoint is needed — `terminating?/3` reads
+  bodies, not the `certified` set, so a single pass over the complete env is exact.
+  """
+  @spec certify_deferred(Env.t()) :: Env.t()
+  def certify_deferred(%Env{certified: nil} = env), do: env
+
+  def certify_deferred(%Env{defs: defs} = env) do
+    Enum.reduce(defs, env, fn {name, def}, acc ->
+      cond do
+        Env.certified?(acc, name) -> acc
+        match?(%{body: {:hole, _}}, def) -> acc
+        match?(%{body: {:extern, _}}, def) -> acc
+        not is_nil(Map.get(def, :builtin_op)) -> acc
+        true ->
+          case Kernel.validate_certificate(acc, name) do
+            {:ok, acc2} -> acc2
+            {:error, _} -> acc
+          end
+      end
+    end)
+  end
+
   defp extern_def?(env, name), do: match?(%{body: {:extern, _}}, Env.get_def(env, name))
 
   # -- seeds: globals appearing in family/constructor type positions ----------

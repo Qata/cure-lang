@@ -43,6 +43,10 @@ defmodule Antigen.UnifyIndicesAntibodyTest do
   alias Cure.Core.{Kernel, Context, Conv, Quote, Term, Inductive}
   alias Cure.Elab.Program
 
+  # Families/constructors elaborate to owner-qualified identities; `branch_unify`
+  # and `Inductive.get_ctor` must be named canonically or the ctor is not found.
+  defp q(owner, name), do: Cure.Elab.Name.qualify(owner, name)
+
   # ---- fixtures -------------------------------------------------------------
 
   defp elaborate!(src) do
@@ -180,7 +184,7 @@ defmodule Antigen.UnifyIndicesAntibodyTest do
     # resolve chase through 3 intermediate keys.
     scrut = [lvl(0), lvl(1), lvl(1), lvl(2), lvl(2), lvl(3), lvl(3), lvl(0)]
 
-    task = Task.async(fn -> Kernel.branch_unify(ctx, :T8, :c8, scrut) end)
+    task = Task.async(fn -> Kernel.branch_unify(ctx, q("C8", :T8), q("C8", :c8), scrut) end)
     result = Task.yield(task, 5_000) || Task.shutdown(task)
 
     assert {:ok, {:solved, subst}} = result,
@@ -197,7 +201,7 @@ defmodule Antigen.UnifyIndicesAntibodyTest do
     i = lvl(0)
     j = lvl(1)
 
-    assert {:solved, subst} = Kernel.branch_unify(ctx, :T, :c, [i, j, j, i])
+    assert {:solved, subst} = Kernel.branch_unify(ctx, q("C4", :T), q("C4", :c), [i, j, j, i])
     assert acyclic?(subst), "expected acyclic subst, got cycle: #{inspect(subst)}"
 
     outer = subst |> Map.keys() |> Enum.filter(&(&1 >= 2))
@@ -213,7 +217,7 @@ defmodule Antigen.UnifyIndicesAntibodyTest do
     ctx = ctx_with(s, 6)
     scrut = [lvl(0), lvl(1), lvl(1), lvl(2), lvl(2), lvl(0)]
 
-    assert {:solved, subst} = Kernel.branch_unify(ctx, :T6, :c6, scrut)
+    assert {:solved, subst} = Kernel.branch_unify(ctx, q("C6", :T6), q("C6", :c6), scrut)
     assert acyclic?(subst), "expected acyclic subst, got cycle: #{inspect(subst)}"
 
     outer = subst |> Map.keys() |> Enum.filter(&(&1 >= 3))
@@ -231,8 +235,8 @@ defmodule Antigen.UnifyIndicesAntibodyTest do
     ctx = ctx_with(s, 2)
     scrut = [lvl(0), lvl(1)]
 
-    assert {:solved, subst} = Kernel.branch_unify(ctx, :SameLen, :same, scrut)
-    assert_no_collapse(ctx, :same, scrut, subst)
+    assert {:solved, subst} = Kernel.branch_unify(ctx, q("M", :SameLen), q("M", :same), scrut)
+    assert_no_collapse(ctx, q("M", :same), scrut, subst)
   end
 
   test "forced entries are genuine unifiers: T(a,a,b,b) vs T(i,j,j,i)" do
@@ -240,8 +244,8 @@ defmodule Antigen.UnifyIndicesAntibodyTest do
     ctx = ctx_with(s, 2)
     scrut = [lvl(0), lvl(1), lvl(1), lvl(0)]
 
-    assert {:solved, subst} = Kernel.branch_unify(ctx, :T, :c, scrut)
-    assert_no_collapse(ctx, :c, scrut, subst)
+    assert {:solved, subst} = Kernel.branch_unify(ctx, q("C4", :T), q("C4", :c), scrut)
+    assert_no_collapse(ctx, q("C4", :c), scrut, subst)
   end
 
   test "forced entries are genuine unifiers: T6(a,a,b,b,c,c) vs T6(i,j,j,k,k,i)" do
@@ -249,7 +253,7 @@ defmodule Antigen.UnifyIndicesAntibodyTest do
     ctx = ctx_with(s, 6)
     scrut = [lvl(0), lvl(1), lvl(1), lvl(2), lvl(2), lvl(0)]
 
-    assert {:solved, subst} = Kernel.branch_unify(ctx, :T6, :c6, scrut)
-    assert_no_collapse(ctx, :c6, scrut, subst)
+    assert {:solved, subst} = Kernel.branch_unify(ctx, q("C6", :T6), q("C6", :c6), scrut)
+    assert_no_collapse(ctx, q("C6", :c6), scrut, subst)
   end
 end

@@ -35,6 +35,14 @@ defmodule Antigen.CycleRuleAntibodyTest do
   alias Cure.Core.{Kernel, Context, Conv, Env, Eval, Inductive}
   alias Cure.Elab.Program
 
+  # `SameLen`/`same` are declared inside `mod M`, so they elaborate to the
+  # owner-qualified identities `M#SameLen`/`M#same`. `branch_unify` resolves a
+  # bare family name but NOT a bare constructor name, so a bare `:same` finds no
+  # ctor and every branch degrades to a uniform `:impossible` — which would both
+  # violate the soundness pin (reachable branch wrongly discharged) and let the
+  # termination pin pass for the wrong reason. Name them canonically.
+  defp q(owner, name), do: Cure.Elab.Name.qualify(owner, name)
+
   @fuel 1000
   @search_depth 12
 
@@ -99,7 +107,7 @@ defmodule Antigen.CycleRuleAntibodyTest do
     ctx = one_var_ctx(s)
 
     for {label, value, term} <- scenarios() do
-      verdict = Kernel.branch_unify(ctx, :SameLen, :same, [a_lvl(), value])
+      verdict = Kernel.branch_unify(ctx, q("M", :SameLen), q("M", :same), [a_lvl(), value])
       reachable = reachable?(term, s)
 
       if reachable do
@@ -120,7 +128,7 @@ defmodule Antigen.CycleRuleAntibodyTest do
 
     for k <- 1..8 do
       value = Enum.reduce(1..k, a_lvl(), fn _, acc -> {:vctor, :S, [acc]} end)
-      task = Task.async(fn -> Kernel.branch_unify(ctx, :SameLen, :same, [a_lvl(), value]) end)
+      task = Task.async(fn -> Kernel.branch_unify(ctx, q("M", :SameLen), q("M", :same), [a_lvl(), value]) end)
       result = Task.yield(task, 5_000) || Task.shutdown(task)
 
       assert {:ok, :impossible} = result,

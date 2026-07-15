@@ -24,7 +24,7 @@ defmodule Cure.Core.InferCheckCoherenceTest do
 
   test "wrong-endpoint expected rejects with conversion_failure, not ctor_arity" do
     ctx = ctx()
-    wrong = {:vdata, :Equivalent, [{:vint_type}, {:vint, 3}, {:vint, 4}]}
+    wrong = {:vdata, :"Std.Equivalent#Equivalent", [{:vint_type}, {:vint, 3}, {:vint, 4}]}
     assert {:error, {:conversion_failure, _, _}} = Kernel.check(ctx, @spine_refl, wrong)
   end
 
@@ -37,7 +37,7 @@ defmodule Cure.Core.InferCheckCoherenceTest do
 
   test "checking position inside inference: (λ p : Eq(Int,3,3). p)(spine_refl) infers" do
     ctx = ctx()
-    eq_ty = {:data, :Equivalent, [{:int_type}], [{:int_lit, 3}, {:int_lit, 3}]}
+    eq_ty = {:data, :"Std.Equivalent#Equivalent", [{:int_type}], [{:int_lit, 3}, {:int_lit, 3}]}
     term = {:app, {:lam, Cure.Core.Grade.unrestricted(), eq_ty, {:var, 0}}, @spine_refl}
     assert {:ok, _} = Kernel.infer(ctx, term)
   end

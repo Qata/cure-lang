@@ -629,7 +629,7 @@ defmodule Cure.Elab.Elaborator do
       # infer both types the operand against Int and rejects a non-Int operand.
       :bnot ->
         with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
-             term = {:app, {:global, :int_bnot}, o_core},
+             term = {:app, {:global, builtin_op_global(:int_bnot)}, o_core},
              {:ok, type} <- Kernel.infer(ctx, term) do
           {:ok, term, type}
         end
@@ -640,7 +640,7 @@ defmodule Cure.Elab.Elaborator do
       :- ->
         with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
              {:ok, g} <- neg_global(o_type, ctx),
-             term = {:app, {:global, g}, o_core},
+             term = {:app, {:global, builtin_op_global(g)}, o_core},
              {:ok, type} <- Kernel.infer(ctx, term) do
           {:ok, term, type}
         end
@@ -1072,10 +1072,10 @@ defmodule Cure.Elab.Elaborator do
         {:ok, app2(if(op_sym == :==, do: :eq, else: :ne), l, r)}
 
       {:ok, :int} ->
-        {:ok, app2(if(op_sym == :==, do: :int_eq, else: :int_ne), l, r)}
+        {:ok, app2(builtin_op_global(if(op_sym == :==, do: :int_eq, else: :int_ne)), l, r)}
 
       {:ok, :float} ->
-        {:ok, app2(if(op_sym == :==, do: :float_eq, else: :float_ne), l, r)}
+        {:ok, app2(builtin_op_global(if(op_sym == :==, do: :float_eq, else: :float_ne)), l, r)}
 
       # An indexed family (Bounded — Char) erases to a native int but is not a
       # monomorphic twin, so it takes the same polymorphic struct_eq path.
@@ -1093,13 +1093,13 @@ defmodule Cure.Elab.Elaborator do
         case primitive_scrut_kind(l_type, Context.signature(ctx)) do
           {:ok, :int} ->
             case Map.fetch(@int_binop_globals, op) do
-              {:ok, g} -> {:ok, app2(g, l, r)}
+              {:ok, g} -> {:ok, app2(builtin_op_global(g), l, r)}
               :error -> {:error, {:unsupported_operand_type, op_sym}}
             end
 
           {:ok, :float} ->
             case Map.fetch(@float_binop_globals, op) do
-              {:ok, g} -> {:ok, app2(g, l, r)}
+              {:ok, g} -> {:ok, app2(builtin_op_global(g), l, r)}
               :error -> {:error, {:unsupported_operand_type, op_sym}}
             end
 
@@ -1128,7 +1128,7 @@ defmodule Cure.Elab.Elaborator do
     if Unify.has_meta?(ty) do
       {:error, {:unsupported_operand_type, op_sym}}
     else
-      g = if op_sym == :==, do: :struct_eq, else: :struct_ne
+      g = builtin_op_global(if op_sym == :==, do: :struct_eq, else: :struct_ne)
       {:ok, {:app, app2(g, ty, l), r}}
     end
   end
@@ -1146,6 +1146,13 @@ defmodule Cure.Elab.Elaborator do
   # A saturated `f(a)(b)` application of a global by name, most-recently-applied
   # argument outermost — the shape the kernel + emit expect for a curried def.
   defp app2(name, l, r), do: {:app, {:app, {:global, name}, l}, r}
+
+  # The canonical global identity of a kernel builtin op. `Builtins.seed/2`
+  # registers these under `Std.Builtin#<op>` (see `builtin_op_name/1` there), so a
+  # reference must name the same owner — otherwise it only resolves through
+  # `Env.resolve_key`'s base-scan fallback and a raw `env.defs` walk (the trust
+  # ledger's) sees the def as unresolved.
+  defp builtin_op_global(op), do: Cure.Elab.Name.qualify("Std.Builtin", op)
 
   # `.1`/`.2` lower to an application of the Std.Sigma projection global
   # (`sigma_first`/`sigma_second`), with the erased implicits `{a}`/`{b}` solved
@@ -4006,14 +4013,14 @@ defmodule Cure.Elab.Elaborator do
   # readback of the scrutinee type (its type argument is erased at emit).
   defp eq_test_core(:bounded, scrut_term, rhs_core, scrut_type, ctx) do
     ty = Quote.reify(scrut_type, Context.length(ctx), Context.signature(ctx))
-    {:app, app2(:struct_eq, ty, scrut_term), rhs_core}
+    {:app, app2(builtin_op_global(:struct_eq), ty, scrut_term), rhs_core}
   end
 
   defp eq_test_core(prim, scrut_term, rhs_core, _scrut_type, _ctx) do
     eq_global =
       case prim do
-        :int -> :int_eq
-        :float -> :float_eq
+        :int -> builtin_op_global(:int_eq)
+        :float -> builtin_op_global(:float_eq)
         :bool -> :eq
       end
 

@@ -11,11 +11,19 @@ defmodule Cure.Stdlib.SetDependentRunTest do
   `set_dependent_capability_test.exs` guards a self-contained *emit*. This pins
   the actual delegated module's *runtime* behaviour so a regression in the
   cross-module lowering is caught as a wrong answer, not just a type error.
+
+  Emission is ONE BEAM module per Cure owner (`Cure.Std.Set`, `Cure.Std.Map`),
+  exactly as the real compiler lowers a multi-module program — Set's delegating
+  calls (`new`/`remove`/`size`) reach `Std.Map`'s same-named functions as REMOTE
+  calls. Bundling both owners into a single BEAM module is not a real compile
+  target and collides on the shared base names (two `new/0`, `remove/2`, …); the
+  owner-qualified identities that canonicalization now keeps distinct are what
+  make the split faithful.
   """
   use ExUnit.Case, async: true
 
   alias Cure.Compiler.{Lexer, Parser}
-  alias Cure.Elab.{Program, Emit}
+  alias Cure.Elab.{Name, Program, Emit}
 
   setup_all do
     src = File.read!("lib/std/set.cure")
@@ -38,10 +46,21 @@ defmodule Cure.Stdlib.SetDependentRunTest do
         :size
       ])
 
-    {:ok, m} =
-      Emit.compile_and_load(env, module: :"Cure.Test.SetShip", functions: fns, origins: origins)
+    # Emit one BEAM module per owning Cure module. `remote_target` lowers a
+    # cross-owner `{:global, "Std.Map#size"}` to `{Cure.Std.Map, size}`, so the
+    # delegated module must be loaded under that same `Cure.<owner>` name.
+    fns
+    |> Enum.group_by(&Name.owner/1)
+    |> Enum.each(fn {owner, names} ->
+      {:ok, _} =
+        Emit.compile_and_load(env,
+          module: String.to_atom("Cure." <> owner),
+          functions: names,
+          origins: origins
+        )
+    end)
 
-    {:ok, m: m}
+    {:ok, m: :"Cure.Std.Set"}
   end
 
   test "from_list dedups and size counts distinct elements", %{m: m} do

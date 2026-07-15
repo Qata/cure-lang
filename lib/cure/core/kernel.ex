@@ -628,6 +628,15 @@ defmodule Cure.Core.Kernel do
   """
   @spec validate_certificate(Env.t(), atom()) :: {:ok, Env.t()} | {:error, term()}
   def validate_certificate(env, name) do
+    # Canonicalize the lookup name to its def key BEFORE deriving the certificate.
+    # A def's body refers to itself (and its siblings) by owner-qualified key, but a
+    # caller may submit the bare name. `Certificate.terminating?` detects recursion by
+    # matching the submitted name against the `{:global, _}` nodes in the body: a bare
+    # name never matches a qualified self-reference, so an un-canonicalized name makes a
+    # self-looping function look non-recursive and be certified total (unsound). Resolve
+    # once here so recursion detection compares like against like.
+    name = Env.resolve_key(env, env.defs, name)
+
     case Env.get_def(env, name) do
       # Builtin-op def (K2, R4): total by fiat, no body to submit to the
       # termination checker. Type-check the declared type, then certify.

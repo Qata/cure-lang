@@ -25,8 +25,8 @@ defmodule Cure.Core.BoolConnectiveDefeqTest do
     env
   end
 
-  @tt {:ctor, :True, []}
-  @ff {:ctor, :False, []}
+  @tt {:ctor, :"Std.Bool#True", []}
+  @ff {:ctor, :"Std.Bool#False", []}
 
   # A single free Boolean variable `b` at de Bruijn index 0.
   @conv_env [{:vneutral, {:nvar, 0}}]
@@ -95,13 +95,13 @@ defmodule Cure.Core.BoolConnectiveDefeqTest do
     ctx = ctx()
     alias Cure.Core.Normalise
 
-    assert {:ctor, :True, []} =
+    assert {:ctor, :"Std.Bool#True", []} =
              Normalise.nf(ctx, app2(:int_eq, {:int_lit, 4}, {:int_lit, 4}), delta: :certified)
 
-    assert {:ctor, :True, []} =
+    assert {:ctor, :"Std.Bool#True", []} =
              Normalise.nf(ctx, app2(:int_ne, {:int_lit, 4}, {:int_lit, 5}), delta: :certified)
 
-    assert {:ok, {:vdata, :Bool, []}} = Kernel.infer(ctx, app2(:int_eq, {:int_lit, 1}, {:int_lit, 1}))
-    assert {:ok, {:vdata, :Bool, []}} = Kernel.infer(ctx, app2(:int_ne, {:int_lit, 1}, {:int_lit, 2}))
+    assert {:ok, {:vdata, :"Std.Bool#Bool", []}} = Kernel.infer(ctx, app2(:int_eq, {:int_lit, 1}, {:int_lit, 1}))
+    assert {:ok, {:vdata, :"Std.Bool#Bool", []}} = Kernel.infer(ctx, app2(:int_ne, {:int_lit, 1}, {:int_lit, 2}))
   end
 end

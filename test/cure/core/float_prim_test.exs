@@ -34,7 +34,9 @@ defmodule Cure.Core.FloatPrimTest do
   end
 
   test "certified delta folds float comparisons to Bool constructor values" do
-    assert {:ctor, :True, []} =
+    true_ctor = Cure.Elab.Name.qualify("Std.Bool", :True)
+
+    assert {:ctor, ^true_ctor, []} =
              Normalise.nf(ctx(), app2(:float_lt, {:float_lit, 1.0}, {:float_lit, 2.0}), delta: :certified)
   end
 
@@ -54,7 +56,9 @@ defmodule Cure.Core.FloatPrimTest do
     assert {:ok, {:vfloat_type}} = Kernel.infer(ctx, {:float_lit, 1.5})
     assert {:ok, {:vfloat_type}} = Kernel.infer(ctx, app2(:float_add, {:float_lit, 1.0}, {:float_lit, 2.0}))
 
-    assert {:ok, {:vdata, :Bool, []}} =
+    bool_family = Cure.Elab.Name.qualify("Std.Bool", :Bool)
+
+    assert {:ok, {:vdata, ^bool_family, []}} =
              Kernel.infer(ctx, app2(:float_lt, {:float_lit, 1.0}, {:float_lit, 2.0}))
 
     assert {:error, _} = Kernel.infer(ctx, app2(:float_add, {:float_lit, 1.0}, {:int_lit, 2}))

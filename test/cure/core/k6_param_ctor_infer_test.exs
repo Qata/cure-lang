@@ -18,7 +18,7 @@ defmodule Cure.Core.K6ParamCtorInferTest do
     # refl at a=Int, w=3  ->  Equivalent(Int, 3, 3).  Spine = [param a, witness w].
     term = {:ctor, :reflexive, [{:int_type}, {:int_lit, 3}]}
 
-    assert {:ok, {:vdata, :Equivalent, [{:vint_type}, {:vint, 3}, {:vint, 3}]}} =
+    assert {:ok, {:vdata, :"Std.Equivalent#Equivalent", [{:vint_type}, {:vint, 3}, {:vint, 3}]}} =
              Kernel.infer(ctx, term)
   end
 
@@ -26,6 +26,8 @@ defmodule Cure.Core.K6ParamCtorInferTest do
     ctx = Context.empty(Builtins.seed(Env.empty()))
     # Fields-only spine (no param) stays inference-mode-rejected — unchanged.
     term = {:ctor, :reflexive, [{:int_lit, 3}]}
-    assert {:error, {:ctor_requires_checking_mode, :Equivalent}} = Kernel.infer(ctx, term)
+
+    assert {:error, {:ctor_requires_checking_mode, :"Std.Equivalent#Equivalent"}} =
+             Kernel.infer(ctx, term)
   end
 end

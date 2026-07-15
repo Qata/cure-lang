@@ -98,8 +98,8 @@ defmodule Cure.Audit.GoldenTest do
 
   ABSURD (0)
 
-  NOT PROVEN TOTAL (3)   — cannot be used in proofs; not assumptions
-    drop, last, take
+  NOT PROVEN TOTAL (1)   — cannot be used in proofs; not assumptions
+    last
 
   UNRESOLVED (0)   — names a signature mentions that do not exist
 
@@ -111,13 +111,19 @@ defmodule Cure.Audit.GoldenTest do
     assert text == @expected
   end
 
-  test "not-proven-total lists exactly the three value defs, and no axioms" do
+  test "not-proven-total lists only last, and no axioms" do
     {:ok, text} = CLI.run("Std.List", [])
-    [_, tail] = String.split(text, "NOT PROVEN TOTAL (3)", parts: 2)
+    [_, tail] = String.split(text, "NOT PROVEN TOTAL (1)", parts: 2)
     [names, _] = String.split(tail, "\n\n", parts: 2)
 
-    for n <- ~w(last drop take), do: assert(names =~ n)
+    # `last` recurses through a nested case scrutinee (its `[x]` middle clause
+    # forces `[]`/`[_|t]` to compile inside the outer `[h|t']` case); size-change
+    # cannot yet trace the decrease across that nesting, so `last` stays sound-but-
+    # unproven. `drop`/`take` delegate to `*_rest` helpers and ARE proven total.
+    assert names =~ "last"
     refute names =~ "reverse"
+    refute names =~ "drop"
+    refute names =~ "take"
     # length/1 is an extern and struct_eq is a builtin op: neither belongs here.
     refute names =~ "length"
     refute names =~ "struct_eq"

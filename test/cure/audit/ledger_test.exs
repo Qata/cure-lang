@@ -80,7 +80,7 @@ defmodule Cure.Audit.LedgerTest do
     end
     """
 
-    assert audit(opaque).opaque == [:Effect]
+    assert audit(opaque).opaque == [:"Test.Opaque#Effect"]
     assert audit(empty).opaque == []
   end
 
@@ -92,7 +92,7 @@ defmodule Cure.Audit.LedgerTest do
     """
 
     {:ok, env} = Cure.Elab.Program.elaborate(src)
-    assert Ledger.roots(env) == [:f]
+    assert Ledger.roots(env) == [:"Test.Roots#f"]
   end
 
   test "prelude externs are not attributed to the audited module" do

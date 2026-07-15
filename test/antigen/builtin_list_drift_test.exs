@@ -15,7 +15,7 @@ defmodule Antigen.BuiltinListDriftTest do
 
   test "the seeded :list family exists with ctors Nil/0 and Cons/2" do
     seeded = Builtins.seed(Env.empty())
-    assert Inductive.builtin(seeded, :list) == :List
+    assert Inductive.builtin(seeded, :list) == :"Std.List#List"
 
     ctors =
       seeded
@@ -23,7 +23,7 @@ defmodule Antigen.BuiltinListDriftTest do
       |> Enum.map(fn c -> {c.name, length(c.args)} end)
       |> Enum.sort()
 
-    assert ctors == [{:Cons, 2}, {:Nil, 0}]
+    assert ctors == [{:"Std.List#Cons", 2}, {:"Std.List#Nil", 0}]
   end
 
   test "prelude-compiled Std.List family is structurally identical to Builtins.seed's" do
@@ -38,6 +38,6 @@ defmodule Antigen.BuiltinListDriftTest do
   end
 
   test "Inductive.builtin(env, :list) resolves after seeding" do
-    assert Inductive.builtin(Builtins.seed(Env.empty()), :list) == :List
+    assert Inductive.builtin(Builtins.seed(Env.empty()), :list) == :"Std.List#List"
   end
 end

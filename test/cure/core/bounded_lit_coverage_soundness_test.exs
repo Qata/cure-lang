@@ -43,7 +43,7 @@ defmodule Cure.Core.BoundedLitCoverageSoundnessTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Core.{Context, Eval, Inductive, Kernel}
+  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel}
   alias Cure.Elab.Program
 
   @nat {:data, :Nat, [], []}
@@ -57,9 +57,14 @@ defmodule Cure.Core.BoundedLitCoverageSoundnessTest do
   # bounded_to_ctor/1` below produces the genuine production `First`/`Next`
   # shape.
   defp sig do
-    {:ok, base} =
+    {:ok, elaborated} =
       Program.elaborate("mod M\n  use Std.Bounded\n  fn f(x: Bounded(10)) -> Bounded(10) = x\nend\n")
 
+    # Elaborating `mod M` leaves `module_owner: "M"` on the env; declaring the
+    # synthetic `Bx` family on it would owner-qualify its ctors (`M#bx0`), so the
+    # bare `:Bx`/`:bx0` the tests name below would no longer resolve. Strip the
+    # owner first — `Bx` is a hand-rolled stand-in, not a member of any module.
+    base = Env.with_owner(elaborated, nil)
     bounded_fid = Inductive.builtin(base, :bounded)
     bounded10 = {:data, bounded_fid, [], [{:nat_lit, 10}]}
 

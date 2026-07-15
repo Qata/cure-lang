@@ -10,7 +10,7 @@ defmodule Cure.Core.CompactNatTest do
   alias Cure.Core.{Builtins, Env, Kernel, Context, Eval, Conv, Normalise, Serialize, Term, Value}
   alias Cure.Elab.{Elaborator, Declarations}
 
-  @nat {:data, :Nat, [], []}
+  @nat {:data, :"Std.Nat#Nat", [], []}
 
   defp ctx, do: Context.empty(Builtins.seed(Env.empty()))
   defp sig, do: Builtins.seed(Env.empty())

@@ -3,8 +3,8 @@ defmodule Antigen.Assays.ElabSoundnessTest do
   alias Antigen.{Assays.Elab, Challenge}
   alias Cure.Core.{Env, Builtins}
 
-  @bool {:data, :Bool, [], []}
-  @nat {:data, :Nat, [], []}
+  @bool {:data, :"Std.Bool#Bool", [], []}
+  @nat {:data, :"Std.Nat#Nat", [], []}
 
   defp prog(src),
     do:
@@ -124,7 +124,7 @@ defmodule Antigen.Assays.ElabSoundnessTest do
       # def ok_mk : F(Nat) = Mk(Z)   — well typed; infer alone would misreport it.
       env =
         option_env()
-        |> Env.add_def(:ok_mk, {:data, :F, [@nat], []}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+        |> Env.add_def(:ok_mk, {:data, :F, [@nat], []}, {:ctor, :Mk, [{:ctor, :"Std.Nat#Z", []}]})
 
       assert Elab.run(prog("ignored"), kernel_with_env(env)) == :ok
     end
@@ -133,7 +133,7 @@ defmodule Antigen.Assays.ElabSoundnessTest do
       # def bad_mk : F(Bool) = Mk(Z)  — Z:Nat, but F(Bool) expects x:Bool -> reject.
       env =
         option_env()
-        |> Env.add_def(:bad_mk, {:data, :F, [@bool], []}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+        |> Env.add_def(:bad_mk, {:data, :F, [@bool], []}, {:ctor, :Mk, [{:ctor, :"Std.Nat#Z", []}]})
 
       assert {:violation, {:core_ill_typed, :bad_mk, _}} =
                Elab.run(prog("ignored"), kernel_with_env(env))
@@ -165,7 +165,7 @@ defmodule Antigen.Assays.ElabSoundnessTest do
       # def ok_alias : FNatAlias = Mk(Z)  where FNatAlias := F(Nat).
       env =
         aliased_option_env()
-        |> Env.add_def(:ok_alias, {:global, :FNatAlias}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+        |> Env.add_def(:ok_alias, {:global, :FNatAlias}, {:ctor, :Mk, [{:ctor, :"Std.Nat#Z", []}]})
 
       assert Elab.run(prog("ignored"), kernel_with_env(env)) == :ok
     end
@@ -174,7 +174,7 @@ defmodule Antigen.Assays.ElabSoundnessTest do
       # def bad_alias : FBoolAlias = Mk(Z)  where FBoolAlias := F(Bool); Z:Nat ≠ Bool.
       env =
         aliased_option_env()
-        |> Env.add_def(:bad_alias, {:global, :FBoolAlias}, {:ctor, :Mk, [{:ctor, :Z, []}]})
+        |> Env.add_def(:bad_alias, {:global, :FBoolAlias}, {:ctor, :Mk, [{:ctor, :"Std.Nat#Z", []}]})
 
       assert {:violation, {:core_ill_typed, :bad_alias, _}} =
                Elab.run(prog("ignored"), kernel_with_env(env))
@@ -218,8 +218,9 @@ defmodule Antigen.Assays.ElabSoundnessTest do
         |> Env.certify(:loop)
         |> Env.add_def(
           :probe,
-          {:data, :Equivalent, [@nat], [{:global, :loop}, {:ctor, :Z, []}]},
-          {:ctor, :reflexive, [{:ctor, :Z, []}]}
+          {:data, :"Std.Equivalent#Equivalent", [@nat],
+           [{:global, :loop}, {:ctor, :"Std.Nat#Z", []}]},
+          {:ctor, :"Std.Equivalent#reflexive", [{:ctor, :"Std.Nat#Z", []}]}
         )
 
       task = Task.async(fn -> Elab.run(prog("ignored"), kernel_with_env(env)) end)
