@@ -367,6 +367,33 @@ defmodule Cure.Compiler.MacroSyntax do
   @spec from_core(Cure.Core.Term.t()) :: repr() | {:error, term()}
   def from_core(term), do: decode_core(canonicalize_core(term))
 
+  @doc "Decode the source-level MacroResult wrapper, if present."
+  @spec from_core_macro_result(Cure.Core.Term.t()) ::
+          {:expanded, repr()}
+          | {:rejected, [repr()]}
+          | :not_macro_result
+          | {:error, term()}
+  def from_core_macro_result(term) do
+    case canonicalize_core(term) do
+      {:ctor, :"Std.Syntax#Expanded", [syntax]} ->
+        case from_core(syntax) do
+          {:error, _} = error -> error
+          repr -> {:expanded, repr}
+        end
+
+      {:ctor, :"Std.Syntax#Rejected", [diagnostics]} ->
+        with {:ok, diagnostics} <- from_core_list(diagnostics),
+             {:ok, diagnostics} <- map_results(diagnostics, &from_core/1),
+             true <- Enum.all?(diagnostics, &syntax_repr?/1) do
+          {:rejected, diagnostics}
+        else
+          _ -> {:error, :invalid_macro_diagnostics}
+        end
+
+      _ -> :not_macro_result
+    end
+  end
+
   defp decode_core({:ctor, :"Std.Syntax#Node", [{:atom_lit, tag}, attrs, kids]}) do
     with {:ok, attrs} <- from_core_attrs(attrs),
          {:ok, kids} <- from_core_list(kids),

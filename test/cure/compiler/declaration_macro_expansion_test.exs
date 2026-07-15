@@ -133,6 +133,42 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :result, []) == :hello
   end
 
+  test "a computed expander may return an explicit MacroResult" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro log
+        syntax log <level: Atom> computed by build
+
+      fn build(level: Atom) -> MacroResult =
+        expand(Leaf(:literal, [KV(:subtype, SAtom(:symbol))], SAtom(level)))
+
+      fn result() -> Atom = log :hello
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == :hello
+  end
+
+  test "a rejected MacroResult stops compilation before runtime code exists" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro log
+        syntax log <level: Atom> computed by build
+
+      fn build(level: Atom) -> MacroResult = reject(atom_literal(:invalid_level))
+
+      fn result() -> Atom = log :hello
+    end
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "absent optional computed holes retain their reflected field slot" do
     source = """
     mod M

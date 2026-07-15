@@ -37,6 +37,11 @@ mod Std.Syntax
   typealias DeclarationsSyntax = Syntax
   typealias ModuleBodySyntax = Syntax
   typealias TokenSyntax = Syntax
+  typealias Diagnostic = Syntax
+
+  type MacroResult =
+    | Expanded(Syntax)
+    | Rejected(List(Diagnostic))
 
   type Attr = KV(Atom, SynLit)
 
@@ -128,6 +133,12 @@ mod Std.Syntax
 
   fn leaf(name: Atom, values: List(Attr), value: SynLit) -> Syntax =
     Leaf(name, values, value)
+
+  fn expand(value: Syntax) -> MacroResult = Expanded(value)
+
+  fn reject(diagnostic: Diagnostic) -> MacroResult = Rejected([diagnostic])
+
+  fn reject_all(diagnostics: List(Diagnostic)) -> MacroResult = Rejected(diagnostics)
 
   fn attr_value(name: Atom, value: SynLit) -> Attr = KV(name, value)
 

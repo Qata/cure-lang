@@ -2075,6 +2075,13 @@ adds no runtime macro protocol or OTP-specific compiler knowledge.
 direction. These are ordinary syntax constructors with explicit literal
 subtypes; they do not interpret arbitrary strings as identifiers.
 
+**Explicit macro result status (2026-07-15).** Source-defined expanders may now
+return `MacroResult` using `expand`, `reject`, or `reject_all`. `Expanded(Syntax)`
+and `Rejected(List(Diagnostic))` are compile-time wrappers decoded at the same
+Core boundary as direct `Syntax`; rejected diagnostics remain ordinary reflected
+syntax values. Legacy direct-`Syntax` results and `Syntax.Failure` remain valid
+compatibility paths, and no result wrapper survives into generated runtime code.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 

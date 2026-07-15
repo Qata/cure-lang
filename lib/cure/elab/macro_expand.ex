@@ -344,15 +344,27 @@ defmodule Cure.Elab.MacroExpand do
   end
 
   defp decode_result_term(result) do
-    case MacroSyntax.from_core(result) do
+    case MacroSyntax.from_core_macro_result(result) do
+      {:expanded, repr} ->
+        {:ok, MacroSyntax.from_syntax(repr)}
+
+      {:rejected, diagnostics} ->
+        {:error, {:author_diagnostics, Enum.map(diagnostics, &MacroSyntax.from_syntax/1)}}
+
       {:error, reason} ->
         {:error, reason}
 
-      {:syn_failure, name, args} ->
-        {:error, {:author_failure, Atom.to_string(name), Enum.map(args, &MacroSyntax.from_syntax/1)}}
+      :not_macro_result ->
+        case MacroSyntax.from_core(result) do
+          {:error, reason} ->
+            {:error, reason}
 
-      repr ->
-        {:ok, MacroSyntax.from_syntax(repr)}
+          {:syn_failure, name, args} ->
+            {:error, {:author_failure, Atom.to_string(name), Enum.map(args, &MacroSyntax.from_syntax/1)}}
+
+          repr ->
+            {:ok, MacroSyntax.from_syntax(repr)}
+        end
     end
   end
 end
