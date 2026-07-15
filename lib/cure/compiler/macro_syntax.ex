@@ -566,7 +566,8 @@ defmodule Cure.Compiler.MacroSyntax do
           {:error, _} = error -> {:halt, error}
         end
 
-      _pair, :ok -> {:halt, {:error, {:malformed_expansion_map, path}}}
+      _pair, :ok ->
+        {:halt, {:error, {:malformed_expansion_map, path}}}
     end)
   end
 

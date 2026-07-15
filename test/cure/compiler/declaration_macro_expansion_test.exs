@@ -61,18 +61,14 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     """
 
     assert {:error,
-            {:codegen_error,
-             {:computed_macro_error, meta,
-              {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}}}} =
+            {:codegen_error, {:computed_macro_error, meta, {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}}}} =
              Cure.Compiler.compile_and_load(source, emit_events: false)
 
     assert Keyword.get(meta, :keyword) == "bad"
 
     rendered =
       Errors.format_error(
-        {:codegen_error,
-         {:computed_macro_error, meta,
-          {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}}},
+        {:codegen_error, {:computed_macro_error, meta, {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}}},
         "macro.cure"
       )
 

@@ -409,10 +409,14 @@ defmodule Cure.Compiler.Errors do
   end
 
   defp format_generated_syntax_reason({:invalid_generated_syntax, {:raw_syntax_in_expansion, path}}),
-    do: {"invalid macro expansion", "raw syntax is only valid for reflection, not generated Cure code (#{format_syntax_path(path)})"}
+    do:
+      {"invalid macro expansion",
+       "raw syntax is only valid for reflection, not generated Cure code (#{format_syntax_path(path)})"}
 
   defp format_generated_syntax_reason({:invalid_generated_syntax, {:quoted_syntax_in_expansion, path}}),
-    do: {"invalid macro expansion", "quoted syntax must be unquoted before it is emitted as Cure code (#{format_syntax_path(path)})"}
+    do:
+      {"invalid macro expansion",
+       "quoted syntax must be unquoted before it is emitted as Cure code (#{format_syntax_path(path)})"}
 
   defp format_generated_syntax_reason({:invalid_generated_syntax, {reason, path}}),
     do: {"invalid macro expansion", "#{inspect(reason)} (#{format_syntax_path(path)})"}

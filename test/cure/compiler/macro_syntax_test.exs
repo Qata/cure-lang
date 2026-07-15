@@ -112,7 +112,9 @@ defmodule Cure.Compiler.MacroSyntaxTest do
              MacroSyntax.validate_expansion({:syn_raw, {:s_int, 1}})
 
     assert {:error, {:quoted_syntax_in_expansion, [{:child, 0}]}} =
-             MacroSyntax.validate_expansion({:syn_node, :block, [], [{:syn_quoted, {:syn_leaf, :literal, [], {:s_int, 1}}}]})
+             MacroSyntax.validate_expansion(
+               {:syn_node, :block, [], [{:syn_quoted, {:syn_leaf, :literal, [], {:s_int, 1}}}]}
+             )
 
     assert :ok =
              MacroSyntax.validate_expansion({:syn_node, :block, [], [{:syn_leaf, :literal, [], {:s_int, 1}}]})
