@@ -161,6 +161,12 @@ mod Std.Syntax
   fn parameter(name: String, kind: Syntax) -> Syntax =
     Node(:param, [KV(:name, SStr(name)), KV(:type, SSyntax(kind))], [])
 
+  fn parameter_linear(name: String, kind: Syntax) -> Syntax =
+    Node(:param, [KV(:name, SStr(name)), KV(:type, SSyntax(kind)), KV(:grade, SAtom(:linear))], [])
+
+  fn let_binding(name: String, value: Syntax) -> Syntax =
+    Node(:assignment, [KV(:let, SBool(true))], [variable(name), value])
+
   fn parameter_literals(params: List(Syntax)) -> SynLit =
     match params
       [] -> SList([])

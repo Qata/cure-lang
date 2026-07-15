@@ -142,6 +142,11 @@ mod Std.Otp.Raw
   @extern(:gen_server, :call, 2)
   fn raw_call({q: Type}, {r: Type}, server: RawPid(q, r, Server), req: q) -> Effect(r)
 
+  ## Reply explicitly to a `gen_server` caller. The public wrapper gives the
+  ## callback-side `from` value a linear binder before consuming it.
+  @extern(:gen, :reply, 2)
+  fn raw_reply({r: Type}, from :linear Tuple(RawPid(NoMessage, NoMessage, Plain), Ref), value: r) -> Effect(Atom)
+
   ## Establish a monitor on `pid`; the returned `MonitorRef` tags the `DOWN` message.
   @extern(:erlang, :monitor, 2)
   fn raw_monitor({m: Type}, {r: Type}, {k: Type}, kind: Atom, pid: RawPid(m, r, k)) -> Effect(MonitorRef)

@@ -122,11 +122,10 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert module == :"Cure.M"
     assert apply(module, :make_request, []) == :Get
 
-    assert apply(:"Cure.Generated.Call", :handle_call, [:Get, {:from, self()}, 7]) ==
-             {:reply, 7, 7}
-
-    assert apply(:"Cure.Generated.Call", :handle_call, [:Pong, {:from, self()}, 9]) ==
-             {:reply, 9, 9}
+    assert {:ok, pid} = apply(:"Cure.Generated.Call", :start_link, [7])
+    assert :gen_server.call(pid, :Get) == 7
+    assert :gen_server.call(pid, :Pong) == 7
+    :gen_server.stop(pid)
   end
 
   test "actor derives one reply type across an arbitrary number of call arms" do
@@ -150,8 +149,9 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert module == :"Cure.M"
     assert apply(module, :make_request, []) == :Count
 
-    assert apply(:"Cure.Generated.ManyCall", :handle_call, [:Count, {:from, self()}, 12]) ==
-             {:reply, 12, 12}
+    assert {:ok, pid} = apply(:"Cure.Generated.ManyCall", :start_link, [12])
+    assert :gen_server.call(pid, :Count) == 12
+    :gen_server.stop(pid)
   end
 
   test "actor rejects inconsistent reply categories across call arms" do

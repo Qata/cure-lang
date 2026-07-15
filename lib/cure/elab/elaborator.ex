@@ -6666,14 +6666,16 @@ defmodule Cure.Elab.Elaborator do
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], present}}
   end
 
-  defp solve_arg({{_name, _type_term}, :unrestricted}, {:ok, _mctx, _chosen, []}, _env),
+  defp solve_arg({{_name, _type_term}, grade}, {:ok, _mctx, _chosen, []}, _env)
+       when grade in [:unrestricted, :linear, :affine],
     do: {:halt, {:error, :too_few_arguments}}
 
   defp solve_arg(
-         {{_name, type_term}, :unrestricted},
+         {{_name, type_term}, grade},
          {:ok, mctx, chosen, [{arg, arg_type_term} | rest]},
          env
-       ) do
+       )
+       when grade in [:unrestricted, :linear, :affine] do
     expected = Subst.instantiate(type_term, chosen)
 
     case Unify.unify(expected, arg_type_term, mctx, env) do

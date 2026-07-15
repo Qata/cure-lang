@@ -66,6 +66,10 @@ mod Std.Otp
   ## / `Server` tag is a phantom at kind `Type`: no values, no runtime cost.
   typealias GenServer(q, r) = RawPid(q, r, Server)
 
+  ## The callback-side one-shot reply capability supplied by `gen_server`. It
+  ## erases to OTP's `{pid, tag}` tuple but remains linear at Cure call sites.
+  typealias Reply(r) = Tuple(RawPid(NoMessage, NoMessage, Plain), Ref)
+
   ## A process message set. The first algebra floor stores tag and arity
   ## shapes; typed ADT payload derivation is added by the transparent macro
   ## phase once callback syntax is available.
@@ -154,6 +158,12 @@ mod Std.Otp
   ## shim and is deferred (audit §6).
   fn call({q: Type}, {r: Type}, server: GenServer(q, r), request: q) -> Effect(r) =
     raw_call(server, request)
+
+  ## Send one reply through a callback's linear `from` capability. Generated
+  ## actor callbacks use this direct operation and return `noreply`.
+  fn reply({r: Type}, from :linear Reply(r), value: r) -> Effect(Unit) =
+    let answered = raw_reply(from, value)
+    ()
 
   ## Asynchronous `gen_server` cast — a typed fire-and-forget request (no reply).
   ## `gen_server:cast/2` answers the constant atom `ok`; the wrapper discards it.

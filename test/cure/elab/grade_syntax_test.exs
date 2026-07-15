@@ -158,6 +158,11 @@ defmodule Cure.Elab.GradeSyntaxTest do
       src = "mod G\n  fn sink(x :linear Int) -> Int = x\n  fn f(c :linear Int) -> Int = sink(c)\nend\n"
       assert {:ok, _} = Program.elaborate(src)
     end
+
+    test "a global application accepts a linear explicit parameter" do
+      src = "mod Cure.LinearGlobalCall\n  fn sink(value :linear Int) -> Int = value\n  fn use(value: Int) -> Int = sink(value)\nend\n"
+      assert {:ok, _} = Compiler.compile_and_load(src, emit_events: false)
+    end
   end
 
   describe "extern arity counts PRESENT parameters, not unrestricted ones" do

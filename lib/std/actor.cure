@@ -330,7 +330,6 @@ mod Std.Actor
     let message_type: Syntax = enum_type("ActorMessage", message_heads)
     let request_type: Syntax = enum_type("ActorRequest", request_heads)
     let cast_result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
-    let call_result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), reply_type, variable("State")])])
     let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
     let start_type: Syntax = call("Effect", [variable("Tuple")])
     let cast_body: Syntax = actor_handler(input.cast_body)
@@ -345,7 +344,7 @@ mod Std.Actor
         alias_node("Message", variable("ActorMessage")),
         alias_node("Request", variable("ActorRequest")),
         function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), variable("initial")])),
-        function("handle_call", [parameter("request", variable("Request")), parameter("from", variable("Tuple")), parameter("state", variable("State"))], call_result_type, call_body),
+        function("handle_call", [parameter("request", variable("Request")), parameter_linear("from", call("Reply", [reply_type])), parameter("state", variable("State"))], cast_result_type, call_body),
         function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], cast_result_type, cast_body),
         function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], cast_result_type, default_state),
         function("terminate", [parameter("reason", variable("Atom")), parameter("state", variable("State"))], call("Effect", [variable("Atom")]), atom_literal(:ok)),
@@ -371,7 +370,10 @@ mod Std.Actor
     false -> arm
 
   fn actor_call_handler_arm_node(values: List(Attr), children: List(Syntax)) -> Syntax = match children
-    [body] -> Node(:match_arm, values, [block([tuple([atom_literal(:reply), body, variable("state")])])])
+    [body] -> Node(:match_arm, values, [block([
+      let_binding("answered", call("Std.Otp.reply", [variable("from"), body])),
+      tuple([atom_literal(:noreply), variable("state")])
+    ])])
     _ -> Node(:match_arm, values, children)
 
   ## Typed-actor runtime operations: spawn, stop, send, introspect.

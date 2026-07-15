@@ -391,7 +391,8 @@ defmodule Cure.Elab.Emit do
     body_form = lower(env, inner, ctx)
 
     params =
-      for {n, :unrestricted} <- Enum.zip(param_names, qs),
+      for {n, q} <- Enum.zip(param_names, qs),
+          Grade.present?(q),
           do: underscore_if_unused({:var, @line, n}, body_form)
 
     clause = {:clause, @line, params, [], [body_form]}
