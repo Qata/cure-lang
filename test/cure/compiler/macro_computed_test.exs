@@ -59,6 +59,27 @@ defmodule Cure.Compiler.MacroComputedTest do
     assert [{:lit, "call"}, {:hole, %{name: "other", kind: "Code"}}] = segments
   end
 
+  test "computed dispatch tries later rules after an earlier grammar mismatch" do
+    node =
+      parse!("""
+      mod M
+        macro Mk
+          syntax mk first <x: Code> computed by build_first
+          syntax mk second <x: Code> computed by build_second
+        fn f() -> Syntax = mk second 1
+      """)
+
+    find = fn find, n ->
+      case n do
+        {:computed_use, _, [{:variable, _, "build_second"}, _]} -> true
+        {_tag, _meta, children} when is_list(children) -> Enum.any?(children, &find.(find, &1))
+        _ -> false
+      end
+    end
+
+    assert find.(find, node)
+  end
+
   test "a zero-hole computed use is deferred with its elab and synthetic input" do
     node =
       parse!("""
