@@ -205,8 +205,23 @@ defmodule Cure.Compiler.MacroFamily do
 
   defp shape_type("Syntax"), do: "Syntax"
 
-  defp shape_type(shape) when shape in ["Name", "ModuleName", "Type", "Pattern", "Expression", "Statement", "Code", "Cases", "Parameters", "Fields", "Declarations", "ModuleBody", "Token"],
-    do: shape <> "Syntax"
+  defp shape_type(shape)
+       when shape in [
+              "Name",
+              "ModuleName",
+              "Type",
+              "Pattern",
+              "Expression",
+              "Statement",
+              "Code",
+              "Cases",
+              "Parameters",
+              "Fields",
+              "Declarations",
+              "ModuleBody",
+              "Token"
+            ],
+       do: shape <> "Syntax"
 
   defp shape_type(_shape), do: "Syntax"
 
