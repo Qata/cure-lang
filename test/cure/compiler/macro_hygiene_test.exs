@@ -56,6 +56,33 @@ defmodule Cure.Compiler.MacroHygieneTest do
     refute find_fresh(body)
   end
 
+  test "a <fresh> binder sharing a hole's name does not swallow the use-site argument" do
+    # The rule declares BOTH a hole `e` and a template binder `<fresh e>` under the
+    # same name. These are two distinct bindings: the hole carries the use-site
+    # argument, `<fresh e>` is a template-introduced binder. Freshening must gensym
+    # the binder WITHOUT rewriting the plain `e` that is really the hole reference,
+    # otherwise the use-site argument is silently dropped (the substitution never
+    # finds a plain `e` to replace). Set-of-scopes would keep them apart by scope;
+    # here we keep hole material out of the freshening rewrite.
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Shadow\n    syntax shadow <e: Code> becomes let <fresh e> = 100 in e\n  fn f(x: Int) -> Int = shadow x\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:block, _, [assign, tail]} = body
+    {:assignment, _, [{:variable, _, binder}, _]} = assign
+    {:variable, _, tail_name} = tail
+
+    # the <fresh e> binder was gensym'd away from the bare hole name
+    refute binder == "e"
+    # the trailing `e` is the HOLE: it must become the use-site argument `x`,
+    # NOT the freshened binder and NOT dropped.
+    assert tail_name == "x"
+    # and no unexpanded marker survives anywhere
+    refute find_fresh(body)
+  end
+
   test "computed hygiene rewrites explicit markers without rewriting reflected input" do
     generated =
       {:tuple, [],
