@@ -516,9 +516,9 @@ defmodule Cure.Compiler.Parser do
 
         meta = [
           keyword: keyword,
-          syntax_type: macro_syntax_type(keyword),
-          syntax_fields: macro_syntax_fields(rule.segments),
-          syntax_repeated_fields: macro_syntax_repeated_fields(rule.segments),
+          syntax_type: Map.get(rule, :syntax_type, macro_syntax_type(keyword)),
+          syntax_fields: Map.get(rule, :syntax_fields, macro_syntax_fields(rule.segments)),
+          syntax_repeated_fields: Map.get(rule, :syntax_repeated_fields, macro_syntax_repeated_fields(rule.segments)),
           syntax_field_types: Map.get(rule, :syntax_field_types, %{}),
           line: keyword_token.line,
           col: keyword_token.col
@@ -739,16 +739,24 @@ defmodule Cure.Compiler.Parser do
   # The enclosing dedent remains in the token stream for the surrounding
   # declaration parser.
   defp match_segments(state, [{:family, family_meta} | rest], bindings, progress) do
-    {captured, state} = capture_family_body(state)
-    {family_value, family_state} = parse_family_body(captured, family_meta, state)
+    family_state = skip_newlines(state)
 
-    state = %{
-      state
-      | errors: state.errors ++ family_state.errors,
-        fresh_counter: family_state.fresh_counter
-    }
+    case peek(family_state) do
+      %Token{type: :indent} ->
+        {captured, state} = capture_family_body(state)
+        {family_value, parsed_state} = parse_family_body(captured, family_meta, state)
 
-    match_segments(state, rest, Map.put(bindings, family_meta.name, family_value), progress + 1)
+        state = %{
+          state
+          | errors: state.errors ++ parsed_state.errors,
+            fresh_counter: parsed_state.fresh_counter
+        }
+
+        match_segments(state, rest, Map.put(bindings, family_meta.name, family_value), progress + 1)
+
+      _ ->
+        {:error, progress, state}
+    end
   end
 
   # Raw holes are the reader-tier escape hatch: capture the token span without

@@ -66,7 +66,7 @@ defmodule Cure.Compiler.MacroFamily do
                           line: accepts_entry.line
                         }}
                      ],
-                 syntax_type: syntax_type(Keyword.get(meta, :name)),
+                 syntax_type: syntax_type("#{family.name}Input"),
                  syntax_fields: fields,
                  syntax_repeated_fields: [],
                  syntax_field_types:

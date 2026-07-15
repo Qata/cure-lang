@@ -118,18 +118,18 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
       use Std.Syntax
       use Std.Option
 
-      macro actor <name: ModuleName>
+      macro custom_actor <name: ModuleName>
         syntax family ActorDefinition
           state Type
           optional initial Expression
         accepts ActorDefinition
         expands with derive_actor
 
-      fn derive_actor(input: ActorSyntax) -> Syntax = match input.definition.initial
+      fn derive_actor(input: ActorDefinitionInputSyntax) -> Syntax = match input.definition.initial
         None() -> int_literal(0)
         Some(value) -> value
 
-      fn result() -> Int = actor Counter
+      fn result() -> Int = custom_actor Counter
         state Int
         initial 7
     end
