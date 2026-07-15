@@ -173,16 +173,82 @@ this, the internal AST simply *is* conformant: stock Metastatic, the Cure
 wrapper, external consumers, and any future tool all work uniformly, with no
 adapter and no discipline to remember.
 
-This is where an **Elixir source rewriter earns its keep** — and only here.
-Details in §6. In short:
+**The invariant this establishes.** The target is *not* empty meta. Meta
+legitimately holds non-structural scalars — names, line/col, scope, visibility,
+arity, and (as QTT lands) grades and erasure/implicit flags. The rule is narrower
+and exact:
+
+> **No canonical node may appear inside a meta value.** Every subterm lives in
+> children; scalar annotations stay in meta.
+
+This is exactly the predicate the extended conformance detector enforces (§6):
+green iff the invariant holds. It is also a convention Cure *already follows* in
+places — `pattern_match` is `{:pattern_match, [line:, col:], [scrutinee, arm1,
+…]}`, meta scalars only, every subterm in children. The refactor brings the
+stragglers into line with a node that is already right.
+
+Why dependent typing makes this the correct direction (rather than a reason to
+change Metastatic): the meta/children split is the standard annotations-vs-
+structure division every homogeneous AST uses (Elixir's `{form, meta, args}`,
+unist, estree). The dividing line is *"is this a subterm?"* — and in a dependent
+language **types are terms** (`Vec n a` mentions the value `n`), so a type
+annotation is unambiguously a subterm and belongs in children. Cure filed terms
+under metadata; that is a category error dependent typing makes sharper, not
+murkier.
+
+**Concrete before/after** (the three largest offenders):
+
+```
+# current — subterm mis-filed as metadata
+param        = {:param,        [type: T], "x"}
+function_def = {:function_def, [return_type: T, name: "f", params: [P1,P2],
+                                visibility:, arity:, line:, col:], [body]}
+match_arm    = {:match_arm,    [pattern: Pat], [body]}
+
+# target — subterms in children, scalars stay in meta
+param        = {:param,        [name: "x", line:, col:], [ {:param_type, m, [T]} ]}
+function_def = {:function_def, [name: "f", visibility:, arity:, line:, col:],
+                 [ {:params, m, [P1, P2]}, {:return_type, m, [T]},
+                   {:constraints, m, [...]}, {:body, m, [e]} ]}
+match_arm    = {:match_arm,    [line:, col:], [ {:pattern, m, [Pat]}, {:body, m, [e]} ]}
+```
+
+### C's sub-fork: how named roles are represented in children — **C2 chosen**
+
+Metastatic's children is a flat positional list, so a node's named roles (params
+vs. return-type vs. body) are not first-class. Three shapes resolve this:
+
+- **C1 — positional children.** Roles by position/convention. Leanest, most
+  fragile; every consumer memorizes positions.
+- **C2 — wrapper-node children (CHOSEN).** Each role becomes a typed child node
+  whose tag names the role (`{:return_type, m, [T]}`, `{:params, m, […]}`). Fully
+  conformant to *today's* Metastatic, self-describing, drift-proof. Cost:
+  verbosity and "scan children for the role" access, both absorbed by thin
+  Cure-side accessors (`Cure.MetaAST.child(node, :return_type)`). It emits the
+  *same* wrapper shape Option B produces, so B and C converge (B is C applied at
+  the boundary), and it extends the already-correct `pattern_match`.
+- **C3 — labeled children inside Metastatic.** Teach traversal that children may
+  be a keyword list of named sub-nodes it walks. Best ergonomics (keyed access +
+  traversal), but changes the shared substrate's traversal contract and every
+  consumer assuming children-is-a-list. The literal "Metastatic conforms to us"
+  option; rejected here because it destabilizes the shared substrate for a gain
+  (lean nodes + keyed access) that Cure-side accessors recover under C2.
+
+**Decision:** C2. If Metastatic ever gains consumers beyond Cure, C2 is
+decisively right (their children-is-a-list assumption is preserved). Even
+treating Metastatic as Cure's private substrate, C2 keeps the trusted traversal
+contract stable and pushes the only real cost (role access) into a trivial
+accessor — the better place for it than Metastatic's core.
+
+**The rewriter, with C2 fixed.** Details in §6. In short:
 
 - **Construction sites** (parser, a handful of builders) are few, localized, and
-  deterministic — a Sourceror-based rewrite transforms them safely.
-- **Read sites** (~55) are the hard part: a purely syntactic rewriter cannot
-  always know that a given `meta[:type]` belongs to a `param` (it lacks the
-  runtime node type), so it cannot blindly rewrite them. Read-site migration is
-  therefore rewriter-*assisted* (transform the unambiguous patterns) plus
-  grep-guided manual work, with the **behavioral test suite** catching stale
+  deterministic — a Sourceror-based rewrite emits the wrapper-child shape safely.
+- **Read sites** are the hard part: a purely syntactic rewriter cannot always
+  know that a given `meta[:type]` belongs to a `param` (it lacks the runtime node
+  type), so it cannot blindly rewrite them. Read-site migration is therefore
+  rewriter-*assisted* (transform the unambiguous patterns to the new accessor)
+  plus grep-guided manual work, with the **behavioral test suite** catching stale
   readers (nil regressions) and the **extended detector** confirming the shape
   end-state.
 
@@ -218,9 +284,10 @@ The user's intuition — "a source rewriter would earn its keep if we fix our
 side" — is correct, with one important scoping.
 
 **Where it clearly helps (construction).** Moving `{:param, [type: t], name}` →
-`{:param, meta, [name, t]}` (or a wrapper child) at the parser build sites is a
-mechanical, semantics-preserving AST edit. Sourceror can do this reliably: match
-the construction pattern, restructure the tuple, preserve formatting.
+`{:param, [name: name], [{:param_type, m, [t]}]}` (the C2 wrapper shape) at the
+parser build sites is a mechanical, semantics-preserving AST edit. Sourceror can
+do this reliably: match the construction pattern, restructure the tuple, preserve
+formatting.
 
 **Where it is limited (reads).** A read site is `Keyword.get(meta, :type)` /
 `meta[:type]` / a pattern `{:param, meta, name}` followed by `meta[:type]`. A
@@ -274,11 +341,6 @@ do.
 - **Consumer inventory.** Exactly which tools consume Cure AST through stock
   Metastatic today (RAG index? MCP? anything else)? This determines whether B is
   even needed now, and how urgent the trap in §6 is. A+B are sized to the answer.
-- **Wrapper vs. positional for C.** When a subtree moves to children, does it
-  become a positional child or a wrapper node (`{:param_type, meta, [t]}`)?
-  Wrapper preserves the key's name and keeps children self-describing; positional
-  is leaner but order-dependent. (Recommend wrapper — self-describing, matches how
-  B would lift it, keeps A and C convergent.)
 - **B's inverse.** Does any consumer need to round-trip B's output back to
   internal form? If yes, B needs a documented inverse; if no (consumers are
   read-only indexes), it does not.
