@@ -65,11 +65,13 @@ defmodule Cure.Compiler.MacroSyntax do
       {:pascal_case, {:s_bool, pascal_case?(name)}},
       {:constructor_key, {:s_atom, String.to_atom(name <> "/0")}}
     ]
+
     {:syn_leaf, :variable, attrs(meta) ++ extra, synlit(name)}
   end
 
   def to_syntax({:function_call, meta, args}) when is_list(meta) and is_list(args) do
     name = Keyword.get(meta, :name)
+
     extra =
       if is_binary(name),
         do: [
@@ -77,6 +79,7 @@ defmodule Cure.Compiler.MacroSyntax do
           {:constructor_key, {:s_atom, String.to_atom(name <> "/" <> Integer.to_string(length(args)))}}
         ],
         else: []
+
     {:syn_node, :function_call, attrs(meta) ++ extra, Enum.map(args, &to_syntax/1)}
   end
 
