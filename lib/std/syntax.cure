@@ -21,6 +21,23 @@ mod Std.Syntax
     | Quoted(Syntax)
     | Failure(Atom, List(Syntax))
 
+  ## Shape-specific aliases keep generated family records readable without
+  ## introducing separate runtime representations or weakening the generic
+  ## reflection boundary.
+  typealias NameSyntax = Syntax
+  typealias ModuleNameSyntax = Syntax
+  typealias TypeSyntax = Syntax
+  typealias PatternSyntax = Syntax
+  typealias ExpressionSyntax = Syntax
+  typealias StatementSyntax = Syntax
+  typealias CodeSyntax = Syntax
+  typealias CasesSyntax = Syntax
+  typealias ParametersSyntax = Syntax
+  typealias FieldsSyntax = Syntax
+  typealias DeclarationsSyntax = Syntax
+  typealias ModuleBodySyntax = Syntax
+  typealias TokenSyntax = Syntax
+
   type Attr = KV(Atom, SynLit)
 
   type SynLit =

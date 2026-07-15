@@ -102,7 +102,7 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
         accepts ActorDefinition
         expands with derive_actor
 
-      fn derive_actor(name: Syntax, definition: ActorDefinitionSyntax) -> Syntax = definition.initial
+      fn derive_actor(name: ModuleNameSyntax, definition: ActorDefinitionSyntax) -> Syntax = definition.initial
 
       fn result() -> Int = actor Counter
         state Int

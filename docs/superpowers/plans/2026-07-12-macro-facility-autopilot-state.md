@@ -2054,6 +2054,13 @@ field, and generated type names preserve their source capitalization. Partial
 or undecodable candidate applications fall through to the next valid calling
 convention rather than being mistaken for a successful expansion.
 
+**Shape-specific syntax aliases status (2026-07-15).** Generated family fields
+now use readable aliases such as `TypeSyntax`, `ExpressionSyntax`,
+`ModuleNameSyntax`, `CodeSyntax`, and `CasesSyntax`, all transparently backed by
+the checked generic `Syntax` value. This improves expander signatures without
+creating runtime wrappers or a second parser representation; `Syntax` remains
+the explicit low-level escape hatch.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 

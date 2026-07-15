@@ -138,7 +138,7 @@ defmodule Cure.Compiler.MacroFamily do
               Enum.map(fields, & &1.name),
               meta,
               %{},
-              %{syntax_repeated_fields: repeated_fields}
+              %{syntax_repeated_fields: repeated_fields, syntax_family: %{fields: fields}}
             )
           ]
 
@@ -186,16 +186,32 @@ defmodule Cure.Compiler.MacroFamily do
   defp field_type(field, _field_types, _rule), do: syntax_field_type(field, %{})
 
   defp syntax_field_type(field, rule) do
+    field_shape =
+      rule
+      |> Map.get(:syntax_family, %{})
+      |> Map.get(:fields, [])
+      |> Enum.find_value("Syntax", fn family_field ->
+        if family_field.name == field, do: family_field_shape(family_field), else: nil
+      end)
+
+    base_type = {:variable, [scope: :local], shape_type(field_shape)}
+
     if field in Map.get(rule, :syntax_repeated_fields, []) do
-      list_type()
+      {:function_call, [name: "List"], [base_type]}
     else
-      {:variable, [scope: :local], "Syntax"}
+      base_type
     end
   end
 
-  defp list_type do
-    {:function_call, [name: "List"], [{:variable, [scope: :local], "Syntax"}]}
-  end
+  defp shape_type("Syntax"), do: "Syntax"
+
+  defp shape_type(shape) when shape in ["Name", "ModuleName", "Type", "Pattern", "Expression", "Statement", "Code", "Cases", "Parameters", "Fields", "Declarations", "ModuleBody", "Token"],
+    do: shape <> "Syntax"
+
+  defp shape_type(_shape), do: "Syntax"
+
+  defp family_field_shape(%{shape: shape}), do: shape
+  defp family_field_shape(_field), do: "Syntax"
 
   defp validate_families(families) do
     duplicate_names = duplicate_values(Enum.map(families, & &1.name))
