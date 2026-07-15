@@ -212,7 +212,7 @@ defmodule Cure.Elab.MacroExpand do
             )
 
           direct = direct_input_cores(input_repr, Keyword.get(meta, :syntax_fields, []), field_types)
-          [[record], direct, [MacroSyntax.to_core(input_repr)]]
+          [direct, [record], [MacroSyntax.to_core(input_repr)]]
       end
 
     with {:ok, elab_core, _elab_type} <-

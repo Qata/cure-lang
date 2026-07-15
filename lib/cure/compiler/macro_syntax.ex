@@ -338,11 +338,17 @@ defmodule Cure.Compiler.MacroSyntax do
   defp to_core_primitive_list(repr, shape), do: to_core_list([to_core_primitive(repr, shape)])
 
   defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_int, value}}, "Int"), do: {:int_lit, value}
+  defp to_core_primitive({:syn_raw, {:s_int, value}}, "Int"), do: {:int_lit, value}
   defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_float, value}}, "Float"), do: {:float_lit, value}
+  defp to_core_primitive({:syn_raw, {:s_float, value}}, "Float"), do: {:float_lit, value}
   defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_atom, value}}, "Atom"), do: {:atom_lit, value}
+  defp to_core_primitive({:syn_raw, {:s_atom, value}}, "Atom"), do: {:atom_lit, value}
 
   defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_bool, true}}, "Bool"), do: {:ctor, :True, []}
   defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_bool, false}}, "Bool"), do: {:ctor, :False, []}
+  defp to_core_primitive({:syn_raw, {:s_bool, true}}, "Bool"), do: {:ctor, :True, []}
+  defp to_core_primitive({:syn_raw, {:s_bool, false}}, "Bool"), do: {:ctor, :False, []}
+  defp to_core_primitive({:syn_raw, {:s_syntax, repr}}, shape), do: to_core_primitive(repr, shape)
 
   defp to_core_primitive(repr, _shape), do: to_core(repr)
 

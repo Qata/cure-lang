@@ -2069,6 +2069,10 @@ records, repeated fields, and direct expander arguments. Non-literal expressions
 are rejected before expansion, while non-primitive captures continue to preserve
 hygienic syntax values. This is compile-time representation selection only: it
 adds no runtime macro protocol or OTP-specific compiler knowledge.
+Direct captured arguments are attempted first; generated family records and the
+generic reflected `Syntax` value remain compatibility fallbacks. Repeated and
+nested primitive fields are encoded as their ordinary `List(T)` or `T` Core
+values, respectively.
 
 `Std.Syntax` now also exposes explicit `int_literal`, `float_literal`,
 `bool_literal`, `string_literal`, and `atom_literal` builders for the reverse

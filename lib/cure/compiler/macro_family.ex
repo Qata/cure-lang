@@ -180,10 +180,21 @@ defmodule Cure.Compiler.MacroFamily do
   end
 
   defp field_type(field, field_types, rule) when is_binary(field) do
-    case Map.get(field_types, field) do
-      {:record, name, _fields} -> {:variable, [scope: :local], name}
-      {:primitive, shape} -> {:variable, [scope: :local], shape}
-      _ -> syntax_field_type(field, rule)
+    base_type =
+      case Map.get(field_types, field) do
+        {:record, name, _fields} -> {:variable, [scope: :local], name}
+        {:primitive, shape} -> {:variable, [scope: :local], shape}
+        _ -> nil
+      end
+
+    if base_type do
+      if field in Map.get(rule, :syntax_repeated_fields, []) do
+        {:function_call, [name: "List"], [base_type]}
+      else
+        base_type
+      end
+    else
+      syntax_field_type(field, rule)
     end
   end
 

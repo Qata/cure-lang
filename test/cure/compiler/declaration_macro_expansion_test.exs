@@ -169,6 +169,50 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "repeated primitive captures arrive as ordinary Cure lists" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro tags
+        syntax tags <values: Atom>... computed by build
+
+      fn build(input: TagsSyntax) -> Syntax =
+        match input.values
+          [] -> atom_literal(:empty)
+          [_ | _] -> atom_literal(:nonempty)
+
+      fn result() -> Atom = tags :one :two
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == :nonempty
+  end
+
+  test "nested primitive family fields arrive as ordinary Cure values" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro value
+        syntax family Definition
+          initial Int
+        accepts Definition
+        expands with build
+
+      fn build(definition: DefinitionSyntax) -> Syntax = integer(definition.initial)
+
+      fn result() -> Int = value
+        initial 7
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert apply(module, :result, []) == 7
+  end
+
   test "absent optional computed holes retain their reflected field slot" do
     source = """
     mod M
