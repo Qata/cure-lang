@@ -316,13 +316,16 @@ defmodule Cure.Elab.MacroExpand do
         result = Normalise.nf(context, application, fuel: @normalise_fuel)
 
         case decode_result(result) do
-          {:ok, _ast} = success -> success
+          {:ok, _ast} = success ->
+            success
+
           {:error, reason} when fallback != [] ->
             if fallback_decode_error?(reason),
               do: execute_application(context, elab_core, fallback),
               else: {:error, reason}
 
-          error -> error
+          error ->
+            error
         end
 
       {:error, _reason} when fallback != [] ->
