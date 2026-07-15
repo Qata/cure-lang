@@ -431,6 +431,53 @@ The compiler must not recognize these four names specially. A user-defined
 macro that emits the same generic declaration vocabulary must use the same
 pipeline.
 
+### 10.1 Reusable macro rule families
+
+The public standard macros must be authorable without copying a large
+declaration template into every grammar alternative. The current form repeats
+the same `syntax actor`/`syntax fsm`/`syntax sup`/`syntax app` prefix and the
+same lifted-module declarations for each optional lifecycle clause. That is a
+poor source-language abstraction boundary: changing one common callback,
+import, alias, behavior declaration, or startup operation requires editing
+many independent rules, and a user-defined behavior cannot reuse the common
+part without moving it into an opaque compiler or Elixir helper.
+
+This is a language facility, not a request to hide the generated runtime behind
+a helper. It has two required layers:
+
+1. **Shared declaration builders.** Ordinary Cure functions over `Std.Syntax`
+   construct reusable declaration bundles: imports, behavior metadata, state
+   aliases, default callbacks, lifecycle functions, and caller-supplied
+   overrides. The builder returns ordinary syntax that is reparsed,
+   recursively expanded, elaborated, checked, and emitted through the common
+   pipeline. It must not return an opaque container value or invoke a runtime
+   dispatcher.
+2. **Composable grammar rule families.** The macro language must allow a
+   standard or user macro to define a common grammar/template fragment once
+   and specialize it with named slots, optional clauses, and override bundles.
+   A rule family must preserve ordinary grammar ambiguity and duplicate-rule
+   diagnostics, lexical imports, source spans, hygiene, and inside-out
+   expansion. It must compose with computed rules and declaration bundles; it
+   must not be implemented as string substitution or as a compiler-owned list
+   of OTP cases.
+
+The desired authoring shape is conceptually:
+
+```cure
+macro GenServerSurface
+  declaration gen_server_floor(state, message, overrides)
+  syntax actor <name: ModuleName> state <state: Type> <overrides: ActorOverrides>
+    expands gen_server_floor(state, message, overrides)
+```
+
+The exact surface spelling is deliberately an implementation choice, but the
+semantic contract is fixed: a user can define an actor-like macro by reusing
+the generic family and changing only its domain-specific slots. The generated
+result remains direct Cure declarations and direct foreign operations. Tests
+must prove that a user-defined family, nested family composition, and a
+standard-library family all produce the same ordinary AST/Core path as a
+handwritten expansion, including negative ambiguity and hygiene cases.
+
 ## 11. Required implementation order
 
 Implement in this order; do not use a later layer to paper over an earlier gap:
@@ -446,6 +493,11 @@ Implement in this order; do not use a later layer to paper over an earlier gap:
    modules in one expansion.
 5. **Generic syntax analysis:** add the structural traversal and declaration
    builders needed for derivation.
+5a. **Reusable macro rule families:** factor repeated standard-library grammar
+   and lifted-declaration templates into source-defined `Std.Syntax` builders,
+   then add generic grammar-family composition usable by user macros. Preserve
+   ordinary parsing, diagnostics, lexical scope, hygiene, recursive expansion,
+   and direct checked emission.
 6. **Actor derivation:** remove the required explicit message type in the
    inferred path and test external `Pid(m)`/`send` calls.
 7. **FSM derivation:** derive events and transition contracts.
