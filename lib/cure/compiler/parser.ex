@@ -36,7 +36,7 @@ defmodule Cure.Compiler.Parser do
       {:ok, ast} = Cure.Compiler.Parser.parse(tokens)
   """
 
-  alias Cure.Compiler.{MacroRaw, Token}
+  alias Cure.Compiler.{MacroFamily, MacroRaw, Token}
   alias Cure.Compiler.Parser.Precedence
   alias Cure.Pipeline.Events
 
@@ -235,8 +235,8 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp collect_macro_rules(ast, acc) do
-    Enum.reduce(collect_macro_defs_with_scope(ast), acc, fn {:macro_def, _meta, rules}, macro_acc ->
-      Enum.reduce(rules, macro_acc, fn
+    Enum.reduce(collect_macro_defs_with_scope(ast), acc, fn {:macro_def, meta, rules}, macro_acc ->
+      Enum.reduce(harvestable_macro_rules(meta, rules), macro_acc, fn
         %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
           Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
 
@@ -318,8 +318,8 @@ defmodule Cure.Compiler.Parser do
   defp harvest_active_macros(exprs) do
     exprs
     |> collect_macro_defs_with_scope()
-    |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
-      Enum.reduce(rules, acc, fn
+    |> Enum.reduce(%{}, fn {:macro_def, meta, rules}, acc ->
+      Enum.reduce(harvestable_macro_rules(meta, rules), acc, fn
         %{kind: :syntax, keyword: kw} = rule, acc2 when is_binary(kw) ->
           Map.update(acc2, kw, [rule], &(&1 ++ [rule]))
 
@@ -335,8 +335,8 @@ defmodule Cure.Compiler.Parser do
   defp harvest_computed_macros(exprs) do
     exprs
     |> collect_macro_defs_with_scope()
-    |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
-      Enum.reduce(rules, acc, fn
+    |> Enum.reduce(%{}, fn {:macro_def, meta, rules}, acc ->
+      Enum.reduce(harvestable_macro_rules(meta, rules), acc, fn
         %{kind: :computed, keyword: kw} = rule, acc2 when is_binary(kw) ->
           Map.update(acc2, kw, [rule], &(&1 ++ [rule]))
 
@@ -344,6 +344,10 @@ defmodule Cure.Compiler.Parser do
           acc2
       end)
     end)
+  end
+
+  defp harvestable_macro_rules(meta, rules) do
+    MacroFamily.lowered_rules(meta, rules)
   end
 
   # Sibling of harvest_active_macros for Tier-1 `literal` rules, keyed by their
@@ -515,6 +519,7 @@ defmodule Cure.Compiler.Parser do
           syntax_type: macro_syntax_type(keyword),
           syntax_fields: macro_syntax_fields(rule.segments),
           syntax_repeated_fields: macro_syntax_repeated_fields(rule.segments),
+          syntax_field_types: Map.get(rule, :syntax_field_types, %{}),
           line: keyword_token.line,
           col: keyword_token.col
         ]
@@ -721,6 +726,24 @@ defmodule Cure.Compiler.Parser do
     match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
   end
 
+  # A structured family consumes the indented body as one grammar unit. The
+  # family parser then parses named sections with the ordinary Cure
+  # expression/type parsers, preserving normal nested syntax and macro use.
+  # The enclosing dedent remains in the token stream for the surrounding
+  # declaration parser.
+  defp match_segments(state, [{:family, family_meta} | rest], bindings, progress) do
+    {captured, state} = capture_family_body(state)
+    {family_value, family_state} = parse_family_body(captured, family_meta, state)
+
+    state = %{
+      state
+      | errors: state.errors ++ family_state.errors,
+        fresh_counter: family_state.fresh_counter
+    }
+
+    match_segments(state, rest, Map.put(bindings, family_meta.name, family_value), progress + 1)
+  end
+
   # Raw holes are the reader-tier escape hatch: capture the token span without
   # asking the ordinary expression parser to interpret it. Structural
   # delimiters belong to the enclosing parser, so `dedent`/`newline` remain in
@@ -821,6 +844,140 @@ defmodule Cure.Compiler.Parser do
 
   defp put_repeated_binding(bindings, {:hole, %{name: name}}, values), do: Map.put(bindings, name, values)
   defp put_repeated_binding(bindings, _segment, _values), do: bindings
+
+  defp capture_family_body(state) do
+    remaining = Enum.drop(state.tokens, state.pos)
+    target_indent = Enum.find_value(remaining, &indent_value/1)
+
+    case target_indent do
+      nil ->
+        count = Enum.find_index(remaining, &match?(%Token{type: :eof}, &1)) || length(remaining)
+        {Enum.take(remaining, count), advance_n(state, count)}
+
+      target_indent ->
+        count =
+          remaining
+          |> Enum.with_index()
+          |> Enum.find_value(length(remaining), fn
+            {%Token{type: :dedent, value: ^target_indent}, index} -> index
+            _ -> nil
+          end)
+
+        {Enum.take(remaining, count), advance_n(state, count)}
+    end
+  end
+
+  defp indent_value(%Token{type: :indent, value: value}) when is_integer(value), do: value
+  defp indent_value(_token), do: nil
+
+  defp parse_family_body(tokens, family_meta, parser_state) do
+    target_indent = Enum.find_value(tokens, &indent_value/1) || 0
+
+    family_state = %{
+      parser_state
+      | tokens: tokens ++ [%Token{type: :dedent, value: target_indent, line: 0, col: 0}, eof_token(peek(parser_state))],
+        pos: 0,
+        errors: [],
+        fresh_counter: parser_state.fresh_counter
+    }
+
+    family_state = skip_newlines(family_state)
+
+    case peek(family_state) do
+      %Token{type: :indent} ->
+        {value, family_state} = parse_family_sections(advance(family_state), family_meta, %{})
+        {value, family_state}
+
+      token ->
+        family_state = add_error(family_state, {:expected, :indent, :got, token.type, token.line, token.col})
+        family_value(family_meta, %{}, family_state)
+    end
+  end
+
+  defp parse_family_sections(state, family_meta, values) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        family_value(family_meta, values, state)
+
+      %Token{type: :identifier, value: name} = token ->
+        case Enum.find(family_meta.fields, &(&1.name == name)) do
+          nil ->
+            state = add_error(state, {:unknown_syntax_family_field, family_meta.family, name, token.line, token.col})
+            {_ignored, state} = parse_expr_or_block(advance(state))
+            parse_family_sections(state, family_meta, values)
+
+          field ->
+            {value, state} = parse_family_field_value(advance(state), field)
+            {values, state} = record_family_value(values, field, value, token, state)
+            parse_family_sections(state, family_meta, values)
+        end
+
+      token ->
+        state = add_error(state, {:expected, :syntax_family_field, :got, token.type, token.line, token.col})
+        parse_family_sections(advance(state), family_meta, values)
+    end
+  end
+
+  defp parse_family_field_value(state, %{shape: "Type"}) do
+    state = skip_newlines(state)
+    parse_type_expr(state)
+  end
+
+  defp parse_family_field_value(state, %{shape: "ModuleName"}) do
+    state = skip_newlines(state)
+    {name, state} = parse_dotted_name(state)
+    {{:literal, [subtype: :symbol], String.to_atom(name)}, state}
+  end
+
+  defp parse_family_field_value(state, %{shape: "Cases"}) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :indent} = indent ->
+        {arms, state} = parse_block_match_arms(advance(state))
+        state = expect_dedent(state)
+        {{:case_block, [line: indent.line, col: indent.col], arms}, state}
+
+      _ ->
+        {arm, state} = parse_match_arm(state)
+        {{:case_block, [], [arm]}, state}
+    end
+  end
+
+  defp parse_family_field_value(state, _field) do
+    state = skip_newlines(state)
+    parse_expr_or_block(state)
+  end
+
+  defp record_family_value(values, %{name: name, cardinality: :repeated}, value, _token, state) do
+    {Map.update(values, name, [value], &(&1 ++ [value])), state}
+  end
+
+  defp record_family_value(values, %{name: name}, value, token, state) do
+    if Map.has_key?(values, name) do
+      {values, add_error(state, {:duplicate_syntax_family_field, name, token.line, token.col})}
+    else
+      {Map.put(values, name, value), state}
+    end
+  end
+
+  defp family_value(family_meta, values, state) do
+    {fields, state} =
+      Enum.map_reduce(family_meta.fields, state, fn field, state ->
+        case Map.fetch(values, field.name) do
+          {:ok, value} -> {value, state}
+          :error when field.cardinality == :repeated -> {[], state}
+          :error when field.cardinality == :optional -> {nil, state}
+          :error ->
+            error = {:missing_syntax_family_field, family_meta.family, field.name, field.line, field.col}
+            {nil, add_error(state, error)}
+        end
+      end)
+
+    {{:family_input, [family: family_meta.family], fields}, state}
+  end
 
   defp advance_n(state, 0), do: state
   defp advance_n(state, count), do: advance_n(advance(state), count - 1)
@@ -5390,6 +5547,15 @@ defmodule Cure.Compiler.Parser do
     state = skip_macro_trivia(state)
     {rules, state} = parse_macro_block(state)
 
+    state =
+      case MacroFamily.validate(rules) do
+        :ok ->
+          state
+
+        {:error, reason} ->
+          add_error(state, {:invalid_macro_family, reason, token.line, token.col})
+      end
+
     meta = [name: name, leading_segments: leading_segments, line: token.line, col: token.col]
     {{:macro_def, meta, rules}, state}
   end
@@ -5847,6 +6013,7 @@ defmodule Cure.Compiler.Parser do
   defp segment_hole_names({:hole, %{name: name}}), do: [name]
   defp segment_hole_names({:code_hole, %{name: name}}), do: [name]
   defp segment_hole_names({:raw_hole, %{name: name}}), do: [name]
+  defp segment_hole_names({:family, %{name: name}}), do: [name]
   defp segment_hole_names({:repeat, segment}), do: segment_hole_names(segment)
   defp segment_hole_names({:optional, segments}), do: Enum.flat_map(segments, &segment_hole_names/1)
   defp segment_hole_names(_segment), do: []
@@ -5861,6 +6028,7 @@ defmodule Cure.Compiler.Parser do
   defp segment_inputs({:hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:code_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
+  defp segment_inputs({:family, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:repeat, segment}, bindings), do: [segment_inputs(segment, bindings)]
   # Optional groups still occupy a stable reflected-record slot. An absent
   # optional hole is represented by `nil`, which MacroSyntax reflects as

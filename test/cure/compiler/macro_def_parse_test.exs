@@ -92,11 +92,16 @@ defmodule Cure.Compiler.MacroDefParseTest do
     node =
       parse!("""
       macro actor <name: ModuleName>
+        syntax family ActorDefinition
+          state Type
         accepts ActorDefinition
         expands with derive_actor
       """)
 
-    assert {:macro_def, meta, [accepts, expands]} = node
+    assert {:macro_def, meta, [family, accepts, expands]} = node
+
+    assert family.kind == :syntax_family
+    assert family.name == "ActorDefinition"
 
     assert Keyword.get(meta, :leading_segments) == [
              {:hole, %{name: "name", kind: "ModuleName", line: 1}}
@@ -106,6 +111,23 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert accepts.family == "ActorDefinition"
     assert expands.kind == :expands_with
     assert {:variable, _, "derive_actor"} = expands.expander
+  end
+
+  test "a structured macro rejects duplicate family fields" do
+    {:ok, tokens} =
+      Lexer.tokenize("""
+      macro Actor
+        syntax family Definition
+          state Type
+          state Type
+      """, emit_events: false)
+
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false, prelude_macros: false)
+
+    assert Enum.any?(errors, fn
+             {:invalid_macro_family, {:duplicate_syntax_family_field, [{"Definition", "state"}]}, _, _} -> true
+             _ -> false
+           end)
   end
 
   test "an open category and qualified category extension are retained" do

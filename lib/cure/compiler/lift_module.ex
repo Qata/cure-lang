@@ -7,7 +7,7 @@ defmodule Cure.Compiler.LiftModule do
   through the same dependent elaborator and emitter as the enclosing module.
   """
 
-  alias Cure.Compiler.MacroSyntax
+  alias Cure.Compiler.{MacroFamily, MacroSyntax}
   alias Cure.Elab.{Emit, Program}
 
   @type unit :: %{
@@ -95,26 +95,12 @@ defmodule Cure.Compiler.LiftModule do
   # record here; otherwise an inherited macro builder's `input.field` projection
   # is rechecked without the record family in the lifted environment.
   defp unit_declarations({:macro_def, meta, rules}) when is_list(meta) and is_list(rules) do
-    rules
+    MacroFamily.lowered_rules(meta, rules)
     |> Enum.filter(&(&1[:kind] == :computed))
     |> Enum.uniq_by(&Map.get(&1, :syntax_type))
-    |> Enum.map(fn rule ->
-      fields =
-        rule
-        |> Map.get(:syntax_fields, [])
-        |> MacroSyntax.record_fields()
-        |> Enum.map(fn field ->
-          {:param, [type: macro_syntax_field_type(field, rule)], field}
-        end)
-
-      {:container,
-       [
-         container_type: :struct,
-         name: Map.fetch!(rule, :syntax_type),
-         macro_generated: true,
-         line: Keyword.get(meta, :line, 0),
-         col: Keyword.get(meta, :col, 0)
-       ], fields}
+    |> Enum.flat_map(fn rule ->
+      MacroFamily.generated_record_declarations(meta, rule)
+      |> Enum.map(&append_context_field(&1, rule))
     end)
   end
 
@@ -129,6 +115,15 @@ defmodule Cure.Compiler.LiftModule do
   end
 
   defp unit_declarations(_other), do: []
+
+  defp append_context_field({:container, meta, fields}, rule) do
+    if Keyword.get(meta, :name) == Map.get(rule, :syntax_type) do
+      context = {:param, [type: {:variable, [scope: :local], "Syntax"}], MacroSyntax.context_field()}
+      {:container, meta, fields ++ [context]}
+    else
+      {:container, meta, fields}
+    end
+  end
 
   defp normalize_generated_declaration({:function_def, meta, [body]}) do
     params = Keyword.get(meta, :params, [])
@@ -145,14 +140,6 @@ defmodule Cure.Compiler.LiftModule do
 
   defp normalize_generated_param({:param, meta, []}) do
     {:param, [type: Keyword.fetch!(meta, :type)], Keyword.fetch!(meta, :name)}
-  end
-
-  defp macro_syntax_field_type(field, rule) do
-    if field in Map.get(rule, :syntax_repeated_fields, []) do
-      {:function_call, [name: "List"], [{:variable, [scope: :local], "Syntax"}]}
-    else
-      {:variable, [scope: :local], "Syntax"}
-    end
   end
 
   defp declared_name({:import, _meta, _children}), do: nil

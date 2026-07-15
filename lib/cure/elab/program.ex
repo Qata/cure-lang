@@ -7,7 +7,7 @@ defmodule Cure.Elab.Program do
   totality-certified signature.
   """
 
-  alias Cure.Compiler.{Lexer, MacroSyntax, MacroValidate, Parser}
+  alias Cure.Compiler.{Lexer, MacroFamily, MacroSyntax, MacroValidate, Parser}
   alias Cure.Core.{Env, Inductive, Validator}
   alias Cure.Elab.{Coherence, Declarations, Erase, MacroExpand, TotalityClosure}
   alias Cure.Stdlib.Paths
@@ -1124,26 +1124,12 @@ defmodule Cure.Elab.Program do
   # The fields are the rule's holes plus the reserved `context` field, which
   # carries the reflected expansion context (`MacroSyntax.record_fields/1`).
   defp declarations({:macro_def, meta, rules}) when is_list(meta) and is_list(rules) do
-    rules
+    MacroFamily.lowered_rules(meta, rules)
     |> Enum.filter(&(&1[:kind] == :computed))
     |> Enum.uniq_by(&Map.get(&1, :syntax_type))
-    |> Enum.map(fn rule ->
-      fields =
-        rule
-        |> Map.get(:syntax_fields, [])
-        |> MacroSyntax.record_fields()
-        |> Enum.map(fn field ->
-          {:param, [type: macro_syntax_field_type(field, rule)], field}
-        end)
-
-      {:container,
-       [
-         container_type: :struct,
-         name: Map.fetch!(rule, :syntax_type),
-         macro_generated: true,
-         line: Keyword.get(meta, :line, 0),
-         col: Keyword.get(meta, :col, 0)
-       ], fields}
+    |> Enum.flat_map(fn rule ->
+      MacroFamily.generated_record_declarations(meta, rule)
+      |> Enum.map(&append_context_field(&1, rule))
     end)
   end
 
@@ -1165,11 +1151,12 @@ defmodule Cure.Elab.Program do
 
   defp declarations(_other), do: []
 
-  defp macro_syntax_field_type(field, rule) do
-    if field in Map.get(rule, :syntax_repeated_fields, []) do
-      {:function_call, [name: "List"], [{:variable, [scope: :local], "Syntax"}]}
+  defp append_context_field({:container, meta, fields}, rule) do
+    if Keyword.get(meta, :name) == Map.get(rule, :syntax_type) do
+      context = {:param, [type: {:variable, [scope: :local], "Syntax"}], MacroSyntax.context_field()}
+      {:container, meta, fields ++ [context]}
     else
-      {:variable, [scope: :local], "Syntax"}
+      {:container, meta, fields}
     end
   end
 

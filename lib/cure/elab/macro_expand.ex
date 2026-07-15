@@ -8,7 +8,7 @@ defmodule Cure.Elab.MacroExpand do
   elaborated and kernel-checked by the ordinary declaration path.
   """
 
-  alias Cure.Compiler.{MacroSyntax, Parser}
+  alias Cure.Compiler.{MacroFamily, MacroSyntax, Parser}
   alias Cure.Core.{Context, Kernel, Normalise}
   alias Cure.Elab.{Elaborator, TotalityClosure}
 
@@ -205,7 +205,8 @@ defmodule Cure.Elab.MacroExpand do
               Cure.Core.Env.resolve_key(env, env.ctors, syntax_type),
               Keyword.get(meta, :syntax_fields, []),
               Keyword.get(meta, :syntax_repeated_fields, []),
-              input_repr
+              input_repr,
+              resolve_field_types(Keyword.get(meta, :syntax_field_types, %{}), env)
             ),
             MacroSyntax.to_core(input_repr)
           ]
@@ -224,6 +225,25 @@ defmodule Cure.Elab.MacroExpand do
   rescue
     error -> {:error, {:computed_macro_error, meta, {:host_exception, error.__struct__}}}
   end
+
+  defp resolve_field_types(field_types, env) when is_map(field_types) do
+    Map.new(field_types, fn
+      {field, {:record, name, fields}} ->
+        repeated =
+          fields
+          |> Enum.filter(&(MacroFamily.field_cardinality(&1) in [:repeated, :one_or_more]))
+          |> Enum.map(& &1.name)
+
+        {field,
+         {:record, Cure.Core.Env.resolve_key(env, env.ctors, name),
+          Enum.map(fields, &Map.put(&1, :repeated, &1.name in repeated))}}
+
+      {field, value} ->
+        {field, value}
+    end)
+  end
+
+  defp resolve_field_types(_field_types, _env), do: %{}
 
   defp global_names({:global, name}), do: [name]
   defp global_names({:app, f, a}), do: global_names(f) ++ global_names(a)

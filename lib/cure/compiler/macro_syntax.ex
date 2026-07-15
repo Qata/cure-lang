@@ -232,25 +232,59 @@ defmodule Cure.Compiler.MacroSyntax do
   """
   @spec to_core_record(String.t() | atom(), [String.t()], repr()) :: Cure.Core.Term.t()
   def to_core_record(type_name, syntax_fields, repr),
-    do: to_core_record(type_name, syntax_fields, [], repr)
+    do: to_core_record(type_name, syntax_fields, [], repr, %{}, true)
 
   @spec to_core_record(String.t() | atom(), [String.t()], [String.t()], repr()) :: Cure.Core.Term.t()
-  def to_core_record(type_name, syntax_fields, repeated_fields, {:syn_node, _tag, attrs, kids}) do
+  def to_core_record(type_name, syntax_fields, repeated_fields, repr),
+    do: to_core_record(type_name, syntax_fields, repeated_fields, repr, %{}, true)
+
+  @spec to_core_record(String.t() | atom(), [String.t()], [String.t()], repr(), map()) :: Cure.Core.Term.t()
+  def to_core_record(type_name, syntax_fields, repeated_fields, repr, field_types),
+    do: to_core_record(type_name, syntax_fields, repeated_fields, repr, field_types, true)
+
+  defp to_core_record(
+         type_name,
+         syntax_fields,
+         repeated_fields,
+         {:syn_node, _tag, attrs, kids},
+         field_types,
+         include_context?
+       ) do
     name = if is_binary(type_name), do: String.to_atom(type_name), else: type_name
 
     args =
       syntax_fields
       |> Enum.zip(kids)
-      |> Enum.map(fn {field, kid} ->
-        if field in repeated_fields, do: to_core_syntax_list(kid), else: to_core(kid)
-      end)
+      |> Enum.map(&to_core_record_field(&1, repeated_fields, field_types))
 
     args =
-      if @context_field in syntax_fields,
+      if not include_context? or @context_field in syntax_fields,
         do: args,
         else: args ++ [to_core(context_attr(attrs))]
 
     {:ctor, name, args}
+  end
+
+  defp to_core_record(_type_name, _syntax_fields, _repeated_fields, repr, _field_types, _include_context?),
+    do: to_core(repr)
+
+  defp to_core_record_field({field, kid}, repeated_fields, field_types) do
+    if field in repeated_fields do
+      to_core_syntax_list(kid)
+    else
+      case Map.get(field_types, field) do
+        {:record, nested_name, nested_fields} ->
+          nested_repeated =
+            nested_fields
+            |> Enum.filter(&(&1.cardinality in [:repeated, :one_or_more]))
+            |> Enum.map(& &1.name)
+
+          to_core_record(nested_name, Enum.map(nested_fields, & &1.name), nested_repeated, kid, %{}, false)
+
+        _ ->
+          to_core(kid)
+      end
+    end
   end
 
   # The parser keeps one child slot per grammar field, so a repeated field is

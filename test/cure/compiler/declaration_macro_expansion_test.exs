@@ -66,6 +66,30 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :result, []) == 1
   end
 
+  test "a structured family lowers to nested syntax records and expands" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro actor <name: ModuleName>
+        syntax family ActorDefinition
+          state Type
+          optional initial Expression
+        accepts ActorDefinition
+        expands with derive_actor
+
+      fn derive_actor(input: ActorSyntax) -> Syntax = input.definition.initial
+
+      fn result() -> Int = actor Counter
+        state Int
+        initial 7
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == 7
+  end
+
   test "absent optional computed holes retain their reflected field slot" do
     source = """
     mod M

@@ -2030,6 +2030,22 @@ syntax pattern matching, dedicated `derive`/`typed macro` forms, phase controls,
 and public export-policy syntax. These must layer on the same safe family,
 hygiene, diagnostic, and direct-emission contracts.
 
+**Structured family lowering status (2026-07-15).** The first 5a slice now
+parses `syntax family` declarations with typed fields and cardinality, accepts
+structured macro headers with leading captures, and lowers
+`accepts Family`/`expands with expander` to the existing generic computed-macro
+protocol. Family bodies are parsed as unordered named sections using ordinary
+Cure expression and type parsing; `Cases` is represented by a generic case
+block, not an OTP-specific node. Generated family and invocation records are
+ordinary declarations, nested family values are reflected into Core, and the
+full path is covered by a compiled user-defined family expansion.
+
+This slice intentionally leaves the generated-record calling convention as
+the advanced fallback. Direct expander parameters, primitive literal decoding,
+syntax-template interpolation, typed declaration builders, and the safe/raw
+API split remain ordered follow-up slices from the beginner-friendliness list;
+none may be implemented by introducing compiler-owned domain knowledge.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 
