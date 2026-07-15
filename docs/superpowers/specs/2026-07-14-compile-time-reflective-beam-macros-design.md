@@ -532,6 +532,57 @@ operations. Tests must prove a user-defined family, nested family composition,
 duplicate and ambiguous sections, cardinality errors, source-range diagnostics,
 and hygiene all use the same ordinary AST/Core path as a handwritten expansion.
 
+### 10.2 Beginner-friendly feature priority
+
+The following requests are intentionally split so the macro implementation has
+a coherent safe beginner path rather than accumulating convenience syntax before
+the representation and hygiene contracts are sound.
+
+**Build now, as part of the family and safe-syntax foundation:**
+
+- semantic capture types for simple literals (`Atom`, `Int`, `String`, etc.) and
+  explicit syntax wrappers for unevaluated `Expression`, `Pattern`, `Type`, and
+  `Code` captures;
+- direct expander parameters (`derive_actor(name, definition)`) with generated
+  input records retained as an advanced fallback;
+- typed `syntax ...` templates with visibly distinct syntax splicing, literal
+  lifting, declaration-list splicing, and intentional identifier construction;
+- automatic lifting only for the closed set of primitive/tuple/list values, never
+  arbitrary strings as identifiers;
+- definition-site hygiene by default, explicit caller-name capture, and explicit
+  fresh/private/exported name construction;
+- typed `Std.Syntax` declaration builders with named arguments, including
+  functions, modules, aliases, parameters, match arms, imports, and `use`;
+- generated family fields as ordinary record access, repeated captures as
+  ordinary `List(T)`, unordered sections by default, and declarative empty-block
+  cardinality (`Cases` nonempty, `Code` optionally empty);
+- `MacroResult`/structured diagnostics, `Result` convenience conversion, source
+  provenance, and expansion-aware errors that point back to authored sections;
+- a clear safe `Std.Syntax` versus advanced `Std.Syntax.Raw` boundary. Raw node,
+  token, scope, and metadata operations remain available but are visibly unsafe.
+
+Macro declarations and families follow Cure's ordinary layout convention. They
+do not introduce a special `end` requirement or expose `Code until dedent` to
+authors; the parser owns indentation boundaries.
+
+**Maybe later, after the foundation is stable:**
+
+- inline expansion clauses for tiny macros and implicit `block macro` body
+  capture;
+- generated `has_field`/`field_or` convenience methods and friendly field aliases;
+- custom family examples, editor completion/hover, canonical formatting, macro
+  check/expand/trace commands, and source-side expansion assertions;
+- grouped/plural section spellings, canonical section ordering, normalization
+  hooks, and advanced family inclusion transformations;
+- user-defined syntax categories, constructor-style syntax alternatives, parser
+  derivation from semantic ADTs, and pattern matching directly over syntax;
+- dedicated `derive`/`typed macro` forms, explicit phase controls, public API
+  export policies, and broader syntax-provenance controls.
+
+These later features must build on the same typed family records, hygiene,
+diagnostic, and direct-emission contracts. None may reintroduce string-based
+rewriting, runtime macro interpretation, or compiler-owned OTP knowledge.
+
 ## 11. Required implementation order
 
 Implement in this order; do not use a later layer to paper over an earlier gap:

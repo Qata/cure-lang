@@ -2004,6 +2004,32 @@ direct checked BEAM operations. Coverage must include nested family composition,
 override precedence, duplicate/ambiguous grammar rules, generated-name hygiene,
 and a byte/Core-path comparison against an equivalent handwritten expansion.
 
+**Beginner-friendliness priority (2026-07-15).** Fold the following into the
+5a implementation rather than treating them as unrelated polish:
+
+- decoded primitive captures and explicit `ExpressionSyntax`/
+  `PatternSyntax`/`TypeSyntax`/`CodeSyntax` wrappers;
+- direct expander parameters with generated records retained as an advanced
+  fallback;
+- safe syntax templates with distinct syntax splicing, literal lifting,
+  declaration-list splicing, and intentional identifier construction;
+- default definition-site hygiene plus explicit caller/fresh/private/exported
+  identifier operations;
+- named-argument typed declaration builders under `Std.Syntax`, with raw node
+  construction moved to a visibly advanced `Std.Syntax.Raw` boundary;
+- ordinary record access for family fields, `List(T)` repeated captures,
+  unordered sections by default, and declarative empty-block cardinality;
+- `MacroResult`/`Result` convenience conversion, source provenance, and
+  expansion-aware diagnostics.
+
+The following remain explicitly parked as later work: inline expansion shorthand,
+implicit block capture, aliases and convenience accessors, editor completion and
+hover, formatter and macro inspection commands, grouped/plural spellings,
+canonical ordering and normalization hooks, user-defined syntax categories and
+syntax pattern matching, dedicated `derive`/`typed macro` forms, phase controls,
+and public export-policy syntax. These must layer on the same safe family,
+hygiene, diagnostic, and direct-emission contracts.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 
