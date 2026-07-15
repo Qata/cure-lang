@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-15
 **Status:** design for review (no implementation)
-**Related:** the six irregular-tuple shapes (separate, smaller gap — see §3); `lib/cure/meta_ast/conformance.ex` (the detector built for component (1)); the migrator→MetaAST rework (downstream consumer).
+**Related:** the six irregular-tuple shapes (separate, smaller gap — see §3); `lib/cure/meta_ast/conformance.ex` (the detector built for component (1)); the migrator→MetaAST rework (downstream consumer, specified as a phase in §8).
 
 ## 1. Summary
 
@@ -351,7 +351,118 @@ do.
    remove the trap, versus accept permanent adapter discipline. This spec does
    not pre-decide it; A+B are valuable and shippable regardless.
 
-## 8. Open questions
+## 8. Phase: rework `Cure.Migrate` onto MetaAST traversal
+
+This is the downstream consumer that motivated the whole initiative. It is
+specified here as an explicit phase, sequenced **after** Option C.
+
+### 8.1 Motivating defect (verified)
+
+The migration facility (`lib/cure/migrate/**`, landed 2026-07-10, still unmerged)
+does **not** traverse via Metastatic. `Cure.Migrate.fold_rules/2` hands the whole
+AST to each rule's `detect_and_rewrite/2`; every rule hand-rolls its own recursive
+walker. Two consequences, both confirmed against the live code:
+
+- **`UppercaseTypeVar`** is hand-taught the meta layout — `rewrite_signature/4`
+  reads `Keyword.get(meta, :params)` / `:return_type` and rewrites the type
+  expressions in place. It works, but only because a human coded descent into each
+  meta slot, and it took **five same-day follow-up fixes** (`9ccd04c9`,
+  `58f976d9`, `69e143cd`, `610dd492`, `5ec6edb3`) to get the meta/children split
+  right — propagate the rename into the body, freshen against body names, rename
+  the implicit binder, handle proto/interface/impl heads, reuse a head var's
+  rename across methods. Every one of those bugs is a subterm scattered between
+  meta and children.
+- **`ModuleRename`** was **not** taught that layout: its generic clause recurses
+  children only. Verified live — running the `Std.Eq → Std.Equatable` rule on
+  ```
+  fn f(x: Std.Eq.T) -> Std.Eq.T = Std.Eq.eq(x)
+  ```
+  yields
+  ```
+  fn f(x: Std.Eq.T) -> Std.Eq.T = Std.Equatable.eq(x)
+  ```
+  — the body call renamed, **both signature occurrences (in meta) left pointing at
+  the renamed-away module**, and the rule reports success. A half-migrated,
+  non-compiling file with a clean bill of health.
+
+This is the blind spot expressed in the one tool whose entire job is correct AST
+rewriting — and the two rules disagree with each other about whether the signature
+layer even exists.
+
+### 8.2 Principle: retire the traversal, not the transformations
+
+A rule bundles two separable things:
+
+1. a **transformation** — *what* to rewrite (`Std.Eq → Std.Equatable`, lowercase a
+   free type var). Inherently per-rule; stays handwritten. This is the rule's
+   reason to exist.
+2. a **traversal** — *how to reach every node* so the transformation lands
+   everywhere. Should be generic and shared across all rules.
+
+The defect is that meta-blindness forces every rule to hand-code #2 as well as #1:
+stock `prewalk` never yields the meta-borne type nodes, so a rule must hand-write
+descent into `:params`/`:type`/`:return_type` — or, like `ModuleRename`, silently
+skip them. This phase retires the **hand-coded traversal** and rebuilds each rule
+as *generic walk + local transform*. The transformations are unchanged. The rule
+of thumb is exact: **handwrite the transformation, never the traversal.**
+
+### 8.3 Hard ordering dependency: this phase is downstream of Option C
+
+This rework **cannot precede** the C2 representation refactor. Stock
+`prewalk`/`traverse` never enter meta, so a rule rebuilt on the generic walk
+*today* would visit the `param` node but never be handed the `Std.Eq.T` type var
+inside its `:type` meta. Rebuilding on the generic walk before subterms move to
+children makes rules **more** broken, not less. Therefore:
+
+> **Option C moves subterms meta→children first; only then do the rules collapse
+> onto the generic walk.** The representation fix is what *enables* MetaAST-based
+> migration — it is not a substitute for it.
+
+The coupling runs both ways, which pins the timing precisely. The current rules
+read the old shape directly (`Keyword.get(meta, :params)`); the moment a C step
+relocates a slot, those reads break. So each C step that moves a slot must update
+or rebuild every rule that reads it — and the conformance tripwire's shrinking
+allowlist is the sequencing mechanism: shrink a bucket → fix the rule that
+depended on it → green. C and the rule-rebuild advance **in lockstep, node type by
+node type**, not as two independent projects.
+
+### 8.4 Per-rule outcome (honest — not every rule becomes a one-liner)
+
+- **`ModuleRename`** essentially does: `prewalk` + "rename if this node is a
+  qualified reference to a renamed module." No per-slot descent; correct for
+  signatures and bodies uniformly, by construction.
+- **`UppercaseTypeVar`** stays **scope-aware**: it must gather every type var in a
+  signature, build one rename map, freshen collisions, and thread that map through
+  the body. With children-based shape this becomes **generic `traverse/4` + a
+  scoped accumulator** (Metastatic's `traverse` carries an accumulator for exactly
+  this) instead of hand-rolled descent plus a `var_names_deep` that has to grovel
+  through both meta and children. A genuine simplification — one uniform descent,
+  no meta special-casing — that removes the class of bug behind its five fixes,
+  but not "delete the rule."
+
+### 8.5 Build on Metastatic's own traversal, not a Cure-only walker
+
+Rebuild the rules on **Metastatic's `prewalk`/`traverse`**, not a fresh
+Cure-internal walker. The point of conforming to Metastatic is that "the migrator
+can reach a node" and "RAG/MCP can reach a node" become the **same** guarantee —
+enforced by the **same** traversal and the **same** conformance tripwire. A
+parallel Cure-only walker would reintroduce a second traversal that can drift out
+of sync, the exact failure mode this initiative exists to kill. (Option A's
+Cure-side meta-aware wrapper is a *bridge* for the pre-C world; once C lands the
+wrapper and stock Metastatic coincide, and the rules should target stock
+traversal.)
+
+### 8.6 Exit criteria
+
+- Every migration rule reaches nodes through generic Metastatic traversal; no rule
+  hand-codes descent into a meta slot.
+- Every rename-class rule rewrites references in signature positions —
+  regression-pinned by the `fn f(x: Std.Eq.T) -> Std.Eq.T = Std.Eq.eq(x)` case
+  above, which must migrate all three occurrences (today it migrates one).
+- The `:node_in_meta` allowlist is empty for every node type any rule touches (C
+  complete for those types).
+
+## 9. Open questions
 
 - **Consumer inventory.** Exactly which tools consume Cure AST through stock
   Metastatic today (RAG index? MCP? anything else)? This determines whether B is
@@ -364,12 +475,12 @@ do.
   (Recommend same module, distinct `kind:` on each violation — one detector, two
   gates.)
 
-## 9. Scope / non-goals
+## 10. Scope / non-goals
 
-- **In scope:** the meta-slot blind spot, the our-side fix options, and the
-  rewriter's role. The detector already built for component (1).
-- **Out of scope here:** the six-shape normalization (its own follow-up); the
-  migrator→MetaAST rework (downstream; consumes whichever fix lands); any change
-  to the Metastatic dependency (Option D, noted only for contrast).
+- **In scope:** the meta-slot blind spot, the our-side fix options, the rewriter's
+  role, and the migrator→MetaAST rework as a sequenced downstream phase (§8). The
+  detector already built for component (1).
+- **Out of scope here:** the six-shape normalization (its own follow-up); any
+  change to the Metastatic dependency (Option D, noted only for contrast).
 - **Non-goal:** a big-bang representation flip. C, if chosen, is incremental and
   gated.
