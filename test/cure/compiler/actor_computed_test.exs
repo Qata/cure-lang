@@ -5,6 +5,7 @@ defmodule Cure.Compiler.ActorComputedTest do
     source = """
     mod M
       use Std.Actor
+      use Std.Otp
 
       actor Cure.Generated.Derived state Int derive
         match message
@@ -12,12 +13,17 @@ defmodule Cure.Compiler.ActorComputedTest do
 
     fn make_message() -> ActorMessage = Inc
       fn keep_message(message: ActorMessage) -> ActorMessage = message
+      fn send_inc() -> Effect(Unit) =
+        let pid: Pid(ActorMessage) = beam_ops self
+        let sent: Effect(Unit) = beam_ops tell pid Inc
+        sent
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert module == :"Cure.M"
     assert Code.ensure_loaded?(:"Cure.Generated.Derived")
     assert apply(module, :make_message, []) == :Inc
+    assert function_exported?(module, :send_inc, 0)
     assert apply(:"Cure.Generated.Derived", :init, [0]) == {:ok, 0}
     assert apply(:"Cure.Generated.Derived", :handle_cast, [:Inc, 0]) == {:noreply, 1}
     assert apply(:"Cure.Generated.Derived", :handle_info, [:Inc, 0]) == {:noreply, 0}
