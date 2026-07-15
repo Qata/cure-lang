@@ -63,6 +63,16 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:variable_name, {:s_atom, :state}} in attrs
   end
 
+  test "source coordinates survive the syntax reflection boundary" do
+    ast = {:variable, [line: 12, col: 7, scope: :local], "state"}
+
+    assert {:syn_leaf, :variable, attrs, {:s_str, "state"}} = MacroSyntax.to_syntax(ast)
+    assert {:source_line, {:s_int, 12}} in attrs
+    assert {:source_col, {:s_int, 7}} in attrs
+
+    assert MacroSyntax.from_syntax(MacroSyntax.to_syntax(ast)) == ast
+  end
+
   test "from_syntax(to_syntax(ast)) round-trips up to source position" do
     for src <- ["g(1, x + 2)", "[1, 2, 3]", "\"hi\"", ":ok", "true", "3.5", "f()"] do
       ast = expr!(src)
