@@ -388,16 +388,41 @@ defmodule Cure.Compiler.MacroSyntax do
         end
 
       {:ctor, :"Std.Syntax#Rejected", [diagnostics]} ->
-        with {:ok, diagnostics} <- from_core_list(diagnostics),
-             {:ok, diagnostics} <- map_results(diagnostics, &from_core/1),
-             true <- Enum.all?(diagnostics, &syntax_repr?/1) do
-          {:rejected, diagnostics}
-        else
-          _ -> {:error, :invalid_macro_diagnostics}
+        case decode_macro_diagnostics(diagnostics) do
+          {:ok, values} -> {:rejected, values}
+          error -> error
+        end
+
+      {:ctor, :"Std.Result#Ok", [syntax]} ->
+        case from_core(syntax) do
+          {:error, _} = error -> error
+          repr -> {:expanded, repr}
+        end
+
+      {:ctor, :"Std.Result#Error", [diagnostic]} ->
+        case decode_macro_diagnostics(diagnostic) do
+          {:ok, values} -> {:rejected, values}
+          error -> error
         end
 
       _ ->
         :not_macro_result
+    end
+  end
+
+  defp decode_macro_diagnostics(value) do
+    case from_core(value) do
+      {:error, _} ->
+        with {:ok, diagnostics} <- from_core_list(value),
+             {:ok, diagnostics} <- map_results(diagnostics, &from_core/1),
+             true <- Enum.all?(diagnostics, &syntax_repr?/1) do
+          {:ok, diagnostics}
+        else
+          _ -> {:error, :invalid_macro_diagnostics}
+        end
+
+      repr when is_tuple(repr) ->
+        if syntax_repr?(repr), do: {:ok, [repr]}, else: {:error, :invalid_macro_diagnostic}
     end
   end
 

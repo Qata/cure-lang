@@ -2085,6 +2085,8 @@ and `Rejected(List(Diagnostic))` are compile-time wrappers decoded at the same
 Core boundary as direct `Syntax`; rejected diagnostics remain ordinary reflected
 syntax values. Legacy direct-`Syntax` results and `Syntax.Failure` remain valid
 compatibility paths, and no result wrapper survives into generated runtime code.
+The decoder also accepts `Std.Result`'s `Ok(Syntax)` and `Error(Diagnostic)` forms
+as a convenience, without making `Result` part of the macro runtime protocol.
 
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**

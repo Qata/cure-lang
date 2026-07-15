@@ -98,6 +98,15 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:rejected, [^repr]} = MacroSyntax.from_core_macro_result(rejected)
   end
 
+  test "Std.Result wrappers decode as macro results" do
+    repr = {:syn_leaf, :literal, [], {:s_int, 1}}
+    ok = {:ctor, :"Std.Result#Ok", [MacroSyntax.to_core(repr)]}
+    error = {:ctor, :"Std.Result#Error", [MacroSyntax.to_core(repr)]}
+
+    assert {:expanded, ^repr} = MacroSyntax.from_core_macro_result(ok)
+    assert {:rejected, [^repr]} = MacroSyntax.from_core_macro_result(error)
+  end
+
   test "an exotic scalar value (regex tuple) reflects opaquely without crashing" do
     ast = expr!("~r/foo/")
     # Node tag is :literal (subtype: :regex in meta), NOT a bare :regex tag —

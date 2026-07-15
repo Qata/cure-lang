@@ -152,6 +152,26 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :result, []) == :hello
   end
 
+  test "a computed expander may return Std.Result for convenience" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Result
+
+      macro log
+        syntax log <level: Atom> computed by build
+
+      fn build(level: Atom) -> Result(Syntax, Syntax) =
+        ok(Leaf(:literal, [KV(:subtype, SAtom(:symbol))], SAtom(level)))
+
+      fn result() -> Atom = log :hello
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == :hello
+  end
+
   test "a rejected MacroResult stops compilation before runtime code exists" do
     source = """
     mod M
