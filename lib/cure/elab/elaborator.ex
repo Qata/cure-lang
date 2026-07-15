@@ -6266,7 +6266,14 @@ defmodule Cure.Elab.Elaborator do
                actual when not is_nil(actual) <- actual,
                actual_term <- Quote.reify(actual, Context.length(branch_ctx)),
                expected_term <- Subst.shift(annotated, length(telescope), 0),
-               true <- Conv.conv?(expected_term, actual_term, Context.env(branch_ctx), Context.length(branch_ctx), Context.signature(branch_ctx)) do
+               true <-
+                 Conv.conv?(
+                   expected_term,
+                   actual_term,
+                   Context.env(branch_ctx),
+                   Context.length(branch_ctx),
+                   Context.signature(branch_ctx)
+                 ) do
             {:cont, :ok}
           else
             false -> {:halt, {:error, {:typed_pattern_type_mismatch, type_ast}}}

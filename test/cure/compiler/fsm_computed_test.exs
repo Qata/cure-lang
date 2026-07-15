@@ -39,6 +39,7 @@ defmodule Cure.Compiler.FsmComputedTest do
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert apply(module, :make_event, []) == {:Data, 7}
+
     assert apply(:"Cure.Generated.Payload", :handle_event, [:info, {:Data, 7}, :ready, 4]) ==
              :keep_state_and_data
   end
