@@ -830,7 +830,7 @@ defmodule Cure.Compiler.Parser do
   defp parse_code_until(state, delimiter) do
     remaining = Enum.drop(state.tokens, state.pos)
 
-    case split_code_until(remaining, delimiter, []) do
+    case split_code_until(remaining, delimiter, nil, []) do
       {:ok, prefix, delimiter_token} ->
         boundary = code_boundary_token(prefix, delimiter_token)
         parse_state = %{state | tokens: prefix ++ [boundary, eof_token(delimiter_token)], pos: 0}
@@ -846,15 +846,13 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp split_code_until([], _delimiter, _acc), do: :missing
+  defp split_code_until([], _delimiter, _previous, _acc), do: :missing
 
-  defp split_code_until([token | rest], delimiter, acc) do
-    previous = List.last(acc)
-
+  defp split_code_until([token | rest], delimiter, previous, acc) do
     if code_until_delimiter?(token, delimiter, previous, List.first(rest)) do
       {:ok, Enum.reverse(acc), token}
     else
-      split_code_until(rest, delimiter, [token | acc])
+      split_code_until(rest, delimiter, token, [token | acc])
     end
   end
 

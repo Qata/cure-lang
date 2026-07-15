@@ -1914,20 +1914,20 @@ exemption.
 
 **Derived call-channel floor status (2026-07-15).** The generic macro parser now
 supports delimiter-aware parsed holes (`<body: Code until call>`), so a macro
- can parse one indented code expression before a following grammar literal
- without capturing the literal as part of the body or falling back to raw
- tokens. Computed-rule dispatch also tries all rules for a keyword before
- falling back to an older transparent rule. `actor` consumes this vocabulary
- to derive an `ActorRequest` enum and a typed `handle_call` result from an
- optional `call` arm. The initial sound floor accepts one or two
- request-pattern arms whose replies agree as the reflected `state`, an
- integer/float/atom/bool literal, or a tuple; unsupported expressions and
- inconsistent reply categories fail at macro elaboration and never widen to
- `Any`. Reflected variables carry canonical atom metadata so this check is
- source-defined and does not reconstruct names in the compiler. General
- multi-arm traversal, richer expression inference, and the one-shot typed
- reply capability required by the full BEAM algebra remain open; this floor is
- not completion of §9.4.
+can parse one indented code expression before a following grammar literal
+without capturing the literal as part of the body or falling back to raw
+tokens. Computed-rule dispatch also tries all rules for a keyword before
+falling back to an older transparent rule. `actor` consumes this vocabulary
+to derive an `ActorRequest` enum and a typed `handle_call` result from an
+optional `call` arm. The initial sound floor accepts one or two
+request-pattern arms whose replies agree as the reflected `state`, an
+integer/float/atom/bool literal, or a tuple; unsupported expressions and
+inconsistent reply categories fail at macro elaboration and never widen to
+`Any`. Reflected variables carry canonical atom metadata so this check is
+source-defined and does not reconstruct names in the compiler. General
+multi-arm traversal, richer expression inference, and the one-shot typed
+reply capability required by the full BEAM algebra remain open; this floor is
+not completion of §9.4.
 
 **Hardest sub-problem** (not the reflection, not even the reorder): the derived
 message type is a NEW NOMINAL DECLARATION that must exist before the lifted module
