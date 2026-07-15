@@ -2146,14 +2146,22 @@ runtime dispatch. Positive end-to-end coverage proves a user-defined service
 family reuses a common state field, and parser coverage pins all three rejection
 classes.
 
-The next structured-macro sub-phase must also solve generated input identity
-generically: a legacy and structured rule may share a public keyword, but their
-advanced fallback records cannot both be named from that keyword alone. A
-source-level actor prototype exposed this collision before landing and was
-removed; no compiler-specific rename workaround is accepted. Direct expander
-parameters remain the intended primary API, with fallback record identity to be
-made explicit and collision-free before the four standard containers are
-rewritten onto families.
+**Generated input identity status (2026-07-15).** The structured lowering now
+names its advanced fallback record from the accepted family (`FamilyNameInputSyntax`)
+rather than from the public macro keyword. The parser also preserves the
+family-specific metadata when materializing a computed use, and only consumes
+an indented body when matching a family rule. This keeps a structured and a
+legacy rule with the same public keyword disjoint without an OTP-specific
+compiler exception, while preserving ordinary legacy fallback.
+
+**Structured actor status (2026-07-15).** `Std.Actor` now declares an
+`ActorDefinition` family with required `state` and `on_cast` sections and a
+source-defined `actor` expander. The expander uses the existing transparent
+syntax reflection and declaration builders to derive `ActorMessage` and emit
+an ordinary lifted GenServer module. A compiled integration test covers the
+structured surface alongside the legacy actor forms; the remaining actor
+sections and the FSM/supervisor/application family surfaces stay ordered
+follow-up work.
 
 **Typed declaration builder status (2026-07-15).** `Std.Syntax` now exposes
 record-backed specifications and builders for parameters, linear parameters,

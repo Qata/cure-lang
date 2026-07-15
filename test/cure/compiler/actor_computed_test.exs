@@ -29,6 +29,26 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert apply(:"Cure.Generated.Derived", :handle_info, [:Inc, 0]) == {:noreply, 0}
   end
 
+  test "actor accepts the reusable structured family surface" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.Structured
+        state Int
+        on_cast
+          Inc -> state + 1
+
+    fn make_message() -> ActorMessage = Inc
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(module, :make_message, []) == :Inc
+    assert apply(:"Cure.Generated.Structured", :init, [0]) == {:ok, 0}
+    assert apply(:"Cure.Generated.Structured", :handle_cast, [:Inc, 0]) == {:noreply, 1}
+  end
+
   test "actor derives its message type from multiple reflected handler arms" do
     source = """
     mod M

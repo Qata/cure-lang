@@ -3,6 +3,28 @@ mod Std.Actor
   use Std.Syntax
   use Std.List
 
+  ## The structured actor surface is a source-defined family. Legacy forms in
+  ## ActorContainers remain available through ordinary grammar fallback.
+  macro actor <name: ModuleName>
+    syntax family ActorDefinition
+      state Type
+      on_cast Cases
+    accepts ActorDefinition
+    expands with derive_actor_family
+
+  fn derive_actor_family(name: ModuleNameSyntax, definition: ActorDefinitionSyntax) -> Syntax =
+    let body = Node(:pattern_match, [], [variable("message") | children(definition.on_cast)])
+    let name_syntax: Syntax = name
+    let module_name: SynLit = match name_syntax
+      Leaf(_, _, SAtom(value)) -> SAtom(value)
+      _ -> SStr("Cure.Generated.Actor")
+    let module_expr: Syntax = match name_syntax
+      Leaf(_, _, SAtom(value)) -> atom_literal(value)
+      _ -> atom_literal(:generated_actor)
+    match derive_pattern_heads(body)
+      InvalidHeads(reason) -> Failure(reason, [])
+      Heads(heads) -> emit_actor_parts(module_name, module_expr, definition.state, body, heads)
+
   ## `actor` is a transparent standard-library macro. The base actor is an
   ## ordinary lifted GenServer module; message-code derivation and user
   ## handlers are layered on top of this floor.
@@ -305,15 +327,18 @@ mod Std.Actor
             false -> InvalidReply(:reply_type_not_derivable)
 
   fn emit_actor(input: ActorSyntax, module_name: SynLit, module_expr: Syntax, heads: List(Syntax)) -> Syntax =
+    emit_actor_parts(module_name, module_expr, input.state_type, input.cast_body, heads)
+
+  fn emit_actor_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, cast_body: Syntax, heads: List(Syntax)) -> Syntax =
         let message_type: Syntax = enum_type("ActorMessage", heads)
         let result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let start_type: Syntax = call("Effect", [variable("Tuple")])
-        let handler_body: Syntax = actor_handler(input.cast_body)
+        let handler_body: Syntax = actor_handler(cast_body)
         let default_state: Syntax = tuple([atom_literal(:noreply), variable("state")])
         block([
           message_type,
-          gen_server_module(module_name, input.state_type, [
+          gen_server_module(module_name, state_type, [
             alias_node("Message", variable("ActorMessage")),
             function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), variable("initial")])),
             function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, handler_body),
