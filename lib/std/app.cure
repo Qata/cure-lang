@@ -6,7 +6,7 @@ mod Std.App
   ## AppContainers remain available through ordinary grammar fallback.
   macro app <name: ModuleName>
     syntax family ApplicationDefinition
-      root Code
+      root ModuleName
     accepts ApplicationDefinition
     expands with derive_application_family
 

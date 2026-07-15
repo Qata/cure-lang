@@ -37,7 +37,28 @@ DONE for the shared specs (self-reviewed); each SP plan still gets Stage 3.
 - Two-phase parse (pre-pass seeds `active_macros` from `use`+local defs) = SP1's
   architectural core (grounding doc). Soft-keyword `macro`; `{:macro_def,meta,rules}` AST.
 
-## CURRENT POSITION
+## CURRENT POSITION — 2026-07-15 (live pointer)
+
+**The live implementation state is the `ORDERED TRANSPARENT BEAM PLAN` below plus the
+dated status blocks under `OPEN GATE — automatic message-code derivation` (current
+through 2026-07-15). Read those for detail; this is the map.** Where the branch
+actually stands:
+
+- **Transparent BEAM plan:** Phases 0, 1, 2, and 2.5 are COMPLETE. Phase 3 (`beam_ops`)
+  is unblocked (2.5 done) and substantially landed. Phase 4 has replaced all four OTP
+  forms — `sup`, `actor`, `fsm`, `app` each now lower through a source-defined
+  `syntax family` + expander (the structured-family surface, 2026-07-15). Phase 5/5a
+  (reusable family surface + beginner-friendly `Std.Syntax` builders) is in progress;
+  Phase 6 end-to-end / AtomVM verification remains.
+- **Open work:** retire the `contextual` proof exemption on `beam_ops self` via
+  reply-channel message-code derivation; finish the safe-vs-`Std.Syntax.Raw` split,
+  scope-aware hygiene for ordinary generated binders, and multi-channel `handle_call`
+  reply typing.
+
+The SP1–SP6 records below are the historical foundation log — superseded as the
+*current* pointer by the summary above, but retained for provenance.
+
+## SP1 MILESTONE-1 RECORD (historical)
 SP1, Stage 2 DONE for milestone 1 (macro-definition front-end): plan committed at
 `docs/superpowers/plans/2026-07-12-macro-facility-sp1-plan.md` (`6f76a94`), tasks 1-3
 with complete anchored code (soft-keyword `macro`, `syntax` rules, typed holes →
@@ -1171,7 +1192,9 @@ Suggested commit:
 
 ### Phase 3 — Implement `beam_ops` over the algebra
 
-**STATUS: WAITING ON PHASE 2.5 (2026-07-14).** `Std.Otp` now defines a closed initial
+**STATUS: UNBLOCKED — Phase 2.5 COMPLETE (2026-07-15); implementation substantially
+landed. Residual: retire the `contextual` proof exemption on `beam_ops self` via
+reply-channel message-code derivation (see the `OPEN GATE` section).** `Std.Otp` now defines a closed initial
 `beam_ops` vocabulary: `self`, messaging, call/cast, process creation, startup,
 lifecycle, timers, monitors, and links all expand to ordinary checked
 `Std.Otp` calls and are proven marker-free. The generic macro grammar now has a
@@ -1362,7 +1385,10 @@ Phase 3 operations:
 
 #### Phase 4a — `sup` capability proof
 
-**STATUS: IN PROGRESS (2026-07-13).** `lib/std/supervisor.cure` now expands
+**STATUS: LANDED — structured `syntax family` surface (2026-07-15); see "Structured
+supervisor status" in the `OPEN GATE` section. The 2026-07-13 transparent-rule expansion
+described below was the first replacement, since refined into the family surface.**
+`lib/std/supervisor.cure` now expands
 `sup` into a transparent `lift module` with checked `Supervisor.init/1`, an
 ordinary `start_link/0`, dynamic module atoms, a typed `ChildSpec` value, and
 the real checked `supervisor:start_link/3` boundary. The common
@@ -1397,7 +1423,10 @@ module emits and runs through the common path.
 
 #### Phase 4b — `actor`
 
-**STATUS: IN PROGRESS (2026-07-13).** The public `actor` syntax now expands
+**STATUS: LANDED — structured `syntax family` surface (2026-07-15); see "Structured
+actor status" (and the call/info/lifecycle status blocks) in the `OPEN GATE` section.
+The 2026-07-13 transparent-rule expansion described below was the first replacement,
+since refined into the family surface.** The public `actor` syntax now expands
 to an ordinary lifted `GenServer` module and starts through the typed
 `Std.Otp.start_link` wrapper. In addition to the bootstrap form, the
 standard-library macro now accepts an explicit `state <Type>` clause and
@@ -1473,7 +1502,10 @@ each generated lifted module and executes through the ordinary typed wrapper.
 
 #### Phase 4c — `fsm`
 
-**STATUS: IN PROGRESS (2026-07-13).** The public `fsm` syntax now expands to
+**STATUS: LANDED — structured `syntax family` surface (2026-07-15); see "Structured
+FSM status" in the `OPEN GATE` section. The 2026-07-13 transparent-rule expansion
+described below was the first replacement, since refined into the family surface.**
+The public `fsm` syntax now expands to
 an ordinary lifted `GenStatem` module and starts through the typed
 `Std.Otp.start_statem` wrapper. In addition to the bootstrap form, the
 standard-library macro accepts an explicit `state <Type>` clause and emits a
@@ -1522,7 +1554,10 @@ messages.
 
 #### Phase 4d — `app`
 
-**STATUS: IN PROGRESS (2026-07-13).** The public `app` syntax now expands to
+**STATUS: LANDED — structured `syntax family` surface (2026-07-15); see "Structured
+application status" in the `OPEN GATE` section. The 2026-07-13 transparent-rule expansion
+described below was the first replacement, since refined into the family surface.**
+The public `app` syntax now expands to
 an ordinary lifted `Application` module with checked `start/2` and `stop/1`
 callbacks, and the generic Unix/AtomVM packaging path is exercised. In
 addition to the bootstrap form, the standard-library macro accepts an
@@ -1580,7 +1615,9 @@ Suggested commits:
 
 ### Phase 5 — Remove bespoke OTP compiler paths and OTP knowledge
 
-**STATUS: IN PROGRESS (2026-07-13).** The active compiler no longer dispatches
+**STATUS: IN PROGRESS (2026-07-13; sub-phase 5a — reusable `syntax family` surface and
+the beginner-friendly `Std.Syntax` builder/hygiene/diagnostic slices — landing through
+2026-07-15, see the dated status blocks in the `OPEN GATE` section).** The active compiler no longer dispatches
 through `ContainerMacro`, the legacy OTP raw-body parser and `__otp_container`
 marker path are gone, and the closed `OtpMacro` behavior registry has been
 deleted. Remaining work is auditing all generic tooling and application
@@ -2205,11 +2242,13 @@ strategy. Empty-child initialization and recursive expansion of nested
 available through grammar fallback.
 
 **Structured application status (2026-07-15).** `Std.App` now declares an
-`ApplicationDefinition` family with a typed `root` section. Its source-defined
-expander emits the ordinary application callbacks and delegates root startup to
-`Std.Otp` through the generated code. Stop and phase callbacks are covered by a
-compiled integration test; richer phase and body forms remain legacy-compatible
-follow-up extensions of the same family surface.
+`ApplicationDefinition` family with a typed `ModuleName` root section. Its
+source-defined expander emits the ordinary application callbacks and delegates
+root startup to `Std.Otp` through the generated code. Stop and phase callbacks
+are covered by a compiled integration test; richer phase and body forms remain
+legacy-compatible follow-up extensions of the same family surface. The generic
+Unix AtomVM package proof now also compiles and starts all four structured
+surfaces alongside their legacy counterparts.
 
 **Typed declaration builder status (2026-07-15).** `Std.Syntax` now exposes
 record-backed specifications and builders for parameters, linear parameters,

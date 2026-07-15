@@ -66,7 +66,7 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
       use Std.App
 
       app Cure.Generated.StructuredApp
-        root :root_supervisor
+        root Cure.Generated.StructuredSup
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
