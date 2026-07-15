@@ -1793,10 +1793,10 @@ also prove that the generated `ActorMessage` crosses the lifted-unit boundary
 into an enclosing caller's `Pid(ActorMessage)` and `beam_ops tell` call. The
 computed-result path now shares the parser's compile-time hygiene protocol:
 explicit generated markers are freshened while reflected use-site syntax is
-left untouched. The remaining work is payload-bearing handler derivation with
-a sound typed payload view, plus retirement of the standalone proof exemption
-once the derived transparent operation templates are provable without a
-use-site context.
+left untouched. Typed payload derivation is now landed for explicit constructor
+views; the remaining work is multi-channel `handle_call` reply typing, plus
+retirement of the standalone proof exemption once the derived transparent
+operation templates are provable without a use-site context.
 
 **Goal.** Today an `actor` must be handed an explicit `messages <Type>` clause
 (and an `fsm` an `events <Type>`). The std macro should DERIVE the message type
@@ -1891,6 +1891,17 @@ their existing marker-plus-plain-reference behavior because hole substitution
 occurs after template freshening. Tests pin both the direct protocol boundary
 and a compiled computed macro that returns `{caller_value, generated_value}`
 without capture. Quoted syntax remains a hygiene boundary.
+
+**Payload derivation status (2026-07-15).** The source reflection vocabulary now
+recognizes constructor patterns with explicit typed payload binders, such as
+`Ping(value: Int)`, and constructs matching parameterized enum variants. The
+elaborator desugars those annotations to ordinary constructor binders and
+checks them definitionally against the constructor telescope, so this is a
+language-level typed pattern feature rather than an actor-specific trust path.
+`actor` and `fsm` now derive and execute typed payload messages/events; untyped
+payload patterns remain rejected because their code set is not closed. The
+remaining derivation work is multi-channel `handle_call` reply typing and any
+additional payload forms that cannot be represented by an explicit type view.
 
 **Hardest sub-problem** (not the reflection, not even the reorder): the derived
 message type is a NEW NOMINAL DECLARATION that must exist before the lifted module

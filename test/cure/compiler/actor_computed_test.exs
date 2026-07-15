@@ -85,16 +85,31 @@ defmodule Cure.Compiler.ActorComputedTest do
              Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
-  test "actor rejects payload constructors without a payload type view" do
+  test "actor derives a typed payload constructor from a typed handler pattern" do
     source = """
     mod M
       use Std.Actor
 
       actor Cure.Generated.Payload state Int derive
         match message
-          Ping(value) -> value
+          Ping(value: Int) -> value
 
     fn make_message() -> ActorMessage = Ping(7)
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :make_message, []) == {:Ping, 7}
+    assert apply(:"Cure.Generated.Payload", :handle_cast, [{:Ping, 7}, 0]) == {:noreply, 7}
+  end
+
+  test "actor still rejects an untyped payload constructor" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.UntypedPayload state Int derive
+        match message
+          Ping(value) -> value
     """
 
     assert {:error, {:computed_macro_error, _, {:author_failure, "payload_type_not_derivable", []}}} =

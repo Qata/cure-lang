@@ -45,6 +45,8 @@ mod Std.Syntax
 
   type PatternHead = ValidHead(Atom, Syntax) | InvalidHead(Atom)
 
+  type PayloadTypes = Payloads(List(Syntax)) | InvalidPayload(Atom)
+
   ## Small, total operations used by source-defined syntax macros. These keep
   ## syntax analysis in Cure instead of teaching the compiler about a macro's
   ## domain-specific declarations.
@@ -166,6 +168,17 @@ mod Std.Syntax
   fn enum_variant(name: String) -> Syntax =
     Leaf(:variable, [KV(:variant, SBool(true))], SStr(name))
 
+  ## Build a constructor variant with explicitly typed payload fields. The
+  ## parser represents enum constructors as function definitions whose params
+  ## are type expressions, so this is the same surface form as a user-written
+  ## `type Message = Ping(Int)` declaration.
+  fn enum_variant_payload(name: String, payloads: List(Syntax)) -> Syntax =
+    Node(:function_def, [
+      KV(:name, SStr(name)),
+      KV(:params, syntax_list(payloads)),
+      KV(:variant, SBool(true))
+    ], [])
+
   ## Extract a closed constructor head from a reflected match arm. A handler
   ## whose head cannot determine a nominal constructor is rejected by the
   ## caller rather than silently widening the generated message/event type.
@@ -177,9 +190,10 @@ mod Std.Syntax
       true -> match attr(values, :name)
         Found(value) -> match value
           SStr(name) -> match constructor_name(values)
-            true -> pickup
-              empty_syntax_list(args) -> ValidHead(constructor_key(values), enum_variant(name))
-              else -> InvalidHead(:payload_type_not_derivable)
+            true -> match payload_types(args)
+              Payloads([]) -> ValidHead(constructor_key(values), enum_variant(name))
+              Payloads(types) -> ValidHead(constructor_key(values), enum_variant_payload(name, types))
+              InvalidPayload(reason) -> InvalidHead(reason)
             false -> InvalidHead(:non_constructor_pattern)
           _ -> InvalidHead(:unsupported_pattern)
         Missing -> InvalidHead(:unsupported_pattern)
@@ -226,9 +240,23 @@ mod Std.Syntax
       _ -> :invalid_constructor
     Missing -> :invalid_constructor
 
-  fn empty_syntax_list(items: List(Syntax)) -> Bool = match items
-    [] -> true
-    _ -> false
+  fn payload_types(args: List(Syntax)) -> PayloadTypes = match args
+    [] -> Payloads([])
+    [head | rest] -> match head
+      Node(tag, _, values) -> match tag == :typed_pattern
+        true -> match values
+          [_, payload] -> match valid_payload_type(payload)
+            true -> match payload_types(rest)
+              Payloads(types) -> Payloads([payload | types])
+              InvalidPayload(reason) -> InvalidPayload(reason)
+            false -> InvalidPayload(:payload_type_not_derivable)
+          _ -> InvalidPayload(:payload_type_not_derivable)
+        false -> InvalidPayload(:payload_type_not_derivable)
+      _ -> InvalidPayload(:payload_type_not_derivable)
+
+  fn valid_payload_type(payload: Syntax) -> Bool = match payload
+    Raw(_) -> false
+    _ -> true
 
   fn derive_pattern_heads(body: Syntax) -> PatternHeads = match handler_children(body)
     [_scrutinee | arms] -> collect_pattern_heads(arms, [], [])

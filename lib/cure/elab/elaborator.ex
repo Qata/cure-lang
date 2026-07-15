@@ -13,7 +13,7 @@ defmodule Cure.Elab.Elaborator do
   name resolves to its de Bruijn index by position.
   """
 
-  alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Normalise, Quote}
+  alias Cure.Core.{Context, Conv, Env, Eval, Grade, Inductive, Kernel, Normalise, Quote}
   alias Cure.Elab.{GuardLint, MetaCtx, Subst, Unify}
 
   # Placeholder body for a `:case` branch the join point will fill (see
@@ -711,7 +711,7 @@ defmodule Cure.Elab.Elaborator do
   # motive it builds is effectively constant — correct for inference position.
   def elaborate_expr_typed({:pattern_match, meta, [scrut | arms]} = expr, names, ctx, env)
       when is_list(meta) do
-    arms = desugar_list_patterns(arms)
+    arms = arms |> desugar_list_patterns() |> desugar_typed_constructor_args()
 
     if special_match_arms?(arms) do
       with {:ok, desugared} <- desugar_special_match(scrut, arms, Keyword.get(meta, :line, 0)) do
@@ -2352,7 +2352,7 @@ defmodule Cure.Elab.Elaborator do
     # rekey/refine/constructor_pattern all see the uniform function_call shape and
     # no `:list` node survives. One-deep only; a nested list pattern desugars to a
     # nested ctor pattern that `constructor_pattern/1` rejects (:nested_constructor_arg).
-    arms0 = desugar_list_patterns(arms0)
+    arms0 = arms0 |> desugar_list_patterns() |> desugar_typed_constructor_args()
     {scrut_expr, arms0} = desugar_tuple_scrutinee(scrut_expr, arms0)
 
     with {:ok, arms1} <- desugar_as_patterns(arms0),
@@ -2378,6 +2378,7 @@ defmodule Cure.Elab.Elaborator do
            try_guard_match(scrut_expr, arms, result_type_term, names, ctx, env),
          :not_applicable <- try_tuple_match(scrut_expr, arms, result_type_term, names, ctx, env),
          {:ok, scrut_term, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env),
+         :ok <- validate_typed_pattern_annotations(arms, scrut_type, names, ctx, env),
          :not_applicable <-
            try_trivial_match(scrut_expr, arms, result_type_term, names, ctx, env),
          :not_applicable <-
@@ -6165,6 +6166,119 @@ defmodule Cure.Elab.Elaborator do
         other
     end)
   end
+
+  # Typed constructor payloads (`Some(value: Int)`) are a surface ascription on
+  # an ordinary constructor binder. Remove the annotation before the existing
+  # pattern matrix, but retain its type AST in arm metadata for the validation
+  # pass in `elaborate_match/6`. Keeping this generic avoids teaching any macro
+  # about the elaborator's constructor representation.
+  defp desugar_typed_constructor_args(arms) do
+    Enum.map(arms, fn
+      {:match_arm, meta, body} = arm ->
+        case Keyword.get(meta, :pattern) do
+          {:function_call, pattern_meta, args} ->
+            {args, annotations} = clean_typed_constructor_args(args, 0, [], [])
+
+            meta =
+              if annotations == [],
+                do: meta,
+                else: Keyword.put(meta, :typed_pattern_types, Enum.reverse(annotations))
+
+            {:match_arm, Keyword.put(meta, :pattern, {:function_call, pattern_meta, args}), body}
+
+          _ ->
+            arm
+        end
+
+      other ->
+        other
+    end)
+  end
+
+  defp clean_typed_constructor_args([], _index, args, annotations), do: {Enum.reverse(args), annotations}
+
+  defp clean_typed_constructor_args([{:typed_pattern, pattern_meta, [name, type_ast]} | rest], index, args, annotations)
+       when is_binary(name) do
+    clean_typed_constructor_args(
+      rest,
+      index + 1,
+      [{:variable, pattern_meta, name} | args],
+      [{index, type_ast} | annotations]
+    )
+  end
+
+  defp clean_typed_constructor_args([arg | rest], index, args, annotations) do
+    clean_typed_constructor_args(rest, index + 1, [arg | args], annotations)
+  end
+
+  defp validate_typed_pattern_annotations(arms, {:vdata, dname, combined_vals}, names, ctx, env) do
+    pc = Inductive.param_count(env, dname)
+    {param_vals, _idx_vals} = Enum.split(combined_vals, pc)
+
+    Enum.reduce_while(arms, :ok, fn
+      {:match_arm, meta, _body}, :ok ->
+        case Keyword.get(meta, :typed_pattern_types, []) do
+          [] ->
+            {:cont, :ok}
+
+          annotations ->
+            pattern = Keyword.fetch!(meta, :pattern)
+
+            with {:ok, {cname, _pattern_vars}} <- constructor_pattern(pattern),
+                 %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
+                 branch_ctx <- extend_context(ctx, telescope, param_vals),
+                 :ok <- validate_constructor_payload_types(annotations, telescope, quantities, branch_ctx, names, env) do
+              {:cont, :ok}
+            else
+              {:error, _} = error -> {:halt, error}
+              nil -> {:halt, {:error, {:unknown_constructor, cname_from_pattern(pattern)}}}
+            end
+        end
+
+      _arm, :ok ->
+        {:cont, :ok}
+    end)
+    |> case do
+      :ok -> :ok
+      {:error, _} = error -> error
+    end
+  end
+
+  defp validate_typed_pattern_annotations(_arms, _scrut_type, _names, _ctx, _env), do: :ok
+
+  defp validate_constructor_payload_types(annotations, telescope, quantities, branch_ctx, names, env) do
+    present_positions =
+      quantities
+      |> Enum.with_index()
+      |> Enum.filter(fn {quantity, _index} -> Grade.present?(quantity) end)
+      |> Enum.map(&elem(&1, 1))
+
+    Enum.reduce_while(annotations, :ok, fn {position, type_ast}, :ok ->
+      case Enum.at(present_positions, position) do
+        nil ->
+          {:halt, {:error, {:typed_pattern_arity, position}}}
+
+        telescope_position ->
+          branch_index = length(telescope) - 1 - telescope_position
+          actual = Context.lookup(branch_ctx, branch_index)
+
+          with {:ok, annotated} <- elaborate_type(type_ast, names, env),
+               actual when not is_nil(actual) <- actual,
+               actual_term <- Quote.reify(actual, Context.length(branch_ctx)),
+               expected_term <- Subst.shift(annotated, length(telescope), 0),
+               true <- Conv.conv?(expected_term, actual_term, Context.env(branch_ctx), Context.length(branch_ctx), Context.signature(branch_ctx)) do
+            {:cont, :ok}
+          else
+            false -> {:halt, {:error, {:typed_pattern_type_mismatch, type_ast}}}
+            nil -> {:halt, {:error, {:typed_pattern_type_mismatch, type_ast}}}
+            {:error, reason} -> {:halt, {:error, {:typed_pattern_type_error, reason}}}
+          end
+      end
+    end)
+  end
+
+  defp cname_from_pattern({:function_call, meta, _args}), do: Keyword.get(meta, :name)
+  defp cname_from_pattern(_pattern), do: nil
 
   defp constructor_pattern({:function_call, meta, args}) do
     cname = meta |> Keyword.fetch!(:name) |> String.to_atom()

@@ -25,6 +25,24 @@ defmodule Cure.Compiler.FsmComputedTest do
     assert apply(generated, :handle_event, [:info, :Stop, :state, 4]) == :keep_state_and_data
   end
 
+  test "fsm derives a typed payload constructor from a typed handler pattern" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      fsm Cure.Generated.Payload state Int derive
+        match event
+          Data(value: Int) -> :keep_state_and_data
+
+    fn make_event() -> FsmEvent = Data(7)
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :make_event, []) == {:Data, 7}
+    assert apply(:"Cure.Generated.Payload", :handle_event, [:info, {:Data, 7}, :ready, 4]) ==
+             :keep_state_and_data
+  end
+
   test "fsm rejects a catch-all event handler" do
     source = """
     mod M
