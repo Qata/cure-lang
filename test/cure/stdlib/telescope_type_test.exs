@@ -23,6 +23,6 @@ defmodule Cure.Stdlib.TelescopeTypeTest do
     src = File.read!("lib/std/telescope.cure")
     assert {:ok, env} = elab(src)
     ctor_names = env |> Inductive.ctors_of(:Telescope) |> Enum.map(& &1.name) |> Enum.sort()
-    assert ctor_names == [:Empty, :More]
+    assert ctor_names == [:"Std.Telescope#Empty", :"Std.Telescope#More"]
   end
 end
