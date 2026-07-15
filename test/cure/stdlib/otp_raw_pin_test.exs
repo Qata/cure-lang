@@ -23,6 +23,7 @@ defmodule Cure.Stdlib.OtpRawPinTest do
     "raw_send" => "Effect(m)",
     "raw_cast" => "Effect(Atom)",
     "raw_stop" => "Effect(Atom)",
+    "raw_reply" => "Effect(Atom)",
     "raw_call" => "Effect(r)",
     "raw_link" => "Effect(Bool)",
     "raw_unlink" => "Effect(Bool)",
