@@ -2131,6 +2131,13 @@ generated binders is still pending the scope-aware hygiene pass; `variable/1`
 therefore remains compatibility behavior until generated binders and references
 can be renamed as one lexical unit.
 
+**Author-diagnostic formatting status (2026-07-15).** Structured `Rejected`
+results and legacy `Failure` results now retain a dedicated macro-rejection
+category through the outer code-generation error formatter. The compiler still
+keeps the authored diagnostic payload opaque to the runtime, but users receive
+the macro name, diagnostic count or failure name, and expansion source location
+instead of an unclassified tuple dump.
+
 **Raw expansion validation status (2026-07-15).** Raw construction is now
 explicitly separated from executable expansion. Before a computed result is
 converted back to parser AST, `MacroSyntax.validate_expansion/1` rejects raw and

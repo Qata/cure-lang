@@ -77,6 +77,20 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert rendered =~ "macro.cure:9"
   end
 
+  test "author rejection results retain a friendly macro diagnostic category" do
+    rendered =
+      Errors.format_error(
+        {:codegen_error,
+         {:computed_macro_error, [keyword: "actor", line: 4],
+          {:author_diagnostics, [{:macro_failure, :missing_state, []}]}}},
+        "actor.cure"
+      )
+
+    assert rendered =~ "macro rejected expansion"
+    assert rendered =~ "reported 1 diagnostic(s)"
+    assert rendered =~ "actor.cure:4"
+  end
+
   test "repeated computed holes are typed and reflected as List(Syntax)" do
     source = """
     mod M

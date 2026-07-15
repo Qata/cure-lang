@@ -421,7 +421,23 @@ defmodule Cure.Compiler.Errors do
   defp format_generated_syntax_reason({:invalid_generated_syntax, {reason, path}}),
     do: {"invalid macro expansion", "#{inspect(reason)} (#{format_syntax_path(path)})"}
 
+  defp format_generated_syntax_reason({:author_diagnostics, diagnostics}) when is_list(diagnostics),
+    do: {"macro rejected expansion", format_author_diagnostics(diagnostics)}
+
+  defp format_generated_syntax_reason({:author_failure, name, args}) when is_list(args),
+    do: {"macro rejected expansion", "the macro reported `#{name}`#{format_author_args(args)}"}
+
   defp format_generated_syntax_reason(reason), do: {"computed macro failed", inspect(reason)}
+
+  defp format_author_diagnostics([]), do: "the macro returned no diagnostic details"
+
+  defp format_author_diagnostics(diagnostics) do
+    details = Enum.map_join(diagnostics, "; ", &inspect/1)
+    "the macro reported #{length(diagnostics)} diagnostic(s): #{details}"
+  end
+
+  defp format_author_args([]), do: ""
+  defp format_author_args(args), do: ": #{Enum.map_join(args, ", ", &inspect/1)}"
 
   defp format_syntax_path(path) do
     path
