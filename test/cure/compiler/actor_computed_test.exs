@@ -149,6 +149,7 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert module == :"Cure.M"
     assert apply(module, :make_request, []) == :Count
+
     assert apply(:"Cure.Generated.ManyCall", :handle_call, [:Count, {:from, self()}, 12]) ==
              {:reply, 12, 12}
   end
