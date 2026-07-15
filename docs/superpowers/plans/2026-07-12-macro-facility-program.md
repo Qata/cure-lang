@@ -154,6 +154,64 @@ suite green.
 facility. Each DSL is its own small plan.
 **Depends on:** SP1–SP5 as each DSL requires.
 
+> **SP7–SP9 are first-class but NOT prerequisites for SP6.** Unlike SP5.1–5.3, they do
+> not gate the DSL libraries. They are, respectively: a cross-cutting dev-experience
+> workstream that can start NOW (SP7), a soundness EXTENSION of SP3 (SP8), and a
+> deliberate later high-ceiling capability bet (SP9). Order them by priority, not
+> strictly after SP6.
+
+### SP7 — Macro tooling: stepper, expansion introspection, macro-aware errors
+**Ships:** a `cure macro expand <file>` that prints each expansion step (the stepper), a
+`--trace-macros` flag, and macro-aware error rendering — errors that point at the USE
+site in the DSL's own vocabulary and show the expansion, instead of surfacing a
+Core-level `unknown_global` from inside generated code (the parked Elm-style rendering).
+**Why it matters:** a DSL you cannot watch expand is a DSL you debug by print statement;
+Racket's macro stepper is a large part of why authoring in it is tractable. Source
+provenance (`source_line`/`source_col`) landed 2026-07-15, so the location channel already
+exists — this is now cheap and disproportionately drives whether the facility gets USED.
+**Ordering:** can begin immediately — depends only on the landed expansion pipeline + the
+provenance channel; independent of SP5.x and SP6. Highest adoption leverage per unit effort.
+**Gate:** `cure macro expand` shows the step sequence for a `computed by` macro; an
+ill-typed expansion reports at the use site with the DSL keyword and the expansion shown,
+not a raw generated-code error; full suite green.
+**Depends on:** the landed expansion pipeline + source provenance.
+
+### SP8 — Composition soundness (macro∘macro proofs + expansion confluence)
+**Ships:** extends the self-proving story from "one macro's output is well-typed" (SP3) to
+two properties SP3 does NOT cover: (1) **composition** — when macro A's output contains a
+use of macro B, the composition is proven, not just each in isolation (build against
+`macros/2026-07-08-macro-composition-design.md`); (2) **expansion confluence/termination as
+a PROVEN per-macro property**, not merely fuel-bounded — today a computed output that
+contains further macro uses relies on the fuel backstop.
+**Why:** the inside-out expansion order makes composition tractable to state as a theorem;
+making "expansion converges" proven rather than fuel-capped extends the guarantee from
+"type-safe output" to "well-defined output."
+**Ordering:** after SP3 (needs the generative-proof engine) and once interacting macros
+exist (the SP5.x / SP6 DSLs are good fodder).
+**Gate:** a composed A∘B macro pair is generatively proven at macro-compile; a
+non-converging computed macro is REJECTED with a diagnostic rather than silently
+fuel-exhausted; full suite + Antigen campaign green.
+**Depends on:** SP3 (generative-proof engine).
+
+### SP9 — Type-directed (elaboration-time) macros
+**Ships:** a distinct macro KIND that participates in bidirectional elaboration — it
+receives the EXPECTED type and may emit typed terms into the elaborator's metavariable
+context, rather than being a pure `Syntax -> Syntax` pre-pass. Unlocks overloaded literals,
+adaptive `do`-notation (the block's type selects the `Effect` row / monad), and type-driven
+deriving — the Lean 4 / Idris `%macro` posture.
+**Why it is its own KIND, not an extension of `computed by`:** `computed by` runs BEFORE
+elaboration and never sees the expected type; type-directed macros couple to the
+elaborator. Keeping them a separate kind preserves the clean syntactic pre-pass for
+everything that does not need types.
+**Ordering:** the deliberate LATER, high-ceiling bet — start only after the syntactic tier
+(SP1–SP6) is proven solid by the OTP-container dogfood. Highest capability ceiling, biggest
+architectural risk (elaborator coupling), so it goes last.
+**Gate:** a type-directed macro resolves an overloaded literal or adapts a `do`-block to its
+checked `Effect` row and its output kernel-checks; a wrong emission still yields
+rejected-not-unsound (the reflection/emission trust posture is preserved); full suite green.
+**Depends on:** SP2 (Tier-3 host) + the reflection API; the effect stack (already landed)
+for the `do`-notation case.
+
 ---
 
 ## Sequencing summary
