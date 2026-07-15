@@ -36,10 +36,10 @@ defmodule Cure.Core.BuiltinOpBoolCodomainTest do
   alias Cure.Core.{Builtins, Env, Inductive, Kernel}
 
   defp with_own_bool(env) do
-    family = Inductive.family(:Bool, [], [], 0)
-    ctors = [Inductive.ctor(:False, [], []), Inductive.ctor(:True, [], [])]
+    family = Inductive.family(:"Std.Bool#Bool", [], [], 0)
+    ctors = [Inductive.ctor(:"Std.Bool#False", [], []), Inductive.ctor(:"Std.Bool#True", [], [])]
 
-    env |> Inductive.declare(family, ctors) |> Inductive.register_builtin(:bool, :Bool)
+    env |> Inductive.declare(family, ctors) |> Inductive.register_builtin(:bool, :"Std.Bool#Bool")
   end
 
   test "a comparison op's codomain names the real Bool family even when :bool is excluded" do
@@ -47,7 +47,7 @@ defmodule Cure.Core.BuiltinOpBoolCodomainTest do
 
     assert %{type: {:pi, _g1, _, {:pi, _g2, _, {:data, fam, [], []}}}} = Env.get_def(env, :int_lt)
     refute is_nil(fam)
-    assert fam == :Bool
+    assert fam == :"Std.Bool#Bool"
   end
 
   test "struct_eq/struct_ne's codomain does too — same snapshot, same defect" do
@@ -55,7 +55,7 @@ defmodule Cure.Core.BuiltinOpBoolCodomainTest do
 
     for op <- [:struct_eq, :struct_ne] do
       assert %{type: {:pi, _g1, _, {:pi, _g2, _, {:pi, _g3, _, {:data, fam, [], []}}}}} = Env.get_def(env, op)
-      assert fam == :Bool
+      assert fam == :"Std.Bool#Bool"
     end
   end
 
@@ -74,7 +74,7 @@ defmodule Cure.Core.BuiltinOpBoolCodomainTest do
     # `register_builtin/3` for :Bool under key :bool, the same primitives `builtins.ex` uses.
     env = Env.empty() |> Builtins.seed(MapSet.new([:Bool])) |> with_own_bool()
 
-    assert Inductive.builtin(env, :bool) == :Bool
+    assert Inductive.builtin(env, :bool) == :"Std.Bool#Bool"
     assert :ok = Kernel.check_def(env, :int_lt)
     assert :ok = Kernel.check_def(env, :struct_eq)
   end
@@ -87,10 +87,10 @@ defmodule Cure.Core.BuiltinOpBoolCodomainTest do
   end
 
   test "an env whose Bool is excluded and never declared reports the missing family" do
-    # Not a defect: the env is genuinely incomplete. What matters is that it names :Bool rather
-    # than nil, so the diagnostic points at the family that is actually absent.
+    # Not a defect: the env is genuinely incomplete. What matters is that it names the canonical
+    # Bool family rather than nil, so the diagnostic points at the family that is actually absent.
     env = Builtins.seed(Env.empty(), MapSet.new([:Bool]))
 
-    assert {:error, {:unknown_family, :Bool}} = Kernel.check_def(env, :int_lt)
+    assert {:error, {:unknown_family, :"Std.Bool#Bool"}} = Kernel.check_def(env, :int_lt)
   end
 end

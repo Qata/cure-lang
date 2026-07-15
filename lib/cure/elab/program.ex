@@ -1535,8 +1535,14 @@ defmodule Cure.Elab.Program do
   # environment. Non-function declarations are elaborated in source order in pass
   # one (a function signature may reference any type declared before it).
   defp elaborate_declarations(items, env, prelude?) do
-    with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?) do
-      body_pass(fn_decls, env1)
+    with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?),
+         {:ok, env2} <- body_pass(fn_decls, env1) do
+      # Every body is now present. Re-certify defs whose totality was DEFERRED
+      # in declaration order (a total function calling a helper declared below
+      # it — `reverse` → `reverse_acc`), which the in-order per-def certify left
+      # uncertified and no later pass revisits. Sound: the kernel re-derives each
+      # certificate; genuinely partial defs are rejected exactly as before.
+      {:ok, TotalityClosure.certify_deferred(env2)}
     end
   end
 

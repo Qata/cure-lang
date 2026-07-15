@@ -11,12 +11,12 @@ defmodule Cure.Core.PrimBoolInductiveTest do
 
   test "a comparison spine infers to the Bool inductive, not {:vbool_type}", %{ctx: ctx} do
     {:ok, ty} = Kernel.infer(ctx, app2(:int_lt, {:int_lit, 3}, {:int_lit, 5}))
-    assert ty == {:vdata, :Bool, []}
+    assert ty == {:vdata, :"Std.Bool#Bool", []}
   end
 
   test "equality infers to the Bool inductive", %{ctx: ctx} do
     {:ok, ty} = Kernel.infer(ctx, app2(:int_eq, {:int_lit, 3}, {:int_lit, 3}))
-    assert ty == {:vdata, :Bool, []}
+    assert ty == {:vdata, :"Std.Bool#Bool", []}
   end
 
   test "the connectives are not ops: an :and spine is an unknown global", %{ctx: ctx} do

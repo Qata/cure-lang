@@ -28,7 +28,7 @@ defmodule Cure.Core.BuiltinOpTest do
 
   test "comparison folds to the inductive Bool ctor" do
     t = Normalise.nf(ctx(), app2(:int_lt, {:int_lit, 1}, {:int_lit, 2}), delta: :certified)
-    assert {:ctor, :True, []} = t
+    assert {:ctor, :"Std.Bool#True", []} = t
   end
 
   test "G.1 rule 1: div/rem by literal zero stays neutral (never crashes)" do
@@ -83,30 +83,30 @@ defmodule Cure.Core.BuiltinOpTest do
       t =
         Normalise.nf(ctx(), app3(:struct_eq, {:int_type}, {:int_lit, 3}, {:int_lit, 3}), delta: :certified)
 
-      assert {:ctor, :True, []} = t
+      assert {:ctor, :"Std.Bool#True", []} = t
 
       t2 =
         Normalise.nf(ctx(), app3(:struct_ne, {:int_type}, {:int_lit, 3}, {:int_lit, 4}), delta: :certified)
 
-      assert {:ctor, :True, []} = t2
+      assert {:ctor, :"Std.Bool#True", []} = t2
     end
 
     test "struct_eq and struct_ne fold on Atom literals" do
-      assert {:ctor, :True, []} =
+      assert {:ctor, :"Std.Bool#True", []} =
                Normalise.nf(
                  ctx(),
                  app3(:struct_eq, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :node}),
                  delta: :certified
                )
 
-      assert {:ctor, :False, []} =
+      assert {:ctor, :"Std.Bool#False", []} =
                Normalise.nf(
                  ctx(),
                  app3(:struct_eq, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :leaf}),
                  delta: :certified
                )
 
-      assert {:ctor, :True, []} =
+      assert {:ctor, :"Std.Bool#True", []} =
                Normalise.nf(
                  ctx(),
                  app3(:struct_ne, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :leaf}),
@@ -125,7 +125,7 @@ defmodule Cure.Core.BuiltinOpTest do
     end
 
     test "struct_eq stays NEUTRAL on constructor args (ADT equality never computes in-kernel)" do
-      spine = app3(:struct_eq, {:data, :Nat, [], []}, {:ctor, :Z, []}, {:ctor, :Z, []})
+      spine = app3(:struct_eq, {:data, :"Std.Nat#Nat", [], []}, {:ctor, :"Std.Nat#Z", []}, {:ctor, :"Std.Nat#Z", []})
       assert spine == Normalise.nf(ctx(), spine, delta: :certified)
     end
 

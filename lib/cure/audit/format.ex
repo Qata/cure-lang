@@ -11,6 +11,7 @@ defmodule Cure.Audit.Format do
   alias Cure.Audit.Ledger
   alias Cure.Audit.Ledger.Axiom
   alias Cure.Audit.Targets
+  alias Cure.Elab.Name
 
   @spec render(Ledger.Report.t(), keyword()) :: String.t()
   def render(report, opts) do
@@ -28,7 +29,7 @@ defmodule Cure.Audit.Format do
       bucket_section("AXIOMS — OTP", report.axioms, :otp),
       bucket_section("AXIOMS — CURE RUNTIME", report.axioms, :cure_runtime),
       bucket_section("AXIOMS — CURE BRIDGE", report.axioms, :cure_bridge),
-      list_section("OPAQUE TYPES", Enum.map(report.opaque, &Atom.to_string/1)),
+      list_section("OPAQUE TYPES", Enum.map(report.opaque, &Name.base/1)),
       "KERNEL BUILTINS\n  #{report.builtin_count} builtin operators (Cure.Core.Builtins)",
       list_section("HOLES", report.holes),
       "ABSURD (#{report.absurd})",
@@ -125,7 +126,7 @@ defmodule Cure.Audit.Format do
 
   defp not_total_section(names) do
     "NOT PROVEN TOTAL (#{length(names)})   — cannot be used in proofs; not assumptions\n" <>
-      "  " <> Enum.map_join(names, ", ", &Atom.to_string/1)
+      "  " <> Enum.map_join(names, ", ", &Name.base/1)
   end
 
   defp unresolved_section([]),
@@ -133,7 +134,7 @@ defmodule Cure.Audit.Format do
 
   defp unresolved_section(names) do
     "UNRESOLVED (#{length(names)})   — names a signature mentions that do not exist\n" <>
-      "  " <> Enum.map_join(names, ", ", &Atom.to_string/1)
+      "  " <> Enum.map_join(names, ", ", &Name.base/1)
   end
 
   defp target_section(_axioms, nil), do: nil

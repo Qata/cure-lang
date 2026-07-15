@@ -26,6 +26,10 @@ defmodule Cure.Elab.BinopLoweringTest do
   defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
   defp app3(g, ty, a, b), do: {:app, app2(g, ty, a), b}
 
+  # Builtin ops lower to owner-qualified globals (`Std.Builtin#int_add`), matching
+  # both `Builtins.seed`'s registration key and the elaborator's emission.
+  defp bop(op), do: Cure.Elab.Name.qualify("Std.Builtin", op)
+
   # No {:prim, _, _} node anywhere in the term.
   defp no_prim?(t) when is_tuple(t) do
     case t do
@@ -39,27 +43,27 @@ defmodule Cure.Elab.BinopLoweringTest do
 
   test "Int `+` lowers to an int_add global spine, no prim" do
     b = body("  fn f(x: Int) -> Int = x + 1\n", :f)
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(:int_add, {:var, 0}, {:int_lit, 1})} == b
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(bop(:int_add), {:var, 0}, {:int_lit, 1})} == b
     assert no_prim?(b)
   end
 
   test "Float `+` lowers to float_add" do
     b = body("  fn g(x: Float) -> Float = x + 1.0\n", :g)
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:float_type}, app2(:float_add, {:var, 0}, {:float_lit, 1.0})} == b
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:float_type}, app2(bop(:float_add), {:var, 0}, {:float_lit, 1.0})} == b
     assert no_prim?(b)
   end
 
   test "Int `==` lowers to int_eq (guard-position shape)" do
     b = body("  fn eq0(n: Int) -> Bool = n == 0\n", :eq0)
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(:int_eq, {:var, 0}, {:int_lit, 0})} == b
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(bop(:int_eq), {:var, 0}, {:int_lit, 0})} == b
     assert no_prim?(b)
   end
 
   test "Int `!=` lowers to int_ne; Float `==` to float_eq" do
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(:int_ne, {:var, 0}, {:int_lit, 3})} ==
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(bop(:int_ne), {:var, 0}, {:int_lit, 3})} ==
              body("  fn t(n: Int) -> Bool = n != 3\n", :t)
 
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:float_type}, app2(:float_eq, {:var, 0}, {:float_lit, 2.0})} ==
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:float_type}, app2(bop(:float_eq), {:var, 0}, {:float_lit, 2.0})} ==
              body("  fn u(x: Float) -> Bool = x == 2.0\n", :u)
   end
 
@@ -68,7 +72,7 @@ defmodule Cure.Elab.BinopLoweringTest do
 
     assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
             {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
-             app3(:struct_eq, {:data, :"Std.Nat#Nat", [], []}, {:var, 1}, {:var, 0})}} == b
+             app3(bop(:struct_eq), {:data, :"Std.Nat#Nat", [], []}, {:var, 1}, {:var, 0})}} == b
 
     assert no_prim?(b)
   end
@@ -78,7 +82,7 @@ defmodule Cure.Elab.BinopLoweringTest do
 
     assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
             {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
-             app3(:struct_ne, {:data, :"Std.Nat#Nat", [], []}, {:var, 1}, {:var, 0})}} == b
+             app3(bop(:struct_ne), {:data, :"Std.Nat#Nat", [], []}, {:var, 1}, {:var, 0})}} == b
   end
 
   test "non-numeric arithmetic still rejects (unchanged from decision 3)" do

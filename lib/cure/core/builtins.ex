@@ -185,7 +185,8 @@ defmodule Cure.Core.Builtins do
   # `maybe_seed/5` excludes precisely on `family.name`, so the family the module goes on to
   # declare carries the same name the seed would have used. The canonical name is therefore the
   # correct snapshot under both orders, and the op signatures no longer vary with seeding order.
-  defp bool_family_id(env), do: Inductive.builtin(env, :bool) || bool_family(env).name
+  defp bool_family_id(env),
+    do: Inductive.builtin(env, :bool) || bool_family(Env.with_owner(env, "Std.Bool")).name
 
   # struct_eq/struct_ne : Pi(a: Type0). Pi(_: a). Pi(_: a). Bool — under the
   # second binder the type param a is {:var, 0}; under the third it is {:var, 1}.

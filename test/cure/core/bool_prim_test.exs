@@ -17,35 +17,35 @@ defmodule Cure.Core.BoolPrimTest do
   defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
 
   test "certified delta folds integer comparisons to Bool constructor values" do
-    assert {:ctor, :True, []} = Normalise.nf(ctx(), app2(:int_lt, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
-    assert {:ctor, :True, []} = Normalise.nf(ctx(), app2(:int_eq, {:int_lit, 4}, {:int_lit, 4}), delta: :certified)
-    assert {:ctor, :False, []} = Normalise.nf(ctx(), app2(:int_ge, {:int_lit, 2}, {:int_lit, 9}), delta: :certified)
+    assert {:ctor, :"Std.Bool#True", []} = Normalise.nf(ctx(), app2(:int_lt, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
+    assert {:ctor, :"Std.Bool#True", []} = Normalise.nf(ctx(), app2(:int_eq, {:int_lit, 4}, {:int_lit, 4}), delta: :certified)
+    assert {:ctor, :"Std.Bool#False", []} = Normalise.nf(ctx(), app2(:int_ge, {:int_lit, 2}, {:int_lit, 9}), delta: :certified)
   end
 
   test "the boolean connectives are NOT builtin ops: an and/or/not spine stays neutral" do
     for t <- [
-          app2(:and, {:ctor, :True, []}, {:ctor, :False, []}),
-          app2(:or, {:ctor, :True, []}, {:ctor, :False, []}),
-          {:app, {:global, :not}, {:ctor, :False, []}}
+          app2(:and, {:ctor, :"Std.Bool#True", []}, {:ctor, :"Std.Bool#False", []}),
+          app2(:or, {:ctor, :"Std.Bool#True", []}, {:ctor, :"Std.Bool#False", []}),
+          {:app, {:global, :not}, {:ctor, :"Std.Bool#False", []}}
         ] do
       assert t == Normalise.nf(ctx(), t, delta: :certified)
     end
   end
 
   test "definitional equality across comparisons" do
-    assert Conv.conv?(app2(:int_lt, {:int_lit, 3}, {:int_lit, 5}), {:ctor, :True, []}, [], 0, env())
-    refute Conv.conv?({:ctor, :True, []}, {:ctor, :False, []}, [], 0, env())
+    assert Conv.conv?(app2(:int_lt, {:int_lit, 3}, {:int_lit, 5}), {:ctor, :"Std.Bool#True", []}, [], 0, env())
+    refute Conv.conv?({:ctor, :"Std.Bool#True", []}, {:ctor, :"Std.Bool#False", []}, [], 0, env())
   end
 
   test "kernel types numeric comparison spines at Bool and rejects connective globals as unknown" do
-    bool = {:vdata, :Bool, []}
+    bool = {:vdata, :"Std.Bool#Bool", []}
     assert {:ok, ^bool} = Kernel.infer(ctx(), app2(:int_lt, {:int_lit, 1}, {:int_lit, 2}))
 
     # The connectives are Std.Bool defs, absent from the bare seeded env — an
     # `and`-headed spine is an ordinary unknown global (was {:unknown_prim, :and}).
     assert {:error, :unknown_global} =
-             Kernel.infer(ctx(), app2(:and, {:ctor, :True, []}, {:ctor, :False, []}))
+             Kernel.infer(ctx(), app2(:and, {:ctor, :"Std.Bool#True", []}, {:ctor, :"Std.Bool#False", []}))
 
-    assert {:error, _} = Kernel.infer(ctx(), app2(:int_lt, {:ctor, :True, []}, {:int_lit, 2}))
+    assert {:error, _} = Kernel.infer(ctx(), app2(:int_lt, {:ctor, :"Std.Bool#True", []}, {:int_lit, 2}))
   end
 end
