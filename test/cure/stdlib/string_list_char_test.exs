@@ -21,6 +21,7 @@ defmodule Cure.Stdlib.StringListCharTest do
 
   test "String resolves to List(Char)" do
     {:ok, env} = Program.elaborate("mod M\n  use Std.String\n  fn f(s: String) -> String = s\nend\n")
+
     assert match?(
              {:data, :"Std.List#List", [global: :"Std.Char#Char"], []},
              Cure.Core.Env.get_def(env, :String).body

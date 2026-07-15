@@ -99,10 +99,18 @@ defmodule Cure.Elab.TotalityClosure do
   def certify_deferred(%Env{defs: defs} = env) do
     Enum.reduce(defs, env, fn {name, def}, acc ->
       cond do
-        Env.certified?(acc, name) -> acc
-        match?(%{body: {:hole, _}}, def) -> acc
-        match?(%{body: {:extern, _}}, def) -> acc
-        not is_nil(Map.get(def, :builtin_op)) -> acc
+        Env.certified?(acc, name) ->
+          acc
+
+        match?(%{body: {:hole, _}}, def) ->
+          acc
+
+        match?(%{body: {:extern, _}}, def) ->
+          acc
+
+        not is_nil(Map.get(def, :builtin_op)) ->
+          acc
+
         true ->
           case Kernel.validate_certificate(acc, name) do
             {:ok, acc2} -> acc2

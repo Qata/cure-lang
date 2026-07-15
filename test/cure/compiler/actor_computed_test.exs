@@ -44,4 +44,66 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert apply(:"Cure.Generated.Handler", :handle_cast, [:Inc, 4]) == {:noreply, 4}
     assert apply(:"Cure.Generated.Handler", :handle_cast, [:Stop, 4]) == {:noreply, 4}
   end
+
+  test "actor deduplicates repeated constructor heads" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.Dedup state Int derive
+        match message
+          Inc -> 1
+          Inc -> 2
+
+    fn make_message() -> ActorMessage = Inc
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(module, :make_message, []) == :Inc
+  end
+
+  test "actor rejects payload constructors without a payload type view" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.Payload state Int derive
+        match message
+          Ping(value) -> value
+
+    fn make_message() -> ActorMessage = Ping(7)
+    """
+
+    assert {:error, {:computed_macro_error, _, {:author_failure, "payload_type_not_derivable", []}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
+  test "actor rejects guarded handler heads with a macro diagnostic" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.Guarded state Int derive
+        match message
+          Inc when true -> 1
+    """
+
+    assert {:error, {:computed_macro_error, _, {:author_failure, "guarded_handler", []}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
+  test "actor rejects variable catch-all handler heads" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.CatchAll state Int derive
+        match message
+          message -> 1
+    """
+
+    assert {:error, {:computed_macro_error, _, {:author_failure, "non_constructor_pattern", []}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
 end

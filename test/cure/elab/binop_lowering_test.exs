@@ -49,7 +49,10 @@ defmodule Cure.Elab.BinopLoweringTest do
 
   test "Float `+` lowers to float_add" do
     b = body("  fn g(x: Float) -> Float = x + 1.0\n", :g)
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:float_type}, app2(bop(:float_add), {:var, 0}, {:float_lit, 1.0})} == b
+
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:float_type}, app2(bop(:float_add), {:var, 0}, {:float_lit, 1.0})} ==
+             b
+
     assert no_prim?(b)
   end
 

@@ -51,8 +51,7 @@ defmodule Cure.Core.EquivalentKernelTest do
       {:lam, Cure.Core.Grade.unrestricted(), ty,
        {:lam, Cure.Core.Grade.unrestricted(), ty, {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
 
-    {:case, proof, arrow_motive,
-     [{@refl, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
+    {:case, proof, arrow_motive, [{@refl, 1, {:lam, Cure.Core.Grade.unrestricted(), {:app, motive, l}, {:var, 0}}}]}
   end
 
   # motive (x.M) = λx. Box(x)

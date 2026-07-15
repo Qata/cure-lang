@@ -218,8 +218,7 @@ defmodule Antigen.Assays.ElabSoundnessTest do
         |> Env.certify(:loop)
         |> Env.add_def(
           :probe,
-          {:data, :"Std.Equivalent#Equivalent", [@nat],
-           [{:global, :loop}, {:ctor, :"Std.Nat#Z", []}]},
+          {:data, :"Std.Equivalent#Equivalent", [@nat], [{:global, :loop}, {:ctor, :"Std.Nat#Z", []}]},
           {:ctor, :"Std.Equivalent#reflexive", [{:ctor, :"Std.Nat#Z", []}]}
         )
 

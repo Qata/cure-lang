@@ -176,11 +176,9 @@ defmodule Cure.Core.EffectFormerTest do
     test "substitution and shifting recurse through pure and bind" do
       term = {:effect_bind, {:effect_pure, {:var, 0}}, {:lam, @omega, {:int_type}, {:var, 1}}}
 
-      assert {:effect_bind, {:effect_pure, {:var, 1}},
-              {:lam, @omega, {:int_type}, {:var, 2}}} = Subst.shift(term, 1, 0)
+      assert {:effect_bind, {:effect_pure, {:var, 1}}, {:lam, @omega, {:int_type}, {:var, 2}}} = Subst.shift(term, 1, 0)
 
-      assert {:effect_bind, {:effect_pure, {:int_lit, 7}},
-              {:lam, @omega, {:int_type}, {:int_lit, 7}}} =
+      assert {:effect_bind, {:effect_pure, {:int_lit, 7}}, {:lam, @omega, {:int_type}, {:int_lit, 7}}} =
                Subst.instantiate(term, [{:int_lit, 7}])
     end
 

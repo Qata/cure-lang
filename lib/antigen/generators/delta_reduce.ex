@@ -82,9 +82,11 @@ defmodule Antigen.Generators.DeltaReduce do
     # Builtin-op-fold (Amendment A1): struct_eq/struct_ne fold a SATURATED
     # literal spine via the audited table — the polymorphic-equality twin of the
     # int/float binop fold (already warm via the Primitive generator).
-    {{:app, {:app, {:app, {:global, :struct_eq}, @int_type}, {:int_lit, 3}}, {:int_lit, 4}}, {:ctor, :"Std.Bool#False", []},
+    {{:app, {:app, {:app, {:global, :struct_eq}, @int_type}, {:int_lit, 3}}, {:int_lit, 4}},
+     {:ctor, :"Std.Bool#False", []},
      "builtin/struct_eq: struct_eq Int 3 4 → False (δ-fold via the audited literal table)"},
-    {{:app, {:app, {:app, {:global, :struct_ne}, @int_type}, {:int_lit, 5}}, {:int_lit, 5}}, {:ctor, :"Std.Bool#False", []},
+    {{:app, {:app, {:app, {:global, :struct_ne}, @int_type}, {:int_lit, 5}}, {:int_lit, 5}},
+     {:ctor, :"Std.Bool#False", []},
      "builtin/struct_ne: struct_ne Int 5 5 → False (δ-fold via the audited literal table)"},
     # Unsaturated struct op (2 of 3 args) — neither builtin_op_fold clause
     # matches (not a full [_tyval,l,r] spine, and the op IS a struct op), so it

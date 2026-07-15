@@ -17,9 +17,14 @@ defmodule Cure.Core.BoolPrimTest do
   defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
 
   test "certified delta folds integer comparisons to Bool constructor values" do
-    assert {:ctor, :"Std.Bool#True", []} = Normalise.nf(ctx(), app2(:int_lt, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
-    assert {:ctor, :"Std.Bool#True", []} = Normalise.nf(ctx(), app2(:int_eq, {:int_lit, 4}, {:int_lit, 4}), delta: :certified)
-    assert {:ctor, :"Std.Bool#False", []} = Normalise.nf(ctx(), app2(:int_ge, {:int_lit, 2}, {:int_lit, 9}), delta: :certified)
+    assert {:ctor, :"Std.Bool#True", []} =
+             Normalise.nf(ctx(), app2(:int_lt, {:int_lit, 3}, {:int_lit, 5}), delta: :certified)
+
+    assert {:ctor, :"Std.Bool#True", []} =
+             Normalise.nf(ctx(), app2(:int_eq, {:int_lit, 4}, {:int_lit, 4}), delta: :certified)
+
+    assert {:ctor, :"Std.Bool#False", []} =
+             Normalise.nf(ctx(), app2(:int_ge, {:int_lit, 2}, {:int_lit, 9}), delta: :certified)
   end
 
   test "the boolean connectives are NOT builtin ops: an and/or/not spine stays neutral" do
