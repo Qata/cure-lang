@@ -9,13 +9,23 @@ mod Std.Fsm
     syntax family FsmDefinition
       state Type
       events Cases
+      optional event_type Type
     accepts FsmDefinition
     expands with derive_fsm_family
 
   fn derive_fsm_family(name: ModuleNameSyntax, definition: FsmDefinitionSyntax) -> Syntax =
     let body = Node(:pattern_match, [], [variable("event") | children(definition.events)])
     let name_syntax: Syntax = name
-    emit_fsm_parts(name_syntax, definition.state, fsm_handler(body))
+    match derive_pattern_heads(body)
+      InvalidHeads(reason) -> Failure(reason, [])
+      Heads(heads) ->
+        let event_type = match definition.event_type
+          None() -> variable("FsmEvent")
+          Some(value) -> value
+        let event_declarations = match definition.event_type
+          None() -> [enum_type("FsmEvent", heads)]
+          Some(_) -> []
+        emit_fsm_parts(name_syntax, definition.state, event_type, event_declarations, fsm_handler(body))
 
   ## `fsm` is a transparent standard-library macro. The base state-machine is
   ## an ordinary lifted GenStatem module; transition derivation and handlers
@@ -134,9 +144,11 @@ mod Std.Fsm
   type Transition = Row(Atom, Atom, Atom)
 
   fn emit_fsm(input: FsmSyntax, event_body: Syntax) -> Syntax =
-    emit_fsm_parts(input.name, input.state_type, event_body)
+    match derive_pattern_heads(event_body)
+      InvalidHeads(reason) -> Failure(reason, [])
+      Heads(heads) -> emit_fsm_parts(input.name, input.state_type, variable("FsmEvent"), [enum_type("FsmEvent", heads)], event_body)
 
-  fn emit_fsm_parts(name_syntax: Syntax, state_type: Syntax, event_body: Syntax) -> Syntax =
+  fn emit_fsm_parts(name_syntax: Syntax, state_type: Syntax, event_type: Syntax, event_declarations: List(Syntax), event_body: Syntax) -> Syntax =
     let module_name = match name_syntax
       Leaf(_, _, SAtom(name)) -> SAtom(name)
       _ -> SStr("Cure.Generated.Fsm")
@@ -146,22 +158,20 @@ mod Std.Fsm
     match derive_pattern_heads(event_body)
       InvalidHeads(reason) -> Failure(reason, [])
       Heads(heads) ->
-        let event_type = enum_type("FsmEvent", heads)
         let result_type = call("Effect", [variable("Atom")])
         let init_type = call("Effect", [tuple_type([variable("Atom"), variable("Atom"), variable("State")])])
         let start_type = call("Effect", [variable("Tuple")])
-        block([
-          event_type,
+        block(append(event_declarations, [
           lift_module_isolated(module_name, :gen_statem, [
             use_module("Std.Otp"),
             alias_node("State", state_type),
-            alias_node("Event", variable("FsmEvent")),
+            alias_node("Event", event_type),
             function("callback_mode", [], variable("Atom"), atom_literal(:handle_event_function)),
             function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), atom_literal(:initial), variable("initial")])),
             function("handle_event", [parameter("event_type", variable("Atom")), parameter("event", variable("Event")), parameter("state", variable("Atom")), parameter("data", variable("State"))], result_type, event_body),
             function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_statem", [module_expr, variable("initial")]))
           ])
-        ])
+        ]))
 
   fn derive_fsm(input: FsmSyntax) -> Syntax =
     emit_fsm(input, input.event_body)

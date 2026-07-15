@@ -2228,11 +2228,13 @@ actor forms; reply-channel derivation and the remaining callback-context gate
 stay ordered follow-up work.
 
 **Structured FSM status (2026-07-15).** `Std.Fsm` now declares an
-`FsmDefinition` family with required `state` and `events` sections. Its
-source-defined expander normalizes case bodies into the checked callback shape,
-derives `FsmEvent`, and emits an ordinary lifted GenStatem module. A compiled
-integration test covers initialization, event construction, and dispatch while
-the legacy FSM grammar remains the fallback path.
+`FsmDefinition` family with required `state` and `events` sections plus an
+optional `event_type Type` override. Its source-defined expander normalizes case
+bodies into the checked callback shape, derives `FsmEvent` by default, or
+reuses the caller-supplied nominal event type, and emits an ordinary lifted
+GenStatem module. A compiled integration test covers both event-type paths,
+initialization, event construction, and dispatch while the legacy FSM grammar
+remains the fallback path.
 
 **Structured supervisor status (2026-07-15).** `Std.Supervisor` now declares
 a `SupervisorDefinition` family with a typed `children` section. Its

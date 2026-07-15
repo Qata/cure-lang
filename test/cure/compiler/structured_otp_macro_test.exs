@@ -24,7 +24,31 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
              :Tick,
              :initial,
              0
-           ]) == :keep_state_and_data
+    ]) == :keep_state_and_data
+  end
+
+  test "structured fsm accepts an explicit event type override" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      type EventKind = Tick | Stop
+
+      fsm Cure.Generated.ExplicitEvents
+        state Int
+        event_type EventKind
+        events
+          Tick -> :keep_state_and_data
+          Stop -> :keep_state_and_data
+
+    fn make_event() -> EventKind = Tick
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(module, :make_event, []) == :Tick
+    assert apply(:"Cure.Generated.ExplicitEvents", :handle_event, [:cast, :Tick, :initial, 0]) == :keep_state_and_data
+    assert apply(:"Cure.Generated.ExplicitEvents", :handle_event, [:cast, :Stop, :initial, 3]) == :keep_state_and_data
   end
 
   test "supervisor accepts the reusable structured family surface" do
