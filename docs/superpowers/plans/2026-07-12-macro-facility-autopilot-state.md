@@ -2070,6 +2070,11 @@ are rejected before expansion, while non-primitive captures continue to preserve
 hygienic syntax values. This is compile-time representation selection only: it
 adds no runtime macro protocol or OTP-specific compiler knowledge.
 
+`Std.Syntax` now also exposes explicit `int_literal`, `float_literal`,
+`bool_literal`, `string_literal`, and `atom_literal` builders for the reverse
+direction. These are ordinary syntax constructors with explicit literal
+subtypes; they do not interpret arbitrary strings as identifiers.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 

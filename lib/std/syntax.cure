@@ -136,6 +136,19 @@ mod Std.Syntax
   fn syntax_bool(value: Bool) -> SynLit = SBool(value)
   fn syntax_int(value: Int) -> SynLit = SInt(value)
 
+  ## Lift ordinary primitive values into literal syntax. These constructors are
+  ## explicit so a string can never be mistaken for an identifier or raw syntax.
+  fn int_literal(value: Int) -> Syntax = integer(value)
+
+  fn float_literal(value: Float) -> Syntax =
+    Leaf(:literal, [KV(:subtype, SAtom(:float))], SFloat(value))
+
+  fn bool_literal(value: Bool) -> Syntax =
+    Leaf(:literal, [KV(:subtype, SAtom(:boolean))], SBool(value))
+
+  fn string_literal(value: String) -> Syntax =
+    Leaf(:literal, [KV(:subtype, SAtom(:string))], SStr(value))
+
   fn syntax_list(items: List(Syntax)) -> SynLit = match items
     [] -> SList([])
     [head | rest] ->

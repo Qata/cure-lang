@@ -21,6 +21,8 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
 
     fn build_node() -> Syntax =
       node(:generated, [attr_value(:kind, syntax_atom(:actor))], [])
+
+    fn build_literals() -> List(Syntax) = [int_literal(7), float_literal(2.5), bool_literal(true), string_literal("ok"), atom_literal(:ready)]
   """
 
   test "source-level syntax helpers analyze and construct reflected syntax" do
@@ -38,5 +40,13 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
 
     assert apply(module, :build_node, []) ==
              {:Node, :generated, [{:KV, :kind, {:SAtom, :actor}}], []}
+
+    assert apply(module, :build_literals, []) == [
+             {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :integer}}], {:SInt, 7}},
+             {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :float}}], {:SFloat, 2.5}},
+             {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :boolean}}], {:SBool, true}},
+             {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :string}}], {:SStr, ~c"ok"}},
+             {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :symbol}}], {:SAtom, :ready}}
+           ]
   end
 end
