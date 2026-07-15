@@ -69,6 +69,7 @@ defmodule Cure.Compiler.MacroFamily do
                  syntax_type: syntax_type("#{family.name}Input"),
                  syntax_fields: fields,
                  syntax_repeated_fields: [],
+                 direct_inputs: true,
                  syntax_field_types:
                    Map.put(leading_field_types(leading_segments), "definition", {
                      :record,

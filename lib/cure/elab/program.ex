@@ -1152,7 +1152,8 @@ defmodule Cure.Elab.Program do
   defp declarations(_other), do: []
 
   defp append_context_field({:container, meta, fields}, rule) do
-    if Keyword.get(meta, :name) == Map.get(rule, :syntax_type) do
+    if Keyword.get(meta, :name) == Map.get(rule, :syntax_type) and
+         not Enum.any?(fields, &match?({:param, _, "context"}, &1)) do
       context = {:param, [type: {:variable, [scope: :local], "Syntax"}], MacroSyntax.context_field()}
       {:container, meta, fields ++ [context]}
     else

@@ -519,6 +519,7 @@ defmodule Cure.Compiler.Parser do
           syntax_type: Map.get(rule, :syntax_type, macro_syntax_type(keyword)),
           syntax_fields: Map.get(rule, :syntax_fields, macro_syntax_fields(rule.segments)),
           syntax_repeated_fields: Map.get(rule, :syntax_repeated_fields, macro_syntax_repeated_fields(rule.segments)),
+          direct_inputs: Map.get(rule, :direct_inputs, false),
           syntax_field_types: Map.get(rule, :syntax_field_types, %{}),
           line: keyword_token.line,
           col: keyword_token.col
@@ -692,9 +693,15 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp match_segments(state, [{:hole, %{name: name, kind: "ModuleName"}} | rest], bindings, progress) do
-    {module_name, state} = parse_dotted_name(state)
-    module = {:literal, [subtype: :symbol], String.to_atom(module_name)}
-    match_segments(state, rest, Map.put(bindings, name, module), progress + 1)
+    case peek(state) do
+      %Token{type: :identifier} ->
+        {module_name, state} = parse_dotted_name(state)
+        module = {:literal, [subtype: :symbol], String.to_atom(module_name)}
+        match_segments(state, rest, Map.put(bindings, name, module), progress + 1)
+
+      _ ->
+        {:error, progress, state}
+    end
   end
 
   defp match_segments(state, [{:hole, %{name: name, kind: kind}} | rest], bindings, progress)
@@ -1803,7 +1810,17 @@ defmodule Cure.Compiler.Parser do
           name
           when (is_map_key(state.computed_macros, name) or is_map_key(state.builtin_computed_macros, name)) and
                  name not in @reserved_macro_keywords ->
-            parse_computed_use(state, name)
+            if computed_macro_head?(state, name) do
+              parse_computed_use(state, name)
+            else
+              case computed_macro_fallback(state, name) do
+                {:ok, ast, fallback_state} ->
+                  {ast, fallback_state}
+
+                :none ->
+                  {variable(token), advance(state)}
+              end
+            end
 
           # Standard-library syntax macros use the same segment matcher as
           # user macros. Their raw body is parsed again by the ordinary parser.
@@ -3014,6 +3031,73 @@ defmodule Cure.Compiler.Parser do
 
   defp macro_use_head?(state, "lens"), do: prelude_macro_head?(state, "lens")
   defp macro_use_head?(_state, _name), do: true
+
+  defp computed_macro_head?(state, name) do
+    rules = Map.get(state.computed_macros, name, []) ++ Map.get(state.builtin_computed_macros, name, [])
+
+    Enum.any?(rules, fn rule ->
+      case {rule.segments, peek_at(state, 1)} do
+        {[], _next} -> true
+        {[{:lit, "("} | _], %Token{type: :lparen}} -> true
+        {_segments, %Token{type: :lparen}} -> false
+        {_segments, _next} -> not legacy_block_ambiguity?(state, name, rule)
+      end
+    end)
+  end
+
+  # A structured family and an older raw-body rule may share a keyword. If the
+  # use-site starts with the legacy rule's nested block form, let the legacy
+  # matcher own it; an inline structured field remains unambiguous. This keeps
+  # migration source-compatible without making the family parser know anything
+  # about the legacy rule's domain vocabulary.
+  defp legacy_block_ambiguity?(state, name, rule) do
+    Map.get(rule, :direct_inputs, false) and
+      (Map.has_key?(state.active_macros, name) or Map.has_key?(state.builtin_macros, name)) and
+      nested_family_block_head?(state)
+  end
+
+  defp nested_family_block_head?(state) do
+    state.tokens
+    |> Enum.drop(state.pos + 1)
+    |> drop_until_newline()
+    |> case do
+      [%Token{type: :newline} | rest] ->
+        rest
+        |> drop_whitespace_tokens()
+        |> case do
+          [%Token{type: :indent} | rest] ->
+            rest
+            |> drop_whitespace_tokens()
+            |> case do
+              [%Token{type: :identifier} | rest] ->
+                rest
+                |> drop_whitespace_tokens()
+                |> starts_with_indent?()
+
+              _ ->
+                false
+            end
+
+          _ ->
+            false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp drop_until_newline([%Token{type: :newline} | _] = tokens), do: tokens
+  defp drop_until_newline([_token | rest]), do: drop_until_newline(rest)
+  defp drop_until_newline([]), do: []
+
+  defp drop_whitespace_tokens([%Token{type: type} | rest]) when type in [:newline],
+    do: drop_whitespace_tokens(rest)
+
+  defp drop_whitespace_tokens(tokens), do: tokens
+
+  defp starts_with_indent?([%Token{type: :indent} | _]), do: true
+  defp starts_with_indent?(_tokens), do: false
 
   # -- Let Binding -----------------------------------------------------------
 

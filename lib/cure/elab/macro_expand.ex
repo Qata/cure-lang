@@ -211,8 +211,12 @@ defmodule Cure.Elab.MacroExpand do
               field_types
             )
 
-          direct = direct_input_cores(input_repr, Keyword.get(meta, :syntax_fields, []), field_types)
-          [direct, [record], [MacroSyntax.to_core(input_repr)]]
+          direct =
+            if Keyword.get(meta, :direct_inputs, false),
+              do: direct_input_cores(input_repr, Keyword.get(meta, :syntax_fields, []), field_types),
+              else: []
+
+          Enum.filter([direct, [record], [MacroSyntax.to_core(input_repr)]], &(&1 != []))
       end
 
     with {:ok, elab_core, _elab_type} <-
