@@ -134,7 +134,7 @@ mod Std.Fsm
         let start_type = call("Effect", [variable("Tuple")])
         block([
           event_type,
-          lift_module(module_name, :gen_statem, [
+          lift_module_isolated(module_name, :gen_statem, [
             use_module("Std.Otp"),
             alias_node("State", input.state_type),
             alias_node("Event", variable("FsmEvent")),
