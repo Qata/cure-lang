@@ -964,7 +964,8 @@ defmodule Cure.Compiler.Parser do
     parse_expr_or_block(state)
   end
 
-  defp record_family_value(values, %{name: name, cardinality: :repeated}, value, _token, state) do
+  defp record_family_value(values, %{name: name, cardinality: cardinality}, value, _token, state)
+       when cardinality in [:repeated, :one_or_more] do
     {Map.update(values, name, [value], &(&1 ++ [value])), state}
   end
 
@@ -992,6 +993,10 @@ defmodule Cure.Compiler.Parser do
 
           :error when field.cardinality == :optional ->
             {{:family_option, [present: false], []}, state}
+
+          :error when field.cardinality == :one_or_more ->
+            error = {:missing_syntax_family_field, family_meta.family, field.name, field.line, field.col}
+            {[], add_error(state, error)}
 
           :error ->
             error = {:missing_syntax_family_field, family_meta.family, field.name, field.line, field.col}

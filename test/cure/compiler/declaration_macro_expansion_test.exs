@@ -171,6 +171,36 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :present, []) == 7
   end
 
+  test "repeated and one_or_more family sections are ordinary lists" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro collect <name: ModuleName>
+        syntax family Values
+          repeated item Int
+          one_or_more required Int
+        accepts Values
+        expands with count_values
+
+      fn count_values(name: ModuleNameSyntax, definition: ValuesSyntax) -> Syntax =
+        int_literal(count(definition.item) + count(definition.required))
+
+      fn count(values: List(Int)) -> Int = match values
+        [] -> 0
+        [_ | rest] -> 1 + count(rest)
+
+      fn result() -> Int = collect Values
+        item 1
+        item 2
+        required 3
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == 3
+  end
+
   test "a structured expander may receive leading captures directly" do
     source = """
     mod M

@@ -2115,6 +2115,12 @@ using ordinary Option pattern matching. Repeated fields remain ordinary
 `List(T)` values, and required fields still produce a compile-time missing-field
 diagnostic.
 
+Repeated family fields now include both `repeated` and `one_or_more`: each is
+represented as an ordinary `List(T)` in the generated record, while a missing
+`one_or_more` field is rejected with the same source-located missing-section
+diagnostic used for required fields. This keeps cardinality semantics in the
+declarative family grammar instead of requiring expander-side list decoding.
+
 **Computed candidate rejection status (2026-07-15).** Direct, generated-record,
 and generic `Syntax` calling conventions may be tried in sequence when a
 candidate is incompatible with an expander signature. Once a candidate has
