@@ -36,8 +36,7 @@ defmodule Antigen.NeutralAppMotiveTest do
     # the case does NOT fail with :bad_motive (it must fail LATER, in branch
     # checking, with a branch-related error — proving motive-wf passed).
     kase =
-      {:case, {:ctor, :"P#Z", []}, motive,
-       [{:"P#Z", 0, {:ctor, :"P#Z", []}}, {:"P#S", 1, {:ctor, :"P#Z", []}}]}
+      {:case, {:ctor, :"P#Z", []}, motive, [{:"P#Z", 0, {:ctor, :"P#Z", []}}, {:"P#S", 1, {:ctor, :"P#Z", []}}]}
 
     assert {:error, err} = Kernel.infer(ctx, kase)
     refute err == :bad_motive, "motive-wf should now accept the neutral-app motive; got :bad_motive"

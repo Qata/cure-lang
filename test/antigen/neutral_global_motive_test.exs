@@ -37,8 +37,7 @@ defmodule Antigen.NeutralGlobalMotiveTest do
     motive = {:lam, Grade.unrestricted(), nat, {:global, :AliasNat}}
 
     kase =
-      {:case, {:ctor, :"P#Z", []}, motive,
-       [{:"P#Z", 0, {:ctor, :"P#Z", []}}, {:"P#S", 1, {:ctor, :"P#Z", []}}]}
+      {:case, {:ctor, :"P#Z", []}, motive, [{:"P#Z", 0, {:ctor, :"P#Z", []}}, {:"P#S", 1, {:ctor, :"P#Z", []}}]}
 
     assert {:ok, _} = Kernel.infer(ctx, kase)
   end
@@ -51,8 +50,7 @@ defmodule Antigen.NeutralGlobalMotiveTest do
     motive = {:lam, Grade.unrestricted(), nat, {:global, :valNat}}
 
     kase =
-      {:case, {:ctor, :"P#Z", []}, motive,
-       [{:"P#Z", 0, {:ctor, :"P#Z", []}}, {:"P#S", 1, {:ctor, :"P#Z", []}}]}
+      {:case, {:ctor, :"P#Z", []}, motive, [{:"P#Z", 0, {:ctor, :"P#Z", []}}, {:"P#S", 1, {:ctor, :"P#Z", []}}]}
 
     assert {:error, :bad_motive} = Kernel.infer(ctx, kase)
   end
