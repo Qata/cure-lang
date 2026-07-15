@@ -1950,6 +1950,32 @@ model. A local macro remains useful for strictly textual repetition, but it is
 not a substitute for the typed `Std.Syntax` analysis/construction layer needed
 to derive message types and validate handler shapes.
 
+**Reusable macro surface blocker (2026-07-15).** The existing standard-library
+containers still repeat the same `syntax actor`/`syntax fsm`/`syntax sup`/`syntax
+app` grammar prefixes and lifted callback declarations for every optional
+lifecycle variation. This is not an acceptable authoring model for the final
+language: a user-defined actor-like abstraction cannot copy a private standard
+template and remain maintainable, and moving the repetition into an Elixir
+helper would violate the source-defined vocabulary requirement.
+
+This is now an explicit ordered sub-phase (5a), before further container parity:
+
+1. Factor common callback/import/alias/lifecycle construction into ordinary
+   Cure functions over `Std.Syntax`, returning transparent declaration bundles.
+2. Add generic source-level grammar rule-family composition with named slots,
+   optional clauses, and override bundles. Preserve grammar diagnostics,
+   lexical imports, hygiene, recursive inside-out expansion, computed rules, and
+   declaration bundles.
+3. Rewrite the four standard macros to use those builders and prove that a
+   user-defined family can reuse the same generic machinery without any
+   compiler-owned OTP case or runtime dispatcher.
+
+The implementation must not be a string-substitution pass or a hidden runtime
+container. Its output must still be ordinary parsed Cure declarations and
+direct checked BEAM operations. Coverage must include nested family composition,
+override precedence, duplicate/ambiguous grammar rules, generated-name hygiene,
+and a byte/Core-path comparison against an equivalent handwritten expansion.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 
