@@ -26,4 +26,18 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
              0
            ]) == :keep_state_and_data
   end
+
+  test "supervisor accepts the reusable structured family surface" do
+    source = """
+    mod M
+      use Std.Supervisor
+
+      sup Cure.Generated.StructuredSup
+        children []
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.StructuredSup", :init, [[]]) == {:ok, {{:one_for_one, 3, 5}, []}}
+  end
 end

@@ -2170,6 +2170,13 @@ derives `FsmEvent`, and emits an ordinary lifted GenStatem module. A compiled
 integration test covers initialization, event construction, and dispatch while
 the legacy FSM grammar remains the fallback path.
 
+**Structured supervisor status (2026-07-15).** `Std.Supervisor` now declares
+a `SupervisorDefinition` family with a typed `children` section. Its
+source-defined expander emits a lifted supervisor with a concrete
+`List(ChildSpec)` initialization contract and the standard closed restart
+strategy. Empty-child initialization is covered end to end, and legacy `sup`
+forms remain available through grammar fallback.
+
 **Typed declaration builder status (2026-07-15).** `Std.Syntax` now exposes
 record-backed specifications and builders for parameters, linear parameters,
 functions, aliases, lifted modules, and match arms. Macro authors can construct

@@ -1,6 +1,35 @@
 @group(:concurrency)
 mod Std.Supervisor
+  use Std.Syntax
   use Std.Otp.Raw
+
+  ## The structured supervisor surface is source-defined. Legacy forms in
+  ## SupervisorContainers remain available through ordinary grammar fallback.
+  macro sup <name: ModuleName>
+    syntax family SupervisorDefinition
+      children Code
+    accepts SupervisorDefinition
+    expands with derive_supervisor_family
+
+  fn derive_supervisor_family(name: ModuleNameSyntax, definition: SupervisorDefinitionSyntax) -> Syntax =
+    let name_syntax: Syntax = name
+    let module_name: SynLit = match name_syntax
+      Leaf(_, _, SAtom(value)) -> SAtom(value)
+      _ -> SStr("Cure.Generated.Supervisor")
+    let module_expr: Syntax = match name_syntax
+      Leaf(_, _, SAtom(value)) -> atom_literal(value)
+      _ -> atom_literal(:generated_supervisor)
+    let strategy = call("supervision_strategy", [call("one_for_one", []), int_literal(3), call("more", [int_literal(4)])])
+    let init_body = tuple([atom_literal(:ok), tuple([strategy, definition.children])])
+    let strategy_type = tuple_type([variable("Atom"), variable("Nat"), variable("Nat")])
+    let init_type = call("Effect", [tuple_type([variable("Atom"), tuple_type([strategy_type, call("List", [variable("ChildSpec")])])])])
+    lift_module_isolated(module_name, :supervisor, [
+      use_module("Std.Otp"),
+      use_module("Std.Supervisor"),
+      function("init", [parameter("arg", call("List", [variable("p")]))], init_type, init_body),
+      function("start_link", [], call("Effect", [variable("Tuple")]), call("Std.Otp.start_supervisor", [module_expr]))
+    ])
+
   ## `sup` is a transparent standard-library macro. The empty supervisor floor
   ## is a normal lifted module; child-spec declarations are added as checked
   ## syntax in the next algebra slice.
