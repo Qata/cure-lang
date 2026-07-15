@@ -19,7 +19,7 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert Code.ensure_loaded?(:"Cure.Generated.Derived")
     assert apply(module, :make_message, []) == :Inc
     assert apply(:"Cure.Generated.Derived", :init, [0]) == {:ok, 0}
-    assert apply(:"Cure.Generated.Derived", :handle_cast, [:Inc, 0]) == {:noreply, 0}
+    assert apply(:"Cure.Generated.Derived", :handle_cast, [:Inc, 0]) == {:noreply, 1}
     assert apply(:"Cure.Generated.Derived", :handle_info, [:Inc, 0]) == {:noreply, 0}
   end
 
@@ -41,11 +41,11 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert module == :"Cure.M"
     assert apply(module, :make_inc, []) == :Inc
     assert apply(module, :make_stop, []) == :Stop
-    assert apply(:"Cure.Generated.Handler", :handle_cast, [:Inc, 4]) == {:noreply, 4}
-    assert apply(:"Cure.Generated.Handler", :handle_cast, [:Stop, 4]) == {:noreply, 4}
+    assert apply(:"Cure.Generated.Handler", :handle_cast, [:Inc, 4]) == {:noreply, 1}
+    assert apply(:"Cure.Generated.Handler", :handle_cast, [:Stop, 4]) == {:noreply, 2}
   end
 
-  test "actor deduplicates repeated constructor heads" do
+  test "actor rejects duplicate handler arms after deriving the message type" do
     source = """
     mod M
       use Std.Actor
@@ -58,9 +58,8 @@ defmodule Cure.Compiler.ActorComputedTest do
     fn make_message() -> ActorMessage = Inc
     """
 
-    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
-    assert module == :"Cure.M"
-    assert apply(module, :make_message, []) == :Inc
+    assert {:error, {:lift_module_error, _, {:duplicate_branch, _}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
   test "actor rejects payload constructors without a payload type view" do

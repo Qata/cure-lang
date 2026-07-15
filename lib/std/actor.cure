@@ -204,6 +204,30 @@ mod Std.Actor
       fn start_link(initial: p) -> Effect(Tuple) = beam_ops start_link name initial
       body
 
+  ## Adapt the state-valued body of an inferred actor handler to the ordinary
+  ## GenServer callback result. This remains in the actor macro module: it is
+  ## domain-specific syntax construction, not part of the generic reflection
+  ## vocabulary.
+  fn actor_handler(body: Syntax) -> Syntax = match tag(body) == :pattern_match
+    true -> actor_handler_node(attrs(body), children(body))
+    false -> body
+
+  fn actor_handler_node(values: List(Attr), children: List(Syntax)) -> Syntax = match children
+    [scrutinee | arms] -> Node(:pattern_match, values, [scrutinee | actor_handler_arms(arms)])
+    _ -> Node(:pattern_match, values, children)
+
+  fn actor_handler_arms(arms: List(Syntax)) -> List(Syntax) = match arms
+    [] -> []
+    [arm | rest] -> [actor_handler_arm(arm) | actor_handler_arms(rest)]
+
+  fn actor_handler_arm(arm: Syntax) -> Syntax = match tag(arm) == :match_arm
+    true -> actor_handler_arm_node(attrs(arm), children(arm))
+    false -> arm
+
+  fn actor_handler_arm_node(values: List(Attr), children: List(Syntax)) -> Syntax = match children
+    [body] -> Node(:match_arm, values, [block([tuple([atom_literal(:noreply), body])])])
+    _ -> Node(:match_arm, values, children)
+
   fn derive_actor(input: ActorSyntax) -> Syntax =
     let module_name = match input.name
       Leaf(_, _, SAtom(name)) -> SAtom(name)
@@ -218,15 +242,16 @@ mod Std.Actor
         let result_type = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let init_type = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let start_type = call("Effect", [variable("Tuple")])
+        let handler_body = actor_handler(input.cast_body)
         let default_state = tuple([atom_literal(:noreply), variable("state")])
         block([
           message_type,
-          lift_module(module_name, :gen_server, [
+          lift_module_isolated(module_name, :gen_server, [
             use_module("Std.Otp"),
             alias_node("State", input.state_type),
             alias_node("Message", variable("ActorMessage")),
             function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), variable("initial")])),
-            function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, default_state),
+            function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, handler_body),
             function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, default_state),
             function("terminate", [parameter("reason", variable("Atom")), parameter("state", variable("State"))], call("Effect", [variable("Atom")]), atom_literal(:ok)),
             function("code_change", [parameter("old", variable("Atom")), parameter("state", variable("State")), parameter("extra", variable("Atom"))], result_type, tuple([atom_literal(:ok), variable("state")])),

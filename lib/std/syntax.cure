@@ -242,3 +242,14 @@ mod Std.Syntax
       KV(:behaviour, SAtom(behaviour)),
       KV(:declarations, syntax_list(declarations))
     ], [])
+
+  ## Build a lifted unit that inherits enclosing declarations but not the
+  ## imports used only to define the surrounding macro. Macro authors can use
+  ## this when the generated unit declares its complete import surface.
+  fn lift_module_isolated(module: SynLit, behaviour: Atom, declarations: List(Syntax)) -> Syntax =
+    Node(:lift_module, [
+      KV(:module, module),
+      KV(:behaviour, SAtom(behaviour)),
+      KV(:inherit_imports, SBool(false)),
+      KV(:declarations, syntax_list(declarations))
+    ], [])

@@ -40,6 +40,13 @@ defmodule Cure.Compiler.LiftModule do
   # (`State`, `Message`, `start_link`) that its callbacks are written against,
   # and an enclosing definition of the same name must not displace them.
   defp inherit_scope(request, inherited) do
+    inherited =
+      if Map.get(request, :inherit_imports, true) do
+        inherited
+      else
+        Enum.reject(inherited, &match?({:import, _, _}, &1))
+      end
+
     taken = taken_names(request)
 
     inherited =
@@ -53,7 +60,12 @@ defmodule Cure.Compiler.LiftModule do
     # `typealias Message = Tick` needs `Tick` already bound — unlike an inductive,
     # a type alias has no forward-reference pre-pass).
     declarations = inherited ++ request.declarations
-    imports = Enum.uniq(request.imports ++ imports_from_declarations(inherited))
+    imports =
+      if Map.get(request, :inherit_imports, true) do
+        Enum.uniq(request.imports ++ imports_from_declarations(inherited))
+      else
+        request.imports
+      end
 
     %{request | declarations: declarations, imports: imports, dependencies: imports}
   end
@@ -157,6 +169,7 @@ defmodule Cure.Compiler.LiftModule do
          behaviour when is_atom(behaviour) <- Keyword.get(meta, :behaviour),
          callbacks when is_list(callbacks) <- Keyword.get(meta, :callbacks, []),
          declarations when is_list(declarations) <- Keyword.get(meta, :declarations, []),
+         inherit_imports when is_boolean(inherit_imports) <- Keyword.get(meta, :inherit_imports, true),
          declarations = Enum.map(declarations, &normalize_generated_declaration/1),
          :ok <- validate_module_name(module),
          :ok <- validate_behaviour(behaviour),
@@ -172,6 +185,7 @@ defmodule Cure.Compiler.LiftModule do
          callbacks: callbacks,
          declarations: declarations,
          imports: imports,
+         inherit_imports: inherit_imports,
          dependencies: imports,
          source_provenance: Keyword.get(meta, :source_provenance)
        }}
