@@ -97,9 +97,11 @@ defmodule Cure.Compiler.MacroDefParseTest do
       """)
 
     assert {:macro_def, meta, [accepts, expands]} = node
+
     assert Keyword.get(meta, :leading_segments) == [
              {:hole, %{name: "name", kind: "ModuleName", line: 1}}
            ]
+
     assert accepts.kind == :accepts
     assert accepts.family == "ActorDefinition"
     assert expands.kind == :expands_with
