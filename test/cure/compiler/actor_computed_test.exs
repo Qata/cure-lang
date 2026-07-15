@@ -49,6 +49,29 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert apply(:"Cure.Generated.Structured", :handle_cast, [:Inc, 0]) == {:noreply, 1}
   end
 
+  test "structured actor derives a typed call channel from an optional family section" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.StructuredCall
+        state Int
+        on_cast
+          Inc -> state + 1
+        on_call
+          Read -> state
+
+    fn make_request() -> ActorRequest = Read
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(module, :make_request, []) == :Read
+    assert {:ok, pid} = apply(:"Cure.Generated.StructuredCall", :start_link, [7])
+    assert :gen_server.call(pid, :Read) == 7
+    :gen_server.stop(pid)
+  end
+
   test "actor derives its message type from multiple reflected handler arms" do
     source = """
     mod M

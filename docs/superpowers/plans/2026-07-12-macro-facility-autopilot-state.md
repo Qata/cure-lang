@@ -1932,6 +1932,16 @@ source-defined and does not reconstruct names in the compiler. Richer
 expression inference and the one-shot typed reply capability required by the
 full BEAM algebra remain open; this floor is not completion of §9.4.
 
+**Structured actor call-channel status (2026-07-15).** The source-defined
+`ActorDefinition` family now accepts an optional `on_call Cases` section in
+addition to `state` and `on_cast`. The expander normalizes both family case
+blocks into the reflected pattern algebra, reuses the existing request/reply
+derivation, and emits the direct typed `ActorRequest` callback path. A compiled
+runtime test proves `gen_server.call` against the structured actor; unsupported
+reply expressions and inconsistent reply categories continue to reject through
+the ordinary macro diagnostic path. Full BEAM reply capability derivation and
+additional lifecycle sections remain open.
+
 **Hardest sub-problem** (not the reflection, not even the reorder): the derived
 message type is a NEW NOMINAL DECLARATION that must exist before the lifted module
 referencing it is elaborated, and must be the SAME nominal type external `send`
