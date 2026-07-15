@@ -217,16 +217,31 @@ for the `do`-notation case.
 ## Sequencing summary
 
 ```
-SP1 (facility + Tiers 1–2) ──> SP2 (Tier 3 + typed errors + examples) ──┬─> SP3 (generative proof)
-                                                                        ├─> SP4 (reflection API)
-                                                                        └─> SP5 (behaviour/lift module ──> Std.Otp ceiling)
-                                                                              └─> SP6 (Tier 5 + DSL libraries)
+SP1 (facility + Tiers 1–2)
+  └─> SP2 (Tier 3 + typed errors + examples)          ← the spine
+        ├─> SP3 (generative proof) ──────────────────> SP8 (composition soundness)
+        ├─> SP4 (reflection API)
+        └─> SP5 (behaviour/lift module ──> Std.Otp ceiling)
+
+  SP5.1 (quasiquote)          ┐
+  SP5.2 (cross-module import) ├─ NON-OPTIONAL prereqs ─> SP6 (Tier 5 + DSL libraries)
+  SP5.3 (scope-set hygiene)   ┘  (independent; each depends on SP1/SP2)
+
+Cross-cutting / horizon (off the SP6 critical path):
+  SP7 (tooling: stepper, introspection, macro-aware errors) — startable NOW (provenance landed)
+  SP9 (type-directed / elaboration-time macros)             — LAST; after the SP1–SP6 tier is proven
 ```
 
 SP1→SP2 is the spine. SP3/SP4/SP5 fan out from SP2 and can be ordered by priority
 (SP5 unblocks the `Std.Otp` ceiling; SP3 delivers the self-proving guarantee's
-headline; SP4 unblocks the flagship reducers). Write and execute one SP's detailed
-plan fully — red-green, gated, committed — before starting the next.
+headline; SP4 unblocks the flagship reducers). SP5.1–5.3 are non-optional
+prerequisites for SP6 — DSL libraries need ergonomic authoring (quasiquote),
+cross-module distribution, and non-spoofable hygiene — but are independent of the
+OTP-container work and of each other. Off the critical path: SP7 (tooling) can start
+now on the landed provenance channel; SP8 extends SP3's proof to composition and
+proven expansion confluence; SP9 (type-directed macros) is the deliberate last,
+high-ceiling bet. Write and execute one SP's detailed plan fully — red-green, gated,
+committed — before starting the next.
 
 ## Immediate next step
 
