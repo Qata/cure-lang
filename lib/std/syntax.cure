@@ -216,6 +216,12 @@ mod Std.Syntax
   fn atom_literal(value: Atom) -> Syntax =
     Leaf(:literal, [KV(:subtype, SAtom(:symbol))], SAtom(value))
 
+  ## The unit value has a two-tuple parser representation rather than an
+  ## ordinary expression node. The parser bridge recognizes this reflected
+  ## marker and restores the canonical `()` AST before re-elaboration.
+  fn unit_literal() -> Syntax =
+    Node(:unit_value, [], [])
+
   fn call(name: String, args: List(Syntax)) -> Syntax =
     Node(:function_call, [KV(:name, SStr(name))], args)
 

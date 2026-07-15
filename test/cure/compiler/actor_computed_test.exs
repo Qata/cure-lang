@@ -73,6 +73,45 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert apply(:"Cure.Generated.ExplicitMessages", :handle_cast, [:Stop, 3]) == {:noreply, 3}
   end
 
+  test "structured actor derives a nullary starter from an initial expression" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.InitialExpression
+        state Int
+        initial 7
+        on_cast
+          Inc -> state + 1
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.InitialExpression", :init, [[]]) == {:ok, 7}
+    assert {:ok, pid} = apply(:"Cure.Generated.InitialExpression", :start_link, [])
+    assert :gen_server.cast(pid, :Inc) == :ok
+    Process.sleep(10)
+    assert :gen_server.stop(pid) == :ok
+  end
+
+  test "structured actor accepts an effectful init callback body" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.EffectfulInit
+        state Int
+        init
+          %[:ok, 11]
+        on_cast
+          Inc -> state + 1
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.EffectfulInit", :init, [[]]) == {:ok, 11}
+  end
+
   test "structured actor derives a typed call channel from an optional family section" do
     source = """
     mod M

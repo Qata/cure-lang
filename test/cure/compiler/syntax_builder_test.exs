@@ -24,6 +24,8 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
 
     fn build_literals() -> List(Syntax) = [int_literal(7), float_literal(2.5), bool_literal(true), string_literal("ok"), atom_literal(:ready)]
 
+    fn build_unit() -> Syntax = unit_literal()
+
     fn build_function() -> Syntax =
       function_from(FunctionSpec{
         name: "handle",
@@ -70,6 +72,8 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
              {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :string}}], {:SStr, ~c"ok"}},
              {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :symbol}}], {:SAtom, :ready}}
            ]
+
+    assert apply(module, :build_unit, []) == {:Node, :unit_value, [], []}
 
     assert {:Node, :function_def, attrs, [body]} = apply(module, :build_function, [])
     assert {:KV, :name, {:SStr, ~c"handle"}} in attrs

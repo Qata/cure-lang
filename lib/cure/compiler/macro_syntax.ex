@@ -22,7 +22,32 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
+  def lower_internal({:unit_value, meta, []}) when is_list(meta),
+    do: {:ok, {:unit_value, meta}}
+
   def lower_internal(_ast), do: :not_internal
+
+  @doc """
+  Lower internal syntax markers throughout a generated AST tree.
+
+  Top-level macro results pass through the parser's marker hook, while lifted
+  modules are validated directly by `LiftModule`. Keeping the recursive bridge
+  here makes both paths interpret the same safe syntax constructors.
+  """
+  @spec lower_internal_tree(term()) :: term()
+  def lower_internal_tree(ast) when is_list(ast),
+    do: Enum.map(ast, &lower_internal_tree/1)
+
+  def lower_internal_tree({tag, meta, children}) when is_list(meta) and is_list(children) do
+    lowered = {tag, meta, Enum.map(children, &lower_internal_tree/1)}
+
+    case lower_internal(lowered) do
+      {:ok, value} -> value
+      :not_internal -> lowered
+    end
+  end
+
+  def lower_internal_tree(ast), do: ast
 
   @type synlit ::
           {:s_int, integer}

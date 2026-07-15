@@ -158,6 +158,7 @@ defmodule Cure.Compiler.LiftModule do
          callbacks when is_list(callbacks) <- Keyword.get(meta, :callbacks, []),
          declarations when is_list(declarations) <- Keyword.get(meta, :declarations, []),
          inherit_imports when is_boolean(inherit_imports) <- Keyword.get(meta, :inherit_imports, true),
+         declarations = MacroSyntax.lower_internal_tree(declarations),
          declarations = Enum.map(declarations, &normalize_generated_declaration/1),
          :ok <- validate_module_name(module),
          :ok <- validate_behaviour(behaviour),

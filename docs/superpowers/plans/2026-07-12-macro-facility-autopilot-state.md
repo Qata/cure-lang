@@ -1991,7 +1991,13 @@ added.
 accepts optional `terminate Code` and `code_change Code` sections. The source
 expander emits those bodies directly and supplies the ordinary `:ok` and
 `{:ok, state}` defaults when they are absent. Runtime assertions cover both
-overrides, and the complete actor computed suite is green at 16 tests.
+overrides. It now also accepts optional `initial Expression` and `init Code`
+sections: `initial` derives a nullary `start_link` whose callback returns the
+captured state expression, while `init` supplies the callback body directly;
+the default remains `start_link(initial)`. The shared syntax builder exposes a
+safe `unit_literal` marker and the lifted-module path lowers it recursively
+before elaboration. Runtime assertions cover all three initialization modes,
+and the complete actor computed suite is green at 19 tests.
 
 **Hardest sub-problem** (not the reflection, not even the reorder): the derived
 message type is a NEW NOMINAL DECLARATION that must exist before the lifted module
@@ -2223,9 +2229,11 @@ optional explicit `messages Type` override, and a source-defined `actor`
 expander. The expander uses the existing transparent syntax reflection and
 declaration builders to derive `ActorMessage` by default, or reuse the
 caller-supplied nominal message type, and emits an ordinary lifted GenServer
-module. A compiled integration test covers both paths alongside the legacy
-actor forms; reply-channel derivation and the remaining callback-context gate
-stay ordered follow-up work.
+module. Optional `initial Expression` and `init Code` are source-defined as
+well, with the default, expression-initialized, and effectful callback paths
+all producing direct compiled code. A compiled integration test covers these
+paths alongside the legacy actor forms; reply-channel derivation and the
+remaining callback-context gate stay ordered follow-up work.
 
 **Structured FSM status (2026-07-15).** `Std.Fsm` now declares an
 `FsmDefinition` family with required `state` and `events` sections plus an
