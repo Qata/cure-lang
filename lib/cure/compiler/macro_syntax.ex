@@ -613,7 +613,7 @@ defmodule Cure.Compiler.MacroSyntax do
 
   defp validate_reflected_node({:syn_leaf, tag, attrs, lit}, path)
        when is_atom(tag) and is_list(attrs),
-    do: validate_reflected_attrs(attrs, path) |> then(&validate_reflected_literal(&1, lit, path))
+       do: validate_reflected_attrs(attrs, path) |> then(&validate_reflected_literal(&1, lit, path))
 
   defp validate_reflected_node({:syn_raw, _lit}, _path), do: :ok
   defp validate_reflected_node({:syn_quoted, _syntax}, _path), do: :ok

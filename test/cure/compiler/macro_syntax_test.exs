@@ -138,8 +138,7 @@ defmodule Cure.Compiler.MacroSyntaxTest do
 
   test "expansion validation permits reflection-only values in syntax metadata" do
     reflected =
-      {:syn_node, :outer,
-       [{:payload, {:s_syntax, {:syn_raw, {:s_int, 1}}}}], []}
+      {:syn_node, :outer, [{:payload, {:s_syntax, {:syn_raw, {:s_int, 1}}}}], []}
 
     assert :ok = MacroSyntax.validate_expansion(reflected)
   end
