@@ -2115,6 +2115,15 @@ using ordinary Option pattern matching. Repeated fields remain ordinary
 `List(T)` values, and required fields still produce a compile-time missing-field
 diagnostic.
 
+**Computed candidate rejection status (2026-07-15).** Direct, generated-record,
+and generic `Syntax` calling conventions may be tried in sequence when a
+candidate is incompatible with an expander signature. Once a candidate has
+successfully normalized to an intentional `Failure`, `Rejected` diagnostic, or
+invalid generated expansion, that result is terminal and is no longer replaced
+by a later candidate's type error. This preserves source-defined macro
+diagnostics and prevents a generic fallback from masking them with an
+unrelated `foreign_ctor` or `unknown_global` error.
+
 **Typed declaration builder status (2026-07-15).** `Std.Syntax` now exposes
 record-backed specifications and builders for parameters, linear parameters,
 functions, aliases, lifted modules, and match arms. Macro authors can construct

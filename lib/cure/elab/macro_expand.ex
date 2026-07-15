@@ -317,7 +317,11 @@ defmodule Cure.Elab.MacroExpand do
 
         case decode_result(result) do
           {:ok, _ast} = success -> success
-          {:error, _reason} when fallback != [] -> execute_application(context, elab_core, fallback)
+          {:error, reason} when fallback != [] ->
+            if fallback_decode_error?(reason),
+              do: execute_application(context, elab_core, fallback),
+              else: {:error, reason}
+
           error -> error
         end
 
@@ -331,6 +335,11 @@ defmodule Cure.Elab.MacroExpand do
 
   defp execute_application(_context, _elab_core, []),
     do: {:error, :no_compatible_macro_input}
+
+  defp fallback_decode_error?({:author_failure, _name, _args}), do: false
+  defp fallback_decode_error?({:author_diagnostics, _diagnostics}), do: false
+  defp fallback_decode_error?({:invalid_generated_syntax, _reason}), do: false
+  defp fallback_decode_error?(_reason), do: true
 
   defp decode_result(result) do
     if result == :fuel_exhausted do
