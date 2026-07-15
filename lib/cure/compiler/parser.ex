@@ -110,6 +110,7 @@ defmodule Cure.Compiler.Parser do
   @spec freshen_generated(ast(), non_neg_integer()) :: {ast(), non_neg_integer()}
   def freshen_generated(ast, fresh_counter \\ 0) when is_integer(fresh_counter) and fresh_counter >= 0 do
     state = %__MODULE__{fresh_counter: fresh_counter}
+
     freshen(ast, state, false)
     |> then(fn {freshened, state} -> {freshened, state.fresh_counter} end)
   end

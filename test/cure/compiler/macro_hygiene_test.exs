@@ -58,10 +58,11 @@ defmodule Cure.Compiler.MacroHygieneTest do
 
   test "computed hygiene rewrites explicit markers without rewriting reflected input" do
     generated =
-      {:tuple, [], [
-        {:fresh_name, [], "g"},
-        {:variable, [scope: :local], "g"}
-      ]}
+      {:tuple, [],
+       [
+         {:fresh_name, [], "g"},
+         {:variable, [scope: :local], "g"}
+       ]}
 
     {hygienic, next_counter} = Parser.freshen_generated(generated)
 
