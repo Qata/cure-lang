@@ -129,6 +129,30 @@ defmodule Cure.Compiler.ActorComputedTest do
              {:reply, 9, 9}
   end
 
+  test "actor derives one reply type across an arbitrary number of call arms" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.ManyCall state Int derive
+        match message
+          Ping -> 1
+        call
+          match request
+            Get -> state
+            Pong -> state
+            Count -> state
+
+    fn make_request() -> ActorRequest = Count
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(module, :make_request, []) == :Count
+    assert apply(:"Cure.Generated.ManyCall", :handle_call, [:Count, {:from, self()}, 12]) ==
+             {:reply, 12, 12}
+  end
+
   test "actor rejects inconsistent reply categories across call arms" do
     source = """
     mod M
@@ -140,7 +164,8 @@ defmodule Cure.Compiler.ActorComputedTest do
         call
           match request
             Get -> state
-            Count -> 1
+            Count -> state
+            Reset -> 1
     """
 
     assert {:error, {:computed_macro_error, _, {:author_failure, "inconsistent_reply_types", []}}} =

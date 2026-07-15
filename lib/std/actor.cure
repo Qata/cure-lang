@@ -256,17 +256,22 @@ mod Std.Actor
 
   fn infer_reply_type(body: Syntax, state_type: Syntax) -> ReplyTypeInference = match tag(body) == :pattern_match
     true -> match children(body)
-      [_scrutinee, arm] -> reply_arm_type(arm, state_type)
-      [_scrutinee, first, second] -> infer_reply_pair(first, second, state_type)
+      [_scrutinee | arms] -> infer_reply_arms(arms, state_type)
       _ -> InvalidReply(:reply_type_not_derivable)
     false -> InvalidReply(:reply_type_not_derivable)
 
-  fn infer_reply_pair(first: Syntax, second: Syntax, state_type: Syntax) -> ReplyTypeInference = match reply_arm_type(first, state_type)
-    InvalidReply(reason) -> InvalidReply(reason)
-    ReplyType(reply_type, first_key) -> match reply_arm_type(second, state_type)
+  fn infer_reply_arms(arms: List(Syntax), state_type: Syntax) -> ReplyTypeInference = match arms
+    [first | rest] -> match reply_arm_type(first, state_type)
       InvalidReply(reason) -> InvalidReply(reason)
-      ReplyType(_, second_key) -> match first_key == second_key
-        true -> ReplyType(reply_type, first_key)
+      ReplyType(reply_type, reply_key) -> infer_reply_tail(rest, state_type, reply_type, reply_key)
+    [] -> InvalidReply(:reply_type_not_derivable)
+
+  fn infer_reply_tail(arms: List(Syntax), state_type: Syntax, reply_type: Syntax, reply_key: Atom) -> ReplyTypeInference = match arms
+    [] -> ReplyType(reply_type, reply_key)
+    [arm | rest] -> match reply_arm_type(arm, state_type)
+      InvalidReply(reason) -> InvalidReply(reason)
+      ReplyType(_, arm_key) -> match reply_key == arm_key
+        true -> infer_reply_tail(rest, state_type, reply_type, reply_key)
         false -> InvalidReply(:inconsistent_reply_types)
 
   fn reply_arm_type(arm: Syntax, state_type: Syntax) -> ReplyTypeInference = match children(arm)
