@@ -743,16 +743,31 @@ defmodule Cure.Compiler.Parser do
 
     case peek(family_state) do
       %Token{type: :indent} ->
-        {captured, state} = capture_family_body(state)
-        {family_value, parsed_state} = parse_family_body(captured, family_meta, state)
+        body_start = family_state |> advance() |> skip_newlines()
 
-        state = %{
-          state
-          | errors: state.errors ++ parsed_state.errors,
-            fresh_counter: parsed_state.fresh_counter
-        }
+        case peek(body_start) do
+          %Token{type: :keyword} ->
+            {:error, progress, state}
 
-        match_segments(state, rest, Map.put(bindings, family_meta.name, family_value), progress + 1)
+          %Token{type: :identifier, value: field_name} ->
+            if Enum.any?(family_meta.fields, &(&1.name == field_name)) do
+              {captured, state} = capture_family_body(state)
+              {family_value, parsed_state} = parse_family_body(captured, family_meta, state)
+
+              state = %{
+                state
+                | errors: state.errors ++ parsed_state.errors,
+                  fresh_counter: parsed_state.fresh_counter
+              }
+
+              match_segments(state, rest, Map.put(bindings, family_meta.name, family_value), progress + 1)
+            else
+              {:error, progress, state}
+            end
+
+          _ ->
+            {:error, progress, state}
+        end
 
       _ ->
         {:error, progress, state}

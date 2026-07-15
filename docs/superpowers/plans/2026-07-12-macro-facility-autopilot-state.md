@@ -2168,9 +2168,11 @@ classes.
 names its advanced fallback record from the accepted family (`FamilyNameInputSyntax`)
 rather than from the public macro keyword. The parser also preserves the
 family-specific metadata when materializing a computed use, and only consumes
-an indented body when matching a family rule. This keeps a structured and a
-legacy rule with the same public keyword disjoint without an OTP-specific
-compiler exception, while preserving ordinary legacy fallback.
+an indented body whose first section is declared by the family. Keyword-led or
+undeclared-section bodies therefore fall through to legacy syntax rules. This
+keeps a structured and a legacy rule with the same public keyword disjoint
+without an OTP-specific compiler exception, while preserving ordinary legacy
+fallback; the full 68-test transparent-container suite pins this behavior.
 
 **Structured actor status (2026-07-15).** `Std.Actor` now declares an
 `ActorDefinition` family with required `state` and `on_cast` sections and a
