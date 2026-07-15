@@ -5668,6 +5668,7 @@ defmodule Cure.Compiler.Parser do
   defp optional_segment_inputs({:hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
   defp optional_segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
   defp optional_segment_inputs({:repeat, segment}, bindings), do: optional_segment_inputs(segment, bindings)
+
   defp optional_segment_inputs({:optional, segments}, bindings),
     do: Enum.flat_map(segments, &optional_segment_inputs(&1, bindings))
 
