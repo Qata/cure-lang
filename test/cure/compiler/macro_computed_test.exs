@@ -52,9 +52,7 @@ defmodule Cure.Compiler.MacroComputedTest do
 
   test "computed rules can delimit one parsed code hole before a following literal" do
     [rule] =
-      rules(
-        parse!("macro Mk\n  syntax mk <body: Code until call> (call <other: Code>)? computed by build\n")
-      )
+      rules(parse!("macro Mk\n  syntax mk <body: Code until call> (call <other: Code>)? computed by build\n"))
 
     assert rule.kind == :computed
     assert [{:code_hole, %{name: "body", delimiter: "call"}}, {:optional, segments}] = rule.segments

@@ -120,6 +120,7 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert module == :"Cure.M"
     assert apply(module, :make_request, []) == :Get
+
     assert apply(:"Cure.Generated.Call", :handle_call, [:Get, {:from, self()}, 7]) ==
              {:reply, 7, 7}
   end
@@ -139,8 +140,7 @@ defmodule Cure.Compiler.ActorComputedTest do
             Get -> reply(state)
     """
 
-    assert {:error,
-            {:computed_macro_error, _, {:author_failure, "reply_type_not_derivable", []}}} =
+    assert {:error, {:computed_macro_error, _, {:author_failure, "reply_type_not_derivable", []}}} =
              Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
