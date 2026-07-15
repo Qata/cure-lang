@@ -136,6 +136,14 @@ defmodule Cure.Compiler.MacroSyntaxTest do
              MacroSyntax.validate_expansion({:syn_node, :block, [], [{:syn_leaf, :literal, [], {:s_int, 1}}]})
   end
 
+  test "expansion validation permits reflection-only values in syntax metadata" do
+    reflected =
+      {:syn_node, :outer,
+       [{:payload, {:s_syntax, {:syn_raw, {:s_int, 1}}}}], []}
+
+    assert :ok = MacroSyntax.validate_expansion(reflected)
+  end
+
   test "an exotic scalar value (regex tuple) reflects opaquely without crashing" do
     ast = expr!("~r/foo/")
     # Node tag is :literal (subtype: :regex in meta), NOT a bare :regex tag —

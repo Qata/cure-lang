@@ -580,9 +580,6 @@ defmodule Cure.Compiler.MacroSyntax do
     end)
   end
 
-  defp validate_synlit({:s_syntax, syntax}, path),
-    do: validate_expansion_node(syntax, [{:syntax_literal} | path])
-
   defp validate_synlit({:s_map, pairs}, path) when is_list(pairs) do
     Enum.reduce_while(pairs, :ok, fn
       {key, value}, :ok ->
@@ -600,8 +597,90 @@ defmodule Cure.Compiler.MacroSyntax do
 
   defp validate_synlit(:s_opaque, _path), do: :ok
 
+  defp validate_synlit({:s_syntax, syntax}, path),
+    do: validate_reflected_node(syntax, [{:syntax_literal} | path])
+
   defp validate_synlit(_other, path),
     do: {:error, {:malformed_expansion_literal, path}}
+
+  defp validate_reflected_node({:syn_node, tag, attrs, kids}, path)
+       when is_atom(tag) and is_list(attrs) and is_list(kids) do
+    with :ok <- validate_reflected_attrs(attrs, path),
+         :ok <- validate_reflected_children(kids, path) do
+      :ok
+    end
+  end
+
+  defp validate_reflected_node({:syn_leaf, tag, attrs, lit}, path)
+       when is_atom(tag) and is_list(attrs),
+    do: validate_reflected_attrs(attrs, path) |> then(&validate_reflected_literal(&1, lit, path))
+
+  defp validate_reflected_node({:syn_raw, _lit}, _path), do: :ok
+  defp validate_reflected_node({:syn_quoted, _syntax}, _path), do: :ok
+  defp validate_reflected_node({:syn_failure, _name, _args}, _path), do: :ok
+  defp validate_reflected_node(_other, path), do: {:error, {:malformed_reflected_syntax, path}}
+
+  defp validate_reflected_children(children, path) do
+    children
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {child, index}, :ok ->
+      case validate_reflected_node(child, [{:child, index} | path]) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_reflected_attrs(attrs, path) do
+    attrs
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn
+      {{key, value}, index}, :ok when is_atom(key) ->
+        case validate_reflected_literal(:ok, value, [{:attribute, key, index} | path]) do
+          :ok -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
+        end
+
+      {_attribute, index}, :ok ->
+        {:halt, {:error, {:malformed_reflected_attribute, [{:attribute, index} | path]}}}
+    end)
+  end
+
+  defp validate_reflected_literal(:ok, {:s_syntax, syntax}, path),
+    do: validate_reflected_node(syntax, path)
+
+  defp validate_reflected_literal(:ok, {:s_list, values}, path) when is_list(values),
+    do: Enum.reduce_while(values, :ok, &validate_reflected_literal_item(&1, &2, path))
+
+  defp validate_reflected_literal(:ok, {:s_map, pairs}, path) when is_list(pairs),
+    do: Enum.reduce_while(pairs, :ok, &validate_reflected_pair(&1, &2, path))
+
+  defp validate_reflected_literal(:ok, {:s_int, value}, _path) when is_integer(value), do: :ok
+  defp validate_reflected_literal(:ok, {:s_float, value}, _path) when is_float(value), do: :ok
+  defp validate_reflected_literal(:ok, {:s_str, value}, _path) when is_binary(value), do: :ok
+  defp validate_reflected_literal(:ok, {:s_bool, value}, _path) when is_boolean(value), do: :ok
+  defp validate_reflected_literal(:ok, {:s_atom, value}, _path) when is_atom(value), do: :ok
+  defp validate_reflected_literal(:ok, :s_opaque, _path), do: :ok
+  defp validate_reflected_literal({:error, _} = error, _value, _path), do: error
+  defp validate_reflected_literal(_result, _value, path), do: {:error, {:malformed_reflected_literal, path}}
+
+  defp validate_reflected_literal_item(value, :ok, path),
+    do: validate_reflected_literal(:ok, value, [{:list_item} | path]) |> reduce_validation()
+
+  defp validate_reflected_pair({key, value}, :ok, path) do
+    with :ok <- validate_reflected_literal(:ok, key, [{:map_key} | path]),
+         :ok <- validate_reflected_literal(:ok, value, [{:map_value} | path]) do
+      {:cont, :ok}
+    else
+      {:error, _} = error -> {:halt, error}
+    end
+  end
+
+  defp validate_reflected_pair(_pair, :ok, path),
+    do: {:halt, {:error, {:malformed_reflected_map, path}}}
+
+  defp reduce_validation(:ok), do: {:cont, :ok}
+  defp reduce_validation({:error, _} = error), do: {:halt, error}
 
   defp ctor(name, args), do: {:ctor, canonical_ctor(name), args}
 

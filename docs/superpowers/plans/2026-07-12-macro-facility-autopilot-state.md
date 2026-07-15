@@ -2141,13 +2141,17 @@ instead of an unclassified tuple dump.
 **Raw expansion validation status (2026-07-15).** Raw construction is now
 explicitly separated from executable expansion. Before a computed result is
 converted back to parser AST, `MacroSyntax.validate_expansion/1` rejects raw and
-quoted reflection forms, malformed syntax representations, malformed attributes,
-and malformed syntax literals. Legacy `Failure` values remain available for the
-existing author-diagnostic protocol. The compiler wraps these failures with the
-macro's provenance and formats them through the outer `:codegen_error` boundary,
-so advanced unchecked construction cannot degrade into an `inspect/1`-only
-diagnostic or a host exception. Semantic validation of known Cure declaration
-shapes remains the responsibility of the typed builders and ordinary elaborator.
+quoted reflection forms when they appear as executable expansion nodes, along
+with malformed syntax representations, malformed attributes, and malformed
+syntax literals. Reflection-only values nested in syntax metadata remain valid;
+they are part of the quoted `Syntax` data model and must survive a reflected
+payload round trip without being mistaken for generated code. Legacy `Failure`
+values remain available for the existing author-diagnostic protocol. The
+compiler wraps invalid results with the macro's provenance and formats them
+through the outer `:codegen_error` boundary, so advanced unchecked construction
+cannot degrade into an `inspect/1`-only diagnostic or a host exception. Semantic
+validation of known Cure declaration shapes remains the responsibility of the
+typed builders and ordinary elaborator.
 
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
