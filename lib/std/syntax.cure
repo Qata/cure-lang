@@ -84,6 +84,18 @@ mod Std.Syntax
         true -> Found(value)
         false -> attr(rest, key)
 
+  ## Read the generic staged expansion context attached to reflected syntax.
+  ## A context-free use site is represented by the same opaque value used for
+  ## any unavailable syntax, so a source-defined macro can inspect it without
+  ## relying on a compiler-owned callback record.
+  fn expansion_context(syntax: Syntax) -> Syntax = match attr(attrs(syntax), :expansion_context)
+    Found(SSyntax(value)) -> value
+    _ -> Raw(SOpaque)
+
+  ## Look up one field in the generic staged expansion context.
+  fn context_attr(syntax: Syntax, key: Atom) -> AttrResult =
+    attr(attrs(expansion_context(syntax)), key)
+
   fn node(name: Atom, values: List(Attr), terms: List(Syntax)) -> Syntax =
     Node(name, values, terms)
 

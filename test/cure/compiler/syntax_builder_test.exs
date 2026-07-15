@@ -13,6 +13,12 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
     fn find_name() -> AttrResult =
       attr([KV(:other, SInt(0)), KV(:name, SStr("worker"))], :name)
 
+    fn context_name() -> AttrResult =
+      context_attr(
+        Node(:sample, [attr_value(:expansion_context, SSyntax(Node(:callback_context, [KV(:callback, SAtom(:handle_cast))], [])))], []),
+        :callback
+      )
+
     fn build_node() -> Syntax =
       node(:generated, [attr_value(:kind, syntax_atom(:actor))], [])
   """
@@ -27,6 +33,8 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
            ]
 
     assert apply(module, :find_name, []) == {:Found, {:SStr, String.to_charlist("worker")}}
+
+    assert apply(module, :context_name, []) == {:Found, {:SAtom, :handle_cast}}
 
     assert apply(module, :build_node, []) ==
              {:Node, :generated, [{:KV, :kind, {:SAtom, :actor}}], []}
