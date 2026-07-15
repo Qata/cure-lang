@@ -60,6 +60,7 @@ defmodule Cure.Compiler.LiftModule do
     # `typealias Message = Tick` needs `Tick` already bound — unlike an inductive,
     # a type alias has no forward-reference pre-pass).
     declarations = inherited ++ request.declarations
+
     imports =
       if Map.get(request, :inherit_imports, true) do
         Enum.uniq(request.imports ++ imports_from_declarations(inherited))
