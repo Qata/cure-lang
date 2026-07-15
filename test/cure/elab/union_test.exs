@@ -2,8 +2,14 @@ defmodule Cure.Elab.UnionTest do
   @moduledoc """
   End-to-end elaboration of anonymous unions, through `Program.elaborate/1` (so the
   stdlib prelude is in scope and `String` resolves).
+
+  Not `async`: the heterogeneous-Map round-trip compiles a source that installs the
+  global BEAM module `Cure.Std.Map` (with the full delegated surface, incl. `get/2`).
+  `set_dependent_run_test.exs` installs a *partial* `Cure.Std.Map` (Set's delegated
+  subset only) under the same global name. BEAM modules are process-global, so two
+  such tests running concurrently clobber each other's module. Both are serialized.
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Cure.Core.{Env, Inductive}
   alias Cure.Elab.{Program, Union}

@@ -19,8 +19,13 @@ defmodule Cure.Stdlib.SetDependentRunTest do
   target and collides on the shared base names (two `new/0`, `remove/2`, …); the
   owner-qualified identities that canonicalization now keeps distinct are what
   make the split faithful.
+
+  Not `async`: the emitted `Cure.Std.Map` is a *partial* view (Set's delegated
+  subset — no `get/2`). It is installed under the same process-global BEAM module
+  name that `union_test.exs` installs a *full* `Cure.Std.Map` under, so the two must
+  not run concurrently (they would clobber each other's global module). Serialized.
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Elab.{Name, Program, Emit}
