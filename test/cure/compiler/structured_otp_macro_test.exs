@@ -24,7 +24,7 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
              :Tick,
              :initial,
              0
-    ]) == :keep_state_and_data
+           ]) == :keep_state_and_data
   end
 
   test "structured fsm accepts an explicit event type override" do
