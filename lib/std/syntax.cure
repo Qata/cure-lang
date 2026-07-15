@@ -38,6 +38,13 @@ mod Std.Syntax
 
   type AttrResult = Found(SynLit) | Missing
 
+  ## A constructor head extracted from a reflected match arm. The arity is
+  ## retained in the generic constructor key so source-defined derivations can
+  ## reject unsupported payload views without compiler-owned domain knowledge.
+  type PatternHeads = Heads(List(Syntax)) | InvalidHeads(Atom)
+
+  type PatternHead = ValidHead(Atom, Syntax) | InvalidHead(Atom)
+
   ## Small, total operations used by source-defined syntax macros. These keep
   ## syntax analysis in Cure instead of teaching the compiler about a macro's
   ## domain-specific declarations.
@@ -150,6 +157,82 @@ mod Std.Syntax
 
   fn enum_variant(name: String) -> Syntax =
     Leaf(:variable, [KV(:variant, SBool(true))], SStr(name))
+
+  ## Extract a closed constructor head from a reflected match arm. A handler
+  ## whose head cannot determine a nominal constructor is rejected by the
+  ## caller rather than silently widening the generated message/event type.
+  fn pattern_head(pattern: Syntax) -> PatternHead = match pattern
+    Leaf(_, values, SStr(name)) -> match constructor_name(values)
+      true -> ValidHead(constructor_key(values), enum_variant(name))
+      false -> InvalidHead(:non_constructor_pattern)
+    Node(_, values, args) -> match has_tag(pattern, :function_call)
+      true -> match attr(values, :name)
+        Found(value) -> match value
+          SStr(name) -> match constructor_name(values)
+            true -> pickup
+              empty_syntax_list(args) -> ValidHead(constructor_key(values), enum_variant(name))
+              else -> InvalidHead(:payload_type_not_derivable)
+            false -> InvalidHead(:non_constructor_pattern)
+          _ -> InvalidHead(:unsupported_pattern)
+        Missing -> InvalidHead(:unsupported_pattern)
+      false -> InvalidHead(:unsupported_pattern)
+    _ -> InvalidHead(:unsupported_pattern)
+
+  fn handler_head(arm: Syntax) -> PatternHead = match arm
+    Node(_, values, _) -> match attr(values, :guard)
+      Found(_) -> InvalidHead(:guarded_handler)
+      Missing -> match attr(values, :pattern)
+        Found(SSyntax(pattern)) -> pattern_head(pattern)
+        _ -> InvalidHead(:missing_pattern)
+    _ -> InvalidHead(:unsupported_handler)
+
+  fn collect_pattern_heads(arms: List(Syntax), seen: List(Syntax), keys: List(Atom)) -> PatternHeads =
+    match arms
+      [] -> match reverse_heads(seen)
+        [] -> InvalidHeads(:empty_handler)
+        [head | rest] -> Heads([head | rest])
+      [arm | rest] ->
+        match handler_head(arm)
+          InvalidHead(reason) -> InvalidHeads(reason)
+          ValidHead(key, value) -> pickup
+            has_key(keys, key) -> collect_pattern_heads(rest, seen, keys)
+            else -> collect_pattern_heads(rest, [value | seen], [key | keys])
+
+  fn reverse_heads(items: List(Syntax)) -> List(Syntax) =
+    reverse_heads_acc(items, [])
+
+  fn reverse_heads_acc(items: List(Syntax), acc: List(Syntax)) -> List(Syntax) =
+    match items
+      [] -> acc
+      [head | rest] -> reverse_heads_acc(rest, [head | acc])
+
+  fn has_key(keys: List(Atom), key: Atom) -> Bool = match keys
+    [] -> false
+    [head | rest] -> pickup
+      head == key -> true
+      else -> has_key(rest, key)
+
+  fn constructor_key(values: List(Attr)) -> Atom = match attr(values, :constructor_key)
+    Found(value) -> match value
+      SAtom(key) -> key
+      _ -> :invalid_constructor
+    Missing -> :invalid_constructor
+
+  fn empty_syntax_list(items: List(Syntax)) -> Bool = match items
+    [] -> true
+    _ -> false
+
+  fn derive_pattern_heads(body: Syntax) -> PatternHeads = match handler_children(body)
+    [_scrutinee | arms] -> collect_pattern_heads(arms, [], [])
+    _ -> InvalidHeads(:invalid_handler_body)
+
+  fn handler_children(body: Syntax) -> List(Syntax) = children(body)
+
+  fn constructor_name(values: List(Attr)) -> Bool = match attr(values, :pascal_case)
+    Found(value) -> match value
+      SBool(result) -> result
+      _ -> false
+    Missing -> false
 
   fn block(items: List(Syntax)) -> Syntax = Node(:block, [], items)
 

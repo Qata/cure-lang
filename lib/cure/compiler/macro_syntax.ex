@@ -57,6 +57,29 @@ defmodule Cure.Compiler.MacroSyntax do
   @spec to_syntax(term()) :: repr
   def to_syntax({:quoted_syntax, _meta, [inner]}), do: {:syn_quoted, to_syntax(inner)}
 
+  # Preserve the parser's generic identifier-shape fact for source-defined
+  # syntax analysis. A reflected macro must distinguish a Pascal constructor
+  # head from a lowercase variable without a domain-specific compiler rule.
+  def to_syntax({:variable, meta, name}) when is_list(meta) and is_binary(name) do
+    extra = [
+      {:pascal_case, {:s_bool, pascal_case?(name)}},
+      {:constructor_key, {:s_atom, String.to_atom(name <> "/0")}}
+    ]
+    {:syn_leaf, :variable, attrs(meta) ++ extra, synlit(name)}
+  end
+
+  def to_syntax({:function_call, meta, args}) when is_list(meta) and is_list(args) do
+    name = Keyword.get(meta, :name)
+    extra =
+      if is_binary(name),
+        do: [
+          {:pascal_case, {:s_bool, pascal_case?(name)}},
+          {:constructor_key, {:s_atom, String.to_atom(name <> "/" <> Integer.to_string(length(args)))}}
+        ],
+        else: []
+    {:syn_node, :function_call, attrs(meta) ++ extra, Enum.map(args, &to_syntax/1)}
+  end
+
   def to_syntax({tag, meta, third}) when is_list(third) do
     {:syn_node, tag, attrs(meta), Enum.map(third, &to_syntax/1)}
   end
@@ -117,6 +140,9 @@ defmodule Cure.Compiler.MacroSyntax do
 
   defp attrs(_), do: []
 
+  defp pascal_case?(<<first::utf8, _rest::binary>>) when first in ?A..?Z, do: true
+  defp pascal_case?(_), do: false
+
   defp synlit(v) when is_integer(v), do: {:s_int, v}
   defp synlit(v) when is_float(v), do: {:s_float, v}
   defp synlit(v) when is_binary(v), do: {:s_str, v}
@@ -158,7 +184,9 @@ defmodule Cure.Compiler.MacroSyntax do
   def from_syntax({:syn_failure, name, args}),
     do: {:macro_failure, name, Enum.map(args, &from_syntax/1)}
 
-  defp from_attrs(attrs), do: for({k, lit} <- attrs, do: {k, from_synlit(lit)})
+  defp from_attrs(attrs) do
+    for {k, lit} <- attrs, k not in [:pascal_case, :constructor_key], do: {k, from_synlit(lit)}
+  end
 
   defp from_synlit({:s_int, n}), do: n
   defp from_synlit({:s_float, f}), do: f

@@ -44,6 +44,19 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:syn_leaf, :variable, _, {:s_str, "x"}} = arg2
   end
 
+  test "to_syntax records generic constructor spelling and arity metadata" do
+    repr = MacroSyntax.to_syntax(expr!("Ping(value)"))
+
+    assert {:syn_node, :function_call, attrs, _args} = repr
+    assert {:pascal_case, {:s_bool, true}} in attrs
+    assert {:constructor_key, {:s_atom, :"Ping/1"}} in attrs
+
+    nullary = MacroSyntax.to_syntax(expr!("Ping"))
+    assert {:syn_leaf, :variable, nullary_attrs, {:s_str, "Ping"}} = nullary
+    assert {:pascal_case, {:s_bool, true}} in nullary_attrs
+    assert {:constructor_key, {:s_atom, :"Ping/0"}} in nullary_attrs
+  end
+
   test "from_syntax(to_syntax(ast)) round-trips up to source position" do
     for src <- ["g(1, x + 2)", "[1, 2, 3]", "\"hi\"", ":ok", "true", "3.5", "f()"] do
       ast = expr!(src)

@@ -24,4 +24,18 @@ defmodule Cure.Compiler.FsmComputedTest do
     assert apply(generated, :handle_event, [:info, :Start, :state, 4]) == :keep_state_and_data
     assert apply(generated, :handle_event, [:info, :Stop, :state, 4]) == :keep_state_and_data
   end
+
+  test "fsm rejects a catch-all event handler" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      fsm Cure.Generated.CatchAll state Int derive
+        match event
+          event -> :keep_state_and_data
+    """
+
+    assert {:error, {:computed_macro_error, _, {:author_failure, "non_constructor_pattern", []}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
 end
