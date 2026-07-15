@@ -1942,6 +1942,14 @@ reply expressions and inconsistent reply categories continue to reject through
 the ordinary macro diagnostic path. Full BEAM reply capability derivation and
 additional lifecycle sections remain open.
 
+**Structured actor info-channel status (2026-07-15).** `ActorDefinition` now
+also accepts an optional `on_info Cases` section. The source expander selects a
+transparent default `{:noreply, state}` handler when it is absent and routes
+present cases through the same checked handler normalization used by casts and
+calls. A compiled integration test proves the generated `handle_info` callback
+updates state from a reflected family case; no compiler-side lifecycle rule was
+added.
+
 **Hardest sub-problem** (not the reflection, not even the reorder): the derived
 message type is a NEW NOMINAL DECLARATION that must exist before the lifted module
 referencing it is elaborated, and must be the SAME nominal type external `send`

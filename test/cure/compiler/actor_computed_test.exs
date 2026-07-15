@@ -72,6 +72,24 @@ defmodule Cure.Compiler.ActorComputedTest do
     :gen_server.stop(pid)
   end
 
+  test "structured actor derives an optional info channel from the family" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.StructuredInfo
+        state Int
+        on_cast
+          Inc -> state + 1
+        on_info
+          Tick -> state + 2
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.StructuredInfo", :handle_info, [:Tick, 3]) == {:noreply, 5}
+  end
+
   test "actor derives its message type from multiple reflected handler arms" do
     source = """
     mod M

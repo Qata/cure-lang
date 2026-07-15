@@ -11,6 +11,7 @@ mod Std.Actor
       state Type
       on_cast Cases
       optional on_call Cases
+      optional on_info Cases
     accepts ActorDefinition
     expands with derive_actor_family
 
@@ -19,6 +20,9 @@ mod Std.Actor
     let call_body = match definition.on_call
       None() -> Raw(SOpaque)
       Some(value) -> Node(:pattern_match, [], [variable("request") | children(value)])
+    let info_body = match definition.on_info
+      None() -> Raw(SOpaque)
+      Some(value) -> Node(:pattern_match, [], [variable("message") | children(value)])
     let name_syntax: Syntax = name
     let module_name: SynLit = match name_syntax
       Leaf(_, _, SAtom(value)) -> SAtom(value)
@@ -29,9 +33,13 @@ mod Std.Actor
     match derive_pattern_heads(body)
       InvalidHeads(reason) -> Failure(reason, [])
       Heads(heads) -> match derive_reply_contract(call_body, definition.state)
-        NoCall -> emit_actor_parts(module_name, module_expr, definition.state, body, heads)
+        NoCall -> emit_actor_parts(module_name, module_expr, definition.state, body, info_body, heads)
         InvalidCall(reason) -> Failure(reason, [])
-        CallContract(request_heads, reply_type) -> emit_actor_call_parts(module_name, module_expr, definition.state, body, call_body, heads, request_heads, reply_type)
+        CallContract(request_heads, reply_type) -> emit_actor_call_parts(module_name, module_expr, definition.state, body, call_body, info_body, heads, request_heads, reply_type)
+
+  fn actor_info_handler(info_body: Syntax) -> Syntax = match tag(info_body) == :raw
+    true -> tuple([atom_literal(:noreply), variable("state")])
+    false -> actor_handler(info_body)
 
   ## `actor` is a transparent standard-library macro. The base actor is an
   ## ordinary lifted GenServer module; message-code derivation and user
@@ -335,22 +343,22 @@ mod Std.Actor
             false -> InvalidReply(:reply_type_not_derivable)
 
   fn emit_actor(input: ActorSyntax, module_name: SynLit, module_expr: Syntax, heads: List(Syntax)) -> Syntax =
-    emit_actor_parts(module_name, module_expr, input.state_type, input.cast_body, heads)
+    emit_actor_parts(module_name, module_expr, input.state_type, input.cast_body, Raw(SOpaque), heads)
 
-  fn emit_actor_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, cast_body: Syntax, heads: List(Syntax)) -> Syntax =
+  fn emit_actor_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, cast_body: Syntax, info_body: Syntax, heads: List(Syntax)) -> Syntax =
         let message_type: Syntax = enum_type("ActorMessage", heads)
         let result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let start_type: Syntax = call("Effect", [variable("Tuple")])
         let handler_body: Syntax = actor_handler(cast_body)
-        let default_state: Syntax = tuple([atom_literal(:noreply), variable("state")])
+        let info_handler: Syntax = actor_info_handler(info_body)
         block([
           message_type,
           gen_server_module(module_name, state_type, [
             alias_node("Message", variable("ActorMessage")),
             function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), variable("initial")])),
             function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, handler_body),
-            function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, default_state),
+            function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, info_handler),
             function("terminate", [parameter("reason", variable("Atom")), parameter("state", variable("State"))], call("Effect", [variable("Atom")]), atom_literal(:ok)),
             function("code_change", [parameter("old", variable("Atom")), parameter("state", variable("State")), parameter("extra", variable("Atom"))], result_type, tuple([atom_literal(:ok), variable("state")])),
             function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_link", [module_expr, variable("initial")]))
@@ -358,9 +366,9 @@ mod Std.Actor
         ])
 
   fn emit_actor_call(input: ActorSyntax, module_name: SynLit, module_expr: Syntax, message_heads: List(Syntax), request_heads: List(Syntax), reply_type: Syntax) -> Syntax =
-    emit_actor_call_parts(module_name, module_expr, input.state_type, input.cast_body, input.call_body, message_heads, request_heads, reply_type)
+    emit_actor_call_parts(module_name, module_expr, input.state_type, input.cast_body, input.call_body, Raw(SOpaque), message_heads, request_heads, reply_type)
 
-  fn emit_actor_call_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, cast_body: Syntax, call_body: Syntax, message_heads: List(Syntax), request_heads: List(Syntax), reply_type: Syntax) -> Syntax =
+  fn emit_actor_call_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, cast_body: Syntax, call_body: Syntax, info_body: Syntax, message_heads: List(Syntax), request_heads: List(Syntax), reply_type: Syntax) -> Syntax =
     let message_type: Syntax = enum_type("ActorMessage", message_heads)
     let request_type: Syntax = enum_type("ActorRequest", request_heads)
     let cast_result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
@@ -368,7 +376,7 @@ mod Std.Actor
     let start_type: Syntax = call("Effect", [variable("Tuple")])
     let cast_body: Syntax = actor_handler(cast_body)
     let call_body: Syntax = actor_call_handler(call_body)
-    let default_state: Syntax = tuple([atom_literal(:noreply), variable("state")])
+    let info_handler: Syntax = actor_info_handler(info_body)
     block([
       message_type,
       request_type,
@@ -378,7 +386,7 @@ mod Std.Actor
         function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), variable("initial")])),
         function("handle_call", [parameter("request", variable("Request")), parameter_linear("from", call("Reply", [reply_type])), parameter("state", variable("State"))], cast_result_type, call_body),
         function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], cast_result_type, cast_body),
-        function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], cast_result_type, default_state),
+        function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], cast_result_type, info_handler),
         function("terminate", [parameter("reason", variable("Atom")), parameter("state", variable("State"))], call("Effect", [variable("Atom")]), atom_literal(:ok)),
         function("code_change", [parameter("old", variable("Atom")), parameter("state", variable("State")), parameter("extra", variable("Atom"))], cast_result_type, tuple([atom_literal(:ok), variable("state")])),
         function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_link", [module_expr, variable("initial")]))
