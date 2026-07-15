@@ -28,15 +28,35 @@ defmodule Cure.Compiler.LiftModuleSurfaceTest do
              %{behaviour: :GenServer, callback: :handle_info, arity: 2}
            ]
 
-    assert %{parameter_names: ["arg"], return_annotation: :inferred} = hd(meta[:callbacks]).callback_context
+    assert %{parameter_names: ["arg"], parameter_types: [{:variable, _, "Int"}], return_annotation: :inferred, return_type: nil} =
+             hd(meta[:callbacks]).callback_context
 
-    assert %{parameter_names: ["msg", "state"], return_annotation: :inferred} =
+    assert %{parameter_names: ["msg", "state"], parameter_types: [{:variable, _, "Int"}, {:variable, _, "Int"}], return_annotation: :inferred, return_type: nil} =
              List.last(meta[:callbacks]).callback_context
 
     assert {:variable, _, "arg"} = hd(meta[:callbacks]).body
 
     assert {:ok, %{kind: :quoted_module, behaviour: :GenServer}} =
              LiftModule.request_ast({:lift_module, meta, []})
+  end
+
+  test "lifted callback context carries parameter and return type syntax" do
+    source = """
+    lift module Cure.Generated.Context
+      behaviour custom_behavior
+      callback ping(arg: Int, flag: Bool) returns Tuple(Int, Bool) = %[arg, flag]
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:lift_module, meta, []}} = Parser.parse(tokens, emit_events: false)
+
+    [callback] = meta[:callbacks]
+    assert [
+             {:variable, _, "Int"},
+             {:variable, _, "Bool"}
+           ] = callback.callback_context.parameter_types
+
+    assert {:tuple_type, _, _} = callback.callback_context.return_type
   end
 
   test "generic lifted modules accept user-defined behavior atoms" do

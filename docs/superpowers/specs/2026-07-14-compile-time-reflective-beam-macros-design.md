@@ -259,8 +259,12 @@ construct ordinary Cure syntax, declarations, blocks, and lifted modules.
 Reflection must carry a typed expansion context when a delayed callback is
 interpreted. The context is compile-time metadata and may include the enclosing
 declaration kind, callback name and arity, parameter names and syntax,
-declared return type syntax, state and message/event type syntax when
-available, and source provenance for diagnostics.
+parameter type syntax, declared return type syntax, state and message/event
+type syntax when available, and source provenance for diagnostics. The parser
+now records parameter and return type syntax in the generic callback context;
+later source-defined builders may add domain-neutral declarations such as
+inherited state or protocol fields without changing the compiler's object
+model.
 
 The context must be explicit in the reflected input, not recovered by an
 OTP-specific compiler branch. If a callback needs more context, extend the

@@ -5406,7 +5406,12 @@ defmodule Cure.Compiler.Parser do
         callback: name,
         arity: length(params),
         parameter_names: Enum.map(params, fn {:param, _, parameter} -> parameter end),
-        return_annotation: if(return_type, do: :declared, else: :inferred)
+        parameter_types:
+          Enum.map(params, fn {:param, parameter_meta, _parameter} ->
+            Keyword.get(parameter_meta, :type)
+          end),
+        return_annotation: if(return_type, do: :declared, else: :inferred),
+        return_type: return_type
       }
     }
 

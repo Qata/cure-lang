@@ -1903,6 +1903,15 @@ payload patterns remain rejected because their code set is not closed. The
 remaining derivation work is multi-channel `handle_call` reply typing and any
 additional payload forms that cannot be represented by an explicit type view.
 
+**Typed callback context status (2026-07-15).** The generic staged callback
+context now carries parameter type syntax and the declared return type syntax,
+in addition to callback identity, arity, and parameter names. This is
+compile-time `Syntax` metadata available to any computed macro; it is not an
+OTP compiler branch and is not emitted into runtime code. The remaining
+context work is source-level consumption by the derived operation builders,
+including the reply-channel derivation that will retire the remaining proof
+exemption.
+
 **Hardest sub-problem** (not the reflection, not even the reorder): the derived
 message type is a NEW NOMINAL DECLARATION that must exist before the lifted module
 referencing it is elaborated, and must be the SAME nominal type external `send`
