@@ -300,7 +300,9 @@ defmodule Cure.Elab.MacroExpand do
             nested_field_types
           )
 
-        {:primitive, shape} -> MacroSyntax.to_core_primitive_value(kid, shape)
+        {:primitive, shape} ->
+          MacroSyntax.to_core_primitive_value(kid, shape)
+
         _ ->
           MacroSyntax.to_core(kid)
       end
