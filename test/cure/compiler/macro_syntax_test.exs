@@ -57,6 +57,12 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:constructor_key, {:s_atom, :"Ping/0"}} in nullary_attrs
   end
 
+  test "to_syntax records a canonical atom for reflected variable names" do
+    {:syn_leaf, :variable, attrs, {:s_str, "state"}} = MacroSyntax.to_syntax(expr!("state"))
+
+    assert {:variable_name, {:s_atom, :state}} in attrs
+  end
+
   test "from_syntax(to_syntax(ast)) round-trips up to source position" do
     for src <- ["g(1, x + 2)", "[1, 2, 3]", "\"hi\"", ":ok", "true", "3.5", "f()"] do
       ast = expr!(src)

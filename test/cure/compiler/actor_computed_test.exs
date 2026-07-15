@@ -102,6 +102,48 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert apply(:"Cure.Generated.Payload", :handle_cast, [{:Ping, 7}, 0]) == {:noreply, 7}
   end
 
+  test "actor derives a typed request and reply callback from an optional call arm" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.Call state Int derive
+        match message
+          Ping -> 1
+        call
+          match request
+            Get -> state
+
+    fn make_request() -> ActorRequest = Get
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(module, :make_request, []) == :Get
+    assert apply(:"Cure.Generated.Call", :handle_call, [:Get, {:from, self()}, 7]) ==
+             {:reply, 7, 7}
+  end
+
+  test "actor rejects a call reply whose type cannot be inferred" do
+    source = """
+    mod M
+      use Std.Actor
+
+      fn reply(state: Int) -> Int = state
+
+      actor Cure.Generated.InvalidCall state Int derive
+        match message
+          Ping -> 1
+        call
+          match request
+            Get -> reply(state)
+    """
+
+    assert {:error,
+            {:computed_macro_error, _, {:author_failure, "reply_type_not_derivable", []}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "actor still rejects an untyped payload constructor" do
     source = """
     mod M

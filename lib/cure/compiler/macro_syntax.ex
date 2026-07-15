@@ -63,7 +63,8 @@ defmodule Cure.Compiler.MacroSyntax do
   def to_syntax({:variable, meta, name}) when is_list(meta) and is_binary(name) do
     extra = [
       {:pascal_case, {:s_bool, pascal_case?(name)}},
-      {:constructor_key, {:s_atom, String.to_atom(name <> "/0")}}
+      {:constructor_key, {:s_atom, String.to_atom(name <> "/0")}},
+      {:variable_name, {:s_atom, String.to_atom(name)}}
     ]
 
     {:syn_leaf, :variable, attrs(meta) ++ extra, synlit(name)}
@@ -188,7 +189,7 @@ defmodule Cure.Compiler.MacroSyntax do
     do: {:macro_failure, name, Enum.map(args, &from_syntax/1)}
 
   defp from_attrs(attrs) do
-    for {k, lit} <- attrs, k not in [:pascal_case, :constructor_key], do: {k, from_synlit(lit)}
+    for {k, lit} <- attrs, k not in [:pascal_case, :constructor_key, :variable_name], do: {k, from_synlit(lit)}
   end
 
   defp from_synlit({:s_int, n}), do: n

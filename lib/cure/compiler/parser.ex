@@ -498,13 +498,13 @@ defmodule Cure.Compiler.Parser do
   # the dependent environment exists. Preserve the elab reference and the
   # matched inputs in a generic syntax-shaped node for the elaboration pass.
   defp parse_computed_use(state, keyword) do
-    [rule | _] = computed_rules(state, keyword)
+    rules = computed_rules(state, keyword)
     original_state = state
     keyword_token = peek(state)
     state = advance(state)
 
-    case match_segments(state, rule.segments, %{}, 0) do
-      {:ok, bindings, _progress, state} ->
+    case match_computed_rule(rules, state) do
+      {:ok, bindings, _progress, state, rule} ->
         inputs =
           Enum.flat_map(rule.segments, &segment_inputs(&1, bindings))
 
@@ -521,7 +521,7 @@ defmodule Cure.Compiler.Parser do
 
         {{:computed_use, put_expansion_context(meta, state.expansion_context), [rule.elab, input]}, state}
 
-      {:error, progress, state} ->
+      {:error, rule, progress, state} ->
         case computed_macro_fallback(original_state, keyword) do
           {:ok, ast, fallback_state} ->
             {ast, fallback_state}
@@ -544,6 +544,24 @@ defmodule Cure.Compiler.Parser do
         end
     end
   end
+
+  defp match_computed_rule([rule | rest], state) do
+    case match_segments(state, rule.segments, %{}, 0) do
+      {:ok, bindings, progress, matched_state} ->
+        {:ok, bindings, progress, matched_state, rule}
+
+      {:error, progress, _failed_state} ->
+        case match_computed_rule(rest, state) do
+          {:error, _last_rule, _last_progress, _last_state} ->
+            {:error, rule, progress, state}
+
+          success ->
+            success
+        end
+    end
+  end
+
+  defp match_computed_rule([], state), do: {:error, %{segments: []}, 0, state}
 
   # A computed rule may deliberately share a keyword with an older transparent
   # rule. Let the computed grammar win when it matches, but preserve the
@@ -587,6 +605,7 @@ defmodule Cure.Compiler.Parser do
     case Enum.at(rule.segments, progress) do
       {:lit, w} -> {:literal, w}
       {:hole, %{kind: k}} -> {:hole_kind, k}
+      {:code_hole, %{delimiter: delimiter}} -> {:code_until, delimiter}
       _ -> :nothing_more
     end
   end
@@ -682,6 +701,21 @@ defmodule Cure.Compiler.Parser do
     match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
   end
 
+  # A delimiter-aware Code hole is still parsed by the ordinary expression
+  # parser. The matcher temporarily replaces the delimiter with a synthetic
+  # dedent so an indented code block cannot consume the next grammar literal.
+  defp match_segments(
+         state,
+         [{:code_hole, %{name: name, delimiter: delimiter}} | rest],
+         bindings,
+         progress
+       ) do
+    case parse_code_until(state, delimiter) do
+      {:ok, arg, state} ->
+        match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+    end
+  end
+
   defp match_segments(state, [{:hole, %{name: name}} | rest], bindings, progress) do
     {arg, state} = parse_expr(state, 0)
     match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
@@ -752,6 +786,10 @@ defmodule Cure.Compiler.Parser do
     not match?(%Token{type: type} when type in [:newline, :dedent, :eof], peek(state))
   end
 
+  defp optional_group_present?(state, [{:code_hole, _meta} | _]) do
+    not match?(%Token{type: type} when type in [:newline, :dedent, :eof], peek(state))
+  end
+
   defp optional_group_present?(state, [{:repeat, segment} | _]),
     do: optional_group_present?(state, [segment])
 
@@ -788,6 +826,61 @@ defmodule Cure.Compiler.Parser do
   defp advance_n(state, count), do: advance_n(advance(state), count - 1)
 
   defp consume_raw_delimiter?(delimiter), do: delimiter not in ["dedent", "newline"]
+
+  defp parse_code_until(state, delimiter) do
+    remaining = Enum.drop(state.tokens, state.pos)
+
+    case split_code_until(remaining, delimiter, []) do
+      {:ok, prefix, delimiter_token} ->
+        boundary = code_boundary_token(prefix, delimiter_token)
+        parse_state = %{state | tokens: prefix ++ [boundary, eof_token(delimiter_token)], pos: 0}
+        parse_state = skip_newlines(parse_state)
+        {arg, parse_state} = parse_expr(parse_state, 0)
+        state = %{state | errors: parse_state.errors, fresh_counter: parse_state.fresh_counter}
+        {:ok, arg, %{state | pos: state.pos + length(prefix)}}
+
+      :missing ->
+        state = skip_newlines(state)
+        {arg, state} = parse_expr(state, 0)
+        {:ok, arg, state}
+    end
+  end
+
+  defp split_code_until([], _delimiter, _acc), do: :missing
+
+  defp split_code_until([token | rest], delimiter, acc) do
+    previous = List.last(acc)
+
+    if code_until_delimiter?(token, delimiter, previous, List.first(rest)) do
+      {:ok, Enum.reverse(acc), token}
+    else
+      split_code_until(rest, delimiter, [token | acc])
+    end
+  end
+
+  defp code_until_delimiter?(%Token{} = token, delimiter, previous, next) do
+    token_matches?(token, delimiter) and
+      match?(%Token{type: type} when type in [:newline, :dedent], previous) and
+      match?(%Token{type: type} when type in [:newline, :dedent, :eof], next)
+  end
+
+  defp token_matches?(%Token{type: type, value: value}, delimiter) do
+    to_string(type) == delimiter or (is_binary(value) and value == delimiter)
+  end
+
+  defp code_boundary_token(prefix, delimiter_token) do
+    indent = Enum.find(prefix, &match?(%Token{type: :indent}, &1))
+
+    case indent do
+      %Token{value: value} when is_integer(value) ->
+        %Token{type: :dedent, value: value, line: delimiter_token.line, col: delimiter_token.col}
+
+      _ ->
+        eof_token(delimiter_token)
+    end
+  end
+
+  defp eof_token(token), do: %Token{type: :eof, value: nil, line: token.line, col: token.col}
 
   defp raw_line([%Token{line: line} | _], _state), do: line
   defp raw_line([], state), do: peek(state).line
@@ -5641,6 +5734,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp segment_hole_names({:hole, %{name: name}}), do: [name]
+  defp segment_hole_names({:code_hole, %{name: name}}), do: [name]
   defp segment_hole_names({:raw_hole, %{name: name}}), do: [name]
   defp segment_hole_names({:repeat, segment}), do: segment_hole_names(segment)
   defp segment_hole_names({:optional, segments}), do: Enum.flat_map(segments, &segment_hole_names/1)
@@ -5654,6 +5748,7 @@ defmodule Cure.Compiler.Parser do
   defp segment_repeated_hole_names(_segment), do: []
 
   defp segment_inputs({:hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
+  defp segment_inputs({:code_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:repeat, segment}, bindings), do: [segment_inputs(segment, bindings)]
   # Optional groups still occupy a stable reflected-record slot. An absent
@@ -5666,6 +5761,7 @@ defmodule Cure.Compiler.Parser do
   defp segment_inputs(_segment, _bindings), do: []
 
   defp optional_segment_inputs({:hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
+  defp optional_segment_inputs({:code_hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
   defp optional_segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
   defp optional_segment_inputs({:repeat, segment}, bindings), do: optional_segment_inputs(segment, bindings)
 
@@ -5898,6 +5994,12 @@ defmodule Cure.Compiler.Parser do
           {%Token{type: :identifier, value: name}, %Token{type: :colon}, %Token{type: :identifier, value: "raw"},
            %Token{type: :identifier, value: "until"}, %Token{type: :identifier, value: delimiter}, %Token{type: :gt}, _} ->
             hole = {:raw_hole, %{name: name, delimiter: delimiter, line: peek(state).line}}
+            state = Enum.reduce(1..7, state, fn _, acc_state -> advance(acc_state) end)
+            parse_rule_segments(state, [hole | acc], mode)
+
+          {%Token{type: :identifier, value: name}, %Token{type: :colon}, %Token{type: :identifier, value: "Code"},
+           %Token{type: :identifier, value: "until"}, %Token{type: :identifier, value: delimiter}, %Token{type: :gt}, _} ->
+            hole = {:code_hole, %{name: name, delimiter: delimiter, line: peek(state).line}}
             state = Enum.reduce(1..7, state, fn _, acc_state -> advance(acc_state) end)
             parse_rule_segments(state, [hole | acc], mode)
 

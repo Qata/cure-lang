@@ -7,7 +7,7 @@ mod Std.Actor
   ## ordinary lifted GenServer module; message-code derivation and user
   ## handlers are layered on top of this floor.
   macro ActorContainers
-    syntax actor <name: ModuleName> state <state_type: Type> derive <cast_body: Code> contextual computed by derive_actor
+    syntax actor <name: ModuleName> state <state_type: Type> derive <cast_body: Code until call> (call <call_body: Code>)? contextual computed by derive_actor
 
     syntax actor <name: ModuleName> state <state_type: Type> call <request_type: Type> returns <reply_type: Type> <call_body: delayed raw until dedent> contextual becomes lift module name
       use Std.Otp
@@ -228,22 +228,86 @@ mod Std.Actor
     [body] -> Node(:match_arm, values, [block([tuple([atom_literal(:noreply), body])])])
     _ -> Node(:match_arm, values, children)
 
+  type ReplyInference = NoCall | CallContract(List(Syntax), Syntax) | InvalidCall(Atom)
+  type ReplyTypeInference = ReplyType(Syntax, Atom) | InvalidReply(Atom)
+
   fn derive_actor(input: ActorSyntax) -> Syntax =
-    let module_name = match input.name
+    let module_name: SynLit = match input.name
       Leaf(_, _, SAtom(name)) -> SAtom(name)
       _ -> SStr("Cure.Generated.Actor")
-    let module_expr = match input.name
+    let module_expr: Syntax = match input.name
       Leaf(_, _, SAtom(name)) -> atom_literal(name)
       _ -> atom_literal(:generated_actor)
     match derive_pattern_heads(input.cast_body)
       InvalidHeads(reason) -> Failure(reason, [])
       Heads(heads) ->
-        let message_type = enum_type("ActorMessage", heads)
-        let result_type = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
-        let init_type = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
-        let start_type = call("Effect", [variable("Tuple")])
-        let handler_body = actor_handler(input.cast_body)
-        let default_state = tuple([atom_literal(:noreply), variable("state")])
+        match derive_reply_contract(input.call_body, input.state_type)
+          NoCall -> emit_actor(input, module_name, module_expr, heads)
+          InvalidCall(reason) -> Failure(reason, [])
+          CallContract(request_heads, reply_type) -> emit_actor_call(input, module_name, module_expr, heads, request_heads, reply_type)
+
+  fn derive_reply_contract(call_body: Syntax, state_type: Syntax) -> ReplyInference = match call_body
+    Raw(_) -> NoCall
+    _ -> match derive_pattern_heads(call_body)
+      InvalidHeads(reason) -> InvalidCall(reason)
+      Heads(request_heads) -> match infer_reply_type(call_body, state_type)
+        ReplyType(reply_type, _) -> CallContract(request_heads, reply_type)
+        InvalidReply(reason) -> InvalidCall(reason)
+
+  fn infer_reply_type(body: Syntax, state_type: Syntax) -> ReplyTypeInference = match tag(body) == :pattern_match
+    true -> match children(body)
+      [_scrutinee, arm] -> reply_arm_type(arm, state_type)
+      _ -> InvalidReply(:reply_type_not_derivable)
+    false -> InvalidReply(:reply_type_not_derivable)
+
+  fn infer_reply_arms(arms: List(Syntax), state_type: Syntax, found: ReplyTypeInference) -> ReplyTypeInference = match arms
+    [] -> found
+    [arm | rest] -> match reply_arm_type(arm, state_type)
+      InvalidReply(reason) -> InvalidReply(reason)
+      ReplyType(reply_type, reply_key) -> match found
+        InvalidReply(:no_reply_type) -> infer_reply_arms(rest, state_type, ReplyType(reply_type, reply_key))
+        ReplyType(_, previous_key) -> match previous_key == reply_key
+          true -> infer_reply_arms(rest, state_type, found)
+          false -> InvalidReply(:inconsistent_reply_types)
+        InvalidReply(reason) -> InvalidReply(reason)
+
+  fn reply_arm_type(arm: Syntax, state_type: Syntax) -> ReplyTypeInference = match children(arm)
+    [body] -> match tag(body) == :block
+      true -> match children(body)
+        [expression] -> reply_expr_type(expression, state_type)
+        _ -> InvalidReply(:reply_type_not_derivable)
+      false -> reply_expr_type(body, state_type)
+    _ -> InvalidReply(:reply_type_not_derivable)
+
+  fn reply_expr_type(expr: Syntax, state_type: Syntax) -> ReplyTypeInference = match expr
+    _ -> match tag(expr) == :variable
+      true -> match is_variable_named(expr, :state)
+        true -> ReplyType(state_type, :state)
+        false -> InvalidReply(:reply_type_not_derivable)
+      false -> match tag(expr) == :literal
+        true -> literal_reply_type(attrs(expr))
+        false -> match tag(expr) == :tuple
+          true -> ReplyType(variable("Tuple"), :tuple)
+          false -> InvalidReply(:reply_type_not_derivable)
+
+  fn literal_reply_type(values: List(Attr)) -> ReplyTypeInference = match attr(values, :subtype)
+    _ -> match attr_atom_is(values, :subtype, :integer)
+      true -> ReplyType(variable("Int"), :int)
+      false -> match attr_atom_is(values, :subtype, :float)
+        true -> ReplyType(variable("Float"), :float)
+        false -> match attr_atom_is(values, :subtype, :symbol)
+          true -> ReplyType(variable("Atom"), :atom)
+          false -> match attr_atom_is(values, :subtype, :boolean)
+            true -> ReplyType(variable("Bool"), :bool)
+            false -> InvalidReply(:reply_type_not_derivable)
+
+  fn emit_actor(input: ActorSyntax, module_name: SynLit, module_expr: Syntax, heads: List(Syntax)) -> Syntax =
+        let message_type: Syntax = enum_type("ActorMessage", heads)
+        let result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
+        let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
+        let start_type: Syntax = call("Effect", [variable("Tuple")])
+        let handler_body: Syntax = actor_handler(input.cast_body)
+        let default_state: Syntax = tuple([atom_literal(:noreply), variable("state")])
         block([
           message_type,
           lift_module_isolated(module_name, :gen_server, [
@@ -258,6 +322,54 @@ mod Std.Actor
             function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_link", [module_expr, variable("initial")]))
           ])
         ])
+
+  fn emit_actor_call(input: ActorSyntax, module_name: SynLit, module_expr: Syntax, message_heads: List(Syntax), request_heads: List(Syntax), reply_type: Syntax) -> Syntax =
+    let message_type: Syntax = enum_type("ActorMessage", message_heads)
+    let request_type: Syntax = enum_type("ActorRequest", request_heads)
+    let cast_result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
+    let call_result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), reply_type, variable("State")])])
+    let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
+    let start_type: Syntax = call("Effect", [variable("Tuple")])
+    let cast_body: Syntax = actor_handler(input.cast_body)
+    let call_body: Syntax = actor_call_handler(input.call_body)
+    let default_state: Syntax = tuple([atom_literal(:noreply), variable("state")])
+    block([
+      message_type,
+      request_type,
+      lift_module_isolated(module_name, :gen_server, [
+        use_module("Std.Otp"),
+        alias_node("State", input.state_type),
+        alias_node("Message", variable("ActorMessage")),
+        alias_node("Request", variable("ActorRequest")),
+        function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), variable("initial")])),
+        function("handle_call", [parameter("request", variable("Request")), parameter("from", variable("Tuple")), parameter("state", variable("State"))], call_result_type, call_body),
+        function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], cast_result_type, cast_body),
+        function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], cast_result_type, default_state),
+        function("terminate", [parameter("reason", variable("Atom")), parameter("state", variable("State"))], call("Effect", [variable("Atom")]), atom_literal(:ok)),
+        function("code_change", [parameter("old", variable("Atom")), parameter("state", variable("State")), parameter("extra", variable("Atom"))], cast_result_type, tuple([atom_literal(:ok), variable("state")])),
+        function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_link", [module_expr, variable("initial")]))
+      ])
+    ])
+
+  fn actor_call_handler(body: Syntax) -> Syntax = match tag(body) == :pattern_match
+    true -> actor_call_handler_node(attrs(body), children(body))
+    false -> body
+
+  fn actor_call_handler_node(values: List(Attr), children: List(Syntax)) -> Syntax = match children
+    [scrutinee | arms] -> Node(:pattern_match, values, [scrutinee | actor_call_handler_arms(arms)])
+    _ -> Node(:pattern_match, values, children)
+
+  fn actor_call_handler_arms(arms: List(Syntax)) -> List(Syntax) = match arms
+    [] -> []
+    [arm | rest] -> [actor_call_handler_arm(arm) | actor_call_handler_arms(rest)]
+
+  fn actor_call_handler_arm(arm: Syntax) -> Syntax = match tag(arm) == :match_arm
+    true -> actor_call_handler_arm_node(attrs(arm), children(arm))
+    false -> arm
+
+  fn actor_call_handler_arm_node(values: List(Attr), children: List(Syntax)) -> Syntax = match children
+    [body] -> Node(:match_arm, values, [block([tuple([atom_literal(:reply), body, variable("state")])])])
+    _ -> Node(:match_arm, values, children)
 
   ## Typed-actor runtime operations: spawn, stop, send, introspect.
   ##

@@ -59,6 +59,10 @@ mod Std.Syntax
 
   fn has_tag(syntax: Syntax, expected: Atom) -> Bool = tag(syntax) == expected
 
+  fn is_variable_named(syntax: Syntax, expected: Atom) -> Bool = match tag(syntax) == :variable
+    true -> attr_atom_is(attrs(syntax), :variable_name, expected)
+    false -> false
+
   fn attrs(syntax: Syntax) -> List(Attr) = match syntax
     Node(_, values, _) -> values
     Leaf(_, values, _) -> values
@@ -83,6 +87,12 @@ mod Std.Syntax
       match name == key
         true -> Found(value)
         false -> attr(rest, key)
+
+  fn attr_atom_is(values: List(Attr), key: Atom, expected: Atom) -> Bool = match attr(values, key)
+    Found(value) -> match value
+      SAtom(actual) -> actual == expected
+      _ -> false
+    Missing -> false
 
   ## Read the generic staged expansion context attached to reflected syntax.
   ## A context-free use site is represented by the same opaque value used for
