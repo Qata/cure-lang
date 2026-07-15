@@ -90,6 +90,25 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert apply(:"Cure.Generated.StructuredInfo", :handle_info, [:Tick, 3]) == {:noreply, 5}
   end
 
+  test "structured actor emits optional lifecycle callback bodies" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.StructuredLifecycle
+        state Int
+        on_cast
+          Inc -> state + 1
+        terminate :shutdown
+        code_change %[:ok, state + 1]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.StructuredLifecycle", :terminate, [:normal, 3]) == :shutdown
+    assert apply(:"Cure.Generated.StructuredLifecycle", :code_change, [:old, 3, :extra]) == {:ok, 4}
+  end
+
   test "actor derives its message type from multiple reflected handler arms" do
     source = """
     mod M

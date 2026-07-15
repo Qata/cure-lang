@@ -1950,6 +1950,12 @@ calls. A compiled integration test proves the generated `handle_info` callback
 updates state from a reflected family case; no compiler-side lifecycle rule was
 added.
 
+**Structured actor lifecycle status (2026-07-15).** `ActorDefinition` now
+accepts optional `terminate Code` and `code_change Code` sections. The source
+expander emits those bodies directly and supplies the ordinary `:ok` and
+`{:ok, state}` defaults when they are absent. Runtime assertions cover both
+overrides, and the complete actor computed suite is green at 16 tests.
+
 **Hardest sub-problem** (not the reflection, not even the reorder): the derived
 message type is a NEW NOMINAL DECLARATION that must exist before the lifted module
 referencing it is elaborated, and must be the SAME nominal type external `send`
