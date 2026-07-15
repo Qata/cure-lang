@@ -14,14 +14,17 @@ defmodule Antigen.BuiltinBoolDriftTest do
     ctx = Context.empty(Builtins.seed(Env.empty()))
     lt = fn a, b -> {:app, {:app, {:global, :int_lt}, {:int_lit, a}}, {:int_lit, b}} end
 
+    true_ctor = Cure.Elab.Name.qualify("Std.Bool", :True)
+    false_ctor = Cure.Elab.Name.qualify("Std.Bool", :False)
+
     assert Normalise.nf(ctx, lt.(1, 2), delta: :certified) ==
-             Normalise.nf(ctx, {:ctor, :True, []}, delta: :certified)
+             Normalise.nf(ctx, {:ctor, true_ctor, []}, delta: :certified)
 
     assert Normalise.nf(ctx, lt.(2, 1), delta: :certified) ==
-             Normalise.nf(ctx, {:ctor, :False, []}, delta: :certified)
+             Normalise.nf(ctx, {:ctor, false_ctor, []}, delta: :certified)
 
     # the shared table itself (Eval.fold) still lands on the ctor VALUES
-    assert Eval.fold(:lt, [{:vint, 1}, {:vint, 2}]) == {:ok, Eval.eval({:ctor, :True, []}, [])}
-    assert Eval.fold(:lt, [{:vint, 2}, {:vint, 1}]) == {:ok, Eval.eval({:ctor, :False, []}, [])}
+    assert Eval.fold(:lt, [{:vint, 1}, {:vint, 2}]) == {:ok, Eval.eval({:ctor, true_ctor, []}, [])}
+    assert Eval.fold(:lt, [{:vint, 2}, {:vint, 1}]) == {:ok, Eval.eval({:ctor, false_ctor, []}, [])}
   end
 end
