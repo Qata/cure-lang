@@ -2122,6 +2122,15 @@ keeps source coordinates distinct from semantic syntax attributes and gives
 later expansion-aware diagnostics a stable location channel without adding a
 runtime provenance object or changing generated code.
 
+**Explicit name-intent status (2026-07-15).** `Std.Syntax` now exposes
+`caller_identifier`, `private_identifier`, and `exported_identifier` alongside
+the existing `fresh` primitive. These constructors preserve intent in the
+reflected syntax value, and a computed expansion test proves caller capture
+binds against the use-site function parameter. Automatic freshening of ordinary
+generated binders is still pending the scope-aware hygiene pass; `variable/1`
+therefore remains compatibility behavior until generated binders and references
+can be renamed as one lexical unit.
+
 **Raw expansion validation status (2026-07-15).** Raw construction is now
 explicitly separated from executable expansion. Before a computed result is
 converted back to parser AST, `MacroSyntax.validate_expansion/1` rejects raw and

@@ -184,6 +184,20 @@ defmodule Cure.Compiler.MacroSyntax do
     {tag, from_attrs(attrs), Enum.map(kids, &from_syntax/1)}
   end
 
+  # Caller scope is an expansion intent, not a scope understood by ordinary
+  # elaboration. Consume it at this boundary while retaining the reflected
+  # marker for macros that inspect the syntax value before emission.
+  def from_syntax({:syn_leaf, :variable, attrs, {:s_str, name}}) do
+    meta = from_attrs(attrs)
+
+    meta =
+      if Keyword.get(meta, :scope) == :caller,
+        do: Keyword.put(meta, :scope, :local),
+        else: meta
+
+    {:variable, meta, name}
+  end
+
   def from_syntax({:syn_leaf, tag, attrs, lit}) do
     {tag, from_attrs(attrs), from_synlit(lit)}
   end

@@ -42,6 +42,9 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
       })
 
     fn build_arm() -> Syntax = match_arm(variable("Ready"), atom_literal(:ok))
+
+    fn build_name_intents() -> List(Syntax) =
+      [caller_identifier("state"), private_identifier("temporary"), exported_identifier("start_link")]
   """
 
   test "source-level syntax helpers analyze and construct reflected syntax" do
@@ -82,6 +85,12 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
 
     assert {:Node, :match_arm, [{:KV, :pattern, {:SSyntax, _}}], [_]} =
              apply(module, :build_arm, [])
+
+    assert [
+             {:Leaf, :variable, [{:KV, :scope, {:SAtom, :caller}}], {:SStr, ~c"state"}},
+             {:Leaf, :fresh_name, [], {:SStr, ~c"temporary"}},
+             {:Leaf, :variable, [{:KV, :scope, {:SAtom, :exported}}], {:SStr, ~c"start_link"}}
+           ] = apply(module, :build_name_intents, [])
   end
 
   test "raw syntax construction is available only through an explicit unsafe API" do

@@ -194,6 +194,17 @@ mod Std.Syntax
   fn variable(name: String) -> Syntax =
     Leaf(:variable, [KV(:scope, SAtom(:local))], SStr(name))
 
+  ## Name-intent constructors make scope decisions explicit in macro source.
+  ## `caller_identifier` deliberately retains the call-site scope; the other
+  ## two are used for generated references and declaration names respectively.
+  fn caller_identifier(name: String) -> Syntax =
+    Leaf(:variable, [KV(:scope, SAtom(:caller))], SStr(name))
+
+  fn private_identifier(name: String) -> Syntax = fresh(name)
+
+  fn exported_identifier(name: String) -> Syntax =
+    Leaf(:variable, [KV(:scope, SAtom(:exported))], SStr(name))
+
   ## Mark a generated binder or reference for the parser's existing hygienic
   ## freshening pass. Use the marker at each generated occurrence that should
   ## share a binding; syntax reflected from the caller remains untouched. The

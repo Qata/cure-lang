@@ -73,6 +73,12 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert MacroSyntax.from_syntax(MacroSyntax.to_syntax(ast)) == ast
   end
 
+  test "caller scope is consumed before generated syntax reaches elaboration" do
+    repr = {:syn_leaf, :variable, [{:scope, {:s_atom, :caller}}], {:s_str, "state"}}
+
+    assert {:variable, [scope: :local], "state"} = MacroSyntax.from_syntax(repr)
+  end
+
   test "from_syntax(to_syntax(ast)) round-trips up to source position" do
     for src <- ["g(1, x + 2)", "[1, 2, 3]", "\"hi\"", ":ok", "true", "3.5", "f()"] do
       ast = expr!(src)
