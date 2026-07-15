@@ -2105,6 +2105,16 @@ construction. Existing helpers remain source-compatible during the migration;
 future typed templates and declaration builders must use the safe namespace and
 leave raw construction visibly opt-in.
 
+**Optional family-field status (2026-07-15).** Structured family fields with
+`optional` cardinality now lower to ordinary `Std.Option.Option(T)` fields.
+Absent sections are encoded as `None()`, present sections as `Some(value)`,
+including through nested family records and both direct and generated expander
+calling conventions. This removes the previous `nil` placeholder, which was
+not a value of the declared syntax field type and prevented expanders from
+using ordinary Option pattern matching. Repeated fields remain ordinary
+`List(T)` values, and required fields still produce a compile-time missing-field
+diagnostic.
+
 **Typed declaration builder status (2026-07-15).** `Std.Syntax` now exposes
 record-backed specifications and builders for parameters, linear parameters,
 functions, aliases, lifted modules, and match arms. Macro authors can construct

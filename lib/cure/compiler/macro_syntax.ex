@@ -57,6 +57,12 @@ defmodule Cure.Compiler.MacroSyntax do
   @spec to_syntax(term()) :: repr
   def to_syntax({:quoted_syntax, _meta, [inner]}), do: {:syn_quoted, to_syntax(inner)}
 
+  def to_syntax({:family_option, meta, []}) when is_list(meta),
+    do: {:syn_leaf, :option_none, [], :s_opaque}
+
+  def to_syntax({:family_option, meta, [value]}) when is_list(meta),
+    do: {:syn_node, :option_some, [], [to_syntax(value)]}
+
   # Preserve the parser's generic identifier-shape fact for source-defined
   # syntax analysis. A reflected macro must distinguish a Pascal constructor
   # head from a lowercase variable without a domain-specific compiler rule.
@@ -307,37 +313,63 @@ defmodule Cure.Compiler.MacroSyntax do
     do: to_core(repr)
 
   defp to_core_record_field({field, kid}, repeated_fields, field_types) do
-    if field in repeated_fields do
-      case Map.get(field_types, field) do
-        {:primitive, shape} -> to_core_primitive_list(kid, shape)
-        _ -> to_core_syntax_list(kid)
-      end
-    else
-      case Map.get(field_types, field) do
-        {:record, nested_name, nested_fields} ->
-          nested_repeated =
-            nested_fields
-            |> Enum.filter(&(&1.cardinality in [:repeated, :one_or_more]))
-            |> Enum.map(& &1.name)
+    case Map.get(field_types, field) do
+      {:optional, inner} ->
+        option_kid(kid, inner, repeated_fields, field_types)
 
-          nested_field_types = primitive_field_types(nested_fields)
-
-          to_core_record(
-            nested_name,
-            Enum.map(nested_fields, & &1.name),
-            nested_repeated,
-            kid,
-            nested_field_types,
-            false
-          )
-
-        {:primitive, shape} ->
-          to_core_primitive(kid, shape)
-
-        _ ->
-          to_core(kid)
-      end
+      field_type ->
+        encode_core_record_field(kid, field_type, repeated_fields, field_types, field)
     end
+  end
+
+  defp encode_core_record_field(kid, {:record, nested_name, nested_fields}, _repeated_fields, _field_types, _field) do
+    nested_repeated =
+      nested_fields
+      |> Enum.filter(&(&1.cardinality in [:repeated, :one_or_more]))
+      |> Enum.map(& &1.name)
+
+    to_core_record(
+      nested_name,
+      Enum.map(nested_fields, & &1.name),
+      nested_repeated,
+      kid,
+      family_field_types(nested_fields),
+      false
+    )
+  end
+
+  defp encode_core_record_field(kid, {:primitive, shape}, repeated_fields, _field_types, field) do
+    if field in repeated_fields, do: to_core_primitive_list(kid, shape), else: to_core_primitive(kid, shape)
+  end
+
+  defp encode_core_record_field(kid, _field_type, repeated_fields, _field_types, field) do
+    if field in repeated_fields, do: to_core_syntax_list(kid), else: to_core(kid)
+  end
+
+  defp option_kid({:syn_leaf, :option_none, _attrs, :s_opaque}, _inner, _repeated_fields, _field_types),
+    do: {:ctor, option_ctor(:None), []}
+
+  defp option_kid({:syn_node, :option_some, _attrs, [value]}, inner, repeated_fields, field_types),
+    do: {:ctor, option_ctor(:Some), [encode_core_record_field(value, inner, repeated_fields, field_types, nil)]}
+
+  defp option_kid(kid, inner, repeated_fields, field_types),
+    do: {:ctor, option_ctor(:Some), [encode_core_record_field(kid, inner, repeated_fields, field_types, nil)]}
+
+  defp option_ctor(name), do: Cure.Elab.Name.qualify("Std.Option", name)
+
+  @doc "Build field metadata used to encode structured family records."
+  @spec family_field_types([map()]) :: map()
+  def family_field_types(fields) when is_list(fields) do
+    Map.new(fields, fn field ->
+      base =
+        case field.shape do
+          shape when shape in ["Int", "Float", "Atom", "Bool"] -> {:primitive, shape}
+          _ -> :syntax
+        end
+
+      value = if field.cardinality == :optional, do: {:optional, base}, else: base
+      {field.name, value}
+    end)
   end
 
   # The parser keeps one child slot per grammar field, so a repeated field is
@@ -382,12 +414,6 @@ defmodule Cure.Compiler.MacroSyntax do
   @doc "Encode a literal capture according to a primitive family shape."
   @spec to_core_primitive_value(repr(), String.t()) :: Cure.Core.Term.t()
   def to_core_primitive_value(repr, shape), do: to_core_primitive(repr, shape)
-
-  defp primitive_field_types(fields) do
-    fields
-    |> Enum.filter(&(&1.shape in ["Int", "Float", "Atom", "Bool"]))
-    |> Map.new(&{&1.name, {:primitive, &1.shape}})
-  end
 
   defp context_attr(attrs) do
     case List.keyfind(attrs, :expansion_context, 0) do

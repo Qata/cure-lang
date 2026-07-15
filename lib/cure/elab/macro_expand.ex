@@ -287,10 +287,7 @@ defmodule Cure.Elab.MacroExpand do
             |> Enum.filter(&(MacroFamily.field_cardinality(&1) in [:repeated, :one_or_more]))
             |> Enum.map(& &1.name)
 
-          nested_field_types =
-            nested_fields
-            |> Enum.filter(&(MacroFamily.field_shape(&1) in ["Int", "Float", "Atom", "Bool"]))
-            |> Map.new(&{&1.name, {:primitive, &1.shape}})
+          nested_field_types = MacroSyntax.family_field_types(nested_fields)
 
           MacroSyntax.to_core_record_without_context(
             nested_name,

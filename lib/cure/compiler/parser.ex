@@ -968,6 +968,10 @@ defmodule Cure.Compiler.Parser do
     {Map.update(values, name, [value], &(&1 ++ [value])), state}
   end
 
+  defp record_family_value(values, %{name: name, cardinality: :optional}, value, _token, state) do
+    {Map.put(values, name, {:family_option, [present: true], [value]}), state}
+  end
+
   defp record_family_value(values, %{name: name}, value, token, state) do
     if Map.has_key?(values, name) do
       {values, add_error(state, {:duplicate_syntax_family_field, name, token.line, token.col})}
@@ -987,7 +991,7 @@ defmodule Cure.Compiler.Parser do
             {[], state}
 
           :error when field.cardinality == :optional ->
-            {nil, state}
+            {{:family_option, [present: false], []}, state}
 
           :error ->
             error = {:missing_syntax_family_field, family_meta.family, field.name, field.line, field.col}

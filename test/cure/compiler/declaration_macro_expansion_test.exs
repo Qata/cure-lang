@@ -116,6 +116,7 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     source = """
     mod M
       use Std.Syntax
+      use Std.Option
 
       macro actor <name: ModuleName>
         syntax family ActorDefinition
@@ -124,7 +125,9 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
         accepts ActorDefinition
         expands with derive_actor
 
-      fn derive_actor(input: ActorSyntax) -> Syntax = input.definition.initial
+      fn derive_actor(input: ActorSyntax) -> Syntax = match input.definition.initial
+        None() -> int_literal(0)
+        Some(value) -> value
 
       fn result() -> Int = actor Counter
         state Int
@@ -136,10 +139,11 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :result, []) == 7
   end
 
-  test "a structured expander may receive leading captures directly" do
+  test "optional family sections are ordinary Option values" do
     source = """
     mod M
       use Std.Syntax
+      use Std.Option
 
       macro actor <name: ModuleName>
         syntax family ActorDefinition
@@ -148,7 +152,41 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
         accepts ActorDefinition
         expands with derive_actor
 
-      fn derive_actor(name: ModuleNameSyntax, definition: ActorDefinitionSyntax) -> Syntax = definition.initial
+      fn derive_actor(name: ModuleNameSyntax, definition: ActorDefinitionSyntax) -> Syntax =
+        match definition.initial
+          None() -> int_literal(0)
+          Some(value) -> value
+
+      fn absent() -> Int = actor Counter
+        state Int
+
+      fn present() -> Int = actor Counter
+        state Int
+        initial 7
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :absent, []) == 0
+    assert apply(module, :present, []) == 7
+  end
+
+  test "a structured expander may receive leading captures directly" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Option
+
+      macro actor <name: ModuleName>
+        syntax family ActorDefinition
+          state Type
+          optional initial Expression
+        accepts ActorDefinition
+        expands with derive_actor
+
+      fn derive_actor(name: ModuleNameSyntax, definition: ActorDefinitionSyntax) -> Syntax = match definition.initial
+        None() -> int_literal(0)
+        Some(value) -> value
 
       fn result() -> Int = actor Counter
         state Int
