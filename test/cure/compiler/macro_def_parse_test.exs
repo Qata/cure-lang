@@ -65,6 +65,47 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert rule.contextual
   end
 
+  test "a syntax family records typed sections and cardinality" do
+    node =
+      parse!("""
+      macro ActorContainers
+        syntax family ActorDefinition
+          state Type
+          optional messages Type
+          repeated route Route
+          one_or_more dependency ModuleName
+      """)
+
+    assert {:macro_def, _meta, [family]} = node
+    assert family.kind == :syntax_family
+    assert family.name == "ActorDefinition"
+
+    assert Enum.map(family.fields, &{&1.name, &1.shape, &1.cardinality}) == [
+             {"state", "Type", :required},
+             {"messages", "Type", :optional},
+             {"route", "Route", :repeated},
+             {"dependency", "ModuleName", :one_or_more}
+           ]
+  end
+
+  test "a structured macro header records accepts and expands with" do
+    node =
+      parse!("""
+      macro actor <name: ModuleName>
+        accepts ActorDefinition
+        expands with derive_actor
+      """)
+
+    assert {:macro_def, meta, [accepts, expands]} = node
+    assert Keyword.get(meta, :leading_segments) == [
+             {:hole, %{name: "name", kind: "ModuleName", line: 1}}
+           ]
+    assert accepts.kind == :accepts
+    assert accepts.family == "ActorDefinition"
+    assert expands.kind == :expands_with
+    assert {:variable, _, "derive_actor"} = expands.expander
+  end
+
   test "an open category and qualified category extension are retained" do
     node =
       parse!(

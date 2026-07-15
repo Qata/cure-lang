@@ -5386,10 +5386,11 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
+    {leading_segments, state} = parse_rule_segments(state, [])
     state = skip_macro_trivia(state)
     {rules, state} = parse_macro_block(state)
 
-    meta = [name: name, line: token.line, col: token.col]
+    meta = [name: name, leading_segments: leading_segments, line: token.line, col: token.col]
     {{:macro_def, meta, rules}, state}
   end
 
@@ -5568,8 +5569,21 @@ defmodule Cure.Compiler.Parser do
         {Enum.reverse(acc), state}
 
       %Token{type: :identifier, value: "syntax"} ->
-        {rule, state} = parse_macro_rule(state)
+        {rule, state} =
+          case peek_at(state, 1) do
+            %Token{type: :identifier, value: "family"} -> parse_syntax_family(state)
+            _ -> parse_macro_rule(state)
+          end
+
         parse_macro_rules(state, [rule | acc])
+
+      %Token{type: :identifier, value: "accepts"} ->
+        {entry, state} = parse_macro_accepts(state)
+        parse_macro_rules(state, [entry | acc])
+
+      %Token{type: :identifier, value: "expands"} ->
+        {entry, state} = parse_macro_expands_with(state)
+        parse_macro_rules(state, [entry | acc])
 
       %Token{type: :identifier, value: "literal"} ->
         {rule, state} = parse_literal_rule(state)
@@ -5591,6 +5605,105 @@ defmodule Cure.Compiler.Parser do
         state = add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col})
         # Recover: skip a token so one bad line does not eat the block.
         parse_macro_rules(advance(state), acc)
+    end
+  end
+
+  defp parse_macro_accepts(state) do
+    token = peek(state)
+    state = advance(state)
+    {family, state} = parse_dotted_name(state)
+    {%{kind: :accepts, family: family, line: token.line, col: token.col}, state}
+  end
+
+  defp parse_macro_expands_with(state) do
+    token = peek(state)
+    state = advance(state)
+
+    state =
+      case peek(state) do
+        %Token{type: :identifier, value: "with"} -> advance(state)
+        t -> add_error(state, {:expected, :with, :got, t.type, t.line, t.col})
+      end
+
+    {expander, state} = parse_expr(state, 0)
+    {%{kind: :expands_with, expander: expander, line: token.line, col: token.col}, state}
+  end
+
+  defp parse_syntax_family(state) do
+    family_token = peek_at(state, 1)
+    state = advance(state)
+    state = advance(state)
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+    state = skip_macro_trivia(state)
+
+    case peek(state) do
+      %Token{type: :indent} ->
+        {fields, state} = parse_syntax_family_fields(advance(state), [])
+        state = expect_dedent(state)
+
+        {%{
+           kind: :syntax_family,
+           name: name,
+           fields: fields,
+           line: family_token.line,
+           col: family_token.col
+         }, state}
+
+      t ->
+        state = add_error(state, {:expected, :indent, :got, t.type, t.line, t.col})
+        {%{kind: :syntax_family, name: name, fields: [], line: family_token.line, col: family_token.col}, state}
+    end
+  end
+
+  defp parse_syntax_family_fields(state, acc) do
+    state = skip_macro_trivia(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: :identifier} = token ->
+        {cardinality, state} = parse_family_cardinality(state)
+        field_token = peek(state)
+        field = to_string(field_token.value)
+        state = advance(state)
+        shape_token = peek(state)
+        shape = to_string(shape_token.value)
+        state = advance(state)
+        state = consume_line_end(state)
+
+        field_entry = %{
+          kind: :family_field,
+          name: field,
+          shape: shape,
+          cardinality: cardinality,
+          line: token.line,
+          col: token.col
+        }
+
+        parse_syntax_family_fields(state, [field_entry | acc])
+
+      other ->
+        state = add_error(state, {:expected, :family_field, :got, other.type, other.line, other.col})
+        parse_syntax_family_fields(advance(state), acc)
+    end
+  end
+
+  defp parse_family_cardinality(state) do
+    case peek(state) do
+      %Token{type: :identifier, value: "optional"} -> {:optional, advance(state)}
+      %Token{type: :identifier, value: "repeated"} -> {:repeated, advance(state)}
+      %Token{type: :identifier, value: "one_or_more"} -> {:one_or_more, advance(state)}
+      _ -> {:required, state}
+    end
+  end
+
+  defp consume_line_end(state) do
+    case peek(state) do
+      %Token{type: :newline} -> advance(state)
+      _ -> state
     end
   end
 
