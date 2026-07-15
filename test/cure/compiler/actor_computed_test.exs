@@ -124,6 +124,7 @@ defmodule Cure.Compiler.ActorComputedTest do
 
     assert apply(:"Cure.Generated.Call", :handle_call, [:Get, {:from, self()}, 7]) ==
              {:reply, 7, 7}
+
     assert apply(:"Cure.Generated.Call", :handle_call, [:Pong, {:from, self()}, 9]) ==
              {:reply, 9, 9}
   end
@@ -142,8 +143,7 @@ defmodule Cure.Compiler.ActorComputedTest do
             Count -> 1
     """
 
-    assert {:error,
-            {:computed_macro_error, _, {:author_failure, "inconsistent_reply_types", []}}} =
+    assert {:error, {:computed_macro_error, _, {:author_failure, "inconsistent_reply_types", []}}} =
              Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
