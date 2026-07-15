@@ -1225,7 +1225,11 @@ Suggested commit:
 
 ### Phase 2.5 — Establish canonical owner identity before further macro work
 
-**STATUS: REQUIRED BEFORE PHASE 3 CONTINUES (2026-07-14).** The previous
+**STATUS: COMPLETE (2026-07-15).** Commits `c877edfa`, `5e46008d`, and
+`6bb375f5` established canonical owner-qualified identities at elaboration,
+removed post-hoc Core re-keying, and updated the resolution/emission,
+coherence, union, macro, and cross-module test surfaces. The focused canonical
+identity acceptance matrix passes 39 tests on this branch. The previous
 resolver experiment attempted to repair collisions after module slices had
 already been elaborated. That direction is rejected and must not be resumed.
 
