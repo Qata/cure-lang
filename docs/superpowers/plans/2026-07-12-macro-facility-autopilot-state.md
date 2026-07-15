@@ -1431,6 +1431,13 @@ source-level effect result aliases and negative state-result coverage. These
 callbacks are reparsed, elaborated, and emitted through the same lifted-module
 path (`9a4e47bc`, 59 focused object tests).
 
+The Tier-3 inferred actor path now derives nullary constructor message heads
+in `Std.Actor`, preserves each handler body as ordinary syntax, and emits the
+generated unit with an isolated explicit import surface. It rejects payload,
+guarded, catch-all, and duplicate heads until a typed payload view is
+available; the shared nominal message type is proven at an external
+`Pid(ActorMessage)`/`beam_ops tell` call (`7da653b0`, `f75e4ec1`).
+
 The actor floor now also has a generic `handle_cast` form without a forced
 payload literal, preserving the ordinary polymorphic state/message relationship
 for user-defined actors whose initial state is supplied by `start_link/1`.
@@ -1502,6 +1509,12 @@ The FSM macro now also exposes delayed-body forms for `terminate/3` and
 `code_change/4`, with state/data result aliases and a negative mismatch test;
 both callbacks execute through the ordinary lifted module (`84d4b30b`, 62
 focused object tests).
+
+The Tier-3 inferred FSM path now derives nullary event heads in `Std.Fsm` and
+isolates the generated unit's explicit imports while retaining enclosing
+declarations (`370a0c54`). Payload-bearing event views and richer transition
+contract derivation remain open under the same soundness policy as actor
+messages.
 
 #### Phase 4d — `app`
 
