@@ -2146,6 +2146,15 @@ runtime dispatch. Positive end-to-end coverage proves a user-defined service
 family reuses a common state field, and parser coverage pins all three rejection
 classes.
 
+The next structured-macro sub-phase must also solve generated input identity
+generically: a legacy and structured rule may share a public keyword, but their
+advanced fallback records cannot both be named from that keyword alone. A
+source-level actor prototype exposed this collision before landing and was
+removed; no compiler-specific rename workaround is accepted. Direct expander
+parameters remain the intended primary API, with fallback record identity to be
+made explicit and collision-free before the four standard containers are
+rewritten onto families.
+
 **Typed declaration builder status (2026-07-15).** `Std.Syntax` now exposes
 record-backed specifications and builders for parameters, linear parameters,
 functions, aliases, lifted modules, and match arms. Macro authors can construct
