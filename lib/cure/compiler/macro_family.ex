@@ -63,9 +63,12 @@ defmodule Cure.Compiler.MacroFamily do
              syntax_type: syntax_type(Keyword.get(meta, :name)),
              syntax_fields: fields,
              syntax_repeated_fields: [],
-             syntax_field_types: %{
-               "definition" => {:record, syntax_type(family.name), family.fields}
-             },
+             syntax_field_types:
+               Map.put(leading_field_types(leading_segments), "definition", {
+                 :record,
+                 syntax_type(family.name),
+                 family.fields
+               }),
              syntax_family: family,
              elab: expands_entry.expander,
              examples: [],
@@ -179,6 +182,7 @@ defmodule Cure.Compiler.MacroFamily do
   defp field_type(field, field_types, rule) when is_binary(field) do
     case Map.get(field_types, field) do
       {:record, name, _fields} -> {:variable, [scope: :local], name}
+      {:primitive, shape} -> {:variable, [scope: :local], shape}
       _ -> syntax_field_type(field, rule)
     end
   end
@@ -204,6 +208,7 @@ defmodule Cure.Compiler.MacroFamily do
   end
 
   defp shape_type("Syntax"), do: "Syntax"
+  defp shape_type(shape) when shape in ["Int", "Float", "Atom", "Bool"], do: shape
 
   defp shape_type(shape)
        when shape in [
@@ -272,4 +277,20 @@ defmodule Cure.Compiler.MacroFamily do
   defp hole_names({:optional, segments}), do: Enum.flat_map(segments, &hole_names/1)
   defp hole_names({:repeat, segment}), do: hole_names(segment)
   defp hole_names(_), do: []
+
+  defp leading_field_types(segments) do
+    segments
+    |> Enum.flat_map(&segment_field_types/1)
+    |> Map.new()
+  end
+
+  defp segment_field_types({:hole, %{name: name, kind: kind}}) when kind in ["Int", "Float", "Atom", "Bool"],
+    do: [{name, {:primitive, kind}}]
+
+  defp segment_field_types({:repeat, segment}), do: segment_field_types(segment)
+
+  defp segment_field_types({:optional, segments}),
+    do: Enum.flat_map(segments, &segment_field_types/1)
+
+  defp segment_field_types(_segment), do: []
 end

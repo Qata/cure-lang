@@ -248,6 +248,11 @@ defmodule Cure.Compiler.MacroSyntax do
   def to_core_record_without_context(type_name, syntax_fields, repeated_fields, repr),
     do: to_core_record(type_name, syntax_fields, repeated_fields, repr, %{}, false)
 
+  @spec to_core_record_without_context(String.t() | atom(), [String.t()], [String.t()], repr(), map()) ::
+          Cure.Core.Term.t()
+  def to_core_record_without_context(type_name, syntax_fields, repeated_fields, repr, field_types),
+    do: to_core_record(type_name, syntax_fields, repeated_fields, repr, field_types, false)
+
   defp to_core_record(
          type_name,
          syntax_fields,
@@ -276,7 +281,10 @@ defmodule Cure.Compiler.MacroSyntax do
 
   defp to_core_record_field({field, kid}, repeated_fields, field_types) do
     if field in repeated_fields do
-      to_core_syntax_list(kid)
+      case Map.get(field_types, field) do
+        {:primitive, shape} -> to_core_primitive_list(kid, shape)
+        _ -> to_core_syntax_list(kid)
+      end
     else
       case Map.get(field_types, field) do
         {:record, nested_name, nested_fields} ->
@@ -285,7 +293,19 @@ defmodule Cure.Compiler.MacroSyntax do
             |> Enum.filter(&(&1.cardinality in [:repeated, :one_or_more]))
             |> Enum.map(& &1.name)
 
-          to_core_record(nested_name, Enum.map(nested_fields, & &1.name), nested_repeated, kid, %{}, false)
+          nested_field_types = primitive_field_types(nested_fields)
+
+          to_core_record(
+            nested_name,
+            Enum.map(nested_fields, & &1.name),
+            nested_repeated,
+            kid,
+            nested_field_types,
+            false
+          )
+
+        {:primitive, shape} ->
+          to_core_primitive(kid, shape)
 
         _ ->
           to_core(kid)
@@ -308,6 +328,33 @@ defmodule Cure.Compiler.MacroSyntax do
 
   defp to_core_syntax_item({:s_syntax, repr}), do: to_core(repr)
   defp to_core_syntax_item(lit), do: to_core({:syn_raw, lit})
+
+  defp to_core_primitive_list({:syn_raw, {:s_list, [{:s_list, items}]}}, shape),
+    do: to_core_list(Enum.map(items, fn item -> to_core_primitive({:syn_raw, item}, shape) end))
+
+  defp to_core_primitive_list({:syn_raw, {:s_list, items}}, shape),
+    do: to_core_list(Enum.map(items, fn item -> to_core_primitive({:syn_raw, item}, shape) end))
+
+  defp to_core_primitive_list(repr, shape), do: to_core_list([to_core_primitive(repr, shape)])
+
+  defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_int, value}}, "Int"), do: {:int_lit, value}
+  defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_float, value}}, "Float"), do: {:float_lit, value}
+  defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_atom, value}}, "Atom"), do: {:atom_lit, value}
+
+  defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_bool, true}}, "Bool"), do: {:ctor, :True, []}
+  defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_bool, false}}, "Bool"), do: {:ctor, :False, []}
+
+  defp to_core_primitive(repr, _shape), do: to_core(repr)
+
+  @doc "Encode a literal capture according to a primitive family shape."
+  @spec to_core_primitive_value(repr(), String.t()) :: Cure.Core.Term.t()
+  def to_core_primitive_value(repr, shape), do: to_core_primitive(repr, shape)
+
+  defp primitive_field_types(fields) do
+    fields
+    |> Enum.filter(&(&1.shape in ["Int", "Float", "Atom", "Bool"]))
+    |> Map.new(&{&1.name, {:primitive, &1.shape}})
+  end
 
   defp context_attr(attrs) do
     case List.keyfind(attrs, :expansion_context, 0) do

@@ -697,6 +697,13 @@ defmodule Cure.Compiler.Parser do
     match_segments(state, rest, Map.put(bindings, name, module), progress + 1)
   end
 
+  defp match_segments(state, [{:hole, %{name: name, kind: kind}} | rest], bindings, progress)
+       when kind in ["Int", "Float", "Atom", "Bool"] do
+    {arg, state} = parse_expr(state, 0)
+    state = validate_primitive_capture(arg, kind, state)
+    match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+  end
+
   # Code holes may introduce an indented expression block after their marker
   # (`derive` newline `match ...`). The ordinary expression parser owns the
   # block tokens, so only the separator newline belongs to the grammar matcher.
@@ -931,6 +938,12 @@ defmodule Cure.Compiler.Parser do
     {{:literal, [subtype: :symbol], String.to_atom(name)}, state}
   end
 
+  defp parse_family_field_value(state, %{shape: shape}) when shape in ["Int", "Float", "Atom", "Bool"] do
+    state = skip_newlines(state)
+    {value, state} = parse_expr(state, 0)
+    {value, validate_primitive_capture(value, shape, state)}
+  end
+
   defp parse_family_field_value(state, %{shape: "Cases"}) do
     state = skip_newlines(state)
 
@@ -984,6 +997,25 @@ defmodule Cure.Compiler.Parser do
 
     {{:family_input, [family: family_meta.family], fields}, state}
   end
+
+  defp validate_primitive_capture({:literal, meta, _value}, shape, state) do
+    expected =
+      case shape do
+        "Int" -> :integer
+        "Float" -> :float
+        "Atom" -> :symbol
+        "Bool" -> :boolean
+      end
+
+    if Keyword.get(meta, :subtype) == expected do
+      state
+    else
+      add_error(state, {:expected_literal_capture, shape, Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)})
+    end
+  end
+
+  defp validate_primitive_capture(_value, shape, state),
+    do: add_error(state, {:expected_literal_capture, shape, peek(state).line, peek(state).col})
 
   defp advance_n(state, 0), do: state
   defp advance_n(state, count), do: advance_n(advance(state), count - 1)
@@ -5977,6 +6009,7 @@ defmodule Cure.Compiler.Parser do
       syntax_type: macro_syntax_type(keyword),
       syntax_fields: macro_syntax_fields(segments),
       syntax_repeated_fields: macro_syntax_repeated_fields(segments),
+      syntax_field_types: macro_syntax_field_types(segments),
       elab: elab,
       examples: examples,
       category: category,
@@ -6015,6 +6048,22 @@ defmodule Cure.Compiler.Parser do
     |> Enum.flat_map(&segment_repeated_hole_names/1)
     |> Enum.uniq()
   end
+
+  defp macro_syntax_field_types(segments) do
+    segments
+    |> Enum.flat_map(&segment_field_types/1)
+    |> Map.new()
+  end
+
+  defp segment_field_types({:hole, %{name: name, kind: kind}}) when kind in ["Int", "Float", "Atom", "Bool"],
+    do: [{name, {:primitive, kind}}]
+
+  defp segment_field_types({:repeat, segment}), do: segment_field_types(segment)
+
+  defp segment_field_types({:optional, segments}),
+    do: Enum.flat_map(segments, &segment_field_types/1)
+
+  defp segment_field_types(_segment), do: []
 
   defp segment_hole_names({:hole, %{name: name}}), do: [name]
   defp segment_hole_names({:code_hole, %{name: name}}), do: [name]

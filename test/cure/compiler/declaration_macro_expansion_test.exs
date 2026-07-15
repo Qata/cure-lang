@@ -114,6 +114,25 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :result, []) == 9
   end
 
+  test "a primitive literal capture is passed as its semantic Cure value" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro log
+        syntax log <level: Atom> computed by build
+
+      fn build(level: Atom) -> Syntax =
+        Leaf(:literal, [KV(:subtype, SAtom(:symbol))], SAtom(level))
+
+      fn result() -> Atom = log :hello
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == :hello
+  end
+
   test "absent optional computed holes retain their reflected field slot" do
     source = """
     mod M

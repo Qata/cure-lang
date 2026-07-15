@@ -2061,6 +2061,15 @@ the checked generic `Syntax` value. This improves expander signatures without
 creating runtime wrappers or a second parser representation; `Syntax` remains
 the explicit low-level escape hatch.
 
+**Primitive literal capture status (2026-07-15).** Primitive-shaped captures
+(`Int`, `Float`, `Atom`, and `Bool`) are now validated as literal syntax at the
+macro call site and passed to expanders as their ordinary Cure Core values. The
+same shape metadata is threaded through generated family records, nested family
+records, repeated fields, and direct expander arguments. Non-literal expressions
+are rejected before expansion, while non-primitive captures continue to preserve
+hygienic syntax values. This is compile-time representation selection only: it
+adds no runtime macro protocol or OTP-specific compiler knowledge.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 
