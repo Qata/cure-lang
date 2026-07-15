@@ -20,6 +20,10 @@ defmodule Cure.Elab.BitwiseOpsTest do
 
   defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
 
+  # Builtin ops lower to owner-qualified globals (`Std.Builtin#int_band`), matching
+  # both `Builtins.seed`'s registration key and the elaborator's emission.
+  defp bop(op), do: Cure.Elab.Name.qualify("Std.Builtin", op)
+
   # Elaborate a one-def module and RUN the def on the BEAM (end-to-end: surface
   # → Core → Erlang → evaluation). Unique module name so repeated loads never
   # clash.
@@ -33,7 +37,7 @@ defmodule Cure.Elab.BitwiseOpsTest do
   test "`band` lowers to an int_band global spine (Int-directed)" do
     b = body("  fn f(x: Int) -> Int = x band 6\n", :f)
 
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(:int_band, {:var, 0}, {:int_lit, 6})} ==
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(bop(:int_band), {:var, 0}, {:int_lit, 6})} ==
              b
   end
 

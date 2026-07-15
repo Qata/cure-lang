@@ -19,6 +19,10 @@ defmodule Cure.Elab.BoolConnectiveLoweringTest do
     Env.get_def(env, name).body
   end
 
+  # Builtin ops lower to owner-qualified globals (`Std.Builtin#int_eq`), matching
+  # both `Builtins.seed`'s registration key and the elaborator's emission.
+  defp bop(op), do: Cure.Elab.Name.qualify("Std.Builtin", op)
+
   @tt {:ctor, :"Std.Bool#True", []}
   @ff {:ctor, :"Std.Bool#False", []}
 
@@ -39,17 +43,17 @@ defmodule Cure.Elab.BoolConnectiveLoweringTest do
 
   test "Int `==` lowers to the int_eq builtin-op global" do
     assert body("  fn t() -> Bool = 1 == 2\n", :t) ==
-             {:app, {:app, {:global, :int_eq}, {:int_lit, 1}}, {:int_lit, 2}}
+             {:app, {:app, {:global, bop(:int_eq)}, {:int_lit, 1}}, {:int_lit, 2}}
   end
 
   test "Float `==` lowers to the float_eq builtin-op global" do
     assert body("  fn t() -> Bool = 1.0 == 2.0\n", :t) ==
-             {:app, {:app, {:global, :float_eq}, {:float_lit, 1.0}}, {:float_lit, 2.0}}
+             {:app, {:app, {:global, bop(:float_eq)}, {:float_lit, 1.0}}, {:float_lit, 2.0}}
   end
 
   test "Int `!=` lowers to the int_ne builtin-op global" do
     assert body("  fn t() -> Bool = 1 != 2\n", :t) ==
-             {:app, {:app, {:global, :int_ne}, {:int_lit, 1}}, {:int_lit, 2}}
+             {:app, {:app, {:global, bop(:int_ne)}, {:int_lit, 1}}, {:int_lit, 2}}
   end
 
   test "Bool `==` lowers to an `eq` application" do
