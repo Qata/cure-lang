@@ -89,6 +89,7 @@ defmodule Cure.Compiler.MacroSyntaxTest do
   test "MacroResult wrappers decode without changing the Syntax representation" do
     repr = {:syn_leaf, :literal, [], {:s_int, 1}}
     expanded = {:ctor, :"Std.Syntax#Expanded", [MacroSyntax.to_core(repr)]}
+
     rejected =
       {:ctor, :"Std.Syntax#Rejected",
        [{:ctor, :"Std.List#Cons", [MacroSyntax.to_core(repr), {:ctor, :"Std.List#Nil", []}]}]}

@@ -390,7 +390,8 @@ defmodule Cure.Compiler.MacroSyntax do
           _ -> {:error, :invalid_macro_diagnostics}
         end
 
-      _ -> :not_macro_result
+      _ ->
+        :not_macro_result
     end
   end
 
