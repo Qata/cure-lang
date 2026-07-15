@@ -300,12 +300,27 @@ some test fails) and the extended detector (shape end-state is provably
 conformant).
 
 **Why the detector is the linchpin.** Extend `Cure.MetaAST.Conformance` with a
-second predicate: *no canonical node appears inside any meta value*. Today that
-tripwire is red (2,600 hits); it goes green only when C is complete for the node
-types in scope. This is the red→green gate the compiler cannot provide for a
-silent-read change. Combined with the incremental sequencing, each node type's
-migration is: rewrite construction → migrate reads → detector confirms that
-node's meta is node-free → full suite green → commit.
+second predicate: *no canonical node appears inside any meta value*. This is
+additive — the detector as built enforces only the *shape* gate (it treats
+`{:param, [type: T], "x"}` as conformant, because it is a canonical 3-tuple; it
+descends meta values only to find shape violations nested deeper, never recording
+that a node lives in meta). The new check reuses the existing `hides_node?/1`
+helper: at each canonical node, any meta value that hides a canonical node emits a
+violation tagged `kind: :node_in_meta`, distinct from the shape gate's
+`kind: :bad_shape`. This is the red→green gate the compiler cannot provide for a
+silent-read change.
+
+**How the gate is introduced (it cannot be a day-one hard assertion).** The
+`:node_in_meta` predicate is red across all ~2,600 sites today, and the
+`:bad_shape` predicate is red across the ~66 six-shape sites — so neither
+tripwire can assert "zero violations" against today's corpus without red-lighting
+the suite before any refactor exists (and tests are immutable once green). Both
+are therefore introduced as a **shrinking allowlist**: the tripwire asserts zero
+violations only for the node types (or shapes) already migrated, and each
+refactor step removes one entry from the allowlist as it goes green. So each C
+step is: rewrite construction → migrate reads → drop that node type from the
+`:node_in_meta` allowlist → detector confirms its meta is node-free → full suite
+green → commit. The allowlist reaching empty is the definition of done.
 
 **Honest verdict on the rewriter.** It is a genuine force multiplier for
 construction and for the regular read patterns, and the detector makes the whole
