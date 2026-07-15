@@ -20,9 +20,8 @@ defmodule Cure.Compiler.FsmComputedTest do
     assert apply(module, :make_start, []) == :Start
     assert apply(module, :make_stop, []) == :Stop
 
-    assert apply( craze = :"Cure.Generated.Derived", :handle_event, [:info, :Start, :state, 4]) ==
-             :keep_state_and_data
-
-    assert apply(craze, :handle_event, [:info, :Stop, :state, 4]) == :keep_state_and_data
+    generated = :"Cure.Generated.Derived"
+    assert apply(generated, :handle_event, [:info, :Start, :state, 4]) == :keep_state_and_data
+    assert apply(generated, :handle_event, [:info, :Stop, :state, 4]) == :keep_state_and_data
   end
 end

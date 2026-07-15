@@ -489,7 +489,7 @@ defmodule Cure.Elab.Emit do
   # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter
   # takes de Bruijn index 0 in the body's frame.
   defp lower(env, {:lam, _g, _dom, body}, ctx) do
-    var = :"Fn#{length(ctx)}"
+    var = fresh_var("Fn")
     body_form = lower(env, body, [var | ctx])
     clause = {:clause, @line, [{:var, @line, unused_underscore(var, body_form)}], [], [body_form]}
     {:fun, @line, {:clauses, [clause]}}
@@ -500,7 +500,7 @@ defmodule Cure.Elab.Emit do
   # where surface substitution emitted it at every use site (and not at all at
   # zero uses). Its parameter takes de Bruijn index 0 in the body's frame.
   defp lower(env, {:let, _g, _ty, val, body}, ctx) do
-    var = :"L#{length(ctx)}"
+    var = fresh_var("L")
     body_form = lower(env, body, [var | ctx])
     bind = {:match, @line, {:var, @line, unused_underscore(var, body_form)}, lower(env, val, ctx)}
     {:block, @line, [bind, body_form]}
@@ -568,7 +568,7 @@ defmodule Cure.Elab.Emit do
   # continuation (slice c: `let x = e ⏎ rest`), the dominant "effect consumed
   # where produced" case; the emitted shape is byte-for-byte the bespoke path's.
   defp lower(env, {:effect_bind, e, {:lam, _g, _dom, body}}, ctx) do
-    var = :"E#{length(ctx)}"
+    var = fresh_var("E")
     body_form = lower(env, body, [var | ctx])
     bind = {:match, @line, {:var, @line, unused_underscore(var, body_form)}, lower(env, e, ctx)}
     {:block, @line, [bind, body_form]}
@@ -851,9 +851,8 @@ defmodule Cure.Elab.Emit do
   # tagged form would — but without the leading ctor-name atom, so the value stays
   # the untagged 2-tuple the ABI requires.
   defp sigma_branch_clause(env, {_mk_pair, 2, body}, ctx) do
-    base = length(ctx)
-    vx = :"V#{base}"
-    vy = :"V#{base + 1}"
+    vx = fresh_var("V")
+    vy = fresh_var("V")
     body_form = lower(env, body, [vy, vx | ctx])
     px = underscore_if_unused({:var, @line, vx}, body_form)
     py = underscore_if_unused({:var, @line, vy}, body_form)
@@ -873,9 +872,8 @@ defmodule Cure.Elab.Emit do
 
   defp list_branch_clause(env, {cname, 2, body}, ctx) do
     if base_name(cname) == :Cons do
-      base = length(ctx)
-      vh = :"V#{base}"
-      vt = :"V#{base + 1}"
+      vh = fresh_var("V")
+      vt = fresh_var("V")
       body_form = lower(env, body, [vt, vh | ctx])
       ph = underscore_if_unused({:var, @line, vh}, body_form)
       pt = underscore_if_unused({:var, @line, vt}, body_form)
@@ -897,9 +895,8 @@ defmodule Cure.Elab.Emit do
   end
 
   defp nat_branch_clause(env, {_succ, 1, body}, ctx) do
-    base = length(ctx)
-    k = :"V#{base}"
-    n = :"N#{base}"
+    k = fresh_var("V")
+    n = fresh_var("N")
     body_form = lower(env, body, [k | ctx])
     k_var = underscore_if_unused({:var, @line, k}, body_form)
     bind = {:match, @line, k_var, {:op, @line, :-, {:var, @line, n}, {:integer, @line, 1}}}
@@ -917,8 +914,7 @@ defmodule Cure.Elab.Emit do
   # with guard `N > 0` and binding the predecessor `pred = N - 1`.
   defp bounded_branch_clause(env, {name, arity, body}, ctx) do
     quantities = Inductive.ctor_quantities(env, name) || List.duplicate(:unrestricted, arity)
-    base = length(ctx)
-    field_names = for i <- indices(arity), do: :"V#{base + i}"
+    field_names = for _i <- indices(arity), do: fresh_var("V")
     new_ctx = Enum.reverse(field_names) ++ ctx
     body_form = lower(env, body, new_ctx)
 
@@ -929,7 +925,7 @@ defmodule Cure.Elab.Emit do
 
       present_idx ->
         # `Next`: the present field is the predecessor = N - 1.
-        n = :"N#{base}"
+        n = fresh_var("N")
         pred_name = Enum.at(field_names, present_idx)
         pred_var = underscore_if_unused({:var, @line, pred_name}, body_form)
         bind = {:match, @line, pred_var, {:op, @line, :-, {:var, @line, n}, {:integer, @line, 1}}}
@@ -940,12 +936,11 @@ defmodule Cure.Elab.Emit do
 
   defp generic_branch_clause(env, {cname, arity, body}, ctx) do
     quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:unrestricted, arity)
-    base = length(ctx)
 
     fields =
       for i <- indices(arity) do
         q = Enum.at(quantities, i, :unrestricted)
-        if q == :unrestricted, do: {:unrestricted, :"V#{base + i}"}, else: {:erased, :"_f#{base + i}"}
+        if q == :unrestricted, do: {:unrestricted, fresh_var("V")}, else: {:erased, fresh_var("_f")}
       end
 
     field_names = Enum.map(fields, fn {_q, n} -> n end)
@@ -965,13 +960,31 @@ defmodule Cure.Elab.Emit do
     {:clause, @line, [pattern], [], [body_form]}
   end
 
+  # A synthetic BEAM variable name, unique across the *entire* compilation run
+  # (not just within one lexical nesting chain). Binder names used to be derived
+  # from `length(ctx)` (de-Bruijn context depth): sound along a single ancestor
+  # chain, but two SIBLING subterms lowered from the same `ctx` (e.g. independent
+  # arguments to a ctor/call, or independent elements of a list literal) could
+  # legitimately reach the same depth and so mint the *same* name for two
+  # unrelated binders. Erlang's `expr_list`/pattern-list hygiene checks then
+  # either warn (`match_underscore_var_pat`, sibling case-exports reusing a
+  # name) or — worse — silently REBIND: a nested case whose fresh field name
+  # happens to equal an already-bound ancestor variable stops introducing a new
+  # binding and instead matches against the ancestor's *value*, corrupting the
+  # program. `System.unique_integer/1` sidesteps both: every call reserves one
+  # globally-fresh id, so no two synthetic binders can ever collide, siblings or
+  # not. (Each field of a multi-field clause must call this once per field —
+  # never derive further names by adding an offset to one reserved id, since
+  # that reintroduces the exact same collision class against other reserved ids.)
+  defp fresh_var(prefix), do: :"#{prefix}#{System.unique_integer([:positive, :monotonic])}"
+
   # `erl_lint` flags a bound-but-unused variable (`unused_var`). An erased proof
   # discards its parameters — an equality proof erases to the runtime-irrelevant
   # `:refl`, so a *present* function parameter or matched ctor field can go
   # unreferenced. Rename such a binder to a `_`-prefixed name: still a real,
   # referenceable variable, but exempt from the warning. Binder names are
-  # depth-unique (`V<ctx-depth>`), so a plain occurrence check over the lowered
-  # body is a sound "is it used?" test (no shadowing to confuse it).
+  # globally unique (`fresh_var/1`), so a plain occurrence check over the
+  # lowered body is a sound "is it used?" test (no shadowing to confuse it).
   defp underscore_if_unused({:var, l, name} = v, body_form) do
     if used_var?(name, body_form), do: v, else: {:var, l, :"_#{name}"}
   end

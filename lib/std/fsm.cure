@@ -1,10 +1,14 @@
 @group(:concurrency)
 mod Std.Fsm
+  use Std.Syntax
+  use Std.List
   ## `fsm` is a transparent standard-library macro. The base state-machine is
   ## an ordinary lifted GenStatem module; transition derivation and handlers
   ## are layered on top of this floor.
   macro FsmContainers
     syntax transition <from: Atom> <event: Atom> <to: Atom> becomes Std.Fsm.transition(from, event, to)
+
+    syntax fsm <name: ModuleName> state <state_type: Type> derive <event_body: Code> contextual computed by derive_fsm
 
     syntax fsm <name: ModuleName> state <state_type: Type> transitions <table: Code> contextual becomes lift module name
       use Std.Otp
@@ -113,6 +117,36 @@ mod Std.Fsm
       body
 
   type Transition = Row(Atom, Atom, Atom)
+
+  fn emit_fsm(input: FsmSyntax, event_body: Syntax) -> Syntax =
+    let classify: Syntax -> Syntax = fn(arm) -> match arm { Node(_, arm_attrs, _) -> match attr(arm_attrs, :pattern) { Found(SSyntax(pattern)) -> match pattern { Leaf(_, _, SStr(name)) -> enum_variant(name), Node(_, pattern_attrs, _) -> match attr(pattern_attrs, :name) { Found(SStr(name)) -> enum_variant(name), _ -> enum_variant("Event") }, _ -> enum_variant("Event") }, _ -> enum_variant("Event") }, _ -> enum_variant("Event") }
+    let module_name = match input.name
+      Leaf(_, _, SAtom(name)) -> SAtom(name)
+      _ -> SStr("Cure.Generated.Fsm")
+    let module_expr = match input.name
+      Leaf(_, _, SAtom(name)) -> atom_literal(name)
+      _ -> atom_literal(:generated_fsm)
+    let event_type = match children(event_body)
+      [_scrutinee | arms] -> enum_type("FsmEvent", map(arms, classify))
+      _ -> enum_type("FsmEvent", [enum_variant("Event")])
+    let result_type = call("Effect", [variable("Atom")])
+    let init_type = call("Effect", [tuple_type([variable("Atom"), variable("Atom"), variable("State")])])
+    let start_type = call("Effect", [variable("Tuple")])
+    block([
+      event_type,
+      lift_module(module_name, :gen_statem, [
+        use_module("Std.Otp"),
+        alias_node("State", input.state_type),
+        alias_node("Event", variable("FsmEvent")),
+        function("callback_mode", [], variable("Atom"), atom_literal(:handle_event_function)),
+        function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), atom_literal(:initial), variable("initial")])),
+        function("handle_event", [parameter("event_type", variable("Atom")), parameter("event", variable("Event")), parameter("state", variable("Atom")), parameter("data", variable("State"))], result_type, event_body),
+        function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_statem", [module_expr, variable("initial")]))
+      ])
+    ])
+
+  fn derive_fsm(input: FsmSyntax) -> Syntax =
+    emit_fsm(input, input.event_body)
 
   ## A transition row is ordinary data. The macro surface above expands rows to
   ## this checked ADT so users can compose, inspect, and transform tables with
