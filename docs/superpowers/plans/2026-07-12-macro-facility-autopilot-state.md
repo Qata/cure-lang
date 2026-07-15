@@ -2177,6 +2177,13 @@ source-defined expander emits a lifted supervisor with a concrete
 strategy. Empty-child initialization is covered end to end, and legacy `sup`
 forms remain available through grammar fallback.
 
+**Structured application status (2026-07-15).** `Std.App` now declares an
+`ApplicationDefinition` family with a typed `root` section. Its source-defined
+expander emits the ordinary application callbacks and delegates root startup to
+`Std.Otp` through the generated code. Stop and phase callbacks are covered by a
+compiled integration test; richer phase and body forms remain legacy-compatible
+follow-up extensions of the same family surface.
+
 **Typed declaration builder status (2026-07-15).** `Std.Syntax` now exposes
 record-backed specifications and builders for parameters, linear parameters,
 functions, aliases, lifted modules, and match arms. Macro authors can construct

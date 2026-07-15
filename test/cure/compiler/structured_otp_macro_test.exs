@@ -40,4 +40,19 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     assert module == :"Cure.M"
     assert apply(:"Cure.Generated.StructuredSup", :init, [[]]) == {:ok, {{:one_for_one, 3, 5}, []}}
   end
+
+  test "application accepts the reusable structured family surface" do
+    source = """
+    mod M
+      use Std.App
+
+      app Cure.Generated.StructuredApp
+        root :root_supervisor
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.StructuredApp", :stop, [:state]) == :ok
+    assert apply(:"Cure.Generated.StructuredApp", :start_phase, [:boot, :normal, []]) == :ok
+  end
 end
