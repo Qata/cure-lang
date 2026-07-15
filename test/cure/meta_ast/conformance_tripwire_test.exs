@@ -9,10 +9,11 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
   # The MetaAST-conformance tripwire over the whole first-party .cure corpus
   # (stdlib + examples + oracle probes + fixtures — every committed source).
   #
-  # Metastatic's traversal loses a subterm in two ways — a `:bad_shape` tuple it
-  # cannot enter, or a `:node_in_meta` subterm parked in a meta value it never
-  # walks (see `Cure.MetaAST.Conformance`). The end-state invariant is ZERO of
-  # both. The corpus does not satisfy that yet (~7,000 node_in_meta + ~250
+  # Metastatic's traversal loses a subterm in three ways — a `:bad_shape` tuple it
+  # cannot enter, a `:node_in_meta` subterm parked in a meta value it never walks,
+  # or a `:node_child` bare node in a children slot where a list was required (see
+  # `Cure.MetaAST.Conformance`). The end-state invariant is ZERO of all three. The
+  # corpus does not satisfy that yet (~7,000 node_in_meta + ~200 node_child/
   # bad_shape across the four trees), and it cannot be flipped to a hard "zero
   # violations" assertion without red-lighting the suite before the Option-C
   # refactor exists.
@@ -29,11 +30,12 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
   # Each Option-C step deletes the bucket it fixes from this list. The allowlist
   # reaching `[]` is the definition of done.
   @allowlist MapSet.new([
-               {:bad_shape, :arrow_chain, nil},
                {:bad_shape, :builtin, nil},
                {:bad_shape, :group, nil},
                {:bad_shape, :named_dom, nil},
                {:bad_shape, :named_implicit_pat, nil},
+               {:node_child, :forced_pattern, nil},
+               {:node_child, :gadt_ctor, nil},
                {:node_in_meta, :bin_segment, :size},
                {:node_in_meta, :container, :decorator},
                {:node_in_meta, :container, :for_type},

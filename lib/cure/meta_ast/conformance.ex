@@ -12,16 +12,23 @@ defmodule Cure.MetaAST.Conformance do
 
     * `:bad_shape` — an atom-headed tuple that is NOT a canonical 3-tuple and yet
       hides a node. Metastatic treats it as an opaque leaf, so the subterms it
-      carries are dropped. The six known shapes are `:named_implicit_pat`
-      (4-tuple), `:named_dom` (`{tag, name, inner}`), `:arrow_chain` (2-tuple),
-      `:gadt_ctor` (canonical, but its children slot holds a bare arrow_chain),
-      `:group` (2-tuple), and `:builtin` (2-tuple).
+      carries are dropped. The known shapes are `:named_implicit_pat` (4-tuple),
+      `:named_dom` (`{tag, name, inner}`), `:arrow_chain` (2-tuple), `:group`
+      (2-tuple), and `:builtin` (2-tuple).
 
     * `:node_in_meta` — a *canonical* node that stores a subterm inside a meta
       value (e.g. `param`'s type under `:type`, `function_def`'s `:params` /
       `:return_type`, `match_arm`'s `:pattern`). The node itself is shape-valid,
       so Metastatic descends its children and never sees the subterm parked in
       meta. This is the larger gap (~2,600 occurrences across the stdlib).
+
+    * `:node_child` — a *canonical* node whose children slot is a bare node (or a
+      node-hiding tuple) instead of a LIST of children. Metastatic's
+      `traverse_children` recurses only an `is_list` slot; every other shape is
+      passed through as a leaf, so the subtree is lost. The invariant is that the
+      children slot is always a list of child nodes (leaf nodes like `:variable` /
+      `:literal` carry an opaque scalar there, which hides nothing and is fine).
+      `:gadt_ctor` is the corpus example — its slot holds a bare `:arrow_chain`.
 
   The target invariant (see the 2026-07-15 blind-spot design, Option C / C2) is:
   **no canonical node may appear inside a meta value.** Meta holds only
@@ -47,7 +54,7 @@ defmodule Cure.MetaAST.Conformance do
   # non-3-tuple shape hides no subterms and needs no rewrite.
   @trivia_tags [:comment, :doc_comment]
 
-  @type kind :: :bad_shape | :node_in_meta
+  @type kind :: :bad_shape | :node_in_meta | :node_child
 
   @type violation :: %{
           kind: kind(),
@@ -103,6 +110,9 @@ defmodule Cure.MetaAST.Conformance do
 
       %{kind: :node_in_meta, tag: tag, key: key, path: path} ->
         "  * [node_in_meta] #{inspect(tag)} hides a node in meta :#{key} at #{path_string(path)}"
+
+      %{kind: :node_child, tag: tag, path: path} ->
+        "  * [node_child] #{inspect(tag)} children slot is a bare node, not a list, at #{path_string(path)}"
     end)
   end
 
@@ -128,7 +138,7 @@ defmodule Cure.MetaAST.Conformance do
 
       canonical_node?(node) ->
         acc = walk_meta(elem(node, 1), tag, [tag | path], acc)
-        walk(elem(node, 2), [tag | path], acc)
+        walk_children(elem(node, 2), tag, path, acc)
 
       Enum.any?(non_meta_elements(node), &hides_node?/1) ->
         flag_and_descend(node, tag, path, acc)
@@ -179,6 +189,48 @@ defmodule Cure.MetaAST.Conformance do
     end)
   end
 
+  # The children slot of a canonical node. It must be a LIST of child nodes — that
+  # is the only shape Metastatic's `traverse_children` recurses. A leaf node
+  # (`:variable`, `:literal`) legitimately carries an opaque scalar here, which
+  # hides nothing. Anything else — a bare node, or a node-hiding tuple like a
+  # `:arrow_chain` — is dropped by Metastatic's non-list fallback, so we flag it as
+  # `:node_child` and descend to surface anything nested, without re-flagging the
+  # slot term itself (it is a normalization target, like a bad-shape node). `path`
+  # does NOT yet include the parent tag.
+  defp walk_children(children, tag, path, acc) when is_list(children) do
+    Enum.reduce(children, acc, fn el, acc -> walk(el, [tag | path], acc) end)
+  end
+
+  defp walk_children(children, tag, path, acc) do
+    if hides_node?(children) do
+      violation = %{
+        kind: :node_child,
+        path: Enum.reverse([tag | path]),
+        tag: tag,
+        key: nil,
+        arity: nil,
+        node: children
+      }
+
+      descend_child(children, [tag | path], [violation | acc])
+    else
+      acc
+    end
+  end
+
+  # Descend into a non-list children term already flagged `:node_child`, surfacing
+  # nested violations without re-flagging the term. A canonical node is walked
+  # normally (`walk/3` never self-flags a canonical node); a node-hiding tuple has
+  # its elements descended like a bad-shape node's, minus the top-level flag.
+  defp descend_child(child, path, acc) do
+    if is_tuple(child) and tuple_size(child) >= 1 and is_atom(:erlang.element(1, child)) and
+         not canonical_node?(child) do
+      descend_elements(child, path, acc)
+    else
+      walk(child, path, acc)
+    end
+  end
+
   defp flag_and_descend(node, tag, path, acc) do
     violation = %{
       kind: :bad_shape,
@@ -189,20 +241,22 @@ defmodule Cure.MetaAST.Conformance do
       node: node
     }
 
-    acc = [violation | acc]
+    descend_elements(node, [tag | path], [violation | acc])
+  end
 
-    # Descend into every element after the tag. A keyword-list element is treated as
-    # a meta slot: walk its VALUES (which may hold nodes) but not its keys, matching
-    # how a canonical node's meta is handled. A bad-shape node is itself a
-    # normalization target, so we do not additionally emit `:node_in_meta` for its
-    # meta-like slots — we only surface violations nested inside.
+  # Descend into every element after the tag. A keyword-list element is treated as a
+  # meta slot: walk its VALUES (which may hold nodes) but not its keys, matching how
+  # a canonical node's meta is handled. The tuple itself is an already-flagged
+  # normalization target, so we do not emit `:node_in_meta` for its meta-like slots —
+  # we only surface violations nested inside.
+  defp descend_elements(node, path, acc) do
     node
     |> Tuple.to_list()
     |> tl()
     |> Enum.reduce(acc, fn el, acc ->
       if keyword_list?(el),
-        do: walk_meta_values(el, [tag | path], acc),
-        else: walk(el, [tag | path], acc)
+        do: walk_meta_values(el, path, acc),
+        else: walk(el, path, acc)
     end)
   end
 

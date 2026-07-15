@@ -99,14 +99,36 @@ defmodule Cure.MetaAST.ConformanceTest do
       assert [%{kind: :bad_shape, tag: :group}] = Conformance.violations({:group, [var("x")]})
       assert [%{kind: :bad_shape, tag: :builtin}] = Conformance.violations({:builtin, var("Int")})
     end
+  end
 
-    test "gadt_ctor is canonical but surfaces the bare arrow_chain in its child slot" do
-      # gadt_ctor passes the shape check (keyword meta); the defect is the bare
-      # arrow_chain tuple sitting where a children LIST should be. Metastatic's
-      # traverse_children passes a non-list child through untouched, so the arrow
-      # chain is lost — the detector flags it.
+  describe ":node_child — canonical node whose children slot is a bare node" do
+    test "a single node in the children slot instead of a one-element list" do
+      # Metastatic's traverse_children only recurses `is_list` children; a bare
+      # node in the slot hits the fallback and is passed through as a leaf, so its
+      # whole subtree is lost. The invariant is that children is ALWAYS a list.
+      ast = {:wrapper, [line: 1], var("inner")}
+
+      assert [%{kind: :node_child, tag: :wrapper, key: nil}] = Conformance.violations(ast)
+      refute Conformance.conformant?(ast)
+    end
+
+    test "gadt_ctor's bare arrow_chain child is a non-list children slot" do
+      # gadt_ctor is canonical, but its children slot holds a bare arrow_chain
+      # tuple, not a list — so the whole constructor domain chain is lost. Flagged
+      # at the parent (its children must be a list), NOT as a bad_shape arrow_chain.
       ast = {:gadt_ctor, [name: "C"], {:arrow_chain, [var("A"), var("B")]}}
-      assert [%{kind: :bad_shape, tag: :arrow_chain}] = Conformance.violations(ast)
+
+      assert [%{kind: :node_child, tag: :gadt_ctor, key: nil}] = Conformance.violations(ast)
+    end
+
+    test "the subterms under a bare-node child are still descended for deeper defects" do
+      # wrapper's child is a bare arrow_chain whose domain is itself a param with a
+      # type parked in meta — the node_child flag does not stop the walk.
+      ast = {:wrapper, [], {:arrow_chain, [{:param, [type: var("A")], "x"}]}}
+
+      buckets = Conformance.violation_buckets(ast)
+      assert MapSet.member?(buckets, {:node_child, :wrapper, nil})
+      assert MapSet.member?(buckets, {:node_in_meta, :param, :type})
     end
   end
 
@@ -128,6 +150,18 @@ defmodule Cure.MetaAST.ConformanceTest do
 
     test "meta scalars do not trip the node_in_meta gate" do
       ast = {:thing, [name: "f", scope: :local, subtype: :integer, arity: 2], [var("x")]}
+      assert Conformance.conformant?(ast)
+    end
+
+    test "a leaf node's scalar value in the children slot is not a node_child" do
+      # variable/literal legitimately carry a non-list scalar in the children slot;
+      # it hides no node, so the node_child gate must not fire.
+      assert Conformance.conformant?({:variable, [scope: :local], "x"})
+      assert Conformance.conformant?({:literal, [subtype: :integer], 42})
+    end
+
+    test "an opaque non-list children slot (holds no node) is not a node_child" do
+      ast = {:extern_ref, [], {:erlang, :length, 1}}
       assert Conformance.conformant?(ast)
     end
   end
