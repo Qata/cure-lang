@@ -107,6 +107,17 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:rejected, [^repr]} = MacroSyntax.from_core_macro_result(error)
   end
 
+  test "expansion validation rejects reflection-only raw and quoted values" do
+    assert {:error, {:raw_syntax_in_expansion, []}} =
+             MacroSyntax.validate_expansion({:syn_raw, {:s_int, 1}})
+
+    assert {:error, {:quoted_syntax_in_expansion, [{:child, 0}]}} =
+             MacroSyntax.validate_expansion({:syn_node, :block, [], [{:syn_quoted, {:syn_leaf, :literal, [], {:s_int, 1}}}]})
+
+    assert :ok =
+             MacroSyntax.validate_expansion({:syn_node, :block, [], [{:syn_leaf, :literal, [], {:s_int, 1}}]})
+  end
+
   test "an exotic scalar value (regex tuple) reflects opaquely without crashing" do
     ast = expr!("~r/foo/")
     # Node tag is :literal (subtype: :regex in meta), NOT a bare :regex tag —

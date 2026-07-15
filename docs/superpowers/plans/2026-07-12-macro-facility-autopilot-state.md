@@ -2105,6 +2105,17 @@ construction. Existing helpers remain source-compatible during the migration;
 future typed templates and declaration builders must use the safe namespace and
 leave raw construction visibly opt-in.
 
+**Raw expansion validation status (2026-07-15).** Raw construction is now
+explicitly separated from executable expansion. Before a computed result is
+converted back to parser AST, `MacroSyntax.validate_expansion/1` rejects raw and
+quoted reflection forms, malformed syntax representations, malformed attributes,
+and malformed syntax literals. Legacy `Failure` values remain available for the
+existing author-diagnostic protocol. The compiler wraps these failures with the
+macro's provenance and formats them through the outer `:codegen_error` boundary,
+so advanced unchecked construction cannot degrade into an `inspect/1`-only
+diagnostic or a host exception. Semantic validation of known Cure declaration
+shapes remains the responsibility of the typed builders and ordinary elaborator.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 

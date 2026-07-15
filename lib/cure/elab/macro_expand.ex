@@ -346,7 +346,7 @@ defmodule Cure.Elab.MacroExpand do
   defp decode_result_term(result) do
     case MacroSyntax.from_core_macro_result(result) do
       {:expanded, repr} ->
-        {:ok, MacroSyntax.from_syntax(repr)}
+        validate_expansion(repr)
 
       {:rejected, diagnostics} ->
         {:error, {:author_diagnostics, Enum.map(diagnostics, &MacroSyntax.from_syntax/1)}}
@@ -363,8 +363,15 @@ defmodule Cure.Elab.MacroExpand do
             {:error, {:author_failure, Atom.to_string(name), Enum.map(args, &MacroSyntax.from_syntax/1)}}
 
           repr ->
-            {:ok, MacroSyntax.from_syntax(repr)}
+            validate_expansion(repr)
         end
+    end
+  end
+
+  defp validate_expansion(repr) do
+    case MacroSyntax.validate_expansion(repr) do
+      :ok -> {:ok, MacroSyntax.from_syntax(repr)}
+      {:error, reason} -> {:error, {:invalid_generated_syntax, reason}}
     end
   end
 end

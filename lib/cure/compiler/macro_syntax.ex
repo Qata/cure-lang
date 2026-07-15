@@ -373,6 +373,19 @@ defmodule Cure.Compiler.MacroSyntax do
   @spec from_core(Cure.Core.Term.t()) :: repr() | {:error, term()}
   def from_core(term), do: decode_core(canonicalize_core(term))
 
+  @doc """
+  Validate syntax that is about to cross from macro evaluation into elaboration.
+
+  `Std.Syntax.Raw` deliberately permits construction without semantic checks, but
+  raw and quoted values are reflection forms rather than executable expansion
+  nodes. Keeping this boundary here means malformed advanced syntax gets a
+  deterministic macro diagnostic instead of reaching an elaborator catch-all or
+  causing a host exception. `Failure` is intentionally accepted because the
+  legacy direct-Syntax failure protocol decodes it as an author diagnostic.
+  """
+  @spec validate_expansion(repr()) :: :ok | {:error, term()}
+  def validate_expansion(repr), do: validate_expansion_node(repr, [])
+
   @doc "Decode the source-level MacroResult wrapper, if present."
   @spec from_core_macro_result(Cure.Core.Term.t()) ::
           {:expanded, repr()}
@@ -471,6 +484,96 @@ defmodule Cure.Compiler.MacroSyntax do
   end
 
   defp decode_core(other), do: {:error, {:unsupported_syntax_core, other}}
+
+  defp validate_expansion_node({:syn_node, tag, attrs, kids}, path)
+       when is_atom(tag) and is_list(attrs) and is_list(kids) do
+    with :ok <- validate_attrs(attrs, path),
+         :ok <- validate_expansion_children(kids, path) do
+      :ok
+    end
+  end
+
+  defp validate_expansion_node({:syn_leaf, tag, attrs, lit}, path)
+       when is_atom(tag) and is_list(attrs) do
+    with :ok <- validate_attrs(attrs, path),
+         :ok <- validate_synlit(lit, path) do
+      :ok
+    end
+  end
+
+  defp validate_expansion_node({:syn_failure, _name, _args}, _path), do: :ok
+
+  defp validate_expansion_node({:syn_raw, _lit}, path),
+    do: {:error, {:raw_syntax_in_expansion, path}}
+
+  defp validate_expansion_node({:syn_quoted, _syntax}, path),
+    do: {:error, {:quoted_syntax_in_expansion, path}}
+
+  defp validate_expansion_node(_other, path),
+    do: {:error, {:malformed_expansion_syntax, path}}
+
+  defp validate_expansion_children(children, path) do
+    children
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {child, index}, :ok ->
+      case validate_expansion_node(child, [{:child, index} | path]) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_attrs(attrs, path) do
+    attrs
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn
+      {{key, value}, index}, :ok when is_atom(key) ->
+        case validate_synlit(value, [{:attribute, key, index} | path]) do
+          :ok -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
+        end
+
+      {_attribute, index}, :ok ->
+        {:halt, {:error, {:malformed_expansion_attribute, [{:attribute, index} | path]}}}
+    end)
+  end
+
+  defp validate_synlit({:s_int, value}, _path) when is_integer(value), do: :ok
+  defp validate_synlit({:s_float, value}, _path) when is_float(value), do: :ok
+  defp validate_synlit({:s_str, value}, _path) when is_binary(value), do: :ok
+  defp validate_synlit({:s_bool, value}, _path) when is_boolean(value), do: :ok
+  defp validate_synlit({:s_atom, value}, _path) when is_atom(value), do: :ok
+
+  defp validate_synlit({:s_list, values}, path) when is_list(values) do
+    Enum.reduce_while(values, :ok, fn value, :ok ->
+      case validate_synlit(value, [{:list_item} | path]) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_synlit({:s_syntax, syntax}, path),
+    do: validate_expansion_node(syntax, [{:syntax_literal} | path])
+
+  defp validate_synlit({:s_map, pairs}, path) when is_list(pairs) do
+    Enum.reduce_while(pairs, :ok, fn
+      {key, value}, :ok ->
+        with :ok <- validate_synlit(key, [{:map_key} | path]),
+             :ok <- validate_synlit(value, [{:map_value} | path]) do
+          {:cont, :ok}
+        else
+          {:error, _} = error -> {:halt, error}
+        end
+
+      _pair, :ok -> {:halt, {:error, {:malformed_expansion_map, path}}}
+    end)
+  end
+
+  defp validate_synlit(:s_opaque, _path), do: :ok
+
+  defp validate_synlit(_other, path),
+    do: {:error, {:malformed_expansion_literal, path}}
 
   defp ctor(name, args), do: {:ctor, canonical_ctor(name), args}
 

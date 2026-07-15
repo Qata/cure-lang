@@ -1,6 +1,7 @@
 defmodule Cure.Compiler.DeclarationMacroExpansionTest do
   use ExUnit.Case, async: false
 
+  alias Cure.Compiler.Errors
   alias Cure.Elab.Program
 
   @source """
@@ -43,6 +44,41 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert {:ok, ast} = Cure.Compiler.parse_source(source)
     assert {:ok, expanded} = Program.expand_declaration_uses(ast)
     assert find_computed_use(expanded)
+  end
+
+  test "a raw syntax result receives a friendly generated-expansion diagnostic" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Syntax.Raw
+
+      macro Bad
+        syntax bad computed by build
+
+      fn build(input: Syntax) -> Syntax = unsafe_raw(SInt(1))
+      fn result() -> Int = bad
+    end
+    """
+
+    assert {:error,
+            {:codegen_error,
+             {:computed_macro_error, meta,
+              {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert Keyword.get(meta, :keyword) == "bad"
+
+    rendered =
+      Errors.format_error(
+        {:codegen_error,
+         {:computed_macro_error, meta,
+          {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}}},
+        "macro.cure"
+      )
+
+    assert rendered =~ "invalid macro expansion"
+    assert rendered =~ "raw syntax is only valid for reflection"
+    assert rendered =~ "macro.cure:9"
   end
 
   test "repeated computed holes are typed and reflected as List(Syntax)" do
