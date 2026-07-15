@@ -308,6 +308,7 @@ defmodule Cure.Elab.MacroExpand do
     case Kernel.infer(context, application) do
       {:ok, _result_type} ->
         result = Normalise.nf(context, application, fuel: @normalise_fuel)
+
         case decode_result(result) do
           {:ok, _ast} = success -> success
           {:error, _reason} when fallback != [] -> execute_application(context, elab_core, fallback)
