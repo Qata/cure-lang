@@ -194,22 +194,25 @@ defmodule Cure.Elab.MacroExpand do
       |> MacroSyntax.to_syntax()
       |> MacroSyntax.with_context(Keyword.get(meta, :expansion_context))
 
+    field_types = resolve_field_types(Keyword.get(meta, :syntax_field_types, %{}), env)
+
     input_cores =
       case Keyword.get(meta, :syntax_type) do
         nil ->
-          [MacroSyntax.to_core(input_repr)]
+          [[MacroSyntax.to_core(input_repr)]]
 
         syntax_type ->
-          [
+          record =
             MacroSyntax.to_core_record(
               Cure.Core.Env.resolve_key(env, env.ctors, syntax_type),
               Keyword.get(meta, :syntax_fields, []),
               Keyword.get(meta, :syntax_repeated_fields, []),
               input_repr,
-              resolve_field_types(Keyword.get(meta, :syntax_field_types, %{}), env)
-            ),
-            MacroSyntax.to_core(input_repr)
-          ]
+              field_types
+            )
+
+          direct = direct_input_cores(input_repr, Keyword.get(meta, :syntax_fields, []), field_types)
+          [[record], direct, [MacroSyntax.to_core(input_repr)]]
       end
 
     with {:ok, elab_core, _elab_type} <-
@@ -273,15 +276,45 @@ defmodule Cure.Elab.MacroExpand do
 
   defp global_names(_term), do: []
 
-  defp execute_application(context, elab_core, [input_core | fallback]) do
-    application = {:app, elab_core, input_core}
+  defp direct_input_cores({:syn_node, _tag, _attrs, kids}, fields, field_types) do
+    fields
+    |> Enum.zip(kids)
+    |> Enum.map(fn {field, kid} ->
+      case Map.get(field_types, field) do
+        {:record, nested_name, nested_fields} ->
+          repeated =
+            nested_fields
+            |> Enum.filter(&(MacroFamily.field_cardinality(&1) in [:repeated, :one_or_more]))
+            |> Enum.map(& &1.name)
+
+          MacroSyntax.to_core_record_without_context(
+            nested_name,
+            Enum.map(nested_fields, & &1.name),
+            repeated,
+            kid
+          )
+
+        _ ->
+          MacroSyntax.to_core(kid)
+      end
+    end)
+  end
+
+  defp direct_input_cores(_input_repr, _fields, _field_types), do: []
+
+  defp execute_application(context, elab_core, [candidate | fallback]) when is_list(candidate) do
+    application = Enum.reduce(candidate, elab_core, fn input_core, function -> {:app, function, input_core} end)
 
     case Kernel.infer(context, application) do
       {:ok, _result_type} ->
         result = Normalise.nf(context, application, fuel: @normalise_fuel)
-        decode_result(result)
+        case decode_result(result) do
+          {:ok, _ast} = success -> success
+          {:error, _reason} when fallback != [] -> execute_application(context, elab_core, fallback)
+          error -> error
+        end
 
-      {:error, {:foreign_ctor, _}} when fallback != [] ->
+      {:error, _reason} when fallback != [] ->
         execute_application(context, elab_core, fallback)
 
       {:error, reason} ->

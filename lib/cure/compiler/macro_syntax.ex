@@ -242,6 +242,12 @@ defmodule Cure.Compiler.MacroSyntax do
   def to_core_record(type_name, syntax_fields, repeated_fields, repr, field_types),
     do: to_core_record(type_name, syntax_fields, repeated_fields, repr, field_types, true)
 
+  @doc "Encode a nested syntax record without the reserved expansion context field."
+  @spec to_core_record_without_context(String.t() | atom(), [String.t()], [String.t()], repr()) ::
+          Cure.Core.Term.t()
+  def to_core_record_without_context(type_name, syntax_fields, repeated_fields, repr),
+    do: to_core_record(type_name, syntax_fields, repeated_fields, repr, %{}, false)
+
   defp to_core_record(
          type_name,
          syntax_fields,

@@ -101,7 +101,15 @@ defmodule Cure.Compiler.MacroFamily do
   @doc "The generated record name for a source-level family or macro."
   @spec syntax_type(String.t() | nil) :: String.t()
   def syntax_type(nil), do: "MacroSyntax"
-  def syntax_type(name), do: String.capitalize(to_string(name)) <> "Syntax"
+
+  def syntax_type(name) do
+    name = to_string(name)
+
+    case name do
+      <<first::utf8, rest::binary>> -> String.upcase(<<first::utf8>>) <> rest <> "Syntax"
+      _ -> "MacroSyntax"
+    end
+  end
 
   @doc "Return a field's declared category and cardinality metadata."
   @spec field_shape(map()) :: String.t()

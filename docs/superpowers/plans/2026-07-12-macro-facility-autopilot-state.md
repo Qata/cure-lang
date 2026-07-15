@@ -2046,6 +2046,14 @@ syntax-template interpolation, typed declaration builders, and the safe/raw
 API split remain ordered follow-up slices from the beginner-friendliness list;
 none may be implemented by introducing compiler-owned domain knowledge.
 
+**Direct expander arguments status (2026-07-15).** Structured family rules now
+offer the expander ordinary captured arguments as a first execution candidate,
+while preserving the generated invocation record and generic `Syntax` fallbacks
+for compatibility. Nested family records omit the reserved expansion-context
+field, and generated type names preserve their source capitalization. Partial
+or undecodable candidate applications fall through to the next valid calling
+convention rather than being mistaken for a successful expansion.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 

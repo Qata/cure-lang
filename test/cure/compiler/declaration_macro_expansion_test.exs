@@ -90,6 +90,30 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :result, []) == 7
   end
 
+  test "a structured expander may receive leading captures directly" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro actor <name: ModuleName>
+        syntax family ActorDefinition
+          state Type
+          optional initial Expression
+        accepts ActorDefinition
+        expands with derive_actor
+
+      fn derive_actor(name: Syntax, definition: ActorDefinitionSyntax) -> Syntax = definition.initial
+
+      fn result() -> Int = actor Counter
+        state Int
+        initial 9
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == 9
+  end
+
   test "absent optional computed holes retain their reflected field slot" do
     source = """
     mod M

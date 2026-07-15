@@ -5989,7 +5989,7 @@ defmodule Cure.Compiler.Parser do
     {rule, state}
   end
 
-  defp macro_syntax_type(keyword), do: String.capitalize(keyword) <> "Syntax"
+  defp macro_syntax_type(keyword), do: MacroFamily.syntax_type(keyword)
 
   # A rule may optionally declare the category it produces. Categories are
   # metadata for the macro grammar; expansion remains ordinary AST rewriting.
