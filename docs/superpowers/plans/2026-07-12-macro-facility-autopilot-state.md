@@ -1958,7 +1958,35 @@ language: a user-defined actor-like abstraction cannot copy a private standard
 template and remain maintainable, and moving the repetition into an Elixir
 helper would violate the source-defined vocabulary requirement.
 
-This is now an explicit ordered sub-phase (5a), before further container parity:
+This is now an explicit ordered sub-phase (5a), before further container parity.
+The canonical surface vocabulary is:
+
+```cure
+syntax family GenServerDefinition
+  state Type
+  optional messages Type
+  optional initial Expression
+  optional init Code
+  optional on_call Cases
+  optional on_cast Cases
+  optional on_info Cases
+  optional terminate Code
+  optional code_change Code
+end
+
+macro actor <name: ModuleName>
+  accepts GenServerDefinition
+  expands with derive_actor
+end
+```
+
+The family declaration owns only the reusable body shape. The macro declaration
+owns the leading syntax and expansion function. Internally `accepts` may lower
+to the existing computed-rule machinery, but authors should not need to write
+`Code until dedent` or `contextual computed by` for ordinary structured macros.
+Generated fields must retain category metadata, source ranges, cardinality,
+section order, and provenance; the reflected runtime value may remain ordinary
+`Syntax`.
 
 1. Factor common callback/import/alias/lifecycle construction into ordinary
    Cure functions over `Std.Syntax`, returning transparent declaration bundles.

@@ -452,31 +452,85 @@ a helper. It has two required layers:
    recursively expanded, elaborated, checked, and emitted through the common
    pipeline. It must not return an opaque container value or invoke a runtime
    dispatcher.
-2. **Composable grammar rule families.** The macro language must allow a
-   standard or user macro to define a common grammar/template fragment once
-   and specialize it with named slots, optional clauses, and override bundles.
-   A rule family must preserve ordinary grammar ambiguity and duplicate-rule
-   diagnostics, lexical imports, source spans, hygiene, and inside-out
-   expansion. It must compose with computed rules and declaration bundles; it
-   must not be implemented as string substitution or as a compiler-owned list
-   of OTP cases.
-
-The desired authoring shape is conceptually:
+2. **Composable grammar rule families.** The public vocabulary should describe
+   the syntax shape, not parser mechanics. A family uses ordinary words for
+   cardinality and receives a generated typed syntax record:
 
 ```cure
-macro GenServerSurface
-  declaration gen_server_floor(state, message, overrides)
-  syntax actor <name: ModuleName> state <state: Type> <overrides: ActorOverrides>
-    expands gen_server_floor(state, message, overrides)
+syntax family GenServerDefinition
+  state Type
+  optional messages Type
+  optional initial Expression
+  optional init Code
+  optional on_call Cases
+  optional on_cast Cases
+  optional on_info Cases
+  optional terminate Code
+  optional code_change Code
+end
+
+macro actor <name: ModuleName>
+  accepts GenServerDefinition
+  expands with derive_actor
 ```
 
-The exact surface spelling is deliberately an implementation choice, but the
-semantic contract is fixed: a user can define an actor-like macro by reusing
-the generic family and changing only its domain-specific slots. The generated
-result remains direct Cure declarations and direct foreign operations. Tests
-must prove that a user-defined family, nested family composition, and a
-standard-library family all produce the same ordinary AST/Core path as a
-handwritten expansion, including negative ambiguity and hygiene cases.
+`state Type` is exactly one section; `optional on_call Cases` is zero or one;
+`repeated route Route` is zero or more; and `one_or_more field Field` requires
+at least one. Indented sections end naturally at dedent. `Code` remains an
+explicit escape hatch for genuinely free-form bodies, but macro authors do not
+write `Code until dedent` in the normal case. The initial built-in categories
+are `Name`, `ModuleName`, `Type`, `Pattern`, `Expression`, `Statement`, `Code`,
+`Cases`, `Parameters`, `Fields`, `Declarations`, `ModuleBody`, `Token`, and
+`Syntax`.
+
+The generated record is conceptually:
+
+```cure
+type GenServerDefinitionSyntax = {
+  state: Syntax,
+  messages: Option(Syntax),
+  initial: Option(Syntax),
+  init: Option(Syntax),
+  on_call: Option(Syntax),
+  on_cast: Option(Syntax),
+  on_info: Option(Syntax),
+  terminate: Option(Syntax),
+  code_change: Option(Syntax)
+}
+```
+
+The category is validated by the family parser and preserved in field metadata;
+the runtime representation remains ordinary reflected syntax. Source ranges,
+section provenance, cardinality, and order must survive reflection so tooling
+and diagnostics can identify both the duplicate and the original declaration.
+
+The expander API should be beginner-readable:
+
+```cure
+fn derive_actor(
+  name: ModuleNameSyntax,
+  definition: GenServerDefinitionSyntax
+) -> MacroResult = ...
+```
+
+`accepts` supplies the structured body and `expands with` names the compile-time
+function. Internally the implementation may lower this to the existing
+`computed by` machinery, but `computed by` and `contextual` are not required
+surface syntax for ordinary macro authors.
+
+Families may be reused with `includes OtherFamily`, exposing included fields
+directly. Initial support must reject conflicting fields rather than offer
+renaming/exclusion transformations. Defaults should normally be applied by the
+expander, preserving the distinction between an absent section and a section
+whose semantic value happens to be defaulted. Cross-field validation remains
+ordinary Cure code returning structured diagnostics, not a new constraint DSL.
+
+The semantic contract is fixed: a user can define an actor-like macro by
+reusing the generic family and changing only its expansion function. The
+generated result remains direct Cure declarations and direct foreign
+operations. Tests must prove a user-defined family, nested family composition,
+duplicate and ambiguous sections, cardinality errors, source-range diagnostics,
+and hygiene all use the same ordinary AST/Core path as a handwritten expansion.
 
 ## 11. Required implementation order
 
