@@ -26,8 +26,8 @@ defmodule Antigen.EffectMotiveTest do
   alias Cure.Core.{Context, Conv, Env, Grade, Kernel}
   alias Cure.Elab.Program
 
-  @nat {:data, :Nat, [], []}
-  @bool {:data, :Bool2, [], []}
+  @nat {:data, :"P#Nat", [], []}
+  @bool {:data, :"P#Bool2", [], []}
 
   # A real elaborated env (Nat, Bool2), extended with:
   #   valNat : Nat := Z    (a global standing for a VALUE, NOT a type)
@@ -36,17 +36,17 @@ defmodule Antigen.EffectMotiveTest do
       Program.elaborate("mod P\n  type Nat = Z | S(Nat)\n  type Bool2 = T2 | F2\nend\n")
 
     base
-    |> Env.add_def(:valNat, @nat, {:ctor, :Z, []})
+    |> Env.add_def(:valNat, @nat, {:ctor, :"P#Z", []})
     |> Env.certify(:valNat)
   end
 
   defp case_on_nat(motive_body) do
     motive = {:lam, Grade.unrestricted(), @nat, motive_body}
 
-    {:case, {:ctor, :Z, []}, motive,
+    {:case, {:ctor, :"P#Z", []}, motive,
      [
-       {:Z, 0, {:effect_pure, {:ctor, :Z, []}}},
-       {:S, 1, {:effect_pure, {:ctor, :Z, []}}}
+       {:"P#Z", 0, {:effect_pure, {:ctor, :"P#Z", []}}},
+       {:"P#S", 1, {:effect_pure, {:ctor, :"P#Z", []}}}
      ]}
   end
 
@@ -72,10 +72,10 @@ defmodule Antigen.EffectMotiveTest do
     body = {:effect_type, {:effect_type, @nat}}
 
     kase =
-      {:case, {:ctor, :Z, []}, {:lam, Grade.unrestricted(), @nat, body},
+      {:case, {:ctor, :"P#Z", []}, {:lam, Grade.unrestricted(), @nat, body},
        [
-         {:Z, 0, {:effect_pure, {:effect_pure, {:ctor, :Z, []}}}},
-         {:S, 1, {:effect_pure, {:effect_pure, {:ctor, :Z, []}}}}
+         {:"P#Z", 0, {:effect_pure, {:effect_pure, {:ctor, :"P#Z", []}}}},
+         {:"P#S", 1, {:effect_pure, {:effect_pure, {:ctor, :"P#Z", []}}}}
        ]}
 
     assert {:ok, _} = Kernel.infer(Context.empty(env()), kase)
