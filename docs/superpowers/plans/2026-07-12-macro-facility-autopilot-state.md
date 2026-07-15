@@ -1770,8 +1770,17 @@ you keep moving.
 
 ## OPEN GATE — automatic message-code derivation
 
-The one remaining gap. Operator directive (2026-07-14): **build source-language
-reflection/derivation. Do not work around it.**
+The remaining derivation gap is now narrowed. Operator directive (2026-07-14):
+**build source-language reflection/derivation. Do not work around it.**
+
+The nullary-constructor path is landed in the source macros: `actor` and `fsm`
+inspect their reflected match arms, synthesize one shared nominal message/event
+declaration, and emit direct callback code in an isolated lifted unit. Tests now
+also prove that the generated `ActorMessage` crosses the lifted-unit boundary
+into an enclosing caller's `Pid(ActorMessage)` and `beam_ops tell` call. The
+remaining work is payload-bearing handler derivation with a sound typed payload
+view, plus retirement of the standalone proof exemption once the derived
+transparent operation templates are provable without a use-site context.
 
 **Goal.** Today an `actor` must be handed an explicit `messages <Type>` clause
 (and an `fsm` an `events <Type>`). The std macro should DERIVE the message type
