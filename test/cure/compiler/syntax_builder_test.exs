@@ -23,6 +23,25 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
       node(:generated, [attr_value(:kind, syntax_atom(:actor))], [])
 
     fn build_literals() -> List(Syntax) = [int_literal(7), float_literal(2.5), bool_literal(true), string_literal("ok"), atom_literal(:ready)]
+
+    fn build_function() -> Syntax =
+      function_from(FunctionSpec{
+        name: "handle",
+        parameters: [linear_parameter_spec("from", variable("Reply"))],
+        returns: variable("Result"),
+        body: variable("from")
+      })
+
+    fn build_alias() -> Syntax = alias_from(alias_spec("State", variable("Int")))
+
+    fn build_module() -> Syntax =
+      module_from(ModuleSpec{
+        name: "Cure.Generated.Worker",
+        behaviour: :gen_server,
+        declarations: []
+      })
+
+    fn build_arm() -> Syntax = match_arm(variable("Ready"), atom_literal(:ok))
   """
 
   test "source-level syntax helpers analyze and construct reflected syntax" do
@@ -48,6 +67,21 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
              {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :string}}], {:SStr, ~c"ok"}},
              {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :symbol}}], {:SAtom, :ready}}
            ]
+
+    assert {:Node, :function_def, attrs, [body]} = apply(module, :build_function, [])
+    assert {:KV, :name, {:SStr, ~c"handle"}} in attrs
+    assert Enum.any?(attrs, &match?({:KV, :return_type, {:SSyntax, _}}, &1))
+    assert {:Leaf, :variable, _, {:SStr, ~c"from"}} = body
+
+    assert {:Node, :type_annotation, [{:KV, :name, {:SStr, ~c"State"}}], [_]} =
+             apply(module, :build_alias, [])
+
+    assert {:Node, :lift_module, attrs, []} = apply(module, :build_module, [])
+    assert {:KV, :module, {:SStr, ~c"Cure.Generated.Worker"}} in attrs
+    assert {:KV, :behaviour, {:SAtom, :gen_server}} in attrs
+
+    assert {:Node, :match_arm, [{:KV, :pattern, {:SSyntax, _}}], [_]} =
+             apply(module, :build_arm, [])
   end
 
   test "raw syntax construction is available only through an explicit unsafe API" do

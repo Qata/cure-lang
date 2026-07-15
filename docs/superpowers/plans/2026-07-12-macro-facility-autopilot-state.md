@@ -2105,6 +2105,16 @@ construction. Existing helpers remain source-compatible during the migration;
 future typed templates and declaration builders must use the safe namespace and
 leave raw construction visibly opt-in.
 
+**Typed declaration builder status (2026-07-15).** `Std.Syntax` now exposes
+record-backed specifications and builders for parameters, linear parameters,
+functions, aliases, lifted modules, and match arms. Macro authors can construct
+these declarations through named record fields and typed builder functions;
+generic positional node constructors remain compatibility and advanced
+facilities. The builders produce the same ordinary reflected syntax
+representation and add no compiler-owned declaration vocabulary. Semantic
+validation remains in the ordinary Cure elaborator, while malformed reflected
+representations are covered by the final expansion validation boundary.
+
 **Raw expansion validation status (2026-07-15).** Raw construction is now
 explicitly separated from executable expansion. Before a computed result is
 converted back to parser AST, `MacroSyntax.validate_expansion/1` rejects raw and

@@ -69,6 +69,30 @@ mod Std.Syntax
 
   type PayloadTypes = Payloads(List(Syntax)) | InvalidPayload(Atom)
 
+  ## Typed declaration specifications keep ordinary macro authors away from
+  ## positional attribute lists. They are source-level records, so a builder
+  ## call reads like the declaration it produces and remains reusable by any
+  ## user-defined macro.
+  rec ParameterSpec
+    name: String
+    kind: Syntax
+    linear: Bool
+
+  rec FunctionSpec
+    name: String
+    parameters: List(ParameterSpec)
+    returns: Syntax
+    body: Syntax
+
+  rec ModuleSpec
+    name: String
+    behaviour: Atom
+    declarations: List(Syntax)
+
+  rec AliasSpec
+    name: String
+    value: Syntax
+
   ## Small, total operations used by source-defined syntax macros. These keep
   ## syntax analysis in Cure instead of teaching the compiler about a macro's
   ## domain-specific declarations.
@@ -205,6 +229,20 @@ mod Std.Syntax
   fn parameter_linear(name: String, kind: Syntax) -> Syntax =
     Node(:param, [KV(:name, SStr(name)), KV(:type, SSyntax(kind)), KV(:grade, SAtom(:linear))], [])
 
+  fn parameter_spec(name: String, kind: Syntax) -> ParameterSpec =
+    ParameterSpec{name: name, kind: kind, linear: false}
+
+  fn linear_parameter_spec(name: String, kind: Syntax) -> ParameterSpec =
+    ParameterSpec{name: name, kind: kind, linear: true}
+
+  fn parameter_from(spec: ParameterSpec) -> Syntax = match spec.linear
+    true -> parameter_linear(spec.name, spec.kind)
+    false -> parameter(spec.name, spec.kind)
+
+  fn parameters_from(specs: List(ParameterSpec)) -> List(Syntax) = match specs
+    [] -> []
+    [head | rest] -> [parameter_from(head) | parameters_from(rest)]
+
   fn let_binding(name: String, value: Syntax) -> Syntax =
     Node(:assignment, [KV(:let, SBool(true))], [variable(name), value])
 
@@ -221,6 +259,24 @@ mod Std.Syntax
       KV(:params, parameter_literals(params)),
       KV(:return_type, SSyntax(return_type))
     ], [body])
+
+  fn function_from(spec: FunctionSpec) -> Syntax =
+    function(spec.name, parameters_from(spec.parameters), spec.returns, spec.body)
+
+  fn module_from(spec: ModuleSpec) -> Syntax =
+    lift_module(SStr(spec.name), spec.behaviour, spec.declarations)
+
+  fn alias_from(spec: AliasSpec) -> Syntax =
+    alias_node(spec.name, spec.value)
+
+  fn alias_spec(name: String, value: Syntax) -> AliasSpec =
+    AliasSpec{name: name, value: value}
+
+  fn match_arm(pattern: Syntax, body: Syntax) -> Syntax =
+    Node(:match_arm, [KV(:pattern, SSyntax(pattern))], [body])
+
+  fn guarded_match_arm(pattern: Syntax, guard: Syntax, body: Syntax) -> Syntax =
+    Node(:match_arm, [KV(:pattern, SSyntax(pattern)), KV(:guard, SSyntax(guard))], [body])
 
   fn integer(value: Int) -> Syntax =
     Leaf(:literal, [KV(:subtype, SAtom(:integer))], SInt(value))
