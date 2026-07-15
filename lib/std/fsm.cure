@@ -2,6 +2,21 @@
 mod Std.Fsm
   use Std.Syntax
   use Std.List
+
+  ## The structured FSM surface reuses the generic family parser. Legacy forms
+  ## in FsmContainers remain available through ordinary grammar fallback.
+  macro fsm <name: ModuleName>
+    syntax family FsmDefinition
+      state Type
+      events Cases
+    accepts FsmDefinition
+    expands with derive_fsm_family
+
+  fn derive_fsm_family(name: ModuleNameSyntax, definition: FsmDefinitionSyntax) -> Syntax =
+    let body = Node(:pattern_match, [], [variable("event") | children(definition.events)])
+    let name_syntax: Syntax = name
+    emit_fsm_parts(name_syntax, definition.state, fsm_handler(body))
+
   ## `fsm` is a transparent standard-library macro. The base state-machine is
   ## an ordinary lifted GenStatem module; transition derivation and handlers
   ## are layered on top of this floor.
@@ -119,10 +134,13 @@ mod Std.Fsm
   type Transition = Row(Atom, Atom, Atom)
 
   fn emit_fsm(input: FsmSyntax, event_body: Syntax) -> Syntax =
-    let module_name = match input.name
+    emit_fsm_parts(input.name, input.state_type, event_body)
+
+  fn emit_fsm_parts(name_syntax: Syntax, state_type: Syntax, event_body: Syntax) -> Syntax =
+    let module_name = match name_syntax
       Leaf(_, _, SAtom(name)) -> SAtom(name)
       _ -> SStr("Cure.Generated.Fsm")
-    let module_expr = match input.name
+    let module_expr = match name_syntax
       Leaf(_, _, SAtom(name)) -> atom_literal(name)
       _ -> atom_literal(:generated_fsm)
     match derive_pattern_heads(event_body)
@@ -136,7 +154,7 @@ mod Std.Fsm
           event_type,
           lift_module_isolated(module_name, :gen_statem, [
             use_module("Std.Otp"),
-            alias_node("State", input.state_type),
+            alias_node("State", state_type),
             alias_node("Event", variable("FsmEvent")),
             function("callback_mode", [], variable("Atom"), atom_literal(:handle_event_function)),
             function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), atom_literal(:initial), variable("initial")])),
@@ -147,6 +165,28 @@ mod Std.Fsm
 
   fn derive_fsm(input: FsmSyntax) -> Syntax =
     emit_fsm(input, input.event_body)
+
+  ## Family cases contain plain expression bodies. Lifted callbacks consume a
+  ## checked block, so normalize each arm here in ordinary source-level syntax.
+  fn fsm_handler(body: Syntax) -> Syntax = match tag(body) == :pattern_match
+    true -> fsm_handler_node(attrs(body), children(body))
+    false -> body
+
+  fn fsm_handler_node(values: List(Attr), children: List(Syntax)) -> Syntax = match children
+    [scrutinee | arms] -> Node(:pattern_match, values, [scrutinee | fsm_handler_arms(arms)])
+    _ -> Node(:pattern_match, values, children)
+
+  fn fsm_handler_arms(arms: List(Syntax)) -> List(Syntax) = match arms
+    [] -> []
+    [arm | rest] -> [fsm_handler_arm(arm) | fsm_handler_arms(rest)]
+
+  fn fsm_handler_arm(arm: Syntax) -> Syntax = match tag(arm) == :match_arm
+    true -> fsm_handler_arm_node(attrs(arm), children(arm))
+    false -> arm
+
+  fn fsm_handler_arm_node(values: List(Attr), children: List(Syntax)) -> Syntax = match children
+    [body] -> Node(:match_arm, values, [block([body])])
+    _ -> Node(:match_arm, values, children)
 
   ## A transition row is ordinary data. The macro surface above expands rows to
   ## this checked ADT so users can compose, inspect, and transform tables with

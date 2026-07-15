@@ -2163,6 +2163,13 @@ structured surface alongside the legacy actor forms; the remaining actor
 sections and the FSM/supervisor/application family surfaces stay ordered
 follow-up work.
 
+**Structured FSM status (2026-07-15).** `Std.Fsm` now declares an
+`FsmDefinition` family with required `state` and `events` sections. Its
+source-defined expander normalizes case bodies into the checked callback shape,
+derives `FsmEvent`, and emits an ordinary lifted GenStatem module. A compiled
+integration test covers initialization, event construction, and dispatch while
+the legacy FSM grammar remains the fallback path.
+
 **Typed declaration builder status (2026-07-15).** `Std.Syntax` now exposes
 record-backed specifications and builders for parameters, linear parameters,
 functions, aliases, lifted modules, and match arms. Macro authors can construct
