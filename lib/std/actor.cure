@@ -313,9 +313,7 @@ mod Std.Actor
         let default_state: Syntax = tuple([atom_literal(:noreply), variable("state")])
         block([
           message_type,
-          lift_module_isolated(module_name, :gen_server, [
-            use_module("Std.Otp"),
-            alias_node("State", input.state_type),
+          gen_server_module(module_name, input.state_type, [
             alias_node("Message", variable("ActorMessage")),
             function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), variable("initial")])),
             function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, handler_body),
@@ -338,9 +336,7 @@ mod Std.Actor
     block([
       message_type,
       request_type,
-      lift_module_isolated(module_name, :gen_server, [
-        use_module("Std.Otp"),
-        alias_node("State", input.state_type),
+      gen_server_module(module_name, input.state_type, [
         alias_node("Message", variable("ActorMessage")),
         alias_node("Request", variable("ActorRequest")),
         function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), variable("initial")])),
@@ -352,6 +348,15 @@ mod Std.Actor
         function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_link", [module_expr, variable("initial")]))
       ])
     ])
+
+  ## Shared transparent declaration bundle for generated GenServer modules.
+  ## Domain-specific builders supply only aliases and callback overrides; the
+  ## common import and state plumbing live in one ordinary Cure function.
+  fn gen_server_module(module_name: SynLit, state_type: Syntax, declarations: List(Syntax)) -> Syntax =
+    lift_module_isolated(module_name, :gen_server, append([
+      use_module("Std.Otp"),
+      alias_node("State", state_type)
+    ], declarations))
 
   fn actor_call_handler(body: Syntax) -> Syntax = match tag(body) == :pattern_match
     true -> actor_call_handler_node(attrs(body), children(body))
