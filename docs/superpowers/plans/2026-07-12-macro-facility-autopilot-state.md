@@ -2099,6 +2099,11 @@ the safe `Std.Syntax` versus advanced `Std.Syntax.Raw` boundary. Editor tooling,
 inline shorthand, aliases, grouping/plural spellings, custom syntax categories,
 syntax-pattern matching, and phase/export conveniences remain parked as later
 work; none is a prerequisite for transparent compiled expansion.
+The safe/raw boundary has begun additively: `Std.Syntax.Raw` now exposes
+`unsafe_node`, `unsafe_leaf`, and `unsafe_raw` for deliberately unchecked
+construction. Existing helpers remain source-compatible during the migration;
+future typed templates and declaration builders must use the safe namespace and
+leave raw construction visibly opt-in.
 
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**

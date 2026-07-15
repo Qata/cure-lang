@@ -49,4 +49,20 @@ defmodule Cure.Compiler.SyntaxBuilderTest do
              {:Leaf, :literal, [{:KV, :subtype, {:SAtom, :symbol}}], {:SAtom, :ready}}
            ]
   end
+
+  test "raw syntax construction is available only through an explicit unsafe API" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Syntax.Raw
+
+      fn build_raw() -> Syntax = unsafe_node(:raw, [], [unsafe_leaf(:value, [], SInt(1))])
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert apply(module, :build_raw, []) ==
+             {:Node, :raw, [], [{:Leaf, :value, [], {:SInt, 1}}]}
+  end
 end
