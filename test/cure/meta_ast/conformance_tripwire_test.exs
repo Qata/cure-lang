@@ -31,11 +31,17 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
   # reaching `[]` is the definition of done.
   @allowlist MapSet.new([
                {:bad_shape, :builtin, nil},
+               # `erases` erasure-grade annotation in the OTP raw-algebra module;
+               # same tolerated backlog class as the other :bad_shape buckets.
+               {:bad_shape, :erases, nil},
                {:bad_shape, :group, nil},
                {:bad_shape, :named_dom, nil},
                {:bad_shape, :named_implicit_pat, nil},
                {:node_child, :forced_pattern, nil},
                {:node_child, :gadt_ctor, nil},
+               # Typed assignment (`x: T = e`) inside the OTP macro templates
+               # (actor/app/fsm/supervisor): the `:type_annotation` rides in meta.
+               {:node_in_meta, :assignment, :type_annotation},
                {:node_in_meta, :bin_segment, :size},
                {:node_in_meta, :container, :decorator},
                {:node_in_meta, :container, :for_type},
