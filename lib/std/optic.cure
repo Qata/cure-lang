@@ -23,6 +23,7 @@ mod Std.Optic
   use Std.Vector
   use Std.Sigma
   use Std.Option
+  use Std.List
 
   # ---- kinds --------------------------------------------------------------
 
@@ -151,6 +152,48 @@ mod Std.Optic
   ## is fixed by the later `x` argument, so it elaborates in checking mode.)
   fn set({s: Type}, {a: Type}, {k: OpticKind}, o: Optic(s, a, k), new: a, x: s) -> s =
     over(o, fn(ignored) -> new, x)
+
+  # ---- affine: constructor ------------------------------------------------
+
+  ## The extraction behind `affine`, factored out of the constructor lambda so its
+  ## `match` body is an ordinary function (a `match` directly inside the stored
+  ## lambda does not lower). `pre(x)` decides whether the focus is present; when it
+  ## is, the setter `fn(new) -> put(new)(x)` is closed over `x` exactly as `lens`
+  ## closes over its structure.
+  fn affine_ext({s: Type}, {a: Type}, pre: (s) -> Option(a), put: (a) -> (s) -> s, x: s) -> AffineRep(a, s) =
+    match pre(x)
+      Some(v) -> MkAffineRep(Some(MkLensRep(v, fn(new) -> put(new)(x))))
+      None() -> MkAffineRep(None())
+
+  ## Build an affine (zero-or-one focus) from a partial getter `pre : s -> Option(a)`
+  ## and a setter `put : a -> s -> s`. When `pre(x)` is `None`, `over`/`set` leave the
+  ## structure untouched and `preview` yields `None`; this is the total, statically-
+  ## kinded replacement for an `Access`-style "maybe this key exists" path.
+  fn affine({s: Type}, {a: Type}, pre: (s) -> Option(a), put: (a) -> (s) -> s) -> Optic(s, a, AffineKind) =
+    MkAffineO(MkAffineExt(fn(x) -> affine_ext(pre, put, x)))
+
+  # ---- to_list_of: collect every focus ------------------------------------
+
+  ## Every focus of an optic, in order, as an ordinary `List`. Total at every kind:
+  ## a lens yields a one-element list, an affine zero-or-one, a traversal the whole
+  ## `Vector` of foci flattened to a list. The kind-polymorphic counterpart to
+  ## `preview` (which keeps only the first).
+  fn to_list_of({s: Type}, {a: Type}, {k: OpticKind}, o: Optic(s, a, k), x: s) -> List(a) =
+    match o
+      MkLensO(le) -> match le
+        MkLensExt(f) -> match f(x)
+          MkLensRep(focus, rebuild) -> [focus]
+      MkAffineO(ae) -> match ae
+        MkAffineExt(f) -> match f(x)
+          MkAffineRep(opt) -> match opt
+            Some(lr) -> match lr
+              MkLensRep(focus, rebuild) -> [focus]
+            None() -> []
+      MkTravO(te) -> match te
+        MkTravExt(f) -> match f(x)
+          MkTravRep(sig) -> match sig
+            mk_pair(n, rest) -> match rest
+              mk_pair(v, rebuild) -> Std.Vector.to_list(v)
 
   ## Common tuple lenses exposed through the `lens` syntax macro. The macro is
   ## only surface sugar; these are ordinary typed Std.Optic functions.
