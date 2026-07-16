@@ -224,8 +224,15 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   holds for BOTH outcomes — the novel content is the message-vs-death DISPATCH on the flag,
   neither branch reaching an ill-typed state. The step rules are gated to the correct flag
   (a wrong-flag step is unconstructible). Idris-mirrored (`test/oracle/otp/link`, rel=same),
-  tests in `otp_link_test.exs`. **Remaining in G3:** `demonitor`/unlink, cascading-exit
-  liveness, and the `DOWN`/`EXIT` reason/ref payload (abstracted to bare tags here).
+  tests in `otp_link_test.exs`. **`demonitor` now DONE — `Std.Otp.Demonitor`
+  (`lib/std/otp_demonitor.cure`):** an `MRef` is indexed by an `Active`/`Removed` lifecycle
+  state, `demonitor` moves `Active → Removed`, and the death step `SDown` REQUIRES an
+  `Active` monitor — so a DOWN delivered after `demonitor` is unconstructible (mirrors
+  `Std.Otp.Timer`'s Pending/Cancelled discipline, completing the monitor lifecycle
+  establish→observe→cancel). Idris-mirrored (`test/oracle/otp/demonitor`, rel=same); the
+  parallel `unlink` over `Std.Otp.Link`'s trap-flagged link is the same shape. **Remaining
+  in G3:** cascading-exit liveness, and the `DOWN`/`EXIT` reason/ref payload (abstracted to
+  bare tags here).
 - **G4. Timers / `send_after` / `receive after`.** **No paper** — KWC *explicitly*
   excludes timers, Core Erlang omits them, mailbox types list timeouts as future work.
   → **DONE — `Std.Otp.Timer` (`lib/std/otp_timer.cure`).** Two typing obligations: (1)
