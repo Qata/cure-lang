@@ -363,13 +363,31 @@ defmodule Cure.Elab.Program do
       # in the preparation AST so local macro definitions keep working.
       prep_ast = declaration_expansion_prep(ast)
 
-      with {:ok, env} <- check_ast_elixir_core(prep_ast) do
-        expand_declaration_nodes(ast, env)
+      with {:ok, env} <- check_ast_elixir_core(prep_ast),
+           {:ok, expanded} <- expand_declaration_nodes(ast, env) do
+        {:ok, unwrap_sole_lifted_module(expanded)}
       end
     else
       {:ok, ast}
     end
   end
+
+  # A parse-time `becomes lift module name` template yields a bare top-level
+  # `:lift_module` node, so a bare (mod-less) single-actor program has the lifted
+  # module as its top-level module identity and `compile_and_load` returns the
+  # actor. A computed/family expansion instead wraps its single lifted module in
+  # the expander's general `:block` shape; left wrapped, the program's stripped
+  # main AST is an empty block and codegen emits an empty `Cure.Main` wrapper
+  # rather than the actor. Normalize that sole-lifted-module block to the bare
+  # `:lift_module` so both surfaces agree downstream. Only the very top level of
+  # the expansion is unwrapped; a lifted module nested inside a `mod`/container
+  # is reached through the container recursion and stays wrapped, so mod-scoped
+  # programs still return their own module.
+  defp unwrap_sole_lifted_module({tag, _meta, [{:lift_module, _, _} = lifted]})
+       when tag in [:block, :container],
+       do: lifted
+
+  defp unwrap_sole_lifted_module(other), do: other
 
   # Declaration expansion must not descend into function bodies. Those uses are
   # expanded by Declarations with the callback context already attached to the

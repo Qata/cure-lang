@@ -68,6 +68,27 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert apply(:"Cure.Generated.RawFamilyPickup", :handle_cast, [:other, 4]) == {:noreply, 4}
   end
 
+  test "a bare (mod-less) computed raw actor is the program's top-level module" do
+    # A `becomes lift module name` template yields a bare top-level `lift_module`
+    # at parse time, so `compile_and_load` returns the actor module itself. A
+    # computed/family expansion instead wraps its single lifted module in a
+    # `:block`, which (pre-fix) fell through to an empty `Cure.Main` wrapper. This
+    # pins in-place module identity for the computed path so bare-source guards
+    # (container_macro_test:186/204/213) hold once terse heads route through the
+    # shared family emitter.
+    source = """
+    actor Cure.Generated.BareTopRawCast
+      state Int
+      messages Atom
+      handle_cast
+        %[:noreply, state]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.Generated.BareTopRawCast"
+    assert apply(module, :handle_cast, [:ping, 7]) == {:noreply, 7}
+  end
+
   test "terse template form routes through the shared family raw emitter" do
     # The single-line-fields `actor N state T handle_cast <body>` form is the
     # positional TEMPLATE (not the block family form). It is rerouted from a
