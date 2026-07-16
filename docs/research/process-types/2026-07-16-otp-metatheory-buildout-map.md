@@ -260,8 +260,16 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   not expressible in a total program. A call typed as bare `r` would be unsound (it cannot
   always produce an `r`); `CallOutcome(r)` is the honest total type, and a
   `try_call : … -> Effect(CallOutcome(r))` on top of `Std.Otp.SendEffect` is the total
-  wrapper. Idris-mirrored (`test/oracle/otp/call`, rel=same). Remaining: supervision-restart
-  tied to state preservation.
+  wrapper. Idris-mirrored (`test/oracle/otp/call`, rel=same). **Supervision-restart now
+  DONE — `Std.Otp.Supervisor` (`lib/std/otp_supervisor.cure`):** a `Fleet(specs)` is a
+  supervisor's running children indexed by the whole spec list, and `restart_all`
+  (one-for-all) / `restart_one` (one-for-one) return `Fleet(specs)` with the SAME `specs` —
+  so the TYPE certifies the supervision invariant: a restart revives children but never
+  changes what children the supervisor has. `establish : (specs) -> Fleet(specs)` says a
+  running fleet of exactly the declared children always exists. Idris-mirrored
+  (`test/oracle/otp/supervisor`, rel=same), tests pin that restart cannot reshape the spec
+  list. Restart-intensity limits (max_restarts/max_seconds) are an operational bound not
+  modelled.
 - **G7. `Pid` vs `GenServer` separation + `whereis` partiality** (conformance F-2/F-2c).
   No paper; Cure's own audit. → **DONE — `Std.Otp.Registry` (`lib/std/otp_registry.cure`).**
   F-2: a `GenServer(q, r)` WRAPS a pid and carries its protocol; a bare `Pid` cannot be

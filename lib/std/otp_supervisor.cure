@@ -1,0 +1,61 @@
+@group(:concurrency)
+mod Std.Otp.Supervisor
+  ## TYPED SUPERVISION — restart preserves the supervisor's declared children
+  ## (build-out map G6 remainder "supervision-restart tied to state preservation").
+  ##
+  ## A supervisor owns a fixed set of child SPECS and keeps those children running: when
+  ## a child dies it is restarted, and — this is the supervision guarantee — the restarted
+  ## child has the SAME spec. So the supervision tree's TYPES are invariant across
+  ## restarts: no restart ever changes what children a supervisor has, only whether each
+  ## is currently up. No paper types this; it is core OTP (supervisors are half of OTP)
+  ## and the counterpart to `Std.Otp.Call`/`Std.Otp.Monitor` (which handle the failures a
+  ## supervisor reacts to).
+  ##
+  ## A `Fleet(specs)` is a supervisor's running children, INDEXED by the whole spec list —
+  ## one child per spec. The restart operations return `Fleet(specs)` with the SAME
+  ## `specs`, so the type itself certifies the invariant:
+  ##   * `restart_all` (one-for-all) revives the whole fleet;
+  ##   * `restart_one` (one-for-one) revives the head child, the rest untouched;
+  ##   * `establish` starts a fleet for any spec list.
+  ## Totality certification guarantees every child in the spec is accounted for.
+  ##
+  ## **Honest scope.** Child specs are schematic identities; a child's message-type
+  ## interface is `Std.Otp.HetRouting`, its call/reply is `Std.Otp.Proof`. Restart
+  ## INTENSITY limits (max_restarts / max_seconds → supervisor shutdown) are an
+  ## operational bound not modelled here. This types the structural invariant: the
+  ## supervisor's children are always exactly its spec.
+
+  ## A child's SPEC (its identity/type, schematic here).
+  type ChildSpec = CA | CB | CC
+  type Children = CNil | CCons(ChildSpec, Children)
+
+  ## A running child, indexed by its spec. Whether `Alive` or `Restarting`, its SPEC is
+  ## fixed — a restart never changes what a child IS, only whether it is currently up.
+  type Child indices (spec: ChildSpec)
+    Alive      : Child(spec)
+    Restarting : Child(spec)
+
+  ## A supervisor's FLEET: one child per spec, indexed by the whole spec list.
+  type Fleet indices (specs: Children)
+    FNil  : Fleet(CNil)
+    FCons : Child(spec) -> Fleet(rest) -> Fleet(CCons(spec, rest))
+
+  ## **ONE-FOR-ALL restart.** Bring the WHOLE fleet back to `Alive`. The return type is
+  ## `Fleet(specs)` with the SAME `specs` — the supervision invariant, certified by the
+  ## type: restarts never change the supervisor's declared children, only revive them.
+  fn restart_all({specs: Children}, f: Fleet(specs)) -> Fleet(specs) = match f
+    FNil()         -> FNil()
+    FCons(c, rest) -> FCons(Alive(), restart_all(rest))
+
+  ## **ONE-FOR-ONE restart.** Revive just the head child; the rest are untouched. The
+  ## spec list is preserved.
+  fn restart_one({spec: ChildSpec}, {rest: Children}, f: Fleet(CCons(spec, rest))) -> Fleet(CCons(spec, rest)) = match f
+    FCons(c, others) -> FCons(Alive(), others)
+
+  ## The supervisor can always ESTABLISH a fleet for any spec list (start all children).
+  ## Its type `(specs) -> Fleet(specs)` says: for any declared children, a running fleet
+  ## of exactly those children exists.
+  fn establish(specs: Children) -> Fleet(specs) = match specs
+    CNil()         -> FNil()
+    CCons(s, rest) -> FCons(Alive(), establish(rest))
+end

@@ -1,0 +1,18 @@
+mod Supervisor
+  type ChildSpec = CA | CB | CC
+  type Children = CNil | CCons(ChildSpec, Children)
+  type Child indices (spec: ChildSpec)
+    Alive      : Child(spec)
+    Restarting : Child(spec)
+  type Fleet indices (specs: Children)
+    FNil  : Fleet(CNil)
+    FCons : Child(spec) -> Fleet(rest) -> Fleet(CCons(spec, rest))
+  fn restart_all({specs: Children}, f: Fleet(specs)) -> Fleet(specs) = match f
+    FNil()         -> FNil()
+    FCons(c, rest) -> FCons(Alive(), restart_all(rest))
+  fn restart_one({spec: ChildSpec}, {rest: Children}, f: Fleet(CCons(spec, rest))) -> Fleet(CCons(spec, rest)) = match f
+    FCons(c, others) -> FCons(Alive(), others)
+  fn establish(specs: Children) -> Fleet(specs) = match specs
+    CNil()         -> FNil()
+    CCons(s, rest) -> FCons(Alive(), establish(rest))
+end
