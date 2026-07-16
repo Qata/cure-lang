@@ -139,8 +139,15 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
 - **G2. Preservation/progress of a TYPED OTP layer over the concurrent reduction
   relation.** Core Erlang gives the *untyped* relation; NVLang's preservation is over a
   *toy* single-actor step (no interleaving, no ether). Nobody has typed-OTP subject
-  reduction over a real concurrent semantics. → Cure builds: state the typing invariant
-  on `Σ=(Δ,Π)` and prove it preserved by Figs 2–5. Biggest *proof* undertaking.
+  reduction over a real concurrent semantics. → **STARTED — `Std.Otp.Preservation`
+  (`lib/std/otp_preservation.cure`).** Subject reduction is PROVEN in Cure (kernel-
+  checked, totality-certified, Idris-mirrored `test/oracle/otp/preservation` rel=same)
+  for the **send/arrive/receive fragment, single receiver, message-type safety** — the
+  NVLang Thm 4.1 property proven over the *actual* ether→mailbox reduction rather than a
+  toy step. Remaining: exit/link/monitor signals; multiple pids/interleaving; mailbox
+  FIFO order (abstracted here — one `AllAccepted`-over-append lemma); and **composing
+  this with obligation (1)'s dependent LINEAR reply** (G1) — the reply value's
+  `ReplyOf(req)` typing carried through delivery. That composition is the next milestone.
 - **G3. Typed monitors / links / DOWN.** NVLang has `MonitorRef` in the grammar only
   (prose §2.5, no rules/theorems); Core Erlang omits monitors; KWC has the *operational*
   monitor model but untyped. → Cure builds the typing + the DOWN-as-message discipline.

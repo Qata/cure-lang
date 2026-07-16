@@ -1,0 +1,92 @@
+@group(:concurrency)
+mod Std.Otp.Preservation
+  ## Subject reduction (PRESERVATION) for the Core Erlang send/arrive/receive
+  ## reduction, proven in Cure and re-checked every build.
+  ##
+  ## The operational model is the concurrency fragment of Bereczky, Horpácsi &
+  ## Thompson, *A Formalisation of Core Erlang* (Acta Cybernetica 2023, arXiv
+  ## 2311.10482; Coq-checked): signals traverse an **ether** keyed by
+  ## `(source, target)`, are **delivered** into a process **mailbox**, and are
+  ## **consumed** by `receive`. This module ports the three rules that touch one
+  ## receiver — `SEND`/`NSEND` (Fig 3/5), `NARRIVE` (Fig 5), `RECEIVE` (Fig 4) — as a
+  ## small-step relation `Step`, gives it an extrinsic **typing** (`WT`: every message
+  ## in flight or in the mailbox is one the receiver accepts), and proves that
+  ## reduction preserves it.
+  ##
+  ## **What this establishes (message-type safety as a metatheorem).** NVLang (arXiv
+  ## 2512.05224) states message-type safety (its Thm 4.1) but proves it only over a
+  ## toy single-actor step with no ether. Here it is proven over the *actual*
+  ## ether→mailbox reduction: a well-typed configuration never delivers to the mailbox
+  ## a message the receiver cannot handle, and no such message can even be sent. The
+  ## excluded tag `TDec` witnesses this — `Accepted(TDec)` is uninhabited
+  ## (`tdec_unaccepted`), so no `SSend` can introduce it and no `WT` can contain it.
+  ##
+  ## **Honest scope.** This is the send/arrive/receive fragment for a *single*
+  ## receiver with a *fixed, decidable* accepted-tag set (the receiver's clause-derived
+  ## message type, modelled as the inductive predicate `Accepted`). Mailbox **order**
+  ## is abstracted — message-type safety is order-independent, so `NARRIVE` prepends
+  ## rather than FIFO-appends; a FIFO-faithful version needs one `AllAccepted`-over-
+  ## append lemma and changes nothing about the invariant. Not modelled here: exit/
+  ## link/monitor signals, timers, multiple processes/pids, and the *dependent linear
+  ## reply* discipline (that is `Std.Otp.Proof`, obligation (1)); composing this
+  ## preservation with that reply typing is the next step (build-out map G1/G2).
+
+  ## Message vocabulary (tags).
+  type Tag = TInc | TDec | TQuery
+
+  ## A list of tags (self-contained; the ether and mailbox are tag lists).
+  type TagList = TNil | TCons(Tag, TagList)
+
+  ## The receiver's DERIVED accepted-message set, as an inductive predicate: a value
+  ## of `Accepted(t)` is a proof that tag `t` is accepted. This receiver accepts `Inc`
+  ## and `Query` but NOT `Dec` — there is no `Accepted(TDec)` constructor.
+  type Accepted indices (t: Tag)
+    AccInc   : Accepted(TInc)
+    AccQuery : Accepted(TQuery)
+
+  ## Every tag in a list is accepted (free `t`/`rest` are erased-implicit, à la
+  ## `Equivalent`'s `reflexive : Equivalent(a, w, w)`).
+  type AllAccepted indices (ts: TagList)
+    AANil  : AllAccepted(TNil)
+    AACons : Accepted(t) -> AllAccepted(rest) -> AllAccepted(TCons(t, rest))
+
+  ## A configuration: the ether (in-flight signals to the receiver) and its mailbox.
+  type Config = MkConfig(TagList, TagList)
+
+  ## WELL-TYPED configuration: every in-flight AND mailboxed message is accepted.
+  type WT indices (c: Config)
+    MkWT : AllAccepted(e) -> AllAccepted(m) -> WT(MkConfig(e, m))
+
+  ## The reduction relation (Core Erlang fragment, one receiver):
+  ##   SSend   — a TYPED send: only an accepted tag enters the ether (SEND + NSEND).
+  ##   SArrive — NARRIVE: deliver a front-of-ether signal into the mailbox.
+  ##   SRecv   — RECEIVE: consume a mailbox message.
+  type Step indices (before: Config, after: Config)
+    SSend   : Accepted(t) -> Step(MkConfig(e, m), MkConfig(TCons(t, e), m))
+    SArrive : Step(MkConfig(TCons(t, e), m), MkConfig(e, TCons(t, m)))
+    SRecv   : Step(MkConfig(e, TCons(t, m)), MkConfig(e, m))
+
+  ## **PRESERVATION.** Reducing a well-typed configuration yields a well-typed
+  ## configuration. Proof by cases on the reduction step, shuffling the `AllAccepted`
+  ## witnesses: `SSend` prepends the send's own acceptance proof; `SArrive` moves the
+  ## head witness from the ether list to the mailbox list; `SRecv` drops a mailbox
+  ## witness. Kernel-checked and totality-certified — a genuine proof term.
+  fn preservation({b: Config}, {a: Config}, wt: WT(b), s: Step(b, a)) -> WT(a) = match s
+    SSend(acc) -> match wt
+      MkWT(ae, am) -> MkWT(AACons(acc, ae), am)
+    SArrive() -> match wt
+      MkWT(ae, am) -> match ae
+        AACons(at, ae2) -> MkWT(ae2, AACons(at, am))
+    SRecv() -> match wt
+      MkWT(ae, am) -> match am
+        AACons(rat, am2) -> MkWT(ae, am2)
+
+  ## Non-vacuity: a concrete well-typed configuration (ether `[Inc]`, mailbox `[Query]`).
+  fn example() -> WT(MkConfig(TCons(TInc, TNil), TCons(TQuery, TNil))) =
+    MkWT(AACons(AccInc, AANil), AACons(AccQuery, AANil))
+
+  ## The exclusion is REAL: `Accepted(TDec)` is uninhabited, so `TDec` can never be
+  ## sent to or held by this receiver. An absurd (zero-branch) match proves it.
+  type Void = |
+  fn tdec_unaccepted(p: Accepted(TDec)) -> Void = match p
+end
