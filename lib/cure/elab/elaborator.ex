@@ -6929,20 +6929,35 @@ defmodule Cure.Elab.Elaborator do
     slots = Enum.zip(domains, quantities)
     init = {:ok, MetaCtx.new(), [], arg_asts, []}
 
-    # GOAL-DIRECTED solving for an anonymous-union goal — the same reason as in
-    # `elaborate_global_app/5`, and needed here too because this is the path taken when
-    # an argument cannot be inferred standalone (`Std.Map.put(:a, 1, Std.Map.new())` —
-    # `new()`'s implicits have nothing to fix them).
+    # GOAL-DIRECTED solving from the concrete return-type goal — ordinary
+    # bidirectional propagation (Idris/Agda/Lean): unify the codomain against the
+    # expected type FIRST, so a leading implicit determined only by the result is
+    # solved before its dependent argument slots are elaborated. This is the path
+    # taken when an argument cannot be inferred standalone, in two shapes:
     #
-    # Without it, the value slot's domain `?v` is still an unsolved meta, so the slot is
-    # DEFERRED and later resolved by inferring the argument — locking `?v := Int` and
-    # losing the union. Solving the codomain against the goal first pins
-    # `?v := Union<…>`, so the slot is no longer deferred: the argument is CHECKED
-    # against the union and the literal/member injection fires normally.
+    #   * an anonymous-union value slot (`Std.Map.put(:a, 1, Std.Map.new())` —
+    #     `new()`'s implicits have nothing to fix them): without goal-first solving
+    #     the domain `?v` stays a meta, the slot is DEFERRED and later resolved by
+    #     inferring the argument, locking `?v := Int` and LOSING the union;
+    #   * a lambda argument whose domain the goal alone fixes (`mk(fn(x) -> x.1)`
+    #     at `Box(Tuple(Int,Int), Int)` — `mk : {s} -> {a} -> (s -> a) -> Box(s,a)`):
+    #     without it `?s`/`?a` stay metas, so `fn(x) -> x.1` is checked at `?s -> ?a`
+    #     and the projection cannot lower (`:unsupported_expression`). When NO later
+    #     argument constrains the implicit (only lambdas, or a single argument), the
+    #     cross-argument deferral cannot rescue it, but the goal can.
+    #
+    # `bidir_solve_codomain_from_goal` swallows unification failure, so a goal that
+    # does not inform the codomain leaves the accumulator untouched — the ordinary
+    # left-to-right slot solving then runs exactly as before, and the kernel
+    # re-checks the assembled term regardless. Restricted to a META-FREE goal so a
+    # still-open expected type (nothing to solve against) skips the pre-pass.
     {erased, rest} = Enum.split_while(slots, fn {_d, q} -> q == :erased end)
 
+    seed_from_goal? =
+      union_goal?(expected) or (not is_nil(expected) and not Unify.has_meta?(expected))
+
     {init, slots} =
-      if union_goal?(expected) do
+      if seed_from_goal? do
         seeded =
           erased
           |> Enum.reduce_while(init, &bidir_app_slot(&1, &2, names, ctx, env))

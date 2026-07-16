@@ -32,21 +32,21 @@ defmodule Cure.Stdlib.OpticCompositionRunTest do
     fn drop2() -> List(Int) = to_list(Std.Vector.drop(S(S(Z())), v3()))
 
     # ---- composed lens: focus {{x,y},z}.1.1 ----
-    fn outer_get(x: Tuple(Tuple(Int, Int), Int)) -> Tuple(Int, Int) = x.1
-    fn outer_put(y: Tuple(Int, Int)) -> (Tuple(Tuple(Int, Int), Int)) -> Tuple(Tuple(Int, Int), Int) = fn(x) -> %[y, x.2]
-    fn outer() -> Optic(Tuple(Tuple(Int, Int), Int), Tuple(Int, Int), LensKind) = lens(outer_get, outer_put)
+    # Getters AND setters are written INLINE (`fn(x) -> x.1`): with both `lens`
+    # arguments unannotated lambdas, the domain is fixed only by the declared
+    # return `Optic(_, _, LensKind)` goal — the case the `.i`-projection fix
+    # (goal-seeded implicit solving) unblocked.
+    fn outer() -> Optic(Tuple(Tuple(Int, Int), Int), Tuple(Int, Int), LensKind) =
+      lens(fn(x) -> x.1, fn(y) -> fn(x) -> %[y, x.2])
 
-    fn inner_get(x: Tuple(Int, Int)) -> Int = x.1
-    fn inner_put(y: Int) -> (Tuple(Int, Int)) -> Tuple(Int, Int) = fn(x) -> %[y, x.2]
-    fn inner() -> Optic(Tuple(Int, Int), Int, LensKind) = lens(inner_get, inner_put)
+    fn inner() -> Optic(Tuple(Int, Int), Int, LensKind) =
+      lens(fn(x) -> x.1, fn(y) -> fn(x) -> %[y, x.2])
 
     fn view_composed() -> Int = view(compose(outer(), inner()), %[%[7, 8], 9])
     fn set_composed() -> Tuple(Tuple(Int, Int), Int) = Std.Optic.set(compose(outer(), inner()), 42, %[%[7, 8], 9])
 
     # ---- composed traversal: exercises the take/drop rebuild-split ----
-    fn id_get(x: Int) -> Int = x
-    fn id_put(y: Int) -> (Int) -> Int = fn(x) -> y
-    fn idlens() -> Optic(Int, Int, LensKind) = lens(id_get, id_put)
+    fn idlens() -> Optic(Int, Int, LensKind) = lens(fn(x) -> x, fn(y) -> fn(x) -> y)
     fn idt() -> Optic(Int, Int, TraversalKind) = lens_to_trav(idlens())
 
     fn both_rebuild(w: Vector(Int, S(S(Z())))) -> Tuple(Int, Int) =
@@ -66,9 +66,9 @@ defmodule Cure.Stdlib.OpticCompositionRunTest do
 
     fns = [
       :v3, :take2, :drop2,
-      :outer_get, :outer_put, :outer, :inner_get, :inner_put, :inner,
+      :outer, :inner,
       :view_composed, :set_composed,
-      :id_get, :id_put, :idlens, :idt,
+      :idlens, :idt,
       :both_rebuild, :both_ext, :both, :collect, :bump
     ]
 
