@@ -37,7 +37,21 @@ DONE for the shared specs (self-reviewed); each SP plan still gets Stage 3.
 - Two-phase parse (pre-pass seeds `active_macros` from `use`+local defs) = SP1's
   architectural core (grounding doc). Soft-keyword `macro`; `{:macro_def,meta,rules}` AST.
 
-## CURRENT POSITION — 2026-07-15 (live pointer)
+## CURRENT POSITION — 2026-07-16 (live pointer)
+
+- **SP5.3 (auto full hygiene) COMPLETE** (`b6942c01` RED / `8d93fe39` GREEN /
+  `d2ccf817` gate-fix / plan v9 `d02405f3`). Every unannotated ordinary binder in
+  a Tier-2 `becomes` template is now auto-freshened by a scope-aware
+  `scoped_freshen/5` walk (let/block, match-arm+guard, lambda, single-clause
+  fn-def params, comprehension reverse-scope), with `<capture Name>` as the
+  opt-out and map-shaped family-signature binders left untouched. Frontend-only,
+  TCB delta zero. The full-suite gate caught one regression — freshened OTP
+  `start_link` params produced `initial$0` gensyms the Printer/lexer couldn't
+  round-trip — fixed by allowing `$` as an identifier continuation char
+  (`lexer.ex`). Full suite green: **4235 passed / 1 skipped / 0 failed**, antigen
+  318/318. This clears the last non-optional SP6 prerequisite.
+
+
 
 **The live implementation state is the `ORDERED TRANSPARENT BEAM PLAN` below plus the
 dated status blocks under `OPEN GATE — automatic message-code derivation` (current
@@ -51,9 +65,9 @@ actually stands:
   (reusable family surface + beginner-friendly `Std.Syntax` builders) is in progress;
   Phase 6 end-to-end / AtomVM verification remains.
 - **Open work:** retire the `contextual` proof exemption on `beam_ops self` via
-  reply-channel message-code derivation; finish the safe-vs-`Std.Syntax.Raw` split,
-  scope-aware hygiene for ordinary generated binders, and multi-channel `handle_call`
-  reply typing.
+  reply-channel message-code derivation; finish the safe-vs-`Std.Syntax.Raw` split
+  and multi-channel `handle_call` reply typing. (Scope-aware hygiene for ordinary
+  generated binders is now DONE — SP5.3, see the current-position pointer above.)
 
 The SP1–SP6 records below are the historical foundation log — superseded as the
 *current* pointer by the summary above, but retained for provenance.
