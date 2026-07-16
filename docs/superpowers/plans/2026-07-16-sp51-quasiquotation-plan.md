@@ -121,3 +121,33 @@ the `:quoted_syntax` data-boundary already respected by `apply_freshening`/
 - Byte-identical-Core gate is the guard against the port silently changing
   behaviour; capture the golden snapshot BEFORE the first `actor.cure` edit.
 - Ghost-writer commits, explicit-pathspec staging, one `mix` build at a time.
+
+## 8. Status (landed)
+
+- **Stages 1–4 LANDED** (`0c3e5a09`, `049daeb5`, `19cc6605`): `quote <form>` +
+  `$(e)` single / `$(e ...)` group splice — lexer (`$(`→`:splice_open`, `...`→
+  `:ellipsis`), parser (`parse_quote`/`parse_splice`), lowering
+  (`MacroSyntax.lower_quote`: repr → surface `Std.Syntax` constructor AST,
+  re-elaborated — Strategy B), elaborator `:quoted_syntax` clauses in BOTH
+  `elaborate_expr/3` and `elaborate_expr_typed/4`, and Stage-4
+  `:splice_outside_quote` diagnostic. 12 tests in
+  `test/cure/compiler/quasiquote_test.exs`. TCB delta 0, no `lib/cure/core/*`.
+- **Stage 5 port LANDED** (`b7a20c48`, `ea79fe85`, `6f2dc4dd`): the clean
+  static-skeleton builders across the whole OTP macro family rewritten to
+  `quote`/`$()` — **11 sites**: actor (6: `default_actor_init`,
+  `derive_actor_init`, `actor_handler_arm`, info/terminate/code_change
+  defaults), fsm (2: `callback_mode`, `init`), supervisor (1: nested
+  `%[:ok, %[$(strategy), $(children)]]` — two splices), app (2: `stop`,
+  `start_phase`). Covers no-splice literals/tuples/atoms, single splices, and
+  nested splices. The remaining builders are deliberately NOT ported: the call
+  handler's two-statement `let`-block (block-form `let` is unauthorable in
+  surface and would diverge) and the all-dynamic `function(...)` emitters
+  (name/params/type/body all vary — no static skeleton). `quote` earns its keep
+  only for static-skeleton-with-holes.
+- **Byte-identical-Core gate LANDED**: `test/cure/compiler/actor_quote_golden_test.exs`
+  freezes the compiled BEAM SHA256 of **6 representative generated modules**
+  (GDerived, GStructuredCall, GLifecycle, GFsmDerived, GSup, GApp). Every port
+  above kept all six byte-identical, proving the extra `quote` reflection attrs
+  are ignored by `from_syntax` and no line-provenance leaks. Behavioral suites
+  (actor_computed, fsm_computed, structured_otp) all green alongside.
+- **Stage 6**: full `mix test` alone = the closing gate (in progress).
