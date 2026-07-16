@@ -30,6 +30,25 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     :gen_server.stop(pid)
   end
 
+  test "family raw handle_cast without a messages declaration is polymorphic in the message" do
+    # No `messages` field: the family's raw branch must emit a message-polymorphic
+    # `handle_cast` (an inline free type var at the callback, NOT a module-level
+    # `typealias Message = m` with a free `m`, which the kernel cannot resolve).
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyNoMsg
+        state Int
+        handle_cast
+          %[:noreply, state]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyNoMsg", :handle_cast, [:anything, 7]) == {:noreply, 7}
+    assert apply(:"Cure.Generated.RawFamilyNoMsg", :handle_cast, [42, 7]) == {:noreply, 7}
+  end
+
   test "family raw handle_cast body may branch on the message with pickup" do
     source = """
     mod M

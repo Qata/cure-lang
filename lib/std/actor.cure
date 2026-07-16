@@ -64,7 +64,7 @@ mod Std.Actor
           None() -> [enum_type("ActorMessage", heads)]
           Some(_) -> []
         match derive_reply_contract(call_body, definition.state)
-          NoCall -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, info_body, terminate_body, code_change_body, heads, extra_declarations)
+          NoCall -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, info_body, terminate_body, code_change_body, heads, extra_declarations, true)
           InvalidCall(reason) -> Failure(reason, [])
           CallContract(request_heads, reply_type) -> emit_actor_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, heads, request_heads, reply_type, extra_declarations)
 
@@ -95,10 +95,13 @@ mod Std.Actor
     let code_change_body = match definition.code_change
       None() -> Raw(SOpaque)
       Some(value) -> value
+    let message_aliased = match definition.messages
+      None() -> false
+      Some(_) -> true
     let message_type = match definition.messages
       None() -> variable("m")
       Some(value) -> value
-    emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, [], cast_body, info_body, terminate_body, code_change_body, [], extra_declarations)
+    emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, [], cast_body, info_body, terminate_body, code_change_body, [], extra_declarations, message_aliased)
 
   fn actor_info_handler(info_body: Syntax) -> Syntax = match tag(info_body) == :raw
     true -> quote %[:noreply, state]
@@ -423,7 +426,21 @@ mod Std.Actor
             true -> ReplyType(variable("Bool"), :bool)
             false -> InvalidReply(:reply_type_not_derivable)
 
-  fn emit_actor_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, heads: List(Syntax), extra_declarations: List(Syntax)) -> Syntax =
+  ## `message_aliased` selects how the `handle_cast`/`handle_info` message type is
+  ## expressed. When true (a `messages` type or a derived enum is supplied), the
+  ## type is a module-level `typealias Message = <type>` referenced by both
+  ## callbacks — the byte-identical pre-1e shape (`emit_actor_parts_aliased`).
+  ## When false (a raw actor with no `messages`), the message is polymorphic: NO
+  ## module-level alias is emitted (a free `m` there has no binder and fails as
+  ## `:unknown_global`); instead each callback carries an inline free type var,
+  ## auto-generalized per function (`emit_actor_parts_poly`). The two branches are
+  ## separate functions so the aliased list literal — and thus its compiled bytes
+  ## — stays untouched.
+  fn emit_actor_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, heads: List(Syntax), extra_declarations: List(Syntax), message_aliased: Bool) -> Syntax = match message_aliased
+    true -> emit_actor_parts_aliased(module_name, module_expr, state_type, init_spec, message_type, message_declarations, cast_body, info_body, terminate_body, code_change_body, extra_declarations)
+    false -> emit_actor_parts_poly(module_name, module_expr, state_type, init_spec, message_declarations, cast_body, info_body, terminate_body, code_change_body, extra_declarations)
+
+  fn emit_actor_parts_aliased(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, extra_declarations: List(Syntax)) -> Syntax =
         let result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let start_type: Syntax = call("Effect", [variable("Tuple")])
@@ -437,6 +454,25 @@ mod Std.Actor
             function("init", [init_spec.parameter], init_type, init_spec.body),
             quote (fn handle_cast(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(handler_body)),
             quote (fn handle_info(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(info_handler)),
+            quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
+            quote (fn code_change(old: Atom, state: State, extra: Atom) -> Effect(Tuple(Atom, State)) = $(code_change_handler)),
+            function("start_link", init_spec.start_parameters, start_type, call("Std.Otp.start_link", [module_expr, init_spec.start_argument]))
+          ], extra_declarations))
+        ]))
+
+  fn emit_actor_parts_poly(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, extra_declarations: List(Syntax)) -> Syntax =
+        let result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
+        let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
+        let start_type: Syntax = call("Effect", [variable("Tuple")])
+        let handler_body: Syntax = actor_handler(cast_body)
+        let info_handler: Syntax = actor_info_handler(info_body)
+        let terminate_handler: Syntax = actor_terminate_handler(terminate_body)
+        let code_change_handler: Syntax = actor_code_change_handler(code_change_body)
+        block(append(message_declarations, [
+          gen_server_module(module_name, state_type, append([
+            function("init", [init_spec.parameter], init_type, init_spec.body),
+            function("handle_cast", [parameter("message", variable("m")), parameter("state", variable("State"))], result_type, handler_body),
+            function("handle_info", [parameter("message", variable("i")), parameter("state", variable("State"))], result_type, info_handler),
             quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
             quote (fn code_change(old: Atom, state: State, extra: Atom) -> Effect(Tuple(Atom, State)) = $(code_change_handler)),
             function("start_link", init_spec.start_parameters, start_type, call("Std.Otp.start_link", [module_expr, init_spec.start_argument]))
