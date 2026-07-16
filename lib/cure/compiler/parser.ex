@@ -4953,6 +4953,13 @@ defmodule Cure.Compiler.Parser do
       :lparen ->
         state = advance(state)
         {inner, state} = parse_type_atom(state)
+        # A PARENTHESISED function type (`(A) -> B`, `(A) -> B -> C`) is ONE grouped
+        # type — e.g. a higher-order constructor field `MkPid : ((m) -> R) -> Pid(m)`.
+        # The closing `)` bounds the arrow chain, so absorbing `->` here is
+        # unambiguous, unlike the ctor's own top-level arrow chain (which uses `->`
+        # to separate fields from the result index). `parse_type_atom` stays
+        # arrow-free everywhere else.
+        {inner, state} = parse_paren_arrow_tail(state, inner)
         state = expect(state, :rparen)
         {inner, state}
 
@@ -4970,6 +4977,33 @@ defmodule Cure.Compiler.Parser do
           _ ->
             {{:variable, [scope: :local], name}, state}
         end
+    end
+  end
+
+  # Inside a `(...)` group only: if an `->` follows the first atom, collect the
+  # whole arrow chain `A -> B -> …  -> Ret` into the same `Function` node
+  # `parse_type_arrow` produces, so a parenthesised function type is one grouped
+  # type. Absent an arrow this is the identity (a plain parenthesised type).
+  defp parse_paren_arrow_tail(state, first) do
+    case peek(state) do
+      %Token{type: :arrow} ->
+        {parts, state} = collect_paren_arrow(state, [first])
+        {{:function_call, [name: "Function", function_type: true], parts}, state}
+
+      _ ->
+        {first, state}
+    end
+  end
+
+  defp collect_paren_arrow(state, acc) do
+    case peek(state) do
+      %Token{type: :arrow} ->
+        state = advance(state)
+        {atom, state} = parse_type_atom(state)
+        collect_paren_arrow(state, [atom | acc])
+
+      _ ->
+        {Enum.reverse(acc), state}
     end
   end
 

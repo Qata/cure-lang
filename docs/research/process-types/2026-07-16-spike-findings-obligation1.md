@@ -164,10 +164,46 @@ handler `with r … reply(cap, …) per branch` type-checks) remains reach-pinne
 future slice — it improves authoring nicety, not expressiveness. Root cause + two
 sound design options are recorded above.
 
-## Next step
+## Obligation (2) — DISCHARGED (strong operational form)
 
-Obligation (2) — send-safety for a clause-DERIVED pid message index (F-1). Prove a
-well-typed `send(p, m)` can only deliver a message the actor has a clause for, when
-the index is derived from the handler clauses rather than annotated (NVLang's
-`Extract-Msg`/`T-Spawn` give the annotated-index recipe; the delta is derivation).
-Independent of obligations (1) and #2b.
+Send-safety for a clause-DERIVED pid message index (F-1), in `Std.Otp.Proof`:
+
+- `type Pid(m: Type)` with `MkPid : ((m) -> Response) -> Pid(m)` — the pid CARRIES
+  its handler, so its message index `m` is exactly the stored handler's DOMAIN.
+- `spawn_actor({m}, handler: (m) -> Response) -> Pid(m)` — the index is DERIVED
+  (the implicit `m` inferred from the handler), not annotated (NVLang's T-Spawn
+  reads it off a receive annotation; this is the open half).
+- `post({m}, p: Pid(m), msg: m) -> Response = match p | MkPid(h) -> h(msg)` — `post`
+  requires `msg` at the derived type AND DISPATCHES it through the stored handler.
+
+Operational send-safety: a well-typed `post` delivers to the handler the pid
+carries, which must be TOTAL (kernel-certified exhaustive) to exist, so every
+message of the derived type is handled. Negatives reject: `ob2_neg_wrong_msg`
+(`:index_mismatch` — a message not of the actor's type), `ob2_neg_nontotal`
+(`:missing_branch` — a non-exhaustive handler cannot form). `test/oracle/otp/`
+mirrors all three in Idris, `rel=same`.
+
+This needed one gap fix — **higher-order constructor fields**. A parenthesised
+function-typed ctor field (`MkPid : ((m) -> Response) -> Pid(m)`) did not parse:
+the GADT ctor grammar (`parse_type_atom`) is arrow-free so the ctor's own arrow
+chain separates fields, but a `(...)`-grouped function type is unambiguous and is
+now absorbed (`parse_paren_arrow_tail`, parser.ex). The elaborator already handled
+such fields; the gap was purely the parser.
+
+## Still open — roadblock #2b (ergonomic branching handler)
+
+The one gap NOT closed: the branching handler `with r … reply(cap, …) per branch`
+still over-rejects. Root cause confirmed by dumping the core term: `with`'s
+Eq-transport encodes each branch's sibling as `transport_case(prf) applied to cap`
+(a collapsible `:case` = identity on `cap`), which relevance ω-scales pre-erasure.
+This encoding is HOSTILE to linear accounting in BOTH directions — it over-counts
+for dup (the ω-scale) and would MASK a drop if naively counted once (the erased
+transport looks like a use). The sound fix is to REPLACE the transport with
+motive-generalization — `(case r of λcap':linear. body) cap`, a real linear binder
+per branch that `check_binder` polices directly, with the convoy argument scaled by
+the branch grade (not ω). That is a larger slice (an encoding rewrite in
+`elaborate_with`, plus verifying the `Π(ReplyCap(w))` motive domain reifies for a
+param family — the reach-pinned reify gap) and is left for a follow-up. Obligation
+(1) does not need it: the split authoring (`serve = reply(cap, handle(r))`) is a
+sound formalization and is now hardened by the `let`-laundering soundness fix
+(`2026-07-16-let-linearity-soundness-fix.md`).

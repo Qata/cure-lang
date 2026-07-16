@@ -87,4 +87,49 @@ mod Std.Otp.Proof
   ## definitionally equal to `handle`'s result type, so no sibling refinement is
   ## needed; the per-constructor content is carried entirely by `handle`.
   fn serve(r: Req, cap :linear ReplyCap(r)) -> Replied = reply(cap, handle(r))
+
+  ## ── Obligation (2): send-safety for a clause-DERIVED pid message index (F-1) ──
+  ##
+  ## **The result.** A process handle `Pid(m)` is indexed by the TYPE of message it
+  ## accepts, and `post` may deliver only a message of that type. The novelty over
+  ## NVLang (2512.05224) is that the index is *derived* from the handler, not
+  ## *annotated*: `spawn_actor` takes a handler and returns `Pid(<its domain>)`, so
+  ## the message vocabulary is exactly the handler's domain. `post` then DISPATCHES
+  ## through the handler the pid carries, so a well-typed `post` always reaches a
+  ## clause — and because a handler must be TOTAL (kernel-certified exhaustive) to
+  ## exist, every message of the derived type is handled: send-safe.
+  ##
+  ## Soundness evidence is again the rejection of violations, in `test/oracle/otp/`:
+  ##   * `ob2_send_safe`     accept/accept — `post(spawn_actor(dispatch), msg)`
+  ##   * `ob2_neg_wrong_msg` reject/reject — a message NOT of the actor's type
+  ##   * `ob2_neg_nontotal`  reject/reject — a non-exhaustive handler cannot form
+
+  ## A cast-style message vocabulary (no reply) and the actor's response.
+  type Msg = Inc | Dec | Query(Reply0)
+  type Response = Ack | Count(Reply0)
+
+  ## A process handle that CARRIES its handler; its message index `m` is exactly the
+  ## stored handler's DOMAIN (a higher-order constructor field).
+  type Pid(m: Type) indices ()
+    MkPid : ((m) -> Response) -> Pid(m)
+
+  ## spawn DERIVES the pid's message index from the handler's domain — the implicit
+  ## `m` is inferred from the handler's type; nothing is annotated.
+  fn spawn_actor({m: Type}, msg_handler: (m) -> Response) -> Pid(m) = MkPid(msg_handler)
+
+  ## post requires the message to be of the pid's derived type `m`, and DELIVERS it
+  ## by dispatching through the stored handler — operational send-safety.
+  fn post({m: Type}, p: Pid(m), msg: m) -> Response = match p
+    MkPid(h) -> h(msg)
+
+  ## The handler "clauses" — total over Msg (kernel-certified exhaustive).
+  fn dispatch(m: Msg) -> Response = match m
+    Inc()     -> Ack
+    Dec()     -> Ack
+    Query(x)  -> Count(x)
+
+  ## A well-typed client: post a Msg to the actor spawned from `dispatch`. The pid is
+  ## `Pid(Msg)` (index derived from `dispatch`'s domain), `post` forces `msg : Msg`
+  ## and dispatches it through the total handler — no unhandled message is reachable.
+  fn deliver_client(msg: Msg) -> Response = post(spawn_actor(dispatch), msg)
 end
