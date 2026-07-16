@@ -2478,23 +2478,64 @@ defmodule Cure.Elab.Elaborator do
           # scrutinee's family key, which is only known here. Typed-pattern arms
           # (`n: Int`) become ordinary ctor-pattern arms, so coverage, exhaustiveness
           # and totality all come from the existing machinery below.
-          with {:ok, arms} <- desugar_union_arms(arms, dname, names, env),
-               {:ok, branches, join} <-
-                 elaborate_branches(
-                   arms,
-                   names,
-                   ctx,
-                   env,
-                   dname,
-                   idx_vals,
-                   param_vals,
-                   scrut_term,
-                   result_type_term,
-                   carried,
-                   motive
-                 ) do
-            case_term = wrap_join({:case, scrut_term, motive, branches}, join)
-            {:ok, if(carried, do: {:app, case_term, mk_refl(carried.idx_term)}, else: case_term)}
+          with {:ok, arms} <- desugar_union_arms(arms, dname, names, env) do
+            standard =
+              with {:ok, branches, join} <-
+                     elaborate_branches(
+                       arms,
+                       names,
+                       ctx,
+                       env,
+                       dname,
+                       idx_vals,
+                       param_vals,
+                       scrut_term,
+                       result_type_term,
+                       carried,
+                       motive
+                     ) do
+                case_term = wrap_join({:case, scrut_term, motive, branches}, join)
+                {:ok, if(carried, do: {:app, case_term, mk_refl(carried.idx_term)}, else: case_term)}
+              end
+
+            # Item C: the standard motive refines the RETURN per branch but not the
+            # types of scrutinee-dependent SIBLINGS (`w : ReplyOf(r)`), so a plain
+            # `match r` that reads such a sibling rejects. Only when the standard path
+            # fails, and only for a non-indexed family matched on a VARIABLE with such
+            # siblings, retry via motive-generalization (the same machinery `with r`
+            # uses). Working matches keep the standard path untouched.
+            case standard do
+              {:ok, _} ->
+                standard
+
+              {:error, _} = err ->
+                siblings =
+                  if family.indices == [] and match?({:var, _}, scrut_term) do
+                    case collect_with_siblings(scrut_term, names, ctx, env) do
+                      {:ok, s} -> s
+                      _ -> []
+                    end
+                  else
+                    []
+                  end
+
+                if siblings != [] do
+                  elaborate_motivegen_case(
+                    scrut_term,
+                    scrut_type,
+                    dname,
+                    combined_vals,
+                    siblings,
+                    arms,
+                    result_type_term,
+                    names,
+                    ctx,
+                    env
+                  )
+                else
+                  err
+                end
+            end
           end
 
         _ ->
@@ -2719,49 +2760,18 @@ defmodule Cure.Elab.Elaborator do
               # convoy. Restricted to ONE sibling; the proof form and multi-sibling keep
               # the Eq-arrow path below.
               family.indices == [] and proof_name == nil and siblings != [] ->
-                scrut_type_term = resplit_data(Quote.reify(scrut_type, Context.length(ctx)), env)
-                m = length(siblings)
-                g_abs = abstract_term(result_type_term, scrut_term, 0)
-
-                # motive = λw. Π(s₁: H₁[e↦w]) … Π(sₘ: Hₘ[e↦w]). G[e↦w]. Siblings are
-                # independent (`collect_with_siblings` rejects sibling-references-sibling),
-                # so at Π position j (1-based) the domain Hⱼ[e↦w] shifts +(j-1) past the
-                # earlier binders, and G shifts +m past all of them.
-                motive_body =
-                  siblings
-                  |> Enum.with_index(1)
-                  |> Enum.reverse()
-                  |> Enum.reduce(Subst.shift(g_abs, m, 0), fn {%{type_term: h_ctx}, j}, acc ->
-                    h_abs = abstract_term(h_ctx, scrut_term, 0)
-                    {:pi, Cure.Core.Grade.unrestricted(), Subst.shift(h_abs, j - 1, 0), acc}
-                  end)
-
-                motive = {:lam, Cure.Core.Grade.unrestricted(), scrut_type_term, motive_body}
-
-                pc = Inductive.param_count(env, dname)
-                {param_vals, _idx_vals} = Enum.split(combined_vals, pc)
-
-                cfg = %{
-                  names: names,
-                  ctx: ctx,
-                  env: env,
-                  dname: dname,
-                  param_vals: param_vals,
-                  motive: motive,
-                  sibling_names: Enum.map(siblings, & &1.name)
-                }
-
-                with {:ok, branches} <- elaborate_with_motivegen_branches(arms, cfg) do
-                  case_term = {:case, scrut_term, motive, branches}
-                  # (case e of …) s₁ … sₘ — apply the case to the ORIGINAL siblings, in
-                  # motive-Π order (s₁ first).
-                  applied =
-                    Enum.reduce(siblings, case_term, fn %{index: idx}, acc ->
-                      {:app, acc, {:var, idx}}
-                    end)
-
-                  {:ok, applied}
-                end
+                elaborate_motivegen_case(
+                  scrut_term,
+                  scrut_type,
+                  dname,
+                  combined_vals,
+                  siblings,
+                  arms,
+                  result_type_term,
+                  names,
+                  ctx,
+                  env
+                )
 
               # Capability B (proof / sibling transport) — the Eq-arrow motive.
               # This slice's eq-arrow motive is built for a NON-indexed scrutinee
@@ -3174,6 +3184,63 @@ defmodule Cure.Elab.Elaborator do
         end)
 
       {:ok, {cname, arity, {:lam, Cure.Core.Grade.unrestricted(), eq_dom_term, wrapped}}}
+    end
+  end
+
+  # Motive-generalization elimination (shared by `with` and plain `match`): refine
+  # `m` scrutinee-dependent siblings by generalizing them into the case motive and
+  # binding a fresh refined λ per branch, then apply the case to the ORIGINAL
+  # siblings. `motive = λw. Π(s₁: H₁[e↦w]) … Π(sₘ: Hₘ[e↦w]). G[e↦w]` (independent
+  # siblings, so domain j shifts +(j-1) and G shifts +m). Non-indexed family, variable
+  # scrutinee. A linear sibling stays linear (see the relevance convoy rule).
+  defp elaborate_motivegen_case(
+         scrut_term,
+         scrut_type,
+         dname,
+         combined_vals,
+         siblings,
+         arms,
+         result_type_term,
+         names,
+         ctx,
+         env
+       ) do
+    scrut_type_term = resplit_data(Quote.reify(scrut_type, Context.length(ctx)), env)
+    m = length(siblings)
+    g_abs = abstract_term(result_type_term, scrut_term, 0)
+
+    motive_body =
+      siblings
+      |> Enum.with_index(1)
+      |> Enum.reverse()
+      |> Enum.reduce(Subst.shift(g_abs, m, 0), fn {%{type_term: h_ctx}, j}, acc ->
+        h_abs = abstract_term(h_ctx, scrut_term, 0)
+        {:pi, Cure.Core.Grade.unrestricted(), Subst.shift(h_abs, j - 1, 0), acc}
+      end)
+
+    motive = {:lam, Cure.Core.Grade.unrestricted(), scrut_type_term, motive_body}
+    pc = Inductive.param_count(env, dname)
+    {param_vals, _idx_vals} = Enum.split(combined_vals, pc)
+
+    cfg = %{
+      names: names,
+      ctx: ctx,
+      env: env,
+      dname: dname,
+      param_vals: param_vals,
+      motive: motive,
+      sibling_names: Enum.map(siblings, & &1.name)
+    }
+
+    with {:ok, branches} <- elaborate_with_motivegen_branches(arms, cfg) do
+      case_term = {:case, scrut_term, motive, branches}
+
+      applied =
+        Enum.reduce(siblings, case_term, fn %{index: idx}, acc ->
+          {:app, acc, {:var, idx}}
+        end)
+
+      {:ok, applied}
     end
   end
 
