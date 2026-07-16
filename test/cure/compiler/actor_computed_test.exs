@@ -376,4 +376,25 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert {:error, {:computed_macro_error, _, {:author_failure, "non_constructor_pattern", []}}} =
              Cure.Compiler.compile_and_load(source, emit_events: false)
   end
+
+  test "structured actor threads a body declaration into the generated module" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.WithBody
+        state Int
+        on_cast
+          Inc -> state + 1
+        body
+          fn bump(n: Int) -> Int = n + 1
+
+    fn make_message() -> ActorMessage = Inc
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.WithBody", :bump, [4]) == 5
+    assert apply(:"Cure.Generated.WithBody", :handle_cast, [:Inc, 0]) == {:noreply, 1}
+  end
 end
