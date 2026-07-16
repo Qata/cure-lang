@@ -192,8 +192,16 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   cannot form an `MRef` (uninhabited `Accepted(TDown)`), so unmonitored processes are
   DOWN-safe by construction. Composes with `Std.Otp.Safety` (`SDown` is one more typed
   delivery rule). Kernel-checked, Idris-mirrored (`test/oracle/otp/monitor`, rel=same),
-  tests in `otp_monitor_test.exs`. **Remaining:** links (bidirectional exit signals),
-  `demonitor`, and the `DOWN` reason/ref payload (abstracted to a bare tag here).
+  tests in `otp_monitor_test.exs`. **Links DONE too — `Std.Otp.Link`
+  (`lib/std/otp_link.cure`).** The bidirectional companion: on a linked peer's death the
+  outcome is gated by the `trap_exit` flag — a TRAPPING process receives a well-typed
+  `EXIT` message (`SExitTrap`, requiring `Accepted(TExit)` carried by `LinkTrap`), a
+  NON-trapping process propagates to a terminal `Dead` state (`SExitProp`). `preservation`
+  holds for BOTH outcomes — the novel content is the message-vs-death DISPATCH on the flag,
+  neither branch reaching an ill-typed state. The step rules are gated to the correct flag
+  (a wrong-flag step is unconstructible). Idris-mirrored (`test/oracle/otp/link`, rel=same),
+  tests in `otp_link_test.exs`. **Remaining in G3:** `demonitor`/unlink, cascading-exit
+  liveness, and the `DOWN`/`EXIT` reason/ref payload (abstracted to bare tags here).
 - **G4. Timers / `send_after` / `receive after`.** **No paper** — KWC *explicitly*
   excludes timers, Core Erlang omits them, mailbox types list timeouts as future work.
   → Discharge against OTP docs (and the live AtomVM `send_after` cancellation defect).
