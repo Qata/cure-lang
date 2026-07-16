@@ -527,7 +527,32 @@ defmodule Cure.Migrate do
 
   # The type + constructor names a `.cure` source at `path` exports. Fail-open:
   # any read/lex/parse failure yields `:error` and contributes nothing.
+  #
+  # Memoized per process, keyed by (path, mtime): a fixpoint re-resolves every import
+  # on each pass, and each file's lint re-reads its siblings, so without this the same
+  # sibling sources are read+lexed+parsed O(files × passes) times — quadratic in the
+  # stdlib size, which times out the whole-stdlib monotone test as the tree grows. The
+  # mtime in the key keeps it correct if a source is rewritten mid-process (temp files).
   defp exported_names_of_file(path) do
+    mtime = case File.stat(path, time: :posix) do
+      {:ok, %File.Stat{mtime: t}} -> t
+      _ -> :nostat
+    end
+
+    key = {:mig_exports, path, mtime}
+
+    case Process.get(key) do
+      nil ->
+        result = compute_exported_names_of_file(path)
+        Process.put(key, result)
+        result
+
+      cached ->
+        cached
+    end
+  end
+
+  defp compute_exported_names_of_file(path) do
     with {:ok, src} <- File.read(path),
          {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false),
          {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, emit_events: false) do
