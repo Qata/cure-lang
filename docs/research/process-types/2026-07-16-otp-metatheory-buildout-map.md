@@ -183,7 +183,17 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   piece.
 - **G3. Typed monitors / links / DOWN.** NVLang has `MonitorRef` in the grammar only
   (prose §2.5, no rules/theorems); Core Erlang omits monitors; KWC has the *operational*
-  monitor model but untyped. → Cure builds the typing + the DOWN-as-message discipline.
+  monitor model but untyped. → **DONE for monitors — `Std.Otp.Monitor`
+  (`lib/std/otp_monitor.cure`).** The typing rule: a monitor reference is EVIDENCE its
+  holder accepts `DOWN` (`MkMRef : Accepted(TDown) -> MRef`; `monitor_accepts` reads it
+  back). The death step `SDown` delivers `DOWN` into the monitor's ether and requires an
+  `MRef`, so `preservation` shows delivery preserves well-typedness — a monitor never
+  gets a `DOWN` it cannot handle. Dually, a receiver whose vocabulary excludes `DOWN`
+  cannot form an `MRef` (uninhabited `Accepted(TDown)`), so unmonitored processes are
+  DOWN-safe by construction. Composes with `Std.Otp.Safety` (`SDown` is one more typed
+  delivery rule). Kernel-checked, Idris-mirrored (`test/oracle/otp/monitor`, rel=same),
+  tests in `otp_monitor_test.exs`. **Remaining:** links (bidirectional exit signals),
+  `demonitor`, and the `DOWN` reason/ref payload (abstracted to a bare tag here).
 - **G4. Timers / `send_after` / `receive after`.** **No paper** — KWC *explicitly*
   excludes timers, Core Erlang omits them, mailbox types list timeouts as future work.
   → Discharge against OTP docs (and the live AtomVM `send_after` cancellation defect).
