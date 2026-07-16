@@ -64,10 +64,12 @@ actually stands:
   `syntax family` + expander (the structured-family surface, 2026-07-15). Phase 5/5a
   (reusable family surface + beginner-friendly `Std.Syntax` builders) is in progress;
   Phase 6 end-to-end / AtomVM verification remains.
-- **Open work:** retire the `contextual` proof exemption on `beam_ops self` via
-  reply-channel message-code derivation; finish the safe-vs-`Std.Syntax.Raw` split
-  and multi-channel `handle_call` reply typing. (Scope-aware hygiene for ordinary
-  generated binders is now DONE — SP5.3, see the current-position pointer above.)
+- **Open work:** the `contextual` proof exemption on `beam_ops self` is now
+  RETIRED (`a543cfb9`, via parametric-erased acceptance — NOT the earlier
+  reply-channel-derivation idea, which was unnecessary). Remaining optional polish:
+  finish the safe-vs-`Std.Syntax.Raw` split and multi-channel `handle_call` reply
+  typing. (Scope-aware hygiene for ordinary generated binders is DONE — SP5.3, see
+  the current-position pointer above.)
 
 **DONE-gate assessment (2026-07-16, verified against source + green tests).** The
 host-side spine is functionally COMPLETE and green. Concretely proven this fire:
@@ -102,22 +104,45 @@ host-side spine is functionally COMPLETE and green. Concretely proven this fire:
    *union* reply type would be sound (Erlang replies are heterogeneous) but is a
    deliberate behavior-widening decision, not a defect — deferred; keep as-is
    (lower-risk) absent an operator call.
-2. *`contextual` retirement* — optional self-proof polish (option B synthetic
-   frame); rules are checked at real use sites regardless.
+2. *`contextual` retirement* — CLOSED for the nullary-parametric case
+   (`beam_ops self`, `a543cfb9`, see the gate-(a) block below). The remaining
+   `contextual` rules supply arguments and are intrinsically use-site-bound —
+   not a gap.
 3. *Safe/raw helper migration* — additive; existing helpers stay source-compatible.
 
-**Two gates stand between here and the REMAINING-WORK §8 DONE bar** (do NOT
-`CronDelete` until both close): (a) the SP3 *generative* proof still EXEMPTS the
-`contextual` OTP surfaces, so "generatively proven" is not fully met for them
-(option-B slice, bounded + host-testable); (b) ESP32 **hardware** verification —
+**GATE (a) CLOSED for `beam_ops self` — 2026-07-16 (`a543cfb9`).** The SP3
+generative proof now PROVES the nullary all-erased-implicit case instead of
+exempting it. `check_expression_expansion` (`macro_fuzz.ex`) accepts a bare
+nullary global call whose every parameter is erased when the sole obstruction is
+`{:unsolved_metavariables, name}`: an erased binder is computationally
+irrelevant, so the expansion is well-typed at a schematic type for every
+instantiation by parametricity (the same reason an ungeneralized polymorphic term
+type-checks). Realized as a pure predicate `parametric_erased_call?/3` reading the
+callee signature from `Env.get_def` (`quantities` all `:erased` + an all-erased Pi
+spine of matching arity, non-Pi codomain) — no elaborator error-contract change,
+no new user surface, TCB delta ZERO. `beam_ops self` (`otp.cure:13`) dropped its
+`contextual` qualifier and now flows through the ordinary proof batch; both guards
+(bare-nullary shape, every-parameter-erased) are unit-tested directly. Full suite
+**4237 passed / 1 skipped / 0 failed**, Antigen 318/318. The chosen approach
+supersedes the earlier option-A/option-B framing — neither was needed. The
+*remaining* `contextual` `beam_ops` rules (`tell`/`call`/`cast`/`spawn`/… ) all
+SUPPLY arguments and are legitimately contextual (their typed-pid/reply obligations
+are only discharged at a real use site); they are NOT nullary-parametric and stay
+exempt by design. So gate (a) is now closed for the only rule where it is soundly
+closable use-site-free; the SP3 exemption that remains is intrinsic, not a gap.
+
+**One gate remains between here and the REMAINING-WORK §8 DONE bar** (do NOT
+`CronDelete` until it closes): (b) ESP32 **hardware** verification —
 the project's raison d'être, a distinct observable-flashing work mode, not a host
 `mix test`. The generic-unix half of the runtime story is now CLOSED (verified
 above, all eight surfaces), so gate (b)'s residual is specifically the physical
 ESP32 flash + serial-observed run — which per CLAUDE.md must be observable and
 is realistically operator-driven; an autonomous host fire can build/package the
-`.avm` but cannot observe the board. Sequence: option-B generative coverage
-(host-testable, autonomous-doable) → hardware run (operator-driven). Everything
-else — multi-channel reply typing, safe/raw helper migration — is optional polish.
+`.avm` but cannot observe the board. With gate (a) now closed for `self` (above)
+and the remaining `contextual` rules intrinsically use-site-bound, the only
+autonomous host work left is optional polish — multi-channel reply typing and
+safe/raw helper migration. The DONE bar is otherwise met on host; hardware is the
+last real gate.
 
 The SP1–SP6 records below are the historical foundation log — superseded as the
 *current* pointer by the summary above, but retained for provenance.

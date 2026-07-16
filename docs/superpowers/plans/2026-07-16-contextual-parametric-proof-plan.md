@@ -1,5 +1,21 @@
 # Plan — retire `contextual` on parametric-erased `beam_ops` rules (gate a)
 
+> **STATUS: EXECUTED 2026-07-16 (`a543cfb9`).** Landed for `beam_ops self` (the
+> only nullary all-erased-implicit `beam_ops` rule). Full suite 4237 passed,
+> Antigen 318/318, TCB delta zero. Deviations from the plan below, all
+> simplifications: (1) Task 3 (distinct `:proven_parametric` manifest status)
+> was DROPPED — parametric acceptance is a genuine well-typedness proof (the term
+> is well-typed at a schematic type, unsolved only in erased/irrelevant
+> positions), so a plain `:passed` is honest and no manifest surgery was needed.
+> (2) The predicate reads the callee key straight from the
+> `{:unsolved_metavariables, name}` error (the elaborator already resolves it), so
+> no name-resolution step was required. (3) Guards are unit-tested by exposing the
+> pure `parametric_erased_call?/3` — a relevant-implicit behavioral negative is
+> unauthorable (implicits are erased-by-default; a nullary relevant-explicit call
+> just partial-applies), so direct predicate unit tests are the faithful check.
+> (4) Only `self` qualified; every other `beam_ops` rule supplies arguments and
+> stays `contextual` by design (intrinsically use-site-bound, not a gap).
+
 **Branch:** `core-let-binder` (accumulating stack). Work in the worktree root
 `.claude/worktrees/core-let-binder`, never the parent clone.
 
