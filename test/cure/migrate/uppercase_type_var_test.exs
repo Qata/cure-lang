@@ -343,4 +343,68 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     assert out =~ "Pair(Int, ka)"
     assert Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
+
+  test "a structured macro family's generated record type is left alone, not lowercased" do
+    # `syntax family FsmDefinition` synthesizes a record `FsmDefinitionSyntax`
+    # (`MacroFamily.syntax_type/1`) during lowering, so it is absent from the raw
+    # source AST `build_ctx/1` walks. A sibling expander annotated with that
+    # generated type (`definition: FsmDefinitionSyntax`) was therefore misread as
+    # carrying a free type variable and lowercased to `fsmdefinitionsyntax`,
+    # corrupting the stdlib actor/fsm/app/supervisor expanders. `build_ctx/1`
+    # must reproduce the macro lowering to learn the generated record names.
+    src = """
+    mod M
+      macro fsm <name: ModuleName>
+        syntax family FsmDefinition
+          state Type
+        accepts FsmDefinition
+        expands with expand_fsm
+      fn expand_fsm(definition: FsmDefinitionSyntax) -> Int = 0
+    """
+
+    {out, warns} = migrate(src, "family.cure")
+    assert out =~ "definition: FsmDefinitionSyntax"
+    refute out =~ "fsmdefinitionsyntax"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a legacy computed-by macro's generated input record type is left alone" do
+    # A legacy `syntax <keyword> … computed by …` rule synthesizes an input record
+    # named `syntax_type(keyword)` — here `widget` -> `WidgetSyntax` — with a field
+    # per hole. Same gap as the structured family: the record is generated during
+    # lowering, absent from the source AST, so an expander's `input: WidgetSyntax`
+    # signature must not be misread as a free type variable.
+    src = """
+    mod M
+      macro Widgets
+        syntax widget <name: ModuleName> value <v: Type> derive <b: Code> contextual computed by expand_widget
+      fn expand_widget(input: WidgetSyntax) -> Int = 0
+    """
+
+    {out, warns} = migrate(src, "legacy.cure")
+    assert out =~ "input: WidgetSyntax"
+    refute out =~ "widgetsyntax"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a genuinely free type var still warns even alongside a macro declaration" do
+    # Guards against the macro-name collection degenerating into blanket
+    # suppression: a real free type var `T` in a sibling function must still be
+    # flagged when the file also contains a macro declaration.
+    src = """
+    mod M
+      macro fsm <name: ModuleName>
+        syntax family FsmDefinition
+          state Type
+        accepts FsmDefinition
+        expands with expand_fsm
+      fn expand_fsm(definition: FsmDefinitionSyntax) -> Int = 0
+      fn id(x: T) -> T = x
+    """
+
+    {out, warns} = migrate(src, "mixed.cure")
+    assert out =~ "x: t"
+    assert out =~ "definition: FsmDefinitionSyntax"
+    assert Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
 end
