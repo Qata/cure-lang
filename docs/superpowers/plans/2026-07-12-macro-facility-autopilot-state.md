@@ -69,6 +69,42 @@ actually stands:
   and multi-channel `handle_call` reply typing. (Scope-aware hygiene for ordinary
   generated binders is now DONE — SP5.3, see the current-position pointer above.)
 
+**DONE-gate assessment (2026-07-16, verified against source + green tests).** The
+host-side spine is functionally COMPLETE and green. Concretely proven this fire:
+- `test/cure/compiler/actor_computed_test.exs` (36 green with
+  `declaration_macro_expansion_test.exs`) executes the FULL DONE chain for a
+  user-defined `actor` macro: `Cure.Compiler.compile_and_load/2` runs
+  parse→expand→**derive** (message type + reply contract from handler clauses)
+  →elaborate→codegen→load real BEAM, then `start_link` →
+  `:gen_server.cast(pid, :Inc)` → `:gen_server.stop(pid)` runs the expansion as a
+  LIVE GenServer. "A user-defined macro parses, expands, and its expansion runs"
+  is met on the host BEAM (≡ AtomVM semantics per CLAUDE.md).
+- Structured `actor`/`fsm`/`sup`/`app` surfaces, the safe-vs-`Std.Syntax.Raw`
+  boundary (`unsafe_*` + `validate_expansion/1`), and scope-set hygiene (SP5.3)
+  are all landed and green. The generic-unix AtomVM run exists for the
+  supervisor/application proof (this doc, "Structured application status").
+
+**The remaining residuals are all optional or out-of-host-scope — NONE is a bug:**
+1. *Multi-channel `handle_call` reply typing* — an ENHANCEMENT, not a gap.
+   `infer_reply_tail` (`actor.cure:355`) today rejects arms with differing reply
+   types (`:inconsistent_reply_types`), which is the recorded fork-#1 default
+   ("reject rather than guess") WITH an explicit escape (the
+   `actor … call … returns <reply_type>` rule, `actor.cure:77`). Accepting a
+   *union* reply type would be sound (Erlang replies are heterogeneous) but is a
+   deliberate behavior-widening decision, not a defect — deferred; keep as-is
+   (lower-risk) absent an operator call.
+2. *`contextual` retirement* — optional self-proof polish (option B synthetic
+   frame); rules are checked at real use sites regardless.
+3. *Safe/raw helper migration* — additive; existing helpers stay source-compatible.
+
+**Two gates stand between here and the REMAINING-WORK §8 DONE bar** (do NOT
+`CronDelete` until both close): (a) the SP3 *generative* proof still EXEMPTS the
+`contextual` OTP surfaces, so "generatively proven" is not fully met for them
+(option-B slice); (b) ESP32 **hardware** verification (Phase 6 proper) — the
+project's raison d'être, a distinct observable-flashing work mode, not a host
+`mix test`. Sequence: option-B generative coverage (bounded, host-testable) →
+hardware run. Everything else is polish.
+
 The SP1–SP6 records below are the historical foundation log — superseded as the
 *current* pointer by the summary above, but retained for provenance.
 
