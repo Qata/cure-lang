@@ -944,13 +944,22 @@ defmodule Cure.Elab.Declarations do
 
       true ->
         # A non-constructor call body is inferred, then (mirroring the constructor
-        # branch above) retried in *checking* mode when inference fails only because
-        # an implicit stayed unsolved. This lets an implicit determined by NEITHER
-        # argument — only by the declared return type (`mk(Z()) : Const(Nat, Bool)`,
-        # whose phantom `{b}` no argument fixes) — be solved from the goal. Additive:
-        # the checked retry runs only after inference errored with
-        # `:unsolved_metavariables`, and the original error is surfaced if it too
-        # fails, so every currently-accepted or -rejected body is unchanged.
+        # branch above, and `elaborate_branch_body`'s function-call arm) retried in
+        # *checking* mode when inference fails only because it could not synthesise a
+        # standalone type. Two such failures both want the goal threaded in:
+        #
+        #   * `:unsolved_metavariables` — an implicit determined by NEITHER argument,
+        #     only by the declared return type (`mk(Z()) : Const(Nat, Bool)`, whose
+        #     phantom `{b}` no argument fixes) — solved from the goal;
+        #   * `:unsupported_expression` — an argument that cannot infer standalone,
+        #     the load-bearing case being an unannotated lambda whose domain only the
+        #     goal fixes (`mk(fn(x) -> x.1) : Box(Tuple(Int,Int), Int)`): checking
+        #     against the goal solves the callee's implicit `s`/`a` first, giving the
+        #     lambda a concrete (tuple) domain so its `.i` projection lowers.
+        #
+        # Additive: the checked retry runs only after inference already errored, and
+        # the original error is surfaced if the retry also fails, so every
+        # currently-accepted or -rejected body is unchanged.
         case Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
           {:ok, term, type} ->
             # `coerce_union/5` is a strict no-op unless the declared return type is a
@@ -959,7 +968,9 @@ defmodule Cure.Elab.Declarations do
             # narrow(n)` would never be injected or widened.
             {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
 
-          {:error, {:unsolved_metavariables, _}} = orig ->
+          {:error, reason} = orig
+          when is_tuple(reason) and
+                 elem(reason, 0) in [:unsolved_metavariables, :unsupported_expression] ->
             case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do
               {:ok, term} -> {:ok, term}
               {:error, _} -> orig

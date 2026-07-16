@@ -119,4 +119,73 @@ defmodule Cure.Compiler.PrinterFidelityTest do
     discard = assert_roundtrips("mod M\n  fn go(p: Int) -> Unit =\n    let x = p\n    ()\n")
     assert discard =~ "()"
   end
+
+  test "a `quote` form round-trips instead of raising" do
+    # SP5.1 added `quote <form>` (parses to `:quoted_syntax`), and the stdlib now
+    # uses it (fsm.cure `quote :handle_event_function`, actor.cure `quote :ok`),
+    # but the printer had no clause for the node — so `cure fmt`/`migrate` RAISED
+    # UnprintableNodeError on any file containing `quote`.
+    out = assert_roundtrips("mod M\n  fn f() -> Syntax = quote :ok\n")
+    assert out =~ "quote :ok"
+    refute out =~ "quoted_syntax"
+  end
+
+  test "a single `$(e)` splice inside a quote round-trips" do
+    out = assert_roundtrips("mod M\n  fn f(x: Syntax) -> Syntax = quote $(x)\n")
+    assert out =~ "quote $(x)"
+    refute out =~ ":splice"
+  end
+
+  test "a `$(e ...)` group splice inside a quote round-trips with its ellipsis" do
+    out = assert_roundtrips("mod M\n  fn f(xs: List(Syntax)) -> Syntax = quote [$(xs ...)]\n")
+    assert out =~ "$(xs ...)"
+    refute out =~ ":splice_group"
+  end
+
+  test "a structured-family macro round-trips its header params and family/accepts/expands body" do
+    # `macro actor <name: ModuleName>` with a `syntax family`/`accepts`/`expands
+    # with` body (the structured OTP surface in actor.cure/fsm.cure). The printer
+    # rendered only `macro <name>` — it dropped the `<name: ModuleName>` header
+    # params (`leading_segments`) and silently discarded the `:syntax_family`,
+    # `:accepts`, and `:expands_with` rules via the `macro_rule_lines` catch-all,
+    # so `cure fmt`/`migrate` DELETED the whole macro declaration.
+    src = """
+    mod M
+      macro actor <name: ModuleName>
+        syntax family ActorDefinition
+          state Type
+          optional messages Type
+          on_cast Cases
+        accepts ActorDefinition
+        expands with derive_actor_family
+    """
+
+    out = assert_roundtrips(src)
+    assert out =~ "macro actor <name: ModuleName>"
+    assert out =~ "syntax family ActorDefinition"
+    assert out =~ "state Type"
+    assert out =~ "optional messages Type"
+    assert out =~ "on_cast Cases"
+    assert out =~ "accepts ActorDefinition"
+    assert out =~ "expands with derive_actor_family"
+  end
+
+  test "a `computed by <fn>` rule with a `Code until` hole round-trips (not dropped)" do
+    # A Tier-3 `computed by derive_actor` rule (ActorContainers in actor.cure)
+    # stores its expander in `:elab`, not `:template`, so the printer's
+    # template-requiring clause never matched it and the catch-all silently
+    # dropped the whole rule — losing the generated `ActorSyntax` record on
+    # reprint. Its segments also use a `<x: Code until y>` (`:code_hole`), which
+    # had no `macro_segment_to_string` clause.
+    src = """
+    mod M
+      macro Box
+        syntax box <name: ModuleName> derive <cast_body: Code until call> (call <call_body: Code>)? contextual computed by derive_box
+    """
+
+    out = assert_roundtrips(src)
+    assert out =~ "computed by derive_box"
+    assert out =~ "<cast_body: Code until call>"
+    assert out =~ "(call <call_body: Code>)?"
+  end
 end

@@ -836,6 +836,14 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Quasiquotation (SP5.1) in checked position: lower `quote` to its builder
+  # expression and check that against the expected type (`Syntax`).
+  def elaborate_expr_typed({:quoted_syntax, _meta, [inner]}, names, ctx, env),
+    do: elaborate_expr_typed(Cure.Compiler.MacroSyntax.lower_quote(inner), names, ctx, env)
+
+  def elaborate_expr_typed({tag, meta, _}, _names, _ctx, _env) when tag in [:splice, :splice_group],
+    do: {:error, {:splice_outside_quote, tag, meta}}
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
 
   # Synthesise each element of a tuple literal to `{core, type_term}` (the inferred
@@ -2412,6 +2420,44 @@ defmodule Cure.Elab.Elaborator do
     arms0 = arms0 |> desugar_list_patterns() |> desugar_typed_constructor_args()
     {scrut_expr, arms0} = desugar_tuple_scrutinee(scrut_expr, arms0)
 
+    if hoist_named_default?(scrut_expr, arms0) do
+      hoist_named_default_scrutinee(scrut_expr, arms0, result_type_term, names, ctx, env)
+    else
+      elaborate_match_dispatch(scrut_expr, arms0, result_type_term, names, ctx, env)
+    end
+  end
+
+  # A *named* default (`… | other -> body`) binds the WHOLE scrutinee value, but
+  # `desugar_with_default` can only do so when the scrutinee is already a
+  # variable. A complex scrutinee (`match S(n) | S(Z()) -> … | other -> …`) has
+  # nothing to bind `other` to and would otherwise reject as
+  # `:catchall_with_nesting`. Hoist it into a fresh `let $s = scrut in match $s
+  # | …` so the whole variable-scrutinee machinery applies and `$s` is evaluated
+  # exactly once (Idris' `case … of other =>` binds once likewise). Engaged only
+  # when nesting forces the default path AND the scrutinee is not already a
+  # variable, so the common cases are untouched.
+  defp hoist_named_default?(scrut_expr, arms) do
+    not match?({:variable, _m, _n}, scrut_expr) and
+      Enum.any?(arms, &named_default_arm?/1) and
+      Enum.any?(arms, &arm_has_nested?/1)
+  end
+
+  defp named_default_arm?({:match_arm, meta, _body}) do
+    case Keyword.fetch!(meta, :pattern) do
+      {:variable, _m, name} -> name != "_"
+      _ -> false
+    end
+  end
+
+  defp hoist_named_default_scrutinee(scrut_expr, arms, result_type_term, names, ctx, env) do
+    sname = "$scrut" <> fresh_tag()
+    svar = {:variable, [], sname}
+    assign = {:assignment, [let: true], [svar, scrut_expr]}
+    inner_match = {:pattern_match, [], [svar | arms]}
+    elaborate_let_block([assign, inner_match], result_type_term, names, ctx, env)
+  end
+
+  defp elaborate_match_dispatch(scrut_expr, arms0, result_type_term, names, ctx, env) do
     with {:ok, arms1} <- desugar_as_patterns(arms0),
          {:ok, arms1b} <- desugar_tuple_args(arms1),
          # A guard on a *nested* constructor pattern is threaded through the
@@ -7067,20 +7113,35 @@ defmodule Cure.Elab.Elaborator do
     slots = Enum.zip(domains, quantities)
     init = {:ok, MetaCtx.new(), [], arg_asts, []}
 
-    # GOAL-DIRECTED solving for an anonymous-union goal — the same reason as in
-    # `elaborate_global_app/5`, and needed here too because this is the path taken when
-    # an argument cannot be inferred standalone (`Std.Map.put(:a, 1, Std.Map.new())` —
-    # `new()`'s implicits have nothing to fix them).
+    # GOAL-DIRECTED solving from the concrete return-type goal — ordinary
+    # bidirectional propagation (Idris/Agda/Lean): unify the codomain against the
+    # expected type FIRST, so a leading implicit determined only by the result is
+    # solved before its dependent argument slots are elaborated. This is the path
+    # taken when an argument cannot be inferred standalone, in two shapes:
     #
-    # Without it, the value slot's domain `?v` is still an unsolved meta, so the slot is
-    # DEFERRED and later resolved by inferring the argument — locking `?v := Int` and
-    # losing the union. Solving the codomain against the goal first pins
-    # `?v := Union<…>`, so the slot is no longer deferred: the argument is CHECKED
-    # against the union and the literal/member injection fires normally.
+    #   * an anonymous-union value slot (`Std.Map.put(:a, 1, Std.Map.new())` —
+    #     `new()`'s implicits have nothing to fix them): without goal-first solving
+    #     the domain `?v` stays a meta, the slot is DEFERRED and later resolved by
+    #     inferring the argument, locking `?v := Int` and LOSING the union;
+    #   * a lambda argument whose domain the goal alone fixes (`mk(fn(x) -> x.1)`
+    #     at `Box(Tuple(Int,Int), Int)` — `mk : {s} -> {a} -> (s -> a) -> Box(s,a)`):
+    #     without it `?s`/`?a` stay metas, so `fn(x) -> x.1` is checked at `?s -> ?a`
+    #     and the projection cannot lower (`:unsupported_expression`). When NO later
+    #     argument constrains the implicit (only lambdas, or a single argument), the
+    #     cross-argument deferral cannot rescue it, but the goal can.
+    #
+    # `bidir_solve_codomain_from_goal` swallows unification failure, so a goal that
+    # does not inform the codomain leaves the accumulator untouched — the ordinary
+    # left-to-right slot solving then runs exactly as before, and the kernel
+    # re-checks the assembled term regardless. Restricted to a META-FREE goal so a
+    # still-open expected type (nothing to solve against) skips the pre-pass.
     {erased, rest} = Enum.split_while(slots, fn {_d, q} -> q == :erased end)
 
+    seed_from_goal? =
+      union_goal?(expected) or (not is_nil(expected) and not Unify.has_meta?(expected))
+
     {init, slots} =
-      if union_goal?(expected) do
+      if seed_from_goal? do
         seeded =
           erased
           |> Enum.reduce_while(init, &bidir_app_slot(&1, &2, names, ctx, env))
@@ -7924,6 +7985,20 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr({:list, _, _} = node, scope, env),
     do: elaborate_expr(desugar_list(node), scope, env)
+
+  # Quasiquotation (SP5.1): `quote <form>` lowers to the `Std.Syntax` builder
+  # expression that constructs the reflected form, with `$(e)` splice holes
+  # elaborated in place. Pure surface sugar — the lowered term re-enters the
+  # ordinary elaborator (TCB delta 0).
+  def elaborate_expr({:quoted_syntax, _meta, [inner]}, scope, env),
+    do: elaborate_expr(Cure.Compiler.MacroSyntax.lower_quote(inner), scope, env)
+
+  # A `$(e)` / `$(e ...)` splice reaching the elaborator as a bare node means it
+  # sits outside any enclosing `quote` — a category error. Inside a quote,
+  # `lower_quote/1` consumes the splice wrapper (only its inner expression
+  # survives), so this clause fires only for an orphan splice.
+  def elaborate_expr({tag, meta, _}, _scope, _env) when tag in [:splice, :splice_group],
+    do: {:error, {:splice_outside_quote, tag, meta}}
 
   def elaborate_expr(other, _scope, _env), do: {:error, {:unsupported_expression, other}}
 

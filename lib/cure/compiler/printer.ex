@@ -1182,6 +1182,14 @@ defmodule Cure.Compiler.Printer do
     name = Keyword.get(meta, :name)
     pad = String.duplicate(indent, depth + 1)
 
+    # A structured-family macro carries header params (`macro actor <name:
+    # ModuleName>`) in `leading_segments`; render them so the header round-trips.
+    header =
+      case Keyword.get(meta, :leading_segments, []) do
+        [] -> "macro #{name}"
+        segments -> "macro #{name} #{macro_segments_to_string(segments)}"
+      end
+
     body =
       rules
       |> Enum.flat_map(&macro_rule_lines(&1, depth + 1, indent))
@@ -1190,7 +1198,26 @@ defmodule Cure.Compiler.Printer do
       |> Enum.reject(&(String.trim(&1) == ""))
       |> Enum.join("\n")
 
-    "macro #{name}\n#{pad}#{body}"
+    "#{header}\n#{pad}#{body}"
+  end
+
+  # -- Quasiquotation (`quote <form>`, `$(e)`, `$(e ...)`) -------------------
+
+  # SP5.1 surface sugar (parser.ex `parse_quote`/`parse_splice`). The printer
+  # backs `cure fmt`/`migrate`, and the stdlib now quotes (fsm/actor/app/
+  # supervisor), so these must reprint to the exact surface that reparses to the
+  # same node — not raise. A splice is legal only inside a quote, so its clause
+  # only fires while rendering a quoted form's inner tree.
+  defp to_string({:quoted_syntax, _meta, [inner]}, depth, indent) do
+    "quote " <> render(inner, depth, indent)
+  end
+
+  defp to_string({:splice, _meta, [expr]}, depth, indent) do
+    "$(" <> render(expr, depth, indent) <> ")"
+  end
+
+  defp to_string({:splice_group, _meta, [expr]}, depth, indent) do
+    "$(" <> render(expr, depth, indent) <> " ...)"
   end
 
   defp to_string(other, _depth, _indent) when is_binary(other), do: other
@@ -1225,16 +1252,20 @@ defmodule Cure.Compiler.Printer do
     head =
       "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} #{verb} #{render(template, depth, indent)}"
 
-    examples =
-      rule
-      |> Map.get(:examples, [])
-      |> Enum.map(fn example ->
-        use_site = macro_use_site_to_string(example.use_site)
-        expected = render(elem(example.expected, 1), depth + 1, indent)
-        "#{String.duplicate(indent, max(depth - 1, 0))}example #{use_site} expands #{expected}"
-      end)
+    [head | macro_rule_examples(rule, depth, indent)]
+  end
 
-    [head | examples]
+  # A Tier-3 `computed by <fn>` rule stores its expander in `:elab` and carries no
+  # `:template`, so the clause above (which requires `template`) never matched it
+  # and the catch-all dropped it — silently deleting the legacy `syntax actor …
+  # computed by derive_actor` rule (whence the generated `ActorSyntax` record).
+  defp macro_rule_lines(%{kind: :computed, keyword: keyword, segments: segments, elab: elab} = rule, depth, indent) do
+    context = if rule[:contextual], do: " contextual", else: ""
+
+    head =
+      "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} computed by #{render(elab, depth, indent)}"
+
+    [head | macro_rule_examples(rule, depth, indent)]
   end
 
   defp macro_rule_lines(%{kind: :literal, segments: segments, template: template}, depth, indent),
@@ -1251,7 +1282,56 @@ defmodule Cure.Compiler.Printer do
     ["explain\n#{pad}" <> Enum.join(lines, "\n#{pad}")]
   end
 
+  # Structured-family macro body (parser.ex `parse_syntax_family` /
+  # `parse_macro_accepts` / `parse_macro_expands_with`). Without these clauses the
+  # catch-all below dropped the entire family declaration on reprint, so `cure
+  # fmt`/`migrate` silently deleted the structured OTP surface (actor/fsm.cure).
+  defp macro_rule_lines(%{kind: :syntax_family, name: name} = rule, depth, indent) do
+    pad = String.duplicate(indent, depth + 1)
+
+    include_lines =
+      rule
+      |> Map.get(:includes, [])
+      |> Enum.map(fn {inc, _line, _col} -> "includes #{inc}" end)
+
+    field_lines =
+      rule
+      |> Map.get(:fields, [])
+      |> Enum.map(&family_field_to_string/1)
+
+    ["syntax family #{name}\n#{pad}" <> Enum.join(include_lines ++ field_lines, "\n#{pad}")]
+  end
+
+  defp macro_rule_lines(%{kind: :accepts, family: family}, _depth, _indent),
+    do: ["accepts #{family}"]
+
+  defp macro_rule_lines(%{kind: :expands_with, expander: expander}, depth, indent),
+    do: ["expands with #{render(expander, depth, indent)}"]
+
   defp macro_rule_lines(_rule, _depth, _indent), do: []
+
+  defp macro_rule_examples(rule, depth, indent) do
+    rule
+    |> Map.get(:examples, [])
+    |> Enum.map(fn example ->
+      use_site = macro_use_site_to_string(example.use_site)
+      expected = render(elem(example.expected, 1), depth + 1, indent)
+      "#{String.duplicate(indent, max(depth - 1, 0))}example #{use_site} expands #{expected}"
+    end)
+  end
+
+  # A `syntax family` field: `[optional|repeated|one_or_more] <name> <Shape>`.
+  defp family_field_to_string(%{name: name, shape: shape} = field) do
+    prefix =
+      case Map.get(field, :cardinality, :required) do
+        :optional -> "optional "
+        :repeated -> "repeated "
+        :one_or_more -> "one_or_more "
+        _ -> ""
+      end
+
+    "#{prefix}#{name} #{shape}"
+  end
 
   defp macro_segments_to_string(segments), do: Enum.map_join(segments, " ", &macro_segment_to_string/1)
   defp macro_segment_to_string({:lit, word}), do: word
@@ -1259,6 +1339,9 @@ defmodule Cure.Compiler.Printer do
 
   defp macro_segment_to_string({:raw_hole, %{name: name, delimiter: delimiter}}),
     do: "<#{name}: raw until #{delimiter}>"
+
+  defp macro_segment_to_string({:code_hole, %{name: name, delimiter: delimiter}}),
+    do: "<#{name}: Code until #{delimiter}>"
 
   defp macro_segment_to_string({:repeat, segment}), do: macro_segment_to_string(segment) <> "..."
   defp macro_segment_to_string({:optional, segments}), do: "(#{macro_segments_to_string(segments)})?"

@@ -75,6 +75,20 @@ defmodule Cure.Compiler.Errors do
     format_diagnostic("error", "arity mismatch", file, line, message)
   end
 
+  def format_error({:splice_outside_quote, tag, meta}, file) do
+    line = Keyword.get(meta, :line, 0)
+
+    form = if tag == :splice_group, do: "$(e ...)", else: "$(e)"
+
+    format_diagnostic(
+      "error",
+      "splice outside quote",
+      file,
+      line,
+      "a #{form} splice is only meaningful inside a `quote`; there is no quoted form here to splice into"
+    )
+  end
+
   def format_error({:extern_untyped_head, message, meta}, file) do
     line = Keyword.get(meta, :line, 0)
     format_diagnostic("error", "@extern declaration missing a typed head (E056)", file, line, message)

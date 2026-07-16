@@ -57,15 +57,15 @@ mod Std.Actor
           CallContract(request_heads, reply_type) -> emit_actor_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, heads, request_heads, reply_type)
 
   fn actor_info_handler(info_body: Syntax) -> Syntax = match tag(info_body) == :raw
-    true -> tuple([atom_literal(:noreply), variable("state")])
+    true -> quote %[:noreply, state]
     false -> actor_handler(info_body)
 
   fn actor_terminate_handler(body: Syntax) -> Syntax = match tag(body) == :raw
-    true -> atom_literal(:ok)
+    true -> quote :ok
     false -> body
 
   fn actor_code_change_handler(body: Syntax) -> Syntax = match tag(body) == :raw
-    true -> tuple([atom_literal(:ok), variable("state")])
+    true -> quote %[:ok, state]
     false -> body
 
   ## `actor` is a transparent standard-library macro. The base actor is an
@@ -290,7 +290,7 @@ mod Std.Actor
     false -> arm
 
   fn actor_handler_arm_node(values: List(Attr), children: List(Syntax)) -> Syntax = match children
-    [body] -> Node(:match_arm, values, [block([tuple([atom_literal(:noreply), body])])])
+    [body] -> Node(:match_arm, values, [block([quote %[:noreply, $(body)]])])
     _ -> Node(:match_arm, values, children)
 
   type ReplyInference = NoCall | CallContract(List(Syntax), Syntax) | InvalidCall(Atom)
@@ -308,11 +308,11 @@ mod Std.Actor
     start_argument: Syntax
 
   fn default_actor_init(state_type: Syntax) -> ActorInitSpec =
-    ActorInitSpec{parameter: parameter("initial", variable("State")), body: tuple([atom_literal(:ok), variable("initial")]), start_parameters: [parameter("initial", state_type)], start_argument: variable("initial")}
+    ActorInitSpec{parameter: parameter("initial", variable("State")), body: quote %[:ok, initial], start_parameters: [parameter("initial", state_type)], start_argument: variable("initial")}
 
   fn derive_actor_init(state_type: Syntax, initial: Option(Syntax), init: Option(Syntax)) -> ActorInitSpec =
     match initial
-      Some(value) -> ActorInitSpec{parameter: parameter("args", variable("Atom")), body: tuple([atom_literal(:ok), value]), start_parameters: [], start_argument: atom_literal(:unit)}
+      Some(value) -> ActorInitSpec{parameter: parameter("args", variable("Atom")), body: quote %[:ok, $(value)], start_parameters: [], start_argument: atom_literal(:unit)}
       None() -> match init
         Some(value) -> ActorInitSpec{parameter: parameter("args", variable("Atom")), body: value, start_parameters: [], start_argument: atom_literal(:unit)}
         None() -> default_actor_init(state_type)

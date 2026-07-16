@@ -146,13 +146,30 @@ mod Std.Vector
           empty() -> empty()
           prepend(_, _) -> prepend(x, init(rest))
 
-  # NOTE `take`/`drop` (`Vect (n + m) a -> Vect n a` and `-> Vect m a`) are
-  # deferred: their inner match sits on a scrutinee of index `plus(S(k), m)`, and
-  # the coverage checker does not normalize `plus` when discharging the omitted
-  # `empty` constructor as impossible, so it reports a spurious `:missing_branch`.
-  # `head`/`last`/`init` work because their scrutinee index is a *literal* `S(_)`.
-  # This is the indexed-scrutinee coverage gap; unblock via the Lean-shape matching
-  # work, then restore both.
+  ## First `n` elements of a vector whose length is `plus(n, m)`, dropping the
+  ## trailing `m`. `with n` (not `match n`) is the Idris-style convoy: matching
+  ## `n` refines the sibling `xs : Vector(a, plus(n, m))` per branch, so in the
+  ## `S(k)` branch `xs : Vector(a, plus(S(k), m))` — a non-empty vector — and the
+  ## inner `match xs` legitimately omits `empty`. That omission is discharged
+  ## because coverage normalizes the scrutinee index: `plus(S(k), m)` reduces to
+  ## `S(plus(k, m))`, whose `S` head refutes `empty`'s `Z`.
+  fn take({a: Type}, n: Nat, {m: Nat}, xs: Vector(a, plus(n, m))) -> Vector(a, n) =
+    with n
+      Z() -> empty()
+      S(k) ->
+        match xs
+          prepend(x, rest) -> prepend(x, take(k, rest))
+
+  ## Drop the first `n` elements of a vector of length `plus(n, m)`, keeping the
+  ## trailing `m`. Same convoy: `with n` refines `xs`, so the `Z` branch returns
+  ## `xs` directly (`plus(Z, m)` reduces to `m`, matching the `Vector(a, m)`
+  ## result) and the `S(k)` branch peels one element off the now-non-empty `xs`.
+  fn drop({a: Type}, n: Nat, {m: Nat}, xs: Vector(a, plus(n, m))) -> Vector(a, m) =
+    with n
+      Z() -> xs
+      S(k) ->
+        match xs
+          prepend(_, rest) -> drop(k, rest)
 
   ## Pair two equal-length vectors element-wise into a vector of 2-tuples.
   fn zip({a: Type}, {b: Type}, {n: Nat}, xs: Vector(a, n), ys: Vector(b, n)) -> Vector(Tuple(a, b), n) =
