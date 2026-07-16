@@ -2350,6 +2350,50 @@ advances the counter past any collision, so a fresh binder is always distinct
 from injected caller material (`006a4652`). Full compiler suite green (822).
 This closes the *correctness* core of the SP5.3 gate. The larger ergonomic
 piece — automatic definition-site freshening of ALL ordinary generated binders
-via a full set-of-scopes model, keeping the `<capture>` escape hatch — remains
-pending (same pass referenced in the "Explicit name-intent status" block above,
-where `Std.Syntax.variable/1` stays compatibility behavior until it lands).
+in a Tier-2 `becomes` template via a scope-aware set-of-scopes walk, keeping a
+`<capture Name>` escape hatch — is now **LANDED (SP5.3, 2026-07-16:
+`b6942c01`/`8d93fe39`/`d2ccf817`)** via `scoped_freshen/5` in the parser (frames
+for let/block, match-arm+guard, lambda, single-clause fn-def params, comprehension
+reverse-scope; map-shaped family-signature binders untouched; TCB delta zero).
+Note this is the **Tier-2 template** path only. The **Tier-3 computed** path's
+`Std.Syntax.variable/1` deliberately stays explicit-marker (`fresh(...)`) — per
+the "Computed-result hygiene status" block, reflected use-site syntax is
+interleaved with generated AST, so a computed result CANNOT be blanket-freshened
+without renaming caller references; explicit markers are correct there by design,
+not a pending gap.
+
+**`contextual` retirement — empirical blocker analysis (2026-07-16).** Direct
+probing (replicating `MacroFuzz.check_expression_expansion`: elaborate the
+expansion in `Context.empty`) establishes the ground truth, correcting an earlier
+belief that slice L0.2's context threading would retire `contextual` in ~30 lines:
+
+- `beam_ops self` → `Std.Otp.self()` elaborated standalone fails with
+  `{:unsolved_metavariables, :"Std.Otp#self"}`. `self : {m: Type} -> Effect(Pid(m))`
+  has an erased result-position index `m` with nothing to constrain it — the
+  *use* is genuinely context-dependent (like `[] : List a` / `read` with no
+  expected type), even though the *definition* is well-typed.
+- Wrapping the expansion in an **unannotated** definition body
+  (`fn probe() = Std.Otp.self()`) **still fails** the same way: Cure does NOT
+  infer a polymorphic signature from an unannotated body (Idris/Agda behave the
+  same). Only an explicit return type naming the index
+  (`fn probe({m: Type}) -> Effect(Pid(m)) = Std.Otp.self()`) type-checks. So no
+  untrusted term-wrapping trick makes the empty-context proof pass — per the
+  elaborator-HARD-STOP principle, the simple paths are ruled out.
+- L0.2's `callback_context` reflection is delivered to **Tier-3 computed** elabs
+  only (`MacroExpand`), so it never reaches the **Tier-2 `becomes`** `beam_ops`
+  rules whose proof actually fails. The two were conflated.
+
+**Consequence.** `contextual` (defer the SP3 self-proof) is the *correct* posture
+for a genuinely context-dependent expansion — you cannot prove it standalone
+without inventing an expected type. Retiring it soundly requires the proof to
+elaborate such a rule under a **declared expected type** that binds the residual
+result index. Two options, both real design slices (NOT tail-of-fire edits):
+(A) generalize residual result-position erased-index metavars in the proof
+harness (needs the elaborator to hand back the partial term + residual-metavar
+relevance so the proof can prove "well-typed for all instantiations"); or
+(B) a per-rule / per-context expected-type declaration the proof checks against.
+Recommendation: **(A)**, real-language-aligned (ML/Haskell generalize
+under-constrained implicits; here restricted to *erased index* residuals so no
+value-relevant ambiguity is masked), lower surface cost, but it is an
+elaborator-support + proof-harness slice that warrants its own plan and red-green.
+Until then `contextual` stays and is honest.
