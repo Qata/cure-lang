@@ -2322,3 +2322,20 @@ languages; discuss in prose, don't ask).**
    that skips derivation.** This is the Haskell/Idris posture — inference by
    default, annotation always permitted — and it keeps every existing program
    compiling.
+
+**Template-hygiene characterized-hole status (2026-07-16).** Both SP5.3
+correctness holes in the `becomes`-template freshening path are now closed with
+red-green fixtures (`test/cure/compiler/macro_hygiene_test.exs`), parser-only,
+TCB delta zero. (a) A `<fresh e>` binder that shares a hole's name no longer
+swallows the use-site argument: freshening leaves a plain variable untouched
+when its name is also a hole, so the hole's material still substitutes
+(`7db30556`). (b) A use-site name that spoofs the predictable gensym namespace
+(`` `g$0` `` passed as a hole) can no longer be captured by a `<fresh g>`
+binder: `mint_gensym` collects every name appearing in the hole values and
+advances the counter past any collision, so a fresh binder is always distinct
+from injected caller material (`006a4652`). Full compiler suite green (822).
+This closes the *correctness* core of the SP5.3 gate. The larger ergonomic
+piece — automatic definition-site freshening of ALL ordinary generated binders
+via a full set-of-scopes model, keeping the `<capture>` escape hatch — remains
+pending (same pass referenced in the "Explicit name-intent status" block above,
+where `Std.Syntax.variable/1` stays compatibility behavior until it lands).
