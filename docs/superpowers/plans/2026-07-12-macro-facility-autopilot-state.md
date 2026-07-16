@@ -81,8 +81,17 @@ host-side spine is functionally COMPLETE and green. Concretely proven this fire:
   is met on the host BEAM (≡ AtomVM semantics per CLAUDE.md).
 - Structured `actor`/`fsm`/`sup`/`app` surfaces, the safe-vs-`Std.Syntax.Raw`
   boundary (`unsafe_*` + `validate_expansion/1`), and scope-set hygiene (SP5.3)
-  are all landed and green. The generic-unix AtomVM run exists for the
-  supervisor/application proof (this doc, "Structured application status").
+  are all landed and green.
+- **Generic-unix AtomVM runtime gate VERIFIED for ALL EIGHT surfaces this fire.**
+  `mix test --include atomvm test/cure/compiler/atomvm_container_test.exs` = **1
+  passed** ("Return value: ok"). That test compiles the legacy `actor`/`sup`/`app`/
+  `fsm` AND the structured `Std.Actor`/`Std.Fsm`/`Std.Supervisor`/`Std.App`
+  expansions to real BEAM, packs them with `packbeam` + estdlib into an `.avm`,
+  and RUNS them on the real generic-unix AtomVM binary via `start_link`/`start`.
+  (Supersedes the older "Structured application status" note that claimed the
+  generic-unix run only for supervisor/application — it now covers actor + fsm
+  too.) AtomVM ≡ OTP semantics per CLAUDE.md, so this is the strongest
+  host-reachable form of "the expansion runs on the actual VM."
 
 **The remaining residuals are all optional or out-of-host-scope — NONE is a bug:**
 1. *Multi-channel `handle_call` reply typing* — an ENHANCEMENT, not a gap.
@@ -100,10 +109,15 @@ host-side spine is functionally COMPLETE and green. Concretely proven this fire:
 **Two gates stand between here and the REMAINING-WORK §8 DONE bar** (do NOT
 `CronDelete` until both close): (a) the SP3 *generative* proof still EXEMPTS the
 `contextual` OTP surfaces, so "generatively proven" is not fully met for them
-(option-B slice); (b) ESP32 **hardware** verification (Phase 6 proper) — the
-project's raison d'être, a distinct observable-flashing work mode, not a host
-`mix test`. Sequence: option-B generative coverage (bounded, host-testable) →
-hardware run. Everything else is polish.
+(option-B slice, bounded + host-testable); (b) ESP32 **hardware** verification —
+the project's raison d'être, a distinct observable-flashing work mode, not a host
+`mix test`. The generic-unix half of the runtime story is now CLOSED (verified
+above, all eight surfaces), so gate (b)'s residual is specifically the physical
+ESP32 flash + serial-observed run — which per CLAUDE.md must be observable and
+is realistically operator-driven; an autonomous host fire can build/package the
+`.avm` but cannot observe the board. Sequence: option-B generative coverage
+(host-testable, autonomous-doable) → hardware run (operator-driven). Everything
+else — multi-channel reply typing, safe/raw helper migration — is optional polish.
 
 The SP1–SP6 records below are the historical foundation log — superseded as the
 *current* pointer by the summary above, but retained for provenance.
