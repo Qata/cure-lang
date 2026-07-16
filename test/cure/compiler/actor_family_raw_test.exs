@@ -107,4 +107,25 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert apply(:"Cure.Generated.RawTemplateCast", :handle_cast, [:ping, 7]) == {:noreply, 7}
     assert apply(:"Cure.Generated.RawTemplateCast", :handle_cast, [42, 7]) == {:noreply, 7}
   end
+
+  test "terse messages template routes through the shared family raw emitter" do
+    # The `actor N state T messages M handle_cast <body>` form (rule 172) carries
+    # a `messages` hole, so it opts into the `computed directly by` multi-arg
+    # input path (adapter emit_raw_state_messages_cast) rather than the shared
+    # ActorSyntax record. This behavioral pin replaces the retired Raw05
+    # byte-golden: the `pickup` dispatch and the spliced verbatim body must
+    # survive the fold, and (via wall-3 in-place identity) the bare-source actor
+    # is the program's top-level module.
+    source = """
+    actor Cure.Generated.RawMessagesTemplateCast state Int messages Atom handle_cast
+      pickup
+        message == :inc -> %[:noreply, state + 1]
+        else -> %[:noreply, state]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.Generated.RawMessagesTemplateCast"
+    assert apply(module, :handle_cast, [:inc, 4]) == {:noreply, 5}
+    assert apply(module, :handle_cast, [:other, 4]) == {:noreply, 4}
+  end
 end

@@ -169,18 +169,7 @@ mod Std.Actor
       callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = code_change_body
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name initial
 
-    syntax actor <name: ModuleName> state <state_type: Type> messages <message_type: Type> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_server
-      typealias State = state_type
-      typealias Message = message_type
-      callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
-      callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
-      callback handle_cast(message: Message, state: State) returns Effect(Tuple(Atom, State)) = cast_body
-      callback handle_info(message: Message, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
-      callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
-      callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name initial
+    syntax actor <name: ModuleName> state <state_type: Type> messages <message_type: Type> handle_cast <cast_body: Code until dedent> contextual computed directly by emit_raw_state_messages_cast
 
     syntax actor <name: ModuleName> state <state_type: Type> handle_cast <cast_body: Code until call> (call <call_body: Code>)? contextual computed by emit_raw_state_cast
 
@@ -358,6 +347,17 @@ mod Std.Actor
   fn emit_raw_state_cast(input: ActorSyntax) -> Syntax =
     let definition = ActorDefinitionSyntax{state: input.state_type, messages: None(), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: Some(input.cast_body), handle_info: None(), terminate: None(), code_change: None(), body: None()}
     derive_actor_family(input.name, definition)
+
+  ## Tier-0 raw adapter for `actor <name> state <T> messages <M> handle_cast <raw
+  ## body>`. Unlike `emit_raw_state_cast`, this rule carries a `messages` hole, so
+  ## its hole set does not match the shared `ActorSyntax` record — it opts into
+  ## the `computed directly by` multi-arg input path instead, receiving each hole
+  ## positionally. The `messages` annotation is threaded as `Some(message_type)`
+  ## so the family raw branch aliases the message type on the callbacks; the
+  ## `handle_cast` body is spliced verbatim.
+  fn emit_raw_state_messages_cast(name: Syntax, state_type: Syntax, message_type: Syntax, cast_body: Syntax) -> Syntax =
+    let definition = ActorDefinitionSyntax{state: state_type, messages: Some(message_type), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: Some(cast_body), handle_info: None(), terminate: None(), code_change: None(), body: None()}
+    derive_actor_family(name, definition)
 
   fn derive_cases(body: Syntax) -> Syntax = match children(body)
     [_scrutinee | arms] -> Node(:cases, [], arms)
