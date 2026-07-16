@@ -250,7 +250,17 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   on the handle (the request-reply typing itself is `Std.Otp.Proof`/`Std.Otp.SendEffect`).
 - **G8. ORDERED selective-receive typing.** Mailbox types are commutative; Erlang is
   ordered. Recovering order (position-indexed patterns) is *new type theory* both mailbox
-  papers name as future work. → Cure builds if arrival-order-sensitive protocols matter.
+  papers name as future work. → **SLICE DONE — `Std.Otp.SelectiveReceive`
+  (`lib/std/otp_selective_receive.cure`).** `SelRecv(before, x, after)` types Erlang's
+  front-to-back scan directly: `SelHere` (head is `x`, consume it) and `SelSkip` (head is
+  another tag, keep it and recurse) ARE the arrival-order scan — order is the inductive
+  structure of the receive, not abstracted. `preserves` (selective receive keeps the
+  mailbox well-typed) and `received_accepted` (the received message is accepted) hold by
+  induction on the scan; a receive of a tag absent from the mailbox is unconstructible.
+  Idris-mirrored (`test/oracle/otp/selective_receive`, rel=same), tests in
+  `otp_selective_receive_test.exs`. **Still open (the hard core):** arbitrary
+  pattern-directed selective receive with protocol-level ordering of a whole conversation.
+  This is the ordered-scan primitive that a full solution builds on.
 - **G9. Mailbox type INFERENCE.** The **universally-named open problem** — Special
   Delivery, de'Liguoro–Padovani, and the OTP tooling literature all name inference as
   THE gap ("users must specify explicit patterns on each guard"). → Cure builds if it
