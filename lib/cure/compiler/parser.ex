@@ -529,9 +529,17 @@ defmodule Cure.Compiler.Parser do
           syntax_repeated_fields: Map.get(rule, :syntax_repeated_fields, macro_syntax_repeated_fields(rule.segments)),
           syntax_field_types: Map.get(rule, :syntax_field_types, %{}),
           line: keyword_token.line,
-          col: keyword_token.col,
-          home_source: Map.get(rule, :source_path)
+          col: keyword_token.col
         ]
+
+        # Only stdlib-harvested rules carry a home file (:source_path). Attach it
+        # as :home_source for definition-site expander resolution; omit the key
+        # entirely for user/local macros so their deferred-node shape is unchanged.
+        meta =
+          case Map.get(rule, :source_path) do
+            nil -> meta
+            home_source -> Keyword.put(meta, :home_source, home_source)
+          end
 
         meta =
           if Map.get(rule, :direct_inputs, false),

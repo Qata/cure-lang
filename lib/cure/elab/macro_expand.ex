@@ -184,19 +184,42 @@ defmodule Cure.Elab.MacroExpand do
   defp expansion_frame(_), do: %{keyword: nil, line: nil, col: nil}
 
   defp execute(meta, elab_ast, input_ast, env, fresh_counter) do
-    # Definition-site (ambient) macro hygiene. A stdlib computed/family macro's
-    # expander is a global of its HOME module; a bare use-site (no `use Std.X`)
-    # lacks that global, so elaborating the expander against the caller env alone
-    # fails `:unknown_global`. Merge the macro's home-module env (cached) so the
-    # expander resolves in its definition scope — as Lean/Racket resolve macro
-    # helpers. Only the EXPANDER elaboration sees this env; the AST it produces is
-    # re-elaborated in the caller's own env, so caller scope is unchanged.
-    env =
-      case Keyword.get(meta, :home_source) do
-        nil -> env
-        home_source -> Cure.Elab.Program.env_with_macro_home(env, home_source)
-      end
+    # Definition-site (ambient) macro hygiene, as a ZERO-OVERHEAD FALLBACK. A
+    # stdlib computed/family macro's expander is a global of its HOME module. If
+    # the use-site has `use Std.X` (or the macro is lexical), the expander already
+    # resolves in the caller env — the common path — and we pay nothing extra.
+    # Only a genuinely-bare ambient use fails to resolve the expander; that single
+    # failure is retried once with the home-module env merged, so it resolves in
+    # its definition scope (as Lean/Racket resolve macro helpers). The merged env
+    # is local to the retry — the AST it produces is re-elaborated in the caller's
+    # own env, so caller scope is unchanged.
+    case execute_with_env(meta, elab_ast, input_ast, env, fresh_counter) do
+      {:error, {:computed_macro_error, _meta, reason}} = err ->
+        case Keyword.get(meta, :home_source) do
+          nil ->
+            err
 
+          home_source ->
+            if resolution_failure?(reason) do
+              merged = Cure.Elab.Program.env_with_macro_home(env, home_source)
+              execute_with_env(meta, elab_ast, input_ast, merged, fresh_counter)
+            else
+              err
+            end
+        end
+
+      ok ->
+        ok
+    end
+  end
+
+  # Only an unresolved-expander failure merits retrying in the definition-site
+  # scope; any other computed-macro error is genuine and returned as-is.
+  defp resolution_failure?(:unknown_global), do: true
+  defp resolution_failure?({:unknown_global, _}), do: true
+  defp resolution_failure?(_), do: false
+
+  defp execute_with_env(meta, elab_ast, input_ast, env, fresh_counter) do
     context = Context.empty(env)
 
     # The elab sees WHERE it was invoked, not just what it was handed: the
