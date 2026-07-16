@@ -614,6 +614,37 @@ defmodule Cure.Elab.Program do
     end)
   end
 
+  # The auto-prelude env a NON-prelude module's slice is elaborated against: each
+  # auto-prelude module's own independent slice, flat-merged — the same construction
+  # the top-level `shadow_resolved_imports` uses (`auto_prelude_imports ++ imports`),
+  # so `Std.Nat`'s `plus` (a function; the auto-prelude only makes the TYPE `Nat`
+  # ambient) is present for δ-reduction. A prelude SOURCE gets nothing: it must be
+  # self-sufficient, and this also terminates the recursion — the auto-prelude
+  # slices it builds each hit the `@auto_prelude` guard, so `slice_prelude_env`
+  # bottoms out at once. (The guard is `@auto_prelude` membership, NOT `prelude_source?` — the
+  # latter is true for EVERY registered stdlib module, which would skip the prelude
+  # for `Std.Proof`/`Std.List`/… too and defeat the fix.)
+  defp slice_prelude_env(ast) do
+    if find_module_name(ast) in @auto_prelude do
+      {:ok, Env.empty()}
+    else
+      auto_prelude_imports(ast)
+      |> distinct_import_modules()
+      |> Enum.reduce_while({:ok, Env.empty()}, fn {_module_id, path}, {:ok, acc} ->
+        case module_slice_env(path) do
+          {:ok, slice} ->
+            case merge_env(acc, slice) do
+              {:ok, merged} -> {:cont, {:ok, merged}}
+              {:error, _} = err -> {:halt, err}
+            end
+
+          {:error, _} = err ->
+            {:halt, err}
+        end
+      end)
+    end
+  end
+
   # ── `@prelude` decorator ───────────────────────────────────────────────────
   #
   # A stdlib item marked `@prelude` (see `lib/std/string.cure`'s `String` alias)
@@ -1287,9 +1318,15 @@ defmodule Cure.Elab.Program do
          {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false),
          :ok <- check_declarations(ast),
+         # A sliced module is still a module: it must see the auto-prelude modules
+         # (`Std.Nat` etc.), or a body relying on a prelude def it never explicitly
+         # `use`d — e.g. `Std.Proof`'s lemmas over `Std.Nat.plus` — elaborates with a
+         # dangling global that never δ-reduces (`plus(Z,Z) ≡ Z` stays stuck).
+         {:ok, prelude} <- slice_prelude_env(ast),
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
          seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
-         {:ok, env0_base} <- merge_env(seeded, imported),
+         {:ok, base} <- merge_env(seeded, prelude),
+         {:ok, env0_base} <- merge_env(base, imported),
          env0 = Map.put(env0_base, :import_modules, direct_import_ids(imports(ast))),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do
