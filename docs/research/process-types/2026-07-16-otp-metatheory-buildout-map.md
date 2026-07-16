@@ -153,14 +153,20 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
 - **G2. Preservation/progress of a TYPED OTP layer over the concurrent reduction
   relation.** Core Erlang gives the *untyped* relation; NVLang's preservation is over a
   *toy* single-actor step (no interleaving, no ether). Nobody has typed-OTP subject
-  reduction over a real concurrent semantics. → **STARTED — `Std.Otp.Preservation`
-  (`lib/std/otp_preservation.cure`).** Subject reduction is PROVEN in Cure (kernel-
-  checked, totality-certified, Idris-mirrored `test/oracle/otp/preservation` rel=same)
-  for the **send/arrive/receive fragment, single receiver, message-type safety** — the
-  NVLang Thm 4.1 property proven over the *actual* ether→mailbox reduction rather than a
-  toy step. Remaining: exit/link/monitor signals; multiple pids/interleaving; mailbox
-  FIFO order (abstracted here — one `AllAccepted`-over-append lemma). The composition
-  with obligation (1) is **DONE for the reply TYPE** — see G1×G2 below.
+  reduction over a real concurrent semantics. → **DONE (progress + preservation = type
+  safety).** `Std.Otp.Preservation` (`lib/std/otp_preservation.cure`) proves SUBJECT
+  REDUCTION for the send/arrive/receive fragment (single receiver, message-type safety) —
+  the NVLang Thm 4.1 property over the *actual* ether→mailbox reduction, not a toy step.
+  `Std.Otp.Safety` (`lib/std/otp_safety.cure`) adds PROGRESS — a well-typed config is
+  never stuck (either final, or an arrive/receive step is available) — and combines the
+  two into the canonical safety theorem `safety : (c) -> WT(c) -> Safe(c)` (a well-typed
+  config is either final or steps to a WELL-TYPED config). Both kernel-checked, totality-
+  certified, Idris-mirrored (`test/oracle/otp/preservation`, `.../safety`, rel=same); tests
+  in `otp_preservation_test.exs`, `otp_safety_test.exs`. `safety` exercises plain-`match`
+  sibling refinement — matching `c` refines the witness `wt` so `preservation(wt, step)`
+  type-checks. Remaining: exit/link/monitor signals; multiple pids/interleaving; mailbox
+  FIFO order (abstracted — one `AllAccepted`-over-append lemma). The composition with
+  obligation (1) is **DONE for the reply TYPE** — see G1×G2 below.
 - **G1×G2. COMPOSE: dependent reply typing preserved through delivery.** **DONE —
   `Std.Otp.ReplyPreservation` (`lib/std/otp_reply_preservation.cure`).** Strengthens G2's
   payload from a message *tag* to a request-answering *reply* `(r, v)` and proves
