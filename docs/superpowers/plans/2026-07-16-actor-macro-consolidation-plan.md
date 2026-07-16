@@ -40,7 +40,7 @@ Before this plan was written, each risky premise was probed live (edit → run g
 
 ## Testing discipline note (read before executing)
 
-Tasks 1 and 2 are **behavior-preserving refactors**, verified against the existing immutable goldens and 19 behavioral tests (characterization tests). They add no new behavior, so there is deliberately **no new red test** for them — the "red→green" they must satisfy is "the whole golden + behavioral set was green before the edit and is byte-identical green after." Each records the baseline-green run before editing and the still-green run after. Task 3 adds new behavior (`body` passthrough) and follows **strict red-green**: a failing test first, then the minimal change to pass it.
+Tasks 1 and 2 are **behavior-preserving refactors**, verified against the existing immutable goldens and 19 behavioral tests (characterization tests). They add no new behavior, so there is deliberately **no new red test** for them — the "red→green" they must satisfy is "the whole golden + behavioral set was green before the edit and is byte-identical green after." Each records the baseline-green run before editing and the still-green run after. Task 3 adds new behavior (`body` passthrough) and follows **strict red-green**: a failing test first, then the minimal change to pass it. The new test written in Task 3 Step 1 is, once it exists, **immutable in the same sense as the pre-existing 19**: Steps 3–7 must turn it green by editing `lib/std/actor.cure` only, never by weakening or rewriting the test itself. The sole exception is discovering the test asserts genuinely wrong behavior — in that case the implementer must first state why the test is wrong before touching it, not edit it to match whatever the code currently does.
 
 ---
 
@@ -119,7 +119,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "refacto
 
 **Files:**
 - Modify: `lib/std/actor.cure` — `emit_actor_parts` (~396) and `emit_actor_call_parts` (~419).
-- Characterization guard: `test/cure/compiler/actor_quote_golden_test.exs` (immutable).
+- Characterization guard: `test/cure/compiler/actor_quote_golden_test.exs` (immutable) **and** `test/cure/compiler/actor_computed_test.exs` (immutable) — both emitters are also the backend the `derive` surface (Task 1's `derive_actor` adapter) routes through, so the 19 behavioral tests exercise the same four callbacks this task templatizes; the golden fixtures alone don't cover every edge case those 19 tests pin (guarded-head rejection, catch-all rejection, typed payload, multi-arm call, etc.). Bookend the task with both files (Steps 1 and 7); the intermediate Steps 3 and 5 may stay golden-only for fast iteration.
 
 **Interfaces:**
 - Consumes: the `quote`/`$()` surface; the local bindings already computed in each emitter (`handler_body`/`cast_body`, `info_handler`, `terminate_handler`, `code_change_handler`).
@@ -127,10 +127,10 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "refacto
 
 **Scope boundary:** Only the four **fixed-parameter** callbacks become templates: `handle_cast`, `handle_info`, `terminate`, `code_change`. `init`, `handle_call`, and `start_link` KEEP their `function(…)` builder calls — their parameters are dynamic (`init_spec.parameter`, `init_spec.start_parameters`), linear (`parameter_linear("from", …)`), or dependently typed (`Reply(reply_type)`), which the literal-parameter template form cannot express. Do not attempt to templatize those three in this run.
 
-- [ ] **Step 1: Record the baseline-green golden run**
+- [ ] **Step 1: Record the baseline-green characterization run**
 
-Run: `cd <worktree> && mix test test/cure/compiler/actor_quote_golden_test.exs`
-Expected: PASS — `6 passed`.
+Run: `cd <worktree> && mix test test/cure/compiler/actor_quote_golden_test.exs test/cure/compiler/actor_computed_test.exs`
+Expected: PASS — `6 passed` (goldens) and `19 passed` (behavioral). This is the invariant Task 2 must preserve.
 
 - [ ] **Step 2: Templatize `handle_cast` and `handle_info` in `emit_actor_parts`**
 
@@ -196,10 +196,10 @@ with:
 
 Leave `handle_call`, `init`, and `start_link` (and the `alias_node`/`request_type` lines) exactly as they are.
 
-- [ ] **Step 7: Run the golden guard for both emitters**
+- [ ] **Step 7: Run the full characterization guard for both emitters**
 
-Run: `cd <worktree> && mix test test/cure/compiler/actor_quote_golden_test.exs`
-Expected: PASS — `6 passed`, byte-identical (this exercises `GStructuredCall`/`GLifecycle`, which hit `emit_actor_call_parts`). If a SHA diverges, STOP and report.
+Run: `cd <worktree> && mix test test/cure/compiler/actor_quote_golden_test.exs test/cure/compiler/actor_computed_test.exs`
+Expected: PASS — `6 passed` (goldens byte-identical — this exercises `GStructuredCall`/`GLifecycle`, which hit `emit_actor_call_parts`) and `19 passed` (behavioral, byte-identical-in-effect — these route through the now-templatized `emit_actor_parts`/`emit_actor_call_parts` via Task 1's `derive_actor` adapter). If a golden SHA diverges, STOP and report; if a behavioral test regresses, STOP and report (Halt protocol) — do not weaken or edit the immutable test.
 
 - [ ] **Step 8: Commit**
 
@@ -216,7 +216,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "refacto
 **Files:**
 - Modify: `lib/std/actor.cure` — `ActorDefinition` family (~10–19); `derive_actor_family` (~23); `emit_actor_parts` (~396); `emit_actor_call_parts` (~419); the Task-1 `derive_actor` adapter (add `body: None()`).
 - Test: `test/cure/compiler/actor_computed_test.exs` — append one new test.
-- Characterization guard: `test/cure/compiler/actor_quote_golden_test.exs` (no-body goldens must stay byte-identical).
+- Characterization guard: `test/cure/compiler/actor_quote_golden_test.exs` (no-body goldens must stay byte-identical) **and** the pre-existing 19 tests in `test/cure/compiler/actor_computed_test.exs` (must stay green alongside the new 20th test — see Step 9).
 
 **Interfaces:**
 - Consumes: the `Declarations` family shape → auto-generated field `body: Option(DeclarationsSyntax)` on `ActorDefinitionSyntax`; `children/1`; `append/2`; `Cure.Compiler.compile_and_load/2`.
@@ -311,7 +311,45 @@ The only change in this step versus the post-Task-2 file is structural: the decl
 
 - [ ] **Step 7: Thread `extra_declarations` into `emit_actor_call_parts`**
 
-Add `, extra_declarations: List(Syntax)` as the final parameter after `reply_type: Syntax`. Wrap that emitter's `gen_server_module` declaration list the same way — change its closing `]` (the list passed to `gen_server_module`) to `], extra_declarations)` so it reads `gen_server_module(module_name, state_type, append([ … start_link … ], extra_declarations))`. Do not touch `handle_call`, `init`, `alias_node`, or the outer `request_type` sibling.
+Add `, extra_declarations: List(Syntax)` as the final parameter after `reply_type: Syntax`. Wrap that emitter's `gen_server_module` declaration list the same way as Step 6 — this needs **two** edits to the list passed to `gen_server_module`: insert `append(` immediately before its opening `[`, and change its closing `]` to `], extra_declarations)` immediately before the `)` that closes `gen_server_module(...)`. The post-Task-2 body reads:
+
+```cure
+    block(append(message_declarations, [
+      request_type,
+      gen_server_module(module_name, state_type, [
+        alias_node("Message", message_type),
+        alias_node("Request", variable("ActorRequest")),
+        function("init", [init_spec.parameter], init_type, init_spec.body),
+        function("handle_call", [parameter("request", variable("Request")), parameter_linear("from", call("Reply", [reply_type])), parameter("state", variable("State"))], cast_result_type, call_body),
+        quote (fn handle_cast(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(cast_body)),
+        quote (fn handle_info(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(info_handler)),
+        quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
+        quote (fn code_change(old: Atom, state: State, extra: Atom) -> Effect(Tuple(Atom, State)) = $(code_change_handler)),
+        function("start_link", init_spec.start_parameters, start_type, call("Std.Otp.start_link", [module_expr, init_spec.start_argument]))
+      ])
+    ]))
+```
+
+becomes:
+
+```cure
+    block(append(message_declarations, [
+      request_type,
+      gen_server_module(module_name, state_type, append([
+        alias_node("Message", message_type),
+        alias_node("Request", variable("ActorRequest")),
+        function("init", [init_spec.parameter], init_type, init_spec.body),
+        function("handle_call", [parameter("request", variable("Request")), parameter_linear("from", call("Reply", [reply_type])), parameter("state", variable("State"))], cast_result_type, call_body),
+        quote (fn handle_cast(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(cast_body)),
+        quote (fn handle_info(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(info_handler)),
+        quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
+        quote (fn code_change(old: Atom, state: State, extra: Atom) -> Effect(Tuple(Atom, State)) = $(code_change_handler)),
+        function("start_link", init_spec.start_parameters, start_type, call("Std.Otp.start_link", [module_expr, init_spec.start_argument]))
+      ], extra_declarations))
+    ]))
+```
+
+Do not touch `handle_call`, `init`, `alias_node`, or the outer `request_type` sibling. The extra `extra_declarations` argument must land on the list passed to `gen_server_module` (via `append`), not as a fourth positional argument to `gen_server_module` itself — `gen_server_module/3` takes exactly three parameters (see `lib/std/actor.cure:447`), so appending it anywhere else is an arity error.
 
 - [ ] **Step 8: Run the new test to verify it passes**
 
