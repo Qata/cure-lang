@@ -170,7 +170,18 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   excludes timers, Core Erlang omits them, mailbox types list timeouts as future work.
   → Discharge against OTP docs (and the live AtomVM `send_after` cancellation defect).
 - **G5. Effect tracking for OTP ops.** NVLang *explicitly* excludes it (§8.4); Cure has
-  `Effect(T)`. → Cure builds effect-honest OTP op types (this is work-order item G).
+  `Effect(T)`. → **DONE for the send algebra — `Std.Otp.SendEffect`
+  (`lib/std/otp_send_effect.cure`).** The effect-honest companion to obligation (2):
+  `spawn_actor`/`post` return `Effect(Pid(m))`/`Effect(Response)` and the client threads
+  them with monadic `let` (`effect_bind`). The point proven is that the clause-DERIVED
+  message index survives the effect discipline — the bind refines the implicit `m := Msg`
+  from the handler's domain, and the effectful `post` still forces `msg : Msg`. So
+  send-safety is an invariant of the send, not of purity. Kernel-checked; Idris-mirrored
+  with a user-defined `Eff` monad (`test/oracle/otp/ob2_eff_send_safe` +
+  `ob2_eff_neg_wrong_msg`, rel=same); behavioural negatives in
+  `test/cure/stdlib/otp_send_effect_test.exs`. (The wider typed OTP library `Std.Otp`
+  already returns `Effect` for every op; this module isolates the *derived-index ×
+  effect-bind* interaction as a metatheory result.)
 - **G6. `gen_server:call` failure/totality.** No paper types the 5000 ms timeout /
   caller-`exit` failure mode; NVLang's `await` is total. → Cure builds `Effect(Result(r,
   _))` / an exceptional index; supervision-restart tied to state preservation.

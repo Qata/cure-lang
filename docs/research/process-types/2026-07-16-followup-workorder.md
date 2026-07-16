@@ -80,6 +80,14 @@ refines multiple siblings for free) → `rel=same`.
 
 ## B. `with … proof` clause + multi-sibling still use the linear-hostile Eq-transport
 
+**Disposition (2026-07-16): DEFER — not on the metatheory path.** No OTP metatheory
+proof built to date uses a linear-sibling `with … proof`: the obligation-(1) branching
+handler, reply-preservation, and message-safety proofs all use plain `match` (item C
+path) or motive-gen `with r` (item A). B is speculative completeness for a construct the
+metatheory does not exercise, and the fix (option (2): motive with BOTH sibling Π-domains
+AND the Eq-arrow) is non-trivial elaborator work. Revisit only if a real program writes a
+linear-sibling `with … proof`. Original analysis below.
+
 **Status:** open; largely subsumed by A. The Eq-transport encoding
 (`elaborate_with_eq_branch`, `eq_arrow_motive`, `collect_with_siblings` in
 `elaborator.ex`) wraps a sibling as `transport_case(prf) applied to cap` — a
@@ -140,6 +148,13 @@ the cost). Repro: `spike7` / `docs/.../spike/spike7_sibling_refine.cure`.
 
 ## D. CBV-vs-CBN `let` linearity divergence from Idris
 
+**Disposition (2026-07-16): DECIDED — leave as-is; no code.** The metatheory targets the
+BEAM, which is call-by-value, so Cure's CBV-sound `let` rule is the *correct* rule for
+this project, not a parity bug. Forcing strict Idris (CBN/substitution) parity would
+reject valid CBV programs (`let _ = consume(linear) in …`) — a completeness loss. The
+`let_linear` oracle cluster already omits the divergent case deliberately rather than
+marking it `same`. Decision recorded; original analysis below.
+
 **Status:** intentional, documented; decide whether to "fix". After the soundness fix
 (`relevance.ex` `:let` `:not_join`), Cure ACCEPTS `let x = consume(c) in Done` (c
 linear, consumed once, result discarded) where Idris REJECTS it (Idris counts `let` by
@@ -190,6 +205,21 @@ documented in the findings docs; write retroactive specs only if the paper-trail
 wanted. No code risk.
 
 ## G. Obligation (2) effect-honesty (scoped out by the parent brief)
+
+**Disposition (2026-07-16): DONE (the valuable slice) — `Std.Otp.SendEffect`
+(`lib/std/otp_send_effect.cure`).** Rather than re-flavour the pure obligation-(2)
+exemplar (which deliberately stays pure to isolate the send-safety argument, and is
+pinned by the `ob2_*` oracle), added an effect-honest COMPANION that proves the
+interesting property: the clause-DERIVED message index survives the `Effect` discipline.
+`spawn_actor`/`post` return `Effect(Pid(m))`/`Effect(Response)`; the client threads them
+with monadic `let` (`effect_bind`), the bind refines `m := Msg` from the handler's
+domain, and the effectful `post` still forces `msg : Msg`. Negatives (wrong-typed message,
+non-total handler) reject under the effect discipline. Kernel-checked; Idris-mirrored with
+a user `Eff` monad (`test/oracle/otp/ob2_eff_send_safe` + `ob2_eff_neg_wrong_msg`,
+rel=same); tests in `test/cure/stdlib/otp_send_effect_test.exs`; build-out map G5 marked
+done for the send algebra. The `Effect` former turned out to already carry `effect_pure`/
+`effect_bind` in the kernel (more than "inert slice 1"), so no former work was needed.
+Original note below.
 
 **Status:** intentionally out of scope. `Std.Otp.Proof`'s `spawn_actor`/`post` are
 PURE (no `Effect`) — faithful to NVLang (which has no effect tracking) and to the
