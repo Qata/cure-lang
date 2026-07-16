@@ -96,7 +96,107 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
          terminate :shutdown
          code_change %[:ok, state + 1]
      """,
-     "511485c8a39dcc47ff708cabdeec07cf4a6b9bd3dcc56c50e8e1343c088ed925"}
+     "511485c8a39dcc47ff708cabdeec07cf4a6b9bd3dcc56c50e8e1343c088ed925"},
+    # --- Raw Gen A characterization goldens (consolidation safety net) ---
+    # Each freezes the compiled BEAM of one legacy `becomes lift module name`
+    # raw-callback template (lib/std/actor.cure). They exist so the 1e
+    # consolidation of the 16 positional templates into one unified-family raw
+    # branch can be proven byte-identical. The L177 form (`initial` + `handle_cast`
+    # with no `state`) is intentionally absent: it is dead code that fails to
+    # compile on this tree (polymorphic state var never pinned) and is used by no
+    # test or demo, so the consolidation drops it rather than reproducing it.
+    {"Raw01_call_returns",
+     """
+     actor Cure.Generated.Raw01_call_returns state Int call Int returns Bool
+       %[:reply, true, state]
+     """,
+     "81bd23b8b6f2b2c42a27df88fdabe29aa6fa859f6d667f917a8b67f0f5f609ee"},
+    {"Raw02_init",
+     """
+     actor Cure.Generated.Raw02_init state Int init
+       %[:ok, 7]
+     """,
+     "c7e686a9760e103fd6f71107b2aca4a7ce0228ad50ce4ca1545489e7277754f5"},
+    {"Raw03_terminate",
+     """
+     actor Cure.Generated.Raw03_terminate state Int terminate
+       :shutdown_complete
+     """,
+     "1085c4d8a4583a8e95790f539fc1aedf9457d9b3fe85784e2daae15480c3e1ff"},
+    {"Raw04_code_change",
+     """
+     actor Cure.Generated.Raw04_code_change state Int code_change
+       %[:ok, state + 1]
+     """,
+     "2803b5276b6cfe999ef27dd48a071dcf5fb5df4f7f41bc85f17ca6196cf285bf"},
+    {"Raw05_state_messages_cast",
+     """
+     actor Cure.Generated.Raw05_state_messages_cast state Int messages Atom handle_cast
+       pickup
+         message == :inc -> %[:noreply, state + 1]
+         else -> %[:noreply, state]
+     """,
+     "8c68506061fd72938e611bb4ca7139079fb073b0aae35f1bb8a8c1c04064c82f"},
+    {"Raw06_state_cast",
+     """
+     actor Cure.Generated.Raw06_state_cast state Int handle_cast
+       %[:noreply, state]
+     """,
+     "3683d7449f89b03d5f4330609b2d581131d6061dea4f3e84aebbd7ad1d705d21"},
+    {"Raw07_state_initial_cast",
+     """
+     actor Cure.Generated.Raw07_state_initial_cast state Int initial 0 handle_cast
+       %[:noreply, state]
+     """,
+     "da4eb6bdb6a6ad5f4a332508ad33e5cb0a5a14629280cbe1c2f501214dbb017c"},
+    {"Raw08_state_initial_messages_cast",
+     """
+     actor Cure.Generated.Raw08_state_initial_messages_cast state Int initial 0 messages Atom handle_cast
+       %[:noreply, state]
+     """,
+     "4c1e8b80c5beaf2d7530e9532937211cf333f0750d399d752dfeea4a6f5a77a7"},
+    {"Raw10_bare_cast",
+     """
+     actor Cure.Generated.Raw10_bare_cast handle_cast
+       %[:noreply, state]
+     """,
+     "d960f4e0002773caf1bd8f8cdf855ee2cb1dafc16909bd8b06123d1a23fe11ff"},
+    {"Raw11_state_messages_info",
+     """
+     actor Cure.Generated.Raw11_state_messages_info state Int messages Atom handle_info
+       %[:noreply, state]
+     """,
+     "452c46b46cb7db8fea849d1c5c85209a3fd774b7a299d7a58cbe4a31bc201a90"},
+    {"Raw12_state_info",
+     """
+     actor Cure.Generated.Raw12_state_info state Int handle_info
+       %[:noreply, state + 1]
+     """,
+     "83c072435c8ad460084846bdd078b120310cae0d4819a752dd58b14fcee661b4"},
+    {"Raw13_state_with_body",
+     """
+     actor Cure.Generated.Raw13_state_with_body state Int with 0
+       fn helper() -> Int = 0
+     """,
+     "7035f79646a68bf95c0f7b10bfb95e422bbdb6037cfb2b15781ffac47a7289a3"},
+    {"Raw14_state_body",
+     """
+     actor Cure.Generated.Raw14_state_body state Int
+       fn helper() -> Int = 0
+     """,
+     "5a8f011c1a8a62cde887a045aba29553bb8e2cbaae0cad045a8b245fa779fbff"},
+    {"Raw15_with_body",
+     """
+     actor Cure.Generated.Raw15_with_body with 0
+       fn helper() -> Int = 0
+     """,
+     "21eae5f62c773db2e1452e985e786ccc5061eb939b580f5b71f2db7c3262db96"},
+    {"Raw16_bare_body",
+     """
+     actor Cure.Generated.Raw16_bare_body
+       fn helper() -> Int = 0
+     """,
+     "60b2a426b44df7a6b06214b9ba96f90f9df6d5be383ce5654927f129fd49c50d"}
   ]
 
   defp beam_sha256(name, src) do
