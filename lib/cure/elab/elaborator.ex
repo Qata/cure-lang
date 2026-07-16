@@ -1463,36 +1463,29 @@ defmodule Cure.Elab.Elaborator do
         # Additive: falls back to the ordinary infer-then-check path on any failure, so
         # inference-position behaviour (no expected type) is unchanged.
         resolved = resolve_def_key(env, name, atom)
-        concrete_goal? = not Unify.has_meta?(expected_core)
 
-        goal_first? =
-          (concrete_goal? and implicit_def?(env, resolved)) or
-            (Enum.any?(args, &match?({:lambda, _m, _b}, &1)) and Map.has_key?(env.defs, resolved))
+        # Partial application of an implicit-carrying def against a function-type
+        # goal: eta-expand the missing explicit parameters into lambda binders —
+        # `konst(7)` at `(Int) -> Int` becomes `fn(x) -> konst(7, x)`. The residual
+        # binder domains come from the expected Π, reducing an under-saturated call
+        # (which the saturating implicit paths reject with `:too_few_arguments`, or
+        # mis-align the first explicit arg onto the leading implicit slot) to the
+        # ordinary saturated path. Idris elaborates an under-applied function
+        # checked against a function type exactly this way; the kernel re-checks the
+        # synthesized lambda, so only eta-equivalent well-typed terms are accepted.
+        residual = residual_explicit_arity(env, resolved, length(args))
 
-        goal_first =
-          if goal_first? do
-            case elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core) do
-              {:ok, term, _type} ->
-                case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-                  :ok -> {:ok, term}
-                  {:error, _} -> nil
-                end
-
-              {:error, _} ->
-                nil
-            end
-          end
-
-        # No post-hoc retry. There used to be one here, firing on
-        # `:unsolved_metavariables` under the guard `implicit_def?(resolved) and not
-        # has_meta?(expected_core)` — which is EXACTLY the first disjunct of
-        # `goal_first?` above. Whenever it fired, the identical
-        # `elaborate_global_app_expected` had therefore already run and failed, so it
-        # could only fail again. It was dead the moment the goal-first pre-pass was
-        # introduced, and stayed in the file because each new attempt was bolted on in
-        # front of the previous one instead of replacing it. Solving happens once, up
-        # front, where the goal is known.
-        goal_first || elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+        if residual > 0 and match?({:pi, _, _, _}, Kernel.normalize(ctx, expected_core)) do
+          elaborate_expr_checked(
+            eta_expand_call(meta, args, residual),
+            expected_core,
+            names,
+            ctx,
+            env
+          )
+        else
+          elaborate_checked_call_saturated(expr, resolved, expected_core, args, names, ctx, env)
+        end
     end
   end
 
@@ -1747,6 +1740,45 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+  # The saturated (or non-function-goal) checking-mode path for a non-constructor
+  # call: try the goal-first pre-pass when the goal can inform implicit solving,
+  # otherwise infer-then-recheck. Split out of the `true ->` branch of
+  # `elaborate_expr_checked({:function_call,...})` so the eta-expansion path can
+  # share `resolved` without duplicating this block. Defined here (after the
+  # `elaborate_expr_checked/5` clause group) so those clauses stay grouped.
+  defp elaborate_checked_call_saturated(expr, resolved, expected_core, args, names, ctx, env) do
+    concrete_goal? = not Unify.has_meta?(expected_core)
+
+    goal_first? =
+      (concrete_goal? and implicit_def?(env, resolved)) or
+        (Enum.any?(args, &match?({:lambda, _m, _b}, &1)) and Map.has_key?(env.defs, resolved))
+
+    goal_first =
+      if goal_first? do
+        case elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core) do
+          {:ok, term, _type} ->
+            case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+              :ok -> {:ok, term}
+              {:error, _} -> nil
+            end
+
+          {:error, _} ->
+            nil
+        end
+      end
+
+    # No post-hoc retry. There used to be one here, firing on
+    # `:unsolved_metavariables` under the guard `implicit_def?(resolved) and not
+    # has_meta?(expected_core)` — which is EXACTLY the first disjunct of
+    # `goal_first?` above. Whenever it fired, the identical
+    # `elaborate_global_app_expected` had therefore already run and failed, so it
+    # could only fail again. It was dead the moment the goal-first pre-pass was
+    # introduced, and stayed in the file because each new attempt was bolted on in
+    # front of the previous one instead of replacing it. Solving happens once, up
+    # front, where the goal is known.
+    goal_first || elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+  end
 
   # Recursively elaborate a run of surface tuple elements against a Σ-shaped goal,
   # peeling ONE Σ layer per element. Distinguishes two terminations:
@@ -2294,6 +2326,31 @@ defmodule Cure.Elab.Elaborator do
       %{quantities: q} when is_list(q) -> :erased in q
       _ -> false
     end
+  end
+
+  # Residual explicit-parameter count for a partial application in checking mode:
+  # the def's explicit (non-erased) arity minus the number of supplied arguments.
+  # Positive means the call is under-saturated. Only defs with recorded
+  # per-parameter quantities participate (every implicit-carrying def has them);
+  # a def without quantities returns 0 so its existing partial-application
+  # behaviour — non-implicit currying, which the kernel already types — is left
+  # exactly as-is.
+  defp residual_explicit_arity(env, key, supplied) do
+    case Env.get_def(env, key) do
+      %{quantities: q} when is_list(q) -> Enum.count(q, &(&1 != :erased)) - supplied
+      _ -> 0
+    end
+  end
+
+  # Eta-expand an under-saturated call by `k` explicit binders: `f(a1..an)`
+  # becomes `fn($eta0 .. $eta{k-1}) -> f(a1..an, $eta0 .. $eta{k-1})`. The
+  # `$`-prefixed binder names are synthetic and cannot collide with a source
+  # identifier. Reuses the original call `meta` (carrying `:name`) for the now-
+  # saturated inner application.
+  defp eta_expand_call(meta, args, k) do
+    vars = for i <- 0..(k - 1), do: {:variable, [], "$eta#{i}"}
+    params = for i <- 0..(k - 1), do: {:param, [], "$eta#{i}"}
+    {:lambda, [params: params], [{:function_call, meta, args ++ vars}]}
   end
 
   # Map a surface call name to its def-registry key: a qualified (`Std.Map.keys`)
