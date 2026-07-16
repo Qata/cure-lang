@@ -195,21 +195,18 @@ defmodule Cure.Elab.PiGradeSourceTest do
     end
   end
 
-  describe "obligation (1) is reach-pinned on roadblock #2 (sibling-binder refinement)" do
+  describe "obligation (1): plain `match` refines the linear reply capability (roadblock #2 CLOSED)" do
     # The handoff-brief §5 obligation-(1) shape: a `reply` eliminator with a leading
     # implicit `{r}` and a LINEAR reply capability whose value arg is typed by the
     # large-elimination `ReplyOf(r)`, driven by a handler that replies once per path.
     #
-    # This does NOT yet elaborate — not because of grades or the implicit-app path
-    # (both fixed / working) but because Cure's dependent `match` refines the
-    # RETURN/motive over the scrutinee yet NOT the types of SIBLING binders that
-    # depend on it. Matching `r` against `GetCount()` leaves `cap : ReplyCap(r)` (and
-    # thus `reply`'s inferred `{r}`) at the abstract `r`, so `v : ReplyOf(r)` never
-    # reduces to `Reply0`. This is §8 roadblock #2 (dependent-match coverage).
-    #
-    # REACH-PIN: flip this assertion to `{:ok, _}` when context-refinement-on-match
-    # lands. See docs/research/process-types/spike/ (spike5, spike7) for the repro.
-    test "reply(cap, R0) fails: ReplyOf(r) is not reduced in the GetCount branch" do
+    # This was reach-pinned to REJECT on roadblock #2 — dependent `match` refined the
+    # RETURN/motive but not the SIBLING `cap : ReplyCap(r)`, so `v : ReplyOf(r)` never
+    # reduced. That gap is now CLOSED: motive-generalization refines scrutinee-
+    # dependent siblings (work-order item A for `with r`, item C wiring plain `match`
+    # to the same machinery), so this now elaborates and the linear `cap` is consumed
+    # exactly once. Drop/dup remain rejected (see linear_sibling_refinement_test.exs).
+    test "reply(cap, R0): plain-match handler refines cap and elaborates" do
       src = """
       mod ReplyLinear
         type Reply0 = R0
@@ -237,7 +234,7 @@ defmodule Cure.Elab.PiGradeSourceTest do
       end
       """
 
-      assert {:error, {:index_mismatch, _}} = Program.elaborate(src)
+      assert {:ok, _env} = Program.elaborate(src)
     end
   end
 end

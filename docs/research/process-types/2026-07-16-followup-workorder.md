@@ -97,19 +97,32 @@ the motive with BOTH the sibling Π-domains AND the Eq-arrow, combining A's moti
 with the proof binding. (2) is cleaner. Low priority unless someone writes a
 linear-sibling `with … proof`.
 
-## C. Plain `match r` does not refine siblings (only `with r` does)
+## C. Plain `match r` refines siblings  ✅ MOSTLY DONE (one edge remains)
 
-**Status:** open (by design). `match r` refines the RETURN/motive per branch (spike1)
-but NOT sibling binder types (spike7 rejects `use_it(r, w: ReplyOf(r)) = match r …`).
-Only `with r` refines siblings. Idris's plain `match` refines both. Unifying them
-(making plain `match` do the sibling motive-gen when a scrutinee-dependent sibling is
-in scope) would remove a Cure/Idris ergonomic gap. Not required by the obligations.
+**Status:** MOSTLY DONE. `elaborate_match` (`elaborator.ex`) now, when its STANDARD
+path fails on a non-indexed family matched on a VARIABLE with scrutinee-dependent
+siblings (`collect_with_siblings`), retries via the shared
+`elaborate_motivegen_case` helper (same machinery as item A / `with r`). So the
+ergonomic OTP handler works with plain `match r` — no `with` needed:
 
-**Fix approach:** `elaborate_match` (`elaborator.ex`, ~2343) would need to detect
-scrutinee-dependent siblings (reuse `collect_with_siblings`) and route to the
-motive-gen path (A) instead of its return-only value-abstraction. Risk: `match` is a
-hot path; changing its motive could regress many tests. Prefer landing A first, then
-sharing its machinery.
+    fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = match r
+      GetCount() -> reply(cap, R0)  …
+
+Accepts; drop/dup in a branch reject (tests in `linear_sibling_refinement_test.exs`).
+The obligation-(1) reach-pin in `pi_grade_source_test.exs` flipped to `{:ok, _}`.
+
+**Why FALLBACK (not proactive):** the retry fires ONLY when the standard path fails,
+so working matches are untouched — provably non-regressing on a hot path.
+
+**REMAINING EDGE:** the retry keys on the standard path returning `{:error, _}`. When
+a branch body is a bare sibling VARIABLE returned directly (`use_it(r, w: ReplyOf(r))
+= match r | GetCount() -> w | …`), the standard path SUCCEEDS building a term and the
+KERNEL rejects it later (`:branch_type`) — outside `elaborate_match`, so the retry
+never fires. The call-argument shape (`reply(cap, …)`) fails DURING elaboration
+(`:index_mismatch`), so it retries fine. To close the edge: gate a `Kernel.check` on
+the standard `{:ok}` term when siblings are present and retry motive-gen on failure
+(adds a kernel call + a `collect_with_siblings` on every non-indexed var match — weigh
+the cost). Repro: `spike7` / `docs/.../spike/spike7_sibling_refine.cure`.
 
 ## D. CBV-vs-CBN `let` linearity divergence from Idris
 

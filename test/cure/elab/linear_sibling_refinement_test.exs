@@ -139,4 +139,42 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
       assert verdict2(handle) == :reject
     end
   end
+
+  describe "plain `match` (not `with`) refines the linear sibling too (item C)" do
+    # `match r` — no `with` — routes to the same motive-generalization machinery when
+    # its standard path fails and a scrutinee-dependent sibling is in scope, so the
+    # ergonomic OTP handler needs no `with`. Linearity is still enforced.
+    test "plain-match handler consuming cap once per path is accepted" do
+      defs = """
+        fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = match r
+          GetCount()  -> reply(cap, R0)
+          SetName(_)  -> reply(cap, R1a)
+          Ping()      -> reply(cap, R1b)
+      """
+
+      assert verdict(defs) == :accept
+    end
+
+    test "plain-match: a branch that DROPS the capability is rejected" do
+      defs = """
+        fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = match r
+          GetCount()  -> Done
+          SetName(_)  -> reply(cap, R1a)
+          Ping()      -> reply(cap, R1b)
+      """
+
+      assert verdict(defs) == :reject
+    end
+
+    test "plain-match: a branch that DUPLICATES the capability is rejected" do
+      defs = """
+        fn handle(r: Req, cap :linear ReplyCap(r)) -> Pair = match r
+          GetCount()  -> MkPair(reply(cap, R0), reply(cap, R0))
+          SetName(_)  -> MkPair(reply(cap, R1a), Done)
+          Ping()      -> MkPair(reply(cap, R1b), Done)
+      """
+
+      assert verdict(defs) == :reject
+    end
+  end
 end
