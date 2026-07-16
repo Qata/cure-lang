@@ -151,9 +151,24 @@ CBV programs (`let _ = consume(linear) in …`) and is a completeness loss. Reco
 leaving as-is; it's a defensible semantic choice, not a bug. See
 `2026-07-16-let-linearity-soundness-fix.md`.
 
-## E. Reify gap for INDEX-bearing families in a motive domain
+## E. Reify gap for INDEX-bearing families in a motive domain  ✅ NOT A LIVE GAP
 
-**Status:** pre-existing, reach-pinned (not introduced here). `Quote.reify`
+**Status:** INVESTIGATED — not reachable via sibling refinement. The motive-gen path
+(`elaborate_motivegen_case`) DOES generalize a sibling's type into the case motive as
+a Π domain (the shape the eq-transport design feared), but `collect_with_siblings`
+applies `resplit_data`, which recovers the param/index split — so an INDEX-bearing
+sibling family reifies correctly. Verified accepting across param-only, 0-param-1-index,
+param+index, indexed-scrutinee, and COMPUTED-index (`G(flip(r))`) siblings; two pinned
+in `linear_sibling_refinement_test.exs` ("INDEX-bearing families"). The eq-transport
+path (proof clause) still uses transport, not motive generalization, so it never
+reifies such a domain either. The latent collapse remains in `Quote.split_data_args`
+(reify WITHOUT a sig), but no reachable sibling-refinement program hits it. The stale
+`elaborate_with` doc comment was corrected. If a future path generalizes an
+index-bearing family into a motive WITHOUT `resplit_data`, revisit.
+
+Original text below.
+
+**Status (original):** pre-existing, reach-pinned (not introduced here). `Quote.reify`
 (`lib/cure/core/quote.ex:57`, `split_data_args`) collapses `{:vdata, name, params ++
 indices}`; `resplit_data` (`elaborator.ex:~2266`) restores the split via
 `Inductive.param_count`. For a PARAM-ONLY family (`ReplyCap(m)`), no misclassification

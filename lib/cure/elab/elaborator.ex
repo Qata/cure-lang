@@ -2698,9 +2698,13 @@ defmodule Cure.Elab.Elaborator do
 
   and each branch receives `prf : Eq(T, e, pat)` (the user's proof name, or an
   internal one). Siblings are refined **by transport in the branch body**, NOT
-  by generalizing their type into the motive (a `Π(SNat(w))…` motive domain
-  trips `Quote.reify`'s `{:vdata}` param/index collapse — a real kernel gap,
-  reach-pinned separately). For each sibling:
+  by generalizing their type into the motive. (When this was written, a
+  `Π(SNat(w))…` motive domain tripped `Quote.reify`'s `{:vdata}` param/index
+  collapse. The no-proof sibling case now DOES generalize into the motive —
+  `elaborate_motivegen_case` — and index-bearing families work there because
+  `collect_with_siblings` applies `resplit_data`, recovering the split; see
+  `linear_sibling_refinement_test.exs`. This proof-clause path keeps transport.)
+  For each sibling:
 
       h_j' = rewrite prf (λx. H_j[e↦x]) h_j   : H_j[e↦pat]
 

@@ -191,4 +191,61 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
       assert verdict(defs) == :accept
     end
   end
+
+  describe "sibling refinement handles INDEX-bearing families (reify gap handled by resplit)" do
+    # The motive-gen path abstracts a sibling's type into the case motive as a Π
+    # domain. `collect_with_siblings` applies `resplit_data`, so an INDEX-bearing
+    # sibling family — the `Π(SNat(w))` shape the eq-transport design avoided for fear
+    # of `Quote.reify`'s param/index collapse — refines correctly. These pin that the
+    # gap is not reachable via sibling refinement.
+    defp idx_verdict(src) do
+      case Program.elaborate(src) do
+        {:ok, _} -> :accept
+        {:error, _} -> :reject
+      end
+    end
+
+    test "sibling of an index-bearing family (F indexed by the scrutinee) refines" do
+      src = """
+      mod IdxSib
+        type Tag = TA | TB
+        type Res = MkRes
+        type F(a: Type) indices (t: Tag)
+          MkFA : F(a, TA)
+          MkFB : F(a, TB)
+        fn useF({a: Type}, {t: Tag}, x: F(a, t)) -> Res = match x
+          MkFA() -> MkRes
+          MkFB() -> MkRes
+        fn handle(r: Tag, w: F(Res, r)) -> Res = with r
+          TA() -> useF(w)
+          TB() -> useF(w)
+      end
+      """
+
+      assert idx_verdict(src) == :accept
+    end
+
+    test "sibling with a COMPUTED index `G(flip(r))` refines" do
+      src = """
+      mod ComputedIdx
+        type Tag = TA | TB
+        type Res = MkRes
+        fn flip(t: Tag) -> Tag = match t
+          TA() -> TB()
+          TB() -> TA()
+        type G indices (t: Tag)
+          MkGA : G(TA)
+          MkGB : G(TB)
+        fn useG({t: Tag}, y: G(t)) -> Res = match y
+          MkGA() -> MkRes
+          MkGB() -> MkRes
+        fn handle(r: Tag, w: G(flip(r))) -> Res = with r
+          TA() -> useG(w)
+          TB() -> useG(w)
+      end
+      """
+
+      assert idx_verdict(src) == :accept
+    end
+  end
 end
