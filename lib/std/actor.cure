@@ -182,17 +182,7 @@ mod Std.Actor
       callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name initial
 
-    syntax actor <name: ModuleName> state <state_type: Type> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_server
-      typealias State = state_type
-      callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
-      callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
-      callback handle_cast(message: m, state: State) returns Effect(Tuple(Atom, State)) = cast_body
-      callback handle_info(message: i, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
-      callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
-      callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name initial
+    syntax actor <name: ModuleName> state <state_type: Type> handle_cast <cast_body: Code until call> (call <call_body: Code>)? contextual computed by emit_raw_state_cast
 
     syntax actor <name: ModuleName> state <state_type: Type> initial <payload: Code> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
       use Std.Otp
@@ -358,6 +348,15 @@ mod Std.Actor
       Raw(_) -> None()
       value -> Some(derive_cases(value))
     let definition = ActorDefinitionSyntax{state: input.state_type, messages: None(), initial: None(), init: None(), on_cast: Some(derive_cases(input.cast_body)), on_call: on_call, on_info: None(), handle_cast: None(), handle_info: None(), terminate: None(), code_change: None(), body: None()}
+    derive_actor_family(input.name, definition)
+
+  ## Tier-0 raw adapter for `actor <name> state <T> handle_cast <raw body>`. The
+  ## `handle_cast` body is a full GenServer result spliced verbatim, so it routes
+  ## through the family's raw branch (on_cast None, handle_cast Some) instead of
+  ## the Cases path. One thin adapter over the shared emitter, replacing the
+  ## spelled-out template.
+  fn emit_raw_state_cast(input: ActorSyntax) -> Syntax =
+    let definition = ActorDefinitionSyntax{state: input.state_type, messages: None(), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: Some(input.cast_body), handle_info: None(), terminate: None(), code_change: None(), body: None()}
     derive_actor_family(input.name, definition)
 
   fn derive_cases(body: Syntax) -> Syntax = match children(body)

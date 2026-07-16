@@ -137,12 +137,15 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
          else -> %[:noreply, state]
      """,
      "8c68506061fd72938e611bb4ca7139079fb073b0aae35f1bb8a8c1c04064c82f"},
-    {"Raw06_state_cast",
-     """
-     actor Cure.Generated.Raw06_state_cast state Int handle_cast
-       %[:noreply, state]
-     """,
-     "3683d7449f89b03d5f4330609b2d581131d6061dea4f3e84aebbd7ad1d705d21"},
+    # Raw06_state_cast (`actor N state T handle_cast <body>`) has been FOLDED into
+    # the shared `emit_raw_state_cast` → `derive_actor_family_raw` emitter (§1e
+    # mechanism A). Per the corrected spec (d1aec7b4) the raw fold is a
+    # behavioral-equivalence guarantee, NOT byte-identical: the computed family
+    # branch legitimately reshapes the BEAM, and the folded form now requires
+    # `use Std.Actor` in scope (a computed rule resolves its elaborator, unlike a
+    # bare Tier-2 template). Its byte-identical golden therefore retires; behavioral
+    # equivalence is pinned by "terse template form routes through the shared family
+    # raw emitter" in actor_family_raw_test.exs.
     {"Raw07_state_initial_cast",
      """
      actor Cure.Generated.Raw07_state_initial_cast state Int initial 0 handle_cast

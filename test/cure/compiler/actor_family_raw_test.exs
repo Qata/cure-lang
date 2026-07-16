@@ -67,4 +67,23 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert apply(:"Cure.Generated.RawFamilyPickup", :handle_cast, [:inc, 4]) == {:noreply, 5}
     assert apply(:"Cure.Generated.RawFamilyPickup", :handle_cast, [:other, 4]) == {:noreply, 4}
   end
+
+  test "terse template form routes through the shared family raw emitter" do
+    # The single-line-fields `actor N state T handle_cast <body>` form is the
+    # positional TEMPLATE (not the block family form). It is rerouted from a
+    # spelled-out `becomes lift module name` block to `computed by
+    # emit_raw_state_cast`, which delegates to the shared family raw emitter.
+    # This pins that the reroute expands and behaves like the block form.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawTemplateCast state Int handle_cast
+        %[:noreply, state]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawTemplateCast", :handle_cast, [:ping, 7]) == {:noreply, 7}
+    assert apply(:"Cure.Generated.RawTemplateCast", :handle_cast, [42, 7]) == {:noreply, 7}
+  end
 end
