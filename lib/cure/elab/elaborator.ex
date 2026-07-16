@@ -836,6 +836,11 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Quasiquotation (SP5.1) in checked position: lower `quote` to its builder
+  # expression and check that against the expected type (`Syntax`).
+  def elaborate_expr_typed({:quoted_syntax, _meta, [inner]}, names, ctx, env),
+    do: elaborate_expr_typed(Cure.Compiler.MacroSyntax.lower_quote(inner), names, ctx, env)
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
 
   # Synthesise each element of a tuple literal to `{core, type_term}` (the inferred
@@ -7661,6 +7666,13 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr({:list, _, _} = node, scope, env),
     do: elaborate_expr(desugar_list(node), scope, env)
+
+  # Quasiquotation (SP5.1): `quote <form>` lowers to the `Std.Syntax` builder
+  # expression that constructs the reflected form, with `$(e)` splice holes
+  # elaborated in place. Pure surface sugar — the lowered term re-enters the
+  # ordinary elaborator (TCB delta 0).
+  def elaborate_expr({:quoted_syntax, _meta, [inner]}, scope, env),
+    do: elaborate_expr(Cure.Compiler.MacroSyntax.lower_quote(inner), scope, env)
 
   def elaborate_expr(other, _scope, _env), do: {:error, {:unsupported_expression, other}}
 

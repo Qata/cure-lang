@@ -73,4 +73,57 @@ defmodule Cure.Compiler.QuasiquoteTest do
     assert {:quoted_syntax, _m, [_]} = body
     assert collect(body, [:splice, :splice_group]) == []
   end
+
+  # -- Stage 3: quote lowers to a Std.Syntax value the elaborator accepts -----
+
+  defp elaborates?(src) do
+    match?({:ok, _}, Cure.Elab.Program.elaborate(src))
+  end
+
+  test "`quote` over a literal elaborates to a Syntax value" do
+    assert elaborates?("""
+           mod M
+             use Std.Syntax
+             fn f() -> Syntax = quote 1
+           end
+           """)
+  end
+
+  test "`quote` over a call form elaborates to a Syntax value" do
+    assert elaborates?("""
+           mod M
+             use Std.Syntax
+             fn f() -> Syntax = quote foo(bar)
+           end
+           """)
+  end
+
+  test "a single `$(e)` splice elaborates, injecting the Syntax argument" do
+    assert elaborates?("""
+           mod M
+             use Std.Syntax
+             fn f(x: Syntax) -> Syntax = quote g($(x))
+           end
+           """)
+  end
+
+  test "a `$(xs ...)` group splice elaborates, flattening the List(Syntax)" do
+    assert elaborates?("""
+           mod M
+             use Std.Syntax
+             use Std.List
+             fn f(xs: List(Syntax)) -> Syntax = quote g($(xs ...))
+           end
+           """)
+  end
+
+  test "a group splice followed by a static child elaborates (append shape)" do
+    assert elaborates?("""
+           mod M
+             use Std.Syntax
+             use Std.List
+             fn f(xs: List(Syntax)) -> Syntax = quote g($(xs ...), bar)
+           end
+           """)
+  end
 end
