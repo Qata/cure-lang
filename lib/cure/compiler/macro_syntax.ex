@@ -293,11 +293,22 @@ defmodule Cure.Compiler.MacroSyntax do
   defp synlit(v) when is_atom(v), do: {:s_atom, v}
   defp synlit(v) when is_list(v), do: {:s_list, Enum.map(v, &synlit/1)}
 
+  # A raw lexer Token, leaked into a macro input by a `delayed raw until dedent`
+  # capture. Reflected by its content (type + value) only: source position is
+  # excluded so the macro recursion guard (expansion_key/1) stays
+  # position-insensitive, while two Tokens of different type or value still
+  # reflect differently and are not conflated. A struct is a map, so this MUST
+  # precede the plain-map clause below.
+  defp synlit(%Cure.Compiler.Token{type: type, value: value}),
+    do: {:s_list, [{:s_atom, type}, synlit(value)]}
+
   # A meta value that is a plain Elixir map (e.g. an `interface`'s
   # `defaults:` table, name -> default-method-body AST -- see
   # parse_interface/1). Representable losslessly as a list of key/value
   # synlit pairs; order is not semantically meaningful for a lookup table.
-  defp synlit(v) when is_map(v),
+  # Structs are excluded — they are not plain lookup tables and are not
+  # Enumerable (see the Token clause above).
+  defp synlit(v) when is_map(v) and not is_struct(v),
     do: {:s_map, Enum.map(v, fn {k, val} -> {synlit(k), synlit(val)} end)}
 
   # A meta value that is itself a full AST node (e.g. a binary-segment
