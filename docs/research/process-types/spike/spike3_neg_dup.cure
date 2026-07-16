@@ -1,0 +1,6 @@
+mod LinNegDup
+  # PROBE L2 (negative): using a linear binder twice must be REJECTED.
+  type Box = MkBox
+  type Pair = MkPair(Box, Box)
+  fn dup_it(x :linear Box) -> Pair = MkPair(x, x)
+end

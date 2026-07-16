@@ -1,0 +1,5 @@
+mod LinNegDrop
+  # PROBE L1 (negative): dropping a linear binder must be REJECTED.
+  type Box = MkBox
+  fn drop_it(x :linear Box) -> Box = MkBox
+end
