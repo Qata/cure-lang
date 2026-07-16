@@ -221,10 +221,11 @@ NVLang minus one annotation.
 
 ---
 
-## 5. NEW papers found (not in the repo) — get these
+## 5. NEW papers found — now PULLED IN (six of seven)
 
-These surfaced during the arXiv verification and are NOT in `docs/research/`. Ranked by
-relevance to actually building the metatheory.
+These surfaced during the arXiv verification. All but Mostrous–Vasconcelos are now in
+`docs/research/process-types/` (Mostrous is Springer-paywalled; HAL serves only a JS
+landing page). Ranked by relevance to actually building the metatheory.
 
 1. **"Proof of Delivery: Mechanized Mailbox Types"** — Schiebelbein, Bieniusa, Fowler,
    **COORDINATION 2026** (simonjf.com/writing/proof-of-delivery.pdf). **Rocq/Coq
