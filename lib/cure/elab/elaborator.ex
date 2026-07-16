@@ -5094,27 +5094,36 @@ defmodule Cure.Elab.Elaborator do
           # A constructor branch body. Infer FIRST — this preserves every case that
           # already worked, including a reconstruction whose indices the present
           # arguments determine and the carried-index-Eq transport (which wraps an
-          # inferred body). ONLY when inference cannot pin the erased indices —
-          # `prim()`/`seq(l,r)` reconstructed at a refined index with no present
-          # argument to solve `av`/`bv` from (`:unsolved_metavariables`) — retry in
-          # checking mode, letting the branch's expected type pin them.
+          # inferred body). Retry in checking mode — letting the branch's expected
+          # type drive the constructor — when inference cannot pin the erased indices
+          # (`prim()`/`seq(l,r)` reconstructed at a refined index with no present
+          # argument to solve `av`/`bv` from: `:unsolved_metavariables`) OR when a
+          # field is not inferable at all (`:unsupported_expression`) — e.g. an
+          # unannotated lambda in a field like `MkLensRep(v, fn new -> ...)`, whose
+          # domain only the field type supplies. Both are exactly the cases Idris
+          # handles by checking the arm body against the match's expected type; the
+          # kernel re-checks either way, so this only ever accepts well-typed terms.
           case elaborate_expr_typed(expr, names, ctx, env) do
             {:ok, term, _type} -> {:ok, term}
             {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
+            {:error, {:unsupported_expression, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
             {:error, _} = err -> err
           end
 
         true ->
           # An ordinary (non-constructor) function-call arm body. Infer FIRST to
-          # preserve every case that already worked; ONLY when inference cannot
-          # solve the call's result-type metavariables — a polymorphic nullary
-          # function like `empty() -> Iter(t)` whose `t` has no argument to fix it
-          # — retry in checking mode, letting the branch's expected type pin them
-          # (mirrors the constructor-arm path above; Idris checks arm bodies
-          # against the match's expected type).
+          # preserve every case that already worked; retry in checking mode when
+          # inference cannot solve the call's result-type metavariables — a
+          # polymorphic nullary function like `empty() -> Iter(t)` whose `t` has no
+          # argument to fix it (`:unsolved_metavariables`) — or when an argument is
+          # not inferable (`:unsupported_expression`, e.g. an unannotated lambda
+          # passed to a higher-order call), letting the branch's expected type drive
+          # it. Mirrors the constructor-arm path above; Idris checks arm bodies
+          # against the match's expected type, and the kernel re-checks either way.
           case elaborate_expr_typed(expr, names, ctx, env) do
             {:ok, term, _type} -> {:ok, term}
             {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
+            {:error, {:unsupported_expression, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
             {:error, _} = err -> err
           end
       end
