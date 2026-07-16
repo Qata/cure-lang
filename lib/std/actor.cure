@@ -318,19 +318,15 @@ mod Std.Actor
         None() -> default_actor_init(state_type)
 
   fn derive_actor(input: ActorSyntax) -> Syntax =
-    let module_name: SynLit = match input.name
-      Leaf(_, _, SAtom(name)) -> SAtom(name)
-      _ -> SStr("Cure.Generated.Actor")
-    let module_expr: Syntax = match input.name
-      Leaf(_, _, SAtom(name)) -> atom_literal(name)
-      _ -> atom_literal(:generated_actor)
-    match derive_pattern_heads(input.cast_body)
-      InvalidHeads(reason) -> Failure(reason, [])
-      Heads(heads) ->
-        match derive_reply_contract(input.call_body, input.state_type)
-          NoCall -> emit_actor(input, module_name, module_expr, heads)
-          InvalidCall(reason) -> Failure(reason, [])
-          CallContract(request_heads, reply_type) -> emit_actor_call(input, module_name, module_expr, heads, request_heads, reply_type)
+    let on_call = match input.call_body
+      Raw(_) -> None()
+      value -> Some(derive_cases(value))
+    let definition = ActorDefinitionSyntax{state: input.state_type, messages: None(), initial: None(), init: None(), on_cast: derive_cases(input.cast_body), on_call: on_call, on_info: None(), terminate: None(), code_change: None()}
+    derive_actor_family(input.name, definition)
+
+  fn derive_cases(body: Syntax) -> Syntax = match children(body)
+    [_scrutinee | arms] -> Node(:cases, [], arms)
+    _ -> Node(:cases, [], [])
 
   fn derive_reply_contract(call_body: Syntax, state_type: Syntax) -> ReplyInference = match call_body
     Raw(_) -> NoCall
@@ -390,9 +386,6 @@ mod Std.Actor
             true -> ReplyType(variable("Bool"), :bool)
             false -> InvalidReply(:reply_type_not_derivable)
 
-  fn emit_actor(input: ActorSyntax, module_name: SynLit, module_expr: Syntax, heads: List(Syntax)) -> Syntax =
-    emit_actor_parts(module_name, module_expr, input.state_type, default_actor_init(input.state_type), variable("ActorMessage"), [enum_type("ActorMessage", heads)], input.cast_body, Raw(SOpaque), Raw(SOpaque), Raw(SOpaque), heads)
-
   fn emit_actor_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, heads: List(Syntax)) -> Syntax =
         let result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
@@ -412,9 +405,6 @@ mod Std.Actor
             function("start_link", init_spec.start_parameters, start_type, call("Std.Otp.start_link", [module_expr, init_spec.start_argument]))
           ])
         ]))
-
-  fn emit_actor_call(input: ActorSyntax, module_name: SynLit, module_expr: Syntax, message_heads: List(Syntax), request_heads: List(Syntax), reply_type: Syntax) -> Syntax =
-    emit_actor_call_parts(module_name, module_expr, input.state_type, default_actor_init(input.state_type), variable("ActorMessage"), [enum_type("ActorMessage", message_heads)], input.cast_body, input.call_body, Raw(SOpaque), Raw(SOpaque), Raw(SOpaque), message_heads, request_heads, reply_type)
 
   fn emit_actor_call_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, call_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, message_heads: List(Syntax), request_heads: List(Syntax), reply_type: Syntax) -> Syntax =
     let request_type: Syntax = enum_type("ActorRequest", request_heads)
