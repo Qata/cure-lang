@@ -73,4 +73,32 @@ defmodule Cure.Elab.CatchallPatternTest do
     assert apply(mod, :tag, [:Green]) == {:S, :Z}
     assert apply(mod, :tag, [:Blue]) == {:S, :Z}
   end
+
+  # Row #4 residual: a *named* default over a *non-variable* scrutinee combined
+  # with a *nested* arm (`match S(n) | S(Z()) -> … | other -> …`). There is no
+  # variable to bind `other` to, so the match path hoists the scrutinee into a
+  # fresh `let $s = S(n) in match $s | …`, letting the whole variable-scrutinee
+  # machinery apply and binding `other` to `$s` (evaluated once, as Idris'
+  # `case … of other =>`). Oracle `match/mt22_nested_named_default_nonvar` pins
+  # accept/accept parity.
+  test "named default over a non-variable scrutinee with nesting elaborates" do
+    src =
+      "mod M\n  type Nat = Z | S(Nat)\n  fn f(n: Nat) -> Nat = match S(n)\n    S(Z()) -> Z()\n    other -> other\nend\n"
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "the hoisted named default binds the whole scrutinee, once, on the BEAM" do
+    src =
+      "mod M\n  type Nat = Z | S(Nat)\n  fn f(n: Nat) -> Nat = match S(n)\n    S(Z()) -> Z()\n    other -> other\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.NestedNamedDefaultE2E", functions: [:f])
+
+    # f(Z): scrutinee S(Z) matches S(Z()) → Z.
+    assert apply(mod, :f, [:Z]) == :Z
+    # f(S(Z)): scrutinee S(S(Z)) misses S(Z()) → falls to `other` = the whole
+    # scrutinee S(S(Z)), proving the named default binds the hoisted value.
+    assert apply(mod, :f, [{:S, :Z}]) == {:S, {:S, :Z}}
+  end
 end

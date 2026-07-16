@@ -121,12 +121,24 @@ defmodule Cure.Elab.NestedPatternTest do
     assert apply(mod, :f, [:Z]) == :Z
   end
 
-  test "a NAMED catch-all with nesting over a non-variable scrutinee is a clean error (boundary)" do
-    # `S(n)` is not a variable, so the named catch-all has nothing to bind to.
+  test "a NAMED catch-all with nesting over a non-variable scrutinee hoists and binds once" do
+    # `S(n)` is not a variable, so there is nothing to bind the named catch-all
+    # to directly; `elaborate_match` hoists the scrutinee into a fresh
+    # `let $s = S(n) in match $s | …`, so `other` binds `$s` (evaluated once),
+    # matching Idris' `case … of other =>`. Oracle
+    # `match/mt22_nested_named_default_nonvar` pins accept/accept parity.
     src =
       @nat <>
         "  fn f(n: Nat) -> Nat = match S(n)\n    S(S(m)) -> m\n    other -> other\nend\n"
 
-    assert {:error, {:unsupported_pattern, :catchall_with_nesting}} = Program.elaborate(src)
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.NestedNamedCatchallNonVarE2E", functions: [:f])
+
+    # f(Z): scrut S(Z) misses S(S(m)) → `other` = S(Z).
+    assert apply(mod, :f, [:Z]) == {:S, :Z}
+    # f(S(Z)): scrut S(S(Z)) matches S(S(m)) with m = Z → Z.
+    assert apply(mod, :f, [{:S, :Z}]) == :Z
+    # f(S(S(Z))): scrut S(S(S(Z))) matches S(S(m)) with m = S(Z) → S(Z).
+    assert apply(mod, :f, [{:S, {:S, :Z}}]) == {:S, :Z}
   end
 end
