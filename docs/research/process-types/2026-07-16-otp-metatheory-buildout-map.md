@@ -164,9 +164,16 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   certified, Idris-mirrored (`test/oracle/otp/preservation`, `.../safety`, rel=same); tests
   in `otp_preservation_test.exs`, `otp_safety_test.exs`. `safety` exercises plain-`match`
   sibling refinement — matching `c` refines the witness `wt` so `preservation(wt, step)`
-  type-checks. Remaining: exit/link/monitor signals; multiple pids/interleaving; mailbox
-  FIFO order (abstracted — one `AllAccepted`-over-append lemma). The composition with
-  obligation (1) is **DONE for the reply TYPE** — see G1×G2 below.
+  type-checks. **Multiple pids / interleaving now DONE — `Std.Otp.System`
+  (`lib/std/otp_system.cure`):** a `System` is a pool of per-process `Config`s, a `SysStep`
+  is ANY one process taking a step while the others stay fixed (asynchronous, no global
+  lock), and `sys_preservation` proves GLOBAL well-typedness (every process well-typed) is
+  preserved by any interleaved step — NVLang's toy single-actor step cannot state this.
+  Idris-mirrored (`test/oracle/otp/system`, rel=same), tests in `otp_system_test.exs`.
+  Exit/link/monitor signals are `Std.Otp.Monitor`/`Std.Otp.Link`. Remaining: cross-process
+  message TRANSFER (a sender's `SSend` landing in another process's ether — needs a routing
+  index) and mailbox FIFO order (abstracted — one `AllAccepted`-over-append lemma). The
+  composition with obligation (1) is **DONE for the reply TYPE** — see G1×G2 below.
 - **G1×G2. COMPOSE: dependent reply typing preserved through delivery.** **DONE —
   `Std.Otp.ReplyPreservation` (`lib/std/otp_reply_preservation.cure`).** Strengthens G2's
   payload from a message *tag* to a request-answering *reply* `(r, v)` and proves
