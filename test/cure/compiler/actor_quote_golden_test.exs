@@ -13,6 +13,8 @@
 #   * GStructuredCall — structured `on_call`: reply channel + handle_call
 #   * GLifecycle      — optional terminate / code_change callback bodies
 #   * GFsmDerived     — derive_fsm: callback_mode + init callback bodies
+#   * GSup            — derive_supervisor: init %[:ok, %[strategy, children]]
+#   * GApp            — derive_application: stop / start_phase :ok bodies
 #
 # If a hash here changes, the port altered the generated program — that is the
 # failure this gate exists to catch. The ONLY legitimate reason to re-freeze is
@@ -64,6 +66,24 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
      fn make_start() -> FsmEvent = Start
      """,
      "20fd156f84f75a598bab7ac2064f2cf3edecb75057a9884b565b1d514f4438ab"},
+    {"GSup",
+     """
+     mod M
+       use Std.Supervisor
+
+       sup Cure.Generated.GSup
+         children []
+     """,
+     "c946d1c98c57efe5fc692ecad9c313ff11da59893f6cdad3cd2b06990d2c9818"},
+    {"GApp",
+     """
+     mod M
+       use Std.App
+
+       app Cure.Generated.GApp
+         root Cure.Generated.GSup
+     """,
+     "0fc99d391075931aa2c59ec052462675d4f45a754d10ebf45403601355699dfa"},
     {"GLifecycle",
      """
      mod M
