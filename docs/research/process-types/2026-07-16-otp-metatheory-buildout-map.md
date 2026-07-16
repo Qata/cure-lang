@@ -176,10 +176,15 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   deeper — the scan is the routing), REQUIRING `Accepted(t)` (a message may only be routed
   to a process that accepts it — the typed inter-process send). `deliver_preservation`
   proves routing preserves GLOBAL well-typedness, so a system of COMMUNICATING processes
-  stays well-typed. Idris-mirrored (`test/oracle/otp/routing`, rel=same). Remaining:
+  stays well-typed. Idris-mirrored (`test/oracle/otp/routing`, rel=same). **Mailbox FIFO
+  order now DONE — `Std.Otp.Fifo` (`lib/std/otp_fifo.cure`):** `SArrive` appends to the
+  mailbox END (FIFO) and `SRecv` consumes the FRONT; preservation is re-proved via the
+  `all_accepted_snoc` lemma (appending an accepted message keeps the mailbox all-accepted)
+  — exactly the `AllAccepted`-over-append lemma the order-abstracted modules deferred, now
+  discharged once and for all. Idris-mirrored (`test/oracle/otp/fifo`, rel=same). Remaining:
   HETEROGENEOUS routing (per-process types + target index, on `Registry`'s `GenServer`
-  handles) and mailbox FIFO order (abstracted — one `AllAccepted`-over-append lemma). The
-  composition with obligation (1) is **DONE for the reply TYPE** — see G1×G2 below.
+  handles). The composition with obligation (1) is **DONE for the reply TYPE** — see G1×G2
+  below.
 - **G1×G2. COMPOSE: dependent reply typing preserved through delivery.** **DONE —
   `Std.Otp.ReplyPreservation` (`lib/std/otp_reply_preservation.cure`).** Strengthens G2's
   payload from a message *tag* to a request-answering *reply* `(r, v)` and proves
