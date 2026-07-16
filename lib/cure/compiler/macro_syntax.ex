@@ -65,6 +65,11 @@ defmodule Cure.Compiler.MacroSyntax do
           | {:syn_raw, synlit}
           | {:syn_quoted, repr}
           | {:syn_failure, atom, [repr]}
+          # Quasiquote splice holes (SP5.1). The second element is the RAW
+          # surface AST of the spliced expression, kept un-reflected so
+          # `lower_quote/1` re-emits it verbatim for the ordinary elaborator.
+          | {:syn_splice, term()}
+          | {:syn_splice_group, term()}
 
   # -- to_syntax: parser AST -> repr -----------------------------------------
 
@@ -81,6 +86,12 @@ defmodule Cure.Compiler.MacroSyntax do
   # term (e.g. a compiled regex) -- honest, not a crash.
   @spec to_syntax(term()) :: repr
   def to_syntax({:quoted_syntax, _meta, [inner]}), do: {:syn_quoted, to_syntax(inner)}
+
+  # Quasiquote splice holes (SP5.1). Keep the inner expression RAW (do not
+  # reflect it): `lower_quote/1` re-emits it verbatim so the ordinary
+  # elaborator types and lowers the spliced `Syntax` / `List(Syntax)` value.
+  def to_syntax({:splice, _meta, [inner]}), do: {:syn_splice, inner}
+  def to_syntax({:splice_group, _meta, [inner]}), do: {:syn_splice_group, inner}
 
   def to_syntax({:family_option, meta, []}) when is_list(meta),
     do: {:syn_leaf, :option_none, [], :s_opaque}
@@ -124,6 +135,96 @@ defmodule Cure.Compiler.MacroSyntax do
   end
 
   def to_syntax(other), do: {:syn_raw, synlit(other)}
+
+  # -- quote lowering: quoted form -> Std.Syntax builder surface AST ----------
+
+  @doc """
+  Lower a `quote <form>` inner AST to an ordinary Cure surface expression that
+  builds the corresponding `Std.Syntax` value (SP5.1).
+
+  This is the parse-time expansion of `quote`: reflect the quoted form with
+  `to_syntax/1` (so `from_syntax` regenerates it exactly — `from_syntax ∘
+  to_syntax = id`), then map each `repr` node to its `Std.Syntax` constructor
+  application. A `$(e)` splice hole becomes the spliced expression `e`; a
+  `$(e ...)` group splice becomes `e` joined into the enclosing child list with
+  `Std.List.append`. The result re-enters the ordinary elaborator, so implicit
+  insertion, constructor resolution and list typing are handled there — no Core
+  is hand-built (TCB delta 0). The enclosing module must `use Std.Syntax` (and
+  `use Std.List` when group splices are present), exactly as a hand-written
+  builder expression would.
+  """
+  @spec lower_quote(term()) :: term()
+  def lower_quote(inner), do: repr_to_ast(to_syntax(inner))
+
+  # A splice hole in term position IS the spliced expression.
+  defp repr_to_ast({:syn_splice, inner}), do: inner
+
+  # A group splice reaching term position (rather than a child-list position)
+  # has no enclosing sequence to flatten into — a category error surfaced by
+  # the elaborator's orphan-splice check. Emit it as a bare `Std.List` value so
+  # the type mismatch (`List(Syntax)` where `Syntax` is expected) is reported.
+  defp repr_to_ast({:syn_splice_group, inner}), do: inner
+
+  defp repr_to_ast({:syn_node, tag, attrs, kids}),
+    do: qq_call("Node", [qq_atom(tag), attrs_ast(attrs), kids_ast(kids)])
+
+  defp repr_to_ast({:syn_leaf, tag, attrs, lit}),
+    do: qq_call("Leaf", [qq_atom(tag), attrs_ast(attrs), synlit_ast(lit)])
+
+  defp repr_to_ast({:syn_raw, lit}), do: qq_call("Raw", [synlit_ast(lit)])
+  defp repr_to_ast({:syn_quoted, inner}), do: qq_call("Quoted", [repr_to_ast(inner)])
+
+  defp repr_to_ast({:syn_failure, name, args}),
+    do: qq_call("Failure", [qq_atom(name), qq_list(Enum.map(args, &repr_to_ast/1))])
+
+  # Attribute list: `List(Attr)` where `Attr = KV(Atom, SynLit)`.
+  defp attrs_ast(attrs),
+    do: qq_list(Enum.map(attrs, fn {key, lit} -> qq_call("KV", [qq_atom(key), synlit_ast(lit)]) end))
+
+  # Child list, splicing groups. Runs of ordinary children become list
+  # literals; each `$(e ...)` group contributes its `List(Syntax)` value; the
+  # segments are joined left-to-right with `Std.List.append`. With no group
+  # splice this is a single list literal (clean Core — identical to a
+  # hand-written `[a, b, c]`).
+  defp kids_ast(kids), do: kids |> chunk_kids() |> segments_to_ast()
+
+  defp chunk_kids([]), do: []
+  defp chunk_kids([{:syn_splice_group, inner} | rest]), do: [{:group, inner} | chunk_kids(rest)]
+
+  defp chunk_kids([kid | rest]) do
+    {statics, tail} = Enum.split_while(rest, &(not match?({:syn_splice_group, _}, &1)))
+    [{:static, Enum.map([kid | statics], &repr_to_ast/1)} | chunk_kids(tail)]
+  end
+
+  defp segments_to_ast([]), do: qq_list([])
+  defp segments_to_ast([{:static, asts}]), do: qq_list(asts)
+  defp segments_to_ast([{:group, inner}]), do: inner
+  defp segments_to_ast([{:static, asts} | rest]), do: qq_append(qq_list(asts), segments_to_ast(rest))
+  defp segments_to_ast([{:group, inner} | rest]), do: qq_append(inner, segments_to_ast(rest))
+
+  defp synlit_ast({:s_int, n}), do: qq_call("SInt", [qq_lit(:integer, n)])
+  defp synlit_ast({:s_float, f}), do: qq_call("SFloat", [qq_lit(:float, f)])
+  defp synlit_ast({:s_str, s}), do: qq_call("SStr", [qq_lit(:string, s)])
+  defp synlit_ast({:s_bool, b}), do: qq_call("SBool", [qq_lit(:boolean, b)])
+  defp synlit_ast({:s_atom, a}), do: qq_call("SAtom", [qq_atom(a)])
+  defp synlit_ast({:s_list, items}), do: qq_call("SList", [qq_list(Enum.map(items, &synlit_ast/1))])
+  defp synlit_ast({:s_syntax, inner}), do: qq_call("SSyntax", [repr_to_ast(inner)])
+
+  defp synlit_ast({:s_map, pairs}),
+    do:
+      qq_call("SMap", [
+        qq_list(Enum.map(pairs, fn {k, v} -> qq_call("SPair", [synlit_ast(k), synlit_ast(v)]) end))
+      ])
+
+  defp synlit_ast(:s_opaque), do: qq_call("SOpaque", [])
+
+  # Surface-AST builders. The `line`/`col` are cosmetic here — this AST is
+  # generated, not sourced — so a fixed origin keeps the shape stable.
+  defp qq_call(name, args), do: {:function_call, [name: name, line: 0, col: 0], args}
+  defp qq_append(a, b), do: qq_call("append", [a, b])
+  defp qq_list(items), do: {:list, [line: 0, col: 0], items}
+  defp qq_atom(a) when is_atom(a), do: {:literal, [subtype: :symbol, line: 0, col: 0], a}
+  defp qq_lit(subtype, value), do: {:literal, [subtype: subtype, line: 0, col: 0], value}
 
   # -- expansion context -----------------------------------------------------
 

@@ -12,6 +12,7 @@ defmodule Cure.Migrate do
   See `Cure.Migrate.Rule` for the shape of a single rule.
   """
 
+  alias Cure.Compiler.MacroFamily
   alias Cure.Migrate.Rule
 
   defmodule Warning do
@@ -393,6 +394,28 @@ defmodule Cure.Migrate do
 
   defp collect_type_names({:indexed_type, meta, ch}, acc) when is_list(ch) do
     Enum.reduce(ch, maybe_name(meta, acc), &collect_type_names/2)
+  end
+
+  # A `macro` declaration synthesizes typed record types for its rules — a legacy
+  # `computed by` rule gets `syntax_type(keyword)` (`fsm` -> `FsmSyntax`), a
+  # structured `syntax family`/`expands with` gets `syntax_type(family)`
+  # (`FsmDefinition` -> `FsmDefinitionSyntax`) plus its `…InputSyntax`. Those
+  # records are generated during lowering (`MacroFamily.generated_record_declarations`,
+  # the same pipeline `Program.declarations`/`LiftModule.unit_declarations` run),
+  # so they are absent from the raw source AST this walk sees. Reproduce the exact
+  # lowering to learn their names; otherwise a sibling expander's signature
+  # (`fn derive_fsm(input: FsmSyntax)`) is misread as carrying a free type
+  # variable and spuriously warned/lowercased.
+  defp collect_type_names({:macro_def, meta, rules}, acc)
+       when is_list(meta) and is_list(rules) do
+    MacroFamily.lowered_rules(meta, rules)
+    |> Enum.filter(&(&1[:kind] == :computed))
+    |> Enum.uniq_by(&Map.get(&1, :syntax_type))
+    |> Enum.flat_map(&MacroFamily.generated_record_declarations(meta, &1))
+    |> Enum.reduce(acc, fn
+      {:container, cmeta, _fields}, a -> maybe_name(cmeta, a)
+      _other, a -> a
+    end)
   end
 
   defp collect_type_names({_k, _meta, ch}, acc) when is_list(ch) do

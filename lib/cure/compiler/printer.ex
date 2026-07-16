@@ -1193,6 +1193,25 @@ defmodule Cure.Compiler.Printer do
     "macro #{name}\n#{pad}#{body}"
   end
 
+  # -- Quasiquotation (`quote <form>`, `$(e)`, `$(e ...)`) -------------------
+
+  # SP5.1 surface sugar (parser.ex `parse_quote`/`parse_splice`). The printer
+  # backs `cure fmt`/`migrate`, and the stdlib now quotes (fsm/actor/app/
+  # supervisor), so these must reprint to the exact surface that reparses to the
+  # same node — not raise. A splice is legal only inside a quote, so its clause
+  # only fires while rendering a quoted form's inner tree.
+  defp to_string({:quoted_syntax, _meta, [inner]}, depth, indent) do
+    "quote " <> render(inner, depth, indent)
+  end
+
+  defp to_string({:splice, _meta, [expr]}, depth, indent) do
+    "$(" <> render(expr, depth, indent) <> ")"
+  end
+
+  defp to_string({:splice_group, _meta, [expr]}, depth, indent) do
+    "$(" <> render(expr, depth, indent) <> " ...)"
+  end
+
   defp to_string(other, _depth, _indent) when is_binary(other), do: other
 
   defp to_string(other, _depth, _indent) do

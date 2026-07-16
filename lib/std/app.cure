@@ -23,8 +23,8 @@ mod Std.App
       use_module("Std.App"),
       use_module("Std.Supervisor"),
       function("start", [parameter("kind", variable("t")), parameter("args", variable("a"))], start_type, start_body),
-      function("stop", [parameter("state", variable("s"))], stop_type, atom_literal(:ok)),
-      function("start_phase", [parameter("phase", variable("Atom")), parameter("kind", variable("t")), parameter("args", variable("a"))], stop_type, atom_literal(:ok))
+      function("stop", [parameter("state", variable("s"))], stop_type, quote :ok),
+      function("start_phase", [parameter("phase", variable("Atom")), parameter("kind", variable("t")), parameter("args", variable("a"))], stop_type, quote :ok)
     ])
 
   ## `app` is a transparent standard-library macro. The base application is

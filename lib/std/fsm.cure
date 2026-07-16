@@ -166,8 +166,8 @@ mod Std.Fsm
             use_module("Std.Otp"),
             alias_node("State", state_type),
             alias_node("Event", event_type),
-            function("callback_mode", [], variable("Atom"), atom_literal(:handle_event_function)),
-            function("init", [parameter("initial", variable("State"))], init_type, tuple([atom_literal(:ok), atom_literal(:initial), variable("initial")])),
+            function("callback_mode", [], variable("Atom"), quote :handle_event_function),
+            function("init", [parameter("initial", variable("State"))], init_type, quote %[:ok, :initial, initial]),
             function("handle_event", [parameter("event_type", variable("Atom")), parameter("event", variable("Event")), parameter("state", variable("Atom")), parameter("data", variable("State"))], result_type, event_body),
             function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_statem", [module_expr, variable("initial")]))
           ])

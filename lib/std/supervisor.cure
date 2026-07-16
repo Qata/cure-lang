@@ -20,7 +20,7 @@ mod Std.Supervisor
       Leaf(_, _, SAtom(value)) -> atom_literal(value)
       _ -> atom_literal(:generated_supervisor)
     let strategy = call("supervision_strategy", [call("one_for_one", []), int_literal(3), call("more", [int_literal(4)])])
-    let init_body = tuple([atom_literal(:ok), tuple([strategy, definition.children])])
+    let init_body = quote %[:ok, %[$(strategy), $(definition.children)]]
     let strategy_type = tuple_type([variable("Atom"), variable("Nat"), variable("Nat")])
     let init_type = call("Effect", [tuple_type([variable("Atom"), tuple_type([strategy_type, call("List", [variable("ChildSpec")])])])])
     lift_module_isolated(module_name, :supervisor, [
