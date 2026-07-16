@@ -146,9 +146,12 @@ defmodule Cure.E2E.TupleReprProbeTest do
     fn dep() -> Tele = Dep(Int, fn(x) -> Empty())
     fn start() -> Tele = dep()
   """
-  test "P3 GAP: higher-order ctor field (A -> Tele) fails to parse at the arrow" do
-    assert {:error, errs} = elab(@p3)
-    assert Enum.any?(errs, &match?({:expected, :rparen, :got, :arrow, _, _}, &1))
+  test "P3 (closed): higher-order ctor field (A -> Tele) parses and elaborates" do
+    # A PARENTHESISED function-typed constructor field now parses
+    # (`parse_paren_arrow_tail`): `Dep : (A: Type) -> (A -> Tele) -> Tele` — the
+    # `(A -> Tele)` field is one grouped type, bounded by its `)`, distinct from the
+    # ctor's own arrow chain. (Was: `{:error, {:expected, :rparen, :got, :arrow}}`.)
+    assert {:ok, _env} = elab(@p3)
   end
 
   @p5 """
