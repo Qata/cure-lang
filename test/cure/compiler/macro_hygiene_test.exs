@@ -223,4 +223,209 @@ defmodule Cure.Compiler.MacroHygieneTest do
     # the RHS `src()` is left entirely untouched (still a bare call, no args)
     assert {:function_call, _, []} = rhs
   end
+
+  test "auto-hygiene: a free template reference that is neither binder nor hole is left untouched" do
+    # `e + freevar`: `e` is a hole (→ use-site `x`), `freevar` is a plain free
+    # reference (not a template binder, not a hole). Auto-hygiene must freshen
+    # ONLY binders — a free var like `freevar` passes through verbatim, otherwise
+    # the walk would over-capture ordinary references (gap-(a) regression guard).
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Fv\n    syntax fv <e: Code> becomes e + freevar\n  fn f(x: Int) -> Int = fv x\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:binary_op, _, [{:variable, _, hole_ref}, {:variable, _, free_ref}]} = body
+
+    # the hole `e` is substituted to the use-site arg, NOT freshened
+    assert hole_ref == "x"
+    # the free reference passes through unchanged
+    assert free_ref == "freevar"
+  end
+
+  test "auto-hygiene: a <capture Name> binder opts out and binds into caller scope" do
+    # `<capture done>` marks a template binder that MUST NOT be freshened — it
+    # binds into the caller's scope on purpose (the documented opt-out). After
+    # expansion the binder and its reference both stay the literal name `done`.
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Cap\n    syntax cap becomes let <capture done> = true in done\n  fn f() -> Bool = cap\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:block, _, [assign, tail]} = body
+    {:assignment, _, [{:variable, _, binder}, _]} = assign
+    {:variable, _, tail_ref} = tail
+
+    # the <capture done> binder is NOT freshened
+    assert binder == "done"
+    # its reference stays the same literal name (binds into caller scope)
+    assert tail_ref == "done"
+    refute find_fresh(body)
+  end
+
+  test "auto-hygiene: a match-arm pattern binder is freshened, its body reference tracks it" do
+    # `match e / Some(x) -> x / None -> 0` invoked `mt some(x)`: the scrutinee `e`
+    # carries the use-site `some(x)`. The arm pattern `Some(x)` binds `x`, used in
+    # the arm body. Auto-hygiene freshens the pattern binder + body reference; the
+    # scrutinee's use-site `x` (hole material) is preserved.
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Mt\n    syntax mt <e: Code> becomes match e\n      Some(x) -> x\n      None -> 0\n  fn f(x: Int) -> Int = mt some(x)\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:pattern_match, _, [scrutinee, arm, _none]} = body
+    {:function_call, [{:name, "some"} | _], [{:variable, _, scrut_ref}]} = scrutinee
+    {:match_arm, arm_meta, [{:variable, _, arm_ref}]} = arm
+    {:function_call, [{:name, "Some"} | _], [{:variable, _, binder}]} = Keyword.fetch!(arm_meta, :pattern)
+
+    # the pattern binder is auto-freshened away from "x"
+    refute binder == "x"
+    # the arm body reference tracks the freshened binder
+    assert arm_ref == binder
+    # the scrutinee's use-site `x` (hole material) is preserved, NOT captured
+    assert scrut_ref == "x"
+  end
+
+  test "auto-hygiene: a guarded match arm renames the guard reference to the pattern gensym" do
+    # `Some(x) when x > 0 -> x`: the guard `x > 0` references the pattern binder.
+    # The frame must span BOTH the guard (in meta) and the body, so the guard's
+    # `x` is renamed to the SAME gensym as the pattern binder (else it goes free).
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Mg\n    syntax mg <e: Code> becomes match e\n      Some(x) when x > 0 -> x\n      None -> 0\n  fn f(x: Int) -> Int = mg some(x)\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:pattern_match, _, [_scrutinee, arm, _none]} = body
+    {:match_arm, arm_meta, [{:variable, _, arm_ref}]} = arm
+    {:function_call, [{:name, "Some"} | _], [{:variable, _, binder}]} = Keyword.fetch!(arm_meta, :pattern)
+    {:binary_op, _, [{:variable, _, guard_ref}, _]} = Keyword.fetch!(arm_meta, :guard)
+
+    refute binder == "x"
+    # both the body reference AND the guard reference track the pattern gensym
+    assert arm_ref == binder
+    assert guard_ref == binder
+  end
+
+  test "auto-hygiene: an expression-position lambda param is freshened, its body reference tracks it" do
+    # `map(fn(y) -> y + e)` invoked `lm y`: the hole `e` carries the use-site `y`.
+    # The lambda param `y` is a template binder; auto-hygiene freshens it and the
+    # body reference `y`, while the hole `e` (→ use-site `y`) is preserved.
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Lm\n    syntax lm <e: Code> becomes map(fn(y) -> y + e)\n  fn f(y: Int) -> Int = lm y\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:function_call, [{:name, "map"} | _], [lambda]} = body
+    {:lambda, lam_meta, [{:binary_op, _, [{:variable, _, lam_ref}, {:variable, _, hole_ref}]}]} = lambda
+    [{:param, _, binder}] = Keyword.fetch!(lam_meta, :params)
+
+    # the lambda param is auto-freshened away from "y"
+    refute binder == "y"
+    # the template body reference tracks the freshened param
+    assert lam_ref == binder
+    # the hole `e` (use-site `y`) is preserved, NOT captured by the lambda param
+    assert hole_ref == "y"
+  end
+
+  test "auto-hygiene: a single-clause named-fn-def param is freshened so it cannot capture the hole" do
+    # `fn g(x: Int) = x + e` invoked `withf x`: the hole `e` carries the use-site
+    # `x`. The template's `fn g` param `x` is a binder; auto-hygiene freshens it
+    # and the `x +` reference, so the hole's `x` (use-site) is NOT captured.
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Withf\n    syntax withf <e: Code> becomes fn g(x: Int) = x + e\n  fn f(x: Int) -> Int = withf x\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:function_def, fn_meta, [{:binary_op, _, [{:variable, _, param_ref}, {:variable, _, hole_ref}]}]} = body
+    [{:param, _, binder}] = Keyword.fetch!(fn_meta, :params)
+
+    # the fn-def param is auto-freshened away from "x"
+    refute binder == "x"
+    # the template body reference tracks the freshened param
+    assert param_ref == binder
+    # the hole `e` (use-site `x`) is preserved, NOT captured by the fn-def param
+    assert hole_ref == "x"
+  end
+
+  test "auto-hygiene: a guarded/where fn-def renames the guard and constraint references to the param gensym" do
+    # `fn g(x: Int) when x > 0 = x + e`: the `guards:` term (in meta) references
+    # the param. The frame must span the guard so its `x` tracks the param gensym.
+    {:ok, guarded} =
+      parse(
+        "mod M\n  macro Fg\n    syntax chk <e: Code> becomes fn g(x: Int) when x > 0 = x + e\n  fn f(x: Int) -> Int = chk x\n"
+      )
+
+    gbody = fn_body(guarded, "f")
+    {:function_def, gmeta, [{:binary_op, _, [{:variable, _, gparam_ref}, _hole]}]} = gbody
+    [{:param, _, gbinder}] = Keyword.fetch!(gmeta, :params)
+    {:binary_op, _, [{:variable, _, guard_ref}, _]} = Keyword.fetch!(gmeta, :guards)
+
+    refute gbinder == "x"
+    assert gparam_ref == gbinder
+    # the guard reference tracks the param gensym, not left free / captured
+    assert guard_ref == gbinder
+
+    # `fn g(x: Int) where Foo(x) = e`: the `constraints:` term references the param.
+    {:ok, whered} =
+      parse(
+        "mod M\n  macro Fw\n    syntax chk <e: Code> becomes fn g(x: Int) where Foo(x) = e\n  fn f(x: Int) -> Int = chk x\n"
+      )
+
+    wbody = fn_body(whered, "f")
+    {:function_def, wmeta, [_body]} = wbody
+    [{:param, _, wbinder}] = Keyword.fetch!(wmeta, :params)
+    [{:function_call, [{:name, "Foo"} | _], [{:variable, _, constraint_ref}]}] = Keyword.fetch!(wmeta, :constraints)
+
+    refute wbinder == "x"
+    # the where-clause constraint reference tracks the param gensym
+    assert constraint_ref == wbinder
+  end
+
+  test "auto-hygiene no-op: a lift-module callback signature (map-shaped OUT set) is left unchanged" do
+    # `becomes lift module name / callback init(arg: Int) -> arg`: the callback
+    # signature lives in a MAP (§4 OUT set). Auto-hygiene must NOT descend into
+    # maps, so the callback param name `arg` stays literal — pinning the boundary
+    # so a future executor can't silently "generalize" auto-hygiene into it.
+    {:ok, {:container, _, children}} =
+      parse(
+        "mod M\n  macro Lift\n    syntax mk <name: ModuleName> becomes lift module name\n      behaviour GenServer\n      callback init(arg: Int) -> arg\n  mk Cure.Generated.W\n"
+      )
+
+    {:lift_module, meta, []} = List.last(children)
+    [callback] = Keyword.fetch!(meta, :callbacks)
+
+    # the map-shaped callback param name is unchanged (walk never entered the map)
+    assert [{:param, _, "arg"}] = callback.params
+    assert callback.callback_context.parameter_names == ["arg"]
+    assert {:variable, _, "arg"} = callback.body
+  end
+
+  test "auto-hygiene reconciled with <fresh>: an explicit marker and an auto-discovered binder do not cross-bind" do
+    # A template mixing an explicit `<fresh h>` binder with an auto-discovered
+    # `let a` binder: each is freshened to its OWN distinct gensym, and each
+    # reference tracks its own binder (no cross-binding to the wrong gensym).
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Mix\n    syntax mix becomes let <fresh h> = 1 in let a = 2 in h + a\n  fn f() -> Int = mix\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:block, _, [outer_assign, inner_block]} = body
+    {:assignment, _, [{:variable, _, h_binder}, _]} = outer_assign
+    {:block, _, [inner_assign, {:binary_op, _, [{:variable, _, h_ref}, {:variable, _, a_ref}]}]} = inner_block
+    {:assignment, _, [{:variable, _, a_binder}, _]} = inner_assign
+
+    refute h_binder == "h"
+    refute a_binder == "a"
+    refute h_binder == a_binder
+    # each reference tracks its OWN binder
+    assert h_ref == h_binder
+    assert a_ref == a_binder
+    refute find_fresh(body)
+  end
 end
