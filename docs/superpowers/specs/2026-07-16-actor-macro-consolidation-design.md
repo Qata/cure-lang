@@ -2,7 +2,7 @@
 
 **Status:** design approved, implementation pending.
 **Scope:** `lib/std/actor.cure` first (reference implementation), then `fsm`/`supervisor`/`app`, then a deferred Tier‑3 typed layer.
-**Layer:** P (parser, for the optional whole‑module `quote` step) + stdlib Cure (`lib/std/*.cure`). **TCB delta: zero** — no change to `lib/cure/core/*`.
+**Layer:** P (parser, for the optional whole‑module `quote` step and, if 1e adopts mechanism (a), the family keyword‑alias capability) + stdlib Cure (`lib/std/*.cure`). **TCB delta: zero** — no change to `lib/cure/core/*`.
 
 ## 1. Motivation
 
@@ -53,8 +53,8 @@ which reads like the code it emits. The module wrapper (`mod … behaviour … [
 The reference implementation. Every step is independently green‑gated; the byte‑identical goldens are the spine that lets a backend rewrite be *proven* safe, not assumed.
 
 ### 1a — Fold to one expander
-Retire `derive_actor`, `emit_actor`, `emit_actor_call`, and the `ActorSyntax` capture record. Every surface routes through `derive_actor_family` → `emit_actor_parts`/`emit_actor_call_parts`. The `derive` shorthand rule builds an `ActorDefinitionSyntax` (name→`ModuleName`, `state_type`→`state`, `cast_body`→`on_cast`, `call_body`→`on_call`, remaining optionals `None`) and delegates. Output is byte‑identical because Gen C fills the same defaults the wrappers hardcoded.
-**Guard:** `GDerived` BEAM‑SHA256 golden byte‑identical + the 12 behavioral tests in `test/cure/compiler/actor_computed_test.exs` (immutable — they pin the `derive` surface).
+Retire the standalone bodies of `derive_actor`, `emit_actor`, `emit_actor_call`, and the `ActorSyntax` capture record. `emit_actor`/`emit_actor_call` are deleted outright (their only caller, the old `derive_actor` body, is gone). `derive_actor` is *rewritten in place* — same name, same `syntax … computed by derive_actor` target in `ActorContainers`, so that grammar rule needs no change — into a one-line adapter: it builds an `ActorDefinitionSyntax` (name→`ModuleName`, `state_type`→`state`, `cast_body`→`on_cast`, `call_body`→`on_call`, remaining optionals `None`) and delegates to `derive_actor_family`. Every surface then routes through `derive_actor_family` → `emit_actor_parts`/`emit_actor_call_parts`. This provisionally applies mechanism (b) from step 1e to the `derive` rule so 1a is independently gate‑able without first resolving 1e's open mechanism choice (§10 item 1); if 1e later adopts mechanism (a), it supersedes this adapter for `derive`/`call` too, not only the other 15 Gen A forms. Output is byte‑identical because Gen C fills the same defaults the wrappers hardcoded.
+**Guard:** `GDerived` BEAM‑SHA256 golden byte‑identical + the 19 behavioral tests in `test/cure/compiler/actor_computed_test.exs` (immutable — they pin the `derive` surface).
 
 ### 1b — Templatize the backend
 Rewrite `emit_actor_parts`/`emit_actor_call_parts` and the handler transforms (`actor_call_handler_arm_node` et al.) as per‑declaration `quote` templates with `$()` splices; a thin `gen_server_module` assembles the templated declarations and the variable‑length message enum. The expander now reads as literal Cure.
@@ -69,12 +69,12 @@ Add `optional body Declarations` to the `ActorDefinition` family; thread a `List
 **Guard:** a new behavioral test for a user‑declaration‑carrying actor; no‑body goldens unchanged.
 
 ### 1e — Terse shorthand + remove Gen A
-Re‑express the positional forms as delegating rules onto `derive_actor_family`, preserving the `derive` spelling the tests pin. Two mechanisms, decided at planning time:
+Re‑express the remaining Gen A positional forms as delegating rules onto `derive_actor_family`, and decide whether to also fold the `derive`/`call` rule's provisional 1a adapter into the same mechanism. Two mechanisms, decided at planning time:
 - **(a) preferred** — teach the family surface to accept keyword aliases (`derive` ≡ `on_cast`, `call` ≡ `on_call`) so the terse forms *are* the structured form with shorter labels, lowered straight to `derive_actor_family`. Requires a small parser capability; confirm it exists or add it.
 - **(b) fallback** — keep each terse form as a thin `computed by` rule whose elab is a one‑line adapter that fills an `ActorDefinitionSyntax` and calls `derive_actor_family`. Available today; leaves a few near‑empty adapters instead of one expander.
 
-Then migrate the 12 demos (examples/cure_motif/{voice,sequencer,clock}, cure_atelier/{painter,curator}, cure_colony/{echo,worker}, cure_forge/{metrics,logger,queue,pool}, vicure/test_syntax) to the surviving surface and delete the 16 `becomes` templates.
-**Guard:** a temporary parity test per terse form (byte‑identical to its old template) + demos compile on generic‑unix (`phase35/run-on-unix.sh`) + full suite.
+Then migrate the 12 demos (`examples/cure_motif/cure_src/{voice,sequencer,clock}.cure`, `examples/cure_atelier/cure_src/{painter,curator}.cure`, `examples/cure_colony/cure_src/{echo,worker}.cure`, `examples/cure_forge/cure_src/{metrics,logger,queue,pool}.cure`, `vicure/test_syntax.cure`) to the surviving surface and delete the 16 `becomes` templates.
+**Guard:** a temporary parity test per terse form (byte‑identical to its old template) + each migrated demo's own Mix test suite (e.g. `mix test` in `examples/cure_motif/`, `examples/cure_atelier/`, `examples/cure_colony/`, `examples/cure_forge/`) + full suite. (`phase35/run-on-unix.sh` is a generic‑unix AtomVM harness in the separate `esp32-beam` repo, not part of `cure-lang` — not applicable here.)
 
 ## 5. Stage 2 — fsm / supervisor / app
 
@@ -87,7 +87,7 @@ If 1c landed in Stage 1, all four collapse to whole‑module single templates he
 
 ## 6. Stage 3 — Tier 3: typed, Lean‑`MetaM`‑style macros (deferred)
 
-An elaborator‑integrated macro that sees inferred types and datatype structure, added last. It removes the one irreducibly‑uncouth remainder of Stages 1–2: syntax **analysis**. Quasiquotation makes *synthesis* (producing output) elegant, but it does nothing for *analysis* (inspecting the user's syntax). The reply‑type derivation `derive_reply_contract` / `infer_reply_type` / `reply_expr_type` walks the user's `call` body and sniffs literal subtypes (`:integer → Int`, `:float → Float`, `:symbol → Atom`) to *guess* the reply type — a hack that is irreducibly procedural at Tier 2. A typed macro asks the elaborator for the *inferred* type instead.
+An elaborator‑integrated macro that sees inferred types and datatype structure, added last. It removes the one irreducibly‑uncouth remainder of Stages 1–2: syntax **analysis**. Quasiquotation makes *synthesis* (producing output) elegant, but it does nothing for *analysis* (inspecting the user's syntax). The reply‑type derivation `derive_reply_contract` / `infer_reply_type` / `reply_expr_type` walks the user's `call` body and sniffs literal subtypes (`:integer → Int`, `:float → Float`, `:symbol → Atom`, `:boolean → Bool`) to *guess* the reply type — a hack that is irreducibly procedural at Tier 2. A typed macro asks the elaborator for the *inferred* type instead.
 
 Tier 3 is also the principled home for deriving and the OTP‑metatheory pid‑index / `ReplyOf(req)` work (see `docs/research/process-types/`). It gets its own brainstorm → spec → plan when we reach it; recorded here as direction, not detail.
 
@@ -97,7 +97,7 @@ The end state realizes the Lean‑4 macro architecture:
 
 | Tier | Lean analog | Cure realization |
 | --- | --- | --- |
-| 1 — declarative shorthand | `macro` / `macro_rules` | terse positional forms + `becomes` templates, delegating to the Tier‑2 expander |
+| 1 — declarative shorthand | `macro` / `macro_rules` | terse positional forms delegating to the Tier‑2 expander (family keyword‑aliases or thin `computed by` adapters, per 1e — not the retired `becomes lift module name` skeletons) |
 | 2 — procedural expander | `elab` / `elab_rules` | `syntax family` + quote‑based `expands with` expander over one backend |
 | 3 — typed metaprogramming | `MetaM` / elaborator reflection | typed access to inferred types + datatype structure (Stage 3) |
 
