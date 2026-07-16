@@ -398,10 +398,10 @@ mod Std.Actor
           gen_server_module(module_name, state_type, [
             alias_node("Message", message_type),
             function("init", [init_spec.parameter], init_type, init_spec.body),
-            function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, handler_body),
-            function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, info_handler),
-            function("terminate", [parameter("reason", variable("Atom")), parameter("state", variable("State"))], call("Effect", [variable("Atom")]), terminate_handler),
-            function("code_change", [parameter("old", variable("Atom")), parameter("state", variable("State")), parameter("extra", variable("Atom"))], result_type, code_change_handler),
+            quote (fn handle_cast(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(handler_body)),
+            quote (fn handle_info(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(info_handler)),
+            quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
+            quote (fn code_change(old: Atom, state: State, extra: Atom) -> Effect(Tuple(Atom, State)) = $(code_change_handler)),
             function("start_link", init_spec.start_parameters, start_type, call("Std.Otp.start_link", [module_expr, init_spec.start_argument]))
           ])
         ]))
@@ -423,10 +423,10 @@ mod Std.Actor
         alias_node("Request", variable("ActorRequest")),
         function("init", [init_spec.parameter], init_type, init_spec.body),
         function("handle_call", [parameter("request", variable("Request")), parameter_linear("from", call("Reply", [reply_type])), parameter("state", variable("State"))], cast_result_type, call_body),
-        function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], cast_result_type, cast_body),
-        function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], cast_result_type, info_handler),
-        function("terminate", [parameter("reason", variable("Atom")), parameter("state", variable("State"))], call("Effect", [variable("Atom")]), terminate_handler),
-        function("code_change", [parameter("old", variable("Atom")), parameter("state", variable("State")), parameter("extra", variable("Atom"))], cast_result_type, code_change_handler),
+        quote (fn handle_cast(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(cast_body)),
+        quote (fn handle_info(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(info_handler)),
+        quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
+        quote (fn code_change(old: Atom, state: State, extra: Atom) -> Effect(Tuple(Atom, State)) = $(code_change_handler)),
         function("start_link", init_spec.start_parameters, start_type, call("Std.Otp.start_link", [module_expr, init_spec.start_argument]))
       ])
     ]))
