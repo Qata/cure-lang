@@ -83,6 +83,32 @@ defmodule Cure.Compiler.MacroHygieneTest do
     refute find_fresh(body)
   end
 
+  test "a use-site name spoofing the gensym namespace cannot capture a <fresh> binder" do
+    # The <fresh g> binder would predictably gensym to "g$0" (counter starts at 0).
+    # The use-site passes a backtick identifier `g$0` (the only way to write `$` in
+    # a name) as the hole, spoofing that gensym. Hygiene must keep the fresh binder
+    # distinct from ALL use-site material, so the caller's `g$0` is NOT captured by
+    # the template's `let`. The fresh binder therefore skips "g$0".
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Cap\n    syntax cap <e: Code> becomes let <fresh g> = 100 in e + g\n  fn f() -> Int = cap `g$0`\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:block, _, [assign, plus]} = body
+    {:assignment, _, [{:variable, _, binder}, _]} = assign
+    {:binary_op, _, [{:variable, _, lhs}, {:variable, _, rhs}]} = plus
+
+    # the use-site material `g$0` is preserved verbatim (left operand = the hole)
+    assert lhs == "g$0"
+    # the fresh binder must NOT collide with the spoofed use-site name
+    refute binder == "g$0"
+    # the template's own reference `g` freshens to match its binder, still distinct
+    # from the use-site name — so no capture is possible
+    assert rhs == binder
+    refute rhs == "g$0"
+  end
+
   test "computed hygiene rewrites explicit markers without rewriting reflected input" do
     generated =
       {:tuple, [],

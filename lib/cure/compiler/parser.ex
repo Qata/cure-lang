@@ -1140,7 +1140,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp expand_template_rule(rule, bindings, state) do
-    {freshened, state} = freshen(rule.template, state, true, Map.keys(bindings))
+    {freshened, state} = freshen(rule.template, state, true, bindings)
     expanded = subst_holes(freshened, bindings, state)
     expanded = attach_lexical_imports(expanded, Map.get(rule, :lexical_imports, []))
 
@@ -1267,17 +1267,80 @@ defmodule Cure.Compiler.Parser do
   # markers and, for templates, plain references of those names. Counter lives
   # in parser state so gensyms are stable within a build (design §5) and unique
   # across use-sites.
-  defp freshen(template, state, rewrite_plain?, hole_names \\ []) do
+  defp freshen(template, state, rewrite_plain?, bindings \\ %{}) do
     names = collect_fresh_names(template) |> MapSet.to_list() |> Enum.sort()
+    used = collect_used_names(bindings)
 
     {rename, state} =
       Enum.reduce(names, {%{}, state}, fn n, {m, s} ->
-        {Map.put(m, n, "#{n}$#{s.fresh_counter}"), %{s | fresh_counter: s.fresh_counter + 1}}
+        {gensym, s} = mint_gensym(n, s, used)
+        {Map.put(m, n, gensym), s}
       end)
 
-    holes = MapSet.new(hole_names)
+    holes = MapSet.new(Map.keys(bindings))
     {apply_freshening(template, rename, rewrite_plain?, holes), state}
   end
+
+  # Mint "n$<counter>", advancing the state counter on each attempt, and skip any
+  # candidate that collides with a name appearing in the use-site material
+  # (`used`). Without this a caller can spoof the gensym namespace — pass a
+  # backtick identifier `g$0` as a hole — and be captured by the template's own
+  # `<fresh g>` binder. Termination: `used` is finite and the counter is strictly
+  # monotonic, so a free candidate is reached in at most |used| + 1 steps.
+  defp mint_gensym(name, state, used) do
+    candidate = "#{name}$#{state.fresh_counter}"
+    state = %{state | fresh_counter: state.fresh_counter + 1}
+
+    if MapSet.member?(used, candidate) do
+      mint_gensym(name, state, used)
+    else
+      {candidate, state}
+    end
+  end
+
+  # Names appearing anywhere in the use-site material bound to holes. A fresh
+  # binder must avoid every one so injected caller identifiers cannot be captured
+  # (see mint_gensym). We collect plain variable names and raw-token identifier
+  # values; over-collection is harmless (it only advances the counter).
+  defp collect_used_names(bindings) do
+    Enum.reduce(bindings, MapSet.new(), fn {_hole, value}, acc ->
+      MapSet.union(acc, collect_used_value(value))
+    end)
+  end
+
+  defp collect_used_value({:variable, _meta, name}) when is_binary(name),
+    do: MapSet.new([name])
+
+  defp collect_used_value({:raw_tokens, _meta, tokens}), do: raw_token_names(tokens)
+
+  defp collect_used_value({_t, meta, ch}) when is_list(ch) do
+    Enum.reduce(ch, collect_used_meta(meta), fn c, acc ->
+      MapSet.union(acc, collect_used_value(c))
+    end)
+  end
+
+  defp collect_used_value(list) when is_list(list),
+    do: Enum.reduce(list, MapSet.new(), &MapSet.union(&2, collect_used_value(&1)))
+
+  defp collect_used_value(_), do: MapSet.new()
+
+  defp collect_used_meta(meta) when is_list(meta) do
+    Enum.reduce(meta, MapSet.new(), fn
+      {_k, v}, acc -> MapSet.union(acc, collect_used_value(v))
+      _, acc -> acc
+    end)
+  end
+
+  defp collect_used_meta(_), do: MapSet.new()
+
+  defp raw_token_names(tokens) when is_list(tokens) do
+    Enum.reduce(tokens, MapSet.new(), fn
+      %Token{type: :identifier, value: v}, acc when is_binary(v) -> MapSet.put(acc, v)
+      _, acc -> acc
+    end)
+  end
+
+  defp raw_token_names(_), do: MapSet.new()
 
   defp collect_fresh_names({:fresh_name, _meta, name}), do: MapSet.new([name])
 
