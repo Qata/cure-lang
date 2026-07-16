@@ -136,8 +136,20 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   mailboxes/actors. → *This is obligation (1). The combination is the frontier.* Already
   demonstrated in Cure as kernel-checked exemplars (`Std.Otp.Proof`); the reply
   *type* is now also carried through the reduction (G1×G2, see `Std.Otp.ReplyPreservation`
-  below), though the LINEAR *capability*'s exactly-once is still proven only intrinsically
-  (via QTT grades), not yet as an operational conservation theorem over the relation.
+  below), AND the LINEAR *capability*'s consumed-exactly-once is now ALSO an operational
+  conservation theorem over the relation — `Std.Otp.ReplyConservation`
+  (`lib/std/otp_reply_conservation.cure`): the reply capabilities are a conserved resource,
+  a single step preserves `pending + answered` (`step_conserves`, via `Std.Proof.plus_succ_right`),
+  a whole run preserves it (`total_invariant`, induction over the reflexive-transitive closure
+  `LStar`), and a COMPLETE run from `MkConfig(n, Z)` to `MkConfig(Z, m)` forces `n ≡ m`
+  (`drain`) — every capability answered exactly once, none lost or duplicated. Plus the
+  linearity guard `no_answer_without_cap` (no reply without a capability). Kernel-checked,
+  Idris-mirrored (`test/oracle/otp/reply_conservation`, rel=same), tests in
+  `otp_reply_conservation_test.exs`. This is the operational DUAL of `Std.Otp.Proof`'s
+  intrinsic QTT-grade proof — so obligation (1) is now discharged both intrinsically and
+  operationally. (It dogfoods the cross-module lemma-import fix landed the same session —
+  `module_slice_env` now merges the auto-prelude, so `Std.Proof` lemmas are reusable across
+  modules.)
 - **G2. Preservation/progress of a TYPED OTP layer over the concurrent reduction
   relation.** Core Erlang gives the *untyped* relation; NVLang's preservation is over a
   *toy* single-actor step (no interleaving, no ether). Nobody has typed-OTP subject
