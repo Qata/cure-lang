@@ -6528,6 +6528,16 @@ defmodule Cure.Compiler.Parser do
   defp parse_computed_rule(state, kw_token, keyword, segments, category, contextual) do
     state = advance(state)
 
+    # Optional `directly` opt-in: the elab fn receives each matched hole as its
+    # own argument (multi-arg) rather than one synthesized input record. This
+    # lets a rule whose holes differ from the keyword's shared synthesized
+    # record still reach a typed adapter. Absent => single-record input (default).
+    {direct_inputs, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "directly"} -> {true, advance(state)}
+        _ -> {false, state}
+      end
+
     state =
       case peek(state) do
         %Token{type: :identifier, value: "by"} -> advance(state)
@@ -6545,6 +6555,7 @@ defmodule Cure.Compiler.Parser do
       syntax_fields: macro_syntax_fields(segments),
       syntax_repeated_fields: macro_syntax_repeated_fields(segments),
       syntax_field_types: macro_syntax_field_types(segments),
+      direct_inputs: direct_inputs,
       elab: elab,
       examples: examples,
       category: category,

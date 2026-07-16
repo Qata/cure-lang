@@ -152,4 +152,35 @@ defmodule Cure.Compiler.MacroComputedTest do
     assert rule.syntax_type == "MkSyntax"
     assert rule.syntax_fields == ["first", "second"]
   end
+
+  test "a plain `computed by` rule does not opt into direct (multi-arg) inputs" do
+    [rule] = rules(parse!("macro Mk\n  syntax mk <x: Code> computed by build_it\n"))
+    assert rule.kind == :computed
+    assert Map.get(rule, :direct_inputs, false) == false
+  end
+
+  test "`computed directly by` opts the rule into direct (multi-arg) inputs" do
+    [rule] = rules(parse!("macro Mk\n  syntax mk <x: Code> then <y: Code> computed directly by build_it\n"))
+    assert rule.kind == :computed
+    assert rule.direct_inputs == true
+    # the opt-in must not disturb the rest of the rule
+    assert rule.syntax_fields == ["x", "y"]
+    assert {:variable, _, "build_it"} = rule.elab
+  end
+
+  test "the direct opt-in propagates to the deferred use-site node meta" do
+    node =
+      parse!("mod M\n  macro Mk\n    syntax mk <x: Code> computed directly by build_it\n  fn f(a: Int) -> Syntax = mk a\n")
+
+    find = fn find, n ->
+      case n do
+        {:function_def, meta, [body]} -> if(to_string(Keyword.get(meta, :name)) == "f", do: body)
+        {_t, _m, ch} when is_list(ch) -> Enum.find_value(ch, &find.(find, &1))
+        _ -> nil
+      end
+    end
+
+    assert {:computed_use, meta, _} = find.(find, node)
+    assert Keyword.get(meta, :direct_inputs) == true
+  end
 end
