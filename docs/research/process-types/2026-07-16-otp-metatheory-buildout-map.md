@@ -181,10 +181,16 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   mailbox END (FIFO) and `SRecv` consumes the FRONT; preservation is re-proved via the
   `all_accepted_snoc` lemma (appending an accepted message keeps the mailbox all-accepted)
   — exactly the `AllAccepted`-over-append lemma the order-abstracted modules deferred, now
-  discharged once and for all. Idris-mirrored (`test/oracle/otp/fifo`, rel=same). Remaining:
-  HETEROGENEOUS routing (per-process types + target index, on `Registry`'s `GenServer`
-  handles). The composition with obligation (1) is **DONE for the reply TYPE** — see G1×G2
-  below.
+  discharged once and for all. Idris-mirrored (`test/oracle/otp/fifo`, rel=same).
+  **HETEROGENEOUS routing now DONE — `Std.Otp.HetRouting` (`lib/std/otp_het_routing.cure`):**
+  each process carries its OWN accepted-set (interface); `WTProc` types its ether/mailbox
+  against that set via a `Member`/`AllMember` predicate; `Deliver` requires `Member(t, set)`
+  — `t` must be in the TARGET process's own interface — and `preservation` proves routing
+  preserves global well-typedness even when every process speaks a different protocol. This
+  is the interface-indexed core `Registry`'s `GenServer(q, r)` handles denote. Idris-mirrored
+  (`test/oracle/otp/het_routing`, rel=same). The G2 concurrent-reduction line is now
+  complete (interleaving + FIFO + homogeneous AND heterogeneous typed delivery). The
+  composition with obligation (1) is **DONE for the reply TYPE** — see G1×G2 below.
 - **G1×G2. COMPOSE: dependent reply typing preserved through delivery.** **DONE —
   `Std.Otp.ReplyPreservation` (`lib/std/otp_reply_preservation.cure`).** Strengthens G2's
   payload from a message *tag* to a request-answering *reply* `(r, v)` and proves
