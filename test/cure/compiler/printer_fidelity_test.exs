@@ -119,4 +119,26 @@ defmodule Cure.Compiler.PrinterFidelityTest do
     discard = assert_roundtrips("mod M\n  fn go(p: Int) -> Unit =\n    let x = p\n    ()\n")
     assert discard =~ "()"
   end
+
+  test "a `quote` form round-trips instead of raising" do
+    # SP5.1 added `quote <form>` (parses to `:quoted_syntax`), and the stdlib now
+    # uses it (fsm.cure `quote :handle_event_function`, actor.cure `quote :ok`),
+    # but the printer had no clause for the node — so `cure fmt`/`migrate` RAISED
+    # UnprintableNodeError on any file containing `quote`.
+    out = assert_roundtrips("mod M\n  fn f() -> Syntax = quote :ok\n")
+    assert out =~ "quote :ok"
+    refute out =~ "quoted_syntax"
+  end
+
+  test "a single `$(e)` splice inside a quote round-trips" do
+    out = assert_roundtrips("mod M\n  fn f(x: Syntax) -> Syntax = quote $(x)\n")
+    assert out =~ "quote $(x)"
+    refute out =~ ":splice"
+  end
+
+  test "a `$(e ...)` group splice inside a quote round-trips with its ellipsis" do
+    out = assert_roundtrips("mod M\n  fn f(xs: List(Syntax)) -> Syntax = quote [$(xs ...)]\n")
+    assert out =~ "$(xs ...)"
+    refute out =~ ":splice_group"
+  end
 end
