@@ -31,9 +31,22 @@ item is independent. Read `2026-07-16-spike-findings-obligation1.md` and
 
 ---
 
-## A. Lift the SINGLE-SIBLING restriction on motive-generalization  ★ highest value
+## A. Lift the SINGLE-SIBLING restriction on motive-generalization  ✅ DONE
 
-**Status:** open. The most valuable extension. Restricted deliberately when landed.
+**Status:** DONE. `elaborate_with_motivegen_branch(es)` and the guard
+(`family.indices == [] and proof_name == nil and siblings != []`) now handle m
+siblings: motive `λw. Π(s₁: H₁[e↦w]) … Π(sₘ: Hₘ[e↦w]). G[e↦w]` (domain j shifted
++(j-1), G shifted +m), branches `λs₁'.…λsₘ'. body`, case applied to all siblings in
+Π-order. The relevance convoy rule already handled n-ary convoys. Verified: a
+two-linear-sibling `with` handler accepts, dropping/dup'ing a sibling rejects, all
+`rel=same` vs Idris (`test/oracle/otp/ob1_two_sib*`), tests in
+`linear_sibling_refinement_test.exs`. NOTE (not a bug): combining two linear
+consumptions in an ω-field ctor (`MkPair(use1(c1), use2(c2))`) is rejected by BOTH
+Cure and Idris — ω fields force ω-usage; consume to a value via a linear-slotted
+function or `let`-bind first.
+
+(Original text follows for history.) The most valuable extension. Restricted
+deliberately when landed.
 
 **What works now:** a `with r` handler with EXACTLY ONE scrutinee-dependent sibling
 and no user `proof` refines that sibling by motive-generalization and keeps it linear
