@@ -76,11 +76,65 @@ dependent context over the scrutinee), not a grade or application-path issue.
 `{:error, {:index_mismatch, _}}` for `spike5`, to be flipped to `{:ok, _}` when
 context-refinement-on-match lands.
 
+## Roadblock #2 refined — the `with` construct already refines siblings
+
+Cure has an EXISTING construct that does sibling refinement: `with <scrut> [proof
+<name>] | C(pat) -> body` (`elaborate_with_value`, elaborator.ex:2629). For a
+**non-indexed scrutinee family** it refines every in-scope sibling whose type
+mentions the scrutinee, by Eq-arrow transport in the branch body. `Req` is
+non-indexed, so:
+
+- `spike8_sibling_with` (sibling `w : ReplyOf(r)` via `with r`): **ACCEPT**. The
+  dependent typing that plain `match` lacked is fully available through `with`.
+- `spike9_obligation1_with` (obligation (1) via `with r`): the `:index_mismatch`
+  is GONE — the dependent typing now works. It fails only on
+  `{:usage_violation, used: :unrestricted, declared: :linear}` for `cap`.
+
+## Roadblock #2b — the real remaining wall: linearity through sibling transport
+
+**Diagnosis (root cause found).** `with`'s sibling transport
+(`elaborate_with_eq_branch`, elaborator.ex:3011) encodes each branch as an
+immediately-applied nest of **ω-graded** lambdas —
+`(case r of {c, ar, λprf. (λh'. body) transport}…) (refl r)` — where
+`transport = transport_case(prf,…) cap`. The erasure-soundness checker
+`lib/cure/elab/relevance.ex` then over-counts `cap`:
+
+- a `:lam` body's use of an outer binder is scaled by ω (relevance.ex:239 — "a λ may
+  be entered any number of times"), so the `λprf` wrapper ω-scales `cap`;
+- an argument to a bare λ / a `:case`-headed application is scaled by the callee's
+  grade, which defaults to ω for a `:case` head (`callee_quantities`, relevance.ex:624)
+  and for the `λh'` rebind — so `cap` is ω-scaled again.
+
+At RUNTIME the proof and transport erase away (`Equivalent` is collapsible; the
+transport is J/subst on `refl`), leaving `case r of … cap …` with `cap` used once
+per path. So this is a **precision gap in relevance** (it rejects a term that
+`Erase` makes linear-safe), NOT a real linearity violation. relevance.ex is E-layer
+(explicitly "NOT the kernel") but soundness-critical (it makes erasure sound), with a
+documented red-team history — so the fix must be provably sound, not a hack.
+
+**Design options** (both need relevance to stop ω-scaling the one-shot convoy):
+1. *Convoy precision in relevance.* Recognize the McBride convoy
+   `{:app, {:case,…branches…}, arg}` (a case returning a function, immediately
+   applied) as one-shot, and scale the arg by the branch-lambda **parameter grade**
+   rather than ω (`callee_quantities` of a `:case` head = the uniform branch-λ
+   grade). Encoding-agnostic; mirrors `Erase`. Must stay sound for an adversarial
+   convoy (`(case s of λx:ω. dup(x,x)) lin` must still REJECT — scaling by the ω
+   branch grade does reject it).
+2. *Motive-generalize the sibling instead of transporting it.* Abstract the linear
+   sibling into the case motive (`motive = λw. Π(cap : ReplyCap(w)). G`, applied to
+   `cap`), giving `(case r of λcap':linear. body) cap` with NO `λprf`/transport.
+   Cleaner for linearity, but the doc (elaborator.ex:2593-2596) notes motive-domain
+   generalization tripped `Quote.reify`'s `{:vdata}` param/index collapse for an
+   INDEXED family (`SNat(w)`); must verify a PARAM family (`ReplyCap(w)`) reifies.
+
+Both converge on the same relevance fix (convoy arg scaled by the branch grade, not
+ω) + making the sibling-binding λ carry the sibling's real grade. Option 2 also
+removes the `λprf` ω-scale entirely, so it is the likely target.
+
 ## Next step
 
-Obligation (1) is blocked solely on roadblock #2. Per brief §8, this warrants a
-focused capability-expansion spec: **refine the types of scrutinee-dependent
-sibling binders during dependent `match`** (motive generalization over the
-dependent context, not just the return). Verify Idris/Agda alignment; the machinery
-overlaps `abstract_term` / `build_motive` (the same used by `rewrite` and
-`with`-abstraction). Obligation (2) (F-1 send-safety) is untouched and independent.
+Implement roadblock #2b: linearity-preserving dependent sibling refinement. This is
+soundness-critical relevance.ex + elaborator work — do it red-green WITH the full
+Antigen suite and negative controls (a duplicated/dropped linear sibling must still
+reject through the convoy path). Then obligation (1) elaborates via `with r`.
+Obligation (2) (F-1 send-safety) is untouched and independent.
