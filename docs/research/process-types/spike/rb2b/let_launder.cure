@@ -1,0 +1,5 @@
+mod LetLaunder
+  type Box = MkBox
+  type Pair = MkPair(Box, Box)
+  fn f(c :linear Box) -> Pair = let x = c in MkPair(x, x)
+end

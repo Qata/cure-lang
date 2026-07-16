@@ -1,0 +1,22 @@
+mod LaunderCap
+  type Reply0 = R0
+  type Reply1 = R1a | R1b
+  type Req = GetCount | SetName(Reply0) | Ping
+  fn ReplyOf(r: Req) -> Type = match r
+    GetCount()  -> Reply0
+    SetName(_)  -> Reply1
+    Ping()      -> Reply1
+  type ReplyCap(r: Req) indices ()
+    MkCap : ReplyCap(r)
+  type Replied = Done
+  type Pair = MkPair(Replied, Replied)
+  fn reply({r: Req}, cap :linear ReplyCap(r), v: ReplyOf(r)) -> Replied =
+    match cap
+      MkCap() -> Done
+  fn handle(r: Req) -> ReplyOf(r) = match r
+    GetCount()  -> R0
+    SetName(_)  -> R1a
+    Ping()      -> R1b
+  fn serve(r: Req, cap :linear ReplyCap(r)) -> Pair =
+    let x = cap in MkPair(reply(x, handle(r)), reply(x, handle(r)))
+end

@@ -1,0 +1,32 @@
+mod ReplyOfSpike1
+  # §6 spike, PROBE (a)+(b), self-contained to isolate the genuinely-new
+  # capability from any stdlib-import confound: does a function whose RETURN TYPE
+  # mentions the SCRUTINEE it matches on get each branch body checked against
+  # `ReplyOf` reduced AFTER the scrutinee is refined to that constructor?
+  #
+  # Contrast with test/oracle/largeelim/le01: there the consumers return a FIXED
+  # `FocusShape(LensKind)`, so no per-branch refinement of the scrutinee is
+  # exercised. Here `handle : (r: Req) -> ReplyOf(r)` is the real test — the
+  # dependent-match / motive machinery (cf. sigma.cure:37 `-> b(sigma_first(p))`).
+
+  # distinct, locally-defined reply types (no stdlib types, to isolate the probe)
+  type Reply0 = R0
+  type Reply1 = R1a | R1b
+
+  # request vocabulary — one constructor carries a field, replies differ per ctor
+  type Req = GetCount | SetName(Reply0) | Ping
+
+  # PROBE (a): large elimination on a user ADT — `ReplyOf : Req -> Type`.
+  # Very likely accepts (le01 proves the capability exists).
+  fn ReplyOf(r: Req) -> Type = match r
+    GetCount()  -> Reply0
+    SetName(_)  -> Reply1
+    Ping()      -> Reply1
+
+  # PROBE (b): dependent return refined by the SCRUTINEE. Each branch body must be
+  # checked against `ReplyOf(r)` reduced per-branch. THE real test.
+  fn handle(r: Req) -> ReplyOf(r) = match r
+    GetCount()  -> R0
+    SetName(_)  -> R1a
+    Ping()      -> R1b
+end

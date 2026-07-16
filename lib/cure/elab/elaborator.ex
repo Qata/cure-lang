@@ -6852,10 +6852,15 @@ defmodule Cure.Elab.Elaborator do
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args, deferred}}
   end
 
-  defp bidir_app_slot({_dom, :unrestricted}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env),
-    do: {:halt, {:error, :too_few_arguments}}
+  defp bidir_app_slot({_dom, grade}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env)
+       when grade in [:unrestricted, :linear, :affine],
+       do: {:halt, {:error, :too_few_arguments}}
 
-  defp bidir_app_slot({dom, :unrestricted}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env) do
+  # A supplied explicit argument — grade governs later USAGE counting
+  # (`relevance.ex`), not slot mechanics: :unrestricted / :linear / :affine all
+  # consume one surface argument here, mirroring `solve_arg/3`'s telescope slot.
+  defp bidir_app_slot({dom, grade}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env)
+       when grade in [:unrestricted, :linear, :affine] do
     # ZONK-then-instantiate, not instantiate-then-zonk: `Subst.instantiate` shifts a
     # substituted term across binders, `Unify.zonk` does not. A domain that is a Π
     # (a function-typed argument, `(a) -> a`) whose earlier sibling already solved the

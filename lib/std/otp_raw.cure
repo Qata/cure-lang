@@ -133,6 +133,10 @@ mod Std.Otp.Raw
 
   ## Synchronous `gen_server` call — the reply type is where `Std.Otp` threads
   ## the dependent `ReplyOf(req)`; here it is a free (return-polymorphic) result.
+  ## The *soundness* of that threading — that a reply must have the request's own
+  ## `ReplyOf(req)` and that the reply capability is consumed linearly (obligation
+  ## (1) of the OTP metatheory) — is discharged, kernel-checked, in `Std.Otp.Proof`
+  ## (`lib/std/otp_proof.cure`; oracle `test/oracle/otp/`).
   ## `Server`-only: calling a plain process blocks the caller for 5s and then exits it.
   ##
   ## ⚠ PARTIAL. On timeout (default 5000 ms) or server death the CALLER EXITS. No value is

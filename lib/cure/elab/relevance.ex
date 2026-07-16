@@ -275,7 +275,23 @@ defmodule Cure.Elab.Relevance do
         with {:ok, uv} <- walk(val, depth, :present_arg, st),
              {:ok, ub} <- walk(body, depth + 1, site, track_erased(st, g, depth)),
              :ok <- check_binder(st, depth, g, ub, :let) do
-          {:ok, seq(uv, Map.delete(ub, depth))}
+          # CBV: the value runs once, so its resources are counted once via `uv`
+          # (this is why `let x = consume(c) in …` counts `c` a single time — even
+          # if `x` is dropped, and even summed with a second use of `c` in the body).
+          # But the binder NAMES that value: if the body uses `x` ω-many times, the
+          # value's result — hence any linear resource ALIASED into it — is referenced
+          # ω times. `seq(uv, ub\x)` alone dropped the binder's uses and so laundered
+          # `let x = cap in (…x…x…)` to a single use. Add the aliasing duplication
+          # when `x` is used ω-many times; a linear/affine resource inside `uv` then
+          # reaches ω and is rejected, while a value with no restricted resource is
+          # unaffected (ω resources carry no obligation). Idris reaches the same
+          # verdict by substitution; this keeps Cure's single CBV evaluation.
+          dup =
+            if Enum.any?(Map.get(ub, depth, no_uses()), &(&1 == Grade.unrestricted())),
+              do: scale(uv, Grade.unrestricted()),
+              else: %{}
+
+          {:ok, seq(seq(uv, dup), Map.delete(ub, depth))}
         end
     end
   end

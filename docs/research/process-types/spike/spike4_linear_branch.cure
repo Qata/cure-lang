@@ -1,0 +1,11 @@
+mod LinBranch
+  # PROBE L3: a linear binder used ONCE IN EACH branch of a match on ANOTHER
+  # scrutinee = once per path = linearly consumed. Correct QTT JOINs usage across
+  # mutually-exclusive branches (max), it does not SUM. This is the exact shape of
+  # an obligation-(1) handler: reply exactly once on every path.
+  type Box = MkBox
+  type Sel = A | B
+  fn pick(s: Sel, x :linear Box) -> Box = match s
+    A() -> x
+    B() -> x
+end
