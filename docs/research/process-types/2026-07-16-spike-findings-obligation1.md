@@ -190,20 +190,35 @@ chain separates fields, but a `(...)`-grouped function type is unambiguous and i
 now absorbed (`parse_paren_arrow_tail`, parser.ex). The elaborator already handled
 such fields; the gap was purely the parser.
 
-## Still open — roadblock #2b (ergonomic branching handler)
+## Roadblock #2b — RESOLVED (ergonomic branching handler)
 
-The one gap NOT closed: the branching handler `with r … reply(cap, …) per branch`
-still over-rejects. Root cause confirmed by dumping the core term: `with`'s
-Eq-transport encodes each branch's sibling as `transport_case(prf) applied to cap`
-(a collapsible `:case` = identity on `cap`), which relevance ω-scales pre-erasure.
-This encoding is HOSTILE to linear accounting in BOTH directions — it over-counts
-for dup (the ω-scale) and would MASK a drop if naively counted once (the erased
-transport looks like a use). The sound fix is to REPLACE the transport with
-motive-generalization — `(case r of λcap':linear. body) cap`, a real linear binder
-per branch that `check_binder` polices directly, with the convoy argument scaled by
-the branch grade (not ω). That is a larger slice (an encoding rewrite in
-`elaborate_with`, plus verifying the `Π(ReplyCap(w))` motive domain reifies for a
-param family — the reach-pinned reify gap) and is left for a follow-up. Obligation
-(1) does not need it: the split authoring (`serve = reply(cap, handle(r))`) is a
-sound formalization and is now hardened by the `let`-laundering soundness fix
-(`2026-07-16-let-linearity-soundness-fix.md`).
+The branching handler `with r … reply(cap, …) per branch` now type-checks, with
+linearity enforced (drop / dup in a branch reject). Two changes:
+
+1. **Elaborator — motive-generalization** (`elaborate_with_motivegen_branch`,
+   single sibling, no user proof): the sibling refinement no longer uses
+   Eq-transport (`transport_case(prf) cap`, a collapsible case that erases to
+   identity but which relevance ω-scaled pre-erasure — hostile to linear accounting
+   in BOTH directions). Instead the sibling becomes a Π domain in the motive
+   `λw. Π(h': H[e↦w]). G[e↦w]` and a real λ binder per branch, and the case is
+   applied to the original sibling: `(case r of λcap'. body) cap`. The `Π(ReplyCap(w))`
+   domain reifies cleanly — `ReplyCap` is a PARAM-only family, so the doc's warned
+   param/index collapse (for index-bearing `SNat(w)`) does not apply.
+2. **Relevance — the McBride convoy rule** (`walk_convoy`): `(case s of {λx. inner})
+   a` is a case that returns a function, applied once. Each branch runs once (no
+   ω-scale) and `a` is aliased by `x`, so `a` is used exactly as many times as the
+   branch uses `x`. Sound: `a` scaled by `x`'s usage, other captures counted once,
+   and `a`'s OWN grade (the def's `:linear cap`) is still checked at its binding
+   site — so a branch that drops (`a` → 0) or duplicates (`a` → ω) it is rejected
+   there. The branch-λ grade is therefore ω; the sibling's real linearity is
+   enforced via the convoy, not the branch binder.
+
+Differential oracle `test/oracle/otp/ob1_branching*` mirrors Cure's `with r` against
+Idris's native dependent `match` (which refines the linear sibling for free),
+`rel=same` on accept + drop-reject + dup-reject. Behavioral test
+`linear_sibling_refinement_test.exs`. Gates: Antigen 563/318-318, elab 1046, core
+537, stdlib 49/0, replay 79.
+
+Obligation (1) now has BOTH forms: the split `serve = reply(cap, handle(r))` and the
+ergonomic branching handler. Restricted to a SINGLE sibling and the no-user-proof
+case; multi-sibling and the `proof` clause keep the Eq-arrow path (reach-pinned).
