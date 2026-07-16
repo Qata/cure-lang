@@ -2718,16 +2718,25 @@ defmodule Cure.Elab.Elaborator do
               # enforced at its own binding site (the def's `:linear cap`) via the
               # convoy. Restricted to ONE sibling; the proof form and multi-sibling keep
               # the Eq-arrow path below.
-              family.indices == [] and proof_name == nil and match?([_], siblings) ->
-                [%{name: sname, index: sidx, type_term: h_ctx}] = siblings
+              family.indices == [] and proof_name == nil and siblings != [] ->
                 scrut_type_term = resplit_data(Quote.reify(scrut_type, Context.length(ctx)), env)
+                m = length(siblings)
                 g_abs = abstract_term(result_type_term, scrut_term, 0)
-                h_abs = abstract_term(h_ctx, scrut_term, 0)
 
-                # motive = λw. Π(h' : H[e↦w]). G[e↦w]
-                motive =
-                  {:lam, Cure.Core.Grade.unrestricted(), scrut_type_term,
-                   {:pi, Cure.Core.Grade.unrestricted(), h_abs, Subst.shift(g_abs, 1, 0)}}
+                # motive = λw. Π(s₁: H₁[e↦w]) … Π(sₘ: Hₘ[e↦w]). G[e↦w]. Siblings are
+                # independent (`collect_with_siblings` rejects sibling-references-sibling),
+                # so at Π position j (1-based) the domain Hⱼ[e↦w] shifts +(j-1) past the
+                # earlier binders, and G shifts +m past all of them.
+                motive_body =
+                  siblings
+                  |> Enum.with_index(1)
+                  |> Enum.reverse()
+                  |> Enum.reduce(Subst.shift(g_abs, m, 0), fn {%{type_term: h_ctx}, j}, acc ->
+                    h_abs = abstract_term(h_ctx, scrut_term, 0)
+                    {:pi, Cure.Core.Grade.unrestricted(), Subst.shift(h_abs, j - 1, 0), acc}
+                  end)
+
+                motive = {:lam, Cure.Core.Grade.unrestricted(), scrut_type_term, motive_body}
 
                 pc = Inductive.param_count(env, dname)
                 {param_vals, _idx_vals} = Enum.split(combined_vals, pc)
@@ -2739,13 +2748,19 @@ defmodule Cure.Elab.Elaborator do
                   dname: dname,
                   param_vals: param_vals,
                   motive: motive,
-                  sibling_name: sname
+                  sibling_names: Enum.map(siblings, & &1.name)
                 }
 
                 with {:ok, branches} <- elaborate_with_motivegen_branches(arms, cfg) do
                   case_term = {:case, scrut_term, motive, branches}
-                  # (case e of …) cap — apply the case to the ORIGINAL sibling.
-                  {:ok, {:app, case_term, {:var, sidx}}}
+                  # (case e of …) s₁ … sₘ — apply the case to the ORIGINAL siblings, in
+                  # motive-Π order (s₁ first).
+                  applied =
+                    Enum.reduce(siblings, case_term, fn %{index: idx}, acc ->
+                      {:app, acc, {:var, idx}}
+                    end)
+
+                  {:ok, applied}
                 end
 
               # Capability B (proof / sibling transport) — the Eq-arrow motive.
@@ -3185,7 +3200,7 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_with_motivegen_branch(cname, pattern, body_expr, cfg) do
-    %{names: names, ctx: ctx, env: env, param_vals: param_vals, motive: motive, sibling_name: sname} = cfg
+    %{names: names, ctx: ctx, env: env, param_vals: param_vals, motive: motive, sibling_names: snames} = cfg
 
     {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
     %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
@@ -3195,20 +3210,29 @@ defmodule Cure.Elab.Elaborator do
 
     ctor_term = branch_constructor_term(cname, arity)
     motive_shifted = Subst.shift(motive, arity, 0)
-    # applied = Π(h' : H[e↦pat]). G[e↦pat]
+    # applied = Π(s₁: H₁[e↦pat]) … Π(sₘ: Hₘ[e↦pat]). G[e↦pat]
     applied = Kernel.normalize(branch_ctx0, {:app, motive_shifted, ctor_term})
 
-    {:pi, g, h_dom_term, cod_b1} = applied
-    h_dom_value = Eval.eval(h_dom_term, Context.env(branch_ctx0))
-    branch_ctx1 = Context.extend(branch_ctx0, h_dom_value)
-    # The refined sibling binds at index 0 under its original name, shadowing the
-    # outer (unrefined) binder so the arm body reads the refined type.
-    branch_names1 = [sname | branch_names0]
-    cod_expected = Kernel.normalize(branch_ctx1, cod_b1)
+    # Peel one Π per sibling, extending the branch context and rebinding each
+    # refined sibling under its original name (so the arm body reads the refined
+    # type; the outer unrefined binder is shadowed). Collect the (grade, domain)
+    # pairs to wrap the body in the matching λ-nest.
+    {branch_ctx, branch_names, cod, doms_rev} =
+      Enum.reduce(snames, {branch_ctx0, branch_names0, applied, []}, fn sname, {c, ns, ty, acc} ->
+        {:pi, g, dom_term, cod_ty} = ty
+        dom_value = Eval.eval(dom_term, Context.env(c))
+        {Context.extend(c, dom_value), [sname | ns], cod_ty, [{g, dom_term} | acc]}
+      end)
+
+    cod_expected = Kernel.normalize(branch_ctx, cod)
 
     with {:ok, inner} <-
-           elaborate_branch_body(body_expr, cod_expected, branch_names1, branch_ctx1, env) do
-      {:ok, {cname, arity, {:lam, g, h_dom_term, inner}}}
+           elaborate_branch_body(body_expr, cod_expected, branch_names, branch_ctx, env) do
+      # doms_rev is innermost-first; folding wraps λs₁'. … λsₘ'. inner (s₁ outermost).
+      wrapped =
+        Enum.reduce(doms_rev, inner, fn {g, dom_term}, acc -> {:lam, g, dom_term, acc} end)
+
+      {:ok, {cname, arity, wrapped}}
     end
   end
 

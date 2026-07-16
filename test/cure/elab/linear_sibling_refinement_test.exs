@@ -78,4 +78,65 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
 
     assert verdict(defs) == :reject
   end
+
+  describe "motive-generalization refines MULTIPLE linear siblings" do
+    defp verdict2(handle) do
+      src = """
+      mod TwoSib
+        type Reply0 = R0
+        type Req = A | B
+        fn ReplyOf(r: Req) -> Type = match r
+          A() -> Reply0
+          B() -> Reply0
+        type Cap1(r: Req) indices ()
+          MkC1 : Cap1(r)
+        type Cap2(r: Req) indices ()
+          MkC2 : Cap2(r)
+        type Replied = Done
+        fn use_both({r: Req}, c1 :linear Cap1(r), c2 :linear Cap2(r), v: ReplyOf(r)) -> Replied =
+          match c1
+            MkC1() -> match c2
+              MkC2() -> Done
+        fn use1({r: Req}, c1 :linear Cap1(r), v: ReplyOf(r)) -> Replied = match c1
+          MkC1() -> Done
+      #{handle}
+      end
+      """
+
+      case Program.elaborate(src) do
+        {:ok, _} -> :accept
+        {:error, _} -> :reject
+      end
+    end
+
+    test "two linear siblings each consumed once per path is accepted" do
+      handle = """
+        fn handle(r: Req, c1 :linear Cap1(r), c2 :linear Cap2(r)) -> Replied = with r
+          A() -> use_both(c1, c2, R0)
+          B() -> use_both(c1, c2, R0)
+      """
+
+      assert verdict2(handle) == :accept
+    end
+
+    test "dropping the second sibling in a branch is rejected" do
+      handle = """
+        fn handle(r: Req, c1 :linear Cap1(r), c2 :linear Cap2(r)) -> Replied = with r
+          A() -> use1(c1, R0)
+          B() -> use_both(c1, c2, R0)
+      """
+
+      assert verdict2(handle) == :reject
+    end
+
+    test "duplicating a sibling in a branch is rejected" do
+      handle = """
+        fn handle(r: Req, c1 :linear Cap1(r), c2 :linear Cap2(r)) -> Replied = with r
+          A() -> let x = use1(c1, R0) in use_both(c1, c2, R0)
+          B() -> use_both(c1, c2, R0)
+      """
+
+      assert verdict2(handle) == :reject
+    end
+  end
 end
