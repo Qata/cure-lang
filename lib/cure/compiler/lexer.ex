@@ -47,6 +47,7 @@ defmodule Cure.Compiler.Lexer do
     band bor bxor bsl bsr bnot
     true false nil
     extern proof
+    quote
   )a
 
   @keyword_strings Enum.map(@keywords, &Atom.to_string/1)
@@ -203,6 +204,16 @@ defmodule Cure.Compiler.Lexer do
       # Brackets
       ?( -> {:ok, emit_single(state, :lparen, "(", inc_paren: true)}
       ?) -> {:ok, emit_single(state, :rparen, ")", dec_paren: true)}
+      # Quasiquote splice open `$(` (SP5.1). `$` is otherwise only an
+      # identifier *continuation* (gensyms `base$N`), never a token start, so
+      # `$(` is unambiguous. The matching `)` is an ordinary `:rparen`; the
+      # inner expression lexes normally under the bumped paren depth.
+      ?$ ->
+        if peek_at(state, 1) == ?( do
+          {:ok, emit_single(state, :splice_open, "$(", inc_paren: true)}
+        else
+          {:error, {:unexpected_character, ?$, state.line, state.col}, state}
+        end
       ?[ -> {:ok, emit_single(state, :lbracket, "[")}
       ?] -> {:ok, emit_single(state, :rbracket, "]")}
       ?{ -> {:ok, emit_single(state, :lbrace, "{")}

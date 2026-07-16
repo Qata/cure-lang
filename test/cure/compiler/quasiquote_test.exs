@@ -1,0 +1,76 @@
+# test/cure/compiler/quasiquote_test.exs
+#
+# SP5.1 — quasiquotation (`quote` / `$( )`). Stage-1 parser-level fixtures.
+# Red until `parse_quote` + splice lexing land (Stages 2-3). The end-to-end
+# byte-identical-Core port gate is exercised separately in Stage 5.
+defmodule Cure.Compiler.QuasiquoteTest do
+  use ExUnit.Case, async: true
+  alias Cure.Compiler.{Lexer, Parser}
+
+  defp parse!(src) do
+    {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
+    {:ok, ast} = Parser.parse(tokens, emit_events: false)
+    ast
+  end
+
+  # Pull the body expression of `fn f(...) = <body>` out of a parsed module.
+  defp body!(ast) do
+    find = fn find, n ->
+      case n do
+        {:function_def, meta, [b]} ->
+          if to_string(Keyword.get(meta, :name)) == "f", do: b, else: nil
+
+        {_t, _m, ch} when is_list(ch) ->
+          Enum.find_value(ch, &find.(find, &1))
+
+        _ ->
+          nil
+      end
+    end
+
+    find.(find, ast)
+  end
+
+  # Walk a tree collecting every node whose tag is in `tags`.
+  defp collect(tree, tags) do
+    case tree do
+      {tag, _m, ch} when is_list(ch) ->
+        here = if tag in tags, do: [tree], else: []
+        here ++ Enum.flat_map(ch, &collect(&1, tags))
+
+      list when is_list(list) ->
+        Enum.flat_map(list, &collect(&1, tags))
+
+      _ ->
+        []
+    end
+  end
+
+  test "`quote <expr>` parses to a :quoted_syntax node wrapping the inner form" do
+    ast = parse!("mod M\n  fn f() -> Syntax = quote 1\nend")
+    body = body!(ast)
+    assert {:quoted_syntax, _meta, [_inner]} = body
+  end
+
+  test "`$(e)` inside a quote parses to a single :splice hole carrying the expr" do
+    ast = parse!("mod M\n  fn f(x: Syntax) -> Syntax = quote g($(x))\nend")
+    body = body!(ast)
+    assert {:quoted_syntax, _m, [_]} = body
+    [splice] = collect(body, [:splice])
+    assert {:splice, _sm, [{:variable, _, "x"}]} = splice
+  end
+
+  test "`$(e ...)` inside a quote parses to a :splice_group hole" do
+    ast = parse!("mod M\n  fn f(xs: List(Syntax)) -> Syntax = quote g($(xs ...))\nend")
+    body = body!(ast)
+    [group] = collect(body, [:splice_group])
+    assert {:splice_group, _gm, [{:variable, _, "xs"}]} = group
+  end
+
+  test "a quote with no splices carries no splice holes" do
+    ast = parse!("mod M\n  fn f() -> Syntax = quote foo(bar)\nend")
+    body = body!(ast)
+    assert {:quoted_syntax, _m, [_]} = body
+    assert collect(body, [:splice, :splice_group]) == []
+  end
+end

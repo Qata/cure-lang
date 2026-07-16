@@ -2241,6 +2241,11 @@ defmodule Cure.Compiler.Parser do
       :lparen ->
         parse_grouped(state)
 
+      # Quasiquote splice hole (SP5.1): `$(e)` / `$(e ...)`. Legal only inside a
+      # `quote`; outside one the elaborator rejects the orphan splice node.
+      :splice_open ->
+        parse_splice(state, token)
+
       # Collections
       :lbracket ->
         parse_list_or_comprehension(state)
@@ -3282,6 +3287,9 @@ defmodule Cure.Compiler.Parser do
 
       :match ->
         parse_match(state)
+
+      :quote ->
+        parse_quote(state)
 
       :pickup ->
         parse_pickup(state)
@@ -7671,6 +7679,46 @@ defmodule Cure.Compiler.Parser do
     {expr, state} = parse_expr(state, 0)
     ast = {node_type, [line: token.line, col: token.col], [expr]}
     {ast, state}
+  end
+
+  # -- Quasiquote (SP5.1) ----------------------------------------------------
+
+  # `quote <form>` lifts the following Cure form to a `Std.Syntax.Syntax`
+  # value. The inner form is parsed by the ordinary expression grammar, so
+  # splice holes (`$(...)`) nest anywhere within it: `parse_prefix` emits a
+  # `:splice` / `:splice_group` node wherever `$(` appears. The macro
+  # frontend lowers `:quoted_syntax` to `Std.Syntax` builder calls (with each
+  # hole spliced in) via the `to_syntax`/`to_core` bridge in `macro_syntax.ex`;
+  # this stays pure surface sugar (TCB delta 0). Declaration-form quoting
+  # rides the same node — a `type`/`fn` form parses through `parse_expr` here.
+  defp parse_quote(state) do
+    token = peek(state)
+    state = advance(state)
+    {inner, state} = parse_expr(state, 0)
+    ast = {:quoted_syntax, [line: token.line, col: token.col], [inner]}
+    {ast, state}
+  end
+
+  # `$(e)` single-node splice / `$(e ...)` repeated-group splice. The trailing
+  # `...` (a `:ellipsis` token) marks splice-all: `e : List(Syntax)` flattened
+  # into the enclosing node's child sequence (Scheme `,@` analog). Without it,
+  # `e : Syntax` fills one child position. The `:splice_open` token already
+  # consumed the `$(`; we close on `)`.
+  defp parse_splice(state, open_token) do
+    state = advance(state)
+    {expr, state} = parse_expr(state, 0)
+    meta = [line: open_token.line, col: open_token.col]
+
+    case peek(state) do
+      %Token{type: :ellipsis} ->
+        state = advance(state)
+        state = expect(state, :rparen)
+        {{:splice_group, meta, [expr]}, state}
+
+      _ ->
+        state = expect(state, :rparen)
+        {{:splice, meta, [expr]}, state}
+    end
   end
 
   # -- Send ------------------------------------------------------------------
