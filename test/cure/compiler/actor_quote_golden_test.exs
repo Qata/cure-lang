@@ -12,6 +12,7 @@
 #   * GDerived        — `derive` path: default_actor_init + actor_handler arms
 #   * GStructuredCall — structured `on_call`: reply channel + handle_call
 #   * GLifecycle      — optional terminate / code_change callback bodies
+#   * GFsmDerived     — derive_fsm: callback_mode + init callback bodies
 #
 # If a hash here changes, the port altered the generated program — that is the
 # failure this gate exists to catch. The ONLY legitimate reason to re-freeze is
@@ -50,6 +51,19 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
      fn make_request() -> ActorRequest = Read
      """,
      "2756ad344630d8dbefa49f55b67224c0537bdd5bb1c6f09e112d1628c0982031"},
+    {"GFsmDerived",
+     """
+     mod M
+       use Std.Fsm
+
+       fsm Cure.Generated.GFsmDerived state Int derive
+         match event
+           Start -> :keep_state_and_data
+           Stop -> :keep_state_and_data
+
+     fn make_start() -> FsmEvent = Start
+     """,
+     "20fd156f84f75a598bab7ac2064f2cf3edecb75057a9884b565b1d514f4438ab"},
     {"GLifecycle",
      """
      mod M
