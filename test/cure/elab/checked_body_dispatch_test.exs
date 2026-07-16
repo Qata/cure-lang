@@ -65,4 +65,31 @@ defmodule Cure.Elab.CheckedBodyDispatchTest do
     assert apply(mod, :tail, [[]]) == []
     assert apply(mod, :tail, [[:Z, :Z]]) == [:Z]
   end
+
+  test "a ctor-arm body with an unannotated lambda in a type-var-domain field elaborates + runs" do
+    # The Std.Optic shape (optic.cure:165, `MkAffineRep(Some(MkLensRep(v, fn(new) ->
+    # put(new)(x))))`): a match arm returns a constructor whose field is an arrow
+    # `(a) -> a` over a TYPE VARIABLE, filled by an unannotated lambda. Inference
+    # cannot type such a lambda (its domain has no source but the field type), so the
+    # constructor-arm path must fall back from `:unsupported_expression` to CHECKED
+    # elaboration. Before that fallback existed, this failed as
+    # `{:unsupported_expression, {:lambda, ...}}`. `mk`'s arms build the box; `unbox`
+    # applies the stored lambda so the run exercises the actual closure.
+    src =
+      "mod M\n  type Box(a: Type) = MkBox(a, (a) -> a)\n" <>
+        "  fn unbox({a: Type}, b: Box(a), x: a) -> a =\n" <>
+        "    match b\n      MkBox(v, f) -> f(x)\n" <>
+        "  fn mk({a: Type}, sel: Int, v: a, g: (a) -> a) -> Box(a) =\n" <>
+        "    match sel\n" <>
+        "      0 -> MkBox(v, fn(new) -> g(new))\n" <>
+        "      other -> MkBox(v, fn(new) -> g(g(new)))\n" <>
+        "  fn demo(sel: Int, start: Int) -> Int =\n" <>
+        "    unbox(mk(sel, 0, fn(n) -> n + 1), start)\nend\n"
+
+    assert {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.M", functions: [:demo, :mk, :unbox])
+    # sel=0: one application of `+1` to start; sel=1 (other): two applications.
+    assert apply(mod, :demo, [0, 5]) == 6
+    assert apply(mod, :demo, [1, 5]) == 7
+  end
 end

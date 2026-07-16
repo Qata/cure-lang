@@ -9,6 +9,9 @@ mod Std.Vector
 
   use Std.Nat
   use Std.Bounded
+  use Std.Option
+  use Std.List
+  use Std.Sigma
 
   type Vector(a: Type) indices (n: Nat)
     empty : Vector(a, Z)
@@ -109,3 +112,102 @@ mod Std.Vector
         pickup
           pred(x) -> all(rest, pred)
           else -> false
+
+  ## Append one element at the END of the vector, growing the length by one.
+  ## Total: the length index tracks the growth exactly, mirroring `prepend` at the
+  ## other end. `snoc` is the workhorse behind `reverse`.
+  fn snoc({a: Type}, {n: Nat}, xs: Vector(a, n), y: a) -> Vector(a, S(n)) =
+    match xs
+      empty() -> prepend(y, empty())
+      prepend(x, rest) -> prepend(x, snoc(rest, y))
+
+  ## Reverse the vector, preserving its length. Each `prepend` is turned into a
+  ## `snoc` on the reversed tail, so the length is provably unchanged (`Vector(a, n)
+  ## -> Vector(a, n)`) without any auxiliary `plus`-lemma.
+  fn reverse({a: Type}, {n: Nat}, xs: Vector(a, n)) -> Vector(a, n) =
+    match xs
+      empty() -> empty()
+      prepend(x, rest) -> snoc(reverse(rest), x)
+
+  ## Last element of a non-empty vector. The `S(n)` index makes emptiness
+  ## unrepresentable, so this is total with no `Option`.
+  fn last({a: Type}, {n: Nat}, xs: Vector(a, S(n))) -> a =
+    match xs
+      prepend(x, rest) ->
+        match rest
+          empty() -> x
+          prepend(_, _) -> last(rest)
+
+  ## All-but-the-last element of a non-empty vector, shrinking the length by one.
+  fn init({a: Type}, {n: Nat}, xs: Vector(a, S(n))) -> Vector(a, n) =
+    match xs
+      prepend(x, rest) ->
+        match rest
+          empty() -> empty()
+          prepend(_, _) -> prepend(x, init(rest))
+
+  ## First `n` elements of a vector whose length is `plus(n, m)`, dropping the
+  ## trailing `m`. `with n` (not `match n`) is the Idris-style convoy: matching
+  ## `n` refines the sibling `xs : Vector(a, plus(n, m))` per branch, so in the
+  ## `S(k)` branch `xs : Vector(a, plus(S(k), m))` — a non-empty vector — and the
+  ## inner `match xs` legitimately omits `empty`. That omission is discharged
+  ## because coverage normalizes the scrutinee index: `plus(S(k), m)` reduces to
+  ## `S(plus(k, m))`, whose `S` head refutes `empty`'s `Z`.
+  fn take({a: Type}, n: Nat, {m: Nat}, xs: Vector(a, plus(n, m))) -> Vector(a, n) =
+    with n
+      Z() -> empty()
+      S(k) ->
+        match xs
+          prepend(x, rest) -> prepend(x, take(k, rest))
+
+  ## Drop the first `n` elements of a vector of length `plus(n, m)`, keeping the
+  ## trailing `m`. Same convoy: `with n` refines `xs`, so the `Z` branch returns
+  ## `xs` directly (`plus(Z, m)` reduces to `m`, matching the `Vector(a, m)`
+  ## result) and the `S(k)` branch peels one element off the now-non-empty `xs`.
+  fn drop({a: Type}, n: Nat, {m: Nat}, xs: Vector(a, plus(n, m))) -> Vector(a, m) =
+    with n
+      Z() -> xs
+      S(k) ->
+        match xs
+          prepend(_, rest) -> drop(k, rest)
+
+  ## Pair two equal-length vectors element-wise into a vector of 2-tuples.
+  fn zip({a: Type}, {b: Type}, {n: Nat}, xs: Vector(a, n), ys: Vector(b, n)) -> Vector(Tuple(a, b), n) =
+    match %[xs, ys]
+      %[empty(), empty()] -> empty()
+      %[prepend(x, x_rest), prepend(y, y_rest)] -> prepend(%[x, y], zip(x_rest, y_rest))
+
+  ## Forget the length index, projecting to an ordinary `List`.
+  fn to_list({a: Type}, {n: Nat}, xs: Vector(a, n)) -> List(a) =
+    match xs
+      empty() -> []
+      prepend(x, rest) -> [x | to_list(rest)]
+
+  ## Recover a length-indexed vector from a list. The length is not known
+  ## statically, so it is packed existentially in a `Sigma` alongside the vector.
+  ## The pair is built with the `%[..]` surface (which lowers to `mk_pair` while
+  ## solving the dependent second-component motive from the expected `Sigma` type);
+  ## a bare `mk_pair(..)` leaves that motive an unsolved metavariable.
+  fn from_list({a: Type}, xs: List(a)) -> Sigma(n: Nat, Vector(a, n)) =
+    match xs
+      [] -> %[Z(), empty()]
+      [x | rest] ->
+        match from_list(rest)
+          mk_pair(m, v) -> %[S(m), prepend(x, v)]
+
+  ## First element satisfying `pred`, or `None` if there is none.
+  fn find({a: Type}, {n: Nat}, xs: Vector(a, n), pred: a -> Bool) -> Option(a) =
+    match xs
+      empty() -> None()
+      prepend(x, rest) ->
+        pickup
+          pred(x) -> Some(x)
+          else -> find(rest, pred)
+
+  ## Sum of an `Int` vector of any length.
+  fn sum({n: Nat}, xs: Vector(Int, n)) -> Int =
+    foldl(xs, 0, fn(x) -> fn(acc) -> acc + x)
+
+  ## Product of an `Int` vector of any length.
+  fn product({n: Nat}, xs: Vector(Int, n)) -> Int =
+    foldl(xs, 1, fn(x) -> fn(acc) -> acc * x)

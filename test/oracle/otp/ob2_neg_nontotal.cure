@@ -1,0 +1,7 @@
+mod Ob2NegNontotal
+  type Reply0 = R0
+  type Msg = Inc | Dec | Query(Reply0)
+  type Response = Ack | Count(Reply0)
+  fn dispatch_bad(m: Msg) -> Response = match m
+    Inc() -> Ack
+end

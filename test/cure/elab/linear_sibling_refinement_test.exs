@@ -1,0 +1,180 @@
+defmodule Cure.Elab.LinearSiblingRefinementTest do
+  @moduledoc """
+  A `with r` handler may match on `r` while a LINEAR sibling whose type depends on
+  `r` (`cap : ReplyCap(r)`) is in scope, refine that sibling per branch, and consume
+  it exactly once — the ergonomic OTP handler shape
+
+      with r
+        GetCount() -> reply(cap, R0)
+        …
+
+  Previously this over-rejected: `with`'s Eq-transport encodes the sibling as
+  `transport_case(prf) applied to cap` (a collapsible case = identity on `cap`)
+  which the relevance checker ω-scaled pre-erasure. The sibling refinement now uses
+  MOTIVE-GENERALIZATION — `(case r of λcap'. body) cap`, a real λ binder per branch —
+  and the relevance CONVOY rule counts the linear `cap` once. Linearity is still
+  enforced: dropping or duplicating `cap` in a branch is rejected.
+  """
+  use ExUnit.Case, async: true
+
+  alias Cure.Elab.Program
+
+  defp verdict(defs) do
+    src = """
+    mod LinSib
+      type Reply0 = R0
+      type Reply1 = R1a | R1b
+      type Req = GetCount | SetName(Reply0) | Ping
+      fn ReplyOf(r: Req) -> Type = match r
+        GetCount()  -> Reply0
+        SetName(_)  -> Reply1
+        Ping()      -> Reply1
+      type ReplyCap(r: Req) indices ()
+        MkCap : ReplyCap(r)
+      type Replied = Done
+      type Pair = MkPair(Replied, Replied)
+      fn reply({r: Req}, cap :linear ReplyCap(r), v: ReplyOf(r)) -> Replied =
+        match cap
+          MkCap() -> Done
+    #{defs}
+    end
+    """
+
+    case Program.elaborate(src) do
+      {:ok, _} -> :accept
+      {:error, _} -> :reject
+    end
+  end
+
+  test "branching handler consuming the linear capability once per path is accepted" do
+    defs = """
+      fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = with r
+        GetCount()  -> reply(cap, R0)
+        SetName(_)  -> reply(cap, R1a)
+        Ping()      -> reply(cap, R1b)
+    """
+
+    assert verdict(defs) == :accept
+  end
+
+  test "a branch that DROPS the linear capability is rejected" do
+    defs = """
+      fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = with r
+        GetCount()  -> Done
+        SetName(_)  -> reply(cap, R1a)
+        Ping()      -> reply(cap, R1b)
+    """
+
+    assert verdict(defs) == :reject
+  end
+
+  test "a branch that DUPLICATES the linear capability is rejected" do
+    defs = """
+      fn handle(r: Req, cap :linear ReplyCap(r)) -> Pair = with r
+        GetCount()  -> MkPair(reply(cap, R0), reply(cap, R0))
+        SetName(_)  -> MkPair(reply(cap, R1a), Done)
+        Ping()      -> MkPair(reply(cap, R1b), Done)
+    """
+
+    assert verdict(defs) == :reject
+  end
+
+  describe "motive-generalization refines MULTIPLE linear siblings" do
+    defp verdict2(handle) do
+      src = """
+      mod TwoSib
+        type Reply0 = R0
+        type Req = A | B
+        fn ReplyOf(r: Req) -> Type = match r
+          A() -> Reply0
+          B() -> Reply0
+        type Cap1(r: Req) indices ()
+          MkC1 : Cap1(r)
+        type Cap2(r: Req) indices ()
+          MkC2 : Cap2(r)
+        type Replied = Done
+        fn use_both({r: Req}, c1 :linear Cap1(r), c2 :linear Cap2(r), v: ReplyOf(r)) -> Replied =
+          match c1
+            MkC1() -> match c2
+              MkC2() -> Done
+        fn use1({r: Req}, c1 :linear Cap1(r), v: ReplyOf(r)) -> Replied = match c1
+          MkC1() -> Done
+      #{handle}
+      end
+      """
+
+      case Program.elaborate(src) do
+        {:ok, _} -> :accept
+        {:error, _} -> :reject
+      end
+    end
+
+    test "two linear siblings each consumed once per path is accepted" do
+      handle = """
+        fn handle(r: Req, c1 :linear Cap1(r), c2 :linear Cap2(r)) -> Replied = with r
+          A() -> use_both(c1, c2, R0)
+          B() -> use_both(c1, c2, R0)
+      """
+
+      assert verdict2(handle) == :accept
+    end
+
+    test "dropping the second sibling in a branch is rejected" do
+      handle = """
+        fn handle(r: Req, c1 :linear Cap1(r), c2 :linear Cap2(r)) -> Replied = with r
+          A() -> use1(c1, R0)
+          B() -> use_both(c1, c2, R0)
+      """
+
+      assert verdict2(handle) == :reject
+    end
+
+    test "duplicating a sibling in a branch is rejected" do
+      handle = """
+        fn handle(r: Req, c1 :linear Cap1(r), c2 :linear Cap2(r)) -> Replied = with r
+          A() -> let x = use1(c1, R0) in use_both(c1, c2, R0)
+          B() -> use_both(c1, c2, R0)
+      """
+
+      assert verdict2(handle) == :reject
+    end
+  end
+
+  describe "plain `match` (not `with`) refines the linear sibling too (item C)" do
+    # `match r` — no `with` — routes to the same motive-generalization machinery when
+    # its standard path fails and a scrutinee-dependent sibling is in scope, so the
+    # ergonomic OTP handler needs no `with`. Linearity is still enforced.
+    test "plain-match handler consuming cap once per path is accepted" do
+      defs = """
+        fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = match r
+          GetCount()  -> reply(cap, R0)
+          SetName(_)  -> reply(cap, R1a)
+          Ping()      -> reply(cap, R1b)
+      """
+
+      assert verdict(defs) == :accept
+    end
+
+    test "plain-match: a branch that DROPS the capability is rejected" do
+      defs = """
+        fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = match r
+          GetCount()  -> Done
+          SetName(_)  -> reply(cap, R1a)
+          Ping()      -> reply(cap, R1b)
+      """
+
+      assert verdict(defs) == :reject
+    end
+
+    test "plain-match: a branch that DUPLICATES the capability is rejected" do
+      defs = """
+        fn handle(r: Req, cap :linear ReplyCap(r)) -> Pair = match r
+          GetCount()  -> MkPair(reply(cap, R0), reply(cap, R0))
+          SetName(_)  -> MkPair(reply(cap, R1a), Done)
+          Ping()      -> MkPair(reply(cap, R1b), Done)
+      """
+
+      assert verdict(defs) == :reject
+    end
+  end
+end

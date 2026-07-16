@@ -1471,36 +1471,29 @@ defmodule Cure.Elab.Elaborator do
         # Additive: falls back to the ordinary infer-then-check path on any failure, so
         # inference-position behaviour (no expected type) is unchanged.
         resolved = resolve_def_key(env, name, atom)
-        concrete_goal? = not Unify.has_meta?(expected_core)
 
-        goal_first? =
-          (concrete_goal? and implicit_def?(env, resolved)) or
-            (Enum.any?(args, &match?({:lambda, _m, _b}, &1)) and Map.has_key?(env.defs, resolved))
+        # Partial application of an implicit-carrying def against a function-type
+        # goal: eta-expand the missing explicit parameters into lambda binders —
+        # `konst(7)` at `(Int) -> Int` becomes `fn(x) -> konst(7, x)`. The residual
+        # binder domains come from the expected Π, reducing an under-saturated call
+        # (which the saturating implicit paths reject with `:too_few_arguments`, or
+        # mis-align the first explicit arg onto the leading implicit slot) to the
+        # ordinary saturated path. Idris elaborates an under-applied function
+        # checked against a function type exactly this way; the kernel re-checks the
+        # synthesized lambda, so only eta-equivalent well-typed terms are accepted.
+        residual = residual_explicit_arity(env, resolved, length(args))
 
-        goal_first =
-          if goal_first? do
-            case elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core) do
-              {:ok, term, _type} ->
-                case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-                  :ok -> {:ok, term}
-                  {:error, _} -> nil
-                end
-
-              {:error, _} ->
-                nil
-            end
-          end
-
-        # No post-hoc retry. There used to be one here, firing on
-        # `:unsolved_metavariables` under the guard `implicit_def?(resolved) and not
-        # has_meta?(expected_core)` — which is EXACTLY the first disjunct of
-        # `goal_first?` above. Whenever it fired, the identical
-        # `elaborate_global_app_expected` had therefore already run and failed, so it
-        # could only fail again. It was dead the moment the goal-first pre-pass was
-        # introduced, and stayed in the file because each new attempt was bolted on in
-        # front of the previous one instead of replacing it. Solving happens once, up
-        # front, where the goal is known.
-        goal_first || elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+        if residual > 0 and match?({:pi, _, _, _}, Kernel.normalize(ctx, expected_core)) do
+          elaborate_expr_checked(
+            eta_expand_call(meta, args, residual),
+            expected_core,
+            names,
+            ctx,
+            env
+          )
+        else
+          elaborate_checked_call_saturated(expr, resolved, expected_core, args, names, ctx, env)
+        end
     end
   end
 
@@ -1755,6 +1748,45 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+  # The saturated (or non-function-goal) checking-mode path for a non-constructor
+  # call: try the goal-first pre-pass when the goal can inform implicit solving,
+  # otherwise infer-then-recheck. Split out of the `true ->` branch of
+  # `elaborate_expr_checked({:function_call,...})` so the eta-expansion path can
+  # share `resolved` without duplicating this block. Defined here (after the
+  # `elaborate_expr_checked/5` clause group) so those clauses stay grouped.
+  defp elaborate_checked_call_saturated(expr, resolved, expected_core, args, names, ctx, env) do
+    concrete_goal? = not Unify.has_meta?(expected_core)
+
+    goal_first? =
+      (concrete_goal? and implicit_def?(env, resolved)) or
+        (Enum.any?(args, &match?({:lambda, _m, _b}, &1)) and Map.has_key?(env.defs, resolved))
+
+    goal_first =
+      if goal_first? do
+        case elaborate_global_app_expected(env, resolved, args, names, ctx, expected_core) do
+          {:ok, term, _type} ->
+            case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+              :ok -> {:ok, term}
+              {:error, _} -> nil
+            end
+
+          {:error, _} ->
+            nil
+        end
+      end
+
+    # No post-hoc retry. There used to be one here, firing on
+    # `:unsolved_metavariables` under the guard `implicit_def?(resolved) and not
+    # has_meta?(expected_core)` — which is EXACTLY the first disjunct of
+    # `goal_first?` above. Whenever it fired, the identical
+    # `elaborate_global_app_expected` had therefore already run and failed, so it
+    # could only fail again. It was dead the moment the goal-first pre-pass was
+    # introduced, and stayed in the file because each new attempt was bolted on in
+    # front of the previous one instead of replacing it. Solving happens once, up
+    # front, where the goal is known.
+    goal_first || elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+  end
 
   # Recursively elaborate a run of surface tuple elements against a Σ-shaped goal,
   # peeling ONE Σ layer per element. Distinguishes two terminations:
@@ -2304,6 +2336,31 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # Residual explicit-parameter count for a partial application in checking mode:
+  # the def's explicit (non-erased) arity minus the number of supplied arguments.
+  # Positive means the call is under-saturated. Only defs with recorded
+  # per-parameter quantities participate (every implicit-carrying def has them);
+  # a def without quantities returns 0 so its existing partial-application
+  # behaviour — non-implicit currying, which the kernel already types — is left
+  # exactly as-is.
+  defp residual_explicit_arity(env, key, supplied) do
+    case Env.get_def(env, key) do
+      %{quantities: q} when is_list(q) -> Enum.count(q, &(&1 != :erased)) - supplied
+      _ -> 0
+    end
+  end
+
+  # Eta-expand an under-saturated call by `k` explicit binders: `f(a1..an)`
+  # becomes `fn($eta0 .. $eta{k-1}) -> f(a1..an, $eta0 .. $eta{k-1})`. The
+  # `$`-prefixed binder names are synthetic and cannot collide with a source
+  # identifier. Reuses the original call `meta` (carrying `:name`) for the now-
+  # saturated inner application.
+  defp eta_expand_call(meta, args, k) do
+    vars = for i <- 0..(k - 1), do: {:variable, [], "$eta#{i}"}
+    params = for i <- 0..(k - 1), do: {:param, [], "$eta#{i}"}
+    {:lambda, [params: params], [{:function_call, meta, args ++ vars}]}
+  end
+
   # Map a surface call name to its def-registry key: a qualified (`Std.Map.keys`)
   # name resolves through the value namespace, a bare name through bare-shadowing;
   # either falls back to the raw atom. Mirrors the `resolved` computation at the
@@ -2467,23 +2524,64 @@ defmodule Cure.Elab.Elaborator do
           # scrutinee's family key, which is only known here. Typed-pattern arms
           # (`n: Int`) become ordinary ctor-pattern arms, so coverage, exhaustiveness
           # and totality all come from the existing machinery below.
-          with {:ok, arms} <- desugar_union_arms(arms, dname, names, env),
-               {:ok, branches, join} <-
-                 elaborate_branches(
-                   arms,
-                   names,
-                   ctx,
-                   env,
-                   dname,
-                   idx_vals,
-                   param_vals,
-                   scrut_term,
-                   result_type_term,
-                   carried,
-                   motive
-                 ) do
-            case_term = wrap_join({:case, scrut_term, motive, branches}, join)
-            {:ok, if(carried, do: {:app, case_term, mk_refl(carried.idx_term)}, else: case_term)}
+          with {:ok, arms} <- desugar_union_arms(arms, dname, names, env) do
+            standard =
+              with {:ok, branches, join} <-
+                     elaborate_branches(
+                       arms,
+                       names,
+                       ctx,
+                       env,
+                       dname,
+                       idx_vals,
+                       param_vals,
+                       scrut_term,
+                       result_type_term,
+                       carried,
+                       motive
+                     ) do
+                case_term = wrap_join({:case, scrut_term, motive, branches}, join)
+                {:ok, if(carried, do: {:app, case_term, mk_refl(carried.idx_term)}, else: case_term)}
+              end
+
+            # Item C: the standard motive refines the RETURN per branch but not the
+            # types of scrutinee-dependent SIBLINGS (`w : ReplyOf(r)`), so a plain
+            # `match r` that reads such a sibling rejects. Only when the standard path
+            # fails, and only for a non-indexed family matched on a VARIABLE with such
+            # siblings, retry via motive-generalization (the same machinery `with r`
+            # uses). Working matches keep the standard path untouched.
+            case standard do
+              {:ok, _} ->
+                standard
+
+              {:error, _} = err ->
+                siblings =
+                  if family.indices == [] and match?({:var, _}, scrut_term) do
+                    case collect_with_siblings(scrut_term, names, ctx, env) do
+                      {:ok, s} -> s
+                      _ -> []
+                    end
+                  else
+                    []
+                  end
+
+                if siblings != [] do
+                  elaborate_motivegen_case(
+                    scrut_term,
+                    scrut_type,
+                    dname,
+                    combined_vals,
+                    siblings,
+                    arms,
+                    result_type_term,
+                    names,
+                    ctx,
+                    env
+                  )
+                else
+                  err
+                end
+            end
           end
 
         _ ->
@@ -2694,6 +2792,32 @@ defmodule Cure.Elab.Elaborator do
               # scrutinee (`with v` for `v : NVv(n)`) refines the same as `match v`.
               not need_eq ->
                 elaborate_match(scrut_expr, arms, result_type_term, names, ctx, env)
+
+              # Sibling refinement WITHOUT a user proof, single sibling: use
+              # MOTIVE-GENERALIZATION rather than Eq-transport. The sibling becomes a
+              # Π domain in the case motive and a real λ binder per branch, so a LINEAR
+              # sibling STAYS linear — the Eq-transport `transport_case(prf) cap`
+              # encoding is a collapsible case that erases to identity but which the
+              # relevance checker ω-scaled pre-erasure (over-counting a dup, masking a
+              # drop). Here `cap` is a direct convoy argument `(case e …) cap` whose
+              # per-branch λ binder `check_binder` polices; the relevance convoy rule
+              # counts it once. The branch-λ grade is ω — the sibling's REAL grade is
+              # enforced at its own binding site (the def's `:linear cap`) via the
+              # convoy. Restricted to ONE sibling; the proof form and multi-sibling keep
+              # the Eq-arrow path below.
+              family.indices == [] and proof_name == nil and siblings != [] ->
+                elaborate_motivegen_case(
+                  scrut_term,
+                  scrut_type,
+                  dname,
+                  combined_vals,
+                  siblings,
+                  arms,
+                  result_type_term,
+                  names,
+                  ctx,
+                  env
+                )
 
               # Capability B (proof / sibling transport) — the Eq-arrow motive.
               # This slice's eq-arrow motive is built for a NON-indexed scrutinee
@@ -3106,6 +3230,122 @@ defmodule Cure.Elab.Elaborator do
         end)
 
       {:ok, {cname, arity, {:lam, Cure.Core.Grade.unrestricted(), eq_dom_term, wrapped}}}
+    end
+  end
+
+  # Motive-generalization elimination (shared by `with` and plain `match`): refine
+  # `m` scrutinee-dependent siblings by generalizing them into the case motive and
+  # binding a fresh refined λ per branch, then apply the case to the ORIGINAL
+  # siblings. `motive = λw. Π(s₁: H₁[e↦w]) … Π(sₘ: Hₘ[e↦w]). G[e↦w]` (independent
+  # siblings, so domain j shifts +(j-1) and G shifts +m). Non-indexed family, variable
+  # scrutinee. A linear sibling stays linear (see the relevance convoy rule).
+  defp elaborate_motivegen_case(
+         scrut_term,
+         scrut_type,
+         dname,
+         combined_vals,
+         siblings,
+         arms,
+         result_type_term,
+         names,
+         ctx,
+         env
+       ) do
+    scrut_type_term = resplit_data(Quote.reify(scrut_type, Context.length(ctx)), env)
+    m = length(siblings)
+    g_abs = abstract_term(result_type_term, scrut_term, 0)
+
+    motive_body =
+      siblings
+      |> Enum.with_index(1)
+      |> Enum.reverse()
+      |> Enum.reduce(Subst.shift(g_abs, m, 0), fn {%{type_term: h_ctx}, j}, acc ->
+        h_abs = abstract_term(h_ctx, scrut_term, 0)
+        {:pi, Cure.Core.Grade.unrestricted(), Subst.shift(h_abs, j - 1, 0), acc}
+      end)
+
+    motive = {:lam, Cure.Core.Grade.unrestricted(), scrut_type_term, motive_body}
+    pc = Inductive.param_count(env, dname)
+    {param_vals, _idx_vals} = Enum.split(combined_vals, pc)
+
+    cfg = %{
+      names: names,
+      ctx: ctx,
+      env: env,
+      dname: dname,
+      param_vals: param_vals,
+      motive: motive,
+      sibling_names: Enum.map(siblings, & &1.name)
+    }
+
+    with {:ok, branches} <- elaborate_with_motivegen_branches(arms, cfg) do
+      case_term = {:case, scrut_term, motive, branches}
+
+      applied =
+        Enum.reduce(siblings, case_term, fn %{index: idx}, acc ->
+          {:app, acc, {:var, idx}}
+        end)
+
+      {:ok, applied}
+    end
+  end
+
+  # Motive-generalization branches (single sibling, no proof). Each branch binds the
+  # REFINED sibling as a fresh λ, at the type `motive @ ctor` computes, and rebinds
+  # the sibling's ORIGINAL name to it so the body sees the refined type. No Eq, no
+  # transport — the linear sibling stays a real linear resource threaded through the
+  # convoy `(case e …) cap`.
+  defp elaborate_with_motivegen_branches(arms, %{ctx: ctx, env: env, dname: dname} = cfg) do
+    with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname),
+         :ok <- reject_with_default(default) do
+      arm_map
+      |> Enum.reduce_while({:ok, []}, fn
+        {_cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
+          {:cont, {:ok, acc}}
+
+        {cname, {:matched, pattern, body_expr}}, {:ok, acc} ->
+          case elaborate_with_motivegen_branch(cname, pattern, body_expr, cfg) do
+            {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
+            {:error, _} = err -> {:halt, err}
+          end
+      end)
+    end
+  end
+
+  defp elaborate_with_motivegen_branch(cname, pattern, body_expr, cfg) do
+    %{names: names, ctx: ctx, env: env, param_vals: param_vals, motive: motive, sibling_names: snames} = cfg
+
+    {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
+    %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
+    arity = length(telescope)
+    branch_names0 = branch_scope(quantities, pattern_vars) ++ names
+    branch_ctx0 = extend_context(ctx, telescope, param_vals)
+
+    ctor_term = branch_constructor_term(cname, arity)
+    motive_shifted = Subst.shift(motive, arity, 0)
+    # applied = Π(s₁: H₁[e↦pat]) … Π(sₘ: Hₘ[e↦pat]). G[e↦pat]
+    applied = Kernel.normalize(branch_ctx0, {:app, motive_shifted, ctor_term})
+
+    # Peel one Π per sibling, extending the branch context and rebinding each
+    # refined sibling under its original name (so the arm body reads the refined
+    # type; the outer unrefined binder is shadowed). Collect the (grade, domain)
+    # pairs to wrap the body in the matching λ-nest.
+    {branch_ctx, branch_names, cod, doms_rev} =
+      Enum.reduce(snames, {branch_ctx0, branch_names0, applied, []}, fn sname, {c, ns, ty, acc} ->
+        {:pi, g, dom_term, cod_ty} = ty
+        dom_value = Eval.eval(dom_term, Context.env(c))
+        {Context.extend(c, dom_value), [sname | ns], cod_ty, [{g, dom_term} | acc]}
+      end)
+
+    cod_expected = Kernel.normalize(branch_ctx, cod)
+
+    with {:ok, inner} <-
+           elaborate_branch_body(body_expr, cod_expected, branch_names, branch_ctx, env) do
+      # doms_rev is innermost-first; folding wraps λs₁'. … λsₘ'. inner (s₁ outermost).
+      wrapped =
+        Enum.reduce(doms_rev, inner, fn {g, dom_term}, acc -> {:lam, g, dom_term, acc} end)
+
+      {:ok, {cname, arity, wrapped}}
     end
   end
 
@@ -5140,27 +5380,36 @@ defmodule Cure.Elab.Elaborator do
           # A constructor branch body. Infer FIRST — this preserves every case that
           # already worked, including a reconstruction whose indices the present
           # arguments determine and the carried-index-Eq transport (which wraps an
-          # inferred body). ONLY when inference cannot pin the erased indices —
-          # `prim()`/`seq(l,r)` reconstructed at a refined index with no present
-          # argument to solve `av`/`bv` from (`:unsolved_metavariables`) — retry in
-          # checking mode, letting the branch's expected type pin them.
+          # inferred body). Retry in checking mode — letting the branch's expected
+          # type drive the constructor — when inference cannot pin the erased indices
+          # (`prim()`/`seq(l,r)` reconstructed at a refined index with no present
+          # argument to solve `av`/`bv` from: `:unsolved_metavariables`) OR when a
+          # field is not inferable at all (`:unsupported_expression`) — e.g. an
+          # unannotated lambda in a field like `MkLensRep(v, fn new -> ...)`, whose
+          # domain only the field type supplies. Both are exactly the cases Idris
+          # handles by checking the arm body against the match's expected type; the
+          # kernel re-checks either way, so this only ever accepts well-typed terms.
           case elaborate_expr_typed(expr, names, ctx, env) do
             {:ok, term, _type} -> {:ok, term}
             {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
+            {:error, {:unsupported_expression, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
             {:error, _} = err -> err
           end
 
         true ->
           # An ordinary (non-constructor) function-call arm body. Infer FIRST to
-          # preserve every case that already worked; ONLY when inference cannot
-          # solve the call's result-type metavariables — a polymorphic nullary
-          # function like `empty() -> Iter(t)` whose `t` has no argument to fix it
-          # — retry in checking mode, letting the branch's expected type pin them
-          # (mirrors the constructor-arm path above; Idris checks arm bodies
-          # against the match's expected type).
+          # preserve every case that already worked; retry in checking mode when
+          # inference cannot solve the call's result-type metavariables — a
+          # polymorphic nullary function like `empty() -> Iter(t)` whose `t` has no
+          # argument to fix it (`:unsolved_metavariables`) — or when an argument is
+          # not inferable (`:unsupported_expression`, e.g. an unannotated lambda
+          # passed to a higher-order call), letting the branch's expected type drive
+          # it. Mirrors the constructor-arm path above; Idris checks arm bodies
+          # against the match's expected type, and the kernel re-checks either way.
           case elaborate_expr_typed(expr, names, ctx, env) do
             {:ok, term, _type} -> {:ok, term}
             {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
+            {:error, {:unsupported_expression, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
             {:error, _} = err -> err
           end
       end
@@ -6817,20 +7066,35 @@ defmodule Cure.Elab.Elaborator do
     slots = Enum.zip(domains, quantities)
     init = {:ok, MetaCtx.new(), [], arg_asts, []}
 
-    # GOAL-DIRECTED solving for an anonymous-union goal — the same reason as in
-    # `elaborate_global_app/5`, and needed here too because this is the path taken when
-    # an argument cannot be inferred standalone (`Std.Map.put(:a, 1, Std.Map.new())` —
-    # `new()`'s implicits have nothing to fix them).
+    # GOAL-DIRECTED solving from the concrete return-type goal — ordinary
+    # bidirectional propagation (Idris/Agda/Lean): unify the codomain against the
+    # expected type FIRST, so a leading implicit determined only by the result is
+    # solved before its dependent argument slots are elaborated. This is the path
+    # taken when an argument cannot be inferred standalone, in two shapes:
     #
-    # Without it, the value slot's domain `?v` is still an unsolved meta, so the slot is
-    # DEFERRED and later resolved by inferring the argument — locking `?v := Int` and
-    # losing the union. Solving the codomain against the goal first pins
-    # `?v := Union<…>`, so the slot is no longer deferred: the argument is CHECKED
-    # against the union and the literal/member injection fires normally.
+    #   * an anonymous-union value slot (`Std.Map.put(:a, 1, Std.Map.new())` —
+    #     `new()`'s implicits have nothing to fix them): without goal-first solving
+    #     the domain `?v` stays a meta, the slot is DEFERRED and later resolved by
+    #     inferring the argument, locking `?v := Int` and LOSING the union;
+    #   * a lambda argument whose domain the goal alone fixes (`mk(fn(x) -> x.1)`
+    #     at `Box(Tuple(Int,Int), Int)` — `mk : {s} -> {a} -> (s -> a) -> Box(s,a)`):
+    #     without it `?s`/`?a` stay metas, so `fn(x) -> x.1` is checked at `?s -> ?a`
+    #     and the projection cannot lower (`:unsupported_expression`). When NO later
+    #     argument constrains the implicit (only lambdas, or a single argument), the
+    #     cross-argument deferral cannot rescue it, but the goal can.
+    #
+    # `bidir_solve_codomain_from_goal` swallows unification failure, so a goal that
+    # does not inform the codomain leaves the accumulator untouched — the ordinary
+    # left-to-right slot solving then runs exactly as before, and the kernel
+    # re-checks the assembled term regardless. Restricted to a META-FREE goal so a
+    # still-open expected type (nothing to solve against) skips the pre-pass.
     {erased, rest} = Enum.split_while(slots, fn {_d, q} -> q == :erased end)
 
+    seed_from_goal? =
+      union_goal?(expected) or (not is_nil(expected) and not Unify.has_meta?(expected))
+
     {init, slots} =
-      if union_goal?(expected) do
+      if seed_from_goal? do
         seeded =
           erased
           |> Enum.reduce_while(init, &bidir_app_slot(&1, &2, names, ctx, env))
@@ -6889,10 +7153,15 @@ defmodule Cure.Elab.Elaborator do
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], args, deferred}}
   end
 
-  defp bidir_app_slot({_dom, :unrestricted}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env),
-    do: {:halt, {:error, :too_few_arguments}}
+  defp bidir_app_slot({_dom, grade}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env)
+       when grade in [:unrestricted, :linear, :affine],
+       do: {:halt, {:error, :too_few_arguments}}
 
-  defp bidir_app_slot({dom, :unrestricted}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env) do
+  # A supplied explicit argument — grade governs later USAGE counting
+  # (`relevance.ex`), not slot mechanics: :unrestricted / :linear / :affine all
+  # consume one surface argument here, mirroring `solve_arg/3`'s telescope slot.
+  defp bidir_app_slot({dom, grade}, {:ok, mctx, chosen, [arg | rest], deferred}, names, ctx, env)
+       when grade in [:unrestricted, :linear, :affine] do
     # ZONK-then-instantiate, not instantiate-then-zonk: `Subst.instantiate` shifts a
     # substituted term across binders, `Unify.zonk` does not. A domain that is a Π
     # (a function-typed argument, `(a) -> a`) whose earlier sibling already solved the
