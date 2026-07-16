@@ -204,7 +204,15 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   liveness, and the `DOWN`/`EXIT` reason/ref payload (abstracted to bare tags here).
 - **G4. Timers / `send_after` / `receive after`.** **No paper** — KWC *explicitly*
   excludes timers, Core Erlang omits them, mailbox types list timeouts as future work.
-  → Discharge against OTP docs (and the live AtomVM `send_after` cancellation defect).
+  → **DONE — `Std.Otp.Timer` (`lib/std/otp_timer.cure`).** Two typing obligations: (1)
+  `send_after` is a typed send — `MkTimer : Accepted(t) -> TimerRef(t, Pending)`, only an
+  accepted message can be scheduled; (2) cancellation is observable in the type — a
+  `TimerRef` is indexed by a `Pending`/`Cancelled` lifecycle state, `cancel` moves
+  `Pending → Cancelled`, and `SFire` requires a `Pending` timer, so "fire after cancel" is
+  UNCONSTRUCTIBLE. `preservation` shows a fired timer delivers an accepted message;
+  `TTimeout` models the `receive ... after` branch. Kernel-checked, Idris-mirrored
+  (`test/oracle/otp/timer`, rel=same), tests in `otp_timer_test.exs`. Delay/clock ordering
+  abstracted (a fired timer is one that reached its deadline).
 - **G5. Effect tracking for OTP ops.** NVLang *explicitly* excludes it (§8.4); Cure has
   `Effect(T)`. → **DONE for the send algebra — `Std.Otp.SendEffect`
   (`lib/std/otp_send_effect.cure`).** The effect-honest companion to obligation (2):
