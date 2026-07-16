@@ -2706,6 +2706,48 @@ defmodule Cure.Elab.Elaborator do
               not need_eq ->
                 elaborate_match(scrut_expr, arms, result_type_term, names, ctx, env)
 
+              # Sibling refinement WITHOUT a user proof, single sibling: use
+              # MOTIVE-GENERALIZATION rather than Eq-transport. The sibling becomes a
+              # Π domain in the case motive and a real λ binder per branch, so a LINEAR
+              # sibling STAYS linear — the Eq-transport `transport_case(prf) cap`
+              # encoding is a collapsible case that erases to identity but which the
+              # relevance checker ω-scaled pre-erasure (over-counting a dup, masking a
+              # drop). Here `cap` is a direct convoy argument `(case e …) cap` whose
+              # per-branch λ binder `check_binder` polices; the relevance convoy rule
+              # counts it once. The branch-λ grade is ω — the sibling's REAL grade is
+              # enforced at its own binding site (the def's `:linear cap`) via the
+              # convoy. Restricted to ONE sibling; the proof form and multi-sibling keep
+              # the Eq-arrow path below.
+              family.indices == [] and proof_name == nil and match?([_], siblings) ->
+                [%{name: sname, index: sidx, type_term: h_ctx}] = siblings
+                scrut_type_term = resplit_data(Quote.reify(scrut_type, Context.length(ctx)), env)
+                g_abs = abstract_term(result_type_term, scrut_term, 0)
+                h_abs = abstract_term(h_ctx, scrut_term, 0)
+
+                # motive = λw. Π(h' : H[e↦w]). G[e↦w]
+                motive =
+                  {:lam, Cure.Core.Grade.unrestricted(), scrut_type_term,
+                   {:pi, Cure.Core.Grade.unrestricted(), h_abs, Subst.shift(g_abs, 1, 0)}}
+
+                pc = Inductive.param_count(env, dname)
+                {param_vals, _idx_vals} = Enum.split(combined_vals, pc)
+
+                cfg = %{
+                  names: names,
+                  ctx: ctx,
+                  env: env,
+                  dname: dname,
+                  param_vals: param_vals,
+                  motive: motive,
+                  sibling_name: sname
+                }
+
+                with {:ok, branches} <- elaborate_with_motivegen_branches(arms, cfg) do
+                  case_term = {:case, scrut_term, motive, branches}
+                  # (case e of …) cap — apply the case to the ORIGINAL sibling.
+                  {:ok, {:app, case_term, {:var, sidx}}}
+                end
+
               # Capability B (proof / sibling transport) — the Eq-arrow motive.
               # This slice's eq-arrow motive is built for a NON-indexed scrutinee
               # family; an indexed scrutinee that also needs transport must use the
@@ -3117,6 +3159,56 @@ defmodule Cure.Elab.Elaborator do
         end)
 
       {:ok, {cname, arity, {:lam, Cure.Core.Grade.unrestricted(), eq_dom_term, wrapped}}}
+    end
+  end
+
+  # Motive-generalization branches (single sibling, no proof). Each branch binds the
+  # REFINED sibling as a fresh λ, at the type `motive @ ctor` computes, and rebinds
+  # the sibling's ORIGINAL name to it so the body sees the refined type. No Eq, no
+  # transport — the linear sibling stays a real linear resource threaded through the
+  # convoy `(case e …) cap`.
+  defp elaborate_with_motivegen_branches(arms, %{ctx: ctx, env: env, dname: dname} = cfg) do
+    with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname),
+         :ok <- reject_with_default(default) do
+      arm_map
+      |> Enum.reduce_while({:ok, []}, fn
+        {_cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
+          {:cont, {:ok, acc}}
+
+        {cname, {:matched, pattern, body_expr}}, {:ok, acc} ->
+          case elaborate_with_motivegen_branch(cname, pattern, body_expr, cfg) do
+            {:ok, branch} -> {:cont, {:ok, acc ++ [branch]}}
+            {:error, _} = err -> {:halt, err}
+          end
+      end)
+    end
+  end
+
+  defp elaborate_with_motivegen_branch(cname, pattern, body_expr, cfg) do
+    %{names: names, ctx: ctx, env: env, param_vals: param_vals, motive: motive, sibling_name: sname} = cfg
+
+    {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
+    %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
+    arity = length(telescope)
+    branch_names0 = branch_scope(quantities, pattern_vars) ++ names
+    branch_ctx0 = extend_context(ctx, telescope, param_vals)
+
+    ctor_term = branch_constructor_term(cname, arity)
+    motive_shifted = Subst.shift(motive, arity, 0)
+    # applied = Π(h' : H[e↦pat]). G[e↦pat]
+    applied = Kernel.normalize(branch_ctx0, {:app, motive_shifted, ctor_term})
+
+    {:pi, g, h_dom_term, cod_b1} = applied
+    h_dom_value = Eval.eval(h_dom_term, Context.env(branch_ctx0))
+    branch_ctx1 = Context.extend(branch_ctx0, h_dom_value)
+    # The refined sibling binds at index 0 under its original name, shadowing the
+    # outer (unrefined) binder so the arm body reads the refined type.
+    branch_names1 = [sname | branch_names0]
+    cod_expected = Kernel.normalize(branch_ctx1, cod_b1)
+
+    with {:ok, inner} <-
+           elaborate_branch_body(body_expr, cod_expected, branch_names1, branch_ctx1, env) do
+      {:ok, {cname, arity, {:lam, g, h_dom_term, inner}}}
     end
   end
 

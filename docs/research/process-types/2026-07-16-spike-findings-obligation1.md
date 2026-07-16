@@ -164,10 +164,61 @@ handler `with r … reply(cap, …) per branch` type-checks) remains reach-pinne
 future slice — it improves authoring nicety, not expressiveness. Root cause + two
 sound design options are recorded above.
 
-## Next step
+## Obligation (2) — DISCHARGED (strong operational form)
 
-Obligation (2) — send-safety for a clause-DERIVED pid message index (F-1). Prove a
-well-typed `send(p, m)` can only deliver a message the actor has a clause for, when
-the index is derived from the handler clauses rather than annotated (NVLang's
-`Extract-Msg`/`T-Spawn` give the annotated-index recipe; the delta is derivation).
-Independent of obligations (1) and #2b.
+Send-safety for a clause-DERIVED pid message index (F-1), in `Std.Otp.Proof`:
+
+- `type Pid(m: Type)` with `MkPid : ((m) -> Response) -> Pid(m)` — the pid CARRIES
+  its handler, so its message index `m` is exactly the stored handler's DOMAIN.
+- `spawn_actor({m}, handler: (m) -> Response) -> Pid(m)` — the index is DERIVED
+  (the implicit `m` inferred from the handler), not annotated (NVLang's T-Spawn
+  reads it off a receive annotation; this is the open half).
+- `post({m}, p: Pid(m), msg: m) -> Response = match p | MkPid(h) -> h(msg)` — `post`
+  requires `msg` at the derived type AND DISPATCHES it through the stored handler.
+
+Operational send-safety: a well-typed `post` delivers to the handler the pid
+carries, which must be TOTAL (kernel-certified exhaustive) to exist, so every
+message of the derived type is handled. Negatives reject: `ob2_neg_wrong_msg`
+(`:index_mismatch` — a message not of the actor's type), `ob2_neg_nontotal`
+(`:missing_branch` — a non-exhaustive handler cannot form). `test/oracle/otp/`
+mirrors all three in Idris, `rel=same`.
+
+This needed one gap fix — **higher-order constructor fields**. A parenthesised
+function-typed ctor field (`MkPid : ((m) -> Response) -> Pid(m)`) did not parse:
+the GADT ctor grammar (`parse_type_atom`) is arrow-free so the ctor's own arrow
+chain separates fields, but a `(...)`-grouped function type is unambiguous and is
+now absorbed (`parse_paren_arrow_tail`, parser.ex). The elaborator already handled
+such fields; the gap was purely the parser.
+
+## Roadblock #2b — RESOLVED (ergonomic branching handler)
+
+The branching handler `with r … reply(cap, …) per branch` now type-checks, with
+linearity enforced (drop / dup in a branch reject). Two changes:
+
+1. **Elaborator — motive-generalization** (`elaborate_with_motivegen_branch`,
+   single sibling, no user proof): the sibling refinement no longer uses
+   Eq-transport (`transport_case(prf) cap`, a collapsible case that erases to
+   identity but which relevance ω-scaled pre-erasure — hostile to linear accounting
+   in BOTH directions). Instead the sibling becomes a Π domain in the motive
+   `λw. Π(h': H[e↦w]). G[e↦w]` and a real λ binder per branch, and the case is
+   applied to the original sibling: `(case r of λcap'. body) cap`. The `Π(ReplyCap(w))`
+   domain reifies cleanly — `ReplyCap` is a PARAM-only family, so the doc's warned
+   param/index collapse (for index-bearing `SNat(w)`) does not apply.
+2. **Relevance — the McBride convoy rule** (`walk_convoy`): `(case s of {λx. inner})
+   a` is a case that returns a function, applied once. Each branch runs once (no
+   ω-scale) and `a` is aliased by `x`, so `a` is used exactly as many times as the
+   branch uses `x`. Sound: `a` scaled by `x`'s usage, other captures counted once,
+   and `a`'s OWN grade (the def's `:linear cap`) is still checked at its binding
+   site — so a branch that drops (`a` → 0) or duplicates (`a` → ω) it is rejected
+   there. The branch-λ grade is therefore ω; the sibling's real linearity is
+   enforced via the convoy, not the branch binder.
+
+Differential oracle `test/oracle/otp/ob1_branching*` mirrors Cure's `with r` against
+Idris's native dependent `match` (which refines the linear sibling for free),
+`rel=same` on accept + drop-reject + dup-reject. Behavioral test
+`linear_sibling_refinement_test.exs`. Gates: Antigen 563/318-318, elab 1046, core
+537, stdlib 49/0, replay 79.
+
+Obligation (1) now has BOTH forms: the split `serve = reply(cap, handle(r))` and the
+ergonomic branching handler. Restricted to a SINGLE sibling and the no-user-proof
+case; multi-sibling and the `proof` clause keep the Eq-arrow path (reach-pinned).
