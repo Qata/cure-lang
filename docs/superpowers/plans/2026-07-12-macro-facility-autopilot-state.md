@@ -2392,8 +2392,55 @@ result index. Two options, both real design slices (NOT tail-of-fire edits):
 harness (needs the elaborator to hand back the partial term + residual-metavar
 relevance so the proof can prove "well-typed for all instantiations"); or
 (B) a per-rule / per-context expected-type declaration the proof checks against.
-Recommendation: **(A)**, real-language-aligned (ML/Haskell generalize
-under-constrained implicits; here restricted to *erased index* residuals so no
-value-relevant ambiguity is masked), lower surface cost, but it is an
-elaborator-support + proof-harness slice that warrants its own plan and red-green.
-Until then `contextual` stays and is honest.
+
+**Recommendation REVISED to (B) after reading source (2026-07-16).** The two
+`{:unsolved_metavariables, name}` producers — `finish_global_app`
+(`elaborator.ex:7500`) and `finish_ctor_app` (`:6727`) — carry ONLY the callee
+name; the residual args (`chosen`, which is in scope at the failure site and
+whose telescope positions/erasure ARE known there) are discarded. So option (A)
+is *not* the lower-cost path: it requires enriching a soundness-critical error
+contract across ≥2 producers to surface which metavars are unsolved and their
+erasure, THEN adding a generalization step that has no definition boundary to
+attach to in the proof's bare-expression (infer-mode) elaboration. Option (B) is
+strictly more bounded: the proof already has synthetic-frame machinery —
+`check_block_expansion` (`macro_fuzz.ex:477`) wraps declaration expansions in a
+`{:container, …, "MacroExpansionProof", declarations}` and checks them via
+`Program.check_ast/1`. Extending that so a `contextual` *expression*-rule declares
+a proof frame (a signature binding the residual index, e.g.
+`fn __proof({m: Type}) -> Effect(Pid(m)) = <expansion>`) and is checked the same
+way reuses a proven path and needs no elaborator error-contract change. It also
+matches probe case 2 exactly (an explicit `-> Effect(Pid(m))` annotation makes
+elaboration succeed). Cost: new macro-rule surface to carry the proof frame, plus
+routing contextual expression-rules through the synthetic-def check instead of
+exempting them. Still its own plan + red-green; NOT a tail-of-fire edit.
+
+**Priority note.** This is *optional polish*, not a soundness hole: `contextual`
+rules are still type-checked at their REAL use sites whenever the stdlib and the
+`examples/**` corpus elaborate (PrinterTotality gate + full suite). What
+`contextual` skips is only the *generative, use-site-free* self-proof — whose
+value for a genuinely context-dependent rule is inherently limited.
+
+**Derivation-programme status re-grounded against source (2026-07-16).** The
+message-type **derivation** programme — which older notes (and the
+`macro-message-code-derivation-programme` memory) framed as "the last open gate,
+structural blocker do-this-first" — has in fact LANDED and is green. Verified this
+fire: (1) declaration-position Tier-3 expansion is real —
+`Program.expand_declaration_uses/1` (`program.ex:356`) expands decl-position
+`{:computed_use}` nodes, and it runs at `compiler.ex:96` BEFORE `codegen` →
+`LiftModule.collect` (`:300`); the "make Tier-3 a declaration pass and move
+`collect` behind it" reorder is done. (2) `actor.cure` derives the message type
+and reply contract from handler clauses — `derive_actor`/`derive_reply_contract`/
+`derive_pattern_heads`, driven by the Tier-3 rule
+`actor <name> state <state_type> derive <cast_body: Code until call> (call …)?
+computed by derive_actor` (`actor.cure:75`). (3) `mix test
+test/cure/compiler/actor_computed_test.exs
+test/cure/compiler/declaration_macro_expansion_test.exs` = **36 passed, 0
+failed** — the two-scope nominal-type + lifted-module derivation works end-to-end.
+
+So the residual non-optional macro work is NOT derivation. Per the CURRENT
+POSITION pointer it is: the safe-vs-`Std.Syntax.Raw` split, multi-channel
+`handle_call` reply typing, and Phase 6 (end-to-end / AtomVM). The `contextual`
+retirement (option B) is *optional* polish layered on the now-landed derivation —
+note the derive rules (`actor.cure:75` etc.) still carry `contextual`, and the
+sound way to drop it there is the same option-(B) synthetic-proof-frame. Until a
+planned slice takes it, `contextual` stays and is honest.
