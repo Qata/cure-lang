@@ -16,17 +16,34 @@ defmodule Cure.Observe.Trace do
 
       mix cure.trace Cure.Std.List.map/2
 
-  ## Filters
+  ## Tracing compiler internals
 
-  `start/2` accepts options:
+  `:dbg.tpl` traces LOCAL (private) functions too, so the same tracer pins where a
+  compiler pass makes a decision or returns an error — point it at
+  `Cure.Elab.*` / `Cure.Core.*`. Two things make that practical:
 
-    * `:effect`     -- atom; only surface calls whose declared
-      effect set contains the given effect.
-    * `:format`     -- `:plain` (default) or `:marcli` for ANSI
-      colour.
-    * `:self`       -- send formatted lines to the calling process
-      as `{:cure_trace, text}` messages instead of printing them.
-      Useful for tests.
+    * pass a LIST of `{module, fun, arity}` to trace a whole path in one run;
+    * cap the noise — elaborator arguments carry the full `Env`/`Context`, so the
+      default `:limit`/`:printable_limit` keep each line short (override for detail).
+
+  To pin the ORIGIN of a rejection, add `only_errors: true`: only `{:error, _}`
+  returns are printed (calls and `return_to` are suppressed), so the first line is
+  the innermost pass that produced the error.
+
+  ## Filters / options
+
+  `start/2` accepts:
+
+    * `:only_errors` -- boolean; print only `{:error, _}` return values (pins where
+      a rejection originates). Default `false`.
+    * `:limit`       -- `inspect/2` `:limit` for args/returns. Default `8`
+      (`:infinity` for full detail).
+    * `:printable_limit` -- `inspect/2` `:printable_limit`. Default `120`.
+    * `:effect`      -- atom; only surface calls whose declared effect set contains
+      the given effect.
+    * `:format`      -- `:plain` (default) or `:marcli` for ANSI colour.
+    * `:self`        -- send formatted lines to the calling process as
+      `{:cure_trace, text}` messages instead of printing them. Useful for tests.
 
   ## Registry
 
@@ -40,22 +57,29 @@ defmodule Cure.Observe.Trace do
   @reg_table :cure_trace_registry
 
   @doc """
-  Start tracing the given `{module, fun, arity}` triple. Repeated
-  calls replace the current trace spec.
+  Start tracing the given `{module, fun, arity}` triple, or a LIST of them (a whole
+  call path in one run). Repeated calls replace the current trace spec.
   """
-  @spec start({module(), atom(), arity()}, keyword()) :: :ok
-  def start({module, fun, arity} = mfa, opts \\ []) do
+  @spec start({module(), atom(), arity()} | [{module(), atom(), arity()}], keyword()) :: :ok
+  def start(mfa_or_list, opts \\ []) do
     ensure_registry()
     ensure_dbg()
 
+    mfas = List.wrap(mfa_or_list)
     target = if Keyword.get(opts, :self, false), do: self(), else: nil
 
     :dbg.tracer(:process, {&trace_handler/2, %{target: target, opts: opts}})
 
-    :dbg.p(:all, [:call, :return_to])
-    :dbg.tpl(module, fun, arity, [{:_, [], [{:return_trace}]}])
+    # `return_to` is suppressed under `only_errors` (it carries no value); otherwise
+    # it shows which caller control unwinds to, which is useful for path tracing.
+    flags = if Keyword.get(opts, :only_errors, false), do: [:call], else: [:call, :return_to]
+    :dbg.p(:all, flags)
 
-    Process.put({__MODULE__, :active}, mfa)
+    Enum.each(mfas, fn {module, fun, arity} ->
+      :dbg.tpl(module, fun, arity, [{:_, [], [{:return_trace}]}])
+    end)
+
+    Process.put({__MODULE__, :active}, mfas)
     :ok
   end
 
@@ -121,21 +145,53 @@ defmodule Cure.Observe.Trace do
 
   @doc false
   def trace_handler(msg, %{target: target, opts: opts} = state) do
-    line = format(msg, opts)
+    case format(msg, opts) do
+      nil ->
+        state
 
-    cond do
-      is_pid(target) -> send(target, {:cure_trace, line})
-      true -> IO.puts(line)
+      line ->
+        cond do
+          is_pid(target) -> send(target, {:cure_trace, line})
+          true -> IO.puts(line)
+        end
+
+        state
     end
-
-    state
   end
 
-  defp format({:trace, pid, :call, {mod, fun, args}}, opts) do
+  # `only_errors` suppresses everything but `{:error, _}` returns, so the first line
+  # printed is the innermost pass that produced the rejection.
+  defp format({:trace, _pid, :call, {mod, fun, args}}, opts) when is_list(args) do
+    if Keyword.get(opts, :only_errors, false), do: nil, else: format_call({mod, fun, args}, opts)
+  end
+
+  defp format({:trace, _pid, :return_from, {mod, fun, arity}, ret}, opts) do
+    if Keyword.get(opts, :only_errors, false) and not match?({:error, _}, ret) do
+      nil
+    else
+      mfa = {mod, fun, arity}
+
+      return_type =
+        case lookup_signature(mfa) do
+          {:ok, %{return: t}} -> " : #{t}"
+          :error -> ""
+        end
+
+      "return #{mod}.#{fun}/#{arity} -> #{insp(ret, opts)}#{return_type}"
+    end
+  end
+
+  defp format({:trace, _pid, :return_to, {mod, fun, arity}}, _opts),
+    do: "  ↳ returned to #{mod}.#{fun}/#{arity}"
+
+  defp format({:trace, _pid, :return_to, :undefined}, _opts), do: "  ↳ returned to (top level)"
+
+  defp format(_other, _opts), do: nil
+
+  defp format_call({mod, fun, args}, opts) do
     arity = length(args)
     mfa = {mod, fun, arity}
-
-    header = "call #{inspect(pid)} #{mod}.#{fun}/#{arity}"
+    header = "call #{mod}.#{fun}/#{arity}"
 
     body =
       case lookup_signature(mfa) do
@@ -143,33 +199,26 @@ defmodule Cure.Observe.Trace do
           typed =
             args
             |> Enum.zip(params)
-            |> Enum.map(fn {a, t} -> "#{inspect(a)} : #{t}" end)
+            |> Enum.map(fn {a, t} -> "#{insp(a, opts)} : #{t}" end)
             |> Enum.join(", ")
 
           effects_tag = if effects == [], do: "pure", else: "! " <> Enum.join(effects, ",")
-
           "#{header}(#{typed})  [#{effects_tag}]"
 
         :error ->
-          "#{header}(#{Enum.map_join(args, ", ", &inspect/1)})"
+          "#{header}(#{Enum.map_join(args, ", ", &insp(&1, opts))})"
       end
 
     _ = Keyword.get(opts, :format, :plain)
     body
   end
 
-  defp format({:trace, pid, :return_from, {mod, fun, arity}, ret}, opts) do
-    mfa = {mod, fun, arity}
-
-    return_type =
-      case lookup_signature(mfa) do
-        {:ok, %{return: t}} -> " : #{t}"
-        :error -> ""
-      end
-
-    _ = Keyword.get(opts, :format, :plain)
-    "return #{inspect(pid)} #{mod}.#{fun}/#{arity} -> #{inspect(ret)}#{return_type}"
+  # Compiler-internal args carry the full `Env`/`Context`; cap them so a line is
+  # readable. `:infinity` restores full detail.
+  defp insp(term, opts) do
+    inspect(term,
+      limit: Keyword.get(opts, :limit, 8),
+      printable_limit: Keyword.get(opts, :printable_limit, 120)
+    )
   end
-
-  defp format(other, _opts), do: "trace #{inspect(other)}"
 end
