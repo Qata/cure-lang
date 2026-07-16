@@ -841,6 +841,9 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:quoted_syntax, _meta, [inner]}, names, ctx, env),
     do: elaborate_expr_typed(Cure.Compiler.MacroSyntax.lower_quote(inner), names, ctx, env)
 
+  def elaborate_expr_typed({tag, meta, _}, _names, _ctx, _env) when tag in [:splice, :splice_group],
+    do: {:error, {:splice_outside_quote, tag, meta}}
+
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
 
   # Synthesise each element of a tuple literal to `{core, type_term}` (the inferred
@@ -7673,6 +7676,13 @@ defmodule Cure.Elab.Elaborator do
   # ordinary elaborator (TCB delta 0).
   def elaborate_expr({:quoted_syntax, _meta, [inner]}, scope, env),
     do: elaborate_expr(Cure.Compiler.MacroSyntax.lower_quote(inner), scope, env)
+
+  # A `$(e)` / `$(e ...)` splice reaching the elaborator as a bare node means it
+  # sits outside any enclosing `quote` — a category error. Inside a quote,
+  # `lower_quote/1` consumes the splice wrapper (only its inner expression
+  # survives), so this clause fires only for an orphan splice.
+  def elaborate_expr({tag, meta, _}, _scope, _env) when tag in [:splice, :splice_group],
+    do: {:error, {:splice_outside_quote, tag, meta}}
 
   def elaborate_expr(other, _scope, _env), do: {:error, {:unsupported_expression, other}}
 

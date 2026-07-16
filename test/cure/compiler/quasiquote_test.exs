@@ -126,4 +126,35 @@ defmodule Cure.Compiler.QuasiquoteTest do
            end
            """)
   end
+
+  # -- Stage 4: a wrong-category splice is a compile error --------------------
+
+  test "an orphan `$(e)` outside any quote is rejected with a dedicated error" do
+    assert {:error, {:splice_outside_quote, :splice, _meta}} =
+             Cure.Elab.Program.elaborate("""
+             mod M
+               use Std.Syntax
+               fn f(x: Syntax) -> Syntax = g($(x))
+             end
+             """)
+  end
+
+  test "an orphan `$(xs ...)` group splice outside any quote is rejected" do
+    assert {:error, {:splice_outside_quote, :splice_group, _meta}} =
+             Cure.Elab.Program.elaborate("""
+             mod M
+               use Std.Syntax
+               fn f(xs: List(Syntax)) -> Syntax = g($(xs ...))
+             end
+             """)
+  end
+
+  test "splicing a non-Syntax expression is a compile error" do
+    refute elaborates?("""
+           mod M
+             use Std.Syntax
+             fn f(n: Int) -> Syntax = quote g($(n))
+           end
+           """)
+  end
 end
