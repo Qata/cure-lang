@@ -507,10 +507,56 @@ defmodule Cure.Compiler.MacroFuzz do
       {:ok, _term, _type} ->
         :ok
 
+      {:error, {:unsolved_metavariables, name} = reason} ->
+        if parametric_erased_call?(expansion, env, name) do
+          :ok
+        else
+          {:error,
+           {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
+        end
+
       {:error, reason} ->
         {:error, {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
     end
   end
+
+  # A contextual expression rule may expand to a nullary application of a global
+  # whose every parameter is an erased implicit — e.g. `Std.Otp.self()` where
+  # `self : {m: Type} -> Effect(Pid(m))`. The erased index `m` cannot be solved
+  # use-site-free, so standalone elaboration reports it as an unsolved
+  # metavariable. But an erased binder is computationally irrelevant: the
+  # expansion is well-typed at a schematic type for every instantiation of the
+  # erased parameters, exactly as an ungeneralized polymorphic term is. When the
+  # sole obstruction is unsolved metavariables of such an all-erased,
+  # no-explicit-argument global call, the expansion is proven well-typed by
+  # parametricity — so the generative proof accepts it without a `contextual`
+  # exemption. Guards: the expansion must be a bare nullary call (no argument
+  # subterms can hide a relevant unsolved metavariable), and the errored callee's
+  # every parameter must be erased (no relevant parameter left unsolved).
+  @doc false
+  @spec parametric_erased_call?(term(), Cure.Core.Env.t(), atom()) :: boolean()
+  def parametric_erased_call?({:function_call, _meta, []}, env, name) do
+    case Env.get_def(env, name) do
+      %{type: type, quantities: quantities} when is_list(quantities) ->
+        quantities != [] and Enum.all?(quantities, &(&1 == :erased)) and
+          all_erased_pi_spine?(type, length(quantities))
+
+      _ ->
+        false
+    end
+  end
+
+  def parametric_erased_call?(_expansion, _env, _name), do: false
+
+  # The def's type must be a telescope of exactly `count` erased Pi binders whose
+  # final codomain is not itself a Pi — i.e. every parameter is erased and no
+  # relevant (present-grade) parameter hides in or beyond the spine.
+  defp all_erased_pi_spine?(type, 0), do: not match?({:pi, _grade, _dom, _cod}, type)
+
+  defp all_erased_pi_spine?({:pi, :erased, _dom, cod}, count) when count > 0,
+    do: all_erased_pi_spine?(cod, count - 1)
+
+  defp all_erased_pi_spine?(_type, _count), do: false
 
   defp shrink_counterexample(rule, rules, env, bindings, details) do
     {name, term, info} = first_shrinkable_binding(bindings, env)

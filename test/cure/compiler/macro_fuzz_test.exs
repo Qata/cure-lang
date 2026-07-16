@@ -194,6 +194,71 @@ defmodule Cure.Compiler.MacroFuzzTest do
     assert is_tuple(generated)
   end
 
+  test "a nullary all-erased-implicit global expansion passes the proof parametrically" do
+    # `Std.Otp.self : {m: Type} -> Effect(Pid(m))` has an erased result index `m`
+    # that cannot be solved use-site-free, so standalone elaboration reports it as
+    # an unsolved metavariable. Because `m` is erased (computationally
+    # irrelevant), the expansion is well-typed at a schematic type for every
+    # instantiation, so the generative proof accepts it without a `contextual`
+    # exemption.
+    source = """
+    mod M
+      use Std.Otp
+      macro Here
+        syntax here becomes Std.Otp.self()
+          example here expands Std.Otp.self()
+        explain
+          keyword "here" =>
+            "returns the current process"
+    """
+
+    assert {:ok, env} = Program.elaborate(source)
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
+    macro_def = Enum.find(children, &match?({:macro_def, _, _}, &1))
+
+    assert :ok = MacroFuzz.check_expansion_proof(macro_def, env, draws: 1, seed: 7)
+  end
+
+  test "the parametric-erased guard discriminates by shape, arity, and erasure" do
+    # `Std.Otp.self : {m: Type} -> Effect(Pid(m))` is the sole otp qualifier: one
+    # erased parameter, applied nullary. Everything else must be rejected.
+    assert {:ok, otp_env} = Program.elaborate("mod M\n  use Std.Otp\n")
+
+    self_call = {:function_call, [name: "Std.Otp.self"], []}
+    assert MacroFuzz.parametric_erased_call?(self_call, otp_env, :"Std.Otp#self")
+
+    # Non-call expansion — the shape guard rejects it.
+    refute MacroFuzz.parametric_erased_call?({:identifier, [], :x}, otp_env, :"Std.Otp#self")
+
+    # A call that supplies an explicit argument — the arity guard rejects it,
+    # because an argument subterm could hide a relevant unsolved metavariable.
+    refute MacroFuzz.parametric_erased_call?(
+             {:function_call, [name: "Std.Otp.self"], [{:int_lit, 0}]},
+             otp_env,
+             :"Std.Otp#self"
+           )
+
+    # A nullary call of a global with a present (unrestricted) parameter — the
+    # erasure guard rejects it; parametric acceptance is scoped to erased
+    # parameters alone.
+    assert {:ok, twice_env} =
+             Program.elaborate("mod M\n  use Std.Nat\n  fn twice(x: Nat) -> Nat = x\n")
+
+    refute MacroFuzz.parametric_erased_call?(
+             {:function_call, [name: "twice"], []},
+             twice_env,
+             :"M#twice"
+           )
+
+    # An unknown callee has no signature to prove erasure from — rejected.
+    refute MacroFuzz.parametric_erased_call?(
+             {:function_call, [name: "nope"], []},
+             otp_env,
+             :"M#nope"
+           )
+  end
+
   test "proof manifests list every rule and cache identical proof work" do
     source = """
     mod M
