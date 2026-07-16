@@ -227,8 +227,17 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   already returns `Effect` for every op; this module isolates the *derived-index ×
   effect-bind* interaction as a metatheory result.)
 - **G6. `gen_server:call` failure/totality.** No paper types the 5000 ms timeout /
-  caller-`exit` failure mode; NVLang's `await` is total. → Cure builds `Effect(Result(r,
-  _))` / an exceptional index; supervision-restart tied to state preservation.
+  caller-`exit` failure mode; NVLang's `await` is total. → **DONE — `Std.Otp.Call`
+  (`lib/std/otp_call.cure`).** A total call reifies its failure as a VALUE:
+  `CallOutcome(r) = Replied(r) | Failed(CallError)` (`Timeout`/`NoProc`/`ServerDied`). The
+  totality enforcement is the kernel's exhaustiveness check — `resume` matches both
+  constructors, and a consumer that ignores `Failed` is REJECTED as non-total
+  (`{:missing_branch, Failed}` in `otp_call_test.exs`). So "assume the call succeeded" is
+  not expressible in a total program. A call typed as bare `r` would be unsound (it cannot
+  always produce an `r`); `CallOutcome(r)` is the honest total type, and a
+  `try_call : … -> Effect(CallOutcome(r))` on top of `Std.Otp.SendEffect` is the total
+  wrapper. Idris-mirrored (`test/oracle/otp/call`, rel=same). Remaining: supervision-restart
+  tied to state preservation.
 - **G7. `Pid` vs `GenServer` separation + `whereis` partiality** (conformance F-2/F-2c).
   No paper; Cure's own audit. → distinct opaque types; `whereis -> Option(Pid)`.
 - **G8. ORDERED selective-receive typing.** Mailbox types are commutative; Erlang is
