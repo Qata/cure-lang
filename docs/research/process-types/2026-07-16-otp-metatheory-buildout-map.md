@@ -134,8 +134,10 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   and not indexed per request-constructor. Dependent session types (Toninho–Caires–
   Pfenning) do dependent messaging but for **π-calculus/linear channels**, not BEAM
   mailboxes/actors. → *This is obligation (1). The combination is the frontier.* Already
-  demonstrated in Cure as kernel-checked exemplars (`Std.Otp.Proof`); a full
-  **preservation proof** over C1's relation is still unbuilt (see G2).
+  demonstrated in Cure as kernel-checked exemplars (`Std.Otp.Proof`); the reply
+  *type* is now also carried through the reduction (G1×G2, see `Std.Otp.ReplyPreservation`
+  below), though the LINEAR *capability*'s exactly-once is still proven only intrinsically
+  (via QTT grades), not yet as an operational conservation theorem over the relation.
 - **G2. Preservation/progress of a TYPED OTP layer over the concurrent reduction
   relation.** Core Erlang gives the *untyped* relation; NVLang's preservation is over a
   *toy* single-actor step (no interleaving, no ether). Nobody has typed-OTP subject
@@ -145,9 +147,22 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   for the **send/arrive/receive fragment, single receiver, message-type safety** — the
   NVLang Thm 4.1 property proven over the *actual* ether→mailbox reduction rather than a
   toy step. Remaining: exit/link/monitor signals; multiple pids/interleaving; mailbox
-  FIFO order (abstracted here — one `AllAccepted`-over-append lemma); and **composing
-  this with obligation (1)'s dependent LINEAR reply** (G1) — the reply value's
-  `ReplyOf(req)` typing carried through delivery. That composition is the next milestone.
+  FIFO order (abstracted here — one `AllAccepted`-over-append lemma). The composition
+  with obligation (1) is **DONE for the reply TYPE** — see G1×G2 below.
+- **G1×G2. COMPOSE: dependent reply typing preserved through delivery.** **DONE —
+  `Std.Otp.ReplyPreservation` (`lib/std/otp_reply_preservation.cure`).** Strengthens G2's
+  payload from a message *tag* to a request-answering *reply* `(r, v)` and proves
+  `preservation : WT b -> Step b a -> WT a` where `WT` demands every in-flight/delivered
+  reply is well-typed for its request (`HasReply(r, v)`). The `reify : HasReply(r, v) ->
+  ReplyOf(r)` bridge shows `HasReply` faithfully reflects obligation (1)'s large-
+  elimination `ReplyOf` — so preserving `HasReply` IS preserving the dependent `ReplyOf`
+  typing through send/arrive/receive. Kernel-checked, totality-certified, Idris-mirrored
+  (`test/oracle/otp/reply_preservation` + `reply_neg_wrong_reply`, rel=same); behavioural
+  negatives in `test/cure/stdlib/otp_reply_preservation_test.exs`. **Honest remainder:**
+  this carries the reply *type*; the LINEAR *capability*'s consumed-exactly-once is not
+  yet an operational conservation theorem over the relation (a request-response
+  conservation over a config of outstanding reply capabilities) — that is the last G1
+  piece.
 - **G3. Typed monitors / links / DOWN.** NVLang has `MonitorRef` in the grammar only
   (prose §2.5, no rules/theorems); Core Erlang omits monitors; KWC has the *operational*
   monitor model but untyped. → Cure builds the typing + the DOWN-as-message discipline.

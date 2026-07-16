@@ -49,7 +49,13 @@ dogfooding of the sibling-refinement work landed this session.
   is order-independent; a FIFO-faithful version adds one `AllAccepted`-over-append lemma
   and changes nothing about the invariant).
 - Not modelled: exit/link/monitor signals, timers, multiple pids / interleaving, spawn.
-- **Not yet composed with obligation (1).** This proves message-*tag* safety; carrying
-  the *dependent linear* reply value's `ReplyOf(req)` typing through delivery — uniting
-  `Std.Otp.Proof` (the reply rule) with `Std.Otp.Preservation` (the reduction) — is the
-  next milestone (G1 × G2).
+- **Composed with obligation (1) for the reply TYPE — DONE.** `Std.Otp.ReplyPreservation`
+  (`lib/std/otp_reply_preservation.cure`) strengthens the payload from a tag to a
+  request-answering reply `(r, v)`, proves the same subject reduction over it, and adds
+  the `reify : HasReply(r, v) -> ReplyOf(r)` bridge showing `HasReply` faithfully reflects
+  obligation (1)'s large-elimination `ReplyOf` — so the dependent reply typing is carried
+  through send/arrive/receive. Idris-mirrored (`test/oracle/otp/reply_preservation` +
+  `reply_neg_wrong_reply`, rel=same); tests in `otp_reply_preservation_test.exs`. The
+  remaining G1 piece is the LINEAR *capability*'s consumed-exactly-once as an operational
+  conservation theorem over the relation (proven intrinsically via QTT today, not yet
+  operationally).
