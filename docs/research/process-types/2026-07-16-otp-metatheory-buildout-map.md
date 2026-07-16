@@ -239,7 +239,15 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   wrapper. Idris-mirrored (`test/oracle/otp/call`, rel=same). Remaining: supervision-restart
   tied to state preservation.
 - **G7. `Pid` vs `GenServer` separation + `whereis` partiality** (conformance F-2/F-2c).
-  No paper; Cure's own audit. → distinct opaque types; `whereis -> Option(Pid)`.
+  No paper; Cure's own audit. → **DONE — `Std.Otp.Registry` (`lib/std/otp_registry.cure`).**
+  F-2: a `GenServer(q, r)` WRAPS a pid and carries its protocol; a bare `Pid` cannot be
+  used where a `GenServer` is expected (`server_pid(MkPid)` fails to unify — a Pid is not a
+  GenServer), and `expect_server` is the explicit protocol assertion (FFI trust boundary),
+  not a silent identity. F-2c: `whereis` returns `PidOption` (`NoPid | SomePid`), never a
+  bare `Pid`; consuming it (`with_pid`) must handle `NoPid` or fail totality certification.
+  Idris-mirrored (`test/oracle/otp/registry`, rel=same), tests in `otp_registry_test.exs`
+  (both the Pid≠GenServer and non-total-consumer negatives). `Pid` abstract, `q`/`r` phantom
+  on the handle (the request-reply typing itself is `Std.Otp.Proof`/`Std.Otp.SendEffect`).
 - **G8. ORDERED selective-receive typing.** Mailbox types are commutative; Erlang is
   ordered. Recovering order (position-indexed patterns) is *new type theory* both mailbox
   papers name as future work. → Cure builds if arrival-order-sensitive protocols matter.
