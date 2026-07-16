@@ -63,6 +63,22 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:variable_name, {:s_atom, :state}} in attrs
   end
 
+  test "source coordinates survive the syntax reflection boundary" do
+    ast = {:variable, [line: 12, col: 7, scope: :local], "state"}
+
+    assert {:syn_leaf, :variable, attrs, {:s_str, "state"}} = MacroSyntax.to_syntax(ast)
+    assert {:source_line, {:s_int, 12}} in attrs
+    assert {:source_col, {:s_int, 7}} in attrs
+
+    assert MacroSyntax.from_syntax(MacroSyntax.to_syntax(ast)) == ast
+  end
+
+  test "caller scope is consumed before generated syntax reaches elaboration" do
+    repr = {:syn_leaf, :variable, [{:scope, {:s_atom, :caller}}], {:s_str, "state"}}
+
+    assert {:variable, [scope: :local], "state"} = MacroSyntax.from_syntax(repr)
+  end
+
   test "from_syntax(to_syntax(ast)) round-trips up to source position" do
     for src <- ["g(1, x + 2)", "[1, 2, 3]", "\"hi\"", ":ok", "true", "3.5", "f()"] do
       ast = expr!(src)
@@ -84,6 +100,47 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     repr = {:syn_quoted, {:syn_leaf, :literal, [], {:s_int, 1}}}
 
     assert MacroSyntax.from_core(MacroSyntax.to_core(repr)) == repr
+  end
+
+  test "MacroResult wrappers decode without changing the Syntax representation" do
+    repr = {:syn_leaf, :literal, [], {:s_int, 1}}
+    expanded = {:ctor, :"Std.Syntax#Expanded", [MacroSyntax.to_core(repr)]}
+
+    rejected =
+      {:ctor, :"Std.Syntax#Rejected",
+       [{:ctor, :"Std.List#Cons", [MacroSyntax.to_core(repr), {:ctor, :"Std.List#Nil", []}]}]}
+
+    assert {:expanded, ^repr} = MacroSyntax.from_core_macro_result(expanded)
+    assert {:rejected, [^repr]} = MacroSyntax.from_core_macro_result(rejected)
+  end
+
+  test "Std.Result wrappers decode as macro results" do
+    repr = {:syn_leaf, :literal, [], {:s_int, 1}}
+    ok = {:ctor, :"Std.Result#Ok", [MacroSyntax.to_core(repr)]}
+    error = {:ctor, :"Std.Result#Error", [MacroSyntax.to_core(repr)]}
+
+    assert {:expanded, ^repr} = MacroSyntax.from_core_macro_result(ok)
+    assert {:rejected, [^repr]} = MacroSyntax.from_core_macro_result(error)
+  end
+
+  test "expansion validation rejects reflection-only raw and quoted values" do
+    assert {:error, {:raw_syntax_in_expansion, []}} =
+             MacroSyntax.validate_expansion({:syn_raw, {:s_int, 1}})
+
+    assert {:error, {:quoted_syntax_in_expansion, [{:child, 0}]}} =
+             MacroSyntax.validate_expansion(
+               {:syn_node, :block, [], [{:syn_quoted, {:syn_leaf, :literal, [], {:s_int, 1}}}]}
+             )
+
+    assert :ok =
+             MacroSyntax.validate_expansion({:syn_node, :block, [], [{:syn_leaf, :literal, [], {:s_int, 1}}]})
+  end
+
+  test "expansion validation permits reflection-only values in syntax metadata" do
+    reflected =
+      {:syn_node, :outer, [{:payload, {:s_syntax, {:syn_raw, {:s_int, 1}}}}], []}
+
+    assert :ok = MacroSyntax.validate_expansion(reflected)
   end
 
   test "an exotic scalar value (regex tuple) reflects opaquely without crashing" do

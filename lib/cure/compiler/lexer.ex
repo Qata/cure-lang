@@ -683,7 +683,14 @@ defmodule Cure.Compiler.Lexer do
 
     {word, state} =
       consume_while(state, fn c ->
-        c in ?a..?z or c in ?A..?Z or c in ?0..?9 or c == ?_
+        # `$` is permitted only as an identifier *continuation* char (the
+        # dispatch that enters this function never starts on `$`), so a name
+        # can never *begin* with it. This is exactly the shape macro hygiene
+        # gensyms take (`base$<counter>`): freshened binders such as
+        # `initial$0` must lex back as a single identifier so that
+        # parse->print->parse round-trips the expanded corpus (the Printer
+        # totality gate). `$` has no other lexical role in Cure.
+        c in ?a..?z or c in ?A..?Z or c in ?0..?9 or c == ?_ or c == ?$
       end)
 
     # Allow a trailing `?` for predicate-style names (Elixir convention,
