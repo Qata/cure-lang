@@ -29,6 +29,149 @@ defmodule Cure.Compiler.ActorComputedTest do
     assert apply(:"Cure.Generated.Derived", :handle_info, [:Inc, 0]) == {:noreply, 0}
   end
 
+  test "actor accepts the reusable structured family surface" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.Structured
+        state Int
+        on_cast
+          Inc -> state + 1
+
+    fn make_message() -> ActorMessage = Inc
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(module, :make_message, []) == :Inc
+    assert apply(:"Cure.Generated.Structured", :init, [0]) == {:ok, 0}
+    assert apply(:"Cure.Generated.Structured", :handle_cast, [:Inc, 0]) == {:noreply, 1}
+  end
+
+  test "structured actor accepts an explicit message type override" do
+    source = """
+    mod M
+      use Std.Actor
+
+      type Command = Inc | Stop
+
+      actor Cure.Generated.ExplicitMessages
+        state Int
+        messages Command
+        on_cast
+          Inc -> state + 1
+          Stop -> state
+
+    fn make_message() -> Command = Inc
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(module, :make_message, []) == :Inc
+    assert apply(:"Cure.Generated.ExplicitMessages", :handle_cast, [:Inc, 0]) == {:noreply, 1}
+    assert apply(:"Cure.Generated.ExplicitMessages", :handle_cast, [:Stop, 3]) == {:noreply, 3}
+  end
+
+  test "structured actor derives a nullary starter from an initial expression" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.InitialExpression
+        state Int
+        initial 7
+        on_cast
+          Inc -> state + 1
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.InitialExpression", :init, [[]]) == {:ok, 7}
+    assert {:ok, pid} = apply(:"Cure.Generated.InitialExpression", :start_link, [])
+    assert :gen_server.cast(pid, :Inc) == :ok
+    Process.sleep(10)
+    assert :gen_server.stop(pid) == :ok
+  end
+
+  test "structured actor accepts an effectful init callback body" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.EffectfulInit
+        state Int
+        init
+          %[:ok, 11]
+        on_cast
+          Inc -> state + 1
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.EffectfulInit", :init, [[]]) == {:ok, 11}
+  end
+
+  test "structured actor derives a typed call channel from an optional family section" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.StructuredCall
+        state Int
+        on_cast
+          Inc -> state + 1
+        on_call
+          Read -> state
+
+    fn make_request() -> ActorRequest = Read
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(module, :make_request, []) == :Read
+    assert {:ok, pid} = apply(:"Cure.Generated.StructuredCall", :start_link, [7])
+    assert :gen_server.call(pid, :Read) == 7
+    :gen_server.stop(pid)
+  end
+
+  test "structured actor derives an optional info channel from the family" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.StructuredInfo
+        state Int
+        on_cast
+          Inc -> state + 1
+        on_info
+          Tick -> state + 2
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.StructuredInfo", :handle_info, [:Tick, 3]) == {:noreply, 5}
+  end
+
+  test "structured actor emits optional lifecycle callback bodies" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.StructuredLifecycle
+        state Int
+        on_cast
+          Inc -> state + 1
+        terminate :shutdown
+        code_change %[:ok, state + 1]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.StructuredLifecycle", :terminate, [:normal, 3]) == :shutdown
+    assert apply(:"Cure.Generated.StructuredLifecycle", :code_change, [:old, 3, :extra]) == {:ok, 4}
+  end
+
   test "actor derives its message type from multiple reflected handler arms" do
     source = """
     mod M

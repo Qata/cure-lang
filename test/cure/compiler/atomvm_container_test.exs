@@ -41,6 +41,34 @@ defmodule Cure.Compiler.AtomVMContainerTest do
                  emit_events: false
                )
 
+      assert {:ok, :"Cure.Main", _} =
+               Cure.Compiler.compile_string(
+                 "use Std.Actor\nactor Cure.AtomVMStructuredActor\n  state Int\n  on_cast\n    Inc -> state + 1\n",
+                 output_dir: out,
+                 emit_events: false
+               )
+
+      assert {:ok, :"Cure.Main", _} =
+               Cure.Compiler.compile_string(
+                 "use Std.Fsm\nfsm Cure.AtomVMStructuredFsm\n  state Int\n  events\n    Tick -> :keep_state_and_data\n",
+                 output_dir: out,
+                 emit_events: false
+               )
+
+      assert {:ok, :"Cure.Main", _} =
+               Cure.Compiler.compile_string(
+                 "use Std.Supervisor\nsup Cure.AtomVMStructuredSup\n  children []\n",
+                 output_dir: out,
+                 emit_events: false
+               )
+
+      assert {:ok, :"Cure.Main", _} =
+               Cure.Compiler.compile_string(
+                 "use Std.App\napp Cure.AtomVMStructuredApp\n  root Cure.AtomVMStructuredSup\n",
+                 output_dir: out,
+                 emit_events: false
+               )
+
       forms = [
         {:attribute, 1, :module, :cure_atomvm_probe},
         {:attribute, 1, :export, [{:start, 0}]},
@@ -52,6 +80,10 @@ defmodule Cure.Compiler.AtomVMContainerTest do
               remote_call(:"Cure.AtomVMTestApp", :start, [{:atom, 1, :normal}, {nil, 1}]),
               remote_call(:"Cure.AtomVMTestActor", :start_link, []),
               remote_call(:"Cure.AtomVMTestFsm", :start_link, [{:integer, 1, 0}]),
+              remote_call(:"Cure.AtomVMStructuredSup", :start_link, []),
+              remote_call(:"Cure.AtomVMStructuredApp", :start, [{:atom, 1, :normal}, {nil, 1}]),
+              remote_call(:"Cure.AtomVMStructuredActor", :start_link, [{:integer, 1, 0}]),
+              remote_call(:"Cure.AtomVMStructuredFsm", :start_link, [{:integer, 1, 0}]),
               remote_call(:io, :format, [{:string, 1, ~c"CURE_ATOMVM_PROOF_OK~n"}, {nil, 1}])
             ]}
          ]}
@@ -70,7 +102,11 @@ defmodule Cure.Compiler.AtomVMContainerTest do
           Path.join(out, "Cure.AtomVMTestWorker.beam"),
           Path.join(out, "Cure.AtomVMTestApp.beam"),
           Path.join(out, "Cure.AtomVMTestActor.beam"),
-          Path.join(out, "Cure.AtomVMTestFsm.beam")
+          Path.join(out, "Cure.AtomVMTestFsm.beam"),
+          Path.join(out, "Cure.AtomVMStructuredSup.beam"),
+          Path.join(out, "Cure.AtomVMStructuredApp.beam"),
+          Path.join(out, "Cure.AtomVMStructuredActor.beam"),
+          Path.join(out, "Cure.AtomVMStructuredFsm.beam")
           | beams
         ]
 

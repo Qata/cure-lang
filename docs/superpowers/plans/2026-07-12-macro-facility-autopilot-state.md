@@ -37,7 +37,117 @@ DONE for the shared specs (self-reviewed); each SP plan still gets Stage 3.
 - Two-phase parse (pre-pass seeds `active_macros` from `use`+local defs) = SP1's
   architectural core (grounding doc). Soft-keyword `macro`; `{:macro_def,meta,rules}` AST.
 
-## CURRENT POSITION
+## CURRENT POSITION — 2026-07-16 (live pointer)
+
+- **SP5.3 (auto full hygiene) COMPLETE** (`b6942c01` RED / `8d93fe39` GREEN /
+  `d2ccf817` gate-fix / plan v9 `d02405f3`). Every unannotated ordinary binder in
+  a Tier-2 `becomes` template is now auto-freshened by a scope-aware
+  `scoped_freshen/5` walk (let/block, match-arm+guard, lambda, single-clause
+  fn-def params, comprehension reverse-scope), with `<capture Name>` as the
+  opt-out and map-shaped family-signature binders left untouched. Frontend-only,
+  TCB delta zero. The full-suite gate caught one regression — freshened OTP
+  `start_link` params produced `initial$0` gensyms the Printer/lexer couldn't
+  round-trip — fixed by allowing `$` as an identifier continuation char
+  (`lexer.ex`). Full suite green: **4235 passed / 1 skipped / 0 failed**, antigen
+  318/318. This clears the last non-optional SP6 prerequisite.
+
+
+
+**The live implementation state is the `ORDERED TRANSPARENT BEAM PLAN` below plus the
+dated status blocks under `OPEN GATE — automatic message-code derivation` (current
+through 2026-07-15). Read those for detail; this is the map.** Where the branch
+actually stands:
+
+- **Transparent BEAM plan:** Phases 0, 1, 2, and 2.5 are COMPLETE. Phase 3 (`beam_ops`)
+  is unblocked (2.5 done) and substantially landed. Phase 4 has replaced all four OTP
+  forms — `sup`, `actor`, `fsm`, `app` each now lower through a source-defined
+  `syntax family` + expander (the structured-family surface, 2026-07-15). Phase 5/5a
+  (reusable family surface + beginner-friendly `Std.Syntax` builders) is in progress;
+  Phase 6 end-to-end / AtomVM verification remains.
+- **Open work:** the `contextual` proof exemption on `beam_ops self` is now
+  RETIRED (`a543cfb9`, via parametric-erased acceptance — NOT the earlier
+  reply-channel-derivation idea, which was unnecessary). Remaining optional polish:
+  finish the safe-vs-`Std.Syntax.Raw` split and multi-channel `handle_call` reply
+  typing. (Scope-aware hygiene for ordinary generated binders is DONE — SP5.3, see
+  the current-position pointer above.)
+
+**DONE-gate assessment (2026-07-16, verified against source + green tests).** The
+host-side spine is functionally COMPLETE and green. Concretely proven this fire:
+- `test/cure/compiler/actor_computed_test.exs` (36 green with
+  `declaration_macro_expansion_test.exs`) executes the FULL DONE chain for a
+  user-defined `actor` macro: `Cure.Compiler.compile_and_load/2` runs
+  parse→expand→**derive** (message type + reply contract from handler clauses)
+  →elaborate→codegen→load real BEAM, then `start_link` →
+  `:gen_server.cast(pid, :Inc)` → `:gen_server.stop(pid)` runs the expansion as a
+  LIVE GenServer. "A user-defined macro parses, expands, and its expansion runs"
+  is met on the host BEAM (≡ AtomVM semantics per CLAUDE.md).
+- Structured `actor`/`fsm`/`sup`/`app` surfaces, the safe-vs-`Std.Syntax.Raw`
+  boundary (`unsafe_*` + `validate_expansion/1`), and scope-set hygiene (SP5.3)
+  are all landed and green.
+- **Generic-unix AtomVM runtime gate VERIFIED for ALL EIGHT surfaces this fire.**
+  `mix test --include atomvm test/cure/compiler/atomvm_container_test.exs` = **1
+  passed** ("Return value: ok"). That test compiles the legacy `actor`/`sup`/`app`/
+  `fsm` AND the structured `Std.Actor`/`Std.Fsm`/`Std.Supervisor`/`Std.App`
+  expansions to real BEAM, packs them with `packbeam` + estdlib into an `.avm`,
+  and RUNS them on the real generic-unix AtomVM binary via `start_link`/`start`.
+  (Supersedes the older "Structured application status" note that claimed the
+  generic-unix run only for supervisor/application — it now covers actor + fsm
+  too.) AtomVM ≡ OTP semantics per CLAUDE.md, so this is the strongest
+  host-reachable form of "the expansion runs on the actual VM."
+
+**The remaining residuals are all optional or out-of-host-scope — NONE is a bug:**
+1. *Multi-channel `handle_call` reply typing* — an ENHANCEMENT, not a gap.
+   `infer_reply_tail` (`actor.cure:355`) today rejects arms with differing reply
+   types (`:inconsistent_reply_types`), which is the recorded fork-#1 default
+   ("reject rather than guess") WITH an explicit escape (the
+   `actor … call … returns <reply_type>` rule, `actor.cure:77`). Accepting a
+   *union* reply type would be sound (Erlang replies are heterogeneous) but is a
+   deliberate behavior-widening decision, not a defect — deferred; keep as-is
+   (lower-risk) absent an operator call.
+2. *`contextual` retirement* — CLOSED for the nullary-parametric case
+   (`beam_ops self`, `a543cfb9`, see the gate-(a) block below). The remaining
+   `contextual` rules supply arguments and are intrinsically use-site-bound —
+   not a gap.
+3. *Safe/raw helper migration* — additive; existing helpers stay source-compatible.
+
+**GATE (a) CLOSED for `beam_ops self` — 2026-07-16 (`a543cfb9`).** The SP3
+generative proof now PROVES the nullary all-erased-implicit case instead of
+exempting it. `check_expression_expansion` (`macro_fuzz.ex`) accepts a bare
+nullary global call whose every parameter is erased when the sole obstruction is
+`{:unsolved_metavariables, name}`: an erased binder is computationally
+irrelevant, so the expansion is well-typed at a schematic type for every
+instantiation by parametricity (the same reason an ungeneralized polymorphic term
+type-checks). Realized as a pure predicate `parametric_erased_call?/3` reading the
+callee signature from `Env.get_def` (`quantities` all `:erased` + an all-erased Pi
+spine of matching arity, non-Pi codomain) — no elaborator error-contract change,
+no new user surface, TCB delta ZERO. `beam_ops self` (`otp.cure:13`) dropped its
+`contextual` qualifier and now flows through the ordinary proof batch; both guards
+(bare-nullary shape, every-parameter-erased) are unit-tested directly. Full suite
+**4237 passed / 1 skipped / 0 failed**, Antigen 318/318. The chosen approach
+supersedes the earlier option-A/option-B framing — neither was needed. The
+*remaining* `contextual` `beam_ops` rules (`tell`/`call`/`cast`/`spawn`/… ) all
+SUPPLY arguments and are legitimately contextual (their typed-pid/reply obligations
+are only discharged at a real use site); they are NOT nullary-parametric and stay
+exempt by design. So gate (a) is now closed for the only rule where it is soundly
+closable use-site-free; the SP3 exemption that remains is intrinsic, not a gap.
+
+**One gate remains between here and the REMAINING-WORK §8 DONE bar** (do NOT
+`CronDelete` until it closes): (b) ESP32 **hardware** verification —
+the project's raison d'être, a distinct observable-flashing work mode, not a host
+`mix test`. The generic-unix half of the runtime story is now CLOSED (verified
+above, all eight surfaces), so gate (b)'s residual is specifically the physical
+ESP32 flash + serial-observed run — which per CLAUDE.md must be observable and
+is realistically operator-driven; an autonomous host fire can build/package the
+`.avm` but cannot observe the board. With gate (a) now closed for `self` (above)
+and the remaining `contextual` rules intrinsically use-site-bound, the only
+autonomous host work left is optional polish — multi-channel reply typing and
+safe/raw helper migration. The DONE bar is otherwise met on host; hardware is the
+last real gate.
+
+The SP1–SP6 records below are the historical foundation log — superseded as the
+*current* pointer by the summary above, but retained for provenance.
+
+## SP1 MILESTONE-1 RECORD (historical)
 SP1, Stage 2 DONE for milestone 1 (macro-definition front-end): plan committed at
 `docs/superpowers/plans/2026-07-12-macro-facility-sp1-plan.md` (`6f76a94`), tasks 1-3
 with complete anchored code (soft-keyword `macro`, `syntax` rules, typed holes →
@@ -1171,7 +1281,9 @@ Suggested commit:
 
 ### Phase 3 — Implement `beam_ops` over the algebra
 
-**STATUS: WAITING ON PHASE 2.5 (2026-07-14).** `Std.Otp` now defines a closed initial
+**STATUS: UNBLOCKED — Phase 2.5 COMPLETE (2026-07-15); implementation substantially
+landed. Residual: retire the `contextual` proof exemption on `beam_ops self` via
+reply-channel message-code derivation (see the `OPEN GATE` section).** `Std.Otp` now defines a closed initial
 `beam_ops` vocabulary: `self`, messaging, call/cast, process creation, startup,
 lifecycle, timers, monitors, and links all expand to ordinary checked
 `Std.Otp` calls and are proven marker-free. The generic macro grammar now has a
@@ -1225,7 +1337,11 @@ Suggested commit:
 
 ### Phase 2.5 — Establish canonical owner identity before further macro work
 
-**STATUS: REQUIRED BEFORE PHASE 3 CONTINUES (2026-07-14).** The previous
+**STATUS: COMPLETE (2026-07-15).** Commits `c877edfa`, `5e46008d`, and
+`6bb375f5` established canonical owner-qualified identities at elaboration,
+removed post-hoc Core re-keying, and updated the resolution/emission,
+coherence, union, macro, and cross-module test surfaces. The focused canonical
+identity acceptance matrix passes 39 tests on this branch. The previous
 resolver experiment attempted to repair collisions after module slices had
 already been elaborated. That direction is rejected and must not be resumed.
 
@@ -1358,7 +1474,10 @@ Phase 3 operations:
 
 #### Phase 4a — `sup` capability proof
 
-**STATUS: IN PROGRESS (2026-07-13).** `lib/std/supervisor.cure` now expands
+**STATUS: LANDED — structured `syntax family` surface (2026-07-15); see "Structured
+supervisor status" in the `OPEN GATE` section. The 2026-07-13 transparent-rule expansion
+described below was the first replacement, since refined into the family surface.**
+`lib/std/supervisor.cure` now expands
 `sup` into a transparent `lift module` with checked `Supervisor.init/1`, an
 ordinary `start_link/0`, dynamic module atoms, a typed `ChildSpec` value, and
 the real checked `supervisor:start_link/3` boundary. The common
@@ -1393,7 +1512,10 @@ module emits and runs through the common path.
 
 #### Phase 4b — `actor`
 
-**STATUS: IN PROGRESS (2026-07-13).** The public `actor` syntax now expands
+**STATUS: LANDED — structured `syntax family` surface (2026-07-15); see "Structured
+actor status" (and the call/info/lifecycle status blocks) in the `OPEN GATE` section.
+The 2026-07-13 transparent-rule expansion described below was the first replacement,
+since refined into the family surface.** The public `actor` syntax now expands
 to an ordinary lifted `GenServer` module and starts through the typed
 `Std.Otp.start_link` wrapper. In addition to the bootstrap form, the
 standard-library macro now accepts an explicit `state <Type>` clause and
@@ -1469,7 +1591,10 @@ each generated lifted module and executes through the ordinary typed wrapper.
 
 #### Phase 4c — `fsm`
 
-**STATUS: IN PROGRESS (2026-07-13).** The public `fsm` syntax now expands to
+**STATUS: LANDED — structured `syntax family` surface (2026-07-15); see "Structured
+FSM status" in the `OPEN GATE` section. The 2026-07-13 transparent-rule expansion
+described below was the first replacement, since refined into the family surface.**
+The public `fsm` syntax now expands to
 an ordinary lifted `GenStatem` module and starts through the typed
 `Std.Otp.start_statem` wrapper. In addition to the bootstrap form, the
 standard-library macro accepts an explicit `state <Type>` clause and emits a
@@ -1518,7 +1643,10 @@ messages.
 
 #### Phase 4d — `app`
 
-**STATUS: IN PROGRESS (2026-07-13).** The public `app` syntax now expands to
+**STATUS: LANDED — structured `syntax family` surface (2026-07-15); see "Structured
+application status" in the `OPEN GATE` section. The 2026-07-13 transparent-rule expansion
+described below was the first replacement, since refined into the family surface.**
+The public `app` syntax now expands to
 an ordinary lifted `Application` module with checked `start/2` and `stop/1`
 callbacks, and the generic Unix/AtomVM packaging path is exercised. In
 addition to the bootstrap form, the standard-library macro accepts an
@@ -1576,7 +1704,9 @@ Suggested commits:
 
 ### Phase 5 — Remove bespoke OTP compiler paths and OTP knowledge
 
-**STATUS: IN PROGRESS (2026-07-13).** The active compiler no longer dispatches
+**STATUS: IN PROGRESS (2026-07-13; sub-phase 5a — reusable `syntax family` surface and
+the beginner-friendly `Std.Syntax` builder/hygiene/diagnostic slices — landing through
+2026-07-15, see the dated status blocks in the `OPEN GATE` section).** The active compiler no longer dispatches
 through `ContainerMacro`, the legacy OTP raw-body parser and `__otp_container`
 marker path are gone, and the closed `OtpMacro` behavior registry has been
 deleted. Remaining work is auditing all generic tooling and application
@@ -1928,6 +2058,36 @@ source-defined and does not reconstruct names in the compiler. Richer
 expression inference and the one-shot typed reply capability required by the
 full BEAM algebra remain open; this floor is not completion of §9.4.
 
+**Structured actor call-channel status (2026-07-15).** The source-defined
+`ActorDefinition` family now accepts an optional `on_call Cases` section in
+addition to `state` and `on_cast`. The expander normalizes both family case
+blocks into the reflected pattern algebra, reuses the existing request/reply
+derivation, and emits the direct typed `ActorRequest` callback path. A compiled
+runtime test proves `gen_server.call` against the structured actor; unsupported
+reply expressions and inconsistent reply categories continue to reject through
+the ordinary macro diagnostic path. Full BEAM reply capability derivation and
+additional lifecycle sections remain open.
+
+**Structured actor info-channel status (2026-07-15).** `ActorDefinition` now
+also accepts an optional `on_info Cases` section. The source expander selects a
+transparent default `{:noreply, state}` handler when it is absent and routes
+present cases through the same checked handler normalization used by casts and
+calls. A compiled integration test proves the generated `handle_info` callback
+updates state from a reflected family case; no compiler-side lifecycle rule was
+added.
+
+**Structured actor lifecycle status (2026-07-15).** `ActorDefinition` now
+accepts optional `terminate Code` and `code_change Code` sections. The source
+expander emits those bodies directly and supplies the ordinary `:ok` and
+`{:ok, state}` defaults when they are absent. Runtime assertions cover both
+overrides. It now also accepts optional `initial Expression` and `init Code`
+sections: `initial` derives a nullary `start_link` whose callback returns the
+captured state expression, while `init` supplies the callback body directly;
+the default remains `start_link(initial)`. The shared syntax builder exposes a
+safe `unit_literal` marker and the lifted-module path lowers it recursively
+before elaboration. Runtime assertions cover all three initialization modes,
+and the complete actor computed suite is green at 19 tests.
+
 **Hardest sub-problem** (not the reflection, not even the reorder): the derived
 message type is a NEW NOMINAL DECLARATION that must exist before the lifted module
 referencing it is elaborated, and must be the SAME nominal type external `send`
@@ -1958,7 +2118,35 @@ language: a user-defined actor-like abstraction cannot copy a private standard
 template and remain maintainable, and moving the repetition into an Elixir
 helper would violate the source-defined vocabulary requirement.
 
-This is now an explicit ordered sub-phase (5a), before further container parity:
+This is now an explicit ordered sub-phase (5a), before further container parity.
+The canonical surface vocabulary is:
+
+```cure
+syntax family GenServerDefinition
+  state Type
+  optional messages Type
+  optional initial Expression
+  optional init Code
+  optional on_call Cases
+  optional on_cast Cases
+  optional on_info Cases
+  optional terminate Code
+  optional code_change Code
+end
+
+macro actor <name: ModuleName>
+  accepts GenServerDefinition
+  expands with derive_actor
+end
+```
+
+The family declaration owns only the reusable body shape. The macro declaration
+owns the leading syntax and expansion function. Internally `accepts` may lower
+to the existing computed-rule machinery, but authors should not need to write
+`Code until dedent` or `contextual computed by` for ordinary structured macros.
+Generated fields must retain category metadata, source ranges, cardinality,
+section order, and provenance; the reflected runtime value may remain ordinary
+`Syntax`.
 
 1. Factor common callback/import/alias/lifecycle construction into ordinary
    Cure functions over `Std.Syntax`, returning transparent declaration bundles.
@@ -1976,6 +2164,240 @@ direct checked BEAM operations. Coverage must include nested family composition,
 override precedence, duplicate/ambiguous grammar rules, generated-name hygiene,
 and a byte/Core-path comparison against an equivalent handwritten expansion.
 
+**Beginner-friendliness priority (2026-07-15).** Fold the following into the
+5a implementation rather than treating them as unrelated polish:
+
+- decoded primitive captures and explicit `ExpressionSyntax`/
+  `PatternSyntax`/`TypeSyntax`/`CodeSyntax` wrappers;
+- direct expander parameters with generated records retained as an advanced
+  fallback;
+- safe syntax templates with distinct syntax splicing, literal lifting,
+  declaration-list splicing, and intentional identifier construction;
+- default definition-site hygiene plus explicit caller/fresh/private/exported
+  identifier operations;
+- named-argument typed declaration builders under `Std.Syntax`, with raw node
+  construction moved to a visibly advanced `Std.Syntax.Raw` boundary;
+- ordinary record access for family fields, `List(T)` repeated captures,
+  unordered sections by default, and declarative empty-block cardinality;
+- `MacroResult`/`Result` convenience conversion, source provenance, and
+  expansion-aware diagnostics.
+
+The following remain explicitly parked as later work: inline expansion shorthand,
+implicit block capture, aliases and convenience accessors, editor completion and
+hover, formatter and macro inspection commands, grouped/plural spellings,
+canonical ordering and normalization hooks, user-defined syntax categories and
+syntax pattern matching, dedicated `derive`/`typed macro` forms, phase controls,
+and public export-policy syntax. These must layer on the same safe family,
+hygiene, diagnostic, and direct-emission contracts.
+
+**Structured family lowering status (2026-07-15).** The first 5a slice now
+parses `syntax family` declarations with typed fields and cardinality, accepts
+structured macro headers with leading captures, and lowers
+`accepts Family`/`expands with expander` to the existing generic computed-macro
+protocol. Family bodies are parsed as unordered named sections using ordinary
+Cure expression and type parsing; `Cases` is represented by a generic case
+block, not an OTP-specific node. Generated family and invocation records are
+ordinary declarations, nested family values are reflected into Core, and the
+full path is covered by a compiled user-defined family expansion.
+
+This slice intentionally leaves the generated-record calling convention as
+the advanced fallback. Direct expander parameters, primitive literal decoding,
+syntax-template interpolation, typed declaration builders, and the safe/raw
+API split remain ordered follow-up slices from the beginner-friendliness list;
+none may be implemented by introducing compiler-owned domain knowledge.
+
+**Direct expander arguments status (2026-07-15).** Structured family rules now
+offer the expander ordinary captured arguments as a first execution candidate,
+while preserving the generated invocation record and generic `Syntax` fallbacks
+for compatibility. Nested family records omit the reserved expansion-context
+field, and generated type names preserve their source capitalization. Partial
+or undecodable candidate applications fall through to the next valid calling
+convention rather than being mistaken for a successful expansion.
+
+**Shape-specific syntax aliases status (2026-07-15).** Generated family fields
+now use readable aliases such as `TypeSyntax`, `ExpressionSyntax`,
+`ModuleNameSyntax`, `CodeSyntax`, and `CasesSyntax`, all transparently backed by
+the checked generic `Syntax` value. This improves expander signatures without
+creating runtime wrappers or a second parser representation; `Syntax` remains
+the explicit low-level escape hatch.
+
+**Primitive literal capture status (2026-07-15).** Primitive-shaped captures
+(`Int`, `Float`, `Atom`, and `Bool`) are now validated as literal syntax at the
+macro call site and passed to expanders as their ordinary Cure Core values. The
+same shape metadata is threaded through generated family records, nested family
+records, repeated fields, and direct expander arguments. Non-literal expressions
+are rejected before expansion, while non-primitive captures continue to preserve
+hygienic syntax values. This is compile-time representation selection only: it
+adds no runtime macro protocol or OTP-specific compiler knowledge.
+Direct captured arguments are attempted first; generated family records and the
+generic reflected `Syntax` value remain compatibility fallbacks. Repeated and
+nested primitive fields are encoded as their ordinary `List(T)` or `T` Core
+values, respectively.
+
+`Std.Syntax` now also exposes explicit `int_literal`, `float_literal`,
+`bool_literal`, `string_literal`, and `atom_literal` builders for the reverse
+direction. These are ordinary syntax constructors with explicit literal
+subtypes; they do not interpret arbitrary strings as identifiers.
+
+**Explicit macro result status (2026-07-15).** Source-defined expanders may now
+return `MacroResult` using `expand`, `reject`, or `reject_all`. `Expanded(Syntax)`
+and `Rejected(List(Diagnostic))` are compile-time wrappers decoded at the same
+Core boundary as direct `Syntax`; rejected diagnostics remain ordinary reflected
+syntax values. Legacy direct-`Syntax` results and `Syntax.Failure` remain valid
+compatibility paths, and no result wrapper survives into generated runtime code.
+The decoder also accepts `Std.Result`'s `Ok(Syntax)` and `Error(Diagnostic)` forms
+as a convenience, without making `Result` part of the macro runtime protocol.
+
+**Beginner-surface triage status (2026-07-15).** The foundation slices selected
+for immediate implementation are semantic literal captures and explicit literal
+lifting, direct-first structured expander arguments, ordinary family records and
+repeated lists, and explicit `MacroResult`/`Std.Result` outcomes. The remaining
+required foundation slices are typed syntax templates with distinct splicing and
+lifting, definition-site hygiene with explicit name-intent operations, named
+typed declaration builders, source provenance, expansion-aware diagnostics, and
+the safe `Std.Syntax` versus advanced `Std.Syntax.Raw` boundary. Editor tooling,
+inline shorthand, aliases, grouping/plural spellings, custom syntax categories,
+syntax-pattern matching, and phase/export conveniences remain parked as later
+work; none is a prerequisite for transparent compiled expansion.
+The safe/raw boundary has begun additively: `Std.Syntax.Raw` now exposes
+`unsafe_node`, `unsafe_leaf`, and `unsafe_raw` for deliberately unchecked
+construction. Existing helpers remain source-compatible during the migration;
+future typed templates and declaration builders must use the safe namespace and
+leave raw construction visibly opt-in.
+
+**Optional family-field status (2026-07-15).** Structured family fields with
+`optional` cardinality now lower to ordinary `Std.Option.Option(T)` fields.
+Absent sections are encoded as `None()`, present sections as `Some(value)`,
+including through nested family records and both direct and generated expander
+calling conventions. This removes the previous `nil` placeholder, which was
+not a value of the declared syntax field type and prevented expanders from
+using ordinary Option pattern matching. Repeated fields remain ordinary
+`List(T)` values, and required fields still produce a compile-time missing-field
+diagnostic.
+
+Repeated family fields now include both `repeated` and `one_or_more`: each is
+represented as an ordinary `List(T)` in the generated record, while a missing
+`one_or_more` field is rejected with the same source-located missing-section
+diagnostic used for required fields. This keeps cardinality semantics in the
+declarative family grammar instead of requiring expander-side list decoding.
+
+**Computed candidate rejection status (2026-07-15).** Direct, generated-record,
+and generic `Syntax` calling conventions may be tried in sequence when a
+candidate is incompatible with an expander signature. Once a candidate has
+successfully normalized to an intentional `Failure`, `Rejected` diagnostic, or
+invalid generated expansion, that result is terminal and is no longer replaced
+by a later candidate's type error. This preserves source-defined macro
+diagnostics and prevents a generic fallback from masking them with an
+unrelated `foreign_ctor` or `unknown_global` error.
+
+**Reusable family composition status (2026-07-15).** `syntax family` declarations
+now support generic `includes OtherFamily` composition. Included fields are
+flattened into the accepted family's ordinary generated record, preserving each
+field's category and cardinality, while the parser remains unordered and the
+expander receives normal record/Option/List values. Composition is validated at
+the family boundary: unknown includes, inherited duplicate fields, and cycles
+are source diagnostics rather than late expander failures. This is language-level
+grammar reuse; it adds no OTP vocabulary, parser-side string substitution, or
+runtime dispatch. Positive end-to-end coverage proves a user-defined service
+family reuses a common state field, and parser coverage pins all three rejection
+classes.
+
+**Generated input identity status (2026-07-15).** The structured lowering now
+names its advanced fallback record from the accepted family (`FamilyNameInputSyntax`)
+rather than from the public macro keyword. The parser also preserves the
+family-specific metadata when materializing a computed use, and only consumes
+an indented body whose first section is declared by the family. Keyword-led or
+undeclared-section bodies therefore fall through to legacy syntax rules. This
+keeps a structured and a legacy rule with the same public keyword disjoint
+without an OTP-specific compiler exception, while preserving ordinary legacy
+fallback; the full 68-test transparent-container suite pins this behavior.
+
+**Structured actor status (2026-07-15).** `Std.Actor` now declares an
+`ActorDefinition` family with required `state` and `on_cast` sections, an
+optional explicit `messages Type` override, and a source-defined `actor`
+expander. The expander uses the existing transparent syntax reflection and
+declaration builders to derive `ActorMessage` by default, or reuse the
+caller-supplied nominal message type, and emits an ordinary lifted GenServer
+module. Optional `initial Expression` and `init Code` are source-defined as
+well, with the default, expression-initialized, and effectful callback paths
+all producing direct compiled code. A compiled integration test covers these
+paths alongside the legacy actor forms; reply-channel derivation and the
+remaining callback-context gate stay ordered follow-up work.
+
+**Structured FSM status (2026-07-15).** `Std.Fsm` now declares an
+`FsmDefinition` family with required `state` and `events` sections plus an
+optional `event_type Type` override. Its source-defined expander normalizes case
+bodies into the checked callback shape, derives `FsmEvent` by default, or
+reuses the caller-supplied nominal event type, and emits an ordinary lifted
+GenStatem module. A compiled integration test covers both event-type paths,
+initialization, event construction, and dispatch while the legacy FSM grammar
+remains the fallback path.
+
+**Structured supervisor status (2026-07-15).** `Std.Supervisor` now declares
+a `SupervisorDefinition` family with a typed `children` section. Its
+source-defined expander emits a lifted supervisor with a concrete
+`List(ChildSpec)` initialization contract and the standard closed restart
+strategy. Empty-child initialization and recursive expansion of nested
+`child_spec` syntax are covered end to end, and legacy `sup` forms remain
+available through grammar fallback.
+
+**Structured application status (2026-07-15).** `Std.App` now declares an
+`ApplicationDefinition` family with a typed `ModuleName` root section. Its
+source-defined expander emits the ordinary application callbacks and delegates
+root startup to `Std.Otp` through the generated code. Stop and phase callbacks
+are covered by a compiled integration test; richer phase and body forms remain
+legacy-compatible follow-up extensions of the same family surface. The generic
+Unix AtomVM package proof now also compiles and starts all four structured
+surfaces alongside their legacy counterparts.
+
+**Typed declaration builder status (2026-07-15).** `Std.Syntax` now exposes
+record-backed specifications and builders for parameters, linear parameters,
+functions, aliases, lifted modules, and match arms. Macro authors can construct
+these declarations through named record fields and typed builder functions;
+generic positional node constructors remain compatibility and advanced
+facilities. The builders produce the same ordinary reflected syntax
+representation and add no compiler-owned declaration vocabulary. Semantic
+validation remains in the ordinary Cure elaborator, while malformed reflected
+representations are covered by the final expansion validation boundary.
+
+**Source provenance status (2026-07-15).** Syntax reflection now carries source
+line and column values through dedicated `source_line` and `source_col` mirror
+attributes, reconstructing ordinary parser metadata on the way back out. This
+keeps source coordinates distinct from semantic syntax attributes and gives
+later expansion-aware diagnostics a stable location channel without adding a
+runtime provenance object or changing generated code.
+
+**Explicit name-intent status (2026-07-15).** `Std.Syntax` now exposes
+`caller_identifier`, `private_identifier`, and `exported_identifier` alongside
+the existing `fresh` primitive. These constructors preserve intent in the
+reflected syntax value, and a reflection-boundary test proves caller capture is
+consumed into an ordinary use-site variable before elaboration. Automatic freshening of ordinary
+generated binders is still pending the scope-aware hygiene pass; `variable/1`
+therefore remains compatibility behavior until generated binders and references
+can be renamed as one lexical unit.
+
+**Author-diagnostic formatting status (2026-07-15).** Structured `Rejected`
+results and legacy `Failure` results now retain a dedicated macro-rejection
+category through the outer code-generation error formatter. The compiler still
+keeps the authored diagnostic payload opaque to the runtime, but users receive
+the macro name, diagnostic count or failure name, and expansion source location
+instead of an unclassified tuple dump.
+
+**Raw expansion validation status (2026-07-15).** Raw construction is now
+explicitly separated from executable expansion. Before a computed result is
+converted back to parser AST, `MacroSyntax.validate_expansion/1` rejects raw and
+quoted reflection forms when they appear as executable expansion nodes, along
+with malformed syntax representations, malformed attributes, and malformed
+syntax literals. Reflection-only values nested in syntax metadata remain valid;
+they are part of the quoted `Syntax` data model and must survive a reflected
+payload round trip without being mistaken for generated code. Legacy `Failure`
+values remain available for the existing author-diagnostic protocol. The
+compiler wraps invalid results with the macro's provenance and formats them
+through the outer `:codegen_error` boundary, so advanced unchecked construction
+cannot degrade into an `inspect/1`-only diagnostic or a host exception. Semantic
+validation of known Cure declaration shapes remains the responsibility of the
+typed builders and ordinary elaborator.
+
 **Two design forks, with defaults (operator standing directive: align with real
 languages; discuss in prose, don't ask).**
 
@@ -1989,3 +2411,111 @@ languages; discuss in prose, don't ask).**
    that skips derivation.** This is the Haskell/Idris posture — inference by
    default, annotation always permitted — and it keeps every existing program
    compiling.
+
+**Template-hygiene characterized-hole status (2026-07-16).** Both SP5.3
+correctness holes in the `becomes`-template freshening path are now closed with
+red-green fixtures (`test/cure/compiler/macro_hygiene_test.exs`), parser-only,
+TCB delta zero. (a) A `<fresh e>` binder that shares a hole's name no longer
+swallows the use-site argument: freshening leaves a plain variable untouched
+when its name is also a hole, so the hole's material still substitutes
+(`7db30556`). (b) A use-site name that spoofs the predictable gensym namespace
+(`` `g$0` `` passed as a hole) can no longer be captured by a `<fresh g>`
+binder: `mint_gensym` collects every name appearing in the hole values and
+advances the counter past any collision, so a fresh binder is always distinct
+from injected caller material (`006a4652`). Full compiler suite green (822).
+This closes the *correctness* core of the SP5.3 gate. The larger ergonomic
+piece — automatic definition-site freshening of ALL ordinary generated binders
+in a Tier-2 `becomes` template via a scope-aware set-of-scopes walk, keeping a
+`<capture Name>` escape hatch — is now **LANDED (SP5.3, 2026-07-16:
+`b6942c01`/`8d93fe39`/`d2ccf817`)** via `scoped_freshen/5` in the parser (frames
+for let/block, match-arm+guard, lambda, single-clause fn-def params, comprehension
+reverse-scope; map-shaped family-signature binders untouched; TCB delta zero).
+Note this is the **Tier-2 template** path only. The **Tier-3 computed** path's
+`Std.Syntax.variable/1` deliberately stays explicit-marker (`fresh(...)`) — per
+the "Computed-result hygiene status" block, reflected use-site syntax is
+interleaved with generated AST, so a computed result CANNOT be blanket-freshened
+without renaming caller references; explicit markers are correct there by design,
+not a pending gap.
+
+**`contextual` retirement — empirical blocker analysis (2026-07-16).** Direct
+probing (replicating `MacroFuzz.check_expression_expansion`: elaborate the
+expansion in `Context.empty`) establishes the ground truth, correcting an earlier
+belief that slice L0.2's context threading would retire `contextual` in ~30 lines:
+
+- `beam_ops self` → `Std.Otp.self()` elaborated standalone fails with
+  `{:unsolved_metavariables, :"Std.Otp#self"}`. `self : {m: Type} -> Effect(Pid(m))`
+  has an erased result-position index `m` with nothing to constrain it — the
+  *use* is genuinely context-dependent (like `[] : List a` / `read` with no
+  expected type), even though the *definition* is well-typed.
+- Wrapping the expansion in an **unannotated** definition body
+  (`fn probe() = Std.Otp.self()`) **still fails** the same way: Cure does NOT
+  infer a polymorphic signature from an unannotated body (Idris/Agda behave the
+  same). Only an explicit return type naming the index
+  (`fn probe({m: Type}) -> Effect(Pid(m)) = Std.Otp.self()`) type-checks. So no
+  untrusted term-wrapping trick makes the empty-context proof pass — per the
+  elaborator-HARD-STOP principle, the simple paths are ruled out.
+- L0.2's `callback_context` reflection is delivered to **Tier-3 computed** elabs
+  only (`MacroExpand`), so it never reaches the **Tier-2 `becomes`** `beam_ops`
+  rules whose proof actually fails. The two were conflated.
+
+**Consequence.** `contextual` (defer the SP3 self-proof) is the *correct* posture
+for a genuinely context-dependent expansion — you cannot prove it standalone
+without inventing an expected type. Retiring it soundly requires the proof to
+elaborate such a rule under a **declared expected type** that binds the residual
+result index. Two options, both real design slices (NOT tail-of-fire edits):
+(A) generalize residual result-position erased-index metavars in the proof
+harness (needs the elaborator to hand back the partial term + residual-metavar
+relevance so the proof can prove "well-typed for all instantiations"); or
+(B) a per-rule / per-context expected-type declaration the proof checks against.
+
+**Recommendation REVISED to (B) after reading source (2026-07-16).** The two
+`{:unsolved_metavariables, name}` producers — `finish_global_app`
+(`elaborator.ex:7500`) and `finish_ctor_app` (`:6727`) — carry ONLY the callee
+name; the residual args (`chosen`, which is in scope at the failure site and
+whose telescope positions/erasure ARE known there) are discarded. So option (A)
+is *not* the lower-cost path: it requires enriching a soundness-critical error
+contract across ≥2 producers to surface which metavars are unsolved and their
+erasure, THEN adding a generalization step that has no definition boundary to
+attach to in the proof's bare-expression (infer-mode) elaboration. Option (B) is
+strictly more bounded: the proof already has synthetic-frame machinery —
+`check_block_expansion` (`macro_fuzz.ex:477`) wraps declaration expansions in a
+`{:container, …, "MacroExpansionProof", declarations}` and checks them via
+`Program.check_ast/1`. Extending that so a `contextual` *expression*-rule declares
+a proof frame (a signature binding the residual index, e.g.
+`fn __proof({m: Type}) -> Effect(Pid(m)) = <expansion>`) and is checked the same
+way reuses a proven path and needs no elaborator error-contract change. It also
+matches probe case 2 exactly (an explicit `-> Effect(Pid(m))` annotation makes
+elaboration succeed). Cost: new macro-rule surface to carry the proof frame, plus
+routing contextual expression-rules through the synthetic-def check instead of
+exempting them. Still its own plan + red-green; NOT a tail-of-fire edit.
+
+**Priority note.** This is *optional polish*, not a soundness hole: `contextual`
+rules are still type-checked at their REAL use sites whenever the stdlib and the
+`examples/**` corpus elaborate (PrinterTotality gate + full suite). What
+`contextual` skips is only the *generative, use-site-free* self-proof — whose
+value for a genuinely context-dependent rule is inherently limited.
+
+**Derivation-programme status re-grounded against source (2026-07-16).** The
+message-type **derivation** programme — which older notes (and the
+`macro-message-code-derivation-programme` memory) framed as "the last open gate,
+structural blocker do-this-first" — has in fact LANDED and is green. Verified this
+fire: (1) declaration-position Tier-3 expansion is real —
+`Program.expand_declaration_uses/1` (`program.ex:356`) expands decl-position
+`{:computed_use}` nodes, and it runs at `compiler.ex:96` BEFORE `codegen` →
+`LiftModule.collect` (`:300`); the "make Tier-3 a declaration pass and move
+`collect` behind it" reorder is done. (2) `actor.cure` derives the message type
+and reply contract from handler clauses — `derive_actor`/`derive_reply_contract`/
+`derive_pattern_heads`, driven by the Tier-3 rule
+`actor <name> state <state_type> derive <cast_body: Code until call> (call …)?
+computed by derive_actor` (`actor.cure:75`). (3) `mix test
+test/cure/compiler/actor_computed_test.exs
+test/cure/compiler/declaration_macro_expansion_test.exs` = **36 passed, 0
+failed** — the two-scope nominal-type + lifted-module derivation works end-to-end.
+
+So the residual non-optional macro work is NOT derivation. Per the CURRENT
+POSITION pointer it is: the safe-vs-`Std.Syntax.Raw` split, multi-channel
+`handle_call` reply typing, and Phase 6 (end-to-end / AtomVM). The `contextual`
+retirement (option B) is *optional* polish layered on the now-landed derivation —
+note the derive rules (`actor.cure:75` etc.) still carry `contextual`, and the
+sound way to drop it there is the same option-(B) synthetic-proof-frame. Until a
+planned slice takes it, `contextual` stays and is honest.

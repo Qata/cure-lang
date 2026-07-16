@@ -127,6 +127,9 @@ defmodule Cure.Compiler.Errors do
 
   # -- Codegen Errors ----------------------------------------------------------
 
+  def format_error({:codegen_error, {:computed_macro_error, _meta, _reason} = error}, file),
+    do: format_error(error, file)
+
   def format_error({:codegen_error, reason}, file) do
     format_diagnostic("error", "codegen error", file, 0, inspect(reason))
   end
@@ -375,12 +378,14 @@ defmodule Cure.Compiler.Errors do
     line = Keyword.get(meta, :line, 0)
     keyword = Keyword.get(meta, :keyword, "computed")
 
+    {title, detail} = format_generated_syntax_reason(reason)
+
     format_diagnostic(
       "error",
-      "computed macro failed",
+      title,
       file,
       line,
-      "the `#{keyword}` computed macro could not produce a valid Syntax expansion: #{inspect(reason)}"
+      "the `#{keyword}` computed macro could not produce a valid Syntax expansion: #{detail}"
     )
   end
 
@@ -401,6 +406,51 @@ defmodule Cure.Compiler.Errors do
 
   def format_error(error, file) do
     format_diagnostic("error", "compilation error", file, 0, inspect(error))
+  end
+
+  defp format_generated_syntax_reason({:invalid_generated_syntax, {:raw_syntax_in_expansion, path}}),
+    do:
+      {"invalid macro expansion",
+       "raw syntax is only valid for reflection, not generated Cure code (#{format_syntax_path(path)})"}
+
+  defp format_generated_syntax_reason({:invalid_generated_syntax, {:quoted_syntax_in_expansion, path}}),
+    do:
+      {"invalid macro expansion",
+       "quoted syntax must be unquoted before it is emitted as Cure code (#{format_syntax_path(path)})"}
+
+  defp format_generated_syntax_reason({:invalid_generated_syntax, {reason, path}}),
+    do: {"invalid macro expansion", "#{inspect(reason)} (#{format_syntax_path(path)})"}
+
+  defp format_generated_syntax_reason({:author_diagnostics, diagnostics}) when is_list(diagnostics),
+    do: {"macro rejected expansion", format_author_diagnostics(diagnostics)}
+
+  defp format_generated_syntax_reason({:author_failure, name, args}) when is_list(args),
+    do: {"macro rejected expansion", "the macro reported `#{name}`#{format_author_args(args)}"}
+
+  defp format_generated_syntax_reason(reason), do: {"computed macro failed", inspect(reason)}
+
+  defp format_author_diagnostics([]), do: "the macro returned no diagnostic details"
+
+  defp format_author_diagnostics(diagnostics) do
+    details = Enum.map_join(diagnostics, "; ", &inspect/1)
+    "the macro reported #{length(diagnostics)} diagnostic(s): #{details}"
+  end
+
+  defp format_author_args([]), do: ""
+  defp format_author_args(args), do: ": #{Enum.map_join(args, ", ", &inspect/1)}"
+
+  defp format_syntax_path(path) do
+    path
+    |> Enum.reverse()
+    |> Enum.map_join(".", fn
+      {:child, index} -> "child[#{index}]"
+      {:attribute, key, index} -> "attribute #{key}[#{index}]"
+      {:syntax_literal} -> "syntax literal"
+      {:map_key} -> "map key"
+      {:map_value} -> "map value"
+      {:list_item} -> "list item"
+      other -> inspect(other)
+    end)
   end
 
   defp known_editions_hint, do: Enum.join(Cure.Edition.all(), ", ")

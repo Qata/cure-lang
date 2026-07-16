@@ -21,6 +21,28 @@ mod Std.Syntax
     | Quoted(Syntax)
     | Failure(Atom, List(Syntax))
 
+  ## Shape-specific aliases keep generated family records readable without
+  ## introducing separate runtime representations or weakening the generic
+  ## reflection boundary.
+  typealias NameSyntax = Syntax
+  typealias ModuleNameSyntax = Syntax
+  typealias TypeSyntax = Syntax
+  typealias PatternSyntax = Syntax
+  typealias ExpressionSyntax = Syntax
+  typealias StatementSyntax = Syntax
+  typealias CodeSyntax = Syntax
+  typealias CasesSyntax = Syntax
+  typealias ParametersSyntax = Syntax
+  typealias FieldsSyntax = Syntax
+  typealias DeclarationsSyntax = Syntax
+  typealias ModuleBodySyntax = Syntax
+  typealias TokenSyntax = Syntax
+  typealias Diagnostic = Syntax
+
+  type MacroResult =
+    | Expanded(Syntax)
+    | Rejected(List(Diagnostic))
+
   type Attr = KV(Atom, SynLit)
 
   type SynLit =
@@ -46,6 +68,30 @@ mod Std.Syntax
   type PatternHead = ValidHead(Atom, Syntax) | InvalidHead(Atom)
 
   type PayloadTypes = Payloads(List(Syntax)) | InvalidPayload(Atom)
+
+  ## Typed declaration specifications keep ordinary macro authors away from
+  ## positional attribute lists. They are source-level records, so a builder
+  ## call reads like the declaration it produces and remains reusable by any
+  ## user-defined macro.
+  rec ParameterSpec
+    name: String
+    kind: Syntax
+    linear: Bool
+
+  rec FunctionSpec
+    name: String
+    parameters: List(ParameterSpec)
+    returns: Syntax
+    body: Syntax
+
+  rec ModuleSpec
+    name: String
+    behaviour: Atom
+    declarations: List(Syntax)
+
+  rec AliasSpec
+    name: String
+    value: Syntax
 
   ## Small, total operations used by source-defined syntax macros. These keep
   ## syntax analysis in Cure instead of teaching the compiler about a macro's
@@ -112,12 +158,31 @@ mod Std.Syntax
   fn leaf(name: Atom, values: List(Attr), value: SynLit) -> Syntax =
     Leaf(name, values, value)
 
+  fn expand(value: Syntax) -> MacroResult = Expanded(value)
+
+  fn reject(diagnostic: Diagnostic) -> MacroResult = Rejected([diagnostic])
+
+  fn reject_all(diagnostics: List(Diagnostic)) -> MacroResult = Rejected(diagnostics)
+
   fn attr_value(name: Atom, value: SynLit) -> Attr = KV(name, value)
 
   fn syntax_atom(value: Atom) -> SynLit = SAtom(value)
   fn syntax_string(value: String) -> SynLit = SStr(value)
   fn syntax_bool(value: Bool) -> SynLit = SBool(value)
   fn syntax_int(value: Int) -> SynLit = SInt(value)
+
+  ## Lift ordinary primitive values into literal syntax. These constructors are
+  ## explicit so a string can never be mistaken for an identifier or raw syntax.
+  fn int_literal(value: Int) -> Syntax = integer(value)
+
+  fn float_literal(value: Float) -> Syntax =
+    Leaf(:literal, [KV(:subtype, SAtom(:float))], SFloat(value))
+
+  fn bool_literal(value: Bool) -> Syntax =
+    Leaf(:literal, [KV(:subtype, SAtom(:boolean))], SBool(value))
+
+  fn string_literal(value: String) -> Syntax =
+    Leaf(:literal, [KV(:subtype, SAtom(:string))], SStr(value))
 
   fn syntax_list(items: List(Syntax)) -> SynLit = match items
     [] -> SList([])
@@ -129,6 +194,17 @@ mod Std.Syntax
   fn variable(name: String) -> Syntax =
     Leaf(:variable, [KV(:scope, SAtom(:local))], SStr(name))
 
+  ## Name-intent constructors make scope decisions explicit in macro source.
+  ## `caller_identifier` deliberately retains the call-site scope; the other
+  ## two are used for generated references and declaration names respectively.
+  fn caller_identifier(name: String) -> Syntax =
+    Leaf(:variable, [KV(:scope, SAtom(:caller))], SStr(name))
+
+  fn private_identifier(name: String) -> Syntax = fresh(name)
+
+  fn exported_identifier(name: String) -> Syntax =
+    Leaf(:variable, [KV(:scope, SAtom(:exported))], SStr(name))
+
   ## Mark a generated binder or reference for the parser's existing hygienic
   ## freshening pass. Use the marker at each generated occurrence that should
   ## share a binding; syntax reflected from the caller remains untouched. The
@@ -139,6 +215,12 @@ mod Std.Syntax
 
   fn atom_literal(value: Atom) -> Syntax =
     Leaf(:literal, [KV(:subtype, SAtom(:symbol))], SAtom(value))
+
+  ## The unit value has a two-tuple parser representation rather than an
+  ## ordinary expression node. The parser bridge recognizes this reflected
+  ## marker and restores the canonical `()` AST before re-elaboration.
+  fn unit_literal() -> Syntax =
+    Node(:unit_value, [], [])
 
   fn call(name: String, args: List(Syntax)) -> Syntax =
     Node(:function_call, [KV(:name, SStr(name))], args)
@@ -164,6 +246,20 @@ mod Std.Syntax
   fn parameter_linear(name: String, kind: Syntax) -> Syntax =
     Node(:param, [KV(:name, SStr(name)), KV(:type, SSyntax(kind)), KV(:grade, SAtom(:linear))], [])
 
+  fn parameter_spec(name: String, kind: Syntax) -> ParameterSpec =
+    ParameterSpec{name: name, kind: kind, linear: false}
+
+  fn linear_parameter_spec(name: String, kind: Syntax) -> ParameterSpec =
+    ParameterSpec{name: name, kind: kind, linear: true}
+
+  fn parameter_from(spec: ParameterSpec) -> Syntax = match spec.linear
+    true -> parameter_linear(spec.name, spec.kind)
+    false -> parameter(spec.name, spec.kind)
+
+  fn parameters_from(specs: List(ParameterSpec)) -> List(Syntax) = match specs
+    [] -> []
+    [head | rest] -> [parameter_from(head) | parameters_from(rest)]
+
   fn let_binding(name: String, value: Syntax) -> Syntax =
     Node(:assignment, [KV(:let, SBool(true))], [variable(name), value])
 
@@ -180,6 +276,24 @@ mod Std.Syntax
       KV(:params, parameter_literals(params)),
       KV(:return_type, SSyntax(return_type))
     ], [body])
+
+  fn function_from(spec: FunctionSpec) -> Syntax =
+    function(spec.name, parameters_from(spec.parameters), spec.returns, spec.body)
+
+  fn module_from(spec: ModuleSpec) -> Syntax =
+    lift_module(SStr(spec.name), spec.behaviour, spec.declarations)
+
+  fn alias_from(spec: AliasSpec) -> Syntax =
+    alias_node(spec.name, spec.value)
+
+  fn alias_spec(name: String, value: Syntax) -> AliasSpec =
+    AliasSpec{name: name, value: value}
+
+  fn match_arm(pattern: Syntax, body: Syntax) -> Syntax =
+    Node(:match_arm, [KV(:pattern, SSyntax(pattern))], [body])
+
+  fn guarded_match_arm(pattern: Syntax, guard: Syntax, body: Syntax) -> Syntax =
+    Node(:match_arm, [KV(:pattern, SSyntax(pattern)), KV(:guard, SSyntax(guard))], [body])
 
   fn integer(value: Int) -> Syntax =
     Leaf(:literal, [KV(:subtype, SAtom(:integer))], SInt(value))

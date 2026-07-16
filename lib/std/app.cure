@@ -1,5 +1,32 @@
 @group(:system)
 mod Std.App
+  use Std.Syntax
+
+  ## The structured application surface is source-defined. Legacy forms in
+  ## AppContainers remain available through ordinary grammar fallback.
+  macro app <name: ModuleName>
+    syntax family ApplicationDefinition
+      root ModuleName
+    accepts ApplicationDefinition
+    expands with derive_application_family
+
+  fn derive_application_family(name: ModuleNameSyntax, definition: ApplicationDefinitionSyntax) -> Syntax =
+    let name_syntax: Syntax = name
+    let module_name: SynLit = match name_syntax
+      Leaf(_, _, SAtom(value)) -> SAtom(value)
+      _ -> SStr("Cure.Generated.Application")
+    let start_type = call("Effect", [variable("Tuple")])
+    let stop_type = call("Effect", [variable("Atom")])
+    let start_body = call("Std.Otp.start_supervisor", [definition.root])
+    lift_module_isolated(module_name, :application, [
+      use_module("Std.Otp"),
+      use_module("Std.App"),
+      use_module("Std.Supervisor"),
+      function("start", [parameter("kind", variable("t")), parameter("args", variable("a"))], start_type, start_body),
+      function("stop", [parameter("state", variable("s"))], stop_type, atom_literal(:ok)),
+      function("start_phase", [parameter("phase", variable("Atom")), parameter("kind", variable("t")), parameter("args", variable("a"))], stop_type, atom_literal(:ok))
+    ])
+
   ## `app` is a transparent standard-library macro. The base application is
   ## an ordinary lifted Application module; root-supervisor startup and
   ## lifecycle phases are layered on top of this floor.

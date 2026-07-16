@@ -10,7 +10,7 @@ mod Std.Otp
     syntax beam_ops start_statem <module: Code> <args: Code> contextual becomes Std.Otp.start_statem(module, args)
     syntax beam_ops start_supervisor <module: Code> contextual becomes Std.Otp.start_supervisor(module)
     syntax beam_ops start_supervisor <module: Code> <args: Code> contextual becomes Std.Otp.start_supervisor_with(module, args)
-    syntax beam_ops self contextual becomes Std.Otp.self()
+    syntax beam_ops self becomes Std.Otp.self()
 
     syntax beam_ops tell <dest: Code> <message: Code> contextual becomes Std.Otp.tell(dest, message)
     syntax beam_ops send <dest: Code> <message: Code> contextual becomes Std.Otp.tell(dest, message)

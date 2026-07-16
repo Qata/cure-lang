@@ -229,32 +229,81 @@ against `a.name`-style typed reflection.
 
 ---
 
+## 5.1 SP5.1 — Quasiquotation (`quote` / `$( )`)  ⟵ NON-OPTIONAL PREREQ FOR SP6 (promoted 2026-07-16)
+**Status:** promoted from the former optional "slice 4". Plan NOT written. Start at Stage 2.
+**Scope:** a `quote { … }` surface lifting ordinary Cure syntax to a `Syntax` value, with
+`$(expr)` single-node and `$(xs …)` repeated-group splices + splice position/category checking.
+Becomes the DEFAULT authoring surface for `computed by` expanders; the `Std.Syntax` typed
+builders / `Std.Syntax.Raw` drop to the escape hatch. Reuses the landed `to_syntax`/`from_syntax`
+bridge (no second AST model).
+**Gate:** a `derive_actor`-class expander rewritten with `quote`/`$()` produces byte-identical Core
+to the hand-built version; a wrong-category splice is a compile error; full suite green.
+
+## 5.2 SP5.2 — Cross-module macro import (was §7 "T9")  ⟵ NON-OPTIONAL PREREQ FOR SP6 (promoted 2026-07-16)
+**Status:** promoted out of "deferred" — a hard prerequisite for SP6, not a convenience. Plan NOT written.
+**Scope (base §7 import scope + §6 name res):** `use SomeModule` brings that module's
+`syntax`/`macro`/`syntax family` grammars into scope at the USE site. The HARD architectural piece —
+cross-module resolution (`import_source_env`/`module_slice_env`, `program.ex:699/799`) runs at
+ELABORATION, but macro expansion is at PARSE time, so imported-macro grammars need the PARSER to
+locate+parse imported modules (couples parser to import resolution).
+**Gate:** a DSL macro defined in module A, `use`d from B, expands + kernel-checks in B; a same-keyword
+grammar conflict across imports is a real diagnostic (not a raw parser error); full suite green.
+
+## 5.3 SP5.3 — Scope-set hygiene (was §7 "T7b")  ⟵ NON-OPTIONAL PREREQ FOR SP6 (promoted 2026-07-16)
+**Status:** promoted out of "deferred". Plan NOT written.
+**Scope:** replace string-gensym hygiene with Flatt's set-of-scopes model (uncopyable scope marks) and
+turn on automatic full hygiene (auto-rename every template binder, no annotation), keeping the
+`<capture>` escape hatch. Closes the two characterized gaps: (a) fresh-name = hole-name silent-drop
+(`<fresh e>` where `e` is also a hole drops the arg); (b) backtick-gensym spoofing (`` `g$0` `` as a
+use-site arg defeats string gensyms). These are exploitable-in-principle, not cosmetic.
+**Gate:** red fixtures reproducing both gaps now pass; auto-hygiene renames binders with no annotation;
+`<capture>` still binds into caller scope on demand; full suite green.
+
+---
+
 ## 6. SP6 — Tier 5 + concrete DSL libraries
-**Status:** not started. Depends on SP1–SP5 as each DSL requires. **LAST.**
+**Status:** not started. Depends on SP1–SP5 **and the non-optional SP5.1–5.3 prerequisites** as each
+DSL requires. **LAST of the core spine** (only SP9 is scheduled after it).
 **Scope (base §13):** module rules + raw holes (§13.1–.2), then the sibling DSL specs (`packet`,
 `board`, `driver`, `protocol`, `parse`, …) as libraries on the finished facility. Each DSL is its own
 small plan.
 
 ---
 
-## 7. Deferred SP1 enhancements (NOT gate-blocking; do when convenient)
-- **T9** — import scoping (§7) + two-pass name resolution (§6): cross-module macros. The HARD
-  architectural piece — cross-module resolution (`import_source_env`/`module_slice_env`,
-  `program.ex:699/799`) runs at ELABORATION, but macro expansion is at PARSE time, so imported-macro
-  grammars need the PARSER to locate+parse imported modules (couples parser to import resolution).
-- **T7b** — automatic full hygiene (auto-rename every template binder, no annotation) + fix the two
-  characterized `<fresh>` gaps: (a) fresh-name = hole-name silent-drop (`<fresh e>` where `e` is also
-  a hole silently drops the arg); (b) backtick-gensym spoofing (`` `g$0` `` as a use-site arg defeats
-  string gensyms — robust fix = Racket-style uncopyable scope marks). Plus the `<capture>` escape hatch.
-- **Parked:** Elm-style error rendering (`docs/superpowers/specs/2026-07-12-elm-style-error-rendering-PARKED.md`).
+## 6a. SP7–SP9 — first-class, OFF the SP6 critical path
+Unlike SP5.1–5.3 these do NOT gate SP6. Order by priority, not sequence. Full detail + gates in the
+program roadmap (`2026-07-12-macro-facility-program.md`, SP7–SP9).
+- **SP7 — Macro tooling** (stepper, expansion introspection, macro-aware errors). Startable NOW: rides
+  the landed `source_line`/`source_col` provenance channel (2026-07-15). Absorbs the former Parked
+  Elm-style error rendering. Highest adoption leverage per unit effort. `cure macro expand <file>`
+  step view + `--trace-macros` + use-site error rendering.
+- **SP8 — Composition soundness.** Extends SP3's generative proof from single-macro to macro∘macro
+  composition (build against `macros/2026-07-08-macro-composition-design.md`) + proven expansion
+  confluence/termination (today only fuel-bounded). Depends on SP3.
+- **SP9 — Type-directed (elaboration-time) macros.** A distinct macro KIND that sees the expected type
+  and emits into the elaborator (Lean 4 / Idris `%macro` posture) — overloaded literals, adaptive
+  `do`-notation, type-driven deriving. The deliberate LAST, high-ceiling bet, after the SP1–SP6
+  syntactic tier is proven. Depends on SP2 + reflection API (+ effect stack for `do`-notation).
+
+---
+
+## 7. Promoted out of "deferred" (2026-07-16)
+The three items formerly parked here as optional/deferred SP1 enhancements are now first-class
+non-optional sub-projects — see §5.1–5.3 and §6a above:
+- former **T9** (cross-module macros) → **SP5.2** (§5.2), a non-optional prerequisite for SP6.
+- former **T7b** (auto full hygiene + the two `<fresh>` gaps) → **SP5.3** (§5.3).
+- former **Parked** Elm-style error rendering → folded into **SP7** (§6a).
+No SP1 enhancements remain deferred.
 
 ---
 
 ## 8. DONE criterion + halt
-**DONE (cancel cron + notify):** all 6 sub-projects implemented, code-reviewed, full `mix test` green,
-with an end-to-end proof — a user-defined macro parses, expands, is generatively proven (full fuzz) to
-expand to well-typed Core, and its expansion runs. Then `CronDelete` the autopilot cron +
-`PushNotification` naming the final commit.
+**DONE (cancel cron + notify):** all core sub-projects through SP6 — SP1–SP6 plus the non-optional
+SP5.1–5.3 prerequisites — implemented, code-reviewed, full `mix test` green, with an end-to-end proof —
+a user-defined macro parses, expands, is generatively proven (full fuzz) to expand to well-typed Core,
+and its expansion runs. (SP7–SP9 are first-class follow-on, NOT part of this DONE bar: SP7/SP8
+recommended before the facility is called polished; SP9 is the horizon bet.) Then `CronDelete` the
+autopilot cron + `PushNotification` naming the final commit.
 **HALT:** hard blocker, a would-be `lib/cure/core/*` change, or a review loop hitting pass 15 without
 convergence → update the running state file with the blocker + what's needed, `PushNotification`, STOP.
 Never guess or accept an unconverged artifact.
@@ -264,12 +313,16 @@ Never guess or accept an unconverged artifact.
 ## 9. Ordering summary
 ```
 SP2 (finish): slice2 exec ▸ slice3 execution ▸ typed-record ▸ check…else fail ▸ WIRING ▸ Stage6  ⟵ NOW
-   └─▶ SP3 (generative proof)   ┐
-   └─▶ SP4 (reflection API)     ├─ fan out from SP2; order by priority
+   └─▶ SP3 (generative proof) ─────────────────────────▶ SP8 (composition soundness)
+   └─▶ SP4 (reflection API)     ┐ fan out from SP2; order by priority
    └─▶ SP5 (behaviour/lift ▸ Std.Otp ceiling)  ┘
-                                   └─▶ SP6 (Tier 5 + DSL libraries)   ⟵ LAST
-Deferred anytime: SP1 T9, SP1 T7b.
+         SP5.1 quasiquote          ┐
+         SP5.2 cross-module import  ├─ NON-OPTIONAL prereqs ─▶ SP6 (Tier 5 + DSL libraries)  ⟵ last of core spine
+         SP5.3 scope-set hygiene   ┘
+Off critical path: SP7 (tooling) — startable NOW ▸ SP9 (type-directed macros) — LAST.
 ```
 SP1→SP2 is the spine (SP2 nearly done). SP5 unblocks the `Std.Otp` ceiling; SP3 delivers the
-self-proving headline; SP4 unblocks the flagship reducers. One SP's full plan — red-green, gated,
-committed — before the next.
+self-proving headline; SP4 unblocks the flagship reducers. SP5.1–5.3 are non-optional prerequisites
+for SP6 (quasiquote authoring, cross-module distribution, non-spoofable hygiene). SP7 (tooling) rides
+the landed provenance channel and can start now; SP8 extends SP3; SP9 (type-directed macros) is the
+last, high-ceiling bet. One SP's full plan — red-green, gated, committed — before the next.

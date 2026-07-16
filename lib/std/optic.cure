@@ -23,6 +23,7 @@ mod Std.Optic
   use Std.Vector
   use Std.Sigma
   use Std.Option
+  use Std.List
 
   # ---- kinds --------------------------------------------------------------
 
@@ -151,6 +152,106 @@ mod Std.Optic
   ## is fixed by the later `x` argument, so it elaborates in checking mode.)
   fn set({s: Type}, {a: Type}, {k: OpticKind}, o: Optic(s, a, k), new: a, x: s) -> s =
     over(o, fn(ignored) -> new, x)
+
+  # ---- affine: constructor ------------------------------------------------
+
+  ## The extraction behind `affine`, factored out of the constructor lambda so its
+  ## `match` body is an ordinary function (a `match` directly inside the stored
+  ## lambda does not lower). `pre(x)` decides whether the focus is present; when it
+  ## is, the setter `fn(new) -> put(new)(x)` is closed over `x` exactly as `lens`
+  ## closes over its structure.
+  fn affine_ext({s: Type}, {a: Type}, pre: (s) -> Option(a), put: (a) -> (s) -> s, x: s) -> AffineRep(a, s) =
+    match pre(x)
+      Some(v) -> MkAffineRep(Some(MkLensRep(v, fn(new) -> put(new)(x))))
+      None() -> MkAffineRep(None())
+
+  ## Build an affine (zero-or-one focus) from a partial getter `pre : s -> Option(a)`
+  ## and a setter `put : a -> s -> s`. When `pre(x)` is `None`, `over`/`set` leave the
+  ## structure untouched and `preview` yields `None`; this is the total, statically-
+  ## kinded replacement for an `Access`-style "maybe this key exists" path.
+  fn affine({s: Type}, {a: Type}, pre: (s) -> Option(a), put: (a) -> (s) -> s) -> Optic(s, a, AffineKind) =
+    MkAffineO(MkAffineExt(fn(x) -> affine_ext(pre, put, x)))
+
+  # ---- to_list_of: collect every focus ------------------------------------
+
+  ## Every focus of an optic, in order, as an ordinary `List`. Total at every kind:
+  ## a lens yields a one-element list, an affine zero-or-one, a traversal the whole
+  ## `Vector` of foci flattened to a list. The kind-polymorphic counterpart to
+  ## `preview` (which keeps only the first).
+  fn to_list_of({s: Type}, {a: Type}, {k: OpticKind}, o: Optic(s, a, k), x: s) -> List(a) =
+    match o
+      MkLensO(le) -> match le
+        MkLensExt(f) -> match f(x)
+          MkLensRep(focus, rebuild) -> [focus]
+      MkAffineO(ae) -> match ae
+        MkAffineExt(f) -> match f(x)
+          MkAffineRep(opt) -> match opt
+            Some(lr) -> match lr
+              MkLensRep(focus, rebuild) -> [focus]
+            None() -> []
+      MkTravO(te) -> match te
+        MkTravExt(f) -> match f(x)
+          MkTravRep(sig) -> match sig
+            mk_pair(n, rest) -> match rest
+              mk_pair(v, rebuild) -> Std.Vector.to_list(v)
+
+  # ---- composition --------------------------------------------------------
+
+  ## The extraction behind `compose_lens`, factored out of the constructor lambda
+  ## (a `match` directly inside the stored lambda does not lower, exactly as in
+  ## `affine_ext`). Reads the outer lens at `x` to get focus `fa : a` and rebuilder
+  ## `ra : a -> s`, then the inner lens at `fa` to get `fb : b` and `rb : b -> a`;
+  ## the composed rebuilder threads a new `b` back through both, `ra(rb(new))`.
+  fn compose_lens_ext({s: Type}, {a: Type}, {b: Type}, o1: Optic(s, a, LensKind), o2: Optic(a, b, LensKind), x: s) -> LensRep(b, s) =
+    match o1
+      MkLensO(le1) -> match le1
+        MkLensExt(f1) -> match f1(x)
+          MkLensRep(fa, ra) -> match o2
+            MkLensO(le2) -> match le2
+              MkLensExt(f2) -> match f2(fa)
+                MkLensRep(fb, rb) -> MkLensRep(fb, fn(new) -> ra(rb(new)))
+
+  ## Compose two lenses into a lens focusing `b` inside `s` through the intermediate
+  ## `a`. `view` reads through both; `set`/`over` rebuild through both. Composing a
+  ## lens with a lens keeps a lens (`join(LensKind, LensKind) = LensKind`), so the
+  ## result is again total — the composability that makes optics worth the GADT.
+  fn compose_lens({s: Type}, {a: Type}, {b: Type}, o1: Optic(s, a, LensKind), o2: Optic(a, b, LensKind)) -> Optic(s, b, LensKind) =
+    MkLensO(MkLensExt(fn(x) -> compose_lens_ext(o1, o2, x)))
+
+  ## The extraction behind `compose_affine`. The focus is present only if BOTH the
+  ## outer affine finds an `a` in `x` AND the inner affine finds a `b` in that `a`;
+  ## any `None` short-circuits to `None`. When both hit, the rebuilder threads a new
+  ## `b` back through both, `ra(rb(new))`, exactly as the lens case.
+  fn compose_affine_ext({s: Type}, {a: Type}, {b: Type}, o1: Optic(s, a, AffineKind), o2: Optic(a, b, AffineKind), x: s) -> AffineRep(b, s) =
+    match o1
+      MkAffineO(ae1) -> match ae1
+        MkAffineExt(f1) -> match f1(x)
+          MkAffineRep(opt1) -> match opt1
+            Some(lr1) -> match lr1
+              MkLensRep(fa, ra) -> match o2
+                MkAffineO(ae2) -> match ae2
+                  MkAffineExt(f2) -> match f2(fa)
+                    MkAffineRep(opt2) -> match opt2
+                      Some(lr2) -> match lr2
+                        MkLensRep(fb, rb) -> MkAffineRep(Some(MkLensRep(fb, fn(new) -> ra(rb(new)))))
+                      None() -> MkAffineRep(None())
+            None() -> MkAffineRep(None())
+
+  ## Compose two affines. `join(AffineKind, AffineKind) = AffineKind`, so the result
+  ## is again an affine: it focuses `b` inside `s` when both partial steps succeed,
+  ## and `preview`/`set` treat a miss at either step as "no focus" (leaving `s`
+  ## untouched under `set`). The zero-or-one analogue of `compose_lens`.
+  fn compose_affine({s: Type}, {a: Type}, {b: Type}, o1: Optic(s, a, AffineKind), o2: Optic(a, b, AffineKind)) -> Optic(s, b, AffineKind) =
+    MkAffineO(MkAffineExt(fn(x) -> compose_affine_ext(o1, o2, x)))
+
+  # NOTE traversal composition (`compose_trav`) and the fully kind-polymorphic
+  # `compose : Optic(s,a,k1) -> Optic(a,b,k2) -> Optic(s,b,join(k1,k2))` are
+  # deferred. Traversal composition must append the two focus `Vector`s and split
+  # the combined rebuild count back apart — that needs the same `plus`-normalizing
+  # coverage the deferred `Vector.take`/`drop` need (see vector.cure). The general
+  # `compose` additionally needs kind coercions (a lens used where an affine is
+  # expected, etc.) so every one of `join`'s nine branches lands at the computed
+  # result kind. Both unblock after the Lean-shape matching work.
 
   ## Common tuple lenses exposed through the `lens` syntax macro. The macro is
   ## only surface sugar; these are ordinary typed Std.Optic functions.

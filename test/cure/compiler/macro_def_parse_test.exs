@@ -65,6 +65,139 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert rule.contextual
   end
 
+  test "a syntax family records typed sections and cardinality" do
+    node =
+      parse!("""
+      macro ActorContainers
+        syntax family ActorDefinition
+          state Type
+          optional messages Type
+          repeated route Route
+          one_or_more dependency ModuleName
+      """)
+
+    assert {:macro_def, _meta, [family]} = node
+    assert family.kind == :syntax_family
+    assert family.name == "ActorDefinition"
+
+    assert Enum.map(family.fields, &{&1.name, &1.shape, &1.cardinality}) == [
+             {"state", "Type", :required},
+             {"messages", "Type", :optional},
+             {"route", "Route", :repeated},
+             {"dependency", "ModuleName", :one_or_more}
+           ]
+  end
+
+  test "a structured macro header records accepts and expands with" do
+    node =
+      parse!("""
+      macro actor <name: ModuleName>
+        syntax family ActorDefinition
+          state Type
+        accepts ActorDefinition
+        expands with derive_actor
+      """)
+
+    assert {:macro_def, meta, [family, accepts, expands]} = node
+
+    assert family.kind == :syntax_family
+    assert family.name == "ActorDefinition"
+
+    assert Keyword.get(meta, :leading_segments) == [
+             {:hole, %{name: "name", kind: "ModuleName", line: 1}}
+           ]
+
+    assert accepts.kind == :accepts
+    assert accepts.family == "ActorDefinition"
+    assert expands.kind == :expands_with
+    assert {:variable, _, "derive_actor"} = expands.expander
+  end
+
+  test "a family may include another family" do
+    node =
+      parse!("""
+      macro Service <name: ModuleName>
+        syntax family Common
+          state Type
+        syntax family ServiceDefinition
+          includes Common
+          optional timeout Int
+        accepts ServiceDefinition
+        expands with derive_service
+      """)
+
+    assert {:macro_def, _meta, [common, family, accepts, expands]} = node
+    assert common.name == "Common"
+    assert family.includes == [{"Common", 5, 5}]
+    assert accepts.family == "ServiceDefinition"
+    assert {:variable, _, "derive_service"} = expands.expander
+  end
+
+  test "family composition rejects unknown included families" do
+    {:ok, tokens} =
+      Lexer.tokenize(
+        """
+        macro Bad
+          syntax family Service
+            includes Missing
+            state Type
+          accepts Service
+          expands with build
+        """,
+        emit_events: false
+      )
+
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    assert Enum.any?(errors, fn
+             {:invalid_macro_family, {:unknown_syntax_family, "Missing"}, _, _} -> true
+             _ -> false
+           end)
+  end
+
+  test "family composition rejects cycles" do
+    {:ok, tokens} =
+      Lexer.tokenize(
+        """
+        macro Bad
+          syntax family First
+            includes Second
+          syntax family Second
+            includes First
+          accepts First
+          expands with build
+        """,
+        emit_events: false
+      )
+
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    assert Enum.any?(errors, fn
+             {:invalid_macro_family, {:syntax_family_cycle, ["First", "Second", "First"]}, _, _} -> true
+             _ -> false
+           end)
+  end
+
+  test "a structured macro rejects duplicate family fields" do
+    {:ok, tokens} =
+      Lexer.tokenize(
+        """
+        macro Actor
+          syntax family Definition
+            state Type
+            state Type
+        """,
+        emit_events: false
+      )
+
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false, prelude_macros: false)
+
+    assert Enum.any?(errors, fn
+             {:invalid_macro_family, {:duplicate_syntax_family_field, [{"Definition", "state"}]}, _, _} -> true
+             _ -> false
+           end)
+  end
+
   test "an open category and qualified category extension are retained" do
     node =
       parse!(

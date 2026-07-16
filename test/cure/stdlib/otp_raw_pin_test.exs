@@ -42,7 +42,9 @@ defmodule Cure.Stdlib.OtpRawPinTest do
     "raw_statem_start_link" => "Effect(Tuple)",
     "raw_statem_start_link_unnamed" => "Effect(Tuple)",
     "raw_supervisor_start_link" => "Effect(Tuple)",
-    "raw_term" => "RawTerm"
+    "raw_term" => "RawTerm",
+    # `:gen.reply/2` returns the atom `:ok` after delivering the reply.
+    "raw_reply" => "Effect(Atom)"
   }
 
   defp declarations do

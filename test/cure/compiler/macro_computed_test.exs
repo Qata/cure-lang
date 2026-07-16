@@ -44,6 +44,7 @@ defmodule Cure.Compiler.MacroComputedTest do
               syntax_type: "MkSyntax",
               syntax_fields: [],
               syntax_repeated_fields: [],
+              syntax_field_types: %{},
               line: _,
               col: _
             ], _} =
@@ -109,6 +110,7 @@ defmodule Cure.Compiler.MacroComputedTest do
               syntax_type: "MkSyntax",
               syntax_fields: [],
               syntax_repeated_fields: [],
+              syntax_field_types: %{},
               line: _,
               col: _
             ], [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
