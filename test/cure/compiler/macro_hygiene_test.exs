@@ -452,4 +452,43 @@ defmodule Cure.Compiler.MacroHygieneTest do
     assert a_ref == a_binder
     refute find_fresh(body)
   end
+
+  test "a gensym-shaped name lexes as a single identifier token" do
+    # Auto-hygiene mints binder names of the form `base$<counter>`. For the
+    # expanded corpus to survive a print->reparse round-trip, such a name must
+    # lex back as ONE identifier (not `base`, then an unexpected `$`). `$` is a
+    # continuation-only char: it may not *start* an identifier.
+    {:ok, [tok | rest]} = Lexer.tokenize("initial$0", emit_events: false)
+    assert {:identifier, "initial$0"} = {tok.type, tok.value}
+    # only the trailing EOF remains
+    assert Enum.all?(rest, &(&1.type == :eof))
+
+    # A leading `$` is still not a valid identifier start.
+    assert {:error, {:unexpected_character, ?$, _, _}} = Lexer.tokenize("$oops", emit_events: false)
+  end
+
+  test "an expanded template with an auto-freshened fn-def param prints and reparses" do
+    # This is the corpus-totality scenario in miniature: an OTP-style macro whose
+    # template is a single-clause fn-def with an unannotated `initial` param that
+    # is also used in the body. Auto-hygiene freshens `initial` -> `initial$N` in
+    # both positions; the printed program must reparse (gensym round-trips).
+    src =
+      "mod M\n  macro Mk\n    syntax mk becomes fn start_link(initial: Int) -> Int = id(initial)\n  fn f() -> Int = mk\n"
+
+    {:ok, ast} = parse(src)
+
+    # `f`'s body IS the expanded start_link fn-def (a nested function_def).
+    sl = fn_body(ast, "f")
+    assert {:function_def, sl_meta, [call]} = sl
+    # both the param binder and its use in the body were freshened to `initial$N`
+    assert [{:param, _, pbinder}] = Keyword.fetch!(sl_meta, :params)
+    assert String.contains?(pbinder, "$")
+    assert {:function_call, _, [{:variable, _, arg} | _]} = call
+    assert arg == pbinder
+
+    # print -> reparse is total (would raise :unexpected_character before the fix)
+    out = Cure.Compiler.Printer.quoted_to_string(ast)
+    assert {:ok, toks2} = Lexer.tokenize(out, emit_events: false)
+    assert {:ok, _ast2} = Parser.parse(toks2, emit_events: false)
+  end
 end
