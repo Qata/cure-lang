@@ -131,10 +131,43 @@ Both converge on the same relevance fix (convoy arg scaled by the branch grade, 
 ω) + making the sibling-binding λ carry the sibling's real grade. Option 2 also
 removes the `λprf` ω-scale entirely, so it is the likely target.
 
+## RESOLUTION — obligation (1) DISCHARGED (roadblock #2b sidestepped, not needed)
+
+Roadblock #2b is real but it is NOT on the critical path. Obligation (1) is
+expressible today by **splitting the two concerns** so no linear sibling is ever in
+scope during a `match` (no convoy):
+
+- `handle(r) -> ReplyOf(r)` — the per-constructor dependent reply VALUE (the spike1
+  shape; the `match` lives here, with no capability in scope).
+- `reply({r}, cap :linear ReplyCap(r), v: ReplyOf(r))` — the linear reply rule.
+- `serve(r, cap) = reply(cap, handle(r))` — compose with `r` ABSTRACT, so
+  `ReplyOf(r)` is definitionally itself and unifies with `handle(r)`'s type; the
+  capability is used exactly once.
+
+`spike10_split.cure` ACCEPTS. The three negative controls all REJECT:
+`neg1_wrong_reply` (`:index_mismatch` — value not `ReplyOf(r)`), `neg2_drop_cap`
+(`used :erased`), `neg3_dup_cap` (`used :unrestricted`). So the type rule genuinely
+CONSTRAINS: a well-typed reply preserves the request's reply type and consumes the
+capability exactly once.
+
+**Trust anchor.** The `test/oracle/otp/` cluster mirrors the positive + three
+negatives in Cure and Idris 2; `mix cure.oracle otp` reports `rel=same` on all four
+(accept/accept, reject/reject ×3). Idris 2 has the same `1 x : T` multiplicity and
+large elimination, so agreement localizes trust.
+
+**Deliverable.** `lib/std/otp_proof.cure` (`Std.Otp.Proof`) — kernel-checked,
+totality-certified, compiled into the stdlib every build. `raw_call`'s docstring in
+`lib/std/otp_raw.cure` now points at it.
+
+Roadblock #2b (linearity-preserving sibling refinement so the ERGONOMIC branching
+handler `with r … reply(cap, …) per branch` type-checks) remains reach-pinned for a
+future slice — it improves authoring nicety, not expressiveness. Root cause + two
+sound design options are recorded above.
+
 ## Next step
 
-Implement roadblock #2b: linearity-preserving dependent sibling refinement. This is
-soundness-critical relevance.ex + elaborator work — do it red-green WITH the full
-Antigen suite and negative controls (a duplicated/dropped linear sibling must still
-reject through the convoy path). Then obligation (1) elaborates via `with r`.
-Obligation (2) (F-1 send-safety) is untouched and independent.
+Obligation (2) — send-safety for a clause-DERIVED pid message index (F-1). Prove a
+well-typed `send(p, m)` can only deliver a message the actor has a clause for, when
+the index is derived from the handler clauses rather than annotated (NVLang's
+`Extract-Msg`/`T-Spawn` give the annotated-index recipe; the delta is derivation).
+Independent of obligations (1) and #2b.
