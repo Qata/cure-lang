@@ -1210,7 +1210,26 @@ defmodule Cure.Core.Kernel do
       |> Enum.map(&subst_params(&1, pmap, 0))
       |> Enum.zip(scrut_indices)
       |> Enum.map(fn {r, s_val} ->
-        {r, s_val |> Quote.reify(outer_depth) |> Term.shift(arity, 0)}
+        # Coverage/branch-typing is up to DEFINITIONAL EQUALITY: unify the ctor's
+        # index `r` against the NORMAL FORM of the scrutinee's index, not its
+        # stuck form. A dependent sibling refined per branch (via `with`) can
+        # present its index as a stuck neutral — `plus(S(k), m)` rather than
+        # `S(plus(k, m))` — and unifying `Z` (an impossible branch's index)
+        # against that stuck `plus(...)` fails to refute it, keeping a branch the
+        # eliminator legitimately omits and rejecting a total function as
+        # non-exhaustive. Normalizing strengthens the refutation (a reducible
+        # index gains its constructor head) and never weakens it (an already-nf
+        # or genuinely-stuck index is unchanged). `nf` in the outer frame, then
+        # shift into the ctor frame. Fail-safe on fuel exhaustion.
+        s_term = Quote.reify(s_val, outer_depth)
+
+        s_norm =
+          case Normalise.nf(ctx, s_term) do
+            :fuel_exhausted -> s_term
+            nf -> nf
+          end
+
+        {r, Term.shift(s_norm, arity, 0)}
       end)
       |> reduce_index_pairs(%{}, arity)
     end
