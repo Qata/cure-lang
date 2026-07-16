@@ -146,4 +146,81 @@ defmodule Cure.Compiler.MacroHygieneTest do
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert apply(module, :f, [7]) == {7, 100}
   end
+
+  # ---------------------------------------------------------------------------
+  # SP5.3 auto full hygiene — auto-rename EVERY unannotated ordinary template
+  # binder (no <fresh> needed), keeping <capture> as the opt-out. These fixtures
+  # are RED until the scope-aware walk (Task 3) lands; they assert on expanded
+  # output. Binder-shape ground-truth is locked in sp53_binder_shapes_test.exs.
+  # ---------------------------------------------------------------------------
+
+  test "auto-hygiene: an unannotated let binder is freshened so it cannot capture use-site material" do
+    # Template introduces `let acc` with NO <fresh>. The use-site passes its own
+    # `acc` (the param) as the hole `e`. Auto-hygiene must gensym the template
+    # binder so the hole's `acc` is NOT captured by the template's `let`.
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Acc\n    syntax m <e: Code> becomes let acc = 0 in e + acc\n  fn f(acc: Int) -> Int = m acc\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:block, _, [assign, plus]} = body
+    {:assignment, _, [{:variable, _, binder}, _]} = assign
+    {:binary_op, _, [{:variable, _, hole_ref}, {:variable, _, tmpl_ref}]} = plus
+
+    # the unannotated template binder was auto-freshened away from "acc"
+    refute binder == "acc"
+    # the hole material (use-site param `acc`) is preserved, NOT captured
+    assert hole_ref == "acc"
+    # the template's own reference `acc` tracks the freshened binder
+    assert tmpl_ref == binder
+    refute find_fresh(body)
+  end
+
+  test "auto-hygiene: nested let..in shadowing gives each binder a distinct fresh name" do
+    # `let x = 1 in let x = 2 in x`: the trailing `x` binds to the INNER `let`.
+    # Auto-hygiene must gensym both binders to DISTINCT names and point the
+    # trailing reference at the inner one (correct shadowing under freshening).
+    {:ok, ast} =
+      parse("mod M\n  macro S\n    syntax s becomes let x = 1 in let x = 2 in x\n  fn f() -> Int = s\n")
+
+    body = fn_body(ast, "f")
+    {:block, _, [outer_assign, inner_block]} = body
+    {:assignment, _, [{:variable, _, outer_b}, _]} = outer_assign
+    {:block, _, [inner_assign, {:variable, _, tail}]} = inner_block
+    {:assignment, _, [{:variable, _, inner_b}, _]} = inner_assign
+
+    refute outer_b == "x"
+    refute inner_b == "x"
+    # the two binders are freshened to distinct gensyms (no cross-binding)
+    refute outer_b == inner_b
+    # the trailing `x` tracks the INNER binder, honoring shadowing
+    assert tail == inner_b
+  end
+
+  test "auto-hygiene: constructor-pattern destructuring let freshens the LHS leaf, not the RHS" do
+    # `let Some(x) = src() in e + x`: the pattern binder `x` (LHS leaf) is a
+    # template binder; the RHS `src()` and the hole `e` are use-site/free material.
+    # Auto-hygiene must freshen the LHS `x` (and the template's `+ x` reference)
+    # while leaving the hole `x` (use-site) and the RHS `src()` untouched.
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Dbl\n    syntax dbl <e: Code> becomes let Some(x) = src() in e + x\n  fn f(x: Int) -> Int = dbl x\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:block, _, [assign, plus]} = body
+    {:assignment, _, [lhs, rhs]} = assign
+    {:function_call, _, [{:variable, _, binder}]} = lhs
+    {:binary_op, _, [{:variable, _, hole_ref}, {:variable, _, tmpl_ref}]} = plus
+
+    # the pattern binder `x` (LHS leaf) is auto-freshened away from "x"
+    refute binder == "x"
+    # the hole `x` (use-site material) is preserved, NOT captured
+    assert hole_ref == "x"
+    # the template's own `+ x` reference tracks the freshened binder
+    assert tmpl_ref == binder
+    # the RHS `src()` is left entirely untouched (still a bare call, no args)
+    assert {:function_call, _, []} = rhs
+  end
 end
