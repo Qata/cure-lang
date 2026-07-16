@@ -41,24 +41,29 @@ Diff scope (code): `lib/cure/compiler/parser.ex` (+7), `lib/std/actor.cure`
 immutable behavioral test — "structured actor threads a body declaration into
 the generated module"). 3 files.
 
-## Full-suite verification (run once)
+## Full-suite verification
 
-`mix test` → **4262/4264 passed, 1 skipped, 2 failures**. Both failures are
-pre-existing and unrelated to this run's diff:
+**Final state (after merging `feature/idris-parity`, merge commit `78c3455a`):**
+`mix test` → **4306 passed, 1 skipped, 0 failures** (Antigen shape-coverage
+318/318; 156 expected immune responses). Fully green.
+
+At the end of the autopilot run itself (before the merge) the suite showed
+**4262/4264 passed, 1 skipped, 2 failures**, both classified pre-existing and
+unrelated to this run's diff — and **both were subsequently resolved by the
+`feature/idris-parity` merge**, confirming neither was a regression from this
+run:
 
 1. **`Cure.Migrate.MonotonePropertyTest` — non-monotone on `lib/std/actor.cure`.**
    Classified empirically: reverting `lib/std/actor.cure` to baseline
-   `53b63996` and re-running the monotone test **still fails identically**. The
-   migration Printer does not round-trip the pre-existing `quote`/`$()` sites in
-   `actor.cure` to a fixpoint (the `90612376` printer fix stopped it *raising*
-   but did not make the round-trip idempotent). Standing migration-facility gap,
-   not caused by Task 1/2/3. The additive parser clause is inert on baseline
-   `actor.cure`, which has no `Declarations` family field.
+   `53b63996` and re-running the monotone test **still failed identically**, so
+   the pre-existing `quote`/`$()` sites — not Task 1/2/3 — were the cause. The
+   `feature/idris-parity` printer fixes (+74 lines in
+   `lib/cure/compiler/printer.ex`) make the round-trip idempotent; the test now
+   passes.
 
 2. **`Cure.Elab.UnionTest` — `:"Cure.Std.Map".get/2 is undefined or private`.**
-   The diff touches nothing near `Std.Map` or union elaboration. Pre-existing.
-
-Neither is a regression introduced by this run.
+   The diff touched nothing near `Std.Map`/union elaboration; resolved by the
+   idris-parity work brought in by the merge.
 
 ## Deferred (NOT in this run — future stages)
 
@@ -69,13 +74,14 @@ Neither is a regression introduced by this run.
   `application` macros.
 - **Stage 3** — typed Tier-3 elaborator (Lean-style MetaM direction).
 
-## Follow-up worth filing (independent of this branch)
+## Post-run merge
 
-The migration facility's monotone law is red for `actor.cure` because `quote`/
-`$()` nodes don't reprint to a fixpoint. Worth a dedicated red-test-first fix in
-`Cure.Compiler.Printer` / `Trivia` — out of scope for the actor consolidation.
+`feature/idris-parity` was merged into this branch (`78c3455a`, ghost-authored,
+no conflicts) to pick up its `printer.ex` fixes. The merge left `actor.cure`
+untouched, so the Stage-1 actor work is intact, and it brought the tree to
+**0 failures** (see Full-suite verification above).
 
 ## Next action for the operator
 
-Review and merge `autopilot/actor-macro-consolidation`. The two full-suite
-failures are pre-existing on the baseline and are **not** expected to be green.
+Review and merge `autopilot/actor-macro-consolidation`. The tree is fully green
+(0 failures) after the `feature/idris-parity` merge.
