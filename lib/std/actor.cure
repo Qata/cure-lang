@@ -12,17 +12,27 @@ mod Std.Actor
       optional messages Type
       optional initial Expression
       optional init Code
-      on_cast Cases
+      optional on_cast Cases
       optional on_call Cases
       optional on_info Cases
+      optional handle_cast Code
+      optional handle_info Code
       optional terminate Code
       optional code_change Code
       optional body Declarations
     accepts ActorDefinition
     expands with derive_actor_family
 
-  fn derive_actor_family(name: ModuleNameSyntax, definition: ActorDefinitionSyntax) -> Syntax =
-    let body = Node(:pattern_match, [], [variable("message") | children(definition.on_cast)])
+  fn derive_actor_family(name: ModuleNameSyntax, definition: ActorDefinitionSyntax) -> Syntax = match definition.on_cast
+    None() -> derive_actor_family_raw(name, definition)
+    Some(cast_cases) -> derive_actor_family_cases(name, definition, cast_cases)
+
+  ## The derived (Cases) branch of the family: `on_cast` arms are reflected into
+  ## a message type and each arm body is wrapped in the GenServer `:noreply`
+  ## result. Byte-identical to the pre-1e emitter — this path feeds the
+  ## GDerived/GStructuredCall/GLifecycle byte-identical goldens.
+  fn derive_actor_family_cases(name: ModuleNameSyntax, definition: ActorDefinitionSyntax, cast_cases: Syntax) -> Syntax =
+    let body = Node(:pattern_match, [], [variable("message") | children(cast_cases)])
     let call_body = match definition.on_call
       None() -> Raw(SOpaque)
       Some(value) -> Node(:pattern_match, [], [variable("request") | children(value)])
@@ -57,6 +67,38 @@ mod Std.Actor
           NoCall -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, info_body, terminate_body, code_change_body, heads, extra_declarations)
           InvalidCall(reason) -> Failure(reason, [])
           CallContract(request_heads, reply_type) -> emit_actor_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, heads, request_heads, reply_type, extra_declarations)
+
+  ## The Tier-0 raw branch of the family: `handle_cast`/`handle_info` bodies are
+  ## full GenServer callback results spliced verbatim (no `:noreply` wrapping,
+  ## no message-type derivation). Value-equality dispatch, `pickup`/`else`, and
+  ## guards that the Cases surface cannot express live here. All raw positional
+  ## rules can funnel into this one emitter instead of re-spelling a module.
+  fn derive_actor_family_raw(name: ModuleNameSyntax, definition: ActorDefinitionSyntax) -> Syntax =
+    let name_syntax: Syntax = name
+    let module_name: SynLit = match name_syntax
+      Leaf(_, _, SAtom(value)) -> SAtom(value)
+      _ -> SStr("Cure.Generated.Actor")
+    let module_expr: Syntax = match name_syntax
+      Leaf(_, _, SAtom(value)) -> atom_literal(value)
+      _ -> atom_literal(:generated_actor)
+    let init_spec = derive_actor_init(definition.state, definition.initial, definition.init)
+    let extra_declarations = optional_declarations(definition.body)
+    let cast_body = match definition.handle_cast
+      None() -> quote %[:noreply, state]
+      Some(value) -> value
+    let info_body = match definition.handle_info
+      None() -> Raw(SOpaque)
+      Some(value) -> value
+    let terminate_body = match definition.terminate
+      None() -> Raw(SOpaque)
+      Some(value) -> value
+    let code_change_body = match definition.code_change
+      None() -> Raw(SOpaque)
+      Some(value) -> value
+    let message_type = match definition.messages
+      None() -> variable("m")
+      Some(value) -> value
+    emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, [], cast_body, info_body, terminate_body, code_change_body, [], extra_declarations)
 
   fn actor_info_handler(info_body: Syntax) -> Syntax = match tag(info_body) == :raw
     true -> quote %[:noreply, state]
@@ -312,7 +354,7 @@ mod Std.Actor
     let on_call = match input.call_body
       Raw(_) -> None()
       value -> Some(derive_cases(value))
-    let definition = ActorDefinitionSyntax{state: input.state_type, messages: None(), initial: None(), init: None(), on_cast: derive_cases(input.cast_body), on_call: on_call, on_info: None(), terminate: None(), code_change: None(), body: None()}
+    let definition = ActorDefinitionSyntax{state: input.state_type, messages: None(), initial: None(), init: None(), on_cast: Some(derive_cases(input.cast_body)), on_call: on_call, on_info: None(), handle_cast: None(), handle_info: None(), terminate: None(), code_change: None(), body: None()}
     derive_actor_family(input.name, definition)
 
   fn derive_cases(body: Syntax) -> Syntax = match children(body)

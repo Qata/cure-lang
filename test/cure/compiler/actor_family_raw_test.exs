@@ -1,0 +1,51 @@
+defmodule Cure.Compiler.ActorFamilyRawTest do
+  use ExUnit.Case, async: false
+
+  # §1e Mechanism A: the ActorDefinition family gains a raw-body branch — an
+  # alternative to the `on_cast` Cases branch. A raw `handle_cast` body is a
+  # full GenServer callback result (e.g. `%[:noreply, state]` or a `pickup`
+  # dispatch) spliced verbatim, NOT a set of Cases arms wrapped in `:noreply`.
+  # This lets the ONE family host both the derived (Cases) surface and the
+  # Tier-0 raw surface, so the 15 positional raw templates can share the
+  # family's single emitter instead of each re-spelling a full module.
+
+  test "family actor accepts a raw handle_cast body with an explicit message type" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyCast
+        state Int
+        messages Atom
+        handle_cast
+          %[:noreply, state]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert apply(:"Cure.Generated.RawFamilyCast", :handle_cast, [:ping, 7]) == {:noreply, 7}
+    assert apply(:"Cure.Generated.RawFamilyCast", :init, [3]) == {:ok, 3}
+    assert {:ok, pid} = apply(:"Cure.Generated.RawFamilyCast", :start_link, [5])
+    assert :gen_server.cast(pid, :ping) == :ok
+    :gen_server.stop(pid)
+  end
+
+  test "family raw handle_cast body may branch on the message with pickup" do
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyPickup
+        state Int
+        messages Atom
+        handle_cast
+          pickup
+            message == :inc -> %[:noreply, state + 1]
+            else -> %[:noreply, state]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyPickup", :handle_cast, [:inc, 4]) == {:noreply, 5}
+    assert apply(:"Cure.Generated.RawFamilyPickup", :handle_cast, [:other, 4]) == {:noreply, 4}
+  end
+end
