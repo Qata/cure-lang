@@ -405,6 +405,30 @@ defmodule Cure.Compiler.MacroHygieneTest do
     assert {:variable, _, "arg"} = callback.body
   end
 
+  test "auto-hygiene: a comprehension generator binder (reverse-scope) is freshened over the earlier-sibling body" do
+    # `[x + e for x <- xs]` invoked `cmp x`: the hole `e` carries the use-site `x`.
+    # The generator binds `x`, scoping the comprehension BODY — an EARLIER sibling
+    # (reverse scope). Auto-hygiene must freshen the generator pattern binder AND
+    # the body reference `x`, leaving the collection `xs` and the hole `e` (→ `x`).
+    {:ok, ast} =
+      parse(
+        "mod M\n  macro Cmp\n    syntax cmp <e: Code> becomes [x + e for x <- xs]\n  fn f(x: Int) -> Int = cmp x\n"
+      )
+
+    body = fn_body(ast, "f")
+    {:comprehension, _, [{:binary_op, _, [{:variable, _, body_ref}, {:variable, _, hole_ref}]}, generator]} = body
+    {:generator, _, [{:variable, _, binder}, {:variable, _, collection}]} = generator
+
+    # the generator pattern binder is auto-freshened away from "x"
+    refute binder == "x"
+    # the earlier-sibling body reference tracks the freshened binder (reverse scope)
+    assert body_ref == binder
+    # the hole `e` (use-site `x`) is preserved, NOT captured by the generator
+    assert hole_ref == "x"
+    # the collection `xs` is a free reference, left untouched
+    assert collection == "xs"
+  end
+
   test "auto-hygiene reconciled with <fresh>: an explicit marker and an auto-discovered binder do not cross-bind" do
     # A template mixing an explicit `<fresh h>` binder with an auto-discovered
     # `let a` binder: each is freshened to its OWN distinct gensym, and each

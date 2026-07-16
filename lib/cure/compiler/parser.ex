@@ -1267,7 +1267,13 @@ defmodule Cure.Compiler.Parser do
   # markers and, for templates, plain references of those names. Counter lives
   # in parser state so gensyms are stable within a build (design §5) and unique
   # across use-sites.
-  defp freshen(template, state, rewrite_plain?, bindings \\ %{}) do
+  defp freshen(template, state, rewrite_plain?, bindings \\ %{})
+
+  # Computed-macro path (`freshen_generated`, rewrite_plain? = false): rewrite
+  # ONLY explicit `<fresh Name>` markers to gensyms; reflected plain variables are
+  # left untouched (they are reflected use-site data, not template binders). This
+  # is the flat, marker-only pass — auto-hygiene does NOT apply to generated ASTs.
+  defp freshen(template, state, false, bindings) do
     names = collect_fresh_names(template) |> MapSet.to_list() |> Enum.sort()
     used = collect_used_names(bindings)
 
@@ -1277,8 +1283,20 @@ defmodule Cure.Compiler.Parser do
         {Map.put(m, n, gensym), s}
       end)
 
+    {apply_freshening(template, rename), state}
+  end
+
+  # Template path (Tier-2 `becomes`, rewrite_plain? = true): SP5.3 auto full
+  # hygiene. A scope-aware walk auto-renames EVERY unannotated ordinary binder
+  # (`let`/pattern/lambda/fn-def/comprehension), plus explicit `<fresh>` markers,
+  # threading a per-scope rename map so shadowing re-mints and references track
+  # their binder. `<capture Name>` binders opt OUT (bind into caller scope). Holes
+  # are never renamed (use-site material, substituted afterwards). Maps are never
+  # walked, keeping the OTP lift-module OUT set a no-op (design §4).
+  defp freshen(template, state, true, bindings) do
     holes = MapSet.new(Map.keys(bindings))
-    {apply_freshening(template, rename, rewrite_plain?, holes), state}
+    used = collect_used_names(bindings)
+    scoped_freshen(template, %{}, holes, used, state)
   end
 
   # Mint "n$<counter>", advancing the state counter on each attempt, and skip any
@@ -1372,54 +1390,303 @@ defmodule Cure.Compiler.Parser do
 
   defp collect_fresh_names_value(_), do: MapSet.new()
 
-  # Rewrite: a `<fresh N>` MARKER always becomes a variable of its gensym (it is a
-  # template-introduced binder). A PLAIN variable whose name is a declared fresh
-  # name becomes its gensym too (a reference to that binder) — UNLESS the name is
-  # also a hole, in which case it is use-site material about to be substituted and
-  # must be left untouched (freshening it would swallow the argument). Everything
-  # else recurses (children AND meta, mirroring subst_holes).
-  defp apply_freshening({:fresh_name, meta, name}, rename, _rewrite_plain?, _holes),
+  # Marker-only rewrite (computed path): a `<fresh N>` MARKER becomes a variable of
+  # its gensym (a template-introduced binder). Plain variables are left untouched —
+  # in the generated-AST path they are reflected use-site data, never template
+  # binders. Everything else recurses (children AND meta, mirroring subst_holes).
+  defp apply_freshening({:fresh_name, meta, name}, rename),
     do: {:variable, meta, Map.get(rename, name, name)}
 
   # A quoted syntax value is data, not part of the generated program being
   # hygienized. Keep its inner representation available to the next macro
   # stage unchanged, matching MacroExpand's quote boundary.
-  defp apply_freshening({:quoted_syntax, _meta, _children} = quoted, _rename, _rewrite_plain?, _holes),
-    do: quoted
+  defp apply_freshening({:quoted_syntax, _meta, _children} = quoted, _rename), do: quoted
 
-  defp apply_freshening({:variable, _meta, _name} = v, _rename, false, _holes), do: v
+  defp apply_freshening({:variable, _meta, _name} = v, _rename), do: v
 
-  defp apply_freshening({:variable, meta, name} = v, rename, true, holes) do
-    cond do
-      MapSet.member?(holes, name) -> v
-      Map.has_key?(rename, name) -> {:variable, meta, Map.fetch!(rename, name)}
-      true -> v
-    end
-  end
+  defp apply_freshening({t, meta, ch}, rename) when is_list(ch),
+    do: {t, apply_freshening_meta(meta, rename), Enum.map(ch, &apply_freshening(&1, rename))}
 
-  defp apply_freshening({t, meta, ch}, rename, rewrite_plain?, holes) when is_list(ch),
-    do:
-      {t, apply_freshening_meta(meta, rename, rewrite_plain?, holes),
-       Enum.map(ch, &apply_freshening(&1, rename, rewrite_plain?, holes))}
+  defp apply_freshening(other, _rename), do: other
 
-  defp apply_freshening(other, _rename, _rewrite_plain?, _holes), do: other
-
-  defp apply_freshening_meta(meta, rename, rewrite_plain?, holes) when is_list(meta) do
+  defp apply_freshening_meta(meta, rename) when is_list(meta) do
     Enum.map(meta, fn
-      {k, v} -> {k, apply_freshening_value(v, rename, rewrite_plain?, holes)}
+      {k, v} -> {k, apply_freshening_value(v, rename)}
       other -> other
     end)
   end
 
-  defp apply_freshening_meta(meta, _rename, _rewrite_plain?, _holes), do: meta
+  defp apply_freshening_meta(meta, _rename), do: meta
 
-  defp apply_freshening_value(v, rename, rewrite_plain?, holes) when is_tuple(v),
-    do: apply_freshening(v, rename, rewrite_plain?, holes)
+  defp apply_freshening_value(v, rename) when is_tuple(v), do: apply_freshening(v, rename)
 
-  defp apply_freshening_value(v, rename, rewrite_plain?, holes) when is_list(v),
-    do: Enum.map(v, &apply_freshening_value(&1, rename, rewrite_plain?, holes))
+  defp apply_freshening_value(v, rename) when is_list(v),
+    do: Enum.map(v, &apply_freshening_value(&1, rename))
 
-  defp apply_freshening_value(v, _rename, _rewrite_plain?, _holes), do: v
+  defp apply_freshening_value(v, _rename), do: v
+
+  # ---------------------------------------------------------------------------
+  # SP5.3 scope-aware auto-hygiene walk (template path).
+  #
+  # `scoped_freshen(node, rename, holes, used, state) -> {node, state}`.
+  # `rename` maps a template binder name to its per-expansion gensym for the
+  # CURRENT scope; a binding form extends it over exactly the sub-region it
+  # governs, so shadowing re-mints and references resolve to the innermost
+  # binder. `holes` are use-site hole names (never renamed — subst_holes fills
+  # them afterwards). `used` are use-site identifiers a gensym must avoid
+  # (mint_gensym collision-avoidance; see the `g$0` spoof test). `state` threads
+  # the global fresh_counter so every mint is unique within a build.
+  # ---------------------------------------------------------------------------
+
+  # Reference: a hole is left for substitution; a bound name resolves to its
+  # gensym; anything else (a free var, or a constructor) is left verbatim.
+  defp scoped_freshen({:variable, meta, name} = v, rename, holes, _used, state) do
+    cond do
+      MapSet.member?(holes, name) -> {v, state}
+      Map.has_key?(rename, name) -> {{:variable, meta, Map.fetch!(rename, name)}, state}
+      true -> {v, state}
+    end
+  end
+
+  # Stray markers outside a recognized binder position (rare): a `<fresh>` resolves
+  # to its in-scope gensym (or its literal name if unbound); a `<capture>` lowers to
+  # a plain caller-scope variable the walk never renames.
+  defp scoped_freshen({:fresh_name, meta, name}, rename, _holes, _used, state),
+    do: {{:variable, meta, Map.get(rename, name, name)}, state}
+
+  defp scoped_freshen({:capture_name, meta, name}, _rename, _holes, _used, state),
+    do: {{:variable, meta, name}, state}
+
+  # Quoted syntax is a data boundary — leave it whole (mirrors apply_freshening).
+  defp scoped_freshen({:quoted_syntax, _meta, _children} = quoted, _rename, _holes, _used, state),
+    do: {quoted, state}
+
+  # Uniform block frame (`let`, incl. constructor-pattern destructuring). Walk the
+  # children left-to-right; each `{:assignment}` child binds its LHS-leaf binders
+  # over the FOLLOWING children only (its RHS is evaluated in the OUTER scope — the
+  # RHS is a reference/hole, never bound by this assignment). A later assignment of
+  # the same name re-mints, shadowing the earlier binder over the remaining
+  # siblings. A lone assignment (bare `becomes let x = e`) has no following sibling
+  # — a no-op.
+  defp scoped_freshen({:block, meta, children}, rename, holes, used, state) do
+    {rev, _rename, state} =
+      Enum.reduce(children, {[], rename, state}, fn
+        {:assignment, ameta, [lhs, rhs]}, {acc, r, s} ->
+          {new_rhs, s} = scoped_freshen(rhs, r, holes, used, s)
+          {new_lhs, r2, s} = bind_pattern(lhs, r, holes, used, s)
+          {[{:assignment, ameta, [new_lhs, new_rhs]} | acc], r2, s}
+
+        child, {acc, r, s} ->
+          {new_child, s} = scoped_freshen(child, r, holes, used, s)
+          {[new_child | acc], r, s}
+      end)
+
+    {{:block, meta, Enum.reverse(rev)}, state}
+  end
+
+  # Match arm: the pattern binders scope BOTH the arm body (children) AND the
+  # `guard:` term in meta. The scrutinee is a sibling of the enclosing
+  # `pattern_match` node, walked in the outer scope — not here.
+  defp scoped_freshen({:match_arm, meta, children}, rename, holes, used, state) do
+    {new_pattern, arm_rename, state} = bind_pattern(Keyword.get(meta, :pattern), rename, holes, used, state)
+    {new_children, state} = scoped_freshen_list(children, arm_rename, holes, used, state)
+    meta = Keyword.put(meta, :pattern, new_pattern)
+
+    {meta, state} =
+      case Keyword.fetch(meta, :guard) do
+        {:ok, guard} ->
+          {new_guard, state} = scoped_freshen(guard, arm_rename, holes, used, state)
+          {Keyword.put(meta, :guard, new_guard), state}
+
+        :error ->
+          {meta, state}
+      end
+
+    {{:match_arm, meta, new_children}, state}
+  end
+
+  # Expression-position lambda: params bind the body only.
+  defp scoped_freshen({:lambda, meta, children}, rename, holes, used, state) do
+    {new_params, lam_rename, state} = bind_params(Keyword.get(meta, :params, []), rename, holes, used, state)
+    {new_children, state} = scoped_freshen_list(children, lam_rename, holes, used, state)
+    {{:lambda, Keyword.put(meta, :params, new_params), new_children}, state}
+  end
+
+  # Single-clause named fn-def — matched STRICTLY on the single-child `[body]`
+  # shape. A multi-clause fn-def is `{:function_def, meta, []}` (empty children,
+  # `clauses:`/`params:` in meta); it falls through to the generic clause, which
+  # never renames its signature (params are bare-string tuple leaves the generic
+  # meta walk leaves untouched). Params bind the body PLUS the `guards:`,
+  # `return_type:`, `constraints:` (the `where` clause) meta terms and each param's
+  # own `type:`/`default:` — all of which may reference the params.
+  defp scoped_freshen({:function_def, meta, [body]}, rename, holes, used, state) do
+    {new_params, fn_rename, state} = bind_params(Keyword.get(meta, :params, []), rename, holes, used, state)
+    {new_params, state} = rewrite_param_annotations(new_params, fn_rename, holes, used, state)
+    {new_body, state} = scoped_freshen(body, fn_rename, holes, used, state)
+
+    {meta, state} =
+      Enum.reduce([:guards, :return_type, :constraints], {Keyword.put(meta, :params, new_params), state}, fn
+        key, {m, s} -> scoped_freshen_meta_slot(m, key, fn_rename, holes, used, s)
+      end)
+
+    {{:function_def, meta, [new_body]}, state}
+  end
+
+  # Comprehension: REVERSE-scope. `[body | gens_and_filters]` — the body is the
+  # FIRST child but is scoped by EVERY generator binder. Generators bind
+  # left-to-right (a later generator's collection may reference an earlier binder);
+  # filters are scoped by the preceding generators. Walk the generators/filters
+  # first, accumulating the rename, then walk the earlier-sibling body under the
+  # full accumulated scope.
+  defp scoped_freshen({:comprehension, meta, [body | rest]}, rename, holes, used, state) do
+    {rev, comp_rename, state} =
+      Enum.reduce(rest, {[], rename, state}, fn
+        {:generator, gmeta, [pattern, collection]}, {acc, r, s} ->
+          {new_collection, s} = scoped_freshen(collection, r, holes, used, s)
+          {new_pattern, r2, s} = bind_pattern(pattern, r, holes, used, s)
+          {[{:generator, gmeta, [new_pattern, new_collection]} | acc], r2, s}
+
+        filter, {acc, r, s} ->
+          {new_filter, s} = scoped_freshen(filter, r, holes, used, s)
+          {[new_filter | acc], r, s}
+      end)
+
+    {new_body, state} = scoped_freshen(body, comp_rename, holes, used, state)
+    {{:comprehension, meta, [new_body | Enum.reverse(rev)]}, state}
+  end
+
+  # Generic recursion: no new scope introduced. Recurse meta values and children
+  # under the same rename. Bare-string/atom meta values (names, flags) and
+  # `{:param, _, string}` tuples are left untouched — only a binding-form frame
+  # ever renames a param string — so a stray/empty-children fn-def keeps its
+  # signature, and maps (never `{tag, meta, list}`) stop the walk (the OTP OUT set).
+  defp scoped_freshen({t, meta, children}, rename, holes, used, state) when is_list(children) do
+    {new_meta, state} = scoped_freshen_meta(meta, rename, holes, used, state)
+    {new_children, state} = scoped_freshen_list(children, rename, holes, used, state)
+    {{t, new_meta, new_children}, state}
+  end
+
+  defp scoped_freshen(other, _rename, _holes, _used, state), do: {other, state}
+
+  defp scoped_freshen_list(nodes, rename, holes, used, state) when is_list(nodes) do
+    Enum.map_reduce(nodes, state, fn node, s -> scoped_freshen(node, rename, holes, used, s) end)
+  end
+
+  defp scoped_freshen_meta(meta, rename, holes, used, state) when is_list(meta) do
+    Enum.map_reduce(meta, state, fn
+      {k, v}, s ->
+        {new_v, s} = scoped_freshen_value(v, rename, holes, used, s)
+        {{k, new_v}, s}
+
+      other, s ->
+        {other, s}
+    end)
+  end
+
+  defp scoped_freshen_meta(meta, _rename, _holes, _used, state), do: {meta, state}
+
+  defp scoped_freshen_value(v, rename, holes, used, state) when is_tuple(v),
+    do: scoped_freshen(v, rename, holes, used, state)
+
+  defp scoped_freshen_value(v, rename, holes, used, state) when is_list(v),
+    do: scoped_freshen_list(v, rename, holes, used, state)
+
+  defp scoped_freshen_value(v, _rename, _holes, _used, state), do: {v, state}
+
+  # Rewrite one meta slot (`guards:`/`return_type:`/`constraints:`) with the
+  # in-scope rename if present, threading state; a missing slot is a no-op.
+  defp scoped_freshen_meta_slot(meta, key, rename, holes, used, state) do
+    case Keyword.fetch(meta, key) do
+      {:ok, value} ->
+        {new_value, state} = scoped_freshen_value(value, rename, holes, used, state)
+        {Keyword.put(meta, key, new_value), state}
+
+      :error ->
+        {meta, state}
+    end
+  end
+
+  # Bind a pattern: mint a gensym for each binder LEAF and rewrite it, returning
+  # the rewritten pattern, the extended rename, and threaded state. Binder leaves
+  # are lowercase-initial `{:variable}` names (an uppercase name is a nullary
+  # constructor — Idris/Cure convention, elaborator.ex:4519 — left untouched) that
+  # are NOT holes, plus explicit `<fresh>` markers (always minted). A `<capture>`
+  # marker lowers to a plain caller-scope variable and binds nothing. Non-binder
+  # structure (a constructor's argument list) is recursed; `name:`-in-meta
+  # constructors are not leaves so are never minted.
+  defp bind_pattern({:variable, meta, name} = v, rename, holes, used, state) do
+    if binder_name?(name) and not MapSet.member?(holes, name) do
+      {gensym, state} = mint_gensym(name, state, used)
+      {{:variable, meta, gensym}, Map.put(rename, name, gensym), state}
+    else
+      {v, rename, state}
+    end
+  end
+
+  defp bind_pattern({:fresh_name, meta, name}, rename, _holes, used, state) do
+    {gensym, state} = mint_gensym(name, state, used)
+    {{:variable, meta, gensym}, Map.put(rename, name, gensym), state}
+  end
+
+  defp bind_pattern({:capture_name, meta, name}, rename, _holes, _used, state),
+    do: {{:variable, meta, name}, rename, state}
+
+  defp bind_pattern({t, meta, children}, rename, holes, used, state) when is_list(children) do
+    {new_children, rename, state} = bind_pattern_list(children, rename, holes, used, state)
+    {{t, meta, new_children}, rename, state}
+  end
+
+  defp bind_pattern(other, rename, _holes, _used, state), do: {other, rename, state}
+
+  defp bind_pattern_list(nodes, rename, holes, used, state) when is_list(nodes) do
+    {rev, rename, state} =
+      Enum.reduce(nodes, {[], rename, state}, fn node, {acc, r, s} ->
+        {new_node, r2, s} = bind_pattern(node, r, holes, used, s)
+        {[new_node | acc], r2, s}
+      end)
+
+    {Enum.reverse(rev), rename, state}
+  end
+
+  # Bind lambda / fn-def params: each `{:param, meta, name}` string-child is a
+  # binder (params are always binders — no constructor ambiguity). Mint, rewrite
+  # the name, extend the rename. Param annotations (`type:`/`default:`) are
+  # rewritten separately once the full param scope is known (see
+  # rewrite_param_annotations) so a dependent annotation referencing a sibling
+  # param resolves correctly.
+  defp bind_params(params, rename, _holes, used, state) when is_list(params) do
+    {rev, rename, state} =
+      Enum.reduce(params, {[], rename, state}, fn
+        {:param, pmeta, name}, {acc, r, s} when is_binary(name) ->
+          {gensym, s} = mint_gensym(name, s, used)
+          {[{:param, pmeta, gensym} | acc], Map.put(r, name, gensym), s}
+
+        other, {acc, r, s} ->
+          {[other | acc], r, s}
+      end)
+
+    {Enum.reverse(rev), rename, state}
+  end
+
+  defp bind_params(params, rename, _holes, _used, state), do: {params, rename, state}
+
+  defp rewrite_param_annotations(params, rename, holes, used, state) when is_list(params) do
+    Enum.map_reduce(params, state, fn
+      {:param, pmeta, name}, s ->
+        {new_pmeta, s} = scoped_freshen_meta(pmeta, rename, holes, used, s)
+        {{:param, new_pmeta, name}, s}
+
+      other, s ->
+        {other, s}
+    end)
+  end
+
+  defp rewrite_param_annotations(params, _rename, _holes, _used, state), do: {params, state}
+
+  # A lowercase-initial (or `_`-initial) name is a term binder; an uppercase name
+  # is a constructor (elaborator.ex:4519). Empty names never bind.
+  defp binder_name?(name) when is_binary(name), do: name =~ ~r/^[a-z_]/
+  defp binder_name?(_), do: false
 
   defp subst_holes({:variable, _meta, name} = v, bindings, _state) do
     case Map.fetch(bindings, name) do
@@ -2035,13 +2302,20 @@ defmodule Cure.Compiler.Parser do
         parse_block(state)
 
       # `<fresh Name>` — a template hygiene marker minting a per-expansion
-      # gensym (design §5). Only this exact window is special; every other
-      # leading `<` keeps its previous unexpected-token error. Infix `<`
-      # (comparisons) never reaches this prefix clause.
+      # gensym (design §5). `<capture Name>` is the symmetric opt-OUT: it marks
+      # a template binder that must NOT be auto-freshened, so it binds into the
+      # caller's scope on purpose (SP5.3 §4). Only these exact windows are
+      # special; every other leading `<` keeps its previous unexpected-token
+      # error. Infix `<` (comparisons) never reaches this prefix clause.
       :lt ->
         case {peek_at(state, 1), peek_at(state, 2), peek_at(state, 3)} do
           {%Token{type: :identifier, value: "fresh"}, %Token{type: :identifier, value: name}, %Token{type: :gt}} ->
             node = {:fresh_name, [line: token.line, col: token.col], name}
+            state = state |> advance() |> advance() |> advance() |> advance()
+            {node, state}
+
+          {%Token{type: :identifier, value: "capture"}, %Token{type: :identifier, value: name}, %Token{type: :gt}} ->
+            node = {:capture_name, [line: token.line, col: token.col], name}
             state = state |> advance() |> advance() |> advance() |> advance()
             {node, state}
 
