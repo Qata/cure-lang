@@ -227,16 +227,24 @@ defmodule Cure.Compiler.Parser do
                prelude_macros: false,
                builtin_macros: builtin_macros
              ) do
-        collect_macro_rules(ast, rules)
+        collect_macro_rules(ast, rules, path)
       else
         _ -> rules
       end
     end)
   end
 
-  defp collect_macro_rules(ast, acc) do
+  # `path` is the home file of every rule harvested here (a stdlib module). It is
+  # stamped onto each rule as `:source_path` so a computed/family use-site can
+  # later resolve the rule's expander in its DEFINITION-SITE scope (ambient macro
+  # hygiene), not just the bare caller env. Local/user macros harvest through
+  # harvest_active_macros / harvest_computed_macros instead and carry no path, so
+  # their expansion behaviour is unchanged.
+  defp collect_macro_rules(ast, acc, path) do
     Enum.reduce(collect_macro_defs_with_scope(ast), acc, fn {:macro_def, meta, rules}, macro_acc ->
-      Enum.reduce(harvestable_macro_rules(meta, rules), macro_acc, fn
+      tagged = Enum.map(harvestable_macro_rules(meta, rules), &Map.put(&1, :source_path, path))
+
+      Enum.reduce(tagged, macro_acc, fn
         %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
           Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
 
@@ -521,7 +529,8 @@ defmodule Cure.Compiler.Parser do
           syntax_repeated_fields: Map.get(rule, :syntax_repeated_fields, macro_syntax_repeated_fields(rule.segments)),
           syntax_field_types: Map.get(rule, :syntax_field_types, %{}),
           line: keyword_token.line,
-          col: keyword_token.col
+          col: keyword_token.col,
+          home_source: Map.get(rule, :source_path)
         ]
 
         meta =
