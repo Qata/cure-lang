@@ -176,5 +176,19 @@ defmodule Cure.Elab.LinearSiblingRefinementTest do
 
       assert verdict(defs) == :reject
     end
+
+    test "plain-match: a branch that RETURNS a scrutinee-dependent sibling directly" do
+      # `GetCount() -> w` reads the sibling `w : ReplyOf(r)` at its refined type
+      # `Reply0`. The standard path builds a term the KERNEL rejects, outside
+      # `elaborate_match`; the gated kernel-check retry (item-C edge) catches it.
+      defs = """
+        fn use_it(r: Req, w: ReplyOf(r)) -> Reply0 = match r
+          GetCount()  -> w
+          SetName(_)  -> R0
+          Ping()      -> R0
+      """
+
+      assert verdict(defs) == :accept
+    end
   end
 end

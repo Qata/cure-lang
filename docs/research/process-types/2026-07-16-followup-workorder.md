@@ -97,7 +97,21 @@ the motive with BOTH the sibling Π-domains AND the Eq-arrow, combining A's moti
 with the proof binding. (2) is cleaner. Low priority unless someone writes a
 linear-sibling `with … proof`.
 
-## C. Plain `match r` refines siblings  ✅ MOSTLY DONE (one edge remains)
+## C. Plain `match r` refines siblings  ✅ DONE (edge closed)
+
+**Edge closed:** the direct-sibling-return case (`GetCount() -> w`, standard build
+succeeds → kernel rejects) is now handled — when a scrutinee-dependent sibling is in
+scope, the standard `{:ok}` term is kernel-checked and the motive-gen retry fires on
+failure (`match_term_kernel_rejects?`). A cheap value-level gate
+(`context_type_mentions_var?`, no reification) fronts the expensive
+`collect_with_siblings` + kernel-check so ordinary sibling-free matches pay only a
+value walk. Test in `linear_sibling_refinement_test.exs` ("RETURNS a
+scrutinee-dependent sibling directly"). (Perf note: the elab suite is ~155s post-merge
+regardless of this change — verified against HEAD; not a regression.)
+
+Original status below.
+
+
 
 **Status:** MOSTLY DONE. `elaborate_match` (`elaborator.ex`) now, when its STANDARD
 path fails on a non-indexed family matched on a VARIABLE with scrutinee-dependent

@@ -2500,41 +2500,50 @@ defmodule Cure.Elab.Elaborator do
 
             # Item C: the standard motive refines the RETURN per branch but not the
             # types of scrutinee-dependent SIBLINGS (`w : ReplyOf(r)`), so a plain
-            # `match r` that reads such a sibling rejects. Only when the standard path
-            # fails, and only for a non-indexed family matched on a VARIABLE with such
-            # siblings, retry via motive-generalization (the same machinery `with r`
-            # uses). Working matches keep the standard path untouched.
-            case standard do
-              {:ok, _} ->
-                standard
+            # `match r` that reads such a sibling ill-types. Detect siblings only for a
+            # non-indexed family matched on a VARIABLE (cheap gate). If present, retry
+            # via motive-generalization (the machinery `with r` uses) when the standard
+            # path FAILS during elaboration, OR when it succeeds but the assembled term
+            # does not KERNEL-check — the sibling-read failure surfaces there, not in
+            # `elaborate_branches` (`GetCount() -> w`, `:branch_type`). Sibling-free
+            # matches keep the standard path untouched; the extra kernel-check runs only
+            # for the rare match that has a scrutinee-dependent sibling.
+            # Cheap gate first: a scrutinee-dependent sibling exists only if the
+            # scrutinee VARIABLE occurs in some context binder's TYPE. Test that on the
+            # stored VALUES (no reification) before the expensive `collect_with_siblings`
+            # (which reifies every binder) + kernel-check — so an ordinary sibling-free
+            # match pays only a value-level walk.
+            siblings =
+              with {:var, i} <- scrut_term,
+                   true <- family.indices == [],
+                   scrut_level = Context.length(ctx) - 1 - i,
+                   true <- context_type_mentions_var?(ctx, scrut_level),
+                   {:ok, s} <- collect_with_siblings(scrut_term, names, ctx, env) do
+                s
+              else
+                _ -> []
+              end
 
-              {:error, _} = err ->
-                siblings =
-                  if family.indices == [] and match?({:var, _}, scrut_term) do
-                    case collect_with_siblings(scrut_term, names, ctx, env) do
-                      {:ok, s} -> s
-                      _ -> []
-                    end
-                  else
-                    []
-                  end
+            retry = fn ->
+              elaborate_motivegen_case(
+                scrut_term,
+                scrut_type,
+                dname,
+                combined_vals,
+                siblings,
+                arms,
+                result_type_term,
+                names,
+                ctx,
+                env
+              )
+            end
 
-                if siblings != [] do
-                  elaborate_motivegen_case(
-                    scrut_term,
-                    scrut_type,
-                    dname,
-                    combined_vals,
-                    siblings,
-                    arms,
-                    result_type_term,
-                    names,
-                    ctx,
-                    env
-                  )
-                else
-                  err
-                end
+            cond do
+              siblings == [] -> standard
+              match?({:error, _}, standard) -> retry.()
+              match_term_kernel_rejects?(elem(standard, 1), result_type_term, ctx) -> retry.()
+              true -> standard
             end
           end
 
@@ -3185,6 +3194,40 @@ defmodule Cure.Elab.Elaborator do
 
       {:ok, {cname, arity, {:lam, Cure.Core.Grade.unrestricted(), eq_dom_term, wrapped}}}
     end
+  end
+
+  # Cheap value-level check: does any binder type in `ctx` reference the neutral var
+  # at `level`? Walks the stored type VALUES without reifying, so an ordinary
+  # sibling-free match pays only this. Conservative — a scrutinee buried inside a
+  # closure-valued binder type is not seen (that sibling just isn't refined, no worse
+  # than before), but the applied-type siblings we care about (`ReplyOf(r)`, `Cap(r)`)
+  # are `{:nvar, level}` reachable by structural walk.
+  defp context_type_mentions_var?(ctx, level) do
+    Enum.any?(ctx.types, &value_mentions_nvar?(&1, level))
+  end
+
+  defp value_mentions_nvar?({:nvar, k}, level), do: k == level
+
+  defp value_mentions_nvar?(t, level) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.any?(&value_mentions_nvar?(&1, level))
+
+  defp value_mentions_nvar?(l, level) when is_list(l),
+    do: Enum.any?(l, &value_mentions_nvar?(&1, level))
+
+  defp value_mentions_nvar?(_, _), do: false
+
+  # Does the assembled `match` term fail the kernel against its expected type? Used
+  # by the item-C fallback: a plain `match` whose body reads a scrutinee-dependent
+  # sibling at its unrefined type builds a term `elaborate_branches` accepts but the
+  # kernel later rejects (`:branch_type`). A crash in the check is treated as a
+  # rejection (retry motive-gen). Only ever called when a sibling is in scope.
+  defp match_term_kernel_rejects?(term, result_type_term, ctx) do
+    expected = Eval.eval(result_type_term, Context.env(ctx))
+    match?({:error, _}, Kernel.check(ctx, term, expected))
+  rescue
+    _ -> true
+  catch
+    _, _ -> true
   end
 
   # Motive-generalization elimination (shared by `with` and plain `match`): refine
