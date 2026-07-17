@@ -269,7 +269,7 @@ defmodule Cure.Elab.Elaborator do
       # both plain and implicit defs. Guarded on the dot so bare def calls keep
       # their existing paths.
       String.contains?(name, ".") and Map.has_key?(env.defs, resolved) ->
-        if Enum.any?(args, &match?({:lambda, _m, _b}, &1)) do
+        if Enum.any?(args, &(match?({:lambda, _m, _b}, &1) or call_placeholder?(&1))) do
           # A lambda argument needs a checking-mode expected type, so the bidirectional
           # elaborator is the ONLY path here. It used to be run, and then — on failure —
           # run a second time with identical arguments, which can only reproduce the same
@@ -304,6 +304,17 @@ defmodule Cure.Elab.Elaborator do
       # name has no dot and no unique variant.)
       length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
         {:error, {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}}
+
+      # `_` is meaningful only to the goal-directed application solver: the
+      # ordinary scoped path necessarily interprets every variable-shaped AST as
+      # a name and reports `:unknown_global` before a later dependent argument can
+      # constrain it. Route placeholder-bearing calls directly through the same
+      # Π-telescope solver used for implicit and lambda-bearing applications.
+      # Local definitions retain the ordinary local-over-import precedence.
+      Enum.any?(args, &call_placeholder?/1) and
+          (Env.get_def(env, atom) != nil or Env.get_def(env, resolved) != nil) ->
+        key = if Env.get_def(env, atom), do: Env.resolve_key(env, env.defs, atom), else: resolved
+        elaborate_implicit_app_bidirectional(env, key, args, names, ctx)
 
       # A global whose telescope carries erased (implicit) parameters: insert
       # fresh metavariables for them and solve from the present arguments, the
@@ -2058,6 +2069,14 @@ defmodule Cure.Elab.Elaborator do
   # inference first, fall back to left-to-right bidirectional application, both
   # carrying `expected`. The caller re-checks the assembled term against the goal.
   defp elaborate_global_app_expected(env, atom, args, names, ctx, expected) do
+    if Enum.any?(args, &call_placeholder?/1) do
+      elaborate_implicit_app_bidirectional(env, atom, args, names, ctx, expected)
+    else
+      elaborate_global_app_expected_eager(env, atom, args, names, ctx, expected)
+    end
+  end
+
+  defp elaborate_global_app_expected_eager(env, atom, args, names, ctx, expected) do
     result =
       with {:ok, present} <- map_present_args(args, names, ctx, env) do
         elaborate_global_app(env, atom, present, ctx, expected)
@@ -2074,6 +2093,9 @@ defmodule Cure.Elab.Elaborator do
         end
     end
   end
+
+  defp call_placeholder?({:variable, _meta, "_"}), do: true
+  defp call_placeholder?(_arg), do: false
 
   # A `rewrite` proof's type. The inductive identity type `Equivalent(a,x,y)` (spec
   # 2026-07-04) infers to `{:vdata, :Equivalent, [a, x, y]}` (1 param + 2 indices);
@@ -7261,6 +7283,25 @@ defmodule Cure.Elab.Elaborator do
   defp bidir_app_slot({_dom, grade}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env)
        when grade in [:unrestricted, :linear, :affine],
        do: {:halt, {:error, :too_few_arguments}}
+
+  # An explicit `_` in call-argument position is a goal-directed placeholder,
+  # not a reference to a global named `_`. Seed a term metavariable at this
+  # slot and continue: a later dependent argument may determine its VALUE.
+  # `finish_global_app` rejects it if it remains
+  # unsolved, and the assembled application is kernel-checked by the caller, so
+  # no placeholder can escape into Core.
+  defp bidir_app_slot(
+         {dom, grade},
+         {:ok, mctx, chosen, [{:variable, _meta, "_"} | rest], deferred},
+         _names,
+         _ctx,
+         _env
+       )
+       when grade in [:unrestricted, :linear, :affine] do
+    dom_inst = Enum.map(chosen, &Unify.zonk(&1, mctx)) |> then(&Subst.instantiate(dom, &1))
+    {mctx, id} = MetaCtx.fresh(mctx, dom_inst)
+    {:cont, {:ok, mctx, chosen ++ [{:meta, id}], rest, deferred}}
+  end
 
   # A supplied explicit argument — grade governs later USAGE counting
   # (`relevance.ex`), not slot mechanics: :unrestricted / :linear / :affine all
