@@ -30,4 +30,21 @@ defmodule Cure.Stdlib.OtpRecursiveTransferTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "rec_is_least: the inferred interface is below any pre-fixed point (principality)" do
+    # {TA, TB} is a pre-fixed point of the transfer for mu X. send TA; recv TB; X
+    # (applying the transfer to it gives itself), so the inferred interface is contained in
+    # it — inference does not over-approximate.
+    src = """
+    mod RlInst
+      use Std.Otp.FiniteFixpoint
+      use Std.Otp.RecursiveTransfer
+      fn loop_body() -> RBody = RSend(TA, RRecv(TB, RVar()))
+      fn least() -> Sub(rec_infer(loop_body()), MkIF(T, T, F)) =
+        rec_is_least(loop_body(), MkIF(T, T, F), sub_refl(MkIF(T, T, F)))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

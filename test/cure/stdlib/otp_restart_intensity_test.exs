@@ -72,4 +72,22 @@ defmodule Cure.Stdlib.OtpRestartIntensityTest do
 
     assert verdict(defs) == :accept
   end
+
+  test "the module is compiled into the stdlib preload" do
+    assert Code.ensure_loaded?(:"Cure.Std.Otp.RestartIntensity")
+  end
+
+  test "restart intensity is exact: the canonical run tolerates exactly budget+1 failures" do
+    src = """
+    mod RiExact
+      use Std.Otp.RestartIntensity
+      fn exact(n: Nat) -> Equivalent(Nat, run_len(eventually_down(n)), S(n)) =
+        eventually_down_len(n)
+      fn tolerates_two() -> Equivalent(Nat, run_len(eventually_down(S(S(Z())))), S(S(S(Z())))) =
+        eventually_down_len(S(S(Z())))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

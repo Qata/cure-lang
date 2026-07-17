@@ -1,0 +1,176 @@
+mod Bst
+  use Std.Equivalent
+  type Key = KA | KB | KC
+  type Cmp = KLt | KEq | KGt
+  type B = F | T
+  fn kcmp(a: Key, b: Key) -> Cmp = match a
+    KA() -> match b
+      KA() -> KEq()
+      KB() -> KLt()
+      KC() -> KLt()
+    KB() -> match b
+      KA() -> KGt()
+      KB() -> KEq()
+      KC() -> KLt()
+    KC() -> match b
+      KA() -> KGt()
+      KB() -> KGt()
+      KC() -> KEq()
+  type Tree = Leaf | Node(Tree, Key, Tree)
+  fn member(k: Key, t: Tree) -> B = match t
+    Leaf()        -> F()
+    Node(l, v, r) -> match kcmp(k, v)
+      KLt() -> member(k, l)
+      KEq() -> T()
+      KGt() -> member(k, r)
+  fn insert(k: Key, t: Tree) -> Tree = match t
+    Leaf()        -> Node(Leaf(), k, Leaf())
+    Node(l, v, r) -> match kcmp(k, v)
+      KLt() -> Node(insert(k, l), v, r)
+      KEq() -> Node(l, v, r)
+      KGt() -> Node(l, v, insert(k, r))
+  fn member_leaf(k: Key) -> Equivalent(B, member(k, Leaf()), F()) = reflexive(F())
+  fn insert_member(k: Key, t: Tree) -> Equivalent(B, member(k, insert(k, t)), T()) = match t
+    Leaf()        -> match k
+      KA() -> reflexive(T())
+      KB() -> reflexive(T())
+      KC() -> reflexive(T())
+    Node(l, v, r) -> match k
+      KA() -> match v
+        KA() -> reflexive(T())
+        KB() -> insert_member(KA(), l)
+        KC() -> insert_member(KA(), l)
+      KB() -> match v
+        KA() -> insert_member(KB(), r)
+        KB() -> reflexive(T())
+        KC() -> insert_member(KB(), l)
+      KC() -> match v
+        KA() -> insert_member(KC(), r)
+        KB() -> insert_member(KC(), r)
+        KC() -> reflexive(T())
+  fn insert_preserves(x: Key, k: Key, t: Tree, e: Equivalent(B, member(x, t), T())) -> Equivalent(B, member(x, insert(k, t)), T()) = match t
+    Leaf()        -> match e
+    Node(l, v, r) -> match x
+      KA() -> match v
+        KA() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+        KB() -> match k
+          KA() -> insert_preserves(KA(), KA(), l, e)
+          KB() -> e
+          KC() -> e
+        KC() -> match k
+          KA() -> insert_preserves(KA(), KA(), l, e)
+          KB() -> insert_preserves(KA(), KB(), l, e)
+          KC() -> e
+      KB() -> match v
+        KA() -> match k
+          KA() -> e
+          KB() -> insert_preserves(KB(), KB(), r, e)
+          KC() -> insert_preserves(KB(), KC(), r, e)
+        KB() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+        KC() -> match k
+          KA() -> insert_preserves(KB(), KA(), l, e)
+          KB() -> insert_preserves(KB(), KB(), l, e)
+          KC() -> e
+      KC() -> match v
+        KA() -> match k
+          KA() -> e
+          KB() -> insert_preserves(KC(), KB(), r, e)
+          KC() -> insert_preserves(KC(), KC(), r, e)
+        KB() -> match k
+          KA() -> e
+          KB() -> e
+          KC() -> insert_preserves(KC(), KC(), r, e)
+        KC() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+  fn keq(x: Key, k: Key) -> B = match x
+    KA() -> match k
+      KA() -> T()
+      KB() -> F()
+      KC() -> F()
+    KB() -> match k
+      KA() -> F()
+      KB() -> T()
+      KC() -> F()
+    KC() -> match k
+      KA() -> F()
+      KB() -> F()
+      KC() -> T()
+  fn orb(a: B, b: B) -> B = match a
+    F() -> b
+    T() -> T()
+  fn insert_spec(x: Key, k: Key, t: Tree) -> Equivalent(B, member(x, insert(k, t)), orb(keq(x, k), member(x, t))) = match t
+    Leaf()        -> match x
+      KA() -> match k
+        KA() -> reflexive(T())
+        KB() -> reflexive(F())
+        KC() -> reflexive(F())
+      KB() -> match k
+        KA() -> reflexive(F())
+        KB() -> reflexive(T())
+        KC() -> reflexive(F())
+      KC() -> match k
+        KA() -> reflexive(F())
+        KB() -> reflexive(F())
+        KC() -> reflexive(T())
+    Node(l, v, r) -> match x
+      KA() -> match v
+        KA() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+        KB() -> match k
+          KA() -> insert_spec(KA(), KA(), l)
+          KB() -> reflexive(member(KA(), l))
+          KC() -> reflexive(member(KA(), l))
+        KC() -> match k
+          KA() -> insert_spec(KA(), KA(), l)
+          KB() -> insert_spec(KA(), KB(), l)
+          KC() -> reflexive(member(KA(), l))
+      KB() -> match v
+        KA() -> match k
+          KA() -> reflexive(member(KB(), r))
+          KB() -> insert_spec(KB(), KB(), r)
+          KC() -> insert_spec(KB(), KC(), r)
+        KB() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+        KC() -> match k
+          KA() -> insert_spec(KB(), KA(), l)
+          KB() -> insert_spec(KB(), KB(), l)
+          KC() -> reflexive(member(KB(), l))
+      KC() -> match v
+        KA() -> match k
+          KA() -> reflexive(member(KC(), r))
+          KB() -> insert_spec(KC(), KB(), r)
+          KC() -> insert_spec(KC(), KC(), r)
+        KB() -> match k
+          KA() -> reflexive(member(KC(), r))
+          KB() -> reflexive(member(KC(), r))
+          KC() -> insert_spec(KC(), KC(), r)
+        KC() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+  fn orb_cong_r(a: B, {b: B}, {b2: B}, e: Equivalent(B, b, b2)) -> Equivalent(B, orb(a, b), orb(a, b2)) =
+    rewrite e in reflexive(orb(a, b2))
+  fn orb_swap(a: B, b: B, c: B) -> Equivalent(B, orb(a, orb(b, c)), orb(b, orb(a, c))) = match a
+    F() -> reflexive(orb(b, c))
+    T() -> match b
+      F() -> reflexive(T())
+      T() -> reflexive(T())
+  fn insert_comm(x: Key, j: Key, k: Key, t: Tree) -> Equivalent(B, member(x, insert(j, insert(k, t))), member(x, insert(k, insert(j, t)))) =
+    trans(insert_spec(x, j, insert(k, t)),
+      trans(orb_cong_r(keq(x, j), insert_spec(x, k, t)),
+        trans(orb_swap(keq(x, j), keq(x, k), member(x, t)),
+          trans(orb_cong_r(keq(x, k), sym(insert_spec(x, j, t))),
+            sym(insert_spec(x, k, insert(j, t)))))))
+end

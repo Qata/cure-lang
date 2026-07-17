@@ -1,4 +1,5 @@
 mod RestartIntensity
+  use Std.Equivalent
   type Phase = Up | Down
   type Sup indices (budget: Nat, phase: Phase)
     Alive   : Sup(n, Up)
@@ -15,4 +16,12 @@ mod RestartIntensity
   fn eventually_down(n: Nat) -> FailRun(n, Up, Z, Down) = match n
     Z()  -> FRMore(FShutdown(), FRDone())
     S(k) -> FRMore(FRestart(), eventually_down(k))
+  fn run_len({b1: Nat}, {p1: Phase}, {b2: Nat}, {p2: Phase}, run: FailRun(b1, p1, b2, p2)) -> Nat = match run
+    FRDone()        -> Z()
+    FRMore(f, rest) -> S(run_len(rest))
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+  fn eventually_down_len(n: Nat) -> Equivalent(Nat, run_len(eventually_down(n)), S(n)) = match n
+    Z()  -> reflexive(S(Z()))
+    S(k) -> snat_cong(eventually_down_len(k))
 end

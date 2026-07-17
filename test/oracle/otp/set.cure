@@ -1,0 +1,89 @@
+mod Sets
+  use Std.Equivalent
+  type Key = KA | KB | KC
+  type B = F | T
+  fn orb(a: B, b: B) -> B = match a
+    F() -> b
+    T() -> T()
+  fn key_eq(x: Key, y: Key) -> B = match x
+    KA() -> match y
+      KA() -> T
+      KB() -> F
+      KC() -> F
+    KB() -> match y
+      KA() -> F
+      KB() -> T
+      KC() -> F
+    KC() -> match y
+      KA() -> F
+      KB() -> F
+      KC() -> T
+  type Set = SetNil | SetCons(Key, Set)
+  fn mem(x: Key, s: Set) -> B = match s
+    SetNil()          -> F()
+    SetCons(k, rest)  -> match key_eq(x, k)
+      T() -> T()
+      F() -> mem(x, rest)
+  fn union(s1: Set, s2: Set) -> Set = match s1
+    SetNil()          -> s2
+    SetCons(k, rest)  -> SetCons(k, union(rest, s2))
+  fn union_member(x: Key, s1: Set, s2: Set) -> Equivalent(B, mem(x, union(s1, s2)), orb(mem(x, s1), mem(x, s2))) = match s1
+    SetNil()          -> reflexive(mem(x, s2))
+    SetCons(k, rest)  -> match x
+      KA() -> match k
+        KA() -> reflexive(T())
+        KB() -> union_member(KA(), rest, s2)
+        KC() -> union_member(KA(), rest, s2)
+      KB() -> match k
+        KA() -> union_member(KB(), rest, s2)
+        KB() -> reflexive(T())
+        KC() -> union_member(KB(), rest, s2)
+      KC() -> match k
+        KA() -> union_member(KC(), rest, s2)
+        KB() -> union_member(KC(), rest, s2)
+        KC() -> reflexive(T())
+  fn orb_comm(a: B, b: B) -> Equivalent(B, orb(a, b), orb(b, a)) = match a
+    F() -> match b
+      F() -> reflexive(F())
+      T() -> reflexive(T())
+    T() -> match b
+      F() -> reflexive(T())
+      T() -> reflexive(T())
+  fn orb_idem(a: B) -> Equivalent(B, orb(a, a), a) = match a
+    F() -> reflexive(F())
+    T() -> reflexive(T())
+  fn union_comm_member(x: Key, s1: Set, s2: Set) -> Equivalent(B, mem(x, union(s1, s2)), mem(x, union(s2, s1))) =
+    trans(union_member(x, s1, s2), trans(orb_comm(mem(x, s1), mem(x, s2)), sym(union_member(x, s2, s1))))
+  fn union_idem_member(x: Key, s: Set) -> Equivalent(B, mem(x, union(s, s)), mem(x, s)) =
+    trans(union_member(x, s, s), orb_idem(mem(x, s)))
+  fn orb_assoc(a: B, b: B, c: B) -> Equivalent(B, orb(orb(a, b), c), orb(a, orb(b, c))) = match a
+    F() -> reflexive(orb(b, c))
+    T() -> reflexive(T())
+  fn orb_cong_l({a: B}, {a2: B}, c: B, e: Equivalent(B, a, a2)) -> Equivalent(B, orb(a, c), orb(a2, c)) =
+    rewrite e in reflexive(orb(a2, c))
+  fn orb_cong_r(a: B, {b: B}, {b2: B}, e: Equivalent(B, b, b2)) -> Equivalent(B, orb(a, b), orb(a, b2)) =
+    rewrite e in reflexive(orb(a, b2))
+  fn union_assoc_member(x: Key, s1: Set, s2: Set, s3: Set) -> Equivalent(B, mem(x, union(union(s1, s2), s3)), mem(x, union(s1, union(s2, s3)))) =
+    trans(union_member(x, union(s1, s2), s3),
+      trans(orb_cong_l(mem(x, s3), union_member(x, s1, s2)),
+        trans(orb_assoc(mem(x, s1), mem(x, s2), mem(x, s3)),
+          trans(orb_cong_r(mem(x, s1), sym(union_member(x, s2, s3))),
+            sym(union_member(x, s1, union(s2, s3)))))))
+  fn implb(a: B, b: B) -> B = match a
+    F() -> T()
+    T() -> b
+  fn implb_cong_r(a: B, {b: B}, {b2: B}, e: Equivalent(B, b, b2)) -> Equivalent(B, implb(a, b), implb(a, b2)) =
+    rewrite e in reflexive(implb(a, b2))
+  fn implb_orb_l(a: B, b: B) -> Equivalent(B, implb(a, orb(a, b)), T()) = match a
+    F() -> reflexive(T())
+    T() -> reflexive(T())
+  fn implb_orb_r(a: B, b: B) -> Equivalent(B, implb(b, orb(a, b)), T()) = match b
+    F() -> reflexive(T())
+    T() -> match a
+      F() -> reflexive(T())
+      T() -> reflexive(T())
+  fn union_upper_l(x: Key, s1: Set, s2: Set) -> Equivalent(B, implb(mem(x, s1), mem(x, union(s1, s2))), T()) =
+    trans(implb_cong_r(mem(x, s1), union_member(x, s1, s2)), implb_orb_l(mem(x, s1), mem(x, s2)))
+  fn union_upper_r(x: Key, s1: Set, s2: Set) -> Equivalent(B, implb(mem(x, s2), mem(x, union(s1, s2))), T()) =
+    trans(implb_cong_r(mem(x, s2), union_member(x, s1, s2)), implb_orb_r(mem(x, s1), mem(x, s2)))
+end

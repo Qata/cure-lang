@@ -1,5 +1,6 @@
 @group(:concurrency)
 mod Std.Otp.RestartIntensity
+  use Std.Equivalent
   ## RESTART INTENSITY — the `max_restarts` bound completing `Std.Otp.Supervisor` (build-out
   ## map supervision depth).
   ##
@@ -54,4 +55,21 @@ mod Std.Otp.RestartIntensity
   fn eventually_down(n: Nat) -> FailRun(n, Up, Z, Down) = match n
     Z()  -> FRMore(FShutdown(), FRDone())
     S(k) -> FRMore(FRestart(), eventually_down(k))
+
+  ## The NUMBER of failures a run absorbs — its length as a chain of transitions.
+  fn run_len({b1: Nat}, {p1: Phase}, {b2: Nat}, {p2: Phase}, run: FailRun(b1, p1, b2, p2)) -> Nat = match run
+    FRDone()        -> Z()
+    FRMore(f, rest) -> S(run_len(rest))
+
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+
+  ## **RESTART INTENSITY IS EXACT.** The canonical failure run from budget `n` has length `S(n)`:
+  ## a supervisor tolerates EXACTLY `n + 1` failures — `n` restarts spending the budget, then one
+  ## final zero-budget shutdown — before reaching `Down`. This sharpens `eventually_down` (which only
+  ## says `Down` is reached) into a precise count, by induction on the budget: the base run is one
+  ## shutdown (`S(Z)`), and each extra unit of budget prepends one restart (`snat_cong` on the IH).
+  fn eventually_down_len(n: Nat) -> Equivalent(Nat, run_len(eventually_down(n)), S(n)) = match n
+    Z()  -> reflexive(S(Z()))
+    S(k) -> snat_cong(eventually_down_len(k))
 end

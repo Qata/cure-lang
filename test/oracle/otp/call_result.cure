@@ -1,0 +1,21 @@
+mod CallResult
+  type Req = RGet | RPut
+  type Rep = VNat | VBool
+  type Bit = B0 | B1
+  fn RepVal(p: Rep) -> Type = match p
+    VNat()  -> Nat
+    VBool() -> Bit
+  fn reply_for(r: Req) -> Rep = match r
+    RGet() -> VNat
+    RPut() -> VBool
+  type CallError = Timeout | NoProc | ServerDied
+  type CallResult indices (r: Req)
+    Ok  : (r: Req) -> RepVal(reply_for(r)) -> CallResult(r)
+    Err : (r: Req) -> CallError -> CallResult(r)
+  type Status = Success | Failure
+  fn describe({r: Req}, res: CallResult(r)) -> Status = match res
+    Ok(rr, v)  -> Success()
+    Err(rr, e) -> Failure()
+  fn get_reply() -> CallResult(RGet()) = Ok(RGet(), S(Z()))
+  fn put_reply() -> CallResult(RPut()) = Ok(RPut(), B1())
+end

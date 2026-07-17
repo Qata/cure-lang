@@ -1,0 +1,62 @@
+defmodule Cure.Elab.AppliedDefResolutionTest do
+  @moduledoc """
+  An applied plain DEFINITION in a dependent index (`plus(a, b)` inside `Equivalent(...)`) must
+  resolve its head to the EXACT owned registry key. Before this fix, `lower_applied_type_head`'s
+  catch-all did `Env.resolve_key(env, env.defs, atom)`, which for an ambiguous bare name
+  (`plus` is defined in several stdlib modules) degraded to an unresolvable `{:global, :plus}`
+  that never δ-unfolds — so a using-module annotation mentioning it silently failed conversion,
+  and even the qualified spelling (resolved only through the `:type` namespace) degraded the
+  same way.
+
+  Now: a qualified head resolves through the value namespace to its exact key (and unfolds); a
+  bare, uniquely-provided name resolves to its key; a bare name provided by ≥2 modules is a clean
+  `:ambiguous_name` error rather than a downstream conversion failure.
+  """
+  use ExUnit.Case, async: true
+
+  alias Cure.Elab.Program
+
+  defp verdict(src) do
+    case Program.elaborate(src) do
+      {:ok, _} -> :accept
+      {:error, e} -> {:error, e}
+    end
+  end
+
+  test "a QUALIFIED applied def in a type annotation resolves and δ-unfolds" do
+    # `Std.Otp.EffAlgebra.plus` names a specific (ambiguous-by-base) def; qualified it must land
+    # on `Std.Otp.EffAlgebra#plus` and reduce `plus(S(Z), Z)` to `S(Z)`.
+    src = """
+    mod A
+      use Std.Otp.EffAlgebra
+      fn h() -> Equivalent(Nat, Std.Otp.EffAlgebra.plus(S(Z()), Z()), S(Z())) = reflexive(S(Z()))
+    end
+    """
+
+    assert verdict(src) == :accept
+  end
+
+  test "a UNIQUE imported applied def in a type annotation still resolves and unfolds" do
+    src = """
+    mod B
+      use Std.Otp.EffAlgebra
+      fn h() -> Equivalent(Nat, count_sends(seq(ENil(), ENil())), Z()) = reflexive(Z())
+    end
+    """
+
+    assert verdict(src) == :accept
+  end
+
+  test "a BARE ambiguous applied def in a type annotation is a clean :ambiguous_name error" do
+    # `plus` is defined in ≥2 imported/prelude modules with no unique winner: reject it as
+    # ambiguous (as term position already does), not as a silent conversion failure.
+    src = """
+    mod C
+      use Std.Otp.EffAlgebra
+      fn h() -> Equivalent(Nat, plus(S(Z()), Z()), S(Z())) = reflexive(S(Z()))
+    end
+    """
+
+    assert {:error, {:ambiguous_name, :plus, _}} = verdict(src)
+  end
+end

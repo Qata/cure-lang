@@ -1,0 +1,77 @@
+mod Tree
+  use Std.Equivalent
+  type Tree = Leaf | Node(Tree, Nat, Tree)
+  fn add(m: Nat, n: Nat) -> Nat = match m
+    Z()  -> n
+    S(k) -> S(add(k, n))
+  fn mirror(t: Tree) -> Tree = match t
+    Leaf()        -> Leaf()
+    Node(l, v, r) -> Node(mirror(r), v, mirror(l))
+  fn size(t: Tree) -> Nat = match t
+    Leaf()        -> Z()
+    Node(l, v, r) -> S(add(size(l), size(r)))
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+  fn add_cong({a1: Nat}, {b1: Nat}, {a2: Nat}, {b2: Nat}, ea: Equivalent(Nat, a1, b1), eb: Equivalent(Nat, a2, b2)) -> Equivalent(Nat, add(a1, a2), add(b1, b2)) =
+    rewrite ea in rewrite eb in reflexive(add(b1, b2))
+  fn node_cong({l1: Tree}, {l2: Tree}, v: Nat, {r1: Tree}, {r2: Tree}, el: Equivalent(Tree, l1, l2), er: Equivalent(Tree, r1, r2)) -> Equivalent(Tree, Node(l1, v, r1), Node(l2, v, r2)) =
+    rewrite el in rewrite er in reflexive(Node(l2, v, r2))
+  fn add_zero_r(x: Nat) -> Equivalent(Nat, add(x, Z()), x) = match x
+    Z()  -> reflexive(Z())
+    S(k) -> snat_cong(add_zero_r(k))
+  fn add_succ_r(x: Nat, y: Nat) -> Equivalent(Nat, add(x, S(y)), S(add(x, y))) = match x
+    Z()  -> reflexive(S(y))
+    S(k) -> snat_cong(add_succ_r(k, y))
+  fn add_comm(x: Nat, y: Nat) -> Equivalent(Nat, add(x, y), add(y, x)) = match x
+    Z()  -> sym(add_zero_r(y))
+    S(k) -> trans(snat_cong(add_comm(k, y)), sym(add_succ_r(y, k)))
+  fn mirror_involution(t: Tree) -> Equivalent(Tree, mirror(mirror(t)), t) = match t
+    Leaf()        -> reflexive(Leaf())
+    Node(l, v, r) -> node_cong(v, mirror_involution(l), mirror_involution(r))
+  fn size_mirror(t: Tree) -> Equivalent(Nat, size(mirror(t)), size(t)) = match t
+    Leaf()        -> reflexive(Z())
+    Node(l, v, r) -> snat_cong(trans(add_cong(size_mirror(r), size_mirror(l)), add_comm(size(r), size(l))))
+  type TList = TNil | TCons(Nat, TList)
+  fn lapp(xs: TList, ys: TList) -> TList = match xs
+    TNil()      -> ys
+    TCons(h, t) -> TCons(h, lapp(t, ys))
+  fn lrev(xs: TList) -> TList = match xs
+    TNil()      -> TNil()
+    TCons(h, t) -> lapp(lrev(t), TCons(h, TNil()))
+  fn tcons_cong(h: Nat, {a: TList}, {b: TList}, e: Equivalent(TList, a, b)) -> Equivalent(TList, TCons(h, a), TCons(h, b)) =
+    rewrite e in reflexive(TCons(h, b))
+  fn lapp_cong(c: TList, {a: TList}, {b: TList}, e: Equivalent(TList, a, b)) -> Equivalent(TList, lapp(a, c), lapp(b, c)) =
+    rewrite e in reflexive(lapp(b, c))
+  fn lapp_cong2({a1: TList}, {b1: TList}, {a2: TList}, {b2: TList}, e1: Equivalent(TList, a1, b1), e2: Equivalent(TList, a2, b2)) -> Equivalent(TList, lapp(a1, a2), lapp(b1, b2)) =
+    rewrite e1 in rewrite e2 in reflexive(lapp(b1, b2))
+  fn lapp_assoc(xs: TList, ys: TList, zs: TList) -> Equivalent(TList, lapp(lapp(xs, ys), zs), lapp(xs, lapp(ys, zs))) = match xs
+    TNil()      -> reflexive(lapp(ys, zs))
+    TCons(h, t) -> tcons_cong(h, lapp_assoc(t, ys, zs))
+  fn lapp_nil_r(xs: TList) -> Equivalent(TList, lapp(xs, TNil()), xs) = match xs
+    TNil()      -> reflexive(TNil())
+    TCons(h, t) -> tcons_cong(h, lapp_nil_r(t))
+  fn lrev_app(xs: TList, ys: TList) -> Equivalent(TList, lrev(lapp(xs, ys)), lapp(lrev(ys), lrev(xs))) = match xs
+    TNil()      -> sym(lapp_nil_r(lrev(ys)))
+    TCons(h, t) -> trans(lapp_cong(TCons(h, TNil()), lrev_app(t, ys)), lapp_assoc(lrev(ys), lrev(t), TCons(h, TNil())))
+  fn lrev_cons(v: Nat, xs: TList) -> Equivalent(TList, lrev(TCons(v, xs)), lapp(lrev(xs), TCons(v, TNil()))) =
+    reflexive(lapp(lrev(xs), TCons(v, TNil())))
+  fn lapp_cons(v: Nat, xs: TList) -> Equivalent(TList, lapp(TCons(v, TNil()), xs), TCons(v, xs)) =
+    reflexive(TCons(v, xs))
+  fn flatten(t: Tree) -> TList = match t
+    Leaf()        -> TNil()
+    Node(l, v, r) -> lapp(flatten(l), TCons(v, flatten(r)))
+  fn flatten_mirror(t: Tree) -> Equivalent(TList, flatten(mirror(t)), lrev(flatten(t))) = match t
+    Leaf()        -> reflexive(TNil())
+    Node(l, v, r) -> trans(lapp_cong2(flatten_mirror(r), trans(tcons_cong(v, flatten_mirror(l)), sym(lapp_cons(v, lrev(flatten(l)))))), sym(trans(lrev_app(flatten(l), TCons(v, flatten(r))), trans(lapp_cong(lrev(flatten(l)), lrev_cons(v, flatten(r))), lapp_assoc(lrev(flatten(r)), TCons(v, TNil()), lrev(flatten(l)))))))
+  fn llen(xs: TList) -> Nat = match xs
+    TNil()      -> Z()
+    TCons(h, t) -> S(llen(t))
+  fn llen_cons(v: Nat, xs: TList) -> Equivalent(Nat, llen(TCons(v, xs)), S(llen(xs))) =
+    reflexive(S(llen(xs)))
+  fn llen_app(xs: TList, ys: TList) -> Equivalent(Nat, llen(lapp(xs, ys)), add(llen(xs), llen(ys))) = match xs
+    TNil()      -> reflexive(llen(ys))
+    TCons(h, t) -> snat_cong(llen_app(t, ys))
+  fn size_flatten(t: Tree) -> Equivalent(Nat, llen(flatten(t)), size(t)) = match t
+    Leaf()        -> reflexive(Z())
+    Node(l, v, r) -> trans(llen_app(flatten(l), TCons(v, flatten(r))), trans(add_cong(size_flatten(l), trans(llen_cons(v, flatten(r)), snat_cong(size_flatten(r)))), add_succ_r(size(l), size(r))))
+end

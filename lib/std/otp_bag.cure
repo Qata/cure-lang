@@ -1,0 +1,111 @@
+@group(:concurrency)
+mod Std.Otp.Bag
+  use Std.Equivalent
+  ## ETS `bag` / `duplicate_bag` — a MULTISET-keyed table. Unlike a `set` table (`Std.Otp.Ets`,
+  ## where a second insert of a key OVERWRITES) or an ordered map (`Std.Otp.Gbt`), a `duplicate_bag`
+  ## KEEPS every insertion, so a key can be present many times and the meaningful observation is its
+  ## multiplicity — `count(k, t)`, how many times `k` was inserted. This is the multiset semantics:
+  ## `insert` always adds an occurrence, and `delete_one` removes a single occurrence (Erlang
+  ## `ets:delete_object`), so the count algebra — not set membership — is what the laws pin down.
+  ##
+  ## Keys are a fixed finite domain with decidable equality, so `keq` reduces at proof time (the
+  ## concrete-domain technique shared with `Std.Otp.Set`/`Std.Otp.Bst`).
+
+  type MKey = MA | MB | MC
+  type MBit = MF | MT
+  fn keq(x: MKey, k: MKey) -> MBit = match x
+    MA() -> match k
+      MA() -> MT()
+      MB() -> MF()
+      MC() -> MF()
+    MB() -> match k
+      MA() -> MF()
+      MB() -> MT()
+      MC() -> MF()
+    MC() -> match k
+      MA() -> MF()
+      MB() -> MF()
+      MC() -> MT()
+
+  ## A bag as a plain list of keys — order is irrelevant, only multiplicity matters.
+  type Bag = BNil | BCons(MKey, Bag)
+
+  ## The MULTIPLICITY of `x` in the bag: how many occurrences it has.
+  fn count(x: MKey, t: Bag) -> Nat = match t
+    BNil()         -> Z()
+    BCons(k, rest) -> match keq(x, k)
+      MT() -> S(count(x, rest))
+      MF() -> count(x, rest)
+
+  ## `duplicate_bag` insert: always ADD an occurrence (never overwrite).
+  fn insert(k: MKey, t: Bag) -> Bag = BCons(k, t)
+
+  ## `ets:delete_object`: remove a SINGLE occurrence (the first match), leaving the rest.
+  fn delete_one(k: MKey, t: Bag) -> Bag = match t
+    BNil()          -> BNil()
+    BCons(k2, rest) -> match keq(k, k2)
+      MT() -> rest
+      MF() -> BCons(k2, delete_one(k, rest))
+
+  ## **INSERT INCREMENTS THE MULTIPLICITY.** `count(k, insert(k, t)) = S(count(k, t))` — inserting
+  ## `k` adds exactly one occurrence of `k` (a duplicate_bag never overwrites). Casing `k` makes
+  ## `keq(k, k)` reduce to `MT`, so `count` steps under the new head.
+  fn insert_incr(k: MKey, t: Bag) -> Equivalent(Nat, count(k, insert(k, t)), S(count(k, t))) = match k
+    MA() -> reflexive(S(count(MA(), t)))
+    MB() -> reflexive(S(count(MB(), t)))
+    MC() -> reflexive(S(count(MC(), t)))
+
+  ## **INSERTING A DIFFERENT KEY LEAVES A MULTIPLICITY ALONE.** Given `x ≠ k`, `count(x, insert(k,
+  ## t)) = count(x, t)` — adding an occurrence of `k` doesn't change how many `x`'s there are. The
+  ## new head fails the `keq(x, k)` test (`= MF`), so `count` skips it; the same-key diagonals are
+  ## impossible under the premise (`keq(x, x) = MT`, so `neq : MT = MF` is uninhabited).
+  fn insert_other(x: MKey, k: MKey, t: Bag, neq: Equivalent(MBit, keq(x, k), MF())) -> Equivalent(Nat, count(x, insert(k, t)), count(x, t)) = match x
+    MA() -> match k
+      MA() -> match neq
+      MB() -> reflexive(count(MA(), t))
+      MC() -> reflexive(count(MA(), t))
+    MB() -> match k
+      MA() -> reflexive(count(MB(), t))
+      MB() -> match neq
+      MC() -> reflexive(count(MB(), t))
+    MC() -> match k
+      MA() -> reflexive(count(MC(), t))
+      MB() -> reflexive(count(MC(), t))
+      MC() -> match neq
+
+  ## **DELETE-ONE UNDOES AN INSERT.** `delete_one(k, insert(k, t)) = t` — removing a single
+  ## occurrence right after adding it returns the original bag exactly. `insert` prepends `k`, and
+  ## `delete_one` finds that head (`keq(k, k) = MT`) and drops it. So insert and delete_one are a
+  ## push/pop pair on the multiset.
+  fn delete_insert(k: MKey, t: Bag) -> Equivalent(Bag, delete_one(k, insert(k, t)), t) = match k
+    MA() -> reflexive(t)
+    MB() -> reflexive(t)
+    MC() -> reflexive(t)
+
+  ## Saturating predecessor: `mpred(Z) = Z`, `mpred(S n) = n`.
+  fn mpred(n: Nat) -> Nat = match n
+    Z()  -> Z()
+    S(m) -> m
+
+  ## **DELETE-ONE DECREMENTS THE MULTIPLICITY (saturating).** `count(k, delete_one(k, t)) =
+  ## mpred(count(k, t))` — removing a single occurrence drops `k`'s count by one, or leaves it at
+  ## zero if `k` was absent. Together with `insert_incr` this fully pins `count` under both
+  ## operations: insert `+1`, delete_one `−1` (clamped). Induction on the bag, casing both keys so
+  ## `keq` computes: at a matching head `delete_one` drops it and the head's `S(...)` cancels the
+  ## `mpred`; at a non-matching head both `count` and `delete_one` skip it and the tail carries by IH.
+  fn count_delete_one(k: MKey, t: Bag) -> Equivalent(Nat, count(k, delete_one(k, t)), mpred(count(k, t))) = match t
+    BNil()          -> reflexive(Z())
+    BCons(k2, rest) -> match k
+      MA() -> match k2
+        MA() -> reflexive(count(MA(), rest))
+        MB() -> count_delete_one(MA(), rest)
+        MC() -> count_delete_one(MA(), rest)
+      MB() -> match k2
+        MA() -> count_delete_one(MB(), rest)
+        MB() -> reflexive(count(MB(), rest))
+        MC() -> count_delete_one(MB(), rest)
+      MC() -> match k2
+        MA() -> count_delete_one(MC(), rest)
+        MB() -> count_delete_one(MC(), rest)
+        MC() -> reflexive(count(MC(), rest))
+end

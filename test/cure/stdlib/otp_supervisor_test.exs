@@ -30,6 +30,13 @@ defmodule Cure.Stdlib.OtpSupervisorTest do
     fn establish(specs: Children) -> Fleet(specs) = match specs
       CNil()         -> FNil()
       CCons(s, rest) -> FCons(Alive(), establish(rest))
+    type Pool indices (spec: ChildSpec)
+      PNil  : Pool(spec)
+      PCons : Child(spec) -> Pool(spec) -> Pool(spec)
+    fn start_child({spec: ChildSpec}, p: Pool(spec)) -> Pool(spec) = PCons(Alive(), p)
+    fn restart_pool({spec: ChildSpec}, p: Pool(spec)) -> Pool(spec) = match p
+      PNil()         -> PNil()
+      PCons(c, rest) -> PCons(Alive(), restart_pool(rest))
   """
 
   defp verdict(defs) do
@@ -67,5 +74,42 @@ defmodule Cure.Stdlib.OtpSupervisorTest do
     """
 
     assert verdict(defs) == :reject
+  end
+
+  test "simple_one_for_one: a dynamic pool keeps its uniform spec across start/restart" do
+    defs = """
+      fn grow(p: Pool(CA)) -> Pool(CA) = start_child(restart_pool(p))
+    """
+
+    assert verdict(defs) == :accept
+  end
+
+  test "simple_one_for_one: the pool's uniform spec cannot change" do
+    # start_child preserves the pool's spec; claiming it turns a CA-pool into a CB-pool rejects.
+    defs = """
+      fn bad(p: Pool(CA)) -> Pool(CB) = start_child(p)
+    """
+
+    assert verdict(defs) == :reject
+  end
+
+  test "the module is compiled into the stdlib preload" do
+    assert Code.ensure_loaded?(:"Cure.Std.Otp.Supervisor")
+  end
+
+  test "dynamic-pool membership algebra: start grows, terminate cancels start, restart preserves size" do
+    src = """
+    mod SupPool
+      use Std.Otp.Supervisor
+      fn grows(spec: ChildSpec, p: Pool(spec)) -> Equivalent(Nat, pool_size(start_child(p)), S(pool_size(p))) =
+        start_grows(p)
+      fn cancels(spec: ChildSpec, p: Pool(spec)) -> Equivalent(Pool(spec), terminate_child(start_child(p)), p) =
+        terminate_start_id(p)
+      fn keeps_size(spec: ChildSpec, p: Pool(spec)) -> Equivalent(Nat, pool_size(restart_pool(p)), pool_size(p)) =
+        restart_preserves_size(p)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
   end
 end
