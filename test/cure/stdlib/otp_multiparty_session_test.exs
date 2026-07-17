@@ -58,6 +58,20 @@ defmodule Cure.Stdlib.OtpMultipartySessionTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "operational correspondence: firing the head steps both participants' projections" do
+    src = """
+    mod MpOpc
+      use Std.Otp.MultipartySession
+      fn snd(t: Tag, k: Global) -> LStep(project(GMsg(RA, RB, t, k), RA), project(k, RA)) =
+        proj_sender_steps(t, k)
+      fn rcv(t: Tag, k: Global) -> LStep(project(GMsg(RA, RB, t, k), RB), project(k, RB)) =
+        proj_receiver_steps(t, k)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "grun_preserves: well-formedness is maintained across a whole protocol run" do
     src = """
     mod MpPres

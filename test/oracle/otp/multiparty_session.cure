@@ -59,4 +59,13 @@ mod MultipartySession
   fn grun_preserves({g: Global}, {g2: Global}, wf: TwoParty(g), run: GRun(g, g2)) -> TwoParty(g2) = match run
     GRDone()          -> wf
     GRStep(st, rest)  -> grun_preserves(twoparty_preserved(wf, st), rest)
+  type LStep indices (l: Local, l2: Local)
+    LStepSend : LStep(LSend(t, k), k)
+    LStepRecv : LStep(LRecv(t, k), k)
+  fn lstep_send(t: Tag, k2: Local) -> LStep(LSend(t, k2), k2) = LStepSend()
+  fn lstep_recv(t: Tag, k2: Local) -> LStep(LRecv(t, k2), k2) = LStepRecv()
+  fn proj_sender_steps(t: Tag, k: Global) -> LStep(project(GMsg(RA, RB, t, k), RA), project(k, RA)) =
+    lstep_send(t, project(k, RA))
+  fn proj_receiver_steps(t: Tag, k: Global) -> LStep(project(GMsg(RA, RB, t, k), RB), project(k, RB)) =
+    lstep_recv(t, project(k, RB))
 end

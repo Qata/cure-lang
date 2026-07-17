@@ -68,3 +68,13 @@ twoparty_terminates (TPBA t wf2) = grun_fire RB RA t (twoparty_terminates wf2)
 grun_preserves : TwoParty g -> GRun g g2 -> TwoParty g2
 grun_preserves wf GRDone = wf
 grun_preserves wf (GRStep st rest) = grun_preserves (twoparty_preserved wf st) rest
+
+data LStep : Local -> Local -> Type where
+  LStepSend : LStep (LSend t k) k
+  LStepRecv : LStep (LRecv t k) k
+
+proj_sender_steps : (t : Tag) -> (k : Global) -> LStep (project (GMsg RA RB t k) RA) (project k RA)
+proj_sender_steps t k = LStepSend
+
+proj_receiver_steps : (t : Tag) -> (k : Global) -> LStep (project (GMsg RA RB t k) RB) (project k RB)
+proj_receiver_steps t k = LStepRecv
