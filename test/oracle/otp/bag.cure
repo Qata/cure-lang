@@ -1,0 +1,51 @@
+mod Bag
+  use Std.Equivalent
+  type MKey = MA | MB | MC
+  type MBit = MF | MT
+  fn keq(x: MKey, k: MKey) -> MBit = match x
+    MA() -> match k
+      MA() -> MT()
+      MB() -> MF()
+      MC() -> MF()
+    MB() -> match k
+      MA() -> MF()
+      MB() -> MT()
+      MC() -> MF()
+    MC() -> match k
+      MA() -> MF()
+      MB() -> MF()
+      MC() -> MT()
+  type Bag = BNil | BCons(MKey, Bag)
+  fn count(x: MKey, t: Bag) -> Nat = match t
+    BNil()         -> Z()
+    BCons(k, rest) -> match keq(x, k)
+      MT() -> S(count(x, rest))
+      MF() -> count(x, rest)
+  fn insert(k: MKey, t: Bag) -> Bag = BCons(k, t)
+  fn delete_one(k: MKey, t: Bag) -> Bag = match t
+    BNil()          -> BNil()
+    BCons(k2, rest) -> match keq(k, k2)
+      MT() -> rest
+      MF() -> BCons(k2, delete_one(k, rest))
+  fn insert_incr(k: MKey, t: Bag) -> Equivalent(Nat, count(k, insert(k, t)), S(count(k, t))) = match k
+    MA() -> reflexive(S(count(MA(), t)))
+    MB() -> reflexive(S(count(MB(), t)))
+    MC() -> reflexive(S(count(MC(), t)))
+  fn insert_other(x: MKey, k: MKey, t: Bag, neq: Equivalent(MBit, keq(x, k), MF())) -> Equivalent(Nat, count(x, insert(k, t)), count(x, t)) = match x
+    MA() -> match k
+      MA() -> match neq
+      MB() -> reflexive(count(MA(), t))
+      MC() -> reflexive(count(MA(), t))
+    MB() -> match k
+      MA() -> reflexive(count(MB(), t))
+      MB() -> match neq
+      MC() -> reflexive(count(MB(), t))
+    MC() -> match k
+      MA() -> reflexive(count(MC(), t))
+      MB() -> reflexive(count(MC(), t))
+      MC() -> match neq
+  fn delete_insert(k: MKey, t: Bag) -> Equivalent(Bag, delete_one(k, insert(k, t)), t) = match k
+    MA() -> reflexive(t)
+    MB() -> reflexive(t)
+    MC() -> reflexive(t)
+end
