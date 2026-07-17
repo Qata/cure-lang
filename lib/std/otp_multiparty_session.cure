@@ -77,4 +77,19 @@ mod Std.Otp.MultipartySession
     GFire() -> match wf
       TPAB(t, wf2) -> wf2
       TPBA(t, wf2) -> wf2
+
+  ## A well-formed global protocol is either FINISHED (`GEnd`) or has a head interaction ready to
+  ## FIRE. Both index shapes are fixed by the scrutinee, so nothing floats during construction.
+  type GProgress indices (g: Global)
+    GPDone : GProgress(GEnd)
+    GPFire : GProgress(GMsg(from, to, t, k))
+
+  ## **GLOBAL PROGRESS.** A two-party protocol never deadlocks: it is either complete or its head
+  ## interaction can fire. Case analysis on the well-formedness derivation. With
+  ## `twoparty_preserved` this is full safety for the global protocol — it always either finishes
+  ## or makes progress, and firing keeps it well-formed (so projections stay coherent throughout).
+  fn global_progress({g: Global}, wf: TwoParty(g)) -> GProgress(g) = match wf
+    TPEnd()      -> GPDone()
+    TPAB(t, wf2) -> GPFire()
+    TPBA(t, wf2) -> GPFire()
 end

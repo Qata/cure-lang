@@ -43,3 +43,12 @@ twoparty_preserved : TwoParty g -> GStep g g2 -> TwoParty g2
 twoparty_preserved wf GFire = case wf of
   TPAB t wf2 => wf2
   TPBA t wf2 => wf2
+
+data GProgress : Global -> Type where
+  GPDone : GProgress GEnd
+  GPFire : GProgress (GMsg from to t k)
+
+global_progress : TwoParty g -> GProgress g
+global_progress TPEnd = GPDone
+global_progress (TPAB t wf2) = GPFire
+global_progress (TPBA t wf2) = GPFire

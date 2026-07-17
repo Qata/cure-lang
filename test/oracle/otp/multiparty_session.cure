@@ -40,4 +40,11 @@ mod MultipartySession
     GFire() -> match wf
       TPAB(t, wf2) -> wf2
       TPBA(t, wf2) -> wf2
+  type GProgress indices (g: Global)
+    GPDone : GProgress(GEnd)
+    GPFire : GProgress(GMsg(from, to, t, k))
+  fn global_progress({g: Global}, wf: TwoParty(g)) -> GProgress(g) = match wf
+    TPEnd()      -> GPDone()
+    TPAB(t, wf2) -> GPFire()
+    TPBA(t, wf2) -> GPFire()
 end

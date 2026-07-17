@@ -44,4 +44,17 @@ defmodule Cure.Stdlib.OtpMultipartySessionTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "global_progress: a well-formed non-empty protocol is ready to fire (no deadlock)" do
+    src = """
+    mod MpProg
+      use Std.Otp.MultipartySession
+      fn wf() -> TwoParty(GMsg(RA, RB, TA, GEnd())) = TPAB(TA, TPEnd())
+      fn ready() -> GProgress(GMsg(RA, RB, TA, GEnd())) = global_progress(wf())
+      fn done() -> GProgress(GEnd()) = global_progress(TPEnd())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end
