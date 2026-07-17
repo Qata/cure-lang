@@ -1981,6 +1981,14 @@ defmodule Cure.Compiler.Parser do
           do: {:delayed_raw_tokens, raw_meta, tokens},
           else: parse_raw_hole(tokens, state)
 
+      {:ok, {:declarations_block, _block_meta, stmts}} when is_list(stmts) ->
+        # A `Declarations until dedent` body binds a pre-parsed block. Splice
+        # its statements flat into the enclosing declarations — the same
+        # `{:raw_splice, _}` shape the raw-hole path yields — so body members
+        # (`fn`/`type`/…) become real module declarations rather than one
+        # opaque node the emitter drops. An empty body splices nothing.
+        {:raw_splice, stmts}
+
       {:ok, _value} ->
         subst_holes(variable, bindings, state)
 

@@ -629,11 +629,37 @@ defmodule Cure.Compiler.MacroFuzz do
           {:ok, [Token.t()]} | {:error, {:unsupported_surface_filler, term()}} | {:error, term()}
   def assemble_use_site(%{keyword: keyword, segments: segments}, bindings)
       when is_binary(keyword) and is_map(bindings) do
-    with {:ok, words} <- assemble_words(segments, bindings),
-         {:ok, tokens} <- Lexer.tokenize(Enum.join([keyword | words], " "), emit_events: false) do
-      tokens = Enum.reject(tokens, &(&1.type == :eof))
-      {:ok, append_raw_delimiters(tokens, segments)}
+    with {:ok, words} <- assemble_words(segments, bindings) do
+      line = Enum.join([keyword | words], " ")
+
+      if declarations_hole?(segments) do
+        # A `Declarations until dedent` body must occupy its own indented
+        # line so `parse_definition_block` sees an `:indent`. Synthesise a
+        # minimal well-typed body block and let the lexer emit the structural
+        # indent/dedent tokens rather than hand-building them.
+        case Lexer.tokenize(line <> "\n  fn __proof_body() -> Int = 1\n", emit_events: false) do
+          {:ok, tokens} -> {:ok, Enum.reject(tokens, &(&1.type == :eof))}
+          {:error, _} = error -> error
+        end
+      else
+        case Lexer.tokenize(line, emit_events: false) do
+          {:ok, tokens} ->
+            tokens = Enum.reject(tokens, &(&1.type == :eof))
+            {:ok, append_raw_delimiters(tokens, segments)}
+
+          {:error, _} = error ->
+            error
+        end
+      end
     end
+  end
+
+  defp declarations_hole?(segments) when is_list(segments) do
+    Enum.any?(segments, fn
+      {:declarations_hole, _meta} -> true
+      {:optional, group} -> declarations_hole?(group)
+      _ -> false
+    end)
   end
 
   defp append_raw_delimiters(tokens, segments) do
@@ -693,6 +719,11 @@ defmodule Cure.Compiler.MacroFuzz do
           {:ok, words} -> {:cont, {:ok, acc ++ words}}
           {:error, _} = error -> {:halt, error}
         end
+
+      {:declarations_hole, _meta}, {:ok, acc} ->
+        # The body block is appended to the assembled source as its own
+        # indented line by `assemble_use_site`; it contributes no inline word.
+        {:cont, {:ok, acc}}
 
       other, {:ok, _acc} ->
         {:halt, {:error, {:invalid_macro_segment, other}}}

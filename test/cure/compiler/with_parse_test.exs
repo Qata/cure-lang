@@ -199,8 +199,7 @@ defmodule Cure.Compiler.WithParseTest do
   test "`actor Name with Payload` preserves the payload in transparent syntax" do
     src = """
     actor Counter with 0
-      on_message
-        (:inc, n) -> n + 1
+      fn initial_state() -> Int = 0
     """
 
     assert {:ok, ast} = parse(src)
