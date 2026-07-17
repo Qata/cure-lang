@@ -46,15 +46,17 @@ mod Std.Otp.ExitSignal
 
   ## A linked peer's exit, dispatched by REASON × trap flag. Indexing `Step` by the reason
   ## makes the dispatch type-level, so the surviving case is provably the only outcome of a
-  ## normal exit on a non-trapping peer. Per constructor: normal+trapping delivers an EXIT
-  ## message; normal+not-trapping SURVIVES unchanged (a normal exit does not kill);
-  ## abnormal+trapping delivers an EXIT message; abnormal+not-trapping propagates to `Dead`;
-  ## `Kill` dies unconditionally, even when trapping (untrappable).
+  ## normal exit on a non-trapping peer.
   type Step indices (r: Reason, before: Proc, after: Proc)
+    ## normal + trapping: EXIT delivered as a message.
     SNormalTrap    : Accepted(TExit) -> Step(Normal, Alive(e, m, Trapping), Alive(TCons(TExit, e), m, Trapping))
+    ## normal + not trapping: the peer SURVIVES unchanged — a normal exit does not kill.
     SNormalSurvive : Step(Normal, Alive(e, m, NotTrapping), Alive(e, m, NotTrapping))
+    ## abnormal + trapping: EXIT delivered as a message.
     SAbnormalTrap  : Accepted(TExit) -> Step(Abnormal, Alive(e, m, Trapping), Alive(TCons(TExit, e), m, Trapping))
+    ## abnormal + not trapping: the peer exits (propagation).
     SAbnormalProp  : Step(Abnormal, Alive(e, m, NotTrapping), Dead)
+    ## kill: unconditional death, even when trapping (untrappable).
     SKillTrap      : Step(Kill, Alive(e, m, Trapping), Dead)
     SKillNoTrap    : Step(Kill, Alive(e, m, NotTrapping), Dead)
 

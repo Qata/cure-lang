@@ -196,7 +196,11 @@ in the constructor-list production).
 
 **Layer/risk.** P. Low. Soundness-neutral (comments are non-semantic).
 
-**Status.** OPEN.
+**Status.** ✅ FIXED (`parser.ex`): `parse_gadt_ctors` skips `:doc_comment`/`:line_comment`
+between constructors, and the block entry uses `skip_newlines_and_comments` so a comment before
+the first constructor (which lands before the block `:indent`) doesn't defeat block-open
+detection. Regression tests in `parser_indexed_type_test.exs`; `Std.Otp.ExitSignal` documents
+each constructor in place.
 
 ---
 

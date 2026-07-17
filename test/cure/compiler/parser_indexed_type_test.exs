@@ -120,4 +120,41 @@ defmodule Cure.Compiler.ParserIndexedTypeTest do
     assert [{:function_call, [name: "SNat"], _}, {:function_call, [name: "SNat"], _}] = chain
     refute Enum.any?(chain, &match?({:named_dom, _, _}, &1))
   end
+
+  # E5: `##`/`#` comments may document constructors in place — a comment before the first
+  # constructor (before the block's `:indent`) or between constructors must be skipped, not
+  # parsed as a bogus constructor name. A comment after the block still documents the next decl.
+  test "comments may document each constructor without breaking the ctor list" do
+    src = """
+    mod M
+      type Step indices (r: Nat)
+        ## the base case
+        SZero : Step(Z)
+        ## the successor case
+        SSucc : Step(n) -> Step(S(n))
+      ## documents the function below, not a constructor
+      fn foo() -> Nat = Z
+    """
+
+    {:ok, ast} = parse_decl(src)
+    {:indexed_type, _meta, ctors} = find_indexed_type(ast, "Step")
+
+    names = for {:gadt_ctor, m, _} <- ctors, do: Keyword.get(m, :name)
+    assert names == ["SZero", "SSucc"]
+  end
+
+  test "a plain # comment between constructors is skipped too" do
+    src = """
+    mod M
+      type T indices (n: Nat)
+        A : T(Z)
+        # plain line comment
+        B : T(S(n))
+    """
+
+    {:ok, ast} = parse_decl(src)
+    {:indexed_type, _meta, ctors} = find_indexed_type(ast, "T")
+    names = for {:gadt_ctor, m, _} <- ctors, do: Keyword.get(m, :name)
+    assert names == ["A", "B"]
+  end
 end
