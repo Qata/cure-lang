@@ -43,4 +43,23 @@ defmodule Cure.Stdlib.OtpSessionTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "session_run_safe: a full session run stays compatible to completion" do
+    # !TA.?TB.end vs ?TA.!TB.end run to completion (exchange TA then TB); compatibility holds
+    # throughout, so the session never gets stuck.
+    src = """
+    mod SrInst
+      use Std.Otp.Session
+      fn c0() -> Compat(SSend(TA, SRecv(TB, SEnd())), SRecv(TA, SSend(TB, SEnd()))) =
+        CSR(TA, CRS(TB, CEnd()))
+      fn step1() -> SStep(SSend(TA, SRecv(TB, SEnd())), SRecv(TA, SSend(TB, SEnd())), SRecv(TB, SEnd()), SSend(TB, SEnd())) = StepSR()
+      fn step2() -> SStep(SRecv(TB, SEnd()), SSend(TB, SEnd()), SEnd(), SEnd()) = StepRS()
+      fn run() -> SRun(SSend(TA, SRecv(TB, SEnd())), SRecv(TA, SSend(TB, SEnd())), SEnd(), SEnd()) =
+        SRStep(step1(), SRStep(step2(), SRDone()))
+      fn safe() -> Compat(SEnd(), SEnd()) = session_run_safe(c0(), run())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

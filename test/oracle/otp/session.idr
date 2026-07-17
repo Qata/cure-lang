@@ -36,3 +36,11 @@ data SStep : SType -> SType -> SType -> SType -> Type where
 session_preservation : Compat l r -> SStep l r l2 r2 -> Compat l2 r2
 session_preservation (CSR t c2) StepSR = c2
 session_preservation (CRS t c2) StepRS = c2
+
+data SRun : SType -> SType -> SType -> SType -> Type where
+  SRDone : SRun l r l r
+  SRStep : SStep l r lm rm -> SRun lm rm l2 r2 -> SRun l r l2 r2
+
+session_run_safe : Compat l r -> SRun l r l2 r2 -> Compat l2 r2
+session_run_safe c SRDone = c
+session_run_safe c (SRStep st rest) = session_run_safe (session_preservation c st) rest

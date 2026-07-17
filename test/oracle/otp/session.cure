@@ -30,4 +30,11 @@ mod Session
       CSR(t, c2) -> c2
     StepRS() -> match c
       CRS(t, c2) -> c2
+
+  type SRun indices (l: SType, r: SType, l2: SType, r2: SType)
+    SRDone : SRun(l, r, l, r)
+    SRStep : SStep(l, r, lm, rm) -> SRun(lm, rm, l2, r2) -> SRun(l, r, l2, r2)
+  fn session_run_safe({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, c: Compat(l, r), run: SRun(l, r, l2, r2)) -> Compat(l2, r2) = match run
+    SRDone()         -> c
+    SRStep(st, rest) -> session_run_safe(session_preservation(c, st), rest)
 end
