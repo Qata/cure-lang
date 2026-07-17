@@ -19,7 +19,7 @@ defmodule Cure.Elab.EmitPrefixTest do
     fns =
       Program.reachable_def_names(
         env,
-        [:from_list, :union, :member, :to_list, :add, :new, :size] ++ map_surface
+        [:from_list, :union, :intersection, :member, :to_list, :add, :new, :size] ++ map_surface
       )
 
     {:ok, env: env, origins: origins, fns: fns}
@@ -64,6 +64,55 @@ defmodule Cure.Elab.EmitPrefixTest do
              flat |> :erlang.binary_to_term() |> inspect(limit: :infinity),
              "{:\"Cure.Std.Map\""
            )
+  end
+
+  defp emit_group(env, origins, fns, prefix) do
+    owners = ["Std.Set", "Std.Map"]
+
+    fns
+    |> Enum.group_by(&Name.owner/1)
+    |> Enum.each(fn {owner, names} ->
+      {:ok, _} =
+        Emit.compile_and_load(env,
+          module: String.to_atom(prefix <> "Cure." <> owner),
+          functions: names,
+          origins: origins,
+          prefix: prefix,
+          local_owners: owners
+        )
+    end)
+
+    String.to_atom(prefix <> "Cure.Std.Set")
+  end
+
+  test "two prefixed emissions coexist and neither clobbers the canonical", ctx do
+    %{env: env, origins: origins, fns: fns} = ctx
+
+    a = emit_group(env, origins, fns, "T_A.")
+    b = emit_group(env, origins, fns, "T_B.")
+
+    refute a == b
+    assert apply(a, :size, [apply(a, :from_list, [[7, 7, 8]])]) == 2
+    assert apply(b, :size, [apply(b, :from_list, [[1, 1, 1, 2]])]) == 2
+
+    # Canonical Set is sticky (loaded at suite startup) and still returns its own
+    # results — the prefixed emissions never touched its slot.
+    assert :code.is_sticky(:"Cure.Std.Set")
+    assert apply(:"Cure.Std.Set", :size, [apply(:"Cure.Std.Set", :from_list, [[3, 3, 4, 5]])]) == 3
+  end
+
+  test "a prefixed Set+Map group delegates correctly through the prefixed Map", ctx do
+    %{env: env, origins: origins, fns: fns} = ctx
+
+    set = emit_group(env, origins, fns, "T_Deleg.")
+
+    # `union`/`intersection` exercise Set's delegated calls into Map. Correct
+    # results prove the intra-group remote target resolved to T_Deleg.Cure.Std.Map,
+    # not a missing/mismatched module.
+    a = apply(set, :from_list, [[1, 2, 3]])
+    b = apply(set, :from_list, [[2, 3, 4]])
+    assert Enum.sort(apply(set, :to_list, [apply(set, :union, [a, b])])) == [1, 2, 3, 4]
+    assert Enum.sort(apply(set, :to_list, [apply(set, :intersection, [a, b])])) == [2, 3]
   end
 
   # Canonicalize every `{:var, _, name}` atom in an abstract-forms tree to a
