@@ -1059,8 +1059,39 @@ defmodule Cure.Compiler.Printer do
 
     chain =
       Enum.map_join(elems, " -> ", fn
-        {:named_dom, dname, inner} -> "(#{dname}: #{render(inner, depth, indent)})"
-        other -> render(other, depth, indent)
+        {:named_dom, dname, inner} ->
+          inner_rendered = render_ctor_function_type(inner, depth, indent)
+
+          inner_rendered =
+            case inner do
+              {:pi_type, _, _} ->
+                "(" <> inner_rendered <> ")"
+
+              {:function_call, function_meta, _} ->
+                if Keyword.get(function_meta, :function_type),
+                  do: "(" <> inner_rendered <> ")",
+                  else: inner_rendered
+
+              _ ->
+                inner_rendered
+            end
+
+          "(#{dname}: #{inner_rendered})"
+
+        # A function-typed constructor FIELD must stay grouped away from the
+        # constructor's own arrow telescope. Without this outer pair, a field
+        # parsed from `((rest: A) -> B(rest))` prints as `(rest: A) -> B(rest)`;
+        # reparsing then mistakes `rest` for a constructor-level named field.
+        {:pi_type, _, _} = function_type ->
+          "(" <> render_ctor_function_type(function_type, depth, indent) <> ")"
+
+        {:function_call, function_meta, _} = function_type ->
+          if Keyword.get(function_meta, :function_type),
+            do: "(" <> render_ctor_function_type(function_type, depth, indent) <> ")",
+            else: render(function_type, depth, indent)
+
+        other ->
+          render(other, depth, indent)
       end)
 
     "#{name} : #{chain}"
@@ -1241,6 +1272,42 @@ defmodule Cure.Compiler.Printer do
   defp to_string(other, _depth, _indent) do
     raise Cure.Compiler.Printer.UnprintableNodeError, node: other
   end
+
+  # Constructor fields use a dedicated arrow-chain grammar. A multi-domain Π
+  # that the general printer writes `(rest: A, Proof(rest)) -> Result(rest)` must
+  # therefore be rendered here as `(rest: A) -> Proof(rest) -> Result(rest)`;
+  # both denote the same Π telescope, but only the latter is accepted inside the
+  # constructor parser's grouped field production.
+  defp render_ctor_function_type({:pi_type, meta, children}, depth, indent) do
+    binders = Keyword.get(meta, :binders, [])
+    {domains, [result]} = Enum.split(children, length(children) - 1)
+
+    domains =
+      binders
+      |> Enum.zip(domains)
+      |> Enum.map(fn
+        {nil, domain} -> render(domain, depth, indent)
+        {name, domain} -> "(#{name}: #{render(domain, depth, indent)})"
+      end)
+
+    Enum.join(domains ++ [render(result, depth, indent)], " -> ")
+  end
+
+  defp render_ctor_function_type(
+         {:function_call, meta, children} = function_type,
+         depth,
+         indent
+       ) do
+    if Keyword.get(meta, :function_type) do
+      {domains, [result]} = Enum.split(children, length(children) - 1)
+      domains = Enum.map(domains, &("(" <> render(&1, depth, indent) <> ")"))
+      Enum.join(domains ++ [render(result, depth, indent)], " -> ")
+    else
+      render(function_type, depth, indent)
+    end
+  end
+
+  defp render_ctor_function_type(other, depth, indent), do: render(other, depth, indent)
 
   defp lift_module_name_to_string({:macro_hole, name}), do: name
   defp lift_module_name_to_string({:macro_path_hole, prefix, name}), do: prefix <> "." <> name
