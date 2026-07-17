@@ -528,6 +528,12 @@ defmodule Cure.Compiler.Parser do
           syntax_fields: Map.get(rule, :syntax_fields, macro_syntax_fields(rule.segments)),
           syntax_repeated_fields: Map.get(rule, :syntax_repeated_fields, macro_syntax_repeated_fields(rule.segments)),
           syntax_field_types: Map.get(rule, :syntax_field_types, %{}),
+          # The matched rule's segments (literals interleaved with holes). The
+          # printer needs the literal separators (`state`/`messages`/…) to
+          # reconstruct the surface invocation — the flattened arg list drops
+          # them — and a file being reprinted has no access to the stdlib rule
+          # that defined this macro, so the segments must travel on the node.
+          syntax_segments: rule.segments,
           line: keyword_token.line,
           col: keyword_token.col
         ]
