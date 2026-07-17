@@ -1,0 +1,79 @@
+@group(:concurrency)
+mod Std.Otp.Bst
+  use Std.Equivalent
+  ## ERLANG `gb_trees` / `gb_sets` — the ORDERED binary search tree OTP uses for logarithmic-time
+  ## sorted maps and sets. Keys live at every node; the search invariant is that everything in the
+  ## left subtree compares LESS than the node key and everything in the right compares GREATER, so
+  ## `member` and `insert` can steer by a single comparison at each node instead of scanning.
+  ##
+  ## Keys are drawn from a fixed finite domain `KA < KB < KC` with a total `kcmp`. Working over a
+  ## concrete domain lets `kcmp(k, v)` REDUCE at proof time, so the search-tree laws hold by
+  ## computation and 9-way key casing rather than needing abstract order lemmas — the same technique
+  ## the `Std.Otp.Set` membership proofs use.
+
+  type Key = KA | KB | KC
+  type Cmp = KLt | KEq | KGt
+  type B = F | T
+
+  ## The total order on keys: KA < KB < KC.
+  fn kcmp(a: Key, b: Key) -> Cmp = match a
+    KA() -> match b
+      KA() -> KEq()
+      KB() -> KLt()
+      KC() -> KLt()
+    KB() -> match b
+      KA() -> KGt()
+      KB() -> KEq()
+      KC() -> KLt()
+    KC() -> match b
+      KA() -> KGt()
+      KB() -> KGt()
+      KC() -> KEq()
+
+  type Tree = Leaf | Node(Tree, Key, Tree)
+
+  ## Membership steers by the comparison: go left when smaller, right when larger, hit at equal.
+  fn member(k: Key, t: Tree) -> B = match t
+    Leaf()        -> F()
+    Node(l, v, r) -> match kcmp(k, v)
+      KLt() -> member(k, l)
+      KEq() -> T()
+      KGt() -> member(k, r)
+
+  ## Insert steers the same way, so the search invariant is preserved: a new key lands on the side
+  ## its comparison dictates, and re-inserting an existing key is a no-op.
+  fn insert(k: Key, t: Tree) -> Tree = match t
+    Leaf()        -> Node(Leaf(), k, Leaf())
+    Node(l, v, r) -> match kcmp(k, v)
+      KLt() -> Node(insert(k, l), v, r)
+      KEq() -> Node(l, v, r)
+      KGt() -> Node(l, v, insert(k, r))
+
+  ## The empty tree has no members — the base of every search.
+  fn member_leaf(k: Key) -> Equivalent(B, member(k, Leaf()), F()) = reflexive(F())
+
+  ## **A SEARCH-TREE INSERT MAKES THE KEY FINDABLE.** `member(k, insert(k, t)) = T` — after inserting
+  ## `k`, a subsequent search for `k` succeeds, no matter the tree's shape. `member` and `insert`
+  ## steer by the SAME `kcmp(k, v)`, so at each node they take matching branches: on a hit (`k = v`)
+  ## both stop and membership is `T`; on `KLt`/`KGt` both descend the same subtree and the induction
+  ## hypothesis carries. Casing `k` and each node key `v` over the finite domain makes every
+  ## comparison reduce.
+  fn insert_member(k: Key, t: Tree) -> Equivalent(B, member(k, insert(k, t)), T()) = match t
+    Leaf()        -> match k
+      KA() -> reflexive(T())
+      KB() -> reflexive(T())
+      KC() -> reflexive(T())
+    Node(l, v, r) -> match k
+      KA() -> match v
+        KA() -> reflexive(T())
+        KB() -> insert_member(KA(), l)
+        KC() -> insert_member(KA(), l)
+      KB() -> match v
+        KA() -> insert_member(KB(), r)
+        KB() -> reflexive(T())
+        KC() -> insert_member(KB(), l)
+      KC() -> match v
+        KA() -> insert_member(KC(), r)
+        KB() -> insert_member(KC(), r)
+        KC() -> reflexive(T())
+end

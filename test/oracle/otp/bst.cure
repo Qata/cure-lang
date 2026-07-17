@@ -1,0 +1,51 @@
+mod Bst
+  use Std.Equivalent
+  type Key = KA | KB | KC
+  type Cmp = KLt | KEq | KGt
+  type B = F | T
+  fn kcmp(a: Key, b: Key) -> Cmp = match a
+    KA() -> match b
+      KA() -> KEq()
+      KB() -> KLt()
+      KC() -> KLt()
+    KB() -> match b
+      KA() -> KGt()
+      KB() -> KEq()
+      KC() -> KLt()
+    KC() -> match b
+      KA() -> KGt()
+      KB() -> KGt()
+      KC() -> KEq()
+  type Tree = Leaf | Node(Tree, Key, Tree)
+  fn member(k: Key, t: Tree) -> B = match t
+    Leaf()        -> F()
+    Node(l, v, r) -> match kcmp(k, v)
+      KLt() -> member(k, l)
+      KEq() -> T()
+      KGt() -> member(k, r)
+  fn insert(k: Key, t: Tree) -> Tree = match t
+    Leaf()        -> Node(Leaf(), k, Leaf())
+    Node(l, v, r) -> match kcmp(k, v)
+      KLt() -> Node(insert(k, l), v, r)
+      KEq() -> Node(l, v, r)
+      KGt() -> Node(l, v, insert(k, r))
+  fn member_leaf(k: Key) -> Equivalent(B, member(k, Leaf()), F()) = reflexive(F())
+  fn insert_member(k: Key, t: Tree) -> Equivalent(B, member(k, insert(k, t)), T()) = match t
+    Leaf()        -> match k
+      KA() -> reflexive(T())
+      KB() -> reflexive(T())
+      KC() -> reflexive(T())
+    Node(l, v, r) -> match k
+      KA() -> match v
+        KA() -> reflexive(T())
+        KB() -> insert_member(KA(), l)
+        KC() -> insert_member(KA(), l)
+      KB() -> match v
+        KA() -> insert_member(KB(), r)
+        KB() -> reflexive(T())
+        KC() -> insert_member(KB(), l)
+      KC() -> match v
+        KA() -> insert_member(KC(), r)
+        KB() -> insert_member(KC(), r)
+        KC() -> reflexive(T())
+end
