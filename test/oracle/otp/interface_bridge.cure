@@ -1,0 +1,145 @@
+mod InterfaceBridge
+  type B = F | T
+  type IF = MkIF(B, B, B)
+  type Imp indices (a: B, b: B)
+    ImpFF : Imp(F, F)
+    ImpFT : Imp(F, T)
+    ImpTT : Imp(T, T)
+  type Sub indices (x: IF, y: IF)
+    MkSub : Imp(a, a2) -> Imp(b, b2) -> Imp(c, c2) -> Sub(MkIF(a, b, c), MkIF(a2, b2, c2))
+
+  type Tag = TA | TB | TC
+  type TagList = TNil | TCons(Tag, TagList)
+  type Handles indices (t: Tag, iface: TagList)
+    HHere  : Handles(t, TCons(t, rest))
+    HThere : Handles(t, rest) -> Handles(t, TCons(y, rest))
+  type AllHandled indices (s: TagList, iface: TagList)
+    AHNil  : AllHandled(TNil, iface)
+    AHCons : Handles(t, iface) -> AllHandled(rest, iface) -> AllHandled(TCons(t, rest), iface)
+
+  fn denote(x: IF) -> TagList = match x
+    MkIF(a, b, c) -> match a
+      F() -> match b
+        F() -> match c
+          F() -> TNil
+          T() -> TCons(TC, TNil)
+        T() -> match c
+          F() -> TCons(TB, TNil)
+          T() -> TCons(TB, TCons(TC, TNil))
+      T() -> match b
+        F() -> match c
+          F() -> TCons(TA, TNil)
+          T() -> TCons(TA, TCons(TC, TNil))
+        T() -> match c
+          F() -> TCons(TA, TCons(TB, TNil))
+          T() -> TCons(TA, TCons(TB, TCons(TC, TNil)))
+
+  fn getb(x: IF, t: Tag) -> B = match x
+    MkIF(a, b, c) -> match t
+      TA() -> a
+      TB() -> b
+      TC() -> c
+
+  fn handles_a(b: B, c: B) -> Handles(TA, denote(MkIF(T, b, c))) = match b
+    F() -> match c
+      F() -> HHere()
+      T() -> HHere()
+    T() -> match c
+      F() -> HHere()
+      T() -> HHere()
+  fn handles_b(a: B, c: B) -> Handles(TB, denote(MkIF(a, T, c))) = match a
+    F() -> match c
+      F() -> HHere()
+      T() -> HHere()
+    T() -> match c
+      F() -> HThere(HHere())
+      T() -> HThere(HHere())
+  fn handles_c(a: B, b: B) -> Handles(TC, denote(MkIF(a, b, T))) = match a
+    F() -> match b
+      F() -> HHere()
+      T() -> HThere(HHere())
+    T() -> match b
+      F() -> HThere(HHere())
+      T() -> HThere(HThere(HHere()))
+
+  fn denote_complete(x: IF, t: Tag, e: Equivalent(B, getb(x, t), T)) -> Handles(t, denote(x)) = match t
+    TA() -> match x
+      MkIF(a, b, c) -> match a
+        F() -> match e
+        T() -> handles_a(b, c)
+    TB() -> match x
+      MkIF(a, b, c) -> match b
+        F() -> match e
+        T() -> handles_b(a, c)
+    TC() -> match x
+      MkIF(a, b, c) -> match c
+        F() -> match e
+        T() -> handles_c(a, b)
+
+  fn getb_mono(x: IF, y: IF, s: Sub(x, y), t: Tag, e: Equivalent(B, getb(x, t), T)) -> Equivalent(B, getb(y, t), T) = match t
+    TA() -> match x
+      MkIF(xa, xb, xc) -> match y
+        MkIF(ya, yb, yc) -> match s
+          MkSub(ia, ib, ic) -> match ia
+            ImpFF() -> match e
+            ImpFT() -> match e
+            ImpTT() -> reflexive(T)
+    TB() -> match x
+      MkIF(xa, xb, xc) -> match y
+        MkIF(ya, yb, yc) -> match s
+          MkSub(ia, ib, ic) -> match ib
+            ImpFF() -> match e
+            ImpFT() -> match e
+            ImpTT() -> reflexive(T)
+    TC() -> match x
+      MkIF(xa, xb, xc) -> match y
+        MkIF(ya, yb, yc) -> match s
+          MkSub(ia, ib, ic) -> match ic
+            ImpFF() -> match e
+            ImpFT() -> match e
+            ImpTT() -> reflexive(T)
+
+  fn sub_allhandled(x: IF, y: IF, s: Sub(x, y)) -> AllHandled(denote(x), denote(y)) = match x
+    MkIF(a, b, c) -> match y
+      MkIF(ya, yb, yc) -> match s
+        MkSub(ia, ib, ic) -> match ia
+          ImpFF() -> match ib
+            ImpFF() -> match ic
+              ImpFF() -> AHNil()
+              ImpFT() -> AHNil()
+              ImpTT() -> AHCons(handles_c(ya, yb), AHNil())
+            ImpFT() -> match ic
+              ImpFF() -> AHNil()
+              ImpFT() -> AHNil()
+              ImpTT() -> AHCons(handles_c(ya, yb), AHNil())
+            ImpTT() -> match ic
+              ImpFF() -> AHCons(handles_b(ya, yc), AHNil())
+              ImpFT() -> AHCons(handles_b(ya, yc), AHNil())
+              ImpTT() -> AHCons(handles_b(ya, yc), AHCons(handles_c(ya, yb), AHNil()))
+          ImpFT() -> match ib
+            ImpFF() -> match ic
+              ImpFF() -> AHNil()
+              ImpFT() -> AHNil()
+              ImpTT() -> AHCons(handles_c(ya, yb), AHNil())
+            ImpFT() -> match ic
+              ImpFF() -> AHNil()
+              ImpFT() -> AHNil()
+              ImpTT() -> AHCons(handles_c(ya, yb), AHNil())
+            ImpTT() -> match ic
+              ImpFF() -> AHCons(handles_b(ya, yc), AHNil())
+              ImpFT() -> AHCons(handles_b(ya, yc), AHNil())
+              ImpTT() -> AHCons(handles_b(ya, yc), AHCons(handles_c(ya, yb), AHNil()))
+          ImpTT() -> match ib
+            ImpFF() -> match ic
+              ImpFF() -> AHCons(handles_a(yb, yc), AHNil())
+              ImpFT() -> AHCons(handles_a(yb, yc), AHNil())
+              ImpTT() -> AHCons(handles_a(yb, yc), AHCons(handles_c(ya, yb), AHNil()))
+            ImpFT() -> match ic
+              ImpFF() -> AHCons(handles_a(yb, yc), AHNil())
+              ImpFT() -> AHCons(handles_a(yb, yc), AHNil())
+              ImpTT() -> AHCons(handles_a(yb, yc), AHCons(handles_c(ya, yb), AHNil()))
+            ImpTT() -> match ic
+              ImpFF() -> AHCons(handles_a(yb, yc), AHCons(handles_b(ya, yc), AHNil()))
+              ImpFT() -> AHCons(handles_a(yb, yc), AHCons(handles_b(ya, yc), AHNil()))
+              ImpTT() -> AHCons(handles_a(yb, yc), AHCons(handles_b(ya, yc), AHCons(handles_c(ya, yb), AHNil())))
+end

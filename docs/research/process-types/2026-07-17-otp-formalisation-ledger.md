@@ -82,10 +82,11 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [ ] `lfp` construction via bounded Kleene iterate `iterate(f, ⊥, height)`
 - [x] `?lfp_le` pre-fixpoint bound — **SHIPPED** `otp_inference_fixpoint.cure`
 - [ ] `?le_lfp` (lfp below any upper bound of pre-fixed points)
-- [ ] **STABILIZATION**: `iterate(f, ⊥, |Tag|)` IS a fixed point — needs finite-height counting (interface size ≤ |Tag|, strict-increase-or-fixed). *The hard half.*
-- [ ] `?map_lfp` (fixed-point property `f(lfp) = lfp`) — needed for BRec **coverage**
+- [x] **STABILIZATION**: `iterate(f, ⊥, |Tag|)` IS a fixed point — finite-height counting (interface size ≤ 3, strict-increase-or-fixed) — **SHIPPED** `otp_finite_fixpoint.cure` over the height-3 `IF` lattice (Idris `rel=same`). *The hard half, mathlib `monotone_chain_condition` port.*
+- [x] `?map_lfp` (fixed-point property `f(lfp) ⊑ lfp`) — **SHIPPED** `map_lfp_le` in `otp_finite_fixpoint.cure`
+- [x] `IF ↔ TagList` bridge (`denote`, `denote_complete`, `sub_allhandled`) — **SHIPPED** `otp_interface_bridge.cure` (Idris `rel=same`); transfers `map_lfp_le`'s `Sub` conclusion to `AllHandled` membership, so the finite fixpoint is usable in the adequacy representation
 - [ ] `?is_least` principality (composes map_lfp + lfp_le)
-- [ ] BRec **coverage** + **adequacy** composed (recursive sends stay within `lfp`)
+- [ ] BRec **coverage** + **adequacy** composed (recursive sends stay within `lfp`) — *now unblocked: stabilization + bridge in hand; remaining work is the `BRec` syntax + transfer-function derivation*
 - Scaffold: `scaffolds/inference_fixpoint.cure`; shape doc `2026-07-17-mailbox-inference-fixpoint-shape.md`
 
 ### B3. Counting / multiplicity fragment — commutative-regex mailbox types (Special Delivery, de'Liguoro–Padovani)
