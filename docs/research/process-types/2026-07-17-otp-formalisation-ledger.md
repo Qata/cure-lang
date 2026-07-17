@@ -95,7 +95,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 ### B3. Counting / multiplicity fragment — commutative-regex mailbox types (Special Delivery, de'Liguoro–Padovani)
 *(the tag-SET model does not reach this; it is a set, not a multiset with counts)*
 - [x] Mailbox types as COMMUTATIVE REGEX (patterns `PZero`/`POne`/`PAtom`/`PPlus`/`PTimes`/`PStar`) over MULTISETS (Parikh vectors `MkMS(Nat,Nat,Nat)`), with the `Accepts` relation and the COMMUTATIVE-MONOID laws of `(Pat, PTimes, POne)`: `times_comm` (`E·F ≡ F·E`), `times_assoc`, `one_times` (unit), plus `plus_comm` (choice) — all via `msadd` arithmetic (`msadd_comm`/`msadd_assoc`/`msadd_zero_left` over Nat `plus_comm`/`plus_assoc`) — **SHIPPED** `otp_mailbox_pattern.cure` (Idris `rel=same`). The counting model the tag-set inference cannot express.
-- [ ] Brzozowski derivatives for pattern matching (nullable + `deriv` + the fundamental theorem `Accepts(deriv(E,t), m) ↔ Accepts(E, m ⊎ {t})`) — NEXT in-Cure slice
+- [~] Brzozowski derivatives for pattern matching: `nullable` (does a pattern accept the empty bag) + `nullable_sound` (the decision soundly certifies emptiness-acceptance; induction with `BOr`/`BAnd` truth-inversion) — **SHIPPED** `otp_mailbox_pattern.cure` (Idris `rel=same`). REMAINING: `nullable_complete` (needs `msadd` zero-inversion via `MkMS` injectivity + Nat `plus`-zero-inversion), then `deriv(E,t)` + the fundamental theorem `Accepts(deriv(E,t), m) ↔ Accepts(E, m ⊎ {t})`
 - [ ] Pattern SUBTYPING (inclusion) with multiplicities
 - [ ] Conformance (`reliable`/`usable`, de'Liguoro–Padovani Def. 10)
 - [ ] Bidirectional constraint GENERATION from a behaviour

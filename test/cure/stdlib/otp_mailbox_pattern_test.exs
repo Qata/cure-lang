@@ -44,4 +44,18 @@ defmodule Cure.Stdlib.OtpMailboxPatternTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "nullable_sound: a nullable pattern accepts the empty bag" do
+    # *{TA} (zero or more TA) is nullable — it accepts the empty mailbox — and nullable_sound
+    # turns that decision into the acceptance derivation.
+    src = """
+    mod MpNull
+      use Std.Otp.MailboxPattern
+      fn star_nullable() -> Accepts(PStar(PAtom(TA)), MkMS(Z, Z, Z)) =
+        nullable_sound(PStar(PAtom(TA)), reflexive(T))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

@@ -20,6 +20,7 @@ mod Std.Otp.MailboxPattern
   ## (an untrusted lint) — the algebra and derivative correctness proved here do not.
 
   type Tag = TA | TB | TC
+  type B = F | T
 
   ## Nat addition and commutativity (the multiset arithmetic; standard induction via rewrite).
   fn plus(m: Nat, n: Nat) -> Nat = match m
@@ -94,4 +95,52 @@ mod Std.Otp.MailboxPattern
   fn one_times({e: Pat}, {m: MS}, acc: Accepts(PTimes(POne, e), m)) -> Accepts(e, m) = match acc
     ATimes(m1, m2, a1, ae) -> match a1
       AOne() -> rewrite msadd_zero_left(m2) in ae
+
+  ## Boolean connectives + their truth-inversion (which side is `T`), carrying the witness as
+  ## a proof term so the derivation can be rebuilt without sibling-index refinement.
+  fn orb(x: B, y: B) -> B = match x
+    F() -> y
+    T() -> T
+  fn andb(x: B, y: B) -> B = match x
+    F() -> F
+    T() -> y
+  type BOr indices (x: B, y: B)
+    BOrL : Equivalent(B, x, T) -> BOr(x, y)
+    BOrR : Equivalent(B, y, T) -> BOr(x, y)
+  fn orb_true(x: B, y: B, e: Equivalent(B, orb(x, y), T)) -> BOr(x, y) = match x
+    T() -> BOrL(reflexive(T))
+    F() -> match y
+      T() -> BOrR(reflexive(T))
+      F() -> match e
+  type BAnd indices (x: B, y: B)
+    BAndBoth : Equivalent(B, x, T) -> Equivalent(B, y, T) -> BAnd(x, y)
+  fn andb_true(x: B, y: B, e: Equivalent(B, andb(x, y), T)) -> BAnd(x, y) = match x
+    T() -> match y
+      T() -> BAndBoth(reflexive(T), reflexive(T))
+      F() -> match e
+    F() -> match e
+
+  ## **NULLABILITY** — does a pattern accept the EMPTY bag (can the conversation end here)?
+  ## The base case of Brzozowski derivation.
+  fn nullable(pat: Pat) -> B = match pat
+    PZero()      -> F
+    POne()       -> T
+    PAtom(t)     -> F
+    PPlus(a, b)  -> orb(nullable(a), nullable(b))
+    PTimes(a, b) -> andb(nullable(a), nullable(b))
+    PStar(a)     -> T
+
+  ## **NULLABILITY SOUNDNESS.** If `nullable(pat) = T` then `pat` accepts the empty bag —
+  ## the decision procedure soundly certifies emptiness-acceptance. Induction on the pattern;
+  ## the truth-inversion lemmas pick the right injection / build the empty `ATimes` split.
+  fn nullable_sound(pat: Pat, e: Equivalent(B, nullable(pat), T)) -> Accepts(pat, MkMS(Z, Z, Z)) = match pat
+    PZero()      -> match e
+    POne()       -> AOne()
+    PAtom(t)     -> match e
+    PPlus(a, b)  -> match orb_true(nullable(a), nullable(b), e)
+      BOrL(pa) -> APlusL(nullable_sound(a, pa))
+      BOrR(pb) -> APlusR(nullable_sound(b, pb))
+    PTimes(a, b) -> match andb_true(nullable(a), nullable(b), e)
+      BAndBoth(pa, pb) -> ATimes(MkMS(Z, Z, Z), MkMS(Z, Z, Z), nullable_sound(a, pa), nullable_sound(b, pb))
+    PStar(a)     -> AStar0()
 end

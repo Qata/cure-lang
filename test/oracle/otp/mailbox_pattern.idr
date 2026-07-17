@@ -62,3 +62,52 @@ times_assoc (ATimes _ mg (ATimes me mf acc_e acc_f) acc_g) =
 
 one_times : Accepts (PTimes POne e) m -> Accepts e m
 one_times (ATimes _ m2 AOne ae) = rewrite msadd_zero_left m2 in ae
+
+data B = F | T
+
+Uninhabited (F = T) where
+  uninhabited Refl impossible
+
+orb : B -> B -> B
+orb F y = y
+orb T y = T
+
+andb : B -> B -> B
+andb F y = F
+andb T y = y
+
+data BOr : B -> B -> Type where
+  BOrL : x = T -> BOr x y
+  BOrR : y = T -> BOr x y
+
+orb_true : (x : B) -> (y : B) -> orb x y = T -> BOr x y
+orb_true T y e = BOrL Refl
+orb_true F T e = BOrR Refl
+orb_true F F e = absurd e
+
+data BAnd : B -> B -> Type where
+  BAndBoth : x = T -> y = T -> BAnd x y
+
+andb_true : (x : B) -> (y : B) -> andb x y = T -> BAnd x y
+andb_true T T e = BAndBoth Refl Refl
+andb_true T F e = absurd e
+andb_true F y e = absurd e
+
+nullable : Pat -> B
+nullable PZero = F
+nullable POne = T
+nullable (PAtom t) = F
+nullable (PPlus a b) = orb (nullable a) (nullable b)
+nullable (PTimes a b) = andb (nullable a) (nullable b)
+nullable (PStar a) = T
+
+nullable_sound : (pat : Pat) -> nullable pat = T -> Accepts pat (MkMS 0 0 0)
+nullable_sound PZero e = absurd e
+nullable_sound POne e = AOne
+nullable_sound (PAtom t) e = absurd e
+nullable_sound (PPlus a b) e = case orb_true (nullable a) (nullable b) e of
+  BOrL pa => APlusL (nullable_sound a pa)
+  BOrR pb => APlusR (nullable_sound b pb)
+nullable_sound (PTimes a b) e = case andb_true (nullable a) (nullable b) e of
+  BAndBoth pa pb => ATimes (MkMS 0 0 0) (MkMS 0 0 0) (nullable_sound a pa) (nullable_sound b pb)
+nullable_sound (PStar a) e = AStar0
