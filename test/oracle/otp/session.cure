@@ -33,6 +33,12 @@ mod Session
     CRS(t, c2)  -> srecv_cong(t, compat_dual(c2))
     CSel(ca, cb) -> sselect_cong(compat_dual(ca), compat_dual(cb))
     COff(ca, cb) -> soffer_cong(compat_dual(ca), compat_dual(cb))
+  fn dual_compat(s: SType) -> Compat(s, dual(s)) = match s
+    SEnd()        -> CEnd()
+    SSend(t, k)   -> CSR(t, dual_compat(k))
+    SRecv(t, k)   -> CRS(t, dual_compat(k))
+    SSelect(a, b) -> CSel(dual_compat(a), dual_compat(b))
+    SOffer(a, b)  -> COff(dual_compat(a), dual_compat(b))
   type SStep indices (l: SType, r: SType, l2: SType, r2: SType)
     StepSR : SStep(SSend(t, lk), SRecv(t, rk), lk, rk)
     StepRS : SStep(SRecv(t, lk), SSend(t, rk), lk, rk)

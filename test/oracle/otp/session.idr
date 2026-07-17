@@ -31,6 +31,13 @@ compat_dual (CRS t c2) = cong (SRecv t) (compat_dual c2)
 compat_dual (CSel ca cb) = cong2 SSelect (compat_dual ca) (compat_dual cb)
 compat_dual (COff ca cb) = cong2 SOffer (compat_dual ca) (compat_dual cb)
 
+dual_compat : (s : SType) -> Compat s (dual s)
+dual_compat SEnd = CEnd
+dual_compat (SSend t k) = CSR t (dual_compat k)
+dual_compat (SRecv t k) = CRS t (dual_compat k)
+dual_compat (SSelect a b) = CSel (dual_compat a) (dual_compat b)
+dual_compat (SOffer a b) = COff (dual_compat a) (dual_compat b)
+
 data SStep : SType -> SType -> SType -> SType -> Type where
   StepSR : SStep (SSend t lk) (SRecv t rk) lk rk
   StepRS : SStep (SRecv t lk) (SSend t rk) lk rk

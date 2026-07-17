@@ -65,6 +65,18 @@ mod Std.Otp.Session
     CSel(ca, cb) -> sselect_cong(compat_dual(ca), compat_dual(cb))
     COff(ca, cb) -> soffer_cong(compat_dual(ca), compat_dual(cb))
 
+  ## **DUALITY = COMPATIBILITY (converse).** Every session type is compatible with its own dual —
+  ## `Compat(S, dual(S))`. Structural induction building the compatibility witness: each send
+  ## dualizes to the peer's receive and each choice to the peer's offer. With `compat_dual` (which
+  ## proves the forward direction, `Compat(l, r) ⟹ l = dual(r)`) this closes the equivalence
+  ## "compatible ⟺ dual" — communication safety is EXACTLY duality, both directions.
+  fn dual_compat(s: SType) -> Compat(s, dual(s)) = match s
+    SEnd()        -> CEnd()
+    SSend(t, k)   -> CSR(t, dual_compat(k))
+    SRecv(t, k)   -> CRS(t, dual_compat(k))
+    SSelect(a, b) -> CSel(dual_compat(a), dual_compat(b))
+    SOffer(a, b)  -> COff(dual_compat(a), dual_compat(b))
+
   ## A communication STEP: one endpoint sends tag `t`, the other receives it, and both advance
   ## to their continuations. Well-formed only when the send/receive tags agree.
   ## A communication step also covers CHOICE: selecting a branch (`SelL`/`SelR`) commits both

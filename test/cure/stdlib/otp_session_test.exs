@@ -104,6 +104,18 @@ defmodule Cure.Stdlib.OtpSessionTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "dual_compat: every type is compatible with its dual (converse of compat_dual)" do
+    src = """
+    mod DcInst
+      use Std.Otp.Session
+      fn c() -> Compat(SSend(TA, SRecv(TB, SEnd())), dual(SSend(TA, SRecv(TB, SEnd())))) =
+        dual_compat(SSend(TA, SRecv(TB, SEnd())))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "compat_terminates: a compatible session normalises to a full run reaching (SEnd, SEnd)" do
     # RA sends TA then receives TB then ends, against its dual. compat_terminates builds the
     # complete two-step run to (SEnd, SEnd).
