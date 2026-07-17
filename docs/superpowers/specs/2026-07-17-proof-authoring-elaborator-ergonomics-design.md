@@ -515,6 +515,36 @@ stuck accumulator/combiner slot — e.g. the mailbox-encoding monoid homomorphis
 only the Cure kernel's conversion is too weak. Deferred (TCB HARD-STOP — a normalizer change needs
 its own reviewed run + Antigen termination/soundness antibodies).
 
+**ROOT CAUSE PINNED (2026-07-18, minimal repro `docs/research/process-types/probes/k1-freeze-inconsistency.exs`).**
+A 40-line kernel repro (`combine`/`g` mirroring `msum`/`recvs`, no stdlib) shows the defect is an
+INCONSISTENT A6 freeze in `Normalise.reduce_unfolded`, and the direction is the OPPOSITE of the
+first guess:
+- `nf(combine(MkM(Z), x))` → **stays FOLDED** `combine(MkM Z, x)` (NOT reduced).
+- `nf(combine(g(MkU), x))` → **REDUCES** to `case x { MkM b -> MkM(…) }`.
+
+Mechanism: when the first arg is a **literal ctor** (`MkM(Z)`), the OUTER `case` ι-fires during the
+initial `reapply`/`eval`, leaving only the INNER `case x` stuck; `reduce_unfolded` sees a stuck
+`ncase` on `x`, returns `:stuck`, and A6 freezes the whole `combine` application. When the first arg
+is a **stuck global** (`g(MkU)`), the OUTER case is stuck on `g(MkU)`; `reduce_unfolded` forces
+`g(MkU)→MkM(Z)`, fires the outer ι, and returns the reduced `case x`. So the freeze fires iff the
+argument was already a constructor — two definitionally-equal terms get different normal forms and
+`conv?` returns false (INCOMPLETENESS, never unsoundness — it only rejects). The A6 freeze is meant
+to stop `nf` LOOPING on RECURSIVE stuck defs (`f n = case n {S k → f k}`, whose branch re-exposes
+`f`); it over-fires on NON-recursive defs like `combine` whose branch bodies contain no recursive
+call. A correct fix must distinguish "re-exposed the SAME recursive call (freeze)" from "made ι
+progress and left a residual stuck eliminator (keep reduced)" — e.g. only freeze when a branch body
+of the unfolded case still mentions the def being unfolded, or track whether the initial `reapply`
+already fired an ι. This is a real but SUBTLE `normalise.ex` change (NF-termination-critical); it
+stays a dedicated kernel run, not an autonomous grind edit. **Why the obvious fix is wrong:** "freeze
+iff a branch mentions the def ITSELF (self-recursion)" fixes `combine` but BREAKS MUTUAL recursion —
+`f n = case n {S k → h k}`, `h m = case m {S j → f j}`: neither branch self-mentions, so `nf` would
+keep unfolding `f→h→f→…` forever (and `nf` runs at `:infinity` fuel, so the freeze — not fuel — is
+what guarantees NF termination here). A correct fix must track the SET of defs currently being
+unfolded on the path (an unfold stack) and freeze on re-entry to any of them, not just self. That is
+the dedicated kernel change, with an Antigen antibody proving NF still terminates on mutually-
+recursive stuck defs. Repro is committed and reproduces on
+demand (`mix run docs/research/process-types/probes/k1-freeze-inconsistency.exs`).
+
 **Deeper trace (2026-07-18, do NOT blind-fix).** Reading `eval.ex`/`normalise.ex`/`conv.ex`:
 `eval` leaves globals opaque (`{:vneutral,{:nglobal,_}}`); δ fires only in `Normalise`. Tracing
 `whnf_value(msum(recvs(LEnd), recvs t))` by hand, it SHOULD reduce: `unfold_certified_head`
