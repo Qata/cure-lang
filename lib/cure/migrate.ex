@@ -502,7 +502,22 @@ defmodule Cure.Migrate do
   # the same `@prelude` markers as the loader instead of maintaining a second
   # compiler-owned module list.
   defp prelude_sources do
-    Cure.Stdlib.Paths.source_dirs()
+    dirs = Cure.Stdlib.Paths.source_dirs()
+    key = {:migrate_prelude_sources, dirs}
+
+    case Process.get(key) do
+      nil ->
+        sources = compute_prelude_sources(dirs)
+        Process.put(key, sources)
+        sources
+
+      sources ->
+        sources
+    end
+  end
+
+  defp compute_prelude_sources(dirs) do
+    dirs
     |> Enum.flat_map(&Path.wildcard(Path.join(&1, "*.cure")))
     |> Enum.uniq()
     |> Enum.flat_map(fn path ->

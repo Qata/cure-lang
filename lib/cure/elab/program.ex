@@ -1608,7 +1608,11 @@ defmodule Cure.Elab.Program do
   # operation. Ambiguity is diagnosed later by Resolution against canonical
   # suffixes and the direct-import set.
   defp shadow_resolved_imports(ast) do
-    sources = Enum.uniq(prelude_sources_for(ast) ++ imports(ast))
+    # Prelude providers are loaded and export-filtered by `prelude_slice_env/1`.
+    # Merging their full interfaces here would leak every sibling declaration
+    # from an item-level marker (for example Std.String.length alongside the
+    # marked String alias). This path is exclusively explicit `use` visibility.
+    sources = Enum.uniq(imports(ast))
 
     with {:ok, modules} <- resolve_import_modules(sources),
          {:ok, merged} <-
