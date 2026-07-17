@@ -14,11 +14,11 @@ defmodule Antigen.Assays.IndexedTest do
     assert :ok == A.run(G.branch_family(:ill_typed))
   end
 
-  test "4.2 exhaustive Tri case is accepted" do
+  test "4.2 a known Tri constructor specializes to its reachable branch" do
     assert :ok == A.run(G.coverage(:well_typed))
   end
 
-  test "4.2 non-exhaustive Tri case must be rejected" do
+  test "4.2 a non-exhaustive case on an opaque Tri variable is rejected" do
     assert :ok == A.run(G.coverage(:ill_typed))
   end
 

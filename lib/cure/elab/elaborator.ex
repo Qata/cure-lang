@@ -725,7 +725,7 @@ defmodule Cure.Elab.Elaborator do
            arity = length(telescope),
            pc = Inductive.param_count(env, dname),
            {param_vals, _idx_vals} = Enum.split(combined_vals, pc),
-           branch_names = branch_scope(quantities, pattern_vars) ++ names,
+           branch_names = branch_scope(telescope, quantities, pattern_vars) ++ names,
            branch_ctx = extend_context(ctx, telescope, param_vals),
            {:ok, _b_term, t_branch_val} <-
              elaborate_expr_typed(body_expr, branch_names, branch_ctx, env),
@@ -3018,7 +3018,7 @@ defmodule Cure.Elab.Elaborator do
     {:ok, {^cname, pattern_vars}} = constructor_pattern(with_pattern)
     %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
-    branch_names = branch_scope(quantities, pattern_vars) ++ names
+    branch_names = branch_scope(telescope, quantities, pattern_vars) ++ names
 
     case verdict do
       :impossible ->
@@ -3072,7 +3072,14 @@ defmodule Cure.Elab.Elaborator do
         |> Eval.eval(env)
       end)
 
-    %{ctx | types: types}
+    refined_env =
+      for i <- 0..(depth - 1)//1 do
+        {:var, i}
+        |> replace_branch_vars(subst)
+        |> Eval.eval(env)
+      end
+
+    %{ctx | types: types, env: refined_env}
   end
 
   # Eq-arrow motive `λ(w:T). Eq(T, e, w) -> G[e↦w]`. Under the `w`-binder, `e`/`T`
@@ -3171,7 +3178,7 @@ defmodule Cure.Elab.Elaborator do
     {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
     %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
-    branch_names0 = branch_scope(quantities, pattern_vars) ++ names
+    branch_names0 = branch_scope(telescope, quantities, pattern_vars) ++ names
     branch_ctx0 = extend_context(ctx, telescope, param_vals)
 
     ctor_term = branch_constructor_term(cname, arity)
@@ -3365,7 +3372,7 @@ defmodule Cure.Elab.Elaborator do
     {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
     %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
-    branch_names0 = branch_scope(quantities, pattern_vars) ++ names
+    branch_names0 = branch_scope(telescope, quantities, pattern_vars) ++ names
     branch_ctx0 = extend_context(ctx, telescope, param_vals)
 
     ctor_term = branch_constructor_term(cname, arity)
@@ -3626,7 +3633,25 @@ defmodule Cure.Elab.Elaborator do
       sig = Context.signature(ctx)
       cnames = sig |> Inductive.ctors_of(dname) |> Enum.map(& &1.name)
 
-      verdicts = Map.new(cnames, &{&1, Kernel.branch_unify(ctx, dname, &1, idx_vals, param_vals)})
+      known_value =
+        case Eval.eval(scrut_term, Context.env(ctx)) do
+          {:vctor, _cname, _args} = value -> value
+          _ -> nil
+        end
+
+      verdicts =
+        Map.new(cnames, fn cname ->
+          verdict = Kernel.branch_unify(ctx, dname, cname, idx_vals, param_vals)
+
+          verdict =
+            case known_value do
+              {:vctor, known_ctor, _args} when cname != known_ctor -> :impossible
+              {:vctor, ^cname, args} -> merge_known_ctor_args(verdict, args, Context.length(ctx))
+              _ -> verdict
+            end
+
+          {cname, verdict}
+        end)
 
       uncovered =
         Enum.filter(cnames, fn c ->
@@ -3710,6 +3735,33 @@ defmodule Cure.Elab.Elaborator do
         {:ok, brs, join}
       end
     end
+  end
+
+  defp merge_known_ctor_args(:impossible, _args, _depth), do: :impossible
+
+  defp merge_known_ctor_args(verdict, args, depth) do
+    arity = length(args)
+
+    value_subst =
+      args
+      |> Enum.with_index()
+      |> Map.new(fn {value, p} ->
+        ctor_key = arity - 1 - p
+        shifted = value |> Quote.reify(depth) |> Cure.Core.Term.shift(arity, 0)
+
+        case shifted do
+          {:var, outer_key} -> {outer_key, {:var, ctor_key}}
+          closed -> {ctor_key, closed}
+        end
+      end)
+
+    index_subst =
+      case verdict do
+        {:solved, subst} -> subst
+        :trivial -> %{}
+      end
+
+    {:solved, Map.merge(index_subst, value_subst)}
   end
 
   # --- as-pattern desugaring (parity #4) -------------------------------------
@@ -5080,7 +5132,7 @@ defmodule Cure.Elab.Elaborator do
        ) do
     {:ok, {cname, pattern_vars}} = constructor_pattern(pattern)
     %{args: telescope, quantities: quantities, result_indices: result_indices} = Inductive.get_ctor(env, cname)
-    branch_names = branch_scope(quantities, pattern_vars) ++ names
+    branch_names = branch_scope(telescope, quantities, pattern_vars) ++ names
 
     case verdict do
       :impossible ->
@@ -5118,7 +5170,8 @@ defmodule Cure.Elab.Elaborator do
         {bindings, checks} = split_named_implicits(pattern, subst, arity, telescope)
 
         tele_names =
-          Enum.reduce(bindings, branch_scope(quantities, pattern_vars), fn {name, {:variable, _, vname}}, acc ->
+          Enum.reduce(bindings, branch_scope(telescope, quantities, pattern_vars), fn {name, {:variable, _, vname}},
+                                                                                      acc ->
             p = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
             List.replace_at(acc, arity - 1 - p, to_string(vname))
           end)
@@ -6817,14 +6870,19 @@ defmodule Cure.Elab.Elaborator do
 
   defp strip_pattern_meta(other), do: other
 
-  # Names for the branch's telescope binders, most-recently-bound first: surface
-  # pattern variables name the present (ω) positions in order; erased positions
-  # are inaccessible, given a fresh placeholder.
-  defp branch_scope(quantities, pattern_vars) do
+  # Names for the branch's telescope binders, most-recently-bound first. Surface
+  # pattern variables name present (ω) positions. Erased constructor existentials
+  # get distinct internal names: they are still quantity-0 (so relevance rejects
+  # computational use), but branch substitutions can address each slot without
+  # collapsing them all to the old, ambiguous `_erased` name. A source-level name
+  # requested with `{index = binder}` replaces this internal name below.
+  defp branch_scope(telescope, quantities, pattern_vars) do
     {names_in_order, _rest} =
-      Enum.map_reduce(quantities, pattern_vars, fn
-        :unrestricted, [v | rest] -> {v, rest}
-        :erased, vars -> {"_erased", vars}
+      Enum.zip(telescope, quantities)
+      |> Enum.with_index()
+      |> Enum.map_reduce(pattern_vars, fn
+        {{{_tele_name, _type}, :unrestricted}, _i}, [v | rest] -> {v, rest}
+        {{{tele_name, _type}, :erased}, i}, vars -> {"$erased_#{tele_name}_#{i}", vars}
       end)
 
     Enum.reverse(names_in_order)
