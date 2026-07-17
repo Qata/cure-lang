@@ -31,4 +31,8 @@ defmodule Cure.Stdlib.OtpInferenceScaffoldTest do
   test "the constraint-generation frontier scaffold type-checks with its holes" do
     assert elaborates?("inference_frontier.cure")
   end
+
+  test "the adequacy scaffold type-checks (preservation_at proved; adequacy/coverage holed)" do
+    assert elaborates?("inference_adequacy.cure")
+  end
 end
