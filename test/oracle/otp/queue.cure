@@ -1,0 +1,22 @@
+mod Queue
+  use Std.Equivalent
+  type QList = QNil | QCons(Nat, QList)
+  fn append(xs: QList, ys: QList) -> QList = match xs
+    QNil()       -> ys
+    QCons(h, t)  -> QCons(h, append(t, ys))
+  fn reverse(xs: QList) -> QList = match xs
+    QNil()       -> QNil()
+    QCons(h, t)  -> append(reverse(t), QCons(h, QNil()))
+  fn cons_cong(h: Nat, {a: QList}, {b: QList}, e: Equivalent(QList, a, b)) -> Equivalent(QList, QCons(h, a), QCons(h, b)) =
+    rewrite e in reflexive(QCons(h, b))
+  fn append_assoc(xs: QList, ys: QList, zs: QList) -> Equivalent(QList, append(append(xs, ys), zs), append(xs, append(ys, zs))) = match xs
+    QNil()       -> reflexive(append(ys, zs))
+    QCons(h, t)  -> cons_cong(h, append_assoc(t, ys, zs))
+  type Q = MkQ(QList, QList)
+  fn to_list(q: Q) -> QList = match q
+    MkQ(f, b) -> append(f, reverse(b))
+  fn enqueue(x: Nat, q: Q) -> Q = match q
+    MkQ(f, b) -> MkQ(f, QCons(x, b))
+  fn enqueue_appends(x: Nat, q: Q) -> Equivalent(QList, to_list(enqueue(x, q)), append(to_list(q), QCons(x, QNil()))) = match q
+    MkQ(f, b) -> sym(append_assoc(f, reverse(b), QCons(x, QNil())))
+end

@@ -1,0 +1,50 @@
+@group(:concurrency)
+mod Std.Otp.Queue
+  use Std.Equivalent
+  ## ERLANG `:queue` — the amortized TWO-LIST functional queue OTP reaches for everywhere (message
+  ## buffers, work lists). A queue is a FRONT list (dequeue end, in order) and a BACK list (enqueue
+  ## end, REVERSED); its logical FIFO sequence is `front ++ reverse(back)`. Enqueue pushes onto the
+  ## back in O(1); dequeue pops the front, reversing the back onto it only when the front runs dry —
+  ## so the representation is not unique, and correctness is exactly that every operation preserves
+  ## the logical sequence.
+  ##
+  ## The headline law: ENQUEUE APPENDS — `to_list(enqueue(x, q)) = to_list(q) ++ [x]`. So the
+  ## two-list encoding faithfully realizes a FIFO queue: an element pushed on the back really lands
+  ## at the end of the logical order, no matter how front/back are currently split.
+
+  type QList = QNil | QCons(Nat, QList)
+
+  fn append(xs: QList, ys: QList) -> QList = match xs
+    QNil()       -> ys
+    QCons(h, t)  -> QCons(h, append(t, ys))
+
+  ## Reverse via the standard `append`-based definition; `reverse(QCons(x, xs)) = reverse(xs) ++ [x]`
+  ## holds definitionally, which is exactly what the enqueue proof needs.
+  fn reverse(xs: QList) -> QList = match xs
+    QNil()       -> QNil()
+    QCons(h, t)  -> append(reverse(t), QCons(h, QNil()))
+
+  fn cons_cong(h: Nat, {a: QList}, {b: QList}, e: Equivalent(QList, a, b)) -> Equivalent(QList, QCons(h, a), QCons(h, b)) =
+    rewrite e in reflexive(QCons(h, b))
+
+  ## `append` is associative — the list lemma the enqueue proof turns on.
+  fn append_assoc(xs: QList, ys: QList, zs: QList) -> Equivalent(QList, append(append(xs, ys), zs), append(xs, append(ys, zs))) = match xs
+    QNil()       -> reflexive(append(ys, zs))
+    QCons(h, t)  -> cons_cong(h, append_assoc(t, ys, zs))
+
+  ## A queue: `MkQ(front, back)` with logical sequence `front ++ reverse(back)`.
+  type Q = MkQ(QList, QList)
+  ## The logical FIFO sequence a queue denotes.
+  fn to_list(q: Q) -> QList = match q
+    MkQ(f, b) -> append(f, reverse(b))
+  ## Enqueue: push onto the back (O(1)); the back stays reversed.
+  fn enqueue(x: Nat, q: Q) -> Q = match q
+    MkQ(f, b) -> MkQ(f, QCons(x, b))
+
+  ## **ENQUEUE APPENDS.** `to_list(enqueue(x, q)) = to_list(q) ++ [x]`. Pushing onto the reversed
+  ## back places `x` at the END of the logical sequence: `reverse(QCons(x, b)) = reverse(b) ++ [x]`
+  ## (definitional), then `append_assoc` re-associates `f ++ (reverse(b) ++ [x])` into
+  ## `(f ++ reverse(b)) ++ [x] = to_list(q) ++ [x]`. So the two-list encoding is a faithful FIFO.
+  fn enqueue_appends(x: Nat, q: Q) -> Equivalent(QList, to_list(enqueue(x, q)), append(to_list(q), QCons(x, QNil()))) = match q
+    MkQ(f, b) -> sym(append_assoc(f, reverse(b), QCons(x, QNil())))
+end

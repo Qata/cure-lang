@@ -1,0 +1,27 @@
+defmodule Cure.Stdlib.OtpQueueTest do
+  @moduledoc """
+  `Std.Otp.Queue` — Erlang's amortized two-list functional queue. `enqueue_appends` proves the
+  two-list representation faithfully models a FIFO sequence: enqueue places the element at the end
+  of the logical order (`to_list(enqueue(x, q)) = to_list(q) ++ [x]`). List ctors are `QNil`/`QCons`
+  to avoid ambient name collisions. Cross-checked against Idris (oracle `queue`).
+  """
+  use ExUnit.Case, async: true
+
+  alias Cure.Elab.Program
+
+  test "the module is compiled into the stdlib preload" do
+    assert Code.ensure_loaded?(:"Cure.Std.Otp.Queue")
+  end
+
+  test "enqueue appends to the logical FIFO sequence" do
+    src = """
+    mod QEnq
+      use Std.Otp.Queue
+      fn law(x: Nat, q: Q) -> Equivalent(QList, to_list(enqueue(x, q)), append(to_list(q), QCons(x, QNil()))) =
+        enqueue_appends(x, q)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+end
