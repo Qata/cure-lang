@@ -122,18 +122,17 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
     # golden therefore retires; behavioral equivalence (init/1 returns the spliced
     # result for any start argument) is pinned by "terse init template routes
     # through the shared family raw emitter" in actor_family_raw_test.exs.
-    {"Raw03_terminate",
-     """
-     actor Cure.Generated.Raw03_terminate state Int terminate
-       :shutdown_complete
-     """,
-     "1085c4d8a4583a8e95790f539fc1aedf9457d9b3fe85784e2daae15480c3e1ff"},
-    {"Raw04_code_change",
-     """
-     actor Cure.Generated.Raw04_code_change state Int code_change
-       %[:ok, state + 1]
-     """,
-     "2803b5276b6cfe999ef27dd48a071dcf5fb5df4f7f41bc85f17ca6196cf285bf"},
+    # Raw03_terminate (`actor N state T terminate <body>`) and Raw04_code_change
+    # (`actor N state T code_change <body>`) have been FOLDED into the shared
+    # `emit_raw_state_terminate` / `emit_raw_state_code_change` → derive_actor_family
+    # emitters (§1e mechanism A) via the `computed directly by` multi-arg input
+    # path. Per the corrected spec (d1aec7b4) the raw fold is a behavioral-
+    # equivalence guarantee, NOT byte-identical: the computed family branch
+    # legitimately reshapes the BEAM (callbacks split into meta the template folds
+    # differently). Their byte-identical goldens therefore retire; behavioral
+    # equivalence (terminate/2 and code_change/3 return the spliced result verbatim)
+    # is pinned by "terse terminate/code_change template routes through the shared
+    # family raw emitter" in actor_family_raw_test.exs.
     # Raw05_state_messages_cast (`actor N state T messages M handle_cast <body>`)
     # has been FOLDED into the shared `emit_raw_state_messages_cast` →
     # `derive_actor_family` emitter (§1e mechanism A) via the `computed directly

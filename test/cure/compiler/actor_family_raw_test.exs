@@ -178,4 +178,42 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert apply(:"Cure.Generated.RawFamilyInit", :init, [:unit]) == {:ok, 7}
     assert apply(:"Cure.Generated.RawFamilyInit", :init, [:anything]) == {:ok, 7}
   end
+
+  test "terse terminate template routes through the shared family raw emitter" do
+    # The `actor N state T terminate <body>` form (rule at actor.cure:160) carries
+    # a `terminate` hole and no cast/messages, so it opts into the `computed
+    # directly by` multi-arg input path (adapter emit_raw_state_terminate) into the
+    # family raw branch (terminate: Some(body)). This behavioral pin replaces the
+    # retired Raw03 byte-golden: the spliced terminate body is the full callback
+    # result, so `terminate/2` returns it verbatim.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyTerminate state Int terminate
+        :shutdown_complete
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyTerminate", :terminate, [:normal, 5]) == :shutdown_complete
+  end
+
+  test "terse code_change template routes through the shared family raw emitter" do
+    # The `actor N state T code_change <body>` form (rule at actor.cure:162) carries
+    # a `code_change` hole and no cast/messages, so it opts into the `computed
+    # directly by` multi-arg input path (adapter emit_raw_state_code_change) into
+    # the family raw branch (code_change: Some(body)). This behavioral pin replaces
+    # the retired Raw04 byte-golden: the spliced code_change body is the full
+    # callback result, so `code_change/3` returns it verbatim over the state.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyCodeChange state Int code_change
+        %[:ok, state + 1]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyCodeChange", :code_change, [:v1, 5, :extra]) == {:ok, 6}
+  end
 end
