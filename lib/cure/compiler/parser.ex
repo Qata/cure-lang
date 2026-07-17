@@ -8251,10 +8251,16 @@ defmodule Cure.Compiler.Parser do
   # The tokens from `pos` to the end, as a list. Callers that scan or split the
   # remaining stream want a list; this is O(n) like the `Enum.drop/2` it
   # replaces, and unlike `peek/1` it is not on the hot path.
-  defp tokens_from(%{count: count}, pos) when pos >= count, do: []
-
   defp tokens_from(%{tokens: tokens, count: count}, pos) do
-    for idx <- max(pos, 0)..(count - 1), do: elem(tokens, idx)
+    start = max(pos, 0)
+
+    # Clamp before building the range: `start..(count - 1)` would otherwise be a
+    # descending range (and index a nonexistent element) once start > count - 1.
+    if start >= count do
+      []
+    else
+      for idx <- start..(count - 1), do: elem(tokens, idx)
+    end
   end
 
   defp peek(%{count: count, pos: pos}) when pos >= count do
