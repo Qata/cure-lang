@@ -56,6 +56,21 @@ defmodule Cure.Stdlib.OtpSessionMailboxTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "recvs_hom: the encoding is a monoid homomorphism (recvs(seq s t) = msum(recvs s)(recvs t))" do
+    # Sequentially composing (recv TA) with (send TB) — its mailbox is {TA}, the sum of {TA} and {}.
+    src = """
+    mod SmHom
+      use Std.Otp.SessionMailbox
+      fn hom(s: Local, t: Local) -> Equivalent(MS, recvs(seq(s, t)), msum(recvs(s), recvs(t))) =
+        recvs_hom(s, t)
+      fn inst() -> Equivalent(MS, recvs(seq(LRecv(TA, LEnd()), LSend(TB, LEnd()))), msum(recvs(LRecv(TA, LEnd())), recvs(LSend(TB, LEnd())))) =
+        recvs_hom(LRecv(TA, LEnd()), LSend(TB, LEnd()))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "compat_recv_send: compatible endpoints have balanced mailboxes" do
     # LSend(TA, LEnd) is compatible with LRecv(TA, LEnd); the sender's mailbox (empty) equals the
     # receiver's sends (empty), and the sender's sends {TA} equals the receiver's mailbox {TA}.

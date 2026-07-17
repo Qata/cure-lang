@@ -1,4 +1,5 @@
 mod SessionMailbox
+  use Std.Equivalent
   type Tag = TA | TB | TC
   type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LPar(Local, Local)
   type MS = MkMS(Nat, Nat, Nat)
@@ -57,4 +58,36 @@ mod SessionMailbox
     CSR(t, c2)    -> bump_cong(t, compat_send_recv(c2))
     CRS(t, c2)    -> compat_send_recv(c2)
     CPar(ca, cb)  -> msum_cong(compat_send_recv(ca), compat_send_recv(cb))
+  fn seq(s: Local, t: Local) -> Local = match s
+    LEnd()      -> t
+    LSend(tg, k) -> LSend(tg, seq(k, t))
+    LRecv(tg, k) -> LRecv(tg, seq(k, t))
+    LPar(a, b)  -> LPar(a, seq(b, t))
+  fn add_assoc(x: Nat, y: Nat, z: Nat) -> Equivalent(Nat, add(add(x, y), z), add(x, add(y, z))) = match x
+    Z()  -> reflexive(add(y, z))
+    S(k) -> rewrite add_assoc(k, y, z) in reflexive(S(add(k, add(y, z))))
+  fn mkms_cong({a1: Nat}, {a2: Nat}, {b1: Nat}, {b2: Nat}, {c1: Nat}, {c2: Nat}, ea: Equivalent(Nat, a1, a2), eb: Equivalent(Nat, b1, b2), ec: Equivalent(Nat, c1, c2)) -> Equivalent(MS, MkMS(a1, b1, c1), MkMS(a2, b2, c2)) =
+    rewrite ea in rewrite eb in rewrite ec in reflexive(MkMS(a2, b2, c2))
+  fn msum_assoc(m: MS, n: MS, p: MS) -> Equivalent(MS, msum(msum(m, n), p), msum(m, msum(n, p))) = match m
+    MkMS(a1, b1, c1) -> match n
+      MkMS(a2, b2, c2) -> match p
+        MkMS(a3, b3, c3) -> mkms_cong(add_assoc(a1, a2, a3), add_assoc(b1, b2, b3), add_assoc(c1, c2, c3))
+  fn bump_msum_dist(t: Tag, m: MS, n: MS) -> Equivalent(MS, bump(t, msum(m, n)), msum(bump(t, m), n)) = match m
+    MkMS(a1, b1, c1) -> match n
+      MkMS(a2, b2, c2) -> match t
+        TA() -> reflexive(MkMS(S(add(a1, a2)), add(b1, b2), add(c1, c2)))
+        TB() -> reflexive(MkMS(add(a1, a2), S(add(b1, b2)), add(c1, c2)))
+        TC() -> reflexive(MkMS(add(a1, a2), add(b1, b2), S(add(c1, c2))))
+  fn msum_empty_l(n: MS) -> Equivalent(MS, n, msum(MkMS(Z(), Z(), Z()), n)) = match n
+    MkMS(a, b, c) -> reflexive(MkMS(a, b, c))
+  fn recvs_hom(s: Local, t: Local) -> Equivalent(MS, recvs(seq(s, t)), msum(recvs(s), recvs(t))) = match s
+    LEnd()       -> msum_empty_l(recvs(t))
+    LSend(tg, k) -> recvs_hom(k, t)
+    LRecv(tg, k) -> trans(bump_cong(tg, recvs_hom(k, t)), bump_msum_dist(tg, recvs(k), recvs(t)))
+    LPar(a, b)   -> trans(msum_cong(reflexive(recvs(a)), recvs_hom(b, t)), sym(msum_assoc(recvs(a), recvs(b), recvs(t))))
+  fn sends_hom(s: Local, t: Local) -> Equivalent(MS, sends(seq(s, t)), msum(sends(s), sends(t))) = match s
+    LEnd()       -> msum_empty_l(sends(t))
+    LSend(tg, k) -> trans(bump_cong(tg, sends_hom(k, t)), bump_msum_dist(tg, sends(k), sends(t)))
+    LRecv(tg, k) -> sends_hom(k, t)
+    LPar(a, b)   -> trans(msum_cong(reflexive(sends(a)), sends_hom(b, t)), sym(msum_assoc(sends(a), sends(b), sends(t))))
 end
