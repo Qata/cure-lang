@@ -128,4 +128,8 @@ mod SessionMailbox
     trans(recvs_hom(a, b), trans(msum_comm(recvs(a), recvs(b)), sym(recvs_hom(b, a))))
   fn sends_seq_comm(a: Local, b: Local) -> Equivalent(MS, sends(seq(a, b)), sends(seq(b, a))) =
     trans(sends_hom(a, b), trans(msum_comm(sends(a), sends(b)), sym(sends_hom(b, a))))
+  fn mailbox_seq_cong(s: Local, s2: Local, t: Local, t2: Local, es: Equivalent(MS, recvs(s), recvs(s2)), et: Equivalent(MS, recvs(t), recvs(t2))) -> Equivalent(MS, recvs(seq(s, t)), recvs(seq(s2, t2))) =
+    trans(recvs_hom(s, t), trans(msum_cong(es, et), sym(recvs_hom(s2, t2))))
+  fn mailbox_par_cong(a: Local, a2: Local, b: Local, b2: Local, ea: Equivalent(MS, recvs(a), recvs(a2)), eb: Equivalent(MS, recvs(b), recvs(b2))) -> Equivalent(MS, recvs(LPar(a, b)), recvs(LPar(a2, b2))) =
+    msum_cong(ea, eb)
 end

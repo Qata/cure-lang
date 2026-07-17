@@ -56,6 +56,18 @@ defmodule Cure.Stdlib.OtpSessionMailboxTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "compositionality: substituting mailbox-equivalent sub-protocols preserves the composite mailbox" do
+    src = """
+    mod SmCong
+      use Std.Otp.SessionMailbox
+      fn cong(s: Local, s2: Local, t: Local, t2: Local, es: Equivalent(MS, recvs(s), recvs(s2)), et: Equivalent(MS, recvs(t), recvs(t2))) -> Equivalent(MS, recvs(seq(s, t)), recvs(seq(s2, t2))) =
+        mailbox_seq_cong(s, s2, t, t2, es, et)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "mailbox types forget order: recvs(seq a b) = recvs(seq b a)" do
     src = """
     mod SmOrder

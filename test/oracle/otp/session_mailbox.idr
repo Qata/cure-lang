@@ -157,3 +157,9 @@ recvs_seq_comm a b = trans (recvs_hom a b) (trans (msum_comm (recvs a) (recvs b)
 
 sends_seq_comm : (a : Local) -> (b : Local) -> sends (seq a b) = sends (seq b a)
 sends_seq_comm a b = trans (sends_hom a b) (trans (msum_comm (sends a) (sends b)) (sym (sends_hom b a)))
+
+mailbox_seq_cong : (s : Local) -> (s2 : Local) -> (t : Local) -> (t2 : Local) -> recvs s = recvs s2 -> recvs t = recvs t2 -> recvs (seq s t) = recvs (seq s2 t2)
+mailbox_seq_cong s s2 t t2 es et = trans (recvs_hom s t) (trans (msum_cong es et) (sym (recvs_hom s2 t2)))
+
+mailbox_par_cong : (a : Local) -> (a2 : Local) -> (b : Local) -> (b2 : Local) -> recvs a = recvs a2 -> recvs b = recvs b2 -> recvs (LPar a b) = recvs (LPar a2 b2)
+mailbox_par_cong a a2 b b2 ea eb = msum_cong ea eb
