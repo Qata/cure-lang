@@ -87,7 +87,7 @@ defmodule Cure.Elab.Program do
   defp with_loader_session(fun) when is_function(fun, 0) do
     case Process.get(@loader_state_key, :no_loader_session) do
       :no_loader_session ->
-        Process.put(@loader_state_key, %{modules: %{}, paths: %{}})
+        Process.put(@loader_state_key, %{modules: %{}, paths: %{}, prelude_bootstrap: nil})
 
         try do
           fun.()
@@ -1505,9 +1505,23 @@ defmodule Cure.Elab.Program do
     do: MapSet.member?(prelude_bootstrap_modules(), module_name)
 
   defp prelude_bootstrap_modules do
-    entries = prelude_manifest()
-    paths = Map.new(entries, &{&1.source, &1.path})
-    prelude_bootstrap_modules(Enum.map(entries, & &1.source), paths, MapSet.new())
+    state = Process.get(@loader_state_key)
+
+    case state && state.prelude_bootstrap do
+      %MapSet{} = cached ->
+        cached
+
+      _ ->
+        entries = prelude_manifest()
+        paths = Map.new(entries, &{&1.source, &1.path})
+        closure = prelude_bootstrap_modules(Enum.map(entries, & &1.source), paths, MapSet.new())
+
+        if state do
+          put_loader_state(%{Process.get(@loader_state_key) | prelude_bootstrap: closure})
+        end
+
+        closure
+    end
   end
 
   defp prelude_bootstrap_modules([], _paths, seen), do: seen
