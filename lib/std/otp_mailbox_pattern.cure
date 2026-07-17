@@ -238,4 +238,26 @@ mod Std.Otp.MailboxPattern
       ATimes(m1, m2, aa, ab) -> ATimes(m1, m2, aa, APlusL(ab))
     APlusR(ar) -> match ar
       ATimes(m1, m2, aa, ac) -> ATimes(m1, m2, aa, APlusR(ac))
+
+  ## **ADDITIVE STRUCTURE.** Choice is associative (`(E⊕F)⊕G ≡ E⊕(F⊕G)`) with unit `PZero`
+  ## (`E⊕𝟎 ≡ E`); together with `plus_pat_comm` this makes `(Pat, ⊕, 𝟎)` a commutative monoid.
+  fn plus_assoc_fwd({a: Pat}, {b: Pat}, {c: Pat}, {m: MS}, acc: Accepts(PPlus(PPlus(a, b), c), m)) -> Accepts(PPlus(a, PPlus(b, c)), m) = match acc
+    APlusL(al) -> match al
+      APlusL(aa) -> APlusL(aa)
+      APlusR(ab) -> APlusR(APlusL(ab))
+    APlusR(ac) -> APlusR(APlusR(ac))
+  fn plus_assoc_bwd({a: Pat}, {b: Pat}, {c: Pat}, {m: MS}, acc: Accepts(PPlus(a, PPlus(b, c)), m)) -> Accepts(PPlus(PPlus(a, b), c), m) = match acc
+    APlusL(aa) -> APlusL(APlusL(aa))
+    APlusR(ar) -> match ar
+      APlusL(ab) -> APlusL(APlusR(ab))
+      APlusR(ac) -> APlusR(ac)
+  fn plus_zero_fwd({a: Pat}, {m: MS}, acc: Accepts(PPlus(a, PZero), m)) -> Accepts(a, m) = match acc
+    APlusL(aa) -> aa
+    APlusR(az) -> match az
+  fn plus_zero_bwd({a: Pat}, {m: MS}, acc: Accepts(a, m)) -> Accepts(PPlus(a, PZero), m) = APlusL(acc)
+
+  ## **ANNIHILATOR.** `𝟎·E` accepts nothing — `PZero` absorbs the product. The `PZero` factor's
+  ## sub-derivation is uninhabited, so the whole thing is vacuous.
+  fn zero_times({a: Pat}, {m: MS}, acc: Accepts(PTimes(PZero, a), m)) -> Accepts(PZero, m) = match acc
+    ATimes(m1, m2, az, aa) -> match az
 end

@@ -168,3 +168,26 @@ dist_fwd (ATimes m1 m2 aa (APlusR ac)) = APlusR (ATimes m1 m2 aa ac)
 dist_bwd : Accepts (PPlus (PTimes a b) (PTimes a c)) m -> Accepts (PTimes a (PPlus b c)) m
 dist_bwd (APlusL (ATimes m1 m2 aa ab)) = ATimes m1 m2 aa (APlusL ab)
 dist_bwd (APlusR (ATimes m1 m2 aa ac)) = ATimes m1 m2 aa (APlusR ac)
+
+absurd_pzero : Accepts PZero m -> b
+absurd_pzero AOne impossible
+
+plus_assoc_fwd : Accepts (PPlus (PPlus a b) c) m -> Accepts (PPlus a (PPlus b c)) m
+plus_assoc_fwd (APlusL (APlusL aa)) = APlusL aa
+plus_assoc_fwd (APlusL (APlusR ab)) = APlusR (APlusL ab)
+plus_assoc_fwd (APlusR ac) = APlusR (APlusR ac)
+
+plus_assoc_bwd : Accepts (PPlus a (PPlus b c)) m -> Accepts (PPlus (PPlus a b) c) m
+plus_assoc_bwd (APlusL aa) = APlusL (APlusL aa)
+plus_assoc_bwd (APlusR (APlusL ab)) = APlusL (APlusR ab)
+plus_assoc_bwd (APlusR (APlusR ac)) = APlusR ac
+
+plus_zero_fwd : Accepts (PPlus a PZero) m -> Accepts a m
+plus_zero_fwd (APlusL aa) = aa
+plus_zero_fwd (APlusR az) = absurd_pzero az
+
+zero_times : Accepts (PTimes PZero a) m -> Accepts PZero m
+zero_times (ATimes m1 m2 az aa) = absurd_pzero az
+
+plus_zero_bwd : Accepts a m -> Accepts (PPlus a PZero) m
+plus_zero_bwd acc = APlusL acc

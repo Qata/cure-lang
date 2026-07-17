@@ -105,4 +105,17 @@ defmodule Cure.Stdlib.OtpMailboxPatternTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "PZero is the additive unit (plus_zero round-trips)" do
+    src = """
+    mod SemiInst
+      use Std.Otp.MailboxPattern
+      fn a_acc() -> Accepts(PAtom(TA), MkMS(S(Z), Z, Z)) = AAtomA()
+      fn with_zero() -> Accepts(PPlus(PAtom(TA), PZero), MkMS(S(Z), Z, Z)) = plus_zero_bwd(a_acc())
+      fn back() -> Accepts(PAtom(TA), MkMS(S(Z), Z, Z)) = plus_zero_fwd(with_zero())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end
