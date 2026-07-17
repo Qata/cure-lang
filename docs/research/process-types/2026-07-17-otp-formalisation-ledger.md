@@ -72,7 +72,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 ### B1. Near-term, in-Cure provable (small or elaborator-gated)
 - [x] `unlink` (demonitor-shape over `Link`, keeping the trap dispatch) — SHIPPED `otp_unlink.cure`
 - [x] EXIT **reason axis** — reason-dependent dispatch (`normal`/`abnormal`/`kill`) in `otp_exit_signal.cure`. Still open: a full reason *term* as payload, and monitor-ref correlation on DOWN
-- [ ] Cascading exit-signal propagation across a link set (exit signal fan-out) — now approachable: chain `SAbnormalProp`'s `Dead` into the dead process's own links
+- [x] Cascading exit-signal propagation across a link CHAIN — `otp_cascade_exit.cure` (`Cascade` relation + `run_cascade` totality: terminates, survivors = suffix from first trapper). Open: a general link GRAPH (fan-out) vs the chain slice
 - [ ] **E1** sibling-context refinement on `match` (elaborator ergonomics — removes the data-first tax) — spec `2026-07-17-proof-authoring-elaborator-ergonomics-design.md`
 - [ ] **E3 / task #15** cross-module resolution of implicit-carrying stdlib fns (lets proof lemmas factor across modules)
 - [ ] **E4** partial-app codegen (eta-expand explicit-arg partial applications)
