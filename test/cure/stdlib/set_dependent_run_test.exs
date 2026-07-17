@@ -20,10 +20,13 @@ defmodule Cure.Stdlib.SetDependentRunTest do
   owner-qualified identities that canonicalization now keeps distinct are what
   make the split faithful.
 
-  Not `async`: the emitted `Cure.Std.Map` is a *partial* view (Set's delegated
-  subset — no `get/2`). It is installed under the same process-global BEAM module
-  name that `union_test.exs` installs a *full* `Cure.Std.Map` under, so the two must
-  not run concurrently (they would clobber each other's global module). Serialized.
+  The delegated `Cure.Std.Map` is emitted at its FULL owner surface (incl.
+  `get/2`), identical to the module the stdlib preload JIT-compiles from
+  `map.cure` and that `union_test.exs` / `map_parameterized_test.exs` call into —
+  so installing it under the shared process-global BEAM name can never drop a
+  function another test relies on (it was a tree-shaken partial view that caused
+  the historical flake). `async: false` is retained as defence-in-depth against
+  concurrent identical reloads, not for correctness.
   """
   use ExUnit.Case, async: false
 
@@ -37,19 +40,34 @@ defmodule Cure.Stdlib.SetDependentRunTest do
     {:ok, env} = Program.elaborate(src)
     origins = Program.import_origins(ast)
 
+    # Seed reachability with the FULL `Std.Map` owner surface, not just Set's
+    # delegated subset, so the process-global `Cure.Std.Map` this installs is
+    # identical to the full module the real compiler installs (the stdlib preload
+    # JIT-compiles all of `map.cure`) and that consumers — `union_test.exs`,
+    # `map_parameterized_test.exs` — call into. A tree-shaken partial view would
+    # drop `get/2` and clobber that full module under the shared global BEAM name,
+    # which is the flaky-test root cause. The real compiler never prunes a
+    # dependency owner: `codegen_modules_with_main` emits only the main module and
+    # each imported owner is installed at full surface by the preload — so emitting
+    # the full owner surface here mirrors the shipping behaviour.
+    map_surface = env.defs |> Map.keys() |> Enum.filter(&(Name.owner(&1) == "Std.Map"))
+
     fns =
-      Program.reachable_def_names(env, [
-        :from_list,
-        :intersection,
-        :difference,
-        :union,
-        :member,
-        :to_list,
-        :add,
-        :remove,
-        :new,
-        :size
-      ])
+      Program.reachable_def_names(
+        env,
+        [
+          :from_list,
+          :intersection,
+          :difference,
+          :union,
+          :member,
+          :to_list,
+          :add,
+          :remove,
+          :new,
+          :size
+        ] ++ map_surface
+      )
 
     # Emit one BEAM module per owning Cure module. `remote_target` lowers a
     # cross-owner `{:global, "Std.Map#size"}` to `{Cure.Std.Map, size}`, so the
