@@ -269,7 +269,7 @@ defmodule Cure.Elab.Elaborator do
       # both plain and implicit defs. Guarded on the dot so bare def calls keep
       # their existing paths.
       String.contains?(name, ".") and Map.has_key?(env.defs, resolved) ->
-        if Enum.any?(args, &match?({:lambda, _m, _b}, &1)) do
+        if Enum.any?(args, &(match?({:lambda, _m, _b}, &1) or call_placeholder?(&1))) do
           # A lambda argument needs a checking-mode expected type, so the bidirectional
           # elaborator is the ONLY path here. It used to be run, and then — on failure —
           # run a second time with identical arguments, which can only reproduce the same
@@ -304,6 +304,17 @@ defmodule Cure.Elab.Elaborator do
       # name has no dot and no unique variant.)
       length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
         {:error, {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}}
+
+      # `_` is meaningful only to the goal-directed application solver: the
+      # ordinary scoped path necessarily interprets every variable-shaped AST as
+      # a name and reports `:unknown_global` before a later dependent argument can
+      # constrain it. Route placeholder-bearing calls directly through the same
+      # Π-telescope solver used for implicit and lambda-bearing applications.
+      # Local definitions retain the ordinary local-over-import precedence.
+      Enum.any?(args, &call_placeholder?/1) and
+          (Env.get_def(env, atom) != nil or Env.get_def(env, resolved) != nil) ->
+        key = if Env.get_def(env, atom), do: Env.resolve_key(env, env.defs, atom), else: resolved
+        elaborate_implicit_app_bidirectional(env, key, args, names, ctx)
 
       # A global whose telescope carries erased (implicit) parameters: insert
       # fresh metavariables for them and solve from the present arguments, the
@@ -1760,6 +1771,7 @@ defmodule Cure.Elab.Elaborator do
 
     goal_first? =
       (concrete_goal? and implicit_def?(env, resolved)) or
+        (concrete_goal? and Enum.any?(args, &call_placeholder?/1) and Map.has_key?(env.defs, resolved)) or
         (Enum.any?(args, &match?({:lambda, _m, _b}, &1)) and Map.has_key?(env.defs, resolved))
 
     goal_first =
@@ -2058,6 +2070,14 @@ defmodule Cure.Elab.Elaborator do
   # inference first, fall back to left-to-right bidirectional application, both
   # carrying `expected`. The caller re-checks the assembled term against the goal.
   defp elaborate_global_app_expected(env, atom, args, names, ctx, expected) do
+    if Enum.any?(args, &call_placeholder?/1) do
+      elaborate_implicit_app_bidirectional(env, atom, args, names, ctx, expected)
+    else
+      elaborate_global_app_expected_eager(env, atom, args, names, ctx, expected)
+    end
+  end
+
+  defp elaborate_global_app_expected_eager(env, atom, args, names, ctx, expected) do
     result =
       with {:ok, present} <- map_present_args(args, names, ctx, env) do
         elaborate_global_app(env, atom, present, ctx, expected)
@@ -2074,6 +2094,9 @@ defmodule Cure.Elab.Elaborator do
         end
     end
   end
+
+  defp call_placeholder?({:variable, _meta, "_"}), do: true
+  defp call_placeholder?(_arg), do: false
 
   # A `rewrite` proof's type. The inductive identity type `Equivalent(a,x,y)` (spec
   # 2026-07-04) infers to `{:vdata, :Equivalent, [a, x, y]}` (1 param + 2 indices);
@@ -7193,17 +7216,19 @@ defmodule Cure.Elab.Elaborator do
     # left-to-right slot solving then runs exactly as before, and the kernel
     # re-checks the assembled term regardless. Restricted to a META-FREE goal so a
     # still-open expected type (nothing to solve against) skips the pre-pass.
-    {erased, rest} = Enum.split_while(slots, fn {_d, q} -> q == :erased end)
-
     seed_from_goal? =
       union_goal?(expected) or (not is_nil(expected) and not Unify.has_meta?(expected))
 
     {init, slots} =
       if seed_from_goal? do
-        seeded =
-          erased
-          |> Enum.reduce_while(init, &bidir_app_slot(&1, &2, names, ctx, env))
-          |> bidir_solve_codomain_from_goal(codomain, expected, env, rest)
+        # Allocate the REAL leading erased/placeholder metas before solving the
+        # codomain. Previously only erased slots were retained; explicit `_`
+        # slots were represented by disposable padding metas during goal
+        # unification, then allocated afresh in the main pass and stayed
+        # unsolved (`box(_) : Box(Z)`). Stop at the first ordinary present
+        # argument so its existing bidirectional checking order is unchanged.
+        {seeded, rest} = bidir_seed_goal_prefix(slots, init, names, ctx, env)
+        seeded = bidir_solve_codomain_from_goal(seeded, codomain, expected, env, rest)
 
         {seeded, rest}
       else
@@ -7215,6 +7240,30 @@ defmodule Cure.Elab.Elaborator do
     |> resolve_deferred_slots(names, ctx, env)
     |> finish_global_app(name, codomain, ctx, env, expected)
   end
+
+  defp bidir_seed_goal_prefix(
+         [slot = {_dom, :erased} | rest],
+         acc,
+         names,
+         ctx,
+         env
+       ) do
+    {:cont, acc} = bidir_app_slot(slot, acc, names, ctx, env)
+    bidir_seed_goal_prefix(rest, acc, names, ctx, env)
+  end
+
+  defp bidir_seed_goal_prefix(
+         [slot | rest],
+         {:ok, _mctx, _chosen, [{:variable, _meta, "_"} | _], _deferred} = acc,
+         names,
+         ctx,
+         env
+       ) do
+    {:cont, acc} = bidir_app_slot(slot, acc, names, ctx, env)
+    bidir_seed_goal_prefix(rest, acc, names, ctx, env)
+  end
+
+  defp bidir_seed_goal_prefix(slots, acc, _names, _ctx, _env), do: {acc, slots}
 
   # `solve_codomain_from_goal/5` for the bidirectional accumulator's 5-tuple. Same
   # contract: pad `chosen` to the full binder stack (Subst.instantiate indexes against
@@ -7261,6 +7310,25 @@ defmodule Cure.Elab.Elaborator do
   defp bidir_app_slot({_dom, grade}, {:ok, _mctx, _chosen, [], _deferred}, _names, _ctx, _env)
        when grade in [:unrestricted, :linear, :affine],
        do: {:halt, {:error, :too_few_arguments}}
+
+  # An explicit `_` in call-argument position is a goal-directed placeholder,
+  # not a reference to a global named `_`. Seed a term metavariable at this
+  # slot and continue: a later dependent argument may determine its VALUE.
+  # `finish_global_app` rejects it if it remains
+  # unsolved, and the assembled application is kernel-checked by the caller, so
+  # no placeholder can escape into Core.
+  defp bidir_app_slot(
+         {dom, grade},
+         {:ok, mctx, chosen, [{:variable, _meta, "_"} | rest], deferred},
+         _names,
+         _ctx,
+         _env
+       )
+       when grade in [:unrestricted, :linear, :affine] do
+    dom_inst = Enum.map(chosen, &Unify.zonk(&1, mctx)) |> then(&Subst.instantiate(dom, &1))
+    {mctx, id} = MetaCtx.fresh(mctx, dom_inst)
+    {:cont, {:ok, mctx, chosen ++ [{:meta, id}], rest, deferred}}
+  end
 
   # A supplied explicit argument — grade governs later USAGE counting
   # (`relevance.ex`), not slot mechanics: :unrestricted / :linear / :affine all

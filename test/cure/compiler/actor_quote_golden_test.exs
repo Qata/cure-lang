@@ -152,48 +152,75 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
     # bare Tier-2 template). Its byte-identical golden therefore retires; behavioral
     # equivalence is pinned by "terse template form routes through the shared family
     # raw emitter" in actor_family_raw_test.exs.
-    {"Raw07_state_initial_cast",
-     """
-     actor Cure.Generated.Raw07_state_initial_cast state Int initial 0 handle_cast
-       %[:noreply, state]
-     """,
-     "da4eb6bdb6a6ad5f4a332508ad33e5cb0a5a14629280cbe1c2f501214dbb017c"},
-    {"Raw08_state_initial_messages_cast",
-     """
-     actor Cure.Generated.Raw08_state_initial_messages_cast state Int initial 0 messages Atom handle_cast
-       %[:noreply, state]
-     """,
-     "4c1e8b80c5beaf2d7530e9532937211cf333f0750d399d752dfeea4a6f5a77a7"},
-    {"Raw10_bare_cast",
-     """
-     actor Cure.Generated.Raw10_bare_cast handle_cast
-       %[:noreply, state]
-     """,
-     "d960f4e0002773caf1bd8f8cdf855ee2cb1dafc16909bd8b06123d1a23fe11ff"},
-    {"Raw11_state_messages_info",
-     """
-     actor Cure.Generated.Raw11_state_messages_info state Int messages Atom handle_info
-       %[:noreply, state]
-     """,
-     "452c46b46cb7db8fea849d1c5c85209a3fd774b7a299d7a58cbe4a31bc201a90"},
-    {"Raw12_state_info",
-     """
-     actor Cure.Generated.Raw12_state_info state Int handle_info
-       %[:noreply, state + 1]
-     """,
-     "83c072435c8ad460084846bdd078b120310cae0d4819a752dd58b14fcee661b4"},
-    {"Raw13_state_with_body",
-     """
-     actor Cure.Generated.Raw13_state_with_body state Int with 0
-       fn helper() -> Int = 0
-     """,
-     "7035f79646a68bf95c0f7b10bfb95e422bbdb6037cfb2b15781ffac47a7289a3"},
-    {"Raw14_state_body",
-     """
-     actor Cure.Generated.Raw14_state_body state Int
-       fn helper() -> Int = 0
-     """,
-     "5a8f011c1a8a62cde887a045aba29553bb8e2cbaae0cad045a8b245fa779fbff"},
+    # Raw07_state_initial_cast (`actor N state T initial <p> handle_cast <body>`) and
+    # Raw08_state_initial_messages_cast (`... initial <p> messages <M> handle_cast
+    # <body>`) have been FOLDED into the shared emit_raw_state_initial_cast /
+    # emit_raw_state_initial_messages_cast → derive_actor_family emitters (§1e
+    # mechanism A) via the `computed directly by` multi-arg input path. Per the
+    # corrected spec (d1aec7b4) the raw fold is a behavioral-equivalence guarantee,
+    # NOT byte-identical: the folded `initial: Some` path emits `init(args: Atom) =
+    # %[:ok, payload]` with a nullary start_link passing `:unit`, vs the template's
+    # `init(initial: State)` + `start_link() = beam_ops start_link name [payload]`
+    # (both ignore the init arg and yield the seeded payload). Their byte-identical
+    # goldens therefore retire; behavioral equivalence (init/1 returns the seeded
+    # payload, handle_cast/pickup spliced verbatim) is pinned by "terse initial+
+    # handle_cast / initial+messages+handle_cast template routes through the shared
+    # family raw emitter" in actor_family_raw_test.exs.
+    # Raw10_bare_cast (STATELESS `actor N handle_cast <body>`) has been FOLDED into
+    # the shared emit_raw_cast_stateless → derive_actor_family_raw_stateless emitter
+    # (§1e mechanism A, state-poly path) via the `computed directly by` multi-arg
+    # input path. This is the first fold to route through the state-polymorphic
+    # emitter (emit_actor_parts_poly_state + gen_server_module_raw): the stateless
+    # form keeps the state a free type var `p` and emits NO `typealias State`, so a
+    # uniform State alias cannot be used. Per the corrected spec (d1aec7b4) the raw
+    # fold is a behavioral-equivalence guarantee, NOT byte-identical: the folded
+    # family path emits Effect-wrapped default callbacks and DROPS the template's
+    # default handle_call (matching every other folded raw form), legitimately
+    # reshaping the BEAM. Its byte-identical golden therefore retires; behavioral
+    # equivalence (init/1 seeds the state, start_link/1 starts, handle_cast body
+    # spliced verbatim, :sys.get_state reflects the seed) is pinned by "bare
+    # stateless handle_cast template routes through the poly-state family raw
+    # emitter" in actor_family_raw_test.exs, and by container_macro_test:213
+    # (Cure.PolymorphicCast).
+    # Raw11_state_messages_info (`actor N state T messages <M> handle_info <body>`)
+    # and Raw12_state_info (`... state T handle_info <body>`) have been FOLDED into
+    # the shared emit_raw_state_messages_info / emit_raw_state_info →
+    # derive_actor_family emitters (§1e mechanism A) via the `computed directly by`
+    # multi-arg input path. Per the corrected spec (d1aec7b4) the raw fold is a
+    # behavioral-equivalence guarantee, NOT byte-identical: the computed family
+    # branch splices the handle_info body verbatim via raw_info_handler (wall-4
+    # safe) and legitimately reshapes the BEAM. Their byte-identical goldens
+    # therefore retire; behavioral equivalence (handle_info/2 returns the spliced
+    # result verbatim, incl. a `match`-shaped body's arms not double-wrapped) is
+    # pinned by "terse messages+handle_info / handle_info template routes through
+    # the shared family raw emitter" in actor_family_raw_test.exs.
+    # Raw13_state_with_body (`actor N state T with <payload> <body-declarations>`)
+    # has been FOLDED into the shared emit_raw_state_initial_body ->
+    # derive_actor_family emitter (§1e mechanism A) via the positional
+    # `Declarations until dedent` hole + the `with` seed (initial: Some). Per the
+    # corrected spec (d1aec7b4) the raw fold is a behavioral-equivalence
+    # guarantee, NOT byte-identical: the folded initial-seed family path emits
+    # init(args: Atom) = %[:ok, payload] with a nullary start_link (vs the
+    # template's init(initial: State) + nullary start_link passing payload — both
+    # seed the payload) and Effect-wrapped default callbacks. Its byte-identical
+    # golden therefore retires; behavioral equivalence (init/1 returns the seeded
+    # payload for any argument, default handle_cast, and the spliced extra
+    # declaration callable) is pinned by "terse state+with+body template routes
+    # through the shared family raw emitter" in actor_family_raw_test.exs.
+    # Raw14_state_body (`actor N state T <body-declarations>`) has been FOLDED
+    # into the shared emit_raw_state_body → derive_actor_family emitter (§1e
+    # mechanism A). This is the first fold to route through the new positional
+    # `Declarations until dedent` hole (parser raw-body branch, task #24 step 1):
+    # the trailing definition block is captured as a `:declarations_block` node —
+    # the same shape the structured family `body` section produces — and threaded
+    # to emit_actor_parts via optional_declarations. Per the corrected spec
+    # (d1aec7b4) the raw fold is a behavioral-equivalence guarantee, NOT
+    # byte-identical: the folded default-init family path emits Effect-wrapped
+    # callbacks vs the template's bare-Tuple return types (bodies identical,
+    # return types erased). Its byte-identical golden therefore retires;
+    # behavioral equivalence (default init/1 + start_link/1 + the spliced extra
+    # declarations callable) is pinned by "terse state+body template routes
+    # through the shared family raw emitter" in actor_family_raw_test.exs.
     {"Raw15_with_body",
      """
      actor Cure.Generated.Raw15_with_body with 0

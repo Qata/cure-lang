@@ -740,6 +740,22 @@ defmodule Cure.Compiler.Printer do
     "lift module #{name}\n#{pad}#{body}"
   end
 
+  # A `computed directly by` / `computed by` macro invocation that deferred to
+  # the elaborator parses to `:computed_use`. Reconstruct the surface call from
+  # the matched rule's segments (carried on the node as `:syntax_segments`)
+  # interleaved with the parsed arguments: a file being reprinted has no access
+  # to the stdlib rule that defined the macro, so the literal separators
+  # (`state`/`messages`/…) and hole order must travel on the node itself. Without
+  # this clause `cure fmt`/`migrate` RAISED UnprintableNodeError on every actor
+  # demo built on the folded `computed directly by` surface (examples/**).
+  defp to_string({:computed_use, meta, [_elab, {:macro_input, _mi, args}]}, depth, indent) do
+    keyword = Keyword.fetch!(meta, :keyword)
+    segments = Keyword.get(meta, :syntax_segments, [])
+    pad = String.duplicate(indent, depth + 1)
+    {rendered, _leftover} = computed_use_segments(segments, args, depth, indent, pad)
+    keyword <> Enum.join(rendered, "")
+  end
+
   # -- Container (module, record, enum, protocol, and trait) ----------------
 
   defp to_string({:container, meta, body}, depth, indent) do
@@ -1043,8 +1059,39 @@ defmodule Cure.Compiler.Printer do
 
     chain =
       Enum.map_join(elems, " -> ", fn
-        {:named_dom, dname, inner} -> "(#{dname}: #{render(inner, depth, indent)})"
-        other -> render(other, depth, indent)
+        {:named_dom, dname, inner} ->
+          inner_rendered = render_ctor_function_type(inner, depth, indent)
+
+          inner_rendered =
+            case inner do
+              {:pi_type, _, _} ->
+                "(" <> inner_rendered <> ")"
+
+              {:function_call, function_meta, _} ->
+                if Keyword.get(function_meta, :function_type),
+                  do: "(" <> inner_rendered <> ")",
+                  else: inner_rendered
+
+              _ ->
+                inner_rendered
+            end
+
+          "(#{dname}: #{inner_rendered})"
+
+        # A function-typed constructor FIELD must stay grouped away from the
+        # constructor's own arrow telescope. Without this outer pair, a field
+        # parsed from `((rest: A) -> B(rest))` prints as `(rest: A) -> B(rest)`;
+        # reparsing then mistakes `rest` for a constructor-level named field.
+        {:pi_type, _, _} = function_type ->
+          "(" <> render_ctor_function_type(function_type, depth, indent) <> ")"
+
+        {:function_call, function_meta, _} = function_type ->
+          if Keyword.get(function_meta, :function_type),
+            do: "(" <> render_ctor_function_type(function_type, depth, indent) <> ")",
+            else: render(function_type, depth, indent)
+
+        other ->
+          render(other, depth, indent)
       end)
 
     "#{name} : #{chain}"
@@ -1226,6 +1273,42 @@ defmodule Cure.Compiler.Printer do
     raise Cure.Compiler.Printer.UnprintableNodeError, node: other
   end
 
+  # Constructor fields use a dedicated arrow-chain grammar. A multi-domain Π
+  # that the general printer writes `(rest: A, Proof(rest)) -> Result(rest)` must
+  # therefore be rendered here as `(rest: A) -> Proof(rest) -> Result(rest)`;
+  # both denote the same Π telescope, but only the latter is accepted inside the
+  # constructor parser's grouped field production.
+  defp render_ctor_function_type({:pi_type, meta, children}, depth, indent) do
+    binders = Keyword.get(meta, :binders, [])
+    {domains, [result]} = Enum.split(children, length(children) - 1)
+
+    domains =
+      binders
+      |> Enum.zip(domains)
+      |> Enum.map(fn
+        {nil, domain} -> render(domain, depth, indent)
+        {name, domain} -> "(#{name}: #{render(domain, depth, indent)})"
+      end)
+
+    Enum.join(domains ++ [render(result, depth, indent)], " -> ")
+  end
+
+  defp render_ctor_function_type(
+         {:function_call, meta, children} = function_type,
+         depth,
+         indent
+       ) do
+    if Keyword.get(meta, :function_type) do
+      {domains, [result]} = Enum.split(children, length(children) - 1)
+      domains = Enum.map(domains, &("(" <> render(&1, depth, indent) <> ")"))
+      Enum.join(domains ++ [render(result, depth, indent)], " -> ")
+    else
+      render(function_type, depth, indent)
+    end
+  end
+
+  defp render_ctor_function_type(other, depth, indent), do: render(other, depth, indent)
+
   defp lift_module_name_to_string({:macro_hole, name}), do: name
   defp lift_module_name_to_string({:macro_path_hole, prefix, name}), do: prefix <> "." <> name
   defp lift_module_name_to_string(name), do: to_string(name)
@@ -1246,7 +1329,13 @@ defmodule Cure.Compiler.Printer do
 
   defp macro_rule_lines(%{kind: kind, keyword: keyword, segments: segments, template: template} = rule, depth, indent)
        when kind in [:syntax, :computed] do
-    verb = if kind == :computed, do: "computed by", else: "becomes"
+    verb =
+      cond do
+        kind == :computed and rule[:direct_inputs] -> "computed directly by"
+        kind == :computed -> "computed by"
+        true -> "becomes"
+      end
+
     context = if rule[:contextual], do: " contextual", else: ""
 
     head =
@@ -1261,9 +1350,10 @@ defmodule Cure.Compiler.Printer do
   # computed by derive_actor` rule (whence the generated `ActorSyntax` record).
   defp macro_rule_lines(%{kind: :computed, keyword: keyword, segments: segments, elab: elab} = rule, depth, indent) do
     context = if rule[:contextual], do: " contextual", else: ""
+    verb = if rule[:direct_inputs], do: "computed directly by", else: "computed by"
 
     head =
-      "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} computed by #{render(elab, depth, indent)}"
+      "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} #{verb} #{render(elab, depth, indent)}"
 
     [head | macro_rule_examples(rule, depth, indent)]
   end
@@ -1333,6 +1423,40 @@ defmodule Cure.Compiler.Printer do
     "#{prefix}#{name} #{shape}"
   end
 
+  # Reconstruct a `:computed_use` invocation's surface by walking the matched
+  # rule's segments and interleaving literals with the parsed arguments (which
+  # arrive in the same segment order, one per hole segment).
+  defp computed_use_segments(segments, args, depth, indent, pad) do
+    Enum.reduce(segments, {[], args}, fn segment, {acc, remaining} ->
+      {piece, rest} = computed_use_segment(segment, remaining, depth, indent, pad)
+      {acc ++ [piece], rest}
+    end)
+  end
+
+  defp computed_use_segment({:lit, word}, args, _depth, _indent, _pad), do: {" " <> word, args}
+
+  # A `<name: ModuleName>` hole binds a symbol literal (`:"Cure.Echo"`); the
+  # surface writes it bare (`Cure.Echo`), so it must NOT go through the symbol
+  # renderer (which would prefix a colon and break the reparse).
+  defp computed_use_segment({:hole, %{kind: "ModuleName"}}, [arg | rest], depth, indent, _pad),
+    do: {" " <> computed_use_module_name(arg, depth, indent), rest}
+
+  defp computed_use_segment({:hole, _}, [arg | rest], depth, indent, _pad),
+    do: {" " <> render(arg, depth, indent), rest}
+
+  defp computed_use_segment({kind, %{delimiter: "dedent"}}, [arg | rest], depth, indent, pad)
+       when kind in [:code_hole, :raw_hole, :declarations_hole],
+       do: {"\n" <> pad <> render(arg, depth + 1, indent), rest}
+
+  defp computed_use_segment({kind, _}, [arg | rest], depth, indent, _pad)
+       when kind in [:code_hole, :raw_hole, :declarations_hole],
+       do: {" " <> render(arg, depth, indent), rest}
+
+  defp computed_use_module_name({:literal, _meta, value}, _depth, _indent) when is_atom(value),
+    do: Atom.to_string(value)
+
+  defp computed_use_module_name(arg, depth, indent), do: render(arg, depth, indent)
+
   defp macro_segments_to_string(segments), do: Enum.map_join(segments, " ", &macro_segment_to_string/1)
   defp macro_segment_to_string({:lit, word}), do: word
   defp macro_segment_to_string({:hole, %{name: name, kind: kind}}), do: "<#{name}: #{kind}>"
@@ -1342,6 +1466,9 @@ defmodule Cure.Compiler.Printer do
 
   defp macro_segment_to_string({:code_hole, %{name: name, delimiter: delimiter}}),
     do: "<#{name}: Code until #{delimiter}>"
+
+  defp macro_segment_to_string({:declarations_hole, %{name: name, delimiter: delimiter}}),
+    do: "<#{name}: Declarations until #{delimiter}>"
 
   defp macro_segment_to_string({:repeat, segment}), do: macro_segment_to_string(segment) <> "..."
   defp macro_segment_to_string({:optional, segments}), do: "(#{macro_segments_to_string(segments)})?"

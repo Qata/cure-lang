@@ -1,0 +1,88 @@
+@group(:core)
+mod Std.Proof.Math
+  ## Proof-carrying mathematics used by refinements and ordinary Cure programs.
+  ##
+  ## This module deliberately contains no trusted arithmetic oracle. Operations
+  ## are total Cure functions and every law is an ordinary dependent proof term
+  ## checked by the kernel. Future refinement automation may search for these
+  ## theorems, but it does not get to bypass them.
+
+  use Std.Decision
+
+  ## Evidence that a natural number is strictly positive.
+  type IsPositive indices (value: Nat)
+    PositiveSuccessor : IsPositive(S(predecessor))
+
+  ## Evidence that one natural number is less than or equal to another.
+  type IsLessThanOrEqual indices (left: Nat, right: Nat)
+    ZeroIsLessThanOrEqual : IsLessThanOrEqual(Z, right)
+    SuccessorsAreLessThanOrEqual : IsLessThanOrEqual(left, right) -> IsLessThanOrEqual(S(left), S(right))
+
+  ## Evidence that one natural number is strictly less than another.
+  type IsLessThan indices (left: Nat, right: Nat)
+    ZeroIsLessThanSuccessor : IsLessThan(Z, S(right))
+    SuccessorsAreLessThan : IsLessThan(left, right) -> IsLessThan(S(left), S(right))
+
+  ## Natural-number multiplication, defined structurally on the left operand.
+  fn multiply(left: Nat, right: Nat) -> Nat = match left
+    Z() -> Z()
+    S(predecessor) -> plus(right, multiply(predecessor, right))
+
+  ## Zero cannot carry evidence of strict positivity.
+  fn zero_is_not_positive(proof: IsPositive(Z)) -> Empty = match proof
+
+  ## Decide positivity while carrying either a proof or a disproof.
+  fn decide_is_positive(value: Nat) -> Decision(IsPositive(value)) = match value
+    Z() -> No(zero_is_not_positive)
+    S(predecessor) -> Yes(PositiveSuccessor())
+
+  ## Adding anything to a positive left operand remains positive.
+  fn adding_to_a_positive_number_is_positive(
+    {positive: Nat},
+    {other: Nat},
+    proof: IsPositive(positive)
+  ) -> IsPositive(plus(positive, other)) = match proof
+    PositiveSuccessor() -> PositiveSuccessor()
+
+  ## Adding a positive right operand to any natural number remains positive.
+  fn adding_a_positive_number_is_positive(
+    natural: Nat,
+    {positive: Nat},
+    proof: IsPositive(positive)
+  ) -> IsPositive(plus(natural, positive)) = match natural
+    Z() -> proof
+    S(predecessor) -> PositiveSuccessor()
+
+  ## The product of two positive natural numbers is positive.
+  ##
+  ## Matching the left proof refines `left` to a successor. Multiplication then
+  ## reduces to `right + multiply(predecessor, right)`, whose positivity follows
+  ## directly from the proof that `right` is positive.
+  fn multiplying_positive_numbers_is_positive(
+    {left: Nat},
+    {right: Nat},
+    left_is_positive: IsPositive(left),
+    right_is_positive: IsPositive(right)
+  ) -> IsPositive(multiply(left, right)) = match left_is_positive
+    PositiveSuccessor() -> adding_to_a_positive_number_is_positive(right_is_positive)
+
+  ## Every natural number is less than or equal to itself.
+  fn less_than_or_equal_is_reflexive(value: Nat) -> IsLessThanOrEqual(value, value) = match value
+    Z() -> ZeroIsLessThanOrEqual()
+    S(predecessor) -> SuccessorsAreLessThanOrEqual(less_than_or_equal_is_reflexive(predecessor))
+
+  ## Less-than-or-equal evidence composes transitively.
+  fn less_than_or_equal_is_transitive(
+    {left: Nat},
+    {middle: Nat},
+    {right: Nat},
+    left_to_middle: IsLessThanOrEqual(left, middle),
+    middle_to_right: IsLessThanOrEqual(middle, right)
+  ) -> IsLessThanOrEqual(left, right) = match left_to_middle
+    ZeroIsLessThanOrEqual() -> ZeroIsLessThanOrEqual()
+    SuccessorsAreLessThanOrEqual(left_predecessors) -> match middle_to_right
+      SuccessorsAreLessThanOrEqual(right_predecessors) ->
+        SuccessorsAreLessThanOrEqual(
+          less_than_or_equal_is_transitive(left_predecessors, right_predecessors)
+        )
+end

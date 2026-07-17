@@ -216,4 +216,171 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert apply(:"Cure.Generated.RawFamilyCodeChange", :code_change, [:v1, 5, :extra]) == {:ok, 6}
   end
+
+  test "terse initial+handle_cast template routes through the shared family raw emitter" do
+    # The `actor N state T initial <payload> handle_cast <body>` form carries an
+    # `initial` hole, so the adapter emit_raw_state_initial_cast seeds the family
+    # with initial: Some(payload). This behavioral pin replaces the retired Raw07
+    # byte-golden: derive_actor_init emits init(args: Atom) = %[:ok, payload], so
+    # init/1 returns the seeded payload for any argument, and the handle_cast body
+    # is spliced verbatim.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyInitialCast state Int initial 0 handle_cast
+        %[:noreply, state]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyInitialCast", :init, [:anything]) == {:ok, 0}
+    assert apply(:"Cure.Generated.RawFamilyInitialCast", :handle_cast, [:ping, 7]) == {:noreply, 7}
+  end
+
+  test "terse initial+messages+handle_cast template routes through the shared family raw emitter" do
+    # The `actor N state T initial <payload> messages <M> handle_cast <body>` form
+    # (adapter emit_raw_state_initial_messages_cast) seeds initial and aliases the
+    # message type. This behavioral pin replaces the retired Raw08 byte-golden: the
+    # `pickup` dispatch survives the fold and init/1 returns the seeded payload.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyInitialMsgCast state Int initial 0 messages Atom handle_cast
+        pickup
+          message == :inc -> %[:noreply, state + 1]
+          else -> %[:noreply, state]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyInitialMsgCast", :init, [:anything]) == {:ok, 0}
+    assert apply(:"Cure.Generated.RawFamilyInitialMsgCast", :handle_cast, [:inc, 4]) == {:noreply, 5}
+    assert apply(:"Cure.Generated.RawFamilyInitialMsgCast", :handle_cast, [:other, 4]) == {:noreply, 4}
+  end
+
+  test "terse messages+handle_info template routes through the shared family raw emitter" do
+    # The `actor N state T messages <M> handle_info <body>` form (adapter
+    # emit_raw_state_messages_info) routes the raw handle_info body through the
+    # family raw branch (raw_info_handler). This behavioral pin replaces the retired
+    # Raw11 byte-golden AND exercises wall-4 for the INFO path: a `match`-shaped info
+    # body with full-result arms must splice VERBATIM, never re-wrapped in a second
+    # `:noreply`.
+    source = """
+    mod M
+      use Std.Actor
+
+      type Sig = Tick | Tock
+
+      actor Cure.Generated.RawFamilyMsgInfo state Int messages Sig handle_info
+        match message
+          Tick -> %[:noreply, state + 1]
+          Tock -> %[:noreply, state - 1]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyMsgInfo", :handle_info, [:Tick, 4]) == {:noreply, 5}
+    assert apply(:"Cure.Generated.RawFamilyMsgInfo", :handle_info, [:Tock, 4]) == {:noreply, 3}
+  end
+
+  test "terse handle_info template routes through the shared family raw emitter" do
+    # The `actor N state T handle_info <body>` form (adapter emit_raw_state_info)
+    # routes the raw handle_info body through the family raw branch with a
+    # polymorphic message type. This behavioral pin replaces the retired Raw12
+    # byte-golden: the handle_info body is spliced verbatim.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyInfo state Int handle_info
+        %[:noreply, state]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyInfo", :handle_info, [:timeout, 9]) == {:noreply, 9}
+  end
+
+  test "terse state+body template routes through the shared family raw emitter" do
+    # The `actor N state T <body-declarations>` form (rule at actor.cure:200)
+    # carries no callback holes but a trailing definition block, captured by the
+    # NEW positional `Declarations until dedent` hole (parser raw-body branch,
+    # task #24 step 1) and threaded to the family via emit_raw_state_body
+    # (body: Some(...)). This behavioral pin replaces the retired Raw14
+    # byte-golden: the default GenServer callbacks are emitted (init/1 =
+    # {:ok, initial}, handle_cast/2 = {:noreply, state}, start_link/1) alongside
+    # the spliced extra declaration, which becomes a callable function of the
+    # generated module. Per the corrected spec (d1aec7b4) the raw fold is
+    # behavioral-equivalence, NOT byte-identical (default-init family path emits
+    # Effect-wrapped callback return types vs the template's bare Tuple types;
+    # bodies identical, return types erased).
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyBody state Int
+        fn helper() -> Int = 42
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyBody", :helper, []) == 42
+    assert apply(:"Cure.Generated.RawFamilyBody", :init, [3]) == {:ok, 3}
+    assert apply(:"Cure.Generated.RawFamilyBody", :handle_cast, [:ping, 7]) == {:noreply, 7}
+    assert {:ok, pid} = apply(:"Cure.Generated.RawFamilyBody", :start_link, [5])
+    :gen_server.stop(pid)
+  end
+
+  test "terse state+with+body template routes through the shared family raw emitter" do
+    # The `actor N state T with <payload> <body-declarations>` form (rule at
+    # actor.cure:187) carries a `with` seed AND a trailing definition block. The
+    # seed threads through the family as initial: Some(payload) (adapter
+    # emit_raw_state_initial_body) and the block through the NEW positional
+    # `Declarations until dedent` hole as body: Some(...). This behavioral pin
+    # replaces the retired Raw13 byte-golden: derive_actor_init emits
+    # init(args: Atom) = %[:ok, payload], so init/1 returns the seeded payload for
+    # any argument (behaviorally equivalent to the template's nullary
+    # start_link seeding), the default handle_cast is {:noreply, state}, and the
+    # spliced extra declaration is a callable function of the generated module.
+    # Per the corrected spec (d1aec7b4) the raw fold is behavioral-equivalence,
+    # NOT byte-identical.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyStateWithBody state Int with 0
+        fn helper() -> Int = 42
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyStateWithBody", :helper, []) == 42
+    assert apply(:"Cure.Generated.RawFamilyStateWithBody", :init, [:anything]) == {:ok, 0}
+    assert apply(:"Cure.Generated.RawFamilyStateWithBody", :handle_cast, [:ping, 7]) == {:noreply, 7}
+  end
+
+  test "bare stateless handle_cast template routes through the poly-state family raw emitter" do
+    # The `actor N handle_cast <cast-body>` form (rule at actor.cure:172) is
+    # STATELESS — the hand-written template kept the state polymorphic (free `p`,
+    # no `typealias State`) and used a default init/start_link/1. Folding it
+    # requires a state-polymorphic emitter path (emit_actor_parts_poly_state +
+    # derive_actor_family_raw_stateless via adapter emit_raw_cast_stateless): the
+    # callbacks carry a free `p` state var and NO module-level State alias (a
+    # `typealias State = p` with free `p` would be :unknown_global). Behavioral
+    # contract preserved from container_macro_test:213 (Cure.PolymorphicCast):
+    # start_link/1 seeds the state, init/1 returns {:ok, arg}, and the spliced
+    # handle_cast body drives the cast. Raw fold = behavioral-equivalence, NOT
+    # byte-identical (spec d1aec7b4); the template's default handle_call is
+    # dropped, matching every other folded raw form.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyStatelessCast handle_cast
+        %[:noreply, state]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyStatelessCast", :init, [7]) == {:ok, 7}
+    assert apply(:"Cure.Generated.RawFamilyStatelessCast", :handle_cast, [:inc, 4]) == {:noreply, 4}
+    assert {:ok, pid} = apply(:"Cure.Generated.RawFamilyStatelessCast", :start_link, [0])
+    assert :sys.get_state(pid) == 0
+    :gen_server.stop(pid)
+  end
 end

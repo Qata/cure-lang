@@ -407,4 +407,21 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     assert out =~ "definition: FsmDefinitionSyntax"
     assert Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
+
+  test "generated type names inside quoted macro declarations are not lowercased" do
+    src = """
+    mod M
+      fn build() -> Int =
+        quote (fn handle(message: Message, state: State) -> Tuple(Atom, State) = state)
+    """
+
+    {out, warns} = migrate(src, "quoted_generated_scope.cure")
+
+    assert out =~ "message: Message"
+    assert out =~ "state: State"
+    assert out =~ "Tuple(Atom, State)"
+    refute out =~ "message: message"
+    refute out =~ "state: state"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
 end

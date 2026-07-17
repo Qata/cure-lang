@@ -293,11 +293,29 @@ Recorded so future sessions don't mistake them for gaps:
   `s : SendsIn(BNil, t)` (no constructor has a `BNil` head) is accepted and total — no explicit
   `impossible` needed.
 
-## To verify (claims not yet isolated)
+## E7 — Explicit call-argument `_` was parsed as a global name
 
-- Whether `_` is accepted as an explicit-argument placeholder in a call. A `coverage(_, s2)` call
-  produced `:unknown_global`, but that may have been recursive-resolution noise, not `_` itself.
-  Isolate before asserting.
+**Symptom.** `_` in a call such as `index(_, IsZ())` produced `:unknown_global`, even when a
+later dependent argument uniquely determined the missing value.
+
+**Root cause + layer.** E. The parser intentionally represents `_` as a variable-shaped AST,
+but ordinary eager argument inference resolved it as a free global before the dependent
+application solver could inspect the remaining Π telescope.
+
+**Semantics.** `_` is a goal-directed placeholder only in a direct global call-argument slot.
+The application solver creates a typed metavariable and allows later dependent arguments or a
+concrete expected result to solve it. All placeholders must be solved before Core assembly, and the
+kernel re-checks the resulting application. An unconstrained `_` is rejected; `_` outside a call
+argument remains an ordinary error. Relevance is unchanged: a relevant runtime argument cannot
+be reconstructed solely from an erased index. Thus `coverage(_, s2)` is valid only when `s2` (or
+another constraint) determines a Core term that is legal at the present argument position; it
+does not turn erased proof indices into runtime values.
+
+**Status.** ✅ FIXED. Placeholder-bearing calls route directly to bidirectional Π-telescope
+solving instead of first passing through eager free-name resolution. Regressions cover solving
+from a later proof index, a runtime-carried dependent argument, and the expected result, plus
+ambiguity rejection and the non-call scope boundary. The goal pre-pass retains the actual
+placeholder meta rather than solving a disposable padding meta.
 
 ---
 

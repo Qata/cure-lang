@@ -463,17 +463,27 @@ dependent compiler yet.
 - `trans(p: Atom, q: Atom) -> Atom`.
 - `cong(f: T -> U, eq: Atom) -> Atom`.
 ### Std.Proof
-A `proof`-container (declared with `proof Std.Proof`) holding
-legacy law-shaped declarations. The legacy checker requires each
-definition to return an `Eq(...)`-looking type, but those propositions
-are not yet validated by `Cure.Core.Kernel` from Cure source.
-#### Arithmetic
-- `plus_zero(n: Int) -> Eq(Int, n, n)`.
-- `zero_plus(n: Int) -> Eq(Int, n, n)`.
-- `plus_comm(a: Int, b: Int) -> Eq(Int, a, a)`.
-#### List laws
-- `append_nil(xs: List(T)) -> Eq(List(T), xs, xs)`.
-- `map_id(xs: List(T)) -> Eq(List(T), xs, xs)`.
+Kernel-checked propositional equality laws over `Std.Nat`, proved by
+structural induction in Cure.
+- `plus_zero_right(natural)`.
+- `plus_succ_right(left, right)`.
+- `plus_comm(left, right)`.
+
+### Std.Proof.Math
+Proof-carrying natural-number mathematics intended for both ordinary programs
+and refinement automation. It contains no trusted arithmetic solver: all
+operations and evidence are Cure definitions checked by the dependent kernel.
+- `IsPositive(value)` -- evidence that a natural number is positive.
+- `IsLessThan(left, right)` and `IsLessThanOrEqual(left, right)` -- structural
+  order evidence.
+- `multiply(left, right)` -- total structural multiplication.
+- `decide_is_positive(value)` -- a proof-carrying positivity decision.
+- `adding_to_a_positive_number_is_positive(...)` and
+  `adding_a_positive_number_is_positive(...)` -- positivity closure for addition.
+- `multiplying_positive_numbers_is_positive(...)` -- the foundational theorem
+  required for positive-number refinements to compose through multiplication.
+- `less_than_or_equal_is_reflexive(...)` and
+  `less_than_or_equal_is_transitive(...)` -- reusable order laws.
 
 ## Concurrency and OTP
 ### Std.Actor (v0.25.0)
