@@ -1,0 +1,204 @@
+# Proof-authoring elaborator ergonomics — a living catalog
+
+*Status: LIVING (append as encountered). Opened 2026-07-17 while dogfooding the OTP
+metatheory in Cure (`Std.Otp.*`). Layer tags per `cure-porting`: **K** = trusted kernel
+(`lib/cure/core/*`, HARD-STOP), **E** = elaborator (`lib/cure/elab/*`), **C** = codegen/erase,
+**P** = parser.*
+
+## Why this exists
+
+Formalizing the OTP process algebra in Cure surfaced a recurring pattern: a lemma that is
+*provable today* still costs the author an unnatural proof structure, an explicit-field
+workaround, or a puzzling error, where a modest elaborator change would let them write the
+obvious thing. None of these are soundness holes — the kernel stays honest — they are
+**ergonomics**: the gap between the proof an author reaches for first and the proof Cure
+currently accepts.
+
+This catalog records each one with: the symptom, a minimal repro, the root cause + layer, the
+current workaround, the proposed change, and whether it is soundness-neutral. It is the input
+to prioritising elaborator work, and it feeds the partially-landed **Lean-shape matching**
+programme (`2026-07-02-lean-shape-matching-design.md`) and the dependent-match surface
+(`2026-07-02-dependent-match-surface-design.md`).
+
+**Rule for future sessions:** when a proof only goes through via a structural trick, an
+explicit-field carry, or after a confusing rejection that a smarter elaborator would avoid —
+add an entry here. Do not silently absorb the tax.
+
+---
+
+## E1 — Refinement does not reach sibling context binders on `match` (the headline)
+
+**Symptom.** Matching an indexed scrutinee refines the **motive** (goal type) but not the
+**value of a sibling binder** that the matched constructor constrains. A later `match` on that
+sibling then cannot prune impossible constructors, giving `{:reachable_impossible, C}` or
+`{:missing_branch, C}`.
+
+**Minimal repro** (from `Std.Otp.InferenceAdequacy` branching coverage). `SendSendK :
+SendsIn(k,t) -> SendsIn(BSend(y,k), t)`, so matching `s` against `SendSendK` forces
+`b = BSend(y,k)`:
+
+```
+fn coverage(b: Behaviour, {t: Tag}, s: SendsIn(b, t)) -> Member(t, infer(b)) = match s
+  SendHere()    -> MemHere()
+  SendSendK(s2) -> match b            # b SHOULD be refined to BSend(y,k) here
+    BSend(y, k) -> MemThere(coverage(k, s2))
+    BNil()      -> impossible          # -> {:reachable_impossible, BNil}
+    ...
+```
+
+The nested `match b` sees `b : Behaviour` unrefined: the index equation `b = BSend(y,k)` learned
+from matching `s` was applied to the goal but not substituted into the context, so `b`'s
+impossibility analysis still admits `BNil`.
+
+**Root cause + layer.** `elaborate_match` (E, with coverage support in K) solves the
+scrutinee/constructor index unification and rewrites the **motive**, but does not apply the
+resulting substitution to the **local context** (types/values of other binders). This is the
+McBride "dependent pattern matching refines the whole context" step; Cure does the motive half
+only. Confirmed by probes: sibling refinement DOES reach the motive (`infer(b)` reduces after a
+single-constructor witness match — see E1-nongap below), but not a subsequent scrutinee position.
+
+**Current workaround.** *Match the data before the evidence.* Scrutinize `b` first (binding
+`l`/`r`/`k` by name), then the evidence `s` against an already-concrete `b`:
+
+```
+fn coverage(b: Behaviour, {t: Tag}, s: SendsIn(b, t)) -> Member(t, infer(b)) = match b
+  BNil()      -> match s                       # SendsIn(BNil,t) uninhabited -> empty match OK
+  BSend(y, k) -> match s
+    SendHere()    -> MemHere()
+    SendSendK(s2) -> MemThere(coverage(k, s2))
+  BSeq(l, r)  -> match s
+    SendSeqL(s2) -> member_append_left(coverage(l, s2))
+    SendSeqR(s2) -> member_append_right(infer(l), coverage(r, s2))
+```
+
+This accepts today (verified 2026-07-17), zero TCB change. But the author must *know* to invert,
+and the inversion is not always available (when the evidence, not the data, is what recursion
+shrinks). It is also the deep reason the metatheory leans on **E2**'s explicit-field carries.
+
+**Proposed change.** On `match`, apply the index-unification substitution to the whole context,
+not just the motive — refining sibling binders whose value the matched constructor fixes, and
+letting the coverage/impossibility checker use those refinements. Soundness-neutral: it reuses
+the *same* unifier already trusted for the motive; it only widens where the result is applied.
+Accepts strictly more programs. Overlaps directly with the Lean-shape matching spec's
+context-refinement phase.
+
+**Layer/risk.** E primary; the impossibility-pruning consumer may be K → HARD-STOP review +
+Antigen antibody. Medium-high effort, high payoff (removes both the inversion tax and most E2
+carries).
+
+**Status.** OPEN. Workaround in use across `Std.Otp.*`. This is "roadblock #2" in the
+OTP-metatheory directive.
+
+---
+
+## E2 — Index existentials are not bound by name in patterns
+
+**Symptom.** Matching an indexed constructor does not expose the constructor's index arguments
+(existentials) as named term variables. A proof that needs the intermediate/left component of a
+compound index cannot reach it.
+
+**Repros (recurring across the metatheory).**
+- `Runs(b, before)` / `RStep : Runs(b,before) -> StepAt(...) -> Runs(b,after)` — the recursive
+  adequacy call needs `before`, an index existential, not surfaced by matching `RStep`.
+- `LStep`/drain (`Std.Otp.ReplyConservation`) — the pending/answered counts are index
+  existentials; the drain proof cannot name them from a bare `LThen` match.
+- `BSeq(l,r)` left component `l` for `member_append_right(infer(l), …)`.
+
+**Root cause + layer.** Same family as E1: pattern matching binds the constructor's *value*
+fields but not its *index* arguments. E (`constructor_pattern` / motive machinery).
+
+**Current workaround (two, both in the tree).**
+1. *Make the index implicit and let inference recover it* — used for adequacy's config
+   (`{c: Config}`), so the recursive call solves the intermediate config from a sibling's type.
+   Works only when the index is *determined* by another argument (fails for `BSeq`'s `l`, which
+   no sibling determines — hence E1's data-first inversion instead).
+2. *Carry the needed component as an explicit constructor field* — `LAnswer` takes its counts
+   `(p)(a)` explicitly so `LThen`'s match binds them (directive line 246). Pollutes the datatype
+   with proof-only fields.
+
+**Proposed change.** Allow naming index existentials in patterns (an `as`/named-index binder, or
+surfacing them automatically when the constructor's index mentions a fresh variable). Largely
+subsumed by E1 (context refinement makes the data-first re-match expose them cleanly); a
+dedicated surface would remove the re-match step entirely.
+
+**Layer/risk.** E. Medium. Soundness-neutral (binds already-present kernel data).
+
+**Status.** OPEN. Explicit-field carry is the current house style; flag each new use here.
+
+---
+
+## E3 — Cross-module resolution of implicit-carrying stdlib functions (`:unknown_global`)
+
+**Symptom.** `use Std.SomeMod; call a_fn_that_carries_implicits(...)` → `:unknown_global`.
+Functions with only explicit args resolve fine across modules; adding an implicit parameter
+breaks cross-module resolution.
+
+**Repro.** `use Std.Otp.InferenceLaws; handles_mono(...)` (implicit-carrying) → `:unknown_global`.
+Dodged in `otp_inference_laws_test` by making the test self-contained.
+
+**Root cause + layer.** E-layer name resolution (`program.ex`) — the qualified/`use` import path
+does not resolve the implicit-carrying def key. See memory
+`cross-module-implicit-fn-resolution-bug`.
+
+**Current workaround.** Keep such lemmas in a self-contained module, or inline. Blocks factoring
+shared proof lemmas (e.g. `member_append_*`) into a reusable stdlib module.
+
+**Proposed change.** Fix qualified-import resolution to carry implicit-argument defs. This is
+**task #15** and the operator-designated next elaborator task after the OTP work.
+
+**Layer/risk.** E. Completeness (not soundness). Medium.
+
+**Status.** OPEN — tracked as task #15.
+
+---
+
+## E4 — Partial application of an explicit-arg function does not codegen (codegen-adjacent)
+
+**Symptom.** A partial application (e.g. a disproof `No(no_handles_nil(t))` where
+`no_handles_nil : (Tag) -> (P) -> Empty`) **type-checks** but emits a call at the wrong arity, so
+the loaded BEAM has `no_handles_nil/1 undefined`.
+
+**Root cause + layer.** C (codegen/erase) — partial-app of an explicit-arg function is not
+eta-expanded at emission. (Contrast E-layer partial-app of an *implicit*-carrying function, which
+DOES eta-expand — see memory `branch-body-lambda-fallback-and-partialapp-hole`.)
+
+**Current workaround.** Lambda-wrap: `No(fn(p) -> no_handles_nil(t, p))`. See memory
+`partial-app-codegen-arity-gap`.
+
+**Proposed change.** Eta-expand partial applications of explicit-arg functions at codegen, matching
+the implicit-carrying path.
+
+**Layer/risk.** C. Low-medium. Soundness-neutral (only affects emitted arity).
+
+**Status.** OPEN (codegen, not elaborator, but a proof-authoring wart — kept here for the author's-eye view).
+
+---
+
+## Confirmed non-gaps (do NOT chase these)
+
+Recorded so future sessions don't mistake them for gaps:
+
+- **Sibling refinement into the motive WORKS.** A single-constructor indexed witness whose match
+  fixes `b` *does* reduce `infer(b)` in the goal — verified with `SendHd : SendHd(BSend(t,k), t)`
+  and a `Member(t, infer(b))` return. The gap (E1) is specifically the *context/scrutinee*
+  position, not the motive.
+- **Explicit relevant sibling `b` is refined for type computation.** `fn f(b, {t}, w: SendHd(b,t))
+  -> Member(t, infer(b))` accepts. Making `b` explicit does not, by itself, reintroduce a
+  refinement failure.
+- **Empty `match` on an uninhabited indexed type WORKS.** `match s` with no clauses where
+  `s : SendsIn(BNil, t)` (no constructor has a `BNil` head) is accepted and total — no explicit
+  `impossible` needed.
+
+## To verify (claims not yet isolated)
+
+- Whether `_` is accepted as an explicit-argument placeholder in a call. A `coverage(_, s2)` call
+  produced `:unknown_global`, but that may have been recursive-resolution noise, not `_` itself.
+  Isolate before asserting.
+
+---
+
+## Maintenance
+
+Append new entries as `E<n>` with the same fields. When an entry lands, mark it DONE with the
+commit and leave it (history value). Cross-reference the Lean-shape matching spec for E1/E2 — a
+full context-refinement implementation there closes most of this catalog at once.
