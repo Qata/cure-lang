@@ -1405,8 +1405,7 @@ defmodule Cure.Elab.Program do
         paths: Map.put(state.paths, path, module_name)
     })
 
-    emit_loader_event({:compiling, module_name, path})
-    result = compute_module_interface(module_name, path)
+    result = cached_module_interface(module_name, path)
     state = Process.get(@loader_state_key)
 
     case result do
@@ -1417,6 +1416,65 @@ defmodule Cure.Elab.Program do
       {:error, reason} ->
         put_loader_state(%{state | modules: Map.put(state.modules, module_name, {:failed, path, reason})})
         {:error, reason}
+    end
+  end
+
+  # Shipped stdlib sources are immutable for the lifetime of a compiler run: no
+  # test writes them and nothing regenerates them mid-run, so a stdlib path is
+  # guaranteed to elaborate identically every time. Their interfaces are
+  # therefore memoized across loader generations, which is what collapses the
+  # redundant re-elaboration every `Program.elaborate` otherwise pays — the
+  # prelude modules plus explicit imports, re-sliced from source on each of the
+  # hundreds of elaboration calls a test suite makes.
+  #
+  # Scope matters, and is the whole point: ONLY shipped stdlib paths are cached.
+  # User and temp-file modules stay per-generation, so a fresh generation still
+  # observes changed source and a half-written file is never memoized. Caching
+  # by path regardless of provenance would reintroduce exactly that hole.
+  #
+  # This runs only in the HOST compiler, never on AtomVM (no `persistent_term`
+  # there). Failures are NOT cached — a transient read/parse error must not
+  # poison later loads once the tree is consistent.
+  #
+  # Bookkeeping (cycle stack, duplicate identity, path/identity agreement) lives
+  # in the caller and still runs per generation on every load, hit or miss.
+  defp cached_module_interface(module_name, path) do
+    if stdlib_source_path?(path) do
+      key = {__MODULE__, :module_interface, path}
+
+      case :persistent_term.get(key, :missing) do
+        :missing ->
+          case compile_module_interface(module_name, path) do
+            {:ok, _interface} = ok ->
+              :persistent_term.put(key, ok)
+              ok
+
+            {:error, _reason} = error ->
+              error
+          end
+
+        cached ->
+          cached
+      end
+    else
+      compile_module_interface(module_name, path)
+    end
+  end
+
+  # The `:compiling` event fires only where a module is genuinely elaborated, so
+  # an observer counting events never sees a cache hit reported as a compile.
+  defp compile_module_interface(module_name, path) do
+    emit_loader_event({:compiling, module_name, path})
+    compute_module_interface(module_name, path)
+  end
+
+  defp stdlib_source_path?(path) do
+    case Paths.source_dir() do
+      nil ->
+        false
+
+      dir ->
+        String.starts_with?(Path.expand(path), Path.expand(dir) <> "/")
     end
   end
 
