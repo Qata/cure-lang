@@ -302,8 +302,21 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   This is the ordered-scan primitive that a full solution builds on.
 - **G9. Mailbox type INFERENCE.** The **universally-named open problem** — Special
   Delivery, de'Liguoro–Padovani, and the OTP tooling literature all name inference as
-  THE gap ("users must specify explicit patterns on each guard"). → Cure builds if it
-  wants annotation-free mailbox typing.
+  THE gap ("users must specify explicit patterns on each guard"). → **DECIDABLE CORE DONE
+  — `Std.Otp.Inference` (`lib/std/otp_inference.cure`).** Two parts: (1) the interface is
+  already DERIVED not annotated — `spawn_actor(handler)` infers `Pid(<handler domain>)` via
+  the elaborator's metavariable solving, demonstrated in `otp_inference_test.exs`; (2) the
+  metatheory that makes that trustworthy — mailbox membership is DECIDABLE: `decide_handles`
+  (is a tag in the inferred interface?) and `decide_all_handled` (are all a process's
+  self-sends handled? — the closure constraint) are TOTAL, proof-carrying decision
+  procedures, built on decidable tag equality (`tag_eq`, from constructor disjointness).
+  So the "is this message handled?" check the literature discharges by annotation is settled
+  by an algorithm. Idris-mirrored (`test/oracle/otp/inference`, rel=same). **Still OPEN (the
+  research core):** inference across an EVOLVING protocol (a session where the accepted set
+  changes over a conversation) is constraint-solving over the whole behaviour, not a
+  membership check; and GLOBAL interface inference from the system-wide send/receive graph.
+  This slice is annotation-free mailbox typing for the FIRST-ORDER, finite-algebra, single-
+  receiver case — the decidable foundation a full solution builds on.
 - **Out of scope (confirmed):** static **deadlock/liveness** is a *runtime* result
   (deadlock paper explicitly rejects the static route as undecidable + needs whole
   source); if ever wanted it is a DDMon-style probe layer, orthogonal to the type system.

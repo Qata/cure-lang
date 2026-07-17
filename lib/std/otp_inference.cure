@@ -1,0 +1,133 @@
+@group(:concurrency)
+mod Std.Otp.Inference
+  use Std.Decision
+
+  ## MAILBOX-TYPE INFERENCE — the decidable core (build-out map G9).
+  ##
+  ## G9 is the problem every mailbox-typing paper names as THE open gap: Special Delivery,
+  ## de'Liguoro–Padovani, and the OTP tooling literature all require the programmer to
+  ## ANNOTATE the accepted-message patterns on each guard. This module mechanizes the part
+  ## of inference that CAN be settled definitively — deciding, without annotation, whether
+  ## a message is in an interface and whether a process's self-sends are all handled — and
+  ## is rigorously honest about the part that remains research (see "Scope").
+  ##
+  ## **The interface is DERIVED, not annotated.** Cure already infers the first-order
+  ## mailbox type: `spawn_actor(handler)` yields `Pid(<handler domain>)`, the message type
+  ## solved from the handler by the elaborator's metavariables — no annotation (obligation
+  ## (2), `Std.Otp.Proof`; demonstrated in `otp_inference_test.exs`). This module supplies
+  ## the METATHEORY that makes such inference trustworthy: mailbox membership is DECIDABLE.
+  ##
+  ## **Decidable membership (`decide_handles`).** Given an inferred interface `iface` (a
+  ## receiver's accepted tags) and any tag `t`, `decide_handles` is a TOTAL, proof-carrying
+  ## procedure returning `Yes` with a `Handles(t, iface)` proof or `No` with a disproof. So
+  ## "is this message handled?" — the check the papers make the programmer discharge by
+  ## annotation — is settled by an algorithm.
+  ##
+  ## **Decidable self-send closure (`decide_all_handled`).** A process that sends tags to
+  ## its own mailbox is mailbox-safe iff every self-sent tag is handled. `decide_all_handled`
+  ## DECIDES `AllHandled(sends, iface)` totally — so the closure constraint (the inferred
+  ## interface must cover the process's own sends) is checkable without annotation.
+  ##
+  ## Both rest on decidable TAG EQUALITY (`tag_eq`), built from constructor disjointness
+  ## (`Std.Decision`'s `impossible` discharge) — the primitive the whole decision procedure
+  ## needs.
+  ##
+  ## ## Scope — solved vs. open
+  ##
+  ## SOLVED here: for a FINITE, first-order message algebra and a single receiver, the
+  ## interface is derived from usage and every safety obligation (membership, self-send
+  ## closure) is DECIDABLE by a total proof-carrying algorithm. That is annotation-free
+  ## mailbox typing for the first-order case.
+  ##
+  ## OPEN (the research core of G9): inference across an EVOLVING protocol — a session where
+  ## the accepted set changes over a conversation — is a CONSTRAINT-SOLVING problem over the
+  ## whole behaviour, not a membership check; and GLOBAL inference of every process's
+  ## interface from the system-wide send/receive graph. Those are not decided here.
+
+  ## The message-tag algebra (schematic; a concrete finite interface universe).
+  type Tag = TA | TB | TC
+
+  ## Constructor disjointness — the disproofs decidable equality needs.
+  fn ta_ne_tb(p: Equivalent(Tag, TA(), TB())) -> Empty = match p
+    reflexive() -> impossible
+  fn ta_ne_tc(p: Equivalent(Tag, TA(), TC())) -> Empty = match p
+    reflexive() -> impossible
+  fn tb_ne_ta(p: Equivalent(Tag, TB(), TA())) -> Empty = match p
+    reflexive() -> impossible
+  fn tb_ne_tc(p: Equivalent(Tag, TB(), TC())) -> Empty = match p
+    reflexive() -> impossible
+  fn tc_ne_ta(p: Equivalent(Tag, TC(), TA())) -> Empty = match p
+    reflexive() -> impossible
+  fn tc_ne_tb(p: Equivalent(Tag, TC(), TB())) -> Empty = match p
+    reflexive() -> impossible
+
+  ## **DECIDABLE TAG EQUALITY.** Total: for any two tags, a proof they are equal or a
+  ## disproof — the primitive the membership decision is built on.
+  fn tag_eq(a: Tag, b: Tag) -> Decision(Equivalent(Tag, a, b)) = match a
+    TA() -> match b
+      TA() -> Yes(reflexive(TA()))
+      TB() -> No(ta_ne_tb)
+      TC() -> No(ta_ne_tc)
+    TB() -> match b
+      TA() -> No(tb_ne_ta)
+      TB() -> Yes(reflexive(TB()))
+      TC() -> No(tb_ne_tc)
+    TC() -> match b
+      TA() -> No(tc_ne_ta)
+      TB() -> No(tc_ne_tb)
+      TC() -> Yes(reflexive(TC()))
+
+  ## An interface is the list of tags a receiver accepts (its inferred mailbox type).
+  type TagList = TNil | TCons(Tag, TagList)
+
+  ## Membership: tag `t` is handled by interface `iface` — a proof that `t` occurs.
+  type Handles indices (t: Tag, iface: TagList)
+    HHere  : Handles(t, TCons(t, rest))
+    HThere : Handles(t, rest) -> Handles(t, TCons(y, rest))
+
+  ## Nothing is handled by the empty interface (absurd — no constructor produces it).
+  fn no_handles_nil(t: Tag, p: Handles(t, TNil)) -> Empty = match p
+
+  ## When `t = h`, `t` is handled at the head of `TCons(h, rest)`.
+  fn handles_here(t: Tag, h: Tag, rest: TagList, eq: Equivalent(Tag, t, h)) -> Handles(t, TCons(h, rest)) =
+    rewrite eq in HHere()
+
+  ## Disproof for the cons case: a proof of `Handles(t, TCons(h, rest))` is `HHere`
+  ## (forcing `h = t`, contradicting `neq`) or `HThere` (giving `Handles(t, rest)`,
+  ## contradicting `nrest`).
+  fn handles_cons_absurd(t: Tag, h: Tag, rest: TagList, neq: (Equivalent(Tag, t, h)) -> Empty, nrest: (Handles(t, rest)) -> Empty, hp: Handles(t, TCons(h, rest))) -> Empty = match hp
+    HHere()   -> neq(reflexive(t))
+    HThere(q) -> nrest(q)
+
+  ## **DECIDABLE MEMBERSHIP.** Total, proof-carrying: is `t` handled by `iface`? This is
+  ## the inference check the literature makes the programmer discharge by annotation.
+  fn decide_handles(t: Tag, iface: TagList) -> Decision(Handles(t, iface)) = match iface
+    TNil() -> No(fn(p) -> no_handles_nil(t, p))
+    TCons(h, rest) -> match tag_eq(t, h)
+      Yes(eq) -> Yes(handles_here(t, h, rest, eq))
+      No(neq) -> match decide_handles(t, rest)
+        Yes(p)    -> Yes(HThere(p))
+        No(nrest) -> No(fn(hp) -> handles_cons_absurd(t, h, rest, neq, nrest, hp))
+
+  ## Every tag in `s` (a process's self-sends) is handled by `iface`.
+  type AllHandled indices (s: TagList, iface: TagList)
+    AHNil  : AllHandled(TNil, iface)
+    AHCons : Handles(t, iface) -> AllHandled(rest, iface) -> AllHandled(TCons(t, rest), iface)
+
+  fn ah_head_absurd(t: Tag, rest: TagList, iface: TagList, nt: (Handles(t, iface)) -> Empty, ah: AllHandled(TCons(t, rest), iface)) -> Empty = match ah
+    AHCons(ht, ahrest) -> nt(ht)
+  fn ah_tail_absurd(t: Tag, rest: TagList, iface: TagList, nrest: (AllHandled(rest, iface)) -> Empty, ah: AllHandled(TCons(t, rest), iface)) -> Empty = match ah
+    AHCons(ht, ahrest) -> nrest(ahrest)
+
+  ## **DECIDABLE SELF-SEND CLOSURE.** Total, proof-carrying: does the inferred `iface`
+  ## handle ALL of a process's self-sends `s`? The closure constraint that makes an
+  ## inferred interface safe for a process that sends to itself — checkable without
+  ## annotation.
+  fn decide_all_handled(s: TagList, iface: TagList) -> Decision(AllHandled(s, iface)) = match s
+    TNil() -> Yes(AHNil())
+    TCons(t, rest) -> match decide_handles(t, iface)
+      No(nt)  -> No(fn(ah) -> ah_head_absurd(t, rest, iface, nt, ah))
+      Yes(ht) -> match decide_all_handled(rest, iface)
+        Yes(hrest) -> Yes(AHCons(ht, hrest))
+        No(nrest)  -> No(fn(ah) -> ah_tail_absurd(t, rest, iface, nrest, ah))
+end
