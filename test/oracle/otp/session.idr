@@ -104,3 +104,15 @@ compat_terminates (COff ca cb) = run_off (compat_terminates ca)
 
 compat_unique : (r : SType) -> (r2 : SType) -> Compat l r -> Compat l r2 -> r = r2
 compat_unique r r2 c1 c2 = trans (sym (dual_involution r)) (trans (cong dual (trans (sym (compat_dual c1)) (compat_dual c2))) (dual_involution r2))
+
+sstep_sym : SStep l r l2 r2 -> SStep r l r2 l2
+sstep_sym StepSR = StepRS
+sstep_sym StepRS = StepSR
+sstep_sym SelL = OffL
+sstep_sym SelR = OffR
+sstep_sym OffL = SelL
+sstep_sym OffR = SelR
+
+srun_sym : SRun l r l2 r2 -> SRun r l r2 l2
+srun_sym SRDone = SRDone
+srun_sym (SRStep st rest) = SRStep (sstep_sym st) (srun_sym rest)

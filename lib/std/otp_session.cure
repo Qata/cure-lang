@@ -126,10 +126,29 @@ mod Std.Otp.Session
     OffR() -> match c
       COff(ca, cb) -> cb
 
+  ## **STEPS ARE REVERSIBLE UNDER ENDPOINT SWAP.** A communication step `SStep(l, r, l2, r2)`
+  ## mirrors to `SStep(r, l, r2, l2)` — a send becomes the peer's receive, a selection the peer's
+  ## offer, and vice versa. This is the operational face of `compat_sym`: the two endpoints of a
+  ## channel are interchangeable at every step.
+  fn sstep_sym({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, st: SStep(l, r, l2, r2)) -> SStep(r, l, r2, l2) = match st
+    StepSR() -> StepRS()
+    StepRS() -> StepSR()
+    SelL()   -> OffL()
+    SelR()   -> OffR()
+    OffL()   -> SelL()
+    OffR()   -> SelR()
+
   ## A whole session RUN: the reflexive-transitive closure of communication steps.
   type SRun indices (l: SType, r: SType, l2: SType, r2: SType)
     SRDone : SRun(l, r, l, r)
     SRStep : SStep(l, r, lm, rm) -> SRun(lm, rm, l2, r2) -> SRun(l, r, l2, r2)
+
+  ## **RUNS ARE REVERSIBLE UNDER ENDPOINT SWAP.** A whole run `SRun(l, r, l2, r2)` mirrors to
+  ## `SRun(r, l, r2, l2)`, swapping both endpoints at every step (via `sstep_sym`). So the two
+  ## participants' views of a session's execution are mirror images — consistent with `compat_sym`.
+  fn srun_sym({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, run: SRun(l, r, l2, r2)) -> SRun(r, l, r2, l2) = match run
+    SRDone()         -> SRDone()
+    SRStep(st, rest) -> SRStep(sstep_sym(st), srun_sym(rest))
 
   ## **SESSION SAFETY OVER A RUN.** A session started from compatible endpoints stays compatible
   ## through every step of its execution — it never gets stuck on a type mismatch. Induction over

@@ -104,6 +104,18 @@ defmodule Cure.Stdlib.OtpSessionTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "srun_sym: a session run reverses under endpoint swap" do
+    src = """
+    mod SrsInst
+      use Std.Otp.Session
+      fn rev({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, run: SRun(l, r, l2, r2)) -> SRun(r, l, r2, l2) =
+        srun_sym(run)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "compat_unique: an endpoint's compatible peer is unique" do
     src = """
     mod CuInst

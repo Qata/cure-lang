@@ -68,9 +68,19 @@ mod Session
       COff(ca, cb) -> ca
     OffR() -> match c
       COff(ca, cb) -> cb
+  fn sstep_sym({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, st: SStep(l, r, l2, r2)) -> SStep(r, l, r2, l2) = match st
+    StepSR() -> StepRS()
+    StepRS() -> StepSR()
+    SelL()   -> OffL()
+    SelR()   -> OffR()
+    OffL()   -> SelL()
+    OffR()   -> SelR()
   type SRun indices (l: SType, r: SType, l2: SType, r2: SType)
     SRDone : SRun(l, r, l, r)
     SRStep : SStep(l, r, lm, rm) -> SRun(lm, rm, l2, r2) -> SRun(l, r, l2, r2)
+  fn srun_sym({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, run: SRun(l, r, l2, r2)) -> SRun(r, l, r2, l2) = match run
+    SRDone()         -> SRDone()
+    SRStep(st, rest) -> SRStep(sstep_sym(st), srun_sym(rest))
   fn session_run_safe({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, c: Compat(l, r), run: SRun(l, r, l2, r2)) -> Compat(l2, r2) = match run
     SRDone()         -> c
     SRStep(st, rest) -> session_run_safe(session_preservation(c, st), rest)
