@@ -24,6 +24,8 @@ defmodule Cure.Stdlib.OtpSetTest do
         union_comm_member(x, s1, s2)
       fn idem(x: Key, s: Set) -> Equivalent(B, mem(x, union(s, s)), mem(x, s)) =
         union_idem_member(x, s)
+      fn assoc(x: Key, s1: Set, s2: Set, s3: Set) -> Equivalent(B, mem(x, union(union(s1, s2), s3)), mem(x, union(s1, union(s2, s3)))) =
+        union_assoc_member(x, s1, s2, s3)
     end
     """
 

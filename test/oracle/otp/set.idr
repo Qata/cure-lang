@@ -57,3 +57,21 @@ union_comm_member x s1 s2 = trans (union_member x s1 s2) (trans (orb_comm (mem x
 
 union_idem_member : (x : Key) -> (s : Set) -> mem x (union s s) = mem x s
 union_idem_member x s = trans (union_member x s s) (orb_idem (mem x s))
+
+orb_assoc : (a : B) -> (b : B) -> (c : B) -> orb (orb a b) c = orb a (orb b c)
+orb_assoc F b c = Refl
+orb_assoc T b c = Refl
+
+orb_cong_l : (c : B) -> a = a2 -> orb a c = orb a2 c
+orb_cong_l c e = cong (\y => orb y c) e
+
+orb_cong_r : (a : B) -> b = b2 -> orb a b = orb a b2
+orb_cong_r a e = cong (\y => orb a y) e
+
+union_assoc_member : (x : Key) -> (s1 : Set) -> (s2 : Set) -> (s3 : Set) -> mem x (union (union s1 s2) s3) = mem x (union s1 (union s2 s3))
+union_assoc_member x s1 s2 s3 =
+  trans (union_member x (union s1 s2) s3)
+    (trans (orb_cong_l (mem x s3) (union_member x s1 s2))
+      (trans (orb_assoc (mem x s1) (mem x s2) (mem x s3))
+        (trans (orb_cong_r (mem x s1) (sym (union_member x s2 s3)))
+          (sym (union_member x s1 (union s2 s3))))))
