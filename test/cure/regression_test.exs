@@ -9,7 +9,10 @@ defmodule Cure.RegressionTest do
 
   alias Mix.Tasks.Cure.Check
 
+  # :slow — compiles all 81 stdlib modules (~22s). CI covers this both here
+  # (`mix test --include slow`) and via its dedicated `mix cure.check.stdlib` step.
   @tag :regression
+  @tag :slow
   test "every Std.* module compiles without warnings" do
     result =
       ExUnit.CaptureIO.capture_io(fn ->

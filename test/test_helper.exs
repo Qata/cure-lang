@@ -160,7 +160,18 @@ defmodule Cure.FailureTailFormatter do
   defp plain(_kind, content), do: content
 end
 
-ExUnit.start(formatters: [ExUnit.CLIFormatter, Cure.FailureTailFormatter])
+# `:slow` marks tests that compile the whole 81-module stdlib to assert something
+# narrower than a full stdlib compile. They are excluded from the default run
+# because they cost ~43s of a ~156s suite, which is a tax on every local edit.
+#
+# They are NOT redundant, so they still run everywhere it matters: CI passes
+# `--include slow` (see `.github/workflows/ci.yml`). Run them locally with
+# `mix test --include slow`. Tag a test `:slow` only when it is genuinely
+# stdlib-scale — not merely to quiet a test that has become slow by accident.
+ExUnit.start(
+  exclude: [:slow],
+  formatters: [ExUnit.CLIFormatter, Cure.FailureTailFormatter]
+)
 
 # Antigen deliberately injects "immune response" violations (test scaffolding
 # exercising the detection machinery). Rather than flood stdout with one calm
