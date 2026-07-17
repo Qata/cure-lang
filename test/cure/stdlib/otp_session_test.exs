@@ -104,6 +104,17 @@ defmodule Cure.Stdlib.OtpSessionTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "compat_sym: compatibility is symmetric" do
+    src = """
+    mod CsymInst
+      use Std.Otp.Session
+      fn sym({l: SType}, {r: SType}, c: Compat(l, r)) -> Compat(r, l) = compat_sym(c)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "dual_compat: every type is compatible with its dual (converse of compat_dual)" do
     src = """
     mod DcInst

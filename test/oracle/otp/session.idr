@@ -38,6 +38,13 @@ dual_compat (SRecv t k) = CRS t (dual_compat k)
 dual_compat (SSelect a b) = CSel (dual_compat a) (dual_compat b)
 dual_compat (SOffer a b) = COff (dual_compat a) (dual_compat b)
 
+compat_sym : Compat l r -> Compat r l
+compat_sym CEnd = CEnd
+compat_sym (CSR t c2) = CRS t (compat_sym c2)
+compat_sym (CRS t c2) = CSR t (compat_sym c2)
+compat_sym (CSel ca cb) = COff (compat_sym ca) (compat_sym cb)
+compat_sym (COff ca cb) = CSel (compat_sym ca) (compat_sym cb)
+
 data SStep : SType -> SType -> SType -> SType -> Type where
   StepSR : SStep (SSend t lk) (SRecv t rk) lk rk
   StepRS : SStep (SRecv t lk) (SSend t rk) lk rk

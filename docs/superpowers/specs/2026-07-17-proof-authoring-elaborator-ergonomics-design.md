@@ -487,6 +487,43 @@ fix for the remaining bare case. Distinct from E10 (a function ARGUMENT not redu
 
 ---
 
+## K1 — conversion does not reduce a reducible argument sitting in a stuck application's spine (KERNEL)
+
+**Symptom.** During conversion, an application `g(f(c), x)` where the OUTER call `g` is stuck
+(neutral because a LATER argument `x` is a variable) does not get its EARLIER argument `f(c)`
+reduced, even when `f(c)` reduces to a value on its own. So `msum(recvs(LEnd), recvs(t))` and
+`msum(MkMS(Z,Z,Z), recvs(t))` are NOT judged convertible although `recvs(LEnd) ≡ MkMS(Z,Z,Z)` —
+the `recvs(LEnd)` in the stuck `msum`'s first slot stays a neutral `napp` and is compared
+syntactically against `MkMS(Z,Z,Z)`, which fails.
+
+**Minimal repro** (`Std.Otp.SessionMailbox`, attempting the monoid-homomorphism `recvs(seq(s,t)) =
+msum(recvs(s), recvs(t))`): the `LEnd` case goal `msum(recvs(LEnd), recvs(t))` will not convert
+with a proof of type `msum(MkMS(Z,Z,Z), recvs(t))`. In ISOLATION `recvs(LEnd)` reduces fine
+(`fn h() -> Equivalent(MS, recvs(LEnd()), MkMS(Z,Z,Z)) = reflexive(MkMS(Z,Z,Z))` is accepted); the
+non-reduction is specifically inside the stuck-`msum` spine. `seq(LEnd, t) ≡ t` DID reduce in the
+same position (that arg is the whole head, not a spine element behind a stuck outer call).
+
+**Root cause + layer.** K — `normalise.ex`/`conv.ex`. When an application is neutral (stuck on
+some argument), the evaluator leaves the spine's OTHER arguments un-normalized (WHNF-lazy spine),
+and conversion compares spine elements without forcing them to normal form. A fully-normalizing
+(or spine-normalizing-on-mismatch) conversion would reduce `recvs(LEnd) → MkMS(Z,Z,Z)` and
+succeed. Idris/Agda normalize here.
+
+**Impact.** Blocks any inductive proof whose per-constructor goal places a reduced measure in a
+stuck accumulator/combiner slot — e.g. the mailbox-encoding monoid homomorphism over `seq`
+(`recvs`/`sends` are homomorphisms to `(MS, msum, empty)`). The result is TRUE and Idris-provable;
+only the Cure kernel's conversion is too weak. Deferred (TCB HARD-STOP — a normalizer change needs
+its own reviewed run + Antigen termination/soundness antibodies).
+
+**Workaround (partial, fragile).** Bridge every stuck-spine reduction with an explicit congruence
+lemma (`fn recvs_lend() -> Equivalent(MS, recvs(LEnd), MkMS(Z,Z,Z)) = reflexive(...)` then
+`msum_cong(recvs_lend(), …)`), one per constructor per slot. Verbose and it still tripped
+`:branch_type` in composition, so the homomorphism was NOT landed; recorded here instead. The
+neighbouring encoding results that DON'T need a reduced value in a stuck slot (`recvs_dual`,
+`compat_recv_send`, fork/join) all elaborate cleanly.
+
+---
+
 ## Maintenance
 
 Append new entries as `E<n>` with the same fields. When an entry lands, mark it DONE with the

@@ -77,6 +77,17 @@ mod Std.Otp.Session
     SSelect(a, b) -> CSel(dual_compat(a), dual_compat(b))
     SOffer(a, b)  -> COff(dual_compat(a), dual_compat(b))
 
+  ## **COMPATIBILITY IS SYMMETRIC.** If `l` can safely communicate with `r`, then `r` can with `l`
+  ## — `Compat(l, r) ⟹ Compat(r, l)`. Structural induction swapping each matched send/receive (and
+  ## internal/external choice) to its mirror. So "can communicate" is a symmetric relation, as a
+  ## channel's two endpoints should be interchangeable.
+  fn compat_sym({l: SType}, {r: SType}, c: Compat(l, r)) -> Compat(r, l) = match c
+    CEnd()       -> CEnd()
+    CSR(t, c2)   -> CRS(t, compat_sym(c2))
+    CRS(t, c2)   -> CSR(t, compat_sym(c2))
+    CSel(ca, cb) -> COff(compat_sym(ca), compat_sym(cb))
+    COff(ca, cb) -> CSel(compat_sym(ca), compat_sym(cb))
+
   ## A communication STEP: one endpoint sends tag `t`, the other receives it, and both advance
   ## to their continuations. Well-formed only when the send/receive tags agree.
   ## A communication step also covers CHOICE: selecting a branch (`SelL`/`SelR`) commits both
