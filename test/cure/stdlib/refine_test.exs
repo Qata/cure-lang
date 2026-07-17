@@ -6,8 +6,8 @@ defmodule Cure.Stdlib.RefineTest do
   test "a refined value carries kernel-checked evidence" do
     source = """
     mod ProofBackedRefinement
-      use Std.Refine
       use Std.Proof.Math
+      use Std.Refine
 
       type PositiveNatural = {value: Nat | IsPositive(value)}
 
@@ -31,8 +31,8 @@ defmodule Cure.Stdlib.RefineTest do
   test "a false refinement cannot be constructed without evidence" do
     source = """
     mod RejectedRefinement
-      use Std.Refine
       use Std.Proof.Math
+      use Std.Refine
 
       type PositiveNatural = {value: Nat | IsPositive(value)}
 
@@ -42,4 +42,19 @@ defmodule Cure.Stdlib.RefineTest do
 
     assert {:error, _reason} = Program.elaborate(source)
   end
+
+  test "transitive proof imports and positive arithmetic preserve refinements" do
+    source = """
+    mod PositiveNaturalArithmetic
+      use Std.Refine
+
+      fn two() -> PositiveNatural = positive_natural_from_successor(S(Z))
+      fn four_by_addition() -> PositiveNatural = add_positive_natural_numbers(two(), two())
+      fn four_by_multiplication() -> PositiveNatural = multiply_positive_natural_numbers(two(), two())
+    end
+    """
+
+    assert {:ok, _environment} = Program.elaborate(source)
+  end
+
 end

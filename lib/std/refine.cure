@@ -1,5 +1,7 @@
 @group(:core)
 mod Std.Refine
+  use Std.Proof.Math
+
   ## A value paired with kernel-checked evidence that it satisfies a proposition.
   ##
   ## The surface `{value: a | predicate(value)}` is an ordinary dependent pair.
@@ -26,4 +28,26 @@ mod Std.Refine
     {predicate: (a) -> Type},
     refined: Sigma(value: a, predicate(value))
   ) -> predicate(refined_value(refined)) = refined.2
+
+  ## Natural numbers known to be strictly positive.
+  type PositiveNatural = {value: Nat | IsPositive(value)}
+
+  ## Construct a positive natural number from any successor.
+  fn positive_natural_from_successor(predecessor: Nat) -> PositiveNatural =
+    refine(S(predecessor), successor_is_positive(predecessor))
+
+  ## Adding two positive natural numbers preserves positivity.
+  fn add_positive_natural_numbers(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
+    refine(
+      plus(refined_value(left), refined_value(right)),
+      adding_to_a_positive_number_is_positive(refinement_proof(left))
+    )
+
+  ## Multiplying two positive natural numbers preserves positivity.
+  fn multiply_positive_natural_numbers(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
+    refine(
+      multiply(refined_value(left), refined_value(right)),
+      multiplying_positive_numbers_is_positive(refinement_proof(left), refinement_proof(right))
+    )
+
 end
