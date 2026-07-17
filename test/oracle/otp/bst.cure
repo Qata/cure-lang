@@ -160,4 +160,17 @@ mod Bst
           KA() -> reflexive(T())
           KB() -> reflexive(T())
           KC() -> reflexive(T())
+  fn orb_cong_r(a: B, {b: B}, {b2: B}, e: Equivalent(B, b, b2)) -> Equivalent(B, orb(a, b), orb(a, b2)) =
+    rewrite e in reflexive(orb(a, b2))
+  fn orb_swap(a: B, b: B, c: B) -> Equivalent(B, orb(a, orb(b, c)), orb(b, orb(a, c))) = match a
+    F() -> reflexive(orb(b, c))
+    T() -> match b
+      F() -> reflexive(T())
+      T() -> reflexive(T())
+  fn insert_comm(x: Key, j: Key, k: Key, t: Tree) -> Equivalent(B, member(x, insert(j, insert(k, t))), member(x, insert(k, insert(j, t)))) =
+    trans(insert_spec(x, j, insert(k, t)),
+      trans(orb_cong_r(keq(x, j), insert_spec(x, k, t)),
+        trans(orb_swap(keq(x, j), keq(x, k), member(x, t)),
+          trans(orb_cong_r(keq(x, k), sym(insert_spec(x, j, t))),
+            sym(insert_spec(x, k, insert(j, t)))))))
 end

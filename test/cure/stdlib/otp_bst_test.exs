@@ -28,6 +28,8 @@ defmodule Cure.Stdlib.OtpBstTest do
         insert_preserves(x, k, t, e)
       fn spec(x: Key, k: Key, t: Tree) -> Equivalent(B, member(x, insert(k, t)), orb(keq(x, k), member(x, t))) =
         insert_spec(x, k, t)
+      fn comm(x: Key, j: Key, k: Key, t: Tree) -> Equivalent(B, member(x, insert(j, insert(k, t))), member(x, insert(k, insert(j, t)))) =
+        insert_comm(x, j, k, t)
     end
     """
 

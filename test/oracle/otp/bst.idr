@@ -130,3 +130,19 @@ insert_spec KC KC (Node l KB r) = insert_spec KC KC r
 insert_spec KC KA (Node l KC r) = Refl
 insert_spec KC KB (Node l KC r) = Refl
 insert_spec KC KC (Node l KC r) = Refl
+
+orb_cong_r : (a : B) -> b = b2 -> orb a b = orb a b2
+orb_cong_r a e = cong (\y => orb a y) e
+
+orb_swap : (a : B) -> (b : B) -> (c : B) -> orb a (orb b c) = orb b (orb a c)
+orb_swap F b c = Refl
+orb_swap T F c = Refl
+orb_swap T T c = Refl
+
+insert_comm : (x : Key) -> (j : Key) -> (k : Key) -> (t : Tree) -> member x (insert j (insert k t)) = member x (insert k (insert j t))
+insert_comm x j k t =
+  trans (insert_spec x j (insert k t))
+    (trans (orb_cong_r (keq x j) (insert_spec x k t))
+      (trans (orb_swap (keq x j) (keq x k) (member x t))
+        (trans (orb_cong_r (keq x k) (sym (insert_spec x j t)))
+          (sym (insert_spec x k (insert j t))))))
