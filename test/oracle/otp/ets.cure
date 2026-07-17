@@ -1,6 +1,5 @@
 mod Ets
   use Std.Equivalent
-  use Std.Decision
   type Key = KA | KB | KC
   type B = F | T
   fn key_eq(x: Key, y: Key) -> B = match x
@@ -16,8 +15,6 @@ mod Ets
       KA() -> F
       KB() -> F
       KC() -> T
-  fn t_ne_f(p: Equivalent(B, T(), F())) -> Empty = match p
-  fn absurd({a: Type}, e: Empty) -> a = match e
   type Opt = ONone | OSome(Nat)
   type Table = TEmpty | TIns(Key, Nat, Table)
   fn lookup(k: Key, t: Table) -> Opt = match t
@@ -32,15 +29,15 @@ mod Ets
     KC() -> reflexive(OSome(v))
   fn lookup_insert_neq(k: Key, k2: Key, v: Nat, t: Table, neq: Equivalent(B, key_eq(k, k2), F())) -> Equivalent(Opt, lookup(k, insert(k2, v, t)), lookup(k, t)) = match k
     KA() -> match k2
-      KA() -> absurd(t_ne_f(neq))
+      KA() -> match neq
       KB() -> reflexive(lookup(KA(), t))
       KC() -> reflexive(lookup(KA(), t))
     KB() -> match k2
       KA() -> reflexive(lookup(KB(), t))
-      KB() -> absurd(t_ne_f(neq))
+      KB() -> match neq
       KC() -> reflexive(lookup(KB(), t))
     KC() -> match k2
       KA() -> reflexive(lookup(KC(), t))
       KB() -> reflexive(lookup(KC(), t))
-      KC() -> absurd(t_ne_f(neq))
+      KC() -> match neq
 end

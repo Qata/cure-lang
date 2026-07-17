@@ -14,14 +14,6 @@ key_eq KC KA = F
 key_eq KC KB = F
 key_eq KC KC = T
 
-data Empty : Type where
-
-t_ne_f : T = F -> Empty
-t_ne_f Refl impossible
-
-absurd : Empty -> a
-absurd x impossible
-
 data Opt = ONone | OSome Nat
 data Table = TEmpty | TIns Key Nat Table
 
@@ -40,12 +32,12 @@ lookup_insert_eq KB v t = Refl
 lookup_insert_eq KC v t = Refl
 
 lookup_insert_neq : (k : Key) -> (k2 : Key) -> (v : Nat) -> (t : Table) -> key_eq k k2 = F -> lookup k (insert k2 v t) = lookup k t
-lookup_insert_neq KA KA v t neq = absurd (t_ne_f neq)
+lookup_insert_neq KA KA v t Refl impossible
 lookup_insert_neq KA KB v t neq = Refl
 lookup_insert_neq KA KC v t neq = Refl
 lookup_insert_neq KB KA v t neq = Refl
-lookup_insert_neq KB KB v t neq = absurd (t_ne_f neq)
+lookup_insert_neq KB KB v t Refl impossible
 lookup_insert_neq KB KC v t neq = Refl
 lookup_insert_neq KC KA v t neq = Refl
 lookup_insert_neq KC KB v t neq = Refl
-lookup_insert_neq KC KC v t neq = absurd (t_ne_f neq)
+lookup_insert_neq KC KC v t Refl impossible
