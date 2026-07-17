@@ -1,7 +1,7 @@
 @group(:concurrency)
 mod Std.Otp.InferenceAdequacy
   ## ADEQUACY of mailbox-type inference — `infer(behaviour)` tied to the OPERATIONAL
-  ## metatheory, PROVED for the sequential first-order fragment (build-out map G9).
+  ## metatheory, PROVED for the sequential AND branching first-order fragment (build-out map G9).
   ##
   ## This is the theorem the mailbox-types literature has only STATED: the statically
   ## inferred interface is preserved by the operational reduction of the behaviour it was
@@ -9,7 +9,7 @@ mod Std.Otp.InferenceAdequacy
   ## handle. The mechanized state of the art (Proof of Delivery, Rocq) mechanized the
   ## mailbox-type ALGEBRA but EXPLICITLY DEFERRED the operational preservation theorem;
   ## this module discharges that operational half and ties it to inference — for the
-  ## sequential first-order fragment (`BNil`/`BRecv`/`BSend`), with no holes.
+  ## sequential and branching first-order fragment (`BNil`/`BRecv`/`BSend`/`BSeq`), with no holes.
   ##
   ## Three parts, each with a matching shape (2026-07-17-adequacy-shape.md):
   ##   * `WTat(c, I)` = `config ⊨ interface` (Proof of Delivery's config⊨pattern relation,
@@ -20,12 +20,14 @@ mod Std.Otp.InferenceAdequacy
   ##     behaviour's sends are covered by `infer(b)`, and every reachable config is
   ##     therefore well-typed at `infer(b)`.
   ##
-  ## **Honest scope.** Sequential behaviours only. BRANCHING (`BSeq`) needs
-  ## `append`-membership of the inferred interface, whose left operand `infer(l)` is an
-  ## erased existential index — Cure rejects using it relevantly (`:erased_used_relevantly`);
-  ## that case stays in the `inference_adequacy.cure` scaffold. RECURSION (`BRec`) needs the
-  ## frontier `lfp` (also scaffolded). This is the first-order, sequential core proved end
-  ## to end: inference → operational safety.
+  ## **Honest scope.** Sequential AND branching (`BSeq`) behaviours. Branching coverage needs
+  ## `append`-membership of the inferred interface (`member_append_left`/`member_append_right`);
+  ## its left operand `infer(l)` is recovered relevantly by matching the DATA `b` before the
+  ## EVIDENCE `sends` — so `l`/`r` are bound by name (the ergonomics-catalog E1 structure, see
+  ## `2026-07-17-proof-authoring-elaborator-ergonomics-design.md`), sidestepping the erased
+  ## existential without any TCB change. RECURSION (`BRec`) still needs the frontier `lfp`
+  ## (scaffolded in `inference_adequacy.cure`). This is the first-order core proved end to end:
+  ## inference → operational safety.
 
   type Tag = TA | TB | TC
   type TagList = TNil | TCons(Tag, TagList)
@@ -62,25 +64,50 @@ mod Std.Otp.InferenceAdequacy
       MkWTat(ae, am) -> match am
         AMCons(rat, am2) -> MkWTat(ae, am2)
 
-  ## A sequential process BEHAVIOUR and its inferred interface (the constant-fold fragment).
-  type Behaviour = BNil | BRecv(Tag, Behaviour) | BSend(Tag, Behaviour)
+  ## A first-order process BEHAVIOUR and its inferred interface. `BSeq(l, r)` is BRANCHING:
+  ## its interface is the append of the branches' interfaces (order-sensitive tag fragment).
+  type Behaviour = BNil | BRecv(Tag, Behaviour) | BSend(Tag, Behaviour) | BSeq(Behaviour, Behaviour)
+  fn append(a: TagList, b: TagList) -> TagList = match a
+    TNil()         -> b
+    TCons(t, rest) -> TCons(t, append(rest, b))
   fn infer(b: Behaviour) -> TagList = match b
     BNil()      -> TNil
     BRecv(t, k) -> TCons(t, infer(k))
     BSend(t, k) -> TCons(t, infer(k))
+    BSeq(l, r)  -> append(infer(l), infer(r))
 
-  ## `SendsIn(b, t)` — behaviour `b` has a send site for tag `t`.
+  ## Membership is preserved under `append`, on the left and the right. These are the
+  ## `AllMember`-over-append lemmas the order-abstracted modules deferred, specialized to
+  ## single-tag membership — the algebra branching coverage needs.
+  fn member_append_left({t: Tag}, {xs: TagList}, {ys: TagList}, m: Member(t, xs)) -> Member(t, append(xs, ys)) = match m
+    MemHere()    -> MemHere()
+    MemThere(m2) -> MemThere(member_append_left(m2))
+  fn member_append_right(xs: TagList, {t: Tag}, {ys: TagList}, m: Member(t, ys)) -> Member(t, append(xs, ys)) = match xs
+    TNil()         -> m
+    TCons(y, rest) -> MemThere(member_append_right(rest, m))
+
+  ## `SendsIn(b, t)` — behaviour `b` has a send site for tag `t`. `BSeq` sends on either branch.
   type SendsIn indices (b: Behaviour, t: Tag)
     SendHere  : SendsIn(BSend(t, k), t)
     SendRecvK : SendsIn(k, t) -> SendsIn(BRecv(y, k), t)
     SendSendK : SendsIn(k, t) -> SendsIn(BSend(y, k), t)
+    SendSeqL  : SendsIn(l, t) -> SendsIn(BSeq(l, r), t)
+    SendSeqR  : SendsIn(r, t) -> SendsIn(BSeq(l, r), t)
 
-  ## **COVERAGE.** Every tag `b` sends is in `infer(b)` — the constraint generator's
-  ## soundness, by induction on the send site.
-  fn coverage({b: Behaviour}, {t: Tag}, sends: SendsIn(b, t)) -> Member(t, infer(b)) = match sends
-    SendHere()    -> MemHere()
-    SendRecvK(s2) -> MemThere(coverage(s2))
-    SendSendK(s2) -> MemThere(coverage(s2))
+  ## **COVERAGE.** Every tag `b` sends is in `infer(b)` — the constraint generator's soundness.
+  ## Match the DATA `b` first (binding the sub-behaviours `l`/`r`/`k` by name), then the EVIDENCE
+  ## `sends` against a concrete `b`. `match sends` on `BNil` is EMPTY (`SendsIn(BNil,t)` is
+  ## uninhabited: `BNil` sends nothing). `BSeq`'s branches route through the append lemmas.
+  fn coverage(b: Behaviour, {t: Tag}, sends: SendsIn(b, t)) -> Member(t, infer(b)) = match b
+    BNil()      -> match sends
+    BRecv(y, k) -> match sends
+      SendRecvK(s2) -> MemThere(coverage(k, s2))
+    BSend(y, k) -> match sends
+      SendHere()    -> MemHere()
+      SendSendK(s2) -> MemThere(coverage(k, s2))
+    BSeq(l, r)  -> match sends
+      SendSeqL(s2) -> member_append_left(coverage(l, s2))
+      SendSeqR(s2) -> member_append_right(infer(l), coverage(r, s2))
 
   ## `Runs(b, c)` — config `c` is reachable by executing `b` (steps typed at `infer(b)`,
   ## which `coverage` justifies for `b`'s sends).

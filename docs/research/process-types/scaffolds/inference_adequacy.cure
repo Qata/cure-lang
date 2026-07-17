@@ -1,4 +1,12 @@
 mod InferenceAdequacy
+  ## STATUS (2026-07-17): the SEQUENTIAL and BRANCHING (`BSeq`) fragment is now PROVED, no
+  ## holes, in the shipped `lib/std/otp_inference_adequacy.cure` (Idris rel=same). The `BSeq`
+  ## coverage that this scaffold's `?coverage`/`?adequacy` notes call erasure-blocked was
+  ## resolved by matching the DATA before the EVIDENCE (E1 structure), no TCB change. What this
+  ## scaffold still stands for is the RECURSION (`BRec`) frontier, which genuinely needs the
+  ## `lfp` machinery (see `inference_fixpoint.cure`). The notes below predate the branching
+  ## proof; read them as the recursion-frontier design, not the current gap list.
+  ##
   ## ADEQUACY — tying `infer(behaviour)` back to the operational metatheory: the one piece
   ## of G9 with no single external match, here decomposed into three parts that DO each
   ## have a matching shape (see 2026-07-17-adequacy-shape.md).

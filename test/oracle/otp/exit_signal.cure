@@ -1,0 +1,33 @@
+mod ExitSignal
+  type Tag = TInc | TQuery | TExit
+  type TagList = TNil | TCons(Tag, TagList)
+  type Accepted indices (t: Tag)
+    AccInc   : Accepted(TInc)
+    AccQuery : Accepted(TQuery)
+    AccExit  : Accepted(TExit)
+  type AllAccepted indices (ts: TagList)
+    AANil  : AllAccepted(TNil)
+    AACons : Accepted(t) -> AllAccepted(rest) -> AllAccepted(TCons(t, rest))
+  type Trap = Trapping | NotTrapping
+  type Reason = Normal | Abnormal | Kill
+  type Proc = Alive(TagList, TagList, Trap) | Dead
+  type WTP indices (p: Proc)
+    WTAlive : AllAccepted(e) -> AllAccepted(m) -> WTP(Alive(e, m, tr))
+    WTDead  : WTP(Dead)
+  type Step indices (r: Reason, before: Proc, after: Proc)
+    SNormalTrap    : Accepted(TExit) -> Step(Normal, Alive(e, m, Trapping), Alive(TCons(TExit, e), m, Trapping))
+    SNormalSurvive : Step(Normal, Alive(e, m, NotTrapping), Alive(e, m, NotTrapping))
+    SAbnormalTrap  : Accepted(TExit) -> Step(Abnormal, Alive(e, m, Trapping), Alive(TCons(TExit, e), m, Trapping))
+    SAbnormalProp  : Step(Abnormal, Alive(e, m, NotTrapping), Dead)
+    SKillTrap      : Step(Kill, Alive(e, m, Trapping), Dead)
+    SKillNoTrap    : Step(Kill, Alive(e, m, NotTrapping), Dead)
+  fn preservation({r: Reason}, {b: Proc}, {a: Proc}, wt: WTP(b), s: Step(r, b, a)) -> WTP(a) = match s
+    SNormalTrap(accexit) -> match wt
+      WTAlive(ae, am) -> WTAlive(AACons(accexit, ae), am)
+    SNormalSurvive() -> wt
+    SAbnormalTrap(accexit) -> match wt
+      WTAlive(ae, am) -> WTAlive(AACons(accexit, ae), am)
+    SAbnormalProp() -> WTDead
+    SKillTrap()   -> WTDead
+    SKillNoTrap() -> WTDead
+end

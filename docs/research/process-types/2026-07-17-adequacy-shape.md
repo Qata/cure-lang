@@ -54,16 +54,21 @@ PoD deferred). The genuinely NEW work is the COMPOSITION — proving the three f
 part (operational preservation for mailbox-typed configurations) is done.
 
 **DONE — `Std.Otp.InferenceAdequacy` (`lib/std/otp_inference_adequacy.cure`).** The
-SEQUENTIAL first-order fragment (`BNil`/`BRecv`/`BSend`) is now PROVED end to end, no holes:
-`preservation_at` (subject reduction at `infer(b)`), `coverage` (`SendsIn(b,t) ⟹ Member(t,
-infer(b))`), and `adequacy` (every reachable config is `WTat(c, infer(b))`), Idris-mirrored
-`rel=same`. This is the mailbox-inference adequacy the literature has only STATED, mechanized
-against an operational reduction — the operational half Proof of Delivery deferred, tied to
-inference. The `?adequacy` block turned out NOT to be a deep gap: it was resolved by making the
-config argument IMPLICIT so the recursive call infers the intermediate config from `prev`'s type
-(the standard dependent-match form). What remains: BRANCHING (`BSeq`) needs `append`-membership
-whose left operand `infer(l)` is an erased existential index (`:erased_used_relevantly`), and
-RECURSION (`BRec`) needs the frontier `lfp` — both stay in `scaffolds/inference_adequacy.cure`.
+SEQUENTIAL and BRANCHING first-order fragment (`BNil`/`BRecv`/`BSend`/`BSeq`) is now PROVED end
+to end, no holes: `preservation_at` (subject reduction at `infer(b)`), `coverage`
+(`SendsIn(b,t) ⟹ Member(t, infer(b))`) including the `BSeq` branches via
+`member_append_left`/`member_append_right`, and `adequacy` (every reachable config is
+`WTat(c, infer(b))`), Idris-mirrored `rel=same`. This is the mailbox-inference adequacy the
+literature has only STATED, mechanized against an operational reduction — the operational half
+Proof of Delivery deferred, tied to inference. Two things turned out NOT to be deep gaps: the
+`?adequacy` block was resolved by making the config argument IMPLICIT so the recursive call
+infers the intermediate config from `prev`'s type; and BRANCHING — previously thought
+erasure-blocked because `member_append_right` needs `infer(l)` relevantly while `l` is an
+existential index — was resolved by matching the DATA (behaviour) before the EVIDENCE
+(`SendsIn`), which binds `l`/`r`/`k` by name and prunes impossible evidence constructors (the E1
+structure in `2026-07-17-proof-authoring-elaborator-ergonomics-design.md`), with no TCB change.
+What remains: RECURSION (`BRec`) needs the frontier `lfp` — it stays in
+`scaffolds/inference_adequacy.cure`.
 
 ## References (cloned to `~/Develop`)
 

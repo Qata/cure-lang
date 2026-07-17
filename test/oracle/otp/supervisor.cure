@@ -12,6 +12,11 @@ mod Supervisor
     FCons(c, rest) -> FCons(Alive(), restart_all(rest))
   fn restart_one({spec: ChildSpec}, {rest: Children}, f: Fleet(CCons(spec, rest))) -> Fleet(CCons(spec, rest)) = match f
     FCons(c, others) -> FCons(Alive(), others)
+  fn rest_for_one({specs: Children}, f: Fleet(specs), k: Nat) -> Fleet(specs) = match k
+    Z()   -> restart_all(f)
+    S(k2) -> match f
+      FNil()         -> FNil()
+      FCons(c, rest) -> FCons(c, rest_for_one(rest, k2))
   fn establish(specs: Children) -> Fleet(specs) = match specs
     CNil()         -> FNil()
     CCons(s, rest) -> FCons(Alive(), establish(rest))

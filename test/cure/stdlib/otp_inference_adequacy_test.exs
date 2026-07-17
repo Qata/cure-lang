@@ -23,19 +23,37 @@ defmodule Cure.Stdlib.OtpInferenceAdequacyTest do
     type Config = MkConfig(TagList, TagList)
     type WTat indices (c: Config, iface: TagList)
       MkWTat : AllMember(e, iface) -> AllMember(m, iface) -> WTat(MkConfig(e, m), iface)
-    type Behaviour = BNil | BRecv(Tag, Behaviour) | BSend(Tag, Behaviour)
+    type Behaviour = BNil | BRecv(Tag, Behaviour) | BSend(Tag, Behaviour) | BSeq(Behaviour, Behaviour)
+    fn append(a: TagList, b: TagList) -> TagList = match a
+      TNil()         -> b
+      TCons(t, rest) -> TCons(t, append(rest, b))
     fn infer(b: Behaviour) -> TagList = match b
       BNil()      -> TNil
       BRecv(t, k) -> TCons(t, infer(k))
       BSend(t, k) -> TCons(t, infer(k))
+      BSeq(l, r)  -> append(infer(l), infer(r))
+    fn member_append_left({t: Tag}, {xs: TagList}, {ys: TagList}, m: Member(t, xs)) -> Member(t, append(xs, ys)) = match m
+      MemHere()    -> MemHere()
+      MemThere(m2) -> MemThere(member_append_left(m2))
+    fn member_append_right(xs: TagList, {t: Tag}, {ys: TagList}, m: Member(t, ys)) -> Member(t, append(xs, ys)) = match xs
+      TNil()         -> m
+      TCons(y, rest) -> MemThere(member_append_right(rest, m))
     type SendsIn indices (b: Behaviour, t: Tag)
       SendHere  : SendsIn(BSend(t, k), t)
       SendRecvK : SendsIn(k, t) -> SendsIn(BRecv(y, k), t)
       SendSendK : SendsIn(k, t) -> SendsIn(BSend(y, k), t)
-    fn coverage({b: Behaviour}, {t: Tag}, sends: SendsIn(b, t)) -> Member(t, infer(b)) = match sends
-      SendHere()    -> MemHere()
-      SendRecvK(s2) -> MemThere(coverage(s2))
-      SendSendK(s2) -> MemThere(coverage(s2))
+      SendSeqL  : SendsIn(l, t) -> SendsIn(BSeq(l, r), t)
+      SendSeqR  : SendsIn(r, t) -> SendsIn(BSeq(l, r), t)
+    fn coverage(b: Behaviour, {t: Tag}, sends: SendsIn(b, t)) -> Member(t, infer(b)) = match b
+      BNil()      -> match sends
+      BRecv(y, k) -> match sends
+        SendRecvK(s2) -> MemThere(coverage(k, s2))
+      BSend(y, k) -> match sends
+        SendHere()    -> MemHere()
+        SendSendK(s2) -> MemThere(coverage(k, s2))
+      BSeq(l, r)  -> match sends
+        SendSeqL(s2) -> member_append_left(coverage(l, s2))
+        SendSeqR(s2) -> member_append_right(infer(l), coverage(r, s2))
   """
 
   defp verdict(defs) do
@@ -51,7 +69,20 @@ defmodule Cure.Stdlib.OtpInferenceAdequacyTest do
     # the goal alone).
     defs = """
       fn tc_covered(s: SendsIn(BSend(TA, BRecv(TB, BSend(TC, BNil))), TC)) -> Member(TC, infer(BSend(TA, BRecv(TB, BSend(TC, BNil))))) =
-        coverage(s)
+        coverage(BSend(TA, BRecv(TB, BSend(TC, BNil))), s)
+    """
+
+    assert verdict(defs) == :accept
+  end
+
+  test "coverage handles a BRANCHING behaviour: a send on the right branch of a BSeq is covered" do
+    # BSeq(BSend(TA, BNil), BSend(TC, BNil)): the send of TC lives on the RIGHT branch, so its
+    # membership in infer(BSeq(...)) = append(infer left, infer right) goes through
+    # member_append_right — the case that needs infer(left) relevantly (recovered by matching
+    # the behaviour before the evidence).
+    defs = """
+      fn tc_on_right(s: SendsIn(BSeq(BSend(TA, BNil), BSend(TC, BNil)), TC)) -> Member(TC, infer(BSeq(BSend(TA, BNil), BSend(TC, BNil)))) =
+        coverage(BSeq(BSend(TA, BNil), BSend(TC, BNil)), s)
     """
 
     assert verdict(defs) == :accept
@@ -61,7 +92,7 @@ defmodule Cure.Stdlib.OtpInferenceAdequacyTest do
     # BSend(TA, BNil) has no send of TC: SendHere requires the head tag to be TC.
     defs = """
       fn no_tc_send(s: SendsIn(BSend(TA, BNil), TC)) -> Member(TC, infer(BSend(TA, BNil))) =
-        coverage(s)
+        coverage(BSend(TA, BNil), s)
       fn absurd() -> SendsIn(BSend(TA, BNil), TC) = SendHere()
     """
 

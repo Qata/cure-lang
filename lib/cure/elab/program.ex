@@ -1520,15 +1520,30 @@ defmodule Cure.Elab.Program do
             end
 
           dir ->
-            path = Path.join(dir, String.downcase(Enum.join(segments, "_")) <> ".cure")
+            # The file convention snake_cases each module-name segment
+            # (`Std.Otp.InferenceLaws` -> `otp_inference_laws.cure`), so a compound CamelCase
+            # segment gets its underscores. The old all-downcase join
+            # (`otp_inferencelaws`) missed them, leaving every multi-word module
+            # (`InferenceLaws`, `ReplyPreservation`, …) unresolvable on `use` (E3). Try the
+            # snake_cased path first, then the legacy join as a fallback for any file that
+            # predates the convention.
+            candidates =
+              [
+                Enum.map_join(segments, "_", &Macro.underscore/1),
+                String.downcase(Enum.join(segments, "_"))
+              ]
+              |> Enum.uniq()
+              |> Enum.map(&Path.join(dir, &1 <> ".cure"))
 
-            if File.exists?(path) do
-              {:ok, source, path}
-            else
-              case user_source_path(source) do
-                {:ok, user_path} -> {:ok_user, source, user_path}
-                :not_found -> {:error, {:missing_stdlib_source, source, path}}
-              end
+            case Enum.find(candidates, &File.exists?/1) do
+              nil ->
+                case user_source_path(source) do
+                  {:ok, user_path} -> {:ok_user, source, user_path}
+                  :not_found -> {:error, {:missing_stdlib_source, source, hd(candidates)}}
+                end
+
+              path ->
+                {:ok, source, path}
             end
         end
 

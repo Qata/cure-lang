@@ -5400,7 +5400,7 @@ defmodule Cure.Compiler.Parser do
     state = expect(state, :lparen)
     {idx_tele, state} = parse_typed_params(state)
     state = expect(state, :rparen)
-    state = skip_newlines(state)
+    state = skip_newlines_and_comments(state)
 
     {opened_block, state} =
       case peek(state) do
@@ -5596,6 +5596,13 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: type} when type in [:dedent, :eof] ->
         {Enum.reverse(acc), state}
+
+      # A `##`/`#` comment still at constructor indent (no intervening `:dedent`, which the
+      # clause above would have caught) sits BETWEEN constructors — skip it and continue, so a
+      # constructor can be documented in place (E5). A comment that ends the block is preceded
+      # by `:dedent` and never reaches here.
+      %Token{type: type} when type in [:doc_comment, :line_comment] ->
+        parse_gadt_ctors(advance(state), acc)
 
       _ ->
         cname_token = peek(state)
@@ -8140,6 +8147,18 @@ defmodule Cure.Compiler.Parser do
   defp skip_newlines(state) do
     case peek(state) do
       %Token{type: :newline} -> skip_newlines(advance(state))
+      _ -> state
+    end
+  end
+
+  # Like `skip_newlines`, but also skips `##`/`#` comment tokens. Used where a comment may
+  # document the first constructor of a `type … indices` block: such a comment lands before the
+  # block's `:indent` token, so plain `skip_newlines` would leave `peek` on the comment and
+  # defeat block-open detection (E5).
+  defp skip_newlines_and_comments(state) do
+    case peek(state) do
+      %Token{type: :newline} -> skip_newlines_and_comments(advance(state))
+      %Token{type: t} when t in [:doc_comment, :line_comment] -> skip_newlines_and_comments(advance(state))
       _ -> state
     end
   end
