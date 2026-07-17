@@ -3,6 +3,14 @@ defmodule Cure.Core.UnifyIndicesTest do
   alias Cure.Core.{Kernel, Context}
   alias Cure.Elab.Program
 
+  # Families/constructors elaborate to owner-qualified identities (`M#SameLen`,
+  # `G#box`, `G#S`, …). `branch_unify` and the hand-built scrutinee `{:vctor, …}`
+  # values must name them canonically — a bare name resolves to no registered ctor
+  # and every match degrades to `:impossible`. (`Nat` is declared per-module and
+  # coexists with the prelude's `Std.Nat#Nat`, so bare resolution is ambiguous;
+  # qualify with the module owner explicitly.)
+  defp q(owner, name), do: Cure.Elab.Name.qualify(owner, name)
+
   @src "mod M\n  type Nat = Z | S(Nat)\n  type SameLen indices (n: Nat, m: Nat)\n    same : SameLen(k, k)\nend\n"
 
   defp sig,
@@ -24,7 +32,7 @@ defmodule Cure.Core.UnifyIndicesTest do
 
     # scrutinee index VALUES for [a, b] (SameLen(a, b)).
     scrut = [{:vneutral, {:nvar, 0}}, {:vneutral, {:nvar, 1}}]
-    assert {:solved, subst} = Kernel.branch_unify(ctx, :SameLen, :same, scrut)
+    assert {:solved, subst} = Kernel.branch_unify(ctx, q("M", :SameLen), q("M", :same), scrut)
     # `same` has arity 1 (the implicit `k`); the forced entry keys the OUTER var (>= arity).
     forced = subst |> Map.to_list() |> Enum.filter(fn {k, _v} -> k >= 1 end)
     assert forced != []
@@ -69,15 +77,15 @@ defmodule Cure.Core.UnifyIndicesTest do
     s = sig()
     # Single outer var `a`; second scrutinee index is the ctor value `S(a)`.
     ctx = one_var_ctx(s)
-    scrut = [{:vneutral, {:nvar, 0}}, {:vctor, :S, [{:vneutral, {:nvar, 0}}]}]
-    assert :impossible = Kernel.branch_unify(ctx, :SameLen, :same, scrut)
+    scrut = [{:vneutral, {:nvar, 0}}, {:vctor, q("M", :S), [{:vneutral, {:nvar, 0}}]}]
+    assert :impossible = Kernel.branch_unify(ctx, q("M", :SameLen), q("M", :same), scrut)
   end
 
   test "(b) injectivity: `vs : Vone(S(k))` vs Vone(S(a)) decomposes to k := a" do
     s = guard_sig()
     ctx = one_var_ctx(s)
-    scrut = [{:vctor, :S, [{:vneutral, {:nvar, 0}}]}]
-    assert {:solved, subst} = Kernel.branch_unify(ctx, :Vone, :vs, scrut)
+    scrut = [{:vctor, q("G", :S), [{:vneutral, {:nvar, 0}}]}]
+    assert {:solved, subst} = Kernel.branch_unify(ctx, q("G", :Vone), q("G", :vs), scrut)
     # arity 1: the ctor-arg key 0 is solved to the scrutinee var; no cyclic bind.
     assert Map.has_key?(subst, 0)
     assert {:var, _} = Map.get(subst, 0)
@@ -87,15 +95,15 @@ defmodule Cure.Core.UnifyIndicesTest do
   test "(c) conflict: `vz : Vone(Z)` vs Vone(S(a)) is :impossible" do
     s = guard_sig()
     ctx = one_var_ctx(s)
-    scrut = [{:vctor, :S, [{:vneutral, {:nvar, 0}}]}]
-    assert :impossible = Kernel.branch_unify(ctx, :Vone, :vz, scrut)
+    scrut = [{:vctor, q("G", :S), [{:vneutral, {:nvar, 0}}]}]
+    assert :impossible = Kernel.branch_unify(ctx, q("G", :Vone), q("G", :vz), scrut)
   end
 
   test "(d) no-regression: plain ctor-arg-only `box : Box(k)` vs Box(a) has no forced entry" do
     s = guard_sig()
     ctx = one_var_ctx(s)
     scrut = [{:vneutral, {:nvar, 0}}]
-    assert {:solved, subst} = Kernel.branch_unify(ctx, :Box, :box, scrut)
+    assert {:solved, subst} = Kernel.branch_unify(ctx, q("G", :Box), q("G", :box), scrut)
     # Exactly the prior behavior: ctor-arg key (< arity 1) := scrutinee var; no
     # forced scrutinee-var (>= arity) entries induced.
     assert {:var, _} = Map.get(subst, 0)
@@ -154,7 +162,7 @@ defmodule Cure.Core.UnifyIndicesTest do
     i = {:vneutral, {:nvar, 0}}
     j = {:vneutral, {:nvar, 1}}
 
-    assert {:solved, subst} = Kernel.branch_unify(ctx, :T, :c, [i, j, j, i])
+    assert {:solved, subst} = Kernel.branch_unify(ctx, q("C", :T), q("C", :c), [i, j, j, i])
     # The soundness obligation: no cyclic substitution.
     assert acyclic?(subst), "expected acyclic subst, got #{inspect(subst)}"
     # And the collapse is real: every OUTER key (>= arity 2) resolves to one

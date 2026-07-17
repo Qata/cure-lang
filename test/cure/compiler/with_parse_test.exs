@@ -67,6 +67,29 @@ defmodule Cure.Compiler.WithParseTest do
     assert length(arms) == 2
   end
 
+  test "`proof` after a call scrutinee is not consumed as another scrutinee" do
+    src = """
+    mod M
+      type Nat = Z | S(Nat)
+      fn g(n: Nat) -> Nat = n
+      fn foo(n: Nat) -> Nat =
+        with g(n) proof pf
+          Z() -> Z()
+          S(k) -> S(k)
+    """
+
+    assert {:ok, ast} = parse(src)
+
+    node =
+      collect(ast, [])
+      |> Enum.find(fn t -> match?({:with_abs, _, [_ | _]}, t) end)
+
+    assert {:with_abs, meta, [{:function_call, call_meta, _args} | arms]} = node
+    assert Keyword.get(call_meta, :name) == "g"
+    assert Keyword.get(meta, :proof) == "pf"
+    assert length(arms) == 2
+  end
+
   test "no-proof `with` leaves :proof absent in meta (capability A unchanged)" do
     src = """
     mod M

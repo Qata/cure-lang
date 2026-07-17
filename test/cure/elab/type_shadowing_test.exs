@@ -144,7 +144,7 @@ defmodule Cure.Elab.TypeShadowingTest do
     assert info[:ctor] == :Z
     assert info[:shadowed_module] == "Std.Nat"
     assert info[:hint] == "Std.Nat.Z"
-    assert info[:local_family] == :Nat
+    assert info[:local_family] == :"WrongCtor#Nat"
   end
 
   test "R4: `Std.Nat` in a type slot resolves to the imported type (module==typename collapse)" do
@@ -185,14 +185,16 @@ defmodule Cure.Elab.TypeShadowingTest do
       assert {:ok, :"Std.Result#Ok"} =
                Cure.Elab.Resolution.resolve_qualified(env, "Std.Result.Ok", :value)
 
-      assert env.ctor_to_family[:"Std.Result#Ok"] == :Result
+      assert env.ctor_to_family[:"Std.Result#Ok"] == :"Std.Result#Result"
     end
 
     test "the local declaration wins the bare key" do
       assert {:ok, env} = elaborate(@src)
 
-      assert env.ctor_to_family[:Ok] == :Res
-      assert Cure.Core.Env.get_def(env, :mk).body == {:ctor, :Ok, [int_lit: 5]}
+      assert env.ctor_to_family[:"CtorNameCollision#Ok"] == :"CtorNameCollision#Res"
+
+      assert Cure.Core.Env.get_def(env, :mk).body ==
+               {:ctor, :"CtorNameCollision#Ok", [int_lit: 5]}
     end
 
     test "a non-colliding constructor of the same import keeps its bare key" do
@@ -200,8 +202,8 @@ defmodule Cure.Elab.TypeShadowingTest do
       # "a constructor keeps its bare key unless its own name is in shadowed_ctor_names".
       assert {:ok, env} = elaborate(@src)
 
-      assert env.ctor_to_family[:Error] == :Result
-      assert env.families[:Result].name == :Result
+      assert env.ctor_to_family[:"Std.Result#Error"] == :"Std.Result#Result"
+      assert env.families[:"Std.Result#Result"].name == :"Std.Result#Result"
     end
   end
 end

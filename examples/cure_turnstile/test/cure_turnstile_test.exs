@@ -128,6 +128,5 @@ defmodule CureTurnstileTest do
 
       assert %{coins: 10, passages: 10, state: :locked} = CureTurnstile.stats(pid)
     end
-
   end
 end

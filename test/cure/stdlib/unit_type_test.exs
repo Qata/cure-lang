@@ -24,12 +24,12 @@ defmodule Cure.Stdlib.UnitTypeTest do
     src = File.read!("lib/std/unit.cure")
     assert {:ok, env} = elab(src)
     ctors = Inductive.ctors_of(env, :Unit)
-    assert [%{name: :unit, args: []}] = ctors
+    assert [%{name: :"Std.Unit#unit", args: []}] = ctors
   end
 
   test "`type Unit = ()` produces the same family the compiler seeds" do
     {:ok, env} = elab("@group(:core)\nmod Std.Unit\n  type Unit = ()\n")
-    assert [%{name: :unit, args: []}] = Inductive.ctors_of(env, :Unit)
+    assert [%{name: :"Std.Unit#unit", args: []}] = Inductive.ctors_of(env, :Unit)
   end
 
   test "`()` is a value of type Unit" do

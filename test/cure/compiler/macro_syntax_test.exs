@@ -1,6 +1,6 @@
 defmodule Cure.Compiler.MacroSyntaxTest do
   use ExUnit.Case, async: true
-  alias Cure.Compiler.{Lexer, Parser, MacroSyntax}
+  alias Cure.Compiler.{Lexer, Parser, MacroSyntax, Token}
 
   # Parse the RHS of `fn f() = <expr>` to get a real expression AST.
   defp expr!(src) do
@@ -44,6 +44,66 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:syn_leaf, :variable, _, {:s_str, "x"}} = arg2
   end
 
+  test "to_syntax records generic constructor spelling and arity metadata" do
+    repr = MacroSyntax.to_syntax(expr!("Ping(value)"))
+
+    assert {:syn_node, :function_call, attrs, _args} = repr
+    assert {:pascal_case, {:s_bool, true}} in attrs
+    assert {:constructor_key, {:s_atom, :"Ping/1"}} in attrs
+
+    nullary = MacroSyntax.to_syntax(expr!("Ping"))
+    assert {:syn_leaf, :variable, nullary_attrs, {:s_str, "Ping"}} = nullary
+    assert {:pascal_case, {:s_bool, true}} in nullary_attrs
+    assert {:constructor_key, {:s_atom, :"Ping/0"}} in nullary_attrs
+  end
+
+  test "to_syntax records a canonical atom for reflected variable names" do
+    {:syn_leaf, :variable, attrs, {:s_str, "state"}} = MacroSyntax.to_syntax(expr!("state"))
+
+    assert {:variable_name, {:s_atom, :state}} in attrs
+  end
+
+  test "source coordinates survive the syntax reflection boundary" do
+    ast = {:variable, [line: 12, col: 7, scope: :local], "state"}
+
+    assert {:syn_leaf, :variable, attrs, {:s_str, "state"}} = MacroSyntax.to_syntax(ast)
+    assert {:source_line, {:s_int, 12}} in attrs
+    assert {:source_col, {:s_int, 7}} in attrs
+
+    assert MacroSyntax.from_syntax(MacroSyntax.to_syntax(ast)) == ast
+  end
+
+  test "to_syntax reflects a raw lexer Token without crashing" do
+    # A `delayed raw until dedent` capture leaks unparsed Tokens into the macro
+    # input; expansion_key/1 reflects that input via to_syntax. A Token is a
+    # struct, so it must not fall into the plain-map synlit clause (which would
+    # Enum.map over the struct and raise).
+    tok = Token.new(:newline, "\n", 1, 60)
+    assert {:syn_raw, repr} = MacroSyntax.to_syntax(tok)
+    refute repr == :s_opaque
+  end
+
+  test "reflected Tokens are position-insensitive but content-distinguishing" do
+    # The macro recursion guard (expansion_key/1) ignores source positions, so
+    # two Tokens differing only in line/col must reflect equally; Tokens with
+    # different type or value must reflect differently, or the guard would treat
+    # two distinct raw bodies as the same expansion and drop one.
+    base = MacroSyntax.to_syntax(Token.new(:atom, ":inc", 1, 1))
+    moved = MacroSyntax.to_syntax(Token.new(:atom, ":inc", 9, 42))
+    other_val = MacroSyntax.to_syntax(Token.new(:atom, ":dec", 1, 1))
+    other_type = MacroSyntax.to_syntax(Token.new(:ident, ":inc", 1, 1))
+
+    assert base == moved
+    refute base == other_val
+    refute base == other_type
+  end
+
+  test "caller scope is consumed before generated syntax reaches elaboration" do
+    repr = {:syn_leaf, :variable, [{:scope, {:s_atom, :caller}}], {:s_str, "state"}}
+
+    assert {:variable, [scope: :local], "state"} = MacroSyntax.from_syntax(repr)
+  end
+
   test "from_syntax(to_syntax(ast)) round-trips up to source position" do
     for src <- ["g(1, x + 2)", "[1, 2, 3]", "\"hi\"", ":ok", "true", "3.5", "f()"] do
       ast = expr!(src)
@@ -65,6 +125,47 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     repr = {:syn_quoted, {:syn_leaf, :literal, [], {:s_int, 1}}}
 
     assert MacroSyntax.from_core(MacroSyntax.to_core(repr)) == repr
+  end
+
+  test "MacroResult wrappers decode without changing the Syntax representation" do
+    repr = {:syn_leaf, :literal, [], {:s_int, 1}}
+    expanded = {:ctor, :"Std.Syntax#Expanded", [MacroSyntax.to_core(repr)]}
+
+    rejected =
+      {:ctor, :"Std.Syntax#Rejected",
+       [{:ctor, :"Std.List#Cons", [MacroSyntax.to_core(repr), {:ctor, :"Std.List#Nil", []}]}]}
+
+    assert {:expanded, ^repr} = MacroSyntax.from_core_macro_result(expanded)
+    assert {:rejected, [^repr]} = MacroSyntax.from_core_macro_result(rejected)
+  end
+
+  test "Std.Result wrappers decode as macro results" do
+    repr = {:syn_leaf, :literal, [], {:s_int, 1}}
+    ok = {:ctor, :"Std.Result#Ok", [MacroSyntax.to_core(repr)]}
+    error = {:ctor, :"Std.Result#Error", [MacroSyntax.to_core(repr)]}
+
+    assert {:expanded, ^repr} = MacroSyntax.from_core_macro_result(ok)
+    assert {:rejected, [^repr]} = MacroSyntax.from_core_macro_result(error)
+  end
+
+  test "expansion validation rejects reflection-only raw and quoted values" do
+    assert {:error, {:raw_syntax_in_expansion, []}} =
+             MacroSyntax.validate_expansion({:syn_raw, {:s_int, 1}})
+
+    assert {:error, {:quoted_syntax_in_expansion, [{:child, 0}]}} =
+             MacroSyntax.validate_expansion(
+               {:syn_node, :block, [], [{:syn_quoted, {:syn_leaf, :literal, [], {:s_int, 1}}}]}
+             )
+
+    assert :ok =
+             MacroSyntax.validate_expansion({:syn_node, :block, [], [{:syn_leaf, :literal, [], {:s_int, 1}}]})
+  end
+
+  test "expansion validation permits reflection-only values in syntax metadata" do
+    reflected =
+      {:syn_node, :outer, [{:payload, {:s_syntax, {:syn_raw, {:s_int, 1}}}}], []}
+
+    assert :ok = MacroSyntax.validate_expansion(reflected)
   end
 
   test "an exotic scalar value (regex tuple) reflects opaquely without crashing" do
@@ -157,7 +258,10 @@ defmodule Cure.Compiler.MacroSyntaxTest do
       {:syn_node, :literal, [{:subtype, {:s_atom, :integer}}], [{:syn_leaf, :literal, [], {:s_int, 7}}]}
 
     core = MacroSyntax.to_core(repr)
-    assert {:ctor, :Node, [{:atom_lit, :literal}, {:ctor, :Cons, _}, {:ctor, :Cons, _}]} = core
+
+    assert {:ctor, :"Std.Syntax#Node",
+            [{:atom_lit, :literal}, {:ctor, :"Std.List#Cons", _}, {:ctor, :"Std.List#Cons", _}]} = core
+
     assert MacroSyntax.from_core(core) == repr
   end
 
@@ -179,10 +283,11 @@ defmodule Cure.Compiler.MacroSyntaxTest do
   test "a derived rule record encodes reflected syntax fields as a Core constructor" do
     input = {:syn_node, :macro_input, [], [{:syn_leaf, :variable, [], {:s_str, "n"}}]}
 
-    assert {:ctor, :MkSyntax, [{:ctor, :Leaf, _}, {:ctor, :Raw, [{:ctor, :SOpaque, []}]}]} =
+    assert {:ctor, :MkSyntax,
+            [{:ctor, :"Std.Syntax#Leaf", _}, {:ctor, :"Std.Syntax#Raw", [{:ctor, :"Std.Syntax#SOpaque", []}]}]} =
              MacroSyntax.to_core_record("MkSyntax", ["x"], input)
 
-    assert {:ctor, :EmptySyntax, [{:ctor, :Raw, [{:ctor, :SOpaque, []}]}]} =
+    assert {:ctor, :EmptySyntax, [{:ctor, :"Std.Syntax#Raw", [{:ctor, :"Std.Syntax#SOpaque", []}]}]} =
              MacroSyntax.to_core_record("EmptySyntax", [], {:syn_node, :macro_input, [], []})
   end
 
@@ -190,10 +295,11 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     context = %{behaviour: :gen_server, callback: :handle_cast, arity: 2}
     input = MacroSyntax.with_context({:syn_node, :macro_input, [], []}, context)
 
-    assert {:ctor, :SelfSyntax, [{:ctor, :Node, [{:atom_lit, :callback_context}, attrs, {:ctor, :Nil, []}]}]} =
+    assert {:ctor, :SelfSyntax,
+            [{:ctor, :"Std.Syntax#Node", [{:atom_lit, :callback_context}, attrs, {:ctor, :"Std.List#Nil", []}]}]} =
              MacroSyntax.to_core_record("SelfSyntax", [], input)
 
-    assert {:ctor, :Cons, _} = attrs
+    assert {:ctor, :"Std.List#Cons", _} = attrs
   end
 
   test "a rule with no expansion context reflects a total, absent context" do

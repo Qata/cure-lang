@@ -2,6 +2,7 @@
 mod Std.Otp
   use Std.Otp.Raw
   use Std.Bool
+  use Std.Option
 
   ## Transparent process-operation syntax. Each rule produces ordinary Cure
   ## syntax; the checked algebra remains the only semantic implementation.
@@ -9,7 +10,7 @@ mod Std.Otp
     syntax beam_ops start_statem <module: Code> <args: Code> contextual becomes Std.Otp.start_statem(module, args)
     syntax beam_ops start_supervisor <module: Code> contextual becomes Std.Otp.start_supervisor(module)
     syntax beam_ops start_supervisor <module: Code> <args: Code> contextual becomes Std.Otp.start_supervisor_with(module, args)
-    syntax beam_ops self contextual becomes Std.Otp.self()
+    syntax beam_ops self becomes Std.Otp.self()
 
     syntax beam_ops tell <dest: Code> <message: Code> contextual becomes Std.Otp.tell(dest, message)
     syntax beam_ops send <dest: Code> <message: Code> contextual becomes Std.Otp.tell(dest, message)
@@ -43,21 +44,31 @@ mod Std.Otp
   ##                          extern) — a wrong request AND a wrong reply are both
   ##                          caught.
   ##
-  ## Every operation performs a BEAM side effect, so it returns `Effect(T)`: the
-  ## effect discipline forbids duplicating, dropping, or reordering a
-  ## `tell`/`call`/`cast`. Messages are POLYMORPHIC (the narrow point for a message
-  ## set), never `Any`.
+  ## Every operation performs a BEAM side effect, so it returns `Effect(T)`. The effect
+  ## discipline forbids duplicating, dropping, or reordering an OPERATION — a statement
+  ## about the PROGRAM'S EFFECT SEQUENCE, not about the mailbox. The BEAM promises no
+  ## delivery at all (a `tell` to a dead process silently succeeds) and orders signals only
+  ## PAIRWISE, from one sender to one target; nothing in this module claims more. Messages
+  ## are POLYMORPHIC (the narrow point for a message set), never `Any`.
   ##
   ## The typed layer calls the raw externs through ordinary qualified Cure
   ## definitions. The only foreign declarations are in `Std.Otp.Raw`; the
   ## imported opaque carrier preserves erased runtime identity while the public
   ## aliases below attach message and request/reply indices.
 
-  ## A typed process handle accepting messages of type `m`.
-  typealias Pid(m) = RawPid(m, m)
+  ## A typed handle to a plain BEAM process accepting messages of type `m`. It answers
+  ## raw sends, and nothing else.
+  typealias Pid(m) = RawPid(m, m, Plain)
 
-  ## A typed `gen_server` taking requests `q`, replying `r`.
-  typealias GenServer(q, r) = RawPid(q, r)
+  ## A typed `gen_server` taking requests `q`, replying `r`. DISTINCT from `Pid(m)`:
+  ## `call`/`cast`/`stop` are gen_server protocol operations, and a plain spawned process
+  ## cannot answer them — it would block the caller for 5s and then exit it. The `Plain`
+  ## / `Server` tag is a phantom at kind `Type`: no values, no runtime cost.
+  typealias GenServer(q, r) = RawPid(q, r, Server)
+
+  ## The callback-side one-shot reply capability supplied by `gen_server`. It
+  ## erases to OTP's `{pid, tag}` tuple but remains linear at Cure call sites.
+  typealias Reply(r) = Tuple(RawPid(NoMessage, NoMessage, Plain), Ref)
 
   ## A process message set. The first algebra floor stores tag and arity
   ## shapes; typed ADT payload derivation is added by the transparent macro
@@ -128,44 +139,135 @@ mod Std.Otp
   ## so a `Pid(Command)` can never be sent a `Telemetry`. (Named `tell`, not
   ## `send`: `send` is the reserved Melquiades keyword — a later macro can reclaim
   ## the `p ! msg` surface and lower it to this.)
-  fn tell({m: Type}, dest: Pid(m), msg: m) -> Effect(Unit) = raw_send(dest, msg)
+  ##
+  ## Accepts BOTH handles: a raw send to a gen_server is legitimate BEAM practice —
+  ## it lands in `handle_info`.
+  ## The raw BIF returns the message itself; the typed wrapper DISCARDS it — a send is
+  ## fire-and-forget, and echoing the argument back tells the caller nothing. Discarding
+  ## is a choice the typed layer makes explicitly, not a lie the raw type tells.
+  fn tell({m: Type}, {r: Type}, {k: Type}, dest: RawPid(m, r, k), msg: m) -> Effect(Unit) =
+    let sent = raw_send(dest, msg)
+    ()
 
   ## Synchronous `gen_server` call: send request `q`, block for reply `r`. Both the
   ## request AND the reply are checked against the server's type.
+  ##
+  ## ⚠ PARTIAL. On timeout (default 5000 ms) or server death the CALLER EXITS. `Effect(r)`
+  ## is sound — no value is ever returned at the wrong type — but it is NOT total: there is
+  ## simply no continuation. A `try_call` reifying the failure as a value needs a try/catch
+  ## shim and is deferred (audit §6).
   fn call({q: Type}, {r: Type}, server: GenServer(q, r), request: q) -> Effect(r) =
     raw_call(server, request)
 
-  ## Asynchronous `gen_server` cast — a typed fire-and-forget request (no reply).
-  fn cast({q: Type}, {r: Type}, server: GenServer(q, r), request: q) -> Effect(Unit) =
-    raw_cast(server, request)
+  ## Send one reply through a callback's linear `from` capability. Generated
+  ## actor callbacks use this direct operation and return `noreply`.
+  fn reply({r: Type}, from :linear Reply(r), value: r) -> Effect(Unit) =
+    let answered = raw_reply(from, value)
+    ()
 
-  ## Typed lifecycle and observation wrappers over the raw effect boundary.
-  typealias MonitorRef = Ref
-  typealias TimerRef = Ref
+  ## Asynchronous `gen_server` cast — a typed fire-and-forget request (no reply).
+  ## `gen_server:cast/2` answers the constant atom `ok`; the wrapper discards it.
+  fn cast({q: Type}, {r: Type}, server: GenServer(q, r), request: q) -> Effect(Unit) =
+    let acked = raw_cast(server, request)
+    ()
+
+  ## Typed lifecycle and observation wrappers over the raw effect boundary. `MonitorRef`
+  ## and `TimerRef` are the raw base's own DISTINCT carriers (imported, not aliased): they
+  ## used to be two names for one `Ref`, which made `cancel_timer(monitor_ref)` well-typed.
   typealias BeamTerm = RawTerm
 
-  fn stop({m: Type}, pid: Pid(m)) -> Effect(Unit) = raw_stop(pid)
+  ## Stop a `gen_server`. `Server`-only — `gen_server:stop` on a plain process blocks
+  ## and then exits the caller. The BIF answers the constant atom `ok`; discarded.
+  fn stop({q: Type}, {r: Type}, server: GenServer(q, r)) -> Effect(Unit) =
+    let stopped = raw_stop(server)
+    ()
 
-  fn send_after({m: Type}, delay: Int, pid: Pid(m), msg: m) -> Effect(Ref) =
+  ## The signal-layer operations below accept BOTH handles: linking, monitoring,
+  ## exiting, naming and timing are properties of a BEAM PROCESS, not of the protocol
+  ## it speaks. They are tag-polymorphic in `k`.
+  fn send_after({m: Type}, {r: Type}, {k: Type}, delay: Int, pid: RawPid(m, r, k), msg: m) -> Effect(TimerRef) =
     raw_send_after(delay, pid, msg)
 
-  fn cancel_timer(ref: Ref) -> Effect(Unit) = raw_cancel_timer(ref)
+  ## Cancel a timer, surfacing what the BIF actually reports: `Some(ms)` when the timer
+  ## was still pending (`ms` milliseconds were left on it), `None` when it had already
+  ## fired or been cancelled. The old `Effect(Unit)` threw that answer away, which is how
+  ## a caller could believe a cancellation succeeded when it had not.
+  ##
+  ## ⚠ AtomVM: `erlang:send_after/3` registers its timer under a DIFFERENT ref than the one
+  ## it returns (timer_manager.erl:87-91), so on AtomVM cancelling a `send_after` ref always
+  ## yields `None` AND THE MESSAGE STILL FIRES. Cancellation is reliable on OTP; on AtomVM it
+  ## is not. See the audit, §5.
+  fn cancel_timer(ref: TimerRef) -> Effect(Option(Int)) =
+    let remaining = raw_cancel_timer(ref)
+    match remaining
+      ms: Int -> Some(ms)
+      already: Bool -> None()
 
-  fn monitor({m: Type}, kind: Atom, pid: Pid(m)) -> Effect(Ref) = raw_monitor(kind, pid)
+  fn monitor({m: Type}, {r: Type}, {k: Type}, kind: Atom, pid: RawPid(m, r, k)) -> Effect(MonitorRef) =
+    raw_monitor(kind, pid)
 
-  fn demonitor(ref: Ref) -> Effect(Unit) = raw_demonitor(ref)
+  ## Remove a monitor AND flush any `DOWN` already sitting in the mailbox. Without `flush`
+  ## a stale `DOWN` outlives the call, and every receiving `match` has to carry an arm for
+  ## a monitor the caller believes it already removed.
+  fn demonitor(ref: MonitorRef) -> Effect(Unit) =
+    let removed = raw_demonitor_flush(ref, [:flush])
+    ()
 
-  fn link({m: Type}, pid: Pid(m)) -> Effect(Unit) = raw_link(pid)
+  ## `erlang:link/1`, `unlink/1` and `register/2` all answer the constant `true` — there is
+  ## no failure they report by value (they raise instead). The wrappers discard it.
+  fn link({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Unit) =
+    let linked = raw_link(pid)
+    ()
 
-  fn unlink({m: Type}, pid: Pid(m)) -> Effect(Unit) = raw_unlink(pid)
+  fn unlink({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Unit) =
+    let unlinked = raw_unlink(pid)
+    ()
 
-  fn exit({m: Type}, {r: Type}, pid: Pid(m), reason: r) -> Effect(Unit) = raw_exit(pid, reason)
+  ## Why a process is being asked to exit. The BEAM's three exit rules turn on exactly this
+  ## distinction, crossed with the target's trap_exit flag and the signal's link flag:
+  ##
+  ##   * `Normal`          — dropped by a non-trapping target (unless it is the caller
+  ##                         itself, which does terminate).
+  ##   * `Kill`            — untrappable when sent explicitly with `exit/2`: the target dies
+  ##                         and propagates the reason `killed`. (Sent THROUGH A LINK it is
+  ##                         trappable — but this op only ever sends explicitly.)
+  ##   * `Because(reason)` — terminates a non-trapping target; a trapping target receives
+  ##                         `{'EXIT', From, reason}` at the END of its mailbox.
+  type ExitReason = Normal | Kill | Because(Atom)
 
-  fn is_alive({m: Type}, pid: Pid(m)) -> Effect(Bool) = raw_is_alive(pid)
+  local fn exit_atom(reason: ExitReason) -> Atom =
+    match reason
+      Normal() -> :normal
+      Kill() -> :kill
+      Because(why) -> why
 
-  fn register({m: Type}, name: Atom, pid: Pid(m)) -> Effect(Unit) = raw_register(name, pid)
+  ## Send an exit signal. Makes NO type-level claim that the target dies — correctly: which
+  ## of the three outcomes occurs depends on the target's trap_exit flag, which the sender
+  ## cannot see. A polymorphic reason could not even state the distinction.
+  fn exit({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k), reason: ExitReason) -> Effect(Unit) =
+    let signalled = raw_exit(pid, exit_atom(reason))
+    ()
 
-  fn unregister(name: Atom) -> Effect(Unit) = raw_unregister(name)
+  fn is_alive({m: Type}, {r: Type}, {k: Type}, pid: RawPid(m, r, k)) -> Effect(Bool) =
+    raw_is_alive(pid)
 
-  fn whereis({m: Type}, name: Atom) -> Effect(Pid(m)) = raw_whereis(name)
+  fn register({m: Type}, {r: Type}, {k: Type}, name: Atom, pid: RawPid(m, r, k)) -> Effect(Unit) =
+    let registered = raw_register(name, pid)
+    ()
+
+  fn unregister(name: Atom) -> Effect(Unit) =
+    let unregistered = raw_unregister(name)
+    ()
+
+  ## Look up a registered name. `None` when the name is not registered — the BIF returns
+  ## the atom `undefined` there, and the old signature asserted a pid.
+  ##
+  ## The result is a `BarePid`: you may `link`, `monitor`, `exit` or `is_alive` it, but you
+  ## cannot `tell` to it. Nothing associates a registered NAME with a message TYPE, so a
+  ## typed handle cannot be recovered from one (audit F-1 / parent spec §13.7).
+  fn whereis(name: Atom) -> Effect(Option(BarePid)) =
+    let found = raw_whereis(name)
+    match found
+      p: BarePid -> Some(p)
+      :undefined -> None()
 end

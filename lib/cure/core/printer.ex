@@ -9,7 +9,15 @@ defmodule Cure.Core.Printer do
   Nothing else in the tree does this — `Quote.reify/2` returns a term and error
   sites hand it to `inspect/1`. Every dependent-pipeline type error that mentions
   a type therefore prints a raw Elixir tuple today.
+
+  Global identities (defs, families, constructors) are stored canonically as
+  `Owner#Base` atoms. Display strips the owner and shows the base name — the
+  Idris/Agda convention of qualified identity, unqualified rendering. The
+  `Owner#Base` spelling is owned by `Cure.Elab.Name`, so base extraction routes
+  through it rather than re-parsing the separator here.
   """
+
+  alias Cure.Elab.Name
 
   @letters ~w(a b c d e f g h i j k l m n o p q r s t u v w x y z)
 
@@ -29,7 +37,7 @@ defmodule Cure.Core.Printer do
   def print({:binary_type}, _names), do: "Binary"
   def print({:atom_type}, _names), do: "Atom"
   def print({:atom_lit, a}, _names), do: ":" <> Atom.to_string(a)
-  def print({:global, name}, _names), do: Atom.to_string(name)
+  def print({:global, name}, _names), do: Name.base(name)
   def print({:hole, name}, _names), do: "?" <> name
   def print({:absurd}, _names), do: "absurd"
 
@@ -69,10 +77,10 @@ defmodule Cure.Core.Printer do
   end
 
   def print({:data, name, params, indices}, names),
-    do: applied(Atom.to_string(name), params ++ indices, names)
+    do: applied(Name.base(name), params ++ indices, names)
 
   def print({:ctor, name, args}, names),
-    do: applied(Atom.to_string(name), args, names)
+    do: applied(Name.base(name), args, names)
 
   def print({:case, scrut, _motive, branches}, names) do
     arms =

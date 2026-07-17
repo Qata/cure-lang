@@ -20,10 +20,10 @@ defmodule Cure.Elab.HoleGoalTest do
   test "the sketch hole reports its goal type (an SF) and a non-empty local context" do
     {:ok, env} = Program.elaborate(@src)
 
-    assert [%{function: :sketch, goal: goal, context: context}] = Program.hole_goals(env)
+    assert [%{function: :"Main#sketch", goal: goal, context: context}] = Program.hole_goals(env)
 
     # The goal is the declared return type: an SF(...) family application.
-    assert {:data, :SF, _params, _indices} = goal
+    assert {:data, :"Main#SF", _params, _indices} = goal
 
     # The local context is every parameter in scope (5 implicit + l + r).
     assert length(context) == 7

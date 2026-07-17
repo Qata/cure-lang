@@ -1,0 +1,26 @@
+mod Preservation
+  type Tag = TInc | TDec | TQuery
+  type TagList = TNil | TCons(Tag, TagList)
+  type Accepted indices (t: Tag)
+    AccInc   : Accepted(TInc)
+    AccQuery : Accepted(TQuery)
+  type AllAccepted indices (ts: TagList)
+    AANil  : AllAccepted(TNil)
+    AACons : Accepted(t) -> AllAccepted(rest) -> AllAccepted(TCons(t, rest))
+  type Config = MkConfig(TagList, TagList)
+  type WT indices (c: Config)
+    MkWT : AllAccepted(e) -> AllAccepted(m) -> WT(MkConfig(e, m))
+  type Step indices (before: Config, after: Config)
+    SSend   : Accepted(t) -> Step(MkConfig(e, m), MkConfig(TCons(t, e), m))
+    SArrive : Step(MkConfig(TCons(t, e), m), MkConfig(e, TCons(t, m)))
+    SRecv   : Step(MkConfig(e, TCons(t, m)), MkConfig(e, m))
+  fn preservation({b: Config}, {a: Config}, wt: WT(b), s: Step(b, a)) -> WT(a) = match s
+    SSend(acc) -> match wt
+      MkWT(ae, am) -> MkWT(AACons(acc, ae), am)
+    SArrive() -> match wt
+      MkWT(ae, am) -> match ae
+        AACons(at, ae2) -> MkWT(ae2, AACons(at, am))
+    SRecv() -> match wt
+      MkWT(ae, am) -> match am
+        AACons(rat, am2) -> MkWT(ae, am2)
+end

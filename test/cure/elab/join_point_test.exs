@@ -41,8 +41,10 @@ defmodule Cure.Elab.JoinPointTest do
   defp count(env, name, pred),
     do: env |> body(name) |> Validator.nodes() |> Enum.count(pred)
 
-  defp calls(env, name, callee),
-    do: count(env, name, &match?({:global, ^callee}, &1))
+  defp calls(env, name, callee) do
+    key = Env.resolve_key(env, env.defs, callee)
+    count(env, name, &(&1 == {:global, key}))
+  end
 
   defp lets(env, name), do: count(env, name, &match?({:let, _, _, _, _}, &1))
 

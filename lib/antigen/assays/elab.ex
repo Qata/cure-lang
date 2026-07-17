@@ -341,20 +341,24 @@ defmodule Antigen.Assays.Elab do
     end
   end
 
-  # Bare atoms only: none of this corpus's fixed/seeded programs declare a
-  # local `type Nat` (§2.4 nominal rule), so the canonical `:Z`/`:S` ctors
-  # never collide and are never re-keyed (verified: `Cure.Elab.Resolution`'s
-  # re-key path only fires when a LOCAL declaration shadows an import, and
-  # even then uses a `"Mod#name"` atom, e.g. `:"Std.Nat#Z"` — never the
-  # `"Std.Nat.Z"` dot-form). If a future corpus addition ever needs a
-  # colliding-import case, add the real `#`-separated guard then; don't
-  # speculate here.
-  defp decode_nat({:ctor, :Z, []}), do: {:nat, 0}
+  # Match on the constructor's BASE name (`Cure.Elab.Name.base/1`), so both the
+  # bare `:Z`/`:S` spelling and the canonical owner-qualified `:"Std.Nat#Z"` /
+  # `:"Std.Nat#S"` identity decode identically. The canonicalization pass makes
+  # a declared family's own ctors canonical regardless of local shadowing, so
+  # this corpus's `Nat` programs now normalize to the `#`-qualified atoms.
+  defp decode_nat({:ctor, name, args}) do
+    case {Cure.Elab.Name.base(name), args} do
+      {"Z", []} ->
+        {:nat, 0}
 
-  defp decode_nat({:ctor, :S, [inner]}) do
-    case decode_nat(inner) do
-      {:nat, n} -> {:nat, n + 1}
-      other -> other
+      {"S", [inner]} ->
+        case decode_nat(inner) do
+          {:nat, n} -> {:nat, n + 1}
+          other -> other
+        end
+
+      _ ->
+        {:stuck, {:ctor, name, args}}
     end
   end
 

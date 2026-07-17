@@ -55,23 +55,23 @@ defmodule Cure.Elab.Subst do
   # Enumerated by tag/arity rather than caught by a wildcard — see the moduledoc.
   defguardp is_leaf(t)
             when is_tuple(t) and
-                   (elem(t, 0) in [
-                      :var,
-                      :meta,
-                      :type,
-                      :global,
-                      :int_type,
-                      :int_lit,
-                      :nat_lit,
-                      :bounded_lit,
-                      :float_type,
-                      :float_lit,
-                      :binary_type,
-                      :atom_type,
-                      :atom_lit,
-                      :hole,
-                      :absurd
-                    ])
+                   elem(t, 0) in [
+                     :var,
+                     :meta,
+                     :type,
+                     :global,
+                     :int_type,
+                     :int_lit,
+                     :nat_lit,
+                     :bounded_lit,
+                     :float_type,
+                     :float_lit,
+                     :binary_type,
+                     :atom_type,
+                     :atom_lit,
+                     :hole,
+                     :absurd
+                   ]
 
   @doc """
   Instantiate the outermost `length(values)` binders of `term` with `values`
@@ -103,9 +103,7 @@ defmodule Cure.Elab.Subst do
     do: {:lam, g, replace(d, env, k, depth), replace(b, env, k, depth + 1)}
 
   defp replace({:let, g, t, v, b}, env, k, depth),
-    do:
-      {:let, g, replace(t, env, k, depth), replace(v, env, k, depth),
-       replace(b, env, k, depth + 1)}
+    do: {:let, g, replace(t, env, k, depth), replace(v, env, k, depth), replace(b, env, k, depth + 1)}
 
   defp replace({:app, f, x}, env, k, depth),
     do: {:app, replace(f, env, k, depth), replace(x, env, k, depth)}

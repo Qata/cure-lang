@@ -15,7 +15,7 @@ defmodule Antigen.NfWellTypedAntibodyTest do
     sig
   end
 
-  @nat {:data, :Nat, [], []}
+  @nat {:data, :"Std.Nat#Nat", [], []}
   defp z, do: {:ctor, :Z, []}
 
   # B4.i — nf of the FAMILY TYPE itself (not a proof of it). IMPORTANT (verified

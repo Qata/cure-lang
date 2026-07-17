@@ -1,0 +1,16 @@
+mod CascadeExit
+  type Trap = Trapping | NotTrapping
+  type Chain = CNil | CCons(Trap, Chain)
+  type Cascade indices (before: Chain, after: Chain)
+    CascEmpty : Cascade(CNil, CNil)
+    CascStop  : Cascade(CCons(Trapping, rest), CCons(Trapping, rest))
+    CascProp  : Cascade(rest, after) -> Cascade(CCons(NotTrapping, rest), after)
+  type CascadeOf indices (before: Chain)
+    MkCascadeOf : (after: Chain) -> Cascade(before, after) -> CascadeOf(before)
+  fn run_cascade(c: Chain) -> CascadeOf(c) = match c
+    CNil()      -> MkCascadeOf(CNil, CascEmpty())
+    CCons(t, r) -> match t
+      Trapping    -> MkCascadeOf(CCons(Trapping, r), CascStop())
+      NotTrapping -> match run_cascade(r)
+        MkCascadeOf(after, casc) -> MkCascadeOf(after, CascProp(casc))
+end

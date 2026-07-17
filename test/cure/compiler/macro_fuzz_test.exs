@@ -37,11 +37,11 @@ defmodule Cure.Compiler.MacroFuzzTest do
 
   test "module-aware generation resolves closed user enum categories" do
     assert {:ok, env} = Program.elaborate("mod M\n  type Flag = Off | On\n")
-    assert {:ok, %{goal: {:data, :Flag, [], []}}, terms} = MacroFuzz.sample_holes("Flag", 10, 23, env)
-    goal_value = Eval.eval({:data, :Flag, [], []}, env)
+    assert {:ok, %{goal: {:data, :"M#Flag", [], []}}, terms} = MacroFuzz.sample_holes("Flag", 10, 23, env)
+    goal_value = Eval.eval({:data, :"M#Flag", [], []}, Context.env(Context.empty(env)))
 
     assert Enum.all?(terms, &(Kernel.check(Context.empty(env), &1, goal_value) == :ok))
-    assert Enum.all?(terms, &match?({:ctor, name, []} when name in [:Off, :On], &1))
+    assert Enum.all?(terms, &match?({:ctor, name, []} when name in [:"M#Off", :"M#On"], &1))
   end
 
   test "module-aware generation resolves nullary parameterized and indexed families" do
@@ -53,12 +53,17 @@ defmodule Cure.Compiler.MacroFuzzTest do
                  empty : Ix(a, D)
              """)
 
-    assert {:ok, %{goal: {:data, :Ix, [{:data, :Nat, [], []}], [{:ctor, :D, []}]}}, terms} =
+    assert {:ok, %{goal: {:data, :"M#Ix", [{:data, :"Std.Nat#Nat", [], []}], [{:ctor, :"M#D", []}]}}, terms} =
              MacroFuzz.sample_holes("Ix", 4, 29, env)
 
-    goal = {:data, :Ix, [{:data, :Nat, [], []}], [{:ctor, :D, []}]}
-    assert Enum.all?(terms, &(Kernel.check(Context.empty(env), &1, Eval.eval(goal, env)) == :ok))
-    assert Enum.all?(terms, &match?({:ctor, :empty, []}, &1))
+    goal = {:data, :"M#Ix", [{:data, :"Std.Nat#Nat", [], []}], [{:ctor, :"M#D", []}]}
+
+    assert Enum.all?(
+             terms,
+             &(Kernel.check(Context.empty(env), &1, Eval.eval(goal, Context.env(Context.empty(env)))) == :ok)
+           )
+
+    assert Enum.all?(terms, &match?({:ctor, :"M#empty", []}, &1))
   end
 
   test "category coverage reports module domains and open extensions" do
@@ -187,6 +192,71 @@ defmodule Cure.Compiler.MacroFuzzTest do
              MacroFuzz.check_expansion_proof(macro_def, env, draws: 8, seed: 31)
 
     assert is_tuple(generated)
+  end
+
+  test "a nullary all-erased-implicit global expansion passes the proof parametrically" do
+    # `Std.Otp.self : {m: Type} -> Effect(Pid(m))` has an erased result index `m`
+    # that cannot be solved use-site-free, so standalone elaboration reports it as
+    # an unsolved metavariable. Because `m` is erased (computationally
+    # irrelevant), the expansion is well-typed at a schematic type for every
+    # instantiation, so the generative proof accepts it without a `contextual`
+    # exemption.
+    source = """
+    mod M
+      use Std.Otp
+      macro Here
+        syntax here becomes Std.Otp.self()
+          example here expands Std.Otp.self()
+        explain
+          keyword "here" =>
+            "returns the current process"
+    """
+
+    assert {:ok, env} = Program.elaborate(source)
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:container, _, children}} = Parser.parse(tokens, emit_events: false)
+    macro_def = Enum.find(children, &match?({:macro_def, _, _}, &1))
+
+    assert :ok = MacroFuzz.check_expansion_proof(macro_def, env, draws: 1, seed: 7)
+  end
+
+  test "the parametric-erased guard discriminates by shape, arity, and erasure" do
+    # `Std.Otp.self : {m: Type} -> Effect(Pid(m))` is the sole otp qualifier: one
+    # erased parameter, applied nullary. Everything else must be rejected.
+    assert {:ok, otp_env} = Program.elaborate("mod M\n  use Std.Otp\n")
+
+    self_call = {:function_call, [name: "Std.Otp.self"], []}
+    assert MacroFuzz.parametric_erased_call?(self_call, otp_env, :"Std.Otp#self")
+
+    # Non-call expansion — the shape guard rejects it.
+    refute MacroFuzz.parametric_erased_call?({:identifier, [], :x}, otp_env, :"Std.Otp#self")
+
+    # A call that supplies an explicit argument — the arity guard rejects it,
+    # because an argument subterm could hide a relevant unsolved metavariable.
+    refute MacroFuzz.parametric_erased_call?(
+             {:function_call, [name: "Std.Otp.self"], [{:int_lit, 0}]},
+             otp_env,
+             :"Std.Otp#self"
+           )
+
+    # A nullary call of a global with a present (unrestricted) parameter — the
+    # erasure guard rejects it; parametric acceptance is scoped to erased
+    # parameters alone.
+    assert {:ok, twice_env} =
+             Program.elaborate("mod M\n  use Std.Nat\n  fn twice(x: Nat) -> Nat = x\n")
+
+    refute MacroFuzz.parametric_erased_call?(
+             {:function_call, [name: "twice"], []},
+             twice_env,
+             :"M#twice"
+           )
+
+    # An unknown callee has no signature to prove erasure from — rejected.
+    refute MacroFuzz.parametric_erased_call?(
+             {:function_call, [name: "nope"], []},
+             otp_env,
+             :"M#nope"
+           )
   end
 
   test "proof manifests list every rule and cache identical proof work" do

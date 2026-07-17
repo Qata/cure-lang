@@ -24,9 +24,9 @@ defmodule Cure.Elab.UnifyWhnfTest do
     sig
   end
 
-  @z {:ctor, :Z, []}
-  defp s(t), do: {:ctor, :S, [t]}
-  defp plus(a, b), do: {:app, {:app, {:global, :plus}, a}, b}
+  @z {:ctor, :"M#Z", []}
+  defp s(t), do: {:ctor, :"M#S", [t]}
+  defp plus(a, b), do: {:app, {:app, {:global, :"M#plus"}, a}, b}
 
   test "reduces plus(Z, ?m) to ?m — the meta passes through the Z-branch untouched" do
     assert Unify.whnf_meta_aware(plus(@z, {:meta, 0}), MetaCtx.new(), sig_with_plus()) ==

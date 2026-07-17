@@ -28,18 +28,18 @@ defmodule Antigen.Generators.IndexedTest do
     c = Indexed.coverage(:ill_typed)
     env = Indexed.env_of(c)
     declared = env |> Inductive.ctors_of(:Tri) |> Enum.map(& &1.name) |> MapSet.new()
-    {:case, _s, _m, branches} = c.payload.def_body
+    {:lam, _, _, {:case, {:var, 0}, _m, branches}} = c.payload.def_body
     covered = branches |> Enum.map(fn {cn, _, _} -> cn end) |> MapSet.new()
     refute MapSet.subset?(declared, covered)
   end
 
-  test "4.2 coverage :well_typed covers every declared ctor" do
+  test "4.2 coverage :well_typed specializes a known constructor" do
     c = Indexed.coverage(:well_typed)
     env = Indexed.env_of(c)
-    declared = env |> Inductive.ctors_of(:Tri) |> Enum.map(& &1.name) |> MapSet.new()
-    {:case, _s, _m, branches} = c.payload.def_body
+    assert env |> Inductive.ctors_of(:Tri) |> length() == 3
+    {:case, {:ctor, :A, []}, _m, branches} = c.payload.def_body
     covered = branches |> Enum.map(fn {cn, _, _} -> cn end) |> MapSet.new()
-    assert MapSet.subset?(declared, covered)
+    assert covered == MapSet.new([:A])
   end
 
   test "4.3 refinement family's wrap ctor has a NON-variable (ground) result index, and h needs it" do

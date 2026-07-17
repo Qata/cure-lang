@@ -65,6 +65,17 @@ defmodule Cure.Migrate.Rules.UppercaseTypeVar do
   # body walk keeps binder and reference in sync. Its keys are always uppercase
   # type-variable names, so lowercase value bindings are never touched.
 
+  # A quasiquote is code DATA whose identifiers resolve in the generated use-site
+  # scope, not in the module that constructs it. In particular, transparent
+  # macros quote declarations referring to aliases they emit alongside those
+  # declarations (`Message`, `State`, `Request`). Treating the quoted signature
+  # as an ordinary local signature spuriously lowercases those generated type
+  # names. Resolution-dependent migration must stop at this scope boundary; a
+  # dedicated syntax-tree migration can transform quoted code only when it also
+  # models the generated declaration environment.
+  defp walk({:quoted_syntax, _meta, _children} = quoted, _ctx, _active, lines),
+    do: {quoted, lines}
+
   defp walk({:function_def, meta, body}, ctx, active, lines) do
     # Freshening must avoid every name the BODY already uses, not just signature
     # names, or a renamed signature binder (`T` -> `t`) can land on a distinct

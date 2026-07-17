@@ -39,7 +39,6 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
   # vocabulary — and the contract sent to Metastatic — is stale and must be updated.
   @meta_vocabulary MapSet.new([
                      :as_pattern,
-                     :assert_type,
                      :attribute_access,
                      :bin_segment,
                      :binary_op,

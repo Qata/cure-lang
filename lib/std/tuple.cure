@@ -23,8 +23,6 @@ mod Std.Tuple
   ## third(%[1, 2, 3])       # => 3
   ## ```
 
-  ## Group tag consumed by `Cure.Stdlib.Preload`.
-
   ## The first component of a pair.
   fn first(t: Tuple(a, b)) -> a = t.1
 

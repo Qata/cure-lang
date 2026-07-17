@@ -152,4 +152,89 @@ defmodule Cure.Elab.PiGradeSourceTest do
       assert {:ok, _env} = Program.elaborate(src)
     end
   end
+
+  describe "the implicit-app slot iterator handles a linear/affine explicit param" do
+    # `bidir_app_slot/5` (the implicit-insertion application path, taken whenever a
+    # callee has a leading implicit `{...}`) only had clauses for :erased and
+    # :unrestricted domain grades; a :linear (or :affine) explicit param made it
+    # RAISE `FunctionClauseError` rather than elaborate. The plain-application path
+    # (`solve_arg/3`) already treats `grade in [:unrestricted, :linear, :affine]`
+    # as "consume one supplied argument"; this brings the implicit path to parity.
+    # Linearity itself is enforced later in `relevance.ex`, so consuming the slot
+    # here launders nothing (the usage checker still counts occurrences).
+    test "a callee with a leading implicit AND a linear explicit param is applied" do
+      # `use_box` has an implicit `{t}` (solved from `x`), an ω param `x`, and a
+      # LINEAR `c` consumed once. The call `use_box(y, c)` goes through the
+      # implicit-app path and feeds `c` into the linear slot — the case that used
+      # to raise. `{t}` is genuinely solvable here, so this is a clean positive.
+      src = """
+      mod CallLinearImplicit
+        type Box = MkBox
+        fn use_box({t: Type}, x: t, c :linear Box) -> Box = c
+        fn g(y: Int, c :linear Box) -> Box = use_box(y, c)
+      end
+      """
+
+      assert {:ok, _env} = Program.elaborate(src)
+    end
+
+    test "linearity is STILL enforced through the implicit-app path (drop rejects)" do
+      # The fix consumes the linear slot like an ω slot at the elaboration stage;
+      # usage is counted later in relevance.ex. Guard that the fix did not launder
+      # linearity: a body that DROPS the linear param must still be rejected, even
+      # when reached via the implicit-app path.
+      src = """
+      mod DropLinearImplicit
+        type Box = MkBox
+        fn use_box({t: Type}, x: t, c :linear Box) -> Box = MkBox
+        fn g(y: Int, c :linear Box) -> Box = use_box(y, c)
+      end
+      """
+
+      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.elaborate(src)
+    end
+  end
+
+  describe "obligation (1): plain `match` refines the linear reply capability (roadblock #2 CLOSED)" do
+    # The handoff-brief §5 obligation-(1) shape: a `reply` eliminator with a leading
+    # implicit `{r}` and a LINEAR reply capability whose value arg is typed by the
+    # large-elimination `ReplyOf(r)`, driven by a handler that replies once per path.
+    #
+    # This was reach-pinned to REJECT on roadblock #2 — dependent `match` refined the
+    # RETURN/motive but not the SIBLING `cap : ReplyCap(r)`, so `v : ReplyOf(r)` never
+    # reduced. That gap is now CLOSED: motive-generalization refines scrutinee-
+    # dependent siblings (work-order item A for `with r`, item C wiring plain `match`
+    # to the same machinery), so this now elaborates and the linear `cap` is consumed
+    # exactly once. Drop/dup remain rejected (see linear_sibling_refinement_test.exs).
+    test "reply(cap, R0): plain-match handler refines cap and elaborates" do
+      src = """
+      mod ReplyLinear
+        type Reply0 = R0
+        type Reply1 = R1a | R1b
+        type Req = GetCount | SetName(Reply0) | Ping
+
+        fn ReplyOf(r: Req) -> Type = match r
+          GetCount()  -> Reply0
+          SetName(_)  -> Reply1
+          Ping()      -> Reply1
+
+        type ReplyCap(r: Req) indices ()
+          MkCap : ReplyCap(r)
+
+        type Replied = Done
+
+        fn reply({r: Req}, cap :linear ReplyCap(r), v: ReplyOf(r)) -> Replied =
+          match cap
+            MkCap() -> Done
+
+        fn handle(r: Req, cap :linear ReplyCap(r)) -> Replied = match r
+          GetCount()  -> reply(cap, R0)
+          SetName(_)  -> reply(cap, R1a)
+          Ping()      -> reply(cap, R1b)
+      end
+      """
+
+      assert {:ok, _env} = Program.elaborate(src)
+    end
+  end
 end

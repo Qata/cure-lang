@@ -21,8 +21,9 @@ defmodule Antigen.Generators.SigMenuTest do
     ctx = Context.empty(env)
     # a comparison SPINE (K2) types at Bool and normalizes to a True/False ctor
     lt = {:app, {:app, {:global, :int_lt}, {:int_lit, 1}}, {:int_lit, 2}}
+    true_ctor = Cure.Elab.Name.qualify("Std.Bool", :True)
     assert {:ok, _} = Kernel.infer(ctx, lt)
-    assert {:ctor, :True, []} = Cure.Core.Normalise.nf(ctx, lt, fuel: 500_000, delta: :certified)
+    assert {:ctor, ^true_ctor, []} = Cure.Core.Normalise.nf(ctx, lt, fuel: 500_000, delta: :certified)
   end
 
   test "canon builds a well-typed inhabitant for each closed goal type" do

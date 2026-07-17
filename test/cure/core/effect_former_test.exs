@@ -18,6 +18,7 @@ defmodule Cure.Core.EffectFormerTest do
   use ExUnit.Case, async: true
 
   alias Cure.Core.{Context, Conv, Kernel, MetaCheck, Serialize, Term}
+  alias Cure.Elab.{Erase, Subst}
 
   @omega Cure.Core.Grade.unrestricted()
 
@@ -168,6 +169,23 @@ defmodule Cure.Core.EffectFormerTest do
       # a sound effectful term is misreported as stuck.
       assert MetaCheck.progresses?(empty(), pure3())
       assert MetaCheck.type_preserved?(empty(), pure3())
+    end
+  end
+
+  describe "elaborator walkers" do
+    test "substitution and shifting recurse through pure and bind" do
+      term = {:effect_bind, {:effect_pure, {:var, 0}}, {:lam, @omega, {:int_type}, {:var, 1}}}
+
+      assert {:effect_bind, {:effect_pure, {:var, 1}}, {:lam, @omega, {:int_type}, {:var, 2}}} = Subst.shift(term, 1, 0)
+
+      assert {:effect_bind, {:effect_pure, {:int_lit, 7}}, {:lam, @omega, {:int_type}, {:int_lit, 7}}} =
+               Subst.instantiate(term, [{:int_lit, 7}])
+    end
+
+    test "hole detection does not stop at an effect node" do
+      refute Erase.has_hole?(pure3())
+      assert Erase.has_hole?({:effect_type, {:hole, :under_type}})
+      assert Erase.has_hole?({:effect_bind, {:effect_pure, {:int_lit, 1}}, {:hole, :continuation}})
     end
   end
 end

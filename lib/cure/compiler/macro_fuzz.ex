@@ -11,8 +11,8 @@ defmodule Cure.Compiler.MacroFuzz do
   alias Antigen.Backend.StreamData, as: Backend
   alias Antigen.Generators.{SigMenu, Term}
   alias Cure.Compiler.{Lexer, LiftModule, Parser, Token}
-  alias Cure.Core.{Context, Eval, Inductive, Kernel, Normalise}
-  alias Cure.Elab.{Elaborator, MacroExpand}
+  alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Normalise}
+  alias Cure.Elab.{Elaborator, MacroExpand, Program}
 
   @default_draws 32
   @cache_key :cure_macro_fuzz_cache_state
@@ -191,7 +191,7 @@ defmodule Cure.Compiler.MacroFuzz do
             [ctor | _] ->
               result_params = instantiate_result_terms(ctor.result_params, params, 0)
               result_indices = instantiate_result_terms(ctor.result_indices, params, 0)
-              goal = {:data, family_name, result_params, result_indices}
+              goal = {:data, family.name, result_params, result_indices}
 
               {:ok,
                %{
@@ -227,7 +227,10 @@ defmodule Cure.Compiler.MacroFuzz do
     end)
   end
 
-  defp canonical_parameter(_ctx, {:type, _level}), do: {:ok, SigMenu.nat()}
+  defp canonical_parameter(%Context{} = ctx, {:type, _level}) do
+    env = Context.signature(ctx)
+    {:ok, {:data, Env.resolve_key(env, env.families, :Nat), [], []}}
+  end
 
   defp canonical_parameter(ctx, type) do
     try do
@@ -449,6 +452,9 @@ defmodule Cure.Compiler.MacroFuzz do
 
   defp check_expansion(keyword, input, expansion, env) do
     case expansion do
+      {:block, _meta, items} when is_list(items) ->
+        check_block_expansion(keyword, input, expansion, env)
+
       {:lift_module, _meta, []} ->
         case LiftModule.request_ast(expansion) do
           {:ok, _quoted_module} ->
@@ -464,15 +470,93 @@ defmodule Cure.Compiler.MacroFuzz do
     end
   end
 
+  # A declaration macro may return a type declaration alongside a lifted
+  # module. Check the enclosing declarations and the lifted unit through their
+  # ordinary generic paths so the proof exercises the same two scopes as the
+  # real declaration pass.
+  defp check_block_expansion(keyword, input, expansion, _env) do
+    declarations = expansion |> LiftModule.strip() |> block_items()
+
+    proof_module =
+      {:container, [container_type: :module, name: "MacroExpansionProof", language: :cure], declarations}
+
+    with {:ok, _env} <- Program.check_ast(proof_module),
+         {:ok, requests} <- LiftModule.collect(expansion),
+         :ok <- emit_proof_lifted_requests(requests) do
+      :ok
+    else
+      {:error, reason} ->
+        {:error, {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
+    end
+  end
+
+  defp emit_proof_lifted_requests(requests) do
+    Enum.reduce_while(requests, :ok, fn request, :ok ->
+      case LiftModule.emit(request) do
+        {:ok, _unit} -> {:cont, :ok}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+  end
+
+  defp block_items({:block, _meta, items}) when is_list(items), do: items
+  defp block_items(item), do: [item]
+
   defp check_expression_expansion(keyword, input, expansion, env) do
     case Elaborator.elaborate_expr_typed(expansion, [], Context.empty(env), env) do
       {:ok, _term, _type} ->
         :ok
 
+      {:error, {:unsolved_metavariables, name} = reason} ->
+        if parametric_erased_call?(expansion, env, name) do
+          :ok
+        else
+          {:error,
+           {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
+        end
+
       {:error, reason} ->
         {:error, {:expansion_ill_typed, %{keyword: keyword, input: input, expansion: expansion, kernel_error: reason}}}
     end
   end
+
+  # A contextual expression rule may expand to a nullary application of a global
+  # whose every parameter is an erased implicit — e.g. `Std.Otp.self()` where
+  # `self : {m: Type} -> Effect(Pid(m))`. The erased index `m` cannot be solved
+  # use-site-free, so standalone elaboration reports it as an unsolved
+  # metavariable. But an erased binder is computationally irrelevant: the
+  # expansion is well-typed at a schematic type for every instantiation of the
+  # erased parameters, exactly as an ungeneralized polymorphic term is. When the
+  # sole obstruction is unsolved metavariables of such an all-erased,
+  # no-explicit-argument global call, the expansion is proven well-typed by
+  # parametricity — so the generative proof accepts it without a `contextual`
+  # exemption. Guards: the expansion must be a bare nullary call (no argument
+  # subterms can hide a relevant unsolved metavariable), and the errored callee's
+  # every parameter must be erased (no relevant parameter left unsolved).
+  @doc false
+  @spec parametric_erased_call?(term(), Cure.Core.Env.t(), atom()) :: boolean()
+  def parametric_erased_call?({:function_call, _meta, []}, env, name) do
+    case Env.get_def(env, name) do
+      %{type: type, quantities: quantities} when is_list(quantities) ->
+        quantities != [] and Enum.all?(quantities, &(&1 == :erased)) and
+          all_erased_pi_spine?(type, length(quantities))
+
+      _ ->
+        false
+    end
+  end
+
+  def parametric_erased_call?(_expansion, _env, _name), do: false
+
+  # The def's type must be a telescope of exactly `count` erased Pi binders whose
+  # final codomain is not itself a Pi — i.e. every parameter is erased and no
+  # relevant (present-grade) parameter hides in or beyond the spine.
+  defp all_erased_pi_spine?(type, 0), do: not match?({:pi, _grade, _dom, _cod}, type)
+
+  defp all_erased_pi_spine?({:pi, :erased, _dom, cod}, count) when count > 0,
+    do: all_erased_pi_spine?(cod, count - 1)
+
+  defp all_erased_pi_spine?(_type, _count), do: false
 
   defp shrink_counterexample(rule, rules, env, bindings, details) do
     {name, term, info} = first_shrinkable_binding(bindings, env)

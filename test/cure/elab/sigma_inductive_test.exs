@@ -54,11 +54,11 @@ defmodule Cure.Elab.SigmaInductiveTest do
     assert %{type: type, body: body} = Env.get_def(env, :forget_dec)
 
     body_core = unwrap_lams(body)
-    assert {:ctor, :mk_pair, [_, _]} = body_core
+    assert {:ctor, :"Std.Sigma#mk_pair", [_, _]} = body_core
     refute mentions?(body, :pair)
 
     # Declared type's Π codomain is the inductive Sigma, not the primitive node.
-    assert has_data?(type, :Sigma)
+    assert has_data?(type, :"Std.Sigma#Sigma")
     refute mentions?(type, :sigma)
   end
 

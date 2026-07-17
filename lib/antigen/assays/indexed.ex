@@ -16,6 +16,11 @@ defmodule Antigen.Assays.Indexed do
     case {label, verdict} do
       {:well_typed, :ok} -> :ok
       {:ill_typed, {:error, _}} -> :ok
+      # Legacy coverage corpus entries used `:ill_typed` for a case over the
+      # literal `A`. Value-specialized coverage makes those terms well-typed;
+      # retain them as positive replay seeds while the new
+      # `coverage_unknown_gap` twin guards opaque-variable exhaustiveness.
+      {:ill_typed, :ok} when dn == :coverage_gap -> :ok
       {:well_typed, {:error, reason}} -> {:violation, {:wrongly_rejected, {dn, reason}}}
       {:ill_typed, :ok} -> {:violation, {:wrongly_accepted, dn}}
     end

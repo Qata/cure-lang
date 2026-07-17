@@ -53,4 +53,15 @@ defmodule Cure.Elab.MatchTest do
     bad = String.replace(@src, "  seq(l, r) -> Dcoupled\n", "")
     assert {:error, _} = elaborate_all(bad)
   end
+
+  test "validates typed payload annotations against the constructor field type" do
+    src = """
+    mod M
+      type Message = Ping(Int)
+      fn read(message: Message) -> Int = match message
+        Ping(value: Bool) -> 0
+    """
+
+    assert {:error, {:typed_pattern_type_mismatch, _}} = Cure.Elab.Program.elaborate(src)
+  end
 end

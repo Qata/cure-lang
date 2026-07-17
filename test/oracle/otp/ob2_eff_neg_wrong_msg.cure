@@ -1,0 +1,19 @@
+mod Ob2EffNegWrongMsg
+  type Reply0 = R0
+  type Msg = Inc | Dec | Query(Reply0)
+  type Response = Ack | Count(Reply0)
+  type Pid(m: Type) indices ()
+    MkPid : ((m) -> Response) -> Pid(m)
+  fn spawn_actor({m: Type}, msg_handler: (m) -> Response) -> Effect(Pid(m)) = MkPid(msg_handler)
+  fn post({m: Type}, p: Pid(m), msg: m) -> Effect(Response) = match p
+    MkPid(h) -> h(msg)
+  fn dispatch(m: Msg) -> Response = match m
+    Inc()     -> Ack
+    Dec()     -> Ack
+    Query(x)  -> Count(x)
+  # The pid is Pid(Msg) (index derived from dispatch), so post forces a Msg. Posting a
+  # Response is rejected even under the effect discipline.
+  fn deliver_bad(bad: Response) -> Effect(Response) =
+    let pid = spawn_actor(dispatch)
+    post(pid, bad)
+end

@@ -12,6 +12,7 @@ defmodule Cure.Migrate do
   See `Cure.Migrate.Rule` for the shape of a single rule.
   """
 
+  alias Cure.Compiler.MacroFamily
   alias Cure.Migrate.Rule
 
   defmodule Warning do
@@ -395,6 +396,28 @@ defmodule Cure.Migrate do
     Enum.reduce(ch, maybe_name(meta, acc), &collect_type_names/2)
   end
 
+  # A `macro` declaration synthesizes typed record types for its rules — a legacy
+  # `computed by` rule gets `syntax_type(keyword)` (`fsm` -> `FsmSyntax`), a
+  # structured `syntax family`/`expands with` gets `syntax_type(family)`
+  # (`FsmDefinition` -> `FsmDefinitionSyntax`) plus its `…InputSyntax`. Those
+  # records are generated during lowering (`MacroFamily.generated_record_declarations`,
+  # the same pipeline `Program.declarations`/`LiftModule.unit_declarations` run),
+  # so they are absent from the raw source AST this walk sees. Reproduce the exact
+  # lowering to learn their names; otherwise a sibling expander's signature
+  # (`fn derive_fsm(input: FsmSyntax)`) is misread as carrying a free type
+  # variable and spuriously warned/lowercased.
+  defp collect_type_names({:macro_def, meta, rules}, acc)
+       when is_list(meta) and is_list(rules) do
+    MacroFamily.lowered_rules(meta, rules)
+    |> Enum.filter(&(&1[:kind] == :computed))
+    |> Enum.uniq_by(&Map.get(&1, :syntax_type))
+    |> Enum.flat_map(&MacroFamily.generated_record_declarations(meta, &1))
+    |> Enum.reduce(acc, fn
+      {:container, cmeta, _fields}, a -> maybe_name(cmeta, a)
+      _other, a -> a
+    end)
+  end
+
   defp collect_type_names({_k, _meta, ch}, acc) when is_list(ch) do
     Enum.reduce(ch, acc, &collect_type_names/2)
   end
@@ -453,17 +476,8 @@ defmodule Cure.Migrate do
   # here, a builtin, or directly imported. Best-effort and FAIL-OPEN — an
   # unresolvable import (non-stdlib module, missing source dir, read/parse
   # failure) contributes nothing rather than crashing the warn-only lint.
-  # The stdlib modules the elaborator auto-imports into EVERY module with no
-  # `use` statement (`Cure.Elab.Program.@auto_prelude`). A file like `proof.cure`
-  # references `Nat`/`Z`/`S` with no import node at all — it gets them from this
-  # implicit prelude — so their exported names must seed the ctx exactly as a
-  # direct `use` would, or the auto-imported `Z` is misread as a free type var.
-  # Duplicated (not imported) to keep the warn-only lint decoupled from the
-  # elaborator's private attr; keep in sync with program.ex if the prelude grows.
-  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma Std.Int Std.Float Std.Binary Std.Bounded)
-
   defp imported_names(ast, file) do
-    sources = Enum.uniq(collect_import_sources(ast, []) ++ @auto_prelude)
+    sources = Enum.uniq(collect_import_sources(ast, []) ++ prelude_sources())
     # User (non-`Std.*`) imports have no path convention — Cure resolves them by
     # co-compilation, not by name→path — so they cannot be read the way a stdlib
     # source is. The only handle a single-file lint has is the sibling `.cure`
@@ -480,6 +494,39 @@ defmodule Cure.Migrate do
       case names do
         {:ok, ns} -> MapSet.union(acc, ns)
         :error -> acc
+      end
+    end)
+  end
+
+  # Prelude membership lives at the definition site. The migration linter reads
+  # the same `@prelude` markers as the loader instead of maintaining a second
+  # compiler-owned module list.
+  defp prelude_sources do
+    dirs = Cure.Stdlib.Paths.source_dirs()
+    key = {:migrate_prelude_sources, dirs}
+
+    case Process.get(key) do
+      nil ->
+        sources = compute_prelude_sources(dirs)
+        Process.put(key, sources)
+        sources
+
+      sources ->
+        sources
+    end
+  end
+
+  defp compute_prelude_sources(dirs) do
+    dirs
+    |> Enum.flat_map(&Path.wildcard(Path.join(&1, "*.cure")))
+    |> Enum.uniq()
+    |> Enum.flat_map(fn path ->
+      with {:ok, src} <- File.read(path),
+           true <- Regex.match?(~r/^\s*@prelude\s*$/m, src),
+           {:ok, name} <- module_name_of_file(path) do
+        [name]
+      else
+        _ -> []
       end
     end)
   end
@@ -504,7 +551,33 @@ defmodule Cure.Migrate do
 
   # The type + constructor names a `.cure` source at `path` exports. Fail-open:
   # any read/lex/parse failure yields `:error` and contributes nothing.
+  #
+  # Memoized per process, keyed by (path, mtime): a fixpoint re-resolves every import
+  # on each pass, and each file's lint re-reads its siblings, so without this the same
+  # sibling sources are read+lexed+parsed O(files × passes) times — quadratic in the
+  # stdlib size, which times out the whole-stdlib monotone test as the tree grows. The
+  # mtime in the key keeps it correct if a source is rewritten mid-process (temp files).
   defp exported_names_of_file(path) do
+    mtime =
+      case File.stat(path, time: :posix) do
+        {:ok, %File.Stat{mtime: t}} -> t
+        _ -> :nostat
+      end
+
+    key = {:mig_exports, path, mtime}
+
+    case Process.get(key) do
+      nil ->
+        result = compute_exported_names_of_file(path)
+        Process.put(key, result)
+        result
+
+      cached ->
+        cached
+    end
+  end
+
+  defp compute_exported_names_of_file(path) do
     with {:ok, src} <- File.read(path),
          {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(src, emit_events: false),
          {:ok, ast} <- Cure.Compiler.Parser.parse(tokens, emit_events: false) do

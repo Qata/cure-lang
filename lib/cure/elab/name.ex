@@ -18,29 +18,37 @@ defmodule Cure.Elab.Name do
     String.to_atom(normalize_owner(owner) <> @separator <> normalize_base(base))
   end
 
-  @doc "Return the module owner encoded in a canonical name, or nil for a bare atom."
-  @spec owner(atom() | String.t()) :: String.t() | nil
-  def owner(name) when is_atom(name), do: owner(Atom.to_string(name))
+  @doc """
+  Split a canonical name into `{owner, base}` in a single pass.
 
-  def owner(name) when is_binary(name) do
-    case String.split(name, @separator, parts: 2) do
-      [owner, _base] when owner != "" -> owner
-      _ -> nil
+  The owner is `nil` for a bare name, and for a name whose text before the
+  separator is not a valid owner — a content-derived identity like
+  `Union<Int|Std.Bool#Bool>` is its own base, not `Bool` owned by
+  `Union<Int|Std.Bool`.
+
+  Callers that need both halves should prefer this over `owner/1` and `base/1`:
+  it decides the split once rather than twice, and name resolution asks this
+  question for every key in a table on every unresolved lookup.
+  """
+  @spec split(atom() | String.t()) :: {String.t() | nil, String.t()}
+  def split(name) when is_atom(name), do: split(Atom.to_string(name))
+
+  def split(name) when is_binary(name) do
+    case :binary.split(name, @separator) do
+      [owner, base] -> if valid_owner?(owner), do: {owner, base}, else: {nil, name}
+      [bare] -> {nil, bare}
     end
   end
+
+  @doc "Return the module owner encoded in a canonical name, or nil for a bare atom."
+  @spec owner(atom() | String.t()) :: String.t() | nil
+  def owner(name) when is_atom(name) or is_binary(name), do: split(name) |> elem(0)
 
   def owner(_name), do: nil
 
   @doc "Return the basename encoded in a canonical name, or the original bare name."
   @spec base(atom() | String.t()) :: String.t() | nil
-  def base(name) when is_atom(name), do: base(Atom.to_string(name))
-
-  def base(name) when is_binary(name) do
-    case String.split(name, @separator, parts: 2) do
-      [_owner, base] -> base
-      [bare] -> bare
-    end
-  end
+  def base(name) when is_atom(name) or is_binary(name), do: split(name) |> elem(1)
 
   def base(_name), do: nil
 
@@ -53,4 +61,21 @@ defmodule Cure.Elab.Name do
 
   defp normalize_base(base) when is_atom(base), do: Atom.to_string(base)
   defp normalize_base(base) when is_binary(base), do: base
+
+  # `[A-Za-z_][A-Za-z0-9_.]*`, anchored at both ends, as a byte scan rather than
+  # a regex. `owner/1` and `base/1` sit under the elaborator's name resolution,
+  # which asks this question millions of times per elaboration; a `Regex.match?/2`
+  # here cost roughly a quarter of a cold compile in `re:run`/`re:import` alone.
+  defp valid_owner?(<<c, rest::binary>>) when c in ?A..?Z or c in ?a..?z or c == ?_,
+    do: owner_rest?(rest)
+
+  defp valid_owner?(_owner), do: false
+
+  defp owner_rest?(<<>>), do: true
+
+  defp owner_rest?(<<c, rest::binary>>)
+       when c in ?A..?Z or c in ?a..?z or c in ?0..?9 or c == ?_ or c == ?.,
+       do: owner_rest?(rest)
+
+  defp owner_rest?(_rest), do: false
 end

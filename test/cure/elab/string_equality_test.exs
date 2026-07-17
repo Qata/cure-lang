@@ -16,8 +16,8 @@ defmodule Cure.Elab.StringEqualityTest do
   test "reachable_def_names excludes type-level defs (type aliases)" do
     {:ok, env} = Program.elaborate("mod M\n  use Std.Char\n  fn eqc(a: Char, b: Char) -> Bool = a == b\nend\n")
     roots = Program.reachable_def_names(env, [:eqc])
-    assert :eqc in roots
-    refute :Char in roots
+    assert :"M#eqc" in roots
+    refute :"Std.Char#Char" in roots
   end
 
   test "Char equality runs end-to-end via struct_eq" do

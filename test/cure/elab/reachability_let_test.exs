@@ -24,7 +24,7 @@ defmodule Cure.Elab.ReachabilityLetTest do
     """
 
     {:ok, env} = Program.elaborate(src)
-    assert :helper in Program.reachable_def_names(env, [:g])
+    assert :"M#helper" in Program.reachable_def_names(env, [:g])
   end
 
   test "co-emitting that closure produces a module that actually runs" do
@@ -60,7 +60,7 @@ defmodule Cure.Elab.ReachabilityLetTest do
 
     {:ok, env} = Program.elaborate(src)
     reachable = Program.reachable_def_names(env, [:g])
-    assert :a in reachable
-    assert :b in reachable
+    assert :"M#a" in reachable
+    assert :"M#b" in reachable
   end
 end

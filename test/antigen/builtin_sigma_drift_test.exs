@@ -19,14 +19,14 @@ defmodule Antigen.BuiltinSigmaDriftTest do
 
   test "the seeded :sigma family exists with ctor mk_pair/2" do
     seeded = Builtins.seed(Env.empty())
-    assert Inductive.builtin(seeded, :sigma) == :Sigma
+    assert Inductive.builtin(seeded, :sigma) == :"Std.Sigma#Sigma"
 
     ctors =
       seeded
       |> Inductive.ctors_of(:Sigma)
       |> Enum.map(fn c -> {c.name, length(c.args)} end)
 
-    assert ctors == [{:mk_pair, 2}]
+    assert ctors == [{:"Std.Sigma#mk_pair", 2}]
   end
 
   test "prelude-compiled Std.Sigma family is structurally identical to Builtins.seed's" do
@@ -41,6 +41,6 @@ defmodule Antigen.BuiltinSigmaDriftTest do
   end
 
   test "Inductive.builtin(env, :sigma) resolves after seeding" do
-    assert Inductive.builtin(Builtins.seed(Env.empty()), :sigma) == :Sigma
+    assert Inductive.builtin(Builtins.seed(Env.empty()), :sigma) == :"Std.Sigma#Sigma"
   end
 end

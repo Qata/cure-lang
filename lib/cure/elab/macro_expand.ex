@@ -8,9 +8,9 @@ defmodule Cure.Elab.MacroExpand do
   elaborated and kernel-checked by the ordinary declaration path.
   """
 
-  alias Cure.Compiler.MacroSyntax
+  alias Cure.Compiler.{MacroFamily, MacroSyntax, Parser}
   alias Cure.Core.{Context, Kernel, Normalise}
-  alias Cure.Elab.Elaborator
+  alias Cure.Elab.{Elaborator, TotalityClosure}
 
   @normalise_fuel 10_000
   # Termination is guaranteed by active-stack cycle detection. Production
@@ -35,6 +35,7 @@ defmodule Cure.Elab.MacroExpand do
     state = %{
       expansions: 0,
       nodes: 0,
+      fresh_counter: 0,
       active: MapSet.new(),
       path: [],
       context: Keyword.get(opts, :callback_context),
@@ -71,7 +72,8 @@ defmodule Cure.Elab.MacroExpand do
            meta
            |> Keyword.put(:provenance, expansion_chain(state))
            |> put_expansion_context(state.context),
-         {:ok, expanded} <- execute(meta, elab, input, env),
+         {:ok, expanded, fresh_counter} <- execute(meta, elab, input, env, state.fresh_counter),
+         state = %{state | fresh_counter: fresh_counter},
          {:ok, expanded, state} <- expand_node(expanded, env, state),
          {:ok, state} <- end_expansion(node, state) do
       {:ok, expanded, state}
@@ -181,7 +183,43 @@ defmodule Cure.Elab.MacroExpand do
 
   defp expansion_frame(_), do: %{keyword: nil, line: nil, col: nil}
 
-  defp execute(meta, elab_ast, input_ast, env) do
+  defp execute(meta, elab_ast, input_ast, env, fresh_counter) do
+    # Definition-site (ambient) macro hygiene, as a ZERO-OVERHEAD FALLBACK. A
+    # stdlib computed/family macro's expander is a global of its HOME module. If
+    # the use-site has `use Std.X` (or the macro is lexical), the expander already
+    # resolves in the caller env — the common path — and we pay nothing extra.
+    # Only a genuinely-bare ambient use fails to resolve the expander; that single
+    # failure is retried once with the home-module env merged, so it resolves in
+    # its definition scope (as Lean/Racket resolve macro helpers). The merged env
+    # is local to the retry — the AST it produces is re-elaborated in the caller's
+    # own env, so caller scope is unchanged.
+    case execute_with_env(meta, elab_ast, input_ast, env, fresh_counter) do
+      {:error, {:computed_macro_error, _meta, reason}} = err ->
+        case Keyword.get(meta, :home_source) do
+          nil ->
+            err
+
+          home_source ->
+            if resolution_failure?(reason) do
+              merged = Cure.Elab.Program.env_with_macro_home(env, home_source)
+              execute_with_env(meta, elab_ast, input_ast, merged, fresh_counter)
+            else
+              err
+            end
+        end
+
+      ok ->
+        ok
+    end
+  end
+
+  # Only an unresolved-expander failure merits retrying in the definition-site
+  # scope; any other computed-macro error is genuine and returned as-is.
+  defp resolution_failure?(:unknown_global), do: true
+  defp resolution_failure?({:unknown_global, _}), do: true
+  defp resolution_failure?(_), do: false
+
+  defp execute_with_env(meta, elab_ast, input_ast, env, fresh_counter) do
     context = Context.empty(env)
 
     # The elab sees WHERE it was invoked, not just what it was handed: the
@@ -192,27 +230,37 @@ defmodule Cure.Elab.MacroExpand do
       |> MacroSyntax.to_syntax()
       |> MacroSyntax.with_context(Keyword.get(meta, :expansion_context))
 
+    field_types = resolve_field_types(Keyword.get(meta, :syntax_field_types, %{}), env)
+
     input_cores =
       case Keyword.get(meta, :syntax_type) do
         nil ->
-          [MacroSyntax.to_core(input_repr)]
+          [[MacroSyntax.to_core(input_repr)]]
 
         syntax_type ->
-          [
+          record =
             MacroSyntax.to_core_record(
-              syntax_type,
+              Cure.Core.Env.resolve_key(env, env.ctors, syntax_type),
               Keyword.get(meta, :syntax_fields, []),
               Keyword.get(meta, :syntax_repeated_fields, []),
-              input_repr
-            ),
-            MacroSyntax.to_core(input_repr)
-          ]
+              input_repr,
+              field_types
+            )
+
+          direct =
+            if Keyword.get(meta, :direct_inputs, false) or primitive_field_types?(field_types),
+              do: direct_input_cores(input_repr, Keyword.get(meta, :syntax_fields, []), field_types),
+              else: []
+
+          Enum.filter([direct, [record], [MacroSyntax.to_core(input_repr)]], &(&1 != []))
       end
 
     with {:ok, elab_core, _elab_type} <-
            Elaborator.elaborate_expr_typed(elab_ast, [], context, env),
-         {:ok, result_ast} <- execute_application(context, elab_core, input_cores) do
-      {:ok, result_ast}
+         {:ok, eval_env} <- TotalityClosure.certify_roots(env, global_names(elab_core)),
+         {:ok, result_ast} <- execute_application(Context.empty(eval_env), elab_core, input_cores),
+         {result_ast, fresh_counter} <- Parser.freshen_generated(result_ast, fresh_counter) do
+      {:ok, result_ast, fresh_counter}
     else
       {:error, reason} -> {:error, {:computed_macro_error, meta, reason}}
       :fuel_exhausted -> {:error, {:computed_macro_error, meta, :normalization_fuel_exhausted}}
@@ -221,15 +269,112 @@ defmodule Cure.Elab.MacroExpand do
     error -> {:error, {:computed_macro_error, meta, {:host_exception, error.__struct__}}}
   end
 
-  defp execute_application(context, elab_core, [input_core | fallback]) do
-    application = {:app, elab_core, input_core}
+  defp resolve_field_types(field_types, env) when is_map(field_types) do
+    Map.new(field_types, fn
+      {field, {:record, name, fields}} ->
+        repeated =
+          fields
+          |> Enum.filter(&(MacroFamily.field_cardinality(&1) in [:repeated, :one_or_more]))
+          |> Enum.map(& &1.name)
+
+        {field,
+         {:record, Cure.Core.Env.resolve_key(env, env.ctors, name),
+          Enum.map(fields, &Map.put(&1, :repeated, &1.name in repeated))}}
+
+      {field, value} ->
+        {field, value}
+    end)
+  end
+
+  defp resolve_field_types(_field_types, _env), do: %{}
+
+  defp primitive_field_types?(field_types) when is_map(field_types) do
+    Enum.any?(field_types, fn {_field, type} -> match?({:primitive, _shape}, type) end)
+  end
+
+  defp primitive_field_types?(_field_types), do: false
+
+  defp global_names({:global, name}), do: [name]
+  defp global_names({:app, f, a}), do: global_names(f) ++ global_names(a)
+  defp global_names({:lam, _grade, domain, body}), do: global_names(domain) ++ global_names(body)
+  defp global_names({:pi, _grade, domain, codomain}), do: global_names(domain) ++ global_names(codomain)
+
+  defp global_names({:case, scrutinee, motive, branches}) do
+    global_names(scrutinee) ++
+      global_names(motive) ++ Enum.flat_map(branches, fn {_name, _arity, body} -> global_names(body) end)
+  end
+
+  defp global_names({:let, _grade, type, value, body}),
+    do: global_names(type) ++ global_names(value) ++ global_names(body)
+
+  defp global_names({:effect_type, inner}), do: global_names(inner)
+  defp global_names({:effect_pure, value}), do: global_names(value)
+
+  defp global_names({:effect_bind, effect, continuation}),
+    do: global_names(effect) ++ global_names(continuation)
+
+  defp global_names({:ctor, _name, args}), do: Enum.flat_map(args, &global_names/1)
+  defp global_names({:data, _name, params, indices}), do: Enum.flat_map(params ++ indices, &global_names/1)
+  defp global_names(term) when is_list(term), do: Enum.flat_map(term, &global_names/1)
+
+  defp global_names(term) when is_tuple(term),
+    do: term |> Tuple.to_list() |> Enum.flat_map(&global_names/1)
+
+  defp global_names(_term), do: []
+
+  defp direct_input_cores({:syn_node, _tag, _attrs, kids}, fields, field_types) do
+    fields
+    |> Enum.zip(kids)
+    |> Enum.map(fn {field, kid} ->
+      case Map.get(field_types, field) do
+        {:record, nested_name, nested_fields} ->
+          repeated =
+            nested_fields
+            |> Enum.filter(&(MacroFamily.field_cardinality(&1) in [:repeated, :one_or_more]))
+            |> Enum.map(& &1.name)
+
+          nested_field_types = MacroSyntax.family_field_types(nested_fields)
+
+          MacroSyntax.to_core_record_without_context(
+            nested_name,
+            Enum.map(nested_fields, & &1.name),
+            repeated,
+            kid,
+            nested_field_types
+          )
+
+        {:primitive, shape} ->
+          MacroSyntax.to_core_primitive_value(kid, shape)
+
+        _ ->
+          MacroSyntax.to_core(kid)
+      end
+    end)
+  end
+
+  defp direct_input_cores(_input_repr, _fields, _field_types), do: []
+
+  defp execute_application(context, elab_core, [candidate | fallback]) when is_list(candidate) do
+    application = Enum.reduce(candidate, elab_core, fn input_core, function -> {:app, function, input_core} end)
 
     case Kernel.infer(context, application) do
       {:ok, _result_type} ->
         result = Normalise.nf(context, application, fuel: @normalise_fuel)
-        decode_result(result)
 
-      {:error, {:foreign_ctor, _}} when fallback != [] ->
+        case decode_result(result) do
+          {:ok, _ast} = success ->
+            success
+
+          {:error, reason} when fallback != [] ->
+            if fallback_decode_error?(reason),
+              do: execute_application(context, elab_core, fallback),
+              else: {:error, reason}
+
+          error ->
+            error
+        end
+
+      {:error, _reason} when fallback != [] ->
         execute_application(context, elab_core, fallback)
 
       {:error, reason} ->
@@ -240,6 +385,11 @@ defmodule Cure.Elab.MacroExpand do
   defp execute_application(_context, _elab_core, []),
     do: {:error, :no_compatible_macro_input}
 
+  defp fallback_decode_error?({:author_failure, _name, _args}), do: false
+  defp fallback_decode_error?({:author_diagnostics, _diagnostics}), do: false
+  defp fallback_decode_error?({:invalid_generated_syntax, _reason}), do: false
+  defp fallback_decode_error?(_reason), do: true
+
   defp decode_result(result) do
     if result == :fuel_exhausted do
       {:error, :normalization_fuel_exhausted}
@@ -249,15 +399,34 @@ defmodule Cure.Elab.MacroExpand do
   end
 
   defp decode_result_term(result) do
-    case MacroSyntax.from_core(result) do
+    case MacroSyntax.from_core_macro_result(result) do
+      {:expanded, repr} ->
+        validate_expansion(repr)
+
+      {:rejected, diagnostics} ->
+        {:error, {:author_diagnostics, Enum.map(diagnostics, &MacroSyntax.from_syntax/1)}}
+
       {:error, reason} ->
         {:error, reason}
 
-      {:syn_failure, name, args} ->
-        {:error, {:author_failure, Atom.to_string(name), Enum.map(args, &MacroSyntax.from_syntax/1)}}
+      :not_macro_result ->
+        case MacroSyntax.from_core(result) do
+          {:error, reason} ->
+            {:error, reason}
 
-      repr ->
-        {:ok, MacroSyntax.from_syntax(repr)}
+          {:syn_failure, name, args} ->
+            {:error, {:author_failure, Atom.to_string(name), Enum.map(args, &MacroSyntax.from_syntax/1)}}
+
+          repr ->
+            validate_expansion(repr)
+        end
+    end
+  end
+
+  defp validate_expansion(repr) do
+    case MacroSyntax.validate_expansion(repr) do
+      :ok -> {:ok, MacroSyntax.from_syntax(repr)}
+      {:error, reason} -> {:error, {:invalid_generated_syntax, reason}}
     end
   end
 end

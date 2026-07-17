@@ -5,6 +5,13 @@
 > dependent-pipeline migration (the work that surfaced it) reaches a natural
 > stopping point, or whenever error-quality becomes the bottleneck again.
 
+**0.35 integration note (2026-07-17):** this cleanup is the seed of, but not the
+complete design for, the shared diagnostic foundation in
+[`2026-07-17-cure-native-parser-diagnostics-self-hosting-design.md`](2026-07-17-cure-native-parser-diagnostics-self-hosting-design.md).
+On resumption, follow that spec's multi-span, provenance, machine-output, and
+typed-hole requirements rather than stopping at this document's original
+one-line formatter boundary.
+
 ## Motivation
 
 Cure's compiler returns a mix of **payload-carrying** error tuples and

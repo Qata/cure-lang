@@ -16,13 +16,15 @@ defmodule Antigen.NeutralAppMotiveTest do
 
   # ctx: [ b : (Nat) -> Type ]  (level 0)
   defp ctx_with_type_family(env) do
-    pi = Eval.eval({:pi, Cure.Core.Grade.unrestricted(), {:data, :Nat, [], []}, {:type, 0}}, [])
+    pi =
+      Eval.eval({:pi, Cure.Core.Grade.unrestricted(), {:data, :"P#Nat", [], []}, {:type, 0}}, [])
+
     Context.extend(Context.empty(env), pi)
   end
 
   test "accept pin: a motive applying a type-family variable sorts (case infers)" do
     ctx = ctx_with_type_family(nat_env())
-    nat = {:data, :Nat, [], []}
+    nat = {:data, :"P#Nat", [], []}
     # b is de Bruijn var 1 UNDER the motive's own binder (v : Nat is var 0).
     motive = {:lam, Cure.Core.Grade.unrestricted(), nat, {:app, {:var, 1}, {:var, 0}}}
 
@@ -33,7 +35,8 @@ defmodule Antigen.NeutralAppMotiveTest do
     # not exist closed, so pin acceptance at the motive-wf boundary by asserting
     # the case does NOT fail with :bad_motive (it must fail LATER, in branch
     # checking, with a branch-related error — proving motive-wf passed).
-    kase = {:case, {:ctor, :Z, []}, motive, [{:Z, 0, {:ctor, :Z, []}}, {:S, 1, {:ctor, :Z, []}}]}
+    kase =
+      {:case, {:ctor, :"P#Z", []}, motive, [{:"P#Z", 0, {:ctor, :"P#Z", []}}, {:"P#S", 1, {:ctor, :"P#Z", []}}]}
 
     assert {:error, err} = Kernel.infer(ctx, kase)
     refute err == :bad_motive, "motive-wf should now accept the neutral-app motive; got :bad_motive"

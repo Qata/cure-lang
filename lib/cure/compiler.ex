@@ -410,15 +410,12 @@ defmodule Cure.Compiler do
   # A dependent module is lowered by the kernel: elaborate to `Cure.Core`, erase
   # its {0,ω} index arguments, and emit the erased residue as real BEAM forms.
   defp dependent_codegen(ast) do
-    origins = Cure.Elab.Program.import_origins(ast)
-
     with {:ok, env, local_defs} <- Cure.Elab.Program.check_ast_with_locals(ast),
          {:ok, forms} <-
            Cure.Elab.Emit.compile_forms(
              env,
              Cure.Elab.Program.module_atom(ast),
-             local_defs,
-             origins
+             local_defs
            ) do
       {:ok, forms}
     else

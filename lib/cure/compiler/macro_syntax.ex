@@ -22,7 +22,32 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
+  def lower_internal({:unit_value, meta, []}) when is_list(meta),
+    do: {:ok, {:unit_value, meta}}
+
   def lower_internal(_ast), do: :not_internal
+
+  @doc """
+  Lower internal syntax markers throughout a generated AST tree.
+
+  Top-level macro results pass through the parser's marker hook, while lifted
+  modules are validated directly by `LiftModule`. Keeping the recursive bridge
+  here makes both paths interpret the same safe syntax constructors.
+  """
+  @spec lower_internal_tree(term()) :: term()
+  def lower_internal_tree(ast) when is_list(ast),
+    do: Enum.map(ast, &lower_internal_tree/1)
+
+  def lower_internal_tree({tag, meta, children}) when is_list(meta) and is_list(children) do
+    lowered = {tag, meta, Enum.map(children, &lower_internal_tree/1)}
+
+    case lower_internal(lowered) do
+      {:ok, value} -> value
+      :not_internal -> lowered
+    end
+  end
+
+  def lower_internal_tree(ast), do: ast
 
   @type synlit ::
           {:s_int, integer}
@@ -40,6 +65,11 @@ defmodule Cure.Compiler.MacroSyntax do
           | {:syn_raw, synlit}
           | {:syn_quoted, repr}
           | {:syn_failure, atom, [repr]}
+          # Quasiquote splice holes (SP5.1). The second element is the RAW
+          # surface AST of the spliced expression, kept un-reflected so
+          # `lower_quote/1` re-emits it verbatim for the ordinary elaborator.
+          | {:syn_splice, term()}
+          | {:syn_splice_group, term()}
 
   # -- to_syntax: parser AST -> repr -----------------------------------------
 
@@ -54,6 +84,45 @@ defmodule Cure.Compiler.MacroSyntax do
   @spec to_syntax(term()) :: repr
   def to_syntax({:quoted_syntax, _meta, [inner]}), do: {:syn_quoted, to_syntax(inner)}
 
+  # Quasiquote splice holes (SP5.1). Keep the inner expression RAW (do not
+  # reflect it): `lower_quote/1` re-emits it verbatim so the ordinary
+  # elaborator types and lowers the spliced `Syntax` / `List(Syntax)` value.
+  def to_syntax({:splice, _meta, [inner]}), do: {:syn_splice, inner}
+  def to_syntax({:splice_group, _meta, [inner]}), do: {:syn_splice_group, inner}
+
+  def to_syntax({:family_option, meta, []}) when is_list(meta),
+    do: {:syn_leaf, :option_none, [], :s_opaque}
+
+  def to_syntax({:family_option, meta, [value]}) when is_list(meta),
+    do: {:syn_node, :option_some, [], [to_syntax(value)]}
+
+  # Preserve the parser's generic identifier-shape fact for source-defined
+  # syntax analysis. A reflected macro must distinguish a Pascal constructor
+  # head from a lowercase variable without a domain-specific compiler rule.
+  def to_syntax({:variable, meta, name}) when is_list(meta) and is_binary(name) do
+    extra = [
+      {:pascal_case, {:s_bool, pascal_case?(name)}},
+      {:constructor_key, {:s_atom, String.to_atom(name <> "/0")}},
+      {:variable_name, {:s_atom, String.to_atom(name)}}
+    ]
+
+    {:syn_leaf, :variable, attrs(meta) ++ extra, synlit(name)}
+  end
+
+  def to_syntax({:function_call, meta, args}) when is_list(meta) and is_list(args) do
+    name = Keyword.get(meta, :name)
+
+    extra =
+      if is_binary(name),
+        do: [
+          {:pascal_case, {:s_bool, pascal_case?(name)}},
+          {:constructor_key, {:s_atom, String.to_atom(name <> "/" <> Integer.to_string(length(args)))}}
+        ],
+        else: []
+
+    {:syn_node, :function_call, attrs(meta) ++ extra, Enum.map(args, &to_syntax/1)}
+  end
+
   def to_syntax({tag, meta, third}) when is_list(third) do
     {:syn_node, tag, attrs(meta), Enum.map(third, &to_syntax/1)}
   end
@@ -63,6 +132,96 @@ defmodule Cure.Compiler.MacroSyntax do
   end
 
   def to_syntax(other), do: {:syn_raw, synlit(other)}
+
+  # -- quote lowering: quoted form -> Std.Syntax builder surface AST ----------
+
+  @doc """
+  Lower a `quote <form>` inner AST to an ordinary Cure surface expression that
+  builds the corresponding `Std.Syntax` value (SP5.1).
+
+  This is the parse-time expansion of `quote`: reflect the quoted form with
+  `to_syntax/1` (so `from_syntax` regenerates it exactly — `from_syntax ∘
+  to_syntax = id`), then map each `repr` node to its `Std.Syntax` constructor
+  application. A `$(e)` splice hole becomes the spliced expression `e`; a
+  `$(e ...)` group splice becomes `e` joined into the enclosing child list with
+  `Std.List.append`. The result re-enters the ordinary elaborator, so implicit
+  insertion, constructor resolution and list typing are handled there — no Core
+  is hand-built (TCB delta 0). The enclosing module must `use Std.Syntax` (and
+  `use Std.List` when group splices are present), exactly as a hand-written
+  builder expression would.
+  """
+  @spec lower_quote(term()) :: term()
+  def lower_quote(inner), do: repr_to_ast(to_syntax(inner))
+
+  # A splice hole in term position IS the spliced expression.
+  defp repr_to_ast({:syn_splice, inner}), do: inner
+
+  # A group splice reaching term position (rather than a child-list position)
+  # has no enclosing sequence to flatten into — a category error surfaced by
+  # the elaborator's orphan-splice check. Emit it as a bare `Std.List` value so
+  # the type mismatch (`List(Syntax)` where `Syntax` is expected) is reported.
+  defp repr_to_ast({:syn_splice_group, inner}), do: inner
+
+  defp repr_to_ast({:syn_node, tag, attrs, kids}),
+    do: qq_call("Node", [qq_atom(tag), attrs_ast(attrs), kids_ast(kids)])
+
+  defp repr_to_ast({:syn_leaf, tag, attrs, lit}),
+    do: qq_call("Leaf", [qq_atom(tag), attrs_ast(attrs), synlit_ast(lit)])
+
+  defp repr_to_ast({:syn_raw, lit}), do: qq_call("Raw", [synlit_ast(lit)])
+  defp repr_to_ast({:syn_quoted, inner}), do: qq_call("Quoted", [repr_to_ast(inner)])
+
+  defp repr_to_ast({:syn_failure, name, args}),
+    do: qq_call("Failure", [qq_atom(name), qq_list(Enum.map(args, &repr_to_ast/1))])
+
+  # Attribute list: `List(Attr)` where `Attr = KV(Atom, SynLit)`.
+  defp attrs_ast(attrs),
+    do: qq_list(Enum.map(attrs, fn {key, lit} -> qq_call("KV", [qq_atom(key), synlit_ast(lit)]) end))
+
+  # Child list, splicing groups. Runs of ordinary children become list
+  # literals; each `$(e ...)` group contributes its `List(Syntax)` value; the
+  # segments are joined left-to-right with `Std.List.append`. With no group
+  # splice this is a single list literal (clean Core — identical to a
+  # hand-written `[a, b, c]`).
+  defp kids_ast(kids), do: kids |> chunk_kids() |> segments_to_ast()
+
+  defp chunk_kids([]), do: []
+  defp chunk_kids([{:syn_splice_group, inner} | rest]), do: [{:group, inner} | chunk_kids(rest)]
+
+  defp chunk_kids([kid | rest]) do
+    {statics, tail} = Enum.split_while(rest, &(not match?({:syn_splice_group, _}, &1)))
+    [{:static, Enum.map([kid | statics], &repr_to_ast/1)} | chunk_kids(tail)]
+  end
+
+  defp segments_to_ast([]), do: qq_list([])
+  defp segments_to_ast([{:static, asts}]), do: qq_list(asts)
+  defp segments_to_ast([{:group, inner}]), do: inner
+  defp segments_to_ast([{:static, asts} | rest]), do: qq_append(qq_list(asts), segments_to_ast(rest))
+  defp segments_to_ast([{:group, inner} | rest]), do: qq_append(inner, segments_to_ast(rest))
+
+  defp synlit_ast({:s_int, n}), do: qq_call("SInt", [qq_lit(:integer, n)])
+  defp synlit_ast({:s_float, f}), do: qq_call("SFloat", [qq_lit(:float, f)])
+  defp synlit_ast({:s_str, s}), do: qq_call("SStr", [qq_lit(:string, s)])
+  defp synlit_ast({:s_bool, b}), do: qq_call("SBool", [qq_lit(:boolean, b)])
+  defp synlit_ast({:s_atom, a}), do: qq_call("SAtom", [qq_atom(a)])
+  defp synlit_ast({:s_list, items}), do: qq_call("SList", [qq_list(Enum.map(items, &synlit_ast/1))])
+  defp synlit_ast({:s_syntax, inner}), do: qq_call("SSyntax", [repr_to_ast(inner)])
+
+  defp synlit_ast({:s_map, pairs}),
+    do:
+      qq_call("SMap", [
+        qq_list(Enum.map(pairs, fn {k, v} -> qq_call("SPair", [synlit_ast(k), synlit_ast(v)]) end))
+      ])
+
+  defp synlit_ast(:s_opaque), do: qq_call("SOpaque", [])
+
+  # Surface-AST builders. The `line`/`col` are cosmetic here — this AST is
+  # generated, not sourced — so a fixed origin keeps the shape stable.
+  defp qq_call(name, args), do: {:function_call, [name: name, line: 0, col: 0], args}
+  defp qq_append(a, b), do: qq_call("append", [a, b])
+  defp qq_list(items), do: {:list, [line: 0, col: 0], items}
+  defp qq_atom(a) when is_atom(a), do: {:literal, [subtype: :symbol, line: 0, col: 0], a}
+  defp qq_lit(subtype, value), do: {:literal, [subtype: subtype, line: 0, col: 0], value}
 
   # -- expansion context -----------------------------------------------------
 
@@ -106,13 +265,23 @@ defmodule Cure.Compiler.MacroSyntax do
 
   def with_context(repr, _context), do: repr
 
-  # A node whose semantic meta carries values; drop line/col, keep the rest as
-  # {key, synlit}. Unrepresentable meta values become :s_opaque.
+  # Preserve source coordinates under dedicated mirror keys. They are not
+  # semantic syntax attributes, but carrying them through reflection lets
+  # generated-code diagnostics point back to authored syntax. Other semantic
+  # meta values remain {key, synlit}; unrepresentable values become opaque.
   defp attrs(meta) when is_list(meta) do
-    for {k, v} <- meta, k not in [:line, :col], do: {k, synlit(v)}
+    Enum.flat_map(meta, fn
+      {:line, value} -> [{:source_line, synlit(value)}]
+      {:col, value} -> [{:source_col, synlit(value)}]
+      {key, value} -> [{key, synlit(value)}]
+      _ -> []
+    end)
   end
 
   defp attrs(_), do: []
+
+  defp pascal_case?(<<first::utf8, _rest::binary>>) when first in ?A..?Z, do: true
+  defp pascal_case?(_), do: false
 
   defp synlit(v) when is_integer(v), do: {:s_int, v}
   defp synlit(v) when is_float(v), do: {:s_float, v}
@@ -121,11 +290,22 @@ defmodule Cure.Compiler.MacroSyntax do
   defp synlit(v) when is_atom(v), do: {:s_atom, v}
   defp synlit(v) when is_list(v), do: {:s_list, Enum.map(v, &synlit/1)}
 
+  # A raw lexer Token, leaked into a macro input by a `delayed raw until dedent`
+  # capture. Reflected by its content (type + value) only: source position is
+  # excluded so the macro recursion guard (expansion_key/1) stays
+  # position-insensitive, while two Tokens of different type or value still
+  # reflect differently and are not conflated. A struct is a map, so this MUST
+  # precede the plain-map clause below.
+  defp synlit(%Cure.Compiler.Token{type: type, value: value}),
+    do: {:s_list, [{:s_atom, type}, synlit(value)]}
+
   # A meta value that is a plain Elixir map (e.g. an `interface`'s
   # `defaults:` table, name -> default-method-body AST -- see
   # parse_interface/1). Representable losslessly as a list of key/value
   # synlit pairs; order is not semantically meaningful for a lookup table.
-  defp synlit(v) when is_map(v),
+  # Structs are excluded — they are not plain lookup tables and are not
+  # Enumerable (see the Token clause above).
+  defp synlit(v) when is_map(v) and not is_struct(v),
     do: {:s_map, Enum.map(v, fn {k, val} -> {synlit(k), synlit(val)} end)}
 
   # A meta value that is itself a full AST node (e.g. a binary-segment
@@ -144,6 +324,20 @@ defmodule Cure.Compiler.MacroSyntax do
     {tag, from_attrs(attrs), Enum.map(kids, &from_syntax/1)}
   end
 
+  # Caller scope is an expansion intent, not a scope understood by ordinary
+  # elaboration. Consume it at this boundary while retaining the reflected
+  # marker for macros that inspect the syntax value before emission.
+  def from_syntax({:syn_leaf, :variable, attrs, {:s_str, name}}) do
+    meta = from_attrs(attrs)
+
+    meta =
+      if Keyword.get(meta, :scope) == :caller,
+        do: Keyword.put(meta, :scope, :local),
+        else: meta
+
+    {:variable, meta, name}
+  end
+
   def from_syntax({:syn_leaf, tag, attrs, lit}) do
     {tag, from_attrs(attrs), from_synlit(lit)}
   end
@@ -155,7 +349,15 @@ defmodule Cure.Compiler.MacroSyntax do
   def from_syntax({:syn_failure, name, args}),
     do: {:macro_failure, name, Enum.map(args, &from_syntax/1)}
 
-  defp from_attrs(attrs), do: for({k, lit} <- attrs, do: {k, from_synlit(lit)})
+  defp from_attrs(attrs) do
+    for {key, lit} <- attrs, key not in [:pascal_case, :constructor_key, :variable_name] do
+      case key do
+        :source_line -> {:line, from_synlit(lit)}
+        :source_col -> {:col, from_synlit(lit)}
+        _ -> {key, from_synlit(lit)}
+      end
+    end
+  end
 
   defp from_synlit({:s_int, n}), do: n
   defp from_synlit({:s_float, f}), do: f
@@ -197,25 +399,111 @@ defmodule Cure.Compiler.MacroSyntax do
   """
   @spec to_core_record(String.t() | atom(), [String.t()], repr()) :: Cure.Core.Term.t()
   def to_core_record(type_name, syntax_fields, repr),
-    do: to_core_record(type_name, syntax_fields, [], repr)
+    do: to_core_record(type_name, syntax_fields, [], repr, %{}, true)
 
   @spec to_core_record(String.t() | atom(), [String.t()], [String.t()], repr()) :: Cure.Core.Term.t()
-  def to_core_record(type_name, syntax_fields, repeated_fields, {:syn_node, _tag, attrs, kids}) do
+  def to_core_record(type_name, syntax_fields, repeated_fields, repr),
+    do: to_core_record(type_name, syntax_fields, repeated_fields, repr, %{}, true)
+
+  @spec to_core_record(String.t() | atom(), [String.t()], [String.t()], repr(), map()) :: Cure.Core.Term.t()
+  def to_core_record(type_name, syntax_fields, repeated_fields, repr, field_types),
+    do: to_core_record(type_name, syntax_fields, repeated_fields, repr, field_types, true)
+
+  @doc "Encode a nested syntax record without the reserved expansion context field."
+  @spec to_core_record_without_context(String.t() | atom(), [String.t()], [String.t()], repr()) ::
+          Cure.Core.Term.t()
+  def to_core_record_without_context(type_name, syntax_fields, repeated_fields, repr),
+    do: to_core_record(type_name, syntax_fields, repeated_fields, repr, %{}, false)
+
+  @spec to_core_record_without_context(String.t() | atom(), [String.t()], [String.t()], repr(), map()) ::
+          Cure.Core.Term.t()
+  def to_core_record_without_context(type_name, syntax_fields, repeated_fields, repr, field_types),
+    do: to_core_record(type_name, syntax_fields, repeated_fields, repr, field_types, false)
+
+  defp to_core_record(
+         type_name,
+         syntax_fields,
+         repeated_fields,
+         {:syn_node, _tag, attrs, kids},
+         field_types,
+         include_context?
+       ) do
     name = if is_binary(type_name), do: String.to_atom(type_name), else: type_name
 
     args =
       syntax_fields
       |> Enum.zip(kids)
-      |> Enum.map(fn {field, kid} ->
-        if field in repeated_fields, do: to_core_syntax_list(kid), else: to_core(kid)
-      end)
+      |> Enum.map(&to_core_record_field(&1, repeated_fields, field_types))
 
     args =
-      if @context_field in syntax_fields,
+      if not include_context? or @context_field in syntax_fields,
         do: args,
         else: args ++ [to_core(context_attr(attrs))]
 
     {:ctor, name, args}
+  end
+
+  defp to_core_record(_type_name, _syntax_fields, _repeated_fields, repr, _field_types, _include_context?),
+    do: to_core(repr)
+
+  defp to_core_record_field({field, kid}, repeated_fields, field_types) do
+    case Map.get(field_types, field) do
+      {:optional, inner} ->
+        option_kid(kid, inner, repeated_fields, field_types)
+
+      field_type ->
+        encode_core_record_field(kid, field_type, repeated_fields, field_types, field)
+    end
+  end
+
+  defp encode_core_record_field(kid, {:record, nested_name, nested_fields}, _repeated_fields, _field_types, _field) do
+    nested_repeated =
+      nested_fields
+      |> Enum.filter(&(&1.cardinality in [:repeated, :one_or_more]))
+      |> Enum.map(& &1.name)
+
+    to_core_record(
+      nested_name,
+      Enum.map(nested_fields, & &1.name),
+      nested_repeated,
+      kid,
+      family_field_types(nested_fields),
+      false
+    )
+  end
+
+  defp encode_core_record_field(kid, {:primitive, shape}, repeated_fields, _field_types, field) do
+    if field in repeated_fields, do: to_core_primitive_list(kid, shape), else: to_core_primitive(kid, shape)
+  end
+
+  defp encode_core_record_field(kid, _field_type, repeated_fields, _field_types, field) do
+    if field in repeated_fields, do: to_core_syntax_list(kid), else: to_core(kid)
+  end
+
+  defp option_kid({:syn_leaf, :option_none, _attrs, :s_opaque}, _inner, _repeated_fields, _field_types),
+    do: {:ctor, option_ctor(:None), []}
+
+  defp option_kid({:syn_node, :option_some, _attrs, [value]}, inner, repeated_fields, field_types),
+    do: {:ctor, option_ctor(:Some), [encode_core_record_field(value, inner, repeated_fields, field_types, nil)]}
+
+  defp option_kid(kid, inner, repeated_fields, field_types),
+    do: {:ctor, option_ctor(:Some), [encode_core_record_field(kid, inner, repeated_fields, field_types, nil)]}
+
+  defp option_ctor(name), do: Cure.Elab.Name.qualify("Std.Option", name)
+
+  @doc "Build field metadata used to encode structured family records."
+  @spec family_field_types([map()]) :: map()
+  def family_field_types(fields) when is_list(fields) do
+    Map.new(fields, fn field ->
+      base =
+        case field.shape do
+          shape when shape in ["Int", "Float", "Atom", "Bool"] -> {:primitive, shape}
+          _ -> :syntax
+        end
+
+      value = if field.cardinality == :optional, do: {:optional, base}, else: base
+      {field.name, value}
+    end)
   end
 
   # The parser keeps one child slot per grammar field, so a repeated field is
@@ -234,6 +522,33 @@ defmodule Cure.Compiler.MacroSyntax do
   defp to_core_syntax_item({:s_syntax, repr}), do: to_core(repr)
   defp to_core_syntax_item(lit), do: to_core({:syn_raw, lit})
 
+  defp to_core_primitive_list({:syn_raw, {:s_list, [{:s_list, items}]}}, shape),
+    do: to_core_list(Enum.map(items, fn item -> to_core_primitive({:syn_raw, item}, shape) end))
+
+  defp to_core_primitive_list({:syn_raw, {:s_list, items}}, shape),
+    do: to_core_list(Enum.map(items, fn item -> to_core_primitive({:syn_raw, item}, shape) end))
+
+  defp to_core_primitive_list(repr, shape), do: to_core_list([to_core_primitive(repr, shape)])
+
+  defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_int, value}}, "Int"), do: {:int_lit, value}
+  defp to_core_primitive({:syn_raw, {:s_int, value}}, "Int"), do: {:int_lit, value}
+  defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_float, value}}, "Float"), do: {:float_lit, value}
+  defp to_core_primitive({:syn_raw, {:s_float, value}}, "Float"), do: {:float_lit, value}
+  defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_atom, value}}, "Atom"), do: {:atom_lit, value}
+  defp to_core_primitive({:syn_raw, {:s_atom, value}}, "Atom"), do: {:atom_lit, value}
+
+  defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_bool, true}}, "Bool"), do: {:ctor, :True, []}
+  defp to_core_primitive({:syn_leaf, :literal, _attrs, {:s_bool, false}}, "Bool"), do: {:ctor, :False, []}
+  defp to_core_primitive({:syn_raw, {:s_bool, true}}, "Bool"), do: {:ctor, :True, []}
+  defp to_core_primitive({:syn_raw, {:s_bool, false}}, "Bool"), do: {:ctor, :False, []}
+  defp to_core_primitive({:syn_raw, {:s_syntax, repr}}, shape), do: to_core_primitive(repr, shape)
+
+  defp to_core_primitive(repr, _shape), do: to_core(repr)
+
+  @doc "Encode a literal capture according to a primitive family shape."
+  @spec to_core_primitive_value(repr(), String.t()) :: Cure.Core.Term.t()
+  def to_core_primitive_value(repr, shape), do: to_core_primitive(repr, shape)
+
   defp context_attr(attrs) do
     case List.keyfind(attrs, :expansion_context, 0) do
       {:expansion_context, {:s_syntax, repr}} -> repr
@@ -243,7 +558,75 @@ defmodule Cure.Compiler.MacroSyntax do
 
   @doc "Decode a normalized Core value of Std.Syntax into the mirror representation."
   @spec from_core(Cure.Core.Term.t()) :: repr() | {:error, term()}
-  def from_core({:ctor, :Node, [{:atom_lit, tag}, attrs, kids]}) do
+  def from_core(term), do: decode_core(canonicalize_core(term))
+
+  @doc """
+  Validate syntax that is about to cross from macro evaluation into elaboration.
+
+  `Std.Syntax.Raw` deliberately permits construction without semantic checks, but
+  raw and quoted values are reflection forms rather than executable expansion
+  nodes. Keeping this boundary here means malformed advanced syntax gets a
+  deterministic macro diagnostic instead of reaching an elaborator catch-all or
+  causing a host exception. `Failure` is intentionally accepted because the
+  legacy direct-Syntax failure protocol decodes it as an author diagnostic.
+  """
+  @spec validate_expansion(repr()) :: :ok | {:error, term()}
+  def validate_expansion(repr), do: validate_expansion_node(repr, [])
+
+  @doc "Decode the source-level MacroResult wrapper, if present."
+  @spec from_core_macro_result(Cure.Core.Term.t()) ::
+          {:expanded, repr()}
+          | {:rejected, [repr()]}
+          | :not_macro_result
+          | {:error, term()}
+  def from_core_macro_result(term) do
+    case canonicalize_core(term) do
+      {:ctor, :"Std.Syntax#Expanded", [syntax]} ->
+        case from_core(syntax) do
+          {:error, _} = error -> error
+          repr -> {:expanded, repr}
+        end
+
+      {:ctor, :"Std.Syntax#Rejected", [diagnostics]} ->
+        case decode_macro_diagnostics(diagnostics) do
+          {:ok, values} -> {:rejected, values}
+          error -> error
+        end
+
+      {:ctor, :"Std.Result#Ok", [syntax]} ->
+        case from_core(syntax) do
+          {:error, _} = error -> error
+          repr -> {:expanded, repr}
+        end
+
+      {:ctor, :"Std.Result#Error", [diagnostic]} ->
+        case decode_macro_diagnostics(diagnostic) do
+          {:ok, values} -> {:rejected, values}
+          error -> error
+        end
+
+      _ ->
+        :not_macro_result
+    end
+  end
+
+  defp decode_macro_diagnostics(value) do
+    case from_core(value) do
+      {:error, _} ->
+        with {:ok, diagnostics} <- from_core_list(value),
+             {:ok, diagnostics} <- map_results(diagnostics, &from_core/1),
+             true <- Enum.all?(diagnostics, &syntax_repr?/1) do
+          {:ok, diagnostics}
+        else
+          _ -> {:error, :invalid_macro_diagnostics}
+        end
+
+      repr when is_tuple(repr) ->
+        if syntax_repr?(repr), do: {:ok, [repr]}, else: {:error, :invalid_macro_diagnostic}
+    end
+  end
+
+  defp decode_core({:ctor, :"Std.Syntax#Node", [{:atom_lit, tag}, attrs, kids]}) do
     with {:ok, attrs} <- from_core_attrs(attrs),
          {:ok, kids} <- from_core_list(kids),
          {:ok, kids} <- map_results(kids, &from_core/1),
@@ -254,7 +637,7 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  def from_core({:ctor, :Leaf, [{:atom_lit, tag}, attrs, lit]}) do
+  defp decode_core({:ctor, :"Std.Syntax#Leaf", [{:atom_lit, tag}, attrs, lit]}) do
     with {:ok, attrs} <- from_core_attrs(attrs),
          {:ok, lit} <- from_core_synlit(lit) do
       {:syn_leaf, tag, attrs, lit}
@@ -263,21 +646,21 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  def from_core({:ctor, :Raw, [lit]}) do
+  defp decode_core({:ctor, :"Std.Syntax#Raw", [lit]}) do
     case from_core_synlit(lit) do
       {:ok, lit} -> {:syn_raw, lit}
       error -> error
     end
   end
 
-  def from_core({:ctor, :Quoted, [syntax]}) do
+  defp decode_core({:ctor, :"Std.Syntax#Quoted", [syntax]}) do
     case from_core(syntax) do
       {:error, _} = error -> error
       syntax -> {:syn_quoted, syntax}
     end
   end
 
-  def from_core({:ctor, :Failure, [{:atom_lit, name}, args]}) do
+  defp decode_core({:ctor, :"Std.Syntax#Failure", [{:atom_lit, name}, args]}) do
     with {:ok, args} <- from_core_list(args),
          {:ok, args} <- map_results(args, &from_core/1),
          true <- Enum.all?(args, &syntax_repr?/1) do
@@ -287,9 +670,228 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  def from_core(other), do: {:error, {:unsupported_syntax_core, other}}
+  defp decode_core(other), do: {:error, {:unsupported_syntax_core, other}}
 
-  defp ctor(name, args), do: {:ctor, name, args}
+  defp validate_expansion_node({:syn_node, tag, attrs, kids}, path)
+       when is_atom(tag) and is_list(attrs) and is_list(kids) do
+    with :ok <- validate_attrs(attrs, path),
+         :ok <- validate_expansion_children(kids, path) do
+      :ok
+    end
+  end
+
+  defp validate_expansion_node({:syn_leaf, tag, attrs, lit}, path)
+       when is_atom(tag) and is_list(attrs) do
+    with :ok <- validate_attrs(attrs, path),
+         :ok <- validate_synlit(lit, path) do
+      :ok
+    end
+  end
+
+  defp validate_expansion_node({:syn_failure, _name, _args}, _path), do: :ok
+
+  defp validate_expansion_node({:syn_raw, _lit}, path),
+    do: {:error, {:raw_syntax_in_expansion, path}}
+
+  defp validate_expansion_node({:syn_quoted, _syntax}, path),
+    do: {:error, {:quoted_syntax_in_expansion, path}}
+
+  defp validate_expansion_node(_other, path),
+    do: {:error, {:malformed_expansion_syntax, path}}
+
+  defp validate_expansion_children(children, path) do
+    children
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {child, index}, :ok ->
+      case validate_expansion_node(child, [{:child, index} | path]) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_attrs(attrs, path) do
+    attrs
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn
+      {{key, value}, index}, :ok when is_atom(key) ->
+        case validate_synlit(value, [{:attribute, key, index} | path]) do
+          :ok -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
+        end
+
+      {_attribute, index}, :ok ->
+        {:halt, {:error, {:malformed_expansion_attribute, [{:attribute, index} | path]}}}
+    end)
+  end
+
+  defp validate_synlit({:s_int, value}, _path) when is_integer(value), do: :ok
+  defp validate_synlit({:s_float, value}, _path) when is_float(value), do: :ok
+  defp validate_synlit({:s_str, value}, _path) when is_binary(value), do: :ok
+  defp validate_synlit({:s_bool, value}, _path) when is_boolean(value), do: :ok
+  defp validate_synlit({:s_atom, value}, _path) when is_atom(value), do: :ok
+
+  defp validate_synlit({:s_list, values}, path) when is_list(values) do
+    Enum.reduce_while(values, :ok, fn value, :ok ->
+      case validate_synlit(value, [{:list_item} | path]) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_synlit({:s_map, pairs}, path) when is_list(pairs) do
+    Enum.reduce_while(pairs, :ok, fn
+      {key, value}, :ok ->
+        with :ok <- validate_synlit(key, [{:map_key} | path]),
+             :ok <- validate_synlit(value, [{:map_value} | path]) do
+          {:cont, :ok}
+        else
+          {:error, _} = error -> {:halt, error}
+        end
+
+      _pair, :ok ->
+        {:halt, {:error, {:malformed_expansion_map, path}}}
+    end)
+  end
+
+  defp validate_synlit(:s_opaque, _path), do: :ok
+
+  defp validate_synlit({:s_syntax, syntax}, path),
+    do: validate_reflected_node(syntax, [{:syntax_literal} | path])
+
+  defp validate_synlit(_other, path),
+    do: {:error, {:malformed_expansion_literal, path}}
+
+  defp validate_reflected_node({:syn_node, tag, attrs, kids}, path)
+       when is_atom(tag) and is_list(attrs) and is_list(kids) do
+    with :ok <- validate_reflected_attrs(attrs, path),
+         :ok <- validate_reflected_children(kids, path) do
+      :ok
+    end
+  end
+
+  defp validate_reflected_node({:syn_leaf, tag, attrs, lit}, path)
+       when is_atom(tag) and is_list(attrs),
+       do: validate_reflected_attrs(attrs, path) |> then(&validate_reflected_literal(&1, lit, path))
+
+  defp validate_reflected_node({:syn_raw, _lit}, _path), do: :ok
+  defp validate_reflected_node({:syn_quoted, _syntax}, _path), do: :ok
+  defp validate_reflected_node({:syn_failure, _name, _args}, _path), do: :ok
+  defp validate_reflected_node(_other, path), do: {:error, {:malformed_reflected_syntax, path}}
+
+  defp validate_reflected_children(children, path) do
+    children
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn {child, index}, :ok ->
+      case validate_reflected_node(child, [{:child, index} | path]) do
+        :ok -> {:cont, :ok}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp validate_reflected_attrs(attrs, path) do
+    attrs
+    |> Enum.with_index()
+    |> Enum.reduce_while(:ok, fn
+      {{key, value}, index}, :ok when is_atom(key) ->
+        case validate_reflected_literal(:ok, value, [{:attribute, key, index} | path]) do
+          :ok -> {:cont, :ok}
+          {:error, _} = error -> {:halt, error}
+        end
+
+      {_attribute, index}, :ok ->
+        {:halt, {:error, {:malformed_reflected_attribute, [{:attribute, index} | path]}}}
+    end)
+  end
+
+  defp validate_reflected_literal(:ok, {:s_syntax, syntax}, path),
+    do: validate_reflected_node(syntax, path)
+
+  defp validate_reflected_literal(:ok, {:s_list, values}, path) when is_list(values),
+    do: Enum.reduce_while(values, :ok, &validate_reflected_literal_item(&1, &2, path))
+
+  defp validate_reflected_literal(:ok, {:s_map, pairs}, path) when is_list(pairs),
+    do: Enum.reduce_while(pairs, :ok, &validate_reflected_pair(&1, &2, path))
+
+  defp validate_reflected_literal(:ok, {:s_int, value}, _path) when is_integer(value), do: :ok
+  defp validate_reflected_literal(:ok, {:s_float, value}, _path) when is_float(value), do: :ok
+  defp validate_reflected_literal(:ok, {:s_str, value}, _path) when is_binary(value), do: :ok
+  defp validate_reflected_literal(:ok, {:s_bool, value}, _path) when is_boolean(value), do: :ok
+  defp validate_reflected_literal(:ok, {:s_atom, value}, _path) when is_atom(value), do: :ok
+  defp validate_reflected_literal(:ok, :s_opaque, _path), do: :ok
+  defp validate_reflected_literal({:error, _} = error, _value, _path), do: error
+  defp validate_reflected_literal(_result, _value, path), do: {:error, {:malformed_reflected_literal, path}}
+
+  defp validate_reflected_literal_item(value, :ok, path),
+    do: validate_reflected_literal(:ok, value, [{:list_item} | path]) |> reduce_validation()
+
+  defp validate_reflected_pair({key, value}, :ok, path) do
+    with :ok <- validate_reflected_literal(:ok, key, [{:map_key} | path]),
+         :ok <- validate_reflected_literal(:ok, value, [{:map_value} | path]) do
+      {:cont, :ok}
+    else
+      {:error, _} = error -> {:halt, error}
+    end
+  end
+
+  defp validate_reflected_pair(_pair, :ok, path),
+    do: {:halt, {:error, {:malformed_reflected_map, path}}}
+
+  defp reduce_validation(:ok), do: {:cont, :ok}
+  defp reduce_validation({:error, _} = error), do: {:halt, error}
+
+  defp ctor(name, args), do: {:ctor, canonical_ctor(name), args}
+
+  defp canonical_ctor(name) when name in [:True, :False],
+    do: Cure.Elab.Name.qualify("Std.Bool", name)
+
+  defp canonical_ctor(name) when name in [:Nil, :Cons],
+    do: Cure.Elab.Name.qualify("Std.List", name)
+
+  defp canonical_ctor(name), do: Cure.Elab.Name.qualify("Std.Syntax", name)
+
+  defp canonicalize_core({:ctor, name, args}) do
+    base = Cure.Elab.Name.base(name) |> String.to_atom()
+    canonical_name = if syntax_ctor?(base), do: canonical_ctor(base), else: name
+    {:ctor, canonical_name, Enum.map(args, &canonicalize_core/1)}
+  end
+
+  defp canonicalize_core({:app, f, a}), do: {:app, canonicalize_core(f), canonicalize_core(a)}
+  defp canonicalize_core({:lam, g, d, b}), do: {:lam, g, canonicalize_core(d), canonicalize_core(b)}
+  defp canonicalize_core({:pi, g, d, c}), do: {:pi, g, canonicalize_core(d), canonicalize_core(c)}
+
+  defp canonicalize_core({:data, n, ps, is}),
+    do: {:data, n, Enum.map(ps, &canonicalize_core/1), Enum.map(is, &canonicalize_core/1)}
+
+  defp canonicalize_core(other), do: other
+
+  defp syntax_ctor?(name),
+    do:
+      name in [
+        :Node,
+        :Leaf,
+        :Raw,
+        :Quoted,
+        :Failure,
+        :KV,
+        :SInt,
+        :SFloat,
+        :SStr,
+        :SBool,
+        :SAtom,
+        :SList,
+        :SSyntax,
+        :SMap,
+        :SOpaque,
+        :SPair,
+        :True,
+        :False,
+        :Nil,
+        :Cons
+      ]
+
   defp atom(value), do: {:atom_lit, value}
 
   defp to_core_attrs(attrs),
@@ -320,7 +922,7 @@ defmodule Cure.Compiler.MacroSyntax do
     with {:ok, entries} <- from_core_list(core),
          {:ok, attrs} <-
            map_results(entries, fn
-             {:ctor, :KV, [{:atom_lit, key}, lit]} ->
+             {:ctor, :"Std.Syntax#KV", [{:atom_lit, key}, lit]} ->
                with {:ok, lit} <- from_core_synlit(lit), do: {key, lit}
 
              _ ->
@@ -332,18 +934,18 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  defp from_core_list({:ctor, :Nil, []}), do: {:ok, []}
+  defp from_core_list({:ctor, :"Std.List#Nil", []}), do: {:ok, []}
 
-  defp from_core_list({:ctor, :Cons, [head, tail]}) do
+  defp from_core_list({:ctor, :"Std.List#Cons", [head, tail]}) do
     with {:ok, rest} <- from_core_list(tail), do: {:ok, [head | rest]}
   end
 
   defp from_core_list(_), do: {:error, :invalid_syntax_list}
 
-  defp from_core_synlit({:ctor, :SInt, [{:int_lit, n}]}), do: {:ok, {:s_int, n}}
-  defp from_core_synlit({:ctor, :SFloat, [{:float_lit, f}]}), do: {:ok, {:s_float, f}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SInt", [{:int_lit, n}]}), do: {:ok, {:s_int, n}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SFloat", [{:float_lit, f}]}), do: {:ok, {:s_float, f}}
 
-  defp from_core_synlit({:ctor, :SStr, [chars]}) do
+  defp from_core_synlit({:ctor, :"Std.Syntax#SStr", [chars]}) do
     with {:ok, chars} <- from_core_list(chars),
          true <- Enum.all?(chars, &match?({:bounded_lit, n} when is_integer(n), &1)) do
       {:ok, {:s_str, chars |> Enum.map(fn {:bounded_lit, n} -> n end) |> List.to_string()}}
@@ -352,35 +954,35 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  defp from_core_synlit({:ctor, :SBool, [{:ctor, :True, []}]}), do: {:ok, {:s_bool, true}}
-  defp from_core_synlit({:ctor, :SBool, [{:ctor, :False, []}]}), do: {:ok, {:s_bool, false}}
-  defp from_core_synlit({:ctor, :SAtom, [{:atom_lit, a}]}), do: {:ok, {:s_atom, a}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SBool", [{:ctor, :"Std.Bool#True", []}]}), do: {:ok, {:s_bool, true}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SBool", [{:ctor, :"Std.Bool#False", []}]}), do: {:ok, {:s_bool, false}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SAtom", [{:atom_lit, a}]}), do: {:ok, {:s_atom, a}}
 
-  defp from_core_synlit({:ctor, :SList, [items]}) do
+  defp from_core_synlit({:ctor, :"Std.Syntax#SList", [items]}) do
     with {:ok, items} <- from_core_list(items),
          {:ok, items} <- map_results(items, &from_core_synlit/1) do
       {:ok, {:s_list, items}}
     end
   end
 
-  defp from_core_synlit({:ctor, :SSyntax, [syntax]}) do
+  defp from_core_synlit({:ctor, :"Std.Syntax#SSyntax", [syntax]}) do
     case from_core(syntax) do
       {:error, _} = error -> error
       syntax -> {:ok, {:s_syntax, syntax}}
     end
   end
 
-  defp from_core_synlit({:ctor, :SMap, [pairs]}) do
+  defp from_core_synlit({:ctor, :"Std.Syntax#SMap", [pairs]}) do
     with {:ok, pairs} <- from_core_list(pairs),
          {:ok, pairs} <- map_results(pairs, &from_core_pair/1) do
       {:ok, {:s_map, pairs}}
     end
   end
 
-  defp from_core_synlit({:ctor, :SOpaque, []}), do: {:ok, :s_opaque}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SOpaque", []}), do: {:ok, :s_opaque}
   defp from_core_synlit(_), do: {:error, :invalid_syntax_literal}
 
-  defp from_core_pair({:ctor, :SPair, [key, value]}) do
+  defp from_core_pair({:ctor, :"Std.Syntax#SPair", [key, value]}) do
     with {:ok, key} <- from_core_synlit(key), {:ok, value} <- from_core_synlit(value), do: {key, value}
   end
 

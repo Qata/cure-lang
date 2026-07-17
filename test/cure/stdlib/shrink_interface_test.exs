@@ -48,8 +48,8 @@ defmodule Cure.Stdlib.ShrinkInterfaceTest do
     """
 
     assert {:ok, env} = Program.elaborate(src)
-    assert :__impl_Shrink_Int_shrink in Program.impl_def_names(env)
-    assert inspect(Map.get(env.defs, :f).body) =~ "__impl_Shrink_Int_shrink"
+    assert :"M#__impl_Shrink_Int_shrink" in Program.impl_def_names(env)
+    assert inspect(Map.get(env.defs, :"M#f").body) =~ "__impl_Shrink_Int_shrink"
   end
 
   test "shrink at a type with no instance is rejected — what ∀t. t -> List(t) could never do" do

@@ -96,12 +96,16 @@ defmodule Cure.Core.Builtins do
   """
   @spec validate!(Env.t(), atom(), atom()) :: :ok
   def validate!(%Env{} = env, key, family_id) do
-    expected = Enum.sort(schema(key))
+    expected =
+      schema(key)
+      |> Enum.map(fn {name, arity} -> {Atom.to_string(name), arity} end)
+      |> Enum.sort()
+
     ctors = Inductive.ctors_of(env, family_id) || []
 
     actual =
       ctors
-      |> Enum.map(fn c -> {c.name, length(Map.get(c, :args, []))} end)
+      |> Enum.map(fn c -> {Cure.Elab.Name.base(c.name), length(Map.get(c, :args, []))} end)
       |> Enum.sort()
 
     if actual == expected do
@@ -123,11 +127,11 @@ defmodule Cure.Core.Builtins do
   @spec seed(Env.t(), MapSet.t()) :: Env.t()
   def seed(%Env{} = env, exclude \\ MapSet.new()) do
     env
-    |> maybe_seed(:bool, bool_family(), bool_ctors(), exclude)
-    |> maybe_seed(:nat, nat_family(), nat_ctors(), exclude)
-    |> maybe_seed(:eq, eq_family(), eq_ctors(), exclude)
-    |> maybe_seed(:sigma, sigma_family(), sigma_ctors(), exclude)
-    |> maybe_seed(:list, list_family(), list_ctors(), exclude)
+    |> seed_builtin(:bool, exclude)
+    |> seed_builtin(:nat, exclude)
+    |> seed_builtin(:eq, exclude)
+    |> seed_builtin(:sigma, exclude)
+    |> seed_builtin(:list, exclude)
     |> seed_ops()
     |> seed_primitives()
   end
@@ -181,7 +185,8 @@ defmodule Cure.Core.Builtins do
   # `maybe_seed/5` excludes precisely on `family.name`, so the family the module goes on to
   # declare carries the same name the seed would have used. The canonical name is therefore the
   # correct snapshot under both orders, and the op signatures no longer vary with seeding order.
-  defp bool_family_id(env), do: Inductive.builtin(env, :bool) || bool_family().name
+  defp bool_family_id(env),
+    do: Inductive.builtin(env, :bool) || bool_family(Env.with_owner(env, "Std.Bool")).name
 
   # struct_eq/struct_ne : Pi(a: Type0). Pi(_: a). Pi(_: a). Bool — under the
   # second binder the type param a is {:var, 0}; under the third it is {:var, 1}.
@@ -195,8 +200,8 @@ defmodule Cure.Core.Builtins do
 
     Enum.reduce(@struct_ops, env, fn {name, op_key}, acc ->
       acc
-      |> Env.add_def(name, ty, nil, [:erased, :unrestricted, :unrestricted])
-      |> Env.register_builtin_op(name, op_key)
+      |> Env.add_def(builtin_op_name(name), ty, nil, [:erased, :unrestricted, :unrestricted])
+      |> Env.register_builtin_op(builtin_op_name(name), op_key)
     end)
   end
 
@@ -206,8 +211,8 @@ defmodule Cure.Core.Builtins do
       ty = {:pi, Grade.unrestricted(), dom, {:pi, Grade.unrestricted(), dom, cod}}
 
       acc
-      |> Env.add_def(name, ty, nil)
-      |> Env.register_builtin_op(name, op_key)
+      |> Env.add_def(builtin_op_name(name), ty, nil)
+      |> Env.register_builtin_op(builtin_op_name(name), op_key)
     end)
   end
 
@@ -216,22 +221,77 @@ defmodule Cure.Core.Builtins do
       ty = {:pi, Grade.unrestricted(), dom, dom}
 
       acc
-      |> Env.add_def(name, ty, nil)
-      |> Env.register_builtin_op(name, op_key)
+      |> Env.add_def(builtin_op_name(name), ty, nil)
+      |> Env.register_builtin_op(builtin_op_name(name), op_key)
     end)
   end
+
+  defp builtin_op_name(name), do: Cure.Elab.Name.qualify("Std.Builtin", name)
 
   # A builtin whose bare family name is locally declared by the compiled module
   # is NOT seeded: the module's own declaration is the canonical family, and
   # pre-seeding a same-named family would leave the seed's constructors in
   # `ctor_to_family` (so a `match` on the local family reads as non-exhaustive).
   defp maybe_seed(env, key, family, ctors, exclude) do
-    if MapSet.member?(exclude, family.name) do
+    if MapSet.member?(exclude, family.name) or
+         MapSet.member?(exclude, String.to_atom(Cure.Elab.Name.base(family.name))) do
       env
     else
       declare_and_register(env, key, family, ctors)
     end
   end
+
+  defp seed_builtin(env, :bool, exclude),
+    do:
+      seed_builtin(
+        env,
+        :bool,
+        bool_family(Env.with_owner(env, "Std.Bool")),
+        bool_ctors(Env.with_owner(env, "Std.Bool")),
+        exclude
+      )
+
+  defp seed_builtin(env, :nat, exclude),
+    do:
+      seed_builtin(
+        env,
+        :nat,
+        nat_family(Env.with_owner(env, "Std.Nat")),
+        nat_ctors(Env.with_owner(env, "Std.Nat")),
+        exclude
+      )
+
+  defp seed_builtin(env, :eq, exclude),
+    do:
+      seed_builtin(
+        env,
+        :eq,
+        eq_family(Env.with_owner(env, "Std.Equivalent")),
+        eq_ctors(Env.with_owner(env, "Std.Equivalent")),
+        exclude
+      )
+
+  defp seed_builtin(env, :sigma, exclude),
+    do:
+      seed_builtin(
+        env,
+        :sigma,
+        sigma_family(Env.with_owner(env, "Std.Sigma")),
+        sigma_ctors(Env.with_owner(env, "Std.Sigma")),
+        exclude
+      )
+
+  defp seed_builtin(env, :list, exclude),
+    do:
+      seed_builtin(
+        env,
+        :list,
+        list_family(Env.with_owner(env, "Std.List")),
+        list_ctors(Env.with_owner(env, "Std.List")),
+        exclude
+      )
+
+  defp seed_builtin(env, key, family, ctors, exclude), do: maybe_seed(env, key, family, ctors, exclude)
 
   defp declare_and_register(env, key, family, ctors) do
     fid = family.name
@@ -241,21 +301,21 @@ defmodule Cure.Core.Builtins do
   end
 
   # Bool : Type0 = False | True  (both nullary)
-  defp bool_family, do: Inductive.family(:Bool, [], [], 0)
+  defp bool_family(env), do: Inductive.family(Env.owned_name(env, :Bool), [], [], 0)
 
-  defp bool_ctors,
+  defp bool_ctors(env),
     do: [
-      Inductive.ctor(:False, [], []),
-      Inductive.ctor(:True, [], [])
+      Inductive.ctor(Env.owned_name(env, :False), [], []),
+      Inductive.ctor(Env.owned_name(env, :True), [], [])
     ]
 
   # Nat : Type0 = Z | S(Nat)  (S's field references the Nat family)
-  defp nat_family, do: Inductive.family(:Nat, [], [], 0)
+  defp nat_family(env), do: Inductive.family(Env.owned_name(env, :Nat), [], [], 0)
 
-  defp nat_ctors,
+  defp nat_ctors(env),
     do: [
-      Inductive.ctor(:Z, [], []),
-      Inductive.ctor(:S, [{:n, {:data, :Nat, [], []}}], [])
+      Inductive.ctor(Env.owned_name(env, :Z), [], []),
+      Inductive.ctor(Env.owned_name(env, :S), [{:n, {:data, Env.owned_name(env, :Nat), [], []}}], [])
     ]
 
   # Equivalent : (a : Type) -> a -> a -> Type   (1 param `a`, 2 indices `x y : a`)
@@ -269,12 +329,12 @@ defmodule Cure.Core.Builtins do
   # unification when matching `reflexive` and dropped at runtime, while the surface
   # still supplies it explicitly at construction (`reflexive(x)`). K/UIP is
   # inherited from the existing index unifier — operator-signed-off 2026-07-04.
-  defp eq_family,
-    do: Inductive.family(:Equivalent, [a: {:type, 0}], [x: {:var, 0}, y: {:var, 1}], 0)
+  defp eq_family(env),
+    do: Inductive.family(Env.owned_name(env, :Equivalent), [a: {:type, 0}], [x: {:var, 0}, y: {:var, 1}], 0)
 
-  defp eq_ctors,
+  defp eq_ctors(env),
     do: [
-      Inductive.ctor(:reflexive, [w: {:var, 0}], [{:var, 0}, {:var, 0}], [:erased], [{:var, 1}])
+      Inductive.ctor(Env.owned_name(env, :reflexive), [w: {:var, 0}], [{:var, 0}, {:var, 0}], [:erased], [{:var, 1}])
     ]
 
   # Sigma : (a : Type) -> (b : (a) -> Type) -> Type   (2 params, no indices)
@@ -283,13 +343,19 @@ defmodule Cure.Core.Builtins do
   # primitive {:sigma}/{:pair}/{:fst}/{:snd} Core forms. Level-0 like Equivalent.
   # Source of truth is the @builtin(:sigma) decl in Std.Sigma; this seed is its
   # byte-for-byte mirror, pinned by the conformance drift test.
-  defp sigma_family,
-    do: Inductive.family(:Sigma, [a: {:type, 0}, b: {:pi, Grade.unrestricted(), {:var, 0}, {:type, 0}}], [], 0)
+  defp sigma_family(env),
+    do:
+      Inductive.family(
+        Env.owned_name(env, :Sigma),
+        [a: {:type, 0}, b: {:pi, Grade.unrestricted(), {:var, 0}, {:type, 0}}],
+        [],
+        0
+      )
 
-  defp sigma_ctors,
+  defp sigma_ctors(env),
     do: [
       Inductive.ctor(
-        :mk_pair,
+        Env.owned_name(env, :mk_pair),
         # Second field `b(x)` is anonymous in the surface ctor sig, so the
         # elaborator auto-names it `_a1` (positional; the drift test pins this).
         [x: {:var, 1}, _a1: {:app, {:var, 1}, {:var, 0}}],
@@ -306,18 +372,18 @@ defmodule Cure.Core.Builtins do
   # references List itself, like nat's S). Source of truth is the @builtin(:list)
   # decl in Std.List; this seed is its byte-for-byte mirror, pinned by
   # builtin_list_drift_test.exs.
-  defp list_family, do: Inductive.family(:List, [a: {:type, 0}], [], 0)
+  defp list_family(env), do: Inductive.family(Env.owned_name(env, :List), [a: {:type, 0}], [], 0)
 
   # Field names auto-generated positionally by the elaborator (`_a0`/`_a1`); the
   # result-param term is the family's own param `a` reindexed under the ctor's
   # field binders (Nil: {:var, 0}; Cons: {:var, 2} beneath its two fields). The
   # drift test pins both spellings against the source declaration.
-  defp list_ctors,
+  defp list_ctors(env),
     do: [
-      Inductive.ctor(:Nil, [], [], [], [{:var, 0}]),
+      Inductive.ctor(Env.owned_name(env, :Nil), [], [], [], [{:var, 0}]),
       Inductive.ctor(
-        :Cons,
-        [_a0: {:var, 0}, _a1: {:data, :List, [{:var, 1}], []}],
+        Env.owned_name(env, :Cons),
+        [_a0: {:var, 0}, _a1: {:data, Env.owned_name(env, :List), [{:var, 1}], []}],
         [],
         [:unrestricted, :unrestricted],
         [{:var, 2}]

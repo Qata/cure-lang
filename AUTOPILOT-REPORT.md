@@ -1,57 +1,87 @@
-# Autopilot Completion Report — Cure Editions
+# Autopilot completion report — actor-macro consolidation (Stage 1: actor)
 
-**Branch:** `autopilot/editions` (worktree `.claude/worktrees/editions`)
-**Status:** ✅ Complete — full suite green, ready for review & merge. **NOT auto-merged.**
-**Final gate:** `MIX_ENV=test mix test` → **3817 passed, 0 failures** (3 doctests, 3814 tests; baseline before this work was 3778). Antigen shape-coverage 309/309.
+**Branch:** `autopilot/actor-macro-consolidation` (cut from HEAD; **NOT auto-merged**)
+**Run date:** 2026-07-16
+**Outcome:** ✅ Complete. All planned Stage-1 (actor) tasks landed green; both
+full-suite failures classified as **pre-existing and unrelated** to this run.
 
-> The previous run's report (kernel-parity-batch) that this file replaces remains in git history.
+> Replaces the earlier `editions`-run report carried in via the HEAD cut (that
+> report remains in git history).
 
-## What shipped
+## What this run delivered
 
-A Rust-style **editions** system layered over Cure's migration facility (spec scope "C"): editions gate the parser keyword set and carry per-rule provenance; `cure migrate` rewrites both keyword and stdlib changes across an edition boundary and can stamp the new edition; there is no edition-conditional stdlib resolver (renamed names error with a fix-hint). Edition identity is a calendar-year string; precedence is file `@edition("YYYY")` pragma > `Cure.toml` `[project].edition` > compiler default. Editions begin at "2026"; `proto`→`interface` is the first forward deprecation (`enforced_in: nil`).
+Consolidated `lib/std/actor.cure`'s expansion path toward ONE quote-templated
+backend (`derive_actor_family` → `emit_actor_parts` / `emit_actor_call_parts`),
+per the approved Lean-style 3-tier macro design. **Stage 1 (actor) scope only.**
 
-## Stage-by-stage outcome
+| Task | Deliverable | Commit |
+|------|-------------|--------|
+| 1 (1a) | Fold `derive_actor` into `derive_actor_family` (single entry) | `fa270d5a` |
+| 2 (1b) | Templatize the 4 fixed-param callbacks with `quote` | `7511959e` |
+| 3 (1d) | `body Declarations` passthrough into the generated module | `a8fe90fe` |
 
-| Stage | Outcome | Commit(s) |
-|-------|---------|-----------|
-| 0 — Brainstorm + spec | Design approved by operator; spec written | `1a3dc93` |
-| 1 — Spec review (Sonnet, recursive-skeptical) | Hardened to convergence | `fe97bc2` |
-| 2 — Plan (writing-plans) | 13-task plan across 7 phases | `426fcf9` |
-| 3 — Plan review (Sonnet, recursive-skeptical) | Hardened to convergence | `bf5b606` |
-| 4 — Execute (Opus, TDD) | 12 task commits (Tasks 3+4 atomic), all green | `0fb93db` … `813093d` |
-| 5 — Verify + report | Full suite green; this report; notify | — |
+Task 3 required a P-layer parser addition — a `parse_family_field_value` clause
+for `%{shape: "Declarations"}` using `parse_definition_block`, so a `body` block
+captures *declarations* rather than expressions. Spec §9 permits P-layer
+changes; **TCB (`lib/cure/core/*`) untouched.**
 
-## Task commits (Stage 4)
+## Stage-by-stage trail
 
-- `0fb93db` Task 1 — `Cure.Edition` identity, ordering, validation
-- `d5ac15a` Task 2 — `resolve/1` precedence + `Cure.toml [project].edition`
-- `309bcc6` Tasks 3+4 (atomic) — `tier`/`since`/`enforced_in` provenance replaces `tolerate_safe?` on `Rule`; 5 rules re-tagged
-- `b2dca93` Task 5 — edition-derived keyword set in the lexer
-- `d2f00bf` Task 6 — thread `:edition` through the parser; enforce `@edition` placement
-- `ed2014e` Task 7 — `run_to_fixpoint/2` with reparse verify + `@max_passes 8` backstop
-- `30ff52c` Task 8 — monotone-rewrite property gate over the 44-file stdlib corpus
-- `9231a9a` Task 9 — `proto`/`impl` → `interface`/`implementation` rule (first `retires_keywords` rule) + `parse_impl` `for_type` fix
-- `efba21f` Task 10 — edition-crossing rule selection + lossless `Cure.toml` edition writer
-- `2be6ab5` Task 11 — edition-aware two-phase `cure migrate` (fixpoint rewrite + edition bump, `--strict`, `--edition`)
-- `813093d` Task 12 — Antigen coverage probes for the edition keyword-set + migrate fixpoint (manifest 307→309)
-- Task 13 — full-suite gate: no fixups needed, no commit (tree already green)
+| Stage | Action | Commit |
+|-------|--------|--------|
+| 0 | Spec written | `ad343b07` |
+| 1 | Spec hardened (recursive-skeptical-review, Sonnet) | `441cbd80` |
+| 2 | Plan written | `f6ddf778` |
+| 3 | Plan hardened (recursive-skeptical-review, Sonnet) | `53b63996` |
+| 4 | Execute (inline TDD, Opus) | `fa270d5a`, `7511959e`, `a8fe90fe` |
+| 5 | Code review (recursive-skeptical-review, Sonnet) | zero confirmed findings — no fix commit |
 
-## Notable in-flight corrections (subagents caught real defects)
+Diff scope (code): `lib/cure/compiler/parser.ex` (+7), `lib/std/actor.cure`
+(refactor, net −20), `test/cure/compiler/actor_computed_test.exs` (+21, one new
+immutable behavioral test — "structured actor threads a body declaration into
+the generated module"). 3 files.
 
-1. **Task 7** — the plan's convergence check `new_ast == ast` was provably wrong: paired flip rules cancel to identity, so pass 1 looks converged. Fixed with a per-step `rewrote?` flag (converge only when AST unchanged AND no rule rewrote), so pure `:warn` rules don't loop forever.
-2. **Task 9** — the plan pinned `proto→interface` as tier `:machine`, but `:machine` folds rewrites into `cure build`, which would reroute the stdlib's `Ord`/`Show` to the dependent pipeline that cannot yet compile them (the `<`/`<>` blockers), reddening every build. Downgraded to `:review` (source untouched under `:safe_only`; `cure migrate` still rewrites), with a promote-to-`:machine` note. Also added `Trivia.carry/2` to preserve doc-comments the naive rewrite dropped (caught by the monotone gate).
-3. **Task 12** — the plan expected a raised Antigen floor, but `Cure.Edition`/`Cure.Migrate` aren't among the 8 cover-compiled kernel modules, so the floor is unaffected. Probes are still legitimate soundness assertions gated by the CoverManifest; source trusted over the plan.
+## Full-suite verification
 
-Every deviation trusted real source over a plan snippet and is documented in its commit; no behavioral test was weakened (the only immutable-test edits were plan-sanctioned: Tasks 3+4 fixture keys and Task 11's stale `--strict` pin, both re-asserting the new contract).
+**Final state (after merging `feature/idris-parity`, merge commit `78c3455a`):**
+`mix test` → **4306 passed, 1 skipped, 0 failures** (Antigen shape-coverage
+318/318; 156 expected immune responses). Fully green.
 
-## Ghost-writing constraint
+At the end of the autopilot run itself (before the merge) the suite showed
+**4262/4264 passed, 1 skipped, 2 failures**, both classified pre-existing and
+unrelated to this run's diff — and **both were subsequently resolved by the
+`feature/idris-parity` merge**, confirming neither was a regression from this
+run:
 
-All 15 run commits authored as `Made In Heaven <madeinheaven@madeinheaven.com>`; a trailer scan across all bodies found **zero** `Co-Authored-By` / `Claude-Session` / "Generated with" trailers.
+1. **`Cure.Migrate.MonotonePropertyTest` — non-monotone on `lib/std/actor.cure`.**
+   Classified empirically: reverting `lib/std/actor.cure` to baseline
+   `53b63996` and re-running the monotone test **still failed identically**, so
+   the pre-existing `quote`/`$()` sites — not Task 1/2/3 — were the cause. The
+   `feature/idris-parity` printer fixes (+74 lines in
+   `lib/cure/compiler/printer.ex`) make the round-trip idempotent; the test now
+   passes.
 
-## Follow-on (filed, not done)
+2. **`Cure.Elab.UnionTest` — `:"Cure.Std.Map".get/2 is undefined or private`.**
+   The diff touched nothing near `Std.Map`/union elaboration; resolved by the
+   idris-parity work brought in by the merge.
 
-- **Session task #11** — a migration rule to rewrite tuple **types** in signatures from parenthesized `(A, B)` to `%[A, B]` (the unified-tuple surface), requested mid-run. Investigation attached to the task: neither branch's stdlib carries the syntax in type position, so the change lives in the parser's tuple-type grammar; the executor should start from the parser diff (main vs `feature/idris-parity`) and derive the rewrite from real AST node shapes. Sequenced after this editions work so it inherits the tier/provenance machinery. **Not part of this branch.**
+## Deferred (NOT in this run — future stages)
 
-## Next step for the operator
+- **1c** — whole-module `quote` (module-level template).
+- **1e** — terse Tier-1 shorthand delegating to the expander, deletion of the
+  legacy Gen A positional `becomes` template rules, and demo migration.
+- **Stage 2** — apply the same consolidation to `fsm` / `supervisor` /
+  `application` macros.
+- **Stage 3** — typed Tier-3 elaborator (Lean-style MetaM direction).
 
-Review and merge `autopilot/editions` into `feature/idris-parity`. The worktree is preserved.
+## Post-run merge
+
+`feature/idris-parity` was merged into this branch (`78c3455a`, ghost-authored,
+no conflicts) to pick up its `printer.ex` fixes. The merge left `actor.cure`
+untouched, so the Stage-1 actor work is intact, and it brought the tree to
+**0 failures** (see Full-suite verification above).
+
+## Next action for the operator
+
+Review and merge `autopilot/actor-macro-consolidation`. The tree is fully green
+(0 failures) after the `feature/idris-parity` merge.

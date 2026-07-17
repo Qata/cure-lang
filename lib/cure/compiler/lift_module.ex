@@ -7,7 +7,7 @@ defmodule Cure.Compiler.LiftModule do
   through the same dependent elaborator and emitter as the enclosing module.
   """
 
-  alias Cure.Compiler.MacroSyntax
+  alias Cure.Compiler.{MacroFamily, MacroSyntax}
   alias Cure.Elab.{Emit, Program}
 
   @type unit :: %{
@@ -40,6 +40,13 @@ defmodule Cure.Compiler.LiftModule do
   # (`State`, `Message`, `start_link`) that its callbacks are written against,
   # and an enclosing definition of the same name must not displace them.
   defp inherit_scope(request, inherited) do
+    inherited =
+      if Map.get(request, :inherit_imports, true) do
+        inherited
+      else
+        Enum.reject(inherited, &match?({:import, _, _}, &1))
+      end
+
     taken = taken_names(request)
 
     inherited =
@@ -53,7 +60,13 @@ defmodule Cure.Compiler.LiftModule do
     # `typealias Message = Tick` needs `Tick` already bound — unlike an inductive,
     # a type alias has no forward-reference pre-pass).
     declarations = inherited ++ request.declarations
-    imports = Enum.uniq(request.imports ++ imports_from_declarations(inherited))
+
+    imports =
+      if Map.get(request, :inherit_imports, true) do
+        Enum.uniq(request.imports ++ imports_from_declarations(inherited))
+      else
+        request.imports
+      end
 
     %{request | declarations: declarations, imports: imports, dependencies: imports}
   end
@@ -82,32 +95,18 @@ defmodule Cure.Compiler.LiftModule do
   # record here; otherwise an inherited macro builder's `input.field` projection
   # is rechecked without the record family in the lifted environment.
   defp unit_declarations({:macro_def, meta, rules}) when is_list(meta) and is_list(rules) do
-    rules
+    MacroFamily.lowered_rules(meta, rules)
     |> Enum.filter(&(&1[:kind] == :computed))
     |> Enum.uniq_by(&Map.get(&1, :syntax_type))
-    |> Enum.map(fn rule ->
-      fields =
-        rule
-        |> Map.get(:syntax_fields, [])
-        |> MacroSyntax.record_fields()
-        |> Enum.map(fn field ->
-          {:param, [type: macro_syntax_field_type(field, rule)], field}
-        end)
-
-      {:container,
-       [
-         container_type: :struct,
-         name: Map.fetch!(rule, :syntax_type),
-         macro_generated: true,
-         line: Keyword.get(meta, :line, 0),
-         col: Keyword.get(meta, :col, 0)
-       ], fields}
+    |> Enum.flat_map(fn rule ->
+      MacroFamily.generated_record_declarations(meta, rule)
+      |> Enum.map(&append_context_field(&1, rule))
     end)
   end
 
   defp unit_declarations({tag, meta, _} = node)
        when tag in [:import, :indexed_type, :function_def] and is_list(meta),
-       do: [node]
+       do: [normalize_generated_declaration(node)]
 
   defp unit_declarations({:type_annotation, meta, _} = node) when is_list(meta) do
     if Keyword.has_key?(meta, :name) and not Keyword.get(meta, :refinement, false),
@@ -117,12 +116,30 @@ defmodule Cure.Compiler.LiftModule do
 
   defp unit_declarations(_other), do: []
 
-  defp macro_syntax_field_type(field, rule) do
-    if field in Map.get(rule, :syntax_repeated_fields, []) do
-      {:function_call, [name: "List"], [{:variable, [scope: :local], "Syntax"}]}
+  defp append_context_field({:container, meta, fields}, rule) do
+    if Keyword.get(meta, :name) == Map.get(rule, :syntax_type) do
+      context = {:param, [type: {:variable, [scope: :local], "Syntax"}], MacroSyntax.context_field()}
+      {:container, meta, fields ++ [context]}
     else
-      {:variable, [scope: :local], "Syntax"}
+      {:container, meta, fields}
     end
+  end
+
+  defp normalize_generated_declaration({:function_def, meta, [body]}) do
+    params = Keyword.get(meta, :params, [])
+
+    if Enum.all?(params, &match?({:param, _, []}, &1)) do
+      params = Enum.map(params, &normalize_generated_param/1)
+      {:function_def, Keyword.put(meta, :params, params), [body]}
+    else
+      {:function_def, meta, [body]}
+    end
+  end
+
+  defp normalize_generated_declaration(node), do: node
+
+  defp normalize_generated_param({:param, meta, []}) do
+    {:param, [type: Keyword.fetch!(meta, :type)], Keyword.fetch!(meta, :name)}
   end
 
   defp declared_name({:import, _meta, _children}), do: nil
@@ -140,6 +157,9 @@ defmodule Cure.Compiler.LiftModule do
          behaviour when is_atom(behaviour) <- Keyword.get(meta, :behaviour),
          callbacks when is_list(callbacks) <- Keyword.get(meta, :callbacks, []),
          declarations when is_list(declarations) <- Keyword.get(meta, :declarations, []),
+         inherit_imports when is_boolean(inherit_imports) <- Keyword.get(meta, :inherit_imports, true),
+         declarations = MacroSyntax.lower_internal_tree(declarations),
+         declarations = Enum.map(declarations, &normalize_generated_declaration/1),
          :ok <- validate_module_name(module),
          :ok <- validate_behaviour(behaviour),
          :ok <- validate_callbacks(callbacks),
@@ -154,6 +174,7 @@ defmodule Cure.Compiler.LiftModule do
          callbacks: callbacks,
          declarations: declarations,
          imports: imports,
+         inherit_imports: inherit_imports,
          dependencies: imports,
          source_provenance: Keyword.get(meta, :source_provenance)
        }}
@@ -170,6 +191,11 @@ defmodule Cure.Compiler.LiftModule do
   # behavior-specific meaning here.
   defp normalize_module_name(module) when is_binary(module), do: {:ok, module}
   defp normalize_module_name(module) when is_atom(module), do: {:ok, Atom.to_string(module)}
+
+  defp normalize_module_name(module) when is_list(module) do
+    if Enum.all?(module, &is_integer/1), do: {:ok, List.to_string(module)}, else: {:error, :invalid_lift_module_ast}
+  end
+
   defp normalize_module_name(_module), do: {:error, :invalid_lift_module_ast}
 
   @spec strip(term()) :: term()
@@ -191,8 +217,7 @@ defmodule Cure.Compiler.LiftModule do
   def emit(%{module: module, behaviour: behaviour} = request) do
     with {:ok, module_ast} <- ordinary_module_ast(request),
          {:ok, env, local_defs} <- Program.check_ast_with_locals(module_ast),
-         origins = Program.import_origins(module_ast),
-         {:ok, forms} <- Emit.compile_forms(env, Program.module_atom(module_ast), local_defs, origins) do
+         {:ok, forms} <- Emit.compile_forms(env, Program.module_atom(module_ast), local_defs) do
       {:ok,
        %{
          module: Program.module_atom(module_ast),

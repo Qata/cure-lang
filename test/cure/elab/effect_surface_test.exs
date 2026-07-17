@@ -42,7 +42,7 @@ defmodule Cure.Elab.EffectSurfaceTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert {:effect_type, {:data, :Unit, [], []}} = type_of(env, :f)
+      assert {:effect_type, {:data, :"Std.Unit#Unit", [], []}} = type_of(env, :f)
     end
 
     test "an effectful @extern registers a postulate whose type ends in {:effect_type, …}" do
@@ -54,7 +54,7 @@ defmodule Cure.Elab.EffectSurfaceTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert {:effect_type, {:data, :Unit, [], []}} = type_of(env, :sched_yield)
+      assert {:effect_type, {:data, :"Std.Unit#Unit", [], []}} = type_of(env, :sched_yield)
       assert {:extern, {:erlang, :yield, 0}} = Env.get_def(env, :sched_yield).body
     end
 
@@ -82,7 +82,7 @@ defmodule Cure.Elab.EffectSurfaceTest do
       inner = {:function_call, [name: "List"], [{:variable, [scope: :local], "Int"}]}
       ast = {:function_call, [name: "Effect"], [inner]}
 
-      assert {:ok, {:effect_type, {:data, :List, [{:int_type}], []}}} =
+      assert {:ok, {:effect_type, {:data, :"Std.List#List", [{:int_type}], []}}} =
                Declarations.lower_type(ast, [], prelude_env())
     end
   end

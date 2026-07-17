@@ -303,6 +303,18 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     assert parse!(out, "pi.cure")
   end
 
+  test "a dependent function-valued GADT field retains its outer grouping" do
+    src = """
+    mod M
+      type Acc(a: Type) indices (xs: List(a))
+        MkAcc : (descend: ((rest: List(a)) -> Acc(a, rest))) -> Acc(a, xs)
+    """
+
+    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "gadt_pi.cure"))
+    assert out =~ "(descend: ((rest: List(a)) -> Acc(a, rest)))"
+    assert parse!(out, "gadt_pi.cure")
+  end
+
   test "sigma type round-trips" do
     src = """
     mod M

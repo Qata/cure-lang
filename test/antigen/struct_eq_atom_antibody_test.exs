@@ -15,21 +15,24 @@ defmodule Antigen.StructEqAtomAntibodyTest do
   defp app3(global, type, left, right), do: {:app, app2(global, type, left), right}
 
   test "known Atom literals reduce through the shared primitive fold" do
-    assert {:ctor, :True, []} =
+    true_ctor = Cure.Elab.Name.qualify("Std.Bool", :True)
+    false_ctor = Cure.Elab.Name.qualify("Std.Bool", :False)
+
+    assert {:ctor, ^true_ctor, []} =
              Normalise.nf(
                ctx(),
                app3(:struct_eq, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :node}),
                delta: :certified
              )
 
-    assert {:ctor, :False, []} =
+    assert {:ctor, ^false_ctor, []} =
              Normalise.nf(
                ctx(),
                app3(:struct_eq, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :leaf}),
                delta: :certified
              )
 
-    assert {:ctor, :True, []} =
+    assert {:ctor, ^true_ctor, []} =
              Normalise.nf(
                ctx(),
                app3(:struct_ne, {:atom_type}, {:atom_lit, :node}, {:atom_lit, :leaf}),

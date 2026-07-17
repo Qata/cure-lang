@@ -1,0 +1,77 @@
+@group(:concurrency)
+mod Std.Otp.Unlink
+  ## LINK CANCELLATION — `unlink`, completing the link lifecycle of `Std.Otp.Link`
+  ## (build-out map G3 remainder; the bidirectional companion to `Std.Otp.Demonitor`).
+  ##
+  ## `Std.Otp.Link` established a bidirectional link and showed a peer's death is safe under
+  ## BOTH trap outcomes (a trapping process gets a well-typed `EXIT` message; a non-trapping
+  ## one propagates to `Dead`). `unlink` is the inverse: it SEVERS the link so a peer's death
+  ## drives neither outcome. The typing makes this observable — a `LinkRef` is indexed by a
+  ## lifecycle state (`Linked`/`Unlinked`); `unlink` moves `Linked → Unlinked`, and the death
+  ## step (`SExitTrap`/`SExitProp`) REQUIRES a `Linked` ref. So "an exit signal delivered
+  ## after `unlink`" is unconstructible — neither the message nor the death can arise.
+  ##
+  ## This is the exact shape of `Std.Otp.Demonitor` (Active/Removed monitor) carried over to
+  ## the TRAP-FLAGGED link: a `Linked` ref still dispatches on the trap flag, so the module
+  ## keeps `Std.Otp.Link`'s message-vs-death distinction while adding the severable lifecycle.
+  ## Completes the link lifecycle: establish (`LinkedTrap`/`LinkedNoTrap`) → observe
+  ## (`SExitTrap`/`SExitProp` / preservation) → cancel (`unlink`).
+  ##
+  ## **Honest scope.** Single link; `EXIT` as a bare tag (from/reason payload abstracted);
+  ## `Dead` terminal (cascading-exit liveness is the next step). Types the discipline that an
+  ## UNLINKED ref originates no exit signal, message or death.
+
+  type Tag = TInc | TQuery | TExit
+  type TagList = TNil | TCons(Tag, TagList)
+
+  type Accepted indices (t: Tag)
+    AccInc   : Accepted(TInc)
+    AccQuery : Accepted(TQuery)
+    AccExit  : Accepted(TExit)
+
+  type AllAccepted indices (ts: TagList)
+    AANil  : AllAccepted(TNil)
+    AACons : Accepted(t) -> AllAccepted(rest) -> AllAccepted(TCons(t, rest))
+
+  ## Whether a process traps exits — kept from `Std.Otp.Link` so a live link still dispatches
+  ## message-vs-death.
+  type Trap = Trapping | NotTrapping
+  type Proc = Alive(TagList, TagList, Trap) | Dead
+  type WTP indices (p: Proc)
+    WTAlive : AllAccepted(e) -> AllAccepted(m) -> WTP(Alive(e, m, tr))
+    WTDead  : WTP(Dead)
+
+  ## A link's lifecycle state.
+  type LState = Linked | Unlinked
+
+  ## A link reference, indexed by lifecycle. A LINKED ref is either a trapping link (carrying
+  ## the `Accepted(TExit)` proof, as in `Std.Otp.Link.LinkTrap`) or a non-trapping one; an
+  ## UNLINKED ref carries no delivery evidence at all.
+  type LinkRef indices (s: LState)
+    LinkedTrap   : Accepted(TExit) -> LinkRef(Linked)
+    LinkedNoTrap : LinkRef(Linked)
+    Severed      : LinkRef(Unlinked)
+
+  ## `unlink`: a linked ref (either trap variant) becomes severed — no exit signal will fire
+  ## through it, message or death.
+  fn unlink(l: LinkRef(Linked)) -> LinkRef(Unlinked) = Severed
+
+  ## The reduction on a linked peer's death, GATED on a `Linked` ref and dispatched by the
+  ## trap flag: trapping delivers `EXIT` as a message; not-trapping propagates to `Dead`. A
+  ## severed (`Unlinked`) ref cannot be passed here, so no exit arises after `unlink`.
+  type Step indices (before: Proc, after: Proc)
+    SExitTrap : LinkRef(Linked) -> Accepted(TExit) -> Step(Alive(e, m, Trapping), Alive(TCons(TExit, e), m, Trapping))
+    SExitProp : LinkRef(Linked) -> Step(Alive(e, m, NotTrapping), Dead)
+
+  ## **PRESERVATION.** Either outcome of a peer's death through a still-`Linked` ref keeps the
+  ## process well-typed: trapping delivers a well-typed `EXIT` (from the accepted proof); not
+  ## trapping reaches the vacuously well-typed `Dead`. Mirrors `Std.Otp.Link.preservation`,
+  ## but now the `Linked` index is what admits the step at all.
+  fn preservation({b: Proc}, {a: Proc}, wt: WTP(b), s: Step(b, a)) -> WTP(a) = match s
+    SExitTrap(lref, accexit) -> match wt
+      WTAlive(ae, am) -> WTAlive(AACons(accexit, ae), am)
+    SExitProp(lref) -> WTDead
+
+  ## Non-vacuity: a link can be established (linked) and then unlinked.
+  fn establish() -> LinkRef(Linked) = LinkedTrap(AccExit)
+end

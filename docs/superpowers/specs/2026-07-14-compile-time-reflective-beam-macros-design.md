@@ -259,8 +259,12 @@ construct ordinary Cure syntax, declarations, blocks, and lifted modules.
 Reflection must carry a typed expansion context when a delayed callback is
 interpreted. The context is compile-time metadata and may include the enclosing
 declaration kind, callback name and arity, parameter names and syntax,
-declared return type syntax, state and message/event type syntax when
-available, and source provenance for diagnostics.
+parameter type syntax, declared return type syntax, state and message/event
+type syntax when available, and source provenance for diagnostics. The parser
+now records parameter and return type syntax in the generic callback context;
+later source-defined builders may add domain-neutral declarations such as
+inherited state or protocol fields without changing the compiler's object
+model.
 
 The context must be explicit in the reflected input, not recovered by an
 OTP-specific compiler branch. If a callback needs more context, extend the
@@ -390,7 +394,12 @@ v1** and belong on the roadmap, in priority order:
   residual of a commutative-regex mailbox pattern. This is the only discipline
   that structurally exceeds a constructor set, and the primary future target;
   it is also the most inference-hungry (Special Delivery names inference as the
-  open usability problem).
+  open usability problem). Note too that the BEAM mailbox is ordered by arrival
+  with selective receive on *every* BEAM (not just AtomVM — this is the standard
+  concurrent-Core-Erlang semantics, machine-checked in Bereczky et al.,
+  `docs/research/process-types/`), whereas the mailbox-type theory above is
+  stated for *unordered* interactions; the commutative-regex residual therefore
+  does not transfer to BEAM without first reconciling that ordering gap.
 - *multiplicity* — bounds on how many of each message may be pending (e.g. "at
   most one `Config`").
 - *junk-freedom* — a static guarantee that no message is left unconsumed.
@@ -422,6 +431,158 @@ The compiler must not recognize these four names specially. A user-defined
 macro that emits the same generic declaration vocabulary must use the same
 pipeline.
 
+### 10.1 Reusable macro rule families
+
+The public standard macros must be authorable without copying a large
+declaration template into every grammar alternative. The current form repeats
+the same `syntax actor`/`syntax fsm`/`syntax sup`/`syntax app` prefix and the
+same lifted-module declarations for each optional lifecycle clause. That is a
+poor source-language abstraction boundary: changing one common callback,
+import, alias, behavior declaration, or startup operation requires editing
+many independent rules, and a user-defined behavior cannot reuse the common
+part without moving it into an opaque compiler or Elixir helper.
+
+This is a language facility, not a request to hide the generated runtime behind
+a helper. It has two required layers:
+
+1. **Shared declaration builders.** Ordinary Cure functions over `Std.Syntax`
+   construct reusable declaration bundles: imports, behavior metadata, state
+   aliases, default callbacks, lifecycle functions, and caller-supplied
+   overrides. The builder returns ordinary syntax that is reparsed,
+   recursively expanded, elaborated, checked, and emitted through the common
+   pipeline. It must not return an opaque container value or invoke a runtime
+   dispatcher.
+2. **Composable grammar rule families.** The public vocabulary should describe
+   the syntax shape, not parser mechanics. A family uses ordinary words for
+   cardinality and receives a generated typed syntax record:
+
+```cure
+syntax family GenServerDefinition
+  state Type
+  optional messages Type
+  optional initial Expression
+  optional init Code
+  optional on_call Cases
+  optional on_cast Cases
+  optional on_info Cases
+  optional terminate Code
+  optional code_change Code
+end
+
+macro actor <name: ModuleName>
+  accepts GenServerDefinition
+  expands with derive_actor
+```
+
+`state Type` is exactly one section; `optional on_call Cases` is zero or one;
+`repeated route Route` is zero or more; and `one_or_more field Field` requires
+at least one. Indented sections end naturally at dedent. `Code` remains an
+explicit escape hatch for genuinely free-form bodies, but macro authors do not
+write `Code until dedent` in the normal case. The initial built-in categories
+are `Name`, `ModuleName`, `Type`, `Pattern`, `Expression`, `Statement`, `Code`,
+`Cases`, `Parameters`, `Fields`, `Declarations`, `ModuleBody`, `Token`, and
+`Syntax`.
+
+The generated record is conceptually:
+
+```cure
+type GenServerDefinitionSyntax = {
+  state: Syntax,
+  messages: Option(Syntax),
+  initial: Option(Syntax),
+  init: Option(Syntax),
+  on_call: Option(Syntax),
+  on_cast: Option(Syntax),
+  on_info: Option(Syntax),
+  terminate: Option(Syntax),
+  code_change: Option(Syntax)
+}
+```
+
+The category is validated by the family parser and preserved in field metadata;
+the runtime representation remains ordinary reflected syntax. Source ranges,
+section provenance, cardinality, and order must survive reflection so tooling
+and diagnostics can identify both the duplicate and the original declaration.
+
+The expander API should be beginner-readable:
+
+```cure
+fn derive_actor(
+  name: ModuleNameSyntax,
+  definition: GenServerDefinitionSyntax
+) -> MacroResult = ...
+```
+
+`accepts` supplies the structured body and `expands with` names the compile-time
+function. Internally the implementation may lower this to the existing
+`computed by` machinery, but `computed by` and `contextual` are not required
+surface syntax for ordinary macro authors.
+
+Families may be reused with `includes OtherFamily`, exposing included fields
+directly. Initial support must reject conflicting fields rather than offer
+renaming/exclusion transformations. Defaults should normally be applied by the
+expander, preserving the distinction between an absent section and a section
+whose semantic value happens to be defaulted. Cross-field validation remains
+ordinary Cure code returning structured diagnostics, not a new constraint DSL.
+
+The semantic contract is fixed: a user can define an actor-like macro by
+reusing the generic family and changing only its expansion function. The
+generated result remains direct Cure declarations and direct foreign
+operations. Tests must prove a user-defined family, nested family composition,
+duplicate and ambiguous sections, cardinality errors, source-range diagnostics,
+and hygiene all use the same ordinary AST/Core path as a handwritten expansion.
+
+### 10.2 Beginner-friendly feature priority
+
+The following requests are intentionally split so the macro implementation has
+a coherent safe beginner path rather than accumulating convenience syntax before
+the representation and hygiene contracts are sound.
+
+**Build now, as part of the family and safe-syntax foundation:**
+
+- semantic capture types for simple literals (`Atom`, `Int`, `String`, etc.) and
+  explicit syntax wrappers for unevaluated `Expression`, `Pattern`, `Type`, and
+  `Code` captures;
+- direct expander parameters (`derive_actor(name, definition)`) with generated
+  input records retained as an advanced fallback;
+- typed `syntax ...` templates with visibly distinct syntax splicing, literal
+  lifting, declaration-list splicing, and intentional identifier construction;
+- automatic lifting only for the closed set of primitive/tuple/list values, never
+  arbitrary strings as identifiers;
+- definition-site hygiene by default, explicit caller-name capture, and explicit
+  fresh/private/exported name construction;
+- typed `Std.Syntax` declaration builders with named arguments, including
+  functions, modules, aliases, parameters, match arms, imports, and `use`;
+- generated family fields as ordinary record access, repeated captures as
+  ordinary `List(T)`, unordered sections by default, and declarative empty-block
+  cardinality (`Cases` nonempty, `Code` optionally empty);
+- `MacroResult`/structured diagnostics, `Result` convenience conversion, source
+  provenance, and expansion-aware errors that point back to authored sections;
+- a clear safe `Std.Syntax` versus advanced `Std.Syntax.Raw` boundary. Raw node,
+  token, scope, and metadata operations remain available but are visibly unsafe.
+
+Macro declarations and families follow Cure's ordinary layout convention. They
+do not introduce a special `end` requirement or expose `Code until dedent` to
+authors; the parser owns indentation boundaries.
+
+**Maybe later, after the foundation is stable:**
+
+- inline expansion clauses for tiny macros and implicit `block macro` body
+  capture;
+- generated `has_field`/`field_or` convenience methods and friendly field aliases;
+- custom family examples, editor completion/hover, canonical formatting, macro
+  check/expand/trace commands, and source-side expansion assertions;
+- grouped/plural section spellings, canonical section ordering, normalization
+  hooks, and advanced family inclusion transformations;
+- user-defined syntax categories, constructor-style syntax alternatives, parser
+  derivation from semantic ADTs, and pattern matching directly over syntax;
+- dedicated `derive`/`typed macro` forms, explicit phase controls, public API
+  export policies, and broader syntax-provenance controls.
+
+These later features must build on the same typed family records, hygiene,
+diagnostic, and direct-emission contracts. None may reintroduce string-based
+rewriting, runtime macro interpretation, or compiler-owned OTP knowledge.
+
 ## 11. Required implementation order
 
 Implement in this order; do not use a later layer to paper over an earlier gap:
@@ -437,6 +598,11 @@ Implement in this order; do not use a later layer to paper over an earlier gap:
    modules in one expansion.
 5. **Generic syntax analysis:** add the structural traversal and declaration
    builders needed for derivation.
+5a. **Reusable macro rule families:** factor repeated standard-library grammar
+   and lifted-declaration templates into source-defined `Std.Syntax` builders,
+   then add generic grammar-family composition usable by user macros. Preserve
+   ordinary parsing, diagnostics, lexical scope, hygiene, recursive expansion,
+   and direct checked emission.
 6. **Actor derivation:** remove the required explicit message type in the
    inferred path and test external `Pid(m)`/`send` calls.
 7. **FSM derivation:** derive events and transition contracts.
@@ -499,3 +665,7 @@ External research:
 - https://arxiv.org/abs/1801.04167 (Mailbox Types for Unordered Interactions)
 - https://arxiv.org/abs/2306.12935 (Special Delivery: Programming with Mailbox
   Types)
+- https://arxiv.org/abs/2311.10482 (Bereczky, Horpácsi & Thompson, *A
+  Formalisation of Core Erlang, a Concurrent Actor Language*) — reference
+  operational semantics for the sealed raw process base; see
+  `docs/research/process-types/raw-algebra-conformance-checklist.md`

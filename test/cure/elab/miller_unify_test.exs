@@ -135,4 +135,15 @@ defmodule Cure.Elab.MillerUnifyTest do
     {ctx, m} = fam_ctx_nn()
     assert solve_index(ctx, m, rhs) == {:lam, Cure.Core.Grade.unrestricted(), @nat, rhs}
   end
+
+  test "effect-wrapped solution: mabs descends through Effect" do
+    {ctx, m} = fam_ctx_nn()
+    lhs = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:effect_type, {:app, {:meta, m}, {:var, 0}}}}
+    rhs = {:pi, Cure.Core.Grade.unrestricted(), @nat, {:effect_type, @nat}}
+
+    assert {:ok, ctx2} = Unify.unify(lhs, rhs, ctx, nil)
+
+    assert {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat} ==
+             Unify.zonk({:meta, m}, ctx2)
+  end
 end

@@ -9,17 +9,17 @@ defmodule Cure.Stdlib.CharStdTest do
   use ExUnit.Case, async: true
   alias Cure.Elab.Program
 
-  @char_body {:data, :Bounded, [], [nat_lit: 1_114_112]}
+  @char_body {:data, :"Std.Bounded#Bounded", [], [nat_lit: 1_114_112]}
 
   test "Std.Char elaborates and owns the Char alias" do
     assert {:ok, env} = Program.elaborate(File.read!("lib/std/char.cure"))
-    assert %{type: {:type, 0}, body: @char_body} = Map.get(env.defs, :Char)
+    assert %{type: {:type, 0}, body: @char_body} = Cure.Core.Env.get_def(env, :Char)
   end
 
   test "use Std.Char brings Char into scope as Bounded(0x110000)" do
     src = "mod M\n  use Std.Char\n  fn f(c: Char) -> Char = c\nend\n"
     {:ok, env} = Program.elaborate(src)
-    assert %{body: @char_body} = Map.get(env.defs, :Char)
+    assert %{body: @char_body} = Cure.Core.Env.get_def(env, :Char)
   end
 
   test "Std.Binary re-uses Std.Char rather than redefining Char" do

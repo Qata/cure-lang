@@ -36,21 +36,27 @@ defmodule Cure.Compiler.Parser do
       {:ok, ast} = Cure.Compiler.Parser.parse(tokens)
   """
 
-  alias Cure.Compiler.{MacroRaw, Token}
+  alias Cure.Compiler.{MacroFamily, MacroRaw, Token}
   alias Cure.Compiler.Parser.Precedence
   alias Cure.Pipeline.Events
 
   # -- Parser State ----------------------------------------------------------
 
+  # `tokens` holds a *tuple*, not a list, so `peek/1` is O(1) `elem/2` rather
+  # than an O(pos) `Enum.at/2` walk; `count` caches the arity so `peek/1` never
+  # pays an O(n) `length/1`. Together these keep parsing linear in token count.
+  # Always write it via `put_tokens/2` — never `%{state | tokens: some_list}`.
   defstruct [
     :tokens,
     :file,
+    count: 0,
     pos: 0,
     errors: [],
     emit_events: false,
     edition: nil,
     seen_stmt?: false,
     builtin_macros: %{},
+    builtin_computed_macros: %{},
     active_macros: %{},
     computed_macros: %{},
     fresh_counter: 0,
@@ -96,6 +102,24 @@ defmodule Cure.Compiler.Parser do
   @type ast :: {atom(), keyword(), term()}
   @type result :: {ast(), t()}
 
+  @doc """
+  Apply the parser's hygiene protocol to AST produced by a computed macro.
+
+  Computed macros use the same `fresh(...)` marker as `becomes` templates, but
+  their result is produced after parsing and therefore cannot pass through the
+  normal template expansion path. This entry point keeps the protocol shared
+  and threads the caller's counter so nested and sibling expansions remain
+  distinct. Only explicit generated markers are rewritten; syntax reflected
+  from the use site remains opaque to the generated name mapping.
+  """
+  @spec freshen_generated(ast(), non_neg_integer()) :: {ast(), non_neg_integer()}
+  def freshen_generated(ast, fresh_counter \\ 0) when is_integer(fresh_counter) and fresh_counter >= 0 do
+    state = %__MODULE__{fresh_counter: fresh_counter}
+
+    freshen(ast, state, false)
+    |> then(fn {freshened, state} -> {freshened, state.fresh_counter} end)
+  end
+
   # -- Public API ------------------------------------------------------------
 
   @doc """
@@ -121,24 +145,27 @@ defmodule Cure.Compiler.Parser do
     # Phase 1 (harvest): parse once with NO active macros, keep only the local
     # macro grammars. Use-sites may mis-parse here; we discard everything but
     # the {:macro_def, …} nodes and their (recovered) errors.
-    harvest_state = %__MODULE__{tokens: tokens, file: file, emit_events: false, edition: edition}
+    harvest_state =
+      put_tokens(%__MODULE__{file: file, emit_events: false, edition: edition}, tokens)
     {harvest_exprs, _harvest_state} = parse_program(harvest_state)
     active = harvest_active_macros(harvest_exprs)
     computed = harvest_computed_macros(harvest_exprs)
     literal = harvest_literal_macros(harvest_exprs)
 
     # Phase 2 (authoritative): parse with the macro grammars seeded so use-sites expand.
+    builtin_rules =
+      cond do
+        is_map(supplied_macros) -> supplied_macros
+        prelude? -> prelude_macros()
+        true -> %{}
+      end
+
     state = %__MODULE__{
-      tokens: tokens,
       file: file,
       emit_events: emit?,
       edition: edition,
-      builtin_macros:
-        cond do
-          is_map(supplied_macros) -> supplied_macros
-          prelude? -> prelude_macros()
-          true -> %{}
-        end,
+      builtin_macros: syntax_macro_rules(builtin_rules),
+      builtin_computed_macros: computed_macro_rules(builtin_rules),
       active_macros: active,
       computed_macros: computed,
       # Local `literal` rules always apply. In the normal (non-self-harvest)
@@ -152,6 +179,8 @@ defmodule Cure.Compiler.Parser do
           true -> literal
         end
     }
+
+    state = put_tokens(state, tokens)
 
     {exprs, state} = parse_program(state)
 
@@ -252,23 +281,49 @@ defmodule Cure.Compiler.Parser do
                prelude_macros: false,
                builtin_macros: builtin_macros
              ) do
-        collect_macro_rules(ast, rules)
+        collect_macro_rules(ast, rules, path)
       else
         _ -> rules
       end
     end)
   end
 
-  defp collect_macro_rules(ast, acc) do
-    Enum.reduce(collect_macro_defs_with_scope(ast), acc, fn {:macro_def, _meta, rules}, macro_acc ->
-      Enum.reduce(rules, macro_acc, fn
+  # `path` is the home file of every rule harvested here (a stdlib module). It is
+  # stamped onto each rule as `:source_path` so a computed/family use-site can
+  # later resolve the rule's expander in its DEFINITION-SITE scope (ambient macro
+  # hygiene), not just the bare caller env. Local/user macros harvest through
+  # harvest_active_macros / harvest_computed_macros instead and carry no path, so
+  # their expansion behaviour is unchanged.
+  defp collect_macro_rules(ast, acc, path) do
+    Enum.reduce(collect_macro_defs_with_scope(ast), acc, fn {:macro_def, meta, rules}, macro_acc ->
+      tagged = Enum.map(harvestable_macro_rules(meta, rules), &Map.put(&1, :source_path, path))
+
+      Enum.reduce(tagged, macro_acc, fn
         %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
+          Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
+
+        %{kind: :computed, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
           Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
 
         _, acc2 ->
           acc2
       end)
     end)
+  end
+
+  defp syntax_macro_rules(rules) when is_map(rules), do: filter_macro_rules(rules, :syntax)
+  defp syntax_macro_rules(_rules), do: %{}
+
+  defp computed_macro_rules(rules) when is_map(rules), do: filter_macro_rules(rules, :computed)
+  defp computed_macro_rules(_rules), do: %{}
+
+  defp filter_macro_rules(rules, kind) do
+    for {keyword, candidates} <- rules,
+        selected = Enum.filter(List.wrap(candidates), &(&1[:kind] == kind)),
+        selected != [],
+        into: %{} do
+      {keyword, selected}
+    end
   end
 
   @doc """
@@ -286,15 +341,19 @@ defmodule Cure.Compiler.Parser do
 
     eof = %Token{type: :eof, value: nil, line: 0, col: 0}
 
-    state = %__MODULE__{
-      tokens: use_site_tokens ++ [eof],
-      file: "example",
-      emit_events: false,
-      builtin_macros: %{},
-      active_macros: active,
-      computed_macros: computed,
-      literal_macros: literal
-    }
+    state =
+      put_tokens(
+        %__MODULE__{
+          file: "example",
+          emit_events: false,
+          builtin_macros: %{},
+          builtin_computed_macros: %{},
+          active_macros: active,
+          computed_macros: computed,
+          literal_macros: literal
+        },
+        use_site_tokens ++ [eof]
+      )
 
     {ast, state} = parse_expr(state, 0)
 
@@ -324,8 +383,8 @@ defmodule Cure.Compiler.Parser do
   defp harvest_active_macros(exprs) do
     exprs
     |> collect_macro_defs_with_scope()
-    |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
-      Enum.reduce(rules, acc, fn
+    |> Enum.reduce(%{}, fn {:macro_def, meta, rules}, acc ->
+      Enum.reduce(harvestable_macro_rules(meta, rules), acc, fn
         %{kind: :syntax, keyword: kw} = rule, acc2 when is_binary(kw) ->
           Map.update(acc2, kw, [rule], &(&1 ++ [rule]))
 
@@ -341,8 +400,8 @@ defmodule Cure.Compiler.Parser do
   defp harvest_computed_macros(exprs) do
     exprs
     |> collect_macro_defs_with_scope()
-    |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
-      Enum.reduce(rules, acc, fn
+    |> Enum.reduce(%{}, fn {:macro_def, meta, rules}, acc ->
+      Enum.reduce(harvestable_macro_rules(meta, rules), acc, fn
         %{kind: :computed, keyword: kw} = rule, acc2 when is_binary(kw) ->
           Map.update(acc2, kw, [rule], &(&1 ++ [rule]))
 
@@ -350,6 +409,10 @@ defmodule Cure.Compiler.Parser do
           acc2
       end)
     end)
+  end
+
+  defp harvestable_macro_rules(meta, rules) do
+    MacroFamily.lowered_rules(meta, rules)
   end
 
   # Sibling of harvest_active_macros for Tier-1 `literal` rules, keyed by their
@@ -504,12 +567,13 @@ defmodule Cure.Compiler.Parser do
   # the dependent environment exists. Preserve the elab reference and the
   # matched inputs in a generic syntax-shaped node for the elaboration pass.
   defp parse_computed_use(state, keyword) do
-    [rule | _] = Map.fetch!(state.computed_macros, keyword)
+    rules = computed_rules(state, keyword)
+    original_state = state
     keyword_token = peek(state)
     state = advance(state)
 
-    case match_segments(state, rule.segments, %{}, 0) do
-      {:ok, bindings, _progress, state} ->
+    case match_computed_rule(rules, state) do
+      {:ok, bindings, _progress, state, rule} ->
         inputs =
           Enum.flat_map(rule.segments, &segment_inputs(&1, bindings))
 
@@ -517,30 +581,109 @@ defmodule Cure.Compiler.Parser do
 
         meta = [
           keyword: keyword,
-          syntax_type: macro_syntax_type(keyword),
-          syntax_fields: macro_syntax_fields(rule.segments),
-          syntax_repeated_fields: macro_syntax_repeated_fields(rule.segments),
+          syntax_type: Map.get(rule, :syntax_type, macro_syntax_type(keyword)),
+          syntax_fields: Map.get(rule, :syntax_fields, macro_syntax_fields(rule.segments)),
+          syntax_repeated_fields: Map.get(rule, :syntax_repeated_fields, macro_syntax_repeated_fields(rule.segments)),
+          syntax_field_types: Map.get(rule, :syntax_field_types, %{}),
           line: keyword_token.line,
           col: keyword_token.col
         ]
 
+        # The matched rule's segments (literals interleaved with holes). The
+        # printer needs the literal separators (`state`/`messages`/…) to
+        # reconstruct the surface invocation — the flattened arg list drops
+        # them — and a file being reprinted has no access to the stdlib rule
+        # that defined this macro, so the segments must travel on the node.
+        # Omit the key entirely for zero-hole macros (empty segments): they
+        # reprint from the keyword alone and their deferred-node shape stays
+        # unchanged (macro_computed_test pins the exact meta for such macros).
+        meta =
+          case rule.segments do
+            [] -> meta
+            segments -> Keyword.put(meta, :syntax_segments, segments)
+          end
+
+        # Only stdlib-harvested rules carry a home file (:source_path). Attach it
+        # as :home_source for definition-site expander resolution; omit the key
+        # entirely for user/local macros so their deferred-node shape is unchanged.
+        meta =
+          case Map.get(rule, :source_path) do
+            nil -> meta
+            home_source -> Keyword.put(meta, :home_source, home_source)
+          end
+
+        meta =
+          if Map.get(rule, :direct_inputs, false),
+            do: Keyword.put(meta, :direct_inputs, true),
+            else: meta
+
         {{:computed_use, put_expansion_context(meta, state.expansion_context), [rule.elab, input]}, state}
 
-      {:error, progress, state} ->
-        t = peek(state)
+      {:error, rule, progress, state} ->
+        case computed_macro_fallback(original_state, keyword) do
+          {:ok, ast, fallback_state} ->
+            {ast, fallback_state}
 
-        state =
-          add_error(
-            state,
-            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
-          )
+          :none ->
+            t = peek(state)
 
-        {variable(%Cure.Compiler.Token{
-           type: :identifier,
-           value: keyword,
-           line: t.line,
-           col: t.col
-         }), state}
+            state =
+              add_error(
+                state,
+                {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
+              )
+
+            {variable(%Cure.Compiler.Token{
+               type: :identifier,
+               value: keyword,
+               line: t.line,
+               col: t.col
+             }), state}
+        end
+    end
+  end
+
+  defp match_computed_rule([rule | rest], state) do
+    case match_segments(state, rule.segments, %{}, 0) do
+      {:ok, bindings, progress, matched_state} ->
+        {:ok, bindings, progress, matched_state, rule}
+
+      {:error, progress, _failed_state} ->
+        case match_computed_rule(rest, state) do
+          {:error, _last_rule, _last_progress, _last_state} ->
+            {:error, rule, progress, state}
+
+          success ->
+            success
+        end
+    end
+  end
+
+  defp match_computed_rule([], state), do: {:error, %{segments: []}, 0, state}
+
+  # A computed rule may deliberately share a keyword with an older transparent
+  # rule. Let the computed grammar win when it matches, but preserve the
+  # existing rule as a grammar fallback when it does not. The fallback starts
+  # from the original state so the failed computed match cannot consume input.
+  defp computed_macro_fallback(state, keyword) do
+    cond do
+      is_map_key(state.builtin_macros, keyword) and prelude_macro_head?(state, keyword) ->
+        {ast, state} = parse_macro_use(state, keyword, state.builtin_macros)
+        {:ok, ast, state}
+
+      is_map_key(state.active_macros, keyword) and macro_use_head?(state, keyword) ->
+        {ast, state} = parse_macro_use(state, keyword)
+        {:ok, ast, state}
+
+      true ->
+        :none
+    end
+  end
+
+  defp computed_rules(state, keyword) do
+    case Map.get(state.computed_macros, keyword) do
+      nil -> Map.get(state.builtin_computed_macros, keyword, [])
+      rules -> rules
     end
   end
 
@@ -560,6 +703,7 @@ defmodule Cure.Compiler.Parser do
     case Enum.at(rule.segments, progress) do
       {:lit, w} -> {:literal, w}
       {:hole, %{kind: k}} -> {:hole_kind, k}
+      {:code_hole, %{delimiter: delimiter}} -> {:code_until, delimiter}
       _ -> :nothing_more
     end
   end
@@ -641,14 +785,122 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp match_segments(state, [{:hole, %{name: name, kind: "ModuleName"}} | rest], bindings, progress) do
-    {module_name, state} = parse_dotted_name(state)
-    module = {:literal, [subtype: :symbol], String.to_atom(module_name)}
-    match_segments(state, rest, Map.put(bindings, name, module), progress + 1)
+    case peek(state) do
+      %Token{type: :identifier} ->
+        {module_name, state} = parse_dotted_name(state)
+        module = {:literal, [subtype: :symbol], String.to_atom(module_name)}
+        match_segments(state, rest, Map.put(bindings, name, module), progress + 1)
+
+      _ ->
+        {:error, progress, state}
+    end
+  end
+
+  defp match_segments(state, [{:hole, %{name: name, kind: kind}} | rest], bindings, progress)
+       when kind in ["Int", "Float", "Atom", "Bool"] do
+    {arg, state} = parse_expr(state, 0)
+    state = validate_primitive_capture(arg, kind, state)
+    match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+  end
+
+  # Code holes may introduce an indented expression block after their marker
+  # (`derive` newline `match ...`). The ordinary expression parser owns the
+  # block tokens, so only the separator newline belongs to the grammar matcher.
+  defp match_segments(state, [{:hole, %{name: name, kind: "Code"}} | rest], bindings, progress) do
+    state = skip_newlines(state)
+    {arg, state} = parse_expr(state, 0)
+    match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+  end
+
+  # A delimiter-aware Code hole is still parsed by the ordinary expression
+  # parser. The matcher temporarily replaces the delimiter with a synthetic
+  # dedent so an indented code block cannot consume the next grammar literal.
+  defp match_segments(
+         state,
+         [{:code_hole, %{name: name, delimiter: delimiter}} | rest],
+         bindings,
+         progress
+       ) do
+    case parse_code_until(state, delimiter) do
+      {:ok, arg, state} ->
+        match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+    end
+  end
+
+  # A positional declarations block hole consumes the indented run of
+  # definitions as one `:declarations_block` node — the same shape the
+  # structured family `body Declarations` section produces — so a raw Tier-0
+  # template body can flow through `computed`. `parse_definition_block` reads
+  # from the block's `:indent` through its matching `:dedent`, so the only
+  # supported delimiter is the block's own dedent.
+  defp match_segments(state, [{:declarations_hole, %{name: name}} | rest], bindings, progress) do
+    # A positional declarations body always begins on its OWN line: the block's
+    # `:indent` (or, for an empty body, the form simply ends). So the token
+    # DIRECTLY following the preceding segment must be a structural boundary.
+    # If instead a same-line token follows (e.g. a sibling rule's `with`/`call`
+    # keyword, as in the single-line use-sites the expansion fuzzer synthesises
+    # for those siblings), this rule does not apply: report a non-match and hand
+    # the ORIGINAL state back so `match_macro_rule` tries the next rule, rather
+    # than greedily matching an empty body and leaving the continuation over.
+    # This mirrors the `{:family}` clause's `:indent` guard while still allowing
+    # a bodyless `actor <name> state <type>` (the form ends at a newline/dedent).
+    case peek(state) do
+      %Token{type: type} when type in [:newline, :indent, :dedent, :eof] ->
+        scan_state = skip_newlines(state)
+        token = peek(scan_state)
+        {stmts, after_state} = parse_definition_block(scan_state)
+        node = {:declarations_block, [line: token.line, col: token.col], stmts}
+        match_segments(after_state, rest, Map.put(bindings, name, node), progress + 1)
+
+      _ ->
+        {:error, progress, state}
+    end
   end
 
   defp match_segments(state, [{:hole, %{name: name}} | rest], bindings, progress) do
     {arg, state} = parse_expr(state, 0)
     match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
+  end
+
+  # A structured family consumes the indented body as one grammar unit. The
+  # family parser then parses named sections with the ordinary Cure
+  # expression/type parsers, preserving normal nested syntax and macro use.
+  # The enclosing dedent remains in the token stream for the surrounding
+  # declaration parser.
+  defp match_segments(state, [{:family, family_meta} | rest], bindings, progress) do
+    family_state = skip_newlines(state)
+
+    case peek(family_state) do
+      %Token{type: :indent} ->
+        body_start = family_state |> advance() |> skip_newlines()
+
+        case peek(body_start) do
+          %Token{type: :keyword} ->
+            {:error, progress, state}
+
+          %Token{type: :identifier, value: field_name} ->
+            if Enum.any?(family_meta.fields, &(&1.name == field_name)) do
+              {captured, state} = capture_family_body(state)
+              {family_value, parsed_state} = parse_family_body(captured, family_meta, state)
+
+              state = %{
+                state
+                | errors: state.errors ++ parsed_state.errors,
+                  fresh_counter: parsed_state.fresh_counter
+              }
+
+              match_segments(state, rest, Map.put(bindings, family_meta.name, family_value), progress + 1)
+            else
+              {:error, progress, state}
+            end
+
+          _ ->
+            {:error, progress, state}
+        end
+
+      _ ->
+        {:error, progress, state}
+    end
   end
 
   # Raw holes are the reader-tier escape hatch: capture the token span without
@@ -661,7 +913,7 @@ defmodule Cure.Compiler.Parser do
          bindings,
          progress
        ) do
-    remaining = Enum.drop(state.tokens, state.pos)
+    remaining = tokens_from(state, state.pos)
 
     case MacroRaw.capture(remaining, delimiter) do
       {:ok, captured, _rest} ->
@@ -694,14 +946,39 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp match_segments(state, [{:optional, group} | rest], bindings, progress) do
-    case match_segments(state, group, bindings, progress) do
-      {:ok, bindings, _group_progress, matched_state} ->
-        match_segments(matched_state, rest, bindings, progress + 1)
+    if optional_group_present?(state, group) do
+      case match_segments(state, group, bindings, progress) do
+        {:ok, bindings, _group_progress, matched_state} ->
+          match_segments(matched_state, rest, bindings, progress + 1)
 
-      {:error, _group_progress, _matched_state} ->
-        match_segments(state, rest, bindings, progress + 1)
+        {:error, _group_progress, _matched_state} ->
+          match_segments(state, rest, bindings, progress + 1)
+      end
+    else
+      match_segments(state, rest, bindings, progress + 1)
     end
   end
+
+  # Do not invoke an expression/raw parser merely to discover that an optional
+  # group is absent. At a structural boundary that parser would record a
+  # spurious error on the enclosing form, even though absence is valid.
+  defp optional_group_present?(state, [{:lit, word} | _]), do: lit_token_matches?(peek(state), word)
+
+  defp optional_group_present?(state, [{kind, _meta} | _]) when kind in [:hole, :raw_hole] do
+    not match?(%Token{type: type} when type in [:newline, :dedent, :eof], peek(state))
+  end
+
+  defp optional_group_present?(state, [{:code_hole, _meta} | _]) do
+    not match?(%Token{type: type} when type in [:newline, :dedent, :eof], peek(state))
+  end
+
+  defp optional_group_present?(state, [{:repeat, segment} | _]),
+    do: optional_group_present?(state, [segment])
+
+  defp optional_group_present?(state, [{:optional, segments} | _]),
+    do: optional_group_present?(state, segments)
+
+  defp optional_group_present?(_state, []), do: false
 
   defp match_repeated_segment(state, {:hole, %{name: name}}, bindings, acc) do
     case peek(state) do
@@ -727,10 +1004,246 @@ defmodule Cure.Compiler.Parser do
   defp put_repeated_binding(bindings, {:hole, %{name: name}}, values), do: Map.put(bindings, name, values)
   defp put_repeated_binding(bindings, _segment, _values), do: bindings
 
+  defp capture_family_body(state) do
+    remaining = tokens_from(state, state.pos)
+    target_indent = Enum.find_value(remaining, &indent_value/1)
+
+    case target_indent do
+      nil ->
+        count = Enum.find_index(remaining, &match?(%Token{type: :eof}, &1)) || length(remaining)
+        {Enum.take(remaining, count), advance_n(state, count)}
+
+      target_indent ->
+        count =
+          remaining
+          |> Enum.with_index()
+          |> Enum.find_value(length(remaining), fn
+            {%Token{type: :dedent, value: ^target_indent}, index} -> index
+            _ -> nil
+          end)
+
+        {Enum.take(remaining, count), advance_n(state, count)}
+    end
+  end
+
+  defp indent_value(%Token{type: :indent, value: value}) when is_integer(value), do: value
+  defp indent_value(_token), do: nil
+
+  defp parse_family_body(tokens, family_meta, parser_state) do
+    target_indent = Enum.find_value(tokens, &indent_value/1) || 0
+
+    # Built against `parser_state` before its tokens are swapped out.
+    family_tokens =
+      tokens ++ [%Token{type: :dedent, value: target_indent, line: 0, col: 0}, eof_token(peek(parser_state))]
+
+    family_state =
+      put_tokens(
+        %{parser_state | pos: 0, errors: [], fresh_counter: parser_state.fresh_counter},
+        family_tokens
+      )
+
+    family_state = skip_newlines(family_state)
+
+    case peek(family_state) do
+      %Token{type: :indent} ->
+        {value, family_state} = parse_family_sections(advance(family_state), family_meta, %{})
+        {value, family_state}
+
+      token ->
+        family_state = add_error(family_state, {:expected, :indent, :got, token.type, token.line, token.col})
+        family_value(family_meta, %{}, family_state)
+    end
+  end
+
+  defp parse_family_sections(state, family_meta, values) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        family_value(family_meta, values, state)
+
+      %Token{type: :identifier, value: name} = token ->
+        case Enum.find(family_meta.fields, &(&1.name == name)) do
+          nil ->
+            state = add_error(state, {:unknown_syntax_family_field, family_meta.family, name, token.line, token.col})
+            {_ignored, state} = parse_expr_or_block(advance(state))
+            parse_family_sections(state, family_meta, values)
+
+          field ->
+            {value, state} = parse_family_field_value(advance(state), field)
+            {values, state} = record_family_value(values, field, value, token, state)
+            parse_family_sections(state, family_meta, values)
+        end
+
+      token ->
+        state = add_error(state, {:expected, :syntax_family_field, :got, token.type, token.line, token.col})
+        parse_family_sections(advance(state), family_meta, values)
+    end
+  end
+
+  defp parse_family_field_value(state, %{shape: "Type"}) do
+    state = skip_newlines(state)
+    parse_type_expr(state)
+  end
+
+  defp parse_family_field_value(state, %{shape: "ModuleName"}) do
+    state = skip_newlines(state)
+    {name, state} = parse_dotted_name(state)
+    {{:literal, [subtype: :symbol], String.to_atom(name)}, state}
+  end
+
+  defp parse_family_field_value(state, %{shape: shape}) when shape in ["Int", "Float", "Atom", "Bool"] do
+    state = skip_newlines(state)
+    {value, state} = parse_expr(state, 0)
+    {value, validate_primitive_capture(value, shape, state)}
+  end
+
+  defp parse_family_field_value(state, %{shape: "Cases"}) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :indent} = indent ->
+        {arms, state} = parse_block_match_arms(advance(state))
+        state = expect_dedent(state)
+        {{:case_block, [line: indent.line, col: indent.col], arms}, state}
+
+      _ ->
+        {arm, state} = parse_match_arm(state)
+        {{:case_block, [], [arm]}, state}
+    end
+  end
+
+  defp parse_family_field_value(state, %{shape: "Declarations"}) do
+    state = skip_newlines(state)
+    token = peek(state)
+    {stmts, state} = parse_definition_block(state)
+    {{:declarations_block, [line: token.line, col: token.col], stmts}, state}
+  end
+
+  defp parse_family_field_value(state, _field) do
+    state = skip_newlines(state)
+    parse_expr_or_block(state)
+  end
+
+  defp record_family_value(values, %{name: name, cardinality: cardinality}, value, _token, state)
+       when cardinality in [:repeated, :one_or_more] do
+    {Map.update(values, name, [value], &(&1 ++ [value])), state}
+  end
+
+  defp record_family_value(values, %{name: name, cardinality: :optional}, value, _token, state) do
+    {Map.put(values, name, {:family_option, [present: true], [value]}), state}
+  end
+
+  defp record_family_value(values, %{name: name}, value, token, state) do
+    if Map.has_key?(values, name) do
+      {values, add_error(state, {:duplicate_syntax_family_field, name, token.line, token.col})}
+    else
+      {Map.put(values, name, value), state}
+    end
+  end
+
+  defp family_value(family_meta, values, state) do
+    {fields, state} =
+      Enum.map_reduce(family_meta.fields, state, fn field, state ->
+        case Map.fetch(values, field.name) do
+          {:ok, value} ->
+            {value, state}
+
+          :error when field.cardinality == :repeated ->
+            {[], state}
+
+          :error when field.cardinality == :optional ->
+            {{:family_option, [present: false], []}, state}
+
+          :error when field.cardinality == :one_or_more ->
+            error = {:missing_syntax_family_field, family_meta.family, field.name, field.line, field.col}
+            {[], add_error(state, error)}
+
+          :error ->
+            error = {:missing_syntax_family_field, family_meta.family, field.name, field.line, field.col}
+            {nil, add_error(state, error)}
+        end
+      end)
+
+    {{:family_input, [family: family_meta.family], fields}, state}
+  end
+
+  defp validate_primitive_capture({:literal, meta, _value}, shape, state) do
+    expected =
+      case shape do
+        "Int" -> :integer
+        "Float" -> :float
+        "Atom" -> :symbol
+        "Bool" -> :boolean
+      end
+
+    if Keyword.get(meta, :subtype) == expected do
+      state
+    else
+      add_error(state, {:expected_literal_capture, shape, Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)})
+    end
+  end
+
+  defp validate_primitive_capture(_value, shape, state),
+    do: add_error(state, {:expected_literal_capture, shape, peek(state).line, peek(state).col})
+
   defp advance_n(state, 0), do: state
   defp advance_n(state, count), do: advance_n(advance(state), count - 1)
 
   defp consume_raw_delimiter?(delimiter), do: delimiter not in ["dedent", "newline"]
+
+  defp parse_code_until(state, delimiter) do
+    remaining = tokens_from(state, state.pos)
+
+    case split_code_until(remaining, delimiter, nil, []) do
+      {:ok, prefix, delimiter_token} ->
+        boundary = code_boundary_token(prefix, delimiter_token)
+        parse_state = put_tokens(%{state | pos: 0}, prefix ++ [boundary, eof_token(delimiter_token)])
+        parse_state = skip_newlines(parse_state)
+        {arg, parse_state} = parse_expr(parse_state, 0)
+        state = %{state | errors: parse_state.errors, fresh_counter: parse_state.fresh_counter}
+        {:ok, arg, %{state | pos: state.pos + length(prefix)}}
+
+      :missing ->
+        state = skip_newlines(state)
+        {arg, state} = parse_expr(state, 0)
+        {:ok, arg, state}
+    end
+  end
+
+  defp split_code_until([], _delimiter, _previous, _acc), do: :missing
+
+  defp split_code_until([token | rest], delimiter, previous, acc) do
+    if code_until_delimiter?(token, delimiter, previous, List.first(rest)) do
+      {:ok, Enum.reverse(acc), token}
+    else
+      split_code_until(rest, delimiter, token, [token | acc])
+    end
+  end
+
+  defp code_until_delimiter?(%Token{} = token, delimiter, previous, next) do
+    token_matches?(token, delimiter) and
+      match?(%Token{type: type} when type in [:newline, :dedent], previous) and
+      match?(%Token{type: type} when type in [:newline, :dedent, :eof], next)
+  end
+
+  defp token_matches?(%Token{type: type, value: value}, delimiter) do
+    to_string(type) == delimiter or (is_binary(value) and value == delimiter)
+  end
+
+  defp code_boundary_token(prefix, delimiter_token) do
+    indent = Enum.find(prefix, &match?(%Token{type: :indent}, &1))
+
+    case indent do
+      %Token{value: value} when is_integer(value) ->
+        %Token{type: :dedent, value: value, line: delimiter_token.line, col: delimiter_token.col}
+
+      _ ->
+        eof_token(delimiter_token)
+    end
+  end
+
+  defp eof_token(token), do: %Token{type: :eof, value: nil, line: token.line, col: token.col}
 
   defp raw_line([%Token{line: line} | _], _state), do: line
   defp raw_line([], state), do: peek(state).line
@@ -754,7 +1267,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp expand_template_rule(rule, bindings, state) do
-    {freshened, state} = freshen(rule.template, state)
+    {freshened, state} = freshen(rule.template, state, true, bindings)
     expanded = subst_holes(freshened, bindings, state)
     expanded = attach_lexical_imports(expanded, Map.get(rule, :lexical_imports, []))
 
@@ -878,18 +1391,101 @@ defmodule Cure.Compiler.Parser do
   defp import_declaration_key(other), do: other
 
   # Mint one deterministic gensym per distinct declared fresh name, then rewrite
-  # markers and plain references of those names. Counter lives in parser state so
-  # gensyms are stable within a build (design §5) and unique across use-sites.
-  defp freshen(template, state) do
+  # markers and, for templates, plain references of those names. Counter lives
+  # in parser state so gensyms are stable within a build (design §5) and unique
+  # across use-sites.
+  defp freshen(template, state, rewrite_plain?, bindings \\ %{})
+
+  # Computed-macro path (`freshen_generated`, rewrite_plain? = false): rewrite
+  # ONLY explicit `<fresh Name>` markers to gensyms; reflected plain variables are
+  # left untouched (they are reflected use-site data, not template binders). This
+  # is the flat, marker-only pass — auto-hygiene does NOT apply to generated ASTs.
+  defp freshen(template, state, false, bindings) do
     names = collect_fresh_names(template) |> MapSet.to_list() |> Enum.sort()
+    used = collect_used_names(bindings)
 
     {rename, state} =
       Enum.reduce(names, {%{}, state}, fn n, {m, s} ->
-        {Map.put(m, n, "#{n}$#{s.fresh_counter}"), %{s | fresh_counter: s.fresh_counter + 1}}
+        {gensym, s} = mint_gensym(n, s, used)
+        {Map.put(m, n, gensym), s}
       end)
 
     {apply_freshening(template, rename), state}
   end
+
+  # Template path (Tier-2 `becomes`, rewrite_plain? = true): SP5.3 auto full
+  # hygiene. A scope-aware walk auto-renames EVERY unannotated ordinary binder
+  # (`let`/pattern/lambda/fn-def/comprehension), plus explicit `<fresh>` markers,
+  # threading a per-scope rename map so shadowing re-mints and references track
+  # their binder. `<capture Name>` binders opt OUT (bind into caller scope). Holes
+  # are never renamed (use-site material, substituted afterwards). Maps are never
+  # walked, keeping the OTP lift-module OUT set a no-op (design §4).
+  defp freshen(template, state, true, bindings) do
+    holes = MapSet.new(Map.keys(bindings))
+    used = collect_used_names(bindings)
+    scoped_freshen(template, %{}, holes, used, state)
+  end
+
+  # Mint "n$<counter>", advancing the state counter on each attempt, and skip any
+  # candidate that collides with a name appearing in the use-site material
+  # (`used`). Without this a caller can spoof the gensym namespace — pass a
+  # backtick identifier `g$0` as a hole — and be captured by the template's own
+  # `<fresh g>` binder. Termination: `used` is finite and the counter is strictly
+  # monotonic, so a free candidate is reached in at most |used| + 1 steps.
+  defp mint_gensym(name, state, used) do
+    candidate = "#{name}$#{state.fresh_counter}"
+    state = %{state | fresh_counter: state.fresh_counter + 1}
+
+    if MapSet.member?(used, candidate) do
+      mint_gensym(name, state, used)
+    else
+      {candidate, state}
+    end
+  end
+
+  # Names appearing anywhere in the use-site material bound to holes. A fresh
+  # binder must avoid every one so injected caller identifiers cannot be captured
+  # (see mint_gensym). We collect plain variable names and raw-token identifier
+  # values; over-collection is harmless (it only advances the counter).
+  defp collect_used_names(bindings) do
+    Enum.reduce(bindings, MapSet.new(), fn {_hole, value}, acc ->
+      MapSet.union(acc, collect_used_value(value))
+    end)
+  end
+
+  defp collect_used_value({:variable, _meta, name}) when is_binary(name),
+    do: MapSet.new([name])
+
+  defp collect_used_value({:raw_tokens, _meta, tokens}), do: raw_token_names(tokens)
+
+  defp collect_used_value({_t, meta, ch}) when is_list(ch) do
+    Enum.reduce(ch, collect_used_meta(meta), fn c, acc ->
+      MapSet.union(acc, collect_used_value(c))
+    end)
+  end
+
+  defp collect_used_value(list) when is_list(list),
+    do: Enum.reduce(list, MapSet.new(), &MapSet.union(&2, collect_used_value(&1)))
+
+  defp collect_used_value(_), do: MapSet.new()
+
+  defp collect_used_meta(meta) when is_list(meta) do
+    Enum.reduce(meta, MapSet.new(), fn
+      {_k, v}, acc -> MapSet.union(acc, collect_used_value(v))
+      _, acc -> acc
+    end)
+  end
+
+  defp collect_used_meta(_), do: MapSet.new()
+
+  defp raw_token_names(tokens) when is_list(tokens) do
+    Enum.reduce(tokens, MapSet.new(), fn
+      %Token{type: :identifier, value: v}, acc when is_binary(v) -> MapSet.put(acc, v)
+      _, acc -> acc
+    end)
+  end
+
+  defp raw_token_names(_), do: MapSet.new()
 
   defp collect_fresh_names({:fresh_name, _meta, name}), do: MapSet.new([name])
 
@@ -921,18 +1517,19 @@ defmodule Cure.Compiler.Parser do
 
   defp collect_fresh_names_value(_), do: MapSet.new()
 
-  # Rewrite: a marker becomes a variable of its gensym; a plain variable whose
-  # name is a declared fresh name becomes its gensym; everything else recurses
-  # (children AND meta, mirroring subst_holes).
+  # Marker-only rewrite (computed path): a `<fresh N>` MARKER becomes a variable of
+  # its gensym (a template-introduced binder). Plain variables are left untouched —
+  # in the generated-AST path they are reflected use-site data, never template
+  # binders. Everything else recurses (children AND meta, mirroring subst_holes).
   defp apply_freshening({:fresh_name, meta, name}, rename),
     do: {:variable, meta, Map.get(rename, name, name)}
 
-  defp apply_freshening({:variable, meta, name} = v, rename) do
-    case Map.fetch(rename, name) do
-      {:ok, g} -> {:variable, meta, g}
-      :error -> v
-    end
-  end
+  # A quoted syntax value is data, not part of the generated program being
+  # hygienized. Keep its inner representation available to the next macro
+  # stage unchanged, matching MacroExpand's quote boundary.
+  defp apply_freshening({:quoted_syntax, _meta, _children} = quoted, _rename), do: quoted
+
+  defp apply_freshening({:variable, _meta, _name} = v, _rename), do: v
 
   defp apply_freshening({t, meta, ch}, rename) when is_list(ch),
     do: {t, apply_freshening_meta(meta, rename), Enum.map(ch, &apply_freshening(&1, rename))}
@@ -954,6 +1551,269 @@ defmodule Cure.Compiler.Parser do
     do: Enum.map(v, &apply_freshening_value(&1, rename))
 
   defp apply_freshening_value(v, _rename), do: v
+
+  # ---------------------------------------------------------------------------
+  # SP5.3 scope-aware auto-hygiene walk (template path).
+  #
+  # `scoped_freshen(node, rename, holes, used, state) -> {node, state}`.
+  # `rename` maps a template binder name to its per-expansion gensym for the
+  # CURRENT scope; a binding form extends it over exactly the sub-region it
+  # governs, so shadowing re-mints and references resolve to the innermost
+  # binder. `holes` are use-site hole names (never renamed — subst_holes fills
+  # them afterwards). `used` are use-site identifiers a gensym must avoid
+  # (mint_gensym collision-avoidance; see the `g$0` spoof test). `state` threads
+  # the global fresh_counter so every mint is unique within a build.
+  # ---------------------------------------------------------------------------
+
+  # Reference: a hole is left for substitution; a bound name resolves to its
+  # gensym; anything else (a free var, or a constructor) is left verbatim.
+  defp scoped_freshen({:variable, meta, name} = v, rename, holes, _used, state) do
+    cond do
+      MapSet.member?(holes, name) -> {v, state}
+      Map.has_key?(rename, name) -> {{:variable, meta, Map.fetch!(rename, name)}, state}
+      true -> {v, state}
+    end
+  end
+
+  # Stray markers outside a recognized binder position (rare): a `<fresh>` resolves
+  # to its in-scope gensym (or its literal name if unbound); a `<capture>` lowers to
+  # a plain caller-scope variable the walk never renames.
+  defp scoped_freshen({:fresh_name, meta, name}, rename, _holes, _used, state),
+    do: {{:variable, meta, Map.get(rename, name, name)}, state}
+
+  defp scoped_freshen({:capture_name, meta, name}, _rename, _holes, _used, state),
+    do: {{:variable, meta, name}, state}
+
+  # Quoted syntax is a data boundary — leave it whole (mirrors apply_freshening).
+  defp scoped_freshen({:quoted_syntax, _meta, _children} = quoted, _rename, _holes, _used, state),
+    do: {quoted, state}
+
+  # Uniform block frame (`let`, incl. constructor-pattern destructuring). Walk the
+  # children left-to-right; each `{:assignment}` child binds its LHS-leaf binders
+  # over the FOLLOWING children only (its RHS is evaluated in the OUTER scope — the
+  # RHS is a reference/hole, never bound by this assignment). A later assignment of
+  # the same name re-mints, shadowing the earlier binder over the remaining
+  # siblings. A lone assignment (bare `becomes let x = e`) has no following sibling
+  # — a no-op.
+  defp scoped_freshen({:block, meta, children}, rename, holes, used, state) do
+    {rev, _rename, state} =
+      Enum.reduce(children, {[], rename, state}, fn
+        {:assignment, ameta, [lhs, rhs]}, {acc, r, s} ->
+          {new_rhs, s} = scoped_freshen(rhs, r, holes, used, s)
+          {new_lhs, r2, s} = bind_pattern(lhs, r, holes, used, s)
+          {[{:assignment, ameta, [new_lhs, new_rhs]} | acc], r2, s}
+
+        child, {acc, r, s} ->
+          {new_child, s} = scoped_freshen(child, r, holes, used, s)
+          {[new_child | acc], r, s}
+      end)
+
+    {{:block, meta, Enum.reverse(rev)}, state}
+  end
+
+  # Match arm: the pattern binders scope BOTH the arm body (children) AND the
+  # `guard:` term in meta. The scrutinee is a sibling of the enclosing
+  # `pattern_match` node, walked in the outer scope — not here.
+  defp scoped_freshen({:match_arm, meta, children}, rename, holes, used, state) do
+    {new_pattern, arm_rename, state} = bind_pattern(Keyword.get(meta, :pattern), rename, holes, used, state)
+    {new_children, state} = scoped_freshen_list(children, arm_rename, holes, used, state)
+    meta = Keyword.put(meta, :pattern, new_pattern)
+
+    {meta, state} =
+      case Keyword.fetch(meta, :guard) do
+        {:ok, guard} ->
+          {new_guard, state} = scoped_freshen(guard, arm_rename, holes, used, state)
+          {Keyword.put(meta, :guard, new_guard), state}
+
+        :error ->
+          {meta, state}
+      end
+
+    {{:match_arm, meta, new_children}, state}
+  end
+
+  # Expression-position lambda: params bind the body only.
+  defp scoped_freshen({:lambda, meta, children}, rename, holes, used, state) do
+    {new_params, lam_rename, state} = bind_params(Keyword.get(meta, :params, []), rename, holes, used, state)
+    {new_children, state} = scoped_freshen_list(children, lam_rename, holes, used, state)
+    {{:lambda, Keyword.put(meta, :params, new_params), new_children}, state}
+  end
+
+  # Single-clause named fn-def — matched STRICTLY on the single-child `[body]`
+  # shape. A multi-clause fn-def is `{:function_def, meta, []}` (empty children,
+  # `clauses:`/`params:` in meta); it falls through to the generic clause, which
+  # never renames its signature (params are bare-string tuple leaves the generic
+  # meta walk leaves untouched). Params bind the body PLUS the `guards:`,
+  # `return_type:`, `constraints:` (the `where` clause) meta terms and each param's
+  # own `type:`/`default:` — all of which may reference the params.
+  defp scoped_freshen({:function_def, meta, [body]}, rename, holes, used, state) do
+    {new_params, fn_rename, state} = bind_params(Keyword.get(meta, :params, []), rename, holes, used, state)
+    {new_params, state} = rewrite_param_annotations(new_params, fn_rename, holes, used, state)
+    {new_body, state} = scoped_freshen(body, fn_rename, holes, used, state)
+
+    {meta, state} =
+      Enum.reduce([:guards, :return_type, :constraints], {Keyword.put(meta, :params, new_params), state}, fn
+        key, {m, s} -> scoped_freshen_meta_slot(m, key, fn_rename, holes, used, s)
+      end)
+
+    {{:function_def, meta, [new_body]}, state}
+  end
+
+  # Comprehension: REVERSE-scope. `[body | gens_and_filters]` — the body is the
+  # FIRST child but is scoped by EVERY generator binder. Generators bind
+  # left-to-right (a later generator's collection may reference an earlier binder);
+  # filters are scoped by the preceding generators. Walk the generators/filters
+  # first, accumulating the rename, then walk the earlier-sibling body under the
+  # full accumulated scope.
+  defp scoped_freshen({:comprehension, meta, [body | rest]}, rename, holes, used, state) do
+    {rev, comp_rename, state} =
+      Enum.reduce(rest, {[], rename, state}, fn
+        {:generator, gmeta, [pattern, collection]}, {acc, r, s} ->
+          {new_collection, s} = scoped_freshen(collection, r, holes, used, s)
+          {new_pattern, r2, s} = bind_pattern(pattern, r, holes, used, s)
+          {[{:generator, gmeta, [new_pattern, new_collection]} | acc], r2, s}
+
+        filter, {acc, r, s} ->
+          {new_filter, s} = scoped_freshen(filter, r, holes, used, s)
+          {[new_filter | acc], r, s}
+      end)
+
+    {new_body, state} = scoped_freshen(body, comp_rename, holes, used, state)
+    {{:comprehension, meta, [new_body | Enum.reverse(rev)]}, state}
+  end
+
+  # Generic recursion: no new scope introduced. Recurse meta values and children
+  # under the same rename. Bare-string/atom meta values (names, flags) and
+  # `{:param, _, string}` tuples are left untouched — only a binding-form frame
+  # ever renames a param string — so a stray/empty-children fn-def keeps its
+  # signature, and maps (never `{tag, meta, list}`) stop the walk (the OTP OUT set).
+  defp scoped_freshen({t, meta, children}, rename, holes, used, state) when is_list(children) do
+    {new_meta, state} = scoped_freshen_meta(meta, rename, holes, used, state)
+    {new_children, state} = scoped_freshen_list(children, rename, holes, used, state)
+    {{t, new_meta, new_children}, state}
+  end
+
+  defp scoped_freshen(other, _rename, _holes, _used, state), do: {other, state}
+
+  defp scoped_freshen_list(nodes, rename, holes, used, state) when is_list(nodes) do
+    Enum.map_reduce(nodes, state, fn node, s -> scoped_freshen(node, rename, holes, used, s) end)
+  end
+
+  defp scoped_freshen_meta(meta, rename, holes, used, state) when is_list(meta) do
+    Enum.map_reduce(meta, state, fn
+      {k, v}, s ->
+        {new_v, s} = scoped_freshen_value(v, rename, holes, used, s)
+        {{k, new_v}, s}
+
+      other, s ->
+        {other, s}
+    end)
+  end
+
+  defp scoped_freshen_meta(meta, _rename, _holes, _used, state), do: {meta, state}
+
+  defp scoped_freshen_value(v, rename, holes, used, state) when is_tuple(v),
+    do: scoped_freshen(v, rename, holes, used, state)
+
+  defp scoped_freshen_value(v, rename, holes, used, state) when is_list(v),
+    do: scoped_freshen_list(v, rename, holes, used, state)
+
+  defp scoped_freshen_value(v, _rename, _holes, _used, state), do: {v, state}
+
+  # Rewrite one meta slot (`guards:`/`return_type:`/`constraints:`) with the
+  # in-scope rename if present, threading state; a missing slot is a no-op.
+  defp scoped_freshen_meta_slot(meta, key, rename, holes, used, state) do
+    case Keyword.fetch(meta, key) do
+      {:ok, value} ->
+        {new_value, state} = scoped_freshen_value(value, rename, holes, used, state)
+        {Keyword.put(meta, key, new_value), state}
+
+      :error ->
+        {meta, state}
+    end
+  end
+
+  # Bind a pattern: mint a gensym for each binder LEAF and rewrite it, returning
+  # the rewritten pattern, the extended rename, and threaded state. Binder leaves
+  # are lowercase-initial `{:variable}` names (an uppercase name is a nullary
+  # constructor — Idris/Cure convention, elaborator.ex:4519 — left untouched) that
+  # are NOT holes, plus explicit `<fresh>` markers (always minted). A `<capture>`
+  # marker lowers to a plain caller-scope variable and binds nothing. Non-binder
+  # structure (a constructor's argument list) is recursed; `name:`-in-meta
+  # constructors are not leaves so are never minted.
+  defp bind_pattern({:variable, meta, name} = v, rename, holes, used, state) do
+    if binder_name?(name) and not MapSet.member?(holes, name) do
+      {gensym, state} = mint_gensym(name, state, used)
+      {{:variable, meta, gensym}, Map.put(rename, name, gensym), state}
+    else
+      {v, rename, state}
+    end
+  end
+
+  defp bind_pattern({:fresh_name, meta, name}, rename, _holes, used, state) do
+    {gensym, state} = mint_gensym(name, state, used)
+    {{:variable, meta, gensym}, Map.put(rename, name, gensym), state}
+  end
+
+  defp bind_pattern({:capture_name, meta, name}, rename, _holes, _used, state),
+    do: {{:variable, meta, name}, rename, state}
+
+  defp bind_pattern({t, meta, children}, rename, holes, used, state) when is_list(children) do
+    {new_children, rename, state} = bind_pattern_list(children, rename, holes, used, state)
+    {{t, meta, new_children}, rename, state}
+  end
+
+  defp bind_pattern(other, rename, _holes, _used, state), do: {other, rename, state}
+
+  defp bind_pattern_list(nodes, rename, holes, used, state) when is_list(nodes) do
+    {rev, rename, state} =
+      Enum.reduce(nodes, {[], rename, state}, fn node, {acc, r, s} ->
+        {new_node, r2, s} = bind_pattern(node, r, holes, used, s)
+        {[new_node | acc], r2, s}
+      end)
+
+    {Enum.reverse(rev), rename, state}
+  end
+
+  # Bind lambda / fn-def params: each `{:param, meta, name}` string-child is a
+  # binder (params are always binders — no constructor ambiguity). Mint, rewrite
+  # the name, extend the rename. Param annotations (`type:`/`default:`) are
+  # rewritten separately once the full param scope is known (see
+  # rewrite_param_annotations) so a dependent annotation referencing a sibling
+  # param resolves correctly.
+  defp bind_params(params, rename, _holes, used, state) when is_list(params) do
+    {rev, rename, state} =
+      Enum.reduce(params, {[], rename, state}, fn
+        {:param, pmeta, name}, {acc, r, s} when is_binary(name) ->
+          {gensym, s} = mint_gensym(name, s, used)
+          {[{:param, pmeta, gensym} | acc], Map.put(r, name, gensym), s}
+
+        other, {acc, r, s} ->
+          {[other | acc], r, s}
+      end)
+
+    {Enum.reverse(rev), rename, state}
+  end
+
+  defp bind_params(params, rename, _holes, _used, state), do: {params, rename, state}
+
+  defp rewrite_param_annotations(params, rename, holes, used, state) when is_list(params) do
+    Enum.map_reduce(params, state, fn
+      {:param, pmeta, name}, s ->
+        {new_pmeta, s} = scoped_freshen_meta(pmeta, rename, holes, used, s)
+        {{:param, new_pmeta, name}, s}
+
+      other, s ->
+        {other, s}
+    end)
+  end
+
+  defp rewrite_param_annotations(params, _rename, _holes, _used, state), do: {params, state}
+
+  # A lowercase-initial (or `_`-initial) name is a term binder; an uppercase name
+  # is a constructor (elaborator.ex:4519). Empty names never bind.
+  defp binder_name?(name) when is_binary(name), do: name =~ ~r/^[a-z_]/
+  defp binder_name?(_), do: false
 
   defp subst_holes({:variable, _meta, name} = v, bindings, _state) do
     case Map.fetch(bindings, name) do
@@ -1013,17 +1873,21 @@ defmodule Cure.Compiler.Parser do
     eof = %Token{type: :eof, value: nil, line: 0, col: 0}
     context = context || parser_state.expansion_context
 
-    state = %__MODULE__{
-      tokens: tokens ++ [eof],
-      file: parser_state.file,
-      emit_events: false,
-      edition: parser_state.edition,
-      builtin_macros: parser_state.builtin_macros,
-      active_macros: parser_state.active_macros,
-      computed_macros: parser_state.computed_macros,
-      literal_macros: parser_state.literal_macros,
-      expansion_context: context
-    }
+    state =
+      put_tokens(
+        %__MODULE__{
+          file: parser_state.file,
+          emit_events: false,
+          edition: parser_state.edition,
+          builtin_macros: parser_state.builtin_macros,
+          builtin_computed_macros: parser_state.builtin_computed_macros,
+          active_macros: parser_state.active_macros,
+          computed_macros: parser_state.computed_macros,
+          literal_macros: parser_state.literal_macros,
+          expansion_context: context
+        },
+        tokens ++ [eof]
+      )
 
     {exprs, state} = parse_program(state)
 
@@ -1410,6 +2274,24 @@ defmodule Cure.Compiler.Parser do
       # Variables / identifiers
       :identifier ->
         case token.value do
+          # Computed rules get first refusal when they share a public keyword
+          # with a transparent rule. A mismatch falls through to that rule in
+          # parse_computed_use/2, preserving existing grammar variants.
+          name
+          when (is_map_key(state.computed_macros, name) or is_map_key(state.builtin_computed_macros, name)) and
+                 name not in @reserved_macro_keywords ->
+            if computed_macro_head?(state, name) do
+              parse_computed_use(state, name)
+            else
+              case computed_macro_fallback(state, name) do
+                {:ok, ast, fallback_state} ->
+                  {ast, fallback_state}
+
+                :none ->
+                  {variable(token), advance(state)}
+              end
+            end
+
           # Standard-library syntax macros use the same segment matcher as
           # user macros. Their raw body is parsed again by the ordinary parser.
           name when is_map_key(state.builtin_macros, name) ->
@@ -1429,9 +2311,6 @@ defmodule Cure.Compiler.Parser do
               {variable(token), advance(state)}
             end
 
-          name when is_map_key(state.computed_macros, name) and name not in @reserved_macro_keywords ->
-            parse_computed_use(state, name)
-
           "assert_type" ->
             parse_assert_type(state, token)
 
@@ -1440,6 +2319,15 @@ defmodule Cure.Compiler.Parser do
 
           "rewrite" ->
             parse_rewrite(state, token)
+
+          # `proof` is contextual: at a declaration-shaped head it introduces
+          # a proof container; in every other expression/binder position it is
+          # an ordinary identifier. The lexer deliberately does not decide.
+          "proof" ->
+            case peek_at(state, 1) do
+              %Token{type: :identifier} -> parse_proof_container(state)
+              _ -> {variable(token), advance(state)}
+            end
 
           # Contextual keyword: `with e <arms>` is a with-abstraction only in
           # expression-prefix position and only when what follows `with` can
@@ -1491,6 +2379,11 @@ defmodule Cure.Compiler.Parser do
       # Grouping
       :lparen ->
         parse_grouped(state)
+
+      # Quasiquote splice hole (SP5.1): `$(e)` / `$(e ...)`. Legal only inside a
+      # `quote`; outside one the elaborator rejects the orphan splice node.
+      :splice_open ->
+        parse_splice(state, token)
 
       # Collections
       :lbracket ->
@@ -1553,13 +2446,20 @@ defmodule Cure.Compiler.Parser do
         parse_block(state)
 
       # `<fresh Name>` — a template hygiene marker minting a per-expansion
-      # gensym (design §5). Only this exact window is special; every other
-      # leading `<` keeps its previous unexpected-token error. Infix `<`
-      # (comparisons) never reaches this prefix clause.
+      # gensym (design §5). `<capture Name>` is the symmetric opt-OUT: it marks
+      # a template binder that must NOT be auto-freshened, so it binds into the
+      # caller's scope on purpose (SP5.3 §4). Only these exact windows are
+      # special; every other leading `<` keeps its previous unexpected-token
+      # error. Infix `<` (comparisons) never reaches this prefix clause.
       :lt ->
         case {peek_at(state, 1), peek_at(state, 2), peek_at(state, 3)} do
           {%Token{type: :identifier, value: "fresh"}, %Token{type: :identifier, value: name}, %Token{type: :gt}} ->
             node = {:fresh_name, [line: token.line, col: token.col], name}
+            state = state |> advance() |> advance() |> advance() |> advance()
+            {node, state}
+
+          {%Token{type: :identifier, value: "capture"}, %Token{type: :identifier, value: name}, %Token{type: :gt}} ->
+            node = {:capture_name, [line: token.line, col: token.col], name}
             state = state |> advance() |> advance() |> advance() |> advance()
             {node, state}
 
@@ -1729,7 +2629,8 @@ defmodule Cure.Compiler.Parser do
         {:expr, expr_tokens} ->
           # Append an EOF token so the sub-parser terminates
           sub_tokens = expr_tokens ++ [Token.new(:eof, nil, token.line, token.col)]
-          sub_state = %__MODULE__{tokens: sub_tokens, file: state.file, emit_events: false}
+          sub_state =
+            put_tokens(%__MODULE__{file: state.file, emit_events: false}, sub_tokens)
           {expr, _} = parse_expr(sub_state, 0)
           expr
       end)
@@ -2527,6 +3428,9 @@ defmodule Cure.Compiler.Parser do
       :match ->
         parse_match(state)
 
+      :quote ->
+        parse_quote(state)
+
       :pickup ->
         parse_pickup(state)
 
@@ -2622,6 +3526,73 @@ defmodule Cure.Compiler.Parser do
 
   defp macro_use_head?(state, "lens"), do: prelude_macro_head?(state, "lens")
   defp macro_use_head?(_state, _name), do: true
+
+  defp computed_macro_head?(state, name) do
+    rules = Map.get(state.computed_macros, name, []) ++ Map.get(state.builtin_computed_macros, name, [])
+
+    Enum.any?(rules, fn rule ->
+      case {rule.segments, peek_at(state, 1)} do
+        {[], _next} -> true
+        {[{:lit, "("} | _], %Token{type: :lparen}} -> true
+        {_segments, %Token{type: :lparen}} -> false
+        {_segments, _next} -> not legacy_block_ambiguity?(state, name, rule)
+      end
+    end)
+  end
+
+  # A structured family and an older raw-body rule may share a keyword. If the
+  # use-site starts with the legacy rule's nested block form, let the legacy
+  # matcher own it; an inline structured field remains unambiguous. This keeps
+  # migration source-compatible without making the family parser know anything
+  # about the legacy rule's domain vocabulary.
+  defp legacy_block_ambiguity?(state, name, rule) do
+    Map.get(rule, :direct_inputs, false) and
+      (Map.has_key?(state.active_macros, name) or Map.has_key?(state.builtin_macros, name)) and
+      nested_family_block_head?(state)
+  end
+
+  defp nested_family_block_head?(state) do
+    state
+    |> tokens_from(state.pos + 1)
+    |> drop_until_newline()
+    |> case do
+      [%Token{type: :newline} | rest] ->
+        rest
+        |> drop_whitespace_tokens()
+        |> case do
+          [%Token{type: :indent} | rest] ->
+            rest
+            |> drop_whitespace_tokens()
+            |> case do
+              [%Token{type: :identifier} | rest] ->
+                rest
+                |> drop_whitespace_tokens()
+                |> starts_with_indent?()
+
+              _ ->
+                false
+            end
+
+          _ ->
+            false
+        end
+
+      _ ->
+        false
+    end
+  end
+
+  defp drop_until_newline([%Token{type: :newline} | _] = tokens), do: tokens
+  defp drop_until_newline([_token | rest]), do: drop_until_newline(rest)
+  defp drop_until_newline([]), do: []
+
+  defp drop_whitespace_tokens([%Token{type: type} | rest]) when type in [:newline],
+    do: drop_whitespace_tokens(rest)
+
+  defp drop_whitespace_tokens(tokens), do: tokens
+
+  defp starts_with_indent?([%Token{type: :indent} | _]), do: true
+  defp starts_with_indent?(_tokens), do: false
 
   # -- Let Binding -----------------------------------------------------------
 
@@ -2848,6 +3819,11 @@ defmodule Cure.Compiler.Parser do
       {acc, state}
     end
   end
+
+  # `proof` is the contextual with-proof keyword (it lexes as an identifier since
+  # 408d3049). It terminates the scrutinee list so `parse_optional_with_proof`
+  # can claim `proof <ident>`; without this, multi-with collection eats it.
+  defp with_scrutinee_start?(%Token{type: :identifier, value: "proof"}), do: false
 
   defp with_scrutinee_start?(%Token{type: type})
        when type in [
@@ -3200,6 +4176,15 @@ defmodule Cure.Compiler.Parser do
   defp parse_optional_with_proof(state) do
     case peek(state) do
       %Token{type: :keyword, value: :proof} ->
+        case peek_at(state, 1) do
+          %Token{type: :identifier, value: name} ->
+            {name, state |> advance() |> advance()}
+
+          _ ->
+            {nil, state}
+        end
+
+      %Token{type: :identifier, value: "proof"} ->
         case peek_at(state, 1) do
           %Token{type: :identifier, value: name} ->
             {name, state |> advance() |> advance()}
@@ -4444,7 +5429,11 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
     {rhs, state} = parse_type_expr(state)
 
-    meta = [name: name, line: token.line, col: token.col]
+    # Keep the explicit spelling distinguishable from the deliberately
+    # ambiguous `type X = Y` node. The elaborator's header pass uses this bit
+    # to predeclare transparent aliases without accidentally turning a
+    # forward-referenced one-constructor ADT into an alias.
+    meta = [name: name, line: token.line, col: token.col, typealias: true]
     meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
     {{:type_annotation, meta, [rhs]}, state}
   end
@@ -4523,7 +5512,7 @@ defmodule Cure.Compiler.Parser do
     state = expect(state, :lparen)
     {idx_tele, state} = parse_typed_params(state)
     state = expect(state, :rparen)
-    state = skip_newlines(state)
+    state = skip_newlines_and_comments(state)
 
     {opened_block, state} =
       case peek(state) do
@@ -4570,6 +5559,12 @@ defmodule Cure.Compiler.Parser do
 
     {ast, state} =
       case {peek(state), peek_at(state, 1)} do
+        {%Token{type: :lbrace}, _} ->
+          {rhs, state} = parse_refinement_type(state)
+          meta = [name: name, line: token.line, col: token.col]
+          meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+          {{:type_annotation, meta, [rhs]}, state}
+
         {%Token{type: :lparen}, %Token{type: :rparen}} ->
           # `type Unit = ()` — the Swift-style unit type: `Unit` is the type, `()`
           # its sole value. `= ()` is RESERVED to `Unit`; `()` names the one
@@ -4720,6 +5715,13 @@ defmodule Cure.Compiler.Parser do
       %Token{type: type} when type in [:dedent, :eof] ->
         {Enum.reverse(acc), state}
 
+      # A `##`/`#` comment still at constructor indent (no intervening `:dedent`, which the
+      # clause above would have caught) sits BETWEEN constructors — skip it and continue, so a
+      # constructor can be documented in place (E5). A comment that ends the block is preceded
+      # by `:dedent` and never reaches here.
+      %Token{type: type} when type in [:doc_comment, :line_comment] ->
+        parse_gadt_ctors(advance(state), acc)
+
       _ ->
         cname_token = peek(state)
         cname = to_string(cname_token.value)
@@ -4785,9 +5787,24 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
 
     case token.type do
+      :lbrace ->
+        parse_refinement_type(state)
+
       :lparen ->
         state = advance(state)
-        {inner, state} = parse_type_atom(state)
+        # Reuse the constructor-domain parser inside the group as well. This
+        # admits a named dependent domain in a higher-order field type:
+        # `Mk : ((x: A) -> B(x)) -> T`. Previously the general type parser
+        # accepted this Π shape while this constructor-only path accepted only
+        # anonymous `(A) -> B`, creating two subtly different type grammars.
+        {inner, state} = parse_ctor_dom(state)
+        # A PARENTHESISED function type (`(A) -> B`, `(A) -> B -> C`) is ONE grouped
+        # type — e.g. a higher-order constructor field `MkPid : ((m) -> R) -> Pid(m)`.
+        # The closing `)` bounds the arrow chain, so absorbing `->` here is
+        # unambiguous, unlike the ctor's own top-level arrow chain (which uses `->`
+        # to separate fields from the result index). `parse_type_atom` stays
+        # arrow-free everywhere else.
+        {inner, state} = parse_paren_arrow_tail(state, inner)
         state = expect(state, :rparen)
         {inner, state}
 
@@ -4805,6 +5822,55 @@ defmodule Cure.Compiler.Parser do
           _ ->
             {{:variable, [scope: :local], name}, state}
         end
+    end
+  end
+
+  # Inside a `(...)` group only: if an `->` follows the first atom, collect the
+  # whole arrow chain `A -> B -> …  -> Ret` into the same `Function` node
+  # `parse_type_arrow` produces, so a parenthesised function type is one grouped
+  # type. Absent an arrow this is the identity (a plain parenthesised type).
+  defp parse_paren_arrow_tail(state, first) do
+    case peek(state) do
+      %Token{type: :arrow} ->
+        {parts, state} = collect_paren_arrow(state, [first])
+        {paren_arrow_ast(parts), state}
+
+      _ ->
+        {first, state}
+    end
+  end
+
+  defp collect_paren_arrow(state, acc) do
+    case peek(state) do
+      %Token{type: :arrow} ->
+        state = advance(state)
+        {atom, state} = parse_ctor_dom(state)
+        collect_paren_arrow(state, [atom | acc])
+
+      _ ->
+        {Enum.reverse(acc), state}
+    end
+  end
+
+  defp paren_arrow_ast(parts) do
+    {domains, [ret]} = Enum.split(parts, length(parts) - 1)
+
+    if Enum.any?(domains, &match?({:named_dom, _, _}, &1)) do
+      binders =
+        Enum.map(domains, fn
+          {:named_dom, name, _} -> name
+          _ -> nil
+        end)
+
+      doms =
+        Enum.map(domains, fn
+          {:named_dom, _, inner} -> inner
+          other -> other
+        end)
+
+      {:pi_type, [binders: binders], doms ++ [ret]}
+    else
+      {:function_call, [name: "Function", function_type: true], parts}
     end
   end
 
@@ -5221,10 +6287,20 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
+    {leading_segments, state} = parse_rule_segments(state, [])
     state = skip_macro_trivia(state)
     {rules, state} = parse_macro_block(state)
 
-    meta = [name: name, line: token.line, col: token.col]
+    state =
+      case MacroFamily.validate(rules) do
+        :ok ->
+          state
+
+        {:error, reason} ->
+          add_error(state, {:invalid_macro_family, reason, token.line, token.col})
+      end
+
+    meta = [name: name, leading_segments: leading_segments, line: token.line, col: token.col]
     {{:macro_def, meta, rules}, state}
   end
 
@@ -5353,7 +6429,12 @@ defmodule Cure.Compiler.Parser do
         callback: name,
         arity: length(params),
         parameter_names: Enum.map(params, fn {:param, _, parameter} -> parameter end),
-        return_annotation: if(return_type, do: :declared, else: :inferred)
+        parameter_types:
+          Enum.map(params, fn {:param, parameter_meta, _parameter} ->
+            Keyword.get(parameter_meta, :type)
+          end),
+        return_annotation: if(return_type, do: :declared, else: :inferred),
+        return_type: return_type
       }
     }
 
@@ -5398,8 +6479,21 @@ defmodule Cure.Compiler.Parser do
         {Enum.reverse(acc), state}
 
       %Token{type: :identifier, value: "syntax"} ->
-        {rule, state} = parse_macro_rule(state)
+        {rule, state} =
+          case peek_at(state, 1) do
+            %Token{type: :identifier, value: "family"} -> parse_syntax_family(state)
+            _ -> parse_macro_rule(state)
+          end
+
         parse_macro_rules(state, [rule | acc])
+
+      %Token{type: :identifier, value: "accepts"} ->
+        {entry, state} = parse_macro_accepts(state)
+        parse_macro_rules(state, [entry | acc])
+
+      %Token{type: :identifier, value: "expands"} ->
+        {entry, state} = parse_macro_expands_with(state)
+        parse_macro_rules(state, [entry | acc])
 
       %Token{type: :identifier, value: "literal"} ->
         {rule, state} = parse_literal_rule(state)
@@ -5421,6 +6515,111 @@ defmodule Cure.Compiler.Parser do
         state = add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col})
         # Recover: skip a token so one bad line does not eat the block.
         parse_macro_rules(advance(state), acc)
+    end
+  end
+
+  defp parse_macro_accepts(state) do
+    token = peek(state)
+    state = advance(state)
+    {family, state} = parse_dotted_name(state)
+    {%{kind: :accepts, family: family, line: token.line, col: token.col}, state}
+  end
+
+  defp parse_macro_expands_with(state) do
+    token = peek(state)
+    state = advance(state)
+
+    state =
+      case peek(state) do
+        %Token{type: :identifier, value: "with"} -> advance(state)
+        t -> add_error(state, {:expected, :with, :got, t.type, t.line, t.col})
+      end
+
+    {expander, state} = parse_expr(state, 0)
+    {%{kind: :expands_with, expander: expander, line: token.line, col: token.col}, state}
+  end
+
+  defp parse_syntax_family(state) do
+    family_token = peek_at(state, 1)
+    state = advance(state)
+    state = advance(state)
+    name_token = peek(state)
+    name = to_string(name_token.value)
+    state = advance(state)
+    state = skip_macro_trivia(state)
+
+    case peek(state) do
+      %Token{type: :indent} ->
+        {fields, includes, state} = parse_syntax_family_fields(advance(state), [], [])
+        state = expect_dedent(state)
+
+        {%{
+           kind: :syntax_family,
+           name: name,
+           fields: fields,
+           includes: includes,
+           line: family_token.line,
+           col: family_token.col
+         }, state}
+
+      t ->
+        state = add_error(state, {:expected, :indent, :got, t.type, t.line, t.col})
+        {%{kind: :syntax_family, name: name, fields: [], line: family_token.line, col: family_token.col}, state}
+    end
+  end
+
+  defp parse_syntax_family_fields(state, fields, includes) do
+    state = skip_macro_trivia(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(fields), Enum.reverse(includes), state}
+
+      %Token{type: :identifier, value: "includes"} = token ->
+        {include, state} = parse_dotted_name(advance(state))
+        state = consume_line_end(state)
+        parse_syntax_family_fields(state, fields, [{include, token.line, token.col} | includes])
+
+      %Token{type: :identifier} = token ->
+        {cardinality, state} = parse_family_cardinality(state)
+        field_token = peek(state)
+        field = to_string(field_token.value)
+        state = advance(state)
+        shape_token = peek(state)
+        shape = to_string(shape_token.value)
+        state = advance(state)
+        state = consume_line_end(state)
+
+        field_entry = %{
+          kind: :family_field,
+          name: field,
+          shape: shape,
+          cardinality: cardinality,
+          line: token.line,
+          col: token.col
+        }
+
+        parse_syntax_family_fields(state, [field_entry | fields], includes)
+
+      other ->
+        state = add_error(state, {:expected, :family_field, :got, other.type, other.line, other.col})
+        parse_syntax_family_fields(advance(state), fields, includes)
+    end
+  end
+
+  defp parse_family_cardinality(state) do
+    case peek(state) do
+      %Token{type: :identifier, value: "optional"} -> {:optional, advance(state)}
+      %Token{type: :identifier, value: "repeated"} -> {:repeated, advance(state)}
+      %Token{type: :identifier, value: "one_or_more"} -> {:one_or_more, advance(state)}
+      _ -> {:required, state}
+    end
+  end
+
+  defp consume_line_end(state) do
+    case peek(state) do
+      %Token{type: :newline} -> advance(state)
+      _ -> state
     end
   end
 
@@ -5506,6 +6705,16 @@ defmodule Cure.Compiler.Parser do
   defp parse_computed_rule(state, kw_token, keyword, segments, category, contextual) do
     state = advance(state)
 
+    # Optional `directly` opt-in: the elab fn receives each matched hole as its
+    # own argument (multi-arg) rather than one synthesized input record. This
+    # lets a rule whose holes differ from the keyword's shared synthesized
+    # record still reach a typed adapter. Absent => single-record input (default).
+    {direct_inputs, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "directly"} -> {true, advance(state)}
+        _ -> {false, state}
+      end
+
     state =
       case peek(state) do
         %Token{type: :identifier, value: "by"} -> advance(state)
@@ -5522,6 +6731,8 @@ defmodule Cure.Compiler.Parser do
       syntax_type: macro_syntax_type(keyword),
       syntax_fields: macro_syntax_fields(segments),
       syntax_repeated_fields: macro_syntax_repeated_fields(segments),
+      syntax_field_types: macro_syntax_field_types(segments),
+      direct_inputs: direct_inputs,
       elab: elab,
       examples: examples,
       category: category,
@@ -5534,7 +6745,7 @@ defmodule Cure.Compiler.Parser do
     {rule, state}
   end
 
-  defp macro_syntax_type(keyword), do: String.capitalize(keyword) <> "Syntax"
+  defp macro_syntax_type(keyword), do: MacroFamily.syntax_type(keyword)
 
   # A rule may optionally declare the category it produces. Categories are
   # metadata for the macro grammar; expansion remains ordinary AST rewriting.
@@ -5561,8 +6772,27 @@ defmodule Cure.Compiler.Parser do
     |> Enum.uniq()
   end
 
+  defp macro_syntax_field_types(segments) do
+    segments
+    |> Enum.flat_map(&segment_field_types/1)
+    |> Map.new()
+  end
+
+  defp segment_field_types({:hole, %{name: name, kind: kind}}) when kind in ["Int", "Float", "Atom", "Bool"],
+    do: [{name, {:primitive, kind}}]
+
+  defp segment_field_types({:repeat, segment}), do: segment_field_types(segment)
+
+  defp segment_field_types({:optional, segments}),
+    do: Enum.flat_map(segments, &segment_field_types/1)
+
+  defp segment_field_types(_segment), do: []
+
   defp segment_hole_names({:hole, %{name: name}}), do: [name]
+  defp segment_hole_names({:code_hole, %{name: name}}), do: [name]
   defp segment_hole_names({:raw_hole, %{name: name}}), do: [name]
+  defp segment_hole_names({:declarations_hole, %{name: name}}), do: [name]
+  defp segment_hole_names({:family, %{name: name}}), do: [name]
   defp segment_hole_names({:repeat, segment}), do: segment_hole_names(segment)
   defp segment_hole_names({:optional, segments}), do: Enum.flat_map(segments, &segment_hole_names/1)
   defp segment_hole_names(_segment), do: []
@@ -5575,10 +6805,32 @@ defmodule Cure.Compiler.Parser do
   defp segment_repeated_hole_names(_segment), do: []
 
   defp segment_inputs({:hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
+  defp segment_inputs({:code_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
+  defp segment_inputs({:declarations_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
+  defp segment_inputs({:family, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:repeat, segment}, bindings), do: [segment_inputs(segment, bindings)]
-  defp segment_inputs({:optional, segments}, bindings), do: Enum.flat_map(segments, &segment_inputs(&1, bindings))
+  # Optional groups still occupy a stable reflected-record slot. An absent
+  # optional hole is represented by `nil`, which MacroSyntax reflects as
+  # `Raw(SOpaque)`; dropping the slot would shift every later field left and
+  # make the typed computed input unsound.
+  defp segment_inputs({:optional, segments}, bindings),
+    do: Enum.flat_map(segments, &optional_segment_inputs(&1, bindings))
+
   defp segment_inputs(_segment, _bindings), do: []
+
+  defp optional_segment_inputs({:hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
+  defp optional_segment_inputs({:code_hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
+  defp optional_segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
+
+  defp optional_segment_inputs({:declarations_hole, %{name: name}}, bindings),
+    do: [Map.get(bindings, name)]
+  defp optional_segment_inputs({:repeat, segment}, bindings), do: optional_segment_inputs(segment, bindings)
+
+  defp optional_segment_inputs({:optional, segments}, bindings),
+    do: Enum.flat_map(segments, &optional_segment_inputs(&1, bindings))
+
+  defp optional_segment_inputs(_segment, _bindings), do: []
 
   # After a syntax rule's template, an OPTIONAL indented block of `example …`
   # lines (self-proving §5). Consumes the nested indent/dedent so the macro-body
@@ -5807,6 +7059,25 @@ defmodule Cure.Compiler.Parser do
             state = Enum.reduce(1..7, state, fn _, acc_state -> advance(acc_state) end)
             parse_rule_segments(state, [hole | acc], mode)
 
+          {%Token{type: :identifier, value: name}, %Token{type: :colon}, %Token{type: :identifier, value: "Code"},
+           %Token{type: :identifier, value: "until"}, %Token{type: :identifier, value: delimiter}, %Token{type: :gt}, _} ->
+            hole = {:code_hole, %{name: name, delimiter: delimiter, line: peek(state).line}}
+            state = Enum.reduce(1..7, state, fn _, acc_state -> advance(acc_state) end)
+            parse_rule_segments(state, [hole | acc], mode)
+
+          # A positional declarations block hole: `<name: Declarations until X>`
+          # captures the indented run of definitions the same way the structured
+          # family `body Declarations` section does (parse_definition_block), but
+          # in a positional rule slot so a raw Tier-0 template can funnel its
+          # trailing body block through `computed`. The only delimiter in use is
+          # `dedent` (the block's own indentation boundary).
+          {%Token{type: :identifier, value: name}, %Token{type: :colon},
+           %Token{type: :identifier, value: "Declarations"}, %Token{type: :identifier, value: "until"},
+           %Token{type: :identifier, value: delimiter}, %Token{type: :gt}, _} ->
+            hole = {:declarations_hole, %{name: name, delimiter: delimiter, line: peek(state).line}}
+            state = Enum.reduce(1..7, state, fn _, acc_state -> advance(acc_state) end)
+            parse_rule_segments(state, [hole | acc], mode)
+
           _ ->
             with %Token{type: :identifier, value: name} <- peek_at(state, 1),
                  %Token{type: :colon} <- peek_at(state, 2),
@@ -5847,14 +7118,14 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp optional_group_start?(%{tokens: tokens, pos: pos}) do
+  defp optional_group_start?(%{pos: pos} = state) do
     result =
-      tokens
-      |> Enum.drop(pos + 1)
+      state
+      |> tokens_from(pos + 1)
       |> Enum.with_index()
       |> Enum.find_value(:not_found, fn
         {%Token{type: :rparen}, index} ->
-          case Enum.at(tokens, pos + index + 2) do
+          case token_at(state, pos + index + 2) do
             %Token{type: :hole, value: ""} -> true
             _ -> false
           end
@@ -5957,6 +7228,9 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
 
     case token.type do
+      :lbrace ->
+        parse_refinement_type(state)
+
       :lparen ->
         # Grouped/tuple type `(A, B)` or function type `(A, B) -> C`. Each element
         # may carry an optional binder name `(x: A) -> …` — a DEPENDENT arrow whose
@@ -6024,6 +7298,23 @@ defmodule Cure.Compiler.Parser do
             maybe_parse_type_projection(base, state)
         end
     end
+  end
+
+  # `{value: Base | Proposition}` is a proof-backed refinement type. The base is
+  # parsed with the non-union arrow parser because this form owns the `|` token.
+  # The proposition remains ordinary Cure syntax and may refer to `value`.
+  defp parse_refinement_type(state) do
+    state = advance(state)
+    binder_token = peek(state)
+    binder = to_string(binder_token.value)
+    state = advance(state)
+    state = expect(state, :colon)
+    {base_type, state} = parse_type_arrow(state)
+    state = expect(state, :bar) |> skip_newlines()
+    {proposition, state} = parse_expr(state, 0)
+    state = expect(state, :rbrace)
+
+    {{:refinement_type, [binder: binder], [base_type, proposition]}, state}
   end
 
   # A type-position projection `p.1` / `p.2` (used in dependent index positions,
@@ -6535,6 +7826,17 @@ defmodule Cure.Compiler.Parser do
         type_ast = attach_decorator(type_ast, dec_name, args)
         {type_ast, state}
 
+      # `@erases(:pid) opaque type Name` attaches the decorator to the opaque
+      # container. Like the `type` branch, parse_type_def/2 builds a {:container, …}
+      # node that attach_decorator/3's generic clause threads into :decorator meta —
+      # but the `opaque` keyword must be consumed first (see the statement
+      # dispatcher). Without this branch the decorator is silently dropped and the
+      # carrier is left with no declared erasure.
+      %Token{type: :keyword, value: :opaque} ->
+        {type_ast, state} = parse_type_def(advance(state), opaque: true)
+        type_ast = attach_decorator(type_ast, dec_name, args)
+        {type_ast, state}
+
       # `@builtin(:tag) primitive Name` attaches the decorator to the primitive
       # container (the generic {:container, …} attach_decorator clause writes it
       # into :decorator meta, like `@builtin(:key) type Name`).
@@ -6661,6 +7963,46 @@ defmodule Cure.Compiler.Parser do
     {expr, state} = parse_expr(state, 0)
     ast = {node_type, [line: token.line, col: token.col], [expr]}
     {ast, state}
+  end
+
+  # -- Quasiquote (SP5.1) ----------------------------------------------------
+
+  # `quote <form>` lifts the following Cure form to a `Std.Syntax.Syntax`
+  # value. The inner form is parsed by the ordinary expression grammar, so
+  # splice holes (`$(...)`) nest anywhere within it: `parse_prefix` emits a
+  # `:splice` / `:splice_group` node wherever `$(` appears. The macro
+  # frontend lowers `:quoted_syntax` to `Std.Syntax` builder calls (with each
+  # hole spliced in) via the `to_syntax`/`to_core` bridge in `macro_syntax.ex`;
+  # this stays pure surface sugar (TCB delta 0). Declaration-form quoting
+  # rides the same node — a `type`/`fn` form parses through `parse_expr` here.
+  defp parse_quote(state) do
+    token = peek(state)
+    state = advance(state)
+    {inner, state} = parse_expr(state, 0)
+    ast = {:quoted_syntax, [line: token.line, col: token.col], [inner]}
+    {ast, state}
+  end
+
+  # `$(e)` single-node splice / `$(e ...)` repeated-group splice. The trailing
+  # `...` (a `:ellipsis` token) marks splice-all: `e : List(Syntax)` flattened
+  # into the enclosing node's child sequence (Scheme `,@` analog). Without it,
+  # `e : Syntax` fills one child position. The `:splice_open` token already
+  # consumed the `$(`; we close on `)`.
+  defp parse_splice(state, open_token) do
+    state = advance(state)
+    {expr, state} = parse_expr(state, 0)
+    meta = [line: open_token.line, col: open_token.col]
+
+    case peek(state) do
+      %Token{type: :ellipsis} ->
+        state = advance(state)
+        state = expect(state, :rparen)
+        {{:splice_group, meta, [expr]}, state}
+
+      _ ->
+        state = expect(state, :rparen)
+        {{:splice, meta, [expr]}, state}
+    end
   end
 
   # -- Send ------------------------------------------------------------------
@@ -6939,19 +8281,45 @@ defmodule Cure.Compiler.Parser do
 
   # -- Token Helpers ---------------------------------------------------------
 
-  defp peek(%{tokens: tokens, pos: pos}) when pos >= length(tokens) do
+  # Store `tokens` as a tuple + cached `count`. This is the single writer for
+  # both fields; keeping them in lockstep is what makes O(1) lookup safe.
+  defp put_tokens(state, tokens) when is_list(tokens) do
+    %{state | tokens: List.to_tuple(tokens), count: length(tokens)}
+  end
+
+  # Token at an absolute index, or nil when out of range — mirroring the
+  # `Enum.at/2` semantics the callers were written against.
+  defp token_at(%{tokens: tokens, count: count}, idx) when idx >= 0 and idx < count do
+    elem(tokens, idx)
+  end
+
+  defp token_at(_state, _idx), do: nil
+
+  # The tokens from `pos` to the end, as a list. Callers that scan or split the
+  # remaining stream want a list; this is O(n) like the `Enum.drop/2` it
+  # replaces, and unlike `peek/1` it is not on the hot path.
+  defp tokens_from(%{tokens: tokens, count: count}, pos) do
+    start = max(pos, 0)
+
+    # Clamp before building the range: `start..(count - 1)` would otherwise be a
+    # descending range (and index a nonexistent element) once start > count - 1.
+    if start >= count do
+      []
+    else
+      for idx <- start..(count - 1), do: elem(tokens, idx)
+    end
+  end
+
+  defp peek(%{count: count, pos: pos}) when pos >= count do
     Token.new(:eof, nil, 1, 1)
   end
 
-  defp peek(%{tokens: tokens, pos: pos}), do: Enum.at(tokens, pos)
+  defp peek(%{tokens: tokens, pos: pos}), do: elem(tokens, pos)
 
   # Look n tokens past the current position (peek_ahead(state, 0) == peek(state)).
-  defp peek_ahead(%{tokens: tokens, pos: pos}, n), do: Enum.at(tokens, pos + n)
+  defp peek_ahead(%{pos: pos} = state, n), do: token_at(state, pos + n)
 
-  defp peek_at(%{tokens: tokens, pos: pos}, offset) do
-    idx = pos + offset
-    if idx >= 0 and idx < length(tokens), do: Enum.at(tokens, idx), else: nil
-  end
+  defp peek_at(%{pos: pos} = state, offset), do: token_at(state, pos + offset)
 
   defp advance(state), do: %{state | pos: state.pos + 1}
 
@@ -6964,6 +8332,18 @@ defmodule Cure.Compiler.Parser do
   defp skip_newlines(state) do
     case peek(state) do
       %Token{type: :newline} -> skip_newlines(advance(state))
+      _ -> state
+    end
+  end
+
+  # Like `skip_newlines`, but also skips `##`/`#` comment tokens. Used where a comment may
+  # document the first constructor of a `type … indices` block: such a comment lands before the
+  # block's `:indent` token, so plain `skip_newlines` would leave `peek` on the comment and
+  # defeat block-open detection (E5).
+  defp skip_newlines_and_comments(state) do
+    case peek(state) do
+      %Token{type: :newline} -> skip_newlines_and_comments(advance(state))
+      %Token{type: t} when t in [:doc_comment, :line_comment] -> skip_newlines_and_comments(advance(state))
       _ -> state
     end
   end

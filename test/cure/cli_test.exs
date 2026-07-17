@@ -138,6 +138,11 @@ defmodule Cure.CLITest do
   end
 
   describe "cure stdlib" do
+    # :slow — asserts CLI wiring only, but pays a full 81-module stdlib compile
+    # (~21s) to do it. This is the only test of `cure stdlib`, and `cmd_stdlib`
+    # shares no code with the `mix cure.compile_stdlib` task the rest of the
+    # suite leans on, so it must keep running on CI.
+    @tag :slow
     test "compiles stdlib" do
       output =
         capture_io(fn ->

@@ -1,0 +1,124 @@
+@group(:concurrency)
+mod Std.Otp.InferenceAdequacy
+  ## ADEQUACY of mailbox-type inference — `infer(behaviour)` tied to the OPERATIONAL
+  ## metatheory, PROVED for the sequential AND branching first-order fragment (build-out map G9).
+  ##
+  ## This is the theorem the mailbox-types literature has only STATED: the statically
+  ## inferred interface is preserved by the operational reduction of the behaviour it was
+  ## inferred from, so a process typed by inference never delivers a message it cannot
+  ## handle. The mechanized state of the art (Proof of Delivery, Rocq) mechanized the
+  ## mailbox-type ALGEBRA but EXPLICITLY DEFERRED the operational preservation theorem;
+  ## this module discharges that operational half and ties it to inference — for the
+  ## sequential and branching first-order fragment (`BNil`/`BRecv`/`BSend`/`BSeq`), with no holes.
+  ##
+  ## Three parts, each with a matching shape (2026-07-17-adequacy-shape.md):
+  ##   * `WTat(c, I)` = `config ⊨ interface` (Proof of Delivery's config⊨pattern relation,
+  ##     tag-set fragment);
+  ##   * `preservation_at` = subject reduction at the inferred interface (PLFA `preserve`;
+  ##     `Std.Otp.Preservation` generalized from a fixed accepted-set to `infer(b)`);
+  ##   * `coverage` + `adequacy` = the fundamental-theorem bridge (Actris's `ltyped`): a
+  ##     behaviour's sends are covered by `infer(b)`, and every reachable config is
+  ##     therefore well-typed at `infer(b)`.
+  ##
+  ## **Honest scope.** Sequential AND branching (`BSeq`) behaviours. Branching coverage needs
+  ## `append`-membership of the inferred interface (`member_append_left`/`member_append_right`);
+  ## its left operand `infer(l)` is recovered relevantly by matching the EVIDENCE `sends` first,
+  ## then matching the refined DATA `b` to bind `l`/`r` at runtime (the now-landed E1/E2 convoy
+  ## structure in `2026-07-17-proof-authoring-elaborator-ergonomics-design.md`). RECURSION (`BRec`)
+  ## still needs the frontier `lfp`
+  ## (scaffolded in `inference_adequacy.cure`). This is the first-order core proved end to end:
+  ## inference → operational safety.
+
+  type Tag = TA | TB | TC
+  type TagList = TNil | TCons(Tag, TagList)
+
+  ## Membership and `AllMember` — the `config ⊨ interface` relation (tag-set fragment).
+  type Member indices (t: Tag, iface: TagList)
+    MemHere  : Member(t, TCons(t, rest))
+    MemThere : Member(t, rest) -> Member(t, TCons(y, rest))
+  type AllMember indices (ts: TagList, iface: TagList)
+    AMNil  : AllMember(TNil, iface)
+    AMCons : Member(t, iface) -> AllMember(rest, iface) -> AllMember(TCons(t, rest), iface)
+
+  type Config = MkConfig(TagList, TagList)
+  ## `WTat(c, I)`: config `c` is well-typed at interface `I` (every message a member of `I`).
+  type WTat indices (c: Config, iface: TagList)
+    MkWTat : AllMember(e, iface) -> AllMember(m, iface) -> WTat(MkConfig(e, m), iface)
+
+  ## The reduction typed at interface `I`: a send may only send an `I`-message.
+  type StepAt indices (i: TagList, before: Config, after: Config)
+    SSendAt   : Member(t, i) -> StepAt(i, MkConfig(e, m), MkConfig(TCons(t, e), m))
+    SArriveAt : StepAt(i, MkConfig(TCons(t, e), m), MkConfig(e, TCons(t, m)))
+    SRecvAt   : StepAt(i, MkConfig(e, TCons(t, m)), MkConfig(e, m))
+
+  ## **PRESERVATION AT THE INFERRED INTERFACE.** A typed step preserves `config ⊨ I` —
+  ## `Std.Otp.Preservation` generalized to an arbitrary interface. The operational half
+  ## that Proof of Delivery deferred.
+  fn preservation_at({i: TagList}, {b: Config}, {a: Config}, wt: WTat(b, i), s: StepAt(i, b, a)) -> WTat(a, i) = match s
+    SSendAt(mem) -> match wt
+      MkWTat(ae, am) -> MkWTat(AMCons(mem, ae), am)
+    SArriveAt() -> match wt
+      MkWTat(ae, am) -> match ae
+        AMCons(at, ae2) -> MkWTat(ae2, AMCons(at, am))
+    SRecvAt() -> match wt
+      MkWTat(ae, am) -> match am
+        AMCons(rat, am2) -> MkWTat(ae, am2)
+
+  ## A first-order process BEHAVIOUR and its inferred interface. `BSeq(l, r)` is BRANCHING:
+  ## its interface is the append of the branches' interfaces (order-sensitive tag fragment).
+  type Behaviour = BNil | BRecv(Tag, Behaviour) | BSend(Tag, Behaviour) | BSeq(Behaviour, Behaviour)
+  fn append(a: TagList, b: TagList) -> TagList = match a
+    TNil()         -> b
+    TCons(t, rest) -> TCons(t, append(rest, b))
+  fn infer(b: Behaviour) -> TagList = match b
+    BNil()      -> TNil
+    BRecv(t, k) -> TCons(t, infer(k))
+    BSend(t, k) -> TCons(t, infer(k))
+    BSeq(l, r)  -> append(infer(l), infer(r))
+
+  ## Membership is preserved under `append`, on the left and the right. These are the
+  ## `AllMember`-over-append lemmas the order-abstracted modules deferred, specialized to
+  ## single-tag membership — the algebra branching coverage needs.
+  fn member_append_left({t: Tag}, {xs: TagList}, {ys: TagList}, m: Member(t, xs)) -> Member(t, append(xs, ys)) = match m
+    MemHere()    -> MemHere()
+    MemThere(m2) -> MemThere(member_append_left(m2))
+  fn member_append_right(xs: TagList, {t: Tag}, {ys: TagList}, m: Member(t, ys)) -> Member(t, append(xs, ys)) = match xs
+    TNil()         -> m
+    TCons(y, rest) -> MemThere(member_append_right(rest, m))
+
+  ## `SendsIn(b, t)` — behaviour `b` has a send site for tag `t`. `BSeq` sends on either branch.
+  type SendsIn indices (b: Behaviour, t: Tag)
+    SendHere  : SendsIn(BSend(t, k), t)
+    SendRecvK : SendsIn(k, t) -> SendsIn(BRecv(y, k), t)
+    SendSendK : SendsIn(k, t) -> SendsIn(BSend(y, k), t)
+    SendSeqL  : SendsIn(l, t) -> SendsIn(BSeq(l, r), t)
+    SendSeqR  : SendsIn(r, t) -> SendsIn(BSeq(l, r), t)
+
+  ## **COVERAGE.** Every tag `b` sends is in `infer(b)` — the constraint generator's soundness.
+  ## Eliminate the EVIDENCE first. Its constructor refines the sibling behaviour `b`; the
+  ## subsequent match on `b` retains the runtime field binders while the branch-context
+  ## substitution prunes every constructor contradicted by the evidence.
+  fn coverage(b: Behaviour, {t: Tag}, sends: SendsIn(b, t)) -> Member(t, infer(b)) = match sends
+    SendHere()    -> MemHere()
+    SendRecvK(s2) -> match b
+      BRecv(y, k) -> MemThere(coverage(k, s2))
+    SendSendK(s2) -> match b
+      BSend(y, k) -> MemThere(coverage(k, s2))
+    SendSeqL(s2) -> match b
+      BSeq(l, r) -> member_append_left(coverage(l, s2))
+    SendSeqR(s2) -> match b
+      BSeq(l, r) -> member_append_right(infer(l), coverage(r, s2))
+
+  ## `Runs(b, c)` — config `c` is reachable by executing `b` (steps typed at `infer(b)`,
+  ## which `coverage` justifies for `b`'s sends).
+  type Runs indices (b: Behaviour, c: Config)
+    RStart : Runs(b, MkConfig(TNil, TNil))
+    RStep  : Runs(b, before) -> StepAt(infer(b), before, after) -> Runs(b, after)
+
+  ## **ADEQUACY.** Every config reachable by running `b` is well-typed at `infer(b)`. By
+  ## induction on the run: the empty config is trivially typed; each step preserves typing
+  ## at `infer(b)` via `preservation_at`. The inferred type is operationally safe.
+  fn adequacy(b: Behaviour, {c: Config}, run: Runs(b, c)) -> WTat(c, infer(b)) = match run
+    RStart()          -> MkWTat(AMNil(), AMNil())
+    RStep(prev, step) -> preservation_at(adequacy(b, prev), step)
+end

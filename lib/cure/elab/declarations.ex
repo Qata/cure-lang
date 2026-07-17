@@ -17,9 +17,21 @@ defmodule Cure.Elab.Declarations do
   """
 
   alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote, Term}
-  alias Cure.Elab.{Elaborator, MacroExpand, Relevance}
+  alias Cure.Elab.{Elaborator, MacroExpand, Relevance, Subst}
 
   @ceiling 2
+
+  # The runtime classes an `@erases(<class>)` may name. Each maps to exactly one TOTAL
+  # Erlang guard in `Cure.Elab.Emit.class_guard/1`, which is what makes an opaque
+  # carrier discriminable inside an anonymous union.
+  @erasure_classes [:pid, :reference, :integer, :float, :binary, :atom, :boolean, :list]
+
+  @doc """
+  The admissible `@erases(<class>)` set. Exposed for `Cure.Compiler.Errors`, which
+  names it in the `:unknown_erasure_class` message rather than duplicating the list.
+  """
+  @spec erasure_classes() :: [atom()]
+  def erasure_classes, do: @erasure_classes
 
   @doc """
   Elaborate one declaration AST, returning the augmented signature.
@@ -31,7 +43,8 @@ defmodule Cure.Elab.Declarations do
   """
   @spec elaborate(tuple(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
   def elaborate(decl, env) do
-    with {:ok, env} <- Cure.Elab.Union.predeclare_all(decl, env) do
+    with :ok <- reject_erases_on_non_opaque(decl),
+         {:ok, env} <- Cure.Elab.Union.predeclare_all(decl, env) do
       do_elaborate(decl, env)
     end
   end
@@ -107,9 +120,10 @@ defmodule Cure.Elab.Declarations do
         params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
 
         with :ok <- reject_reserved_family_name(name),
+             {:ok, erasure} <- erasure_class(meta, name),
              {:ok, param_tele} <-
                elaborate_index_telescope(params, name, env, [], :duplicate_parameter) do
-          declare_opaque_at_min_level(env, name, param_tele, 0)
+          declare_opaque_at_min_level(env, name, param_tele, 0, erasure)
         end
 
       :primitive ->
@@ -214,12 +228,10 @@ defmodule Cure.Elab.Declarations do
   keyed put, so re-registering the header with the real ctors simply overwrites
   the empty placeholder).
 
-  Only the ctor-bearing enum / record / indexed families need this: their bodies
-  are what reference siblings. `@builtin` containers are skipped (the canonical
-  builtin registration owns them). Everything else — aliases, opaque carriers,
-  interfaces, primitives, functions — is returned unchanged; their
-  forward-reference cases are out of scope for this pass and handled (or rejected)
-  in the main pass exactly as before.
+  Constructor-bearing families and explicit transparent aliases participate.
+  Alias headers contain only the name and erased type-parameter telescope; the
+  checked RHS replaces the body-less placeholder in the main pass. `@builtin`
+  containers are skipped because canonical builtin registration owns them.
   """
   @spec declare_header(term(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
   def declare_header({:container, meta, _variants}, env) when is_list(meta) do
@@ -258,16 +270,42 @@ defmodule Cure.Elab.Declarations do
   # binds a nullary def, not a ctor-bearing family, so it is left to the main
   # pass.
   def declare_header({:type_annotation, meta, [rhs]}, env) when is_list(meta) do
-    if single_variant_enum?(rhs, env) do
-      name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-      params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
-      register_header(name, params, [], env)
-    else
-      {:ok, env}
+    cond do
+      Keyword.get(meta, :typealias, false) ->
+        register_typealias_header(meta, env)
+
+      single_variant_enum?(rhs, env) ->
+        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+        params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+        register_header(name, params, [], env)
+
+      true ->
+        {:ok, env}
     end
   end
 
   def declare_header(_decl, env), do: {:ok, env}
+
+  # A forward alias needs only a well-sorted name while signatures and earlier
+  # aliases are lowered. Its real universe and transparent body are unknown
+  # until the main pass, which overwrites this entry. Type parameters are
+  # uniformly erased `Type 0` binders, matching `elaborate_typealias/2`.
+  defp register_typealias_header(meta, env) do
+    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+    params = Keyword.get(meta, :type_params, [])
+    grade = Grade.zero()
+
+    type =
+      Enum.reduce(Enum.reverse(params), {:type, @ceiling}, fn _param, acc ->
+        {:pi, grade, {:type, 0}, acc}
+      end)
+
+    quantities = List.duplicate(:erased, length(params))
+
+    with :ok <- reject_reserved_family_name(name) do
+      {:ok, Env.add_def(env, name, type, nil, quantities)}
+    end
+  end
 
   # Elaborate the parameter/index telescopes (mirroring `declare_parameterized`'s
   # prefix) and register the family with an empty constructor list.
@@ -432,13 +470,22 @@ defmodule Cure.Elab.Declarations do
   #
   # The ARGUMENT direction needs no check: passing a union INTO Erlang hands it an
   # ordinary tagged tuple, which is a perfectly good Erlang term.
+  #
+  # A leading `Effect` is STRIPPED first. `Effect(T)` has no runtime representation — it
+  # erases to `T` exactly (`Emit.lower/3` drops `{:effect_pure, …}`) — so an effectful
+  # extern returning a union hands back the very same untagged value a pure one does, and
+  # takes the very same re-tagging wrapper. Only the HEAD is stripped, so a union buried
+  # inside the effect's payload (`Effect(List(Int | Binary))`) is still rejected below.
   defp check_extern_not_union(sig, env) do
-    codomain = extern_codomain(sig.pi, length(sig.quantities || []))
+    codomain =
+      sig.pi
+      |> extern_codomain(length(sig.quantities || []))
+      |> strip_effect()
 
     case codomain do
       {:data, ukey, [], []} ->
         if Cure.Elab.Union.union_family?(ukey) do
-          case Cure.Elab.Union.discriminable(Cure.Elab.Union.members_of(env, ukey)) do
+          case Cure.Elab.Union.discriminable(Cure.Elab.Union.members_of(env, ukey), env) do
             :ok -> :ok
             {:error, reason} -> {:error, {:extern_union_indistinct, sig.name, reason}}
           end
@@ -460,6 +507,12 @@ defmodule Cure.Elab.Declarations do
   defp extern_codomain(type, 0), do: type
   defp extern_codomain({:pi, _g, _dom, cod}, n), do: extern_codomain(cod, n - 1)
   defp extern_codomain(type, _n), do: type
+
+  # `Effect(T)` erases to `T`, so the RESULT SHAPE an FFI boundary sees is `T`'s. One
+  # layer only: `Effect` is not nestable in the surface language.
+  @doc false
+  def strip_effect({:effect_type, t}), do: t
+  def strip_effect(type), do: type
 
   defp check_extern_arity(sig, arity) do
     # PRESENT, not unrestricted. Slice 4a's rename left `== :unrestricted` here, which
@@ -737,7 +790,16 @@ defmodule Cure.Elab.Declarations do
   """
   @spec declare_generated_family(Env.t(), atom(), [map()]) :: {:ok, Env.t()} | {:error, term()}
   def declare_generated_family(env, name, ctors) do
-    declare_indexed_at_min_level(env, name, [], [], ctors, 0)
+    # Anonymous unions derive their identity from their canonical member set,
+    # so an enclosing module must not become part of the generated family or
+    # constructor keys.  Keep the caller's owner on the returned environment;
+    # only this compiler-generated registration is ownerless.
+    generated_env = Env.with_owner(env, nil)
+
+    case declare_indexed_at_min_level(generated_env, name, [], [], ctors, 0) do
+      {:ok, result} -> {:ok, Env.with_owner(result, Env.owner(env))}
+      {:error, _} = error -> error
+    end
   end
 
   @doc """
@@ -906,13 +968,22 @@ defmodule Cure.Elab.Declarations do
 
       true ->
         # A non-constructor call body is inferred, then (mirroring the constructor
-        # branch above) retried in *checking* mode when inference fails only because
-        # an implicit stayed unsolved. This lets an implicit determined by NEITHER
-        # argument — only by the declared return type (`mk(Z()) : Const(Nat, Bool)`,
-        # whose phantom `{b}` no argument fixes) — be solved from the goal. Additive:
-        # the checked retry runs only after inference errored with
-        # `:unsolved_metavariables`, and the original error is surfaced if it too
-        # fails, so every currently-accepted or -rejected body is unchanged.
+        # branch above, and `elaborate_branch_body`'s function-call arm) retried in
+        # *checking* mode when inference fails only because it could not synthesise a
+        # standalone type. Two such failures both want the goal threaded in:
+        #
+        #   * `:unsolved_metavariables` — an implicit determined by NEITHER argument,
+        #     only by the declared return type (`mk(Z()) : Const(Nat, Bool)`, whose
+        #     phantom `{b}` no argument fixes) — solved from the goal;
+        #   * `:unsupported_expression` — an argument that cannot infer standalone,
+        #     the load-bearing case being an unannotated lambda whose domain only the
+        #     goal fixes (`mk(fn(x) -> x.1) : Box(Tuple(Int,Int), Int)`): checking
+        #     against the goal solves the callee's implicit `s`/`a` first, giving the
+        #     lambda a concrete (tuple) domain so its `.i` projection lowers.
+        #
+        # Additive: the checked retry runs only after inference already errored, and
+        # the original error is surfaced if the retry also fails, so every
+        # currently-accepted or -rejected body is unchanged.
         case Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
           {:ok, term, type} ->
             # `coerce_union/5` is a strict no-op unless the declared return type is a
@@ -921,7 +992,9 @@ defmodule Cure.Elab.Declarations do
             # narrow(n)` would never be injected or widened.
             {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
 
-          {:error, {:unsolved_metavariables, _}} = orig ->
+          {:error, reason} = orig
+          when is_tuple(reason) and
+                 elem(reason, 0) in [:unsolved_metavariables, :unsupported_expression] ->
             case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do
               {:ok, term} -> {:ok, term}
               {:error, _} -> orig
@@ -1109,6 +1182,10 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp collect_type_vars({:sigma_type, _m, children}, bound, env, acc) when is_list(children) do
+    Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
+  end
+
+  defp collect_type_vars({:refinement_type, _m, children}, bound, env, acc) when is_list(children) do
     Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
   end
 
@@ -1365,7 +1442,7 @@ defmodule Cure.Elab.Declarations do
 
       implicits =
         infer_exprs
-        |> infer_implicits(fam, index_tele, env, param_count)
+        |> infer_implicits(fam, index_tele, env, param_count, param_scope)
         |> Enum.reject(fn {n, _t} -> MapSet.member?(explicit_names, n) end)
 
       impl_names = Enum.map(implicits, &elem(&1, 0))
@@ -1377,7 +1454,15 @@ defmodule Cure.Elab.Declarations do
 
           with {:ok, result_params} <- map_idx_to_core(param_exprs, full_scope, fam, env),
                {:ok, result_indices} <- map_idx_to_core(index_exprs, full_scope, fam, env) do
-            impl_tele = Enum.map(implicits, fn {n, ty} -> {String.to_atom(n), ty} end)
+            # Each inferred binder pushes the family's parameters one slot
+            # farther out. `infer_implicits/6` returns types in the bare
+            # parameter frame, so lift them over the preceding inferred
+            # binders as the telescope is assembled.
+            impl_tele =
+              implicits
+              |> Enum.with_index()
+              |> Enum.map(fn {{n, ty}, i} -> {String.to_atom(n), Term.shift(ty, i, 0)} end)
+
             # Inferred index variables are erased (quantity 0); the explicit
             # arguments are runtime-relevant (quantity ω). See M8.3 / M9.
             quantities =
@@ -1459,10 +1544,10 @@ defmodule Cure.Elab.Declarations do
 
   # -- implicit index-variable inference --------------------------------------
 
-  defp infer_implicits(exprs, fam, index_tele, env, self_param_count) do
+  defp infer_implicits(exprs, fam, index_tele, env, self_param_count, param_scope) do
     {ordered, _seen} =
       Enum.reduce(exprs, {[], MapSet.new()}, fn e, acc ->
-        collect_implicit_vars(e, fam, index_tele, env, self_param_count, acc)
+        collect_implicit_vars(e, fam, index_tele, env, self_param_count, param_scope, acc)
       end)
 
     ordered
@@ -1472,22 +1557,46 @@ defmodule Cure.Elab.Declarations do
   # dictionary record) carries `function_type: true` and NO `:name`. Recurse into
   # its arrow components so a head/index variable buried inside is still collected,
   # never treating it as a family application.
-  defp collect_implicit_vars({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc)
+  defp collect_implicit_vars(
+         {:function_call, fmeta, args},
+         fam,
+         index_tele,
+         env,
+         self_param_count,
+         param_scope,
+         acc
+       )
        when is_list(fmeta) do
     if Keyword.get(fmeta, :function_type) do
       Enum.reduce(args, acc, fn a, ac ->
-        collect_implicit_vars(a, fam, index_tele, env, self_param_count, ac)
+        collect_implicit_vars(a, fam, index_tele, env, self_param_count, param_scope, ac)
       end)
     else
-      collect_named_call_implicits({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc)
+      collect_named_call_implicits(
+        {:function_call, fmeta, args},
+        fam,
+        index_tele,
+        env,
+        self_param_count,
+        param_scope,
+        acc
+      )
     end
   end
 
-  defp collect_implicit_vars(_other, _fam, _index_tele, _env, _self_param_count, acc), do: acc
+  defp collect_implicit_vars(_other, _fam, _index_tele, _env, _self_param_count, _param_scope, acc), do: acc
 
-  defp collect_named_call_implicits({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc) do
+  defp collect_named_call_implicits(
+         {:function_call, fmeta, args},
+         fam,
+         index_tele,
+         env,
+         self_param_count,
+         param_scope,
+         acc
+       ) do
     name = String.to_atom(Keyword.fetch!(fmeta, :name))
-    index_types = family_index_types(name, fam, index_tele, env)
+    index_types = family_index_types(name, args, fam, index_tele, env, param_scope)
 
     # A family application's leading `param_count` arguments are parameters, not
     # index-typed positions — skip them so the remaining args align 0-based with
@@ -1530,7 +1639,9 @@ defmodule Cure.Elab.Declarations do
           acc
       end
 
-    Enum.reduce(args, acc, fn a, ac -> collect_implicit_vars(a, fam, index_tele, env, self_param_count, ac) end)
+    Enum.reduce(args, acc, fn a, ac ->
+      collect_implicit_vars(a, fam, index_tele, env, self_param_count, param_scope, ac)
+    end)
   end
 
   # Collect free variables from an index EXPRESSION typed by `type`, recursing into
@@ -1576,11 +1687,28 @@ defmodule Cure.Elab.Declarations do
   defp pi_domains(_), do: []
 
   # The positional index types of family `name` (self or already registered).
-  defp family_index_types(name, fam, index_tele, env) do
-    cond do
-      name == fam -> Enum.map(index_tele, &elem(&1, 1))
-      Inductive.family?(env, name) -> Enum.map(Inductive.index_telescope(env, name) || [], &elem(&1, 1))
-      true -> nil
+  defp family_index_types(name, args, fam, index_tele, env, param_scope) do
+    {param_count, tele} =
+      cond do
+        name == fam -> {length(args) - length(index_tele), index_tele}
+        Inductive.family?(env, name) -> {Inductive.param_count(env, name), Inductive.index_telescope(env, name) || []}
+        true -> {0, nil}
+      end
+
+    with tele when is_list(tele) <- tele,
+         {:ok, actuals} <- map_idx_to_core(Enum.take(args, param_count + length(tele)), param_scope, fam, env) do
+      tele
+      |> Enum.with_index()
+      |> Enum.map(fn {{_binder, type}, index_position} ->
+        # An index telescope entry is scoped over the family parameters and all
+        # earlier indices. Instantiate that prefix with the actual application
+        # arguments, yielding a type in the surrounding constructor-parameter
+        # frame. This is the crucial difference between `Consumed(t, …)` and
+        # blindly copying `Consumed`'s internal `a` slot.
+        Subst.instantiate(type, Enum.take(actuals, param_count + index_position))
+      end)
+    else
+      _ -> nil
     end
   end
 
@@ -1705,13 +1833,28 @@ defmodule Cure.Elab.Declarations do
   # the ctx is NULLed under their binders (spec §7.3 item 4). `Sigma(x: D, U)`
   # lowers to the builtin inductive `Sigma(D, λx:D. U)`: `body` was elaborated with
   # `bname` in scope, so it is already in the frame of one new lambda binder, and
-  # wrapping it under `{:lam, Cure.Core.Grade.unrestricted(), dom, body}` is exactly that frame. `:Sigma` is the
-  # canonical family name (only Std.Sigma registers `@builtin(:sigma)`), used as a
-  # literal so `Sigma(..)` lowers even in a raw-`Env.empty()` elaboration.
+  # wrapping it under `{:lam, Cure.Core.Grade.unrestricted(), dom, body}` is exactly that frame.
   defp idx_to_core({:sigma_type, [binder: bname], [dom_ast, body_ast]}, scope, fam, env, _ctx) do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
-      {:ok, {:data, :Sigma, [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
+      {:ok, {:data, sigma_family_name(env), [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
+    end
+  end
+
+  # A refinement is an ordinary dependent pair in Core: the value and a proof of
+  # the proposition about that value. Solvers receive no trusted representation.
+  defp idx_to_core(
+         {:refinement_type, [binder: bname], [dom_ast, proposition_ast]},
+         scope,
+         fam,
+         env,
+         _ctx
+       ) do
+    with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
+         {:ok, proposition} <- idx_to_core(proposition_ast, [bname | scope], fam, env) do
+      {:ok,
+       {:data, sigma_family_name(env),
+        [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, proposition}], []}}
     end
   end
 
@@ -1797,7 +1940,7 @@ defmodule Cure.Elab.Declarations do
     with {:ok, ms} <- Cure.Elab.Union.canonicalise(members, scope, env) do
       case ms do
         [%{payload: payload}] when payload != nil -> {:ok, payload}
-        _ -> {:ok, {:data, Cure.Elab.Union.family_key(ms), [], []}}
+        _ -> {:ok, {:data, Cure.Elab.Union.family_key(ms, env), [], []}}
       end
     end
   end
@@ -1901,6 +2044,7 @@ defmodule Cure.Elab.Declarations do
         {:ok, Enum.reduce(core_args, {:var, idx}, fn a, acc -> {:app, acc, a} end)}
 
       atom == fam or Inductive.family?(env, atom) ->
+        atom = Env.resolve_key(env, env.families, atom)
         # Split the applied arguments into the family's parameters (prefix) and
         # indices (suffix); the kernel checks each slot against its own
         # telescope. param_count is 0 for parameter-free families (all indices).
@@ -1908,9 +2052,10 @@ defmodule Cure.Elab.Declarations do
         {:ok, {:data, atom, params, indices}}
 
       Inductive.get_ctor(env, atom) ->
-        {:ok, {:ctor, atom, core_args}}
+        {:ok, {:ctor, Env.resolve_key(env, env.ctors, atom), core_args}}
 
       true ->
+        atom = Env.resolve_key(env, env.defs, atom)
         {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
     end
   end
@@ -2022,14 +2167,17 @@ defmodule Cure.Elab.Declarations do
 
   defp beta_substitute(other, _depth, _arg), do: other
 
-  defp build_telescope_type([], _scope, _fam, _env), do: {:ok, {:data, :Unit, [], []}}
+  defp build_telescope_type([], _scope, _fam, env),
+    do: {:ok, {:data, Env.resolve_key(env, env.families, :Unit), [], []}}
 
   defp build_telescope_type([{bname, ast} | rest], scope, fam, env) do
     with {:ok, dom} <- idx_to_core(ast, scope, fam, env),
          {:ok, body} <- build_telescope_type(rest, [bname | scope], fam, env) do
-      {:ok, {:data, :Sigma, [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
+      {:ok, {:data, sigma_family_name(env), [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
     end
   end
+
+  defp sigma_family_name(env), do: Inductive.builtin(env, :sigma) || :Sigma
 
   # `(D1, …, Dn) -> R` (surface `Function(D1,…,Dn,R)`, tagged `function_type`)
   # becomes the non-dependent Π `Π(_:D1). … Π(_:Dn). R` — the native Core arrow the
@@ -2081,17 +2229,22 @@ defmodule Cure.Elab.Declarations do
         Env.primitive(env, name)
 
       Inductive.family?(env, atom) ->
-        {:data, atom, [], []}
+        {:data, Env.resolve_key(env, env.families, atom), [], []}
 
       Inductive.get_ctor(env, atom) ->
-        {:ctor, atom, []}
+        {:ctor, Env.resolve_key(env, env.ctors, atom), []}
 
       # A bare name reachable only under a single re-keyed `:"Mod#name"` variant
       # (shadowed-but-present, spec §3.3). Exactly-one resolves; ≥2 (ambiguous)
       # falls through to `{:global, atom}` here and is caught by R7 (Task 10).
-      match?({:ok, _}, Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)) ->
-        {:ok, key} = Cure.Elab.Resolution.resolve_bare_shadowed(env, atom)
-        if Inductive.family?(env, key), do: {:data, key, [], []}, else: {:ctor, key, []}
+      match?({:ok, _}, Cure.Elab.Resolution.resolve_bare(env, atom)) ->
+        {:ok, key} = Cure.Elab.Resolution.resolve_bare(env, atom)
+
+        cond do
+          Inductive.family?(env, key) -> {:data, key, [], []}
+          Env.get_def(env, key) -> {:global, key}
+          true -> {:ctor, key, []}
+        end
 
       # ≥2 distinct re-keyed origins, no local/unshadowed winner: unqualified use
       # is ambiguous (R7). The caller turns this marker into an error.
@@ -2102,6 +2255,65 @@ defmodule Cure.Elab.Declarations do
         {:global, atom}
     end
   end
+
+  # `@erases(<class>)` on an opaque carrier. Absent → nil (undeclared, the common
+  # case). Present but not admissible → a compile error naming the class, rather than
+  # a silently undeclared carrier that fails much later inside union discrimination
+  # with an unrelated message.
+  defp erasure_class(meta, name) do
+    case Keyword.get(meta, :decorator) do
+      {:decorator, dm, args} when is_list(dm) ->
+        if Keyword.get(dm, :name) == :erases,
+          do: erases_class(args, name),
+          else: {:ok, nil}
+
+      _ ->
+        {:ok, nil}
+    end
+  end
+
+  # The class argument of an `@erases(<class>)` decorator, validated against the
+  # admissible set. Any other argument shape — zero args, more than one arg, or an
+  # argument that isn't an atom literal (e.g. a bare identifier missing its `:`) — is a
+  # malformed decorator, not an absent one, and becomes a compile error naming the
+  # mistake. Reporting it here (rather than falling through to `{:ok, nil}`) is what
+  # stops a typo silently reading as "undeclared", since there is no later checkpoint
+  # that would catch it — a `nil` erasure just means "no carrier class declared".
+  defp erases_class([{:literal, _, class}], _name) when class in @erasure_classes,
+    do: {:ok, class}
+
+  defp erases_class([{:literal, _, class}], name),
+    do: {:error, {:unknown_erasure_class, name, class}}
+
+  defp erases_class(other_args, name),
+    do: {:error, {:unknown_erasure_class, name, malformed_erases_arg(other_args)}}
+
+  # A short, readable stand-in for the malformed `@erases(...)` argument list, so the
+  # `:unknown_erasure_class` message names the actual mistake instead of dumping the
+  # raw parser AST (line/col meta and all) at the caller. The single-atom-literal shape
+  # is handled by the two clauses above `erasure_class` dispatches through before
+  # reaching this fallback, so only the genuinely malformed shapes land here.
+  defp malformed_erases_arg([]), do: :missing_argument
+  defp malformed_erases_arg([_, _ | _] = args), do: {:too_many_arguments, length(args)}
+  defp malformed_erases_arg([_not_a_literal]), do: :not_an_atom_literal
+
+  # `@erases` asserts the runtime shape of a carrier that has NO constructors and so
+  # no inferable erasure. A type WITH constructors erases to a bare atom (nullary) or
+  # a tagged tuple; a declared class could only ever disagree with that. Checked once
+  # at the declaration entry point, so every non-opaque container form is covered.
+  defp reject_erases_on_non_opaque({:container, meta, _variants}) do
+    case {Keyword.get(meta, :container_type), Keyword.get(meta, :decorator)} do
+      {ct, {:decorator, dm, _}} when ct != :opaque and is_list(dm) ->
+        if Keyword.get(dm, :name) == :erases,
+          do: {:error, {:erases_on_non_opaque, meta |> Keyword.fetch!(:name) |> String.to_atom()}},
+          else: :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp reject_erases_on_non_opaque(_decl), do: :ok
 
   # The `@builtin(:tag)` on a primitive container, or an error if absent.
   defp primitive_builtin_tag(meta) do
@@ -2176,18 +2388,23 @@ defmodule Cure.Elab.Declarations do
   # constructors, checking only that the parameter telescope is well-formed
   # (level search on `:universe_level`). There are no constructors, so
   # check_all_ctors / positive? are vacuous and deliberately skipped.
-  defp declare_opaque_at_min_level(env, name, param_tele, level) when level <= @ceiling do
-    family = Inductive.opaque_family(name, param_tele, level)
+  defp declare_opaque_at_min_level(env, name, param_tele, level, erasure) when level <= @ceiling do
+    family = Inductive.opaque_family(name, param_tele, level, erasure)
     env2 = Inductive.declare(env, family, [])
 
     case Kernel.check_family(env2, Inductive.get_family(env2, name)) do
-      :ok -> {:ok, env2}
-      {:error, :universe_level} -> declare_opaque_at_min_level(env, name, param_tele, level + 1)
-      {:error, _} = err -> err
+      :ok ->
+        {:ok, env2}
+
+      {:error, :universe_level} ->
+        declare_opaque_at_min_level(env, name, param_tele, level + 1, erasure)
+
+      {:error, _} = err ->
+        err
     end
   end
 
-  defp declare_opaque_at_min_level(_env, _name, _param_tele, _level),
+  defp declare_opaque_at_min_level(_env, _name, _param_tele, _level, _erasure),
     do: {:error, :universe_ceiling}
 
   # -- declaration at the least well-formed universe level --------------------

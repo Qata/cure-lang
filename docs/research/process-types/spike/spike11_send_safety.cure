@@ -1,0 +1,39 @@
+mod SendSafety
+  # Obligation (2): send-safety for a clause-DERIVED pid message index (F-1).
+  # The message vocabulary is the DOMAIN of the actor's total handler; `spawn_actor`
+  # DERIVES the pid's message index from that domain (the implicit `m` is inferred
+  # from the handler's type) — no annotation, unlike NVLang's T-Spawn which reads the
+  # index off a receive annotation. `post` requires the message to have the pid's
+  # derived type, and the handler's TOTALITY over that type (kernel-certified
+  # exhaustiveness) means every postable message has a clause: send-safe.
+  type Reply0 = R0
+  type Msg = Inc | Dec | Query(Reply0)
+  type Response = Ack | Count(Reply0)
+  type Unit = MkUnit
+
+  # A process handle indexed by its message TYPE (NVLang Pid[tau_m]); phantom in m.
+  type Pid(m: Type) indices ()
+    MkPid : Pid(m)
+
+  # The handler "clauses" — total over Msg (exhaustive => kernel-certified).
+  fn handle(m: Msg) -> Response = match m
+    Inc()     -> Ack
+    Dec()     -> Ack
+    Query(x)  -> Count(x)
+
+  # spawn DERIVES the pid's message index from the handler's DOMAIN `m` — the index's
+  # provenance is the clauses' domain, INFERRED, not annotated.
+  fn spawn_actor({m: Type}, {resp: Type}, handler: (m) -> resp) -> Pid(m) = MkPid()
+
+  # post requires the message to be of the pid's (derived) message type `m`.
+  fn post({m: Type}, p: Pid(m), msg: m) -> Unit = MkUnit
+
+  # A well-typed client: post a Msg to the pid spawned from `handle`. `spawn_actor(handle)`
+  # has type `Pid(Msg)` (index derived from handle's domain); `post` forces `msg : Msg`.
+  fn client(msg: Msg) -> Unit = post(spawn_actor(handle), msg)
+
+  # Operational send-safety: every message of the derived type `Msg` (i.e. every message
+  # postable to `spawn_actor(handle)`) is dispatched by the TOTAL handler — no unhandled
+  # message exists. Totality is kernel-certified, so this is a real coverage guarantee.
+  fn deliver(msg: Msg) -> Response = handle(msg)
+end

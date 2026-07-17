@@ -1,0 +1,52 @@
+## Knaster-Tarski PRE-FIXPOINT BOUND via monotone Kleene iteration — provable slice of the
+## BRec/lfp frontier (docs/research/process-types/scaffolds/inference_fixpoint.cure ?lfp_le).
+##
+## Theorem: for a MONOTONE transfer f on the interface subtyping order, every Kleene iterate
+## from bottom is bounded by any pre-fixed point a (f(a) subset a): iterate(f, TNil, n) subset a
+## for all n. This is the direction that makes inference PRINCIPAL (lfp below any fixed point)
+## and it needs NO finite-height stabilization argument — pure induction on the fuel n.
+## The OTHER half (that some iterate IS a fixed point) needs the height/counting argument and
+## stays open. Self-contained (inlines subtyping transitivity; cross-module implicit-carrying
+## resolution is E3/task#15). Validated 2026-07-17.
+
+mod FixpointPrefixpointBound
+  type Tag = TA | TB | TC
+  type TagList = TNil | TCons(Tag, TagList)
+
+  type Handles indices (t: Tag, iface: TagList)
+    HHere  : Handles(t, TCons(t, rest))
+    HThere : Handles(t, rest) -> Handles(t, TCons(y, rest))
+  type AllHandled indices (s: TagList, iface: TagList)
+    AHNil  : AllHandled(TNil, iface)
+    AHCons : Handles(t, iface) -> AllHandled(rest, iface) -> AllHandled(TCons(t, rest), iface)
+
+  type Nat = Z | S(Nat)
+  fn iterate(f: (TagList) -> TagList, x: TagList, n: Nat) -> TagList = match n
+    Z()  -> x
+    S(k) -> f(iterate(f, x, k))
+
+  ## Subtyping transitivity, inlined: a tag handled by y, and y subset z, is handled by z.
+  fn handles_weaken({t: Tag}, {y: TagList}, {z: TagList}, h: Handles(t, y), sub: AllHandled(y, z)) -> Handles(t, z) = match h
+    HHere()    -> match sub
+      AHCons(ht, srest) -> ht
+    HThere(h2) -> match sub
+      AHCons(hh, srest) -> handles_weaken(h2, srest)
+
+  fn all_handled_trans({x: TagList}, {y: TagList}, {z: TagList}, xy: AllHandled(x, y), yz: AllHandled(y, z)) -> AllHandled(x, z) = match xy
+    AHNil()            -> AHNil()
+    AHCons(hx, xrest)  -> AHCons(handles_weaken(hx, yz), all_handled_trans(xrest, yz))
+
+  ## PRE-FIXPOINT BOUND: with f monotone and a a pre-fixed point (f(a) subset a), every iterate
+  ## from bottom is subset a. Induction on n: bottom subset a trivially; the step composes
+  ## monotonicity (iterate_k subset a  =>  f(iterate_k) subset f(a)) with the pre-fixpoint
+  ## (f(a) subset a) by transitivity.
+  fn lfp_le(
+      f: (TagList) -> TagList,
+      mono: (x: TagList) -> (y: TagList) -> (AllHandled(x, y)) -> AllHandled(f(x), f(y)),
+      a: TagList,
+      pre: AllHandled(f(a), a),
+      n: Nat
+    ) -> AllHandled(iterate(f, TNil, n), a) = match n
+    Z()  -> AHNil()
+    S(k) -> all_handled_trans(mono(iterate(f, TNil, k), a, lfp_le(f, mono, a, pre, k)), pre)
+end

@@ -27,7 +27,9 @@ defmodule Antigen.BuiltinBoolMigrationTest do
   test "a comparison constructs the inductive Bool, not a primitive Bool value" do
     ctx = Context.empty(Builtins.seed(Env.empty()))
 
-    assert {:ok, {:vdata, :Bool, []}} =
+    bool_family = Cure.Elab.Name.qualify("Std.Bool", :Bool)
+
+    assert {:ok, {:vdata, ^bool_family, []}} =
              Kernel.infer(ctx, {:app, {:app, {:global, :int_lt}, {:int_lit, 3}}, {:int_lit, 5}})
   end
 end

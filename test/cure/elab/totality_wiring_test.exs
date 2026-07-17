@@ -23,7 +23,7 @@ defmodule Cure.Elab.TotalityWiringTest do
     # andd is self-recursive (non-total) yet appears in SF's computed index,
     # so it is type-level and MUST be total — §6 negative #3.
     src = @types <> "fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)\n" <> @gadt
-    assert {:error, {:totality_required, :andd}} = Program.elaborate(src)
+    assert {:error, {:totality_required, :"Main#andd"}} = Program.elaborate(src)
   end
 
   test "a non-total function used only at runtime is NOT required to be total" do

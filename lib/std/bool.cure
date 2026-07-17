@@ -1,4 +1,5 @@
 @group(:core)
+@prelude
 mod Std.Bool
   ## Booleans as a real inductive type.
   ##

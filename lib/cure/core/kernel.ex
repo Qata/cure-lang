@@ -295,9 +295,10 @@ defmodule Cure.Core.Kernel do
     pc = Inductive.param_count(sig, dname)
     {scrut_params, scrut_idx} = Enum.split(scrut_args, pc)
     motive_value = Eval.eval(motive, Context.env(ctx))
+    scrut_value = Eval.eval(scrut, Context.env(ctx))
 
     with :ok <- check_motive_wf(ctx, motive_value, family, scrut_params),
-         :ok <- check_coverage(ctx, sig, dname, branches, scrut_idx, scrut_params),
+         :ok <- check_coverage(ctx, sig, dname, branches, scrut_idx, scrut_params, scrut_value),
          :ok <-
            check_case_branches(
              ctx,
@@ -306,10 +307,10 @@ defmodule Cure.Core.Kernel do
              motive_value,
              branches,
              scrut_idx,
-             scrut_params
+             scrut_params,
+             scrut_value
            ) do
       # Result type = motive at the scrutinee's actual indices and value (§4.4).
-      scrut_value = Eval.eval(scrut, Context.env(ctx))
       {:ok, apply_motive(motive_value, scrut_idx ++ [scrut_value])}
     end
   end
@@ -628,6 +629,15 @@ defmodule Cure.Core.Kernel do
   """
   @spec validate_certificate(Env.t(), atom()) :: {:ok, Env.t()} | {:error, term()}
   def validate_certificate(env, name) do
+    # Canonicalize the lookup name to its def key BEFORE deriving the certificate.
+    # A def's body refers to itself (and its siblings) by owner-qualified key, but a
+    # caller may submit the bare name. `Certificate.terminating?` detects recursion by
+    # matching the submitted name against the `{:global, _}` nodes in the body: a bare
+    # name never matches a qualified self-reference, so an un-canonicalized name makes a
+    # self-looping function look non-recursive and be certified total (unsound). Resolve
+    # once here so recursion detection compares like against like.
+    name = Env.resolve_key(env, env.defs, name)
+
     case Env.get_def(env, name) do
       # Builtin-op def (K2, R4): total by fiat, no body to submit to the
       # termination checker. Type-check the declared type, then certify.
@@ -1039,7 +1049,7 @@ defmodule Cure.Core.Kernel do
   # scrutinee be eliminated by an empty branch list (ex-falso, K4/§H), with no
   # `{:absurd}` term. Relies on `:impossible` being the certain non-unification
   # verdict (K5a-hardened): a merely `:undecided` omission is NOT accepted.
-  defp check_coverage(ctx, sig, dname, branches, scrut_indices, scrut_params) do
+  defp check_coverage(ctx, sig, dname, branches, scrut_indices, scrut_params, scrut_value) do
     covered = branches |> Enum.map(fn {c, _ar, _b} -> c end) |> MapSet.new()
 
     uncovered =
@@ -1047,9 +1057,16 @@ defmodule Cure.Core.Kernel do
       |> Inductive.ctors_of(dname)
       |> Enum.reject(fn c -> MapSet.member?(covered, c.name) end)
 
+    known_ctor =
+      case scrut_value do
+        {:vctor, cname, _args} -> cname
+        _ -> nil
+      end
+
     if Enum.all?(uncovered, fn c ->
-         unify_indices(ctx, c.result_indices, scrut_indices, length(c.args), scrut_params) ==
-           :impossible
+         (known_ctor != nil and c.name != known_ctor) or
+           unify_indices(ctx, c.result_indices, scrut_indices, length(c.args), scrut_params) ==
+             :impossible
        end),
        do: :ok,
        else: {:error, :coverage}
@@ -1060,7 +1077,16 @@ defmodule Cure.Core.Kernel do
   # A branch must name a constructor of the scrutinee's OWN family `dname`; a
   # constructor of any other family is ill-formed (it can never match), so it is
   # rejected before its body is checked (`:foreign_ctor`).
-  defp check_case_branches(ctx, sig, dname, motive_value, branches, scrut_indices, scrut_params) do
+  defp check_case_branches(
+         ctx,
+         sig,
+         dname,
+         motive_value,
+         branches,
+         scrut_indices,
+         scrut_params,
+         scrut_value
+       ) do
     Enum.reduce_while(branches, :ok, fn {cname, arity, body}, :ok ->
       case Inductive.get_ctor(sig, cname) do
         nil ->
@@ -1088,6 +1114,8 @@ defmodule Cure.Core.Kernel do
                       {:solved, s} -> s
                       :trivial -> %{}
                     end
+
+                  subst = merge_known_branch_args(subst, scrut_value, cname, arity, Context.length(ctx))
 
                   {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele, scrut_params)
                   ctx_branch = specialize_branch_context(ctx_branch, subst)
@@ -1118,6 +1146,23 @@ defmodule Cure.Core.Kernel do
       end
     end)
   end
+
+  defp merge_known_branch_args(subst, {:vctor, cname, args}, cname, arity, depth)
+       when length(args) == arity do
+    args
+    |> Enum.with_index()
+    |> Enum.reduce(subst, fn {value, p}, acc ->
+      term = value |> Quote.reify(depth) |> Term.shift(arity, 0)
+      ctor_key = arity - 1 - p
+
+      case term do
+        {:var, outer_key} -> Map.put(acc, outer_key, {:var, ctor_key})
+        closed -> Map.put(acc, ctor_key, closed)
+      end
+    end)
+  end
+
+  defp merge_known_branch_args(subst, _value, _cname, _arity, _depth), do: subst
 
   @doc """
   Public branch-refinement query (spec §3). Given the caller's `ctx`, the
@@ -1201,7 +1246,26 @@ defmodule Cure.Core.Kernel do
       |> Enum.map(&subst_params(&1, pmap, 0))
       |> Enum.zip(scrut_indices)
       |> Enum.map(fn {r, s_val} ->
-        {r, s_val |> Quote.reify(outer_depth) |> Term.shift(arity, 0)}
+        # Coverage/branch-typing is up to DEFINITIONAL EQUALITY: unify the ctor's
+        # index `r` against the NORMAL FORM of the scrutinee's index, not its
+        # stuck form. A dependent sibling refined per branch (via `with`) can
+        # present its index as a stuck neutral — `plus(S(k), m)` rather than
+        # `S(plus(k, m))` — and unifying `Z` (an impossible branch's index)
+        # against that stuck `plus(...)` fails to refute it, keeping a branch the
+        # eliminator legitimately omits and rejecting a total function as
+        # non-exhaustive. Normalizing strengthens the refutation (a reducible
+        # index gains its constructor head) and never weakens it (an already-nf
+        # or genuinely-stuck index is unchanged). `nf` in the outer frame, then
+        # shift into the ctor frame. Fail-safe on fuel exhaustion.
+        s_term = Quote.reify(s_val, outer_depth)
+
+        s_norm =
+          case Normalise.nf(ctx, s_term) do
+            :fuel_exhausted -> s_term
+            nf -> nf
+          end
+
+        {r, Term.shift(s_norm, arity, 0)}
       end)
       |> reduce_index_pairs(%{}, arity)
     end
@@ -1524,7 +1588,14 @@ defmodule Cure.Core.Kernel do
         |> Eval.eval(env)
       end)
 
-    %{ctx | types: types}
+    refined_env =
+      for i <- 0..(depth - 1)//1 do
+        {:var, i}
+        |> replace_branch_vars(subst)
+        |> Eval.eval(env)
+      end
+
+    %{ctx | types: types, env: refined_env}
   end
 
   defp specialize_branch_value(value, _ctx, subst) when map_size(subst) == 0, do: value

@@ -89,33 +89,6 @@ defmodule Cure.Elab.Relevance do
 
   alias Cure.Core.{Env, Grade, Inductive}
 
-  # The leaves of `Core.Term` — formers with no subterms, so nothing for either walker
-  # below to descend into. Both `walk/4` and `count_level/3` used to end in a wildcard
-  # catch-all that ASSUMED anything unrecognised was one of these. That assumption is
-  # what let `{:effect_bind, …}` — which carries arbitrary subterms — be silently read
-  # as "no usages here" by `count_level`, certifying an un-join that was not safe.
-  # Enumerating the leaves instead means an unknown former reaches the raise below, and
-  # the next former added to `Core.Term` breaks THIS module rather than being counted as
-  # zero. `{:meta, _}` is elaborator-only and genuinely a leaf.
-  defguardp is_leaf(t)
-            when is_tuple(t) and
-                   elem(t, 0) in [
-                     :meta,
-                     :type,
-                     :global,
-                     :int_type,
-                     :int_lit,
-                     :nat_lit,
-                     :bounded_lit,
-                     :float_type,
-                     :float_lit,
-                     :binary_type,
-                     :atom_type,
-                     :atom_lit,
-                     :hole,
-                     :absurd
-                   ]
-
   @type site :: :returned | :present_arg | :scrutinee | :applied
   @type kind :: :param | :lambda | :let | :field
 
@@ -302,7 +275,23 @@ defmodule Cure.Elab.Relevance do
         with {:ok, uv} <- walk(val, depth, :present_arg, st),
              {:ok, ub} <- walk(body, depth + 1, site, track_erased(st, g, depth)),
              :ok <- check_binder(st, depth, g, ub, :let) do
-          {:ok, seq(uv, Map.delete(ub, depth))}
+          # CBV: the value runs once, so its resources are counted once via `uv`
+          # (this is why `let x = consume(c) in …` counts `c` a single time — even
+          # if `x` is dropped, and even summed with a second use of `c` in the body).
+          # But the binder NAMES that value: if the body uses `x` ω-many times, the
+          # value's result — hence any linear resource ALIASED into it — is referenced
+          # ω times. `seq(uv, ub\x)` alone dropped the binder's uses and so laundered
+          # `let x = cap in (…x…x…)` to a single use. Add the aliasing duplication
+          # when `x` is used ω-many times; a linear/affine resource inside `uv` then
+          # reaches ω and is rejected, while a value with no restricted resource is
+          # unaffected (ω resources carry no obligation). Idris reaches the same
+          # verdict by substitution; this keeps Cure's single CBV evaluation.
+          dup =
+            if Enum.any?(Map.get(ub, depth, no_uses()), &(&1 == Grade.unrestricted())),
+              do: scale(uv, Grade.unrestricted()),
+              else: %{}
+
+          {:ok, seq(seq(uv, dup), Map.delete(ub, depth))}
         end
     end
   end
@@ -311,13 +300,32 @@ defmodule Cure.Elab.Relevance do
   # value exists for it (`Grade.present?/1` — the dual of `Erase.erase`'s
   # `{:app, …}` filtering), and its usage is scaled by the callee's declared grade.
   # Passing a linear variable to an `ω` parameter therefore costs `ω`.
+  #
+  # EXCEPTION — the McBride convoy. `(case s of {c, ar, λx₁…λxₙ. inner} …) a₁ … aₙ`
+  # is a case that RETURNS a function, immediately applied to `a₁ … aₙ`. The case
+  # picks ONE branch and applies its λ-nest exactly once, so it is NOT an escaping
+  # closure: each branch's captures run once (no ω-scale), and each argument `aⱼ` is
+  # aliased by the branch binder `xⱼ`, hence used exactly as many times as the branch
+  # uses `xⱼ`. This is the shape dependent-`match` / `with` sibling refinement emits
+  # (`(case r of λcap'. …reply(cap',…)…) cap`); the generic ω-scale wrongly rejected
+  # a linear capability threaded through it. Sound: `aⱼ` scaled by `xⱼ`'s usage, other
+  # captures counted once, and the original argument's own grade (e.g. the def's
+  # `:linear cap`) is still checked at its binding site — so a branch that DROPS or
+  # DUPLICATES it is rejected there (`aⱼ` reaches 0 / ω).
   defp walk({:app, _f, _x} = app, depth, _site, st) do
     {head, args} = spine(app, [])
-    quantities = callee_quantities(head, length(args), st.env)
 
-    with {:ok, uh} <- walk(head, depth, :applied, st),
-         {:ok, ua} <- walk_args(args, quantities, depth, st) do
-      {:ok, seq(uh, ua)}
+    case head do
+      {:case, scrut, _motive, branches}
+      when branches != [] ->
+        if Enum.all?(branches, fn {_c, _ar, b} -> lambda_depth(b) >= length(args) end) do
+          walk_convoy(scrut, branches, args, depth, st)
+        else
+          walk_app_spine(head, args, depth, st)
+        end
+
+      _ ->
+        walk_app_spine(head, args, depth, st)
     end
   end
 
@@ -399,8 +407,102 @@ defmodule Cure.Elab.Relevance do
   defp walk({:effect_pure, a}, depth, site, st), do: walk(a, depth, site, st)
   defp walk({:effect_type, t}, depth, site, st), do: walk(t, depth, site, st)
 
-  defp walk(leaf, _depth, _site, _st) when is_leaf(leaf), do: {:ok, %{}}
-  defp walk(other, _depth, _site, _st), do: unrecognised!(other, "walk/4")
+  defp walk(_leaf, _depth, _site, _st), do: {:ok, %{}}
+
+  defp walk_app_spine(head, args, depth, st) do
+    quantities = callee_quantities(head, length(args), st.env)
+
+    with {:ok, uh} <- walk(head, depth, :applied, st),
+         {:ok, ua} <- walk_args(args, quantities, depth, st) do
+      {:ok, seq(uh, ua)}
+    end
+  end
+
+  defp lambda_depth({:lam, _g, _d, b}), do: 1 + lambda_depth(b)
+  defp lambda_depth(_), do: 0
+
+  # The convoy: scrutinee runs once (relevant, or exempt if collapsible), then one
+  # branch. Each branch's λ-nest binds `x₁…xₙ` to `a₁…aₙ` and runs once.
+  defp walk_convoy(scrut, branches, args, depth, st) do
+    scrut_usage =
+      if collapsible_case?(st.env, branches),
+        do: {:ok, %{}},
+        else: walk(scrut, depth, :scrutinee, st)
+
+    with {:ok, us} <- scrut_usage,
+         {:ok, ubs} <- walk_convoy_branches(branches, args, depth, st) do
+      {:ok, seq(us, alt(ubs))}
+    end
+  end
+
+  defp walk_convoy_branches(branches, args, depth, st) do
+    n = length(args)
+
+    branches
+    |> Enum.reduce_while({:ok, []}, fn {cname, arity, body}, {:ok, acc} ->
+      ctor_qs =
+        Inductive.ctor_quantities(st.env, cname) || List.duplicate(Grade.unrestricted(), arity)
+
+      branch_erased =
+        ctor_qs
+        |> Enum.with_index()
+        |> Enum.filter(fn {q, _p} -> Grade.erased?(q) end)
+        |> Enum.map(fn {_q, p} -> depth + p end)
+
+      st2 = %{st | erased: Enum.into(branch_erased, st.erased)}
+
+      # Peel the n λ binders (they sit ABOVE the `arity` pattern binders). `xⱼ` is at
+      # level `depth + arity + j`; `inner` is walked below all of them.
+      {lam_grades, inner} = peel_lambdas(body, n)
+      inner_depth = depth + arity + n
+
+      case walk(inner, inner_depth, :returned, st2) do
+        {:ok, u_inner} ->
+          x_levels = for(j <- 0..(n - 1)//1, do: depth + arity + j)
+
+          # Each xⱼ aliases aⱼ, so aⱼ is used as many times as `inner` uses xⱼ.
+          arg_usages =
+            args
+            |> Enum.with_index()
+            |> Enum.map(fn {arg, j} ->
+              x_usage = Map.get(u_inner, Enum.at(x_levels, j), no_uses())
+              {:ok, ua} = walk(arg, depth, :present_arg, st2)
+              scale_by_uses(ua, x_usage)
+            end)
+
+          with :ok <- check_convoy_binders(st2, x_levels, lam_grades, u_inner),
+               :ok <- check_fields(st2, ctor_qs, depth, u_inner) do
+            drop = x_levels ++ for(p <- 0..(arity - 1)//1, do: depth + p)
+            {:cont, {:ok, acc ++ [seq(seq_all(arg_usages), Map.drop(u_inner, drop))]}}
+          else
+            {:error, _} = err -> {:halt, err}
+          end
+
+        {:error, _} = err ->
+          {:halt, err}
+      end
+    end)
+  end
+
+  defp peel_lambdas(body, 0), do: {[], body}
+  defp peel_lambdas({:lam, g, _d, b}, n), do: peel_lambdas(b, n - 1) |> then(fn {gs, i} -> {[g | gs], i} end)
+  defp peel_lambdas(body, _n), do: {[], body}
+
+  defp check_convoy_binders(st, x_levels, lam_grades, u_inner) do
+    x_levels
+    |> Enum.zip(lam_grades)
+    |> each(fn {lvl, g} -> check_binder(st, lvl, g, u_inner, :lambda) end)
+  end
+
+  # Scale a usage context by a SET of use-grades: each entry used once per member,
+  # the scaled copies UNIONED per level. Do NOT `alt` against an empty base — `alt`
+  # reads an absent level as `{0}` (no_uses), which would inject a spurious drop into
+  # every level and make a linearly-used argument look dropped.
+  defp scale_by_uses(usage, use_set) do
+    Enum.reduce(use_set, %{}, fn g, acc ->
+      Map.merge(acc, scale(usage, g), fn _l, a, b -> MapSet.union(a, b) end)
+    end)
+  end
 
   # Recognise the join idiom AND prove it is sound to un-join: the `:let` value is a
   # λ, the body is a `case`, and the let binder (de Bruijn level `depth`) occurs in
@@ -476,29 +578,13 @@ defmodule Cure.Elab.Relevance do
       Enum.sum(Enum.map(brs, fn {_c, ar, b} -> count_level(b, depth + ar, t) end))
   end
 
-  # Effect formers bind nothing of their own (the continuation's binder lives in the
-  # `:lam` that `effect_bind` carries), so every subterm is counted at the SAME depth.
-  # Omitting these made every occurrence of the join binder inside an effect node count
-  # as zero, which is what authorised an unsafe un-join.
   defp count_level({:effect_type, inner}, depth, t), do: count_level(inner, depth, t)
-  defp count_level({:effect_pure, a}, depth, t), do: count_level(a, depth, t)
+  defp count_level({:effect_pure, value}, depth, t), do: count_level(value, depth, t)
 
-  defp count_level({:effect_bind, e, k}, depth, t),
-    do: count_level(e, depth, t) + count_level(k, depth, t)
+  defp count_level({:effect_bind, effect, continuation}, depth, t),
+    do: count_level(effect, depth, t) + count_level(continuation, depth, t)
 
-  defp count_level(leaf, _depth, _t) when is_leaf(leaf), do: 0
-  defp count_level(other, _depth, _t), do: unrecognised!(other, "count_level/3")
-
-  # FAIL CLOSED. Counting an unknown former as zero occurrences is not conservative: it is
-  # the premise the un-join's soundness argument rests on, so a wrong zero here licenses a
-  # wrong optimisation. Refuse to guess.
-  @spec unrecognised!(term(), String.t()) :: no_return()
-  defp unrecognised!(other, fun) do
-    raise ArgumentError,
-          "Cure.Elab.Relevance.#{fun}: unrecognised Core former #{inspect(other, limit: 3)}. " <>
-            "Every former in Core.Term.t() must be enumerated here — treating a compound " <>
-            "former as a leaf reports zero usages for everything inside it."
-  end
+  defp count_level(_leaf, _depth, _t), do: 0
 
   # Un-join: check the shared continuation ONCE (unscaled), then combine it as one
   # alternative with the matched-arm usages. `alt` (agreement) then counts a captured

@@ -6,7 +6,7 @@ defmodule Cure.Elab.BuiltinPreludeSeedTest do
 
   test "compiling Std.Bool's own prelude source registers :bool" do
     {:ok, env} = Cure.Elab.Program.elaborate(@bool_src)
-    assert Inductive.builtin(env, :bool) == :Bool
+    assert Inductive.builtin(env, :bool) == :"Std.Bool#Bool"
   end
 
   test "prelude-compiled Bool family is structurally identical to Builtins.seed's" do
@@ -24,7 +24,7 @@ defmodule Cure.Elab.BuiltinPreludeSeedTest do
     # capture the key — the register pass only honors @builtin in prelude sources.
     src = "mod M\n  @builtin(:bool)\n  type Coin = Heads | Tails\n"
     {:ok, env} = Cure.Elab.Program.elaborate(src)
-    assert Inductive.builtin(env, :bool) == :Bool
+    assert Inductive.builtin(env, :bool) == :"Std.Bool#Bool"
     refute Inductive.builtin(env, :bool) == :Coin
   end
 end

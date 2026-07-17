@@ -82,7 +82,7 @@ defmodule Cure.Elab.RecordTest do
   end
 
   test "projecting an unknown field is rejected" do
-    assert {:error, {:unknown_field, :Point, "z"}} =
+    assert {:error, {:unknown_field, :"M#Point", "z"}} =
              Program.elaborate(@pt <> "  fn f(p: Point) -> Nat = p.z\nend\n")
   end
 

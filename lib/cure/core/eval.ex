@@ -329,6 +329,6 @@ defmodule Cure.Core.Eval do
   # stays neutral, never unsound (K2, spec 2026-07-09).
   def fold(_op, _args), do: :stuck
 
-  defp vbool(true), do: {:vctor, :True, []}
-  defp vbool(false), do: {:vctor, :False, []}
+  defp vbool(true), do: {:vctor, :"Std.Bool#True", []}
+  defp vbool(false), do: {:vctor, :"Std.Bool#False", []}
 end

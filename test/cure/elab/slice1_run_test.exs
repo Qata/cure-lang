@@ -24,7 +24,7 @@ defmodule Cure.Elab.Slice1RunTest do
   """
 
   # nullary constructor value
-  defp c(name), do: {:ctor, name, []}
+  defp c(name), do: {:ctor, Cure.Elab.Name.qualify("Main", name), []}
 
   defp apply_all(fun, args), do: Enum.reduce(args, fun, fn a, acc -> Eval.apply(acc, a) end)
 
@@ -37,26 +37,26 @@ defmodule Cure.Elab.Slice1RunTest do
   test "running the match on seq(prim, prim) evaluates to the seq branch" do
     {:ok, env} = Program.elaborate(@src)
 
-    prim = {:ctor, :prim, [c(:SVNil), c(:SVNil)]}
+    prim = {:ctor, :"Main#prim", [c(:SVNil), c(:SVNil)]}
     # seq(prim, prim) : SF(SVNil, SVNil, andd(Causal, Causal)) — full (unerased) form
     seq =
-      {:ctor, :seq, [c(:SVNil), c(:SVNil), c(:Causal), c(:SVNil), c(:Causal), prim, prim]}
+      {:ctor, :"Main#seq", [c(:SVNil), c(:SVNil), c(:Causal), c(:SVNil), c(:Causal), prim, prim]}
 
     run = Eval.eval(Env.get_def(env, :run).body, [])
     indices = [Eval.eval(c(:SVNil), []), Eval.eval(c(:SVNil), []), Eval.eval(c(:Causal), [])]
     result = apply_all(run, indices ++ [Eval.eval(seq, [])])
 
-    assert {:vctor, :Dcoupled, []} = result
+    assert {:vctor, :"Main#Dcoupled", []} = result
   end
 
   test "running the match on a prim value evaluates to the prim branch" do
     {:ok, env} = Program.elaborate(@src)
 
-    prim = {:ctor, :prim, [c(:SVNil), c(:SVNil)]}
+    prim = {:ctor, :"Main#prim", [c(:SVNil), c(:SVNil)]}
     run = Eval.eval(Env.get_def(env, :run).body, [])
     indices = [Eval.eval(c(:SVNil), []), Eval.eval(c(:SVNil), []), Eval.eval(c(:Causal), [])]
     result = apply_all(run, indices ++ [Eval.eval(prim, [])])
 
-    assert {:vctor, :Causal, []} = result
+    assert {:vctor, :"Main#Causal", []} = result
   end
 end

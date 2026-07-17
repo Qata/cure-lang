@@ -16,7 +16,7 @@ defmodule Cure.Elab.Implementation do
   instance clause nor a default is a `:missing_method` error.
   """
 
-  alias Cure.Core.Env
+  alias Cure.Core.{Env, Inductive}
   alias Cure.Elab.{Coherence, Declarations, Resolve}
 
   @doc """
@@ -40,7 +40,7 @@ defmodule Cure.Elab.Implementation do
       desc ->
         with :ok <- check_no_stray_clauses(desc, iface, body),
              {:ok, method_map, mangled_fns} <-
-               build_methods(desc, iface, head, for_type, body),
+               build_methods(desc, iface, head, for_type, body, env),
              ref = %{iface: iface, head: head, methods: method_map, as: as_name},
              {:ok, env1} <- register_instance(env, iface, head, as_name, ref),
              {:ok, env2} <- register_signatures(mangled_fns, env1),
@@ -74,7 +74,7 @@ defmodule Cure.Elab.Implementation do
           head_atom(body, env, MapSet.put(seen, head), head)
 
         _ ->
-          head
+          if Inductive.family?(env, head), do: Env.resolve_key(env, env.families, head), else: head
       end
     end
   end
@@ -114,9 +114,9 @@ defmodule Cure.Elab.Implementation do
   # function_def — either the instance's own clause renamed, or the interface
   # default specialised to this head type. Returns the `method => mangled_atom`
   # map alongside the decls.
-  defp build_methods(desc, iface, head, for_type, body) do
+  defp build_methods(desc, iface, head, for_type, body, env) do
     Enum.reduce_while(desc.method_order, {:ok, %{}, []}, fn method, {:ok, mm, fns} ->
-      mangled = mangled_name(iface, head, method)
+      mangled = mangled_name(env, iface, head, method)
 
       with {:ok, fn_decl, origin} <- method_def(desc, method, for_type, body),
            :ok <- check_method_signature(desc, iface, method, for_type, fn_decl, origin) do
@@ -303,8 +303,14 @@ defmodule Cure.Elab.Implementation do
   defp rename_fn({:function_def, m, b}, mangled),
     do: {:function_def, Keyword.put(m, :name, Atom.to_string(mangled)), b}
 
-  defp mangled_name(iface, head, method),
-    do: :"__impl_#{iface}_#{head}_#{method}"
+  defp mangled_name(env, iface, head, method) do
+    base = :"__impl_#{iface}_#{head}_#{method}"
+
+    case Env.owner(env) do
+      nil -> base
+      owner -> Cure.Elab.Name.qualify(owner, base)
+    end
+  end
 
   # -- registration -----------------------------------------------------------
 
@@ -342,7 +348,7 @@ defmodule Cure.Elab.Implementation do
 
   defp bind_named_instance(env, %{head_kind: :type}, iface, head, name, ref) do
     term = Resolve.dict_term_from_ref(env, iface, ref)
-    {:ok, Env.add_def(env, String.to_atom(name), Resolve.dict_type_term(iface, head), term)}
+    {:ok, Env.add_def(env, String.to_atom(name), Resolve.dict_type_term(env, iface, head), term)}
   end
 
   defp bind_named_instance(env, _desc, _iface, _head, _name, _ref), do: {:ok, env}

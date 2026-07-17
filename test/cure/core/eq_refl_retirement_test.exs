@@ -17,7 +17,7 @@ defmodule Cure.Core.EqReflRetirementTest do
   alias Cure.Elab.Program
   import Cure.TestSupport.RetiredNode, only: [opaque: 1]
 
-  @nat {:data, :Nat, [], []}
+  @nat {:data, :"Std.Nat#Nat", [], []}
   defp z, do: {:ctor, :Z, []}
   defp s(n), do: {:ctor, :S, [n]}
 
@@ -27,7 +27,11 @@ defmodule Cure.Core.EqReflRetirementTest do
   end
 
   defp eq_ty(sig, ty, a, b),
-    do: Eval.eval({:data, :Equivalent, [ty], [a, b]}, Context.env(Context.empty(sig)))
+    do:
+      Eval.eval(
+        {:data, :"Std.Equivalent#Equivalent", [ty], [a, b]},
+        Context.env(Context.empty(sig))
+      )
 
   test "Kernel.infer no longer accepts primitive {:eq} / {:refl} nodes" do
     sig = base_sig()

@@ -2,6 +2,13 @@ defmodule Cure.Elab.UnionTest do
   @moduledoc """
   End-to-end elaboration of anonymous unions, through `Program.elaborate/1` (so the
   stdlib prelude is in scope and `String` resolves).
+
+  The heterogeneous-Map round-trip relies on the global BEAM module `Cure.Std.Map`
+  carrying `get/2`. It is `async: true`: the round-trip only *consumes* the
+  preloaded full `Cure.Std.Map` (the stdlib preload JIT-compiles all of `map.cure`
+  at suite start), and `set_dependent_run_test.exs` — the suite's only reloader of
+  that global module — now installs the same FULL surface, so it can no longer
+  clobber `get/2` (the historical flake). No test installs a partial view.
   """
   use ExUnit.Case, async: true
 
@@ -24,7 +31,7 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert Inductive.family?(env, :"Union<Bool|Int>")
+      assert Inductive.family?(env, :"Union<Int|Std.Bool#Bool>")
     end
 
     test "the family has one constructor per member, family-qualified" do
@@ -37,9 +44,15 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, env} = Program.elaborate(src)
 
       names =
-        env |> Inductive.ctors_of(:"Union<Bool|Int>") |> Enum.map(& &1.name) |> Enum.sort()
+        env
+        |> Inductive.ctors_of(:"Union<Int|Std.Bool#Bool>")
+        |> Enum.map(& &1.name)
+        |> Enum.sort()
 
-      assert names == [:"Union<Bool|Int>$Bool", :"Union<Bool|Int>$Int"]
+      assert names == [
+               :"Union<Int|Std.Bool#Bool>$Int",
+               :"Union<Int|Std.Bool#Bool>$Std.Bool#Bool"
+             ]
     end
 
     test "a type member's ctor takes one payload argument; a literal member's takes none" do
@@ -70,7 +83,7 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert union_families(env) == [:"Union<Bool|Int>"]
+      assert union_families(env) == [:"Union<Int|Std.Bool#Bool>"]
     end
 
     test "a one-member union collapses to the member itself — no family is generated" do
@@ -94,10 +107,13 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, env} = Program.elaborate(src)
 
-      assert Inductive.family?(env, :"Disjoint<Atom|Bool|Int>")
+      assert Inductive.family?(env, :"Disjoint<Atom|Int|Std.Bool#Bool>")
 
       ctors =
-        env |> Inductive.ctors_of(:"Disjoint<Atom|Bool|Int>") |> Enum.map(& &1.name) |> Enum.sort()
+        env
+        |> Inductive.ctors_of(:"Disjoint<Atom|Int|Std.Bool#Bool>")
+        |> Enum.map(& &1.name)
+        |> Enum.sort()
 
       assert length(ctors) == 3
     end
@@ -194,7 +210,7 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, env} = Program.elaborate(src)
       body = Env.get_def(env, :f).body |> unwrap_lams()
 
-      assert {:ctor, :"Union<Bool|Int>$Int", [{:var, 0}]} = body
+      assert {:ctor, :"Union<Int|Std.Bool#Bool>$Int", [{:var, 0}]} = body
     end
 
     test "a literal is injected into its literal member constructor" do
@@ -237,7 +253,10 @@ defmodule Cure.Elab.UnionTest do
       # One branch per ctor of the NARROW family, each remapped to its counterpart
       # in the wide one. This is a real function, not a cast.
       assert branches |> Enum.map(fn {c, ar, _} -> {c, ar} end) |> Enum.sort() ==
-               [{:"Union<Bool|Int>$Bool", 1}, {:"Union<Bool|Int>$Int", 1}]
+               [
+                 {:"Union<Int|Std.Bool#Bool>$Int", 1},
+                 {:"Union<Int|Std.Bool#Bool>$Std.Bool#Bool", 1}
+               ]
     end
 
     test "widening to a union that lacks a source member is rejected" do
@@ -268,7 +287,10 @@ defmodule Cure.Elab.UnionTest do
       assert {:case, _scrut, _motive, branches} = body
 
       assert branches |> Enum.map(fn {c, ar, _} -> {c, ar} end) |> Enum.sort() ==
-               [{:"Union<Bool|Int>$Bool", 1}, {:"Union<Bool|Int>$Int", 1}]
+               [
+                 {:"Union<Int|Std.Bool#Bool>$Int", 1},
+                 {:"Union<Int|Std.Bool#Bool>$Std.Bool#Bool", 1}
+               ]
     end
 
     test "a literal member is matched as a bare literal and binds nothing" do
@@ -376,7 +398,7 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
-      assert apply(:"Cure.UTM", :wrap, [7]) == {:"Union<Bool|Int>$Int", 7}
+      assert apply(:"Cure.UTM", :wrap, [7]) == {:"Union<Int|Std.Bool#Bool>$Int", 7}
     end
 
     test "a literal member erases to its family-qualified NULLARY ctor atom" do
@@ -702,10 +724,10 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
       # true/false take the more specific Bool clause...
-      assert apply(:"Cure.EXN2", :raw, [[true]]) == {:"Disjoint<Atom|Bool>$Bool", true}
-      assert apply(:"Cure.EXN2", :raw, [[false]]) == {:"Disjoint<Atom|Bool>$Bool", false}
+      assert apply(:"Cure.EXN2", :raw, [[true]]) == {:"Disjoint<Atom|Std.Bool#Bool>$Std.Bool#Bool", true}
+      assert apply(:"Cure.EXN2", :raw, [[false]]) == {:"Disjoint<Atom|Std.Bool#Bool>$Std.Bool#Bool", false}
       # ...and every other atom falls through to Atom.
-      assert apply(:"Cure.EXN2", :raw, [[:other]]) == {:"Disjoint<Atom|Bool>$Atom", :other}
+      assert apply(:"Cure.EXN2", :raw, [[:other]]) == {:"Disjoint<Atom|Std.Bool#Bool>$Atom", :other}
     end
 
     # NOT admissible — and for a reason that has nothing to do with the FFI. `:north`'s
@@ -743,8 +765,8 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
-      assert apply(:"Cure.EXN3", :raw, [-3]) == :"Disjoint<Int#3|Nat>$Int#3"
-      assert apply(:"Cure.EXN3", :raw, [-7]) == {:"Disjoint<Int#3|Nat>$Nat", 7}
+      assert apply(:"Cure.EXN3", :raw, [-3]) == :"Disjoint<Int#3|Std.Nat#Nat>$Int#3"
+      assert apply(:"Cure.EXN3", :raw, [-7]) == {:"Disjoint<Int#3|Std.Nat#Nat>$Std.Nat#Nat", 7}
     end
 
     test "STILL REJECTS two class members that share a guard: List(Int) | List(Bool)" do
@@ -773,9 +795,9 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
-      assert apply(:"Cure.EX3", :raw, [[true]]) == {:"Disjoint<Atom|Bool|Int>$Bool", true}
-      assert apply(:"Cure.EX3", :raw, [[:other]]) == {:"Disjoint<Atom|Bool|Int>$Atom", :other}
-      assert apply(:"Cure.EX3", :raw, [[7]]) == {:"Disjoint<Atom|Bool|Int>$Int", 7}
+      assert apply(:"Cure.EX3", :raw, [[true]]) == {:"Disjoint<Atom|Int|Std.Bool#Bool>$Std.Bool#Bool", true}
+      assert apply(:"Cure.EX3", :raw, [[:other]]) == {:"Disjoint<Atom|Int|Std.Bool#Bool>$Atom", :other}
+      assert apply(:"Cure.EX3", :raw, [[7]]) == {:"Disjoint<Atom|Int|Std.Bool#Bool>$Int", 7}
     end
 
     test "a union in an @extern's ARGUMENT position is unaffected" do
@@ -908,11 +930,154 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
       # non-negative: tagged Nat
-      assert apply(:"Cure.NG", :raw, [[7]]) == {:"Union<Binary|Nat>$Nat", 7}
+      assert apply(:"Cure.NG", :raw, [[7]]) == {:"Union<Binary|Std.Nat#Nat>$Std.Nat#Nat", 7}
 
       # negative: NOT a Nat, and not a Binary either — the extern lied, so the honest
       # outcome is a CaseClauseError, not a fabricated Nat(-7).
       assert_raise CaseClauseError, fn -> apply(:"Cure.NG", :raw, [[-7]]) end
+    end
+  end
+
+  # An `opaque type` has no constructors, so nothing about its runtime shape can be
+  # inferred — which is exactly why `@erases(<class>)` exists. A carrier that DECLARES
+  # its erasure is a first-class union member: its class comes from the declaration
+  # instead of the built-in name table, and `is_pid`/`is_reference` discriminate it.
+  describe "opaque carriers with a declared erasure" do
+    test "an @erases(:pid) carrier is a legal union member" do
+      src = """
+      mod OPQ1
+        @erases(:pid)
+        opaque type Handle
+
+        @extern(:erlang, :whereis, 1)
+        fn look(name: Atom) -> Handle | :undefined
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+      assert union_families(env) == [:"Union<Atom#:undefined|OPQ1#Handle>"]
+    end
+
+    test "a pid carrier and a reference carrier are told apart, not collided" do
+      src = """
+      mod OPQ2
+        @erases(:pid)
+        opaque type Handle
+
+        @erases(:reference)
+        opaque type Ref
+
+        @extern(:erlang, :hd, 1)
+        fn raw(xs: List(Atom)) -> Handle | Ref
+      end
+      """
+
+      assert {:ok, env} = Program.elaborate(src)
+
+      # Distinct classes (is_pid vs is_reference) ⇒ disjoint erasures ⇒ `Union<…>`, not
+      # `Disjoint<…>`. Two `:unsupported` members would have been rejected outright.
+      assert union_families(env) == [:"Union<OPQ2#Handle|OPQ2#Ref>"]
+    end
+
+    test "a declared-erasure member is discriminated at runtime by its guard" do
+      src = """
+      mod OPQ3
+        @erases(:pid)
+        opaque type Handle
+
+        @extern(:erlang, :whereis, 1)
+        fn look(name: Atom) -> Handle | :undefined
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      Process.register(self(), :cure_union_pid_probe)
+
+      # erlang:whereis/1 hands back an untagged pid; the boundary must re-tag it, which it
+      # can only do if `Handle` resolves to the `is_pid` guard.
+      assert apply(:"Cure.OPQ3", :look, [:cure_union_pid_probe]) ==
+               {:"Union<Atom#:undefined|OPQ3#Handle>$OPQ3#Handle", self()}
+
+      # ...and an unregistered name comes back as the literal member.
+      assert apply(:"Cure.OPQ3", :look, [:cure_union_no_such_name]) ==
+               :"Union<Atom#:undefined|OPQ3#Handle>$Atom#:undefined"
+    end
+
+    test "an opaque member WITHOUT @erases is still rejected — its shape is unknown" do
+      src = """
+      mod OPQ4
+        opaque type Bare
+
+        @extern(:erlang, :whereis, 1)
+        fn look(name: Atom) -> Bare | :undefined
+      end
+      """
+
+      assert {:error, {:extern_union_indistinct, :look, _}} = Program.elaborate(src)
+    end
+  end
+
+  # `Effect(T)` has NO runtime representation — the elaborator injects `{:effect_pure, …}`
+  # and emit lowers it straight back to `T`. So an effectful extern returning a union
+  # erases to exactly the same untagged Erlang value a pure one does, and needs exactly
+  # the same re-tagging wrapper. Rejecting it (`:extern_returns_union`) forced every
+  # honest effectful FFI op — `whereis`, `cancel_timer` — to lie about its result type.
+  describe "@extern returning Effect(<union>)" do
+    test "the union under an Effect is re-tagged, not rejected" do
+      src = """
+      mod EFU1
+        @extern(:erlang, :abs, 1)
+        fn raw(n: Int) -> Effect(Int | Binary)
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+      assert apply(:"Cure.EFU1", :raw, [-5]) == {:"Union<Binary|Int>$Int", 5}
+    end
+
+    test "indistinct members under an Effect are still rejected" do
+      src = """
+      mod EFU2
+        @extern(:erlang, :abs, 1)
+        fn raw(n: Int) -> Effect(Int | Nat)
+      end
+      """
+
+      assert {:error, {:extern_union_indistinct, :raw, _}} = Program.elaborate(src)
+    end
+
+    test "a union NESTED under an Effect (not its head) is still rejected" do
+      src = """
+      mod EFU3
+        @extern(:erlang, :tl, 1)
+        fn raw(xs: List(Int)) -> Effect(List(Int | Binary))
+      end
+      """
+
+      assert {:error, {:extern_returns_union, :raw, _}} = Program.elaborate(src)
+    end
+
+    test "an effectful lookup returning a declared-erasure carrier or a literal" do
+      src = """
+      mod EFU4
+        @erases(:pid)
+        opaque type Handle
+
+        @extern(:erlang, :whereis, 1)
+        fn look(name: Atom) -> Effect(Handle | :undefined)
+      end
+      """
+
+      assert {:ok, _} = Cure.Compiler.compile_and_load(src)
+
+      Process.register(self(), :cure_union_effect_probe)
+
+      assert apply(:"Cure.EFU4", :look, [:cure_union_effect_probe]) ==
+               {:"Union<Atom#:undefined|EFU4#Handle>$EFU4#Handle", self()}
+
+      assert apply(:"Cure.EFU4", :look, [:cure_union_no_such_name]) ==
+               :"Union<Atom#:undefined|EFU4#Handle>$Atom#:undefined"
     end
   end
 end

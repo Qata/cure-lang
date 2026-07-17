@@ -22,7 +22,7 @@ defmodule Cure.Elab.Emit do
 
   alias Cure.Compiler.BeamWriter
   alias Cure.Core.{Grade, Env, Inductive, Validator}
-  alias Cure.Elab.Erase
+  alias Cure.Elab.{Erase, Name}
 
   @line 1
 
@@ -38,9 +38,10 @@ defmodule Cure.Elab.Emit do
     module = Keyword.fetch!(opts, :module)
     names = Keyword.fetch!(opts, :functions)
     origins = Keyword.get(opts, :origins, %{})
+    emit_opts = Keyword.take(opts, [:prefix, :local_owners])
 
     with :ok <- reject_holes(env, names) do
-      BeamWriter.compile_and_load(module_forms(env, module, names, origins))
+      BeamWriter.compile_and_load(module_forms(env, module, names, origins, emit_opts))
     end
   end
 
@@ -80,7 +81,13 @@ defmodule Cure.Elab.Emit do
   self-contained module.
   """
   @spec compile_forms(Env.t(), module(), [atom()], map()) :: {:ok, [tuple()]} | {:error, term()}
-  def compile_forms(%Env{} = env, module, names, origins) do
+  def compile_forms(%Env{} = env, module, names, origins),
+    do: compile_forms(env, module, names, origins, [])
+
+  @doc "As `compile_forms/4`, with `emit_opts` (`:prefix`/`:local_owners`, see `module_forms/5`)."
+  @spec compile_forms(Env.t(), module(), [atom()], map(), keyword()) ::
+          {:ok, [tuple()]} | {:error, term()}
+  def compile_forms(%Env{} = env, module, names, origins, emit_opts) do
     # Type-level definitions — those whose type ends in a universe (`… -> Type`) —
     # are type synonyms / type-level computations (a large-elim kind selector, a
     # `Lens(s, a) = Optic(LensKind, s, a)` alias). They are computationally
@@ -96,7 +103,7 @@ defmodule Cure.Elab.Emit do
       emit_names = Enum.reject(names, &type_level_def?(env, &1))
 
       try do
-        {:ok, module_forms(env, module, emit_names, origins)}
+        {:ok, module_forms(env, module, emit_names, origins, emit_opts)}
       rescue
         e in ArgumentError -> {:error, {:cannot_emit, Exception.message(e)}}
       end
@@ -124,13 +131,47 @@ defmodule Cure.Elab.Emit do
 
   @doc "As `module_forms/3`, with an import-`origins` map (see `compile_forms/4`)."
   @spec module_forms(Env.t(), module(), [atom()], map()) :: [tuple()]
-  def module_forms(%Env{} = env, module, names, origins) do
+  def module_forms(%Env{} = env, module, names, origins),
+    do: module_forms(env, module, names, origins, [])
+
+  @doc """
+  As `module_forms/4`, with `emit_opts`:
+
+    * `:prefix` — module-name prefix for the emitted group (default `""`).
+    * `:local_owners` — owner strings emitted together in this call, whose
+      intra-group calls should target the prefixed module. `nil` (default) means
+      "derive from `names`"; only consulted when `:prefix` is non-empty.
+
+  With `prefix: ""` the forms are byte-for-byte identical to `module_forms/4`.
+  """
+  @spec module_forms(Env.t(), module(), [atom()], map(), keyword()) :: [tuple()]
+  def module_forms(%Env{} = env, module, names, origins, emit_opts) do
+    prefix = Keyword.get(emit_opts, :prefix, "")
+
+    local_owners =
+      case Keyword.get(emit_opts, :local_owners) do
+        nil -> names |> Enum.map(&Name.owner/1) |> Enum.reject(&is_nil/1) |> MapSet.new()
+        list -> MapSet.new(list)
+      end
+
     # Stash the import origins for the two `{:global, name}` lowering sites; the
     # de Bruijn `ctx` list threaded through `lower/3` has no room for a
     # module-level constant, and the Core `Env` is TCB. Reset on every call
     # (the /3 default passes `%{}`) so a self-contained module never inherits a
-    # previous module's origins.
+    # previous module's origins. The prefix/local-owners route intra-group
+    # cross-owner calls to a prefixed target under a non-empty prefix (C2).
     Process.put(:cure_emit_origins, origins)
+    Process.put(:cure_emit_prefix, prefix)
+    Process.put(:cure_emit_local_owners, local_owners)
+
+    aliases =
+      Enum.flat_map(names, fn name ->
+        key = Env.resolve_key(env, env.defs, name)
+        emitted = emit_name_for_key(key)
+        [{name, emitted}, {key, emitted}]
+      end)
+
+    Process.put(:cure_emit_aliases, Map.new(aliases))
 
     try do
       fn_forms = Enum.map(names, &function_form(env, &1))
@@ -143,6 +184,9 @@ defmodule Cure.Elab.Emit do
       ]
     after
       Process.delete(:cure_emit_origins)
+      Process.delete(:cure_emit_prefix)
+      Process.delete(:cure_emit_local_owners)
+      Process.delete(:cure_emit_aliases)
     end
   end
 
@@ -166,18 +210,43 @@ defmodule Cure.Elab.Emit do
   # `module_forms/4`); `%{}` outside an emit or for a self-contained module.
   defp emit_origins, do: Process.get(:cure_emit_origins, %{})
 
-  # Resolve a source `{:global, name}` to a REMOTE `{module, fun}` target or
-  # `:local`. A `#`-mangled qualified name (`Std.List#map`, from a qualified
-  # call or an `implementation` method body) carries its owner in the name; a
-  # bare name is looked up in the import `origins`; everything else stays local
-  # (this module's own def, or an auto-imported BEAM BIF).
-  defp remote_target(name, origins) do
-    s = Atom.to_string(name)
+  # The module-name prefix for the group currently being emitted (`""` outside an
+  # emit or for the default un-prefixed path).
+  defp emit_prefix, do: Process.get(:cure_emit_prefix, "")
 
+  # The owner strings emitted together in this call (empty set outside an emit).
+  defp emit_local_owners, do: Process.get(:cure_emit_local_owners, MapSet.new())
+
+  defp emit_aliases, do: Process.get(:cure_emit_aliases, %{})
+
+  defp emit_name_for_key(name) do
+    case Cure.Elab.Name.base(name) do
+      nil -> name
+      base -> String.to_atom(base)
+    end
+  end
+
+  defp emitted_name(name), do: Map.get(emit_aliases(), name, emit_name_for_key(name))
+
+  # Resolve a source `{:global, name}` to a REMOTE `{module, fun}` target or
+  # `:local`. Every ordinary global is owner-qualified during elaboration.
+  # Local keys are recorded in `emit_aliases`; any remaining qualified key is a
+  # remote call. The origins fallback remains only for the compatibility /4 API
+  # while old direct emitter tests migrate to canonical environments.
+  defp remote_target(name, origins) do
     cond do
-      String.contains?(s, "#") ->
-        [mod, fun] = String.split(s, "#", parts: 2)
-        {String.to_atom("Cure." <> mod), String.to_atom(fun)}
+      Map.has_key?(emit_aliases(), name) ->
+        :local
+
+      (owner = Name.owner(name)) != nil ->
+        base = String.to_atom(Name.base(name))
+        prefix = emit_prefix()
+
+        if prefix != "" and MapSet.member?(emit_local_owners(), owner) do
+          {String.to_atom(prefix <> "Cure." <> owner), base}
+        else
+          {String.to_atom("Cure." <> owner), base}
+        end
 
       (mod = Map.get(origins, name)) != nil ->
         {mod, name}
@@ -220,17 +289,28 @@ defmodule Cure.Elab.Emit do
   defp function_form(env, name) do
     case Env.get_def(env, name) do
       %{body: {:extern, {mod, fun, _arity}}} = def ->
-        extern_form(name, {mod, fun}, present_arity(env, name), extern_union_members(env, def))
+        extern_form(
+          emitted_name(name),
+          {mod, fun},
+          present_arity(env, name),
+          extern_union_members(env, def),
+          env
+        )
 
       def ->
-        real_function_form(name, def, env)
+        real_function_form(emitted_name(name), def, env)
     end
   end
 
   # The members of an `@extern`'s union return type, tagged with their constructor names,
   # or nil when it does not return a union. Drives the discriminating wrapper below.
   defp extern_union_members(env, %{type: pi, quantities: quantities}) do
-    case codomain_of(pi, length(quantities || [])) do
+    codomain =
+      pi
+      |> codomain_of(length(quantities || []))
+      |> Cure.Elab.Declarations.strip_effect()
+
+    case codomain do
       {:data, ukey, [], []} ->
         if Cure.Elab.Union.union_family?(ukey) do
           env
@@ -257,14 +337,14 @@ defmodule Cure.Elab.Emit do
   # reaches the BEAM. `Declarations.check_extern_arity/2` rejects a literal that disagrees, so
   # the two agree by construction; reading the quantities here keeps that true by construction
   # rather than by convention.
-  defp extern_form(fn_atom, {mod, fun}, arity, union_members) do
+  defp extern_form(fn_atom, {mod, fun}, arity, union_members, env) do
     param_forms = for i <- 0..(arity - 1)//1, do: {:var, @line, :"V#{i}"}
     remote = {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, param_forms}
 
     body =
       case union_members do
         nil -> remote
-        members -> union_dispatch(remote, members)
+        members -> union_dispatch(remote, members, env)
       end
 
     {:function, @line, fn_atom, arity, [{:clause, @line, param_forms, [], [body]}]}
@@ -281,13 +361,13 @@ defmodule Cure.Elab.Emit do
   #
   # Literal members are matched by EXACT VALUE and come first — they are strictly more
   # specific than a type member's guard.
-  defp union_dispatch(remote, members) do
+  defp union_dispatch(remote, members, env) do
     clauses =
       members
-      |> Cure.Elab.Union.discrimination_order()
+      |> Cure.Elab.Union.discrimination_order(env)
       |> Enum.map(fn
         %{payload: nil} = lit -> literal_clause(lit)
-        type -> type_clause(type)
+        type -> type_clause(type, env)
       end)
 
     {:case, @line, remote, clauses}
@@ -304,7 +384,7 @@ defmodule Cure.Elab.Emit do
 
   # `R when is_integer(R) -> {:'Union<…>$Int', R}` — a type member is a 1-ary ctor, so it
   # erases to a tagged 2-tuple carrying the raw value.
-  defp type_clause(%{ctor: ctor} = member) do
+  defp type_clause(%{ctor: ctor} = member, env) do
     body = {:tuple, @line, [{:atom, @line, ctor}, {:var, @line, :R}]}
 
     # The guard sequence is a CONJUNCTION. A class test alone is not always enough: it must
@@ -313,13 +393,13 @@ defmodule Cure.Elab.Emit do
     # negatives — a raw -7 was being tagged Nat(-7). `Bounded(n)` (hence `Char`) is an
     # integer confined to 0..n-1.
     guards =
-      [class_test(member) | bound_tests(Cure.Elab.Union.value_bounds(member))]
+      [class_test(member, env) | bound_tests(Cure.Elab.Union.value_bounds(member))]
 
     {:clause, @line, [{:var, @line, :R}], [guards], [body]}
   end
 
-  defp class_test(member) do
-    test = class_guard(Cure.Elab.Union.runtime_class(member))
+  defp class_test(member, env) do
+    test = class_guard(Cure.Elab.Union.runtime_class(env, member))
     {:call, @line, {:atom, @line, test}, [{:var, @line, :R}]}
   end
 
@@ -343,6 +423,8 @@ defmodule Cure.Elab.Emit do
   defp class_guard(:float), do: :is_float
   defp class_guard(:binary), do: :is_binary
   defp class_guard(:list), do: :is_list
+  defp class_guard(:pid), do: :is_pid
+  defp class_guard(:reference), do: :is_reference
 
   defp literal_form(v) when is_integer(v), do: {:integer, @line, v}
   defp literal_form(v) when is_float(v), do: {:float, @line, v}
@@ -357,7 +439,8 @@ defmodule Cure.Elab.Emit do
     body_form = lower(env, inner, ctx)
 
     params =
-      for {n, :unrestricted} <- Enum.zip(param_names, qs),
+      for {n, q} <- Enum.zip(param_names, qs),
+          Grade.present?(q),
           do: underscore_if_unused({:var, @line, n}, body_form)
 
     clause = {:clause, @line, params, [], [body_form]}
@@ -420,7 +503,7 @@ defmodule Cure.Elab.Emit do
         end
 
       list_ctor?(env, name) ->
-        case {name, args} do
+        case {base_name(name), args} do
           {:Nil, []} -> {nil, @line}
           {:Cons, [h, t]} -> {:cons, @line, lower(env, h, ctx), lower(env, t, ctx)}
         end
@@ -455,7 +538,7 @@ defmodule Cure.Elab.Emit do
   # A first-class lambda erases to a curried 1-argument BEAM fun; its parameter
   # takes de Bruijn index 0 in the body's frame.
   defp lower(env, {:lam, _g, _dom, body}, ctx) do
-    var = :"Fn#{length(ctx)}"
+    var = fresh_var("Fn")
     body_form = lower(env, body, [var | ctx])
     clause = {:clause, @line, [{:var, @line, unused_underscore(var, body_form)}], [], [body_form]}
     {:fun, @line, {:clauses, [clause]}}
@@ -466,7 +549,7 @@ defmodule Cure.Elab.Emit do
   # where surface substitution emitted it at every use site (and not at all at
   # zero uses). Its parameter takes de Bruijn index 0 in the body's frame.
   defp lower(env, {:let, _g, _ty, val, body}, ctx) do
-    var = :"L#{length(ctx)}"
+    var = fresh_var("L")
     body_form = lower(env, body, [var | ctx])
     bind = {:match, @line, {:var, @line, unused_underscore(var, body_form)}, lower(env, val, ctx)}
     {:block, @line, [bind, body_form]}
@@ -502,14 +585,14 @@ defmodule Cure.Elab.Emit do
         case present_arity(env, name) do
           0 ->
             case remote_target(name, emit_origins()) do
-              :local -> {:call, @line, {:atom, @line, name}, []}
+              :local -> {:call, @line, {:atom, @line, emitted_name(name)}, []}
               {mod, fun} -> {:call, @line, {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}, []}
             end
 
           n ->
             case remote_target(name, emit_origins()) do
               :local ->
-                {:fun, @line, {:function, name, n}}
+                {:fun, @line, {:function, emitted_name(name), n}}
 
               {mod, fun} ->
                 {:fun, @line, {:function, {:atom, @line, mod}, {:atom, @line, fun}, {:integer, @line, n}}}
@@ -534,7 +617,7 @@ defmodule Cure.Elab.Emit do
   # continuation (slice c: `let x = e ⏎ rest`), the dominant "effect consumed
   # where produced" case; the emitted shape is byte-for-byte the bespoke path's.
   defp lower(env, {:effect_bind, e, {:lam, _g, _dom, body}}, ctx) do
-    var = :"E#{length(ctx)}"
+    var = fresh_var("E")
     body_form = lower(env, body, [var | ctx])
     bind = {:match, @line, {:var, @line, unused_underscore(var, body_form)}, lower(env, e, ctx)}
     {:block, @line, [bind, body_form]}
@@ -720,16 +803,32 @@ defmodule Cure.Elab.Emit do
       # A named function takes its declared arity in one BEAM call; any further
       # arguments apply (curried) to the function it returns — `mk()(z)`.
       {:global, name} ->
-        {direct, extra} = Enum.split(args, present_arity(env, name))
+        arity = present_arity(env, name)
 
         callee =
           case remote_target(name, emit_origins()) do
-            :local -> {:atom, @line, name}
+            :local -> {:atom, @line, emitted_name(name)}
             {mod, fun} -> {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}
           end
 
-        base = {:call, @line, callee, Enum.map(direct, &lower(env, &1, ctx))}
-        Enum.reduce(extra, base, fn arg, acc -> {:call, @line, acc, [lower(env, arg, ctx)]} end)
+        if length(args) < arity do
+          # UNDER-saturated (partial application): the value has a function type, so eta-expand
+          # the missing explicit parameters into the curried 1-arg-fun ABI — `add(Z)` at arity 2
+          # becomes `fun(V) -> add(Z, V) end`. Without this, `Enum.split` would emit a call at
+          # the SUPPLIED arity (`add/1`), which does not exist (E4). The kernel already typed the
+          # partial application (currying); this only lowers it faithfully.
+          eta = for _ <- 1..(arity - length(args)), do: fresh_var("Pa")
+          supplied = Enum.map(args, &lower(env, &1, ctx))
+          saturated = {:call, @line, callee, supplied ++ Enum.map(eta, &{:var, @line, &1})}
+
+          Enum.reduce(Enum.reverse(eta), saturated, fn v, body ->
+            {:fun, @line, {:clauses, [{:clause, @line, [{:var, @line, v}], [], [body]}]}}
+          end)
+        else
+          {direct, extra} = Enum.split(args, arity)
+          base = {:call, @line, callee, Enum.map(direct, &lower(env, &1, ctx))}
+          Enum.reduce(extra, base, fn arg, acc -> {:call, @line, acc, [lower(env, arg, ctx)]} end)
+        end
 
       # Applying a closure value (a lambda or a function-typed binder) is curried:
       # apply one argument at a time to the BEAM fun.
@@ -779,7 +878,9 @@ defmodule Cure.Elab.Emit do
   # for a bare `Sigma(x:T,U)` pair (whose tail is an ordinary value, not `unit`).
   # This is the emit-time reader of the `unit` marker: it decides flat-vs-nested for
   # BOTH values (here) and telescope patterns (`telescope_pattern_cars/2`).
-  defp telescope_cars(_env, {:ctor, :unit, []}), do: {:telescope, []}
+  defp telescope_cars(_env, {:ctor, name, []}) when is_atom(name) do
+    if base_name(name) == :unit, do: {:telescope, []}, else: :not_telescope
+  end
 
   defp telescope_cars(env, {:ctor, name, [car, cdr]}) do
     if sigma_ctor?(env, name) do
@@ -815,9 +916,8 @@ defmodule Cure.Elab.Emit do
   # tagged form would — but without the leading ctor-name atom, so the value stays
   # the untagged 2-tuple the ABI requires.
   defp sigma_branch_clause(env, {_mk_pair, 2, body}, ctx) do
-    base = length(ctx)
-    vx = :"V#{base}"
-    vy = :"V#{base + 1}"
+    vx = fresh_var("V")
+    vy = fresh_var("V")
     body_form = lower(env, body, [vy, vx | ctx])
     px = underscore_if_unused({:var, @line, vx}, body_form)
     py = underscore_if_unused({:var, @line, vy}, body_form)
@@ -829,18 +929,23 @@ defmodule Cure.Elab.Emit do
   # last field, so `[tail, head | ctx]`). A nested list pattern is lowered by the
   # elaborator's matrix compiler into a chain of these single-level Cons/Nil
   # branches, so native cons cells select correctly at every level.
-  defp list_branch_clause(env, {:Nil, 0, body}, ctx) do
-    {:clause, @line, [{nil, @line}], [], [lower(env, body, ctx)]}
+  defp list_branch_clause(env, {cname, 0, body}, ctx) do
+    if base_name(cname) == :Nil,
+      do: {:clause, @line, [{nil, @line}], [], [lower(env, body, ctx)]},
+      else: generic_branch_clause(env, {cname, 0, body}, ctx)
   end
 
-  defp list_branch_clause(env, {:Cons, 2, body}, ctx) do
-    base = length(ctx)
-    vh = :"V#{base}"
-    vt = :"V#{base + 1}"
-    body_form = lower(env, body, [vt, vh | ctx])
-    ph = underscore_if_unused({:var, @line, vh}, body_form)
-    pt = underscore_if_unused({:var, @line, vt}, body_form)
-    {:clause, @line, [{:cons, @line, ph, pt}], [], [body_form]}
+  defp list_branch_clause(env, {cname, 2, body}, ctx) do
+    if base_name(cname) == :Cons do
+      vh = fresh_var("V")
+      vt = fresh_var("V")
+      body_form = lower(env, body, [vt, vh | ctx])
+      ph = underscore_if_unused({:var, @line, vh}, body_form)
+      pt = underscore_if_unused({:var, @line, vt}, body_form)
+      {:clause, @line, [{:cons, @line, ph, pt}], [], [body_form]}
+    else
+      generic_branch_clause(env, {cname, 2, body}, ctx)
+    end
   end
 
   # case-on-Nat (spec §2.2): the zero ctor's branch matches literal 0; the succ
@@ -855,9 +960,8 @@ defmodule Cure.Elab.Emit do
   end
 
   defp nat_branch_clause(env, {_succ, 1, body}, ctx) do
-    base = length(ctx)
-    k = :"V#{base}"
-    n = :"N#{base}"
+    k = fresh_var("V")
+    n = fresh_var("N")
     body_form = lower(env, body, [k | ctx])
     k_var = underscore_if_unused({:var, @line, k}, body_form)
     bind = {:match, @line, k_var, {:op, @line, :-, {:var, @line, n}, {:integer, @line, 1}}}
@@ -875,8 +979,7 @@ defmodule Cure.Elab.Emit do
   # with guard `N > 0` and binding the predecessor `pred = N - 1`.
   defp bounded_branch_clause(env, {name, arity, body}, ctx) do
     quantities = Inductive.ctor_quantities(env, name) || List.duplicate(:unrestricted, arity)
-    base = length(ctx)
-    field_names = for i <- indices(arity), do: :"V#{base + i}"
+    field_names = for _i <- indices(arity), do: fresh_var("V")
     new_ctx = Enum.reverse(field_names) ++ ctx
     body_form = lower(env, body, new_ctx)
 
@@ -887,7 +990,7 @@ defmodule Cure.Elab.Emit do
 
       present_idx ->
         # `Next`: the present field is the predecessor = N - 1.
-        n = :"N#{base}"
+        n = fresh_var("N")
         pred_name = Enum.at(field_names, present_idx)
         pred_var = underscore_if_unused({:var, @line, pred_name}, body_form)
         bind = {:match, @line, pred_var, {:op, @line, :-, {:var, @line, n}, {:integer, @line, 1}}}
@@ -898,12 +1001,11 @@ defmodule Cure.Elab.Emit do
 
   defp generic_branch_clause(env, {cname, arity, body}, ctx) do
     quantities = Inductive.ctor_quantities(env, cname) || List.duplicate(:unrestricted, arity)
-    base = length(ctx)
 
     fields =
       for i <- indices(arity) do
         q = Enum.at(quantities, i, :unrestricted)
-        if q == :unrestricted, do: {:unrestricted, :"V#{base + i}"}, else: {:erased, :"_f#{base + i}"}
+        if q == :unrestricted, do: {:unrestricted, fresh_var("V")}, else: {:erased, fresh_var("_f")}
       end
 
     field_names = Enum.map(fields, fn {_q, n} -> n end)
@@ -923,13 +1025,31 @@ defmodule Cure.Elab.Emit do
     {:clause, @line, [pattern], [], [body_form]}
   end
 
+  # A synthetic BEAM variable name, unique across the *entire* compilation run
+  # (not just within one lexical nesting chain). Binder names used to be derived
+  # from `length(ctx)` (de-Bruijn context depth): sound along a single ancestor
+  # chain, but two SIBLING subterms lowered from the same `ctx` (e.g. independent
+  # arguments to a ctor/call, or independent elements of a list literal) could
+  # legitimately reach the same depth and so mint the *same* name for two
+  # unrelated binders. Erlang's `expr_list`/pattern-list hygiene checks then
+  # either warn (`match_underscore_var_pat`, sibling case-exports reusing a
+  # name) or — worse — silently REBIND: a nested case whose fresh field name
+  # happens to equal an already-bound ancestor variable stops introducing a new
+  # binding and instead matches against the ancestor's *value*, corrupting the
+  # program. `System.unique_integer/1` sidesteps both: every call reserves one
+  # globally-fresh id, so no two synthetic binders can ever collide, siblings or
+  # not. (Each field of a multi-field clause must call this once per field —
+  # never derive further names by adding an offset to one reserved id, since
+  # that reintroduces the exact same collision class against other reserved ids.)
+  defp fresh_var(prefix), do: :"#{prefix}#{System.unique_integer([:positive, :monotonic])}"
+
   # `erl_lint` flags a bound-but-unused variable (`unused_var`). An erased proof
   # discards its parameters — an equality proof erases to the runtime-irrelevant
   # `:refl`, so a *present* function parameter or matched ctor field can go
   # unreferenced. Rename such a binder to a `_`-prefixed name: still a real,
   # referenceable variable, but exempt from the warning. Binder names are
-  # depth-unique (`V<ctx-depth>`), so a plain occurrence check over the lowered
-  # body is a sound "is it used?" test (no shadowing to confuse it).
+  # globally unique (`fresh_var/1`), so a plain occurrence check over the
+  # lowered body is a sound "is it used?" test (no shadowing to confuse it).
   defp underscore_if_unused({:var, l, name} = v, body_form) do
     if used_var?(name, body_form), do: v, else: {:var, l, :"_#{name}"}
   end
@@ -997,8 +1117,13 @@ defmodule Cure.Elab.Emit do
     fam != nil and Inductive.ctor_family(env, name) == fam
   end
 
-  defp bool_atom(:True), do: true
-  defp bool_atom(:False), do: false
+  defp bool_atom(name) do
+    case base_name(name) do
+      :True -> true
+      :False -> false
+      other -> other
+    end
+  end
 
   defp bool_atom_or_self(env, name) do
     if bool_ctor?(env, name), do: bool_atom(name), else: name
@@ -1011,9 +1136,15 @@ defmodule Cure.Elab.Emit do
   # (`Ok(value) -> {:ok, value}`, `None() -> :none`). Applied at BOTH the
   # construction and the pattern site so the tags agree. Every other constructor
   # keeps its declared (PascalCase) tag; records stay tagged tuples `{:Point,…}`.
-  defp otp_tag(:Ok), do: :ok
-  defp otp_tag(:Error), do: :error
-  defp otp_tag(:Some), do: :some
-  defp otp_tag(:None), do: :none
-  defp otp_tag(name), do: name
+  defp otp_tag(name) do
+    case base_name(name) do
+      :Ok -> :ok
+      :Error -> :error
+      :Some -> :some
+      :None -> :none
+      other -> other
+    end
+  end
+
+  defp base_name(name), do: name |> Cure.Elab.Name.base() |> String.to_atom()
 end

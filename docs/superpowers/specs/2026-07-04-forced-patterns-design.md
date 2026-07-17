@@ -14,6 +14,13 @@ gate** (new Antigen antibody + full Antigen suite + full test suite). **Blocking
 **auto-generalization defect**) that must be fixed or worked around before the primary oracle
 probes can exercise this design — see §5.1.
 
+> **Landed correction (2026-07-04; re-verified 2026-07-17).** The blocking
+> auto-generalization defect described below is fixed by `dc2b6355` (`check_result_indices`
+> now seeds the family-parameter neutrals, matching `check_ctor_app`). This commit is contained
+> in `core-let-binder`. Live verification on 2026-07-17 reports `dp01`, `dp01b`, `dp02`, and
+> `dp03` as Cure/Idris `accept/accept`, and `dp06` as `reject/reject`; every `dotpat` relation is
+> `same`. Sections retaining “blocked” language are historical diagnosis, not current status.
+
 ---
 
 ## 1. Goal

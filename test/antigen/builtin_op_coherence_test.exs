@@ -32,10 +32,10 @@ defmodule Antigen.BuiltinOpCoherenceTest do
     assert {:float_lit, 3.5} =
              Normalise.nf(ctx(), app2(:float_add, {:float_lit, 1.5}, {:float_lit, 2.0}), delta: :certified)
 
-    assert {:ctor, :True, []} =
+    assert {:ctor, :"Std.Bool#True", []} =
              Normalise.nf(ctx(), app2(:int_le, {:int_lit, 2}, {:int_lit, 2}), delta: :certified)
 
-    assert {:ctor, :False, []} =
+    assert {:ctor, :"Std.Bool#False", []} =
              Normalise.nf(ctx(), app2(:float_gt, {:float_lit, 1.0}, {:float_lit, 2.0}), delta: :certified)
   end
 
