@@ -9,6 +9,13 @@ Cure, adapted where the BEAM/AtomVM target demands it.
 ([`macros/2026-07-08-parse-macro-design.md`](macros/2026-07-08-parse-macro-design.md))
 lowers onto. Revises that macro's §11 non-goal #2 — see §9.
 
+**Release placement (2026-07-17):** completion of this public library is parked
+for Cure 0.35 and feeds the Cure-native parser/diagnostics/self-hosting program
+specified in
+[`2026-07-17-cure-native-parser-diagnostics-self-hosting-design.md`](2026-07-17-cure-native-parser-diagnostics-self-hosting-design.md).
+The 0.34 dependent-type rewrite may retain landed substrate and fix general
+compiler gaps it exposes, but does not take on the remaining parser product.
+
 **Implementation status (2026-07-17):** the list-shaped `Consumed` relation,
 strict drop constructor, reflexivity, transitivity, the dependent `Step`
 result, and strict-suffix accessibility `Acc` have landed in `Std.Data.Suffix`.
