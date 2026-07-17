@@ -430,35 +430,35 @@ application; E10 is *reduction* of an applied function during type conversion.
 
 ---
 
-## E11 — Nested function application not reduced when converting a call result to an annotation
+## E11 — Applied DEFINITION head in a type/index position not resolved to its exact key
 
-**Symptom.** A proof `h() -> T = f(args)` where `T` is the definitional-but-not-syntactic normal
-form of `f(args)`'s type fails with `:conversion_failure` when `T` contains a NESTED (depth ≥ 2)
-function application. Isolated probe (`Std.Otp.EffAlgebra` `count_hom`): checking
-`count_hom(ENil(), ENil())` against `Equivalent(Nat, count_sends(seq(ENil(), ENil())),
-plus(count_sends(ENil()), count_sends(ENil())))` REJECTS, though that IS `count_hom`'s own return
-type at those args. A DEPTH-1 annotation (`count_sends(ENil())`) converts fine; a nested annotation
-whose two sides are SYNTACTICALLY IDENTICAL (checked against `reflexive`) also converts fine. Only
-the combination — nested apps + the two Equivalent sides differing (both reducing to the same normal
-form) + checked against a function-call result — fails.
+**Symptom.** A proof annotation applying a function whose name is defined in MULTIPLE modules
+(`plus`, in `Std.Nat`/`EffAlgebra`/`MailboxPattern`/…) fails to convert even when both sides reduce
+to the same normal form: `h() -> Equivalent(Nat, plus(S(Z()),Z()), S(Z())) = reflexive(S(Z()))`
+REJECTS. Not about nesting or "imported functions" in general (earlier two mischaracterizations):
+UNIQUELY-named imported functions (`count_sends`, `seq`) reduce fine; a LOCAL `idn(idn(Z))` reduces
+fine. It is specifically an AMBIGUOUS applied def head. In TERM position the same `plus(…)`
+correctly reports `:ambiguous_name`; only in TYPE/index position did it silently degrade. Even the
+QUALIFIED spelling `Std.Otp.EffAlgebra.plus(…)` degraded the same way.
 
-**Root cause + layer.** K (conversion/normaliser). The call's inferred type is reduced to normal
-form (`Equivalent(Nat, Z, Z)`), but converting it against the annotation does not fully δ-reduce the
-annotation's nested application `count_sends (seq …)` (the OUTER `count_sends` is not re-fired after
-its argument `seq …` reduces). Single applications are reduced; the nested case stops one layer
-short.
+**Root cause + layer.** E (elaborator, `declarations.ex` — NOT TCB). `idx_to_core`'s `{:variable,…}`
+clause resolves via `resolve_index_name` (which handles ambiguity), but the `{:function_call,…}` →
+`lower_applied_type_head` CATCH-ALL for an applied plain def did `Env.resolve_key(env, env.defs,
+atom)`, which for an ambiguous bare name falls back to the bare atom → `{:global, :plus}`, which is
+not a registry key, so `Env.get_def`/`certified?` fail and δ-unfold stays stuck → conversion can't
+reduce it. Separately, the qualified head was only offered to `resolve_qualified(…, :type)` (wrong
+namespace for a value/def), so it degraded to the bare tail and hit the same catch-all.
 
-**Semantics.** No soundness impact; a conversion-completeness gap. Fix = drive `whnf` to a fixpoint
-on the spine (re-reduce the head after arguments reduce) in the conversion path, matching the term
-position.
+**Semantics.** No soundness impact; a resolution/conversion-completeness gap.
 
-**Workaround.** Write the annotation in NORMAL FORM (`Equivalent(Nat, S(S(Z())), S(S(Z())))` instead
-of `count_sends(seq(...)) = plus(...)`); the proof term is unchanged. Used in the `count_hom` stdlib
-test. The theorem itself (`count_hom`) elaborates fine — this only bites author-written annotations
-that leave nested applications unreduced.
-
-**Status.** OPEN. Cousin of E10 (both are "an application not reduced in conversion"), but E10 is a
-function ARGUMENT in an index; E11 is the OUTER head of a nested application in an ordinary annotation.
+**Status.** ✅ FIXED (Stage 1) in `lower_applied_type_head` via new `applied_def_key/3`: a qualified
+head resolves through the VALUE namespace to `Mod#name` (and then δ-unfolds); a bare uniquely-provided
+name resolves to its key; a bare name provided by ≥2 modules is a clean `:ambiguous_name` (matching
+term position) instead of a silent conversion failure. Regression: `applied_def_resolution_test.exs`;
+full gate green (4600 passed, 318/318 Antigen). **Stage 2 (OPEN):** TYPE-DIRECTED tie-breaking so a
+BARE ambiguous applied def is resolved by the argument/expected types (per the approved
+`overloading-and-argument-labels-spec`) rather than requiring the qualified spelling — the principled
+fix for the remaining bare case. Distinct from E10 (a function ARGUMENT not reduced in an index).
 
 ---
 

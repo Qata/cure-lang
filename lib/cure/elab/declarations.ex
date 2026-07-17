@@ -2055,8 +2055,48 @@ defmodule Cure.Elab.Declarations do
         {:ok, {:ctor, Env.resolve_key(env, env.ctors, atom), core_args}}
 
       true ->
-        atom = Env.resolve_key(env, env.defs, atom)
-        {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
+        # An applied plain (non-family, non-ctor) DEFINITION — e.g. `plus(a, b)`
+        # in a dependent index. The head must resolve to its EXACT owned def key,
+        # or δ-unfolding stays stuck and the application never reduces during
+        # conversion. This mirrors the term-position resolution in
+        # `elaborate_named_call`/`resolve_index_name`: a qualified head resolves
+        # through the VALUE namespace, a bare head through `resolve_bare`, and a
+        # genuinely ambiguous bare head is rejected (R7) rather than degraded to an
+        # unresolvable `{:global, :bare}` that silently fails to convert.
+        case applied_def_key(env, raw_name, atom) do
+          {:ambiguous_name, a, mods} ->
+            {:error, {:ambiguous_name, a, mods}}
+
+          key ->
+            {:ok, Enum.reduce(core_args, {:global, key}, fn a, acc -> {:app, acc, a} end)}
+        end
+    end
+  end
+
+  # Resolve an applied definition head to its exact registry key. `raw_name` is
+  # the surface spelling (possibly dotted), `atom` its bare-tail atom. A qualified
+  # head resolves through the value namespace to `Mod#name`; a bare head that is
+  # uniquely present (locally or via one import) resolves to that key; a bare head
+  # provided by ≥2 distinct modules with no unique winner is ambiguous. Anything
+  # else keeps the current bare-atom behaviour (a genuinely-unknown name still
+  # surfaces the ordinary `:unknown_global` downstream).
+  defp applied_def_key(env, raw_name, atom) do
+    cond do
+      String.contains?(raw_name, ".") ->
+        case Cure.Elab.Resolution.resolve_qualified(env, raw_name, :value) do
+          {:ok, key} -> key
+          :error -> Env.resolve_key(env, env.defs, atom)
+        end
+
+      match?({:ok, _}, Cure.Elab.Resolution.resolve_bare(env, atom)) ->
+        {:ok, key} = Cure.Elab.Resolution.resolve_bare(env, atom)
+        key
+
+      length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
+        {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}
+
+      true ->
+        Env.resolve_key(env, env.defs, atom)
     end
   end
 
