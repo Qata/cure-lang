@@ -17,7 +17,7 @@ defmodule Antigen.Generators.Indexed do
     {:branch_family, :well_typed},
     {:branch_family, :ill_typed},
     {:coverage_gap, :well_typed},
-    {:coverage_gap, :ill_typed},
+    {:coverage_unknown_gap, :ill_typed},
     {:refine, :well_typed},
     {:refine, :ill_typed},
     {:motive_wf, :well_typed},
@@ -130,22 +130,24 @@ defmodule Antigen.Generators.Indexed do
 
   @tri {:data, :Tri, [], []}
 
-  @doc "Coverage obligation. `:ill_typed` omits a required branch (expects {:error, :coverage})."
+  @doc "Coverage obligation: known constructors specialize; opaque variables remain exhaustive."
   @spec coverage(:well_typed | :ill_typed) :: Challenge.t()
   def coverage(:well_typed) do
     body =
-      {:case, {:ctor, :A, []}, {:lam, Cure.Core.Grade.unrestricted(), @tri, @tri},
-       [{:A, 0, {:ctor, :A, []}}, {:B, 0, {:ctor, :A, []}}, {:C, 0, {:ctor, :A, []}}]}
+      {:case, {:ctor, :A, []}, {:lam, Cure.Core.Grade.unrestricted(), @tri, @tri}, [{:A, 0, {:ctor, :A, []}}]}
 
-    challenge(:well_typed, [tri_family()], :coverage_gap, @tri, body, "exhaustive Tri case")
+    challenge(:well_typed, [tri_family()], :coverage_gap, @tri, body, "known A specializes to its A branch")
   end
 
   def coverage(:ill_typed) do
-    body =
-      {:case, {:ctor, :A, []}, {:lam, Cure.Core.Grade.unrestricted(), @tri, @tri},
-       [{:A, 0, {:ctor, :A, []}}, {:B, 0, {:ctor, :A, []}}]}
+    def_type = {:pi, Cure.Core.Grade.unrestricted(), @tri, @tri}
 
-    challenge(:ill_typed, [tri_family()], :coverage_gap, @tri, body, "non-exhaustive: C omitted")
+    body =
+      {:lam, Cure.Core.Grade.unrestricted(), @tri,
+       {:case, {:var, 0}, {:lam, Cure.Core.Grade.unrestricted(), @tri, @tri},
+        [{:A, 0, {:ctor, :A, []}}, {:B, 0, {:ctor, :A, []}}]}}
+
+    challenge(:ill_typed, [tri_family()], :coverage_unknown_gap, def_type, body, "opaque Tri variable omits C")
   end
 
   # -- 4.3 compound-index refinement (crown jewel) ----------------------------

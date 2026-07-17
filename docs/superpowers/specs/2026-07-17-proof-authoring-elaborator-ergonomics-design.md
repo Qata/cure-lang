@@ -86,8 +86,12 @@ context-refinement phase.
 Antigen antibody. Medium-high effort, high payoff (removes both the inversion tax and most E2
 carries).
 
-**Status.** OPEN. Workaround in use across `Std.Otp.*`. This is "roadblock #2" in the
-OTP-metatheory directive.
+**Status.** ✅ FIXED. Branch substitutions now refine both context types and the
+context's NbE values. Nested coverage observes a definitionally known constructor,
+and the matching branch adds the constructor-field equations in the convoy direction
+(outer existential → newly bound runtime field). The kernel independently performs
+the same refinement and coverage check. `Std.Otp.InferenceAdequacy.coverage` now uses
+the evidence-first formulation.
 
 ---
 
@@ -123,7 +127,11 @@ dedicated surface would remove the re-match step entirely.
 
 **Layer/risk.** E. Medium. Soundness-neutral (binds already-present kernel data).
 
-**Status.** OPEN. Explicit-field carry is the current house style; flag each new use here.
+**Status.** ✅ FIXED for the E1-dependent use cases. Erased telescope slots now receive
+distinct internal names (rather than every slot being `_erased`), and the branch
+substitution transports their equations without making them computationally relevant.
+Authors can request stable source names with the existing unforced named-implicit
+pattern syntax; data re-matches expose relevant runtime fields naturally.
 
 ---
 

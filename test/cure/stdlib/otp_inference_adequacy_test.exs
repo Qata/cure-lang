@@ -59,7 +59,7 @@ defmodule Cure.Stdlib.OtpInferenceAdequacyTest do
   defp verdict(defs) do
     case Program.elaborate("mod AdqT\n#{@calculus}#{defs}\nend\n") do
       {:ok, _} -> :accept
-      {:error, _} -> :reject
+      {:error, _error} -> :reject
     end
   end
 
@@ -83,6 +83,23 @@ defmodule Cure.Stdlib.OtpInferenceAdequacyTest do
     defs = """
       fn tc_on_right(s: SendsIn(BSeq(BSend(TA, BNil), BSend(TC, BNil)), TC)) -> Member(TC, infer(BSeq(BSend(TA, BNil), BSend(TC, BNil)))) =
         coverage(BSeq(BSend(TA, BNil), BSend(TC, BNil)), s)
+    """
+
+    assert verdict(defs) == :accept
+  end
+
+  test "coverage may eliminate indexed evidence before inspecting its sibling value" do
+    defs = """
+      fn coverage_evidence_first(b: Behaviour, {t: Tag}, sends: SendsIn(b, t)) -> Member(t, infer(b)) = match sends
+        SendHere()    -> MemHere()
+        SendRecvK(s2) -> match b
+          BRecv(y, k) -> MemThere(coverage_evidence_first(k, s2))
+        SendSendK(s2) -> match b
+          BSend(y, k) -> MemThere(coverage_evidence_first(k, s2))
+        SendSeqL(s2) -> match b
+          BSeq(l, r) -> member_append_left(coverage_evidence_first(l, s2))
+        SendSeqR(s2) -> match b
+          BSeq(l, r) -> member_append_right(infer(l), coverage_evidence_first(r, s2))
     """
 
     assert verdict(defs) == :accept
