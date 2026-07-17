@@ -63,4 +63,28 @@ mod RecursiveTransfer
     RRecv(t, k)  -> setbit_mono(t, tset(k, x), tset(k, y), tset_mono(k, x, y, s))
     RSeq(l, r)   -> join_mono(tset(l, x), tset(r, x), tset(l, y), tset(r, y),
                               tset_mono(l, x, y, s), tset_mono(r, x, y, s))
+
+  fn imp_trans({a: B}, {b: B}, {c: B}, ab: Imp(a, b), bc: Imp(b, c)) -> Imp(a, c) = match ab
+    ImpFF() -> match bc
+      ImpFF() -> ImpFF()
+      ImpFT() -> ImpFT()
+    ImpFT() -> match bc
+      ImpTT() -> ImpFT()
+    ImpTT() -> match bc
+      ImpTT() -> ImpTT()
+  fn sub_trans({x: IF}, {y: IF}, {z: IF}, xy: Sub(x, y), yz: Sub(y, z)) -> Sub(x, z) = match xy
+    MkSub(a, b, c) -> match yz
+      MkSub(a2, b2, c2) -> MkSub(imp_trans(a, a2), imp_trans(b, b2), imp_trans(c, c2))
+  fn bot_imp(a: B) -> Imp(F, a) = match a
+    F() -> ImpFF()
+    T() -> ImpFT()
+  fn bot_sub(x: IF) -> Sub(bot(), x) = match x
+    MkIF(a, b, c) -> MkSub(bot_imp(a), bot_imp(b), bot_imp(c))
+  fn iter(f: (IF) -> IF, n: Nat) -> IF = match n
+    Z()  -> bot()
+    S(k) -> f(iter(f, k))
+
+  fn lfp_le(f: (IF) -> IF, mono: (x: IF) -> (y: IF) -> (Sub(x, y)) -> Sub(f(x), f(y)), z: IF, hz: Sub(f(z), z), n: Nat) -> Sub(iter(f, n), z) = match n
+    Z()  -> bot_sub(z)
+    S(k) -> sub_trans(mono(iter(f, k), z, lfp_le(f, mono, z, hz, k)), hz)
 end

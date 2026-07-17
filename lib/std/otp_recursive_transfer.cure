@@ -95,4 +95,20 @@ mod Std.Otp.RecursiveTransfer
   fn rec_fixed(body: RBody) -> Sub(tset(body, rec_infer(body)), rec_infer(body)) =
     map_lfp_le(fn(i) -> tset(body, i),
                fn(x) -> fn(y) -> fn(s) -> tset_mono(body, x, y, s))
+
+  ## **PRE-FIXPOINT BOUND (Kleene leastness).** Every Kleene iterate of a monotone `f` is below
+  ## any pre-fixed point `z` (`f(z) ⊑ z`). By induction on the iteration count: `⊥` is below
+  ## everything; the successor case is monotonicity of `f` on the IH composed with `f(z) ⊑ z`.
+  fn lfp_le(f: (IF) -> IF, mono: (x: IF) -> (y: IF) -> (Sub(x, y)) -> Sub(f(x), f(y)), z: IF, hz: Sub(f(z), z), n: Nat) -> Sub(iter(f, n), z) = match n
+    Z()  -> bot_sub(z)
+    S(k) -> sub_trans(mono(iter(f, k), z, lfp_le(f, mono, z, hz, k)), hz)
+
+  ## **PRINCIPALITY of `infer(BRec)`.** The inferred interface is contained in every
+  ## self-consistent interface `z` (`tset(body, z) ⊑ z`) — inference never over-approximates.
+  ## Together with `rec_fixed` (the inferred interface is itself such a `z`), `rec_infer(body)`
+  ## is the LEAST fixed point of the transfer.
+  fn rec_is_least(body: RBody, z: IF, hz: Sub(tset(body, z), z)) -> Sub(rec_infer(body), z) =
+    lfp_le(fn(i) -> tset(body, i),
+           fn(x) -> fn(y) -> fn(s) -> tset_mono(body, x, y, s),
+           z, hz, S(S(S(S(Z())))))
 end
