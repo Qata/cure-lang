@@ -17,7 +17,7 @@ defmodule Cure.Stdlib.PreloadStickyTest do
     {mod, binary}
   end
 
-  test "a stuck stdlib module refuses load_binary and preload tolerates it" do
+  test "a stuck stdlib module refuses load_binary, and Preload's own tolerance holds against the real canonical stdlib" do
     {mod, binary} = probe_binary()
 
     # Load then stick it, mimicking the C1 startup stanza.
@@ -28,16 +28,29 @@ defmodule Cure.Stdlib.PreloadStickyTest do
     try do
       assert :code.is_sticky(mod)
 
-      # A second load is refused with :sticky_directory (the property Preload must tolerate).
+      # A second load is refused with :sticky_directory -- the raw OTP-level
+      # property `Preload`'s `load_if_present/2` tolerance branch
+      # (`{:error, _reason} -> :ok`) depends on. This probe is deliberately
+      # synthetic (a throwaway `Cure.Std.*`-shaped name with no `lib/std/*.cure`
+      # declaration and no `.beam` file on disk) so proving it does not risk any
+      # shared canonical module: `Preload.stdlib_modules/1` discovers modules
+      # solely from real `lib/std/*.cure` declarations (or, as a packaged-release
+      # fallback, real `.beam` files already on disk), so this in-memory-only
+      # probe can never be reached by `Preload.preload/1`'s own discovery for
+      # ANY `kind` -- it exists purely to pin the raw `:code` semantics, not to
+      # drive Preload's own module-iteration code.
       assert {:error, :sticky_directory} = :code.load_binary(mod, ~c"nofile", binary)
-
-      # A preload pass that would otherwise reload stdlib modules must still return :ok,
-      # i.e. it swallows the :sticky_directory refusal rather than raising.
-      assert Preload.preload(kind: :none) == :ok
     after
       :code.unstick_mod(mod)
       :code.purge(mod)
       :code.delete(mod)
     end
+
+    # The end-to-end claim -- that a `Preload.preload/1` pass tolerates hitting
+    # an already-stuck module without raising -- is exercised for real here:
+    # `kind: :all` walks every real canonical `Cure.Std.*` module (all stuck by
+    # `test/test_helper.exs`'s C1 stanza before any test ran), the same call
+    # shape used at every production `preload(kind: :all)` site in this suite.
+    assert Preload.preload(kind: :all) == :ok
   end
 end
