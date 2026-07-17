@@ -57,4 +57,18 @@ defmodule Cure.Stdlib.OtpMultipartySessionTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "twoparty_terminates: a well-formed protocol runs all the way to GEnd (normalisation)" do
+    src = """
+    mod MpTerm
+      use Std.Otp.MultipartySession
+      fn wf() -> TwoParty(GMsg(RA, RB, TA, GMsg(RB, RA, TB, GEnd()))) =
+        TPAB(TA, TPBA(TB, TPEnd()))
+      fn run() -> GRun(GMsg(RA, RB, TA, GMsg(RB, RA, TB, GEnd())), GEnd()) =
+        twoparty_terminates(TPAB(TA, TPBA(TB, TPEnd())))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

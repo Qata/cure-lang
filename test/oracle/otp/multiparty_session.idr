@@ -52,3 +52,15 @@ global_progress : TwoParty g -> GProgress g
 global_progress TPEnd = GPDone
 global_progress (TPAB t wf2) = GPFire
 global_progress (TPBA t wf2) = GPFire
+
+data GRun : Global -> Global -> Type where
+  GRDone : GRun g g
+  GRStep : GStep g gm -> GRun gm g2 -> GRun g g2
+
+grun_fire : (from : Role) -> (to : Role) -> (t : Tag) -> GRun k GEnd -> GRun (GMsg from to t k) GEnd
+grun_fire from to t tail = GRStep GFire tail
+
+twoparty_terminates : TwoParty g -> GRun g GEnd
+twoparty_terminates TPEnd = GRDone
+twoparty_terminates (TPAB t wf2) = grun_fire RA RB t (twoparty_terminates wf2)
+twoparty_terminates (TPBA t wf2) = grun_fire RB RA t (twoparty_terminates wf2)

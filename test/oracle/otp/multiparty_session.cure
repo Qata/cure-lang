@@ -47,4 +47,13 @@ mod MultipartySession
     TPEnd()      -> GPDone()
     TPAB(t, wf2) -> GPFire()
     TPBA(t, wf2) -> GPFire()
+  type GRun indices (g: Global, g2: Global)
+    GRDone : GRun(g, g)
+    GRStep : GStep(g, gm) -> GRun(gm, g2) -> GRun(g, g2)
+  fn grun_fire(from: Role, to: Role, t: Tag, {k: Global}, tail: GRun(k, GEnd)) -> GRun(GMsg(from, to, t, k), GEnd) =
+    GRStep(GFire(), tail)
+  fn twoparty_terminates({g: Global}, wf: TwoParty(g)) -> GRun(g, GEnd) = match wf
+    TPEnd()      -> GRDone()
+    TPAB(t, wf2) -> grun_fire(RA, RB, t, twoparty_terminates(wf2))
+    TPBA(t, wf2) -> grun_fire(RB, RA, t, twoparty_terminates(wf2))
 end

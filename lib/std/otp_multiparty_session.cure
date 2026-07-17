@@ -92,4 +92,25 @@ mod Std.Otp.MultipartySession
     TPEnd()      -> GPDone()
     TPAB(t, wf2) -> GPFire()
     TPBA(t, wf2) -> GPFire()
+
+  ## A whole global RUN: the reflexive-transitive closure of head-firings.
+  type GRun indices (g: Global, g2: Global)
+    GRDone : GRun(g, g)
+    GRStep : GStep(g, gm) -> GRun(gm, g2) -> GRun(g, g2)
+
+  ## Prepend one head-firing to a completing run. The explicit `tail` argument pins `GRStep`'s
+  ## intermediate index (the continuation `k`), so the nullary `GFire` is checked against a
+  ## concrete type — the explicit-`tail` pattern that sidesteps the floating-target E6-residual.
+  fn grun_fire(from: Role, to: Role, t: Tag, {k: Global}, tail: GRun(k, GEnd)) -> GRun(GMsg(from, to, t, k), GEnd) =
+    GRStep(GFire(), tail)
+
+  ## **GLOBAL NORMALISATION.** Every well-formed two-party protocol runs all the way to `GEnd`:
+  ## there is a full `GRun` from `g` to `GEnd`. Structural induction on the well-formedness
+  ## derivation, firing the head interaction at each step; since `Global` is finite the run is
+  ## finite. With `global_progress` and `twoparty_preserved` this is full safety for the global
+  ## protocol — it never deadlocks, stays well-formed, and always terminates.
+  fn twoparty_terminates({g: Global}, wf: TwoParty(g)) -> GRun(g, GEnd) = match wf
+    TPEnd()      -> GRDone()
+    TPAB(t, wf2) -> grun_fire(RA, RB, t, twoparty_terminates(wf2))
+    TPBA(t, wf2) -> grun_fire(RB, RA, t, twoparty_terminates(wf2))
 end
