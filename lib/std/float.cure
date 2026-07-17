@@ -1,4 +1,5 @@
 @group(:core)
+@prelude
 mod Std.Float
   ## The primitive machine floating-point number.
   ##

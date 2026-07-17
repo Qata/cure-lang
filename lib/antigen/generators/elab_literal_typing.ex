@@ -6,7 +6,7 @@ defmodule Antigen.Generators.ElabLiteralTyping do
   elaborator's literal lowering and the `{:nat_lit, _}` inference rule both share
   (kernel.ex ~1256-1269) — but neither is reachable from a bare `:typed_term`
   Core-level challenge without the REAL prelude (`Cure.Elab.Program`'s
-  `@auto_prelude` seeds `Std.Bool`/`Std.Nat`, registering the builtins these
+  `@prelude` providers seed `Std.Bool`/`Std.Nat`, registering the builtins these
   functions read via `Inductive.builtin(sig, :bool | :nat)`). So this vertical
   goes through the full elaborator on tiny self-contained modules — no preamble
   needed, Bool and Nat are auto-imported into every elaborated program.

@@ -54,6 +54,8 @@ existing `Env`; persistent `.curei` files are a later optimization.
 4. Direct, transitive, diamond, macro-home, and prelude-entry loads reuse the
    same interface.
 5. Prelude inclusion is represented as dependency edges before graph loading.
+   Every edge is derived from a declaration-site `@prelude` marker; there is no
+   separate compiler-owned auto-prelude list.
 6. Repeated imports affect visibility only; they do not rebuild declarations.
 7. The active load stack rejects cycles with the complete canonical cycle path.
 8. Failed interfaces are not treated as successful empty environments.
@@ -99,10 +101,12 @@ declared name that does not match the requested identity.
 
 ### 5.2 Dependency edges
 
-Parse the source header and collect direct imports. Add automatic-prelude module
-edges unless the module is itself an automatic-prelude module or locally
-declares the corresponding canonical type. Add item-level prelude providers as
-synthetic edges with export filters.
+Parse the source header and collect direct imports. Scan the standard library
+for module- and item-level `@prelude` markers and add their providers as
+synthetic edges with export filters. A provider module is elaborated from its
+declared imports only, which makes the prelude bootstrap graph explicit and
+acyclic. A whole-module marker exports the complete interface; an item marker
+exports only that declaration (and a type's constructors).
 
 ### 5.3 Load
 

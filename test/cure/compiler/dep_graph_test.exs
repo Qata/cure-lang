@@ -185,17 +185,20 @@ defmodule Cure.Compiler.DepGraphTest do
       assert "Std.Map" in graph.nodes[user].closure_deps
     end
 
-    test "auto-prelude Bool/Nat are closure deps unless self or shadowed", %{tmp_dir: dir} do
+    test "marked prelude providers are closure dependencies", %{tmp_dir: dir} do
       plain = write!(dir, "p.cure", "mod Plain\n  fn f() -> Int = 1\n")
       shadow = write!(dir, "s.cure", "mod Shadow\n  type Bool = TT | FF\n  fn f() -> Int = 1\n")
+      bool = write!(dir, "bool.cure", "@prelude\nmod Std.Bool\n  type Bool = False | True\nend\n")
+      nat = write!(dir, "nat.cure", "@prelude\nmod Std.Nat\n  type Nat = Z | S(Nat)\nend\n")
 
-      {:ok, graph} =
-        DepGraph.scan([plain, shadow], known_modules: ["Std.Bool", "Std.Nat"])
+      {:ok, graph} = DepGraph.scan([plain, shadow, bool, nat])
 
       assert "Std.Bool" in graph.nodes[plain].closure_deps
       assert "Std.Nat" in graph.nodes[plain].closure_deps
-      refute "Std.Bool" in graph.nodes[shadow].closure_deps
+      assert "Std.Bool" in graph.nodes[shadow].closure_deps
       assert "Std.Nat" in graph.nodes[shadow].closure_deps
+      refute "Std.Bool" in graph.nodes[bool].closure_deps
+      refute "Std.Nat" in graph.nodes[nat].closure_deps
     end
   end
 
