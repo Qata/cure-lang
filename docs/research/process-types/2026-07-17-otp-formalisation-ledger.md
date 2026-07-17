@@ -88,7 +88,8 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [x] `?map_lfp` (fixed-point property `f(lfp) ⊑ lfp`) — **SHIPPED** `map_lfp_le` in `otp_finite_fixpoint.cure`
 - [x] `IF ↔ TagList` bridge (`denote`, `denote_complete`, `sub_allhandled`) — **SHIPPED** `otp_interface_bridge.cure` (Idris `rel=same`); transfers `map_lfp_le`'s `Sub` conclusion to `AllHandled` membership, so the finite fixpoint is usable in the adequacy representation
 - [ ] `?is_least` principality (composes map_lfp + lfp_le)
-- [ ] BRec **coverage** + **adequacy** composed (recursive sends stay within `lfp`) — *now unblocked: stabilization + bridge in hand; remaining work is the `BRec` syntax + transfer-function derivation*
+- [x] BRec **coverage** — every direct send tag of a recursive behaviour is a member of its inferred fixed-point interface (`RSendsIn`, `tset_covers`, `brec_covers`) — **SHIPPED** `otp_recursive_adequacy.cure` (Idris `rel=same` on the `tset_covers` induction; `brec_covers` composes it with the oracle-verified `rec_fixed`)
+- [ ] BRec **adequacy** proper — connect `brec_covers` (`getb = T`) to `Handles(t, denote(lfp))` via `InterfaceBridge.denote_complete` (blocked only on sharing one `Tag` across `InterfaceBridge`/`RecursiveTransfer` — a consolidation, not a proof gap), then compose with a recursive `Runs`/`preservation_at` chain
 - Scaffold: `scaffolds/inference_fixpoint.cure`; shape doc `2026-07-17-mailbox-inference-fixpoint-shape.md`
 
 ### B3. Counting / multiplicity fragment — commutative-regex mailbox types (Special Delivery, de'Liguoro–Padovani)
