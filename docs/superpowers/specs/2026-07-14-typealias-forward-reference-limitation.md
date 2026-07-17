@@ -1,19 +1,19 @@
 # Typealias forward-reference limitation — Design note
 
 **Date:** 2026-07-14.
-**Status:** accepted limitation — documents existing behaviour; no fix obligated.
+**Status:** resolved 2026-07-17 — explicit aliases participate in the header pass.
 **Scope:** the elaborator's type-header pre-pass and the transparent `lift module`
 declaration ordering that consumes it.
 
 ## 1. Summary
 
-Forward-referencing a **type alias** — using an alias in a position that is
-elaborated before the alias's own declaration — is a pre-existing elaborator
-limitation. The type-header pre-pass that lets a type mention a *later-declared*
-sibling covers **constructor-bearing inductive families only** (enum, struct,
-indexed), not aliases. A genuine alias (`type Message = Tick`) binds a nullary
-type-level definition in the main pass, so anything elaborated before that point
-that names `Message` fails.
+Forward-referencing an explicit **type alias** now works. The type-header
+pre-pass registers a body-less alias definition containing its erased
+type-parameter telescope and a conservative universe. The normal declaration
+pass installs checked bodies, then a dependency-ordered completion pass
+re-elaborates aliases from their completed dependencies so final universe levels
+are exact. A kernel-driven certification sweep makes the completed chains
+available to conversion before function bodies are checked.
 
 This is **out of scope** for the transparent BEAM / macro work, and it does
 **not** need fixing for that work: the transparent `lift module` path already
@@ -120,8 +120,11 @@ pre-pass to register alias headers too:
   (currently rejected) should elaborate identically to the same program with the
   alias moved earlier.
 
-This is deferred. Nothing in the current macro / transparent-BEAM work depends
-on it.
+This was implemented as a general elaborator improvement. Explicit `typealias`
+nodes carry a parser metadata marker so the header pass cannot confuse them with
+the deliberately ambiguous single-constructor spelling `type X = Y`. Alias
+cycles are rejected before certification; unknown targets retain their ordinary
+unresolved-name error.
 
 ## 6. Verification
 

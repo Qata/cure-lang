@@ -9,6 +9,30 @@ Cure, adapted where the BEAM/AtomVM target demands it.
 ([`macros/2026-07-08-parse-macro-design.md`](macros/2026-07-08-parse-macro-design.md))
 lowers onto. Revises that macro's §11 non-goal #2 — see §9.
 
+**Release placement (2026-07-17):** completion of this public library is parked
+for Cure 0.35 and feeds the Cure-native parser/diagnostics/self-hosting program
+specified in
+[`2026-07-17-cure-native-parser-diagnostics-self-hosting-design.md`](2026-07-17-cure-native-parser-diagnostics-self-hosting-design.md).
+The 0.34 dependent-type rewrite may retain landed substrate and fix general
+compiler gaps it exposes, but does not take on the remaining parser product.
+
+**Implementation status (2026-07-17):** the list-shaped `Consumed` relation,
+strict drop constructor, reflexivity, transitivity, the dependent `Step`
+result, and strict-suffix accessibility `Acc` have landed in `Std.Data.Suffix`.
+Landing `Step` also fixed the general
+family-application inference bug it exposed: index-variable types are now
+instantiated with the applied family's actual parameters before being placed in
+a constructor telescope, so a field such as `Consumed(t, strict, rest, orig)`
+correctly refers to the surrounding `t` and earlier named `rest` field. Landing
+`Acc` unified dependent-arrow parsing for ordinary annotations and higher-order
+constructor fields; both now retain named Π domains through the same AST shape.
+The consumption bit follows the reference's lower-bound semantics (`True`
+guarantees a proper suffix; `False` makes no guarantee), including a drop
+constructor polymorphic in that bit. The structural `weaken`/`weakens`
+conversions are the next slice: their honest definitions currently expose a
+general dependent-match motive `:branch_type` rejection and must not be replaced
+by an unchecked cast.
+
 ---
 
 ## 1. Purpose & positioning
@@ -61,11 +85,12 @@ bit — whether *at least one token was consumed*:
 ```
 # Std.Data.Suffix  (list-shaped instance; see §3 for the binary instance)
 #
-# Consumed(strict, rem, orig) : proof that `rem` is a suffix of `orig`,
-# strict = true iff at least one element was dropped.
+# Consumed(strict, rem, orig) : proof that `rem` is a suffix of `orig`.
+# strict = true guarantees at least one element was dropped; false carries no
+# strictness guarantee (and therefore admits both equal and proper suffixes).
 type Consumed(strict: Bool, rem: List(t), orig: List(t)) =
   | Same  : Consumed(false, xs, xs)                       # nothing consumed
-  | Uncons: Consumed(b, h :: t, cs) -> Consumed(true, t, cs)   # at least one
+  | Uncons: Consumed(b, h :: t, cs) -> Consumed(b2, t, cs)
 ```
 
 Two properties, both from the reference, both essential:

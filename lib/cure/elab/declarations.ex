@@ -17,7 +17,7 @@ defmodule Cure.Elab.Declarations do
   """
 
   alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote, Term}
-  alias Cure.Elab.{Elaborator, MacroExpand, Relevance}
+  alias Cure.Elab.{Elaborator, MacroExpand, Relevance, Subst}
 
   @ceiling 2
 
@@ -228,12 +228,10 @@ defmodule Cure.Elab.Declarations do
   keyed put, so re-registering the header with the real ctors simply overwrites
   the empty placeholder).
 
-  Only the ctor-bearing enum / record / indexed families need this: their bodies
-  are what reference siblings. `@builtin` containers are skipped (the canonical
-  builtin registration owns them). Everything else — aliases, opaque carriers,
-  interfaces, primitives, functions — is returned unchanged; their
-  forward-reference cases are out of scope for this pass and handled (or rejected)
-  in the main pass exactly as before.
+  Constructor-bearing families and explicit transparent aliases participate.
+  Alias headers contain only the name and erased type-parameter telescope; the
+  checked RHS replaces the body-less placeholder in the main pass. `@builtin`
+  containers are skipped because canonical builtin registration owns them.
   """
   @spec declare_header(term(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
   def declare_header({:container, meta, _variants}, env) when is_list(meta) do
@@ -272,16 +270,42 @@ defmodule Cure.Elab.Declarations do
   # binds a nullary def, not a ctor-bearing family, so it is left to the main
   # pass.
   def declare_header({:type_annotation, meta, [rhs]}, env) when is_list(meta) do
-    if single_variant_enum?(rhs, env) do
-      name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-      params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
-      register_header(name, params, [], env)
-    else
-      {:ok, env}
+    cond do
+      Keyword.get(meta, :typealias, false) ->
+        register_typealias_header(meta, env)
+
+      single_variant_enum?(rhs, env) ->
+        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+        params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+        register_header(name, params, [], env)
+
+      true ->
+        {:ok, env}
     end
   end
 
   def declare_header(_decl, env), do: {:ok, env}
+
+  # A forward alias needs only a well-sorted name while signatures and earlier
+  # aliases are lowered. Its real universe and transparent body are unknown
+  # until the main pass, which overwrites this entry. Type parameters are
+  # uniformly erased `Type 0` binders, matching `elaborate_typealias/2`.
+  defp register_typealias_header(meta, env) do
+    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+    params = Keyword.get(meta, :type_params, [])
+    grade = Grade.zero()
+
+    type =
+      Enum.reduce(Enum.reverse(params), {:type, @ceiling}, fn _param, acc ->
+        {:pi, grade, {:type, 0}, acc}
+      end)
+
+    quantities = List.duplicate(:erased, length(params))
+
+    with :ok <- reject_reserved_family_name(name) do
+      {:ok, Env.add_def(env, name, type, nil, quantities)}
+    end
+  end
 
   # Elaborate the parameter/index telescopes (mirroring `declare_parameterized`'s
   # prefix) and register the family with an empty constructor list.
@@ -1414,7 +1438,7 @@ defmodule Cure.Elab.Declarations do
 
       implicits =
         infer_exprs
-        |> infer_implicits(fam, index_tele, env, param_count)
+        |> infer_implicits(fam, index_tele, env, param_count, param_scope)
         |> Enum.reject(fn {n, _t} -> MapSet.member?(explicit_names, n) end)
 
       impl_names = Enum.map(implicits, &elem(&1, 0))
@@ -1426,7 +1450,15 @@ defmodule Cure.Elab.Declarations do
 
           with {:ok, result_params} <- map_idx_to_core(param_exprs, full_scope, fam, env),
                {:ok, result_indices} <- map_idx_to_core(index_exprs, full_scope, fam, env) do
-            impl_tele = Enum.map(implicits, fn {n, ty} -> {String.to_atom(n), ty} end)
+            # Each inferred binder pushes the family's parameters one slot
+            # farther out. `infer_implicits/6` returns types in the bare
+            # parameter frame, so lift them over the preceding inferred
+            # binders as the telescope is assembled.
+            impl_tele =
+              implicits
+              |> Enum.with_index()
+              |> Enum.map(fn {{n, ty}, i} -> {String.to_atom(n), Term.shift(ty, i, 0)} end)
+
             # Inferred index variables are erased (quantity 0); the explicit
             # arguments are runtime-relevant (quantity ω). See M8.3 / M9.
             quantities =
@@ -1508,10 +1540,10 @@ defmodule Cure.Elab.Declarations do
 
   # -- implicit index-variable inference --------------------------------------
 
-  defp infer_implicits(exprs, fam, index_tele, env, self_param_count) do
+  defp infer_implicits(exprs, fam, index_tele, env, self_param_count, param_scope) do
     {ordered, _seen} =
       Enum.reduce(exprs, {[], MapSet.new()}, fn e, acc ->
-        collect_implicit_vars(e, fam, index_tele, env, self_param_count, acc)
+        collect_implicit_vars(e, fam, index_tele, env, self_param_count, param_scope, acc)
       end)
 
     ordered
@@ -1521,22 +1553,46 @@ defmodule Cure.Elab.Declarations do
   # dictionary record) carries `function_type: true` and NO `:name`. Recurse into
   # its arrow components so a head/index variable buried inside is still collected,
   # never treating it as a family application.
-  defp collect_implicit_vars({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc)
+  defp collect_implicit_vars(
+         {:function_call, fmeta, args},
+         fam,
+         index_tele,
+         env,
+         self_param_count,
+         param_scope,
+         acc
+       )
        when is_list(fmeta) do
     if Keyword.get(fmeta, :function_type) do
       Enum.reduce(args, acc, fn a, ac ->
-        collect_implicit_vars(a, fam, index_tele, env, self_param_count, ac)
+        collect_implicit_vars(a, fam, index_tele, env, self_param_count, param_scope, ac)
       end)
     else
-      collect_named_call_implicits({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc)
+      collect_named_call_implicits(
+        {:function_call, fmeta, args},
+        fam,
+        index_tele,
+        env,
+        self_param_count,
+        param_scope,
+        acc
+      )
     end
   end
 
-  defp collect_implicit_vars(_other, _fam, _index_tele, _env, _self_param_count, acc), do: acc
+  defp collect_implicit_vars(_other, _fam, _index_tele, _env, _self_param_count, _param_scope, acc), do: acc
 
-  defp collect_named_call_implicits({:function_call, fmeta, args}, fam, index_tele, env, self_param_count, acc) do
+  defp collect_named_call_implicits(
+         {:function_call, fmeta, args},
+         fam,
+         index_tele,
+         env,
+         self_param_count,
+         param_scope,
+         acc
+       ) do
     name = String.to_atom(Keyword.fetch!(fmeta, :name))
-    index_types = family_index_types(name, fam, index_tele, env)
+    index_types = family_index_types(name, args, fam, index_tele, env, param_scope)
 
     # A family application's leading `param_count` arguments are parameters, not
     # index-typed positions — skip them so the remaining args align 0-based with
@@ -1579,7 +1635,9 @@ defmodule Cure.Elab.Declarations do
           acc
       end
 
-    Enum.reduce(args, acc, fn a, ac -> collect_implicit_vars(a, fam, index_tele, env, self_param_count, ac) end)
+    Enum.reduce(args, acc, fn a, ac ->
+      collect_implicit_vars(a, fam, index_tele, env, self_param_count, param_scope, ac)
+    end)
   end
 
   # Collect free variables from an index EXPRESSION typed by `type`, recursing into
@@ -1625,11 +1683,28 @@ defmodule Cure.Elab.Declarations do
   defp pi_domains(_), do: []
 
   # The positional index types of family `name` (self or already registered).
-  defp family_index_types(name, fam, index_tele, env) do
-    cond do
-      name == fam -> Enum.map(index_tele, &elem(&1, 1))
-      Inductive.family?(env, name) -> Enum.map(Inductive.index_telescope(env, name) || [], &elem(&1, 1))
-      true -> nil
+  defp family_index_types(name, args, fam, index_tele, env, param_scope) do
+    {param_count, tele} =
+      cond do
+        name == fam -> {length(args) - length(index_tele), index_tele}
+        Inductive.family?(env, name) -> {Inductive.param_count(env, name), Inductive.index_telescope(env, name) || []}
+        true -> {0, nil}
+      end
+
+    with tele when is_list(tele) <- tele,
+         {:ok, actuals} <- map_idx_to_core(Enum.take(args, param_count + length(tele)), param_scope, fam, env) do
+      tele
+      |> Enum.with_index()
+      |> Enum.map(fn {{_binder, type}, index_position} ->
+        # An index telescope entry is scoped over the family parameters and all
+        # earlier indices. Instantiate that prefix with the actual application
+        # arguments, yielding a type in the surrounding constructor-parameter
+        # frame. This is the crucial difference between `Consumed(t, …)` and
+        # blindly copying `Consumed`'s internal `a` slot.
+        Subst.instantiate(type, Enum.take(actuals, param_count + index_position))
+      end)
+    else
+      _ -> nil
     end
   end
 

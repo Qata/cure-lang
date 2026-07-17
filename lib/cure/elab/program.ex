@@ -1655,7 +1655,14 @@ defmodule Cure.Elab.Program do
   # one (a function signature may reference any type declared before it).
   defp elaborate_declarations(items, env, prelude?) do
     with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?),
-         {:ok, env2} <- body_pass(fn_decls, env1) do
+         {:ok, alias_order} <- typealias_order(items, env1),
+         {:ok, env_completed} <- complete_typealiases(alias_order, items, env1),
+         # Alias bodies are all present after the register pass. Certify their
+         # forward chains now so an earlier function body can use conversion
+         # through `A -> B -> RHS`; the final sweep below still handles
+         # functions whose bodies are only installed by `body_pass/2`.
+         env_aliases = TotalityClosure.certify_deferred(env_completed),
+         {:ok, env2} <- body_pass(fn_decls, env_aliases) do
       # Every body is now present. Re-certify defs whose totality was DEFERRED
       # in declaration order (a total function calling a helper declared below
       # it — `reverse` → `reverse_acc`), which the in-order per-def certify left
@@ -1663,6 +1670,89 @@ defmodule Cure.Elab.Program do
       # certificate; genuinely partial defs are rejected exactly as before.
       {:ok, TotalityClosure.certify_deferred(env2)}
     end
+  end
+
+  # Transparent aliases are ordinary Core definitions, so a forward chain is
+  # harmless once every body is present. A cycle is different: it can never be
+  # certified for delta-reduction and would leave apparently declared types
+  # permanently opaque. Reject it explicitly instead of accepting a synonym
+  # that normalization cannot unfold.
+  defp typealias_order(items, env) do
+    alias_items =
+      items
+      |> Enum.flat_map(fn
+        {:type_annotation, meta, [_rhs]} = decl when is_list(meta) ->
+          if Keyword.get(meta, :typealias, false) do
+            name = Env.owned_name(env, meta |> Keyword.fetch!(:name) |> String.to_atom())
+            [{name, decl}]
+          else
+            []
+          end
+
+        _ ->
+          []
+      end)
+      |> Map.new()
+
+    aliases = alias_items |> Map.keys() |> MapSet.new()
+
+    graph =
+      Map.new(aliases, fn name ->
+        deps =
+          case Env.get_def(env, name) do
+            %{body: body} -> body |> global_refs() |> Enum.filter(&MapSet.member?(aliases, &1)) |> Enum.uniq()
+            _ -> []
+          end
+
+        {name, deps}
+      end)
+
+    kahn_typealiases(graph, [])
+  end
+
+  defp kahn_typealiases(graph, order) when map_size(graph) == 0,
+    do: {:ok, Enum.reverse(order)}
+
+  defp kahn_typealiases(graph, order) do
+    ready =
+      graph
+      |> Enum.filter(fn {_name, deps} -> deps == [] end)
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.sort()
+
+    case ready do
+      [] ->
+        remaining = graph |> Map.keys() |> Enum.sort()
+        {:error, {:cyclic_typealiases, remaining ++ [hd(remaining)]}}
+
+      _ ->
+        ready_set = MapSet.new(ready)
+
+        graph2 =
+          graph
+          |> Map.drop(ready)
+          |> Map.new(fn {name, deps} -> {name, Enum.reject(deps, &MapSet.member?(ready_set, &1))} end)
+
+        kahn_typealiases(graph2, Enum.reverse(ready) ++ order)
+    end
+  end
+
+  defp complete_typealiases(order, items, env) do
+    declarations =
+      Map.new(items, fn
+        {:type_annotation, meta, [_rhs]} = decl when is_list(meta) ->
+          {Env.owned_name(env, meta |> Keyword.fetch!(:name) |> String.to_atom()), decl}
+
+        other ->
+          {make_ref(), other}
+      end)
+
+    Enum.reduce_while(order, {:ok, env}, fn name, {:ok, acc} ->
+      case Declarations.elaborate(Map.fetch!(declarations, name), acc) do
+        {:ok, acc2} -> {:cont, {:ok, acc2}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
   end
 
   defp register_pass(items, env, prelude?) do

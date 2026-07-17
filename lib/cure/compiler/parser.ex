@@ -2214,6 +2214,15 @@ defmodule Cure.Compiler.Parser do
           "rewrite" ->
             parse_rewrite(state, token)
 
+          # `proof` is contextual: at a declaration-shaped head it introduces
+          # a proof container; in every other expression/binder position it is
+          # an ordinary identifier. The lexer deliberately does not decide.
+          "proof" ->
+            case peek_at(state, 1) do
+              %Token{type: :identifier} -> parse_proof_container(state)
+              _ -> {variable(token), advance(state)}
+            end
+
           # Contextual keyword: `with e <arms>` is a with-abstraction only in
           # expression-prefix position and only when what follows `with` can
           # begin a scrutinee. The container macro's payload-binder `with` is
@@ -4063,6 +4072,15 @@ defmodule Cure.Compiler.Parser do
             {nil, state}
         end
 
+      %Token{type: :identifier, value: "proof"} ->
+        case peek_at(state, 1) do
+          %Token{type: :identifier, value: name} ->
+            {name, state |> advance() |> advance()}
+
+          _ ->
+            {nil, state}
+        end
+
       _ ->
         {nil, state}
     end
@@ -5299,7 +5317,11 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
     {rhs, state} = parse_type_expr(state)
 
-    meta = [name: name, line: token.line, col: token.col]
+    # Keep the explicit spelling distinguishable from the deliberately
+    # ambiguous `type X = Y` node. The elaborator's header pass uses this bit
+    # to predeclare transparent aliases without accidentally turning a
+    # forward-referenced one-constructor ADT into an alias.
+    meta = [name: name, line: token.line, col: token.col, typealias: true]
     meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
     {{:type_annotation, meta, [rhs]}, state}
   end
@@ -5649,7 +5671,12 @@ defmodule Cure.Compiler.Parser do
     case token.type do
       :lparen ->
         state = advance(state)
-        {inner, state} = parse_type_atom(state)
+        # Reuse the constructor-domain parser inside the group as well. This
+        # admits a named dependent domain in a higher-order field type:
+        # `Mk : ((x: A) -> B(x)) -> T`. Previously the general type parser
+        # accepted this Π shape while this constructor-only path accepted only
+        # anonymous `(A) -> B`, creating two subtly different type grammars.
+        {inner, state} = parse_ctor_dom(state)
         # A PARENTHESISED function type (`(A) -> B`, `(A) -> B -> C`) is ONE grouped
         # type — e.g. a higher-order constructor field `MkPid : ((m) -> R) -> Pid(m)`.
         # The closing `)` bounds the arrow chain, so absorbing `->` here is
@@ -5685,7 +5712,7 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :arrow} ->
         {parts, state} = collect_paren_arrow(state, [first])
-        {{:function_call, [name: "Function", function_type: true], parts}, state}
+        {paren_arrow_ast(parts), state}
 
       _ ->
         {first, state}
@@ -5696,11 +5723,33 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :arrow} ->
         state = advance(state)
-        {atom, state} = parse_type_atom(state)
+        {atom, state} = parse_ctor_dom(state)
         collect_paren_arrow(state, [atom | acc])
 
       _ ->
         {Enum.reverse(acc), state}
+    end
+  end
+
+  defp paren_arrow_ast(parts) do
+    {domains, [ret]} = Enum.split(parts, length(parts) - 1)
+
+    if Enum.any?(domains, &match?({:named_dom, _, _}, &1)) do
+      binders =
+        Enum.map(domains, fn
+          {:named_dom, name, _} -> name
+          _ -> nil
+        end)
+
+      doms =
+        Enum.map(domains, fn
+          {:named_dom, _, inner} -> inner
+          other -> other
+        end)
+
+      {:pi_type, [binders: binders], doms ++ [ret]}
+    else
+      {:function_call, [name: "Function", function_type: true], parts}
     end
   end
 

@@ -29,11 +29,11 @@ defmodule Cure.Stdlib.SetDependentRunTest do
   calls resolve to the PREFIXED Map (via `remote_target`'s prefix routing, C2), a
   genuine cross-module remote call staying inside this test's sandbox. The
   emitted Map still carries its FULL owner surface (`map_surface` below), so it
-  mirrors what the real compiler installs. `async: true` is sound: the prefix is
-  unique to this test module, so no other test defines or observes the same
-  prefixed atoms — the producer is fully sandboxed and touches no shared slot.
+  mirrors what the real compiler installs. `async: false` is retained as
+  defence-in-depth against two runs racing to define the same prefixed atom, not
+  for correctness.
   """
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Elab.{Name, Program, Emit}
