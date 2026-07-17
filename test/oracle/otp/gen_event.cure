@@ -1,0 +1,39 @@
+mod GenEvent
+  use Std.Equivalent
+  type Event = EvA | EvB | EvC
+  type B = F | T
+  type EvSet = MkEvSet(B, B, B)
+  fn member(e: Event, s: EvSet) -> B = match s
+    MkEvSet(a, b, c) -> match e
+      EvA() -> a
+      EvB() -> b
+      EvC() -> c
+  fn step(e: Event, iface: EvSet, st: Nat) -> Nat = match member(e, iface)
+    T() -> S(st)
+    F() -> st
+  type IfaceList = INil | ICons(EvSet, IfaceList)
+  type Manager indices (ifaces: IfaceList)
+    MNil  : Manager(INil)
+    MCons : (iface: EvSet) -> Nat -> Manager(rest) -> Manager(ICons(iface, rest))
+  fn add_handler(iface: EvSet, st: Nat, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Manager(ICons(iface, ifaces)) =
+    MCons(iface, st, mgr)
+  fn notify(e: Event, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Manager(ifaces) = match mgr
+    MNil()                 -> MNil()
+    MCons(iface, st, rest) -> MCons(iface, step(e, iface, st), notify(e, rest))
+  fn count({ifaces: IfaceList}, mgr: Manager(ifaces)) -> Nat = match mgr
+    MNil()                 -> Z()
+    MCons(iface, st, rest) -> S(count(rest))
+  fn interfaces({ifaces: IfaceList}, mgr: Manager(ifaces)) -> IfaceList = match mgr
+    MNil()                 -> INil()
+    MCons(iface, st, rest) -> ICons(iface, interfaces(rest))
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+  fn icons_cong(iface: EvSet, {a: IfaceList}, {b: IfaceList}, e: Equivalent(IfaceList, a, b)) -> Equivalent(IfaceList, ICons(iface, a), ICons(iface, b)) =
+    rewrite e in reflexive(ICons(iface, b))
+  fn notify_preserves_count(e: Event, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Equivalent(Nat, count(notify(e, mgr)), count(mgr)) = match mgr
+    MNil()                 -> reflexive(Z())
+    MCons(iface, st, rest) -> snat_cong(notify_preserves_count(e, rest))
+  fn notify_preserves_ifaces(e: Event, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Equivalent(IfaceList, interfaces(notify(e, mgr)), interfaces(mgr)) = match mgr
+    MNil()                 -> reflexive(INil())
+    MCons(iface, st, rest) -> icons_cong(iface, notify_preserves_ifaces(e, rest))
+end
