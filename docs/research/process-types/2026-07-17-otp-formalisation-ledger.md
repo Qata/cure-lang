@@ -137,9 +137,12 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 | Progress + multi-pid interleaving | NVLang single-actor, no progress | DONE |
 | Timers, call-totality, effect-honesty | no paper | DONE |
 | Inference adequacy (infer ⇒ operational safety) | literature only STATES it | DONE, sequential + branching |
+| Recursion fixpoint inference (`infer(BRec)` = least fixed point, operationally safe) | literature STATES the lfp exists; leaves coverage/adequacy for recursion open | DONE — syntax-derived transfer, finite Kleene stabilization, coverage, adequacy, principality, all kernel-certified + Idris cross-checked (finite universe) |
 
 ## Critical path to "FULL"
-B2 (recursion fixpoint) is the next in-Cure milestone and unblocks recursive adequacy. B3 (counting
-fragment) is the largest remaining piece and is partly EXTERNAL (Presburger/Z3). B5–B8 are depth/
-fidelity extensions. B1 is cleanup + ergonomics. Everything in B1/B2/B4/B5/B6/B7/B8 is in-Cure
-provable; only B3's solver step sits outside the TCB.
+B2 (recursion fixpoint) is **COMPLETE** (transfer derivation → monotonicity → finite Kleene
+stabilization → coverage → operational adequacy → principality; `otp_finite_fixpoint` /
+`otp_interface_bridge` / `otp_recursive_transfer` / `otp_recursive_adequacy` / `otp_recursive_run`),
+for the finite (bounded-tag) universe. B3 (counting fragment) is the largest remaining piece and is
+partly EXTERNAL (Presburger/Z3). B5–B8 are depth/fidelity extensions. B1 is cleanup + ergonomics.
+Everything in B1/B2/B4/B5/B6/B7/B8 is in-Cure provable; only B3's solver step sits outside the TCB.
