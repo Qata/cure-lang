@@ -30,4 +30,22 @@ defmodule Cure.Stdlib.OtpKeyOrderTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "kmin/kmax are a bounded meet-semilattice (comm, idem, assoc, lower/upper bounds)" do
+    src = """
+    mod MeetJoin
+      use Std.Otp.KeyOrder
+      fn comm(a: OKey, b: OKey) -> Equivalent(OKey, kmin(a, b), kmin(b, a)) =
+        kmin_comm(a, b)
+      fn assoc(a: OKey, b: OKey, c: OKey) -> Equivalent(OKey, kmin(kmin(a, b), c), kmin(a, kmin(b, c))) =
+        kmin_assoc(a, b, c)
+      fn lower(a: OKey, b: OKey) -> Equivalent(OBit, le(kmin(a, b), a), OT()) =
+        kmin_lower_l(a, b)
+      fn upper(a: OKey, b: OKey) -> Equivalent(OBit, le(b, kmax(a, b)), OT()) =
+        kmax_upper_r(a, b)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end
