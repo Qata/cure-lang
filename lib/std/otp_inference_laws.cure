@@ -1,0 +1,67 @@
+@group(:concurrency)
+mod Std.Otp.InferenceLaws
+  ## The ALGEBRA of inferred mailbox interfaces — the laws that make inference (`Std.Otp.
+  ## Inference`) a real ordering story, and the foundation the fixpoint construction of the
+  ## full inference (build-out map G9) rests on.
+  ##
+  ## Interfaces are ordered by SUBTYPING: `a ⊆ b` (written `AllHandled(a, b)`) means every
+  ## tag `a` accepts is also accepted by `b` — a receiver that handles MORE is safe to use
+  ## where one handling FEWER is expected. This module proves the three laws that make that
+  ## an order with the right computational content:
+  ##
+  ##   * **membership monotonicity** (`handles_mono`): `t ∈ a` and `a ⊆ b` ⟹ `t ∈ b`;
+  ##   * **weakening / subtyping soundness** (`weaken`): `s ⊆ a` and `a ⊆ b` ⟹ `s ⊆ b`
+  ##     (⊆ is transitive — a safe interface can always be WIDENED);
+  ##   * **inference soundness** (`self_member`): the set of messages a mailbox receives,
+  ##     used AS its interface, handles all of them — so inferring the interface = the
+  ##     received-message set is safe, and (since `AllHandled(s, I)` literally says `s ⊆ I`)
+  ##     that inferred `s` is CONTAINED in every safe interface `I` — i.e. it is PRINCIPAL
+  ##     (the least safe interface).
+  ##
+  ## Principality is the key inference property: an inferred type should be the LEAST one
+  ## that works, so any other valid typing is a widening of it. Here that is immediate from
+  ## `self_member` + the meaning of `⊆`. In the full G9 fixpoint construction (see
+  ## `Std.Otp.InferenceFixpoint`), principality generalizes to "the inferred interface is
+  ## the LEAST FIXED POINT of the behaviour's constraint-transfer function" — the shape
+  ## `Mathlib.Order.FixedPoints.OrderHom.isLeast_lfp` proves for a complete lattice.
+
+  type Tag = TA | TB | TC
+  type TagList = TNil | TCons(Tag, TagList)
+
+  ## Membership: tag `t` is handled by interface `iface`.
+  type Handles indices (t: Tag, iface: TagList)
+    HHere  : Handles(t, TCons(t, rest))
+    HThere : Handles(t, rest) -> Handles(t, TCons(y, rest))
+
+  ## Interface subtyping `a ⊆ b`: every tag of `a` is handled by `b`.
+  type AllHandled indices (s: TagList, iface: TagList)
+    AHNil  : AllHandled(TNil, iface)
+    AHCons : Handles(t, iface) -> AllHandled(rest, iface) -> AllHandled(TCons(t, rest), iface)
+
+  ## **MEMBERSHIP MONOTONICITY.** `t ∈ a` and `a ⊆ b` ⟹ `t ∈ b`. Induction on the
+  ## membership proof, reading the corresponding witness out of the subtyping proof.
+  fn handles_mono({t: Tag}, {a: TagList}, {b: TagList}, h: Handles(t, a), sub: AllHandled(a, b)) -> Handles(t, b) = match h
+    HHere() -> match sub
+      AHCons(ht, srest) -> ht
+    HThere(h2) -> match sub
+      AHCons(sh, srest) -> handles_mono(h2, srest)
+
+  ## **WEAKENING (subtyping is transitive / sound).** `s ⊆ a` and `a ⊆ b` ⟹ `s ⊆ b`. A
+  ## safe interface can always be widened to a larger one.
+  fn weaken({s: TagList}, {a: TagList}, {b: TagList}, ah: AllHandled(s, a), sub: AllHandled(a, b)) -> AllHandled(s, b) = match ah
+    AHNil() -> AHNil()
+    AHCons(ht, ahrest) -> AHCons(handles_mono(ht, sub), weaken(ahrest, sub))
+
+  ## Prepending a tag to the interface preserves membership of everything already handled.
+  fn weaken_cons({s: TagList}, {iface: TagList}, ah: AllHandled(s, iface), y: Tag) -> AllHandled(s, TCons(y, iface)) = match ah
+    AHNil() -> AHNil()
+    AHCons(ht, ahrest) -> AHCons(HThere(ht), weaken_cons(ahrest, y))
+
+  ## **INFERENCE SOUNDNESS + PRINCIPALITY.** The set of messages a mailbox receives, used
+  ## AS its interface, handles all of them (`AllHandled(s, s)`). Since `AllHandled(s, I)`
+  ## is exactly `s ⊆ I`, this inferred `s` is the LEAST safe interface — every valid
+  ## interface `I` (one with `AllHandled(s, I)`) is a widening of it.
+  fn self_member(s: TagList) -> AllHandled(s, s) = match s
+    TNil() -> AHNil()
+    TCons(t, rest) -> AHCons(HHere(), weaken_cons(self_member(rest), t))
+end
