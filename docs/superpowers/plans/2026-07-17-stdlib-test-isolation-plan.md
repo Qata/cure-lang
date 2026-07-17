@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **TCB-adjacency:** `lib/cure/elab/emit.ex` is TCB-adjacent. The kernel re-checks emitter output, but codegen changes still require the full gate. The empty-prefix byte-identity invariant (Task 4) is the guard that the default emission path is untouched.
+- **TCB-adjacency:** `lib/cure/elab/emit.ex` is TCB-adjacent. The kernel re-checks emitter output, but codegen changes still require the full gate. The authoritative guard that the default emission path is untouched is **Task 8's committed BEAM golden** (it byte-compares compiled output against a pre-change baseline). Task 4's forms-level check is a lighter internal-consistency guard (`module_forms/5` with an empty prefix equals `module_forms/4`), not a pre-change comparison — see Task 4.
 - **Empty-prefix byte-identity (invariant):** `module_forms`/`compile_and_load`/`compile_forms` with `prefix: ""` (the default) MUST produce output byte-for-byte identical to before this change. This is what keeps production compilation and the golden gate green.
 - **One build at a time:** Never launch concurrent full suites — a past concurrent full-suite run caused a kernel panic. Serialize every `mix test`.
 - **Tests are behavioral and immutable:** Each task's red test asserts observable behavior and is not rewritten to match a broken implementation. Fix code, not the test.
@@ -84,8 +84,9 @@ defmodule Cure.Stdlib.PreloadStickyTest do
     {mod, binary} = probe_binary()
 
     # Load then stick it, mimicking the C1 startup stanza.
+    # NB: `:code.stick_mod/1` returns `true` (not `:ok`) — pattern-match on `true`.
     {:module, ^mod} = :code.load_binary(mod, ~c"nofile", binary)
-    :ok = :code.stick_mod(mod)
+    true = :code.stick_mod(mod)
 
     try do
       assert :code.is_sticky(mod)
@@ -155,7 +156,8 @@ Insert this block in `test/test_helper.exs` immediately after `Mix.Task.run("cur
      |> Enum.map(fn path ->
        mod = path |> Path.basename(".beam") |> String.to_atom()
        {:module, ^mod} = :code.ensure_loaded(mod)
-       :ok = :code.stick_mod(mod)
+       # `:code.stick_mod/1` returns `true` (not `:ok`).
+       true = :code.stick_mod(mod)
        mod
      end)
      |> MapSet.new()
@@ -187,7 +189,12 @@ Insert this block in `test/test_helper.exs` immediately after `Mix.Task.run("cur
      end)
      |> MapSet.new()
 
+   # Spec C1 requires catching a mismatch in EITHER direction: a declared module
+   # not compiled (missing) OR a compiled module not declared (extra) — the latter
+   # signals a stale beam or a rename that left an orphan, which would be stuck
+   # under a name no source backs.
    missing = MapSet.difference(declared, loaded)
+   extra = MapSet.difference(loaded, declared)
 
    unless MapSet.size(missing) == 0 do
      raise """
@@ -196,6 +203,17 @@ Insert this block in `test/test_helper.exs` immediately after `Mix.Task.run("cur
      #{missing |> MapSet.to_list() |> Enum.sort() |> Enum.map_join(", ", &inspect/1)}
 
      Run `mix cure.compile_stdlib` and check its output for compile errors.
+     """
+   end
+
+   unless MapSet.size(extra) == 0 do
+     raise """
+     test_helper: these modules were compiled to #{ebin} but are NOT declared in
+     any lib/std/*.cure (a stale beam or an orphaned rename — sticking one would
+     freeze a name no current source produces):
+     #{extra |> MapSet.to_list() |> Enum.sort() |> Enum.map_join(", ", &inspect/1)}
+
+     Delete the stale beam(s) or run a clean `mix cure.compile_stdlib`.
      """
    end
 
@@ -233,18 +251,22 @@ Note: producer tests are expected red between here and Tasks 6–7. This is the 
 
 ### Task 3: C1 — re-stick after the two `preload_test.exs` purge sites
 
-`preload_test.exs` deliberately purges + deletes a canonical module to observe a reload path. `:code.purge`/`:code.delete` clear the sticky flag, so after these tests the canonical `Cure.Std.List` / staged module would be resident but **not** sticky — a hole in the C1 guarantee for any later test. Re-stick each module in the cleanup block, and assert the sticky flag is restored so the guarantee cannot silently regress. Both sites use `try/after` (not `on_exit`); keep the file `async: false`.
+`preload_test.exs` deliberately purges + deletes a canonical module to observe a reload path. **Correcting a common misconception:** `:code.purge`/`:code.delete` do NOT clear the sticky flag — they only *unload* the module. Verified against OTP 29: `is_sticky/1` is `module_loaded(M) andalso ets_lookup({sticky, M})`, so the `{sticky, M}` entry survives purge/delete; `is_sticky` merely reads `false` while the module is unloaded, and any later reload silently restores stickiness.
+
+The real hazard is subtler, and the two sites differ. **Site 1** JIT-compiles `Cure.Std.List` from `priv/std/list.cure` inside its `try` — a genuinely **non-canonical** version. That reload re-marks the module sticky, so a plain `Preload.preload(kind: :all)` afterwards **cannot overwrite it** (`:code.load_binary` returns `{:error, :sticky_directory}`, which `load_if_present` swallows), and the JIT version would stay stuck for the rest of the suite, defeating C1. **Site 2** stages `Cure.Std.Core` from `staged_sample_beam/0`, which normally harvests the CANONICAL beam out of `_build/cure/ebin`, so its reload is already canonical and it is not, by itself, a real hazard — but it is fixed with the same shape for uniformity and to cover the fallback case where the staged beam came from `priv/ebin` and could differ.
+
+Cleanup at both sites therefore **evicts first** (`:code.unstick_mod` + `:code.purge` + `:code.delete`), THEN `Preload.preload(kind: :all)` to reload the CANONICAL bytes from `_build/cure/ebin`, THEN re-sticks, THEN asserts (`is_sticky` + an md5 check that the loaded bytes equal the canonical beam's). Without the `unstick_mod`, `is_sticky` is trivially true (the test's own reload already re-stuck the module), so the eviction is what makes both asserts meaningful. Both sites use `try/after` (not `on_exit`); keep the file `async: false`.
 
 **Files:**
 - Modify: `test/cure/stdlib/preload_test.exs` — Site 1 (`compile_missing_from_sources/1` describe, "recovers an unloaded module by compiling it from source", purge at lines 181–182, `after` block ending ~198); Site 2 (`preload/1` describe, "honours :stdlib_beam_dir app-env override", purge at lines 131–132, `after` block lines 140–147).
 
 **Interfaces:**
-- Consumes: the C1 startup stanza (Task 2) has already stuck these modules once. This task restores the flag the purge cleared.
-- Produces: canonical `Cure.Std.List` (Site 1) and the staged module (Site 2) left resident **and sticky** after each test.
+- Consumes: the C1 startup stanza (Task 2) has already stuck these modules once. This task evicts the test's own reload and restores/confirms the CANONICAL bytes (purge/delete did NOT clear the sticky entry — see description; the eviction is what lets the canonical reload actually replace the test's version at Site 1, and is applied uniformly at Site 2).
+- Produces: canonical `Cure.Std.List` (Site 1) and canonical `Cure.Std.Core` (Site 2) left resident **and sticky** after each test.
 
 - [ ] **Step 1: Write the assertions + re-stick — Site 1 ("recovers an unloaded module")**
 
-In the `try` block (after the existing `assert Code.ensure_loaded?(module)` at line 187), the module is resident again but not sticky. Re-stick it and assert. Change the `try/after` so the `after` restores stickiness. Concretely, edit the block at lines 185–197:
+After the `try`, the module is resident as the JIT-from-source version and (because the try's reload re-marked it) already sticky — so it must be evicted and replaced with the canonical bytes, not merely re-stuck. Change the `after` to evict → reload canonical → re-stick, and add the post-`try` asserts. Concretely, edit the block at lines 185–197:
 
 ```elixir
       try do
@@ -260,14 +282,28 @@ In the `try` block (after the existing `assert Code.ensure_loaded?(module)` at l
 
         File.rm_rf!(empty)
 
-        # C1: this test purged+deleted the module, which cleared its sticky flag.
-        # Restore the canonical resident version and re-stick it so later tests
-        # keep the immutable-canonical guarantee.
+        # C1: the try reloaded a JIT-from-source `Cure.Std.List`, which re-marked
+        # the module sticky (purge/delete never removed the sticky entry). A plain
+        # preload CANNOT overwrite a sticky module, so evict the test's version
+        # first, then reload the CANONICAL bytes from `_build/cure/ebin`, then
+        # re-stick — leaving the immutable-canonical surface later tests depend on.
+        :code.unstick_mod(module)
+        :code.purge(module)
+        :code.delete(module)
         Cure.Stdlib.Preload.preload(kind: :all)
         :code.stick_mod(module)
       end
 
       assert :code.is_sticky(module)
+
+      # Discriminating guard for the actual invariant: the CANONICAL bytes are
+      # resident, not the stale JIT-from-source version. `is_sticky` alone is
+      # trivially true after the try's own reload, so this md5 check is what goes
+      # red if the eviction above is dropped. (`module_info(:md5)` is the loaded
+      # module's md5; `:beam_lib.md5/1` is the on-disk canonical's — verified equal
+      # for a module loaded from its own beam.)
+      {:ok, {^module, disk_md5}} = :beam_lib.md5(~c"_build/cure/ebin/Cure.Std.List.beam")
+      assert module.module_info(:md5) == disk_md5
 ```
 
 - [ ] **Step 2: Write the assertions + re-stick — Site 2 ("honours :stdlib_beam_dir app-env override")**
@@ -283,19 +319,41 @@ Edit the `after` block at lines 140–147 (inside the `{:ok, module, binary}` br
 
             File.rm_rf!(tmp)
 
-            # C1: restore the canonical resident version and re-stick (purge/delete
-            # above cleared the sticky flag set at suite startup).
+            # C1: the try reloaded the STAGED module, which re-marked it sticky
+            # (purge/delete never removed the sticky entry, and a sticky module
+            # cannot be overwritten by preload). Evict it, reload the CANONICAL
+            # bytes from `_build/cure/ebin`, then re-stick.
+            :code.unstick_mod(module)
+            :code.purge(module)
+            :code.delete(module)
             Cure.Stdlib.Preload.preload(kind: :all)
             :code.stick_mod(module)
           end
 
           assert :code.is_sticky(module)
+
+          # Consistency guard: the loaded bytes equal the canonical beam. Unlike
+          # Site 1 this is normally green even without eviction, because the staged
+          # beam is harvested from the canonical `_build/cure/ebin` (see Step 3
+          # note) — kept for symmetry and to catch the `priv/ebin`-fallback case.
+          canonical_beam = String.to_charlist("_build/cure/ebin/#{module}.beam")
+          {:ok, {^module, disk_md5}} = :beam_lib.md5(canonical_beam)
+          assert module.module_info(:md5) == disk_md5
 ```
 
-- [ ] **Step 3: Run the file**
+- [ ] **Step 3: Verify the Site-1 guard is honest (red), then green**
+
+First prove the md5 guard discriminates. Site 1 is the reliable red: its `try` reloads a JIT-from-source `Cure.Std.List`, whose bytes differ from the canonical beam. Comment out Site 1's three eviction lines (`:code.unstick_mod`/`:code.purge`/`:code.delete`) and run
 
 Run: `mix test test/cure/stdlib/preload_test.exs`
-Expected: PASS. Both new `assert :code.is_sticky(module)` lines are green; the file leaves the canonical modules sticky.
+Expected: **FAIL** on Site 1's `assert module.module_info(:md5) == disk_md5` — without eviction the stale JIT version is still resident (its md5 differs from the canonical beam). This confirms the assertion is not vacuous. (`assert :code.is_sticky` stays green even here, which is exactly why the md5 check is needed.)
+
+> Note on Site 2: `staged_sample_beam/0` harvests `Cure.Std.Core.beam` from `_build/cure/ebin` (the canonical bytes) in the normal suite, so Site 2's reload is already the canonical module and its md5 assert stays green with or without eviction. Site 2's eviction is defensive uniformity (it guarantees canonical even in the fallback case where the staged beam came from `priv/ebin` and could differ); do not expect a Site-2 red.
+
+Then restore the eviction lines and re-run:
+
+Run: `mix test test/cure/stdlib/preload_test.exs`
+Expected: PASS. Both sites' `assert :code.is_sticky(module)` and the canonical-md5 asserts are green; the file leaves the canonical modules resident (canonical bytes) and sticky.
 
 - [ ] **Step 4: Commit**
 
@@ -309,6 +367,8 @@ git commit -m "test(stdlib): re-stick canonical modules after preload purge site
 ### Task 4: C2 — emit.ex prefix threading + empty-prefix byte-identity (invariant test FIRST)
 
 Thread an optional module-name `prefix` and a `local_owners` set through the emit entry points so a producer's emitted group installs and cross-links under that prefix. With `prefix: ""` (the default) the emitted Erlang forms are byte-for-byte identical to today. **Write the byte-identity test first (red), then implement.**
+
+> **Scope note (do not oversell this test):** post-change, `module_forms/4` delegates to `module_forms/5` with `[]`, so the Step-1 test below (`/4` vs `/5 [prefix: "", local_owners: nil]`) compares two calls that resolve to identical arguments — it is an internal-consistency guard (the empty-prefix branch adds nothing), NOT a comparison against the *pre-change* output. The authoritative pre-change byte-identity guarantee is **Task 8's committed BEAM golden**, which SHA/byte-compares compiled output against a baseline captured before this change. Keep both.
 
 **Files:**
 - Test: Create `test/cure/elab/emit_prefix_test.exs`
@@ -676,7 +736,7 @@ and, in `setup_all`, after computing `fns`:
     {:ok, m: String.to_atom(prefix <> "Cure.Std.Set")}
 ```
 
-Update the module's `@moduledoc`/comment that claims "Bundling both owners into a single BEAM module is not a real compile" — the prefixed group still emits one module per owner, so the delegation faithfulness note stays accurate; just adjust any sentence asserting the module is loaded under the bare `Cure.<owner>` name to say it is loaded under the per-test prefix.
+Rewrite the `@moduledoc` to match the new mechanism. The "one BEAM module per owner" and "collides on shared base names" reasoning (lines 15–21) stays accurate — the prefixed group still emits one module per owner. But the paragraph justifying installation "under the shared process-global BEAM name" (lines 23–29) becomes **false**: the migration's whole point is that the group is now installed under a per-test PREFIX and never touches the shared canonical slot, so that safety-by-full-surface rationale no longer applies. Replace that paragraph with the prefixed-isolation rationale (the canonical is sticky/resident from C1; this test's Set+Map are emitted under `prefix <> "Cure.<owner>"` and delegate among themselves via the prefixed remote target, so a consumer's canonical `Cure.Std.Map` is never dropped or clobbered). Keep the `async: false` note.
 
 - [ ] **Step 2: Run the file**
 
