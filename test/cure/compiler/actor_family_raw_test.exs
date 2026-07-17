@@ -298,4 +298,33 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert apply(:"Cure.Generated.RawFamilyInfo", :handle_info, [:timeout, 9]) == {:noreply, 9}
   end
+
+  test "terse state+body template routes through the shared family raw emitter" do
+    # The `actor N state T <body-declarations>` form (rule at actor.cure:200)
+    # carries no callback holes but a trailing definition block, captured by the
+    # NEW positional `Declarations until dedent` hole (parser raw-body branch,
+    # task #24 step 1) and threaded to the family via emit_raw_state_body
+    # (body: Some(...)). This behavioral pin replaces the retired Raw14
+    # byte-golden: the default GenServer callbacks are emitted (init/1 =
+    # {:ok, initial}, handle_cast/2 = {:noreply, state}, start_link/1) alongside
+    # the spliced extra declaration, which becomes a callable function of the
+    # generated module. Per the corrected spec (d1aec7b4) the raw fold is
+    # behavioral-equivalence, NOT byte-identical (default-init family path emits
+    # Effect-wrapped callback return types vs the template's bare Tuple types;
+    # bodies identical, return types erased).
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyBody state Int
+        fn helper() -> Int = 42
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyBody", :helper, []) == 42
+    assert apply(:"Cure.Generated.RawFamilyBody", :init, [3]) == {:ok, 3}
+    assert apply(:"Cure.Generated.RawFamilyBody", :handle_cast, [:ping, 7]) == {:noreply, 7}
+    assert {:ok, pid} = apply(:"Cure.Generated.RawFamilyBody", :start_link, [5])
+    :gen_server.stop(pid)
+  end
 end

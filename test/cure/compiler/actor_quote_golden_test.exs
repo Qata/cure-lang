@@ -190,12 +190,20 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
        fn helper() -> Int = 0
      """,
      "7035f79646a68bf95c0f7b10bfb95e422bbdb6037cfb2b15781ffac47a7289a3"},
-    {"Raw14_state_body",
-     """
-     actor Cure.Generated.Raw14_state_body state Int
-       fn helper() -> Int = 0
-     """,
-     "5a8f011c1a8a62cde887a045aba29553bb8e2cbaae0cad045a8b245fa779fbff"},
+    # Raw14_state_body (`actor N state T <body-declarations>`) has been FOLDED
+    # into the shared emit_raw_state_body → derive_actor_family emitter (§1e
+    # mechanism A). This is the first fold to route through the new positional
+    # `Declarations until dedent` hole (parser raw-body branch, task #24 step 1):
+    # the trailing definition block is captured as a `:declarations_block` node —
+    # the same shape the structured family `body` section produces — and threaded
+    # to emit_actor_parts via optional_declarations. Per the corrected spec
+    # (d1aec7b4) the raw fold is a behavioral-equivalence guarantee, NOT
+    # byte-identical: the folded default-init family path emits Effect-wrapped
+    # callbacks vs the template's bare-Tuple return types (bodies identical,
+    # return types erased). Its byte-identical golden therefore retires;
+    # behavioral equivalence (default init/1 + start_link/1 + the spliced extra
+    # declarations callable) is pinned by "terse state+body template routes
+    # through the shared family raw emitter" in actor_family_raw_test.exs.
     {"Raw15_with_body",
      """
      actor Cure.Generated.Raw15_with_body with 0

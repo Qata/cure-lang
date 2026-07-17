@@ -756,6 +756,36 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  # A positional declarations block hole consumes the indented run of
+  # definitions as one `:declarations_block` node — the same shape the
+  # structured family `body Declarations` section produces — so a raw Tier-0
+  # template body can flow through `computed`. `parse_definition_block` reads
+  # from the block's `:indent` through its matching `:dedent`, so the only
+  # supported delimiter is the block's own dedent.
+  defp match_segments(state, [{:declarations_hole, %{name: name}} | rest], bindings, progress) do
+    # A positional declarations body always begins on its OWN line: the block's
+    # `:indent` (or, for an empty body, the form simply ends). So the token
+    # DIRECTLY following the preceding segment must be a structural boundary.
+    # If instead a same-line token follows (e.g. a sibling rule's `with`/`call`
+    # keyword, as in the single-line use-sites the expansion fuzzer synthesises
+    # for those siblings), this rule does not apply: report a non-match and hand
+    # the ORIGINAL state back so `match_macro_rule` tries the next rule, rather
+    # than greedily matching an empty body and leaving the continuation over.
+    # This mirrors the `{:family}` clause's `:indent` guard while still allowing
+    # a bodyless `actor <name> state <type>` (the form ends at a newline/dedent).
+    case peek(state) do
+      %Token{type: type} when type in [:newline, :indent, :dedent, :eof] ->
+        scan_state = skip_newlines(state)
+        token = peek(scan_state)
+        {stmts, after_state} = parse_definition_block(scan_state)
+        node = {:declarations_block, [line: token.line, col: token.col], stmts}
+        match_segments(after_state, rest, Map.put(bindings, name, node), progress + 1)
+
+      _ ->
+        {:error, progress, state}
+    end
+  end
+
   defp match_segments(state, [{:hole, %{name: name}} | rest], bindings, progress) do
     {arg, state} = parse_expr(state, 0)
     match_segments(state, rest, Map.put(bindings, name, arg), progress + 1)
@@ -6614,6 +6644,7 @@ defmodule Cure.Compiler.Parser do
   defp segment_hole_names({:hole, %{name: name}}), do: [name]
   defp segment_hole_names({:code_hole, %{name: name}}), do: [name]
   defp segment_hole_names({:raw_hole, %{name: name}}), do: [name]
+  defp segment_hole_names({:declarations_hole, %{name: name}}), do: [name]
   defp segment_hole_names({:family, %{name: name}}), do: [name]
   defp segment_hole_names({:repeat, segment}), do: segment_hole_names(segment)
   defp segment_hole_names({:optional, segments}), do: Enum.flat_map(segments, &segment_hole_names/1)
@@ -6629,6 +6660,7 @@ defmodule Cure.Compiler.Parser do
   defp segment_inputs({:hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:code_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
+  defp segment_inputs({:declarations_hole, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:family, %{name: name}}, bindings), do: [Map.fetch!(bindings, name)]
   defp segment_inputs({:repeat, segment}, bindings), do: [segment_inputs(segment, bindings)]
   # Optional groups still occupy a stable reflected-record slot. An absent
@@ -6643,6 +6675,9 @@ defmodule Cure.Compiler.Parser do
   defp optional_segment_inputs({:hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
   defp optional_segment_inputs({:code_hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
   defp optional_segment_inputs({:raw_hole, %{name: name}}, bindings), do: [Map.get(bindings, name)]
+
+  defp optional_segment_inputs({:declarations_hole, %{name: name}}, bindings),
+    do: [Map.get(bindings, name)]
   defp optional_segment_inputs({:repeat, segment}, bindings), do: optional_segment_inputs(segment, bindings)
 
   defp optional_segment_inputs({:optional, segments}, bindings),
@@ -6880,6 +6915,19 @@ defmodule Cure.Compiler.Parser do
           {%Token{type: :identifier, value: name}, %Token{type: :colon}, %Token{type: :identifier, value: "Code"},
            %Token{type: :identifier, value: "until"}, %Token{type: :identifier, value: delimiter}, %Token{type: :gt}, _} ->
             hole = {:code_hole, %{name: name, delimiter: delimiter, line: peek(state).line}}
+            state = Enum.reduce(1..7, state, fn _, acc_state -> advance(acc_state) end)
+            parse_rule_segments(state, [hole | acc], mode)
+
+          # A positional declarations block hole: `<name: Declarations until X>`
+          # captures the indented run of definitions the same way the structured
+          # family `body Declarations` section does (parse_definition_block), but
+          # in a positional rule slot so a raw Tier-0 template can funnel its
+          # trailing body block through `computed`. The only delimiter in use is
+          # `dedent` (the block's own indentation boundary).
+          {%Token{type: :identifier, value: name}, %Token{type: :colon},
+           %Token{type: :identifier, value: "Declarations"}, %Token{type: :identifier, value: "until"},
+           %Token{type: :identifier, value: delimiter}, %Token{type: :gt}, _} ->
+            hole = {:declarations_hole, %{name: name, delimiter: delimiter, line: peek(state).line}}
             state = Enum.reduce(1..7, state, fn _, acc_state -> advance(acc_state) end)
             parse_rule_segments(state, [hole | acc], mode)
 
