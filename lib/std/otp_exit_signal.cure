@@ -1,0 +1,73 @@
+@group(:concurrency)
+mod Std.Otp.ExitSignal
+  ## REASON-DEPENDENT exit-signal propagation (build-out map G3 remainder; the exit REASON
+  ## payload `Std.Otp.Link`/`Std.Otp.Unlink` abstracted away).
+  ##
+  ## In real OTP a linked peer's exit signal dispatches on BOTH the receiver's `trap_exit`
+  ## flag AND the exit REASON — a subtlety no published type system models and the piece
+  ## `Std.Otp.Link` deliberately left out (it always propagates or traps):
+  ##   * reason `normal`, NOT trapping → the peer SURVIVES (a normal exit does not kill);
+  ##   * reason `normal`, trapping     → an `{'EXIT', from, normal}` MESSAGE is delivered;
+  ##   * reason `abnormal`, NOT trapping → the peer EXITS (propagation → `Dead`);
+  ##   * reason `abnormal`, trapping   → an `EXIT` MESSAGE is delivered;
+  ##   * reason `kill` → the peer dies UNCONDITIONALLY, even when trapping (untrappable).
+  ##
+  ## The `Step` is indexed by the `Reason`, so the dispatch is at the TYPE level: the
+  ## surviving case (`SNormalSurvive`) is the only step from a non-trapping peer under a
+  ## `Normal` reason, so "a normal exit kills a non-trapping peer" is unconstructible — the
+  ## typed guarantee OTP programmers rely on. **PRESERVATION holds for every case**: whether
+  ## the peer survives, gets a well-typed `EXIT` message, or dies, no ill-typed state arises.
+  ##
+  ## **Honest scope.** `EXIT` as a bare tag (the `from` pid abstracted); reasons collapsed to
+  ## `Normal`/`Abnormal`/`Kill` (an actual reason term is a payload for the message-payload
+  ## work); `Dead` terminal. Refines `Std.Otp.Link`'s trap-only dispatch with the reason axis.
+
+  type Tag = TInc | TQuery | TExit
+  type TagList = TNil | TCons(Tag, TagList)
+
+  type Accepted indices (t: Tag)
+    AccInc   : Accepted(TInc)
+    AccQuery : Accepted(TQuery)
+    AccExit  : Accepted(TExit)
+
+  type AllAccepted indices (ts: TagList)
+    AANil  : AllAccepted(TNil)
+    AACons : Accepted(t) -> AllAccepted(rest) -> AllAccepted(TCons(t, rest))
+
+  type Trap = Trapping | NotTrapping
+  ## The exit reason axis: `normal` (does not kill a non-trapper), `abnormal` (propagates),
+  ## `kill` (untrappable).
+  type Reason = Normal | Abnormal | Kill
+
+  type Proc = Alive(TagList, TagList, Trap) | Dead
+  type WTP indices (p: Proc)
+    WTAlive : AllAccepted(e) -> AllAccepted(m) -> WTP(Alive(e, m, tr))
+    WTDead  : WTP(Dead)
+
+  ## A linked peer's exit, dispatched by REASON × trap flag. Indexing `Step` by the reason
+  ## makes the dispatch type-level, so the surviving case is provably the only outcome of a
+  ## normal exit on a non-trapping peer. Per constructor: normal+trapping delivers an EXIT
+  ## message; normal+not-trapping SURVIVES unchanged (a normal exit does not kill);
+  ## abnormal+trapping delivers an EXIT message; abnormal+not-trapping propagates to `Dead`;
+  ## `Kill` dies unconditionally, even when trapping (untrappable).
+  type Step indices (r: Reason, before: Proc, after: Proc)
+    SNormalTrap    : Accepted(TExit) -> Step(Normal, Alive(e, m, Trapping), Alive(TCons(TExit, e), m, Trapping))
+    SNormalSurvive : Step(Normal, Alive(e, m, NotTrapping), Alive(e, m, NotTrapping))
+    SAbnormalTrap  : Accepted(TExit) -> Step(Abnormal, Alive(e, m, Trapping), Alive(TCons(TExit, e), m, Trapping))
+    SAbnormalProp  : Step(Abnormal, Alive(e, m, NotTrapping), Dead)
+    SKillTrap      : Step(Kill, Alive(e, m, Trapping), Dead)
+    SKillNoTrap    : Step(Kill, Alive(e, m, NotTrapping), Dead)
+
+  ## **PRESERVATION.** Every reason×trap outcome keeps the process well-typed: a survivor is
+  ## unchanged, a trapping peer gets a well-typed `EXIT` (from its accepted proof), a
+  ## propagating or killed peer reaches the vacuously well-typed `Dead`.
+  fn preservation({r: Reason}, {b: Proc}, {a: Proc}, wt: WTP(b), s: Step(r, b, a)) -> WTP(a) = match s
+    SNormalTrap(accexit) -> match wt
+      WTAlive(ae, am) -> WTAlive(AACons(accexit, ae), am)
+    SNormalSurvive() -> wt
+    SAbnormalTrap(accexit) -> match wt
+      WTAlive(ae, am) -> WTAlive(AACons(accexit, ae), am)
+    SAbnormalProp() -> WTDead
+    SKillTrap()   -> WTDead
+    SKillNoTrap() -> WTDead
+end
