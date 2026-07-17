@@ -60,6 +60,95 @@ defmodule Cure.Compiler.MacroComputedTest do
     assert [{:lit, "call"}, {:hole, %{name: "other", kind: "Code"}}] = segments
   end
 
+  test "computed rules can capture a positional declarations block hole" do
+    [rule] =
+      rules(
+        parse!(
+          "macro Mk\n  syntax mk state <t: Type> <body: Declarations until dedent> computed directly by build\n"
+        )
+      )
+
+    assert rule.kind == :computed
+
+    assert [
+             {:lit, "state"},
+             {:hole, %{name: "t", kind: "Type"}},
+             {:declarations_hole, %{name: "body", delimiter: "dedent"}}
+           ] = rule.segments
+  end
+
+  test "a declarations block hole does not shadow a sibling rule on a single-line use" do
+    # `<body: Declarations until dedent>` must only match a real indented block.
+    # On a single-line use-site sharing the `mk state <t>` prefix, the trailing
+    # sibling literal (`with`) has to win — otherwise the declarations hole
+    # matches an empty block and swallows the rest as leftover.
+    node =
+      parse!("""
+      mod M
+        macro Mk
+          syntax mk state <t: Type> <body: Declarations until dedent> computed directly by build_body
+          syntax mk state <t: Type> with <p: Code> computed directly by build_with
+        fn f() -> Syntax = mk state Int with 0
+      """)
+
+    find = fn find, n ->
+      case n do
+        {:computed_use, _, [{:variable, _, name}, _]} -> name
+        {_t, _m, ch} when is_list(ch) -> Enum.find_value(ch, &find.(find, &1))
+        _ -> nil
+      end
+    end
+
+    assert find.(find, node) == "build_with"
+  end
+
+  test "a declarations block hole still matches a real indented body" do
+    node =
+      parse!("""
+      mod M
+        macro Mk
+          syntax mk state <t: Type> <body: Declarations until dedent> computed directly by build_body
+          syntax mk state <t: Type> with <p: Code> computed directly by build_with
+        fn f() -> Syntax =
+          mk state Int
+            fn helper() -> Int = 0
+      """)
+
+    find = fn find, n ->
+      case n do
+        {:computed_use, _, [{:variable, _, name}, _]} -> name
+        {_t, _m, ch} when is_list(ch) -> Enum.find_value(ch, &find.(find, &1))
+        _ -> nil
+      end
+    end
+
+    assert find.(find, node) == "build_body"
+  end
+
+  test "a declarations block hole matches a bodyless use whose form ends after the prefix" do
+    # `mk state Int` with nothing after (the form ends at the newline/eof) is a
+    # legitimate empty-body use of the declarations-hole rule; it must still
+    # match that rule (empty block), not fall through.
+    node =
+      parse!("""
+      mod M
+        macro Mk
+          syntax mk state <t: Type> <body: Declarations until dedent> computed directly by build_body
+          syntax mk state <t: Type> with <p: Code> computed directly by build_with
+        fn f() -> Syntax = mk state Int
+      """)
+
+    find = fn find, n ->
+      case n do
+        {:computed_use, _, [{:variable, _, name}, {:macro_input, _, inputs}]} -> {name, inputs}
+        {_t, _m, ch} when is_list(ch) -> Enum.find_value(ch, &find.(find, &1))
+        _ -> nil
+      end
+    end
+
+    assert {"build_body", [_t, {:declarations_block, _, []}]} = find.(find, node)
+  end
+
   test "computed dispatch tries later rules after an earlier grammar mismatch" do
     node =
       parse!("""
