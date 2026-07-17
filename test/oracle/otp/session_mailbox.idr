@@ -51,3 +51,21 @@ sends_dual LEnd = Refl
 sends_dual (LSend t k) = sends_dual k
 sends_dual (LRecv t k) = bump_cong t (sends_dual k)
 sends_dual (LPar a b) = msum_cong (sends_dual a) (sends_dual b)
+
+data Compat : Local -> Local -> Type where
+  CEnd : Compat LEnd LEnd
+  CSR : (t : Tag) -> Compat l r -> Compat (LSend t l) (LRecv t r)
+  CRS : (t : Tag) -> Compat l r -> Compat (LRecv t l) (LSend t r)
+  CPar : Compat la ra -> Compat lb rb -> Compat (LPar la lb) (LPar ra rb)
+
+compat_recv_send : Compat l r -> recvs l = sends r
+compat_recv_send CEnd = Refl
+compat_recv_send (CSR t c2) = compat_recv_send c2
+compat_recv_send (CRS t c2) = bump_cong t (compat_recv_send c2)
+compat_recv_send (CPar ca cb) = msum_cong (compat_recv_send ca) (compat_recv_send cb)
+
+compat_send_recv : Compat l r -> sends l = recvs r
+compat_send_recv CEnd = Refl
+compat_send_recv (CSR t c2) = bump_cong t (compat_send_recv c2)
+compat_send_recv (CRS t c2) = compat_send_recv c2
+compat_send_recv (CPar ca cb) = msum_cong (compat_send_recv ca) (compat_send_recv cb)

@@ -42,4 +42,19 @@ mod SessionMailbox
     LSend(t, k) -> sends_dual(k)
     LRecv(t, k) -> bump_cong(t, sends_dual(k))
     LPar(a, b)  -> msum_cong(sends_dual(a), sends_dual(b))
+  type Compat indices (l: Local, r: Local)
+    CEnd : Compat(LEnd, LEnd)
+    CSR  : (t: Tag) -> Compat(l, r) -> Compat(LSend(t, l), LRecv(t, r))
+    CRS  : (t: Tag) -> Compat(l, r) -> Compat(LRecv(t, l), LSend(t, r))
+    CPar : Compat(la, ra) -> Compat(lb, rb) -> Compat(LPar(la, lb), LPar(ra, rb))
+  fn compat_recv_send({l: Local}, {r: Local}, c: Compat(l, r)) -> Equivalent(MS, recvs(l), sends(r)) = match c
+    CEnd()        -> reflexive(MkMS(Z(), Z(), Z()))
+    CSR(t, c2)    -> compat_recv_send(c2)
+    CRS(t, c2)    -> bump_cong(t, compat_recv_send(c2))
+    CPar(ca, cb)  -> msum_cong(compat_recv_send(ca), compat_recv_send(cb))
+  fn compat_send_recv({l: Local}, {r: Local}, c: Compat(l, r)) -> Equivalent(MS, sends(l), recvs(r)) = match c
+    CEnd()        -> reflexive(MkMS(Z(), Z(), Z()))
+    CSR(t, c2)    -> bump_cong(t, compat_send_recv(c2))
+    CRS(t, c2)    -> compat_send_recv(c2)
+    CPar(ca, cb)  -> msum_cong(compat_send_recv(ca), compat_send_recv(cb))
 end

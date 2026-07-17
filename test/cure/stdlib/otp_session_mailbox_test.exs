@@ -55,4 +55,21 @@ defmodule Cure.Stdlib.OtpSessionMailboxTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "compat_recv_send: compatible endpoints have balanced mailboxes" do
+    # LSend(TA, LEnd) is compatible with LRecv(TA, LEnd); the sender's mailbox (empty) equals the
+    # receiver's sends (empty), and the sender's sends {TA} equals the receiver's mailbox {TA}.
+    src = """
+    mod SmBal
+      use Std.Otp.SessionMailbox
+      fn c0() -> Compat(LSend(TA, LEnd()), LRecv(TA, LEnd())) = CSR(TA, CEnd())
+      fn balanced() -> Equivalent(MS, recvs(LSend(TA, LEnd())), sends(LRecv(TA, LEnd()))) =
+        compat_recv_send(CSR(TA, CEnd()))
+      fn mirror() -> Equivalent(MS, sends(LSend(TA, LEnd())), recvs(LRecv(TA, LEnd()))) =
+        compat_send_recv(CSR(TA, CEnd()))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

@@ -82,4 +82,31 @@ mod Std.Otp.SessionMailbox
     LSend(t, k) -> sends_dual(k)
     LRecv(t, k) -> bump_cong(t, sends_dual(k))
     LPar(a, b)  -> msum_cong(sends_dual(a), sends_dual(b))
+
+  ## Structural COMPATIBILITY of two endpoints: a send on one side is a receive on the other, and
+  ## parallel composes componentwise (fork/join). The tag is carried so the proof can name it.
+  type Compat indices (l: Local, r: Local)
+    CEnd : Compat(LEnd, LEnd)
+    CSR  : (t: Tag) -> Compat(l, r) -> Compat(LSend(t, l), LRecv(t, r))
+    CRS  : (t: Tag) -> Compat(l, r) -> Compat(LRecv(t, l), LSend(t, r))
+    CPar : Compat(la, ra) -> Compat(lb, rb) -> Compat(LPar(la, lb), LPar(ra, rb))
+
+  ## **ENCODING BALANCES COMPATIBILITY.** For compatible endpoints, one side's mailbox multiset is
+  ## exactly what the other side sends: `recvs(l) = sends(r)`. Induction on the compatibility
+  ## derivation — each matched send/receive contributes the same tag to `r`'s emissions and `l`'s
+  ## mailbox. So the encoding turns a well-typed (compatible) session into a pair of mailboxes that
+  ## exactly service each other's traffic — communication safety at the mailbox level.
+  fn compat_recv_send({l: Local}, {r: Local}, c: Compat(l, r)) -> Equivalent(MS, recvs(l), sends(r)) = match c
+    CEnd()        -> reflexive(MkMS(Z(), Z(), Z()))
+    CSR(t, c2)    -> compat_recv_send(c2)
+    CRS(t, c2)    -> bump_cong(t, compat_recv_send(c2))
+    CPar(ca, cb)  -> msum_cong(compat_recv_send(ca), compat_recv_send(cb))
+
+  ## The mirror: what one side sends is exactly the other side's mailbox — `sends(l) = recvs(r)`.
+  ## Together the two say compatible endpoints' mailboxes are precisely served by each other.
+  fn compat_send_recv({l: Local}, {r: Local}, c: Compat(l, r)) -> Equivalent(MS, sends(l), recvs(r)) = match c
+    CEnd()        -> reflexive(MkMS(Z(), Z(), Z()))
+    CSR(t, c2)    -> bump_cong(t, compat_send_recv(c2))
+    CRS(t, c2)    -> compat_send_recv(c2)
+    CPar(ca, cb)  -> msum_cong(compat_send_recv(ca), compat_send_recv(cb))
 end
