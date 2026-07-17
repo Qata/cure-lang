@@ -23,19 +23,37 @@ mod InferenceAdequacy
     SRecvAt() -> match wt
       MkWTat(ae, am) -> match am
         AMCons(rat, am2) -> MkWTat(ae, am2)
-  type Behaviour = BNil | BRecv(Tag, Behaviour) | BSend(Tag, Behaviour)
+  type Behaviour = BNil | BRecv(Tag, Behaviour) | BSend(Tag, Behaviour) | BSeq(Behaviour, Behaviour)
+  fn append(a: TagList, b: TagList) -> TagList = match a
+    TNil()         -> b
+    TCons(t, rest) -> TCons(t, append(rest, b))
   fn infer(b: Behaviour) -> TagList = match b
     BNil()      -> TNil
     BRecv(t, k) -> TCons(t, infer(k))
     BSend(t, k) -> TCons(t, infer(k))
+    BSeq(l, r)  -> append(infer(l), infer(r))
+  fn member_append_left({t: Tag}, {xs: TagList}, {ys: TagList}, m: Member(t, xs)) -> Member(t, append(xs, ys)) = match m
+    MemHere()    -> MemHere()
+    MemThere(m2) -> MemThere(member_append_left(m2))
+  fn member_append_right(xs: TagList, {t: Tag}, {ys: TagList}, m: Member(t, ys)) -> Member(t, append(xs, ys)) = match xs
+    TNil()         -> m
+    TCons(y, rest) -> MemThere(member_append_right(rest, m))
   type SendsIn indices (b: Behaviour, t: Tag)
     SendHere  : SendsIn(BSend(t, k), t)
     SendRecvK : SendsIn(k, t) -> SendsIn(BRecv(y, k), t)
     SendSendK : SendsIn(k, t) -> SendsIn(BSend(y, k), t)
-  fn coverage({b: Behaviour}, {t: Tag}, sends: SendsIn(b, t)) -> Member(t, infer(b)) = match sends
-    SendHere()    -> MemHere()
-    SendRecvK(s2) -> MemThere(coverage(s2))
-    SendSendK(s2) -> MemThere(coverage(s2))
+    SendSeqL  : SendsIn(l, t) -> SendsIn(BSeq(l, r), t)
+    SendSeqR  : SendsIn(r, t) -> SendsIn(BSeq(l, r), t)
+  fn coverage(b: Behaviour, {t: Tag}, sends: SendsIn(b, t)) -> Member(t, infer(b)) = match b
+    BNil()      -> match sends
+    BRecv(y, k) -> match sends
+      SendRecvK(s2) -> MemThere(coverage(k, s2))
+    BSend(y, k) -> match sends
+      SendHere()    -> MemHere()
+      SendSendK(s2) -> MemThere(coverage(k, s2))
+    BSeq(l, r)  -> match sends
+      SendSeqL(s2) -> member_append_left(coverage(l, s2))
+      SendSeqR(s2) -> member_append_right(infer(l), coverage(r, s2))
   type Runs indices (b: Behaviour, c: Config)
     RStart : Runs(b, MkConfig(TNil, TNil))
     RStep  : Runs(b, before) -> StepAt(infer(b), before, after) -> Runs(b, after)

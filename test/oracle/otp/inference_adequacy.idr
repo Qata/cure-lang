@@ -26,22 +26,40 @@ preservation_at (MkWTat ae am) (SSendAt mem) = MkWTat (AMCons mem ae) am
 preservation_at (MkWTat (AMCons at ae2) am) SArriveAt = MkWTat ae2 (AMCons at am)
 preservation_at (MkWTat ae (AMCons rat am2)) SRecvAt = MkWTat ae am2
 
-data Behaviour = BNil | BRecv Tag Behaviour | BSend Tag Behaviour
+data Behaviour = BNil | BRecv Tag Behaviour | BSend Tag Behaviour | BSeq Behaviour Behaviour
+
+append : TagList -> TagList -> TagList
+append TNil b = b
+append (TCons t rest) b = TCons t (append rest b)
 
 infer : Behaviour -> TagList
 infer BNil = TNil
 infer (BRecv t k) = TCons t (infer k)
 infer (BSend t k) = TCons t (infer k)
+infer (BSeq l r) = append (infer l) (infer r)
+
+member_append_left : Member t xs -> Member t (append xs ys)
+member_append_left MemHere = MemHere
+member_append_left (MemThere m2) = MemThere (member_append_left m2)
+
+member_append_right : (xs : TagList) -> Member t ys -> Member t (append xs ys)
+member_append_right TNil m = m
+member_append_right (TCons y rest) m = MemThere (member_append_right rest m)
 
 data SendsIn : Behaviour -> Tag -> Type where
   SendHere : SendsIn (BSend t k) t
   SendRecvK : SendsIn k t -> SendsIn (BRecv y k) t
   SendSendK : SendsIn k t -> SendsIn (BSend y k) t
+  SendSeqL : SendsIn l t -> SendsIn (BSeq l r) t
+  SendSeqR : SendsIn r t -> SendsIn (BSeq l r) t
 
-coverage : SendsIn b t -> Member t (infer b)
-coverage SendHere = MemHere
-coverage (SendRecvK s2) = MemThere (coverage s2)
-coverage (SendSendK s2) = MemThere (coverage s2)
+coverage : (b : Behaviour) -> SendsIn b t -> Member t (infer b)
+coverage BNil s = case s of _ impossible
+coverage (BRecv y k) (SendRecvK s2) = MemThere (coverage k s2)
+coverage (BSend y k) SendHere = MemHere
+coverage (BSend y k) (SendSendK s2) = MemThere (coverage k s2)
+coverage (BSeq l r) (SendSeqL s2) = member_append_left (coverage l s2)
+coverage (BSeq l r) (SendSeqR s2) = member_append_right (infer l) (coverage r s2)
 
 data Runs : Behaviour -> Config -> Type where
   RStart : Runs b (MkConfig TNil TNil)
