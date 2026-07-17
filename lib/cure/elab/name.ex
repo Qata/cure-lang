@@ -54,7 +54,20 @@ defmodule Cure.Elab.Name do
   defp normalize_base(base) when is_atom(base), do: Atom.to_string(base)
   defp normalize_base(base) when is_binary(base), do: base
 
-  defp valid_owner?(owner) do
-    owner != "" and String.match?(owner, ~r/^[A-Za-z_][A-Za-z0-9_.]*$/)
-  end
+  # `[A-Za-z_][A-Za-z0-9_.]*`, anchored at both ends, as a byte scan rather than
+  # a regex. `owner/1` and `base/1` sit under the elaborator's name resolution,
+  # which asks this question millions of times per elaboration; a `Regex.match?/2`
+  # here cost roughly a quarter of a cold compile in `re:run`/`re:import` alone.
+  defp valid_owner?(<<c, rest::binary>>) when c in ?A..?Z or c in ?a..?z or c == ?_,
+    do: owner_rest?(rest)
+
+  defp valid_owner?(_owner), do: false
+
+  defp owner_rest?(<<>>), do: true
+
+  defp owner_rest?(<<c, rest::binary>>)
+       when c in ?A..?Z or c in ?a..?z or c in ?0..?9 or c == ?_ or c == ?.,
+       do: owner_rest?(rest)
+
+  defp owner_rest?(_rest), do: false
 end
