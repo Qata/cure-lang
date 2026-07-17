@@ -90,4 +90,74 @@ mod Bst
           KA() -> reflexive(T())
           KB() -> reflexive(T())
           KC() -> reflexive(T())
+  fn keq(x: Key, k: Key) -> B = match x
+    KA() -> match k
+      KA() -> T()
+      KB() -> F()
+      KC() -> F()
+    KB() -> match k
+      KA() -> F()
+      KB() -> T()
+      KC() -> F()
+    KC() -> match k
+      KA() -> F()
+      KB() -> F()
+      KC() -> T()
+  fn orb(a: B, b: B) -> B = match a
+    F() -> b
+    T() -> T()
+  fn insert_spec(x: Key, k: Key, t: Tree) -> Equivalent(B, member(x, insert(k, t)), orb(keq(x, k), member(x, t))) = match t
+    Leaf()        -> match x
+      KA() -> match k
+        KA() -> reflexive(T())
+        KB() -> reflexive(F())
+        KC() -> reflexive(F())
+      KB() -> match k
+        KA() -> reflexive(F())
+        KB() -> reflexive(T())
+        KC() -> reflexive(F())
+      KC() -> match k
+        KA() -> reflexive(F())
+        KB() -> reflexive(F())
+        KC() -> reflexive(T())
+    Node(l, v, r) -> match x
+      KA() -> match v
+        KA() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+        KB() -> match k
+          KA() -> insert_spec(KA(), KA(), l)
+          KB() -> reflexive(member(KA(), l))
+          KC() -> reflexive(member(KA(), l))
+        KC() -> match k
+          KA() -> insert_spec(KA(), KA(), l)
+          KB() -> insert_spec(KA(), KB(), l)
+          KC() -> reflexive(member(KA(), l))
+      KB() -> match v
+        KA() -> match k
+          KA() -> reflexive(member(KB(), r))
+          KB() -> insert_spec(KB(), KB(), r)
+          KC() -> insert_spec(KB(), KC(), r)
+        KB() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+        KC() -> match k
+          KA() -> insert_spec(KB(), KA(), l)
+          KB() -> insert_spec(KB(), KB(), l)
+          KC() -> reflexive(member(KB(), l))
+      KC() -> match v
+        KA() -> match k
+          KA() -> reflexive(member(KC(), r))
+          KB() -> insert_spec(KC(), KB(), r)
+          KC() -> insert_spec(KC(), KC(), r)
+        KB() -> match k
+          KA() -> reflexive(member(KC(), r))
+          KB() -> reflexive(member(KC(), r))
+          KC() -> insert_spec(KC(), KC(), r)
+        KC() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
 end

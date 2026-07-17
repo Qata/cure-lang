@@ -127,4 +127,85 @@ mod Std.Otp.Bst
           KA() -> reflexive(T())
           KB() -> reflexive(T())
           KC() -> reflexive(T())
+
+  ## Key equality and boolean OR, to state the COMPLETE insert law.
+  fn keq(x: Key, k: Key) -> B = match x
+    KA() -> match k
+      KA() -> T()
+      KB() -> F()
+      KC() -> F()
+    KB() -> match k
+      KA() -> F()
+      KB() -> T()
+      KC() -> F()
+    KC() -> match k
+      KA() -> F()
+      KB() -> F()
+      KC() -> T()
+  fn orb(a: B, b: B) -> B = match a
+    F() -> b
+    T() -> T()
+
+  ## **INSERT ADDS EXACTLY THE KEY (complete characterization).** `member(x, insert(k, t)) =
+  ## keq(x, k) or member(x, t)` — after inserting `k`, `x` is a member iff `x` IS `k` or `x` was
+  ## already there. This single law subsumes `insert_member` (take `x = k`) and `insert_preserves`
+  ## (take `member(x, t) = T`), and also settles the remaining case (`x ≠ k`, `x ∉ t` ⟹ still
+  ## absent). `insert` keeps each root key, so `member` steers by the same `kcmp(x, v)` on both
+  ## sides; casing `x`/`v`/`k` reduces every comparison — a hit gives `T`, an off-side descent
+  ## leaves that subtree untouched (and `keq(x, k) = F`, so `orb` is the identity there), and a
+  ## same-side descent is the induction hypothesis.
+  fn insert_spec(x: Key, k: Key, t: Tree) -> Equivalent(B, member(x, insert(k, t)), orb(keq(x, k), member(x, t))) = match t
+    Leaf()        -> match x
+      KA() -> match k
+        KA() -> reflexive(T())
+        KB() -> reflexive(F())
+        KC() -> reflexive(F())
+      KB() -> match k
+        KA() -> reflexive(F())
+        KB() -> reflexive(T())
+        KC() -> reflexive(F())
+      KC() -> match k
+        KA() -> reflexive(F())
+        KB() -> reflexive(F())
+        KC() -> reflexive(T())
+    Node(l, v, r) -> match x
+      KA() -> match v
+        KA() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+        KB() -> match k
+          KA() -> insert_spec(KA(), KA(), l)
+          KB() -> reflexive(member(KA(), l))
+          KC() -> reflexive(member(KA(), l))
+        KC() -> match k
+          KA() -> insert_spec(KA(), KA(), l)
+          KB() -> insert_spec(KA(), KB(), l)
+          KC() -> reflexive(member(KA(), l))
+      KB() -> match v
+        KA() -> match k
+          KA() -> reflexive(member(KB(), r))
+          KB() -> insert_spec(KB(), KB(), r)
+          KC() -> insert_spec(KB(), KC(), r)
+        KB() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+        KC() -> match k
+          KA() -> insert_spec(KB(), KA(), l)
+          KB() -> insert_spec(KB(), KB(), l)
+          KC() -> reflexive(member(KB(), l))
+      KC() -> match v
+        KA() -> match k
+          KA() -> reflexive(member(KC(), r))
+          KB() -> insert_spec(KC(), KB(), r)
+          KC() -> insert_spec(KC(), KC(), r)
+        KB() -> match k
+          KA() -> reflexive(member(KC(), r))
+          KB() -> reflexive(member(KC(), r))
+          KC() -> insert_spec(KC(), KC(), r)
+        KC() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
 end

@@ -77,3 +77,56 @@ insert_preserves KC KC (Node l KB r) e = insert_preserves KC KC r e
 insert_preserves KC KA (Node l KC r) e = Refl
 insert_preserves KC KB (Node l KC r) e = Refl
 insert_preserves KC KC (Node l KC r) e = Refl
+
+keq : Key -> Key -> B
+keq KA KA = T
+keq KA KB = F
+keq KA KC = F
+keq KB KA = F
+keq KB KB = T
+keq KB KC = F
+keq KC KA = F
+keq KC KB = F
+keq KC KC = T
+
+orb : B -> B -> B
+orb F b = b
+orb T b = T
+
+insert_spec : (x : Key) -> (k : Key) -> (t : Tree) -> member x (insert k t) = orb (keq x k) (member x t)
+insert_spec KA KA Leaf = Refl
+insert_spec KA KB Leaf = Refl
+insert_spec KA KC Leaf = Refl
+insert_spec KB KA Leaf = Refl
+insert_spec KB KB Leaf = Refl
+insert_spec KB KC Leaf = Refl
+insert_spec KC KA Leaf = Refl
+insert_spec KC KB Leaf = Refl
+insert_spec KC KC Leaf = Refl
+insert_spec KA KA (Node l KA r) = Refl
+insert_spec KA KB (Node l KA r) = Refl
+insert_spec KA KC (Node l KA r) = Refl
+insert_spec KA KA (Node l KB r) = insert_spec KA KA l
+insert_spec KA KB (Node l KB r) = Refl
+insert_spec KA KC (Node l KB r) = Refl
+insert_spec KA KA (Node l KC r) = insert_spec KA KA l
+insert_spec KA KB (Node l KC r) = insert_spec KA KB l
+insert_spec KA KC (Node l KC r) = Refl
+insert_spec KB KA (Node l KA r) = Refl
+insert_spec KB KB (Node l KA r) = insert_spec KB KB r
+insert_spec KB KC (Node l KA r) = insert_spec KB KC r
+insert_spec KB KA (Node l KB r) = Refl
+insert_spec KB KB (Node l KB r) = Refl
+insert_spec KB KC (Node l KB r) = Refl
+insert_spec KB KA (Node l KC r) = insert_spec KB KA l
+insert_spec KB KB (Node l KC r) = insert_spec KB KB l
+insert_spec KB KC (Node l KC r) = Refl
+insert_spec KC KA (Node l KA r) = Refl
+insert_spec KC KB (Node l KA r) = insert_spec KC KB r
+insert_spec KC KC (Node l KA r) = insert_spec KC KC r
+insert_spec KC KA (Node l KB r) = Refl
+insert_spec KC KB (Node l KB r) = Refl
+insert_spec KC KC (Node l KB r) = insert_spec KC KC r
+insert_spec KC KA (Node l KC r) = Refl
+insert_spec KC KB (Node l KC r) = Refl
+insert_spec KC KC (Node l KC r) = Refl
