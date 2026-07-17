@@ -111,3 +111,44 @@ nullable_sound (PPlus a b) e = case orb_true (nullable a) (nullable b) e of
 nullable_sound (PTimes a b) e = case andb_true (nullable a) (nullable b) e of
   BAndBoth pa pb => ATimes (MkMS 0 0 0) (MkMS 0 0 0) (nullable_sound a pa) (nullable_sound b pb)
 nullable_sound (PStar a) e = AStar0
+
+singleton : Tag -> MS
+singleton TA = MkMS 1 0 0
+singleton TB = MkMS 0 1 0
+singleton TC = MkMS 0 0 1
+
+deriv : Pat -> Tag -> Pat
+deriv PZero t = PZero
+deriv POne t = PZero
+deriv (PAtom TA) TA = POne
+deriv (PAtom TA) TB = PZero
+deriv (PAtom TA) TC = PZero
+deriv (PAtom TB) TA = PZero
+deriv (PAtom TB) TB = POne
+deriv (PAtom TB) TC = PZero
+deriv (PAtom TC) TA = PZero
+deriv (PAtom TC) TB = PZero
+deriv (PAtom TC) TC = POne
+deriv (PPlus a b) t = PPlus (deriv a t) (deriv b t)
+deriv (PTimes a b) t = PPlus (PTimes (deriv a t) b) (PTimes a (deriv b t))
+deriv (PStar a) t = PTimes (deriv a t) (PStar a)
+
+ms_swap : (x : MS) -> (y : MS) -> (z : MS) -> msadd (msadd x y) z = msadd (msadd x z) y
+ms_swap x y z =
+  rewrite msadd_assoc x y z in
+  rewrite msadd_comm y z in
+  rewrite msadd_assoc x z y in Refl
+
+mutual
+  deriv_sound : (pat : Pat) -> (t : Tag) -> (m : MS) -> Accepts (deriv pat t) m -> Accepts pat (msadd m (singleton t))
+  deriv_sound (PPlus a b) t m (APlusL da) = APlusL (deriv_sound a t m da)
+  deriv_sound (PPlus a b) t m (APlusR db) = APlusR (deriv_sound b t m db)
+  deriv_sound (PTimes a b) t _ (APlusL (ATimes m1 m2 da ab)) =
+    rewrite ms_swap m1 m2 (singleton t) in ATimes (msadd m1 (singleton t)) m2 (deriv_sound a t m1 da) ab
+  deriv_sound (PTimes a b) t _ (APlusR (ATimes m1 m2 aa db)) =
+    rewrite msadd_assoc m1 m2 (singleton t) in ATimes m1 (msadd m2 (singleton t)) aa (deriv_sound b t m2 db)
+  deriv_sound (PStar a) t _ (ATimes m1 m2 da as) =
+    rewrite ms_swap m1 m2 (singleton t) in AStarN (msadd m1 (singleton t)) m2 (deriv_sound a t m1 da) as
+  deriv_sound (PAtom TA) TA _ AOne = AAtomA
+  deriv_sound (PAtom TB) TB _ AOne = AAtomB
+  deriv_sound (PAtom TC) TC _ AOne = AAtomC

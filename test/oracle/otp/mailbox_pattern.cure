@@ -100,4 +100,62 @@ mod MailboxPattern
     PTimes(a, b) -> match andb_true(nullable(a), nullable(b), e)
       BAndBoth(pa, pb) -> ATimes(MkMS(Z, Z, Z), MkMS(Z, Z, Z), nullable_sound(a, pa), nullable_sound(b, pb))
     PStar(a)     -> AStar0()
+
+  fn singleton(t: Tag) -> MS = match t
+    TA() -> MkMS(S(Z), Z, Z)
+    TB() -> MkMS(Z, S(Z), Z)
+    TC() -> MkMS(Z, Z, S(Z))
+  fn deriv(pat: Pat, t: Tag) -> Pat = match pat
+    PZero()      -> PZero
+    POne()       -> PZero
+    PAtom(s)     -> match s
+      TA() -> match t
+        TA() -> POne
+        TB() -> PZero
+        TC() -> PZero
+      TB() -> match t
+        TA() -> PZero
+        TB() -> POne
+        TC() -> PZero
+      TC() -> match t
+        TA() -> PZero
+        TB() -> PZero
+        TC() -> POne
+    PPlus(a, b)  -> PPlus(deriv(a, t), deriv(b, t))
+    PTimes(a, b) -> PPlus(PTimes(deriv(a, t), b), PTimes(a, deriv(b, t)))
+    PStar(a)     -> PTimes(deriv(a, t), PStar(a))
+  fn ms_swap(x: MS, y: MS, z: MS) -> Equivalent(MS, msadd(msadd(x, y), z), msadd(msadd(x, z), y)) =
+    rewrite msadd_assoc(x, y, z) in rewrite msadd_comm(y, z) in rewrite msadd_assoc(x, z, y) in reflexive(msadd(x, msadd(z, y)))
+  fn ds_plus(a: Pat, b: Pat, t: Tag, m: MS, acc: Accepts(deriv(PPlus(a, b), t), m)) -> Accepts(PPlus(a, b), msadd(m, singleton(t))) = match acc
+    APlusL(da) -> APlusL(deriv_sound(a, t, m, da))
+    APlusR(db) -> APlusR(deriv_sound(b, t, m, db))
+  fn ds_times(a: Pat, b: Pat, t: Tag, m: MS, acc: Accepts(deriv(PTimes(a, b), t), m)) -> Accepts(PTimes(a, b), msadd(m, singleton(t))) = match acc
+    APlusL(al) -> match al
+      ATimes(m1, m2, da, ab) -> rewrite ms_swap(m1, m2, singleton(t)) in ATimes(msadd(m1, singleton(t)), m2, deriv_sound(a, t, m1, da), ab)
+    APlusR(ar) -> match ar
+      ATimes(m1, m2, aa, db) -> rewrite msadd_assoc(m1, m2, singleton(t)) in ATimes(m1, msadd(m2, singleton(t)), aa, deriv_sound(b, t, m2, db))
+  fn ds_star(a: Pat, t: Tag, m: MS, acc: Accepts(deriv(PStar(a), t), m)) -> Accepts(PStar(a), msadd(m, singleton(t))) = match acc
+    ATimes(m1, m2, da, as) -> rewrite ms_swap(m1, m2, singleton(t)) in AStarN(msadd(m1, singleton(t)), m2, deriv_sound(a, t, m1, da), as)
+  fn deriv_sound(pat: Pat, t: Tag, m: MS, acc: Accepts(deriv(pat, t), m)) -> Accepts(pat, msadd(m, singleton(t))) = match pat
+    PZero()      -> match acc
+    POne()       -> match acc
+    PAtom(s)     -> match s
+      TA() -> match t
+        TA() -> match acc
+          AOne() -> AAtomA()
+        TB() -> match acc
+        TC() -> match acc
+      TB() -> match t
+        TA() -> match acc
+        TB() -> match acc
+          AOne() -> AAtomB()
+        TC() -> match acc
+      TC() -> match t
+        TA() -> match acc
+        TB() -> match acc
+        TC() -> match acc
+          AOne() -> AAtomC()
+    PPlus(a, b)  -> ds_plus(a, b, t, m, acc)
+    PTimes(a, b) -> ds_times(a, b, t, m, acc)
+    PStar(a)     -> ds_star(a, t, m, acc)
 end

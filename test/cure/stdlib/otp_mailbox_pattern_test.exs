@@ -58,4 +58,20 @@ defmodule Cure.Stdlib.OtpMailboxPatternTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "deriv_sound: if the derivative accepts the rest, the pattern accepts the whole bag" do
+    # The derivative of {TA}.{TB} by TA accepts the bag {TB}; soundness rebuilds acceptance of
+    # {TA,TB} by the original pattern (the peeled TA relocated back in).
+    src = """
+    mod DsInst
+      use Std.Otp.MailboxPattern
+      fn d_acc() -> Accepts(deriv(PTimes(PAtom(TA), PAtom(TB)), TA), MkMS(Z, S(Z), Z)) =
+        APlusL(ATimes(MkMS(Z, Z, Z), MkMS(Z, S(Z), Z), AOne(), AAtomB()))
+      fn full() -> Accepts(PTimes(PAtom(TA), PAtom(TB)), msadd(MkMS(Z, S(Z), Z), singleton(TA))) =
+        deriv_sound(PTimes(PAtom(TA), PAtom(TB)), TA, MkMS(Z, S(Z), Z), d_acc())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end
