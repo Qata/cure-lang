@@ -1,0 +1,37 @@
+mod RecursiveRun
+  type Tag = TA | TB | TC
+  type TagList = TNil | TCons(Tag, TagList)
+  type Handles indices (t: Tag, iface: TagList)
+    HHere  : Handles(t, TCons(t, rest))
+    HThere : Handles(t, rest) -> Handles(t, TCons(y, rest))
+  type AllHandled indices (s: TagList, iface: TagList)
+    AHNil  : AllHandled(TNil, iface)
+    AHCons : Handles(t, iface) -> AllHandled(rest, iface) -> AllHandled(TCons(t, rest), iface)
+
+  type Config = MkConfig(TagList, TagList)
+  type WTat indices (c: Config, iface: TagList)
+    MkWTat : AllHandled(e, iface) -> AllHandled(m, iface) -> WTat(MkConfig(e, m), iface)
+
+  type StepAt indices (i: TagList, before: Config, after: Config)
+    SSendAt   : Handles(t, i) -> StepAt(i, MkConfig(e, m), MkConfig(TCons(t, e), m))
+    SArriveAt : StepAt(i, MkConfig(TCons(t, e), m), MkConfig(e, TCons(t, m)))
+    SRecvAt   : StepAt(i, MkConfig(e, TCons(t, m)), MkConfig(e, m))
+
+  fn preservation_at({i: TagList}, {b: Config}, {a: Config}, wt: WTat(b, i), s: StepAt(i, b, a)) -> WTat(a, i) = match s
+    SSendAt(mem) -> match wt
+      MkWTat(ae, am) -> MkWTat(AHCons(mem, ae), am)
+    SArriveAt() -> match wt
+      MkWTat(ae, am) -> match ae
+        AHCons(at, ae2) -> MkWTat(ae2, AHCons(at, am))
+    SRecvAt() -> match wt
+      MkWTat(ae, am) -> match am
+        AHCons(rat, am2) -> MkWTat(ae, am2)
+
+  type RunsAt indices (i: TagList, c: Config)
+    RAStart : RunsAt(i, MkConfig(TNil, TNil))
+    RAStep  : RunsAt(i, before) -> StepAt(i, before, after) -> RunsAt(i, after)
+
+  fn adequacy_at({i: TagList}, {c: Config}, run: RunsAt(i, c)) -> WTat(c, i) = match run
+    RAStart()          -> MkWTat(AHNil(), AHNil())
+    RAStep(prev, step) -> preservation_at(adequacy_at(prev), step)
+end
