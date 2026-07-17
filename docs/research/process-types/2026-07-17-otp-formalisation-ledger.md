@@ -113,7 +113,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [ ] Arbitrary PATTERN-DIRECTED selective receive with protocol-level ordering of a WHOLE conversation (current slice = single-tag ordered scan)
 
 ### B5. Signals semantics depth (KWC parity and beyond)
-- [ ] Ordered OUTBOX-per-process with per-sender ordering (KWC's model; current = mailbox FIFO, not the outbox/signal-ordering model)
+- [x] PER-SENDER signal ordering (KWC's pairwise guarantee): a mailbox is an `Interleave` of per-sender streams; `proj_left`/`proj_right` prove projecting to a sender recovers exactly that sender's stream in order — each sender's signals stay FIFO regardless of the interleaving — **SHIPPED** `otp_signal_order.cure` (Idris `rel=same`). Refines the single global mailbox-FIFO model to Erlang's actual pairwise ordering.
 - [ ] link / monitor / exit modelled as SIGNALS with KWC ordering guarantees
 
 ### B6. Supervision depth
