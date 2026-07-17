@@ -127,4 +127,25 @@ mod Std.Otp.Session
     CRS(t, c2)   -> PStepRS()
     CSel(ca, cb) -> PStepSel()
     COff(ca, cb) -> PStepOff()
+
+  ## Prepend one communication step to a completing run. The explicit `tail` argument pins the
+  ## step's target continuations (`SRStep`'s intermediate indices), so the nullary step ctor is
+  ## checked against a fully concrete type — the construction pattern that sidesteps the
+  ## floating-target E6-residual.
+  fn run_sr(t: Tag, {lk: SType}, {rk: SType}, tail: SRun(lk, rk, SEnd, SEnd)) -> SRun(SSend(t, lk), SRecv(t, rk), SEnd, SEnd) = SRStep(StepSR(), tail)
+  fn run_rs(t: Tag, {lk: SType}, {rk: SType}, tail: SRun(lk, rk, SEnd, SEnd)) -> SRun(SRecv(t, lk), SSend(t, rk), SEnd, SEnd) = SRStep(StepRS(), tail)
+  fn run_sel({la: SType}, {lb: SType}, {ra: SType}, {rb: SType}, tail: SRun(la, ra, SEnd, SEnd)) -> SRun(SSelect(la, lb), SOffer(ra, rb), SEnd, SEnd) = SRStep(SelL(), tail)
+  fn run_off({la: SType}, {lb: SType}, {ra: SType}, {rb: SType}, tail: SRun(la, ra, SEnd, SEnd)) -> SRun(SOffer(la, lb), SSelect(ra, rb), SEnd, SEnd) = SRStep(OffL(), tail)
+
+  ## **SESSION NORMALISATION.** Every compatible (finite) session runs all the way to completion:
+  ## there is a full `SRun` from `(l, r)` to `(SEnd, SEnd)`. Structural induction on the
+  ## compatibility derivation builds the run one step at a time (choosing the left branch at each
+  ## choice); since `SType` is finite the run is finite. This packages progress + preservation +
+  ## termination: a well-typed session never deadlocks, never mistypes, and always terminates.
+  fn compat_terminates({l: SType}, {r: SType}, c: Compat(l, r)) -> SRun(l, r, SEnd, SEnd) = match c
+    CEnd()       -> SRDone()
+    CSR(t, c2)   -> run_sr(t, compat_terminates(c2))
+    CRS(t, c2)   -> run_rs(t, compat_terminates(c2))
+    CSel(ca, cb) -> run_sel(compat_terminates(ca))
+    COff(ca, cb) -> run_off(compat_terminates(ca))
 end

@@ -103,4 +103,20 @@ defmodule Cure.Stdlib.OtpSessionTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "compat_terminates: a compatible session normalises to a full run reaching (SEnd, SEnd)" do
+    # RA sends TA then receives TB then ends, against its dual. compat_terminates builds the
+    # complete two-step run to (SEnd, SEnd).
+    src = """
+    mod StInst
+      use Std.Otp.Session
+      fn c0() -> Compat(SSend(TA, SRecv(TB, SEnd())), SRecv(TA, SSend(TB, SEnd()))) =
+        CSR(TA, CRS(TB, CEnd()))
+      fn run() -> SRun(SSend(TA, SRecv(TB, SEnd())), SRecv(TA, SSend(TB, SEnd())), SEnd(), SEnd()) =
+        compat_terminates(c0())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

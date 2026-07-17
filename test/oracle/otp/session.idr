@@ -68,3 +68,22 @@ session_progress (CSR t c2) = PStepSR
 session_progress (CRS t c2) = PStepRS
 session_progress (CSel ca cb) = PStepSel
 session_progress (COff ca cb) = PStepOff
+
+run_sr : (t : Tag) -> SRun lk rk SEnd SEnd -> SRun (SSend t lk) (SRecv t rk) SEnd SEnd
+run_sr t x = SRStep StepSR x
+
+run_rs : (t : Tag) -> SRun lk rk SEnd SEnd -> SRun (SRecv t lk) (SSend t rk) SEnd SEnd
+run_rs t x = SRStep StepRS x
+
+run_sel : SRun la ra SEnd SEnd -> SRun (SSelect la lb) (SOffer ra rb) SEnd SEnd
+run_sel x = SRStep SelL x
+
+run_off : SRun la ra SEnd SEnd -> SRun (SOffer la lb) (SSelect ra rb) SEnd SEnd
+run_off x = SRStep OffL x
+
+compat_terminates : Compat l r -> SRun l r SEnd SEnd
+compat_terminates CEnd = SRDone
+compat_terminates (CSR t c2) = run_sr t (compat_terminates c2)
+compat_terminates (CRS t c2) = run_rs t (compat_terminates c2)
+compat_terminates (CSel ca cb) = run_sel (compat_terminates ca)
+compat_terminates (COff ca cb) = run_off (compat_terminates ca)

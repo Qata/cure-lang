@@ -71,4 +71,14 @@ mod Session
     CRS(t, c2)   -> PStepRS()
     CSel(ca, cb) -> PStepSel()
     COff(ca, cb) -> PStepOff()
+  fn run_sr(t: Tag, {lk: SType}, {rk: SType}, tail: SRun(lk, rk, SEnd, SEnd)) -> SRun(SSend(t, lk), SRecv(t, rk), SEnd, SEnd) = SRStep(StepSR(), tail)
+  fn run_rs(t: Tag, {lk: SType}, {rk: SType}, tail: SRun(lk, rk, SEnd, SEnd)) -> SRun(SRecv(t, lk), SSend(t, rk), SEnd, SEnd) = SRStep(StepRS(), tail)
+  fn run_sel({la: SType}, {lb: SType}, {ra: SType}, {rb: SType}, tail: SRun(la, ra, SEnd, SEnd)) -> SRun(SSelect(la, lb), SOffer(ra, rb), SEnd, SEnd) = SRStep(SelL(), tail)
+  fn run_off({la: SType}, {lb: SType}, {ra: SType}, {rb: SType}, tail: SRun(la, ra, SEnd, SEnd)) -> SRun(SOffer(la, lb), SSelect(ra, rb), SEnd, SEnd) = SRStep(OffL(), tail)
+  fn compat_terminates({l: SType}, {r: SType}, c: Compat(l, r)) -> SRun(l, r, SEnd, SEnd) = match c
+    CEnd()       -> SRDone()
+    CSR(t, c2)   -> run_sr(t, compat_terminates(c2))
+    CRS(t, c2)   -> run_rs(t, compat_terminates(c2))
+    CSel(ca, cb) -> run_sel(compat_terminates(ca))
+    COff(ca, cb) -> run_off(compat_terminates(ca))
 end
