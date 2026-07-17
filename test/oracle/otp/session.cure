@@ -1,36 +1,58 @@
 mod Session
   type Tag = TA | TB | TC
-  type SType = SEnd | SSend(Tag, SType) | SRecv(Tag, SType)
+  type SType = SEnd | SSend(Tag, SType) | SRecv(Tag, SType) | SSelect(SType, SType) | SOffer(SType, SType)
   fn dual(s: SType) -> SType = match s
-    SEnd()      -> SEnd()
-    SSend(t, k) -> SRecv(t, dual(k))
-    SRecv(t, k) -> SSend(t, dual(k))
+    SEnd()         -> SEnd()
+    SSend(t, k)    -> SRecv(t, dual(k))
+    SRecv(t, k)    -> SSend(t, dual(k))
+    SSelect(a, b)  -> SOffer(dual(a), dual(b))
+    SOffer(a, b)   -> SSelect(dual(a), dual(b))
   fn dual_involution(s: SType) -> Equivalent(SType, dual(dual(s)), s) = match s
-    SEnd()      -> reflexive(SEnd())
-    SSend(t, k) -> rewrite dual_involution(k) in reflexive(SSend(t, k))
-    SRecv(t, k) -> rewrite dual_involution(k) in reflexive(SRecv(t, k))
+    SEnd()        -> reflexive(SEnd())
+    SSend(t, k)   -> rewrite dual_involution(k) in reflexive(SSend(t, k))
+    SRecv(t, k)   -> rewrite dual_involution(k) in reflexive(SRecv(t, k))
+    SSelect(a, b) -> rewrite dual_involution(a) in rewrite dual_involution(b) in reflexive(SSelect(a, b))
+    SOffer(a, b)  -> rewrite dual_involution(a) in rewrite dual_involution(b) in reflexive(SOffer(a, b))
   type Compat indices (l: SType, r: SType)
     CEnd : Compat(SEnd, SEnd)
     CSR  : (t: Tag) -> Compat(l, r) -> Compat(SSend(t, l), SRecv(t, r))
     CRS  : (t: Tag) -> Compat(l, r) -> Compat(SRecv(t, l), SSend(t, r))
+    CSel : Compat(la, ra) -> Compat(lb, rb) -> Compat(SSelect(la, lb), SOffer(ra, rb))
+    COff : Compat(la, ra) -> Compat(lb, rb) -> Compat(SOffer(la, lb), SSelect(ra, rb))
   fn ssend_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SSend(t, a), SSend(t, b)) =
     rewrite e in reflexive(SSend(t, b))
   fn srecv_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SRecv(t, a), SRecv(t, b)) =
     rewrite e in reflexive(SRecv(t, b))
+  fn sselect_cong({a1: SType}, {b1: SType}, {a2: SType}, {b2: SType}, ea: Equivalent(SType, a1, b1), eb: Equivalent(SType, a2, b2)) -> Equivalent(SType, SSelect(a1, a2), SSelect(b1, b2)) =
+    rewrite ea in rewrite eb in reflexive(SSelect(b1, b2))
+  fn soffer_cong({a1: SType}, {b1: SType}, {a2: SType}, {b2: SType}, ea: Equivalent(SType, a1, b1), eb: Equivalent(SType, a2, b2)) -> Equivalent(SType, SOffer(a1, a2), SOffer(b1, b2)) =
+    rewrite ea in rewrite eb in reflexive(SOffer(b1, b2))
   fn compat_dual({l: SType}, {r: SType}, c: Compat(l, r)) -> Equivalent(SType, l, dual(r)) = match c
-    CEnd()     -> reflexive(SEnd())
-    CSR(t, c2) -> ssend_cong(t, compat_dual(c2))
-    CRS(t, c2) -> srecv_cong(t, compat_dual(c2))
-
+    CEnd()      -> reflexive(SEnd())
+    CSR(t, c2)  -> ssend_cong(t, compat_dual(c2))
+    CRS(t, c2)  -> srecv_cong(t, compat_dual(c2))
+    CSel(ca, cb) -> sselect_cong(compat_dual(ca), compat_dual(cb))
+    COff(ca, cb) -> soffer_cong(compat_dual(ca), compat_dual(cb))
   type SStep indices (l: SType, r: SType, l2: SType, r2: SType)
     StepSR : SStep(SSend(t, lk), SRecv(t, rk), lk, rk)
     StepRS : SStep(SRecv(t, lk), SSend(t, rk), lk, rk)
+    SelL   : SStep(SSelect(la, lb), SOffer(ra, rb), la, ra)
+    SelR   : SStep(SSelect(la, lb), SOffer(ra, rb), lb, rb)
+    OffL   : SStep(SOffer(la, lb), SSelect(ra, rb), la, ra)
+    OffR   : SStep(SOffer(la, lb), SSelect(ra, rb), lb, rb)
   fn session_preservation({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, c: Compat(l, r), st: SStep(l, r, l2, r2)) -> Compat(l2, r2) = match st
     StepSR() -> match c
       CSR(t, c2) -> c2
     StepRS() -> match c
       CRS(t, c2) -> c2
-
+    SelL() -> match c
+      CSel(ca, cb) -> ca
+    SelR() -> match c
+      CSel(ca, cb) -> cb
+    OffL() -> match c
+      COff(ca, cb) -> ca
+    OffR() -> match c
+      COff(ca, cb) -> cb
   type SRun indices (l: SType, r: SType, l2: SType, r2: SType)
     SRDone : SRun(l, r, l, r)
     SRStep : SStep(l, r, lm, rm) -> SRun(lm, rm, l2, r2) -> SRun(l, r, l2, r2)

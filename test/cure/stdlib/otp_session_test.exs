@@ -62,4 +62,20 @@ defmodule Cure.Stdlib.OtpSessionTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "branching sessions: selecting a branch preserves compatibility" do
+    # An internal choice between (send TA) and (send TB) is compatible with an external choice
+    # offering (recv TA) / (recv TB). Selecting the left branch keeps the endpoints compatible.
+    src = """
+    mod ScInst
+      use Std.Otp.Session
+      fn c0() -> Compat(SSelect(SSend(TA, SEnd()), SSend(TB, SEnd())), SOffer(SRecv(TA, SEnd()), SRecv(TB, SEnd()))) =
+        CSel(CSR(TA, CEnd()), CSR(TB, CEnd()))
+      fn sel() -> SStep(SSelect(SSend(TA, SEnd()), SSend(TB, SEnd())), SOffer(SRecv(TA, SEnd()), SRecv(TB, SEnd())), SSend(TA, SEnd()), SRecv(TA, SEnd())) = SelL()
+      fn after() -> Compat(SSend(TA, SEnd()), SRecv(TA, SEnd())) = session_preservation(c0(), sel())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

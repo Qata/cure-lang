@@ -13,22 +13,29 @@ mod Std.Otp.Session
   ## (`Compat(l, r) ⟹ l = dual(r)`). So "the endpoints can safely communicate" is precisely
   ## "the endpoints are dual", the invariant a mailbox encoding must preserve.
 
+  ## Session types with BRANCHING: `SSelect(a, b)` is internal choice (⊕ — this endpoint picks a
+  ## branch), `SOffer(a, b)` is external choice (& — this endpoint offers both). A binary
+  ## select/offer suffices to show the structure.
   type Tag = TA | TB | TC
-  type SType = SEnd | SSend(Tag, SType) | SRecv(Tag, SType)
+  type SType = SEnd | SSend(Tag, SType) | SRecv(Tag, SType) | SSelect(SType, SType) | SOffer(SType, SType)
 
-  ## The dual of a session type: swap sends and receives.
+  ## The dual of a session type: swap sends/receives and internal/external choice.
   fn dual(s: SType) -> SType = match s
-    SEnd()      -> SEnd()
-    SSend(t, k) -> SRecv(t, dual(k))
-    SRecv(t, k) -> SSend(t, dual(k))
+    SEnd()         -> SEnd()
+    SSend(t, k)    -> SRecv(t, dual(k))
+    SRecv(t, k)    -> SSend(t, dual(k))
+    SSelect(a, b)  -> SOffer(dual(a), dual(b))
+    SOffer(a, b)   -> SSelect(dual(a), dual(b))
 
   ## **DUALITY IS AN INVOLUTION.** Dualizing twice returns the original type — so an endpoint's
   ## type and its peer's determine each other. (Send/receive are constructor FIELDS here, bound
   ## by name on the match, so no index-existential workaround is needed.)
   fn dual_involution(s: SType) -> Equivalent(SType, dual(dual(s)), s) = match s
-    SEnd()      -> reflexive(SEnd())
-    SSend(t, k) -> rewrite dual_involution(k) in reflexive(SSend(t, k))
-    SRecv(t, k) -> rewrite dual_involution(k) in reflexive(SRecv(t, k))
+    SEnd()        -> reflexive(SEnd())
+    SSend(t, k)   -> rewrite dual_involution(k) in reflexive(SSend(t, k))
+    SRecv(t, k)   -> rewrite dual_involution(k) in reflexive(SRecv(t, k))
+    SSelect(a, b) -> rewrite dual_involution(a) in rewrite dual_involution(b) in reflexive(SSelect(a, b))
+    SOffer(a, b)  -> rewrite dual_involution(a) in rewrite dual_involution(b) in reflexive(SOffer(a, b))
 
   ## Structural COMPATIBILITY: two endpoints can safely communicate — a send on one side is a
   ## receive on the other, recursively. The tag is carried explicitly so the proof can name it.
@@ -36,35 +43,56 @@ mod Std.Otp.Session
     CEnd : Compat(SEnd, SEnd)
     CSR  : (t: Tag) -> Compat(l, r) -> Compat(SSend(t, l), SRecv(t, r))
     CRS  : (t: Tag) -> Compat(l, r) -> Compat(SRecv(t, l), SSend(t, r))
+    CSel : Compat(la, ra) -> Compat(lb, rb) -> Compat(SSelect(la, lb), SOffer(ra, rb))
+    COff : Compat(la, ra) -> Compat(lb, rb) -> Compat(SOffer(la, lb), SSelect(ra, rb))
 
   ## Congruences for the session constructors under equality.
   fn ssend_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SSend(t, a), SSend(t, b)) =
     rewrite e in reflexive(SSend(t, b))
   fn srecv_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SRecv(t, a), SRecv(t, b)) =
     rewrite e in reflexive(SRecv(t, b))
+  fn sselect_cong({a1: SType}, {b1: SType}, {a2: SType}, {b2: SType}, ea: Equivalent(SType, a1, b1), eb: Equivalent(SType, a2, b2)) -> Equivalent(SType, SSelect(a1, a2), SSelect(b1, b2)) =
+    rewrite ea in rewrite eb in reflexive(SSelect(b1, b2))
+  fn soffer_cong({a1: SType}, {b1: SType}, {a2: SType}, {b2: SType}, ea: Equivalent(SType, a1, b1), eb: Equivalent(SType, a2, b2)) -> Equivalent(SType, SOffer(a1, a2), SOffer(b1, b2)) =
+    rewrite ea in rewrite eb in reflexive(SOffer(b1, b2))
 
   ## **COMPATIBILITY = DUALITY.** Compatible endpoints are exactly dual endpoints — communication
   ## safety is duality. Induction on the compatibility derivation.
   fn compat_dual({l: SType}, {r: SType}, c: Compat(l, r)) -> Equivalent(SType, l, dual(r)) = match c
-    CEnd()     -> reflexive(SEnd())
-    CSR(t, c2) -> ssend_cong(t, compat_dual(c2))
-    CRS(t, c2) -> srecv_cong(t, compat_dual(c2))
+    CEnd()      -> reflexive(SEnd())
+    CSR(t, c2)  -> ssend_cong(t, compat_dual(c2))
+    CRS(t, c2)  -> srecv_cong(t, compat_dual(c2))
+    CSel(ca, cb) -> sselect_cong(compat_dual(ca), compat_dual(cb))
+    COff(ca, cb) -> soffer_cong(compat_dual(ca), compat_dual(cb))
 
   ## A communication STEP: one endpoint sends tag `t`, the other receives it, and both advance
   ## to their continuations. Well-formed only when the send/receive tags agree.
+  ## A communication step also covers CHOICE: selecting a branch (`SelL`/`SelR`) commits both
+  ## endpoints to the chosen branch's continuations; `OffL`/`OffR` are the mirror (peer selects).
   type SStep indices (l: SType, r: SType, l2: SType, r2: SType)
     StepSR : SStep(SSend(t, lk), SRecv(t, rk), lk, rk)
     StepRS : SStep(SRecv(t, lk), SSend(t, rk), lk, rk)
+    SelL   : SStep(SSelect(la, lb), SOffer(ra, rb), la, ra)
+    SelR   : SStep(SSelect(la, lb), SOffer(ra, rb), lb, rb)
+    OffL   : SStep(SOffer(la, lb), SSelect(ra, rb), la, ra)
+    OffR   : SStep(SOffer(la, lb), SSelect(ra, rb), lb, rb)
 
-  ## **SESSION PRESERVATION (subject reduction).** A communication step between COMPATIBLE
-  ## endpoints yields compatible endpoints — a safe session stays safe as it runs. The step
-  ## refines the endpoints so the compatibility witness exposes exactly the continuation
-  ## compatibility.
+  ## **SESSION PRESERVATION (subject reduction).** A communication step — send/receive OR a
+  ## branch selection — between COMPATIBLE endpoints yields compatible endpoints. For a choice
+  ## step, the chosen branch's continuations were themselves compatible in the witness.
   fn session_preservation({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, c: Compat(l, r), st: SStep(l, r, l2, r2)) -> Compat(l2, r2) = match st
     StepSR() -> match c
       CSR(t, c2) -> c2
     StepRS() -> match c
       CRS(t, c2) -> c2
+    SelL() -> match c
+      CSel(ca, cb) -> ca
+    SelR() -> match c
+      CSel(ca, cb) -> cb
+    OffL() -> match c
+      COff(ca, cb) -> ca
+    OffR() -> match c
+      COff(ca, cb) -> cb
 
   ## A whole session RUN: the reflexive-transitive closure of communication steps.
   type SRun indices (l: SType, r: SType, l2: SType, r2: SType)
