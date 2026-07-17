@@ -167,4 +167,14 @@ mod MailboxPattern
       AOne() -> AStar0()
     APlusR(at) -> match at
       ATimes(m1, m2, ae, as) -> AStarN(m1, m2, ae, as)
+
+  fn dist_fwd({a: Pat}, {b: Pat}, {c: Pat}, {m: MS}, acc: Accepts(PTimes(a, PPlus(b, c)), m)) -> Accepts(PPlus(PTimes(a, b), PTimes(a, c)), m) = match acc
+    ATimes(m1, m2, aa, abc) -> match abc
+      APlusL(ab) -> APlusL(ATimes(m1, m2, aa, ab))
+      APlusR(ac) -> APlusR(ATimes(m1, m2, aa, ac))
+  fn dist_bwd({a: Pat}, {b: Pat}, {c: Pat}, {m: MS}, acc: Accepts(PPlus(PTimes(a, b), PTimes(a, c)), m)) -> Accepts(PTimes(a, PPlus(b, c)), m) = match acc
+    APlusL(al) -> match al
+      ATimes(m1, m2, aa, ab) -> ATimes(m1, m2, aa, APlusL(ab))
+    APlusR(ar) -> match ar
+      ATimes(m1, m2, aa, ac) -> ATimes(m1, m2, aa, APlusR(ac))
 end

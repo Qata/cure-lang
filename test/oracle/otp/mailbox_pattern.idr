@@ -160,3 +160,11 @@ star_unfold (AStarN m1 m2 ae as) = APlusR (ATimes m1 m2 ae as)
 star_fold : Accepts (PPlus POne (PTimes a (PStar a))) m -> Accepts (PStar a) m
 star_fold (APlusL AOne) = AStar0
 star_fold (APlusR (ATimes m1 m2 ae as)) = AStarN m1 m2 ae as
+
+dist_fwd : Accepts (PTimes a (PPlus b c)) m -> Accepts (PPlus (PTimes a b) (PTimes a c)) m
+dist_fwd (ATimes m1 m2 aa (APlusL ab)) = APlusL (ATimes m1 m2 aa ab)
+dist_fwd (ATimes m1 m2 aa (APlusR ac)) = APlusR (ATimes m1 m2 aa ac)
+
+dist_bwd : Accepts (PPlus (PTimes a b) (PTimes a c)) m -> Accepts (PTimes a (PPlus b c)) m
+dist_bwd (APlusL (ATimes m1 m2 aa ab)) = ATimes m1 m2 aa (APlusL ab)
+dist_bwd (APlusR (ATimes m1 m2 aa ac)) = ATimes m1 m2 aa (APlusR ac)

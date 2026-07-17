@@ -90,4 +90,19 @@ defmodule Cure.Stdlib.OtpMailboxPatternTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "dist_fwd: E.(F+G) distributes to (E.F)+(E.G)" do
+    src = """
+    mod DistInst
+      use Std.Otp.MailboxPattern
+      fn bc() -> Accepts(PPlus(PAtom(TB), PAtom(TC)), MkMS(Z, S(Z), Z)) = APlusL(AAtomB())
+      fn src_acc() -> Accepts(PTimes(PAtom(TA), PPlus(PAtom(TB), PAtom(TC))), MkMS(S(Z), S(Z), Z)) =
+        ATimes(MkMS(S(Z), Z, Z), MkMS(Z, S(Z), Z), AAtomA(), bc())
+      fn dist() -> Accepts(PPlus(PTimes(PAtom(TA), PAtom(TB)), PTimes(PAtom(TA), PAtom(TC))), MkMS(S(Z), S(Z), Z)) =
+        dist_fwd(src_acc())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end
