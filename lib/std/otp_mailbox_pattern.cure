@@ -34,6 +34,9 @@ mod Std.Otp.MailboxPattern
   fn plus_comm(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, n), plus(n, m)) = match m
     Z()  -> rewrite plus_n_z(n) in reflexive(n)
     S(k) -> rewrite plus_n_s(n, k) in rewrite plus_comm(k, n) in reflexive(S(plus(n, k)))
+  fn plus_assoc(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, plus(plus(a, b), c), plus(a, plus(b, c))) = match a
+    Z()  -> reflexive(plus(b, c))
+    S(k) -> rewrite plus_assoc(k, b, c) in reflexive(S(plus(k, plus(b, c))))
 
   ## A multiset over the 3-tag alphabet = a Parikh vector (counts per tag).
   type MS = MkMS(Nat, Nat, Nat)
@@ -43,6 +46,12 @@ mod Std.Otp.MailboxPattern
   fn msadd_comm(x: MS, y: MS) -> Equivalent(MS, msadd(x, y), msadd(y, x)) = match x
     MkMS(a, b, c) -> match y
       MkMS(d, e, f) -> rewrite plus_comm(d, a) in rewrite plus_comm(e, b) in rewrite plus_comm(f, c) in reflexive(MkMS(plus(a, d), plus(b, e), plus(c, f)))
+  fn msadd_assoc(x: MS, y: MS, z: MS) -> Equivalent(MS, msadd(msadd(x, y), z), msadd(x, msadd(y, z))) = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, e, f) -> match z
+        MkMS(g, h, i) -> rewrite plus_assoc(a, d, g) in rewrite plus_assoc(b, e, h) in rewrite plus_assoc(c, f, i) in reflexive(MkMS(plus(a, plus(d, g)), plus(b, plus(e, h)), plus(c, plus(f, i))))
+  fn msadd_zero_left(y: MS) -> Equivalent(MS, msadd(MkMS(Z, Z, Z), y), y) = match y
+    MkMS(d, e, f) -> reflexive(MkMS(d, e, f))
 
   ## Commutative-regex patterns over the alphabet.
   type Pat = PZero | POne | PAtom(Tag) | PPlus(Pat, Pat) | PTimes(Pat, Pat) | PStar(Pat)
@@ -72,4 +81,17 @@ mod Std.Otp.MailboxPattern
   ## what a mailbox (an unordered bag of messages) needs and a sequential regex does not have.
   fn times_comm({e: Pat}, {f: Pat}, {m: MS}, acc: Accepts(PTimes(e, f), m)) -> Accepts(PTimes(f, e), m) = match acc
     ATimes(m1, m2, ae, af) -> rewrite msadd_comm(m1, m2) in ATimes(m2, m1, af, ae)
+
+  ## **CONCATENATION ASSOCIATIVITY.** `(E·F)·G` and `E·(F·G)` denote the same multisets —
+  ## reassociate the two `ATimes` splits and rewrite by `msadd_assoc`. With `times_comm` and
+  ## `one_times` this makes `(Pat, PTimes, POne)` a COMMUTATIVE MONOID up to acceptance.
+  fn times_assoc({e: Pat}, {f: Pat}, {g: Pat}, {m: MS}, acc: Accepts(PTimes(PTimes(e, f), g), m)) -> Accepts(PTimes(e, PTimes(f, g)), m) = match acc
+    ATimes(mef, mg, acc_ef, acc_g) -> match acc_ef
+      ATimes(me, mf, acc_e, acc_f) -> rewrite msadd_assoc(me, mf, mg) in ATimes(me, msadd(mf, mg), acc_e, ATimes(mf, mg, acc_f, acc_g))
+
+  ## **UNIT.** `𝟙·E` denotes the same multisets as `E` (the empty bag is the identity of the
+  ## Minkowski sum — definitionally, since `0 + n = n`).
+  fn one_times({e: Pat}, {m: MS}, acc: Accepts(PTimes(POne, e), m)) -> Accepts(e, m) = match acc
+    ATimes(m1, m2, a1, ae) -> match a1
+      AOne() -> rewrite msadd_zero_left(m2) in ae
 end

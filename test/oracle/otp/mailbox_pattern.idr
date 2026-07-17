@@ -14,6 +14,10 @@ plus_comm : (m : Nat) -> (n : Nat) -> m + n = n + m
 plus_comm 0 n = rewrite plus_n_z n in Refl
 plus_comm (S k) n = rewrite plus_n_s n k in rewrite plus_comm k n in Refl
 
+plus_assoc : (a : Nat) -> (b : Nat) -> (c : Nat) -> (a + b) + c = a + (b + c)
+plus_assoc 0 b c = Refl
+plus_assoc (S k) b c = rewrite plus_assoc k b c in Refl
+
 data MS = MkMS Nat Nat Nat
 
 msadd : MS -> MS -> MS
@@ -24,6 +28,13 @@ msadd_comm (MkMS a b c) (MkMS d e f) =
   rewrite plus_comm a d in
   rewrite plus_comm b e in
   rewrite plus_comm c f in Refl
+
+msadd_assoc : (x : MS) -> (y : MS) -> (z : MS) -> msadd (msadd x y) z = msadd x (msadd y z)
+msadd_assoc (MkMS a b c) (MkMS d e f) (MkMS g h i) =
+  rewrite plus_assoc a d g in rewrite plus_assoc b e h in rewrite plus_assoc c f i in Refl
+
+msadd_zero_left : (y : MS) -> msadd (MkMS 0 0 0) y = y
+msadd_zero_left (MkMS d e f) = Refl
 
 data Pat = PZero | POne | PAtom Tag | PPlus Pat Pat | PTimes Pat Pat | PStar Pat
 
@@ -44,3 +55,10 @@ plus_pat_comm (APlusR af) = APlusL af
 
 times_comm : Accepts (PTimes e f) m -> Accepts (PTimes f e) m
 times_comm (ATimes m1 m2 ae af) = rewrite msadd_comm m1 m2 in ATimes m2 m1 af ae
+
+times_assoc : Accepts (PTimes (PTimes e f) g) m -> Accepts (PTimes e (PTimes f g)) m
+times_assoc (ATimes _ mg (ATimes me mf acc_e acc_f) acc_g) =
+  rewrite msadd_assoc me mf mg in ATimes me (msadd mf mg) acc_e (ATimes mf mg acc_f acc_g)
+
+one_times : Accepts (PTimes POne e) m -> Accepts e m
+one_times (ATimes _ m2 AOne ae) = rewrite msadd_zero_left m2 in ae

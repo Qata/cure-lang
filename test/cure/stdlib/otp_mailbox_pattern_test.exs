@@ -29,4 +29,19 @@ defmodule Cure.Stdlib.OtpMailboxPatternTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "one_times: the empty pattern is the unit of concatenation" do
+    # 1 . {TA} accepts the bag {TA}, and one_times strips the unit to give {TA} directly.
+    src = """
+    mod MpUnit
+      use Std.Otp.MailboxPattern
+      fn one_ta() -> Accepts(PTimes(POne, PAtom(TA)), MkMS(S(Z), Z, Z)) =
+        ATimes(MkMS(Z, Z, Z), MkMS(S(Z), Z, Z), AOne(), AAtomA())
+      fn ta_from_one() -> Accepts(PAtom(TA), MkMS(S(Z), Z, Z)) =
+        one_times(one_ta())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end
