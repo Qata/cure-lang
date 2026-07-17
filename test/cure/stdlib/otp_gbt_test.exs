@@ -23,6 +23,8 @@ defmodule Cure.Stdlib.OtpGbtTest do
         lookup_insert_neq(x, k, val, t, neq)
       fn inst() -> Equivalent(GOpt, lookup(GB(), insert(GB(), S(S(Z())), GNode(GLeaf(), GA(), Z(), GLeaf()))), GSome(S(S(Z())))) =
         lookup_insert_eq(GB(), S(S(Z())), GNode(GLeaf(), GA(), Z(), GLeaf()))
+      fn spec(x: GKey, k: GKey, val: Nat, t: GTree) -> Equivalent(GOpt, lookup(x, insert(k, val, t)), gsel(gkeq(x, k), GSome(val), lookup(x, t))) =
+        lookup_spec(x, k, val, t)
     end
     """
 

@@ -148,4 +148,73 @@ mod Std.Otp.Gbt
           GA() -> reflexive(GSome(w))
           GB() -> reflexive(GSome(w))
           GC() -> match neq
+
+  ## Three-way selector: `gsel(BT, a, b) = a`, `gsel(BF, a, b) = b` — the boolean conditional used
+  ## to state the complete lookup law without a side condition.
+  fn gsel(b: GBit, x: GOpt, y: GOpt) -> GOpt = match b
+    BT() -> x
+    BF() -> y
+
+  ## **COMPLETE LOOKUP-AFTER-ENTER LAW (capstone).** `lookup(x, insert(k, val, t)) =
+  ## if x = k then Some(val) else lookup(x, t)`. A single conditional statement that SUBSUMES both
+  ## `lookup_insert_eq` (take `x = k`, so the guard is `BT`) and `lookup_insert_neq` (take `x ≠ k`,
+  ## guard `BF`) — and needs NO premise, because the same-key case now returns `Some(val)` instead of
+  ## being refuted. Same 27-way `x`/`v`/`k` casing: at `x = v` the read hits the root (`Some(val)` if
+  ## `k` also hit, else the untouched `Some(w)`); an off-side descent leaves that subtree and the
+  ## guard is `BF` so `gsel` picks the plain lookup (reflexive); a same-side descent is the induction
+  ## hypothesis, whose `gsel` the kernel matches up to definitional equality.
+  fn lookup_spec(x: GKey, k: GKey, val: Nat, t: GTree) -> Equivalent(GOpt, lookup(x, insert(k, val, t)), gsel(gkeq(x, k), GSome(val), lookup(x, t))) = match t
+    GLeaf()            -> match x
+      GA() -> match k
+        GA() -> reflexive(GSome(val))
+        GB() -> reflexive(GNone())
+        GC() -> reflexive(GNone())
+      GB() -> match k
+        GA() -> reflexive(GNone())
+        GB() -> reflexive(GSome(val))
+        GC() -> reflexive(GNone())
+      GC() -> match k
+        GA() -> reflexive(GNone())
+        GB() -> reflexive(GNone())
+        GC() -> reflexive(GSome(val))
+    GNode(l, v, w, r)  -> match x
+      GA() -> match v
+        GA() -> match k
+          GA() -> reflexive(GSome(val))
+          GB() -> reflexive(GSome(w))
+          GC() -> reflexive(GSome(w))
+        GB() -> match k
+          GA() -> lookup_spec(GA(), GA(), val, l)
+          GB() -> reflexive(lookup(GA(), l))
+          GC() -> reflexive(lookup(GA(), l))
+        GC() -> match k
+          GA() -> lookup_spec(GA(), GA(), val, l)
+          GB() -> lookup_spec(GA(), GB(), val, l)
+          GC() -> reflexive(lookup(GA(), l))
+      GB() -> match v
+        GA() -> match k
+          GA() -> reflexive(lookup(GB(), r))
+          GB() -> lookup_spec(GB(), GB(), val, r)
+          GC() -> lookup_spec(GB(), GC(), val, r)
+        GB() -> match k
+          GA() -> reflexive(GSome(w))
+          GB() -> reflexive(GSome(val))
+          GC() -> reflexive(GSome(w))
+        GC() -> match k
+          GA() -> lookup_spec(GB(), GA(), val, l)
+          GB() -> lookup_spec(GB(), GB(), val, l)
+          GC() -> reflexive(lookup(GB(), l))
+      GC() -> match v
+        GA() -> match k
+          GA() -> reflexive(lookup(GC(), r))
+          GB() -> lookup_spec(GC(), GB(), val, r)
+          GC() -> lookup_spec(GC(), GC(), val, r)
+        GB() -> match k
+          GA() -> reflexive(lookup(GC(), r))
+          GB() -> reflexive(lookup(GC(), r))
+          GC() -> lookup_spec(GC(), GC(), val, r)
+        GC() -> match k
+          GA() -> reflexive(GSome(w))
+          GB() -> reflexive(GSome(w))
+          GC() -> reflexive(GSome(val))
 end

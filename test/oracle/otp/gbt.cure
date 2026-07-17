@@ -115,4 +115,61 @@ mod Gbt
           GA() -> reflexive(GSome(w))
           GB() -> reflexive(GSome(w))
           GC() -> match neq
+  fn gsel(b: GBit, x: GOpt, y: GOpt) -> GOpt = match b
+    BT() -> x
+    BF() -> y
+  fn lookup_spec(x: GKey, k: GKey, val: Nat, t: GTree) -> Equivalent(GOpt, lookup(x, insert(k, val, t)), gsel(gkeq(x, k), GSome(val), lookup(x, t))) = match t
+    GLeaf()            -> match x
+      GA() -> match k
+        GA() -> reflexive(GSome(val))
+        GB() -> reflexive(GNone())
+        GC() -> reflexive(GNone())
+      GB() -> match k
+        GA() -> reflexive(GNone())
+        GB() -> reflexive(GSome(val))
+        GC() -> reflexive(GNone())
+      GC() -> match k
+        GA() -> reflexive(GNone())
+        GB() -> reflexive(GNone())
+        GC() -> reflexive(GSome(val))
+    GNode(l, v, w, r)  -> match x
+      GA() -> match v
+        GA() -> match k
+          GA() -> reflexive(GSome(val))
+          GB() -> reflexive(GSome(w))
+          GC() -> reflexive(GSome(w))
+        GB() -> match k
+          GA() -> lookup_spec(GA(), GA(), val, l)
+          GB() -> reflexive(lookup(GA(), l))
+          GC() -> reflexive(lookup(GA(), l))
+        GC() -> match k
+          GA() -> lookup_spec(GA(), GA(), val, l)
+          GB() -> lookup_spec(GA(), GB(), val, l)
+          GC() -> reflexive(lookup(GA(), l))
+      GB() -> match v
+        GA() -> match k
+          GA() -> reflexive(lookup(GB(), r))
+          GB() -> lookup_spec(GB(), GB(), val, r)
+          GC() -> lookup_spec(GB(), GC(), val, r)
+        GB() -> match k
+          GA() -> reflexive(GSome(w))
+          GB() -> reflexive(GSome(val))
+          GC() -> reflexive(GSome(w))
+        GC() -> match k
+          GA() -> lookup_spec(GB(), GA(), val, l)
+          GB() -> lookup_spec(GB(), GB(), val, l)
+          GC() -> reflexive(lookup(GB(), l))
+      GC() -> match v
+        GA() -> match k
+          GA() -> reflexive(lookup(GC(), r))
+          GB() -> lookup_spec(GC(), GB(), val, r)
+          GC() -> lookup_spec(GC(), GC(), val, r)
+        GB() -> match k
+          GA() -> reflexive(lookup(GC(), r))
+          GB() -> reflexive(lookup(GC(), r))
+          GC() -> lookup_spec(GC(), GC(), val, r)
+        GC() -> match k
+          GA() -> reflexive(GSome(w))
+          GB() -> reflexive(GSome(w))
+          GC() -> reflexive(GSome(val))
 end
