@@ -39,4 +39,20 @@ defmodule Cure.Stdlib.OtpSessionMailboxTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "fork/join: fidelity holds for a parallel composition (mailbox = multiset sum)" do
+    # An endpoint forks two sub-sessions (recv TA in parallel with recv TB). Its dual sends TA
+    # in parallel with sends TB; recvs_dual certifies the parallel mailbox equals the dual's
+    # parallel sends, componentwise.
+    src = """
+    mod SmPar
+      use Std.Otp.SessionMailbox
+      fn ep() -> Local = LPar(LRecv(TA, LEnd()), LRecv(TB, LEnd()))
+      fn fidelity() -> Equivalent(MS, recvs(dual(LPar(LRecv(TA, LEnd()), LRecv(TB, LEnd())))), sends(LPar(LRecv(TA, LEnd()), LRecv(TB, LEnd())))) =
+        recvs_dual(LPar(LRecv(TA, LEnd()), LRecv(TB, LEnd())))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

@@ -1,7 +1,13 @@
 mod SessionMailbox
   type Tag = TA | TB | TC
-  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local)
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LPar(Local, Local)
   type MS = MkMS(Nat, Nat, Nat)
+  fn add(m: Nat, n: Nat) -> Nat = match m
+    Z()  -> n
+    S(k) -> S(add(k, n))
+  fn msum(m: MS, n: MS) -> MS = match m
+    MkMS(a1, b1, c1) -> match n
+      MkMS(a2, b2, c2) -> MkMS(add(a1, a2), add(b1, b2), add(c1, c2))
   fn bump(t: Tag, m: MS) -> MS = match m
     MkMS(a, b, c) -> match t
       TA() -> MkMS(S(a), b, c)
@@ -11,22 +17,29 @@ mod SessionMailbox
     LEnd()      -> MkMS(Z(), Z(), Z())
     LSend(t, k) -> recvs(k)
     LRecv(t, k) -> bump(t, recvs(k))
+    LPar(a, b)  -> msum(recvs(a), recvs(b))
   fn sends(l: Local) -> MS = match l
     LEnd()      -> MkMS(Z(), Z(), Z())
     LSend(t, k) -> bump(t, sends(k))
     LRecv(t, k) -> sends(k)
+    LPar(a, b)  -> msum(sends(a), sends(b))
   fn dual(l: Local) -> Local = match l
     LEnd()      -> LEnd()
     LSend(t, k) -> LRecv(t, dual(k))
     LRecv(t, k) -> LSend(t, dual(k))
+    LPar(a, b)  -> LPar(dual(a), dual(b))
   fn bump_cong(t: Tag, {a: MS}, {b: MS}, e: Equivalent(MS, a, b)) -> Equivalent(MS, bump(t, a), bump(t, b)) =
     rewrite e in reflexive(bump(t, b))
+  fn msum_cong({a1: MS}, {b1: MS}, {a2: MS}, {b2: MS}, ea: Equivalent(MS, a1, b1), eb: Equivalent(MS, a2, b2)) -> Equivalent(MS, msum(a1, a2), msum(b1, b2)) =
+    rewrite ea in rewrite eb in reflexive(msum(b1, b2))
   fn recvs_dual(l: Local) -> Equivalent(MS, recvs(dual(l)), sends(l)) = match l
     LEnd()      -> reflexive(MkMS(Z(), Z(), Z()))
     LSend(t, k) -> bump_cong(t, recvs_dual(k))
     LRecv(t, k) -> recvs_dual(k)
+    LPar(a, b)  -> msum_cong(recvs_dual(a), recvs_dual(b))
   fn sends_dual(l: Local) -> Equivalent(MS, sends(dual(l)), recvs(l)) = match l
     LEnd()      -> reflexive(MkMS(Z(), Z(), Z()))
     LSend(t, k) -> sends_dual(k)
     LRecv(t, k) -> bump_cong(t, sends_dual(k))
+    LPar(a, b)  -> msum_cong(sends_dual(a), sends_dual(b))
 end

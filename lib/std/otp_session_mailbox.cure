@@ -12,10 +12,20 @@ mod Std.Otp.SessionMailbox
   ## mailbox type accounts for, and vice versa.
 
   type Tag = TA | TB | TC
-  ## A binary session endpoint type: send-then-continue, receive-then-continue, or done.
-  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local)
+  ## A binary session endpoint type: send-then-continue, receive-then-continue, done, or the
+  ## FORK/JOIN of two independent sub-sessions running in parallel (`LPar`).
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LPar(Local, Local)
   ## A mailbox type as a commutative multiset: counts of expected `TA`, `TB`, `TC` messages.
   type MS = MkMS(Nat, Nat, Nat)
+
+  ## Nat addition and multiset (disjoint) union — the mailbox of a parallel composition is the
+  ## sum of the components' mailboxes.
+  fn add(m: Nat, n: Nat) -> Nat = match m
+    Z()  -> n
+    S(k) -> S(add(k, n))
+  fn msum(m: MS, n: MS) -> MS = match m
+    MkMS(a1, b1, c1) -> match n
+      MkMS(a2, b2, c2) -> MkMS(add(a1, a2), add(b1, b2), add(c1, c2))
 
   ## Increment the counter for one tag.
   fn bump(t: Tag, m: MS) -> MS = match m
@@ -30,22 +40,29 @@ mod Std.Otp.SessionMailbox
     LEnd()      -> MkMS(Z(), Z(), Z())
     LSend(t, k) -> recvs(k)
     LRecv(t, k) -> bump(t, recvs(k))
+    LPar(a, b)  -> msum(recvs(a), recvs(b))
 
   ## The dual measure: the tags an endpoint SENDS (what lands in its peer's mailbox).
   fn sends(l: Local) -> MS = match l
     LEnd()      -> MkMS(Z(), Z(), Z())
     LSend(t, k) -> bump(t, sends(k))
     LRecv(t, k) -> sends(k)
+    LPar(a, b)  -> msum(sends(a), sends(b))
 
-  ## Dual endpoint: swap send and receive.
+  ## Dual endpoint: swap send and receive; fork/join dualizes componentwise.
   fn dual(l: Local) -> Local = match l
     LEnd()      -> LEnd()
     LSend(t, k) -> LRecv(t, dual(k))
     LRecv(t, k) -> LSend(t, dual(k))
+    LPar(a, b)  -> LPar(dual(a), dual(b))
 
   ## Congruence for `bump` under equality of mailbox multisets.
   fn bump_cong(t: Tag, {a: MS}, {b: MS}, e: Equivalent(MS, a, b)) -> Equivalent(MS, bump(t, a), bump(t, b)) =
     rewrite e in reflexive(bump(t, b))
+
+  ## Congruence for multiset union in both arguments.
+  fn msum_cong({a1: MS}, {b1: MS}, {a2: MS}, {b2: MS}, ea: Equivalent(MS, a1, b1), eb: Equivalent(MS, a2, b2)) -> Equivalent(MS, msum(a1, a2), msum(b1, b2)) =
+    rewrite ea in rewrite eb in reflexive(msum(b1, b2))
 
   ## **MAILBOX-ENCODING FIDELITY.** An endpoint's mailbox multiset equals what its DUAL peer
   ## sends: `recvs(dual(L)) = sends(L)`. Induction on `L` — dualizing turns each of the endpoint's
@@ -55,6 +72,7 @@ mod Std.Otp.SessionMailbox
     LEnd()      -> reflexive(MkMS(Z(), Z(), Z()))
     LSend(t, k) -> bump_cong(t, recvs_dual(k))
     LRecv(t, k) -> recvs_dual(k)
+    LPar(a, b)  -> msum_cong(recvs_dual(a), recvs_dual(b))
 
   ## The mirror: what an endpoint sends equals what its dual peer receives — `sends(dual(L)) =
   ## recvs(L)`. Together with `recvs_dual` this says the two mailbox multisets of a session's
@@ -63,4 +81,5 @@ mod Std.Otp.SessionMailbox
     LEnd()      -> reflexive(MkMS(Z(), Z(), Z()))
     LSend(t, k) -> sends_dual(k)
     LRecv(t, k) -> bump_cong(t, sends_dual(k))
+    LPar(a, b)  -> msum_cong(sends_dual(a), sends_dual(b))
 end
