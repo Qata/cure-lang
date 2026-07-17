@@ -78,8 +78,10 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [ ] **E4** partial-app codegen (eta-expand explicit-arg partial applications)
 
 ### B2. Recursion fixpoint — genuine in-Cure research (Knaster–Tarski / Kleene)
-- [ ] `BRec` behaviour representation (recursion variable / de Bruijn) + `infer(BRec) = lfp(transfer)`
-- [ ] `lfp` construction via bounded Kleene iterate `iterate(f, ⊥, height)`
+- [x] `BRec` behaviour representation (`RBody` with single recursion variable `RVar`) + syntax-derived transfer `tset(body, I)` + `infer(BRec) = rec_infer` — **SHIPPED** `otp_recursive_transfer.cure` (Idris `rel=same`)
+- [x] transfer MONOTONICITY generic over syntax (`tset_mono`, induction on the body; `orb_mono`/`join_mono`/`setbit_mono`) — the hypothesis `map_lfp_le` needs — **SHIPPED** `otp_recursive_transfer.cure`
+- [x] fixed-point property at a syntactic transfer (`rec_fixed = map_lfp_le(tset(body,-), tset_mono(body))`) — **SHIPPED** `otp_recursive_transfer.cure`
+- [x] `lfp` construction via bounded Kleene iterate `iterate(f, ⊥, height)` — **SHIPPED** (`rec_infer = iter(tset(body,-), 4)`)
 - [x] `?lfp_le` pre-fixpoint bound — **SHIPPED** `otp_inference_fixpoint.cure`
 - [ ] `?le_lfp` (lfp below any upper bound of pre-fixed points)
 - [x] **STABILIZATION**: `iterate(f, ⊥, |Tag|)` IS a fixed point — finite-height counting (interface size ≤ 3, strict-increase-or-fixed) — **SHIPPED** `otp_finite_fixpoint.cure` over the height-3 `IF` lattice (Idris `rel=same`). *The hard half, mathlib `monotone_chain_condition` port.*
