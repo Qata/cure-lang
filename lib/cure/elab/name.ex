@@ -18,29 +18,37 @@ defmodule Cure.Elab.Name do
     String.to_atom(normalize_owner(owner) <> @separator <> normalize_base(base))
   end
 
-  @doc "Return the module owner encoded in a canonical name, or nil for a bare atom."
-  @spec owner(atom() | String.t()) :: String.t() | nil
-  def owner(name) when is_atom(name), do: owner(Atom.to_string(name))
+  @doc """
+  Split a canonical name into `{owner, base}` in a single pass.
 
-  def owner(name) when is_binary(name) do
-    case String.split(name, @separator, parts: 2) do
-      [owner, _base] -> if valid_owner?(owner), do: owner, else: nil
-      _ -> nil
+  The owner is `nil` for a bare name, and for a name whose text before the
+  separator is not a valid owner — a content-derived identity like
+  `Union<Int|Std.Bool#Bool>` is its own base, not `Bool` owned by
+  `Union<Int|Std.Bool`.
+
+  Callers that need both halves should prefer this over `owner/1` and `base/1`:
+  it decides the split once rather than twice, and name resolution asks this
+  question for every key in a table on every unresolved lookup.
+  """
+  @spec split(atom() | String.t()) :: {String.t() | nil, String.t()}
+  def split(name) when is_atom(name), do: split(Atom.to_string(name))
+
+  def split(name) when is_binary(name) do
+    case :binary.split(name, @separator) do
+      [owner, base] -> if valid_owner?(owner), do: {owner, base}, else: {nil, name}
+      [bare] -> {nil, bare}
     end
   end
+
+  @doc "Return the module owner encoded in a canonical name, or nil for a bare atom."
+  @spec owner(atom() | String.t()) :: String.t() | nil
+  def owner(name) when is_atom(name) or is_binary(name), do: split(name) |> elem(0)
 
   def owner(_name), do: nil
 
   @doc "Return the basename encoded in a canonical name, or the original bare name."
   @spec base(atom() | String.t()) :: String.t() | nil
-  def base(name) when is_atom(name), do: base(Atom.to_string(name))
-
-  def base(name) when is_binary(name) do
-    case String.split(name, @separator, parts: 2) do
-      [owner, base] -> if valid_owner?(owner), do: base, else: name
-      [bare] -> bare
-    end
-  end
+  def base(name) when is_atom(name) or is_binary(name), do: split(name) |> elem(1)
 
   def base(_name), do: nil
 

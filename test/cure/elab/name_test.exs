@@ -53,6 +53,33 @@ defmodule Cure.Elab.NameTest do
     end
   end
 
+  describe "split/1" do
+    # `owner/1` and `base/1` are defined through `split/1`, so these pin that the
+    # single pass agrees with both halves rather than drifting from them.
+    test "agrees with owner/1 and base/1" do
+      for name <- [
+            :"Std.Functor#fmap",
+            :"Union<Int|Std.Bool#Bool>",
+            :"Std.Functor#__impl_Functor_Std.List#List_fmap",
+            :bare,
+            :"1Foo#bar"
+          ] do
+        assert Name.split(name) == {Name.owner(name), Name.base(name)},
+               "split/1 disagreed with owner/1 + base/1 for #{inspect(name)}"
+      end
+    end
+
+    test "splits at the first separator only" do
+      assert Name.split("Std.Functor#__impl_Functor_Std.List#List_fmap") ==
+               {"Std.Functor", "__impl_Functor_Std.List#List_fmap"}
+    end
+
+    test "an unowned name is its own base" do
+      assert Name.split("bare") == {nil, "bare"}
+      assert Name.split("Union<Int|Std.Bool#Bool>") == {nil, "Union<Int|Std.Bool#Bool>"}
+    end
+  end
+
   describe "qualify/2" do
     test "round-trips through owner/1 and base/1" do
       name = Name.qualify("Std.List", "map")
