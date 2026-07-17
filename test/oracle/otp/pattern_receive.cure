@@ -1,0 +1,20 @@
+mod PatternReceive
+  type Tag = TA | TB | TC
+  type TagList = TNil | TCons(Tag, TagList)
+  type Mailbox = BNil | BCons(Tag, Mailbox)
+  type InSet indices (t: Tag, set: TagList)
+    Here  : InSet(t, TCons(t, rest))
+    There : InSet(t, rest) -> InSet(t, TCons(y, rest))
+  type InMbox indices (t: Tag, mbox: Mailbox)
+    MHere  : InMbox(t, BCons(t, rest))
+    MThere : InMbox(t, rest) -> InMbox(t, BCons(y, rest))
+  type SelRecv indices (set: TagList, before: Mailbox, got: Tag, after: Mailbox)
+    SRHere : InSet(t, set) -> SelRecv(set, BCons(t, rest), t, rest)
+    SRSkip : SelRecv(set, rest, g, after) -> SelRecv(set, BCons(h, rest), g, BCons(h, after))
+  fn selrecv_matches({set: TagList}, {before: Mailbox}, {got: Tag}, {after: Mailbox}, sr: SelRecv(set, before, got, after)) -> InSet(got, set) = match sr
+    SRHere(mem) -> mem
+    SRSkip(sr2) -> selrecv_matches(sr2)
+  fn selrecv_present({set: TagList}, {before: Mailbox}, {got: Tag}, {after: Mailbox}, sr: SelRecv(set, before, got, after)) -> InMbox(got, before) = match sr
+    SRHere(mem) -> MHere()
+    SRSkip(sr2) -> MThere(selrecv_present(sr2))
+end

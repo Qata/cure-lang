@@ -110,7 +110,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [ ] Evolving-protocol inference (accepted set changes over a conversation) — composes B2 fixpoint + this solving
 
 ### B4. Full ordered / protocol selective receive (rest of G8)
-- [ ] Arbitrary PATTERN-DIRECTED selective receive with protocol-level ordering of a WHOLE conversation (current slice = single-tag ordered scan)
+- [x] PATTERN-DIRECTED selective receive (a pattern = a set of acceptable tags, generalizing the single-tag scan): `SelRecv(set, before, got, after)` with `selrecv_matches` (received message matches the pattern) + `selrecv_present` (it was actually in the mailbox) — **SHIPPED** `otp_pattern_receive.cure` (Idris `rel=same`). Open: whole-conversation protocol-level ordering (a protocol state machine dictating the pattern per step)
 
 ### B5. Signals semantics depth (KWC parity and beyond)
 - [x] PER-SENDER signal ordering (KWC's pairwise guarantee): a mailbox is an `Interleave` of per-sender streams; `proj_left`/`proj_right` prove projecting to a sender recovers exactly that sender's stream in order — each sender's signals stay FIFO regardless of the interleaving — **SHIPPED** `otp_signal_order.cure` (Idris `rel=same`). Refines the single global mailbox-FIFO model to Erlang's actual pairwise ordering.
