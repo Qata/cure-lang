@@ -47,3 +47,33 @@ insert_member KB (Node l KC r) = insert_member KB l
 insert_member KC (Node l KA r) = insert_member KC r
 insert_member KC (Node l KB r) = insert_member KC r
 insert_member KC (Node l KC r) = Refl
+
+insert_preserves : (x : Key) -> (k : Key) -> (t : Tree) -> member x t = T -> member x (insert k t) = T
+insert_preserves x k Leaf Refl impossible
+insert_preserves KA KA (Node l KA r) e = Refl
+insert_preserves KA KB (Node l KA r) e = Refl
+insert_preserves KA KC (Node l KA r) e = Refl
+insert_preserves KA KA (Node l KB r) e = insert_preserves KA KA l e
+insert_preserves KA KB (Node l KB r) e = e
+insert_preserves KA KC (Node l KB r) e = e
+insert_preserves KA KA (Node l KC r) e = insert_preserves KA KA l e
+insert_preserves KA KB (Node l KC r) e = insert_preserves KA KB l e
+insert_preserves KA KC (Node l KC r) e = e
+insert_preserves KB KA (Node l KA r) e = e
+insert_preserves KB KB (Node l KA r) e = insert_preserves KB KB r e
+insert_preserves KB KC (Node l KA r) e = insert_preserves KB KC r e
+insert_preserves KB KA (Node l KB r) e = Refl
+insert_preserves KB KB (Node l KB r) e = Refl
+insert_preserves KB KC (Node l KB r) e = Refl
+insert_preserves KB KA (Node l KC r) e = insert_preserves KB KA l e
+insert_preserves KB KB (Node l KC r) e = insert_preserves KB KB l e
+insert_preserves KB KC (Node l KC r) e = e
+insert_preserves KC KA (Node l KA r) e = e
+insert_preserves KC KB (Node l KA r) e = insert_preserves KC KB r e
+insert_preserves KC KC (Node l KA r) e = insert_preserves KC KC r e
+insert_preserves KC KA (Node l KB r) e = e
+insert_preserves KC KB (Node l KB r) e = e
+insert_preserves KC KC (Node l KB r) e = insert_preserves KC KC r e
+insert_preserves KC KA (Node l KC r) e = Refl
+insert_preserves KC KB (Node l KC r) e = Refl
+insert_preserves KC KC (Node l KC r) e = Refl

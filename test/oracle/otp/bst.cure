@@ -48,4 +48,46 @@ mod Bst
         KA() -> insert_member(KC(), r)
         KB() -> insert_member(KC(), r)
         KC() -> reflexive(T())
+  fn insert_preserves(x: Key, k: Key, t: Tree, e: Equivalent(B, member(x, t), T())) -> Equivalent(B, member(x, insert(k, t)), T()) = match t
+    Leaf()        -> match e
+    Node(l, v, r) -> match x
+      KA() -> match v
+        KA() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+        KB() -> match k
+          KA() -> insert_preserves(KA(), KA(), l, e)
+          KB() -> e
+          KC() -> e
+        KC() -> match k
+          KA() -> insert_preserves(KA(), KA(), l, e)
+          KB() -> insert_preserves(KA(), KB(), l, e)
+          KC() -> e
+      KB() -> match v
+        KA() -> match k
+          KA() -> e
+          KB() -> insert_preserves(KB(), KB(), r, e)
+          KC() -> insert_preserves(KB(), KC(), r, e)
+        KB() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
+        KC() -> match k
+          KA() -> insert_preserves(KB(), KA(), l, e)
+          KB() -> insert_preserves(KB(), KB(), l, e)
+          KC() -> e
+      KC() -> match v
+        KA() -> match k
+          KA() -> e
+          KB() -> insert_preserves(KC(), KB(), r, e)
+          KC() -> insert_preserves(KC(), KC(), r, e)
+        KB() -> match k
+          KA() -> e
+          KB() -> e
+          KC() -> insert_preserves(KC(), KC(), r, e)
+        KC() -> match k
+          KA() -> reflexive(T())
+          KB() -> reflexive(T())
+          KC() -> reflexive(T())
 end
