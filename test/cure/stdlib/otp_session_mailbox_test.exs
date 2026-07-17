@@ -56,6 +56,20 @@ defmodule Cure.Stdlib.OtpSessionMailboxTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "mailbox types forget order: recvs(seq a b) = recvs(seq b a)" do
+    src = """
+    mod SmOrder
+      use Std.Otp.SessionMailbox
+      fn seq_comm(a: Local, b: Local) -> Equivalent(MS, recvs(seq(a, b)), recvs(seq(b, a))) =
+        recvs_seq_comm(a, b)
+      fn par_comm(a: Local, b: Local) -> Equivalent(MS, recvs(LPar(a, b)), recvs(LPar(b, a))) =
+        recvs_par_comm(a, b)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "algebraic structure: msum is commutative and seq is associative" do
     src = """
     mod SmAlg

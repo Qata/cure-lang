@@ -148,3 +148,12 @@ seq_end_r LEnd = Refl
 seq_end_r (LSend tg k) = lsend_cong tg (seq_end_r k)
 seq_end_r (LRecv tg k) = lrecv_cong tg (seq_end_r k)
 seq_end_r (LPar x y) = lpar_cong2 x (seq_end_r y)
+
+recvs_par_comm : (a : Local) -> (b : Local) -> recvs (LPar a b) = recvs (LPar b a)
+recvs_par_comm a b = msum_comm (recvs a) (recvs b)
+
+recvs_seq_comm : (a : Local) -> (b : Local) -> recvs (seq a b) = recvs (seq b a)
+recvs_seq_comm a b = trans (recvs_hom a b) (trans (msum_comm (recvs a) (recvs b)) (sym (recvs_hom b a)))
+
+sends_seq_comm : (a : Local) -> (b : Local) -> sends (seq a b) = sends (seq b a)
+sends_seq_comm a b = trans (sends_hom a b) (trans (msum_comm (sends a) (sends b)) (sym (sends_hom b a)))

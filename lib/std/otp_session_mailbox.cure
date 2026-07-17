@@ -206,4 +206,19 @@ mod Std.Otp.SessionMailbox
     LSend(tg, k) -> lsend_cong(tg, seq_end_r(k))
     LRecv(tg, k) -> lrecv_cong(tg, seq_end_r(k))
     LPar(x, y)   -> lpar_cong2(x, seq_end_r(y))
+
+  ## **MAILBOX TYPES FORGET ORDER (the point of the encoding).** Fork/join is order-insensitive at
+  ## the mailbox level — `recvs(LPar(a, b)) = recvs(LPar(b, a))` — directly from `msum_comm`.
+  fn recvs_par_comm(a: Local, b: Local) -> Equivalent(MS, recvs(LPar(a, b)), recvs(LPar(b, a))) =
+    msum_comm(recvs(a), recvs(b))
+
+  ## And SEQUENTIAL composition's mailbox forgets order too: `recvs(seq(a, b)) = recvs(seq(b, a))`
+  ## even though `seq` itself is NOT commutative (the sessions run in a fixed order). The mailbox is
+  ## a commutative BAG, so swapping two composed sub-protocols leaves the set of expected messages
+  ## unchanged — this is exactly why mailbox types can be commutative, DERIVED from the monoid
+  ## homomorphism (`recvs_hom`) plus `msum_comm`. `sends` behaves the same way.
+  fn recvs_seq_comm(a: Local, b: Local) -> Equivalent(MS, recvs(seq(a, b)), recvs(seq(b, a))) =
+    trans(recvs_hom(a, b), trans(msum_comm(recvs(a), recvs(b)), sym(recvs_hom(b, a))))
+  fn sends_seq_comm(a: Local, b: Local) -> Equivalent(MS, sends(seq(a, b)), sends(seq(b, a))) =
+    trans(sends_hom(a, b), trans(msum_comm(sends(a), sends(b)), sym(sends_hom(b, a))))
 end
