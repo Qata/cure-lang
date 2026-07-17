@@ -27,6 +27,22 @@ defmodule Cure.Stdlib.OtpGenEventTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "remove_at: removing a handler at a position deletes exactly that interface entry" do
+    # A two-handler manager; removing the SECOND handler (There Here) leaves a manager typed by
+    # the interface list with only the first entry.
+    src = """
+    mod GeRem
+      use Std.Otp.GenEvent
+      fn two() -> Manager(ICons(MkEvSet(T(), F(), F()), ICons(MkEvSet(F(), T(), F()), INil()))) =
+        add_handler(MkEvSet(T(), F(), F()), Z(), add_handler(MkEvSet(F(), T(), F()), Z(), MNil()))
+      fn drop_second() -> Manager(ICons(MkEvSet(T(), F(), F()), INil())) =
+        remove_at(two(), There(MkEvSet(T(), F(), F()), Here(MkEvSet(F(), T(), F()), INil())))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "install/remove are inverse on the manager configuration" do
     src = """
     mod GeInv

@@ -56,3 +56,15 @@ add_remove_inverse iface st mgr = Refl
 
 count_after_add : (iface : EvSet) -> (st : Nat) -> (mgr : Manager ifaces) -> count (add_handler iface st mgr) = S (count mgr)
 count_after_add iface st mgr = Refl
+
+data Pos : IfaceList -> Type where
+  Here : (iface : EvSet) -> (rest : IfaceList) -> Pos (ICons iface rest)
+  There : (iface : EvSet) -> Pos rest -> Pos (ICons iface rest)
+
+delete_at : Pos ifaces -> IfaceList
+delete_at (Here iface rest) = rest
+delete_at (There iface p) = ICons iface (delete_at p)
+
+remove_at : (mgr : Manager ifaces) -> (pos : Pos ifaces) -> Manager (delete_at pos)
+remove_at (MCons _ st r) (Here iface rest) = r
+remove_at (MCons _ st r) (There iface p) = MCons iface st (remove_at r p)

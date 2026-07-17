@@ -87,4 +87,26 @@ mod Std.Otp.GenEvent
   ## Installing a handler increments the count; the interface list gains exactly the new entry.
   fn count_after_add(iface: EvSet, st: Nat, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Equivalent(Nat, count(add_handler(iface, st, mgr)), S(count(mgr))) =
     reflexive(S(count(mgr)))
+
+  ## A POSITION into a (non-empty) interface list: the head (`Here`) or one deeper (`There`). The
+  ## skipped interface / tail are carried explicitly so `delete_at` can name them (E2 workaround).
+  type Pos indices (ifaces: IfaceList)
+    Here  : (iface: EvSet) -> (rest: IfaceList) -> Pos(ICons(iface, rest))
+    There : (iface: EvSet) -> Pos(rest) -> Pos(ICons(iface, rest))
+
+  ## The interface list with the handler at `pos` deleted — the type-level effect of removal.
+  fn delete_at({ifaces: IfaceList}, pos: Pos(ifaces)) -> IfaceList = match pos
+    Here(iface, rest) -> rest
+    There(iface, p)   -> ICons(iface, delete_at(p))
+
+  ## **REMOVE A HANDLER AT AN ARBITRARY POSITION.** Uninstall the handler pointed at by `pos`; the
+  ## result manager is typed by `delete_at(pos)` — the interface list with exactly that one entry
+  ## gone, all others (before and after) preserved in order. A dependently-typed list-deletion: the
+  ## `Pos` witness guarantees the position exists, so removal is total and can't drop the wrong
+  ## handler. Recurses on the position and the manager together (`match evidence; match data`).
+  fn remove_at({ifaces: IfaceList}, mgr: Manager(ifaces), pos: Pos(ifaces)) -> Manager(delete_at(pos)) = match pos
+    Here(iface, rest) -> match mgr
+      MCons(i, st, r) -> r
+    There(iface, p)   -> match mgr
+      MCons(i, st, r) -> MCons(i, st, remove_at(r, p))
 end

@@ -42,4 +42,15 @@ mod GenEvent
     reflexive(mgr)
   fn count_after_add(iface: EvSet, st: Nat, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Equivalent(Nat, count(add_handler(iface, st, mgr)), S(count(mgr))) =
     reflexive(S(count(mgr)))
+  type Pos indices (ifaces: IfaceList)
+    Here  : (iface: EvSet) -> (rest: IfaceList) -> Pos(ICons(iface, rest))
+    There : (iface: EvSet) -> Pos(rest) -> Pos(ICons(iface, rest))
+  fn delete_at({ifaces: IfaceList}, pos: Pos(ifaces)) -> IfaceList = match pos
+    Here(iface, rest) -> rest
+    There(iface, p)   -> ICons(iface, delete_at(p))
+  fn remove_at({ifaces: IfaceList}, mgr: Manager(ifaces), pos: Pos(ifaces)) -> Manager(delete_at(pos)) = match pos
+    Here(iface, rest) -> match mgr
+      MCons(i, st, r) -> r
+    There(iface, p)   -> match mgr
+      MCons(i, st, r) -> MCons(i, st, remove_at(r, p))
 end
