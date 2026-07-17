@@ -87,3 +87,18 @@ flatten (Node l v r) = lapp (flatten l) (TCons v (flatten r))
 flatten_mirror : (t : Tree) -> flatten (mirror t) = lrev (flatten t)
 flatten_mirror Leaf = Refl
 flatten_mirror (Node l v r) = trans (lapp_cong2 (flatten_mirror r) (trans (tcons_cong v (flatten_mirror l)) (sym (lapp_cons v (lrev (flatten l)))))) (sym (trans (lrev_app (flatten l) (TCons v (flatten r))) (trans (lapp_cong (lrev (flatten l)) (lrev_cons v (flatten r))) (lapp_assoc (lrev (flatten r)) (TCons v TNil) (lrev (flatten l))))))
+
+llen : TList -> Nat
+llen TNil = Z
+llen (TCons h t) = S (llen t)
+
+llen_cons : (v : Nat) -> (xs : TList) -> llen (TCons v xs) = S (llen xs)
+llen_cons v xs = Refl
+
+llen_app : (xs : TList) -> (ys : TList) -> llen (lapp xs ys) = add (llen xs) (llen ys)
+llen_app TNil ys = Refl
+llen_app (TCons h t) ys = snat_cong (llen_app t ys)
+
+size_flatten : (t : Tree) -> llen (flatten t) = size t
+size_flatten Leaf = Refl
+size_flatten (Node l v r) = trans (llen_app (flatten l) (TCons v (flatten r))) (trans (add_cong (size_flatten l) (trans (llen_cons v (flatten r)) (snat_cong (size_flatten r)))) (add_succ_r (size l) (size r)))
