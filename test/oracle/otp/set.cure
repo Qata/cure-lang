@@ -42,4 +42,18 @@ mod Sets
         KA() -> union_member(KC(), rest, s2)
         KB() -> union_member(KC(), rest, s2)
         KC() -> reflexive(T())
+  fn orb_comm(a: B, b: B) -> Equivalent(B, orb(a, b), orb(b, a)) = match a
+    F() -> match b
+      F() -> reflexive(F())
+      T() -> reflexive(T())
+    T() -> match b
+      F() -> reflexive(T())
+      T() -> reflexive(T())
+  fn orb_idem(a: B) -> Equivalent(B, orb(a, a), a) = match a
+    F() -> reflexive(F())
+    T() -> reflexive(T())
+  fn union_comm_member(x: Key, s1: Set, s2: Set) -> Equivalent(B, mem(x, union(s1, s2)), mem(x, union(s2, s1))) =
+    trans(union_member(x, s1, s2), trans(orb_comm(mem(x, s1), mem(x, s2)), sym(union_member(x, s2, s1))))
+  fn union_idem_member(x: Key, s: Set) -> Equivalent(B, mem(x, union(s, s)), mem(x, s)) =
+    trans(union_member(x, s, s), orb_idem(mem(x, s)))
 end

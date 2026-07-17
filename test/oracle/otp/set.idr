@@ -41,3 +41,19 @@ union_member KB (SetCons KC rest) s2 = union_member KB rest s2
 union_member KC (SetCons KA rest) s2 = union_member KC rest s2
 union_member KC (SetCons KB rest) s2 = union_member KC rest s2
 union_member KC (SetCons KC rest) s2 = Refl
+
+orb_comm : (a : B) -> (b : B) -> orb a b = orb b a
+orb_comm F F = Refl
+orb_comm F T = Refl
+orb_comm T F = Refl
+orb_comm T T = Refl
+
+orb_idem : (a : B) -> orb a a = a
+orb_idem F = Refl
+orb_idem T = Refl
+
+union_comm_member : (x : Key) -> (s1 : Set) -> (s2 : Set) -> mem x (union s1 s2) = mem x (union s2 s1)
+union_comm_member x s1 s2 = trans (union_member x s1 s2) (trans (orb_comm (mem x s1) (mem x s2)) (sym (union_member x s2 s1)))
+
+union_idem_member : (x : Key) -> (s : Set) -> mem x (union s s) = mem x s
+union_idem_member x s = trans (union_member x s s) (orb_idem (mem x s))

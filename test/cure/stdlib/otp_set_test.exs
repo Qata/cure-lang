@@ -20,6 +20,10 @@ defmodule Cure.Stdlib.OtpSetTest do
         union_member(x, s1, s2)
       fn inst() -> Equivalent(B, mem(KB(), union(SetCons(KA(), SetNil()), SetCons(KB(), SetNil()))), orb(mem(KB(), SetCons(KA(), SetNil())), mem(KB(), SetCons(KB(), SetNil())))) =
         union_member(KB(), SetCons(KA(), SetNil()), SetCons(KB(), SetNil()))
+      fn comm(x: Key, s1: Set, s2: Set) -> Equivalent(B, mem(x, union(s1, s2)), mem(x, union(s2, s1))) =
+        union_comm_member(x, s1, s2)
+      fn idem(x: Key, s: Set) -> Equivalent(B, mem(x, union(s, s)), mem(x, s)) =
+        union_idem_member(x, s)
     end
     """
 
