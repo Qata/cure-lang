@@ -1,0 +1,183 @@
+@group(:concurrency)
+mod Std.Otp.InterfaceBridge
+  ## BRIDGE between the two fixpoint representations (build-out map G9 / BRec).
+  ##
+  ## `Std.Otp.InferenceFixpoint` proves the PRE-FIXPOINT bound (`lfp_le`, principality) over
+  ## the `TagList`/`AllHandled` interface order with an abstract monotone `f`. `Std.Otp.
+  ## FiniteFixpoint` proves the STABILIZATION half (`map_lfp_le`, the fixed-point property)
+  ## over the concrete height-3 `IF = MkIF(B, B, B)` lattice — the CANONICAL, duplicate-free
+  ## representation where the finite-height size argument actually goes through (a `TagList`
+  ## may carry duplicates, so its length is not bounded by |Tag|; `IF` is one bit per tag, so
+  ## it is).
+  ##
+  ## This module is the connective tissue: `denote : IF -> TagList` reads an `IF` bit-record
+  ## as the canonical tag interface it stands for, and the two correspondence theorems show
+  ## `IF`'s order `Sub` maps FAITHFULLY onto `TagList` membership:
+  ##   * `denote_complete` — a bit set in `x` is a member of `denote(x)` (completeness);
+  ##   * `sub_to_inif` / `sub_allhandled` — `Sub(x, y)` (the finite-lattice order the finite
+  ##     fixpoint theorem is stated in) implies `AllHandled(denote(x), denote(y))` (the
+  ##     membership order the adequacy proof consumes).
+  ## So `map_lfp_le`'s `Sub(f(lfp), lfp)` transfers to `AllHandled(denote(f lfp), denote(lfp))`
+  ## — the fixed-point property in the representation `Std.Otp.InferenceAdequacy` speaks, for
+  ## the finite 3-tag universe. This discharges the `?map_lfp` scope note in
+  ## `Std.Otp.InferenceFixpoint` for the finite fragment.
+
+  use Std.Otp.FiniteFixpoint
+
+  type Tag = TA | TB | TC
+  type TagList = TNil | TCons(Tag, TagList)
+
+  ## Membership and the interface subtyping order (same shape as the inference modules).
+  type Handles indices (t: Tag, iface: TagList)
+    HHere  : Handles(t, TCons(t, rest))
+    HThere : Handles(t, rest) -> Handles(t, TCons(y, rest))
+  type AllHandled indices (s: TagList, iface: TagList)
+    AHNil  : AllHandled(TNil, iface)
+    AHCons : Handles(t, iface) -> AllHandled(rest, iface) -> AllHandled(TCons(t, rest), iface)
+
+  ## The canonical tag interface an `IF` bit-record denotes: the set bits, in tag order.
+  fn denote(x: IF) -> TagList = match x
+    MkIF(a, b, c) -> match a
+      F() -> match b
+        F() -> match c
+          F() -> TNil
+          T() -> TCons(TC, TNil)
+        T() -> match c
+          F() -> TCons(TB, TNil)
+          T() -> TCons(TB, TCons(TC, TNil))
+      T() -> match b
+        F() -> match c
+          F() -> TCons(TA, TNil)
+          T() -> TCons(TA, TCons(TC, TNil))
+        T() -> match c
+          F() -> TCons(TA, TCons(TB, TNil))
+          T() -> TCons(TA, TCons(TB, TCons(TC, TNil)))
+
+  ## Membership on the finite lattice as a single-bit projection: tag `t` is set in `x` iff
+  ## `getb(x, t) = T`. Projecting ONE bit (rather than an `InIf` GADT that constrains `x`'s
+  ## whole shape) keeps the other two bits out of the goal, so witnesses never carry
+  ## undetermined implicits.
+  fn getb(x: IF, t: Tag) -> B = match x
+    MkIF(a, b, c) -> match t
+      TA() -> a
+      TB() -> b
+      TC() -> c
+
+  ## **COMPLETENESS.** A bit set in `x` is a member of `denote(x)`. The three `handles_*`
+  ## helpers give the membership witness for a concretely-set bit against `denote(MkIF(...))`.
+  fn handles_a(b: B, c: B) -> Handles(TA, denote(MkIF(T, b, c))) = match b
+    F() -> match c
+      F() -> HHere()
+      T() -> HHere()
+    T() -> match c
+      F() -> HHere()
+      T() -> HHere()
+  fn handles_b(a: B, c: B) -> Handles(TB, denote(MkIF(a, T, c))) = match a
+    F() -> match c
+      F() -> HHere()
+      T() -> HHere()
+    T() -> match c
+      F() -> HThere(HHere())
+      T() -> HThere(HHere())
+  fn handles_c(a: B, b: B) -> Handles(TC, denote(MkIF(a, b, T))) = match a
+    F() -> match b
+      F() -> HHere()
+      T() -> HThere(HHere())
+    T() -> match b
+      F() -> HThere(HHere())
+      T() -> HThere(HThere(HHere()))
+
+  ## `getb(x, t) = T` implies membership in `denote(x)`. Match the tag to select the bit,
+  ## match `x` to expose it; when the bit is `F` the hypothesis is `Equivalent(B, F, T)` — a
+  ## refuted equality, so that leaf is impossible (empty match).
+  fn denote_complete(x: IF, t: Tag, e: Equivalent(B, getb(x, t), T)) -> Handles(t, denote(x)) = match t
+    TA() -> match x
+      MkIF(a, b, c) -> match a
+        F() -> match e
+        T() -> handles_a(b, c)
+    TB() -> match x
+      MkIF(a, b, c) -> match b
+        F() -> match e
+        T() -> handles_b(a, c)
+    TC() -> match x
+      MkIF(a, b, c) -> match c
+        F() -> match e
+        T() -> handles_c(a, b)
+
+  ## **ORDER PRESERVATION (pointwise).** `Sub(x, y)` carries a set bit of `x` to the same bit
+  ## of `y`. Match the tag, the endpoints, and the `Sub` witness; the relevant `Imp` cannot be
+  ## `Imp(T, F)` (no such constructor) and a set source bit rules out its `Imp(F, _)` cases via
+  ## the refuted hypothesis, leaving `ImpTT` which forces the target bit to `T` (`reflexive`).
+  fn getb_mono(x: IF, y: IF, s: Sub(x, y), t: Tag, e: Equivalent(B, getb(x, t), T)) -> Equivalent(B, getb(y, t), T) = match t
+    TA() -> match x
+      MkIF(xa, xb, xc) -> match y
+        MkIF(ya, yb, yc) -> match s
+          MkSub(ia, ib, ic) -> match ia
+            ImpFF() -> match e
+            ImpFT() -> match e
+            ImpTT() -> reflexive(T)
+    TB() -> match x
+      MkIF(xa, xb, xc) -> match y
+        MkIF(ya, yb, yc) -> match s
+          MkSub(ia, ib, ic) -> match ib
+            ImpFF() -> match e
+            ImpFT() -> match e
+            ImpTT() -> reflexive(T)
+    TC() -> match x
+      MkIF(xa, xb, xc) -> match y
+        MkIF(ya, yb, yc) -> match s
+          MkSub(ia, ib, ic) -> match ic
+            ImpFF() -> match e
+            ImpFT() -> match e
+            ImpTT() -> reflexive(T)
+
+  ## **ORDER EMBEDDING (the theorem the fixpoint transfer needs).** `Sub(x, y)` in the finite
+  ## lattice implies `denote(x) ⊆ denote(y)` as membership. Match `x` into its eight bit
+  ## patterns; each present bit `t` contributes an `AHCons` whose `Handles(t, denote(y))` is
+  ## obtained by carrying its membership witness (`reflexive(T)`, valid since the bit is set in
+  ## this branch) across `s` (`getb_mono`) and reading it back into `denote(y)`
+  ## (`denote_complete`). Absent bits contribute nothing (`denote(x)` has no entry for them).
+  fn sub_allhandled(x: IF, y: IF, s: Sub(x, y)) -> AllHandled(denote(x), denote(y)) = match x
+    MkIF(a, b, c) -> match y
+      MkIF(ya, yb, yc) -> match s
+        MkSub(ia, ib, ic) -> match ia
+          ImpFF() -> match ib
+            ImpFF() -> match ic
+              ImpFF() -> AHNil()
+              ImpFT() -> AHNil()
+              ImpTT() -> AHCons(handles_c(ya, yb), AHNil())
+            ImpFT() -> match ic
+              ImpFF() -> AHNil()
+              ImpFT() -> AHNil()
+              ImpTT() -> AHCons(handles_c(ya, yb), AHNil())
+            ImpTT() -> match ic
+              ImpFF() -> AHCons(handles_b(ya, yc), AHNil())
+              ImpFT() -> AHCons(handles_b(ya, yc), AHNil())
+              ImpTT() -> AHCons(handles_b(ya, yc), AHCons(handles_c(ya, yb), AHNil()))
+          ImpFT() -> match ib
+            ImpFF() -> match ic
+              ImpFF() -> AHNil()
+              ImpFT() -> AHNil()
+              ImpTT() -> AHCons(handles_c(ya, yb), AHNil())
+            ImpFT() -> match ic
+              ImpFF() -> AHNil()
+              ImpFT() -> AHNil()
+              ImpTT() -> AHCons(handles_c(ya, yb), AHNil())
+            ImpTT() -> match ic
+              ImpFF() -> AHCons(handles_b(ya, yc), AHNil())
+              ImpFT() -> AHCons(handles_b(ya, yc), AHNil())
+              ImpTT() -> AHCons(handles_b(ya, yc), AHCons(handles_c(ya, yb), AHNil()))
+          ImpTT() -> match ib
+            ImpFF() -> match ic
+              ImpFF() -> AHCons(handles_a(yb, yc), AHNil())
+              ImpFT() -> AHCons(handles_a(yb, yc), AHNil())
+              ImpTT() -> AHCons(handles_a(yb, yc), AHCons(handles_c(ya, yb), AHNil()))
+            ImpFT() -> match ic
+              ImpFF() -> AHCons(handles_a(yb, yc), AHNil())
+              ImpFT() -> AHCons(handles_a(yb, yc), AHNil())
+              ImpTT() -> AHCons(handles_a(yb, yc), AHCons(handles_c(ya, yb), AHNil()))
+            ImpTT() -> match ic
+              ImpFF() -> AHCons(handles_a(yb, yc), AHCons(handles_b(ya, yc), AHNil()))
+              ImpFT() -> AHCons(handles_a(yb, yc), AHCons(handles_b(ya, yc), AHNil()))
+              ImpTT() -> AHCons(handles_a(yb, yc), AHCons(handles_b(ya, yc), AHCons(handles_c(ya, yb), AHNil())))
+end

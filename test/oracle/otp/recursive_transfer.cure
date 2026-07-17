@@ -1,0 +1,66 @@
+mod RecursiveTransfer
+  type B = F | T
+  type IF = MkIF(B, B, B)
+  type Imp indices (a: B, b: B)
+    ImpFF : Imp(F, F)
+    ImpFT : Imp(F, T)
+    ImpTT : Imp(T, T)
+  type Sub indices (x: IF, y: IF)
+    MkSub : Imp(a, a2) -> Imp(b, b2) -> Imp(c, c2) -> Sub(MkIF(a, b, c), MkIF(a2, b2, c2))
+  type Tag = TA | TB | TC
+
+  fn bot() -> IF = MkIF(F, F, F)
+  fn imp_refl(a: B) -> Imp(a, a) = match a
+    F() -> ImpFF()
+    T() -> ImpTT()
+  fn sub_refl(x: IF) -> Sub(x, x) = match x
+    MkIF(a, b, c) -> MkSub(imp_refl(a), imp_refl(b), imp_refl(c))
+
+  fn orb(p: B, q: B) -> B = match p
+    F() -> q
+    T() -> T
+  fn orb_mono({p: B}, {p2: B}, {q: B}, {q2: B}, ip: Imp(p, p2), iq: Imp(q, q2)) -> Imp(orb(p, q), orb(p2, q2)) = match ip
+    ImpFF() -> iq
+    ImpFT() -> match iq
+      ImpFF() -> ImpFT()
+      ImpFT() -> ImpFT()
+      ImpTT() -> ImpTT()
+    ImpTT() -> ImpTT()
+
+  fn join(x: IF, y: IF) -> IF = match x
+    MkIF(a, b, c) -> match y
+      MkIF(a2, b2, c2) -> MkIF(orb(a, a2), orb(b, b2), orb(c, c2))
+  fn join_mono(x: IF, y: IF, x2: IF, y2: IF, s1: Sub(x, x2), s2: Sub(y, y2)) -> Sub(join(x, y), join(x2, y2)) = match s1
+    MkSub(ia, ib, ic) -> match s2
+      MkSub(ja, jb, jc) -> MkSub(orb_mono(ia, ja), orb_mono(ib, jb), orb_mono(ic, jc))
+
+  fn setbit(t: Tag, x: IF) -> IF = match x
+    MkIF(a, b, c) -> match t
+      TA() -> MkIF(T, b, c)
+      TB() -> MkIF(a, T, c)
+      TC() -> MkIF(a, b, T)
+  fn setbit_mono(t: Tag, x: IF, y: IF, s: Sub(x, y)) -> Sub(setbit(t, x), setbit(t, y)) = match t
+    TA() -> match s
+      MkSub(ia, ib, ic) -> MkSub(ImpTT(), ib, ic)
+    TB() -> match s
+      MkSub(ia, ib, ic) -> MkSub(ia, ImpTT(), ic)
+    TC() -> match s
+      MkSub(ia, ib, ic) -> MkSub(ia, ib, ImpTT())
+
+  type RBody = RNil | RVar | RSend(Tag, RBody) | RRecv(Tag, RBody) | RSeq(RBody, RBody)
+
+  fn tset(body: RBody, i: IF) -> IF = match body
+    RNil()       -> bot()
+    RVar()       -> i
+    RSend(t, k)  -> setbit(t, tset(k, i))
+    RRecv(t, k)  -> setbit(t, tset(k, i))
+    RSeq(l, r)   -> join(tset(l, i), tset(r, i))
+
+  fn tset_mono(body: RBody, x: IF, y: IF, s: Sub(x, y)) -> Sub(tset(body, x), tset(body, y)) = match body
+    RNil()       -> sub_refl(bot())
+    RVar()       -> s
+    RSend(t, k)  -> setbit_mono(t, tset(k, x), tset(k, y), tset_mono(k, x, y, s))
+    RRecv(t, k)  -> setbit_mono(t, tset(k, x), tset(k, y), tset_mono(k, x, y, s))
+    RSeq(l, r)   -> join_mono(tset(l, x), tset(r, x), tset(l, y), tset(r, y),
+                              tset_mono(l, x, y, s), tset_mono(r, x, y, s))
+end
