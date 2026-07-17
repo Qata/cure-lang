@@ -24,6 +24,10 @@ defmodule Cure.Stdlib.OtpBstSearchTest do
         mem_eq_lmem(x, t, bst)
       fn below(x: OKey, b: OKey, t: Tree, pxb: Equivalent(OBit, cmp(x, b), OT()), pgt: Equivalent(OBit, allgt(t, b), OT())) -> Equivalent(OBit, lmem(x, t), OF()) =
         below_not_lmem(x, b, t, pxb, pgt)
+      fn del_preserves(k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT())) -> Equivalent(OBit, isbst(delete(k, t)), OT()) =
+        delete_bst(k, t, bst)
+      fn merge_preserves(l: Tree, r: Tree, m: OKey, bl: Equivalent(OBit, isbst(l), OT()), br: Equivalent(OBit, isbst(r), OT()), plt: Equivalent(OBit, alllt(l, m), OT()), pgt: Equivalent(OBit, allgt(r, m), OT())) -> Equivalent(OBit, isbst(merge(l, r)), OT()) =
+        merge_bst(l, r, m, bl, br, plt, pgt)
     end
     """
 
