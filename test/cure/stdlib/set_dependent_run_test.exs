@@ -25,10 +25,15 @@ defmodule Cure.Stdlib.SetDependentRunTest do
   `map.cure` and that `union_test.exs` / `map_parameterized_test.exs` call into —
   so installing it under the shared process-global BEAM name can never drop a
   function another test relies on (it was a tree-shaken partial view that caused
-  the historical flake). `async: false` is retained as defence-in-depth against
-  concurrent identical reloads, not for correctness.
+  the historical flake).
+
+  `async: true` is sound: this `setup_all` is the *only* reloader of the global
+  `Cure.Std.Map` in the suite — every other `Emit.compile_and_load` targets a
+  test-local module and merely remote-calls into the preloaded Map. With a single
+  reloader at most two code versions coexist, so BEAM's code-purge (which kills a
+  process only when a *third* version loads over live code) cannot fire.
   """
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Elab.{Name, Program, Emit}
