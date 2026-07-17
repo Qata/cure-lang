@@ -35,9 +35,15 @@ Mix.Task.run("cure.compile_stdlib")
 (fn ->
    ebin = "_build/cure/ebin"
 
+   # Scope strictly to the stdlib namespace `Cure.Std.*`. `_build/cure/ebin` is the
+   # stdlib compile output, but tests that `Cure.Compiler.compile_and_load` an
+   # ad-hoc `mod Hello` / `mod M` also drop a `Cure.<Name>.beam` here as a side
+   # effect. Those are NOT stdlib and must not be stuck (nor counted "extra" below):
+   # every module declared in `lib/std/*.cure` is `Std.*`, so the canonical surface
+   # is exactly `Cure.Std.*`.
    loaded =
      ebin
-     |> Path.join("Cure.*.beam")
+     |> Path.join("Cure.Std.*.beam")
      |> Path.wildcard()
      |> Enum.map(fn path ->
        mod = path |> Path.basename(".beam") |> String.to_atom()
