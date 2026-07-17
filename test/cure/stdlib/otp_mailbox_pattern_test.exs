@@ -74,4 +74,20 @@ defmodule Cure.Stdlib.OtpMailboxPatternTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "star_unfold/star_fold: the Kleene star fixpoint law round-trips" do
+    src = """
+    mod StarInst
+      use Std.Otp.MailboxPattern
+      fn empty_star() -> Accepts(PStar(PAtom(TA)), MkMS(Z, Z, Z)) = AStar0()
+      fn plus_form() -> Accepts(PPlus(POne, PTimes(PAtom(TA), PStar(PAtom(TA)))), MkMS(S(Z), Z, Z)) =
+        APlusR(ATimes(MkMS(S(Z), Z, Z), MkMS(Z, Z, Z), AAtomA(), empty_star()))
+      fn one_ta_star() -> Accepts(PStar(PAtom(TA)), MkMS(S(Z), Z, Z)) = star_fold(plus_form())
+      fn back() -> Accepts(PPlus(POne, PTimes(PAtom(TA), PStar(PAtom(TA)))), MkMS(S(Z), Z, Z)) =
+        star_unfold(one_ta_star())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

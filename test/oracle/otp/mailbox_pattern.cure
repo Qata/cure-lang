@@ -158,4 +158,13 @@ mod MailboxPattern
     PPlus(a, b)  -> ds_plus(a, b, t, m, acc)
     PTimes(a, b) -> ds_times(a, b, t, m, acc)
     PStar(a)     -> ds_star(a, t, m, acc)
+
+  fn star_unfold({a: Pat}, {m: MS}, acc: Accepts(PStar(a), m)) -> Accepts(PPlus(POne, PTimes(a, PStar(a))), m) = match acc
+    AStar0()                -> APlusL(AOne())
+    AStarN(m1, m2, ae, as)  -> APlusR(ATimes(m1, m2, ae, as))
+  fn star_fold({a: Pat}, {m: MS}, acc: Accepts(PPlus(POne, PTimes(a, PStar(a))), m)) -> Accepts(PStar(a), m) = match acc
+    APlusL(a1) -> match a1
+      AOne() -> AStar0()
+    APlusR(at) -> match at
+      ATimes(m1, m2, ae, as) -> AStarN(m1, m2, ae, as)
 end

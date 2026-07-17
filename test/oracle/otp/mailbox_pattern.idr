@@ -152,3 +152,11 @@ mutual
   deriv_sound (PAtom TA) TA _ AOne = AAtomA
   deriv_sound (PAtom TB) TB _ AOne = AAtomB
   deriv_sound (PAtom TC) TC _ AOne = AAtomC
+
+star_unfold : Accepts (PStar a) m -> Accepts (PPlus POne (PTimes a (PStar a))) m
+star_unfold AStar0 = APlusL AOne
+star_unfold (AStarN m1 m2 ae as) = APlusR (ATimes m1 m2 ae as)
+
+star_fold : Accepts (PPlus POne (PTimes a (PStar a))) m -> Accepts (PStar a) m
+star_fold (APlusL AOne) = AStar0
+star_fold (APlusR (ATimes m1 m2 ae as)) = AStarN m1 m2 ae as
