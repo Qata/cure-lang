@@ -22,6 +22,11 @@ defmodule Cure.Stdlib.OtpSupervisorTest do
     fn restart_all({specs: Children}, f: Fleet(specs)) -> Fleet(specs) = match f
       FNil()         -> FNil()
       FCons(c, rest) -> FCons(Alive(), restart_all(rest))
+    fn rest_for_one({specs: Children}, f: Fleet(specs), k: Nat) -> Fleet(specs) = match k
+      Z()   -> restart_all(f)
+      S(k2) -> match f
+        FNil()         -> FNil()
+        FCons(c, rest) -> FCons(c, rest_for_one(rest, k2))
     fn establish(specs: Children) -> Fleet(specs) = match specs
       CNil()         -> FNil()
       CCons(s, rest) -> FCons(Alive(), establish(rest))
@@ -38,6 +43,17 @@ defmodule Cure.Stdlib.OtpSupervisorTest do
     defs = """
       fn boot() -> Fleet(CCons(CA, CCons(CB, CNil))) = establish(CCons(CA, CCons(CB, CNil)))
       fn revive(f: Fleet(CCons(CA, CCons(CB, CNil)))) -> Fleet(CCons(CA, CCons(CB, CNil))) = restart_all(f)
+    """
+
+    assert verdict(defs) == :accept
+  end
+
+  test "rest_for_one preserves the spec list (keeps a prefix, revives the suffix)" do
+    # Keep the first child, revive the child at position 1 and all after it. The result type
+    # is still Fleet of the exact same three-child spec.
+    defs = """
+      fn revive_suffix(f: Fleet(CCons(CA, CCons(CB, CCons(CC, CNil))))) -> Fleet(CCons(CA, CCons(CB, CCons(CC, CNil)))) =
+        rest_for_one(f, S(Z()))
     """
 
     assert verdict(defs) == :accept
