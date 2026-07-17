@@ -59,4 +59,16 @@ mod Session
   fn session_run_safe({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, c: Compat(l, r), run: SRun(l, r, l2, r2)) -> Compat(l2, r2) = match run
     SRDone()         -> c
     SRStep(st, rest) -> session_run_safe(session_preservation(c, st), rest)
+  type Progress indices (l: SType, r: SType)
+    PDone    : Progress(SEnd, SEnd)
+    PStepSR  : Progress(SSend(t, lk), SRecv(t, rk))
+    PStepRS  : Progress(SRecv(t, lk), SSend(t, rk))
+    PStepSel : Progress(SSelect(la, lb), SOffer(ra, rb))
+    PStepOff : Progress(SOffer(la, lb), SSelect(ra, rb))
+  fn session_progress({l: SType}, {r: SType}, c: Compat(l, r)) -> Progress(l, r) = match c
+    CEnd()       -> PDone()
+    CSR(t, c2)   -> PStepSR()
+    CRS(t, c2)   -> PStepRS()
+    CSel(ca, cb) -> PStepSel()
+    COff(ca, cb) -> PStepOff()
 end

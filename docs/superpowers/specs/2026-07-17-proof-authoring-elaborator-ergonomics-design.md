@@ -300,6 +300,25 @@ bounded change like E11. Standing workaround (cheap, keep using): bind the sub-t
 helper `fn h() -> T(concrete indices) = <ctor>` (the checking-mode annotation pins the index),
 same shape as `ra_start`.
 
+**Residual variant — floating OUTPUT indices of a WRAPPED step relation (seen 2026-07-18,
+`Std.Otp.Session` progress).** The same eager-finalization also bites when the enclosing
+constructor's field type carries *its own* fresh index metavars that the inner ctor is supposed
+to solve. Repro: a "can-step" wrapper `PStep : SStep(l, r, l2, r2) -> Progress(l, r)` (`l2,r2`
+= the step's TARGET continuations, auto-bound implicits of `PStep`), constructed as
+`PStep(StepSR())` against a goal `Progress(SSend(t,l'), SRecv(t,r'))` where `l',r'` are rigid
+existentials from a prior `match c`. `PStep` introduces `?l2,?r2` metavars; its argument's goal
+becomes `SStep(SSend(t,l'), SRecv(t,r'), ?l2, ?r2)`; the nullary `StepSR` is finalized in
+isolation before `?l2,?r2` are solved → `{:unsolved_metavariables, StepSR}`. Wrapping in a typed
+helper `fn step_sr(t, {lk},{rk}) -> SStep(SSend(t,lk), SRecv(t,rk), lk, rk) = StepSR()` does NOT
+help — the helper's own `?lk,?rk` now float at the call `PStep(step_sr(t))`, same shape one level
+out. The clean fix is a REFORMULATION, not a workaround: drop the wrapper and give the index
+family only its INPUT indices (`Progress` with `PStepSR : Progress(SSend(t,lk), SRecv(t,rk))`,
+two indices, no target). Then every ctor is constructed against a concrete-headed rigid-var goal
+(the `match c` branch fixes `l,r`), nothing floats, and the constructor's own indices already
+name exactly the redex — which is the whole content of the progress theorem. LESSON for proof
+authoring: prefer index families whose indices are all determined by the scrutinee/goal head;
+avoid GADT ctors that carry OUTPUT indices you must construct against a partly-metavariable goal.
+
 ---
 
 ## Confirmed non-gaps (do NOT chase these)

@@ -105,4 +105,26 @@ mod Std.Otp.Session
   fn session_run_safe({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, c: Compat(l, r), run: SRun(l, r, l2, r2)) -> Compat(l2, r2) = match run
     SRDone()         -> c
     SRStep(st, rest) -> session_run_safe(session_preservation(c, st), rest)
+
+  ## A compatible pair is either FINISHED (both endpoints are `SEnd`) or it is a REDEX — its
+  ## endpoints form a matching send/receive or an offered choice. Each non-done constructor's
+  ## indices are exactly one of `SStep`'s domains (`SSend(t,_) / SRecv(t,_)`, `SSelect/SOffer`,
+  ## …), so a communication step is available precisely in those cases.
+  type Progress indices (l: SType, r: SType)
+    PDone    : Progress(SEnd, SEnd)
+    PStepSR  : Progress(SSend(t, lk), SRecv(t, rk))
+    PStepRS  : Progress(SRecv(t, lk), SSend(t, rk))
+    PStepSel : Progress(SSelect(la, lb), SOffer(ra, rb))
+    PStepOff : Progress(SOffer(la, lb), SSelect(ra, rb))
+
+  ## **SESSION PROGRESS.** Compatible endpoints never deadlock: a well-formed session is either
+  ## already complete or is a communication redex. Case analysis on the compatibility derivation —
+  ## `SEnd`/`SEnd` is done, every other shape is a matching send/receive or a selectable branch.
+  ## With `session_preservation` this gives full type safety (well-typed sessions never get stuck).
+  fn session_progress({l: SType}, {r: SType}, c: Compat(l, r)) -> Progress(l, r) = match c
+    CEnd()       -> PDone()
+    CSR(t, c2)   -> PStepSR()
+    CRS(t, c2)   -> PStepRS()
+    CSel(ca, cb) -> PStepSel()
+    COff(ca, cb) -> PStepOff()
 end

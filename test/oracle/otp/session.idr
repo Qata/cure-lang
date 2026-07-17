@@ -54,3 +54,17 @@ data SRun : SType -> SType -> SType -> SType -> Type where
 session_run_safe : Compat l r -> SRun l r l2 r2 -> Compat l2 r2
 session_run_safe c SRDone = c
 session_run_safe c (SRStep st rest) = session_run_safe (session_preservation c st) rest
+
+data Progress : SType -> SType -> Type where
+  PDone : Progress SEnd SEnd
+  PStepSR : Progress (SSend t lk) (SRecv t rk)
+  PStepRS : Progress (SRecv t lk) (SSend t rk)
+  PStepSel : Progress (SSelect la lb) (SOffer ra rb)
+  PStepOff : Progress (SOffer la lb) (SSelect ra rb)
+
+session_progress : Compat l r -> Progress l r
+session_progress CEnd = PDone
+session_progress (CSR t c2) = PStepSR
+session_progress (CRS t c2) = PStepRS
+session_progress (CSel ca cb) = PStepSel
+session_progress (COff ca cb) = PStepOff

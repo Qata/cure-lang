@@ -78,4 +78,29 @@ defmodule Cure.Stdlib.OtpSessionTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "session_progress: a compatible non-finished session is a communication redex (no deadlock)" do
+    # A send/receive pair is compatible; session_progress classifies it as the PStepSR redex —
+    # a step is available, so the session cannot be deadlocked.
+    src = """
+    mod SpInst
+      use Std.Otp.Session
+      fn c0() -> Compat(SSend(TA, SEnd()), SRecv(TA, SEnd())) = CSR(TA, CEnd())
+      fn redex() -> Progress(SSend(TA, SEnd()), SRecv(TA, SEnd())) = session_progress(c0())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
+  test "session_progress: a finished session is PDone" do
+    src = """
+    mod SpDone
+      use Std.Otp.Session
+      fn done() -> Progress(SEnd(), SEnd()) = session_progress(CEnd())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end
