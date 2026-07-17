@@ -16,6 +16,12 @@ defmodule Cure.Stdlib.RefineTest do
       fn value_is_positive(value: PositiveNatural) -> IsPositive(refined_value(value)) =
         refinement_proof(value)
 
+      fn multiply_positive_values(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
+        refine(
+          multiply(refined_value(left), refined_value(right)),
+          multiplying_positive_numbers_is_positive(refinement_proof(left), refinement_proof(right))
+        )
+
     end
     """
 
