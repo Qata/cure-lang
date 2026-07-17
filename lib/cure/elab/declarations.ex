@@ -228,12 +228,10 @@ defmodule Cure.Elab.Declarations do
   keyed put, so re-registering the header with the real ctors simply overwrites
   the empty placeholder).
 
-  Only the ctor-bearing enum / record / indexed families need this: their bodies
-  are what reference siblings. `@builtin` containers are skipped (the canonical
-  builtin registration owns them). Everything else — aliases, opaque carriers,
-  interfaces, primitives, functions — is returned unchanged; their
-  forward-reference cases are out of scope for this pass and handled (or rejected)
-  in the main pass exactly as before.
+  Constructor-bearing families and explicit transparent aliases participate.
+  Alias headers contain only the name and erased type-parameter telescope; the
+  checked RHS replaces the body-less placeholder in the main pass. `@builtin`
+  containers are skipped because canonical builtin registration owns them.
   """
   @spec declare_header(term(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
   def declare_header({:container, meta, _variants}, env) when is_list(meta) do
@@ -272,16 +270,42 @@ defmodule Cure.Elab.Declarations do
   # binds a nullary def, not a ctor-bearing family, so it is left to the main
   # pass.
   def declare_header({:type_annotation, meta, [rhs]}, env) when is_list(meta) do
-    if single_variant_enum?(rhs, env) do
-      name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-      params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
-      register_header(name, params, [], env)
-    else
-      {:ok, env}
+    cond do
+      Keyword.get(meta, :typealias, false) ->
+        register_typealias_header(meta, env)
+
+      single_variant_enum?(rhs, env) ->
+        name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+        params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+        register_header(name, params, [], env)
+
+      true ->
+        {:ok, env}
     end
   end
 
   def declare_header(_decl, env), do: {:ok, env}
+
+  # A forward alias needs only a well-sorted name while signatures and earlier
+  # aliases are lowered. Its real universe and transparent body are unknown
+  # until the main pass, which overwrites this entry. Type parameters are
+  # uniformly erased `Type 0` binders, matching `elaborate_typealias/2`.
+  defp register_typealias_header(meta, env) do
+    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+    params = Keyword.get(meta, :type_params, [])
+    grade = Grade.zero()
+
+    type =
+      Enum.reduce(Enum.reverse(params), {:type, @ceiling}, fn _param, acc ->
+        {:pi, grade, {:type, 0}, acc}
+      end)
+
+    quantities = List.duplicate(:erased, length(params))
+
+    with :ok <- reject_reserved_family_name(name) do
+      {:ok, Env.add_def(env, name, type, nil, quantities)}
+    end
+  end
 
   # Elaborate the parameter/index telescopes (mirroring `declare_parameterized`'s
   # prefix) and register the family with an empty constructor list.

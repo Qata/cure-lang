@@ -5299,7 +5299,11 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
     {rhs, state} = parse_type_expr(state)
 
-    meta = [name: name, line: token.line, col: token.col]
+    # Keep the explicit spelling distinguishable from the deliberately
+    # ambiguous `type X = Y` node. The elaborator's header pass uses this bit
+    # to predeclare transparent aliases without accidentally turning a
+    # forward-referenced one-constructor ADT into an alias.
+    meta = [name: name, line: token.line, col: token.col, typealias: true]
     meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
     {{:type_annotation, meta, [rhs]}, state}
   end
