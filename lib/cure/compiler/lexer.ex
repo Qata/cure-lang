@@ -50,9 +50,21 @@ defmodule Cure.Compiler.Lexer do
     quote
   )a
 
+  # Contextual words are identifiers lexically. The parser promotes them only
+  # where the surrounding grammar proves the construct. Keeping this list at
+  # the lexer boundary prevents declaration vocabulary from stealing ordinary
+  # binder/value names everywhere else. Add words here one at a time with both
+  # construct and identifier regressions.
+  @contextual_keywords ~w(proof)a
+
   @keyword_strings Enum.map(@keywords, &Atom.to_string/1)
 
-  @keyword_string_set MapSet.new(@keyword_strings)
+  @keyword_string_set @keyword_strings
+                      |> MapSet.new()
+                      |> MapSet.difference(MapSet.new(Enum.map(@contextual_keywords, &Atom.to_string/1)))
+
+  @doc "Words lexed as identifiers and promoted contextually by the parser."
+  def contextual_keywords, do: @contextual_keywords
 
   # -- Lexer state -----------------------------------------------------------
 
@@ -172,38 +184,68 @@ defmodule Cure.Compiler.Lexer do
   defp lex_next(state) do
     case peek(state) do
       # Newline
-      ?\n -> {:ok, handle_newline(state)}
+      ?\n ->
+        {:ok, handle_newline(state)}
+
       # Carriage return
-      ?\r -> {:ok, advance(state, 1)}
+      ?\r ->
+        {:ok, advance(state, 1)}
+
       # Spaces (not at line start -> skip)
-      ?\s -> {:ok, skip_spaces(state)}
+      ?\s ->
+        {:ok, skip_spaces(state)}
+
       # Tab (error)
-      ?\t -> {:error, {:tab_not_allowed, state.line, state.col}, state}
+      ?\t ->
+        {:error, {:tab_not_allowed, state.line, state.col}, state}
+
       # Comment
-      ?# -> lex_comment_or_operator(state)
+      ?# ->
+        lex_comment_or_operator(state)
+
       # String
-      ?" -> lex_string(state)
+      ?" ->
+        lex_string(state)
+
       # Quoted identifier
-      ?` -> lex_quoted_identifier(state)
+      ?` ->
+        lex_quoted_identifier(state)
+
       # Char literal
-      ?' -> lex_char(state)
+      ?' ->
+        lex_char(state)
+
       # Atom (symbol)
-      ?: -> lex_atom_or_colon(state)
+      ?: ->
+        lex_atom_or_colon(state)
+
       # Regex sigil
-      ?~ -> lex_regex(state)
+      ?~ ->
+        lex_regex(state)
+
       # Binary literal << >>
-      ?< -> lex_angle_or_op(state)
+      ?< ->
+        lex_angle_or_op(state)
+
       # Melquiades operator (unicode `✉`, U+2709 ENVELOPE): 0xE2 0x9C 0x89.
       # Detection can't live in a guard (peek_at/2 is a plain function,
       # not a macro), so we dispatch on the first byte and inspect the
       # next two inside lex_melquiades_envelope/1. Any other 0xE2-led
       # sequence falls through to the unexpected-character error.
-      0xE2 -> lex_melquiades_envelope(state)
+      0xE2 ->
+        lex_melquiades_envelope(state)
+
       # Percent sigils: %[ %{
-      ?% -> lex_percent(state)
+      ?% ->
+        lex_percent(state)
+
       # Brackets
-      ?( -> {:ok, emit_single(state, :lparen, "(", inc_paren: true)}
-      ?) -> {:ok, emit_single(state, :rparen, ")", dec_paren: true)}
+      ?( ->
+        {:ok, emit_single(state, :lparen, "(", inc_paren: true)}
+
+      ?) ->
+        {:ok, emit_single(state, :rparen, ")", dec_paren: true)}
+
       # Quasiquote splice open `$(` (SP5.1). `$` is otherwise only an
       # identifier *continuation* (gensyms `base$N`), never a token start, so
       # `$(` is unambiguous. The matching `)` is an ordinary `:rparen`; the
@@ -214,30 +256,76 @@ defmodule Cure.Compiler.Lexer do
         else
           {:error, {:unexpected_character, ?$, state.line, state.col}, state}
         end
-      ?[ -> {:ok, emit_single(state, :lbracket, "[")}
-      ?] -> {:ok, emit_single(state, :rbracket, "]")}
-      ?{ -> {:ok, emit_single(state, :lbrace, "{")}
-      ?} -> {:ok, emit_single(state, :rbrace, "}")}
-      ?, -> {:ok, emit_single(state, :comma, ",")}
-      ?; -> {:ok, emit_single(state, :semicolon, ";")}
+
+      ?[ ->
+        {:ok, emit_single(state, :lbracket, "[")}
+
+      ?] ->
+        {:ok, emit_single(state, :rbracket, "]")}
+
+      ?{ ->
+        {:ok, emit_single(state, :lbrace, "{")}
+
+      ?} ->
+        {:ok, emit_single(state, :rbrace, "}")}
+
+      ?, ->
+        {:ok, emit_single(state, :comma, ",")}
+
+      ?; ->
+        {:ok, emit_single(state, :semicolon, ";")}
+
       # Operators and punctuation
-      ?@ -> {:ok, emit_single(state, :at, "@")}
-      ?_ -> lex_identifier(state)
-      c when c in ?a..?z -> lex_identifier(state)
-      c when c in ?A..?Z -> lex_identifier(state)
-      c when c in ?0..?9 -> lex_number(state)
-      ?+ -> lex_plus(state)
-      ?- -> lex_minus(state)
-      ?* -> lex_star(state)
-      ?/ -> lex_slash(state)
-      ?= -> lex_equal(state)
-      ?! -> lex_bang(state)
-      ?> -> lex_greater(state)
-      ?| -> lex_pipe_or_bar(state)
-      ?. -> lex_dot(state)
-      ?^ -> {:ok, emit_single(state, :caret, "^")}
-      ?? -> lex_hole(state)
-      _ -> {:error, {:unexpected_character, peek(state), state.line, state.col}, state}
+      ?@ ->
+        {:ok, emit_single(state, :at, "@")}
+
+      ?_ ->
+        lex_identifier(state)
+
+      c when c in ?a..?z ->
+        lex_identifier(state)
+
+      c when c in ?A..?Z ->
+        lex_identifier(state)
+
+      c when c in ?0..?9 ->
+        lex_number(state)
+
+      ?+ ->
+        lex_plus(state)
+
+      ?- ->
+        lex_minus(state)
+
+      ?* ->
+        lex_star(state)
+
+      ?/ ->
+        lex_slash(state)
+
+      ?= ->
+        lex_equal(state)
+
+      ?! ->
+        lex_bang(state)
+
+      ?> ->
+        lex_greater(state)
+
+      ?| ->
+        lex_pipe_or_bar(state)
+
+      ?. ->
+        lex_dot(state)
+
+      ?^ ->
+        {:ok, emit_single(state, :caret, "^")}
+
+      ?? ->
+        lex_hole(state)
+
+      _ ->
+        {:error, {:unexpected_character, peek(state), state.line, state.col}, state}
     end
   end
 

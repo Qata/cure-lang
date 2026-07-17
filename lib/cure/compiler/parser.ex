@@ -2214,6 +2214,15 @@ defmodule Cure.Compiler.Parser do
           "rewrite" ->
             parse_rewrite(state, token)
 
+          # `proof` is contextual: at a declaration-shaped head it introduces
+          # a proof container; in every other expression/binder position it is
+          # an ordinary identifier. The lexer deliberately does not decide.
+          "proof" ->
+            case peek_at(state, 1) do
+              %Token{type: :identifier} -> parse_proof_container(state)
+              _ -> {variable(token), advance(state)}
+            end
+
           # Contextual keyword: `with e <arms>` is a with-abstraction only in
           # expression-prefix position and only when what follows `with` can
           # begin a scrutinee. The container macro's payload-binder `with` is
@@ -4055,6 +4064,15 @@ defmodule Cure.Compiler.Parser do
   defp parse_optional_with_proof(state) do
     case peek(state) do
       %Token{type: :keyword, value: :proof} ->
+        case peek_at(state, 1) do
+          %Token{type: :identifier, value: name} ->
+            {name, state |> advance() |> advance()}
+
+          _ ->
+            {nil, state}
+        end
+
+      %Token{type: :identifier, value: "proof"} ->
         case peek_at(state, 1) do
           %Token{type: :identifier, value: name} ->
             {name, state |> advance() |> advance()}

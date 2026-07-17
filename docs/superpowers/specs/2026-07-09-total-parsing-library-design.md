@@ -9,6 +9,13 @@ Cure, adapted where the BEAM/AtomVM target demands it.
 ([`macros/2026-07-08-parse-macro-design.md`](macros/2026-07-08-parse-macro-design.md))
 lowers onto. Revises that macro's §11 non-goal #2 — see §9.
 
+**Implementation status (2026-07-17):** the list-shaped `Consumed` relation,
+strict drop constructor, reflexivity, and transitivity foundation have landed in
+`Std.Data.Suffix`. `Step` is the next slice. Its honest dependent constructor
+shape exposed a general named-constructor-telescope shift mismatch when a later
+field mentions an earlier field; that compiler completeness fix is required
+before `Step` lands and must not be bypassed with an unindexed remainder.
+
 ---
 
 ## 1. Purpose & positioning
