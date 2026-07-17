@@ -106,7 +106,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 
 ### B6. Supervision depth
 - [ ] Restart INTENSITY (`max_restarts`/`max_seconds`) — operational bound not modelled
-- [ ] Differential restart-SET semantics `one_for_one` / `one_for_all` / `rest_for_one` tied to preservation (NVLang Def. 4.2) — current `Fleet` preserves specs but not the per-strategy restart sets
+- [x] Differential restart-SET semantics `one_for_one` / `one_for_all` / `rest_for_one` tied to preservation (NVLang Def. 4.2) — all three strategies in `otp_supervisor.cure`, each preserving `Fleet(specs)`, differing only in which children they revive
 - [ ] Dynamic children / `simple_one_for_one`
 
 ### B7. Effects depth
