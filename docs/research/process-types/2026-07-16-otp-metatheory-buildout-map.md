@@ -316,7 +316,19 @@ Ordered by value. "Adaptation" = what changes moving to Cure's dependent/QTT set
   changes over a conversation) is constraint-solving over the whole behaviour, not a
   membership check; and GLOBAL interface inference from the system-wide send/receive graph.
   This slice is annotation-free mailbox typing for the FIRST-ORDER, finite-algebra, single-
-  receiver case — the decidable foundation a full solution builds on.
+  receiver case — the decidable foundation a full solution builds on. **Inference LAWS**
+  (`Std.Otp.InferenceLaws`: monotonicity, weakening/subtyping, principality) and **ADEQUACY**
+  (`Std.Otp.InferenceAdequacy`) are also proved: for SEQUENTIAL behaviours, the inferred
+  interface is operationally SAFE — `adequacy : Runs(b, c) -> WTat(c, infer(b))`, i.e. every
+  config reachable by running `b` is well-typed at `infer(b)` (the operational-preservation
+  half Proof of Delivery deferred, tied to inference, Idris rel=same). The OPEN research core
+  (evolving-protocol constraint solving; branching/recursion adequacy) is mapped to concrete
+  fills in `2026-07-17-{mailbox-inference-fixpoint-shape,frontier-matching-shapes,adequacy-shape}.md`:
+  mailbox types = commutative regex (mathlib `Computability/RegularExpressions`); solving =
+  Presburger/semilinear (mathlib `ModelTheory/.../Presburger`, Lean `omega`); the recursion
+  fixpoint (mathlib `Order/FixedPoints`+`OmegaCompletePartialOrder`); transfer monotonicity
+  (Lean `Tactic/Monotonicity`); constraint gen (mbcheck); fundamental theorem (Actris logrel).
+  Holed scaffolds in `scaffolds/`. Refs cloned to `~/Develop`.
 - **Out of scope (confirmed):** static **deadlock/liveness** is a *runtime* result
   (deadlock paper explicitly rejects the static route as undecidable + needs whole
   source); if ever wanted it is a DDMon-style probe layer, orthogonal to the type system.

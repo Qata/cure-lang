@@ -1,0 +1,45 @@
+mod InferenceAdequacy
+  type Tag = TA | TB | TC
+  type TagList = TNil | TCons(Tag, TagList)
+  type Member indices (t: Tag, iface: TagList)
+    MemHere  : Member(t, TCons(t, rest))
+    MemThere : Member(t, rest) -> Member(t, TCons(y, rest))
+  type AllMember indices (ts: TagList, iface: TagList)
+    AMNil  : AllMember(TNil, iface)
+    AMCons : Member(t, iface) -> AllMember(rest, iface) -> AllMember(TCons(t, rest), iface)
+  type Config = MkConfig(TagList, TagList)
+  type WTat indices (c: Config, iface: TagList)
+    MkWTat : AllMember(e, iface) -> AllMember(m, iface) -> WTat(MkConfig(e, m), iface)
+  type StepAt indices (i: TagList, before: Config, after: Config)
+    SSendAt   : Member(t, i) -> StepAt(i, MkConfig(e, m), MkConfig(TCons(t, e), m))
+    SArriveAt : StepAt(i, MkConfig(TCons(t, e), m), MkConfig(e, TCons(t, m)))
+    SRecvAt   : StepAt(i, MkConfig(e, TCons(t, m)), MkConfig(e, m))
+  fn preservation_at({i: TagList}, {b: Config}, {a: Config}, wt: WTat(b, i), s: StepAt(i, b, a)) -> WTat(a, i) = match s
+    SSendAt(mem) -> match wt
+      MkWTat(ae, am) -> MkWTat(AMCons(mem, ae), am)
+    SArriveAt() -> match wt
+      MkWTat(ae, am) -> match ae
+        AMCons(at, ae2) -> MkWTat(ae2, AMCons(at, am))
+    SRecvAt() -> match wt
+      MkWTat(ae, am) -> match am
+        AMCons(rat, am2) -> MkWTat(ae, am2)
+  type Behaviour = BNil | BRecv(Tag, Behaviour) | BSend(Tag, Behaviour)
+  fn infer(b: Behaviour) -> TagList = match b
+    BNil()      -> TNil
+    BRecv(t, k) -> TCons(t, infer(k))
+    BSend(t, k) -> TCons(t, infer(k))
+  type SendsIn indices (b: Behaviour, t: Tag)
+    SendHere  : SendsIn(BSend(t, k), t)
+    SendRecvK : SendsIn(k, t) -> SendsIn(BRecv(y, k), t)
+    SendSendK : SendsIn(k, t) -> SendsIn(BSend(y, k), t)
+  fn coverage({b: Behaviour}, {t: Tag}, sends: SendsIn(b, t)) -> Member(t, infer(b)) = match sends
+    SendHere()    -> MemHere()
+    SendRecvK(s2) -> MemThere(coverage(s2))
+    SendSendK(s2) -> MemThere(coverage(s2))
+  type Runs indices (b: Behaviour, c: Config)
+    RStart : Runs(b, MkConfig(TNil, TNil))
+    RStep  : Runs(b, before) -> StepAt(infer(b), before, after) -> Runs(b, after)
+  fn adequacy(b: Behaviour, {c: Config}, run: Runs(b, c)) -> WTat(c, infer(b)) = match run
+    RStart()          -> MkWTat(AMNil(), AMNil())
+    RStep(prev, step) -> preservation_at(adequacy(b, prev), step)
+end

@@ -53,12 +53,17 @@ PoD deferred). The genuinely NEW work is the COMPOSITION — proving the three f
 *this* project's `Std.Otp.*` reduction — but every part has a shape to port, and the hardest
 part (operational preservation for mailbox-typed configurations) is done.
 
-**Concretely provable next step:** the first-order fold fragment (no `BRec`) makes `?adequacy`
-dischargeable outright — induction on the run, `RStart ↦ MkWTat(AMNil, AMNil)`, `RStep ↦
-preservation_at ∘ IH`, with send-coverage `BSend(t,k) ⟹ Member(t, infer(b))` immediate from the
-fold. Proving THAT turns the scaffold's `?adequacy` into a theorem for the first-order case —
-the mailbox-inference adequacy the literature has only stated, not mechanized against an
-operational reduction — leaving only the recursive (`lfp`) fragment holed.
+**DONE — `Std.Otp.InferenceAdequacy` (`lib/std/otp_inference_adequacy.cure`).** The
+SEQUENTIAL first-order fragment (`BNil`/`BRecv`/`BSend`) is now PROVED end to end, no holes:
+`preservation_at` (subject reduction at `infer(b)`), `coverage` (`SendsIn(b,t) ⟹ Member(t,
+infer(b))`), and `adequacy` (every reachable config is `WTat(c, infer(b))`), Idris-mirrored
+`rel=same`. This is the mailbox-inference adequacy the literature has only STATED, mechanized
+against an operational reduction — the operational half Proof of Delivery deferred, tied to
+inference. The `?adequacy` block turned out NOT to be a deep gap: it was resolved by making the
+config argument IMPLICIT so the recursive call infers the intermediate config from `prev`'s type
+(the standard dependent-match form). What remains: BRANCHING (`BSeq`) needs `append`-membership
+whose left operand `infer(l)` is an erased existential index (`:erased_used_relevantly`), and
+RECURSION (`BRec`) needs the frontier `lfp` — both stay in `scaffolds/inference_adequacy.cure`.
 
 ## References (cloned to `~/Develop`)
 
