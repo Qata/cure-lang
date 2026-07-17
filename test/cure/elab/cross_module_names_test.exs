@@ -84,4 +84,23 @@ defmodule Cure.Elab.CrossModuleNamesTest do
       assert {:error, {:duplicate_constructor, :C}} = check(src)
     end
   end
+
+  # E3: a stdlib module whose name is a compound CamelCase word lives in a snake_cased file
+  # (`Std.Otp.InferenceLaws` -> `otp_inference_laws.cure`). The module->file mapping used to
+  # only downcase (`otp_inferencelaws`), so `use` of any multi-word module resolved NONE of its
+  # functions (`:unknown_global`). This is independent of whether the function carries implicits.
+  describe "multi-word stdlib module names resolve on use (E3)" do
+    test "an explicit-arg function from Std.Otp.InferenceLaws resolves" do
+      src = "mod X\n  use Std.Otp.InferenceLaws\n  fn t() -> AllHandled(TNil, TNil) = self_member(TNil)\nend\n"
+      assert {:ok, _} = check(src)
+    end
+
+    test "an implicit-carrying function from Std.Otp.InferenceLaws resolves" do
+      src =
+        "mod X\n  use Std.Otp.InferenceLaws\n" <>
+          "  fn t(h: Handles(TA, TCons(TA, TNil)), sub: AllHandled(TCons(TA, TNil), TCons(TA, TNil))) -> Handles(TA, TCons(TA, TNil)) = handles_mono(h, sub)\nend\n"
+
+      assert {:ok, _} = check(src)
+    end
+  end
 end

@@ -148,7 +148,13 @@ shared proof lemmas (e.g. `member_append_*`) into a reusable stdlib module.
 
 **Layer/risk.** E. Completeness (not soundness). Medium.
 
-**Status.** OPEN — tracked as task #15.
+**Status.** ✅ FIXED (`program.ex` `import_source_path`). Root cause was NOT implicits — it was
+the module→file mapping: `String.downcase(Enum.join(segments, "_"))` mapped
+`Std.Otp.InferenceLaws` to `otp_inferencelaws.cure`, but the file is `otp_inference_laws.cure`
+(the convention snake_cases each segment). So `use` of ANY multi-word module
+(`InferenceLaws`, `ReplyPreservation`, …) merged zero of its defs → `:unknown_global` on every
+call, implicit or explicit. Fix snake_cases each segment (`Macro.underscore`) with the legacy
+all-downcase form kept as a fallback. Regression tests in `cross_module_names_test.exs`.
 
 ---
 
