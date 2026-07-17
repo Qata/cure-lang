@@ -1,0 +1,34 @@
+mod Tree
+  use Std.Equivalent
+  type Tree = Leaf | Node(Tree, Nat, Tree)
+  fn add(m: Nat, n: Nat) -> Nat = match m
+    Z()  -> n
+    S(k) -> S(add(k, n))
+  fn mirror(t: Tree) -> Tree = match t
+    Leaf()        -> Leaf()
+    Node(l, v, r) -> Node(mirror(r), v, mirror(l))
+  fn size(t: Tree) -> Nat = match t
+    Leaf()        -> Z()
+    Node(l, v, r) -> S(add(size(l), size(r)))
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+  fn add_cong({a1: Nat}, {b1: Nat}, {a2: Nat}, {b2: Nat}, ea: Equivalent(Nat, a1, b1), eb: Equivalent(Nat, a2, b2)) -> Equivalent(Nat, add(a1, a2), add(b1, b2)) =
+    rewrite ea in rewrite eb in reflexive(add(b1, b2))
+  fn node_cong({l1: Tree}, {l2: Tree}, v: Nat, {r1: Tree}, {r2: Tree}, el: Equivalent(Tree, l1, l2), er: Equivalent(Tree, r1, r2)) -> Equivalent(Tree, Node(l1, v, r1), Node(l2, v, r2)) =
+    rewrite el in rewrite er in reflexive(Node(l2, v, r2))
+  fn add_zero_r(x: Nat) -> Equivalent(Nat, add(x, Z()), x) = match x
+    Z()  -> reflexive(Z())
+    S(k) -> snat_cong(add_zero_r(k))
+  fn add_succ_r(x: Nat, y: Nat) -> Equivalent(Nat, add(x, S(y)), S(add(x, y))) = match x
+    Z()  -> reflexive(S(y))
+    S(k) -> snat_cong(add_succ_r(k, y))
+  fn add_comm(x: Nat, y: Nat) -> Equivalent(Nat, add(x, y), add(y, x)) = match x
+    Z()  -> sym(add_zero_r(y))
+    S(k) -> trans(snat_cong(add_comm(k, y)), sym(add_succ_r(y, k)))
+  fn mirror_involution(t: Tree) -> Equivalent(Tree, mirror(mirror(t)), t) = match t
+    Leaf()        -> reflexive(Leaf())
+    Node(l, v, r) -> node_cong(v, mirror_involution(l), mirror_involution(r))
+  fn size_mirror(t: Tree) -> Equivalent(Nat, size(mirror(t)), size(t)) = match t
+    Leaf()        -> reflexive(Z())
+    Node(l, v, r) -> snat_cong(trans(add_cong(size_mirror(r), size_mirror(l)), add_comm(size(r), size(l))))
+end
