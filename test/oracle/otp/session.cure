@@ -1,0 +1,24 @@
+mod Session
+  type Tag = TA | TB | TC
+  type SType = SEnd | SSend(Tag, SType) | SRecv(Tag, SType)
+  fn dual(s: SType) -> SType = match s
+    SEnd()      -> SEnd()
+    SSend(t, k) -> SRecv(t, dual(k))
+    SRecv(t, k) -> SSend(t, dual(k))
+  fn dual_involution(s: SType) -> Equivalent(SType, dual(dual(s)), s) = match s
+    SEnd()      -> reflexive(SEnd())
+    SSend(t, k) -> rewrite dual_involution(k) in reflexive(SSend(t, k))
+    SRecv(t, k) -> rewrite dual_involution(k) in reflexive(SRecv(t, k))
+  type Compat indices (l: SType, r: SType)
+    CEnd : Compat(SEnd, SEnd)
+    CSR  : (t: Tag) -> Compat(l, r) -> Compat(SSend(t, l), SRecv(t, r))
+    CRS  : (t: Tag) -> Compat(l, r) -> Compat(SRecv(t, l), SSend(t, r))
+  fn ssend_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SSend(t, a), SSend(t, b)) =
+    rewrite e in reflexive(SSend(t, b))
+  fn srecv_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SRecv(t, a), SRecv(t, b)) =
+    rewrite e in reflexive(SRecv(t, b))
+  fn compat_dual({l: SType}, {r: SType}, c: Compat(l, r)) -> Equivalent(SType, l, dual(r)) = match c
+    CEnd()     -> reflexive(SEnd())
+    CSR(t, c2) -> ssend_cong(t, compat_dual(c2))
+    CRS(t, c2) -> srecv_cong(t, compat_dual(c2))
+end

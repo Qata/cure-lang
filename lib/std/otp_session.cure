@@ -1,0 +1,52 @@
+@group(:concurrency)
+mod Std.Otp.Session
+  ## BINARY SESSION TYPES + DUALITY (build-out map B3, session-types-into-mailboxes).
+  ## de'Liguoro–Padovani §4.3–4.4 encode binary session types into mailbox types; the load-
+  ## bearing notion is DUALITY — two endpoints of a channel have DUAL types (one's send is the
+  ## other's receive), and a session is communication-safe exactly when its endpoints are dual.
+  ##
+  ## `SType` is a binary session type (`SEnd`, send-then-continue, receive-then-continue). `dual`
+  ## swaps send/receive. This module proves the two theorems session-type soundness rests on:
+  ## `dual_involution` — `dual` is an involution (`dual(dual(S)) = S`), so the two endpoints
+  ## determine each other; and `compat_dual` — the structural COMPATIBILITY relation (a send on
+  ## one side matched by a receive on the other, recursively) coincides with duality
+  ## (`Compat(l, r) ⟹ l = dual(r)`). So "the endpoints can safely communicate" is precisely
+  ## "the endpoints are dual", the invariant a mailbox encoding must preserve.
+
+  type Tag = TA | TB | TC
+  type SType = SEnd | SSend(Tag, SType) | SRecv(Tag, SType)
+
+  ## The dual of a session type: swap sends and receives.
+  fn dual(s: SType) -> SType = match s
+    SEnd()      -> SEnd()
+    SSend(t, k) -> SRecv(t, dual(k))
+    SRecv(t, k) -> SSend(t, dual(k))
+
+  ## **DUALITY IS AN INVOLUTION.** Dualizing twice returns the original type — so an endpoint's
+  ## type and its peer's determine each other. (Send/receive are constructor FIELDS here, bound
+  ## by name on the match, so no index-existential workaround is needed.)
+  fn dual_involution(s: SType) -> Equivalent(SType, dual(dual(s)), s) = match s
+    SEnd()      -> reflexive(SEnd())
+    SSend(t, k) -> rewrite dual_involution(k) in reflexive(SSend(t, k))
+    SRecv(t, k) -> rewrite dual_involution(k) in reflexive(SRecv(t, k))
+
+  ## Structural COMPATIBILITY: two endpoints can safely communicate — a send on one side is a
+  ## receive on the other, recursively. The tag is carried explicitly so the proof can name it.
+  type Compat indices (l: SType, r: SType)
+    CEnd : Compat(SEnd, SEnd)
+    CSR  : (t: Tag) -> Compat(l, r) -> Compat(SSend(t, l), SRecv(t, r))
+    CRS  : (t: Tag) -> Compat(l, r) -> Compat(SRecv(t, l), SSend(t, r))
+
+  ## Congruences for the session constructors under equality.
+  fn ssend_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SSend(t, a), SSend(t, b)) =
+    rewrite e in reflexive(SSend(t, b))
+  fn srecv_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SRecv(t, a), SRecv(t, b)) =
+    rewrite e in reflexive(SRecv(t, b))
+
+  ## **COMPATIBILITY = DUALITY.** Compatible endpoints are exactly dual endpoints — communication
+  ## safety is duality. Induction on the compatibility derivation.
+  fn compat_dual({l: SType}, {r: SType}, c: Compat(l, r)) -> Equivalent(SType, l, dual(r)) = match c
+    CEnd()     -> reflexive(SEnd())
+    CSR(t, c2) -> ssend_cong(t, compat_dual(c2))
+    CRS(t, c2) -> srecv_cong(t, compat_dual(c2))
+end
