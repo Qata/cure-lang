@@ -94,8 +94,8 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 
 ### B3. Counting / multiplicity fragment — commutative-regex mailbox types (Special Delivery, de'Liguoro–Padovani)
 *(the tag-SET model does not reach this; it is a set, not a multiset with counts)*
-- [ ] Mailbox types as COMMUTATIVE REGEX (patterns `𝟙`, `E+F`, `E·F` commutative, `*E`) — not flat tag sets
-- [ ] Brzozowski derivatives for pattern matching
+- [x] Mailbox types as COMMUTATIVE REGEX (patterns `PZero`/`POne`/`PAtom`/`PPlus`/`PTimes`/`PStar`) over MULTISETS (Parikh vectors `MkMS(Nat,Nat,Nat)`), with the `Accepts` relation and the defining laws `times_comm` (`E·F ≡ F·E`) + `plus_comm` (via `msadd_comm`/Nat `plus_comm`) — **SHIPPED** `otp_mailbox_pattern.cure` (Idris `rel=same`). This is the counting model the tag-set inference cannot express.
+- [ ] Brzozowski derivatives for pattern matching (nullable + `deriv` + the fundamental theorem `Accepts(deriv(E,t), m) ↔ Accepts(E, m ⊎ {t})`) — NEXT in-Cure slice
 - [ ] Pattern SUBTYPING (inclusion) with multiplicities
 - [ ] Conformance (`reliable`/`usable`, de'Liguoro–Padovani Def. 10)
 - [ ] Bidirectional constraint GENERATION from a behaviour

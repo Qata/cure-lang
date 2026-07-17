@@ -1,0 +1,75 @@
+@group(:concurrency)
+mod Std.Otp.MailboxPattern
+  ## COMMUTATIVE-REGEX mailbox types (build-out map B3, in-Cure half). The tag-SET inference
+  ## model (`Std.Otp.Inference*`) tracks WHICH tags a mailbox handles; it cannot express
+  ## MULTIPLICITY ("two `Put`s then a `Get`"). The mailbox-types literature (Special Delivery,
+  ## de'Liguoro–Padovani) models a mailbox type as a COMMUTATIVE regular expression over the
+  ## message alphabet — patterns `𝟙`, `E+F`, `E·F` (commutative), `*E` — denoting SETS of
+  ## MULTISETS of messages (Parikh vectors), not flat tag sets.
+  ##
+  ## This module builds that model in Cure over a finite 3-tag alphabet: a multiset is a Parikh
+  ## vector `MkMS(Nat, Nat, Nat)` (counts of `TA`/`TB`/`TC`), `Accepts(pat, m)` is the
+  ## acceptance relation (which multisets a pattern denotes), and the two defining laws of the
+  ## COMMUTATIVE fragment are proved — `times_comm` (`E·F` denotes the same multisets as `F·E`,
+  ## the property that separates commutative from sequential regex) and `plus_comm`. The
+  ## multiset arithmetic rests on `plus_comm` on `Nat`, proved here by the standard induction.
+  ##
+  ## Next slices (B3): `nullable` + Brzozowski derivatives + the fundamental theorem, then
+  ## pattern SUBTYPING (inclusion). The DECISION procedure for general inclusion needs a
+  ## Presburger/semilinear solver, which by the SMT trust-boundary decision stays OUT of the TCB
+  ## (an untrusted lint) — the algebra and derivative correctness proved here do not.
+
+  type Tag = TA | TB | TC
+
+  ## Nat addition and commutativity (the multiset arithmetic; standard induction via rewrite).
+  fn plus(m: Nat, n: Nat) -> Nat = match m
+    Z()  -> n
+    S(k) -> S(plus(k, n))
+  fn plus_n_z(n: Nat) -> Equivalent(Nat, plus(n, Z()), n) = match n
+    Z()  -> reflexive(Z())
+    S(k) -> rewrite plus_n_z(k) in reflexive(S(k))
+  fn plus_n_s(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, S(n)), S(plus(m, n))) = match m
+    Z()  -> reflexive(S(n))
+    S(k) -> rewrite plus_n_s(k, n) in reflexive(S(S(plus(k, n))))
+  fn plus_comm(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, n), plus(n, m)) = match m
+    Z()  -> rewrite plus_n_z(n) in reflexive(n)
+    S(k) -> rewrite plus_n_s(n, k) in rewrite plus_comm(k, n) in reflexive(S(plus(n, k)))
+
+  ## A multiset over the 3-tag alphabet = a Parikh vector (counts per tag).
+  type MS = MkMS(Nat, Nat, Nat)
+  fn msadd(x: MS, y: MS) -> MS = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, e, f) -> MkMS(plus(a, d), plus(b, e), plus(c, f))
+  fn msadd_comm(x: MS, y: MS) -> Equivalent(MS, msadd(x, y), msadd(y, x)) = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, e, f) -> rewrite plus_comm(d, a) in rewrite plus_comm(e, b) in rewrite plus_comm(f, c) in reflexive(MkMS(plus(a, d), plus(b, e), plus(c, f)))
+
+  ## Commutative-regex patterns over the alphabet.
+  type Pat = PZero | POne | PAtom(Tag) | PPlus(Pat, Pat) | PTimes(Pat, Pat) | PStar(Pat)
+
+  ## `Accepts(pat, m)` — the multiset `m` is denoted by `pat`. `PTimes` is the Minkowski sum
+  ## (`msadd`), `PStar` its iterate; `PTimes`/`PStar` carry their split multisets EXPLICITLY so
+  ## the commutativity proof can name them (index existentials are otherwise unnameable).
+  type Accepts indices (pat: Pat, m: MS)
+    AOne   : Accepts(POne, MkMS(Z, Z, Z))
+    AAtomA : Accepts(PAtom(TA), MkMS(S(Z), Z, Z))
+    AAtomB : Accepts(PAtom(TB), MkMS(Z, S(Z), Z))
+    AAtomC : Accepts(PAtom(TC), MkMS(Z, Z, S(Z)))
+    APlusL : Accepts(e, m) -> Accepts(PPlus(e, f), m)
+    APlusR : Accepts(f, m) -> Accepts(PPlus(e, f), m)
+    ATimes : (m1: MS) -> (m2: MS) -> Accepts(e, m1) -> Accepts(f, m2) -> Accepts(PTimes(e, f), msadd(m1, m2))
+    AStar0 : Accepts(PStar(e), MkMS(Z, Z, Z))
+    AStarN : (m1: MS) -> (m2: MS) -> Accepts(e, m1) -> Accepts(PStar(e), m2) -> Accepts(PStar(e), msadd(m1, m2))
+
+  ## **CHOICE COMMUTATIVITY.** `E+F` and `F+E` denote the same multisets (swap the injection).
+  fn plus_pat_comm({e: Pat}, {f: Pat}, {m: MS}, acc: Accepts(PPlus(e, f), m)) -> Accepts(PPlus(f, e), m) = match acc
+    APlusL(ae) -> APlusR(ae)
+    APlusR(af) -> APlusL(af)
+
+  ## **CONCATENATION COMMUTATIVITY — the defining law of the COMMUTATIVE fragment.** `E·F` and
+  ## `F·E` denote the same multisets: swap the two `ATimes` sub-derivations and rewrite by
+  ## `msadd_comm` (the Minkowski sum is commutative because `+` on `Nat` is). This is exactly
+  ## what a mailbox (an unordered bag of messages) needs and a sequential regex does not have.
+  fn times_comm({e: Pat}, {f: Pat}, {m: MS}, acc: Accepts(PTimes(e, f), m)) -> Accepts(PTimes(f, e), m) = match acc
+    ATimes(m1, m2, ae, af) -> rewrite msadd_comm(m1, m2) in ATimes(m2, m1, af, ae)
+end

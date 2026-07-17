@@ -1,0 +1,44 @@
+mod MailboxPattern
+  type Tag = TA | TB | TC
+
+  fn plus(m: Nat, n: Nat) -> Nat = match m
+    Z()  -> n
+    S(k) -> S(plus(k, n))
+  fn plus_n_z(n: Nat) -> Equivalent(Nat, plus(n, Z()), n) = match n
+    Z()  -> reflexive(Z())
+    S(k) -> rewrite plus_n_z(k) in reflexive(S(k))
+  fn plus_n_s(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, S(n)), S(plus(m, n))) = match m
+    Z()  -> reflexive(S(n))
+    S(k) -> rewrite plus_n_s(k, n) in reflexive(S(S(plus(k, n))))
+  fn plus_comm(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, n), plus(n, m)) = match m
+    Z()  -> rewrite plus_n_z(n) in reflexive(n)
+    S(k) -> rewrite plus_n_s(n, k) in rewrite plus_comm(k, n) in reflexive(S(plus(n, k)))
+
+  type MS = MkMS(Nat, Nat, Nat)
+  fn msadd(x: MS, y: MS) -> MS = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, e, f) -> MkMS(plus(a, d), plus(b, e), plus(c, f))
+  fn msadd_comm(x: MS, y: MS) -> Equivalent(MS, msadd(x, y), msadd(y, x)) = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, e, f) -> rewrite plus_comm(d, a) in rewrite plus_comm(e, b) in rewrite plus_comm(f, c) in reflexive(MkMS(plus(a, d), plus(b, e), plus(c, f)))
+
+  type Pat = PZero | POne | PAtom(Tag) | PPlus(Pat, Pat) | PTimes(Pat, Pat) | PStar(Pat)
+
+  type Accepts indices (pat: Pat, m: MS)
+    AOne   : Accepts(POne, MkMS(Z, Z, Z))
+    AAtomA : Accepts(PAtom(TA), MkMS(S(Z), Z, Z))
+    AAtomB : Accepts(PAtom(TB), MkMS(Z, S(Z), Z))
+    AAtomC : Accepts(PAtom(TC), MkMS(Z, Z, S(Z)))
+    APlusL : Accepts(e, m) -> Accepts(PPlus(e, f), m)
+    APlusR : Accepts(f, m) -> Accepts(PPlus(e, f), m)
+    ATimes : (m1: MS) -> (m2: MS) -> Accepts(e, m1) -> Accepts(f, m2) -> Accepts(PTimes(e, f), msadd(m1, m2))
+    AStar0 : Accepts(PStar(e), MkMS(Z, Z, Z))
+    AStarN : (m1: MS) -> (m2: MS) -> Accepts(e, m1) -> Accepts(PStar(e), m2) -> Accepts(PStar(e), msadd(m1, m2))
+
+  fn plus_pat_comm({e: Pat}, {f: Pat}, {m: MS}, acc: Accepts(PPlus(e, f), m)) -> Accepts(PPlus(f, e), m) = match acc
+    APlusL(ae) -> APlusR(ae)
+    APlusR(af) -> APlusL(af)
+
+  fn times_comm({e: Pat}, {f: Pat}, {m: MS}, acc: Accepts(PTimes(e, f), m)) -> Accepts(PTimes(f, e), m) = match acc
+    ATimes(m1, m2, ae, af) -> rewrite msadd_comm(m1, m2) in ATimes(m2, m1, af, ae)
+end
