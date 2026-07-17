@@ -109,4 +109,23 @@ mod Std.Otp.GenEvent
       MCons(i, st, r) -> r
     There(iface, p)   -> match mgr
       MCons(i, st, r) -> MCons(i, st, remove_at(r, p))
+
+  ## **SWAP / CODE_CHANGE.** Replace the handler at `pos` with a fresh state (its upgraded
+  ## implementation), keeping its interface slot. The result is typed `Manager(ifaces)` with the
+  ## SAME interface list — the type already certifies that a code_change does not alter the
+  ## manager's configuration; only the swapped handler's state changes.
+  fn swap_at({ifaces: IfaceList}, mgr: Manager(ifaces), pos: Pos(ifaces), new_st: Nat) -> Manager(ifaces) = match pos
+    Here(iface, rest) -> match mgr
+      MCons(i, st, r) -> MCons(i, new_st, r)
+    There(iface, p)   -> match mgr
+      MCons(i, st, r) -> MCons(i, st, swap_at(r, p, new_st))
+
+  ## **SWAP PRESERVES THE INTERFACE LIST.** Explicit confirmation that a handler upgrade leaves the
+  ## manager's configuration (WHO the handlers are and WHAT each handles) unchanged — only the
+  ## swapped handler's implementation is replaced.
+  fn swap_preserves_ifaces({ifaces: IfaceList}, mgr: Manager(ifaces), pos: Pos(ifaces), new_st: Nat) -> Equivalent(IfaceList, interfaces(swap_at(mgr, pos, new_st)), interfaces(mgr)) = match pos
+    Here(iface, rest) -> match mgr
+      MCons(i, st, r) -> reflexive(ICons(i, interfaces(r)))
+    There(iface, p)   -> match mgr
+      MCons(i, st, r) -> icons_cong(i, swap_preserves_ifaces(r, p, new_st))
 end

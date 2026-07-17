@@ -68,3 +68,11 @@ delete_at (There iface p) = ICons iface (delete_at p)
 remove_at : (mgr : Manager ifaces) -> (pos : Pos ifaces) -> Manager (delete_at pos)
 remove_at (MCons _ st r) (Here iface rest) = r
 remove_at (MCons _ st r) (There iface p) = MCons iface st (remove_at r p)
+
+swap_at : (mgr : Manager ifaces) -> (pos : Pos ifaces) -> (new_st : Nat) -> Manager ifaces
+swap_at (MCons _ st r) (Here iface rest) new_st = MCons iface new_st r
+swap_at (MCons _ st r) (There iface p) new_st = MCons iface st (swap_at r p new_st)
+
+swap_preserves_ifaces : (mgr : Manager ifaces) -> (pos : Pos ifaces) -> (new_st : Nat) -> interfaces (swap_at mgr pos new_st) = interfaces mgr
+swap_preserves_ifaces (MCons _ st r) (Here iface rest) new_st = Refl
+swap_preserves_ifaces (MCons _ st r) (There iface p) new_st = icons_cong iface (swap_preserves_ifaces r p new_st)

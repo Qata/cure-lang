@@ -27,6 +27,18 @@ defmodule Cure.Stdlib.OtpGenEventTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "swap_at (code_change): upgrading a handler preserves the interface configuration" do
+    src = """
+    mod GeSwap
+      use Std.Otp.GenEvent
+      fn keeps({ifaces: IfaceList}, mgr: Manager(ifaces), pos: Pos(ifaces), new_st: Nat) -> Equivalent(IfaceList, interfaces(swap_at(mgr, pos, new_st)), interfaces(mgr)) =
+        swap_preserves_ifaces(mgr, pos, new_st)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "remove_at: removing a handler at a position deletes exactly that interface entry" do
     # A two-handler manager; removing the SECOND handler (There Here) leaves a manager typed by
     # the interface list with only the first entry.
