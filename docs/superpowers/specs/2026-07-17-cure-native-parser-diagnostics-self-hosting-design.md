@@ -388,3 +388,71 @@ When 0.35 work begins:
 Until then, this document records direction and boundaries only. It does not
 authorize pulling user-facing parser or diagnostic expansion into the 0.34
 dependent-type rewrite.
+
+---
+
+## Appendix A — parked `Std.Data.Suffix` prototype
+
+The following is the exact Cure source of the 0.34 exploration as parked on
+2026-07-17. It was removed from `lib/std` because the public parsing feature is
+targeted at 0.35. Preserve it here as implementation evidence and a restart
+point, not as a claim that proof erasure or the complete suffix algebra is done.
+
+```cure
+@group(:collections)
+mod Std.Data.Suffix
+  ## A proof that `rem` is a suffix of `orig`, indexed by whether at least one
+  ## element was consumed. This is the foundation of total lexers and parsers:
+  ## recursive drivers may descend only after receiving a `Consumed(...,
+  ## True, ...)` witness.
+  ##
+  ## The indices are compile-time information. Runtime parsers carry their
+  ## remainder directly; later slices erase/compact the witness while retaining
+  ## the kernel-checked strictness relationship.
+
+  use Std.Bool
+  use Std.List
+
+  type Consumed(a: Type) indices (strict: Bool, rem: List(a), orig: List(a))
+    Same : (xs: List(a)) -> Consumed(a, False, xs, xs)
+    Drop : (head: a) -> Consumed(a, strict, rem, orig) -> Consumed(a, out, rem, Cons(head, orig))
+
+  ## One parser transition. Success existentially carries its remainder while
+  ## the dependent proof ties that remainder back to the original input.
+  ## Failure is polymorphic in the consumption indices, so callers retain the
+  ## strictness promised by the parser even when no value is produced.
+  type Step(t: Type, e: Type, a: Type) indices (strict: Bool, orig: List(t))
+    Succ : (value: a) -> (rest: List(t)) -> Consumed(t, strict, rest, orig) -> Step(t, e, a, strict, orig)
+    Fail : (error: e) -> Step(t, e, a, strict, orig)
+
+  ## Accessibility of the strict-suffix relation. A driver may recurse on any
+  ## `rest` only after applying this witness with a proof that `rest` consumed
+  ## at least one element from `orig`.
+  type Acc(t: Type) indices (orig: List(t))
+    MkAcc : (descend: ((rest: List(t)) -> Consumed(t, True, rest, orig) -> Acc(t, rest))) -> Acc(t, orig)
+
+  ## Reflexivity: consuming nothing leaves the original input unchanged.
+  fn same({a: Type}, xs: List(a)) -> Consumed(a, False, xs, xs) = Same(xs)
+
+  ## Extend a suffix proof across one discarded head. Regardless of the inner
+  ## proof's strictness, the result is now known to have consumed input.
+  fn drop({a: Type}, {strict: Bool}, {rem: List(a)}, {orig: List(a)}, head: a, proof: Consumed(a, strict, rem, orig)) -> Consumed(a, True, rem, Cons(head, orig)) =
+    Drop(head, proof)
+
+  ## Transitivity. Sequencing two consumers is strict when either consumer is
+  ## strict. The escaped `or` is an ordinary imported type-level function.
+  fn trans({a: Type}, {left: Bool}, {right: Bool}, {orig: List(a)}, {mid: List(a)}, {rem: List(a)}, first: Consumed(a, left, mid, orig), second: Consumed(a, right, rem, mid)) -> Consumed(a, `or`(left, right), rem, orig) =
+    match first
+      Same(_) -> second
+      Drop(head, previous) -> Drop(head, trans(previous, second))
+
+end
+```
+
+Known restart conditions:
+
+- implement `weaken`/`weakens` only after the general dependent-match motive
+  `:branch_type` rejection is understood;
+- mark proof fields and accessibility arguments honestly quantity-zero;
+- verify erasure before claiming zero runtime allocation;
+- restore focused library tests when the module returns to `lib/std`.
