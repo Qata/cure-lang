@@ -306,4 +306,21 @@ mod Std.Otp.MailboxPattern
     ITimes(s1, s2) -> IPlus(IInL(ITimes(deriv_mono(t, s1), s2)), IInR(ITimes(s1, deriv_mono(t, s2))))
     IStar(s)       -> ITimes(deriv_mono(t, s), IStar(s))
     ITrans(sef, sfg) -> ITrans(deriv_mono(t, sef), deriv_mono(t, sfg))
+
+  ## **BRZOZOWSKI MATCHING** — the operational decision procedure for mailbox membership. A
+  ## message stream is a `Word` (a list presenting a bag in some order); `parikh` is its bag,
+  ## `dfold` folds the derivative along it, and matching = the residual is `nullable`.
+  ## `matches_word_sound` proves it SOUND: if `dfold(E, w)` is nullable then `E` accepts
+  ## `parikh(w)`. Induction on the word — `nullable_sound` at the empty tail, `deriv_sound`
+  ## relocating each consumed tag back into the bag (up to `msadd_comm`).
+  type Word = WNil | WCons(Tag, Word)
+  fn parikh(w: Word) -> MS = match w
+    WNil()         -> MkMS(Z, Z, Z)
+    WCons(t, rest) -> msadd(singleton(t), parikh(rest))
+  fn dfold(e: Pat, w: Word) -> Pat = match w
+    WNil()         -> e
+    WCons(t, rest) -> dfold(deriv(e, t), rest)
+  fn matches_word_sound(e: Pat, w: Word, h: Equivalent(B, nullable(dfold(e, w)), T)) -> Accepts(e, parikh(w)) = match w
+    WNil()         -> nullable_sound(e, h)
+    WCons(t, rest) -> rewrite msadd_comm(singleton(t), parikh(rest)) in deriv_sound(e, t, parikh(rest), matches_word_sound(deriv(e, t), rest, h))
 end

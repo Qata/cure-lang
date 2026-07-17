@@ -228,3 +228,18 @@ deriv_mono t (IInR seg) = IInR (deriv_mono t seg)
 deriv_mono t (ITimes s1 s2) = IPlus (IInL (ITimes (deriv_mono t s1) s2)) (IInR (ITimes s1 (deriv_mono t s2)))
 deriv_mono t (IStar s) = ITimes (deriv_mono t s) (IStar s)
 deriv_mono t (ITrans sef sfg) = ITrans (deriv_mono t sef) (deriv_mono t sfg)
+
+data Word = WNil | WCons Tag Word
+
+parikh : Word -> MS
+parikh WNil = MkMS 0 0 0
+parikh (WCons t rest) = msadd (singleton t) (parikh rest)
+
+dfold : Pat -> Word -> Pat
+dfold e WNil = e
+dfold e (WCons t rest) = dfold (deriv e t) rest
+
+matches_word_sound : (e : Pat) -> (w : Word) -> (nullable (dfold e w) = T) -> Accepts e (parikh w)
+matches_word_sound e WNil h = nullable_sound e h
+matches_word_sound e (WCons t rest) h =
+  rewrite msadd_comm (singleton t) (parikh rest) in deriv_sound e t (parikh rest) (matches_word_sound (deriv e t) rest h)

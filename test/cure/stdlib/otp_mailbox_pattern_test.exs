@@ -144,4 +144,16 @@ defmodule Cure.Stdlib.OtpMailboxPatternTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "matches_word_sound: Brzozowski matching decides membership (word [TA,TB] in {TA}.{TB})" do
+    src = """
+    mod MatchInst
+      use Std.Otp.MailboxPattern
+      fn matched() -> Accepts(PTimes(PAtom(TA), PAtom(TB)), MkMS(S(Z), S(Z), Z)) =
+        matches_word_sound(PTimes(PAtom(TA), PAtom(TB)), WCons(TA, WCons(TB, WNil())), reflexive(T))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end
