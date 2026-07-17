@@ -166,12 +166,22 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
     # payload, handle_cast/pickup spliced verbatim) is pinned by "terse initial+
     # handle_cast / initial+messages+handle_cast template routes through the shared
     # family raw emitter" in actor_family_raw_test.exs.
-    {"Raw10_bare_cast",
-     """
-     actor Cure.Generated.Raw10_bare_cast handle_cast
-       %[:noreply, state]
-     """,
-     "d960f4e0002773caf1bd8f8cdf855ee2cb1dafc16909bd8b06123d1a23fe11ff"},
+    # Raw10_bare_cast (STATELESS `actor N handle_cast <body>`) has been FOLDED into
+    # the shared emit_raw_cast_stateless → derive_actor_family_raw_stateless emitter
+    # (§1e mechanism A, state-poly path) via the `computed directly by` multi-arg
+    # input path. This is the first fold to route through the state-polymorphic
+    # emitter (emit_actor_parts_poly_state + gen_server_module_raw): the stateless
+    # form keeps the state a free type var `p` and emits NO `typealias State`, so a
+    # uniform State alias cannot be used. Per the corrected spec (d1aec7b4) the raw
+    # fold is a behavioral-equivalence guarantee, NOT byte-identical: the folded
+    # family path emits Effect-wrapped default callbacks and DROPS the template's
+    # default handle_call (matching every other folded raw form), legitimately
+    # reshaping the BEAM. Its byte-identical golden therefore retires; behavioral
+    # equivalence (init/1 seeds the state, start_link/1 starts, handle_cast body
+    # spliced verbatim, :sys.get_state reflects the seed) is pinned by "bare
+    # stateless handle_cast template routes through the poly-state family raw
+    # emitter" in actor_family_raw_test.exs, and by container_macro_test:213
+    # (Cure.PolymorphicCast).
     # Raw11_state_messages_info (`actor N state T messages <M> handle_info <body>`)
     # and Raw12_state_info (`... state T handle_info <body>`) have been FOLDED into
     # the shared emit_raw_state_messages_info / emit_raw_state_info →

@@ -354,4 +354,33 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert apply(:"Cure.Generated.RawFamilyStateWithBody", :init, [:anything]) == {:ok, 0}
     assert apply(:"Cure.Generated.RawFamilyStateWithBody", :handle_cast, [:ping, 7]) == {:noreply, 7}
   end
+
+  test "bare stateless handle_cast template routes through the poly-state family raw emitter" do
+    # The `actor N handle_cast <cast-body>` form (rule at actor.cure:172) is
+    # STATELESS — the hand-written template kept the state polymorphic (free `p`,
+    # no `typealias State`) and used a default init/start_link/1. Folding it
+    # requires a state-polymorphic emitter path (emit_actor_parts_poly_state +
+    # derive_actor_family_raw_stateless via adapter emit_raw_cast_stateless): the
+    # callbacks carry a free `p` state var and NO module-level State alias (a
+    # `typealias State = p` with free `p` would be :unknown_global). Behavioral
+    # contract preserved from container_macro_test:213 (Cure.PolymorphicCast):
+    # start_link/1 seeds the state, init/1 returns {:ok, arg}, and the spliced
+    # handle_cast body drives the cast. Raw fold = behavioral-equivalence, NOT
+    # byte-identical (spec d1aec7b4); the template's default handle_call is
+    # dropped, matching every other folded raw form.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyStatelessCast handle_cast
+        %[:noreply, state]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyStatelessCast", :init, [7]) == {:ok, 7}
+    assert apply(:"Cure.Generated.RawFamilyStatelessCast", :handle_cast, [:inc, 4]) == {:noreply, 4}
+    assert {:ok, pid} = apply(:"Cure.Generated.RawFamilyStatelessCast", :start_link, [0])
+    assert :sys.get_state(pid) == 0
+    :gen_server.stop(pid)
+  end
 end
