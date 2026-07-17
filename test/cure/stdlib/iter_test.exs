@@ -1,5 +1,5 @@
 defmodule Cure.Stdlib.IterTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   # `Cure.Std.Iter` is loaded dynamically by `Cure.Stdlib.Preload` in
   # `setup_all` below; Elixir's compile-time checker doesn't see it,
