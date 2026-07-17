@@ -66,4 +66,17 @@ mod Std.Otp.InferenceFixpoint
     ) -> AllHandled(iterate(f, TNil, n), a) = match n
     Z()  -> AHNil()
     S(k) -> all_handled_trans(mono(iterate(f, TNil, k), a, lfp_le(f, mono, a, pre, k)), pre)
+
+  ## **ASCENDING KLEENE CHAIN** (mathlib `Monotone.monotone_iterate_of_le_map`). For a monotone
+  ## `f`, each iterate from bottom is `⊆` the next: `f^n(⊥) ⊆ f^{n+1}(⊥)`. Induction on `n`: the
+  ## base is `⊥ ⊆ f(⊥)` (`⊥` is below everything); the step lifts the induction hypothesis
+  ## through `f` by monotonicity. This is the chain whose stabilization (once a bounded size
+  ## measure is added) yields the least fixed point.
+  fn monotone_iterate(
+      f: (TagList) -> TagList,
+      mono: (x: TagList) -> (y: TagList) -> (AllHandled(x, y)) -> AllHandled(f(x), f(y)),
+      n: Nat
+    ) -> AllHandled(iterate(f, TNil, n), iterate(f, TNil, S(n))) = match n
+    Z()  -> AHNil()
+    S(k) -> mono(iterate(f, TNil, k), iterate(f, TNil, S(k)), monotone_iterate(f, mono, k))
 end

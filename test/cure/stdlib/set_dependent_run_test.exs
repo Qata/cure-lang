@@ -27,9 +27,11 @@ defmodule Cure.Stdlib.SetDependentRunTest do
   never be dropped or clobbered by this producer — the historical flake, where a
   tree-shaken partial view overwrote the shared global name. Set's delegated
   calls resolve to the PREFIXED Map (via `remote_target`'s prefix routing, C2), a
-  genuine cross-module remote call staying inside this test's sandbox. `async:
-  false` is retained as defence-in-depth against two runs racing to define the
-  same prefixed atom, not for correctness.
+  genuine cross-module remote call staying inside this test's sandbox. The
+  emitted Map still carries its FULL owner surface (`map_surface` below), so it
+  mirrors what the real compiler installs. `async: false` is retained as
+  defence-in-depth against two runs racing to define the same prefixed atom, not
+  for correctness.
   """
   use ExUnit.Case, async: false
 

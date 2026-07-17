@@ -28,3 +28,10 @@ lfp_le : (f : TagList -> TagList) ->
          AllHandled (iterate f TNil n) a
 lfp_le f mono a pre Z = AHNil
 lfp_le f mono a pre (S k) = all_handled_trans (mono (iterate f TNil k) a (lfp_le f mono a pre k)) pre
+
+monotone_iterate : (f : TagList -> TagList) ->
+         ((x : TagList) -> (y : TagList) -> AllHandled x y -> AllHandled (f x) (f y)) ->
+         (n : Nat) -> AllHandled (iterate f TNil n) (iterate f TNil (S n))
+monotone_iterate f mono Z = AHNil
+monotone_iterate f mono (S k) = mono (iterate f TNil k) (iterate f TNil (S k)) (monotone_iterate f mono k)
+

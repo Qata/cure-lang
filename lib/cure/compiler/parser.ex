@@ -3713,8 +3713,9 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  # `proof` is contextual and may still be tokenized as an identifier here.
-  # It delimits the optional equation binder; it is never another scrutinee.
+  # `proof` is the contextual with-proof keyword (it lexes as an identifier since
+  # 408d3049). It terminates the scrutinee list so `parse_optional_with_proof`
+  # can claim `proof <ident>`; without this, multi-with collection eats it.
   defp with_scrutinee_start?(%Token{type: :identifier, value: "proof"}), do: false
 
   defp with_scrutinee_start?(%Token{type: type})
