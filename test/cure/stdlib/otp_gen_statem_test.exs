@@ -25,4 +25,18 @@ defmodule Cure.Stdlib.OtpGenStatemTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "handled-event count is a monoid homomorphism over run composition" do
+    src = """
+    mod GsRun
+      use Std.Otp.GenStatem
+      fn single(c1: SConfig, c2: SConfig, s: SStep(c1, c2)) -> SRun(c1, c2) =
+        srun_single(s)
+      fn compose(c1: SConfig, c2: SConfig, c3: SConfig, r1: SRun(c1, c2), r2: SRun(c2, c3)) -> SRun(c1, c3) =
+        srun_trans(r1, r2)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

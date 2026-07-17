@@ -1,4 +1,5 @@
 mod GenStatem
+  use Std.Equivalent
   fn plus(m: Nat, n: Nat) -> Nat = match m
     Z()  -> n
     S(k) -> S(plus(k, n))
@@ -26,4 +27,27 @@ mod GenStatem
     rewrite plus_n_s(p, q) in reflexive(S(plus(p, q)))
   fn redeliver_conserves(p: Nat, q: Nat) -> Equivalent(Nat, unproc(MkSC(p, q)), unproc(MkSC(plus(q, p), Z()))) =
     rewrite plus_n_z(plus(q, p)) in plus_comm(p, q)
+  fn plus_assoc(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, plus(plus(a, b), c), plus(a, plus(b, c))) = match a
+    Z()  -> reflexive(plus(b, c))
+    S(k) -> rewrite plus_assoc(k, b, c) in reflexive(S(plus(k, plus(b, c))))
+  fn plus_cong_r(a: Nat, {x: Nat}, {y: Nat}, e: Equivalent(Nat, x, y)) -> Equivalent(Nat, plus(a, x), plus(a, y)) =
+    rewrite e in reflexive(plus(a, y))
+  type SRun indices (before: SConfig, after: SConfig)
+    SRDone : SRun(c, c)
+    SRMore : SStep(c1, c2) -> SRun(c2, c3) -> SRun(c1, c3)
+  fn step_handles({b: SConfig}, {a: SConfig}, s: SStep(b, a)) -> Nat = match s
+    SHandle()    -> S(Z())
+    SPostpone()  -> Z()
+    SRedeliver() -> Z()
+  fn handle_count({c1: SConfig}, {c2: SConfig}, run: SRun(c1, c2)) -> Nat = match run
+    SRDone()        -> Z()
+    SRMore(s, rest) -> plus(step_handles(s), handle_count(rest))
+  fn srun_single({c1: SConfig}, {c2: SConfig}, s: SStep(c1, c2)) -> SRun(c1, c2) =
+    SRMore(s, SRDone())
+  fn srun_trans({c1: SConfig}, {c2: SConfig}, {c3: SConfig}, r1: SRun(c1, c2), r2: SRun(c2, c3)) -> SRun(c1, c3) = match r1
+    SRDone()        -> r2
+    SRMore(s, rest) -> SRMore(s, srun_trans(rest, r2))
+  fn handle_count_trans({c1: SConfig}, {c2: SConfig}, {c3: SConfig}, r1: SRun(c1, c2), r2: SRun(c2, c3)) -> Equivalent(Nat, handle_count(srun_trans(r1, r2)), plus(handle_count(r1), handle_count(r2))) = match r1
+    SRDone()        -> reflexive(handle_count(r2))
+    SRMore(s, rest) -> trans(plus_cong_r(step_handles(s), handle_count_trans(rest, r2)), sym(plus_assoc(step_handles(s), handle_count(rest), handle_count(r2))))
 end
