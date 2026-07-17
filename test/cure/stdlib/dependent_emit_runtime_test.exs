@@ -20,21 +20,57 @@ defmodule Cure.Stdlib.DependentEmitRuntimeTest do
   representation, `math` a pure-value `@extern` surface, `list` recursion + list
   externs, `bool` boolean logic. Together they show the dependent emitter yields
   correct runnable code across the shapes the stdlib is built from.
+
+  This is an emitter-verifying PRODUCER: it deliberately re-emits stdlib modules
+  through the dependent pipeline to prove the emitter's output *runs*. Under the
+  C1 sticky-canonical regime (`test/test_helper.exs`) it must NOT emit under the
+  bare canonical name — that slot is loaded and sticky at suite startup, so a
+  canonical-name load fails with `:sticky_directory`. So it emits each module
+  under a per-test module-name PREFIX (`T_<module>.Cure.Std.X`, C2), keeping the
+  exact `Emit.compile_and_load` path under test while never touching the shared
+  canonical slot. `async: false` is retained as defence-in-depth against two runs
+  racing to define the same prefixed atom, not for correctness.
   """
   use ExUnit.Case, async: false
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Elab.{Program, Emit}
 
-  # Emit `lib/std/<name>.cure` through the dependent pipeline and load the BEAM,
-  # returning the loaded module atom.
+  # Emit `lib/std/<name>.cure` through the dependent pipeline under a per-test
+  # PREFIX and load the BEAM, returning the loaded (prefixed) module atom. Passing
+  # the module's own owner as `local_owners` keeps any same-owner remote call
+  # pointed at the prefixed module rather than the sticky canonical; these modules
+  # are self-contained, so there is no cross-owner delegation to reroute.
   defp load_std(name) do
     src = File.read!(Path.join("lib/std", name <> ".cure"))
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
     {:ok, env, locals} = Program.check_ast_with_locals(ast)
-    {:ok, mod} = Emit.compile_and_load(env, module: Program.module_atom(ast), functions: locals)
+
+    canonical = Program.module_atom(ast)
+    owner = canonical |> Atom.to_string() |> String.replace_prefix("Cure.", "")
+    prefix = prefix_for(__MODULE__)
+
+    {:ok, mod} =
+      Emit.compile_and_load(env,
+        module: String.to_atom(prefix <> Atom.to_string(canonical)),
+        functions: locals,
+        prefix: prefix,
+        local_owners: [owner]
+      )
+
     mod
+  end
+
+  # A per-test module-name prefix, sanitized into a valid atom segment.
+  defp prefix_for(mod) do
+    seg =
+      mod
+      |> Atom.to_string()
+      |> String.replace_prefix("Elixir.", "")
+      |> String.replace(".", "_")
+
+    "T_" <> seg <> "."
   end
 
   test "Std.Option runs correctly with the dependent constructor representation" do

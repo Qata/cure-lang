@@ -21,10 +21,6 @@ defmodule Cure.Compiler.DependentVecCodegenTest do
   end
   """
 
-  @stdlib_src File.read!("lib/std/vector.cure")
-  @nat_src File.read!("lib/std/nat.cure")
-  @bounded_src File.read!("lib/std/bounded.cure")
-
   test "length-indexed Vector append compiles and runs after erasure" do
     assert {:ok, mod} = Cure.Compiler.compile_and_load(@src, emit_events: false)
     assert mod == :"Cure.VecCg"
@@ -49,31 +45,22 @@ defmodule Cure.Compiler.DependentVecCodegenTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(bad, emit_events: false)
   end
 
+  # Under C1 the canonical stdlib is loaded and STICKY at suite startup
+  # (test/test_helper.exs), compiled from these very sources through this same
+  # `Cure.Compiler.compile_and_load` path by `mix cure.compile_stdlib`. Re-compiling
+  # `lib/std/vector.cure` (and its Nat/Bounded deps) here would try to load over the
+  # sticky `Cure.Std.Vector` slot and fail with `:sticky_directory`. The full
+  # compiler path on a length-indexed vector is already proven by the first test
+  # (inline `VecCg`); this test's distinct claim is the REAL stdlib `Std.Vector`'s
+  # post-erasure runtime surface, which the sticky canonical embodies exactly. So
+  # resolve the canonical modules directly rather than re-emitting them.
   test "Std.Vector is the length-indexed Vector module and runs after erasure" do
-    assert {:ok, nat} =
-             Cure.Compiler.compile_and_load(@nat_src,
-               file: "lib/std/nat.cure",
-               emit_events: false
-             )
-
-    assert nat == :"Cure.Std.Nat"
+    assert {:module, nat} = :code.ensure_loaded(:"Cure.Std.Nat")
     assert function_exported?(nat, :plus, 2)
 
-    assert {:ok, bounded} =
-             Cure.Compiler.compile_and_load(@bounded_src,
-               file: "lib/std/bounded.cure",
-               emit_events: false
-             )
+    assert {:module, _bounded} = :code.ensure_loaded(:"Cure.Std.Bounded")
 
-    assert bounded == :"Cure.Std.Bounded"
-
-    assert {:ok, mod} =
-             Cure.Compiler.compile_and_load(@stdlib_src,
-               file: "lib/std/vector.cure",
-               emit_events: false
-             )
-
-    assert mod == :"Cure.Std.Vector"
+    assert {:module, mod} = :code.ensure_loaded(:"Cure.Std.Vector")
     refute function_exported?(mod, :plus, 2)
 
     xs = {:prepend, 1, {:prepend, 2, :empty}}

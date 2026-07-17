@@ -1358,19 +1358,32 @@ defmodule Cure.Elab.Program do
 
   def env_with_macro_home(caller, _path), do: caller
 
-  defp cached_macro_home_env(path) do
-    key = {__MODULE__, :macro_home_env, path}
+  # The macro-home env IS a module slice; `module_slice_env/1` already memoizes
+  # by path, so this is now a thin alias kept for the call-site names below.
+  defp cached_macro_home_env(path), do: module_slice_env(path)
+
+  # Memoized module-slice builder. `compute_module_slice_env/1` is a pure
+  # function of `path`: it reads and elaborates the file, and the stdlib (the
+  # only thing sliced here) is immutable for the lifetime of a compiler build —
+  # no test writes `lib/std/*.cure` or swaps `:stdlib_macro_rules` mid-run, so a
+  # path is guaranteed to elaborate identically every time. Caching it collapses
+  # the redundant re-elaboration every `Program.elaborate` used to pay: the 7
+  # `@auto_prelude` modules (plus explicit imports) were re-sliced from source on
+  # each of the hundreds of elaboration calls a test suite makes. The cache is
+  # keyed by absolute path, so a temp file at a unique path never collides with a
+  # shipped module. Failures are NOT cached — a transient read/parse error must
+  # not poison later slices once the tree is consistent.
+  defp module_slice_env(path) do
+    key = {__MODULE__, :module_slice_env, path}
 
     case :persistent_term.get(key, :missing) do
       :missing ->
-        case module_slice_env(path) do
+        case compute_module_slice_env(path) do
           {:ok, _env} = ok ->
             :persistent_term.put(key, ok)
             ok
 
           {:error, _} = err ->
-            # Do not cache failures: a transient read/parse error must not poison
-            # later expansions once the tree is consistent.
             err
         end
 
@@ -1379,7 +1392,7 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp module_slice_env(path) do
+  defp compute_module_slice_env(path) do
     with {:ok, source} <- File.read(path),
          {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false),

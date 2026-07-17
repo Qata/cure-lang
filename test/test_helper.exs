@@ -23,6 +23,102 @@
 IO.puts("test_helper: compiling Cure stdlib")
 Mix.Task.run("cure.compile_stdlib")
 
+# --- C1: load + stick the canonical stdlib -------------------------------------
+#
+# The BEAM has one global code-table slot per module name. `cure.compile_stdlib`
+# has just written the canonical `_build/cure/ebin/Cure.*.beam`. Load every one of
+# them and mark it STICKY (`:code.stick_mod/1`): a sticky module refuses
+# `:code.load_binary`/`load_file` with `{:error, :sticky_directory}`, so no later
+# producer test can overwrite the canonical surface consumers depend on. Any
+# producer still emitting a bare canonical name now fails loudly and
+# deterministically (a worklist item) instead of silently clobbering.
+(fn ->
+   ebin = "_build/cure/ebin"
+
+   # Scope strictly to the stdlib namespace `Cure.Std.*`. `_build/cure/ebin` is the
+   # stdlib compile output, but tests that `Cure.Compiler.compile_and_load` an
+   # ad-hoc `mod Hello` / `mod M` also drop a `Cure.<Name>.beam` here as a side
+   # effect. Those are NOT stdlib and must not be stuck (nor counted "extra" below):
+   # every module declared in `lib/std/*.cure` is `Std.*`, so the canonical surface
+   # is exactly `Cure.Std.*`.
+   loaded =
+     ebin
+     |> Path.join("Cure.Std.*.beam")
+     |> Path.wildcard()
+     |> Enum.map(fn path ->
+       mod = path |> Path.basename(".beam") |> String.to_atom()
+       {:module, ^mod} = :code.ensure_loaded(mod)
+       # `:code.stick_mod/1` returns `true` (not `:ok`).
+       true = :code.stick_mod(mod)
+       mod
+     end)
+     |> MapSet.new()
+
+   if MapSet.size(loaded) == 0 do
+     raise """
+     test_helper: no canonical stdlib beams found in #{ebin}.
+     Expected `mix cure.compile_stdlib` to have written Cure.*.beam there.
+     """
+   end
+
+   # Completeness: every module DECLARED in lib/std/*.cure must be resident, or a
+   # consumer could hit a not-loaded module the sticky set never covered.
+   mod_regex = ~r/^\s*(?:mod|proof|actor|fsm|sup|app)\s+([A-Za-z_][\w\.]*)/m
+
+   declared =
+     "lib/std/*.cure"
+     |> Path.wildcard()
+     |> Enum.flat_map(fn path ->
+       case File.read(path) do
+         {:ok, src} ->
+           mod_regex
+           |> Regex.scan(src)
+           |> Enum.map(fn [_, name] -> String.to_atom("Cure." <> name) end)
+
+         {:error, _} ->
+           []
+       end
+     end)
+     |> MapSet.new()
+
+   # Spec C1 requires catching a mismatch in EITHER direction: a declared module
+   # not compiled (missing) OR a compiled module not declared (extra) — the latter
+   # signals a stale beam or a rename that left an orphan, which would be stuck
+   # under a name no source backs.
+   missing = MapSet.difference(declared, loaded)
+   extra = MapSet.difference(loaded, declared)
+
+   unless MapSet.size(missing) == 0 do
+     raise """
+     test_helper: these stdlib modules are declared in lib/std/*.cure but were not
+     compiled to #{ebin} (so they cannot be made sticky and consumers may flake):
+     #{missing |> MapSet.to_list() |> Enum.sort() |> Enum.map_join(", ", &inspect/1)}
+
+     Run `mix cure.compile_stdlib` and check its output for compile errors.
+     """
+   end
+
+   unless MapSet.size(extra) == 0 do
+     raise """
+     test_helper: these modules were compiled to #{ebin} but are NOT declared in
+     any lib/std/*.cure (a stale beam or an orphaned rename — sticking one would
+     freeze a name no current source produces):
+     #{extra |> MapSet.to_list() |> Enum.sort() |> Enum.map_join(", ", &inspect/1)}
+
+     Delete the stale beam(s) or run a clean `mix cure.compile_stdlib`.
+     """
+   end
+
+   # A hard sanity floor in case both scans somehow degrade to empty.
+   for sentinel <- [:"Cure.Std.String", :"Cure.Std.Core", :"Cure.Std.List"] do
+     unless MapSet.member?(loaded, sentinel) and :code.is_sticky(sentinel) do
+       raise "test_helper: sentinel #{inspect(sentinel)} is not loaded+sticky; stdlib compile is incomplete."
+     end
+   end
+
+   IO.puts("test_helper: stuck #{MapSet.size(loaded)} canonical stdlib modules")
+ end).()
+
 # A tail-friendly failure formatter.
 #
 # ExUnit prints each failure inline, in the moment it happens — buried among

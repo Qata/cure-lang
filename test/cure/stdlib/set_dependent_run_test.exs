@@ -20,18 +20,18 @@ defmodule Cure.Stdlib.SetDependentRunTest do
   owner-qualified identities that canonicalization now keeps distinct are what
   make the split faithful.
 
-  The delegated `Cure.Std.Map` is emitted at its FULL owner surface (incl.
-  `get/2`), identical to the module the stdlib preload JIT-compiles from
-  `map.cure` and that `union_test.exs` / `map_parameterized_test.exs` call into —
-  so installing it under the shared process-global BEAM name can never drop a
-  function another test relies on (it was a tree-shaken partial view that caused
-  the historical flake).
-
-  `async: true` is sound: this `setup_all` is the *only* reloader of the global
-  `Cure.Std.Map` in the suite — every other `Emit.compile_and_load` targets a
-  test-local module and merely remote-calls into the preloaded Map. With a single
-  reloader at most two code versions coexist, so BEAM's code-purge (which kills a
-  process only when a *third* version loads over live code) cannot fire.
+  This test emits its Set+Map group under a per-test module-name PREFIX
+  (`T_<module>.Cure.<owner>`), never touching the shared canonical slots. The
+  canonical `Cure.Std.Map`/`Cure.Std.List` are loaded and made *sticky* at suite
+  startup (test_helper C1), so a consumer test's canonical `Cure.Std.Map` can
+  never be dropped or clobbered by this producer — the historical flake, where a
+  tree-shaken partial view overwrote the shared global name. Set's delegated
+  calls resolve to the PREFIXED Map (via `remote_target`'s prefix routing, C2), a
+  genuine cross-module remote call staying inside this test's sandbox. The
+  emitted Map still carries its FULL owner surface (`map_surface` below), so it
+  mirrors what the real compiler installs. `async: true` is sound: the prefix is
+  unique to this test module, so no other test defines or observes the same
+  prefixed atoms — the producer is fully sandboxed and touches no shared slot.
   """
   use ExUnit.Case, async: true
 
@@ -46,15 +46,13 @@ defmodule Cure.Stdlib.SetDependentRunTest do
     origins = Program.import_origins(ast)
 
     # Seed reachability with the FULL `Std.Map` owner surface, not just Set's
-    # delegated subset, so the process-global `Cure.Std.Map` this installs is
-    # identical to the full module the real compiler installs (the stdlib preload
-    # JIT-compiles all of `map.cure`) and that consumers — `union_test.exs`,
-    # `map_parameterized_test.exs` — call into. A tree-shaken partial view would
-    # drop `get/2` and clobber that full module under the shared global BEAM name,
-    # which is the flaky-test root cause. The real compiler never prunes a
-    # dependency owner: `codegen_modules_with_main` emits only the main module and
-    # each imported owner is installed at full surface by the preload — so emitting
-    # the full owner surface here mirrors the shipping behaviour.
+    # delegated subset, so the prefixed `Cure.Std.Map` this test emits mirrors the
+    # full module the real compiler installs (the stdlib preload JIT-compiles all
+    # of `map.cure`). The real compiler never prunes a dependency owner:
+    # `codegen_modules_with_main` emits only the main module and each imported owner
+    # is installed at full surface by the preload — so emitting the full owner
+    # surface here mirrors the shipping behaviour. Because this now emits under a
+    # per-test prefix, it no longer touches the shared canonical slot at all.
     map_surface = env.defs |> Map.keys() |> Enum.filter(&(Name.owner(&1) == "Std.Map"))
 
     fns =
@@ -74,21 +72,38 @@ defmodule Cure.Stdlib.SetDependentRunTest do
         ] ++ map_surface
       )
 
-    # Emit one BEAM module per owning Cure module. `remote_target` lowers a
-    # cross-owner `{:global, "Std.Map#size"}` to `{Cure.Std.Map, size}`, so the
-    # delegated module must be loaded under that same `Cure.<owner>` name.
+    prefix = prefix_for(__MODULE__)
+    owners = fns |> Enum.map(&Name.owner/1) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    # Emit one BEAM module per owning Cure module, under `prefix`. Passing the WHOLE
+    # group's `owners` as `local_owners` keeps Set's delegated call to Map pointed at
+    # the PREFIXED Map (a genuine cross-module remote call inside the sandbox), never
+    # at the sticky canonical. No canonical slot is touched.
     fns
     |> Enum.group_by(&Name.owner/1)
     |> Enum.each(fn {owner, names} ->
       {:ok, _} =
         Emit.compile_and_load(env,
-          module: String.to_atom("Cure." <> owner),
+          module: String.to_atom(prefix <> "Cure." <> owner),
           functions: names,
-          origins: origins
+          origins: origins,
+          prefix: prefix,
+          local_owners: owners
         )
     end)
 
-    {:ok, m: :"Cure.Std.Set"}
+    {:ok, m: String.to_atom(prefix <> "Cure.Std.Set")}
+  end
+
+  # A per-test module-name prefix, sanitized into a valid atom segment.
+  defp prefix_for(mod) do
+    seg =
+      mod
+      |> Atom.to_string()
+      |> String.replace_prefix("Elixir.", "")
+      |> String.replace(".", "_")
+
+    "T_" <> seg <> "."
   end
 
   test "from_list dedups and size counts distinct elements", %{m: m} do

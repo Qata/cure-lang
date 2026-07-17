@@ -471,16 +471,38 @@ defmodule Cure.Stdlib.Preload do
   end
 
   defp load_from_candidates(module, candidate_dirs) do
-    Enum.find_value(candidate_dirs, :not_found, fn dir ->
-      path = Path.join(dir, "#{module}.beam")
+    if already_resident?(module) do
+      :ok
+    else
+      Enum.find_value(candidate_dirs, :not_found, fn dir ->
+        path = Path.join(dir, "#{module}.beam")
 
-      with true <- File.exists?(path),
-           :ok <- load_if_present(module, path) do
-        :ok
-      else
-        _ -> false
-      end
-    end)
+        with true <- File.exists?(path),
+             :ok <- load_if_present(module, path) do
+          :ok
+        else
+          _ -> false
+        end
+      end)
+    end
+  end
+
+  # A module already resident in the VM (loaded, whether sticky or not) is
+  # left alone, per this module's documented `preload/1` contract. Retrying
+  # `:code.load_binary/3` against an already-resident *sticky* module is not
+  # just redundant: OTP logs an `:error`-level "Can't load module ... that
+  # resides in sticky dir" line as a side effect of the rejection, on top of
+  # the `{:error, :sticky_directory}` return this module already tolerates.
+  # Under C1 (`test/test_helper.exs` sticks the whole canonical stdlib at
+  # suite startup) every one of the dozen-plus `preload(kind: :all)` call
+  # sites across the test suite would otherwise flood output with ~70 such
+  # lines apiece. Uses the zero-side-effect `:code.is_loaded/1` check, NOT
+  # `module_loaded?/1` -- that helper's `Code.ensure_loaded?/1` fallback
+  # searches the global Erlang code path, which is exactly the
+  # stale-shadowing hazard this module's `:code.load_binary/3` design
+  # deliberately avoids (see moduledoc "Why not just `:code.add_patha/1?`").
+  defp already_resident?(module) do
+    match?({:file, _}, :code.is_loaded(module))
   end
 
   # Compile any module in `stdlib_modules(kind)` that is still not

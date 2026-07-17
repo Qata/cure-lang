@@ -1,20 +1,17 @@
 defmodule Cure.StdlibTest do
   use ExUnit.Case, async: false
 
-  # Helper: compile a stdlib .cure file and load it into the VM
-  defp compile_stdlib(name) do
-    path = Path.join(["lib", "std", "#{name}.cure"])
-    source = File.read!(path)
-
-    case Cure.Compiler.compile_and_load(source, file: path) do
-      {:ok, module} -> module
-      {:error, reason} -> flunk("Failed to compile #{name}: #{inspect(reason)}")
-    end
-  end
-
-  defp purge(module) do
-    :code.purge(module)
-    :code.delete(module)
+  # These are PURE CONSUMER tests: every assertion checks a runtime result the
+  # canonical `Cure.Std.*` beam already produces. Under C1 the canonical stdlib
+  # is loaded and made STICKY at suite startup (see `test/test_helper.exs`), so
+  # this test must not self-compile a stdlib module — a fresh compile would try to
+  # load over the sticky canonical name and fail with `:sticky_directory`, and
+  # even absent stickiness it would clobber the shared slot other tests depend on.
+  # Resolve the sticky canonical directly instead of building our own.
+  defp std(name) do
+    module = String.to_atom("Cure.Std." <> Macro.camelize(name))
+    {:module, ^module} = :code.ensure_loaded(module)
+    module
   end
 
   # ============================================================================
@@ -23,9 +20,7 @@ defmodule Cure.StdlibTest do
 
   describe "Std.Math" do
     setup do
-      m = compile_stdlib("math")
-      on_exit(fn -> purge(m) end)
-      %{m: m}
+      %{m: std("math")}
     end
 
     test "abs", %{m: m} do
@@ -106,9 +101,7 @@ defmodule Cure.StdlibTest do
 
   describe "Std.Io" do
     setup do
-      m = compile_stdlib("io")
-      on_exit(fn -> purge(m) end)
-      %{m: m}
+      %{m: std("io")}
     end
 
     test "int_to_string", %{m: m} do
@@ -137,9 +130,7 @@ defmodule Cure.StdlibTest do
 
   describe "Std.Core -- utility functions" do
     setup do
-      m = compile_stdlib("core")
-      on_exit(fn -> purge(m) end)
-      %{m: m}
+      %{m: std("core")}
     end
 
     test "identity", %{m: m} do
@@ -170,9 +161,7 @@ defmodule Cure.StdlibTest do
 
   describe "Std.Core -- boolean operations" do
     setup do
-      m = compile_stdlib("core")
-      on_exit(fn -> purge(m) end)
-      %{m: m}
+      %{m: std("core")}
     end
 
     test "bool_not", %{m: m} do
@@ -218,7 +207,10 @@ defmodule Cure.StdlibTest do
 
       {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
       result = mod.probe()
-      purge(mod)
+      # `ComparisonProbe` is an ad-hoc, non-canonical module name (never in the
+      # sticky canonical set), so evicting it directly is safe and clobbers nothing.
+      :code.purge(mod)
+      :code.delete(mod)
       result
     end
 
@@ -236,9 +228,7 @@ defmodule Cure.StdlibTest do
 
   describe "Std.Core -- Result type" do
     setup do
-      m = compile_stdlib("core")
-      on_exit(fn -> purge(m) end)
-      %{m: m}
+      %{m: std("core")}
     end
 
     test "ok and error constructors", %{m: m} do
@@ -286,9 +276,7 @@ defmodule Cure.StdlibTest do
 
   describe "Std.Core -- Option type" do
     setup do
-      m = compile_stdlib("core")
-      on_exit(fn -> purge(m) end)
-      %{m: m}
+      %{m: std("core")}
     end
 
     test "some and none constructors", %{m: m} do
@@ -330,9 +318,7 @@ defmodule Cure.StdlibTest do
 
   describe "Std.List" do
     setup do
-      m = compile_stdlib("list")
-      on_exit(fn -> purge(m) end)
-      %{m: m}
+      %{m: std("list")}
     end
 
     test "length", %{m: m} do
@@ -471,9 +457,7 @@ defmodule Cure.StdlibTest do
 
   describe "Std.String" do
     setup do
-      m = compile_stdlib("string")
-      on_exit(fn -> purge(m) end)
-      %{m: m}
+      %{m: std("string")}
     end
 
     test "length", %{m: m} do
@@ -533,9 +517,7 @@ defmodule Cure.StdlibTest do
 
   describe "Std.System" do
     setup do
-      m = compile_stdlib("system")
-      on_exit(fn -> purge(m) end)
-      %{m: m}
+      %{m: std("system")}
     end
 
     test "timestamp_ms returns integer", %{m: m} do
