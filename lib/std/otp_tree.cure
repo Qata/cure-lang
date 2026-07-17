@@ -55,4 +55,52 @@ mod Std.Otp.Tree
   fn size_mirror(t: Tree) -> Equivalent(Nat, size(mirror(t)), size(t)) = match t
     Leaf()        -> reflexive(Z())
     Node(l, v, r) -> snat_cong(trans(add_cong(size_mirror(r), size_mirror(l)), add_comm(size(r), size(l))))
+
+  ## A node-value list (the in-order traversal), with its `append`/`reverse` algebra.
+  type TList = TNil | TCons(Nat, TList)
+  fn lapp(xs: TList, ys: TList) -> TList = match xs
+    TNil()      -> ys
+    TCons(h, t) -> TCons(h, lapp(t, ys))
+  fn lrev(xs: TList) -> TList = match xs
+    TNil()      -> TNil()
+    TCons(h, t) -> lapp(lrev(t), TCons(h, TNil()))
+  fn tcons_cong(h: Nat, {a: TList}, {b: TList}, e: Equivalent(TList, a, b)) -> Equivalent(TList, TCons(h, a), TCons(h, b)) =
+    rewrite e in reflexive(TCons(h, b))
+  fn lapp_cong(c: TList, {a: TList}, {b: TList}, e: Equivalent(TList, a, b)) -> Equivalent(TList, lapp(a, c), lapp(b, c)) =
+    rewrite e in reflexive(lapp(b, c))
+  fn lapp_cong2({a1: TList}, {b1: TList}, {a2: TList}, {b2: TList}, e1: Equivalent(TList, a1, b1), e2: Equivalent(TList, a2, b2)) -> Equivalent(TList, lapp(a1, a2), lapp(b1, b2)) =
+    rewrite e1 in rewrite e2 in reflexive(lapp(b1, b2))
+  fn lapp_assoc(xs: TList, ys: TList, zs: TList) -> Equivalent(TList, lapp(lapp(xs, ys), zs), lapp(xs, lapp(ys, zs))) = match xs
+    TNil()      -> reflexive(lapp(ys, zs))
+    TCons(h, t) -> tcons_cong(h, lapp_assoc(t, ys, zs))
+  fn lapp_nil_r(xs: TList) -> Equivalent(TList, lapp(xs, TNil()), xs) = match xs
+    TNil()      -> reflexive(TNil())
+    TCons(h, t) -> tcons_cong(h, lapp_nil_r(t))
+
+  ## `reverse` is an ANTIHOMOMORPHISM for `append`: `reverse(xs ++ ys) = reverse(ys) ++ reverse(xs)`.
+  fn lrev_app(xs: TList, ys: TList) -> Equivalent(TList, lrev(lapp(xs, ys)), lapp(lrev(ys), lrev(xs))) = match xs
+    TNil()      -> sym(lapp_nil_r(lrev(ys)))
+    TCons(h, t) -> trans(lapp_cong(TCons(h, TNil()), lrev_app(t, ys)), lapp_assoc(lrev(ys), lrev(t), TCons(h, TNil())))
+
+  ## Reduction-bridge lemmas: these hold DEFINITIONALLY (`reflexive`), but stated as explicit
+  ## equalities so a `trans`/`cong` chain — whose implicit unification does NOT δ-reduce — can use
+  ## them as syntactic steps.
+  fn lrev_cons(v: Nat, xs: TList) -> Equivalent(TList, lrev(TCons(v, xs)), lapp(lrev(xs), TCons(v, TNil()))) =
+    reflexive(lapp(lrev(xs), TCons(v, TNil())))
+  fn lapp_cons(v: Nat, xs: TList) -> Equivalent(TList, lapp(TCons(v, TNil()), xs), TCons(v, xs)) =
+    reflexive(TCons(v, xs))
+
+  ## In-order traversal of the tree.
+  fn flatten(t: Tree) -> TList = match t
+    Leaf()        -> TNil()
+    Node(l, v, r) -> lapp(flatten(l), TCons(v, flatten(r)))
+
+  ## **MIRROR REVERSES THE IN-ORDER TRAVERSAL.** `flatten(mirror(t)) = reverse(flatten(t))` — since
+  ## `mirror` swaps left and right everywhere, walking the reflected tree left-to-right visits the
+  ## nodes in the exact reverse order. Induction on `t`; the node case rewrites the traversal with
+  ## the IHs and re-associates via `lrev_app` + `lapp_assoc`, bridging the definitional reductions
+  ## explicitly (`lrev_cons`/`lapp_cons`).
+  fn flatten_mirror(t: Tree) -> Equivalent(TList, flatten(mirror(t)), lrev(flatten(t))) = match t
+    Leaf()        -> reflexive(TNil())
+    Node(l, v, r) -> trans(lapp_cong2(flatten_mirror(r), trans(tcons_cong(v, flatten_mirror(l)), sym(lapp_cons(v, lrev(flatten(l)))))), sym(trans(lrev_app(flatten(l), TCons(v, flatten(r))), trans(lapp_cong(lrev(flatten(l)), lrev_cons(v, flatten(r))), lapp_assoc(lrev(flatten(r)), TCons(v, TNil()), lrev(flatten(l)))))))
 end

@@ -42,3 +42,48 @@ mirror_involution (Node l v r) = node_cong v (mirror_involution l) (mirror_invol
 size_mirror : (t : Tree) -> size (mirror t) = size t
 size_mirror Leaf = Refl
 size_mirror (Node l v r) = snat_cong (trans (add_cong (size_mirror r) (size_mirror l)) (add_comm (size r) (size l)))
+
+data TList = TNil | TCons Nat TList
+
+lapp : TList -> TList -> TList
+lapp TNil ys = ys
+lapp (TCons h t) ys = TCons h (lapp t ys)
+
+lrev : TList -> TList
+lrev TNil = TNil
+lrev (TCons h t) = lapp (lrev t) (TCons h TNil)
+
+tcons_cong : (h : Nat) -> a = b -> TCons h a = TCons h b
+tcons_cong h Refl = Refl
+
+lapp_cong : (c : TList) -> a = b -> lapp a c = lapp b c
+lapp_cong c Refl = Refl
+
+lapp_cong2 : a1 = b1 -> a2 = b2 -> lapp a1 a2 = lapp b1 b2
+lapp_cong2 Refl Refl = Refl
+
+lapp_assoc : (xs : TList) -> (ys : TList) -> (zs : TList) -> lapp (lapp xs ys) zs = lapp xs (lapp ys zs)
+lapp_assoc TNil ys zs = Refl
+lapp_assoc (TCons h t) ys zs = tcons_cong h (lapp_assoc t ys zs)
+
+lapp_nil_r : (xs : TList) -> lapp xs TNil = xs
+lapp_nil_r TNil = Refl
+lapp_nil_r (TCons h t) = tcons_cong h (lapp_nil_r t)
+
+lrev_app : (xs : TList) -> (ys : TList) -> lrev (lapp xs ys) = lapp (lrev ys) (lrev xs)
+lrev_app TNil ys = sym (lapp_nil_r (lrev ys))
+lrev_app (TCons h t) ys = trans (lapp_cong (TCons h TNil) (lrev_app t ys)) (lapp_assoc (lrev ys) (lrev t) (TCons h TNil))
+
+lrev_cons : (v : Nat) -> (xs : TList) -> lrev (TCons v xs) = lapp (lrev xs) (TCons v TNil)
+lrev_cons v xs = Refl
+
+lapp_cons : (v : Nat) -> (xs : TList) -> lapp (TCons v TNil) xs = TCons v xs
+lapp_cons v xs = Refl
+
+flatten : Tree -> TList
+flatten Leaf = TNil
+flatten (Node l v r) = lapp (flatten l) (TCons v (flatten r))
+
+flatten_mirror : (t : Tree) -> flatten (mirror t) = lrev (flatten t)
+flatten_mirror Leaf = Refl
+flatten_mirror (Node l v r) = trans (lapp_cong2 (flatten_mirror r) (trans (tcons_cong v (flatten_mirror l)) (sym (lapp_cons v (lrev (flatten l)))))) (sym (trans (lrev_app (flatten l) (TCons v (flatten r))) (trans (lapp_cong (lrev (flatten l)) (lrev_cons v (flatten r))) (lapp_assoc (lrev (flatten r)) (TCons v TNil) (lrev (flatten l))))))

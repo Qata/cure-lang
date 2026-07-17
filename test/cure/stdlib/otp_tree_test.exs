@@ -20,6 +20,7 @@ defmodule Cure.Stdlib.OtpTreeTest do
       fn keeps_size(t: Tree) -> Equivalent(Nat, size(mirror(t)), size(t)) = size_mirror(t)
       fn inst() -> Equivalent(Tree, mirror(mirror(Node(Leaf(), Z(), Node(Leaf(), S(Z()), Leaf())))), Node(Leaf(), Z(), Node(Leaf(), S(Z()), Leaf()))) =
         mirror_involution(Node(Leaf(), Z(), Node(Leaf(), S(Z()), Leaf())))
+      fn traversal(t: Tree) -> Equivalent(TList, flatten(mirror(t)), lrev(flatten(t))) = flatten_mirror(t)
     end
     """
 
