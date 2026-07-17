@@ -49,4 +49,20 @@ mod Std.Otp.Session
     CEnd()     -> reflexive(SEnd())
     CSR(t, c2) -> ssend_cong(t, compat_dual(c2))
     CRS(t, c2) -> srecv_cong(t, compat_dual(c2))
+
+  ## A communication STEP: one endpoint sends tag `t`, the other receives it, and both advance
+  ## to their continuations. Well-formed only when the send/receive tags agree.
+  type SStep indices (l: SType, r: SType, l2: SType, r2: SType)
+    StepSR : SStep(SSend(t, lk), SRecv(t, rk), lk, rk)
+    StepRS : SStep(SRecv(t, lk), SSend(t, rk), lk, rk)
+
+  ## **SESSION PRESERVATION (subject reduction).** A communication step between COMPATIBLE
+  ## endpoints yields compatible endpoints — a safe session stays safe as it runs. The step
+  ## refines the endpoints so the compatibility witness exposes exactly the continuation
+  ## compatibility.
+  fn session_preservation({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, c: Compat(l, r), st: SStep(l, r, l2, r2)) -> Compat(l2, r2) = match st
+    StepSR() -> match c
+      CSR(t, c2) -> c2
+    StepRS() -> match c
+      CRS(t, c2) -> c2
 end

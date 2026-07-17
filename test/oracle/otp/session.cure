@@ -21,4 +21,13 @@ mod Session
     CEnd()     -> reflexive(SEnd())
     CSR(t, c2) -> ssend_cong(t, compat_dual(c2))
     CRS(t, c2) -> srecv_cong(t, compat_dual(c2))
+
+  type SStep indices (l: SType, r: SType, l2: SType, r2: SType)
+    StepSR : SStep(SSend(t, lk), SRecv(t, rk), lk, rk)
+    StepRS : SStep(SRecv(t, lk), SSend(t, rk), lk, rk)
+  fn session_preservation({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, c: Compat(l, r), st: SStep(l, r, l2, r2)) -> Compat(l2, r2) = match st
+    StepSR() -> match c
+      CSR(t, c2) -> c2
+    StepRS() -> match c
+      CRS(t, c2) -> c2
 end

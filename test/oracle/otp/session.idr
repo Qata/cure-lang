@@ -28,3 +28,11 @@ compat_dual : Compat l r -> l = dual r
 compat_dual CEnd = Refl
 compat_dual (CSR t c2) = ssend_cong t (compat_dual c2)
 compat_dual (CRS t c2) = srecv_cong t (compat_dual c2)
+
+data SStep : SType -> SType -> SType -> SType -> Type where
+  StepSR : SStep (SSend t lk) (SRecv t rk) lk rk
+  StepRS : SStep (SRecv t lk) (SSend t rk) lk rk
+
+session_preservation : Compat l r -> SStep l r l2 r2 -> Compat l2 r2
+session_preservation (CSR t c2) StepSR = c2
+session_preservation (CRS t c2) StepRS = c2

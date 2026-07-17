@@ -106,7 +106,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [ ] Conformance (`reliable`/`usable`, de'Liguoro–Padovani Def. 10)
 - [ ] Bidirectional constraint GENERATION from a behaviour
 - [ ] **Presburger / semilinear (Parikh) SOLVING** — external Z3/omega backend, **OUT OF TCB** (untrusted lint per the SMT trust-boundary decision), not a kernel proof
-- [~] Session-types-into-mailboxes encoding (de'Liguoro–Padovani §4.3–4.4): binary session types + DUALITY foundation — `dual`, `dual_involution` (dual is an involution), `Compat` + `compat_dual` (compatible endpoints are exactly dual endpoints, i.e. communication safety = duality) — **SHIPPED** `otp_session.cure` (Idris `rel=same`). Open: the actual encoding into mailbox patterns (`Std.Otp.MailboxPattern`) + fork/join
+- [~] Session-types-into-mailboxes encoding (de'Liguoro–Padovani §4.3–4.4): binary session types + DUALITY foundation — `dual`, `dual_involution` (dual is an involution), `Compat` + `compat_dual` (compatible endpoints are exactly dual endpoints, i.e. communication safety = duality) — **SHIPPED** `otp_session.cure` (Idris `rel=same`). plus `SStep` + `session_preservation` (subject reduction: a communication step between compatible endpoints yields compatible endpoints — a safe session stays safe as it runs). Open: the actual encoding into mailbox patterns (`Std.Otp.MailboxPattern`) + fork/join
 - [ ] Evolving-protocol inference (accepted set changes over a conversation) — composes B2 fixpoint + this solving
 
 ### B4. Full ordered / protocol selective receive (rest of G8)
