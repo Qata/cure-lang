@@ -141,7 +141,16 @@ defmodule Cure.Compiler.Parser do
         end,
       active_macros: active,
       computed_macros: computed,
-      literal_macros: literal
+      # Local `literal` rules always apply. In the normal (non-self-harvest)
+      # case, standard-library `literal` rules join them so a suffix like `ms`
+      # expands in ANY file, exactly as `:syntax` macros are globally active via
+      # `builtin_macros`. Local rules win on a suffix collision.
+      literal_macros:
+        cond do
+          is_map(supplied_macros) -> literal
+          prelude? -> Map.merge(prelude_literal_macros(), literal, fn _k, _p, l -> l end)
+          true -> literal
+        end
     }
 
     {exprs, state} = parse_program(state)
@@ -173,10 +182,12 @@ defmodule Cure.Compiler.Parser do
   defp load_prelude_macros do
     Process.put(:cure_loading_prelude, true)
 
-    rules =
+    {rules, literal_rules} =
       case Application.get_env(:cure, :stdlib_macro_rules) do
         rules when is_map(rules) ->
-          rules
+          # Env-supplied grammar sets carry only keyword `:syntax` rules; there
+          # is no literal-rule channel for this legacy escape hatch.
+          {rules, %{}}
 
         _ ->
           stdlib_macro_paths = Path.wildcard(Path.expand("../../std/*.cure", __DIR__))
@@ -186,12 +197,48 @@ defmodule Cure.Compiler.Parser do
           # standard-library macro can transparently invoke another (for
           # example, standard-library starters invoking another syntax macro).
           harvested = collect_stdlib_macro_rules(stdlib_macro_paths, %{})
-          collect_stdlib_macro_rules(stdlib_macro_paths, %{}, harvested)
+          syntax = collect_stdlib_macro_rules(stdlib_macro_paths, %{}, harvested)
+          literal = collect_stdlib_literal_rules(stdlib_macro_paths, harvested)
+          {syntax, literal}
       end
 
     :persistent_term.put({__MODULE__, :prelude_macros}, rules)
+    :persistent_term.put({__MODULE__, :prelude_literal_macros}, literal_rules)
     Process.delete(:cure_loading_prelude)
     rules
+  end
+
+  # Suffix-keyed `literal` rules gathered from every standard-library module, so
+  # a suffix such as `ms` expands in any file the way keyword `:syntax` macros
+  # are globally active. Populated as a side effect of `load_prelude_macros/0`
+  # (both persistent-term caches are written together); while the prelude is
+  # itself loading, no prelude literal rules are active (self-reference guard).
+  defp prelude_literal_macros do
+    case {Process.get(:cure_loading_prelude), :persistent_term.get({__MODULE__, :prelude_literal_macros}, :missing)} do
+      {true, _} -> %{}
+      {_, rules} when is_map(rules) -> rules
+      _ ->
+        load_prelude_macros()
+        :persistent_term.get({__MODULE__, :prelude_literal_macros}, %{})
+    end
+  end
+
+  defp collect_stdlib_literal_rules(paths, builtin_macros) do
+    Enum.reduce(paths, %{}, fn path, acc ->
+      with {:ok, source} <- File.read(path),
+           {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
+           {:ok, ast} <-
+             parse(tokens,
+               file: path,
+               emit_events: false,
+               prelude_macros: false,
+               builtin_macros: builtin_macros
+             ) do
+        Map.merge(acc, harvest_literal_macros(ast), fn _k, v1, v2 -> v1 ++ v2 end)
+      else
+        _ -> acc
+      end
+    end)
   end
 
   defp collect_stdlib_macro_rules(paths, acc, builtin_macros \\ %{}) do
@@ -1482,7 +1529,7 @@ defmodule Cure.Compiler.Parser do
       # never reaches this prefix clause.
       :dot ->
         {inner, state} = parse_forced_inner(advance(state))
-        {{:forced_pattern, [line: token.line, col: token.col], inner}, state}
+        {{:forced_pattern, [line: token.line, col: token.col], [inner]}, state}
 
       # Named-implicit dot pattern `{ name = <expr> }` in a constructor-argument
       # position — annotates an erased implicit index by name (Lean/Idris-style),
@@ -1649,8 +1696,8 @@ defmodule Cure.Compiler.Parser do
     state = expect(state, :assign)
     {inner, state} = parse_expr(state, 0)
     state = expect(state, :rbrace)
-    meta = [line: brace_token.line, col: brace_token.col]
-    {{:named_implicit_pat, meta, name, inner}, state}
+    meta = [line: brace_token.line, col: brace_token.col, name: name]
+    {{:named_implicit_pat, meta, [inner]}, state}
   end
 
   # -- Literals --------------------------------------------------------------
@@ -6533,7 +6580,7 @@ defmodule Cure.Compiler.Parser do
             {:container, Keyword.put(meta, :derive, derive_names), body}
 
           _ ->
-            {:container, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), body}
+            {:container, Keyword.put(meta, :decorator, {:decorator, [name: String.to_atom(dec_name)], args}), body}
         end
 
       # `@builtin(:key) type Name indices (...)` — a GADT / indexed family.
@@ -6541,7 +6588,7 @@ defmodule Cure.Compiler.Parser do
       # program.ex's maybe_register_builtin can see it (mirrors the
       # {:container} enum-ADT clause above).
       {:indexed_type, meta, ctors} ->
-        {:indexed_type, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), ctors}
+        {:indexed_type, Keyword.put(meta, :decorator, {:decorator, [name: String.to_atom(dec_name)], args}), ctors}
 
       {:function_def, meta, body} ->
         decoration =
@@ -6557,7 +6604,7 @@ defmodule Cure.Compiler.Parser do
               [extern: extern_val]
 
             _ ->
-              [decorator: {String.to_atom(dec_name), args}]
+              [decorator: {:decorator, [name: String.to_atom(dec_name)], args}]
           end
 
         {:function_def, meta ++ decoration, body}
@@ -6566,7 +6613,7 @@ defmodule Cure.Compiler.Parser do
       # decorator into the `{:type_annotation}` meta so program.ex's prelude
       # discovery can see it (mirrors the `{:container}`/`{:indexed_type}` clauses).
       {:type_annotation, meta, rhs} ->
-        {:type_annotation, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), rhs}
+        {:type_annotation, Keyword.put(meta, :decorator, {:decorator, [name: String.to_atom(dec_name)], args}), rhs}
 
       other ->
         other
