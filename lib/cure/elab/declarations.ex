@@ -224,7 +224,7 @@ defmodule Cure.Elab.Declarations do
   @spec declare_header(term(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
   def declare_header({:container, meta, _variants}, env) when is_list(meta) do
     cond do
-      match?({:builtin, _}, Keyword.get(meta, :decorator)) ->
+      attached_decorator_name(Keyword.get(meta, :decorator)) == :builtin ->
         {:ok, env}
 
       Keyword.get(meta, :container_type) in [:enum, :struct] ->
@@ -241,7 +241,7 @@ defmodule Cure.Elab.Declarations do
   end
 
   def declare_header({:indexed_type, meta, _ctor_sigs}, env) when is_list(meta) do
-    if match?({:builtin, _}, Keyword.get(meta, :decorator)) do
+    if attached_decorator_name(Keyword.get(meta, :decorator)) == :builtin do
       {:ok, env}
     else
       name = meta |> Keyword.fetch!(:name) |> String.to_atom()
@@ -2106,10 +2106,20 @@ defmodule Cure.Elab.Declarations do
   # The `@builtin(:tag)` on a primitive container, or an error if absent.
   defp primitive_builtin_tag(meta) do
     case Keyword.get(meta, :decorator) do
-      {:builtin, [{:literal, _, tag}]} when is_atom(tag) -> {:ok, tag}
-      _ -> {:error, {:primitive_missing_builtin, Keyword.get(meta, :name)}}
+      {:decorator, dm, [{:literal, _, tag}]} when is_atom(tag) ->
+        if Keyword.get(dm, :name) == :builtin,
+          do: {:ok, tag},
+          else: {:error, {:primitive_missing_builtin, Keyword.get(meta, :name)}}
+
+      _ ->
+        {:error, {:primitive_missing_builtin, Keyword.get(meta, :name)}}
     end
   end
+
+  # The name of an attached decorator node (`{:decorator, [name: n], args}`) held
+  # in a container/def meta `:decorator` slot, or `nil` if absent/non-decorator.
+  defp attached_decorator_name({:decorator, m, _args}) when is_list(m), do: Keyword.get(m, :name)
+  defp attached_decorator_name(_), do: nil
 
   # The fixed tag→Core-node table — the ONLY inherent mapping (keyed by builtin
   # tag, not by surface name). Exactly four tags are legal.

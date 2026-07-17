@@ -704,9 +704,14 @@ defmodule Cure.Elab.Program do
   end
 
   defp prelude_decorated?({_tag, meta, _}) when is_list(meta),
-    do: match?({:prelude, _}, Keyword.get(meta, :decorator))
+    do: attached_decorator_name(Keyword.get(meta, :decorator)) == :prelude
 
   defp prelude_decorated?(_), do: false
+
+  # The name of an attached decorator node (`{:decorator, [name: n], args}`) held
+  # in a def/container meta `:decorator` slot, or `nil` if absent/non-decorator.
+  defp attached_decorator_name({:decorator, m, _args}) when is_list(m), do: Keyword.get(m, :name)
+  defp attached_decorator_name(_), do: nil
 
   defp declaration_name({:type_annotation, meta, _}) when is_list(meta),
     do: meta |> Keyword.get(:name) |> to_name_atom()
@@ -1755,15 +1760,16 @@ defmodule Cure.Elab.Program do
   end
 
   defp register_builtin_from_meta(meta, env) do
-    case Keyword.get(meta, :decorator) do
-      {:builtin, args} ->
-        key = builtin_key(args)
-        fid = meta |> Keyword.fetch!(:name) |> String.to_atom()
-        :ok = Cure.Core.Builtins.validate!(env, key, fid)
-        {:ok, Cure.Core.Inductive.register_builtin(env, key, fid)}
+    dec = Keyword.get(meta, :decorator)
 
-      _ ->
-        {:ok, env}
+    if attached_decorator_name(dec) == :builtin do
+      {:decorator, _dm, args} = dec
+      key = builtin_key(args)
+      fid = meta |> Keyword.fetch!(:name) |> String.to_atom()
+      :ok = Cure.Core.Builtins.validate!(env, key, fid)
+      {:ok, Cure.Core.Inductive.register_builtin(env, key, fid)}
+    else
+      {:ok, env}
     end
   end
 

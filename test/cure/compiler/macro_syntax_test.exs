@@ -99,12 +99,13 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:match_arm, _, [nil]} = back
   end
 
-  test "a named_implicit_pat node (a 4-tuple, not {tag,meta,third}) does not crash" do
+  test "a named_implicit_pat node (canonical {tag, meta, [inner]}) reflects without crashing" do
     ast = parse_stmt!("match v { vcons({k = .m}, h, r) -> h }")
     assert {:pattern_match, _, [_scrutinee, arm]} = ast
     assert {:match_arm, ameta, _body} = arm
     assert {:function_call, _cmeta, [arg0 | _]} = Keyword.get(ameta, :pattern)
-    assert {:named_implicit_pat, _, "k", _inner} = arg0
+    assert {:named_implicit_pat, nmeta, [_inner]} = arg0
+    assert Keyword.get(nmeta, :name) == "k"
 
     # Must not raise (FunctionClauseError) -- reflecting the whole arm walks
     # into arg0 via the pattern= meta attr.

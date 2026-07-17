@@ -7,59 +7,75 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
   @moduledoc false
 
   # The MetaAST-conformance tripwire over the whole first-party .cure corpus
-  # (stdlib + examples + oracle probes + fixtures — every committed source).
+  # (stdlib + examples + oracle probes + fixtures — every committed source). It is
+  # the executable form of the meta-shape contract handed to Metastatic: the shape
+  # is whatever these tests prove, and anything falling outside is a change target.
   #
-  # Metastatic's traversal loses a subterm in three ways — a `:bad_shape` tuple it
-  # cannot enter, a `:node_in_meta` subterm parked in a meta value it never walks,
-  # or a `:node_child` bare node in a children slot where a list was required (see
-  # `Cure.MetaAST.Conformance`). The end-state invariant is ZERO of all three. The
-  # corpus does not satisfy that yet (~7,000 node_in_meta + ~200 node_child/
-  # bad_shape across the four trees), and it cannot be flipped to a hard "zero
-  # violations" assertion without red-lighting the suite before the Option-C
-  # refactor exists.
+  # Under decision D (2026-07-15 blind-spot design) Metastatic's traversal descends
+  # meta values that contain nodes, so a subterm parked in meta is LEGAL — a node is
+  # `{atom, keyword_list, _}` in every slot. What must hold instead is that the meta
+  # shape is regular enough for that descent to be TOTAL and SOUND. Three invariants
+  # (see `Cure.MetaAST.Conformance`), split by their nature:
   #
-  # So this is a SHRINKING ALLOWLIST. `@allowlist` is the set of {kind, tag, key}
-  # buckets currently tolerated. The tripwire fails if:
+  #   * INV-C — soundness — is asserted HARD, because the corpus already satisfies
+  #     it (measured):
+  #       C.1  no guard-matching non-node in any meta value (`meta_nonnodes` empty) —
+  #            the walker never descends opaque data as if it were a subterm.
+  #       C.2  every node tag reaching a meta position is in the frozen vocabulary —
+  #            a new atom in node-position (a new subterm kind, or an opaque payload
+  #            wrongly shaped) trips the gate for a human to classify. This frozen
+  #            set IS the node-tag half of the contract sent to Metastatic.
   #
-  #   * a NEW bucket appears that is not allowlisted — i.e. someone introduced a
-  #     fresh non-conformant shape or a new meta-embedded subterm (regression), or
-  #   * an allowlisted bucket no longer occurs — i.e. a migration eliminated it and
-  #     the entry is now STALE and must be deleted (keeps the allowlist honest and
-  #     forces it to shrink).
-  #
-  # Each Option-C step deletes the bucket it fixes from this list. The allowlist
-  # reaching `[]` is the definition of done.
-  @allowlist MapSet.new([
-               {:bad_shape, :builtin, nil},
-               {:bad_shape, :group, nil},
-               {:bad_shape, :named_dom, nil},
-               {:bad_shape, :named_implicit_pat, nil},
-               {:node_child, :forced_pattern, nil},
-               {:node_child, :gadt_ctor, nil},
-               {:node_in_meta, :bin_segment, :size},
-               {:node_in_meta, :container, :decorator},
-               {:node_in_meta, :container, :for_type},
-               {:node_in_meta, :function_call, :callee},
-               {:node_in_meta, :function_def, :constraints},
-               {:node_in_meta, :function_def, :guards},
-               {:node_in_meta, :function_def, :params},
-               {:node_in_meta, :function_def, :return_type},
-               {:node_in_meta, :implementation, :for_type},
-               {:node_in_meta, :indexed_type, :decorator},
-               {:node_in_meta, :indexed_type, :indices},
-               {:node_in_meta, :indexed_type, :params},
-               {:node_in_meta, :lambda, :params},
-               {:node_in_meta, :lift_module, :declarations},
-               {:node_in_meta, :match_arm, :guard},
-               {:node_in_meta, :match_arm, :pattern},
-               {:node_in_meta, :param, :default},
-               {:node_in_meta, :param, :type},
-               {:node_in_meta, :with_rematch_arm, :parent_patterns},
-               {:node_in_meta, :with_rematch_arm, :pattern}
-             ])
+  #   * INV-A / INV-B — completeness — remain a SHRINKING ALLOWLIST, because the
+  #     corpus does NOT yet satisfy them: ~265 `:bad_shape` / `:node_child` sites
+  #     hide nodes from a canonical-guard walker and are Cure-side normalization
+  #     targets. The allowlist reaching `[]` is the definition of done; each fix
+  #     deletes the bucket it eliminates.
 
-  # Every committed first-party .cure tree. Detection is structural, so widening
-  # the corpus only ever adds buckets — it never changes how a node is judged.
+  # INV-C.2 — the frozen node-tag vocabulary. Exactly the canonical-node tags that
+  # occur inside a meta value across the whole corpus (derived by enumeration, not
+  # by hand). Equality is asserted both ways: a NEW tag means an unclassified atom
+  # reached node-position in meta (soundness review); a VANISHED tag means the
+  # vocabulary — and the contract sent to Metastatic — is stale and must be updated.
+  @meta_vocabulary MapSet.new([
+                     :as_pattern,
+                     :assert_type,
+                     :attribute_access,
+                     :bin_segment,
+                     :binary_op,
+                     :decorator,
+                     :forced_pattern,
+                     :function_call,
+                     :function_def,
+                     :import,
+                     :list,
+                     :literal,
+                     :map,
+                     :named_implicit_pat,
+                     :pair,
+                     :param,
+                     :pi_type,
+                     :pin,
+                     :sigma_type,
+                     :tuple,
+                     :tuple_type,
+                     :type_annotation,
+                     :typed_pattern,
+                     :unary_op,
+                     :union_type,
+                     :variable
+                   ])
+
+  # INV-A / INV-B — the shrinking structural allowlist. Each entry is a
+  # {kind, tag, key} bucket (key always nil) whose nodes a canonical-guard walker
+  # cannot reach. These are normalization targets, not permanent shape.
+  @structural_allowlist MapSet.new([
+                          {:bad_shape, :named_dom, nil},
+                          {:node_child, :gadt_ctor, nil}
+                        ])
+
+  # Every committed first-party .cure tree. Detection is structural, so widening the
+  # corpus only ever adds coverage — it never changes how a node is judged.
   @corpus_globs [
     "lib/std/*.cure",
     "examples/**/*.cure",
@@ -67,52 +83,95 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
     "test/fixtures/*.cure"
   ]
 
-  defp corpus_buckets do
+  # One pass over the corpus, folding every file's analysis together:
+  #   tags     — union of meta_node_tags (INV-C.2)
+  #   buckets  — union of violation_buckets (INV-A/INV-B)
+  #   nonnodes — concatenated meta_nonnodes (INV-C.1)
+  #   failed   — files that did not parse (would silently shrink coverage)
+  defp corpus do
     @corpus_globs
     |> Enum.flat_map(&Path.wildcard/1)
     |> Enum.uniq()
-    |> Enum.reduce({MapSet.new(), []}, fn file, {buckets, failed} ->
+    |> Enum.reduce(%{tags: MapSet.new(), buckets: MapSet.new(), nonnodes: [], failed: []}, fn file, acc ->
       with {:ok, toks} <- Lexer.tokenize(File.read!(file), emit_events: false),
            {:ok, ast} <- Parser.parse(toks, emit_events: false) do
-        {MapSet.union(buckets, Conformance.violation_buckets(ast)), failed}
+        %{
+          acc
+          | tags: MapSet.union(acc.tags, Conformance.meta_node_tags(ast)),
+            buckets: MapSet.union(acc.buckets, Conformance.violation_buckets(ast)),
+            nonnodes: acc.nonnodes ++ tag_file(Conformance.meta_nonnodes(ast), file)
+        }
       else
-        _ -> {buckets, [Path.basename(file) | failed]}
+        _ -> %{acc | failed: [Path.basename(file) | acc.failed]}
       end
     end)
   end
 
+  defp tag_file(nonnodes, file), do: Enum.map(nonnodes, &Map.put(&1, :file, Path.basename(file)))
+
   test "every first-party file parses (a parse failure would silently shrink coverage)" do
-    {_buckets, failed} = corpus_buckets()
+    failed = corpus().failed
     assert failed == [], "files failed to parse: #{Enum.join(failed, ", ")}"
   end
 
-  test "no MetaAST-conformance violation outside the allowlist" do
-    {buckets, _failed} = corpus_buckets()
-    unexpected = MapSet.difference(buckets, @allowlist)
+  test "INV-C.1: no guard-matching non-node appears in any meta value" do
+    nonnodes = corpus().nonnodes
 
-    assert MapSet.equal?(unexpected, MapSet.new()), """
-    New MetaAST-conformance violation(s) not in the allowlist:
+    assert nonnodes == [], """
+    A meta value holds a tuple that Metastatic's descent guard (`{atom, is_list, _}`)
+    would enter as a node, but that is not a canonical node (its second element is a
+    list but not a keyword list). Descending it would make the walker treat opaque
+    data as a subterm — an INV-C soundness break.
 
-    #{format(unexpected)}
+    #{Enum.map_join(nonnodes, "\n", fn e -> "  #{e.file}: #{inspect(e.tag)}  #{inspect(e.node)}" end)}
 
-    A subterm here is invisible to Metastatic's traversal (RAG/MCP/migrator).
-    Either bring the node to the conformant shape (subterm in children, scalars
-    in meta) or, if this is a deliberate new construct, add its {kind, tag, key}
-    bucket to @allowlist in this file with a note.
+    Fix the producer so this is either a canonical node or opaque data with a
+    non-list second element.
     """
   end
 
-  test "the allowlist has no stale entries (forces it to shrink as C lands)" do
-    {buckets, _failed} = corpus_buckets()
-    stale = MapSet.difference(@allowlist, buckets)
+  test "INV-C.2: the node-tag vocabulary in meta is exactly the frozen set" do
+    tags = corpus().tags
+    new_tags = MapSet.difference(tags, @meta_vocabulary)
+    gone_tags = MapSet.difference(@meta_vocabulary, tags)
+
+    assert MapSet.equal?(tags, @meta_vocabulary), """
+    The set of canonical-node tags reaching a meta position has drifted from the
+    frozen INV-C vocabulary (which is also the node-tag contract sent to Metastatic).
+
+    New in meta (classify — a new subterm kind is fine; an opaque payload wrongly
+    shaped as `{atom, keyword_list, _}` is a soundness bug): #{inspect(MapSet.to_list(new_tags))}
+
+    No longer in meta (the vocabulary and the Metastatic contract are stale — update
+    both): #{inspect(MapSet.to_list(gone_tags))}
+    """
+  end
+
+  test "INV-A/INV-B: no structural violation outside the shrinking allowlist" do
+    unexpected = MapSet.difference(corpus().buckets, @structural_allowlist)
+
+    assert MapSet.equal?(unexpected, MapSet.new()), """
+    New MetaAST structural violation(s) not in the allowlist:
+
+    #{format(unexpected)}
+
+    A node here is invisible to a canonical-guard walker (its subterms are lost).
+    Either bring it to canonical shape (INV-A: 3-tuple node; INV-B: list children)
+    or, if this is a deliberate new construct, add its {kind, tag, nil} bucket to
+    @structural_allowlist with a note.
+    """
+  end
+
+  test "INV-A/INV-B: the structural allowlist has no stale entries (forces it to shrink)" do
+    stale = MapSet.difference(@structural_allowlist, corpus().buckets)
 
     assert MapSet.equal?(stale, MapSet.new()), """
-    Allowlisted bucket(s) no longer occur in the corpus:
+    Allowlisted structural bucket(s) no longer occur in the corpus:
 
     #{format(stale)}
 
-    These were fixed (or the construct was removed). Delete them from @allowlist —
-    the allowlist must only ever shrink.
+    These were normalized (or the construct was removed). Delete them from
+    @structural_allowlist — it must only ever shrink.
     """
   end
 

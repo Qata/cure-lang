@@ -937,7 +937,7 @@ defmodule Cure.Compiler.Printer do
   # the scrutinee must be convertible with, not a fresh binder. A bare
   # variable/literal prints as `.x`; anything compound prints as `.(...)`.
 
-  defp to_string({:forced_pattern, _meta, inner}, depth, indent) do
+  defp to_string({:forced_pattern, _meta, [inner]}, depth, indent) do
     inner_str = render(inner, depth, indent)
 
     case inner do
@@ -953,8 +953,8 @@ defmodule Cure.Compiler.Printer do
   # value in a pattern-argument position. This is a 4-tuple node, not the
   # standard `{tag, meta, children}` shape.
 
-  defp to_string({:named_implicit_pat, _meta, name, inner}, depth, indent) do
-    "{ " <> name <> " = " <> render(inner, depth, indent) <> " }"
+  defp to_string({:named_implicit_pat, meta, [inner]}, depth, indent) do
+    "{ " <> Keyword.get(meta, :name) <> " = " <> render(inner, depth, indent) <> " }"
   end
 
   # -- Hole (`?name` / `??`) -------------------------------------------------
@@ -1074,7 +1074,8 @@ defmodule Cure.Compiler.Printer do
       nil ->
         type_block
 
-      {dec_name, args} ->
+      {:decorator, dm, args} ->
+        dec_name = Keyword.get(dm, :name)
         self_pad = String.duplicate(indent, depth)
         "@#{dec_name}(#{args_to_string(args, depth, indent)})\n#{self_pad}#{type_block}"
     end
@@ -1626,7 +1627,9 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
-  defp maybe_prepend_decorator(result, _extern, {dec_name, args}, depth, indent) do
+  defp maybe_prepend_decorator(result, _extern, {:decorator, dm, args}, depth, indent) do
+    dec_name = Keyword.get(dm, :name)
+
     args_str =
       case args do
         [{:literal, [subtype: :boolean], bval}] ->

@@ -46,14 +46,11 @@ defmodule Cure.Compiler.MacroSyntax do
   # `to_syntax/1` is called recursively over every element found in a node's
   # children list (via `Enum.map(third, &to_syntax/1)`), but not every such
   # element is a well-formed `{tag, meta, third}` triple: an `impossible`
-  # match-arm body is the bare atom `nil` (see parse_match_arm_tail/2), and a
-  # named-implicit dot pattern (`{name = <expr>}`) is a 4-tuple
-  # `{:named_implicit_pat, meta, name, inner}` (see parse_named_implicit_pat/2)
-  # -- neither matches either clause below. Rather than crash on real,
-  # reachable parser output, fall back to a raw leaf: scalars (like `nil`)
-  # round-trip exactly via `synlit`, and non-conforming tuples (like the
-  # named-implicit 4-tuple) reflect opaquely, same as an irreducible native
-  # term (e.g. a compiled regex) -- honest, not a crash.
+  # match-arm body is the bare atom `nil` (see parse_match_arm_tail/2) -- which
+  # matches neither clause below. Rather than crash on real, reachable parser
+  # output, fall back to a raw leaf: scalars (like `nil`) round-trip exactly via
+  # `synlit`, and any non-conforming tuple reflects opaquely, same as an
+  # irreducible native term (e.g. a compiled regex) -- honest, not a crash.
   @spec to_syntax(term()) :: repr
   def to_syntax({:quoted_syntax, _meta, [inner]}), do: {:syn_quoted, to_syntax(inner)}
 

@@ -84,12 +84,29 @@ pattern-matching surface of essentially every definition Cure has.
 
 ## 3. Relationship to the six irregular shapes (a separate, smaller gap)
 
-The detector in `lib/cure/meta_ast/conformance.ex` flags **shape**
-non-conformance: atom-headed tuples that are not canonical 3-tuples and that
-hide a node. There are six such shapes, ~66 occurrences in stdlib:
-`named_implicit_pat` (4-tuple), `named_dom` (`{tag, name, inner}`), `arrow_chain`
-(2-tuple), `gadt_ctor` (canonical but children slot holds a bare arrow_chain),
-`:group` (2-tuple), `:builtin` (2-tuple).
+The detector in `lib/cure/meta_ast/conformance.ex` flags two **completeness**
+defects (INV-A/INV-B) — a canonical-guard walker cannot reach a subterm hidden in
+either a non-canonical atom-headed tuple (`:bad_shape`) or a children slot that is
+a bare node instead of a list (`:node_child`). Six shapes trip these, measured
+across the full first-party corpus (`lib/std` + `examples` + oracle probes +
+fixtures — the tripwire's shrinking allowlist):
+
+| Shape | Kind | Items | Files | Fix |
+|---|---|---|---|---|
+| `gadt_ctor` | `node_child` | 179 | 78 | wrap the bare `arrow_chain` child in a list |
+| `group` | `bad_shape` | 47 | 47 | normalize 2-tuple → canonical 3-tuple |
+| `builtin` | `bad_shape` | 10 | 10 | normalize 2-tuple → canonical 3-tuple |
+| `named_implicit_pat` | `bad_shape` | 10 | 10 | normalize 4-tuple → canonical 3-tuple |
+| `named_dom` | `bad_shape` | 8 | 8 | normalize `{tag, name, inner}` → canonical 3-tuple |
+| `forced_pattern` | `node_child` | 8 | 8 | wrap the bare child in a list |
+| **Total** | | **262** | | **6 producer edits** |
+
+The 262 occurrences reduce to **6 producer edits** — one per shape, at the site
+that emits it. Each edit deletes the corresponding allowlist bucket; the allowlist
+reaching `[]` is the definition of done. (`arrow_chain` no longer appears as its
+own `bad_shape` shape: every occurrence is a `gadt_ctor`'s bare `arrow_chain`
+child, re-attributed to `node_child :gadt_ctor` once the children-list invariant
+was added.)
 
 These are **orthogonal** to the blind spot:
 

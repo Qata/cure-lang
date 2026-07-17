@@ -458,14 +458,14 @@ defmodule Cure.Elab.Elaborator do
   # a pattern (a `let` RHS, a function argument/body, …) — reject it. Placed
   # before the catch-all so this precise error, not `{:unsupported_expression,…}`,
   # is reported.
-  def elaborate_expr_typed({:forced_pattern, meta, _expr}, _names, _ctx, _env),
+  def elaborate_expr_typed({:forced_pattern, meta, _children}, _names, _ctx, _env),
     do: {:error, {:forced_pattern_not_in_pattern, meta}}
 
   # A named-implicit dot pattern `{ name = <expr> }` is only meaningful as a
   # constructor-argument PATTERN position (annotating an erased index by name).
   # Reaching ordinary expression elaboration means it was used outside a pattern
   # — reject it with a precise error (mirrors the forced-pattern guard above).
-  def elaborate_expr_typed({:named_implicit_pat, meta, _name, _inner}, _names, _ctx, _env),
+  def elaborate_expr_typed({:named_implicit_pat, meta, _children}, _names, _ctx, _env),
     do: {:error, {:named_implicit_not_in_pattern, meta}}
 
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
@@ -4262,7 +4262,7 @@ defmodule Cure.Elab.Elaborator do
   # A constructor-pattern argument is a LEAF (not a nested sub-pattern needing
   # matrix lowering) if it is a bare variable or a named-implicit annotation.
   defp pat_arg_leaf?({:variable, _m, _v}), do: true
-  defp pat_arg_leaf?({:named_implicit_pat, _m, _n, _i}), do: true
+  defp pat_arg_leaf?({:named_implicit_pat, _m, _children}), do: true
   defp pat_arg_leaf?(_), do: false
 
   # Group arms by outer constructor (first-appearance order, within-group order
@@ -4874,7 +4874,7 @@ defmodule Cure.Elab.Elaborator do
   # The forced inner of a named-implicit is normally a dot pattern `.<expr>`; peel
   # the forced wrapper (it is not valid in ordinary expression elaboration) and
   # elaborate the underlying expression. A non-dot inner is elaborated as-is.
-  defp forced_inner_expr({:forced_pattern, _m, inner}), do: inner
+  defp forced_inner_expr({:forced_pattern, _m, [inner]}), do: inner
   defp forced_inner_expr(other), do: other
 
   @doc """
@@ -6164,7 +6164,7 @@ defmodule Cure.Elab.Elaborator do
 
   defp constructor_pattern(other), do: {:error, {:unsupported_pattern, pattern_shape(other)}}
 
-  defp named_implicit_arg?({:named_implicit_pat, _m, _n, _i}), do: true
+  defp named_implicit_arg?({:named_implicit_pat, _m, _children}), do: true
   defp named_implicit_arg?(_), do: false
 
   # A pattern's value-reconstruction (spliced into a branch body by
@@ -6188,7 +6188,7 @@ defmodule Cure.Elab.Elaborator do
   # pairs (empty for a pattern without any). Used by `elaborate_matched_branch`
   # to run the forced-index convertibility check.
   defp constructor_named_implicits({:function_call, _meta, args}),
-    do: for({:named_implicit_pat, _m, name, inner} <- args, do: {name, inner})
+    do: for({:named_implicit_pat, m, [inner]} <- args, do: {Keyword.get(m, :name), inner})
 
   defp constructor_named_implicits(_), do: []
 

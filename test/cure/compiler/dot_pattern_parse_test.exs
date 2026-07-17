@@ -31,7 +31,7 @@ defmodule Cure.Compiler.DotPatternParseTest do
     assert {:pattern_match, _, [_scrutinee, arm]} = ast
     assert {:match_arm, ameta, _body} = arm
     assert {:function_call, _cmeta, [arg]} = Keyword.get(ameta, :pattern)
-    assert {:forced_pattern, _, {:variable, _, "a"}} = arg
+    assert {:forced_pattern, _, [{:variable, _, "a"}]} = arg
   end
 
   # (b) A parenthesised compound dot pattern `.(S(k))` parses the inner
@@ -41,7 +41,7 @@ defmodule Cure.Compiler.DotPatternParseTest do
     assert {:pattern_match, _, [_scrutinee, arm]} = ast
     assert {:match_arm, ameta, _body} = arm
     assert {:function_call, _cmeta, [arg]} = Keyword.get(ameta, :pattern)
-    assert {:forced_pattern, _, inner} = arg
+    assert {:forced_pattern, _, [inner]} = arg
     assert {:function_call, _, [{:variable, _, "k"}]} = inner
   end
 
