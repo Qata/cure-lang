@@ -39,7 +39,7 @@ each a sequence of items. An item is a `challenge -> expected response` pair:
 
 ```cure
 checklist C172S
-  use Std.Units          # kt, degC, psi, deg via the units macro
+  use Std.Measurements          # kt, degC, psi, deg via the units macro
 
   normal BeforeStart
     "Preflight inspection" -> "COMPLETE"

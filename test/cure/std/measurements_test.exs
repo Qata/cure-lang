@@ -1,11 +1,11 @@
-defmodule Cure.Std.UnitsTest do
-  # End-to-end coverage for `Std.Units` (design 2026-07-08-units-macro-design).
+defmodule Cure.Std.MeasurementsTest do
+  # End-to-end coverage for `Std.Measurements` (design 2026-07-08-units-macro-design).
   #
   # The distinctive behaviour is that a `literal` suffix (`ms`, `khz`, `pct`, …)
-  # declared inside `lib/std/units.cure` expands at a use-site in ANOTHER file,
+  # declared inside `lib/std/measurements.cure` expands at a use-site in ANOTHER file,
   # with no local `macro` block — i.e. standard-library literal rules are globally
   # active through the prelude, the same way keyword `:syntax` macros are. These
-  # tests compile a *consumer* module that only `use Std.Units` and never declares
+  # tests compile a *consumer* module that only `use Std.Measurements` and never declares
   # the rules itself, so a green result proves the cross-file propagation.
   use ExUnit.Case, async: false
 
@@ -21,7 +21,7 @@ defmodule Cure.Std.UnitsTest do
       m =
         load!(:"Cure.UT1", """
         mod UT1
-          use Std.Units
+          use Std.Measurements
           fn a() -> Duration = 500ms
           fn b() -> Duration = 250us
           fn c() -> Duration = 2s
@@ -36,7 +36,7 @@ defmodule Cure.Std.UnitsTest do
       m =
         load!(:"Cure.UT2", """
         mod UT2
-          use Std.Units
+          use Std.Measurements
           fn f() -> Frequency = 3khz
           fn g() -> Frequency = 50hz
           fn p() -> Percent = 80pct
@@ -55,7 +55,7 @@ defmodule Cure.Std.UnitsTest do
       m =
         load!(:"Cure.UT3", """
         mod UT3
-          use Std.Units
+          use Std.Measurements
           fn sum_ms() -> Int = as_ms(add(500ms, 250ms))
           fn diff_ms() -> Int = as_ms(sub(1s, 250ms))
           fn scaled_us() -> Int = as_us(scale(1ms, 3))
@@ -74,7 +74,7 @@ defmodule Cure.Std.UnitsTest do
       assert {:error, _} =
                Program.elaborate("""
                mod BadMix
-                 use Std.Units
+                 use Std.Measurements
                  fn oops() -> Duration = add(500ms, 3khz)
                """)
     end
@@ -83,7 +83,7 @@ defmodule Cure.Std.UnitsTest do
       assert {:error, _} =
                Program.elaborate("""
                mod BadBare
-                 use Std.Units
+                 use Std.Measurements
                  fn need(d: Duration) -> Duration = d
                  fn call() -> Duration = need(500)
                """)

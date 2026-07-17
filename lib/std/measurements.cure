@@ -1,17 +1,17 @@
 @group(:system)
-mod Std.Units
+mod Std.Measurements
   ## Literal units of measure (design 2026-07-08-units-macro-design).
   ##
   ## A number written immediately before a registered suffix expands, at parse
   ## time, into the matching constructor call — no runtime cost beyond the
   ## wrapped integer. The suffixes are globally active (like `:syntax` macros),
-  ## so `use Std.Units` is only needed to bring the operations and the wrapper
+  ## so `use Std.Measurements` is only needed to bring the operations and the wrapper
   ## types into scope, not to enable the sugar.
   ##
-  ##   500ms   ==>  Std.Units.ms(500)     # a Duration of 500_000 microseconds
-  ##   3khz    ==>  Std.Units.khz(3)      # a Frequency of 3_000 hertz
-  ##   80pct   ==>  Std.Units.pct(80)     # a Percent
-  ##   9600baud ==> Std.Units.baud(9600)  # a Baud rate
+  ##   500ms   ==>  Std.Measurements.ms(500)     # a Duration of 500_000 microseconds
+  ##   3khz    ==>  Std.Measurements.khz(3)      # a Frequency of 3_000 hertz
+  ##   80pct   ==>  Std.Measurements.pct(80)     # a Percent
+  ##   9600baud ==> Std.Measurements.baud(9600)  # a Baud rate
   ##
   ## Each quantity is a closed record over one `Int`, so arithmetic stays
   ## same-unit: `plus`/`minus`/`scale` are defined per quantity and there is no
@@ -20,7 +20,7 @@ mod Std.Units
   ## ## Example
   ##
   ## ```cure
-  ## use Std.Units
+  ## use Std.Measurements
   ##
   ## let budget = plus(500ms, 250ms)     # a Duration of 750_000 microseconds
   ## as_ms(budget)                        # => 750
@@ -69,14 +69,14 @@ mod Std.Units
 
   # -- Literal rules ----------------------------------------------------------
 
-  macro Units
-    literal <n: Number> us becomes Std.Units.us(n)
-    literal <n: Number> ms becomes Std.Units.ms(n)
-    literal <n: Number> s becomes Std.Units.s(n)
-    literal <n: Number> hz becomes Std.Units.hz(n)
-    literal <n: Number> khz becomes Std.Units.khz(n)
-    literal <n: Number> pct becomes Std.Units.pct(n)
-    literal <n: Number> baud becomes Std.Units.baud(n)
+  macro Measurements
+    literal <n: Number> us becomes Std.Measurements.us(n)
+    literal <n: Number> ms becomes Std.Measurements.ms(n)
+    literal <n: Number> s becomes Std.Measurements.s(n)
+    literal <n: Number> hz becomes Std.Measurements.hz(n)
+    literal <n: Number> khz becomes Std.Measurements.khz(n)
+    literal <n: Number> pct becomes Std.Measurements.pct(n)
+    literal <n: Number> baud becomes Std.Measurements.baud(n)
 
   # -- Duration arithmetic (same-unit) ----------------------------------------
 
