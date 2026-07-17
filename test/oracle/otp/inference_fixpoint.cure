@@ -1,0 +1,31 @@
+mod InferenceFixpoint
+  type Tag = TA | TB | TC
+  type TagList = TNil | TCons(Tag, TagList)
+  type Handles indices (t: Tag, iface: TagList)
+    HHere  : Handles(t, TCons(t, rest))
+    HThere : Handles(t, rest) -> Handles(t, TCons(y, rest))
+  type AllHandled indices (s: TagList, iface: TagList)
+    AHNil  : AllHandled(TNil, iface)
+    AHCons : Handles(t, iface) -> AllHandled(rest, iface) -> AllHandled(TCons(t, rest), iface)
+  type Nat = Z | S(Nat)
+  fn iterate(f: (TagList) -> TagList, x: TagList, n: Nat) -> TagList = match n
+    Z()  -> x
+    S(k) -> f(iterate(f, x, k))
+  fn handles_weaken({t: Tag}, {y: TagList}, {z: TagList}, h: Handles(t, y), sub: AllHandled(y, z)) -> Handles(t, z) = match h
+    HHere()    -> match sub
+      AHCons(ht, srest) -> ht
+    HThere(h2) -> match sub
+      AHCons(hh, srest) -> handles_weaken(h2, srest)
+  fn all_handled_trans({x: TagList}, {y: TagList}, {z: TagList}, xy: AllHandled(x, y), yz: AllHandled(y, z)) -> AllHandled(x, z) = match xy
+    AHNil()            -> AHNil()
+    AHCons(hx, xrest)  -> AHCons(handles_weaken(hx, yz), all_handled_trans(xrest, yz))
+  fn lfp_le(
+      f: (TagList) -> TagList,
+      mono: (x: TagList) -> (y: TagList) -> (AllHandled(x, y)) -> AllHandled(f(x), f(y)),
+      a: TagList,
+      pre: AllHandled(f(a), a),
+      n: Nat
+    ) -> AllHandled(iterate(f, TNil, n), a) = match n
+    Z()  -> AHNil()
+    S(k) -> all_handled_trans(mono(iterate(f, TNil, k), a, lfp_le(f, mono, a, pre, k)), pre)
+end
