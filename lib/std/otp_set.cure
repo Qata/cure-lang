@@ -1,0 +1,61 @@
+@group(:concurrency)
+mod Std.Otp.Set
+  use Std.Equivalent
+  ## `:sets` / `:ordsets` — the BEAM set library. A set is modelled as a list of keys and `union`
+  ## as concatenation; the defining law is that MEMBERSHIP DISTRIBUTES OVER UNION as boolean OR:
+  ## `member(x, union(s1, s2)) = member(x, s1) or member(x, s2)`. An element is in the union exactly
+  ## when it is in one of the parts — the characteristic property of set union, certified.
+
+  type Key = KA | KB | KC
+  type B = F | T
+  fn orb(a: B, b: B) -> B = match a
+    F() -> b
+    T() -> T()
+  fn key_eq(x: Key, y: Key) -> B = match x
+    KA() -> match y
+      KA() -> T
+      KB() -> F
+      KC() -> F
+    KB() -> match y
+      KA() -> F
+      KB() -> T
+      KC() -> F
+    KC() -> match y
+      KA() -> F
+      KB() -> F
+      KC() -> T
+
+  type Set = SetNil | SetCons(Key, Set)
+
+  ## Membership: is `x` bound anywhere in the set?
+  fn mem(x: Key, s: Set) -> B = match s
+    SetNil()          -> F()
+    SetCons(k, rest)  -> match key_eq(x, k)
+      T() -> T()
+      F() -> mem(x, rest)
+
+  ## Union as concatenation (membership is OR, so duplicates across the two are harmless).
+  fn union(s1: Set, s2: Set) -> Set = match s1
+    SetNil()          -> s2
+    SetCons(k, rest)  -> SetCons(k, union(rest, s2))
+
+  ## **MEMBERSHIP DISTRIBUTES OVER UNION.** `member(x, union(s1, s2)) = member(x, s1) or member(x,
+  ## s2)`. Induction on `s1`; at a `SetCons(k, …)` head, casing both keys makes `key_eq` compute —
+  ## on a match (`x = k`) both sides are `T` (via `orb(T, _) = T`), on a mismatch both peel the head
+  ## and continue by the induction hypothesis.
+  fn union_member(x: Key, s1: Set, s2: Set) -> Equivalent(B, mem(x, union(s1, s2)), orb(mem(x, s1), mem(x, s2))) = match s1
+    SetNil()          -> reflexive(mem(x, s2))
+    SetCons(k, rest)  -> match x
+      KA() -> match k
+        KA() -> reflexive(T())
+        KB() -> union_member(KA(), rest, s2)
+        KC() -> union_member(KA(), rest, s2)
+      KB() -> match k
+        KA() -> union_member(KB(), rest, s2)
+        KB() -> reflexive(T())
+        KC() -> union_member(KB(), rest, s2)
+      KC() -> match k
+        KA() -> union_member(KC(), rest, s2)
+        KB() -> union_member(KC(), rest, s2)
+        KC() -> reflexive(T())
+end

@@ -1,0 +1,45 @@
+mod Sets
+  use Std.Equivalent
+  type Key = KA | KB | KC
+  type B = F | T
+  fn orb(a: B, b: B) -> B = match a
+    F() -> b
+    T() -> T()
+  fn key_eq(x: Key, y: Key) -> B = match x
+    KA() -> match y
+      KA() -> T
+      KB() -> F
+      KC() -> F
+    KB() -> match y
+      KA() -> F
+      KB() -> T
+      KC() -> F
+    KC() -> match y
+      KA() -> F
+      KB() -> F
+      KC() -> T
+  type Set = SetNil | SetCons(Key, Set)
+  fn mem(x: Key, s: Set) -> B = match s
+    SetNil()          -> F()
+    SetCons(k, rest)  -> match key_eq(x, k)
+      T() -> T()
+      F() -> mem(x, rest)
+  fn union(s1: Set, s2: Set) -> Set = match s1
+    SetNil()          -> s2
+    SetCons(k, rest)  -> SetCons(k, union(rest, s2))
+  fn union_member(x: Key, s1: Set, s2: Set) -> Equivalent(B, mem(x, union(s1, s2)), orb(mem(x, s1), mem(x, s2))) = match s1
+    SetNil()          -> reflexive(mem(x, s2))
+    SetCons(k, rest)  -> match x
+      KA() -> match k
+        KA() -> reflexive(T())
+        KB() -> union_member(KA(), rest, s2)
+        KC() -> union_member(KA(), rest, s2)
+      KB() -> match k
+        KA() -> union_member(KB(), rest, s2)
+        KB() -> reflexive(T())
+        KC() -> union_member(KB(), rest, s2)
+      KC() -> match k
+        KA() -> union_member(KC(), rest, s2)
+        KB() -> union_member(KC(), rest, s2)
+        KC() -> reflexive(T())
+end
