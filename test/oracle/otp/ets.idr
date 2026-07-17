@@ -41,3 +41,23 @@ lookup_insert_neq KB KC v t neq = Refl
 lookup_insert_neq KC KA v t neq = Refl
 lookup_insert_neq KC KB v t neq = Refl
 lookup_insert_neq KC KC v t Refl impossible
+
+delete : Key -> Table -> Table
+delete k TEmpty = TEmpty
+delete k (TIns k2 v rest) = case key_eq k k2 of
+  T => delete k rest
+  F => TIns k2 v (delete k rest)
+
+lookup_delete : (k : Key) -> (t : Table) -> lookup k (delete k t) = ONone
+lookup_delete KA TEmpty = Refl
+lookup_delete KA (TIns KA v rest) = lookup_delete KA rest
+lookup_delete KA (TIns KB v rest) = lookup_delete KA rest
+lookup_delete KA (TIns KC v rest) = lookup_delete KA rest
+lookup_delete KB TEmpty = Refl
+lookup_delete KB (TIns KA v rest) = lookup_delete KB rest
+lookup_delete KB (TIns KB v rest) = lookup_delete KB rest
+lookup_delete KB (TIns KC v rest) = lookup_delete KB rest
+lookup_delete KC TEmpty = Refl
+lookup_delete KC (TIns KA v rest) = lookup_delete KC rest
+lookup_delete KC (TIns KB v rest) = lookup_delete KC rest
+lookup_delete KC (TIns KC v rest) = lookup_delete KC rest

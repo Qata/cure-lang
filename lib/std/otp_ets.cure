@@ -67,4 +67,35 @@ mod Std.Otp.Ets
       KA() -> reflexive(lookup(KC(), t))
       KB() -> reflexive(lookup(KC(), t))
       KC() -> match neq
+
+  ## `ets:delete` — drop EVERY binding for `k`.
+  fn delete(k: Key, t: Table) -> Table = match t
+    TEmpty()          -> TEmpty()
+    TIns(k2, v, rest) -> match key_eq(k, k2)
+      T() -> delete(k, rest)
+      F() -> TIns(k2, v, delete(k, rest))
+
+  ## **LOOKUP-AFTER-DELETE.** Looking up a deleted key finds nothing: `lookup(k, delete(k, t)) =
+  ## ONone`. Induction on the table, casing on both keys so `key_eq` computes: at a matching head
+  ## `delete` drops it (recurse on the tail); at a non-matching head `delete` keeps it and `lookup`
+  ## skips it — both continue to the deleted tail by the induction hypothesis.
+  fn lookup_delete(k: Key, t: Table) -> Equivalent(Opt, lookup(k, delete(k, t)), ONone()) = match k
+    KA() -> match t
+      TEmpty()          -> reflexive(ONone())
+      TIns(k2, v, rest) -> match k2
+        KA() -> lookup_delete(KA(), rest)
+        KB() -> lookup_delete(KA(), rest)
+        KC() -> lookup_delete(KA(), rest)
+    KB() -> match t
+      TEmpty()          -> reflexive(ONone())
+      TIns(k2, v, rest) -> match k2
+        KA() -> lookup_delete(KB(), rest)
+        KB() -> lookup_delete(KB(), rest)
+        KC() -> lookup_delete(KB(), rest)
+    KC() -> match t
+      TEmpty()          -> reflexive(ONone())
+      TIns(k2, v, rest) -> match k2
+        KA() -> lookup_delete(KC(), rest)
+        KB() -> lookup_delete(KC(), rest)
+        KC() -> lookup_delete(KC(), rest)
 end

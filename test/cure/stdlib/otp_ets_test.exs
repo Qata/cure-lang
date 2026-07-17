@@ -27,6 +27,20 @@ defmodule Cure.Stdlib.OtpEtsTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "lookup-after-delete finds nothing" do
+    src = """
+    mod EtsDel
+      use Std.Otp.Ets
+      fn law(k: Key, t: Table) -> Equivalent(Opt, lookup(k, delete(k, t)), ONone()) =
+        lookup_delete(k, t)
+      fn inst() -> Equivalent(Opt, lookup(KA(), delete(KA(), insert(KA(), S(Z()), TEmpty()))), ONone()) =
+        lookup_delete(KA(), insert(KA(), S(Z()), TEmpty()))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "insert at a different key leaves a lookup unchanged" do
     src = """
     mod EtsNeq
