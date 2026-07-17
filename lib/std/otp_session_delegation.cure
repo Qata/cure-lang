@@ -1,0 +1,68 @@
+@group(:concurrency)
+mod Std.Otp.SessionDelegation
+  ## SESSION DELEGATION / HIGHER-ORDER CHANNELS (build-out map B3, session extension). The
+  ## distinguishing higher-order feature of session types: an endpoint can SEND ANOTHER CHANNEL
+  ## over a channel (`SDeleg`) and its peer RESUMES that channel (`SResume`) — delegation, e.g. a
+  ## load balancer handing a live client connection to a worker. The subtlety: when a channel of
+  ## type `A` is delegated, `A` is transferred AS-IS — it is NOT dualized (the receiver takes over
+  ## the exact endpoint the sender held). Only the CARRIER session continues in dual lock-step.
+  ##
+  ## This module shows duality stays an involution despite the un-dualized payload, and that
+  ## compatibility still coincides with duality when channels are passed.
+
+  type Tag = TA | TB | TC
+  ## A session type with delegation: `SDeleg(a, k)` sends a channel of session type `a` then
+  ## continues as `k`; `SResume(a, k)` receives such a channel then continues as `k`.
+  type SType = SEnd | SSend(Tag, SType) | SRecv(Tag, SType) | SDeleg(SType, SType) | SResume(SType, SType)
+
+  ## Dual: swap send/receive and delegate/resume. The CARRIED type `a` is preserved unchanged —
+  ## delegation transfers the endpoint as-is; only the carrier continuation `k` is dualized.
+  fn dual(s: SType) -> SType = match s
+    SEnd()          -> SEnd()
+    SSend(t, k)     -> SRecv(t, dual(k))
+    SRecv(t, k)     -> SSend(t, dual(k))
+    SDeleg(a, k)    -> SResume(a, dual(k))
+    SResume(a, k)   -> SDeleg(a, dual(k))
+
+  ## **DUALITY IS AN INVOLUTION (with delegation).** `dual(dual(S)) = S` even though the delegated
+  ## payload is never dualized: at `SDeleg`/`SResume` the carried `a` returns unchanged (it is
+  ## copied verbatim through both duals) while the continuation recurses. So the two endpoints of a
+  ## channel-passing protocol still determine each other.
+  fn dual_involution(s: SType) -> Equivalent(SType, dual(dual(s)), s) = match s
+    SEnd()        -> reflexive(SEnd())
+    SSend(t, k)   -> rewrite dual_involution(k) in reflexive(SSend(t, k))
+    SRecv(t, k)   -> rewrite dual_involution(k) in reflexive(SRecv(t, k))
+    SDeleg(a, k)  -> rewrite dual_involution(k) in reflexive(SDeleg(a, k))
+    SResume(a, k) -> rewrite dual_involution(k) in reflexive(SResume(a, k))
+
+  ## Structural compatibility, including channel passing: one side delegates a channel of type `a`,
+  ## the other resumes a channel of the SAME type `a`, and the carriers continue compatibly.
+  type Compat indices (l: SType, r: SType)
+    CEnd : Compat(SEnd, SEnd)
+    CSR  : (t: Tag) -> Compat(l, r) -> Compat(SSend(t, l), SRecv(t, r))
+    CRS  : (t: Tag) -> Compat(l, r) -> Compat(SRecv(t, l), SSend(t, r))
+    CDel : (a: SType) -> Compat(l, r) -> Compat(SDeleg(a, l), SResume(a, r))
+    CRes : (a: SType) -> Compat(l, r) -> Compat(SResume(a, l), SDeleg(a, r))
+
+  fn ssend_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SSend(t, a), SSend(t, b)) =
+    rewrite e in reflexive(SSend(t, b))
+  fn srecv_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SRecv(t, a), SRecv(t, b)) =
+    rewrite e in reflexive(SRecv(t, b))
+  ## Congruence for the delegate/resume constructors: the carried type `a` is fixed, the carrier
+  ## continuation varies.
+  fn sdeleg_cong(a: SType, {x: SType}, {y: SType}, e: Equivalent(SType, x, y)) -> Equivalent(SType, SDeleg(a, x), SDeleg(a, y)) =
+    rewrite e in reflexive(SDeleg(a, y))
+  fn sresume_cong(a: SType, {x: SType}, {y: SType}, e: Equivalent(SType, x, y)) -> Equivalent(SType, SResume(a, x), SResume(a, y)) =
+    rewrite e in reflexive(SResume(a, y))
+
+  ## **COMPATIBILITY = DUALITY (with delegation).** Compatible endpoints are exactly dual — channel
+  ## passing preserves the invariant: a delegated channel of type `a` is resumed as the same `a`,
+  ## and `dual` leaves `a` untouched, so the delegate/resume cases go through by the carrier's
+  ## induction hypothesis. Communication safety is still duality when channels are first-class.
+  fn compat_dual({l: SType}, {r: SType}, c: Compat(l, r)) -> Equivalent(SType, l, dual(r)) = match c
+    CEnd()       -> reflexive(SEnd())
+    CSR(t, c2)   -> ssend_cong(t, compat_dual(c2))
+    CRS(t, c2)   -> srecv_cong(t, compat_dual(c2))
+    CDel(a, c2)  -> sdeleg_cong(a, compat_dual(c2))
+    CRes(a, c2)  -> sresume_cong(a, compat_dual(c2))
+end
