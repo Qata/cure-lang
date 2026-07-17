@@ -1,0 +1,58 @@
+mod SessionSubtyping
+  type B = F | T
+  type BLe indices (x: B, y: B)
+    BLeF : BLe(F, y)
+    BLeT : BLe(T, T)
+  fn ble_refl(x: B) -> BLe(x, x) = match x
+    F() -> BLeF()
+    T() -> BLeT()
+  fn ble_trans({x: B}, {y: B}, {z: B}, p: BLe(x, y), q: BLe(y, z)) -> BLe(x, z) = match p
+    BLeF() -> BLeF()
+    BLeT() -> match q
+      BLeT() -> BLeT()
+  type LSet = MkLSet(B, B, B)
+  type LSub indices (s: LSet, t: LSet)
+    MkLSub : BLe(a1, a2) -> BLe(b1, b2) -> BLe(c1, c2) -> LSub(MkLSet(a1, b1, c1), MkLSet(a2, b2, c2))
+  fn lsub_refl(s: LSet) -> LSub(s, s) = match s
+    MkLSet(a, b, c) -> MkLSub(ble_refl(a), ble_refl(b), ble_refl(c))
+  fn lsub_trans({s: LSet}, {u: LSet}, {v: LSet}, p: LSub(s, u), q: LSub(u, v)) -> LSub(s, v) = match p
+    MkLSub(pa, pb, pc) -> match q
+      MkLSub(qa, qb, qc) -> MkLSub(ble_trans(pa, qa), ble_trans(pb, qb), ble_trans(pc, qc))
+  type Tag = TA | TB | TC
+  type SType = SEnd | SSend(Tag, SType) | SRecv(Tag, SType) | SSelect(LSet, SType) | SBranch(LSet, SType)
+  type Sub indices (s: SType, t: SType)
+    SubEnd  : Sub(SEnd, SEnd)
+    SubSend : (tg: Tag) -> Sub(k1, k2) -> Sub(SSend(tg, k1), SSend(tg, k2))
+    SubRecv : (tg: Tag) -> Sub(k1, k2) -> Sub(SRecv(tg, k1), SRecv(tg, k2))
+    SubSel  : LSub(s1, s2) -> Sub(k1, k2) -> Sub(SSelect(s1, k1), SSelect(s2, k2))
+    SubBra  : LSub(s2, s1) -> Sub(k1, k2) -> Sub(SBranch(s1, k1), SBranch(s2, k2))
+  fn sub_refl(s: SType) -> Sub(s, s) = match s
+    SEnd()          -> SubEnd()
+    SSend(tg, k)    -> SubSend(tg, sub_refl(k))
+    SRecv(tg, k)    -> SubRecv(tg, sub_refl(k))
+    SSelect(ls, k)  -> SubSel(lsub_refl(ls), sub_refl(k))
+    SBranch(ls, k)  -> SubBra(lsub_refl(ls), sub_refl(k))
+  fn sub_trans({a: SType}, {b: SType}, {c: SType}, p: Sub(a, b), q: Sub(b, c)) -> Sub(a, c) = match p
+    SubEnd() -> match q
+      SubEnd() -> SubEnd()
+    SubSend(tg, p2) -> match q
+      SubSend(tg2, q2) -> SubSend(tg, sub_trans(p2, q2))
+    SubRecv(tg, p2) -> match q
+      SubRecv(tg2, q2) -> SubRecv(tg, sub_trans(p2, q2))
+    SubSel(pl, p2) -> match q
+      SubSel(ql, q2) -> SubSel(lsub_trans(pl, ql), sub_trans(p2, q2))
+    SubBra(pl, p2) -> match q
+      SubBra(ql, q2) -> SubBra(lsub_trans(ql, pl), sub_trans(p2, q2))
+  fn dual(s: SType) -> SType = match s
+    SEnd()          -> SEnd()
+    SSend(tg, k)    -> SRecv(tg, dual(k))
+    SRecv(tg, k)    -> SSend(tg, dual(k))
+    SSelect(ls, k)  -> SBranch(ls, dual(k))
+    SBranch(ls, k)  -> SSelect(ls, dual(k))
+  fn sub_dual_antitone({s: SType}, {t: SType}, p: Sub(s, t)) -> Sub(dual(t), dual(s)) = match p
+    SubEnd()        -> SubEnd()
+    SubSend(tg, p2) -> SubRecv(tg, sub_dual_antitone(p2))
+    SubRecv(tg, p2) -> SubSend(tg, sub_dual_antitone(p2))
+    SubSel(pl, p2)  -> SubBra(pl, sub_dual_antitone(p2))
+    SubBra(pl, p2)  -> SubSel(pl, sub_dual_antitone(p2))
+end
