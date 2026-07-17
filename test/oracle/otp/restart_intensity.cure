@@ -1,0 +1,12 @@
+mod RestartIntensity
+  type Phase = Up | Down
+  type Sup indices (budget: Nat, phase: Phase)
+    Alive   : Sup(n, Up)
+    Stopped : Sup(Z, Down)
+  type Fail indices (b1: Nat, p1: Phase, b2: Nat, p2: Phase)
+    FRestart  : Fail(S(n), Up, n, Up)
+    FShutdown : Fail(Z, Up, Z, Down)
+  fn on_fail({b1: Nat}, {p1: Phase}, {b2: Nat}, {p2: Phase}, sup: Sup(b1, p1), f: Fail(b1, p1, b2, p2)) -> Sup(b2, p2) = match f
+    FRestart()  -> Alive()
+    FShutdown() -> Stopped()
+end

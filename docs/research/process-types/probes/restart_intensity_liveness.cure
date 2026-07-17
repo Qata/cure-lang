@@ -1,0 +1,19 @@
+## Restart-intensity bounded-run LIVENESS — BLOCKED by E6 (elaborator incompleteness).
+## `eventually_down` leaves an unsolved metavar on the nullary FRDone/FRestart whose indices
+## are fixed only through FRMore's intermediate existential; Cure REJECTS, Idris ACCEPTS. The
+## core (Sup/Fail/on_fail) is shipped in lib/std/otp_restart_intensity.cure; this is the
+## liveness statement kept for when E6 is fixed. Idris mirror in
+## test/oracle/otp/... would be rel=cure_stricter until then.
+mod RestartIntensityLiveness
+  type Phase = Up | Down
+  type Fail indices (b1: Nat, p1: Phase, b2: Nat, p2: Phase)
+    FRestart  : Fail(S(n), Up, n, Up)
+    FShutdown : Fail(Z, Up, Z, Down)
+  type FailRun indices (b1: Nat, p1: Phase, b2: Nat, p2: Phase)
+    FRDone : FailRun(b, p, b, p)
+    FRMore : Fail(b1, p1, bm, pm) -> FailRun(bm, pm, b2, p2) -> FailRun(b1, p1, b2, p2)
+  ## EXPECT: reject (E6 unsolved metavar) — Idris accepts the same proof.
+  fn eventually_down(n: Nat) -> FailRun(n, Up, Z, Down) = match n
+    Z()  -> FRMore(FShutdown(), FRDone())
+    S(k) -> FRMore(FRestart(), eventually_down(k))
+end

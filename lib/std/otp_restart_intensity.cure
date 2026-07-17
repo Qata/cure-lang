@@ -1,0 +1,47 @@
+@group(:concurrency)
+mod Std.Otp.RestartIntensity
+  ## RESTART INTENSITY — the `max_restarts` bound completing `Std.Otp.Supervisor` (build-out
+  ## map supervision depth).
+  ##
+  ## `Std.Otp.Supervisor` typed the STRUCTURAL invariant (restart preserves the child specs);
+  ## it left the restart-INTENSITY limit as "an operational bound not modelled". This module
+  ## types that bound: a supervisor carries a restart BUDGET (its `max_restarts`, a `Std.Nat`
+  ## index), each child failure it absorbs consumes one, and when the budget is exhausted the
+  ## NEXT failure shuts the supervisor down instead of restarting. So a supervisor can restart
+  ## at most `budget` times — "a supervisor restarts beyond its intensity" is unconstructible:
+  ## `FRestart` REQUIRES `S(n)` budget, and a zero-budget failure has only `FShutdown`.
+  ## `on_fail` is total: every failure of a running supervisor either restarts or shuts down.
+  ##
+  ## The bounded-run LIVENESS theorem — from budget `n`, `n` restarts then one shutdown reach
+  ## `Down`, i.e. a supervisor tolerates EXACTLY `budget` failures — is currently BLOCKED in
+  ## Cure: its proof `eventually_down` leaves an unsolved metavar (Cure rejects where Idris
+  ## accepts), the E6 elaborator-incompleteness in the ergonomics catalog — a nullary GADT
+  ## constructor whose indices are fixed only through a SIBLING argument's intermediate
+  ## existential is not solved. The full statement and the blocker are recorded in
+  ## `docs/research/process-types/probes/restart_intensity_liveness.cure`; this module ships the
+  ## discharged core (the intensity bound + `on_fail` totality).
+  ##
+  ## **Honest scope.** The sliding TIME window (`max_seconds`) is abstracted — the budget is a
+  ## plain count, as if all failures fall in one window (the worst case the bound guards).
+
+  type Phase = Up | Down
+
+  ## A supervisor indexed by its remaining restart budget and phase. `Alive(n)` is running with
+  ## `n` restarts left; `Stopped` has exhausted its budget and shut down.
+  type Sup indices (budget: Nat, phase: Phase)
+    Alive   : Sup(n, Up)
+    Stopped : Sup(Z, Down)
+
+  ## One child failure: with budget `S(n)` the supervisor RESTARTS (budget → `n`, stays `Up`);
+  ## with budget `Z` it SHUTS DOWN (→ `Down`). There is no restart from zero budget.
+  type Fail indices (b1: Nat, p1: Phase, b2: Nat, p2: Phase)
+    FRestart  : Fail(S(n), Up, n, Up)
+    FShutdown : Fail(Z, Up, Z, Down)
+
+  ## Absorbing a failure transitions the supervisor per its budget. Total: every failure of a
+  ## running supervisor either restarts (budget remaining) or shuts down (budget zero). The
+  ## `FRestart` case can only fire with `S(n)` budget, so the intensity bound is enforced.
+  fn on_fail({b1: Nat}, {p1: Phase}, {b2: Nat}, {p2: Phase}, sup: Sup(b1, p1), f: Fail(b1, p1, b2, p2)) -> Sup(b2, p2) = match f
+    FRestart()  -> Alive()
+    FShutdown() -> Stopped()
+end
