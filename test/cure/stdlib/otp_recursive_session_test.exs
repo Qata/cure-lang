@@ -30,4 +30,18 @@ defmodule Cure.Stdlib.OtpRecursiveSessionTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "duality commutes with unfolding in general form (non-recursive head)" do
+    # rdual_unfold applies at any shape; on a send head unfold is the identity and dual commutes
+    # structurally.
+    src = """
+    mod RsGen
+      use Std.Otp.RecursiveSession
+      fn gen() -> Equivalent(RSType, rdual(unfold(RSend(TA, RVar()))), unfold(rdual(RSend(TA, RVar())))) =
+        rdual_unfold(RSend(TA, RVar()))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

@@ -40,3 +40,10 @@ subst_dual (RMu body) u = Refl
 
 dual_unfold_commute : (body : RSType) -> rdual (unfold (RMu body)) = unfold (RMu (rdual body))
 dual_unfold_commute body = subst_dual body (RMu body)
+
+rdual_unfold : (s : RSType) -> rdual (unfold s) = unfold (rdual s)
+rdual_unfold REnd = Refl
+rdual_unfold (RSend t k) = Refl
+rdual_unfold (RRecv t k) = Refl
+rdual_unfold RVar = Refl
+rdual_unfold (RMu body) = subst_dual body (RMu body)

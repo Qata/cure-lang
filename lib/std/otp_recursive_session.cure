@@ -61,4 +61,15 @@ mod Std.Otp.RecursiveSession
   ## `subst_dual` at the self-substitution.
   fn dual_unfold_commute(body: RSType) -> Equivalent(RSType, rdual(unfold(RMu(body))), unfold(RMu(rdual(body)))) =
     subst_dual(body, RMu(body))
+
+  ## **DUALITY COMMUTES WITH UNFOLDING — GENERAL FORM.** `dual(unfold(S)) = unfold(dual(S))` for
+  ## EVERY session shape, recursive or not. On a non-recursive head `unfold` is the identity and
+  ## `rdual` commutes structurally; on `RMu` it is exactly `subst_dual` at the self-substitution.
+  ## `dual_unfold_commute` above is the `RMu` instance of this law.
+  fn rdual_unfold(s: RSType) -> Equivalent(RSType, rdual(unfold(s)), unfold(rdual(s))) = match s
+    REnd()      -> reflexive(REnd())
+    RSend(t, k) -> reflexive(RRecv(t, rdual(k)))
+    RRecv(t, k) -> reflexive(RSend(t, rdual(k)))
+    RVar()      -> reflexive(RVar())
+    RMu(body)   -> subst_dual(body, RMu(body))
 end
