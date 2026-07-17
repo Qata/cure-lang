@@ -106,3 +106,45 @@ sends_hom LEnd t = msum_empty_l (sends t)
 sends_hom (LSend tg k) t = trans (cong (bump tg) (sends_hom k t)) (bump_msum_dist tg (sends k) (sends t))
 sends_hom (LRecv tg k) t = sends_hom k t
 sends_hom (LPar a b) t = trans (cong (msum (sends a)) (sends_hom b t)) (sym (msum_assoc (sends a) (sends b) (sends t)))
+
+snat_cong : a = b -> S a = S b
+snat_cong Refl = Refl
+
+add_zero_r : (x : Nat) -> add x 0 = x
+add_zero_r Z = Refl
+add_zero_r (S k) = snat_cong (add_zero_r k)
+
+add_succ_r : (x : Nat) -> (y : Nat) -> add x (S y) = S (add x y)
+add_succ_r Z y = Refl
+add_succ_r (S k) y = snat_cong (add_succ_r k y)
+
+add_comm : (x : Nat) -> (y : Nat) -> add x y = add y x
+add_comm Z y = sym (add_zero_r y)
+add_comm (S k) y = trans (snat_cong (add_comm k y)) (sym (add_succ_r y k))
+
+msum_comm : (m : MS) -> (n : MS) -> msum m n = msum n m
+msum_comm (MkMS a1 b1 c1) (MkMS a2 b2 c2) = mkms_cong (add_comm a1 a2) (add_comm b1 b2) (add_comm c1 c2)
+
+msum_empty_r : (m : MS) -> msum m (MkMS 0 0 0) = m
+msum_empty_r (MkMS a b c) = mkms_cong (add_zero_r a) (add_zero_r b) (add_zero_r c)
+
+lsend_cong : (tg : Tag) -> a = b -> LSend tg a = LSend tg b
+lsend_cong tg Refl = Refl
+
+lrecv_cong : (tg : Tag) -> a = b -> LRecv tg a = LRecv tg b
+lrecv_cong tg Refl = Refl
+
+lpar_cong2 : (x : Local) -> a = b -> LPar x a = LPar x b
+lpar_cong2 x Refl = Refl
+
+seq_assoc : (a : Local) -> (b : Local) -> (c : Local) -> seq (seq a b) c = seq a (seq b c)
+seq_assoc LEnd b c = Refl
+seq_assoc (LSend tg k) b c = lsend_cong tg (seq_assoc k b c)
+seq_assoc (LRecv tg k) b c = lrecv_cong tg (seq_assoc k b c)
+seq_assoc (LPar x y) b c = lpar_cong2 x (seq_assoc y b c)
+
+seq_end_r : (s : Local) -> seq s LEnd = s
+seq_end_r LEnd = Refl
+seq_end_r (LSend tg k) = lsend_cong tg (seq_end_r k)
+seq_end_r (LRecv tg k) = lrecv_cong tg (seq_end_r k)
+seq_end_r (LPar x y) = lpar_cong2 x (seq_end_r y)

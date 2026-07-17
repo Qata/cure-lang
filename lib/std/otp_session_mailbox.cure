@@ -159,4 +159,51 @@ mod Std.Otp.SessionMailbox
     LSend(tg, k) -> trans(bump_cong(tg, sends_hom(k, t)), bump_msum_dist(tg, sends(k), sends(t)))
     LRecv(tg, k) -> sends_hom(k, t)
     LPar(a, b)   -> trans(msum_cong(reflexive(sends(a)), sends_hom(b, t)), sym(msum_assoc(sends(a), sends(b), sends(t))))
+
+  ## Nat lemmas for the COMMUTATIVE half of the mailbox monoid.
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+  fn add_zero_r(x: Nat) -> Equivalent(Nat, add(x, Z()), x) = match x
+    Z()  -> reflexive(Z())
+    S(k) -> snat_cong(add_zero_r(k))
+  fn add_succ_r(x: Nat, y: Nat) -> Equivalent(Nat, add(x, S(y)), S(add(x, y))) = match x
+    Z()  -> reflexive(S(y))
+    S(k) -> snat_cong(add_succ_r(k, y))
+  fn add_comm(x: Nat, y: Nat) -> Equivalent(Nat, add(x, y), add(y, x)) = match x
+    Z()  -> sym(add_zero_r(y))
+    S(k) -> trans(snat_cong(add_comm(k, y)), sym(add_succ_r(y, k)))
+
+  ## **(MS, msum, empty) IS A COMMUTATIVE MONOID.** `msum` is COMMUTATIVE (mailbox types are bags:
+  ## order-insensitive) — componentwise `add_comm` — and the empty multiset is a two-sided unit
+  ## (`msum_empty_l` above, `msum_empty_r` here); `msum_assoc` gives associativity. So the mailbox
+  ## codomain has exactly the commutative-monoid structure a bag semantics should.
+  fn msum_comm(m: MS, n: MS) -> Equivalent(MS, msum(m, n), msum(n, m)) = match m
+    MkMS(a1, b1, c1) -> match n
+      MkMS(a2, b2, c2) -> mkms_cong(add_comm(a1, a2), add_comm(b1, b2), add_comm(c1, c2))
+  fn msum_empty_r(m: MS) -> Equivalent(MS, msum(m, MkMS(Z(), Z(), Z())), m) = match m
+    MkMS(a, b, c) -> mkms_cong(add_zero_r(a), add_zero_r(b), add_zero_r(c))
+
+  ## Congruences for the session constructors (used by `seq_assoc`/`seq_end_r`).
+  fn lsend_cong(tg: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LSend(tg, a), LSend(tg, b)) =
+    rewrite e in reflexive(LSend(tg, b))
+  fn lrecv_cong(tg: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LRecv(tg, a), LRecv(tg, b)) =
+    rewrite e in reflexive(LRecv(tg, b))
+  fn lpar_cong2(x: Local, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LPar(x, a), LPar(x, b)) =
+    rewrite e in reflexive(LPar(x, b))
+
+  ## **(Local, seq, LEnd) IS A MONOID.** Sequential composition is ASSOCIATIVE (`seq_assoc`) with
+  ## `LEnd` a two-sided unit (`seq(LEnd, s) = s` definitionally; `seq_end_r` gives the right unit).
+  ## With `recvs_hom`/`sends_hom` mapping this monoid to `(MS, msum, empty)` and preserving the unit
+  ## (`recvs(LEnd) = empty`), `recvs` and `sends` are genuine MONOID HOMOMORPHISMS from the session
+  ## monoid to the commutative mailbox monoid.
+  fn seq_assoc(a: Local, b: Local, c: Local) -> Equivalent(Local, seq(seq(a, b), c), seq(a, seq(b, c))) = match a
+    LEnd()       -> reflexive(seq(b, c))
+    LSend(tg, k) -> lsend_cong(tg, seq_assoc(k, b, c))
+    LRecv(tg, k) -> lrecv_cong(tg, seq_assoc(k, b, c))
+    LPar(x, y)   -> lpar_cong2(x, seq_assoc(y, b, c))
+  fn seq_end_r(s: Local) -> Equivalent(Local, seq(s, LEnd()), s) = match s
+    LEnd()       -> reflexive(LEnd())
+    LSend(tg, k) -> lsend_cong(tg, seq_end_r(k))
+    LRecv(tg, k) -> lrecv_cong(tg, seq_end_r(k))
+    LPar(x, y)   -> lpar_cong2(x, seq_end_r(y))
 end

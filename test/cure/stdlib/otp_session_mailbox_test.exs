@@ -56,6 +56,20 @@ defmodule Cure.Stdlib.OtpSessionMailboxTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "algebraic structure: msum is commutative and seq is associative" do
+    src = """
+    mod SmAlg
+      use Std.Otp.SessionMailbox
+      fn comm(m: MS, n: MS) -> Equivalent(MS, msum(m, n), msum(n, m)) = msum_comm(m, n)
+      fn assoc(a: Local, b: Local, c: Local) -> Equivalent(Local, seq(seq(a, b), c), seq(a, seq(b, c))) =
+        seq_assoc(a, b, c)
+      fn unit_r(s: Local) -> Equivalent(Local, seq(s, LEnd()), s) = seq_end_r(s)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "recvs_hom: the encoding is a monoid homomorphism (recvs(seq s t) = msum(recvs s)(recvs t))" do
     # Sequentially composing (recv TA) with (send TB) — its mailbox is {TA}, the sum of {TA} and {}.
     src = """
