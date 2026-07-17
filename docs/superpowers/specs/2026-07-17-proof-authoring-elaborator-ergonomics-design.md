@@ -319,8 +319,71 @@ placeholder meta rather than solving a disposable padding meta.
 
 ---
 
+## E8 — Sequential-match refinement does not compose across independent scrutinees
+
+**Symptom.** `deriv_sound` over the commutative-regex `Accepts` relation: after `match pat`
+(binding `PTimes(a,b)`), a *separate* `match acc → APlusR(ar) → match ar → ATimes(m1,m2,…)`
+whose constructor forces the index `m ≡ msadd(m1,m2)` does NOT update the goal — a subsequent
+`rewrite msadd_assoc(m1,m2,…)` fails `:rewrite_no_match` because the goal still reads
+`msadd(m, singleton(t))` with `m` unrefined. A one-probe control (`nest2`) with a *literal*
+`Accepts(PPlus(PTimes(e,f),PZero), m)` scrutinee and NO outer `match pat` refines `m` correctly
+through the same nested `APlusL → ATimes` chain. So the refinement machinery works; what fails is
+composing a later scrutinee's index refinement into a goal a *prior, independent* match already
+specialized.
+
+**Root cause + layer.** E (same family as E1). Each `match` desugars to its own motive; the
+motive built for `match acc` abstracts `acc`'s indices over the goal *as specialized by the
+earlier `match pat`*, but the earlier match's branch goal is treated as fixed — the second
+match's substitution (`m ↦ msadd(m1,m2)`) is scoped to its own elaboration and is not
+back-propagated into the shared return type. Idris avoids this because a single clause matches
+all patterns simultaneously (one unification problem), so every constructor's index equations are
+in scope together.
+
+**Semantics.** Nothing changes about what is provable — only whether it can be written without a
+helper. A correct implementation would elaborate a `match` under the accumulated index
+substitutions of enclosing matches (or, equivalently, adopt clause-simultaneous matching à la the
+Lean-shape spec).
+
+**Workaround (in use).** Helper-delegation: move the evidence match into a function whose `acc`
+is a *parameter*, so no prior data-match has frozen the goal. `deriv_sound`'s `ds_times`/`ds_star`
+match `acc` directly and mutually recurse with `deriv_sound`; the sum index then refines. Cost: an
+extra top-level lemma per shape, and mutual recursion (which the kernel's termination cert accepts
+here on structural descent).
+
+**Status.** OPEN (worked around). Same fix as E1/E2 — full context-refinement / simultaneous
+matching closes it.
+
+---
+
+## E9 — Stuck-index equation is not retained as a proof on GADT match
+
+**Symptom.** Matching `acc : Accepts(PTimes(a,b), MkMS(Z,Z,Z))` as `ATimes(m1,m2,…)` (whose result
+index is the stuck app `msadd(m1,m2)`) leaves `m1,m2` abstract with NO usable term witnessing
+`msadd(m1,m2) = MkMS(Z,Z,Z)`. So `nullable_complete` / `deriv_complete` cannot invert the sum to
+conclude `m1 = m2 = empty`. Matching `reflexive` for constructor injectivity (`MkMS(p,q,r) =
+MkMS(Z,Z,Z) ⊢ p = Z`) gives `:conversion_failure` — injectivity is not derived from a `reflexive`
+match either.
+
+**Root cause + layer.** E/K boundary. When a constructor's index is a non-constructor (stuck
+function application), the match introduces the unification constraint but neither (a) refines the
+existentials nor (b) reflects the constraint as an `Equivalent` the branch body can eliminate.
+Constructor injectivity of the equality type is likewise not exposed.
+
+**Semantics.** The soundness-preserving fix is to reflect the residual index constraint as a
+branch hypothesis `Equivalent(I, ctorIndex, scrutIndex)` (Agda/Idris `with`-style), and to provide
+constructor injectivity for the identity type (a derived, TCB-neutral eliminator). Either unblocks
+the inversion proofs.
+
+**Workaround.** None clean — the completeness directions are deferred. (The SOUNDNESS directions
+avoid inversion entirely and are proved.)
+
+**Status.** OPEN. Distinct from E8: E8 is refinement not *composing*; E9 is the index equation not
+*existing* as a term even for a single match.
+
+---
+
 ## Maintenance
 
 Append new entries as `E<n>` with the same fields. When an entry lands, mark it DONE with the
 commit and leave it (history value). Cross-reference the Lean-shape matching spec for E1/E2 — a
-full context-refinement implementation there closes most of this catalog at once.
+full context-refinement implementation there closes most of this catalog at once (E8 included).
