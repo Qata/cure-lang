@@ -3713,6 +3713,10 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  # `proof` is contextual and may still be tokenized as an identifier here.
+  # It delimits the optional equation binder; it is never another scrutinee.
+  defp with_scrutinee_start?(%Token{type: :identifier, value: "proof"}), do: false
+
   defp with_scrutinee_start?(%Token{type: type})
        when type in [
               :identifier,
