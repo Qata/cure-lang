@@ -108,6 +108,31 @@ defmodule Cure.Stdlib.PreloadTest do
       assert Code.ensure_loaded?(:"Cure.Std.List")
     end
 
+    # Under C1 the canonical stdlib is already loaded (and sticky) by the time
+    # any test runs (test/test_helper.exs). The moduledoc promises "modules
+    # already loaded into the VM are left alone", but the loader used to
+    # unconditionally retry `:code.load_binary/3` on every module in the
+    # closure regardless of residency -- against a sticky module that retry
+    # is rejected by OTP, and the rejection is logged at `:error` level as a
+    # side effect independent of the (correctly tolerated) Elixir-level
+    # return value. With ~70 stdlib modules and roughly a dozen call sites
+    # across the suite (every migrated C2/C3 test's `setup_all` calls
+    # `preload(kind: :all)` after C1 has already stuck everything), this
+    # floods CI output with hundreds of spurious `[error]` lines that can
+    # bury genuine failures.
+    test "kind: :all is silent when every module is already loaded" do
+      # Precondition: test_helper.exs already loaded+stuck the canonical
+      # stdlib before any test ran.
+      assert Code.ensure_loaded?(:"Cure.Std.Core")
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert Preload.preload(examples: false, kind: :all) == :ok
+        end)
+
+      refute log =~ "sticky dir"
+    end
+
     test "unknown kind raises ArgumentError" do
       assert_raise ArgumentError, fn -> Preload.preload(kind: :bogus) end
     end
