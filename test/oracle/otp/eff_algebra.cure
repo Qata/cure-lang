@@ -12,4 +12,20 @@ mod EffAlgebra
   fn seq_assoc(a: Eff, b: Eff, c: Eff) -> Equivalent(Eff, seq(seq(a, b), c), seq(a, seq(b, c))) = match a
     ENil()       -> reflexive(seq(b, c))
     ECons(op, k) -> rewrite seq_assoc(k, b, c) in reflexive(ECons(op, seq(k, seq(b, c))))
+
+  fn plus(m: Nat, n: Nat) -> Nat = match m
+    Z()  -> n
+    S(k) -> S(plus(k, n))
+  fn count_sends(e: Eff) -> Nat = match e
+    ENil()       -> Z()
+    ECons(op, k) -> match op
+      OSend(t) -> S(count_sends(k))
+      ORecv(t) -> count_sends(k)
+      OSpawn() -> count_sends(k)
+  fn count_hom(a: Eff, b: Eff) -> Equivalent(Nat, count_sends(seq(a, b)), plus(count_sends(a), count_sends(b))) = match a
+    ENil()       -> reflexive(count_sends(b))
+    ECons(op, k) -> match op
+      OSend(t) -> rewrite count_hom(k, b) in reflexive(S(plus(count_sends(k), count_sends(b))))
+      ORecv(t) -> count_hom(k, b)
+      OSpawn() -> count_hom(k, b)
 end

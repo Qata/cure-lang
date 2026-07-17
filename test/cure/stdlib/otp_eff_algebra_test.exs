@@ -25,4 +25,18 @@ defmodule Cure.Stdlib.OtpEffAlgebraTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "count_hom: a handler is a monoid homomorphism (handle a;b = handle a + handle b)" do
+    # Two one-send programs composed have 2 sends = 1 + 1; count_hom gives the homomorphism.
+    src = """
+    mod EaHom
+      use Std.Otp.EffAlgebra
+      fn one() -> Eff = ECons(OSend(TA), ENil())
+      fn hom() -> Equivalent(Nat, S(S(Z())), S(S(Z()))) =
+        count_hom(one(), one())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

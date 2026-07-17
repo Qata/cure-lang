@@ -430,6 +430,38 @@ application; E10 is *reduction* of an applied function during type conversion.
 
 ---
 
+## E11 — Nested function application not reduced when converting a call result to an annotation
+
+**Symptom.** A proof `h() -> T = f(args)` where `T` is the definitional-but-not-syntactic normal
+form of `f(args)`'s type fails with `:conversion_failure` when `T` contains a NESTED (depth ≥ 2)
+function application. Isolated probe (`Std.Otp.EffAlgebra` `count_hom`): checking
+`count_hom(ENil(), ENil())` against `Equivalent(Nat, count_sends(seq(ENil(), ENil())),
+plus(count_sends(ENil()), count_sends(ENil())))` REJECTS, though that IS `count_hom`'s own return
+type at those args. A DEPTH-1 annotation (`count_sends(ENil())`) converts fine; a nested annotation
+whose two sides are SYNTACTICALLY IDENTICAL (checked against `reflexive`) also converts fine. Only
+the combination — nested apps + the two Equivalent sides differing (both reducing to the same normal
+form) + checked against a function-call result — fails.
+
+**Root cause + layer.** K (conversion/normaliser). The call's inferred type is reduced to normal
+form (`Equivalent(Nat, Z, Z)`), but converting it against the annotation does not fully δ-reduce the
+annotation's nested application `count_sends (seq …)` (the OUTER `count_sends` is not re-fired after
+its argument `seq …` reduces). Single applications are reduced; the nested case stops one layer
+short.
+
+**Semantics.** No soundness impact; a conversion-completeness gap. Fix = drive `whnf` to a fixpoint
+on the spine (re-reduce the head after arguments reduce) in the conversion path, matching the term
+position.
+
+**Workaround.** Write the annotation in NORMAL FORM (`Equivalent(Nat, S(S(Z())), S(S(Z())))` instead
+of `count_sends(seq(...)) = plus(...)`); the proof term is unchanged. Used in the `count_hom` stdlib
+test. The theorem itself (`count_hom`) elaborates fine — this only bites author-written annotations
+that leave nested applications unreduced.
+
+**Status.** OPEN. Cousin of E10 (both are "an application not reduced in conversion"), but E10 is a
+function ARGUMENT in an index; E11 is the OUTER head of a nested application in an ordinary annotation.
+
+---
+
 ## Maintenance
 
 Append new entries as `E<n>` with the same fields. When an entry lands, mark it DONE with the
