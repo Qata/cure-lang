@@ -106,4 +106,21 @@ mod Session
     CRS(t, c2)   -> run_rs(t, compat_terminates(c2))
     CSel(ca, cb) -> run_sel(compat_terminates(ca))
     COff(ca, cb) -> run_off(compat_terminates(ca))
+  fn sdepth(s: SType) -> Nat = match s
+    SEnd()        -> Z()
+    SSend(t, k)   -> S(sdepth(k))
+    SRecv(t, k)   -> S(sdepth(k))
+    SSelect(a, b) -> S(sdepth(a))
+    SOffer(a, b)  -> S(sdepth(a))
+  fn srun_len({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, run: SRun(l, r, l2, r2)) -> Nat = match run
+    SRDone()         -> Z()
+    SRStep(st, rest) -> S(srun_len(rest))
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+  fn compat_terminates_len({l: SType}, {r: SType}, c: Compat(l, r)) -> Equivalent(Nat, srun_len(compat_terminates(c)), sdepth(l)) = match c
+    CEnd()       -> reflexive(Z())
+    CSR(t, c2)   -> snat_cong(compat_terminates_len(c2))
+    CRS(t, c2)   -> snat_cong(compat_terminates_len(c2))
+    CSel(ca, cb) -> snat_cong(compat_terminates_len(ca))
+    COff(ca, cb) -> snat_cong(compat_terminates_len(ca))
 end

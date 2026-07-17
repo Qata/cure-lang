@@ -199,4 +199,32 @@ mod Std.Otp.Session
     CRS(t, c2)   -> run_rs(t, compat_terminates(c2))
     CSel(ca, cb) -> run_sel(compat_terminates(ca))
     COff(ca, cb) -> run_off(compat_terminates(ca))
+
+  ## The session DEPTH of an endpoint — its number of communication actions down the left spine
+  ## (each send/receive is one action; at a choice the canonical run commits to the left branch).
+  fn sdepth(s: SType) -> Nat = match s
+    SEnd()        -> Z()
+    SSend(t, k)   -> S(sdepth(k))
+    SRecv(t, k)   -> S(sdepth(k))
+    SSelect(a, b) -> S(sdepth(a))
+    SOffer(a, b)  -> S(sdepth(a))
+  ## The number of communication steps in a run.
+  fn srun_len({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, run: SRun(l, r, l2, r2)) -> Nat = match run
+    SRDone()         -> Z()
+    SRStep(st, rest) -> S(srun_len(rest))
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+
+  ## **SESSION TERMINATION TIME IS EXACT.** The canonical terminating run of a compatible session
+  ## takes EXACTLY `sdepth(l)` communication steps: `srun_len(compat_terminates(c)) = sdepth(l)`.
+  ## This sharpens `compat_terminates` (which only proves the run REACHES completion) into a precise
+  ## step count — a well-typed session finishes in a number of exchanges fixed by its type's depth.
+  ## By induction on the compatibility derivation: `SEnd` takes zero steps, and each send/receive or
+  ## chosen branch contributes exactly one (`snat_cong` on the induction hypothesis).
+  fn compat_terminates_len({l: SType}, {r: SType}, c: Compat(l, r)) -> Equivalent(Nat, srun_len(compat_terminates(c)), sdepth(l)) = match c
+    CEnd()       -> reflexive(Z())
+    CSR(t, c2)   -> snat_cong(compat_terminates_len(c2))
+    CRS(t, c2)   -> snat_cong(compat_terminates_len(c2))
+    CSel(ca, cb) -> snat_cong(compat_terminates_len(ca))
+    COff(ca, cb) -> snat_cong(compat_terminates_len(ca))
 end

@@ -166,4 +166,18 @@ defmodule Cure.Stdlib.OtpSessionTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "compat_terminates_len: a compatible session terminates in exactly sdepth(l) steps" do
+    src = """
+    mod StLen
+      use Std.Otp.Session
+      fn exact(l: SType, r: SType, c: Compat(l, r)) -> Equivalent(Nat, srun_len(compat_terminates(c)), sdepth(l)) =
+        compat_terminates_len(c)
+      fn two() -> Equivalent(Nat, srun_len(compat_terminates(CSR(TA, CRS(TB, CEnd())))), S(S(Z()))) =
+        compat_terminates_len(CSR(TA, CRS(TB, CEnd())))
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

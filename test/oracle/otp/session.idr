@@ -116,3 +116,21 @@ sstep_sym OffR = SelR
 srun_sym : SRun l r l2 r2 -> SRun r l r2 l2
 srun_sym SRDone = SRDone
 srun_sym (SRStep st rest) = SRStep (sstep_sym st) (srun_sym rest)
+
+sdepth : SType -> Nat
+sdepth SEnd = Z
+sdepth (SSend t k) = S (sdepth k)
+sdepth (SRecv t k) = S (sdepth k)
+sdepth (SSelect a b) = S (sdepth a)
+sdepth (SOffer a b) = S (sdepth a)
+
+srun_len : SRun l r l2 r2 -> Nat
+srun_len SRDone = Z
+srun_len (SRStep st rest) = S (srun_len rest)
+
+compat_terminates_len : (c : Compat l r) -> srun_len (compat_terminates c) = sdepth l
+compat_terminates_len CEnd = Refl
+compat_terminates_len (CSR t c2) = cong S (compat_terminates_len c2)
+compat_terminates_len (CRS t c2) = cong S (compat_terminates_len c2)
+compat_terminates_len (CSel ca cb) = cong S (compat_terminates_len ca)
+compat_terminates_len (COff ca cb) = cong S (compat_terminates_len ca)
