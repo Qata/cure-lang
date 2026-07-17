@@ -126,7 +126,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 
 ### B8. Full gen_server / gen_statem lifecycle
 - [ ] Typed full callback protocol (`init`/`handle_call`/`handle_cast`/`handle_info`/`terminate`/`code_change`) as one state machine (current = call totality + reply typing, not the full lifecycle)
-- [ ] `gen_statem` state-function typing
+- [x] `gen_statem` EVENT POSTPONING: `SStep` (handle/postpone/redeliver) with per-move conservation of the unprocessed count — `handle_progresses` (only handling advances), `postpone_conserves`/`redeliver_conserves` (deferring/redelivering relocate an event, never drop it) — **SHIPPED** `otp_gen_statem.cure` (Idris `rel=same`). *No paper types postpone; this is gen_statem's defining feature.* Open: full state-function callback protocol
 
 ### B9. Out of scope (confirmed)
 - Static DEADLOCK / LIVENESS — undecidable, a runtime result; a DDMon-style probe layer if ever wanted, orthogonal to the type system.

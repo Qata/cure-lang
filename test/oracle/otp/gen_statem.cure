@@ -1,0 +1,29 @@
+mod GenStatem
+  fn plus(m: Nat, n: Nat) -> Nat = match m
+    Z()  -> n
+    S(k) -> S(plus(k, n))
+  fn plus_n_z(n: Nat) -> Equivalent(Nat, plus(n, Z()), n) = match n
+    Z()  -> reflexive(Z())
+    S(k) -> rewrite plus_n_z(k) in reflexive(S(k))
+  fn plus_n_s(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, S(n)), S(plus(m, n))) = match m
+    Z()  -> reflexive(S(n))
+    S(k) -> rewrite plus_n_s(k, n) in reflexive(S(S(plus(k, n))))
+  fn plus_comm(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, n), plus(n, m)) = match m
+    Z()  -> rewrite plus_n_z(n) in reflexive(n)
+    S(k) -> rewrite plus_n_s(n, k) in rewrite plus_comm(k, n) in reflexive(S(plus(n, k)))
+
+  type SConfig = MkSC(Nat, Nat)
+  fn unproc(c: SConfig) -> Nat = match c
+    MkSC(p, q) -> plus(p, q)
+  type SStep indices (before: SConfig, after: SConfig)
+    SHandle    : SStep(MkSC(S(p), q), MkSC(p, q))
+    SPostpone  : SStep(MkSC(S(p), q), MkSC(p, S(q)))
+    SRedeliver : SStep(MkSC(p, q), MkSC(plus(q, p), Z))
+
+  fn handle_progresses(p: Nat, q: Nat) -> Equivalent(Nat, unproc(MkSC(S(p), q)), S(unproc(MkSC(p, q)))) =
+    reflexive(S(plus(p, q)))
+  fn postpone_conserves(p: Nat, q: Nat) -> Equivalent(Nat, unproc(MkSC(S(p), q)), unproc(MkSC(p, S(q)))) =
+    rewrite plus_n_s(p, q) in reflexive(S(plus(p, q)))
+  fn redeliver_conserves(p: Nat, q: Nat) -> Equivalent(Nat, unproc(MkSC(p, q)), unproc(MkSC(plus(q, p), Z()))) =
+    rewrite plus_n_z(plus(q, p)) in plus_comm(p, q)
+end

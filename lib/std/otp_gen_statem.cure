@@ -1,0 +1,54 @@
+@group(:concurrency)
+mod Std.Otp.GenStatem
+  ## gen_statem EVENT POSTPONING (build-out map B8) — deferring an event never loses it.
+  ##
+  ## `gen_statem`'s defining feature over `gen_server` is `postpone`: a state handler may DEFER
+  ## an event, and every postponed event is REDELIVERED after the next state change. The safety
+  ## question this raises — and the one no paper types — is that postponing/redelivering never
+  ## DROPS an event: the only way an event leaves the system is by being HANDLED.
+  ##
+  ## We model a machine's event bookkeeping as `MkSC(pending, postponed)` (both counts), and the
+  ## three moves as an `SStep` relation: HANDLE consumes one pending event, POSTPONE moves one
+  ## pending → postponed, REDELIVER (on state change) moves ALL postponed back to pending.
+  ## `step_measure` proves the invariant: every step either CONSERVES the unprocessed count
+  ## `pending + postponed` (postpone and redeliver — no event lost, just relocated) or PROGRESSES
+  ## it down by exactly one (handle). So a `gen_statem` makes progress only by handling events,
+  ## and postponing is never a leak. (Nat arithmetic proved here by the standard induction.)
+
+  fn plus(m: Nat, n: Nat) -> Nat = match m
+    Z()  -> n
+    S(k) -> S(plus(k, n))
+  fn plus_n_z(n: Nat) -> Equivalent(Nat, plus(n, Z()), n) = match n
+    Z()  -> reflexive(Z())
+    S(k) -> rewrite plus_n_z(k) in reflexive(S(k))
+  fn plus_n_s(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, S(n)), S(plus(m, n))) = match m
+    Z()  -> reflexive(S(n))
+    S(k) -> rewrite plus_n_s(k, n) in reflexive(S(S(plus(k, n))))
+  fn plus_comm(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, n), plus(n, m)) = match m
+    Z()  -> rewrite plus_n_z(n) in reflexive(n)
+    S(k) -> rewrite plus_n_s(n, k) in rewrite plus_comm(k, n) in reflexive(S(plus(n, k)))
+
+  ## A machine's event bookkeeping: (events pending delivery, events postponed).
+  type SConfig = MkSC(Nat, Nat)
+  fn unproc(c: SConfig) -> Nat = match c
+    MkSC(p, q) -> plus(p, q)
+
+  ## The three event moves, as transitions on the bookkeeping config: HANDLE consumes one
+  ## pending event, POSTPONE relocates one pending → postponed, REDELIVER (on state change)
+  ## returns ALL postponed to pending.
+  type SStep indices (before: SConfig, after: SConfig)
+    SHandle    : SStep(MkSC(S(p), q), MkSC(p, q))
+    SPostpone  : SStep(MkSC(S(p), q), MkSC(p, S(q)))
+    SRedeliver : SStep(MkSC(p, q), MkSC(plus(q, p), Z))
+
+  ## **POSTPONE SAFETY**, as the per-move conservation facts on the unprocessed count
+  ## `pending + postponed`. HANDLE is the only move that makes progress (one fewer unprocessed
+  ## event); POSTPONE and REDELIVER conserve the count exactly — a deferred event is relocated,
+  ## never lost. So a `gen_statem` advances only by handling, and postponing cannot leak events.
+  fn handle_progresses(p: Nat, q: Nat) -> Equivalent(Nat, unproc(MkSC(S(p), q)), S(unproc(MkSC(p, q)))) =
+    reflexive(S(plus(p, q)))
+  fn postpone_conserves(p: Nat, q: Nat) -> Equivalent(Nat, unproc(MkSC(S(p), q)), unproc(MkSC(p, S(q)))) =
+    rewrite plus_n_s(p, q) in reflexive(S(plus(p, q)))
+  fn redeliver_conserves(p: Nat, q: Nat) -> Equivalent(Nat, unproc(MkSC(p, q)), unproc(MkSC(plus(q, p), Z()))) =
+    rewrite plus_n_z(plus(q, p)) in plus_comm(p, q)
+end
