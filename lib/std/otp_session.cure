@@ -1,5 +1,6 @@
 @group(:concurrency)
 mod Std.Otp.Session
+  use Std.Equivalent
   ## BINARY SESSION TYPES + DUALITY (build-out map B3, session-types-into-mailboxes).
   ## de'Liguoro–Padovani §4.3–4.4 encode binary session types into mailbox types; the load-
   ## bearing notion is DUALITY — two endpoints of a channel have DUAL types (one's send is the
@@ -87,6 +88,14 @@ mod Std.Otp.Session
     CRS(t, c2)   -> CSR(t, compat_sym(c2))
     CSel(ca, cb) -> COff(compat_sym(ca), compat_sym(cb))
     COff(ca, cb) -> CSel(compat_sym(ca), compat_sym(cb))
+
+  ## **COMPATIBLE PEER IS UNIQUE.** An endpoint has at most one compatible peer: `Compat(l, r)` and
+  ## `Compat(l, r2)` force `r = r2`. Both peers equal `dual(l)` (by `compat_dual`), and `dual` is
+  ## injective (it is its own inverse, `dual_involution`), so the peers coincide. So a well-typed
+  ## channel determines its other endpoint's type uniquely — there is no ambiguity in who `l` talks
+  ## to.
+  fn compat_unique({l: SType}, r: SType, r2: SType, c1: Compat(l, r), c2: Compat(l, r2)) -> Equivalent(SType, r, r2) =
+    trans(sym(dual_involution(r)), trans(cong(dual, trans(sym(compat_dual(c1)), compat_dual(c2))), dual_involution(r2)))
 
   ## A communication STEP: one endpoint sends tag `t`, the other receives it, and both advance
   ## to their continuations. Well-formed only when the send/receive tags agree.

@@ -104,6 +104,18 @@ defmodule Cure.Stdlib.OtpSessionTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "compat_unique: an endpoint's compatible peer is unique" do
+    src = """
+    mod CuInst
+      use Std.Otp.Session
+      fn uniq({l: SType}, r: SType, r2: SType, c1: Compat(l, r), c2: Compat(l, r2)) -> Equivalent(SType, r, r2) =
+        compat_unique(r, r2, c1, c2)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "compat_sym: compatibility is symmetric" do
     src = """
     mod CsymInst

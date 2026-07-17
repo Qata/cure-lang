@@ -1,4 +1,5 @@
 mod Session
+  use Std.Equivalent
   type Tag = TA | TB | TC
   type SType = SEnd | SSend(Tag, SType) | SRecv(Tag, SType) | SSelect(SType, SType) | SOffer(SType, SType)
   fn dual(s: SType) -> SType = match s
@@ -45,6 +46,8 @@ mod Session
     CRS(t, c2)   -> CSR(t, compat_sym(c2))
     CSel(ca, cb) -> COff(compat_sym(ca), compat_sym(cb))
     COff(ca, cb) -> CSel(compat_sym(ca), compat_sym(cb))
+  fn compat_unique({l: SType}, r: SType, r2: SType, c1: Compat(l, r), c2: Compat(l, r2)) -> Equivalent(SType, r, r2) =
+    trans(sym(dual_involution(r)), trans(cong(dual, trans(sym(compat_dual(c1)), compat_dual(c2))), dual_involution(r2)))
   type SStep indices (l: SType, r: SType, l2: SType, r2: SType)
     StepSR : SStep(SSend(t, lk), SRecv(t, rk), lk, rk)
     StepRS : SStep(SRecv(t, lk), SSend(t, rk), lk, rk)

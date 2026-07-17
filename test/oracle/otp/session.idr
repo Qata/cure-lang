@@ -101,3 +101,6 @@ compat_terminates (CSR t c2) = run_sr t (compat_terminates c2)
 compat_terminates (CRS t c2) = run_rs t (compat_terminates c2)
 compat_terminates (CSel ca cb) = run_sel (compat_terminates ca)
 compat_terminates (COff ca cb) = run_off (compat_terminates ca)
+
+compat_unique : (r : SType) -> (r2 : SType) -> Compat l r -> Compat l r2 -> r = r2
+compat_unique r r2 c1 c2 = trans (sym (dual_involution r)) (trans (cong dual (trans (sym (compat_dual c1)) (compat_dual c2))) (dual_involution r2))
