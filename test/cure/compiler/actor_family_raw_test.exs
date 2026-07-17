@@ -216,4 +216,86 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert apply(:"Cure.Generated.RawFamilyCodeChange", :code_change, [:v1, 5, :extra]) == {:ok, 6}
   end
+
+  test "terse initial+handle_cast template routes through the shared family raw emitter" do
+    # The `actor N state T initial <payload> handle_cast <body>` form carries an
+    # `initial` hole, so the adapter emit_raw_state_initial_cast seeds the family
+    # with initial: Some(payload). This behavioral pin replaces the retired Raw07
+    # byte-golden: derive_actor_init emits init(args: Atom) = %[:ok, payload], so
+    # init/1 returns the seeded payload for any argument, and the handle_cast body
+    # is spliced verbatim.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyInitialCast state Int initial 0 handle_cast
+        %[:noreply, state]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyInitialCast", :init, [:anything]) == {:ok, 0}
+    assert apply(:"Cure.Generated.RawFamilyInitialCast", :handle_cast, [:ping, 7]) == {:noreply, 7}
+  end
+
+  test "terse initial+messages+handle_cast template routes through the shared family raw emitter" do
+    # The `actor N state T initial <payload> messages <M> handle_cast <body>` form
+    # (adapter emit_raw_state_initial_messages_cast) seeds initial and aliases the
+    # message type. This behavioral pin replaces the retired Raw08 byte-golden: the
+    # `pickup` dispatch survives the fold and init/1 returns the seeded payload.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyInitialMsgCast state Int initial 0 messages Atom handle_cast
+        pickup
+          message == :inc -> %[:noreply, state + 1]
+          else -> %[:noreply, state]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyInitialMsgCast", :init, [:anything]) == {:ok, 0}
+    assert apply(:"Cure.Generated.RawFamilyInitialMsgCast", :handle_cast, [:inc, 4]) == {:noreply, 5}
+    assert apply(:"Cure.Generated.RawFamilyInitialMsgCast", :handle_cast, [:other, 4]) == {:noreply, 4}
+  end
+
+  test "terse messages+handle_info template routes through the shared family raw emitter" do
+    # The `actor N state T messages <M> handle_info <body>` form (adapter
+    # emit_raw_state_messages_info) routes the raw handle_info body through the
+    # family raw branch (raw_info_handler). This behavioral pin replaces the retired
+    # Raw11 byte-golden AND exercises wall-4 for the INFO path: a `match`-shaped info
+    # body with full-result arms must splice VERBATIM, never re-wrapped in a second
+    # `:noreply`.
+    source = """
+    mod M
+      use Std.Actor
+
+      type Sig = Tick | Tock
+
+      actor Cure.Generated.RawFamilyMsgInfo state Int messages Sig handle_info
+        match message
+          Tick -> %[:noreply, state + 1]
+          Tock -> %[:noreply, state - 1]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyMsgInfo", :handle_info, [:Tick, 4]) == {:noreply, 5}
+    assert apply(:"Cure.Generated.RawFamilyMsgInfo", :handle_info, [:Tock, 4]) == {:noreply, 3}
+  end
+
+  test "terse handle_info template routes through the shared family raw emitter" do
+    # The `actor N state T handle_info <body>` form (adapter emit_raw_state_info)
+    # routes the raw handle_info body through the family raw branch with a
+    # polymorphic message type. This behavioral pin replaces the retired Raw12
+    # byte-golden: the handle_info body is spliced verbatim.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyInfo state Int handle_info
+        %[:noreply, state]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyInfo", :handle_info, [:timeout, 9]) == {:noreply, 9}
+  end
 end

@@ -165,30 +165,9 @@ mod Std.Actor
 
     syntax actor <name: ModuleName> state <state_type: Type> handle_cast <cast_body: Code until call> (call <call_body: Code>)? contextual computed by emit_raw_state_cast
 
-    syntax actor <name: ModuleName> state <state_type: Type> initial <payload: Code> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_server
-      typealias State = state_type
-      callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, assert_type payload : State]
-      callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
-      callback handle_cast(message: m, state: State) returns Effect(Tuple(Atom, State)) = cast_body
-      callback handle_info(message: m, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
-      callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
-      callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
-      fn start_link() -> Effect(Tuple) = beam_ops start_link name [payload]
+    syntax actor <name: ModuleName> state <state_type: Type> initial <payload: Code> handle_cast <cast_body: Code until dedent> contextual computed directly by emit_raw_state_initial_cast
 
-    syntax actor <name: ModuleName> state <state_type: Type> initial <payload: Code> messages <message_type: Type> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_server
-      typealias State = state_type
-      typealias Message = message_type
-      callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, assert_type payload : State]
-      callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
-      callback handle_cast(message: Message, state: State) returns Effect(Tuple(Atom, State)) = cast_body
-      callback handle_info(message: Message, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
-      callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
-      callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
-      fn start_link() -> Effect(Tuple) = beam_ops start_link name [payload]
+    syntax actor <name: ModuleName> state <state_type: Type> initial <payload: Code> messages <message_type: Type> handle_cast <cast_body: Code until dedent> contextual computed directly by emit_raw_state_initial_messages_cast
 
     syntax actor <name: ModuleName> handle_cast <cast_body: delayed raw until dedent> contextual becomes lift module name
       use Std.Otp
@@ -201,30 +180,9 @@ mod Std.Actor
       callback code_change(old: v, state: p, extra: x) returns Effect(Tuple(Atom, p)) = %[:ok, state]
       fn start_link(initial: p) -> Effect(Tuple) = beam_ops start_link name initial
 
-    syntax actor <name: ModuleName> state <state_type: Type> messages <message_type: Type> handle_info <info_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_server
-      typealias State = state_type
-      typealias Message = message_type
-      callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
-      callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
-      callback handle_cast(message: Message, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
-      callback handle_info(message: Message, state: State) returns Effect(Tuple(Atom, State)) = info_body
-      callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
-      callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name initial
+    syntax actor <name: ModuleName> state <state_type: Type> messages <message_type: Type> handle_info <info_body: Code until dedent> contextual computed directly by emit_raw_state_messages_info
 
-    syntax actor <name: ModuleName> state <state_type: Type> handle_info <info_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_server
-      typealias State = state_type
-      callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
-      callback handle_call(request: r, from: f, state: State) returns Effect(Tuple(Atom, Atom, State)) = %[:reply, :ok, state]
-      callback handle_cast(message: m, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
-      callback handle_info(message: i, state: State) returns Effect(Tuple(Atom, State)) = info_body
-      callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
-      callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name [initial]
+    syntax actor <name: ModuleName> state <state_type: Type> handle_info <info_body: Code until dedent> contextual computed directly by emit_raw_state_info
 
     syntax actor <name: ModuleName> state <state_type: Type> with <payload: Code> <body: raw until dedent> becomes lift module name
       use Std.Otp
@@ -376,6 +334,38 @@ mod Std.Actor
   ## by` multi-arg input path.
   fn emit_raw_state_code_change(name: Syntax, state_type: Syntax, code_change_body: Syntax) -> Syntax =
     let definition = ActorDefinitionSyntax{state: state_type, messages: None(), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: None(), handle_info: None(), terminate: None(), code_change: Some(code_change_body), body: None()}
+    derive_actor_family(name, definition)
+
+  ## Tier-0 raw adapter for `actor <name> state <T> initial <payload> handle_cast
+  ## <raw body>`. The `initial` payload seeds the family via `initial: Some`, which
+  ## `derive_actor_init` turns into `init(args: Atom) = %[:ok, payload]` with a
+  ## nullary start_link — behaviorally equivalent to the template's
+  ## `init(initial: State) = %[:ok, assert_type payload : State]` (both ignore the
+  ## init arg and yield the spliced payload). Multi-arg `computed directly by` path.
+  fn emit_raw_state_initial_cast(name: Syntax, state_type: Syntax, payload: Syntax, cast_body: Syntax) -> Syntax =
+    let definition = ActorDefinitionSyntax{state: state_type, messages: None(), initial: Some(payload), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: Some(cast_body), handle_info: None(), terminate: None(), code_change: None(), body: None()}
+    derive_actor_family(name, definition)
+
+  ## Tier-0 raw adapter for `actor <name> state <T> initial <payload> messages <M>
+  ## handle_cast <raw body>`. As `emit_raw_state_initial_cast` but also threads the
+  ## `messages` annotation so the family aliases the message type on the callbacks.
+  fn emit_raw_state_initial_messages_cast(name: Syntax, state_type: Syntax, payload: Syntax, message_type: Syntax, cast_body: Syntax) -> Syntax =
+    let definition = ActorDefinitionSyntax{state: state_type, messages: Some(message_type), initial: Some(payload), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: Some(cast_body), handle_info: None(), terminate: None(), code_change: None(), body: None()}
+    derive_actor_family(name, definition)
+
+  ## Tier-0 raw adapter for `actor <name> state <T> messages <M> handle_info <raw
+  ## body>`. The `handle_info` body is a full callback result spliced verbatim via
+  ## the family raw branch (`raw_info_handler`, wall-4 safe); the `messages`
+  ## annotation aliases the message type. Multi-arg `computed directly by` path.
+  fn emit_raw_state_messages_info(name: Syntax, state_type: Syntax, message_type: Syntax, info_body: Syntax) -> Syntax =
+    let definition = ActorDefinitionSyntax{state: state_type, messages: Some(message_type), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: None(), handle_info: Some(info_body), terminate: None(), code_change: None(), body: None()}
+    derive_actor_family(name, definition)
+
+  ## Tier-0 raw adapter for `actor <name> state <T> handle_info <raw body>`. As
+  ## `emit_raw_state_messages_info` but without a `messages` annotation, so the
+  ## message type stays polymorphic on the callbacks.
+  fn emit_raw_state_info(name: Syntax, state_type: Syntax, info_body: Syntax) -> Syntax =
+    let definition = ActorDefinitionSyntax{state: state_type, messages: None(), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: None(), handle_info: Some(info_body), terminate: None(), code_change: None(), body: None()}
     derive_actor_family(name, definition)
 
   fn derive_cases(body: Syntax) -> Syntax = match children(body)
