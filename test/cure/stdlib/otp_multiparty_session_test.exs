@@ -28,4 +28,20 @@ defmodule Cure.Stdlib.OtpMultipartySessionTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "firing the head interaction preserves two-party well-formedness (subject reduction)" do
+    # GStep fires the head message of the protocol; twoparty_preserved certifies the resulting
+    # continuation is still a well-formed two-party protocol.
+    src = """
+    mod MpStep
+      use Std.Otp.MultipartySession
+      fn wf() -> TwoParty(GMsg(RA, RB, TA, GMsg(RB, RA, TB, GEnd()))) =
+        TPAB(TA, TPBA(TB, TPEnd()))
+      fn advanced() -> TwoParty(GMsg(RB, RA, TB, GEnd())) =
+        twoparty_preserved(wf(), GFire())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

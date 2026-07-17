@@ -34,4 +34,10 @@ mod MultipartySession
     TPEnd()       -> reflexive(LEnd())
     TPAB(t, wf2)  -> lsend_cong(t, projection_duality(wf2))
     TPBA(t, wf2)  -> lrecv_cong(t, projection_duality(wf2))
+  type GStep indices (g: Global, g2: Global)
+    GFire : GStep(GMsg(from, to, t, k), k)
+  fn twoparty_preserved({g: Global}, {g2: Global}, wf: TwoParty(g), st: GStep(g, g2)) -> TwoParty(g2) = match st
+    GFire() -> match wf
+      TPAB(t, wf2) -> wf2
+      TPBA(t, wf2) -> wf2
 end

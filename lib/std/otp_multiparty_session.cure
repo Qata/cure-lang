@@ -64,4 +64,17 @@ mod Std.Otp.MultipartySession
     TPEnd()       -> reflexive(LEnd())
     TPAB(t, wf2)  -> lsend_cong(t, projection_duality(wf2))
     TPBA(t, wf2)  -> lrecv_cong(t, projection_duality(wf2))
+
+  ## A global protocol REDUCES by firing its head interaction: the message is exchanged and the
+  ## protocol advances to the continuation.
+  type GStep indices (g: Global, g2: Global)
+    GFire : GStep(GMsg(from, to, t, k), k)
+
+  ## **GLOBAL SUBJECT REDUCTION.** Firing the head interaction of a well-formed two-party
+  ## protocol yields a well-formed two-party protocol — so (with `projection_duality`) the
+  ## projected endpoints stay coherent through every step of the protocol's execution.
+  fn twoparty_preserved({g: Global}, {g2: Global}, wf: TwoParty(g), st: GStep(g, g2)) -> TwoParty(g2) = match st
+    GFire() -> match wf
+      TPAB(t, wf2) -> wf2
+      TPBA(t, wf2) -> wf2
 end

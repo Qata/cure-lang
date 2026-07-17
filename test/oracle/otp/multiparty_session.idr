@@ -35,3 +35,11 @@ projection_duality : TwoParty g -> project g RA = dual (project g RB)
 projection_duality TPEnd = Refl
 projection_duality (TPAB t wf2) = cong (LSend t) (projection_duality wf2)
 projection_duality (TPBA t wf2) = cong (LRecv t) (projection_duality wf2)
+
+data GStep : Global -> Global -> Type where
+  GFire : GStep (GMsg from to t k) k
+
+twoparty_preserved : TwoParty g -> GStep g g2 -> TwoParty g2
+twoparty_preserved wf GFire = case wf of
+  TPAB t wf2 => wf2
+  TPBA t wf2 => wf2
