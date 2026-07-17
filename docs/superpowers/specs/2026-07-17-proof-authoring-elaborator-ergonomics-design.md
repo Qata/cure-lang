@@ -515,6 +515,20 @@ stuck accumulator/combiner slot — e.g. the mailbox-encoding monoid homomorphis
 only the Cure kernel's conversion is too weak. Deferred (TCB HARD-STOP — a normalizer change needs
 its own reviewed run + Antigen termination/soundness antibodies).
 
+**Deeper trace (2026-07-18, do NOT blind-fix).** Reading `eval.ex`/`normalise.ex`/`conv.ex`:
+`eval` leaves globals opaque (`{:vneutral,{:nglobal,_}}`); δ fires only in `Normalise`. Tracing
+`whnf_value(msum(recvs(LEnd), recvs t))` by hand, it SHOULD reduce: `unfold_certified_head`
+δ-unfolds `msum` to a stuck `ncase(recvs(LEnd))`, then `reduce_unfolded` whnf's that scrutinee —
+`recvs(LEnd)` δ-reduces to `MkMS(Z,Z,Z)` — fires the outer ι, and both sides land on
+`ncase(recvs t, motive, [MkMS→MkMS(add(Z,a2),…)])`. So the naive "conversion doesn't reduce a
+stuck-spine arg" story is INCOMPLETE — the machinery is designed to force exactly this. The real
+defect is subtler (candidate: env-threading through `reduce_unfolded`→`Eval.reduce_branch_body`,
+or motive/branch closure capture differing between the direct-`vctor`-match path and the
+`ncase`-then-force path, making two equal `ncase` values compare unequal; or a fuel interaction).
+This needs INTERACTIVE kernel debugging (dump the two whnf'd values and diff), not a speculative
+edit to the deliberately-lazy δ engine (whose A6 freezing rule explicitly guards canonical-form
+and δ-loop hazards). Deferred to a dedicated kernel session with that instrumentation.
+
 **Workaround (partial, fragile).** Bridge every stuck-spine reduction with an explicit congruence
 lemma (`fn recvs_lend() -> Equivalent(MS, recvs(LEnd), MkMS(Z,Z,Z)) = reflexive(...)` then
 `msum_cong(recvs_lend(), …)`), one per constructor per slot. Verbose and it still tripped
