@@ -57,7 +57,7 @@ mod Spline
   rec Row
     sub: Float
     diag: Float
-    sup: Float
+    super: Float
     rhs: Float
 
   ## A reduced row after the Thomas forward sweep:
@@ -147,7 +147,7 @@ mod Spline
             let h1 = cx - bx
             let dy0 = fdiv(by - ay, h0)
             let dy1 = fdiv(cy - by, h1)
-            let row = Row{sub: h0, diag: 2.0 * (h0 + h1), sup: h1, rhs: 6.0 * (dy1 - dy0)}
+            let row = Row{sub: h0, diag: 2.0 * (h0 + h1), super: h1, rhs: 6.0 * (dy1 - dy0)}
             [row | build_rows(rest)]
           _ -> []
       _ -> []
@@ -170,9 +170,9 @@ mod Spline
   local fn thomas_forward(rows: List(Row), prev_c: Float, prev_d: Float) -> List(ReducedRow) =
     match rows
       [] -> []
-      [Row{sub, diag, sup, rhs} | rest] ->
+      [Row{sub, diag, super, rhs} | rest] ->
         let denom = diag - sub * prev_c
-        let new_c = fdiv(sup, denom)
+        let new_c = fdiv(super, denom)
         let new_d = fdiv(rhs - sub * prev_d, denom)
         [ReducedRow{c: new_c, d: new_d} | thomas_forward(rest, new_c, new_d)]
 

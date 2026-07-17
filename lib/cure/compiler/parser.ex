@@ -227,16 +227,24 @@ defmodule Cure.Compiler.Parser do
                prelude_macros: false,
                builtin_macros: builtin_macros
              ) do
-        collect_macro_rules(ast, rules)
+        collect_macro_rules(ast, rules, path)
       else
         _ -> rules
       end
     end)
   end
 
-  defp collect_macro_rules(ast, acc) do
+  # `path` is the home file of every rule harvested here (a stdlib module). It is
+  # stamped onto each rule as `:source_path` so a computed/family use-site can
+  # later resolve the rule's expander in its DEFINITION-SITE scope (ambient macro
+  # hygiene), not just the bare caller env. Local/user macros harvest through
+  # harvest_active_macros / harvest_computed_macros instead and carry no path, so
+  # their expansion behaviour is unchanged.
+  defp collect_macro_rules(ast, acc, path) do
     Enum.reduce(collect_macro_defs_with_scope(ast), acc, fn {:macro_def, meta, rules}, macro_acc ->
-      Enum.reduce(harvestable_macro_rules(meta, rules), macro_acc, fn
+      tagged = Enum.map(harvestable_macro_rules(meta, rules), &Map.put(&1, :source_path, path))
+
+      Enum.reduce(tagged, macro_acc, fn
         %{kind: :syntax, keyword: keyword} = rule, acc2 when is_binary(keyword) ->
           Map.update(acc2, keyword, [rule], &(&1 ++ [rule]))
 
@@ -523,6 +531,15 @@ defmodule Cure.Compiler.Parser do
           line: keyword_token.line,
           col: keyword_token.col
         ]
+
+        # Only stdlib-harvested rules carry a home file (:source_path). Attach it
+        # as :home_source for definition-site expander resolution; omit the key
+        # entirely for user/local macros so their deferred-node shape is unchanged.
+        meta =
+          case Map.get(rule, :source_path) do
+            nil -> meta
+            home_source -> Keyword.put(meta, :home_source, home_source)
+          end
 
         meta =
           if Map.get(rule, :direct_inputs, false),
@@ -6511,6 +6528,16 @@ defmodule Cure.Compiler.Parser do
   defp parse_computed_rule(state, kw_token, keyword, segments, category, contextual) do
     state = advance(state)
 
+    # Optional `directly` opt-in: the elab fn receives each matched hole as its
+    # own argument (multi-arg) rather than one synthesized input record. This
+    # lets a rule whose holes differ from the keyword's shared synthesized
+    # record still reach a typed adapter. Absent => single-record input (default).
+    {direct_inputs, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "directly"} -> {true, advance(state)}
+        _ -> {false, state}
+      end
+
     state =
       case peek(state) do
         %Token{type: :identifier, value: "by"} -> advance(state)
@@ -6528,6 +6555,7 @@ defmodule Cure.Compiler.Parser do
       syntax_fields: macro_syntax_fields(segments),
       syntax_repeated_fields: macro_syntax_repeated_fields(segments),
       syntax_field_types: macro_syntax_field_types(segments),
+      direct_inputs: direct_inputs,
       elab: elab,
       examples: examples,
       category: category,
