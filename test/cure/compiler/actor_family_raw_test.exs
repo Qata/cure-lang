@@ -383,4 +383,63 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert :sys.get_state(pid) == 0
     :gen_server.stop(pid)
   end
+
+  test "terse stateless with+body template routes through the poly-state family raw emitter" do
+    # The `actor N with <payload> <body-declarations>` form (STATELESS Raw15,
+    # rule at actor.cure:212) carries a `with` seed AND a trailing definition
+    # block but NO `state` annotation — the state stays a free type var `p` (no
+    # `typealias State`). The seed threads through the state-poly family as
+    # initial: Some(payload) (adapter emit_raw_stateless_initial_body ->
+    # derive_actor_family_raw_stateless) and the block through the positional
+    # `Declarations until dedent` hole as body: Some(...). This behavioral pin
+    # replaces the retired Raw15_with_body byte-golden: derive_actor_init_poly
+    # emits init(args: Atom) = %[:ok, payload], so init/1 returns the seeded
+    # payload for ANY argument (behaviorally equivalent to the template's echoing
+    # init + nullary start_link seeding the payload). Raw fold =
+    # behavioral-equivalence, NOT byte-identical (spec d1aec7b4): the folded
+    # family drops the template's vestigial default handle_call and Effect-wraps
+    # callbacks, matching every other folded raw form.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyStatelessWithBody with 0
+        fn helper() -> Int = 42
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyStatelessWithBody", :helper, []) == 42
+    assert apply(:"Cure.Generated.RawFamilyStatelessWithBody", :init, [:anything]) == {:ok, 0}
+    assert apply(:"Cure.Generated.RawFamilyStatelessWithBody", :handle_cast, [:ping, 7]) == {:noreply, 7}
+    refute function_exported?(:"Cure.Generated.RawFamilyStatelessWithBody", :handle_call, 3)
+  end
+
+  test "bare stateless body template routes through the poly-state family raw emitter" do
+    # The `actor N <body-declarations>` form (STATELESS Raw16, bare, rule at
+    # actor.cure:224) carries no callback holes and no `state`/`with` — just a
+    # trailing definition block, captured by the positional `Declarations until
+    # dedent` hole and threaded through the state-poly family (adapter
+    # emit_raw_stateless_body -> derive_actor_family_raw_stateless) with
+    # body: Some(...). This behavioral pin replaces the retired Raw16_bare_body
+    # byte-golden: the default poly init (init(initial: p) = {:ok, initial},
+    # start_link/1) is emitted alongside the spliced extra declaration (a callable
+    # function of the module), and the template's vestigial default handle_call is
+    # DROPPED, matching every other folded raw form. Raw fold =
+    # behavioral-equivalence, NOT byte-identical (spec d1aec7b4).
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyStatelessBody
+        fn helper() -> Int = 42
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyStatelessBody", :helper, []) == 42
+    assert apply(:"Cure.Generated.RawFamilyStatelessBody", :init, [3]) == {:ok, 3}
+    assert apply(:"Cure.Generated.RawFamilyStatelessBody", :handle_cast, [:ping, 7]) == {:noreply, 7}
+    refute function_exported?(:"Cure.Generated.RawFamilyStatelessBody", :handle_call, 3)
+    assert {:ok, pid} = apply(:"Cure.Generated.RawFamilyStatelessBody", :start_link, [5])
+    :gen_server.stop(pid)
+  end
 end
