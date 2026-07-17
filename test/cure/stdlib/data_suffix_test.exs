@@ -15,7 +15,7 @@ defmodule Cure.Stdlib.DataSuffixTest do
 
     type Consumed(a: Type) indices (strict: Bool, rem: List(a), orig: List(a))
       Same : (xs: List(a)) -> Consumed(a, False, xs, xs)
-      Drop : (head: a) -> Consumed(a, strict, rem, orig) -> Consumed(a, True, rem, Cons(head, orig))
+      Drop : (head: a) -> Consumed(a, strict, rem, orig) -> Consumed(a, out, rem, Cons(head, orig))
 
     type Step(t: Type, e: Type, a: Type) indices (strict: Bool, orig: List(t))
       Succ : (value: a) -> (rest: List(t)) -> Consumed(t, strict, rest, orig) -> Step(t, e, a, strict, orig)
@@ -23,6 +23,9 @@ defmodule Cure.Stdlib.DataSuffixTest do
 
     type Acc(t: Type) indices (orig: List(t))
       MkAcc : (descend: ((rest: List(t)) -> Consumed(t, True, rest, orig) -> Acc(t, rest))) -> Acc(t, orig)
+
+    fn drop({a: Type}, {strict: Bool}, {rem: List(a)}, {orig: List(a)}, head: a, proof: Consumed(a, strict, rem, orig)) -> Consumed(a, True, rem, Cons(head, orig)) =
+      Drop(head, proof)
 
     fn trans({a: Type}, {left: Bool}, {right: Bool}, {orig: List(a)}, {mid: List(a)}, {rem: List(a)}, first: Consumed(a, left, mid, orig), second: Consumed(a, right, rem, mid)) -> Consumed(a, `or`(left, right), rem, orig) =
       match first
@@ -66,7 +69,7 @@ defmodule Cure.Stdlib.DataSuffixTest do
   test "trans composes two strict drops and preserves the final remainder" do
     definition = """
       fn p({a: Type}, x: a, y: a, tail: List(a)) -> Consumed(a, True, tail, Cons(x, Cons(y, tail))) =
-        trans(Drop(x, Same(Cons(y, tail))), Drop(y, Same(tail)))
+        trans(drop(x, Same(Cons(y, tail))), drop(y, Same(tail)))
     """
 
     assert verdict(definition) == :accept
@@ -75,7 +78,16 @@ defmodule Cure.Stdlib.DataSuffixTest do
   test "trans with Same on the left preserves the second proof's strictness" do
     definition = """
       fn p({a: Type}, x: a, tail: List(a)) -> Consumed(a, True, tail, Cons(x, tail)) =
-        trans(Same(Cons(x, tail)), Drop(x, Same(tail)))
+        trans(Same(Cons(x, tail)), drop(x, Same(tail)))
+    """
+
+    assert verdict(definition) == :accept
+  end
+
+  test "False carries no guarantee and admits a proper suffix" do
+    definition = """
+      fn p({a: Type}, head: a, tail: List(a)) -> Consumed(a, False, tail, Cons(head, tail)) =
+        Drop(head, Same(tail))
     """
 
     assert verdict(definition) == :accept

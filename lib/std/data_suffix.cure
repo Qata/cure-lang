@@ -14,7 +14,7 @@ mod Std.Data.Suffix
 
   type Consumed(a: Type) indices (strict: Bool, rem: List(a), orig: List(a))
     Same : (xs: List(a)) -> Consumed(a, False, xs, xs)
-    Drop : (head: a) -> Consumed(a, strict, rem, orig) -> Consumed(a, True, rem, Cons(head, orig))
+    Drop : (head: a) -> Consumed(a, strict, rem, orig) -> Consumed(a, out, rem, Cons(head, orig))
 
   ## One parser transition. Success existentially carries its remainder while
   ## the dependent proof ties that remainder back to the original input.

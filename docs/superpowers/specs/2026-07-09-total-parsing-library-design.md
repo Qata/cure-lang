@@ -19,6 +19,12 @@ a constructor telescope, so a field such as `Consumed(t, strict, rest, orig)`
 correctly refers to the surrounding `t` and earlier named `rest` field. Landing
 `Acc` unified dependent-arrow parsing for ordinary annotations and higher-order
 constructor fields; both now retain named Π domains through the same AST shape.
+The consumption bit follows the reference's lower-bound semantics (`True`
+guarantees a proper suffix; `False` makes no guarantee), including a drop
+constructor polymorphic in that bit. The structural `weaken`/`weakens`
+conversions are the next slice: their honest definitions currently expose a
+general dependent-match motive `:branch_type` rejection and must not be replaced
+by an unchecked cast.
 
 ---
 
@@ -72,11 +78,12 @@ bit — whether *at least one token was consumed*:
 ```
 # Std.Data.Suffix  (list-shaped instance; see §3 for the binary instance)
 #
-# Consumed(strict, rem, orig) : proof that `rem` is a suffix of `orig`,
-# strict = true iff at least one element was dropped.
+# Consumed(strict, rem, orig) : proof that `rem` is a suffix of `orig`.
+# strict = true guarantees at least one element was dropped; false carries no
+# strictness guarantee (and therefore admits both equal and proper suffixes).
 type Consumed(strict: Bool, rem: List(t), orig: List(t)) =
   | Same  : Consumed(false, xs, xs)                       # nothing consumed
-  | Uncons: Consumed(b, h :: t, cs) -> Consumed(true, t, cs)   # at least one
+  | Uncons: Consumed(b, h :: t, cs) -> Consumed(b2, t, cs)
 ```
 
 Two properties, both from the reference, both essential:
