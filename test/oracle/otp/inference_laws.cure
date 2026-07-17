@@ -1,0 +1,24 @@
+mod InferenceLaws
+  type Tag = TA | TB | TC
+  type TagList = TNil | TCons(Tag, TagList)
+  type Handles indices (t: Tag, iface: TagList)
+    HHere  : Handles(t, TCons(t, rest))
+    HThere : Handles(t, rest) -> Handles(t, TCons(y, rest))
+  type AllHandled indices (s: TagList, iface: TagList)
+    AHNil  : AllHandled(TNil, iface)
+    AHCons : Handles(t, iface) -> AllHandled(rest, iface) -> AllHandled(TCons(t, rest), iface)
+  fn handles_mono({t: Tag}, {a: TagList}, {b: TagList}, h: Handles(t, a), sub: AllHandled(a, b)) -> Handles(t, b) = match h
+    HHere() -> match sub
+      AHCons(ht, srest) -> ht
+    HThere(h2) -> match sub
+      AHCons(sh, srest) -> handles_mono(h2, srest)
+  fn weaken({s: TagList}, {a: TagList}, {b: TagList}, ah: AllHandled(s, a), sub: AllHandled(a, b)) -> AllHandled(s, b) = match ah
+    AHNil() -> AHNil()
+    AHCons(ht, ahrest) -> AHCons(handles_mono(ht, sub), weaken(ahrest, sub))
+  fn weaken_cons({s: TagList}, {iface: TagList}, ah: AllHandled(s, iface), y: Tag) -> AllHandled(s, TCons(y, iface)) = match ah
+    AHNil() -> AHNil()
+    AHCons(ht, ahrest) -> AHCons(HThere(ht), weaken_cons(ahrest, y))
+  fn self_member(s: TagList) -> AllHandled(s, s) = match s
+    TNil() -> AHNil()
+    TCons(t, rest) -> AHCons(HHere(), weaken_cons(self_member(rest), t))
+end

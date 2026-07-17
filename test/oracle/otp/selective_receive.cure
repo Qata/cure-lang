@@ -1,0 +1,25 @@
+mod SelectiveReceive
+  type Tag = TInc | TDec | TQuery
+  type TagList = TNil | TCons(Tag, TagList)
+  type Accepted indices (t: Tag)
+    AccInc   : Accepted(TInc)
+    AccQuery : Accepted(TQuery)
+  type AllAccepted indices (ts: TagList)
+    AANil  : AllAccepted(TNil)
+    AACons : Accepted(t) -> AllAccepted(rest) -> AllAccepted(TCons(t, rest))
+  type SelRecv indices (before: TagList, x: Tag, after: TagList)
+    SelHere : SelRecv(TCons(x, rest), x, rest)
+    SelSkip : SelRecv(rest, x, rest2) -> SelRecv(TCons(y, rest), x, TCons(y, rest2))
+  fn preserves({x: Tag}, {before: TagList}, {after: TagList}, all: AllAccepted(before), s: SelRecv(before, x, after)) -> AllAccepted(after) = match s
+    SelHere() -> match all
+      AACons(accx, rest_acc) -> rest_acc
+    SelSkip(s2) -> match all
+      AACons(accy, rest_acc) -> AACons(accy, preserves(rest_acc, s2))
+  fn received_accepted({x: Tag}, {before: TagList}, {after: TagList}, all: AllAccepted(before), s: SelRecv(before, x, after)) -> Accepted(x) = match s
+    SelHere() -> match all
+      AACons(accx, rest_acc) -> accx
+    SelSkip(s2) -> match all
+      AACons(accy, rest_acc) -> received_accepted(rest_acc, s2)
+  fn example() -> SelRecv(TCons(TInc, TCons(TQuery, TNil)), TQuery, TCons(TInc, TNil)) =
+    SelSkip(SelHere())
+end

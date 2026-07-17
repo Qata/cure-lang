@@ -80,6 +80,14 @@ refines multiple siblings for free) → `rel=same`.
 
 ## B. `with … proof` clause + multi-sibling still use the linear-hostile Eq-transport
 
+**Disposition (2026-07-16): DEFER — not on the metatheory path.** No OTP metatheory
+proof built to date uses a linear-sibling `with … proof`: the obligation-(1) branching
+handler, reply-preservation, and message-safety proofs all use plain `match` (item C
+path) or motive-gen `with r` (item A). B is speculative completeness for a construct the
+metatheory does not exercise, and the fix (option (2): motive with BOTH sibling Π-domains
+AND the Eq-arrow) is non-trivial elaborator work. Revisit only if a real program writes a
+linear-sibling `with … proof`. Original analysis below.
+
 **Status:** open; largely subsumed by A. The Eq-transport encoding
 (`elaborate_with_eq_branch`, `eq_arrow_motive`, `collect_with_siblings` in
 `elaborator.ex`) wraps a sibling as `transport_case(prf) applied to cap` — a
@@ -97,7 +105,21 @@ the motive with BOTH the sibling Π-domains AND the Eq-arrow, combining A's moti
 with the proof binding. (2) is cleaner. Low priority unless someone writes a
 linear-sibling `with … proof`.
 
-## C. Plain `match r` refines siblings  ✅ MOSTLY DONE (one edge remains)
+## C. Plain `match r` refines siblings  ✅ DONE (edge closed)
+
+**Edge closed:** the direct-sibling-return case (`GetCount() -> w`, standard build
+succeeds → kernel rejects) is now handled — when a scrutinee-dependent sibling is in
+scope, the standard `{:ok}` term is kernel-checked and the motive-gen retry fires on
+failure (`match_term_kernel_rejects?`). A cheap value-level gate
+(`context_type_mentions_var?`, no reification) fronts the expensive
+`collect_with_siblings` + kernel-check so ordinary sibling-free matches pay only a
+value walk. Test in `linear_sibling_refinement_test.exs` ("RETURNS a
+scrutinee-dependent sibling directly"). (Perf note: the elab suite is ~155s post-merge
+regardless of this change — verified against HEAD; not a regression.)
+
+Original status below.
+
+
 
 **Status:** MOSTLY DONE. `elaborate_match` (`elaborator.ex`) now, when its STANDARD
 path fails on a non-indexed family matched on a VARIABLE with scrutinee-dependent
@@ -126,6 +148,13 @@ the cost). Repro: `spike7` / `docs/.../spike/spike7_sibling_refine.cure`.
 
 ## D. CBV-vs-CBN `let` linearity divergence from Idris
 
+**Disposition (2026-07-16): DECIDED — leave as-is; no code.** The metatheory targets the
+BEAM, which is call-by-value, so Cure's CBV-sound `let` rule is the *correct* rule for
+this project, not a parity bug. Forcing strict Idris (CBN/substitution) parity would
+reject valid CBV programs (`let _ = consume(linear) in …`) — a completeness loss. The
+`let_linear` oracle cluster already omits the divergent case deliberately rather than
+marking it `same`. Decision recorded; original analysis below.
+
 **Status:** intentional, documented; decide whether to "fix". After the soundness fix
 (`relevance.ex` `:let` `:not_join`), Cure ACCEPTS `let x = consume(c) in Done` (c
 linear, consumed once, result discarded) where Idris REJECTS it (Idris counts `let` by
@@ -137,9 +166,24 @@ CBV programs (`let _ = consume(linear) in …`) and is a completeness loss. Reco
 leaving as-is; it's a defensible semantic choice, not a bug. See
 `2026-07-16-let-linearity-soundness-fix.md`.
 
-## E. Reify gap for INDEX-bearing families in a motive domain
+## E. Reify gap for INDEX-bearing families in a motive domain  ✅ NOT A LIVE GAP
 
-**Status:** pre-existing, reach-pinned (not introduced here). `Quote.reify`
+**Status:** INVESTIGATED — not reachable via sibling refinement. The motive-gen path
+(`elaborate_motivegen_case`) DOES generalize a sibling's type into the case motive as
+a Π domain (the shape the eq-transport design feared), but `collect_with_siblings`
+applies `resplit_data`, which recovers the param/index split — so an INDEX-bearing
+sibling family reifies correctly. Verified accepting across param-only, 0-param-1-index,
+param+index, indexed-scrutinee, and COMPUTED-index (`G(flip(r))`) siblings; two pinned
+in `linear_sibling_refinement_test.exs` ("INDEX-bearing families"). The eq-transport
+path (proof clause) still uses transport, not motive generalization, so it never
+reifies such a domain either. The latent collapse remains in `Quote.split_data_args`
+(reify WITHOUT a sig), but no reachable sibling-refinement program hits it. The stale
+`elaborate_with` doc comment was corrected. If a future path generalizes an
+index-bearing family into a motive WITHOUT `resplit_data`, revisit.
+
+Original text below.
+
+**Status (original):** pre-existing, reach-pinned (not introduced here). `Quote.reify`
 (`lib/cure/core/quote.ex:57`, `split_data_args`) collapses `{:vdata, name, params ++
 indices}`; `resplit_data` (`elaborator.ex:~2266`) restores the split via
 `Inductive.param_count`. For a PARAM-ONLY family (`ReplyCap(m)`), no misclassification
@@ -161,6 +205,21 @@ documented in the findings docs; write retroactive specs only if the paper-trail
 wanted. No code risk.
 
 ## G. Obligation (2) effect-honesty (scoped out by the parent brief)
+
+**Disposition (2026-07-16): DONE (the valuable slice) — `Std.Otp.SendEffect`
+(`lib/std/otp_send_effect.cure`).** Rather than re-flavour the pure obligation-(2)
+exemplar (which deliberately stays pure to isolate the send-safety argument, and is
+pinned by the `ob2_*` oracle), added an effect-honest COMPANION that proves the
+interesting property: the clause-DERIVED message index survives the `Effect` discipline.
+`spawn_actor`/`post` return `Effect(Pid(m))`/`Effect(Response)`; the client threads them
+with monadic `let` (`effect_bind`), the bind refines `m := Msg` from the handler's
+domain, and the effectful `post` still forces `msg : Msg`. Negatives (wrong-typed message,
+non-total handler) reject under the effect discipline. Kernel-checked; Idris-mirrored with
+a user `Eff` monad (`test/oracle/otp/ob2_eff_send_safe` + `ob2_eff_neg_wrong_msg`,
+rel=same); tests in `test/cure/stdlib/otp_send_effect_test.exs`; build-out map G5 marked
+done for the send algebra. The `Effect` former turned out to already carry `effect_pure`/
+`effect_bind` in the kernel (more than "inert slice 1"), so no former work was needed.
+Original note below.
 
 **Status:** intentionally out of scope. `Std.Otp.Proof`'s `spawn_actor`/`post` are
 PURE (no `Effect`) — faithful to NVLang (which has no effect tracking) and to the

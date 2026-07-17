@@ -632,6 +632,37 @@ defmodule Cure.Elab.Program do
     end)
   end
 
+  # The auto-prelude env a NON-prelude module's slice is elaborated against: each
+  # auto-prelude module's own independent slice, flat-merged — the same construction
+  # the top-level `shadow_resolved_imports` uses (`auto_prelude_imports ++ imports`),
+  # so `Std.Nat`'s `plus` (a function; the auto-prelude only makes the TYPE `Nat`
+  # ambient) is present for δ-reduction. A prelude SOURCE gets nothing: it must be
+  # self-sufficient, and this also terminates the recursion — the auto-prelude
+  # slices it builds each hit the `@auto_prelude` guard, so `slice_prelude_env`
+  # bottoms out at once. (The guard is `@auto_prelude` membership, NOT `prelude_source?` — the
+  # latter is true for EVERY registered stdlib module, which would skip the prelude
+  # for `Std.Proof`/`Std.List`/… too and defeat the fix.)
+  defp slice_prelude_env(ast) do
+    if find_module_name(ast) in @auto_prelude do
+      {:ok, Env.empty()}
+    else
+      auto_prelude_imports(ast)
+      |> distinct_import_modules()
+      |> Enum.reduce_while({:ok, Env.empty()}, fn {_module_id, path}, {:ok, acc} ->
+        case module_slice_env(path) do
+          {:ok, slice} ->
+            case merge_env(acc, slice) do
+              {:ok, merged} -> {:cont, {:ok, merged}}
+              {:error, _} = err -> {:halt, err}
+            end
+
+          {:error, _} = err ->
+            {:halt, err}
+        end
+      end)
+    end
+  end
+
   # ── `@prelude` decorator ───────────────────────────────────────────────────
   #
   # A stdlib item marked `@prelude` (see `lib/std/string.cure`'s `String` alias)
@@ -1327,19 +1358,32 @@ defmodule Cure.Elab.Program do
 
   def env_with_macro_home(caller, _path), do: caller
 
-  defp cached_macro_home_env(path) do
-    key = {__MODULE__, :macro_home_env, path}
+  # The macro-home env IS a module slice; `module_slice_env/1` already memoizes
+  # by path, so this is now a thin alias kept for the call-site names below.
+  defp cached_macro_home_env(path), do: module_slice_env(path)
+
+  # Memoized module-slice builder. `compute_module_slice_env/1` is a pure
+  # function of `path`: it reads and elaborates the file, and the stdlib (the
+  # only thing sliced here) is immutable for the lifetime of a compiler build —
+  # no test writes `lib/std/*.cure` or swaps `:stdlib_macro_rules` mid-run, so a
+  # path is guaranteed to elaborate identically every time. Caching it collapses
+  # the redundant re-elaboration every `Program.elaborate` used to pay: the 7
+  # `@auto_prelude` modules (plus explicit imports) were re-sliced from source on
+  # each of the hundreds of elaboration calls a test suite makes. The cache is
+  # keyed by absolute path, so a temp file at a unique path never collides with a
+  # shipped module. Failures are NOT cached — a transient read/parse error must
+  # not poison later slices once the tree is consistent.
+  defp module_slice_env(path) do
+    key = {__MODULE__, :module_slice_env, path}
 
     case :persistent_term.get(key, :missing) do
       :missing ->
-        case module_slice_env(path) do
+        case compute_module_slice_env(path) do
           {:ok, _env} = ok ->
             :persistent_term.put(key, ok)
             ok
 
           {:error, _} = err ->
-            # Do not cache failures: a transient read/parse error must not poison
-            # later expansions once the tree is consistent.
             err
         end
 
@@ -1348,14 +1392,20 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp module_slice_env(path) do
+  defp compute_module_slice_env(path) do
     with {:ok, source} <- File.read(path),
          {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false),
          :ok <- check_declarations(ast),
+         # A sliced module is still a module: it must see the auto-prelude modules
+         # (`Std.Nat` etc.), or a body relying on a prelude def it never explicitly
+         # `use`d — e.g. `Std.Proof`'s lemmas over `Std.Nat.plus` — elaborates with a
+         # dangling global that never δ-reduces (`plus(Z,Z) ≡ Z` stays stuck).
+         {:ok, prelude} <- slice_prelude_env(ast),
          {:ok, imported} <- import_env(imports(ast), MapSet.new()),
          seeded = Env.with_owner(seed_with_telescope_support(ast), find_module_name(ast) || "Main"),
-         {:ok, env0_base} <- merge_env(seeded, imported),
+         {:ok, base} <- merge_env(seeded, prelude),
+         {:ok, env0_base} <- merge_env(base, imported),
          env0 = Map.put(env0_base, :import_modules, direct_import_ids(imports(ast))),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          {:ok, certified} <- TotalityClosure.certify_type_level(env) do

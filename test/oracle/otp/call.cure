@@ -1,0 +1,12 @@
+mod Call
+  type CallError = Timeout | NoProc | ServerDied
+  type CallOutcome(r: Type) indices ()
+    Replied : (r) -> CallOutcome(r)
+    Failed  : CallError -> CallOutcome(r)
+  fn resume({r: Type}, {s: Type}, o: CallOutcome(r), on_reply: (r) -> s, on_fail: (CallError) -> s) -> s = match o
+    Replied(x) -> on_reply(x)
+    Failed(e)  -> on_fail(e)
+  type Reply = RVal
+  fn ok_call() -> CallOutcome(Reply) = Replied(RVal)
+  fn dead_call() -> CallOutcome(Reply) = Failed(ServerDied)
+end

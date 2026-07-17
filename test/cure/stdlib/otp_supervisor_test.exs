@@ -1,0 +1,55 @@
+defmodule Cure.Stdlib.OtpSupervisorTest do
+  @moduledoc """
+  `Std.Otp.Supervisor` — typed supervision: a supervisor's restart preserves its
+  declared children (the `Fleet(specs)` type is invariant across restarts). The proof
+  is re-checked every build via the stdlib preload; these tests pin the safety content
+  — restart returns a fleet of the SAME specs, and a fleet cannot be reshaped to a
+  different spec list.
+  """
+  use ExUnit.Case, async: true
+
+  alias Cure.Elab.Program
+
+  @calculus """
+    type ChildSpec = CA | CB | CC
+    type Children = CNil | CCons(ChildSpec, Children)
+    type Child indices (spec: ChildSpec)
+      Alive      : Child(spec)
+      Restarting : Child(spec)
+    type Fleet indices (specs: Children)
+      FNil  : Fleet(CNil)
+      FCons : Child(spec) -> Fleet(rest) -> Fleet(CCons(spec, rest))
+    fn restart_all({specs: Children}, f: Fleet(specs)) -> Fleet(specs) = match f
+      FNil()         -> FNil()
+      FCons(c, rest) -> FCons(Alive(), restart_all(rest))
+    fn establish(specs: Children) -> Fleet(specs) = match specs
+      CNil()         -> FNil()
+      CCons(s, rest) -> FCons(Alive(), establish(rest))
+  """
+
+  defp verdict(defs) do
+    case Program.elaborate("mod SupT\n#{@calculus}#{defs}\nend\n") do
+      {:ok, _} -> :accept
+      {:error, _} -> :reject
+    end
+  end
+
+  test "a supervisor establishes and restarts a fleet of its exact spec" do
+    defs = """
+      fn boot() -> Fleet(CCons(CA, CCons(CB, CNil))) = establish(CCons(CA, CCons(CB, CNil)))
+      fn revive(f: Fleet(CCons(CA, CCons(CB, CNil)))) -> Fleet(CCons(CA, CCons(CB, CNil))) = restart_all(f)
+    """
+
+    assert verdict(defs) == :accept
+  end
+
+  test "restart cannot change the supervisor's declared children (spec list is invariant)" do
+    # restart_all's result type is Fleet(specs) with the SAME specs; claiming it yields a
+    # DIFFERENT spec list must reject.
+    defs = """
+      fn bad(f: Fleet(CCons(CA, CNil))) -> Fleet(CCons(CB, CNil)) = restart_all(f)
+    """
+
+    assert verdict(defs) == :reject
+  end
+end

@@ -1,0 +1,19 @@
+mod ReplyNegWrongReply
+  type Req = GetCount | Ping
+  type Val = VInt | VAtom
+  type HasReply indices (r: Req, v: Val)
+    HRGet  : HasReply(GetCount, VInt)
+    HRPing : HasReply(Ping, VAtom)
+  type Reply = MkReply(Req, Val)
+  type Replies = RNil | RCons(Reply, Replies)
+  type AllReplied indices (rs: Replies)
+    ARNil  : AllReplied(RNil)
+    ARCons : HasReply(r, v) -> AllReplied(rest) -> AllReplied(RCons(MkReply(r, v), rest))
+  type Config = MkConfig(Replies, Replies)
+  type WT indices (c: Config)
+    MkWT : AllReplied(e) -> AllReplied(m) -> WT(MkConfig(e, m))
+  # A config that holds a WRONG-TYPED reply (GetCount answered by VAtom) cannot be
+  # well-typed: there is no HasReply(GetCount, VAtom) to build the ARCons witness.
+  fn bad() -> WT(MkConfig(RCons(MkReply(GetCount, VAtom), RNil), RNil)) =
+    MkWT(ARCons(HRGet, ARNil), ARNil)
+end

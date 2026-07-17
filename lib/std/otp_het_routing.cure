@@ -1,0 +1,67 @@
+@group(:concurrency)
+mod Std.Otp.HetRouting
+  ## HETEROGENEOUS typed routing — each process has its OWN message type, and a message
+  ## may only be routed to a process that accepts it. This generalizes `Std.Otp.Routing`
+  ## (which assumed one shared receiver type) to the real OTP situation: a system of
+  ## processes with DIFFERENT interfaces.
+  ##
+  ## Each process carries its own accepted-SET (its interface), and its ether and mailbox
+  ## are well-typed against THAT set (`WTProc`). Routing a message `t` to a process
+  ## requires `Member(t, set)` — `t` is in the TARGET process's own accepted-set, not a
+  ## global one. `preservation` then shows heterogeneous routing preserves GLOBAL
+  ## well-typedness: the target gains a member of its own interface, everyone else is
+  ## untouched. So even when every process speaks a different protocol, no process is ever
+  ## routed a message outside its type.
+  ##
+  ## This is the interface-indexed core that `Std.Otp.Registry`'s `GenServer(q, r)`
+  ## handles denote at the value level: `q` is the target's request interface, and a typed
+  ## send is exactly a `Member`-checked delivery into its ether.
+  ##
+  ## **Honest scope.** The accepted-set is a concrete `TagList` (a first-order interface);
+  ## per-process REPLY typing is `Std.Otp.ReplyPreservation`. Order within each mailbox is
+  ## `Std.Otp.Fifo`. Mailbox-type INFERENCE (deriving each set from usage) is the open
+  ## problem (G9), not addressed here.
+
+  type Tag = TInc | TDec | TQuery
+  type TagList = TNil | TCons(Tag, TagList)
+
+  ## Membership: tag `t` is in the accepted-set `set` (a process's interface).
+  type Member indices (t: Tag, set: TagList)
+    MemHere  : Member(t, TCons(t, rest))
+    MemThere : Member(t, rest) -> Member(t, TCons(y, rest))
+
+  ## Every tag in `ts` is a member of `set`.
+  type AllMember indices (ts: TagList, set: TagList)
+    AMNil  : AllMember(TNil, set)
+    AMCons : Member(t, set) -> AllMember(rest, set) -> AllMember(TCons(t, rest), set)
+
+  ## A process carries its OWN accepted-set (interface), ether, and mailbox — processes
+  ## are HETEROGENEOUS.
+  type Proc = MkProc(TagList, TagList, TagList)
+
+  ## WELL-TYPED process: its ether and mailbox contain only members of its own set.
+  type WTProc indices (p: Proc)
+    MkWTP : AllMember(e, set) -> AllMember(m, set) -> WTProc(MkProc(set, e, m))
+
+  type System = SNil | SCons(Proc, System)
+  type WTSys indices (sys: System)
+    WSNil  : WTSys(SNil)
+    WSCons : WTProc(p) -> WTSys(rest) -> WTSys(SCons(p, rest))
+
+  ## HETEROGENEOUS DELIVERY: route `t` to a process. `DHere` requires `Member(t, set)` —
+  ## `t` must be in the TARGET process's own accepted-set; `DThere` routes deeper.
+  type Deliver indices (before: System, after: System)
+    DHere  : Member(t, set) -> Deliver(SCons(MkProc(set, e, m), rest), SCons(MkProc(set, TCons(t, e), m), rest))
+    DThere : Deliver(rest, rest2) -> Deliver(SCons(p, rest), SCons(p, rest2))
+
+  ## **PRESERVATION.** Heterogeneous routing preserves global well-typedness — the target
+  ## gains a member of ITS OWN interface, every other process is untouched. So a system of
+  ## processes with different protocols stays well-typed: no process is routed a message
+  ## outside its type.
+  fn preservation({b: System}, {a: System}, wt: WTSys(b), d: Deliver(b, a)) -> WTSys(a) = match d
+    DHere(mem) -> match wt
+      WSCons(wtp, wrest) -> match wtp
+        MkWTP(ame, amm) -> WSCons(MkWTP(AMCons(mem, ame), amm), wrest)
+    DThere(d2) -> match wt
+      WSCons(wtp, wrest) -> WSCons(wtp, preservation(wrest, d2))
+end
