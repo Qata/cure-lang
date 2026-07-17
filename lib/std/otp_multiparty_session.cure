@@ -1,0 +1,67 @@
+@group(:concurrency)
+mod Std.Otp.MultipartySession
+  ## MULTIPARTY SESSION TYPES (build-out map B3, session extension). A GLOBAL type describes a
+  ## whole protocol as a sequence of interactions `from → to : tag`, from a bird's-eye view.
+  ## Each role obtains its LOCAL type by PROJECTION — keeping the messages it sends/receives and
+  ## skipping the ones it isn't party to. The central well-formedness result (Honda–Yoshida–
+  ## Carbone): the projections COHERE — for a two-role protocol, the projections onto the two
+  ## roles are DUAL, so the endpoints can safely communicate (`Std.Otp.Session`'s duality, now
+  ## derived from a global protocol rather than assumed).
+  ##
+  ## `project(G, r)` computes role `r`'s local type; `projection_duality` proves that a two-party
+  ## global (`TwoParty`) projects to dual endpoints, so global well-formedness yields local
+  ## communication safety.
+
+  type Role = RA | RB
+  type Tag = TA | TB | TC
+  type B = F | T
+  fn role_eq(x: Role, y: Role) -> B = match x
+    RA() -> match y
+      RA() -> T
+      RB() -> F
+    RB() -> match y
+      RA() -> F
+      RB() -> T
+
+  ## A global protocol: `GMsg(from, to, tag, continuation)` — role `from` sends `tag` to `to`.
+  type Global = GEnd | GMsg(Role, Role, Tag, Global)
+  ## A local (endpoint) type: send/receive/end.
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local)
+
+  fn dual(l: Local) -> Local = match l
+    LEnd()      -> LEnd()
+    LSend(t, k) -> LRecv(t, dual(k))
+    LRecv(t, k) -> LSend(t, dual(k))
+
+  ## Project a global protocol onto one role: it SENDS the messages it originates, RECEIVES the
+  ## ones addressed to it, and skips the rest.
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()              -> LEnd()
+    GMsg(from, to, t, k) -> match role_eq(from, r)
+      T() -> LSend(t, project(k, r))
+      F() -> match role_eq(to, r)
+        T() -> LRecv(t, project(k, r))
+        F() -> project(k, r)
+
+  ## A well-formed TWO-PARTY global: every message is between `RA` and `RB` (in either
+  ## direction). The tag is carried explicitly so the coherence proof can name it.
+  type TwoParty indices (g: Global)
+    TPEnd : TwoParty(GEnd)
+    TPAB  : (t: Tag) -> TwoParty(k) -> TwoParty(GMsg(RA, RB, t, k))
+    TPBA  : (t: Tag) -> TwoParty(k) -> TwoParty(GMsg(RB, RA, t, k))
+
+  fn lsend_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LSend(t, a), LSend(t, b)) =
+    rewrite e in reflexive(LSend(t, b))
+  fn lrecv_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LRecv(t, a), LRecv(t, b)) =
+    rewrite e in reflexive(LRecv(t, b))
+
+  ## **PROJECTION COHERENCE.** A two-party global protocol projects to DUAL endpoints:
+  ## `project(G, RA) = dual(project(G, RB))`. So a well-formed global guarantees its two
+  ## participants have compatible (dual) local types — global well-formedness ⟹ endpoint safety.
+  ## Induction on the two-party well-formedness derivation; each message is a send for one role
+  ## and the receive for the other, and duality swaps them.
+  fn projection_duality({g: Global}, wf: TwoParty(g)) -> Equivalent(Local, project(g, RA), dual(project(g, RB))) = match wf
+    TPEnd()       -> reflexive(LEnd())
+    TPAB(t, wf2)  -> lsend_cong(t, projection_duality(wf2))
+    TPBA(t, wf2)  -> lrecv_cong(t, projection_duality(wf2))
+end
