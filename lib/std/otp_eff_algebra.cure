@@ -1,0 +1,39 @@
+@group(:concurrency)
+mod Std.Otp.EffAlgebra
+  ## ALGEBRAIC OTP EFFECTS (build-out map B7). The kernel `Effect(T)` former is inert
+  ## (sequencing via `bind`, no laws exposed); this module builds a USER-level effect algebra
+  ## and proves the LAWS a sound effect handler relies on.
+  ##
+  ## The OTP message operations (`OSend`/`ORecv`/`OSpawn`) carry NO result value, so an effectful
+  ## program is a finite SEQUENCE of commands, and sequential composition is APPEND. The effect
+  ## algebra is therefore a MONOID: `(Eff, seq, ENil)` with `seq` associative and `ENil` its
+  ## unit. The three laws below (left/right identity, associativity) certify it, so effectful OTP
+  ## programs can be reassociated and unit-simplified without changing meaning — exactly the
+  ## rewrites an effect handler / optimiser performs. (A value-returning free monad would need a
+  ## higher-order `bind`; the kernel does not yet reduce a function argument in a dependent index
+  ## position, cataloged in the ergonomics spec — and for value-less ops the monoid is the honest
+  ## structure anyway.)
+
+  type Tag = TA | TB | TC
+  type Op = OSend(Tag) | ORecv(Tag) | OSpawn
+  type Eff = ENil | ECons(Op, Eff)
+
+  ## Sequential composition of effect programs = append the command sequences.
+  fn seq(m: Eff, n: Eff) -> Eff = match m
+    ENil()       -> n
+    ECons(op, k) -> ECons(op, seq(k, n))
+
+  ## **LEFT IDENTITY.** `ENil ; n ≡ n` — holds definitionally (`seq` recurses on its first arg).
+  fn seq_nil_l(n: Eff) -> Equivalent(Eff, seq(ENil(), n), n) = reflexive(n)
+
+  ## **RIGHT IDENTITY.** `m ; ENil ≡ m` — induction on the command sequence.
+  fn seq_nil_r(m: Eff) -> Equivalent(Eff, seq(m, ENil()), m) = match m
+    ENil()       -> reflexive(ENil())
+    ECons(op, k) -> rewrite seq_nil_r(k) in reflexive(ECons(op, k))
+
+  ## **ASSOCIATIVITY.** `(a ; b) ; c ≡ a ; (b ; c)` — induction on `a`; a leading command is
+  ## pushed out of both regroupings, so the tail follows from the IH.
+  fn seq_assoc(a: Eff, b: Eff, c: Eff) -> Equivalent(Eff, seq(seq(a, b), c), seq(a, seq(b, c))) = match a
+    ENil()       -> reflexive(seq(b, c))
+    ECons(op, k) -> rewrite seq_assoc(k, b, c) in reflexive(ECons(op, seq(k, seq(b, c))))
+end

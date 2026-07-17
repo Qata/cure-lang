@@ -122,7 +122,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [x] Dynamic children / `simple_one_for_one`: `Pool(spec)` indexed by a SINGLE spec (not a list) certifies UNIFORM children; `start_child`/`terminate_child` vary the pool at runtime, `restart_pool` preserves spec + size — **SHIPPED** `otp_supervisor.cure` (Idris `rel=same`)
 
 ### B7. Effects depth
-- [ ] Full effect row/algebra for OTP ops (current = inert `Effect(T)` + `bind`); effect ordering; effect handlers
+- [x] Effect ALGEBRA + LAWS: OTP message ops carry no result, so effect programs form a MONOID under sequential composition (`seq` = append) — `seq_nil_l`/`seq_nil_r`/`seq_assoc` certify `(Eff, seq, ENil)` is a monoid, the reassociation/unit-simplification an effect handler relies on — **SHIPPED** `otp_eff_algebra.cure` (Idris `rel=same`). Open: a value-returning free-monad `bind` needs higher-order function reduction in a dependent index position (kernel gap, cataloged); effect ROW/handlers
 
 ### B8. Full gen_server / gen_statem lifecycle
 - [ ] Typed full callback protocol (`init`/`handle_call`/`handle_cast`/`handle_info`/`terminate`/`code_change`) as one state machine (current = call totality + reply typing, not the full lifecycle)

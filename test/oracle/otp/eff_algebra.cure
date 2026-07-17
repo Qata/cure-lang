@@ -1,0 +1,15 @@
+mod EffAlgebra
+  type Tag = TA | TB | TC
+  type Op = OSend(Tag) | ORecv(Tag) | OSpawn
+  type Eff = ENil | ECons(Op, Eff)
+  fn seq(m: Eff, n: Eff) -> Eff = match m
+    ENil()       -> n
+    ECons(op, k) -> ECons(op, seq(k, n))
+  fn seq_nil_l(n: Eff) -> Equivalent(Eff, seq(ENil(), n), n) = reflexive(n)
+  fn seq_nil_r(m: Eff) -> Equivalent(Eff, seq(m, ENil()), m) = match m
+    ENil()       -> reflexive(ENil())
+    ECons(op, k) -> rewrite seq_nil_r(k) in reflexive(ECons(op, k))
+  fn seq_assoc(a: Eff, b: Eff, c: Eff) -> Equivalent(Eff, seq(seq(a, b), c), seq(a, seq(b, c))) = match a
+    ENil()       -> reflexive(seq(b, c))
+    ECons(op, k) -> rewrite seq_assoc(k, b, c) in reflexive(ECons(op, seq(k, seq(b, c))))
+end
