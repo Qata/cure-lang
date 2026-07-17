@@ -27,6 +27,18 @@ defmodule Cure.Stdlib.OtpGenEventTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "install/remove are inverse on the manager configuration" do
+    src = """
+    mod GeInv
+      use Std.Otp.GenEvent
+      fn inv(iface: EvSet, st: Nat, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Equivalent(Manager(ifaces), remove_head(add_handler(iface, st, mgr)), mgr) =
+        add_remove_inverse(iface, st, mgr)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "the Manager index certifies notify preserves the interface list at the type level" do
     # notify : Manager(ifaces) -> Manager(ifaces); a two-handler manager stays two-handler-typed.
     src = """

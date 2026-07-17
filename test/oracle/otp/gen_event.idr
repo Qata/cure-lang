@@ -47,3 +47,12 @@ notify_preserves_count e (MCons iface st rest) = snat_cong (notify_preserves_cou
 notify_preserves_ifaces : (e : Event) -> (mgr : Manager ifaces) -> interfaces (notify e mgr) = interfaces mgr
 notify_preserves_ifaces e MNil = Refl
 notify_preserves_ifaces e (MCons iface st rest) = icons_cong iface (notify_preserves_ifaces e rest)
+
+remove_head : Manager (ICons iface rest) -> Manager rest
+remove_head (MCons i st r) = r
+
+add_remove_inverse : (iface : EvSet) -> (st : Nat) -> (mgr : Manager ifaces) -> remove_head (add_handler iface st mgr) = mgr
+add_remove_inverse iface st mgr = Refl
+
+count_after_add : (iface : EvSet) -> (st : Nat) -> (mgr : Manager ifaces) -> count (add_handler iface st mgr) = S (count mgr)
+count_after_add iface st mgr = Refl

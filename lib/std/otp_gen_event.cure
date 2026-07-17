@@ -72,4 +72,19 @@ mod Std.Otp.GenEvent
   fn notify_preserves_ifaces(e: Event, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Equivalent(IfaceList, interfaces(notify(e, mgr)), interfaces(mgr)) = match mgr
     MNil()                 -> reflexive(INil())
     MCons(iface, st, rest) -> icons_cong(iface, notify_preserves_ifaces(e, rest))
+
+  ## Uninstall the front handler — the type records the SHRUNK interface list. (Only `MCons` can
+  ## have an `ICons` index, so the empty case is impossible and needs no clause.)
+  fn remove_head({iface: EvSet}, {rest: IfaceList}, mgr: Manager(ICons(iface, rest))) -> Manager(rest) = match mgr
+    MCons(i, st, r) -> r
+
+  ## **INSTALL/REMOVE ARE INVERSE.** Installing a handler and immediately removing it restores the
+  ## manager EXACTLY — `remove_head(add_handler(iface, st, mgr)) = mgr`. So dynamic handler
+  ## management is well-behaved: a transient handler leaves no trace on the configuration.
+  fn add_remove_inverse(iface: EvSet, st: Nat, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Equivalent(Manager(ifaces), remove_head(add_handler(iface, st, mgr)), mgr) =
+    reflexive(mgr)
+
+  ## Installing a handler increments the count; the interface list gains exactly the new entry.
+  fn count_after_add(iface: EvSet, st: Nat, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Equivalent(Nat, count(add_handler(iface, st, mgr)), S(count(mgr))) =
+    reflexive(S(count(mgr)))
 end

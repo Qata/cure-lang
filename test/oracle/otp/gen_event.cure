@@ -36,4 +36,10 @@ mod GenEvent
   fn notify_preserves_ifaces(e: Event, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Equivalent(IfaceList, interfaces(notify(e, mgr)), interfaces(mgr)) = match mgr
     MNil()                 -> reflexive(INil())
     MCons(iface, st, rest) -> icons_cong(iface, notify_preserves_ifaces(e, rest))
+  fn remove_head({iface: EvSet}, {rest: IfaceList}, mgr: Manager(ICons(iface, rest))) -> Manager(rest) = match mgr
+    MCons(i, st, r) -> r
+  fn add_remove_inverse(iface: EvSet, st: Nat, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Equivalent(Manager(ifaces), remove_head(add_handler(iface, st, mgr)), mgr) =
+    reflexive(mgr)
+  fn count_after_add(iface: EvSet, st: Nat, {ifaces: IfaceList}, mgr: Manager(ifaces)) -> Equivalent(Nat, count(add_handler(iface, st, mgr)), S(count(mgr))) =
+    reflexive(S(count(mgr)))
 end
