@@ -144,7 +144,28 @@ defmodule Cure.Stdlib.PreloadTest do
             end
 
             File.rm_rf!(tmp)
+
+            # C1: the try reloaded the STAGED module, which re-marked it sticky
+            # (purge/delete never removed the sticky entry, and a sticky module
+            # cannot be overwritten by preload). Evict it, reload the CANONICAL
+            # bytes from `_build/cure/ebin`, then re-stick.
+            :code.unstick_mod(module)
+            :code.purge(module)
+            :code.delete(module)
+            Cure.Stdlib.Preload.preload(kind: :all)
+            :code.stick_mod(module)
           end
+
+          assert :code.is_sticky(module)
+
+          # Consistency guard: the loaded bytes equal the canonical beam. As at
+          # Site 1 this is a consistency assertion rather than a discriminating
+          # red-check — the staged beam is harvested from the canonical
+          # `_build/cure/ebin`, so it is md5-identical regardless of eviction. Kept
+          # for symmetry and to catch the `priv/ebin`-fallback case.
+          canonical_beam = String.to_charlist("_build/cure/ebin/#{module}.beam")
+          {:ok, {^module, disk_md5}} = :beam_lib.md5(canonical_beam)
+          assert module.module_info(:md5) == disk_md5
 
         :skip ->
           File.rm_rf!(tmp)
@@ -194,7 +215,35 @@ defmodule Cure.Stdlib.PreloadTest do
         end
 
         File.rm_rf!(empty)
+
+        # C1: the try reloaded a JIT-from-source `Cure.Std.List`, which re-marked
+        # the module sticky (purge/delete never removed the sticky entry). A plain
+        # preload CANNOT overwrite a sticky module, so evict the test's version
+        # first, then reload the CANONICAL bytes from `_build/cure/ebin`, then
+        # re-stick — leaving the immutable-canonical surface later tests depend on.
+        :code.unstick_mod(module)
+        :code.purge(module)
+        :code.delete(module)
+        Cure.Stdlib.Preload.preload(kind: :all)
+        :code.stick_mod(module)
       end
+
+      # The invariant later tests depend on: after this test, `Cure.Std.List` is
+      # resident AND sticky, so no consumer hits a not-loaded module and no producer
+      # can clobber it.
+      assert :code.is_sticky(module)
+
+      # Consistency guard: the resident bytes equal the canonical beam. NB this is
+      # NOT a discriminating red-check — the JIT-from-source path above compiles the
+      # SAME `priv/std/list.cure` with the SAME compiler as the canonical
+      # `_build/cure/ebin` beam, so the two are md5-identical whether or not the
+      # eviction ran. That identity is itself the reassurance: this reload path can
+      # never leave a divergent or partial `Cure.Std.List` resident. The eviction is
+      # kept as insurance for any future JIT path whose bytes could drift.
+      # (`module_info(:md5)` is the loaded module's md5; `:beam_lib.md5/1` is the
+      # on-disk canonical's — verified equal for a module loaded from its own beam.)
+      {:ok, {^module, disk_md5}} = :beam_lib.md5(~c"_build/cure/ebin/Cure.Std.List.beam")
+      assert module.module_info(:md5) == disk_md5
     end
 
     test "silently no-ops when neither BEAM nor source is reachable" do
