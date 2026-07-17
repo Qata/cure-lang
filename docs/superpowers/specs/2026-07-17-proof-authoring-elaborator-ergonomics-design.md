@@ -174,6 +174,32 @@ the implicit-carrying path.
 
 ---
 
+## E5 — `##` comment lines between constructors in a `type` block are a syntax error
+
+**Symptom.** A `## …` doc-comment line placed BETWEEN constructor declarations inside a
+`type X indices (…)` block fails to parse (`syntax error` at each affected line). Comments are
+only accepted before the `type` (or another top-level decl), not interleaved with its
+constructors — so per-constructor documentation cannot sit next to the constructor it
+describes; it must be collected into the block-leading comment.
+
+**Repro.** In `Std.Otp.ExitSignal`, a `## normal + trapping: …` line before each `Step`
+constructor errored; moving all of them into the comment above `type Step` fixed it.
+
+**Root cause + layer.** P (lexer/parser) — the constructor-list grammar inside a `type` block
+does not admit comment tokens between entries.
+
+**Current workaround.** Put per-constructor prose in the block-leading `##` comment above the
+`type`. (Costs locality: the reader cross-references names to descriptions.)
+
+**Proposed change.** Allow `##` comment lines between constructors in a `type` block (skip them
+in the constructor-list production).
+
+**Layer/risk.** P. Low. Soundness-neutral (comments are non-semantic).
+
+**Status.** OPEN.
+
+---
+
 ## Confirmed non-gaps (do NOT chase these)
 
 Recorded so future sessions don't mistake them for gaps:

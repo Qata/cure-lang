@@ -33,6 +33,8 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [x] Typed monitor / DOWN-as-message (`MRef` carries `Accepted(TDown)`) — `otp_monitor.cure` *(NVLang: MonitorRef in grammar only)*
 - [x] Typed links + `trap_exit` dispatch (message-vs-death on the flag) — `otp_link.cure`
 - [x] Demonitor (`MRef` Active/Removed; DOWN-after-demonitor unconstructible) — `otp_demonitor.cure`
+- [x] Unlink (`LinkRef` Linked/Unlinked; no exit signal after unlink, keeping trap dispatch) — `otp_unlink.cure`
+- [x] Reason-dependent exit propagation (`Step` indexed by `Normal`/`Abnormal`/`Kill`; normal doesn't kill a non-trapper, kill is untrappable) — `otp_exit_signal.cure`
 
 ### A5. Timers (G4) — *no paper types timers*
 - [x] `send_after` typed; `TimerRef` Pending/Cancelled; fire-after-cancel unconstructible; `receive after` branch — `otp_timer.cure`
@@ -69,8 +71,8 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 
 ### B1. Near-term, in-Cure provable (small or elaborator-gated)
 - [x] `unlink` (demonitor-shape over `Link`, keeping the trap dispatch) — SHIPPED `otp_unlink.cure`
-- [ ] DOWN / EXIT **payloads**: reason term + monitor ref (currently DOWN/EXIT are tag-only)
-- [ ] Cascading exit-signal propagation across a link set (exit signal fan-out)
+- [x] EXIT **reason axis** — reason-dependent dispatch (`normal`/`abnormal`/`kill`) in `otp_exit_signal.cure`. Still open: a full reason *term* as payload, and monitor-ref correlation on DOWN
+- [ ] Cascading exit-signal propagation across a link set (exit signal fan-out) — now approachable: chain `SAbnormalProp`'s `Dead` into the dead process's own links
 - [ ] **E1** sibling-context refinement on `match` (elaborator ergonomics — removes the data-first tax) — spec `2026-07-17-proof-authoring-elaborator-ergonomics-design.md`
 - [ ] **E3 / task #15** cross-module resolution of implicit-carrying stdlib fns (lets proof lemmas factor across modules)
 - [ ] **E4** partial-app codegen (eta-expand explicit-arg partial applications)
