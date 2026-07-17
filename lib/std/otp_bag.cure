@@ -81,4 +81,31 @@ mod Std.Otp.Bag
     MA() -> reflexive(t)
     MB() -> reflexive(t)
     MC() -> reflexive(t)
+
+  ## Saturating predecessor: `mpred(Z) = Z`, `mpred(S n) = n`.
+  fn mpred(n: Nat) -> Nat = match n
+    Z()  -> Z()
+    S(m) -> m
+
+  ## **DELETE-ONE DECREMENTS THE MULTIPLICITY (saturating).** `count(k, delete_one(k, t)) =
+  ## mpred(count(k, t))` — removing a single occurrence drops `k`'s count by one, or leaves it at
+  ## zero if `k` was absent. Together with `insert_incr` this fully pins `count` under both
+  ## operations: insert `+1`, delete_one `−1` (clamped). Induction on the bag, casing both keys so
+  ## `keq` computes: at a matching head `delete_one` drops it and the head's `S(...)` cancels the
+  ## `mpred`; at a non-matching head both `count` and `delete_one` skip it and the tail carries by IH.
+  fn count_delete_one(k: MKey, t: Bag) -> Equivalent(Nat, count(k, delete_one(k, t)), mpred(count(k, t))) = match t
+    BNil()          -> reflexive(Z())
+    BCons(k2, rest) -> match k
+      MA() -> match k2
+        MA() -> reflexive(count(MA(), rest))
+        MB() -> count_delete_one(MA(), rest)
+        MC() -> count_delete_one(MA(), rest)
+      MB() -> match k2
+        MA() -> count_delete_one(MB(), rest)
+        MB() -> reflexive(count(MB(), rest))
+        MC() -> count_delete_one(MB(), rest)
+      MC() -> match k2
+        MA() -> count_delete_one(MC(), rest)
+        MB() -> count_delete_one(MC(), rest)
+        MC() -> reflexive(count(MC(), rest))
 end

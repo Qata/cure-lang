@@ -26,6 +26,8 @@ defmodule Cure.Stdlib.OtpBagTest do
         delete_insert(k, t)
       fn twice() -> Equivalent(Nat, count(MA(), insert(MA(), insert(MA(), BNil()))), S(S(Z()))) =
         insert_incr(MA(), insert(MA(), BNil()))
+      fn decr(k: MKey, t: Bag) -> Equivalent(Nat, count(k, delete_one(k, t)), mpred(count(k, t))) =
+        count_delete_one(k, t)
     end
     """
 

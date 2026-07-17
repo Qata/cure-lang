@@ -54,3 +54,19 @@ delete_insert : (k : MKey) -> (t : Bag) -> delete_one k (insert k t) = t
 delete_insert MA t = Refl
 delete_insert MB t = Refl
 delete_insert MC t = Refl
+
+mpred : Nat -> Nat
+mpred Z = Z
+mpred (S m) = m
+
+count_delete_one : (k : MKey) -> (t : Bag) -> count k (delete_one k t) = mpred (count k t)
+count_delete_one k BNil = Refl
+count_delete_one MA (BCons MA rest) = Refl
+count_delete_one MA (BCons MB rest) = count_delete_one MA rest
+count_delete_one MA (BCons MC rest) = count_delete_one MA rest
+count_delete_one MB (BCons MA rest) = count_delete_one MB rest
+count_delete_one MB (BCons MB rest) = Refl
+count_delete_one MB (BCons MC rest) = count_delete_one MB rest
+count_delete_one MC (BCons MA rest) = count_delete_one MC rest
+count_delete_one MC (BCons MB rest) = count_delete_one MC rest
+count_delete_one MC (BCons MC rest) = Refl
