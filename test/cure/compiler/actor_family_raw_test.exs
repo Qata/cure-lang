@@ -327,4 +327,31 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert {:ok, pid} = apply(:"Cure.Generated.RawFamilyBody", :start_link, [5])
     :gen_server.stop(pid)
   end
+
+  test "terse state+with+body template routes through the shared family raw emitter" do
+    # The `actor N state T with <payload> <body-declarations>` form (rule at
+    # actor.cure:187) carries a `with` seed AND a trailing definition block. The
+    # seed threads through the family as initial: Some(payload) (adapter
+    # emit_raw_state_initial_body) and the block through the NEW positional
+    # `Declarations until dedent` hole as body: Some(...). This behavioral pin
+    # replaces the retired Raw13 byte-golden: derive_actor_init emits
+    # init(args: Atom) = %[:ok, payload], so init/1 returns the seeded payload for
+    # any argument (behaviorally equivalent to the template's nullary
+    # start_link seeding), the default handle_cast is {:noreply, state}, and the
+    # spliced extra declaration is a callable function of the generated module.
+    # Per the corrected spec (d1aec7b4) the raw fold is behavioral-equivalence,
+    # NOT byte-identical.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyStateWithBody state Int with 0
+        fn helper() -> Int = 42
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyStateWithBody", :helper, []) == 42
+    assert apply(:"Cure.Generated.RawFamilyStateWithBody", :init, [:anything]) == {:ok, 0}
+    assert apply(:"Cure.Generated.RawFamilyStateWithBody", :handle_cast, [:ping, 7]) == {:noreply, 7}
+  end
 end
