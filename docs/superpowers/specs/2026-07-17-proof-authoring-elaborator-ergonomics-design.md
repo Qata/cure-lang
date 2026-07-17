@@ -284,15 +284,21 @@ elaborates. Full gate green (elab 1069, core 538, compiler exit 0). Regression t
 AND codegens. NOTE: E1/E2 (the match side) are the SAME family; the postponement idea transfers
 but the code path differs (this fixed the application side).
 
-**Residual (seen 2026-07-17 repeatedly — `AStar0`, `RAStart`, `IRefl`, `SVHere`).** The fixpoint
-solve handles a nullary indexed ctor whose index a SIBLING determines. It does NOT yet handle one
-in DEEP nested argument position when the determining constraint lives only in the enclosing
-call's expected type (e.g. `star_fold(APlusR(ATimes(…, AStar0())))`, `RAStep(RAStart(), …)`,
-`CRStep(TB, SVHere(), CRDone())`): the inner nullary ctor's index is left `:unsolved_metavariables`
-because the outer expected type isn't pushed inward far enough. Standing workaround: bind the
-sub-term to a typed helper `fn h() -> T(concrete indices) = <ctor>` (the checking-mode annotation
-pins the index), then use `h()` — same shape as `ra_start`. Full fix = push the checked type
-through nested constructor arguments (bidirectional propagation into ctor-arg positions).
+**Residual (seen 2026-07-17 repeatedly — `AStar0`, `RAStart`, `IRefl`, `SVHere`; ROOT CAUSE
+pinned 2026-07-18).** The fixpoint solve handles a nullary indexed ctor whose index a DIRECT
+sibling determines. It does NOT handle one whose index is an implicit of an ENCLOSING FUNCTION
+application. Exact repro: `star_fold(APlusR(ATimes(MkMS(S(Z),Z,Z), MkMS(Z,Z,Z), AAtomA(),
+AStar0())))` → `:unsolved_metavariables, AStar0`. Here `star_fold`'s implicit `{a}` IS solved —
+from the deep sibling `AAtomA` (which fixes `a = PAtom(TA)`) — but the *also-deep* `AStar0 :
+Accepts(PStar(a), 0)` is elaborated in its own nested `finish_ctor_app`, which zonks and finalizes
+its metavars EAGERLY (`finish_ctor_app`, elaborator.ex ~7156: `if Enum.any?(all, &has_meta?/1) ->
+{:error, {:unsolved_metavariables, cname}}`) — *before* the outer application solves `a`. So the
+inner ctor's metavar is a metavar in the OUTER metacontext but is finalized in an inner, isolated
+one. Full fix is ARCHITECTURAL: thread ONE shared metacontext through the whole application tree
+(or postpone per-ctor finalization to the top-level solve), not per-ctor eager finalization. NOT a
+bounded change like E11. Standing workaround (cheap, keep using): bind the sub-term to a typed
+helper `fn h() -> T(concrete indices) = <ctor>` (the checking-mode annotation pins the index),
+same shape as `ra_start`.
 
 ---
 
