@@ -5,9 +5,9 @@ defmodule Cure.Stdlib.OtpRestartIntensityTest do
   failure has only `FShutdown`. Re-checked every build via the stdlib preload; these tests pin
   the intensity bound — a supervisor cannot restart beyond its budget.
 
-  The bounded-run liveness theorem (`eventually_down`) is E6-blocked in Cure and lives as a
-  probe (`docs/research/process-types/probes/restart_intensity_liveness.cure`); it is not
-  exercised here.
+  The bounded-run liveness theorem (`eventually_down`: from budget `n`, `n` restarts then one
+  shutdown reach `Down`) is proved in the shipped module and exercised here — it was formerly
+  E6-blocked and is now unblocked by the constructor-argument deferral fix.
   """
   use ExUnit.Case, async: true
 
@@ -24,6 +24,12 @@ defmodule Cure.Stdlib.OtpRestartIntensityTest do
     fn on_fail({b1: Nat}, {p1: Phase}, {b2: Nat}, {p2: Phase}, sup: Sup(b1, p1), f: Fail(b1, p1, b2, p2)) -> Sup(b2, p2) = match f
       FRestart()  -> Alive()
       FShutdown() -> Stopped()
+    type FailRun indices (b1: Nat, p1: Phase, b2: Nat, p2: Phase)
+      FRDone : FailRun(b, p, b, p)
+      FRMore : Fail(b1, p1, bm, pm) -> FailRun(bm, pm, b2, p2) -> FailRun(b1, p1, b2, p2)
+    fn eventually_down(n: Nat) -> FailRun(n, Up, Z, Down) = match n
+      Z()  -> FRMore(FShutdown(), FRDone())
+      S(k) -> FRMore(FRestart(), eventually_down(k))
   """
 
   defp verdict(defs) do
@@ -56,5 +62,14 @@ defmodule Cure.Stdlib.OtpRestartIntensityTest do
     """
 
     assert verdict(defs) == :reject
+  end
+
+  test "the bounded-run liveness theorem holds at a concrete budget" do
+    # A budget-2 supervisor reaches Down after exactly two restarts and one shutdown.
+    defs = """
+      fn tolerates_two() -> FailRun(S(S(Z)), Up, Z, Down) = eventually_down(S(S(Z)))
+    """
+
+    assert verdict(defs) == :accept
   end
 end

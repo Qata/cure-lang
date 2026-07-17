@@ -9,4 +9,10 @@ mod RestartIntensity
   fn on_fail({b1: Nat}, {p1: Phase}, {b2: Nat}, {p2: Phase}, sup: Sup(b1, p1), f: Fail(b1, p1, b2, p2)) -> Sup(b2, p2) = match f
     FRestart()  -> Alive()
     FShutdown() -> Stopped()
+  type FailRun indices (b1: Nat, p1: Phase, b2: Nat, p2: Phase)
+    FRDone : FailRun(b, p, b, p)
+    FRMore : Fail(b1, p1, bm, pm) -> FailRun(bm, pm, b2, p2) -> FailRun(b1, p1, b2, p2)
+  fn eventually_down(n: Nat) -> FailRun(n, Up, Z, Down) = match n
+    Z()  -> FRMore(FShutdown(), FRDone())
+    S(k) -> FRMore(FRestart(), eventually_down(k))
 end
