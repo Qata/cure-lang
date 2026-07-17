@@ -64,3 +64,7 @@ twoparty_terminates : TwoParty g -> GRun g GEnd
 twoparty_terminates TPEnd = GRDone
 twoparty_terminates (TPAB t wf2) = grun_fire RA RB t (twoparty_terminates wf2)
 twoparty_terminates (TPBA t wf2) = grun_fire RB RA t (twoparty_terminates wf2)
+
+grun_preserves : TwoParty g -> GRun g g2 -> TwoParty g2
+grun_preserves wf GRDone = wf
+grun_preserves wf (GRStep st rest) = grun_preserves (twoparty_preserved wf st) rest

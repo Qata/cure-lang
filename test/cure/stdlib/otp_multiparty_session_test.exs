@@ -58,6 +58,18 @@ defmodule Cure.Stdlib.OtpMultipartySessionTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "grun_preserves: well-formedness is maintained across a whole protocol run" do
+    src = """
+    mod MpPres
+      use Std.Otp.MultipartySession
+      fn preserved({g: Global}, {g2: Global}, wf: TwoParty(g), run: GRun(g, g2)) -> TwoParty(g2) =
+        grun_preserves(wf, run)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "twoparty_terminates: a well-formed protocol runs all the way to GEnd (normalisation)" do
     src = """
     mod MpTerm

@@ -113,4 +113,13 @@ mod Std.Otp.MultipartySession
     TPEnd()      -> GRDone()
     TPAB(t, wf2) -> grun_fire(RA, RB, t, twoparty_terminates(wf2))
     TPBA(t, wf2) -> grun_fire(RB, RA, t, twoparty_terminates(wf2))
+
+  ## **GLOBAL SAFETY OVER A RUN.** A two-party protocol started well-formed stays well-formed
+  ## through EVERY step of its execution — `TwoParty(g)` and `GRun(g, g2)` yield `TwoParty(g2)`.
+  ## Induction over the run, applying `twoparty_preserved` at each firing. With `projection_duality`
+  ## this means the projected endpoints stay coherent at every reachable point of the protocol, not
+  ## just after a single step — the multi-step strengthening of `twoparty_preserved`.
+  fn grun_preserves({g: Global}, {g2: Global}, wf: TwoParty(g), run: GRun(g, g2)) -> TwoParty(g2) = match run
+    GRDone()          -> wf
+    GRStep(st, rest)  -> grun_preserves(twoparty_preserved(wf, st), rest)
 end

@@ -56,4 +56,7 @@ mod MultipartySession
     TPEnd()      -> GRDone()
     TPAB(t, wf2) -> grun_fire(RA, RB, t, twoparty_terminates(wf2))
     TPBA(t, wf2) -> grun_fire(RB, RA, t, twoparty_terminates(wf2))
+  fn grun_preserves({g: Global}, {g2: Global}, wf: TwoParty(g), run: GRun(g, g2)) -> TwoParty(g2) = match run
+    GRDone()          -> wf
+    GRStep(st, rest)  -> grun_preserves(twoparty_preserved(wf, st), rest)
 end
