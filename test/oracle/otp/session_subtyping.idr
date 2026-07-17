@@ -60,3 +60,17 @@ sub_dual_antitone (SubSend tg p2) = SubRecv tg (sub_dual_antitone p2)
 sub_dual_antitone (SubRecv tg p2) = SubSend tg (sub_dual_antitone p2)
 sub_dual_antitone (SubSel pl p2) = SubBra pl (sub_dual_antitone p2)
 sub_dual_antitone (SubBra pl p2) = SubSel pl (sub_dual_antitone p2)
+
+data Compat : SType -> SType -> Type where
+  CEnd : Compat SEnd SEnd
+  CSR : (tg : Tag) -> Compat l r -> Compat (SSend tg l) (SRecv tg r)
+  CRS : (tg : Tag) -> Compat l r -> Compat (SRecv tg l) (SSend tg r)
+  CSelBra : LSub sl sr -> Compat kl kr -> Compat (SSelect sl kl) (SBranch sr kr)
+  CBraSel : LSub sr sl -> Compat kl kr -> Compat (SBranch sl kl) (SSelect sr kr)
+
+narrow : Sub s s2 -> Compat s2 t -> Compat s t
+narrow SubEnd c = c
+narrow (SubSend tg sub2) (CSR tg c2) = CSR tg (narrow sub2 c2)
+narrow (SubRecv tg sub2) (CRS tg c2) = CRS tg (narrow sub2 c2)
+narrow (SubSel sl sub2) (CSelBra cl c2) = CSelBra (lsub_trans sl cl) (narrow sub2 c2)
+narrow (SubBra sl sub2) (CBraSel cl c2) = CBraSel (lsub_trans cl sl) (narrow sub2 c2)

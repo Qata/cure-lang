@@ -51,4 +51,22 @@ defmodule Cure.Stdlib.OtpSessionSubtypingTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "narrowing: a subtype is safely substitutable in a compatible session" do
+    # A selector offering only LA is a subtype of one offering LA|LB; if the latter is compatible
+    # with a brancher offering LA|LB, narrow gives compatibility of the smaller selector with it.
+    src = """
+    mod SubNarrow
+      use Std.Otp.SessionSubtyping
+      fn sub() -> Sub(SSelect(MkLSet(T(), F(), F()), SEnd()), SSelect(MkLSet(T(), T(), F()), SEnd())) =
+        SubSel(MkLSub(BLeT(), BLeF(), BLeF()), SubEnd())
+      fn c0() -> Compat(SSelect(MkLSet(T(), T(), F()), SEnd()), SBranch(MkLSet(T(), T(), F()), SEnd())) =
+        CSelBra(MkLSub(BLeT(), BLeT(), BLeF()), CEnd())
+      fn narrowed() -> Compat(SSelect(MkLSet(T(), F(), F()), SEnd()), SBranch(MkLSet(T(), T(), F()), SEnd())) =
+        narrow(sub(), c0())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

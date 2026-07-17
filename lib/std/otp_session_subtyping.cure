@@ -96,4 +96,30 @@ mod Std.Otp.SessionSubtyping
     SubRecv(tg, p2) -> SubSend(tg, sub_dual_antitone(p2))
     SubSel(pl, p2)  -> SubBra(pl, sub_dual_antitone(p2))
     SubBra(pl, p2)  -> SubSel(pl, sub_dual_antitone(p2))
+
+  ## Structural compatibility (can safely communicate): send meets receive, and a selector's
+  ## offered labels must be a SUBSET of the brancher's (`LSub`), so every label the selector might
+  ## pick is one the brancher handles.
+  type Compat indices (l: SType, r: SType)
+    CEnd    : Compat(SEnd, SEnd)
+    CSR     : (tg: Tag) -> Compat(l, r) -> Compat(SSend(tg, l), SRecv(tg, r))
+    CRS     : (tg: Tag) -> Compat(l, r) -> Compat(SRecv(tg, l), SSend(tg, r))
+    CSelBra : LSub(sl, sr) -> Compat(kl, kr) -> Compat(SSelect(sl, kl), SBranch(sr, kr))
+    CBraSel : LSub(sr, sl) -> Compat(kl, kr) -> Compat(SBranch(sl, kl), SSelect(sr, kr))
+
+  ## **SUBTYPING SOUNDNESS / NARROWING.** If `s` is a subtype of `s2` and `s2` can safely
+  ## communicate with `t`, then `s` can too — a subtype is SAFELY SUBSTITUTABLE in any compatible
+  ## session. Induction on the subtyping derivation; each choice case composes the label-set
+  ## witnesses with `lsub_trans` in the order its variance dictates (`s ⊆ s2 ⊆ t` for select, `t ⊆
+  ## s2 ⊆ s` for branch). This is the theorem that gives session subtyping its meaning.
+  fn narrow({s: SType}, {s2: SType}, {t: SType}, sub: Sub(s, s2), c: Compat(s2, t)) -> Compat(s, t) = match sub
+    SubEnd()          -> c
+    SubSend(tg, sub2) -> match c
+      CSR(tg2, c2) -> CSR(tg, narrow(sub2, c2))
+    SubRecv(tg, sub2) -> match c
+      CRS(tg2, c2) -> CRS(tg, narrow(sub2, c2))
+    SubSel(sl, sub2) -> match c
+      CSelBra(cl, c2) -> CSelBra(lsub_trans(sl, cl), narrow(sub2, c2))
+    SubBra(sl, sub2) -> match c
+      CBraSel(cl, c2) -> CBraSel(lsub_trans(cl, sl), narrow(sub2, c2))
 end
