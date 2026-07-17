@@ -57,7 +57,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [x] Decidable core: `tag_eq`, `decide_handles`, `decide_all_handled` (total, proof-carrying) — `otp_inference.cure`
 - [x] Inference LAWS: monotonicity, weakening/subtyping-transitivity, principality (`self_member`) — `otp_inference_laws.cure`
 - [x] ADEQUACY, sequential + branching (`BNil`/`BRecv`/`BSend`/`BSeq`): `preservation_at`, `coverage`, `adequacy` over runs — `otp_inference_adequacy.cure` *(the operational half Proof of Delivery deferred, tied to inference)*
-- [x] Pre-fixpoint bound (`lfp_le`, principality direction of Knaster–Tarski) via monotone Kleene iteration — **PROVED as probe** `docs/research/process-types/probes/fixpoint_prefixpoint_bound.cure` (not yet shipped)
+- [x] Pre-fixpoint bound (`lfp_le`, principality direction of Knaster–Tarski) via monotone Kleene iteration — **SHIPPED** `otp_inference_fixpoint.cure` (Idris `rel=same`)
 
 ### A12. Cross-cutting
 - [x] Exhaustiveness / dead-letter prevention (C8): kernel-certified totality + exhaustiveness on every proof term
@@ -68,7 +68,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 ## PART B — REMAINING (fine-grained), toward FULL formalisation
 
 ### B1. Near-term, in-Cure provable (small or elaborator-gated)
-- [ ] `unlink` (demonitor-shape over `Link`) — thin duplication of an existing pattern
+- [x] `unlink` (demonitor-shape over `Link`, keeping the trap dispatch) — SHIPPED `otp_unlink.cure`
 - [ ] DOWN / EXIT **payloads**: reason term + monitor ref (currently DOWN/EXIT are tag-only)
 - [ ] Cascading exit-signal propagation across a link set (exit signal fan-out)
 - [ ] **E1** sibling-context refinement on `match` (elaborator ergonomics — removes the data-first tax) — spec `2026-07-17-proof-authoring-elaborator-ergonomics-design.md`
@@ -78,7 +78,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 ### B2. Recursion fixpoint — genuine in-Cure research (Knaster–Tarski / Kleene)
 - [ ] `BRec` behaviour representation (recursion variable / de Bruijn) + `infer(BRec) = lfp(transfer)`
 - [ ] `lfp` construction via bounded Kleene iterate `iterate(f, ⊥, height)`
-- [ ] `?lfp_le` pre-fixpoint bound — **proved (probe), ready to ship**
+- [x] `?lfp_le` pre-fixpoint bound — **SHIPPED** `otp_inference_fixpoint.cure`
 - [ ] `?le_lfp` (lfp below any upper bound of pre-fixed points)
 - [ ] **STABILIZATION**: `iterate(f, ⊥, |Tag|)` IS a fixed point — needs finite-height counting (interface size ≤ |Tag|, strict-increase-or-fixed). *The hard half.*
 - [ ] `?map_lfp` (fixed-point property `f(lfp) = lfp`) — needed for BRec **coverage**
