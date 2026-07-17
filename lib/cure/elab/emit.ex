@@ -22,7 +22,7 @@ defmodule Cure.Elab.Emit do
 
   alias Cure.Compiler.BeamWriter
   alias Cure.Core.{Grade, Env, Inductive, Validator}
-  alias Cure.Elab.Erase
+  alias Cure.Elab.{Erase, Name}
 
   @line 1
 
@@ -38,9 +38,10 @@ defmodule Cure.Elab.Emit do
     module = Keyword.fetch!(opts, :module)
     names = Keyword.fetch!(opts, :functions)
     origins = Keyword.get(opts, :origins, %{})
+    emit_opts = Keyword.take(opts, [:prefix, :local_owners])
 
     with :ok <- reject_holes(env, names) do
-      BeamWriter.compile_and_load(module_forms(env, module, names, origins))
+      BeamWriter.compile_and_load(module_forms(env, module, names, origins, emit_opts))
     end
   end
 
@@ -80,7 +81,13 @@ defmodule Cure.Elab.Emit do
   self-contained module.
   """
   @spec compile_forms(Env.t(), module(), [atom()], map()) :: {:ok, [tuple()]} | {:error, term()}
-  def compile_forms(%Env{} = env, module, names, origins) do
+  def compile_forms(%Env{} = env, module, names, origins),
+    do: compile_forms(env, module, names, origins, [])
+
+  @doc "As `compile_forms/4`, with `emit_opts` (`:prefix`/`:local_owners`, see `module_forms/5`)."
+  @spec compile_forms(Env.t(), module(), [atom()], map(), keyword()) ::
+          {:ok, [tuple()]} | {:error, term()}
+  def compile_forms(%Env{} = env, module, names, origins, emit_opts) do
     # Type-level definitions — those whose type ends in a universe (`… -> Type`) —
     # are type synonyms / type-level computations (a large-elim kind selector, a
     # `Lens(s, a) = Optic(LensKind, s, a)` alias). They are computationally
@@ -96,7 +103,7 @@ defmodule Cure.Elab.Emit do
       emit_names = Enum.reject(names, &type_level_def?(env, &1))
 
       try do
-        {:ok, module_forms(env, module, emit_names, origins)}
+        {:ok, module_forms(env, module, emit_names, origins, emit_opts)}
       rescue
         e in ArgumentError -> {:error, {:cannot_emit, Exception.message(e)}}
       end
@@ -124,13 +131,38 @@ defmodule Cure.Elab.Emit do
 
   @doc "As `module_forms/3`, with an import-`origins` map (see `compile_forms/4`)."
   @spec module_forms(Env.t(), module(), [atom()], map()) :: [tuple()]
-  def module_forms(%Env{} = env, module, names, origins) do
+  def module_forms(%Env{} = env, module, names, origins),
+    do: module_forms(env, module, names, origins, [])
+
+  @doc """
+  As `module_forms/4`, with `emit_opts`:
+
+    * `:prefix` — module-name prefix for the emitted group (default `""`).
+    * `:local_owners` — owner strings emitted together in this call, whose
+      intra-group calls should target the prefixed module. `nil` (default) means
+      "derive from `names`"; only consulted when `:prefix` is non-empty.
+
+  With `prefix: ""` the forms are byte-for-byte identical to `module_forms/4`.
+  """
+  @spec module_forms(Env.t(), module(), [atom()], map(), keyword()) :: [tuple()]
+  def module_forms(%Env{} = env, module, names, origins, emit_opts) do
+    prefix = Keyword.get(emit_opts, :prefix, "")
+
+    local_owners =
+      case Keyword.get(emit_opts, :local_owners) do
+        nil -> names |> Enum.map(&Name.owner/1) |> Enum.reject(&is_nil/1) |> MapSet.new()
+        list -> MapSet.new(list)
+      end
+
     # Stash the import origins for the two `{:global, name}` lowering sites; the
     # de Bruijn `ctx` list threaded through `lower/3` has no room for a
     # module-level constant, and the Core `Env` is TCB. Reset on every call
     # (the /3 default passes `%{}`) so a self-contained module never inherits a
-    # previous module's origins.
+    # previous module's origins. The prefix/local-owners route intra-group
+    # cross-owner calls to a prefixed target under a non-empty prefix (C2).
     Process.put(:cure_emit_origins, origins)
+    Process.put(:cure_emit_prefix, prefix)
+    Process.put(:cure_emit_local_owners, local_owners)
 
     aliases =
       Enum.flat_map(names, fn name ->
@@ -152,6 +184,8 @@ defmodule Cure.Elab.Emit do
       ]
     after
       Process.delete(:cure_emit_origins)
+      Process.delete(:cure_emit_prefix)
+      Process.delete(:cure_emit_local_owners)
       Process.delete(:cure_emit_aliases)
     end
   end
@@ -176,6 +210,13 @@ defmodule Cure.Elab.Emit do
   # `module_forms/4`); `%{}` outside an emit or for a self-contained module.
   defp emit_origins, do: Process.get(:cure_emit_origins, %{})
 
+  # The module-name prefix for the group currently being emitted (`""` outside an
+  # emit or for the default un-prefixed path).
+  defp emit_prefix, do: Process.get(:cure_emit_prefix, "")
+
+  # The owner strings emitted together in this call (empty set outside an emit).
+  defp emit_local_owners, do: Process.get(:cure_emit_local_owners, MapSet.new())
+
   defp emit_aliases, do: Process.get(:cure_emit_aliases, %{})
 
   defp emit_name_for_key(name) do
@@ -197,8 +238,15 @@ defmodule Cure.Elab.Emit do
       Map.has_key?(emit_aliases(), name) ->
         :local
 
-      (owner = Cure.Elab.Name.owner(name)) != nil ->
-        {String.to_atom("Cure." <> owner), String.to_atom(Cure.Elab.Name.base(name))}
+      (owner = Name.owner(name)) != nil ->
+        base = String.to_atom(Name.base(name))
+        prefix = emit_prefix()
+
+        if prefix != "" and MapSet.member?(emit_local_owners(), owner) do
+          {String.to_atom(prefix <> "Cure." <> owner), base}
+        else
+          {String.to_atom("Cure." <> owner), base}
+        end
 
       (mod = Map.get(origins, name)) != nil ->
         {mod, name}
