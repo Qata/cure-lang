@@ -382,6 +382,36 @@ avoid inversion entirely and are proved.)
 
 ---
 
+## E10 — Higher-order function argument not reduced in a dependent index position
+
+**Symptom.** Proving the monad laws for a free-monad `Eff(a)` with `bind(m, f)`: a proof whose
+GOAL type mentions `bind(m, <function>)` fails to reduce the applied function. Concretely (a) a
+LAMBDA in an `Equivalent` index — `Equivalent(Eff, bind(m, fn(y) -> Pure(y)), m)` — crashes
+normalisation with `Eval.apply: … is not a function` and the bound `y` mis-resolved to a global;
+(b) a NAMED function passed there — `bind(m, ret)` — yields `:branch_type` because `bind(Pure(x),
+ret)` is not reduced through `ret` during conversion; (c) a PARTIAL application there —
+`bind(m, kcomp(f, g))` — likewise does not reduce. First-order proofs are unaffected (the
+value-less effect algebra was re-stated as a MONOID `(Eff, seq, ENil)` and its laws proved).
+
+**Root cause + layer.** K (normaliser) + E. Reducing `bind` applied to a concrete continuation in
+a *type/index* position requires β/δ-reduction of the applied function under the motive; the
+kernel's conversion does not drive this for a lambda (whose closure mis-captures the binder here),
+a δ-unfoldable name, or an under-applied global. In *term* position the same reductions work — it
+is specifically the index/conversion path.
+
+**Semantics.** No soundness impact; a completeness/expressivity gap. The fix is to normalise
+applied functions (β for lambdas, δ for names, saturation for partial applications) inside
+conversion when they occur in an index, and to fix the lambda-closure capture in that path.
+
+**Workaround.** For value-less effects, use the first-order MONOID formulation (no continuation
+function) — `Std.Otp.EffAlgebra` proves left/right identity + associativity of `seq`. The
+value-returning free-monad `bind` and its three monad laws stay blocked on this.
+
+**Status.** OPEN. Related to E4 (partial-app codegen) but distinct: E4 is codegen of a partial
+application; E10 is *reduction* of an applied function during type conversion.
+
+---
+
 ## Maintenance
 
 Append new entries as `E<n>` with the same fields. When an entry lands, mark it DONE with the
