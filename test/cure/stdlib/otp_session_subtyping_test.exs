@@ -52,6 +52,18 @@ defmodule Cure.Stdlib.OtpSessionSubtypingTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "sub_antisym: mutual subtypes are structurally equal (partial order)" do
+    src = """
+    mod SubAnti
+      use Std.Otp.SessionSubtyping
+      fn eq({s: SType}, {t: SType}, p: Sub(s, t), q: Sub(t, s)) -> Equivalent(SType, s, t) =
+        sub_antisym(p, q)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "narrowing: a subtype is safely substitutable in a compatible session" do
     # A selector offering only LA is a subtype of one offering LA|LB; if the latter is compatible
     # with a brancher offering LA|LB, narrow gives compatibility of the smaller selector with it.

@@ -74,3 +74,32 @@ narrow (SubSend tg sub2) (CSR tg c2) = CSR tg (narrow sub2 c2)
 narrow (SubRecv tg sub2) (CRS tg c2) = CRS tg (narrow sub2 c2)
 narrow (SubSel sl sub2) (CSelBra cl c2) = CSelBra (lsub_trans sl cl) (narrow sub2 c2)
 narrow (SubBra sl sub2) (CBraSel cl c2) = CBraSel (lsub_trans cl sl) (narrow sub2 c2)
+
+ble_antisym : BLe x y -> BLe y x -> x = y
+ble_antisym BLeF BLeF = Refl
+ble_antisym BLeT q = Refl
+
+mklset_cong : a1 = a2 -> b1 = b2 -> c1 = c2 -> MkLSet a1 b1 c1 = MkLSet a2 b2 c2
+mklset_cong Refl Refl Refl = Refl
+
+lsub_antisym : LSub s t -> LSub t s -> s = t
+lsub_antisym (MkLSub pa pb pc) (MkLSub qa qb qc) = mklset_cong (ble_antisym pa qa) (ble_antisym pb qb) (ble_antisym pc qc)
+
+ssend_cong : (tg : Tag) -> x = y -> SSend tg x = SSend tg y
+ssend_cong tg prf = cong (SSend tg) prf
+
+srecv_cong : (tg : Tag) -> x = y -> SRecv tg x = SRecv tg y
+srecv_cong tg prf = cong (SRecv tg) prf
+
+sselect_cong2 : s1 = s2 -> x = y -> SSelect s1 x = SSelect s2 y
+sselect_cong2 Refl Refl = Refl
+
+sbranch_cong2 : s1 = s2 -> x = y -> SBranch s1 x = SBranch s2 y
+sbranch_cong2 Refl Refl = Refl
+
+sub_antisym : Sub s t -> Sub t s -> s = t
+sub_antisym SubEnd SubEnd = Refl
+sub_antisym (SubSend tg p2) (SubSend tg q2) = ssend_cong tg (sub_antisym p2 q2)
+sub_antisym (SubRecv tg p2) (SubRecv tg q2) = srecv_cong tg (sub_antisym p2 q2)
+sub_antisym (SubSel pl p2) (SubSel ql q2) = sselect_cong2 (lsub_antisym pl ql) (sub_antisym p2 q2)
+sub_antisym (SubBra pl p2) (SubBra ql q2) = sbranch_cong2 (lsub_antisym ql pl) (sub_antisym p2 q2)

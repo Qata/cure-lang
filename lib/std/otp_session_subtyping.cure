@@ -26,6 +26,11 @@ mod Std.Otp.SessionSubtyping
     BLeF() -> BLeF()
     BLeT() -> match q
       BLeT() -> BLeT()
+  ## The boolean order is ANTISYMMETRIC: `x ≤ y` and `y ≤ x` force `x = y`.
+  fn ble_antisym({x: B}, {y: B}, p: BLe(x, y), q: BLe(y, x)) -> Equivalent(B, x, y) = match p
+    BLeF() -> match q
+      BLeF() -> reflexive(F())
+    BLeT() -> reflexive(T())
 
   ## A label set over `LA`/`LB`/`LC`: three presence bits.
   type LSet = MkLSet(B, B, B)
@@ -38,6 +43,16 @@ mod Std.Otp.SessionSubtyping
   fn lsub_trans({s: LSet}, {u: LSet}, {v: LSet}, p: LSub(s, u), q: LSub(u, v)) -> LSub(s, v) = match p
     MkLSub(pa, pb, pc) -> match q
       MkLSub(qa, qb, qc) -> MkLSub(ble_trans(pa, qa), ble_trans(pb, qb), ble_trans(pc, qc))
+
+  ## Congruence for `MkLSet` under componentwise equality.
+  fn mklset_cong({a1: B}, {a2: B}, {b1: B}, {b2: B}, {c1: B}, {c2: B}, ea: Equivalent(B, a1, a2), eb: Equivalent(B, b1, b2), ec: Equivalent(B, c1, c2)) -> Equivalent(LSet, MkLSet(a1, b1, c1), MkLSet(a2, b2, c2)) =
+    rewrite ea in rewrite eb in rewrite ec in reflexive(MkLSet(a2, b2, c2))
+
+  ## Label-set subset is ANTISYMMETRIC: `s ⊆ t` and `t ⊆ s` force `s = t` (componentwise
+  ## `ble_antisym`).
+  fn lsub_antisym({s: LSet}, {t: LSet}, p: LSub(s, t), q: LSub(t, s)) -> Equivalent(LSet, s, t) = match p
+    MkLSub(pa, pb, pc) -> match q
+      MkLSub(qa, qb, qc) -> mklset_cong(ble_antisym(pa, qa), ble_antisym(pb, qb), ble_antisym(pc, qc))
 
   type Tag = TA | TB | TC
   ## A session type: send/receive, internal choice (⊕, `SSelect`) and external choice (&,
@@ -122,4 +137,30 @@ mod Std.Otp.SessionSubtyping
       CSelBra(cl, c2) -> CSelBra(lsub_trans(sl, cl), narrow(sub2, c2))
     SubBra(sl, sub2) -> match c
       CBraSel(cl, c2) -> CBraSel(lsub_trans(cl, sl), narrow(sub2, c2))
+
+  ## Congruences for the session constructors under equality of continuations / label sets.
+  fn ssend_cong(tg: Tag, {x: SType}, {y: SType}, e: Equivalent(SType, x, y)) -> Equivalent(SType, SSend(tg, x), SSend(tg, y)) =
+    rewrite e in reflexive(SSend(tg, y))
+  fn srecv_cong(tg: Tag, {x: SType}, {y: SType}, e: Equivalent(SType, x, y)) -> Equivalent(SType, SRecv(tg, x), SRecv(tg, y)) =
+    rewrite e in reflexive(SRecv(tg, y))
+  fn sselect_cong2({s1: LSet}, {s2: LSet}, {x: SType}, {y: SType}, es: Equivalent(LSet, s1, s2), ek: Equivalent(SType, x, y)) -> Equivalent(SType, SSelect(s1, x), SSelect(s2, y)) =
+    rewrite es in rewrite ek in reflexive(SSelect(s2, y))
+  fn sbranch_cong2({s1: LSet}, {s2: LSet}, {x: SType}, {y: SType}, es: Equivalent(LSet, s1, s2), ek: Equivalent(SType, x, y)) -> Equivalent(SType, SBranch(s1, x), SBranch(s2, y)) =
+    rewrite es in rewrite ek in reflexive(SBranch(s2, y))
+
+  ## **SUBTYPING IS ANTISYMMETRIC.** Mutual subtypes are structurally equal — `Sub(s, t)` and
+  ## `Sub(t, s)` force `s = t`. Induction on both derivations; the choice cases use `lsub_antisym`
+  ## on the two label-set witnesses (in the order each variance supplies them). With `sub_refl` and
+  ## `sub_trans`, `Sub` is thus a PARTIAL ORDER on session types.
+  fn sub_antisym({s: SType}, {t: SType}, p: Sub(s, t), q: Sub(t, s)) -> Equivalent(SType, s, t) = match p
+    SubEnd() -> match q
+      SubEnd() -> reflexive(SEnd())
+    SubSend(tg, p2) -> match q
+      SubSend(tg2, q2) -> ssend_cong(tg, sub_antisym(p2, q2))
+    SubRecv(tg, p2) -> match q
+      SubRecv(tg2, q2) -> srecv_cong(tg, sub_antisym(p2, q2))
+    SubSel(pl, p2) -> match q
+      SubSel(ql, q2) -> sselect_cong2(lsub_antisym(pl, ql), sub_antisym(p2, q2))
+    SubBra(pl, p2) -> match q
+      SubBra(ql, q2) -> sbranch_cong2(lsub_antisym(ql, pl), sub_antisym(p2, q2))
 end
