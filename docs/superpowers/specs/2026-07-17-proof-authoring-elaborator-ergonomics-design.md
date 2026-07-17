@@ -133,6 +133,14 @@ substitution transports their equations without making them computationally rele
 Authors can request stable source names with the existing unforced named-implicit
 pattern syntax; data re-matches expose relevant runtime fields naturally.
 
+**Residual (seen 2026-07-17 in `Std.Otp.Conversation` / `Std.Otp.GenStatem`).** A
+*relevant* index existential still can't be named in a proof body — e.g. `CRStep`'s
+`t` (needed for the `MCons t …` congruence) or `SStep`'s split counts (needed for the
+measure). The standing workaround is to add the value as an EXPLICIT constructor FIELD
+(`CRStep : (t : Tag) -> …`, `SHandle : (p q : Nat) -> …`) so a data-match binds it, plus a
+small congruence helper (`mcons_cong`) instead of an inline `reflexive` over the unnameable
+index. Full fix = surface named-implicit *binders* on constructor patterns.
+
 ---
 
 ## E3 — Cross-module resolution of implicit-carrying stdlib functions (`:unknown_global`)
@@ -275,6 +283,16 @@ elaborates. Full gate green (elab 1069, core 538, compiler exit 0). Regression t
 `ctor_arg_deferral_test.exs`; the restart-intensity bounded-run liveness theorem now elaborates
 AND codegens. NOTE: E1/E2 (the match side) are the SAME family; the postponement idea transfers
 but the code path differs (this fixed the application side).
+
+**Residual (seen 2026-07-17 repeatedly — `AStar0`, `RAStart`, `IRefl`, `SVHere`).** The fixpoint
+solve handles a nullary indexed ctor whose index a SIBLING determines. It does NOT yet handle one
+in DEEP nested argument position when the determining constraint lives only in the enclosing
+call's expected type (e.g. `star_fold(APlusR(ATimes(…, AStar0())))`, `RAStep(RAStart(), …)`,
+`CRStep(TB, SVHere(), CRDone())`): the inner nullary ctor's index is left `:unsolved_metavariables`
+because the outer expected type isn't pushed inward far enough. Standing workaround: bind the
+sub-term to a typed helper `fn h() -> T(concrete indices) = <ctor>` (the checking-mode annotation
+pins the index), then use `h()` — same shape as `ra_start`. Full fix = push the checked type
+through nested constructor arguments (bidirectional propagation into ctor-arg positions).
 
 ---
 
