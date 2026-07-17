@@ -476,17 +476,8 @@ defmodule Cure.Migrate do
   # here, a builtin, or directly imported. Best-effort and FAIL-OPEN — an
   # unresolvable import (non-stdlib module, missing source dir, read/parse
   # failure) contributes nothing rather than crashing the warn-only lint.
-  # The stdlib modules the elaborator auto-imports into EVERY module with no
-  # `use` statement (`Cure.Elab.Program.@auto_prelude`). A file like `proof.cure`
-  # references `Nat`/`Z`/`S` with no import node at all — it gets them from this
-  # implicit prelude — so their exported names must seed the ctx exactly as a
-  # direct `use` would, or the auto-imported `Z` is misread as a free type var.
-  # Duplicated (not imported) to keep the warn-only lint decoupled from the
-  # elaborator's private attr; keep in sync with program.ex if the prelude grows.
-  @auto_prelude ~w(Std.Bool Std.Nat Std.Sigma Std.Int Std.Float Std.Binary Std.Bounded)
-
   defp imported_names(ast, file) do
-    sources = Enum.uniq(collect_import_sources(ast, []) ++ @auto_prelude)
+    sources = Enum.uniq(collect_import_sources(ast, []) ++ prelude_sources())
     # User (non-`Std.*`) imports have no path convention — Cure resolves them by
     # co-compilation, not by name→path — so they cannot be read the way a stdlib
     # source is. The only handle a single-file lint has is the sibling `.cure`
@@ -503,6 +494,39 @@ defmodule Cure.Migrate do
       case names do
         {:ok, ns} -> MapSet.union(acc, ns)
         :error -> acc
+      end
+    end)
+  end
+
+  # Prelude membership lives at the definition site. The migration linter reads
+  # the same `@prelude` markers as the loader instead of maintaining a second
+  # compiler-owned module list.
+  defp prelude_sources do
+    dirs = Cure.Stdlib.Paths.source_dirs()
+    key = {:migrate_prelude_sources, dirs}
+
+    case Process.get(key) do
+      nil ->
+        sources = compute_prelude_sources(dirs)
+        Process.put(key, sources)
+        sources
+
+      sources ->
+        sources
+    end
+  end
+
+  defp compute_prelude_sources(dirs) do
+    dirs
+    |> Enum.flat_map(&Path.wildcard(Path.join(&1, "*.cure")))
+    |> Enum.uniq()
+    |> Enum.flat_map(fn path ->
+      with {:ok, src} <- File.read(path),
+           true <- Regex.match?(~r/^\s*@prelude\s*$/m, src),
+           {:ok, name} <- module_name_of_file(path) do
+        [name]
+      else
+        _ -> []
       end
     end)
   end
@@ -534,10 +558,11 @@ defmodule Cure.Migrate do
   # stdlib size, which times out the whole-stdlib monotone test as the tree grows. The
   # mtime in the key keeps it correct if a source is rewritten mid-process (temp files).
   defp exported_names_of_file(path) do
-    mtime = case File.stat(path, time: :posix) do
-      {:ok, %File.Stat{mtime: t}} -> t
-      _ -> :nostat
-    end
+    mtime =
+      case File.stat(path, time: :posix) do
+        {:ok, %File.Stat{mtime: t}} -> t
+        _ -> :nostat
+      end
 
     key = {:mig_exports, path, mtime}
 

@@ -138,15 +138,28 @@ defmodule Cure.Core.Env do
         name
 
       true ->
-        case Enum.filter(Map.keys(table), fn key ->
-               is_atom(key) and Cure.Elab.Name.qualified?(key) and
-                 Cure.Elab.Name.base(key) == Atom.to_string(name)
-             end) do
+        # Last resort: the name is bare and unowned, so find the unique
+        # owner-qualified key whose base it is. This walks every key in the
+        # table, so keep the per-key work to a single split, and hoist the
+        # target spelling out of the loop rather than re-deriving it per key.
+        target = Atom.to_string(name)
+
+        case Enum.filter(Map.keys(table), &owned_alias?(&1, target)) do
           [key] -> key
           _ -> name
         end
     end
   end
+
+  # Whether `key` is an owner-qualified name whose base is `target`.
+  defp owned_alias?(key, target) when is_atom(key) do
+    case Cure.Elab.Name.split(key) do
+      {nil, _base} -> false
+      {_owner, base} -> base == target
+    end
+  end
+
+  defp owned_alias?(_key, _target), do: false
 
   @doc "Register a primitive base type: surface name → its Core type node."
   @spec put_primitive(t(), String.t(), tuple()) :: t()

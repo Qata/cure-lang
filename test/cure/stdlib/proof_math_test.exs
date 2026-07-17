@@ -51,4 +51,25 @@ defmodule Cure.Stdlib.ProofMathTest do
 
     assert {:ok, _environment} = Program.elaborate(source)
   end
+
+  test "natural-number order decisions and preservation carry evidence" do
+    source = """
+    mod ProofMathOrderBattery
+      use Std.Proof.Math
+
+      fn two_is_at_most_three() -> Decision(IsLessThanOrEqual(S(S(Z)), S(S(S(Z))))) =
+        decide_is_less_than_or_equal(S(S(Z)), S(S(S(Z))))
+
+      fn three_is_not_less_than_two() -> Decision(IsLessThan(S(S(S(Z))), S(S(Z)))) =
+        decide_is_less_than(S(S(S(Z))), S(S(Z)))
+
+      fn zero_is_less_than_one() -> IsLessThan(Z, S(Z)) = ZeroIsLessThanSuccessor()
+
+      fn shifted_strict_order() -> IsLessThan(S(S(Z)), S(S(S(Z)))) =
+        adding_the_same_number_preserves_less_than(S(S(Z)), zero_is_less_than_one())
+    end
+    """
+
+    assert {:ok, _environment} = Program.elaborate(source)
+  end
 end

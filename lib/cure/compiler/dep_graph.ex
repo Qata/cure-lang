@@ -11,7 +11,7 @@ defmodule Cure.Compiler.DepGraph do
       inside the compile set. These gate compile order: classic codegen
       resolves `use`-imported unqualified calls by probing loaded beams.
     * **closure-edges** — the superset (`use` + qualified-call targets +
-      auto-prelude). These describe what must be *loadable at runtime*
+      `@prelude` providers). These describe what must be *loadable at runtime*
       and drive preload closure, never compile order: qualified calls
       lower syntactically and are order-free.
 
@@ -44,8 +44,6 @@ defmodule Cure.Compiler.DepGraph do
   # Behavior-shaped declarations are standard-library syntax macros and arrive
   # here as generic `lift_module` values, never as compiler-owned object kinds.
   @module_container_types [:module, :proof]
-  @auto_prelude ["Std.Bool", "Std.Nat"]
-  @auto_prelude_types %{"Std.Bool" => "Bool", "Std.Nat" => "Nat"}
 
   @spec scan([Path.t()], keyword()) ::
           {:ok, t()} | {:error, {:duplicate_module, String.t(), [Path.t()]}}
@@ -63,9 +61,15 @@ defmodule Cure.Compiler.DepGraph do
 
         universe = MapSet.union(known, MapSet.new(Map.keys(modules)))
 
+        prelude_modules =
+          nodes
+          |> Map.values()
+          |> Enum.filter(&Map.get(&1, :prelude_provider?, false))
+          |> MapSet.new(& &1.module)
+
         nodes =
           Map.new(nodes, fn {path, node} ->
-            {path, finalize_node(node, modules, universe)}
+            {path, finalize_node(node, modules, universe, prelude_modules)}
           end)
 
         {:ok, %__MODULE__{nodes: nodes, modules: modules}}
@@ -202,19 +206,8 @@ defmodule Cure.Compiler.DepGraph do
               uses = collect_uses(ast)
               qualified = collect_qualified_targets(ast)
 
-              declared_types =
-                walk(ast, MapSet.new(), fn
-                  {:container, m, _}, acc when is_list(m) ->
-                    if Keyword.get(m, :container_type) in [:enum, :struct],
-                      do: MapSet.put(acc, Keyword.get(m, :name)),
-                      else: acc
-
-                  _n, acc ->
-                    acc
-                end)
-
               base
-              |> Map.put(:declared_types, declared_types)
+              |> Map.put(:prelude_provider?, prelude_decorated?(ast))
               |> Map.merge(%{
                 module: module,
                 line: line,
@@ -226,14 +219,14 @@ defmodule Cure.Compiler.DepGraph do
     end
   end
 
-  defp finalize_node(%{blank?: true} = node, _modules, _universe), do: node
-  defp finalize_node(%{parse_error: e} = node, _modules, _universe) when e != nil, do: node
+  defp finalize_node(%{blank?: true} = node, _modules, _universe, _prelude), do: node
+  defp finalize_node(%{parse_error: e} = node, _modules, _universe, _prelude) when e != nil, do: node
 
-  defp finalize_node(node, _modules, universe) do
+  defp finalize_node(node, _modules, universe, prelude_modules) do
     closure =
       node.closure_deps
       |> Enum.filter(&MapSet.member?(universe, &1))
-      |> Kernel.++(auto_prelude_deps(node, universe))
+      |> Kernel.++(Enum.filter(prelude_modules, &MapSet.member?(universe, &1)))
       |> Enum.reject(&(&1 == node.module))
       |> Enum.uniq()
       |> Enum.sort()
@@ -246,18 +239,18 @@ defmodule Cure.Compiler.DepGraph do
     %{node | closure_deps: closure, order_deps: order_deps}
   end
 
-  defp auto_prelude_deps(node, universe) do
-    declared = declared_type_names_of(node)
+  defp prelude_decorated?(ast) do
+    walk(ast, false, fn
+      {:property, meta, _children}, false when is_list(meta) ->
+        Keyword.get(meta, :name) == "prelude"
 
-    Enum.filter(@auto_prelude, fn prelude ->
-      MapSet.member?(universe, prelude) and prelude != node.module and
-        not MapSet.member?(declared, Map.fetch!(@auto_prelude_types, prelude))
+      {_tag, meta, _children}, false when is_list(meta) ->
+        match?({:prelude, _}, Keyword.get(meta, :decorator))
+
+      _node, found ->
+        found
     end)
   end
-
-  # Declared enum/struct type names are stashed on the node during scan via
-  # the process-free path below; recomputed here from closure scan output.
-  defp declared_type_names_of(node), do: Map.get(node, :declared_types, MapSet.new())
 
   defp find_module({:container, meta, _body}) when is_list(meta) do
     if Keyword.get(meta, :container_type) in @module_container_types do

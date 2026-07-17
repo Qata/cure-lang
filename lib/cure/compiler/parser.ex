@@ -42,9 +42,14 @@ defmodule Cure.Compiler.Parser do
 
   # -- Parser State ----------------------------------------------------------
 
+  # `tokens` holds a *tuple*, not a list, so `peek/1` is O(1) `elem/2` rather
+  # than an O(pos) `Enum.at/2` walk; `count` caches the arity so `peek/1` never
+  # pays an O(n) `length/1`. Together these keep parsing linear in token count.
+  # Always write it via `put_tokens/2` — never `%{state | tokens: some_list}`.
   defstruct [
     :tokens,
     :file,
+    count: 0,
     pos: 0,
     errors: [],
     emit_events: false,
@@ -140,7 +145,8 @@ defmodule Cure.Compiler.Parser do
     # Phase 1 (harvest): parse once with NO active macros, keep only the local
     # macro grammars. Use-sites may mis-parse here; we discard everything but
     # the {:macro_def, …} nodes and their (recovered) errors.
-    harvest_state = %__MODULE__{tokens: tokens, file: file, emit_events: false, edition: edition}
+    harvest_state =
+      put_tokens(%__MODULE__{file: file, emit_events: false, edition: edition}, tokens)
     {harvest_exprs, _harvest_state} = parse_program(harvest_state)
     active = harvest_active_macros(harvest_exprs)
     computed = harvest_computed_macros(harvest_exprs)
@@ -155,7 +161,6 @@ defmodule Cure.Compiler.Parser do
       end
 
     state = %__MODULE__{
-      tokens: tokens,
       file: file,
       emit_events: emit?,
       edition: edition,
@@ -165,6 +170,8 @@ defmodule Cure.Compiler.Parser do
       computed_macros: computed,
       literal_macros: literal
     }
+
+    state = put_tokens(state, tokens)
 
     {exprs, state} = parse_program(state)
 
@@ -287,16 +294,19 @@ defmodule Cure.Compiler.Parser do
 
     eof = %Token{type: :eof, value: nil, line: 0, col: 0}
 
-    state = %__MODULE__{
-      tokens: use_site_tokens ++ [eof],
-      file: "example",
-      emit_events: false,
-      builtin_macros: %{},
-      builtin_computed_macros: %{},
-      active_macros: active,
-      computed_macros: computed,
-      literal_macros: literal
-    }
+    state =
+      put_tokens(
+        %__MODULE__{
+          file: "example",
+          emit_events: false,
+          builtin_macros: %{},
+          builtin_computed_macros: %{},
+          active_macros: active,
+          computed_macros: computed,
+          literal_macros: literal
+        },
+        use_site_tokens ++ [eof]
+      )
 
     {ast, state} = parse_expr(state, 0)
 
@@ -856,7 +866,7 @@ defmodule Cure.Compiler.Parser do
          bindings,
          progress
        ) do
-    remaining = Enum.drop(state.tokens, state.pos)
+    remaining = tokens_from(state, state.pos)
 
     case MacroRaw.capture(remaining, delimiter) do
       {:ok, captured, _rest} ->
@@ -948,7 +958,7 @@ defmodule Cure.Compiler.Parser do
   defp put_repeated_binding(bindings, _segment, _values), do: bindings
 
   defp capture_family_body(state) do
-    remaining = Enum.drop(state.tokens, state.pos)
+    remaining = tokens_from(state, state.pos)
     target_indent = Enum.find_value(remaining, &indent_value/1)
 
     case target_indent do
@@ -975,13 +985,15 @@ defmodule Cure.Compiler.Parser do
   defp parse_family_body(tokens, family_meta, parser_state) do
     target_indent = Enum.find_value(tokens, &indent_value/1) || 0
 
-    family_state = %{
-      parser_state
-      | tokens: tokens ++ [%Token{type: :dedent, value: target_indent, line: 0, col: 0}, eof_token(peek(parser_state))],
-        pos: 0,
-        errors: [],
-        fresh_counter: parser_state.fresh_counter
-    }
+    # Built against `parser_state` before its tokens are swapped out.
+    family_tokens =
+      tokens ++ [%Token{type: :dedent, value: target_indent, line: 0, col: 0}, eof_token(peek(parser_state))]
+
+    family_state =
+      put_tokens(
+        %{parser_state | pos: 0, errors: [], fresh_counter: parser_state.fresh_counter},
+        family_tokens
+      )
 
     family_state = skip_newlines(family_state)
 
@@ -1134,12 +1146,12 @@ defmodule Cure.Compiler.Parser do
   defp consume_raw_delimiter?(delimiter), do: delimiter not in ["dedent", "newline"]
 
   defp parse_code_until(state, delimiter) do
-    remaining = Enum.drop(state.tokens, state.pos)
+    remaining = tokens_from(state, state.pos)
 
     case split_code_until(remaining, delimiter, nil, []) do
       {:ok, prefix, delimiter_token} ->
         boundary = code_boundary_token(prefix, delimiter_token)
-        parse_state = %{state | tokens: prefix ++ [boundary, eof_token(delimiter_token)], pos: 0}
+        parse_state = put_tokens(%{state | pos: 0}, prefix ++ [boundary, eof_token(delimiter_token)])
         parse_state = skip_newlines(parse_state)
         {arg, parse_state} = parse_expr(parse_state, 0)
         state = %{state | errors: parse_state.errors, fresh_counter: parse_state.fresh_counter}
@@ -1814,18 +1826,21 @@ defmodule Cure.Compiler.Parser do
     eof = %Token{type: :eof, value: nil, line: 0, col: 0}
     context = context || parser_state.expansion_context
 
-    state = %__MODULE__{
-      tokens: tokens ++ [eof],
-      file: parser_state.file,
-      emit_events: false,
-      edition: parser_state.edition,
-      builtin_macros: parser_state.builtin_macros,
-      builtin_computed_macros: parser_state.builtin_computed_macros,
-      active_macros: parser_state.active_macros,
-      computed_macros: parser_state.computed_macros,
-      literal_macros: parser_state.literal_macros,
-      expansion_context: context
-    }
+    state =
+      put_tokens(
+        %__MODULE__{
+          file: parser_state.file,
+          emit_events: false,
+          edition: parser_state.edition,
+          builtin_macros: parser_state.builtin_macros,
+          builtin_computed_macros: parser_state.builtin_computed_macros,
+          active_macros: parser_state.active_macros,
+          computed_macros: parser_state.computed_macros,
+          literal_macros: parser_state.literal_macros,
+          expansion_context: context
+        },
+        tokens ++ [eof]
+      )
 
     {exprs, state} = parse_program(state)
 
@@ -2567,7 +2582,8 @@ defmodule Cure.Compiler.Parser do
         {:expr, expr_tokens} ->
           # Append an EOF token so the sub-parser terminates
           sub_tokens = expr_tokens ++ [Token.new(:eof, nil, token.line, token.col)]
-          sub_state = %__MODULE__{tokens: sub_tokens, file: state.file, emit_events: false}
+          sub_state =
+            put_tokens(%__MODULE__{file: state.file, emit_events: false}, sub_tokens)
           {expr, _} = parse_expr(sub_state, 0)
           expr
       end)
@@ -3489,8 +3505,8 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp nested_family_block_head?(state) do
-    state.tokens
-    |> Enum.drop(state.pos + 1)
+    state
+    |> tokens_from(state.pos + 1)
     |> drop_until_newline()
     |> case do
       [%Token{type: :newline} | rest] ->
@@ -5496,6 +5512,12 @@ defmodule Cure.Compiler.Parser do
 
     {ast, state} =
       case {peek(state), peek_at(state, 1)} do
+        {%Token{type: :lbrace}, _} ->
+          {rhs, state} = parse_refinement_type(state)
+          meta = [name: name, line: token.line, col: token.col]
+          meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+          {{:type_annotation, meta, [rhs]}, state}
+
         {%Token{type: :lparen}, %Token{type: :rparen}} ->
           # `type Unit = ()` — the Swift-style unit type: `Unit` is the type, `()`
           # its sole value. `= ()` is RESERVED to `Unit`; `()` names the one
@@ -5718,6 +5740,9 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
 
     case token.type do
+      :lbrace ->
+        parse_refinement_type(state)
+
       :lparen ->
         state = advance(state)
         # Reuse the constructor-domain parser inside the group as well. This
@@ -7046,14 +7071,14 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp optional_group_start?(%{tokens: tokens, pos: pos}) do
+  defp optional_group_start?(%{pos: pos} = state) do
     result =
-      tokens
-      |> Enum.drop(pos + 1)
+      state
+      |> tokens_from(pos + 1)
       |> Enum.with_index()
       |> Enum.find_value(:not_found, fn
         {%Token{type: :rparen}, index} ->
-          case Enum.at(tokens, pos + index + 2) do
+          case token_at(state, pos + index + 2) do
             %Token{type: :hole, value: ""} -> true
             _ -> false
           end
@@ -7156,6 +7181,9 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
 
     case token.type do
+      :lbrace ->
+        parse_refinement_type(state)
+
       :lparen ->
         # Grouped/tuple type `(A, B)` or function type `(A, B) -> C`. Each element
         # may carry an optional binder name `(x: A) -> …` — a DEPENDENT arrow whose
@@ -7223,6 +7251,23 @@ defmodule Cure.Compiler.Parser do
             maybe_parse_type_projection(base, state)
         end
     end
+  end
+
+  # `{value: Base | Proposition}` is a proof-backed refinement type. The base is
+  # parsed with the non-union arrow parser because this form owns the `|` token.
+  # The proposition remains ordinary Cure syntax and may refer to `value`.
+  defp parse_refinement_type(state) do
+    state = advance(state)
+    binder_token = peek(state)
+    binder = to_string(binder_token.value)
+    state = advance(state)
+    state = expect(state, :colon)
+    {base_type, state} = parse_type_arrow(state)
+    state = expect(state, :bar) |> skip_newlines()
+    {proposition, state} = parse_expr(state, 0)
+    state = expect(state, :rbrace)
+
+    {{:refinement_type, [binder: binder], [base_type, proposition]}, state}
   end
 
   # A type-position projection `p.1` / `p.2` (used in dependent index positions,
@@ -8189,19 +8234,45 @@ defmodule Cure.Compiler.Parser do
 
   # -- Token Helpers ---------------------------------------------------------
 
-  defp peek(%{tokens: tokens, pos: pos}) when pos >= length(tokens) do
+  # Store `tokens` as a tuple + cached `count`. This is the single writer for
+  # both fields; keeping them in lockstep is what makes O(1) lookup safe.
+  defp put_tokens(state, tokens) when is_list(tokens) do
+    %{state | tokens: List.to_tuple(tokens), count: length(tokens)}
+  end
+
+  # Token at an absolute index, or nil when out of range — mirroring the
+  # `Enum.at/2` semantics the callers were written against.
+  defp token_at(%{tokens: tokens, count: count}, idx) when idx >= 0 and idx < count do
+    elem(tokens, idx)
+  end
+
+  defp token_at(_state, _idx), do: nil
+
+  # The tokens from `pos` to the end, as a list. Callers that scan or split the
+  # remaining stream want a list; this is O(n) like the `Enum.drop/2` it
+  # replaces, and unlike `peek/1` it is not on the hot path.
+  defp tokens_from(%{tokens: tokens, count: count}, pos) do
+    start = max(pos, 0)
+
+    # Clamp before building the range: `start..(count - 1)` would otherwise be a
+    # descending range (and index a nonexistent element) once start > count - 1.
+    if start >= count do
+      []
+    else
+      for idx <- start..(count - 1), do: elem(tokens, idx)
+    end
+  end
+
+  defp peek(%{count: count, pos: pos}) when pos >= count do
     Token.new(:eof, nil, 1, 1)
   end
 
-  defp peek(%{tokens: tokens, pos: pos}), do: Enum.at(tokens, pos)
+  defp peek(%{tokens: tokens, pos: pos}), do: elem(tokens, pos)
 
   # Look n tokens past the current position (peek_ahead(state, 0) == peek(state)).
-  defp peek_ahead(%{tokens: tokens, pos: pos}, n), do: Enum.at(tokens, pos + n)
+  defp peek_ahead(%{pos: pos} = state, n), do: token_at(state, pos + n)
 
-  defp peek_at(%{tokens: tokens, pos: pos}, offset) do
-    idx = pos + offset
-    if idx >= 0 and idx < length(tokens), do: Enum.at(tokens, idx), else: nil
-  end
+  defp peek_at(%{pos: pos} = state, offset), do: token_at(state, pos + offset)
 
   defp advance(state), do: %{state | pos: state.pos + 1}
 

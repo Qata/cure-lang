@@ -295,14 +295,14 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
 
-  test "an auto-prelude constructor used with no `use` statement is left alone" do
+  test "a marked prelude constructor used with no `use` statement is left alone" do
     # `proof.cure` references `Nat`/`Z`/`S` with NO import node — it gets them
-    # from the elaborator's implicit auto-prelude (`Std.Nat` et al. imported into
+    # from the elaborator's marked prelude (`Std.Nat` et al. imported into
     # every module). `build_ctx/1` must seed the auto-prelude's exported names
     # unconditionally, or `Z` in a file that never wrote `use Std.Nat` is misread
     # as a free type var and lowercased to `z`.
     src = "mod M\nfn f(v: Pair(Int, Z)) -> Int = 0\n"
-    {out, warns} = migrate(src, "auto_prelude.cure")
+    {out, warns} = migrate(src, "marked_prelude.cure")
     assert out =~ "Z"
     refute out =~ "Pair(Int, z)"
     refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))

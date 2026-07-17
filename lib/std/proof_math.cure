@@ -8,6 +8,7 @@ mod Std.Proof.Math
   ## theorems, but it does not get to bypass them.
 
   use Std.Decision
+  use Std.Nat
 
   ## Evidence that a natural number is strictly positive.
   type IsPositive indices (value: Nat)
@@ -31,10 +32,59 @@ mod Std.Proof.Math
   ## Zero cannot carry evidence of strict positivity.
   fn zero_is_not_positive(proof: IsPositive(Z)) -> Empty = match proof
 
+  ## Every successor natural number is positive.
+  fn successor_is_positive(predecessor: Nat) -> IsPositive(S(predecessor)) = PositiveSuccessor()
+
   ## Decide positivity while carrying either a proof or a disproof.
   fn decide_is_positive(value: Nat) -> Decision(IsPositive(value)) = match value
     Z() -> No(zero_is_not_positive)
     S(predecessor) -> Yes(PositiveSuccessor())
+
+  fn successor_is_not_less_than_or_equal_to_zero(predecessor: Nat, proof: IsLessThanOrEqual(S(predecessor), Z)) -> Empty = match proof
+
+  fn successors_preserve_less_than_or_equal_disproof(left: Nat, right: Nat, disproof: (IsLessThanOrEqual(left, right)) -> Empty, proof: IsLessThanOrEqual(S(left), S(right))) -> Empty = match proof
+    SuccessorsAreLessThanOrEqual(predecessor_proof) -> disproof(predecessor_proof)
+
+  ## Decide less-than-or-equal with checked evidence in either branch.
+  fn decide_is_less_than_or_equal(left: Nat, right: Nat) -> Decision(IsLessThanOrEqual(left, right)) = match left
+    Z() -> Yes(ZeroIsLessThanOrEqual())
+    S(left_predecessor) -> match right
+      Z() -> No(fn(proof) -> successor_is_not_less_than_or_equal_to_zero(left_predecessor, proof))
+      S(right_predecessor) -> match decide_is_less_than_or_equal(left_predecessor, right_predecessor)
+        Yes(proof) -> Yes(SuccessorsAreLessThanOrEqual(proof))
+        No(disproof) -> No(fn(proof) -> successors_preserve_less_than_or_equal_disproof(left_predecessor, right_predecessor, disproof, proof))
+
+  fn zero_is_not_less_than_zero(proof: IsLessThan(Z, Z)) -> Empty = match proof
+
+  fn successor_is_not_less_than_zero(predecessor: Nat, proof: IsLessThan(S(predecessor), Z)) -> Empty = match proof
+
+  fn successors_preserve_less_than_disproof(left: Nat, right: Nat, disproof: (IsLessThan(left, right)) -> Empty, proof: IsLessThan(S(left), S(right))) -> Empty = match proof
+    SuccessorsAreLessThan(predecessor_proof) -> disproof(predecessor_proof)
+
+  ## Decide strict less-than with checked evidence in either branch.
+  fn decide_is_less_than(left: Nat, right: Nat) -> Decision(IsLessThan(left, right)) = match left
+    Z() -> match right
+      Z() -> No(zero_is_not_less_than_zero)
+      S(right_predecessor) -> Yes(ZeroIsLessThanSuccessor())
+    S(left_predecessor) -> match right
+      Z() -> No(fn(proof) -> successor_is_not_less_than_zero(left_predecessor, proof))
+      S(right_predecessor) -> match decide_is_less_than(left_predecessor, right_predecessor)
+        Yes(proof) -> Yes(SuccessorsAreLessThan(proof))
+        No(disproof) -> No(fn(proof) -> successors_preserve_less_than_disproof(left_predecessor, right_predecessor, disproof, proof))
+
+  ## Positivity is the same proposition as zero being strictly less than a value.
+  fn positive_means_zero_is_less_than(
+    {value: Nat},
+    proof: IsPositive(value)
+  ) -> IsLessThan(Z, value) = match proof
+    PositiveSuccessor() -> ZeroIsLessThanSuccessor()
+
+  ## Strictly exceeding zero is evidence of positivity.
+  fn zero_is_less_than_means_positive(
+    {value: Nat},
+    proof: IsLessThan(Z, value)
+  ) -> IsPositive(value) = match proof
+    ZeroIsLessThanSuccessor() -> PositiveSuccessor()
 
   ## Adding anything to a positive left operand remains positive.
   fn adding_to_a_positive_number_is_positive(
@@ -85,4 +135,15 @@ mod Std.Proof.Math
         SuccessorsAreLessThanOrEqual(
           less_than_or_equal_is_transitive(left_predecessors, right_predecessors)
         )
+
+  ## Adding the same number to both sides preserves less-than-or-equal.
+  fn adding_the_same_number_preserves_less_than_or_equal(addend: Nat, {left: Nat}, {right: Nat}, proof: IsLessThanOrEqual(left, right)) -> IsLessThanOrEqual(plus(addend, left), plus(addend, right)) = match addend
+    Z() -> proof
+    S(predecessor) -> SuccessorsAreLessThanOrEqual(adding_the_same_number_preserves_less_than_or_equal(predecessor, proof))
+
+  ## Adding the same number to both sides preserves strict less-than.
+  fn adding_the_same_number_preserves_less_than(addend: Nat, {left: Nat}, {right: Nat}, proof: IsLessThan(left, right)) -> IsLessThan(plus(addend, left), plus(addend, right)) = match addend
+    Z() -> proof
+    S(predecessor) -> SuccessorsAreLessThan(adding_the_same_number_preserves_less_than(predecessor, proof))
+
 end

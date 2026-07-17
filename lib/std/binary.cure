@@ -1,4 +1,5 @@
 @group(:core)
+@prelude
 mod Std.Binary
   ## The bridge between Cure's two string representations.
   ##

@@ -1,4 +1,5 @@
 @group(:core)
+@prelude
 mod Std.Bounded
   ## Bounded natural indices.
   ##

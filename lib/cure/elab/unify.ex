@@ -172,12 +172,95 @@ defmodule Cure.Elab.Unify do
   # the zonked solution, so no soundness rests on this (a wrong solve is caught
   # downstream). Idris/Agda pattern-unification parity (ledger #10).
   defp do_unify(t1, t2, ctx, sig, depth) do
+    case {flex_application(t1), flex_application(t2)} do
+      {{id, argument}, _} ->
+        flex_or(flex_rigid_solve(id, argument, t2, ctx, depth), t1, t2, ctx, sig, depth)
+
+      {_, {id, argument}} ->
+        flex_or(flex_rigid_solve(id, argument, t1, ctx, depth), t1, t2, ctx, sig, depth)
+
+      _ ->
+        case {miller_pattern(t1), miller_pattern(t2)} do
+          {{id, vars}, _} -> miller_or(miller_solve(id, vars, t2, ctx, depth), t1, t2, ctx, sig, depth)
+          {_, {id, vars}} -> miller_or(miller_solve(id, vars, t1, ctx, depth), t1, t2, ctx, sig, depth)
+          _ -> do_unify_struct(t1, t2, ctx, sig, depth)
+        end
+    end
+  end
+
+  # A one-argument flex-rigid equation over a computed argument, for example
+  # `?predicate(product) = IsPositive(product)`. This is not a Miller pattern
+  # because `product` is not a variable, but it has the canonical abstraction
+  # solution `?predicate := λvalue. IsPositive(value)` when the exact argument
+  # occurs in the rigid side. Restricted to the ambient frame, one application,
+  # a known unary Π type, and meta-free terms; every candidate is occurs-checked
+  # and the assembled program is independently checked by the kernel.
+  defp flex_application({:app, {:meta, id}, argument}), do: {id, argument}
+  defp flex_application(_term), do: nil
+
+  defp flex_rigid_solve(id, argument, rhs, ctx, 0) do
+    with true <- meta_free?(argument),
+         true <- meta_free?(rhs),
+         true <- match?({:data, _, _, _}, rhs),
+         true <- contains_term?(rhs, argument),
+         {:pi, _grade, domain, _codomain} <- MetaCtx.meta_type(ctx, id),
+         body = abstract_exact_term(rhs, argument, 0),
+         solution = {:lam, Cure.Core.Grade.unrestricted(), domain, body},
+         false <- occurs?(id, solution, ctx) do
+      {:ok, MetaCtx.put_solution(ctx, id, solution)}
+    else
+      _ -> :fallthrough
+    end
+  end
+
+  defp flex_rigid_solve(_id, _argument, _rhs, _ctx, _depth), do: :fallthrough
+
+  defp flex_or({:ok, ctx2}, _t1, _t2, _ctx, _sig, _depth), do: {:ok, ctx2}
+
+  defp flex_or(:fallthrough, t1, t2, ctx, sig, depth) do
     case {miller_pattern(t1), miller_pattern(t2)} do
       {{id, vars}, _} -> miller_or(miller_solve(id, vars, t2, ctx, depth), t1, t2, ctx, sig, depth)
       {_, {id, vars}} -> miller_or(miller_solve(id, vars, t1, ctx, depth), t1, t2, ctx, sig, depth)
       _ -> do_unify_struct(t1, t2, ctx, sig, depth)
     end
   end
+
+  defp contains_term?(term, target) when term == target, do: true
+  defp contains_term?(term, target) when is_tuple(term), do: term |> Tuple.to_list() |> Enum.any?(&contains_term?(&1, target))
+  defp contains_term?(term, target) when is_list(term), do: Enum.any?(term, &contains_term?(&1, target))
+  defp contains_term?(_term, _target), do: false
+
+  defp abstract_exact_term(term, target, depth) when term == target, do: {:var, depth}
+  defp abstract_exact_term({:var, i}, _target, depth) when i >= depth, do: {:var, i + 1}
+  defp abstract_exact_term({:var, _} = variable, _target, _depth), do: variable
+
+  defp abstract_exact_term({:pi, grade, domain, codomain}, target, depth),
+    do:
+      {:pi, grade, abstract_exact_term(domain, target, depth),
+       abstract_exact_term(codomain, target, depth + 1)}
+
+  defp abstract_exact_term({:lam, grade, domain, body}, target, depth),
+    do:
+      {:lam, grade, abstract_exact_term(domain, target, depth),
+       abstract_exact_term(body, target, depth + 1)}
+
+  defp abstract_exact_term({:let, grade, type, value, body}, target, depth),
+    do:
+      {:let, grade, abstract_exact_term(type, target, depth),
+       abstract_exact_term(value, target, depth), abstract_exact_term(body, target, depth + 1)}
+
+  defp abstract_exact_term({:app, function, argument}, target, depth),
+    do: {:app, abstract_exact_term(function, target, depth), abstract_exact_term(argument, target, depth)}
+
+  defp abstract_exact_term({:data, name, parameters, indices}, target, depth),
+    do:
+      {:data, name, Enum.map(parameters, &abstract_exact_term(&1, target, depth)),
+       Enum.map(indices, &abstract_exact_term(&1, target, depth))}
+
+  defp abstract_exact_term({:ctor, name, arguments}, target, depth),
+    do: {:ctor, name, Enum.map(arguments, &abstract_exact_term(&1, target, depth))}
+
+  defp abstract_exact_term(leaf, _target, _depth), do: leaf
 
   defp miller_or({:ok, ctx2}, _t1, _t2, _ctx, _sig, _depth), do: {:ok, ctx2}
   defp miller_or(:fallthrough, t1, t2, ctx, sig, depth), do: do_unify_struct(t1, t2, ctx, sig, depth)

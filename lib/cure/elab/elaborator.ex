@@ -2066,9 +2066,11 @@ defmodule Cure.Elab.Elaborator do
 
   # Elaborate a saturated global call in checking mode, threading the expected
   # return type into the application so a return-type-only implicit can be solved.
-  # Mirrors the inference dispatch (`implicit_def?` branch): try up-front argument
-  # inference first, fall back to left-to-right bidirectional application, both
-  # carrying `expected`. The caller re-checks the assembled term against the goal.
+  # Checking mode is goal-directed: solve hidden arguments from `expected` before
+  # inferring explicit arguments, then retain eager inference as a compatibility
+  # fallback. This ordering matters when eager inference can produce a complete but
+  # wrong hidden family (for example the predicate of a refinement constructor).
+  # The caller re-checks the assembled term against the goal in either path.
   defp elaborate_global_app_expected(env, atom, args, names, ctx, expected) do
     if Enum.any?(args, &call_placeholder?/1) do
       elaborate_implicit_app_bidirectional(env, atom, args, names, ctx, expected)
@@ -2078,19 +2080,20 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp elaborate_global_app_expected_eager(env, atom, args, names, ctx, expected) do
-    result =
-      with {:ok, present} <- map_present_args(args, names, ctx, env) do
-        elaborate_global_app(env, atom, present, ctx, expected)
-      end
-
-    case result do
+    case elaborate_implicit_app_bidirectional(env, atom, args, names, ctx, expected) do
       {:ok, _, _} = ok ->
         ok
 
-      {:error, _} = orig ->
-        case elaborate_implicit_app_bidirectional(env, atom, args, names, ctx, expected) do
-          {:ok, _, _} = ok -> ok
-          {:error, _} -> orig
+      {:error, _} = goal_error ->
+        case map_present_args(args, names, ctx, env) do
+          {:ok, present} ->
+            case elaborate_global_app(env, atom, present, ctx, expected) do
+              {:ok, _, _} = ok -> ok
+              {:error, _} -> goal_error
+            end
+
+          {:error, _} ->
+            goal_error
         end
     end
   end
@@ -2408,9 +2411,12 @@ defmodule Cure.Elab.Elaborator do
 
     Enum.reduce_while(args, {:ok, []}, fn arg, {:ok, acc} ->
       case elaborate_expr_typed(arg, names, ctx, env) do
-        # Reify the argument's type at the *context* depth so its de Bruijn
-        # indices are in the caller's frame (where the erased indices are solved).
-        {:ok, term, type} -> {:cont, {:ok, acc ++ [{term, Quote.reify(type, depth)}]}}
+        # Reify at the caller's depth AND with the inductive signature. Semantic
+        # data values flatten parameters and indices; a signature-free readback
+        # would turn `IsPositive(n)` (zero parameters, one index) into a bogus
+        # one-parameter family before it is unified with a dependent call slot.
+        {:ok, term, type} ->
+          {:cont, {:ok, acc ++ [{term, Quote.reify(type, depth, env)}]}}
         {:error, _} = err -> {:halt, err}
       end
     end)
@@ -7191,6 +7197,20 @@ defmodule Cure.Elab.Elaborator do
     %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
+    # Transparent aliases in an expected result must be unfolded before the
+    # goal-first implicit solve. Refinement aliases are the load-bearing case:
+    # `PositiveNatural` normalizes to `Sigma(Nat, IsPositive)`, which determines
+    # the hidden predicate of `refine` before its proof argument is checked.
+    # `finish_global_app` already performs this normalization for its final solve;
+    # doing the same in the pre-pass prevents argument order from hiding that goal.
+    expected_for_goal =
+      if expected != nil do
+        case Kernel.normalize(ctx, expected) do
+          :fuel_exhausted -> expected
+          normalized -> normalized
+        end
+      end
+
     slots = Enum.zip(domains, quantities)
     init = {:ok, MetaCtx.new(), [], arg_asts, []}
 
@@ -7217,7 +7237,8 @@ defmodule Cure.Elab.Elaborator do
     # re-checks the assembled term regardless. Restricted to a META-FREE goal so a
     # still-open expected type (nothing to solve against) skips the pre-pass.
     seed_from_goal? =
-      union_goal?(expected) or (not is_nil(expected) and not Unify.has_meta?(expected))
+      union_goal?(expected_for_goal) or
+        (not is_nil(expected_for_goal) and not Unify.has_meta?(expected_for_goal))
 
     {init, slots} =
       if seed_from_goal? do
@@ -7228,7 +7249,7 @@ defmodule Cure.Elab.Elaborator do
         # unsolved (`box(_) : Box(Z)`). Stop at the first ordinary present
         # argument so its existing bidirectional checking order is unchanged.
         {seeded, rest} = bidir_seed_goal_prefix(slots, init, names, ctx, env)
-        seeded = bidir_solve_codomain_from_goal(seeded, codomain, expected, env, rest)
+        seeded = bidir_solve_codomain_from_goal(seeded, codomain, expected_for_goal, env, rest)
 
         {seeded, rest}
       else

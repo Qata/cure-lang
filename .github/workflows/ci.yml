@@ -71,8 +71,10 @@ jobs:
       - name: Credo (strict)
         run: mix credo --strict
 
+      # `--include slow` re-enables the `:slow` tests that `test_helper.exs`
+      # excludes for local runs. CI must run the whole suite.
       - name: Run tests
-        run: mix test
+        run: mix test --include slow
 
       # - name: Build Dialyzer PLTs
       #   run: mix dialyzer --plt
