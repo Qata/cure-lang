@@ -489,6 +489,17 @@ fix for the remaining bare case. Distinct from E10 (a function ARGUMENT not redu
 
 ## K1 — conversion does not reduce a reducible argument sitting in a stuck application's spine (KERNEL)
 
+**✅ FIXED (`dee86c0b`, `fix(core)`).** Root cause was an INCONSISTENT A6 freeze in
+`Normalise.reduce_unfolded` (see the pinned trace below): it froze `f(<ctor>, x)` but not
+`f(<reducible-global>, x)`. Fix = recurse on the ι-result so a residual stuck `ncase` propagates
+`:stuck` and the whole application freezes CONSISTENTLY (it only ever freezes MORE, so NF
+termination and mutual recursion are unaffected). Validated: full suite + full Antigen (318/318, no
+distinct normal forms equated) + a dedicated regression/termination antibody
+(`test/cure/core/reduce_unfolded_freeze_consistency_test.exs`). PAYOFF: the mailbox monoid-
+homomorphism (`Std.Otp.SessionMailbox` `recvs_hom`/`sends_hom`) now elaborates with clean combinator
+proofs. The original diagnosis below is kept for history.
+
+
 **Symptom.** During conversion, an application `g(f(c), x)` where the OUTER call `g` is stuck
 (neutral because a LATER argument `x` is a variable) does not get its EARLIER argument `f(c)`
 reduced, even when `f(c)` reduces to a value on its own. So `msum(recvs(LEnd), recvs(t))` and
