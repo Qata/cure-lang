@@ -218,3 +218,13 @@ mutual
   incl_sound (ITimes s1 s2) acc = incl_times s1 s2 acc
   incl_sound (IStar s) acc = incl_star s acc
   incl_sound (ITrans sef sfg) acc = incl_sound sfg (incl_sound sef acc)
+
+deriv_mono : (t : Tag) -> Incl e f -> Incl (deriv e t) (deriv f t)
+deriv_mono t IRefl = IRefl
+deriv_mono t IZero = IZero
+deriv_mono t (IPlus se sf) = IPlus (deriv_mono t se) (deriv_mono t sf)
+deriv_mono t (IInL sef) = IInL (deriv_mono t sef)
+deriv_mono t (IInR seg) = IInR (deriv_mono t seg)
+deriv_mono t (ITimes s1 s2) = IPlus (IInL (ITimes (deriv_mono t s1) s2)) (IInR (ITimes s1 (deriv_mono t s2)))
+deriv_mono t (IStar s) = ITimes (deriv_mono t s) (IStar s)
+deriv_mono t (ITrans sef sfg) = ITrans (deriv_mono t sef) (deriv_mono t sfg)

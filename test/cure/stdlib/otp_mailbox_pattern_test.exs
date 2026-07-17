@@ -131,4 +131,17 @@ defmodule Cure.Stdlib.OtpMailboxPatternTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "deriv_mono: subtyping is preserved by the derivative" do
+    src = """
+    mod DmInst
+      use Std.Otp.MailboxPattern
+      fn sub() -> Incl(PAtom(TA), PPlus(PAtom(TA), PAtom(TB))) = IInL(IRefl())
+      fn dmono() -> Incl(deriv(PAtom(TA), TA), deriv(PPlus(PAtom(TA), PAtom(TB)), TA)) =
+        deriv_mono(TA, sub())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

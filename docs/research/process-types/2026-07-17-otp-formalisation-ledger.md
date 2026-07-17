@@ -101,6 +101,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [x] SEMIRING left-DISTRIBUTIVITY `E·(F⊕G) ≡ (E·F)⊕(E·G)` (`dist_fwd`/`dist_bwd`, both directions) — **SHIPPED** `otp_mailbox_pattern.cure` (Idris `rel=same`).
 - [x] ADDITIVE monoid + ANNIHILATOR: `⊕` associative (`plus_assoc_fwd`/`bwd`) with unit `PZero` (`plus_zero_fwd`/`bwd`), and `PZero` absorbs `·` (`zero_times`) — `(Pat, ⊕, 𝟎, ·, 𝟙, *)` is a commutative KLEENE ALGEBRA up to acceptance — **SHIPPED** `otp_mailbox_pattern.cure` (Idris `rel=same`).
 - [x] Pattern SUBTYPING (inclusion): inductive `Incl(E,F)` (refl, `𝟎`-least, choice lub/injections, `·`/`*` monotone, transitive) + `incl_sound` (implies semantic inclusion — a mailbox typed `E` is usable where `F` is expected) — **SHIPPED** `otp_mailbox_pattern.cure` (Idris `rel=same`). Note: this is the SOUND syntactic subtyping; the DECISION procedure for semantic inclusion needs the Presburger solver (out of TCB).
+- [x] Derivative MONOTONICITY under subtyping (`deriv_mono : Incl(E,F) → Incl(deriv(E,t), deriv(F,t))`, pure `Incl` recursion) — **SHIPPED** `otp_mailbox_pattern.cure` (Idris `rel=same`).
 - [ ] Conformance (`reliable`/`usable`, de'Liguoro–Padovani Def. 10)
 - [ ] Bidirectional constraint GENERATION from a behaviour
 - [ ] **Presburger / semilinear (Parikh) SOLVING** — external Z3/omega backend, **OUT OF TCB** (untrusted lint per the SMT trust-boundary decision), not a kernel proof
