@@ -256,7 +256,17 @@ into sibling argument goals before finalizing metavariables (or a fixpoint solve
 **Layer/risk.** E. Medium. Soundness-neutral (accepts strictly more; the terms are well-typed —
 Idris confirms).
 
-**Status.** OPEN. Blocks the restart-intensity bounded-run liveness theorem.
+**Status.** ✅ FIXED (`elaborator.ex` `check_ctor_args`), doing exactly what Idris2's
+`TTImp.Elab.App.checkRestApp`/`checkRtoL` does: a present field whose instantiated type still
+carries a metavariable is POSTPONED, its siblings are resolved first — solving that metavariable
+— and it is then checked, iterated to a fixpoint so any dependency order works (earlier- OR
+later-sibling-solved). A field that can be inferred in isolation solves the existential by
+unify-back; one that cannot (a nullary constructor with its own implicit index) is deferred
+until its type is concrete. The kernel re-checks the assembly, so it only widens what
+elaborates. Full gate green (elab 1069, core 538, compiler exit 0). Regression tests in
+`ctor_arg_deferral_test.exs`; the restart-intensity bounded-run liveness theorem now elaborates
+AND codegens. NOTE: E1/E2 (the match side) are the SAME family; the postponement idea transfers
+but the code path differs (this fixed the application side).
 
 ---
 

@@ -7596,44 +7596,109 @@ defmodule Cure.Elab.Elaborator do
   # parameters and every earlier field value (the same `params ++ fields` frame the
   # de Bruijn layout uses). The erased field values are kept in the assembled
   # `{:ctor, …}`, matching `finish_ctor_app`.
-  defp check_ctor_args([], [], _seed, _pc, _params, acc, _mctx, _names, _ctx, _env, cname),
-    do: {:ok, {:ctor, cname, Enum.reverse(acc)}}
+  defp check_ctor_args(slots, arg_asts, seed, pc, params, _acc0, mctx, names, ctx, env, cname) do
+    # Idris-style DEFERRAL (TTImp.Elab.App `checkRestApp`/`checkRtoL`): a present field whose
+    # instantiated type still carries a metavariable is POSTPONED, its siblings resolved first —
+    # which solves that metavariable — and it is then checked. Iterated to a fixpoint so any
+    # dependency order works. Erased index slots seed the assembly with their goal-pinned
+    # metavariable and are re-zonked at the end; positions are kept so the de Bruijn frame stays
+    # correct regardless of resolution order.
+    args_by_pos =
+      slots
+      |> Enum.filter(fn {_i, _ft, q} -> q == :unrestricted end)
+      |> Enum.map(&elem(&1, 0))
+      |> Enum.zip(arg_asts)
+      |> Map.new()
 
-  defp check_ctor_args([{idx, _ftype, :erased} | slots], asts, seed, pc, params, acc, mctx, names, ctx, env, cname) do
-    val = seed |> Enum.at(pc + idx) |> Unify.zonk(mctx)
+    acc0 = for {i, _ft, :erased} <- slots, into: %{}, do: {i, Enum.at(seed, pc + i)}
+    pending = for {i, ft, :unrestricted} <- slots, do: {i, ft}
 
-    if has_meta?(val) do
-      {:error, {:unsolved_index, cname}}
-    else
-      check_ctor_args(slots, asts, seed, pc, params, [val | acc], mctx, names, ctx, env, cname)
+    case resolve_ctor_fields(pending, acc0, args_by_pos, seed, pc, params, mctx, names, ctx, env, cname) do
+      {:ok, acc_map, mctx} ->
+        vals = for i <- 0..(length(slots) - 1)//1, do: Unify.zonk(Map.fetch!(acc_map, i), mctx)
+
+        if Enum.any?(vals, &has_meta?/1) do
+          {:error, {:unsolved_index, cname}}
+        else
+          {:ok, {:ctor, cname, vals}}
+        end
+
+      {:error, _} = err ->
+        err
     end
   end
 
-  defp check_ctor_args(
-         [{_idx, ftype, :unrestricted} | slots],
-         [arg | asts],
-         seed,
-         pc,
-         params,
-         acc,
-         mctx,
-         names,
-         ctx,
-         env,
-         cname
-       ) do
-    ftype_inst = ftype |> Subst.instantiate(params ++ Enum.reverse(acc)) |> Unify.zonk(mctx)
+  # One sweep over the still-pending present fields, recursing while progress is made. A field
+  # whose instantiated type is CONCRETE is checked; one whose type still has a metavariable is
+  # tried by INFERENCE (solving the metavariable from the argument's own type, as a recursive
+  # call or concrete constructor does) and otherwise DEFERRED to a later sweep, once a sibling
+  # solves it.
+  defp resolve_ctor_fields([], acc_map, _args, _seed, _pc, _params, mctx, _names, _ctx, _env, _cname),
+    do: {:ok, acc_map, mctx}
 
-    if has_meta?(ftype_inst) do
-      {:error, {:unsolved_field_type, cname}}
+  defp resolve_ctor_fields(pending, acc_map, args, seed, pc, params, mctx, names, ctx, env, cname) do
+    swept =
+      Enum.reduce(pending, {[], acc_map, mctx, false, nil}, fn {i, ftype}, {pend, amap, mctx, prog, err} ->
+        if err != nil do
+          {pend, amap, mctx, prog, err}
+        else
+          frame = params ++ frame_prefix(amap, seed, pc, i, mctx)
+          ftype_inst = ftype |> Subst.instantiate(frame) |> Unify.zonk(mctx)
+          arg = Map.fetch!(args, i)
+
+          if has_meta?(ftype_inst) do
+            case try_infer_field(arg, ftype_inst, mctx, names, ctx, env) do
+              {:ok, term, mctx2} -> {pend, Map.put(amap, i, term), mctx2, true, nil}
+              :defer -> {[{i, ftype} | pend], amap, mctx, prog, nil}
+            end
+          else
+            case elaborate_expr_checked(arg, ftype_inst, names, ctx, env) do
+              {:ok, term} -> {pend, Map.put(amap, i, term), mctx, true, nil}
+              {:error, _} = e -> {pend, amap, mctx, prog, e}
+            end
+          end
+        end
+      end)
+
+    case swept do
+      {_pend, _amap, _mctx, _prog, {:error, _} = err} ->
+        err
+
+      {[], acc_map, mctx, _prog, nil} ->
+        {:ok, acc_map, mctx}
+
+      {pend, acc_map, mctx, true, nil} ->
+        resolve_ctor_fields(Enum.reverse(pend), acc_map, args, seed, pc, params, mctx, names, ctx, env, cname)
+
+      {_pend, _amap, _mctx, false, nil} ->
+        # A full sweep resolved nothing but fields remain: their types stay under-determined.
+        {:error, {:unsolved_field_type, cname}}
+    end
+  end
+
+  # The de Bruijn frame prefix for the field at position `i`: positions `0..i-1`, each taken from
+  # the resolved assembly, else its seed placeholder (an unresolved sibling is a metavariable,
+  # which keeps this field deferred until that sibling is resolved).
+  defp frame_prefix(_amap, _seed, _pc, 0, _mctx), do: []
+
+  defp frame_prefix(amap, seed, pc, i, mctx) do
+    for j <- 0..(i - 1)//1 do
+      (Map.get(amap, j) || Enum.at(seed, pc + j)) |> Unify.zonk(mctx)
+    end
+  end
+
+  # Infer an argument independently and unify its type back into `mctx`, solving a field-type
+  # metavariable that only this argument determines (e.g. a recursive call whose result type
+  # fixes an intermediate index). Returns `:defer` when the argument cannot be inferred in
+  # isolation (e.g. a nullary constructor with its own implicit index) — it is retried once its
+  # field type becomes concrete.
+  defp try_infer_field(arg, ftype_inst, mctx, names, ctx, env) do
+    with {:ok, term, ty} <- elaborate_expr_typed(arg, names, ctx, env),
+         ty_term = Quote.reify(ty, Context.length(ctx)),
+         {:ok, mctx2} <- Unify.unify(ftype_inst, ty_term, mctx, env) do
+      {:ok, term, mctx2}
     else
-      case elaborate_expr_checked(arg, ftype_inst, names, ctx, env) do
-        {:ok, term} ->
-          check_ctor_args(slots, asts, seed, pc, params, [term | acc], mctx, names, ctx, env, cname)
-
-        {:error, _} = err ->
-          err
-      end
+      _ -> :defer
     end
   end
 
