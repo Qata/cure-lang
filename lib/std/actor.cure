@@ -64,7 +64,7 @@ mod Std.Actor
           None() -> [enum_type("ActorMessage", heads)]
           Some(_) -> []
         match derive_reply_contract(call_body, definition.state)
-          NoCall -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, info_body, terminate_body, code_change_body, heads, extra_declarations, true)
+          NoCall -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, info_body, terminate_body, code_change_body, heads, extra_declarations, true, false)
           InvalidCall(reason) -> Failure(reason, [])
           CallContract(request_heads, reply_type) -> emit_actor_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, heads, request_heads, reply_type, extra_declarations)
 
@@ -101,11 +101,33 @@ mod Std.Actor
     let message_type = match definition.messages
       None() -> variable("m")
       Some(value) -> value
-    emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, [], cast_body, info_body, terminate_body, code_change_body, [], extra_declarations, message_aliased)
+    emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, [], cast_body, info_body, terminate_body, code_change_body, [], extra_declarations, message_aliased, true)
 
   fn actor_info_handler(info_body: Syntax) -> Syntax = match tag(info_body) == :raw
     true -> quote %[:noreply, state]
     false -> actor_handler(info_body)
+
+  ## The raw-branch counterpart of `actor_info_handler`. An absent (`:raw`) info
+  ## body still defaults to the passthrough `%[:noreply, state]`, but a present
+  ## body is a full GenServer result spliced VERBATIM — never routed through
+  ## `actor_handler`, which would re-wrap a `match` body's arms in a second
+  ## `:noreply` (the raw/Cases double-wrap defect, §1e wall 4).
+  fn raw_info_handler(info_body: Syntax) -> Syntax = match tag(info_body) == :raw
+    true -> quote %[:noreply, state]
+    false -> info_body
+
+  ## Select the cast/info body transform for the emitter. The raw branch splices
+  ## the user's full GenServer result verbatim; the Cases branch wraps each arm
+  ## in `:noreply` via `actor_handler`. Kept as tail-position helpers (not an
+  ## inline `let`-RHS match) because a bool-literal match in `let`-RHS position
+  ## mis-lowers through the effect-bind path (§1e wall 4).
+  fn cast_handler_for(cast_body: Syntax, raw_body: Bool) -> Syntax = match raw_body
+    true -> cast_body
+    false -> actor_handler(cast_body)
+
+  fn info_handler_for(info_body: Syntax, raw_body: Bool) -> Syntax = match raw_body
+    true -> raw_info_handler(info_body)
+    false -> actor_info_handler(info_body)
 
   fn actor_terminate_handler(body: Syntax) -> Syntax = match tag(body) == :raw
     true -> quote :ok
@@ -435,16 +457,16 @@ mod Std.Actor
   ## auto-generalized per function (`emit_actor_parts_poly`). The two branches are
   ## separate functions so the aliased list literal — and thus its compiled bytes
   ## — stays untouched.
-  fn emit_actor_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, heads: List(Syntax), extra_declarations: List(Syntax), message_aliased: Bool) -> Syntax = match message_aliased
-    true -> emit_actor_parts_aliased(module_name, module_expr, state_type, init_spec, message_type, message_declarations, cast_body, info_body, terminate_body, code_change_body, extra_declarations)
-    false -> emit_actor_parts_poly(module_name, module_expr, state_type, init_spec, message_declarations, cast_body, info_body, terminate_body, code_change_body, extra_declarations)
+  fn emit_actor_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, heads: List(Syntax), extra_declarations: List(Syntax), message_aliased: Bool, raw_body: Bool) -> Syntax = match message_aliased
+    true -> emit_actor_parts_aliased(module_name, module_expr, state_type, init_spec, message_type, message_declarations, cast_body, info_body, terminate_body, code_change_body, extra_declarations, raw_body)
+    false -> emit_actor_parts_poly(module_name, module_expr, state_type, init_spec, message_declarations, cast_body, info_body, terminate_body, code_change_body, extra_declarations, raw_body)
 
-  fn emit_actor_parts_aliased(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, extra_declarations: List(Syntax)) -> Syntax =
+  fn emit_actor_parts_aliased(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, extra_declarations: List(Syntax), raw_body: Bool) -> Syntax =
         let result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let start_type: Syntax = call("Effect", [variable("Tuple")])
-        let handler_body: Syntax = actor_handler(cast_body)
-        let info_handler: Syntax = actor_info_handler(info_body)
+        let handler_body: Syntax = cast_handler_for(cast_body, raw_body)
+        let info_handler: Syntax = info_handler_for(info_body, raw_body)
         let terminate_handler: Syntax = actor_terminate_handler(terminate_body)
         let code_change_handler: Syntax = actor_code_change_handler(code_change_body)
         block(append(message_declarations, [
@@ -459,12 +481,12 @@ mod Std.Actor
           ], extra_declarations))
         ]))
 
-  fn emit_actor_parts_poly(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, extra_declarations: List(Syntax)) -> Syntax =
+  fn emit_actor_parts_poly(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, extra_declarations: List(Syntax), raw_body: Bool) -> Syntax =
         let result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let start_type: Syntax = call("Effect", [variable("Tuple")])
-        let handler_body: Syntax = actor_handler(cast_body)
-        let info_handler: Syntax = actor_info_handler(info_body)
+        let handler_body: Syntax = cast_handler_for(cast_body, raw_body)
+        let info_handler: Syntax = info_handler_for(info_body, raw_body)
         let terminate_handler: Syntax = actor_terminate_handler(terminate_body)
         let code_change_handler: Syntax = actor_code_change_handler(code_change_body)
         block(append(message_declarations, [

@@ -68,6 +68,34 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert apply(:"Cure.Generated.RawFamilyPickup", :handle_cast, [:other, 4]) == {:noreply, 4}
   end
 
+  test "family raw handle_cast body may be a match with full-result arms" do
+    # A raw handle_cast whose body is a `match` on the message returning full
+    # `%[:noreply, _]` results must splice VERBATIM. The family raw branch must
+    # NOT re-wrap the arms in another `:noreply` — doing so double-wraps to
+    # `%[:noreply, %[:noreply, _]]`, which breaks the callback's
+    # `Effect(Tuple(Atom, State))` type (the nested tuple is not `State`) and
+    # surfaces as `:ctor_requires_checking_mode` on the inner Sigma. Regression
+    # pin for the raw/Cases emitter split (§1e wall 4).
+    source = """
+    mod M
+      use Std.Actor
+
+      type Cmd = Inc | Dec
+
+      actor Cure.Generated.RawFamilyMatch
+        state Int
+        messages Cmd
+        handle_cast
+          match message
+            Inc -> %[:noreply, state + 1]
+            Dec -> %[:noreply, state - 1]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyMatch", :handle_cast, [:Inc, 4]) == {:noreply, 5}
+    assert apply(:"Cure.Generated.RawFamilyMatch", :handle_cast, [:Dec, 4]) == {:noreply, 3}
+  end
+
   test "a bare (mod-less) computed raw actor is the program's top-level module" do
     # A `becomes lift module name` template yields a bare top-level `lift_module`
     # at parse time, so `compile_and_load` returns the actor module itself. A
