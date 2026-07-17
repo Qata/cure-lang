@@ -107,7 +107,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [ ] link / monitor / exit modelled as SIGNALS with KWC ordering guarantees
 
 ### B6. Supervision depth
-- [ ] Restart INTENSITY (`max_restarts`/`max_seconds`) — operational bound not modelled
+- [x] Restart INTENSITY bound (`max_restarts`) — `otp_restart_intensity.cure` (budget index; can't restart at zero). `max_seconds` window abstracted; bounded-run liveness theorem E6-blocked (probe)
 - [x] Differential restart-SET semantics `one_for_one` / `one_for_all` / `rest_for_one` tied to preservation (NVLang Def. 4.2) — all three strategies in `otp_supervisor.cure`, each preserving `Fleet(specs)`, differing only in which children they revive
 - [ ] Dynamic children / `simple_one_for_one`
 

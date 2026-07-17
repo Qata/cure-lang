@@ -200,6 +200,51 @@ in the constructor-list production).
 
 ---
 
+## E6 — nullary GADT constructor indices fixed only through a sibling's existential are unsolved
+
+**Symptom.** Constructing a nullary GADT constructor whose indices are determined only via a
+SIBLING argument's intermediate existential leaves `{:unsolved_metavariables, C}` at
+elaboration — Cure rejects a term Idris accepts (a `cure_stricter` reach gap, an elaborator
+incompleteness, not soundness).
+
+**Minimal repro** (`Std.Otp.RestartIntensity`'s bounded-run liveness):
+
+```
+type FailRun indices (b1: Nat, p1: Phase, b2: Nat, p2: Phase)
+  FRDone : FailRun(b, p, b, p)
+  FRMore : Fail(b1, p1, bm, pm) -> FailRun(bm, pm, b2, p2) -> FailRun(b1, p1, b2, p2)
+fn eventually_down(n: Nat) -> FailRun(n, Up, Z, Down) = match n
+  Z()  -> FRMore(FShutdown(), FRDone())          # -> {:unsolved_metavariables, FRDone}
+  S(k) -> FRMore(FRestart(), eventually_down(k))  # (and FRestart, symmetrically)
+```
+
+In `FRMore(FShutdown(), FRDone())`, `FRMore`'s intermediate index `(bm, pm)` is a metavar fixed
+by `FShutdown : Fail(Z, Up, Z, Down)` (`bm=Z, pm=Down`); `FRDone`'s own indices must then unify
+`FailRun(b,p,b,p) = FailRun(bm,pm,b2,p2)`. The solver does not propagate the sibling-derived
+`bm/pm` into the nullary ctor's slots in time, so they stay unsolved. `FRDone` used where its
+indices come DIRECTLY from the goal (e.g. `fn r() -> FailRun(Z,Down,Z,Down) = FRDone()`)
+elaborates fine — the gap is specifically the sibling-existential routing.
+
+**Root cause + layer.** E — metavariable solving order / propagation of a constructor
+argument's intermediate existential index into a sibling nullary constructor. Same family as
+E1/E2 (index existentials). Idris's unifier solves it.
+
+**Current workaround.** None that keeps the natural proof. Ship the sub-theory that avoids the
+routing (`Std.Otp.RestartIntensity` ships `Sup`/`Fail`/`on_fail`; the `eventually_down` run is a
+blocked probe). Possible reformulations: give the constructors explicit relevant index args
+(pollutes the datatype) — but note that pinning one ctor just moves the failure to the next
+(pinning `FRDone` surfaced `FRestart`).
+
+**Proposed change.** Propagate a constructor argument's solved intermediate existential indices
+into sibling argument goals before finalizing metavariables (or a fixpoint solve pass).
+
+**Layer/risk.** E. Medium. Soundness-neutral (accepts strictly more; the terms are well-typed —
+Idris confirms).
+
+**Status.** OPEN. Blocks the restart-intensity bounded-run liveness theorem.
+
+---
+
 ## Confirmed non-gaps (do NOT chase these)
 
 Recorded so future sessions don't mistake them for gaps:
