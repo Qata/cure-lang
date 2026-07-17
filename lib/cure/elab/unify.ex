@@ -381,8 +381,21 @@ defmodule Cure.Elab.Unify do
   defp do_unify_struct({:ctor, c, a1}, {:ctor, c, a2}, ctx, sig, depth),
     do: unify_lists(a1, a2, ctx, sig, depth)
 
-  defp do_unify_struct({:app, f1, x1}, {:app, f2, x2}, ctx, sig, depth) do
-    with {:ok, ctx} <- unify_d(f1, f2, ctx, sig, depth), do: unify_d(x1, x2, ctx, sig, depth)
+  # Two applications unify by CONGRUENCE (head-to-head, arg-to-arg) — the fast path for a
+  # rigid neutral spine. But an application may also be a REDEX whose normal form matches the
+  # other side even though the spines differ: a `data` index `elt(EFin x, EFin k)` vs its
+  # ι-reduct `slt(x, k)`, or `mem(x, Node(l, v, r))` vs `mem(x, l)`. Congruence decomposes those
+  # to a head/arg mismatch (`elt` vs `slt`, `Node(…)` vs `l`) and fails before conversion is
+  # ever tried. So on a congruence failure, fall back to deciding the WHOLE applications by
+  # δ/ι-convertibility (sound: `conv?` is the trusted decision, and only meta-free terms qualify).
+  defp do_unify_struct({:app, f1, x1} = t1, {:app, f2, x2} = t2, ctx, sig, depth) do
+    case (with {:ok, ctx} <- unify_d(f1, f2, ctx, sig, depth), do: unify_d(x1, x2, ctx, sig, depth)) do
+      {:ok, _} = ok ->
+        ok
+
+      {:error, _} = err ->
+        if delta_convertible?(t1, t2, ctx, sig, depth), do: {:ok, ctx}, else: err
+    end
   end
 
   defp do_unify_struct({:pi, _g1, d1, c1}, {:pi, _g2, d2, c2}, ctx, sig, depth) do
@@ -399,29 +412,30 @@ defmodule Cure.Elab.Unify do
   defp do_unify_struct(t, t, ctx, _sig, _depth), do: {:ok, ctx}
 
   # Last resort: two terms that are not syntactically unifiable may still be
-  # DEFINITIONALLY equal via δ (e.g. `DDec` vs the redex `dmeet(DDec, DDec)`).
-  # Only attempt this when a signature is available and both sides are closed and
-  # metavariable-free — then they carry no unification variables to solve, so a
-  # convertibility check is exactly the right question, and `env=[] depth=0` is
-  # sound (no free de Bruijn vars). Open neutral spines (e.g. `app(av, cv)`) unify
-  # syntactically and never reach here.
-  defp do_unify_struct(t1, t2, ctx, sig, _depth) do
-    if delta_convertible?(t1, t2, ctx, sig) do
+  # DEFINITIONALLY equal via δ/ι (e.g. `DDec` vs the redex `dmeet(DDec, DDec)`, or a
+  # `data` INDEX like `elt(EFin x, EFin k)` vs its ι-reduct `slt(x, k)`). Only attempt
+  # this when a signature is available and both sides are metavariable-free — then they
+  # carry no unification variables to solve, so a convertibility check is exactly the right
+  # question. The terms may be OPEN (free de Bruijn vars < `depth`, e.g. index positions
+  # under the binders unification has entered); evaluating them under a neutral env of that
+  # depth — precisely how the kernel checks under binders — treats those vars as rigid, so
+  # `conv?` decides them soundly. `depth` is the binder depth threaded by `unify_d`.
+  defp do_unify_struct(t1, t2, ctx, sig, depth) do
+    if delta_convertible?(t1, t2, ctx, sig, depth) do
       {:ok, ctx}
     else
       {:error, {:cannot_unify, t1, t2}}
     end
   end
 
-  defp delta_convertible?(_t1, _t2, _ctx, nil), do: false
+  defp delta_convertible?(_t1, _t2, _ctx, nil, _depth), do: false
 
-  defp delta_convertible?(t1, t2, ctx, sig) do
+  defp delta_convertible?(t1, t2, ctx, sig, depth) do
     z1 = zonk(t1, ctx)
     z2 = zonk(t2, ctx)
 
     meta_free?(z1) and meta_free?(z2) and
-      Cure.Core.Term.closed?(z1) and Cure.Core.Term.closed?(z2) and
-      Cure.Core.Conv.conv?(z1, z2, [], 0, sig)
+      Cure.Core.Conv.conv?(z1, z2, Cure.Core.Context.neutral_env(depth), depth, sig)
   end
 
   # Structurally complete: walk EVERY subterm-bearing shape so a metavariable
