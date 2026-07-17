@@ -5496,6 +5496,12 @@ defmodule Cure.Compiler.Parser do
 
     {ast, state} =
       case {peek(state), peek_at(state, 1)} do
+        {%Token{type: :lbrace}, _} ->
+          {rhs, state} = parse_refinement_type(state)
+          meta = [name: name, line: token.line, col: token.col]
+          meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+          {{:type_annotation, meta, [rhs]}, state}
+
         {%Token{type: :lparen}, %Token{type: :rparen}} ->
           # `type Unit = ()` — the Swift-style unit type: `Unit` is the type, `()`
           # its sole value. `= ()` is RESERVED to `Unit`; `()` names the one
@@ -5718,6 +5724,9 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
 
     case token.type do
+      :lbrace ->
+        parse_refinement_type(state)
+
       :lparen ->
         state = advance(state)
         # Reuse the constructor-domain parser inside the group as well. This
@@ -7156,6 +7165,9 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
 
     case token.type do
+      :lbrace ->
+        parse_refinement_type(state)
+
       :lparen ->
         # Grouped/tuple type `(A, B)` or function type `(A, B) -> C`. Each element
         # may carry an optional binder name `(x: A) -> …` — a DEPENDENT arrow whose
@@ -7223,6 +7235,23 @@ defmodule Cure.Compiler.Parser do
             maybe_parse_type_projection(base, state)
         end
     end
+  end
+
+  # `{value: Base | Proposition}` is a proof-backed refinement type. The base is
+  # parsed with the non-union arrow parser because this form owns the `|` token.
+  # The proposition remains ordinary Cure syntax and may refer to `value`.
+  defp parse_refinement_type(state) do
+    state = advance(state)
+    binder_token = peek(state)
+    binder = to_string(binder_token.value)
+    state = advance(state)
+    state = expect(state, :colon)
+    {base_type, state} = parse_type_arrow(state)
+    state = expect(state, :bar) |> skip_newlines()
+    {proposition, state} = parse_expr(state, 0)
+    state = expect(state, :rbrace)
+
+    {{:refinement_type, [binder: binder], [base_type, proposition]}, state}
   end
 
   # A type-position projection `p.1` / `p.2` (used in dependent index positions,

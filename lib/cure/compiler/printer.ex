@@ -1030,6 +1030,17 @@ defmodule Cure.Compiler.Printer do
       ", " <> render(body_type, depth, indent) <> ")"
   end
 
+  # Proof-backed refinement type: `{value: Base | Proposition}`.
+  defp to_string({:refinement_type, meta, [base_type, proposition]}, depth, indent) do
+    binder = Keyword.get(meta, :binder)
+
+    "{" <>
+      binder <>
+      ": " <>
+      render(base_type, depth, indent) <>
+      " | " <> render(proposition, depth, indent) <> "}"
+  end
+
   # -- Typed pattern ----------------------------------------------------------
 
   # `n: Int` in a match arm — binds `n` at the annotated type. The annotation may

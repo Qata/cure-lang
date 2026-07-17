@@ -1,0 +1,29 @@
+@group(:core)
+mod Std.Refine
+  ## A value paired with kernel-checked evidence that it satisfies a proposition.
+  ##
+  ## The surface `{value: a | predicate(value)}` is an ordinary dependent pair.
+  ## It contains no solver result and gives no new authority to the compiler:
+  ## constructing one requires evidence the kernel checks like every other proof.
+  ## Pair a value with evidence that it satisfies the refinement proposition.
+  fn refine(
+    {a: Type},
+    {predicate: (a) -> Type},
+    value: a,
+    proof: predicate(value)
+  ) -> Sigma(refined_value: a, predicate(refined_value)) = %[value, proof]
+
+  ## Recover the underlying value from a proof-backed refinement.
+  fn refined_value(
+    {a: Type},
+    {predicate: (a) -> Type},
+    refined: Sigma(refined_value: a, predicate(refined_value))
+  ) -> a = refined.1
+
+  ## Recover the checked evidence carried by a refinement.
+  fn refinement_proof(
+    {a: Type},
+    {predicate: (a) -> Type},
+    refined: Sigma(value: a, predicate(value))
+  ) -> predicate(refined_value(refined)) = refined.2
+end

@@ -36,6 +36,20 @@ mod Std.Proof.Math
     Z() -> No(zero_is_not_positive)
     S(predecessor) -> Yes(PositiveSuccessor())
 
+  ## Positivity is the same proposition as zero being strictly less than a value.
+  fn positive_means_zero_is_less_than(
+    {value: Nat},
+    proof: IsPositive(value)
+  ) -> IsLessThan(Z, value) = match proof
+    PositiveSuccessor() -> ZeroIsLessThanSuccessor()
+
+  ## Strictly exceeding zero is evidence of positivity.
+  fn zero_is_less_than_means_positive(
+    {value: Nat},
+    proof: IsLessThan(Z, value)
+  ) -> IsPositive(value) = match proof
+    ZeroIsLessThanSuccessor() -> PositiveSuccessor()
+
   ## Adding anything to a positive left operand remains positive.
   fn adding_to_a_positive_number_is_positive(
     {positive: Nat},
@@ -85,4 +99,5 @@ mod Std.Proof.Math
         SuccessorsAreLessThanOrEqual(
           less_than_or_equal_is_transitive(left_predecessors, right_predecessors)
         )
+
 end

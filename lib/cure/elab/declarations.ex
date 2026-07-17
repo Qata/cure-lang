@@ -1185,6 +1185,10 @@ defmodule Cure.Elab.Declarations do
     Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
   end
 
+  defp collect_type_vars({:refinement_type, _m, children}, bound, env, acc) when is_list(children) do
+    Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
+  end
+
   defp collect_type_vars({:tuple_type, _m, children}, bound, env, acc) when is_list(children) do
     Enum.reduce(children, acc, &collect_type_vars(&1, bound, env, &2))
   end
@@ -1834,6 +1838,23 @@ defmodule Cure.Elab.Declarations do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
       {:ok, {:data, sigma_family_name(env), [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
+    end
+  end
+
+  # A refinement is an ordinary dependent pair in Core: the value and a proof of
+  # the proposition about that value. Solvers receive no trusted representation.
+  defp idx_to_core(
+         {:refinement_type, [binder: bname], [dom_ast, proposition_ast]},
+         scope,
+         fam,
+         env,
+         _ctx
+       ) do
+    with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
+         {:ok, proposition} <- idx_to_core(proposition_ast, [bname | scope], fam, env) do
+      {:ok,
+       {:data, sigma_family_name(env),
+        [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, proposition}], []}}
     end
   end
 
