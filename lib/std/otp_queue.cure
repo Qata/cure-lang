@@ -91,4 +91,19 @@ mod Std.Otp.Queue
     MkQ(f, b) -> match f
       QCons(h, f2) -> reflexive(QCons(h, append(f2, reverse(b))))
       QNil()       -> deq_list_reassembles(reverse(b))
+
+  fn append_cong(c: QList, {a: QList}, {b: QList}, e: Equivalent(QList, a, b)) -> Equivalent(QList, append(a, c), append(b, c)) =
+    rewrite e in reflexive(append(b, c))
+
+  ## **REPRESENTATION INDEPENDENCE.** The two-list split is NOT unique — many `(front, back)` pairs
+  ## denote the same logical sequence. The operations are well-defined on that sequence: if `q1` and
+  ## `q2` have the same `to_list`, then so do `enqueue(x, q1)` and `enqueue(x, q2)` (`enqueue_respects`,
+  ## via `enqueue_appends` + `append` congruence), and a dequeue from either observes the same result
+  ## (`dequeue_respects`, via `dequeue_reassembles`: `reassemble(dequeue(qi)) = to_list(qi)`). So the
+  ## amortized queue is a faithful implementation of the abstract FIFO — the internal split is
+  ## invisible to a client.
+  fn enqueue_respects(x: Nat, q1: Q, q2: Q, e: Equivalent(QList, to_list(q1), to_list(q2))) -> Equivalent(QList, to_list(enqueue(x, q1)), to_list(enqueue(x, q2))) =
+    trans(enqueue_appends(x, q1), trans(append_cong(QCons(x, QNil()), e), sym(enqueue_appends(x, q2))))
+  fn dequeue_respects(q1: Q, q2: Q, e: Equivalent(QList, to_list(q1), to_list(q2))) -> Equivalent(QList, reassemble(dequeue(q1)), reassemble(dequeue(q2))) =
+    trans(dequeue_reassembles(q1), trans(e, sym(dequeue_reassembles(q2))))
 end

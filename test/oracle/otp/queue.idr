@@ -53,3 +53,12 @@ deq_list_reassembles (QCons h t) = cons_cong h (append_nil_r t)
 dequeue_reassembles : (q : Q) -> reassemble (dequeue q) = to_list q
 dequeue_reassembles (MkQ (QCons h f2) b) = Refl
 dequeue_reassembles (MkQ QNil b) = deq_list_reassembles (reverse b)
+
+append_cong : (c : QList) -> a = b -> append a c = append b c
+append_cong c Refl = Refl
+
+enqueue_respects : (x : Nat) -> (q1 : Q) -> (q2 : Q) -> to_list q1 = to_list q2 -> to_list (enqueue x q1) = to_list (enqueue x q2)
+enqueue_respects x q1 q2 e = trans (enqueue_appends x q1) (trans (append_cong (QCons x QNil) e) (sym (enqueue_appends x q2)))
+
+dequeue_respects : (q1 : Q) -> (q2 : Q) -> to_list q1 = to_list q2 -> reassemble (dequeue q1) = reassemble (dequeue q2)
+dequeue_respects q1 q2 e = trans (dequeue_reassembles q1) (trans e (sym (dequeue_reassembles q2)))

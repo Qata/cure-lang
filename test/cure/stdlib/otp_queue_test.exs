@@ -25,6 +25,20 @@ defmodule Cure.Stdlib.OtpQueueTest do
     assert {:ok, _} = Program.elaborate(src)
   end
 
+  test "representation independence: same logical sequence => operations agree" do
+    src = """
+    mod QRep
+      use Std.Otp.Queue
+      fn enq(x: Nat, q1: Q, q2: Q, e: Equivalent(QList, to_list(q1), to_list(q2))) -> Equivalent(QList, to_list(enqueue(x, q1)), to_list(enqueue(x, q2))) =
+        enqueue_respects(x, q1, q2, e)
+      fn deq(q1: Q, q2: Q, e: Equivalent(QList, to_list(q1), to_list(q2))) -> Equivalent(QList, reassemble(dequeue(q1)), reassemble(dequeue(q2))) =
+        dequeue_respects(q1, q2, e)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
+
   test "dequeue splits off exactly the head (amortized reversal preserves the FIFO sequence)" do
     src = """
     mod QDeq
