@@ -23,7 +23,48 @@
 IO.puts("test_helper: compiling Cure stdlib")
 Mix.Task.run("cure.compile_stdlib")
 
-ExUnit.start()
+# A tail-friendly failure formatter.
+#
+# ExUnit prints each failure inline, in the moment it happens — buried among
+# thousands of progress dots, compile warnings, and Antigen breadcrumbs. On a
+# ~25-minute suite piped through `tail`, the "Result: N failed" summary survives
+# but the actual failure blocks scroll away, so `tail` of the log shows THAT
+# something failed but never WHAT. This formatter captures every failure's fully
+# formatted block (assertion, diff, stacktrace — exactly what the CLI prints) and
+# the `after_suite` hook below re-prints them as the final lines of output. A
+# `tail` of a piped run then always ends with precisely what failed and why.
+:ets.new(:cure_failure_tail, [:named_table, :public, :ordered_set])
+
+defmodule Cure.FailureTailFormatter do
+  @moduledoc false
+  use GenServer
+
+  @impl true
+  def init(opts), do: {:ok, %{width: Keyword.get(opts, :width, 80)}}
+
+  @impl true
+  def handle_cast({:test_finished, %ExUnit.Test{state: {:failed, failures}} = test}, state) do
+    counter = :ets.info(:cure_failure_tail, :size) + 1
+    text = ExUnit.Formatter.format_test_failure(test, failures, counter, state.width, &plain/2)
+    :ets.insert(:cure_failure_tail, {counter, text})
+    {:noreply, state}
+  end
+
+  # setup_all / module-level failures arrive here, not as individual tests.
+  def handle_cast({:module_finished, %ExUnit.TestModule{state: {:failed, failures}} = mod}, state) do
+    counter = :ets.info(:cure_failure_tail, :size) + 1
+    text = ExUnit.Formatter.format_test_all_failure(mod, failures, counter, state.width, &plain/2)
+    :ets.insert(:cure_failure_tail, {counter, text})
+    {:noreply, state}
+  end
+
+  def handle_cast(_event, state), do: {:noreply, state}
+
+  # This text lands in a piped log, not a TTY — emit it without ANSI coloring.
+  defp plain(_kind, content), do: content
+end
+
+ExUnit.start(formatters: [ExUnit.CLIFormatter, Cure.FailureTailFormatter])
 
 # Antigen deliberately injects "immune response" violations (test scaffolding
 # exercising the detection machinery). Rather than flood stdout with one calm
@@ -41,5 +82,22 @@ ExUnit.after_suite(fn _result ->
   case Antigen.CoverManifest.report() do
     nil -> :ok
     line -> IO.puts("\n" <> line)
+  end
+
+  # Last of all: re-print every failure block, so a `tail` of the piped run
+  # ends with exactly what failed and why (see Cure.FailureTailFormatter above).
+  case :ets.tab2list(:cure_failure_tail) do
+    [] ->
+      :ok
+
+    entries ->
+      bar = String.duplicate("=", 72)
+      IO.puts("\n" <> bar)
+      IO.puts("FAILURES (#{length(entries)}) — re-printed below so a tail of the log catches them:")
+      IO.puts(bar)
+
+      entries
+      |> Enum.sort_by(&elem(&1, 0))
+      |> Enum.each(fn {_counter, text} -> IO.puts(text) end)
   end
 end)
