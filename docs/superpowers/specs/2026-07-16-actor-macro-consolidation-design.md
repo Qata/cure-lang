@@ -2,7 +2,7 @@
 
 **Status:** design approved, implementation pending.
 **Scope:** `lib/std/actor.cure` first (reference implementation), then `fsm`/`supervisor`/`app`, then a deferred Tier‑3 typed layer.
-**Layer:** P (parser, for the optional whole‑module `quote` step and, if 1e adopts mechanism (a), the family keyword‑alias capability) + stdlib Cure (`lib/std/*.cure`). **TCB delta: zero** — no change to `lib/cure/core/*`.
+**Layer:** P (parser, for the optional whole‑module `quote` step and 1e's family raw‑body branch) + stdlib Cure (`lib/std/*.cure`). **TCB delta: zero** — no change to `lib/cure/core/*`.
 
 ## 1. Motivation
 
@@ -53,7 +53,7 @@ which reads like the code it emits. The module wrapper (`mod … behaviour … [
 The reference implementation. Every step is independently green‑gated; the byte‑identical goldens are the spine that lets a backend rewrite be *proven* safe, not assumed.
 
 ### 1a — Fold to one expander
-Retire the standalone bodies of `derive_actor`, `emit_actor`, `emit_actor_call`, and the `ActorSyntax` capture record. `emit_actor`/`emit_actor_call` are deleted outright (their only caller, the old `derive_actor` body, is gone). `derive_actor` is *rewritten in place* — same name, same `syntax … computed by derive_actor` target in `ActorContainers`, so that grammar rule needs no change — into a one-line adapter: it builds an `ActorDefinitionSyntax` (name→`ModuleName`, `state_type`→`state`, `cast_body`→`on_cast`, `call_body`→`on_call`, remaining optionals `None`) and delegates to `derive_actor_family`. Every surface then routes through `derive_actor_family` → `emit_actor_parts`/`emit_actor_call_parts`. This provisionally applies mechanism (b) from step 1e to the `derive` rule so 1a is independently gate‑able without first resolving 1e's open mechanism choice (§10 item 1); if 1e later adopts mechanism (a), it supersedes this adapter for `derive`/`call` too, not only the other 15 Gen A forms. Output is byte‑identical because Gen C fills the same defaults the wrappers hardcoded.
+Retire the standalone bodies of `derive_actor`, `emit_actor`, `emit_actor_call`, and the `ActorSyntax` capture record. `emit_actor`/`emit_actor_call` are deleted outright (their only caller, the old `derive_actor` body, is gone). `derive_actor` is *rewritten in place* — same name, same `syntax … computed by derive_actor` target in `ActorContainers`, so that grammar rule needs no change — into a one-line adapter: it builds an `ActorDefinitionSyntax` (name→`ModuleName`, `state_type`→`state`, `cast_body`→`on_cast`, `call_body`→`on_call`, remaining optionals `None`) and delegates to `derive_actor_family`. Every surface then routes through `derive_actor_family` → `emit_actor_parts`/`emit_actor_call_parts`. This routes the `derive` rule through the family so 1a is independently gate‑able. It works precisely because `derive`'s body **is** Cases (`cast_body → on_cast` type‑checks); the 15 raw `becomes` forms are **not** Cases and do **not** route this way (see the 1e correction — they keep their raw bodies through the family's raw branch). Output is byte‑identical because Gen C fills the same defaults the wrappers hardcoded.
 **Guard:** `GDerived` BEAM‑SHA256 golden byte‑identical + the 19 behavioral tests in `test/cure/compiler/actor_computed_test.exs` (immutable — they pin the `derive` surface).
 
 ### 1b — Templatize the backend
@@ -68,13 +68,24 @@ Extend `quote` to accept an indented declaration block and a `$(decls ...)` grou
 Add `optional body Declarations` to the `ActorDefinition` family; thread a `List(Syntax)` of extra user declarations through the emitters and `append` them into the emitted block. This gives the structured surface the arbitrary‑trailing‑declarations power only the Gen A `with`/bare‑body templates had.
 **Guard:** a new behavioral test for a user‑declaration‑carrying actor; no‑body goldens unchanged.
 
-### 1e — Terse shorthand + remove Gen A
-Re‑express the remaining Gen A positional forms as delegating rules onto `derive_actor_family`, and decide whether to also fold the `derive`/`call` rule's provisional 1a adapter into the same mechanism. Two mechanisms, decided at planning time:
-- **(a) preferred** — teach the family surface to accept keyword aliases (`derive` ≡ `on_cast`, `call` ≡ `on_call`) so the terse forms *are* the structured form with shorter labels, lowered straight to `derive_actor_family`. Requires a small parser capability; confirm it exists or add it.
-- **(b) fallback** — keep each terse form as a thin `computed by` rule whose elab is a one‑line adapter that fills an `ActorDefinitionSyntax` and calls `derive_actor_family`. Available today; leaves a few near‑empty adapters instead of one expander.
+### 1e — Terse shorthand + consolidate Gen A backends
 
-Then migrate the 12 demos (`examples/cure_motif/cure_src/{voice,sequencer,clock}.cure`, `examples/cure_atelier/cure_src/{painter,curator}.cure`, `examples/cure_colony/cure_src/{echo,worker}.cure`, `examples/cure_forge/cure_src/{metrics,logger,queue,pool}.cure`, `vicure/test_syntax.cure`) to the surviving surface and delete the 16 `becomes` templates.
-**Guard:** a temporary parity test per terse form (byte‑identical to its old template) + each migrated demo's own Mix test suite (e.g. `mix test` in `examples/cure_motif/`, `examples/cure_atelier/`, `examples/cure_colony/`, `examples/cure_forge/`) + full suite. (`phase35/run-on-unix.sh` is a generic‑unix AtomVM harness in the separate `esp32-beam` repo, not part of `cure-lang` — not applicable here.)
+**Correction to the original framing (2026‑07‑16).** The original 1e treated all 16 Gen A `becomes lift module name` forms as one homogeneous set of "terse forms delegating to the expander," to be deleted after routing through `derive_actor_family`. That is **wrong for 15 of the 16**, and the error is a category confusion. Delegation works by building an `ActorDefinitionSyntax` with `cast_body → on_cast` — but `on_cast` is typed to accept **Cases** (constructor‑pattern arms) and rejects everything else (`guarded_handler`, `non_constructor_pattern`). Only the `derive`/`call` rule's body *is* Cases (`match message / Inc -> …`); the other 15 forms' bodies are **raw callback expressions** (`%[:noreply, state]`, or a `pickup` value‑equality block with `else`). `cast_body → on_cast` is a category error for them. The 16 forms are therefore **two populations**:
+
+- **Derived shorthand** (`derive`/`call`, Gen B): body is Cases → genuinely folds into `derive_actor_family`, **byte‑identical**, and is genuine Tier‑1 sugar. Keep the 1a adapter / mechanism‑(b) routing here.
+- **Raw callback surface** (the 15 `becomes` templates): an **escape hatch** (Tier‑0, see §7), not sugar over the derived family. It carries expressiveness the derived surface has no grammar for — value‑equality dispatch, `else`, guards, hand‑written callbacks. It is **preserved**, not deleted. What consolidates is the *backend*: the 16 duplicate spelled‑out templates collapse into **one shared raw emitter**.
+
+**Mechanism (decided at planning, 2026‑07‑16): A — unified family.** The `ActorDefinition` family gains a **raw‑body branch** as an alternative to the `on_cast` Cases branch, so one family is the single home for both surfaces: the Cases branch lowers to `emit_actor_parts` (byte‑identical); the raw branch lowers to the shared raw emitter. (Mechanisms (a) keyword‑alias and (b) thin `computed by` adapters were the original options; both presumed the raw body was Cases, so both are superseded for the raw population.)
+
+**Byte‑identical is not the guard for the raw fold.** Traced end‑to‑end (`parser.ex:parse_lift_module` → `lift_module.ex:ordinary_module_ast`): templates split `callback` lines into `meta[:callbacks]`, emitted **first** (`callback_defs ++ declarations`); the computed builders have no callbacks slot (all → `declarations`) and set `inherit_imports:false`. Function order and that split both reach the `.beam` bytes, so a byte‑identical computed emitter would have to reconstruct the parser's callback‑map machinery — deep and fragile. The raw fold's guard is therefore **behavioral‑equivalence**: the ~30 immutable behavioral tests (`container_macro_test.exs`, `actor_computed_test.exs`) + each demo's Mix suite + full suite. The 15 raw characterization goldens (`Raw01…Raw16`, task #23) are a *re‑freezable* net — re‑bless them to the consolidated output with justification when the fold intentionally reshapes emission. Strict byte‑identical stays the bar only for the 6 original quote‑port goldens.
+
+**Tier‑3 seam.** The consolidation isolates the procedural reply‑type analysis (`derive_reply_contract`/`infer_reply_type`, the literal‑subtype sniffing §6 flags) behind a single clearly‑marked function the family calls, so a future typed elaborator swaps it at one site.
+
+**Demo migration is mostly a no‑op.** For a value‑dispatch or custom‑callback actor the "surviving surface" *is* the raw one, so it stays. Only demos whose dispatch is genuinely constructor‑arms move to `derive`/`call`. `logger`/`clock` (value‑dispatch + `else`) and `curator` (custom callbacks) stay raw; the other nine (`voice`, `sequencer`, `painter`, `echo`, `worker`, `metrics`, `queue`, `pool`, `vicure/test_syntax`) are audited case‑by‑case. Nothing deletes the raw *surface*; only duplicate backend templates are removed.
+
+**Already done:** the dead `L177` form (no‑`state` `initial`+`handle_cast`, callbacks typed against free `p`, never pinned → fails to compile, referenced nowhere) was dropped ahead of the fold (`d1fa8dc9`).
+
+**Guard (summary):** behavioral‑equivalence for the raw fold (immutable behavioral suite + demo suites + full suite); byte‑identical for the derived shorthand and the 6 quote‑port goldens. (`phase35/run-on-unix.sh` is a generic‑unix AtomVM harness in the separate `esp32-beam` repo, not part of `cure-lang` — not applicable here.)
 
 ## 5. Stage 2 — fsm / supervisor / app
 
@@ -97,16 +108,18 @@ The end state realizes the Lean‑4 macro architecture:
 
 | Tier | Lean analog | Cure realization |
 | --- | --- | --- |
-| 1 — declarative shorthand | `macro` / `macro_rules` | terse positional forms delegating to the Tier‑2 expander (family keyword‑aliases or thin `computed by` adapters, per 1e — not the retired `becomes lift module name` skeletons) |
+| 0 — raw escape hatch | raw `syntax` + hand‑written `elab` | the raw callback surface: hand‑written GenServer callbacks with arbitrary bodies (value‑dispatch, `else`, guards). Preserved permanently; after 1e it routes through one shared raw emitter behind the `ActorDefinition` family's raw branch, not 16 duplicate templates |
+| 1 — declarative shorthand | `macro` / `macro_rules` | `derive`/`call`: terse forms whose body *is* Cases, delegating to the Tier‑2 expander (byte‑identical) |
 | 2 — procedural expander | `elab` / `elab_rules` | `syntax family` + quote‑based `expands with` expander over one backend |
-| 3 — typed metaprogramming | `MetaM` / elaborator reflection | typed access to inferred types + datatype structure (Stage 3) |
+| 3 — typed metaprogramming | `MetaM` / elaborator reflection | typed access to inferred types + datatype structure; swaps the procedural reply‑type analysis at the single seam 1e isolates (Stage 3) |
 
-Stages 1–2 build tiers 1–2; Stage 3 adds tier 3.
+Tier 0 is not a stage of the progression but the escape hatch beneath it — the tiers are a progression of *structure and typing*, and a raw hand‑written‑callback surface sits outside that progression by definition (as Lean's raw `elab` sits under `macro`/`macro_rules`). Retiring Tier 0 becomes conceivable only if a Tier‑3 typed elaborator grows expressive enough to subsume value‑dispatch + guards + custom callbacks — a "maybe never," and acceptable as such. Stages 1–2 build tiers 1–2 and consolidate Tier 0's backend; Stage 3 adds tier 3.
 
 ## 8. Testing and guards
 
-- **Byte‑identical goldens** (`actor_quote_golden_test.exs`: `GDerived`, `GStructuredCall`, `GLifecycle`, `GFsmDerived`, `GSup`, `GApp`) are the anti‑regression spine. Any backend edit keeps them byte‑identical, or is consciously re‑blessed with justification.
-- **Behavioral tests** (`actor_computed_test.exs`, immutable) pin the `derive` surface across the fold.
+- **Byte‑identical goldens** (`actor_quote_golden_test.exs`: `GDerived`, `GStructuredCall`, `GLifecycle`, `GFsmDerived`, `GSup`, `GApp`) are the anti‑regression spine for the derived surface. Any derived‑path edit keeps them byte‑identical, or is consciously re‑blessed with justification.
+- **Raw characterization goldens** (`Raw01…Raw16` in the same file, task #23) are the raw fold's *re‑freezable* net, not a byte‑identical spine — the raw fold is guarded by behavioral‑equivalence (see 1e), and these are re‑blessed to the consolidated output with justification when the fold intentionally reshapes emission.
+- **Behavioral tests** (`actor_computed_test.exs`, `container_macro_test.exs`, immutable) pin both the `derive` surface and the raw callback surface across the fold — this is the raw fold's real guard.
 - **New tests** cover body passthrough (1d), init‑mode precedence (`initial` wins over `init`, already handled by `derive_actor_init`), and the whole‑module `quote` forms (1c).
 - Red‑green throughout; scoped `mix test <file>` during iteration, one full suite alone at each stage gate.
 
@@ -119,5 +132,5 @@ Stages 1–2 build tiers 1–2; Stage 3 adds tier 3.
 
 ## 10. Open decisions carried to planning
 
-1. **Terse delegation mechanism (1e):** keyword‑alias in the family (preferred) vs thin per‑form adapter (fallback) — decided by whether the family surface can express alternate keyword spellings cheaply.
+1. **~~Terse delegation mechanism (1e)~~ — RESOLVED 2026‑07‑16.** The original keyword‑alias vs per‑form‑adapter choice was moot: both presumed the raw body was Cases (a category error for 15/16 forms — see the 1e correction). Resolution: mechanism **A** (unified `ActorDefinition` family with a raw‑body branch) preserves the raw surface as Tier‑0; the raw fold is guarded by **behavioral‑equivalence** (immutable behavioral suite + demo suites + full suite), not byte‑identical. Only `derive`/`call` (genuine Cases) stays byte‑identical Tier‑1 sugar.
 2. **Whole‑module `quote` (1c):** include in Stage 1 after 1b, or defer to its own follow‑up if the parser extension proves thorny. Neither choice blocks 1a/1b/1d/1e.

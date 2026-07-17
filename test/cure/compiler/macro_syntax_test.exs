@@ -1,6 +1,6 @@
 defmodule Cure.Compiler.MacroSyntaxTest do
   use ExUnit.Case, async: true
-  alias Cure.Compiler.{Lexer, Parser, MacroSyntax}
+  alias Cure.Compiler.{Lexer, Parser, MacroSyntax, Token}
 
   # Parse the RHS of `fn f() = <expr>` to get a real expression AST.
   defp expr!(src) do
@@ -71,6 +71,31 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:source_col, {:s_int, 7}} in attrs
 
     assert MacroSyntax.from_syntax(MacroSyntax.to_syntax(ast)) == ast
+  end
+
+  test "to_syntax reflects a raw lexer Token without crashing" do
+    # A `delayed raw until dedent` capture leaks unparsed Tokens into the macro
+    # input; expansion_key/1 reflects that input via to_syntax. A Token is a
+    # struct, so it must not fall into the plain-map synlit clause (which would
+    # Enum.map over the struct and raise).
+    tok = Token.new(:newline, "\n", 1, 60)
+    assert {:syn_raw, repr} = MacroSyntax.to_syntax(tok)
+    refute repr == :s_opaque
+  end
+
+  test "reflected Tokens are position-insensitive but content-distinguishing" do
+    # The macro recursion guard (expansion_key/1) ignores source positions, so
+    # two Tokens differing only in line/col must reflect equally; Tokens with
+    # different type or value must reflect differently, or the guard would treat
+    # two distinct raw bodies as the same expansion and drop one.
+    base = MacroSyntax.to_syntax(Token.new(:atom, ":inc", 1, 1))
+    moved = MacroSyntax.to_syntax(Token.new(:atom, ":inc", 9, 42))
+    other_val = MacroSyntax.to_syntax(Token.new(:atom, ":dec", 1, 1))
+    other_type = MacroSyntax.to_syntax(Token.new(:ident, ":inc", 1, 1))
+
+    assert base == moved
+    refute base == other_val
+    refute base == other_type
   end
 
   test "caller scope is consumed before generated syntax reaches elaboration" do

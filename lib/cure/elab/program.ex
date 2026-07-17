@@ -363,13 +363,31 @@ defmodule Cure.Elab.Program do
       # in the preparation AST so local macro definitions keep working.
       prep_ast = declaration_expansion_prep(ast)
 
-      with {:ok, env} <- check_ast_elixir_core(prep_ast) do
-        expand_declaration_nodes(ast, env)
+      with {:ok, env} <- check_ast_elixir_core(prep_ast),
+           {:ok, expanded} <- expand_declaration_nodes(ast, env) do
+        {:ok, unwrap_sole_lifted_module(expanded)}
       end
     else
       {:ok, ast}
     end
   end
+
+  # A parse-time `becomes lift module name` template yields a bare top-level
+  # `:lift_module` node, so a bare (mod-less) single-actor program has the lifted
+  # module as its top-level module identity and `compile_and_load` returns the
+  # actor. A computed/family expansion instead wraps its single lifted module in
+  # the expander's general `:block` shape; left wrapped, the program's stripped
+  # main AST is an empty block and codegen emits an empty `Cure.Main` wrapper
+  # rather than the actor. Normalize that sole-lifted-module block to the bare
+  # `:lift_module` so both surfaces agree downstream. Only the very top level of
+  # the expansion is unwrapped; a lifted module nested inside a `mod`/container
+  # is reached through the container recursion and stays wrapped, so mod-scoped
+  # programs still return their own module.
+  defp unwrap_sole_lifted_module({tag, _meta, [{:lift_module, _, _} = lifted]})
+       when tag in [:block, :container],
+       do: lifted
+
+  defp unwrap_sole_lifted_module(other), do: other
 
   # Declaration expansion must not descend into function bodies. Those uses are
   # expanded by Declarations with the callback context already attached to the
@@ -1313,6 +1331,54 @@ defmodule Cure.Elab.Program do
   end
 
   # Build ONE module's flat env slice (own decls + its own imports), as today.
+  @doc """
+  Merge a macro's HOME-module env into a caller env for definition-site (ambient)
+  expander resolution. `path` is the home file of a stdlib computed/family macro
+  (stamped on the rule as `:source_path` at harvest, carried in the `:computed_use`
+  meta as `:home_source`). The home slice is elaborated once and cached; the caller
+  wins on any name conflict (it is the right operand of `merge_env`). Any slice
+  failure degrades gracefully to the caller env, preserving prior behaviour.
+
+  Used only to elaborate the expander itself — the AST the expander produces is
+  re-elaborated in the caller's own env, so this does not widen caller scope.
+  """
+  @spec env_with_macro_home(Env.t(), binary()) :: Env.t()
+  def env_with_macro_home(%Env{} = caller, path) when is_binary(path) do
+    case cached_macro_home_env(path) do
+      {:ok, %Env{} = home} ->
+        case merge_env(home, caller) do
+          {:ok, merged} -> merged
+          {:error, _} -> caller
+        end
+
+      {:error, _} ->
+        caller
+    end
+  end
+
+  def env_with_macro_home(caller, _path), do: caller
+
+  defp cached_macro_home_env(path) do
+    key = {__MODULE__, :macro_home_env, path}
+
+    case :persistent_term.get(key, :missing) do
+      :missing ->
+        case module_slice_env(path) do
+          {:ok, _env} = ok ->
+            :persistent_term.put(key, ok)
+            ok
+
+          {:error, _} = err ->
+            # Do not cache failures: a transient read/parse error must not poison
+            # later expansions once the tree is consistent.
+            err
+        end
+
+      cached ->
+        cached
+    end
+  end
+
   defp module_slice_env(path) do
     with {:ok, source} <- File.read(path),
          {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
