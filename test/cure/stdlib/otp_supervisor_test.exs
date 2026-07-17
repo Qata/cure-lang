@@ -92,4 +92,24 @@ defmodule Cure.Stdlib.OtpSupervisorTest do
 
     assert verdict(defs) == :reject
   end
+
+  test "the module is compiled into the stdlib preload" do
+    assert Code.ensure_loaded?(:"Cure.Std.Otp.Supervisor")
+  end
+
+  test "dynamic-pool membership algebra: start grows, terminate cancels start, restart preserves size" do
+    src = """
+    mod SupPool
+      use Std.Otp.Supervisor
+      fn grows(spec: ChildSpec, p: Pool(spec)) -> Equivalent(Nat, pool_size(start_child(p)), S(pool_size(p))) =
+        start_grows(p)
+      fn cancels(spec: ChildSpec, p: Pool(spec)) -> Equivalent(Pool(spec), terminate_child(start_child(p)), p) =
+        terminate_start_id(p)
+      fn keeps_size(spec: ChildSpec, p: Pool(spec)) -> Equivalent(Nat, pool_size(restart_pool(p)), pool_size(p)) =
+        restart_preserves_size(p)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end
