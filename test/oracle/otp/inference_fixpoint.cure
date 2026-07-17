@@ -28,4 +28,7 @@ mod InferenceFixpoint
     ) -> AllHandled(iterate(f, TNil, n), a) = match n
     Z()  -> AHNil()
     S(k) -> all_handled_trans(mono(iterate(f, TNil, k), a, lfp_le(f, mono, a, pre, k)), pre)
+  fn monotone_iterate(f: (TagList) -> TagList, mono: (x: TagList) -> (y: TagList) -> (AllHandled(x, y)) -> AllHandled(f(x), f(y)), n: Nat) -> AllHandled(iterate(f, TNil, n), iterate(f, TNil, S(n))) = match n
+    Z()  -> AHNil()
+    S(k) -> mono(iterate(f, TNil, k), iterate(f, TNil, S(k)), monotone_iterate(f, mono, k))
 end
