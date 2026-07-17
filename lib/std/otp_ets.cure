@@ -1,0 +1,76 @@
+@group(:concurrency)
+mod Std.Otp.Ets
+  use Std.Equivalent
+  use Std.Decision
+  ## ETS (Erlang Term Storage) — the BEAM's in-memory key/value tables, the storage primitive OTP
+  ## servers reach for. This models a `set`-semantics table (one value per key, last write wins) as
+  ## an association list and proves the functional-correctness laws a verified store must satisfy:
+  ## looking up a just-inserted key returns its value, and inserting a DIFFERENT key does not
+  ## disturb a lookup. So `ets:lookup`/`insert` behave as a real finite map, certified.
+  ##
+  ## Note on proof style: since key equality (`key_eq`) is stuck on an abstract key, `lookup` on an
+  ## abstract key stays FOLDED (the kernel's freeze — finding K1). So the laws are proved by CASE
+  ## ANALYSIS on the concrete keys (which makes `key_eq` compute), and the impossible same-key case
+  ## of the disequality law is refuted with an `Empty` discriminator.
+
+  type Key = KA | KB | KC
+  type B = F | T
+  fn key_eq(x: Key, y: Key) -> B = match x
+    KA() -> match y
+      KA() -> T
+      KB() -> F
+      KC() -> F
+    KB() -> match y
+      KA() -> F
+      KB() -> T
+      KC() -> F
+    KC() -> match y
+      KA() -> F
+      KB() -> F
+      KC() -> T
+
+  ## `T` and `F` are distinct, so `T = F` is uninhabited — the discriminator every decidable-key
+  ## argument needs to close its impossible branch.
+  fn t_ne_f(p: Equivalent(B, T(), F())) -> Empty = match p
+  fn absurd({a: Type}, e: Empty) -> a = match e
+
+  ## A lookup result: a value or nothing.
+  type Opt = ONone | OSome(Nat)
+  ## A table: an association list, most-recent binding at the front (front SHADOWS — set semantics).
+  type Table = TEmpty | TIns(Key, Nat, Table)
+
+  ## `ets:lookup` — first binding for `k`, or nothing.
+  fn lookup(k: Key, t: Table) -> Opt = match t
+    TEmpty()          -> ONone()
+    TIns(k2, v, rest) -> match key_eq(k, k2)
+      T() -> OSome(v)
+      F() -> lookup(k, rest)
+
+  ## `ets:insert` (set) — bind `k` to `v`, shadowing any prior binding.
+  fn insert(k: Key, v: Nat, t: Table) -> Table = TIns(k, v, t)
+
+  ## **LOOKUP-AFTER-INSERT.** Looking up a just-inserted key returns exactly its value:
+  ## `lookup(k, insert(k, v, t)) = OSome(v)`. Case on `k` so `key_eq(k, k)` computes to `T`.
+  fn lookup_insert_eq(k: Key, v: Nat, t: Table) -> Equivalent(Opt, lookup(k, insert(k, v, t)), OSome(v)) = match k
+    KA() -> reflexive(OSome(v))
+    KB() -> reflexive(OSome(v))
+    KC() -> reflexive(OSome(v))
+
+  ## **INSERT AT A DIFFERENT KEY DOESN'T DISTURB A LOOKUP.** If `key_eq(k, k2) = F` then
+  ## `lookup(k, insert(k2, v, t)) = lookup(k, t)` — writes to other keys are invisible. Case on both
+  ## keys: the off-diagonal cases compute (`key_eq = F`), and the same-key diagonals are impossible
+  ## given `neq` (`key_eq(k, k)` would be `T`, so `neq : T = F` is refuted).
+  fn lookup_insert_neq(k: Key, k2: Key, v: Nat, t: Table, neq: Equivalent(B, key_eq(k, k2), F())) -> Equivalent(Opt, lookup(k, insert(k2, v, t)), lookup(k, t)) = match k
+    KA() -> match k2
+      KA() -> absurd(t_ne_f(neq))
+      KB() -> reflexive(lookup(KA(), t))
+      KC() -> reflexive(lookup(KA(), t))
+    KB() -> match k2
+      KA() -> reflexive(lookup(KB(), t))
+      KB() -> absurd(t_ne_f(neq))
+      KC() -> reflexive(lookup(KB(), t))
+    KC() -> match k2
+      KA() -> reflexive(lookup(KC(), t))
+      KB() -> reflexive(lookup(KC(), t))
+      KC() -> absurd(t_ne_f(neq))
+end
