@@ -1771,6 +1771,7 @@ defmodule Cure.Elab.Elaborator do
 
     goal_first? =
       (concrete_goal? and implicit_def?(env, resolved)) or
+        (concrete_goal? and Enum.any?(args, &call_placeholder?/1) and Map.has_key?(env.defs, resolved)) or
         (Enum.any?(args, &match?({:lambda, _m, _b}, &1)) and Map.has_key?(env.defs, resolved))
 
     goal_first =
@@ -7215,17 +7216,19 @@ defmodule Cure.Elab.Elaborator do
     # left-to-right slot solving then runs exactly as before, and the kernel
     # re-checks the assembled term regardless. Restricted to a META-FREE goal so a
     # still-open expected type (nothing to solve against) skips the pre-pass.
-    {erased, rest} = Enum.split_while(slots, fn {_d, q} -> q == :erased end)
-
     seed_from_goal? =
       union_goal?(expected) or (not is_nil(expected) and not Unify.has_meta?(expected))
 
     {init, slots} =
       if seed_from_goal? do
-        seeded =
-          erased
-          |> Enum.reduce_while(init, &bidir_app_slot(&1, &2, names, ctx, env))
-          |> bidir_solve_codomain_from_goal(codomain, expected, env, rest)
+        # Allocate the REAL leading erased/placeholder metas before solving the
+        # codomain. Previously only erased slots were retained; explicit `_`
+        # slots were represented by disposable padding metas during goal
+        # unification, then allocated afresh in the main pass and stayed
+        # unsolved (`box(_) : Box(Z)`). Stop at the first ordinary present
+        # argument so its existing bidirectional checking order is unchanged.
+        {seeded, rest} = bidir_seed_goal_prefix(slots, init, names, ctx, env)
+        seeded = bidir_solve_codomain_from_goal(seeded, codomain, expected, env, rest)
 
         {seeded, rest}
       else
@@ -7237,6 +7240,30 @@ defmodule Cure.Elab.Elaborator do
     |> resolve_deferred_slots(names, ctx, env)
     |> finish_global_app(name, codomain, ctx, env, expected)
   end
+
+  defp bidir_seed_goal_prefix(
+         [slot = {_dom, :erased} | rest],
+         acc,
+         names,
+         ctx,
+         env
+       ) do
+    {:cont, acc} = bidir_app_slot(slot, acc, names, ctx, env)
+    bidir_seed_goal_prefix(rest, acc, names, ctx, env)
+  end
+
+  defp bidir_seed_goal_prefix(
+         [slot | rest],
+         {:ok, _mctx, _chosen, [{:variable, _meta, "_"} | _], _deferred} = acc,
+         names,
+         ctx,
+         env
+       ) do
+    {:cont, acc} = bidir_app_slot(slot, acc, names, ctx, env)
+    bidir_seed_goal_prefix(rest, acc, names, ctx, env)
+  end
+
+  defp bidir_seed_goal_prefix(slots, acc, _names, _ctx, _env), do: {acc, slots}
 
   # `solve_codomain_from_goal/5` for the bidirectional accumulator's 5-tuple. Same
   # contract: pad `chosen` to the full binder stack (Subst.instantiate indexes against

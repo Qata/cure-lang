@@ -32,6 +32,20 @@ defmodule Cure.Elab.CallArgumentPlaceholderTest do
     assert {:ok, _env} = Program.elaborate(source)
   end
 
+  test "the expected result can solve a dependent placeholder" do
+    source = """
+    mod PlaceholderExpected
+      type Nat = Z | S(Nat)
+      type Box indices (n: Nat)
+        MkBox : (value: Nat) -> Box(value)
+      fn box(n: Nat) -> Box(n) = MkBox(n)
+      fn zero() -> Box(Z) = box(_)
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
+
   test "an unconstrained explicit placeholder remains an error" do
     source = """
     mod PlaceholderAmbiguous

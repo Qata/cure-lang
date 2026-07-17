@@ -303,8 +303,8 @@ but ordinary eager argument inference resolved it as a free global before the de
 application solver could inspect the remaining Π telescope.
 
 **Semantics.** `_` is a goal-directed placeholder only in a direct global call-argument slot.
-The application solver creates a typed metavariable and allows later dependent arguments to
-solve it. All placeholders must be solved before Core assembly, and the
+The application solver creates a typed metavariable and allows later dependent arguments or a
+concrete expected result to solve it. All placeholders must be solved before Core assembly, and the
 kernel re-checks the resulting application. An unconstrained `_` is rejected; `_` outside a call
 argument remains an ordinary error. Relevance is unchanged: a relevant runtime argument cannot
 be reconstructed solely from an erased index. Thus `coverage(_, s2)` is valid only when `s2` (or
@@ -313,8 +313,9 @@ does not turn erased proof indices into runtime values.
 
 **Status.** ✅ FIXED. Placeholder-bearing calls route directly to bidirectional Π-telescope
 solving instead of first passing through eager free-name resolution. Regressions cover solving
-from a later proof index, solving from a runtime-carried dependent argument, ambiguity rejection,
-and the non-call scope boundary.
+from a later proof index, a runtime-carried dependent argument, and the expected result, plus
+ambiguity rejection and the non-call scope boundary. The goal pre-pass retains the actual
+placeholder meta rather than solving a disposable padding meta.
 
 ---
 
