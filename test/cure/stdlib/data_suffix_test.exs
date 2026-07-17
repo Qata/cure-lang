@@ -17,6 +17,10 @@ defmodule Cure.Stdlib.DataSuffixTest do
       Same : (xs: List(a)) -> Consumed(a, False, xs, xs)
       Drop : (head: a) -> Consumed(a, strict, rem, orig) -> Consumed(a, True, rem, Cons(head, orig))
 
+    type Step(t: Type, e: Type, a: Type) indices (strict: Bool, orig: List(t))
+      Succ : (value: a) -> (rest: List(t)) -> Consumed(t, strict, rest, orig) -> Step(t, e, a, strict, orig)
+      Fail : (error: e) -> Step(t, e, a, strict, orig)
+
     fn trans({a: Type}, {left: Bool}, {right: Bool}, {orig: List(a)}, {mid: List(a)}, {rem: List(a)}, first: Consumed(a, left, mid, orig), second: Consumed(a, right, rem, mid)) -> Consumed(a, `or`(left, right), rem, orig) =
       match first
         Same(_) -> second
@@ -69,6 +73,33 @@ defmodule Cure.Stdlib.DataSuffixTest do
     definition = """
       fn p({a: Type}, x: a, tail: List(a)) -> Consumed(a, True, tail, Cons(x, tail)) =
         trans(Same(Cons(x, tail)), Drop(x, Same(tail)))
+    """
+
+    assert verdict(definition) == :accept
+  end
+
+  test "Succ retains the exact dependent remainder proof" do
+    definition = """
+      fn p({t: Type}, {e: Type}, {a: Type}, value: a, head: t, tail: List(t)) -> Step(t, e, a, True, Cons(head, tail)) =
+        Succ(value, tail, Drop(head, Same(tail)))
+    """
+
+    assert verdict(definition) == :accept
+  end
+
+  test "Succ rejects a proof about a different remainder" do
+    definition = """
+      fn bad({t: Type}, {e: Type}, {a: Type}, value: a, head: t, tail: List(t), other: List(t)) -> Step(t, e, a, True, Cons(head, tail)) =
+        Succ(value, other, Drop(head, Same(tail)))
+    """
+
+    assert verdict(definition) == :reject
+  end
+
+  test "Fail is polymorphic in strictness and original input" do
+    definition = """
+      fn p({t: Type}, {e: Type}, {a: Type}, error: e, input: List(t)) -> Step(t, e, a, True, input) =
+        Fail(error)
     """
 
     assert verdict(definition) == :accept
