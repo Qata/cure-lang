@@ -322,7 +322,23 @@ defmodule Cure.Core.Normalise do
           {:vctor, cname, cargs} ->
             case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
               {_c, ar, {:closure, env, body}} ->
-                {:ok, reapply(args, spend_fuel(Eval.reduce_branch_body(body, env, cargs, ar)))}
+                # Keep following the ι chain rather than returning after ONE step. If the
+                # branch body re-exposes a *stuck* `ncase` (a case whose scrutinee is a
+                # non-reducible neutral), this recursion propagates that `:stuck` up so the
+                # WHOLE def-application freezes — folded — instead of surfacing the residual
+                # `case`. That makes the A6 freeze CONSISTENT: `f(<ctor>, x)` (outer case
+                # ι-fires eagerly in `eval`, leaving a stuck inner `case x`) and
+                # `f(<stuck-global>, x)` (outer case forced HERE, same stuck inner `case x`)
+                # both freeze to `f(…, x)`, so conversion compares them argument-wise instead
+                # of one folded and one expanded (finding K1). It only ever freezes MORE — a
+                # result headed by a constructor or another global still returns `{:ok, …}` —
+                # so NF termination is preserved (and mutual recursion is unaffected: we never
+                # UNfreeze a recursive re-exposure). Each ι still spends fuel.
+                reduce_unfolded(
+                  reapply(args, spend_fuel(Eval.reduce_branch_body(body, env, cargs, ar))),
+                  sig,
+                  opts
+                )
 
               nil ->
                 :stuck
