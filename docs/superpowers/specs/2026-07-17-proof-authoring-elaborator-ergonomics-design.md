@@ -170,7 +170,12 @@ the implicit-carrying path.
 
 **Layer/risk.** C. Low-medium. Soundness-neutral (only affects emitted arity).
 
-**Status.** OPEN (codegen, not elaborator, but a proof-authoring wart — kept here for the author's-eye view).
+**Status.** ✅ FIXED (`emit.ex` `lower_app_spine`): the `{:global, name}` branch now detects
+under-saturation (`length(args) < present_arity`) and eta-expands the missing parameters into
+the curried 1-arg-fun ABI (`add(Z)` → `fun(V) -> add(Z, V) end`), instead of `Enum.split`
+emitting a call at the supplied arity (`add/1`). Regression tests in
+`partial_application_codegen_test.exs` (one/two-short + higher-order). The disproof lambda-wrap
+workaround in `otp_inference.cure` is no longer needed.
 
 ---
 

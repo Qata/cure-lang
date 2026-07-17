@@ -755,7 +755,7 @@ defmodule Cure.Elab.Emit do
       # A named function takes its declared arity in one BEAM call; any further
       # arguments apply (curried) to the function it returns — `mk()(z)`.
       {:global, name} ->
-        {direct, extra} = Enum.split(args, present_arity(env, name))
+        arity = present_arity(env, name)
 
         callee =
           case remote_target(name, emit_origins()) do
@@ -763,8 +763,24 @@ defmodule Cure.Elab.Emit do
             {mod, fun} -> {:remote, @line, {:atom, @line, mod}, {:atom, @line, fun}}
           end
 
-        base = {:call, @line, callee, Enum.map(direct, &lower(env, &1, ctx))}
-        Enum.reduce(extra, base, fn arg, acc -> {:call, @line, acc, [lower(env, arg, ctx)]} end)
+        if length(args) < arity do
+          # UNDER-saturated (partial application): the value has a function type, so eta-expand
+          # the missing explicit parameters into the curried 1-arg-fun ABI — `add(Z)` at arity 2
+          # becomes `fun(V) -> add(Z, V) end`. Without this, `Enum.split` would emit a call at
+          # the SUPPLIED arity (`add/1`), which does not exist (E4). The kernel already typed the
+          # partial application (currying); this only lowers it faithfully.
+          eta = for _ <- 1..(arity - length(args)), do: fresh_var("Pa")
+          supplied = Enum.map(args, &lower(env, &1, ctx))
+          saturated = {:call, @line, callee, supplied ++ Enum.map(eta, &{:var, @line, &1})}
+
+          Enum.reduce(Enum.reverse(eta), saturated, fn v, body ->
+            {:fun, @line, {:clauses, [{:clause, @line, [{:var, @line, v}], [], [body]}]}}
+          end)
+        else
+          {direct, extra} = Enum.split(args, arity)
+          base = {:call, @line, callee, Enum.map(direct, &lower(env, &1, ctx))}
+          Enum.reduce(extra, base, fn arg, acc -> {:call, @line, acc, [lower(env, arg, ctx)]} end)
+        end
 
       # Applying a closure value (a lambda or a function-typed binder) is curried:
       # apply one argument at a time to the BEAM fun.
