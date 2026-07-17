@@ -60,9 +60,17 @@ defmodule Cure.Elab.EmitPrefixTest do
     # target must be the PREFIXED Map, and the bare canonical must NOT appear.
     assert flat =~ "T_Probe.Cure.Std.Map"
 
+    # Anchored on the quoted-atom boundary `:"Cure.Std.Map"` (not the bare
+    # `Cure.Std.Map` substring, which also occurs inside the prefixed atom
+    # `T_Probe.Cure.Std.Map`, nor `{:"Cure.Std.Map"` — remote_target/2's
+    # `{mod, fun}` result is always wrapped as a 3-tuple `{:atom, line, mod}` in
+    # the actual forms, so a bare-2-tuple-leading pattern never matches
+    # regardless of whether the target correctly rerouted). The leading `:"`
+    # only recurs at the start of a fresh atom literal, so this pattern cannot
+    # false-positive against the prefixed atom's inspect text.
     refute String.contains?(
              flat |> :erlang.binary_to_term() |> inspect(limit: :infinity),
-             "{:\"Cure.Std.Map\""
+             ~s(:"Cure.Std.Map")
            )
   end
 
