@@ -47,4 +47,48 @@ mod Std.Otp.Queue
   ## `(f ++ reverse(b)) ++ [x] = to_list(q) ++ [x]`. So the two-list encoding is a faithful FIFO.
   fn enqueue_appends(x: Nat, q: Q) -> Equivalent(QList, to_list(enqueue(x, q)), append(to_list(q), QCons(x, QNil()))) = match q
     MkQ(f, b) -> sym(append_assoc(f, reverse(b), QCons(x, QNil())))
+
+  ## `QNil` is a right unit for `append` — needed for the reversal case of dequeue.
+  fn append_nil_r(xs: QList) -> Equivalent(QList, append(xs, QNil()), xs) = match xs
+    QNil()      -> reflexive(QNil())
+    QCons(h, t) -> cons_cong(h, append_nil_r(t))
+
+  ## The result of a dequeue: the queue was empty, or its oldest element `x` came off leaving `q2`.
+  type QOut = QEmpty | Out(Nat, Q)
+
+  ## Pop the head off a bare list. Defined BEFORE `dequeue` so it is certified-total first —
+  ## otherwise `dequeue` (which calls it) is not certified and won't δ-reduce.
+  fn deq_list(xs: QList) -> QOut = match xs
+    QNil()      -> QEmpty()
+    QCons(h, t) -> Out(h, MkQ(t, QNil()))
+
+  ## **DEQUEUE.** Pop the oldest element (front of the logical sequence). If the front list is
+  ## non-empty, take its head in O(1); if it is empty, REVERSE the back onto the front and pop that
+  ## (the amortization) — the front-empty case is exactly `deq_list(reverse(b))`. Both empty ⇒ the
+  ## queue is empty.
+  fn dequeue(q: Q) -> QOut = match q
+    MkQ(f, b) -> match f
+      QCons(h, f2) -> Out(h, MkQ(f2, b))
+      QNil()       -> deq_list(reverse(b))
+
+  ## Reassemble a dequeue result back into a logical sequence: nothing, or the head consed onto the
+  ## remaining queue's sequence.
+  fn reassemble(o: QOut) -> QList = match o
+    QEmpty()   -> QNil()
+    Out(x, q2) -> QCons(x, to_list(q2))
+
+  ## Splitting the head off a bare list and reassembling is the identity — the reversal case of
+  ## dequeue in isolation.
+  fn deq_list_reassembles(xs: QList) -> Equivalent(QList, reassemble(deq_list(xs)), xs) = match xs
+    QNil()      -> reflexive(QNil())
+    QCons(h, t) -> cons_cong(h, append_nil_r(t))
+
+  ## **DEQUEUE SPLITS OFF THE HEAD (losing nothing).** `reassemble(dequeue(q)) = to_list(q)` — a
+  ## dequeue removes exactly the oldest element and the remaining queue denotes exactly the tail, in
+  ## BOTH the fast (non-empty front) and the amortized (front-empty, back-reversed) cases. So the
+  ## amortization is correct: reversing the back to refill the front preserves the FIFO sequence.
+  fn dequeue_reassembles(q: Q) -> Equivalent(QList, reassemble(dequeue(q)), to_list(q)) = match q
+    MkQ(f, b) -> match f
+      QCons(h, f2) -> reflexive(QCons(h, append(f2, reverse(b))))
+      QNil()       -> deq_list_reassembles(reverse(b))
 end

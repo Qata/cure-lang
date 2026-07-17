@@ -19,4 +19,25 @@ mod Queue
     MkQ(f, b) -> MkQ(f, QCons(x, b))
   fn enqueue_appends(x: Nat, q: Q) -> Equivalent(QList, to_list(enqueue(x, q)), append(to_list(q), QCons(x, QNil()))) = match q
     MkQ(f, b) -> sym(append_assoc(f, reverse(b), QCons(x, QNil())))
+  fn append_nil_r(xs: QList) -> Equivalent(QList, append(xs, QNil()), xs) = match xs
+    QNil()      -> reflexive(QNil())
+    QCons(h, t) -> cons_cong(h, append_nil_r(t))
+  type QOut = QEmpty | Out(Nat, Q)
+  fn deq_list(xs: QList) -> QOut = match xs
+    QNil()      -> QEmpty()
+    QCons(h, t) -> Out(h, MkQ(t, QNil()))
+  fn dequeue(q: Q) -> QOut = match q
+    MkQ(f, b) -> match f
+      QCons(h, f2) -> Out(h, MkQ(f2, b))
+      QNil()       -> deq_list(reverse(b))
+  fn reassemble(o: QOut) -> QList = match o
+    QEmpty()   -> QNil()
+    Out(x, q2) -> QCons(x, to_list(q2))
+  fn deq_list_reassembles(xs: QList) -> Equivalent(QList, reassemble(deq_list(xs)), xs) = match xs
+    QNil()      -> reflexive(QNil())
+    QCons(h, t) -> cons_cong(h, append_nil_r(t))
+  fn dequeue_reassembles(q: Q) -> Equivalent(QList, reassemble(dequeue(q)), to_list(q)) = match q
+    MkQ(f, b) -> match f
+      QCons(h, f2) -> reflexive(QCons(h, append(f2, reverse(b))))
+      QNil()       -> deq_list_reassembles(reverse(b))
 end

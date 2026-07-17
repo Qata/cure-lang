@@ -24,4 +24,16 @@ defmodule Cure.Stdlib.OtpQueueTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "dequeue splits off exactly the head (amortized reversal preserves the FIFO sequence)" do
+    src = """
+    mod QDeq
+      use Std.Otp.Queue
+      fn law(q: Q) -> Equivalent(QList, reassemble(dequeue(q)), to_list(q)) =
+        dequeue_reassembles(q)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end
