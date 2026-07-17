@@ -24,6 +24,8 @@ defmodule Cure.Stdlib.OtpRecursiveAdequacyTest do
       fn loop_body() -> RBody = RSend(TA, RRecv(TB, RVar()))
       fn covered() -> Equivalent(B, getb(rec_infer(loop_body()), TA), T) =
         brec_covers(loop_body(), TA, RSHere())
+      fn handled() -> Handles(TA, denote(rec_infer(loop_body()))) =
+        brec_handles(loop_body(), TA, RSHere())
     end
     """
 

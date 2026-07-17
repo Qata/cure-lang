@@ -19,35 +19,10 @@ mod Std.Otp.RecursiveAdequacy
 
   use Std.Otp.FiniteFixpoint
   use Std.Otp.RecursiveTransfer
+  use Std.Otp.InterfaceBridge
 
-  ## Bit projection and its monotonicity under `Sub` (a set bit stays set in a larger interface).
-  fn getb(x: IF, t: Tag) -> B = match x
-    MkIF(a, b, c) -> match t
-      TA() -> a
-      TB() -> b
-      TC() -> c
-  fn getb_mono(x: IF, y: IF, s: Sub(x, y), t: Tag, e: Equivalent(B, getb(x, t), T)) -> Equivalent(B, getb(y, t), T) = match t
-    TA() -> match x
-      MkIF(xa, xb, xc) -> match y
-        MkIF(ya, yb, yc) -> match s
-          MkSub(ia, ib, ic) -> match ia
-            ImpFF() -> match e
-            ImpFT() -> match e
-            ImpTT() -> reflexive(T)
-    TB() -> match x
-      MkIF(xa, xb, xc) -> match y
-        MkIF(ya, yb, yc) -> match s
-          MkSub(ia, ib, ic) -> match ib
-            ImpFF() -> match e
-            ImpFT() -> match e
-            ImpTT() -> reflexive(T)
-    TC() -> match x
-      MkIF(xa, xb, xc) -> match y
-        MkIF(ya, yb, yc) -> match s
-          MkSub(ia, ib, ic) -> match ic
-            ImpFF() -> match e
-            ImpFT() -> match e
-            ImpTT() -> reflexive(T)
+  ## `getb`, `getb_mono`, `denote`, and `denote_complete` come from `Std.Otp.InterfaceBridge`
+  ## over its canonical `Tag`; only the `setbit`/`join` coverage lemmas are new here.
 
   ## Setting a bit sets it; setting one bit preserves any other already-set bit.
   fn getb_setbit_here(t: Tag, x: IF) -> Equivalent(B, getb(setbit(t, x), t), T) = match t
@@ -151,4 +126,12 @@ mod Std.Otp.RecursiveAdequacy
   fn brec_covers(body: RBody, t: Tag, sends: RSendsIn(body, t)) -> Equivalent(B, getb(rec_infer(body), t), T) =
     getb_mono(tset(body, rec_infer(body)), rec_infer(body), rec_fixed(body), t,
               tset_covers(body, rec_infer(body), t, sends))
+
+  ## **BREC COVERAGE, IN MEMBERSHIP FORM.** The tag a recursive behaviour sends is `Handles`-ed
+  ## by the `denote`d inferred interface — the shape the `TagList` adequacy proof
+  ## (`Std.Otp.InferenceAdequacy`) consumes. `brec_covers` in bit-set form, bridged by
+  ## `Std.Otp.InterfaceBridge.denote_complete`. This is `infer(BRec)`'s coverage stated exactly
+  ## as the first-order `coverage` states it, now closed under recursion.
+  fn brec_handles(body: RBody, t: Tag, sends: RSendsIn(body, t)) -> Handles(t, denote(rec_infer(body))) =
+    denote_complete(rec_infer(body), t, brec_covers(body, t, sends))
 end

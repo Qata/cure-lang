@@ -18,8 +18,10 @@ mod Std.Otp.RecursiveTransfer
   ## into `TagList` membership for the adequacy proof.
 
   use Std.Otp.FiniteFixpoint
+  use Std.Otp.InterfaceBridge
 
-  type Tag = TA | TB | TC
+  ## `Tag`, `denote`, `getb`, `Handles`, and the membership correspondence come from
+  ## `Std.Otp.InterfaceBridge` (single canonical `Tag` shared across the recursion modules).
 
   ## Bit disjunction and its monotonicity (pointwise ⊑ is preserved by ∨).
   fn orb(p: B, q: B) -> B = match p
