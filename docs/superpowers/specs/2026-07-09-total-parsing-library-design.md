@@ -16,17 +16,22 @@ specified in
 The 0.34 dependent-type rewrite may retain landed substrate and fix general
 compiler gaps it exposes, but does not take on the remaining parser product.
 
-**Parked status (2026-07-17):** an exploratory list-shaped `Consumed`, `Step`,
-and `Acc` implementation proved the necessary dependent-type shapes, then was
-removed from `lib/std` because this user-facing library targets Cure 0.35. Its
-exact source is preserved in Appendix A of
-[`2026-07-17-cure-native-parser-diagnostics-self-hosting-design.md`](2026-07-17-cure-native-parser-diagnostics-self-hosting-design.md).
-The exploration's generally useful compiler fixes remain: family-application
-index types are instantiated with actual parameters before entering constructor
-telescopes, and higher-order constructor fields share the ordinary dependent-
-arrow grammar. On resumption, `weaken`/`weakens` still expose a general
-dependent-match motive `:branch_type` rejection and proof erasure remains to be
-implemented honestly.
+**Implementation status (2026-07-17):** the list-shaped `Consumed` relation,
+strict drop constructor, reflexivity, transitivity, the dependent `Step`
+result, and strict-suffix accessibility `Acc` have landed in `Std.Data.Suffix`.
+Landing `Step` also fixed the general
+family-application inference bug it exposed: index-variable types are now
+instantiated with the applied family's actual parameters before being placed in
+a constructor telescope, so a field such as `Consumed(t, strict, rest, orig)`
+correctly refers to the surrounding `t` and earlier named `rest` field. Landing
+`Acc` unified dependent-arrow parsing for ordinary annotations and higher-order
+constructor fields; both now retain named Π domains through the same AST shape.
+The consumption bit follows the reference's lower-bound semantics (`True`
+guarantees a proper suffix; `False` makes no guarantee), including a drop
+constructor polymorphic in that bit. The structural `weaken`/`weakens`
+conversions are the next slice: their honest definitions currently expose a
+general dependent-match motive `:branch_type` rejection and must not be replaced
+by an unchecked cast.
 
 ---
 
