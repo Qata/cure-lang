@@ -260,4 +260,36 @@ mod Std.Otp.MailboxPattern
   ## sub-derivation is uninhabited, so the whole thing is vacuous.
   fn zero_times({a: Pat}, {m: MS}, acc: Accepts(PTimes(PZero, a), m)) -> Accepts(PZero, m) = match acc
     ATimes(m1, m2, az, aa) -> match az
+
+  ## **PATTERN SUBTYPING.** `Incl(E, F)` is a syntactic inclusion derivation: reflexivity,
+  ## `𝟎` least, choice as least-upper-bound / injections, and `·`/`*` monotone, closed under
+  ## transitivity. `incl_sound` proves it SOUND for semantic inclusion — every bag `E` accepts,
+  ## `F` accepts too — so a mailbox typed `E` may be used where `F` is expected. Monotone
+  ## `·`/`*` cases delegate to helpers (their `acc` is a parameter, so the product/star split
+  ## refines the total — the E8 workaround).
+  type Incl indices (e: Pat, f: Pat)
+    IRefl  : Incl(e, e)
+    IZero  : Incl(PZero, f)
+    IPlus  : Incl(e, g) -> Incl(f, g) -> Incl(PPlus(e, f), g)
+    IInL   : Incl(e, f) -> Incl(e, PPlus(f, g))
+    IInR   : Incl(e, g) -> Incl(e, PPlus(f, g))
+    ITimes : Incl(e1, e2) -> Incl(f1, f2) -> Incl(PTimes(e1, f1), PTimes(e2, f2))
+    IStar  : Incl(e, f) -> Incl(PStar(e), PStar(f))
+    ITrans : Incl(e, f) -> Incl(f, g) -> Incl(e, g)
+  fn incl_times({e1: Pat}, {f1: Pat}, {e2: Pat}, {f2: Pat}, {m: MS}, s1: Incl(e1, e2), s2: Incl(f1, f2), acc: Accepts(PTimes(e1, f1), m)) -> Accepts(PTimes(e2, f2), m) = match acc
+    ATimes(m1, m2, a1, a2) -> ATimes(m1, m2, incl_sound(s1, a1), incl_sound(s2, a2))
+  fn incl_star({e: Pat}, {f: Pat}, {m: MS}, s: Incl(e, f), acc: Accepts(PStar(e), m)) -> Accepts(PStar(f), m) = match acc
+    AStar0()                -> AStar0()
+    AStarN(m1, m2, ae, as)  -> AStarN(m1, m2, incl_sound(s, ae), incl_star(s, as))
+  fn incl_sound({e: Pat}, {f: Pat}, {m: MS}, sub: Incl(e, f), acc: Accepts(e, m)) -> Accepts(f, m) = match sub
+    IRefl()        -> acc
+    IZero()        -> match acc
+    IPlus(se, sf)  -> match acc
+      APlusL(ae) -> incl_sound(se, ae)
+      APlusR(af) -> incl_sound(sf, af)
+    IInL(sef)      -> APlusL(incl_sound(sef, acc))
+    IInR(seg)      -> APlusR(incl_sound(seg, acc))
+    ITimes(s1, s2) -> incl_times(s1, s2, acc)
+    IStar(s)       -> incl_star(s, acc)
+    ITrans(sef, sfg) -> incl_sound(sfg, incl_sound(sef, acc))
 end

@@ -191,3 +191,30 @@ zero_times (ATimes m1 m2 az aa) = absurd_pzero az
 
 plus_zero_bwd : Accepts a m -> Accepts (PPlus a PZero) m
 plus_zero_bwd acc = APlusL acc
+
+data Incl : Pat -> Pat -> Type where
+  IRefl : Incl e e
+  IZero : Incl PZero f
+  IPlus : Incl e g -> Incl f g -> Incl (PPlus e f) g
+  IInL : Incl e f -> Incl e (PPlus f g)
+  IInR : Incl e g -> Incl e (PPlus f g)
+  ITimes : Incl e1 e2 -> Incl f1 f2 -> Incl (PTimes e1 f1) (PTimes e2 f2)
+  IStar : Incl e f -> Incl (PStar e) (PStar f)
+  ITrans : Incl e f -> Incl f g -> Incl e g
+
+mutual
+  incl_times : Incl e1 e2 -> Incl f1 f2 -> Accepts (PTimes e1 f1) m -> Accepts (PTimes e2 f2) m
+  incl_times s1 s2 (ATimes m1 m2 a1 a2) = ATimes m1 m2 (incl_sound s1 a1) (incl_sound s2 a2)
+  incl_star : Incl e f -> Accepts (PStar e) m -> Accepts (PStar f) m
+  incl_star s AStar0 = AStar0
+  incl_star s (AStarN m1 m2 ae as) = AStarN m1 m2 (incl_sound s ae) (incl_star s as)
+  incl_sound : Incl e f -> Accepts e m -> Accepts f m
+  incl_sound IRefl acc = acc
+  incl_sound IZero acc = absurd_pzero acc
+  incl_sound (IPlus se sf) (APlusL ae) = incl_sound se ae
+  incl_sound (IPlus se sf) (APlusR af) = incl_sound sf af
+  incl_sound (IInL sef) acc = APlusL (incl_sound sef acc)
+  incl_sound (IInR seg) acc = APlusR (incl_sound seg acc)
+  incl_sound (ITimes s1 s2) acc = incl_times s1 s2 acc
+  incl_sound (IStar s) acc = incl_star s acc
+  incl_sound (ITrans sef sfg) acc = incl_sound sfg (incl_sound sef acc)

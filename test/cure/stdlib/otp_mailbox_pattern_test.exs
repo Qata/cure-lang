@@ -118,4 +118,17 @@ defmodule Cure.Stdlib.OtpMailboxPatternTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "incl_sound: subtyping transports acceptance (TA <= TA + TB)" do
+    src = """
+    mod SubInst
+      use Std.Otp.MailboxPattern
+      fn a_acc() -> Accepts(PAtom(TA), MkMS(S(Z), Z, Z)) = AAtomA()
+      fn widened() -> Accepts(PPlus(PAtom(TA), PAtom(TB)), MkMS(S(Z), Z, Z)) =
+        incl_sound(IInL(IRefl()), a_acc())
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end
