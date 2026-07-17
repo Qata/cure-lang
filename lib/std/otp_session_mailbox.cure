@@ -1,0 +1,66 @@
+@group(:concurrency)
+mod Std.Otp.SessionMailbox
+  ## SESSION TYPES → MAILBOX TYPES (build-out map B3, de'Liguoro–Padovani §4.3–4.4, the headline
+  ## encoding). A binary session endpoint is realized on the BEAM as a process with a MAILBOX: the
+  ## messages it must be ready to receive. The encoding of an endpoint's session type is therefore
+  ## the MULTISET of tags it RECEIVES (mailbox types are commutative — order-insensitive bags).
+  ##
+  ## `recvs(L)` is that mailbox multiset; `sends(L)` is the multiset of tags the endpoint EMITS.
+  ## The load-bearing correctness property is FIDELITY: the mailbox an endpoint must service is
+  ## exactly what its DUAL peer sends — `recvs(dual(L)) = sends(L)`. So encoding a session into
+  ## mailboxes preserves communication safety: every message one side emits is one the other side's
+  ## mailbox type accounts for, and vice versa.
+
+  type Tag = TA | TB | TC
+  ## A binary session endpoint type: send-then-continue, receive-then-continue, or done.
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local)
+  ## A mailbox type as a commutative multiset: counts of expected `TA`, `TB`, `TC` messages.
+  type MS = MkMS(Nat, Nat, Nat)
+
+  ## Increment the counter for one tag.
+  fn bump(t: Tag, m: MS) -> MS = match m
+    MkMS(a, b, c) -> match t
+      TA() -> MkMS(S(a), b, c)
+      TB() -> MkMS(a, S(b), c)
+      TC() -> MkMS(a, b, S(c))
+
+  ## The encoding: the MAILBOX multiset of an endpoint — the tags it RECEIVES. Sends contribute
+  ## nothing to the endpoint's own mailbox.
+  fn recvs(l: Local) -> MS = match l
+    LEnd()      -> MkMS(Z(), Z(), Z())
+    LSend(t, k) -> recvs(k)
+    LRecv(t, k) -> bump(t, recvs(k))
+
+  ## The dual measure: the tags an endpoint SENDS (what lands in its peer's mailbox).
+  fn sends(l: Local) -> MS = match l
+    LEnd()      -> MkMS(Z(), Z(), Z())
+    LSend(t, k) -> bump(t, sends(k))
+    LRecv(t, k) -> sends(k)
+
+  ## Dual endpoint: swap send and receive.
+  fn dual(l: Local) -> Local = match l
+    LEnd()      -> LEnd()
+    LSend(t, k) -> LRecv(t, dual(k))
+    LRecv(t, k) -> LSend(t, dual(k))
+
+  ## Congruence for `bump` under equality of mailbox multisets.
+  fn bump_cong(t: Tag, {a: MS}, {b: MS}, e: Equivalent(MS, a, b)) -> Equivalent(MS, bump(t, a), bump(t, b)) =
+    rewrite e in reflexive(bump(t, b))
+
+  ## **MAILBOX-ENCODING FIDELITY.** An endpoint's mailbox multiset equals what its DUAL peer
+  ## sends: `recvs(dual(L)) = sends(L)`. Induction on `L` — dualizing turns each of the endpoint's
+  ## sends into the peer's receive and vice versa, so the peer's mailbox accounts for exactly the
+  ## messages this endpoint emits. This is the soundness of the session→mailbox encoding.
+  fn recvs_dual(l: Local) -> Equivalent(MS, recvs(dual(l)), sends(l)) = match l
+    LEnd()      -> reflexive(MkMS(Z(), Z(), Z()))
+    LSend(t, k) -> bump_cong(t, recvs_dual(k))
+    LRecv(t, k) -> recvs_dual(k)
+
+  ## The mirror: what an endpoint sends equals what its dual peer receives — `sends(dual(L)) =
+  ## recvs(L)`. Together with `recvs_dual` this says the two mailbox multisets of a session's
+  ## endpoints are exactly served by each other.
+  fn sends_dual(l: Local) -> Equivalent(MS, sends(dual(l)), recvs(l)) = match l
+    LEnd()      -> reflexive(MkMS(Z(), Z(), Z()))
+    LSend(t, k) -> sends_dual(k)
+    LRecv(t, k) -> bump_cong(t, sends_dual(k))
+end

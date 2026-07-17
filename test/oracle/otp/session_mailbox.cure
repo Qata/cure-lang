@@ -1,0 +1,32 @@
+mod SessionMailbox
+  type Tag = TA | TB | TC
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local)
+  type MS = MkMS(Nat, Nat, Nat)
+  fn bump(t: Tag, m: MS) -> MS = match m
+    MkMS(a, b, c) -> match t
+      TA() -> MkMS(S(a), b, c)
+      TB() -> MkMS(a, S(b), c)
+      TC() -> MkMS(a, b, S(c))
+  fn recvs(l: Local) -> MS = match l
+    LEnd()      -> MkMS(Z(), Z(), Z())
+    LSend(t, k) -> recvs(k)
+    LRecv(t, k) -> bump(t, recvs(k))
+  fn sends(l: Local) -> MS = match l
+    LEnd()      -> MkMS(Z(), Z(), Z())
+    LSend(t, k) -> bump(t, sends(k))
+    LRecv(t, k) -> sends(k)
+  fn dual(l: Local) -> Local = match l
+    LEnd()      -> LEnd()
+    LSend(t, k) -> LRecv(t, dual(k))
+    LRecv(t, k) -> LSend(t, dual(k))
+  fn bump_cong(t: Tag, {a: MS}, {b: MS}, e: Equivalent(MS, a, b)) -> Equivalent(MS, bump(t, a), bump(t, b)) =
+    rewrite e in reflexive(bump(t, b))
+  fn recvs_dual(l: Local) -> Equivalent(MS, recvs(dual(l)), sends(l)) = match l
+    LEnd()      -> reflexive(MkMS(Z(), Z(), Z()))
+    LSend(t, k) -> bump_cong(t, recvs_dual(k))
+    LRecv(t, k) -> recvs_dual(k)
+  fn sends_dual(l: Local) -> Equivalent(MS, sends(dual(l)), recvs(l)) = match l
+    LEnd()      -> reflexive(MkMS(Z(), Z(), Z()))
+    LSend(t, k) -> sends_dual(k)
+    LRecv(t, k) -> bump_cong(t, sends_dual(k))
+end
