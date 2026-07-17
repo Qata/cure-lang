@@ -50,4 +50,18 @@ defmodule Cure.Stdlib.OtpQueueTest do
 
     assert {:ok, _} = Program.elaborate(src)
   end
+
+  test "peek agrees with dequeue, and is_empty reflects the logical sequence" do
+    src = """
+    mod QObs
+      use Std.Otp.Queue
+      fn peeks(q: Q) -> Equivalent(QOpt, peek(q), head_of(dequeue(q))) =
+        peek_dequeue(q)
+      fn empties(q: Q) -> Equivalent(B, is_empty(q), qnull(to_list(q))) =
+        is_empty_reflects(q)
+    end
+    """
+
+    assert {:ok, _} = Program.elaborate(src)
+  end
 end

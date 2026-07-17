@@ -62,3 +62,50 @@ enqueue_respects x q1 q2 e = trans (enqueue_appends x q1) (trans (append_cong (Q
 
 dequeue_respects : (q1 : Q) -> (q2 : Q) -> to_list q1 = to_list q2 -> reassemble (dequeue q1) = reassemble (dequeue q2)
 dequeue_respects q1 q2 e = trans (dequeue_reassembles q1) (trans e (sym (dequeue_reassembles q2)))
+
+data QOpt = QNone | QSome Nat
+
+peek_list : QList -> QOpt
+peek_list QNil = QNone
+peek_list (QCons h t) = QSome h
+
+peek : Q -> QOpt
+peek (MkQ (QCons h f2) b) = QSome h
+peek (MkQ QNil b) = peek_list (reverse b)
+
+head_of : QOut -> QOpt
+head_of QEmpty = QNone
+head_of (Out x q2) = QSome x
+
+peek_list_deq : (xs : QList) -> peek_list xs = head_of (deq_list xs)
+peek_list_deq QNil = Refl
+peek_list_deq (QCons h t) = Refl
+
+peek_dequeue : (q : Q) -> peek q = head_of (dequeue q)
+peek_dequeue (MkQ (QCons h f2) b) = Refl
+peek_dequeue (MkQ QNil b) = peek_list_deq (reverse b)
+
+data B = F | T
+
+qnull : QList -> B
+qnull QNil = T
+qnull (QCons h t) = F
+
+andb : B -> B -> B
+andb F b = F
+andb T b = b
+
+is_empty : Q -> B
+is_empty (MkQ f b) = andb (qnull f) (qnull b)
+
+qnull_append_cons : (xs : QList) -> (h : Nat) -> qnull (append xs (QCons h QNil)) = F
+qnull_append_cons QNil h = Refl
+qnull_append_cons (QCons a t) h = Refl
+
+qnull_reverse : (xs : QList) -> qnull (reverse xs) = qnull xs
+qnull_reverse QNil = Refl
+qnull_reverse (QCons h t) = qnull_append_cons (reverse t) h
+
+is_empty_reflects : (q : Q) -> is_empty q = qnull (to_list q)
+is_empty_reflects (MkQ (QCons h f2) b) = Refl
+is_empty_reflects (MkQ QNil b) = sym (qnull_reverse b)

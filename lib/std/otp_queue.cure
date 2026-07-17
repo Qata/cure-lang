@@ -106,4 +106,59 @@ mod Std.Otp.Queue
     trans(enqueue_appends(x, q1), trans(append_cong(QCons(x, QNil()), e), sym(enqueue_appends(x, q2))))
   fn dequeue_respects(q1: Q, q2: Q, e: Equivalent(QList, to_list(q1), to_list(q2))) -> Equivalent(QList, reassemble(dequeue(q1)), reassemble(dequeue(q2))) =
     trans(dequeue_reassembles(q1), trans(e, sym(dequeue_reassembles(q2))))
+
+  ## PEEK — inspect the oldest element without removing it (Erlang `queue:peek`). An optional Nat.
+  type QOpt = QNone | QSome(Nat)
+  fn peek_list(xs: QList) -> QOpt = match xs
+    QNil()      -> QNone()
+    QCons(h, t) -> QSome(h)
+  fn peek(q: Q) -> QOpt = match q
+    MkQ(f, b) -> match f
+      QCons(h, f2) -> QSome(h)
+      QNil()       -> peek_list(reverse(b))
+  ## The head that a dequeue would remove.
+  fn head_of(o: QOut) -> QOpt = match o
+    QEmpty()   -> QNone()
+    Out(x, q2) -> QSome(x)
+
+  ## **PEEK AGREES WITH DEQUEUE.** `peek(q) = head_of(dequeue(q))` — looking at the front observes
+  ## exactly the element a dequeue would pop, in both the fast and the amortized case. `peek` mirrors
+  ## `dequeue`'s front/back split structurally, so the fast case is reflexive and the front-empty case
+  ## reduces to `peek_list(reverse(b)) = head_of(deq_list(reverse(b)))`.
+  fn peek_list_deq(xs: QList) -> Equivalent(QOpt, peek_list(xs), head_of(deq_list(xs))) = match xs
+    QNil()      -> reflexive(QNone())
+    QCons(h, t) -> reflexive(QSome(h))
+  fn peek_dequeue(q: Q) -> Equivalent(QOpt, peek(q), head_of(dequeue(q))) = match q
+    MkQ(f, b) -> match f
+      QCons(h, f2) -> reflexive(QSome(h))
+      QNil()       -> peek_list_deq(reverse(b))
+
+  ## IS_EMPTY — the O(1) structural test (both lists empty), as Erlang `queue:is_empty` does it.
+  type B = F | T
+  fn qnull(xs: QList) -> B = match xs
+    QNil()      -> T()
+    QCons(h, t) -> F()
+  fn andb(a: B, b: B) -> B = match a
+    F() -> F()
+    T() -> b
+  fn is_empty(q: Q) -> B = match q
+    MkQ(f, b) -> andb(qnull(f), qnull(b))
+
+  ## `qnull` is invariant under `reverse` (reversing doesn't create or destroy elements): appending a
+  ## singleton is never null, and `reverse` of a cons ends in exactly such an append.
+  fn qnull_append_cons(xs: QList, h: Nat) -> Equivalent(B, qnull(append(xs, QCons(h, QNil()))), F()) = match xs
+    QNil()      -> reflexive(F())
+    QCons(a, t) -> reflexive(F())
+  fn qnull_reverse(xs: QList) -> Equivalent(B, qnull(reverse(xs)), qnull(xs)) = match xs
+    QNil()      -> reflexive(T())
+    QCons(h, t) -> qnull_append_cons(reverse(t), h)
+
+  ## **IS_EMPTY REFLECTS THE LOGICAL SEQUENCE.** `is_empty(q) = null(to_list(q))` — the cheap
+  ## both-lists-empty test agrees with the queue actually denoting the empty sequence, even for
+  ## `{[], [a]}`-style states where the front is empty but the back is not (there `is_empty` is
+  ## `null(b)`, matched by `null(reverse(b)) = null(to_list)` via `qnull_reverse`).
+  fn is_empty_reflects(q: Q) -> Equivalent(B, is_empty(q), qnull(to_list(q))) = match q
+    MkQ(f, b) -> match f
+      QCons(h, f2) -> reflexive(F())
+      QNil()       -> sym(qnull_reverse(b))
 end
