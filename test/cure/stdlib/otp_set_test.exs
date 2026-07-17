@@ -26,6 +26,10 @@ defmodule Cure.Stdlib.OtpSetTest do
         union_idem_member(x, s)
       fn assoc(x: Key, s1: Set, s2: Set, s3: Set) -> Equivalent(B, mem(x, union(union(s1, s2), s3)), mem(x, union(s1, union(s2, s3)))) =
         union_assoc_member(x, s1, s2, s3)
+      fn upper_l(x: Key, s1: Set, s2: Set) -> Equivalent(B, implb(mem(x, s1), mem(x, union(s1, s2))), T()) =
+        union_upper_l(x, s1, s2)
+      fn upper_r(x: Key, s1: Set, s2: Set) -> Equivalent(B, implb(mem(x, s2), mem(x, union(s1, s2))), T()) =
+        union_upper_r(x, s1, s2)
     end
     """
 

@@ -75,3 +75,25 @@ union_assoc_member x s1 s2 s3 =
       (trans (orb_assoc (mem x s1) (mem x s2) (mem x s3))
         (trans (orb_cong_r (mem x s1) (sym (union_member x s2 s3)))
           (sym (union_member x s1 (union s2 s3))))))
+
+implb : B -> B -> B
+implb F b = T
+implb T b = b
+
+implb_cong_r : (a : B) -> b = b2 -> implb a b = implb a b2
+implb_cong_r a e = cong (\y => implb a y) e
+
+implb_orb_l : (a : B) -> (b : B) -> implb a (orb a b) = T
+implb_orb_l F b = Refl
+implb_orb_l T b = Refl
+
+implb_orb_r : (a : B) -> (b : B) -> implb b (orb a b) = T
+implb_orb_r a F = Refl
+implb_orb_r F T = Refl
+implb_orb_r T T = Refl
+
+union_upper_l : (x : Key) -> (s1 : Set) -> (s2 : Set) -> implb (mem x s1) (mem x (union s1 s2)) = T
+union_upper_l x s1 s2 = trans (implb_cong_r (mem x s1) (union_member x s1 s2)) (implb_orb_l (mem x s1) (mem x s2))
+
+union_upper_r : (x : Key) -> (s1 : Set) -> (s2 : Set) -> implb (mem x s2) (mem x (union s1 s2)) = T
+union_upper_r x s1 s2 = trans (implb_cong_r (mem x s2) (union_member x s1 s2)) (implb_orb_r (mem x s1) (mem x s2))

@@ -102,4 +102,30 @@ mod Std.Otp.Set
         trans(orb_assoc(mem(x, s1), mem(x, s2), mem(x, s3)),
           trans(orb_cong_r(mem(x, s1), sym(union_member(x, s2, s3))),
             sym(union_member(x, s1, union(s2, s3)))))))
+
+  ## Boolean implication `a ⟹ b`, the membership-ordering primitive: `x ∈ s1` entails `x ∈ s2`
+  ## precisely when `implb(mem(x, s1), mem(x, s2)) = T` at every key. `orb` absorbs each operand
+  ## (`a ⟹ (a or b)`, `b ⟹ (a or b)`) — the semilattice property that makes union an upper bound.
+  fn implb(a: B, b: B) -> B = match a
+    F() -> T()
+    T() -> b
+  fn implb_cong_r(a: B, {b: B}, {b2: B}, e: Equivalent(B, b, b2)) -> Equivalent(B, implb(a, b), implb(a, b2)) =
+    rewrite e in reflexive(implb(a, b2))
+  fn implb_orb_l(a: B, b: B) -> Equivalent(B, implb(a, orb(a, b)), T()) = match a
+    F() -> reflexive(T())
+    T() -> reflexive(T())
+  fn implb_orb_r(a: B, b: B) -> Equivalent(B, implb(b, orb(a, b)), T()) = match b
+    F() -> reflexive(T())
+    T() -> match a
+      F() -> reflexive(T())
+      T() -> reflexive(T())
+
+  ## **UNION IS AN UPPER BOUND OF EACH OPERAND.** `x ∈ s1 ⟹ x ∈ union(s1, s2)` and `x ∈ s2 ⟹ x ∈
+  ## union(s1, s2)` — every element of either part survives into the union (the `⊆`-order witnesses,
+  ## so `union` is the join of the membership semilattice). Rewrite the union side to `orb` via
+  ## `union_member`, then absorb by `implb_orb_l`/`implb_orb_r`.
+  fn union_upper_l(x: Key, s1: Set, s2: Set) -> Equivalent(B, implb(mem(x, s1), mem(x, union(s1, s2))), T()) =
+    trans(implb_cong_r(mem(x, s1), union_member(x, s1, s2)), implb_orb_l(mem(x, s1), mem(x, s2)))
+  fn union_upper_r(x: Key, s1: Set, s2: Set) -> Equivalent(B, implb(mem(x, s2), mem(x, union(s1, s2))), T()) =
+    trans(implb_cong_r(mem(x, s2), union_member(x, s1, s2)), implb_orb_r(mem(x, s1), mem(x, s2)))
 end
