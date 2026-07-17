@@ -24,6 +24,12 @@ mod Std.Data.Suffix
     Succ : (value: a) -> (rest: List(t)) -> Consumed(t, strict, rest, orig) -> Step(t, e, a, strict, orig)
     Fail : (error: e) -> Step(t, e, a, strict, orig)
 
+  ## Accessibility of the strict-suffix relation. A driver may recurse on any
+  ## `rest` only after applying this witness with a proof that `rest` consumed
+  ## at least one element from `orig`.
+  type Acc(t: Type) indices (orig: List(t))
+    MkAcc : (descend: ((rest: List(t)) -> Consumed(t, True, rest, orig) -> Acc(t, rest))) -> Acc(t, orig)
+
   ## Reflexivity: consuming nothing leaves the original input unchanged.
   fn same({a: Type}, xs: List(a)) -> Consumed(a, False, xs, xs) = Same(xs)
 

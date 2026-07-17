@@ -21,6 +21,9 @@ defmodule Cure.Stdlib.DataSuffixTest do
       Succ : (value: a) -> (rest: List(t)) -> Consumed(t, strict, rest, orig) -> Step(t, e, a, strict, orig)
       Fail : (error: e) -> Step(t, e, a, strict, orig)
 
+    type Acc(t: Type) indices (orig: List(t))
+      MkAcc : (descend: ((rest: List(t)) -> Consumed(t, True, rest, orig) -> Acc(t, rest))) -> Acc(t, orig)
+
     fn trans({a: Type}, {left: Bool}, {right: Bool}, {orig: List(a)}, {mid: List(a)}, {rem: List(a)}, first: Consumed(a, left, mid, orig), second: Consumed(a, right, rem, mid)) -> Consumed(a, `or`(left, right), rem, orig) =
       match first
         Same(_) -> second

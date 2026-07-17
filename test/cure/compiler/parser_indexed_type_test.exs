@@ -120,4 +120,20 @@ defmodule Cure.Compiler.ParserIndexedTypeTest do
     assert [{:function_call, [name: "SNat"], _}, {:function_call, [name: "SNat"], _}] = chain
     refute Enum.any?(chain, &match?({:named_dom, _, _}, &1))
   end
+
+  test "higher-order ctor fields share the dependent-arrow grammar" do
+    src = """
+    mod M
+      type Acc(a: Type) indices (xs: List(a))
+        MkAcc : (descend: ((ys: List(a)) -> Smaller(a, ys, xs) -> Acc(a, ys))) -> Acc(a, xs)
+    """
+
+    {:ok, ast} = parse_decl(src)
+    [field, _result] = ctor_chain(ast, "MkAcc")
+
+    assert {:named_dom, "descend", {:pi_type, [binders: ["ys", nil]], [ys_type, smaller, acc]}} = field
+    assert {:function_call, [name: "List"], _} = ys_type
+    assert {:function_call, [name: "Smaller"], _} = smaller
+    assert {:function_call, [name: "Acc"], _} = acc
+  end
 end

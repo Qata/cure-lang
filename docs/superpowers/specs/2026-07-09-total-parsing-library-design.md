@@ -10,12 +10,15 @@ Cure, adapted where the BEAM/AtomVM target demands it.
 lowers onto. Revises that macro's §11 non-goal #2 — see §9.
 
 **Implementation status (2026-07-17):** the list-shaped `Consumed` relation,
-strict drop constructor, reflexivity, transitivity, and the dependent `Step`
-result have landed in `Std.Data.Suffix`. Landing `Step` also fixed the general
+strict drop constructor, reflexivity, transitivity, the dependent `Step`
+result, and strict-suffix accessibility `Acc` have landed in `Std.Data.Suffix`.
+Landing `Step` also fixed the general
 family-application inference bug it exposed: index-variable types are now
 instantiated with the applied family's actual parameters before being placed in
 a constructor telescope, so a field such as `Consumed(t, strict, rest, orig)`
-correctly refers to the surrounding `t` and earlier named `rest` field.
+correctly refers to the surrounding `t` and earlier named `rest` field. Landing
+`Acc` unified dependent-arrow parsing for ordinary annotations and higher-order
+constructor fields; both now retain named Π domains through the same AST shape.
 
 ---
 

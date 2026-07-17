@@ -5664,7 +5664,12 @@ defmodule Cure.Compiler.Parser do
     case token.type do
       :lparen ->
         state = advance(state)
-        {inner, state} = parse_type_atom(state)
+        # Reuse the constructor-domain parser inside the group as well. This
+        # admits a named dependent domain in a higher-order field type:
+        # `Mk : ((x: A) -> B(x)) -> T`. Previously the general type parser
+        # accepted this Π shape while this constructor-only path accepted only
+        # anonymous `(A) -> B`, creating two subtly different type grammars.
+        {inner, state} = parse_ctor_dom(state)
         # A PARENTHESISED function type (`(A) -> B`, `(A) -> B -> C`) is ONE grouped
         # type — e.g. a higher-order constructor field `MkPid : ((m) -> R) -> Pid(m)`.
         # The closing `)` bounds the arrow chain, so absorbing `->` here is
@@ -5700,7 +5705,7 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :arrow} ->
         {parts, state} = collect_paren_arrow(state, [first])
-        {{:function_call, [name: "Function", function_type: true], parts}, state}
+        {paren_arrow_ast(parts), state}
 
       _ ->
         {first, state}
@@ -5711,11 +5716,33 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :arrow} ->
         state = advance(state)
-        {atom, state} = parse_type_atom(state)
+        {atom, state} = parse_ctor_dom(state)
         collect_paren_arrow(state, [atom | acc])
 
       _ ->
         {Enum.reverse(acc), state}
+    end
+  end
+
+  defp paren_arrow_ast(parts) do
+    {domains, [ret]} = Enum.split(parts, length(parts) - 1)
+
+    if Enum.any?(domains, &match?({:named_dom, _, _}, &1)) do
+      binders =
+        Enum.map(domains, fn
+          {:named_dom, name, _} -> name
+          _ -> nil
+        end)
+
+      doms =
+        Enum.map(domains, fn
+          {:named_dom, _, inner} -> inner
+          other -> other
+        end)
+
+      {:pi_type, [binders: binders], doms ++ [ret]}
+    else
+      {:function_call, [name: "Function", function_type: true], parts}
     end
   end
 
