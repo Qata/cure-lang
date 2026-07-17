@@ -12,7 +12,7 @@ the lemma. Concretely, the demo goal:
 ```
 type PositiveNatural = {value: Nat | IsPositive(value)}
 
-fn multiply_positive(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
+fn multiply_positive_natural_numbers(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
   refine(multiply(refined_value(left), refined_value(right)), ?)
 ```
 
@@ -46,13 +46,22 @@ proof term and hands it to the existing kernel checker exactly as if the author
 had written it. If the resolver produces a wrong term, the kernel rejects it; the
 resolver cannot make an ill-typed program type-check. Therefore this feature is
 **soundness-neutral by construction** — no change to `lib/cure/core/*`, no TCB
-review gate, no HARD-STOP. Proofs carry grade 0 (erased), so a found proof has
-zero runtime cost; it exists only to satisfy the kernel at compile time.
+review gate, no HARD-STOP.
 
 This stance is what the reference survey confirms is the right one: Idris, Agda,
 and Lean all re-check the found/produced term in the kernel rather than trusting
 the search. We inherit that property for free because search runs before the
 kernel, not inside it.
+
+Note on runtime cost: a found proof term is checked at whatever grade its goal
+position already carries — the resolver does not itself change grading. Today's
+demo proof parameters (`refine`'s `proof:`, and
+`multiplying_positive_numbers_is_positive`'s `left_is_positive`/
+`right_is_positive`) are ordinary explicit parameters and are **not** marked
+erased; an explicit parameter with no surface grade defaults to `ω`
+(`param_quantity/1`, `declarations.ex:1259`), not `0`. So this feature does not,
+by itself, make the demo's proofs free at runtime — grading refinement proof
+components `0` is a real capability but an orthogonal one, out of scope for v1.
 
 ## 4. Architecture
 
@@ -61,21 +70,42 @@ Three E-layer pieces plus two one-line surface touchpoints.
 ### 4.1 The trigger — proof-position holes
 
 We do **not** introduce Idris's `{auto p: P}` syntax (Cure's named-implicit
-surface is thin). Instead we reuse the existing proof hole. A `?` in a
-proof-carrying position already elaborates to a `{:hole, name}` term
-(`declarations.ex:1039`), and the elaborator already has a `:hole_goal`
-diagnostic that computes the type a hole must be filled with
-(`program.ex:1113`). We make the elaborator, at the point where a proof-position
-hole's goal type is known, **attempt auto-resolution before falling through to
-the unsolved-hole path**:
+surface is thin). Instead we reuse the existing proof hole *surface syntax*:
+`?` already parses to a generic `{:hole, meta, []}` AST node in any expression
+position (`compiler/parser.ex:2268`).
 
-- resolution succeeds → the `{:hole, _}` term is replaced by the found Core proof
-  term, and elaboration continues as if the author wrote it;
-- resolution fails (`:none`) → the existing unsolved-hole / `:hole_goal`
-  behavior is unchanged.
+Elaboration support for that node is currently narrower than "any proof-carrying
+position," though. Today it is handled only when the hole is the **entire body**
+of a definition: `elaborate_body({:hole, meta, _})` (`declarations.ex:1041`)
+turns it into a Core `{:hole, name}` term, and `Env.hole_goals/1`
+(`program.ex:1117`) reports — for every definition whose body is still a hole —
+that definition's return type as the goal. Neither site fires for a hole nested
+inside an expression. In **argument** position — exactly where the demo needs
+it, `refine(multiply(...), ?)` — a hole has no elaboration clause at all today
+and falls through the generic catch-all, failing immediately with
+`{:error, {:unsupported_expression, {:hole, ...}}}`. This is a hard build error,
+not a graceful "unsolved hole" state.
 
-This is purely additive: no existing program changes behavior, because a program
-that previously left an unsolvable proof hole still leaves one.
+So the trigger is genuine new work, not a resolve/3 call bolted onto existing
+plumbing: add a `{:hole, meta, _}` clause to checking-mode expression
+elaboration (`elaborate_expr_checked`), which already carries the expected Core
+type at any argument position — the goal type is available directly, with no
+need to reuse the body-level `hole_goals` machinery. At that hole, **attempt
+auto-resolution before falling through to a graceful unsolved-hole result**
+(mirroring `declarations.ex:1041`'s `{:ok, {:hole, name}}`, so the def-level
+`hole_goals` / `check_codegen_ready` diagnostics see it exactly like a
+body-level hole):
+
+- resolution succeeds → the `{:hole, meta, []}` node is replaced by the found
+  Core proof term, and elaboration continues as if the author wrote it;
+- resolution fails (`:none`) → the node elaborates to `{:hole, name}` (not an
+  error), so it participates in the existing `:hole_goal` diagnostic and
+  codegen gate the same way a body-level hole does today.
+
+This is additive in the sense that no program that previously **typechecked**
+changes behavior. It is not free: making an argument-position hole typecheck at
+all — resolved or not — is new capability that does not exist in the codebase
+today.
 
 ### 4.2 The dispatcher and solver seam
 
@@ -142,7 +172,7 @@ unique-or-defer discipline (§6).
 
 ## 5. The refinement leaf-proof requirement
 
-In `multiply_positive(left: PositiveNatural, right: PositiveNatural)`, the
+In `multiply_positive_natural_numbers(left: PositiveNatural, right: PositiveNatural)`, the
 sub-goals the multiply lemma needs — `IsPositive(refined_value(left))` and
 `IsPositive(refined_value(right))` — are **not** loose variables in scope. A
 refinement type `{value: a | P(value)}` desugars to a dependent pair
@@ -207,9 +237,11 @@ not crash — search simply reports it could not find a proof.
 - **Registration:** `@lemma` decorator on a theorem (new; fits existing decorator
   shape). No arguments in v1.
 
-No other surface change. Exact hook site for the trigger (where the
-proof-position hole's goal type becomes available) is pinned down in the
-implementation plan against `declarations.ex` / `program.ex`.
+No other surface change. §4.1 identifies the trigger's hook site as a new
+`{:hole, meta, _}` clause on `elaborate_expr_checked` (`elaborator.ex`); the
+exact wiring — and how its outcome threads back into `declarations.ex` /
+`program.ex`'s existing `hole_goals` / `check_codegen_ready` diagnostics — is
+finalized in the implementation plan.
 
 ## 8. Testing strategy (TDD)
 
@@ -229,11 +261,20 @@ Unit-test `Cure.Elab.ProofSearch.resolve/3` in isolation, independent of the
 
 ### 8.2 Red — the capability is gated on the tag
 
-A `.cure` program that leaves the proof hole in `multiply_positive`, with **no
-`@lemma` tag** on `multiplying_positive_numbers_is_positive`, must fail
-elaboration with an unsolved proof hole. Assert the failure. This proves the hole
-is not trivially discharged and that resolution is genuinely gated on the tagged
-lemma — without it, there is nothing to find.
+A `.cure` program that leaves the proof hole in
+`multiply_positive_natural_numbers`, with **no `@lemma` tag** on
+`multiplying_positive_numbers_is_positive`, must fail elaboration with the
+graceful unsolved-proof-hole diagnostic — the `:hole_goal` /
+`check_codegen_ready`'s `{:unfilled_hole, name}` path — **not** the raw
+`{:unsupported_expression, {:hole, ...}}` the same program produces today,
+before the trigger (§4.1) exists at all. Assert the specific failure shape, not
+merely "elaboration fails": a looser assertion would already pass on the
+unmodified codebase, before any of this feature is built, for the wrong reason
+(the argument-position hole isn't accepted yet, so there is nothing for the
+resolver to decline). Asserting the precise shape is what proves the hole
+reached the resolver and the resolver declined for lack of a tagged lemma — the
+hole is not trivially discharged, and resolution is genuinely gated on the
+tagged lemma.
 
 ### 8.3 Green — tagging the lemma discharges the hole
 
@@ -245,9 +286,20 @@ lemma's already-written body and is never re-derived by search. The same program
 now elaborates: the hole is filled and the kernel accepts. Assert:
 
 - elaboration succeeds and the program type-checks;
-- **the found term matches the hand-written proof** via a Core-term golden (the
-  same technique as the quasiquote golden gate) — proving search found the
-  *right* proof, not merely *a* term that happens to check.
+- **the found term matches the hand-written proof** — elaborate both the
+  search-resolved program and a reference program with the proof written by
+  hand, and assert the two Core proof terms are structurally equal
+  (`==`; Core terms are plain Elixir tagged tuples, per `lib/cure/core/term.ex`,
+  so no hashing is needed). This is a same-run differential check, not a
+  pinned-hash golden like the quasiquote gate
+  (`test/cure/compiler/actor_quote_golden_test.exs`, which SHA256-hashes
+  compiled `.beam` bytecode against a hardcoded historical hash) — that
+  technique operates one level lower (post-compilation bytecode) and compares
+  against a captured-in-advance value, neither of which fits here: the
+  "reference" is the hand-written proof compiled in the same test run, and the
+  comparison is at the Core-term level, before BEAM codegen. The point in
+  common is only the *shape* of the check (independently-produced artifacts
+  must match exactly), not the mechanism.
 
 ### 8.4 Regression
 
@@ -263,14 +315,18 @@ now elaborates: the hole is filled and the kernel accepts. Assert:
   termination guards.
 - **Modify:** `lib/cure/elab/declarations.ex` — recognize `@lemma`, register the
   tagged lemma into the elaboration environment.
-- **Modify:** the proof-hole elaboration site (`declarations.ex` / `program.ex`)
-  — call `resolve/3` before the unsolved-hole fall-through.
+- **Modify:** `lib/cure/elab/elaborator.ex` — add the `{:hole, meta, _}` clause
+  to `elaborate_expr_checked` (§4.1) that calls `resolve/3` before falling
+  through to a graceful unsolved-hole result; thread that outcome so
+  `declarations.ex` / `program.ex`'s existing `hole_goals` /
+  `check_codegen_ready` diagnostics still see whatever is left unresolved.
 - **Modify:** `lib/std/proof_math.cure` — add `@lemma` to the two lemmas (this is
   the green step; the red step is the same file *without* the tags).
-- **Modify:** `lib/std/refine.cure` — rewrite `multiply_positive` to leave the
-  proof hole.
+- **Modify:** `lib/std/refine.cure` — rewrite `multiply_positive_natural_numbers`
+  to leave the proof hole.
 - **Create tests:** E-level resolver unit tests; a red/green elaboration test over
-  the `.cure` demo; a Core-term golden for the found proof.
+  the `.cure` demo; a same-run differential test asserting the found proof's
+  Core term equals the hand-written proof's Core term (§8.3).
 
 ## 10. Reference grounding
 
