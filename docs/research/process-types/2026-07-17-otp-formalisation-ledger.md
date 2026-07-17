@@ -119,7 +119,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 ### B6. Supervision depth
 - [x] Restart INTENSITY bound (`max_restarts`) — `otp_restart_intensity.cure` (budget index; can't restart at zero). `max_seconds` window abstracted; bounded-run liveness theorem E6-blocked (probe)
 - [x] Differential restart-SET semantics `one_for_one` / `one_for_all` / `rest_for_one` tied to preservation (NVLang Def. 4.2) — all three strategies in `otp_supervisor.cure`, each preserving `Fleet(specs)`, differing only in which children they revive
-- [ ] Dynamic children / `simple_one_for_one`
+- [x] Dynamic children / `simple_one_for_one`: `Pool(spec)` indexed by a SINGLE spec (not a list) certifies UNIFORM children; `start_child`/`terminate_child` vary the pool at runtime, `restart_pool` preserves spec + size — **SHIPPED** `otp_supervisor.cure` (Idris `rel=same`)
 
 ### B7. Effects depth
 - [ ] Full effect row/algebra for OTP ops (current = inert `Effect(T)` + `bind`); effect ordering; effect handlers

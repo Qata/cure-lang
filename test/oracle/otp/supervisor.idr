@@ -26,3 +26,18 @@ rest_for_one (FCons c rest) (S k2) = FCons c (rest_for_one rest k2)
 establish : (specs : Children) -> Fleet specs
 establish CNil = FNil
 establish (CCons s rest) = FCons Alive (establish rest)
+
+data Pool : ChildSpec -> Type where
+  PNil : Pool spec
+  PCons : Child spec -> Pool spec -> Pool spec
+
+start_child : Pool spec -> Pool spec
+start_child p = PCons Alive p
+
+terminate_child : Pool spec -> Pool spec
+terminate_child PNil = PNil
+terminate_child (PCons c rest) = rest
+
+restart_pool : Pool spec -> Pool spec
+restart_pool PNil = PNil
+restart_pool (PCons c rest) = PCons Alive (restart_pool rest)

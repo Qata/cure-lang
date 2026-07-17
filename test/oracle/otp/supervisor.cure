@@ -20,4 +20,15 @@ mod Supervisor
   fn establish(specs: Children) -> Fleet(specs) = match specs
     CNil()         -> FNil()
     CCons(s, rest) -> FCons(Alive(), establish(rest))
+
+  type Pool indices (spec: ChildSpec)
+    PNil  : Pool(spec)
+    PCons : Child(spec) -> Pool(spec) -> Pool(spec)
+  fn start_child({spec: ChildSpec}, p: Pool(spec)) -> Pool(spec) = PCons(Alive(), p)
+  fn terminate_child({spec: ChildSpec}, p: Pool(spec)) -> Pool(spec) = match p
+    PNil()         -> PNil()
+    PCons(c, rest) -> rest
+  fn restart_pool({spec: ChildSpec}, p: Pool(spec)) -> Pool(spec) = match p
+    PNil()         -> PNil()
+    PCons(c, rest) -> PCons(Alive(), restart_pool(rest))
 end
