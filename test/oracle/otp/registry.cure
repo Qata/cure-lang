@@ -1,0 +1,14 @@
+mod Registry
+  type Pid = MkPid
+  type GenServer(q: Type, r: Type) indices ()
+    MkGen : Pid -> GenServer(q, r)
+  type PidOption = NoPid | SomePid(Pid)
+  fn server_pid({q: Type}, {r: Type}, g: GenServer(q, r)) -> Pid = match g
+    MkGen(p) -> p
+  fn expect_server({q: Type}, {r: Type}, p: Pid) -> GenServer(q, r) = MkGen(p)
+  fn with_pid({s: Type}, o: PidOption, on_found: (Pid) -> s, on_absent: () -> s) -> s = match o
+    SomePid(p) -> on_found(p)
+    NoPid()    -> on_absent()
+  fn found() -> PidOption = SomePid(MkPid)
+  fn absent() -> PidOption = NoPid
+end

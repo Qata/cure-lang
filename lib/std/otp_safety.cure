@@ -1,0 +1,82 @@
+@group(:concurrency)
+mod Std.Otp.Safety
+  ## TYPE SAFETY (progress + preservation) for the Core Erlang send/arrive/receive
+  ## reduction — the canonical safety metatheorem, completing `Std.Otp.Preservation`.
+  ##
+  ## `Std.Otp.Preservation` proved PRESERVATION: reducing a well-typed configuration
+  ## yields a well-typed one. This module adds PROGRESS — a well-typed configuration is
+  ## never *stuck*: it is either FINAL (ether and mailbox both empty, no work pending)
+  ## or it can take a reduction step — and combines the two into the standard safety
+  ## statement: **a well-typed configuration is either final or steps to a well-typed
+  ## configuration** (`safety`). So a well-typed system never gets stuck AND never
+  ## reaches an ill-typed state: no message the receiver cannot handle is ever
+  ## delivered, and delivery/consumption can always proceed while work remains.
+  ##
+  ## The operational model is the concurrency fragment of Bereczky, Horpácsi &
+  ## Thompson's Coq-checked Core Erlang (arXiv 2311.10482), as in `Std.Otp.Preservation`:
+  ## an `ether` of in-flight signals delivered into a `mailbox` and consumed by
+  ## `receive`. Progress is over the *internal* reduction (arrive/receive resolve
+  ## pending work); `SSend` is an input action, not forced by progress.
+  ##
+  ## **Honest scope.** Single receiver, message-tag typing, mailbox order abstracted —
+  ## as in `Std.Otp.Preservation`. Not modelled: exit/link/monitor signals, timers,
+  ## multiple pids/interleaving. The dependent LINEAR reply discipline is
+  ## `Std.Otp.Proof`/`Std.Otp.ReplyPreservation`/`Std.Otp.ReplyConservation`.
+
+  ## Message vocabulary and the ether/mailbox as tag lists.
+  type Tag = TInc | TDec | TQuery
+  type TagList = TNil | TCons(Tag, TagList)
+
+  ## The receiver's derived accepted-message set (accepts `Inc`/`Query`, not `Dec`).
+  type Accepted indices (t: Tag)
+    AccInc   : Accepted(TInc)
+    AccQuery : Accepted(TQuery)
+
+  ## Every tag in a list is accepted.
+  type AllAccepted indices (ts: TagList)
+    AANil  : AllAccepted(TNil)
+    AACons : Accepted(t) -> AllAccepted(rest) -> AllAccepted(TCons(t, rest))
+
+  ## A configuration: ether (in-flight) and mailbox.
+  type Config = MkConfig(TagList, TagList)
+
+  ## WELL-TYPED: every in-flight and mailboxed message is accepted.
+  type WT indices (c: Config)
+    MkWT : AllAccepted(e) -> AllAccepted(m) -> WT(MkConfig(e, m))
+
+  ## The reduction (as in `Std.Otp.Preservation`): typed send, deliver, consume.
+  type Step indices (before: Config, after: Config)
+    SSend   : Accepted(t) -> Step(MkConfig(e, m), MkConfig(TCons(t, e), m))
+    SArrive : Step(MkConfig(TCons(t, e), m), MkConfig(e, TCons(t, m)))
+    SRecv   : Step(MkConfig(e, TCons(t, m)), MkConfig(e, m))
+
+  ## **PRESERVATION** (recap): reduction preserves well-typedness.
+  fn preservation({b: Config}, {a: Config}, wt: WT(b), s: Step(b, a)) -> WT(a) = match s
+    SSend(acc) -> match wt
+      MkWT(ae, am) -> MkWT(AACons(acc, ae), am)
+    SArrive() -> match wt
+      MkWT(ae, am) -> match ae
+        AACons(at, ae2) -> MkWT(ae2, AACons(at, am))
+    SRecv() -> match wt
+      MkWT(ae, am) -> match am
+        AACons(rat, am2) -> MkWT(ae, am2)
+
+  ## **SAFETY** (progress + preservation). A well-typed configuration is either FINAL
+  ## or steps to a WELL-TYPED configuration — it is never stuck at an ill-typed or
+  ## unhandled state.
+  type Safe indices (c: Config)
+    Done : Safe(MkConfig(TNil, TNil))
+    Go   : (after: Config) -> Step(c, after) -> WT(after) -> Safe(c)
+
+  ## The proof: case on the configuration's structure. A non-empty ether can always
+  ## deliver (`SArrive`); otherwise a non-empty mailbox can always consume (`SRecv`);
+  ## otherwise both are empty and the configuration is final. Each step's result is
+  ## well-typed by `preservation` — matching `c` refines the sibling witness `wt`, so
+  ## `preservation(wt, …)` type-checks at the refined configuration.
+  fn safety(c: Config, wt: WT(c)) -> Safe(c) = match c
+    MkConfig(e, m) -> match e
+      TCons(t, e2) -> Go(MkConfig(e2, TCons(t, m)), SArrive(), preservation(wt, SArrive()))
+      TNil() -> match m
+        TCons(t, m2) -> Go(MkConfig(TNil, m2), SRecv(), preservation(wt, SRecv()))
+        TNil() -> Done()
+end

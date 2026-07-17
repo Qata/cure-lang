@@ -1,0 +1,80 @@
+@group(:concurrency)
+mod Std.Otp.System
+  ## CONCURRENT SYSTEM preservation — subject reduction under INTERLEAVING, closing the
+  ## "single receiver" restriction of `Std.Otp.Preservation` (build-out map G2's
+  ## "multiple pids / interleaving" caveat).
+  ##
+  ## `Std.Otp.Preservation` proved subject reduction for ONE receiver's ether/mailbox.
+  ## Real OTP runs MANY processes stepping concurrently, with no global lock — an
+  ## asynchronous interleaving. This module lifts preservation to a POOL of processes: a
+  ## `System` is a list of per-process `Config`s, a `SysStep` is ANY one process taking a
+  ## step while the others stay fixed, and `sys_preservation` shows that GLOBAL
+  ## well-typedness (every process well-typed) is preserved by any interleaved step.
+  ##
+  ## This is the property NVLang's toy single-actor step cannot state and Core Erlang
+  ## gives only untyped: a whole system of typed processes never reduces to a state where
+  ## some process holds a message it cannot handle, no matter the interleaving.
+  ##
+  ## **Honest scope.** Processes are independent here — a step is internal to one process
+  ## (send/arrive/receive on its own ether/mailbox). Cross-process message TRANSFER (one
+  ## process's send landing in another's ether) is the next generalization; it threads a
+  ## delivered message from a sender's `SSend` into a receiver's ether and needs a
+  ## routing index. The per-process typing and the interleaving are what this establishes.
+
+  ## Per-process message vocabulary and typing (as in `Std.Otp.Preservation`).
+  type Tag = TInc | TDec | TQuery
+  type TagList = TNil | TCons(Tag, TagList)
+
+  type Accepted indices (t: Tag)
+    AccInc   : Accepted(TInc)
+    AccQuery : Accepted(TQuery)
+
+  type AllAccepted indices (ts: TagList)
+    AANil  : AllAccepted(TNil)
+    AACons : Accepted(t) -> AllAccepted(rest) -> AllAccepted(TCons(t, rest))
+
+  type Config = MkConfig(TagList, TagList)
+  type WT indices (c: Config)
+    MkWT : AllAccepted(e) -> AllAccepted(m) -> WT(MkConfig(e, m))
+
+  type Step indices (before: Config, after: Config)
+    SSend   : Accepted(t) -> Step(MkConfig(e, m), MkConfig(TCons(t, e), m))
+    SArrive : Step(MkConfig(TCons(t, e), m), MkConfig(e, TCons(t, m)))
+    SRecv   : Step(MkConfig(e, TCons(t, m)), MkConfig(e, m))
+
+  ## Per-process PRESERVATION (recap).
+  fn preservation({b: Config}, {a: Config}, wt: WT(b), s: Step(b, a)) -> WT(a) = match s
+    SSend(acc) -> match wt
+      MkWT(ae, am) -> MkWT(AACons(acc, ae), am)
+    SArrive() -> match wt
+      MkWT(ae, am) -> match ae
+        AACons(at, ae2) -> MkWT(ae2, AACons(at, am))
+    SRecv() -> match wt
+      MkWT(ae, am) -> match am
+        AACons(rat, am2) -> MkWT(ae, am2)
+
+  ## A SYSTEM: a pool of concurrent processes.
+  type System = SNil | SCons(Config, System)
+
+  ## WELL-TYPED system: every process is well-typed.
+  type WTSys indices (sys: System)
+    WSNil  : WTSys(SNil)
+    WSCons : WT(c) -> WTSys(rest) -> WTSys(SCons(c, rest))
+
+  ## A SYSTEM step under INTERLEAVING: ANY one process takes a step; the rest are
+  ## unchanged (asynchronous, no global lock). `StepHere` steps the head process,
+  ## `StepThere` steps some process deeper in the pool.
+  type SysStep indices (before: System, after: System)
+    StepHere  : Step(c, c2) -> SysStep(SCons(c, rest), SCons(c2, rest))
+    StepThere : SysStep(rest, rest2) -> SysStep(SCons(c, rest), SCons(c, rest2))
+
+  ## **SYSTEM PRESERVATION.** Any interleaved step preserves GLOBAL well-typedness: the
+  ## process that stepped stays well-typed by per-process `preservation`, and every other
+  ## process is untouched. Induction on which process stepped. So no interleaving drives
+  ## the system to a state where a process holds a message it cannot handle.
+  fn sys_preservation({b: System}, {a: System}, wt: WTSys(b), s: SysStep(b, a)) -> WTSys(a) = match s
+    StepHere(step) -> match wt
+      WSCons(wtc, wrest) -> WSCons(preservation(wtc, step), wrest)
+    StepThere(s2) -> match wt
+      WSCons(wtc, wrest) -> WSCons(wtc, sys_preservation(wrest, s2))
+end

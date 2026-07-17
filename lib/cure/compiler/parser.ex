@@ -993,6 +993,13 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp parse_family_field_value(state, %{shape: "Declarations"}) do
+    state = skip_newlines(state)
+    token = peek(state)
+    {stmts, state} = parse_definition_block(state)
+    {{:declarations_block, [line: token.line, col: token.col], stmts}, state}
+  end
+
   defp parse_family_field_value(state, _field) do
     state = skip_newlines(state)
     parse_expr_or_block(state)

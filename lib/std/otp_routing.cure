@@ -1,0 +1,64 @@
+@group(:concurrency)
+mod Std.Otp.Routing
+  ## CROSS-PROCESS message delivery — typed inter-process communication, closing the
+  ## "independent processes" limitation of `Std.Otp.System`.
+  ##
+  ## `Std.Otp.System` proved preservation under interleaving for a pool of processes
+  ## whose steps are INTERNAL (each on its own ether/mailbox). Real OTP processes
+  ## COMMUNICATE: one process's send lands in ANOTHER process's ether. This module types
+  ## that delivery. `Deliver(before, after)` routes a message into the ether of SOME
+  ## process in the pool — `DeliverHere` targets the head, `DeliverThere` routes deeper,
+  ## so the scan IS the routing. Crucially, delivery REQUIRES `Accepted(t)`: a message may
+  ## only be routed to a process that accepts it — the typed inter-process send.
+  ##
+  ## `deliver_preservation` then shows routing preserves GLOBAL well-typedness: the target
+  ## process gains an accepted message, every other process is untouched. So a well-typed
+  ## system of COMMUNICATING processes stays well-typed — no process is ever routed a
+  ## message it cannot handle, whichever process is the target.
+  ##
+  ## **Honest scope.** Homogeneous system (all processes share the receiver type, so an
+  ## accepted message is accepted by any target); the routing evidence `Accepted(t)` is
+  ## the typed-send obligation. HETEROGENEOUS routing — where the sender must prove the
+  ## SPECIFIC target accepts the message (per-process types + a target index) — is the
+  ## next generalization, building on `Std.Otp.Registry`'s `GenServer(q, r)` handles.
+
+  type Tag = TInc | TDec | TQuery
+  type TagList = TNil | TCons(Tag, TagList)
+
+  type Accepted indices (t: Tag)
+    AccInc   : Accepted(TInc)
+    AccQuery : Accepted(TQuery)
+
+  type AllAccepted indices (ts: TagList)
+    AANil  : AllAccepted(TNil)
+    AACons : Accepted(t) -> AllAccepted(rest) -> AllAccepted(TCons(t, rest))
+
+  type Config = MkConfig(TagList, TagList)
+  type WT indices (c: Config)
+    MkWT : AllAccepted(e) -> AllAccepted(m) -> WT(MkConfig(e, m))
+
+  type System = SNil | SCons(Config, System)
+  type WTSys indices (sys: System)
+    WSNil  : WTSys(SNil)
+    WSCons : WT(c) -> WTSys(rest) -> WTSys(SCons(c, rest))
+
+  ## CROSS-PROCESS DELIVERY: route message `t` into the ether of SOME process in the
+  ## pool. The scan (`DeliverHere` head / `DeliverThere` deeper) is the routing, and the
+  ## `Accepted(t)` argument is the typed-send obligation — a message may only be routed
+  ## to a process that accepts it.
+  type Deliver indices (before: System, after: System)
+    DeliverHere  : Accepted(t) -> Deliver(SCons(MkConfig(e, m), rest), SCons(MkConfig(TCons(t, e), m), rest))
+    DeliverThere : Deliver(rest, rest2) -> Deliver(SCons(c, rest), SCons(c, rest2))
+
+  ## **DELIVERY PRESERVATION.** Routing an accepted message to a process preserves GLOBAL
+  ## well-typedness: the target process gains an accepted message (still well-typed), the
+  ## rest are untouched. Induction on the routing scan. So a well-typed system of
+  ## communicating processes stays well-typed — no process is ever routed a message it
+  ## cannot handle.
+  fn deliver_preservation({b: System}, {a: System}, wt: WTSys(b), d: Deliver(b, a)) -> WTSys(a) = match d
+    DeliverHere(acc) -> match wt
+      WSCons(wtc, wrest) -> match wtc
+        MkWT(ae, am) -> WSCons(MkWT(AACons(acc, ae), am), wrest)
+    DeliverThere(d2) -> match wt
+      WSCons(wtc, wrest) -> WSCons(wtc, deliver_preservation(wrest, d2))
+end

@@ -17,6 +17,7 @@ mod Std.Actor
       optional on_info Cases
       optional terminate Code
       optional code_change Code
+      optional body Declarations
     accepts ActorDefinition
     expands with derive_actor_family
 
@@ -34,6 +35,7 @@ mod Std.Actor
     let code_change_body = match definition.code_change
       None() -> Raw(SOpaque)
       Some(value) -> value
+    let extra_declarations = optional_declarations(definition.body)
     let init_spec = derive_actor_init(definition.state, definition.initial, definition.init)
     let name_syntax: Syntax = name
     let module_name: SynLit = match name_syntax
@@ -52,9 +54,9 @@ mod Std.Actor
           None() -> [enum_type("ActorMessage", heads)]
           Some(_) -> []
         match derive_reply_contract(call_body, definition.state)
-          NoCall -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, info_body, terminate_body, code_change_body, heads)
+          NoCall -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, info_body, terminate_body, code_change_body, heads, extra_declarations)
           InvalidCall(reason) -> Failure(reason, [])
-          CallContract(request_heads, reply_type) -> emit_actor_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, heads, request_heads, reply_type)
+          CallContract(request_heads, reply_type) -> emit_actor_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, heads, request_heads, reply_type, extra_declarations)
 
   fn actor_info_handler(info_body: Syntax) -> Syntax = match tag(info_body) == :raw
     true -> quote %[:noreply, state]
@@ -318,19 +320,19 @@ mod Std.Actor
         None() -> default_actor_init(state_type)
 
   fn derive_actor(input: ActorSyntax) -> Syntax =
-    let module_name: SynLit = match input.name
-      Leaf(_, _, SAtom(name)) -> SAtom(name)
-      _ -> SStr("Cure.Generated.Actor")
-    let module_expr: Syntax = match input.name
-      Leaf(_, _, SAtom(name)) -> atom_literal(name)
-      _ -> atom_literal(:generated_actor)
-    match derive_pattern_heads(input.cast_body)
-      InvalidHeads(reason) -> Failure(reason, [])
-      Heads(heads) ->
-        match derive_reply_contract(input.call_body, input.state_type)
-          NoCall -> emit_actor(input, module_name, module_expr, heads)
-          InvalidCall(reason) -> Failure(reason, [])
-          CallContract(request_heads, reply_type) -> emit_actor_call(input, module_name, module_expr, heads, request_heads, reply_type)
+    let on_call = match input.call_body
+      Raw(_) -> None()
+      value -> Some(derive_cases(value))
+    let definition = ActorDefinitionSyntax{state: input.state_type, messages: None(), initial: None(), init: None(), on_cast: derive_cases(input.cast_body), on_call: on_call, on_info: None(), terminate: None(), code_change: None(), body: None()}
+    derive_actor_family(input.name, definition)
+
+  fn derive_cases(body: Syntax) -> Syntax = match children(body)
+    [_scrutinee | arms] -> Node(:cases, [], arms)
+    _ -> Node(:cases, [], [])
+
+  fn optional_declarations(value: Option(Syntax)) -> List(Syntax) = match value
+    None() -> []
+    Some(inner) -> children(inner)
 
   fn derive_reply_contract(call_body: Syntax, state_type: Syntax) -> ReplyInference = match call_body
     Raw(_) -> NoCall
@@ -390,10 +392,7 @@ mod Std.Actor
             true -> ReplyType(variable("Bool"), :bool)
             false -> InvalidReply(:reply_type_not_derivable)
 
-  fn emit_actor(input: ActorSyntax, module_name: SynLit, module_expr: Syntax, heads: List(Syntax)) -> Syntax =
-    emit_actor_parts(module_name, module_expr, input.state_type, default_actor_init(input.state_type), variable("ActorMessage"), [enum_type("ActorMessage", heads)], input.cast_body, Raw(SOpaque), Raw(SOpaque), Raw(SOpaque), heads)
-
-  fn emit_actor_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, heads: List(Syntax)) -> Syntax =
+  fn emit_actor_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, heads: List(Syntax), extra_declarations: List(Syntax)) -> Syntax =
         let result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
         let start_type: Syntax = call("Effect", [variable("Tuple")])
@@ -402,21 +401,18 @@ mod Std.Actor
         let terminate_handler: Syntax = actor_terminate_handler(terminate_body)
         let code_change_handler: Syntax = actor_code_change_handler(code_change_body)
         block(append(message_declarations, [
-          gen_server_module(module_name, state_type, [
+          gen_server_module(module_name, state_type, append([
             alias_node("Message", message_type),
             function("init", [init_spec.parameter], init_type, init_spec.body),
-            function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, handler_body),
-            function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], result_type, info_handler),
-            function("terminate", [parameter("reason", variable("Atom")), parameter("state", variable("State"))], call("Effect", [variable("Atom")]), terminate_handler),
-            function("code_change", [parameter("old", variable("Atom")), parameter("state", variable("State")), parameter("extra", variable("Atom"))], result_type, code_change_handler),
+            quote (fn handle_cast(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(handler_body)),
+            quote (fn handle_info(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(info_handler)),
+            quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
+            quote (fn code_change(old: Atom, state: State, extra: Atom) -> Effect(Tuple(Atom, State)) = $(code_change_handler)),
             function("start_link", init_spec.start_parameters, start_type, call("Std.Otp.start_link", [module_expr, init_spec.start_argument]))
-          ])
+          ], extra_declarations))
         ]))
 
-  fn emit_actor_call(input: ActorSyntax, module_name: SynLit, module_expr: Syntax, message_heads: List(Syntax), request_heads: List(Syntax), reply_type: Syntax) -> Syntax =
-    emit_actor_call_parts(module_name, module_expr, input.state_type, default_actor_init(input.state_type), variable("ActorMessage"), [enum_type("ActorMessage", message_heads)], input.cast_body, input.call_body, Raw(SOpaque), Raw(SOpaque), Raw(SOpaque), message_heads, request_heads, reply_type)
-
-  fn emit_actor_call_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, call_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, message_heads: List(Syntax), request_heads: List(Syntax), reply_type: Syntax) -> Syntax =
+  fn emit_actor_call_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, call_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, message_heads: List(Syntax), request_heads: List(Syntax), reply_type: Syntax, extra_declarations: List(Syntax)) -> Syntax =
     let request_type: Syntax = enum_type("ActorRequest", request_heads)
     let cast_result_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
     let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
@@ -428,17 +424,17 @@ mod Std.Actor
     let code_change_handler: Syntax = actor_code_change_handler(code_change_body)
     block(append(message_declarations, [
       request_type,
-      gen_server_module(module_name, state_type, [
+      gen_server_module(module_name, state_type, append([
         alias_node("Message", message_type),
         alias_node("Request", variable("ActorRequest")),
         function("init", [init_spec.parameter], init_type, init_spec.body),
         function("handle_call", [parameter("request", variable("Request")), parameter_linear("from", call("Reply", [reply_type])), parameter("state", variable("State"))], cast_result_type, call_body),
-        function("handle_cast", [parameter("message", variable("Message")), parameter("state", variable("State"))], cast_result_type, cast_body),
-        function("handle_info", [parameter("message", variable("Message")), parameter("state", variable("State"))], cast_result_type, info_handler),
-        function("terminate", [parameter("reason", variable("Atom")), parameter("state", variable("State"))], call("Effect", [variable("Atom")]), terminate_handler),
-        function("code_change", [parameter("old", variable("Atom")), parameter("state", variable("State")), parameter("extra", variable("Atom"))], cast_result_type, code_change_handler),
+        quote (fn handle_cast(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(cast_body)),
+        quote (fn handle_info(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(info_handler)),
+        quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
+        quote (fn code_change(old: Atom, state: State, extra: Atom) -> Effect(Tuple(Atom, State)) = $(code_change_handler)),
         function("start_link", init_spec.start_parameters, start_type, call("Std.Otp.start_link", [module_expr, init_spec.start_argument]))
-      ])
+      ], extra_declarations))
     ]))
 
   ## Shared transparent declaration bundle for generated GenServer modules.
