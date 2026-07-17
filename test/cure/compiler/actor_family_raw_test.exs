@@ -156,4 +156,26 @@ defmodule Cure.Compiler.ActorFamilyRawTest do
     assert apply(module, :handle_cast, [:inc, 4]) == {:noreply, 5}
     assert apply(module, :handle_cast, [:other, 4]) == {:noreply, 4}
   end
+
+  test "terse init template routes through the shared family raw emitter" do
+    # The `actor N state T init <body>` form (rule at actor.cure:158) carries an
+    # `init` hole and no cast/messages, so it opts into the `computed directly by`
+    # multi-arg input path (adapter emit_raw_state_init) into the family raw
+    # branch (init: Some(body)). This behavioral pin replaces the retired Raw02
+    # byte-golden: the spliced init body is the full GenServer init result, so
+    # `init/1` returns it verbatim regardless of the start argument. Per the
+    # corrected spec (d1aec7b4) the raw fold is behavioral-equivalence, NOT
+    # byte-identical.
+    source = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.RawFamilyInit state Int init
+        %[:ok, 7]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(:"Cure.Generated.RawFamilyInit", :init, [:unit]) == {:ok, 7}
+    assert apply(:"Cure.Generated.RawFamilyInit", :init, [:anything]) == {:ok, 7}
+  end
 end

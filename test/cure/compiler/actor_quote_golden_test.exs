@@ -111,12 +111,17 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
        %[:reply, true, state]
      """,
      "81bd23b8b6f2b2c42a27df88fdabe29aa6fa859f6d667f917a8b67f0f5f609ee"},
-    {"Raw02_init",
-     """
-     actor Cure.Generated.Raw02_init state Int init
-       %[:ok, 7]
-     """,
-     "c7e686a9760e103fd6f71107b2aca4a7ce0228ad50ce4ca1545489e7277754f5"},
+    # Raw02_init (`actor N state T init <body>`) has been FOLDED into the shared
+    # `emit_raw_state_init` → `derive_actor_family` emitter (§1e mechanism A) via
+    # the `computed directly by` multi-arg input path. Per the corrected spec
+    # (d1aec7b4) the raw fold is a behavioral-equivalence guarantee, NOT
+    # byte-identical: the computed family branch legitimately reshapes the BEAM
+    # (the folded `derive_actor_init(init: Some)` emits `init(args: Atom)` with a
+    # 0-arg `start_link`, vs the template's `init(initial: State)` — the init/1
+    # return value is identical regardless of the argument). Its byte-identical
+    # golden therefore retires; behavioral equivalence (init/1 returns the spliced
+    # result for any start argument) is pinned by "terse init template routes
+    # through the shared family raw emitter" in actor_family_raw_test.exs.
     {"Raw03_terminate",
      """
      actor Cure.Generated.Raw03_terminate state Int terminate
