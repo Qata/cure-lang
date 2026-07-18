@@ -3680,18 +3680,23 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A computed index that is a constructor spine over variables (`S(m)`,
-  # `Cons(h, t)`) is INVERTIBLE by ordinary index refinement — matching unifies the
-  # scrutinee's constructor index with each branch constructor's index directly
-  # (Idris's `yr : Vect m a` in the `(::)` branch). It needs no carried equation:
-  # the plain 3a motive handles it, and forcing the carried-eq transport onto a
-  # sibling with a fresh-variable constructor index (e.g. `S(n')` for a bound tail
-  # length) spuriously fails `:branch_type` even when the branch body never uses
-  # that sibling. Only a NON-invertible computed index — a defined-function
-  # application like `app(p, q)`, whose head is not a constructor and cannot be
-  # inverted — genuinely needs the carried equation (see `carried_index_sibling_test`).
-  # A bare variable is trivially invertible (and was already excluded before).
-  defp invertible_index?({:ctor, _name, args}), do: Enum.all?(args, &invertible_index?/1)
+  # A computed index whose HEAD is a constructor (`S(m)`, `Cons(h, t)`, and also
+  # `Node(p, twist(q))` where an argument carries a computed subterm) is INVERTIBLE
+  # by ordinary index refinement — matching unifies the scrutinee's constructor
+  # index with each branch constructor's index directly (Idris's `yr : Vect m a` in
+  # the `(::)` branch), and structural unification descends THROUGH the ctor head,
+  # binding any computed argument subterm to the ctor's own argument binder. So the
+  # test is on the HEAD only, not the argument shapes: it needs no carried equation.
+  # Forcing the carried-eq transport onto a sibling with a constructor index (e.g.
+  # `S(n')` for a bound tail length) spuriously fails `:branch_type` even when the
+  # branch body never uses that sibling; and recursing into ctor args used to
+  # misclassify `Node(p, twist(q))` as non-invertible merely because `twist(q)` is a
+  # function application, dropping the branch-unify subst (E8, `:rewrite_no_match`).
+  # Only a NON-constructor head — a defined-function application like `app(p, q)`,
+  # which cannot be inverted structurally — genuinely needs the carried equation
+  # (see `carried_index_sibling_test` and the E8 antibody). A bare variable is
+  # trivially invertible (and was already excluded before).
+  defp invertible_index?({:ctor, _name, _args}), do: true
   defp invertible_index?({:var, _}), do: true
   defp invertible_index?(_), do: false
 

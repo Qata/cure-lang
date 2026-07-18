@@ -21,7 +21,7 @@ relevant, run `idris2 --check` on the byte-equivalent program. No `lib/**` was m
 |---|---|---|---|---|
 | **E9** — stuck-index eqn on GADT match | OPEN; **premise falsified** | K (+E) | headline: architectural & beyond-Idris; sub-bug: trivial kernel fix | **NO** for the headline (Idris rejects too) |
 | **E6-residual** — shared metacontext | OPEN | E | **architectural** (thread one metacontext; ~6 entry points) | YES |
-| **E8** — sequential-match refinement | OPEN; **narrower than catalog** | E | **bounded-for-repro** (carried-eq detour) | YES |
+| **E8** — sequential-match refinement | **✅ LANDED** | E | bounded — narrowed `invertible_index?` to head-only (ctor-headed index inverts structurally) | YES |
 | **E2-residual** — name relevant ctor index | OPEN; **design-gated, not bounded** | E | new surface grade syntax + quantity policy | YES |
 | **E10** — HO-fn arg not reduced in index | OPEN; **root cause overturned** | (a) P + K, (b)/(c) K | (a)-parser trivial; kernel part HARD-STOP | YES (all three, Idris-verified) |
 | **E11-Stage-2** — type-directed overload | **✅ LANDED** | E | bounded — routed index-position overloads through term-position resolver | partial |
@@ -121,22 +121,28 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
   member; genuinely ambiguous → a clean `{:ambiguous_overload, …}` error, verified by antibody
   CONTROL B). The kernel-crash path is unreachable — it now fails closed.
 
-### E8 — sequential-match refinement across scrutinees — **OPEN, narrower than catalog**
-- Repro reproduced (`:rewrite_no_match`, `m` unrefined; helper-delegation control accepts).
-  Traced (via `Cure.Dev.Trace`) to the **carried-index-equality mechanism**
-  (`elaborate_carried_eq_branch`, landed `c6c98e93`), **not** to a missing simultaneous-matching
-  architecture:
-  1. `collect_index_siblings/5` (`elaborator.ex:3669`) **over-fires** — it treats an outer,
-     already-consumed scrutinee as a transport sibling because it only excludes the *current*
-     scrutinee var (fires 1/44 in the failing case, 0/46 in the control).
-  2. When it fires, `cod_expected` (`elaborator.ex:5572–5575`) substitutes only the single
-     carried index position and **drops the full `subst`** (which contains `m ↦ msadd(m1,m2)`)
-     that the plain `refine_branch_goal` path threads correctly.
-- **Fix (bounded, two candidates):** (a) tighten `collect_index_siblings` to exclude
-  already-consumed enclosing scrutinees; and/or (b) thread the ctor's full `subst` through the
-  carried-eq path. Tens of lines in `elaborator.ex`, red-green-able.
-- **Caveat:** verified for the documented repro shape only; broader E1-family shapes that never
-  trip the carried-eq detour were not tested and may still be larger.
+### E8 — sequential-match refinement across scrutinees — **✅ LANDED**
+- Root cause (final): the carried-index-equality mechanism was **misfiring on a
+  constructor-headed scrutinee index that merely carried a computed subterm**. The trigger was
+  `invertible_index?` (`elaborator.ex:3694`): it recursed into a constructor's arguments, so
+  `Node(p, twist(q))` / `PTimes(a, deriv(b, t))` were classified **non-invertible** just because
+  a subterm (`twist(q)`, `deriv(b,t)`) is a function application. That routed the branch through
+  `elaborate_carried_eq_branch`, whose `cod_expected` (`elaborator.ex:5606–5609`) refines only the
+  single carried index position and **drops the branch-unify `subst`** that the plain
+  `refine_branch_goal` path threads — so an invertible sibling measure (`n ↦ add(n1, n2)`) never
+  reached the goal and a `rewrite` over the refined measure failed `:rewrite_no_match`.
+- **Fix (bounded, one line):** narrow `invertible_index?` to test the **head only** —
+  `invertible_index?({:ctor, _name, _args}), do: true`. A constructor-headed index is invertible
+  by ordinary structural unification (it descends through the ctor head and binds the computed
+  subterm to the ctor's argument binder); only a **non-constructor head** (a defined function like
+  `app(p, q)` — the FRP-carrier case the mechanism was built for) keeps the carried-eq detour.
+- **Verification:** oracle cluster `e8seq` (`test/oracle/e8seq/e8seq01_carried_index_refine.{cure,idr}`)
+  `rel=same` (both accept); antibody `test/antigen/carried_index_invertibility_antibody_test.exs`
+  (REACH RED→GREEN, CONTROL A false-measure still rejected, CONTROL B function-app-headed carried-eq
+  still fires and fails closed on a wrong-family sibling). Real workaround removed:
+  `lib/std/otp_mailbox_pattern.cure`'s `deriv_sound` no longer delegates its `PTimes`/`PStar` arms
+  through `ds_times`/`ds_star` helpers — they are inlined and elaborate directly. Full elab +
+  oracle-replay + carried-index regression suites green (1274 tests).
 
 ### E6-residual — shared metacontext through the app tree — **OPEN, architectural**
 - Repro reproduced (`{:unsolved_metavariables, AStar0}`; typed-helper workaround elaborates).
