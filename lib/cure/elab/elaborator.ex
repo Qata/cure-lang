@@ -335,13 +335,16 @@ defmodule Cure.Elab.Elaborator do
       not String.contains?(name, ".") and
           length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2 ->
         cands = Cure.Elab.Resolution.overload_candidates(env, atom)
-        arg_labels = Keyword.get(meta, :arg_labels)
 
-        with {:ok, present} <- map_present_args(args, names, ctx, env),
-             arg_types = Enum.map(present, fn {_term, ty} -> ty end),
-             {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, arg_labels, cands) do
-          elaborate_global_app(env, winner, present, ctx)
-        end
+        elaborate_overloaded_app(
+          env,
+          atom,
+          args,
+          Keyword.get(meta, :arg_labels),
+          names,
+          ctx,
+          cands
+        )
 
       # A bare name provided by ≥2 distinct re-keyed imports with no local/
       # unshadowed winner: unqualified use is ambiguous (R7). Checked before the
@@ -2520,6 +2523,37 @@ defmodule Cure.Elab.Elaborator do
         {:ok, key} -> key
         _ -> atom
       end
+    end
+  end
+
+  @doc """
+  Resolve and elaborate an applied call to a bare OVERLOADED name (a set of ≥2
+  members sharing one spelling — same-module discriminated members, or
+  cross-module providers with no unique winner) by inferring the argument types,
+  pruning candidates by first-order convertibility, and dispatching the survivor.
+
+  Shared verbatim by TERM-position elaboration (`elaborate_named_call_resolved`)
+  and dependent-INDEX-position lowering (`declarations.ex:lower_applied_type`) so
+  both disambiguate identically — index position previously ran the pre-overload
+  resolver and either mis-picked an ambient same-name provider (crashing in ι) or
+  reported `:ambiguous_name`. Returns the standard `{:ok, term, type}` on a unique
+  survivor, or `Overload.resolve`'s `{:error, {:no_matching_overload | :ambiguous_overload, …}}`.
+  `candidates` is the caller's already-computed `overload_candidates/2` (≥2).
+  """
+  @spec elaborate_overloaded_app(
+          Env.t(),
+          atom(),
+          [tuple()],
+          [String.t()] | nil,
+          [String.t()],
+          Context.t(),
+          [atom()]
+        ) :: {:ok, term(), term()} | {:error, term()}
+  def elaborate_overloaded_app(env, atom, args, arg_labels, names, ctx, candidates) do
+    with {:ok, present} <- map_present_args(args, names, ctx, env),
+         arg_types = Enum.map(present, fn {_term, ty} -> ty end),
+         {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, arg_labels, candidates) do
+      elaborate_global_app(env, winner, present, ctx)
     end
   end
 

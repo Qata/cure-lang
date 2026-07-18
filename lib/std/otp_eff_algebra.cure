@@ -75,4 +75,25 @@ mod Std.Otp.EffAlgebra
   ## β-reduces to `k(x)`. The `fn(z) -> k(z)` continuation sits in the `Equivalent` INDEX — a
   ## function argument in a dependent index position, the case E10a unblocks.
   fn hbind_left_id(x: Tag, k: (Tag) -> HEff) -> Equivalent(HEff, hbind(HPure(x), fn(z) -> k(z)), k(x)) = reflexive(k(x))
+
+  ## **INTERPRETING EITHER CARRIER (type-directed overload).** `render` interprets
+  ## an effect program into a `Nat` measure — the command count for the valueless
+  ## `Eff` monoid, and the top-level shape for the `HEff` free monad. It is a single
+  ## bare name OVERLOADED across the two carriers, discriminated by argument type;
+  ## a use site resolves by the type of what it is handed. The two laws below place
+  ## that overloaded name inside an `Equivalent` INDEX — a dependent position — and
+  ## the elaborator resolves it there exactly as in term position (E11: type-directed
+  ## overloading reaches into type/index positions; before the fix a same-module
+  ## overload in an index mis-resolved to an ambient provider and crashed the kernel).
+  fn render(e: Eff) -> Nat = count_sends(e)
+  fn render(h: HEff) -> Nat = match h
+    HPure(x)    -> Z()
+    HBind(e, g) -> S(Z())
+
+  ## The empty program measures to zero — `render` here resolves to the `Eff` member
+  ## because `ENil()` is an `Eff`.
+  fn render_eff_nil() -> Equivalent(Nat, render(ENil()), Z()) = reflexive(Z())
+  ## A pure free-monad program measures to zero — `render` here resolves to the
+  ## `HEff` member because `HPure(t)` is an `HEff`.
+  fn render_heff_pure(t: Tag) -> Equivalent(Nat, render(HPure(t)), Z()) = reflexive(Z())
 end

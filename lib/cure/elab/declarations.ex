@@ -2180,23 +2180,60 @@ defmodule Cure.Elab.Declarations do
     # family/ctor applied to a lambda is left to its own path, and on `ctx` (a
     # non-return-type index position threads none — an acceptable §7.5-class
     # residual, mirroring `:sigma_projection_needs_ctx`).
-    if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
-         (implicit_global?(env, atom) or
-            (args_contain_lambda?(args) and term_level_def?(env, atom))) do
-      with {:ok, term, _result_type} <-
-             Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
-        {:ok, term}
-      end
-    else
-      with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
-        case expand_typealias_application(env, atom, core_args) do
-          {:ok, expanded} ->
-            {:ok, expanded}
+    # A bare name resolvable to a return-type/index typing context (`ctx`) that is
+    # not shadowed by a local binder is eligible for the two term-delegating
+    # lowerings below.
+    delegable? = ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil
 
-          :not_typealias ->
-            lower_applied_type_head(atom, raw_name, core_args, fam, env, qualified_key, scope)
-        end
+    # Type-directed OVERLOAD resolution in index position (E11-Stage-2 + E11
+    # crash). A bare overloaded name (≥2 discriminated/cross-module members) reached
+    # `applied_def_key`'s pre-overload resolver, which mis-picked an ambient
+    # same-name provider (`plus(MkM …)` → `Std.Nat#plus`, then a raw ι crash) or
+    # reported `:ambiguous_name`. Route it through the SAME overload machinery as
+    # term position so the argument types prune to the intended member. A bare name
+    # with a single local/direct winner collapses to <2 candidates and never
+    # reaches here. Guarded on `not qualified` (a dotted head is resolved by name)
+    # to mirror the term-position `not String.contains?` guard.
+    overload_cands =
+      if delegable? and not String.contains?(raw_name, ".") do
+        Cure.Elab.Resolution.overload_candidates(env, atom)
+      else
+        []
       end
+
+    cond do
+      length(overload_cands) >= 2 ->
+        with {:ok, term, _result_type} <-
+               Cure.Elab.Elaborator.elaborate_overloaded_app(
+                 env,
+                 atom,
+                 args,
+                 Keyword.get(fmeta, :arg_labels),
+                 scope,
+                 ctx,
+                 overload_cands
+               ) do
+          {:ok, term}
+        end
+
+      delegable? and
+          (implicit_global?(env, atom) or
+             (args_contain_lambda?(args) and term_level_def?(env, atom))) ->
+        with {:ok, term, _result_type} <-
+               Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
+          {:ok, term}
+        end
+
+      true ->
+        with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
+          case expand_typealias_application(env, atom, core_args) do
+            {:ok, expanded} ->
+              {:ok, expanded}
+
+            :not_typealias ->
+              lower_applied_type_head(atom, raw_name, core_args, fam, env, qualified_key, scope)
+          end
+        end
     end
   end
 

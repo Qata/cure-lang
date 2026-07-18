@@ -24,7 +24,7 @@ relevant, run `idris2 --check` on the byte-equivalent program. No `lib/**` was m
 | **E8** — sequential-match refinement | OPEN; **narrower than catalog** | E | **bounded-for-repro** (carried-eq detour) | YES |
 | **E2-residual** — name relevant ctor index | OPEN; **design-gated, not bounded** | E | new surface grade syntax + quantity policy | YES |
 | **E10** — HO-fn arg not reduced in index | OPEN; **root cause overturned** | (a) P + K, (b)/(c) K | (a)-parser trivial; kernel part HARD-STOP | YES (all three, Idris-verified) |
-| **E11-Stage-2** — type-directed overload | OPEN; **not landed here** | E | **bounded** (wire overload into index path) | partial |
+| **E11-Stage-2** — type-directed overload | **✅ LANDED** | E | bounded — routed index-position overloads through term-position resolver | partial |
 
 **Net:** none were already fixed; none is trivial-and-done. Two carry a **kernel** bug
 (E9 sub-bug, E10 (b)/(c)); two were **mis-framed** by the catalog (E9 premise, E10 root
@@ -85,28 +85,41 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
 
 ## 3. Elaborator / parser gaps (fix after the kernel bugs are green)
 
-### E11-Stage-2 — type-directed overload in type/index position — **OPEN, bounded**
-- **Not landed here** despite `autopilot/type-directed-overload-resolution` (`d30c72a8`) being
-  an ancestor: that branch shipped Ph1 overload for **term position only**
+### E11-Stage-2 — type-directed overload in type/index position — **✅ LANDED** (E, `fix(elab): resolve type-directed overloads in index position`)
+- **Was:** Ph1 overload shipped for **term position only**
   (`elaborator.ex:elaborate_named_call_resolved`, ~335–344). The type/index-lowering path
-  (`declarations.ex:lower_applied_type_head/7` ~2190, `applied_def_key/3` ~2243) still runs the
+  (`declarations.ex:lower_applied_type`, `lower_applied_type_head/7`, `applied_def_key/3`) ran the
   pre-Ph1 Stage-1 logic and was never wired to `Overload.resolve/5` /
-  `Resolution.overload_candidates/2`.
-- **Evidence:** bare `plus(...)` in an `Equivalent` index → `{:ambiguous_name, :plus, [...]}`;
-  qualified spelling accepts; term-position overload works.
-- **Fix:** in `lower_applied_type_head`'s catch-all, check `overload_candidates`; if ≥2, infer
-  each already-lowered index arg's type (new plumbing in `idx_to_core`/`map_idx_to_core`
-  ~2584) and call `Overload.resolve/5`, mirroring term position. Bounded E edit.
+  `Resolution.overload_candidates/2`. Bare `plus(...)` in an `Equivalent` index →
+  `{:ambiguous_name, :plus, [...]}`; qualified spelling accepted; term-position overload worked.
+- **Fix landed:** factored the term-position overload branch into a public
+  `Elaborator.elaborate_overloaded_app/7` (`map_present_args` → `Overload.resolve/5` →
+  `elaborate_global_app`), and added a first `cond` branch to `lower_applied_type`
+  (`declarations.ex` ~2204): when a bare, unshadowed, unqualified applied name has
+  `overload_candidates ≥ 2`, route it through `elaborate_overloaded_app/7` — the SAME machinery
+  term position uses. A name with a single local/direct winner collapses to <2 candidates and is
+  untouched. No new `idx_to_core`/`map_idx_to_core` plumbing was needed: the term elaborator
+  infers each argument's type itself.
+- **Verified:** oracle `tdoidx/tdoidx01_overload_in_index` rel=same (cure=accept, idris=accept);
+  antibody `test/antigen/overload_in_index_resolution_antibody_test.exs` (REACH + false-equation
+  CONTROL A + genuine-ambiguity CONTROL B, 3 green). Real-code demonstration: `Std.Otp.EffAlgebra`
+  gains a `render` measure OVERLOADED across its two carriers (`Eff` monoid / `HEff` free monad),
+  proved in an `Equivalent` index (`render_eff_nil`, `render_heff_pure`) — a program that
+  previously crashed the kernel and now type-checks. (No pre-existing shipping workaround existed
+  to remove: the same-module pattern crashed, so no such code was ever written — confirmed by a
+  corpus grep for qualified names inside `Equivalent` indices.)
 
-### NEW — E11 elaborator crash on same-module-overload vs ambient provider
-- When a bare name has a **same-module overload set** (discriminated keys, no bare local key)
-  **and** an ambient/prelude same-name provider (e.g. `Std.Nat#plus`),
-  `Resolution.resolve_bare`'s `prefer_direct` silently drops the local overloads and returns the
-  ambient candidate as if unambiguous. The mis-resolved global is applied to the wrong ctor args
-  and the elaborator **crashes with an uncaught `RuntimeError`** (`ι: no branch for constructor …`)
-  out of `Cure.Elab.Program.elaborate/1` instead of a clean `{:error,_}`. **No workaround** for
-  the same-module case (no qualified escape). The E11-Stage-2 fix (`overload_candidates` prefers
-  local via `prefer_local`) also fixes this. Should at minimum fail closed, not crash.
+### E11 elaborator crash on same-module-overload vs ambient provider — **✅ FIXED** (folded into E11-Stage-2)
+- **Was:** when a bare name had a **same-module overload set** (discriminated keys, no bare local
+  key) **and** an ambient/prelude same-name provider (e.g. `Std.Nat#plus`), the index path's
+  `applied_def_key`/`resolve_bare` silently dropped the local overloads and returned the ambient
+  candidate as if unambiguous. The mis-resolved global was applied to the wrong ctor args and the
+  elaborator **crashed with an uncaught `RuntimeError`** (`ι: no branch for constructor …`) out of
+  `Cure.Elab.Program.elaborate/1` instead of a clean `{:error,_}`.
+- **Fixed by the same change:** the new overload branch now fires *before* `applied_def_key`, so a
+  same-module overload set is resolved by argument type (type-distinguishable → the intended
+  member; genuinely ambiguous → a clean `{:ambiguous_overload, …}` error, verified by antibody
+  CONTROL B). The kernel-crash path is unreachable — it now fails closed.
 
 ### E8 — sequential-match refinement across scrutinees — **OPEN, narrower than catalog**
 - Repro reproduced (`:rewrite_no_match`, `m` unrefined; helper-delegation control accepts).
