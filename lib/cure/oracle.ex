@@ -79,7 +79,7 @@ defmodule Cure.Oracle do
     {verdict, System.monotonic_time(:millisecond) - start}
   end
 
-  defp cure_timeout, do: env_int("ORACLE_CURE_TIMEOUT_MS", 60_000)
+  defp cure_timeout, do: env_int("ORACLE_CURE_TIMEOUT_MS", 120_000)
   defp idris_timeout, do: env_int("ORACLE_IDRIS_TIMEOUT_MS", 180_000)
 
   defp env_int(var, default) do
