@@ -85,4 +85,21 @@ mod NarySub
     LStBra(lk) -> match sub
       SubBra(bsub) -> match brasub_lookup(bsub, lk)
         MkLookSub(lk_a, sub_a) -> MkStepTo(LStBra(lk_a), sub_a)
+
+  ## Combining two external choices by APPENDING their branch lists (the computational counterpart to
+  ## the width RELATION): the combined choice offers everything both components offer.
+  fn append_branches(bs1: Branches, bs2: Branches) -> Branches = match bs1
+    BNil()            -> bs2
+    BCons(t, k, rest) -> BCons(t, k, append_branches(rest, bs2))
+  ## The appended list offers at least its FIRST component (every label of bs1 is found in the append,
+  ## with its own continuation — reflexively). Recursion adds bs2's branches to the sub side (weaken).
+  fn brasub_append_left(bs1: Branches, bs2: Branches) -> BraSub(append_branches(bs1, bs2), bs1) = match bs1
+    BNil()            -> BraSubNil()
+    BCons(t, k, rest) -> BraSubCons(t, LookHere(), sub_refl(k), brasub_weaken(t, k, brasub_append_left(rest, bs2)))
+  ## **COMBINING EXTERNAL CHOICES YIELDS A SUBTYPE** (the compute side of "offering more is safe"):
+  ## LBra(append(bs1, bs2)) <: LBra(bs1) — a process that also handles bs2's labels is safe wherever
+  ## one handling only bs1's is expected. The wider choice is CONSTRUCTED, then proven a subtype via the
+  ## width machinery — connecting the union operation to the subtyping preorder.
+  fn combine_sub_left(bs1: Branches, bs2: Branches) -> Sub(LBra(append_branches(bs1, bs2)), LBra(bs1)) =
+    SubBra(brasub_append_left(bs1, bs2))
 end

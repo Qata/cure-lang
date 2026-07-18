@@ -66,3 +66,14 @@ sub_step_l : Sub a b -> LStep b b2 -> StepTo a b2
 sub_step_l (SubRecv t p) LStRecv = MkStepTo LStRecv p
 sub_step_l (SubBra bsub) (LStBra lk) = case brasub_lookup bsub lk of
   MkLookSub lk_a sub_a => MkStepTo (LStBra lk_a) sub_a
+
+append_branches : Branches -> Branches -> Branches
+append_branches BNil bs2 = bs2
+append_branches (BCons t k rest) bs2 = BCons t k (append_branches rest bs2)
+
+brasub_append_left : (bs1 : Branches) -> (bs2 : Branches) -> BraSub (append_branches bs1 bs2) bs1
+brasub_append_left BNil bs2 = BraSubNil
+brasub_append_left (BCons t k rest) bs2 = BraSubCons t LookHere (sub_refl k) (brasub_weaken t k (brasub_append_left rest bs2))
+
+combine_sub_left : (bs1 : Branches) -> (bs2 : Branches) -> Sub (LBra (append_branches bs1 bs2)) (LBra bs1)
+combine_sub_left bs1 bs2 = SubBra (brasub_append_left bs1 bs2)
