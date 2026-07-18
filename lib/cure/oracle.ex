@@ -112,10 +112,21 @@ defmodule Cure.Oracle do
       end
 
     try do
-      {_out, status} =
+      {out, status} =
         System.cmd(bin, ["--check", base], cd: work, env: env, stderr_to_stdout: true)
 
-      if status == 0, do: :accept, else: :reject
+      # `idris2 --check` type-checks but does NOT hard-fail on totality: under
+      # `%default total` a non-total / non-covering / non-positive definition is
+      # reported as `Error: … is not total|not covering|not strictly positive`
+      # yet the process still exits 0. For an ORACLE over PROOFS totality is
+      # soundness (`foo : P; foo = foo` proves anything), so a type-check pass is
+      # not enough — reject when Idris flags any totality violation, matching the
+      # Cure side, which certifies totality before it will δ-reduce a proof.
+      cond do
+        status != 0 -> :reject
+        Regex.match?(~r/is not total|is not covering|not strictly positive/, out) -> :reject
+        true -> :accept
+      end
     after
       File.rm_rf(work)
     end

@@ -213,34 +213,35 @@ matching/metacontext work knocks out several of these at once.
   reconstruction: `config_subst` takes `g2` explicit, so the spec continuations `project(g2, role)` are
   writable and thread as `sub_step_l`'s explicit `b2` — avoiding `SubRefl` entirely (`7d0ccad1`).
 
-### K-bug 3 — size-change checker rejects recursive-result-as-argument (more conservative than Idris)
+### K-bug 3 — MISDIAGNOSED (NOT a Cure gap); it exposed a real ORACLE-rigor gap instead
 
-- **Symptom.** A mutually-recursive group where a recursive *result* is passed as an argument to a
-  sibling that then recurses through the original function is not certified total, so it stays opaque
-  to δ (proofs about it fail `:conversion_failure`). Concretely, the faithful n-ary branch-merge
-  `merge`/`union_branches`/`insert_branch`: `union_branches(bs1, BCons(t,k,rest)) = insert_branch(t, k,
-  union_branches(bs1, rest))`, and `insert_branch` calls `merge(k, k2)` on a shared label. The group
-  terminates (the continuation `k2` is a sub-sub-term of the original `merge` argument), but the
-  size-change matrices treat `insert_branch`'s list argument `union_branches(bs1, rest)` — a
-  defined-function *result* — as unknown size, breaking the decrease chain.
-- **Differential (verified 2026-07-18).** **Idris accepts** the identical definitions as `%default
-  total` (probe checked in-tree). So this is a genuine Cure `cure_stricter` — Cure's size-change is
-  more conservative than Idris's on this pattern; NOT a phantom.
-- **Root cause + layer.** K (`certificate.ex`, `mutual_group_total?`/`size_change_total?`). The
-  size-change over-approximates a recursive-result argument as unbounded; the cross-function measure
-  that Idris finds (the argument to `merge` strictly shrinks around the whole cycle) is not derived.
-- **Fix.** HARD-STOP kernel change — extend the size-change matrices so a call whose argument is a
-  sibling's recursive result still contributes the strict-decrease edge Idris derives, WITHOUT
-  certifying any non-total function (Antigen antibody: a genuinely non-terminating recursive-result
-  cycle must stay rejected). Aligns with Idris (TCB-change blanket approval applies), but needs the
-  full HARD-STOP gate. A dedicated run, not a loop tick.
-- **Workaround (in use).** Restructure so the recursion is on structural subterms only — e.g. merge
-  branch lists by POSITIONAL PAIRING (`merge_bra(BCons t1 k1 r1)(BCons t2 k2 r2) = BCons t1 (merge k1
-  k2) (merge_bra r1 r2)`) instead of insert-into-a-recursive-result. Certifies + δ-reduces; used for
-  `otp_nary_merge_idem` `merge_idem` (`01b75884`). Also: a plain FORWARD reference (a fn calling a
-  helper declared *below* it) defers certification until the end-of-module sweep, so a dependent proof
-  checked before the sweep sees the caller non-reducing — same class as the mutual-recursion cert bug
-  (`a4f071fb`) but for non-mutual forward refs; workaround is define-before-use ordering.
+- **Original claim (WRONG).** The faithful n-ary branch-merge `merge`/`union_branches`/`insert_branch`
+  (where `union_branches(bs1, BCons(t,k,rest)) = insert_branch(t, k, union_branches(bs1, rest))` and
+  `insert_branch` calls `merge(k, k2)` on a shared label) fails to certify total in Cure, and "Idris
+  accepts it" — implying Cure's size-change is more conservative than Idris.
+- **Corrected (verified 2026-07-18).** The "Idris accepts" evidence was bogus: `idris2 --check` does
+  NOT hard-fail on totality — under `%default total` it prints `Error: … is not total | is not
+  covering | not strictly positive` yet **exits 0**. The definitive `:total merge` REPL query shows
+  Idris ALSO rejects this group ("not total, possibly not terminating due to recursive path
+  insert_branch → merge → merge → union_branches → insert_branch"). So **Cure is correctly conservative
+  and ALIGNED with Idris — both reject.** There is no Cure size-change bug. The insert-into-a-recursive-
+  result pattern is genuinely beyond plain size-change in both languages; the fix is to author it
+  differently (POSITIONAL PAIRING recurses on structural subterms only and certifies in both — used for
+  `otp_nary_merge_idem`, `01b75884`).
+- **The REAL finding + fix (LANDED).** The oracle's `idris_verdict` decided `:accept` purely on
+  `idris2 --check` exit status, which is totality-blind. For an oracle over PROOFS totality is
+  soundness (`foo : P; foo = foo` proves anything), so a type-check pass is not enough. `oracle.ex`
+  now rejects when `--check` output matches `is not total|is not covering|not strictly positive`,
+  matching the Cure side (which certifies totality before it will δ-reduce a proof). Re-ran the whole
+  `otp` cluster under the stricter check: ZERO positive probes flipped (every proof is genuinely total
+  on the Idris side too), `verdicts.json` unchanged, replay green — so all shipped `rel=same` results
+  are now validated as total-proof on BOTH sides. NOTE: other clusters' frozen verdicts predate the
+  stricter check; the change is monotonic (only catches genuinely non-total Idris proofs), so a full
+  re-generation across clusters is a hygiene follow-up, not a correctness regression.
+- **Unrelated ordering note (still valid).** A plain FORWARD reference (a fn calling a helper declared
+  *below* it) defers certification until the end-of-module sweep, so a dependent proof checked before
+  the sweep sees the caller non-reducing — same class as the mutual-recursion cert bug (`a4f071fb`) but
+  for non-mutual forward refs; workaround is define-before-use ordering.
 
 ## 3. Recommended order
 
