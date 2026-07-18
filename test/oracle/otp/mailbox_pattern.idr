@@ -385,3 +385,40 @@ deriv_complete pat t m acc = dc_gen t m acc Refl
 matches_word_complete : (e : Pat) -> (w : Word) -> Accepts e (parikh w) -> nullable (dfold e w) = T
 matches_word_complete e WNil acc = nullable_complete e acc
 matches_word_complete e (WCons t rest) acc = matches_word_complete (deriv e t) rest (deriv_complete e t (parikh rest) (rewrite msadd_comm (parikh rest) (singleton t) in acc))
+
+add_one_a : (k, b, c : Nat) -> MkMS (S k) b c = msadd (MkMS k b c) (singleton TA)
+add_one_a k b c = cong3 MkMS (sym (plus_x_s1 k)) (sym (plus_n_z b)) (sym (plus_n_z c))
+add_one_b : (a, k, c : Nat) -> MkMS a (S k) c = msadd (MkMS a k c) (singleton TB)
+add_one_b a k c = cong3 MkMS (sym (plus_n_z a)) (sym (plus_x_s1 k)) (sym (plus_n_z c))
+add_one_c : (a, b, k : Nat) -> MkMS a b (S k) = msadd (MkMS a b k) (singleton TC)
+add_one_c a b k = cong3 MkMS (sym (plus_n_z a)) (sym (plus_n_z b)) (sym (plus_x_s1 k))
+
+data MailProgress : Pat -> MS -> Type where
+  MPDone : nullable e = T -> MailProgress e (MkMS 0 0 0)
+  MPStep : (t : Tag) -> (m2 : MS) -> Accepts (deriv e t) m2 -> MailProgress e (msadd m2 (singleton t))
+
+reliable : (e : Pat) -> (m : MS) -> Accepts e m -> MailProgress e m
+reliable e (MkMS (S k) b c) acc = rewrite add_one_a k b c in MPStep TA (MkMS k b c) (deriv_complete e TA (MkMS k b c) (rewrite sym (add_one_a k b c) in acc))
+reliable e (MkMS 0 (S k) c) acc = rewrite add_one_b 0 k c in MPStep TB (MkMS 0 k c) (deriv_complete e TB (MkMS 0 k c) (rewrite sym (add_one_b 0 k c) in acc))
+reliable e (MkMS 0 0 (S k)) acc = rewrite add_one_c 0 0 k in MPStep TC (MkMS 0 0 k) (deriv_complete e TC (MkMS 0 0 k) (rewrite sym (add_one_c 0 0 k) in acc))
+reliable e (MkMS 0 0 0) acc = MPDone (nullable_complete e acc)
+
+msize : MS -> Nat
+msize (MkMS a b c) = (a + b) + c
+
+msize_zero : (m : MS) -> msize m = 0 -> m = MkMS 0 0 0
+msize_zero (MkMS a b c) e = cong3 MkMS (plus_zero_l a b (plus_zero_l (a+b) c e)) (plus_zero_r a b (plus_zero_l (a+b) c e)) (plus_zero_r (a+b) c e)
+
+data Drain : Pat -> MS -> Type where
+  DrDone : nullable e = T -> Drain e (MkMS 0 0 0)
+  DrStep : (t : Tag) -> (m2 : MS) -> Drain (deriv e t) m2 -> Drain e (msadd m2 (singleton t))
+
+drain_go : (e : Pat) -> (m : MS) -> (n : Nat) -> Accepts e m -> msize m = n -> Drain e m
+drain_go e m 0 acc sz = case msize_zero m sz of Refl => DrDone (nullable_complete e acc)
+drain_go e (MkMS (S a2) b c) (S k) acc sz = rewrite add_one_a a2 b c in DrStep TA (MkMS a2 b c) (drain_go (deriv e TA) (MkMS a2 b c) k (deriv_complete e TA (MkMS a2 b c) (rewrite sym (add_one_a a2 b c) in acc)) (s_inj sz))
+drain_go e (MkMS 0 (S b2) c) (S k) acc sz = rewrite add_one_b 0 b2 c in DrStep TB (MkMS 0 b2 c) (drain_go (deriv e TB) (MkMS 0 b2 c) k (deriv_complete e TB (MkMS 0 b2 c) (rewrite sym (add_one_b 0 b2 c) in acc)) (s_inj sz))
+drain_go e (MkMS 0 0 (S c2)) (S k) acc sz = rewrite add_one_c 0 0 c2 in DrStep TC (MkMS 0 0 c2) (drain_go (deriv e TC) (MkMS 0 0 c2) k (deriv_complete e TC (MkMS 0 0 c2) (rewrite sym (add_one_c 0 0 c2) in acc)) (s_inj sz))
+drain_go e (MkMS 0 0 0) (S k) acc Refl impossible
+
+drain : (e : Pat) -> (m : MS) -> Accepts e m -> Drain e m
+drain e m acc = drain_go e m (msize m) acc Refl

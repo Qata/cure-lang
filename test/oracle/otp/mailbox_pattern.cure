@@ -390,4 +390,41 @@ mod MailboxPattern
   fn matches_word_complete(e: Pat, w: Word, acc: Accepts(e, parikh(w))) -> Equivalent(B, nullable(dfold(e, w)), T) = match w
     WNil()         -> nullable_complete(e, acc)
     WCons(t, rest) -> matches_word_complete(deriv(e, t), rest, deriv_complete(e, t, parikh(rest), rewrite msadd_comm(parikh(rest), singleton(t)) in acc))
+
+  fn add_one_a(k: Nat, b: Nat, c: Nat) -> Equivalent(MS, MkMS(S(k), b, c), msadd(MkMS(k, b, c), singleton(TA()))) = rewrite plus_x_s1(k) in rewrite plus_n_z(b) in rewrite plus_n_z(c) in reflexive(MkMS(S(k), b, c))
+  fn add_one_b(a: Nat, k: Nat, c: Nat) -> Equivalent(MS, MkMS(a, S(k), c), msadd(MkMS(a, k, c), singleton(TB()))) = rewrite plus_n_z(a) in rewrite plus_x_s1(k) in rewrite plus_n_z(c) in reflexive(MkMS(a, S(k), c))
+  fn add_one_c(a: Nat, b: Nat, k: Nat) -> Equivalent(MS, MkMS(a, b, S(k)), msadd(MkMS(a, b, k), singleton(TC()))) = rewrite plus_n_z(a) in rewrite plus_n_z(b) in rewrite plus_x_s1(k) in reflexive(MkMS(a, b, S(k)))
+
+  type MailProgress indices (e: Pat, m: MS)
+    MPDone : Equivalent(B, nullable(e), T) -> MailProgress(e, MkMS(Z(), Z(), Z()))
+    MPStep : (t: Tag) -> (m2: MS) -> Accepts(deriv(e, t), m2) -> MailProgress(e, msadd(m2, singleton(t)))
+
+  fn reliable(e: Pat, m: MS, acc: Accepts(e, m)) -> MailProgress(e, m) = match m
+    MkMS(a, b, c) -> match a
+      S(k) -> rewrite add_one_a(k, b, c) in MPStep(TA(), MkMS(k, b, c), deriv_complete(e, TA(), MkMS(k, b, c), rewrite add_one_a(k, b, c) in acc))
+      Z()  -> match b
+        S(k) -> rewrite add_one_b(Z(), k, c) in MPStep(TB(), MkMS(Z(), k, c), deriv_complete(e, TB(), MkMS(Z(), k, c), rewrite add_one_b(Z(), k, c) in acc))
+        Z()  -> match c
+          S(k) -> rewrite add_one_c(Z(), Z(), k) in MPStep(TC(), MkMS(Z(), Z(), k), deriv_complete(e, TC(), MkMS(Z(), Z(), k), rewrite add_one_c(Z(), Z(), k) in acc))
+          Z()  -> MPDone(nullable_complete(e, acc))
+
+  fn msize(m: MS) -> Nat = match m
+    MkMS(a, b, c) -> plus(plus(a, b), c)
+  fn msize_zero(m: MS, e: Equivalent(Nat, msize(m), Z())) -> Equivalent(MS, m, MkMS(Z(), Z(), Z())) = match m
+    MkMS(a, b, c) -> rewrite plus_zero_l(a, b, plus_zero_l(plus(a, b), c, e)) in rewrite plus_zero_r(a, b, plus_zero_l(plus(a, b), c, e)) in rewrite plus_zero_r(plus(a, b), c, e) in reflexive(MkMS(Z(), Z(), Z()))
+  type Drain indices (e: Pat, m: MS)
+    DrDone : Equivalent(B, nullable(e), T) -> Drain(e, MkMS(Z(), Z(), Z()))
+    DrStep : (t: Tag) -> (m2: MS) -> Drain(deriv(e, t), m2) -> Drain(e, msadd(m2, singleton(t)))
+  fn drain_go(e: Pat, m: MS, n: Nat, acc: Accepts(e, m), sz: Equivalent(Nat, msize(m), n)) -> Drain(e, m) = match n
+    Z()  -> rewrite msize_zero(m, sz) in DrDone(nullable_complete(e, rewrite msize_zero(m, sz) in acc))
+    S(k) -> match m
+      MkMS(a, b, c) -> match a
+        S(a2) -> rewrite add_one_a(a2, b, c) in DrStep(TA(), MkMS(a2, b, c), drain_go(deriv(e, TA()), MkMS(a2, b, c), k, deriv_complete(e, TA(), MkMS(a2, b, c), rewrite add_one_a(a2, b, c) in acc), s_inj(msize(MkMS(a2, b, c)), k, sz)))
+        Z()  -> match b
+          S(b2) -> rewrite add_one_b(Z(), b2, c) in DrStep(TB(), MkMS(Z(), b2, c), drain_go(deriv(e, TB()), MkMS(Z(), b2, c), k, deriv_complete(e, TB(), MkMS(Z(), b2, c), rewrite add_one_b(Z(), b2, c) in acc), s_inj(msize(MkMS(Z(), b2, c)), k, sz)))
+          Z()  -> match c
+            S(c2) -> rewrite add_one_c(Z(), Z(), c2) in DrStep(TC(), MkMS(Z(), Z(), c2), drain_go(deriv(e, TC()), MkMS(Z(), Z(), c2), k, deriv_complete(e, TC(), MkMS(Z(), Z(), c2), rewrite add_one_c(Z(), Z(), c2) in acc), s_inj(msize(MkMS(Z(), Z(), c2)), k, sz)))
+            Z()  -> match sz
+  fn drain(e: Pat, m: MS, acc: Accepts(e, m)) -> Drain(e, m) =
+    drain_go(e, m, msize(m), acc, reflexive(msize(m)))
 end
