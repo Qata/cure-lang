@@ -1,61 +1,55 @@
 %default total
 
-data OKey = OA | OB | OC
-data OBit = OF | OT
+data Key = Alpha | Beta | Gamma
+data Bit = No | Yes
 
-slt : OKey -> OKey -> OBit
-slt OA OA = OF
-slt OA OB = OT
-slt OA OC = OT
-slt OB OA = OF
-slt OB OB = OF
-slt OB OC = OT
-slt OC OA = OF
-slt OC OB = OF
-slt OC OC = OF
+strictLess : Key -> Key -> Bit
+strictLess Alpha Alpha = No
+strictLess Alpha Beta = Yes
+strictLess Alpha Gamma = Yes
+strictLess Beta Alpha = No
+strictLess Beta Beta = No
+strictLess Beta Gamma = Yes
+strictLess Gamma Alpha = No
+strictLess Gamma Beta = No
+strictLess Gamma Gamma = No
 
-data EKey = EBot | EFin OKey | ETop
+data Bound = BelowAll | Only Key | AboveAll
 
-elt : EKey -> EKey -> OBit
-elt EBot EBot = OF
-elt EBot (EFin y) = OT
-elt EBot ETop = OT
-elt (EFin x) EBot = OF
-elt (EFin x) (EFin y) = slt x y
-elt (EFin x) ETop = OT
-elt ETop b = OF
+boundLess : Bound -> Bound -> Bit
+boundLess BelowAll BelowAll = No
+boundLess BelowAll (Only y) = Yes
+boundLess BelowAll AboveAll = Yes
+boundLess (Only x) BelowAll = No
+boundLess (Only x) (Only y) = strictLess x y
+boundLess (Only x) AboveAll = Yes
+boundLess AboveAll hi = No
 
-data Tri : OKey -> OKey -> Type where
-  TLt : slt x k = OT -> Tri x k
-  TEq : x = k -> Tri x k
-  TGt : slt k x = OT -> Tri x k
+data Trichotomy : Key -> Key -> Type where
+  TriLess : strictLess x k = Yes -> Trichotomy x k
+  TriEqual : x = k -> Trichotomy x k
+  TriGreater : strictLess k x = Yes -> Trichotomy x k
 
-owoto : (x : OKey) -> (k : OKey) -> Tri x k
-owoto OA OA = TEq Refl
-owoto OA OB = TLt Refl
-owoto OA OC = TLt Refl
-owoto OB OA = TGt Refl
-owoto OB OB = TEq Refl
-owoto OB OC = TLt Refl
-owoto OC OA = TGt Refl
-owoto OC OB = TGt Refl
-owoto OC OC = TEq Refl
+compareKeys : (x : Key) -> (k : Key) -> Trichotomy x k
+compareKeys Alpha Alpha = TriEqual Refl
+compareKeys Alpha Beta = TriLess Refl
+compareKeys Alpha Gamma = TriLess Refl
+compareKeys Beta Alpha = TriGreater Refl
+compareKeys Beta Beta = TriEqual Refl
+compareKeys Beta Gamma = TriLess Refl
+compareKeys Gamma Alpha = TriGreater Refl
+compareKeys Gamma Beta = TriGreater Refl
+compareKeys Gamma Gamma = TriEqual Refl
 
-data BST : EKey -> EKey -> Type where
-  BLeaf : elt lo hi = OT -> BST lo hi
-  BNode : (k : OKey) -> BST lo (EFin k) -> BST (EFin k) hi -> BST lo hi
+data SearchTree : Bound -> Bound -> Type where
+  Leaf : boundLess lo hi = Yes -> SearchTree lo hi
+  Branch : (k : Key) -> SearchTree lo (Only k) -> SearchTree (Only k) hi -> SearchTree lo hi
 
-mutual
-  insert : (lo : EKey) -> (hi : EKey) -> (x : OKey) ->
-           (elt lo (EFin x) = OT) -> (elt (EFin x) hi = OT) ->
-           BST lo hi -> BST lo hi
-  insert lo hi x plo phi (BLeaf pf) = BNode x (BLeaf plo) (BLeaf phi)
-  insert lo hi x plo phi (BNode k l r) = insert_go lo hi x plo phi k l r (owoto x k)
-
-  insert_go : (lo : EKey) -> (hi : EKey) -> (x : OKey) ->
-              (elt lo (EFin x) = OT) -> (elt (EFin x) hi = OT) ->
-              (k : OKey) -> BST lo (EFin k) -> BST (EFin k) hi ->
-              Tri x k -> BST lo hi
-  insert_go lo hi x plo phi k l r (TLt lt) = BNode k (insert lo (EFin k) x plo lt l) r
-  insert_go lo hi x plo phi k l r (TEq eq) = BNode k l r
-  insert_go lo hi x plo phi k l r (TGt gt) = BNode k l (insert (EFin k) hi x gt phi r)
+insert : (lo : Bound) -> (hi : Bound) -> (x : Key) ->
+         (boundLess lo (Only x) = Yes) -> (boundLess (Only x) hi = Yes) ->
+         SearchTree lo hi -> SearchTree lo hi
+insert lo hi x below above (Leaf pf) = Branch x (Leaf below) (Leaf above)
+insert lo hi x below above (Branch k l r) = case compareKeys x k of
+  TriLess less => Branch k (insert lo (Only k) x below less l) r
+  TriEqual eq => Branch k l r
+  TriGreater greater => Branch k l (insert (Only k) hi x greater above r)
