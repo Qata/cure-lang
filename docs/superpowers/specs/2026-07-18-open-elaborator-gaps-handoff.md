@@ -148,6 +148,45 @@ matching/metacontext work knocks out several of these at once.
   resolve a bare ambiguous applied def by the argument/expected types instead of requiring the
   qualified spelling.
 
+### E12 — `rewrite`'s occurrence-finder is δ-blind (target hidden under an unreduced defined function)
+
+- **Symptom.** `rewrite n1 in …` with `n1 : role_eq(fr,r) = F` against goal `project(GMsg(fr,to,t,k),
+  r) = project(k,r)` fails `:rewrite_no_match`. The redex `role_eq(fr,r)` is NOT syntactically present
+  in the goal — it appears only after `project` δ-unfolds one step and its inner `case` exposes the
+  scrutinee. `abstract_term`'s occurrence search walks the goal WITHOUT unfolding defined functions,
+  so it finds nothing to abstract.
+- **Distinct from E8** (same `:rewrite_no_match` tag, different mechanism): E8's redex is
+  PRESENT-but-unrefined (an outer match failed to refine `m`); E12's redex is ABSENT-until-unfolded
+  (buried under a defined-function application). Do not conflate them.
+- **Root cause + layer.** E (`elaborator.ex`, the rewrite/`abstract_term` path). The kernel's
+  conversion DOES see through `project` (δ/ι) — the concrete-cased `reflexive` version checks fine —
+  but the elaborator's rewrite occurrence-finder does not WHNF/δ-normalise the goal to expose targets
+  that sit as `case` scrutinees under a defined function.
+- **Idris accepts** the direct `rewrite p1 in rewrite p2 in Refl` (its evaluator WHNF-reduces `project`
+  to the exposed `case`). Reach gap: YES.
+- **Proposed fix.** WHNF/δ-normalise the goal (or candidate subterms) during rewrite-occurrence search,
+  matching Idris. E-only; no kernel change (kernel conversion already handles it).
+- **Workaround (in use).** Case the scrutinees concretely (`match r`/`match fr`/`match to`) so
+  `role_eq`/`project` reduce and lean on kernel conversion via `reflexive`. Verified on
+  `branch_merge.cure` `proj_bystander_msg` (27-leaf concrete case; Idris mirror uses the direct rewrite).
+
+### E1-sub — scrutinee variable not substituted in branch-BODY term occurrences
+
+- **Symptom.** `match r { RA() -> reflexive(project(k, r)) … }` gives `:conversion_failure`: the branch
+  refines the GOAL to `project(k, RA)`, but the hand-written `r` in `project(k, r)` still dereferences
+  the abstract binder (`nvar`), not `RA`. Writing the literal `project(k, RA())` fixes it.
+- **Relation to E1.** The E1 family is framed as sibling/context refinement (refining OTHER binders'
+  types). This is the MATCHED variable itself, in TERM position in the body, not being linked to its
+  pattern — which Idris/Agda get free via clause substitution. Same root (refinement scoped too
+  narrowly), new surface; track as an E1 sub-case, not a dup.
+- **Root cause + layer.** E. The branch substitution refines the motive/goal but is not applied to
+  term-level occurrences of the scrutinee variable in the branch body.
+- **Idris accepts** (clause substitution replaces `r` with `RA` everywhere in the branch). Reach gap: YES.
+- **Proposed fix.** Extend the branch substitution to rewrite the scrutinee variable to its pattern in
+  the body's elaboration context, not just the goal. Subsumed by the E1 context-refinement rework.
+- **Workaround (in use).** Write the concrete constructor literal in the branch body instead of the
+  matched variable. In use across `branch_merge.cure` concrete-cased lemmas.
+
 ## 3. Recommended order
 
 1. **E9** — highest leverage; a real fix deletes the index-generalization boilerplate from every
