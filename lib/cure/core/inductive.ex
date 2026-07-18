@@ -9,6 +9,16 @@ defmodule Cure.Core.Env do
   closures — only Core terms and metadata — so it stays serializable.
   """
 
+  # Where `alias_index/1` memoizes its indexes, and how many table versions it
+  # keeps. `resolve_key/3` is called with five tables (`defs`, `families`,
+  # `ctors`, `ctor_to_family`, `constrained`); a handful of slots holds their
+  # current versions, and the bound is what stops a long elaboration — which
+  # produces a new table term on every registration — from retaining every
+  # superseded one. Entries are pure derived data, so evicting one only costs a
+  # rebuild.
+  @alias_index_key {__MODULE__, :alias_index}
+  @alias_index_slots 8
+
   defstruct families: %{},
             ctors: %{},
             ctor_to_family: %{},
@@ -144,27 +154,71 @@ defmodule Cure.Core.Env do
 
       true ->
         # Last resort: the name is bare and unowned, so find the unique
-        # owner-qualified key whose base it is. This walks every key in the
-        # table, so keep the per-key work to a single split, and hoist the
-        # target spelling out of the loop rather than re-deriving it per key.
-        target = Atom.to_string(name)
-
-        case Enum.filter(Map.keys(table), &owned_alias?(&1, target)) do
+        # owner-qualified key whose base it is — via an index, because
+        # rediscovering it by walking every key made this O(table) on every
+        # unresolved lookup.
+        case Map.get(alias_index(table), Atom.to_string(name), []) do
           [key] -> key
           _ -> name
         end
     end
   end
 
-  # Whether `key` is an owner-qualified name whose base is `target`.
-  defp owned_alias?(key, target) when is_atom(key) do
-    case Cure.Elab.Name.split(key) do
-      {nil, _base} -> false
-      {_owner, base} -> base == target
+  # base => [owner-qualified keys with that base], for `resolve_key/3`'s fallback.
+  #
+  # The index is a pure function of the table's KEY SET, so it is cached under
+  # the table value itself rather than maintained at the (scattered) sites that
+  # write `defs`/`families`/`ctors`. That choice is what makes a stale read
+  # impossible: a table whose keys changed is a different term, so it misses the
+  # cache and the index is rebuilt. A hit means the terms compare equal, which
+  # means the key sets are equal, which means the index describes this table.
+  # There is no invariant for a future writer to maintain, and nothing to drift.
+  #
+  # Lookup compares with `:erts_debug.same/2` — physical identity, O(1) — rather
+  # than `===`, which would deep-compare these nested def maps whenever the
+  # pointers differ and could cost more than the walk it replaces. Identity is
+  # only ever a conservative approximation of equality: two structurally equal
+  # tables at different addresses simply miss and rebuild, which is correct and
+  # costs the same O(table) walk the fallback used to pay unconditionally. So
+  # this is never the slower choice, and never the wrong one.
+  defp alias_index(table) do
+    cache = Process.get(@alias_index_key, [])
+
+    case cached_index(cache, table) do
+      nil ->
+        index = build_alias_index(table)
+        Process.put(@alias_index_key, Enum.take([{table, index} | cache], @alias_index_slots))
+        index
+
+      index ->
+        index
     end
   end
 
-  defp owned_alias?(_key, _target), do: false
+  defp cached_index([], _table), do: nil
+
+  defp cached_index([{cached, index} | rest], table),
+    do: if(:erts_debug.same(cached, table), do: index, else: cached_index(rest, table))
+
+  defp build_alias_index(table) do
+    Enum.reduce(Map.keys(table), %{}, fn key, acc ->
+      case owned_base(key) do
+        nil -> acc
+        base -> Map.update(acc, base, [key], &[key | &1])
+      end
+    end)
+  end
+
+  # The base of an owner-qualified key, or nil for anything else. Non-atom keys
+  # are not owner-qualified names and are skipped.
+  defp owned_base(key) when is_atom(key) do
+    case Cure.Elab.Name.split(key) do
+      {nil, _base} -> nil
+      {_owner, base} -> base
+    end
+  end
+
+  defp owned_base(_key), do: nil
 
   @doc "Register a primitive base type: surface name → its Core type node."
   @spec put_primitive(t(), String.t(), tuple()) :: t()
