@@ -1,87 +1,73 @@
-# Autopilot completion report — actor-macro consolidation (Stage 1: actor)
+# Autopilot completion report — Type-directed overload resolution (Ph1)
 
-**Branch:** `autopilot/actor-macro-consolidation` (cut from HEAD; **NOT auto-merged**)
-**Run date:** 2026-07-16
-**Outcome:** ✅ Complete. All planned Stage-1 (actor) tasks landed green; both
-full-suite failures classified as **pre-existing and unrelated** to this run.
+**Branch:** `autopilot/type-directed-overload-resolution` (cut from HEAD at the spec commit)
+**Status:** ✅ Complete — ready for operator review & merge. NOT auto-merged.
+**Final HEAD:** `a10f8b08`
+**Full suite:** 4742 passed (3 doctests, 4739 tests), 1 skipped, 2 excluded, Antigen 318/318 ✓
+**TCB (`lib/cure/core/**`):** untouched — zero-TCB constraint held throughout.
 
-> Replaces the earlier `editions`-run report carried in via the HEAD cut (that
-> report remains in git history).
+> Replaces an earlier unrelated run's report (`actor-macro-consolidation`) carried
+> in via the HEAD cut; that report remains in git history.
 
-## What this run delivered
+## What shipped
 
-Consolidated `lib/std/actor.cure`'s expansion path toward ONE quote-templated
-backend (`derive_actor_family` → `emit_actor_parts` / `emit_actor_call_parts`),
-per the approved Lean-style 3-tier macro design. **Stage 1 (actor) scope only.**
+Ph1 **named** type-directed overload resolution for Cure (Idris2 elaborate-and-prune),
+keyed by `(name, arity, argument types)`. Several functions may share a bare name;
+the applied call site gathers the candidate set and prunes by inferred argument type.
+Exactly one survivor resolves; none → `{:no_matching_overload}`; more than one →
+`{:ambiguous_overload}`. Works for same-module AND cross-module (`use`d) overload sets
+(Design "Both"), with the dot-qualified spelling as the escape hatch. This retires the
+stdlib rename workarounds (`Std.Measurements.add`/`sub`, `Std.Char.code_point`).
 
-| Task | Deliverable | Commit |
-|------|-------------|--------|
-| 1 (1a) | Fold `derive_actor` into `derive_actor_family` (single entry) | `fa270d5a` |
-| 2 (1b) | Templatize the 4 fixed-param callbacks with `quote` | `7511959e` |
-| 3 (1d) | `body Declarations` passthrough into the generated module | `a8fe90fe` |
+**Explicitly out of scope (deferred):** operator conformance (making `+` "just work"
+on a user type) and Swift-style argument labels — both await the precedence-group spec.
 
-Task 3 required a P-layer parser addition — a `parse_family_field_value` clause
-for `%{shape: "Declarations"}` using `parse_definition_block`, so a `body` block
-captures *declarations* rather than expressions. Spec §9 permits P-layer
-changes; **TCB (`lib/cure/core/*`) untouched.**
+## Stage-by-stage outcome
 
-## Stage-by-stage trail
+| Stage | Outcome | Commits |
+|---|---|---|
+| 0 — Brainstorm + spec | Design "Both" approved (single human gate); spec written & committed | `56765820` |
+| 1 — Spec review (Sonnet) | recursive-skeptical-review → hardened spec | `cf4db2d4` |
+| 2 — Plan (inline) | Implementation plan written | `0ab765b2` |
+| 3 — Plan review (Sonnet) | recursive-skeptical-review → hardened plan | `2a9a8829` |
+| 4 — Execute (Opus, TDD) | 8 per-task commits; red-green throughout | `e417d5b6` `edb83833` `59d54e2d` `71e4f57f` `5b2cc68b` `70a3c676` `8c373019` `6e8f827c` |
+| 5 — Code review (Sonnet) | recursive-skeptical-review, 2 consecutive clean passes; 1 finding fixed | `a10f8b08` |
+| 6 — Verify + report + notify | Full suite green; this report; push notification | — |
 
-| Stage | Action | Commit |
-|-------|--------|--------|
-| 0 | Spec written | `ad343b07` |
-| 1 | Spec hardened (recursive-skeptical-review, Sonnet) | `441cbd80` |
-| 2 | Plan written | `f6ddf778` |
-| 3 | Plan hardened (recursive-skeptical-review, Sonnet) | `53b63996` |
-| 4 | Execute (inline TDD, Opus) | `fa270d5a`, `7511959e`, `a8fe90fe` |
-| 5 | Code review (recursive-skeptical-review, Sonnet) | zero confirmed findings — no fix commit |
+## Key implementation notes
 
-Diff scope (code): `lib/cure/compiler/parser.ex` (+7), `lib/std/actor.cure`
-(refactor, net −20), `test/cure/compiler/actor_computed_test.exs` (+21, one new
-immutable behavioral test — "structured actor threads a body declaration into
-the generated module"). 3 files.
+- **Discriminator:** overload members register under a `~<ordinal>` suffix
+  (`Mod#plus~0`, `Mod#plus~1`). **Size-1 sets stay byte-identical** (`Mod#plus`) —
+  inertness is pinned by test (`OvlInert`) and verified in Stage 5.
+- **Pruner soundness (`overload.ex`):** prunes on **present (non-erased)** parameter
+  domains only, so a polymorphic member like `Std.List#length : {t} -> List(t) -> Nat`
+  is matched on its present `List(t)` (arity 1) rather than dropped by counting the
+  erased `{t}`. A present param still mentioning a telescope binder is **conservatively
+  kept** — the pruner errs toward ambiguity, never toward a silent wrong unique pick.
+- **Diagnostic taxonomy:** an *applied* bare doubly-imported call → `{:ambiguous_overload,
+  name, owners}`; an *un-applied* value reference (no args to prune) stays the
+  pre-resolution `{:ambiguous_name}`. `global_namespace_soundness_test.exs:170` was
+  migrated to the applied-path tag faithfully (the soundness property — no
+  last-merge-wins — is preserved).
 
-## Full-suite verification
+## Stage 5 finding (fixed)
 
-**Final state (after merging `feature/idris-parity`, merge commit `78c3455a`):**
-`mix test` → **4306 passed, 1 skipped, 0 failures** (Antigen shape-coverage
-318/318; 156 expected immune responses). Fully green.
+The only finding was a **coverage gap**: `Resolution.overload_candidates/2` relies on
+`prefer_local` running before `prefer_direct` (a module's own overload members are never
+in its own `import_modules`; the reverse order would let an ambient `@prelude` provider
+like `Std.Nat#plus` masquerade as the sole candidate). The shipped code was correct but
+untested. The reviewer proved it by swapping the filters — which broke the stdlib's own
+build (`Std.Vector`/`Std.Optic`'s locally-overloaded `map`) — then added a permanent
+regression test. **No production code changed** (`a10f8b08`, test-only).
 
-At the end of the autopilot run itself (before the merge) the suite showed
-**4262/4264 passed, 1 skipped, 2 failures**, both classified pre-existing and
-unrelated to this run's diff — and **both were subsequently resolved by the
-`feature/idris-parity` merge**, confirming neither was a regression from this
-run:
+## Deferred: differential-oracle probe
 
-1. **`Cure.Migrate.MonotonePropertyTest` — non-monotone on `lib/std/actor.cure`.**
-   Classified empirically: reverting `lib/std/actor.cure` to baseline
-   `53b63996` and re-running the monotone test **still failed identically**, so
-   the pre-existing `quote`/`$()` sites — not Task 1/2/3 — were the cause. The
-   `feature/idris-parity` printer fixes (+74 lines in
-   `lib/cure/compiler/printer.ex`) make the round-trip idempotent; the test now
-   passes.
-
-2. **`Cure.Elab.UnionTest` — `:"Cure.Std.Map".get/2 is undefined or private`.**
-   The diff touched nothing near `Std.Map`/union elaboration; resolved by the
-   idris-parity work brought in by the merge.
-
-## Deferred (NOT in this run — future stages)
-
-- **1c** — whole-module `quote` (module-level template).
-- **1e** — terse Tier-1 shorthand delegating to the expander, deletion of the
-  legacy Gen A positional `becomes` template rules, and demo migration.
-- **Stage 2** — apply the same consolidation to `fsm` / `supervisor` /
-  `application` macros.
-- **Stage 3** — typed Tier-3 elaborator (Lean-style MetaM direction).
-
-## Post-run merge
-
-`feature/idris-parity` was merged into this branch (`78c3455a`, ghost-authored,
-no conflicts) to pick up its `printer.ex` fixes. The merge left `actor.cure`
-untouched, so the Stage-1 actor work is intact, and it brought the tree to
-**0 failures** (see Full-suite verification above).
+The plan's optional oracle probe (mirroring resolution against `idris2 --check`) was
+**not** built: Idris's overloading mechanism differs enough that no cheap faithful mirror
+exists, and the internal suite already covers the resolution/ambiguity/inertness surface.
+Left as a future item, not a gap in this feature.
 
 ## Next action for the operator
 
-Review and merge `autopilot/actor-macro-consolidation`. The tree is fully green
-(0 failures) after the `feature/idris-parity` merge.
+Merge `autopilot/type-directed-overload-resolution` into `feature/idris-parity` when
+ready. No further sub-projects were decomposed from this idea.

@@ -187,6 +187,11 @@ defmodule Cure.Core.Conv do
   defp conv_neutral?({:nvar, l1}, {:nvar, l2}, _depth, _sig), do: l1 == l2
   # Uncertified globals are opaque, equal iff the same name (δ already tried in whnf).
   defp conv_neutral?({:nglobal, a}, {:nglobal, b}, _depth, _sig), do: a == b
+  # A hole is convertible ONLY to a hole with the same id — each hole is its own
+  # fresh axiom of its checked type (Agda/Idris postulate-per-hole). Distinct ids
+  # fall through to the `_, _` catch-all below and compare unequal, so `refl : ?a
+  # = ?b` cannot type-check across two different holes (first-class holes).
+  defp conv_neutral?({:nhole, a}, {:nhole, b}, _depth, _sig), do: a == b
 
   defp conv_neutral?({:napp, n1, v1}, {:napp, n2, v2}, depth, sig),
     do: conv_neutral?(n1, n2, depth, sig) and conv_val?(v1, v2, depth, sig)
@@ -234,6 +239,9 @@ defmodule Cure.Core.Conv do
   # allowing δ when the two heads are not already identical.
   defp same_neutral_no_delta?({:nvar, l1}, {:nvar, l2}, _depth, _sig), do: l1 == l2
   defp same_neutral_no_delta?({:nglobal, a}, {:nglobal, b}, _depth, _sig), do: a == b
+  # Holes carry no δ; the syntactic pre-δ fast path compares them by id, exactly
+  # as the post-whnf `conv_neutral?` above (first-class holes).
+  defp same_neutral_no_delta?({:nhole, a}, {:nhole, b}, _depth, _sig), do: a == b
 
   defp same_neutral_no_delta?({:napp, f1, a1}, {:napp, f2, a2}, depth, sig),
     do: same_neutral_no_delta?(f1, f2, depth, sig) and same_value_no_delta?(a1, a2, depth, sig)

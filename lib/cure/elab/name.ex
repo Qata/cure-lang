@@ -8,6 +8,7 @@ defmodule Cure.Elab.Name do
   """
 
   @separator "#"
+  @overload_separator "~"
 
   @type owner :: String.t() | atom()
   @type base :: String.t() | atom()
@@ -55,6 +56,26 @@ defmodule Cure.Elab.Name do
   @doc "Whether a global identity carries an owner qualifier."
   @spec qualified?(atom() | String.t()) :: boolean()
   def qualified?(name), do: owner(name) != nil
+
+  @doc "Append an overload discriminator (`~<ordinal>`) to the base of a key."
+  @spec overload_key(atom() | String.t(), non_neg_integer()) :: atom()
+  def overload_key(base_key, ordinal) when is_integer(ordinal) and ordinal >= 0 do
+    String.to_atom(
+      normalize_base(base_key) <> @overload_separator <> Integer.to_string(ordinal)
+    )
+  end
+
+  @doc "Whether a key's base part carries an overload discriminator."
+  @spec overload_member?(atom() | String.t()) :: boolean()
+  def overload_member?(key) do
+    key |> base() |> to_string() |> String.contains?(@overload_separator)
+  end
+
+  @doc "The base name with any `~<ordinal>` overload discriminator removed."
+  @spec overload_base(atom() | String.t()) :: String.t()
+  def overload_base(key) do
+    key |> base() |> to_string() |> String.split(@overload_separator, parts: 2) |> hd()
+  end
 
   defp normalize_owner(owner) when is_atom(owner), do: Atom.to_string(owner)
   defp normalize_owner(owner) when is_binary(owner), do: owner

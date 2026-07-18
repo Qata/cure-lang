@@ -198,6 +198,31 @@ defmodule Cure.Elab.Elaborator do
           end
       end
 
+    # Ph2 label enforcement for a SINGLE call target. An overloaded name (≥2
+    # candidates) is handled by the pruner clause below, which tie-breaks on
+    # exact label agreement; a lone target instead only enforces its declared
+    # labels here (mandatory two-name labels must be written, optional single-name
+    # ones are free). Inert for every pre-Ph2 call: a target with no mandatory
+    # label called without labels checks `:ok`.
+    overloaded? =
+      not String.contains?(name, ".") and
+        length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2
+
+    label_check =
+      if overloaded?,
+        do: :ok,
+        else: Cure.Elab.Overload.check_labels(env, resolved, Keyword.get(meta, :arg_labels))
+
+    case label_check do
+      {:error, _} = err ->
+        err
+
+      :ok ->
+        elaborate_named_call_resolved(meta, name, atom, args, names, resolved, ctx, env)
+    end
+  end
+
+  defp elaborate_named_call_resolved(meta, name, atom, args, names, resolved, ctx, env) do
     cond do
       # An interface-method call (`eqs(x, y)`) resolves to a concrete instance
       # from the head-positioned argument's type — inlined at a concrete head,
@@ -295,6 +320,27 @@ defmodule Cure.Elab.Elaborator do
                 {:error, _} -> orig
               end
           end
+        end
+
+      # An applied call to a bare overloaded name — a set of ≥2 members sharing
+      # one bare spelling: same-module discriminated members, or cross-module
+      # providers with no unique winner. `overload_candidates/2` already applies
+      # local-then-direct precedence, so a name with a single local/direct winner
+      # (a local `map` shadowing imports) collapses to one candidate and never
+      # reaches here — only a genuine set of ≥2 does. Infer the argument types
+      # once, prune by first-order convertibility, and dispatch the survivor.
+      # Placed after the ctor/method/constrained/qualified special cases and
+      # before the generic ambiguity/def paths; the `not String.contains?` guard
+      # keeps it disjoint from the dotted-qualified clause.
+      not String.contains?(name, ".") and
+          length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2 ->
+        cands = Cure.Elab.Resolution.overload_candidates(env, atom)
+        arg_labels = Keyword.get(meta, :arg_labels)
+
+        with {:ok, present} <- map_present_args(args, names, ctx, env),
+             arg_types = Enum.map(present, fn {_term, ty} -> ty end),
+             {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, arg_labels, cands) do
+          elaborate_global_app(env, winner, present, ctx)
         end
 
       # A bare name provided by ≥2 distinct re-keyed imports with no local/
@@ -471,14 +517,14 @@ defmodule Cure.Elab.Elaborator do
   # a pattern (a `let` RHS, a function argument/body, …) — reject it. Placed
   # before the catch-all so this precise error, not `{:unsupported_expression,…}`,
   # is reported.
-  def elaborate_expr_typed({:forced_pattern, meta, _expr}, _names, _ctx, _env),
+  def elaborate_expr_typed({:forced_pattern, meta, _children}, _names, _ctx, _env),
     do: {:error, {:forced_pattern_not_in_pattern, meta}}
 
   # A named-implicit dot pattern `{ name = <expr> }` is only meaningful as a
   # constructor-argument PATTERN position (annotating an erased index by name).
   # Reaching ordinary expression elaboration means it was used outside a pattern
   # — reject it with a precise error (mirrors the forced-pattern guard above).
-  def elaborate_expr_typed({:named_implicit_pat, meta, _name, _inner}, _names, _ctx, _env),
+  def elaborate_expr_typed({:named_implicit_pat, meta, _children}, _names, _ctx, _env),
     do: {:error, {:named_implicit_not_in_pattern, meta}}
 
   def elaborate_expr_typed({:function_call, meta, args}, names, ctx, env) do
@@ -1757,6 +1803,23 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A proof-position hole: attempt auto-resolution. `expected_core` is the Core
+  # goal at this slot. Soundness: ProofSearch only builds a term; the kernel
+  # re-checks it. On `:none` (no candidate discharges the goal) the hole SURVIVES
+  # as a first-class `{:hole, id}` — since holes are stuck neutrals (first-class
+  # holes, Slice 1), the enclosing application evals to a stuck spine and
+  # type-checks (the kernel accepts a hole at any goal), so the declined proof
+  # becomes an inspectable hole that blocks codegen, exactly like a body-level
+  # hole (declarations.ex hole clause), rather than a hard elaboration error.
+  # The id is minted by the shared `Declarations.hole_id/2` scheme.
+  def elaborate_expr_checked({:hole, meta, _}, expected_core, _names, ctx, env) do
+    case Cure.Elab.ProofSearch.resolve(expected_core, ctx, env) do
+      {:ok, term} -> {:ok, term}
+      :none -> {:ok, {:hole, Cure.Elab.Declarations.hole_id(env, meta)}}
+      {:error, _} = err -> err
+    end
+  end
+
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
 
@@ -1954,14 +2017,68 @@ defmodule Cure.Elab.Elaborator do
     if Unify.has_meta?(expected_core) do
       {:error, {:unsolved_metavariable_in_type, expected_core}}
     else
-      with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
-        term = maybe_inject_union(term, type, expected_core, ctx, env)
-
-        with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      case try_discharge_refinement(expr, expected_core, names, ctx, env) do
+        {:ok, term} ->
           {:ok, term}
-        end
+
+        :no ->
+          with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
+            term = maybe_inject_union(term, type, expected_core, ctx, env)
+
+            with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+              {:ok, term}
+            end
+          end
       end
     end
+  end
+
+  # Auto-discharge a CLOSED refinement obligation (§3a level 2). When a value is
+  # checked against a refinement type `{x: T | φ}` — the dependent pair
+  # `Sigma(T, λx. φ)` — and `φ[x := value]` reduces to an inhabited reflection
+  # proposition (`IsTrue(True())`), fill the proof slot with that proposition's
+  # nullary constructor (`Confirmed()`) and build the pair. The author writes just
+  # the value; no `refine`, no explicit proof.
+  #
+  # Soundness: the elaborator only PROPOSES `mk_pair(value, Confirmed())`; the
+  # kernel re-checks it in the fallback's `Kernel.check`, and here inhabitation of
+  # the obligation is itself decided by `Kernel.check` (not by the elaborator
+  # trusting its own reduction). A violated obligation (`IsTrue(False())`) or an
+  # OPEN one (mentioning a free binder) yields no inhabiting constructor, so this
+  # returns `:no` and the value falls through to ordinary checking — the proof is
+  # required, never invented.
+  defp try_discharge_refinement(expr, expected_core, names, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+
+    with false <- is_nil(sigma_fam),
+         {:data, ^sigma_fam, [dom, cod], []} <- Kernel.normalize(ctx, expected_core),
+         {:ok, value} <- elaborate_expr_checked(expr, dom, names, ctx, env),
+         {:data, _fam_key, _p, _i} = obligation <- Kernel.normalize(ctx, {:app, cod, value}),
+         proof when not is_nil(proof) <- reflection_proof(obligation, ctx, env) do
+      {:ok, {:ctor, sigma_ctor_name(env), [value, proof]}}
+    else
+      _ -> :no
+    end
+  end
+
+  # The nullary constructor of the obligation's reflection family that the kernel
+  # accepts as a proof of the (already-reduced) obligation, or nil if none does.
+  # Trying each nullary constructor and letting `Kernel.check` decide keeps this
+  # general over any `So`-style reflection type and never trusts the elaborator's
+  # own view of inhabitation.
+  defp reflection_proof({:data, fam_key, _p, _i} = obligation, ctx, env) do
+    obligation_value = Eval.eval(obligation, Context.env(ctx))
+
+    Inductive.ctors_of(env, fam_key)
+    |> Enum.filter(fn ctor -> ctor.args == [] end)
+    |> Enum.find_value(fn ctor ->
+      candidate = {:ctor, ctor.name, []}
+
+      case Kernel.check(ctx, candidate, obligation_value) do
+        :ok -> candidate
+        _ -> nil
+      end
+    end)
   end
 
   # The nullary constructor for a LITERAL member of the expected union, or nil if the
@@ -4710,7 +4827,7 @@ defmodule Cure.Elab.Elaborator do
   # A constructor-pattern argument is a LEAF (not a nested sub-pattern needing
   # matrix lowering) if it is a bare variable or a named-implicit annotation.
   defp pat_arg_leaf?({:variable, _m, _v}), do: true
-  defp pat_arg_leaf?({:named_implicit_pat, _m, _n, _i}), do: true
+  defp pat_arg_leaf?({:named_implicit_pat, _m, _children}), do: true
   defp pat_arg_leaf?(_), do: false
 
   # Group arms by outer constructor (first-appearance order, within-group order
@@ -5323,7 +5440,7 @@ defmodule Cure.Elab.Elaborator do
   # The forced inner of a named-implicit is normally a dot pattern `.<expr>`; peel
   # the forced wrapper (it is not valid in ordinary expression elaboration) and
   # elaborate the underlying expression. A non-dot inner is elaborated as-is.
-  defp forced_inner_expr({:forced_pattern, _m, inner}), do: inner
+  defp forced_inner_expr({:forced_pattern, _m, [inner]}), do: inner
   defp forced_inner_expr(other), do: other
 
   @doc """
@@ -6789,7 +6906,7 @@ defmodule Cure.Elab.Elaborator do
 
   defp constructor_pattern(other), do: {:error, {:unsupported_pattern, pattern_shape(other)}}
 
-  defp named_implicit_arg?({:named_implicit_pat, _m, _n, _i}), do: true
+  defp named_implicit_arg?({:named_implicit_pat, _m, _children}), do: true
   defp named_implicit_arg?(_), do: false
 
   # A pattern's value-reconstruction (spliced into a branch body by
@@ -6813,7 +6930,7 @@ defmodule Cure.Elab.Elaborator do
   # pairs (empty for a pattern without any). Used by `elaborate_matched_branch`
   # to run the forced-index convertibility check.
   defp constructor_named_implicits({:function_call, _meta, args}),
-    do: for({:named_implicit_pat, _m, name, inner} <- args, do: {name, inner})
+    do: for({:named_implicit_pat, m, [inner]} <- args, do: {Keyword.get(m, :name), inner})
 
   defp constructor_named_implicits(_), do: []
 

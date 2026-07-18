@@ -20,6 +20,7 @@ defmodule Cure.Core.Env do
             constrained: %{},
             primitives: %{},
             import_modules: MapSet.new(),
+            lemmas: %{},
             module_owner: nil
 
   @type t :: %__MODULE__{
@@ -42,7 +43,11 @@ defmodule Cure.Core.Env do
           # (explicit `use` + auto-prelude). Bare-name resolution prefers a
           # direct owner over a name reachable only via a module's transitive
           # re-export, matching must-import semantics (Haskell/Elm/Idris/Swift).
-          import_modules: MapSet.t(String.t())
+          import_modules: MapSet.t(String.t()),
+          # Inert elaborator metadata (the kernel never reads it): `@lemma`-tagged
+          # theorems keyed by their conclusion-head atom, for auto proof-search
+          # (see `Cure.Elab.ProofSearch`). Same status as `interfaces`/`coherence`.
+          lemmas: %{atom() => [map()]}
         }
 
   @doc "An empty signature."
@@ -183,6 +188,19 @@ defmodule Cure.Core.Env do
   @spec get_interface(t(), atom()) :: map() | nil
   def get_interface(%__MODULE__{interfaces: ifaces}, name), do: Map.get(ifaces, name)
 
+  @doc """
+  Register a `@lemma`-tagged theorem for auto proof-search, filed under the
+  head atom of its conclusion type. Inert elaborator metadata — the kernel
+  never reads it (like `interfaces`/`coherence`). See `Cure.Elab.ProofSearch`.
+  """
+  @spec put_lemma(t(), atom(), map()) :: t()
+  def put_lemma(%__MODULE__{lemmas: ls} = env, head, entry) when is_atom(head),
+    do: %{env | lemmas: Map.update(ls, head, [entry], &(&1 ++ [entry]))}
+
+  @doc "The `@lemma` entries filed under conclusion head `head`, or `[]`."
+  @spec lemmas(t(), atom()) :: [map()]
+  def lemmas(%__MODULE__{lemmas: ls}, head) when is_atom(head), do: Map.get(ls, head, [])
+
   @doc "Replace the coherence registry (instance table) carried in the env."
   @spec put_coherence(t(), term()) :: t()
   def put_coherence(%__MODULE__{} = env, registry), do: %{env | coherence: registry}
@@ -204,6 +222,35 @@ defmodule Cure.Core.Env do
   @doc "The interface-constraint descriptors for global `name`, or nil."
   @spec constrained(t(), atom()) :: [map()] | nil
   def constrained(%__MODULE__{} = env, name), do: Map.get(env.constrained, resolve_key(env, env.constrained, name))
+
+  @doc """
+  Attach a parameter-label vector to an already-registered global (Ph2 argument
+  labels). The vector is telescope-aligned (one entry per binder, in order),
+  each a written external label string or `nil` for an unlabelled binder. A
+  `nil` vector means the def has no labels at all — it is stored under no key, so
+  a label-free def's record stays byte-identical (inertness). The label rides IN
+  the `env.defs` record, so it travels with the discriminated overload key.
+  """
+  @spec put_labels(t(), atom(), [String.t() | nil] | nil) :: t()
+  def put_labels(%__MODULE__{} = env, _name, nil), do: env
+
+  def put_labels(%__MODULE__{} = env, name, labels) do
+    key = owned_name(env, name)
+
+    case Map.get(env.defs, key) do
+      nil -> env
+      record -> %{env | defs: Map.put(env.defs, key, Map.put(record, :labels, labels))}
+    end
+  end
+
+  @doc "The telescope-aligned parameter-label vector for global `name`, or nil."
+  @spec labels(t(), atom()) :: [String.t() | nil] | nil
+  def labels(%__MODULE__{} = env, name) do
+    case get_def(env, name) do
+      %{labels: ls} -> ls
+      _ -> nil
+    end
+  end
 
   @doc """
   Mark a global as totality-certified (δ may unfold it). See M7.2.

@@ -35,7 +35,6 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   # current supported slice. Keep the list explicit so a new skip cannot hide
   # an unexpected regression.
   @known_dependent_gaps ~w(
-    dependent_types
     derived_show
     destructuring
     json_derive
