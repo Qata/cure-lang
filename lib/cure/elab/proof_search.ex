@@ -18,7 +18,11 @@ defmodule Cure.Elab.ProofSearch do
 
   # Extended entrypoint (Task 6 fills in depth/cycle guards).
   def resolve(goal, ctx, env, state) do
-    candidates = local_candidates(goal, ctx, env) ++ lemma_candidates(goal, ctx, env, state)
+    candidates =
+      local_candidates(goal, ctx, env) ++
+        projection_candidates(goal, ctx, env) ++
+        lemma_candidates(goal, ctx, env, state)
+
     decide(candidates, goal)
   end
 
@@ -51,6 +55,62 @@ defmodule Cure.Elab.ProofSearch do
     else
       []
     end
+  end
+
+  # Refinement/Sigma second-projection search: for every local binder whose type
+  # WHNFs to the Sigma family, the binder's `.2` projection proves the predicate
+  # about its first component. Its type `P(sigma_first(binder))` is checked
+  # against the goal by the kernel.
+  defp projection_candidates(goal, ctx, env) do
+    goal_val = Eval.eval(goal, Context.env(ctx))
+    len = Context.length(ctx)
+
+    for k <- 0..(len - 1)//1, len > 0 do
+      case sigma_params(Context.lookup(ctx, k), ctx, env) do
+        {:ok, a_value, predicate_value} ->
+          term = sigma_second_of({:var, k}, a_value, predicate_value, ctx)
+
+          case Kernel.check(ctx, term, goal_val) do
+            :ok -> {term, {:projection, k}}
+            _ -> {nil, {:projection, k}}
+          end
+
+        :error ->
+          {nil, {:projection, k}}
+      end
+    end
+    |> Enum.filter(fn {term, _} -> term != nil end)
+  end
+
+  # If a Value WHNFs to the Sigma family, return its two params
+  # `{:ok, a_value, predicate_value}`; else `:error`. Sigma has exactly two
+  # params (`a: Type`, `b: (a) -> Type`) and zero indices.
+  defp sigma_params(nil, _ctx, _env), do: :error
+
+  defp sigma_params(type_value, ctx, env) do
+    case Cure.Core.Inductive.builtin(env, :sigma) do
+      nil ->
+        :error
+
+      sigma_fam ->
+        case Cure.Core.Normalise.whnf_value(type_value, Context.signature(ctx)) do
+          {:vdata, ^sigma_fam, [a_value, predicate_value]} -> {:ok, a_value, predicate_value}
+          _ -> :error
+        end
+    end
+  end
+
+  # `{:var,k}.2` — sigma_second applied with its implicit `{a}`/`{predicate}`
+  # arguments reified DIRECTLY from the Sigma family's own params (not fresh
+  # metavars: those never reach the kernel; sigma_params/3 already pinned down
+  # `a_value`/`predicate_value` from the binder's own type). The assembled term
+  # is meta-free before it reaches Kernel.check.
+  defp sigma_second_of(var_term, a_value, predicate_value, ctx) do
+    depth = Context.length(ctx)
+    sig = Context.signature(ctx)
+    a_term = Cure.Core.Quote.reify(a_value, depth, sig)
+    predicate_term = Cure.Core.Quote.reify(predicate_value, depth, sig)
+    build_app({:global, :sigma_second}, [a_term, predicate_term, var_term])
   end
 
   # Lemma-application search: every registered lemma under the goal's head whose
