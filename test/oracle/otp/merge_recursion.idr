@@ -128,3 +128,87 @@ merge_lsubst_commute (MgBra TC TB mA mB) s = rewrite merge_lsubst_commute mA s i
 merge_lsubst_commute (MgBra TC TC mA mB) s = rewrite merge_lsubst_commute mA s in rewrite merge_lsubst_commute mB s in Refl
 merge_lsubst_commute MgVar s = merge_idem s
 merge_lsubst_commute (MgRec p1 p2 mp) s = Refl
+
+data Role = RA | RB | RC
+
+role_eq : Role -> Role -> TB2
+role_eq RA RA = T
+role_eq RA RB = F
+role_eq RA RC = F
+role_eq RB RA = F
+role_eq RB RB = T
+role_eq RB RC = F
+role_eq RC RA = F
+role_eq RC RB = F
+role_eq RC RC = T
+
+data Global = GEnd | GMsg Role Role Tag Global | GCho Role Role Tag Global Tag Global | GRec Global | GVar
+
+project : Global -> Role -> Local
+project GEnd r = LEnd
+project (GMsg from to t k) r = case role_eq from r of
+  T => LSend t (project k r)
+  F => case role_eq to r of
+    T => LRecv t (project k r)
+    F => project k r
+project (GCho from to tL gL tR gR) r = case role_eq from r of
+  T => LSel tL (project gL r) tR (project gR r)
+  F => case role_eq to r of
+    T => LBra tL (project gL r) tR (project gR r)
+    F => merge (project gL r) (project gR r)
+project (GRec body) r = LRec (project body r)
+project GVar r = LVar
+
+gsubst : Global -> Global -> Global
+gsubst GEnd s = GEnd
+gsubst (GMsg from to t k) s = GMsg from to t (gsubst k s)
+gsubst (GCho from to tL gL tR gR) s = GCho from to tL (gsubst gL s) tR (gsubst gR s)
+gsubst (GRec body) s = GRec body
+gsubst GVar s = s
+
+lsend_cong : (t : Tag) -> a = b -> LSend t a = LSend t b
+lsend_cong t e = cong (LSend t) e
+lrecv_cong : (t : Tag) -> a = b -> LRecv t a = LRecv t b
+lrecv_cong t e = cong (LRecv t) e
+lsel_cong : (a : Tag) -> pa1 = pa2 -> (b : Tag) -> pb1 = pb2 -> LSel a pa1 b pb1 = LSel a pa2 b pb2
+lsel_cong a ea b eb = rewrite ea in rewrite eb in Refl
+lbra_cong : (a : Tag) -> pa1 = pa2 -> (b : Tag) -> pb1 = pb2 -> LBra a pa1 b pb1 = LBra a pa2 b pb2
+lbra_cong a ea b eb = rewrite ea in rewrite eb in Refl
+
+eqv_trans : a = b -> b = c -> a = c
+eqv_trans e1 e2 = trans e1 e2
+merge_cong : a = a2 -> b = b2 -> merge a b = merge a2 b2
+merge_cong ea eb = rewrite ea in rewrite eb in Refl
+
+data WF : Global -> Type where
+  WFEnd : WF GEnd
+  WFAB  : (t : Tag) -> WF k -> WF (GMsg RA RB t k)
+  WFBA  : (t : Tag) -> WF k -> WF (GMsg RB RA t k)
+  WFBC  : (t : Tag) -> WF k -> WF (GMsg RB RC t k)
+  WFAC  : (t : Tag) -> WF k -> WF (GMsg RA RC t k)
+  WFCho : (tL : Tag) -> WF gL -> (tR : Tag) -> WF gR -> Mergeable (project gL RC) (project gR RC) -> WF (GCho RA RB tL gL tR gR)
+  WFRec : (body : Global) -> WF body -> WF (GRec body)
+  WFVar : WF GVar
+
+project_subst_hom : (s : Global) -> (r : Role) -> WF g -> project (gsubst g s) r = lsubst (project g r) (project s r)
+project_subst_hom s r WFEnd = Refl
+project_subst_hom s RA (WFAB t w2) = lsend_cong t (project_subst_hom s RA w2)
+project_subst_hom s RB (WFAB t w2) = lrecv_cong t (project_subst_hom s RB w2)
+project_subst_hom s RC (WFAB t w2) = project_subst_hom s RC w2
+project_subst_hom s RA (WFBA t w2) = lrecv_cong t (project_subst_hom s RA w2)
+project_subst_hom s RB (WFBA t w2) = lsend_cong t (project_subst_hom s RB w2)
+project_subst_hom s RC (WFBA t w2) = project_subst_hom s RC w2
+project_subst_hom s RA (WFBC t w2) = project_subst_hom s RA w2
+project_subst_hom s RB (WFBC t w2) = lsend_cong t (project_subst_hom s RB w2)
+project_subst_hom s RC (WFBC t w2) = lrecv_cong t (project_subst_hom s RC w2)
+project_subst_hom s RA (WFAC t w2) = lsend_cong t (project_subst_hom s RA w2)
+project_subst_hom s RB (WFAC t w2) = project_subst_hom s RB w2
+project_subst_hom s RC (WFAC t w2) = lrecv_cong t (project_subst_hom s RC w2)
+project_subst_hom s RA (WFCho tL wL tR wR mg) = lsel_cong tL (project_subst_hom s RA wL) tR (project_subst_hom s RA wR)
+project_subst_hom s RB (WFCho tL wL tR wR mg) = lbra_cong tL (project_subst_hom s RB wL) tR (project_subst_hom s RB wR)
+project_subst_hom s RC (WFCho tL wL tR wR mg) = eqv_trans (merge_cong (project_subst_hom s RC wL) (project_subst_hom s RC wR)) (merge_lsubst_commute mg (project s RC))
+project_subst_hom s r (WFRec body w2) = Refl
+project_subst_hom s r WFVar = Refl
+
+unfold_commute : (body : Global) -> (r : Role) -> WF body -> project (gsubst body (GRec body)) r = lsubst (project body r) (LRec (project body r))
+unfold_commute body r w = project_subst_hom (GRec body) r w
