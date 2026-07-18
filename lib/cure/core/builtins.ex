@@ -23,7 +23,12 @@ defmodule Cure.Core.Builtins do
     # Equivalent's erased witness `w`), so their STORED arities are 1 and 2 —
     # First: {m}; Next: {m}, Bounded(m). The erased `m` drops at emit, leaving
     # the runtime shape First->0 / Next(pred)->pred+1 (Nat's Z/S erasure).
-    bounded: [{:First, 1}, {:Next, 2}]
+    bounded: [{:First, 1}, {:Next, 2}],
+    # Int : Type0 = FromNat(Nat) | NegativeSuccessor(Nat). Both constructors are
+    # 1-ary (each field is a Nat), so — unlike Nat's Z/S — arity cannot
+    # disambiguate them; every literal/erasure hook that keys off Int is
+    # NAME-keyed, not arity-keyed. FromNat(n) = n; NegativeSuccessor(n) = -(n+1).
+    int: [{:FromNat, 1}, {:NegativeSuccessor, 1}]
   }
 
   # Builtin arithmetic/comparison op globals (K2 wave, spec 2026-07-09). Each is
@@ -129,6 +134,7 @@ defmodule Cure.Core.Builtins do
     env
     |> seed_builtin(:bool, exclude)
     |> seed_builtin(:nat, exclude)
+    |> seed_builtin(:int, exclude)
     |> seed_builtin(:eq, exclude)
     |> seed_builtin(:sigma, exclude)
     |> seed_builtin(:list, exclude)
@@ -261,6 +267,16 @@ defmodule Cure.Core.Builtins do
         exclude
       )
 
+  defp seed_builtin(env, :int, exclude),
+    do:
+      seed_builtin(
+        env,
+        :int,
+        int_family(Env.with_owner(env, "Std.Int")),
+        int_ctors(Env.with_owner(env, "Std.Int")),
+        exclude
+      )
+
   defp seed_builtin(env, :eq, exclude),
     do:
       seed_builtin(
@@ -316,6 +332,22 @@ defmodule Cure.Core.Builtins do
     do: [
       Inductive.ctor(Env.owned_name(env, :Z), [], []),
       Inductive.ctor(Env.owned_name(env, :S), [{:n, {:data, Env.owned_name(env, :Nat), [], []}}], [])
+    ]
+
+  # Int : Type0 = FromNat(Nat) | NegativeSuccessor(Nat). Both fields reference the
+  # Nat family (like S's field references Nat). Source of truth is the
+  # @builtin(:int) decl in Std.Int (lib/std/int.cure); this seed is its
+  # byte-for-byte mirror, pinned by the conformance drift harness.
+  defp int_family(env), do: Inductive.family(Env.owned_name(env, :Int), [], [], 0)
+
+  defp int_ctors(env),
+    do: [
+      Inductive.ctor(Env.owned_name(env, :FromNat), [{:n, {:data, Env.owned_name(env, :Nat), [], []}}], []),
+      Inductive.ctor(
+        Env.owned_name(env, :NegativeSuccessor),
+        [{:n, {:data, Env.owned_name(env, :Nat), [], []}}],
+        []
+      )
     ]
 
   # Equivalent : (a : Type) -> a -> a -> Type   (1 param `a`, 2 indices `x y : a`)
