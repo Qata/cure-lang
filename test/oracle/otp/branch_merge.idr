@@ -309,3 +309,25 @@ merge_sub_r (MgBra TB TC wA wB) = SubBra TB TC (merge_sub_r wA) (merge_sub_r wB)
 merge_sub_r (MgBra TC TA wA wB) = SubBra TC TA (merge_sub_r wA) (merge_sub_r wB)
 merge_sub_r (MgBra TC TB wA wB) = SubBra TC TB (merge_sub_r wA) (merge_sub_r wB)
 merge_sub_r (MgBra TC TC wA wB) = SubBra TC TC (merge_sub_r wA) (merge_sub_r wB)
+
+active_a_defined : WF g -> is_err (project g RA) = F
+active_a_defined WFEnd = Refl
+active_a_defined (WFAB t w2) = Refl
+active_a_defined (WFBA t w2) = Refl
+active_a_defined (WFBC t w2) = active_a_defined w2
+active_a_defined (WFAC t w2) = Refl
+active_a_defined (WFCho tL wL tR wR mg) = Refl
+
+active_b_defined : WF g -> is_err (project g RB) = F
+active_b_defined WFEnd = Refl
+active_b_defined (WFAB t w2) = Refl
+active_b_defined (WFBA t w2) = Refl
+active_b_defined (WFBC t w2) = Refl
+active_b_defined (WFAC t w2) = active_b_defined w2
+active_b_defined (WFCho tL wL tR wR mg) = Refl
+
+data AllDefined : Global -> Type where
+  MkAllDefined : is_err (project g RA) = F -> is_err (project g RB) = F -> is_err (project g RC) = F -> AllDefined g
+
+all_projections_defined : WF g -> AllDefined g
+all_projections_defined w = MkAllDefined (active_a_defined w) (active_b_defined w) (bystander_defined w)

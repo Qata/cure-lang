@@ -380,4 +380,23 @@ mod BranchMerge
         TA() -> SubBra(TC(), TA(), merge_sub_r(wA), merge_sub_r(wB))
         TB() -> SubBra(TC(), TB(), merge_sub_r(wA), merge_sub_r(wB))
         TC() -> SubBra(TC(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+
+  fn active_a_defined({g: Global}, w: WF(g)) -> Equivalent(TB2, is_err(project(g, RA())), F()) = match w
+    WFEnd()                   -> reflexive(F())
+    WFAB(t, w2)               -> reflexive(F())
+    WFBA(t, w2)               -> reflexive(F())
+    WFBC(t, w2)               -> active_a_defined(w2)
+    WFAC(t, w2)               -> reflexive(F())
+    WFCho(tL, wL, tR, wR, mg) -> reflexive(F())
+  fn active_b_defined({g: Global}, w: WF(g)) -> Equivalent(TB2, is_err(project(g, RB())), F()) = match w
+    WFEnd()                   -> reflexive(F())
+    WFAB(t, w2)               -> reflexive(F())
+    WFBA(t, w2)               -> reflexive(F())
+    WFBC(t, w2)               -> reflexive(F())
+    WFAC(t, w2)               -> active_b_defined(w2)
+    WFCho(tL, wL, tR, wR, mg) -> reflexive(F())
+  type AllDefined indices (g: Global)
+    MkAllDefined : Equivalent(TB2, is_err(project(g, RA())), F()) -> Equivalent(TB2, is_err(project(g, RB())), F()) -> Equivalent(TB2, is_err(project(g, RC())), F()) -> AllDefined(g)
+  fn all_projections_defined({g: Global}, w: WF(g)) -> AllDefined(g) =
+    MkAllDefined(active_a_defined(w), active_b_defined(w), bystander_defined(w))
 end
