@@ -243,3 +243,51 @@ matches_word_sound : (e : Pat) -> (w : Word) -> (nullable (dfold e w) = T) -> Ac
 matches_word_sound e WNil h = nullable_sound e h
 matches_word_sound e (WCons t rest) h =
   rewrite msadd_comm (singleton t) (parikh rest) in deriv_sound e t (parikh rest) (matches_word_sound (deriv e t) rest h)
+
+plus_zero_l : (a : Nat) -> (b : Nat) -> (a + b = 0) -> a = 0
+plus_zero_l 0 b e = Refl
+plus_zero_l (S k) b Refl impossible
+
+plus_zero_r : (a : Nat) -> (b : Nat) -> (a + b = 0) -> b = 0
+plus_zero_r 0 b e = e
+plus_zero_r (S k) b Refl impossible
+
+msa : MS -> Nat
+msa (MkMS a b c) = a
+msb : MS -> Nat
+msb (MkMS a b c) = b
+msc : MS -> Nat
+msc (MkMS a b c) = c
+
+msadd_zero_l : (x : MS) -> (y : MS) -> (msadd x y = MkMS 0 0 0) -> x = MkMS 0 0 0
+msadd_zero_l (MkMS a b c) (MkMS d e f) prf =
+  rewrite plus_zero_l a d (cong msa prf) in
+  rewrite plus_zero_l b e (cong msb prf) in
+  rewrite plus_zero_l c f (cong msc prf) in Refl
+
+msadd_zero_r : (x : MS) -> (y : MS) -> (msadd x y = MkMS 0 0 0) -> y = MkMS 0 0 0
+msadd_zero_r (MkMS a b c) (MkMS d e f) prf =
+  rewrite plus_zero_r a d (cong msa prf) in
+  rewrite plus_zero_r b e (cong msb prf) in
+  rewrite plus_zero_r c f (cong msc prf) in Refl
+
+orb_t_r : (x : B) -> orb x T = T
+orb_t_r F = Refl
+orb_t_r T = Refl
+
+orb_r : (x : B) -> {y : B} -> (y = T) -> orb x y = T
+orb_r x py = rewrite py in orb_t_r x
+
+nc_gen : {pat : Pat} -> {m : MS} -> Accepts pat m -> (m = MkMS 0 0 0) -> nullable pat = T
+nc_gen AOne q = Refl
+nc_gen AAtomA Refl impossible
+nc_gen AAtomB Refl impossible
+nc_gen AAtomC Refl impossible
+nc_gen (APlusL ae) q = rewrite nc_gen ae q in Refl
+nc_gen (APlusR {e} af) q = orb_r (nullable e) (nc_gen af q)
+nc_gen (ATimes m1 m2 ae af) q = rewrite nc_gen ae (msadd_zero_l m1 m2 q) in nc_gen af (msadd_zero_r m1 m2 q)
+nc_gen AStar0 q = Refl
+nc_gen (AStarN m1 m2 ae as) q = Refl
+
+nullable_complete : (pat : Pat) -> Accepts pat (MkMS 0 0 0) -> nullable pat = T
+nullable_complete pat acc = nc_gen acc Refl

@@ -241,4 +241,49 @@ mod MailboxPattern
   fn matches_word_sound(e: Pat, w: Word, h: Equivalent(B, nullable(dfold(e, w)), T)) -> Accepts(e, parikh(w)) = match w
     WNil()         -> nullable_sound(e, h)
     WCons(t, rest) -> rewrite msadd_comm(singleton(t), parikh(rest)) in deriv_sound(e, t, parikh(rest), matches_word_sound(deriv(e, t), rest, h))
+
+  fn plus_zero_l(a: Nat, b: Nat, e: Equivalent(Nat, plus(a, b), Z())) -> Equivalent(Nat, a, Z()) = match a
+    Z()  -> reflexive(Z())
+    S(k) -> match e
+  fn plus_zero_r(a: Nat, b: Nat, e: Equivalent(Nat, plus(a, b), Z())) -> Equivalent(Nat, b, Z()) = match a
+    Z()  -> e
+    S(k) -> match e
+  fn msa(m: MS) -> Nat = match m
+    MkMS(a, b, c) -> a
+  fn msb(m: MS) -> Nat = match m
+    MkMS(a, b, c) -> b
+  fn msc(m: MS) -> Nat = match m
+    MkMS(a, b, c) -> c
+  fn msa_cong({m1: MS}, {m2: MS}, e: Equivalent(MS, m1, m2)) -> Equivalent(Nat, msa(m1), msa(m2)) = match e
+    reflexive() -> reflexive(msa(m1))
+  fn msb_cong({m1: MS}, {m2: MS}, e: Equivalent(MS, m1, m2)) -> Equivalent(Nat, msb(m1), msb(m2)) = match e
+    reflexive() -> reflexive(msb(m1))
+  fn msc_cong({m1: MS}, {m2: MS}, e: Equivalent(MS, m1, m2)) -> Equivalent(Nat, msc(m1), msc(m2)) = match e
+    reflexive() -> reflexive(msc(m1))
+  fn msadd_zero_l(x: MS, y: MS, e: Equivalent(MS, msadd(x, y), MkMS(Z(), Z(), Z()))) -> Equivalent(MS, x, MkMS(Z(), Z(), Z())) = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, ee, f) -> rewrite plus_zero_l(a, d, msa_cong(e)) in rewrite plus_zero_l(b, ee, msb_cong(e)) in rewrite plus_zero_l(c, f, msc_cong(e)) in reflexive(MkMS(Z(), Z(), Z()))
+  fn msadd_zero_r(x: MS, y: MS, e: Equivalent(MS, msadd(x, y), MkMS(Z(), Z(), Z()))) -> Equivalent(MS, y, MkMS(Z(), Z(), Z())) = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, ee, f) -> rewrite plus_zero_r(a, d, msa_cong(e)) in rewrite plus_zero_r(b, ee, msb_cong(e)) in rewrite plus_zero_r(c, f, msc_cong(e)) in reflexive(MkMS(Z(), Z(), Z()))
+  fn orb_t_r(x: B) -> Equivalent(B, orb(x, T), T) = match x
+    F() -> reflexive(T)
+    T() -> reflexive(T)
+  fn orb_r(x: B, {y: B}, py: Equivalent(B, y, T)) -> Equivalent(B, orb(x, y), T) = rewrite py in orb_t_r(x)
+
+  fn nc_gen(pat: Pat, {m: MS}, acc: Accepts(pat, m), q: Equivalent(MS, m, MkMS(Z(), Z(), Z()))) -> Equivalent(B, nullable(pat), T) = match pat
+    PZero()      -> match acc
+    POne()       -> reflexive(T)
+    PAtom(t)     -> match acc
+      AAtomA() -> match q
+      AAtomB() -> match q
+      AAtomC() -> match q
+    PPlus(a, b)  -> match acc
+      APlusL(ae) -> rewrite nc_gen(a, ae, q) in reflexive(T)
+      APlusR(af) -> orb_r(nullable(a), nc_gen(b, af, q))
+    PTimes(a, b) -> match acc
+      ATimes(m1, m2, ae, af) -> rewrite nc_gen(a, ae, msadd_zero_l(m1, m2, q)) in rewrite nc_gen(b, af, msadd_zero_r(m1, m2, q)) in reflexive(T)
+    PStar(a)     -> reflexive(T)
+  fn nullable_complete(pat: Pat, acc: Accepts(pat, MkMS(Z(), Z(), Z()))) -> Equivalent(B, nullable(pat), T) =
+    nc_gen(pat, acc, reflexive(MkMS(Z(), Z(), Z())))
 end
