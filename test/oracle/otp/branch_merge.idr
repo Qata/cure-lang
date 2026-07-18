@@ -228,6 +228,8 @@ data Sub : Local -> Local -> Type where
   SubBra : (a : Tag) -> (b : Tag) -> Sub pa1 pa2 -> Sub pb1 pb2 -> Sub (LBra a pa1 b pb1) (LBra a pa2 b pb2)
   SubBraL : Sub (LBra a k b kb) (LRecv a k)
   SubBraR : Sub (LBra a ka b k) (LRecv b k)
+  SubBraLcov : Sub k k2 -> Sub (LBra a k b kb) (LRecv a k2)
+  SubBraRcov : Sub k k2 -> Sub (LBra a ka b k) (LRecv b k2)
   SubErr : Sub LErr LErr
 
 sub_refl : (l : Local) -> Sub l l
@@ -412,3 +414,19 @@ bystander_cho_sub_left (WFCho tL2 wL tR2 wR mg) = merge_sub_l mg
 
 bystander_cho_sub_right : WF (GCho RA RB tL gL tR gR) -> Sub (project (GCho RA RB tL gL tR gR) RC) (project gR RC)
 bystander_cho_sub_right (WFCho tL2 wL tR2 wR mg) = merge_sub_r mg
+
+sub_trans : Sub a b -> Sub b c -> Sub a c
+sub_trans SubEnd SubEnd = SubEnd
+sub_trans SubErr SubErr = SubErr
+sub_trans (SubSend t p) (SubSend t q) = SubSend t (sub_trans p q)
+sub_trans (SubRecv t p) (SubRecv t q) = SubRecv t (sub_trans p q)
+sub_trans (SubSel a b pA pB) (SubSel a b qA qB) = SubSel a b (sub_trans pA qA) (sub_trans pB qB)
+sub_trans (SubBra a b pA pB) (SubBra a b qA qB) = SubBra a b (sub_trans pA qA) (sub_trans pB qB)
+sub_trans (SubBra a b pA pB) SubBraL = SubBraLcov pA
+sub_trans (SubBra a b pA pB) (SubBraLcov qk) = SubBraLcov (sub_trans pA qk)
+sub_trans (SubBra a b pA pB) SubBraR = SubBraRcov pB
+sub_trans (SubBra a b pA pB) (SubBraRcov qk) = SubBraRcov (sub_trans pB qk)
+sub_trans SubBraL (SubRecv t2 q) = SubBraLcov q
+sub_trans (SubBraLcov pk) (SubRecv t2 q) = SubBraLcov (sub_trans pk q)
+sub_trans SubBraR (SubRecv t2 q) = SubBraRcov q
+sub_trans (SubBraRcov pk) (SubRecv t2 q) = SubBraRcov (sub_trans pk q)

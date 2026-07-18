@@ -269,6 +269,8 @@ mod BranchMerge
     SubBra  : (a: Tag) -> (b: Tag) -> Sub(A1, A2) -> Sub(B1, B2) -> Sub(LBra(a, A1, b, B1), LBra(a, A2, b, B2))
     SubBraL : Sub(LBra(a, k, b, kb), LRecv(a, k))
     SubBraR : Sub(LBra(a, ka, b, k), LRecv(b, k))
+    SubBraLcov : Sub(k, k2) -> Sub(LBra(a, k, b, kb), LRecv(a, k2))
+    SubBraRcov : Sub(k, k2) -> Sub(LBra(a, ka, b, k), LRecv(b, k2))
     SubErr  : Sub(LErr, LErr)
   fn sub_refl(l: Local) -> Sub(l, l) = match l
     LEnd()          -> SubEnd()
@@ -506,4 +508,37 @@ mod BranchMerge
         RB() -> reflexive(project(k, RC()))
         RC() -> match n2
       RC() -> match n1
+
+  ## **SUBTYPING IS TRANSITIVE.** `Sub(a,b) -> Sub(b,c) -> Sub(a,c)` — with reflexivity (sub_refl)
+  ## this makes `<:` a PREORDER, the algebraic precondition for using subtyping as a substitution
+  ## principle (a process of type a is safe wherever b, hence wherever c, is expected). The load-
+  ## bearing case is SubBra-then-width: a branch that subsumes another branch, then subsumes a single
+  ## receive, must subsume that receive with COVARIANT continuation (SubBra;SubBraL = SubBraLcov) —
+  ## which is exactly why the rigid nullary width rule is not closed under composition and the
+  ## covariant SubBraLcov/SubBraRcov are needed. Induction on both derivations.
+  fn sub_trans({a: Local}, {b: Local}, {c: Local}, s1: Sub(a, b), s2: Sub(b, c)) -> Sub(a, c) = match s1
+    SubEnd()               -> match s2
+      SubEnd() -> SubEnd()
+    SubErr()               -> match s2
+      SubErr() -> SubErr()
+    SubSend(t, p)          -> match s2
+      SubSend(t2, q) -> SubSend(t, sub_trans(p, q))
+    SubRecv(t, p)          -> match s2
+      SubRecv(t2, q) -> SubRecv(t, sub_trans(p, q))
+    SubSel(a1, b1, pA, pB) -> match s2
+      SubSel(a2, b2, qA, qB) -> SubSel(a1, b1, sub_trans(pA, qA), sub_trans(pB, qB))
+    SubBra(a1, b1, pA, pB) -> match s2
+      SubBra(a2, b2, qA, qB) -> SubBra(a1, b1, sub_trans(pA, qA), sub_trans(pB, qB))
+      SubBraL()              -> SubBraLcov(pA)
+      SubBraLcov(qk)         -> SubBraLcov(sub_trans(pA, qk))
+      SubBraR()              -> SubBraRcov(pB)
+      SubBraRcov(qk)         -> SubBraRcov(sub_trans(pB, qk))
+    SubBraL()              -> match s2
+      SubRecv(t2, q) -> SubBraLcov(q)
+    SubBraLcov(pk)         -> match s2
+      SubRecv(t2, q) -> SubBraLcov(sub_trans(pk, q))
+    SubBraR()              -> match s2
+      SubRecv(t2, q) -> SubBraRcov(q)
+    SubBraRcov(pk)         -> match s2
+      SubRecv(t2, q) -> SubBraRcov(sub_trans(pk, q))
 end
