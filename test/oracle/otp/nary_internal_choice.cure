@@ -1,0 +1,59 @@
+mod NaryInternalChoice
+  use Std.Equivalent
+  ## N-ARY INTERNAL-choice (select ⊕) subtyping — the CONTRAVARIANT dual of external choice: a sender
+  ## that commits to FEWER labels is a SUBTYPE of one offering more (it never sends anything the
+  ## supertype can't handle). SelSub(bsSub, bsSup) = every label the subtype MAY select is found in the
+  ## supertype with a subtype-related continuation. Sub / SelSub / Lookup are mutually recursive.
+  type Tag = TA | TB | TC
+  type Local = LEnd | LSend(Tag, Local) | LSel(Branches)
+  type Branches = BNil | BCons(Tag, Local, Branches)
+  type Lookup indices (bs: Branches, t: Tag, k: Local)
+    LookHere  : Lookup(BCons(t, k, rest), t, k)
+    LookThere : Lookup(rest, t, k) -> Lookup(BCons(t2, k2, rest), t, k)
+  fn lookup_weaken({bs: Branches}, {t: Tag}, {k: Local}, t2: Tag, k2: Local, lk: Lookup(bs, t, k)) -> Lookup(BCons(t2, k2, bs), t, k) =
+    LookThere(lk)
+  type Sub indices (s: Local, t: Local)
+    SubEnd  : Sub(LEnd, LEnd)
+    SubSend : (t: Tag) -> Sub(k1, k2) -> Sub(LSend(t, k1), LSend(t, k2))
+    SubSel  : SelSub(bs1, bs2) -> Sub(LSel(bs1), LSel(bs2))
+  type SelSub indices (bsSub: Branches, bsSup: Branches)
+    SelSubNil  : SelSub(BNil, bsSup)
+    SelSubCons : (t: Tag) -> Lookup(bsSup, t, kSup) -> Sub(kSub, kSup) -> SelSub(rest, bsSup) -> SelSub(BCons(t, kSub, rest), bsSup)
+  ## Weakening the SUP side preserves SelSub (every selectable label is still found in the larger set).
+  fn selsub_weaken({bsSub: Branches}, {bsSup: Branches}, t2: Tag, k2: Local, sw: SelSub(bsSub, bsSup)) -> SelSub(bsSub, BCons(t2, k2, bsSup)) = match sw
+    SelSubNil()                -> SelSubNil()
+    SelSubCons(t, lk, sb, rst) -> SelSubCons(t, lookup_weaken(t2, k2, lk), sb, selsub_weaken(t2, k2, rst))
+  ## **N-ARY INTERNAL-CHOICE SUBTYPING IS REFLEXIVE** (mutually with selsub_refl).
+  fn sub_refl(l: Local) -> Sub(l, l) = match l
+    LEnd()      -> SubEnd()
+    LSend(t, k) -> SubSend(t, sub_refl(k))
+    LSel(bs)    -> SubSel(selsub_refl(bs))
+  fn selsub_refl(bs: Branches) -> SelSub(bs, bs) = match bs
+    BNil()            -> SelSubNil()
+    BCons(t, k, rest) -> SelSubCons(t, LookHere(), sub_refl(k), selsub_weaken(t, k, selsub_refl(rest)))
+  type LookSubUp indices (c: Branches, t: Tag, kSub: Local)
+    MkLookSubUp : Lookup(c, t, kSup) -> Sub(kSub, kSup) -> LookSubUp(c, t, kSub)
+  ## SelSub transports a lookup of a SUBTYPE label up into the SUPERTYPE (mirror of brasub_lookup).
+  fn selsub_lookup({b: Branches}, {c: Branches}, {t: Tag}, {kb: Local}, bc: SelSub(b, c), lk: Lookup(b, t, kb)) -> LookSubUp(c, t, kb) = match lk
+    LookHere()     -> match bc
+      SelSubCons(t2, lk_c, sb, rst) -> MkLookSubUp(lk_c, sb)
+    LookThere(lk2) -> match bc
+      SelSubCons(t2, lk_c, sb, rst) -> selsub_lookup(rst, lk2)
+  ## **N-ARY INTERNAL-CHOICE SUBTYPING IS TRANSITIVE** (mutually with selsub_trans) — with sub_refl a
+  ## PREORDER, the contravariant dual of the external-choice preorder.
+  fn sub_trans({a: Local}, {b: Local}, {c: Local}, s1: Sub(a, b), s2: Sub(b, c)) -> Sub(a, c) = match s1
+    SubEnd()      -> match s2
+      SubEnd() -> SubEnd()
+    SubSend(t, p) -> match s2
+      SubSend(t2, q) -> SubSend(t, sub_trans(p, q))
+    SubSel(ab)    -> match s2
+      SubSel(bc) -> SubSel(selsub_trans(ab, bc))
+  fn selsub_trans({a: Branches}, {b: Branches}, {c: Branches}, ab: SelSub(a, b), bc: SelSub(b, c)) -> SelSub(a, c) = match ab
+    SelSubNil()                        -> SelSubNil()
+    SelSubCons(t, lk_ab, sub_ab, rest_ab) -> match selsub_lookup(bc, lk_ab)
+      MkLookSubUp(lk_ac, sub_bc) -> SelSubCons(t, lk_ac, sub_trans(sub_ab, sub_bc), selsub_trans(rest_ab, bc))
+  ## **CONCRETE NARROWING**: LSel{TA} <: LSel{TA,TB} — a sender that only ever selects TA is safe where
+  ## one that might select TA or TB is expected (it commits to a subset of the outputs).
+  fn narrowing_example() -> Sub(LSel(BCons(TA(), LEnd(), BNil())), LSel(BCons(TA(), LEnd(), BCons(TB(), LEnd(), BNil())))) =
+    SubSel(SelSubCons(TA(), LookHere(), SubEnd(), SelSubNil()))
+end
