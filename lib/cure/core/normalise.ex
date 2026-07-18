@@ -276,7 +276,9 @@ defmodule Cure.Core.Normalise do
         # scrutinee to `Z`/`S` / `First`/`Next` so it reuses the ctor ι-rule below;
         # the two value shapes are disjoint, so composing is safe and every other
         # value passes through unchanged.
-        case Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts))) do
+        case Eval.int_to_ctor_if(
+               Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts)))
+             ) do
           {:vctor, cname, cargs} ->
             case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
               {_c, ar, {:closure, env, body}} ->
@@ -318,7 +320,9 @@ defmodule Cure.Core.Normalise do
       {:ncase, scrut, _motive, branches} ->
         # See the twin arm above: peel a compact-Nat / compact-Bounded scrutinee
         # before the ctor ι.
-        case Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts))) do
+        case Eval.int_to_ctor_if(
+               Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts)))
+             ) do
           {:vctor, cname, cargs} ->
             case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
               {_c, ar, {:closure, env, body}} ->

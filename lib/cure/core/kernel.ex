@@ -1355,6 +1355,25 @@ defmodule Cure.Core.Kernel do
   defp unify_one({:ctor, _, _} = r, {:nat_lit, n}, arity, subst),
     do: unify_one(r, nat_lit_ctor(n), arity, subst)
 
+  # Compact Int literal ↔ FromNat/NegativeSuccessor bridge — the exact mirror of
+  # the Nat bridge above. An `{:int_lit, n}` index is a closed canonical Int
+  # value, definitionally equal to `FromNat({:nat_lit, n})` (n ≥ 0) or
+  # `NegativeSuccessor({:nat_lit, -n-1})` (n < 0), so it must unify with those
+  # constructor result indices exactly as the explicit spelling does — otherwise
+  # `head_key({:int_lit, n})` is `:int_lit`, which never equals `{:ctor, :FromNat}`
+  # /`{:ctor, :NegativeSuccessor}`, and the generic rigid-head clash rule verdicts
+  # a literal index `:impossible` against its own constructor form (the same
+  # coverage-soundness hole the Nat/Bounded bridges close). Single-step peel; the
+  # `{:nat_lit, _}` field then bridges through the Nat clauses above.
+  defp unify_one({:int_lit, a}, {:int_lit, b}, _arity, subst),
+    do: if(a == b, do: {:ok, subst}, else: :impossible)
+
+  defp unify_one({:int_lit, n}, {:ctor, _, _} = s, arity, subst),
+    do: unify_one(int_lit_ctor(n), s, arity, subst)
+
+  defp unify_one({:ctor, _, _} = r, {:int_lit, n}, arity, subst),
+    do: unify_one(r, int_lit_ctor(n), arity, subst)
+
   # Compact Bounded literal ↔ First/Next bridge — the exact mirror of the Nat
   # bridge above, and of `conv.ex`'s cross-representation arms (conv_struct?,
   # the `{:vbounded, _}` vs `{:vctor, :First/:Next, _}` clauses). A
@@ -1538,6 +1557,13 @@ defmodule Cure.Core.Kernel do
   # predecessor left compact. Used only by the `unify_one` nat-literal bridge.
   defp nat_lit_ctor(0), do: {:ctor, :Z, []}
   defp nat_lit_ctor(n) when is_integer(n) and n > 0, do: {:ctor, :S, [{:nat_lit, n - 1}]}
+
+  # Expand a compact Int literal to its explicit constructor term (the term-level
+  # analogue of Eval.int_to_ctor/1): FromNat(n) for n ≥ 0, NegativeSuccessor(-n-1)
+  # for n < 0. Each field is a compact `{:nat_lit, _}` that bridges onward through
+  # `nat_lit_ctor/1`.
+  defp int_lit_ctor(n) when is_integer(n) and n >= 0, do: {:ctor, :FromNat, [{:nat_lit, n}]}
+  defp int_lit_ctor(n) when is_integer(n) and n < 0, do: {:ctor, :NegativeSuccessor, [{:nat_lit, -n - 1}]}
 
   # Only ever called on `rigid_index?` terms (all tuples), so a tuple head is
   # exhaustive — no non-tuple fallback is reachable.
