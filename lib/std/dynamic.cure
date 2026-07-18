@@ -1,0 +1,85 @@
+@group(:collections)
+mod Std.Dynamic
+  ## A typed, honest stand-in for a dynamically-shaped value — the well-typed
+  ## replacement for `Any`.
+  ##
+  ## `Dyn` is a single homogeneous tagged sum over Cure's real BEAM value shapes:
+  ## an atom, an integer, a float, a string, a list of `Dyn`, a tuple (as a list
+  ## of `Dyn`), or a map from `Dyn` to `Dyn`. Because every leaf is itself a `Dyn`,
+  ## an arbitrarily-nested document — a decoded JSON blob, a heterogeneous config —
+  ## has one static type, and you narrow to a concrete shape by pattern-matching a
+  ## constructor rather than by an unchecked runtime `is_map`/`is_tuple` guess.
+  ##
+  ## This module knows nothing about optics: it is an ordinary stdlib citizen,
+  ## usable on its own by anyone who wants a typed `Any`. `Std.Optic` imports it to
+  ## offer per-constructor "case affines" (`dyn_str : Affine(Dyn, String)`, …), but
+  ## the dependency is one-way — `Std.Dynamic` never imports `Std.Optic`.
+  ##
+  ## ## Examples
+  ##
+  ## ```cure
+  ## use Std.Dynamic
+  ##
+  ## DInt(3)                                  # => DInt(3)
+  ## match DStr("hi")                         # => true
+  ##   DStr(s) -> true
+  ##   other   -> false
+  ## ```
+
+  use Std.Atom
+  use Std.List
+  use Std.Map
+  use Std.String
+
+  ## A dynamically-shaped value. One constructor per BEAM value shape; the
+  ## container shapes (`DList`, `DTuple`, `DMap`) recurse through `Dyn`, so the
+  ## whole thing is one type no matter how deeply nested the data is.
+  type Dyn = DAtom(Atom) | DInt(Int) | DFloat(Float) | DStr(String) | DList(List(Dyn)) | DTuple(List(Dyn)) | DMap(List(DynEntry))
+
+  ## One key/value entry of a `DMap`. A dynamic map is an association list of these
+  ## rather than an opaque `Map(Dyn, Dyn)`: `Dyn` in the *key* position of an opaque
+  ## map is not provably strictly positive (an opaque map could be function-backed,
+  ## making the key contravariant), so the kernel rejects it — exactly as Idris/Agda
+  ## reject a recursive occurrence through an abstract type. An explicit product
+  ## whose definition the positivity checker can see is strictly positive in both
+  ## fields, so the mutual recursion `Dyn`/`DynEntry` is accepted.
+  type DynEntry = DEntry(Dyn, Dyn)
+
+  ## Smart constructors: inject a native BEAM value into `Dyn`. These are the
+  ## public way to build a dynamic value — prefer them over naming the raw
+  ## constructors so callers do not depend on constructor spelling.
+  fn of_atom(a: Atom) -> Dyn = DAtom(a)
+  fn of_int(n: Int) -> Dyn = DInt(n)
+  fn of_float(x: Float) -> Dyn = DFloat(x)
+  fn of_str(s: String) -> Dyn = DStr(s)
+  fn of_list(xs: List(Dyn)) -> Dyn = DList(xs)
+  fn of_tuple(xs: List(Dyn)) -> Dyn = DTuple(xs)
+  fn of_map(es: List(DynEntry)) -> Dyn = DMap(es)
+
+  ## Build one association-list entry of a `DMap`.
+  fn entry(k: Dyn, v: Dyn) -> DynEntry = DEntry(k, v)
+
+  ## The shape tag of a dynamic value — a total discriminator, one atom per
+  ## constructor. Use it to branch before narrowing with a `match`.
+  fn tag(d: Dyn) -> Atom = match d
+    DAtom(a) -> :atom
+    DInt(n) -> :int
+    DFloat(x) -> :float
+    DStr(s) -> :str
+    DList(xs) -> :list
+    DTuple(xs) -> :tuple
+    DMap(es) -> :map
+
+  ## The entries of a `DMap`, or the empty list for any other shape. Total: it
+  ## never crashes on a mis-shaped value, it just yields no entries.
+  fn entries(d: Dyn) -> List(DynEntry) = match d
+    DMap(es) -> es
+    other -> []
+
+  ## Projections of a `DynEntry` into its key and value halves.
+  fn entry_key(e: DynEntry) -> Dyn = match e
+    DEntry(k, v) -> k
+
+  fn entry_value(e: DynEntry) -> Dyn = match e
+    DEntry(k, v) -> v
+end
