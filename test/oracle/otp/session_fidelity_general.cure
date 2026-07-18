@@ -1,0 +1,104 @@
+mod SessionFidelityGeneral
+  use Std.Equivalent
+  ## GENERAL WHOLE-CONFIG OPERATIONAL FIDELITY — the arbitrary-role generalization of session_fidelity's
+  ## concrete RA->RB step. `role_after(g,p,q,r)` is role r's post-state when the head p->q fires: the sender
+  ## performs its send, the receiver its receive, every other role is idle. config_fidelity proves that
+  ## for ANY head GMsg(p,q,t,k), stepping the whole configuration by p->q lands it EXACTLY on config(k) —
+  ## no concrete role assignment, no p!=q premise (when the receiver case fires, p!=q is already forced).
+  ## The projected system follows the global protocol in lockstep, for every pair of roles.
+  type Role = RA | RB | RC
+  type Tag = TA | TB | TC
+  type B = F | T
+  type Global = GEnd | GMsg(Role, Role, Tag, Global)
+  type Local = LEnd | LSend(Role, Tag, Local) | LRecv(Role, Tag, Local)
+  type Config = MkCfg(Local, Local, Local)
+  fn role_eq(x: Role, y: Role) -> B = match x
+    RA() -> match y
+      RA() -> T()
+      RB() -> F()
+      RC() -> F()
+    RB() -> match y
+      RA() -> F()
+      RB() -> T()
+      RC() -> F()
+    RC() -> match y
+      RA() -> F()
+      RB() -> F()
+      RC() -> T()
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()               -> LEnd()
+    GMsg(from, to, t, k) -> match role_eq(from, r)
+      T() -> LSend(to, t, project(k, r))
+      F() -> match role_eq(to, r)
+        T() -> LRecv(from, t, project(k, r))
+        F() -> project(k, r)
+  fn config(g: Global) -> Config = MkCfg(project(g, RA()), project(g, RB()), project(g, RC()))
+  fn perform_send(l: Local) -> Local = match l
+    LEnd()          -> LEnd()
+    LSend(to, t, k) -> k
+    LRecv(fr, t, k) -> l
+  fn perform_recv(l: Local) -> Local = match l
+    LEnd()          -> LEnd()
+    LSend(to, t, k) -> l
+    LRecv(fr, t, k) -> k
+  ## Role r's post-state when the head p->q fires: sender performs send, receiver performs receive, else idle.
+  fn role_after(g: Global, p: Role, q: Role, r: Role) -> Local = match role_eq(p, r)
+    T() -> perform_send(project(g, r))
+    F() -> match role_eq(q, r)
+      T() -> perform_recv(project(g, r))
+      F() -> project(g, r)
+  fn step_config(g: Global, p: Role, q: Role) -> Config = MkCfg(role_after(g, p, q, RA()), role_after(g, p, q, RB()), role_after(g, p, q, RC()))
+  ## **PER-ROLE FIDELITY**: after the head p->q of GMsg(p,q,t,k) fires, EVERY role r lands on project(k,r).
+  ## No p!=q premise: the sender case performs its send onto project(k,p); the receiver case (where p!=q
+  ## is already forced) performs its receive onto project(k,q); a bystander projects past the step. 27-way
+  ## on the roles, each case reducing reflexively through project + perform.
+  fn role_fidelity(p: Role, q: Role, t: Tag, k: Global, r: Role) -> Equivalent(Local, role_after(GMsg(p, q, t, k), p, q, r), project(k, r)) =
+    match p
+      RA() -> match q
+        RA() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RB() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RC() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+      RB() -> match q
+        RA() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RB() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RC() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+      RC() -> match q
+        RA() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RB() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RC() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+  ## Congruence for the 3-slot configuration.
+  fn mkcfg_cong({a1: Local}, {b1: Local}, {a2: Local}, {b2: Local}, {a3: Local}, {b3: Local}, e1: Equivalent(Local, a1, b1), e2: Equivalent(Local, a2, b2), e3: Equivalent(Local, a3, b3)) -> Equivalent(Config, MkCfg(a1, a2, a3), MkCfg(b1, b2, b3)) =
+    rewrite e1 in rewrite e2 in rewrite e3 in reflexive(MkCfg(b1, b2, b3))
+  ## **GENERAL WHOLE-CONFIG FIDELITY**: firing the head p->q drives the whole configuration of
+  ## GMsg(p,q,t,k) to config(k) EXACTLY, for ARBITRARY roles p, q. The projected system steps in lockstep
+  ## with the global protocol. Assembled from the three per-role fidelities via config congruence.
+  fn config_fidelity(p: Role, q: Role, t: Tag, k: Global) -> Equivalent(Config, step_config(GMsg(p, q, t, k), p, q), config(k)) =
+    mkcfg_cong(role_fidelity(p, q, t, k, RA()), role_fidelity(p, q, t, k, RB()), role_fidelity(p, q, t, k, RC()))
+end
