@@ -148,7 +148,7 @@ defmodule Cure.Elab.Implementation do
       mangled = mangled_name(env, iface, head, method)
 
       with {:ok, fn_decl, origin} <- method_def(desc, method, for_type, body),
-           :ok <- check_method_signature(desc, iface, method, for_type, fn_decl, origin) do
+           :ok <- check_method_signature(desc, iface, method, for_type, fn_decl, origin, env) do
         renamed = rename_fn(fn_decl, mangled)
         {:cont, {:ok, Map.put(mm, method, mangled), fns ++ [renamed]}}
       else
@@ -198,82 +198,48 @@ defmodule Cure.Elab.Implementation do
   # (`fmap`'s `a`/`b`). Lowercase-initial names are type variables and alpha-renamable;
   # uppercase names are type constructors and must match on the nose — the convention the
   # rest of the compiler already assumes.
-  defp check_method_signature(_desc, _iface, _method, _for_type, _fn_decl, :default), do: :ok
+  # A synthesized default conforms to the interface signature by construction.
+  defp check_method_signature(_desc, _iface, _method, _for_type, _fn_decl, :default, _env), do: :ok
 
-  defp check_method_signature(desc, iface, method, for_type, {:function_def, m, _b}, :instance) do
+  # An instance clause must declare the interface method's type with the head
+  # variable replaced by this instance's head type, up to definitional equality.
+  # We elaborate both the expected (interface, head-substituted) and actual
+  # (instance clause) function types to closed Core Pi types and compare with the
+  # kernel's conversion — which handles α-renaming of the method's other type
+  # variables and δ-unfolding of synonyms for free.
+  defp check_method_signature(desc, iface, method, for_type, {:function_def, m, _b}, :instance, env) do
     info = Map.fetch!(desc.methods, method)
-    hv = desc.head_var
 
-    expected = Enum.map(info.params, &param_type/1) ++ [info.return_type]
-    expected = Enum.map(expected, &subst_head(&1, hv, for_type))
-    actual = Enum.map(Keyword.get(m, :params, []), &param_type/1) ++ [Keyword.get(m, :return_type)]
+    expected_ast = subst_head(info.type_ast, desc.head_var, for_type)
+    actual_ast = function_type_ast(Keyword.get(m, :params, []), Keyword.get(m, :return_type))
 
-    if length(expected) == length(actual) and alpha_equal?(expected, actual) do
+    # The method's OWN type variables (`fmap`'s `a`/`b`) are universally quantified
+    # but written free in the surface AST. Bind each side's free type variables as a
+    # positional de Bruijn scope so `lower_type` lowers them to `{:var, idx}` rather
+    # than distinct global neutrals; a consistent renaming (`a`↔`x`, `b`↔`y`) then
+    # lowers to identical Core terms and passes conversion, while a genuine type
+    # mismatch stays distinct.
+    expected_scope = Declarations.free_type_vars([expected_ast], env)
+    actual_scope = Declarations.free_type_vars([actual_ast], env)
+
+    with {:ok, expected_core} <- Declarations.lower_type(expected_ast, expected_scope, env),
+         {:ok, actual_core} <- Declarations.lower_type(actual_ast, actual_scope, env),
+         true <- Cure.Core.Conv.conv?(expected_core, actual_core, [], 0, env) do
       :ok
     else
-      {:error, {:method_signature_mismatch, iface, method}}
+      _ -> {:error, {:method_signature_mismatch, iface, method}}
     end
   end
 
-  defp param_type({:param, pm, _pname}), do: Keyword.fetch!(pm, :type)
-
-  # Structural equality of two surface type ASTs, modulo a consistent bijective renaming
-  # of type variables (lowercase-initial names).
-  defp alpha_equal?(expected, actual), do: match?({:ok, _}, alpha(expected, actual, %{}))
-
-  defp alpha(xs, ys, sub) when is_list(xs) and is_list(ys) do
-    if length(xs) == length(ys) do
-      Enum.zip(xs, ys)
-      |> Enum.reduce_while({:ok, sub}, fn {x, y}, {:ok, s} ->
-        case alpha(x, y, s) do
-          {:ok, s2} -> {:cont, {:ok, s2}}
-          :error -> {:halt, :error}
-        end
-      end)
-    else
-      :error
-    end
+  # Build the surface function-type AST `T1 -> ... -> Tn -> R` from a param list
+  # and return type, MIRRORING `Interface.build_method_map`'s `method_type_ast`
+  # (interface.ex:140-143) EXACTLY — a single flat `{:function_call,
+  # [function_type: true], [doms..., result]}` node — so the two lower to the same
+  # Core Pi chain and kernel conversion sees identical structure.
+  defp function_type_ast(params, return_type) do
+    dom_asts = Enum.map(params, fn {:param, pm, _pname} -> Keyword.fetch!(pm, :type) end)
+    {:function_call, [function_type: true], dom_asts ++ [return_type]}
   end
-
-  defp alpha({:variable, _, x}, {:variable, _, y}, sub), do: alpha_name(x, y, sub)
-
-  defp alpha({:function_call, m1, a1}, {:function_call, m2, a2}, sub) do
-    with true <- Keyword.get(m1, :function_type, false) == Keyword.get(m2, :function_type, false),
-         {:ok, sub} <- alpha_name(Keyword.get(m1, :name), Keyword.get(m2, :name), sub) do
-      alpha(a1, a2, sub)
-    else
-      _ -> :error
-    end
-  end
-
-  defp alpha(same, same, sub), do: {:ok, sub}
-  defp alpha(_x, _y, _sub), do: :error
-
-  defp alpha_name(nil, nil, sub), do: {:ok, sub}
-
-  defp alpha_name(x, y, sub) when is_binary(x) and is_binary(y) do
-    cond do
-      not (type_var?(x) and type_var?(y)) ->
-        if x == y, do: {:ok, sub}, else: :error
-
-      Map.has_key?(sub, x) ->
-        if Map.fetch!(sub, x) == y, do: {:ok, sub}, else: :error
-
-      y in Map.values(sub) ->
-        # `y` is already the image of a different variable: not a bijection.
-        :error
-
-      true ->
-        {:ok, Map.put(sub, x, y)}
-    end
-  end
-
-  defp alpha_name(_x, _y, _sub), do: :error
-
-  # Cure's convention (and the stdlib's): a lowercase-initial name in type position is a
-  # type variable, an uppercase-initial one is a type constructor.
-  defp type_var?(<<c::utf8, _::binary>>), do: c in ?a..?z
-  defp type_var?(_), do: false
 
   defp function_def_named?({:function_def, m, _body}, name), do: Keyword.get(m, :name) == name
   defp function_def_named?(_other, _name), do: false
