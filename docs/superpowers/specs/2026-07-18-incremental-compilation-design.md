@@ -85,6 +85,29 @@ design does not attempt it; the interface hash is per-module, not per-symbol.
   stable map-key ordering. Computed only for modules actually (re)compiled this
   build; skipped modules reuse their stored hash.
 
+  The `export_env` is obtained from the loader's interface computation, exposed
+  as a new public `Cure.Elab.Program.module_interface/2`. This is **not** a
+  second elaboration pass on the common paths: the loader already computes and
+  caches each stdlib module's interface in `:persistent_term`
+  (`cached_module_interface/2`, key `{Cure.Elab.Program, :module_interface,
+  path}`) as a side effect of compiling that module's dependents. Computing
+  `interface_hash(M)` immediately after M is recompiled primes exactly that
+  cache, which M's dependents' compiles then hit — so the interface is elaborated
+  once, not twice. The only genuinely extra elaboration is for a changed module
+  whose dependents turn out *not* to need recompiling (interface unchanged);
+  that is bounded by the number of changed modules and is the very case where
+  incremental avoids a full dependent recompile, so it is a net win. Non-stdlib
+  (project) sources are not `:persistent_term`-cached (they can change between
+  runs), so a project build may elaborate a changed module's interface twice;
+  project builds are smaller and less frequent, so this is accepted.
+
+  **Serializability caveat.** `:erlang.term_to_binary` requires `export_env` to
+  be a pure data term (no live closures/pids/refs). Cure Core terms are
+  tuples/atoms/maps, so this is expected to hold, but the first implementation
+  task must verify it on a real stdlib `export_env`. If it does not hold, the
+  fallback is to hash a structural projection of the env (its def/family/ctor
+  tables) rather than the whole struct — same soundness argument, narrower term.
+
 - **`toolchain`** = a content hash of the compiler's own compiled bytecode — the
   `.beam` files of the `:cure` application in `Mix.Project.compile_path()`,
   concatenated in sorted path order and SHA-256'd. Computed once per build and
@@ -181,9 +204,10 @@ Steps:
   clean rebuild. The escape hatch for a suspicious build.
 - `:output_dir` default `_build/cure/ebin` (unchanged).
 
-Interface-hash recomputation reuses the elaborator's existing interface
-computation so there is no second elaboration pass: a module compiled in step 6
-already elaborates, and the `export_env` it produces is hashed there.
+Interface-hash recomputation reuses the loader's existing interface computation
+via `Cure.Elab.Program.module_interface/2` (see the fingerprint section for the
+cache-sharing argument that keeps this off the second-elaboration path on full
+builds).
 
 ### Mix task integration
 
