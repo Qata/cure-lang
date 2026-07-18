@@ -697,6 +697,7 @@ defmodule Cure.Elab.Declarations do
         nil -> base_name
         ord -> Cure.Elab.Name.overload_key(base_name, ord)
       end
+
     params0 = Keyword.get(meta, :params, [])
     # The parser makes `-> Type` optional (`fn f() = expr`); when omitted the
     # `:return_type` key is absent. An annotation-free function's codomain is
@@ -1282,15 +1283,35 @@ defmodule Cure.Elab.Declarations do
 
   # The telescope-aligned external-label vector for a signature's parameters
   # (Ph2 argument labels). One entry per binder, in the same order as the
-  # telescope/quantities: the written label string (`fn f(to dest: T)` → "to") or
-  # `nil` for an unlabelled binder (including auto-generalized implicits and
-  # injected dictionaries, which the surface never labels). When NO binder carries
-  # a label the whole vector is `nil`, so a label-free def stores no label data
-  # and its record stays byte-identical to the pre-Ph2 shape (inertness).
+  # telescope/quantities: a per-parameter label descriptor giving the name the
+  # caller may write and whether writing it is required.
+  #
+  #   `fn f(to dest: T)` — two-name → `{:required, "to"}` (external label `to`
+  #     mandatory; the internal `dest` is private to the body).
+  #   `fn f(x: T)`       — single-name → `{:optional, "x"}` (the caller may write
+  #     `f(x: v)` or `f(v)`; the writable name IS the binder name).
+  #
+  # Auto-generalized implicits and injected dictionaries — which the surface never
+  # labels — are `{:optional, <synthetic name>}`; being erased (implicits) or
+  # unwritten (dicts) they never reach a written-label check. The internal name of
+  # a single-name binder is RETAINED (not collapsed to `nil`) so a written optional
+  # label can be validated against it — a label naming no parameter is an error
+  # (spec §4). Optional labels never affect overload distinguishability, only
+  # mandatory ones do (see `member_labels/2`). A no-parameter def stores no vector.
+  defp param_label_vector([]), do: nil
+
   defp param_label_vector(params) do
-    labels = Enum.map(params, fn {:param, pm, _n} -> Keyword.get(pm, :label) end)
-    if Enum.all?(labels, &is_nil/1), do: nil, else: labels
+    Enum.map(params, fn {:param, pm, n} ->
+      case Keyword.get(pm, :label) do
+        nil -> {:optional, param_name_string(n)}
+        label -> {:required, to_string(label)}
+      end
+    end)
   end
+
+  defp param_name_string(n) when is_binary(n), do: n
+  defp param_name_string(n) when is_atom(n), do: to_string(n)
+  defp param_name_string(_), do: nil
 
   # The quantity a parameter binds at: an explicit surface grade wins, else the
   # position's default (`:erased` for an implicit, `ω` for an explicit).
@@ -1890,9 +1911,7 @@ defmodule Cure.Elab.Declarations do
        ) do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, proposition} <- idx_to_core(proposition_ast, [bname | scope], fam, env) do
-      {:ok,
-       {:data, sigma_family_name(env),
-        [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, proposition}], []}}
+      {:ok, {:data, sigma_family_name(env), [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, proposition}], []}}
     end
   end
 

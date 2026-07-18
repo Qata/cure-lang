@@ -1979,8 +1979,7 @@ defmodule Cure.Elab.Program do
           if MapSet.member?(overloaded, name) do
             ord = Map.get(counters, name, 0)
 
-            {{:function_def, Keyword.put(meta, :overload_ordinal, ord), body},
-             Map.put(counters, name, ord + 1)}
+            {{:function_def, Keyword.put(meta, :overload_ordinal, ord), body}, Map.put(counters, name, ord + 1)}
           else
             {decl, counters}
           end
@@ -2038,13 +2037,23 @@ defmodule Cure.Elab.Program do
     end)
   end
 
-  # A member's telescope-aligned label vector, defaulting a label-free def to an
-  # all-`nil` vector so the position-wise comparison is total. Two positions match
-  # when neither is labelled (`nil == nil`) or both carry the same label.
+  # A member's telescope-aligned MANDATORY-label vector: each stored descriptor
+  # projected to its external label if writing it is required (`{:required, l}` →
+  # `l`), else `nil`. Only mandatory labels distinguish overload members — an
+  # OPTIONAL (single-name) label can always be omitted, so a set separable only by
+  # optional labels is still ambiguous at a bare call and must stay an overlap.
+  # A label-free / no-vector def defaults to an all-`nil` vector so the
+  # position-wise comparison is total.
   defp member_labels(def, arity) do
     case Map.get(def, :labels) do
-      nil -> List.duplicate(nil, arity)
-      labels -> labels
+      nil ->
+        List.duplicate(nil, arity)
+
+      labels ->
+        Enum.map(labels, fn
+          {:required, l} -> l
+          _optional -> nil
+        end)
     end
   end
 

@@ -323,6 +323,41 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     assert apply(mod, :labelled, []) == 5
   end
 
+  # Slice F — the internal binder name of an OPTIONAL (single-name) parameter is
+  # retained on the def record, so a written optional label that names no
+  # parameter is rejected (spec §4 step 2: a written label must name a parameter).
+  test "a wrong optional label on a non-overloaded function is rejected" do
+    src = """
+    mod LabelOptWrong
+      fn inc(x: Int) -> Int = x + 1
+      fn bad() -> Int = inc(y: 4)
+    end
+    """
+
+    assert {:error, err} = compile_and_load_error(src)
+    assert match?({:label_mismatch, _, _, _}, unwrap_inner(err))
+  end
+
+  # Slice F — a mixed mandatory/optional overload set of the SAME type. Without
+  # the retained internal name, `f(to: 5)` matched BOTH members (the optional
+  # member's label filter was lenient) and reported a spurious `ambiguous_overload`
+  # even though `to:` names only the first. With the name recorded, the written
+  # label prunes the optional member and the call resolves.
+  test "a written mandatory label resolves against a mixed mandatory/optional overload set" do
+    src = """
+    mod LabelMixedSet
+      fn f(to x: Int) -> Int = x + 1
+      fn f(y: Int) -> Int = y + 100
+      fn use_to() -> Int = f(to: 5)
+      fn use_bare() -> Int = f(5)
+    end
+    """
+
+    assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(mod, :use_to, []) == 6
+    assert apply(mod, :use_bare, []) == 105
+  end
+
   # Task 6 — cross-module resolution (Design "Both"). Two `use`d modules each
   # export `to_int` on a different type; an unqualified `to_int(x)` resolves by
   # `x`'s type. Faithful mirror of `Std.Char.code_point` vs `Std.String.to_int`,

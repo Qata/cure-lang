@@ -65,57 +65,56 @@ defmodule Cure.Elab.Overload do
     end
   end
 
-  # A lone target's present-param labels versus what the caller wrote. An
-  # unwritten call (`written == nil`) is legal only when no present parameter
-  # carries a mandatory label — matching every pre-Ph2 def, whose present labels
-  # are all `nil`. When labels ARE written, a mandatory (non-nil declared) label
-  # must be written identically; an optional (nil declared, single-name) position
-  # accepts any written label or none, since the internal binder name the caller
-  # may echo is not retained on the def record. A length mismatch defers to the
-  # arity machinery rather than double-diagnosing here.
-  defp single_labels_ok?(declared, nil), do: Enum.all?(declared, &is_nil/1)
+  # A lone target's present-param label descriptors versus what the caller wrote.
+  # An unwritten call (`written == nil`) is legal only when no present parameter
+  # carries a MANDATORY label — matching every pre-Ph2 def, whose present params
+  # are all `{:optional, _}`. When labels ARE written, each position is checked by
+  # `label_pos_ok?/2`: a mandatory label must be written identically; an optional
+  # one may be omitted or written with the retained binder name (a label naming no
+  # parameter is rejected). A length mismatch defers to the arity machinery rather
+  # than double-diagnosing here (so `single_labels_ok?/2` and the pruning
+  # `labels_match?/2` differ ONLY at that last clause).
+  defp single_labels_ok?(declared, nil), do: not Enum.any?(declared, &mandatory?/1)
 
   defp single_labels_ok?(declared, written) when length(declared) == length(written) do
-    Enum.zip(declared, written)
-    |> Enum.all?(fn
-      {nil, _w} -> true
-      {d, w} -> d == w
-    end)
+    Enum.zip(declared, written) |> Enum.all?(fn {d, w} -> label_pos_ok?(d, w) end)
   end
 
   defp single_labels_ok?(_declared, _written), do: true
 
-  # A candidate's present-param declared labels must agree with the labels the
+  # A candidate's present-param label descriptors must agree with the labels the
   # caller actually wrote. Both vectors are aligned to the PRESENT (non-erased)
   # parameters — the same positions `present_param_types/1` prunes on and the same
   # positions the surface writes arguments for.
   #
-  # A written label of `nil` means "no label at this position", so an unwritten
-  # call (`written_labels == nil`, the whole common case) matches ONLY a candidate
-  # whose present params are all unlabelled — which is every pre-Ph2 def, keeping
-  # Ph1 resolution byte-for-byte unchanged. A mandatory external label (`to dest`)
-  # is declared non-nil, so it is matched only when the caller writes it; a caller
-  # who writes a label a candidate does not declare prunes that candidate.
-  #
-  # A declared-`nil` (optional, single-name) position accepts ANY written label at
-  # that position — same leniency as `single_labels_ok?/2` below, for the same
-  # reason: the internal binder name a caller may echo (`describe(x: 5)` for
-  # `fn describe(x: Int)`) is not retained on the def record to check exactly. A
-  # candidate must NOT be pruned from the overload set just because the caller
-  # wrote its (optional, unrecorded) parameter name — that would make writing a
-  # self-documenting label break resolution outright (spec §3/§5: `f(x: 5)` is
-  # the SAME call as `f(5)`, overloaded or not).
-  defp labels_match?(declared_present, nil), do: Enum.all?(declared_present, &is_nil/1)
+  # An unwritten call (`written_labels == nil`, the whole common case) matches ONLY
+  # a candidate with no mandatory present label — every pre-Ph2 def is
+  # all-`{:optional, _}`, keeping Ph1 resolution unchanged. When labels are
+  # written, each position is checked by `label_pos_ok?/2`: a mandatory external
+  # label (`to dest`) matches only when the caller writes it; an optional
+  # (single-name) label matches when omitted OR written with the parameter's own
+  # binder name (`describe(x: 5)` for `fn describe(x: Int)` — the SAME call as
+  # `describe(5)`, spec §3/§5). A written label naming NO parameter prunes the
+  # candidate, and a length mismatch is a non-match (wrong arity for this member).
+  defp labels_match?(declared_present, nil), do: not Enum.any?(declared_present, &mandatory?/1)
 
   defp labels_match?(declared_present, written) when length(declared_present) == length(written) do
-    Enum.zip(declared_present, written)
-    |> Enum.all?(fn
-      {nil, _w} -> true
-      {d, w} -> d == w
-    end)
+    Enum.zip(declared_present, written) |> Enum.all?(fn {d, w} -> label_pos_ok?(d, w) end)
   end
 
   defp labels_match?(_declared_present, _written), do: false
+
+  # Whether a parameter's label descriptor makes writing the label mandatory.
+  defp mandatory?({:required, _label}), do: true
+  defp mandatory?(_optional), do: false
+
+  # Whether the label the caller wrote at one position (`w`, possibly `nil`) is
+  # allowed by that parameter's descriptor. A mandatory label must be written
+  # exactly; an optional one may be omitted or written with the parameter's own
+  # binder name; an optional position whose name was not recorded stays lenient.
+  defp label_pos_ok?({:required, label}, w), do: w == label
+  defp label_pos_ok?({:optional, nil}, _w), do: true
+  defp label_pos_ok?({:optional, name}, w), do: is_nil(w) or w == name
 
   defp params_match?(_env, ptypes, atypes) when length(ptypes) != length(atypes), do: false
 
@@ -147,10 +146,11 @@ defmodule Cure.Elab.Overload do
 
   defp present_param_types(_return), do: []
 
-  # The declared external labels of a candidate's PRESENT parameters, in order —
-  # the label vector stored on the def record (telescope-aligned, full length),
-  # restricted to the same non-erased positions `present_param_types/1` keeps. A
-  # label-free def carries no vector, so every present position is `nil`.
+  # The label descriptors of a candidate's PRESENT parameters, in order — the
+  # vector stored on the def record (telescope-aligned, full length), restricted
+  # to the same non-erased positions `present_param_types/1` keeps. A def with no
+  # stored vector defaults to `{:optional, nil}` at every position (lenient, no
+  # mandatory label), so pre-Ph2 defs are unaffected.
   defp present_labels(def, pi) do
     grades = pi_grades(pi)
     full = def_labels(def, length(grades))
@@ -166,7 +166,7 @@ defmodule Cure.Elab.Overload do
 
   defp def_labels(def, arity) do
     case Map.get(def, :labels) do
-      nil -> List.duplicate(nil, arity)
+      nil -> List.duplicate({:optional, nil}, arity)
       labels -> labels
     end
   end

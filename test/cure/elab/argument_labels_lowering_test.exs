@@ -1,8 +1,12 @@
 defmodule Cure.Elab.ArgumentLabelsLoweringTest do
   @moduledoc """
-  Ph2 Slice B: the parsed argument labels (Slice A) are lowered onto the
-  function's def record as a telescope-aligned label vector, readable via
-  `Cure.Core.Env.labels/2`. A label-free def stores no label data (inertness).
+  Ph2 Slice B/F: the parsed argument labels (Slice A) are lowered onto the
+  function's def record as a telescope-aligned descriptor vector, readable via
+  `Cure.Core.Env.labels/2`. Each parameter is `{:required, external_label}` (a
+  two-name binder, label mandatory) or `{:optional, binder_name}` (a single-name
+  binder, label optional — the binder name is retained so a written optional label
+  can be validated). Labels erase before Core; codegen and resolution keys are
+  unaffected regardless.
   """
   use ExUnit.Case, async: true
 
@@ -14,19 +18,20 @@ defmodule Cure.Elab.ArgumentLabelsLoweringTest do
     env
   end
 
-  test "a labelled parameter lowers to a telescope-aligned label vector" do
+  test "a mandatory (two-name) parameter lowers to a :required descriptor" do
     env = elab!("mod M\n  fn move(to dest: Int) -> Int = dest\nend\n")
-    assert Env.labels(env, :"M#move") == ["to"]
+    assert Env.labels(env, :"M#move") == [{:required, "to"}]
   end
 
-  test "a mix of labelled and unlabelled parameters aligns labels by position" do
+  test "a mix of mandatory and optional parameters aligns descriptors by position" do
     env = elab!("mod M\n  fn blit(src: Int, to dest: Int) -> Int = dest\nend\n")
-    assert Env.labels(env, :"M#blit") == [nil, "to"]
+    assert Env.labels(env, :"M#blit") == [{:optional, "src"}, {:required, "to"}]
   end
 
-  test "a label-free def carries no label vector (inert)" do
+  # A def with no MANDATORY labels still records its single-name binder names as
+  # `{:optional, name}`, so a written optional label can be checked against them.
+  test "a label-free def records optional descriptors carrying the binder names" do
     env = elab!("mod M\n  fn add(x: Int, y: Int) -> Int = x + y\nend\n")
-    assert Env.labels(env, :"M#add") == nil
-    refute Map.has_key?(env.defs[:"M#add"], :labels)
+    assert Env.labels(env, :"M#add") == [{:optional, "x"}, {:optional, "y"}]
   end
 end
