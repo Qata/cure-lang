@@ -132,10 +132,35 @@ defmodule Cure.Compiler.Incremental do
         {mod, dirty?}
       end
 
+    # Order-independent prediction of "will this module recompile at all this
+    # build" — a module is reachable-dirty if IT is base-dirty, or ANY module
+    # transitively reachable via `closure_deps` (its full runtime dependency
+    # set, not just `order_deps`) is base-dirty. This is what `dep_changed?/2`
+    # falls back to for a closure-only dependency the walk hasn't visited yet
+    # (only possible across an ambient `@prelude` back-edge): `base_dirty[d]`
+    # alone only reflects `d`'s OWN source/beam status and misses `d` being
+    # dirtied by a cascade from `d`'s own (already-resolvable) deps — e.g. `d`
+    # `use`s `r`, `r`'s source changed, so `d` WILL recompile with a changed
+    # interface this build even though `d` itself is untouched and its beam
+    # exists. `DepGraph.closure/2` is order-independent (plain graph
+    # reachability over `closure_deps_map`, cycle-tolerant), so this is safe
+    # to compute up front alongside `base_dirty`. It over-approximates (a
+    # reachable-dirty module might still turn out interface-invariant once
+    # actually visited) but never under-approximates, matching the "never
+    # serve a stale beam" invariant for the one case where the precise
+    # interface-hash comparison isn't available yet.
+    reachable_dirty =
+      for mod <- walk, into: %{} do
+        deps = Map.get(closure, mod, [])
+        dirty? = Map.fetch!(base_dirty, mod) or Enum.any?(DepGraph.closure(closure, deps), &Map.get(base_dirty, &1, false))
+        {mod, dirty?}
+      end
+
     state0 = %{
       output_dir: output_dir,
       closure: closure,
       base_dirty: base_dirty,
+      reachable_dirty: reachable_dirty,
       module_paths: graph.modules,
       compile_opts: Keyword.get(opts, :compile_opts, []),
       # `roots` drives BOTH deletion scoping (above) and the standalone
@@ -266,14 +291,20 @@ defmodule Cure.Compiler.Incremental do
   # visited this walk, "changed" means its interface hash moved (the precise
   # interface-level cascade). A dep NOT yet visited can only be an ambient
   # `@prelude` cycle back-edge — the acyclic `order_deps` walk places every real
-  # use-dep first — so we fall back to its precomputed base-dirtiness: if that
-  # dep's own source/beams changed it will recompile, and we conservatively
-  # recompile this module too rather than risk linking a stale interface.
+  # use-dep first — so we fall back to `reachable_dirty[d]`: whether `d` (or
+  # anything `d` transitively depends on via the closure graph) will recompile
+  # at all this build. `base_dirty[d]` alone is NOT enough here — it only
+  # reflects `d`'s own source/beam status, missing the case where `d` will be
+  # dirtied this same build by a cascade from `d`'s own dependencies (e.g. `d`
+  # `use`s `r`, `r`'s source changed — `d`'s interface WILL change, but `d`
+  # itself is untouched and its beam still exists). `reachable_dirty` closes
+  # that gap; see its derivation in `run/4` for why it's sound and
+  # order-independent.
   defp dep_changed?(deps, state) do
     Enum.any?(deps, fn d ->
       case Map.get(state.iface, d) do
         %{changed: changed?} -> changed?
-        nil -> Map.get(state.base_dirty, d, false)
+        nil -> Map.get(state.reachable_dirty, d, false)
       end
     end)
   end

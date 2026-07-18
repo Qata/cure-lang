@@ -302,6 +302,74 @@ defmodule Cure.Compiler.IncrementalTest do
   # on the real stdlib graph because a compilable ambient cycle can't be built as
   # a bare temp fixture, and the test BEAM keeps the stdlib loaded+sticky (so an
   # in-process cold build resolves deps from memory and can't surface the miss).
+  # Regression test for the `dep_changed?/2` not-yet-visited fallback added by
+  # the ordering fix (`cae31e7f`). `P` is `@prelude` -- every OTHER module's
+  # `closure_deps` gets `P` appended unconditionally (`DepGraph.finalize_node`),
+  # regardless of whether it actually references `P`. `P` itself `use`s `R`
+  # (a real order_dep), so the acyclic `order_deps` walk schedules `R` before
+  # `P`. `Q` has no relationship to `P` at all beyond that ambient closure
+  # edge, and no order_dep on anything, so alphabetically it is scheduled
+  # BEFORE `P` (`Q` < `R` < `P`). When the driver decides `Q`'s freshness,
+  # `P` is not yet in `state.iface` -- the "not-yet-visited closure dep"
+  # branch. That branch falls back to `base_dirty[P]`, which reports "clean"
+  # (P's own source/beam are untouched) even though P's INTERFACE is about to
+  # change this very build, because its real dependency `R` changed. `Q`
+  # ambiently depends on `P` (that's what the closure edge means) and must
+  # not be served a stale beam.
+  @p_prelude """
+  @prelude
+  mod P
+    use R
+    fn pval() -> Int = R.val()
+  """
+
+  @r_v1 """
+  mod R
+    fn val() -> Int = 1
+  """
+
+  @r_v2 """
+  mod R
+    fn val() -> Int = 2
+  """
+
+  @q_ambient """
+  mod Q
+    fn qval() -> Int = 42
+  """
+
+  test "a closure-only ambient-prelude dependency's cascaded interface change is not missed by the not-yet-visited fallback" do
+    root = Path.join(System.tmp_dir!(), "cure_ambient_#{:erlang.unique_integer([:positive])}")
+    src = Path.join(root, "src")
+    out = Path.join(root, "ebin")
+    File.mkdir_p!(src)
+    on_exit(fn -> File.rm_rf!(root) end)
+
+    File.write!(Path.join(src, "p.cure"), @p_prelude)
+    File.write!(Path.join(src, "r.cure"), @r_v1)
+    File.write!(Path.join(src, "q.cure"), @q_ambient)
+    paths = Path.wildcard(Path.join(src, "*.cure"))
+
+    assert {:ok, s0} = Incremental.compile_dir(paths, out, source_roots: [src])
+    assert Enum.sort(s0.compiled) == ["P", "Q", "R"]
+
+    # Precondition: Q really is scheduled before P in this graph -- otherwise
+    # this test isn't exercising the not-yet-visited fallback at all.
+    {:ok, graph} = DepGraph.scan(paths)
+    pos = Incremental.compile_order(graph) |> Enum.with_index() |> Map.new()
+    assert pos["Q"] < pos["P"]
+
+    File.write!(Path.join(src, "r.cure"), @r_v2)
+    assert {:ok, s} = Incremental.compile_dir(paths, out, source_roots: [src])
+
+    assert "R" in s.compiled
+    assert "P" in s.compiled, "P has a real use-dep on R, which changed -- P must recompile"
+
+    assert "Q" in s.compiled,
+           "Q ambiently depends on P (prelude closure edge) and P's interface changed " <>
+             "this build -- Q must not be served a stale beam"
+  end
+
   test "compile_order places every module after its use-dependencies (real stdlib graph)" do
     {:ok, graph} = DepGraph.scan(Path.wildcard("lib/std/*.cure"))
     order = Incremental.compile_order(graph)
