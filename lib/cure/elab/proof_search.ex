@@ -26,9 +26,26 @@ defmodule Cure.Elab.ProofSearch do
   # Cycle guard: if this goal is already being attempted higher on the branch,
   # abandon it (a self-referential lemma set would otherwise loop forever).
   def resolve(goal, ctx, env, %{trying: ts} = state) do
+    # Weak-head-normalise the goal first. A goal threaded in from checked-mode
+    # elaboration is often an unreduced β-redex — the dependent codomain motive
+    # applied to the argument, e.g. `(λn:Nat. IsPositive(n)) (multiply …)` —
+    # whose head is a `{:lam, …}`, not the family. `head_of/1` (and conclusion
+    # unification) need the reduced `{:data, IsPositive, …, [multiply …]}` form,
+    # or no lemma filed under `IsPositive` is ever tried. whnf (not nf) is used
+    # deliberately: it β-reduces the outer redex to expose the family head while
+    # leaving the index spine (`multiply (refined_value …) …`) unfolded-free, so
+    # the implicit arguments unification recovers from the goal stay in their
+    # surface form — δ-unfolding them (as full nf would) makes the assembled term
+    # differ syntactically from the hand-written proof it must equal.
+    goal = Cure.Core.Normalise.whnf(ctx, goal)
+
     if Enum.any?(ts, &same_goal?(&1, goal, ctx, env)) do
       :none
     else
+      # Now working on `goal`: push it onto the cycle stack so any sub-goal that
+      # reduces back to it (a self-referential lemma set) is cut here, not below.
+      state = %{state | trying: [goal | ts]}
+
       candidates =
         local_candidates(goal, ctx, env) ++
           projection_candidates(goal, ctx, env) ++
@@ -80,7 +97,7 @@ defmodule Cure.Elab.ProofSearch do
     for k <- 0..(len - 1)//1, len > 0 do
       case sigma_params(Context.lookup(ctx, k), ctx, env) do
         {:ok, a_value, predicate_value} ->
-          term = sigma_second_of({:var, k}, a_value, predicate_value, ctx)
+          term = sigma_second_of({:var, k}, a_value, predicate_value, ctx, env)
 
           case Kernel.check(ctx, term, goal_val) do
             :ok -> {term, {:projection, k}}
@@ -112,17 +129,35 @@ defmodule Cure.Elab.ProofSearch do
     end
   end
 
-  # `{:var,k}.2` — sigma_second applied with its implicit `{a}`/`{predicate}`
-  # arguments reified DIRECTLY from the Sigma family's own params (not fresh
-  # metavars: those never reach the kernel; sigma_params/3 already pinned down
-  # `a_value`/`predicate_value` from the binder's own type). The assembled term
-  # is meta-free before it reaches Kernel.check.
-  defp sigma_second_of(var_term, a_value, predicate_value, ctx) do
+  # The second projection of a refinement/Sigma binder, applied with its implicit
+  # `{a}`/`{predicate}` arguments reified DIRECTLY from the Sigma family's own
+  # params (not fresh metavars: those never reach the kernel; sigma_params/3
+  # already pinned down `a_value`/`predicate_value` from the binder's own type).
+  # The assembled term is meta-free before it reaches Kernel.check.
+  #
+  # The head is `Std.Refine.refinement_proof` — the idiomatic accessor a human
+  # writes for the proof carried by a refinement (design §5:
+  # `refinement_proof(left) : IsPositive(refined_value(left))`), so the auto-found
+  # term is syntactically the hand-written one, not a δ-convertible variant. When
+  # `Std.Refine` is not loaded (a plain `Std.Sigma` binder with no refinement API
+  # in scope) we fall back to the kernel builtin `sigma_second`, which is
+  # definitionally the same second projection — refinement_proof's own body — so
+  # generic-Sigma projection still works without depending on Std.Refine.
+  defp sigma_second_of(var_term, a_value, predicate_value, ctx, env) do
     depth = Context.length(ctx)
     sig = Context.signature(ctx)
     a_term = Cure.Core.Quote.reify(a_value, depth, sig)
     predicate_term = Cure.Core.Quote.reify(predicate_value, depth, sig)
-    build_app({:global, :sigma_second}, [a_term, predicate_term, var_term])
+    build_app({:global, second_projection_head(env)}, [a_term, predicate_term, var_term])
+  end
+
+  # The global to head the second projection with: `Std.Refine.refinement_proof`
+  # when the refinement API is in scope, else the kernel builtin `sigma_second`.
+  defp second_projection_head(env) do
+    case Cure.Core.Env.get_def(env, "refinement_proof") do
+      nil -> :sigma_second
+      _def -> Cure.Core.Env.resolve_key(env, env.defs, "refinement_proof")
+    end
   end
 
   # Lemma-application search: every registered lemma under the goal's head whose
@@ -191,7 +226,7 @@ defmodule Cure.Elab.ProofSearch do
         subgoal = Unify.zonk(dom, mctx)
         subgoal_core = ensure_core(subgoal, ctx)
 
-        case resolve(subgoal_core, ctx, env, deeper(state, subgoal_core)) do
+        case resolve(subgoal_core, ctx, env, deeper(state)) do
           {:ok, term} -> {:cont, {:ok, acc ++ [term]}}
           _ -> {:halt, :fail}
         end
@@ -208,8 +243,11 @@ defmodule Cure.Elab.ProofSearch do
 
   defp build_app(head, args), do: Enum.reduce(args, head, fn a, f -> {:app, f, a} end)
 
-  # Descend one level: increment depth and push the sub-goal onto the cycle stack.
-  defp deeper(%{depth: d, trying: ts}, subgoal), do: %{depth: d + 1, trying: [subgoal | ts]}
+  # Descend one level: increment depth only. The cycle stack is extended by
+  # `resolve/4` itself when it begins working on a goal, so the parent goal is
+  # already on `state.trying` here; pushing the sub-goal too would make it match
+  # itself on the next `resolve` and abort every recursion.
+  defp deeper(%{depth: d} = state), do: %{state | depth: d + 1}
 
   # A sub-goal produced by zonk/reify is already a Core term.
   defp ensure_core(term, _ctx), do: term

@@ -52,4 +52,66 @@ defmodule Cure.Elab.ProofHoleResolutionTest do
     assert {:error, {:unfilled_hole, name}} = Program.check_codegen_ready(env)
     assert to_string(name) |> String.contains?("demo")
   end
+
+  # Identical to @red but the local lemma is TAGGED @lemma. Now the hole must be
+  # discharged automatically: sub-goals IsPositive(refined_value(left/right))
+  # come from the refinement projections of the two PositiveNatural binders.
+  #
+  # CRITICAL: @green and @reference use the SAME module name (`TaggedDemo`).
+  # Global def names are module-qualified, so the LOCAL lemma `tagged_fact` would
+  # resolve to a DIFFERENT global atom in each program if the two modules had
+  # different names — making `demo_body(green_env) == demo_body(ref_env)`
+  # structurally false no matter how correct ProofSearch is. Each `elaborate`
+  # builds an independent Env from scratch, so reusing the name is safe.
+  @green """
+  mod TaggedDemo
+    use Std.Proof.Math
+    use Std.Refine
+
+    @lemma
+    fn tagged_fact({left: Nat}, {right: Nat},
+          lp: IsPositive(left), rp: IsPositive(right)) -> IsPositive(multiply(left, right)) =
+      multiplying_positive_numbers_is_positive(lp, rp)
+
+    fn demo(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
+      refine(multiply(refined_value(left), refined_value(right)), ?)
+  end
+  """
+
+  # Same program, same module name, but the proof is written BY HAND (no hole).
+  # Its `demo` body is the reference the resolved term must equal.
+  @reference """
+  mod TaggedDemo
+    use Std.Proof.Math
+    use Std.Refine
+
+    @lemma
+    fn tagged_fact({left: Nat}, {right: Nat},
+          lp: IsPositive(left), rp: IsPositive(right)) -> IsPositive(multiply(left, right)) =
+      multiplying_positive_numbers_is_positive(lp, rp)
+
+    fn demo(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
+      refine(multiply(refined_value(left), refined_value(right)),
+             tagged_fact(refinement_proof(left), refinement_proof(right)))
+  end
+  """
+
+  defp demo_body(env) do
+    {_name, %{body: body}} =
+      Enum.find(env.defs, fn {name, _} -> Atom.to_string(name) |> String.ends_with?("demo") end)
+
+    body
+  end
+
+  test "tagging the lemma discharges the hole and the program passes the codegen gate" do
+    assert {:ok, env} = Program.elaborate(@green)
+    assert :ok = Program.check_codegen_ready(env)
+  end
+
+  test "the found proof term equals the hand-written proof term (same-run differential)" do
+    {:ok, green_env} = Program.elaborate(@green)
+    {:ok, ref_env} = Program.elaborate(@reference)
+
+    assert demo_body(green_env) == demo_body(ref_env)
+  end
 end
