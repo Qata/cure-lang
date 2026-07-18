@@ -688,7 +688,12 @@ defmodule Cure.Elab.Program do
   # membership lives at the definition site, not in a hand-kept list. Cached in
   # `:persistent_term`: the stdlib is fixed for a compiler build, and this runs
   # only in the HOST compiler, never on AtomVM (where `persistent_term` is absent).
-  defp prelude_manifest do
+  #
+  # Public (but `@doc false`) so the incremental driver can observe the cached
+  # set and so tests can assert its content; not part of the stable API.
+  @doc false
+  @spec prelude_manifest() :: [%{source: String.t(), path: String.t(), names: :all | MapSet.t()}]
+  def prelude_manifest do
     case Paths.source_dir() do
       nil ->
         []
@@ -706,6 +711,28 @@ defmodule Cure.Elab.Program do
             cached
         end
     end
+  end
+
+  @doc """
+  Evict the memoized `@prelude` manifest for the current stdlib source dir, if
+  cached, so the next `prelude_manifest/0` re-scans current source content.
+
+  `prelude_manifest/0` caches per source dir under the same "stdlib is immutable
+  for the process lifetime" assumption `cached_module_interface/2` makes — and
+  that incremental compilation of the stdlib likewise violates. If a stdlib
+  source's `@prelude` markers change between two same-process builds, a stale
+  manifest would keep elaborating later modules against the OLD ambient set. The
+  incremental driver calls this once at the start of a build that recompiles any
+  stdlib source, mirroring `invalidate_module_interface/1`.
+  """
+  @spec invalidate_prelude_manifest() :: :ok
+  def invalidate_prelude_manifest do
+    case Paths.source_dir() do
+      nil -> :ok
+      dir -> :persistent_term.erase({__MODULE__, :prelude_manifest, dir})
+    end
+
+    :ok
   end
 
   defp scan_prelude_manifest(dir) do

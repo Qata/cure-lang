@@ -48,7 +48,7 @@ defmodule Mix.Tasks.Cure.Compile do
 
     case Cure.Compiler.Incremental.compile_dir(files, output_dir,
            source_roots: [path],
-           stdlib_hash: Cure.Compiler.Incremental.stdlib_fingerprint(output_dir)
+           stdlib_hash: Cure.Compiler.Incremental.stdlib_fingerprint()
          ) do
       {:ok, summary} ->
         Enum.each(summary.cycles, fn walk ->

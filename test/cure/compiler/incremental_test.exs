@@ -461,4 +461,96 @@ defmodule Cure.Compiler.IncrementalTest do
     # Every named stdlib module is scheduled exactly once.
     assert length(order) == map_size(order_deps)
   end
+
+  # LIMITATION 1 (project builds against a non-default output dir never detect a
+  # stdlib change). The project-build caller previously fingerprinted
+  # `Cure.Std.*.beam` inside the PROJECT's `output_dir`. When that dir is not the
+  # one the stdlib actually compiled to, it holds no stdlib beams, so the
+  # fingerprint is a constant (hash of the empty list) that never moves when the
+  # real stdlib changes — a project module can then be served against a changed
+  # stdlib without recompiling. `stdlib_fingerprint/0` resolves the stdlib's real
+  # beam location via `Cure.Stdlib.Paths.beam_dir/0` (the `:stdlib_beam_dir`
+  # app-env override is its first, highest-priority candidate), independent of
+  # any project output dir.
+  test "stdlib_fingerprint/0 tracks the resolved stdlib beam dir, not a project output dir" do
+    beam_dir = Path.join(System.tmp_dir!(), "cure_stdlib_beams_#{:erlang.unique_integer([:positive])}")
+    proj_out = Path.join(System.tmp_dir!(), "cure_proj_out_#{:erlang.unique_integer([:positive])}")
+    File.mkdir_p!(beam_dir)
+    File.mkdir_p!(proj_out)
+
+    previous = Application.get_env(:cure, :stdlib_beam_dir)
+    Application.put_env(:cure, :stdlib_beam_dir, beam_dir)
+
+    on_exit(fn ->
+      case previous do
+        nil -> Application.delete_env(:cure, :stdlib_beam_dir)
+        value -> Application.put_env(:cure, :stdlib_beam_dir, value)
+      end
+
+      File.rm_rf!(beam_dir)
+      File.rm_rf!(proj_out)
+    end)
+
+    fake_beam = Path.join(beam_dir, "Cure.Std.Fake.beam")
+    File.write!(fake_beam, <<1, 2, 3>>)
+    h1 = Incremental.stdlib_fingerprint()
+
+    # The real stdlib changed: the resolved fingerprint MUST move.
+    File.write!(fake_beam, <<9, 9, 9>>)
+    h2 = Incremental.stdlib_fingerprint()
+    assert h1 != h2
+
+    # ...and it is genuinely reading the beam dir, not the empty project dir
+    # (whose output-scoped fingerprint is the constant the old caller used).
+    assert h2 != Incremental.stdlib_fingerprint(proj_out)
+  end
+
+  # LIMITATION 2 (a stale `@prelude` manifest survives across same-process
+  # builds). `Cure.Elab.Program.prelude_manifest/0` memoizes the set of
+  # `@prelude`-marked stdlib items in `:persistent_term`, keyed by the source
+  # dir, assuming the stdlib is immutable for the process lifetime — the same
+  # assumption incremental compilation of the stdlib violates. Without eviction,
+  # a second same-process build sees the FIRST build's ambient-prelude set even
+  # after a marker changed on disk, so a module can be elaborated against a wrong
+  # ambient scope. Fixture pattern mirrors the stale-interface test above.
+  test "an incremental rebuild refreshes the @prelude manifest when a stdlib source's markers change",
+       %{out: out} do
+    stdlib_src =
+      Path.join(System.tmp_dir!(), "cure_prelude_cache_#{:erlang.unique_integer([:positive])}")
+
+    File.mkdir_p!(stdlib_src)
+    previous = Application.get_env(:cure, :stdlib_source_dir)
+    Application.put_env(:cure, :stdlib_source_dir, stdlib_src)
+
+    on_exit(fn ->
+      case previous do
+        nil -> Application.delete_env(:cure, :stdlib_source_dir)
+        value -> Application.put_env(:cure, :stdlib_source_dir, value)
+      end
+
+      Cure.Elab.Program.invalidate_prelude_manifest()
+      File.rm_rf!(stdlib_src)
+    end)
+
+    p_path = Path.join(stdlib_src, "p.cure")
+    q_path = Path.join(stdlib_src, "q.cure")
+    # P marks a type ambient via `@prelude`; Q is a bystander so the walk has >1
+    # module and the manifest is genuinely consulted during elaboration.
+    File.write!(p_path, "mod P\n  @prelude typealias Widget = Int\n  fn p() -> Int = 1\n")
+    File.write!(q_path, "mod Q\n  fn q() -> Int = 2\n")
+    paths = Path.wildcard(Path.join(stdlib_src, "*.cure"))
+
+    assert {:ok, _s1} = Incremental.compile_dir(paths, out, source_roots: [stdlib_src])
+    # Build 1 populates the per-dir manifest cache: P contributes a prelude mark.
+    assert Enum.any?(Cure.Elab.Program.prelude_manifest(), &(&1.source == "P")),
+           "build 1 should have recorded P as a @prelude provider"
+
+    # Remove the marker and rebuild in the SAME process.
+    File.write!(p_path, "mod P\n  typealias Widget = Int\n  fn p() -> Int = 1\n")
+    assert {:ok, s2} = Incremental.compile_dir(paths, out, source_roots: [stdlib_src])
+    assert "P" in s2.compiled
+
+    refute Enum.any?(Cure.Elab.Program.prelude_manifest(), &(&1.source == "P")),
+           "stale @prelude manifest: P still marked after its marker was removed and it recompiled"
+  end
 end

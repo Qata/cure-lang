@@ -47,12 +47,42 @@ defmodule Cure.Compiler.Incremental do
     end
   end
 
-  @doc "SHA-256 over `Cure.Std.*.beam` content in `output_dir`, sorted. External stdlib fingerprint for project builds."
+  @doc """
+  SHA-256 over the stdlib beams a project build will actually link against,
+  resolved via `Cure.Stdlib.Paths.beam_dir/0` — the stdlib's real on-disk
+  location (`:stdlib_beam_dir` override, bundled `priv/ebin`, `$CURE_HOME`, or
+  the `_build/cure/ebin` dev fallback), NOT the project's own `output_dir`.
+
+  This is the fingerprint a project build stores and re-checks to decide whether
+  the stdlib changed under it. Resolving the real beam dir (instead of the
+  project's `output_dir`, which for a non-default `--output-dir` holds no stdlib
+  beams) is what lets a project built to an unusual output dir still notice a
+  stdlib change and rebuild. Returns the empty-list hash when no stdlib beam dir
+  exists yet — a stable constant, so the first real stdlib compile moves it.
+  """
+  @spec stdlib_fingerprint() :: binary()
+  def stdlib_fingerprint do
+    case Cure.Stdlib.Paths.beam_dir() do
+      nil -> stdlib_fingerprint_over([])
+      dir -> stdlib_fingerprint(dir)
+    end
+  end
+
+  @doc """
+  SHA-256 over `Cure.Std.*.beam` content in a specific `dir`, sorted. Prefer the
+  zero-arity `stdlib_fingerprint/0`, which resolves the stdlib's real beam
+  location; this arity is for pointing at an explicit directory (tests, tools).
+  """
   @spec stdlib_fingerprint(String.t()) :: binary()
-  def stdlib_fingerprint(output_dir) do
-    output_dir
+  def stdlib_fingerprint(dir) do
+    dir
     |> Path.join("Cure.Std.*.beam")
     |> Path.wildcard()
+    |> stdlib_fingerprint_over()
+  end
+
+  defp stdlib_fingerprint_over(files) do
+    files
     |> Enum.sort()
     |> Enum.reduce(:crypto.hash_init(:sha256), fn f, acc ->
       :crypto.hash_update(acc, File.read!(f))
@@ -131,6 +161,15 @@ defmodule Cure.Compiler.Incremental do
 
         {mod, dirty?}
       end
+
+    # If this build recompiles any stdlib source, its `@prelude` markers may have
+    # changed since the manifest was memoized in a prior same-process build. Evict
+    # the memoized manifest ONCE, before the walk, so the build's elaborations see
+    # current markers (a single re-scan, not one per module). Sources are stable
+    # within a build, so one eviction is sufficient; guarded to skip the cost for
+    # the common project build, which never recompiles a stdlib source.
+    if recompiles_stdlib_source?(walk, base_dirty, graph.modules),
+      do: Program.invalidate_prelude_manifest()
 
     # Order-independent prediction of "will this module recompile at all this
     # build" — a module is reachable-dirty if IT is base-dirty, or ANY module
@@ -294,6 +333,24 @@ defmodule Cure.Compiler.Incremental do
       {:ok, _module, _warnings} -> state
       {:error, reason} -> %{state | errors: [{path, reason} | state.errors]}
     end
+  end
+
+  # True when a base-dirty (source-changed / beam-missing / globally-forced)
+  # module in this walk lives under a stdlib source dir — i.e. this build may
+  # recompile a stdlib source, whose `@prelude` markers a cached manifest would
+  # otherwise still reflect from a prior same-process build.
+  defp recompiles_stdlib_source?(walk, base_dirty, module_paths) do
+    dirs = Cure.Stdlib.Paths.source_dirs() |> Enum.map(&Path.expand/1)
+
+    dirs != [] and
+      Enum.any?(walk, fn mod ->
+        Map.fetch!(base_dirty, mod) and
+          under_any_dir?(Path.expand(Map.fetch!(module_paths, mod)), dirs)
+      end)
+  end
+
+  defp under_any_dir?(path, dirs) do
+    Enum.any?(dirs, fn dir -> path == dir or String.starts_with?(path, dir <> "/") end)
   end
 
   # A module is stale if any of its closure deps changed. For a dep already
