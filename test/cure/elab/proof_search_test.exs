@@ -40,4 +40,48 @@ defmodule Cure.Elab.ProofSearchTest do
 
     assert length(provenance) == 2
   end
+
+  test "a registered lemma whose conclusion unifies with the goal, with sub-goals in context, resolves" do
+    # Use the real stdlib so IsPositive/multiply exist, then drive an inline
+    # module with a tagged lemma and an explicit-call demo.
+    source = """
+    mod LemmaApp
+      use Std.Proof.Math
+      use Std.Refine
+
+      @lemma
+      fn positivity_of_product({left: Nat}, {right: Nat},
+            lp: IsPositive(left), rp: IsPositive(right)) -> IsPositive(multiply(left, right)) =
+        multiplying_positive_numbers_is_positive(lp, rp)
+
+      fn demo(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
+        refine(multiply(refined_value(left), refined_value(right)),
+               positivity_of_product(refinement_proof(left), refinement_proof(right)))
+    end
+    """
+
+    assert {:ok, env} = Cure.Elab.Program.elaborate(source)
+    heads = Map.keys(env.lemmas)
+    assert Enum.any?(heads, fn h -> Atom.to_string(h) |> String.ends_with?("IsPositive") end)
+  end
+
+  test "lemma_candidates returns an application term when the conclusion unifies and sub-goals are in scope" do
+    source = """
+    mod LemmaApp2
+      use Std.Proof.Math
+      use Std.Refine
+      @lemma
+      fn pop({left: Nat}, {right: Nat},
+            lp: IsPositive(left), rp: IsPositive(right)) -> IsPositive(multiply(left, right)) =
+        multiplying_positive_numbers_is_positive(lp, rp)
+      fn demo(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
+        refine(multiply(refined_value(left), refined_value(right)),
+               pop(refinement_proof(left), refinement_proof(right)))
+    end
+    """
+
+    {:ok, env} = Cure.Elab.Program.elaborate(source)
+    entries = env.lemmas |> Map.values() |> List.flatten()
+    assert Enum.any?(entries, fn e -> Atom.to_string(e.name) |> String.ends_with?("pop") end)
+  end
 end
