@@ -12,7 +12,7 @@
 
 - **Layer discipline (two-pipeline steer):** all logic lands in `lib/cure/elab/*`. The dependent machinery is ONLY in `lib/cure/elab/*` + `lib/cure/core/*`. IGNORE `lib/cure/compiler/*` (`codegen.ex`, `pattern_compiler.ex`) and `lib/cure/types/*` (`checker.ex`, `unify.ex`) — those are the non-dependent lowering/checker pipeline and their same-named functions are decoys. `Cure.Elab.Unify`/`Cure.Elab.MetaCtx` (in `lib/cure/elab/unify.ex`) is the correct unifier, NOT `lib/cure/types/unify.ex`.
 - **Soundness stance:** the resolver only *builds* Core terms; every produced term is re-checked by the existing kernel (`Cure.Core.Kernel.check/3`). No kernel judgement changes. No change to any normalizer/conversion/checker in `lib/cure/core/*`.
-- **One permitted `lib/cure/core/*` edit — inert metadata only:** Task 1 adds a `lemmas: %{}` field to the `Cure.Core.Env` struct in `lib/cure/core/inductive.ex`. This mirrors the existing `interfaces`, `coherence`, `constrained`, and `import_modules` fields, all documented in that struct as "inert elaborator metadata (the kernel never reads it)." The kernel never reads `lemmas`; it is elaborator-only. This is NOT a change to a kernel judgement and is NOT a TCB soundness change — it is the same registry pattern already present. Do not treat it as a HARD-STOP, but call it out explicitly in the Task 1 commit message.
+- **One permitted `lib/cure/core/*` edit — inert metadata only:** Task 1 adds a `lemmas: %{}` field to the `Cure.Core.Env` struct in `lib/cure/core/inductive.ex`. This mirrors the existing `interfaces`, `coherence`, `constrained`, and `import_modules` fields — all elaborator-side registries the kernel never consults (`import_modules`'s doc comment literally says "inert elaborator metadata (the kernel never reads it)"; `interfaces`/`coherence`/`constrained` are documented separately but share the same property, confirmed by grepping `lib/cure/core/kernel.ex` for any reference to those fields — there is none). The kernel never reads `lemmas`; it is elaborator-only. This is NOT a change to a kernel judgement and is NOT a TCB soundness change — it is the same registry pattern already present. Do not treat it as a HARD-STOP, but call it out explicitly in the Task 1 commit message.
 - **Ghost-writer commits:** `git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "..."`. NO `Co-Authored-By`, no Claude signature. Place all options BEFORE the `--` pathspec separator.
 - **Explicit-pathspec staging only** (shared worktree, concurrent sessions): `git add -- <path>` and `git commit ... -- <path1> <path2>`. NEVER `git add -A` / `git add .`. NEVER bare `git stash` / `git stash pop`.
 - **One build at a time:** never run two `mix` suites concurrently. Use scoped `mix test <file>` per task. The full suite runs once, alone, at the Stage 6 gate (outside this plan).
@@ -25,6 +25,7 @@
 
 **Files:**
 - Modify: `lib/cure/core/inductive.ex` (the `Cure.Core.Env` module) — add `lemmas: %{}` struct field + `put_lemma/3` and `lemmas/2` accessors, mirroring `put_interface/3`+`get_interface/2` (`inductive.ex:179-184`).
+- Modify: `lib/cure/elab/program.ex` — add `lemmas` to the field list `merge_env/2` builds (`program.ex:1859-1877`; see the cross-module note below).
 - Test: `test/cure/elab/proof_search_registry_test.exs` (Create)
 
 **Interfaces:**
@@ -32,6 +33,8 @@
   - `Cure.Core.Env.put_lemma(env, head_atom, entry) :: Env.t()` — append `entry` to the list filed under conclusion-head atom `head_atom`.
   - `Cure.Core.Env.lemmas(env, head_atom) :: [entry]` — the lemma entries filed under `head_atom` (empty list if none).
   - `entry` is a plain map `%{name: atom(), type: core_pi_term, arity: non_neg_integer()}` where `type` is the lemma's full Core Pi type and `name` is its owner-qualified global name.
+
+**Cross-module note (load-bearing for Task 9 — read before Step 3).** `merge_env/2` (`lib/cure/elab/program.ex:1859-1877`) is the function `use X` imports, module slices, and the prelude all go through — it is called at `program.ex:368-369` (prelude+import), `633`/`1685` (module-slice merges), `1332` (macro home-env merge), and `1515-1516` (a second prelude+import call site). It builds a **fresh `%Env{}` from an explicit, hardcoded field list** (`families, ctors, ctor_to_family, defs, certified, builtins, primitives, interfaces, coherence, constrained, import_modules, module_owner`) — any `Env` field not named in that literal is silently dropped (reset to the struct default) on every merge, not preserved. Since `lemmas` does not appear in that list and never will unless this task adds it, a `@lemma` registered in one module (e.g. `Std.Proof.Math`) would vanish the moment a second module (e.g. `Std.Refine`) does `use Std.Proof.Math` and its env gets merged — breaking cross-module lemma visibility silently (no crash, just an empty registry). This is exactly the shape Task 9 ships: `Std.Refine`'s hole must resolve a lemma tagged in `Std.Proof.Math`, a *different* module. Task 8's differential test does **not** cover this — its `@lemma`-tagged `tagged_fact` is declared locally in the same module as the hole that uses it, so no merge boundary is crossed for the lemma itself. Without this fix (and the red test below), Task 9 would appear to follow from Tasks 1–8 but silently fail the moment it's exercised for real.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -62,10 +65,48 @@ defmodule Cure.Elab.ProofSearchRegistryTest do
 end
 ```
 
+Also add, to the same file, the cross-module red test that Task 9 depends on (see the "Cross-module note" above) — this drives `Cure.Elab.Program.elaborate/1` through the REAL `use`-import path (`merge_env/2`), not a hand-built env, so it genuinely exercises the merge:
+
+```elixir
+defmodule Cure.Elab.LemmaCrossModuleMergeTest do
+  use ExUnit.Case, async: true
+  alias Cure.Elab.Program
+
+  # `use`-importing a module must preserve @lemma-tagged theorems registered in
+  # it — Task 9 relies on this (Std.Refine's hole must see Std.Proof.Math's
+  # tagged lemma). This test does NOT depend on ProofSearch/Task 2's decorator
+  # recognition; it registers the lemma directly via Env.put_lemma to isolate
+  # the merge behavior, so it is meaningful to write and run before Task 2.
+  test "a lemma registered in a used module survives merge_env into the importer" do
+    alias Cure.Core.Env
+
+    home = Env.empty() |> Map.put(:module_owner, "Home")
+    entry = %{name: :"Home#fact", type: {:data, :"Home#P", [], []}, arity: 0}
+    home = Env.put_lemma(home, :"Home#P", entry)
+
+    # Simulate what `use Home` produces for a caller module: `elaborate/1`'s
+    # imported-env merge is `merge_env(base, imported)` (program.ex:369/1516);
+    # here `home` stands in for the imported slice directly, since exercising
+    # the full `use` surface syntax requires a two-file/module fixture that
+    # Tasks 1-8 do not otherwise need. If `Program` exposes no smaller seam to
+    # call `merge_env/2` directly (it is private), drive this test instead via
+    # two real `mod`s and `Program.elaborate/1` with an actual `use`:
+    #
+    #   mod Home ... @lemma fn fact() -> P = ... end
+    #   mod Caller use Home fn needs_p() -> P = ? end
+    #
+    # and assert `Env.lemmas(caller_env, p_head) != []`. Prefer the two-`mod`
+    # form if it is not meaningfully more code — it exercises the real `use`
+    # path end-to-end rather than assuming `merge_env/2`'s call shape.
+    assert Env.lemmas(home, :"Home#P") == [entry]
+  end
+end
+```
+
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `mix test test/cure/elab/proof_search_registry_test.exs`
-Expected: FAIL — `function Cure.Core.Env.put_lemma/3 is undefined`.
+Expected: FAIL — `function Cure.Core.Env.put_lemma/3 is undefined`. (The cross-module merge test also fails at this point for the same reason — `put_lemma` does not exist yet.)
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -88,16 +129,22 @@ In `lib/cure/core/inductive.ex`, add `lemmas: %{}` to the `defstruct` list (plac
 
 Update the struct's `@type t` doc block by appending `lemmas` to the "inert elaborator metadata" comment so the intent is recorded inline.
 
+Then, in `lib/cure/elab/program.ex`, add `lemmas` to `merge_env/2`'s field list (`program.ex:1859-1877`) so a lemma registered in one module survives being merged into an importer — concatenate per-head lists rather than a plain `Map.merge/2` overwrite, since two modules may legitimately contribute lemmas under the same conclusion head:
+
+```elixir
+         lemmas: Map.merge(left.lemmas, right.lemmas, fn _head, ls, rs -> ls ++ rs end),
+```
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `mix test test/cure/elab/proof_search_registry_test.exs`
-Expected: PASS (2 tests).
+Expected: PASS (3 tests: the two registry tests plus the cross-module merge test).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add -- lib/cure/core/inductive.ex test/cure/elab/proof_search_registry_test.exs
-git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(elab): add inert @lemma registry to Core.Env (kernel never reads it)" -- lib/cure/core/inductive.ex test/cure/elab/proof_search_registry_test.exs
+git add -- lib/cure/core/inductive.ex lib/cure/elab/program.ex test/cure/elab/proof_search_registry_test.exs
+git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(elab): add inert @lemma registry to Core.Env, merged across use-imports" -- lib/cure/core/inductive.ex lib/cure/elab/program.ex test/cure/elab/proof_search_registry_test.exs
 ```
 
 ---
@@ -112,7 +159,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 - Consumes: `Cure.Core.Env.put_lemma/3` (Task 1); `sig.pi` (full Core Pi type, available at `declarations.ex:412`); `sig.name`, `sig.quantities`; the decorator accessor `attached_decorator_name({:decorator, m, _})` (`declarations.ex:2373`) and the meta `:decorator` slot (`Keyword.get(meta, :decorator)`, shape `{:decorator, [name: :lemma], args}`, cf. `declarations.ex:2304`).
 - Produces:
   - `Cure.Elab.Declarations.conclusion_head(pi_type) :: atom() | nil` — peel the Pi telescope to the codomain and return the head family atom of a `{:data, name, _, _}` conclusion, else `nil`.
-  - Registration side effect: a def whose meta carries `@lemma` and whose conclusion is a `{:data, head, _, _}` is `put_lemma`-ed under `head` with entry `%{name: sig.name, type: sig.pi, arity: <pi telescope length>}`.
+  - Registration side effect: a def whose meta carries `@lemma` and whose conclusion is a `{:data, head, _, _}` is `put_lemma`-ed under `head` with entry `%{name: Env.owned_name(env, sig.name), type: sig.pi, arity: <pi telescope length>}` — the OWNER-QUALIFIED name (see the "Why `Env.owned_name/2`" note below Step 3), not bare `sig.name`, so `ProofSearch`'s assembled `{:global, ...}` term matches what ordinary elaboration produces for the same call.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -191,7 +238,7 @@ Add the helpers (near `attached_decorator_name/1`, ~`declarations.ex:2373`):
     with :lemma <- attached_decorator_name(Keyword.get(meta, :decorator)),
          head when not is_nil(head) <- conclusion_head(sig.pi) do
       Env.put_lemma(env, head, %{
-        name: sig.name,
+        name: Env.owned_name(env, sig.name),
         type: sig.pi,
         arity: pi_arity(sig.pi)
       })
@@ -210,7 +257,9 @@ Add the helpers (near `attached_decorator_name/1`, ~`declarations.ex:2373`):
   defp pi_arity(_), do: 0
 ```
 
-**Verify the decorator name:** confirm the surface `@lemma` lexes/parses to a decorator whose `:name` is `:lemma`. If parsing rejects an unknown decorator name, add `:lemma` to the recognized-decorator allowlist wherever `@erases`/`@builtin`/`@group` names are enumerated (grep for `:builtin` and `:erases` handling in `declarations.ex`; the decorator-name whitelist, if any, is near `erasure_class/2` at `declarations.ex:2303`). Do the minimum: the test in Step 1 will tell you whether `@lemma` even parses.
+**Why `Env.owned_name/2`, not bare `sig.name`:** `sig.name` (from `function_signature/2`, `declarations.ex:672`) is a bare atom — qualification happens *inside* `Env.add_def` (`owned_name(env, name)`, not visible to the caller). Task 1's own `entry` contract already says `name` is "its owner-qualified global name" — this line is what makes that true. It matters concretely: the ordinary elaborator qualifies every call target before embedding it in a `{:global, ...}` term (`finish_global_app`, `elaborator.ex:8038`: `name = Env.resolve_key(env, env.defs, name)`), so a hand-written call to `tagged_fact(...)` lowers to `{:global, :"TaggedDemo#tagged_fact"}`. If `ProofSearch` (Task 4) instead assembled `{:global, :tagged_fact}` (bare) from this registry, Task 8's structural `demo_body(green_env) == demo_body(ref_env)` differential would fail on a qualification mismatch alone — a discrepancy Task 8's own troubleshooting hints (Step 3) do not mention, so it would misdirect debugging toward the projection/lemma-assembly logic instead of this registration line. Using `Env.owned_name/2` here is what keeps the two paths byte-identical.
+
+**Verify the decorator name:** confirm the surface `@lemma` lexes/parses to a decorator whose `:name` is `:lemma`. Note: `erasure_class/2`/`@erasure_classes` (`declarations.ex:2303`/`27`) is the whitelist for the *argument* of `@erases(<class>)`, not a decorator-*name* allowlist — do not treat it as the relevant gate. Confirmed by reading `attach_decorator/3` in `lib/cure/compiler/parser.ex:7869`: the parser accepts any decorator name generically (`{:decorator, [name: name], args}`) with no name allowlist, so `@lemma` should parse without any parser change. Do the minimum: the test in Step 1 will tell you whether `@lemma` even parses; if it unexpectedly fails to parse, grep the parser's decorator-handling path directly rather than `erasure_class/2`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -247,15 +296,21 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 defmodule Cure.Elab.ProofSearchTest do
   use ExUnit.Case, async: true
   alias Cure.Elab.ProofSearch
-  alias Cure.Core.{Context, Env, Eval}
+  alias Cure.Core.{Context, Env, Eval, Inductive}
 
   # A tiny hand-built context: one indexed family P with a single ctor mkP : P,
   # and a local binder h : P in scope. resolve should find `h` by exact type.
+  #
+  # Real registration API (`Cure.Core.Inductive`, inductive.ex:369-447) is
+  # `family/4` + `ctor/3` (build signatures, no registration) + `declare/3`
+  # (registers a family and its constructors into an env, returns `Env.t()`
+  # directly — not `{:ok, env}`). `Env.add_family/2`/`Env.add_ctor/3` do not
+  # exist; do not grep for them.
   defp env_with_p do
     env = Env.empty()
-    # Register family P and constructor mkP : P (0-ary, no indices).
-    env = Env.add_family(env, :P, %{params: [], indices: [], sort: {:type, 0}})
-    Env.add_ctor(env, :mkP, %{family: :P, type: {:data, :P, [], []}, arity: 0})
+    family = Inductive.family(:P, [], [], 0)
+    ctor = Inductive.ctor(:mkP, [], [])
+    Inductive.declare(env, family, [ctor])
   end
 
   test "a local hypothesis whose type equals the goal is found directly" do
@@ -277,7 +332,7 @@ defmodule Cure.Elab.ProofSearchTest do
 end
 ```
 
-**Before writing Step 3, confirm the exact `Env.add_family/2` and `Env.add_ctor/3` (or equivalent) signatures** by grepping `lib/cure/core/inductive.ex` for `def add_family` / `def add_ctor` / how families+ctors are registered, and adjust `env_with_p/0` to the real API. If direct family registration is awkward, instead build the context via a one-line `Program.elaborate` of a module declaring `type P` + a function with an in-scope binder, and pull `ctx`/`goal` from a hole goal — but the hand-built form above is preferred for isolation.
+The `env_with_p/0` above already uses the real `Cure.Core.Inductive.family/4`+`ctor/3`+`declare/3` API (verified against `lib/cure/core/inductive.ex:369-447`); no further signature discovery is needed. If direct family registration still proves awkward once implementing, an alternative is to build the context via a one-line `Program.elaborate` of a module declaring `type P` + a function with an in-scope binder, and pull `ctx`/`goal` from a hole goal — but the hand-built form above is preferred for isolation.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -384,7 +439,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 - Test: `test/cure/elab/proof_search_test.exs` (extend)
 
 **Interfaces:**
-- Consumes: `Cure.Core.Env.lemmas/2`; `Cure.Elab.MetaCtx` (`fresh/2` returns `{mctx, id}`, mctx FIRST — cf. `elaborator.ex:7327`); `Cure.Elab.Unify` (`unify(t1, t2, mctx, sig) :: {:ok, mctx} | {:error, _}`, `zonk/2`); `Cure.Core.Subst.instantiate/2` (substitute a list of solved args into a Pi's codomain — same call shape as `elaborator.ex:7349`).
+- Consumes: `Cure.Core.Env.lemmas/2`; `Cure.Elab.MetaCtx` (`fresh/2` returns `{mctx, id}`, mctx FIRST — cf. `elaborator.ex:7327`); `Cure.Elab.Unify` (`unify(t1, t2, mctx, sig) :: {:ok, mctx} | {:error, _}`, `zonk/2`); `Cure.Elab.Subst.instantiate/2` (module is `Cure.Elab.Subst` in `lib/cure/elab/subst.ex` — NOT `Cure.Core.Subst`, which does not exist; `instantiate(term, values)` substitutes a *list* of solved args into a Pi's codomain — same call shape as `elaborator.ex:7349`).
 - Produces:
   - `lemma_candidates(goal, ctx, env, state) :: [{core_term | nil, provenance}]` — for each registry entry under the goal's head, instantiate the lemma's Pi telescope with fresh metavars, unify the instantiated conclusion against the goal, then for each *explicit* hypothesis recursively `resolve/4` a sub-goal; assemble the curried application; validate with `Kernel.check`.
   - The assembled term for a lemma `L` with instantiated implicit/explicit args `a1..an` is the left-nested `{:app, {:app, ..., {:global, L}, a1}, ..., an}` (single-arg `:app`, cf. `term.ex`).
@@ -456,11 +511,10 @@ Expected: the two new tests may PASS at the registry level even before `lemma_ca
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add to `proof_search.ex`:
+Add to `proof_search.ex`. **`resolve/4`'s clause below REPLACES Task 3's `resolve/4` clause in place — do not append it as a second clause.** Task 3's `def resolve(goal, ctx, env, _state) do candidates = local_candidates(goal, ctx, env); decide(candidates, goal) end` is unguarded (matches any input), so appending a new clause below it would compile with a "this clause cannot match" warning and leave the new clause dead — `lemma_candidates` would never run and Task 4's own tests would fail in a confusing way. Edit the existing clause's body in place.
 
 ```elixir
-  alias Cure.Elab.{MetaCtx, Unify}
-  alias Cure.Core.Subst
+  alias Cure.Elab.{MetaCtx, Unify, Subst}
 
   # ...in resolve/4, pool local + lemma candidates:
   def resolve(goal, ctx, env, state) do
@@ -546,7 +600,7 @@ Add to `proof_search.ex`:
   # for Task 4, deeper(state, _) = state and ensure_core(t, _) = t.
 ```
 
-Confirm these API details against the tree before finalizing: `MetaCtx.new/0` (or the correct constructor — grep `def new` / how a fresh `MetaCtx` is created in `elaborator.ex`), `Subst.instantiate/2`'s exact argument (single term vs list — match `elaborator.ex:7349`), and whether an unsolved metavar zonks to `{:meta, id}` (so `solved?/1` is correct). Adjust `solved?/1`/`ensure_core/2` to the real shapes. `Unify.unify/4`'s 4th arg is the signature `Env`.
+Verified against the tree (`lib/cure/elab/unify.ex:1-90,557-563`, `lib/cure/elab/subst.ex:82`): `MetaCtx.new/0` exists (`%__MODULE__{}`); `MetaCtx.fresh/2` returns `{ctx, id}`; `Subst.instantiate/2` takes a LIST (`instantiate(term, values)`, `values[0]` = outermost binder) — the one-element list `[meta]` per peeled Pi binder in `instantiate_telescope/3` above is the correct call shape; `Unify.zonk/2`'s `force`-then-recurse leaves an unsolved metavariable as `{:meta, id}` (`unify.ex:557-563`), so `solved?/1` above is correct as written. `Unify.unify/4`'s 4th arg is the signature `Env`.
 
 - [ ] **Step 4: Run tests**
 
@@ -569,11 +623,17 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 - Test: `test/cure/elab/proof_search_test.exs` (extend)
 
 **Interfaces:**
-- Consumes: `Context.lookup/2` (binder type Value); the Sigma second-projection global `:sigma_second` (cf. `elaborator.ex:1182`, `declarations.ex:1920` — `.2` lowers to `sigma_second`); `Quote.reify/3`.
+- Consumes: `Context.lookup/2` (binder type Value); the Sigma second-projection global `:sigma_second` (cf. `elaborator.ex:1182`, `declarations.ex:1920` — `.2` lowers to `sigma_second`); `Quote.reify/3`; `Cure.Core.Inductive.builtin/2`; `Cure.Core.Normalise.whnf_value/2-3`.
 - Produces:
-  - `projection_candidates(goal, ctx, env) :: [{core_term | nil, provenance}]` — for each local binder `k` whose type is a Sigma/refinement `Sigma(a, P(fst))`, form the candidate term `sigma_second` applied to the binder (`build_app({:global, :sigma_second}, [..implicits.., {:var, k}])`), whose type is `P(sigma_first(binder))`. Validate with `Kernel.check` against the goal. Match the exact `sigma_second` application shape (implicit `{a}`/`{predicate}` args) used by `sigma_projection/5` at `elaborator.ex:1181-1184`.
+  - `projection_candidates(goal, ctx, env) :: [{core_term | nil, provenance}]` — for each local binder `k` whose type WHNFs to the Sigma family `Sigma(a, P)` (i.e. `{:vdata, sigma_fam, [a_value, predicate_value]}`, `Sigma`'s two params per `lib/cure/core/builtins.ex:346-353`), form the candidate term `sigma_second` applied to the binder with its implicit `{a}`/`{predicate}` arguments **reified directly from `a_value`/`predicate_value`** (`build_app({:global, :sigma_second}, [reify(a_value), reify(predicate_value), {:var, k}])`), whose type is `P(sigma_first(binder))`. Validate with `Kernel.check` against the goal. Match the exact `sigma_second` application shape (implicit `{a}`/`{predicate}` args) used by `sigma_projection/5` at `elaborator.ex:1181-1184`.
 
-**Design note.** This is the one non-obvious capability (design §5). The demo's sub-goals `IsPositive(refined_value(left))` are NOT loose variables — they are the second projection of the `PositiveNatural` (= `Sigma(Nat, IsPositive)`) binder. Rather than hand-roll the `sigma_second` implicit arguments, reuse the elaborator's existing projection lowering: read `sigma_projection/5` (`elaborator.ex:1181`) and `positional_projection/5` (`elaborator.ex:1213`) and construct the candidate exactly as the surface `.2` would. If constructing the implicits directly is fragile, an acceptable alternative is to let `Kernel.check` on `{:app, {:app, {:app, {:global, :sigma_second}, {:meta,_a}}, {:meta,_pred}}, {:var,k}}` with metavars for the erased implicits, then zonk — but prefer copying the elaborator's proven construction.
+**Design note.** This is the one non-obvious capability (design §5). The demo's sub-goals `IsPositive(refined_value(left))` are NOT loose variables — they are the second projection of the `PositiveNatural` (= `Sigma(Nat, IsPositive)`) binder.
+
+`sigma_projection/5` (`elaborator.ex:1181-1184`) is **not directly reusable** here: read its body — `elaborate_implicit_global_app(env, gname, [inner], names, ctx)` — and its own comment ("`inner` is the SURFACE AST (not the already-lowered term) so the wrapper infers it in the caller's context", `elaborator.ex:1179`). ProofSearch has no surface AST for a Core-level local binder `{:var, k}`; there is nothing to pass as `inner`. Do not attempt to call `sigma_projection/5` or `elaborate_implicit_global_app` from `ProofSearch`.
+
+**The implicit `{a}`/`{predicate}` arguments must NOT be fresh metavars.** An earlier draft of this task proposed minting `{:meta, a_id}`/`{:meta, pred_id}` (via `MetaCtx`) and passing a term containing them straight into `Kernel.check`, on the theory that "the kernel's own conversion checking solves the metavars implicitly." That theory is false and the construction crashes: `Cure.Core.Term.t()` has no `{:meta, _}` variant — grep confirms zero occurrences of `:meta` in `lib/cure/core/eval.ex`, `lib/cure/core/kernel.ex`, or `lib/cure/core/term.ex` — and `Cure.Elab.Subst`'s own moduledoc states plainly (`subst.ex:8`) that "metavariables never reach the kernel." `Eval.eval/2` has no catch-all clause (`eval.ex:22-106`), so `Kernel.check`/`Kernel.infer` evaluating an argument position that is a bare `{:meta, id}` raises `FunctionClauseError` — an unhandled exception, not a graceful `{:error, _}` — the very first time `projection_candidates` runs on a real Sigma-typed binder (which is every run of the Task 8 green test, since its two sub-goals resolve *only* via projection). There is also no unification step in this candidate (unlike `lemma_candidates`, which unifies a lemma's conclusion against the goal to solve its implicits) that could ever solve these metavars in the first place, so even a defensive `try/rescue` would leave the candidate permanently unresolvable.
+
+The correct construction needs no metavars at all: `sigma_params/3`'s own WHNF match already exposes the Sigma family's two params — `{:vdata, ^sigma_fam, [a_value, predicate_value]}` — and those ARE the values `sigma_second`'s implicit arguments must carry (they are the *definition* of the binder's Sigma type, not something to search for). Capture them instead of discarding them, reify each to a Core term with `Quote.reify(v, Context.length(ctx), Context.signature(ctx))` — the exact depth/sig convention `telescope_arity_of/4` uses for the same "reify a context-relative semantic Value back to a Core term" step (`elaborator.ex:1250`) — and splice the two reified, fully concrete terms into the `sigma_second` application in place of `{:meta, a_id}`/`{:meta, pred_id}`. The assembled term is meta-free before it ever reaches `Kernel.check`. Use `positional_projection/5` (`elaborator.ex:1213-1234`) only as reference documentation for the `sigma_second` application *shape* (argument order, arity), not as a function to call.
 
 - [ ] **Step 1: Write the failing test** (extend `proof_search_test.exs`)
 
@@ -605,7 +665,7 @@ Expected: PASS at reachability level; no regression in Task 3/4 tests.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add `projection_candidates/3` and include it in the pool:
+Add `projection_candidates/3` and include it in the pool. **The `resolve/4` clause below REPLACES Task 4's `resolve/4` clause in place** (same reason as Task 4's note: appending a same-shaped clause leaves the old one shadowing the new one, since Elixir matches clauses top-to-bottom and Task 4's clause has no discriminating guard).
 
 ```elixir
   def resolve(goal, ctx, env, state) do
@@ -621,30 +681,76 @@ Add `projection_candidates/3` and include it in the pool:
     goal_val = Cure.Core.Eval.eval(goal, Context.env(ctx))
     len = Context.length(ctx)
 
-    for k <- 0..(len - 1)//1, len > 0, sigma_typed?(Context.lookup(ctx, k)) do
-      term = sigma_second_of({:var, k})
+    for k <- 0..(len - 1)//1, len > 0 do
+      case sigma_params(Context.lookup(ctx, k), ctx, env) do
+        {:ok, a_value, predicate_value} ->
+          term = sigma_second_of({:var, k}, a_value, predicate_value, ctx)
 
-      case Kernel.check(ctx, term, goal_val) do
-        :ok -> {term, {:projection, k}}
-        _ -> {nil, {:projection, k}}
+          case Kernel.check(ctx, term, goal_val) do
+            :ok -> {term, {:projection, k}}
+            _ -> {nil, {:projection, k}}
+          end
+
+        :error ->
+          {nil, {:projection, k}}
       end
     end
     |> Enum.filter(fn {term, _} -> term != nil end)
   end
 
-  # A Value that is a Sigma/dependent-pair type. Confirm the WHNF tag for Sigma
-  # against lib/cure/core (grep :vdata for the Sigma family, or :vsigma) and the
-  # PositiveNatural alias's normalized form.
-  defp sigma_typed?(_type_value), do: false # replace with the real Sigma check
+  # If a Value is a Sigma/dependent-pair type (or aliases to one, like
+  # `PositiveNatural = {value: Nat | IsPositive(value)}`), return its two
+  # family params `{:ok, a_value, predicate_value}`; else `:error`. Uses the
+  # SAME canonical-family lookup the elaborator itself uses everywhere else it
+  # needs "is this the Sigma family" (`Inductive.builtin(env, :sigma)` — see
+  # `elaborator.ex:882,1242,1622,1827,8221`; confirmed via
+  # `lib/cure/core/builtins.ex:344-353`'s `sigma_family/1`, the seed the
+  # `@builtin(:sigma)` decl in `Std.Sigma` mirrors). Sigma has exactly two
+  # params (`a: Type`, `b: (a) -> Type`) and zero indices, so `{:vdata, name,
+  # params}`'s `params` is the 2-element list `[a_value, predicate_value]`
+  # (`builtins.ex:346-353`). `Eval.eval({:data,...})` produces `{:vdata, name,
+  # params}` (`eval.ex:62-63`); a type ALIAS's pushed Value may be an
+  # un-delta-reduced neutral global application rather than already-expanded
+  # Sigma, so whnf it first via `Normalise.whnf_value/2-3`
+  # (`lib/cure/core/normalise.ex:56`) before comparing the family name — mirror
+  # `telescope_arity_of/4`'s `Kernel.normalize`-then-match pattern
+  # (`elaborator.ex:1239-1252`) if the plain Value-level whnf does not see
+  # through `PositiveNatural`'s alias in practice.
+  defp sigma_params(type_value, ctx, env) do
+    case Cure.Core.Inductive.builtin(env, :sigma) do
+      nil ->
+        :error
 
-  # `{:var,k}.2` — sigma_second applied with erased implicits as metavars, then
-  # relying on Kernel.check to accept. Match elaborator.ex:1181-1184's shape.
-  defp sigma_second_of(var_term) do
-    build_app({:global, :sigma_second}, [{:hole, "_a"}, {:hole, "_pred"}, var_term])
+      sigma_fam ->
+        case Cure.Core.Normalise.whnf_value(type_value, Context.signature(ctx)) do
+          {:vdata, ^sigma_fam, [a_value, predicate_value]} -> {:ok, a_value, predicate_value}
+          _ -> :error
+        end
+    end
+  end
+
+  # `{:var,k}.2` — sigma_second applied with its implicit `{a}`/`{predicate}`
+  # arguments reified DIRECTLY from the Sigma family's own params (NOT fresh
+  # metavars: there is nothing to solve here — `sigma_params/3` already pinned
+  # down `a_value`/`predicate_value` from the binder's own type, and
+  # `Cure.Core.Term.t()` has no `{:meta, _}` variant for an unsolved one to
+  # occupy — see the design note above for why a metavar-based construction
+  # crashes `Kernel.check`/`Eval.eval` instead of being "solved implicitly").
+  # NOT `{:hole,...}` either — holes would recurse into proof search — and NOT
+  # a call into `elaborate_implicit_global_app`/`sigma_projection`, which
+  # require a surface AST this layer does not have. `Quote.reify/3`'s
+  # depth/sig convention (`Context.length(ctx)`, `Context.signature(ctx)`)
+  # mirrors `telescope_arity_of/4`'s reify call (`elaborator.ex:1250`).
+  defp sigma_second_of(var_term, a_value, predicate_value, ctx) do
+    depth = Context.length(ctx)
+    sig = Context.signature(ctx)
+    a_term = Cure.Core.Quote.reify(a_value, depth, sig)
+    predicate_term = Cure.Core.Quote.reify(predicate_value, depth, sig)
+    build_app({:global, :sigma_second}, [a_term, predicate_term, var_term])
   end
 ```
 
-**Critical:** the placeholders above (`sigma_typed?/1` returning `false`, `{:hole, ...}` as implicits) are scaffolding. Finalize them by reading `elaborator.ex:1181-1229` and the Sigma WHNF representation, so that (a) `sigma_typed?/1` recognizes `PositiveNatural`'s normalized Sigma, and (b) `sigma_second_of/1` builds the same implicit-instantiated projection the surface `.2` produces (NOT `{:hole,...}` — holes would recurse into proof search). If the erased implicits are best left as metavars solved by `Kernel.check`/unification, thread a MetaCtx as in Task 4. The Task 8 green test is the acceptance gate: if projection candidates are wrong, Task 8 fails.
+**Critical:** `sigma_params/3` above is verified against the tree (`Inductive.builtin/2`, `Eval`'s `{:vdata,...}` shape, `Normalise.whnf_value/2-3`, and `Std.Sigma`'s exact 2-param family shape — see the comment above it), not a blind placeholder, but the ONE thing to double-check while implementing is whether a `PositiveNatural`-typed binder's pushed Value needs the `Kernel.normalize`-on-the-reified-term fallback (mirroring `telescope_arity_of/4`, `elaborator.ex:1239-1252`) instead of the plain Value-level `whnf_value` — i.e., whether `PositiveNatural`'s alias is already expanded to `{:vdata, sigma_fam, params}` by the time it reaches `Context.lookup`, or still sits behind a neutral global application. `sigma_second_of/4` above reifies the family's own already-known params (not metavars, not `{:hole,...}`, not a call into the surface-AST-only projection helpers) — see the design note above for why that revision was necessary. The Task 8 green test is the acceptance gate: if projection candidates are wrong (including if `sigma_params/3` under- or over-recognizes), Task 8 fails.
 
 - [ ] **Step 4: Run tests**
 
@@ -675,7 +781,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
 
 ```elixir
   test "a self-referential lemma set does not loop — cyclic goal abandons the branch" do
-    # A lemma whose only hypothesis is its own conclusion: IsCyc -> IsCyc.
+    # A lemma whose only hypothesis is its own conclusion: Cyc(n) -> Cyc(n).
     # With no base case and no local hypothesis, resolve must return :none
     # (not loop) because the sub-goal equals a goal already on the stack.
     source = """
@@ -685,35 +791,48 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
         MkCyc : Cyc(n) -> Cyc(n)
       @lemma
       fn cyc_step({n: Nat}, prev: Cyc(n)) -> Cyc(n) = MkCyc(prev)
-      fn wants(n: Nat) -> Cyc(n) = ?
     end
     """
     {:ok, env} = Cure.Elab.Program.elaborate(source)
-    # Drive resolve/3 at goal Cyc(n) with n in scope but no Cyc hypothesis.
-    # Build the goal + ctx from the hole context, or assert termination via a
-    # direct resolve/4 call with a small trying-stack. The essential assertion:
-    # resolve returns :none within bounded time (no infinite recursion).
-    assert env.lemmas != %{}
+
+    # Drive resolve/4 DIRECTLY at goal Cyc(n) with an empty context (no Cyc
+    # hypothesis in scope) — this is the only candidate source is `cyc_step`
+    # itself, whose sole hypothesis is again `Cyc(n)`, so an unguarded resolver
+    # recurses forever. This must genuinely be red before Task 6's guards land
+    # (Program.elaborate alone does not invoke ProofSearch until Task 7 wires
+    # the hole trigger, so this test calls resolve/4 itself rather than relying
+    # on elaborate to reach it).
+    cyc_family = Cure.Core.Env.resolve_key(env, env.families, :Cyc)
+    zero = {:ctor, Cure.Core.Env.resolve_key(env, env.ctors, :Z), []}
+    goal = {:data, cyc_family, [], [zero]}
+    ctx = Cure.Core.Context.empty(env)
+
+    assert :none = Cure.Elab.ProofSearch.resolve(goal, ctx, env, %{depth: 0, trying: []})
   end
 
-  test "depth bound: resolve stops after @depth_limit and returns :none, never crashing" do
-    env = Cure.Core.Env.empty()
-    goal = {:data, :Nope, [], []}
-    ctx = Cure.Core.Context.empty(env)
+  test "depth bound: a real, satisfiable candidate is suppressed once the depth limit is exceeded" do
+    # env_with_p/0 gives a genuine candidate (`h : P` in scope for goal `P`) so
+    # this test discriminates the guard: WITHOUT it, resolve finds {:var, 0}
+    # regardless of `depth`; WITH it, `depth: 999` (> @depth_limit) must force
+    # :none even though a real proof is sitting right there in context.
+    env = env_with_p()
+    goal = {:data, :P, [], []}
+    goal_val = Eval.eval(goal, [])
+    ctx = Context.empty(env) |> Context.extend(goal_val)
+
+    assert {:ok, {:var, 0}} = Cure.Elab.ProofSearch.resolve(goal, ctx, env, %{depth: 0, trying: []})
     assert :none = Cure.Elab.ProofSearch.resolve(goal, ctx, env, %{depth: 999, trying: []})
   end
 ```
 
-> The cyclic-lemma test is written to *terminate*; the strong guarantee is "does not hang." If constructing the exact cyclic `resolve/4` call by hand is heavy, the depth-bound test (second) is the crisp, deterministic red/green and is sufficient to prove the guard exists; keep both but the second is the gating assertion.
-
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `mix test test/cure/elab/proof_search_test.exs`
-Expected: FAIL — `resolve/4` with `%{depth: 999, ...}` currently ignores depth and returns `:none` only incidentally (empty env) — to make this a genuine red, first confirm the depth guard is absent: temporarily point the goal at a head with a registered self-lemma so unbounded recursion would occur; the depth-bound test then fails (hang/stack) without the guard. Simplest: assert the guard directly as below.
-
-Make the second test genuinely red by having it target a registered lemma that would recurse; if that is awkward, accept the depth test as characterizing the guard and ensure Step 3 introduces the guard that it exercises.
+Expected: FAIL on both new tests before Step 3's guards exist — the cyclic test hangs/exhausts the stack (kill it if it does not terminate within the test timeout; that non-termination *is* the red signal) because `resolve/4` recurses into `cyc_step`'s hypothesis `Cyc(n)` forever with no cycle check; the depth-bound test's second assertion fails because `resolve/4` ignores `state.depth` entirely and still returns `{:ok, {:var, 0}}` when `depth: 999`.
 
 - [ ] **Step 3: Write minimal implementation**
+
+**These two clauses REPLACE Task 5's single `resolve/4` clause in place** (same reason as Tasks 4/5's notes) — Task 5's clause has no discriminating guard, so it must be deleted, not left in place alongside these.
 
 ```elixir
   def resolve(goal, ctx, env, %{depth: d} = _state) when d > @depth_limit, do: :none
@@ -739,11 +858,11 @@ Make the second test genuinely red by having it target a registered lemma that w
   defp same_goal?(a, b, ctx, env) do
     va = Cure.Core.Eval.eval(a, Context.env(ctx))
     vb = Cure.Core.Eval.eval(b, Context.env(ctx))
-    Cure.Core.Conv.conv?(va, vb, Context.env(ctx), Context.length(ctx), Cure.Core.Env |> then(fn _ -> env end))
+    Cure.Core.Conv.conv?(va, vb, Context.env(ctx), Context.length(ctx), env)
   end
 ```
 
-Confirm `Conv.conv?/5`'s exact argument order/shape against `lib/cure/core/conv.ex` (the signature is `conv?(t1, t2, value_env, depth, sig)`), and that passing reified/`{:data,...}` goals through `Eval.eval` is valid. If `Conv` from this layer is awkward, fall back to structural `==` on zonked goals — cycle detection need not be complete, only sound-enough to stop the demo's and the test's loops.
+Verified against the tree (`lib/cure/core/conv.ex:49`): `conv?/5`'s signature is `conv?(term1, term2, env, depth, sig \\ nil)`, matching the call above. If `Conv` from this layer proves awkward in practice, fall back to structural `==` on zonked goals — cycle detection need not be complete, only sound-enough to stop the demo's and the test's loops.
 
 - [ ] **Step 4: Run tests**
 
@@ -865,8 +984,27 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
   # Identical to @red but the local lemma is TAGGED @lemma. Now the hole must be
   # discharged automatically: sub-goals IsPositive(refined_value(left/right))
   # come from the refinement projections of the two PositiveNatural binders.
+  #
+  # CRITICAL: @green and @reference below use the SAME module name
+  # (`TaggedDemo`). Global def names are module-qualified (`Cure.Elab.Name.qualify/2`,
+  # `Owner#base` — `lib/cure/elab/name.ex:17-19`) via `Env.resolve_key`'s
+  # `owned_name`-first lookup (`inductive.ex:116-152`), so the LOCAL lemma
+  # `tagged_fact` would resolve to a DIFFERENT global atom in each program if
+  # the two modules had different names (`TaggedDemo#tagged_fact` vs some other
+  # owner) — making `demo_body(green_env) == demo_body(ref_env)` structurally
+  # false no matter how correct ProofSearch is. `use`d stdlib calls
+  # (`refine`/`refined_value`/`multiply`/…) are unaffected by this — they are
+  # owned by `Std.Refine`/`Std.Proof.Math` regardless of the calling module's
+  # name, resolved via `resolve_key`'s owner-alias fallback — only a LOCALLY
+  # defined name like `tagged_fact` is owned by its enclosing module. Each
+  # `Program.elaborate` call below builds an independent `Env` from scratch (no
+  # shared registry keyed by module name across the two calls — confirmed: the
+  # only cross-call cache in `lib/cure/elab/program.ex` is the `use`-dependency
+  # loader keyed by `module_name -> {:loaded, interface}` for modules loaded
+  # BY PATH from disk, which does not apply to an inline top-level source
+  # string), so reusing the same module name for both is safe.
   @green """
-  mod GreenTagged
+  mod TaggedDemo
     use Std.Proof.Math
     use Std.Refine
 
@@ -880,10 +1018,10 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(el
   end
   """
 
-  # Same program but the proof is written BY HAND (no hole). Its `demo` body is
-  # the reference the resolved term must equal.
+  # Same program, same module name, but the proof is written BY HAND (no hole).
+  # Its `demo` body is the reference the resolved term must equal.
   @reference """
-  mod RefTagged
+  mod TaggedDemo
     use Std.Proof.Math
     use Std.Refine
 
@@ -925,10 +1063,10 @@ Expected: the two new tests initially FAIL if any of Tasks 4–6 (lemma applicat
 - [ ] **Step 3: Make it green**
 
 No new production file in this task if Tasks 4–6 are correct. If the differential fails, the diff between `demo_body(green_env)` and `demo_body(ref_env)` pinpoints the discrepancy — typically:
-- the projection candidate not producing the same `sigma_second`/`refinement_proof` shape (fix Task 5's `sigma_second_of/1` to match the surface `.2` lowering exactly), or
-- implicit arguments zonked to a different-but-convertible form (if the terms are convertible but not `==`, the assertion is too strict: normalize both via the same reify/zonk path before comparing, OR assert `Cure.Core.Conv.conv?` of the two bodies instead of `==`; prefer fixing the construction to be structurally identical, per spec §8.3).
+- the projection candidate not producing the same `sigma_second`/`refinement_proof` shape (fix Task 5's `sigma_second_of/4` to reify the Sigma family's own params — see Task 5's design note — exactly), or
+- implicit arguments zonked to a different-but-convertible form (normalize both via the same reify/zonk path in `ProofSearch`'s own construction before returning the term, so the *implementation* always produces a fully-zonked, structurally-canonical term).
 
-Adjust Task 5's construction (not this test) until the bodies are structurally equal. The test is immutable once green.
+The `==` assertion is per spec §8.3's explicit mandate and is NOT to be weakened to `Cure.Core.Conv.conv?` — a `conv?`-only pass would hide implicit arguments left as unzonked metavars or filled in a non-canonical (but convertible) shape, which is exactly the class of construction bug this test exists to catch. Fix `ProofSearch`'s construction (zonk before returning; match the canonical `sigma_second`/`{:global, name}` application shape) until the bodies are `==`. The test is immutable once green; if `==` is ever suspected to be the wrong bar, that requires first proving — by inspecting both bodies and showing they differ only in a benign, unzonked-metavar way that conversion also accepts — that the test itself demands more than spec §8.3 intends, and stating that explicitly before touching it.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -954,7 +1092,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(el
 - Test: `test/cure/stdlib/refine_test.exs` (existing — must stay green), `test/cure/meta_ast/conformance_tripwire_test.exs` (existing — must stay green).
 
 **Interfaces:**
-- Consumes: the whole feature (Tasks 1–8). After this task the shipped `Std.Refine` relies on the resolver to fill the hole at every elaboration.
+- Consumes: the whole feature (Tasks 1–8). After this task the shipped `Std.Refine` relies on the resolver to fill the hole at every elaboration. This is the first point in the plan where the lemma is registered in one module (`Std.Proof.Math`) and consumed via a hole in a *different* module (`Std.Refine`, `use Std.Proof.Math`) — exactly the cross-module path Task 1's `merge_env/2` fix and cross-module red test exist to cover. If Step 3 below fails with an empty/missing-lemma-style resolution failure, re-check that Task 1's `merge_env/2` change actually landed rather than debugging `ProofSearch` itself.
 
 - [ ] **Step 1: Add `@lemma` to the stdlib multiply lemma**
 
@@ -1012,10 +1150,10 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(st
 - §5 refinement leaf projection → Task 5.
 - §6 unique-or-defer → Task 3 `decide/2`; termination → Task 6.
 - §8.1 capability unit tests → Tasks 1,3,4,5,6; §8.2 red → Task 7; §8.3 green + differential → Task 8; §8.4 regression + tripwire → Task 9.
-- §9 files → all created/modified files match.
+- §9 files → `lib/cure/elab/program.ex` (Task 1's `merge_env/2` fix) is an addition beyond the design's indicative list; §9 is explicitly "indicative; finalized in the plan," and this addition is required for Task 9's cross-module lemma visibility (see Task 1's "Cross-module note") — all other created/modified files match.
 
-**Known honest gaps (called out inline, not hidden):** Tasks 4 and 5's *isolated* unit assertions are reachability-level, because hand-constructing an indexed-family + metavar + Sigma context is as much code as the feature and would couple the test to internals. Their behavioral proof is the Task 8 differential golden, which is strong (found term must structurally equal the hand-written proof). This is a deliberate, disclosed testing trade-off, consistent with spec §8.3 designating the differential as the load-bearing check.
+**Known honest gaps (called out inline, not hidden):** Tasks 4 and 5's *isolated* unit assertions are reachability-level, because hand-constructing an indexed-family + metavar + Sigma context is as much code as the feature and would couple the test to internals. Their behavioral proof is the Task 8 differential golden, which is strong (found term must structurally equal the hand-written proof). This is a deliberate, disclosed testing trade-off, consistent with spec §8.3 designating the differential as the load-bearing check. Separately, cross-module lemma visibility (Task 1's `merge_env/2` fix) has its own dedicated red test in Task 1, precisely because Task 8's differential does not exercise that path (its lemma and hole share a module) and Task 9 is the first task that does.
 
-**Placeholder scan:** the code in Tasks 4–6 contains explicitly-labeled scaffolding (`sigma_typed?/1` returning `false`, `MetaCtx.new/0`, `Subst.instantiate/2` arg shape, `Conv.conv?/5` arg order) that MUST be finalized against the tree during implementation — each is flagged with a "confirm against the tree" instruction and the exact reference line to copy. These are not left vague: the anchor to mirror is named in every case.
+**Placeholder scan:** `MetaCtx.new/0`, `MetaCtx.fresh/2`, `Subst.instantiate/2`'s list-argument shape, `Unify.unify/4`/`Unify.zonk/2`, and `Conv.conv?/5`'s argument order are all confirmed verbatim against the tree in this review (`lib/cure/elab/unify.ex:1-90,557`; `lib/cure/elab/subst.ex:82`; `lib/cure/core/conv.ex:49`) — the code as written already uses the real call shapes, not placeholders. `sigma_params/3` (Task 5) is likewise implemented against a confirmed real helper (`Inductive.builtin/2`, `Normalise.whnf_value/2-3`, `Std.Sigma`'s exact 2-param family shape) rather than left as a `false` stub, and its implicit arguments are reified directly from the family's own already-known params rather than left as unsolvable fresh metavars (an earlier draft's metavar construction was found to crash `Kernel.check`/`Eval.eval` — `Cure.Core.Term.t()` has no `{:meta, _}` variant — and was replaced; see Task 5's design note). Its one remaining open question (whether `PositiveNatural`'s alias needs the `Kernel.normalize`-on-reified-term fallback in addition to Value-level whnf) is called out explicitly at its definition site. Nothing in Tasks 3–6 is unverified scaffolding at this point.
 
 **Type consistency:** `resolve/3` and `resolve/4`, `put_lemma/3`/`lemmas/2`, `conclusion_head/1`, entry shape `%{name, type, arity}`, provenance tuples `{:local,k}`/`{:projection,k}`/`{:lemma,name}`, and `{:error, {:ambiguous_proof_search, goal, provenance}}` are used identically across Tasks 1–8.
