@@ -2357,6 +2357,18 @@ defmodule Cure.Compiler.Parser do
               {variable(token), advance(state)}
             end
 
+          # `builtin infix|prefix|postfix <op> : Group` (Phase 3, contextual):
+          # marks an operator as a fixed, non-overloadable syntactic operator
+          # (`.`, `|>`, `<-|`, `=`, `..`, augmented assigns) that user code may
+          # not rebind. Recognised only immediately ahead of a fixity
+          # declaration; every other `builtin` stays an ordinary identifier.
+          "builtin" ->
+            if builtin_fixity_decl_ahead?(state) do
+              parse_fixity(advance(state), builtin: true)
+            else
+              {variable(token), advance(state)}
+            end
+
           # Contextual keyword: `with e <arms>` is a with-abstraction only in
           # expression-prefix position and only when what follows `with` can
           # begin a scrutinee. The container macro's payload-binder `with` is
@@ -5410,6 +5422,21 @@ defmodule Cure.Compiler.Parser do
     op != nil and colon != nil and colon.type == :colon and fixity_op_token?(op)
   end
 
+  # True at `builtin infix|prefix|postfix <op> :` — a `builtin`-prefixed fixity
+  # declaration. The `builtin` marker is contextual: it is promoted only here,
+  # so a bare `builtin` (or `builtin` used as a value/binder) is untouched.
+  defp builtin_fixity_decl_ahead?(state) do
+    case peek_at(state, 1) do
+      %Token{type: :identifier, value: v} when v in ["infix", "prefix", "postfix"] ->
+        op = peek_at(state, 2)
+        colon = peek_at(state, 3)
+        op != nil and colon != nil and colon.type == :colon and fixity_op_token?(op)
+
+      _ ->
+        false
+    end
+  end
+
   # An operator lexeme is any symbolic-operator token or a word/backtick
   # identifier used as an operator name — anything that is not a delimiter.
   defp fixity_op_token?(%Token{type: type}),
@@ -5417,8 +5444,9 @@ defmodule Cure.Compiler.Parser do
 
   defp fixity_op_token?(_), do: false
 
-  # `infix|prefix|postfix <op> : Group`
-  defp parse_fixity(state) do
+  # `infix|prefix|postfix <op> : Group` (optionally `builtin`-prefixed, which the
+  # caller signals with `builtin: true`).
+  defp parse_fixity(state, opts \\ []) do
     kw = peek(state)
     fixity = String.to_atom(to_string(kw.value))
     state = advance(state)
@@ -5435,7 +5463,15 @@ defmodule Cure.Compiler.Parser do
         _ -> {nil, state}
       end
 
-    meta = [fixity: fixity, operator: lexeme, group: group, line: kw.line, col: kw.col]
+    meta = [
+      fixity: fixity,
+      operator: lexeme,
+      group: group,
+      builtin: Keyword.get(opts, :builtin, false),
+      line: kw.line,
+      col: kw.col
+    ]
+
     {{:fixity, meta, []}, state}
   end
 

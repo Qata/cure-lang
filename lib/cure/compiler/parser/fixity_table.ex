@@ -41,9 +41,10 @@ defmodule Cure.Compiler.Parser.FixityTable do
 
   defstruct groups: %{}, ops: %{}, ranks: %{}, reach: %{}
 
+  @type op_entry :: %{group: group_name(), builtin: boolean()}
   @type t :: %__MODULE__{
           groups: %{group_name() => %{assoc: assoc(), higher_than: [group_name()], lower_than: [group_name()]}},
-          ops: %{String.t() => %{fixity: fixity(), group: group_name()}},
+          ops: %{String.t() => %{optional(fixity()) => op_entry()}},
           ranks: %{group_name() => pos_integer()},
           reach: %{group_name() => MapSet.t(group_name())}
         }
@@ -74,21 +75,33 @@ defmodule Cure.Compiler.Parser.FixityTable do
     |> recompute()
   end
 
-  @doc "Register an infix operator `lexeme` in `group`."
-  @spec add_infix(t(), String.t(), group_name()) :: t()
-  def add_infix(table, lexeme, group), do: add_op(table, lexeme, :infix, group)
+  @doc """
+  Register an infix operator `lexeme` in `group`.
 
-  @doc "Register a prefix operator `lexeme` in `group`."
-  @spec add_prefix(t(), String.t(), group_name()) :: t()
-  def add_prefix(table, lexeme, group), do: add_op(table, lexeme, :prefix, group)
+  Options:
+    * `:builtin` — when `true`, marks the operator as a fixed syntactic
+      operator that user code may not rebind (default `false`).
 
-  @doc "Register a postfix operator `lexeme` in `group`."
-  @spec add_postfix(t(), String.t(), group_name()) :: t()
-  def add_postfix(table, lexeme, group), do: add_op(table, lexeme, :postfix, group)
+  A lexeme may hold both an infix and a prefix/postfix registration (e.g. `-`
+  is infix subtraction *and* prefix negation); the fixities are stored side by
+  side and the per-fixity queries pick out the one they need.
+  """
+  @spec add_infix(t(), String.t(), group_name(), keyword()) :: t()
+  def add_infix(table, lexeme, group, opts \\ []), do: add_op(table, lexeme, :infix, group, opts)
 
-  defp add_op(%__MODULE__{ops: ops} = table, lexeme, fixity, group)
+  @doc "Register a prefix operator `lexeme` in `group`. See `add_infix/4` for options."
+  @spec add_prefix(t(), String.t(), group_name(), keyword()) :: t()
+  def add_prefix(table, lexeme, group, opts \\ []), do: add_op(table, lexeme, :prefix, group, opts)
+
+  @doc "Register a postfix operator `lexeme` in `group`. See `add_infix/4` for options."
+  @spec add_postfix(t(), String.t(), group_name(), keyword()) :: t()
+  def add_postfix(table, lexeme, group, opts \\ []), do: add_op(table, lexeme, :postfix, group, opts)
+
+  defp add_op(%__MODULE__{ops: ops} = table, lexeme, fixity, group, opts)
        when is_binary(lexeme) and is_atom(group) do
-    %{table | ops: Map.put(ops, lexeme, %{fixity: fixity, group: group})}
+    entry = %{group: group, builtin: Keyword.get(opts, :builtin, false)}
+    by_fixity = ops |> Map.get(lexeme, %{}) |> Map.put(fixity, entry)
+    %{table | ops: Map.put(ops, lexeme, by_fixity)}
   end
 
   @doc """
@@ -97,7 +110,7 @@ defmodule Cure.Compiler.Parser.FixityTable do
   """
   @spec infix_bp(t(), String.t()) :: {pos_integer(), pos_integer()} | :not_infix
   def infix_bp(%__MODULE__{ops: ops, groups: groups, ranks: ranks}, lexeme) do
-    with %{fixity: :infix, group: group} <- Map.get(ops, lexeme),
+    with %{infix: %{group: group}} <- Map.get(ops, lexeme),
          %{assoc: assoc} <- Map.get(groups, group),
          bp when is_integer(bp) <- Map.get(ranks, group) do
       right = if assoc == :right, do: bp, else: bp + 1
@@ -110,7 +123,7 @@ defmodule Cure.Compiler.Parser.FixityTable do
   @doc "Returns the right binding power of a prefix operator `lexeme`, or `:not_prefix`."
   @spec prefix_bp(t(), String.t()) :: pos_integer() | :not_prefix
   def prefix_bp(%__MODULE__{ops: ops, ranks: ranks}, lexeme) do
-    with %{fixity: :prefix, group: group} <- Map.get(ops, lexeme),
+    with %{prefix: %{group: group}} <- Map.get(ops, lexeme),
          bp when is_integer(bp) <- Map.get(ranks, group) do
       bp
     else
@@ -118,12 +131,32 @@ defmodule Cure.Compiler.Parser.FixityTable do
     end
   end
 
-  @doc "True when `lexeme`'s group is non-associative (`assoc: :none`)."
+  @doc """
+  True when any of `lexeme`'s fixity groups is non-associative (`assoc: :none`),
+  which the parser refuses to chain.
+  """
   @spec non_assoc?(t(), String.t()) :: boolean()
   def non_assoc?(%__MODULE__{ops: ops, groups: groups}, lexeme) do
     case Map.get(ops, lexeme) do
-      %{group: group} -> match?(%{assoc: :none}, Map.get(groups, group))
-      _ -> false
+      by_fixity when is_map(by_fixity) ->
+        Enum.any?(by_fixity, fn {_fixity, %{group: group}} ->
+          match?(%{assoc: :none}, Map.get(groups, group))
+        end)
+
+      _ ->
+        false
+    end
+  end
+
+  @doc "True when `lexeme` is registered (in any fixity) as a non-overloadable built-in."
+  @spec builtin?(t(), String.t()) :: boolean()
+  def builtin?(%__MODULE__{ops: ops}, lexeme) do
+    case Map.get(ops, lexeme) do
+      by_fixity when is_map(by_fixity) ->
+        Enum.any?(by_fixity, fn {_fixity, %{builtin: b}} -> b end)
+
+      _ ->
+        false
     end
   end
 
@@ -134,8 +167,8 @@ defmodule Cure.Compiler.Parser.FixityTable do
   """
   @spec incomparable?(t(), String.t(), String.t()) :: boolean()
   def incomparable?(%__MODULE__{ops: ops, reach: reach}, lexeme_a, lexeme_b) do
-    with %{group: ga} <- Map.get(ops, lexeme_a),
-         %{group: gb} <- Map.get(ops, lexeme_b) do
+    with ga when is_atom(ga) <- primary_group(Map.get(ops, lexeme_a)),
+         gb when is_atom(gb) <- primary_group(Map.get(ops, lexeme_b)) do
       cond do
         ga == gb -> false
         MapSet.member?(Map.get(reach, ga, MapSet.new()), gb) -> false
@@ -147,14 +180,32 @@ defmodule Cure.Compiler.Parser.FixityTable do
     end
   end
 
-  @doc "Returns the fixity of a registered `lexeme`, or `nil`."
+  @doc """
+  Returns the fixity of a registered `lexeme`, or `nil`. When a lexeme carries
+  more than one fixity (e.g. `-` is both infix and prefix), the infix fixity is
+  reported in preference, then prefix, then postfix.
+  """
   @spec fixity(t(), String.t()) :: fixity() | nil
   def fixity(%__MODULE__{ops: ops}, lexeme) do
     case Map.get(ops, lexeme) do
-      %{fixity: f} -> f
-      _ -> nil
+      by_fixity when is_map(by_fixity) ->
+        Enum.find([:infix, :prefix, :postfix], &Map.has_key?(by_fixity, &1))
+
+      _ ->
+        nil
     end
   end
+
+  # The representative group for a lexeme (infix wins, then prefix, then
+  # postfix), used by `incomparable?/3` when a lexeme carries several fixities.
+  defp primary_group(by_fixity) when is_map(by_fixity) do
+    case Enum.find([:infix, :prefix, :postfix], &Map.has_key?(by_fixity, &1)) do
+      nil -> nil
+      fixity -> by_fixity |> Map.fetch!(fixity) |> Map.fetch!(:group)
+    end
+  end
+
+  defp primary_group(_), do: nil
 
   # -- Ranking + reachability (memoized on add_group) -------------------------
 

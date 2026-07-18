@@ -1260,6 +1260,42 @@ defmodule Cure.Compiler.Printer do
     "#{header}\n#{pad}#{body}"
   end
 
+  # -- Fixity declarations (Phase 3) ----------------------------------------
+  #
+  # `precedencegroup`/`infix`/`prefix`/`postfix` reprint to the exact surface the
+  # parser accepts (parser.ex `parse_precedencegroup`/`parse_fixity`). Operator
+  # lexemes are always backtick-quoted so any symbolic spelling (`+`, `<>`, `..`)
+  # round-trips through the lexer as a single identifier token, keeping
+  # print∘reparse a fixpoint regardless of the operator's other lexical role.
+  defp to_string({:precedencegroup, meta, _}, depth, indent) do
+    name = Atom.to_string(Keyword.fetch!(meta, :name))
+    pad = String.duplicate(indent, depth + 1)
+
+    fields =
+      [
+        case Keyword.get(meta, :assoc) do
+          nil -> nil
+          assoc -> "associativity: #{assoc}"
+        end,
+        precedencegroup_names_field("higher_than", Keyword.get(meta, :higher_than)),
+        precedencegroup_names_field("lower_than", Keyword.get(meta, :lower_than))
+      ]
+      |> Enum.reject(&is_nil/1)
+
+    case fields do
+      [] -> "precedencegroup #{name}"
+      _ -> "precedencegroup #{name}\n#{pad}" <> Enum.join(fields, "\n#{pad}")
+    end
+  end
+
+  defp to_string({:fixity, meta, _}, _depth, _indent) do
+    builtin = if Keyword.get(meta, :builtin, false), do: "builtin ", else: ""
+    fixity = Keyword.fetch!(meta, :fixity)
+    op = Keyword.fetch!(meta, :operator)
+    group = Atom.to_string(Keyword.fetch!(meta, :group))
+    "#{builtin}#{fixity} `#{op}` : #{group}"
+  end
+
   # -- Quasiquotation (`quote <form>`, `$(e)`, `$(e ...)`) -------------------
 
   # SP5.1 surface sugar (parser.ex `parse_quote`/`parse_splice`). The printer
@@ -1283,6 +1319,15 @@ defmodule Cure.Compiler.Printer do
 
   defp to_string(other, _depth, _indent) do
     raise Cure.Compiler.Printer.UnprintableNodeError, node: other
+  end
+
+  # `higher_than:` / `lower_than:` group-name lists for a `precedencegroup` body
+  # (see the `:precedencegroup` clause above). `nil`/`[]` omit the line entirely.
+  defp precedencegroup_names_field(_key, nil), do: nil
+  defp precedencegroup_names_field(_key, []), do: nil
+
+  defp precedencegroup_names_field(key, names) when is_list(names) do
+    "#{key}: " <> Enum.map_join(names, " ", &Atom.to_string/1)
   end
 
   # Constructor fields use a dedicated arrow-chain grammar. A multi-domain Π
