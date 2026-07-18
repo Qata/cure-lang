@@ -2776,10 +2776,21 @@ defmodule Cure.Compiler.Parser do
   defp parse_call(state, func) do
     token = peek(state)
     state = advance(state)
-    {args, state} = parse_call_args(state)
+    # Argument labels (`f(to: v)`) are a FUNCTION-call spelling. A PascalCase head
+    # is a constructor application, where `Ctor(n: T, …)` is instead a TYPED
+    # PATTERN (`maybe_wrap_as/2`) — the two spellings are syntactically identical
+    # (`identifier :`), so the head's case is what disambiguates them. Only allow
+    # label-grabbing for the non-constructor (function) head.
+    allow_labels = not is_pascal_case?(func)
+    {args, arg_labels, state} = parse_call_args(state, allow_labels)
     name = extract_call_name(func)
 
     meta = [name: name, line: token.line, col: token.col]
+
+    # Carry written argument labels only when at least one is present, so the
+    # common all-positional call keeps its exact historical meta shape.
+    meta =
+      if Enum.any?(arg_labels), do: Keyword.put(meta, :arg_labels, arg_labels), else: meta
 
     # When the callee is an expression (e.g. f(x)(y)), preserve it so
     # the codegen can compile it as an expression-based call.
@@ -2794,37 +2805,62 @@ defmodule Cure.Compiler.Parser do
     {ast, state}
   end
 
-  defp parse_call_args(state) do
+  # Returns {args, labels, state}: `labels` is position-aligned with `args`, each
+  # entry the written argument label (`f(to: v)`) or `nil` when the argument is
+  # positional. Callers that ignore labels bind the middle element to `_`.
+  defp parse_call_args(state, allow_labels) do
     state = skip_newlines(state)
 
     case peek(state) do
       %Token{type: :rparen} ->
-        {[], advance(state)}
+        {[], [], advance(state)}
 
       _ ->
+        {label, state} = parse_arg_label(state, allow_labels)
         {first, state} = parse_expr(state, 0)
         {first, state} = maybe_wrap_as(first, state)
         state = skip_newlines(state)
-        {rest, state} = parse_more_args(state)
+        {rest, rest_labels, state} = parse_more_args(state, allow_labels)
         state = skip_newlines(state)
         state = expect(state, :rparen)
-        {[first | rest], state}
+        {[first | rest], [label | rest_labels], state}
     end
   end
 
-  defp parse_more_args(state) do
+  defp parse_more_args(state, allow_labels) do
     case peek(state) do
       %Token{type: :comma} ->
         state = advance(state)
         state = skip_newlines(state)
+        {label, state} = parse_arg_label(state, allow_labels)
         {expr, state} = parse_expr(state, 0)
         {expr, state} = maybe_wrap_as(expr, state)
         state = skip_newlines(state)
-        {rest, state} = parse_more_args(state)
-        {[expr | rest], state}
+        {rest, rest_labels, state} = parse_more_args(state, allow_labels)
+        {[expr | rest], [label | rest_labels], state}
 
       _ ->
-        {[], state}
+        {[], [], state}
+    end
+  end
+
+  # A leading `identifier :` at an argument position is a Swift-style argument
+  # label (`f(to: v)`). This spelling is otherwise a parse error in a paren call
+  # — `:colon` has no infix binding power — so recognising it here is purely
+  # additive and never reinterprets valid existing syntax. Consumes the
+  # identifier and the colon; returns {nil, state} when no label is present.
+  #
+  # `allow_labels` is false under a PascalCase (constructor) head, where the same
+  # `identifier :` spelling is a TYPED PATTERN (`Cons(n: Int, rest)`) that must
+  # reach `maybe_wrap_as/2` untouched.
+  defp parse_arg_label(state, allow_labels) do
+    tok = peek(state)
+    next = peek_at(state, 1)
+
+    if allow_labels && tok && tok.type == :identifier && next && next.type == :colon do
+      {to_string(tok.value), state |> advance() |> advance()}
+    else
+      {nil, state}
     end
   end
 
@@ -5040,6 +5076,19 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
+    # Two-name label form `label internal: T` (Swift). A second identifier before
+    # the annotation means the first name was the EXTERNAL caller-facing label and
+    # this second one is the INTERNAL body binder. Single-name params carry no
+    # label (the one name serves as both, and any call label is optional).
+    {label, name, state} =
+      case peek(state) do
+        %Token{type: :identifier} = internal_token ->
+          {name, to_string(internal_token.value), advance(state)}
+
+        _ ->
+          {nil, name, state}
+      end
+
     # Optional type annotation `: Type`, or a graded one `:g Type`.
     {grade, type_ast, state} = parse_binder_annotation(state, name)
 
@@ -5057,6 +5106,7 @@ defmodule Cure.Compiler.Parser do
       end
 
     param_meta = put_binder_meta([], grade, type_ast)
+    param_meta = if label, do: Keyword.put(param_meta, :label, label), else: param_meta
     param_meta = if default, do: Keyword.put(param_meta, :default, default), else: param_meta
     param_meta = if kind != :positional, do: Keyword.put(param_meta, :kind, kind), else: param_meta
 
@@ -7726,7 +7776,7 @@ defmodule Cure.Compiler.Parser do
       case peek(state) do
         %Token{type: :lparen} ->
           state = advance(state)
-          {a, state} = parse_call_args(state)
+          {a, _labels, state} = parse_call_args(state, false)
           {a, state}
 
         %Token{type: :bool, value: bval} ->
