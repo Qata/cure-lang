@@ -187,6 +187,32 @@ matching/metacontext work knocks out several of these at once.
 - **Workaround (in use).** Write the concrete constructor literal in the branch body instead of the
   matched variable. In use across `branch_merge.cure` concrete-cased lemmas.
 
+### E13 — reflexive/diagonal GADT constructor doesn't propagate its index identification to the goal
+
+- **Symptom.** A reflexivity constructor `SubRefl : Sub(l, l)` (both indices the SAME var). Matching
+  `sub : Sub(a, b)` against `SubRefl` unifies `a = b`, but when a subsequent match (or an already-matched
+  sibling scrutinee) refines `b` to a concrete shape (e.g. `b := LSel(kL,kR)` from matching `st :
+  LStep(b, b2)`), that refinement does NOT flow back to `a` in the goal. Reconstructing a term over `a`
+  (`MkStepTo(LStSelL(), …)` or reusing `st : LStep(a, b2)`) then leaves the constructor's index metavars
+  unsolved (`:unsolved_metavariables, LStSelL`). Minimal repro: a `sub_step` that, in the `SubRefl` case,
+  must produce a `Step(a, _)` — fails; the structural cases (which bind `a`'s shape via the constructor
+  pattern) succeed.
+- **Root cause + layer.** E. `SubRefl`'s two-occurrences-of-`l` index unifies `a` and `b` as a symmetric
+  equation but the elaborator keeps them as distinct metavars linked only one-directionally; a later
+  refinement of one is not mirrored onto the other, so the goal's copy of `a` stays unsolved.
+- **Idris accepts** the identical proof (its unifier treats `a = b` symmetrically and propagates). Reach
+  gap: YES.
+- **Consequence.** Blocks the IMPLICIT-continuation form of `sub_step_l` (subtyping simulates local
+  reduction with the step target inferred), which in turn blocks any theorem that must invoke it with a
+  NEUTRAL/unnameable continuation — the multi-step simulation `sub_run` and the natural
+  implicit-`g2` `config_subst`.
+- **Proposed fix.** In GADT-pattern unification, record a reflexive index identification (`a = b` from a
+  repeated-variable constructor index) as a two-way link so a later refinement of either side updates
+  both, and re-solve dependent goals. E-only.
+- **Workaround (in use).** Make the shared continuation EXPLICIT so it never needs reflexive
+  reconstruction: `config_subst` takes `g2` explicit, so the spec continuations `project(g2, role)` are
+  writable and thread as `sub_step_l`'s explicit `b2` — avoiding `SubRefl` entirely (`7d0ccad1`).
+
 ## 3. Recommended order
 
 1. **E9** — highest leverage; a real fix deletes the index-generalization boilerplate from every
