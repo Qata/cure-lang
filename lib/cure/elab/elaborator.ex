@@ -5603,20 +5603,27 @@ defmodule Cure.Elab.Elaborator do
       else: elaborate_expr_checked(expr, expected, names, ctx, env)
   end
 
-  # A BLOCK branch body (`let x = e ⏎ … ⏎ body`, e.g. `let tri = compareKeys(x, k) in match tri`).
-  # The inference catch-all below elaborates the block's final expression WITHOUT the branch goal,
-  # so an inner DEPENDENT `match` on a let-bound variable never receives the refined checking-mode
-  # type. Its constructor-field index binders then go UNFORCED — a proof field
-  # `p : Equivalent(_, strictLess(x, k), _)` keeps its type over the OPAQUE erased index binders
-  # (`$erased_x`, `$erased_k`) instead of the scrutinee's concrete `x, k`, so a later
-  # reduction-requiring use (the recursive call's `boundLess(Only x, Only k)` domain) fails
-  # conversion at mismatched de Bruijn depths. Retry in CHECKING mode against the branch goal —
-  # `elaborate_let_block` threads `expected` through to the block body, so the inner match reaches
-  # the index-forcing branch path (`elaborate_matched_branch`) exactly as the direct form
-  # `Branch(k, match compareKeys(x, k), r)` already does (a ctor-call body carries the goal). Infer
-  # FIRST to preserve every block that already worked (and its `maybe_inject_union`), surfacing the
-  # ORIGINAL inference error if the checked retry also fails; strictly additive, kernel re-checks.
-  defp elaborate_branch_body({:block, _, _} = expr, expected, names, ctx, env) do
+  # The general branch body: inferred FIRST. `maybe_inject_union/5` is a strict no-op unless
+  # this branch's goal is a generated anonymous-union family — in which case the
+  # inferred body is injected (a member value) or widened (a narrower union, as
+  # produced by a sub-union arm's `assert_type` ascription) into the goal. Without it
+  # a sub-union arm's body has the SUB-union's type while the motive demands the wide
+  # one, and the kernel rejects the branch with `:branch_type`.
+  #
+  # On inference FAILURE, retry in CHECKING mode against the branch goal. Inference
+  # does not thread the refined goal, so a body that needs it to make progress is
+  # wrongly rejected — canonically a BLOCK body (`let x = e in body`) whose inner
+  # DEPENDENT `match` on a local/let-bound variable relies on the goal to FORCE the
+  # constructor-field index binders (else a proof field keeps its type over the OPAQUE
+  # erased indices `$erased_x`/`$erased_k` instead of the scrutinee's concrete `x, k`,
+  # and a later reduction-requiring use fails conversion at mismatched de Bruijn
+  # depths). Checking mode threads the goal in — reaching the index-forcing branch
+  # path exactly as a ctor-call body (`Branch(k, match compareKeys(x, k), r)`) already
+  # does. Not per-shape (block, and any other shape reaching this catch-all): whatever
+  # body inference rejects for lack of the goal gets one goal-informed retry. Surface
+  # the ORIGINAL inference error if the checked retry also fails; strictly additive
+  # (only on failure), and the kernel re-checks the assembled branch.
+  defp elaborate_branch_body(expr, expected, names, ctx, env) do
     if effect_goal?(expected, ctx) do
       elaborate_effect_branch(expr, expected, names, ctx, env)
     else
@@ -5629,22 +5636,6 @@ defmodule Cure.Elab.Elaborator do
             {:ok, _} = ok -> ok
             {:error, _} -> orig
           end
-      end
-    end
-  end
-
-  # The general branch body: inferred. `maybe_inject_union/5` is a strict no-op unless
-  # this branch's goal is a generated anonymous-union family — in which case the
-  # inferred body is injected (a member value) or widened (a narrower union, as
-  # produced by a sub-union arm's `assert_type` ascription) into the goal. Without it
-  # a sub-union arm's body has the SUB-union's type while the motive demands the wide
-  # one, and the kernel rejects the branch with `:branch_type`.
-  defp elaborate_branch_body(expr, expected, names, ctx, env) do
-    if effect_goal?(expected, ctx) do
-      elaborate_effect_branch(expr, expected, names, ctx, env)
-    else
-      with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
-        {:ok, maybe_inject_union(term, type, expected, ctx, env)}
       end
     end
   end
