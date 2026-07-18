@@ -873,12 +873,20 @@ git commit -m "feat(std): Additive/Multiplicative/Divisible/Integral arithmetic 
 ## Task 2.6: Re-route operator elaboration through the interfaces (differential)
 
 **Files:**
-- Modify: `lib/cure/elab/elaborator.ex` — `elaborate_expr_typed({:binary_op, ...})` (727–753), `combine_call` (941–944), `compare_op_call` (963–975), `build_binop` fallbacks; `elaborate_expr_typed({:unary_op, ...})` (676–708).
-- Test: `test/cure/elab/operator_reroute_differential_test.exs` (create).
+- Modify: `lib/cure/elab/elaborator.ex` — `elaborate_expr_typed({:binary_op, ...})` (727–753), `combine_call` (941–944), `compare_op_call` (963–975), `build_binop`'s `{:==,:!=}` and comparison clauses; `elaborate_expr_typed({:unary_op, ...})` (676–708).
+- Modify: `lib/cure/elab/deriving.ex` (+ its caller `lib/cure/elab/program.ex` `body_register_pass`/`register_derived`) — auto-synthesise a structural `Equatable` instance for every data type lacking a hand-written one.
+- Modify: `lib/std/equatable.cure` / `lib/std/comparable.cure` — mark `@prelude`-ambient (per the `@prelude` decorator) so `==`/`<` resolve with no import.
+- Test: `test/cure/elab/operator_reroute_differential_test.exs` (create), plus `test/cure/elab/auto_derive_equatable_test.exs` (create).
 
-**Design (spec §2.5):** operators desugar to a bare-name method call `{:function_call, [name: <op-lexeme>], [l, r]}` resolved by `Resolve.method_call` / `Overload.resolve`. **Retain the primitive fast path** conceptually: the leaf instances *are* the primitive ops (Task 2.4/2.5), so dispatching `+` on Int operands resolves to `Additive for Int`'s `` `+` `` = `Std.Builtin.int_add` — the same emitted spine as today, one dispatch away. Preserve the `struct_eq` last-resort for `==`/`!=` on un-conformed ADTs.
+**Design (spec §2.5 — SOLE-ROUTE invariant):** operators desugar to a bare-name method call `{:function_call, [name: <op-lexeme>], [l, r]}` resolved by `Resolve.method_call` / `Overload.resolve`, and the typeclass becomes the **only** route to `==`/`!=`/`<`/`<=`/`>`/`>=`. Concretely:
+- **Remove `build_binop`'s per-type hardcoding** for `==`/`!=` (int_eq/float_eq/struct_eq/Std.Bool.eq) and for the comparison operators. Those primitives now live *only* in the leaf instance bodies (Task 2.4). Static instance selection on a concrete operand type monomorphises `1 == 2` to the identical Core spine as today — so the fast path is preserved as an optimisation of the single route, not a second definition.
+- **No `struct_eq` last-resort outside the typeclass.** Universal structural `==` on ADTs is retained by **auto-deriving a structural `Equatable`** for any data type without a hand-written instance (coherence-safe, per-type — never a blanket instance). The derived instance *is* field-wise `struct_eq`, reached through coherence; a hand-written `Equatable for T` supersedes it (override). Primitives stay locked (a second `Equatable for Int` is a coherence error).
+- **`Comparable`/`<` is NOT auto-derived** (no universal structural order). `<`/`<=`/`>`/`>=` on a type with no `Comparable` instance rejects with `{:no_instance, Comparable, T}`.
+- **`@prelude` ambience + bootstrap DAG audit.** Mark `Std.Equatable`/`Std.Comparable` ambient so use sites need no import. Audit the stdlib compile order: no module below `Std.Equatable` in the DAG may use `==` (primitive leaf defs like `Std.Bool.` `` `eq` `` are plain functions, safe). If the audit finds a lower module using `==`, rewrite that use to the primitive or lift the module — do NOT reintroduce a builtin `==` path.
 
-**Minimal, low-risk staging:** rather than ripping out `build_binop` wholesale, change the *fallback targets* first so behavior is provably identical, then widen. Because the leaf methods emit exactly the builtin spine `build_binop` emits, an expression that goes through the method path yields the same Core term. The differential test is the guard.
+**Scope note:** this task grew from a pure "re-route" into "re-route + delete the parallel path + auto-derive + prelude". If the auto-derive + bootstrap audit make a single reviewable unit too large, split into **2.6a** (re-route operators to methods; delete `build_binop`'s `==`/`<` hardcoding; prelude + DAG audit) and **2.6b** (auto-derive structural `Equatable`, override + no-instance-error tests). Land 2.6a green first (it needs auto-derive OR a temporary explicit `Equatable` for the test ADTs to keep `==`-on-ADT green — prefer landing 2.6a+2.6b together if ADT `==` would otherwise regress).
+
+**Minimal, low-risk staging:** change the method *targets* and prove identity via the differential regression lock at every edit before deleting the old hardcoding. Because the leaf methods emit exactly the builtin spine `build_binop` emitted, an expression that goes through the method path yields the same Core term — the differential test is the guard. Delete the `build_binop` `==`/`<` hardcoding only once every operator expression routes through methods with identical evaluated results.
 
 - [ ] **Step 1: Write the differential test**
 
@@ -898,12 +906,16 @@ defmodule Cure.Elab.OperatorRerouteDifferentialTest do
     assert eval("[1,2] <> [3]") == [1,2,3]      # Semigroup path unchanged
     assert eval("true and false") == false
     assert eval("not true") == false
-    assert eval("\"a\" == \"a\"") == true         # struct_eq last-resort intact
+    assert eval("\"a\" == \"a\"") == true         # String Equatable instance
+    # ADT structural == now reached via the auto-derived Equatable instance,
+    # evaluating identically to today's struct_eq (see auto_derive_equatable_test).
+    assert eval("Some(1) == Some(1)") == true
+    assert eval("Some(1) == None()") == false
   end
 end
 ```
 
-Record the expected values by running each expression against the pre-change build first (differential baseline).
+Record the expected values by running each expression against the pre-change build first (differential baseline). The two ADT `==` cases are the regression lock proving the auto-derived structural instance matches the old builtin `struct_eq` exactly.
 
 - [ ] **Step 2: Run — establish current green baseline**
 
@@ -941,16 +953,49 @@ And the `:+` fallback (`combine_call` at 739–740) stays for `<>`/non-numeric `
 Run: `mix test test/cure/elab/operator_reroute_differential_test.exs`
 Expected: PASS unchanged after every edit. If a value changes, the re-route diverged — stop and reconcile (usually a wrong leaf primitive in Task 2.4/2.5).
 
-- [ ] **Step 5: Run the full elaborator + stdlib suites**
+- [ ] **Step 5: Auto-derive structural `Equatable` for un-conformed ADTs**
+
+Before deleting `build_binop`'s `struct_eq` path, make the typeclass cover what it covered. In `lib/cure/elab/deriving.ex` (+ `program.ex` registration), synthesise a structural `Equatable` instance for every data type that has no hand-written `Equatable` — field-wise equality that emits the SAME `struct_eq` spine the builtin used. Per-type only (skip types with an explicit instance; never a blanket instance). Write `test/cure/elab/auto_derive_equatable_test.exs`:
+
+```elixir
+defmodule Cure.Elab.AutoDeriveEquatableTest do
+  @moduledoc "Phase 2: ADTs get structural Equatable auto-derived; user instances override; primitives stay locked."
+  use ExUnit.Case, async: true
+  # eval helpers bound to the real harness (Program.elaborate -> reachable_def_names -> Emit.compile_and_load -> apply)
+
+  test "un-conformed ADT gets structural == identical to old struct_eq" do
+    assert eval_bool("Some(1) == Some(1)") == true
+    assert eval_bool("Some(1) == Some(2)") == false
+  end
+
+  test "a hand-written Equatable for T overrides the derived structural one (no overlap error)" do
+    # define `type Mod3 = ...` with a custom `Equatable for Mod3`; assert its == wins.
+  end
+
+  test "a second Equatable for Int is rejected by coherence (primitives locked)" do
+    assert {:error, {:overlapping_instance, :Equatable, :Int}} = Program.elaborate(dup_int_instance_src)
+  end
+end
+```
+
+Run: `mix test test/cure/elab/auto_derive_equatable_test.exs` — Expected: PASS.
+
+- [ ] **Step 6: Delete `build_binop`'s `==`/`<` hardcoding + mark interfaces `@prelude`; audit the DAG**
+
+Remove the `{:==,:!=}` per-type clause and the comparison-operator hardcoding from `build_binop` so the ONLY route is the method desugar. Mark `Std.Equatable`/`Std.Comparable` `@prelude`-ambient (`lib/std/equatable.cure`, `lib/std/comparable.cure`) so `==`/`<` resolve with no import. Audit the stdlib compile order: grep for `==`/`<` uses in modules compiled below `Std.Equatable`; each must be rewritten to a primitive or the module lifted — do NOT reintroduce a builtin `==`. Add a `{:no_instance, Comparable, T}` rejection test for `<` on a type with no `Comparable` instance.
+
+Run: `mix escript.build && mix test test/cure/elab/operator_reroute_differential_test.exs` — Expected: PASS unchanged (the differential lock proves deletion changed nothing).
+
+- [ ] **Step 7: Run the full elaborator + stdlib suites**
 
 Run: `mix test test/cure/elab/ test/cure/std/`
-Expected: PASS.
+Expected: PASS. Any red here is a use site that lost its `==`/`<` builtin path — fix it through the typeclass (add/derive an instance or import), never by restoring the hardcoding.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
-git add lib/cure/elab/elaborator.ex test/cure/elab/operator_reroute_differential_test.exs
-git commit -m "feat(elab): route comparison/arithmetic operators through interfaces"
+git add lib/cure/elab/elaborator.ex lib/cure/elab/deriving.ex lib/cure/elab/program.ex lib/std/equatable.cure lib/std/comparable.cure test/cure/elab/operator_reroute_differential_test.exs test/cure/elab/auto_derive_equatable_test.exs
+git commit -m "feat(elab): route ==/< solely through Equatable/Comparable; auto-derive structural Equatable"
 ```
 
 ## Task 2.7: Phase-2 gate

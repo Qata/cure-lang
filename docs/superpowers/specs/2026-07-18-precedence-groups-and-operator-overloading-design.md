@@ -279,9 +279,49 @@ name**, resolved by overload resolution:
 - Primitive operands still bottom out in the same builtin-op primitives, now one
   dispatch away (the interface leaf). The overload resolver's present-param
   type-direction picks the Int vs Float leaf, exactly as it picks any overload.
-- The existing `struct_eq` fallback for `==` on an un-conformed ADT is
-  **preserved** as the resolution of last resort (no forced conformance), so
-  today's `==`-on-anything semantics are retained.
+
+**Sole-route invariant.** After this step, the typeclass method is the *only*
+way to reach `==`/`!=`/`<`/`<=`/`>`/`>=` in the language. `build_binop`'s
+per-operand-type hardcoding for these operators is **removed**, not kept as a
+parallel path: the primitive equality/ordering primitives (`int_eq`, `float_eq`,
+`struct_eq`, `int_lt`, `float_lt`, `Std.Bool.` `` `eq` ``) live *only* inside the
+leaf instance bodies (`Equatable for Int`, …). Because instance selection is
+resolved statically when the operand type is concrete, `1 == 2` monomorphises to
+exactly the same emitted Core spine as today — the fast path is preserved as an
+*optimisation of the single route*, never as a second definition that could drift
+or that a user cannot override.
+
+**Universal structural equality becomes an auto-derived instance, not a
+fallback.** Today `struct_eq` gives `==` on *any* ADT with zero instances. To keep
+that ergonomics while making the typeclass the sole route, the elaborator
+**auto-derives a structural `Equatable` instance** for every data type that lacks
+a hand-written one (reusing the approved `deriving` machinery). The derived
+instance *is* the field-wise `struct_eq` equality reached through coherence — so
+`==`-on-anything is retained, but now:
+  - it is **overridable** for user-owned types (a hand-written `Equatable for T`
+    supersedes the derived one), whereas today's builtin `struct_eq` cannot be
+    overridden;
+  - the built-in **primitives stay canonical and locked** — global coherence
+    forbids a second `Equatable for Int`, so `==` on the primitives means the
+    same thing in every module, exactly as today.
+  - Derivation is **per-type** (synthesised only when no explicit instance
+    exists), *not* a blanket `Equatable for any-data` instance — a blanket
+    instance plus specific user instances is the overlapping-instance case global
+    coherence forbids.
+  - `Comparable`/`<` is **not** auto-derived: there is no universal structural
+    ordering today, so `Comparable` stays opt-in. `<` on a type with no
+    `Comparable` instance is a compile error (see below).
+
+**Ambient availability + bootstrap order.** Because `==`/`<` now *require* the
+interfaces to be resolvable at every use site, `Std.Equatable` and
+`Std.Comparable` (and their core-type instances) are marked `@prelude`-ambient so
+`1 == 2` keeps working with no import, as today. Step 2.6 must **audit the stdlib
+module DAG**: no module compiled *below* `Std.Equatable` may use `==` (the
+primitive leaf definitions such as `Std.Bool.` `` `eq` `` are plain functions, not
+`==`, so they are safe). When `==`/`<` is used on a type for which no instance
+exists and (for `==`) structural derivation cannot apply, the elaborator rejects
+with a clear `{:no_instance, Equatable | Comparable, T}` error rather than
+silently falling back.
 
 **No parse change in Step 2.** `{:binary_op}` nodes are still produced by the
 current parser; only their elaboration target moves. This is what makes the
@@ -298,6 +338,16 @@ differential oracle exact.
   `{:missing_superinterface, …}`.
 - New: Float `NaN == NaN` is `false`; derived `NaN <= NaN` consistent with the
   primitive basis.
+- New (auto-derive): a user ADT with **no** hand-written `Equatable` gets
+  structural `==` for free (field-wise), evaluating identically to today's
+  `struct_eq`; a user ADT **with** a hand-written `Equatable for T` uses that
+  instance instead (override), proving the derived instance is superseded, not
+  duplicated (no overlap error).
+- New (sole route): `==` on the primitives is not user-overridable — a second
+  `Equatable for Int` is rejected by coherence, confirming primitives stay
+  canonical.
+- New (no-instance): `<` on a type with no `Comparable` instance rejects with
+  `{:no_instance, Comparable, T}` (no silent structural fallback for ordering).
 
 ---
 
