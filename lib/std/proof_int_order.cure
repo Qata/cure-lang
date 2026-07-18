@@ -323,4 +323,136 @@ mod Std.Proof.IntOrder
       Yes(evidence) -> Yes(StrictlyBelow(evidence))
       No(refuter) -> No(fn(proof) -> strictly_below_is_refuted_by_boolean_refuter(refuter, proof))
 
+  ## ── Sign lemmas ──────────────────────────────────────────────────────────
+
+  ## `0 ≤ n` for every natural `n`: `le_int(FromNat(Z), FromNat(n))` reduces to
+  ## `le_nat(Z, n) = True`, so the reflected witness is `Confirmed()`. Stated via
+  ## a return-typed helper so the reduction lands in return-type conversion (the
+  ## constructor-index path does not reduce `le_int` — see the reflexivity
+  ## helpers above).
+  fn zero_le_int_from_nat_evidence(n: Nat) -> IsTrue(le_int(FromNat(Z()), FromNat(n))) =
+    Confirmed()
+
+  fn nonneg_of_from_nat(n: Nat) -> IsLessThanOrEqual(FromNat(Z()), FromNat(n)) =
+    AtMost(zero_le_int_from_nat_evidence(n))
+
+  ## `0 ≤ -1` is impossible. `le_int(FromNat(Z), NegativeSuccessor(Z))` reduces to
+  ## `False`, so the carried witness inhabits `IsTrue(False)`, refuted by
+  ## `true_is_not_false`. (In the reflected form the refutation is *not* an empty
+  ## match — every index pair is inhabited by `AtMost` — but destructuring the
+  ## impossible evidence yields `Empty` all the same. This is LIA's contradiction
+  ## extractor.)
+  fn zero_is_not_at_most_negative_one(
+    proof: IsLessThanOrEqual(FromNat(Z()), NegativeSuccessor(Z()))
+  ) -> Empty =
+    match proof
+      AtMost(evidence) -> true_is_not_false(evidence)
+
+  ## ── Nonnegative-scaling monotonicity ─────────────────────────────────────
+  ##
+  ## Scaling both sides of `b ≤ c` by a nonnegative integer preserves the order.
+  ## The reduction target is natural-number multiplication (`Nat → Nat → Nat`),
+  ## so the scalar and the operands are the nonnegative cone: `scalar : Nat`
+  ## witnesses `0 ≤ FromNat(scalar)`, and `left`/`right` are the `FromNat`
+  ## operands. On that cone the Int order proof between `FromNat` values is
+  ## exactly the Boolean `le_nat`, so the whole development stays in the Boolean
+  ## test world — no equational transport.
+  ##
+  ## `multiply` below is a local mirror of `Std.Proof.Math.multiply` (identical
+  ## structural definition). We cannot `use Std.Proof.Math`: it exports its own
+  ## `IsLessThanOrEqual`/`IsLessThan`/`IsPositive`, whose bare names collide with
+  ## this module's integer order families and mis-resolve at codegen. Referencing
+  ## it qualified is not an option either — a qualified cross-module reference
+  ## still requires the module to be imported. The local mirror is the same total
+  ## function; the lemma it proves is identical.
+  ##
+  ## Extending this to general integer operands would require first-argument
+  ## monotonicity of the iterated integer `add_int`, deferred as out of scope for
+  ## the multiply-reduction specified here.
+
+  ## Natural-number multiplication, structural on the left operand — a local
+  ## mirror of `Std.Proof.Math.multiply` (see the note above on why it is not
+  ## imported).
+  fn multiply(left: Nat, right: Nat) -> Nat =
+    match left
+      Z() -> Z()
+      S(predecessor) -> plus(right, multiply(predecessor, right))
+
+  ## `le_nat(smaller, larger) ⇒ le_nat(smaller, S(larger))`: weaken the bound.
+  fn le_nat_weaken_right(
+    smaller: Nat, larger: Nat, evidence: IsTrue(le_nat(smaller, larger))
+  ) -> IsTrue(le_nat(smaller, S(larger))) =
+    match smaller
+      Z() -> Confirmed()
+      S(sp) -> match larger
+        Z() -> absurd(true_is_not_false(evidence))
+        S(lp) -> le_nat_weaken_right(sp, lp, evidence)
+
+  ## `base ≤ addend + base`: adding on the left only grows a natural number.
+  fn le_nat_add_left_weakens(base: Nat, addend: Nat) -> IsTrue(le_nat(base, plus(addend, base))) =
+    match addend
+      Z() -> le_nat_is_reflexive(base)
+      S(ap) -> le_nat_weaken_right(base, plus(ap, base), le_nat_add_left_weakens(base, ap))
+
+  ## `a ≤ b ⇒ a + y ≤ b + y`: monotone in the left addend.
+  fn le_nat_plus_is_monotone_left(
+    a: Nat, b: Nat, y: Nat, ab: IsTrue(le_nat(a, b))
+  ) -> IsTrue(le_nat(plus(a, y), plus(b, y))) =
+    match a
+      Z() -> le_nat_add_left_weakens(y, b)
+      S(ap) -> match b
+        Z() -> absurd(true_is_not_false(ab))
+        S(bp) -> le_nat_plus_is_monotone_left(ap, bp, y, ab)
+
+  ## `x ≤ y ⇒ a + x ≤ a + y`: monotone in the right addend.
+  fn le_nat_plus_is_monotone_right(
+    a: Nat, x: Nat, y: Nat, xy: IsTrue(le_nat(x, y))
+  ) -> IsTrue(le_nat(plus(a, x), plus(a, y))) =
+    match a
+      Z() -> xy
+      S(ap) -> le_nat_plus_is_monotone_right(ap, x, y, xy)
+
+  ## `a ≤ b` and `x ≤ y ⇒ a + x ≤ b + y`: two-sided addition monotonicity.
+  fn le_nat_plus_is_monotone(
+    a: Nat, b: Nat, x: Nat, y: Nat,
+    ab: IsTrue(le_nat(a, b)), xy: IsTrue(le_nat(x, y))
+  ) -> IsTrue(le_nat(plus(a, x), plus(b, y))) =
+    le_nat_transitive(
+      plus(a, x), plus(a, y), plus(b, y),
+      le_nat_plus_is_monotone_right(a, x, y, xy),
+      le_nat_plus_is_monotone_left(a, b, y, ab))
+
+  ## `left ≤ right ⇒ scalar·left ≤ scalar·right` on the Boolean test. Induction
+  ## on the scalar; the successor step is `multiply(S(sp), v) = plus(v,
+  ## multiply(sp, v))`, discharged by two-sided addition monotonicity.
+  fn le_nat_multiply_is_monotone(
+    scalar: Nat, left: Nat, right: Nat, lr: IsTrue(le_nat(left, right))
+  ) -> IsTrue(le_nat(multiply(scalar, left), multiply(scalar, right))) =
+    match scalar
+      Z() -> Confirmed()
+      S(sp) -> le_nat_plus_is_monotone(
+        left, right,
+        multiply(sp, left), multiply(sp, right),
+        lr,
+        le_nat_multiply_is_monotone(sp, left, right, lr))
+
+  ## A nonnegative-into-Int order witness between `FromNat` operands is exactly
+  ## `le_nat` (return-type conversion reduces `le_int(FromNat l, FromNat r)`).
+  fn from_nat_le_evidence(l: Nat, r: Nat, ev: IsTrue(le_nat(l, r))) -> IsTrue(le_int(FromNat(l), FromNat(r))) =
+    ev
+
+  ## Nonnegative scaling preserves `≤`: given `left ≤ right` (as `FromNat`
+  ## operands) and any `scalar : Nat` (i.e. `0 ≤ FromNat(scalar)`),
+  ## `scalar·left ≤ scalar·right`. Reduces to `Std.Proof.Math.multiply` via the
+  ## Boolean monotonicity above.
+  fn scaling_by_nonneg_preserves_less_than_or_equal(
+    scalar: Nat, left: Nat, right: Nat,
+    proof: IsLessThanOrEqual(FromNat(left), FromNat(right))
+  ) -> IsLessThanOrEqual(FromNat(multiply(scalar, left)), FromNat(multiply(scalar, right))) =
+    match proof
+      AtMost(evidence) ->
+        AtMost(from_nat_le_evidence(
+          multiply(scalar, left), multiply(scalar, right),
+          le_nat_multiply_is_monotone(scalar, left, right, evidence)))
+
 end
