@@ -443,6 +443,8 @@ mod BranchMerge
     LStRecv : LStep(LRecv(t, k), k)
     LStSelL : LStep(LSel(tL, kL, tR, kR), kL)
     LStBraL : LStep(LBra(tL, kL, tR, kR), kL)
+    LStSelR : LStep(LSel(tL, kL, tR, kR), kR)
+    LStBraR : LStep(LBra(tL, kL, tR, kR), kR)
   fn proj_sender_steps(fr: Role, to: Role, t: Tag, k: Global) -> LStep(project(GMsg(fr, to, t, k), fr), project(k, fr)) = match fr
     RA() -> LStSend()
     RB() -> LStSend()
@@ -541,4 +543,46 @@ mod BranchMerge
       SubRecv(t2, q) -> SubBraRcov(q)
     SubBraRcov(pk)         -> match s2
       SubRecv(t2, q) -> SubBraRcov(sub_trans(pk, q))
+
+  ## **CONFIGURATION-LEVEL SESSION FIDELITY + DEADLOCK-FREEDOM.** A running system is the TRIPLE of
+  ## the three roles' local projections. `config(g)` snapshots it; `CStep` reduces it with each role
+  ## individually JUSTIFIED — an acting endpoint by a real local `LStep`, an uninvolved one by staying
+  ## put, a choice bystander by a SUBTYPING step (its merged type absorbs into the taken branch). The
+  ## headline `config_fidelity` proves every global step is mirrored by one justified configuration
+  ## step (Honda-Yoshida-Carbone session fidelity), composing all the per-role step lemmas. Then
+  ## `config_deadlock_free` (`WF(g) ⟹` the config is DONE or STEPS) is the corollary: the projected
+  ## configuration of a well-formed protocol never gets stuck.
+  type Config = MkConfig(Local, Local, Local)
+  fn config(g: Global) -> Config = MkConfig(project(g, RA()), project(g, RB()), project(g, RC()))
+
+  type Justified indices (s: Local, t: Local)
+    JStep : LStep(s, t) -> Justified(s, t)
+    JSame : Justified(s, s)
+    JSub  : Sub(s, t) -> Justified(s, t)
+
+  type CStep indices (c: Config, c2: Config)
+    MkCStep : Justified(a, a2) -> Justified(b, b2) -> Justified(cc, cc2) -> CStep(MkConfig(a, b, cc), MkConfig(a2, b2, cc2))
+
+  fn config_fidelity({g: Global}, {g2: Global}, w: WF(g), st: GStep(g, g2)) -> CStep(config(g), config(g2)) = match st
+    GStMsg()  -> match w
+      WFAB(t, w2) -> MkCStep(JStep(LStSend()), JStep(LStRecv()), JSame())
+      WFBA(t, w2) -> MkCStep(JStep(LStRecv()), JStep(LStSend()), JSame())
+      WFBC(t, w2) -> MkCStep(JSame(), JStep(LStSend()), JStep(LStRecv()))
+      WFAC(t, w2) -> MkCStep(JStep(LStSend()), JSame(), JStep(LStRecv()))
+    GStChoL() -> match w
+      WFCho(tL, wL, tR, wR, mg) -> MkCStep(JStep(LStSelL()), JStep(LStBraL()), JSub(merge_sub_l(mg)))
+    GStChoR() -> match w
+      WFCho(tL, wL, tR, wR, mg) -> MkCStep(JStep(LStSelR()), JStep(LStBraR()), JSub(merge_sub_r(mg)))
+
+  type ConfigProgress indices (c: Config)
+    CPDone : ConfigProgress(MkConfig(LEnd(), LEnd(), LEnd()))
+    CPStep : CStep(c, c2) -> ConfigProgress(c)
+
+  fn config_deadlock_free({g: Global}, w: WF(g)) -> ConfigProgress(config(g)) = match w
+    WFEnd()                   -> CPDone()
+    WFAB(t, w2)               -> CPStep(config_fidelity(WFAB(t, w2), GStMsg()))
+    WFBA(t, w2)               -> CPStep(config_fidelity(WFBA(t, w2), GStMsg()))
+    WFBC(t, w2)               -> CPStep(config_fidelity(WFBC(t, w2), GStMsg()))
+    WFAC(t, w2)               -> CPStep(config_fidelity(WFAC(t, w2), GStMsg()))
+    WFCho(tL, wL, tR, wR, mg) -> CPStep(config_fidelity(WFCho(tL, wL, tR, wR, mg), GStChoL()))
 end

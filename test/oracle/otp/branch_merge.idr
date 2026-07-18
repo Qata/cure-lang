@@ -373,6 +373,8 @@ data LStep : Local -> Local -> Type where
   LStRecv : LStep (LRecv t k) k
   LStSelL : LStep (LSel tL kL tR kR) kL
   LStBraL : LStep (LBra tL kL tR kR) kL
+  LStSelR : LStep (LSel tL kL tR kR) kR
+  LStBraR : LStep (LBra tL kL tR kR) kR
 
 proj_sender_steps : (fr : Role) -> (to : Role) -> (t : Tag) -> (k : Global) -> LStep (project (GMsg fr to t k) fr) (project k fr)
 proj_sender_steps RA to t k = LStSend
@@ -430,3 +432,36 @@ sub_trans SubBraL (SubRecv t2 q) = SubBraLcov q
 sub_trans (SubBraLcov pk) (SubRecv t2 q) = SubBraLcov (sub_trans pk q)
 sub_trans SubBraR (SubRecv t2 q) = SubBraRcov q
 sub_trans (SubBraRcov pk) (SubRecv t2 q) = SubBraRcov (sub_trans pk q)
+
+data Config = MkConfig Local Local Local
+
+config : Global -> Config
+config g = MkConfig (project g RA) (project g RB) (project g RC)
+
+data Justified : Local -> Local -> Type where
+  JStep : LStep s t -> Justified s t
+  JSame : Justified s s
+  JSub  : Sub s t -> Justified s t
+
+data CStep : Config -> Config -> Type where
+  MkCStep : Justified a a2 -> Justified b b2 -> Justified cc cc2 -> CStep (MkConfig a b cc) (MkConfig a2 b2 cc2)
+
+config_fidelity : WF g -> GStep g g2 -> CStep (config g) (config g2)
+config_fidelity (WFAB t w2) GStMsg = MkCStep (JStep LStSend) (JStep LStRecv) JSame
+config_fidelity (WFBA t w2) GStMsg = MkCStep (JStep LStRecv) (JStep LStSend) JSame
+config_fidelity (WFBC t w2) GStMsg = MkCStep JSame (JStep LStSend) (JStep LStRecv)
+config_fidelity (WFAC t w2) GStMsg = MkCStep (JStep LStSend) JSame (JStep LStRecv)
+config_fidelity (WFCho tL wL tR wR mg) GStChoL = MkCStep (JStep LStSelL) (JStep LStBraL) (JSub (merge_sub_l mg))
+config_fidelity (WFCho tL wL tR wR mg) GStChoR = MkCStep (JStep LStSelR) (JStep LStBraR) (JSub (merge_sub_r mg))
+
+data ConfigProgress : Config -> Type where
+  CPDone : ConfigProgress (MkConfig LEnd LEnd LEnd)
+  CPStep : CStep c c2 -> ConfigProgress c
+
+config_deadlock_free : WF g -> ConfigProgress (config g)
+config_deadlock_free WFEnd = CPDone
+config_deadlock_free (WFAB t w2) = CPStep (config_fidelity (WFAB t w2) GStMsg)
+config_deadlock_free (WFBA t w2) = CPStep (config_fidelity (WFBA t w2) GStMsg)
+config_deadlock_free (WFBC t w2) = CPStep (config_fidelity (WFBC t w2) GStMsg)
+config_deadlock_free (WFAC t w2) = CPStep (config_fidelity (WFAC t w2) GStMsg)
+config_deadlock_free (WFCho tL wL tR wR mg) = CPStep (config_fidelity (WFCho tL wL tR wR mg) GStChoL)
