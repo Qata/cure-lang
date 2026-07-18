@@ -1,0 +1,84 @@
+mod MergeJoin
+  use Std.Equivalent
+  ## THE MERGE LATTICE JOIN (upper-bound half) — the branch INTERSECTION is a common SUPERTYPE of two
+  ## external choices, dual to merge_glb's union-is-the-meet. The obstacle merge_glb sidestepped is met
+  ## head-on: membership over abstract lists is decision-heavy, and Cure returns no scrutinee equation from
+  ## a boolean match. The fix is an EVIDENCE-CARRYING decision mem_dec (returning the InB witness), by tag
+  ## casing; inter routes through inter_pick so a match on mem_dec refines the recursion AND yields the
+  ## membership proof directly. covers_inter_l/r then prove LB(s) <: LB(inter) and LB(t) <: LB(inter): the
+  ## intersection is a common supertype of s and t. (LEASTNESS — the full LUB — additionally needs a NotIn
+  ## witness in mem_dec's MNo branch to refute a present element being dropped; that negation-carrying
+  ## decision is the residual hard part, recorded as open.)
+  type Tag = TA | TB | TC
+  type Branches = BNil | BCons(Tag, Branches)
+  type Local = LB(Branches)
+  type InB indices (x: Tag, bs: Branches)
+    InHead : (x2: Tag) -> (rest: Branches) -> InB(x2, BCons(x2, rest))
+    InTail : (y: Tag) -> (rest: Branches) -> InB(x2, rest) -> InB(x2, BCons(y, rest))
+  ## Evidence-carrying membership decision: MYes carries the InB proof.
+  type MemDec indices (x: Tag, t: Branches)
+    MYes : InB(x, t) -> MemDec(x, t)
+    MNo  : MemDec(x, t)
+  fn mem_dec(x: Tag, t: Branches) -> MemDec(x, t) = match t
+    BNil() -> MNo()
+    BCons(y, rest) -> match x
+      TA() -> match y
+        TA() -> MYes(InHead(TA(), rest))
+        TB() -> match mem_dec(TA(), rest)
+          MYes(pf) -> MYes(InTail(TB(), rest, pf))
+          MNo() -> MNo()
+        TC() -> match mem_dec(TA(), rest)
+          MYes(pf) -> MYes(InTail(TC(), rest, pf))
+          MNo() -> MNo()
+      TB() -> match y
+        TA() -> match mem_dec(TB(), rest)
+          MYes(pf) -> MYes(InTail(TA(), rest, pf))
+          MNo() -> MNo()
+        TB() -> MYes(InHead(TB(), rest))
+        TC() -> match mem_dec(TB(), rest)
+          MYes(pf) -> MYes(InTail(TC(), rest, pf))
+          MNo() -> MNo()
+      TC() -> match y
+        TA() -> match mem_dec(TC(), rest)
+          MYes(pf) -> MYes(InTail(TA(), rest, pf))
+          MNo() -> MNo()
+        TB() -> match mem_dec(TC(), rest)
+          MYes(pf) -> MYes(InTail(TB(), rest, pf))
+          MNo() -> MNo()
+        TC() -> MYes(InHead(TC(), rest))
+  ## Intersection routes the decision through a helper so a proof-side match on mem_dec refines it.
+  fn inter_pick(x: Tag, t: Branches, rest: Branches, d: MemDec(x, t)) -> Branches = match d
+    MYes(pf) -> BCons(x, inter(rest, t))
+    MNo()    -> inter(rest, t)
+  fn inter(s: Branches, t: Branches) -> Branches = match s
+    BNil()         -> BNil()
+    BCons(x, rest) -> inter_pick(x, t, rest, mem_dec(x, t))
+  type Covers indices (big: Branches, small: Branches)
+    CovNil  : Covers(big, BNil)
+    CovCons : InB(x, big) -> Covers(big, rest) -> Covers(big, BCons(x, rest))
+  fn covers_weaken(big: Branches, y: Tag, {small: Branches}, w: Covers(big, small)) -> Covers(BCons(y, big), small) = match w
+    CovNil()          -> CovNil()
+    CovCons(inx, w2)  -> CovCons(InTail(y, big, inx), covers_weaken(big, y, w2))
+  ## **UPPER BOUND (left)**: s covers the intersection — LB(s) <: LB(inter(s,t)).
+  fn covers_inter_l(s: Branches, t: Branches) -> Covers(s, inter(s, t)) = match s
+    BNil()         -> CovNil()
+    BCons(x, rest) -> match mem_dec(x, t)
+      MYes(pf) -> CovCons(InHead(x, rest), covers_weaken(rest, x, covers_inter_l(rest, t)))
+      MNo()    -> covers_weaken(rest, x, covers_inter_l(rest, t))
+  ## **UPPER BOUND (right)**: t covers the intersection — the kept branch's membership in t is exactly the
+  ## witness mem_dec handed back (pf), no scrutinee equation needed.
+  fn covers_inter_r(s: Branches, t: Branches) -> Covers(t, inter(s, t)) = match s
+    BNil()         -> CovNil()
+    BCons(x, rest) -> match mem_dec(x, t)
+      MYes(pf) -> CovCons(pf, covers_inter_r(rest, t))
+      MNo()    -> covers_inter_r(rest, t)
+  type Sub indices (a: Local, b: Local)
+    SubB : Covers(s, t) -> Sub(LB(s), LB(t))
+  fn join(x: Local, y: Local) -> Local = match x
+    LB(s) -> match y
+      LB(t) -> LB(inter(s, t))
+  ## **JOIN IS A COMMON UPPER BOUND**: both operands are subtypes of the join (a common supertype). Dual
+  ## to merge_glb's merge_sub_l/r. With merge_glb (the meet) this is the join half of the subtyping lattice.
+  fn join_upper_l(s: Branches, t: Branches) -> Sub(LB(s), join(LB(s), LB(t))) = SubB(covers_inter_l(s, t))
+  fn join_upper_r(s: Branches, t: Branches) -> Sub(LB(t), join(LB(s), LB(t))) = SubB(covers_inter_r(s, t))
+end
