@@ -335,13 +335,16 @@ defmodule Cure.Elab.Elaborator do
       not String.contains?(name, ".") and
           length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2 ->
         cands = Cure.Elab.Resolution.overload_candidates(env, atom)
-        arg_labels = Keyword.get(meta, :arg_labels)
 
-        with {:ok, present} <- map_present_args(args, names, ctx, env),
-             arg_types = Enum.map(present, fn {_term, ty} -> ty end),
-             {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, arg_labels, cands) do
-          elaborate_global_app(env, winner, present, ctx)
-        end
+        elaborate_overloaded_app(
+          env,
+          atom,
+          args,
+          Keyword.get(meta, :arg_labels),
+          names,
+          ctx,
+          cands
+        )
 
       # A bare name provided by ≥2 distinct re-keyed imports with no local/
       # unshadowed winner: unqualified use is ambiguous (R7). Checked before the
@@ -2523,6 +2526,37 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  @doc """
+  Resolve and elaborate an applied call to a bare OVERLOADED name (a set of ≥2
+  members sharing one spelling — same-module discriminated members, or
+  cross-module providers with no unique winner) by inferring the argument types,
+  pruning candidates by first-order convertibility, and dispatching the survivor.
+
+  Shared verbatim by TERM-position elaboration (`elaborate_named_call_resolved`)
+  and dependent-INDEX-position lowering (`declarations.ex:lower_applied_type`) so
+  both disambiguate identically — index position previously ran the pre-overload
+  resolver and either mis-picked an ambient same-name provider (crashing in ι) or
+  reported `:ambiguous_name`. Returns the standard `{:ok, term, type}` on a unique
+  survivor, or `Overload.resolve`'s `{:error, {:no_matching_overload | :ambiguous_overload, …}}`.
+  `candidates` is the caller's already-computed `overload_candidates/2` (≥2).
+  """
+  @spec elaborate_overloaded_app(
+          Env.t(),
+          atom(),
+          [tuple()],
+          [String.t()] | nil,
+          [String.t()],
+          Context.t(),
+          [atom()]
+        ) :: {:ok, term(), term()} | {:error, term()}
+  def elaborate_overloaded_app(env, atom, args, arg_labels, names, ctx, candidates) do
+    with {:ok, present} <- map_present_args(args, names, ctx, env),
+         arg_types = Enum.map(present, fn {_term, ty} -> ty end),
+         {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, arg_labels, candidates) do
+      elaborate_global_app(env, winner, present, ctx)
+    end
+  end
+
   defp map_present_args(args, names, ctx, env) do
     depth = Context.length(ctx)
 
@@ -3646,18 +3680,23 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A computed index that is a constructor spine over variables (`S(m)`,
-  # `Cons(h, t)`) is INVERTIBLE by ordinary index refinement — matching unifies the
-  # scrutinee's constructor index with each branch constructor's index directly
-  # (Idris's `yr : Vect m a` in the `(::)` branch). It needs no carried equation:
-  # the plain 3a motive handles it, and forcing the carried-eq transport onto a
-  # sibling with a fresh-variable constructor index (e.g. `S(n')` for a bound tail
-  # length) spuriously fails `:branch_type` even when the branch body never uses
-  # that sibling. Only a NON-invertible computed index — a defined-function
-  # application like `app(p, q)`, whose head is not a constructor and cannot be
-  # inverted — genuinely needs the carried equation (see `carried_index_sibling_test`).
-  # A bare variable is trivially invertible (and was already excluded before).
-  defp invertible_index?({:ctor, _name, args}), do: Enum.all?(args, &invertible_index?/1)
+  # A computed index whose HEAD is a constructor (`S(m)`, `Cons(h, t)`, and also
+  # `Node(p, twist(q))` where an argument carries a computed subterm) is INVERTIBLE
+  # by ordinary index refinement — matching unifies the scrutinee's constructor
+  # index with each branch constructor's index directly (Idris's `yr : Vect m a` in
+  # the `(::)` branch), and structural unification descends THROUGH the ctor head,
+  # binding any computed argument subterm to the ctor's own argument binder. So the
+  # test is on the HEAD only, not the argument shapes: it needs no carried equation.
+  # Forcing the carried-eq transport onto a sibling with a constructor index (e.g.
+  # `S(n')` for a bound tail length) spuriously fails `:branch_type` even when the
+  # branch body never uses that sibling; and recursing into ctor args used to
+  # misclassify `Node(p, twist(q))` as non-invertible merely because `twist(q)` is a
+  # function application, dropping the branch-unify subst (E8, `:rewrite_no_match`).
+  # Only a NON-constructor head — a defined-function application like `app(p, q)`,
+  # which cannot be inverted structurally — genuinely needs the carried equation
+  # (see `carried_index_sibling_test` and the E8 antibody). A bare variable is
+  # trivially invertible (and was already excluded before).
+  defp invertible_index?({:ctor, _name, _args}), do: true
   defp invertible_index?({:var, _}), do: true
   defp invertible_index?(_), do: false
 

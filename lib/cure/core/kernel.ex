@@ -1355,6 +1355,25 @@ defmodule Cure.Core.Kernel do
     # outer index var := ctor result index (4.3)
     do: bind_index(j, r, arity, subst)
 
+  # Symmetric completion of the clause above — an outer index var on the LEFT.
+  # The top-level r/s pairs obey the "r-side < arity, s-side >= arity" invariant,
+  # but `bind_index`'s resolve-before-bind re-unify (below, ~1498) calls
+  # `unify_one(old, rterm, ...)` on two PREVIOUSLY-BOUND terms whose left/right
+  # positions are set by scrutinee-index processing order, not the invariant. When
+  # that puts an outer var opposite a rigid term (e.g. matching `refl : Eqv(x, x)`
+  # at `Eqv(S(a), S(Z()))` re-unifies `S(a) =? S(Z())`, whose spine step is
+  # `a(outer) =? Z(ctor)`), the outer var lands on the left, matching NEITHER
+  # clause above, and the forced equation `a := Z` was silently dropped as
+  # `:undecided` — order-dependently (the mirror `Eqv(S(Z()), S(a))` bound it via
+  # clause 2). This clause makes constructor injectivity decide SYMMETRICALLY,
+  # mirroring Agda's symmetric Var/Solution dispatch (Rules/LHS/Unify.hs). Placed
+  # AFTER clause 2 so a var/var pair with the outer var on the right still binds
+  # via clause 2 unchanged; this only fires when clause 2 did not, so it converts
+  # previously-dropped pairs into genuine forced bindings and decides no pair
+  # differently than it already did. (spec 2026-07-18 §2, K-bug 1.)
+  defp unify_one({:var, i}, s, arity, subst) when i >= arity,
+    do: bind_index(i, s, arity, subst)
+
   # Compact Nat literal ↔ Z/S bridge (mirrors conv.ex's cross-representation
   # arms): a `{:nat_lit, n}` index is a closed canonical Nat, definitionally
   # equal to its `S`-tower, so it must unify with `Z`/`S` result indices exactly

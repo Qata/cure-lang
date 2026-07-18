@@ -10,7 +10,9 @@ defmodule Cure.Elab.AppliedDefResolutionTest do
 
   Now: a qualified head resolves through the value namespace to its exact key (and unfolds); a
   bare, uniquely-provided name resolves to its key; a bare name provided by ≥2 modules is a clean
-  `:ambiguous_name` error rather than a downstream conversion failure.
+  ambiguity error rather than a downstream conversion failure. Since E11 (type-directed overload
+  in index position) the bare ambiguous case is routed through the SAME overload machinery term
+  position uses, so it surfaces the precise `:ambiguous_overload` — index and term now agree.
   """
   use ExUnit.Case, async: true
 
@@ -47,9 +49,11 @@ defmodule Cure.Elab.AppliedDefResolutionTest do
     assert verdict(src) == :accept
   end
 
-  test "a BARE ambiguous applied def in a type annotation is a clean :ambiguous_name error" do
+  test "a BARE ambiguous applied def in a type annotation is a clean :ambiguous_overload error" do
     # `plus` is defined in ≥2 imported/prelude modules with no unique winner: reject it as
-    # ambiguous (as term position already does), not as a silent conversion failure.
+    # ambiguous (the SAME clean error term position gives), not as a silent conversion failure.
+    # Post-E11 the index path routes through the overload resolver, so this is the precise
+    # `:ambiguous_overload` (identical to term position) rather than the older `:ambiguous_name`.
     src = """
     mod C
       use Std.Otp.EffAlgebra
@@ -57,6 +61,6 @@ defmodule Cure.Elab.AppliedDefResolutionTest do
     end
     """
 
-    assert {:error, {:ambiguous_name, :plus, _}} = verdict(src)
+    assert {:error, {:ambiguous_overload, :plus, _}} = verdict(src)
   end
 end

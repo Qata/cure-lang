@@ -177,20 +177,13 @@ mod Std.Otp.MailboxPattern
 
   ## **DERIVATIVE SOUNDNESS** (one half of the Brzozowski fundamental theorem): if `deriv(E, t)`
   ## accepts `m`, then `E` accepts `m ⊎ {t}`. Constructive — rebuild the derivation, relocating
-  ## the peeled `{t}` with the bag-algebra laws. The `PTimes`/`PStar` cases are split into
-  ## helpers whose `acc` is matched DIRECTLY (no outer `match pat` freezing the sum index), so
-  ## the `ATimes` match refines the total to `msadd(m1,m2)`. (The converse — completeness —
-  ## needs `msadd` zero/one inversion, blocked by stuck-index retention on GADT match.)
-  fn ds_plus(a: Pat, b: Pat, t: Tag, m: MS, acc: Accepts(deriv(PPlus(a, b), t), m)) -> Accepts(PPlus(a, b), msadd(m, singleton(t))) = match acc
-    APlusL(da) -> APlusL(deriv_sound(a, t, m, da))
-    APlusR(db) -> APlusR(deriv_sound(b, t, m, db))
-  fn ds_times(a: Pat, b: Pat, t: Tag, m: MS, acc: Accepts(deriv(PTimes(a, b), t), m)) -> Accepts(PTimes(a, b), msadd(m, singleton(t))) = match acc
-    APlusL(al) -> match al
-      ATimes(m1, m2, da, ab) -> rewrite ms_swap(m1, m2, singleton(t)) in ATimes(msadd(m1, singleton(t)), m2, deriv_sound(a, t, m1, da), ab)
-    APlusR(ar) -> match ar
-      ATimes(m1, m2, aa, db) -> rewrite msadd_assoc(m1, m2, singleton(t)) in ATimes(m1, msadd(m2, singleton(t)), aa, deriv_sound(b, t, m2, db))
-  fn ds_star(a: Pat, t: Tag, m: MS, acc: Accepts(deriv(PStar(a), t), m)) -> Accepts(PStar(a), msadd(m, singleton(t))) = match acc
-    ATimes(m1, m2, da, as) -> rewrite ms_swap(m1, m2, singleton(t)) in AStarN(msadd(m1, singleton(t)), m2, deriv_sound(a, t, m1, da), as)
+  ## the peeled `{t}` with the bag-algebra laws. The `PTimes`/`PStar` arms match `acc` (and the
+  ## nested `ATimes`) INLINE under the outer `match pat`: the `ATimes` match refines the frozen
+  ## total `m` to `msadd(m1,m2)` directly in the goal, so `rewrite msadd_assoc`/`ms_swap` find
+  ## their redex without a delegation helper (E8: a constructor-headed scrutinee index carrying a
+  ## computed subterm is inverted structurally, not detoured through the carried-eq mechanism).
+  ## (The converse — completeness — needs `msadd` zero/one inversion, blocked by stuck-index
+  ## retention on GADT match.)
   fn deriv_sound(pat: Pat, t: Tag, m: MS, acc: Accepts(deriv(pat, t), m)) -> Accepts(pat, msadd(m, singleton(t))) = match pat
     PZero()      -> match acc
     POne()       -> match acc
@@ -210,9 +203,16 @@ mod Std.Otp.MailboxPattern
         TB() -> match acc
         TC() -> match acc
           AOne() -> AAtomC()
-    PPlus(a, b)  -> ds_plus(a, b, t, m, acc)
-    PTimes(a, b) -> ds_times(a, b, t, m, acc)
-    PStar(a)     -> ds_star(a, t, m, acc)
+    PPlus(a, b)  -> match acc
+      APlusL(da) -> APlusL(deriv_sound(a, t, m, da))
+      APlusR(db) -> APlusR(deriv_sound(b, t, m, db))
+    PTimes(a, b) -> match acc
+      APlusL(al) -> match al
+        ATimes(m1, m2, da, ab) -> rewrite ms_swap(m1, m2, singleton(t)) in ATimes(msadd(m1, singleton(t)), m2, deriv_sound(a, t, m1, da), ab)
+      APlusR(ar) -> match ar
+        ATimes(m1, m2, aa, db) -> rewrite msadd_assoc(m1, m2, singleton(t)) in ATimes(m1, msadd(m2, singleton(t)), aa, deriv_sound(b, t, m2, db))
+    PStar(a)     -> match acc
+      ATimes(m1, m2, da, as) -> rewrite ms_swap(m1, m2, singleton(t)) in AStarN(msadd(m1, singleton(t)), m2, deriv_sound(a, t, m1, da), as)
 
   ## **KLEENE STAR FIXPOINT LAW.** `*E ≡ 𝟙 ⊕ E·(*E)` up to accepted bags — the defining
   ## unfolding of the star. Both directions are constructor rearrangements (`AStar0`/`AStarN`

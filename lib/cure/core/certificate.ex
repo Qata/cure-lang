@@ -324,7 +324,8 @@ defmodule Cure.Core.Certificate do
     do: %{root: Enum.at(st.roots, j), smaller: Enum.at(st.smallers, j), recon: Enum.at(st.recons, j)}
 
   # Relation of a single call-argument to a single parameter.
-  #   :smaller — a variable proven structurally < xⱼ
+  #   :smaller — a variable proven structurally < xⱼ, OR an application whose
+  #              spine head is such a variable (higher-order subterm rule below)
   #   :equal   — the same de Bruijn var as xⱼ, OR a constructor application
   #              syntactically identical to xⱼ's reconstruction (reconstruct-equal)
   #   :unknown — anything else (never claim ≤ for a possibly-larger term)
@@ -340,6 +341,30 @@ defmodule Cure.Core.Certificate do
 
   defp arg_relation({:ctor, _c, _as} = arg, %{recon: recon}) do
     if recon != nil and arg == recon, do: :equal, else: :unknown
+  end
+
+  # Higher-order subterm rule (Agda/Idris `Core/Termination/SizeChange.idr`,
+  # spec `2026-07-18-elaborator-gaps-verified-status.md` §2 K-bug 2): an
+  # application `g(a…)` whose spine head `g` is a field of xⱼ exposed as
+  # `:smaller` is ITSELF a strict subterm of xⱼ. The elements of an inductive
+  # type are well-founded trees, and the immediate children of a node
+  # `Bind e g` are exactly `{ g y : y }` — so `g y` is a genuine subterm for
+  # ANY argument `y`, and recursion on it is well-founded. This certifies the
+  # continuation-style `bind`
+  #   Bind(e,g) -> Bind(e, fn y -> bind(g(y), f))
+  # whose self-call passes `g(y)` (head `g` smaller) — total. It does NOT admit
+  # the diverging control
+  #   Bind(e,g) -> Bind(e, fn y -> bind(Bind(e,g), f))
+  # whose self-call passes the ctor RECONSTRUCTION `Bind(e,g)` (matched by the
+  # `{:ctor,…}` clause above as `:equal`, never `:smaller`). We claim `:smaller`
+  # ONLY for a proven-smaller head — never `:equal` (an application is never a
+  # parameter's reconstruction), and never when the head is xⱼ itself (`root`):
+  # `xⱼ` applied to arguments is not `< xⱼ`.
+  defp arg_relation({:app, _, _} = arg, %{smaller: smaller}) do
+    case spine(arg) do
+      {{:var, i}, _args} -> if MapSet.member?(smaller, i), do: :smaller, else: :unknown
+      _ -> :unknown
+    end
   end
 
   defp arg_relation(_arg, _pv), do: :unknown
