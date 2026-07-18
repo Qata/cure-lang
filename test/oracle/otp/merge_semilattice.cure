@@ -1,0 +1,66 @@
+mod MergeSemilattice
+  use Std.Equivalent
+  ## MERGE IS A SEMILATTICE MEET — commutative, idempotent, associative up to SUBTYPING-EQUIVALENCE.
+  ## merge_symmetry found merge is not SYNTACTICALLY commutative (branch order flips); but syntactic
+  ## equality is the wrong notion in a subtyping PREORDER. Up to mutual covering (Equiv = <: both ways,
+  ## the equivalence the preorder induces) merge (= branch union) satisfies every meet law. With
+  ## merge_glb (union is the GLB) and subtyping_preorder (refl+trans), this makes external-choice session
+  ## subtyping a genuine MEET-SEMILATTICE. Every law is assembled from covers_glb + merge_lower + trans.
+  type Tag = TA | TB | TC
+  type Branches = BNil | BCons(Tag, Branches)
+  type InB indices (x: Tag, bs: Branches)
+    InHead : InB(x, BCons(x, rest))
+    InTail : InB(x, rest) -> InB(x, BCons(y, rest))
+  type Covers indices (big: Branches, small: Branches)
+    CovNil  : Covers(big, BNil)
+    CovCons : InB(x, big) -> Covers(big, rest) -> Covers(big, BCons(x, rest))
+  fn bappend(s: Branches, t: Branches) -> Branches = match s
+    BNil()         -> t
+    BCons(x, rest) -> BCons(x, bappend(rest, t))
+  fn covers_weaken({big: Branches}, {small: Branches}, y: Tag, w: Covers(big, small)) -> Covers(BCons(y, big), small) = match w
+    CovNil()          -> CovNil()
+    CovCons(inx, w2)  -> CovCons(InTail(inx), covers_weaken(y, w2))
+  fn covers_refl(bs: Branches) -> Covers(bs, bs) = match bs
+    BNil()         -> CovNil()
+    BCons(x, rest) -> CovCons(InHead(), covers_weaken(x, covers_refl(rest)))
+  fn covers_mem({big: Branches}, {small: Branches}, {x: Tag}, cov: Covers(big, small), inm: InB(x, small)) -> InB(x, big) =
+    match inm
+      InHead()     -> match cov
+        CovCons(inx, cov2) -> inx
+      InTail(in2)  -> match cov
+        CovCons(inx, cov2) -> covers_mem(cov2, in2)
+  fn covers_trans({a: Branches}, {b: Branches}, {c: Branches}, ab: Covers(a, b), bc: Covers(b, c)) -> Covers(a, c) =
+    match bc
+      CovNil()          -> CovNil()
+      CovCons(inx, bc2) -> CovCons(covers_mem(ab, inx), covers_trans(ab, bc2))
+  fn covers_glb({z: Branches}, {s: Branches}, {t: Branches}, cs: Covers(z, s), ct: Covers(z, t)) -> Covers(z, bappend(s, t)) = match cs
+    CovNil()          -> ct
+    CovCons(inx, cs2) -> CovCons(inx, covers_glb(cs2, ct))
+  fn merge_lower_l(s: Branches, t: Branches) -> Covers(bappend(s, t), s) = match s
+    BNil()         -> CovNil()
+    BCons(x, rest) -> CovCons(InHead(), covers_weaken(x, merge_lower_l(rest, t)))
+  fn merge_lower_r(s: Branches, t: Branches) -> Covers(bappend(s, t), t) = match s
+    BNil()         -> covers_refl(t)
+    BCons(x, rest) -> covers_weaken(x, merge_lower_r(rest, t))
+  ## Subtyping-equivalence: mutual covering (a <: b and b <: a) — the equivalence the preorder induces.
+  type Equiv indices (a: Branches, b: Branches)
+    MkEquiv : Covers(a, b) -> Covers(b, a) -> Equiv(a, b)
+  ## **MERGE IS COMMUTATIVE (up to subtyping-equivalence)**: s ∪ t ≈ t ∪ s. Each direction covers the
+  ## other's union by splitting it with covers_glb and hitting each half with merge_lower.
+  fn merge_comm(s: Branches, t: Branches) -> Equiv(bappend(s, t), bappend(t, s)) =
+    MkEquiv(covers_glb(merge_lower_r(s, t), merge_lower_l(s, t)), covers_glb(merge_lower_r(t, s), merge_lower_l(t, s)))
+  ## **MERGE IS IDEMPOTENT (up to subtyping-equivalence)**: s ∪ s ≈ s.
+  fn merge_idem(s: Branches) -> Equiv(bappend(s, s), s) =
+    MkEquiv(merge_lower_l(s, s), covers_glb(covers_refl(s), covers_refl(s)))
+  ## **MERGE IS ASSOCIATIVE (up to subtyping-equivalence)**: (s ∪ t) ∪ u ≈ s ∪ (t ∪ u). Each direction
+  ## re-brackets the union by decomposing with covers_glb and chaining the lower-bound witnesses through
+  ## covers_trans — a pure consequence of "union collects exactly s, t and u's branches".
+  fn merge_assoc(s: Branches, t: Branches, u: Branches) -> Equiv(bappend(bappend(s, t), u), bappend(s, bappend(t, u))) =
+    MkEquiv(
+      covers_glb(
+        covers_trans(merge_lower_l(bappend(s, t), u), merge_lower_l(s, t)),
+        covers_glb(covers_trans(merge_lower_l(bappend(s, t), u), merge_lower_r(s, t)), merge_lower_r(bappend(s, t), u))),
+      covers_glb(
+        covers_glb(merge_lower_l(s, bappend(t, u)), covers_trans(merge_lower_r(s, bappend(t, u)), merge_lower_l(t, u))),
+        covers_trans(merge_lower_r(s, bappend(t, u)), merge_lower_r(t, u))))
+end
