@@ -21,3 +21,8 @@ data ARun : Config -> Config -> Type where
 exchange_ac : (lb : Local) -> (t : Tag) -> (ka : Local) -> (kc : Local) ->
               ARun (MkConfig (LSendTo RC t ka) lb (LRecvFrom RA t kc) BEmpty) (MkConfig ka lb kc BEmpty)
 exchange_ac lb t ka kc = ARStep ASendA (ARStep ARecvC ARDone)
+
+pipeline_terminates : (t1 : Tag) -> (t2 : Tag) ->
+  ARun (MkConfig (LSendTo RB t1 LEnd) (LRecvFrom RA t1 (LSendTo RC t2 LEnd)) (LRecvFrom RB t2 LEnd) BEmpty)
+       (MkConfig LEnd LEnd LEnd BEmpty)
+pipeline_terminates t1 t2 = ARStep ASendA (ARStep ARecvB (ARStep ASendB (ARStep ARecvC ARDone)))

@@ -27,4 +27,19 @@ mod AsyncMultiparty
   ## _), so RB can never intercept it. So async routing is correct and a non-participant is unaffected.
   fn exchange_ac(lb: Local, t: Tag, ka: Local, kc: Local) -> ARun(MkConfig(LSendTo(RC(), t, ka), lb, LRecvFrom(RA(), t, kc), BEmpty()), MkConfig(ka, lb, kc, BEmpty())) =
     ARStep(send_ac(t, ka, lb, kc), ARStep(recv_ca(t, ka, lb, kc), ARDone()))
+
+  ## A 3-party PIPELINE protocol RA→RB→RC: RA sends t1 to RB, then RB forwards t2 to RC. The three
+  ## peer-annotated endpoints (this is exactly what projecting GMsg(RA,RB,t1, GMsg(RB,RC,t2, GEnd))
+  ## gives). Steps have concrete types so the intermediate configs are pinned when composed.
+  fn pstep1(t1: Tag, t2: Tag) -> AStep(MkConfig(LSendTo(RB(), t1, LEnd()), LRecvFrom(RA(), t1, LSendTo(RC(), t2, LEnd())), LRecvFrom(RB(), t2, LEnd()), BEmpty()), MkConfig(LEnd(), LRecvFrom(RA(), t1, LSendTo(RC(), t2, LEnd())), LRecvFrom(RB(), t2, LEnd()), BFull(RA(), RB(), t1))) = ASendA()
+  fn pstep2(t1: Tag, t2: Tag) -> AStep(MkConfig(LEnd(), LRecvFrom(RA(), t1, LSendTo(RC(), t2, LEnd())), LRecvFrom(RB(), t2, LEnd()), BFull(RA(), RB(), t1)), MkConfig(LEnd(), LSendTo(RC(), t2, LEnd()), LRecvFrom(RB(), t2, LEnd()), BEmpty())) = ARecvB()
+  fn pstep3(t1: Tag, t2: Tag) -> AStep(MkConfig(LEnd(), LSendTo(RC(), t2, LEnd()), LRecvFrom(RB(), t2, LEnd()), BEmpty()), MkConfig(LEnd(), LEnd(), LRecvFrom(RB(), t2, LEnd()), BFull(RB(), RC(), t2))) = ASendB()
+  fn pstep4(t1: Tag, t2: Tag) -> AStep(MkConfig(LEnd(), LEnd(), LRecvFrom(RB(), t2, LEnd()), BFull(RB(), RC(), t2)), MkConfig(LEnd(), LEnd(), LEnd(), BEmpty())) = ARecvC()
+  ## **MULTIPARTY ASYNC RUN TO COMPLETION**: the RA→RB→RC pipeline runs asynchronously all the way to
+  ## (LEnd, LEnd, LEnd, empty) — every routed message is delivered and consumed, the mailbox ends empty
+  ## (orphan-freedom), and every role finishes (progress + termination). Routing carries t1 to RB then
+  ## t2 to RC through the chain, each hop a send-then-receive; no role deadlocks and nothing is left
+  ## in flight.
+  fn pipeline_terminates(t1: Tag, t2: Tag) -> ARun(MkConfig(LSendTo(RB(), t1, LEnd()), LRecvFrom(RA(), t1, LSendTo(RC(), t2, LEnd())), LRecvFrom(RB(), t2, LEnd()), BEmpty()), MkConfig(LEnd(), LEnd(), LEnd(), BEmpty())) =
+    ARStep(pstep1(t1, t2), ARStep(pstep2(t1, t2), ARStep(pstep3(t1, t2), ARStep(pstep4(t1, t2), ARDone()))))
 end
