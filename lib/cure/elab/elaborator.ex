@@ -297,6 +297,26 @@ defmodule Cure.Elab.Elaborator do
           end
         end
 
+      # An applied call to a bare overloaded name — a set of ≥2 members sharing
+      # one bare spelling: same-module discriminated members, or cross-module
+      # providers with no unique winner. `overload_candidates/2` already applies
+      # local-then-direct precedence, so a name with a single local/direct winner
+      # (a local `map` shadowing imports) collapses to one candidate and never
+      # reaches here — only a genuine set of ≥2 does. Infer the argument types
+      # once, prune by first-order convertibility, and dispatch the survivor.
+      # Placed after the ctor/method/constrained/qualified special cases and
+      # before the generic ambiguity/def paths; the `not String.contains?` guard
+      # keeps it disjoint from the dotted-qualified clause.
+      not String.contains?(name, ".") and
+          length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2 ->
+        cands = Cure.Elab.Resolution.overload_candidates(env, atom)
+
+        with {:ok, present} <- map_present_args(args, names, ctx, env),
+             arg_types = Enum.map(present, fn {_term, ty} -> ty end),
+             {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, cands) do
+          elaborate_global_app(env, winner, present, ctx)
+        end
+
       # A bare name provided by ≥2 distinct re-keyed imports with no local/
       # unshadowed winner: unqualified use is ambiguous (R7). Checked before the
       # generic paths so an ambiguous name surfaces `:ambiguous_name`, not a

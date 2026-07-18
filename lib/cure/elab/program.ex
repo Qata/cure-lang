@@ -821,7 +821,7 @@ defmodule Cure.Elab.Program do
   """
   @spec check_ast_with_locals(tuple() | list()) :: {:ok, Env.t(), [atom()]} | {:error, term()}
   def check_ast_with_locals(ast) do
-    local_defs = local_def_names(ast)
+    local_defs = local_emit_names(ast)
 
     with {:ok, env} <- check_ast(ast) do
       # `implementation` declarations synthesise mangled method globals that are
@@ -829,6 +829,33 @@ defmodule Cure.Elab.Program do
       # emitted alongside the source-declared defs.
       {:ok, env, local_defs ++ impl_def_names(env)}
     end
+  end
+
+  # The def keys codegen must emit, one per source `:function_def`. A member of a
+  # same-name group of size >= 2 is registered under a discriminated bare name
+  # (`plus~<ord>`, see `annotate_overload_ordinals/1`), so its emit key must carry
+  # the SAME ordinal — otherwise both members lower to one BEAM function and
+  # `erl_lint` rejects the redefinition. Ordinals are assigned in declaration
+  # order, identically to the registration pass, so the emit key and the stored
+  # def key agree. A size-one name is returned bare and untouched, keeping
+  # non-overloaded codegen byte-identical. (`local_def_names/1` stays the surface
+  # spelling for `@prelude`-shadow and import-origin bookkeeping, which key by
+  # bare name.)
+  defp local_emit_names(ast) do
+    names = local_def_names(ast)
+    overloaded = for {n, c} <- Enum.frequencies(names), c >= 2, into: MapSet.new(), do: n
+
+    {keys, _counters} =
+      Enum.map_reduce(names, %{}, fn name, counters ->
+        if MapSet.member?(overloaded, name) do
+          ord = Map.get(counters, name, 0)
+          {Cure.Elab.Name.overload_key(name, ord), Map.put(counters, name, ord + 1)}
+        else
+          {name, counters}
+        end
+      end)
+
+    keys
   end
 
   @doc """

@@ -99,10 +99,17 @@ defmodule Cure.Elab.Resolution do
   end
 
   @doc """
-  Every in-scope canonical def key that provides `bare`: the local module's
-  members and, if none local, `prefer_direct`-scoped import providers. Returns
-  `[]` (unknown), `[key]` (single provider), or `[k0, k1, …]` (an overload
-  set). Used by the applied call site to prune by argument type.
+  Every in-scope canonical def key that provides `bare`. The local module's
+  members win first (a local set shadows same-named imports entirely, and a
+  single local def collapses the result to one); only when none are local do
+  `prefer_direct`-scoped import providers remain. Returns `[]` (unknown),
+  `[key]` (single provider — not an overload set), or `[k0, k1, …]` (an
+  overload set). Used by the applied call site to prune by argument type.
+
+  Ordering matters: `prefer_local` precedes `prefer_direct` so a module's own
+  overload members are never dropped for not appearing in its own
+  `import_modules`, which would otherwise let a prelude provider (e.g.
+  `Std.Nat#plus`) masquerade as the sole candidate for a locally-overloaded name.
   """
   @spec overload_candidates(Env.t(), atom()) :: [atom()]
   def overload_candidates(%Env{} = env, bare) do
@@ -111,8 +118,8 @@ defmodule Cure.Elab.Resolution do
     Map.keys(env.defs)
     |> Enum.filter(fn key -> is_atom(key) and provides_bare?(Atom.to_string(key), b) end)
     |> Enum.map(fn key -> {Cure.Elab.Name.owner(key), key} end)
-    |> prefer_direct(env.import_modules)
     |> prefer_local(env.module_owner)
+    |> prefer_direct(env.import_modules)
     |> Enum.map(&elem(&1, 1))
     |> Enum.uniq()
   end

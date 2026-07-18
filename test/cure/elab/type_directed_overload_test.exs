@@ -31,7 +31,6 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
   # not a candidate list. GREEN REQUIRES the front-end to gather an overload set
   # under one name, then prune by argument type at the call site (spec §4). When
   # implemented, delete the `@tag :skip` and this must pass.
-  @tag :skip
   test "a bare overloaded name resolves by argument type at the call site" do
     src = """
     mod TypeDirectedOverloadName
@@ -96,7 +95,33 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     assert {:error, {:overlapping_overload, :dup, 2}} = elaborate_error(src)
   end
 
+  # Task 5 — call-site pruning failure. When no member's parameter types match
+  # the inferred argument types, the call is `{:no_matching_overload, name, _}`
+  # rather than silently dispatching one arbitrarily.
+  test "no overload matches the argument types" do
+    src = """
+    mod OvlNoMatch
+      type Meters = MkM(Int)
+      type Grams = MkG(Int)
+      fn plus(a: Meters, b: Meters) -> Meters = a
+      fn plus(a: Grams, b: Grams) -> Grams = a
+      fn bad() -> Int = match plus(1, 2)
+        _ -> 0
+    end
+    """
+
+    assert {:error, err} = compile_and_load_error(src)
+    assert match?({:no_matching_overload, :plus, _}, unwrap_inner(err))
+  end
+
   defp elaborate_error(src), do: unwrap(Cure.Elab.Program.elaborate(src))
+
+  defp compile_and_load_error(src), do: Cure.Compiler.compile_and_load(src, emit_events: false)
+
+  # `compile_and_load/2` wraps an elaboration failure as `{:codegen_error, inner}`.
+  # Peel one layer so the test can assert on the overload diagnostic directly.
+  defp unwrap_inner({:codegen_error, inner}), do: inner
+  defp unwrap_inner(other), do: other
 
   defp unwrap({:ok, _} = ok), do: flunk("expected an error, got #{inspect(ok)}")
   defp unwrap({:error, reason}), do: {:error, reason}
