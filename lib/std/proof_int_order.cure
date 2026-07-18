@@ -14,12 +14,23 @@ mod Std.Proof.IntOrder
   ## indices stay plain variables and the sole constructor carries an `IsTrue`
   ## witness of the total Boolean test. This mirrors Idris (`So`/`Oh`), Agda
   ## (`T`), and Lean (`Decidable`).
+  ##
+  ## **Consequence for lemma shapes.** Because the reflected proof carries no
+  ## structure of the compared integers (only that a Boolean test is `True`),
+  ## order lemmas that must inspect those integers take them as *explicit*
+  ## (relevant) parameters rather than the erased implicit `{index}` slots used
+  ## by the structural `Nat`-order family in `Std.Proof.Math`. The Boolean tests
+  ## `le_int` / `lt_int` are total functions routed through `Nat`, and each law
+  ## is discharged by an ordinary Boolean lemma plus case analysis.
 
   use Std.Bool
   use Std.Nat
   use Std.Int
   use Std.Decision
   use Std.Proof.IntMath
+
+  ## Ex falso: anything follows from a proof of the empty type.
+  fn absurd({a: Type}, void: Empty) -> a = match void
 
   ## Boolean less-than-or-equal on naturals, structural on the left operand.
   fn le_nat(left: Nat, right: Nat) -> Bool =
@@ -67,6 +78,46 @@ mod Std.Proof.IntOrder
           FromNat(n) -> True()
           NegativeSuccessor(j) -> lt_nat(j, k)
 
+  ## The integer successor `i + 1`. -(k+1)+1 folds the negative magnitude down
+  ## (to zero when k = 0), and nonnegatives grow by one.
+  fn succ_int(i: Int) -> Int =
+    match i
+      FromNat(n) -> FromNat(S(n))
+      NegativeSuccessor(k) ->
+        match k
+          Z() -> FromNat(Z())
+          S(predecessor) -> NegativeSuccessor(predecessor)
+
+  ## The integer predecessor `i - 1`. Nonnegatives shrink (to -1 at zero) and
+  ## negatives grow one more negative.
+  fn pred_int(i: Int) -> Int =
+    match i
+      FromNat(n) ->
+        match n
+          Z() -> NegativeSuccessor(Z())
+          S(predecessor) -> FromNat(predecessor)
+      NegativeSuccessor(k) -> NegativeSuccessor(S(k))
+
+  ## `x` advanced `count` integer successors.
+  fn add_nat_succ(count: Nat, x: Int) -> Int =
+    match count
+      Z() -> x
+      S(predecessor) -> succ_int(add_nat_succ(predecessor, x))
+
+  ## `x` retreated `count` integer predecessors.
+  fn add_nat_pred(count: Nat, x: Int) -> Int =
+    match count
+      Z() -> x
+      S(predecessor) -> pred_int(add_nat_pred(predecessor, x))
+
+  ## Total integer addition, defined by iterating the successor/predecessor on
+  ## `x` according to the sign and magnitude of `addend`. `FromNat(m)` steps up
+  ## `m` times; `NegativeSuccessor(k)` steps down `k + 1` times.
+  fn add_int(addend: Int, x: Int) -> Int =
+    match addend
+      FromNat(m) -> add_nat_succ(m, x)
+      NegativeSuccessor(k) -> add_nat_pred(S(k), x)
+
   ## Evidence that one integer is ≤ another: the reflected proposition that the
   ## decidable Boolean test `le_int` returns `True`.
   type IsLessThanOrEqual indices (left: Int, right: Int)
@@ -99,6 +150,144 @@ mod Std.Proof.IntOrder
     match value
       FromNat(n) -> AtMost(le_int_from_nat_is_reflexive(n))
       NegativeSuccessor(k) -> AtMost(le_int_neg_succ_is_reflexive(k))
+
+  ## `le_nat` composes transitively (Boolean form). A zero left operand is
+  ## immediate; the impossible `S(_) ≤ Z` cases are refuted from the evidence.
+  fn le_nat_transitive(
+    a: Nat, b: Nat, c: Nat,
+    a_le_b: IsTrue(le_nat(a, b)),
+    b_le_c: IsTrue(le_nat(b, c))
+  ) -> IsTrue(le_nat(a, c)) =
+    match a
+      Z() -> Confirmed()
+      S(a_predecessor) ->
+        match b
+          Z() -> absurd(true_is_not_false(a_le_b))
+          S(b_predecessor) ->
+            match c
+              Z() -> absurd(true_is_not_false(b_le_c))
+              S(c_predecessor) -> le_nat_transitive(a_predecessor, b_predecessor, c_predecessor, a_le_b, b_le_c)
+
+  ## `le_int` composes transitively (Boolean form). Case-splits on the outer
+  ## integers `a`, `c`, then the middle `b`; real cases delegate to
+  ## `le_nat_transitive` (the neg/neg case reversed), the rest are immediate or
+  ## refuted from the evidence.
+  fn le_int_transitive(
+    a: Int, b: Int, c: Int,
+    a_le_b: IsTrue(le_int(a, b)),
+    b_le_c: IsTrue(le_int(b, c))
+  ) -> IsTrue(le_int(a, c)) =
+    match a
+      FromNat(x) ->
+        match c
+          FromNat(z) ->
+            match b
+              FromNat(y) -> le_nat_transitive(x, y, z, a_le_b, b_le_c)
+              NegativeSuccessor(w) -> absurd(true_is_not_false(a_le_b))
+          NegativeSuccessor(z) ->
+            match b
+              FromNat(y) -> absurd(true_is_not_false(b_le_c))
+              NegativeSuccessor(w) -> absurd(true_is_not_false(a_le_b))
+      NegativeSuccessor(x) ->
+        match c
+          FromNat(z) -> Confirmed()
+          NegativeSuccessor(z) ->
+            match b
+              FromNat(y) -> absurd(true_is_not_false(b_le_c))
+              NegativeSuccessor(w) -> le_nat_transitive(z, w, x, b_le_c, a_le_b)
+
+  ## Less-than-or-equal evidence composes transitively. The compared integers
+  ## are explicit (see the module header): the reflected proof does not carry
+  ## them, and `le_int_transitive` must inspect them.
+  fn is_less_than_or_equal_is_transitive(
+    left: Int, middle: Int, right: Int,
+    left_to_middle: IsLessThanOrEqual(left, middle),
+    middle_to_right: IsLessThanOrEqual(middle, right)
+  ) -> IsLessThanOrEqual(left, right) =
+    match left_to_middle
+      AtMost(left_middle_evidence) ->
+        match middle_to_right
+          AtMost(middle_right_evidence) ->
+            AtMost(le_int_transitive(left, middle, right, left_middle_evidence, middle_right_evidence))
+
+  ## The integer successor is monotone (Boolean form): `a ≤ b → a+1 ≤ b+1`.
+  fn succ_int_is_monotone(a: Int, b: Int, a_le_b: IsTrue(le_int(a, b))) -> IsTrue(le_int(succ_int(a), succ_int(b))) =
+    match a
+      FromNat(x) ->
+        match b
+          FromNat(y) -> a_le_b
+          NegativeSuccessor(w) -> absurd(true_is_not_false(a_le_b))
+      NegativeSuccessor(x) ->
+        match b
+          FromNat(y) ->
+            match x
+              Z() -> Confirmed()
+              S(x_predecessor) -> Confirmed()
+          NegativeSuccessor(w) ->
+            match x
+              Z() ->
+                match w
+                  Z() -> Confirmed()
+                  S(w_predecessor) -> absurd(true_is_not_false(a_le_b))
+              S(x_predecessor) ->
+                match w
+                  Z() -> Confirmed()
+                  S(w_predecessor) -> a_le_b
+
+  ## The integer predecessor is monotone (Boolean form): `a ≤ b → a-1 ≤ b-1`.
+  fn pred_int_is_monotone(a: Int, b: Int, a_le_b: IsTrue(le_int(a, b))) -> IsTrue(le_int(pred_int(a), pred_int(b))) =
+    match a
+      FromNat(x) ->
+        match b
+          FromNat(y) ->
+            match x
+              Z() ->
+                match y
+                  Z() -> Confirmed()
+                  S(y_predecessor) -> Confirmed()
+              S(x_predecessor) ->
+                match y
+                  Z() -> absurd(true_is_not_false(a_le_b))
+                  S(y_predecessor) -> a_le_b
+          NegativeSuccessor(w) -> absurd(true_is_not_false(a_le_b))
+      NegativeSuccessor(x) ->
+        match b
+          FromNat(y) ->
+            match y
+              Z() -> Confirmed()
+              S(y_predecessor) -> Confirmed()
+          NegativeSuccessor(w) -> a_le_b
+
+  ## Iterating a monotone integer successor preserves `≤`.
+  fn add_nat_succ_is_monotone(count: Nat, a: Int, b: Int, a_le_b: IsTrue(le_int(a, b))) -> IsTrue(le_int(add_nat_succ(count, a), add_nat_succ(count, b))) =
+    match count
+      Z() -> a_le_b
+      S(predecessor) ->
+        succ_int_is_monotone(add_nat_succ(predecessor, a), add_nat_succ(predecessor, b), add_nat_succ_is_monotone(predecessor, a, b, a_le_b))
+
+  ## Iterating a monotone integer predecessor preserves `≤`.
+  fn add_nat_pred_is_monotone(count: Nat, a: Int, b: Int, a_le_b: IsTrue(le_int(a, b))) -> IsTrue(le_int(add_nat_pred(count, a), add_nat_pred(count, b))) =
+    match count
+      Z() -> a_le_b
+      S(predecessor) ->
+        pred_int_is_monotone(add_nat_pred(predecessor, a), add_nat_pred(predecessor, b), add_nat_pred_is_monotone(predecessor, a, b, a_le_b))
+
+  ## Integer addition is monotone in its second argument (Boolean form):
+  ## `a ≤ b → addend + a ≤ addend + b`, by iterating succ/pred monotonicity.
+  fn add_int_is_monotone(addend: Int, a: Int, b: Int, a_le_b: IsTrue(le_int(a, b))) -> IsTrue(le_int(add_int(addend, a), add_int(addend, b))) =
+    match addend
+      FromNat(m) -> add_nat_succ_is_monotone(m, a, b, a_le_b)
+      NegativeSuccessor(k) -> add_nat_pred_is_monotone(S(k), a, b, a_le_b)
+
+  ## Adding the same integer to both sides preserves less-than-or-equal. The
+  ## sides are explicit (see the module header) since `add_int_is_monotone`
+  ## inspects them.
+  fn adding_the_same_number_preserves_less_than_or_equal(
+    addend: Int, left: Int, right: Int,
+    proof: IsLessThanOrEqual(left, right)
+  ) -> IsLessThanOrEqual(add_int(addend, left), add_int(addend, right)) =
+    match proof
+      AtMost(evidence) -> AtMost(add_int_is_monotone(addend, left, right, evidence))
 
   ## Invert `AtMost`: a refutation of the reflected Boolean evidence refutes the
   ## whole `≤` proof (its only constructor carries exactly that evidence).
