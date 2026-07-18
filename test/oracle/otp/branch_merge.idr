@@ -356,3 +356,12 @@ branch_terminates (WFBA t w2) = GRStep GStMsg (branch_terminates w2)
 branch_terminates (WFBC t w2) = GRStep GStMsg (branch_terminates w2)
 branch_terminates (WFAC t w2) = GRStep GStMsg (branch_terminates w2)
 branch_terminates (WFCho tL wL tR wR mg) = GRStep GStChoL (branch_terminates wL)
+
+cstep_preserves : Coherent g -> GStep g g2 -> Coherent g2
+cstep_preserves (CoAB t w2) GStMsg = w2
+cstep_preserves (CoBA t w2) GStMsg = w2
+cstep_preserves (CoCho tL wL tR wR) GStChoL = wL
+cstep_preserves (CoCho tL wL tR wR) GStChoR = wR
+
+duality_preserved : Coherent g -> GStep g g2 -> project g2 RA = dual (project g2 RB)
+duality_preserved w st = choice_duality (cstep_preserves w st)

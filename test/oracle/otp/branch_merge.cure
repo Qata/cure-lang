@@ -424,4 +424,15 @@ mod BranchMerge
     WFBC(t, w2)               -> GRStep(GStMsg(), branch_terminates(w2))
     WFAC(t, w2)               -> GRStep(GStMsg(), branch_terminates(w2))
     WFCho(tL, wL, tR, wR, mg) -> GRStep(GStChoL(), branch_terminates(wL))
+
+  fn cstep_preserves({g: Global}, {g2: Global}, w: Coherent(g), st: GStep(g, g2)) -> Coherent(g2) = match st
+    GStMsg()  -> match w
+      CoAB(t, w2) -> w2
+      CoBA(t, w2) -> w2
+    GStChoL() -> match w
+      CoCho(tL, wL, tR, wR) -> wL
+    GStChoR() -> match w
+      CoCho(tL, wL, tR, wR) -> wR
+  fn duality_preserved({g: Global}, {g2: Global}, w: Coherent(g), st: GStep(g, g2)) -> Equivalent(Local, project(g2, RA()), dual(project(g2, RB()))) =
+    choice_duality(cstep_preserves(w, st))
 end
