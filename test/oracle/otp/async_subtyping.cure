@@ -1,0 +1,36 @@
+mod AsyncSubtyping
+  use Std.Equivalent
+  ## ASYNCHRONOUS SUBTYPING (Mostrous–Yoshida): the defining async optimization is OUTPUT-BEFORE-INPUT
+  ## reordering — because a send only DEPOSITS into a buffer, an endpoint may send AHEAD (emit an
+  ## independent output) BEFORE receiving, and the session is still safe. This is unsound synchronously
+  ## (a sync send blocks) but sound asynchronously (the output is buffered and delivered when the peer
+  ## is ready). Here: the peer P first sends `a` then receives `b`; the sync-order partner would receive
+  ## `a` then send `b`, but the REORDERED partner E sends `b` FIRST then receives `a` — and still
+  ## completes.
+  type Tag = TA | TB
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local)
+  type Buf = BEmpty | BFull(Tag)
+  type Config = MkConfig(Local, Local, Buf, Buf)
+  type AStep indices (c: Config, c2: Config)
+    ASendA : AStep(MkConfig(LSend(t, ka), b, BEmpty, ba), MkConfig(ka, b, BFull(t), ba))
+    ARecvB : AStep(MkConfig(a, LRecv(t, kb), BFull(t), ba), MkConfig(a, kb, BEmpty, ba))
+    ASendB : AStep(MkConfig(a, LSend(t, kb), ab, BEmpty), MkConfig(a, kb, ab, BFull(t)))
+    ARecvA : AStep(MkConfig(LRecv(t, ka), b, ab, BFull(t)), MkConfig(ka, b, ab, BEmpty))
+  type ARun indices (c: Config, c2: Config)
+    ARDone : ARun(c, c)
+    ARStep : AStep(c, cm) -> ARun(cm, c2) -> ARun(c, c2)
+  ## Steps with concrete types (pin the intermediate configs). E = the reordered (send-ahead) endpoint
+  ## LSend(b, LRecv(a, LEnd)); P = LSend(a, LRecv(b, LEnd)) (sends a, then receives b).
+  fn r1(a: Tag, b: Tag) -> AStep(MkConfig(LSend(b, LRecv(a, LEnd())), LSend(a, LRecv(b, LEnd())), BEmpty(), BEmpty()), MkConfig(LRecv(a, LEnd()), LSend(a, LRecv(b, LEnd())), BFull(b), BEmpty())) = ASendA()
+  fn r2(a: Tag, b: Tag) -> AStep(MkConfig(LRecv(a, LEnd()), LSend(a, LRecv(b, LEnd())), BFull(b), BEmpty()), MkConfig(LRecv(a, LEnd()), LRecv(b, LEnd()), BFull(b), BFull(a))) = ASendB()
+  fn r3(a: Tag, b: Tag) -> AStep(MkConfig(LRecv(a, LEnd()), LRecv(b, LEnd()), BFull(b), BFull(a)), MkConfig(LEnd(), LRecv(b, LEnd()), BFull(b), BEmpty())) = ARecvA()
+  fn r4(a: Tag, b: Tag) -> AStep(MkConfig(LEnd(), LRecv(b, LEnd()), BFull(b), BEmpty()), MkConfig(LEnd(), LEnd(), BEmpty(), BEmpty())) = ARecvB()
+  ## **ASYNC OUTPUT-BEFORE-INPUT SOUNDNESS**: the send-ahead endpoint E = LSend(b, LRecv(a, LEnd)) —
+  ## which emits `b` BEFORE receiving `a`, the reverse of its peer's action order — nonetheless runs the
+  ## async session all the way to (LEnd, LEnd, empty, empty). The early output `b` sits in the buffer
+  ## until P is ready to consume it; meanwhile P's `a` is buffered for E. Both messages are delivered,
+  ## both endpoints finish, no orphan remains. So output-input reordering is a SOUND async refinement —
+  ## the core of asynchronous subtyping — even though it would deadlock synchronously.
+  fn reordered_completes(a: Tag, b: Tag) -> ARun(MkConfig(LSend(b, LRecv(a, LEnd())), LSend(a, LRecv(b, LEnd())), BEmpty(), BEmpty()), MkConfig(LEnd(), LEnd(), BEmpty(), BEmpty())) =
+    ARStep(r1(a, b), ARStep(r2(a, b), ARStep(r3(a, b), ARStep(r4(a, b), ARDone()))))
+end
