@@ -37,8 +37,8 @@ defmodule Antigen.Generators.EffectInert do
   alias Antigen.{Gen, Challenge}
 
   @omega Cure.Core.Grade.unrestricted()
-  @int {:int_type}
-  @effect_int {:effect_type, {:int_type}}
+  @int {:data, :Int, [], []}
+  @effect_int {:effect_type, {:data, :Int, [], []}}
 
   # `pure(x)` where x is the nearest bound var (de Bruijn 0).
   @pure_var0 {:effect_pure, {:var, 0}}

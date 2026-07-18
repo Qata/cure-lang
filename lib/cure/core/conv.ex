@@ -89,6 +89,16 @@ defmodule Cure.Core.Conv do
 
   defp conv_struct?({:vint_type}, {:vint_type}, _depth, _sig), do: true
   defp conv_struct?({:vint, a}, {:vint, b}, _depth, _sig), do: a == b
+
+  # A compact Int literal is definitionally equal to its FromNat/NegativeSuccessor
+  # constructor value, both directions — the Int analogue of the vnat↔S/Z rules
+  # below. Single-step peel (Int has just the two outermost ctors), then the
+  # ctor↔ctor / ctor↔vnat rules finish the comparison on the compact Nat field.
+  defp conv_struct?({:vint, n}, {:vctor, _, _} = c, depth, sig),
+    do: conv_struct?(Eval.int_to_ctor({:vint, n}), c, depth, sig)
+
+  defp conv_struct?({:vctor, _, _} = c, {:vint, n}, depth, sig),
+    do: conv_struct?(c, Eval.int_to_ctor({:vint, n}), depth, sig)
   defp conv_struct?({:vfloat_type}, {:vfloat_type}, _depth, _sig), do: true
   defp conv_struct?({:vbinary_type}, {:vbinary_type}, _depth, _sig), do: true
   defp conv_struct?({:vatom_type}, {:vatom_type}, _depth, _sig), do: true

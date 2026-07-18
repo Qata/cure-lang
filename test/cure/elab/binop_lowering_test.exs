@@ -43,7 +43,7 @@ defmodule Cure.Elab.BinopLoweringTest do
 
   test "Int `+` lowers to an int_add global spine, no prim" do
     b = body("  fn f(x: Int) -> Int = x + 1\n", :f)
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(bop(:int_add), {:var, 0}, {:int_lit, 1})} == b
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Int#Int", [], []}, app2(bop(:int_add), {:var, 0}, {:int_lit, 1})} == b
     assert no_prim?(b)
   end
 
@@ -58,12 +58,12 @@ defmodule Cure.Elab.BinopLoweringTest do
 
   test "Int `==` lowers to int_eq (guard-position shape)" do
     b = body("  fn eq0(n: Int) -> Bool = n == 0\n", :eq0)
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(bop(:int_eq), {:var, 0}, {:int_lit, 0})} == b
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Int#Int", [], []}, app2(bop(:int_eq), {:var, 0}, {:int_lit, 0})} == b
     assert no_prim?(b)
   end
 
   test "Int `!=` lowers to int_ne; Float `==` to float_eq" do
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:int_type}, app2(bop(:int_ne), {:var, 0}, {:int_lit, 3})} ==
+    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Int#Int", [], []}, app2(bop(:int_ne), {:var, 0}, {:int_lit, 3})} ==
              body("  fn t(n: Int) -> Bool = n != 3\n", :t)
 
     assert {:lam, Cure.Core.Grade.unrestricted(), {:float_type}, app2(bop(:float_eq), {:var, 0}, {:float_lit, 2.0})} ==

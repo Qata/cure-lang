@@ -611,7 +611,13 @@ defmodule Cure.Elab.Elaborator do
         {:ok, {:ctor, ctor, []}, Kernel.bool_type_value(Context.signature(ctx))}
 
       :integer when is_integer(value) ->
-        {:ok, {:int_lit, value}, {:vint_type}}
+        # The compact `{:int_lit, value}` Core node stays canonical, but its TYPE
+        # is the inductive `Int` family value (post-2026-07-18 surface flip),
+        # exactly as the bool arm above types its ctor at `bool_type_value`. Handing
+        # back the retired facade `{:vint_type}` here made every elaborated literal
+        # fail conversion against a family-typed context (`{:data, Std.Int#Int}` vs
+        # `{:int_type}`).
+        {:ok, {:int_lit, value}, Kernel.int_type_value(Context.signature(ctx))}
 
       :float when is_float(value) ->
         {:ok, {:float_lit, value}, {:vfloat_type}}
@@ -4655,8 +4661,17 @@ defmodule Cure.Elab.Elaborator do
   defp primitive_scrut_kind({:vint_type}, _sig), do: {:ok, :int}
   defp primitive_scrut_kind({:vfloat_type}, _sig), do: {:ok, :float}
 
+  # `Bool` and `Int` are both nullary inductive families now (spec 2026-07-18
+  # surface flip retired the primitive `{:vint_type}` node). An `Int`-typed operand
+  # is `{:vdata, int_fid, []}`; it maps to `:int` so the arithmetic/comparison/eq
+  # `build_binop` clauses fold to the monomorphic native ops exactly as before the
+  # flip. Any other nullary family (e.g. `Nat`) stays `:error` → struct_eq path.
   defp primitive_scrut_kind({:vdata, fid, []}, sig) do
-    if fid == Inductive.builtin(sig, :bool), do: {:ok, :bool}, else: :error
+    cond do
+      fid == Inductive.builtin(sig, :bool) -> {:ok, :bool}
+      fid == Inductive.builtin(sig, :int) -> {:ok, :int}
+      true -> :error
+    end
   end
 
   # An applied `Bounded(n)` (Char's underlying type) is an indexed family that

@@ -13,12 +13,12 @@ defmodule Cure.Core.DiagnosticsTest do
     assert {:error, {:conversion_failure, got, want}} =
              Kernel.check(ctx, {:int_lit, 1}, {:vdata, :Bool, []})
 
-    assert got == {:int_type}
+    assert got == {:data, :"Std.Int#Int", [], []}
     assert want == {:data, :Bool, [], []}
 
     # The reported normal forms are serializable (C2), so they can be rendered
     # or re-validated by an independent checker.
-    assert Serialize.encode(got) == "(int-type)"
+    assert Serialize.encode(got) == "(data Std.Int#Int () ())"
     assert Serialize.encode(want) == "(data Bool () ())"
   end
 end

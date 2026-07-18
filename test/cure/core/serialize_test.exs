@@ -62,7 +62,7 @@ defmodule Cure.Core.SerializeTest do
     well_typed = {:app, {:app, {:global, :int_add}, {:int_lit, 1}}, {:int_lit, 2}}
     {:ok, decoded} = Serialize.decode(Serialize.encode(well_typed))
     assert Kernel.infer(ctx, decoded) == Kernel.infer(ctx, well_typed)
-    assert {:ok, {:vint_type}} = Kernel.infer(ctx, decoded)
+    assert {:ok, {:vdata, :"Std.Int#Int", []}} = Kernel.infer(ctx, decoded)
 
     ill_typed = {:app, {:app, {:global, :int_add}, {:int_lit, 1}}, {:type, 0}}
     {:ok, decoded_bad} = Serialize.decode(Serialize.encode(ill_typed))

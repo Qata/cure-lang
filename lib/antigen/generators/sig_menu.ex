@@ -55,6 +55,21 @@ defmodule Antigen.Generators.SigMenu do
       # clause resolves its type via `nat_type_value` (reads the :nat builtin),
       # which raises "builtin :nat not seeded" without this registration.
       |> Inductive.register_builtin(:nat, :Nat)
+      # Int + the :int builtin binding — the SAME canonical inductive family real
+      # Cure seeds via `Cure.Core.Builtins.seed/2` (`Int = FromNat(Nat) |
+      # NegativeSuccessor(Nat)`, ctor order and Nat-field types byte-mirrored). Since
+      # the 2026-07-18 surface flip retired the primitive `{:vint_type}`, a bare
+      # compact `{:int_lit, n}` term resolves its type via `Kernel.infer`'s int_lit
+      # clause through `int_type_value` (reads the :int builtin), which raises
+      # "builtin :int not seeded" without this registration — exactly mirroring :nat.
+      |> Inductive.declare(
+        Inductive.family(:Int, [], [], 0),
+        [
+          Inductive.ctor(:FromNat, [{:n, nat()}], []),
+          Inductive.ctor(:NegativeSuccessor, [{:n, nat()}], [])
+        ]
+      )
+      |> Inductive.register_builtin(:int, :Int)
       |> Inductive.declare(
         Inductive.family(:Bd, [], [], 0),
         [Inductive.ctor(:T, [], []), Inductive.ctor(:F, [], [])]
@@ -158,7 +173,7 @@ defmodule Antigen.Generators.SigMenu do
       # literal indices, the only v1 shape reaching rigid_index?'s int_lit/float_lit
       # clauses. Consumed by Generators.DepMatch's tg/tgf variants.
       |> Inductive.declare(
-        Inductive.family(:Tg, [], [{:i, {:int_type}}], 0),
+        Inductive.family(:Tg, [], [{:i, {:data, :Int, [], []}}], 0),
         [Inductive.ctor(:tg0, [], [{:int_lit, 0}]), Inductive.ctor(:tg1, [], [{:int_lit, 1}])]
       )
       |> Inductive.declare(

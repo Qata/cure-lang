@@ -42,10 +42,10 @@ defmodule Cure.Core.BuiltinOpTest do
     # under a binder: int_add x 1 vs int_add x 1 convertible; vs int_add x 2 not.
     # Conv.conv?/5 is conv?(t1, t2, value_env, depth, sig) — conv.ex:47-51,
     # precedent stuck_elim_delta_test.exs:72.
-    ctx1 = Context.extend(ctx(), {:vint_type})
+    ctx1 = Context.extend(ctx(), {:vdata, :"Std.Int#Int", []})
     t1 = app2(:int_add, {:var, 0}, {:int_lit, 1})
     t2 = app2(:int_add, {:var, 0}, {:int_lit, 2})
-    assert {:ok, {:vint_type}} = Kernel.infer(ctx1, t1)
+    assert {:ok, {:vdata, :"Std.Int#Int", []}} = Kernel.infer(ctx1, t1)
     assert t1 == Normalise.nf(ctx1, t1, delta: :certified)
     venv = Context.env(ctx1)
     refute Conv.conv?(t1, t2, venv, 1, env())

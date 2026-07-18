@@ -116,7 +116,7 @@ defmodule Cure.Core.Eval do
     # A compact Nat scrutinee peels ONE layer to `Z`/`S(pred)` and reuses the
     # ctor ι-rule (the tail stays compact, so eliminating a depth-n literal is n
     # steps, never an n-node heap tower); every other value passes through.
-    case nat_to_ctor_if(eval(scrut, env)) do
+    case int_to_ctor_if(nat_to_ctor_if(eval(scrut, env))) do
       {:vctor, cname, args} ->
         case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
           {_cname, arity, body} ->
@@ -250,6 +250,25 @@ defmodule Cure.Core.Eval do
   @doc false
   def nat_to_ctor_if({:vnat, _} = nat), do: nat_to_ctor(nat)
   def nat_to_ctor_if(value), do: value
+
+  # -- compact Int peeling ----------------------------------------------------
+
+  # Map a compact Int literal to its FromNat/NegativeSuccessor constructor value.
+  # Unlike nat_to_ctor (which peels ONE S layer, leaving a compact predecessor),
+  # this is SINGLE-STEP: Int has exactly two outermost constructors, each with a
+  # single compact-Nat field. This is the one audited literal→constructor mapping
+  # for Int (Lean's Int.ofNat/negSucc, @[extern]-backed). SOUND only because BEAM
+  # integers are arbitrary-precision (see Std.Int module doc): the inductive ℤ is
+  # unbounded and native bignums never wrap.
+  #   FromNat(n)           = n            (n ≥ 0)
+  #   NegativeSuccessor(n) = -(n + 1)     (-1, -2, …)
+  @doc false
+  def int_to_ctor({:vint, n}) when is_integer(n) and n >= 0, do: {:vctor, :FromNat, [{:vnat, n}]}
+  def int_to_ctor({:vint, n}) when is_integer(n) and n < 0, do: {:vctor, :NegativeSuccessor, [{:vnat, -n - 1}]}
+
+  @doc false
+  def int_to_ctor_if({:vint, _} = int), do: int_to_ctor(int)
+  def int_to_ctor_if(value), do: value
 
   # -- compact Bounded peeling ------------------------------------------------
 

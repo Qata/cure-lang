@@ -74,7 +74,18 @@ defmodule Cure.Elab.Implementation do
           head_atom(body, env, MapSet.put(seen, head), head)
 
         _ ->
-          if Inductive.family?(env, head), do: Env.resolve_key(env, env.families, head), else: head
+          cond do
+            # A primitive still shadows this name — `Int` during the inductive-Int
+            # transition is registered as a family (`Std.Int#Int`) AND is still a
+            # `seed_primitives` machine type. Its instances key by the primitive
+            # head `:Int`, exactly as they did before the family was seeded, until
+            # the primitive is retired (Task 4 drops `Int` from `seed_primitives`),
+            # at which point the family branch below takes over automatically. This
+            # keeps the family registration dormant w.r.t. coherence keying.
+            not is_nil(Env.primitive(env, to_string(head))) -> head
+            Inductive.family?(env, head) -> Env.resolve_key(env, env.families, head)
+            true -> head
+          end
       end
     end
   end

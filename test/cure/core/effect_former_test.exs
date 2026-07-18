@@ -17,28 +17,30 @@ defmodule Cure.Core.EffectFormerTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Core.{Context, Conv, Kernel, MetaCheck, Serialize, Term}
+  alias Cure.Core.{Builtins, Context, Conv, Env, Kernel, MetaCheck, Serialize, Term}
   alias Cure.Elab.{Erase, Subst}
 
   @omega Cure.Core.Grade.unrestricted()
 
   # Effect(Int) as a term and as its type-value.
-  defp effect_int, do: {:effect_type, {:int_type}}
-  defp effect_int_val, do: {:veffect_type, {:vint_type}}
+  defp effect_int, do: {:effect_type, {:data, :"Std.Int#Int", [], []}}
+  defp effect_int_val, do: {:veffect_type, {:vdata, :"Std.Int#Int", []}}
 
   # pure(3) : Effect(Int)
   defp pure3, do: {:effect_pure, {:int_lit, 3}}
 
   # A well-typed continuation `λ x:Int. pure(x)` and an ill-typed one
   # `λ x:Int. x` (returns Int, not Effect(Int)).
-  defp k_ok, do: {:lam, @omega, {:int_type}, {:effect_pure, {:var, 0}}}
-  defp k_bad, do: {:lam, @omega, {:int_type}, {:var, 0}}
+  defp k_ok, do: {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:effect_pure, {:var, 0}}}
+  defp k_bad, do: {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:var, 0}}
 
   # bind(pure(3), k)
   defp bind_ok, do: {:effect_bind, pure3(), k_ok()}
   defp bind_bad, do: {:effect_bind, pure3(), k_bad()}
 
-  defp empty, do: Context.empty()
+  # The env seeds the `:int` builtin (to type int literals) and registers the
+  # canonical `Std.Int#Int` family (payload of Effect(Int)).
+  defp empty, do: Context.empty(Builtins.seed(Env.empty()))
 
   describe "formation — Effect : Type ℓ → Type ℓ" do
     test "Effect(Int) infers at Type 0 (level-preserving)" do
@@ -56,7 +58,7 @@ defmodule Cure.Core.EffectFormerTest do
 
   describe "introduction — pure(a) : Effect(A)" do
     test "pure(3) infers at Effect(Int)" do
-      assert {:ok, {:veffect_type, {:vint_type}}} = Kernel.infer(empty(), pure3())
+      assert {:ok, {:veffect_type, {:vdata, :"Std.Int#Int", []}}} = Kernel.infer(empty(), pure3())
     end
 
     test "pure(3) checks at Effect(Int)" do
@@ -70,7 +72,7 @@ defmodule Cure.Core.EffectFormerTest do
 
   describe "sequencing — bind(e, k) : Effect(B)" do
     test "bind(pure(3), λx:Int. pure(x)) infers at Effect(Int)" do
-      assert {:ok, {:veffect_type, {:vint_type}}} = Kernel.infer(empty(), bind_ok())
+      assert {:ok, {:veffect_type, {:vdata, :"Std.Int#Int", []}}} = Kernel.infer(empty(), bind_ok())
     end
 
     test "bind(pure(3), λx:Int. pure(x)) checks at Effect(Int)" do
@@ -102,7 +104,7 @@ defmodule Cure.Core.EffectFormerTest do
     test "bind never applies its continuation — pure's payload is not substituted" do
       # If `bind` reduced, the nf would mention `3` where `k` uses its arg; it
       # must instead keep `bind`/`pure`/`λ` structurally intact.
-      assert {:effect_bind, {:effect_pure, {:int_lit, 3}}, {:lam, @omega, {:int_type}, {:effect_pure, {:var, 0}}}} =
+      assert {:effect_bind, {:effect_pure, {:int_lit, 3}}, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:effect_pure, {:var, 0}}}} =
                Kernel.normalize(empty(), bind_ok())
     end
   end
@@ -110,7 +112,7 @@ defmodule Cure.Core.EffectFormerTest do
   describe "congruence — same node, pointwise-convertible children" do
     test "structurally equal effect terms are convertible" do
       assert Conv.conv?(pure3(), {:effect_pure, {:int_lit, 3}}, [], 0)
-      assert Conv.conv?(effect_int(), {:effect_type, {:int_type}}, [], 0)
+      assert Conv.conv?(effect_int(), {:effect_type, {:data, :"Std.Int#Int", [], []}}, [], 0)
       assert Conv.conv?(bind_ok(), bind_ok(), [], 0)
     end
 
@@ -174,11 +176,11 @@ defmodule Cure.Core.EffectFormerTest do
 
   describe "elaborator walkers" do
     test "substitution and shifting recurse through pure and bind" do
-      term = {:effect_bind, {:effect_pure, {:var, 0}}, {:lam, @omega, {:int_type}, {:var, 1}}}
+      term = {:effect_bind, {:effect_pure, {:var, 0}}, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:var, 1}}}
 
-      assert {:effect_bind, {:effect_pure, {:var, 1}}, {:lam, @omega, {:int_type}, {:var, 2}}} = Subst.shift(term, 1, 0)
+      assert {:effect_bind, {:effect_pure, {:var, 1}}, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:var, 2}}} = Subst.shift(term, 1, 0)
 
-      assert {:effect_bind, {:effect_pure, {:int_lit, 7}}, {:lam, @omega, {:int_type}, {:int_lit, 7}}} =
+      assert {:effect_bind, {:effect_pure, {:int_lit, 7}}, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:int_lit, 7}}} =
                Subst.instantiate(term, [{:int_lit, 7}])
     end
 

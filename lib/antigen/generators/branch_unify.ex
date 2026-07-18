@@ -56,8 +56,9 @@ defmodule Antigen.Generators.BranchUnify do
     {0, :Sq, :mksq, [{:ctor, :Z, []}, {:ctor, :S, [{:ctor, :Z, []}]}], :impossible, "Sq mksq [Z,S Z] — merge conflict"},
     {2, :Sq, :mksq, [{:var, 0}, {:var, 1}], :solved, "Sq mksq [var0,var1] — forced equation (Solution step)"},
     {0, :Ty, :tnat, [{:type, 0}], :impossible, "Ty tnat [Type0] — rigid data/Type clash"},
-    {0, :Tg, :tg0, [{:int_lit, 0}], :trivial, "Tg tg0 [0] — int-literal match"},
-    {0, :Tg, :tg0, [{:int_lit, 1}], :trivial, "Tg tg0 [1] — int-literal heads agree (undecided)"},
+    {0, :Tg, :tg0, [{:int_lit, 0}], :trivial, "Tg tg0 [0] — int_lit==int_lit fast path (equal)"},
+    {0, :Tg, :tg0, [{:int_lit, 1}], :impossible,
+     "Tg tg0 [1] — int_lit!=int_lit fast path (distinct); the int_lit<->ctor bridge (kernel.ex) now decides distinct Int literals :impossible, mirroring the nat_lit bridge (Nl below), closing the coverage-soundness gap where they were left :undecided"},
     # crossing 4-index family: mkcyc : Cyc4 a a b b matched against Cyc4 i j j i
     # induces the multi-key cycle (i:=j then j:=i) → resolve-before-bind collapse.
     {2, :Cyc4, :mkcyc, [{:var, 0}, {:var, 1}, {:var, 1}, {:var, 0}], :solved,

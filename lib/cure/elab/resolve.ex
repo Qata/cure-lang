@@ -315,7 +315,9 @@ defmodule Cure.Elab.Resolve do
   defp peel_domains({:pi, _g, dom, cod}, n), do: [dom | peel_domains(cod, n - 1)]
   defp peel_domains(_other, _n), do: []
 
-  defp head_type_core(:Int), do: {:int_type}
+  # `Int` is no longer a primitive: surface `Int` resolves to the inductive family
+  # `Std.Int#Int` via the generic data clause below (spec 2026-07-18 surface flip),
+  # exactly as `Nat` does. Float/String remain primitive base types.
   defp head_type_core(:Float), do: {:float_type}
   defp head_type_core(:String), do: {:string_type}
   defp head_type_core(name), do: {:data, name, [], []}

@@ -6,10 +6,13 @@ defmodule Antigen.PrimitiveSeedAntibodyTest do
   predate it, gated by the #2/#3 batch) and changes no kernel judgement.
 
   Two properties:
-    * EXACTLY-FOUR-CANONICAL — the seeded floor is precisely {Int→int_type,
-      Float→float_type, Binary→binary_type, Atom→atom_type}: no extra bindings,
-      each mapping to the already-gated canonical node (`{:atom_type}` gated by
-      the Atom batch). A drifted binding would silently repoint a base type.
+    * EXACTLY-THREE-CANONICAL — post inductive-Int flip (spec 2026-07-18-
+      inductive-int §3a) `Int` is NO LONGER a primitive (it is the inductive
+      `@builtin(:int)` family, resolved by family lookup). The seeded floor is
+      precisely {Float→float_type, Binary→binary_type, Atom→atom_type}: no extra
+      bindings, each mapping to the already-gated canonical node (`{:atom_type}`
+      gated by the Atom batch). A drifted binding would silently repoint a base
+      type; a resurrected "Int" primitive would shadow the family.
     * KERNEL-INERT — inference/conversion on the primitive nodes is identical
       whether or not the primitives floor is present. The floor is a resolution
       convenience, never consulted by the TCB.
@@ -17,14 +20,16 @@ defmodule Antigen.PrimitiveSeedAntibodyTest do
   use ExUnit.Case, async: true
   alias Cure.Core.{Builtins, Context, Conv, Env, Kernel}
 
-  test "EXACTLY-FOUR-CANONICAL: the floor is precisely the four canonical bindings" do
+  test "EXACTLY-THREE-CANONICAL: the floor is precisely the three canonical bindings" do
     env = Builtins.seed(Env.empty())
 
-    assert Env.primitive(env, "Int") == {:int_type}
+    # `Int` is no longer a primitive — it is the inductive @builtin(:int) family,
+    # so it must fall through the primitives floor (nil) to family resolution.
+    assert Env.primitive(env, "Int") == nil
     assert Env.primitive(env, "Float") == {:float_type}
     assert Env.primitive(env, "Binary") == {:binary_type}
     assert Env.primitive(env, "Atom") == {:atom_type}
-    assert map_size(env.primitives) == 4
+    assert map_size(env.primitives) == 3
   end
 
   test "KERNEL-INERT: primitive-node judgements ignore the floor" do

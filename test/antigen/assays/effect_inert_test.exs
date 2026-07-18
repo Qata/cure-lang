@@ -11,10 +11,10 @@ defmodule Antigen.Assays.EffectInertTest do
   alias Antigen.Generators.EffectInert
   alias Antigen.{Challenge, Runner}
   alias Antigen.Backend.StreamData, as: B
-  alias Cure.Core.{Conv, Kernel, Context}
+  alias Cure.Core.{Conv, Kernel, Context, Env, Inductive}
 
   @omega Cure.Core.Grade.unrestricted()
-  @effect_int {:effect_type, {:int_type}}
+  @effect_int {:effect_type, {:data, :Int, [], []}}
 
   defp ch(term),
     do:
@@ -52,11 +52,14 @@ defmodule Antigen.Assays.EffectInertTest do
   # would flip and the assay would fire; the final assert pins that it currently
   # passes on this exact term.
   test "bind(pure(a), k) is a real, non-vacuous left-identity check" do
+    sig = Antigen.CanonBuiltins.seed(Env.empty())
+    ctx = Context.empty(sig)
+    int_fid = Inductive.builtin(sig, :int)
     a = {:int_lit, 3}
-    k = {:lam, @omega, {:int_type}, {:effect_pure, {:var, 0}}}
+    k = {:lam, @omega, {:data, :Int, [], []}, {:effect_pure, {:var, 0}}}
     t = {:effect_bind, {:effect_pure, a}, k}
 
-    assert {:ok, {:veffect_type, {:vint_type}}} = Kernel.infer(Context.empty(), t)
+    assert {:ok, {:veffect_type, {:vdata, ^int_fid, []}}} = Kernel.infer(ctx, t)
 
     # k(a) here reduces to pure(3); neither it nor pure(3) may be convertible with t.
     refute Conv.conv?(t, {:app, k, a}, [], 0)
@@ -69,8 +72,8 @@ defmodule Antigen.Assays.EffectInertTest do
   # vacuously :ok because nf did nothing) while leaving the `pure` node intact —
   # exactly the "reduce subterms, preserve effect structure" contract.
   test "nf reduces an effect node's payload but preserves the effect skeleton" do
-    t = {:effect_pure, {:app, {:lam, @omega, {:int_type}, {:var, 0}}, {:int_lit, 3}}}
-    nf = Kernel.normalize(Context.empty(), t)
+    t = {:effect_pure, {:app, {:lam, @omega, {:data, :Int, [], []}, {:var, 0}}, {:int_lit, 3}}}
+    nf = Kernel.normalize(Context.empty(Antigen.CanonBuiltins.seed(Env.empty())), t)
 
     assert nf == {:effect_pure, {:int_lit, 3}}, "nf failed to reduce the payload redex"
     assert nf != t, "nf was a no-op — the skeleton-preservation check would be vacuous"
