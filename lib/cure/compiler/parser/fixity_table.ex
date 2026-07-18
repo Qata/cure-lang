@@ -1,0 +1,266 @@
+defmodule Cure.Compiler.Parser.FixityTable do
+  @moduledoc """
+  Session-scoped fixity table assembled from `precedencegroup`/`infix`/`prefix`/
+  `postfix` declarations.
+
+  The table records precedence *groups* (each with an associativity and a partial
+  order over other groups, given by `higher_than`/`lower_than`) and the operator
+  lexemes assigned to those groups. From the group partial order it computes an
+  integer *binding power* per group, so the Pratt parser can bind operators
+  exactly as the declarations require.
+
+  This is the declaration-driven successor to the static
+  `Cure.Compiler.Parser.Precedence` table. In this task it is purely additive:
+  it is built and queried in isolation. Later tasks flip the expression parser's
+  binding-power decisions onto it and retire the static module.
+
+  ## Binding powers
+
+  Groups are linearised from the `higher_than`/`lower_than` relation by a local
+  Kahn topological sort (lowest-binding first) and assigned binding powers on a
+  fixed stride so that a left/non-associative operator's `right = left + 1` never
+  collides with the next group up. For a group `g` with binding power `bp`:
+
+  - `:left`  → `infix_bp` = `{bp, bp + 1}`
+  - `:none`  → `infix_bp` = `{bp, bp + 1}` (chaining is rejected separately)
+  - `:right` → `infix_bp` = `{bp, bp}`
+
+  ## Complexity
+
+  Ranks and the reachability closure are computed once per `add_group/2` (groups
+  are few, and construction is not a hot path). Every query —
+  `infix_bp/2`, `non_assoc?/2`, `incomparable?/3` — is an O(1) map lookup, so the
+  Pratt loop stays linear (heeds the parser-quadratic-token-lookup history).
+  """
+
+  @stride 10
+
+  @type group_name :: atom()
+  @type assoc :: :left | :right | :none
+  @type fixity :: :infix | :prefix | :postfix
+
+  defstruct groups: %{}, ops: %{}, ranks: %{}, reach: %{}
+
+  @type t :: %__MODULE__{
+          groups: %{group_name() => %{assoc: assoc(), higher_than: [group_name()], lower_than: [group_name()]}},
+          ops: %{String.t() => %{fixity: fixity(), group: group_name()}},
+          ranks: %{group_name() => pos_integer()},
+          reach: %{group_name() => MapSet.t(group_name())}
+        }
+
+  @doc "An empty fixity table."
+  @spec new() :: t()
+  def new, do: %__MODULE__{}
+
+  @doc """
+  Register a precedence group.
+
+  Options:
+    * `:assoc` — `:left` (default), `:right`, or `:none`
+    * `:higher_than` — groups this group binds tighter than (default `[]`)
+    * `:lower_than` — groups this group binds looser than (default `[]`)
+
+  Recomputes the memoized binding-power ranks and reachability closure.
+  """
+  @spec add_group(t(), group_name(), keyword()) :: t()
+  def add_group(%__MODULE__{groups: groups} = table, name, opts \\ []) when is_atom(name) do
+    entry = %{
+      assoc: Keyword.get(opts, :assoc, :left),
+      higher_than: Keyword.get(opts, :higher_than, []),
+      lower_than: Keyword.get(opts, :lower_than, [])
+    }
+
+    %{table | groups: Map.put(groups, name, entry)}
+    |> recompute()
+  end
+
+  @doc "Register an infix operator `lexeme` in `group`."
+  @spec add_infix(t(), String.t(), group_name()) :: t()
+  def add_infix(table, lexeme, group), do: add_op(table, lexeme, :infix, group)
+
+  @doc "Register a prefix operator `lexeme` in `group`."
+  @spec add_prefix(t(), String.t(), group_name()) :: t()
+  def add_prefix(table, lexeme, group), do: add_op(table, lexeme, :prefix, group)
+
+  @doc "Register a postfix operator `lexeme` in `group`."
+  @spec add_postfix(t(), String.t(), group_name()) :: t()
+  def add_postfix(table, lexeme, group), do: add_op(table, lexeme, :postfix, group)
+
+  defp add_op(%__MODULE__{ops: ops} = table, lexeme, fixity, group)
+       when is_binary(lexeme) and is_atom(group) do
+    %{table | ops: Map.put(ops, lexeme, %{fixity: fixity, group: group})}
+  end
+
+  @doc """
+  Returns `{left_bp, right_bp}` for an infix operator `lexeme`, or `:not_infix`
+  when the lexeme is unregistered or registered with a non-infix fixity.
+  """
+  @spec infix_bp(t(), String.t()) :: {pos_integer(), pos_integer()} | :not_infix
+  def infix_bp(%__MODULE__{ops: ops, groups: groups, ranks: ranks}, lexeme) do
+    with %{fixity: :infix, group: group} <- Map.get(ops, lexeme),
+         %{assoc: assoc} <- Map.get(groups, group),
+         bp when is_integer(bp) <- Map.get(ranks, group) do
+      right = if assoc == :right, do: bp, else: bp + 1
+      {bp, right}
+    else
+      _ -> :not_infix
+    end
+  end
+
+  @doc "Returns the right binding power of a prefix operator `lexeme`, or `:not_prefix`."
+  @spec prefix_bp(t(), String.t()) :: pos_integer() | :not_prefix
+  def prefix_bp(%__MODULE__{ops: ops, ranks: ranks}, lexeme) do
+    with %{fixity: :prefix, group: group} <- Map.get(ops, lexeme),
+         bp when is_integer(bp) <- Map.get(ranks, group) do
+      bp
+    else
+      _ -> :not_prefix
+    end
+  end
+
+  @doc "True when `lexeme`'s group is non-associative (`assoc: :none`)."
+  @spec non_assoc?(t(), String.t()) :: boolean()
+  def non_assoc?(%__MODULE__{ops: ops, groups: groups}, lexeme) do
+    case Map.get(ops, lexeme) do
+      %{group: group} -> match?(%{assoc: :none}, Map.get(groups, group))
+      _ -> false
+    end
+  end
+
+  @doc """
+  True when the two operators' groups are incomparable: neither group reaches the
+  other in the transitive closure of the `higher_than`/`lower_than` relation.
+  Unregistered lexemes are treated as incomparable.
+  """
+  @spec incomparable?(t(), String.t(), String.t()) :: boolean()
+  def incomparable?(%__MODULE__{ops: ops, reach: reach}, lexeme_a, lexeme_b) do
+    with %{group: ga} <- Map.get(ops, lexeme_a),
+         %{group: gb} <- Map.get(ops, lexeme_b) do
+      cond do
+        ga == gb -> false
+        MapSet.member?(Map.get(reach, ga, MapSet.new()), gb) -> false
+        MapSet.member?(Map.get(reach, gb, MapSet.new()), ga) -> false
+        true -> true
+      end
+    else
+      _ -> true
+    end
+  end
+
+  @doc "Returns the fixity of a registered `lexeme`, or `nil`."
+  @spec fixity(t(), String.t()) :: fixity() | nil
+  def fixity(%__MODULE__{ops: ops}, lexeme) do
+    case Map.get(ops, lexeme) do
+      %{fixity: f} -> f
+      _ -> nil
+    end
+  end
+
+  # -- Ranking + reachability (memoized on add_group) -------------------------
+
+  defp recompute(%__MODULE__{groups: groups} = table) do
+    nodes = all_nodes(groups)
+    edges = ascending_edges(groups, nodes)
+    ordered = kahn(nodes, edges)
+
+    ranks =
+      ordered
+      |> Enum.with_index(1)
+      |> Map.new(fn {name, i} -> {name, i * @stride} end)
+
+    %{table | ranks: ranks, reach: reachability(nodes, edges)}
+  end
+
+  # All group names mentioned anywhere: declared groups plus any referenced in a
+  # relation before their own declaration is seen.
+  defp all_nodes(groups) do
+    Enum.reduce(groups, MapSet.new(Map.keys(groups)), fn {_name, %{higher_than: h, lower_than: l}}, acc ->
+      acc |> add_all(h) |> add_all(l)
+    end)
+    |> MapSet.to_list()
+  end
+
+  defp add_all(set, names), do: Enum.reduce(names, set, &MapSet.put(&2, &1))
+
+  # A directed "binds looser -> binds tighter" edge set. `a -> b` means group `a`
+  # has a strictly lower binding power than `b`.
+  #   higher_than: [x] on g  ⇒  g binds tighter than x  ⇒  edge x -> g
+  #   lower_than:  [y] on g  ⇒  g binds looser than y   ⇒  edge g -> y
+  defp ascending_edges(groups, nodes) do
+    base = Map.new(nodes, &{&1, MapSet.new()})
+
+    Enum.reduce(groups, base, fn {g, %{higher_than: higher, lower_than: lower}}, acc ->
+      acc =
+        Enum.reduce(higher, acc, fn x, a ->
+          Map.update(a, x, MapSet.new([g]), &MapSet.put(&1, g))
+        end)
+
+      Enum.reduce(lower, acc, fn y, a ->
+        Map.update(a, g, MapSet.new([y]), &MapSet.put(&1, y))
+      end)
+    end)
+  end
+
+  # Deterministic Kahn topological sort (ascending binding power first). Cycles,
+  # if any are declared, degrade gracefully: remaining nodes are appended in
+  # sorted order so the result is always a complete linearisation.
+  defp kahn(nodes, edges) do
+    indeg =
+      Enum.reduce(edges, Map.new(nodes, &{&1, 0}), fn {_from, tos}, acc ->
+        Enum.reduce(tos, acc, fn to, a -> Map.update(a, to, 1, &(&1 + 1)) end)
+      end)
+
+    frontier = for {n, 0} <- indeg, into: MapSet.new(), do: n
+    do_kahn(frontier, indeg, edges, [])
+  end
+
+  defp do_kahn(frontier, indeg, edges, acc) do
+    case MapSet.size(frontier) do
+      0 ->
+        # Any nodes left with positive in-degree are in a declared cycle; append
+        # them deterministically rather than dropping them.
+        leftover = for {n, d} <- indeg, d > 0, do: n
+        Enum.reverse(acc) ++ Enum.sort(leftover)
+
+      _ ->
+        n = frontier |> MapSet.to_list() |> Enum.min()
+        frontier = MapSet.delete(frontier, n)
+
+        {indeg, frontier} =
+          edges
+          |> Map.get(n, MapSet.new())
+          |> Enum.reduce({indeg, frontier}, fn m, {ind, fr} ->
+            d = Map.get(ind, m, 0) - 1
+            ind = Map.put(ind, m, d)
+            fr = if d == 0, do: MapSet.put(fr, m), else: fr
+            {ind, fr}
+          end)
+
+        # Mark `n` consumed so it never re-enters the frontier.
+        do_kahn(frontier, Map.put(indeg, n, -1), edges, [n | acc])
+    end
+  end
+
+  # Transitive closure: reach[a] = every group reachable from `a` following the
+  # ascending edges (i.e. every group that binds strictly tighter than `a`).
+  defp reachability(nodes, edges) do
+    Map.new(nodes, fn n -> {n, dfs(edges, MapSet.new([n]), MapSet.new()) |> MapSet.delete(n)} end)
+  end
+
+  defp dfs(edges, frontier, seen) do
+    case MapSet.to_list(MapSet.difference(frontier, seen)) do
+      [] ->
+        seen
+
+      fresh ->
+        seen = MapSet.union(seen, MapSet.new(fresh))
+
+        next =
+          Enum.reduce(fresh, MapSet.new(), fn n, acc ->
+            MapSet.union(acc, Map.get(edges, n, MapSet.new()))
+          end)
+
+        dfs(edges, next, seen)
+    end
+  end
+end

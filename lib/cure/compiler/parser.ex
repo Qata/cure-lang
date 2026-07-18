@@ -2337,6 +2337,26 @@ defmodule Cure.Compiler.Parser do
               _ -> {variable(token), advance(state)}
             end
 
+          # `precedencegroup Name` (Phase 3, contextual): declares a precedence
+          # group. It is a declaration only when a group-name identifier follows;
+          # every other position keeps `precedencegroup` an ordinary identifier.
+          "precedencegroup" ->
+            case peek_at(state, 1) do
+              %Token{type: :identifier} -> parse_precedencegroup(state)
+              _ -> {variable(token), advance(state)}
+            end
+
+          # `infix|prefix|postfix <op> : Group` (Phase 3, contextual): assigns an
+          # operator lexeme to a precedence group. The declaration is recognised
+          # only at the distinctive `<op> :` shape, so `prefix + 1`, `prefix: x`,
+          # and a bare `infix` value all stay ordinary identifiers.
+          fixity when fixity in ["infix", "prefix", "postfix"] ->
+            if fixity_decl_ahead?(state) do
+              parse_fixity(state)
+            else
+              {variable(token), advance(state)}
+            end
+
           # Contextual keyword: `with e <arms>` is a with-abstraction only in
           # expression-prefix position and only when what follows `with` can
           # begin a scrutinee. The container macro's payload-binder `with` is
@@ -5370,6 +5390,144 @@ defmodule Cure.Compiler.Parser do
     ]
 
     {{:container, meta, body_stmts}, state}
+  end
+
+  # -- Fixity declarations (Phase 3) -----------------------------------------
+  #
+  # `precedencegroup`/`infix`/`prefix`/`postfix` build inert
+  # `{:precedencegroup, …}` and `{:fixity, …}` AST nodes. This is purely
+  # additive: later Phase-3 tasks feed these into `Cure.Compiler.Parser.FixityTable`
+  # ahead of expression parsing, then flip the Pratt loop onto it. In this task
+  # nothing downstream consumes them, and the static `Precedence` table still
+  # governs how expressions bind.
+
+  # True at the distinctive `<op> :` shape a fixity declaration takes, so
+  # `infix`/`prefix`/`postfix` are promoted only there and stay ordinary
+  # identifiers everywhere else (`prefix + 1`, `prefix: x`, a bare `infix`).
+  defp fixity_decl_ahead?(state) do
+    op = peek_at(state, 1)
+    colon = peek_at(state, 2)
+    op != nil and colon != nil and colon.type == :colon and fixity_op_token?(op)
+  end
+
+  # An operator lexeme is any symbolic-operator token or a word/backtick
+  # identifier used as an operator name — anything that is not a delimiter.
+  defp fixity_op_token?(%Token{type: type}),
+    do: type not in [:colon, :newline, :indent, :dedent, :eof, :comma, :assign]
+
+  defp fixity_op_token?(_), do: false
+
+  # `infix|prefix|postfix <op> : Group`
+  defp parse_fixity(state) do
+    kw = peek(state)
+    fixity = String.to_atom(to_string(kw.value))
+    state = advance(state)
+
+    op_token = peek(state)
+    lexeme = fixity_lexeme(op_token)
+    state = advance(state)
+
+    state = expect(state, :colon)
+
+    {group, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: v} -> {String.to_atom(v), advance(state)}
+        _ -> {nil, state}
+      end
+
+    meta = [fixity: fixity, operator: lexeme, group: group, line: kw.line, col: kw.col]
+    {{:fixity, meta, []}, state}
+  end
+
+  defp fixity_lexeme(%Token{value: v}) when is_binary(v), do: v
+  defp fixity_lexeme(%Token{value: v}), do: to_string(v)
+
+  # `precedencegroup Name` with an optional indented body of
+  # `associativity:`/`higher_than:`/`lower_than:` lines.
+  defp parse_precedencegroup(state) do
+    kw = peek(state)
+    state = advance(state)
+
+    name_token = peek(state)
+    name = String.to_atom(to_string(name_token.value))
+    state = advance(state)
+    state = skip_newlines(state)
+
+    {fields, state} = parse_precedencegroup_body(state)
+    meta = [name: name, line: kw.line, col: kw.col] ++ fields
+    {{:precedencegroup, meta, []}, state}
+  end
+
+  defp parse_precedencegroup_body(state) do
+    case peek(state) do
+      %Token{type: :indent} -> collect_precedencegroup_fields(advance(state), [])
+      _ -> {[], state}
+    end
+  end
+
+  defp collect_precedencegroup_fields(state, acc) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :dedent} ->
+        {Enum.reverse(acc), advance(state)}
+
+      %Token{type: :eof} ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: :identifier, value: field} ->
+        state = expect(advance(state), :colon)
+        {value, state} = parse_precedencegroup_value(field, state)
+
+        acc =
+          case precedencegroup_field_key(field) do
+            nil -> acc
+            key -> [{key, value} | acc]
+          end
+
+        collect_precedencegroup_fields(state, acc)
+
+      _ ->
+        # Unrecognised line: skip to the block's end rather than loop.
+        {Enum.reverse(acc), skip_to_dedent(state)}
+    end
+  end
+
+  defp precedencegroup_field_key("associativity"), do: :assoc
+  defp precedencegroup_field_key("higher_than"), do: :higher_than
+  defp precedencegroup_field_key("lower_than"), do: :lower_than
+  defp precedencegroup_field_key(_), do: nil
+
+  defp parse_precedencegroup_value("associativity", state) do
+    case peek(state) do
+      %Token{type: :identifier, value: v} -> {String.to_atom(v), advance(state)}
+      _ -> {nil, state}
+    end
+  end
+
+  defp parse_precedencegroup_value(_field, state), do: collect_group_names(state, [])
+
+  # Collect group-name identifiers on the current line, tolerating `[ ]` and `,`.
+  # Stops at the first non-name, non-delimiter token (newline/dedent/eof).
+  defp collect_group_names(state, acc) do
+    case peek(state) do
+      %Token{type: :identifier, value: v} ->
+        collect_group_names(advance(state), [String.to_atom(v) | acc])
+
+      %Token{type: t} when t in [:comma, :lbracket, :rbracket] ->
+        collect_group_names(advance(state), acc)
+
+      _ ->
+        {Enum.reverse(acc), state}
+    end
+  end
+
+  defp skip_to_dedent(state) do
+    case peek(state) do
+      %Token{type: :dedent} -> advance(state)
+      %Token{type: :eof} -> state
+      _ -> skip_to_dedent(advance(state))
+    end
   end
 
   # -- Record  rec Name [(TypeParams)] ---------------------------------------
