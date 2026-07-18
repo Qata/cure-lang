@@ -47,7 +47,7 @@ defmodule Cure.Elab.OverloadTest do
     assert length(cands) == 2
 
     for key <- cands do
-      assert {:ok, ^key} = Overload.resolve(env, :plus, domains(env, key), cands)
+      assert {:ok, ^key} = Overload.resolve(env, :plus, domains(env, key), nil, cands)
       assert Cure.Elab.Name.overload_base(key) == "plus"
     end
   end
@@ -56,13 +56,13 @@ defmodule Cure.Elab.OverloadTest do
     cands = plus_candidates(env)
     # Int is not Meters or Grams, so neither (Meters,Meters) nor (Grams,Grams) matches.
     int = {:data, :"Std.Nat#Nat", [], []}
-    assert {:error, {:no_matching_overload, :plus, _}} = Overload.resolve(env, :plus, [int, int], cands)
+    assert {:error, {:no_matching_overload, :plus, _}} = Overload.resolve(env, :plus, [int, int], nil, cands)
   end
 
   test "wrong arity matches no member", %{env: env} do
     cands = plus_candidates(env)
     [key | _] = cands
     [d | _] = domains(env, key)
-    assert {:error, {:no_matching_overload, :plus, _}} = Overload.resolve(env, :plus, [d], cands)
+    assert {:error, {:no_matching_overload, :plus, _}} = Overload.resolve(env, :plus, [d], nil, cands)
   end
 end

@@ -310,10 +310,11 @@ defmodule Cure.Elab.Elaborator do
       not String.contains?(name, ".") and
           length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2 ->
         cands = Cure.Elab.Resolution.overload_candidates(env, atom)
+        arg_labels = Keyword.get(meta, :arg_labels)
 
         with {:ok, present} <- map_present_args(args, names, ctx, env),
              arg_types = Enum.map(present, fn {_term, ty} -> ty end),
-             {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, cands) do
+             {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, arg_labels, cands) do
           elaborate_global_app(env, winner, present, ctx)
         end
 

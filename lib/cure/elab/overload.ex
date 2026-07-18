@@ -4,24 +4,30 @@ defmodule Cure.Elab.Overload do
   elaborate-and-prune). Pure over an already-elaborated `Env` and the inferred
   argument types; never rewrites Core, never touches the kernel/TCB.
 
-  Given the candidate keys of a bare name (from `Resolution.overload_candidates/2`)
-  and the inferred argument types, keep the members whose parameter telescope is
-  position-wise convertible to the arguments. Exactly one survivor resolves; none
-  is `:no_matching_overload`; more than one is `:ambiguous_overload`.
+  Given the candidate keys of a bare name (from `Resolution.overload_candidates/2`),
+  the inferred argument types, and the written argument labels (Ph2), keep the
+  members whose parameter telescope is position-wise convertible to the arguments
+  AND whose declared labels agree with the written ones. Exactly one survivor
+  resolves; none is `:no_matching_overload`; more than one is
+  `:ambiguous_overload`.
   """
 
   alias Cure.Core.{Env, Grade}
 
-  @spec resolve(Env.t(), atom(), [term()], [atom()]) ::
+  @spec resolve(Env.t(), atom(), [term()], [String.t() | nil] | nil, [atom()]) ::
           {:ok, atom()}
           | {:error, {:no_matching_overload, atom(), [term()]}}
           | {:error, {:ambiguous_overload, atom(), [String.t()]}}
-  def resolve(%Env{} = env, bare, arg_types, candidates) do
+  def resolve(%Env{} = env, bare, arg_types, written_labels, candidates) do
     survivors =
       Enum.filter(candidates, fn key ->
         case Env.get_def(env, key) do
-          %{type: pi} -> params_match?(env, present_param_types(pi), arg_types)
-          _ -> false
+          %{type: pi} = def ->
+            labels_match?(present_labels(def, pi), written_labels) and
+              params_match?(env, present_param_types(pi), arg_types)
+
+          _ ->
+            false
         end
       end)
 
@@ -31,6 +37,22 @@ defmodule Cure.Elab.Overload do
       many -> {:error, {:ambiguous_overload, bare, owners(many)}}
     end
   end
+
+  # A candidate's present-param declared labels must agree with the labels the
+  # caller actually wrote. Both vectors are aligned to the PRESENT (non-erased)
+  # parameters — the same positions `present_param_types/1` prunes on and the same
+  # positions the surface writes arguments for.
+  #
+  # A written label of `nil` means "no label at this position", so an unwritten
+  # call (`written_labels == nil`, the whole common case) matches ONLY a candidate
+  # whose present params are all unlabelled — which is every pre-Ph2 def, keeping
+  # Ph1 resolution byte-for-byte unchanged. A mandatory external label (`to dest`)
+  # is declared non-nil, so it is matched only when the caller writes it; a caller
+  # who writes a label a candidate does not declare prunes that candidate.
+  defp labels_match?(declared_present, nil), do: Enum.all?(declared_present, &is_nil/1)
+
+  defp labels_match?(declared_present, written),
+    do: length(declared_present) == length(written) and declared_present == written
 
   defp params_match?(_env, ptypes, atypes) when length(ptypes) != length(atypes), do: false
 
@@ -61,6 +83,30 @@ defmodule Cure.Elab.Overload do
   end
 
   defp present_param_types(_return), do: []
+
+  # The declared external labels of a candidate's PRESENT parameters, in order —
+  # the label vector stored on the def record (telescope-aligned, full length),
+  # restricted to the same non-erased positions `present_param_types/1` keeps. A
+  # label-free def carries no vector, so every present position is `nil`.
+  defp present_labels(def, pi) do
+    grades = pi_grades(pi)
+    full = def_labels(def, length(grades))
+
+    grades
+    |> Enum.zip(full)
+    |> Enum.filter(fn {g, _l} -> Grade.present?(g) end)
+    |> Enum.map(fn {_g, l} -> l end)
+  end
+
+  defp pi_grades({:pi, grade, _domain, codomain}), do: [grade | pi_grades(codomain)]
+  defp pi_grades(_return), do: []
+
+  defp def_labels(def, arity) do
+    case Map.get(def, :labels) do
+      nil -> List.duplicate(nil, arity)
+      labels -> labels
+    end
+  end
 
   # Whether a Core term mentions any de Bruijn variable — i.e. a parameter type
   # that depends on an earlier telescope binder. Cheap structural scan over the

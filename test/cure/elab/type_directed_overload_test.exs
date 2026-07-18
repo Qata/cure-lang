@@ -191,6 +191,57 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     assert apply(mod, :add_m, []) == 7
   end
 
+  # Slice D — the headline: argument labels TIE-BREAK an overload set whose
+  # members are type-indistinguishable. Both `pick` members have the identical
+  # type `Int -> Int`, so argument-type pruning alone cannot choose between them;
+  # the written label does. `pick(to: 5)` resolves the `to` member (+1),
+  # `pick(from: 5)` the `from` member (+100).
+  test "argument labels disambiguate a same-type overload set" do
+    src = """
+    mod LabelTieBreak
+      fn pick(to x: Int) -> Int = x + 1
+      fn pick(from x: Int) -> Int = x + 100
+      fn use_to() -> Int = pick(to: 5)
+      fn use_from() -> Int = pick(from: 5)
+    end
+    """
+
+    assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(mod, :use_to, []) == 6
+    assert apply(mod, :use_from, []) == 105
+  end
+
+  # The other half of the tie-break: a BARE call to a mandatorily-labelled set
+  # matches no member (every candidate requires its label), so it errors rather
+  # than silently dispatching one. `pick(5)` cannot pick `to` or `from`.
+  test "a bare call to a mandatorily-labelled overload set matches nothing" do
+    src = """
+    mod LabelBareMiss
+      fn pick(to x: Int) -> Int = x + 1
+      fn pick(from x: Int) -> Int = x + 100
+      fn bad() -> Int = pick(5)
+    end
+    """
+
+    assert {:error, err} = compile_and_load_error(src)
+    assert match?({:no_matching_overload, :pick, _}, unwrap_inner(err))
+  end
+
+  # A wrong label matches no member either: `pick(via: 5)` names a label neither
+  # candidate declares.
+  test "an unknown label matches no member" do
+    src = """
+    mod LabelWrong
+      fn pick(to x: Int) -> Int = x + 1
+      fn pick(from x: Int) -> Int = x + 100
+      fn bad() -> Int = pick(via: 5)
+    end
+    """
+
+    assert {:error, err} = compile_and_load_error(src)
+    assert match?({:no_matching_overload, :pick, _}, unwrap_inner(err))
+  end
+
   # Task 6 — cross-module resolution (Design "Both"). Two `use`d modules each
   # export `to_int` on a different type; an unqualified `to_int(x)` resolves by
   # `x`'s type. Faithful mirror of `Std.Char.code_point` vs `Std.String.to_int`,
