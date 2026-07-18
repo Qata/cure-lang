@@ -1,0 +1,157 @@
+mod NaryChoice
+  use Std.Equivalent
+  ## N-ARY session types: choice branches are an ARBITRARY-LENGTH list (Branches), not a fixed pair.
+  ## This needs a Local type and its Branches list to be MUTUALLY recursive, with dual/dual_branches
+  ## and their involution proofs mutually recursive too — which requires the kernel to delta-reduce
+  ## mutually-recursive functions (fix a4f071fb: certify the whole mutual SCC).
+  type TB2 = F | T
+  type Tag = TA | TB | TC
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LSel(Branches) | LBra(Branches)
+  type Branches = BNil | BCons(Tag, Local, Branches)
+  ## DUALITY swaps send/receive and internal/external choice (LSel <-> LBra), dualizing every branch
+  ## continuation. dual and dual_branches are MUTUALLY RECURSIVE.
+  fn dual(l: Local) -> Local = match l
+    LEnd()     -> LEnd()
+    LSend(t, k) -> LRecv(t, dual(k))
+    LRecv(t, k) -> LSend(t, dual(k))
+    LSel(bs)   -> LBra(dual_branches(bs))
+    LBra(bs)   -> LSel(dual_branches(bs))
+  fn dual_branches(bs: Branches) -> Branches = match bs
+    BNil()            -> BNil()
+    BCons(t, l, rest) -> BCons(t, dual(l), dual_branches(rest))
+  fn lsend_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LSend(t, a), LSend(t, b)) = rewrite e in reflexive(LSend(t, b))
+  fn lrecv_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LRecv(t, a), LRecv(t, b)) = rewrite e in reflexive(LRecv(t, b))
+  fn lsel_cong({a: Branches}, {b: Branches}, e: Equivalent(Branches, a, b)) -> Equivalent(Local, LSel(a), LSel(b)) = rewrite e in reflexive(LSel(b))
+  fn lbra_cong({a: Branches}, {b: Branches}, e: Equivalent(Branches, a, b)) -> Equivalent(Local, LBra(a), LBra(b)) = rewrite e in reflexive(LBra(b))
+  fn bcons_cong(t: Tag, {l1: Local}, {l2: Local}, el: Equivalent(Local, l1, l2), {r1: Branches}, {r2: Branches}, er: Equivalent(Branches, r1, r2)) -> Equivalent(Branches, BCons(t, l1, r1), BCons(t, l2, r2)) = rewrite el in rewrite er in reflexive(BCons(t, l2, r2))
+  ## **N-ARY DUALITY IS AN INVOLUTION** (dual(dual(l)) = l), mutually with dual_branches_involution.
+  ## The internal/external-choice and send/receive swaps each undo themselves, over arbitrary-arity
+  ## branch lists. This is the Honda-Yoshida-Carbone duality generalized from binary to n-ary choice.
+  fn dual_involution(l: Local) -> Equivalent(Local, dual(dual(l)), l) = match l
+    LEnd()     -> reflexive(LEnd())
+    LSend(t, k) -> lsend_cong(t, dual_involution(k))
+    LRecv(t, k) -> lrecv_cong(t, dual_involution(k))
+    LSel(bs)   -> lsel_cong(dual_branches_involution(bs))
+    LBra(bs)   -> lbra_cong(dual_branches_involution(bs))
+  fn dual_branches_involution(bs: Branches) -> Equivalent(Branches, dual_branches(dual_branches(bs)), bs) = match bs
+    BNil()            -> reflexive(BNil())
+    BCons(t, l, rest) -> bcons_cong(t, dual_involution(l), dual_branches_involution(rest))
+
+  ## N-ARY GLOBAL protocols: a choice offers an arbitrary-length list of labelled continuations
+  ## (GBranches). Global and GBranches are MUTUALLY inductive; project / project_gbranches and the
+  ## coherence proofs below are all mutually recursive — enabled by mutual-recursion delta-reduction.
+  type Role = RA | RB
+  fn role_eq(x: Role, y: Role) -> TB2 = match x
+    RA() -> match y
+      RA() -> T()
+      RB() -> F()
+    RB() -> match y
+      RA() -> F()
+      RB() -> T()
+  type Global = GEnd | GMsg(Role, Role, Tag, Global) | GCho(Role, Role, GBranches)
+  type GBranches = GBNil | GBCons(Tag, Global, GBranches)
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()             -> LEnd()
+    GMsg(from, to, t, k) -> match role_eq(from, r)
+      T() -> LSend(t, project(k, r))
+      F() -> match role_eq(to, r)
+        T() -> LRecv(t, project(k, r))
+        F() -> LEnd()
+    GCho(from, to, gbs) -> match role_eq(from, r)
+      T() -> LSel(project_gbranches(gbs, r))
+      F() -> match role_eq(to, r)
+        T() -> LBra(project_gbranches(gbs, r))
+        F() -> LEnd()
+  fn project_gbranches(gbs: GBranches, r: Role) -> Branches = match gbs
+    GBNil()             -> BNil()
+    GBCons(t, g, rest)  -> BCons(t, project(g, r), project_gbranches(rest, r))
+  ## COHERENCE for two-party n-ary protocols (RA/RB), mutually inductive over Global/GBranches.
+  type Coherent indices (g: Global)
+    CoEnd : Coherent(GEnd)
+    CoAB  : (t: Tag) -> Coherent(k) -> Coherent(GMsg(RA, RB, t, k))
+    CoBA  : (t: Tag) -> Coherent(k) -> Coherent(GMsg(RB, RA, t, k))
+    CoCho : (t: Tag) -> Coherent(gh) -> CoherentB(rest) -> Coherent(GCho(RA, RB, GBCons(t, gh, rest)))
+  type CoherentB indices (gbs: GBranches)
+    CoBNil  : CoherentB(GBNil)
+    CoBCons : (t: Tag) -> Coherent(g) -> CoherentB(rest) -> CoherentB(GBCons(t, g, rest))
+  ## **N-ARY PROJECTION DUALITY** (Honda-Yoshida-Carbone coherence, generalized from binary to n-ary
+  ## choice): a coherent two-party protocol projects its two roles to DUAL endpoints — including an
+  ## n-ary internal choice (LSel) dual to an n-ary external choice (LBra) over ARBITRARY-length branch
+  ## lists. Mutually recursive with projection_gbranches_duality over the branch list.
+  fn projection_duality({g: Global}, w: Coherent(g)) -> Equivalent(Local, project(g, RA()), dual(project(g, RB()))) = match w
+    CoEnd()     -> reflexive(LEnd())
+    CoAB(t, w2) -> lsend_cong(t, projection_duality(w2))
+    CoBA(t, w2) -> lrecv_cong(t, projection_duality(w2))
+    CoCho(t, ch, cr) -> lsel_cong(projection_gbranches_duality(CoBCons(t, ch, cr)))
+  fn projection_gbranches_duality({gbs: GBranches}, w: CoherentB(gbs)) -> Equivalent(Branches, project_gbranches(gbs, RA()), dual_branches(project_gbranches(gbs, RB()))) = match w
+    CoBNil()             -> reflexive(BNil())
+    CoBCons(t, wg, wrest) -> bcons_cong(t, projection_duality(wg), projection_gbranches_duality(wrest))
+
+  ## N-ARY OPERATIONAL SEMANTICS: a choice fires by SELECTING one of its arbitrarily-many branches.
+  ## Selects(gbs, g) witnesses that g is a branch in the list gbs (membership).
+  type Selects indices (gbs: GBranches, g: Global)
+    SelHere  : Selects(GBCons(t, g, rest), g)
+    SelThere : Selects(rest, g) -> Selects(GBCons(t, g2, rest), g)
+  type GStep indices (g: Global, g2: Global)
+    GStMsg : GStep(GMsg(from, to, t, k), k)
+    GStCho : Selects(gbs, g2) -> GStep(GCho(from, to, gbs), g2)
+  ## Selecting a branch from a coherent choice yields a coherent continuation (recursion over the
+  ## branch list, driven by the selection witness).
+  fn coherentb_select({gbs: GBranches}, {g: Global}, wb: CoherentB(gbs), sel: Selects(gbs, g)) -> Coherent(g) = match sel
+    SelHere()      -> match wb
+      CoBCons(t, wg, wrest) -> wg
+    SelThere(sel2) -> match wb
+      CoBCons(t, wg, wrest) -> coherentb_select(wrest, sel2)
+  ## **N-ARY SUBJECT REDUCTION**: firing a coherent protocol (a message, or SELECTING any branch of an
+  ## n-ary choice) yields a coherent protocol.
+  fn cstep_preserves({g: Global}, {g2: Global}, w: Coherent(g), st: GStep(g, g2)) -> Coherent(g2) = match st
+    GStMsg()    -> match w
+      CoAB(t, w2) -> w2
+      CoBA(t, w2) -> w2
+    GStCho(sel) -> match w
+      CoCho(t, ch, cr) -> coherentb_select(CoBCons(t, ch, cr), sel)
+  ## **N-ARY DUALITY PRESERVED UNDER REDUCTION**: the two active roles' endpoints stay DUAL at every
+  ## reachable state, including after selecting any branch of an n-ary choice — communication safety
+  ## preserved operationally, generalized from binary to n-ary choice.
+  fn duality_preserved({g: Global}, {g2: Global}, w: Coherent(g), st: GStep(g, g2)) -> Equivalent(Local, project(g2, RA()), dual(project(g2, RB()))) =
+    projection_duality(cstep_preserves(w, st))
+
+  ## Multi-step reduction: the reflexive-transitive closure of GStep (a whole protocol RUN).
+  type GRun indices (g: Global, g2: Global)
+    GRDone : GRun(g, g)
+    GRStep : GStep(g, gm) -> GRun(gm, g2) -> GRun(g, g2)
+  ## **N-ARY SAFETY OVER A RUN**: a coherent protocol stays coherent through EVERY step of any run —
+  ## any sequence of messages and n-ary branch selections. Multi-step strengthening of cstep_preserves.
+  fn grun_preserves({g: Global}, {g2: Global}, w: Coherent(g), r: GRun(g, g2)) -> Coherent(g2) = match r
+    GRDone()        -> w
+    GRStep(st, rest) -> grun_preserves(cstep_preserves(w, st), rest)
+  ## **N-ARY DUALITY AT EVERY REACHABLE STATE**: the two active roles' endpoints are DUAL at every
+  ## point of any run — communication safety holds not just initially but throughout execution,
+  ## generalized from binary to n-ary choice.
+  fn duality_over_run({g: Global}, {g2: Global}, w: Coherent(g), r: GRun(g, g2)) -> Equivalent(Local, project(g2, RA()), dual(project(g2, RB()))) =
+    projection_duality(grun_preserves(w, r))
+  ## **EVERY BRANCH OF A COHERENT CHOICE IS DUAL-COHERENT**: not only the selected branch — for ANY
+  ## branch g of a coherent n-ary choice, its two active roles project to dual endpoints. So coherence
+  ## is uniform across the whole n-ary branch set, not contingent on which branch fires.
+  fn branch_dual({gbs: GBranches}, {g: Global}, wb: CoherentB(gbs), sel: Selects(gbs, g)) -> Equivalent(Local, project(g, RA()), dual(project(g, RB()))) =
+    projection_duality(coherentb_select(wb, sel))
+
+  ## **N-ARY TERMINATION**: every coherent protocol runs all the way to GEnd — a full GRun built by
+  ## structural induction, firing each message and selecting each choice's head branch (a choice is
+  ## always non-empty since CoCho pins a head). So a well-formed n-ary protocol never deadlocks, stays
+  ## coherent (grun_preserves), and always terminates.
+  fn global_terminates({g: Global}, w: Coherent(g)) -> GRun(g, GEnd()) = match w
+    CoEnd()          -> GRDone()
+    CoAB(t, w2)      -> GRStep(GStMsg(), global_terminates(w2))
+    CoBA(t, w2)      -> GRStep(GStMsg(), global_terminates(w2))
+    CoCho(t, ch, cr) -> GRStep(GStCho(SelHere()), global_terminates(ch))
+  ## **N-ARY PROGRESS**: a coherent protocol is either finished (GEnd) or can take a step — never
+  ## stuck. Derived by deconstructing the terminating run: an empty run means GEnd, a non-empty run
+  ## exposes a first step. With cstep_preserves (preservation) this is full type safety for n-ary.
+  type CanStep indices (g: Global)
+    StepDone : CanStep(GEnd)
+    StepGo   : GStep(g, g2) -> CanStep(g)
+  fn global_progress({g: Global}, w: Coherent(g)) -> CanStep(g) = match global_terminates(w)
+    GRDone()         -> StepDone()
+    GRStep(st, rest) -> StepGo(st)
+end

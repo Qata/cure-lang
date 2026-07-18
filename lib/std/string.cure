@@ -61,8 +61,11 @@ mod Std.String
   ## characters: a multi-byte code point is one.
   fn length(s: String) -> Int = list_length(as_charlist(s))
 
-  ## `true` when `s` is the empty string.
-  fn is_empty(s: String) -> Bool = length(s) == 0
+  ## `true` when `s` is the empty string. Written with the `int_eq` primitive
+  ## directly (not `==`): `Std.String` is inside the `@prelude` bootstrap closure,
+  ## so it elaborates with no ambient `Equatable` and cannot `use Std.Equatable`
+  ## (that would cycle, since `Std.Equatable` uses `Std.String`).
+  fn is_empty(s: String) -> Bool = Std.Builtin.int_eq(length(s), 0)
 
   ## `:lists.append/2` on two normalised charlists.
   @extern(:lists, :append, 2)

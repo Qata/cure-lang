@@ -1,16 +1,29 @@
 @group(:core)
+@prelude
 mod Std.Comparable
   ## `Std.Char` supplies `code_point` (Char -> Int) for the `Char` instance's
   ## code-point ordering; `Std.String` makes `String` the transparent
   ## `List(Char)` synonym the lexicographic `String` comparison folds over.
   use Std.Char
   use Std.String
-  ## Total-ordering interface: three-way `compare`, returning an `Ordering`.
+  ## `use Std.Bool` supplies `` `not` `` for the derived `` `<=` ``/`` `>=` ``;
+  ## `use Std.Equatable` provides the `Equatable(t)` superinterface required by
+  ## `Comparable(t)`.
+  use Std.Bool
+  use Std.Equatable
+  ## Total-ordering interface on a minimal basis.
   ##
-  ## `compare/2` is the single method; the comparison *operators* `<`, `>`,
-  ## `<=`, `>=` are the surface — on a non-primitive operand they route through
-  ## `compare` automatically (`a < b` desugars to `compare(a, b) == LessThan`),
-  ## so there are no `lt`/`le`/`gt`/`ge` named helpers to call.
+  ## The sole primitive obligation is `` `<` ``; `` `<=` ``, `` `>` ``,
+  ## `` `>=` `` and the three-way `compare` (returning an `Ordering`) are derived
+  ## `where Comparable(t)` top-level functions, each expressed with `` `<` ``
+  ## alone (a total order is trichotomous in `` `<` ``). `Comparable(t)` requires
+  ## `Equatable(t)`, so every comparable type is also equatable.
+  ##
+  ## The derived operations are standalone `where`-constrained functions rather
+  ## than interface defaults: an instance-specialised default re-dispatching a
+  ## sibling method at a concrete operand cannot be elaborated for every leaf
+  ## today, whereas a `where`-constrained function stays polymorphic and is
+  ## resolved per call site (the same idiom `Std.Equatable.` `` `!=` `` uses).
   ##
   ## ## Examples
   ##
@@ -18,69 +31,81 @@ mod Std.Comparable
   ## use Std.Comparable
   ##
   ## compare(1, 2)                           # => LessThan
-  ## 'a' < 'b'                               # => true
-  ## "ada" < "grace"                         # => true
+  ## `<`('a', 'b')                           # => true
+  ## `<`("ada", "grace")                     # => true
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
   ## Three-way ordering result.
   type Ordering = LessThan | EqualTo | GreaterThan
 
-  ## Total ordering over `T`.
-  interface Comparable(t)
-    ## `LessThan` when `a < b`, `GreaterThan` when `a > b`, `EqualTo` otherwise.
-    fn compare(a: t, b: t) -> Ordering
+  ## Total ordering over `t`. Requires `Equatable(t)` so every comparable type
+  ## is equatable; the ordering itself is generated from `` `<` `` alone.
+  interface Comparable(t) requires Equatable(t)
+    ## Strict less-than. Sole primitive obligation of the class.
+    fn `<`(a: t, b: t) -> Bool
 
   ## `Comparable` impl for `Int`.
   implementation Comparable for Int
-    ## Integer three-way compare.
-    fn compare(a: Int, b: Int) -> Ordering =
-      pickup
-        a < b -> LessThan
-        a > b -> GreaterThan
-        else  -> EqualTo
+    ## Primitive integer less-than (matches `build_binop`'s `int_lt` lowering).
+    fn `<`(a: Int, b: Int) -> Bool = Std.Builtin.int_lt(a, b)
 
   ## `Comparable` impl for `Float`.
   implementation Comparable for Float
-    ## Float three-way compare (NaNs follow BEAM's term-order).
-    fn compare(a: Float, b: Float) -> Ordering =
-      pickup
-        a < b -> LessThan
-        a > b -> GreaterThan
-        else  -> EqualTo
+    ## Primitive float less-than (matches `build_binop`'s `float_lt` lowering).
+    fn `<`(a: Float, b: Float) -> Bool = Std.Builtin.float_lt(a, b)
 
   ## `Comparable` impl for `Char`: compare Unicode code points. `code_point` is
   ## the `Char -> Int` coercion (Char erases to its code point), so this is an
   ## `Int` comparison — no method dispatch, works on both pipelines.
   implementation Comparable for Char
-    ## Character three-way compare on code points.
-    fn compare(a: Char, b: Char) -> Ordering =
-      pickup
-        code_point(a) < code_point(b) -> LessThan
-        code_point(a) > code_point(b) -> GreaterThan
-        else                          -> EqualTo
+    ## Character less-than on code points.
+    fn `<`(a: Char, b: Char) -> Bool = Std.Builtin.int_lt(code_point(a), code_point(b))
 
-  ## Lexicographic three-way compare over `String = List(Char)`: compare heads
-  ## by code point, and on a tie recurse into the tails. A prefix sorts before
-  ## its extension (`"ad" < "ada"`). Written as a plain top-level recursion (not
-  ## a self-recursive interface method) so the impl body carries no nested
-  ## method dispatch.
-  fn compare_string(a: String, b: String) -> Ordering =
+  ## Lexicographic strict less-than over `String = List(Char)`: compare heads by
+  ## code point, and on a tie recurse into the tails. A prefix sorts before its
+  ## extension (`"ad" < "ada"`). Written as a plain top-level recursion (not a
+  ## self-recursive interface method) so the impl body carries no nested method
+  ## dispatch. Typed over the underlying `List(Char)` — the function destructures
+  ## list cells (`[]`/`[h | t]`), so its parameter type is the concrete inductive
+  ## it eliminates, not the transparent `String` presentation alias. (A `match`
+  ## scrutinee typed at a bare typealias global is not a `{:data, …}` head until
+  ## it is δ-unfolded, which the kernel's `case` inference does not do in place;
+  ## `String` values still pass, as `String` *is* `List(Char)`.)
+  fn string_lt(a: List(Char), b: List(Char)) -> Bool =
     match a
       [] ->
         match b
-          []      -> EqualTo
-          [_ | _] -> LessThan
+          []      -> False()
+          [_ | _] -> True()
       [ha | ta] ->
         match b
-          []        -> GreaterThan
+          []        -> False()
           [hb | tb] ->
             pickup
-              code_point(ha) < code_point(hb) -> LessThan
-              code_point(ha) > code_point(hb) -> GreaterThan
-              else                            -> compare_string(ta, tb)
+              Std.Builtin.int_lt(code_point(ha), code_point(hb)) -> True()
+              Std.Builtin.int_lt(code_point(hb), code_point(ha)) -> False()
+              else                                               -> string_lt(ta, tb)
 
-  ## `Comparable` impl for `String`. Delegates to lexicographic `compare_string`.
+  ## `Comparable` impl for `String`. Delegates to lexicographic `string_lt`.
   implementation Comparable for String
-    ## String three-way compare, character by character.
-    fn compare(a: String, b: String) -> Ordering = compare_string(a, b)
+    ## String less-than, character by character.
+    fn `<`(a: String, b: String) -> Bool = string_lt(a, b)
+
+  ## `` `<=` `` derived: `a <= b` iff `not (b < a)`.
+  fn `<=`(a: t, b: t) -> Bool where Comparable(t) = Std.Bool.`not`(`<`(b, a))
+
+  ## `` `>` `` derived by flipping the operands: `a > b` iff `b < a`.
+  fn `>`(a: t, b: t) -> Bool where Comparable(t) = `<`(b, a)
+
+  ## `` `>=` `` derived: `a >= b` iff `not (a < b)`.
+  fn `>=`(a: t, b: t) -> Bool where Comparable(t) = Std.Bool.`not`(`<`(a, b))
+
+  ## Derived tripartite `compare`, generated from `` `<` `` alone (trichotomy of
+  ## a total order). Kept present and named `compare` so `compare_op_call` and
+  ## `min`/`max`/`clamp` (which dispatch to `compare`) keep working.
+  fn compare(a: t, b: t) -> Ordering where Comparable(t) =
+    pickup
+      `<`(a, b) -> LessThan
+      `<`(b, a) -> GreaterThan
+      else      -> EqualTo

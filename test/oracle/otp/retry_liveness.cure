@@ -1,0 +1,57 @@
+mod RetryLiveness
+  use Std.Equivalent
+  ## LIVENESS BY A WELL-FOUNDED MEASURE — eventual progress, the verification category beyond safety and
+  ## refinement. A retry FSM has bounded attempts: each failed attempt decrements, and at zero it gives up.
+  ## The measure (attempts + 1) STRICTLY DECREASES on every non-terminal step (measure_decreases), so by
+  ## well-foundedness the loop must reach a terminal state — reaches_terminal proves it does so within
+  ## measure(s) steps. No infinite retrying: the OTP max_retries guarantee as a liveness property.
+  type Nat = Z | S(Nat)
+  type Bool = F | T
+  type State = Retry(Nat) | Done | GaveUp
+  fn leq(a: Nat, b: Nat) -> Bool = match a
+    Z()   -> T()
+    S(k)  -> match b
+      Z()   -> F()
+      S(j)  -> leq(k, j)
+  fn leq_refl(a: Nat) -> Equivalent(Bool, leq(a, a), T()) = match a
+    Z()   -> reflexive(T())
+    S(k)  -> leq_refl(k)
+  ## Strict order a < b.
+  fn lt(a: Nat, b: Nat) -> Bool = match b
+    Z()   -> F()
+    S(j)  -> leq(a, j)
+  fn is_terminal(s: State) -> Bool = match s
+    Retry(n) -> F()
+    Done()   -> T()
+    GaveUp() -> T()
+  ## One step: a failed attempt consumes an attempt; at zero the loop gives up; terminal states are fixed.
+  fn step(s: State) -> State = match s
+    Retry(n) -> match n
+      Z()   -> GaveUp()
+      S(k)  -> Retry(k)
+    Done()   -> Done()
+    GaveUp() -> GaveUp()
+  ## The well-founded measure: attempts remaining + 1 (terminal states have measure 0).
+  fn measure(s: State) -> Nat = match s
+    Retry(n) -> S(n)
+    Done()   -> Z()
+    GaveUp() -> Z()
+  ## **PROGRESS — the measure strictly decreases on every non-terminal step**: is_terminal(s)=F ⟹
+  ## measure(step(s)) < measure(s). This is the well-foundedness that forces termination. Terminal-state
+  ## cases are refuted by the non-terminal hypothesis.
+  fn measure_decreases(s: State, h: Equivalent(Bool, is_terminal(s), F())) -> Equivalent(Bool, lt(measure(step(s)), measure(s)), T()) = match s
+    Retry(n) -> match n
+      Z()   -> reflexive(T())
+      S(k)  -> leq_refl(S(k))
+    Done()   -> match h
+    GaveUp() -> match h
+  fn run(s: State, fuel: Nat) -> State = match fuel
+    Z()    -> s
+    S(m)   -> run(step(s), m)
+  ## **LIVENESS — the retry loop reaches a terminal state within measure(Retry(n)) steps**: running the
+  ## machine measure(Retry(n)) = S(n) steps from Retry(n) always lands on a terminal state (GaveUp). By
+  ## induction on the attempt count; the measure decreasing at each step guarantees the goal is reached.
+  fn reaches_terminal(n: Nat) -> Equivalent(Bool, is_terminal(run(Retry(n), measure(Retry(n)))), T()) = match n
+    Z()   -> reflexive(T())
+    S(k)  -> reaches_terminal(k)
+end

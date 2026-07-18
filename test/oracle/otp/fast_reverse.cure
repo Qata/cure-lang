@@ -1,0 +1,42 @@
+mod FastReverse
+  use Std.Equivalent
+  ## TAIL-RECURSIVE REVERSE REFINES NAIVE REVERSE — verified optimization. The naive spec rev builds the
+  ## reversal with append; the tail-recursive fast_rev uses an accumulator (the real implementation). The
+  ## correctness is the ACCUMULATOR LEMMA revacc_spec (revacc l acc = rev l ++ acc), from which fast_rev l =
+  ## rev l falls out. Rests on the append algebra (associativity + right-identity). A concrete "optimized =
+  ## spec" refinement, over lists.
+  type Nat = Z | S(Nat)
+  type List = LNil | LCons(Nat, List)
+  fn app(a: List, b: List) -> List = match a
+    LNil()          -> b
+    LCons(x, rest)  -> LCons(x, app(rest, b))
+  fn lcons_cong(x: Nat, {a: List}, {b: List}, e: Equivalent(List, a, b)) -> Equivalent(List, LCons(x, a), LCons(x, b)) =
+    rewrite e in reflexive(LCons(x, b))
+  ## Append right-identity.
+  fn app_nil(a: List) -> Equivalent(List, app(a, LNil()), a) = match a
+    LNil()          -> reflexive(LNil())
+    LCons(x, rest)  -> lcons_cong(x, app_nil(rest))
+  ## Append associativity.
+  fn app_assoc(a: List, b: List, c: List) -> Equivalent(List, app(app(a, b), c), app(a, app(b, c))) = match a
+    LNil()          -> reflexive(app(b, c))
+    LCons(x, rest)  -> lcons_cong(x, app_assoc(rest, b, c))
+  ## The spec: naive reverse via append.
+  fn rev(l: List) -> List = match l
+    LNil()          -> LNil()
+    LCons(x, rest)  -> app(rev(rest), LCons(x, LNil()))
+  ## The optimized implementation: tail-recursive reverse with an accumulator.
+  fn revacc(l: List, acc: List) -> List = match l
+    LNil()          -> acc
+    LCons(x, rest)  -> revacc(rest, LCons(x, acc))
+  fn fast_rev(l: List) -> List = revacc(l, LNil())
+  ## **THE ACCUMULATOR LEMMA**: revacc l acc = rev l ++ acc — running the accumulator reverse is the naive
+  ## reversal prepended to the accumulator. Induction on the list; the cons step re-associates the append.
+  fn revacc_spec(l: List, acc: List) -> Equivalent(List, revacc(l, acc), app(rev(l), acc)) = match l
+    LNil()          -> reflexive(acc)
+    LCons(x, rest)  -> trans(revacc_spec(rest, LCons(x, acc)), sym(app_assoc(rev(rest), LCons(x, LNil()), acc)))
+  ## **FAST REVERSE REFINES NAIVE REVERSE**: fast_rev l = rev l for every list — the optimized tail-
+  ## recursive implementation computes exactly the spec. Accumulator lemma at the empty accumulator, then
+  ## append right-identity.
+  fn fast_rev_correct(l: List) -> Equivalent(List, fast_rev(l), rev(l)) =
+    trans(revacc_spec(l, LNil()), app_nil(rev(l)))
+end

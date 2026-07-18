@@ -1,0 +1,54 @@
+mod ConcDeadlockFree
+  use Std.Equivalent
+  ## COMPOSITIONAL DEADLOCK-FREEDOM — the concurrent mutex protocol never WEDGES: from every configuration
+  ## some process can make progress (the system is never stuck). Companion to the mutual-exclusion safety
+  ## result. Even though entry is guarded (a process blocks when the peer is critical), a critical process
+  ## can always EXIT, so a progressing move always exists. `pick` chooses an enabling move per config;
+  ## `deadlock_free` proves the picked move always yields a genuinely different config — progress guaranteed.
+  type Bool = F | T
+  type P = Idle | Crit
+  type Config = MkConfig(P, P)
+  type Move = Enter1 | Exit1 | Enter2 | Exit2
+  fn step(c: Config, m: Move) -> Config = match c
+    MkConfig(p1, p2) -> match m
+      Enter1() -> match p2
+        Idle() -> MkConfig(Crit(), p2)
+        Crit() -> MkConfig(p1, p2)
+      Exit1()  -> MkConfig(Idle(), p2)
+      Enter2() -> match p1
+        Idle() -> MkConfig(p1, Crit())
+        Crit() -> MkConfig(p1, p2)
+      Exit2()  -> MkConfig(p1, Idle())
+  fn peq(a: P, b: P) -> Bool = match a
+    Idle() -> match b
+      Idle() -> T()
+      Crit() -> F()
+    Crit() -> match b
+      Idle() -> F()
+      Crit() -> T()
+  fn andb(a: Bool, b: Bool) -> Bool = match a
+    T() -> b
+    F() -> F()
+  ## Configurations are the same when both components agree.
+  fn same(c1: Config, c2: Config) -> Bool = match c1
+    MkConfig(a1, b1) -> match c2
+      MkConfig(a2, b2) -> andb(peq(a1, a2), peq(b1, b2))
+  ## An enabling move for each configuration: a free process may enter, a critical one may exit.
+  fn pick(c: Config) -> Move = match c
+    MkConfig(p1, p2) -> match p1
+      Idle() -> match p2
+        Idle() -> Enter1()
+        Crit() -> Exit2()
+      Crit() -> Exit1()
+  ## **DEADLOCK-FREEDOM**: for EVERY configuration, the picked move produces a genuinely different config —
+  ## `same(step(c, pick(c)), c) = F`. So the concurrent system can always make progress; it never wedges,
+  ## whatever the state. (Universal over all configs, so a fortiori over the reachable ones.)
+  fn deadlock_free(c: Config) -> Equivalent(Bool, same(step(c, pick(c)), c), F()) = match c
+    MkConfig(p1, p2) -> match p1
+      Idle() -> match p2
+        Idle() -> reflexive(F())
+        Crit() -> reflexive(F())
+      Crit() -> match p2
+        Idle() -> reflexive(F())
+        Crit() -> reflexive(F())
+end

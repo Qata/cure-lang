@@ -31,7 +31,7 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert Inductive.family?(env, :"Union<Int|Std.Bool#Bool>")
+      assert Inductive.family?(env, :"Union<Std.Bool#Bool|Std.Int#Int>")
     end
 
     test "the family has one constructor per member, family-qualified" do
@@ -45,13 +45,13 @@ defmodule Cure.Elab.UnionTest do
 
       names =
         env
-        |> Inductive.ctors_of(:"Union<Int|Std.Bool#Bool>")
+        |> Inductive.ctors_of(:"Union<Std.Bool#Bool|Std.Int#Int>")
         |> Enum.map(& &1.name)
         |> Enum.sort()
 
       assert names == [
-               :"Union<Int|Std.Bool#Bool>$Int",
-               :"Union<Int|Std.Bool#Bool>$Std.Bool#Bool"
+               :"Union<Std.Bool#Bool|Std.Int#Int>$Std.Bool#Bool",
+               :"Union<Std.Bool#Bool|Std.Int#Int>$Std.Int#Int"
              ]
     end
 
@@ -63,15 +63,15 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      key = :"Union<Atom#:north|Int>"
+      key = :"Union<Atom#:north|Std.Int#Int>"
 
       arities =
         env
         |> Inductive.ctors_of(key)
         |> Map.new(fn c -> {c.name, length(c.args)} end)
 
-      assert arities[:"Union<Atom#:north|Int>$Int"] == 1
-      assert arities[:"Union<Atom#:north|Int>$Atom#:north"] == 0
+      assert arities[:"Union<Atom#:north|Std.Int#Int>$Std.Int#Int"] == 1
+      assert arities[:"Union<Atom#:north|Std.Int#Int>$Atom#:north"] == 0
     end
 
     test "Int | Bool and Bool | Int declare ONE family, not two" do
@@ -83,7 +83,7 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert union_families(env) == [:"Union<Int|Std.Bool#Bool>"]
+      assert union_families(env) == [:"Union<Std.Bool#Bool|Std.Int#Int>"]
     end
 
     test "a one-member union collapses to the member itself — no family is generated" do
@@ -107,11 +107,11 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, env} = Program.elaborate(src)
 
-      assert Inductive.family?(env, :"Disjoint<Atom|Int|Std.Bool#Bool>")
+      assert Inductive.family?(env, :"Disjoint<Atom|Std.Bool#Bool|Std.Int#Int>")
 
       ctors =
         env
-        |> Inductive.ctors_of(:"Disjoint<Atom|Int|Std.Bool#Bool>")
+        |> Inductive.ctors_of(:"Disjoint<Atom|Std.Bool#Bool|Std.Int#Int>")
         |> Enum.map(& &1.name)
         |> Enum.sort()
 
@@ -138,9 +138,9 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, env} = Program.elaborate(src)
 
       names =
-        env |> Inductive.ctors_of(:"Disjoint<Int|Int#3>") |> Enum.map(& &1.name) |> Enum.sort()
+        env |> Inductive.ctors_of(:"Disjoint<Int#3|Std.Int#Int>") |> Enum.map(& &1.name) |> Enum.sort()
 
-      assert names == [:"Disjoint<Int|Int#3>$Int", :"Disjoint<Int|Int#3>$Int#3"]
+      assert names == [:"Disjoint<Int#3|Std.Int#Int>$Int#3", :"Disjoint<Int#3|Std.Int#Int>$Std.Int#Int"]
     end
 
     test "a LITERAL expression injects into the literal member" do
@@ -151,7 +151,7 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert {:ctor, :"Disjoint<Int|Int#3>$Int#3", []} = Env.get_def(env, :f).body
+      assert {:ctor, :"Disjoint<Int#3|Std.Int#Int>$Int#3", []} = Env.get_def(env, :f).body
     end
 
     test "a non-literal term injects via its TYPE, even when its value is the literal" do
@@ -164,7 +164,7 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, env} = Program.elaborate(src)
       body = Env.get_def(env, :f).body |> unwrap_lams()
 
-      assert {:ctor, :"Disjoint<Int|Int#3>$Int", [{:var, 0}]} = body
+      assert {:ctor, :"Disjoint<Int#3|Std.Int#Int>$Std.Int#Int", [{:var, 0}]} = body
     end
 
     test "both members are eliminable, and the literal arm is distinct from the type arm" do
@@ -182,8 +182,8 @@ defmodule Cure.Elab.UnionTest do
       assert {:case, _, _, branches} = body
       arities = Map.new(branches, fn {c, ar, _} -> {c, ar} end)
 
-      assert arities[:"Disjoint<Int|Int#3>$Int#3"] == 0
-      assert arities[:"Disjoint<Int|Int#3>$Int"] == 1
+      assert arities[:"Disjoint<Int#3|Std.Int#Int>$Int#3"] == 0
+      assert arities[:"Disjoint<Int#3|Std.Int#Int>$Std.Int#Int"] == 1
     end
 
     test "an atom literal with Atom: :north | Atom" do
@@ -210,7 +210,7 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, env} = Program.elaborate(src)
       body = Env.get_def(env, :f).body |> unwrap_lams()
 
-      assert {:ctor, :"Union<Int|Std.Bool#Bool>$Int", [{:var, 0}]} = body
+      assert {:ctor, :"Union<Std.Bool#Bool|Std.Int#Int>$Std.Int#Int", [{:var, 0}]} = body
     end
 
     test "a literal is injected into its literal member constructor" do
@@ -254,8 +254,8 @@ defmodule Cure.Elab.UnionTest do
       # in the wide one. This is a real function, not a cast.
       assert branches |> Enum.map(fn {c, ar, _} -> {c, ar} end) |> Enum.sort() ==
                [
-                 {:"Union<Int|Std.Bool#Bool>$Int", 1},
-                 {:"Union<Int|Std.Bool#Bool>$Std.Bool#Bool", 1}
+                 {:"Union<Std.Bool#Bool|Std.Int#Int>$Std.Bool#Bool", 1},
+                 {:"Union<Std.Bool#Bool|Std.Int#Int>$Std.Int#Int", 1}
                ]
     end
 
@@ -288,8 +288,8 @@ defmodule Cure.Elab.UnionTest do
 
       assert branches |> Enum.map(fn {c, ar, _} -> {c, ar} end) |> Enum.sort() ==
                [
-                 {:"Union<Int|Std.Bool#Bool>$Int", 1},
-                 {:"Union<Int|Std.Bool#Bool>$Std.Bool#Bool", 1}
+                 {:"Union<Std.Bool#Bool|Std.Int#Int>$Std.Bool#Bool", 1},
+                 {:"Union<Std.Bool#Bool|Std.Int#Int>$Std.Int#Int", 1}
                ]
     end
 
@@ -308,8 +308,8 @@ defmodule Cure.Elab.UnionTest do
       assert {:case, _, _, branches} = body
       arities = Map.new(branches, fn {c, ar, _} -> {c, ar} end)
 
-      assert arities[:"Union<Atom#:north|Int>$Atom#:north"] == 0
-      assert arities[:"Union<Atom#:north|Int>$Int"] == 1
+      assert arities[:"Union<Atom#:north|Std.Int#Int>$Atom#:north"] == 0
+      assert arities[:"Union<Atom#:north|Std.Int#Int>$Std.Int#Int"] == 1
     end
 
     test "a non-exhaustive match is rejected by the existing coverage check" do
@@ -398,7 +398,7 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
-      assert apply(:"Cure.UTM", :wrap, [7]) == {:"Union<Int|Std.Bool#Bool>$Int", 7}
+      assert apply(:"Cure.UTM", :wrap, [7]) == {:"Union<Std.Bool#Bool|Std.Int#Int>$Std.Int#Int", 7}
     end
 
     test "a literal member erases to its family-qualified NULLARY ctor atom" do
@@ -675,7 +675,7 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
       # erlang:abs/1 returns a raw integer; the wrapper must tag it.
-      assert apply(:"Cure.EXD", :raw, [-5]) == {:"Union<Binary|Int>$Int", 5}
+      assert apply(:"Cure.EXD", :raw, [-5]) == {:"Union<Binary|Std.Int#Int>$Std.Int#Int", 5}
       # ...and the ordinary union elimination must then discriminate it.
       assert apply(:"Cure.EXD", :use_it, [-5]) == 5
     end
@@ -691,7 +691,7 @@ defmodule Cure.Elab.UnionTest do
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
       assert apply(:"Cure.EXL", :head, [[:north]]) ==
-               :"Union<Atom#:north|Int>$Atom#:north"
+               :"Union<Atom#:north|Std.Int#Int>$Atom#:north"
     end
 
     test "REJECTS members that share an erased representation: Int | Nat" do
@@ -795,9 +795,9 @@ defmodule Cure.Elab.UnionTest do
 
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
 
-      assert apply(:"Cure.EX3", :raw, [[true]]) == {:"Disjoint<Atom|Int|Std.Bool#Bool>$Std.Bool#Bool", true}
-      assert apply(:"Cure.EX3", :raw, [[:other]]) == {:"Disjoint<Atom|Int|Std.Bool#Bool>$Atom", :other}
-      assert apply(:"Cure.EX3", :raw, [[7]]) == {:"Disjoint<Atom|Int|Std.Bool#Bool>$Int", 7}
+      assert apply(:"Cure.EX3", :raw, [[true]]) == {:"Disjoint<Atom|Std.Bool#Bool|Std.Int#Int>$Std.Bool#Bool", true}
+      assert apply(:"Cure.EX3", :raw, [[:other]]) == {:"Disjoint<Atom|Std.Bool#Bool|Std.Int#Int>$Atom", :other}
+      assert apply(:"Cure.EX3", :raw, [[7]]) == {:"Disjoint<Atom|Std.Bool#Bool|Std.Int#Int>$Std.Int#Int", 7}
     end
 
     test "a union in an @extern's ARGUMENT position is unaffected" do
@@ -1033,7 +1033,7 @@ defmodule Cure.Elab.UnionTest do
       """
 
       assert {:ok, _} = Cure.Compiler.compile_and_load(src)
-      assert apply(:"Cure.EFU1", :raw, [-5]) == {:"Union<Binary|Int>$Int", 5}
+      assert apply(:"Cure.EFU1", :raw, [-5]) == {:"Union<Binary|Std.Int#Int>$Std.Int#Int", 5}
     end
 
     test "indistinct members under an Effect are still rejected" do

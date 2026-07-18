@@ -1,99 +1,20 @@
 defmodule Cure.Compiler.Parser.Precedence do
   @moduledoc """
-  Operator binding power table for Cure's Pratt parser.
+  Operator token-symbol and category mappings for Cure's parser and elaborator.
 
-  Binding powers (BP) determine operator precedence. Higher BP binds tighter.
-  For left-associative operators, right BP = left BP + 1.
-  For right-associative operators, right BP = left BP.
-  For non-associative operators, right BP = left BP + 1, and the parser rejects
-  chaining outright — see `non_assoc?/1` and `Cure.Compiler.Parser`'s
-  `reject_non_assoc_chain/3`. Binding power alone cannot express
-  non-associativity: `right = left + 1` is exactly what a LEFT-associative
-  operator uses, and it only stops the operator from swallowing a peer on its own
-  right-hand side. Nothing about it stops the Pratt loop from picking the built
-  node back up as a new left operand.
+  This module no longer carries binding powers. Operator precedence and
+  associativity are now decided entirely by the declaration-driven
+  `Cure.Compiler.Parser.FixityTable` (seeded from `Std.Operators` via
+  `Cure.Compiler.Parser.BuiltinFixity`); the former static `infix_bp/1`,
+  `prefix_bp/1`, and `non_assoc?/1` tables have been retired.
 
-  ## Precedence Levels (lowest to highest)
+  What remains are two pure token-to-metadata lookups that are *not* precedence:
 
-  | BP | Operators               | Assoc  |
-  |----|-------------------------|--------|
-  |  5 | `= += -= *= /=`         | right  |
-  |  8 | `<-|` / `✉` (Melquiades)| none   |
-  | 10 | `\\|>`                   | left   |
-  | 20 | `or`                    | left   |
-  | 30 | `and`                   | left   |
-  | 40 | `== != < > <= >=`       | none   |
-  | 50 | `.. ..=`                | none   |
-  | 60 | `<>`                    | right  |
-  | 70 | `+ -`                   | left   |
-  | 80 | `* / %`                 | left   |
-  | 90 | prefix `-`, `not`       |        |
-  | 100| `.`                     | left   |
-
-  The Melquiades operator (`<-|` / `✉`) sits below `|>` so that a value
-  built by a pipe chain can be sent in a single expression, and above
-  assignment so `let ref = pid <-| msg` binds the sent message. It is
-  declared non-associative to prevent `a <-| b <-| c` from silently
-  fanning out to two sends.
+  - `operator_symbol/1` — maps an operator token type to its display atom
+    (e.g. `:plus` → `:+`), used when building AST nodes and surface messages.
+  - `operator_category/1` — maps an operator token type to a semantic category
+    (e.g. `:arithmetic`, `:comparison`, `:bitwise`).
   """
-
-  @doc "Returns `{left_bp, right_bp}` for an infix operator token type, or `:not_infix`."
-  @spec infix_bp(atom()) :: {pos_integer(), pos_integer()} | :not_infix
-  def infix_bp(:pipe), do: {10, 11}
-  # Melquiades operator -- non-associative, just below pipe.
-  def infix_bp(:melquiades), do: {8, 9}
-  def infix_bp(:or_op), do: {20, 21}
-  def infix_bp(:and_op), do: {30, 31}
-  # Comparison -- non-associative (right = left + 1)
-  def infix_bp(:eq), do: {40, 41}
-  def infix_bp(:neq), do: {40, 41}
-  def infix_bp(:lt), do: {40, 41}
-  def infix_bp(:gt), do: {40, 41}
-  def infix_bp(:lte), do: {40, 41}
-  def infix_bp(:gte), do: {40, 41}
-  # Range -- non-associative
-  def infix_bp(:range), do: {50, 51}
-  def infix_bp(:range_inclusive), do: {50, 51}
-  # String concat -- right-associative
-  def infix_bp(:string_concat), do: {60, 60}
-  # Additive -- left-associative
-  def infix_bp(:plus), do: {70, 71}
-  def infix_bp(:minus), do: {70, 71}
-  # Multiplicative -- left-associative
-  def infix_bp(:star), do: {80, 81}
-  def infix_bp(:slash), do: {80, 81}
-  def infix_bp(:percent), do: {80, 81}
-  # Bitwise (Erlang precedence): `band` binds at multiplicative level; `bor`,
-  # `bxor`, `bsl`, `bsr` bind at additive level. Left-associative.
-  def infix_bp(:band_op), do: {80, 81}
-  def infix_bp(:bor_op), do: {70, 71}
-  def infix_bp(:bxor_op), do: {70, 71}
-  def infix_bp(:bsl_op), do: {70, 71}
-  def infix_bp(:bsr_op), do: {70, 71}
-  # Dot access -- left-associative
-  def infix_bp(:dot), do: {100, 101}
-  # Assignment operators (very low, right-assoc)
-  def infix_bp(:assign), do: {5, 4}
-  def infix_bp(:plus_assign), do: {5, 4}
-  def infix_bp(:minus_assign), do: {5, 4}
-  def infix_bp(:star_assign), do: {5, 4}
-  def infix_bp(:slash_assign), do: {5, 4}
-  def infix_bp(_), do: :not_infix
-
-  @doc """
-  True for operators the spec marks non-associative, which the parser refuses to chain:
-  `a == b == c`, `a..b..c`, and `a <-| b <-| c` are all parse errors.
-  """
-  @spec non_assoc?(atom()) :: boolean()
-  def non_assoc?(type),
-    do: type in [:melquiades, :eq, :neq, :lt, :gt, :lte, :gte, :range, :range_inclusive]
-
-  @doc "Returns the right binding power for a prefix operator, or `:not_prefix`."
-  @spec prefix_bp(atom()) :: pos_integer() | :not_prefix
-  def prefix_bp(:minus), do: 90
-  def prefix_bp(:not_op), do: 90
-  def prefix_bp(:bnot_op), do: 90
-  def prefix_bp(_), do: :not_prefix
 
   @doc "Returns the operator category for a given token type."
   @spec operator_category(atom()) :: atom()

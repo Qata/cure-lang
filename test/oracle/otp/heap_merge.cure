@@ -1,0 +1,73 @@
+mod HeapMerge
+  use Std.Equivalent
+  ## A VERIFIED MERGEABLE MIN-HEAP (priority queue) — the scheduler / priority-queue primitive, and a
+  ## demonstration that the merge_sorted three-function termination technique transfers from lists to TREES.
+  ## Heap-merge is the same non-structural two-tree recursion as list merge (it descends on neither tree alone,
+  ## only on their combined size), so it uses the identical three-function split: `merge` on h1, `merge_into`
+  ## on h2 with h2 IN SCOPE (so the reconstruct-equal certifies the descent — the LeNo case must recurse via
+  ## `merge_into`, NOT reconstruct h1 and call `merge`), and `merge_pick` routing the key comparison as an
+  ## explicit LeDec. The invariant `Heap` says each node's key ≤ both child roots and both children are heaps;
+  ## `merge_heap` proves `merge` preserves it, the chosen root being the MIN of the two roots (`merge_root_le`).
+  type Nat = Z | S(Nat)
+  type Bool = F | T
+  fn leq(a: Nat, b: Nat) -> Bool = match a
+    Z()   -> T()
+    S(k)  -> match b
+      Z()   -> F()
+      S(j)  -> leq(k, j)
+  type LeDec indices (x: Nat, y: Nat)
+    LeYes : (x2: Nat) -> (y2: Nat) -> Equivalent(Bool, leq(x2, y2), T()) -> LeDec(x2, y2)
+    LeNo  : (x2: Nat) -> (y2: Nat) -> Equivalent(Bool, leq(y2, x2), T()) -> LeDec(x2, y2)
+  fn cmp(x: Nat, y: Nat) -> LeDec(x, y) = match x
+    Z()   -> LeYes(Z(), y, reflexive(T()))
+    S(x2) -> match y
+      Z()   -> LeNo(S(x2), Z(), reflexive(T()))
+      S(y2) -> match cmp(x2, y2)
+        LeYes(a, b, e) -> LeYes(S(x2), S(y2), e)
+        LeNo(a, b, e)  -> LeNo(S(x2), S(y2), e)
+  type Tree = Empty | Node(Nat, Tree, Tree)
+  ## The root key bounds x (Empty is bounded by anything) — a one-level order test.
+  fn root_le(x: Nat, h: Tree) -> Bool = match h
+    Empty()        -> T()
+    Node(y, l, r)  -> leq(x, y)
+  ## Heap order: each node's key ≤ both child roots, and both children are heaps.
+  type Heap indices (h: Tree)
+    HEmpty : Heap(Empty)
+    HNode  : (x: Nat) -> (l: Tree) -> (r: Tree) -> Equivalent(Bool, root_le(x, l), T()) -> Equivalent(Bool, root_le(x, r), T()) -> Heap(l) -> Heap(r) -> Heap(Node(x, l, r))
+  ## Mergeable-heap MERGE, as the three-function total split (like merge_sorted): merge on h1, merge_into on
+  ## h2 (h2 in scope so reconstruct-equal certifies the descent), merge_pick routes the key comparison.
+  fn merge_pick(x: Nat, l1: Tree, r1: Tree, y: Nat, l2: Tree, r2: Tree, d: LeDec(x, y)) -> Tree = match d
+    LeYes(a, b, e) -> Node(x, l1, merge(r1, Node(y, l2, r2)))
+    LeNo(a, b, e)  -> Node(y, l2, merge_into(x, l1, r1, r2))
+  fn merge_into(x: Nat, l1: Tree, r1: Tree, h2: Tree) -> Tree = match h2
+    Empty()        -> Node(x, l1, r1)
+    Node(y, l2, r2) -> merge_pick(x, l1, r1, y, l2, r2, cmp(x, y))
+  fn merge(h1: Tree, h2: Tree) -> Tree = match h1
+    Empty()        -> h2
+    Node(x, l1, r1) -> merge_into(x, l1, r1, h2)
+  ## **THE MERGED ROOT IS THE MIN OF THE TWO ROOTS**: anything bounding both roots bounds the merge's root
+  ## (the new root is one of the two old roots). Mirrors the three-function merge.
+  fn merge_pick_rle(z: Nat, x: Nat, l1: Tree, r1: Tree, y: Nat, l2: Tree, r2: Tree, hz1: Equivalent(Bool, root_le(z, Node(x, l1, r1)), T()), hz2: Equivalent(Bool, root_le(z, Node(y, l2, r2)), T()), d: LeDec(x, y)) -> Equivalent(Bool, root_le(z, merge_pick(x, l1, r1, y, l2, r2, d)), T()) = match d
+    LeYes(a, b, e) -> hz1
+    LeNo(a, b, e)  -> hz2
+  fn merge_into_rle(z: Nat, x: Nat, l1: Tree, r1: Tree, h2: Tree, hz1: Equivalent(Bool, root_le(z, Node(x, l1, r1)), T()), hz2: Equivalent(Bool, root_le(z, h2), T())) -> Equivalent(Bool, root_le(z, merge_into(x, l1, r1, h2)), T()) = match h2
+    Empty()        -> hz1
+    Node(y, l2, r2) -> merge_pick_rle(z, x, l1, r1, y, l2, r2, hz1, hz2, cmp(x, y))
+  fn merge_root_le(z: Nat, h1: Tree, h2: Tree, hz1: Equivalent(Bool, root_le(z, h1), T()), hz2: Equivalent(Bool, root_le(z, h2), T())) -> Equivalent(Bool, root_le(z, merge(h1, h2)), T()) = match h1
+    Empty()        -> hz2
+    Node(x, l1, r1) -> merge_into_rle(z, x, l1, r1, h2, hz1, hz2)
+  ## **MERGE PRESERVES THE HEAP INVARIANT**: Heap(h1) and Heap(h2) ⟹ Heap(merge(h1,h2)). The chosen root is
+  ## ≤ everything it now parents (its old child roots by the invariant, the other heap's root by the comparison
+  ## via merge_root_le). A verified mergeable priority queue — the scheduler primitive. Same three-function mirror.
+  fn merge_pick_heap(x: Nat, l1: Tree, r1: Tree, y: Nat, l2: Tree, r2: Tree, s1: Heap(Node(x, l1, r1)), s2: Heap(Node(y, l2, r2)), d: LeDec(x, y)) -> Heap(merge_pick(x, l1, r1, y, l2, r2, d)) = match d
+    LeYes(a, b, e) -> match s1
+      HNode(x3, l13, r13, hxl1, hxr1, hl1, hr1) -> HNode(x, l1, merge(r1, Node(y, l2, r2)), hxl1, merge_root_le(x, r1, Node(y, l2, r2), hxr1, e), hl1, merge_heap(r1, Node(y, l2, r2), hr1, s2))
+    LeNo(a, b, e)  -> match s2
+      HNode(y3, l23, r23, hyl2, hyr2, hl2, hr2) -> HNode(y, l2, merge_into(x, l1, r1, r2), hyl2, merge_into_rle(y, x, l1, r1, r2, e, hyr2), hl2, merge_into_heap(x, l1, r1, r2, s1, hr2))
+  fn merge_into_heap(x: Nat, l1: Tree, r1: Tree, h2: Tree, s1: Heap(Node(x, l1, r1)), s2: Heap(h2)) -> Heap(merge_into(x, l1, r1, h2)) = match h2
+    Empty()        -> s1
+    Node(y, l2, r2) -> merge_pick_heap(x, l1, r1, y, l2, r2, s1, s2, cmp(x, y))
+  fn merge_heap(h1: Tree, h2: Tree, s1: Heap(h1), s2: Heap(h2)) -> Heap(merge(h1, h2)) = match h1
+    Empty()        -> s2
+    Node(x, l1, r1) -> merge_into_heap(x, l1, r1, h2, s1, s2)
+end

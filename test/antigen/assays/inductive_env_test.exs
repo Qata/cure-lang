@@ -14,7 +14,7 @@ defmodule Antigen.Assays.InductiveEnvTest do
     )
   end
 
-  defp canonical_family, do: Inductive.family(:AntigenEnv, [{:a, {:type, 0}}], [{:n, {:int_type}}], 0)
+  defp canonical_family, do: Inductive.family(:AntigenEnv, [{:a, {:type, 0}}], [{:n, {:data, :Int, [], []}}], 0)
 
   defp canonical_challenge(result_indices \\ [{:int_lit, 3}]) do
     Challenge.new(

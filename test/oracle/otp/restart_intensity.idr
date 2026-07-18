@@ -1,24 +1,23 @@
 %default total
 
-data Phase = Up | Down
-data Sup : Nat -> Phase -> Type where
-  Alive : Sup n Up
-  Stopped : Sup Z Down
-data Fail : Nat -> Phase -> Nat -> Phase -> Type where
-  FRestart : Fail (S n) Up n Up
-  FShutdown : Fail Z Up Z Down
-on_fail : Sup b1 p1 -> Fail b1 p1 b2 p2 -> Sup b2 p2
-on_fail sup FRestart = Alive
-on_fail sup FShutdown = Stopped
-data FailRun : Nat -> Phase -> Nat -> Phase -> Type where
-  FRDone : FailRun b p b p
-  FRMore : Fail b1 p1 bm pm -> FailRun bm pm b2 p2 -> FailRun b1 p1 b2 p2
-eventually_down : (n : Nat) -> FailRun n Up Z Down
-eventually_down Z = FRMore FShutdown FRDone
-eventually_down (S k) = FRMore FRestart (eventually_down k)
-run_len : FailRun b1 p1 b2 p2 -> Nat
-run_len FRDone = Z
-run_len (FRMore f rest) = S (run_len rest)
-eventually_down_len : (n : Nat) -> run_len (eventually_down n) = S n
-eventually_down_len Z = Refl
-eventually_down_len (S k) = cong S (eventually_down_len k)
+data Nat' = Z | S Nat'
+data SupState = Running Nat' | GaveUp
+
+on_failure : SupState -> SupState
+on_failure GaveUp = GaveUp
+on_failure (Running Z) = GaveUp
+on_failure (Running (S k)) = Running k
+
+crashes : SupState -> Nat' -> SupState
+crashes s Z = s
+crashes s (S m) = crashes (on_failure s) m
+
+-- bounded intensity => escalation: S b failures from budget b end in GaveUp.
+supervisor_escalates : (b : Nat') -> crashes (Running b) (S b) = GaveUp
+supervisor_escalates Z = Refl
+supervisor_escalates (S k) = supervisor_escalates k
+
+-- no premature give-up: after exactly b failures the supervisor is still Running Z.
+honours_budget : (b : Nat') -> crashes (Running b) b = Running Z
+honours_budget Z = Refl
+honours_budget (S k) = honours_budget k

@@ -21,6 +21,18 @@
 # an intentional, separately-reviewed change to codegen or an OTP major bump
 # that reshapes BEAM encoding; in that case recapture all three together and say
 # so in the commit.
+#
+# Re-frozen for Task 2.6 (Equatable/Comparable as the sole route to `==`/`<`,
+# with structural `Equatable` auto-derived for ADTs lacking a hand-written
+# instance). GDerived, GStructuredCall, GFsmDerived and GLifecycle each declare
+# their own message/event ADT (ActorMessage / ActorRequest / FsmEvent), so each
+# now OWNS and emits exactly one auto-derived structural-equality method
+# (`__impl_Equatable_<Module>#<Type>_==/2`) — an intentional codegen addition,
+# verified as a single owned instance (not ambient bloat). The modules with no
+# ADT of their own (Raw01/Raw15/Raw16, GSup, GApp) stay byte-identical: making
+# Std.Equatable/Std.Comparable `@prelude` no longer duplicates their ~two dozen
+# ambient instances into every consumer — owner-qualified instances now emit once
+# in their owning module and are reached by remote call (see `check_ast_with_locals`).
 defmodule Cure.Compiler.ActorQuoteGoldenTest do
   use ExUnit.Case, async: false
 
@@ -37,7 +49,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
 
      fn make_message() -> ActorMessage = Inc
      """,
-     "f819aab07c06793a1fe2f145bd3dd9865f5fc9bf034cee53cd5bb2cf01d0db7a"},
+     "1f4c7ab23e3d786a5d7cf3b2feebb7b7bd5e2431c69f5875b2dea54c92995bef"},
     {"GStructuredCall",
      """
      mod M
@@ -52,7 +64,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
 
      fn make_request() -> ActorRequest = Read
      """,
-     "2756ad344630d8dbefa49f55b67224c0537bdd5bb1c6f09e112d1628c0982031"},
+     "186928fe2d506b59861830ca6355c1ded20654001245c52dd9436ff90a4b2fe7"},
     {"GFsmDerived",
      """
      mod M
@@ -65,7 +77,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
 
      fn make_start() -> FsmEvent = Start
      """,
-     "20fd156f84f75a598bab7ac2064f2cf3edecb75057a9884b565b1d514f4438ab"},
+     "00ca03d11ed09b7c5fb68b7be8cab8128c90e3997a3001b942df9bfdb6bb3d74"},
     {"GSup",
      """
      mod M
@@ -96,7 +108,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
          terminate :shutdown
          code_change %[:ok, state + 1]
      """,
-     "511485c8a39dcc47ff708cabdeec07cf4a6b9bd3dcc56c50e8e1343c088ed925"},
+     "d9764518758cb4e3499b6bbdf95167b07c53909b2afd79eadd0441c68350df24"},
     # --- Raw Gen A characterization goldens (consolidation safety net) ---
     # Each freezes the compiled BEAM of one legacy `becomes lift module name`
     # raw-callback template (lib/std/actor.cure). They exist so the 1e

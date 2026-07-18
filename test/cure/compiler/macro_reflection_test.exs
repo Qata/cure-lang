@@ -22,7 +22,7 @@ defmodule Cure.Compiler.MacroReflectionTest do
     assert {:ok, env} = Program.elaborate("mod M\n  fn id(x: Int) -> Int = x\n")
     quoted = {:literal, [subtype: :integer], 1}
 
-    assert {:ok, {:int_type}} = MacroReflection.infer(quoted, env)
+    assert {:ok, {:data, :"Std.Int#Int", [], []}} = MacroReflection.infer(quoted, env)
   end
 
   test "expands quoted ASTs and lifts declarations append-only" do

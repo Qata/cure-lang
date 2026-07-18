@@ -1,0 +1,102 @@
+mod HeapMultiset
+  use Std.Equivalent
+  ## HEAP-MERGE PRESERVES THE MULTISET — the third and final correctness axis of the mergeable heap (after the
+  ## structural heap invariant and min-at-root). `merge_count` proves `count(z, merge(h1,h2)) = count(z,h1) +
+  ## count(z,h2)` for every z, so the heap loses and invents nothing. It is the TREE analog of list merge-
+  ## permutation (`merge_perm`), and strictly harder: each node contributes THREE summands (the root-equality
+  ## indicator + the two subtree counts), so bridging the two sides needs plus-ASSOCIATIVITY on the LeYes side
+  ## and a full `swap12` rearrangement + `plus_succ_r` on the LeNo side (where the new root comes from h2 and
+  ## lands in the second plus-position) — juggling the two-summand list case never needed. Same three-function
+  ## split; `count` routes the equality test through `count_pick` so it refines. Corollaries: `insert_count`
+  ## (insert adds EXACTLY one element) and `delete_min_count` (delete-min removes EXACTLY the root, nothing else).
+  type Nat = Z | S(Nat)
+  type Bool = F | T
+  fn leq(a: Nat, b: Nat) -> Bool = match a
+    Z()   -> T()
+    S(k)  -> match b
+      Z()   -> F()
+      S(j)  -> leq(k, j)
+  type LeDec indices (x: Nat, y: Nat)
+    LeYes : (x2: Nat) -> (y2: Nat) -> Equivalent(Bool, leq(x2, y2), T()) -> LeDec(x2, y2)
+    LeNo  : (x2: Nat) -> (y2: Nat) -> Equivalent(Bool, leq(y2, x2), T()) -> LeDec(x2, y2)
+  fn cmp(x: Nat, y: Nat) -> LeDec(x, y) = match x
+    Z()   -> LeYes(Z(), y, reflexive(T()))
+    S(x2) -> match y
+      Z()   -> LeNo(S(x2), Z(), reflexive(T()))
+      S(y2) -> match cmp(x2, y2)
+        LeYes(a, b, e) -> LeYes(S(x2), S(y2), e)
+        LeNo(a, b, e)  -> LeNo(S(x2), S(y2), e)
+  type Tree = Empty | Node(Nat, Tree, Tree)
+  fn merge_pick(x: Nat, l1: Tree, r1: Tree, y: Nat, l2: Tree, r2: Tree, d: LeDec(x, y)) -> Tree = match d
+    LeYes(a, b, e) -> Node(x, l1, merge(r1, Node(y, l2, r2)))
+    LeNo(a, b, e)  -> Node(y, l2, merge_into(x, l1, r1, r2))
+  fn merge_into(x: Nat, l1: Tree, r1: Tree, h2: Tree) -> Tree = match h2
+    Empty()        -> Node(x, l1, r1)
+    Node(y, l2, r2) -> merge_pick(x, l1, r1, y, l2, r2, cmp(x, y))
+  fn merge(h1: Tree, h2: Tree) -> Tree = match h1
+    Empty()        -> h2
+    Node(x, l1, r1) -> merge_into(x, l1, r1, h2)
+  fn plus(a: Nat, b: Nat) -> Nat = match a
+    Z()   -> b
+    S(k)  -> S(plus(k, b))
+  fn snat_cong(a: Nat, b: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) = rewrite e in reflexive(S(b))
+  fn plus_zero(n: Nat) -> Equivalent(Nat, plus(n, Z()), n) = match n
+    Z()   -> reflexive(Z())
+    S(k)  -> snat_cong(plus(k, Z()), k, plus_zero(k))
+  fn plus_assoc(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, plus(plus(a, b), c), plus(a, plus(b, c))) = match a
+    Z()   -> reflexive(plus(b, c))
+    S(k)  -> snat_cong(plus(plus(k, b), c), plus(k, plus(b, c)), plus_assoc(k, b, c))
+  fn plus_cong_r(a: Nat, b: Nat, c: Nat, e: Equivalent(Nat, b, c)) -> Equivalent(Nat, plus(a, b), plus(a, c)) = rewrite e in reflexive(plus(a, c))
+  fn plus_cong_l(a: Nat, b: Nat, c: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, plus(a, c), plus(b, c)) = rewrite e in reflexive(plus(b, c))
+  fn plus_succ_r(a: Nat, b: Nat) -> Equivalent(Nat, plus(a, S(b)), S(plus(a, b))) = match a
+    Z()   -> reflexive(S(b))
+    S(k)  -> snat_cong(plus(k, S(b)), S(plus(k, b)), plus_succ_r(k, b))
+  fn plus_comm(a: Nat, b: Nat) -> Equivalent(Nat, plus(a, b), plus(b, a)) = match a
+    Z()   -> sym(plus_zero(b))
+    S(k)  -> trans(snat_cong(plus(k, b), plus(b, k), plus_comm(k, b)), sym(plus_succ_r(b, k)))
+  fn swap12(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, plus(a, plus(b, c)), plus(b, plus(a, c))) =
+    trans(sym(plus_assoc(a, b, c)), trans(plus_cong_l(plus(a, b), plus(b, a), c, plus_comm(a, b)), plus_assoc(b, a, c)))
+  type EqDec indices (x: Nat, y: Nat)
+    EqYes : (x2: Nat) -> (y2: Nat) -> Equivalent(Nat, x2, y2) -> EqDec(x2, y2)
+    EqNo  : (x2: Nat) -> (y2: Nat) -> EqDec(x2, y2)
+  fn eq_dec(x: Nat, y: Nat) -> EqDec(x, y) = match x
+    Z()   -> match y
+      Z()   -> EqYes(Z(), Z(), reflexive(Z()))
+      S(k)  -> EqNo(Z(), S(k))
+    S(j)  -> match y
+      Z()   -> EqNo(S(j), Z())
+      S(k)  -> match eq_dec(j, k)
+        EqYes(a, b, e) -> EqYes(S(j), S(k), snat_cong(j, k, e))
+        EqNo(a, b)     -> EqNo(S(j), S(k))
+  fn count_pick(z: Nat, w: Nat, l: Tree, r: Tree, d: EqDec(z, w)) -> Nat = match d
+    EqYes(a, b, e) -> S(plus(count(z, l), count(z, r)))
+    EqNo(a, b)     -> plus(count(z, l), count(z, r))
+  fn count(z: Nat, h: Tree) -> Nat = match h
+    Empty()        -> Z()
+    Node(w, l, r)  -> count_pick(z, w, l, r, eq_dec(z, w))
+  ## **HEAP-MERGE PRESERVES THE MULTISET**: count(z, merge(h1,h2)) = count(z,h1) + count(z,h2) for every z.
+  ## The tree analog of list merge-permutation; three summands per node force plus-associativity juggling.
+  fn merge_pick_count(z: Nat, x: Nat, l1: Tree, r1: Tree, y: Nat, l2: Tree, r2: Tree, d: LeDec(x, y)) -> Equivalent(Nat, count(z, merge_pick(x, l1, r1, y, l2, r2, d)), plus(count(z, Node(x, l1, r1)), count(z, Node(y, l2, r2)))) = match d
+    LeYes(a, b, e) -> match eq_dec(z, x)
+      EqYes(p, q, eq) -> snat_cong(plus(count(z, l1), count(z, merge(r1, Node(y, l2, r2)))), plus(plus(count(z, l1), count(z, r1)), count(z, Node(y, l2, r2))), trans(plus_cong_r(count(z, l1), count(z, merge(r1, Node(y, l2, r2))), plus(count(z, r1), count(z, Node(y, l2, r2))), merge_count(z, r1, Node(y, l2, r2))), sym(plus_assoc(count(z, l1), count(z, r1), count(z, Node(y, l2, r2))))))
+      EqNo(p, q)      -> trans(plus_cong_r(count(z, l1), count(z, merge(r1, Node(y, l2, r2))), plus(count(z, r1), count(z, Node(y, l2, r2))), merge_count(z, r1, Node(y, l2, r2))), sym(plus_assoc(count(z, l1), count(z, r1), count(z, Node(y, l2, r2)))))
+    LeNo(a, b, e)  -> match eq_dec(z, y)
+      EqYes(p, q, eq) -> trans(snat_cong(plus(count(z, l2), count(z, merge_into(x, l1, r1, r2))), plus(count(z, Node(x, l1, r1)), plus(count(z, l2), count(z, r2))), trans(plus_cong_r(count(z, l2), count(z, merge_into(x, l1, r1, r2)), plus(count(z, Node(x, l1, r1)), count(z, r2)), merge_into_count(z, x, l1, r1, r2)), swap12(count(z, l2), count(z, Node(x, l1, r1)), count(z, r2)))), sym(plus_succ_r(count(z, Node(x, l1, r1)), plus(count(z, l2), count(z, r2)))))
+      EqNo(p, q)      -> trans(plus_cong_r(count(z, l2), count(z, merge_into(x, l1, r1, r2)), plus(count(z, Node(x, l1, r1)), count(z, r2)), merge_into_count(z, x, l1, r1, r2)), swap12(count(z, l2), count(z, Node(x, l1, r1)), count(z, r2)))
+  fn merge_into_count(z: Nat, x: Nat, l1: Tree, r1: Tree, h2: Tree) -> Equivalent(Nat, count(z, merge_into(x, l1, r1, h2)), plus(count(z, Node(x, l1, r1)), count(z, h2))) = match h2
+    Empty()        -> sym(plus_zero(count(z, Node(x, l1, r1))))
+    Node(y, l2, r2) -> merge_pick_count(z, x, l1, r1, y, l2, r2, cmp(x, y))
+  fn merge_count(z: Nat, h1: Tree, h2: Tree) -> Equivalent(Nat, count(z, merge(h1, h2)), plus(count(z, h1), count(z, h2))) = match h1
+    Empty()        -> reflexive(count(z, h2))
+    Node(x, l1, r1) -> merge_into_count(z, x, l1, r1, h2)
+  fn singleton(x: Nat) -> Tree = Node(x, Empty(), Empty())
+  fn insert(x: Nat, h: Tree) -> Tree = merge(singleton(x), h)
+  fn delete_min(h: Tree) -> Tree = match h
+    Empty()        -> Empty()
+    Node(k, l, r)  -> merge(l, r)
+  ## **INSERT ADDS EXACTLY ONE ELEMENT**: the multiset of insert(x,h) is that of h plus one x.
+  fn insert_count(z: Nat, x: Nat, h: Tree) -> Equivalent(Nat, count(z, insert(x, h)), plus(count(z, Node(x, Empty(), Empty())), count(z, h))) = merge_count(z, Node(x, Empty(), Empty()), h)
+  ## **DELETE-MIN REMOVES EXACTLY THE ROOT**: the multiset of delete_min(Node(k,l,r)) is the two subtrees' —
+  ## the root k is dropped, nothing else changes.
+  fn delete_min_count(z: Nat, k: Nat, l: Tree, r: Tree) -> Equivalent(Nat, count(z, delete_min(Node(k, l, r))), plus(count(z, l), count(z, r))) = merge_count(z, l, r)
+end

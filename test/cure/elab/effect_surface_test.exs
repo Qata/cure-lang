@@ -68,21 +68,21 @@ defmodule Cure.Elab.EffectSurfaceTest do
       """
 
       assert {:ok, env} = Program.elaborate(src)
-      assert {:effect_type, {:int_type}} = type_of(env, :f)
+      assert {:effect_type, {:data, :"Std.Int#Int", [], []}} = type_of(env, :f)
     end
   end
 
   describe "recursive argument lowering" do
-    test "Effect(Int) lowers to {:effect_type, {:int_type}}" do
+    test "Effect(Int) lowers to {:effect_type, Std.Int#Int}" do
       ast = {:function_call, [name: "Effect"], [{:variable, [scope: :local], "Int"}]}
-      assert {:ok, {:effect_type, {:int_type}}} = Declarations.lower_type(ast, [], prelude_env())
+      assert {:ok, {:effect_type, {:data, :"Std.Int#Int", [], []}}} = Declarations.lower_type(ast, [], prelude_env())
     end
 
     test "Effect(List(Int)) lowers its argument through idx_to_core recursively" do
       inner = {:function_call, [name: "List"], [{:variable, [scope: :local], "Int"}]}
       ast = {:function_call, [name: "Effect"], [inner]}
 
-      assert {:ok, {:effect_type, {:data, :"Std.List#List", [{:int_type}], []}}} =
+      assert {:ok, {:effect_type, {:data, :"Std.List#List", [{:data, :"Std.Int#Int", [], []}], []}}} =
                Declarations.lower_type(ast, [], prelude_env())
     end
   end

@@ -9,7 +9,7 @@ defmodule Cure.Elab.PrimitiveResolveTest do
   alias Cure.Core.Env
   alias Cure.Elab.Program
 
-  for {name, node} <- [{"Int", {:int_type}}, {"Float", {:float_type}}, {"Binary", {:binary_type}}] do
+  for {name, node} <- [{"Int", {:data, :"Std.Int#Int", [], []}}, {"Float", {:float_type}}, {"Binary", {:binary_type}}] do
     test "bare #{name} resolves to #{inspect(node)} with no import" do
       {:ok, env} =
         Program.elaborate("mod M\n  fn f(x: #{unquote(name)}) -> #{unquote(name)} = x\nend\n")
@@ -24,6 +24,6 @@ defmodule Cure.Elab.PrimitiveResolveTest do
     # param/return resolve_index_name path above.
     {:ok, env} = Program.elaborate("mod M\n  type Boxed = Box(Int)\nend\n")
     box = Cure.Core.Inductive.get_ctor(env, :Box)
-    assert [{_name, {:int_type}}] = box.args
+    assert [{_name, {:data, :"Std.Int#Int", [], []}}] = box.args
   end
 end

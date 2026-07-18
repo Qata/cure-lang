@@ -586,9 +586,13 @@ defmodule Cure.Elab.Declarations do
            MacroExpand.expand(body_expr, env, callback_context: Keyword.get(meta, :callback_context)),
          {:ok, sig} <- function_signature(meta, env) do
       ctx = build_context(env, sig.telescope)
+      # Qualify any hole minted while elaborating THIS body by its enclosing def
+      # (`hole_id/2`) — local to this call, never merged back into `final` below,
+      # so it cannot leak into another def's elaboration.
+      def_env = Env.with_current_def(env, sig.name)
 
       with {:ok, body_term, return_core, _return_value} <-
-             elaborate_body_typed(body_expr, sig, ctx, env),
+             elaborate_body_typed(body_expr, sig, ctx, def_env),
            # A `where`-introduced dictionary parameter is present by default but
            # SAFELY demoted to `:erased` when the body never uses it relevantly (an
            # `ignore`-style constrained function): the same criterion the relevance
@@ -1211,16 +1215,15 @@ defmodule Cure.Elab.Declarations do
   # must get a UNIQUE id: once holes flow through the kernel as stuck neutrals,
   # two holes sharing an id are definitionally equal, so `refl : ?a = ?b` would
   # type-check and a false equality be forgeable. A NAMED `?foo` keys on its name
-  # so repeating `?foo` within a scope refers to the SAME unknown; an unnamed `?`
-  # keys on its source position (`line:col`), unique per occurrence. Both are
-  # module-qualified via `Env.owner/1`. No gensym counter is used, so Antigen and
-  # the differential oracle stay replay-stable.
-  #
-  # Soundness note: `line:col` within a module is inherently unique per source
-  # occurrence, and a hole never escapes its own def's normalisation — a
-  # hole-bearing def is never certified and so never δ-unfolded into another def's
-  # conversion — so position alone is soundness-sufficient. The module qualifier
-  # is defense-in-depth and readability for later slices (goal reporting).
+  # so repeating `?foo` *within one def* refers to the SAME unknown; an unnamed
+  # `?` keys on its source position (`line:col`), unique per occurrence. Both are
+  # qualified by `<module>.<def>` (`Env.owner/1` + `Env.current_def/1`) — the
+  # <def> qualifier is REQUIRED for the named case: without it, `?goal` written
+  # in two different defs of the same module mints the SAME id, and `Conv`
+  # (`conv_neutral?({:nhole,id},{:nhole,id}) -> true`) judges those two,
+  # semantically-unrelated holes definitionally equal (cross-def collision — see
+  # `Cure.Elab.HoleIdentityTest` "cross-def collision guard"). No gensym counter
+  # is used, so Antigen and the differential oracle stay replay-stable.
   #
   # Public so the elaborator's proof-hole trigger (Elaborator.elaborate_expr_checked
   # for `{:hole,_}` in argument position) mints ids by the SAME scheme — one
@@ -1228,12 +1231,14 @@ defmodule Cure.Elab.Declarations do
   @doc false
   def hole_id(env, meta) do
     mod = Env.owner(env) || ""
+    def_name = Env.current_def(env)
+    qualifier = if def_name, do: "#{mod}.#{def_name}", else: mod
     name = Keyword.get(meta, :name, "")
 
     if name != "" do
-      "#{mod}##{name}"
+      "#{qualifier}##{name}"
     else
-      "#{mod}:#{Keyword.get(meta, :line, 0)}:#{Keyword.get(meta, :col, 0)}"
+      "#{qualifier}:#{Keyword.get(meta, :line, 0)}:#{Keyword.get(meta, :col, 0)}"
     end
   end
 
@@ -1950,6 +1955,28 @@ defmodule Cure.Elab.Declarations do
   """
   @spec lower_type(tuple(), [String.t()], Env.t()) :: {:ok, tuple()} | {:error, term()}
   def lower_type(ast, scope, env), do: idx_to_core(ast, scope, nil, env, nil)
+
+  @doc """
+  The free type variables of one or more surface type ASTs, in order of first
+  appearance — the same kind-`Type`, family-aware collection Idris-style
+  auto-generalization uses (`auto_generalize/3`), but with an empty bound set.
+
+  Passed as the `scope` to `lower_type/3`, these names lower to positional
+  `{:var, idx}` de Bruijn indices instead of distinct global neutrals, so two
+  signatures that differ only by a consistent renaming of their type variables
+  lower to identical Core terms and compare equal under kernel conversion.
+  """
+  @spec free_type_vars([tuple()], Env.t()) :: [String.t()]
+  def free_type_vars(type_asts, env) do
+    {ordered, _seen} =
+      type_asts
+      |> Enum.reject(&is_nil/1)
+      |> Enum.reduce({[], MapSet.new()}, fn ast, acc ->
+        collect_type_vars(ast, MapSet.new(), env, acc)
+      end)
+
+    ordered
+  end
 
   # Classify an index NAME node as a numeral, since a name STARTING WITH A DIGIT
   # can only be a stringified numeric token from the type parser (Cure identifiers
