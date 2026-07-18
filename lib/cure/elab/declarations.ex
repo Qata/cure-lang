@@ -1051,8 +1051,12 @@ defmodule Cure.Elab.Declarations do
 
   # A hole body `?name` elaborates to a `:hole` term (accepted at the declared
   # return type by the kernel; it blocks codegen until filled).
-  defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, env, _params) do
-    {:ok, {:hole, hole_id(env, meta)}}
+  defp elaborate_body({:hole, _meta, _} = expr, return_core, scope, ctx, env, _params) do
+    # A whole-body proof hole is a check-position hole against the declared return
+    # type: route it through the proof-hole trigger so `@lemma`-tagged theorems and
+    # local hypotheses can auto-discharge it. Strictly additive — on `:none` the
+    # trigger returns the same surviving `{:hole, id}` this clause used to build.
+    Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
   end
 
   # A `let … ⏎ body` block: check it against the declared return type (there is
