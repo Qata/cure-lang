@@ -40,7 +40,7 @@ Downstream, this is the foundation two other efforts build on:
 
 | Model | What it shows | Path |
 | --- | --- | --- |
-| **Cure's own `Nat`** | THE in-tree precedent: `@builtin(:nat)` inductive family + compact `{:nat_lit}` literal defeq to the spine + audited `reduce_nat` fold + codegen lowering `{:nat_lit,n}`→BEAM integer (`Z→0`, `S n→n+1`). | `lib/std/nat.cure`, `lib/cure/core/builtins.ex`, `lib/cure/core/{term,eval,value}.ex`, `lib/cure/elab/emit.ex:529` |
+| **Cure's own `Nat`** | THE in-tree precedent: `@builtin(:nat)` inductive family + compact `{:nat_lit}` literal defeq to the spine (`Eval.nat_to_ctor`/`nat_to_ctor_if`) + audited arithmetic fold + codegen lowering `{:nat_lit,n}`→BEAM integer (`Z→0`, `S n→n+1`). | `lib/std/nat.cure`, `lib/cure/core/builtins.ex`, `lib/cure/core/{term,eval,value,normalise,conv}.ex`, `lib/cure/elab/emit.ex:529` |
 | **Lean 4 core `Int`** | Canonical two-constructor inductive integer, `@[extern "lean_nat_to_int"]` native-backed | `~/Develop/lean4/src/Init/Data/Int/Basic.lean:46` |
 | **Agda stdlib `ℤ`** | Same `+_ / -[1+_]` shape (Pos / NegSucc) | `~/Develop/agda-stdlib/src/Data/Integer/Base.agda` |
 | **Rocq `Z`** | Binary `Z0 | Zpos | Zneg` alternative (rejected here, §2) | `~/Develop/rocq/theories/Corelib/Numbers/BinNums.v:68` |
@@ -84,27 +84,62 @@ We do **not** ship `FromNat(S(S(…)))` terms at runtime. We mirror the machiner
    node) becomes the compact canonical form of the inductive `Int`, exactly as
    `{:nat_lit, n}` is for `Nat`. Its typing is `{:int_lit, n} : Int` for any
    `n ∈ ℤ`.
-2. **Audited fold `reduce_int`** (the analog of the existing `reduce_nat` in the
-   `Eval.fold` table). It makes constructors, eliminator, and literal defeq:
+2. **Audited fold `reduce_int`.** The precedent is **not** `Eval.fold`
+   (that table is the separate arithmetic/comparison-op folder, §3.3) — it is
+   `Eval.nat_to_ctor/1` / `nat_to_ctor_if/1` in `lib/cure/core/eval.ex:244-252`,
+   documented in-tree as "the single audited literal→constructor mapping
+   (Lean's `toCtorIfLit` / Agda's `matchLitSuc`)." `Nat`'s version peels one `S`
+   layer per call (`{:vnat,0}` ⇓ `{:vctor,:Z,[]}`; `{:vnat,n}` ⇓
+   `{:vctor,:S,[{:vnat,n-1}]}`, predecessor left compact) and is invoked from
+   exactly **four** ι-sites that a `reduce_int`/`int_to_ctor_if` analog must
+   also be wired into: `eval`'s own `:case` handling (`eval.ex:119`),
+   `Normalise`'s two `ncase` arms (`normalise.ex:279`, `normalise.ex:321`), and
+   `conv.ex:107,110` (structural **conversion-checking** — literal-vs-explicit-
+   ctor equality during unification, not just case reduction). `conv.ex` is
+   the soundness-critical site: it is what actually makes constructor,
+   eliminator, and literal *defeq* to each other, and it is currently missing
+   from §9's file list.
    - `FromNat({:nat_lit, k})` ⇓ `{:int_lit, k}`
    - `NegativeSuccessor({:nat_lit, k})` ⇓ `{:int_lit, -(k+1)}`
    - **eliminator / `match` on `{:int_lit, n}`:** `n ≥ 0` selects the `FromNat`
      arm binding `{:nat_lit, n}`; `n < 0` selects the `NegativeSuccessor` arm
      binding `{:nat_lit, -n-1}`. This is what gives `match`/induction their
-     computational meaning on the compact form.
+     computational meaning on the compact form — the `Int` analog of
+     `nat_to_ctor`/`nat_to_ctor_if`, single-step (no recursive peel needed,
+     since `Int` has only the two outermost constructors).
 3. **Arithmetic ops.** The existing `int_add`/`int_sub`/`int_mul`/comparison
    builtin ops already fold `{:int_lit}` operands to native BEAM results; they are
    retained and are now understood as the audited computational rule on the
    canonical form of the inductive type.
-4. **Codegen.** `emit.ex` already lowers `{:int_lit, n}` to a native BEAM
-   integer; constructor forms erase through the fold to the same literal, so
-   generated code is unchanged.
+4. **Codegen — closed vs. open ctor applications differ, and this is new work,
+   not "verify, don't rewrite."** `emit.ex` already lowers `{:int_lit, n}` to a
+   native BEAM integer, and a **closed** `FromNat`/`NegativeSuccessor`
+   application folds to `{:int_lit, _}` before codegen ever sees it (§3.2) —
+   generated code for those is genuinely unchanged. But an **open** application
+   (e.g. `fn to_int(n: Nat) -> Int = FromNat(n)`, or the constructor terms an
+   induction proof builds in its own inductive step) reaches `emit.ex` as a
+   literal `{:ctor, :FromNat/:NegativeSuccessor, [n]}` Core node that **cannot**
+   fold at compile time. `emit.ex`'s existing per-family erasure hooks
+   (`nat_ctor?`/`bounded_ctor?`, `lib/cure/elab/emit.ex:1079-1092`) dispatch
+   **by arity** — `[] -> 0`, `[n] -> lower(n)+1` — because `Nat`'s `Z`/`S` and
+   `Bounded`'s `First`/`Next` each have exactly one 0-ary and one 1-ary
+   constructor, so arity alone disambiguates. `Int`'s two constructors are
+   **both 1-ary** (`FromNat(Nat)`, `NegativeSuccessor(Nat)`) — arity cannot
+   tell them apart. Phase 1 must therefore add a **new**, **name-keyed**
+   `int_ctor?`/lowering case (there is no existing precedent shaped exactly
+   like this) that dispatches on the constructor's identity, not its arity:
+   `FromNat(n)` → `lower(n)` (the identity — no `+1`, unlike `S`);
+   `NegativeSuccessor(n)` → `-(lower(n) + 1)`. This is still small, mechanical,
+   and audited by the same one `reduce_int`/erasure-correspondence argument
+   (§4) — but it is new code, and the plan must say so rather than assume
+   `emit.ex` needs no change.
 
 ### 3a. The one open representation question (resolve in the plan)
 
 Currently the *type* `Int` is the primitive former `{:int_type}`, seeded by
-`seed_primitives` and special-cased across the kernel (`infer_prim`, literal
-typing, the builtin-op signatures). `Nat`, by contrast, has a single spelling:
+`seed_primitives` and special-cased across the kernel (literal typing, the
+builtin-op signatures, and the sites enumerated in (i) below). `Nat`, by
+contrast, has a single spelling:
 its type *is* the inductive family seeded by `seed_builtin(:nat, …)`. Two ways to
 reconcile:
 
@@ -114,8 +149,18 @@ reconcile:
   declaration), with `{:int_lit}` as its literal. `Float`/`Binary`/`Atom` stay in
   the primitive-floor cohort — only `Int` moves. Cleanest, most Nat-faithful,
   avoids dual-spelling conversion hazards. Higher blast radius: every
-  `{:int_type}` special-case must be repointed at the family. **Recommended — this
-  is the "just like Nat" the design calls for.**
+  `{:int_type}`/`{:int_lit}` special-case must be repointed at the family — as
+  of this writing that is `lib/cure/core/kernel.ex` (`infer/2` clauses,
+  `rigid_index?/1`; note `infer_prim` itself is **already retired**, K2 spec
+  2026-07-09 — arithmetic/comparison typing goes through the seeded builtin-op
+  globals in `builtins.ex`, not a dedicated prim-typing function), `meta_check.ex`
+  (`canonical_head?/1`), `printer.ex`, `quote.ex`, `serialize.ex`, `term.ex`
+  (`term?`/`shift`/`subst`/`to_external`/`from_external`), `declarations.ex`
+  (`primitive_tag_node/1`), `implementation.ex` (`head_atom/4`), `resolve.ex`
+  (`head_type_core/1`), `unify.ex` (`escapes?/3`), and `union.ex`
+  (`member_key/1`, `class_of_core/2`) — confirmed by grep, not exhaustively
+  audited; the plan's Task 1 should re-grep before starting. **Recommended —
+  this is the "just like Nat" the design calls for.**
 - **(ii) Facade — keep `{:int_type}` as the canonical type, register the family
   behind it, make the two defeq.** Smaller diff, but introduces a second spelling
   of the same type and the conversion-checker must treat `{:int_type} ≡
@@ -129,7 +174,8 @@ recorded, not silent.
 
 - **What is trusted:** the `reduce_int` fold table (§3.2) — it asserts "the
   inductive eliminator and constructors ≡ the native BEAM integer ops." This is
-  the **one TCB addition**, the exact analog of the already-trusted `reduce_nat`.
+  the **one TCB addition**, the exact analog of the already-trusted `Nat`
+  literal↔constructor mapping (`Eval.nat_to_ctor`/`nat_to_ctor_if`, §3.2).
 - **Why it is approved:** it is Lean-aligned (`Int.ofNat` is literally
   `@[extern]`-backed in Lean core), so it falls under the standing
   `tcb-change-blanket-approval` (Idris/Agda/Lean alignment suffices). The change
@@ -151,7 +197,13 @@ MUST typecheck and compile **byte-identically**. `{:int_lit}` and the constructo
 forms are fully interchangeable through the fold, so:
 
 - `5 : Int` stays `{:int_lit, 5}`; `a + b`, `a < b : Bool` fold exactly as before.
-- Generated BEAM is unchanged (codegen already targets `{:int_lit}`).
+- Generated BEAM for every program expressible **today** (none of which uses
+  `FromNat`/`NegativeSuccessor` — they don't exist yet) is unchanged, since
+  today's programs only ever produce `{:int_lit}` and the existing builtin-op
+  forms. New surface use of the constructors (Phase 1's own smoke-test
+  included) exercises the **new** name-keyed codegen case from §3.4, which is
+  additive, not a back-compat concern — but it is a new runtime code path, not
+  a "codegen already targets `{:int_lit}`, nothing to do" claim.
 
 **The gate is:** the full existing test suite stays green (kernel/soundness
 suite, stdlib, oracle replay `rel=same`, Antigen), with **no** expected-output
@@ -171,7 +223,21 @@ slots in *underneath* it as the proof layer that lets *open* arithmetic
 Agent #4's `IsTrue ↔ inductive-family` bridge runs in **parallel** and coexists.
 This initiative defines the `Int`-side order theory (§7 Phase 2) freely; #4's
 bridge becomes a *provable* lemma against it later rather than a stopgap. This
-spec does not modify #4's files or `IsTrue`.
+spec does not modify #4's files or `IsTrue`'s semantics — the type, its
+constructor, and `decide_is_true` are untouched.
+
+**Doc-comment exception (in scope, semantics untouched):** two files carry
+prose that hardcodes "`Int` is primitive" and goes stale once Phase 1 lands —
+`lib/std/proof_int_math.cure`'s module doc ("`Int` is a primitive, not an
+inductive, so it admits no structural induction") and `lib/std/nat.cure`'s
+`of_int` doc ("A primitive machine `Int` is not structurally well-founded, so
+this is an asserted FFI boundary"). Phase 1 MUST update both comments to match
+reality (`of_int`'s *behavior* stays exactly as-is — it remains the trusted
+clamp-to-`Z` FFI boundary regardless of `Int`'s representation, since the
+inductive family still has no upper bound and `of_int` still has to clamp
+negatives; only the prose describing *why* is stale). This is a doc-only edit,
+not a semantic change to `IsTrue` or `#4`'s bridge — do not read the
+"untouched" rule above as blocking it.
 
 ## 7. Scope & phasing — single plan, two sequenced phases
 
@@ -222,10 +288,18 @@ or #4's bridge.
 - **Kernel/TCB:** `lib/cure/core/builtins.ex` (move `Int` out of
   `seed_primitives`; add `seed_builtin(:int, …)` with the FromNat/NegativeSuccessor
   schema, mirroring `:nat`), `lib/cure/core/{term,eval,value}.ex` (the
-  `reduce_int` fold + `{:int_lit}` literal handling), possibly
-  `lib/cure/core/meta_check.ex` (canonical-head), and the `{:int_type}` repoint of
-  §3a. `lib/cure/elab/emit.ex` codegen already targets `{:int_lit}` — verify,
-  don't rewrite.
+  `reduce_int` fold + `{:int_lit}` literal handling), `lib/cure/core/normalise.ex`
+  (the two `ncase` ι-arms) and `lib/cure/core/conv.ex` (literal-vs-ctor
+  conversion-checking — see §3.2), and the full `{:int_type}`/
+  `{:int_lit}` repoint of §3a(i): `lib/cure/core/kernel.ex`, `meta_check.ex`,
+  `printer.ex`, `quote.ex`, `serialize.ex` (all confirmed live special-case
+  sites — see §3a for the specific functions), plus
+  `lib/cure/elab/{declarations,implementation,resolve,unify,union}.ex`.
+  `lib/cure/elab/emit.ex` — `{:int_lit}` lowering (line 525) is unchanged, but
+  a **new** name-keyed `int_ctor?` case is required for open constructor
+  applications (§3.4); this is new code, not a verify-only site.
+- **Doc-only (§6):** `lib/std/proof_int_math.cure`, `lib/std/nat.cure` —
+  refresh the two stale "`Int` is primitive" comments; no semantic change.
 - **Steer:** work in `lib/cure/core/*` + `lib/cure/elab/*`. IGNORE
   `lib/cure/compiler/*` and `lib/cure/types/*` (non-dependent decoys).
 - **Tests:** `test/oracle/otp/int_inductive.{cure,idr}` (+ Phase-2 probes).
