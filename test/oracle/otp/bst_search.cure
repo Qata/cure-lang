@@ -253,4 +253,21 @@ mod BstSearch
         OA() -> mem_delete_eq(OC(), r, andb_l(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst)))
         OB() -> mem_delete_eq(OC(), r, andb_l(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst)))
         OC() -> trans(mem_eq_lmem(OC(), merge(l, r), merge_bst(l, r, OC(), andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst), andb_l(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst)), andb_l(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))), andb_r(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))))), trans(lmem_merge(l, r, OC()), trans(orb_cong_l(lmem(OC(), r), alllt_absent(OC(), l, andb_l(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))))), trans(orb_ofl(lmem(OC(), r)), allgt_absent(OC(), r, andb_r(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))))))))
+  fn lmem_delete_neq(x: OKey, k: OKey, t: Tree, neq: Equivalent(OBit, keq(x, k), OF())) -> Equivalent(OBit, lmem(x, delete(k, t)), lmem(x, t)) = match t
+    Leaf()        -> reflexive(OF())
+    Node(l, v, r) -> match k
+      OA() -> match v
+        OA() -> trans(lmem_merge(l, r, x), sym(trans(orb_cong_l(orb(lmem(x, l), lmem(x, r)), neq), orb_ofl(orb(lmem(x, l), lmem(x, r))))))
+        OB() -> orb_cong_r(keq(x, OB()), orb_cong_l(lmem(x, r), lmem_delete_neq(x, OA(), l, neq)))
+        OC() -> orb_cong_r(keq(x, OC()), orb_cong_l(lmem(x, r), lmem_delete_neq(x, OA(), l, neq)))
+      OB() -> match v
+        OA() -> orb_cong_r(keq(x, OA()), orb_cong_r(lmem(x, l), lmem_delete_neq(x, OB(), r, neq)))
+        OB() -> trans(lmem_merge(l, r, x), sym(trans(orb_cong_l(orb(lmem(x, l), lmem(x, r)), neq), orb_ofl(orb(lmem(x, l), lmem(x, r))))))
+        OC() -> orb_cong_r(keq(x, OC()), orb_cong_l(lmem(x, r), lmem_delete_neq(x, OB(), l, neq)))
+      OC() -> match v
+        OA() -> orb_cong_r(keq(x, OA()), orb_cong_r(lmem(x, l), lmem_delete_neq(x, OC(), r, neq)))
+        OB() -> orb_cong_r(keq(x, OB()), orb_cong_r(lmem(x, l), lmem_delete_neq(x, OC(), r, neq)))
+        OC() -> trans(lmem_merge(l, r, x), sym(trans(orb_cong_l(orb(lmem(x, l), lmem(x, r)), neq), orb_ofl(orb(lmem(x, l), lmem(x, r))))))
+  fn mem_delete_neq(x: OKey, k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT()), neq: Equivalent(OBit, keq(x, k), OF())) -> Equivalent(OBit, mem(x, delete(k, t)), mem(x, t)) =
+    trans(mem_eq_lmem(x, delete(k, t), delete_bst(k, t, bst)), trans(lmem_delete_neq(x, k, t, neq), sym(mem_eq_lmem(x, t, bst))))
 end

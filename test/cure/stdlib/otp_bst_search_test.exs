@@ -30,6 +30,8 @@ defmodule Cure.Stdlib.OtpBstSearchTest do
         merge_bst(l, r, m, bl, br, plt, pgt)
       fn del_removes(k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT())) -> Equivalent(OBit, mem(k, delete(k, t)), OF()) =
         mem_delete_eq(k, t, bst)
+      fn del_preserves_others(x: OKey, k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT()), neq: Equivalent(OBit, keq(x, k), OF())) -> Equivalent(OBit, mem(x, delete(k, t)), mem(x, t)) =
+        mem_delete_neq(x, k, t, bst, neq)
     end
     """
 
