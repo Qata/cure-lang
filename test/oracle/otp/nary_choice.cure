@@ -4,6 +4,7 @@ mod NaryChoice
   ## This needs a Local type and its Branches list to be MUTUALLY recursive, with dual/dual_branches
   ## and their involution proofs mutually recursive too — which requires the kernel to delta-reduce
   ## mutually-recursive functions (fix a4f071fb: certify the whole mutual SCC).
+  type TB2 = F | T
   type Tag = TA | TB | TC
   type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LSel(Branches) | LBra(Branches)
   type Branches = BNil | BCons(Tag, Local, Branches)
@@ -35,4 +36,54 @@ mod NaryChoice
   fn dual_branches_involution(bs: Branches) -> Equivalent(Branches, dual_branches(dual_branches(bs)), bs) = match bs
     BNil()            -> reflexive(BNil())
     BCons(t, l, rest) -> bcons_cong(t, dual_involution(l), dual_branches_involution(rest))
+
+  ## N-ARY GLOBAL protocols: a choice offers an arbitrary-length list of labelled continuations
+  ## (GBranches). Global and GBranches are MUTUALLY inductive; project / project_gbranches and the
+  ## coherence proofs below are all mutually recursive — enabled by mutual-recursion delta-reduction.
+  type Role = RA | RB
+  fn role_eq(x: Role, y: Role) -> TB2 = match x
+    RA() -> match y
+      RA() -> T()
+      RB() -> F()
+    RB() -> match y
+      RA() -> F()
+      RB() -> T()
+  type Global = GEnd | GMsg(Role, Role, Tag, Global) | GCho(Role, Role, GBranches)
+  type GBranches = GBNil | GBCons(Tag, Global, GBranches)
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()             -> LEnd()
+    GMsg(from, to, t, k) -> match role_eq(from, r)
+      T() -> LSend(t, project(k, r))
+      F() -> match role_eq(to, r)
+        T() -> LRecv(t, project(k, r))
+        F() -> LEnd()
+    GCho(from, to, gbs) -> match role_eq(from, r)
+      T() -> LSel(project_gbranches(gbs, r))
+      F() -> match role_eq(to, r)
+        T() -> LBra(project_gbranches(gbs, r))
+        F() -> LEnd()
+  fn project_gbranches(gbs: GBranches, r: Role) -> Branches = match gbs
+    GBNil()             -> BNil()
+    GBCons(t, g, rest)  -> BCons(t, project(g, r), project_gbranches(rest, r))
+  ## COHERENCE for two-party n-ary protocols (RA/RB), mutually inductive over Global/GBranches.
+  type Coherent indices (g: Global)
+    CoEnd : Coherent(GEnd)
+    CoAB  : (t: Tag) -> Coherent(k) -> Coherent(GMsg(RA, RB, t, k))
+    CoBA  : (t: Tag) -> Coherent(k) -> Coherent(GMsg(RB, RA, t, k))
+    CoCho : CoherentB(gbs) -> Coherent(GCho(RA, RB, gbs))
+  type CoherentB indices (gbs: GBranches)
+    CoBNil  : CoherentB(GBNil)
+    CoBCons : (t: Tag) -> Coherent(g) -> CoherentB(rest) -> CoherentB(GBCons(t, g, rest))
+  ## **N-ARY PROJECTION DUALITY** (Honda-Yoshida-Carbone coherence, generalized from binary to n-ary
+  ## choice): a coherent two-party protocol projects its two roles to DUAL endpoints — including an
+  ## n-ary internal choice (LSel) dual to an n-ary external choice (LBra) over ARBITRARY-length branch
+  ## lists. Mutually recursive with projection_gbranches_duality over the branch list.
+  fn projection_duality({g: Global}, w: Coherent(g)) -> Equivalent(Local, project(g, RA()), dual(project(g, RB()))) = match w
+    CoEnd()     -> reflexive(LEnd())
+    CoAB(t, w2) -> lsend_cong(t, projection_duality(w2))
+    CoBA(t, w2) -> lrecv_cong(t, projection_duality(w2))
+    CoCho(wb)   -> lsel_cong(projection_gbranches_duality(wb))
+  fn projection_gbranches_duality({gbs: GBranches}, w: CoherentB(gbs)) -> Equivalent(Branches, project_gbranches(gbs, RA()), dual_branches(project_gbranches(gbs, RB()))) = match w
+    CoBNil()             -> reflexive(BNil())
+    CoBCons(t, wg, wrest) -> bcons_cong(t, projection_duality(wg), projection_gbranches_duality(wrest))
 end
