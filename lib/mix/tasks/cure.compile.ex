@@ -36,14 +36,43 @@ defmodule Mix.Tasks.Cure.Compile do
 
     Enum.each(paths, fn path ->
       if File.dir?(path) do
-        path
-        |> Path.join("**/*.cure")
-        |> Path.wildcard()
-        |> Enum.each(&compile_one(&1, output_dir))
+        compile_dir(path, output_dir)
       else
         compile_one(path, output_dir)
       end
     end)
+  end
+
+  defp compile_dir(path, output_dir) do
+    files = path |> Path.join("**/*.cure") |> Path.wildcard()
+
+    case Cure.Compiler.Incremental.compile_dir(files, output_dir,
+           source_roots: [path],
+           stdlib_hash: Cure.Compiler.Incremental.stdlib_fingerprint(output_dir)
+         ) do
+      {:ok, summary} ->
+        Enum.each(summary.cycles, fn walk ->
+          Mix.shell().info(Cure.Compiler.Errors.format_error({:import_cycle, walk}, path))
+        end)
+
+        Mix.shell().info(
+          "  #{length(summary.compiled)} compiled, " <>
+            "#{length(summary.skipped_fresh)} up-to-date, " <>
+            "#{length(summary.deleted)} removed"
+        )
+
+        unless summary.errors == [] do
+          Enum.each(summary.errors, fn {target, reason} ->
+            Mix.shell().error("  #{Cure.Compiler.Errors.format_error(reason, target)}")
+          end)
+
+          exit({:shutdown, 1})
+        end
+
+      {:error, reason} ->
+        Mix.shell().error(Cure.Compiler.Errors.format_error(reason, path))
+        exit({:shutdown, 1})
+    end
   end
 
   defp compile_one(path, output_dir) do
