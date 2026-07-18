@@ -35,6 +35,7 @@ defmodule Cure.Elab.Implementation do
     with {:ok, head} <- head_key(for_type, env),
          desc when not is_nil(desc) <- Env.get_interface(env, iface),
          :ok <- check_no_stray_clauses(desc, iface, body),
+         :ok <- check_superinterfaces(desc, head, env),
          {:ok, method_map, mangled_fns} <-
            build_methods(desc, iface, head, for_type, body, env),
          ref = %{iface: iface, head: head, methods: method_map, as: as_name},
@@ -135,6 +136,29 @@ defmodule Cure.Elab.Implementation do
       nil -> :ok
       stray -> {:error, {:unknown_interface_method, iface, String.to_atom(stray)}}
     end
+  end
+
+  # A `interface Big(t) requires Small(t)` declaration obliges every
+  # `implementation Big for T` to already have an `implementation Small for T`.
+  # We check each superinterface named in the descriptor has an anonymous
+  # instance for this head in the coherence registry; because implementations
+  # register in source order, the superinterface instance (written earlier) is
+  # already present when the sub-interface's instance is checked. An interface
+  # with no `requires` clause has `super: []`, so this is a no-op. Older
+  # descriptors without the key default to `[]`.
+  defp check_superinterfaces(desc, head, env) do
+    supers = Map.get(desc, :super, [])
+    coherence = Env.coherence(env) || Coherence.new()
+
+    Enum.reduce_while(supers, :ok, fn super_interface, :ok ->
+      case Coherence.lookup_anon(coherence, super_interface, head) do
+        {:ok, _ref} ->
+          {:cont, :ok}
+
+        {:error, _} ->
+          {:halt, {:error, {:missing_superinterface, desc.name, super_interface, head}}}
+      end
+    end)
   end
 
   # -- methods ----------------------------------------------------------------

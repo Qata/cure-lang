@@ -6245,6 +6245,24 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
+    # `requires` is a CONTEXTUAL keyword: it lexes as an ordinary identifier and
+    # is promoted only here, right after the interface param list, so existing
+    # code using `requires` as an identifier is unaffected. The clause names the
+    # superinterfaces this interface extends (`interface Big(t) requires Small(t)`)
+    # — every `implementation Big for T` must then already have an `implementation
+    # Small for T`. We reuse the constraint parser and keep only the interface
+    # names (the descriptor does not need the type variables).
+    {requires, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "requires"} ->
+          state = advance(state)
+          {constraints, state} = parse_constraint_list(state)
+          {superinterface_names(constraints), state}
+
+        _ ->
+          {[], state}
+      end
+
     state = skip_newlines(state)
     {body, state} = parse_definition_block(state)
 
@@ -6259,12 +6277,22 @@ defmodule Cure.Compiler.Parser do
     meta = [
       name: name,
       params: params,
+      requires: requires,
       defaults: defaults,
       line: token.line,
       col: token.col
     ]
 
     {{:interface, meta, body}, state}
+  end
+
+  # Extract the interface names from a parsed constraint list (`Small(t)` →
+  # `"Small"`), dropping the type variables the descriptor does not need.
+  defp superinterface_names(constraints) do
+    Enum.map(constraints, fn
+      {:function_call, m, _args} -> Keyword.get(m, :name)
+      {:variable, _m, name} -> name
+    end)
   end
 
   # -- Implementation  implementation Iface for Type [as Name] ----------------
