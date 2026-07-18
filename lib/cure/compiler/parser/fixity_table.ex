@@ -120,6 +120,25 @@ defmodule Cure.Compiler.Parser.FixityTable do
     end
   end
 
+  @doc """
+  The `{binding_power, associativity}` of a registered `lexeme` — its group's
+  rank and associativity, with infix fixity preferred, then prefix, then postfix
+  — or `:unknown` when the lexeme is unregistered. Only the ORDER of the binding
+  power relative to other groups is significant. The printer uses this to
+  parenthesise a reprint by any operator's real precedence, built-in or
+  user-declared, instead of a hardcoded table.
+  """
+  @spec precedence(t(), String.t()) :: {pos_integer(), assoc()} | :unknown
+  def precedence(%__MODULE__{ops: ops, groups: groups, ranks: ranks}, lexeme) do
+    with group when is_atom(group) <- primary_group(Map.get(ops, lexeme)),
+         %{assoc: assoc} <- Map.get(groups, group),
+         bp when is_integer(bp) <- Map.get(ranks, group) do
+      {bp, assoc}
+    else
+      _ -> :unknown
+    end
+  end
+
   @doc "Returns the right binding power of a prefix operator `lexeme`, or `:not_prefix`."
   @spec prefix_bp(t(), String.t()) :: pos_integer() | :not_prefix
   def prefix_bp(%__MODULE__{ops: ops, ranks: ranks}, lexeme) do

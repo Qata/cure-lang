@@ -37,21 +37,44 @@ defmodule Cure.Compiler.Printer do
   @alignment_limit 40
   @max_line_width 100
 
+  # Process-dictionary key holding the session `FixityTable` for the duration of
+  # a render. Precedence-aware parenthesisation (`op_prec/1` and friends, deep in
+  # the recursive render) consults it to rank ANY operator — built-in or
+  # user-declared — instead of a hardcoded duplicate of `Std.Operators`. Stored
+  # process-scoped rather than threaded through every render clause; ExUnit async
+  # tests each run in their own process, so this is isolation-safe.
+  @fixity_key :cure_printer_fixity_table
+
   @doc """
   Render a MetaAST node as a Cure source string.
+
+  ## Options
+
+  - `:indent` — indentation unit (default: two spaces)
+  - `:fixity` — the session `Cure.Compiler.Parser.FixityTable` the source parsed
+    against. Defaults to the built-in operator table, which already ranks every
+    built-in operator; pass the module's assembled table to rank user-declared
+    operators correctly (otherwise a custom operator is treated as unknown and
+    its operands are conservatively parenthesised).
   """
   @spec quoted_to_string(term(), keyword()) :: String.t()
   def quoted_to_string(ast, opts \\ []) do
     indent = Keyword.get(opts, :indent, @default_indent)
+    table = Keyword.get(opts, :fixity) || Cure.Compiler.Parser.BuiltinFixity.table()
+    prev = Process.put(@fixity_key, table)
 
-    case ast do
-      # The outermost node of a multi-definition file is the program's
-      # top-level statement list. Apply the §5.4 top-of-file policy here (rule 3:
-      # exactly one blank line between every top-level definition; rule 1: no
-      # leading blanks) — NOT in the generic `{:block, …}` clause, because a
-      # function body is also a `:block` and may itself render at depth 0.
-      {:block, meta, exprs} -> render_program(exprs, meta, indent)
-      _ -> render(ast, 0, indent)
+    try do
+      case ast do
+        # The outermost node of a multi-definition file is the program's
+        # top-level statement list. Apply the §5.4 top-of-file policy here (rule 3:
+        # exactly one blank line between every top-level definition; rule 1: no
+        # leading blanks) — NOT in the generic `{:block, …}` clause, because a
+        # function body is also a `:block` and may itself render at depth 0.
+        {:block, meta, exprs} -> render_program(exprs, meta, indent)
+        _ -> render(ast, 0, indent)
+      end
+    after
+      if prev == nil, do: Process.delete(@fixity_key), else: Process.put(@fixity_key, prev)
     end
   end
 
@@ -383,11 +406,11 @@ defmodule Cure.Compiler.Printer do
 
   defp to_string({:unary_op, meta, [operand]}, depth, indent) do
     op = Keyword.get(meta, :operator)
-    # A prefix operator binds at level 90 (see the precedence table below): its
-    # operand needs parentheses whenever it is a lower-precedence expression, or
-    # `-(x + 1)` would reprint as `-x + 1` (= `(-x) + 1`) and `not (a and b)` as
-    # `not a and b` (= `(not a) and b`) — both meaning-changing.
-    inner = operand_str(operand, depth, indent, {90, :right}, :right)
+    # A prefix operator binds in the `Prefix` group (tighter than every infix
+    # group): its operand needs parentheses whenever it is a lower-precedence
+    # expression, or `-(x + 1)` would reprint as `-x + 1` (= `(-x) + 1`) and
+    # `not (a and b)` as `not a and b` (= `(not a) and b`) — both meaning-changing.
+    inner = operand_str(operand, depth, indent, unary_prec(op), :right)
 
     case op do
       :not -> "not #{inner}"
@@ -582,11 +605,11 @@ defmodule Cure.Compiler.Printer do
             "#{name}(#{call_args_to_string(args, depth, indent)})"
         end
 
-      # Pipe call. `|>` binds loosest (level 10, left-assoc), so a left operand
+      # Pipe call. `|>` binds loosely (the `Pipe` group), so a left operand
       # whose own precedence is lower — a bare `<-|` send, a conditional — must
       # be parenthesised or the reprint reparses differently.
       Keyword.get(meta, :pipe) == true ->
-        pipe_parent = {10, :left}
+        pipe_parent = prec_of("|>")
 
         case args do
           [piped | rest] when rest != [] ->
@@ -617,18 +640,18 @@ defmodule Cure.Compiler.Printer do
 
   defp to_string({:attribute_access, meta, [parent]}, depth, indent) do
     attr = Keyword.get(meta, :attribute)
-    # Dot access binds at level 100 (highest); a lower-precedence base needs
+    # Dot access binds tightest (the `Dot` group); a lower-precedence base needs
     # parens or `(a + b).x` reprints as `a + b.x` (= `a + (b.x)`).
-    "#{operand_str(parent, depth, indent, {100, :left}, :left)}.#{attr}"
+    "#{operand_str(parent, depth, indent, prec_of("."), :left)}.#{attr}"
   end
 
   # -- Range -----------------------------------------------------------------
 
   defp to_string({:range, meta, [left, right]}, depth, indent) do
     op = if Keyword.get(meta, :inclusive), do: "..=", else: ".."
-    # Range binds at level 50 (non-associative); operands that bind looser need
-    # parens or `(a == b)..c` reprints as `a == b..c` (= `a == (b .. c)`).
-    parent = {50, :none}
+    # Range binds in the non-associative `Range` group; operands that bind looser
+    # need parens or `(a == b)..c` reprints as `a == b..c` (= `a == (b .. c)`).
+    parent = prec_of("..")
 
     "#{operand_str(left, depth, indent, parent, :left)}#{op}#{operand_str(right, depth, indent, parent, :right)}"
   end
@@ -806,10 +829,10 @@ defmodule Cure.Compiler.Printer do
   #
   # Any other value falls back to the ASCII operator form.
   defp to_string({:send, meta, [target, message]}, depth, indent) do
-    # The Melquiades send operator binds at level 8 (non-associative); operands
-    # that bind looser need parens or `(pid <-| msg) + 1` reprints as
-    # `pid <-| msg + 1` (= `pid <-| (msg + 1)`).
-    parent = {8, :none}
+    # The Melquiades send operator binds in the non-associative `Melquiades`
+    # group; operands that bind looser need parens or `(pid <-| msg) + 1`
+    # reprints as `pid <-| msg + 1` (= `pid <-| (msg + 1)`).
+    parent = prec_of("<-|")
     target_str = operand_str(target, depth, indent, parent, :left)
     message_str = operand_str(message, depth, indent, parent, :right)
 
@@ -1594,13 +1617,14 @@ defmodule Cure.Compiler.Printer do
 
   # -- Precedence-aware parenthesisation -------------------------------------
   #
-  # The parser is a Pratt parser (Cure.Compiler.Parser.Precedence). Reprinting
+  # The parser is a Pratt parser driven by the session `FixityTable`. Reprinting
   # must re-insert exactly the parentheses needed to recover the SAME parse — no
   # more (over-parenthesising is ugly and breaks the print-fixpoint), no fewer
-  # (under-parenthesising silently changes meaning). The table below mirrors
-  # Precedence but is keyed by the operator ATOM the printer sees (`:+`) rather
-  # than the token type Precedence uses (`:plus`); the two MUST stay in
-  # agreement — any precedence change in the parser must be mirrored here.
+  # (under-parenthesising silently changes meaning). Precedences below are read
+  # from that same `FixityTable` (via `op_prec`/`prec_of`, keyed by each
+  # operator's surface lexeme), so the printer and parser cannot drift and
+  # user-declared operators rank correctly — there is no hardcoded copy to keep
+  # in agreement.
 
   # Render `child` as an operand of a parent operator of precedence `parent`
   # (`{level, assoc}` or `:unknown`) on the given `side`, wrapping in parens only
@@ -1640,15 +1664,16 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
-  defp child_prec({:unary_op, _meta, _}), do: {90, :right}
-  # Infix operators the parser lowers to their own node types (not :binary_op).
-  defp child_prec({:range, _meta, _}), do: {50, :none}
-  defp child_prec({:send, _meta, _}), do: {8, :none}
-  defp child_prec({:attribute_access, _meta, _}), do: {100, :left}
-  # `|>` lowers to a pipe-tagged :function_call, binding loosest (level 10); an
-  # ordinary call is a primary (atom) and never needs parens.
+  defp child_prec({:unary_op, meta, _}), do: unary_prec(Keyword.get(meta, :operator))
+  # Infix operators the parser lowers to their own node types (not :binary_op);
+  # rank them through the same fixity table as :binary_op so the scales agree.
+  defp child_prec({:range, _meta, _}), do: prec_of("..")
+  defp child_prec({:send, _meta, _}), do: prec_of("<-|")
+  defp child_prec({:attribute_access, _meta, _}), do: prec_of(".")
+  # `|>` lowers to a pipe-tagged :function_call, binding loosely (the `Pipe`
+  # group); an ordinary call is a primary (atom) and never needs parens.
   defp child_prec({:function_call, meta, _}) do
-    if Keyword.get(meta, :pipe) == true, do: {10, :left}, else: :atom
+    if Keyword.get(meta, :pipe) == true, do: prec_of("|>"), else: :atom
   end
 
   # Right-extending prefix keywords (`throw`/`yield`/`return`/`spawn`) grab
@@ -1665,19 +1690,38 @@ defmodule Cure.Compiler.Printer do
   defp child_prec({:augmented_assignment, _meta, _}), do: :lowest
   defp child_prec(_other), do: :atom
 
-  # {level, assoc} per operator atom, mirroring Cure.Compiler.Parser.Precedence.
-  defp op_prec(:|>), do: {10, :left}
-  defp op_prec(:or), do: {20, :left}
-  defp op_prec(:and), do: {30, :left}
-  defp op_prec(op) when op in [:==, :!=, :<, :>, :<=, :>=], do: {40, :none}
-  defp op_prec(op) when op in [:.., :"..="], do: {50, :none}
-  defp op_prec(:<>), do: {60, :right}
-  defp op_prec(op) when op in [:+, :-, :bor, :bxor, :bsl, :bsr], do: {70, :left}
-  defp op_prec(op) when op in [:*, :/, :rem, :%, :band], do: {80, :left}
-  defp op_prec(:.), do: {100, :left}
-  defp op_prec(op) when op in [:=, :"+=", :"-=", :"*=", :"/="], do: {5, :right}
-  defp op_prec(:melquiades), do: {8, :none}
-  defp op_prec(_other), do: :unknown
+  # {binding_power, assoc} for an infix operator atom, or `:unknown`, resolved
+  # through the session `FixityTable` (`Std.Operators` plus any user-declared
+  # groups). The operator atom's surface lexeme keys the table, so `operator_to_string`
+  # — which already maps every operator atom to its lexeme — is the lookup key.
+  # Only the ORDER of binding powers matters here, and the table preserves the
+  # legacy precedence order, so built-in reprints are unchanged; user-declared
+  # operators now rank correctly instead of falling through to `:unknown`.
+  defp op_prec(op), do: prec_of(operator_to_string(op))
+
+  defp prec_of(lexeme),
+    do: Cure.Compiler.Parser.FixityTable.precedence(current_fixity_table(), lexeme)
+
+  # A prefix operator absent from the table (should not happen for the built-in
+  # unary operators) binds tighter than any declared group, so its operand is
+  # parenthesised whenever it is a compound expression — the conservative choice.
+  @unknown_prefix_bp 1_000_000
+
+  # Prefix (unary) precedence for the operand-parenthesisation of a `{:unary_op}`.
+  # A prefix operator's group (e.g. `-`) differs from its infix group, so the
+  # prefix binding power is read directly. The associativity is fixed `:right`:
+  # unary operators nest rightward (`- -x`), independent of the group's declared
+  # infix associativity, and only the parent side's assoc is consulted.
+  defp unary_prec(op) do
+    case Cure.Compiler.Parser.FixityTable.prefix_bp(current_fixity_table(), operator_to_string(op)) do
+      bp when is_integer(bp) -> {bp, :right}
+      :not_prefix -> {@unknown_prefix_bp, :right}
+    end
+  end
+
+  defp current_fixity_table do
+    Process.get(@fixity_key) || Cure.Compiler.Parser.BuiltinFixity.table()
+  end
 
   defp args_to_string(args, depth, indent) do
     render_span(args, ",", depth, indent)
