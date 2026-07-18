@@ -64,4 +64,128 @@ defmodule Cure.Elab.RefinementUsecaseMatrixTest do
     end
     """)
   end
+
+  # The Std.Refine prelude ships these primitive-comparison refinement types; the
+  # cases below pin every comparison operator's discharge from an in-scope
+  # hypothesis, so no operator is only "green by luck" (matched structurally
+  # without exercising its lowering). Each is the `NonZero`/`Negative`/… surface.
+
+  test "strictly-negative (<) discharges from evidence" do
+    accepts("""
+    mod NegativeCase
+      use Std.Nat
+      use Std.Bool
+      use Std.Proof.IntMath
+      fn f(x: Int, e: IsTrue(x < 0)) -> {n: Int | n < 0} = x
+    end
+    """)
+  end
+
+  test "non-negative (>=) discharges from evidence" do
+    accepts("""
+    mod NonNegativeCase
+      use Std.Nat
+      use Std.Bool
+      use Std.Proof.IntMath
+      fn f(x: Int, e: IsTrue(x >= 0)) -> {n: Int | n >= 0} = x
+    end
+    """)
+  end
+
+  test "non-positive (<=) discharges from evidence" do
+    accepts("""
+    mod NonPositiveCase
+      use Std.Nat
+      use Std.Bool
+      use Std.Proof.IntMath
+      fn f(x: Int, e: IsTrue(x <= 0)) -> {n: Int | n <= 0} = x
+    end
+    """)
+  end
+
+  test "non-zero (!=) discharges from evidence" do
+    accepts("""
+    mod NonZeroCase
+      use Std.Nat
+      use Std.Bool
+      use Std.Proof.IntMath
+      fn f(x: Int, e: IsTrue(x != 0)) -> {n: Int | n != 0} = x
+    end
+    """)
+  end
+
+  test "strictly-positive float (single Float comparison) discharges from evidence" do
+    accepts("""
+    mod PositiveFloatCase
+      use Std.Nat
+      use Std.Bool
+      use Std.Proof.IntMath
+      fn f(x: Float, e: IsTrue(x > 0.0)) -> {n: Float | n > 0.0} = x
+    end
+    """)
+  end
+
+  # Float CONJUNCTION: the `Probability` surface `{p: Float | 0.0 <= p and p <= 1.0}`.
+  # Discharge builds the conjunction from two Float bounds — it must lower each
+  # comparison to the Float builtin (`float_le`), not the Int one, in the index
+  # position, and then assemble via the conjunction lemma.
+  test "probability (Float conjunction) discharges from both bounds" do
+    accepts("""
+    mod ProbabilityCase
+      use Std.Nat
+      use Std.Bool
+      use Std.Proof.IntMath
+      use Std.Proof.BooleanReflection
+      fn f(p: Float, lo: IsTrue(0.0 <= p), hi: IsTrue(p <= 1.0)) -> {q: Float | 0.0 <= q and q <= 1.0} = p
+    end
+    """)
+  end
+
+  # The shipped `Std.Refine` prelude types are named aliases for the same Sigma the
+  # inline `{x: T | φ}` sugar lowers to. These cases exercise them through `use
+  # Std.Refine` so the alias is δ-unfolded to its refinement Sigma before discharge —
+  # covering the named-type surface an author actually writes, and the Int + Float
+  # conjunction aliases (`Percentage`/`Probability`) together.
+  test "shipped Std.Refine.Percentage (Int conjunction alias) discharges from matching bounds" do
+    accepts("""
+    mod ShippedPercentage
+      use Std.Nat
+      use Std.Bool
+      use Std.Proof.IntMath
+      use Std.Proof.BooleanReflection
+      use Std.Refine
+      fn f(p: Int, lo: IsTrue(p >= 0), hi: IsTrue(p <= 100)) -> Percentage = p
+    end
+    """)
+  end
+
+  test "shipped Std.Refine.Probability (Float conjunction alias) discharges from matching bounds" do
+    accepts("""
+    mod ShippedProbability
+      use Std.Nat
+      use Std.Bool
+      use Std.Proof.IntMath
+      use Std.Proof.BooleanReflection
+      use Std.Refine
+      fn f(p: Float, lo: IsTrue(p >= 0.0), hi: IsTrue(p <= 1.0)) -> Probability = p
+    end
+    """)
+  end
+
+  # Soundness guard: evidence for the wrong comparison direction (`0 <= p` where the
+  # `Percentage` predicate is `p >= 0`) must NOT discharge — the proof search matches
+  # structurally, so a mismatched-operator hypothesis is genuinely absent.
+  test "shipped Std.Refine.Percentage rejects mismatched-operator evidence" do
+    assert {:error, _} =
+             Program.elaborate("""
+             mod ShippedPercentageMismatch
+               use Std.Nat
+               use Std.Bool
+               use Std.Proof.IntMath
+               use Std.Proof.BooleanReflection
+               use Std.Refine
+               fn f(p: Int, lo: IsTrue(0 <= p), hi: IsTrue(p <= 100)) -> Percentage = p
+             end
+             """)
+  end
 end

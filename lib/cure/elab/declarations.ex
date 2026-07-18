@@ -2077,18 +2077,24 @@ defmodule Cure.Elab.Declarations do
   # reparses such a type-application argument with the expression parser, so it arrives
   # as an expression `{:binary_op, ...}` with `{:literal, ...}` operands rather than a
   # type atom. We lower it to the SAME builtin-op spine the term elaborator's
-  # `build_binop` produces for Int/Bool operands — `Std.Builtin#int_gt` etc., or the
-  # bare `and`/`or` connective globals — so a closed comparison folds to `Std.Bool#True`
-  # by pure computation and `Confirmed : IsTrue(True())` inhabits it. Reflection over
-  # `Int` is the design's scope; Float propositions are a documented non-goal and lower
-  # to the int_* op, which simply will not fold on `{:vfloat, _}` (no discharge, never
-  # unsound). Operands recurse through `idx_to_core`, so nested connectives compose.
+  # `build_binop` produces — the Int builtins (`Std.Builtin#int_gt` etc.) for Int
+  # operands, the Float builtins (`float_gt` etc.) when an operand is a float literal,
+  # or the bare `and`/`or` connective globals — so a closed comparison folds to
+  # `Std.Bool#True` by pure computation and `Confirmed : IsTrue(True())` inhabits it.
+  # Operands are lowered FIRST so the dispatch can see whether a `{:float_lit, _}` is
+  # present; this mirrors `build_binop`'s Int→int_*/Float→float_* split and keeps the
+  # comparison well-typed on Float operands (`float_le(0.0, q) : Bool`), which the Int
+  # op would reject as `{:float_type}` vs `{:int_type}`. A comparison of two Float
+  # VARIABLES with no literal operand cannot be detected here (scope carries names, not
+  # types) and stays on the int op: it simply will not type-check or discharge — a
+  # documented residual, never unsound. Operands recurse through `idx_to_core`, so
+  # nested connectives compose.
   defp idx_to_core({:binary_op, meta, [l_ast, r_ast]}, scope, fam, env, ctx) do
     op = Keyword.fetch!(meta, :operator)
 
-    with {:ok, global} <- index_binop_global(op),
-         {:ok, l} <- idx_to_core(l_ast, scope, fam, env, ctx),
-         {:ok, r} <- idx_to_core(r_ast, scope, fam, env, ctx) do
+    with {:ok, l} <- idx_to_core(l_ast, scope, fam, env, ctx),
+         {:ok, r} <- idx_to_core(r_ast, scope, fam, env, ctx),
+         {:ok, global} <- index_binop_global(op, float_operands?(l, r)) do
       {:ok, {:app, {:app, {:global, global}, l}, r}}
     end
   end
@@ -2108,23 +2114,39 @@ defmodule Cure.Elab.Declarations do
 
   defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
 
-  # Operator symbol → the Core global its index-position lowering applies. Comparisons map
-  # to the Int builtin op (registered as `Std.Builtin#int_*`, folding via `Eval.fold`);
-  # the boolean connectives map to the qualified `Std.Bool#and`/`#or` defs — the SAME
-  # spelling the function-call form (`` `and`(l, r) ``) resolves to, so an operator-written
-  # conjunction proposition is recognized by the conjunction-elimination candidate source in
-  # `Cure.Elab.ProofSearch` (which matches the resolved `Std.Bool#and` head). Emitting the
-  # bare `:and`/`:or` the term-level `build_binop` uses would leave operator-`and`
-  # refinements undischargeable, since the projection lemmas speak the qualified `and`.
-  defp index_binop_global(:<), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_lt)}
-  defp index_binop_global(:<=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_le)}
-  defp index_binop_global(:>), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_gt)}
-  defp index_binop_global(:>=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ge)}
-  defp index_binop_global(:==), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_eq)}
-  defp index_binop_global(:!=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ne)}
-  defp index_binop_global(:and), do: {:ok, Cure.Elab.Name.qualify("Std.Bool", :and)}
-  defp index_binop_global(:or), do: {:ok, Cure.Elab.Name.qualify("Std.Bool", :or)}
-  defp index_binop_global(op), do: {:error, {:unsupported_index_operator, op}}
+  # A comparison is over Float when either lowered operand is a float literal. This is
+  # the only operand-type signal available in an index position (the scope threaded
+  # through `idx_to_core` is a list of binder NAMES, not typed context), and it covers
+  # every refinement whose bound is a literal — `x > 0.0`, `0.0 <= p`, `p <= 1.0`.
+  defp float_operands?(l, r), do: float_operand?(l) or float_operand?(r)
+  defp float_operand?({:float_lit, _}), do: true
+  defp float_operand?(_), do: false
+
+  # Operator symbol + Float-operand flag → the Core global its index-position lowering
+  # applies. Comparisons map to the Int builtin op (registered as `Std.Builtin#int_*`,
+  # folding via `Eval.fold`) or, when the flag is set, the Float twin (`Std.Builtin#float_*`)
+  # so a Float comparison stays well-typed. The boolean connectives map to the qualified
+  # `Std.Bool#and`/`#or` defs — the SAME spelling the function-call form (`` `and`(l, r) ``)
+  # resolves to, so an operator-written conjunction proposition is recognized by the
+  # conjunction-elimination candidate source in `Cure.Elab.ProofSearch` (which matches the
+  # resolved `Std.Bool#and` head); the flag does not affect them. Emitting the bare
+  # `:and`/`:or` the term-level `build_binop` uses would leave operator-`and` refinements
+  # undischargeable, since the projection lemmas speak the qualified `and`.
+  defp index_binop_global(:<, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_lt)}
+  defp index_binop_global(:<, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_lt)}
+  defp index_binop_global(:<=, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_le)}
+  defp index_binop_global(:<=, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_le)}
+  defp index_binop_global(:>, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_gt)}
+  defp index_binop_global(:>, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_gt)}
+  defp index_binop_global(:>=, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ge)}
+  defp index_binop_global(:>=, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_ge)}
+  defp index_binop_global(:==, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_eq)}
+  defp index_binop_global(:==, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_eq)}
+  defp index_binop_global(:!=, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ne)}
+  defp index_binop_global(:!=, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_ne)}
+  defp index_binop_global(:and, _), do: {:ok, Cure.Elab.Name.qualify("Std.Bool", :and)}
+  defp index_binop_global(:or, _), do: {:ok, Cure.Elab.Name.qualify("Std.Bool", :or)}
+  defp index_binop_global(op, _), do: {:error, {:unsupported_index_operator, op}}
 
   # Wrap a `Bool`-typed refinement clause in `IsTrue(·)` (§3a level 1). Only
   # comparison and boolean-connective operators reflect (they produce `Bool`);
