@@ -1,6 +1,11 @@
 # Spec — δ-reduction of mutually-recursive functions (certify the whole SCC)
 
-**Status:** diagnosed, root-caused, fix designed. Ready to hand off.
+**Status:** ✅ LANDED (`a4f071fb`). Fix + red-green + soundness antibody in
+`test/cure/core/mutual_recursion_reduction_test.exs`; full Antigen 569/0 (coverage
+baseline re-recorded), full suite 4877/0. Payoff probe `otp_nary_choice` (`158b07be`)
+`rel=same`. History below kept for the record.
+
+**Original status:** diagnosed, root-caused, fix designed. Ready to hand off.
 **Layer:** K (TCB — kernel certification decides δ-reducibility). HARD-STOP discipline applies:
 red-green + Antigen antibody + full Antigen + full suite. The change aligns with Idris/Agda/Lean
 (a mutual block certifies as a unit), so it is a legitimate, well-founded TCB change.
