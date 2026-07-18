@@ -1089,6 +1089,27 @@ defmodule Cure.Compiler.Printer do
 
           "(#{dname}: #{inner_rendered})"
 
+        # A RELEVANT IMPLICIT binder `{name: Type}` — implicit (solved, omitted at
+        # the call site) yet retained (ω). Parallel to `:named_dom` but braced.
+        {:implicit_dom, dname, inner} ->
+          inner_rendered = render_ctor_function_type(inner, depth, indent)
+
+          inner_rendered =
+            case inner do
+              {:pi_type, _, _} ->
+                "(" <> inner_rendered <> ")"
+
+              {:function_call, function_meta, _} ->
+                if Keyword.get(function_meta, :function_type),
+                  do: "(" <> inner_rendered <> ")",
+                  else: inner_rendered
+
+              _ ->
+                inner_rendered
+            end
+
+          "{#{dname}: #{inner_rendered}}"
+
         # A function-typed constructor FIELD must stay grouped away from the
         # constructor's own arrow telescope. Without this outer pair, a field
         # parsed from `((rest: A) -> B(rest))` prints as `(rest: A) -> B(rest)`;

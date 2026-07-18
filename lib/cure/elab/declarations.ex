@@ -1521,24 +1521,27 @@ defmodule Cure.Elab.Declarations do
       # the signature (domains + the result), positionally typed by the family's
       # index telescope. Ordered by first appearance → the leading telescope.
       # Parameters are NOT inference candidates (see infer_implicits' skip).
-      # Names bound explicitly by a NAMED dependent domain `(k: Nat)`. Such a
-      # binder is a runtime argument, not an inferred index variable, so it must
-      # be excluded from implicit inference even though it appears in later
-      # domain types / the result index (`SNat(k)`, `NVv(S(k))`).
-      explicit_names =
-        for {:named_dom, name, _inner} <- dom_exprs, into: MapSet.new(), do: name
+      # Names bound by a NAMED dependent domain `(k: Nat)` or a RELEVANT IMPLICIT
+      # domain `{k: Nat}`. Such a binder is a source-position argument, not an
+      # inferred index variable, so it must be excluded from implicit inference
+      # even though it appears in later domain types / the result index
+      # (`SNat(k)`, `NVv(S(k))`). The two differ only in plicity: `(k: T)` is
+      # explicit (positional), `{k: T}` is implicit (solved/named) — both retain
+      # quantity ω. See `2026-07-18-relevant-implicit-ctor-index-design.md`.
+      bound_names =
+        for dom <- dom_exprs, name = bound_dom_name(dom), name != nil, into: MapSet.new(), do: name
 
       infer_exprs = Enum.map(dom_exprs, &strip_named_dom/1) ++ [result_expr]
 
       implicits =
         infer_exprs
         |> infer_implicits(fam, index_tele, env, param_count, param_scope)
-        |> Enum.reject(fn {n, _t} -> MapSet.member?(explicit_names, n) end)
+        |> Enum.reject(fn {n, _t} -> MapSet.member?(bound_names, n) end)
 
       impl_names = Enum.map(implicits, &elem(&1, 0))
 
       case build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
-        {:ok, expl_tele, expl_names} ->
+        {:ok, expl_tele, expl_names, expl_plicities} ->
           full_scope = Enum.reverse(impl_names ++ expl_names) ++ param_scope
           {param_exprs, index_exprs} = Enum.split(applied_exprs, param_count)
 
@@ -1553,13 +1556,29 @@ defmodule Cure.Elab.Declarations do
               |> Enum.with_index()
               |> Enum.map(fn {{n, ty}, i} -> {String.to_atom(n), Term.shift(ty, i, 0)} end)
 
-            # Inferred index variables are erased (quantity 0); the explicit
-            # arguments are runtime-relevant (quantity ω). See M8.3 / M9.
+            # Inferred index variables are erased (quantity 0); every
+            # source-position domain — explicit `(k:T)` OR relevant implicit
+            # `{k:T}` — is runtime-relevant (quantity ω). See M8.3 / M9.
             quantities =
               List.duplicate(:erased, length(impl_tele)) ++
                 List.duplicate(:unrestricted, length(expl_tele))
 
-            {:ok, Inductive.ctor(cname, impl_tele ++ expl_tele, result_indices, quantities, result_params)}
+            # Plicity decouples from quantity: inferred indices AND relevant
+            # implicits `{k:T}` are :implicit (non-positional); explicit doms are
+            # :explicit (positional). Application and pattern binding key off
+            # plicity, erasure keys off quantity.
+            plicities =
+              List.duplicate(:implicit, length(impl_tele)) ++ expl_plicities
+
+            {:ok,
+             Inductive.ctor(
+               cname,
+               impl_tele ++ expl_tele,
+               result_indices,
+               quantities,
+               result_params,
+               plicities
+             )}
           end
 
         {:error, _} = err ->
@@ -1570,16 +1589,24 @@ defmodule Cure.Elab.Declarations do
 
   defp split_last(list), do: {Enum.slice(list, 0..-2//1), List.last(list)}
 
-  # For implicit-variable inference we scan a named binder `(k: Nat)` by its
-  # inner type (`Nat`); the binder name itself is handled as an explicit arg.
+  # For implicit-variable inference we scan a named `(k: Nat)` or relevant-
+  # implicit `{k: Nat}` binder by its inner type (`Nat`); the binder name itself
+  # is handled as a source-position arg, not an inferred index.
   defp strip_named_dom({:named_dom, _name, inner}), do: inner
+  defp strip_named_dom({:implicit_dom, _name, inner}), do: inner
   defp strip_named_dom(other), do: other
 
-  # A constructor's named dependent domains must be linear: a repeated binder
-  # (`(x: Nat) -> (x: Nat) -> …`) shadows and makes later references ambiguous,
-  # exactly like a duplicate function parameter. The bare `_` binds nothing.
+  # The name a domain binds into the constructor's local scope, or `nil` for an
+  # anonymous positional argument. Both `(k: T)` and `{k: T}` bind `k`.
+  defp bound_dom_name({:named_dom, name, _inner}), do: name
+  defp bound_dom_name({:implicit_dom, name, _inner}), do: name
+  defp bound_dom_name(_other), do: nil
+
+  # A constructor's named/implicit dependent domains must be linear: a repeated
+  # binder (`(x: Nat) -> (x: Nat) -> …`) shadows and makes later references
+  # ambiguous, exactly like a duplicate function parameter. `_` binds nothing.
   defp ensure_linear_named_doms(dom_exprs) do
-    named = for {:named_dom, n, _} <- dom_exprs, n != "_", do: n
+    named = for dom <- dom_exprs, n = bound_dom_name(dom), n != nil, n != "_", do: n
 
     case named -- Enum.uniq(named) do
       [] -> :ok
@@ -1601,33 +1628,41 @@ defmodule Cure.Elab.Declarations do
 
   defp family_index_args(other, _fam), do: {:error, {:bad_result_type, other}}
 
-  # Explicit-argument telescope: convert each domain in the scope of all
-  # preceding binders (implicits, then earlier explicits). Anonymous names.
+  # Source-position telescope: convert each domain in the scope of all preceding
+  # binders (inferred implicits, then earlier source-position doms). Returns the
+  # telescope, the bound names, and the per-slot plicity — a NAMED `(k:T)` binder
+  # is `:explicit` (positional), a RELEVANT IMPLICIT `{k:T}` binder is
+  # `:implicit` (solved/named), an anonymous arg is `:explicit`.
   defp build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
     dom_exprs
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, []}, fn {dom, i},
-                                                                                    {:ok, tele, scope, names} ->
-      # A NAMED dependent binder `(k: Nat)` uses its declared name (so later
+    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, [], []}, fn {dom, i},
+                                                                                       {:ok, tele,
+                                                                                        scope, names,
+                                                                                        plics} ->
+      # A NAMED / IMPLICIT dependent binder uses its declared name (so later
       # domains and the result index can reference it); an unnamed arg keeps its
       # anonymous `_aN` name byte-for-byte. Either way the scope is threaded so
       # the next domain's de Bruijn indices resolve this binder.
-      {argname, type_expr} =
+      {argname, type_expr, plicity} =
         case dom do
-          {:named_dom, name, inner} -> {name, inner}
-          _ -> {"_a#{i}", dom}
+          {:named_dom, name, inner} -> {name, inner, :explicit}
+          {:implicit_dom, name, inner} -> {name, inner, :implicit}
+          _ -> {"_a#{i}", dom, :explicit}
         end
 
       case idx_to_core(type_expr, scope, fam, env) do
         {:ok, core} ->
-          {:cont, {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname]}}
+          {:cont,
+           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname],
+            plics ++ [plicity]}}
 
         {:error, _} = err ->
           {:halt, err}
       end
     end)
     |> case do
-      {:ok, tele, _scope, names} -> {:ok, tele, names}
+      {:ok, tele, _scope, names, plics} -> {:ok, tele, names, plics}
       {:error, _} = err -> err
     end
   end

@@ -781,11 +781,12 @@ defmodule Cure.Elab.Elaborator do
       with {:ok, _scrut_term, {:vdata, dname, combined_vals}} <-
              elaborate_expr_typed(scrut, names, ctx, env),
            {:ok, {cname, pattern_vars, body_expr}} <- first_constructor_arm(arms, env),
-           %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
+           %{args: telescope, quantities: quantities, plicities: plicities} <-
+             Inductive.get_ctor(env, cname),
            arity = length(telescope),
            pc = Inductive.param_count(env, dname),
            {param_vals, _idx_vals} = Enum.split(combined_vals, pc),
-           branch_names = branch_scope(telescope, quantities, pattern_vars) ++ names,
+           branch_names = branch_scope(telescope, quantities, plicities, pattern_vars) ++ names,
            branch_ctx = extend_context(ctx, telescope, param_vals),
            {:ok, _b_term, t_branch_val} <-
              elaborate_expr_typed(body_expr, branch_names, branch_ctx, env),
@@ -3196,9 +3197,9 @@ defmodule Cure.Elab.Elaborator do
          result_type_term
        ) do
     {:ok, {^cname, pattern_vars}} = constructor_pattern(with_pattern)
-    %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
+    %{args: telescope, quantities: quantities, plicities: plicities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
-    branch_names = branch_scope(telescope, quantities, pattern_vars) ++ names
+    branch_names = branch_scope(telescope, quantities, plicities, pattern_vars) ++ names
 
     case verdict do
       :impossible ->
@@ -3356,9 +3357,9 @@ defmodule Cure.Elab.Elaborator do
     } = cfg
 
     {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
-    %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
+    %{args: telescope, quantities: quantities, plicities: plicities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
-    branch_names0 = branch_scope(telescope, quantities, pattern_vars) ++ names
+    branch_names0 = branch_scope(telescope, quantities, plicities, pattern_vars) ++ names
     branch_ctx0 = extend_context(ctx, telescope, param_vals)
 
     ctor_term = branch_constructor_term(cname, arity)
@@ -3550,9 +3551,9 @@ defmodule Cure.Elab.Elaborator do
     %{names: names, ctx: ctx, env: env, param_vals: param_vals, motive: motive, sibling_names: snames} = cfg
 
     {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
-    %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
+    %{args: telescope, quantities: quantities, plicities: plicities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
-    branch_names0 = branch_scope(telescope, quantities, pattern_vars) ++ names
+    branch_names0 = branch_scope(telescope, quantities, plicities, pattern_vars) ++ names
     branch_ctx0 = extend_context(ctx, telescope, param_vals)
 
     ctor_term = branch_constructor_term(cname, arity)
@@ -5316,8 +5317,10 @@ defmodule Cure.Elab.Elaborator do
          carried
        ) do
     {:ok, {cname, pattern_vars}} = constructor_pattern(pattern)
-    %{args: telescope, quantities: quantities, result_indices: result_indices} = Inductive.get_ctor(env, cname)
-    branch_names = branch_scope(telescope, quantities, pattern_vars) ++ names
+    %{args: telescope, quantities: quantities, result_indices: result_indices, plicities: plicities} =
+      Inductive.get_ctor(env, cname)
+
+    branch_names = branch_scope(telescope, quantities, plicities, pattern_vars) ++ names
 
     case verdict do
       :impossible ->
@@ -5355,7 +5358,7 @@ defmodule Cure.Elab.Elaborator do
         {bindings, checks} = split_named_implicits(pattern, subst, arity, telescope)
 
         tele_names =
-          Enum.reduce(bindings, branch_scope(telescope, quantities, pattern_vars), fn {name, {:variable, _, vname}},
+          Enum.reduce(bindings, branch_scope(telescope, quantities, plicities, pattern_vars), fn {name, {:variable, _, vname}},
                                                                                       acc ->
             p = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
             List.replace_at(acc, arity - 1 - p, to_string(vname))
@@ -7107,13 +7110,20 @@ defmodule Cure.Elab.Elaborator do
   # computational use), but branch substitutions can address each slot without
   # collapsing them all to the old, ambiguous `_erased` name. A source-level name
   # requested with `{index = binder}` replaces this internal name below.
-  defp branch_scope(telescope, quantities, pattern_vars) do
+  # Assign each constructor telescope slot a branch-scope name. POSITIONAL slots
+  # (plicity `:explicit`) consume the next surface pattern variable; NON-positional
+  # slots (plicity `:implicit` — an erased inferred index OR a relevant implicit
+  # `{k:T}`) get a synthetic name, replaced by the user's binder only if they name
+  # it via `{k = kk}` (see `split_named_implicits`). Positional-vs-not keys off
+  # PLICITY, not quantity: a relevant implicit is ω yet non-positional.
+  defp branch_scope(telescope, quantities, plicities, pattern_vars) do
     {names_in_order, _rest} =
-      Enum.zip(telescope, quantities)
+      Enum.zip([telescope, quantities, plicities])
       |> Enum.with_index()
       |> Enum.map_reduce(pattern_vars, fn
-        {{{_tele_name, _type}, :unrestricted}, _i}, [v | rest] -> {v, rest}
-        {{{tele_name, _type}, :erased}, i}, vars -> {"$erased_#{tele_name}_#{i}", vars}
+        {{{_tele_name, _type}, _q, :explicit}, _i}, [v | rest] -> {v, rest}
+        {{{tele_name, _type}, :erased, :implicit}, i}, vars -> {"$erased_#{tele_name}_#{i}", vars}
+        {{{tele_name, _type}, _q, :implicit}, i}, vars -> {"$implicit_#{tele_name}_#{i}", vars}
       end)
 
     Enum.reverse(names_in_order)
@@ -7249,8 +7259,10 @@ defmodule Cure.Elab.Elaborator do
       # the substitution frame and solved by unifying the present arguments. For
       # a parameter-free family this prefix is empty (unchanged behavior).
       param_tele = Inductive.param_telescope(env, family) || []
-      param_slots = Enum.map(param_tele, fn entry -> {entry, :erased} end)
-      telescope = param_slots ++ Enum.zip(ctor.args, ctor.quantities)
+      # Family parameters are always solved (never positional) → plicity :implicit.
+      param_slots = Enum.map(param_tele, fn entry -> {entry, :erased, :implicit} end)
+      plicities = Inductive.plicities_of(ctor)
+      telescope = param_slots ++ Enum.zip([ctor.args, ctor.quantities, plicities])
       pc = length(param_tele)
       init = {:ok, MetaCtx.new(), [], present_args}
 
@@ -7292,21 +7304,23 @@ defmodule Cure.Elab.Elaborator do
   # the expected `DDec` — closing the composed-computed-index reach (Idris parity)
   # without any kernel change (`Unify` uses the trusted `Conv`; the kernel still
   # re-checks the assembled ctor). See `Unify.unify/4`.
-  defp solve_arg({{_name, type_term}, :erased}, {:ok, mctx, chosen, present}, _env) do
+  # An IMPLICIT slot (an erased inferred index OR a relevant implicit `{k:T}`) is
+  # never positional: insert a fresh meta, solved by unifying a later explicit
+  # argument's type or the expected result. Positional-vs-not keys off PLICITY,
+  # not quantity — a relevant implicit is ω yet still solved, not passed.
+  defp solve_arg({{_name, type_term}, _grade, :implicit}, {:ok, mctx, chosen, present}, _env) do
     {mctx, id} = MetaCtx.fresh(mctx, Subst.instantiate(type_term, chosen))
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], present}}
   end
 
-  defp solve_arg({{_name, _type_term}, grade}, {:ok, _mctx, _chosen, []}, _env)
-       when grade in [:unrestricted, :linear, :affine],
-       do: {:halt, {:error, :too_few_arguments}}
+  defp solve_arg({{_name, _type_term}, _grade, :explicit}, {:ok, _mctx, _chosen, []}, _env),
+    do: {:halt, {:error, :too_few_arguments}}
 
   defp solve_arg(
-         {{_name, type_term}, grade},
+         {{_name, type_term}, _grade, :explicit},
          {:ok, mctx, chosen, [{arg, arg_type_term} | rest]},
          env
-       )
-       when grade in [:unrestricted, :linear, :affine] do
+       ) do
     expected = Subst.instantiate(type_term, chosen)
 
     case Unify.unify(expected, arg_type_term, mctx, env) do
@@ -7831,21 +7845,24 @@ defmodule Cure.Elab.Elaborator do
   # gates, so a genuinely ambiguous domain still rejects.
   defp solve_ctor_present_fields(ctor, arg_asts, seed, pc, mctx, names, ctx, env) do
     params = Enum.take(seed, pc)
-    slots = Enum.zip(ctor.args, ctor.quantities)
+    slots = Enum.zip([ctor.args, ctor.quantities, Inductive.plicities_of(ctor)])
     solve_fields(slots, arg_asts, seed, pc, params, [], mctx, names, ctx, env)
   end
 
   defp solve_fields([], _asts, _seed, _pc, _params, _acc, mctx, _names, _ctx, _env), do: mctx
 
-  defp solve_fields([{{_fn, _ft}, :erased} | slots], asts, seed, pc, params, acc, mctx, names, ctx, env) do
+  # IMPLICIT slot (erased index OR relevant `{k:T}`): non-positional, its value is
+  # the seed metavariable a present field determines. Keyed off plicity, not
+  # quantity — a relevant implicit is ω yet still seeded, not consumed.
+  defp solve_fields([{{_fn, _ft}, _q, :implicit} | slots], asts, seed, pc, params, acc, mctx, names, ctx, env) do
     val = seed |> Enum.at(pc + length(acc)) |> Unify.zonk(mctx)
     solve_fields(slots, asts, seed, pc, params, [val | acc], mctx, names, ctx, env)
   end
 
-  defp solve_fields([{{_fn, _ft}, :unrestricted} | _slots], [], _seed, _pc, _params, _acc, mctx, _names, _ctx, _env),
+  defp solve_fields([{{_fn, _ft}, _q, :explicit} | _slots], [], _seed, _pc, _params, _acc, mctx, _names, _ctx, _env),
     do: mctx
 
-  defp solve_fields([{{_fn, ftype}, :unrestricted} | slots], [arg | rest], seed, pc, params, acc, mctx, names, ctx, env) do
+  defp solve_fields([{{_fn, ftype}, _q, :explicit} | slots], [arg | rest], seed, pc, params, acc, mctx, names, ctx, env) do
     ftype_inst = ftype |> Subst.instantiate(params ++ Enum.reverse(acc)) |> Unify.zonk(mctx)
 
     {mctx, val} = solve_field(arg, ftype_inst, mctx, names, ctx, env)
@@ -7922,10 +7939,11 @@ defmodule Cure.Elab.Elaborator do
       is_nil(ctor) or is_nil(family) ->
         {:error, {:unknown_constructor, cname}}
 
-      # Guard-ordered AFTER the nil check: `ctor.quantities` is only reached once
-      # `ctor` is known non-nil (an unknown ctor would otherwise crash here before
-      # the graceful error above could fire).
-      Enum.count(ctor.quantities, &Grade.present?/1) != length(arg_asts) ->
+      # Guard-ordered AFTER the nil check: the ctor's plicities are only reached
+      # once `ctor` is known non-nil (an unknown ctor would otherwise crash here
+      # before the graceful error above could fire). Positional arg count is the
+      # number of EXPLICIT slots — an implicit `{k:T}` is solved, not passed.
+      Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit)) != length(arg_asts) ->
         {:error, {:constructor_arity_mismatch, cname}}
 
       true ->
@@ -7954,10 +7972,10 @@ defmodule Cure.Elab.Elaborator do
               {:error, {:unsolved_parameters, cname}}
             else
               slots =
-                ctor.args
-                |> Enum.zip(ctor.quantities)
+                [ctor.args, ctor.quantities, Inductive.plicities_of(ctor)]
+                |> Enum.zip()
                 |> Enum.with_index()
-                |> Enum.map(fn {{{_fn, ftype}, q}, i} -> {i, ftype, q} end)
+                |> Enum.map(fn {{{_fn, ftype}, q, p}, i} -> {i, ftype, q, p} end)
 
               check_ctor_args(slots, arg_asts, seed, pc, solved_params, [], mctx, names, ctx, env, cname)
             end
@@ -7979,15 +7997,20 @@ defmodule Cure.Elab.Elaborator do
     # dependency order works. Erased index slots seed the assembly with their goal-pinned
     # metavariable and are re-zonked at the end; positions are kept so the de Bruijn frame stays
     # correct regardless of resolution order.
+    # Positional-vs-not keys off PLICITY: EXPLICIT slots consume the surface
+    # arguments; IMPLICIT slots (erased index OR relevant `{k:T}`) seed from their
+    # goal-pinned metavariable and are solved by unification. The retained value
+    # (relevant implicit) vs dropped one (erased) is a quantity concern erasure
+    # handles later — both flow identically here.
     args_by_pos =
       slots
-      |> Enum.filter(fn {_i, _ft, q} -> q == :unrestricted end)
+      |> Enum.filter(fn {_i, _ft, _q, p} -> p == :explicit end)
       |> Enum.map(&elem(&1, 0))
       |> Enum.zip(arg_asts)
       |> Map.new()
 
-    acc0 = for {i, _ft, :erased} <- slots, into: %{}, do: {i, Enum.at(seed, pc + i)}
-    pending = for {i, ft, :unrestricted} <- slots, do: {i, ft}
+    acc0 = for {i, _ft, _q, :implicit} <- slots, into: %{}, do: {i, Enum.at(seed, pc + i)}
+    pending = for {i, ft, _q, :explicit} <- slots, do: {i, ft}
 
     case resolve_ctor_fields(pending, acc0, args_by_pos, seed, pc, params, mctx, names, ctx, env, cname) do
       {:ok, acc_map, mctx} ->
@@ -8097,7 +8120,11 @@ defmodule Cure.Elab.Elaborator do
       is_nil(ctor) or is_nil(family) ->
         {:error, {:unknown_constructor, cname}}
 
-      Enum.any?(ctor.quantities, &Grade.erased?/1) ->
+      # Bail on any IMPLICIT slot (erased inferred index OR relevant implicit
+      # `{k:T}`): this all-positional inference fallback can't solve a
+      # non-positional field. The primary `elaborate_ctor_app` inserts and solves
+      # implicit metas correctly, so leaving it to that path is complete.
+      Enum.any?(Inductive.plicities_of(ctor), &(&1 == :implicit)) ->
         {:error, {:bidirectional_erased_field, cname}}
 
       length(ctor.args) != length(arg_asts) ->
@@ -8161,7 +8188,12 @@ defmodule Cure.Elab.Elaborator do
     %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
-    telescope = Enum.zip(Enum.map(domains, &{:_, &1}), quantities)
+    # A global def has no relevant-implicit surface (that is a constructor-index
+    # feature), so plicity derives from quantity: erased ⇒ :implicit (meta),
+    # else :explicit (positional) — preserving the pre-plicity `solve_arg`
+    # behavior now that the slot carries an explicit plicity.
+    slot_plicities = Enum.map(quantities, fn :erased -> :implicit; _ -> :explicit end)
+    telescope = Enum.zip([Enum.map(domains, &{:_, &1}), quantities, slot_plicities])
     init = {:ok, MetaCtx.new(), [], present_args}
 
     # GOAL-DIRECTED solving, for an anonymous-union goal only.
@@ -8184,7 +8216,7 @@ defmodule Cure.Elab.Elaborator do
     # call is the fully Idris-faithful behaviour and is the natural generalisation, but
     # it reorders solving for every call in the language — a broad regression surface
     # that deserves its own change. Gated, no non-union program's inference can differ.
-    {erased, rest} = Enum.split_while(telescope, fn {_d, q} -> q == :erased end)
+    {erased, rest} = Enum.split_while(telescope, fn {_d, q, _p} -> q == :erased end)
 
     init =
       if union_goal?(expected) do
@@ -8241,7 +8273,7 @@ defmodule Cure.Elab.Elaborator do
   # real arguments are unified against their domains by `solve_arg` as usual.
   defp solve_codomain_from_goal({:ok, mctx, chosen, present}, codomain, expected, env, remaining) do
     {mctx_padded, padded} =
-      Enum.reduce(remaining, {mctx, chosen}, fn {{_n, ty}, _q}, {m, acc} ->
+      Enum.reduce(remaining, {mctx, chosen}, fn {{_n, ty}, _q, _p}, {m, acc} ->
         {m, id} = MetaCtx.fresh(m, Subst.instantiate(ty, acc))
         {m, acc ++ [{:meta, id}]}
       end)
