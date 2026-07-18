@@ -246,7 +246,13 @@ defmodule Cure.Elab.ProofSearch do
         _ -> {nil, {:lemma, name}}
       end
     else
-      {:error, _} = err -> err
+      # Only an ambiguity PROPAGATED UP from a recursive sub-goal (fill_args)
+      # is a genuine error to surface. Unify.unify/4's own failure shapes
+      # (:cannot_unify, :arity_mismatch, :escaping_variable, :occurs_check) mean
+      # this lemma's conclusion simply does not match the goal — the routine,
+      # expected outcome for most registered lemmas under a shared head — and
+      # must stay a silent decline, not be conflated with an ambiguity error.
+      {:error, {:ambiguous_proof_search, _, _}} = err -> err
       _ -> {nil, {:lemma, name}}
     end
   end
