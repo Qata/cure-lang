@@ -19,7 +19,10 @@ defmodule Cure.Compiler.OperatorFlipTest do
     apply(m, fname, [])
   end
 
-  defp eval(expr), do: run("mod E\n  fn go() -> Bool = #{expr}\nend\n", :go)
+  # The return type is inferred (not annotated), so the harness evaluates
+  # value-surface expressions of any type — Bool (`true and false`), Int
+  # (`-(5)`), etc. — without forcing an incorrect `-> Bool` annotation.
+  defp eval(expr), do: run("mod E\n  fn go() = #{expr}\nend\n", :go)
 
   defp eval_in(src, call) do
     fname = call |> String.trim_trailing("()") |> String.to_atom()
@@ -92,5 +95,20 @@ defmodule Cure.Compiler.OperatorFlipTest do
     """
 
     assert_error_tag(src, :no_operator_meaning)
+  end
+
+  test "prefix minus desugars to negate" do
+    assert eval("-(5)") == -5
+    assert eval("- 5 + 2") == -3
+  end
+
+  test "rebinding a builtin syntactic operator is rejected" do
+    src = """
+    mod M
+      use Std.Operators
+      infix `|>` : Additive
+    end
+    """
+    assert {:error, {:builtin_operator_not_overloadable, :|>}} = Cure.Elab.Program.elaborate(src)
   end
 end

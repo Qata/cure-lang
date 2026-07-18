@@ -112,10 +112,52 @@ defmodule Cure.Elab.Program do
          :ok <- check_no_duplicate_types(ast),
          :ok <- check_no_duplicate_ctors(ast),
          :ok <- check_no_fn_ctor_collision(ast),
+         :ok <- check_no_builtin_rebind(ast),
          :ok <- check_proof_shapes(ast) do
       check_no_sibling_collision(ast)
     end
   end
+
+  # A `precedencegroup`/`infix`/`prefix`/`postfix` declaration may not rebind a
+  # fixed SYNTACTIC operator (`.`, `|>`, `<-|`, `=`, augmented assigns, ranges) —
+  # those keep dedicated AST nodes and never route through the overloadable
+  # `:function_call` desugar, so giving one a user fixity/group is meaningless and
+  # rejected (Task 3.4). The built-in operators are exactly the lexemes marked
+  # `builtin` in `Std.Operators`; `FixityTable.builtin?/2` on the memoized
+  # built-in table is the single source of truth. A decl PARSED from that source
+  # (its own `builtin infix …` lines carry `builtin: true` in the node meta) is
+  # exempt, so re-checking `Std.Operators` on `use` does not reject itself.
+  defp check_no_builtin_rebind(ast) do
+    builtin_table = Cure.Compiler.Parser.BuiltinFixity.table()
+
+    ast
+    |> fixity_decl_nodes()
+    |> Enum.reject(fn {:fixity, meta, _} -> Keyword.get(meta, :builtin, false) end)
+    |> Enum.find_value(:ok, fn {:fixity, meta, _} ->
+      lexeme = Keyword.get(meta, :operator)
+
+      if is_binary(lexeme) and
+           Cure.Compiler.Parser.FixityTable.builtin?(builtin_table, lexeme) do
+        {:error, {:builtin_operator_not_overloadable, String.to_atom(lexeme)}}
+      end
+    end)
+  end
+
+  # Deep-walk the AST collecting every `{:fixity, meta, _}` declaration node.
+  defp fixity_decl_nodes(node) when is_tuple(node) do
+    here =
+      case node do
+        {:fixity, meta, _} when is_list(meta) -> [node]
+        _ -> []
+      end
+
+    here ++ (node |> Tuple.to_list() |> fixity_decl_nodes())
+  end
+
+  defp fixity_decl_nodes(list) when is_list(list),
+    do: Enum.flat_map(list, &fixity_decl_nodes/1)
+
+  defp fixity_decl_nodes(_other), do: []
 
   # A top-level container the dependent pipeline elaborates as a module. Classic
   # codegen compiles a `proof` container "exactly like a regular module"; the

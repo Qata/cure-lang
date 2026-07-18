@@ -692,10 +692,19 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A surface unary operator. `not` is retired as a kernel primitive: it lowers to
-  # an application of the `Std.Bool` prelude def `not` (a `case`-eliminating
-  # function over the inductive Bool). The kernel checks the operand against Bool
-  # and infers the result. Any other unary operator is unsupported here.
+  # A surface unary operator. Prefix `-` DESUGARS to a call on `negate` (the
+  # `Std.Arithmetic` `Additive` method) so a user type with an `Additive`
+  # instance gets prefix negation for free, exactly as an infix overloadable
+  # operator desugars to a `:function_call` (Task 3.3). The desugar fires only
+  # when `negate` has a meaning in scope (`operator_meaning?/2`); otherwise it
+  # falls back to the built-in type-directed lowering, so a unary expression that
+  # compiles today with no `use Std.Arithmetic` (bare `-(5)`) is UNCHANGED.
+  #
+  # `not` is NOT desugared to a call: it is `Std.Bool.\`not\``, a plain function
+  # (not an overloadable interface method), so a `:function_call` gives no user
+  # benefit and would change its Core lowering (breaking the parity with the
+  # `and`/`or` connectives, which stay `{:global, :and/:or}`). It keeps its direct
+  # application of the `Std.Bool` prelude def, unchanged.
   def elaborate_expr_typed({:unary_op, meta, [operand]} = expr, names, ctx, env) do
     case Keyword.fetch!(meta, :operator) do
       :not ->
@@ -714,15 +723,20 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term, type}
         end
 
-      # Numeric negation. Type-directed exactly like binary arithmetic: infer the
-      # operand's primitive kind, then lower to `int_neg`/`float_neg` (both return
-      # their operand type). A non-numeric operand rejects as unsupported.
+      # Numeric negation. Desugars to `negate` when the `Additive` method is in
+      # scope; otherwise type-directed like binary arithmetic: infer the operand's
+      # primitive kind, then lower to `int_neg`/`float_neg` (both return their
+      # operand type). A non-numeric operand rejects as unsupported.
       :- ->
-        with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
-             {:ok, g} <- neg_global(o_type, ctx),
-             term = {:app, {:global, builtin_op_global(g)}, o_core},
-             {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
+        if operator_meaning?(env, :negate) do
+          elaborate_expr_typed({:function_call, [name: "negate"], [operand]}, names, ctx, env)
+        else
+          with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
+               {:ok, g} <- neg_global(o_type, ctx),
+               term = {:app, {:global, builtin_op_global(g)}, o_core},
+               {:ok, type} <- Kernel.infer(ctx, term) do
+            {:ok, term, type}
+          end
         end
 
       _ ->
