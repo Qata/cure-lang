@@ -7813,7 +7813,7 @@ defmodule Cure.Elab.Elaborator do
          {mctx_try, seed} <- fresh_seed(mctx, pc + length(ctor.args)),
          params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, seed)),
          indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, seed)),
-         {:ok, mctx_try} <- Unify.unify({:data, family, params, indices}, dom_inst, mctx_try, env) do
+         {:ok, mctx_try} <- unify_data_components(family, params, indices, dom_inst, mctx_try, env) do
       solve_ctor_present_fields(ctor, cargs, seed, pc, mctx_try, names, ctx, env)
     else
       _ -> mctx
@@ -7821,6 +7821,46 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp solve_deferred_domain(_arg, _dom_inst, mctx, _names, _ctx, _env), do: mctx
+
+  # Simultaneous (component-wise) unification of a constructor's result-type
+  # template `{:data, family, params, indices}` against a domain `dom_inst`,
+  # tolerating a stuck component. A whole-tuple `Unify.unify` is all-or-nothing:
+  # a single index that cannot unify NOW aborts every other component's solving.
+  # For a constructor whose result carries a COMPUTED index — `ATimes : Acc(l,m1)
+  # -> Acc(r,m2) -> Acc(PTimes(l,r), add(m1,m2))` — the `add(m1',m2')` index is a
+  # stuck neutral at deferral time (its scrutinee `m1'` is an unsolved seed meta),
+  # so whole-tuple unification against `Acc(PTimes(PA(?a),…), S(Z))` fails and the
+  # caller's `solve_ctor_present_fields` never runs — leaving the sibling implicit
+  # `?a` (which the STRUCTURAL first index and the present field `AAtomA : …PA(TA)…`
+  # jointly determine) unsolved. Unifying each param/index pair independently and
+  # KEEPING the solutions from the pairs that succeed lets the structural component
+  # solve what it can while the stuck one is simply skipped; the present fields then
+  # finish the job, and the computed index reduces once its arguments are known.
+  #
+  # Meta-solving only, and best-effort: a failing pair leaves `mctx` untouched (never
+  # fabricates a solution), and the assembled call is kernel-re-checked by
+  # `finish_global_app`, so a genuinely ambiguous domain still rejects and nothing
+  # unsound rests on the partial solve. Family/arity mismatch is a real error, not a
+  # stuck component, so it returns `:mismatch` and the caller keeps the original mctx.
+  defp unify_data_components(family, params, indices, dom_inst, mctx, env) do
+    case dom_inst do
+      {:data, ^family, dparams, dindices}
+      when length(dparams) == length(params) and length(dindices) == length(indices) ->
+        mctx =
+          Enum.zip(params ++ indices, dparams ++ dindices)
+          |> Enum.reduce(mctx, fn {a, b}, m ->
+            case Unify.unify(a, b, m, env) do
+              {:ok, m2} -> m2
+              {:error, _} -> m
+            end
+          end)
+
+        {:ok, mctx}
+
+      _ ->
+        :mismatch
+    end
+  end
 
   # Allocate `n` fresh metavariables from `mctx`, returning the updated context and
   # the `[{:meta, id}]` seed frame.
@@ -7961,23 +8001,49 @@ defmodule Cure.Elab.Elaborator do
         params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, seed))
         indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, seed))
 
-        case Unify.unify({:data, family, params, indices}, expected_core, mctx, env) do
-          {:error, _} ->
-            {:error, {:constructor_result_mismatch, cname}}
+        result_term = {:data, family, params, indices}
 
+        slots =
+          [ctor.args, ctor.quantities, Inductive.plicities_of(ctor)]
+          |> Enum.zip()
+          |> Enum.with_index()
+          |> Enum.map(fn {{{_fn, ftype}, q, p}, i} -> {i, ftype, q, p} end)
+
+        case Unify.unify(result_term, expected_core, mctx, env) do
           {:ok, mctx} ->
             solved_params = seed |> Enum.take(pc) |> Enum.map(&Unify.zonk(&1, mctx))
 
             if Enum.any?(solved_params, &has_meta?/1) do
               {:error, {:unsolved_parameters, cname}}
             else
-              slots =
-                [ctor.args, ctor.quantities, Inductive.plicities_of(ctor)]
-                |> Enum.zip()
-                |> Enum.with_index()
-                |> Enum.map(fn {{{_fn, ftype}, q, p}, i} -> {i, ftype, q, p} end)
+              check_ctor_args(slots, arg_asts, seed, pc, solved_params, [], mctx, names, ctx, env, cname, [])
+            end
 
-              check_ctor_args(slots, arg_asts, seed, pc, solved_params, [], mctx, names, ctx, env, cname)
+          {:error, _} ->
+            # The full result-pin failed. It may fail only because a COMPUTED result
+            # index is stuck — `ATimes : … -> Acc(PTimes(l,r), add(m1,m2))` checked
+            # against `Acc(…, S(Z))`, where `add(m1,m2)` cannot reduce until the field
+            # `AAtomA` fixes `m1`. Rather than reject, pin the indices that DO unify
+            # (structural ones — `PTimes(l,r)`, solving `l`/`r`) and DEFER the stuck
+            # equations. The deferred equations are retried inside the field-resolution
+            # fixpoint (`resolve_ctor_fields`): once a sibling field solves their metas
+            # the computed index reduces (`add(S(Z),m2)` → `S(m2)`) and solves the rest.
+            # This is Idris's simultaneous-unification behaviour, scoped to the one
+            # constructor: field checks and result-index constraints solve as ONE
+            # constraint set with postponement. The assembled term is still
+            # kernel-re-checked by the caller, so nothing unsound is admitted — a
+            # deferred equation that stays unsatisfiable surfaces as an unsolved
+            # metavariable or a kernel type error, never silent acceptance.
+            case partial_pin_result(result_term, expected_core, mctx, env) do
+              :mismatch ->
+                {:error, {:constructor_result_mismatch, cname}}
+
+              {mctx, deferred} ->
+                # Params that pinned structurally are passed for the de Bruijn frame;
+                # any still-open param is caught downstream (unsolved metavariable /
+                # kernel re-check), never silently accepted.
+                partial_params = seed |> Enum.take(pc) |> Enum.map(&Unify.zonk(&1, mctx))
+                check_ctor_args(slots, arg_asts, seed, pc, partial_params, [], mctx, names, ctx, env, cname, deferred)
             end
         end
     end
@@ -7990,7 +8056,7 @@ defmodule Cure.Elab.Elaborator do
   # parameters and every earlier field value (the same `params ++ fields` frame the
   # de Bruijn layout uses). The erased field values are kept in the assembled
   # `{:ctor, …}`, matching `finish_ctor_app`.
-  defp check_ctor_args(slots, arg_asts, seed, pc, params, _acc0, mctx, names, ctx, env, cname) do
+  defp check_ctor_args(slots, arg_asts, seed, pc, params, _acc0, mctx, names, ctx, env, cname, deferred) do
     # Idris-style DEFERRAL (TTImp.Elab.App `checkRestApp`/`checkRtoL`): a present field whose
     # instantiated type still carries a metavariable is POSTPONED, its siblings resolved first —
     # which solves that metavariable — and it is then checked. Iterated to a fixpoint so any
@@ -8012,7 +8078,7 @@ defmodule Cure.Elab.Elaborator do
     acc0 = for {i, _ft, _q, :implicit} <- slots, into: %{}, do: {i, Enum.at(seed, pc + i)}
     pending = for {i, ft, _q, :explicit} <- slots, do: {i, ft}
 
-    case resolve_ctor_fields(pending, acc0, args_by_pos, seed, pc, params, mctx, names, ctx, env, cname) do
+    case resolve_ctor_fields(pending, acc0, args_by_pos, seed, pc, params, mctx, names, ctx, env, cname, deferred) do
       {:ok, acc_map, mctx} ->
         vals = for i <- 0..(length(slots) - 1)//1, do: Unify.zonk(Map.fetch!(acc_map, i), mctx)
 
@@ -8032,12 +8098,20 @@ defmodule Cure.Elab.Elaborator do
   # tried by INFERENCE (solving the metavariable from the argument's own type, as a recursive
   # call or concrete constructor does) and otherwise DEFERRED to a later sweep, once a sibling
   # solves it.
-  defp resolve_ctor_fields([], acc_map, _args, _seed, _pc, _params, mctx, _names, _ctx, _env, _cname),
+  defp resolve_ctor_fields([], acc_map, _args, _seed, _pc, _params, mctx, _names, _ctx, _env, _cname, _deferred),
     do: {:ok, acc_map, mctx}
 
-  defp resolve_ctor_fields(pending, acc_map, args, seed, pc, params, mctx, names, ctx, env, cname) do
+  defp resolve_ctor_fields(pending, acc_map, args, seed, pc, params, mctx, names, ctx, env, cname, deferred) do
+    # A DEFERRED result-index equation (`add(m1,m2) = S(Z)`) is retried at the head of
+    # every sweep: once a sibling field solves its metas the computed index reduces
+    # (`add(S(Z),m2)` → `S(m2)` via the meta-aware whnf in `Unify`) and the equation
+    # solves the remaining index metas — which unblocks the fields that reference them.
+    # Discharging one counts as progress, so the fixpoint keeps sweeping even when the
+    # field sweep alone stalls.
+    {mctx, deferred, deferred_prog} = retry_deferred(deferred, mctx, env)
+
     swept =
-      Enum.reduce(pending, {[], acc_map, mctx, false, nil}, fn {i, ftype}, {pend, amap, mctx, prog, err} ->
+      Enum.reduce(pending, {[], acc_map, mctx, deferred_prog, nil}, fn {i, ftype}, {pend, amap, mctx, prog, err} ->
         if err != nil do
           {pend, amap, mctx, prog, err}
         else
@@ -8067,12 +8141,46 @@ defmodule Cure.Elab.Elaborator do
         {:ok, acc_map, mctx}
 
       {pend, acc_map, mctx, true, nil} ->
-        resolve_ctor_fields(Enum.reverse(pend), acc_map, args, seed, pc, params, mctx, names, ctx, env, cname)
+        resolve_ctor_fields(Enum.reverse(pend), acc_map, args, seed, pc, params, mctx, names, ctx, env, cname, deferred)
 
       {_pend, _amap, _mctx, false, nil} ->
-        # A full sweep resolved nothing but fields remain: their types stay under-determined.
+        # A full sweep resolved nothing — no field AND no deferred equation — but fields
+        # remain: their types stay under-determined.
         {:error, {:unsolved_field_type, cname}}
     end
+  end
+
+  # Pin a constructor's result type against the goal COMPONENT-WISE, tolerating a
+  # stuck computed index. Each result parameter/index is unified against the
+  # corresponding goal component independently; the ones that unify refine `mctx`,
+  # and the ones that don't (a computed index like `add(m1,m2)` whose metas aren't
+  # yet known) are returned as DEFERRED `{actual, expected}` equations for the field
+  # fixpoint to retry. Returns `:mismatch` when the goal is not the same data family
+  # at the same arity — a genuine result-type mismatch, not a solving-order issue.
+  defp partial_pin_result({:data, fam, ap, ai}, {:data, fam, ep, ei}, mctx, env)
+       when length(ap) == length(ep) and length(ai) == length(ei) do
+    Enum.zip(ap ++ ai, ep ++ ei)
+    |> Enum.reduce({mctx, []}, fn {actual, expected}, {m, deferred} ->
+      case Unify.unify(actual, expected, m, env) do
+        {:ok, m2} -> {m2, deferred}
+        {:error, _} -> {m, [{actual, expected} | deferred]}
+      end
+    end)
+  end
+
+  defp partial_pin_result(_actual, _expected, _mctx, _env), do: :mismatch
+
+  # Retry each deferred result-index equation after zonking both sides. Solved
+  # equations are dropped; unsolved ones are kept for a later sweep. Returns the
+  # refined context, the still-deferred equations, and whether any were discharged
+  # (progress, which keeps the field fixpoint iterating).
+  defp retry_deferred(deferred, mctx, env) do
+    Enum.reduce(deferred, {mctx, [], false}, fn {lhs, rhs}, {m, still, prog} ->
+      case Unify.unify(Unify.zonk(lhs, m), Unify.zonk(rhs, m), m, env) do
+        {:ok, m2} -> {m2, still, true}
+        {:error, _} -> {m, [{lhs, rhs} | still], prog}
+      end
+    end)
   end
 
   # The de Bruijn frame prefix for the field at position `i`: positions `0..i-1`, each taken from
