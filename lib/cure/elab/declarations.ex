@@ -409,7 +409,10 @@ defmodule Cure.Elab.Declarations do
 
   defp do_register_signature({:function_def, meta, _body}, env) do
     with {:ok, sig} <- function_signature(meta, env) do
-      env1 = Env.add_def(env, sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
+      env1 =
+        env
+        |> Env.add_def(sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
+        |> maybe_register_lemma(sig, meta)
 
       env2 =
         case sig.constraints do
@@ -2372,6 +2375,33 @@ defmodule Cure.Elab.Declarations do
   # in a container/def meta `:decorator` slot, or `nil` if absent/non-decorator.
   defp attached_decorator_name({:decorator, m, _args}) when is_list(m), do: Keyword.get(m, :name)
   defp attached_decorator_name(_), do: nil
+
+  # Register a def tagged `@lemma` into the proof-search registry, filed under
+  # its conclusion head. No-op for untagged defs or non-data conclusions. The
+  # entry's name is OWNER-QUALIFIED (Env.owned_name/2) so ProofSearch's assembled
+  # {:global, ...} term matches what ordinary elaboration produces for the same
+  # call — see Cure.Elab.ProofSearch.
+  defp maybe_register_lemma(env, sig, meta) do
+    with :lemma <- attached_decorator_name(Keyword.get(meta, :decorator)),
+         head when not is_nil(head) <- conclusion_head(sig.pi) do
+      Env.put_lemma(env, head, %{
+        name: Env.owned_name(env, sig.name),
+        type: sig.pi,
+        arity: pi_arity(sig.pi)
+      })
+    else
+      _ -> env
+    end
+  end
+
+  # The head family atom of a Pi type's ultimate codomain, or nil if the
+  # conclusion is not an indexed/parameterised data application.
+  def conclusion_head({:pi, _g, _dom, cod}), do: conclusion_head(cod)
+  def conclusion_head({:data, name, _params, _indices}), do: name
+  def conclusion_head(_), do: nil
+
+  defp pi_arity({:pi, _g, _dom, cod}), do: 1 + pi_arity(cod)
+  defp pi_arity(_), do: 0
 
   # The fixed tag→Core-node table — the ONLY inherent mapping (keyed by builtin
   # tag, not by surface name). Exactly four tags are legal.
