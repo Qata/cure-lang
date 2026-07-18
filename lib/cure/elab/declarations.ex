@@ -1041,8 +1041,8 @@ defmodule Cure.Elab.Declarations do
 
   # A hole body `?name` elaborates to a `:hole` term (accepted at the declared
   # return type by the kernel; it blocks codegen until filled).
-  defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, _env, _params) do
-    {:ok, {:hole, Keyword.get(meta, :name, "")}}
+  defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, env, _params) do
+    {:ok, {:hole, hole_id(env, meta)}}
   end
 
   # A `let … ⏎ body` block: check it against the declared return type (there is
@@ -1102,6 +1102,31 @@ defmodule Cure.Elab.Declarations do
       with {:ok, term, type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
         {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
       end
+    end
+  end
+
+  # Deterministic hole identity (first-class holes, Slice 1). Every source `?`
+  # must get a UNIQUE id: once holes flow through the kernel as stuck neutrals,
+  # two holes sharing an id are definitionally equal, so `refl : ?a = ?b` would
+  # type-check and a false equality be forgeable. A NAMED `?foo` keys on its name
+  # so repeating `?foo` within a scope refers to the SAME unknown; an unnamed `?`
+  # keys on its source position (`line:col`), unique per occurrence. Both are
+  # module-qualified via `Env.owner/1`. No gensym counter is used, so Antigen and
+  # the differential oracle stay replay-stable.
+  #
+  # Soundness note: `line:col` within a module is inherently unique per source
+  # occurrence, and a hole never escapes its own def's normalisation — a
+  # hole-bearing def is never certified and so never δ-unfolded into another def's
+  # conversion — so position alone is soundness-sufficient. The module qualifier
+  # is defense-in-depth and readability for later slices (goal reporting).
+  defp hole_id(env, meta) do
+    mod = Env.owner(env) || ""
+    name = Keyword.get(meta, :name, "")
+
+    if name != "" do
+      "#{mod}##{name}"
+    else
+      "#{mod}:#{Keyword.get(meta, :line, 0)}:#{Keyword.get(meta, :col, 0)}"
     end
   end
 
