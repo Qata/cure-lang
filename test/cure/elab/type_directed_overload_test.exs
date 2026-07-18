@@ -211,6 +211,27 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     assert apply(mod, :use_from, []) == 105
   end
 
+  # Writing an OPTIONAL (single-name) label at an overloaded call site must not
+  # break resolution: `describe(x: 5)` echoes the sole parameter's own name,
+  # which is legal per spec §3 (`f(5)` or `f(x: 5)`) whether or not `describe`
+  # happens to be overloaded. Only argument TYPE need pick the winner here — both
+  # candidates are unlabelled (single-name), so the label filter must treat the
+  # written "x" as agreeing with both, not reject every candidate outright.
+  test "writing an optional single-name label on an overloaded call still resolves by type" do
+    src = """
+    mod LabelOptionalOverload
+      fn describe(x: Int) -> Int = x
+      fn describe(x: Int, y: Int) -> Int = x + y
+      fn one() -> Int = describe(x: 5)
+      fn two() -> Int = describe(x: 5, y: 6)
+    end
+    """
+
+    assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(mod, :one, []) == 5
+    assert apply(mod, :two, []) == 11
+  end
+
   # The other half of the tie-break: a BARE call to a mandatorily-labelled set
   # matches no member (every candidate requires its label), so it errors rather
   # than silently dispatching one. `pick(5)` cannot pick `to` or `from`.

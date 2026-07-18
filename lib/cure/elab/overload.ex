@@ -95,10 +95,26 @@ defmodule Cure.Elab.Overload do
   # Ph1 resolution byte-for-byte unchanged. A mandatory external label (`to dest`)
   # is declared non-nil, so it is matched only when the caller writes it; a caller
   # who writes a label a candidate does not declare prunes that candidate.
+  #
+  # A declared-`nil` (optional, single-name) position accepts ANY written label at
+  # that position — same leniency as `single_labels_ok?/2` below, for the same
+  # reason: the internal binder name a caller may echo (`describe(x: 5)` for
+  # `fn describe(x: Int)`) is not retained on the def record to check exactly. A
+  # candidate must NOT be pruned from the overload set just because the caller
+  # wrote its (optional, unrecorded) parameter name — that would make writing a
+  # self-documenting label break resolution outright (spec §3/§5: `f(x: 5)` is
+  # the SAME call as `f(5)`, overloaded or not).
   defp labels_match?(declared_present, nil), do: Enum.all?(declared_present, &is_nil/1)
 
-  defp labels_match?(declared_present, written),
-    do: length(declared_present) == length(written) and declared_present == written
+  defp labels_match?(declared_present, written) when length(declared_present) == length(written) do
+    Enum.zip(declared_present, written)
+    |> Enum.all?(fn
+      {nil, _w} -> true
+      {d, w} -> d == w
+    end)
+  end
+
+  defp labels_match?(_declared_present, _written), do: false
 
   defp params_match?(_env, ptypes, atypes) when length(ptypes) != length(atypes), do: false
 
