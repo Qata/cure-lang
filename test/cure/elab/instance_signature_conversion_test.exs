@@ -19,11 +19,11 @@ defmodule Cure.Elab.InstanceSignatureConversionTest do
       use Std.Equatable
       type Color = Red | Green | Blue
       implementation Equatable for Color
-        fn eq(a: Color, b: Color) -> Color = a
+        fn `==`(a: Color, b: Color) -> Color = a
     end
     """
 
-    assert {:error, {:method_signature_mismatch, :Equatable, :eq}} = Program.elaborate(src)
+    assert {:error, {:method_signature_mismatch, :Equatable, :==}} = Program.elaborate(src)
   end
 
   test "a correctly-typed instance passes conversion" do
@@ -32,7 +32,7 @@ defmodule Cure.Elab.InstanceSignatureConversionTest do
       use Std.Equatable
       type Color = Red | Green | Blue
       implementation Equatable for Color
-        fn eq(a: Color, b: Color) -> Bool = a == b
+        fn `==`(a: Color, b: Color) -> Bool = a == b
     end
     """
 

@@ -1894,10 +1894,21 @@ defmodule Cure.Compiler.Printer do
   # round-trips as an ordinary identifier (e.g. the `Std.Bool` connectives
   # `` `not` ``/`` `and` ``/`` `or` ``).
   defp quote_if_reserved(name) when is_binary(name) do
-    if name in @reserved_words, do: "`#{name}`", else: name
+    if name in @reserved_words or pure_operator_name?(name),
+      do: "`#{name}`",
+      else: name
   end
 
   defp quote_if_reserved(name), do: name
+
+  # A function named by an operator lexeme (`==`, `<`, `!=`, `<=`, `>=`, `>`, …)
+  # — legal via a backtick definition — lexes as an operator token when emitted
+  # bare, so it must be re-quoted to reparse as a name. Such a name is composed
+  # entirely of operator symbols: it contains no identifier characters. Ordinary
+  # identifiers and qualified paths (`Std.Bool.not`) contain alphanumerics and
+  # are left unquoted (qualified reserved-word tails round-trip on their own).
+  defp pure_operator_name?(name),
+    do: name != "" and not Regex.match?(~r/[A-Za-z0-9_]/, name)
 
   defp typed_params_to_string(params, depth, indent) do
     Enum.map_join(params, ", ", fn {:param, meta, name} ->

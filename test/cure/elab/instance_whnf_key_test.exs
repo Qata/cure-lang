@@ -19,7 +19,7 @@ defmodule Cure.Elab.InstanceWhnfKeyTest do
       use Std.Equatable
       typealias MyInt = Int
       implementation Equatable for MyInt
-        fn eq(a: MyInt, b: MyInt) -> Bool = a == b
+        fn `==`(a: MyInt, b: MyInt) -> Bool = a == b
     end
     """
 
@@ -34,7 +34,7 @@ defmodule Cure.Elab.InstanceWhnfKeyTest do
       use Std.Equatable
       type Color = Red | Green | Blue
       implementation Equatable for Color
-        fn eq(a: Color, b: Color) -> Bool = a == b
+        fn `==`(a: Color, b: Color) -> Bool = a == b
     end
     """
 
@@ -55,7 +55,7 @@ defmodule Cure.Elab.InstanceWhnfKeyTest do
       typealias MyInt = Int
       typealias MyInt2 = MyInt
       implementation Equatable for MyInt2
-        fn eq(a: MyInt2, b: MyInt2) -> Bool = a == b
+        fn `==`(a: MyInt2, b: MyInt2) -> Bool = a == b
     end
     """
 
@@ -73,7 +73,7 @@ defmodule Cure.Elab.InstanceWhnfKeyTest do
       use Std.Equatable
       typealias IntToInt = (Int) -> Int
       implementation Equatable for IntToInt
-        fn eq(a: IntToInt, b: IntToInt) -> Bool = a == b
+        fn `==`(a: IntToInt, b: IntToInt) -> Bool = a == b
     end
     """
 
