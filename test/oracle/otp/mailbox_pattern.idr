@@ -291,3 +291,97 @@ nc_gen (AStarN m1 m2 ae as) q = Refl
 
 nullable_complete : (pat : Pat) -> Accepts pat (MkMS 0 0 0) -> nullable pat = T
 nullable_complete pat acc = nc_gen acc Refl
+
+s_inj : {a, b : Nat} -> S a = S b -> a = b
+s_inj Refl = Refl
+
+cong3 : (f : x -> y -> z -> w) -> {a1,a2 : x} -> {b1,b2 : y} -> {c1,c2 : z} -> a1 = a2 -> b1 = b2 -> c1 = c2 -> f a1 b1 c1 = f a2 b2 c2
+cong3 f Refl Refl Refl = Refl
+
+plus_x_s1 : (a : Nat) -> a + (S Z) = S a
+plus_x_s1 a = trans (plus_n_s a Z) (cong S (plus_n_z a))
+
+data PSplit : Nat -> Nat -> Nat -> Type where
+  PSL : {a, b, n : Nat} -> (a2 : Nat) -> a = S a2 -> a2 + b = n -> PSplit a b n
+  PSR : {a, b, n : Nat} -> (b2 : Nat) -> b = S b2 -> a + b2 = n -> PSplit a b n
+
+plus_succ_split : (a, b, n : Nat) -> a + b = S n -> PSplit a b n
+plus_succ_split 0 b n e = PSR n e Refl
+plus_succ_split (S k) b n e = PSL k Refl (s_inj e)
+
+data Split : MS -> MS -> MS -> Tag -> Type where
+  SplitL : {m1, m2, m : MS} -> {t : Tag} -> (m1p : MS) -> m1 = msadd m1p (singleton t) -> m = msadd m1p m2 -> Split m1 m2 m t
+  SplitR : {m1, m2, m : MS} -> {t : Tag} -> (m2p : MS) -> m2 = msadd m2p (singleton t) -> m = msadd m1 m2p -> Split m1 m2 m t
+
+msadd_split : (m1, m2, m : MS) -> (t : Tag) -> msadd m1 m2 = msadd m (singleton t) -> Split m1 m2 m t
+msadd_split (MkMS a1 b1 c1) (MkMS a2 b2 c2) (MkMS am bm cm) TA e =
+  case plus_succ_split a1 a2 am (trans (cong msa e) (plus_x_s1 am)) of
+    PSL k ea en => SplitL (MkMS k b1 c1)
+      (cong3 MkMS (trans ea (sym (plus_x_s1 k))) (sym (plus_n_z b1)) (sym (plus_n_z c1)))
+      (cong3 MkMS (sym en) (sym (trans (cong msb e) (plus_n_z bm))) (sym (trans (cong msc e) (plus_n_z cm))))
+    PSR k eb en => SplitR (MkMS k b2 c2)
+      (cong3 MkMS (trans eb (sym (plus_x_s1 k))) (sym (plus_n_z b2)) (sym (plus_n_z c2)))
+      (cong3 MkMS (sym en) (sym (trans (cong msb e) (plus_n_z bm))) (sym (trans (cong msc e) (plus_n_z cm))))
+msadd_split (MkMS a1 b1 c1) (MkMS a2 b2 c2) (MkMS am bm cm) TB e =
+  case plus_succ_split b1 b2 bm (trans (cong msb e) (plus_x_s1 bm)) of
+    PSL k eb en => SplitL (MkMS a1 k c1)
+      (cong3 MkMS (sym (plus_n_z a1)) (trans eb (sym (plus_x_s1 k))) (sym (plus_n_z c1)))
+      (cong3 MkMS (sym (trans (cong msa e) (plus_n_z am))) (sym en) (sym (trans (cong msc e) (plus_n_z cm))))
+    PSR k eb en => SplitR (MkMS a2 k c2)
+      (cong3 MkMS (sym (plus_n_z a2)) (trans eb (sym (plus_x_s1 k))) (sym (plus_n_z c2)))
+      (cong3 MkMS (sym (trans (cong msa e) (plus_n_z am))) (sym en) (sym (trans (cong msc e) (plus_n_z cm))))
+msadd_split (MkMS a1 b1 c1) (MkMS a2 b2 c2) (MkMS am bm cm) TC e =
+  case plus_succ_split c1 c2 cm (trans (cong msc e) (plus_x_s1 cm)) of
+    PSL k ec en => SplitL (MkMS a1 b1 k)
+      (cong3 MkMS (sym (plus_n_z a1)) (sym (plus_n_z b1)) (trans ec (sym (plus_x_s1 k))))
+      (cong3 MkMS (sym (trans (cong msa e) (plus_n_z am))) (sym (trans (cong msb e) (plus_n_z bm))) (sym en))
+    PSR k ec en => SplitR (MkMS a2 b2 k)
+      (cong3 MkMS (sym (plus_n_z a2)) (sym (plus_n_z b2)) (trans ec (sym (plus_x_s1 k))))
+      (cong3 MkMS (sym (trans (cong msa e) (plus_n_z am))) (sym (trans (cong msb e) (plus_n_z bm))) (sym en))
+
+zero_is_succ : {0 g : Type} -> (n : Nat) -> Z = S n -> g
+zero_is_succ n Refl impossible
+
+ms_singleton_nonzero : {0 g : Type} -> (m : MS) -> (t : Tag) -> msadd m (singleton t) = MkMS 0 0 0 -> g
+ms_singleton_nonzero (MkMS a b c) TA e = zero_is_succ a (sym (trans (sym (plus_x_s1 a)) (cong msa e)))
+ms_singleton_nonzero (MkMS a b c) TB e = zero_is_succ b (sym (trans (sym (plus_x_s1 b)) (cong msb e)))
+ms_singleton_nonzero (MkMS a b c) TC e = zero_is_succ c (sym (trans (sym (plus_x_s1 c)) (cong msc e)))
+
+singleton_cancel : (m : MS) -> (t : Tag) -> singleton t = msadd m (singleton t) -> m = MkMS 0 0 0
+singleton_cancel (MkMS a b c) TA e = cong3 MkMS (sym (s_inj (trans (cong msa e) (plus_x_s1 a)))) (trans (sym (plus_n_z b)) (sym (cong msb e))) (trans (sym (plus_n_z c)) (sym (cong msc e)))
+singleton_cancel (MkMS a b c) TB e = cong3 MkMS (trans (sym (plus_n_z a)) (sym (cong msa e))) (sym (s_inj (trans (cong msb e) (plus_x_s1 b)))) (trans (sym (plus_n_z c)) (sym (cong msc e)))
+singleton_cancel (MkMS a b c) TC e = cong3 MkMS (trans (sym (plus_n_z a)) (sym (cong msa e))) (trans (sym (plus_n_z b)) (sym (cong msb e))) (sym (s_inj (trans (cong msc e) (plus_x_s1 c))))
+
+deriv_atom : (s, t : Tag) -> (m : MS) -> singleton s = msadd m (singleton t) -> Accepts (deriv (PAtom s) t) m
+deriv_atom TA TA m q = rewrite singleton_cancel m TA q in AOne
+deriv_atom TA TB (MkMS a b c) q = zero_is_succ b (trans (cong msb q) (plus_x_s1 b))
+deriv_atom TA TC (MkMS a b c) q = zero_is_succ c (trans (cong msc q) (plus_x_s1 c))
+deriv_atom TB TA (MkMS a b c) q = zero_is_succ a (trans (cong msa q) (plus_x_s1 a))
+deriv_atom TB TB m q = rewrite singleton_cancel m TB q in AOne
+deriv_atom TB TC (MkMS a b c) q = zero_is_succ c (trans (cong msc q) (plus_x_s1 c))
+deriv_atom TC TA (MkMS a b c) q = zero_is_succ a (trans (cong msa q) (plus_x_s1 a))
+deriv_atom TC TB (MkMS a b c) q = zero_is_succ b (trans (cong msb q) (plus_x_s1 b))
+deriv_atom TC TC m q = rewrite singleton_cancel m TC q in AOne
+
+dc_gen : {pat : Pat} -> (t : Tag) -> (m : MS) -> {idx : MS} -> Accepts pat idx -> idx = msadd m (singleton t) -> Accepts (deriv pat t) m
+dc_gen t m AOne q = ms_singleton_nonzero m t (sym q)
+dc_gen t m AAtomA q = deriv_atom TA t m q
+dc_gen t m AAtomB q = deriv_atom TB t m q
+dc_gen t m AAtomC q = deriv_atom TC t m q
+dc_gen t m (APlusL ae) q = APlusL (dc_gen t m ae q)
+dc_gen t m (APlusR af) q = APlusR (dc_gen t m af q)
+dc_gen t m (ATimes m1 m2 ae af) q = case msadd_split m1 m2 m t q of
+  SplitL m1p e1 e2 => APlusL (rewrite e2 in ATimes m1p m2 (dc_gen t m1p ae e1) af)
+  SplitR m2p e1 e2 => APlusR (rewrite e2 in ATimes m1 m2p ae (dc_gen t m2p af e1))
+dc_gen t m AStar0 q = ms_singleton_nonzero m t (sym q)
+dc_gen t m (AStarN m1 m2 ae as) q = case msadd_split m1 m2 m t q of
+  SplitL m1p e1 e2 => rewrite e2 in ATimes m1p m2 (dc_gen t m1p ae e1) as
+  SplitR m2p e1 e2 => case dc_gen t m2p as e1 of
+    ATimes p1 p2 ad astar => rewrite (trans e2 (trans (sym (msadd_assoc m1 p1 p2)) (trans (cong (\x => msadd x p2) (msadd_comm m1 p1)) (msadd_assoc p1 m1 p2)))) in ATimes p1 (msadd m1 p2) ad (AStarN m1 p2 ae astar)
+
+deriv_complete : (pat : Pat) -> (t : Tag) -> (m : MS) -> Accepts pat (msadd m (singleton t)) -> Accepts (deriv pat t) m
+deriv_complete pat t m acc = dc_gen t m acc Refl
+
+matches_word_complete : (e : Pat) -> (w : Word) -> Accepts e (parikh w) -> nullable (dfold e w) = T
+matches_word_complete e WNil acc = nullable_complete e acc
+matches_word_complete e (WCons t rest) acc = matches_word_complete (deriv e t) rest (deriv_complete e t (parikh rest) (rewrite msadd_comm (parikh rest) (singleton t) in acc))
