@@ -37,3 +37,20 @@ mutual
 
 width_example : Sub (LBra (BCons TA LEnd (BCons TB LEnd BNil))) (LBra (BCons TA LEnd BNil))
 width_example = SubBra (BraSubCons TA LookHere SubEnd BraSubNil)
+
+data LookSub : Branches -> Tag -> Local -> Type where
+  MkLookSub : Lookup a t kSub -> Sub kSub kSup -> LookSub a t kSup
+
+brasub_lookup : BraSub a b -> Lookup b t kb -> LookSub a t kb
+brasub_lookup (BraSubCons t2 lk_a sb rst) LookHere = MkLookSub lk_a sb
+brasub_lookup (BraSubCons t2 lk_a sb rst) (LookThere lk2) = brasub_lookup rst lk2
+
+mutual
+  sub_trans : Sub a b -> Sub b c -> Sub a c
+  sub_trans SubEnd SubEnd = SubEnd
+  sub_trans (SubRecv t p) (SubRecv t q) = SubRecv t (sub_trans p q)
+  sub_trans (SubBra ab) (SubBra bc) = SubBra (brasub_trans ab bc)
+  brasub_trans : BraSub a b -> BraSub b c -> BraSub a c
+  brasub_trans ab BraSubNil = BraSubNil
+  brasub_trans ab (BraSubCons t lk_bc sub_bc rest_bc) = case brasub_lookup ab lk_bc of
+    MkLookSub lk_ac sub_ab => BraSubCons t lk_ac (sub_trans sub_ab sub_bc) (brasub_trans ab rest_bc)

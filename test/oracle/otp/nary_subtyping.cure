@@ -39,4 +39,31 @@ mod NarySub
   ## is usable where one offering only TA is expected (a process that handles more inputs is safe).
   fn width_example() -> Sub(LBra(BCons(TA(), LEnd(), BCons(TB(), LEnd(), BNil()))), LBra(BCons(TA(), LEnd(), BNil()))) =
     SubBra(BraSubCons(TA(), LookHere(), SubEnd(), BraSubNil()))
+
+  ## LookSub(a, t, kSup): the branch list a has a branch labelled t whose continuation is a SUBTYPE of
+  ## kSup — the existential produced when BraSub transports a lookup from the supertype into the subtype.
+  type LookSub indices (a: Branches, t: Tag, kSup: Local)
+    MkLookSub : Lookup(a, t, kSub) -> Sub(kSub, kSup) -> LookSub(a, t, kSup)
+  ## BraSub TRANSPORTS A LOOKUP: if a offers at least b (BraSub(a,b)) and b has a branch (t, kb), then
+  ## a has a matching branch whose continuation subtypes kb. The key to composing BraSub.
+  fn brasub_lookup({a: Branches}, {b: Branches}, {t: Tag}, {kb: Local}, ab: BraSub(a, b), lk: Lookup(b, t, kb)) -> LookSub(a, t, kb) = match lk
+    LookHere()      -> match ab
+      BraSubCons(t2, lk_a, sb, rst) -> MkLookSub(lk_a, sb)
+    LookThere(lk2)  -> match ab
+      BraSubCons(t2, lk_a, sb, rst) -> brasub_lookup(rst, lk2)
+  ## **N-ARY SUBTYPING IS TRANSITIVE** — Sub(a,b) + Sub(b,c) ⟹ Sub(a,c). With sub_refl this makes n-ary
+  ## session `<:` a PREORDER (the substitution-principle precondition). Mutually recursive with
+  ## brasub_trans, which composes the branch-list width relations by transporting each supertype label
+  ## down through the middle type (brasub_lookup) and chaining continuations (sub_trans).
+  fn sub_trans({a: Local}, {b: Local}, {c: Local}, s1: Sub(a, b), s2: Sub(b, c)) -> Sub(a, c) = match s1
+    SubEnd()      -> match s2
+      SubEnd() -> SubEnd()
+    SubRecv(t, p) -> match s2
+      SubRecv(t2, q) -> SubRecv(t, sub_trans(p, q))
+    SubBra(ab)    -> match s2
+      SubBra(bc) -> SubBra(brasub_trans(ab, bc))
+  fn brasub_trans({a: Branches}, {b: Branches}, {c: Branches}, ab: BraSub(a, b), bc: BraSub(b, c)) -> BraSub(a, c) = match bc
+    BraSubNil()                    -> BraSubNil()
+    BraSubCons(t, lk_bc, sub_bc, rest_bc) -> match brasub_lookup(ab, lk_bc)
+      MkLookSub(lk_ac, sub_ab) -> BraSubCons(t, lk_ac, sub_trans(sub_ab, sub_bc), brasub_trans(ab, rest_bc))
 end
