@@ -589,8 +589,10 @@ Add to `lib/cure/compiler/incremental.ex` (alongside `interface_hash/1`). Implem
   def compile_dir(source_paths, output_dir, opts \\ []) do
     File.mkdir_p!(output_dir)
 
+    # DepGraph.order/1 returns {:ok, ordered_paths, cycles}; treat a non-empty
+    # `cycles` as a hard error, reported the way the current task does.
     with {:ok, graph} <- DepGraph.scan(source_paths),
-         {:ok, ordered_paths, _cycles} <- {:ok_order, DepGraph.order(graph)} |> unwrap_order() do
+         {:ok, ordered_paths, []} <- DepGraph.order(graph) do
       path_to_module = for {m, p} <- graph.modules, into: %{}, do: {p, m}
       deps_map = DepGraph.order_deps_map(graph)
 
@@ -632,7 +634,7 @@ Add to `lib/cure/compiler/incremental.ex` (alongside `interface_hash/1`). Implem
   end
 ```
 
-Then implement the helpers referenced above (`unwrap_order/1` to reshape `DepGraph.order/1`'s `{:ok, paths, cycles}` and fail on cycles; `deleted_modules/2`; `rm_beam/2`; `process_module/3` doing the dirty predicate, the compile via `Cure.Compiler.compile_file/2`, the before/after beam-set diff, the interface-hash priming, and the manifest-entry construction; `finalize_summary/1` to sort lists). Follow the Design notes exactly — especially: dirty predicate in topo order, interface hash only for modules with dependents, no manifest entry on error, and beam-set-diff for the `beams` field. Compute `source_hash` as `:crypto.hash(:sha256, File.read!(path))`.
+Then implement the helpers referenced above (`deleted_modules/2`; `rm_beam/2`; `process_module/3` doing the dirty predicate, the compile via `Cure.Compiler.compile_file/2`, the before/after beam-set diff, the interface-hash priming, and the manifest-entry construction; `finalize_summary/1` to sort lists). Follow the Design notes exactly — especially: dirty predicate in topo order, interface hash only for modules with dependents, no manifest entry on error, and beam-set-diff for the `beams` field. Compute `source_hash` as `:crypto.hash(:sha256, File.read!(path))`.
 
 A module `M` "has a dependent" iff some other in-set module lists `M` in `deps_map`. Precompute a reverse map once.
 
