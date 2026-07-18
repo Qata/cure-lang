@@ -399,4 +399,29 @@ mod BranchMerge
     MkAllDefined : Equivalent(TB2, is_err(project(g, RA())), F()) -> Equivalent(TB2, is_err(project(g, RB())), F()) -> Equivalent(TB2, is_err(project(g, RC())), F()) -> AllDefined(g)
   fn all_projections_defined({g: Global}, w: WF(g)) -> AllDefined(g) =
     MkAllDefined(active_a_defined(w), active_b_defined(w), bystander_defined(w))
+
+  type GStep indices (g: Global, g2: Global)
+    GStMsg  : GStep(GMsg(from, to, t, k), k)
+    GStChoL : GStep(GCho(from, to, tL, gL, tR, gR), gL)
+    GStChoR : GStep(GCho(from, to, tL, gL, tR, gR), gR)
+  fn gstep_preserves({g: Global}, {g2: Global}, w: WF(g), st: GStep(g, g2)) -> WF(g2) = match st
+    GStMsg()  -> match w
+      WFAB(t, w2) -> w2
+      WFBA(t, w2) -> w2
+      WFBC(t, w2) -> w2
+      WFAC(t, w2) -> w2
+    GStChoL() -> match w
+      WFCho(tL, wL, tR, wR, mg) -> wL
+    GStChoR() -> match w
+      WFCho(tL, wL, tR, wR, mg) -> wR
+  type GRun indices (g: Global, g2: Global)
+    GRDone : GRun(g, g)
+    GRStep : GStep(g, gm) -> GRun(gm, g2) -> GRun(g, g2)
+  fn branch_terminates({g: Global}, w: WF(g)) -> GRun(g, GEnd()) = match w
+    WFEnd()                   -> GRDone()
+    WFAB(t, w2)               -> GRStep(GStMsg(), branch_terminates(w2))
+    WFBA(t, w2)               -> GRStep(GStMsg(), branch_terminates(w2))
+    WFBC(t, w2)               -> GRStep(GStMsg(), branch_terminates(w2))
+    WFAC(t, w2)               -> GRStep(GStMsg(), branch_terminates(w2))
+    WFCho(tL, wL, tR, wR, mg) -> GRStep(GStChoL(), branch_terminates(wL))
 end

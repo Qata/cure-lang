@@ -331,3 +331,28 @@ data AllDefined : Global -> Type where
 
 all_projections_defined : WF g -> AllDefined g
 all_projections_defined w = MkAllDefined (active_a_defined w) (active_b_defined w) (bystander_defined w)
+
+data GStep : Global -> Global -> Type where
+  GStMsg  : GStep (GMsg from to t k) k
+  GStChoL : GStep (GCho from to tL gL tR gR) gL
+  GStChoR : GStep (GCho from to tL gL tR gR) gR
+
+gstep_preserves : WF g -> GStep g g2 -> WF g2
+gstep_preserves (WFAB t w2) GStMsg = w2
+gstep_preserves (WFBA t w2) GStMsg = w2
+gstep_preserves (WFBC t w2) GStMsg = w2
+gstep_preserves (WFAC t w2) GStMsg = w2
+gstep_preserves (WFCho tL wL tR wR mg) GStChoL = wL
+gstep_preserves (WFCho tL wL tR wR mg) GStChoR = wR
+
+data GRun : Global -> Global -> Type where
+  GRDone : GRun g g
+  GRStep : GStep g gm -> GRun gm g2 -> GRun g g2
+
+branch_terminates : WF g -> GRun g GEnd
+branch_terminates WFEnd = GRDone
+branch_terminates (WFAB t w2) = GRStep GStMsg (branch_terminates w2)
+branch_terminates (WFBA t w2) = GRStep GStMsg (branch_terminates w2)
+branch_terminates (WFBC t w2) = GRStep GStMsg (branch_terminates w2)
+branch_terminates (WFAC t w2) = GRStep GStMsg (branch_terminates w2)
+branch_terminates (WFCho tL wL tR wR mg) = GRStep GStChoL (branch_terminates wL)
