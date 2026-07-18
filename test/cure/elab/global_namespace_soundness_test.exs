@@ -169,9 +169,13 @@ defmodule Cure.Elab.GlobalNamespaceSoundnessTest do
 
     test "bare call of a doubly-imported name is an ambiguity error, not last-merge-wins" do
       # TODAY: silently binds the last-merged helper -> {:ok, _}
-      # AFTER: {:error, {:ambiguous_name, :helper, mods}} with both modules listed
-      assert {:error, {:ambiguous_name, :helper, mods}} = check(fixture_bare_call())
-      assert Enum.sort(mods) == ["Std.CollA", "Std.CollB"]
+      # AFTER: an APPLIED bare call gathers both providers as an overload set and
+      # prunes by argument type. Both `helper(x: Nat)` type-match the `Nat`
+      # argument, so neither wins: {:ambiguous_overload, :helper, owners} with both
+      # modules listed. (The un-applied VALUE reference below has no arguments to
+      # prune, so it stays the pre-resolution {:ambiguous_name}.)
+      assert {:error, {:ambiguous_overload, :helper, owners}} = check(fixture_bare_call())
+      assert Enum.sort(owners) == ["Std.CollA", "Std.CollB"]
     end
 
     test "bare VALUE reference (higher-order arg) raises the same ambiguity error" do
