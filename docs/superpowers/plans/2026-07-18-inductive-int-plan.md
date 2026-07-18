@@ -6,6 +6,8 @@
 
 **Architecture:** Mirror the in-tree `Nat` machinery exactly. `Int` becomes a `@builtin(:int)` inductive family (via `seed_builtin`, not `seed_primitives`); the existing compact `{:int_lit, n}` Core node becomes its canonical value form (as `{:nat_lit}` is for `Nat`); a new audited `int_to_ctor` fold bridges literal↔constructor at every ι/conversion site; and new name-keyed codegen lowers the two 1-ary constructors. The single TCB addition is the fold, Lean-aligned (`Int.ofNat`/`negSucc` are `@[extern]`-backed) and sound only because BEAM integers are arbitrary-precision.
 
+**Naming note (spec cross-reference):** the spec (§3.2, §4) labels this fold `reduce_int`. This plan names it `int_to_ctor`/`int_to_ctor_if` instead — a deliberate choice, not a drift — because it mirrors the *actual* in-tree precedent function names exactly (`Eval.nat_to_ctor/1` / `nat_to_ctor_if/1`, `lib/cure/core/eval.ex:244-252`), which the spec's own §3.2 prose cites when explaining the precedent. Wherever the spec's TCB analysis (§4) says "the `reduce_int` fold," read it as this plan's `int_to_ctor`/`int_to_ctor_if`.
+
 **Tech Stack:** Elixir (the Cure compiler under `lib/cure/`), Cure stdlib (`lib/std/`), the differential oracle (`mix cure.oracle otp` against Idris2 at `~/Develop/Idris2/build/exec/idris2`), ExUnit kernel/soundness suite.
 
 ## Global Constraints
@@ -19,6 +21,7 @@
 - **Elaborator hard-stop principle:** if anything seems to need a new kernel *rule* beyond the `int_to_ctor` fold, STOP and Halt — do not invent a rule.
 - **Steer:** work in `lib/cure/core/*` and `lib/cure/elab/*`. IGNORE `lib/cure/compiler/*` and `lib/cure/types/*` (non-dependent decoys).
 - **The `{:int_lit, n}` node is retained and load-bearing** — it is the compact canonical form. Do NOT remove it. Only `{:int_type}`/`{:vint_type}` (the primitive *type* nodes) are candidates for retirement/repoint (Task 4).
+- **Tests are immutable once written — for every task, not just Task 5.** This covers the ExUnit red tests (`int_family_test.exs`, `int_fold_test.exs`, `int_codegen_test.exs`, `int_surface_test.exs`), the differential oracle probes (Tasks 5–8), and the proof-compile checks (Tasks 5–8) alike. Reach green by changing implementation or proof code ONLY — never by deleting, skipping, loosening an assertion, or rewriting a test/probe to match whatever the code currently does. The sole exception is a test that is itself provably wrong (asserts the wrong expected behavior); that requires stating why the test is wrong, in the plan-execution log, before touching it. (Task 5 restates this for the `negate_involutive` proof specifically — that is a reminder, not the only place it applies.)
 
 ---
 
@@ -61,9 +64,9 @@ NegativeSuccessor({:nat_lit, k})  ⇓  {:int_lit, -(k+1)}     # -1, -2, …
 - **`lib/cure/core/kernel.ex`** — `unify_one` `{:int_lit}`↔`{:ctor}` bridge (`int_lit_ctor/1`); (Task 4) repoint `infer({:int_lit})` typing and `rigid_index?`.
 - **`lib/cure/elab/emit.ex`** — new name-keyed `int_ctor?` + ctor lowering + `int_branch_clause`.
 - **`lib/std/int.cure`** — flip `@builtin(:int) primitive Int` → `type Int = FromNat(Nat) | NegativeSuccessor(Nat)`.
-- **Repoint cohort (Task 4, `{:int_type}`/`{:vint_type}` special-cases):** `kernel.ex`, `meta_check.ex`, `printer.ex`, `quote.ex`, `serialize.ex`, `term.ex`, `value.ex`, `declarations.ex`, `implementation.ex`, `resolve.ex`, `unify.ex`, `union.ex`, `validator.ex`, `certificate.ex`, `subst.ex`, `guard_lint.ex`, `totality_closure.ex`, `elaborator.ex` (re-grep — the live count was 23 files).
+- **Repoint cohort (Task 4, `{:int_type}`/`{:vint_type}` special-cases):** `kernel.ex`, `eval.ex`, `conv.ex`, `meta_check.ex`, `printer.ex`, `quote.ex`, `serialize.ex`, `term.ex`, `value.ex`, `declarations.ex`, `implementation.ex`, `resolve.ex`, `unify.ex`, `union.ex`, `subst.ex`, `guard_lint.ex`, `elaborator.ex` (confirmed live hits via `grep -rn "int_type\|vint_type" lib/cure/core lib/cure/elab | grep -v int_lit`: 18 files total in `lib/cure/core`+`lib/cure/elab`, including `builtins.ex` handled separately above via its own dedicated repoint-contract items — `validator.ex`, `certificate.ex`, and `totality_closure.ex` currently have ZERO hits, so they are dropped from this list; re-grep at Task-4 time regardless, since the tree will have moved). **Note:** `eval.ex:70` (`eval({:int_type},_env) -> {:vint_type}`) and `conv.ex:90,255` (`conv_struct?({:vint_type},{:vint_type},...)`, `same_value_no_delta?({:vint_type},{:vint_type},...)`) are genuine repoint targets distinct from Task 2's work in those same files — Task 2 only adds the `int_to_ctor` peel/defeq machinery, it does not retire these `{:int_type}`/`{:vint_type}` type-node clauses. Do not assume Task 2 already covered them.
 - **`lib/std/proof_int_math.cure`, `lib/std/nat.cure`** — doc-comment refresh only (Task 5, §6).
-- **Tests:** `test/core/int_family_test.exs`, `test/core/int_fold_test.exs`, `test/elab/int_codegen_test.exs`, `test/oracle/otp/int_inductive.{cure,idr}`, plus Phase-2 probes.
+- **Tests:** `test/cure/core/int_family_test.exs`, `test/cure/core/int_fold_test.exs`, `test/cure/elab/int_codegen_test.exs`, `test/oracle/otp/int_inductive.{cure,idr}`, plus Phase-2 probes.
 
 ---
 
@@ -75,7 +78,7 @@ NegativeSuccessor({:nat_lit, k})  ⇓  {:int_lit, -(k+1)}     # -1, -2, …
 
 **Files:**
 - Modify: `lib/cure/core/builtins.ex` (`@schemas`, add `int_family`/`int_ctors`, `seed_builtin(:int)` clause, wire into `seed/2`)
-- Test: `test/core/int_family_test.exs`
+- Test: `test/cure/core/int_family_test.exs`
 
 **Interfaces:**
 - Produces: `Cure.Core.Inductive.builtin(env, :int)` returns the `Std.Int#Int` family id after `Builtins.seed/2`; its constructors are `FromNat(Nat)` and `NegativeSuccessor(Nat)`, validated by `Builtins.validate!(env, :int, fid)`.
@@ -86,7 +89,7 @@ NegativeSuccessor({:nat_lit, k})  ⇓  {:int_lit, -(k+1)}     # -1, -2, …
 - [ ] **Step 1: Write the failing test**
 
 ```elixir
-# test/core/int_family_test.exs
+# test/cure/core/int_family_test.exs
 defmodule Cure.Core.IntFamilyTest do
   use ExUnit.Case, async: true
   alias Cure.Core.{Builtins, Env, Inductive}
@@ -110,7 +113,7 @@ end
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `mix test test/core/int_family_test.exs`
+Run: `mix test test/cure/core/int_family_test.exs`
 Expected: FAIL — `Inductive.builtin(env, :int)` returns `nil` (no `:int` schema/seed yet).
 
 - [ ] **Step 3: Add the schema**
@@ -179,7 +182,7 @@ Then in `seed/2` (line 128), add `|> seed_builtin(:int, exclude)` **after** `see
 
 - [ ] **Step 6: Run the new test to verify it passes**
 
-Run: `mix test test/core/int_family_test.exs`
+Run: `mix test test/cure/core/int_family_test.exs`
 Expected: PASS.
 
 - [ ] **Step 7: Run the full suite (back-compat gate)**
@@ -190,7 +193,7 @@ Expected: PASS, byte-identical to baseline. The family is registered but unused 
 - [ ] **Step 8: Commit**
 
 ```bash
-git add lib/cure/core/builtins.ex test/core/int_family_test.exs
+git add lib/cure/core/builtins.ex test/cure/core/int_family_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "feat(core): register dormant Int inductive family (FromNat/NegativeSuccessor)"
 ```
@@ -204,7 +207,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 - Modify: `lib/cure/core/normalise.ex` (route both `ncase` ι-arms)
 - Modify: `lib/cure/core/conv.ex` (literal-vs-ctor conversion)
 - Modify: `lib/cure/core/kernel.ex` (`unify_one` `{:int_lit}`↔`{:ctor}` bridge via `int_lit_ctor/1`)
-- Test: `test/core/int_fold_test.exs`
+- Test: `test/cure/core/int_fold_test.exs`
 
 **Interfaces:**
 - Consumes: the `Int` family from Task 1; the existing `{:vint, n}` compact value (`eval.ex:71`) and `{:int_lit, n}` term.
@@ -215,7 +218,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 - [ ] **Step 1: Write the failing test**
 
 ```elixir
-# test/core/int_fold_test.exs
+# test/cure/core/int_fold_test.exs
 defmodule Cure.Core.IntFoldTest do
   use ExUnit.Case, async: true
   alias Cure.Core.Eval
@@ -250,7 +253,7 @@ end
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `mix test test/core/int_fold_test.exs`
+Run: `mix test test/cure/core/int_fold_test.exs`
 Expected: FAIL — `Eval.int_to_ctor_if/1` is undefined.
 
 - [ ] **Step 3: Add `int_to_ctor`/`int_to_ctor_if` to `eval.ex`**
@@ -290,7 +293,13 @@ In `lib/cure/core/eval.ex`, the `:case` handler (line 119) currently does `case 
 
 - [ ] **Step 5: Route `Normalise`'s two `ncase` ι-arms**
 
-In `lib/cure/core/normalise.ex`, find the two sites that peel a compact scrutinee to constructor form via `Eval.nat_to_ctor_if` (grep `nat_to_ctor_if` in that file — spec cites the two `ncase` arms). At each, wrap the same way so a `{:vint}` whnf scrutinee peels: `Eval.int_to_ctor_if(Eval.nat_to_ctor_if(<forced_scrutinee>))`. Match the existing call spelling exactly (module-qualified `Eval.` as used there). Do NOT add a new arm — reuse the existing `{:vctor, …}` handling downstream.
+In `lib/cure/core/normalise.ex`, find the two sites (`normalise.ex:279` and `normalise.ex:321`) that peel a compact scrutinee to constructor form. **Both currently read `Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts)))` — a TWO-fold compose (Nat then Bounded), not just `nat_to_ctor_if` alone.** Wrap that existing expression with the Int peel on the OUTSIDE, preserving both existing folds — the correct three-way compose is:
+
+```elixir
+case Eval.int_to_ctor_if(Eval.bounded_to_ctor_if(Eval.nat_to_ctor_if(whnf_value({:vneutral, scrut}, sig, opts)))) do
+```
+
+**Do NOT drop `Eval.bounded_to_ctor_if` from this expression** — `int_to_ctor_if`/`bounded_to_ctor_if`/`nat_to_ctor_if` are no-ops outside their own value shape (`{:vint}`/`{:vbounded}`/`{:vnat}` respectively), so composing all three is safe and order-independent, but omitting `bounded_to_ctor_if` would silently stop peeling `{:vbounded}` scrutinees in both `ncase` arms — a real regression (breaks `case`-on-`Bounded`/`Char` reduction through `Normalise`, e.g. a stuck global unfold with a Bounded/Char scrutinee), not an additive change. Do NOT add a new `case` arm — reuse the existing `{:vctor, …}` handling downstream.
 
 - [ ] **Step 6: Route `Conv` (the soundness-critical defeq site)**
 
@@ -322,7 +331,7 @@ Place these clauses so they do not shadow the existing catch-all `unify_one` cla
 
 - [ ] **Step 8: Run the new test to verify it passes**
 
-Run: `mix test test/core/int_fold_test.exs`
+Run: `mix test test/cure/core/int_fold_test.exs`
 Expected: PASS.
 
 - [ ] **Step 9: Run the full suite (back-compat gate)**
@@ -334,7 +343,7 @@ Expected: PASS, byte-identical. The fold/bridge fire only on `FromNat`/`Negative
 
 ```bash
 git add lib/cure/core/eval.ex lib/cure/core/normalise.ex lib/cure/core/conv.ex \
-        lib/cure/core/kernel.ex test/core/int_fold_test.exs
+        lib/cure/core/kernel.ex test/cure/core/int_fold_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "feat(core): audited int_to_ctor fold + literal↔ctor conversion bridge"
 ```
@@ -345,7 +354,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 **Files:**
 - Modify: `lib/cure/elab/emit.ex` (add `int_ctor?`, ctor-lowering branch, `int_branch_clause`; wire into `lower({:ctor})` and `branch_clause`)
-- Test: `test/elab/int_codegen_test.exs`
+- Test: `test/cure/elab/int_codegen_test.exs`
 
 **Interfaces:**
 - Consumes: the `Int` family (Task 1); `Inductive.builtin(env, :int)`, `Inductive.ctor_family(env, name)` (same registry lookups `nat_ctor?` uses).
@@ -356,7 +365,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 - [ ] **Step 1: Write the failing test**
 
 ```elixir
-# test/elab/int_codegen_test.exs
+# test/cure/elab/int_codegen_test.exs
 defmodule Cure.Elab.IntCodegenTest do
   use ExUnit.Case, async: true
 
@@ -406,7 +415,7 @@ end
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `mix test test/elab/int_codegen_test.exs`
+Run: `mix test test/cure/elab/int_codegen_test.exs`
 Expected: FAIL — open `FromNat(n)` hits the generic tagged-tuple `true ->` arm of `lower({:ctor})` (emit.ex:511) and emits `{FromNat, N}` instead of a native integer; `magnitude` fails to match.
 
 - [ ] **Step 3: Add the name-keyed `int_ctor?` predicate**
@@ -485,7 +494,7 @@ Then wire it into `branch_clause/3` (line 904), before the `true ->` generic arm
 
 - [ ] **Step 6: Run the new test to verify it passes**
 
-Run: `mix test test/elab/int_codegen_test.exs`
+Run: `mix test test/cure/elab/int_codegen_test.exs`
 Expected: PASS — `to_int(2)` yields `2`; `magnitude(-3)` yields `3`.
 
 - [ ] **Step 7: Run the full suite (back-compat gate)**
@@ -496,7 +505,7 @@ Expected: PASS, byte-identical. New codegen fires only on `FromNat`/`NegativeSuc
 - [ ] **Step 8: Commit**
 
 ```bash
-git add lib/cure/elab/emit.ex test/elab/int_codegen_test.exs
+git add lib/cure/elab/emit.ex test/cure/elab/int_codegen_test.exs
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "feat(emit): name-keyed Int ctor lowering + sign-guarded case-on-Int"
 ```
@@ -509,8 +518,8 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 - Modify: `lib/std/int.cure` (flip `primitive` → inductive family)
 - Modify: `lib/cure/core/builtins.ex` (remove `Int` from `seed_primitives`; repoint `seed_ops` int domain to the Int data type)
 - Modify: `lib/cure/core/kernel.ex` (`infer({:int_lit})` typing → Int data type; `infer({:int_type})`, `rigid_index?` — see repoint contract)
-- Modify the **repoint cohort** (re-grep first): `meta_check.ex`, `printer.ex`, `quote.ex`, `serialize.ex`, `term.ex`, `value.ex`, `declarations.ex`, `implementation.ex`, `resolve.ex`, `unify.ex`, `union.ex`, `validator.ex`, `certificate.ex`, `subst.ex`, `guard_lint.ex`, `totality_closure.ex`, `elaborator.ex`
-- Test: reuses the full suite as the gate; add `test/core/int_surface_test.exs`
+- Modify the **repoint cohort** (re-grep first — do not trust this static list): `eval.ex` (line 70: `eval({:int_type},_env) -> {:vint_type}`), `conv.ex` (lines 90, 255: `conv_struct?`/`same_value_no_delta?` on `{:vint_type}` — a distinct site from Task 2's `int_to_ctor` defeq additions in this same file), `meta_check.ex`, `printer.ex`, `quote.ex`, `serialize.ex`, `term.ex`, `value.ex`, `declarations.ex`, `implementation.ex`, `resolve.ex`, `unify.ex`, `union.ex`, `subst.ex`, `guard_lint.ex`, `elaborator.ex` (confirmed live hits as of plan-hardening time; `validator.ex`, `certificate.ex`, `totality_closure.ex` had zero `int_type`/`vint_type` hits and were dropped — re-grep may still turn up new hits if those files changed since)
+- Test: reuses the full suite as the gate; add `test/cure/core/int_surface_test.exs`
 
 **Interfaces:**
 - Consumes: everything from Tasks 1–3 (family, fold, codegen all in place).
@@ -520,7 +529,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 **Repoint contract (apply to every `{:int_type}`/`{:vint_type}` site):** `Nat` has **no** `{:nat_type}` node — its type is just `{:data, nat_fid, [], []}`. Mirror that. For each site currently special-casing `{:int_type}`/`{:vint_type}`:
 1. **Literal typing** (`kernel.ex:63`, `infer({:int_lit,n})` → `{:vint_type}`): change to return the Int data-type value, via a new `int_type_value(sig)` helper mirroring `nat_type_value/1` (`kernel.ex:1691`). Add `int_type_value/1` right beside `nat_type_value/1`.
-2. **Type-of-`Int`** (`kernel.ex:62`, `infer({:int_type})` → `{:vtype,0}`; `infer_type_value_sort({:vint_type})` → `0`): once the surface no longer produces `{:int_type}`, these become dead. **Preferred (faithful, spec §3a(i)):** retire `{:int_type}`/`{:vint_type}` nodes — remove their `term?`/`shift`/`subst`/`to_external`/`from_external` clauses (`term.ex:81,131,177,260,350,400`), `value.ex:64,86`, `eval.ex:70`, and every special-case in the cohort, so `Int`'s only spelling is the data family. **Fallback (facade, spec §3a(ii)):** if retiring a given node's clause breaks a serialization/printer round-trip the back-compat gate flags, KEEP that node as an internal alias defeq to `{:data, int_fid, [], []}` at that seam and **record the fallback in a `# NOTE(int-facade):` comment + AUTOPILOT-STATE.md**. Per-site decision; a mixed outcome is acceptable if recorded.
+2. **Type-of-`Int`** (`kernel.ex:62`, `infer({:int_type})` → `{:vtype,0}`; `infer_type_value_sort({:vint_type})` → `0`): once the surface no longer produces `{:int_type}`, these become dead. **Preferred (faithful, spec §3a(i)):** retire `{:int_type}`/`{:vint_type}` nodes — remove their `term?`/`shift`/`subst`/`to_external`/`from_external` clauses (`term.ex:81,131,177,260,350,400`), `value.ex:63,86`, `eval.ex:70`, `conv.ex:90,255` (`conv_struct?`/`same_value_no_delta?`), and every special-case in the cohort, so `Int`'s only spelling is the data family. **Fallback (facade, spec §3a(ii)):** if retiring a given node's clause breaks a serialization/printer round-trip the back-compat gate flags, KEEP that node as an internal alias defeq to `{:data, int_fid, [], []}` at that seam and **record the fallback in a `# NOTE(int-facade):` comment + AUTOPILOT-STATE.md**. Per-site decision; a mixed outcome is acceptable if recorded.
 3. **`rigid_index?`** (`kernel.ex:1522,1527`): `{:int_type}` and `{:int_lit,_}` are rigid. Keep `{:int_lit,_}` rigid (still a canonical literal). If `{:int_type}` is retired, drop its clause; the data type is already rigid via the existing `{:data,…}` handling.
 4. **`seed_ops` int domain** (`builtins.ex:165`): the `@int_binops`/`@int_unops` domain is `{:int_type}`. Change it to the Int data-type value computed from the registry, mirroring how `bool_ty`/`bool_family_id/1` (line 188) snapshots the Bool family. Add an `int_ty`/`int_family_id/1` helper and pass `int_ty` as the `dom` to `seed_binops(@int_binops, int_ty, bool_ty)` and `seed_unops(@int_unops, int_ty)`. **Ordering:** `seed_ops` runs after `seed_builtin(:int)` in `seed/2`, so the family is registered when `int_family_id` snapshots it — verify. Guard the same `nil`-under-`exclude` scenario `bool_family_id/1` guards (a module declaring its own `Int`): fall back to the owned family name.
 5. **Remove from `seed_primitives`** (`builtins.ex:146`): delete the `|> Env.put_primitive("Int", {:int_type})` line. `Float`/`Binary`/`Atom` stay.
@@ -534,7 +543,7 @@ Record every hit. This is the exhaustive worklist for the repoint. (`{:int_lit}`
 - [ ] **Step 2: Write the failing surface test**
 
 ```elixir
-# test/core/int_surface_test.exs
+# test/cure/core/int_surface_test.exs
 defmodule Cure.Core.IntSurfaceTest do
   use ExUnit.Case, async: true
 
@@ -570,7 +579,7 @@ end
 
 - [ ] **Step 3: Run it to verify it fails**
 
-Run: `mix test test/core/int_surface_test.exs`
+Run: `mix test test/cure/core/int_surface_test.exs`
 Expected: the `match`-on-`Int` case FAILS — `Int` still resolves to the primitive `{:int_type}`, which has no constructors, so `match i` is rejected (non-inductive / no coverage). The arithmetic case may already pass.
 
 - [ ] **Step 4: Flip `lib/std/int.cure`**
@@ -607,7 +616,7 @@ Work the Step-1 worklist top to bottom. Do items in the order: (a) `builtins.ex`
 
 - [ ] **Step 6: Run the surface test to verify it passes**
 
-Run: `mix test test/core/int_surface_test.exs`
+Run: `mix test test/cure/core/int_surface_test.exs`
 Expected: PASS — both cases.
 
 - [ ] **Step 7: Run the FULL suite — the byte-identical back-compat gate**
@@ -627,12 +636,13 @@ Run: `mix cure.oracle otp && mix cure.oracle.replay` (use the repo's canonical r
 ```bash
 git add lib/std/int.cure lib/cure/core/builtins.ex lib/cure/core/kernel.ex \
         lib/cure/core/term.ex lib/cure/core/value.ex lib/cure/core/eval.ex \
+        lib/cure/core/conv.ex \
         lib/cure/core/meta_check.ex lib/cure/core/printer.ex lib/cure/core/quote.ex \
-        lib/cure/core/serialize.ex lib/cure/core/validator.ex lib/cure/core/certificate.ex \
+        lib/cure/core/serialize.ex \
         lib/cure/elab/declarations.ex lib/cure/elab/implementation.ex lib/cure/elab/resolve.ex \
         lib/cure/elab/unify.ex lib/cure/elab/union.ex lib/cure/elab/subst.ex \
-        lib/cure/elab/guard_lint.ex lib/cure/elab/totality_closure.ex lib/cure/elab/elaborator.ex \
-        test/core/int_surface_test.exs
+        lib/cure/elab/guard_lint.ex lib/cure/elab/elaborator.ex \
+        test/cure/core/int_surface_test.exs
 # Stage only the cohort files you actually touched; drop any that had no int_type hit.
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "feat(core): Int is now an inductive @builtin(:int) family (surface flip)"
