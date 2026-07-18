@@ -72,4 +72,22 @@ defmodule Cure.Stdlib.ProofMathTest do
 
     assert {:ok, _environment} = Program.elaborate(source)
   end
+
+  test "boolean-valued Nat comparisons reduce correctly" do
+    source = """
+    mod NatComparisonClient
+      use Std.Bool
+      use Std.Nat
+      use Std.Proof.IntMath
+      use Std.Proof.Math
+
+      # Confirmed() only type-checks if each comparison reduces to True().
+      fn lte_true() -> IsTrue(natural_is_less_than_or_equal(S(Z()), S(S(Z())))) = Confirmed()
+      fn lt_true() -> IsTrue(natural_is_less_than(S(Z()), S(S(Z())))) = Confirmed()
+      fn positive_true() -> IsTrue(natural_is_positive(S(Z()))) = Confirmed()
+    end
+    """
+
+    assert {:ok, _environment} = Program.elaborate(source)
+  end
 end

@@ -7,8 +7,10 @@ mod Std.Proof.Math
   ## checked by the kernel. Future refinement automation may search for these
   ## theorems, but it does not get to bypass them.
 
+  use Std.Bool
   use Std.Decision
   use Std.Nat
+  use Std.Proof.IntMath
 
   ## Evidence that a natural number is strictly positive.
   type IsPositive indices (value: Nat)
@@ -146,5 +148,21 @@ mod Std.Proof.Math
   fn adding_the_same_number_preserves_less_than(addend: Nat, {left: Nat}, {right: Nat}, proof: IsLessThan(left, right)) -> IsLessThan(plus(addend, left), plus(addend, right)) = match addend
     Z() -> proof
     S(predecessor) -> SuccessorsAreLessThan(adding_the_same_number_preserves_less_than(predecessor, proof))
+
+  ## Boolean-valued "less than or equal", structural on both operands.
+  fn natural_is_less_than_or_equal(left: Nat, right: Nat) -> Bool = match left
+    Z() -> True()
+    S(left_predecessor) -> match right
+      Z() -> False()
+      S(right_predecessor) -> natural_is_less_than_or_equal(left_predecessor, right_predecessor)
+
+  ## Boolean-valued strict "less than".
+  fn natural_is_less_than(left: Nat, right: Nat) -> Bool =
+    natural_is_less_than_or_equal(S(left), right)
+
+  ## Boolean-valued positivity.
+  fn natural_is_positive(value: Nat) -> Bool = match value
+    Z() -> False()
+    S(predecessor) -> True()
 
 end
