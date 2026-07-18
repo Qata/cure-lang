@@ -102,6 +102,17 @@ defmodule Cure.Core.Certificate do
     end
   end
 
+  @doc """
+  The set of names to certify when `name`'s definition certifies total: its whole
+  mutual SCC. Callers MUST have already established `terminating?(name, body, env)`
+  — for a genuine group that ran `mutual_group_total?/4` over exactly this SCC, so
+  every member is proven total *together* (Idris/Agda/Lean certify a mutual block
+  as a unit). A non-mutual def yields the singleton `{name}` (unchanged behaviour).
+  This computes membership only, never totality.
+  """
+  @spec total_group(atom(), Cure.Core.Term.t(), Env.t()) :: MapSet.t(atom())
+  def total_group(name, body, env), do: mutual_group(name, body, env)
+
   defp terminating_ready?(name, body, env) do
     group = mutual_group(name, body, env)
 
