@@ -53,4 +53,15 @@ defmodule Cure.Compiler.ArgumentLabelsParseTest do
     {:function_call, meta, _args} = parse!("h(a, b)")
     assert Keyword.get(meta, :arg_labels) == nil
   end
+
+  test "a qualified constructor pattern's typed field binder is not mistaken for a label" do
+    # `is_pascal_case?/1` gates label-grabbing off on a constructor head so
+    # `Ctor(n: T, …)` stays a typed pattern. It must recognise a QUALIFIED
+    # constructor head (`Mod.Ctor(...)`) the same way a bare one is recognised —
+    # otherwise `n: Std.Nat` here is swallowed as a label (dropping the `n`
+    # binder entirely) instead of parsing as `{:typed_pattern, _, ["n", ...]}`.
+    {:function_call, meta, args} = parse!("Std.Nat.S(n: Std.Nat)")
+    refute Keyword.has_key?(meta, :arg_labels)
+    assert [{:typed_pattern, _, ["n", {:attribute_access, _, _}]}] = args
+  end
 end

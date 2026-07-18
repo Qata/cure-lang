@@ -2952,6 +2952,21 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp is_pascal_case?({:variable, _, <<first, _rest::binary>>}) when first in ?A..?Z, do: true
+
+  # A qualified head (`Mod.Ctor`, `Std.Nat.S`) is PascalCase by its FINAL
+  # segment — the constructor/type name a caller actually writes — regardless of
+  # the leading module path's case. Without this, `Std.Nat.S(n: Std.Nat)` (a
+  # qualified constructor pattern with a typed field binder) is mistaken for a
+  # labelled function call: `n:` is swallowed as an argument label instead of
+  # reaching `maybe_wrap_as/2` to parse as `{:typed_pattern, _, ["n", ...]}`,
+  # silently dropping the `n` binder.
+  defp is_pascal_case?({:attribute_access, meta, _}) do
+    case Keyword.get(meta, :attribute) do
+      <<first, _rest::binary>> when first in ?A..?Z -> true
+      _ -> false
+    end
+  end
+
   defp is_pascal_case?(_), do: false
 
   # -- Collections -----------------------------------------------------------
