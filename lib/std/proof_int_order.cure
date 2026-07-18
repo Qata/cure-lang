@@ -22,6 +22,80 @@ mod Std.Proof.IntOrder
   ## by the structural `Nat`-order family in `Std.Proof.Math`. The Boolean tests
   ## `le_int` / `lt_int` are total functions routed through `Nat`, and each law
   ## is discharged by an ordinary Boolean lemma plus case analysis.
+  ##
+  ## ── Public kit ───────────────────────────────────────────────────────────
+  ## The complete exported surface of this module, grouped by role. Boolean
+  ## tests and arithmetic are total functions; the two families are the
+  ## proof-carrying order relations; the rest are the lemmas over them.
+  ##
+  ## Total Boolean tests & integer/nat arithmetic:
+  ##   le_nat(left: Nat, right: Nat) -> Bool
+  ##   lt_nat(left: Nat, right: Nat) -> Bool
+  ##   le_int(left: Int, right: Int) -> Bool
+  ##   lt_int(left: Int, right: Int) -> Bool
+  ##   succ_int(i: Int) -> Int
+  ##   pred_int(i: Int) -> Int
+  ##   add_nat_succ(count: Nat, x: Int) -> Int
+  ##   add_nat_pred(count: Nat, x: Int) -> Int
+  ##   add_int(addend: Int, x: Int) -> Int
+  ##   multiply(left: Nat, right: Nat) -> Nat   ## local Std.Proof.Math.multiply mirror
+  ##
+  ## Proof-carrying order families (reflected form):
+  ##   type IsLessThanOrEqual indices (left: Int, right: Int)
+  ##     AtMost : IsTrue(le_int(left, right)) -> IsLessThanOrEqual(left, right)
+  ##   type IsLessThan indices (left: Int, right: Int)
+  ##     StrictlyBelow : IsTrue(lt_int(left, right)) -> IsLessThan(left, right)
+  ##
+  ## Ex falso:
+  ##   absurd({a: Type}, void: Empty) -> a
+  ##
+  ## Reflexivity:
+  ##   le_nat_is_reflexive(value: Nat) -> IsTrue(le_nat(value, value))
+  ##   le_int_from_nat_is_reflexive(n: Nat) -> IsTrue(le_int(FromNat(n), FromNat(n)))
+  ##   le_int_neg_succ_is_reflexive(k: Nat) -> IsTrue(le_int(NegativeSuccessor(k), NegativeSuccessor(k)))
+  ##   is_less_than_or_equal_is_reflexive(value: Int) -> IsLessThanOrEqual(value, value)
+  ##
+  ## Transitivity:
+  ##   le_nat_transitive(a: Nat, b: Nat, c: Nat, a_le_b, b_le_c) -> IsTrue(le_nat(a, c))
+  ##   le_int_transitive(a: Int, b: Int, c: Int, a_le_b, b_le_c) -> IsTrue(le_int(a, c))
+  ##   is_less_than_or_equal_is_transitive(left: Int, middle: Int, right: Int,
+  ##     left_to_middle, middle_to_right) -> IsLessThanOrEqual(left, right)
+  ##
+  ## Integer monotonicity:
+  ##   succ_int_is_monotone(a: Int, b: Int, a_le_b) -> IsTrue(le_int(succ_int(a), succ_int(b)))
+  ##   pred_int_is_monotone(a: Int, b: Int, a_le_b) -> IsTrue(le_int(pred_int(a), pred_int(b)))
+  ##   add_nat_succ_is_monotone(count: Nat, a: Int, b: Int, a_le_b)
+  ##     -> IsTrue(le_int(add_nat_succ(count, a), add_nat_succ(count, b)))
+  ##   add_nat_pred_is_monotone(count: Nat, a: Int, b: Int, a_le_b)
+  ##     -> IsTrue(le_int(add_nat_pred(count, a), add_nat_pred(count, b)))
+  ##   add_int_is_monotone(addend: Int, a: Int, b: Int, a_le_b)
+  ##     -> IsTrue(le_int(add_int(addend, a), add_int(addend, b)))
+  ##   adding_the_same_number_preserves_less_than_or_equal(addend: Int, left: Int, right: Int,
+  ##     proof) -> IsLessThanOrEqual(add_int(addend, left), add_int(addend, right))
+  ##
+  ## Refutation & decision:
+  ##   at_most_is_refuted_by_boolean_refuter({left}, {right},
+  ##     refuter: (IsTrue(le_int(left, right))) -> Empty, proof) -> Empty
+  ##   strictly_below_is_refuted_by_boolean_refuter({left}, {right},
+  ##     refuter: (IsTrue(lt_int(left, right))) -> Empty, proof) -> Empty
+  ##   decide_is_less_than_or_equal(left: Int, right: Int) -> Decision(IsLessThanOrEqual(left, right))
+  ##   decide_is_less_than(left: Int, right: Int) -> Decision(IsLessThan(left, right))
+  ##
+  ## Sign lemmas & nonnegative-scaling monotonicity:
+  ##   zero_le_int_from_nat_evidence(n: Nat) -> IsTrue(le_int(FromNat(Z()), FromNat(n)))
+  ##   nonneg_of_from_nat(n: Nat) -> IsLessThanOrEqual(FromNat(Z()), FromNat(n))
+  ##   zero_is_not_at_most_negative_one(proof: IsLessThanOrEqual(FromNat(Z()), NegativeSuccessor(Z()))) -> Empty
+  ##   le_nat_weaken_right(smaller: Nat, larger: Nat, evidence) -> IsTrue(le_nat(smaller, S(larger)))
+  ##   le_nat_add_left_weakens(base: Nat, addend: Nat) -> IsTrue(le_nat(base, plus(addend, base)))
+  ##   le_nat_plus_is_monotone_left(a: Nat, b: Nat, y: Nat, ab) -> IsTrue(le_nat(plus(a, y), plus(b, y)))
+  ##   le_nat_plus_is_monotone_right(a: Nat, x: Nat, y: Nat, xy) -> IsTrue(le_nat(plus(a, x), plus(a, y)))
+  ##   le_nat_plus_is_monotone(a: Nat, b: Nat, x: Nat, y: Nat, ab, xy)
+  ##     -> IsTrue(le_nat(plus(a, x), plus(b, y)))
+  ##   le_nat_multiply_is_monotone(scalar: Nat, left: Nat, right: Nat, lr)
+  ##     -> IsTrue(le_nat(multiply(scalar, left), multiply(scalar, right)))
+  ##   from_nat_le_evidence(l: Nat, r: Nat, ev: IsTrue(le_nat(l, r))) -> IsTrue(le_int(FromNat(l), FromNat(r)))
+  ##   scaling_by_nonneg_preserves_less_than_or_equal(scalar: Nat, left: Nat, right: Nat, proof)
+  ##     -> IsLessThanOrEqual(FromNat(multiply(scalar, left)), FromNat(multiply(scalar, right)))
 
   use Std.Bool
   use Std.Nat
