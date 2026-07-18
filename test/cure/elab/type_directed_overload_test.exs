@@ -114,6 +114,22 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     assert match?({:no_matching_overload, :plus, _}, unwrap_inner(err))
   end
 
+  # Task 7 — inertness. A module with no same-name group must be untouched by the
+  # overload machinery: single-provider keys stay bare (`Mod#double`), codegen
+  # emits byte-identical names, and ordinary calls still work. Guards the
+  # key-format ripple that discriminated keys could otherwise introduce.
+  test "a single-definition module is unaffected by the overload machinery" do
+    src = """
+    mod OvlInert
+      fn double(x: Int) -> Int = x + x
+      fn quad(x: Int) -> Int = double(double(x))
+    end
+    """
+
+    assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(mod, :quad, [3]) == 12
+  end
+
   # Task 6 — cross-module resolution (Design "Both"). Two `use`d modules each
   # export `to_int` on a different type; an unqualified `to_int(x)` resolves by
   # `x`'s type. Faithful mirror of `Std.Char.code_point` vs `Std.String.to_int`,
@@ -210,7 +226,14 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
          {:ok, %{modules: modules}} <-
            Cure.Project.compile_project(project, output_dir: ebin, check_types: false) do
       Code.prepend_path(ebin)
-      Enum.each(modules, fn m -> {:module, ^m} = :code.load_file(m) end)
+      # `compile_project/2` load-after-compiles each beam so downstream modules
+      # resolve imports; purge that already-current version before our own reload
+      # so a second `load_file` does not trip `:not_purged` on the old code.
+      Enum.each(modules, fn m ->
+        :code.purge(m)
+        {:module, ^m} = :code.load_file(m)
+      end)
+
       {:ok, String.to_existing_atom(start_module)}
     end
   end
