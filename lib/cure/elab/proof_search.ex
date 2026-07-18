@@ -46,12 +46,30 @@ defmodule Cure.Elab.ProofSearch do
       # reduces back to it (a self-referential lemma set) is cut here, not below.
       state = %{state | trying: [goal | ts]}
 
+      {lemma_ok, lemma_errors} = lemma_candidates(goal, ctx, env, state)
+
       candidates =
         local_candidates(goal, ctx, env) ++
           projection_candidates(goal, ctx, env) ++
-          lemma_candidates(goal, ctx, env, state)
+          lemma_ok
 
-      decide(candidates, goal)
+      # An ambiguous SUB-goal (e.g. a lemma's own hypothesis matches two local
+      # witnesses) means that particular lemma-application path itself yields
+      # more than one distinct proof term — a genuine ambiguity, not "this
+      # lemma doesn't apply". If some OTHER candidate independently and
+      # unambiguously proves the goal, prefer it (the ambiguous branch was
+      # simply unneeded). Only surface the inner ambiguity when it is the
+      # only path this goal has, so it is never silently downgraded to :none.
+      case decide(candidates, goal) do
+        :none ->
+          case lemma_errors do
+            [] -> :none
+            [first | _] -> first
+          end
+
+        other ->
+          other
+      end
     end
   end
 
@@ -174,16 +192,37 @@ defmodule Cure.Elab.ProofSearch do
   # Lemma-application search: every registered lemma under the goal's head whose
   # conclusion unifies with the goal, with any explicit-hypothesis sub-goals
   # resolved recursively, assembled into a curried application and kernel-checked.
+  # Returns `{candidates, errors}`: `candidates` are the usual `{term,
+  # provenance}` pairs from lemma attempts that produced a kernel-checked
+  # term; `errors` collects any `{:error, {:ambiguous_proof_search, ...}}`
+  # raised by a lemma's own (recursive) hypothesis resolution, kept separate
+  # so the caller can prefer an unambiguous candidate when one exists and
+  # only surface the inner ambiguity as a last resort.
   defp lemma_candidates(goal, ctx, env, state) do
     case head_of(goal) do
       nil ->
-        []
+        {[], []}
 
       head ->
-        env
-        |> Cure.Core.Env.lemmas(head)
-        |> Enum.map(&try_lemma(&1, goal, ctx, env, state))
-        |> Enum.filter(fn {term, _} -> term != nil end)
+        results =
+          env
+          |> Cure.Core.Env.lemmas(head)
+          |> Enum.map(&try_lemma(&1, goal, ctx, env, state))
+
+        candidates =
+          Enum.flat_map(results, fn
+            {:error, _} -> []
+            {nil, _prov} -> []
+            {_term, _prov} = c -> [c]
+          end)
+
+        errors =
+          Enum.flat_map(results, fn
+            {:error, _} = e -> [e]
+            _ -> []
+          end)
+
+        {candidates, errors}
     end
   end
 
@@ -207,6 +246,7 @@ defmodule Cure.Elab.ProofSearch do
         _ -> {nil, {:lemma, name}}
       end
     else
+      {:error, _} = err -> err
       _ -> {nil, {:lemma, name}}
     end
   end
@@ -239,6 +279,7 @@ defmodule Cure.Elab.ProofSearch do
 
         case resolve(subgoal_core, ctx, env, deeper(state)) do
           {:ok, term} -> {:cont, {:ok, acc ++ [term]}}
+          {:error, _} = err -> {:halt, err}
           _ -> {:halt, :fail}
         end
       end
@@ -246,6 +287,7 @@ defmodule Cure.Elab.ProofSearch do
     |> case do
       {:ok, args} -> {:ok, args}
       :fail -> :fail
+      {:error, _} = err -> err
     end
   end
 
