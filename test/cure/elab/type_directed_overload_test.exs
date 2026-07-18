@@ -130,6 +130,39 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     assert apply(mod, :quad, [3]) == 12
   end
 
+  # Regression pin for `Resolution.overload_candidates/2`'s ordering: `prefer_local`
+  # must run BEFORE `prefer_direct`. A module's own overload members are never
+  # listed in its OWN `import_modules`, so if `prefer_direct` ran first it would
+  # drop every local member of an overload set (none is a "direct import" of
+  # itself), leaving only an ambient `@prelude` provider of the same bare name
+  # (e.g. `Std.Nat#plus`) as the sole survivor — silently mis-resolving a call
+  # that was meant to hit the local set. Confirmed by construction: swapping the
+  # two filters (`prefer_direct` before `prefer_local`) breaks even the stdlib's
+  # own build (`Std.Vector`/`Std.Optic` both call a `map` overloaded locally
+  # against `Std.List`/`Std.Option`, ambient-shadowed the same way).
+  test "a local overload set shadows an ambient prelude provider of the same bare name" do
+    src = """
+    mod OvlLocalVsPrelude
+      type Meters = MkM(Int)
+      type Grams = MkG(Int)
+
+      fn plus(a: Meters, b: Meters) -> Meters = match a
+        MkM(x) -> match b
+          MkM(y) -> MkM(x + y)
+
+      fn plus(a: Grams, b: Grams) -> Grams = match a
+        MkG(x) -> match b
+          MkG(y) -> MkG(x + y)
+
+      fn add_m() -> Int = match plus(MkM(3), MkM(4))
+        MkM(x) -> x
+    end
+    """
+
+    assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(mod, :add_m, []) == 7
+  end
+
   # Task 6 — cross-module resolution (Design "Both"). Two `use`d modules each
   # export `to_int` on a different type; an unqualified `to_int(x)` resolves by
   # `x`'s type. Faithful mirror of `Std.Char.code_point` vs `Std.String.to_int`,
