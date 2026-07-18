@@ -55,6 +55,7 @@ defmodule Cure.Elab.Overload do
     case Env.get_def(env, key) do
       %{type: pi} = def ->
         declared = present_labels(def, pi)
+
         if single_labels_ok?(declared, written),
           do: :ok,
           else: {:error, {:label_mismatch, key, declared, written}}

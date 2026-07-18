@@ -627,6 +627,7 @@ defmodule Cure.Elab.Declarations do
           env
           |> Env.add_def(sig.name, final_pi, lambda, quantities)
           |> Env.put_labels(sig.name, param_label_vector(sig.params))
+
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
         # must unfold while `append`'s body is checked). A function that fails the
