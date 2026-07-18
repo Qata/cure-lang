@@ -1,0 +1,137 @@
+@group(:core)
+mod Std.Proof.IntOrder
+  ## Proof-carrying order on the inductive integers `Int = FromNat(Nat) |
+  ## NegativeSuccessor(Nat)`, via decidable-Boolean reflection.
+  ##
+  ## **Family shape — reflected form (chosen).** The plan (Task 6 design note)
+  ## and spec §7 allow either a direct four-constructor inductive family or the
+  ## reflected form `IsTrue(le_int(a, b))`. We use the reflected form. The direct
+  ## family is currently *not expressible*: a constructor whose field lives in a
+  ## different inductive family (Nat-order evidence) combined with a
+  ## constructor-headed result index (`FromNat(m)`) trips a spurious
+  ## `:index_mismatch` in the elaborator's constructor-index-inversion path
+  ## (`kernel.ex` `remap_index_error`). The reflected form sidesteps that path:
+  ## indices stay plain variables and the sole constructor carries an `IsTrue`
+  ## witness of the total Boolean test. This mirrors Idris (`So`/`Oh`), Agda
+  ## (`T`), and Lean (`Decidable`).
+
+  use Std.Bool
+  use Std.Nat
+  use Std.Int
+  use Std.Decision
+  use Std.Proof.IntMath
+
+  ## Boolean less-than-or-equal on naturals, structural on the left operand.
+  fn le_nat(left: Nat, right: Nat) -> Bool =
+    match left
+      Z() -> True()
+      S(left_predecessor) ->
+        match right
+          Z() -> False()
+          S(right_predecessor) -> le_nat(left_predecessor, right_predecessor)
+
+  ## Boolean strictly-less-than on naturals, structural on the right operand.
+  fn lt_nat(left: Nat, right: Nat) -> Bool =
+    match right
+      Z() -> False()
+      S(right_predecessor) ->
+        match left
+          Z() -> True()
+          S(left_predecessor) -> lt_nat(left_predecessor, right_predecessor)
+
+  ## Boolean less-than-or-equal on the inductive integers. Nonneg/nonneg reduces
+  ## to `le_nat`; any negative is ≤ any nonneg; no nonneg is ≤ a negative;
+  ## neg/neg reverses `le_nat` on the successors, since -(k+1) ≤ -(j+1) ⇔ j ≤ k.
+  fn le_int(left: Int, right: Int) -> Bool =
+    match left
+      FromNat(m) ->
+        match right
+          FromNat(n) -> le_nat(m, n)
+          NegativeSuccessor(j) -> False()
+      NegativeSuccessor(k) ->
+        match right
+          FromNat(n) -> True()
+          NegativeSuccessor(j) -> le_nat(j, k)
+
+  ## Boolean strictly-less-than on the inductive integers. Nonneg/nonneg reduces
+  ## to `lt_nat`; any negative is < any nonneg; no nonneg is < a negative;
+  ## neg/neg reverses `lt_nat` on the successors, since -(k+1) < -(j+1) ⇔ j < k.
+  fn lt_int(left: Int, right: Int) -> Bool =
+    match left
+      FromNat(m) ->
+        match right
+          FromNat(n) -> lt_nat(m, n)
+          NegativeSuccessor(j) -> False()
+      NegativeSuccessor(k) ->
+        match right
+          FromNat(n) -> True()
+          NegativeSuccessor(j) -> lt_nat(j, k)
+
+  ## Evidence that one integer is ≤ another: the reflected proposition that the
+  ## decidable Boolean test `le_int` returns `True`.
+  type IsLessThanOrEqual indices (left: Int, right: Int)
+    AtMost : IsTrue(le_int(left, right)) -> IsLessThanOrEqual(left, right)
+
+  ## Evidence that one integer is strictly < another: the reflected proposition
+  ## that the decidable Boolean test `lt_int` returns `True`.
+  type IsLessThan indices (left: Int, right: Int)
+    StrictlyBelow : IsTrue(lt_int(left, right)) -> IsLessThan(left, right)
+
+  ## `le_nat` is reflexive: `le_nat(n, n)` computes to `True` for every `n`.
+  fn le_nat_is_reflexive(value: Nat) -> IsTrue(le_nat(value, value)) =
+    match value
+      Z() -> Confirmed()
+      S(predecessor) -> le_nat_is_reflexive(predecessor)
+
+  ## `le_int(FromNat(n), FromNat(n))` reduces to `le_nat(n, n)`, which is `True`.
+  ## Stated at the reduced result type so the conversion — not the constructor
+  ## index path — performs the `le_int` → `le_nat` reduction; the witness is then
+  ## syntactically what `AtMost` expects on the `FromNat` reflexivity arm.
+  fn le_int_from_nat_is_reflexive(n: Nat) -> IsTrue(le_int(FromNat(n), FromNat(n))) =
+    le_nat_is_reflexive(n)
+
+  ## Same, for `le_int(NegativeSuccessor(k), NegativeSuccessor(k))` → `le_nat(k, k)`.
+  fn le_int_neg_succ_is_reflexive(k: Nat) -> IsTrue(le_int(NegativeSuccessor(k), NegativeSuccessor(k))) =
+    le_nat_is_reflexive(k)
+
+  ## Reflexivity: every integer is ≤ itself.
+  fn is_less_than_or_equal_is_reflexive(value: Int) -> IsLessThanOrEqual(value, value) =
+    match value
+      FromNat(n) -> AtMost(le_int_from_nat_is_reflexive(n))
+      NegativeSuccessor(k) -> AtMost(le_int_neg_succ_is_reflexive(k))
+
+  ## Invert `AtMost`: a refutation of the reflected Boolean evidence refutes the
+  ## whole `≤` proof (its only constructor carries exactly that evidence).
+  fn at_most_is_refuted_by_boolean_refuter(
+    {left: Int},
+    {right: Int},
+    refuter: (IsTrue(le_int(left, right))) -> Empty,
+    proof: IsLessThanOrEqual(left, right)
+  ) -> Empty =
+    match proof
+      AtMost(evidence) -> refuter(evidence)
+
+  ## Invert `StrictlyBelow` likewise for strict `<`.
+  fn strictly_below_is_refuted_by_boolean_refuter(
+    {left: Int},
+    {right: Int},
+    refuter: (IsTrue(lt_int(left, right))) -> Empty,
+    proof: IsLessThan(left, right)
+  ) -> Empty =
+    match proof
+      StrictlyBelow(evidence) -> refuter(evidence)
+
+  ## Decide `≤` on integers, carrying checked evidence either way. Reuses the
+  ## generic decidable-Boolean decision on `le_int(left, right)`.
+  fn decide_is_less_than_or_equal(left: Int, right: Int) -> Decision(IsLessThanOrEqual(left, right)) =
+    match decide_is_true(le_int(left, right))
+      Yes(evidence) -> Yes(AtMost(evidence))
+      No(refuter) -> No(fn(proof) -> at_most_is_refuted_by_boolean_refuter(refuter, proof))
+
+  ## Decide strict `<` on integers, carrying checked evidence either way.
+  fn decide_is_less_than(left: Int, right: Int) -> Decision(IsLessThan(left, right)) =
+    match decide_is_true(lt_int(left, right))
+      Yes(evidence) -> Yes(StrictlyBelow(evidence))
+      No(refuter) -> No(fn(proof) -> strictly_below_is_refuted_by_boolean_refuter(refuter, proof))
+
+end
