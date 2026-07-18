@@ -406,3 +406,9 @@ proj_offerer_steps RC RC tL gL tR gR Refl impossible
 
 proj_bystander_msg : (fr : Role) -> (to : Role) -> (r : Role) -> (t : Tag) -> (k : Global) -> role_eq fr r = F -> role_eq to r = F -> project (GMsg fr to t k) r = project k r
 proj_bystander_msg fr to r t k p1 p2 = rewrite p1 in rewrite p2 in Refl
+
+bystander_cho_sub_left : WF (GCho RA RB tL gL tR gR) -> Sub (project (GCho RA RB tL gL tR gR) RC) (project gL RC)
+bystander_cho_sub_left (WFCho tL2 wL tR2 wR mg) = merge_sub_l mg
+
+bystander_cho_sub_right : WF (GCho RA RB tL gL tR gR) -> Sub (project (GCho RA RB tL gL tR gR) RC) (project gR RC)
+bystander_cho_sub_right (WFCho tL2 wL tR2 wR mg) = merge_sub_r mg
