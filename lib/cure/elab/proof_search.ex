@@ -13,17 +13,29 @@ defmodule Cure.Elab.ProofSearch do
   @type goal :: term()
   @type result :: {:ok, term()} | :none | {:error, {:ambiguous_proof_search, term(), [term()]}}
 
+  # Search terminates on two conditions: a recursion-depth ceiling and a
+  # per-branch "already trying this goal" cycle stack.
+  @depth_limit 5
+
   @spec resolve(goal(), Context.t(), Cure.Core.Env.t()) :: result()
   def resolve(goal, ctx, env), do: resolve(goal, ctx, env, %{depth: 0, trying: []})
 
-  # Extended entrypoint (Task 6 fills in depth/cycle guards).
-  def resolve(goal, ctx, env, state) do
-    candidates =
-      local_candidates(goal, ctx, env) ++
-        projection_candidates(goal, ctx, env) ++
-        lemma_candidates(goal, ctx, env, state)
+  # Depth-bound guard: abandon a branch that has descended past the ceiling.
+  def resolve(_goal, _ctx, _env, %{depth: d}) when d > @depth_limit, do: :none
 
-    decide(candidates, goal)
+  # Cycle guard: if this goal is already being attempted higher on the branch,
+  # abandon it (a self-referential lemma set would otherwise loop forever).
+  def resolve(goal, ctx, env, %{trying: ts} = state) do
+    if Enum.any?(ts, &same_goal?(&1, goal, ctx, env)) do
+      :none
+    else
+      candidates =
+        local_candidates(goal, ctx, env) ++
+          projection_candidates(goal, ctx, env) ++
+          lemma_candidates(goal, ctx, env, state)
+
+      decide(candidates, goal)
+    end
   end
 
   # Each candidate is {term, provenance}. Keep only the kernel-checked survivors.
@@ -196,7 +208,15 @@ defmodule Cure.Elab.ProofSearch do
 
   defp build_app(head, args), do: Enum.reduce(args, head, fn a, f -> {:app, f, a} end)
 
-  # deeper/2 and ensure_core/2 are placeholders finalized in Task 6 (state).
-  defp deeper(state, _subgoal), do: state
-  defp ensure_core(t, _ctx), do: t
+  # Descend one level: increment depth and push the sub-goal onto the cycle stack.
+  defp deeper(%{depth: d, trying: ts}, subgoal), do: %{depth: d + 1, trying: [subgoal | ts]}
+
+  # A sub-goal produced by zonk/reify is already a Core term.
+  defp ensure_core(term, _ctx), do: term
+
+  # Up-to-conversion equality of two goal Core terms. `Conv.conv?/5` takes Core
+  # terms and evaluates them itself, so pass the terms directly (not pre-evaled).
+  defp same_goal?(a, b, ctx, env) do
+    Cure.Core.Conv.conv?(a, b, Context.env(ctx), Context.length(ctx), env)
+  end
 end

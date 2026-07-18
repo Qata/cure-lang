@@ -103,4 +103,41 @@ defmodule Cure.Elab.ProofSearchTest do
     assert function_exported?(Cure.Elab.ProofSearch, :resolve, 3)
     _ = source
   end
+
+  @tag timeout: 8_000
+  test "a self-referential lemma set does not loop — cyclic goal abandons the branch" do
+    # A lemma whose only hypothesis is its own conclusion: Cyc(n) -> Cyc(n).
+    # With no base case and no local hypothesis, resolve must return :none
+    # (not loop) because the sub-goal equals a goal already on the stack.
+    source = """
+    mod CycLemma
+      use Std.Proof.Math
+      type Cyc indices (n: Nat)
+        MkCyc : Cyc(n) -> Cyc(n)
+      @lemma
+      fn cyc_step({n: Nat}, prev: Cyc(n)) -> Cyc(n) = MkCyc(prev)
+    end
+    """
+    {:ok, env} = Cure.Elab.Program.elaborate(source)
+
+    cyc_family = Cure.Core.Env.resolve_key(env, env.families, :Cyc)
+    zero = {:ctor, Cure.Core.Env.resolve_key(env, env.ctors, :Z), []}
+    goal = {:data, cyc_family, [], [zero]}
+    ctx = Cure.Core.Context.empty(env)
+
+    assert :none = Cure.Elab.ProofSearch.resolve(goal, ctx, env, %{depth: 0, trying: []})
+  end
+
+  test "depth bound: a real, satisfiable candidate is suppressed once the depth limit is exceeded" do
+    # env_with_p/0 gives a genuine candidate (`h : P` in scope for goal `P`) so
+    # this test discriminates the guard: WITHOUT it, resolve finds {:var, 0}
+    # regardless of `depth`; WITH it, `depth: 999` (> @depth_limit) forces :none.
+    env = env_with_p()
+    goal = {:data, :P, [], []}
+    goal_val = Eval.eval(goal, [])
+    ctx = Context.empty(env) |> Context.extend(goal_val)
+
+    assert {:ok, {:var, 0}} = Cure.Elab.ProofSearch.resolve(goal, ctx, env, %{depth: 0, trying: []})
+    assert :none = Cure.Elab.ProofSearch.resolve(goal, ctx, env, %{depth: 999, trying: []})
+  end
 end
