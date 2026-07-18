@@ -1863,7 +1863,7 @@ defmodule Cure.Elab.Program do
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
   @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
-                      primitives interfaces coherence constrained import_modules module_owner)a
+                      primitives interfaces coherence constrained import_modules lemmas module_owner)a
 
   @env_keys Map.keys(Map.from_struct(%Env{}))
   missing = @env_keys -- @merged_env_keys
@@ -1891,6 +1891,7 @@ defmodule Cure.Elab.Program do
          coherence: coherence,
          constrained: Map.merge(left.constrained, right.constrained),
          import_modules: MapSet.union(left.import_modules, right.import_modules),
+         lemmas: Map.merge(left.lemmas, right.lemmas, fn _head, ls, rs -> Enum.uniq(ls ++ rs) end),
          module_owner: left.module_owner || right.module_owner
        }}
     end

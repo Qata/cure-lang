@@ -417,6 +417,7 @@ defmodule Cure.Elab.Declarations do
         # needs them to tell `move(to:)` from `move(from:)`. The body pass re-adds
         # the def (dropping this) and re-attaches its own copy.
         |> Env.put_labels(sig.name, param_label_vector(sig.params))
+        |> maybe_register_lemma(sig, meta)
 
       env2 =
         case sig.constraints do
@@ -1065,8 +1066,8 @@ defmodule Cure.Elab.Declarations do
 
   # A hole body `?name` elaborates to a `:hole` term (accepted at the declared
   # return type by the kernel; it blocks codegen until filled).
-  defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, _env, _params) do
-    {:ok, {:hole, Keyword.get(meta, :name, "")}}
+  defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, env, _params) do
+    {:ok, {:hole, hole_id(env, meta)}}
   end
 
   # A `let … ⏎ body` block: check it against the declared return type (there is
@@ -1126,6 +1127,36 @@ defmodule Cure.Elab.Declarations do
       with {:ok, term, type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
         {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
       end
+    end
+  end
+
+  # Deterministic hole identity (first-class holes, Slice 1). Every source `?`
+  # must get a UNIQUE id: once holes flow through the kernel as stuck neutrals,
+  # two holes sharing an id are definitionally equal, so `refl : ?a = ?b` would
+  # type-check and a false equality be forgeable. A NAMED `?foo` keys on its name
+  # so repeating `?foo` within a scope refers to the SAME unknown; an unnamed `?`
+  # keys on its source position (`line:col`), unique per occurrence. Both are
+  # module-qualified via `Env.owner/1`. No gensym counter is used, so Antigen and
+  # the differential oracle stay replay-stable.
+  #
+  # Soundness note: `line:col` within a module is inherently unique per source
+  # occurrence, and a hole never escapes its own def's normalisation — a
+  # hole-bearing def is never certified and so never δ-unfolded into another def's
+  # conversion — so position alone is soundness-sufficient. The module qualifier
+  # is defense-in-depth and readability for later slices (goal reporting).
+  #
+  # Public so the elaborator's proof-hole trigger (Elaborator.elaborate_expr_checked
+  # for `{:hole,_}` in argument position) mints ids by the SAME scheme — one
+  # source of hole identity, no drift.
+  @doc false
+  def hole_id(env, meta) do
+    mod = Env.owner(env) || ""
+    name = Keyword.get(meta, :name, "")
+
+    if name != "" do
+      "#{mod}##{name}"
+    else
+      "#{mod}:#{Keyword.get(meta, :line, 0)}:#{Keyword.get(meta, :col, 0)}"
     end
   end
 
@@ -1902,6 +1933,12 @@ defmodule Cure.Elab.Declarations do
 
   # A refinement is an ordinary dependent pair in Core: the value and a proof of
   # the proposition about that value. Solvers receive no trusted representation.
+  #
+  # Surface sugar (§3a level 1): the refinement bar takes the bare boolean
+  # condition and reflects it, like Liquid Haskell / F* / Lean. A comparison or
+  # boolean-connective clause has type `Bool`, so it is wrapped in `IsTrue(φ)`
+  # before lowering — producing the same Σ as an explicit `IsTrue(φ)` clause. A
+  # `Type`-valued clause (a named predicate / proposition) is left unchanged.
   defp idx_to_core(
          {:refinement_type, [binder: bname], [dom_ast, proposition_ast]},
          scope,
@@ -1910,7 +1947,8 @@ defmodule Cure.Elab.Declarations do
          _ctx
        ) do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
-         {:ok, proposition} <- idx_to_core(proposition_ast, [bname | scope], fam, env) do
+         {:ok, proposition} <-
+           idx_to_core(reflect_boolean_proposition(proposition_ast), [bname | scope], fam, env) do
       {:ok, {:data, sigma_family_name(env), [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, proposition}], []}}
     end
   end
@@ -2002,7 +2040,72 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # A comparison / boolean-connective PROPOSITION in an index position — the `n > 0`
+  # inside `IsTrue(n > 0)` (decidable-boolean reflection, spec 2026-07-18). The parser
+  # reparses such a type-application argument with the expression parser, so it arrives
+  # as an expression `{:binary_op, ...}` with `{:literal, ...}` operands rather than a
+  # type atom. We lower it to the SAME builtin-op spine the term elaborator's
+  # `build_binop` produces for Int/Bool operands — `Std.Builtin#int_gt` etc., or the
+  # bare `and`/`or` connective globals — so a closed comparison folds to `Std.Bool#True`
+  # by pure computation and `Confirmed : IsTrue(True())` inhabits it. Reflection over
+  # `Int` is the design's scope; Float propositions are a documented non-goal and lower
+  # to the int_* op, which simply will not fold on `{:vfloat, _}` (no discharge, never
+  # unsound). Operands recurse through `idx_to_core`, so nested connectives compose.
+  defp idx_to_core({:binary_op, meta, [l_ast, r_ast]}, scope, fam, env, ctx) do
+    op = Keyword.fetch!(meta, :operator)
+
+    with {:ok, global} <- index_binop_global(op),
+         {:ok, l} <- idx_to_core(l_ast, scope, fam, env, ctx),
+         {:ok, r} <- idx_to_core(r_ast, scope, fam, env, ctx) do
+      {:ok, {:app, {:app, {:global, global}, l}, r}}
+    end
+  end
+
+  # An expression-parsed numeric literal reaching an index position — only produced by
+  # the propositional reparse above (ordinary type-position numerals arrive as stringified
+  # NAME nodes handled by the `{:variable, ...}` clause). An integer operand of an Int
+  # comparison must be a real `{:int_lit, _}` so the kernel's `int_*` fold fires; a Nat
+  # literal (`{:nat_lit, _}`, `{:vnat, _}`) would leave the spine stuck.
+  defp idx_to_core({:literal, meta, value}, _scope, _fam, _env, _ctx) do
+    case Keyword.get(meta, :subtype) do
+      :integer -> {:ok, {:int_lit, value}}
+      :float -> {:ok, {:float_lit, value}}
+      other -> {:error, {:unsupported_index_literal, other}}
+    end
+  end
+
   defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
+
+  # Operator symbol → the Core global its index-position lowering applies. Comparisons map
+  # to the Int builtin op (registered as `Std.Builtin#int_*`, folding via `Eval.fold`);
+  # the boolean connectives map to the bare `and`/`or` connective globals, exactly as the
+  # term elaborator's `build_binop` emits them.
+  defp index_binop_global(:<), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_lt)}
+  defp index_binop_global(:<=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_le)}
+  defp index_binop_global(:>), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_gt)}
+  defp index_binop_global(:>=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ge)}
+  defp index_binop_global(:==), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_eq)}
+  defp index_binop_global(:!=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ne)}
+  defp index_binop_global(:and), do: {:ok, :and}
+  defp index_binop_global(:or), do: {:ok, :or}
+  defp index_binop_global(op), do: {:error, {:unsupported_index_operator, op}}
+
+  # Wrap a `Bool`-typed refinement clause in `IsTrue(·)` (§3a level 1). Only
+  # comparison and boolean-connective operators reflect (they produce `Bool`);
+  # every other clause — a `Type`-valued predicate application, an already-explicit
+  # `IsTrue(…)`, or an arithmetic misuse that should be rejected as ill-sorted —
+  # passes through untouched. The wrapper node is exactly what the parser yields
+  # for an explicit `IsTrue(φ)`, so lowering (and `IsTrue` name resolution) is
+  # shared verbatim.
+  defp reflect_boolean_proposition({:binary_op, meta, _} = prop) do
+    if Keyword.get(meta, :category) in [:comparison, :boolean] do
+      {:function_call, [name: "IsTrue"], [prop]}
+    else
+      prop
+    end
+  end
+
+  defp reflect_boolean_proposition(prop), do: prop
 
   # Surface `Effect(T)` lowers to the kernel's inert effect type former
   # `{:effect_type, ⟦T⟧}` (design 2026-07-09-effect-type-former §3). `Effect` is a
@@ -2429,6 +2532,33 @@ defmodule Cure.Elab.Declarations do
   # in a container/def meta `:decorator` slot, or `nil` if absent/non-decorator.
   defp attached_decorator_name({:decorator, m, _args}) when is_list(m), do: Keyword.get(m, :name)
   defp attached_decorator_name(_), do: nil
+
+  # Register a def tagged `@lemma` into the proof-search registry, filed under
+  # its conclusion head. No-op for untagged defs or non-data conclusions. The
+  # entry's name is OWNER-QUALIFIED (Env.owned_name/2) so ProofSearch's assembled
+  # {:global, ...} term matches what ordinary elaboration produces for the same
+  # call — see Cure.Elab.ProofSearch.
+  defp maybe_register_lemma(env, sig, meta) do
+    with :lemma <- attached_decorator_name(Keyword.get(meta, :decorator)),
+         head when not is_nil(head) <- conclusion_head(sig.pi) do
+      Env.put_lemma(env, head, %{
+        name: Env.owned_name(env, sig.name),
+        type: sig.pi,
+        arity: pi_arity(sig.pi)
+      })
+    else
+      _ -> env
+    end
+  end
+
+  # The head family atom of a Pi type's ultimate codomain, or nil if the
+  # conclusion is not an indexed/parameterised data application.
+  def conclusion_head({:pi, _g, _dom, cod}), do: conclusion_head(cod)
+  def conclusion_head({:data, name, _params, _indices}), do: name
+  def conclusion_head(_), do: nil
+
+  defp pi_arity({:pi, _g, _dom, cod}), do: 1 + pi_arity(cod)
+  defp pi_arity(_), do: 0
 
   # The fixed tag→Core-node table — the ONLY inherent mapping (keyed by builtin
   # tag, not by surface name). Exactly four tags are legal.

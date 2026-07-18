@@ -108,6 +108,7 @@ mod Std.Proof.Math
   ## Matching the left proof refines `left` to a successor. Multiplication then
   ## reduces to `right + multiply(predecessor, right)`, whose positivity follows
   ## directly from the proof that `right` is positive.
+  @lemma
   fn multiplying_positive_numbers_is_positive(
     {left: Nat},
     {right: Nat},
