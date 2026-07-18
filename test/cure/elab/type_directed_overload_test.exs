@@ -114,13 +114,121 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     assert match?({:no_matching_overload, :plus, _}, unwrap_inner(err))
   end
 
+  # Task 6 — cross-module resolution (Design "Both"). Two `use`d modules each
+  # export `to_int` on a different type; an unqualified `to_int(x)` resolves by
+  # `x`'s type. Faithful mirror of `Std.Char.code_point` vs `Std.String.to_int`,
+  # the rename workaround this feature retires.
+  @tag :tmp_dir
+  test "an unqualified call resolves across two used modules by argument type", %{tmp_dir: dir} do
+    files = %{
+      "a.cure" => """
+      mod OvlCharMod
+        fn to_int(c: Char) -> Int = 65
+      end
+      """,
+      "b.cure" => """
+      mod OvlStrMod
+        fn to_int(s: String) -> Int = 3
+      end
+      """,
+      "main.cure" => """
+      mod OvlXConsumer
+        use OvlCharMod
+        use OvlStrMod
+        fn from_char() -> Int = to_int('A')
+        fn from_str() -> Int = to_int("abc")
+      end
+      """
+    }
+
+    assert {:ok, mod} = compile_multi(dir, files, "Cure.OvlXConsumer")
+    assert apply(mod, :from_char, []) == 65
+    assert apply(mod, :from_str, []) == 3
+  end
+
+  # Two direct imports both provide `foo(Int)`: no argument type can pick between
+  # them, so the call is `{:ambiguous_overload, name, owners}` rather than an
+  # arbitrary dispatch.
+  @tag :tmp_dir
+  test "genuinely ambiguous cross-module overloads report :ambiguous_overload", %{tmp_dir: dir} do
+    files = %{
+      "a.cure" => "mod OvlAmbA\n  fn foo(x: Int) -> Int = 1\nend\n",
+      "b.cure" => "mod OvlAmbB\n  fn foo(x: Int) -> Int = 2\nend\n",
+      "main.cure" => """
+      mod OvlAmbC
+        use OvlAmbA
+        use OvlAmbB
+        fn pick() -> Int = foo(1)
+      end
+      """
+    }
+
+    assert {:error, err} = compile_multi_error(dir, files)
+    assert match?({:ambiguous_overload, :foo, _}, unwrap_inner(err))
+  end
+
+  # The dot-qualified escape hatch names the provider directly, routed through the
+  # existing qualified-global clause rather than the overload pruner, so it sidesteps
+  # the ambiguity entirely.
+  @tag :tmp_dir
+  test "qualifying resolves the ambiguity (escape hatch)", %{tmp_dir: dir} do
+    files = %{
+      "a.cure" => "mod OvlAmbA\n  fn foo(x: Int) -> Int = 1\nend\n",
+      "b.cure" => "mod OvlAmbB\n  fn foo(x: Int) -> Int = 2\nend\n",
+      "main.cure" => """
+      mod OvlAmbD
+        use OvlAmbA
+        use OvlAmbB
+        fn pick() -> Int = OvlAmbA.foo(1)
+      end
+      """
+    }
+
+    assert {:ok, mod} = compile_multi(dir, files, "Cure.OvlAmbD")
+    assert apply(mod, :pick, []) == 1
+  end
+
+  # Write `files` under `dir/src` with a minimal Cure.toml, compile the project,
+  # load every produced beam, and hand back the `Cure.<Start>` module atom. No
+  # off-the-shelf helper loads-and-invokes a `compile_project` beam, so the load
+  # step is added here.
+  defp compile_multi(dir, files, start_module) do
+    src = Path.join(dir, "src")
+    ebin = Path.join(dir, "ebin")
+    File.mkdir_p!(src)
+
+    Enum.each(files, fn {name, body} -> File.write!(Path.join(src, name), body) end)
+
+    File.write!(Path.join(dir, "Cure.toml"), """
+    [project]
+    name = "ovltest"
+    version = "0.1.0"
+    source_paths = ["src"]
+    """)
+
+    with {:ok, project} <- Cure.Project.load(dir),
+         {:ok, %{modules: modules}} <-
+           Cure.Project.compile_project(project, output_dir: ebin, check_types: false) do
+      Code.prepend_path(ebin)
+      Enum.each(modules, fn m -> {:module, ^m} = :code.load_file(m) end)
+      {:ok, String.to_existing_atom(start_module)}
+    end
+  end
+
+  defp compile_multi_error(dir, files) do
+    {:error, _} = compile_multi(dir, files, "unused")
+  end
+
   defp elaborate_error(src), do: unwrap(Cure.Elab.Program.elaborate(src))
 
   defp compile_and_load_error(src), do: Cure.Compiler.compile_and_load(src, emit_events: false)
 
-  # `compile_and_load/2` wraps an elaboration failure as `{:codegen_error, inner}`.
-  # Peel one layer so the test can assert on the overload diagnostic directly.
-  defp unwrap_inner({:codegen_error, inner}), do: inner
+  # `compile_and_load/2` wraps an elaboration failure as `{:codegen_error, inner}`;
+  # `compile_project/2` wraps a per-module failure one layer further as
+  # `{:compile_failed, {:codegen_error, inner}}`. Peel either envelope so the test
+  # can assert on the overload diagnostic directly.
+  defp unwrap_inner({:compile_failed, inner}), do: unwrap_inner(inner)
+  defp unwrap_inner({:codegen_error, inner}), do: unwrap_inner(inner)
   defp unwrap_inner(other), do: other
 
   defp unwrap({:ok, _} = ok), do: flunk("expected an error, got #{inspect(ok)}")
