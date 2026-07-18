@@ -199,13 +199,23 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
   payoff than advertised. The index-generalization workaround stays (used by both sides of the
   oracle). The only actionable kernel item from E9 is **K-bug 1** above.
 
-### NEW — E10a parser misparse — **trivial, P-layer**
-- `maybe_parse_function_type/2` (`parser.ex:7534–7552`) mis-parses a `fn(y) -> …` lambda literal
-  in **type/index** position as a parenthesized arrow-type, emitting a bogus `Function(y,…)` node
-  → `:unknown_global` (the doc's claimed `Eval.apply` crash was **not** reproduced at HEAD). Term
-  position parses the lambda fine. Small bounded parser fix; independent of the kernel work, but
-  fixing it alone changes E10a's symptom to the same `:conversion_failure` as E10 (b)/(c) — it
-  does not reach acceptance without K-bug 2.
+### NEW — E10a parser misparse — **✅ LANDED** (P + E, `fix(elab): lower a lambda in a dependent index position`)
+- `parse_type_arrow` mis-parsed a `fn(y) -> …` lambda literal in **type/index** position as a
+  parenthesized arrow-type, emitting a bogus `Function(y,…)` node → `:unknown_global`. Term
+  position parsed the lambda fine.
+- **Two-part fix.** (P) `parse_type_arrow` now recognises the `fn` keyword token and routes it to
+  the same `parse_fn_or_lambda` expression entry, producing a real `{:lambda, …}`. (E) `idx_to_core`
+  had no lambda clause — a bare binder has no domain until CHECKED against the callee's Π-domain, so
+  `lower_applied_type` delegates an applied term-level **def** carrying a lambda argument to
+  `elaborate_implicit_app_bidirectional` (reusing the implicit-global path; guarded on a real def +
+  threaded ctx). A lambda directly indexing a **family/ctor** (needs index-telescope checking) is a
+  separate, deferred case; a lambda index in a non-return-type position (no ctx) is the documented
+  §7.5-class residual.
+- **Verified.** Oracle `hoidx/hoidx01_lambda_in_index` cure=accept idris=accept **rel=same**;
+  negative antibody `lambda_in_index_lowering` (REACH + false-equation + ill-typed-body controls);
+  `:lambda` added to the MetaAST conformance vocabulary. Workaround removed from `Std.Otp.EffAlgebra`
+  (value-returning free monad `HEff`/`hbind` + left-identity law now live beside the monoid).
+  Combines with K-bug 2 (guarded-lambda `hbind` totality). Full suite green (4851).
 
 ## 4. Execution order (this thread)
 
