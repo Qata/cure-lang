@@ -1,0 +1,33 @@
+mod AsyncSession
+  use Std.Equivalent
+  ## ASYNCHRONOUS two-party sessions: unlike the synchronous model (send+receive fire together), a
+  ## send DEPOSITS its message into an in-flight BUFFER and the endpoint advances IMMEDIATELY; the peer
+  ## receives LATER by consuming it — the real BEAM/OTP mailbox decoupling. The buffer is a single slot
+  ## per direction (a bounded mailbox — a send is enabled when its slot is empty).
+  type Tag = TA | TB
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local)
+  type Buf = BEmpty | BFull(Tag)
+  type Config = MkConfig(Local, Local, Buf, Buf)
+  type AStep indices (c: Config, c2: Config)
+    ASendA : AStep(MkConfig(LSend(t, ka), b, BEmpty, ba), MkConfig(ka, b, BFull(t), ba))
+    ARecvB : AStep(MkConfig(a, LRecv(t, kb), BFull(t), ba), MkConfig(a, kb, BEmpty, ba))
+    ASendB : AStep(MkConfig(a, LSend(t, kb), ab, BEmpty), MkConfig(a, kb, ab, BFull(t)))
+    ARecvA : AStep(MkConfig(LRecv(t, ka), b, ab, BFull(t)), MkConfig(ka, b, ab, BEmpty))
+  type ARun indices (c: Config, c2: Config)
+    ARDone : ARun(c, c)
+    ARStep : AStep(c, cm) -> ARun(cm, c2) -> ARun(c, c2)
+  ## Individual steps, given concrete types so the intermediate configuration is pinned when composed.
+  fn step_send_ab(t: Tag, ka: Local, kb: Local) -> AStep(MkConfig(LSend(t, ka), LRecv(t, kb), BEmpty(), BEmpty()), MkConfig(ka, LRecv(t, kb), BFull(t), BEmpty())) = ASendA()
+  fn step_recv_ab(t: Tag, ka: Local, kb: Local) -> AStep(MkConfig(ka, LRecv(t, kb), BFull(t), BEmpty()), MkConfig(ka, kb, BEmpty(), BEmpty())) = ARecvB()
+  fn step_send_ba(t: Tag, ka: Local, kb: Local) -> AStep(MkConfig(LRecv(t, ka), LSend(t, kb), BEmpty(), BEmpty()), MkConfig(LRecv(t, ka), kb, BEmpty(), BFull(t))) = ASendB()
+  fn step_recv_ba(t: Tag, ka: Local, kb: Local) -> AStep(MkConfig(LRecv(t, ka), kb, BEmpty(), BFull(t)), MkConfig(ka, kb, BEmpty(), BEmpty())) = ARecvA()
+  ## **ASYNC REALIZES SYNCHRONOUS EXCHANGE (A→B)**: a synchronous message (A sends t, B receives t,
+  ## both advance) is realized by an asynchronous SEND-then-RECEIVE — A fires its send and advances
+  ## with t in-flight, then B consumes t and advances; the slot returns to empty. Foundational
+  ## async-refines-sync theorem: the decoupled mailbox model faithfully implements handshake
+  ## communication.
+  fn exchange_ab(t: Tag, ka: Local, kb: Local) -> ARun(MkConfig(LSend(t, ka), LRecv(t, kb), BEmpty(), BEmpty()), MkConfig(ka, kb, BEmpty(), BEmpty())) =
+    ARStep(step_send_ab(t, ka, kb), ARStep(step_recv_ab(t, ka, kb), ARDone()))
+  fn exchange_ba(t: Tag, ka: Local, kb: Local) -> ARun(MkConfig(LRecv(t, ka), LSend(t, kb), BEmpty(), BEmpty()), MkConfig(ka, kb, BEmpty(), BEmpty())) =
+    ARStep(step_send_ba(t, ka, kb), ARStep(step_recv_ba(t, ka, kb), ARDone()))
+end
