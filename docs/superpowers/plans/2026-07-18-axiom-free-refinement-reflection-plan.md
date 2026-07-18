@@ -455,7 +455,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(st
 ### Task 5: Elaborator — refinement→base projection coercion (item c)
 
 **Files:**
-- Modify: `lib/cure/elab/elaborator.ex` (the `:no` branch of `elaborate_expr_checked_fallback/5`, around line 1998–2005; reuse `sigma_projection(:fst, …)` at line ~1201)
+- Modify: `lib/cure/elab/elaborator.ex` (the `:no` branch of `elaborate_expr_checked_fallback/5`, around line 1998–2005; build the projection directly from Core terms — do NOT reuse `sigma_projection/5` at line ~1201, which expects surface AST, not an already-elaborated term)
 - Test: `test/cure/elab/refinement_base_projection_test.exs` (create)
 
 **Interfaces:**
@@ -498,10 +498,10 @@ defmodule Cure.Elab.RefinementBaseProjectionTest do
   test "the coercion does not paper over a genuine type mismatch" do
     assert {:error, _} = Program.elaborate(@mismatch)
   end
-  """
+end
 ```
 
-Remove the stray trailing `"""` if your editor adds one; the second heredoc closes the module string, and the test asserts a `PositiveNatural` fed to a `Bool` return still fails.
+The test asserts a `PositiveNatural` fed to a `Bool`-returning function still fails.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -514,7 +514,7 @@ Expected: `underlying` FAILs today with a `:conversion_failure` (Sigma vs. base 
         :no ->
           with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
             term = maybe_inject_union(term, type, expected_core, ctx, env)
-            term = maybe_coerce_refined_to_base(term, type, expected_core, names, ctx, env)
+            term = maybe_coerce_refined_to_base(term, type, expected_core, ctx, env)
 
             with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
               {:ok, term}
@@ -522,33 +522,64 @@ Expected: `underlying` FAILs today with a `:conversion_failure` (Sigma vs. base 
           end
 ```
 
+**IMPORTANT — do not call `sigma_projection/5` here.** `term`/`type` at this point are already-ELABORATED: `term` is a Core term and `type` is the semantic Value `elaborate_expr_typed/4` returned (the same pair `maybe_inject_union/5` just consumed above via `Quote.reify(type, ...)`  — read its body around line 2098 for the precedent). `sigma_projection/5`'s own doc comment (elaborator.ex:1196-1200) is explicit that its `inner` parameter must be **surface AST**, which it re-elaborates itself via `elaborate_implicit_global_app` → `elaborate_expr_typed`; handing it an already-built Core term feeds a Core tuple where a parser-AST node is expected. Instead, build the projection application directly from the Core pieces you already have — exactly how `proof_search.ex`'s `sigma_second_of/5` (line ~175) builds `refinement_proof`'s application from `sigma_params/3`'s already-pinned `a_value`/`predicate_value`, via `Quote.reify` + a `build_app` fold:
+
 ```elixir
   # If `term`'s inferred `type` WHNFs to the Sigma refinement family and the
   # expected base type is convertible to the Sigma's first-component type, coerce
-  # by inserting the first projection (`sigma_first`) — the reverse of the
-  # base->refined injection. This is the ONLY new behavior; if the shapes don't
-  # match, return `term` unchanged so ordinary checking (and its error) stands.
-  defp maybe_coerce_refined_to_base(term, type, expected_core, names, ctx, env) do
+  # by inserting the first projection (`sigma_first`, or `Std.Refine.refined_value`
+  # when that idiomatic accessor is in scope) — the reverse of the base->refined
+  # injection. This is the ONLY new behavior; if the shapes don't match, return
+  # `term` unchanged so ordinary checking (and its error) stands.
+  #
+  # `type` is a semantic VALUE here (not a Core term — see the call site), so it
+  # is inspected with `Normalise.whnf_value/2` (mirror `sigma_params/3` in
+  # proof_search.ex), never `Kernel.normalize/2` (which expects a Core term and
+  # matches `:data`, not `:vdata`).
+  defp maybe_coerce_refined_to_base(term, type, expected_core, ctx, env) do
     sigma_fam = Inductive.builtin(env, :sigma)
+    depth = Context.length(ctx)
+    sig = Context.signature(ctx)
 
     with false <- is_nil(sigma_fam),
-         {:data, ^sigma_fam, [dom, _cod], []} <- Kernel.normalize(ctx, type),
+         {:vdata, ^sigma_fam, [dom_value, predicate_value]} <- Normalise.whnf_value(type, sig),
          # Do not coerce when the expected type is itself that Sigma (no coercion
          # needed) — only when expected is the base component type.
          false <- sigma_typed?(expected_core, sigma_fam, ctx),
-         true <- convertible?(dom, expected_core, ctx, env) do
-      sigma_projection(:fst, term, names, ctx, env)
+         dom_term <- Quote.reify(dom_value, depth, sig),
+         true <- convertible?(dom_term, expected_core, ctx, env) do
+      predicate_term = Quote.reify(predicate_value, depth, sig)
+      build_app({:global, first_projection_head(env)}, [dom_term, predicate_term, term])
     else
       _ -> term
     end
   end
+
+  # The global to head the first projection with: `Std.Refine.refined_value` when
+  # the refinement API is in scope (the idiomatic accessor a human writes,
+  # mirroring `refinement_proof`), else the kernel builtin `sigma_first`. Mirror
+  # `second_projection_head/1` in `proof_search.ex` EXACTLY: nil-check via
+  # `Env.get_def` FIRST. `Env.resolve_key/3` itself never returns `nil` — its
+  # `@spec` is `:: atom()`; an unresolved name falls back to the bare input atom
+  # unchanged, so calling `resolve_key` before confirming the def exists would
+  # silently hand back a nonexistent global instead of the intended fallback.
+  defp first_projection_head(env) do
+    case Env.get_def(env, "refined_value") do
+      nil -> :sigma_first
+      _def -> Env.resolve_key(env, env.defs, "refined_value")
+    end
+  end
+
+  # Same one-line fold `proof_search.ex` uses (line ~303) to assemble a curried
+  # application from a head and an argument list.
+  defp build_app(head, args), do: Enum.reduce(args, head, fn a, f -> {:app, f, a} end)
 ```
 
-Implement the two small predicates next to the helper:
-- `sigma_typed?(expected_core, sigma_fam, ctx)` — `match? {:data, ^sigma_fam, _, []}, Kernel.normalize(ctx, expected_core)`.
-- `convertible?(a_term, b_term, ctx, env)` — evaluate both and call the existing kernel conversion (`Cure.Core.Conv.conv?/5` as used in `proof_search.ex:317`, or the elaborator's existing conversion entry point — grep `elaborator.ex` for how it already compares two Core types and reuse that; do NOT hand-roll normalization).
+Implement the remaining small predicate next to the helper:
+- `sigma_typed?(expected_core, sigma_fam, ctx)` — `expected_core` really is a Core term here (it is the function's own `expected_core` parameter, never assigned from `elaborate_expr_typed`), so `Kernel.normalize/2` is the right tool: `match? {:data, ^sigma_fam, _, []}, Kernel.normalize(ctx, expected_core)`.
+- `convertible?(a_term, b_term, ctx, env)` — both arguments here are Core terms (`dom_term` was just reified; `expected_core` always was one) — call the existing kernel conversion (`Cure.Core.Conv.conv?/5` as used in `proof_search.ex:317`, which "takes Core terms and evaluates them itself, so pass the terms directly, not pre-evaled" per that file's own comment) or the elaborator's existing conversion entry point if one already wraps it — grep `elaborator.ex` for how it already compares two Core types and reuse that; do NOT hand-roll normalization.
 
-Confirm `sigma_projection/5`'s arity/args at line ~1201 before calling (the plan assumes `sigma_projection(which, inner, names, ctx, env)`); adapt the call to its real signature.
+`Context`, `Env`, `Normalise`, `Quote`, `Inductive`, `Kernel` are all already aliased at the top of `elaborator.ex` (line 16) — use the short forms shown above, not fully-qualified names.
 
 - [ ] **Step 4: Run to verify it passes**
 
@@ -696,8 +727,8 @@ If `nat_reflection_discharge` fails instead, diagnose whether the reflection lem
 ```
 
 Implement the three small helpers:
-- `is_true_and_binder(type, ctx, env)` — returns `[{:and, [left_term, right_term]}]` when `type` WHNFs to `{:data, IsTrue_fam, _, [claim]}` and `claim` WHNFs to `{:data/:app spine of `and`}` with two args; else `[]`. Grep how `sigma_params/3` inspects a binder type via `Normalise.whnf_value/2` and mirror it. Resolve the `IsTrue` family and the `and` global via `Env.get_def`/`Inductive.builtin`/`Env.resolve_key` the same way `second_projection_head/1` resolves `refinement_proof`.
-- `and_left_projection_head(env)` / `and_right_projection_head(env)` — `Env.resolve_key(env, env.defs, "left_operand_is_true_from_true_conjunction")` and the `right_` variant; return `nil` if the module is not loaded (so the source is inert unless `Std.Proof.BooleanReflection` is in scope).
+- `is_true_and_binder(type, ctx, env)` — returns `[{:and, [left_term, right_term]}]` when `type` WHNFs to `{:vdata, IsTrue_fam, [claim_value]}` (a semantic Value — use `Normalise.whnf_value/2`, mirroring `sigma_params/3`, never `Kernel.normalize/2`) and `claim_value` itself WHNFs to the two-argument `and`-application spine; else `[]`. Resolve the `IsTrue` family and the `and` global via `Env.get_def`/`Inductive.builtin` the same way `second_projection_head/1` resolves `refinement_proof`.
+- `and_left_projection_head(env)` / `and_right_projection_head(env)` — mirror `second_projection_head/1` (`proof_search.ex:185`) EXACTLY, do not call `Env.resolve_key` directly: `case Env.get_def(env, "left_operand_is_true_from_true_conjunction") do nil -> nil; _def -> Env.resolve_key(env, env.defs, "left_operand_is_true_from_true_conjunction") end` (and the `right_` variant). This nil-checks via `get_def` FIRST so the source stays inert unless `Std.Proof.BooleanReflection` is in scope. `Env.resolve_key/3` itself is spec'd `:: atom()` and never returns `nil` — called directly (without the `get_def` guard) on a name nothing defines, it falls back to returning the bare, unbound input atom, which is not the `nil` this candidate source's `global != nil` filter (Step 3) needs to drop an out-of-scope source.
 
 The two elimination lemmas take `{left}`,`{right}` erased implicits then the evidence; supplying `arg_terms ++ [binder]` provides the reified implicits explicitly (as `sigma_second_of/5` does for `refinement_proof`). If passing erased implicits positionally is rejected, follow exactly how `sigma_second_of/5` reifies and applies `refinement_proof`'s implicits and copy that calling convention.
 
@@ -741,14 +772,16 @@ mod Refine03
     left_operand_is_true_from_true_conjunction(p)
 end
 ```
-`refine03_boolean_and.idr` (`%default total`, no module line) — the Idris `Data.So` analogue:
+`refine03_boolean_and.idr` (no `module` line, `%default total` on its own line after the import — match `refine01_is_true.idr`'s exact layout) — the Idris `Data.So` analogue:
 ```
-%default total
 import Data.So
+
+%default total
+
 splitLeft : So (True && True) -> So True
-splitLeft x = case andSo x of (l, _) => l
+splitLeft x = case soAnd x of (l, _) => l
 ```
-Confirm `andSo`'s real name/shape in the on-disk Idris base (`~/Develop/Idris2/libs/base/Data/So.idr`) before finalizing; adapt to the actual API (`soAnd`/`andSo`/`choose`), keeping the program semantically identical to the Cure one.
+Verified against the on-disk Idris base (`~/Develop/Idris2/libs/base/Data/So.idr`): the elimination function is `soAnd : {a : Bool} -> So (a && b) -> (So a, So b)` — it destructures a conjunction proof into a pair, which is the direction this probe needs. `andSo : (So a, So b) -> So (a && b)` is the opposite (introduction) direction — it takes a pair and produces the conjunction, so it cannot be applied to `x : So (True && True)` as in an earlier draft of this probe; use `soAnd`, not `andSo`.
 
 `refine04_boolean_or.{cure,idr}` — disjunction introduction from the left operand (Cure `disjunction_is_true_from_left_operand`; Idris `orSo`/`Left`-injection analogue).
 
@@ -859,9 +892,9 @@ Note the pass/skip count and Antigen cell count in the Stage 6 completion report
 - §9 files → all created/modified files appear in a task. ✅
 - §10 non-goals → honored (no kernel edit, no axioms, no solver — Task 6 is a candidate source, not a solver). ✅
 
-**Placeholder scan:** proof terms are concrete (match structures given); the two places with genuine discovery risk (matching an erased implicit; `match evidence` ex-falso reduction; `sigma_projection`/`Conv` exact signatures; Idris `So` API names) each carry an explicit fallback and a hard-stop guard rather than a bare "TBD".
+**Placeholder scan:** proof terms are concrete (match structures given); the places with genuine discovery risk (matching an erased implicit; `match evidence` ex-falso reduction; `Conv.conv?/5`'s exact signature; Idris `So` API names) each carry an explicit fallback and a hard-stop guard rather than a bare "TBD". The refinement→base coercion (Task 5) and the `resolve_key`/`get_def` nil-contract (Task 6) are now given as concrete, verified code rather than left to on-the-fly discovery.
 
-**Type consistency:** `natural_is_less_than`/`natural_is_less_than_or_equal`/`natural_is_positive` names are identical across Tasks 2, 3, 6, 7. The reflection-lemma names match between Task 3 (definition), Task 6 (automation), and Task 7 (oracle). `to_integer` consistent Tasks 4. `maybe_coerce_refined_to_base` / `conjunction_candidates` are the only new Elixir identifiers and each is defined where introduced.
+**Type consistency:** `natural_is_less_than`/`natural_is_less_than_or_equal`/`natural_is_positive` names are identical across Tasks 2, 3, 6, 7. The reflection-lemma names match between Task 3 (definition), Task 6 (automation), and Task 7 (oracle). `to_integer` consistent Tasks 4. New Elixir identifiers and where each is defined: `maybe_coerce_refined_to_base`, `first_projection_head`, `sigma_typed?`, `convertible?`, and a local `build_app` (Task 5, all in `elaborator.ex`); `conjunction_candidates`, `is_true_and_binder`, `and_left_projection_head`, `and_right_projection_head` (Task 6, in `proof_search.ex`, which already has its own `build_app/2` — no collision since the two modules are separate).
 
 **Scope:** single plan, one subsystem (the reflection bridge + two elaborator touch-points). No decomposition needed.
 
