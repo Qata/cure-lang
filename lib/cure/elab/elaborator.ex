@@ -285,6 +285,29 @@ defmodule Cure.Elab.Elaborator do
             end
         end
 
+      # A saturated call to a registered builtin primitive op — `Std.Builtin.int_add`,
+      # `struct_eq`, … — spelled by its qualified name. These globals are body-less:
+      # the arithmetic/comparison ops carry `quantities: nil`, so the general
+      # `elaborate_global_app` path crashes on `length(quantities)`, and `struct_eq`'s
+      # leading ERASED type param makes that path auto-solve the type as a metavar
+      # instead of consuming the explicitly-passed one (an index mismatch). Emit the
+      # raw left-nested app spine directly and let the kernel infer the whole term;
+      # `struct_eq`'s type argument sits in an erased slot the kernel accepts by fiat
+      # (builtins.ex `seed_struct_ops`). Guarded on the `builtin_op` marker (set only
+      # by `Builtins.seed_ops`), so it fires for no user-defined global. Restricted to
+      # the QUALIFIED spelling (`name` carries a `.`): a bare `struct_eq(x, y)` still
+      # routes through the general path, which auto-solves the leading erased type
+      # param as a metavar rather than expecting it as an explicit positional arg.
+      # Placed before the general global-application arm, which would otherwise
+      # intercept the qualified name.
+      String.contains?(name, ".") and
+          match?(%{builtin_op: op} when not is_nil(op), Env.get_def(env, resolved)) ->
+        with {:ok, arg_terms} <- elaborate_all_args(args, names, ctx, env),
+             term = build_app_spine({:global, resolved}, arg_terms),
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
       # A QUALIFIED call to a plain (non-ctor) global def: `A.foo(x)`. The
       # qualified branch above mapped the dotted `name` to the def's registry key
       # (`resolved`, bare or re-keyed `Mod#foo`) via `resolve_qualified/3`; without
@@ -1211,6 +1234,23 @@ defmodule Cure.Elab.Elaborator do
   # A saturated `f(a)(b)` application of a global by name, most-recently-applied
   # argument outermost — the shape the kernel + emit expect for a curried def.
   defp app2(name, l, r), do: {:app, {:app, {:global, name}, l}, r}
+
+  # Left-nested application of a head term to a list of argument terms, in order:
+  # `[a, b, c]` becomes `{:app, {:app, {:app, head, a}, b}, c}` — the curried spine
+  # the kernel and emit expect.
+  defp build_app_spine(head, arg_terms), do: Enum.reduce(arg_terms, head, &{:app, &2, &1})
+
+  # Elaborate every surface argument to its Core term (discarding the inferred
+  # types), short-circuiting on the first failure. Returns `{:ok, terms}` in call
+  # order or the first `{:error, _}`.
+  defp elaborate_all_args(args, names, ctx, env) do
+    Enum.reduce_while(args, {:ok, []}, fn a, {:ok, acc} ->
+      case elaborate_expr_typed(a, names, ctx, env) do
+        {:ok, term, _ty} -> {:cont, {:ok, acc ++ [term]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
 
   # The canonical global identity of a kernel builtin op. `Builtins.seed/2`
   # registers these under `Std.Builtin#<op>` (see `builtin_op_name/1` there), so a
