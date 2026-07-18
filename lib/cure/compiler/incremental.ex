@@ -60,10 +60,32 @@ defmodule Cure.Compiler.Incremental do
     |> :crypto.hash_final()
   end
 
+  @doc """
+  Named modules in dependency-first compile order: every module appears AFTER all
+  of its `use`-dependencies (`order_deps`). This is the only sound compile order —
+  a module's codegen links its use-deps' beams, so those must be built first.
+
+  Ordering follows the acyclic `order_deps` graph, NOT `closure_deps`. The closure
+  superset adds ambient `@prelude`/qualified edges that make the primitive modules
+  a single cycle (`Std.Atom`, `Std.Binary`, `Std.Char`, ...); a cyclic graph has
+  no dependency-respecting order, and `toposort` would emit the cycle
+  alphabetically — scheduling `Std.Binary` before `Std.Char` despite
+  `Binary use Char`, which breaks a cold build. `order_deps` is also the *complete*
+  compile dependency: the only cross-module beam a module links is a `use`-dep
+  (a qualified call without `use` does not compile), so nothing load-bearing is
+  lost by ignoring the closure-only edges here. Change propagation still uses the
+  conservative closure superset — see `dep_changed?/2`.
+  """
+  @spec compile_order(DepGraph.t()) :: [String.t()]
+  def compile_order(graph) do
+    order = DepGraph.order_deps_map(graph)
+    DepGraph.toposort(order, Map.keys(order))
+  end
+
   defp run(graph, source_paths, output_dir, opts) do
     {:ok, _ordered, cycles} = DepGraph.order(graph)
     closure = DepGraph.closure_deps_map(graph)
-    walk = DepGraph.toposort(closure, Map.keys(closure))
+    walk = compile_order(graph)
 
     forced_paths =
       for {path, node} <- graph.nodes,
@@ -92,9 +114,28 @@ defmodule Cure.Compiler.Incremental do
     {manifest, deleted} =
       if force?, do: {manifest, []}, else: delete_removed(manifest, roots, output_dir)
 
+    # Base-dirtiness is independent of visit order: it depends only on a module's
+    # own source bytes, its recorded beams, and the global rebuild flags. Compute
+    # it up front so `dep_changed?/2` can consult a not-yet-visited closure dep
+    # (only possible across an ambient `@prelude` cycle back-edge, where the walk
+    # order cannot place the dep first) and still cascade soundly.
+    base_dirty =
+      for mod <- walk, into: %{} do
+        path = Map.fetch!(graph.modules, mod)
+        old = Map.get(manifest.modules, mod)
+
+        dirty? =
+          all_dirty? or is_nil(old) or
+            source_hash(path) != old.source_hash or
+            any_beam_missing?(old, output_dir)
+
+        {mod, dirty?}
+      end
+
     state0 = %{
       output_dir: output_dir,
       closure: closure,
+      base_dirty: base_dirty,
       module_paths: graph.modules,
       compile_opts: Keyword.get(opts, :compile_opts, []),
       # `roots` drives BOTH deletion scoping (above) and the standalone
@@ -105,7 +146,6 @@ defmodule Cure.Compiler.Incremental do
       # the roots here (as `mix cure.compile` does for the compile step) keeps
       # incrementality effective for non-leaf modules.
       roots: roots,
-      all_dirty?: all_dirty?,
       old: manifest.modules,
       # Seed `new` with the post-deletion kept map, NOT `%{}`. Every module the
       # walk actually visits overwrites its own key below (skip branch: `old`;
@@ -147,9 +187,7 @@ defmodule Cure.Compiler.Incremental do
     old = Map.get(state.old, mod)
 
     dirty? =
-      state.all_dirty? or is_nil(old) or
-        source_hash(path) != old.source_hash or
-        any_beam_missing?(old, state.output_dir) or
+      Map.fetch!(state.base_dirty, mod) or
         dep_changed?(Map.get(state.closure, mod, []), state)
 
     if dirty? do
@@ -224,9 +262,19 @@ defmodule Cure.Compiler.Incremental do
     end
   end
 
+  # A module is stale if any of its closure deps changed. For a dep already
+  # visited this walk, "changed" means its interface hash moved (the precise
+  # interface-level cascade). A dep NOT yet visited can only be an ambient
+  # `@prelude` cycle back-edge — the acyclic `order_deps` walk places every real
+  # use-dep first — so we fall back to its precomputed base-dirtiness: if that
+  # dep's own source/beams changed it will recompile, and we conservatively
+  # recompile this module too rather than risk linking a stale interface.
   defp dep_changed?(deps, state) do
     Enum.any?(deps, fn d ->
-      match?(%{changed: true}, Map.get(state.iface, d))
+      case Map.get(state.iface, d) do
+        %{changed: changed?} -> changed?
+        nil -> Map.get(state.base_dirty, d, false)
+      end
     end)
   end
 

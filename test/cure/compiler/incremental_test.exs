@@ -288,4 +288,38 @@ defmodule Cure.Compiler.IncrementalTest do
     assert File.exists?(Path.join(out, "Cure.Ns.Base.Child.beam"))
     assert Map.has_key?(BuildManifest.load(out).modules, "Ns.Base.Child")
   end
+
+  # Regression (compile-order soundness): the driver must compile every module
+  # AFTER its `use`-dependencies (`order_deps`), because codegen links a module's
+  # use-deps' beams — build them out of order and a cold build fails with
+  # `{:missing_stdlib_module, ...}` (empty code path) or, worse, silently links a
+  # STALE dep beam already on the path. The trap: the ambient `@prelude`
+  # primitives (`Std.Atom`, `Std.Binary`, `Std.Char`, ...) form a *cycle* in
+  # `closure_deps_map/1`, so ordering the walk by the closure graph emits that SCC
+  # ALPHABETICALLY — placing `Std.Binary` before `Std.Char` even though
+  # `Binary use Char`. `compile_order/1` must instead follow the acyclic
+  # `order_deps` graph, exactly as the pre-incremental loop did. This is checked
+  # on the real stdlib graph because a compilable ambient cycle can't be built as
+  # a bare temp fixture, and the test BEAM keeps the stdlib loaded+sticky (so an
+  # in-process cold build resolves deps from memory and can't surface the miss).
+  test "compile_order places every module after its use-dependencies (real stdlib graph)" do
+    {:ok, graph} = DepGraph.scan(Path.wildcard("lib/std/*.cure"))
+    order = Incremental.compile_order(graph)
+
+    pos = order |> Enum.with_index() |> Map.new()
+    order_deps = DepGraph.order_deps_map(graph)
+
+    violations =
+      for m <- order,
+          d <- Map.get(order_deps, m, []),
+          Map.has_key?(pos, d),
+          pos[d] > pos[m],
+          do: {m, d}
+
+    assert violations == [], "module compiled before its use-dep: #{inspect(violations)}"
+    # The exact edge that the buggy closure-ordering got wrong.
+    assert pos["Std.Char"] < pos["Std.Binary"]
+    # Every named stdlib module is scheduled exactly once.
+    assert length(order) == map_size(order_deps)
+  end
 end
