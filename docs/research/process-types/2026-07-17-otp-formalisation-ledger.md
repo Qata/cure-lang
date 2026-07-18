@@ -83,7 +83,7 @@ linearly typed, operational preservation over the REAL reduction, tied to infere
 - [x] fixed-point property at a syntactic transfer (`rec_fixed = map_lfp_le(tset(body,-), tset_mono(body))`) — **SHIPPED** `otp_recursive_transfer.cure`
 - [x] `lfp` construction via bounded Kleene iterate `iterate(f, ⊥, height)` — **SHIPPED** (`rec_infer = iter(tset(body,-), 4)`)
 - [x] `?lfp_le` pre-fixpoint bound — **SHIPPED** `otp_inference_fixpoint.cure`
-- [ ] `?le_lfp` (lfp below any upper bound of pre-fixed points)
+- [x] `?le_lfp` (`le_sInf`: `(∀b. f(b) ⊑ b → a ⊑ b) → a ⊑ lfp`) — SHIPPED `otp_finite_fixpoint.cure` (Idris `rel=same`): `lfp = iter(f,4)` is itself a pre-fixed point (`map_lfp_le`), so instantiate the hypothesis there. With `lfp_le` this is the full universal property `lfp = ⨅{b | f(b) ⊑ b}` — Knaster–Tarski over the `IF` lattice is COMPLETE.
 - [x] **STABILIZATION**: `iterate(f, ⊥, |Tag|)` IS a fixed point — finite-height counting (interface size ≤ 3, strict-increase-or-fixed) — **SHIPPED** `otp_finite_fixpoint.cure` over the height-3 `IF` lattice (Idris `rel=same`). *The hard half, mathlib `monotone_chain_condition` port.*
 - [x] `?map_lfp` (fixed-point property `f(lfp) ⊑ lfp`) — **SHIPPED** `map_lfp_le` in `otp_finite_fixpoint.cure`
 - [x] `IF ↔ TagList` bridge (`denote`, `denote_complete`, `sub_allhandled`) — **SHIPPED** `otp_interface_bridge.cure` (Idris `rel=same`); transfers `map_lfp_le`'s `Sub` conclusion to `AllHandled` membership, so the finite fixpoint is usable in the adequacy representation

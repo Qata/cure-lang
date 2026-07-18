@@ -117,3 +117,6 @@ map_lfp_le : (f : IF -> IF) -> ((x : IF) -> (y : IF) -> Sub x y -> Sub (f x) (f 
 map_lfp_le f mono = case chain_bound f mono (S (S (S (S Z)))) of
   CFixed fx => fx
   CSize sz => absurd (le_irrefl_succ (S (S (S Z))) (le_trans sz (size_bound (iter f (S (S (S (S Z))))))))
+
+le_lfp : (f : IF -> IF) -> ((x : IF) -> (y : IF) -> Sub x y -> Sub (f x) (f y)) -> (a : IF) -> ((b : IF) -> Sub (f b) b -> Sub a b) -> Sub a (iter f (S (S (S (S Z)))))
+le_lfp f mono a hyp = hyp (iter f (S (S (S (S Z))))) (map_lfp_le f mono)
