@@ -40,4 +40,25 @@ defmodule Cure.Elab.SuperinterfaceTest do
     """
     assert {:ok, _env} = Program.elaborate(src)
   end
+
+  test "the super-interface may be implemented AFTER the sub-interface (order-independent)" do
+    # `Big for Color` is written textually BEFORE `Small for Color`. The
+    # obligation is drained against the FINAL coherence table after the whole
+    # registration fold, so the adverse order still elaborates — matching Idris.
+    src = """
+    mod M
+      interface Small(t)
+        fn small(a: t) -> Bool
+      interface Big(t) requires Small(t)
+        fn big(a: t) -> Bool
+
+      type Color = Red | Green | Blue
+      implementation Big for Color
+        fn big(a: Color) -> Bool = True()
+      implementation Small for Color
+        fn small(a: Color) -> Bool = True()
+    end
+    """
+    assert {:ok, _env} = Program.elaborate(src)
+  end
 end

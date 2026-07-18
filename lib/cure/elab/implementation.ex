@@ -26,7 +26,8 @@ defmodule Cure.Elab.Implementation do
   the caller to body-elaborate in the second pass, exactly like ordinary
   functions.
   """
-  @spec register(tuple(), Env.t()) :: {:ok, Env.t(), [tuple()]} | {:error, term()}
+  @spec register(tuple(), Env.t()) ::
+          {:ok, Env.t(), [tuple()], [tuple()]} | {:error, term()}
   def register({:implementation, meta, body}, env) do
     iface = meta |> Keyword.fetch!(:interface) |> String.to_atom()
     for_type = Keyword.fetch!(meta, :for_type)
@@ -35,14 +36,13 @@ defmodule Cure.Elab.Implementation do
     with {:ok, head} <- head_key(for_type, env),
          desc when not is_nil(desc) <- Env.get_interface(env, iface),
          :ok <- check_no_stray_clauses(desc, iface, body),
-         :ok <- check_superinterfaces(desc, head, env),
          {:ok, method_map, mangled_fns} <-
            build_methods(desc, iface, head, for_type, body, env),
          ref = %{iface: iface, head: head, methods: method_map, as: as_name},
          {:ok, env1} <- register_instance(env, iface, head, as_name, ref),
          {:ok, env2} <- register_signatures(mangled_fns, env1),
          {:ok, env3} <- bind_named_instance(env2, desc, iface, head, as_name, ref) do
-      {:ok, env3, mangled_fns}
+      {:ok, env3, mangled_fns, superinterface_obligations(iface, desc, head)}
     else
       nil -> {:error, {:no_such_interface, iface}}
       {:error, _} = err -> err
@@ -140,25 +140,19 @@ defmodule Cure.Elab.Implementation do
 
   # A `interface Big(t) requires Small(t)` declaration obliges every
   # `implementation Big for T` to already have an `implementation Small for T`.
-  # We check each superinterface named in the descriptor has an anonymous
-  # instance for this head in the coherence registry; because implementations
-  # register in source order, the superinterface instance (written earlier) is
-  # already present when the sub-interface's instance is checked. An interface
-  # with no `requires` clause has `super: []`, so this is a no-op. Older
-  # descriptors without the key default to `[]`.
-  defp check_superinterfaces(desc, head, env) do
-    supers = Map.get(desc, :super, [])
-    coherence = Env.coherence(env) || Coherence.new()
-
-    Enum.reduce_while(supers, :ok, fn super_interface, :ok ->
-      case Coherence.lookup_anon(coherence, super_interface, head) do
-        {:ok, _ref} ->
-          {:cont, :ok}
-
-        {:error, _} ->
-          {:halt, {:error, {:missing_superinterface, desc.name, super_interface, head}}}
-      end
-    end)
+  # Rather than check the coherence registry here — which, during the sequential
+  # registration fold, only holds implementations written EARLIER in source order
+  # — we RECORD one `{iface, super_interface, head}` obligation per superinterface
+  # and hand it back to the caller. `Cure.Elab.Program.body_register_pass` drains
+  # every recorded obligation against the FINAL coherence table once all
+  # implementations are registered, so `implementation Big for T` may textually
+  # precede `implementation Small for T` (order-independent, matching Idris). An
+  # interface with no `requires` clause has `super: []`, so this yields no
+  # obligations. Older descriptors without the key default to `[]`.
+  defp superinterface_obligations(iface, desc, head) do
+    desc
+    |> Map.get(:super, [])
+    |> Enum.map(fn super_interface -> {iface, super_interface, head} end)
   end
 
   # -- methods ----------------------------------------------------------------

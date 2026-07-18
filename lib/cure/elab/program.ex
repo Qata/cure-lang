@@ -2178,21 +2178,31 @@ defmodule Cure.Elab.Program do
   end
 
   defp body_register_pass(items, env, prelude?) do
-    Enum.reduce_while(items, {:ok, env, []}, fn decl, {:ok, acc, fns} ->
+    # The fold threads a fourth accumulator, `pending`: the list of
+    # `{iface, super_interface, head}` superinterface obligations recorded by each
+    # `implementation`/`deriving` registration. Checking them inline would only
+    # see implementations registered EARLIER in source order; instead we drain
+    # them against the FINAL coherence table after the fold, so a `requires`
+    # obligation is order-independent (see `drain_superinterface_checks/2`).
+    Enum.reduce_while(items, {:ok, env, [], []}, fn decl, {:ok, acc, fns, pending} ->
       case decl do
         {:function_def, _meta, _body} ->
           case Declarations.register_signature(decl, acc) do
-            {:ok, acc2} -> {:cont, {:ok, acc2, fns ++ [decl]}}
+            {:ok, acc2} -> {:cont, {:ok, acc2, fns ++ [decl], pending}}
             {:error, _} = err -> {:halt, err}
           end
 
         # An implementation lowers each method to a mangled global; register its
         # signatures + the coherence entry now, and thread the mangled defs into
         # `fns` so their bodies elaborate in the second pass like any function.
+        # Its superinterface obligations join `pending` for the post-fold drain.
         {:implementation, _meta, _body} ->
           case Cure.Elab.Implementation.register(decl, acc) do
-            {:ok, acc2, mangled_fns} -> {:cont, {:ok, acc2, fns ++ mangled_fns}}
-            {:error, _} = err -> {:halt, err}
+            {:ok, acc2, mangled_fns, obligations} ->
+              {:cont, {:ok, acc2, fns ++ mangled_fns, pending ++ obligations}}
+
+            {:error, _} = err ->
+              {:halt, err}
           end
 
         # A `type … deriving Iface` container elaborates normally, then each named
@@ -2202,9 +2212,9 @@ defmodule Cure.Elab.Program do
         {:container, meta, _body} = decl when is_list(meta) ->
           with {:ok, acc2} <- Declarations.elaborate(decl, acc),
                {:ok, acc3} <- maybe_register_builtin(decl, acc2, prelude?),
-               {:ok, acc4, derived_fns} <-
+               {:ok, acc4, derived_fns, derived_obligations} <-
                  register_derived(Keyword.get(meta, :deriving, []), decl, acc3) do
-            {:cont, {:ok, acc4, fns ++ derived_fns}}
+            {:cont, {:ok, acc4, fns ++ derived_fns, pending ++ derived_obligations}}
           else
             {:error, _} = err -> {:halt, err}
           end
@@ -2215,7 +2225,7 @@ defmodule Cure.Elab.Program do
               # `maybe_register_builtin` is total ({:ok, _} always), so there is no
               # error branch to thread here.
               case maybe_register_builtin(decl, acc2, prelude?) do
-                {:ok, acc3} -> {:cont, {:ok, acc3, fns}}
+                {:ok, acc3} -> {:cont, {:ok, acc3, fns, pending}}
               end
 
             {:error, _} = err ->
@@ -2224,9 +2234,35 @@ defmodule Cure.Elab.Program do
       end
     end)
     |> case do
-      {:ok, _env, _fns} = ok -> ok
-      {:error, _} = err -> err
+      {:ok, env_final, fns, pending} ->
+        case drain_superinterface_checks(env_final, pending) do
+          :ok -> {:ok, env_final, fns}
+          {:error, _} = err -> err
+        end
+
+      {:error, _} = err ->
+        err
     end
+  end
+
+  # Verify every recorded `{iface, super_interface, head}` obligation against the
+  # FINAL coherence table, now that all implementations in the module are
+  # registered. Each `interface Big(t) requires Small(t)` obliges every
+  # `implementation Big for T` to have an `implementation Small for T` present —
+  # in EITHER source order. On the first unmet obligation, report
+  # `{:missing_superinterface, iface, super_interface, head}` (unchanged shape).
+  defp drain_superinterface_checks(env, pending) do
+    coherence = Env.coherence(env) || Coherence.new()
+
+    Enum.reduce_while(pending, :ok, fn {iface, super_interface, head}, :ok ->
+      case Coherence.lookup_anon(coherence, super_interface, head) do
+        {:ok, _ref} ->
+          {:cont, :ok}
+
+        {:error, _} ->
+          {:halt, {:error, {:missing_superinterface, iface, super_interface, head}}}
+      end
+    end)
   end
 
   # In a designated prelude source, a `@builtin(:key) type Name = ...` container
@@ -2254,16 +2290,18 @@ defmodule Cure.Elab.Program do
 
   # Derive an instance of each named interface for a `deriving` container. Each
   # generated implementation is registered like a hand-written one; its mangled
-  # method defs are threaded back so the second pass elaborates their bodies.
-  defp register_derived([], _decl, env), do: {:ok, env, []}
+  # method defs are threaded back so the second pass elaborates their bodies, and
+  # its superinterface obligations are threaded back for the post-fold drain.
+  defp register_derived([], _decl, env), do: {:ok, env, [], []}
 
   defp register_derived(names, decl, env) do
-    Enum.reduce_while(names, {:ok, env, []}, fn name, {:ok, acc, fns} ->
+    Enum.reduce_while(names, {:ok, env, [], []}, fn name, {:ok, acc, fns, obligations} ->
       iface = String.to_atom(name)
 
       with {:ok, impl_ast} <- Cure.Elab.Deriving.generate(iface, decl, acc),
-           {:ok, acc2, mangled_fns} <- Cure.Elab.Implementation.register(impl_ast, acc) do
-        {:cont, {:ok, acc2, fns ++ mangled_fns}}
+           {:ok, acc2, mangled_fns, new_obligations} <-
+             Cure.Elab.Implementation.register(impl_ast, acc) do
+        {:cont, {:ok, acc2, fns ++ mangled_fns, obligations ++ new_obligations}}
       else
         {:error, _} = err -> {:halt, err}
       end

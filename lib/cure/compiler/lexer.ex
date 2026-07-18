@@ -55,7 +55,7 @@ defmodule Cure.Compiler.Lexer do
   # the lexer boundary prevents declaration vocabulary from stealing ordinary
   # binder/value names everywhere else. Add words here one at a time with both
   # construct and identifier regressions.
-  @contextual_keywords ~w(proof)a
+  @contextual_keywords ~w(proof requires)a
 
   @keyword_strings Enum.map(@keywords, &Atom.to_string/1)
 

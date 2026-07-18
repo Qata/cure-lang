@@ -27,4 +27,20 @@ defmodule Cure.Compiler.ContextualKeywordTest do
     assert [{:param, _, "proof"}] = meta[:params]
     assert {:variable, _, "proof"} = body
   end
+
+  test "requires is lexed as an identifier" do
+    assert {:ok, [token | _]} = Lexer.tokenize("requires", emit_events: false)
+    assert token.type == :identifier
+    assert token.value == "requires"
+    assert :requires in Lexer.contextual_keywords()
+  end
+
+  test "requires remains an ordinary parameter and value" do
+    source = "fn keep(requires: Int) -> Int = requires\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:function_def, meta, [body]}} = Parser.parse(tokens, emit_events: false)
+    assert [{:param, _, "requires"}] = meta[:params]
+    assert {:variable, _, "requires"} = body
+  end
 end
