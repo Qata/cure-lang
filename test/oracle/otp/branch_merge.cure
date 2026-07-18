@@ -1,0 +1,165 @@
+mod BranchMerge
+  use Std.Equivalent
+  type Tag = TA | TB | TC
+  type TB2 = F | T
+  fn tag_eq(x: Tag, y: Tag) -> TB2 = match x
+    TA() -> match y
+      TA() -> T()
+      TB() -> F()
+      TC() -> F()
+    TB() -> match y
+      TA() -> F()
+      TB() -> T()
+      TC() -> F()
+    TC() -> match y
+      TA() -> F()
+      TB() -> F()
+      TC() -> T()
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LSel(Tag, Local, Tag, Local) | LBra(Tag, Local, Tag, Local) | LErr
+  fn dual(l: Local) -> Local = match l
+    LEnd()          -> LEnd()
+    LSend(t, k)     -> LRecv(t, dual(k))
+    LRecv(t, k)     -> LSend(t, dual(k))
+    LSel(a, A, b, B) -> LBra(a, dual(A), b, dual(B))
+    LBra(a, A, b, B) -> LSel(a, dual(A), b, dual(B))
+    LErr()          -> LErr()
+  ## The BRANCH-MERGE operator (TOTAL, `LErr` on conflict). Same actions merge pointwise; DIFFERING
+  ## RECEIVES UNION into an external choice (the bystander offers both labels); differing SENDS or
+  ## mismatched shapes CONFLICT (`LErr`).
+  fn merge(x: Local, y: Local) -> Local = match x
+    LEnd() -> match y
+      LEnd()             -> LEnd()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LSend(t1, k1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> match tag_eq(t1, t2)
+        T() -> LSend(t1, merge(k1, k2))
+        F() -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LRecv(t1, k1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> match tag_eq(t1, t2)
+        T() -> LRecv(t1, merge(k1, k2))
+        F() -> LBra(t1, k1, t2, k2)
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LSel(a1, A1, b1, B1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> match tag_eq(a1, a2)
+        T() -> match tag_eq(b1, b2)
+          T() -> LSel(a1, merge(A1, A2), b1, merge(B1, B2))
+          F() -> LErr()
+        F() -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LBra(a1, A1, b1, B1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> match tag_eq(a1, a2)
+        T() -> match tag_eq(b1, b2)
+          T() -> LBra(a1, merge(A1, A2), b1, merge(B1, B2))
+          F() -> LErr()
+        F() -> LErr()
+      LErr()             -> LErr()
+    LErr() -> LErr()
+  ## **MERGE IS IDEMPOTENT.** `merge(L, L) = L` — a local type merges with itself to itself: the
+  ## base of projection coherence (a bystander with IDENTICAL behaviour in both branches).
+  fn merge_idem(l: Local) -> Equivalent(Local, merge(l, l), l) = match l
+    LEnd()          -> reflexive(LEnd())
+    LSend(t, k)     -> match t
+      TA() -> rewrite merge_idem(k) in reflexive(LSend(TA(), k))
+      TB() -> rewrite merge_idem(k) in reflexive(LSend(TB(), k))
+      TC() -> rewrite merge_idem(k) in reflexive(LSend(TC(), k))
+    LRecv(t, k)     -> match t
+      TA() -> rewrite merge_idem(k) in reflexive(LRecv(TA(), k))
+      TB() -> rewrite merge_idem(k) in reflexive(LRecv(TB(), k))
+      TC() -> rewrite merge_idem(k) in reflexive(LRecv(TC(), k))
+    LSel(a, A, b, B) -> match a
+      TA() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TA(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TA(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TA(), A, TC(), B))
+      TB() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TB(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TB(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TB(), A, TC(), B))
+      TC() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TC(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TC(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TC(), A, TC(), B))
+    LBra(a, A, b, B) -> match a
+      TA() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TA(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TA(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TA(), A, TC(), B))
+      TB() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TB(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TB(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TB(), A, TC(), B))
+      TC() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TC(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TC(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TC(), A, TC(), B))
+    LErr()          -> reflexive(LErr())
+  fn lsend_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LSend(t, a), LSend(t, b)) =
+    rewrite e in reflexive(LSend(t, b))
+  fn lrecv_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LRecv(t, a), LRecv(t, b)) =
+    rewrite e in reflexive(LRecv(t, b))
+  fn lsel_cong(a: Tag, {A1: Local}, {A2: Local}, eA: Equivalent(Local, A1, A2), b: Tag, {B1: Local}, {B2: Local}, eB: Equivalent(Local, B1, B2)) -> Equivalent(Local, LSel(a, A1, b, B1), LSel(a, A2, b, B2)) =
+    rewrite eA in rewrite eB in reflexive(LSel(a, A2, b, B2))
+  type Role = RA | RB | RC
+  fn role_eq(x: Role, y: Role) -> TB2 = match x
+    RA() -> match y
+      RA() -> T()
+      RB() -> F()
+      RC() -> F()
+    RB() -> match y
+      RA() -> F()
+      RB() -> T()
+      RC() -> F()
+    RC() -> match y
+      RA() -> F()
+      RB() -> F()
+      RC() -> T()
+  type Global = GEnd | GMsg(Role, Role, Tag, Global) | GCho(Role, Role, Tag, Global, Tag, Global)
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()               -> LEnd()
+    GMsg(from, to, t, k) -> match role_eq(from, r)
+      T() -> LSend(t, project(k, r))
+      F() -> match role_eq(to, r)
+        T() -> LRecv(t, project(k, r))
+        F() -> project(k, r)
+    GCho(from, to, tL, gL, tR, gR) -> match role_eq(from, r)
+      T() -> LSel(tL, project(gL, r), tR, project(gR, r))
+      F() -> match role_eq(to, r)
+        T() -> LBra(tL, project(gL, r), tR, project(gR, r))
+        F() -> merge(project(gL, r), project(gR, r))
+  type Coherent indices (g: Global)
+    CoEnd : Coherent(GEnd)
+    CoAB  : (t: Tag) -> Coherent(k) -> Coherent(GMsg(RA, RB, t, k))
+    CoBA  : (t: Tag) -> Coherent(k) -> Coherent(GMsg(RB, RA, t, k))
+    CoCho : (tL: Tag) -> Coherent(gL) -> (tR: Tag) -> Coherent(gR) -> Coherent(GCho(RA, RB, tL, gL, tR, gR))
+  ## **CHOICE PROJECTION COHERENCE.** A coherent RA/RB protocol WITH CHOICE projects its two active
+  ## roles to DUAL endpoints: `project(g, RA) = dual(project(g, RB))`. The choice case projects RA to
+  ## an internal choice (`LSel` — RA picks) and RB to an external choice (`LBra` — RB offers); `dual`
+  ## swaps them, so the endpoints stay dual across branching. `bilateral_duality` LIFTED to branching
+  ## protocols, in a system carrying the branch-merge operator (for the bystander RC).
+  fn choice_duality({g: Global}, w: Coherent(g)) -> Equivalent(Local, project(g, RA), dual(project(g, RB))) = match w
+    CoEnd()             -> reflexive(LEnd())
+    CoAB(t, w2)         -> lsend_cong(t, choice_duality(w2))
+    CoBA(t, w2)         -> lrecv_cong(t, choice_duality(w2))
+    CoCho(tL, wL, tR, wR) -> lsel_cong(tL, choice_duality(wL), tR, choice_duality(wR))
+end
