@@ -438,7 +438,12 @@ defmodule Cure.Elab.Declarations do
         with {:ok, sig} <- function_signature(meta, env),
              :ok <- check_extern_arity(sig, arity),
              :ok <- check_extern_not_union(sig, env) do
-          {:ok, Env.add_def(env, sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)}
+          final =
+            env
+            |> Env.add_def(sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)
+            |> Env.put_labels(sig.name, param_label_vector(sig.params))
+
+          {:ok, final}
         end
 
       _ ->
@@ -611,7 +616,10 @@ defmodule Cure.Elab.Declarations do
            # (Syntactic head-check; the `no_effect_in_erased_position` Validator
            # clause is the trusted backstop for an aliased effect type, §8.)
            :ok <- assert_no_erased_effect_binder(final_pi, sig.name) do
-        final = Env.add_def(env, sig.name, final_pi, lambda, quantities)
+        final =
+          env
+          |> Env.add_def(sig.name, final_pi, lambda, quantities)
+          |> Env.put_labels(sig.name, param_label_vector(sig.params))
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
         # must unfold while `append`'s body is checked). A function that fails the
@@ -1262,6 +1270,18 @@ defmodule Cure.Elab.Declarations do
       [] ->
         elaborate_param_telescope_rec(params, env)
     end
+  end
+
+  # The telescope-aligned external-label vector for a signature's parameters
+  # (Ph2 argument labels). One entry per binder, in the same order as the
+  # telescope/quantities: the written label string (`fn f(to dest: T)` → "to") or
+  # `nil` for an unlabelled binder (including auto-generalized implicits and
+  # injected dictionaries, which the surface never labels). When NO binder carries
+  # a label the whole vector is `nil`, so a label-free def stores no label data
+  # and its record stays byte-identical to the pre-Ph2 shape (inertness).
+  defp param_label_vector(params) do
+    labels = Enum.map(params, fn {:param, pm, _n} -> Keyword.get(pm, :label) end)
+    if Enum.all?(labels, &is_nil/1), do: nil, else: labels
   end
 
   # The quantity a parameter binds at: an explicit surface grade wins, else the
