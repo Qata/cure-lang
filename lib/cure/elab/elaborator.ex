@@ -1998,6 +1998,7 @@ defmodule Cure.Elab.Elaborator do
         :no ->
           with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
             term = maybe_inject_union(term, type, expected_core, ctx, env)
+            term = maybe_coerce_refined_to_base(term, type, expected_core, ctx, env)
 
             with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
               {:ok, term}
@@ -2055,6 +2056,64 @@ defmodule Cure.Elab.Elaborator do
     end)
   end
 
+  # If `term`'s inferred `type` WHNFs to the Sigma refinement family and the
+  # expected base type is convertible to the Sigma's first-component type, coerce
+  # by inserting the first projection (`sigma_first`, or `Std.Refine.refined_value`
+  # when that idiomatic accessor is in scope) — the reverse of the base->refined
+  # injection. This is the ONLY new behavior; if the shapes don't match, return
+  # `term` unchanged so ordinary checking (and its error) stands.
+  #
+  # `type` is a semantic VALUE here (not a Core term — see the call site), so it is
+  # inspected with `Normalise.whnf_value/2` (mirror `sigma_params/3` in
+  # proof_search.ex), never `Kernel.normalize/2` (which expects a Core term and
+  # matches `:data`, not `:vdata`). The inserted projection is independently
+  # re-verified by the fallback's `Kernel.check`, so a wrong coercion is caught.
+  defp maybe_coerce_refined_to_base(term, type, expected_core, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+    depth = Context.length(ctx)
+    sig = Context.signature(ctx)
+
+    with false <- is_nil(sigma_fam),
+         {:vdata, ^sigma_fam, [dom_value, predicate_value]} <- Normalise.whnf_value(type, sig),
+         # Do not coerce when the expected type is itself that Sigma (no coercion
+         # needed) — only when expected is the base component type.
+         false <- sigma_typed?(expected_core, sigma_fam, ctx),
+         dom_term <- Quote.reify(dom_value, depth, sig),
+         true <- convertible?(dom_term, expected_core, ctx, env) do
+      predicate_term = Quote.reify(predicate_value, depth, sig)
+      build_app({:global, first_projection_head(env)}, [dom_term, predicate_term, term])
+    else
+      _ -> term
+    end
+  end
+
+  # The global to head the first projection with: `Std.Refine.refined_value` when
+  # the refinement API is in scope (the idiomatic accessor a human writes,
+  # mirroring `refinement_proof`), else the kernel builtin `sigma_first`. Mirror
+  # `second_projection_head/1` in `proof_search.ex`: nil-check via `Env.get_def`
+  # FIRST, because `Env.resolve_key/3` falls back to the bare input atom (never
+  # nil) and would otherwise hand back a nonexistent global.
+  defp first_projection_head(env) do
+    case Env.get_def(env, "refined_value") do
+      nil -> :sigma_first
+      _def -> Env.resolve_key(env, env.defs, "refined_value")
+    end
+  end
+
+  # True when the expected Core type normalises to the Sigma family itself (so no
+  # coercion is needed — the refined value is already at the expected type).
+  defp sigma_typed?(expected_core, sigma_fam, ctx) do
+    match?({:data, ^sigma_fam, _, []}, Kernel.normalize(ctx, expected_core))
+  end
+
+  # Up-to-conversion equality of two Core types, mirroring proof_search.ex:317.
+  # `Conv.conv?/5` takes Core terms and evaluates them itself.
+  defp convertible?(a_term, b_term, ctx, env) do
+    Conv.conv?(a_term, b_term, Context.env(ctx), Context.length(ctx), env)
+  end
+
+  defp build_app(head, args), do: Enum.reduce(args, head, fn a, f -> {:app, f, a} end)
+
   # The nullary constructor for a LITERAL member of the expected union, or nil if the
   # expected type is not a union or the literal is not one of its members.
   #
@@ -2086,6 +2145,21 @@ defmodule Cure.Elab.Elaborator do
   @spec coerce_union(term(), Cure.Core.Value.t(), term(), Context.t(), Env.t()) :: term()
   def coerce_union(term, type, expected_core, ctx, env),
     do: maybe_inject_union(term, type, expected_core, ctx, env)
+
+  @doc """
+  Coerce an already-inferred refinement value to its base type.
+
+  A STRICT no-op unless the inferred `type` WHNFs to the Sigma refinement family and
+  `expected_core` is convertible to the Sigma's first-component type, so it is safe to
+  apply anywhere a term has been inferred but the expected base type is known.
+  `Declarations.elaborate_body/6`'s catch-all needs it for the same reason it needs
+  `coerce_union/5`: that clause elaborates in INFER mode, so a body like
+  `fn underlying(p: PositiveNatural) -> Nat = p` never reaches the check-mode fallback.
+  """
+  @spec coerce_refined_to_base(term(), Cure.Core.Value.t(), term(), Context.t(), Env.t()) ::
+          term()
+  def coerce_refined_to_base(term, type, expected_core, ctx, env),
+    do: maybe_coerce_refined_to_base(term, type, expected_core, ctx, env)
 
   # Anonymous-union subsumption: a coercion inserted by the ELABORATOR in check mode
   # only — never a kernel rule. If the expected type is a generated union family and

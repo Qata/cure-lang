@@ -1110,7 +1110,8 @@ defmodule Cure.Elab.Declarations do
       Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
     else
       with {:ok, term, type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
-        {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
+        term = Elaborator.coerce_union(term, type, return_core, ctx, env)
+        {:ok, Elaborator.coerce_refined_to_base(term, type, return_core, ctx, env)}
       end
     end
   end
