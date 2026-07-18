@@ -1438,6 +1438,24 @@ defmodule Cure.Elab.Program do
   #
   # Bookkeeping (cycle stack, duplicate identity, path/identity agreement) lives
   # in the caller and still runs per generation on every load, hit or miss.
+  @doc """
+  Return the canonical module interface for `module_name` at `path`.
+
+  The interface map carries the elaborated `:export_env` a consumer merges in
+  when it imports this module, plus its `:source_hash`. This is the exact
+  artifact incremental compilation hashes to decide whether a change to this
+  module can affect its dependents. Semantics match the internal loader cache:
+  `:persistent_term`-cached for stdlib paths, recomputed otherwise.
+  """
+  @spec module_interface(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def module_interface(module_name, path) when is_binary(module_name) and is_binary(path) do
+    # Runs inside a loader session so a cold, standalone call (no enclosing
+    # `elaborate/1`) still has the `@loader_state_key` generation its dependency
+    # loading reads. `with_loader_session/1` reuses an existing generation when
+    # one is already open, so this is a no-op cost under normal elaboration.
+    with_loader_session(fn -> cached_module_interface(module_name, path) end)
+  end
+
   defp cached_module_interface(module_name, path) do
     if stdlib_source_path?(path) do
       key = {__MODULE__, :module_interface, path}
