@@ -60,7 +60,13 @@ defmodule Cure.Core.Kernel do
   # and each primitive op is typed against the kernel (arithmetic/comparison are
   # numeric-polymorphic over Int or Float; connectives are on Bool).
   def infer(_ctx, {:int_type}), do: {:ok, {:vtype, 0}}
-  def infer(_ctx, {:int_lit, _n}), do: {:ok, {:vint_type}}
+
+  # A compact `Int` literal inhabits the canonical `Int` inductive family — its type
+  # is the family value `{:vdata, :Int, []}`, exactly as a `{:nat_lit}` inhabits `Nat`.
+  # The surface flip (spec 2026-07-18) retired the primitive `{:vint_type}`; the
+  # literal ↔ `FromNat`/`NegativeSuccessor` spine bridge is the audited `int_to_ctor`
+  # fold, so the compact node and the constructor form share one type at this rule.
+  def infer(ctx, {:int_lit, _n}), do: {:ok, int_type_value(Context.signature(ctx))}
 
   # A compact Nat literal inhabits the canonical `Nat` inductive family — its type
   # is the family value `{:vdata, :Nat, []}`, exactly what `infer({:ctor, :Z, []})`
@@ -1716,6 +1722,20 @@ defmodule Cure.Core.Kernel do
   @spec nat_type_value(Env.t()) :: Cure.Core.Value.t()
   def nat_type_value(sig) do
     fid = Inductive.builtin(sig, :nat) || raise "builtin :nat not seeded (bootstrap/load-order bug)"
+    {:vdata, fid, []}
+  end
+
+  @doc """
+  The type **value** denoting the canonical `Int` inductive family
+  (`Std.Int#Int = FromNat | NegativeSuccessor`). Shared by the `{:int_lit, _}`
+  typing rule and any type-directed integer-literal lowering, mirroring
+  `nat_type_value/1`. Since the surface flip retired the primitive `{:vint_type}`
+  node, a compact integer literal inhabits this family exactly as a `Nat` literal
+  inhabits `Nat`.
+  """
+  @spec int_type_value(Env.t()) :: Cure.Core.Value.t()
+  def int_type_value(sig) do
+    fid = Inductive.builtin(sig, :int) || raise "builtin :int not seeded (bootstrap/load-order bug)"
     {:vdata, fid, []}
   end
 

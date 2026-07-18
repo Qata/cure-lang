@@ -15,7 +15,10 @@ defmodule Cure.Core.LetBinderTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Core.{Context, Eval, Kernel, Serialize, Term, Validator}
+  alias Cure.Core.{Builtins, Context, Env, Eval, Kernel, Serialize, Term, Validator}
+
+  # A context whose env seeds the `:int` builtin, needed to type int literals.
+  defp seeded_ctx, do: Context.empty(Builtins.seed(Env.empty()))
 
   # `let T : Type 0 := Int in <body>`
   defp let_int(body), do: {:let, Cure.Core.Grade.unrestricted(), {:type, 0}, {:int_type}, body}
@@ -80,10 +83,10 @@ defmodule Cure.Core.LetBinderTest do
 
   describe "typing" do
     test "infer/2 types a let by its body's type" do
-      assert {:ok, {:vint_type}} =
+      assert {:ok, {:vdata, :"Std.Int#Int", []}} =
                Kernel.infer(
-                 Context.empty(),
-                 {:let, Cure.Core.Grade.unrestricted(), {:int_type}, {:int_lit, 3}, {:var, 0}}
+                 seeded_ctx(),
+                 {:let, Cure.Core.Grade.unrestricted(), {:data, :"Std.Int#Int", [], []}, {:int_lit, 3}, {:var, 0}}
                )
     end
 
@@ -114,7 +117,7 @@ defmodule Cure.Core.LetBinderTest do
     test "the ascribed type must be a sort" do
       assert {:error, _} =
                Kernel.infer(
-                 Context.empty(),
+                 seeded_ctx(),
                  {:let, Cure.Core.Grade.unrestricted(), {:int_lit, 1}, {:int_lit, 1}, {:int_lit, 1}}
                )
     end

@@ -19,7 +19,7 @@ defmodule Cure.Core.GradeBinderTest do
   silently wrong — so `term?/1` is the net that makes the migration loud.
   """
   use ExUnit.Case, async: true
-  alias Cure.Core.{Context, Conv, Eval, Grade, Kernel, Serialize, Term}
+  alias Cure.Core.{Builtins, Context, Conv, Env, Eval, Grade, Kernel, Serialize, Term}
 
   @nat {:int_type}
 
@@ -113,8 +113,14 @@ defmodule Cure.Core.GradeBinderTest do
     end
 
     test "infer/2 types a graded let by its body's type" do
-      assert {:ok, {:vint_type}} =
-               Kernel.infer(Context.empty(), {:let, :linear, @nat, {:int_lit, 3}, {:var, 0}})
+      # Typing the `{:int_lit, 3}` reads the seeded `:int` builtin, and the let's
+      # declared type must be the canonical `Std.Int#Int` family the literal
+      # inhabits (the inert `{:int_type}` facade no longer converts against it).
+      ctx = Context.empty(Builtins.seed(Env.empty()))
+      int = {:data, :"Std.Int#Int", [], []}
+
+      assert {:ok, {:vdata, :"Std.Int#Int", []}} =
+               Kernel.infer(ctx, {:let, :linear, int, {:int_lit, 3}, {:var, 0}})
     end
   end
 

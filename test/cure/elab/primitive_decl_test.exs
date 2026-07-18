@@ -21,7 +21,9 @@ defmodule Cure.Elab.PrimitiveDeclTest do
   end
 
   test "a primitive whose tag disagrees with the name's floor is rejected" do
-    # Int's floor is {:int_type}; tagging it :float contradicts the floor.
-    assert {:error, _} = Program.elaborate("mod M\n  @builtin(:float) primitive Int\nend\n")
+    # Binary's floor is {:binary_type}; tagging it :float contradicts the floor.
+    # (Int is no longer a machine primitive — it is the inductive Std.Int#Int
+    # family — so the floor-disagreement is exercised on a name still on the floor.)
+    assert {:error, _} = Program.elaborate("mod M\n  @builtin(:float) primitive Binary\nend\n")
   end
 end

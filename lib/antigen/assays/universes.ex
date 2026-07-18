@@ -17,7 +17,7 @@ defmodule Antigen.Assays.Universes do
   def run(%Challenge{kind: :indexed_case} = c), do: run(c, @real_kernel)
 
   def run(%Challenge{kind: :family, label: label, payload: %{family: fam, ctors: ctors}}) do
-    env = Inductive.declare(Env.empty(), fam, ctors)
+    env = Inductive.declare(base_env(), fam, ctors)
 
     verdict =
       with :ok <- Kernel.check_family(env, fam) do
@@ -42,4 +42,14 @@ defmodule Antigen.Assays.Universes do
   defp judge(:ill_typed, {:error, _}, _n), do: :ok
   defp judge(:well_typed, {:error, reason}, n), do: {:violation, {:wrongly_rejected, {n, reason}}}
   defp judge(:ill_typed, :ok, n), do: {:violation, {:wrongly_accepted, n}}
+
+  # The base env a family-shaped challenge is checked in. Since the 2026-07-18 surface
+  # flip retired the primitive `{:vint_type}`, the kernel's compact-literal typing rules
+  # (`infer({:int_lit})` → `int_type_value`, `infer({:nat_lit})` → `nat_type_value`) read
+  # the `:int`/`:nat` builtins — a challenge carrying an int-literal result index (the
+  # `indexed_ctor` probe: `IdxI (n:Int)`, `mki : IdxI 7`) needs them seeded or the kernel
+  # raises "builtin :int not seeded". `Antigen.CanonBuiltins` owns that canonical bare-name
+  # seed (the SAME shapes the v1 signature menu declares); an empty env can no longer type
+  # an integer literal. Extra families are inert to every other probe.
+  defp base_env, do: Antigen.CanonBuiltins.seed(Env.empty())
 end

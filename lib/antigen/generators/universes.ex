@@ -142,7 +142,11 @@ defmodule Antigen.Generators.Universes do
   """
   @spec indexed_ctor(:well_typed | :ill_typed) :: Challenge.t()
   def indexed_ctor(label) do
-    fam = Inductive.family(:IdxI, [], [{:n, {:int_type}}], 0)
+    # Post-2026-07-18 surface flip, `Int` is the inductive family
+    # `Int = FromNat(Nat) | NegativeSuccessor(Nat)`; the index type is that family, and
+    # the compact result-index literal `7` inhabits it via `int_type_value`. The run
+    # env (Antigen.Assays.Universes) seeds the bare `:nat`/`:int` builtins this needs.
+    fam = Inductive.family(:IdxI, [], [{:n, {:data, :Int, [], []}}], 0)
 
     ctors =
       case label do

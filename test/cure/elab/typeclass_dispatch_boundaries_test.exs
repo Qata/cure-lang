@@ -93,7 +93,7 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
 
       def_ = Env.get_def(env, :strictInt)
       refute is_nil(def_), "a named implementation must be bound as an ordinary global value"
-      assert def_.type == {:data, :"M#Eqs", [{:int_type}], []}
+      assert def_.type == {:data, :"M#Eqs", [{:data, :"Std.Int#Int", [], []}], []}
       assert {:ctor, :"M#Eqs", [_eqs_method]} = def_.body
     end
 
@@ -189,7 +189,7 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
           for_int("int_eq(x, y)") <>
           "  implementation Eqs for MyInt\n    fn eqs(x: MyInt, y: MyInt) -> Bool = int_eq(x, y)\nend\n"
 
-      assert {:error, {:overlapping_instance, :Eqs, :Int}} = Program.elaborate(src)
+      assert {:error, {:overlapping_instance, :Eqs, :"Std.Int#Int"}} = Program.elaborate(src)
     end
 
     test "a lone alias instance registers under the unfolded head, so bare `Int` dispatch finds it" do
@@ -201,7 +201,8 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
           "  fn use_it(a: Int, b: Int) -> Bool = eqs(a, b)\nend\n"
 
       assert {:ok, env} = Program.elaborate(src)
-      assert {:ok, %{head: :Int}} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :Int)
+      assert {:ok, %{head: :"Std.Int#Int"}} =
+               Coherence.lookup_anon(Env.coherence(env), :Eqs, :"Std.Int#Int")
     end
 
     test "an alias chain unfolds all the way to the head" do
@@ -211,7 +212,7 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
           for_int("int_eq(x, y)") <>
           "  implementation Eqs for Yours\n    fn eqs(x: Yours, y: Yours) -> Bool = int_eq(x, y)\nend\n"
 
-      assert {:error, {:overlapping_instance, :Eqs, :Int}} = Program.elaborate(src)
+      assert {:error, {:overlapping_instance, :Eqs, :"Std.Int#Int"}} = Program.elaborate(src)
     end
 
     test "an alias of a data family resolves to the family, not the alias name" do

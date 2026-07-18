@@ -76,7 +76,7 @@ defmodule Antigen.Generators.DepMatch do
       {3, var_const(@nat, numeral())},
       {2, var_const(@bd, bd_lit())},
       {2, var_const({:type, 0}, small_type())},
-      {2, var_const({:int_type}, int_lit())},
+      {2, var_const({:data, :Int, [], []}, int_lit())},
       {2, var_const({:float_type}, float_lit())},
       # dependent motives: Vec m (type-former) and Eq Nat m m (propositional)
       {3, var_index(:vec)},
@@ -151,8 +151,8 @@ defmodule Antigen.Generators.DepMatch do
        )},
       {2,
        var_index_extra2(
-         {:int_type},
-         {:data, :Equivalent, [{:int_type}],
+         {:data, :Int, [], []},
+         {:data, :Equivalent, [{:data, :Int, [], []}],
           [
             {:app, {:app, {:global, :int_add}, {:var, 1}}, {:var, 1}},
             {:app, {:app, {:global, :int_add}, {:var, 1}}, {:var, 1}}
@@ -288,7 +288,7 @@ defmodule Antigen.Generators.DepMatch do
   end
 
   defp tg_motive(fname, kind) do
-    ity = if kind == :int, do: {:int_type}, else: {:float_type}
+    ity = if kind == :int, do: {:data, :Int, [], []}, else: {:float_type}
 
     {:lam, Cure.Core.Grade.unrestricted(), ity,
      {:lam, Cure.Core.Grade.unrestricted(), {:data, fname, [], [{:var, 0}]}, @nat}}

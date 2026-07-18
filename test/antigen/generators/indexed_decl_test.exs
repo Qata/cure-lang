@@ -34,7 +34,7 @@ defmodule Antigen.Generators.IndexedDeclTest do
     assert Enum.any?(sample, fn c -> c.label == :ill_typed and length(ctor_index.(c)) == 1 end)
 
     # both index-type families appear
-    assert Enum.any?(sample, fn c -> hd(c.payload.family.indices) == {:n, {:int_type}} end)
+    assert Enum.any?(sample, fn c -> hd(c.payload.family.indices) == {:n, {:data, :Int, [], []}} end)
     assert Enum.any?(sample, fn c -> hd(c.payload.family.indices) == {:n, {:float_type}} end)
 
     # an arg-bearing ctor (non-empty field telescope) → check_ctor_args

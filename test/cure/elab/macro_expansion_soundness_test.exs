@@ -66,7 +66,12 @@ defmodule Cure.Elab.MacroExpansionSoundnessTest do
                "mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n      example bad expands nonexistent_thing\n    explain\n      keyword \"bad\" =>\n        \"starts with bad\"\n  fn f() -> Int = bad\n"
              )
 
-    assert {:reject, {:conversion_failure, {:data, :"Std.Bool#Bool", [], []}, {:int_type}}} =
+    # `true` (Std.Bool#True) checked against the return type `Int` — now the
+    # inductive `Std.Int#Int` family — is rejected by ctor-membership: True is
+    # not one of Int's constructors, so the error is the position-free
+    # `{:foreign_ctor, …}` rather than a bare conversion_failure against the
+    # retired `{:int_type}` facade. Still a genuine rejection.
+    assert {:reject, {:foreign_ctor, :"Std.Bool#True"}} =
              verdict(
                "mod M\n  macro T\n    syntax tt becomes true\n      example tt expands true\n    explain\n      keyword \"tt\" =>\n        \"starts with tt\"\n  fn f() -> Int = tt\n"
              )

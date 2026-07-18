@@ -16,9 +16,9 @@ defmodule Cure.Core.K6ParamCtorInferTest do
   test "infer accepts a param constructor with the param in the spine" do
     ctx = Context.empty(Builtins.seed(Env.empty()))
     # refl at a=Int, w=3  ->  Equivalent(Int, 3, 3).  Spine = [param a, witness w].
-    term = {:ctor, :reflexive, [{:int_type}, {:int_lit, 3}]}
+    term = {:ctor, :reflexive, [{:data, :"Std.Int#Int", [], []}, {:int_lit, 3}]}
 
-    assert {:ok, {:vdata, :"Std.Equivalent#Equivalent", [{:vint_type}, {:vint, 3}, {:vint, 3}]}} =
+    assert {:ok, {:vdata, :"Std.Equivalent#Equivalent", [{:vdata, :"Std.Int#Int", []}, {:vint, 3}, {:vint, 3}]}} =
              Kernel.infer(ctx, term)
   end
 

@@ -148,8 +148,12 @@ defmodule Cure.Core.Builtins do
   # a surface-name resolution table only, adding no Core node and changing no
   # judgement (the three nodes predate it, gated by the #2/#3 batch).
   defp seed_primitives(%Env{} = env) do
+    # `Int` is NO LONGER a primitive: it is the inductive `@builtin(:int)` family
+    # (FromNat/NegativeSuccessor), seeded by `seed_builtin(:int)` and resolving
+    # exactly as `Nat` does. Removing the primitive binding lets every
+    # `Env.primitive(env, "Int")` site fall through to family lookup (spec
+    # 2026-07-18-inductive-int §3a). Float/Binary/Atom stay primitive.
     env
-    |> Env.put_primitive("Int", {:int_type})
     |> Env.put_primitive("Float", {:float_type})
     |> Env.put_primitive("Binary", {:binary_type})
     |> Env.put_primitive("Atom", {:atom_type})
@@ -166,11 +170,12 @@ defmodule Cure.Core.Builtins do
   @spec seed_ops(Env.t()) :: Env.t()
   def seed_ops(%Env{} = env) do
     bool_ty = {:data, bool_family_id(env), [], []}
+    int_ty = {:data, int_family_id(env), [], []}
 
     env
-    |> seed_binops(@int_binops, {:int_type}, bool_ty)
+    |> seed_binops(@int_binops, int_ty, bool_ty)
     |> seed_binops(@float_binops, {:float_type}, bool_ty)
-    |> seed_unops(@int_unops, {:int_type})
+    |> seed_unops(@int_unops, int_ty)
     |> seed_unops(@float_unops, {:float_type})
     |> seed_struct_ops(bool_ty)
   end
@@ -193,6 +198,12 @@ defmodule Cure.Core.Builtins do
   # correct snapshot under both orders, and the op signatures no longer vary with seeding order.
   defp bool_family_id(env),
     do: Inductive.builtin(env, :bool) || bool_family(Env.with_owner(env, "Std.Bool")).name
+
+  # Int is now the inductive family Std.Int#Int (FromNat | NegativeSuccessor); the
+  # primitive-arithmetic operators (@int_binops/@int_unops) take it as their operand
+  # domain. Mirrors bool_family_id/1's canonical-name snapshot under either seed order.
+  defp int_family_id(env),
+    do: Inductive.builtin(env, :int) || int_family(Env.with_owner(env, "Std.Int")).name
 
   # struct_eq/struct_ne : Pi(a: Type0). Pi(_: a). Pi(_: a). Bool — under the
   # second binder the type param a is {:var, 0}; under the third it is {:var, 1}.
@@ -340,15 +351,19 @@ defmodule Cure.Core.Builtins do
   # byte-for-byte mirror, pinned by the conformance drift harness.
   defp int_family(env), do: Inductive.family(Env.owned_name(env, :Int), [], [], 0)
 
-  defp int_ctors(env),
-    do: [
-      Inductive.ctor(Env.owned_name(env, :FromNat), [{:n, {:data, Env.owned_name(env, :Nat), [], []}}], []),
-      Inductive.ctor(
-        Env.owned_name(env, :NegativeSuccessor),
-        [{:n, {:data, Env.owned_name(env, :Nat), [], []}}],
-        []
-      )
+  # FromNat / NegativeSuccessor belong to Std.Int (so the ctor NAMES are owned by
+  # this env), but their single field is a *canonical* Nat — it must point at the
+  # Std.Nat#Nat family, NOT a Std.Int-owned twin, or constructing FromNat(n) fails
+  # to unify n's Nat against the prelude Nat. Nat is seeded before Int, so the
+  # builtin lookup resolves here.
+  defp int_ctors(env) do
+    nat = {:data, Inductive.builtin(env, :nat), [], []}
+
+    [
+      Inductive.ctor(Env.owned_name(env, :FromNat), [{:n, nat}], []),
+      Inductive.ctor(Env.owned_name(env, :NegativeSuccessor), [{:n, nat}], [])
     ]
+  end
 
   # Equivalent : (a : Type) -> a -> a -> Type   (1 param `a`, 2 indices `x y : a`)
   #   reflexive : {w : a} -> Equivalent(a, w, w)  (single ctor, witness `w` erased)

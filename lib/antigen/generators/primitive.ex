@@ -12,7 +12,7 @@ defmodule Antigen.Generators.Primitive do
   (which seeds the 25 ops) in the empty context: operands are
   `:int_lit`/`:float_lit` literals (or shallow nested spines of the same
   numeric type), and the claimed `type` is exactly the op's result type
-  (`{:int_type}`/`{:float_type}`, comparisons `Bool`). div/rem occasionally
+  (`{:data, :Int, [], []}` post-flip / `{:float_type}`, comparisons `Bool`). div/rem occasionally
   draw a **zero divisor**, which the kernel types fine but the fold leaves
   *stuck* (the spine stays a neutral `napp` chain) — this exercises the
   §G.1 partial-op rule.
@@ -64,7 +64,7 @@ defmodule Antigen.Generators.Primitive do
   # -- op spine + its result type ---------------------------------------------
   defp prim_gen do
     Gen.frequency([
-      {5, Gen.bind(int_prim(@max_depth), fn t -> Gen.return({t, {:int_type}}) end)},
+      {5, Gen.bind(int_prim(@max_depth), fn t -> Gen.return({t, {:data, :Int, [], []}}) end)},
       {4, Gen.bind(float_prim(@max_depth), fn t -> Gen.return({t, {:float_type}}) end)},
       {5, Gen.bind(bool_prim(@max_depth), fn t -> Gen.return({t, @bool_type}) end)},
       {2, struct_eq_int()},
@@ -84,7 +84,7 @@ defmodule Antigen.Generators.Primitive do
     Gen.bind(Gen.member_of(@struct_ops), fn g ->
       Gen.bind(int_lit(), fn a ->
         Gen.bind(int_lit(), fn b ->
-          Gen.return({{:app, {:app, {:app, {:global, g}, {:int_type}}, a}, b}, @bool_type})
+          Gen.return({{:app, {:app, {:app, {:global, g}, {:data, :Int, [], []}}, a}, b}, @bool_type})
         end)
       end)
     end)

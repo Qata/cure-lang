@@ -38,7 +38,7 @@ defmodule Cure.Elab.EffectBindTest do
 
       # The continuation binds x : Int (NOT Effect(Int)); the body is the
       # effectful `eff_abs(x)` call, so it is NOT a pure-wrap.
-      assert {:effect_bind, _mkref, {:lam, @omega, {:int_type}, inner}} = body(env, :f)
+      assert {:effect_bind, _mkref, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, inner}} = body(env, :f)
       refute match?({:effect_pure, _}, inner)
     end
 
@@ -51,7 +51,7 @@ defmodule Cure.Elab.EffectBindTest do
 
       assert {:ok, env} = Program.elaborate(src)
 
-      assert {:effect_bind, _mkref, {:lam, @omega, {:int_type}, {:effect_pure, {:var, 0}}}} =
+      assert {:effect_bind, _mkref, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:effect_pure, {:var, 0}}}} =
                body(env, :g)
     end
 
@@ -65,7 +65,7 @@ defmodule Cure.Elab.EffectBindTest do
       assert {:ok, env} = Program.elaborate(src)
 
       assert {:effect_bind, _mkref1,
-              {:lam, @omega, {:int_type}, {:effect_bind, _mkref2, {:lam, @omega, {:int_type}, _inner}}}} = body(env, :h)
+              {:lam, @omega, {:data, :"Std.Int#Int", [], []}, {:effect_bind, _mkref2, {:lam, @omega, {:data, :"Std.Int#Int", [], []}, _inner}}}} = body(env, :h)
     end
   end
 
