@@ -24,7 +24,7 @@ defmodule Cure.StdlibTest do
   # inert (the callee projects field 1 positionally).
   defp equatable_int_dict do
     {:module, _} = :code.ensure_loaded(:"Cure.Std.Equatable")
-    eq = fn a -> fn b -> apply(:"Cure.Std.Equatable", :"__impl_Equatable_Int_==", [a, b]) end end
+    eq = fn a -> fn b -> apply(:"Cure.Std.Equatable", :"__impl_Equatable_Std.Int#Int_==", [a, b]) end end
     {:"Std.Equatable#Equatable", eq}
   end
 
