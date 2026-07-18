@@ -1757,6 +1757,23 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A proof-position hole: attempt auto-resolution. `expected_core` is the Core
+  # goal at this slot. Soundness: ProofSearch only builds a term; the kernel
+  # re-checks it. On `:none` (no candidate discharges the goal) the hole SURVIVES
+  # as a first-class `{:hole, id}` — since holes are stuck neutrals (first-class
+  # holes, Slice 1), the enclosing application evals to a stuck spine and
+  # type-checks (the kernel accepts a hole at any goal), so the declined proof
+  # becomes an inspectable hole that blocks codegen, exactly like a body-level
+  # hole (declarations.ex hole clause), rather than a hard elaboration error.
+  # The id is minted by the shared `Declarations.hole_id/2` scheme.
+  def elaborate_expr_checked({:hole, meta, _}, expected_core, _names, ctx, env) do
+    case Cure.Elab.ProofSearch.resolve(expected_core, ctx, env) do
+      {:ok, term} -> {:ok, term}
+      :none -> {:ok, {:hole, Cure.Elab.Declarations.hole_id(env, meta)}}
+      {:error, _} = err -> err
+    end
+  end
+
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
 

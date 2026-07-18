@@ -1119,7 +1119,12 @@ defmodule Cure.Elab.Declarations do
   # hole-bearing def is never certified and so never δ-unfolded into another def's
   # conversion — so position alone is soundness-sufficient. The module qualifier
   # is defense-in-depth and readability for later slices (goal reporting).
-  defp hole_id(env, meta) do
+  #
+  # Public so the elaborator's proof-hole trigger (Elaborator.elaborate_expr_checked
+  # for `{:hole,_}` in argument position) mints ids by the SAME scheme — one
+  # source of hole identity, no drift.
+  @doc false
+  def hole_id(env, meta) do
     mod = Env.owner(env) || ""
     name = Keyword.get(meta, :name, "")
 
