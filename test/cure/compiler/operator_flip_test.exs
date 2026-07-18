@@ -111,4 +111,42 @@ defmodule Cure.Compiler.OperatorFlipTest do
     """
     assert {:error, {:builtin_operator_not_overloadable, :|>}} = Cure.Elab.Program.elaborate(src)
   end
+
+  test "a cyclic precedencegroup relation is rejected" do
+    # `Ring` binds tighter than `Loop` while `Loop` binds tighter than `Ring`:
+    # an unsatisfiable order the toposort would otherwise linearise silently.
+    src = """
+    mod M
+      use Std.Operators
+      precedencegroup Ring
+        associativity: left
+        higher_than: Loop
+      precedencegroup Loop
+        associativity: left
+        higher_than: Ring
+    end
+    """
+
+    assert {:error, {:precedence_cycle, groups}} = Cure.Elab.Program.elaborate(src)
+    assert Enum.sort(groups) == [:Loop, :Ring]
+  end
+
+  test "a group closing a cycle through the built-in tower is rejected" do
+    # `Weighted` claims to bind BOTH tighter than `Additive` and looser than
+    # `Concat`, but the built-in tower already fixes `Additive` tighter than
+    # `Concat` — so the three groups form a cycle only visible with the
+    # built-in edges included.
+    src = """
+    mod M
+      use Std.Operators
+      precedencegroup Weighted
+        associativity: left
+        higher_than: Additive
+        lower_than: Concat
+    end
+    """
+
+    assert {:error, {:precedence_cycle, groups}} = Cure.Elab.Program.elaborate(src)
+    assert :Weighted in groups
+  end
 end

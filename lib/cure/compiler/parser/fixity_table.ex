@@ -215,6 +215,27 @@ defmodule Cure.Compiler.Parser.FixityTable do
 
   defp primary_group(_), do: nil
 
+  @doc """
+  The group names that lie on a declared precedence cycle, sorted, or `[]` when
+  the relation is acyclic. A cycle means a set of groups each claim (directly or
+  transitively) to bind tighter than one another — an unsatisfiable order the
+  Kahn linearisation in `recompute/1` would otherwise resolve silently. A group
+  is on a cycle exactly when it is reachable from one of its own successors along
+  the ascending "binds looser -> binds tighter" edges.
+  """
+  @spec cyclic_groups(t()) :: [group_name()]
+  def cyclic_groups(%__MODULE__{groups: groups}) do
+    nodes = all_nodes(groups)
+    edges = ascending_edges(groups, nodes)
+
+    nodes
+    |> Enum.filter(fn n ->
+      succ = Map.get(edges, n, MapSet.new())
+      MapSet.member?(dfs(edges, succ, MapSet.new()), n)
+    end)
+    |> Enum.sort()
+  end
+
   # -- Ranking + reachability (memoized on add_group) -------------------------
 
   defp recompute(%__MODULE__{groups: groups} = table) do

@@ -113,8 +113,27 @@ defmodule Cure.Elab.Program do
          :ok <- check_no_duplicate_ctors(ast),
          :ok <- check_no_fn_ctor_collision(ast),
          :ok <- check_no_builtin_rebind(ast),
+         :ok <- check_no_precedence_cycle(ast),
          :ok <- check_proof_shapes(ast) do
       check_no_sibling_collision(ast)
+    end
+  end
+
+  # A module's `precedencegroup` declarations may not describe a cyclic order —
+  # two groups that each claim to bind tighter than the other (directly or
+  # through the built-in tower) have no satisfiable ranking. The Kahn sort in
+  # `FixityTable.recompute/1` linearises such a cycle silently, so the diagnostic
+  # lives here: assemble the module's groups onto the built-in table (so a cycle
+  # closed through a built-in group like `Additive` is caught) and reject if any
+  # group lies on a cycle. Elaborating `Std.Operators` itself is a no-op — its
+  # groups re-add idempotently onto the identical built-in base.
+  defp check_no_precedence_cycle(ast) do
+    base = Cure.Compiler.Parser.BuiltinFixity.table()
+    table = Cure.Compiler.Parser.BuiltinFixity.extend(base, ast)
+
+    case Cure.Compiler.Parser.FixityTable.cyclic_groups(table) do
+      [] -> :ok
+      groups -> {:error, {:precedence_cycle, groups}}
     end
   end
 
