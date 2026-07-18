@@ -77,3 +77,16 @@ brasub_append_left (BCons t k rest) bs2 = BraSubCons t LookHere (sub_refl k) (br
 
 combine_sub_left : (bs1 : Branches) -> (bs2 : Branches) -> Sub (LBra (append_branches bs1 bs2)) (LBra bs1)
 combine_sub_left bs1 bs2 = SubBra (brasub_append_left bs1 bs2)
+
+data LRun : Local -> Local -> Type where
+  LRDone : LRun l l
+  LRStep : LStep a am -> LRun am b -> LRun a b
+
+data RunTo : Local -> Local -> Type where
+  MkRunTo : LRun a t -> Sub t b2 -> RunTo a b2
+
+sub_run : Sub a b -> LRun b b2 -> RunTo a b2
+sub_run sub LRDone = MkRunTo LRDone sub
+sub_run sub (LRStep st rest) = case sub_step_l sub st of
+  MkStepTo lst sub2 => case sub_run sub2 rest of
+    MkRunTo run subf => MkRunTo (LRStep lst run) subf

@@ -102,4 +102,21 @@ mod NarySub
   ## width machinery — connecting the union operation to the subtyping preorder.
   fn combine_sub_left(bs1: Branches, bs2: Branches) -> Sub(LBra(append_branches(bs1, bs2)), LBra(bs1)) =
     SubBra(brasub_append_left(bs1, bs2))
+
+  ## Multi-step local reduction: the reflexive-transitive closure of LStep (a whole endpoint RUN).
+  type LRun indices (a: Local, b: Local)
+    LRDone : LRun(l, l)
+    LRStep : LStep(a, am) -> LRun(am, b) -> LRun(a, b)
+  type RunTo indices (a: Local, b2: Local)
+    MkRunTo : LRun(a, t) -> Sub(t, b2) -> RunTo(a, b2)
+  ## **N-ARY SUBTYPING SIMULATES WHOLE RUNS** (operational soundness over multi-step execution): if
+  ## `a <: b` and the spec side `b` runs to `b2`, the implementation `a` runs to some `t` with `t <: b2`.
+  ## So a subtype safely follows its supertype through its ENTIRE execution — every received label, at
+  ## every step — staying a subtype the whole way. Multi-step strengthening of sub_step_l, chaining the
+  ## single-step simulation and threading the residual subtyping.
+  fn sub_run({a: Local}, {b: Local}, {b2: Local}, sub: Sub(a, b), r: LRun(b, b2)) -> RunTo(a, b2) = match r
+    LRDone()         -> MkRunTo(LRDone(), sub)
+    LRStep(st, rest) -> match sub_step_l(sub, st)
+      MkStepTo(lst, sub2) -> match sub_run(sub2, rest)
+        MkRunTo(run, subf) -> MkRunTo(LRStep(lst, run), subf)
 end
