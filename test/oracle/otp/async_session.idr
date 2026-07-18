@@ -22,3 +22,13 @@ exchange_ab t ka kb = ARStep ASendA (ARStep ARecvB ARDone)
 exchange_ba : (t : Tag) -> (ka : Local) -> (kb : Local) ->
               ARun (MkConfig (LRecv t ka) (LSend t kb) BEmpty BEmpty) (MkConfig ka kb BEmpty BEmpty)
 exchange_ba t ka kb = ARStep ASendB (ARStep ARecvA ARDone)
+
+dual : Local -> Local
+dual LEnd = LEnd
+dual (LSend t k) = LRecv t (dual k)
+dual (LRecv t k) = LSend t (dual k)
+
+async_terminates : (l : Local) -> ARun (MkConfig l (dual l) BEmpty BEmpty) (MkConfig LEnd LEnd BEmpty BEmpty)
+async_terminates LEnd = ARDone
+async_terminates (LSend t ka) = ARStep ASendA (ARStep ARecvB (async_terminates ka))
+async_terminates (LRecv t ka) = ARStep ASendB (ARStep ARecvA (async_terminates ka))

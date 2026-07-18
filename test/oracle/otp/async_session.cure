@@ -30,4 +30,20 @@ mod AsyncSession
     ARStep(step_send_ab(t, ka, kb), ARStep(step_recv_ab(t, ka, kb), ARDone()))
   fn exchange_ba(t: Tag, ka: Local, kb: Local) -> ARun(MkConfig(LRecv(t, ka), LSend(t, kb), BEmpty(), BEmpty()), MkConfig(ka, kb, BEmpty(), BEmpty())) =
     ARStep(step_send_ba(t, ka, kb), ARStep(step_recv_ba(t, ka, kb), ARDone()))
+
+  ## DUALITY: one endpoint's sends are the other's receives. Two endpoints are COMPATIBLE when one is
+  ## the dual of the other.
+  fn dual(l: Local) -> Local = match l
+    LEnd()      -> LEnd()
+    LSend(t, k) -> LRecv(t, dual(k))
+    LRecv(t, k) -> LSend(t, dual(k))
+  ## **ASYNC TERMINATION + ORPHAN-FREEDOM**: a compatible pair (l against dual(l)), started with empty
+  ## buffers, runs ALL THE WAY to completion — both endpoints reach LEnd and BOTH buffers return empty.
+  ## So an asynchronous session between dual endpoints never deadlocks (progress), never leaves a
+  ## message un-received (orphan-freedom: buffers empty at the end), and always terminates. Each action
+  ## is realized by the send-then-receive decomposition, driving the continuation forward by induction.
+  fn async_terminates(l: Local) -> ARun(MkConfig(l, dual(l), BEmpty(), BEmpty()), MkConfig(LEnd(), LEnd(), BEmpty(), BEmpty())) = match l
+    LEnd()      -> ARDone()
+    LSend(t, ka) -> ARStep(step_send_ab(t, ka, dual(ka)), ARStep(step_recv_ab(t, ka, dual(ka)), async_terminates(ka)))
+    LRecv(t, ka) -> ARStep(step_send_ba(t, ka, dual(ka)), ARStep(step_recv_ba(t, ka, dual(ka)), async_terminates(ka)))
 end
