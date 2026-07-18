@@ -1,0 +1,38 @@
+mod NaryChoice
+  use Std.Equivalent
+  ## N-ARY session types: choice branches are an ARBITRARY-LENGTH list (Branches), not a fixed pair.
+  ## This needs a Local type and its Branches list to be MUTUALLY recursive, with dual/dual_branches
+  ## and their involution proofs mutually recursive too — which requires the kernel to delta-reduce
+  ## mutually-recursive functions (fix a4f071fb: certify the whole mutual SCC).
+  type Tag = TA | TB | TC
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LSel(Branches) | LBra(Branches)
+  type Branches = BNil | BCons(Tag, Local, Branches)
+  ## DUALITY swaps send/receive and internal/external choice (LSel <-> LBra), dualizing every branch
+  ## continuation. dual and dual_branches are MUTUALLY RECURSIVE.
+  fn dual(l: Local) -> Local = match l
+    LEnd()     -> LEnd()
+    LSend(t, k) -> LRecv(t, dual(k))
+    LRecv(t, k) -> LSend(t, dual(k))
+    LSel(bs)   -> LBra(dual_branches(bs))
+    LBra(bs)   -> LSel(dual_branches(bs))
+  fn dual_branches(bs: Branches) -> Branches = match bs
+    BNil()            -> BNil()
+    BCons(t, l, rest) -> BCons(t, dual(l), dual_branches(rest))
+  fn lsend_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LSend(t, a), LSend(t, b)) = rewrite e in reflexive(LSend(t, b))
+  fn lrecv_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LRecv(t, a), LRecv(t, b)) = rewrite e in reflexive(LRecv(t, b))
+  fn lsel_cong({a: Branches}, {b: Branches}, e: Equivalent(Branches, a, b)) -> Equivalent(Local, LSel(a), LSel(b)) = rewrite e in reflexive(LSel(b))
+  fn lbra_cong({a: Branches}, {b: Branches}, e: Equivalent(Branches, a, b)) -> Equivalent(Local, LBra(a), LBra(b)) = rewrite e in reflexive(LBra(b))
+  fn bcons_cong(t: Tag, {l1: Local}, {l2: Local}, el: Equivalent(Local, l1, l2), {r1: Branches}, {r2: Branches}, er: Equivalent(Branches, r1, r2)) -> Equivalent(Branches, BCons(t, l1, r1), BCons(t, l2, r2)) = rewrite el in rewrite er in reflexive(BCons(t, l2, r2))
+  ## **N-ARY DUALITY IS AN INVOLUTION** (dual(dual(l)) = l), mutually with dual_branches_involution.
+  ## The internal/external-choice and send/receive swaps each undo themselves, over arbitrary-arity
+  ## branch lists. This is the Honda-Yoshida-Carbone duality generalized from binary to n-ary choice.
+  fn dual_involution(l: Local) -> Equivalent(Local, dual(dual(l)), l) = match l
+    LEnd()     -> reflexive(LEnd())
+    LSend(t, k) -> lsend_cong(t, dual_involution(k))
+    LRecv(t, k) -> lrecv_cong(t, dual_involution(k))
+    LSel(bs)   -> lsel_cong(dual_branches_involution(bs))
+    LBra(bs)   -> lbra_cong(dual_branches_involution(bs))
+  fn dual_branches_involution(bs: Branches) -> Equivalent(Branches, dual_branches(dual_branches(bs)), bs) = match bs
+    BNil()            -> reflexive(BNil())
+    BCons(t, l, rest) -> bcons_cong(t, dual_involution(l), dual_branches_involution(rest))
+end
