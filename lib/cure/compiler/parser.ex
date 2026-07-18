@@ -168,7 +168,16 @@ defmodule Cure.Compiler.Parser do
       builtin_computed_macros: computed_macro_rules(builtin_rules),
       active_macros: active,
       computed_macros: computed,
-      literal_macros: literal
+      # Local `literal` rules always apply. In the normal (non-self-harvest)
+      # case, standard-library `literal` rules join them so a suffix like `ms`
+      # expands in ANY file, exactly as `:syntax` macros are globally active via
+      # `builtin_macros`. Local rules win on a suffix collision.
+      literal_macros:
+        cond do
+          is_map(supplied_macros) -> literal
+          prelude? -> Map.merge(prelude_literal_macros(), literal, fn _k, _p, l -> l end)
+          true -> literal
+        end
     }
 
     state = put_tokens(state, tokens)
@@ -202,10 +211,12 @@ defmodule Cure.Compiler.Parser do
   defp load_prelude_macros do
     Process.put(:cure_loading_prelude, true)
 
-    rules =
+    {rules, literal_rules} =
       case Application.get_env(:cure, :stdlib_macro_rules) do
         rules when is_map(rules) ->
-          rules
+          # Env-supplied grammar sets carry only keyword `:syntax` rules; there
+          # is no literal-rule channel for this legacy escape hatch.
+          {rules, %{}}
 
         _ ->
           stdlib_macro_paths = Path.wildcard(Path.expand("../../std/*.cure", __DIR__))
@@ -215,12 +226,48 @@ defmodule Cure.Compiler.Parser do
           # standard-library macro can transparently invoke another (for
           # example, standard-library starters invoking another syntax macro).
           harvested = collect_stdlib_macro_rules(stdlib_macro_paths, %{})
-          collect_stdlib_macro_rules(stdlib_macro_paths, %{}, harvested)
+          syntax = collect_stdlib_macro_rules(stdlib_macro_paths, %{}, harvested)
+          literal = collect_stdlib_literal_rules(stdlib_macro_paths, harvested)
+          {syntax, literal}
       end
 
     :persistent_term.put({__MODULE__, :prelude_macros}, rules)
+    :persistent_term.put({__MODULE__, :prelude_literal_macros}, literal_rules)
     Process.delete(:cure_loading_prelude)
     rules
+  end
+
+  # Suffix-keyed `literal` rules gathered from every standard-library module, so
+  # a suffix such as `ms` expands in any file the way keyword `:syntax` macros
+  # are globally active. Populated as a side effect of `load_prelude_macros/0`
+  # (both persistent-term caches are written together); while the prelude is
+  # itself loading, no prelude literal rules are active (self-reference guard).
+  defp prelude_literal_macros do
+    case {Process.get(:cure_loading_prelude), :persistent_term.get({__MODULE__, :prelude_literal_macros}, :missing)} do
+      {true, _} -> %{}
+      {_, rules} when is_map(rules) -> rules
+      _ ->
+        load_prelude_macros()
+        :persistent_term.get({__MODULE__, :prelude_literal_macros}, %{})
+    end
+  end
+
+  defp collect_stdlib_literal_rules(paths, builtin_macros) do
+    Enum.reduce(paths, %{}, fn path, acc ->
+      with {:ok, source} <- File.read(path),
+           {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
+           {:ok, ast} <-
+             parse(tokens,
+               file: path,
+               emit_events: false,
+               prelude_macros: false,
+               builtin_macros: builtin_macros
+             ) do
+        Map.merge(acc, harvest_literal_macros(ast), fn _k, v1, v2 -> v1 ++ v2 end)
+      else
+        _ -> acc
+      end
+    end)
   end
 
   defp collect_stdlib_macro_rules(paths, acc, builtin_macros \\ %{}) do
@@ -1996,6 +2043,14 @@ defmodule Cure.Compiler.Parser do
           do: {:delayed_raw_tokens, raw_meta, tokens},
           else: parse_raw_hole(tokens, state)
 
+      {:ok, {:declarations_block, _block_meta, stmts}} when is_list(stmts) ->
+        # A `Declarations until dedent` body binds a pre-parsed block. Splice
+        # its statements flat into the enclosing declarations — the same
+        # `{:raw_splice, _}` shape the raw-hole path yields — so body members
+        # (`fn`/`type`/…) become real module declarations rather than one
+        # opaque node the emitter drops. An empty body splices nothing.
+        {:raw_splice, stmts}
+
       {:ok, _value} ->
         subst_holes(variable, bindings, state)
 
@@ -2375,7 +2430,7 @@ defmodule Cure.Compiler.Parser do
       # never reaches this prefix clause.
       :dot ->
         {inner, state} = parse_forced_inner(advance(state))
-        {{:forced_pattern, [line: token.line, col: token.col], inner}, state}
+        {{:forced_pattern, [line: token.line, col: token.col], [inner]}, state}
 
       # Named-implicit dot pattern `{ name = <expr> }` in a constructor-argument
       # position — annotates an erased implicit index by name (Lean/Idris-style),
@@ -2494,6 +2549,10 @@ defmodule Cure.Compiler.Parser do
   defp parse_rewrite(state, token) do
     state = advance(state)
     {proof, state} = parse_expr(state, 0)
+    # `in` may sit on the next line for a multi-line `rewrite … in …` chain. `rewrite`
+    # always requires `in`, so skipping newlines to find it is unambiguous; `skip_newlines`
+    # skips only `:newline` (never `:indent`/`:dedent`), so it cannot cross a branch boundary.
+    state = skip_newlines(state)
     state = expect_keyword(state, :in)
     {body, state} = parse_expr(state, 0)
     {{:rewrite_expr, [line: token.line, col: token.col], [proof, body]}, state}
@@ -2549,8 +2608,8 @@ defmodule Cure.Compiler.Parser do
     state = expect(state, :assign)
     {inner, state} = parse_expr(state, 0)
     state = expect(state, :rbrace)
-    meta = [line: brace_token.line, col: brace_token.col]
-    {{:named_implicit_pat, meta, name, inner}, state}
+    meta = [line: brace_token.line, col: brace_token.col, name: name]
+    {{:named_implicit_pat, meta, [inner]}, state}
   end
 
   # -- Literals --------------------------------------------------------------
@@ -2717,10 +2776,21 @@ defmodule Cure.Compiler.Parser do
   defp parse_call(state, func) do
     token = peek(state)
     state = advance(state)
-    {args, state} = parse_call_args(state)
+    # Argument labels (`f(to: v)`) are a FUNCTION-call spelling. A PascalCase head
+    # is a constructor application, where `Ctor(n: T, …)` is instead a TYPED
+    # PATTERN (`maybe_wrap_as/2`) — the two spellings are syntactically identical
+    # (`identifier :`), so the head's case is what disambiguates them. Only allow
+    # label-grabbing for the non-constructor (function) head.
+    allow_labels = not is_pascal_case?(func)
+    {args, arg_labels, state} = parse_call_args(state, allow_labels)
     name = extract_call_name(func)
 
     meta = [name: name, line: token.line, col: token.col]
+
+    # Carry written argument labels only when at least one is present, so the
+    # common all-positional call keeps its exact historical meta shape.
+    meta =
+      if Enum.any?(arg_labels), do: Keyword.put(meta, :arg_labels, arg_labels), else: meta
 
     # When the callee is an expression (e.g. f(x)(y)), preserve it so
     # the codegen can compile it as an expression-based call.
@@ -2735,37 +2805,62 @@ defmodule Cure.Compiler.Parser do
     {ast, state}
   end
 
-  defp parse_call_args(state) do
+  # Returns {args, labels, state}: `labels` is position-aligned with `args`, each
+  # entry the written argument label (`f(to: v)`) or `nil` when the argument is
+  # positional. Callers that ignore labels bind the middle element to `_`.
+  defp parse_call_args(state, allow_labels) do
     state = skip_newlines(state)
 
     case peek(state) do
       %Token{type: :rparen} ->
-        {[], advance(state)}
+        {[], [], advance(state)}
 
       _ ->
+        {label, state} = parse_arg_label(state, allow_labels)
         {first, state} = parse_expr(state, 0)
         {first, state} = maybe_wrap_as(first, state)
         state = skip_newlines(state)
-        {rest, state} = parse_more_args(state)
+        {rest, rest_labels, state} = parse_more_args(state, allow_labels)
         state = skip_newlines(state)
         state = expect(state, :rparen)
-        {[first | rest], state}
+        {[first | rest], [label | rest_labels], state}
     end
   end
 
-  defp parse_more_args(state) do
+  defp parse_more_args(state, allow_labels) do
     case peek(state) do
       %Token{type: :comma} ->
         state = advance(state)
         state = skip_newlines(state)
+        {label, state} = parse_arg_label(state, allow_labels)
         {expr, state} = parse_expr(state, 0)
         {expr, state} = maybe_wrap_as(expr, state)
         state = skip_newlines(state)
-        {rest, state} = parse_more_args(state)
-        {[expr | rest], state}
+        {rest, rest_labels, state} = parse_more_args(state, allow_labels)
+        {[expr | rest], [label | rest_labels], state}
 
       _ ->
-        {[], state}
+        {[], [], state}
+    end
+  end
+
+  # A leading `identifier :` at an argument position is a Swift-style argument
+  # label (`f(to: v)`). This spelling is otherwise a parse error in a paren call
+  # — `:colon` has no infix binding power — so recognising it here is purely
+  # additive and never reinterprets valid existing syntax. Consumes the
+  # identifier and the colon; returns {nil, state} when no label is present.
+  #
+  # `allow_labels` is false under a PascalCase (constructor) head, where the same
+  # `identifier :` spelling is a TYPED PATTERN (`Cons(n: Int, rest)`) that must
+  # reach `maybe_wrap_as/2` untouched.
+  defp parse_arg_label(state, allow_labels) do
+    tok = peek(state)
+    next = peek_at(state, 1)
+
+    if allow_labels && tok && tok.type == :identifier && next && next.type == :colon do
+      {to_string(tok.value), state |> advance() |> advance()}
+    else
+      {nil, state}
     end
   end
 
@@ -2857,6 +2952,21 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp is_pascal_case?({:variable, _, <<first, _rest::binary>>}) when first in ?A..?Z, do: true
+
+  # A qualified head (`Mod.Ctor`, `Std.Nat.S`) is PascalCase by its FINAL
+  # segment — the constructor/type name a caller actually writes — regardless of
+  # the leading module path's case. Without this, `Std.Nat.S(n: Std.Nat)` (a
+  # qualified constructor pattern with a typed field binder) is mistaken for a
+  # labelled function call: `n:` is swallowed as an argument label instead of
+  # reaching `maybe_wrap_as/2` to parse as `{:typed_pattern, _, ["n", ...]}`,
+  # silently dropping the `n` binder.
+  defp is_pascal_case?({:attribute_access, meta, _}) do
+    case Keyword.get(meta, :attribute) do
+      <<first, _rest::binary>> when first in ?A..?Z -> true
+      _ -> false
+    end
+  end
+
   defp is_pascal_case?(_), do: false
 
   # -- Collections -----------------------------------------------------------
@@ -4981,6 +5091,19 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
+    # Two-name label form `label internal: T` (Swift). A second identifier before
+    # the annotation means the first name was the EXTERNAL caller-facing label and
+    # this second one is the INTERNAL body binder. Single-name params carry no
+    # label (the one name serves as both, and any call label is optional).
+    {label, name, state} =
+      case peek(state) do
+        %Token{type: :identifier} = internal_token ->
+          {name, to_string(internal_token.value), advance(state)}
+
+        _ ->
+          {nil, name, state}
+      end
+
     # Optional type annotation `: Type`, or a graded one `:g Type`.
     {grade, type_ast, state} = parse_binder_annotation(state, name)
 
@@ -4998,6 +5121,7 @@ defmodule Cure.Compiler.Parser do
       end
 
     param_meta = put_binder_meta([], grade, type_ast)
+    param_meta = if label, do: Keyword.put(param_meta, :label, label), else: param_meta
     param_meta = if default, do: Keyword.put(param_meta, :default, default), else: param_meta
     param_meta = if kind != :positional, do: Keyword.put(param_meta, :kind, kind), else: param_meta
 
@@ -5730,8 +5854,48 @@ defmodule Cure.Compiler.Parser do
         state = expect(state, :rparen)
         {{:named_dom, name, inner}, state}
 
+      # A RELEVANT IMPLICIT domain `{k: Type}` (Idris `{k : Nat}`): implicit at
+      # application/pattern (solved by unification, never positional) but
+      # runtime-relevant (quantity ω, retained) — the fourth quadrant Cure's
+      # inferred-index (implicit+erased) and explicit-dom (explicit+ω) categories
+      # can't spell. Distinguished from a REFINEMENT type `{x: T | P}` (which
+      # `parse_type_atom` routes to `parse_refinement_type`) by the ABSENCE of a
+      # top-level `|` before the closing `}`: `parse_refinement_type` requires the
+      # bar, so a bar-less `{ident: …}` is never a valid refinement here.
+      {%Token{type: :lbrace}, %Token{type: :colon}} ->
+        if implicit_dom_brace?(state) do
+          state = advance(state)
+          name_token = peek(state)
+          name = to_string(name_token.value)
+          state = advance(state)
+          state = expect(state, :colon)
+          {inner, state} = parse_type_atom(state)
+          state = expect(state, :rbrace)
+          {{:implicit_dom, name, inner}, state}
+        else
+          parse_type_atom(state)
+        end
+
       _ ->
         parse_type_atom(state)
+    end
+  end
+
+  # Peek: does the brace group at `state` (peek == `{`) close WITHOUT a top-level
+  # `|`? True → relevant-implicit domain `{k: T}`; false → refinement `{x: T | P}`.
+  # Scans from just inside the `{`, tracking nested-brace depth so a `|` inside a
+  # nested group doesn't count. A malformed/unterminated group returns true and
+  # lets the domain parser surface the error normally.
+  defp implicit_dom_brace?(state), do: scan_implicit_dom_brace(state, 1, 0)
+
+  defp scan_implicit_dom_brace(state, offset, depth) do
+    case peek_at(state, offset) do
+      %Token{type: :lbrace} -> scan_implicit_dom_brace(state, offset + 1, depth + 1)
+      %Token{type: :rbrace} when depth == 0 -> true
+      %Token{type: :rbrace} -> scan_implicit_dom_brace(state, offset + 1, depth - 1)
+      %Token{type: :bar} when depth == 0 -> false
+      nil -> true
+      _ -> scan_implicit_dom_brace(state, offset + 1, depth)
     end
   end
 
@@ -5837,7 +6001,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp parse_type_atom_args_list(state) do
-    {arg, state} = parse_type_atom(state)
+    {arg, state} = parse_type_app_arg(state)
     state = skip_newlines(state)
 
     case peek(state) do
@@ -5849,6 +6013,30 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         {[arg], state}
+    end
+  end
+
+  # A type-application argument is normally a type (`Vector(a, Z)`). But a
+  # decidable-boolean reflection type such as `IsTrue(claim: Bool)` is applied to
+  # a *proposition* — a comparison or boolean-connective expression: `IsTrue(5 > 0)`,
+  # `IsTrue(0 <= p and p <= 100)`. Comparison/boolean operators never legitimately
+  # follow a type in ordinary type syntax (arrows use `->`, Cure has no angle-bracket
+  # generics), so a trailing one is an unambiguous signal that this argument is a
+  # proposition.
+  defp parse_type_app_arg(state), do: parse_type_or_proposition(state, &parse_type_atom/1)
+
+  # Parse a type-position argument with `parse_fun`; if a comparison/boolean operator
+  # immediately follows, the argument is actually a proposition, so reparse it from the
+  # original state with the full expression parser. That yields the same `{:binary_op, ...}`
+  # node an expression would, which the index elaborator routes through the type-directed
+  # term elaborator (so its literals get the right primitive type and the spine folds).
+  @type_prop_ops [:eq, :neq, :lt, :gt, :lte, :gte, :and_op, :or_op]
+  defp parse_type_or_proposition(state, parse_fun) do
+    {parsed, after_state} = parse_fun.(state)
+
+    case peek(after_state) do
+      %Token{type: t} when t in @type_prop_ops -> parse_expr(state, 0)
+      _ -> {parsed, after_state}
     end
   end
 
@@ -5918,7 +6106,7 @@ defmodule Cure.Compiler.Parser do
         {[], state}
 
       _ ->
-        {t, state} = parse_type_expr(state)
+        {t, state} = parse_type_or_proposition(state, &parse_type_expr/1)
         state = skip_newlines(state)
 
         case peek(state) do
@@ -7180,6 +7368,24 @@ defmodule Cure.Compiler.Parser do
   defp parse_type_arrow(state) do
     token = peek(state)
 
+    # A `fn(y) -> …` LAMBDA literal appearing in a dependent index/term position
+    # (e.g. `Equivalent(Eff, bind(m, fn(y) -> Pure(y)), m)`). `fn` lexes as
+    # `%Token{type: :keyword, value: :fn}`, so it is caught here before the
+    # `token.type` dispatch below. Without it the `fn` fell through to the
+    # "Simple type" arm, `(y)` was read as a type-param list and the trailing
+    # `->` turned the whole thing into a bogus arrow type `Function(y, …)` — `y`
+    # then dangled as `{:global, :y}` and normalisation crashed (E10a). Reuse the
+    # expression lambda entry so the SAME `{:lambda,…}` AST is produced here as in
+    # term position; a lambda is a complete term, so (unlike the arrow arms) it is
+    # NOT chained through `maybe_parse_function_type`.
+    if token.type == :keyword and token.value == :fn do
+      parse_fn_or_lambda(state)
+    else
+      parse_type_arrow_dispatch(state, token)
+    end
+  end
+
+  defp parse_type_arrow_dispatch(state, token) do
     case token.type do
       :lbrace ->
         parse_refinement_type(state)
@@ -7667,7 +7873,7 @@ defmodule Cure.Compiler.Parser do
       case peek(state) do
         %Token{type: :lparen} ->
           state = advance(state)
-          {a, state} = parse_call_args(state)
+          {a, _labels, state} = parse_call_args(state, false)
           {a, state}
 
         %Token{type: :bool, value: bval} ->
@@ -7835,7 +8041,7 @@ defmodule Cure.Compiler.Parser do
             {:container, Keyword.put(meta, :derive, derive_names), body}
 
           _ ->
-            {:container, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), body}
+            {:container, Keyword.put(meta, :decorator, {:decorator, [name: String.to_atom(dec_name)], args}), body}
         end
 
       # `@builtin(:key) type Name indices (...)` — a GADT / indexed family.
@@ -7843,7 +8049,7 @@ defmodule Cure.Compiler.Parser do
       # program.ex's maybe_register_builtin can see it (mirrors the
       # {:container} enum-ADT clause above).
       {:indexed_type, meta, ctors} ->
-        {:indexed_type, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), ctors}
+        {:indexed_type, Keyword.put(meta, :decorator, {:decorator, [name: String.to_atom(dec_name)], args}), ctors}
 
       {:function_def, meta, body} ->
         decoration =
@@ -7859,7 +8065,7 @@ defmodule Cure.Compiler.Parser do
               [extern: extern_val]
 
             _ ->
-              [decorator: {String.to_atom(dec_name), args}]
+              [decorator: {:decorator, [name: String.to_atom(dec_name)], args}]
           end
 
         {:function_def, meta ++ decoration, body}
@@ -7868,7 +8074,7 @@ defmodule Cure.Compiler.Parser do
       # decorator into the `{:type_annotation}` meta so program.ex's prelude
       # discovery can see it (mirrors the `{:container}`/`{:indexed_type}` clauses).
       {:type_annotation, meta, rhs} ->
-        {:type_annotation, Keyword.put(meta, :decorator, {String.to_atom(dec_name), args}), rhs}
+        {:type_annotation, Keyword.put(meta, :decorator, {:decorator, [name: String.to_atom(dec_name)], args}), rhs}
 
       other ->
         other

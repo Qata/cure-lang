@@ -68,3 +68,27 @@ tset_mono (RSend t k) x y s = setbit_mono t (tset k x) (tset k y) (tset_mono k x
 tset_mono (RRecv t k) x y s = setbit_mono t (tset k x) (tset k y) (tset_mono k x y s)
 tset_mono (RSeq l r)  x y s = join_mono (tset l x) (tset r x) (tset l y) (tset r y) (tset_mono l x y s) (tset_mono r x y s)
 
+
+imp_trans : Imp a b -> Imp b c -> Imp a c
+imp_trans ImpFF ImpFF = ImpFF
+imp_trans ImpFF ImpFT = ImpFT
+imp_trans ImpFT ImpTT = ImpFT
+imp_trans ImpTT ImpTT = ImpTT
+
+sub_trans : Sub x y -> Sub y z -> Sub x z
+sub_trans (MkSub a b c) (MkSub a2 b2 c2) = MkSub (imp_trans a a2) (imp_trans b b2) (imp_trans c c2)
+
+bot_imp : (a : B) -> Imp F a
+bot_imp F = ImpFF
+bot_imp T = ImpFT
+
+bot_sub : (x : IF) -> Sub (MkIF F F F) x
+bot_sub (MkIF a b c) = MkSub (bot_imp a) (bot_imp b) (bot_imp c)
+
+iter : (IF -> IF) -> Nat -> IF
+iter f Z = bot
+iter f (S k) = f (iter f k)
+
+lfp_le : (f : IF -> IF) -> (mono : (x : IF) -> (y : IF) -> Sub x y -> Sub (f x) (f y)) -> (z : IF) -> Sub (f z) z -> (n : Nat) -> Sub (iter f n) z
+lfp_le f mono z hz Z = bot_sub z
+lfp_le f mono z hz (S k) = sub_trans (mono (iter f k) z (lfp_le f mono z hz k)) hz

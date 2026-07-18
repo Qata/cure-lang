@@ -38,6 +38,6 @@ defmodule Cure.Compiler.PrimitiveParseTest do
   test "`@builtin(:int) primitive Int` attaches the builtin tag to the container" do
     node = primitive_node(parse!("@builtin(:int) primitive Int\n"))
     {:container, meta, []} = node
-    assert {:builtin, [{:literal, _, :int}]} = Keyword.get(meta, :decorator)
+    assert {:decorator, [name: :builtin], [{:literal, _, :int}]} = Keyword.get(meta, :decorator)
   end
 end

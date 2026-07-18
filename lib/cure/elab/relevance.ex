@@ -461,16 +461,26 @@ defmodule Cure.Elab.Relevance do
           x_levels = for(j <- 0..(n - 1)//1, do: depth + arity + j)
 
           # Each xⱼ aliases aⱼ, so aⱼ is used as many times as `inner` uses xⱼ.
-          arg_usages =
+          # A relevant use of an erased binder inside a present convoy argument is a
+          # LEGITIMATE rejection (`walk` returns `{:error, :erased_used_relevantly}`);
+          # PROPAGATE it instead of crashing on a hard `{:ok, ua} =` match — otherwise
+          # an ill-typed body (an erased implicit passed to a present-position call
+          # under a `rewrite`/`match`) raises a MatchError rather than reporting the
+          # error.
+          arg_usages_result =
             args
             |> Enum.with_index()
-            |> Enum.map(fn {arg, j} ->
+            |> Enum.reduce_while({:ok, []}, fn {arg, j}, {:ok, acc_u} ->
               x_usage = Map.get(u_inner, Enum.at(x_levels, j), no_uses())
-              {:ok, ua} = walk(arg, depth, :present_arg, st2)
-              scale_by_uses(ua, x_usage)
+
+              case walk(arg, depth, :present_arg, st2) do
+                {:ok, ua} -> {:cont, {:ok, acc_u ++ [scale_by_uses(ua, x_usage)]}}
+                {:error, _} = err -> {:halt, err}
+              end
             end)
 
-          with :ok <- check_convoy_binders(st2, x_levels, lam_grades, u_inner),
+          with {:ok, arg_usages} <- arg_usages_result,
+               :ok <- check_convoy_binders(st2, x_levels, lam_grades, u_inner),
                :ok <- check_fields(st2, ctor_qs, depth, u_inner) do
             drop = x_levels ++ for(p <- 0..(arity - 1)//1, do: depth + p)
             {:cont, {:ok, acc ++ [seq(seq_all(arg_usages), Map.drop(u_inner, drop))]}}

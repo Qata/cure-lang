@@ -335,26 +335,19 @@ defmodule Cure.Elab.Program do
     end)
   end
 
-  # A module must not bind the same top-level function name twice: `Env.add_def`
-  # is a silent `Map.put` overwrite, so a duplicate would let a program typecheck
-  # against one body and run another. Every real dependent language rejects this.
-  # Separate signatures parse as `:type_annotation` (not `:function_def`), so
-  # counting `:function_def` names has no sig+body false positives.
+  # Same-name top-level function defs are NO LONGER rejected here. A type-distinct
+  # pair (`plus(Meters,Meters)` and `plus(Grams,Grams)`) is a legal overload set,
+  # and telling a genuine duplicate from a set requires the elaborated parameter
+  # telescopes, which do not exist at this pre-elaboration gate. The overwrite
+  # this check used to guard is prevented instead by registering each member under
+  # a discriminated key (`Mod#plus~0`/`Mod#plus~1`, see `annotate_overload_ordinals/1`
+  # + `Cure.Elab.Name.overload_key/2`), and an accidental same-signature duplicate
+  # is rejected precisely by `check_overload_legality/1` after the register pass.
+  # (This function only ever inspected `:function_def` names, so relaxing it fully
+  # is exactly "stop rejecting same-name function defs"; the `:duplicate_type` and
+  # `:duplicate_constructor` gates are unaffected.)
   @spec check_no_duplicate_defs(tuple() | list()) :: :ok | {:error, term()}
-  defp check_no_duplicate_defs(ast) do
-    extract = fn
-      {:function_def, meta, _body} ->
-        case Keyword.get(meta, :name) do
-          name when is_binary(name) -> [name]
-          _ -> []
-        end
-
-      _ ->
-        []
-    end
-
-    first_dup_per_module(ast, extract, :duplicate_definition, &String.to_atom/1)
-  end
+  defp check_no_duplicate_defs(_ast), do: :ok
 
   @doc false
   @spec check_ast_elixir_core(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
@@ -813,9 +806,14 @@ defmodule Cure.Elab.Program do
   defp prelude_property?(_other), do: false
 
   defp prelude_decorated?({_tag, meta, _}) when is_list(meta),
-    do: match?({:prelude, _}, Keyword.get(meta, :decorator))
+    do: attached_decorator_name(Keyword.get(meta, :decorator)) == :prelude
 
   defp prelude_decorated?(_), do: false
+
+  # The name of an attached decorator node (`{:decorator, [name: n], args}`) held
+  # in a def/container meta `:decorator` slot, or `nil` if absent/non-decorator.
+  defp attached_decorator_name({:decorator, m, _args}) when is_list(m), do: Keyword.get(m, :name)
+  defp attached_decorator_name(_), do: nil
 
   defp declaration_name({:type_annotation, meta, _}) when is_list(meta),
     do: meta |> Keyword.get(:name) |> to_name_atom()
@@ -850,7 +848,7 @@ defmodule Cure.Elab.Program do
   """
   @spec check_ast_with_locals(tuple() | list()) :: {:ok, Env.t(), [atom()]} | {:error, term()}
   def check_ast_with_locals(ast) do
-    local_defs = local_def_names(ast)
+    local_defs = local_emit_names(ast)
 
     with {:ok, env} <- check_ast(ast) do
       # `implementation` declarations synthesise mangled method globals that are
@@ -858,6 +856,33 @@ defmodule Cure.Elab.Program do
       # emitted alongside the source-declared defs.
       {:ok, env, local_defs ++ impl_def_names(env)}
     end
+  end
+
+  # The def keys codegen must emit, one per source `:function_def`. A member of a
+  # same-name group of size >= 2 is registered under a discriminated bare name
+  # (`plus~<ord>`, see `annotate_overload_ordinals/1`), so its emit key must carry
+  # the SAME ordinal — otherwise both members lower to one BEAM function and
+  # `erl_lint` rejects the redefinition. Ordinals are assigned in declaration
+  # order, identically to the registration pass, so the emit key and the stored
+  # def key agree. A size-one name is returned bare and untouched, keeping
+  # non-overloaded codegen byte-identical. (`local_def_names/1` stays the surface
+  # spelling for `@prelude`-shadow and import-origin bookkeeping, which key by
+  # bare name.)
+  defp local_emit_names(ast) do
+    names = local_def_names(ast)
+    overloaded = for {n, c} <- Enum.frequencies(names), c >= 2, into: MapSet.new(), do: n
+
+    {keys, _counters} =
+      Enum.map_reduce(names, %{}, fn name, counters ->
+        if MapSet.member?(overloaded, name) do
+          ord = Map.get(counters, name, 0)
+          {Cure.Elab.Name.overload_key(name, ord), Map.put(counters, name, ord + 1)}
+        else
+          {name, counters}
+        end
+      end)
+
+    keys
   end
 
   @doc """
@@ -1905,7 +1930,7 @@ defmodule Cure.Elab.Program do
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
   @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
-                      primitives interfaces coherence constrained import_modules module_owner)a
+                      primitives interfaces coherence constrained import_modules lemmas module_owner)a
 
   @env_keys Map.keys(Map.from_struct(%Env{}))
   missing = @env_keys -- @merged_env_keys
@@ -1933,6 +1958,7 @@ defmodule Cure.Elab.Program do
          coherence: coherence,
          constrained: Map.merge(left.constrained, right.constrained),
          import_modules: MapSet.union(left.import_modules, right.import_modules),
+         lemmas: Map.merge(left.lemmas, right.lemmas, fn _head, ls, rs -> Enum.uniq(ls ++ rs) end),
          module_owner: left.module_owner || right.module_owner
        }}
     end
@@ -1973,7 +1999,10 @@ defmodule Cure.Elab.Program do
   # environment. Non-function declarations are elaborated in source order in pass
   # one (a function signature may reference any type declared before it).
   defp elaborate_declarations(items, env, prelude?) do
+    items = annotate_overload_ordinals(items)
+
     with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?),
+         :ok <- check_overload_legality(env1),
          {:ok, alias_order} <- typealias_order(items, env1),
          {:ok, env_completed} <- complete_typealiases(alias_order, items, env1),
          # Alias bodies are all present after the register pass. Certify their
@@ -1989,6 +2018,127 @@ defmodule Cure.Elab.Program do
       # certificate; genuinely partial defs are rejected exactly as before.
       {:ok, TotalityClosure.certify_deferred(env2)}
     end
+  end
+
+  # Tag each `:function_def` that shares its bare name with a sibling (same-name
+  # group of size >= 2) with its declaration-order ordinal within that group, so
+  # `function_signature/2` registers it under a discriminated key. Size-one names
+  # are left untouched, keeping non-overloaded code byte-identical.
+  #
+  # Grouping purely by bare `:name` is sound here because `items` can never hold
+  # two DIFFERENT sibling modules that share a function name: `check_no_sibling_collision/1`
+  # (run inside `check_declarations/1`, ahead of every path that reaches
+  # `elaborate_declarations/3`) rejects that combination first. Do not call this
+  # from a new entry point that bypasses that precondition.
+  defp annotate_overload_ordinals(items) when is_list(items) do
+    names =
+      Enum.flat_map(items, fn
+        {:function_def, meta, _} when is_list(meta) -> [Keyword.fetch!(meta, :name)]
+        _ -> []
+      end)
+
+    overloaded = for {n, c} <- Enum.frequencies(names), c >= 2, into: MapSet.new(), do: n
+
+    {tagged, _counters} =
+      Enum.map_reduce(items, %{}, fn
+        {:function_def, meta, body} = decl, counters when is_list(meta) ->
+          name = Keyword.fetch!(meta, :name)
+
+          if MapSet.member?(overloaded, name) do
+            ord = Map.get(counters, name, 0)
+
+            {{:function_def, Keyword.put(meta, :overload_ordinal, ord), body}, Map.put(counters, name, ord + 1)}
+          else
+            {decl, counters}
+          end
+
+        other, counters ->
+          {other, counters}
+      end)
+
+    tagged
+  end
+
+  defp annotate_overload_ordinals(items), do: items
+
+  # Reject an overload set holding two members that no call site could ever tell
+  # apart: same owner, same base name, same arity, and position-wise convertible
+  # parameter types. Such a pair is the successor of the old
+  # `duplicate_definition` collision — under discriminated keys both members
+  # register, so this check is what preserves the "a signature can't be defined
+  # twice" guarantee. Runs after `register_pass/3`, once telescopes exist.
+  defp check_overload_legality(env) do
+    env.defs
+    |> Enum.filter(fn {k, _} -> is_atom(k) and Cure.Elab.Name.overload_member?(k) end)
+    |> Enum.group_by(fn {k, _} ->
+      {Cure.Elab.Name.owner(k), Cure.Elab.Name.overload_base(k)}
+    end)
+    |> Enum.reduce_while(:ok, fn {{_owner, base}, members}, :ok ->
+      case first_overlapping_pair(env, members) do
+        nil -> {:cont, :ok}
+        arity -> {:halt, {:error, {:overlapping_overload, String.to_atom(base), arity}}}
+      end
+    end)
+  end
+
+  # The arity of the first indistinguishable pair among `members`, or nil. Two
+  # members overlap iff their parameter telescopes have equal length, every
+  # position is definitionally convertible, AND their argument labels agree at
+  # every position (Ph2). A call site discriminates by both the inferred argument
+  # types and the written labels, so two members with identical types but distinct
+  # labels — `move(to dest: Point)` vs `move(from src: Point)` — ARE tellable
+  # apart and legally co-register; only a pair matching on both is a true overlap.
+  defp first_overlapping_pair(env, members) do
+    typed =
+      for {_key, def} <- members do
+        ptypes = param_types(def.type)
+        {ptypes, member_labels(def, length(ptypes))}
+      end
+
+    Enum.find_value(pairs(typed), fn {{ps, plabels}, {qs, qlabels}} ->
+      if length(ps) == length(qs) and plabels == qlabels and
+           Enum.all?(Enum.zip(ps, qs), fn {p, q} ->
+             Cure.Elab.TypeConv.convertible?(env, p, q)
+           end) do
+        length(ps)
+      end
+    end)
+  end
+
+  # A member's telescope-aligned MANDATORY-label vector: each stored descriptor
+  # projected to its external label if writing it is required (`{:required, l}` →
+  # `l`), else `nil`. Only mandatory labels distinguish overload members — an
+  # OPTIONAL (single-name) label can always be omitted, so a set separable only by
+  # optional labels is still ambiguous at a bare call and must stay an overlap.
+  # A label-free / no-vector def defaults to an all-`nil` vector so the
+  # position-wise comparison is total.
+  defp member_labels(def, arity) do
+    case Map.get(def, :labels) do
+      nil ->
+        List.duplicate(nil, arity)
+
+      labels ->
+        Enum.map(labels, fn
+          {:required, l} -> l
+          _optional -> nil
+        end)
+    end
+  end
+
+  # Every parameter domain of a stored def type, in order. Walks the Pi spine
+  # collecting each domain unconditionally (value- and type-domains alike) —
+  # NOT the `typealias_parameter_count` shape, which only counts `{:type, _}`
+  # domains and would silently drop value-typed parameters here.
+  defp param_types({:pi, _grade, domain, codomain}), do: [domain | param_types(codomain)]
+  defp param_types(_), do: []
+
+  # All unordered pairs of a list, as {earlier, later} tuples.
+  defp pairs(list) do
+    list
+    |> Enum.with_index()
+    |> then(fn indexed ->
+      for {a, i} <- indexed, {b, j} <- indexed, i < j, do: {a, b}
+    end)
   end
 
   # Transparent aliases are ordinary Core definitions, so a forward chain is
@@ -2188,15 +2338,16 @@ defmodule Cure.Elab.Program do
   end
 
   defp register_builtin_from_meta(meta, env) do
-    case Keyword.get(meta, :decorator) do
-      {:builtin, args} ->
-        key = builtin_key(args)
-        fid = meta |> Keyword.fetch!(:name) |> String.to_atom()
-        :ok = Cure.Core.Builtins.validate!(env, key, fid)
-        {:ok, Cure.Core.Inductive.register_builtin(env, key, fid)}
+    dec = Keyword.get(meta, :decorator)
 
-      _ ->
-        {:ok, env}
+    if attached_decorator_name(dec) == :builtin do
+      {:decorator, _dm, args} = dec
+      key = builtin_key(args)
+      fid = meta |> Keyword.fetch!(:name) |> String.to_atom()
+      :ok = Cure.Core.Builtins.validate!(env, key, fid)
+      {:ok, Cure.Core.Inductive.register_builtin(env, key, fid)}
+    else
+      {:ok, env}
     end
   end
 

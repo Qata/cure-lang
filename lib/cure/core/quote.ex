@@ -103,6 +103,10 @@ defmodule Cure.Core.Quote do
 
   defp reify_neutral({:nvar, level}, depth, _sig), do: {:var, depth - level - 1}
   defp reify_neutral({:nglobal, name}, _depth, _sig), do: {:global, name}
+  # A hole neutral reads back to its `{:hole, id}` term; a spined hole reads back
+  # via the `{:napp, …}` arm below, reconstructing the original application
+  # (first-class holes).
+  defp reify_neutral({:nhole, id}, _depth, _sig), do: {:hole, id}
 
   defp reify_neutral({:napp, n, v}, depth, sig),
     do: {:app, reify_neutral(n, depth, sig), reify(v, depth, sig)}

@@ -1,0 +1,57 @@
+@group(:concurrency)
+mod Std.Otp.CallSession
+  ## GEN_SERVER:CALL AS A DEPENDENT SESSION (build-out map B3, session ↔ OTP-call bridge). A
+  ## synchronous `gen_server:call` is the smallest interesting session: the client SENDS a request
+  ## and RECEIVES the matching reply, then both are done. What makes it OTP-flavoured is that the
+  ## reply's type is not fixed — it is COMPUTED from the request (`reply_for(req)`), the
+  ## session-typed face of the directive's dependent `ReplyOf(req)`. This module shows Cure types a
+  ## session whose continuation tag is a function of an earlier message, and that duality and
+  ## compatibility still hold UNIFORMLY over every request — so a dependent request/reply exchange
+  ## is communication-safe for all requests at once.
+
+  ## Request tags and reply tags.
+  type Req = RGet | RPut
+  type Rep = VNat | VUnit
+  ## The dependent reply contract: which reply a request expects.
+  fn reply_for(r: Req) -> Rep = match r
+    RGet() -> VNat
+    RPut() -> VUnit
+
+  ## A session type carrying request/reply messages.
+  type SType = SEnd | SSendReq(Req, SType) | SRecvReq(Req, SType) | SSendRep(Rep, SType) | SRecvRep(Rep, SType)
+
+  ## Dual: swap send/receive on both request and reply messages.
+  fn dual(s: SType) -> SType = match s
+    SEnd()          -> SEnd()
+    SSendReq(q, k)  -> SRecvReq(q, dual(k))
+    SRecvReq(q, k)  -> SSendReq(q, dual(k))
+    SSendRep(p, k)  -> SRecvRep(p, dual(k))
+    SRecvRep(p, k)  -> SSendRep(p, dual(k))
+
+  ## The two endpoints of a call, parameterized by the request. The client sends `req` and receives
+  ## `reply_for(req)`; the server is the mirror. Both continuations mention the COMPUTED reply tag.
+  fn client(req: Req) -> SType = SSendReq(req, SRecvRep(reply_for(req), SEnd()))
+  fn server(req: Req) -> SType = SRecvReq(req, SSendRep(reply_for(req), SEnd()))
+
+  ## **DEPENDENT CALL WELL-FORMEDNESS.** For EVERY request the client endpoint is exactly the dual
+  ## of the server endpoint — `client(req) = dual(server(req))` — even though the reply tag under
+  ## the continuation is the computed `reply_for(req)`. `dual` never inspects `reply_for`, so both
+  ## sides carry the identical (stuck) `reply_for(req)` and the equality holds by reflexivity,
+  ## uniformly in `req`.
+  fn call_duality(req: Req) -> Equivalent(SType, client(req), dual(server(req))) =
+    reflexive(client(req))
+
+  ## Structural compatibility (a send on one side matched by a receive on the other), enough to
+  ## express that a call's endpoints can safely communicate.
+  type Compat indices (l: SType, r: SType)
+    CEnd  : Compat(SEnd, SEnd)
+    CReqL : (q: Req) -> Compat(l, r) -> Compat(SSendReq(q, l), SRecvReq(q, r))
+    CRepR : (p: Rep) -> Compat(l, r) -> Compat(SRecvRep(p, l), SSendRep(p, r))
+
+  ## **DEPENDENT CALL COMPATIBILITY.** The client and server endpoints are compatible for every
+  ## request: the client's request-send meets the server's request-receive, then the server's
+  ## reply-send (of the computed `reply_for(req)`) meets the client's reply-receive, then both end.
+  ## So a dependent request/reply exchange is communication-safe for ALL requests uniformly.
+  fn call_compat(req: Req) -> Compat(client(req), server(req)) =
+    CReqL(req, CRepR(reply_for(req), CEnd()))
+end

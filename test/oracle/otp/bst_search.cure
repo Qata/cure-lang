@@ -1,0 +1,313 @@
+mod BstSearch
+  use Std.Equivalent
+  type OKey = OA | OB | OC
+  type OBit = OF | OT
+  fn orb(a: OBit, b: OBit) -> OBit = match a
+    OF() -> b
+    OT() -> OT()
+  fn andb(a: OBit, b: OBit) -> OBit = match a
+    OF() -> OF()
+    OT() -> b
+  fn cmp(x: OKey, y: OKey) -> OBit = match x
+    OA() -> match y
+      OA() -> OF()
+      OB() -> OT()
+      OC() -> OT()
+    OB() -> match y
+      OA() -> OF()
+      OB() -> OF()
+      OC() -> OT()
+    OC() -> match y
+      OA() -> OF()
+      OB() -> OF()
+      OC() -> OF()
+  fn keq(x: OKey, y: OKey) -> OBit = match x
+    OA() -> match y
+      OA() -> OT()
+      OB() -> OF()
+      OC() -> OF()
+    OB() -> match y
+      OA() -> OF()
+      OB() -> OT()
+      OC() -> OF()
+    OC() -> match y
+      OA() -> OF()
+      OB() -> OF()
+      OC() -> OT()
+  fn orb_of_r(a: OBit) -> Equivalent(OBit, orb(a, OF()), a) = match a
+    OF() -> reflexive(OF())
+    OT() -> reflexive(OT())
+  fn orb_cong_l(c: OBit, {a: OBit}, {a2: OBit}, e: Equivalent(OBit, a, a2)) -> Equivalent(OBit, orb(a, c), orb(a2, c)) =
+    rewrite e in reflexive(orb(a2, c))
+  fn orb_cong_r(a: OBit, {b: OBit}, {b2: OBit}, e: Equivalent(OBit, b, b2)) -> Equivalent(OBit, orb(a, b), orb(a, b2)) =
+    rewrite e in reflexive(orb(a, b2))
+  fn andb_l(a: OBit, c: OBit, e: Equivalent(OBit, andb(a, c), OT())) -> Equivalent(OBit, a, OT()) = match a
+    OT() -> reflexive(OT())
+    OF() -> match e
+  fn andb_r(a: OBit, c: OBit, e: Equivalent(OBit, andb(a, c), OT())) -> Equivalent(OBit, c, OT()) = match a
+    OT() -> e
+    OF() -> match e
+  fn strict_trans(x: OKey, y: OKey, z: OKey, p: Equivalent(OBit, cmp(x, y), OT()), q: Equivalent(OBit, cmp(y, z), OT())) -> Equivalent(OBit, cmp(x, z), OT()) = match x
+    OA() -> match z
+      OA() -> match y
+        OA() -> match p
+        OB() -> match q
+        OC() -> match q
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match z
+      OA() -> match y
+        OA() -> match p
+        OB() -> match p
+        OC() -> match q
+      OB() -> match y
+        OA() -> match p
+        OB() -> match p
+        OC() -> match q
+      OC() -> reflexive(OT())
+    OC() -> match y
+      OA() -> match p
+      OB() -> match p
+      OC() -> match p
+  fn strict_neq(x: OKey, y: OKey, p: Equivalent(OBit, cmp(x, y), OT())) -> Equivalent(OBit, keq(x, y), OF()) = match x
+    OA() -> match y
+      OA() -> match p
+      OB() -> reflexive(OF())
+      OC() -> reflexive(OF())
+    OB() -> match y
+      OA() -> match p
+      OB() -> match p
+      OC() -> reflexive(OF())
+    OC() -> match y
+      OA() -> match p
+      OB() -> match p
+      OC() -> match p
+  fn strict_neq_r(x: OKey, y: OKey, p: Equivalent(OBit, cmp(y, x), OT())) -> Equivalent(OBit, keq(x, y), OF()) = match x
+    OA() -> match y
+      OA() -> match p
+      OB() -> match p
+      OC() -> match p
+    OB() -> match y
+      OA() -> reflexive(OF())
+      OB() -> match p
+      OC() -> match p
+    OC() -> match y
+      OA() -> reflexive(OF())
+      OB() -> reflexive(OF())
+      OC() -> match p
+  type Tree = Leaf | Node(Tree, OKey, Tree)
+  fn mem(x: OKey, t: Tree) -> OBit = match t
+    Leaf()        -> OF()
+    Node(l, v, r) -> match cmp(x, v)
+      OT() -> mem(x, l)
+      OF() -> match keq(x, v)
+        OT() -> OT()
+        OF() -> mem(x, r)
+  fn lmem(x: OKey, t: Tree) -> OBit = match t
+    Leaf()        -> OF()
+    Node(l, v, r) -> orb(keq(x, v), orb(lmem(x, l), lmem(x, r)))
+  fn alllt(t: Tree, b: OKey) -> OBit = match t
+    Leaf()        -> OT()
+    Node(l, v, r) -> andb(cmp(v, b), andb(alllt(l, b), alllt(r, b)))
+  fn allgt(t: Tree, b: OKey) -> OBit = match t
+    Leaf()        -> OT()
+    Node(l, v, r) -> andb(cmp(b, v), andb(allgt(l, b), allgt(r, b)))
+  fn isbst(t: Tree) -> OBit = match t
+    Leaf()        -> OT()
+    Node(l, v, r) -> andb(isbst(l), andb(isbst(r), andb(alllt(l, v), allgt(r, v))))
+  fn below_not_lmem(x: OKey, b: OKey, t: Tree, pxb: Equivalent(OBit, cmp(x, b), OT()), pgt: Equivalent(OBit, allgt(t, b), OT())) -> Equivalent(OBit, lmem(x, t), OF()) = match t
+    Leaf()        -> reflexive(OF())
+    Node(l, v, r) -> rewrite strict_neq(x, v, strict_trans(x, b, v, pxb, andb_l(cmp(b, v), andb(allgt(l, b), allgt(r, b)), pgt))) in rewrite below_not_lmem(x, b, l, pxb, andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, v), andb(allgt(l, b), allgt(r, b)), pgt))) in rewrite below_not_lmem(x, b, r, pxb, andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, v), andb(allgt(l, b), allgt(r, b)), pgt))) in reflexive(OF())
+  fn above_not_lmem(x: OKey, b: OKey, t: Tree, pbx: Equivalent(OBit, cmp(b, x), OT()), plt: Equivalent(OBit, alllt(t, b), OT())) -> Equivalent(OBit, lmem(x, t), OF()) = match t
+    Leaf()        -> reflexive(OF())
+    Node(l, v, r) -> rewrite strict_neq_r(x, v, strict_trans(v, b, x, andb_l(cmp(v, b), andb(alllt(l, b), alllt(r, b)), plt), pbx)) in rewrite above_not_lmem(x, b, l, pbx, andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(v, b), andb(alllt(l, b), alllt(r, b)), plt))) in rewrite above_not_lmem(x, b, r, pbx, andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(v, b), andb(alllt(l, b), alllt(r, b)), plt))) in reflexive(OF())
+  fn unfold_bst(l: Tree, v: OKey, r: Tree, bst: Equivalent(OBit, isbst(Node(l, v, r)), OT())) -> Equivalent(OBit, andb(isbst(l), andb(isbst(r), andb(alllt(l, v), allgt(r, v)))), OT()) = bst
+  fn orb_ofl(a: OBit) -> Equivalent(OBit, orb(OF(), a), a) = reflexive(a)
+  fn ml_OA_OB(l: Tree, r: Tree) -> Equivalent(OBit, mem(OA(), Node(l, OB(), r)), mem(OA(), l)) = reflexive(mem(OA(), l))
+  fn ll_OA_OB(l: Tree, r: Tree) -> Equivalent(OBit, lmem(OA(), Node(l, OB(), r)), orb(lmem(OA(), l), lmem(OA(), r))) = reflexive(orb(lmem(OA(), l), lmem(OA(), r)))
+  fn ml_OA_OC(l: Tree, r: Tree) -> Equivalent(OBit, mem(OA(), Node(l, OC(), r)), mem(OA(), l)) = reflexive(mem(OA(), l))
+  fn ll_OA_OC(l: Tree, r: Tree) -> Equivalent(OBit, lmem(OA(), Node(l, OC(), r)), orb(lmem(OA(), l), lmem(OA(), r))) = reflexive(orb(lmem(OA(), l), lmem(OA(), r)))
+  fn ml_OB_OC(l: Tree, r: Tree) -> Equivalent(OBit, mem(OB(), Node(l, OC(), r)), mem(OB(), l)) = reflexive(mem(OB(), l))
+  fn ll_OB_OC(l: Tree, r: Tree) -> Equivalent(OBit, lmem(OB(), Node(l, OC(), r)), orb(lmem(OB(), l), lmem(OB(), r))) = reflexive(orb(lmem(OB(), l), lmem(OB(), r)))
+  fn ml_OB_OA(l: Tree, r: Tree) -> Equivalent(OBit, mem(OB(), Node(l, OA(), r)), mem(OB(), r)) = reflexive(mem(OB(), r))
+  fn ll_OB_OA(l: Tree, r: Tree) -> Equivalent(OBit, lmem(OB(), Node(l, OA(), r)), orb(lmem(OB(), l), lmem(OB(), r))) = reflexive(orb(lmem(OB(), l), lmem(OB(), r)))
+  fn ml_OC_OA(l: Tree, r: Tree) -> Equivalent(OBit, mem(OC(), Node(l, OA(), r)), mem(OC(), r)) = reflexive(mem(OC(), r))
+  fn ll_OC_OA(l: Tree, r: Tree) -> Equivalent(OBit, lmem(OC(), Node(l, OA(), r)), orb(lmem(OC(), l), lmem(OC(), r))) = reflexive(orb(lmem(OC(), l), lmem(OC(), r)))
+  fn ml_OC_OB(l: Tree, r: Tree) -> Equivalent(OBit, mem(OC(), Node(l, OB(), r)), mem(OC(), r)) = reflexive(mem(OC(), r))
+  fn ll_OC_OB(l: Tree, r: Tree) -> Equivalent(OBit, lmem(OC(), Node(l, OB(), r)), orb(lmem(OC(), l), lmem(OC(), r))) = reflexive(orb(lmem(OC(), l), lmem(OC(), r)))
+  fn mem_eq_lmem(x: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT())) -> Equivalent(OBit, mem(x, t), lmem(x, t)) = match t
+    Leaf()        -> reflexive(OF())
+    Node(l, v, r) -> match x
+      OA() -> match v
+        OA() -> reflexive(OT())
+        OB() -> trans(ml_OA_OB(l, r), trans(mem_eq_lmem(OA(), l, andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), unfold_bst(l, OB(), r, bst))), trans(sym(trans(orb_cong_r(lmem(OA(), l), below_not_lmem(OA(), OB(), r, reflexive(OT()), andb_r(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), unfold_bst(l, OB(), r, bst)))))), orb_of_r(lmem(OA(), l)))), sym(ll_OA_OB(l, r)))))
+        OC() -> trans(ml_OA_OC(l, r), trans(mem_eq_lmem(OA(), l, andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), unfold_bst(l, OC(), r, bst))), trans(sym(trans(orb_cong_r(lmem(OA(), l), below_not_lmem(OA(), OC(), r, reflexive(OT()), andb_r(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), unfold_bst(l, OC(), r, bst)))))), orb_of_r(lmem(OA(), l)))), sym(ll_OA_OC(l, r)))))
+      OB() -> match v
+        OA() -> trans(ml_OB_OA(l, r), trans(mem_eq_lmem(OB(), r, andb_l(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), unfold_bst(l, OA(), r, bst)))), trans(sym(trans(orb_cong_l(lmem(OB(), r), above_not_lmem(OB(), OA(), l, reflexive(OT()), andb_l(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), unfold_bst(l, OA(), r, bst)))))), orb_ofl(lmem(OB(), r)))), sym(ll_OB_OA(l, r)))))
+        OB() -> reflexive(OT())
+        OC() -> trans(ml_OB_OC(l, r), trans(mem_eq_lmem(OB(), l, andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), unfold_bst(l, OC(), r, bst))), trans(sym(trans(orb_cong_r(lmem(OB(), l), below_not_lmem(OB(), OC(), r, reflexive(OT()), andb_r(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), unfold_bst(l, OC(), r, bst)))))), orb_of_r(lmem(OB(), l)))), sym(ll_OB_OC(l, r)))))
+      OC() -> match v
+        OA() -> trans(ml_OC_OA(l, r), trans(mem_eq_lmem(OC(), r, andb_l(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), unfold_bst(l, OA(), r, bst)))), trans(sym(trans(orb_cong_l(lmem(OC(), r), above_not_lmem(OC(), OA(), l, reflexive(OT()), andb_l(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), unfold_bst(l, OA(), r, bst)))))), orb_ofl(lmem(OC(), r)))), sym(ll_OC_OA(l, r)))))
+        OB() -> trans(ml_OC_OB(l, r), trans(mem_eq_lmem(OC(), r, andb_l(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), unfold_bst(l, OB(), r, bst)))), trans(sym(trans(orb_cong_l(lmem(OC(), r), above_not_lmem(OC(), OB(), l, reflexive(OT()), andb_l(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), unfold_bst(l, OB(), r, bst)))))), orb_ofl(lmem(OC(), r)))), sym(ll_OC_OB(l, r)))))
+        OC() -> reflexive(OT())
+  fn andb_intro(a: OBit, c: OBit, pa: Equivalent(OBit, a, OT()), pc: Equivalent(OBit, c, OT())) -> Equivalent(OBit, andb(a, c), OT()) =
+    rewrite pa in pc
+  fn allgt_weaken(t: Tree, v: OKey, w: OKey, pwv: Equivalent(OBit, cmp(w, v), OT()), pgt: Equivalent(OBit, allgt(t, v), OT())) -> Equivalent(OBit, allgt(t, w), OT()) = match t
+    Leaf()        -> reflexive(OT())
+    Node(l, u, r) -> andb_intro(cmp(w, u), andb(allgt(l, w), allgt(r, w)), strict_trans(w, v, u, pwv, andb_l(cmp(v, u), andb(allgt(l, v), allgt(r, v)), pgt)), andb_intro(allgt(l, w), allgt(r, w), allgt_weaken(l, v, w, pwv, andb_l(allgt(l, v), allgt(r, v), andb_r(cmp(v, u), andb(allgt(l, v), allgt(r, v)), pgt))), allgt_weaken(r, v, w, pwv, andb_r(allgt(l, v), allgt(r, v), andb_r(cmp(v, u), andb(allgt(l, v), allgt(r, v)), pgt)))))
+  fn alllt_weaken(t: Tree, v: OKey, w: OKey, pvw: Equivalent(OBit, cmp(v, w), OT()), plt: Equivalent(OBit, alllt(t, v), OT())) -> Equivalent(OBit, alllt(t, w), OT()) = match t
+    Leaf()        -> reflexive(OT())
+    Node(l, u, r) -> andb_intro(cmp(u, w), andb(alllt(l, w), alllt(r, w)), strict_trans(u, v, w, andb_l(cmp(u, v), andb(alllt(l, v), alllt(r, v)), plt), pvw), andb_intro(alllt(l, w), alllt(r, w), alllt_weaken(l, v, w, pvw, andb_l(alllt(l, v), alllt(r, v), andb_r(cmp(u, v), andb(alllt(l, v), alllt(r, v)), plt))), alllt_weaken(r, v, w, pvw, andb_r(alllt(l, v), alllt(r, v), andb_r(cmp(u, v), andb(alllt(l, v), alllt(r, v)), plt)))))
+  fn merge(l: Tree, r: Tree) -> Tree = match l
+    Leaf()          -> r
+    Node(ll, lv, lr) -> Node(ll, lv, merge(lr, r))
+  fn merge_allgt(l: Tree, r: Tree, b: OKey, pl: Equivalent(OBit, allgt(l, b), OT()), pr: Equivalent(OBit, allgt(r, b), OT())) -> Equivalent(OBit, allgt(merge(l, r), b), OT()) = match l
+    Leaf()          -> pr
+    Node(ll, lv, lr) -> andb_intro(cmp(b, lv), andb(allgt(ll, b), allgt(merge(lr, r), b)), andb_l(cmp(b, lv), andb(allgt(ll, b), allgt(lr, b)), pl), andb_intro(allgt(ll, b), allgt(merge(lr, r), b), andb_l(allgt(ll, b), allgt(lr, b), andb_r(cmp(b, lv), andb(allgt(ll, b), allgt(lr, b)), pl)), merge_allgt(lr, r, b, andb_r(allgt(ll, b), allgt(lr, b), andb_r(cmp(b, lv), andb(allgt(ll, b), allgt(lr, b)), pl)), pr)))
+  fn merge_alllt(l: Tree, r: Tree, b: OKey, pl: Equivalent(OBit, alllt(l, b), OT()), pr: Equivalent(OBit, alllt(r, b), OT())) -> Equivalent(OBit, alllt(merge(l, r), b), OT()) = match l
+    Leaf()          -> pr
+    Node(ll, lv, lr) -> andb_intro(cmp(lv, b), andb(alllt(ll, b), alllt(merge(lr, r), b)), andb_l(cmp(lv, b), andb(alllt(ll, b), alllt(lr, b)), pl), andb_intro(alllt(ll, b), alllt(merge(lr, r), b), andb_l(alllt(ll, b), alllt(lr, b), andb_r(cmp(lv, b), andb(alllt(ll, b), alllt(lr, b)), pl)), merge_alllt(lr, r, b, andb_r(alllt(ll, b), alllt(lr, b), andb_r(cmp(lv, b), andb(alllt(ll, b), alllt(lr, b)), pl)), pr)))
+  fn merge_bst(l: Tree, r: Tree, m: OKey, bl: Equivalent(OBit, isbst(l), OT()), br: Equivalent(OBit, isbst(r), OT()), plt: Equivalent(OBit, alllt(l, m), OT()), pgt: Equivalent(OBit, allgt(r, m), OT())) -> Equivalent(OBit, isbst(merge(l, r)), OT()) = match l
+    Leaf()          -> br
+    Node(ll, lv, lr) ->
+      let bl_r = andb_r(isbst(ll), andb(isbst(lr), andb(alllt(ll, lv), allgt(lr, lv))), bl) in
+      let bl_r2 = andb_r(isbst(lr), andb(alllt(ll, lv), allgt(lr, lv)), bl_r) in
+      let plt_r = andb_r(cmp(lv, m), andb(alllt(ll, m), alllt(lr, m)), plt) in
+      andb_intro(isbst(ll), andb(isbst(merge(lr, r)), andb(alllt(ll, lv), allgt(merge(lr, r), lv))), andb_l(isbst(ll), andb(isbst(lr), andb(alllt(ll, lv), allgt(lr, lv))), bl), andb_intro(isbst(merge(lr, r)), andb(alllt(ll, lv), allgt(merge(lr, r), lv)), merge_bst(lr, r, m, andb_l(isbst(lr), andb(alllt(ll, lv), allgt(lr, lv)), bl_r), br, andb_r(alllt(ll, m), alllt(lr, m), plt_r), pgt), andb_intro(alllt(ll, lv), allgt(merge(lr, r), lv), andb_l(alllt(ll, lv), allgt(lr, lv), bl_r2), merge_allgt(lr, r, lv, andb_r(alllt(ll, lv), allgt(lr, lv), bl_r2), allgt_weaken(r, m, lv, andb_l(cmp(lv, m), andb(alllt(ll, m), alllt(lr, m)), plt), pgt)))))
+  fn delete(k: OKey, t: Tree) -> Tree = match t
+    Leaf()        -> Leaf()
+    Node(l, v, r) -> match cmp(k, v)
+      OT() -> Node(delete(k, l), v, r)
+      OF() -> match keq(k, v)
+        OT() -> merge(l, r)
+        OF() -> Node(l, v, delete(k, r))
+  fn delete_alllt(k: OKey, t: Tree, b: OKey, plt: Equivalent(OBit, alllt(t, b), OT())) -> Equivalent(OBit, alllt(delete(k, t), b), OT()) = match t
+    Leaf()        -> reflexive(OT())
+    Node(l, v, r) -> match k
+      OA() -> match v
+        OA() -> merge_alllt(l, r, b, andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(OA(), b), andb(alllt(l, b), alllt(r, b)), plt)), andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(OA(), b), andb(alllt(l, b), alllt(r, b)), plt)))
+        OB() -> andb_intro(cmp(OB(), b), andb(alllt(delete(OA(), l), b), alllt(r, b)), andb_l(cmp(OB(), b), andb(alllt(l, b), alllt(r, b)), plt), andb_intro(alllt(delete(OA(), l), b), alllt(r, b), delete_alllt(OA(), l, b, andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(OB(), b), andb(alllt(l, b), alllt(r, b)), plt))), andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(OB(), b), andb(alllt(l, b), alllt(r, b)), plt))))
+        OC() -> andb_intro(cmp(OC(), b), andb(alllt(delete(OA(), l), b), alllt(r, b)), andb_l(cmp(OC(), b), andb(alllt(l, b), alllt(r, b)), plt), andb_intro(alllt(delete(OA(), l), b), alllt(r, b), delete_alllt(OA(), l, b, andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(OC(), b), andb(alllt(l, b), alllt(r, b)), plt))), andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(OC(), b), andb(alllt(l, b), alllt(r, b)), plt))))
+      OB() -> match v
+        OA() -> andb_intro(cmp(OA(), b), andb(alllt(l, b), alllt(delete(OB(), r), b)), andb_l(cmp(OA(), b), andb(alllt(l, b), alllt(r, b)), plt), andb_intro(alllt(l, b), alllt(delete(OB(), r), b), andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(OA(), b), andb(alllt(l, b), alllt(r, b)), plt)), delete_alllt(OB(), r, b, andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(OA(), b), andb(alllt(l, b), alllt(r, b)), plt)))))
+        OB() -> merge_alllt(l, r, b, andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(OB(), b), andb(alllt(l, b), alllt(r, b)), plt)), andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(OB(), b), andb(alllt(l, b), alllt(r, b)), plt)))
+        OC() -> andb_intro(cmp(OC(), b), andb(alllt(delete(OB(), l), b), alllt(r, b)), andb_l(cmp(OC(), b), andb(alllt(l, b), alllt(r, b)), plt), andb_intro(alllt(delete(OB(), l), b), alllt(r, b), delete_alllt(OB(), l, b, andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(OC(), b), andb(alllt(l, b), alllt(r, b)), plt))), andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(OC(), b), andb(alllt(l, b), alllt(r, b)), plt))))
+      OC() -> match v
+        OA() -> andb_intro(cmp(OA(), b), andb(alllt(l, b), alllt(delete(OC(), r), b)), andb_l(cmp(OA(), b), andb(alllt(l, b), alllt(r, b)), plt), andb_intro(alllt(l, b), alllt(delete(OC(), r), b), andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(OA(), b), andb(alllt(l, b), alllt(r, b)), plt)), delete_alllt(OC(), r, b, andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(OA(), b), andb(alllt(l, b), alllt(r, b)), plt)))))
+        OB() -> andb_intro(cmp(OB(), b), andb(alllt(l, b), alllt(delete(OC(), r), b)), andb_l(cmp(OB(), b), andb(alllt(l, b), alllt(r, b)), plt), andb_intro(alllt(l, b), alllt(delete(OC(), r), b), andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(OB(), b), andb(alllt(l, b), alllt(r, b)), plt)), delete_alllt(OC(), r, b, andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(OB(), b), andb(alllt(l, b), alllt(r, b)), plt)))))
+        OC() -> merge_alllt(l, r, b, andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(OC(), b), andb(alllt(l, b), alllt(r, b)), plt)), andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(OC(), b), andb(alllt(l, b), alllt(r, b)), plt)))
+  fn delete_allgt(k: OKey, t: Tree, b: OKey, pgt: Equivalent(OBit, allgt(t, b), OT())) -> Equivalent(OBit, allgt(delete(k, t), b), OT()) = match t
+    Leaf()        -> reflexive(OT())
+    Node(l, v, r) -> match k
+      OA() -> match v
+        OA() -> merge_allgt(l, r, b, andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, OA()), andb(allgt(l, b), allgt(r, b)), pgt)), andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, OA()), andb(allgt(l, b), allgt(r, b)), pgt)))
+        OB() -> andb_intro(cmp(b, OB()), andb(allgt(delete(OA(), l), b), allgt(r, b)), andb_l(cmp(b, OB()), andb(allgt(l, b), allgt(r, b)), pgt), andb_intro(allgt(delete(OA(), l), b), allgt(r, b), delete_allgt(OA(), l, b, andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, OB()), andb(allgt(l, b), allgt(r, b)), pgt))), andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, OB()), andb(allgt(l, b), allgt(r, b)), pgt))))
+        OC() -> andb_intro(cmp(b, OC()), andb(allgt(delete(OA(), l), b), allgt(r, b)), andb_l(cmp(b, OC()), andb(allgt(l, b), allgt(r, b)), pgt), andb_intro(allgt(delete(OA(), l), b), allgt(r, b), delete_allgt(OA(), l, b, andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, OC()), andb(allgt(l, b), allgt(r, b)), pgt))), andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, OC()), andb(allgt(l, b), allgt(r, b)), pgt))))
+      OB() -> match v
+        OA() -> andb_intro(cmp(b, OA()), andb(allgt(l, b), allgt(delete(OB(), r), b)), andb_l(cmp(b, OA()), andb(allgt(l, b), allgt(r, b)), pgt), andb_intro(allgt(l, b), allgt(delete(OB(), r), b), andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, OA()), andb(allgt(l, b), allgt(r, b)), pgt)), delete_allgt(OB(), r, b, andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, OA()), andb(allgt(l, b), allgt(r, b)), pgt)))))
+        OB() -> merge_allgt(l, r, b, andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, OB()), andb(allgt(l, b), allgt(r, b)), pgt)), andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, OB()), andb(allgt(l, b), allgt(r, b)), pgt)))
+        OC() -> andb_intro(cmp(b, OC()), andb(allgt(delete(OB(), l), b), allgt(r, b)), andb_l(cmp(b, OC()), andb(allgt(l, b), allgt(r, b)), pgt), andb_intro(allgt(delete(OB(), l), b), allgt(r, b), delete_allgt(OB(), l, b, andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, OC()), andb(allgt(l, b), allgt(r, b)), pgt))), andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, OC()), andb(allgt(l, b), allgt(r, b)), pgt))))
+      OC() -> match v
+        OA() -> andb_intro(cmp(b, OA()), andb(allgt(l, b), allgt(delete(OC(), r), b)), andb_l(cmp(b, OA()), andb(allgt(l, b), allgt(r, b)), pgt), andb_intro(allgt(l, b), allgt(delete(OC(), r), b), andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, OA()), andb(allgt(l, b), allgt(r, b)), pgt)), delete_allgt(OC(), r, b, andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, OA()), andb(allgt(l, b), allgt(r, b)), pgt)))))
+        OB() -> andb_intro(cmp(b, OB()), andb(allgt(l, b), allgt(delete(OC(), r), b)), andb_l(cmp(b, OB()), andb(allgt(l, b), allgt(r, b)), pgt), andb_intro(allgt(l, b), allgt(delete(OC(), r), b), andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, OB()), andb(allgt(l, b), allgt(r, b)), pgt)), delete_allgt(OC(), r, b, andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, OB()), andb(allgt(l, b), allgt(r, b)), pgt)))))
+        OC() -> merge_allgt(l, r, b, andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, OC()), andb(allgt(l, b), allgt(r, b)), pgt)), andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, OC()), andb(allgt(l, b), allgt(r, b)), pgt)))
+  fn delete_bst(k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT())) -> Equivalent(OBit, isbst(delete(k, t)), OT()) = match t
+    Leaf()        -> reflexive(OT())
+    Node(l, v, r) -> match k
+      OA() -> match v
+        OA() -> merge_bst(l, r, OA(), andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst), andb_l(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst)), andb_l(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst))), andb_r(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst))))
+        OB() -> andb_intro(isbst(delete(OA(), l)), andb(isbst(r), andb(alllt(delete(OA(), l), OB()), allgt(r, OB()))), delete_bst(OA(), l, andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst)), andb_intro(isbst(r), andb(alllt(delete(OA(), l), OB()), allgt(r, OB())), andb_l(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst)), andb_intro(alllt(delete(OA(), l), OB()), allgt(r, OB()), delete_alllt(OA(), l, OB(), andb_l(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst)))), andb_r(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst))))))
+        OC() -> andb_intro(isbst(delete(OA(), l)), andb(isbst(r), andb(alllt(delete(OA(), l), OC()), allgt(r, OC()))), delete_bst(OA(), l, andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst)), andb_intro(isbst(r), andb(alllt(delete(OA(), l), OC()), allgt(r, OC())), andb_l(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst)), andb_intro(alllt(delete(OA(), l), OC()), allgt(r, OC()), delete_alllt(OA(), l, OC(), andb_l(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst)))), andb_r(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))))))
+      OB() -> match v
+        OA() -> andb_intro(isbst(l), andb(isbst(delete(OB(), r)), andb(alllt(l, OA()), allgt(delete(OB(), r), OA()))), andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst), andb_intro(isbst(delete(OB(), r)), andb(alllt(l, OA()), allgt(delete(OB(), r), OA())), delete_bst(OB(), r, andb_l(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst))), andb_intro(alllt(l, OA()), allgt(delete(OB(), r), OA()), andb_l(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst))), delete_allgt(OB(), r, OA(), andb_r(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst)))))))
+        OB() -> merge_bst(l, r, OB(), andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst), andb_l(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst)), andb_l(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst))), andb_r(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst))))
+        OC() -> andb_intro(isbst(delete(OB(), l)), andb(isbst(r), andb(alllt(delete(OB(), l), OC()), allgt(r, OC()))), delete_bst(OB(), l, andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst)), andb_intro(isbst(r), andb(alllt(delete(OB(), l), OC()), allgt(r, OC())), andb_l(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst)), andb_intro(alllt(delete(OB(), l), OC()), allgt(r, OC()), delete_alllt(OB(), l, OC(), andb_l(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst)))), andb_r(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))))))
+      OC() -> match v
+        OA() -> andb_intro(isbst(l), andb(isbst(delete(OC(), r)), andb(alllt(l, OA()), allgt(delete(OC(), r), OA()))), andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst), andb_intro(isbst(delete(OC(), r)), andb(alllt(l, OA()), allgt(delete(OC(), r), OA())), delete_bst(OC(), r, andb_l(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst))), andb_intro(alllt(l, OA()), allgt(delete(OC(), r), OA()), andb_l(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst))), delete_allgt(OC(), r, OA(), andb_r(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst)))))))
+        OB() -> andb_intro(isbst(l), andb(isbst(delete(OC(), r)), andb(alllt(l, OB()), allgt(delete(OC(), r), OB()))), andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst), andb_intro(isbst(delete(OC(), r)), andb(alllt(l, OB()), allgt(delete(OC(), r), OB())), delete_bst(OC(), r, andb_l(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst))), andb_intro(alllt(l, OB()), allgt(delete(OC(), r), OB()), andb_l(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst))), delete_allgt(OC(), r, OB(), andb_r(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst)))))))
+        OC() -> merge_bst(l, r, OC(), andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst), andb_l(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst)), andb_l(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))), andb_r(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))))
+  fn orb_assoc(a: OBit, b: OBit, c: OBit) -> Equivalent(OBit, orb(orb(a, b), c), orb(a, orb(b, c))) = match a
+    OF() -> reflexive(orb(b, c))
+    OT() -> reflexive(OT())
+  fn lmem_merge(l: Tree, r: Tree, x: OKey) -> Equivalent(OBit, lmem(x, merge(l, r)), orb(lmem(x, l), lmem(x, r))) = match l
+    Leaf()          -> reflexive(lmem(x, r))
+    Node(ll, lv, lr) -> trans(orb_cong_r(keq(x, lv), orb_cong_r(lmem(x, ll), lmem_merge(lr, r, x))), sym(trans(orb_assoc(keq(x, lv), orb(lmem(x, ll), lmem(x, lr)), lmem(x, r)), orb_cong_r(keq(x, lv), orb_assoc(lmem(x, ll), lmem(x, lr), lmem(x, r))))))
+  fn alllt_absent(x: OKey, t: Tree, plt: Equivalent(OBit, alllt(t, x), OT())) -> Equivalent(OBit, lmem(x, t), OF()) = match t
+    Leaf()        -> reflexive(OF())
+    Node(l, v, r) -> rewrite strict_neq_r(x, v, andb_l(cmp(v, x), andb(alllt(l, x), alllt(r, x)), plt)) in rewrite alllt_absent(x, l, andb_l(alllt(l, x), alllt(r, x), andb_r(cmp(v, x), andb(alllt(l, x), alllt(r, x)), plt))) in rewrite alllt_absent(x, r, andb_r(alllt(l, x), alllt(r, x), andb_r(cmp(v, x), andb(alllt(l, x), alllt(r, x)), plt))) in reflexive(OF())
+  fn allgt_absent(x: OKey, t: Tree, pgt: Equivalent(OBit, allgt(t, x), OT())) -> Equivalent(OBit, lmem(x, t), OF()) = match t
+    Leaf()        -> reflexive(OF())
+    Node(l, v, r) -> rewrite strict_neq(x, v, andb_l(cmp(x, v), andb(allgt(l, x), allgt(r, x)), pgt)) in rewrite allgt_absent(x, l, andb_l(allgt(l, x), allgt(r, x), andb_r(cmp(x, v), andb(allgt(l, x), allgt(r, x)), pgt))) in rewrite allgt_absent(x, r, andb_r(allgt(l, x), allgt(r, x), andb_r(cmp(x, v), andb(allgt(l, x), allgt(r, x)), pgt))) in reflexive(OF())
+  fn mem_delete_eq(k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT())) -> Equivalent(OBit, mem(k, delete(k, t)), OF()) = match t
+    Leaf()        -> reflexive(OF())
+    Node(l, v, r) -> match k
+      OA() -> match v
+        OA() -> trans(mem_eq_lmem(OA(), merge(l, r), merge_bst(l, r, OA(), andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst), andb_l(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst)), andb_l(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst))), andb_r(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst))))), trans(lmem_merge(l, r, OA()), trans(orb_cong_l(lmem(OA(), r), alllt_absent(OA(), l, andb_l(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst))))), trans(orb_ofl(lmem(OA(), r)), allgt_absent(OA(), r, andb_r(alllt(l, OA()), allgt(r, OA()), andb_r(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst))))))))
+        OB() -> mem_delete_eq(OA(), l, andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst))
+        OC() -> mem_delete_eq(OA(), l, andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))
+      OB() -> match v
+        OA() -> mem_delete_eq(OB(), r, andb_l(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst)))
+        OB() -> trans(mem_eq_lmem(OB(), merge(l, r), merge_bst(l, r, OB(), andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst), andb_l(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst)), andb_l(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst))), andb_r(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst))))), trans(lmem_merge(l, r, OB()), trans(orb_cong_l(lmem(OB(), r), alllt_absent(OB(), l, andb_l(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst))))), trans(orb_ofl(lmem(OB(), r)), allgt_absent(OB(), r, andb_r(alllt(l, OB()), allgt(r, OB()), andb_r(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst))))))))
+        OC() -> mem_delete_eq(OB(), l, andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))
+      OC() -> match v
+        OA() -> mem_delete_eq(OC(), r, andb_l(isbst(r), andb(alllt(l, OA()), allgt(r, OA())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OA()), allgt(r, OA()))), bst)))
+        OB() -> mem_delete_eq(OC(), r, andb_l(isbst(r), andb(alllt(l, OB()), allgt(r, OB())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OB()), allgt(r, OB()))), bst)))
+        OC() -> trans(mem_eq_lmem(OC(), merge(l, r), merge_bst(l, r, OC(), andb_l(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst), andb_l(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst)), andb_l(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))), andb_r(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))))), trans(lmem_merge(l, r, OC()), trans(orb_cong_l(lmem(OC(), r), alllt_absent(OC(), l, andb_l(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))))), trans(orb_ofl(lmem(OC(), r)), allgt_absent(OC(), r, andb_r(alllt(l, OC()), allgt(r, OC()), andb_r(isbst(r), andb(alllt(l, OC()), allgt(r, OC())), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, OC()), allgt(r, OC()))), bst))))))))
+  fn lmem_delete_neq(x: OKey, k: OKey, t: Tree, neq: Equivalent(OBit, keq(x, k), OF())) -> Equivalent(OBit, lmem(x, delete(k, t)), lmem(x, t)) = match t
+    Leaf()        -> reflexive(OF())
+    Node(l, v, r) -> match k
+      OA() -> match v
+        OA() -> trans(lmem_merge(l, r, x), sym(trans(orb_cong_l(orb(lmem(x, l), lmem(x, r)), neq), orb_ofl(orb(lmem(x, l), lmem(x, r))))))
+        OB() -> orb_cong_r(keq(x, OB()), orb_cong_l(lmem(x, r), lmem_delete_neq(x, OA(), l, neq)))
+        OC() -> orb_cong_r(keq(x, OC()), orb_cong_l(lmem(x, r), lmem_delete_neq(x, OA(), l, neq)))
+      OB() -> match v
+        OA() -> orb_cong_r(keq(x, OA()), orb_cong_r(lmem(x, l), lmem_delete_neq(x, OB(), r, neq)))
+        OB() -> trans(lmem_merge(l, r, x), sym(trans(orb_cong_l(orb(lmem(x, l), lmem(x, r)), neq), orb_ofl(orb(lmem(x, l), lmem(x, r))))))
+        OC() -> orb_cong_r(keq(x, OC()), orb_cong_l(lmem(x, r), lmem_delete_neq(x, OB(), l, neq)))
+      OC() -> match v
+        OA() -> orb_cong_r(keq(x, OA()), orb_cong_r(lmem(x, l), lmem_delete_neq(x, OC(), r, neq)))
+        OB() -> orb_cong_r(keq(x, OB()), orb_cong_r(lmem(x, l), lmem_delete_neq(x, OC(), r, neq)))
+        OC() -> trans(lmem_merge(l, r, x), sym(trans(orb_cong_l(orb(lmem(x, l), lmem(x, r)), neq), orb_ofl(orb(lmem(x, l), lmem(x, r))))))
+  fn mem_delete_neq(x: OKey, k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT()), neq: Equivalent(OBit, keq(x, k), OF())) -> Equivalent(OBit, mem(x, delete(k, t)), mem(x, t)) =
+    trans(mem_eq_lmem(x, delete(k, t), delete_bst(k, t, bst)), trans(lmem_delete_neq(x, k, t, neq), sym(mem_eq_lmem(x, t, bst))))
+  type KList = KNil | KCons(OKey, KList)
+  fn kapp(xs: KList, ys: KList) -> KList = match xs
+    KNil()        -> ys
+    KCons(x, rest) -> KCons(x, kapp(rest, ys))
+  fn flatten(t: Tree) -> KList = match t
+    Leaf()        -> KNil()
+    Node(l, v, r) -> kapp(flatten(l), KCons(v, flatten(r)))
+  fn all_gt_list(xs: KList, b: OKey) -> OBit = match xs
+    KNil()        -> OT()
+    KCons(x, rest) -> andb(cmp(b, x), all_gt_list(rest, b))
+  fn all_lt_list(xs: KList, b: OKey) -> OBit = match xs
+    KNil()        -> OT()
+    KCons(x, rest) -> andb(cmp(x, b), all_lt_list(rest, b))
+  fn sorted(xs: KList) -> OBit = match xs
+    KNil()        -> OT()
+    KCons(x, rest) -> andb(all_gt_list(rest, x), sorted(rest))
+  fn all_gt_list_weaken(xs: KList, v: OKey, b: OKey, pbv: Equivalent(OBit, cmp(b, v), OT()), pgt: Equivalent(OBit, all_gt_list(xs, v), OT())) -> Equivalent(OBit, all_gt_list(xs, b), OT()) = match xs
+    KNil()        -> reflexive(OT())
+    KCons(x, rest) -> andb_intro(cmp(b, x), all_gt_list(rest, b), strict_trans(b, v, x, pbv, andb_l(cmp(v, x), all_gt_list(rest, v), pgt)), all_gt_list_weaken(rest, v, b, pbv, andb_r(cmp(v, x), all_gt_list(rest, v), pgt)))
+  fn all_lt_list_weaken(xs: KList, v: OKey, b: OKey, pvb: Equivalent(OBit, cmp(v, b), OT()), plt: Equivalent(OBit, all_lt_list(xs, v), OT())) -> Equivalent(OBit, all_lt_list(xs, b), OT()) = match xs
+    KNil()        -> reflexive(OT())
+    KCons(x, rest) -> andb_intro(cmp(x, b), all_lt_list(rest, b), strict_trans(x, v, b, andb_l(cmp(x, v), all_lt_list(rest, v), plt), pvb), all_lt_list_weaken(rest, v, b, pvb, andb_r(cmp(x, v), all_lt_list(rest, v), plt)))
+  fn all_gt_list_app_cons(xs: KList, v: OKey, ys: KList, b: OKey, pxs: Equivalent(OBit, all_gt_list(xs, b), OT()), pbv: Equivalent(OBit, cmp(b, v), OT()), pys: Equivalent(OBit, all_gt_list(ys, b), OT())) -> Equivalent(OBit, all_gt_list(kapp(xs, KCons(v, ys)), b), OT()) = match xs
+    KNil()        -> andb_intro(cmp(b, v), all_gt_list(ys, b), pbv, pys)
+    KCons(x, rest) -> andb_intro(cmp(b, x), all_gt_list(kapp(rest, KCons(v, ys)), b), andb_l(cmp(b, x), all_gt_list(rest, b), pxs), all_gt_list_app_cons(rest, v, ys, b, andb_r(cmp(b, x), all_gt_list(rest, b), pxs), pbv, pys))
+  fn all_lt_list_app_cons(xs: KList, v: OKey, ys: KList, b: OKey, pxs: Equivalent(OBit, all_lt_list(xs, b), OT()), pvb: Equivalent(OBit, cmp(v, b), OT()), pys: Equivalent(OBit, all_lt_list(ys, b), OT())) -> Equivalent(OBit, all_lt_list(kapp(xs, KCons(v, ys)), b), OT()) = match xs
+    KNil()        -> andb_intro(cmp(v, b), all_lt_list(ys, b), pvb, pys)
+    KCons(x, rest) -> andb_intro(cmp(x, b), all_lt_list(kapp(rest, KCons(v, ys)), b), andb_l(cmp(x, b), all_lt_list(rest, b), pxs), all_lt_list_app_cons(rest, v, ys, b, andb_r(cmp(x, b), all_lt_list(rest, b), pxs), pvb, pys))
+  fn sorted_concat(xs: KList, v: OKey, ys: KList, sxs: Equivalent(OBit, sorted(xs), OT()), sys: Equivalent(OBit, sorted(ys), OT()), plt: Equivalent(OBit, all_lt_list(xs, v), OT()), pgt: Equivalent(OBit, all_gt_list(ys, v), OT())) -> Equivalent(OBit, sorted(kapp(xs, KCons(v, ys))), OT()) = match xs
+    KNil()        -> andb_intro(all_gt_list(ys, v), sorted(ys), pgt, sys)
+    KCons(x, rest) -> andb_intro(all_gt_list(kapp(rest, KCons(v, ys)), x), sorted(kapp(rest, KCons(v, ys))), all_gt_list_app_cons(rest, v, ys, x, andb_l(all_gt_list(rest, x), sorted(rest), sxs), andb_l(cmp(x, v), all_lt_list(rest, v), plt), all_gt_list_weaken(ys, v, x, andb_l(cmp(x, v), all_lt_list(rest, v), plt), pgt)), sorted_concat(rest, v, ys, andb_r(all_gt_list(rest, x), sorted(rest), sxs), sys, andb_r(cmp(x, v), all_lt_list(rest, v), plt), pgt))
+  fn flatten_all_gt_list(t: Tree, b: OKey, pgt: Equivalent(OBit, allgt(t, b), OT())) -> Equivalent(OBit, all_gt_list(flatten(t), b), OT()) = match t
+    Leaf()        -> reflexive(OT())
+    Node(l, v, r) -> all_gt_list_app_cons(flatten(l), v, flatten(r), b, flatten_all_gt_list(l, b, andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, v), andb(allgt(l, b), allgt(r, b)), pgt))), andb_l(cmp(b, v), andb(allgt(l, b), allgt(r, b)), pgt), flatten_all_gt_list(r, b, andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, v), andb(allgt(l, b), allgt(r, b)), pgt))))
+  fn flatten_all_lt_list(t: Tree, b: OKey, plt: Equivalent(OBit, alllt(t, b), OT())) -> Equivalent(OBit, all_lt_list(flatten(t), b), OT()) = match t
+    Leaf()        -> reflexive(OT())
+    Node(l, v, r) -> all_lt_list_app_cons(flatten(l), v, flatten(r), b, flatten_all_lt_list(l, b, andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(v, b), andb(alllt(l, b), alllt(r, b)), plt))), andb_l(cmp(v, b), andb(alllt(l, b), alllt(r, b)), plt), flatten_all_lt_list(r, b, andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(v, b), andb(alllt(l, b), alllt(r, b)), plt))))
+  fn flatten_sorted(t: Tree, bst: Equivalent(OBit, isbst(t), OT())) -> Equivalent(OBit, sorted(flatten(t)), OT()) = match t
+    Leaf()        -> reflexive(OT())
+    Node(l, v, r) -> sorted_concat(flatten(l), v, flatten(r), flatten_sorted(l, andb_l(isbst(l), andb(isbst(r), andb(alllt(l, v), allgt(r, v))), bst)), flatten_sorted(r, andb_l(isbst(r), andb(alllt(l, v), allgt(r, v)), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, v), allgt(r, v))), bst))), flatten_all_lt_list(l, v, andb_l(alllt(l, v), allgt(r, v), andb_r(isbst(r), andb(alllt(l, v), allgt(r, v)), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, v), allgt(r, v))), bst)))), flatten_all_gt_list(r, v, andb_r(alllt(l, v), allgt(r, v), andb_r(isbst(r), andb(alllt(l, v), allgt(r, v)), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, v), allgt(r, v))), bst)))))
+end

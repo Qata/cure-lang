@@ -76,7 +76,7 @@ defmodule Cure.Elab.CrossModuleNamesTest do
   describe "a duplicate within one module keeps its own error" do
     test "function" do
       src = "mod A\n  fn foo(x: Int) -> Int = x\n  fn foo(y: Int) -> Int = y\nend\n"
-      assert {:error, {:duplicate_definition, :foo}} = check(src)
+      assert {:error, {:overlapping_overload, :foo, 1}} = check(src)
     end
 
     test "constructor across two types" do

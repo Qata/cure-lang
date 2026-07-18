@@ -30,6 +30,7 @@ defmodule Cure.Core.Env do
             constrained: %{},
             primitives: %{},
             import_modules: MapSet.new(),
+            lemmas: %{},
             module_owner: nil
 
   @type t :: %__MODULE__{
@@ -52,7 +53,11 @@ defmodule Cure.Core.Env do
           # (explicit `use` + auto-prelude). Bare-name resolution prefers a
           # direct owner over a name reachable only via a module's transitive
           # re-export, matching must-import semantics (Haskell/Elm/Idris/Swift).
-          import_modules: MapSet.t(String.t())
+          import_modules: MapSet.t(String.t()),
+          # Inert elaborator metadata (the kernel never reads it): `@lemma`-tagged
+          # theorems keyed by their conclusion-head atom, for auto proof-search
+          # (see `Cure.Elab.ProofSearch`). Same status as `interfaces`/`coherence`.
+          lemmas: %{atom() => [map()]}
         }
 
   @doc "An empty signature."
@@ -237,6 +242,19 @@ defmodule Cure.Core.Env do
   @spec get_interface(t(), atom()) :: map() | nil
   def get_interface(%__MODULE__{interfaces: ifaces}, name), do: Map.get(ifaces, name)
 
+  @doc """
+  Register a `@lemma`-tagged theorem for auto proof-search, filed under the
+  head atom of its conclusion type. Inert elaborator metadata — the kernel
+  never reads it (like `interfaces`/`coherence`). See `Cure.Elab.ProofSearch`.
+  """
+  @spec put_lemma(t(), atom(), map()) :: t()
+  def put_lemma(%__MODULE__{lemmas: ls} = env, head, entry) when is_atom(head),
+    do: %{env | lemmas: Map.update(ls, head, [entry], &(&1 ++ [entry]))}
+
+  @doc "The `@lemma` entries filed under conclusion head `head`, or `[]`."
+  @spec lemmas(t(), atom()) :: [map()]
+  def lemmas(%__MODULE__{lemmas: ls}, head) when is_atom(head), do: Map.get(ls, head, [])
+
   @doc "Replace the coherence registry (instance table) carried in the env."
   @spec put_coherence(t(), term()) :: t()
   def put_coherence(%__MODULE__{} = env, registry), do: %{env | coherence: registry}
@@ -258,6 +276,35 @@ defmodule Cure.Core.Env do
   @doc "The interface-constraint descriptors for global `name`, or nil."
   @spec constrained(t(), atom()) :: [map()] | nil
   def constrained(%__MODULE__{} = env, name), do: Map.get(env.constrained, resolve_key(env, env.constrained, name))
+
+  @doc """
+  Attach a parameter-label vector to an already-registered global (Ph2 argument
+  labels). The vector is telescope-aligned (one entry per binder, in order),
+  each a written external label string or `nil` for an unlabelled binder. A
+  `nil` vector means the def has no labels at all — it is stored under no key, so
+  a label-free def's record stays byte-identical (inertness). The label rides IN
+  the `env.defs` record, so it travels with the discriminated overload key.
+  """
+  @spec put_labels(t(), atom(), [String.t() | nil] | nil) :: t()
+  def put_labels(%__MODULE__{} = env, _name, nil), do: env
+
+  def put_labels(%__MODULE__{} = env, name, labels) do
+    key = owned_name(env, name)
+
+    case Map.get(env.defs, key) do
+      nil -> env
+      record -> %{env | defs: Map.put(env.defs, key, Map.put(record, :labels, labels))}
+    end
+  end
+
+  @doc "The telescope-aligned parameter-label vector for global `name`, or nil."
+  @spec labels(t(), atom()) :: [String.t() | nil] | nil
+  def labels(%__MODULE__{} = env, name) do
+    case get_def(env, name) do
+      %{labels: ls} -> ls
+      _ -> nil
+    end
+  end
 
   @doc """
   Mark a global as totality-certified (δ may unfold it). See M7.2.
@@ -382,12 +429,25 @@ defmodule Cure.Core.Inductive do
           # kernel refuses to eliminate; absent on ordinary inductive families.
           optional(:opaque) => boolean()
         }
+  @typedoc """
+  A constructor argument's **plicity** — whether it is supplied *positionally*
+  (`:explicit`, written at application and bound positionally in a pattern) or
+  *implicitly* (`:implicit`, solved by unification at application and bound by
+  name in a pattern). Plicity is orthogonal to `quantity` (`Cure.Core.Grade`):
+  an inferred index is `:implicit` + `:erased`, an ordinary field is `:explicit`
+  + `:unrestricted`, and a *relevant implicit* (Idris `{k : Nat}`) is `:implicit`
+  + `:unrestricted`. The kernel type-checker never reads plicity — it is
+  elaboration metadata (argument insertion / pattern binding) riding on the ctor
+  record — so it stays outside the soundness core.
+  """
+  @type plicity :: :implicit | :explicit
   @type ctor :: %{
           name: atom(),
           args: telescope(),
           result_indices: [Cure.Core.Term.t()],
           result_params: [Cure.Core.Term.t()],
-          quantities: [quantity()]
+          quantities: [quantity()],
+          plicities: [plicity()]
         }
 
   @doc """
@@ -473,13 +533,38 @@ defmodule Cure.Core.Inductive do
   @spec ctor(atom(), telescope(), [Cure.Core.Term.t()], [quantity()], [Cure.Core.Term.t()]) ::
           ctor()
   def ctor(name, arg_tele, result_indices, quantities, result_params),
+    do: ctor(name, arg_tele, result_indices, quantities, result_params, derive_plicities(quantities))
+
+  @doc """
+  Build a constructor signature carrying explicit per-argument **plicities**
+  (`:implicit`/`:explicit`) alongside quantities. The `ctor/5` form derives
+  plicity from quantity (`:erased` ⇒ `:implicit`, else `:explicit`), reproducing
+  the pre-plicity behavior where every erased argument was an inferred index and
+  every runtime-relevant argument was positional. Only a *relevant implicit*
+  (`:implicit` + `:unrestricted`, Idris `{k : Nat}`) needs the explicit form.
+  """
+  @spec ctor(
+          atom(),
+          telescope(),
+          [Cure.Core.Term.t()],
+          [quantity()],
+          [Cure.Core.Term.t()],
+          [plicity()]
+        ) :: ctor()
+  def ctor(name, arg_tele, result_indices, quantities, result_params, plicities),
     do: %{
       name: name,
       args: arg_tele,
       result_indices: result_indices,
       result_params: result_params,
-      quantities: quantities
+      quantities: quantities,
+      plicities: plicities
     }
+
+  # Back-compat plicity default: an erased argument was always an inferred index
+  # (implicit); everything runtime-relevant was positional (explicit).
+  defp derive_plicities(quantities),
+    do: Enum.map(quantities, fn :erased -> :implicit; _ -> :explicit end)
 
   @doc "Register a family and its constructors in the env."
   @spec declare(Env.t(), family(), [ctor()]) :: Env.t()
@@ -573,6 +658,35 @@ defmodule Cure.Core.Inductive do
       _ -> nil
     end
   end
+
+  @doc """
+  A constructor's per-argument **plicities** (`:implicit` / `:explicit`). Older
+  ctor records built before the field existed derive it from quantity (`:erased`
+  ⇒ `:implicit`), so this is total for every constructor with a telescope.
+  """
+  @spec ctor_plicities(Env.t(), atom()) :: [plicity()] | nil
+  def ctor_plicities(env, cname) do
+    case get_ctor(env, cname) do
+      %{plicities: ps} when is_list(ps) -> ps
+      %{quantities: qs} when is_list(qs) -> derive_plicities(qs)
+      _ -> nil
+    end
+  end
+
+  @doc """
+  A constructor's plicity list, defaulting to derived-from-quantity when the
+  record predates the field. `arg_tele` is used only for its length when neither
+  is present (all-`:explicit`). The single authority elaboration consults to tell
+  positional fields from solved-implicit ones.
+  """
+  @spec plicities_of(ctor()) :: [plicity()]
+  def plicities_of(%{plicities: ps}) when is_list(ps), do: ps
+  def plicities_of(%{quantities: qs}) when is_list(qs), do: derive_plicities(qs)
+  def plicities_of(%{args: tele}), do: List.duplicate(:explicit, length(tele))
+
+  @doc "How many of a constructor's arguments are supplied positionally (`:explicit`)."
+  @spec explicit_arity(ctor()) :: non_neg_integer()
+  def explicit_arity(ctor), do: Enum.count(plicities_of(ctor), &(&1 == :explicit))
 
   @doc "A family's index telescope."
   @spec index_telescope(Env.t(), atom()) :: telescope() | nil

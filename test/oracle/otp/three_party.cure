@@ -1,0 +1,47 @@
+mod ThreeParty
+  type Role = RA | RB | RC
+  type Tag = TA | TB | TC
+  type B = F | T
+  fn role_eq(x: Role, y: Role) -> B = match x
+    RA() -> match y
+      RA() -> T
+      RB() -> F
+      RC() -> F
+    RB() -> match y
+      RA() -> F
+      RB() -> T
+      RC() -> F
+    RC() -> match y
+      RA() -> F
+      RB() -> F
+      RC() -> T
+  type Global = GEnd | GMsg(Role, Role, Tag, Global)
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local)
+  fn dual(l: Local) -> Local = match l
+    LEnd()      -> LEnd()
+    LSend(t, k) -> LRecv(t, dual(k))
+    LRecv(t, k) -> LSend(t, dual(k))
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()              -> LEnd()
+    GMsg(from, to, t, k) -> match role_eq(from, r)
+      T() -> LSend(t, project(k, r))
+      F() -> match role_eq(to, r)
+        T() -> LRecv(t, project(k, r))
+        F() -> project(k, r)
+  fn lsend_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LSend(t, a), LSend(t, b)) =
+    rewrite e in reflexive(LSend(t, b))
+  fn lrecv_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LRecv(t, a), LRecv(t, b)) =
+    rewrite e in reflexive(LRecv(t, b))
+  type Bilateral indices (g: Global)
+    BiEnd : Bilateral(GEnd)
+    BiAB  : (t: Tag) -> Bilateral(k) -> Bilateral(GMsg(RA, RB, t, k))
+    BiBA  : (t: Tag) -> Bilateral(k) -> Bilateral(GMsg(RB, RA, t, k))
+  fn bystander_ab({g: Global}, w: Bilateral(g)) -> Equivalent(Local, project(g, RC), LEnd()) = match w
+    BiEnd()      -> reflexive(LEnd())
+    BiAB(t, w2)  -> bystander_ab(w2)
+    BiBA(t, w2)  -> bystander_ab(w2)
+  fn bilateral_duality({g: Global}, w: Bilateral(g)) -> Equivalent(Local, project(g, RA), dual(project(g, RB))) = match w
+    BiEnd()      -> reflexive(LEnd())
+    BiAB(t, w2)  -> lsend_cong(t, bilateral_duality(w2))
+    BiBA(t, w2)  -> lrecv_cong(t, bilateral_duality(w2))
+end

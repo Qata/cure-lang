@@ -385,13 +385,17 @@ defmodule Cure.Compiler do
   end
 
   # A module container with `@group(:g)` attached above `mod` carries the group
-  # in its meta (`decorator: {:group, [{:literal, _, atom}]}`). Read it there,
-  # then descend into the body for nested containers.
+  # in its meta as a canonical decorator node
+  # (`decorator: {:decorator, [name: :group], [{:literal, _, atom}]}`). Read it
+  # there, then descend into the body for nested containers.
   defp group_atoms({:container, meta, children}) when is_list(meta) and is_list(children) do
     from_meta =
       case Keyword.get(meta, :decorator) do
-        {:group, [{:literal, _, atom}]} when is_atom(atom) -> [atom]
-        _ -> []
+        {:decorator, dm, [{:literal, _, atom}]} when is_atom(atom) ->
+          if Keyword.get(dm, :name) == :group, do: [atom], else: []
+
+        _ ->
+          []
       end
 
     from_meta ++ Enum.flat_map(children, &group_atoms/1)

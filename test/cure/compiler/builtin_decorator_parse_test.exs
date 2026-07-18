@@ -27,6 +27,6 @@ defmodule Cure.Compiler.BuiltinDecoratorParseTest do
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
     type_node = find_type_decl(ast, "Bool")
     assert type_node != nil, "expected an enum container named Bool in #{inspect(ast)}"
-    assert {:builtin, [{:literal, _, :bool}]} = Keyword.get(elem(type_node, 1), :decorator)
+    assert {:decorator, [name: :builtin], [{:literal, _, :bool}]} = Keyword.get(elem(type_node, 1), :decorator)
   end
 end

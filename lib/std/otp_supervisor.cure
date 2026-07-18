@@ -1,5 +1,6 @@
 @group(:concurrency)
 mod Std.Otp.Supervisor
+  use Std.Equivalent
   ## TYPED SUPERVISION — restart preserves the supervisor's declared children
   ## (build-out map G6 remainder "supervision-restart tied to state preservation").
   ##
@@ -73,4 +74,51 @@ mod Std.Otp.Supervisor
   fn establish(specs: Children) -> Fleet(specs) = match specs
     CNil()         -> FNil()
     CCons(s, rest) -> FCons(Alive(), establish(rest))
+
+  ## **SIMPLE-ONE-FOR-ONE — a DYNAMIC pool of UNIFORM children.** Unlike the static `Fleet`
+  ## (one child per declared spec), a `simple_one_for_one` supervisor runs a runtime-varying
+  ## number of children that ALL share a single child spec. `Pool(spec)` is indexed by that one
+  ## `spec` (not a spec LIST), so the type certifies uniformity: every child in the pool has the
+  ## same spec, no matter how many are started or terminated.
+  type Pool indices (spec: ChildSpec)
+    PNil  : Pool(spec)
+    PCons : Child(spec) -> Pool(spec) -> Pool(spec)
+
+  ## `start_child` adds one fresh `Alive` child of the pool's spec — the pool grows, spec fixed.
+  fn start_child({spec: ChildSpec}, p: Pool(spec)) -> Pool(spec) = PCons(Alive(), p)
+
+  ## `terminate_child` removes the most-recently-started child; the remaining pool still has the
+  ## same uniform spec (a `simple_one_for_one` supervisor terminates children dynamically).
+  fn terminate_child({spec: ChildSpec}, p: Pool(spec)) -> Pool(spec) = match p
+    PNil()         -> PNil()
+    PCons(c, rest) -> rest
+
+  ## `restart_pool` revives every child; the spec AND the pool's size are preserved — dynamic
+  ## membership is invariant under restart, only liveness changes.
+  fn restart_pool({spec: ChildSpec}, p: Pool(spec)) -> Pool(spec) = match p
+    PNil()         -> PNil()
+    PCons(c, rest) -> PCons(Alive(), restart_pool(rest))
+
+  ## The DYNAMIC MEMBERSHIP of a `simple_one_for_one` pool — its child COUNT (not tracked in the
+  ## `Pool(spec)` index, which fixes only the uniform spec), so laws about it carry real content.
+  fn pool_size({spec: ChildSpec}, p: Pool(spec)) -> Nat = match p
+    PNil()         -> Z()
+    PCons(c, rest) -> S(pool_size(rest))
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+
+  ## **DYNAMIC-POOL MEMBERSHIP ALGEBRA.** `start_child` grows the pool by exactly one
+  ## (`pool_size(start_child(p)) = S(pool_size(p))`); starting then terminating is the IDENTITY
+  ## (`terminate_child(start_child(p)) = p` — the pool is a stack, push then pop cancels); and
+  ## **restart PRESERVES the pool size** (`pool_size(restart_pool(p)) = pool_size(p)` — reviving
+  ## every child changes liveness but not membership, matching the invariant the doc claims, by
+  ## induction on the pool). So a `simple_one_for_one` supervisor's child count moves only by
+  ## explicit `start_child`/`terminate_child`, never by a restart.
+  fn start_grows({spec: ChildSpec}, p: Pool(spec)) -> Equivalent(Nat, pool_size(start_child(p)), S(pool_size(p))) =
+    reflexive(S(pool_size(p)))
+  fn terminate_start_id({spec: ChildSpec}, p: Pool(spec)) -> Equivalent(Pool(spec), terminate_child(start_child(p)), p) =
+    reflexive(p)
+  fn restart_preserves_size({spec: ChildSpec}, p: Pool(spec)) -> Equivalent(Nat, pool_size(restart_pool(p)), pool_size(p)) = match p
+    PNil()         -> reflexive(Z())
+    PCons(c, rest) -> snat_cong(restart_preserves_size(rest))
 end

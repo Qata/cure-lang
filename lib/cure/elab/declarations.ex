@@ -236,7 +236,7 @@ defmodule Cure.Elab.Declarations do
   @spec declare_header(term(), Env.t()) :: {:ok, Env.t()} | {:error, term()}
   def declare_header({:container, meta, _variants}, env) when is_list(meta) do
     cond do
-      match?({:builtin, _}, Keyword.get(meta, :decorator)) ->
+      attached_decorator_name(Keyword.get(meta, :decorator)) == :builtin ->
         {:ok, env}
 
       Keyword.get(meta, :container_type) in [:enum, :struct] ->
@@ -253,7 +253,7 @@ defmodule Cure.Elab.Declarations do
   end
 
   def declare_header({:indexed_type, meta, _ctor_sigs}, env) when is_list(meta) do
-    if match?({:builtin, _}, Keyword.get(meta, :decorator)) do
+    if attached_decorator_name(Keyword.get(meta, :decorator)) == :builtin do
       {:ok, env}
     else
       name = meta |> Keyword.fetch!(:name) |> String.to_atom()
@@ -409,7 +409,15 @@ defmodule Cure.Elab.Declarations do
 
   defp do_register_signature({:function_def, meta, _body}, env) do
     with {:ok, sig} <- function_signature(meta, env) do
-      env1 = Env.add_def(env, sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
+      env1 =
+        env
+        |> Env.add_def(sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
+        # Labels must ride the record from the SIGNATURE pass on: overlap legality
+        # (`check_overload_legality`) runs between the signature and body passes and
+        # needs them to tell `move(to:)` from `move(from:)`. The body pass re-adds
+        # the def (dropping this) and re-attaches its own copy.
+        |> Env.put_labels(sig.name, param_label_vector(sig.params))
+        |> maybe_register_lemma(sig, meta)
 
       env2 =
         case sig.constraints do
@@ -438,7 +446,12 @@ defmodule Cure.Elab.Declarations do
         with {:ok, sig} <- function_signature(meta, env),
              :ok <- check_extern_arity(sig, arity),
              :ok <- check_extern_not_union(sig, env) do
-          {:ok, Env.add_def(env, sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)}
+          final =
+            env
+            |> Env.add_def(sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)
+            |> Env.put_labels(sig.name, param_label_vector(sig.params))
+
+          {:ok, final}
         end
 
       _ ->
@@ -611,7 +624,11 @@ defmodule Cure.Elab.Declarations do
            # (Syntactic head-check; the `no_effect_in_erased_position` Validator
            # clause is the trusted backstop for an aliased effect type, §8.)
            :ok <- assert_no_erased_effect_binder(final_pi, sig.name) do
-        final = Env.add_def(env, sig.name, final_pi, lambda, quantities)
+        final =
+          env
+          |> Env.add_def(sig.name, final_pi, lambda, quantities)
+          |> Env.put_labels(sig.name, param_label_vector(sig.params))
+
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
         # must unfold while `append`'s body is checked). A function that fails the
@@ -670,7 +687,18 @@ defmodule Cure.Elab.Declarations do
   # parameter telescope and the Π type. Deterministic in the type environment, so
   # the signature computed in the registration pass and the body pass agree.
   defp function_signature(meta, env) do
-    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+    # A member of an overload set (tagged with :overload_ordinal by
+    # `annotate_overload_ordinals/1`) registers under a discriminated bare name
+    # `plus~<ord>`; `Env.add_def`'s `owned_name` then qualifies it to
+    # `Mod#plus~<ord>`. An untagged def keeps its plain bare name (inert).
+    base_name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+
+    name =
+      case Keyword.get(meta, :overload_ordinal) do
+        nil -> base_name
+        ord -> Cure.Elab.Name.overload_key(base_name, ord)
+      end
+
     params0 = Keyword.get(meta, :params, [])
     # The parser makes `-> Type` optional (`fn f() = expr`); when omitted the
     # `:return_type` key is absent. An annotation-free function's codomain is
@@ -1038,8 +1066,8 @@ defmodule Cure.Elab.Declarations do
 
   # A hole body `?name` elaborates to a `:hole` term (accepted at the declared
   # return type by the kernel; it blocks codegen until filled).
-  defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, _env, _params) do
-    {:ok, {:hole, Keyword.get(meta, :name, "")}}
+  defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, env, _params) do
+    {:ok, {:hole, hole_id(env, meta)}}
   end
 
   # A `let … ⏎ body` block: check it against the declared return type (there is
@@ -1099,6 +1127,36 @@ defmodule Cure.Elab.Declarations do
       with {:ok, term, type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
         {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
       end
+    end
+  end
+
+  # Deterministic hole identity (first-class holes, Slice 1). Every source `?`
+  # must get a UNIQUE id: once holes flow through the kernel as stuck neutrals,
+  # two holes sharing an id are definitionally equal, so `refl : ?a = ?b` would
+  # type-check and a false equality be forgeable. A NAMED `?foo` keys on its name
+  # so repeating `?foo` within a scope refers to the SAME unknown; an unnamed `?`
+  # keys on its source position (`line:col`), unique per occurrence. Both are
+  # module-qualified via `Env.owner/1`. No gensym counter is used, so Antigen and
+  # the differential oracle stay replay-stable.
+  #
+  # Soundness note: `line:col` within a module is inherently unique per source
+  # occurrence, and a hole never escapes its own def's normalisation — a
+  # hole-bearing def is never certified and so never δ-unfolded into another def's
+  # conversion — so position alone is soundness-sufficient. The module qualifier
+  # is defense-in-depth and readability for later slices (goal reporting).
+  #
+  # Public so the elaborator's proof-hole trigger (Elaborator.elaborate_expr_checked
+  # for `{:hole,_}` in argument position) mints ids by the SAME scheme — one
+  # source of hole identity, no drift.
+  @doc false
+  def hole_id(env, meta) do
+    mod = Env.owner(env) || ""
+    name = Keyword.get(meta, :name, "")
+
+    if name != "" do
+      "#{mod}##{name}"
+    else
+      "#{mod}:#{Keyword.get(meta, :line, 0)}:#{Keyword.get(meta, :col, 0)}"
     end
   end
 
@@ -1253,6 +1311,38 @@ defmodule Cure.Elab.Declarations do
         elaborate_param_telescope_rec(params, env)
     end
   end
+
+  # The telescope-aligned external-label vector for a signature's parameters
+  # (Ph2 argument labels). One entry per binder, in the same order as the
+  # telescope/quantities: a per-parameter label descriptor giving the name the
+  # caller may write and whether writing it is required.
+  #
+  #   `fn f(to dest: T)` — two-name → `{:required, "to"}` (external label `to`
+  #     mandatory; the internal `dest` is private to the body).
+  #   `fn f(x: T)`       — single-name → `{:optional, "x"}` (the caller may write
+  #     `f(x: v)` or `f(v)`; the writable name IS the binder name).
+  #
+  # Auto-generalized implicits and injected dictionaries — which the surface never
+  # labels — are `{:optional, <synthetic name>}`; being erased (implicits) or
+  # unwritten (dicts) they never reach a written-label check. The internal name of
+  # a single-name binder is RETAINED (not collapsed to `nil`) so a written optional
+  # label can be validated against it — a label naming no parameter is an error
+  # (spec §4). Optional labels never affect overload distinguishability, only
+  # mandatory ones do (see `member_labels/2`). A no-parameter def stores no vector.
+  defp param_label_vector([]), do: nil
+
+  defp param_label_vector(params) do
+    Enum.map(params, fn {:param, pm, n} ->
+      case Keyword.get(pm, :label) do
+        nil -> {:optional, param_name_string(n)}
+        label -> {:required, to_string(label)}
+      end
+    end)
+  end
+
+  defp param_name_string(n) when is_binary(n), do: n
+  defp param_name_string(n) when is_atom(n), do: to_string(n)
+  defp param_name_string(_), do: nil
 
   # The quantity a parameter binds at: an explicit surface grade wins, else the
   # position's default (`:erased` for an implicit, `ω` for an explicit).
@@ -1431,24 +1521,27 @@ defmodule Cure.Elab.Declarations do
       # the signature (domains + the result), positionally typed by the family's
       # index telescope. Ordered by first appearance → the leading telescope.
       # Parameters are NOT inference candidates (see infer_implicits' skip).
-      # Names bound explicitly by a NAMED dependent domain `(k: Nat)`. Such a
-      # binder is a runtime argument, not an inferred index variable, so it must
-      # be excluded from implicit inference even though it appears in later
-      # domain types / the result index (`SNat(k)`, `NVv(S(k))`).
-      explicit_names =
-        for {:named_dom, name, _inner} <- dom_exprs, into: MapSet.new(), do: name
+      # Names bound by a NAMED dependent domain `(k: Nat)` or a RELEVANT IMPLICIT
+      # domain `{k: Nat}`. Such a binder is a source-position argument, not an
+      # inferred index variable, so it must be excluded from implicit inference
+      # even though it appears in later domain types / the result index
+      # (`SNat(k)`, `NVv(S(k))`). The two differ only in plicity: `(k: T)` is
+      # explicit (positional), `{k: T}` is implicit (solved/named) — both retain
+      # quantity ω. See `2026-07-18-relevant-implicit-ctor-index-design.md`.
+      bound_names =
+        for dom <- dom_exprs, name = bound_dom_name(dom), name != nil, into: MapSet.new(), do: name
 
       infer_exprs = Enum.map(dom_exprs, &strip_named_dom/1) ++ [result_expr]
 
       implicits =
         infer_exprs
         |> infer_implicits(fam, index_tele, env, param_count, param_scope)
-        |> Enum.reject(fn {n, _t} -> MapSet.member?(explicit_names, n) end)
+        |> Enum.reject(fn {n, _t} -> MapSet.member?(bound_names, n) end)
 
       impl_names = Enum.map(implicits, &elem(&1, 0))
 
       case build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
-        {:ok, expl_tele, expl_names} ->
+        {:ok, expl_tele, expl_names, expl_plicities} ->
           full_scope = Enum.reverse(impl_names ++ expl_names) ++ param_scope
           {param_exprs, index_exprs} = Enum.split(applied_exprs, param_count)
 
@@ -1463,13 +1556,29 @@ defmodule Cure.Elab.Declarations do
               |> Enum.with_index()
               |> Enum.map(fn {{n, ty}, i} -> {String.to_atom(n), Term.shift(ty, i, 0)} end)
 
-            # Inferred index variables are erased (quantity 0); the explicit
-            # arguments are runtime-relevant (quantity ω). See M8.3 / M9.
+            # Inferred index variables are erased (quantity 0); every
+            # source-position domain — explicit `(k:T)` OR relevant implicit
+            # `{k:T}` — is runtime-relevant (quantity ω). See M8.3 / M9.
             quantities =
               List.duplicate(:erased, length(impl_tele)) ++
                 List.duplicate(:unrestricted, length(expl_tele))
 
-            {:ok, Inductive.ctor(cname, impl_tele ++ expl_tele, result_indices, quantities, result_params)}
+            # Plicity decouples from quantity: inferred indices AND relevant
+            # implicits `{k:T}` are :implicit (non-positional); explicit doms are
+            # :explicit (positional). Application and pattern binding key off
+            # plicity, erasure keys off quantity.
+            plicities =
+              List.duplicate(:implicit, length(impl_tele)) ++ expl_plicities
+
+            {:ok,
+             Inductive.ctor(
+               cname,
+               impl_tele ++ expl_tele,
+               result_indices,
+               quantities,
+               result_params,
+               plicities
+             )}
           end
 
         {:error, _} = err ->
@@ -1480,16 +1589,24 @@ defmodule Cure.Elab.Declarations do
 
   defp split_last(list), do: {Enum.slice(list, 0..-2//1), List.last(list)}
 
-  # For implicit-variable inference we scan a named binder `(k: Nat)` by its
-  # inner type (`Nat`); the binder name itself is handled as an explicit arg.
+  # For implicit-variable inference we scan a named `(k: Nat)` or relevant-
+  # implicit `{k: Nat}` binder by its inner type (`Nat`); the binder name itself
+  # is handled as a source-position arg, not an inferred index.
   defp strip_named_dom({:named_dom, _name, inner}), do: inner
+  defp strip_named_dom({:implicit_dom, _name, inner}), do: inner
   defp strip_named_dom(other), do: other
 
-  # A constructor's named dependent domains must be linear: a repeated binder
-  # (`(x: Nat) -> (x: Nat) -> …`) shadows and makes later references ambiguous,
-  # exactly like a duplicate function parameter. The bare `_` binds nothing.
+  # The name a domain binds into the constructor's local scope, or `nil` for an
+  # anonymous positional argument. Both `(k: T)` and `{k: T}` bind `k`.
+  defp bound_dom_name({:named_dom, name, _inner}), do: name
+  defp bound_dom_name({:implicit_dom, name, _inner}), do: name
+  defp bound_dom_name(_other), do: nil
+
+  # A constructor's named/implicit dependent domains must be linear: a repeated
+  # binder (`(x: Nat) -> (x: Nat) -> …`) shadows and makes later references
+  # ambiguous, exactly like a duplicate function parameter. `_` binds nothing.
   defp ensure_linear_named_doms(dom_exprs) do
-    named = for {:named_dom, n, _} <- dom_exprs, n != "_", do: n
+    named = for dom <- dom_exprs, n = bound_dom_name(dom), n != nil, n != "_", do: n
 
     case named -- Enum.uniq(named) do
       [] -> :ok
@@ -1511,33 +1628,41 @@ defmodule Cure.Elab.Declarations do
 
   defp family_index_args(other, _fam), do: {:error, {:bad_result_type, other}}
 
-  # Explicit-argument telescope: convert each domain in the scope of all
-  # preceding binders (implicits, then earlier explicits). Anonymous names.
+  # Source-position telescope: convert each domain in the scope of all preceding
+  # binders (inferred implicits, then earlier source-position doms). Returns the
+  # telescope, the bound names, and the per-slot plicity — a NAMED `(k:T)` binder
+  # is `:explicit` (positional), a RELEVANT IMPLICIT `{k:T}` binder is
+  # `:implicit` (solved/named), an anonymous arg is `:explicit`.
   defp build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
     dom_exprs
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, []}, fn {dom, i},
-                                                                                    {:ok, tele, scope, names} ->
-      # A NAMED dependent binder `(k: Nat)` uses its declared name (so later
+    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, [], []}, fn {dom, i},
+                                                                                       {:ok, tele,
+                                                                                        scope, names,
+                                                                                        plics} ->
+      # A NAMED / IMPLICIT dependent binder uses its declared name (so later
       # domains and the result index can reference it); an unnamed arg keeps its
       # anonymous `_aN` name byte-for-byte. Either way the scope is threaded so
       # the next domain's de Bruijn indices resolve this binder.
-      {argname, type_expr} =
+      {argname, type_expr, plicity} =
         case dom do
-          {:named_dom, name, inner} -> {name, inner}
-          _ -> {"_a#{i}", dom}
+          {:named_dom, name, inner} -> {name, inner, :explicit}
+          {:implicit_dom, name, inner} -> {name, inner, :implicit}
+          _ -> {"_a#{i}", dom, :explicit}
         end
 
       case idx_to_core(type_expr, scope, fam, env) do
         {:ok, core} ->
-          {:cont, {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname]}}
+          {:cont,
+           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname],
+            plics ++ [plicity]}}
 
         {:error, _} = err ->
           {:halt, err}
       end
     end)
     |> case do
-      {:ok, tele, _scope, names} -> {:ok, tele, names}
+      {:ok, tele, _scope, names, plics} -> {:ok, tele, names, plics}
       {:error, _} = err -> err
     end
   end
@@ -1843,6 +1968,12 @@ defmodule Cure.Elab.Declarations do
 
   # A refinement is an ordinary dependent pair in Core: the value and a proof of
   # the proposition about that value. Solvers receive no trusted representation.
+  #
+  # Surface sugar (§3a level 1): the refinement bar takes the bare boolean
+  # condition and reflects it, like Liquid Haskell / F* / Lean. A comparison or
+  # boolean-connective clause has type `Bool`, so it is wrapped in `IsTrue(φ)`
+  # before lowering — producing the same Σ as an explicit `IsTrue(φ)` clause. A
+  # `Type`-valued clause (a named predicate / proposition) is left unchanged.
   defp idx_to_core(
          {:refinement_type, [binder: bname], [dom_ast, proposition_ast]},
          scope,
@@ -1851,10 +1982,9 @@ defmodule Cure.Elab.Declarations do
          _ctx
        ) do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
-         {:ok, proposition} <- idx_to_core(proposition_ast, [bname | scope], fam, env) do
-      {:ok,
-       {:data, sigma_family_name(env),
-        [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, proposition}], []}}
+         {:ok, proposition} <-
+           idx_to_core(reflect_boolean_proposition(proposition_ast), [bname | scope], fam, env) do
+      {:ok, {:data, sigma_family_name(env), [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, proposition}], []}}
     end
   end
 
@@ -1945,7 +2075,72 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # A comparison / boolean-connective PROPOSITION in an index position — the `n > 0`
+  # inside `IsTrue(n > 0)` (decidable-boolean reflection, spec 2026-07-18). The parser
+  # reparses such a type-application argument with the expression parser, so it arrives
+  # as an expression `{:binary_op, ...}` with `{:literal, ...}` operands rather than a
+  # type atom. We lower it to the SAME builtin-op spine the term elaborator's
+  # `build_binop` produces for Int/Bool operands — `Std.Builtin#int_gt` etc., or the
+  # bare `and`/`or` connective globals — so a closed comparison folds to `Std.Bool#True`
+  # by pure computation and `Confirmed : IsTrue(True())` inhabits it. Reflection over
+  # `Int` is the design's scope; Float propositions are a documented non-goal and lower
+  # to the int_* op, which simply will not fold on `{:vfloat, _}` (no discharge, never
+  # unsound). Operands recurse through `idx_to_core`, so nested connectives compose.
+  defp idx_to_core({:binary_op, meta, [l_ast, r_ast]}, scope, fam, env, ctx) do
+    op = Keyword.fetch!(meta, :operator)
+
+    with {:ok, global} <- index_binop_global(op),
+         {:ok, l} <- idx_to_core(l_ast, scope, fam, env, ctx),
+         {:ok, r} <- idx_to_core(r_ast, scope, fam, env, ctx) do
+      {:ok, {:app, {:app, {:global, global}, l}, r}}
+    end
+  end
+
+  # An expression-parsed numeric literal reaching an index position — only produced by
+  # the propositional reparse above (ordinary type-position numerals arrive as stringified
+  # NAME nodes handled by the `{:variable, ...}` clause). An integer operand of an Int
+  # comparison must be a real `{:int_lit, _}` so the kernel's `int_*` fold fires; a Nat
+  # literal (`{:nat_lit, _}`, `{:vnat, _}`) would leave the spine stuck.
+  defp idx_to_core({:literal, meta, value}, _scope, _fam, _env, _ctx) do
+    case Keyword.get(meta, :subtype) do
+      :integer -> {:ok, {:int_lit, value}}
+      :float -> {:ok, {:float_lit, value}}
+      other -> {:error, {:unsupported_index_literal, other}}
+    end
+  end
+
   defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
+
+  # Operator symbol → the Core global its index-position lowering applies. Comparisons map
+  # to the Int builtin op (registered as `Std.Builtin#int_*`, folding via `Eval.fold`);
+  # the boolean connectives map to the bare `and`/`or` connective globals, exactly as the
+  # term elaborator's `build_binop` emits them.
+  defp index_binop_global(:<), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_lt)}
+  defp index_binop_global(:<=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_le)}
+  defp index_binop_global(:>), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_gt)}
+  defp index_binop_global(:>=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ge)}
+  defp index_binop_global(:==), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_eq)}
+  defp index_binop_global(:!=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ne)}
+  defp index_binop_global(:and), do: {:ok, :and}
+  defp index_binop_global(:or), do: {:ok, :or}
+  defp index_binop_global(op), do: {:error, {:unsupported_index_operator, op}}
+
+  # Wrap a `Bool`-typed refinement clause in `IsTrue(·)` (§3a level 1). Only
+  # comparison and boolean-connective operators reflect (they produce `Bool`);
+  # every other clause — a `Type`-valued predicate application, an already-explicit
+  # `IsTrue(…)`, or an arithmetic misuse that should be rejected as ill-sorted —
+  # passes through untouched. The wrapper node is exactly what the parser yields
+  # for an explicit `IsTrue(φ)`, so lowering (and `IsTrue` name resolution) is
+  # shared verbatim.
+  defp reflect_boolean_proposition({:binary_op, meta, _} = prop) do
+    if Keyword.get(meta, :category) in [:comparison, :boolean] do
+      {:function_call, [name: "IsTrue"], [prop]}
+    else
+      prop
+    end
+  end
+
+  defp reflect_boolean_proposition(prop), do: prop
 
   # Surface `Effect(T)` lowers to the kernel's inert effect type former
   # `{:effect_type, ⟦T⟧}` (design 2026-07-09-effect-type-former §3). `Effect` is a
@@ -2008,22 +2203,72 @@ defmodule Cure.Elab.Declarations do
     # term-position machinery. A local binder of the same name shadows the
     # global (mirrors the applied-bound-var cond branch below), and families/
     # ctors never carry def quantities, so this misses them by construction.
-    if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
-         implicit_global?(env, atom) do
-      with {:ok, term, _result_type} <-
-             Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
-        {:ok, term}
-      end
-    else
-      with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
-        case expand_typealias_application(env, atom, core_args) do
-          {:ok, expanded} ->
-            {:ok, expanded}
+    #
+    # The SAME bidirectional delegation is also the only way to lower an
+    # application carrying a bare `fn(y) -> …` LAMBDA argument (E10a): the
+    # syntax-directed `idx_to_core` cannot lower a lambda — an unannotated binder
+    # has no domain until it is CHECKED against the callee's Π-domain, which only
+    # the bidirectional term elaborator supplies (`bidir_app_slot` checks the
+    # lambda at `(Dec) -> Eff` when lowering `bind(m, fn(y) -> Pure(y))`). Without
+    # this the lambda hit the `{:lambda, …}` catch-all as `:unsupported_index_expr`.
+    # Guarded on the head being a real def (get_def carries `:quantities`) so a
+    # family/ctor applied to a lambda is left to its own path, and on `ctx` (a
+    # non-return-type index position threads none — an acceptable §7.5-class
+    # residual, mirroring `:sigma_projection_needs_ctx`).
+    # A bare name resolvable to a return-type/index typing context (`ctx`) that is
+    # not shadowed by a local binder is eligible for the two term-delegating
+    # lowerings below.
+    delegable? = ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil
 
-          :not_typealias ->
-            lower_applied_type_head(atom, raw_name, core_args, fam, env, qualified_key, scope)
-        end
+    # Type-directed OVERLOAD resolution in index position (E11-Stage-2 + E11
+    # crash). A bare overloaded name (≥2 discriminated/cross-module members) reached
+    # `applied_def_key`'s pre-overload resolver, which mis-picked an ambient
+    # same-name provider (`plus(MkM …)` → `Std.Nat#plus`, then a raw ι crash) or
+    # reported `:ambiguous_name`. Route it through the SAME overload machinery as
+    # term position so the argument types prune to the intended member. A bare name
+    # with a single local/direct winner collapses to <2 candidates and never
+    # reaches here. Guarded on `not qualified` (a dotted head is resolved by name)
+    # to mirror the term-position `not String.contains?` guard.
+    overload_cands =
+      if delegable? and not String.contains?(raw_name, ".") do
+        Cure.Elab.Resolution.overload_candidates(env, atom)
+      else
+        []
       end
+
+    cond do
+      length(overload_cands) >= 2 ->
+        with {:ok, term, _result_type} <-
+               Cure.Elab.Elaborator.elaborate_overloaded_app(
+                 env,
+                 atom,
+                 args,
+                 Keyword.get(fmeta, :arg_labels),
+                 scope,
+                 ctx,
+                 overload_cands
+               ) do
+          {:ok, term}
+        end
+
+      delegable? and
+          (implicit_global?(env, atom) or
+             (args_contain_lambda?(args) and term_level_def?(env, atom))) ->
+        with {:ok, term, _result_type} <-
+               Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
+          {:ok, term}
+        end
+
+      true ->
+        with {:ok, core_args} <- map_idx_to_core(args, scope, fam, env, ctx) do
+          case expand_typealias_application(env, atom, core_args) do
+            {:ok, expanded} ->
+              {:ok, expanded}
+
+            :not_typealias ->
+              lower_applied_type_head(atom, raw_name, core_args, fam, env, qualified_key, scope)
+          end
+        end
     end
   end
 
@@ -2055,8 +2300,48 @@ defmodule Cure.Elab.Declarations do
         {:ok, {:ctor, Env.resolve_key(env, env.ctors, atom), core_args}}
 
       true ->
-        atom = Env.resolve_key(env, env.defs, atom)
-        {:ok, Enum.reduce(core_args, {:global, atom}, fn a, acc -> {:app, acc, a} end)}
+        # An applied plain (non-family, non-ctor) DEFINITION — e.g. `plus(a, b)`
+        # in a dependent index. The head must resolve to its EXACT owned def key,
+        # or δ-unfolding stays stuck and the application never reduces during
+        # conversion. This mirrors the term-position resolution in
+        # `elaborate_named_call`/`resolve_index_name`: a qualified head resolves
+        # through the VALUE namespace, a bare head through `resolve_bare`, and a
+        # genuinely ambiguous bare head is rejected (R7) rather than degraded to an
+        # unresolvable `{:global, :bare}` that silently fails to convert.
+        case applied_def_key(env, raw_name, atom) do
+          {:ambiguous_name, a, mods} ->
+            {:error, {:ambiguous_name, a, mods}}
+
+          key ->
+            {:ok, Enum.reduce(core_args, {:global, key}, fn a, acc -> {:app, acc, a} end)}
+        end
+    end
+  end
+
+  # Resolve an applied definition head to its exact registry key. `raw_name` is
+  # the surface spelling (possibly dotted), `atom` its bare-tail atom. A qualified
+  # head resolves through the value namespace to `Mod#name`; a bare head that is
+  # uniquely present (locally or via one import) resolves to that key; a bare head
+  # provided by ≥2 distinct modules with no unique winner is ambiguous. Anything
+  # else keeps the current bare-atom behaviour (a genuinely-unknown name still
+  # surfaces the ordinary `:unknown_global` downstream).
+  defp applied_def_key(env, raw_name, atom) do
+    cond do
+      String.contains?(raw_name, ".") ->
+        case Cure.Elab.Resolution.resolve_qualified(env, raw_name, :value) do
+          {:ok, key} -> key
+          :error -> Env.resolve_key(env, env.defs, atom)
+        end
+
+      match?({:ok, _}, Cure.Elab.Resolution.resolve_bare(env, atom)) ->
+        {:ok, key} = Cure.Elab.Resolution.resolve_bare(env, atom)
+        key
+
+      length(Cure.Elab.Resolution.ambiguous_modules(env, atom)) >= 2 ->
+        {:ambiguous_name, atom, Cure.Elab.Resolution.ambiguous_modules(env, atom)}
+
+      true ->
+        Env.resolve_key(env, env.defs, atom)
     end
   end
 
@@ -2217,6 +2502,19 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # A surface application argument that `idx_to_core` cannot lower syntactically —
+  # a bare lambda has no domain until CHECKED against the callee's Π-domain, so an
+  # application carrying one must be routed through the bidirectional term
+  # elaborator (see `lower_applied_type`).
+  defp args_contain_lambda?(args), do: Enum.any?(args, &match?({:lambda, _, _}, &1))
+
+  # The head resolves to a term-level DEFINITION (carries a `:quantities` list),
+  # i.e. `Env.get_def` places it and `elaborate_implicit_app_bidirectional` can
+  # peel its Π. Families/ctors have no def quantities and are excluded.
+  defp term_level_def?(env, atom) do
+    match?(%{quantities: q} when is_list(q), Env.get_def(env, atom))
+  end
+
   defp resolve_index_name(name, env) do
     atom = String.to_atom(name)
 
@@ -2262,24 +2560,31 @@ defmodule Cure.Elab.Declarations do
   # with an unrelated message.
   defp erasure_class(meta, name) do
     case Keyword.get(meta, :decorator) do
-      {:erases, [{:literal, _, class}]} when class in @erasure_classes ->
-        {:ok, class}
-
-      {:erases, [{:literal, _, class}]} ->
-        {:error, {:unknown_erasure_class, name, class}}
-
-      # Any other `@erases(...)` shape — zero args, more than one arg, or an argument
-      # that isn't an atom literal (e.g. a bare identifier missing its `:`) — is a
-      # malformed decorator, not an absent one. Falling through to the "no decorator"
-      # case below would silently discard the declaration; there is no later checkpoint
-      # that would catch the typo, since a `nil` erasure just reads as "undeclared".
-      {:erases, other_args} ->
-        {:error, {:unknown_erasure_class, name, malformed_erases_arg(other_args)}}
+      {:decorator, dm, args} when is_list(dm) ->
+        if Keyword.get(dm, :name) == :erases,
+          do: erases_class(args, name),
+          else: {:ok, nil}
 
       _ ->
         {:ok, nil}
     end
   end
+
+  # The class argument of an `@erases(<class>)` decorator, validated against the
+  # admissible set. Any other argument shape — zero args, more than one arg, or an
+  # argument that isn't an atom literal (e.g. a bare identifier missing its `:`) — is a
+  # malformed decorator, not an absent one, and becomes a compile error naming the
+  # mistake. Reporting it here (rather than falling through to `{:ok, nil}`) is what
+  # stops a typo silently reading as "undeclared", since there is no later checkpoint
+  # that would catch it — a `nil` erasure just means "no carrier class declared".
+  defp erases_class([{:literal, _, class}], _name) when class in @erasure_classes,
+    do: {:ok, class}
+
+  defp erases_class([{:literal, _, class}], name),
+    do: {:error, {:unknown_erasure_class, name, class}}
+
+  defp erases_class(other_args, name),
+    do: {:error, {:unknown_erasure_class, name, malformed_erases_arg(other_args)}}
 
   # A short, readable stand-in for the malformed `@erases(...)` argument list, so the
   # `:unknown_erasure_class` message names the actual mistake instead of dumping the
@@ -2296,8 +2601,10 @@ defmodule Cure.Elab.Declarations do
   # at the declaration entry point, so every non-opaque container form is covered.
   defp reject_erases_on_non_opaque({:container, meta, _variants}) do
     case {Keyword.get(meta, :container_type), Keyword.get(meta, :decorator)} do
-      {ct, {:erases, _}} when ct != :opaque ->
-        {:error, {:erases_on_non_opaque, meta |> Keyword.fetch!(:name) |> String.to_atom()}}
+      {ct, {:decorator, dm, _}} when ct != :opaque and is_list(dm) ->
+        if Keyword.get(dm, :name) == :erases,
+          do: {:error, {:erases_on_non_opaque, meta |> Keyword.fetch!(:name) |> String.to_atom()}},
+          else: :ok
 
       _ ->
         :ok
@@ -2309,10 +2616,47 @@ defmodule Cure.Elab.Declarations do
   # The `@builtin(:tag)` on a primitive container, or an error if absent.
   defp primitive_builtin_tag(meta) do
     case Keyword.get(meta, :decorator) do
-      {:builtin, [{:literal, _, tag}]} when is_atom(tag) -> {:ok, tag}
-      _ -> {:error, {:primitive_missing_builtin, Keyword.get(meta, :name)}}
+      {:decorator, dm, [{:literal, _, tag}]} when is_atom(tag) ->
+        if Keyword.get(dm, :name) == :builtin,
+          do: {:ok, tag},
+          else: {:error, {:primitive_missing_builtin, Keyword.get(meta, :name)}}
+
+      _ ->
+        {:error, {:primitive_missing_builtin, Keyword.get(meta, :name)}}
     end
   end
+
+  # The name of an attached decorator node (`{:decorator, [name: n], args}`) held
+  # in a container/def meta `:decorator` slot, or `nil` if absent/non-decorator.
+  defp attached_decorator_name({:decorator, m, _args}) when is_list(m), do: Keyword.get(m, :name)
+  defp attached_decorator_name(_), do: nil
+
+  # Register a def tagged `@lemma` into the proof-search registry, filed under
+  # its conclusion head. No-op for untagged defs or non-data conclusions. The
+  # entry's name is OWNER-QUALIFIED (Env.owned_name/2) so ProofSearch's assembled
+  # {:global, ...} term matches what ordinary elaboration produces for the same
+  # call — see Cure.Elab.ProofSearch.
+  defp maybe_register_lemma(env, sig, meta) do
+    with :lemma <- attached_decorator_name(Keyword.get(meta, :decorator)),
+         head when not is_nil(head) <- conclusion_head(sig.pi) do
+      Env.put_lemma(env, head, %{
+        name: Env.owned_name(env, sig.name),
+        type: sig.pi,
+        arity: pi_arity(sig.pi)
+      })
+    else
+      _ -> env
+    end
+  end
+
+  # The head family atom of a Pi type's ultimate codomain, or nil if the
+  # conclusion is not an indexed/parameterised data application.
+  def conclusion_head({:pi, _g, _dom, cod}), do: conclusion_head(cod)
+  def conclusion_head({:data, name, _params, _indices}), do: name
+  def conclusion_head(_), do: nil
+
+  defp pi_arity({:pi, _g, _dom, cod}), do: 1 + pi_arity(cod)
+  defp pi_arity(_), do: 0
 
   # The fixed tag→Core-node table — the ONLY inherent mapping (keyed by builtin
   # tag, not by surface name). Exactly four tags are legal.

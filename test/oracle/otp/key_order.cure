@@ -1,0 +1,220 @@
+mod KeyOrder
+  use Std.Equivalent
+  type OKey = OA | OB | OC
+  type OBit = OF | OT
+  fn le(a: OKey, b: OKey) -> OBit = match a
+    OA() -> OT()
+    OB() -> match b
+      OA() -> OF()
+      OB() -> OT()
+      OC() -> OT()
+    OC() -> match b
+      OA() -> OF()
+      OB() -> OF()
+      OC() -> OT()
+  fn orb(a: OBit, b: OBit) -> OBit = match a
+    OF() -> b
+    OT() -> OT()
+  fn le_refl(a: OKey) -> Equivalent(OBit, le(a, a), OT()) = match a
+    OA() -> reflexive(OT())
+    OB() -> reflexive(OT())
+    OC() -> reflexive(OT())
+  fn le_total(a: OKey, b: OKey) -> Equivalent(OBit, orb(le(a, b), le(b, a)), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+  fn le_antisym(a: OKey, b: OKey, p: Equivalent(OBit, le(a, b), OT()), q: Equivalent(OBit, le(b, a), OT())) -> Equivalent(OKey, a, b) = match a
+    OA() -> match b
+      OA() -> reflexive(OA())
+      OB() -> match q
+      OC() -> match q
+    OB() -> match b
+      OA() -> match p
+      OB() -> reflexive(OB())
+      OC() -> match q
+    OC() -> match b
+      OA() -> match p
+      OB() -> match p
+      OC() -> reflexive(OC())
+  fn le_trans(a: OKey, b: OKey, c: OKey, p: Equivalent(OBit, le(a, b), OT()), q: Equivalent(OBit, le(b, c), OT())) -> Equivalent(OBit, le(a, c), OT()) = match a
+    OA() -> match b
+      OA() -> match c
+        OA() -> reflexive(OT())
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OB() -> match c
+        OA() -> reflexive(OT())
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OC() -> match c
+        OA() -> reflexive(OT())
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> match c
+        OA() -> match p
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OB() -> match c
+        OA() -> match q
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OC() -> match c
+        OA() -> match q
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> match c
+        OA() -> match p
+        OB() -> match p
+        OC() -> reflexive(OT())
+      OB() -> match c
+        OA() -> match p
+        OB() -> match p
+        OC() -> reflexive(OT())
+      OC() -> match c
+        OA() -> match q
+        OB() -> match q
+        OC() -> reflexive(OT())
+  fn kmin(a: OKey, b: OKey) -> OKey = match le(a, b)
+    OT() -> a
+    OF() -> b
+  fn kmax(a: OKey, b: OKey) -> OKey = match le(a, b)
+    OT() -> b
+    OF() -> a
+  fn kmin_comm(a: OKey, b: OKey) -> Equivalent(OKey, kmin(a, b), kmin(b, a)) = match a
+    OA() -> match b
+      OA() -> reflexive(OA())
+      OB() -> reflexive(OA())
+      OC() -> reflexive(OA())
+    OB() -> match b
+      OA() -> reflexive(OA())
+      OB() -> reflexive(OB())
+      OC() -> reflexive(OB())
+    OC() -> match b
+      OA() -> reflexive(OA())
+      OB() -> reflexive(OB())
+      OC() -> reflexive(OC())
+  fn kmax_comm(a: OKey, b: OKey) -> Equivalent(OKey, kmax(a, b), kmax(b, a)) = match a
+    OA() -> match b
+      OA() -> reflexive(OA())
+      OB() -> reflexive(OB())
+      OC() -> reflexive(OC())
+    OB() -> match b
+      OA() -> reflexive(OB())
+      OB() -> reflexive(OB())
+      OC() -> reflexive(OC())
+    OC() -> match b
+      OA() -> reflexive(OC())
+      OB() -> reflexive(OC())
+      OC() -> reflexive(OC())
+  fn kmin_idem(a: OKey) -> Equivalent(OKey, kmin(a, a), a) = match a
+    OA() -> reflexive(OA())
+    OB() -> reflexive(OB())
+    OC() -> reflexive(OC())
+  fn kmax_idem(a: OKey) -> Equivalent(OKey, kmax(a, a), a) = match a
+    OA() -> reflexive(OA())
+    OB() -> reflexive(OB())
+    OC() -> reflexive(OC())
+  fn kmin_lower_l(a: OKey, b: OKey) -> Equivalent(OBit, le(kmin(a, b), a), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+  fn kmin_lower_r(a: OKey, b: OKey) -> Equivalent(OBit, le(kmin(a, b), b), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+  fn kmax_upper_l(a: OKey, b: OKey) -> Equivalent(OBit, le(a, kmax(a, b)), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+  fn kmax_upper_r(a: OKey, b: OKey) -> Equivalent(OBit, le(b, kmax(a, b)), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+  fn kmin_assoc(a: OKey, b: OKey, c: OKey) -> Equivalent(OKey, kmin(kmin(a, b), c), kmin(a, kmin(b, c))) = match a
+    OA() -> match b
+      OA() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OA())
+        OC() -> reflexive(OA())
+      OB() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OA())
+        OC() -> reflexive(OA())
+      OC() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OA())
+        OC() -> reflexive(OA())
+    OB() -> match b
+      OA() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OA())
+        OC() -> reflexive(OA())
+      OB() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OB())
+        OC() -> reflexive(OB())
+      OC() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OB())
+        OC() -> reflexive(OB())
+    OC() -> match b
+      OA() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OA())
+        OC() -> reflexive(OA())
+      OB() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OB())
+        OC() -> reflexive(OB())
+      OC() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OB())
+        OC() -> reflexive(OC())
+end

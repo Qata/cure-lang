@@ -1,0 +1,230 @@
+@group(:concurrency)
+mod Std.Otp.Session
+  use Std.Equivalent
+  ## BINARY SESSION TYPES + DUALITY (build-out map B3, session-types-into-mailboxes).
+  ## de'Liguoro–Padovani §4.3–4.4 encode binary session types into mailbox types; the load-
+  ## bearing notion is DUALITY — two endpoints of a channel have DUAL types (one's send is the
+  ## other's receive), and a session is communication-safe exactly when its endpoints are dual.
+  ##
+  ## `SType` is a binary session type (`SEnd`, send-then-continue, receive-then-continue). `dual`
+  ## swaps send/receive. This module proves the two theorems session-type soundness rests on:
+  ## `dual_involution` — `dual` is an involution (`dual(dual(S)) = S`), so the two endpoints
+  ## determine each other; and `compat_dual` — the structural COMPATIBILITY relation (a send on
+  ## one side matched by a receive on the other, recursively) coincides with duality
+  ## (`Compat(l, r) ⟹ l = dual(r)`). So "the endpoints can safely communicate" is precisely
+  ## "the endpoints are dual", the invariant a mailbox encoding must preserve.
+
+  ## Session types with BRANCHING: `SSelect(a, b)` is internal choice (⊕ — this endpoint picks a
+  ## branch), `SOffer(a, b)` is external choice (& — this endpoint offers both). A binary
+  ## select/offer suffices to show the structure.
+  type Tag = TA | TB | TC
+  type SType = SEnd | SSend(Tag, SType) | SRecv(Tag, SType) | SSelect(SType, SType) | SOffer(SType, SType)
+
+  ## The dual of a session type: swap sends/receives and internal/external choice.
+  fn dual(s: SType) -> SType = match s
+    SEnd()         -> SEnd()
+    SSend(t, k)    -> SRecv(t, dual(k))
+    SRecv(t, k)    -> SSend(t, dual(k))
+    SSelect(a, b)  -> SOffer(dual(a), dual(b))
+    SOffer(a, b)   -> SSelect(dual(a), dual(b))
+
+  ## **DUALITY IS AN INVOLUTION.** Dualizing twice returns the original type — so an endpoint's
+  ## type and its peer's determine each other. (Send/receive are constructor FIELDS here, bound
+  ## by name on the match, so no index-existential workaround is needed.)
+  fn dual_involution(s: SType) -> Equivalent(SType, dual(dual(s)), s) = match s
+    SEnd()        -> reflexive(SEnd())
+    SSend(t, k)   -> rewrite dual_involution(k) in reflexive(SSend(t, k))
+    SRecv(t, k)   -> rewrite dual_involution(k) in reflexive(SRecv(t, k))
+    SSelect(a, b) -> rewrite dual_involution(a) in rewrite dual_involution(b) in reflexive(SSelect(a, b))
+    SOffer(a, b)  -> rewrite dual_involution(a) in rewrite dual_involution(b) in reflexive(SOffer(a, b))
+
+  ## Structural COMPATIBILITY: two endpoints can safely communicate — a send on one side is a
+  ## receive on the other, recursively. The tag is carried explicitly so the proof can name it.
+  type Compat indices (l: SType, r: SType)
+    CEnd : Compat(SEnd, SEnd)
+    CSR  : (t: Tag) -> Compat(l, r) -> Compat(SSend(t, l), SRecv(t, r))
+    CRS  : (t: Tag) -> Compat(l, r) -> Compat(SRecv(t, l), SSend(t, r))
+    CSel : Compat(la, ra) -> Compat(lb, rb) -> Compat(SSelect(la, lb), SOffer(ra, rb))
+    COff : Compat(la, ra) -> Compat(lb, rb) -> Compat(SOffer(la, lb), SSelect(ra, rb))
+
+  ## Congruences for the session constructors under equality.
+  fn ssend_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SSend(t, a), SSend(t, b)) =
+    rewrite e in reflexive(SSend(t, b))
+  fn srecv_cong(t: Tag, {a: SType}, {b: SType}, e: Equivalent(SType, a, b)) -> Equivalent(SType, SRecv(t, a), SRecv(t, b)) =
+    rewrite e in reflexive(SRecv(t, b))
+  fn sselect_cong({a1: SType}, {b1: SType}, {a2: SType}, {b2: SType}, ea: Equivalent(SType, a1, b1), eb: Equivalent(SType, a2, b2)) -> Equivalent(SType, SSelect(a1, a2), SSelect(b1, b2)) =
+    rewrite ea in rewrite eb in reflexive(SSelect(b1, b2))
+  fn soffer_cong({a1: SType}, {b1: SType}, {a2: SType}, {b2: SType}, ea: Equivalent(SType, a1, b1), eb: Equivalent(SType, a2, b2)) -> Equivalent(SType, SOffer(a1, a2), SOffer(b1, b2)) =
+    rewrite ea in rewrite eb in reflexive(SOffer(b1, b2))
+
+  ## **COMPATIBILITY = DUALITY.** Compatible endpoints are exactly dual endpoints — communication
+  ## safety is duality. Induction on the compatibility derivation.
+  fn compat_dual({l: SType}, {r: SType}, c: Compat(l, r)) -> Equivalent(SType, l, dual(r)) = match c
+    CEnd()      -> reflexive(SEnd())
+    CSR(t, c2)  -> ssend_cong(t, compat_dual(c2))
+    CRS(t, c2)  -> srecv_cong(t, compat_dual(c2))
+    CSel(ca, cb) -> sselect_cong(compat_dual(ca), compat_dual(cb))
+    COff(ca, cb) -> soffer_cong(compat_dual(ca), compat_dual(cb))
+
+  ## **DUALITY = COMPATIBILITY (converse).** Every session type is compatible with its own dual —
+  ## `Compat(S, dual(S))`. Structural induction building the compatibility witness: each send
+  ## dualizes to the peer's receive and each choice to the peer's offer. With `compat_dual` (which
+  ## proves the forward direction, `Compat(l, r) ⟹ l = dual(r)`) this closes the equivalence
+  ## "compatible ⟺ dual" — communication safety is EXACTLY duality, both directions.
+  fn dual_compat(s: SType) -> Compat(s, dual(s)) = match s
+    SEnd()        -> CEnd()
+    SSend(t, k)   -> CSR(t, dual_compat(k))
+    SRecv(t, k)   -> CRS(t, dual_compat(k))
+    SSelect(a, b) -> CSel(dual_compat(a), dual_compat(b))
+    SOffer(a, b)  -> COff(dual_compat(a), dual_compat(b))
+
+  ## **COMPATIBILITY IS SYMMETRIC.** If `l` can safely communicate with `r`, then `r` can with `l`
+  ## — `Compat(l, r) ⟹ Compat(r, l)`. Structural induction swapping each matched send/receive (and
+  ## internal/external choice) to its mirror. So "can communicate" is a symmetric relation, as a
+  ## channel's two endpoints should be interchangeable.
+  fn compat_sym({l: SType}, {r: SType}, c: Compat(l, r)) -> Compat(r, l) = match c
+    CEnd()       -> CEnd()
+    CSR(t, c2)   -> CRS(t, compat_sym(c2))
+    CRS(t, c2)   -> CSR(t, compat_sym(c2))
+    CSel(ca, cb) -> COff(compat_sym(ca), compat_sym(cb))
+    COff(ca, cb) -> CSel(compat_sym(ca), compat_sym(cb))
+
+  ## **COMPATIBLE PEER IS UNIQUE.** An endpoint has at most one compatible peer: `Compat(l, r)` and
+  ## `Compat(l, r2)` force `r = r2`. Both peers equal `dual(l)` (by `compat_dual`), and `dual` is
+  ## injective (it is its own inverse, `dual_involution`), so the peers coincide. So a well-typed
+  ## channel determines its other endpoint's type uniquely — there is no ambiguity in who `l` talks
+  ## to.
+  fn compat_unique({l: SType}, r: SType, r2: SType, c1: Compat(l, r), c2: Compat(l, r2)) -> Equivalent(SType, r, r2) =
+    trans(sym(dual_involution(r)), trans(cong(dual, trans(sym(compat_dual(c1)), compat_dual(c2))), dual_involution(r2)))
+
+  ## A communication STEP: one endpoint sends tag `t`, the other receives it, and both advance
+  ## to their continuations. Well-formed only when the send/receive tags agree.
+  ## A communication step also covers CHOICE: selecting a branch (`SelL`/`SelR`) commits both
+  ## endpoints to the chosen branch's continuations; `OffL`/`OffR` are the mirror (peer selects).
+  type SStep indices (l: SType, r: SType, l2: SType, r2: SType)
+    StepSR : SStep(SSend(t, lk), SRecv(t, rk), lk, rk)
+    StepRS : SStep(SRecv(t, lk), SSend(t, rk), lk, rk)
+    SelL   : SStep(SSelect(la, lb), SOffer(ra, rb), la, ra)
+    SelR   : SStep(SSelect(la, lb), SOffer(ra, rb), lb, rb)
+    OffL   : SStep(SOffer(la, lb), SSelect(ra, rb), la, ra)
+    OffR   : SStep(SOffer(la, lb), SSelect(ra, rb), lb, rb)
+
+  ## **SESSION PRESERVATION (subject reduction).** A communication step — send/receive OR a
+  ## branch selection — between COMPATIBLE endpoints yields compatible endpoints. For a choice
+  ## step, the chosen branch's continuations were themselves compatible in the witness.
+  fn session_preservation({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, c: Compat(l, r), st: SStep(l, r, l2, r2)) -> Compat(l2, r2) = match st
+    StepSR() -> match c
+      CSR(t, c2) -> c2
+    StepRS() -> match c
+      CRS(t, c2) -> c2
+    SelL() -> match c
+      CSel(ca, cb) -> ca
+    SelR() -> match c
+      CSel(ca, cb) -> cb
+    OffL() -> match c
+      COff(ca, cb) -> ca
+    OffR() -> match c
+      COff(ca, cb) -> cb
+
+  ## **STEPS ARE REVERSIBLE UNDER ENDPOINT SWAP.** A communication step `SStep(l, r, l2, r2)`
+  ## mirrors to `SStep(r, l, r2, l2)` — a send becomes the peer's receive, a selection the peer's
+  ## offer, and vice versa. This is the operational face of `compat_sym`: the two endpoints of a
+  ## channel are interchangeable at every step.
+  fn sstep_sym({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, st: SStep(l, r, l2, r2)) -> SStep(r, l, r2, l2) = match st
+    StepSR() -> StepRS()
+    StepRS() -> StepSR()
+    SelL()   -> OffL()
+    SelR()   -> OffR()
+    OffL()   -> SelL()
+    OffR()   -> SelR()
+
+  ## A whole session RUN: the reflexive-transitive closure of communication steps.
+  type SRun indices (l: SType, r: SType, l2: SType, r2: SType)
+    SRDone : SRun(l, r, l, r)
+    SRStep : SStep(l, r, lm, rm) -> SRun(lm, rm, l2, r2) -> SRun(l, r, l2, r2)
+
+  ## **RUNS ARE REVERSIBLE UNDER ENDPOINT SWAP.** A whole run `SRun(l, r, l2, r2)` mirrors to
+  ## `SRun(r, l, r2, l2)`, swapping both endpoints at every step (via `sstep_sym`). So the two
+  ## participants' views of a session's execution are mirror images — consistent with `compat_sym`.
+  fn srun_sym({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, run: SRun(l, r, l2, r2)) -> SRun(r, l, r2, l2) = match run
+    SRDone()         -> SRDone()
+    SRStep(st, rest) -> SRStep(sstep_sym(st), srun_sym(rest))
+
+  ## **SESSION SAFETY OVER A RUN.** A session started from compatible endpoints stays compatible
+  ## through every step of its execution — it never gets stuck on a type mismatch. Induction over
+  ## the run, applying `session_preservation` at each step.
+  fn session_run_safe({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, c: Compat(l, r), run: SRun(l, r, l2, r2)) -> Compat(l2, r2) = match run
+    SRDone()         -> c
+    SRStep(st, rest) -> session_run_safe(session_preservation(c, st), rest)
+
+  ## A compatible pair is either FINISHED (both endpoints are `SEnd`) or it is a REDEX — its
+  ## endpoints form a matching send/receive or an offered choice. Each non-done constructor's
+  ## indices are exactly one of `SStep`'s domains (`SSend(t,_) / SRecv(t,_)`, `SSelect/SOffer`,
+  ## …), so a communication step is available precisely in those cases.
+  type Progress indices (l: SType, r: SType)
+    PDone    : Progress(SEnd, SEnd)
+    PStepSR  : Progress(SSend(t, lk), SRecv(t, rk))
+    PStepRS  : Progress(SRecv(t, lk), SSend(t, rk))
+    PStepSel : Progress(SSelect(la, lb), SOffer(ra, rb))
+    PStepOff : Progress(SOffer(la, lb), SSelect(ra, rb))
+
+  ## **SESSION PROGRESS.** Compatible endpoints never deadlock: a well-formed session is either
+  ## already complete or is a communication redex. Case analysis on the compatibility derivation —
+  ## `SEnd`/`SEnd` is done, every other shape is a matching send/receive or a selectable branch.
+  ## With `session_preservation` this gives full type safety (well-typed sessions never get stuck).
+  fn session_progress({l: SType}, {r: SType}, c: Compat(l, r)) -> Progress(l, r) = match c
+    CEnd()       -> PDone()
+    CSR(t, c2)   -> PStepSR()
+    CRS(t, c2)   -> PStepRS()
+    CSel(ca, cb) -> PStepSel()
+    COff(ca, cb) -> PStepOff()
+
+  ## Prepend one communication step to a completing run. The explicit `tail` argument pins the
+  ## step's target continuations (`SRStep`'s intermediate indices), so the nullary step ctor is
+  ## checked against a fully concrete type — the construction pattern that sidesteps the
+  ## floating-target E6-residual.
+  fn run_sr(t: Tag, {lk: SType}, {rk: SType}, tail: SRun(lk, rk, SEnd, SEnd)) -> SRun(SSend(t, lk), SRecv(t, rk), SEnd, SEnd) = SRStep(StepSR(), tail)
+  fn run_rs(t: Tag, {lk: SType}, {rk: SType}, tail: SRun(lk, rk, SEnd, SEnd)) -> SRun(SRecv(t, lk), SSend(t, rk), SEnd, SEnd) = SRStep(StepRS(), tail)
+  fn run_sel({la: SType}, {lb: SType}, {ra: SType}, {rb: SType}, tail: SRun(la, ra, SEnd, SEnd)) -> SRun(SSelect(la, lb), SOffer(ra, rb), SEnd, SEnd) = SRStep(SelL(), tail)
+  fn run_off({la: SType}, {lb: SType}, {ra: SType}, {rb: SType}, tail: SRun(la, ra, SEnd, SEnd)) -> SRun(SOffer(la, lb), SSelect(ra, rb), SEnd, SEnd) = SRStep(OffL(), tail)
+
+  ## **SESSION NORMALISATION.** Every compatible (finite) session runs all the way to completion:
+  ## there is a full `SRun` from `(l, r)` to `(SEnd, SEnd)`. Structural induction on the
+  ## compatibility derivation builds the run one step at a time (choosing the left branch at each
+  ## choice); since `SType` is finite the run is finite. This packages progress + preservation +
+  ## termination: a well-typed session never deadlocks, never mistypes, and always terminates.
+  fn compat_terminates({l: SType}, {r: SType}, c: Compat(l, r)) -> SRun(l, r, SEnd, SEnd) = match c
+    CEnd()       -> SRDone()
+    CSR(t, c2)   -> run_sr(t, compat_terminates(c2))
+    CRS(t, c2)   -> run_rs(t, compat_terminates(c2))
+    CSel(ca, cb) -> run_sel(compat_terminates(ca))
+    COff(ca, cb) -> run_off(compat_terminates(ca))
+
+  ## The session DEPTH of an endpoint — its number of communication actions down the left spine
+  ## (each send/receive is one action; at a choice the canonical run commits to the left branch).
+  fn sdepth(s: SType) -> Nat = match s
+    SEnd()        -> Z()
+    SSend(t, k)   -> S(sdepth(k))
+    SRecv(t, k)   -> S(sdepth(k))
+    SSelect(a, b) -> S(sdepth(a))
+    SOffer(a, b)  -> S(sdepth(a))
+  ## The number of communication steps in a run.
+  fn srun_len({l: SType}, {r: SType}, {l2: SType}, {r2: SType}, run: SRun(l, r, l2, r2)) -> Nat = match run
+    SRDone()         -> Z()
+    SRStep(st, rest) -> S(srun_len(rest))
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+
+  ## **SESSION TERMINATION TIME IS EXACT.** The canonical terminating run of a compatible session
+  ## takes EXACTLY `sdepth(l)` communication steps: `srun_len(compat_terminates(c)) = sdepth(l)`.
+  ## This sharpens `compat_terminates` (which only proves the run REACHES completion) into a precise
+  ## step count — a well-typed session finishes in a number of exchanges fixed by its type's depth.
+  ## By induction on the compatibility derivation: `SEnd` takes zero steps, and each send/receive or
+  ## chosen branch contributes exactly one (`snat_cong` on the induction hypothesis).
+  fn compat_terminates_len({l: SType}, {r: SType}, c: Compat(l, r)) -> Equivalent(Nat, srun_len(compat_terminates(c)), sdepth(l)) = match c
+    CEnd()       -> reflexive(Z())
+    CSR(t, c2)   -> snat_cong(compat_terminates_len(c2))
+    CRS(t, c2)   -> snat_cong(compat_terminates_len(c2))
+    CSel(ca, cb) -> snat_cong(compat_terminates_len(ca))
+    COff(ca, cb) -> snat_cong(compat_terminates_len(ca))
+end

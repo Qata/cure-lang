@@ -2,51 +2,65 @@ defmodule Cure.MetaAST.Conformance do
   @moduledoc """
   Structural MetaAST-conformance check for Cure's *surface* AST.
 
-  Metastatic's generic traversal (`Metastatic.AST.traverse/4`) descends into a
-  node only when it is the canonical `{type, meta, children}` shape — an atom
-  `type`, a keyword-list `meta`, and the children in the third slot — and it
-  recurses ONLY the children slot. Every other tuple it meets is passed through
-  as an opaque leaf, and the meta slot is never walked. So a subterm is invisible
-  to every MetaAST consumer (RAG, MCP, the migrator) in two distinct ways, which
-  this module reports as two violation *kinds*:
+  ## Decision D — meta is a legal home for subterms
 
-    * `:bad_shape` — an atom-headed tuple that is NOT a canonical 3-tuple and yet
-      hides a node. Metastatic treats it as an opaque leaf, so the subterms it
-      carries are dropped. The known shapes are `:named_implicit_pat` (4-tuple),
-      `:named_dom` (`{tag, name, inner}`), `:arrow_chain` (2-tuple), `:group`
-      (2-tuple), and `:builtin` (2-tuple).
+  Metastatic's canonical node is `{type, meta, children}`: an atom `type`, a
+  keyword-list `meta`, and children in the third slot. Historically its traversal
+  (`Metastatic.AST.traverse/4`) recursed ONLY the children slot, so any subterm
+  parked in a meta value was invisible to every consumer (RAG, MCP, the migrator).
+  Cure keeps its whole signature / type / pattern layer in meta (a `param`'s type
+  under `:type`, a `function_def`'s `:params` / `:return_type`, a `match_arm`'s
+  `:pattern`), so that layer was dark.
 
-    * `:node_in_meta` — a *canonical* node that stores a subterm inside a meta
-      value (e.g. `param`'s type under `:type`, `function_def`'s `:params` /
-      `:return_type`, `match_arm`'s `:pattern`). The node itself is shape-valid,
-      so Metastatic descends its children and never sees the subterm parked in
-      meta. This is the larger gap (~2,600 occurrences across the stdlib).
+  The resolution (2026-07-15 blind-spot design, **Option D**) is that Metastatic's
+  traversal will structurally DESCEND meta values that contain nodes — nodes stay
+  in meta; the walker reaches them. This is right because in a dependent language
+  types ARE terms: the `n` in `Vec n a` (a meta/type position) and the `n` in the
+  body (a child/term position) are the *same* node, and a node's encoding must not
+  depend on its slot. A node is `{atom, keyword_list, _}` in EVERY slot.
 
-    * `:node_child` — a *canonical* node whose children slot is a bare node (or a
-      node-hiding tuple) instead of a LIST of children. Metastatic's
-      `traverse_children` recurses only an `is_list` slot; every other shape is
-      passed through as a leaf, so the subtree is lost. The invariant is that the
-      children slot is always a list of child nodes (leaf nodes like `:variable` /
-      `:literal` carry an opaque scalar there, which hides nothing and is fine).
-      `:gadt_ctor` is the corpus example — its slot holds a bare `:arrow_chain`.
+  For that descent to be **total** (reach every node) and **sound** (never descend
+  non-node data), the surface must satisfy three invariants. This module is the
+  total-descent DUAL of the walker: it checks each one.
 
-  The target invariant (see the 2026-07-15 blind-spot design, Option C / C2) is:
-  **no canonical node may appear inside a meta value.** Meta holds only
-  non-structural scalars (names, line/col, scope, visibility, arity, QTT grades);
-  every subterm lives in children. `conformant?/1` is true exactly when both
-  gates are clean. Some Cure nodes already satisfy this — `pattern_match` is
-  `{:pattern_match, [line:, col:], [scrutinee, arms…]}` — so the check is not
-  novel, it is a convention the rest of the surface must be brought in line with.
+    * **INV-A — canonicity.** Every node, in meta OR children, is the canonical
+      3-tuple. A node hidden inside a non-canonical atom-headed tuple is a
+      `:bad_shape` violation: the walker cannot recognise it, so its subterms are
+      lost (completeness failure). The last remaining corpus shape is `:named_dom`
+      (`{tag, name, inner}` — a 3-tuple whose middle slot is a name, not a keyword
+      list). (`:named_implicit_pat`, `:group`, `:builtin`, `:forced_pattern` have
+      been normalized to canonical nodes; `:arrow_chain` re-attributed to the
+      `:node_child :gadt_ctor` bucket.)
 
-  This module is the total-descent DUAL of Metastatic's traversal: it walks every
-  position, including the meta values that traversal skips and the irregular
-  shapes it cannot enter, and reports each place a subterm would be lost.
+    * **INV-B — composite children are lists.** A composite node's children slot is
+      a LIST of child nodes; only the fixed leaf tags (`:variable`, `:literal`,
+      `:comment`) carry a bare scalar there. A bare node in a children slot is a
+      `:node_child` violation — the walker's `traverse_children` recurses only an
+      `is_list` slot, so the subtree is dropped (completeness failure).
+      `:gadt_ctor` (bare `:arrow_chain` child) and `:forced_pattern` are the corpus
+      examples.
 
-  Deliberately NOT built on `Metastatic.AST.conforms?/1`: that predicate gates on
-  a fixed `@all_types` registry which omits ~100 of Cure's node atoms (every
-  dependent / macro / concurrency former), so it rejects almost the whole Cure
-  surface. Conformance here is about SHAPE and PLACEMENT, not type-registry
-  membership.
+    * **INV-C — meta predicate soundness.** Within every meta value, every
+      atom-headed tuple is EITHER a canonical node whose tag is in the known
+      meta-node vocabulary, OR opaque leaf data with a NON-list second element (an
+      MFA `{:erlang, :length, 1}`, a `{:group_ref, :core, 1}`, a module reference).
+      No atom-headed tuple in meta has a list second element unless it is a genuine
+      node. This is what makes "descend any guard-matching value in meta" sound —
+      the walker never mistakes opaque data for a subterm. Two queries express it:
+      `meta_nonnodes/1` (guard-matching non-nodes — must be empty) and
+      `meta_node_tags/1` (the node-tag vocabulary — pinned by the corpus tripwire).
+
+  INV-A and INV-B are *completeness* obligations Cure discharges by normalising the
+  ~265 bad_shape / node_child sites; `violations/1` reports them and the corpus
+  tripwire drives them to zero. INV-C is a *soundness* obligation the corpus already
+  satisfies (measured: the danger set is empty) and the tripwire pins as a hard
+  invariant. Note a node placed in meta is NOT itself a violation any more — that is
+  the whole point of Option D.
+
+  Deliberately NOT built on `Metastatic.AST.conforms?/1`: that predicate gates on a
+  fixed `@all_types` registry which omits ~100 of Cure's node atoms (every
+  dependent / macro / concurrency former), so it rejects almost the whole surface.
+  Conformance here is about SHAPE and PLACEMENT, not type-registry membership.
   """
 
   # Wide tuples carried as trivia, NOT normalization targets. Comments are leaves
@@ -54,7 +68,7 @@ defmodule Cure.MetaAST.Conformance do
   # non-3-tuple shape hides no subterms and needs no rewrite.
   @trivia_tags [:comment, :doc_comment]
 
-  @type kind :: :bad_shape | :node_in_meta | :node_child
+  @type kind :: :bad_shape | :node_child
 
   @type violation :: %{
           kind: kind(),
@@ -65,30 +79,38 @@ defmodule Cure.MetaAST.Conformance do
           node: term()
         }
 
+  @typedoc """
+  A guard-matching non-node found in a meta value: a tuple Metastatic's descent
+  guard (`{atom, is_list(second), _}`) would enter, that is NOT a canonical node
+  (its second element is a list but not a keyword list). The corpus contains none;
+  any occurrence is an INV-C soundness break.
+  """
+  @type meta_nonnode :: %{path: [atom()], tag: atom(), node: term()}
+
   @doc """
-  True iff `ast` satisfies both conformance gates: no `:bad_shape` tuple and no
-  `:node_in_meta` subterm. Note this is the strict end-state invariant — real
-  Cure surface currently fails it (that is what the corpus tripwire tracks).
+  True iff `ast` has no INV-A / INV-B structural violation. This is the completeness
+  end-state (walker reaches every node). Real Cure surface currently fails it — that
+  is what the corpus tripwire tracks — and INV-C soundness is checked separately via
+  `meta_nonnodes/1`.
   """
   @spec conformant?(term()) :: boolean()
   def conformant?(ast), do: violations(ast) == []
 
   @doc """
-  Every conformance violation in `ast`, in pre-order (outermost first). Each is a
-  map with `:kind` (`:bad_shape` | `:node_in_meta`), the `:path` of node tags
-  enclosing it (outermost first), the offending `:tag`, and for `:node_in_meta`
-  the meta `:key` that hides the subterm.
+  Every INV-A (`:bad_shape`) / INV-B (`:node_child`) violation in `ast`, in
+  pre-order (outermost first). A node parked in a meta VALUE is not a violation
+  (Option D) — but a non-canonical tuple hiding a node, or a non-list children
+  slot, is reported wherever it occurs, meta or children.
   """
   @spec violations(term()) :: [violation()]
-  def violations(ast), do: ast |> walk([], []) |> Enum.reverse()
+  def violations(ast), do: ast |> analyze() |> Map.fetch!(:violations) |> Enum.reverse()
 
   @doc """
-  The distinct `{kind, tag, key}` buckets present in `ast` (key is `nil` for
-  `:bad_shape`). This is the granularity the corpus tripwire allowlists against —
-  robust to stdlib churn (adding another function grows the `param :type` count
-  but not the bucket set).
+  The distinct `{kind, tag, key}` structural-violation buckets present in `ast`
+  (`key` is always `nil` now). This is the granularity the corpus tripwire
+  allowlists against — robust to stdlib churn.
   """
-  @spec violation_buckets(term()) :: MapSet.t({kind(), atom(), atom() | nil})
+  @spec violation_buckets(term()) :: MapSet.t({kind(), atom(), nil})
   def violation_buckets(ast) do
     ast
     |> violations()
@@ -97,8 +119,27 @@ defmodule Cure.MetaAST.Conformance do
   end
 
   @doc """
-  A short human-readable line per violation, suitable for a warning or a test
-  failure message.
+  The set of canonical-node tags that appear inside a meta value anywhere in `ast`
+  (INV-C vocabulary). Every tag here is a genuine subterm the walker will descend
+  when it enters meta; the corpus tripwire pins this set so a new atom reaching
+  node-position in meta — a new subterm kind, or an opaque payload wrongly shaped —
+  trips the gate for a human to classify.
+  """
+  @spec meta_node_tags(term()) :: MapSet.t(atom())
+  def meta_node_tags(ast), do: ast |> analyze() |> Map.fetch!(:meta_tags)
+
+  @doc """
+  Guard-matching non-nodes found in meta values (INV-C soundness). Each is a tuple
+  Metastatic's `is_list`-second descent guard would enter but that is not a genuine
+  node. The corpus contains none; a non-empty result is a soundness break that would
+  make the walker descend opaque data.
+  """
+  @spec meta_nonnodes(term()) :: [meta_nonnode()]
+  def meta_nonnodes(ast), do: ast |> analyze() |> Map.fetch!(:meta_nonnodes) |> Enum.reverse()
+
+  @doc """
+  A short human-readable line per structural violation, suitable for a warning or a
+  test failure message.
   """
   @spec describe([violation()]) :: String.t()
   def describe([]), do: "no MetaAST-conformance violations"
@@ -108,9 +149,6 @@ defmodule Cure.MetaAST.Conformance do
       %{kind: :bad_shape, tag: tag, arity: arity, path: path} ->
         "  * [bad_shape] #{inspect(tag)} (arity #{arity}) at #{path_string(path)}"
 
-      %{kind: :node_in_meta, tag: tag, key: key, path: path} ->
-        "  * [node_in_meta] #{inspect(tag)} hides a node in meta :#{key} at #{path_string(path)}"
-
       %{kind: :node_child, tag: tag, path: path} ->
         "  * [node_child] #{inspect(tag)} children slot is a bare node, not a list, at #{path_string(path)}"
     end)
@@ -118,17 +156,38 @@ defmodule Cure.MetaAST.Conformance do
 
   defp path_string(path), do: Enum.map_join(path, ".", &Atom.to_string/1)
 
-  # An atom-headed tuple — the shape of a node. Three outcomes:
+  # ── analysis ──────────────────────────────────────────────────────────────
   #
-  #   * canonical `{tag, keyword_meta, children}` → shape-conformant; check each
-  #     meta value for a hidden node (`:node_in_meta`), descend the meta values
-  #     (they may nest further nodes), and descend the children slot. The meta
-  #     KEYS are never walked.
-  #   * non-canonical but HIDES a node → a `:bad_shape` defect; flag and descend.
-  #   * non-canonical and hides no node (an MFA `{:erlang, :length, 1}`, a `@group`
-  #     argument, a module reference) → opaque leaf data. Metastatic treats it as a
-  #     leaf and loses nothing, so it is conformant; do not flag.
-  defp walk(node, path, acc)
+  # A single pre-order walk collects everything the three invariants need:
+  #   :violations    — INV-A/INV-B, in reverse order (see violations/1)
+  #   :meta_tags     — INV-C vocabulary (canonical tags reached inside meta)
+  #   :meta_nonnodes — INV-C danger set (guard-matching non-nodes in meta)
+  #
+  # `in_meta?` is threaded through the walk: it becomes true the moment we descend a
+  # meta value and STAYS true through any nested node's children (everything under a
+  # meta value is reachable only via meta). It governs the two INV-C collectors; the
+  # INV-A/INV-B checks fire regardless of slot.
+
+  @empty %{violations: [], meta_tags: MapSet.new(), meta_nonnodes: []}
+
+  @doc false
+  @spec analyze(term()) :: %{
+          violations: [violation()],
+          meta_tags: MapSet.t(atom()),
+          meta_nonnodes: [meta_nonnode()]
+        }
+  def analyze(ast), do: walk(ast, [], false, @empty)
+
+  # An atom-headed tuple — the shape of a node. Outcomes:
+  #
+  #   * canonical `{tag, keyword_meta, children}` → record the tag if we are in
+  #     meta (vocabulary), descend the meta values (INV-C soundness + deeper
+  #     violations) and the children slot.
+  #   * non-canonical but HIDES a node → INV-A `:bad_shape`; flag and descend.
+  #   * non-canonical, hides no node, but is guard-matching (is_list second) while
+  #     in meta → an INV-C `meta_nonnode` soundness break; record and descend.
+  #   * otherwise opaque leaf data (MFA, module ref) → conformant; do not flag.
+  defp walk(node, path, in_meta?, acc)
        when is_tuple(node) and tuple_size(node) >= 1 and is_atom(:erlang.element(1, node)) do
     tag = elem(node, 0)
 
@@ -137,71 +196,59 @@ defmodule Cure.MetaAST.Conformance do
         acc
 
       canonical_node?(node) ->
-        acc = walk_meta(elem(node, 1), tag, [tag | path], acc)
-        walk_children(elem(node, 2), tag, path, acc)
+        acc = if in_meta?, do: add_tag(acc, tag), else: acc
+        acc = walk_meta(elem(node, 1), [tag | path], acc)
+        walk_children(elem(node, 2), tag, path, in_meta?, acc)
 
       Enum.any?(non_meta_elements(node), &hides_node?/1) ->
-        flag_and_descend(node, tag, path, acc)
+        flag_bad_shape_and_descend(node, tag, path, in_meta?, acc)
+
+      in_meta? and guard_match?(node) ->
+        acc = add_meta_nonnode(acc, node, tag, path)
+        descend_elements(node, [tag | path], in_meta?, acc)
 
       true ->
         acc
     end
   end
 
-  # A tuple that is not node-shaped (e.g. a `{key_node, value_node}` pair): descend
-  # into every element.
-  defp walk(node, path, acc) when is_tuple(node) do
-    node |> Tuple.to_list() |> Enum.reduce(acc, fn el, acc -> walk(el, path, acc) end)
+  # A non-node-shaped tuple (e.g. a `{key_node, value_node}` pair): descend every
+  # element, preserving `in_meta?`.
+  defp walk(node, path, in_meta?, acc) when is_tuple(node) do
+    node |> Tuple.to_list() |> Enum.reduce(acc, fn el, acc -> walk(el, path, in_meta?, acc) end)
   end
 
-  # A list of children (or any list): walk each element.
-  defp walk(list, path, acc) when is_list(list) do
-    Enum.reduce(list, acc, fn el, acc -> walk(el, path, acc) end)
+  # A keyword list encountered as a value is META structure: descend the VALUE side
+  # of each pair (marking in_meta?), never the key. A plain list is children/args:
+  # descend each element, preserving in_meta?.
+  defp walk(list, path, in_meta?, acc) when is_list(list) do
+    if keyword_list?(list) do
+      Enum.reduce(list, acc, fn {_k, v}, acc -> walk(v, path, true, acc) end)
+    else
+      Enum.reduce(list, acc, fn el, acc -> walk(el, path, in_meta?, acc) end)
+    end
   end
 
   # Primitive leaf (integer, atom, string, nil, …): nothing to descend.
-  defp walk(_other, _path, acc), do: acc
+  defp walk(_other, _path, _in_meta?, acc), do: acc
 
-  # The meta of a canonical node. For each `{key, value}`: if the value hides a
-  # canonical node, that subterm is invisible to Metastatic's children-only
-  # traversal — record a `:node_in_meta` violation keyed by `key`. Either way,
-  # descend the value (never the key) to catch violations nested deeper. `path`
-  # already includes the parent tag.
-  defp walk_meta(meta, parent_tag, path, acc) do
-    Enum.reduce(meta, acc, fn {key, value}, acc ->
-      acc =
-        if hides_node?(value) do
-          violation = %{
-            kind: :node_in_meta,
-            path: Enum.reverse(path),
-            tag: parent_tag,
-            key: key,
-            arity: nil,
-            node: value
-          }
-
-          [violation | acc]
-        else
-          acc
-        end
-
-      walk(value, path, acc)
-    end)
+  # The meta of a canonical node. Every value is descended with `in_meta?` = true —
+  # that is where INV-C's vocabulary and danger checks apply. Keys are never nodes.
+  # `path` already includes the parent tag.
+  defp walk_meta(meta, path, acc) do
+    Enum.reduce(meta, acc, fn {_key, value}, acc -> walk(value, path, true, acc) end)
   end
 
-  # The children slot of a canonical node. It must be a LIST of child nodes — that
-  # is the only shape Metastatic's `traverse_children` recurses. A leaf node
-  # (`:variable`, `:literal`) legitimately carries an opaque scalar here, which
-  # hides nothing. Anything else — a bare node, or a node-hiding tuple like a
-  # `:arrow_chain` — is dropped by Metastatic's non-list fallback, so we flag it as
-  # `:node_child` and descend to surface anything nested, without re-flagging the
-  # slot term itself (it is a normalization target, like a bad-shape node). `path`
-  # does NOT yet include the parent tag.
-  defp walk_children(children, tag, path, acc) when is_list(children) do
-    Enum.reduce(children, acc, fn el, acc -> walk(el, [tag | path], acc) end)
+  # The children slot of a canonical node. It must be a LIST — the only shape
+  # `traverse_children` recurses. A leaf node legitimately carries an opaque scalar
+  # here (hides nothing). Anything else that hides a node is INV-B `:node_child`;
+  # descend it to surface deeper defects without re-flagging the slot term itself.
+  # `in_meta?` is preserved (children of a meta-node are still reached via meta).
+  defp walk_children(children, tag, path, in_meta?, acc) when is_list(children) do
+    Enum.reduce(children, acc, fn el, acc -> walk(el, [tag | path], in_meta?, acc) end)
   end
 
-  defp walk_children(children, tag, path, acc) do
+  defp walk_children(children, tag, path, in_meta?, acc) do
     if hides_node?(children) do
       violation = %{
         kind: :node_child,
@@ -212,26 +259,24 @@ defmodule Cure.MetaAST.Conformance do
         node: children
       }
 
-      descend_child(children, [tag | path], [violation | acc])
+      descend_child(children, [tag | path], in_meta?, add_violation(acc, violation))
     else
       acc
     end
   end
 
-  # Descend into a non-list children term already flagged `:node_child`, surfacing
-  # nested violations without re-flagging the term. A canonical node is walked
-  # normally (`walk/3` never self-flags a canonical node); a node-hiding tuple has
-  # its elements descended like a bad-shape node's, minus the top-level flag.
-  defp descend_child(child, path, acc) do
+  # Descend a non-list children term already flagged `:node_child`, surfacing nested
+  # violations without re-flagging the term.
+  defp descend_child(child, path, in_meta?, acc) do
     if is_tuple(child) and tuple_size(child) >= 1 and is_atom(:erlang.element(1, child)) and
          not canonical_node?(child) do
-      descend_elements(child, path, acc)
+      descend_elements(child, path, in_meta?, acc)
     else
-      walk(child, path, acc)
+      walk(child, path, in_meta?, acc)
     end
   end
 
-  defp flag_and_descend(node, tag, path, acc) do
+  defp flag_bad_shape_and_descend(node, tag, path, in_meta?, acc) do
     violation = %{
       kind: :bad_shape,
       path: Enum.reverse([tag | path]),
@@ -241,42 +286,52 @@ defmodule Cure.MetaAST.Conformance do
       node: node
     }
 
-    descend_elements(node, [tag | path], [violation | acc])
+    descend_elements(node, [tag | path], in_meta?, add_violation(acc, violation))
   end
 
-  # Descend into every element after the tag. A keyword-list element is treated as a
-  # meta slot: walk its VALUES (which may hold nodes) but not its keys, matching how
-  # a canonical node's meta is handled. The tuple itself is an already-flagged
-  # normalization target, so we do not emit `:node_in_meta` for its meta-like slots —
-  # we only surface violations nested inside.
-  defp descend_elements(node, path, acc) do
+  # Descend every element after the tag. A keyword-list element is treated as a meta
+  # slot (walk its VALUES with in_meta? = true, not its keys); every other element is
+  # walked with the inherited `in_meta?`. The tuple itself is an already-flagged
+  # normalization target, so we only surface violations nested inside.
+  defp descend_elements(node, path, in_meta?, acc) do
     node
     |> Tuple.to_list()
     |> tl()
     |> Enum.reduce(acc, fn el, acc ->
       if keyword_list?(el),
-        do: walk_meta_values(el, path, acc),
-        else: walk(el, path, acc)
+        do: Enum.reduce(el, acc, fn {_k, v}, acc -> walk(v, path, true, acc) end),
+        else: walk(el, path, in_meta?, acc)
     end)
   end
 
-  # Descend the value side of each meta pair without emitting `:node_in_meta`
-  # (used inside an already-flagged bad-shape node). Keys are never nodes.
-  defp walk_meta_values(meta, path, acc) do
-    Enum.reduce(meta, acc, fn {_key, value}, acc -> walk(value, path, acc) end)
+  defp add_violation(acc, v), do: %{acc | violations: [v | acc.violations]}
+  defp add_tag(acc, tag), do: %{acc | meta_tags: MapSet.put(acc.meta_tags, tag)}
+
+  defp add_meta_nonnode(acc, node, tag, path) do
+    entry = %{path: Enum.reverse([tag | path]), tag: tag, node: node}
+    %{acc | meta_nonnodes: [entry | acc.meta_nonnodes]}
   end
 
-  # A canonical MetaAST node: 3-tuple, atom tag, keyword-list meta. This is exactly
-  # the shape Metastatic's `do_traverse/4` descends into.
+  # A canonical MetaAST node: 3-tuple, atom tag, keyword-list meta. Exactly the shape
+  # Metastatic descends into (with its guard tightened from `is_list` to keyword —
+  # see guard_match?/1 for the looser shape the walker actually tests).
   defp canonical_node?(node) do
     is_tuple(node) and tuple_size(node) == 3 and is_atom(elem(node, 0)) and
       is_list(elem(node, 1)) and Keyword.keyword?(elem(node, 1))
   end
 
-  # Does `term` contain a canonical node anywhere traversal would need to reach?
-  # This is what separates a malformed NODE (hides real structure — the defect we
-  # flag) from opaque leaf DATA that merely happens to be an atom-headed tuple (an
-  # MFA, a decorator argument): the latter holds only primitives and hides nothing.
+  # Metastatic's ACTUAL descent guard: a 3-tuple with an atom tag and an `is_list`
+  # second element — NOT necessarily a keyword list. A tuple that is guard_match? but
+  # not canonical_node? (list-but-not-keyword second) is what the walker would enter
+  # as a node yet is not one: the INV-C danger shape.
+  defp guard_match?(node) do
+    is_tuple(node) and tuple_size(node) == 3 and is_atom(elem(node, 0)) and is_list(elem(node, 1))
+  end
+
+  # Does `term` contain a canonical node anywhere traversal would need to reach? This
+  # separates a malformed NODE (hides real structure — the defect we flag) from
+  # opaque leaf DATA that merely happens to be an atom-headed tuple (an MFA, a
+  # decorator argument): the latter holds only primitives and hides nothing.
   defp hides_node?(term) when is_tuple(term) do
     cond do
       canonical_node?(term) -> true
@@ -293,8 +348,7 @@ defmodule Cure.MetaAST.Conformance do
     node |> Tuple.to_list() |> tl() |> Enum.reject(&keyword_list?/1)
   end
 
-  # A non-empty keyword list — the shape of a meta slot. `[]` is excluded so an
-  # empty children list is still walked (it has nothing to walk, but the intent is
-  # to skip META, not empty children).
+  # A non-empty keyword list — the shape of a meta slot. `[]` is excluded so an empty
+  # children list is still walked as children, not skipped as meta.
   defp keyword_list?(term), do: is_list(term) and term != [] and Keyword.keyword?(term)
 end

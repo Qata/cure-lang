@@ -16,3 +16,9 @@ data FailRun : Nat -> Phase -> Nat -> Phase -> Type where
 eventually_down : (n : Nat) -> FailRun n Up Z Down
 eventually_down Z = FRMore FShutdown FRDone
 eventually_down (S k) = FRMore FRestart (eventually_down k)
+run_len : FailRun b1 p1 b2 p2 -> Nat
+run_len FRDone = Z
+run_len (FRMore f rest) = S (run_len rest)
+eventually_down_len : (n : Nat) -> run_len (eventually_down n) = S n
+eventually_down_len Z = Refl
+eventually_down_len (S k) = cong S (eventually_down_len k)

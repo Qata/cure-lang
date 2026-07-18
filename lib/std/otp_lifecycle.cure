@@ -1,0 +1,56 @@
+@group(:concurrency)
+mod Std.Otp.Lifecycle
+  ## TYPED gen_server/gen_statem LIFECYCLE (build-out map B8, remainder). The existing modules
+  ## type call totality (`Std.Otp.Call`) and reply contracts (`Std.Otp.Proof`); this module types
+  ## the whole CALLBACK LIFECYCLE as a phase state machine, so the OTP callback ORDER is enforced
+  ## by construction: `init` runs exactly once and first, request callbacks run only while the
+  ## server is up, and `terminate` is final.
+  ##
+  ## A server is in one of three phases; each callback is a typed phase transition. `init` moves
+  ## `PInit → PRunning`; `handle_call`/`handle_cast`/`handle_info` keep it `PRunning`; a
+  ## `{stop, …}` return moves `PRunning → PTerminated`; `terminate` cleans up in `PTerminated`.
+  ## A `Lifecycle` is a well-formed sequence of callbacks. The theorems certify the OTP callback
+  ## contract: `init_only` (from `PInit` the ONLY callback is `init`), `nothing_reinits` (no
+  ## callback ever returns to `PInit` — a server is initialized once), `terminated_absorbing`
+  ## (from `PTerminated` only `terminate`), and `no_resurrection` (a terminated server stays
+  ## terminated for the rest of its lifecycle). No paper types the callback lifecycle.
+
+  type Phase = PInit | PRunning | PTerminated
+
+  ## Each callback as a typed phase transition.
+  type Callback indices (from: Phase, to: Phase)
+    CbInit      : Callback(PInit, PRunning)
+    CbCall      : Callback(PRunning, PRunning)
+    CbCast      : Callback(PRunning, PRunning)
+    CbInfo      : Callback(PRunning, PRunning)
+    CbStop      : Callback(PRunning, PTerminated)
+    CbTerminate : Callback(PTerminated, PTerminated)
+
+  ## A lifecycle: a well-formed sequence of callbacks from one phase to another.
+  type Lifecycle indices (from: Phase, to: Phase)
+    LEnd  : Lifecycle(p, p)
+    LStep : Callback(from, mid) -> Lifecycle(mid, to) -> Lifecycle(from, to)
+
+  type Empty = |
+
+  ## **INIT IS THE ONLY FIRST CALLBACK.** From `PInit`, the only possible callback is `init`
+  ## (which moves to `PRunning`) — a server must initialize before handling anything.
+  fn init_only({to: Phase}, cb: Callback(PInit, to)) -> Equivalent(Phase, to, PRunning) = match cb
+    CbInit() -> reflexive(PRunning())
+
+  ## **NO RE-INITIALIZATION.** No callback ever returns to `PInit` — `Callback(_, PInit)` is
+  ## uninhabited, so a server is initialized exactly once.
+  fn nothing_reinits({from: Phase}, cb: Callback(from, PInit)) -> Empty = match cb
+
+  ## **TERMINATE IS ABSORBING.** From `PTerminated`, the only callback is `terminate`, and it
+  ## stays `PTerminated` — nothing resurrects a stopped server.
+  fn terminated_absorbing({to: Phase}, cb: Callback(PTerminated, to)) -> Equivalent(Phase, to, PTerminated) = match cb
+    CbTerminate() -> reflexive(PTerminated())
+
+  ## **A TERMINATED SERVER STAYS TERMINATED.** Every lifecycle starting from `PTerminated` ends
+  ## at `PTerminated` — the terminated phase is absorbing across the whole remaining lifecycle.
+  fn no_resurrection({to: Phase}, lc: Lifecycle(PTerminated, to)) -> Equivalent(Phase, to, PTerminated) = match lc
+    LEnd()         -> reflexive(PTerminated())
+    LStep(cb, lc2) -> match cb
+      CbTerminate() -> no_resurrection(lc2)
+end

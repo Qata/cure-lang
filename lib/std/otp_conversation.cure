@@ -1,0 +1,48 @@
+@group(:concurrency)
+mod Std.Otp.Conversation
+  ## WHOLE-CONVERSATION PROTOCOL ORDERING (build-out map B4, remainder). `Std.Otp.PatternReceive`
+  ## types one pattern-directed receive; a real client runs a CONVERSATION — a protocol dictating
+  ## the message to receive at each step. The mailbox delivers messages in some arrival order (per
+  ## `Std.Otp.SignalOrder`, only pairwise-ordered), so the messages a protocol wants may be
+  ## interleaved with others. A protocol-directed selective receive extracts, at each step, the
+  ## protocol's next expected message (skipping the rest), advancing the protocol.
+  ##
+  ## `Protocol` is the sequence of expected tags; `SingleRecv(t, before, after)` selectively
+  ## receives tag `t` (front-to-back, skipping non-`t` heads); `ConvRecv(proto, before, after,
+  ## received)` runs the whole protocol, threading the mailbox and collecting the received tags.
+  ## `conv_order` proves the guarantee: whatever order the mailbox arrived in, the RECEIVED
+  ## conversation equals the protocol's tag sequence — a protocol-following client always sees its
+  ## messages in protocol order.
+
+  type Tag = TA | TB | TC
+  type Mailbox = BNil | BCons(Tag, Mailbox)
+  type MList = MNil | MCons(Tag, MList)
+  type Protocol = PDone | PExpect(Tag, Protocol)
+  fn ptags(p: Protocol) -> MList = match p
+    PDone()          -> MNil
+    PExpect(t, rest) -> MCons(t, ptags(rest))
+
+  ## Selectively receive tag `t` from the mailbox: take a matching head, or skip a non-matching
+  ## head (kept in the residual).
+  type SingleRecv indices (t: Tag, before: Mailbox, after: Mailbox)
+    SVHere : SingleRecv(t, BCons(t, rest), rest)
+    SVSkip : SingleRecv(t, rest, after) -> SingleRecv(t, BCons(h, rest), BCons(h, after))
+
+  ## Run a whole protocol over a mailbox, receiving each expected message in turn. The received
+  ## tag `t` is a RELEVANT IMPLICIT (`{t: Tag}`): solved from the `SingleRecv`/protocol indices,
+  ## so callers omit it, yet retained (ω) so the ordering proof can still name it on the pattern.
+  type ConvRecv indices (proto: Protocol, before: Mailbox, after: Mailbox, received: MList)
+    CRDone : ConvRecv(PDone, mbox, mbox, MNil)
+    CRStep : {t: Tag} -> SingleRecv(t, before, mid) -> ConvRecv(rest, mid, after, msgs) -> ConvRecv(PExpect(t, rest), before, after, MCons(t, msgs))
+
+  ## Congruence for `MCons` under equality (`xs ≡ ys ⟹ t::xs ≡ t::ys`).
+  fn mcons_cong(t: Tag, {xs: MList}, {ys: MList}, e: Equivalent(MList, xs, ys)) -> Equivalent(MList, MCons(t, xs), MCons(t, ys)) =
+    rewrite e in reflexive(MCons(t, ys))
+
+  ## **PROTOCOL ORDERING.** The received conversation equals the protocol's tag sequence,
+  ## regardless of the mailbox's arrival order — a protocol-directed client always receives its
+  ## messages in protocol order. Induction on the conversation.
+  fn conv_order({proto: Protocol}, {before: Mailbox}, {after: Mailbox}, {received: MList}, cr: ConvRecv(proto, before, after, received)) -> Equivalent(MList, received, ptags(proto)) = match cr
+    CRDone()           -> reflexive(MNil())
+    CRStep({t = t}, sv, cr2) -> mcons_cong(t, conv_order(cr2))
+end

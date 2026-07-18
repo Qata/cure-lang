@@ -1,0 +1,430 @@
+mod MailboxPattern
+  type Tag = TA | TB | TC
+  type B = F | T
+
+  fn plus(m: Nat, n: Nat) -> Nat = match m
+    Z()  -> n
+    S(k) -> S(plus(k, n))
+  fn plus_n_z(n: Nat) -> Equivalent(Nat, plus(n, Z()), n) = match n
+    Z()  -> reflexive(Z())
+    S(k) -> rewrite plus_n_z(k) in reflexive(S(k))
+  fn plus_n_s(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, S(n)), S(plus(m, n))) = match m
+    Z()  -> reflexive(S(n))
+    S(k) -> rewrite plus_n_s(k, n) in reflexive(S(S(plus(k, n))))
+  fn plus_comm(m: Nat, n: Nat) -> Equivalent(Nat, plus(m, n), plus(n, m)) = match m
+    Z()  -> rewrite plus_n_z(n) in reflexive(n)
+    S(k) -> rewrite plus_n_s(n, k) in rewrite plus_comm(k, n) in reflexive(S(plus(n, k)))
+  fn plus_assoc(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, plus(plus(a, b), c), plus(a, plus(b, c))) = match a
+    Z()  -> reflexive(plus(b, c))
+    S(k) -> rewrite plus_assoc(k, b, c) in reflexive(S(plus(k, plus(b, c))))
+
+  type MS = MkMS(Nat, Nat, Nat)
+  fn msadd(x: MS, y: MS) -> MS = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, e, f) -> MkMS(plus(a, d), plus(b, e), plus(c, f))
+  fn msadd_comm(x: MS, y: MS) -> Equivalent(MS, msadd(x, y), msadd(y, x)) = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, e, f) -> rewrite plus_comm(d, a) in rewrite plus_comm(e, b) in rewrite plus_comm(f, c) in reflexive(MkMS(plus(a, d), plus(b, e), plus(c, f)))
+  fn msadd_assoc(x: MS, y: MS, z: MS) -> Equivalent(MS, msadd(msadd(x, y), z), msadd(x, msadd(y, z))) = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, e, f) -> match z
+        MkMS(g, h, i) -> rewrite plus_assoc(a, d, g) in rewrite plus_assoc(b, e, h) in rewrite plus_assoc(c, f, i) in reflexive(MkMS(plus(a, plus(d, g)), plus(b, plus(e, h)), plus(c, plus(f, i))))
+  fn msadd_zero_left(y: MS) -> Equivalent(MS, msadd(MkMS(Z, Z, Z), y), y) = match y
+    MkMS(d, e, f) -> reflexive(MkMS(d, e, f))
+
+  type Pat = PZero | POne | PAtom(Tag) | PPlus(Pat, Pat) | PTimes(Pat, Pat) | PStar(Pat)
+
+  type Accepts indices (pat: Pat, m: MS)
+    AOne   : Accepts(POne, MkMS(Z, Z, Z))
+    AAtomA : Accepts(PAtom(TA), MkMS(S(Z), Z, Z))
+    AAtomB : Accepts(PAtom(TB), MkMS(Z, S(Z), Z))
+    AAtomC : Accepts(PAtom(TC), MkMS(Z, Z, S(Z)))
+    APlusL : Accepts(e, m) -> Accepts(PPlus(e, f), m)
+    APlusR : Accepts(f, m) -> Accepts(PPlus(e, f), m)
+    ATimes : (m1: MS) -> (m2: MS) -> Accepts(e, m1) -> Accepts(f, m2) -> Accepts(PTimes(e, f), msadd(m1, m2))
+    AStar0 : Accepts(PStar(e), MkMS(Z, Z, Z))
+    AStarN : (m1: MS) -> (m2: MS) -> Accepts(e, m1) -> Accepts(PStar(e), m2) -> Accepts(PStar(e), msadd(m1, m2))
+
+  fn plus_pat_comm({e: Pat}, {f: Pat}, {m: MS}, acc: Accepts(PPlus(e, f), m)) -> Accepts(PPlus(f, e), m) = match acc
+    APlusL(ae) -> APlusR(ae)
+    APlusR(af) -> APlusL(af)
+
+  fn times_comm({e: Pat}, {f: Pat}, {m: MS}, acc: Accepts(PTimes(e, f), m)) -> Accepts(PTimes(f, e), m) = match acc
+    ATimes(m1, m2, ae, af) -> rewrite msadd_comm(m1, m2) in ATimes(m2, m1, af, ae)
+
+  fn times_assoc({e: Pat}, {f: Pat}, {g: Pat}, {m: MS}, acc: Accepts(PTimes(PTimes(e, f), g), m)) -> Accepts(PTimes(e, PTimes(f, g)), m) = match acc
+    ATimes(mef, mg, acc_ef, acc_g) -> match acc_ef
+      ATimes(me, mf, acc_e, acc_f) -> rewrite msadd_assoc(me, mf, mg) in ATimes(me, msadd(mf, mg), acc_e, ATimes(mf, mg, acc_f, acc_g))
+
+  fn one_times({e: Pat}, {m: MS}, acc: Accepts(PTimes(POne, e), m)) -> Accepts(e, m) = match acc
+    ATimes(m1, m2, a1, ae) -> match a1
+      AOne() -> rewrite msadd_zero_left(m2) in ae
+
+  fn orb(x: B, y: B) -> B = match x
+    F() -> y
+    T() -> T
+  fn andb(x: B, y: B) -> B = match x
+    F() -> F
+    T() -> y
+  type BOr indices (x: B, y: B)
+    BOrL : Equivalent(B, x, T) -> BOr(x, y)
+    BOrR : Equivalent(B, y, T) -> BOr(x, y)
+  fn orb_true(x: B, y: B, e: Equivalent(B, orb(x, y), T)) -> BOr(x, y) = match x
+    T() -> BOrL(reflexive(T))
+    F() -> match y
+      T() -> BOrR(reflexive(T))
+      F() -> match e
+  type BAnd indices (x: B, y: B)
+    BAndBoth : Equivalent(B, x, T) -> Equivalent(B, y, T) -> BAnd(x, y)
+  fn andb_true(x: B, y: B, e: Equivalent(B, andb(x, y), T)) -> BAnd(x, y) = match x
+    T() -> match y
+      T() -> BAndBoth(reflexive(T), reflexive(T))
+      F() -> match e
+    F() -> match e
+
+  fn nullable(pat: Pat) -> B = match pat
+    PZero()      -> F
+    POne()       -> T
+    PAtom(t)     -> F
+    PPlus(a, b)  -> orb(nullable(a), nullable(b))
+    PTimes(a, b) -> andb(nullable(a), nullable(b))
+    PStar(a)     -> T
+
+  fn nullable_sound(pat: Pat, e: Equivalent(B, nullable(pat), T)) -> Accepts(pat, MkMS(Z, Z, Z)) = match pat
+    PZero()      -> match e
+    POne()       -> AOne()
+    PAtom(t)     -> match e
+    PPlus(a, b)  -> match orb_true(nullable(a), nullable(b), e)
+      BOrL(pa) -> APlusL(nullable_sound(a, pa))
+      BOrR(pb) -> APlusR(nullable_sound(b, pb))
+    PTimes(a, b) -> match andb_true(nullable(a), nullable(b), e)
+      BAndBoth(pa, pb) -> ATimes(MkMS(Z, Z, Z), MkMS(Z, Z, Z), nullable_sound(a, pa), nullable_sound(b, pb))
+    PStar(a)     -> AStar0()
+
+  fn singleton(t: Tag) -> MS = match t
+    TA() -> MkMS(S(Z), Z, Z)
+    TB() -> MkMS(Z, S(Z), Z)
+    TC() -> MkMS(Z, Z, S(Z))
+  fn deriv(pat: Pat, t: Tag) -> Pat = match pat
+    PZero()      -> PZero
+    POne()       -> PZero
+    PAtom(s)     -> match s
+      TA() -> match t
+        TA() -> POne
+        TB() -> PZero
+        TC() -> PZero
+      TB() -> match t
+        TA() -> PZero
+        TB() -> POne
+        TC() -> PZero
+      TC() -> match t
+        TA() -> PZero
+        TB() -> PZero
+        TC() -> POne
+    PPlus(a, b)  -> PPlus(deriv(a, t), deriv(b, t))
+    PTimes(a, b) -> PPlus(PTimes(deriv(a, t), b), PTimes(a, deriv(b, t)))
+    PStar(a)     -> PTimes(deriv(a, t), PStar(a))
+  fn ms_swap(x: MS, y: MS, z: MS) -> Equivalent(MS, msadd(msadd(x, y), z), msadd(msadd(x, z), y)) =
+    rewrite msadd_assoc(x, y, z) in rewrite msadd_comm(y, z) in rewrite msadd_assoc(x, z, y) in reflexive(msadd(x, msadd(z, y)))
+  fn ds_plus(a: Pat, b: Pat, t: Tag, m: MS, acc: Accepts(deriv(PPlus(a, b), t), m)) -> Accepts(PPlus(a, b), msadd(m, singleton(t))) = match acc
+    APlusL(da) -> APlusL(deriv_sound(a, t, m, da))
+    APlusR(db) -> APlusR(deriv_sound(b, t, m, db))
+  fn ds_times(a: Pat, b: Pat, t: Tag, m: MS, acc: Accepts(deriv(PTimes(a, b), t), m)) -> Accepts(PTimes(a, b), msadd(m, singleton(t))) = match acc
+    APlusL(al) -> match al
+      ATimes(m1, m2, da, ab) -> rewrite ms_swap(m1, m2, singleton(t)) in ATimes(msadd(m1, singleton(t)), m2, deriv_sound(a, t, m1, da), ab)
+    APlusR(ar) -> match ar
+      ATimes(m1, m2, aa, db) -> rewrite msadd_assoc(m1, m2, singleton(t)) in ATimes(m1, msadd(m2, singleton(t)), aa, deriv_sound(b, t, m2, db))
+  fn ds_star(a: Pat, t: Tag, m: MS, acc: Accepts(deriv(PStar(a), t), m)) -> Accepts(PStar(a), msadd(m, singleton(t))) = match acc
+    ATimes(m1, m2, da, as) -> rewrite ms_swap(m1, m2, singleton(t)) in AStarN(msadd(m1, singleton(t)), m2, deriv_sound(a, t, m1, da), as)
+  fn deriv_sound(pat: Pat, t: Tag, m: MS, acc: Accepts(deriv(pat, t), m)) -> Accepts(pat, msadd(m, singleton(t))) = match pat
+    PZero()      -> match acc
+    POne()       -> match acc
+    PAtom(s)     -> match s
+      TA() -> match t
+        TA() -> match acc
+          AOne() -> AAtomA()
+        TB() -> match acc
+        TC() -> match acc
+      TB() -> match t
+        TA() -> match acc
+        TB() -> match acc
+          AOne() -> AAtomB()
+        TC() -> match acc
+      TC() -> match t
+        TA() -> match acc
+        TB() -> match acc
+        TC() -> match acc
+          AOne() -> AAtomC()
+    PPlus(a, b)  -> ds_plus(a, b, t, m, acc)
+    PTimes(a, b) -> ds_times(a, b, t, m, acc)
+    PStar(a)     -> ds_star(a, t, m, acc)
+
+  fn star_unfold({a: Pat}, {m: MS}, acc: Accepts(PStar(a), m)) -> Accepts(PPlus(POne, PTimes(a, PStar(a))), m) = match acc
+    AStar0()                -> APlusL(AOne())
+    AStarN(m1, m2, ae, as)  -> APlusR(ATimes(m1, m2, ae, as))
+  fn star_fold({a: Pat}, {m: MS}, acc: Accepts(PPlus(POne, PTimes(a, PStar(a))), m)) -> Accepts(PStar(a), m) = match acc
+    APlusL(a1) -> match a1
+      AOne() -> AStar0()
+    APlusR(at) -> match at
+      ATimes(m1, m2, ae, as) -> AStarN(m1, m2, ae, as)
+
+  fn dist_fwd({a: Pat}, {b: Pat}, {c: Pat}, {m: MS}, acc: Accepts(PTimes(a, PPlus(b, c)), m)) -> Accepts(PPlus(PTimes(a, b), PTimes(a, c)), m) = match acc
+    ATimes(m1, m2, aa, abc) -> match abc
+      APlusL(ab) -> APlusL(ATimes(m1, m2, aa, ab))
+      APlusR(ac) -> APlusR(ATimes(m1, m2, aa, ac))
+  fn dist_bwd({a: Pat}, {b: Pat}, {c: Pat}, {m: MS}, acc: Accepts(PPlus(PTimes(a, b), PTimes(a, c)), m)) -> Accepts(PTimes(a, PPlus(b, c)), m) = match acc
+    APlusL(al) -> match al
+      ATimes(m1, m2, aa, ab) -> ATimes(m1, m2, aa, APlusL(ab))
+    APlusR(ar) -> match ar
+      ATimes(m1, m2, aa, ac) -> ATimes(m1, m2, aa, APlusR(ac))
+
+  fn plus_assoc_fwd({a: Pat}, {b: Pat}, {c: Pat}, {m: MS}, acc: Accepts(PPlus(PPlus(a, b), c), m)) -> Accepts(PPlus(a, PPlus(b, c)), m) = match acc
+    APlusL(al) -> match al
+      APlusL(aa) -> APlusL(aa)
+      APlusR(ab) -> APlusR(APlusL(ab))
+    APlusR(ac) -> APlusR(APlusR(ac))
+  fn plus_assoc_bwd({a: Pat}, {b: Pat}, {c: Pat}, {m: MS}, acc: Accepts(PPlus(a, PPlus(b, c)), m)) -> Accepts(PPlus(PPlus(a, b), c), m) = match acc
+    APlusL(aa) -> APlusL(APlusL(aa))
+    APlusR(ar) -> match ar
+      APlusL(ab) -> APlusL(APlusR(ab))
+      APlusR(ac) -> APlusR(ac)
+  fn plus_zero_fwd({a: Pat}, {m: MS}, acc: Accepts(PPlus(a, PZero), m)) -> Accepts(a, m) = match acc
+    APlusL(aa) -> aa
+    APlusR(az) -> match az
+  fn plus_zero_bwd({a: Pat}, {m: MS}, acc: Accepts(a, m)) -> Accepts(PPlus(a, PZero), m) = APlusL(acc)
+
+  fn zero_times({a: Pat}, {m: MS}, acc: Accepts(PTimes(PZero, a), m)) -> Accepts(PZero, m) = match acc
+    ATimes(m1, m2, az, aa) -> match az
+
+  type Incl indices (e: Pat, f: Pat)
+    IRefl  : Incl(e, e)
+    IZero  : Incl(PZero, f)
+    IPlus  : Incl(e, g) -> Incl(f, g) -> Incl(PPlus(e, f), g)
+    IInL   : Incl(e, f) -> Incl(e, PPlus(f, g))
+    IInR   : Incl(e, g) -> Incl(e, PPlus(f, g))
+    ITimes : Incl(e1, e2) -> Incl(f1, f2) -> Incl(PTimes(e1, f1), PTimes(e2, f2))
+    IStar  : Incl(e, f) -> Incl(PStar(e), PStar(f))
+    ITrans : Incl(e, f) -> Incl(f, g) -> Incl(e, g)
+  fn incl_times({e1: Pat}, {f1: Pat}, {e2: Pat}, {f2: Pat}, {m: MS}, s1: Incl(e1, e2), s2: Incl(f1, f2), acc: Accepts(PTimes(e1, f1), m)) -> Accepts(PTimes(e2, f2), m) = match acc
+    ATimes(m1, m2, a1, a2) -> ATimes(m1, m2, incl_sound(s1, a1), incl_sound(s2, a2))
+  fn incl_star({e: Pat}, {f: Pat}, {m: MS}, s: Incl(e, f), acc: Accepts(PStar(e), m)) -> Accepts(PStar(f), m) = match acc
+    AStar0()                -> AStar0()
+    AStarN(m1, m2, ae, as)  -> AStarN(m1, m2, incl_sound(s, ae), incl_star(s, as))
+  fn incl_sound({e: Pat}, {f: Pat}, {m: MS}, sub: Incl(e, f), acc: Accepts(e, m)) -> Accepts(f, m) = match sub
+    IRefl()        -> acc
+    IZero()        -> match acc
+    IPlus(se, sf)  -> match acc
+      APlusL(ae) -> incl_sound(se, ae)
+      APlusR(af) -> incl_sound(sf, af)
+    IInL(sef)      -> APlusL(incl_sound(sef, acc))
+    IInR(seg)      -> APlusR(incl_sound(seg, acc))
+    ITimes(s1, s2) -> incl_times(s1, s2, acc)
+    IStar(s)       -> incl_star(s, acc)
+    ITrans(sef, sfg) -> incl_sound(sfg, incl_sound(sef, acc))
+  fn deriv_mono({e: Pat}, {f: Pat}, t: Tag, sub: Incl(e, f)) -> Incl(deriv(e, t), deriv(f, t)) = match sub
+    IRefl()        -> IRefl()
+    IZero()        -> IZero()
+    IPlus(se, sf)  -> IPlus(deriv_mono(t, se), deriv_mono(t, sf))
+    IInL(sef)      -> IInL(deriv_mono(t, sef))
+    IInR(seg)      -> IInR(deriv_mono(t, seg))
+    ITimes(s1, s2) -> IPlus(IInL(ITimes(deriv_mono(t, s1), s2)), IInR(ITimes(s1, deriv_mono(t, s2))))
+    IStar(s)       -> ITimes(deriv_mono(t, s), IStar(s))
+    ITrans(sef, sfg) -> ITrans(deriv_mono(t, sef), deriv_mono(t, sfg))
+
+  type Word = WNil | WCons(Tag, Word)
+  fn parikh(w: Word) -> MS = match w
+    WNil()         -> MkMS(Z, Z, Z)
+    WCons(t, rest) -> msadd(singleton(t), parikh(rest))
+  fn dfold(e: Pat, w: Word) -> Pat = match w
+    WNil()         -> e
+    WCons(t, rest) -> dfold(deriv(e, t), rest)
+  fn matches_word_sound(e: Pat, w: Word, h: Equivalent(B, nullable(dfold(e, w)), T)) -> Accepts(e, parikh(w)) = match w
+    WNil()         -> nullable_sound(e, h)
+    WCons(t, rest) -> rewrite msadd_comm(singleton(t), parikh(rest)) in deriv_sound(e, t, parikh(rest), matches_word_sound(deriv(e, t), rest, h))
+
+  fn plus_zero_l(a: Nat, b: Nat, e: Equivalent(Nat, plus(a, b), Z())) -> Equivalent(Nat, a, Z()) = match a
+    Z()  -> reflexive(Z())
+    S(k) -> match e
+  fn plus_zero_r(a: Nat, b: Nat, e: Equivalent(Nat, plus(a, b), Z())) -> Equivalent(Nat, b, Z()) = match a
+    Z()  -> e
+    S(k) -> match e
+  fn msa(m: MS) -> Nat = match m
+    MkMS(a, b, c) -> a
+  fn msb(m: MS) -> Nat = match m
+    MkMS(a, b, c) -> b
+  fn msc(m: MS) -> Nat = match m
+    MkMS(a, b, c) -> c
+  fn msa_cong({m1: MS}, {m2: MS}, e: Equivalent(MS, m1, m2)) -> Equivalent(Nat, msa(m1), msa(m2)) = match e
+    reflexive() -> reflexive(msa(m1))
+  fn msb_cong({m1: MS}, {m2: MS}, e: Equivalent(MS, m1, m2)) -> Equivalent(Nat, msb(m1), msb(m2)) = match e
+    reflexive() -> reflexive(msb(m1))
+  fn msc_cong({m1: MS}, {m2: MS}, e: Equivalent(MS, m1, m2)) -> Equivalent(Nat, msc(m1), msc(m2)) = match e
+    reflexive() -> reflexive(msc(m1))
+  fn msadd_zero_l(x: MS, y: MS, e: Equivalent(MS, msadd(x, y), MkMS(Z(), Z(), Z()))) -> Equivalent(MS, x, MkMS(Z(), Z(), Z())) = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, ee, f) -> rewrite plus_zero_l(a, d, msa_cong(e)) in rewrite plus_zero_l(b, ee, msb_cong(e)) in rewrite plus_zero_l(c, f, msc_cong(e)) in reflexive(MkMS(Z(), Z(), Z()))
+  fn msadd_zero_r(x: MS, y: MS, e: Equivalent(MS, msadd(x, y), MkMS(Z(), Z(), Z()))) -> Equivalent(MS, y, MkMS(Z(), Z(), Z())) = match x
+    MkMS(a, b, c) -> match y
+      MkMS(d, ee, f) -> rewrite plus_zero_r(a, d, msa_cong(e)) in rewrite plus_zero_r(b, ee, msb_cong(e)) in rewrite plus_zero_r(c, f, msc_cong(e)) in reflexive(MkMS(Z(), Z(), Z()))
+  fn orb_t_r(x: B) -> Equivalent(B, orb(x, T), T) = match x
+    F() -> reflexive(T)
+    T() -> reflexive(T)
+  fn orb_r(x: B, {y: B}, py: Equivalent(B, y, T)) -> Equivalent(B, orb(x, y), T) = rewrite py in orb_t_r(x)
+
+  fn nc_gen(pat: Pat, {m: MS}, acc: Accepts(pat, m), q: Equivalent(MS, m, MkMS(Z(), Z(), Z()))) -> Equivalent(B, nullable(pat), T) = match pat
+    PZero()      -> match acc
+    POne()       -> reflexive(T)
+    PAtom(t)     -> match acc
+      AAtomA() -> match q
+      AAtomB() -> match q
+      AAtomC() -> match q
+    PPlus(a, b)  -> match acc
+      APlusL(ae) -> rewrite nc_gen(a, ae, q) in reflexive(T)
+      APlusR(af) -> orb_r(nullable(a), nc_gen(b, af, q))
+    PTimes(a, b) -> match acc
+      ATimes(m1, m2, ae, af) -> rewrite nc_gen(a, ae, msadd_zero_l(m1, m2, q)) in rewrite nc_gen(b, af, msadd_zero_r(m1, m2, q)) in reflexive(T)
+    PStar(a)     -> reflexive(T)
+  fn nullable_complete(pat: Pat, acc: Accepts(pat, MkMS(Z(), Z(), Z()))) -> Equivalent(B, nullable(pat), T) =
+    nc_gen(pat, acc, reflexive(MkMS(Z(), Z(), Z())))
+
+  fn s_inj(a: Nat, b: Nat, e: Equivalent(Nat, S(a), S(b))) -> Equivalent(Nat, a, b) = match e
+    reflexive() -> reflexive(a)
+  fn plus_x_s1(a: Nat) -> Equivalent(Nat, plus(a, S(Z())), S(a)) = rewrite plus_n_s(a, Z()) in rewrite plus_n_z(a) in reflexive(S(a))
+  type PSplit indices (a: Nat, b: Nat, n: Nat)
+    PSL : (a2: Nat) -> Equivalent(Nat, a, S(a2)) -> Equivalent(Nat, plus(a2, b), n) -> PSplit(a, b, n)
+    PSR : (b2: Nat) -> Equivalent(Nat, b, S(b2)) -> Equivalent(Nat, plus(a, b2), n) -> PSplit(a, b, n)
+  fn plus_succ_split(a: Nat, b: Nat, n: Nat, e: Equivalent(Nat, plus(a, b), S(n))) -> PSplit(a, b, n) = match a
+    Z()  -> PSR(n, e, reflexive(n))
+    S(k) -> PSL(k, reflexive(S(k)), s_inj(plus(k, b), n, e))
+
+  fn ntrans(a: Nat, b: Nat, c: Nat, e1: Equivalent(Nat, a, b), e2: Equivalent(Nat, b, c)) -> Equivalent(Nat, a, c) = match e1
+    reflexive() -> e2
+  type Split indices (m1: MS, m2: MS, m: MS, t: Tag)
+    SplitL : (m1p: MS) -> Equivalent(MS, m1, msadd(m1p, singleton(t))) -> Equivalent(MS, m, msadd(m1p, m2)) -> Split(m1, m2, m, t)
+    SplitR : (m2p: MS) -> Equivalent(MS, m2, msadd(m2p, singleton(t))) -> Equivalent(MS, m, msadd(m1, m2p)) -> Split(m1, m2, m, t)
+
+  fn msadd_split(m1: MS, m2: MS, m: MS, t: Tag, e: Equivalent(MS, msadd(m1, m2), msadd(m, singleton(t)))) -> Split(m1, m2, m, t) = match t
+    TA() -> match m1
+      MkMS(a1, b1, c1) -> match m2
+        MkMS(a2, b2, c2) -> match m
+          MkMS(am, bm, cm) -> match plus_succ_split(a1, a2, am, ntrans(plus(a1, a2), plus(am, S(Z())), S(am), msa_cong(e), plus_x_s1(am)))
+            PSL(k, ea, en) -> SplitL(MkMS(k, b1, c1), rewrite ea in rewrite plus_x_s1(k) in rewrite plus_n_z(b1) in rewrite plus_n_z(c1) in reflexive(MkMS(S(k), b1, c1)), rewrite en in rewrite ntrans(plus(b1, b2), plus(bm, Z()), bm, msb_cong(e), plus_n_z(bm)) in rewrite ntrans(plus(c1, c2), plus(cm, Z()), cm, msc_cong(e), plus_n_z(cm)) in reflexive(MkMS(am, bm, cm)))
+            PSR(k, eb, en) -> SplitR(MkMS(k, b2, c2), rewrite eb in rewrite plus_x_s1(k) in rewrite plus_n_z(b2) in rewrite plus_n_z(c2) in reflexive(MkMS(S(k), b2, c2)), rewrite en in rewrite ntrans(plus(b1, b2), plus(bm, Z()), bm, msb_cong(e), plus_n_z(bm)) in rewrite ntrans(plus(c1, c2), plus(cm, Z()), cm, msc_cong(e), plus_n_z(cm)) in reflexive(MkMS(am, bm, cm)))
+    TB() -> match m1
+      MkMS(a1, b1, c1) -> match m2
+        MkMS(a2, b2, c2) -> match m
+          MkMS(am, bm, cm) -> match plus_succ_split(b1, b2, bm, ntrans(plus(b1, b2), plus(bm, S(Z())), S(bm), msb_cong(e), plus_x_s1(bm)))
+            PSL(k, eb, en) -> SplitL(MkMS(a1, k, c1), rewrite eb in rewrite plus_n_z(a1) in rewrite plus_x_s1(k) in rewrite plus_n_z(c1) in reflexive(MkMS(a1, S(k), c1)), rewrite en in rewrite ntrans(plus(a1, a2), plus(am, Z()), am, msa_cong(e), plus_n_z(am)) in rewrite ntrans(plus(c1, c2), plus(cm, Z()), cm, msc_cong(e), plus_n_z(cm)) in reflexive(MkMS(am, bm, cm)))
+            PSR(k, eb2, en) -> SplitR(MkMS(a2, k, c2), rewrite eb2 in rewrite plus_n_z(a2) in rewrite plus_x_s1(k) in rewrite plus_n_z(c2) in reflexive(MkMS(a2, S(k), c2)), rewrite en in rewrite ntrans(plus(a1, a2), plus(am, Z()), am, msa_cong(e), plus_n_z(am)) in rewrite ntrans(plus(c1, c2), plus(cm, Z()), cm, msc_cong(e), plus_n_z(cm)) in reflexive(MkMS(am, bm, cm)))
+    TC() -> match m1
+      MkMS(a1, b1, c1) -> match m2
+        MkMS(a2, b2, c2) -> match m
+          MkMS(am, bm, cm) -> match plus_succ_split(c1, c2, cm, ntrans(plus(c1, c2), plus(cm, S(Z())), S(cm), msc_cong(e), plus_x_s1(cm)))
+            PSL(k, ec, en) -> SplitL(MkMS(a1, b1, k), rewrite ec in rewrite plus_n_z(a1) in rewrite plus_n_z(b1) in rewrite plus_x_s1(k) in reflexive(MkMS(a1, b1, S(k))), rewrite en in rewrite ntrans(plus(a1, a2), plus(am, Z()), am, msa_cong(e), plus_n_z(am)) in rewrite ntrans(plus(b1, b2), plus(bm, Z()), bm, msb_cong(e), plus_n_z(bm)) in reflexive(MkMS(am, bm, cm)))
+            PSR(k, ec2, en) -> SplitR(MkMS(a2, b2, k), rewrite ec2 in rewrite plus_n_z(a2) in rewrite plus_n_z(b2) in rewrite plus_x_s1(k) in reflexive(MkMS(a2, b2, S(k))), rewrite en in rewrite ntrans(plus(a1, a2), plus(am, Z()), am, msa_cong(e), plus_n_z(am)) in rewrite ntrans(plus(b1, b2), plus(bm, Z()), bm, msb_cong(e), plus_n_z(bm)) in reflexive(MkMS(am, bm, cm)))
+
+  fn esym(a: Nat, b: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, b, a) = match e
+    reflexive() -> reflexive(a)
+  fn zero_is_succ({G: Type}, n: Nat, e: Equivalent(Nat, Z(), S(n))) -> G = match e
+  fn ms_singleton_nonzero({G: Type}, m: MS, t: Tag, e: Equivalent(MS, msadd(m, singleton(t)), MkMS(Z(), Z(), Z()))) -> G = match t
+    TA() -> match m
+      MkMS(a, b, c) -> zero_is_succ(a, ntrans(Z(), plus(a, S(Z())), S(a), esym(plus(a, S(Z())), Z(), msa_cong(e)), plus_x_s1(a)))
+    TB() -> match m
+      MkMS(a, b, c) -> zero_is_succ(b, ntrans(Z(), plus(b, S(Z())), S(b), esym(plus(b, S(Z())), Z(), msb_cong(e)), plus_x_s1(b)))
+    TC() -> match m
+      MkMS(a, b, c) -> zero_is_succ(c, ntrans(Z(), plus(c, S(Z())), S(c), esym(plus(c, S(Z())), Z(), msc_cong(e)), plus_x_s1(c)))
+
+  fn singleton_cancel(m: MS, t: Tag, q: Equivalent(MS, singleton(t), msadd(m, singleton(t)))) -> Equivalent(MS, m, MkMS(Z(), Z(), Z())) = match t
+    TA() -> match m
+      MkMS(a, b, c) -> rewrite esym(Z(), a, s_inj(Z(), a, ntrans(S(Z()), plus(a, S(Z())), S(a), msa_cong(q), plus_x_s1(a)))) in rewrite esym(Z(), b, ntrans(Z(), plus(b, Z()), b, msb_cong(q), plus_n_z(b))) in rewrite esym(Z(), c, ntrans(Z(), plus(c, Z()), c, msc_cong(q), plus_n_z(c))) in reflexive(MkMS(Z(), Z(), Z()))
+    TB() -> match m
+      MkMS(a, b, c) -> rewrite esym(Z(), a, ntrans(Z(), plus(a, Z()), a, msa_cong(q), plus_n_z(a))) in rewrite esym(Z(), b, s_inj(Z(), b, ntrans(S(Z()), plus(b, S(Z())), S(b), msb_cong(q), plus_x_s1(b)))) in rewrite esym(Z(), c, ntrans(Z(), plus(c, Z()), c, msc_cong(q), plus_n_z(c))) in reflexive(MkMS(Z(), Z(), Z()))
+    TC() -> match m
+      MkMS(a, b, c) -> rewrite esym(Z(), a, ntrans(Z(), plus(a, Z()), a, msa_cong(q), plus_n_z(a))) in rewrite esym(Z(), b, ntrans(Z(), plus(b, Z()), b, msb_cong(q), plus_n_z(b))) in rewrite esym(Z(), c, s_inj(Z(), c, ntrans(S(Z()), plus(c, S(Z())), S(c), msc_cong(q), plus_x_s1(c)))) in reflexive(MkMS(Z(), Z(), Z()))
+
+  fn deriv_atom(s: Tag, t: Tag, m: MS, q: Equivalent(MS, singleton(s), msadd(m, singleton(t)))) -> Accepts(deriv(PAtom(s), t), m) = match s
+    TA() -> match t
+      TA() -> rewrite singleton_cancel(m, TA(), q) in AOne()
+      TB() -> match m
+        MkMS(a, b, c) -> zero_is_succ(b, ntrans(Z(), plus(b, S(Z())), S(b), msb_cong(q), plus_x_s1(b)))
+      TC() -> match m
+        MkMS(a, b, c) -> zero_is_succ(c, ntrans(Z(), plus(c, S(Z())), S(c), msc_cong(q), plus_x_s1(c)))
+    TB() -> match t
+      TA() -> match m
+        MkMS(a, b, c) -> zero_is_succ(a, ntrans(Z(), plus(a, S(Z())), S(a), msa_cong(q), plus_x_s1(a)))
+      TB() -> rewrite singleton_cancel(m, TB(), q) in AOne()
+      TC() -> match m
+        MkMS(a, b, c) -> zero_is_succ(c, ntrans(Z(), plus(c, S(Z())), S(c), msc_cong(q), plus_x_s1(c)))
+    TC() -> match t
+      TA() -> match m
+        MkMS(a, b, c) -> zero_is_succ(a, ntrans(Z(), plus(a, S(Z())), S(a), msa_cong(q), plus_x_s1(a)))
+      TB() -> match m
+        MkMS(a, b, c) -> zero_is_succ(b, ntrans(Z(), plus(b, S(Z())), S(b), msb_cong(q), plus_x_s1(b)))
+      TC() -> rewrite singleton_cancel(m, TC(), q) in AOne()
+
+  fn ms_esym(a: MS, b: MS, e: Equivalent(MS, a, b)) -> Equivalent(MS, b, a) = match e
+    reflexive() -> reflexive(a)
+  fn mstrans(a: MS, b: MS, c: MS, e1: Equivalent(MS, a, b), e2: Equivalent(MS, b, c)) -> Equivalent(MS, a, c) = match e1
+    reflexive() -> e2
+  fn msadd_cong_l(x: MS, x2: MS, y: MS, e: Equivalent(MS, x, x2)) -> Equivalent(MS, msadd(x, y), msadd(x2, y)) = match e
+    reflexive() -> reflexive(msadd(x, y))
+
+  fn dc_gen({pat: Pat}, t: Tag, m: MS, {idx: MS}, acc: Accepts(pat, idx), q: Equivalent(MS, idx, msadd(m, singleton(t)))) -> Accepts(deriv(pat, t), m) = match acc
+    AOne()   -> ms_singleton_nonzero(m, t, ms_esym(MkMS(Z(), Z(), Z()), msadd(m, singleton(t)), q))
+    AAtomA() -> deriv_atom(TA(), t, m, q)
+    AAtomB() -> deriv_atom(TB(), t, m, q)
+    AAtomC() -> deriv_atom(TC(), t, m, q)
+    APlusL(ae) -> APlusL(dc_gen(t, m, ae, q))
+    APlusR(af) -> APlusR(dc_gen(t, m, af, q))
+    ATimes(m1, m2, ae, af) -> match msadd_split(m1, m2, m, t, q)
+      SplitL(m1p, e1, e2) -> APlusL(rewrite e2 in ATimes(m1p, m2, dc_gen(t, m1p, ae, e1), af))
+      SplitR(m2p, e1, e2) -> APlusR(rewrite e2 in ATimes(m1, m2p, ae, dc_gen(t, m2p, af, e1)))
+    AStar0() -> ms_singleton_nonzero(m, t, ms_esym(MkMS(Z(), Z(), Z()), msadd(m, singleton(t)), q))
+    AStarN(m1, m2, ae, as) -> match msadd_split(m1, m2, m, t, q)
+      SplitL(m1p, e1, e2) -> rewrite e2 in ATimes(m1p, m2, dc_gen(t, m1p, ae, e1), as)
+      SplitR(m2p, e1, e2) -> match dc_gen(t, m2p, as, e1)
+        ATimes(p1, p2, ad, astar) -> rewrite mstrans(m, msadd(m1, msadd(p1, p2)), msadd(p1, msadd(m1, p2)), e2, mstrans(msadd(m1, msadd(p1, p2)), msadd(msadd(p1, m1), p2), msadd(p1, msadd(m1, p2)), mstrans(msadd(m1, msadd(p1, p2)), msadd(msadd(m1, p1), p2), msadd(msadd(p1, m1), p2), ms_esym(msadd(msadd(m1, p1), p2), msadd(m1, msadd(p1, p2)), msadd_assoc(m1, p1, p2)), msadd_cong_l(msadd(m1, p1), msadd(p1, m1), p2, msadd_comm(m1, p1))), msadd_assoc(p1, m1, p2))) in ATimes(p1, msadd(m1, p2), ad, AStarN(m1, p2, ae, astar))
+  fn deriv_complete(pat: Pat, t: Tag, m: MS, acc: Accepts(pat, msadd(m, singleton(t)))) -> Accepts(deriv(pat, t), m) =
+    dc_gen(t, m, acc, reflexive(msadd(m, singleton(t))))
+
+  fn matches_word_complete(e: Pat, w: Word, acc: Accepts(e, parikh(w))) -> Equivalent(B, nullable(dfold(e, w)), T) = match w
+    WNil()         -> nullable_complete(e, acc)
+    WCons(t, rest) -> matches_word_complete(deriv(e, t), rest, deriv_complete(e, t, parikh(rest), rewrite msadd_comm(parikh(rest), singleton(t)) in acc))
+
+  fn add_one_a(k: Nat, b: Nat, c: Nat) -> Equivalent(MS, MkMS(S(k), b, c), msadd(MkMS(k, b, c), singleton(TA()))) = rewrite plus_x_s1(k) in rewrite plus_n_z(b) in rewrite plus_n_z(c) in reflexive(MkMS(S(k), b, c))
+  fn add_one_b(a: Nat, k: Nat, c: Nat) -> Equivalent(MS, MkMS(a, S(k), c), msadd(MkMS(a, k, c), singleton(TB()))) = rewrite plus_n_z(a) in rewrite plus_x_s1(k) in rewrite plus_n_z(c) in reflexive(MkMS(a, S(k), c))
+  fn add_one_c(a: Nat, b: Nat, k: Nat) -> Equivalent(MS, MkMS(a, b, S(k)), msadd(MkMS(a, b, k), singleton(TC()))) = rewrite plus_n_z(a) in rewrite plus_n_z(b) in rewrite plus_x_s1(k) in reflexive(MkMS(a, b, S(k)))
+
+  type MailProgress indices (e: Pat, m: MS)
+    MPDone : Equivalent(B, nullable(e), T) -> MailProgress(e, MkMS(Z(), Z(), Z()))
+    MPStep : (t: Tag) -> (m2: MS) -> Accepts(deriv(e, t), m2) -> MailProgress(e, msadd(m2, singleton(t)))
+
+  fn reliable(e: Pat, m: MS, acc: Accepts(e, m)) -> MailProgress(e, m) = match m
+    MkMS(a, b, c) -> match a
+      S(k) -> rewrite add_one_a(k, b, c) in MPStep(TA(), MkMS(k, b, c), deriv_complete(e, TA(), MkMS(k, b, c), rewrite add_one_a(k, b, c) in acc))
+      Z()  -> match b
+        S(k) -> rewrite add_one_b(Z(), k, c) in MPStep(TB(), MkMS(Z(), k, c), deriv_complete(e, TB(), MkMS(Z(), k, c), rewrite add_one_b(Z(), k, c) in acc))
+        Z()  -> match c
+          S(k) -> rewrite add_one_c(Z(), Z(), k) in MPStep(TC(), MkMS(Z(), Z(), k), deriv_complete(e, TC(), MkMS(Z(), Z(), k), rewrite add_one_c(Z(), Z(), k) in acc))
+          Z()  -> MPDone(nullable_complete(e, acc))
+
+  fn msize(m: MS) -> Nat = match m
+    MkMS(a, b, c) -> plus(plus(a, b), c)
+  fn msize_zero(m: MS, e: Equivalent(Nat, msize(m), Z())) -> Equivalent(MS, m, MkMS(Z(), Z(), Z())) = match m
+    MkMS(a, b, c) -> rewrite plus_zero_l(a, b, plus_zero_l(plus(a, b), c, e)) in rewrite plus_zero_r(a, b, plus_zero_l(plus(a, b), c, e)) in rewrite plus_zero_r(plus(a, b), c, e) in reflexive(MkMS(Z(), Z(), Z()))
+  type Drain indices (e: Pat, m: MS)
+    DrDone : Equivalent(B, nullable(e), T) -> Drain(e, MkMS(Z(), Z(), Z()))
+    DrStep : (t: Tag) -> (m2: MS) -> Drain(deriv(e, t), m2) -> Drain(e, msadd(m2, singleton(t)))
+  fn drain_go(e: Pat, m: MS, n: Nat, acc: Accepts(e, m), sz: Equivalent(Nat, msize(m), n)) -> Drain(e, m) = match n
+    Z()  -> rewrite msize_zero(m, sz) in DrDone(nullable_complete(e, rewrite msize_zero(m, sz) in acc))
+    S(k) -> match m
+      MkMS(a, b, c) -> match a
+        S(a2) -> rewrite add_one_a(a2, b, c) in DrStep(TA(), MkMS(a2, b, c), drain_go(deriv(e, TA()), MkMS(a2, b, c), k, deriv_complete(e, TA(), MkMS(a2, b, c), rewrite add_one_a(a2, b, c) in acc), s_inj(msize(MkMS(a2, b, c)), k, sz)))
+        Z()  -> match b
+          S(b2) -> rewrite add_one_b(Z(), b2, c) in DrStep(TB(), MkMS(Z(), b2, c), drain_go(deriv(e, TB()), MkMS(Z(), b2, c), k, deriv_complete(e, TB(), MkMS(Z(), b2, c), rewrite add_one_b(Z(), b2, c) in acc), s_inj(msize(MkMS(Z(), b2, c)), k, sz)))
+          Z()  -> match c
+            S(c2) -> rewrite add_one_c(Z(), Z(), c2) in DrStep(TC(), MkMS(Z(), Z(), c2), drain_go(deriv(e, TC()), MkMS(Z(), Z(), c2), k, deriv_complete(e, TC(), MkMS(Z(), Z(), c2), rewrite add_one_c(Z(), Z(), c2) in acc), s_inj(msize(MkMS(Z(), Z(), c2)), k, sz)))
+            Z()  -> match sz
+  fn drain(e: Pat, m: MS, acc: Accepts(e, m)) -> Drain(e, m) =
+    drain_go(e, m, msize(m), acc, reflexive(msize(m)))
+end

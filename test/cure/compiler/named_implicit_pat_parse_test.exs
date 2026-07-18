@@ -4,9 +4,11 @@ defmodule Cure.Compiler.NamedImplicitPatParseTest do
   Lean/Idris-style annotation of a constructor's erased implicit index in a
   pattern-argument position, e.g. `vcons({k = .m}, h, r)`.
 
-  Parsing a `{ IDENT = … }` in expression-prefix position produces a
-  `{:named_implicit_pat, meta, name, inner_expr}` node; the inner expression is
-  parsed with the full grammar, so a leading `.` yields a `{:forced_pattern,…}`.
+  Parsing a `{ IDENT = … }` in expression-prefix position produces a canonical
+  `{:named_implicit_pat, [name: name, …], [inner_expr]}` node (the annotated name
+  is data in `meta[:name]`, the inner expression the single child); the inner
+  expression is parsed with the full grammar, so a leading `.` yields a
+  `{:forced_pattern,…}`.
   Using a named-implicit OUTSIDE a pattern is rejected at elaboration with
   `{:named_implicit_not_in_pattern, _}`.
   """
@@ -28,8 +30,9 @@ defmodule Cure.Compiler.NamedImplicitPatParseTest do
     assert {:pattern_match, _, [_scrutinee, arm]} = ast
     assert {:match_arm, ameta, _body} = arm
     assert {:function_call, _cmeta, [arg0, arg1, arg2]} = Keyword.get(ameta, :pattern)
-    assert {:named_implicit_pat, _, "k", inner} = arg0
-    assert {:forced_pattern, _, {:variable, _, "m"}} = inner
+    assert {:named_implicit_pat, nmeta, [inner]} = arg0
+    assert Keyword.get(nmeta, :name) == "k"
+    assert {:forced_pattern, _, [{:variable, _, "m"}]} = inner
     assert {:variable, _, "h"} = arg1
     assert {:variable, _, "r"} = arg2
   end
@@ -41,8 +44,9 @@ defmodule Cure.Compiler.NamedImplicitPatParseTest do
     assert {:pattern_match, _, [_scrutinee, arm]} = ast
     assert {:match_arm, ameta, _body} = arm
     assert {:function_call, _cmeta, [arg0 | _]} = Keyword.get(ameta, :pattern)
-    assert {:named_implicit_pat, _, "k", inner} = arg0
-    assert {:forced_pattern, _, {:function_call, zmeta, []}} = inner
+    assert {:named_implicit_pat, nmeta, [inner]} = arg0
+    assert Keyword.get(nmeta, :name) == "k"
+    assert {:forced_pattern, _, [{:function_call, zmeta, []}]} = inner
     assert Keyword.get(zmeta, :name) == "Z"
   end
 

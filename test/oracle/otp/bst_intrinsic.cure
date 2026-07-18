@@ -1,0 +1,55 @@
+mod BstIntrinsic
+  use Std.Equivalent
+  type Key = Alpha | Beta | Gamma
+  type Bit = No | Yes
+  fn strictLess(x: Key, y: Key) -> Bit = match x
+    Alpha() -> match y
+      Alpha() -> No()
+      Beta() -> Yes()
+      Gamma() -> Yes()
+    Beta() -> match y
+      Alpha() -> No()
+      Beta() -> No()
+      Gamma() -> Yes()
+    Gamma() -> match y
+      Alpha() -> No()
+      Beta() -> No()
+      Gamma() -> No()
+  type Bound = BelowAll | Only(Key) | AboveAll
+  fn boundLess(lo: Bound, hi: Bound) -> Bit = match lo
+    BelowAll() -> match hi
+      BelowAll() -> No()
+      Only(y) -> Yes()
+      AboveAll() -> Yes()
+    Only(x) -> match hi
+      BelowAll() -> No()
+      Only(y) -> strictLess(x, y)
+      AboveAll() -> Yes()
+    AboveAll() -> No()
+  type Trichotomy indices (x: Key, k: Key)
+    TriLess : Equivalent(Bit, strictLess(x, k), Yes()) -> Trichotomy(x, k)
+    TriEqual : Equivalent(Key, x, k) -> Trichotomy(x, k)
+    TriGreater : Equivalent(Bit, strictLess(k, x), Yes()) -> Trichotomy(x, k)
+  fn compareKeys(x: Key, k: Key) -> Trichotomy(x, k) = match x
+    Alpha() -> match k
+      Alpha() -> TriEqual(reflexive(Alpha()))
+      Beta() -> TriLess(reflexive(Yes()))
+      Gamma() -> TriLess(reflexive(Yes()))
+    Beta() -> match k
+      Alpha() -> TriGreater(reflexive(Yes()))
+      Beta() -> TriEqual(reflexive(Beta()))
+      Gamma() -> TriLess(reflexive(Yes()))
+    Gamma() -> match k
+      Alpha() -> TriGreater(reflexive(Yes()))
+      Beta() -> TriGreater(reflexive(Yes()))
+      Gamma() -> TriEqual(reflexive(Gamma()))
+  type SearchTree indices (lo: Bound, hi: Bound)
+    Leaf : Equivalent(Bit, boundLess(lo, hi), Yes()) -> SearchTree(lo, hi)
+    Branch : (k: Key) -> SearchTree(lo, Only(k)) -> SearchTree(Only(k), hi) -> SearchTree(lo, hi)
+  fn insert(lo: Bound, hi: Bound, x: Key, below: Equivalent(Bit, boundLess(lo, Only(x)), Yes()), above: Equivalent(Bit, boundLess(Only(x), hi), Yes()), t: SearchTree(lo, hi)) -> SearchTree(lo, hi) = match t
+    Leaf(pf) -> Branch(x, Leaf(below), Leaf(above))
+    Branch(k, l, r) -> match compareKeys(x, k)
+      TriLess(less) -> Branch(k, insert(lo, Only(k), x, below, less, l), r)
+      TriEqual(eq) -> Branch(k, l, r)
+      TriGreater(greater) -> Branch(k, l, insert(Only(k), hi, x, greater, above, r))
+end

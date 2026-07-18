@@ -24,7 +24,7 @@ defmodule Cure.Elab.DupDefTest do
     end
     """
 
-    assert {:error, {:duplicate_definition, :foo}} = elaborate(src)
+    assert {:error, {:overlapping_overload, :foo, 0}} = elaborate(src)
   end
 
   test "distinct def names in one module still elaborate" do

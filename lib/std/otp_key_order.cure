@@ -1,0 +1,263 @@
+@group(:concurrency)
+mod Std.Otp.KeyOrder
+  use Std.Equivalent
+  ## THE DECIDABLE TOTAL ORDER ON KEYS — the ordering every ordered OTP structure rests on
+  ## (`gb_trees`/`gb_sets`/`Std.Otp.Bst`/`Std.Otp.Gbt` all steer by a key comparison; `ordsets`/
+  ## `orddict` keep keys sorted by it). Those modules USE a comparison but never certify that it is
+  ## actually a total order. This module does: `le` is a decidable relation on the finite key domain
+  ## `OA < OB < OC`, and the four TOTAL-ORDER AXIOMS are proved — reflexivity, totality,
+  ## antisymmetry, transitivity. So the search-tree and sorted-list invariants downstream rest on a
+  ## certified order, not an assumed one.
+  ##
+  ## Everything reduces at proof time because the domain is concrete, so the axioms are finite case
+  ## analyses; impossible premise combinations (an assumed `le` that is actually `OF`) are refuted by
+  ## the uninhabited `OF = OT`.
+
+  type OKey = OA | OB | OC
+  type OBit = OF | OT
+
+  ## `le(a, b)` — is `a ≤ b` in the order `OA < OB < OC`?
+  fn le(a: OKey, b: OKey) -> OBit = match a
+    OA() -> OT()
+    OB() -> match b
+      OA() -> OF()
+      OB() -> OT()
+      OC() -> OT()
+    OC() -> match b
+      OA() -> OF()
+      OB() -> OF()
+      OC() -> OT()
+  fn orb(a: OBit, b: OBit) -> OBit = match a
+    OF() -> b
+    OT() -> OT()
+
+  ## **REFLEXIVITY.** `a ≤ a` for every key.
+  fn le_refl(a: OKey) -> Equivalent(OBit, le(a, a), OT()) = match a
+    OA() -> reflexive(OT())
+    OB() -> reflexive(OT())
+    OC() -> reflexive(OT())
+
+  ## **TOTALITY.** Any two keys are comparable: `a ≤ b` or `b ≤ a` (`or` of the two directions is
+  ## always `OT`). Every pair computes to a true disjunct.
+  fn le_total(a: OKey, b: OKey) -> Equivalent(OBit, orb(le(a, b), le(b, a)), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+
+  ## **ANTISYMMETRY.** `a ≤ b` and `b ≤ a` force `a = b`. On the diagonal the keys are already
+  ## equal; off the diagonal one direction is `OF`, so its assumed-`OT` premise is uninhabited.
+  fn le_antisym(a: OKey, b: OKey, p: Equivalent(OBit, le(a, b), OT()), q: Equivalent(OBit, le(b, a), OT())) -> Equivalent(OKey, a, b) = match a
+    OA() -> match b
+      OA() -> reflexive(OA())
+      OB() -> match q
+      OC() -> match q
+    OB() -> match b
+      OA() -> match p
+      OB() -> reflexive(OB())
+      OC() -> match q
+    OC() -> match b
+      OA() -> match p
+      OB() -> match p
+      OC() -> reflexive(OC())
+
+  ## **TRANSITIVITY.** `a ≤ b` and `b ≤ c` give `a ≤ c`. Casing all three keys: when `a ≤ c` holds
+  ## it computes to `OT` (reflexive); otherwise `a > c`, and then whichever hypothesis is actually
+  ## `OF` (`a > b` refutes `p`, else `b > c` refutes `q`) is uninhabited.
+  fn le_trans(a: OKey, b: OKey, c: OKey, p: Equivalent(OBit, le(a, b), OT()), q: Equivalent(OBit, le(b, c), OT())) -> Equivalent(OBit, le(a, c), OT()) = match a
+    OA() -> match b
+      OA() -> match c
+        OA() -> reflexive(OT())
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OB() -> match c
+        OA() -> reflexive(OT())
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OC() -> match c
+        OA() -> reflexive(OT())
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> match c
+        OA() -> match p
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OB() -> match c
+        OA() -> match q
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OC() -> match c
+        OA() -> match q
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> match c
+        OA() -> match p
+        OB() -> match p
+        OC() -> reflexive(OT())
+      OB() -> match c
+        OA() -> match p
+        OB() -> match p
+        OC() -> reflexive(OT())
+      OC() -> match c
+        OA() -> match q
+        OB() -> match q
+        OC() -> reflexive(OT())
+
+  ## MEET (`kmin`) and JOIN (`kmax`) — the smaller / larger of two keys, steered by `le`. These are
+  ## `gb_sets:smallest`/`largest` and the priority-queue ordering primitive.
+  fn kmin(a: OKey, b: OKey) -> OKey = match le(a, b)
+    OT() -> a
+    OF() -> b
+  fn kmax(a: OKey, b: OKey) -> OKey = match le(a, b)
+    OT() -> b
+    OF() -> a
+
+  ## **MEET / JOIN ARE COMMUTATIVE.** `kmin(a,b) = kmin(b,a)` and `kmax(a,b) = kmax(b,a)` — the
+  ## smaller (larger) of two keys doesn't depend on their order.
+  fn kmin_comm(a: OKey, b: OKey) -> Equivalent(OKey, kmin(a, b), kmin(b, a)) = match a
+    OA() -> match b
+      OA() -> reflexive(OA())
+      OB() -> reflexive(OA())
+      OC() -> reflexive(OA())
+    OB() -> match b
+      OA() -> reflexive(OA())
+      OB() -> reflexive(OB())
+      OC() -> reflexive(OB())
+    OC() -> match b
+      OA() -> reflexive(OA())
+      OB() -> reflexive(OB())
+      OC() -> reflexive(OC())
+  fn kmax_comm(a: OKey, b: OKey) -> Equivalent(OKey, kmax(a, b), kmax(b, a)) = match a
+    OA() -> match b
+      OA() -> reflexive(OA())
+      OB() -> reflexive(OB())
+      OC() -> reflexive(OC())
+    OB() -> match b
+      OA() -> reflexive(OB())
+      OB() -> reflexive(OB())
+      OC() -> reflexive(OC())
+    OC() -> match b
+      OA() -> reflexive(OC())
+      OB() -> reflexive(OC())
+      OC() -> reflexive(OC())
+
+  ## **MEET / JOIN ARE IDEMPOTENT.** `kmin(a,a) = a`, `kmax(a,a) = a`.
+  fn kmin_idem(a: OKey) -> Equivalent(OKey, kmin(a, a), a) = match a
+    OA() -> reflexive(OA())
+    OB() -> reflexive(OB())
+    OC() -> reflexive(OC())
+  fn kmax_idem(a: OKey) -> Equivalent(OKey, kmax(a, a), a) = match a
+    OA() -> reflexive(OA())
+    OB() -> reflexive(OB())
+    OC() -> reflexive(OC())
+
+  ## **MEET IS A LOWER BOUND, JOIN AN UPPER BOUND.** `kmin(a,b) ≤ a` and `≤ b` (the meet is below
+  ## both operands); `a ≤ kmax(a,b)` and `b ≤` (the join is above both). This is what makes `kmin`
+  ## the minimum a priority queue extracts and `kmax` the maximum.
+  fn kmin_lower_l(a: OKey, b: OKey) -> Equivalent(OBit, le(kmin(a, b), a), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+  fn kmin_lower_r(a: OKey, b: OKey) -> Equivalent(OBit, le(kmin(a, b), b), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+  fn kmax_upper_l(a: OKey, b: OKey) -> Equivalent(OBit, le(a, kmax(a, b)), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+  fn kmax_upper_r(a: OKey, b: OKey) -> Equivalent(OBit, le(b, kmax(a, b)), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+
+  ## **MEET IS ASSOCIATIVE.** `kmin(kmin(a,b),c) = kmin(a,kmin(b,c))` — both sides are the least of
+  ## the three keys, so regrouping is irrelevant; with commutativity and idempotence this makes
+  ## `(OKey, kmin)` a meet-semilattice.
+  fn kmin_assoc(a: OKey, b: OKey, c: OKey) -> Equivalent(OKey, kmin(kmin(a, b), c), kmin(a, kmin(b, c))) = match a
+    OA() -> match b
+      OA() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OA())
+        OC() -> reflexive(OA())
+      OB() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OA())
+        OC() -> reflexive(OA())
+      OC() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OA())
+        OC() -> reflexive(OA())
+    OB() -> match b
+      OA() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OA())
+        OC() -> reflexive(OA())
+      OB() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OB())
+        OC() -> reflexive(OB())
+      OC() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OB())
+        OC() -> reflexive(OB())
+    OC() -> match b
+      OA() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OA())
+        OC() -> reflexive(OA())
+      OB() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OB())
+        OC() -> reflexive(OB())
+      OC() -> match c
+        OA() -> reflexive(OA())
+        OB() -> reflexive(OB())
+        OC() -> reflexive(OC())
+end

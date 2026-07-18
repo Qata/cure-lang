@@ -52,4 +52,26 @@ defmodule Cure.Compiler.DependentProofSurfaceTest do
     assert {:error, {:codegen_error, {:conversion_failure, _lhs, _rhs}}} =
              Cure.Compiler.compile_and_load(src, emit_events: false)
   end
+
+  test "rewrite … in parses with `in` on the next line (multi-line chain)" do
+    # A `rewrite … in …` chain may place `in` at the start of the next line at the
+    # same indentation. `rewrite` always requires `in`, so the parser skips the
+    # intervening newline to find it (regression: previously `:expected :in got :newline`).
+    src = """
+    mod ProofRewriteMultiline
+      type Nat = Z | S(Nat)
+      fn plus(m: Nat, n: Nat) -> Nat = match m
+        Z() -> n
+        S(k) -> S(plus(k, n))
+      fn plus_zero_right(n: Nat) -> Equivalent(Nat, plus(n, Z), n) = match n
+        Z() -> reflexive(Z)
+        S(k) ->
+          rewrite plus_zero_right(k)
+          in reflexive(S(k))
+    end
+    """
+
+    assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(mod, :plus_zero_right, [{:S, {:S, :Z}}]) == :reflexive
+  end
 end

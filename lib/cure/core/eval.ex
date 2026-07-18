@@ -91,6 +91,15 @@ defmodule Cure.Core.Eval do
   # Opaque until the global is certified total (M7 gates δ here).
   def eval({:global, name}, _env), do: {:vneutral, {:nglobal, name}}
 
+  # A hole is a STUCK computation — an assumable term the elaborator has not yet
+  # filled — so it evaluates to a neutral keyed by its unique id (first-class
+  # holes, Slice 1). Application of this neutral accumulates a spine via
+  # `apply/2` below, so a hole in argument position (`f(?h)`) no longer crashes
+  # the evaluator. `id` is a globally-distinct string; two DIFFERENT holes stay
+  # non-convertible (`Conv.conv_neutral?` compares ids), which is what keeps a
+  # hole from standing definitionally for another.
+  def eval({:hole, id}, _env), do: {:vneutral, {:nhole, id}}
+
   # Inert effect nodes: map each to its value form and evaluate SUBTERMS only —
   # never the effect structure. In particular `bind` evaluates `e` and `k` and
   # wraps them; it does NOT `apply` `k` to anything, so `bind(pure(a), k)` never

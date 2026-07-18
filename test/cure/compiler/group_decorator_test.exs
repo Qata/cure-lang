@@ -41,7 +41,7 @@ defmodule Cure.Compiler.GroupDecoratorTest do
   test "@group above mod attaches the group to the module container meta" do
     ast = parse!("@group(:core)\nmod M\n  fn f(x: Int) -> Int = x\nend\n")
     {:container, meta, _body} = module_node(ast)
-    assert {:group, [{:literal, _, :core}]} = Keyword.get(meta, :decorator)
+    assert {:decorator, [name: :group], [{:literal, _, :core}]} = Keyword.get(meta, :decorator)
   end
 
   test "@group inside the mod body is tolerated (deprecated), not a hard error" do

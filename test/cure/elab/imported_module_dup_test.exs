@@ -70,7 +70,7 @@ defmodule Cure.Elab.ImportedModuleDupTest do
 
   test "a duplicate fn name inside an imported module is rejected, not kept last-wins" do
     src = "mod P\n  use Std.DupFn\n  fn f() -> Int = foo()\nend\n"
-    assert {:error, {:duplicate_definition, :foo}} = elaborate(src)
+    assert {:error, {:overlapping_overload, :foo, 0}} = elaborate(src)
   end
 
   test "a duplicate type name inside an imported module is rejected, not kept last-wins" do

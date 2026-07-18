@@ -1,0 +1,137 @@
+@group(:concurrency)
+mod Std.Otp.RecursiveAdequacy
+  ## RECURSIVE-behaviour COVERAGE (build-out map B2 / BRec): every tag a recursive behaviour
+  ## sends is a member of its inferred fixed-point interface. This is the recursion analogue of
+  ## `Std.Otp.InferenceAdequacy.coverage`, closing the loop between the syntax-derived transfer
+  ## (`Std.Otp.RecursiveTransfer`) and operational safety.
+  ##
+  ## `RSendsIn(body, t)` locates a DIRECT send of `t` in the body (recursion-variable positions
+  ## contribute nothing here — their sends are accounted for by the fixed point). `tset_covers`
+  ## proves such a send sets `t`'s bit in the transfer's output for ANY assumed interface `i`
+  ## (a send forces its bit regardless of what the recursion variable stands for). Instantiating
+  ## `i` at the inferred interface `rec_infer(body)` and pushing through the fixed-point witness
+  ## `rec_fixed` (`tset(body, infer) ⊑ infer`) via `getb_mono` gives `brec_covers`: the send tag
+  ## is set in `infer` itself.
+  ##
+  ## Coverage is stated in `getb = T` (bit-set) form, which lives entirely in the finite lattice;
+  ## `Std.Otp.InterfaceBridge.denote_complete` is the already-proven step that turns `getb = T`
+  ## into `Handles(t, denote(infer))` for the `TagList` adequacy proof.
+
+  use Std.Otp.FiniteFixpoint
+  use Std.Otp.RecursiveTransfer
+  use Std.Otp.InterfaceBridge
+
+  ## `getb`, `getb_mono`, `denote`, and `denote_complete` come from `Std.Otp.InterfaceBridge`
+  ## over its canonical `Tag`; only the `setbit`/`join` coverage lemmas are new here.
+
+  ## Setting a bit sets it; setting one bit preserves any other already-set bit.
+  fn getb_setbit_here(t: Tag, x: IF) -> Equivalent(B, getb(setbit(t, x), t), T) = match t
+    TA() -> match x
+      MkIF(a, b, c) -> reflexive(T)
+    TB() -> match x
+      MkIF(a, b, c) -> reflexive(T)
+    TC() -> match x
+      MkIF(a, b, c) -> reflexive(T)
+  fn getb_setbit_preserve(s: Tag, t: Tag, x: IF, e: Equivalent(B, getb(x, t), T)) -> Equivalent(B, getb(setbit(s, x), t), T) = match s
+    TA() -> match t
+      TA() -> match x
+        MkIF(a, b, c) -> reflexive(T)
+      TB() -> match x
+        MkIF(a, b, c) -> e
+      TC() -> match x
+        MkIF(a, b, c) -> e
+    TB() -> match t
+      TA() -> match x
+        MkIF(a, b, c) -> e
+      TB() -> match x
+        MkIF(a, b, c) -> reflexive(T)
+      TC() -> match x
+        MkIF(a, b, c) -> e
+    TC() -> match t
+      TA() -> match x
+        MkIF(a, b, c) -> e
+      TB() -> match x
+        MkIF(a, b, c) -> e
+      TC() -> match x
+        MkIF(a, b, c) -> reflexive(T)
+
+  ## A tag set on either side of a `join` is set in the join.
+  fn getb_join_left(x: IF, y: IF, t: Tag, e: Equivalent(B, getb(x, t), T)) -> Equivalent(B, getb(join(x, y), t), T) = match t
+    TA() -> match x
+      MkIF(a, b, c) -> match y
+        MkIF(a2, b2, c2) -> match a
+          F() -> match e
+          T() -> reflexive(T)
+    TB() -> match x
+      MkIF(a, b, c) -> match y
+        MkIF(a2, b2, c2) -> match b
+          F() -> match e
+          T() -> reflexive(T)
+    TC() -> match x
+      MkIF(a, b, c) -> match y
+        MkIF(a2, b2, c2) -> match c
+          F() -> match e
+          T() -> reflexive(T)
+  fn getb_join_right(x: IF, y: IF, t: Tag, e: Equivalent(B, getb(y, t), T)) -> Equivalent(B, getb(join(x, y), t), T) = match t
+    TA() -> match x
+      MkIF(a, b, c) -> match y
+        MkIF(a2, b2, c2) -> match a
+          F() -> match a2
+            F() -> match e
+            T() -> reflexive(T)
+          T() -> reflexive(T)
+    TB() -> match x
+      MkIF(a, b, c) -> match y
+        MkIF(a2, b2, c2) -> match b
+          F() -> match b2
+            F() -> match e
+            T() -> reflexive(T)
+          T() -> reflexive(T)
+    TC() -> match x
+      MkIF(a, b, c) -> match y
+        MkIF(a2, b2, c2) -> match c
+          F() -> match c2
+            F() -> match e
+            T() -> reflexive(T)
+          T() -> reflexive(T)
+
+  ## `RSendsIn(body, t)` — the body has a DIRECT send of tag `t` (no recursion-variable case:
+  ## `RVar`'s sends are folded into the fixed point).
+  type RSendsIn indices (body: RBody, t: Tag)
+    RSHere  : RSendsIn(RSend(t, k), t)
+    RSSendK : RSendsIn(k, t) -> RSendsIn(RSend(y, k), t)
+    RSRecvK : RSendsIn(k, t) -> RSendsIn(RRecv(y, k), t)
+    RSSeqL  : RSendsIn(l, t) -> RSendsIn(RSeq(l, r), t)
+    RSSeqR  : RSendsIn(r, t) -> RSendsIn(RSeq(l, r), t)
+
+  ## **TRANSFER COVERAGE.** A direct send of `t` sets `t`'s bit in `tset(body, i)` for any `i`.
+  ## Eliminate the send evidence, then match the refined body to expose the field binders; each
+  ## constructor reduces the transfer to a `setbit`/`join` whose coverage lemma applies.
+  fn tset_covers(body: RBody, i: IF, t: Tag, sends: RSendsIn(body, t)) -> Equivalent(B, getb(tset(body, i), t), T) = match sends
+    RSHere()    -> match body
+      RSend(t2, k) -> getb_setbit_here(t2, tset(k, i))
+    RSSendK(s2) -> match body
+      RSend(y, k)  -> getb_setbit_preserve(y, t, tset(k, i), tset_covers(k, i, t, s2))
+    RSRecvK(s2) -> match body
+      RRecv(y, k)  -> getb_setbit_preserve(y, t, tset(k, i), tset_covers(k, i, t, s2))
+    RSSeqL(s2)  -> match body
+      RSeq(l, r)   -> getb_join_left(tset(l, i), tset(r, i), t, tset_covers(l, i, t, s2))
+    RSSeqR(s2)  -> match body
+      RSeq(l, r)   -> getb_join_right(tset(l, i), tset(r, i), t, tset_covers(r, i, t, s2))
+
+  ## **BREC COVERAGE.** Every tag a recursive behaviour sends is a member of its inferred
+  ## fixed-point interface. Coverage at the inferred interface, carried through the fixed-point
+  ## witness `rec_fixed` (`tset(body, infer) ⊑ infer`) by `getb_mono`. The recursion-closed
+  ## analogue of first-order `coverage` — inference stays sound under recursion.
+  fn brec_covers(body: RBody, t: Tag, sends: RSendsIn(body, t)) -> Equivalent(B, getb(rec_infer(body), t), T) =
+    getb_mono(tset(body, rec_infer(body)), rec_infer(body), rec_fixed(body), t,
+              tset_covers(body, rec_infer(body), t, sends))
+
+  ## **BREC COVERAGE, IN MEMBERSHIP FORM.** The tag a recursive behaviour sends is `Handles`-ed
+  ## by the `denote`d inferred interface — the shape the `TagList` adequacy proof
+  ## (`Std.Otp.InferenceAdequacy`) consumes. `brec_covers` in bit-set form, bridged by
+  ## `Std.Otp.InterfaceBridge.denote_complete`. This is `infer(BRec)`'s coverage stated exactly
+  ## as the first-order `coverage` states it, now closed under recursion.
+  fn brec_handles(body: RBody, t: Tag, sends: RSendsIn(body, t)) -> Handles(t, denote(rec_infer(body))) =
+    denote_complete(rec_infer(body), t, brec_covers(body, t, sends))
+end

@@ -49,7 +49,9 @@ defmodule Cure.Elab.HoleTest do
 
     assert {:ok, env} = elaborate_all(src)
     assert %{name: :sketch, body: body} = Env.get_def(env, :sketch)
-    # The hole survives to the Core body (so codegen can refuse to emit it).
-    assert {:hole, "body"} = unwrap_lams(body)
+    # The hole survives to the Core body (so codegen can refuse to emit it),
+    # carrying a unique id derived from its `?body` name (first-class holes).
+    assert {:hole, id} = unwrap_lams(body)
+    assert String.contains?(id, "body")
   end
 end

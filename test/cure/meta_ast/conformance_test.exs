@@ -6,11 +6,8 @@ defmodule Cure.MetaAST.ConformanceTest do
   # A canonical leaf node used as a stand-in subterm throughout.
   defp var(name), do: {:variable, [scope: :local], name}
 
-  describe "compliant AST (the C2 target shape)" do
-    test "a node with only scalars in meta and every subterm in children is conformant" do
-      # This is exactly the invariant's end-state: meta holds line/col/scope, and
-      # scrutinee + arms + their patterns/bodies all live in children as wrapper
-      # nodes. `pattern_match` in the real tree already looks like this.
+  describe "conformant AST (a node in meta is legal under decision D)" do
+    test "scalars in meta and subterms in children is conformant" do
       ast =
         {:pattern_match, [line: 1, col: 1],
          [
@@ -24,7 +21,17 @@ defmodule Cure.MetaAST.ConformanceTest do
 
       assert Conformance.conformant?(ast)
       assert Conformance.violations(ast) == []
-      assert Conformance.violation_buckets(ast) == MapSet.new()
+      assert Conformance.meta_nonnodes(ast) == []
+    end
+
+    test "a canonical node parked in a meta value is NOT a structural violation" do
+      # This is the whole point of Option D: `param` keeps its type in meta and the
+      # walker will descend it. No :bad_shape / :node_child here.
+      ast = {:param, [type: var("Nat")], ["x"]}
+
+      assert Conformance.conformant?(ast)
+      assert Conformance.violations(ast) == []
+      assert Conformance.meta_nonnodes(ast) == []
     end
 
     test "primitives and empty children are conformant" do
@@ -35,52 +42,60 @@ defmodule Cure.MetaAST.ConformanceTest do
     end
   end
 
-  describe ":node_in_meta — canonical node hiding a subterm in meta" do
-    test "param with its type parked under :type" do
-      ast = {:param, [type: var("Nat")], "x"}
-
-      assert [%{kind: :node_in_meta, tag: :param, key: :type}] = Conformance.violations(ast)
-      refute Conformance.conformant?(ast)
+  describe "INV-C.2 — the node-tag vocabulary reached in meta" do
+    test "a node stored under a meta key is collected by tag" do
+      ast = {:param, [type: var("Nat")], ["x"]}
+      assert Conformance.meta_node_tags(ast) == MapSet.new([:variable])
     end
 
-    test "function_def flags both :params and :return_type, not the scalars" do
-      ast =
-        {:function_def,
-         [
-           return_type: var("Nat"),
-           name: "f",
-           params: [{:param, [], ["x"]}],
-           visibility: :public,
-           arity: 1,
-           line: 1,
-           col: 3
-         ], [var("x")]}
+    test "nodes nested deeper in meta are all collected" do
+      # param whose type is a function_call over two variables, all in meta.
+      ty = {:function_call, [callee: var("Vec")], [var("n"), var("a")]}
+      ast = {:param, [type: ty], ["x"]}
 
-      buckets = Conformance.violation_buckets(ast)
-      assert MapSet.member?(buckets, {:node_in_meta, :function_def, :return_type})
-      assert MapSet.member?(buckets, {:node_in_meta, :function_def, :params})
-      # name/visibility/arity/line/col are scalars — never flagged.
-      refute Enum.any?(Conformance.violations(ast), &(&1.key in [:name, :visibility, :arity, :line, :col]))
+      assert Conformance.meta_node_tags(ast) ==
+               MapSet.new([:function_call, :variable])
     end
 
-    test "match_arm with its pattern in meta" do
-      ast = {:match_arm, [pattern: var("Pat")], [var("body")]}
-      assert [%{kind: :node_in_meta, tag: :match_arm, key: :pattern}] = Conformance.violations(ast)
+    test "a node's own subterms in CHILDREN do not count as meta tags" do
+      # The scrutinee/arm live in children — not reached via a meta value — so they
+      # are not part of the meta vocabulary.
+      ast = {:pattern_match, [line: 1], [var("x")]}
+      assert Conformance.meta_node_tags(ast) == MapSet.new()
     end
 
-    test "a subterm nested deeper in meta is still reached" do
-      # param whose type is itself a node with a further node in ITS meta.
-      inner = {:param, [type: var("Bool")], "y"}
-      ast = {:outer, [thing: inner], []}
-
-      buckets = Conformance.violation_buckets(ast)
-      assert MapSet.member?(buckets, {:node_in_meta, :outer, :thing})
-      assert MapSet.member?(buckets, {:node_in_meta, :param, :type})
+    test "scalars in meta contribute no tags" do
+      ast = {:thing, [name: "f", scope: :local, arity: 2], [var("x")]}
+      assert Conformance.meta_node_tags(ast) == MapSet.new()
     end
   end
 
-  describe ":bad_shape — non-canonical tuple that hides a node" do
-    test "named_implicit_pat (4-tuple)" do
+  describe "INV-C.1 — guard-matching non-nodes in meta (must be empty)" do
+    test "a keyword-headed node in meta is a genuine node, not a danger" do
+      ast = {:param, [type: var("Nat")], ["x"]}
+      assert Conformance.meta_nonnodes(ast) == []
+    end
+
+    test "a {atom, non-keyword-list, _} tuple in meta is flagged as a danger" do
+      # `{:weird, [1, 2, 3], :x}` matches Metastatic's `is_list`-second descent guard
+      # but is not a canonical node — descending it would treat opaque data as a
+      # subterm. INV-C.1 catches it.
+      ast = {:param, [type: {:weird, [1, 2, 3], :x}], ["p"]}
+
+      assert [%{tag: :weird, node: {:weird, [1, 2, 3], :x}}] = Conformance.meta_nonnodes(ast)
+    end
+
+    test "opaque data with a non-list second element is safe (no danger)" do
+      # MFA / group_ref shapes have an atom second element, so the guard never enters
+      # them — they are legitimate opaque leaves in meta.
+      ast = {:extern, [target: {:erlang, :length, 1}, ref: {:group_ref, :core, 1}], ["x"]}
+      assert Conformance.meta_nonnodes(ast) == []
+      assert Conformance.conformant?(ast)
+    end
+  end
+
+  describe "INV-A — :bad_shape (non-canonical tuple hiding a node), meta or children" do
+    test "named_implicit_pat (4-tuple) in a child slot" do
       ast = {:named_implicit_pat, [line: 1], "k", var("m")}
       assert [%{kind: :bad_shape, tag: :named_implicit_pat, arity: 4}] = Conformance.violations(ast)
     end
@@ -90,22 +105,25 @@ defmodule Cure.MetaAST.ConformanceTest do
       assert [%{kind: :bad_shape, tag: :named_dom, arity: 3}] = Conformance.violations(ast)
     end
 
-    test "arrow_chain (2-tuple)" do
-      ast = {:arrow_chain, [var("A"), var("B")]}
-      assert [%{kind: :bad_shape, tag: :arrow_chain, arity: 2}] = Conformance.violations(ast)
-    end
+    test "arrow_chain / group / builtin (2-tuples)" do
+      assert [%{kind: :bad_shape, tag: :arrow_chain, arity: 2}] =
+               Conformance.violations({:arrow_chain, [var("A"), var("B")]})
 
-    test "group and builtin (2-tuples)" do
       assert [%{kind: :bad_shape, tag: :group}] = Conformance.violations({:group, [var("x")]})
       assert [%{kind: :bad_shape, tag: :builtin}] = Conformance.violations({:builtin, var("Int")})
     end
+
+    test "a bad_shape tuple hiding a node inside a META value is still flagged" do
+      # INV-A applies in meta too: a decorator holding a `{:group, [node]}` hides its
+      # subterm from the walker regardless of slot.
+      ast = {:container, [decorator: {:group, [var("x")]}], [var("body")]}
+
+      assert MapSet.member?(Conformance.violation_buckets(ast), {:bad_shape, :group, nil})
+    end
   end
 
-  describe ":node_child — canonical node whose children slot is a bare node" do
+  describe "INV-B — :node_child (canonical node whose children slot is a bare node)" do
     test "a single node in the children slot instead of a one-element list" do
-      # Metastatic's traverse_children only recurses `is_list` children; a bare
-      # node in the slot hits the fallback and is passed through as a leaf, so its
-      # whole subtree is lost. The invariant is that children is ALWAYS a list.
       ast = {:wrapper, [line: 1], var("inner")}
 
       assert [%{kind: :node_child, tag: :wrapper, key: nil}] = Conformance.violations(ast)
@@ -113,22 +131,17 @@ defmodule Cure.MetaAST.ConformanceTest do
     end
 
     test "gadt_ctor's bare arrow_chain child is a non-list children slot" do
-      # gadt_ctor is canonical, but its children slot holds a bare arrow_chain
-      # tuple, not a list — so the whole constructor domain chain is lost. Flagged
-      # at the parent (its children must be a list), NOT as a bad_shape arrow_chain.
       ast = {:gadt_ctor, [name: "C"], {:arrow_chain, [var("A"), var("B")]}}
-
       assert [%{kind: :node_child, tag: :gadt_ctor, key: nil}] = Conformance.violations(ast)
     end
 
-    test "the subterms under a bare-node child are still descended for deeper defects" do
-      # wrapper's child is a bare arrow_chain whose domain is itself a param with a
-      # type parked in meta — the node_child flag does not stop the walk.
-      ast = {:wrapper, [], {:arrow_chain, [{:param, [type: var("A")], "x"}]}}
+    test "subterms under a bare-node child are still descended for deeper defects" do
+      ast = {:wrapper, [], {:arrow_chain, [{:another, [], var("x")}]}}
 
       buckets = Conformance.violation_buckets(ast)
       assert MapSet.member?(buckets, {:node_child, :wrapper, nil})
-      assert MapSet.member?(buckets, {:node_in_meta, :param, :type})
+      # the inner :another also has a bare-node child — reached despite the outer flag
+      assert MapSet.member?(buckets, {:node_child, :another, nil})
     end
   end
 
@@ -148,14 +161,7 @@ defmodule Cure.MetaAST.ConformanceTest do
       assert Conformance.conformant?({:doc_comment, "doc", 1})
     end
 
-    test "meta scalars do not trip the node_in_meta gate" do
-      ast = {:thing, [name: "f", scope: :local, subtype: :integer, arity: 2], [var("x")]}
-      assert Conformance.conformant?(ast)
-    end
-
     test "a leaf node's scalar value in the children slot is not a node_child" do
-      # variable/literal legitimately carry a non-list scalar in the children slot;
-      # it hides no node, so the node_child gate must not fire.
       assert Conformance.conformant?({:variable, [scope: :local], "x"})
       assert Conformance.conformant?({:literal, [subtype: :integer], 42})
     end
@@ -166,33 +172,33 @@ defmodule Cure.MetaAST.ConformanceTest do
     end
   end
 
-  describe "mixed AST and reporting" do
+  describe "reporting" do
     test "violation_buckets collapses repeated occurrences to distinct buckets" do
       ast =
         {:mod, [],
          [
-           {:param, [type: var("A")], "x"},
-           {:param, [type: var("B")], "y"},
-           {:match_arm, [pattern: var("P")], [var("b")]}
+           {:wrapper, [], var("x")},
+           {:wrapper, [], var("y")},
+           {:group, [var("z")]}
          ]}
 
       assert Conformance.violation_buckets(ast) ==
                MapSet.new([
-                 {:node_in_meta, :param, :type},
-                 {:node_in_meta, :match_arm, :pattern}
+                 {:node_child, :wrapper, nil},
+                 {:bad_shape, :group, nil}
                ])
     end
 
-    test "describe renders both kinds" do
+    test "describe renders both structural kinds" do
       ast =
         {:mod, [],
          [
-           {:param, [type: var("A")], "x"},
+           {:wrapper, [], var("x")},
            {:arrow_chain, [var("A"), var("B")]}
          ]}
 
       out = ast |> Conformance.violations() |> Conformance.describe()
-      assert out =~ "node_in_meta"
+      assert out =~ "node_child"
       assert out =~ "bad_shape"
       assert Conformance.describe([]) == "no MetaAST-conformance violations"
     end
@@ -201,14 +207,14 @@ defmodule Cure.MetaAST.ConformanceTest do
   describe "against the real parser" do
     alias Cure.Compiler.{Lexer, Parser}
 
-    test "a parsed function surfaces param :type, function_def :params/:return_type" do
+    test "a parsed function's type positions land in the meta vocabulary, not as violations" do
       {:ok, toks} = Lexer.tokenize("mod M\n  fn f(x: Nat) -> Nat = x\n", emit_events: false)
       {:ok, ast} = Parser.parse(toks, emit_events: false)
 
-      buckets = Conformance.violation_buckets(ast)
-      assert MapSet.member?(buckets, {:node_in_meta, :param, :type})
-      assert MapSet.member?(buckets, {:node_in_meta, :function_def, :params})
-      assert MapSet.member?(buckets, {:node_in_meta, :function_def, :return_type})
+      # Nat (param type + return type) is a :variable node reached in meta.
+      assert MapSet.member?(Conformance.meta_node_tags(ast), :variable)
+      # and it is sound: no guard-matching non-node in meta.
+      assert Conformance.meta_nonnodes(ast) == []
     end
   end
 end

@@ -1,0 +1,124 @@
+@group(:concurrency)
+mod Std.Otp.Tree
+  use Std.Equivalent
+  ## BINARY TREE — the structure backing Erlang's `gb_trees` / `gb_sets` (general balanced trees).
+  ## This module proves the STRUCTURAL laws of the tree shape, needing no key comparison: `mirror`
+  ## (swap every node's left and right subtrees) is an INVOLUTION, and mirroring PRESERVES the node
+  ## count. The size law turns on commutativity of addition — mirroring swaps the two subtrees, so
+  ## their sizes are summed in the opposite order.
+
+  type Tree = Leaf | Node(Tree, Nat, Tree)
+
+  fn add(m: Nat, n: Nat) -> Nat = match m
+    Z()  -> n
+    S(k) -> S(add(k, n))
+
+  ## Reflect the tree: at every node, swap the left and right subtrees.
+  fn mirror(t: Tree) -> Tree = match t
+    Leaf()        -> Leaf()
+    Node(l, v, r) -> Node(mirror(r), v, mirror(l))
+
+  ## The node count.
+  fn size(t: Tree) -> Nat = match t
+    Leaf()        -> Z()
+    Node(l, v, r) -> S(add(size(l), size(r)))
+
+  ## Congruences.
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+  fn add_cong({a1: Nat}, {b1: Nat}, {a2: Nat}, {b2: Nat}, ea: Equivalent(Nat, a1, b1), eb: Equivalent(Nat, a2, b2)) -> Equivalent(Nat, add(a1, a2), add(b1, b2)) =
+    rewrite ea in rewrite eb in reflexive(add(b1, b2))
+  fn node_cong({l1: Tree}, {l2: Tree}, v: Nat, {r1: Tree}, {r2: Tree}, el: Equivalent(Tree, l1, l2), er: Equivalent(Tree, r1, r2)) -> Equivalent(Tree, Node(l1, v, r1), Node(l2, v, r2)) =
+    rewrite el in rewrite er in reflexive(Node(l2, v, r2))
+
+  ## Nat commutativity (mirror swaps subtrees, so the size proof needs it).
+  fn add_zero_r(x: Nat) -> Equivalent(Nat, add(x, Z()), x) = match x
+    Z()  -> reflexive(Z())
+    S(k) -> snat_cong(add_zero_r(k))
+  fn add_succ_r(x: Nat, y: Nat) -> Equivalent(Nat, add(x, S(y)), S(add(x, y))) = match x
+    Z()  -> reflexive(S(y))
+    S(k) -> snat_cong(add_succ_r(k, y))
+  fn add_comm(x: Nat, y: Nat) -> Equivalent(Nat, add(x, y), add(y, x)) = match x
+    Z()  -> sym(add_zero_r(y))
+    S(k) -> trans(snat_cong(add_comm(k, y)), sym(add_succ_r(y, k)))
+
+  ## **MIRROR IS AN INVOLUTION.** Reflecting a tree twice returns the original — `mirror(mirror(t))
+  ## = t`. Induction: each node's subtrees are swapped and swapped back, and by the hypothesis each
+  ## is restored.
+  fn mirror_involution(t: Tree) -> Equivalent(Tree, mirror(mirror(t)), t) = match t
+    Leaf()        -> reflexive(Leaf())
+    Node(l, v, r) -> node_cong(v, mirror_involution(l), mirror_involution(r))
+
+  ## **MIRROR PRESERVES SIZE.** Reflecting a tree does not change its node count — `size(mirror(t))
+  ## = size(t)`. Induction; at a node, `mirror` swaps the subtrees so their sizes add in the other
+  ## order, closed by `add_comm`.
+  fn size_mirror(t: Tree) -> Equivalent(Nat, size(mirror(t)), size(t)) = match t
+    Leaf()        -> reflexive(Z())
+    Node(l, v, r) -> snat_cong(trans(add_cong(size_mirror(r), size_mirror(l)), add_comm(size(r), size(l))))
+
+  ## A node-value list (the in-order traversal), with its `append`/`reverse` algebra.
+  type TList = TNil | TCons(Nat, TList)
+  fn lapp(xs: TList, ys: TList) -> TList = match xs
+    TNil()      -> ys
+    TCons(h, t) -> TCons(h, lapp(t, ys))
+  fn lrev(xs: TList) -> TList = match xs
+    TNil()      -> TNil()
+    TCons(h, t) -> lapp(lrev(t), TCons(h, TNil()))
+  fn tcons_cong(h: Nat, {a: TList}, {b: TList}, e: Equivalent(TList, a, b)) -> Equivalent(TList, TCons(h, a), TCons(h, b)) =
+    rewrite e in reflexive(TCons(h, b))
+  fn lapp_cong(c: TList, {a: TList}, {b: TList}, e: Equivalent(TList, a, b)) -> Equivalent(TList, lapp(a, c), lapp(b, c)) =
+    rewrite e in reflexive(lapp(b, c))
+  fn lapp_cong2({a1: TList}, {b1: TList}, {a2: TList}, {b2: TList}, e1: Equivalent(TList, a1, b1), e2: Equivalent(TList, a2, b2)) -> Equivalent(TList, lapp(a1, a2), lapp(b1, b2)) =
+    rewrite e1 in rewrite e2 in reflexive(lapp(b1, b2))
+  fn lapp_assoc(xs: TList, ys: TList, zs: TList) -> Equivalent(TList, lapp(lapp(xs, ys), zs), lapp(xs, lapp(ys, zs))) = match xs
+    TNil()      -> reflexive(lapp(ys, zs))
+    TCons(h, t) -> tcons_cong(h, lapp_assoc(t, ys, zs))
+  fn lapp_nil_r(xs: TList) -> Equivalent(TList, lapp(xs, TNil()), xs) = match xs
+    TNil()      -> reflexive(TNil())
+    TCons(h, t) -> tcons_cong(h, lapp_nil_r(t))
+
+  ## `reverse` is an ANTIHOMOMORPHISM for `append`: `reverse(xs ++ ys) = reverse(ys) ++ reverse(xs)`.
+  fn lrev_app(xs: TList, ys: TList) -> Equivalent(TList, lrev(lapp(xs, ys)), lapp(lrev(ys), lrev(xs))) = match xs
+    TNil()      -> sym(lapp_nil_r(lrev(ys)))
+    TCons(h, t) -> trans(lapp_cong(TCons(h, TNil()), lrev_app(t, ys)), lapp_assoc(lrev(ys), lrev(t), TCons(h, TNil())))
+
+  ## Reduction-bridge lemmas: these hold DEFINITIONALLY (`reflexive`), but stated as explicit
+  ## equalities so a `trans`/`cong` chain — whose implicit unification does NOT δ-reduce — can use
+  ## them as syntactic steps.
+  fn lrev_cons(v: Nat, xs: TList) -> Equivalent(TList, lrev(TCons(v, xs)), lapp(lrev(xs), TCons(v, TNil()))) =
+    reflexive(lapp(lrev(xs), TCons(v, TNil())))
+  fn lapp_cons(v: Nat, xs: TList) -> Equivalent(TList, lapp(TCons(v, TNil()), xs), TCons(v, xs)) =
+    reflexive(TCons(v, xs))
+
+  ## In-order traversal of the tree.
+  fn flatten(t: Tree) -> TList = match t
+    Leaf()        -> TNil()
+    Node(l, v, r) -> lapp(flatten(l), TCons(v, flatten(r)))
+
+  ## **MIRROR REVERSES THE IN-ORDER TRAVERSAL.** `flatten(mirror(t)) = reverse(flatten(t))` — since
+  ## `mirror` swaps left and right everywhere, walking the reflected tree left-to-right visits the
+  ## nodes in the exact reverse order. Induction on `t`; the node case rewrites the traversal with
+  ## the IHs and re-associates via `lrev_app` + `lapp_assoc`, bridging the definitional reductions
+  ## explicitly (`lrev_cons`/`lapp_cons`).
+  fn flatten_mirror(t: Tree) -> Equivalent(TList, flatten(mirror(t)), lrev(flatten(t))) = match t
+    Leaf()        -> reflexive(TNil())
+    Node(l, v, r) -> trans(lapp_cong2(flatten_mirror(r), trans(tcons_cong(v, flatten_mirror(l)), sym(lapp_cons(v, lrev(flatten(l)))))), sym(trans(lrev_app(flatten(l), TCons(v, flatten(r))), trans(lapp_cong(lrev(flatten(l)), lrev_cons(v, flatten(r))), lapp_assoc(lrev(flatten(r)), TCons(v, TNil()), lrev(flatten(l)))))))
+
+  ## List length (named `llen` to avoid an ambient collision), distributing over `lapp` as `add`.
+  fn llen(xs: TList) -> Nat = match xs
+    TNil()      -> Z()
+    TCons(h, t) -> S(llen(t))
+  fn llen_cons(v: Nat, xs: TList) -> Equivalent(Nat, llen(TCons(v, xs)), S(llen(xs))) =
+    reflexive(S(llen(xs)))
+  fn llen_app(xs: TList, ys: TList) -> Equivalent(Nat, llen(lapp(xs, ys)), add(llen(xs), llen(ys))) = match xs
+    TNil()      -> reflexive(llen(ys))
+    TCons(h, t) -> snat_cong(llen_app(t, ys))
+
+  ## **SIZE = TRAVERSAL LENGTH.** The tree's node count equals the length of its in-order traversal:
+  ## `size(t) = length(flatten(t))`. So `flatten` visits every node exactly once — the two measures
+  ## agree. Induction; the node case uses `llen_app` (length distributes over `++`) and `add_succ_r`
+  ## to move the root's `S` through the sum.
+  fn size_flatten(t: Tree) -> Equivalent(Nat, llen(flatten(t)), size(t)) = match t
+    Leaf()        -> reflexive(Z())
+    Node(l, v, r) -> trans(llen_app(flatten(l), TCons(v, flatten(r))), trans(add_cong(size_flatten(l), trans(llen_cons(v, flatten(r)), snat_cong(size_flatten(r)))), add_succ_r(size(l), size(r))))
+end

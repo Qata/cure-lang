@@ -199,8 +199,7 @@ defmodule Cure.Compiler.WithParseTest do
   test "`actor Name with Payload` preserves the payload in transparent syntax" do
     src = """
     actor Counter with 0
-      on_message
-        (:inc, n) -> n + 1
+      fn initial_state() -> Int = 0
     """
 
     assert {:ok, ast} = parse(src)
@@ -216,6 +215,52 @@ defmodule Cure.Compiler.WithParseTest do
              {:function_def, fn_meta, _body} -> Keyword.get(fn_meta, :name) == "start_link"
              _ -> false
            end)
+  end
+
+  # The test above only checks the PARSE-level AST for `start_link` (always
+  # present via the template itself); it never checks that the user's own
+  # `body` declaration (`initial_state`) survives, nor that the actor actually
+  # compiles and runs. The `Declarations until dedent` body-splice mechanism
+  # (rule 212 in Std.Actor's `ActorContainers`) is what carries that body
+  # through; pin its real, end-to-end claim here. Note: the raw
+  # `becomes lift module name` template requires an already-qualified
+  # `Cure.`-prefixed name (a pre-existing, unrelated convention — see
+  # `qualify_module_name`/`macro_module_marker` in parser.ex), so this uses a
+  # qualified name rather than the bare "Counter" above.
+  test "`actor Name with Payload <body>` compiles and the spliced body fn is callable" do
+    src = """
+    actor Cure.Generated.WithBodySpliceProbe with 0
+      fn initial_state() -> Int = 0
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(module, :initial_state, []) == 0
+  end
+
+  # An EMPTY body must splice nothing rather than crash the `{:declarations_block,
+  # _, stmts}` -> `{:raw_splice, stmts}` mechanism (rule 212: `stmts == []`).
+  test "`actor Name with Payload` with an empty body compiles (empty splice, no crash)" do
+    src = """
+    actor Cure.Generated.WithEmptyBodySpliceProbe with 0
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(src, emit_events: false)
+  end
+
+  # A body with MULTIPLE declarations must splice all of them flat into the
+  # enclosing declarations list (rule 224, the bare/no-`with` form).
+  test "bare `actor Name <body>` splices multiple body declarations flat and all are callable" do
+    src = """
+    actor Cure.Generated.BareMultiDeclSpliceProbe
+      fn a() -> Int = 1
+      fn b() -> Int = 2
+      fn c() -> Int = 3
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(module, :a, []) == 1
+    assert apply(module, :b, []) == 2
+    assert apply(module, :c, []) == 3
   end
 
   # ---- Multiple-with surface sugar -----------------------------------------
