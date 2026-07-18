@@ -7328,6 +7328,24 @@ defmodule Cure.Compiler.Parser do
   defp parse_type_arrow(state) do
     token = peek(state)
 
+    # A `fn(y) -> …` LAMBDA literal appearing in a dependent index/term position
+    # (e.g. `Equivalent(Eff, bind(m, fn(y) -> Pure(y)), m)`). `fn` lexes as
+    # `%Token{type: :keyword, value: :fn}`, so it is caught here before the
+    # `token.type` dispatch below. Without it the `fn` fell through to the
+    # "Simple type" arm, `(y)` was read as a type-param list and the trailing
+    # `->` turned the whole thing into a bogus arrow type `Function(y, …)` — `y`
+    # then dangled as `{:global, :y}` and normalisation crashed (E10a). Reuse the
+    # expression lambda entry so the SAME `{:lambda,…}` AST is produced here as in
+    # term position; a lambda is a complete term, so (unlike the arrow arms) it is
+    # NOT chained through `maybe_parse_function_type`.
+    if token.type == :keyword and token.value == :fn do
+      parse_fn_or_lambda(state)
+    else
+      parse_type_arrow_dispatch(state, token)
+    end
+  end
+
+  defp parse_type_arrow_dispatch(state, token) do
     case token.type do
       :lbrace ->
         parse_refinement_type(state)

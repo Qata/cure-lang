@@ -9,10 +9,12 @@ mod Std.Otp.EffAlgebra
   ## algebra is therefore a MONOID: `(Eff, seq, ENil)` with `seq` associative and `ENil` its
   ## unit. The three laws below (left/right identity, associativity) certify it, so effectful OTP
   ## programs can be reassociated and unit-simplified without changing meaning — exactly the
-  ## rewrites an effect handler / optimiser performs. (A value-returning free monad would need a
-  ## higher-order `bind`; the kernel does not yet reduce a function argument in a dependent index
-  ## position, cataloged in the ergonomics spec — and for value-less ops the monoid is the honest
-  ## structure anyway.)
+  ## rewrites an effect handler / optimiser performs. For value-LESS ops the monoid is the honest
+  ## structure; the VALUE-RETURNING free monad (`HEff`/`hbind`, at the foot of the module) sits
+  ## beside it now that its two former blockers are closed — a guarded-lambda `hbind` certifies
+  ## total (size-change fix), and its left-identity law places a `fn`-literal continuation in a
+  ## dependent `Equivalent` index (E10a: a function argument in an index position now lowers and
+  ## reduces).
 
   type Tag = TA | TB | TC
   type Op = OSend(Tag) | ORecv(Tag) | OSpawn
@@ -57,4 +59,20 @@ mod Std.Otp.EffAlgebra
       OSend(t) -> rewrite count_hom(k, b) in reflexive(S(plus(count_sends(k), count_sends(b))))
       ORecv(t) -> count_hom(k, b)
       OSpawn() -> count_hom(k, b)
+
+  ## **VALUE-RETURNING FREE MONAD.** The monoid above models value-LESS command sequences. A
+  ## program that RETURNS a value is the free monad over the same command alphabet: `HPure(x)`
+  ## returns `x`, and `HBind(e, g)` performs command `e` then continues with `g` applied to the
+  ## result. `hbind` threads a continuation `(Tag) -> HEff`, so its recursive self-call sits under
+  ## an unapplied `fn(y)` — guarded-lambda recursion, certified total by the size-change checker.
+  type HEff = HPure(Tag) | HBind(Tag, (Tag) -> HEff)
+  fn hbind(m: HEff, f: (Tag) -> HEff) -> HEff = match m
+    HPure(x)    -> f(x)
+    HBind(e, g) -> HBind(e, fn(y) -> hbind(g(y), f))
+
+  ## **LEFT IDENTITY (free monad).** `hbind(HPure x, k) ≡ k x` — holds definitionally: `hbind`'s
+  ## first arm returns `f(x)`, and applying the inline continuation `fn(z) -> k(z)` to `x`
+  ## β-reduces to `k(x)`. The `fn(z) -> k(z)` continuation sits in the `Equivalent` INDEX — a
+  ## function argument in a dependent index position, the case E10a unblocks.
+  fn hbind_left_id(x: Tag, k: (Tag) -> HEff) -> Equivalent(HEff, hbind(HPure(x), fn(z) -> k(z)), k(x)) = reflexive(k(x))
 end

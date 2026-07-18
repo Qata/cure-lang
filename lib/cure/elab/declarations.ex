@@ -2168,8 +2168,21 @@ defmodule Cure.Elab.Declarations do
     # term-position machinery. A local binder of the same name shadows the
     # global (mirrors the applied-bound-var cond branch below), and families/
     # ctors never carry def quantities, so this misses them by construction.
+    #
+    # The SAME bidirectional delegation is also the only way to lower an
+    # application carrying a bare `fn(y) -> …` LAMBDA argument (E10a): the
+    # syntax-directed `idx_to_core` cannot lower a lambda — an unannotated binder
+    # has no domain until it is CHECKED against the callee's Π-domain, which only
+    # the bidirectional term elaborator supplies (`bidir_app_slot` checks the
+    # lambda at `(Dec) -> Eff` when lowering `bind(m, fn(y) -> Pure(y))`). Without
+    # this the lambda hit the `{:lambda, …}` catch-all as `:unsupported_index_expr`.
+    # Guarded on the head being a real def (get_def carries `:quantities`) so a
+    # family/ctor applied to a lambda is left to its own path, and on `ctx` (a
+    # non-return-type index position threads none — an acceptable §7.5-class
+    # residual, mirroring `:sigma_projection_needs_ctx`).
     if ctx != nil and Enum.find_index(scope, &(&1 == name)) == nil and
-         implicit_global?(env, atom) do
+         (implicit_global?(env, atom) or
+            (args_contain_lambda?(args) and term_level_def?(env, atom))) do
       with {:ok, term, _result_type} <-
              Cure.Elab.Elaborator.elaborate_implicit_global_app(env, atom, args, scope, ctx) do
         {:ok, term}
@@ -2415,6 +2428,19 @@ defmodule Cure.Elab.Declarations do
       %{quantities: q} when is_list(q) -> :erased in q
       _ -> false
     end
+  end
+
+  # A surface application argument that `idx_to_core` cannot lower syntactically —
+  # a bare lambda has no domain until CHECKED against the callee's Π-domain, so an
+  # application carrying one must be routed through the bidirectional term
+  # elaborator (see `lower_applied_type`).
+  defp args_contain_lambda?(args), do: Enum.any?(args, &match?({:lambda, _, _}, &1))
+
+  # The head resolves to a term-level DEFINITION (carries a `:quantities` list),
+  # i.e. `Env.get_def` places it and `elaborate_implicit_app_bidirectional` can
+  # peel its Π. Families/ctors have no def quantities and are excluded.
+  defp term_level_def?(env, atom) do
+    match?(%{quantities: q} when is_list(q), Env.get_def(env, atom))
   end
 
   defp resolve_index_name(name, env) do

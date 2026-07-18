@@ -47,6 +47,7 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
                      :function_call,
                      :function_def,
                      :import,
+                     :lambda,
                      :list,
                      :literal,
                      :map,
