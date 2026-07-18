@@ -143,4 +143,54 @@ defmodule Cure.Elab.ProofHoleResolutionTest do
 
     assert demo_body(green_env) == demo_body(ref_env)
   end
+
+  # An ARGUMENT-position declined hole (the `elaborate_expr_checked({:hole,…})`
+  # trigger, elaborator.ex, distinct from the body-level `elaborate_body` hole
+  # clause in declarations.ex) must ALSO get a def-qualified id when the SAME
+  # named hole is declined in two different functions of one module — otherwise
+  # the two declined proof obligations, which have DIFFERENT goal types
+  # (`IsFoo(plus(a,b))` in `demo_left` vs `IsFoo(plus(c,d))` in `demo_right`),
+  # would collapse to one `Conv`-equal neutral (the same cross-def collision the
+  # body-hole case guards against, exercised through the OTHER hole_id call site).
+  @two_untagged_named_holes """
+  mod TwoUntaggedArgHoles
+    use Std.Nat
+    use Std.Refine
+
+    type IsFoo indices (value: Nat)
+      FooEvidence : IsFoo(S(predecessor))
+
+    type FooNat = {value: Nat | IsFoo(value)}
+
+    fn demo_left(left: FooNat, right: FooNat) -> FooNat =
+      refine(plus(refined_value(left), refined_value(right)), ?p)
+
+    fn demo_right(left: FooNat, right: FooNat) -> FooNat =
+      refine(plus(refined_value(left), refined_value(right)), ?p)
+  end
+  """
+
+  defp hole_ids_in(term) do
+    case term do
+      {:hole, id} -> [id]
+      t when is_tuple(t) -> t |> Tuple.to_list() |> Enum.flat_map(&hole_ids_in/1)
+      l when is_list(l) -> Enum.flat_map(l, &hole_ids_in/1)
+      _ -> []
+    end
+  end
+
+  test "the same named argument-position hole in two different defs gets distinct ids" do
+    assert {:ok, env} = Program.elaborate(@two_untagged_named_holes)
+
+    ids =
+      env.defs
+      |> Map.values()
+      |> Enum.flat_map(fn %{body: body} -> hole_ids_in(body) end)
+
+    assert length(ids) == 2
+
+    assert length(Enum.uniq(ids)) == 2,
+           "CROSS-DEF ARGUMENT-HOLE COLLISION: `?p` in demo_left and `?p` in " <>
+             "demo_right minted the SAME id #{inspect(ids)}"
+  end
 end
