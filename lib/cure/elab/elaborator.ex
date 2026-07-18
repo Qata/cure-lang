@@ -2382,11 +2382,19 @@ defmodule Cure.Elab.Elaborator do
   defp abstract_term({:var, i}, _target, depth) when i >= depth, do: {:var, i + 1}
   defp abstract_term({:var, _} = var, _target, _depth), do: var
 
+  # Descending a binder shifts every free de Bruijn variable — including any in
+  # `target` — up by one, so the target must be shifted to keep matching the SAME
+  # occurrence one binder deeper. Without this, abstracting a scrutinee that occurs
+  # under a binder (e.g. a Π/λ-typed SIBLING like `g : (b = T) -> (c = T)`) both
+  # MISSES the real occurrence (now at `target+1`) and spuriously matches whatever
+  # else sits at the un-shifted index (`c`). Callers whose target occurs only at the
+  # abstraction depth (the common goal case) cross no binder before the match, so the
+  # shift is a no-op for them.
   defp abstract_term({:pi, _g, d, c}, target, depth),
-    do: {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(c, target, depth + 1)}
+    do: {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(c, Subst.shift(target, 1, 0), depth + 1)}
 
   defp abstract_term({:lam, _g, d, b}, target, depth),
-    do: {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(b, target, depth + 1)}
+    do: {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(b, Subst.shift(target, 1, 0), depth + 1)}
 
   # A `:case` branch `{ctor, arity, body}` binds `arity` de Bruijn variables in
   # `body` (see `Cure.Core.Term` shift/3's `:case` clause). Mirror that here:
@@ -2398,7 +2406,7 @@ defmodule Cure.Elab.Elaborator do
   defp abstract_term({:case, scrut, motive, branches}, target, depth) do
     {:case, abstract_term(scrut, target, depth), abstract_term(motive, target, depth),
      Enum.map(branches, fn {ctor, arity, body} ->
-       {ctor, arity, abstract_term(body, target, depth + arity)}
+       {ctor, arity, abstract_term(body, Subst.shift(target, arity, 0), depth + arity)}
      end)}
   end
 

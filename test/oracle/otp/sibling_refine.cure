@@ -1,0 +1,16 @@
+mod SiblingRefine
+  use Std.Equivalent
+  type Bool = F | T
+  fn notb(b: Bool) -> Bool = match b
+    T() -> F()
+    F() -> T()
+  ## **BOOLEAN MODUS TOLLENS via plain match** — matching the variable `b` refines the sibling `g` (a function
+  ## whose type mentions `b`) per branch, so `g(reflexive(T()))` type-checks in the T branch WITHOUT a convoy.
+  fn bool_mt(b: Bool, c: Bool, g: (Equivalent(Bool, b, T())) -> Equivalent(Bool, c, T()), hc: Equivalent(Bool, c, F())) -> Equivalent(Bool, b, F()) = match b
+    T() -> match trans(sym(g(reflexive(T()))), hc)
+    F() -> reflexive(F())
+  ## Sibling refinement also works when the sibling is a plain (non-function) equation over the scrutinee.
+  fn use_eq(b: Bool, p: Equivalent(Bool, b, T())) -> Equivalent(Bool, notb(b), F()) = match b
+    T() -> reflexive(F())
+    F() -> match p
+end
