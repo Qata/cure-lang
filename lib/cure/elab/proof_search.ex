@@ -51,6 +51,7 @@ defmodule Cure.Elab.ProofSearch do
       candidates =
         local_candidates(goal, ctx, env) ++
           projection_candidates(goal, ctx, env) ++
+          conjunction_candidates(goal, ctx, env) ++
           lemma_ok
 
       # An ambiguous SUB-goal (e.g. a lemma's own hypothesis matches two local
@@ -186,6 +187,96 @@ defmodule Cure.Elab.ProofSearch do
     case Cure.Core.Env.get_def(env, "refinement_proof") do
       nil -> :sigma_second
       _def -> Cure.Core.Env.resolve_key(env, env.defs, "refinement_proof")
+    end
+  end
+
+  # Conjunction-elimination search: for every local binder whose type WHNFs to
+  # `IsTrue(and(left, right))`, both operands' truths follow — the left via
+  # `left_operand_is_true_from_true_conjunction`, the right via its counterpart.
+  # Each projection is assembled with the operands reified from the binder's own
+  # type (meta-free, like the Sigma second projection) and kernel-checked against
+  # the goal, so an `IsTrue(left)` or `IsTrue(right)` obligation is discharged
+  # from a conjunctive hypothesis without the author naming the lemma. Only the
+  # projection whose conclusion matches the goal survives the kernel check.
+  defp conjunction_candidates(goal, ctx, env) do
+    goal_val = Eval.eval(goal, Context.env(ctx))
+    len = Context.length(ctx)
+
+    for k <- 0..(len - 1)//1,
+        len > 0,
+        {left_term, right_term} <- is_true_and_binder(Context.lookup(ctx, k), ctx, env),
+        {global, prov} <- [
+          {and_left_projection_head(env), {:conjunction_left, k}},
+          {and_right_projection_head(env), {:conjunction_right, k}}
+        ],
+        global != nil do
+      term = build_app({:global, global}, [left_term, right_term, {:var, k}])
+
+      case Kernel.check(ctx, term, goal_val) do
+        :ok -> {term, prov}
+        _ -> {nil, prov}
+      end
+    end
+    |> Enum.filter(fn {term, _} -> term != nil end)
+  end
+
+  # If a Value WHNFs to `IsTrue(and(left, right))`, return `[{left, right}]` with
+  # both operands reified to Core terms; else `[]` (so the comprehension skips
+  # this binder). `IsTrue` has zero params and one index — the reflected claim —
+  # which must itself be the two-argument `and`-application spine. The operands
+  # are reified at the current context depth, so they can head the projection
+  # application in the same scope as the binder `{:var, k}`.
+  defp is_true_and_binder(nil, _ctx, _env), do: []
+
+  defp is_true_and_binder(type_value, ctx, env) do
+    is_true_key = is_true_family(env)
+    and_key = boolean_and_head(env)
+
+    with true <- is_true_key != nil and and_key != nil,
+         depth = Context.length(ctx),
+         sig = Context.signature(ctx),
+         core = Cure.Core.Quote.reify(type_value, depth, sig),
+         {:data, ^is_true_key, _params, [claim]} <- Cure.Core.Normalise.whnf(ctx, core),
+         {:app, {:app, {:global, ^and_key}, left_term}, right_term} <- claim do
+      [{left_term, right_term}]
+    else
+      _ -> []
+    end
+  end
+
+  # The resolved `Std.Proof.IntMath#IsTrue` family key, or nil when the reflection
+  # family is not in scope (so conjunction elimination stays inert).
+  defp is_true_family(env) do
+    case Cure.Core.Inductive.get_family(env, :IsTrue) do
+      nil -> nil
+      _fam -> Cure.Core.Env.resolve_key(env, env.families, :IsTrue)
+    end
+  end
+
+  # The resolved `Std.Bool#and` def key, or nil when `Std.Bool` is not in scope.
+  defp boolean_and_head(env) do
+    case Cure.Core.Env.get_def(env, "and") do
+      nil -> nil
+      _def -> Cure.Core.Env.resolve_key(env, env.defs, "and")
+    end
+  end
+
+  # The global heading the left-operand projection, or nil when
+  # `Std.Proof.BooleanReflection` is not in scope (so the candidate is dropped by
+  # the `global != nil` guard). Mirrors `second_projection_head/1`.
+  defp and_left_projection_head(env) do
+    case Cure.Core.Env.get_def(env, "left_operand_is_true_from_true_conjunction") do
+      nil -> nil
+      _def -> Cure.Core.Env.resolve_key(env, env.defs, "left_operand_is_true_from_true_conjunction")
+    end
+  end
+
+  # The global heading the right-operand projection, or nil when the module is not
+  # in scope. Mirrors `second_projection_head/1`.
+  defp and_right_projection_head(env) do
+    case Cure.Core.Env.get_def(env, "right_operand_is_true_from_true_conjunction") do
+      nil -> nil
+      _def -> Cure.Core.Env.resolve_key(env, env.defs, "right_operand_is_true_from_true_conjunction")
     end
   end
 

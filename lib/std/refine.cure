@@ -1,6 +1,54 @@
 @group(:core)
 mod Std.Refine
   use Std.Proof.Math
+  use Std.Proof.IntMath
+  use Std.Bool
+
+  # --- Primitive-comparison refinement types --------------------------------
+  #
+  # Each `{x: T | condition}` reflects a decidable Boolean comparison into a
+  # proposition (§3a level 1 auto-wraps the bar in `IsTrue`). A value inhabits
+  # the type only with kernel-checked evidence its condition holds; the auto
+  # proof-search discharges that evidence from an in-scope hypothesis or a
+  # `@lemma` without the author naming it.
+
+  ## Non-zero integer (`Int` minus zero).
+  type NonZero = {x: Int | x != 0}
+
+  ## Strictly positive integer.
+  type Positive = {x: Int | x > 0}
+
+  ## Strictly negative integer.
+  type Negative = {x: Int | x < 0}
+
+  ## Non-negative integer (zero or positive).
+  type NonNegative = {x: Int | x >= 0}
+
+  ## Non-positive integer (zero or negative).
+  type NonPositive = {x: Int | x <= 0}
+
+  ## Integer between 0 and 100 inclusive (a percentage).
+  type Percentage = {p: Int | p >= 0 and p <= 100}
+
+  ## Strictly positive float (e.g. probability density, weight).
+  type PositiveFloat = {x: Float | x > 0.0}
+
+  ## Float in `[0.0, 1.0]` inclusive (a probability).
+  type Probability = {p: Float | p >= 0.0 and p <= 1.0}
+
+  # Predicate combinators (pure runtime helpers; no proof obligation).
+
+  ## `true` when `n` is strictly positive.
+  fn positive?(n: Int) -> Bool = n > 0
+
+  ## `true` when `n` is non-negative.
+  fn non_negative?(n: Int) -> Bool = n >= 0
+
+  ## `true` when `p` is a valid percentage (0..100 inclusive).
+  fn percentage?(p: Int) -> Bool = p >= 0 and p <= 100
+
+  ## `true` when `p` is a valid probability (0.0..1.0 inclusive).
+  fn probability?(p: Float) -> Bool = p >= 0.0 and p <= 1.0
 
   ## A value paired with kernel-checked evidence that it satisfies a proposition.
   ##
