@@ -16,7 +16,7 @@ defmodule Cure.Elab.Implementation do
   instance clause nor a default is a `:missing_method` error.
   """
 
-  alias Cure.Core.{Env, Inductive}
+  alias Cure.Core.Env
   alias Cure.Elab.{Coherence, Declarations, Resolve}
 
   @doc """
@@ -29,7 +29,7 @@ defmodule Cure.Elab.Implementation do
   @spec register(tuple(), Env.t()) :: {:ok, Env.t(), [tuple()]} | {:error, term()}
   def register({:implementation, meta, body}, env) do
     iface = meta |> Keyword.fetch!(:interface) |> String.to_atom()
-    head = meta |> Keyword.fetch!(:for) |> String.to_atom() |> normalize_head(env)
+    head = head_key(Keyword.fetch!(meta, :for_type), env)
     for_type = Keyword.fetch!(meta, :for_type)
     as_name = Keyword.get(meta, :as)
 
@@ -50,41 +50,39 @@ defmodule Cure.Elab.Implementation do
     end
   end
 
-  # The coherence key's head, resolved through transparent type synonyms.
+  # The coherence key: elaborate the instance head to a Core type, whnf it, and
+  # read the head constructor's canonical name. Transparent synonyms unfold via
+  # the kernel's δ-reduction of certified globals, so `MyInt = Int` keys as `:Int`.
   #
   # The parser sets `meta[:for]` to the RAW SURFACE NAME of the `for` clause, with no semantic
   # unfolding. `typealias MyInt = Int` is a transparent synonym at the type-checking level — the
   # two names denote definitionally the same type — but keying coherence on the spelling filed
   # `for Int` and `for MyInt` under two different atoms, so both anonymous instances registered.
-  # Two live dictionaries for one type means `eqs(x, y)` can compute two different answers
+  # Two live dictionaries for one type means `eq(x, y)` can compute two different answers
   # depending on which spelling of the type the call site happened to use. Idris, Agda, Lean and
   # Rust all resolve an instance head to its normal form before comparing, precisely to rule
-  # this out.
-  #
-  # A typealias elaborates to a nullary def `Name : Type := RHS`, so the unfolding is a def
-  # lookup. `seen` guards a cyclic chain of aliases rather than trusting none exists.
-  defp normalize_head(head, env), do: normalize_head(head, env, MapSet.new())
-
-  defp normalize_head(head, env, seen) do
-    if MapSet.member?(seen, head) do
-      head
+  # this out. Routing through the kernel's `whnf_value` (rather than chasing surface `def` bodies
+  # by hand) reuses the same certified δ-reduction the type checker trusts everywhere else.
+  defp head_key(for_type_ast, env) do
+    with {:ok, core_ty} <- Declarations.lower_type(for_type_ast, [], env) do
+      core_ty
+      |> Cure.Core.Eval.eval([])
+      |> Cure.Core.Normalise.whnf_value(env, [])
+      |> whnf_head_atom()
     else
-      case Env.get_def(env, head) do
-        %{type: {:type, _}, body: body} when not is_nil(body) ->
-          head_atom(body, env, MapSet.put(seen, head), head)
-
-        _ ->
-          if Inductive.family?(env, head), do: Env.resolve_key(env, env.families, head), else: head
-      end
+      _ -> :error_head
     end
   end
 
-  defp head_atom({:int_type}, _env, _seen, _fallback), do: :Int
-  defp head_atom({:float_type}, _env, _seen, _fallback), do: :Float
-  defp head_atom({:string_type}, _env, _seen, _fallback), do: :String
-  defp head_atom({:data, name, _params, _indices}, _env, _seen, _fallback), do: name
-  defp head_atom({:global, g}, env, seen, _fallback), do: normalize_head(g, env, seen)
-  defp head_atom(_other, _env, _seen, fallback), do: fallback
+  defp whnf_head_atom({:vint_type}), do: :Int
+  defp whnf_head_atom({:vfloat_type}), do: :Float
+  defp whnf_head_atom({:vbinary_type}), do: :Binary
+  defp whnf_head_atom({:vatom_type}), do: :Atom
+  defp whnf_head_atom({:vdata, name, _args}), do: name
+  # A stuck global (uncertified / open synonym) falls back to its own name — the
+  # same behavior the old `head_atom` fallback gave.
+  defp whnf_head_atom({:vneutral, {:nglobal, name}}), do: name
+  defp whnf_head_atom(other), do: other
 
   # Every clause in the implementation body must name one of the interface's methods.
   # `build_methods/5` iterates the INTERFACE's `method_order` and searches the body by
