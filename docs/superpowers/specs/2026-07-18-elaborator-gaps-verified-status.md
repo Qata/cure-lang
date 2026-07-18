@@ -29,8 +29,10 @@ relevant, run `idris2 --check` on the byte-equivalent program. No `lib/**` was m
 **Net:** none were already fixed; none is trivial-and-done. Two carry a **kernel** bug
 (E9 sub-bug, E10 (b)/(c)); two were **mis-framed** by the catalog (E9 premise, E10 root
 cause); two are **more bounded than feared** (E8, E11-Stage-2); two are **bigger than the
-handoff's ordering implied** (E2-residual, E6-residual). Two **new** bugs surfaced that the
-catalog did not list (E11 elaborator crash, E10a parser misparse).
+handoff's ordering implied** (E2-residual, E6-residual). Four **new** items surfaced that the
+catalog did not list: E11 elaborator crash, E10a parser misparse, and (from the OTP-metatheory
+branch) E12 scrutinee-var-not-substituted-in-bodies and E13 rewrite-under-unreduced-definition —
+both zero-TCB E-layer ergonomics gaps in the scrutinee/rewrite-refinement family (see §3).
 
 ## 2. Kernel-layer bugs — the Antigen targets
 
@@ -148,6 +150,35 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
   `constructor_pattern`/`branch_scope`/`split_named_implicits`. Not a bounded edit.
 - Explicit-field + congruence-helper workaround still required (live in
   `lib/std/otp_conversation.cure`).
+
+### NEW — E12 scrutinee-var not substituted into branch-body written terms — **OPEN, E-layer**
+- Reported from the OTP-metatheory branch (bystander/correspondence lemma). A `match` on a **bare
+  variable** refines the goal/motive (so the goal becomes `project(…, RA)` with `r` refined to the
+  ctor `RA`) but does **not** substitute the scrutinee var into the branch body's **written term
+  occurrences** — a hand-written `project(k, r)` still dereferences the un-refined binder (`r =
+  nvar2`), so the kernel is handed genuinely non-convertible types (`project(k, nvar2)` vs
+  `project(k, RA)`) and **correctly** rejects with `:conversion_failure`. Kernel is right; the E
+  layer simply doesn't propagate the refinement to terms the user wrote.
+- **Workaround (live):** write the concrete literal (`project(k, RA())`) so you don't rely on the
+  un-propagated refinement.
+- **Fix shape:** E-layer — substitute the scrutinee var into body term occurrences (not just the
+  motive). Same **sibling/scrutinee-refinement family** as E8; no TCB change.
+
+### NEW — E13 `rewrite` occurrence-finder doesn't δ-unfold under the target — **OPEN, E-layer**
+- Reported from the same lemma. `rewrite n1 in …` sugar calls `abstract_term` to find LHS
+  occurrences (`role_eq(fr, r)`) in the goal and abstract them into a motive, then applies the
+  `Equivalent` eliminator. The occurrence-finder walks the goal **without δ-unfolding defined
+  functions**, so when the LHS is buried — `role_eq(fr,r)` only appears *after* `project` takes a
+  δ-step and the inner `case` ι-reduces — it finds nothing and reports `:rewrite_no_match`.
+- **Asymmetry (the interesting part):** the **kernel's** conversion *does* see through `project`
+  (δ/ι), which is exactly why the concrete-cased reflexive version type-checks — once roles are
+  concrete, `project` reduces and both sides are definitionally equal. So the redex is reachable
+  by conversion but **not** by the elaborator's syntactic occurrence-matcher. Genuine E-layer
+  limitation (rewrite target hidden under an unreduced definition), **not** a kernel gap.
+- **Workaround (live):** case the scrutinees concretely so `role_eq`/`project` reduce and you lean
+  on the kernel's conversion instead of the elaborator's syntactic matching.
+- **Fix shape:** E-layer — let `abstract_term`'s occurrence-finder δ/ι-reduce (or reduce-on-miss)
+  while searching. Distinct from E8's carried-eq detour; no TCB change.
 
 ### E9 headline — stuck-index equation — **OPEN, but NOT a reach gap**
 - The catalog's headline "Idris accepts via `with`-style abstraction" is **empirically false**
