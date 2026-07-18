@@ -29,24 +29,22 @@ defmodule Cure.Elab.Implementation do
   @spec register(tuple(), Env.t()) :: {:ok, Env.t(), [tuple()]} | {:error, term()}
   def register({:implementation, meta, body}, env) do
     iface = meta |> Keyword.fetch!(:interface) |> String.to_atom()
-    head = head_key(Keyword.fetch!(meta, :for_type), env)
     for_type = Keyword.fetch!(meta, :for_type)
     as_name = Keyword.get(meta, :as)
 
-    case Env.get_interface(env, iface) do
-      nil ->
-        {:error, {:no_such_interface, iface}}
-
-      desc ->
-        with :ok <- check_no_stray_clauses(desc, iface, body),
-             {:ok, method_map, mangled_fns} <-
-               build_methods(desc, iface, head, for_type, body, env),
-             ref = %{iface: iface, head: head, methods: method_map, as: as_name},
-             {:ok, env1} <- register_instance(env, iface, head, as_name, ref),
-             {:ok, env2} <- register_signatures(mangled_fns, env1),
-             {:ok, env3} <- bind_named_instance(env2, desc, iface, head, as_name, ref) do
-          {:ok, env3, mangled_fns}
-        end
+    with {:ok, head} <- head_key(for_type, env),
+         desc when not is_nil(desc) <- Env.get_interface(env, iface),
+         :ok <- check_no_stray_clauses(desc, iface, body),
+         {:ok, method_map, mangled_fns} <-
+           build_methods(desc, iface, head, for_type, body, env),
+         ref = %{iface: iface, head: head, methods: method_map, as: as_name},
+         {:ok, env1} <- register_instance(env, iface, head, as_name, ref),
+         {:ok, env2} <- register_signatures(mangled_fns, env1),
+         {:ok, env3} <- bind_named_instance(env2, desc, iface, head, as_name, ref) do
+      {:ok, env3, mangled_fns}
+    else
+      nil -> {:error, {:no_such_interface, iface}}
+      {:error, _} = err -> err
     end
   end
 
@@ -63,14 +61,35 @@ defmodule Cure.Elab.Implementation do
   # Rust all resolve an instance head to its normal form before comparing, precisely to rule
   # this out. Routing through the kernel's `whnf_value` (rather than chasing surface `def` bodies
   # by hand) reuses the same certified δ-reduction the type checker trusts everywhere else.
+  #
+  # Registration and dispatch agree on which synonyms unfold. `whnf_value` with the default
+  # `delta: :certified` δ-unfolds every certified global head; the dispatch classifier
+  # (`Cure.Elab.Resolve.classify/3`) unfolds a nullary type-level def unconditionally. These
+  # coincide for every synonym reachable from surface syntax: a synonym that reduces to a
+  # concrete head (`typealias MyInt = Int`, and chains thereof) is non-recursive, so it is
+  # certified the moment it is elaborated — before any `implementation` for it is registered —
+  # and the certified δ-gate then unfolds it exactly as dispatch does. The only globals
+  # `whnf_value` leaves folded that `classify` would unfold are non-total / not-yet-elaborated
+  # ones, and those never reduce to a concrete head on EITHER path. So there is no certification
+  # asymmetry to close here, and no delta option to pass: `whnf_value` offers only `:certified`
+  # and `:none`, and `:certified` is already the liberality dispatch needs.
+  #
+  # On success returns `{:ok, atom}`; a lowering failure propagates as `{:error, reason}` so two
+  # distinct malformed heads cannot silently collapse onto one sentinel key and misreport as an
+  # overlapping instance.
   defp head_key(for_type_ast, env) do
-    with {:ok, core_ty} <- Declarations.lower_type(for_type_ast, [], env) do
-      core_ty
-      |> Cure.Core.Eval.eval([])
-      |> Cure.Core.Normalise.whnf_value(env, [])
-      |> whnf_head_atom()
-    else
-      _ -> :error_head
+    case Declarations.lower_type(for_type_ast, [], env) do
+      {:ok, core_type} ->
+        atom =
+          core_type
+          |> Cure.Core.Eval.eval([])
+          |> Cure.Core.Normalise.whnf_value(env, [])
+          |> whnf_head_atom()
+
+        {:ok, atom}
+
+      {:error, reason} ->
+        {:error, {:instance_head_ill_formed, reason}}
     end
   end
 
@@ -78,11 +97,23 @@ defmodule Cure.Elab.Implementation do
   defp whnf_head_atom({:vfloat_type}), do: :Float
   defp whnf_head_atom({:vbinary_type}), do: :Binary
   defp whnf_head_atom({:vatom_type}), do: :Atom
+  # A universe, a Π/function type, and an inert `Effect(T)` are all legitimate (if exotic)
+  # instance heads; key them by a descriptive atom rather than the raw Core value. Every
+  # function type shares the `:Function` key — distinguishing them structurally is out of scope,
+  # and function heads never dispatch statically (`classify/3` returns `:unknown` for a `vpi`).
+  defp whnf_head_atom({:vtype, _level}), do: :Type
+  defp whnf_head_atom({:vpi, _grade, _dom, _cod}), do: :Function
+  defp whnf_head_atom({:veffect_type, _inner}), do: :Effect
   defp whnf_head_atom({:vdata, name, _args}), do: name
   # A stuck global (uncertified / open synonym) falls back to its own name — the
   # same behavior the old `head_atom` fallback gave.
   defp whnf_head_atom({:vneutral, {:nglobal, name}}), do: name
-  defp whnf_head_atom(other), do: other
+  # Any other Value former in head position is not a well-formed type head (a λ, a constructor
+  # or primitive-literal VALUE, or a stuck var/application/eliminator). Return a sentinel ATOM —
+  # never the raw Core term, which is not `String.Chars` and crashed `mangled_name`'s
+  # interpolation. Such a head is itself ill-typed and rejected upstream; the sentinel only keeps
+  # the key well-typed if one ever reaches here.
+  defp whnf_head_atom(_other), do: :non_type_head
 
   # Every clause in the implementation body must name one of the interface's methods.
   # `build_methods/5` iterates the INTERFACE's `method_order` and searches the body by
