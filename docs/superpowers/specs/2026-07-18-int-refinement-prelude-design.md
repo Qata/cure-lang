@@ -1,8 +1,13 @@
 # Int Refinement Prelude (decidable-boolean reflection) — Design
 
 **Date:** 2026-07-18
-**Status:** Approved direction (operator: "Do it"); building TDD via the differential oracle.
-**Layer:** Stdlib (`lib/std/*.cure`) + oracle fixtures + example re-refinement. **No kernel (K) change. No elaborator (E) change expected.**
+**Status:** Approved direction (operator: "Do it", then approved surface sugar + auto-discharge: "Both"); building TDD via the differential oracle.
+**Layer:** Stdlib (`lib/std/*.cure`) + parser (P) + elaborator (E) + oracle fixtures + example re-refinement. **No kernel (K) change** — `lib/cure/core/*` is untouched; if a change seems to require it, STOP per the elaborator-hard-stop principle.
+
+**Superseded framing:** an earlier draft said "no E change expected." That is retired. Making the natural surface work needed, and the operator approved, three untrusted changes below the stdlib:
+- **P** — comparison/boolean operators parse inside a type-application argument (`-> IsTrue(5 > 0)`), reparsing the argument as an expression when a proposition operator trails a type (`parser.ex`, landed `6ea68573`).
+- **E1 (index lowering)** — `idx_to_core` structurally lowers a comparison/connective index to the same Int-builtin Core spine the term elaborator emits (`declarations.ex`).
+- **E2 (refinement sugar, §3a)** — the `{x: T | φ}` desugarer auto-wraps a `Bool`-typed clause `φ` in `IsTrue(φ)`, so the author writes `{n: Int | n > 0}` (level 1), and a **closed** obligation on a value checked at a refinement type is auto-discharged with `Confirmed()` by computation (level 2). This is the ergonomic surface and it dissolves the `refine`-implicit-predicate discharge friction (a bare literal never routes through `refine`'s unsolved `{predicate}` implicit).
 
 ## 1. Goal
 
@@ -59,6 +64,8 @@ mod Std.Proof.IntMath
     Confirmed : IsTrue(True())
 
   ## Int refinement predicates, each reflecting the primitive comparison.
+  ## These stay available for callers who want a named predicate, but the sugar
+  ## in §3a means a refinement can also state the bare comparison inline.
   fn is_positive(n: Int) -> Type = IsTrue(n > 0)
   fn is_non_negative(n: Int) -> Type = IsTrue(n >= 0)
   fn is_non_zero(n: Int) -> Type = IsTrue(n != 0)
@@ -70,10 +77,44 @@ mod Std.Proof.IntMath
     False() -> No(fn(evidence) -> absurd_true_is_false(evidence))
 ```
 
-If a `fn … -> Type` predicate proves awkward as a refinement `predicate:` slot
-during TDD, the fallback is to inline `IsTrue(n > 0)` directly at the refinement
-site — the surface `{n: Int | IsTrue(n > 0)}` needs no wrapper. Slice 1 decides
-this empirically.
+## 3a. Refinement surface sugar (operator-approved: "Both")
+
+Requiring `{n: Int | IsTrue(n > 0)}` leaks the `So`-reflection encoding through
+the refinement bar. Every system with a *native* refinement binder takes the
+bare boolean/prop and reflects it: Liquid Haskell `{v:Int | v > 0}`, F\*
+`x:int{x > 0}`, Lean `{n : Int // n > 0}`. (Idris/Agda write `So`/`T`
+explicitly only because they hand-roll a `Subset`/`Σ` with no refinement
+syntax — which Cure has.) Cure joins the native-binder camp.
+
+**Level 1 — auto-wrap the clause.** In the `{x: T | φ}` desugarer: elaborate
+`φ`; if it has type `Bool`, use `IsTrue(φ)` as the predicate; if it already has
+type `Type` (e.g. `IsSorted(xs)` or a user proposition), use `φ` unchanged. So
+`{n: Int | n > 0}` and `{n: Int | IsTrue(n > 0)}` are equivalent, and
+non-boolean propositions still pass through. This also consolidates lowering:
+the clause goes through the *term* elaborator once at the desugaring site, which
+is the canonical path for the reflected comparison (the §-E1 `idx_to_core`
+structural lowering remains only for comparisons that appear as bare type-family
+*indices*, not behind the refinement bar).
+
+**Level 2 — auto-discharge closed obligations.** When a value is checked against
+a refinement type `{x: T | φ}` and the obligation `φ[x := value]` is *closed*, it
+reduces by computation — `IsTrue(50 > 0)` → `IsTrue(True())` — so the elaborator
+fills the proof with `Confirmed()` automatically. The author writes `50` at
+`{n: Int | n > 0}`; no `refine`, no `Confirmed()`. This is the SMT-parity
+ergonomic for the closed case, and it is why the acceptance demo does not depend
+on fixing `refine`'s `{predicate}` implicit inference: a bare literal constructs
+the underlying Σ directly and never routes through that unsolved implicit.
+
+**`refine(value, proof)` stays** as the explicit-evidence path for *open* terms
+(binder-carried evidence, the `scale` shape), where the obligation cannot reduce
+to a closed `True()` and the author supplies the witness.
+
+**Boundary of auto-discharge:** level 2 fires *only* when the reduced obligation
+is `IsTrue(True())` (whnf + delta decides it). If it reduces to `IsTrue(False())`
+the value is rejected (the refinement is violated); if it is stuck/open (mentions
+a free binder), the elaborator does **not** invent a proof — it leaves the
+obligation for the author's explicit evidence or `refine`. No solver, no
+postulate, no kernel change.
 
 ## 4. Scope boundary (the honest limit, unchanged from SMT)
 
@@ -99,34 +140,49 @@ cases that *can* route through Nat.
 
 Strict red→green per slice, behavioral and immutable once green.
 
+0. **Parser (landed `6ea68573`)** — a comparison/connective parses as a
+   type-application argument (`test/cure/compiler/comparison_type_arg_parse_test.exs`).
 1. **`IsTrue`/`Confirmed` + computation** — paired `test/oracle/refine/int_is_true.{cure,idr}`
    (`.idr` uses `Data.So`/`Oh`), relation `same`. Cure unit test: a closed
    `IsTrue(5 > 0)` type-checks with `Confirmed()`; `IsTrue(5 < 0)` is rejected.
-2. **Predicates + closed refinement** — `refine(50, Confirmed())` at
-   `{p: Int | is_in_range(0, 100, p)}` type-checks; out-of-range literal rejected.
-3. **`decide_is_true`** — returns `Yes`/`No` with evidence; unit test both branches.
-4. **Binder-carried evidence** — a function taking `{n: Int | is_positive(n)}` and
-   threading the evidence (the `scale` shape) type-checks.
-5. **Example re-refinement (acceptance)** — `dependent_types.cure` `Positive`/
+2. **Refinement sugar (level 1)** — `{n: Int | n > 0}` desugars to the same Σ as
+   `{n: Int | IsTrue(n > 0)}` (Core-term golden or structural equality of the two
+   desugarings); a `Type`-valued clause `{xs: List(a) | IsSorted(xs)}` passes
+   through unwrapped; a clause that is neither `Bool` nor `Type` is rejected.
+3. **Auto-discharge (level 2)** — a literal `50` checked at `{n: Int | n > 0}`
+   type-checks with no explicit proof; `-3` at the same type is rejected; an
+   *open* obligation (free binder) is NOT auto-discharged (left for evidence).
+4. **`decide_is_true`** — returns `Yes`/`No` with evidence; unit test both branches.
+5. **Binder-carried evidence via `refine`** — a function taking
+   `{n: Int | is_positive(n)}` and threading the evidence (the `scale` shape)
+   type-checks through the explicit `refine(value, proof)` path.
+6. **Example re-refinement (acceptance)** — `dependent_types.cure` `Positive`/
    `Percentage`, and `moneta.cure` `scale`'s `factor`, move from plain `Int` +
    "unchecked" comment to real `{… | …}` refinements; each project's own
    `mix test` + `cure.check.examples` stays green (the `dependent_types` `@expected`
    row must stay byte-identical or STOP).
-6. **Full gate once, alone** — `mix test --include slow` + `mix antigen` + oracle replay.
+7. **Full gate once, alone** — `mix test --include slow` + `mix antigen` + oracle replay.
 
 ## 6. Files
 
 - Create: `lib/std/proof_int_math.cure`, `test/cure/stdlib/proof_int_math_test.exs`,
   `test/oracle/refine/int_is_true.{cure,idr}` (+ verdicts entry).
+- Modify (P): `lib/cure/compiler/parser.ex` (landed `6ea68573`).
+- Modify (E): `lib/cure/elab/declarations.ex` (`idx_to_core` comparison/literal
+  lowering) and the refinement-`{x: T | φ}` desugaring site (level-1 auto-wrap +
+  level-2 closed auto-discharge). Locate the desugarer before writing the test.
 - Modify: `examples/dependent_types.cure`, `examples/cure_moneta/cure_src/moneta.cure`
   (and `motif.cure` if its ranges reduce to closed checks), dropping the
   "unchecked pending SMTCoq" comments for the re-refined sites.
-- **Untouched:** `lib/cure/core/*` (K), `lib/cure/elab/*` (E). If either needs a
-  change, STOP and report — that is a scope violation.
+- **Untouched:** `lib/cure/core/*` (K). If it needs a change, STOP and report —
+  that is a scope violation and a hard-stop per the elaborator principle.
 
 ## 7. Non-goals
 
 - No decision procedure / omega (that is §5.2, ledgered).
 - No Nat↔Int bridge lemmas.
-- No new refinement *surface* syntax (the `{x: T | φ}` grammar already exists).
+- No new refinement bar *grammar* (the `{x: T | φ}` syntax already exists; §3a
+  changes only how the clause is *elaborated*, not how it parses).
+- No auto-discharge of *open* obligations (only closed `IsTrue(True())` fires;
+  open/stuck obligations wait for explicit evidence or `refine`).
 - No change to `Std.Proof.Math` (Nat) beyond what re-refinement forces.
