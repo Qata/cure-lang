@@ -54,3 +54,15 @@ mutual
 
 narrowing_example : Sub (LSel (BCons TA LEnd BNil)) (LSel (BCons TA LEnd (BCons TB LEnd BNil)))
 narrowing_example = SubSel (SelSubCons TA LookHere SubEnd SelSubNil)
+
+data LStep : Local -> Local -> Type where
+  LStSend : LStep (LSend t k) k
+  LStSel : Lookup bs t k -> LStep (LSel bs) k
+
+data StepUp : Local -> Local -> Type where
+  MkStepUp : LStep b b2 -> Sub a2 b2 -> StepUp b a2
+
+sub_step_internal : Sub a b -> LStep a a2 -> StepUp b a2
+sub_step_internal (SubSend t p) LStSend = MkStepUp LStSend p
+sub_step_internal (SubSel ss) (LStSel lk) = case selsub_lookup ss lk of
+  MkLookSubUp lk_sup sub2 => MkStepUp (LStSel lk_sup) sub2
