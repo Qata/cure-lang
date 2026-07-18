@@ -1,0 +1,70 @@
+mod RLE
+  use Std.Equivalent
+  ## RUN-LENGTH ENCODING ROUND-TRIPS — a fresh DATA-COMPRESSION domain. `encode` groups consecutive equal
+  ## elements of a list into `(value, positive-count)` runs (`push` extends the leading run when the new head
+  ## matches its value, deciding equality with an evidence-carrying `EqDec`); `decode` expands them via
+  ## `replicate` + `app`. `rle_roundtrip` proves `decode(encode(l)) = l` for EVERY list — the encoder is
+  ## LOSSLESS. The crux is `decode_push_pick`: decoding a pushed element equals consing it onto the rest's
+  ## decoding — its match-case uses the equality WITNESS `x = y` to rewrite `replicate(x,n)` to `replicate(y,n)`
+  ## (via `replicate_cong` + `app_cong_l` + `lcons_snd_cong`); the non-match case is reflexive. `rle_roundtrip`
+  ## then chains `decode_push` with the induction hypothesis. Routing the equality test through the `EqDec`
+  ## helper `push_pick` is what lets the proof refine the folded `push`/`decode` (the evidence-carrying idiom).
+  type Nat = Z | S(Nat)
+  type List = LNil | LCons(Nat, List)
+  fn snat_cong(a: Nat, b: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) = rewrite e in reflexive(S(b))
+  fn eqn(a: Nat, b: Nat) -> Bool = match a
+    Z()   -> match b
+      Z()   -> T()
+      S(k)  -> F()
+    S(j)  -> match b
+      Z()   -> F()
+      S(k)  -> eqn(j, k)
+  type Bool = F | T
+  type EqDec indices (x: Nat, y: Nat)
+    EqYes : (x2: Nat) -> (y2: Nat) -> Equivalent(Nat, x2, y2) -> EqDec(x2, y2)
+    EqNo  : (x2: Nat) -> (y2: Nat) -> EqDec(x2, y2)
+  fn eq_dec(x: Nat, y: Nat) -> EqDec(x, y) = match x
+    Z()   -> match y
+      Z()   -> EqYes(Z(), Z(), reflexive(Z()))
+      S(k)  -> EqNo(Z(), S(k))
+    S(j)  -> match y
+      Z()   -> EqNo(S(j), Z())
+      S(k)  -> match eq_dec(j, k)
+        EqYes(a, b, e) -> EqYes(S(j), S(k), snat_cong(j, k, e))
+        EqNo(a, b)     -> EqNo(S(j), S(k))
+  fn app(l1: List, l2: List) -> List = match l1
+    LNil()        -> l2
+    LCons(x, xs)  -> LCons(x, app(xs, l2))
+  fn app_cong_l(a: List, b: List, c: List, e: Equivalent(List, a, b)) -> Equivalent(List, app(a, c), app(b, c)) = rewrite e in reflexive(app(b, c))
+  fn lcons_snd_cong(x: Nat, l1: List, l2: List, e: Equivalent(List, l1, l2)) -> Equivalent(List, LCons(x, l1), LCons(x, l2)) = rewrite e in reflexive(LCons(x, l2))
+  fn replicate(x: Nat, n: Nat) -> List = match n
+    Z()   -> LNil()
+    S(k)  -> LCons(x, replicate(x, k))
+  fn replicate_cong(x: Nat, y: Nat, n: Nat, e: Equivalent(Nat, x, y)) -> Equivalent(List, replicate(x, n), replicate(y, n)) = rewrite e in reflexive(replicate(y, n))
+  ## Run-length-encoded list: a sequence of (value, positive-count) runs.
+  type RLE = RNil | RCons(Nat, Nat, RLE)
+  fn push_pick(x: Nat, y: Nat, n: Nat, gs: RLE, d: EqDec(x, y)) -> RLE = match d
+    EqYes(a, b, e) -> RCons(x, S(n), gs)
+    EqNo(a, b)     -> RCons(x, S(Z()), RCons(y, n, gs))
+  ## Prepend one x to an encoding, extending the leading run if x matches its value.
+  fn push(x: Nat, g: RLE) -> RLE = match g
+    RNil()            -> RCons(x, S(Z()), RNil())
+    RCons(y, n, gs)   -> push_pick(x, y, n, gs, eq_dec(x, y))
+  fn encode(l: List) -> RLE = match l
+    LNil()        -> RNil()
+    LCons(x, xs)  -> push(x, encode(xs))
+  fn decode(g: RLE) -> List = match g
+    RNil()            -> LNil()
+    RCons(y, n, gs)   -> app(replicate(y, n), decode(gs))
+  ## **DECODE UNDOES PUSH**: decoding a pushed element yields that element consed onto the rest's decoding.
+  fn decode_push_pick(x: Nat, y: Nat, n: Nat, gs: RLE, d: EqDec(x, y)) -> Equivalent(List, decode(push_pick(x, y, n, gs, d)), LCons(x, decode(RCons(y, n, gs)))) = match d
+    EqYes(a, b, e) -> lcons_snd_cong(x, app(replicate(x, n), decode(gs)), app(replicate(y, n), decode(gs)), app_cong_l(replicate(x, n), replicate(y, n), decode(gs), replicate_cong(x, y, n, e)))
+    EqNo(a, b)     -> reflexive(LCons(x, decode(RCons(y, n, gs))))
+  fn decode_push(x: Nat, g: RLE) -> Equivalent(List, decode(push(x, g)), LCons(x, decode(g))) = match g
+    RNil()            -> reflexive(LCons(x, LNil()))
+    RCons(y, n, gs)   -> decode_push_pick(x, y, n, gs, eq_dec(x, y))
+  ## **RUN-LENGTH ENCODING ROUND-TRIPS**: decode(encode(l)) = l for every list — the encoder is lossless.
+  fn rle_roundtrip(l: List) -> Equivalent(List, decode(encode(l)), l) = match l
+    LNil()        -> reflexive(LNil())
+    LCons(x, xs)  -> trans(decode_push(x, encode(xs)), lcons_snd_cong(x, decode(encode(xs)), xs, rle_roundtrip(xs)))
+end

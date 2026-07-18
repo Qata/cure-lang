@@ -1,0 +1,118 @@
+mod MergeLatticeAbsorb
+  use Std.Equivalent
+  ## SESSION SUBTYPING IS AN ALGEBRAIC LATTICE — the ABSORPTION laws. merge_glb (meet = union = GLB),
+  ## merge_join (join = intersection = LUB) and merge_semilattice give the order-theoretic lattice; the
+  ## two absorption laws s ∩ (s∪t) ≈ s and s ∪ (s∩t) ≈ s are what tie meet and join into a genuine
+  ## ALGEBRAIC lattice (up to subtyping-equivalence ≈ = mutual covering). The crux is inter_super: if
+  ## s ⊆ u then inter(s,u) ⊇ s (every element of s survives the intersection because it is in u).
+  type Tag = TA | TB | TC
+  type OBit = OF | OT
+  type Branches = BNil | BCons(Tag, Branches)
+  type Empty = |
+  fn teq(a: Tag, b: Tag) -> OBit = match a
+    TA() -> match b
+      TA() -> OT()
+      TB() -> OF()
+      TC() -> OF()
+    TB() -> match b
+      TA() -> OF()
+      TB() -> OT()
+      TC() -> OF()
+    TC() -> match b
+      TA() -> OF()
+      TB() -> OF()
+      TC() -> OT()
+  fn teq_refl(a: Tag) -> Equivalent(OBit, teq(a, a), OT()) = match a
+    TA() -> reflexive(OT())
+    TB() -> reflexive(OT())
+    TC() -> reflexive(OT())
+  fn ot_ne_of(e: Equivalent(OBit, OT(), OF())) -> Empty = match e
+  type InB indices (x: Tag, bs: Branches)
+    InHead : (x2: Tag) -> (rest: Branches) -> InB(x2, BCons(x2, rest))
+    InTail : (y: Tag) -> (rest: Branches) -> InB(x2, rest) -> InB(x2, BCons(y, rest))
+  type NotIn indices (x: Tag, bs: Branches)
+    NINil  : NotIn(x, BNil)
+    NICons : (y2: Tag) -> (rest2: Branches) -> Equivalent(OBit, teq(x, y2), OF()) -> NotIn(x, rest2) -> NotIn(x, BCons(y2, rest2))
+  fn notin_absurd({x: Tag}, {bs: Branches}, nx: NotIn(x, bs), m: InB(x, bs)) -> Empty = match m
+    InHead(x2, rest) -> match nx
+      NICons(y2, rest2, tof, nx2) -> ot_ne_of(trans(sym(teq_refl(x2)), tof))
+    InTail(z, r, m2) -> match nx
+      NICons(y2, rest2, tof, nx2) -> notin_absurd(nx2, m2)
+  type MemDec indices (x: Tag, t: Branches)
+    MYes : InB(x, t) -> MemDec(x, t)
+    MNo  : NotIn(x, t) -> MemDec(x, t)
+  fn mem_dec(x: Tag, t: Branches) -> MemDec(x, t) = match t
+    BNil() -> MNo(NINil())
+    BCons(y, rest) -> match x
+      TA() -> match y
+        TA() -> MYes(InHead(TA(), rest))
+        TB() -> match mem_dec(TA(), rest)
+          MYes(pf) -> MYes(InTail(TB(), rest, pf))
+          MNo(nx) -> MNo(NICons(TB(), rest, reflexive(OF()), nx))
+        TC() -> match mem_dec(TA(), rest)
+          MYes(pf) -> MYes(InTail(TC(), rest, pf))
+          MNo(nx) -> MNo(NICons(TC(), rest, reflexive(OF()), nx))
+      TB() -> match y
+        TA() -> match mem_dec(TB(), rest)
+          MYes(pf) -> MYes(InTail(TA(), rest, pf))
+          MNo(nx) -> MNo(NICons(TA(), rest, reflexive(OF()), nx))
+        TB() -> MYes(InHead(TB(), rest))
+        TC() -> match mem_dec(TB(), rest)
+          MYes(pf) -> MYes(InTail(TC(), rest, pf))
+          MNo(nx) -> MNo(NICons(TC(), rest, reflexive(OF()), nx))
+      TC() -> match y
+        TA() -> match mem_dec(TC(), rest)
+          MYes(pf) -> MYes(InTail(TA(), rest, pf))
+          MNo(nx) -> MNo(NICons(TA(), rest, reflexive(OF()), nx))
+        TB() -> match mem_dec(TC(), rest)
+          MYes(pf) -> MYes(InTail(TB(), rest, pf))
+          MNo(nx) -> MNo(NICons(TB(), rest, reflexive(OF()), nx))
+        TC() -> MYes(InHead(TC(), rest))
+  fn inter_pick(x: Tag, t: Branches, rest: Branches, d: MemDec(x, t)) -> Branches = match d
+    MYes(pf) -> BCons(x, inter(rest, t))
+    MNo(nx)  -> inter(rest, t)
+  fn inter(s: Branches, t: Branches) -> Branches = match s
+    BNil()         -> BNil()
+    BCons(x, rest) -> inter_pick(x, t, rest, mem_dec(x, t))
+  fn bappend(s: Branches, t: Branches) -> Branches = match s
+    BNil()         -> t
+    BCons(x, rest) -> BCons(x, bappend(rest, t))
+  type Covers indices (big: Branches, small: Branches)
+    CovNil  : Covers(big, BNil)
+    CovCons : InB(x, big) -> Covers(big, rest) -> Covers(big, BCons(x, rest))
+  fn covers_weaken(big: Branches, y: Tag, {small: Branches}, w: Covers(big, small)) -> Covers(BCons(y, big), small) = match w
+    CovNil()          -> CovNil()
+    CovCons(inx, w2)  -> CovCons(InTail(y, big, inx), covers_weaken(big, y, w2))
+  fn covers_refl(bs: Branches) -> Covers(bs, bs) = match bs
+    BNil()         -> CovNil()
+    BCons(x, rest) -> CovCons(InHead(x, rest), covers_weaken(rest, x, covers_refl(rest)))
+  fn covers_glb({z: Branches}, {s: Branches}, {t: Branches}, cs: Covers(z, s), ct: Covers(z, t)) -> Covers(z, bappend(s, t)) = match cs
+    CovNil()          -> ct
+    CovCons(inx, cs2) -> CovCons(inx, covers_glb(cs2, ct))
+  fn merge_lower_l(s: Branches, t: Branches) -> Covers(bappend(s, t), s) = match s
+    BNil()         -> CovNil()
+    BCons(x, rest) -> CovCons(InHead(x, bappend(rest, t)), covers_weaken(bappend(rest, t), x, merge_lower_l(rest, t)))
+  fn covers_inter_l(s: Branches, t: Branches) -> Covers(s, inter(s, t)) = match s
+    BNil()         -> CovNil()
+    BCons(x, rest) -> match mem_dec(x, t)
+      MYes(pf) -> CovCons(InHead(x, rest), covers_weaken(rest, x, covers_inter_l(rest, t)))
+      MNo(nx)  -> covers_weaken(rest, x, covers_inter_l(rest, t))
+  ## **inter_super**: if s ⊆ u (Covers(u,s)) then inter(s,u) ⊇ s (Covers(inter(s,u), s)) — every element
+  ## of s is in u so it survives the intersection. The MNo case is impossible (x ∈ u refutes NotIn(x,u)).
+  fn inter_super(s: Branches, u: Branches, sus: Covers(u, s)) -> Covers(inter(s, u), s) = match s
+    BNil()         -> CovNil()
+    BCons(x, rest) -> match sus
+      CovCons(inXu, sus2) -> match mem_dec(x, u)
+        MYes(pf) -> CovCons(InHead(x, inter(rest, u)), covers_weaken(inter(rest, u), x, inter_super(rest, u, sus2)))
+        MNo(nx)  -> match notin_absurd(nx, inXu)
+  type Equiv indices (a: Branches, b: Branches)
+    MkEquiv : Covers(a, b) -> Covers(b, a) -> Equiv(a, b)
+  ## **ABSORPTION (meet absorbs join)**: s ∩ (s ∪ t) ≈ s. Forward: s covers any intersection. Backward:
+  ## since s ⊆ s∪t, inter_super gives the intersection covers s.
+  fn absorb_meet(s: Branches, t: Branches) -> Equiv(inter(s, bappend(s, t)), s) =
+    MkEquiv(inter_super(s, bappend(s, t), merge_lower_l(s, t)), covers_inter_l(s, bappend(s, t)))
+  ## **ABSORPTION (join absorbs meet)**: s ∪ (s ∩ t) ≈ s. Forward: union covers its left operand.
+  ## Backward: s covers both s (refl) and s∩t (covers_inter_l), hence their union (covers_glb).
+  fn absorb_join(s: Branches, t: Branches) -> Equiv(bappend(s, inter(s, t)), s) =
+    MkEquiv(merge_lower_l(s, inter(s, t)), covers_glb(covers_refl(s), covers_inter_l(s, t)))
+end

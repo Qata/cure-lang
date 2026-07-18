@@ -32,23 +32,34 @@ defmodule Mix.Tasks.Cure.Oracle do
     for cluster <- clusters do
       prior = Oracle.read_fixture(cluster)
 
-      # Fan out: one task per probe, and inside each the Cure and Idris checks
-      # run concurrently. Every check is bound by a timeout, so a non-terminating
-      # elaboration surfaces as `timeout` (with its wall-clock) instead of
-      # wedging the run. Join all probes at the end.
+      # Fan out with a CONCURRENCY CAP: at most `max_conc` probes run at once, and
+      # inside each the Cure and Idris checks run concurrently. Unbounded fan-out
+      # (one task per probe) spawns ~2×#probes CPU-bound subprocesses — each Idris
+      # `--check` pegs a core for ~2 min — which saturates the machine as the probe
+      # count grows and inflates *every* Cure verdict past its timeout (false
+      # `timeout` verdicts). The cap keeps total in-flight subprocesses ≈ core
+      # count. Default: half the schedulers (so cure+idris per probe ≈ one core
+      # each); override with `ORACLE_MAX_CONCURRENCY`. Each check is still bound by
+      # its own timeout, so a non-terminating elaboration surfaces as `timeout`.
+      max_conc =
+        case System.get_env("ORACLE_MAX_CONCURRENCY") do
+          nil -> max(1, div(System.schedulers_online(), 2))
+          s -> max(1, String.to_integer(String.trim(s)))
+        end
+
       results =
         Oracle.pairs(cluster)
-        |> Enum.map(fn %{name: name, cure_path: cp, idr_path: ip} ->
-          task =
-            Task.async(fn ->
-              cure = Task.async(fn -> Oracle.cure_verdict_timed(cp) end)
-              idris = Task.async(fn -> Oracle.idris_verdict_timed(bin, ip) end)
-              {Task.await(cure, :infinity), Task.await(idris, :infinity)}
-            end)
-
-          {name, task}
-        end)
-        |> Enum.map(fn {name, task} -> {name, Task.await(task, :infinity)} end)
+        |> Task.async_stream(
+          fn %{name: name, cure_path: cp, idr_path: ip} ->
+            cure = Task.async(fn -> Oracle.cure_verdict_timed(cp) end)
+            idris = Task.async(fn -> Oracle.idris_verdict_timed(bin, ip) end)
+            {name, {Task.await(cure, :infinity), Task.await(idris, :infinity)}}
+          end,
+          max_concurrency: max_conc,
+          timeout: :infinity,
+          ordered: false
+        )
+        |> Enum.map(fn {:ok, res} -> res end)
 
       fixture =
         for {name, {{cure_v, cure_ms}, {idris_v, idris_ms}}} <- results, into: %{} do

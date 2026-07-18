@@ -1,0 +1,110 @@
+mod SortUnique
+  use Std.Equivalent
+  ## SORTING IS UNIQUELY SPECIFIED: two lists that are both sorted and have the SAME MULTISET (equal element
+  ## counts everywhere) are EQUAL. This is the UNIQUENESS half of sorting correctness — the sort algorithms
+  ## (insertion_sort, merge_sorted) prove a sorted permutation EXISTS; this proves it is the ONLY one, so any
+  ## correct sort is forced to produce this exact list. Heads must be equal: each list's head bounds the
+  ## other's head as an element PRESENT in it (membership encoded as count > 0), giving leq both ways, hence
+  ## equal by antisymmetry; the tails then have equal counts and are sorted, so equal by induction. Key
+  ## machinery: an evidence-carrying equality decision EqDec routed through count_pick so the equality test
+  ## refines the count IN THE HYPOTHESIS (convoy pattern — a top-level match on a computed scrutinee leaves the
+  ## folded count opaque, so the decision must ride in as an explicit argument), plus a universally-quantified
+  ## count-equality hypothesis (a dependent function argument) rebuilt for the tail via S-injectivity.
+  type Nat = Z | S(Nat)
+  type Bool = F | T
+  type List = LNil | LCons(Nat, List)
+  fn leq(a: Nat, b: Nat) -> Bool = match a
+    Z()   -> T()
+    S(k)  -> match b
+      Z()   -> F()
+      S(j)  -> leq(k, j)
+  fn leq_refl(a: Nat) -> Equivalent(Bool, leq(a, a), T()) = match a
+    Z()   -> reflexive(T())
+    S(k)  -> leq_refl(k)
+  fn eqn(a: Nat, b: Nat) -> Bool = match a
+    Z()   -> match b
+      Z()   -> T()
+      S(k)  -> F()
+    S(j)  -> match b
+      Z()   -> F()
+      S(k)  -> eqn(j, k)
+  fn eqn_refl(a: Nat) -> Equivalent(Bool, eqn(a, a), T()) = match a
+    Z()   -> reflexive(T())
+    S(k)  -> eqn_refl(k)
+  fn pred(n: Nat) -> Nat = match n
+    Z()   -> Z()
+    S(k)  -> k
+  fn snat_cong(a: Nat, b: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) = rewrite e in reflexive(S(b))
+  fn pred_cong(m: Nat, n: Nat, e: Equivalent(Nat, m, n)) -> Equivalent(Nat, pred(m), pred(n)) = rewrite e in reflexive(pred(n))
+  fn s_inj(a: Nat, b: Nat, e: Equivalent(Nat, S(a), S(b))) -> Equivalent(Nat, a, b) = pred_cong(S(a), S(b), e)
+  fn leq_antisym(a: Nat, b: Nat, h1: Equivalent(Bool, leq(a, b), T()), h2: Equivalent(Bool, leq(b, a), T())) -> Equivalent(Nat, a, b) = match a
+    Z()   -> match b
+      Z()   -> reflexive(Z())
+      S(k)  -> match h2
+    S(j)  -> match b
+      Z()   -> match h1
+      S(k)  -> snat_cong(j, k, leq_antisym(j, k, h1, h2))
+  type EqDec indices (x: Nat, y: Nat)
+    EqYes : (x2: Nat) -> (y2: Nat) -> Equivalent(Nat, x2, y2) -> EqDec(x2, y2)
+    EqNo  : (x2: Nat) -> (y2: Nat) -> Equivalent(Bool, eqn(x2, y2), F()) -> EqDec(x2, y2)
+  fn eq_dec(x: Nat, y: Nat) -> EqDec(x, y) = match x
+    Z()   -> match y
+      Z()   -> EqYes(Z(), Z(), reflexive(Z()))
+      S(k)  -> EqNo(Z(), S(k), reflexive(F()))
+    S(j)  -> match y
+      Z()   -> EqNo(S(j), Z(), reflexive(F()))
+      S(k)  -> match eq_dec(j, k)
+        EqYes(a, b, e)  -> EqYes(S(j), S(k), snat_cong(j, k, e))
+        EqNo(a, b, ne)  -> EqNo(S(j), S(k), ne)
+  fn count_pick(z: Nat, w: Nat, r: List, d: EqDec(z, w)) -> Nat = match d
+    EqYes(a, b, e) -> S(count(z, r))
+    EqNo(a, b, ne) -> count(z, r)
+  fn count(z: Nat, l: List) -> Nat = match l
+    LNil()      -> Z()
+    LCons(w, r) -> count_pick(z, w, r, eq_dec(z, w))
+  fn count_cons_self_pick(y: Nat, r: List, d: EqDec(y, y)) -> Equivalent(Nat, count_pick(y, y, r, d), S(count(y, r))) = match d
+    EqYes(a, b, e) -> reflexive(S(count(y, r)))
+    EqNo(a, b, ne) -> match trans(sym(eqn_refl(y)), ne)
+  fn count_cons_self(y: Nat, r: List) -> Equivalent(Nat, count(y, LCons(y, r)), S(count(y, r))) = count_cons_self_pick(y, r, eq_dec(y, y))
+  type LeAll indices (x: Nat, l: List)
+    LANil  : LeAll(x, LNil)
+    LACons : (y: Nat) -> (rest: List) -> Equivalent(Bool, leq(x, y), T()) -> LeAll(x, rest) -> LeAll(x, LCons(y, rest))
+  type Sorted indices (l: List)
+    SNil  : Sorted(LNil)
+    SCons : (x: Nat) -> (rest: List) -> LeAll(x, rest) -> Sorted(rest) -> Sorted(LCons(x, rest))
+  fn leall_count_le_pick(w: Nat, x: Nat, v: Nat, rest: List, k: Nat, hla2: LeAll(w, rest), hwv: Equivalent(Bool, leq(w, v), T()), d: EqDec(x, v)) -> ((Equivalent(Nat, count_pick(x, v, rest, d), S(k))) -> Equivalent(Bool, leq(w, x), T())) = match d
+    EqYes(a, b, e) -> fn(hpos) -> rewrite e in hwv
+    EqNo(a, b, ne) -> fn(hpos) -> leall_count_le(w, x, rest, k, hpos, hla2)
+  fn leall_count_le(w: Nat, x: Nat, l: List, k: Nat, hpos: Equivalent(Nat, count(x, l), S(k)), hla: LeAll(w, l)) -> Equivalent(Bool, leq(w, x), T()) = match hla
+    LANil()                    -> match hpos
+    LACons(v, rest, hwv, hla2) -> leall_count_le_pick(w, x, v, rest, k, hla2, hwv, eq_dec(x, v))(hpos)
+  fn head_le(x: Nat, xs2: List, y: Nat, k: Nat, la: LeAll(x, xs2), d: EqDec(y, x)) -> ((Equivalent(Nat, count_pick(y, x, xs2, d), S(k))) -> Equivalent(Bool, leq(x, y), T())) = match d
+    EqYes(a, b, e) -> fn(hc) -> rewrite e in leq_refl(x)
+    EqNo(a, b, ne) -> fn(hc) -> leall_count_le(x, y, xs2, k, hc, la)
+  fn count_head_cong(z: Nat, x: Nat, y: Nat, xs2: List, exy: Equivalent(Nat, x, y)) -> Equivalent(Nat, count(z, LCons(x, xs2)), count(z, LCons(y, xs2))) = rewrite exy in reflexive(count(z, LCons(y, xs2)))
+  fn tail_count_pick(z: Nat, hh: Nat, xs2: List, ys2: List, d: EqDec(z, hh)) -> ((Equivalent(Nat, count_pick(z, hh, xs2, d), count_pick(z, hh, ys2, d))) -> Equivalent(Nat, count(z, xs2), count(z, ys2))) = match d
+    EqYes(a, b, e) -> fn(hz) -> s_inj(count(z, xs2), count(z, ys2), hz)
+    EqNo(a, b, ne) -> fn(hz) -> hz
+  fn tail_count(z: Nat, x: Nat, y: Nat, xs2: List, ys2: List, exy: Equivalent(Nat, x, y), hz: Equivalent(Nat, count(z, LCons(x, xs2)), count(z, LCons(y, ys2)))) -> Equivalent(Nat, count(z, xs2), count(z, ys2)) =
+    tail_count_pick(z, y, xs2, ys2, eq_dec(z, y))(trans(sym(count_head_cong(z, x, y, xs2, exy)), hz))
+  fn lcons_cong2(x: Nat, y: Nat, xs2: List, ys2: List, exy: Equivalent(Nat, x, y), exs: Equivalent(List, xs2, ys2)) -> Equivalent(List, LCons(x, xs2), LCons(y, ys2)) = rewrite exy in rewrite exs in reflexive(LCons(y, ys2))
+  ## **SORTING IS UNIQUELY SPECIFIED**: two lists that are both sorted and have the same multiset (equal
+  ## element counts everywhere) are EQUAL. The uniqueness half of sorting correctness — any correct sort is
+  ## forced to produce this one list. Heads must be equal (each bounds the other's head as a present element,
+  ## so leq both ways ⟹ equal by antisymmetry), then the tails have equal counts and are sorted, so equal by IH.
+  fn sorted_perm_unique(xs: List, ys: List, sx: Sorted(xs), sy: Sorted(ys), h: (z: Nat) -> Equivalent(Nat, count(z, xs), count(z, ys))) -> Equivalent(List, xs, ys) = match sx
+    SNil() -> match sy
+      SNil()                    -> reflexive(LNil())
+      SCons(y, ys2, lay, syy)   -> match trans(h(y), count_cons_self(y, ys2))
+    SCons(x, xs2, lax, sxx) -> match sy
+      SNil()                    -> match trans(sym(count_cons_self(x, xs2)), h(x))
+      SCons(y, ys2, lay, syy)   -> lcons_cong2(x, y, xs2, ys2,
+        leq_antisym(x, y,
+          head_le(x, xs2, y, count(y, ys2), lax, eq_dec(y, x))(trans(h(y), count_cons_self(y, ys2))),
+          head_le(y, ys2, x, count(x, xs2), lay, eq_dec(x, y))(trans(sym(h(x)), count_cons_self(x, xs2)))),
+        sorted_perm_unique(xs2, ys2, sxx, syy, fn(z) -> tail_count(z, x, y, xs2, ys2,
+          leq_antisym(x, y,
+            head_le(x, xs2, y, count(y, ys2), lax, eq_dec(y, x))(trans(h(y), count_cons_self(y, ys2))),
+            head_le(y, ys2, x, count(x, xs2), lay, eq_dec(x, y))(trans(sym(h(x)), count_cons_self(x, xs2)))),
+          h(z))))
+end

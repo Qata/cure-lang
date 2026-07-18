@@ -654,9 +654,27 @@ defmodule Cure.Core.Kernel do
         with :ok <- check_def(env, name) do
           %{body: body} = Env.get_def(env, name)
 
-          if Certificate.terminating?(name, body, env),
-            do: {:ok, Env.certify(env, name)},
-            else: {:error, :not_total}
+          if Certificate.terminating?(name, body, env) do
+            # Certify the WHOLE proven-total SCC, not just `name`. A mutual group
+            # is certified member-by-member in declaration order; the first-declared
+            # member defers (its sibling's body is still a pending hole) and the
+            # last-declared member's check proves the group total but — before this —
+            # certified only itself, leaving the earlier member opaque to δ until the
+            # end-of-module sweep, which is too late for a dependent def checked in
+            # between. `terminating?` being true here means `pending_callee?` was
+            # false (every SCC member has a real, already-`check_def`'d body) and, for
+            # a genuine group, `mutual_group_total?` proved every member terminating
+            # together — so certifying them all is sound (Idris/Agda/Lean certify a
+            # `mutual` block as a unit). For a non-mutual def the group is `{name}`,
+            # so this is behaviour-preserving.
+            certified =
+              Certificate.total_group(name, body, env)
+              |> Enum.reduce(env, fn m, acc -> Env.certify(acc, m) end)
+
+            {:ok, certified}
+          else
+            {:error, :not_total}
+          end
         end
     end
   end

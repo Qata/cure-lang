@@ -1,0 +1,44 @@
+mod NDeadlockFree
+  use Std.Equivalent
+  ## N-PROCESS DEADLOCK-FREEDOM — the progress companion to N-process mutual exclusion, at arbitrary scale.
+  ## From any NON-EMPTY configuration some process can make progress: an all-idle system can ACQUIRE (a
+  ## process enters), a system with a holder can RELEASE (it frees up). The observable is the "all idle"
+  ## status, and the enabling move (chosen by that status) always FLIPS it — so the system is never stuck,
+  ## for any number of processes.
+  type Bool = F | T
+  type P = Idle | Crit
+  type Procs = PNil | PCons(P, Procs)
+  fn neg(b: Bool) -> Bool = match b
+    F() -> T()
+    T() -> F()
+  fn all_idle_b(procs: Procs) -> Bool = match procs
+    PNil()          -> T()
+    PCons(p, rest)  -> match p
+      Idle()  -> all_idle_b(rest)
+      Crit()  -> F()
+  fn acquire(procs: Procs) -> Procs = match procs
+    PNil()          -> PNil()
+    PCons(p, rest)  -> PCons(Crit(), rest)
+  fn release(procs: Procs) -> Procs = match procs
+    PNil()          -> PNil()
+    PCons(p, rest)  -> PCons(Idle(), release(rest))
+  ## After a release, everyone is idle.
+  fn release_all_idle(procs: Procs) -> Equivalent(Bool, all_idle_b(release(procs)), T()) = match procs
+    PNil()          -> reflexive(T())
+    PCons(p, rest)  -> release_all_idle(rest)
+  ## The enabling move's effect, routed through the all-idle DECISION b: idle ⟹ acquire, busy ⟹ release.
+  fn stepped(procs: Procs, b: Bool) -> Procs = match b
+    T() -> acquire(procs)
+    F() -> release(procs)
+  ## **THE ENABLING MOVE FLIPS THE STATUS (any decision, non-empty)**: for a non-empty config and either
+  ## branch of the guard, the resulting all-idle status is the negation of the decision. Acquire turns an
+  ## idle system busy (T→F, the head goes critical); release turns a busy system idle (F→T).
+  fn deadlock_step(p: P, rest: Procs, b: Bool) -> Equivalent(Bool, all_idle_b(stepped(PCons(p, rest), b)), neg(b)) = match b
+    T() -> reflexive(F())
+    F() -> release_all_idle(rest)
+  ## **DEADLOCK-FREEDOM**: for a non-empty configuration, the move enabled by the current all-idle status
+  ## FLIPS that status — all_idle_b(stepped(c, all_idle_b(c))) = neg(all_idle_b(c)). So the system always
+  ## makes an observable move; it never wedges, for any number of processes and any state.
+  fn deadlock_free(p: P, rest: Procs) -> Equivalent(Bool, all_idle_b(stepped(PCons(p, rest), all_idle_b(PCons(p, rest)))), neg(all_idle_b(PCons(p, rest)))) =
+    deadlock_step(p, rest, all_idle_b(PCons(p, rest)))
+end

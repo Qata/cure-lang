@@ -1,0 +1,149 @@
+mod VectorClockJoin
+  use Std.Equivalent
+  ## VECTOR CLOCKS FORM A JOIN-SEMILATTICE — the operational algebra beneath the causal order, and the
+  ## algebraic core of CRDT convergence. The receive-merge of two vector clocks is the componentwise max
+  ## (vmax); this proves it is exactly the LEAST UPPER BOUND of the causal order vc_le (vmax_ub_l / vmax_ub_r
+  ## give both operands ≤ the merge, vmax_lub gives leastness), so vmax IS the join. Merge is also a
+  ## SEMILATTICE — commutative (vmax_comm), idempotent (vmax_idem), associative (vmax_assoc) — which is
+  ## exactly STRONG EVENTUAL CONSISTENCY: replicas that merge the same set of updates converge regardless of
+  ## message ORDER, DUPLICATION, or GROUPING. A local event ticks the process's own component and the clock
+  ## only advances (tick_mono: v ≤ tick(i,v)), so a process's clock is monotone along its execution. The
+  ## componentwise proofs reuse the Nat order lemmas and a small Nat-max algebra (le_max_l/r, max_lub,
+  ## max_comm/idem/assoc). VNil is the bottom clock (below every clock).
+  type Nat = Z | S(Nat)
+  type Bool = F | T
+  fn leq(a: Nat, b: Nat) -> Bool = match a
+    Z()   -> T()
+    S(k)  -> match b
+      Z()   -> F()
+      S(j)  -> leq(k, j)
+  fn leq_refl(a: Nat) -> Equivalent(Bool, leq(a, a), T()) = match a
+    Z()   -> reflexive(T())
+    S(k)  -> leq_refl(k)
+  fn le_succ(a: Nat) -> Equivalent(Bool, leq(a, S(a)), T()) = match a
+    Z()   -> reflexive(T())
+    S(k)  -> le_succ(k)
+  fn snat_cong(a: Nat, b: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) = rewrite e in reflexive(S(b))
+  fn max(a: Nat, b: Nat) -> Nat = match a
+    Z()   -> b
+    S(k)  -> match b
+      Z()   -> S(k)
+      S(j)  -> S(max(k, j))
+  fn le_max_l(a: Nat, b: Nat) -> Equivalent(Bool, leq(a, max(a, b)), T()) = match a
+    Z()   -> reflexive(T())
+    S(k)  -> match b
+      Z()   -> leq_refl(S(k))
+      S(j)  -> le_max_l(k, j)
+  fn le_max_r(a: Nat, b: Nat) -> Equivalent(Bool, leq(b, max(a, b)), T()) = match a
+    Z()   -> leq_refl(b)
+    S(k)  -> match b
+      Z()   -> reflexive(T())
+      S(j)  -> le_max_r(k, j)
+  fn max_lub(a: Nat, b: Nat, c: Nat, ha: Equivalent(Bool, leq(a, c), T()), hb: Equivalent(Bool, leq(b, c), T())) -> Equivalent(Bool, leq(max(a, b), c), T()) = match a
+    Z()   -> hb
+    S(k)  -> match b
+      Z()   -> ha
+      S(j)  -> match c
+        Z()   -> match ha
+        S(m)  -> max_lub(k, j, m, ha, hb)
+  fn max_comm(a: Nat, b: Nat) -> Equivalent(Nat, max(a, b), max(b, a)) = match a
+    Z()   -> match b
+      Z()   -> reflexive(Z())
+      S(j)  -> reflexive(S(j))
+    S(k)  -> match b
+      Z()   -> reflexive(S(k))
+      S(j)  -> snat_cong(max(k, j), max(j, k), max_comm(k, j))
+  fn max_idem(a: Nat) -> Equivalent(Nat, max(a, a), a) = match a
+    Z()   -> reflexive(Z())
+    S(k)  -> snat_cong(max(k, k), k, max_idem(k))
+  fn max_assoc(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, max(max(a, b), c), max(a, max(b, c))) = match a
+    Z()   -> reflexive(max(b, c))
+    S(k)  -> match b
+      Z()   -> reflexive(max(S(k), c))
+      S(j)  -> match c
+        Z()   -> reflexive(S(max(k, j)))
+        S(m)  -> snat_cong(max(max(k, j), m), max(k, max(j, m)), max_assoc(k, j, m))
+  fn andb(a: Bool, b: Bool) -> Bool = match a
+    T() -> b
+    F() -> F()
+  fn andb_true_l(a: Bool, b: Bool, e: Equivalent(Bool, andb(a, b), T())) -> Equivalent(Bool, a, T()) = match a
+    T() -> reflexive(T())
+    F() -> match e
+  fn andb_true_r(a: Bool, b: Bool, e: Equivalent(Bool, andb(a, b), T())) -> Equivalent(Bool, b, T()) = match a
+    T() -> e
+    F() -> match e
+  fn andb_intro(a: Bool, b: Bool, ea: Equivalent(Bool, a, T()), eb: Equivalent(Bool, b, T())) -> Equivalent(Bool, andb(a, b), T()) = match a
+    T() -> eb
+    F() -> match ea
+  ## Vector clock; VNil is the bottom (empty/zero) clock — below every clock.
+  type VC = VNil | VCons(Nat, VC)
+  fn vc_le(u: VC, v: VC) -> Bool = match u
+    VNil()        -> T()
+    VCons(x, u2)  -> match v
+      VNil()        -> F()
+      VCons(y, v2)  -> andb(leq(x, y), vc_le(u2, v2))
+  fn vc_le_refl(u: VC) -> Equivalent(Bool, vc_le(u, u), T()) = match u
+    VNil()        -> reflexive(T())
+    VCons(x, u2)  -> andb_intro(leq(x, x), vc_le(u2, u2), leq_refl(x), vc_le_refl(u2))
+  fn vcons_cong(x: Nat, y: Nat, u2: VC, v2: VC, exy: Equivalent(Nat, x, y), euv: Equivalent(VC, u2, v2)) -> Equivalent(VC, VCons(x, u2), VCons(y, v2)) = rewrite exy in rewrite euv in reflexive(VCons(y, v2))
+  ## The RECEIVE-MERGE: componentwise max (pads with the longer clock).
+  fn vmax(u: VC, v: VC) -> VC = match u
+    VNil()        -> v
+    VCons(x, u2)  -> match v
+      VNil()        -> VCons(x, u2)
+      VCons(y, v2)  -> VCons(max(x, y), vmax(u2, v2))
+  ## **MERGE IS AN UPPER BOUND**: u ≤ u⊔v and v ≤ u⊔v — after receiving, the clock dominates both histories.
+  fn vmax_ub_l(u: VC, v: VC) -> Equivalent(Bool, vc_le(u, vmax(u, v)), T()) = match u
+    VNil()        -> reflexive(T())
+    VCons(x, u2)  -> match v
+      VNil()        -> vc_le_refl(VCons(x, u2))
+      VCons(y, v2)  -> andb_intro(leq(x, max(x, y)), vc_le(u2, vmax(u2, v2)), le_max_l(x, y), vmax_ub_l(u2, v2))
+  fn vmax_ub_r(u: VC, v: VC) -> Equivalent(Bool, vc_le(v, vmax(u, v)), T()) = match u
+    VNil()        -> vc_le_refl(v)
+    VCons(x, u2)  -> match v
+      VNil()        -> reflexive(T())
+      VCons(y, v2)  -> andb_intro(leq(y, max(x, y)), vc_le(v2, vmax(u2, v2)), le_max_r(x, y), vmax_ub_r(u2, v2))
+  ## **MERGE IS THE LEAST UPPER BOUND**: any common upper bound w dominates u⊔v. So vmax is exactly the JOIN
+  ## of the causal order — vector clocks form a join-semilattice, the algebraic core of CRDT convergence.
+  fn vmax_lub(u: VC, v: VC, w: VC, hu: Equivalent(Bool, vc_le(u, w), T()), hv: Equivalent(Bool, vc_le(v, w), T())) -> Equivalent(Bool, vc_le(vmax(u, v), w), T()) = match u
+    VNil()        -> hv
+    VCons(x, u2)  -> match v
+      VNil()        -> hu
+      VCons(y, v2)  -> match w
+        VNil()        -> match hu
+        VCons(z, w2)  -> andb_intro(leq(max(x, y), z), vc_le(vmax(u2, v2), w2),
+          max_lub(x, y, z, andb_true_l(leq(x, z), vc_le(u2, w2), hu), andb_true_l(leq(y, z), vc_le(v2, w2), hv)),
+          vmax_lub(u2, v2, w2, andb_true_r(leq(x, z), vc_le(u2, w2), hu), andb_true_r(leq(y, z), vc_le(v2, w2), hv)))
+  ## **MERGE IS A SEMILATTICE**: commutative, idempotent, associative — so replicas that merge the same set
+  ## of updates CONVERGE regardless of message ORDER, DUPLICATION, or GROUPING (strong eventual consistency).
+  fn vmax_comm(u: VC, v: VC) -> Equivalent(VC, vmax(u, v), vmax(v, u)) = match u
+    VNil()        -> match v
+      VNil()        -> reflexive(VNil())
+      VCons(y, v2)  -> reflexive(VCons(y, v2))
+    VCons(x, u2)  -> match v
+      VNil()        -> reflexive(VCons(x, u2))
+      VCons(y, v2)  -> vcons_cong(max(x, y), max(y, x), vmax(u2, v2), vmax(v2, u2), max_comm(x, y), vmax_comm(u2, v2))
+  fn vmax_idem(u: VC) -> Equivalent(VC, vmax(u, u), u) = match u
+    VNil()        -> reflexive(VNil())
+    VCons(x, u2)  -> vcons_cong(max(x, x), x, vmax(u2, u2), u2, max_idem(x), vmax_idem(u2))
+  fn vmax_assoc(u: VC, v: VC, w: VC) -> Equivalent(VC, vmax(vmax(u, v), w), vmax(u, vmax(v, w))) = match u
+    VNil()        -> reflexive(vmax(v, w))
+    VCons(x, u2)  -> match v
+      VNil()        -> reflexive(vmax(VCons(x, u2), w))
+      VCons(y, v2)  -> match w
+        VNil()        -> reflexive(vmax(VCons(x, u2), VCons(y, v2)))
+        VCons(z, w2)  -> vcons_cong(max(max(x, y), z), max(x, max(y, z)), vmax(vmax(u2, v2), w2), vmax(u2, vmax(v2, w2)), max_assoc(x, y, z), vmax_assoc(u2, v2, w2))
+  ## A local event TICKS the process's own component.
+  fn tick(i: Nat, v: VC) -> VC = match v
+    VNil()        -> VNil()
+    VCons(x, r)   -> match i
+      Z()   -> VCons(S(x), r)
+      S(k)  -> VCons(x, tick(k, r))
+  ## **A LOCAL EVENT ADVANCES THE CLOCK**: v ≤ tick(i, v) — every event's clock dominates its predecessor,
+  ## so a process's clock is monotone along its execution.
+  fn tick_mono(i: Nat, v: VC) -> Equivalent(Bool, vc_le(v, tick(i, v)), T()) = match v
+    VNil()        -> reflexive(T())
+    VCons(x, r)   -> match i
+      Z()   -> andb_intro(leq(x, S(x)), vc_le(r, r), le_succ(x), vc_le_refl(r))
+      S(k)  -> andb_intro(leq(x, x), vc_le(r, tick(k, r)), leq_refl(x), tick_mono(k, r))
+end

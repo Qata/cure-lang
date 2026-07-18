@@ -1,0 +1,56 @@
+mod SessionLifecycle
+  use Std.Equivalent
+  ## BRIDGE: gen_server LIFECYCLE (init→running→terminate) × SESSION completion. A server carries a
+  ## session protocol; its callback loop performs one protocol step per handle_*, and it may stop
+  ## NORMALLY only when the protocol is exhausted (LEnd) — a crash may stop at any state. The load-
+  ## bearing result is a CONSERVATION law: a run's step count plus the remaining protocol length equals
+  ## the original protocol length, so a run to completion discharges EVERY session obligation exactly
+  ## once (no skipped message = no stuck/deadlocked server, no doubled message). Bridges lifecycle to sessions.
+  type Nat = Z | S(Nat)
+  type Msg = MReq | MAns
+  type Local = LSend(Msg, Local) | LRecv(Msg, Local) | LEnd
+  fn plus(a: Nat, b: Nat) -> Nat = match a
+    Z()    -> b
+    S(k)   -> S(plus(k, b))
+  fn proto_len(l: Local) -> Nat = match l
+    LEnd()        -> Z()
+    LSend(m, k)   -> S(proto_len(k))
+    LRecv(m, k)   -> S(proto_len(k))
+  ## A run fragment driving the session from `pre` to `post`, one callback per message.
+  type Serve indices (pre: Local, post: Local)
+    SDone     : Serve(l, l)
+    SSendStep : Serve(k, post) -> Serve(LSend(m, k), post)
+    SRecvStep : Serve(k, post) -> Serve(LRecv(m, k), post)
+  fn run_len({pre: Local}, {post: Local}, s: Serve(pre, post)) -> Nat = match s
+    SDone()          -> Z()
+    SSendStep(rest)  -> S(run_len(rest))
+    SRecvStep(rest)  -> S(run_len(rest))
+  fn snat_cong({a: Nat}, {b: Nat}, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) =
+    rewrite e in reflexive(S(b))
+  fn plus_zero(n: Nat) -> Equivalent(Nat, plus(n, Z()), n) = match n
+    Z()    -> reflexive(Z())
+    S(k)   -> snat_cong(plus_zero(k))
+  ## **CONSERVATION (general)**: steps taken + obligations remaining = total protocol length, for any run
+  ## fragment `Serve(pre, post)`. Induction on the run; each step decrements the remaining protocol and
+  ## increments the step count in lockstep.
+  fn conservation({pre: Local}, {post: Local}, s: Serve(pre, post)) -> Equivalent(Nat, plus(run_len(s), proto_len(post)), proto_len(pre)) =
+    match s
+      SDone()          -> reflexive(proto_len(post))
+      SSendStep(rest)  -> snat_cong(conservation(rest))
+      SRecvStep(rest)  -> snat_cong(conservation(rest))
+  ## **A COMPLETING RUN DISCHARGES EVERY OBLIGATION**: a run that reaches LEnd performs exactly
+  ## proto_len(pre) steps — one per session message, none skipped, none doubled. Corollary of
+  ## conservation at post = LEnd (obligations remaining = 0) via plus_zero.
+  fn complete_run({pre: Local}, s: Serve(pre, LEnd())) -> Equivalent(Nat, run_len(s), proto_len(pre)) =
+    trans(sym(plus_zero(run_len(s))), conservation(s))
+  ## The lifecycle stop, indexed by the session state it stops at.
+  type Terminated indices (l: Local)
+    TNormal : Terminated(LEnd)
+    TCrash  : Terminated(l)
+  ## **NORMAL STOP LICENSED AT COMPLETION**: a run that reached LEnd may stop NORMALLY (TNormal is
+  ## well-typed only at LEnd — the index enforces "no normal stop mid-protocol").
+  fn clean_shutdown({pre: Local}, s: Serve(pre, LEnd())) -> Terminated(LEnd()) = TNormal()
+  ## **A CRASH MAY STOP ANYWHERE**: the asymmetry — TCrash is well-typed at every session state, so a
+  ## crash can abandon the protocol mid-flight (whereas a normal stop cannot).
+  fn crash_anytime(l: Local) -> Terminated(l) = TCrash()
+end

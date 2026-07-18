@@ -228,6 +228,8 @@ data Sub : Local -> Local -> Type where
   SubBra : (a : Tag) -> (b : Tag) -> Sub pa1 pa2 -> Sub pb1 pb2 -> Sub (LBra a pa1 b pb1) (LBra a pa2 b pb2)
   SubBraL : Sub (LBra a k b kb) (LRecv a k)
   SubBraR : Sub (LBra a ka b k) (LRecv b k)
+  SubBraLcov : Sub k k2 -> Sub (LBra a k b kb) (LRecv a k2)
+  SubBraRcov : Sub k k2 -> Sub (LBra a ka b k) (LRecv b k2)
   SubErr : Sub LErr LErr
 
 sub_refl : (l : Local) -> Sub l l
@@ -356,3 +358,144 @@ branch_terminates (WFBA t w2) = GRStep GStMsg (branch_terminates w2)
 branch_terminates (WFBC t w2) = GRStep GStMsg (branch_terminates w2)
 branch_terminates (WFAC t w2) = GRStep GStMsg (branch_terminates w2)
 branch_terminates (WFCho tL wL tR wR mg) = GRStep GStChoL (branch_terminates wL)
+
+cstep_preserves : Coherent g -> GStep g g2 -> Coherent g2
+cstep_preserves (CoAB t w2) GStMsg = w2
+cstep_preserves (CoBA t w2) GStMsg = w2
+cstep_preserves (CoCho tL wL tR wR) GStChoL = wL
+cstep_preserves (CoCho tL wL tR wR) GStChoR = wR
+
+duality_preserved : Coherent g -> GStep g g2 -> project g2 RA = dual (project g2 RB)
+duality_preserved w st = choice_duality (cstep_preserves w st)
+
+data LStep : Local -> Local -> Type where
+  LStSend : LStep (LSend t k) k
+  LStRecv : LStep (LRecv t k) k
+  LStSelL : LStep (LSel tL kL tR kR) kL
+  LStBraL : LStep (LBra tL kL tR kR) kL
+  LStSelR : LStep (LSel tL kL tR kR) kR
+  LStBraR : LStep (LBra tL kL tR kR) kR
+
+proj_sender_steps : (fr : Role) -> (to : Role) -> (t : Tag) -> (k : Global) -> LStep (project (GMsg fr to t k) fr) (project k fr)
+proj_sender_steps RA to t k = LStSend
+proj_sender_steps RB to t k = LStSend
+proj_sender_steps RC to t k = LStSend
+
+proj_chooser_steps : (fr : Role) -> (to : Role) -> (tL : Tag) -> (gL : Global) -> (tR : Tag) -> (gR : Global) -> LStep (project (GCho fr to tL gL tR gR) fr) (project gL fr)
+proj_chooser_steps RA to tL gL tR gR = LStSelL
+proj_chooser_steps RB to tL gL tR gR = LStSelL
+proj_chooser_steps RC to tL gL tR gR = LStSelL
+
+proj_receiver_steps : (fr : Role) -> (to : Role) -> (t : Tag) -> (k : Global) -> role_eq fr to = F -> LStep (project (GMsg fr to t k) to) (project k to)
+proj_receiver_steps RA RA t k Refl impossible
+proj_receiver_steps RA RB t k neq = LStRecv
+proj_receiver_steps RA RC t k neq = LStRecv
+proj_receiver_steps RB RA t k neq = LStRecv
+proj_receiver_steps RB RB t k Refl impossible
+proj_receiver_steps RB RC t k neq = LStRecv
+proj_receiver_steps RC RA t k neq = LStRecv
+proj_receiver_steps RC RB t k neq = LStRecv
+proj_receiver_steps RC RC t k Refl impossible
+
+proj_offerer_steps : (fr : Role) -> (to : Role) -> (tL : Tag) -> (gL : Global) -> (tR : Tag) -> (gR : Global) -> role_eq fr to = F -> LStep (project (GCho fr to tL gL tR gR) to) (project gL to)
+proj_offerer_steps RA RA tL gL tR gR Refl impossible
+proj_offerer_steps RA RB tL gL tR gR neq = LStBraL
+proj_offerer_steps RA RC tL gL tR gR neq = LStBraL
+proj_offerer_steps RB RA tL gL tR gR neq = LStBraL
+proj_offerer_steps RB RB tL gL tR gR Refl impossible
+proj_offerer_steps RB RC tL gL tR gR neq = LStBraL
+proj_offerer_steps RC RA tL gL tR gR neq = LStBraL
+proj_offerer_steps RC RB tL gL tR gR neq = LStBraL
+proj_offerer_steps RC RC tL gL tR gR Refl impossible
+
+proj_bystander_msg : (fr : Role) -> (to : Role) -> (r : Role) -> (t : Tag) -> (k : Global) -> role_eq fr r = F -> role_eq to r = F -> project (GMsg fr to t k) r = project k r
+proj_bystander_msg fr to r t k p1 p2 = rewrite p1 in rewrite p2 in Refl
+
+bystander_cho_sub_left : WF (GCho RA RB tL gL tR gR) -> Sub (project (GCho RA RB tL gL tR gR) RC) (project gL RC)
+bystander_cho_sub_left (WFCho tL2 wL tR2 wR mg) = merge_sub_l mg
+
+bystander_cho_sub_right : WF (GCho RA RB tL gL tR gR) -> Sub (project (GCho RA RB tL gL tR gR) RC) (project gR RC)
+bystander_cho_sub_right (WFCho tL2 wL tR2 wR mg) = merge_sub_r mg
+
+sub_trans : Sub a b -> Sub b c -> Sub a c
+sub_trans SubEnd SubEnd = SubEnd
+sub_trans SubErr SubErr = SubErr
+sub_trans (SubSend t p) (SubSend t q) = SubSend t (sub_trans p q)
+sub_trans (SubRecv t p) (SubRecv t q) = SubRecv t (sub_trans p q)
+sub_trans (SubSel a b pA pB) (SubSel a b qA qB) = SubSel a b (sub_trans pA qA) (sub_trans pB qB)
+sub_trans (SubBra a b pA pB) (SubBra a b qA qB) = SubBra a b (sub_trans pA qA) (sub_trans pB qB)
+sub_trans (SubBra a b pA pB) SubBraL = SubBraLcov pA
+sub_trans (SubBra a b pA pB) (SubBraLcov qk) = SubBraLcov (sub_trans pA qk)
+sub_trans (SubBra a b pA pB) SubBraR = SubBraRcov pB
+sub_trans (SubBra a b pA pB) (SubBraRcov qk) = SubBraRcov (sub_trans pB qk)
+sub_trans SubBraL (SubRecv t2 q) = SubBraLcov q
+sub_trans (SubBraLcov pk) (SubRecv t2 q) = SubBraLcov (sub_trans pk q)
+sub_trans SubBraR (SubRecv t2 q) = SubBraRcov q
+sub_trans (SubBraRcov pk) (SubRecv t2 q) = SubBraRcov (sub_trans pk q)
+
+data Config = MkConfig Local Local Local
+
+config : Global -> Config
+config g = MkConfig (project g RA) (project g RB) (project g RC)
+
+data Justified : Local -> Local -> Type where
+  JStep : LStep s t -> Justified s t
+  JSame : Justified s s
+  JSub  : Sub s t -> Justified s t
+
+data CStep : Config -> Config -> Type where
+  MkCStep : Justified a a2 -> Justified b b2 -> Justified cc cc2 -> CStep (MkConfig a b cc) (MkConfig a2 b2 cc2)
+
+config_fidelity : WF g -> GStep g g2 -> CStep (config g) (config g2)
+config_fidelity (WFAB t w2) GStMsg = MkCStep (JStep LStSend) (JStep LStRecv) JSame
+config_fidelity (WFBA t w2) GStMsg = MkCStep (JStep LStRecv) (JStep LStSend) JSame
+config_fidelity (WFBC t w2) GStMsg = MkCStep JSame (JStep LStSend) (JStep LStRecv)
+config_fidelity (WFAC t w2) GStMsg = MkCStep (JStep LStSend) JSame (JStep LStRecv)
+config_fidelity (WFCho tL wL tR wR mg) GStChoL = MkCStep (JStep LStSelL) (JStep LStBraL) (JSub (merge_sub_l mg))
+config_fidelity (WFCho tL wL tR wR mg) GStChoR = MkCStep (JStep LStSelR) (JStep LStBraR) (JSub (merge_sub_r mg))
+
+data ConfigProgress : Config -> Type where
+  CPDone : ConfigProgress (MkConfig LEnd LEnd LEnd)
+  CPStep : CStep c c2 -> ConfigProgress c
+
+config_deadlock_free : WF g -> ConfigProgress (config g)
+config_deadlock_free WFEnd = CPDone
+config_deadlock_free (WFAB t w2) = CPStep (config_fidelity (WFAB t w2) GStMsg)
+config_deadlock_free (WFBA t w2) = CPStep (config_fidelity (WFBA t w2) GStMsg)
+config_deadlock_free (WFBC t w2) = CPStep (config_fidelity (WFBC t w2) GStMsg)
+config_deadlock_free (WFAC t w2) = CPStep (config_fidelity (WFAC t w2) GStMsg)
+config_deadlock_free (WFCho tL wL tR wR mg) = CPStep (config_fidelity (WFCho tL wL tR wR mg) GStChoL)
+
+data StepTo : Local -> Local -> Type where
+  MkStepTo : LStep a t -> Sub t b2 -> StepTo a b2
+
+sub_step_l : (b2 : Local) -> Sub a b -> LStep b b2 -> StepTo a b2
+sub_step_l b2 (SubSend t2 p) LStSend = MkStepTo LStSend p
+sub_step_l b2 (SubRecv t2 p) LStRecv = MkStepTo LStRecv p
+sub_step_l b2 SubBraL LStRecv = MkStepTo LStBraL (sub_refl b2)
+sub_step_l b2 (SubBraLcov pk) LStRecv = MkStepTo LStBraL pk
+sub_step_l b2 SubBraR LStRecv = MkStepTo LStBraR (sub_refl b2)
+sub_step_l b2 (SubBraRcov pk) LStRecv = MkStepTo LStBraR pk
+sub_step_l b2 (SubSel a1 b1 pA pB) LStSelL = MkStepTo LStSelL pA
+sub_step_l b2 (SubSel a1 b1 pA pB) LStSelR = MkStepTo LStSelR pB
+sub_step_l b2 (SubBra a1 b1 pA pB) LStBraL = MkStepTo LStBraL pA
+sub_step_l b2 (SubBra a1 b1 pA pB) LStBraR = MkStepTo LStBraR pB
+
+data JustStepTo : Local -> Local -> Type where
+  MkJustStepTo : Justified i i2 -> Sub i2 s2 -> JustStepTo i s2
+
+justified_sub : (s2 : Local) -> Sub i s -> Justified s s2 -> JustStepTo i s2
+justified_sub s2 sub (JStep st) = case sub_step_l s2 sub st of
+  MkStepTo lst sub2 => MkJustStepTo (JStep lst) sub2
+justified_sub s2 sub JSame = MkJustStepTo JSame sub
+justified_sub s2 sub (JSub sst) = MkJustStepTo JSame (sub_trans sub sst)
+
+data ConfigSub : Config -> Config -> Type where
+  MkConfigSub : Sub ia sa -> Sub ib sb -> Sub ic sc -> ConfigSub (MkConfig ia ib ic) (MkConfig sa sb sc)
+
+data ConfigStep : Config -> Config -> Type where
+  MkConfigStep : JustStepTo ia sa2 -> JustStepTo ib sb2 -> JustStepTo ic sc2 -> ConfigStep (MkConfig ia ib ic) (MkConfig sa2 sb2 sc2)
+
+config_subst : (g2 : Global) -> ConfigSub impl (config g) -> WF g -> GStep g g2 -> ConfigStep impl (config g2)
+config_subst g2 (MkConfigSub sa sb sc) w st = case config_fidelity w st of
+  MkCStep ja jb jc => MkConfigStep (justified_sub (project g2 RA) sa ja) (justified_sub (project g2 RB) sb jb) (justified_sub (project g2 RC) sc jc)

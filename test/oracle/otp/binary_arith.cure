@@ -1,0 +1,154 @@
+mod BinaryArith
+  use Std.Equivalent
+  ## VERIFIED BINARY ARITHMETIC — a fresh domain: positional numeral systems. Naturals are represented as bit
+  ## lists LSB-first (`Bin`), denoted by `to_nat`. Proved FAITHFUL: `inc_correct` (the binary successor denotes
+  ## the Nat successor, `to_nat(inc b) = S(to_nat b)`) and `from_nat_correct` (round-trip — every natural has a
+  ## binary form denoting it back, `to_nat(from_nat n) = n`). Then the real work: RIPPLE-CARRY ADDITION.
+  ## `addc` is the bit-by-bit adder with an incoming carry, built on a full adder — `badd` (sum bit = parity of
+  ## the three inputs) and `bcarry` (carry-out = majority). `fa` proves the defining identity `sum + 2·carry =
+  ## c + x + y` (eight cases, each reflexive). `addc_correct` then proves `to_nat(addc(c,a,b)) = c + to_nat a +
+  ## to_nat b` by induction, its binary-node case a long `plus`/`double` algebra chain: distribute `double`
+  ## over `+` (`double_plus`), substitute the full-adder identity, and reassociate (`rearrange4` swaps the
+  ## middle summands). `add_correct` (`to_nat(add a b) = to_nat a + to_nat b`) falls out at carry `O`.
+  ## `double` is directly recursive (`double(S k) = S(S(double k))`) so it reduces cleanly under the algebra.
+  type Nat = Z | S(Nat)
+  fn plus(a: Nat, b: Nat) -> Nat = match a
+    Z()   -> b
+    S(k)  -> S(plus(k, b))
+  fn snat_cong(a: Nat, b: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) = rewrite e in reflexive(S(b))
+  fn plus_zero(n: Nat) -> Equivalent(Nat, plus(n, Z()), n) = match n
+    Z()   -> reflexive(Z())
+    S(k)  -> snat_cong(plus(k, Z()), k, plus_zero(k))
+  fn plus_succ_r(a: Nat, b: Nat) -> Equivalent(Nat, plus(a, S(b)), S(plus(a, b))) = match a
+    Z()   -> reflexive(S(b))
+    S(k)  -> snat_cong(plus(k, S(b)), S(plus(k, b)), plus_succ_r(k, b))
+  fn plus_assoc(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, plus(plus(a, b), c), plus(a, plus(b, c))) = match a
+    Z()   -> reflexive(plus(b, c))
+    S(k)  -> snat_cong(plus(plus(k, b), c), plus(k, plus(b, c)), plus_assoc(k, b, c))
+  fn plus_comm(a: Nat, b: Nat) -> Equivalent(Nat, plus(a, b), plus(b, a)) = match a
+    Z()   -> sym(plus_zero(b))
+    S(k)  -> trans(snat_cong(plus(k, b), plus(b, k), plus_comm(k, b)), sym(plus_succ_r(b, k)))
+  fn plus_cong_r(a: Nat, b: Nat, c: Nat, e: Equivalent(Nat, b, c)) -> Equivalent(Nat, plus(a, b), plus(a, c)) = rewrite e in reflexive(plus(a, c))
+  fn plus_cong_l(a: Nat, b: Nat, c: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, plus(a, c), plus(b, c)) = rewrite e in reflexive(plus(b, c))
+  fn plus_cong2(a: Nat, ap: Nat, b: Nat, bp: Nat, ea: Equivalent(Nat, a, ap), eb: Equivalent(Nat, b, bp)) -> Equivalent(Nat, plus(a, b), plus(ap, bp)) = rewrite ea in rewrite eb in reflexive(plus(ap, bp))
+  ## Reorder the middle two summands: (w+x)+(y+z) = (w+y)+(x+z).
+  fn rearrange4(w: Nat, x: Nat, y: Nat, z: Nat) -> Equivalent(Nat, plus(plus(w, x), plus(y, z)), plus(plus(w, y), plus(x, z))) =
+    trans(plus_assoc(w, x, plus(y, z)),
+      trans(plus_cong_r(w, plus(x, plus(y, z)), plus(plus(x, y), z), sym(plus_assoc(x, y, z))),
+        trans(plus_cong_r(w, plus(plus(x, y), z), plus(plus(y, x), z), plus_cong_l(plus(x, y), plus(y, x), z, plus_comm(x, y))),
+          trans(plus_cong_r(w, plus(plus(y, x), z), plus(y, plus(x, z)), plus_assoc(y, x, z)),
+            sym(plus_assoc(w, y, plus(x, z)))))))
+  fn double(n: Nat) -> Nat = match n
+    Z()   -> Z()
+    S(k)  -> S(S(double(k)))
+  fn double_cong(m: Nat, n: Nat, e: Equivalent(Nat, m, n)) -> Equivalent(Nat, double(m), double(n)) = rewrite e in reflexive(double(n))
+  fn double_plus(p: Nat, q: Nat) -> Equivalent(Nat, double(plus(p, q)), plus(double(p), double(q))) = match p
+    Z()   -> reflexive(double(q))
+    S(k)  -> snat_cong(S(double(plus(k, q))), S(plus(double(k), double(q))), snat_cong(double(plus(k, q)), plus(double(k), double(q)), double_plus(k, q)))
+  type Bit = O | I
+  type Bin = BNil | BCons(Bit, Bin)
+  fn bit_nat(x: Bit) -> Nat = match x
+    O() -> Z()
+    I() -> S(Z())
+  fn to_nat(b: Bin) -> Nat = match b
+    BNil()        -> Z()
+    BCons(bit, r) -> match bit
+      O() -> double(to_nat(r))
+      I() -> S(double(to_nat(r)))
+  fn to_nat_bcons(bit: Bit, r: Bin) -> Equivalent(Nat, to_nat(BCons(bit, r)), plus(bit_nat(bit), double(to_nat(r)))) = match bit
+    O() -> reflexive(double(to_nat(r)))
+    I() -> reflexive(S(double(to_nat(r))))
+  fn inc(b: Bin) -> Bin = match b
+    BNil()        -> BCons(I(), BNil())
+    BCons(bit, r) -> match bit
+      O() -> BCons(I(), r)
+      I() -> BCons(O(), inc(r))
+  fn inc_correct(b: Bin) -> Equivalent(Nat, to_nat(inc(b)), S(to_nat(b))) = match b
+    BNil()        -> reflexive(S(Z()))
+    BCons(bit, r) -> match bit
+      O() -> reflexive(S(double(to_nat(r))))
+      I() -> double_cong(to_nat(inc(r)), S(to_nat(r)), inc_correct(r))
+  fn from_nat(n: Nat) -> Bin = match n
+    Z()   -> BNil()
+    S(k)  -> inc(from_nat(k))
+  fn from_nat_correct(n: Nat) -> Equivalent(Nat, to_nat(from_nat(n)), n) = match n
+    Z()   -> reflexive(Z())
+    S(k)  -> trans(inc_correct(from_nat(k)), snat_cong(to_nat(from_nat(k)), k, from_nat_correct(k)))
+  ## Full adder: sum bit (parity of the three inputs) and carry-out bit (majority).
+  fn badd(c: Bit, x: Bit, y: Bit) -> Bit = match c
+    O() -> match x
+      O() -> match y
+        O() -> O()
+        I() -> I()
+      I() -> match y
+        O() -> I()
+        I() -> O()
+    I() -> match x
+      O() -> match y
+        O() -> I()
+        I() -> O()
+      I() -> match y
+        O() -> O()
+        I() -> I()
+  fn bcarry(c: Bit, x: Bit, y: Bit) -> Bit = match c
+    O() -> match x
+      O() -> match y
+        O() -> O()
+        I() -> O()
+      I() -> match y
+        O() -> O()
+        I() -> I()
+    I() -> match x
+      O() -> match y
+        O() -> O()
+        I() -> I()
+      I() -> match y
+        O() -> I()
+        I() -> I()
+  ## **FULL-ADDER CORRECTNESS**: sum + 2·carry = c + x + y (the defining bit-arithmetic identity).
+  fn fa(c: Bit, x: Bit, y: Bit) -> Equivalent(Nat, plus(bit_nat(badd(c, x, y)), double(bit_nat(bcarry(c, x, y)))), plus(bit_nat(c), plus(bit_nat(x), bit_nat(y)))) = match c
+    O() -> match x
+      O() -> match y
+        O() -> reflexive(Z())
+        I() -> reflexive(S(Z()))
+      I() -> match y
+        O() -> reflexive(S(Z()))
+        I() -> reflexive(S(S(Z())))
+    I() -> match x
+      O() -> match y
+        O() -> reflexive(S(Z()))
+        I() -> reflexive(S(S(Z())))
+      I() -> match y
+        O() -> reflexive(S(S(Z())))
+        I() -> reflexive(S(S(S(Z()))))
+  fn inc_if(c: Bit, b: Bin) -> Bin = match c
+    O() -> b
+    I() -> inc(b)
+  fn inc_if_correct(c: Bit, b: Bin) -> Equivalent(Nat, to_nat(inc_if(c, b)), plus(bit_nat(c), to_nat(b))) = match c
+    O() -> reflexive(to_nat(b))
+    I() -> inc_correct(b)
+  fn addc(c: Bit, a: Bin, b: Bin) -> Bin = match a
+    BNil()        -> inc_if(c, b)
+    BCons(x, a2)  -> match b
+      BNil()        -> inc_if(c, BCons(x, a2))
+      BCons(y, b2)  -> BCons(badd(c, x, y), addc(bcarry(c, x, y), a2, b2))
+  ## **RIPPLE-CARRY ADD IS CORRECT** (with incoming carry): to_nat(addc(c,a,b)) = c + to_nat a + to_nat b.
+  fn addc_correct(c: Bit, a: Bin, b: Bin) -> Equivalent(Nat, to_nat(addc(c, a, b)), plus(bit_nat(c), plus(to_nat(a), to_nat(b)))) = match a
+    BNil()        -> inc_if_correct(c, b)
+    BCons(x, a2)  -> match b
+      BNil()        -> trans(inc_if_correct(c, BCons(x, a2)), plus_cong_r(bit_nat(c), to_nat(BCons(x, a2)), plus(to_nat(BCons(x, a2)), Z()), sym(plus_zero(to_nat(BCons(x, a2))))))
+      BCons(y, b2)  ->
+        trans(to_nat_bcons(badd(c, x, y), addc(bcarry(c, x, y), a2, b2)),
+          trans(plus_cong_r(bit_nat(badd(c, x, y)), double(to_nat(addc(bcarry(c, x, y), a2, b2))), double(plus(bit_nat(bcarry(c, x, y)), plus(to_nat(a2), to_nat(b2)))), double_cong(to_nat(addc(bcarry(c, x, y), a2, b2)), plus(bit_nat(bcarry(c, x, y)), plus(to_nat(a2), to_nat(b2))), addc_correct(bcarry(c, x, y), a2, b2))),
+            trans(plus_cong_r(bit_nat(badd(c, x, y)), double(plus(bit_nat(bcarry(c, x, y)), plus(to_nat(a2), to_nat(b2)))), plus(double(bit_nat(bcarry(c, x, y))), double(plus(to_nat(a2), to_nat(b2)))), double_plus(bit_nat(bcarry(c, x, y)), plus(to_nat(a2), to_nat(b2)))),
+              trans(plus_cong_r(bit_nat(badd(c, x, y)), plus(double(bit_nat(bcarry(c, x, y))), double(plus(to_nat(a2), to_nat(b2)))), plus(double(bit_nat(bcarry(c, x, y))), plus(double(to_nat(a2)), double(to_nat(b2)))), plus_cong_r(double(bit_nat(bcarry(c, x, y))), double(plus(to_nat(a2), to_nat(b2))), plus(double(to_nat(a2)), double(to_nat(b2))), double_plus(to_nat(a2), to_nat(b2)))),
+                trans(sym(plus_assoc(bit_nat(badd(c, x, y)), double(bit_nat(bcarry(c, x, y))), plus(double(to_nat(a2)), double(to_nat(b2))))),
+                  trans(plus_cong_l(plus(bit_nat(badd(c, x, y)), double(bit_nat(bcarry(c, x, y)))), plus(bit_nat(c), plus(bit_nat(x), bit_nat(y))), plus(double(to_nat(a2)), double(to_nat(b2))), fa(c, x, y)),
+                    trans(plus_assoc(bit_nat(c), plus(bit_nat(x), bit_nat(y)), plus(double(to_nat(a2)), double(to_nat(b2)))),
+                      trans(plus_cong_r(bit_nat(c), plus(plus(bit_nat(x), bit_nat(y)), plus(double(to_nat(a2)), double(to_nat(b2)))), plus(plus(bit_nat(x), double(to_nat(a2))), plus(bit_nat(y), double(to_nat(b2)))), rearrange4(bit_nat(x), bit_nat(y), double(to_nat(a2)), double(to_nat(b2)))),
+                        plus_cong_r(bit_nat(c), plus(plus(bit_nat(x), double(to_nat(a2))), plus(bit_nat(y), double(to_nat(b2)))), plus(to_nat(BCons(x, a2)), to_nat(BCons(y, b2))), plus_cong2(plus(bit_nat(x), double(to_nat(a2))), to_nat(BCons(x, a2)), plus(bit_nat(y), double(to_nat(b2))), to_nat(BCons(y, b2)), sym(to_nat_bcons(x, a2)), sym(to_nat_bcons(y, b2))))))))))))
+  fn add(a: Bin, b: Bin) -> Bin = addc(O(), a, b)
+  ## **BINARY ADDITION IS CORRECT**: to_nat(add(a,b)) = to_nat(a) + to_nat(b) — the positional adder computes
+  ## the sum. Falls out of addc_correct at carry O.
+  fn add_correct(a: Bin, b: Bin) -> Equivalent(Nat, to_nat(add(a, b)), plus(to_nat(a), to_nat(b))) = addc_correct(O(), a, b)
+end

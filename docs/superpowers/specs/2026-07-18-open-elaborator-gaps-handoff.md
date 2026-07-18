@@ -148,6 +148,101 @@ matching/metacontext work knocks out several of these at once.
   resolve a bare ambiguous applied def by the argument/expected types instead of requiring the
   qualified spelling.
 
+### E12 — `rewrite`'s occurrence-finder is δ-blind (target hidden under an unreduced defined function)
+
+- **Symptom.** `rewrite n1 in …` with `n1 : role_eq(fr,r) = F` against goal `project(GMsg(fr,to,t,k),
+  r) = project(k,r)` fails `:rewrite_no_match`. The redex `role_eq(fr,r)` is NOT syntactically present
+  in the goal — it appears only after `project` δ-unfolds one step and its inner `case` exposes the
+  scrutinee. `abstract_term`'s occurrence search walks the goal WITHOUT unfolding defined functions,
+  so it finds nothing to abstract.
+- **Distinct from E8** (same `:rewrite_no_match` tag, different mechanism): E8's redex is
+  PRESENT-but-unrefined (an outer match failed to refine `m`); E12's redex is ABSENT-until-unfolded
+  (buried under a defined-function application). Do not conflate them.
+- **Root cause + layer.** E (`elaborator.ex`, the rewrite/`abstract_term` path). The kernel's
+  conversion DOES see through `project` (δ/ι) — the concrete-cased `reflexive` version checks fine —
+  but the elaborator's rewrite occurrence-finder does not WHNF/δ-normalise the goal to expose targets
+  that sit as `case` scrutinees under a defined function.
+- **Idris accepts** the direct `rewrite p1 in rewrite p2 in Refl` (its evaluator WHNF-reduces `project`
+  to the exposed `case`). Reach gap: YES.
+- **Proposed fix.** WHNF/δ-normalise the goal (or candidate subterms) during rewrite-occurrence search,
+  matching Idris. E-only; no kernel change (kernel conversion already handles it).
+- **Workaround (in use).** Case the scrutinees concretely (`match r`/`match fr`/`match to`) so
+  `role_eq`/`project` reduce and lean on kernel conversion via `reflexive`. Verified on
+  `branch_merge.cure` `proj_bystander_msg` (27-leaf concrete case; Idris mirror uses the direct rewrite).
+
+### E1-sub — scrutinee variable not substituted in branch-BODY term occurrences
+
+- **Symptom.** `match r { RA() -> reflexive(project(k, r)) … }` gives `:conversion_failure`: the branch
+  refines the GOAL to `project(k, RA)`, but the hand-written `r` in `project(k, r)` still dereferences
+  the abstract binder (`nvar`), not `RA`. Writing the literal `project(k, RA())` fixes it.
+- **Relation to E1.** The E1 family is framed as sibling/context refinement (refining OTHER binders'
+  types). This is the MATCHED variable itself, in TERM position in the body, not being linked to its
+  pattern — which Idris/Agda get free via clause substitution. Same root (refinement scoped too
+  narrowly), new surface; track as an E1 sub-case, not a dup.
+- **Root cause + layer.** E. The branch substitution refines the motive/goal but is not applied to
+  term-level occurrences of the scrutinee variable in the branch body.
+- **Idris accepts** (clause substitution replaces `r` with `RA` everywhere in the branch). Reach gap: YES.
+- **Proposed fix.** Extend the branch substitution to rewrite the scrutinee variable to its pattern in
+  the body's elaboration context, not just the goal. Subsumed by the E1 context-refinement rework.
+- **Workaround (in use).** Write the concrete constructor literal in the branch body instead of the
+  matched variable. In use across `branch_merge.cure` concrete-cased lemmas.
+
+### E13 — reflexive/diagonal GADT constructor doesn't propagate its index identification to the goal
+
+- **Symptom.** A reflexivity constructor `SubRefl : Sub(l, l)` (both indices the SAME var). Matching
+  `sub : Sub(a, b)` against `SubRefl` unifies `a = b`, but when a subsequent match (or an already-matched
+  sibling scrutinee) refines `b` to a concrete shape (e.g. `b := LSel(kL,kR)` from matching `st :
+  LStep(b, b2)`), that refinement does NOT flow back to `a` in the goal. Reconstructing a term over `a`
+  (`MkStepTo(LStSelL(), …)` or reusing `st : LStep(a, b2)`) then leaves the constructor's index metavars
+  unsolved (`:unsolved_metavariables, LStSelL`). Minimal repro: a `sub_step` that, in the `SubRefl` case,
+  must produce a `Step(a, _)` — fails; the structural cases (which bind `a`'s shape via the constructor
+  pattern) succeed.
+- **Root cause + layer.** E. `SubRefl`'s two-occurrences-of-`l` index unifies `a` and `b` as a symmetric
+  equation but the elaborator keeps them as distinct metavars linked only one-directionally; a later
+  refinement of one is not mirrored onto the other, so the goal's copy of `a` stays unsolved.
+- **Idris accepts** the identical proof (its unifier treats `a = b` symmetrically and propagates). Reach
+  gap: YES.
+- **Consequence.** Blocks the IMPLICIT-continuation form of `sub_step_l` (subtyping simulates local
+  reduction with the step target inferred), which in turn blocks any theorem that must invoke it with a
+  NEUTRAL/unnameable continuation — the multi-step simulation `sub_run` and the natural
+  implicit-`g2` `config_subst`.
+- **Proposed fix.** In GADT-pattern unification, record a reflexive index identification (`a = b` from a
+  repeated-variable constructor index) as a two-way link so a later refinement of either side updates
+  both, and re-solve dependent goals. E-only.
+- **Workaround (in use).** Make the shared continuation EXPLICIT so it never needs reflexive
+  reconstruction: `config_subst` takes `g2` explicit, so the spec continuations `project(g2, role)` are
+  writable and thread as `sub_step_l`'s explicit `b2` — avoiding `SubRefl` entirely (`7d0ccad1`).
+
+### K-bug 3 — MISDIAGNOSED (NOT a Cure gap); it exposed a real ORACLE-rigor gap instead
+
+- **Original claim (WRONG).** The faithful n-ary branch-merge `merge`/`union_branches`/`insert_branch`
+  (where `union_branches(bs1, BCons(t,k,rest)) = insert_branch(t, k, union_branches(bs1, rest))` and
+  `insert_branch` calls `merge(k, k2)` on a shared label) fails to certify total in Cure, and "Idris
+  accepts it" — implying Cure's size-change is more conservative than Idris.
+- **Corrected (verified 2026-07-18).** The "Idris accepts" evidence was bogus: `idris2 --check` does
+  NOT hard-fail on totality — under `%default total` it prints `Error: … is not total | is not
+  covering | not strictly positive` yet **exits 0**. The definitive `:total merge` REPL query shows
+  Idris ALSO rejects this group ("not total, possibly not terminating due to recursive path
+  insert_branch → merge → merge → union_branches → insert_branch"). So **Cure is correctly conservative
+  and ALIGNED with Idris — both reject.** There is no Cure size-change bug. The insert-into-a-recursive-
+  result pattern is genuinely beyond plain size-change in both languages; the fix is to author it
+  differently (POSITIONAL PAIRING recurses on structural subterms only and certifies in both — used for
+  `otp_nary_merge_idem`, `01b75884`).
+- **The REAL finding + fix (LANDED).** The oracle's `idris_verdict` decided `:accept` purely on
+  `idris2 --check` exit status, which is totality-blind. For an oracle over PROOFS totality is
+  soundness (`foo : P; foo = foo` proves anything), so a type-check pass is not enough. `oracle.ex`
+  now rejects when `--check` output matches `is not total|is not covering|not strictly positive`,
+  matching the Cure side (which certifies totality before it will δ-reduce a proof). Re-ran the whole
+  `otp` cluster under the stricter check: ZERO positive probes flipped (every proof is genuinely total
+  on the Idris side too), `verdicts.json` unchanged, replay green — so all shipped `rel=same` results
+  are now validated as total-proof on BOTH sides. NOTE: other clusters' frozen verdicts predate the
+  stricter check; the change is monotonic (only catches genuinely non-total Idris proofs), so a full
+  re-generation across clusters is a hygiene follow-up, not a correctness regression.
+- **Unrelated ordering note (still valid).** A plain FORWARD reference (a fn calling a helper declared
+  *below* it) defers certification until the end-of-module sweep, so a dependent proof checked before
+  the sweep sees the caller non-reducing — same class as the mutual-recursion cert bug (`a4f071fb`) but
+  for non-mutual forward refs; workaround is define-before-use ordering.
+
 ## 3. Recommended order
 
 1. **E9** — highest leverage; a real fix deletes the index-generalization boilerplate from every

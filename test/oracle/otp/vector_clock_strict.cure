@@ -1,0 +1,118 @@
+mod VectorClockStrict
+  use Std.Equivalent
+  ## STRICT CAUSAL PRECEDENCE IS A STRICT PARTIAL ORDER, and local events strictly advance the clock. Builds
+  ## the "happens-strictly-before" relation on vector clocks as `vc_lt(u,v) = u ≤ v AND NOT v ≤ u` (the poset
+  ## strict order), and proves it IRREFLEXIVE (vc_lt_irrefl — no event before itself), ASYMMETRIC (vc_lt_asym
+  ## — no 2-cycles), and TRANSITIVE (vc_lt_trans — causal precedence composes). The transitivity's reverse leg
+  ## ¬(w ≤ u) is refuted WITHOUT boolean blindness via `bool_mt`, a boolean modus-tollens combinator (if
+  ## w ≤ u then w ≤ v by transitivity, contradicting ¬(w ≤ v)); bool_mt is stated with the convoy pattern so
+  ## matching the boolean refines the implication hypothesis. Then the operational leg: a local event ticks the
+  ## process's own component and STRICTLY advances the clock (tick_strict: v ≺ tick(i,v), needing an InRange
+  ## witness that the process index is within the clock's dimension so the tick genuinely changes a component),
+  ## so successive events on ONE process are strictly ordered by their clocks — the program-order soundness of
+  ## vector clocks, a leg of the Fidge–Mattern characterization.
+  type Nat = Z | S(Nat)
+  type Bool = F | T
+  fn leq(a: Nat, b: Nat) -> Bool = match a
+    Z()   -> T()
+    S(k)  -> match b
+      Z()   -> F()
+      S(j)  -> leq(k, j)
+  fn leq_refl(a: Nat) -> Equivalent(Bool, leq(a, a), T()) = match a
+    Z()   -> reflexive(T())
+    S(k)  -> leq_refl(k)
+  fn leq_succ_self_f(a: Nat) -> Equivalent(Bool, leq(S(a), a), F()) = match a
+    Z()   -> reflexive(F())
+    S(k)  -> leq_succ_self_f(k)
+  fn le_trans(a: Nat, b: Nat, c: Nat, hab: Equivalent(Bool, leq(a, b), T()), hbc: Equivalent(Bool, leq(b, c), T())) -> Equivalent(Bool, leq(a, c), T()) = match a
+    Z()   -> reflexive(T())
+    S(a2) -> match b
+      Z()   -> match hab
+      S(b2) -> match c
+        Z()   -> match hbc
+        S(c2) -> le_trans(a2, b2, c2, hab, hbc)
+  fn andb(a: Bool, b: Bool) -> Bool = match a
+    T() -> b
+    F() -> F()
+  fn notb(b: Bool) -> Bool = match b
+    T() -> F()
+    F() -> T()
+  fn andb_true_l(a: Bool, b: Bool, e: Equivalent(Bool, andb(a, b), T())) -> Equivalent(Bool, a, T()) = match a
+    T() -> reflexive(T())
+    F() -> match e
+  fn andb_true_r(a: Bool, b: Bool, e: Equivalent(Bool, andb(a, b), T())) -> Equivalent(Bool, b, T()) = match a
+    T() -> e
+    F() -> match e
+  fn andb_intro(a: Bool, b: Bool, ea: Equivalent(Bool, a, T()), eb: Equivalent(Bool, b, T())) -> Equivalent(Bool, andb(a, b), T()) = match a
+    T() -> eb
+    F() -> match ea
+  fn notb_true(b: Bool, e: Equivalent(Bool, notb(b), T())) -> Equivalent(Bool, b, F()) = match b
+    T() -> match e
+    F() -> reflexive(F())
+  fn notb_f(b: Bool, e: Equivalent(Bool, b, F())) -> Equivalent(Bool, notb(b), T()) = rewrite e in reflexive(T())
+  ## Boolean modus tollens: (b=T ⟹ c=T) and c=F force b=F. Lets us refute one causal direction from another
+  ## WITHOUT boolean blindness — the key to strict-order transitivity.
+  fn bool_mt(b: Bool, c: Bool, hc: Equivalent(Bool, c, F())) -> ((Equivalent(Bool, b, T())) -> Equivalent(Bool, c, T())) -> Equivalent(Bool, b, F()) = match b
+    T() -> fn(g) -> match trans(sym(g(reflexive(T()))), hc)
+    F() -> fn(g) -> reflexive(F())
+  type VC = VNil | VCons(Nat, VC)
+  fn vc_le(u: VC, v: VC) -> Bool = match u
+    VNil()        -> T()
+    VCons(x, u2)  -> match v
+      VNil()        -> F()
+      VCons(y, v2)  -> andb(leq(x, y), vc_le(u2, v2))
+  fn vc_le_refl(u: VC) -> Equivalent(Bool, vc_le(u, u), T()) = match u
+    VNil()        -> reflexive(T())
+    VCons(x, u2)  -> andb_intro(leq(x, x), vc_le(u2, u2), leq_refl(x), vc_le_refl(u2))
+  fn vc_le_trans(u: VC, v: VC, w: VC, h1: Equivalent(Bool, vc_le(u, v), T()), h2: Equivalent(Bool, vc_le(v, w), T())) -> Equivalent(Bool, vc_le(u, w), T()) = match u
+    VNil()        -> reflexive(T())
+    VCons(x, u2)  -> match v
+      VNil()        -> match h1
+      VCons(y, v2)  -> match w
+        VNil()        -> match h2
+        VCons(z, w2)  -> andb_intro(leq(x, z), vc_le(u2, w2),
+          le_trans(x, y, z, andb_true_l(leq(x, y), vc_le(u2, v2), h1), andb_true_l(leq(y, z), vc_le(v2, w2), h2)),
+          vc_le_trans(u2, v2, w2, andb_true_r(leq(x, y), vc_le(u2, v2), h1), andb_true_r(leq(y, z), vc_le(v2, w2), h2)))
+  ## STRICT causal precedence: u happens-strictly-before v iff u ≤ v and NOT v ≤ u (the poset strict order).
+  fn vc_lt(u: VC, v: VC) -> Bool = andb(vc_le(u, v), notb(vc_le(v, u)))
+  ## **STRICT ORDER IS IRREFLEXIVE**: no event happens strictly before itself.
+  fn vc_lt_irrefl(u: VC) -> Equivalent(Bool, vc_lt(u, u), F()) = rewrite vc_le_refl(u) in reflexive(F())
+  ## **STRICT ORDER IS ASYMMETRIC**: u ≺ v rules out v ≺ u — causal precedence has no 2-cycles.
+  fn vc_lt_asym(u: VC, v: VC, h: Equivalent(Bool, vc_lt(u, v), T())) -> Equivalent(Bool, vc_lt(v, u), F()) =
+    rewrite notb_true(vc_le(v, u), andb_true_r(vc_le(u, v), notb(vc_le(v, u)), h)) in reflexive(F())
+  ## **STRICT ORDER IS TRANSITIVE**: u ≺ v ≺ w ⟹ u ≺ w. Causal precedence composes. The reverse leg
+  ## ¬(w ≤ u) is refuted via bool_mt: were w ≤ u, then w ≤ v by transitivity, contradicting ¬(w ≤ v).
+  fn vc_lt_trans(u: VC, v: VC, w: VC, h1: Equivalent(Bool, vc_lt(u, v), T()), h2: Equivalent(Bool, vc_lt(v, w), T())) -> Equivalent(Bool, vc_lt(u, w), T()) =
+    andb_intro(vc_le(u, w), notb(vc_le(w, u)),
+      vc_le_trans(u, v, w, andb_true_l(vc_le(u, v), notb(vc_le(v, u)), h1), andb_true_l(vc_le(v, w), notb(vc_le(w, v)), h2)),
+      notb_f(vc_le(w, u),
+        bool_mt(vc_le(w, u), vc_le(w, v),
+          notb_true(vc_le(w, v), andb_true_r(vc_le(v, w), notb(vc_le(w, v)), h2)))(
+          fn(hwu) -> vc_le_trans(w, u, v, hwu, andb_true_l(vc_le(u, v), notb(vc_le(v, u)), h1)))))
+  ## A local event ticks the process's own component.
+  fn tick(i: Nat, v: VC) -> VC = match v
+    VNil()        -> VNil()
+    VCons(x, r)   -> match i
+      Z()   -> VCons(S(x), r)
+      S(k)  -> VCons(x, tick(k, r))
+  fn le_succ(a: Nat) -> Equivalent(Bool, leq(a, S(a)), T()) = match a
+    Z()   -> reflexive(T())
+    S(k)  -> le_succ(k)
+  fn tick_mono(i: Nat, v: VC) -> Equivalent(Bool, vc_le(v, tick(i, v)), T()) = match v
+    VNil()        -> reflexive(T())
+    VCons(x, r)   -> match i
+      Z()   -> andb_intro(leq(x, S(x)), vc_le(r, r), le_succ(x), vc_le_refl(r))
+      S(k)  -> andb_intro(leq(x, x), vc_le(r, tick(k, r)), leq_refl(x), tick_mono(k, r))
+  ## Witness that process index i is within the clock's dimension.
+  type InRange indices (i: Nat, v: VC)
+    IRHere  : (x: Nat) -> (r: VC) -> InRange(Z, VCons(x, r))
+    IRThere : (x: Nat) -> (k: Nat) -> (r: VC) -> InRange(k, r) -> InRange(S(k), VCons(x, r))
+  ## The ticked clock is NOT ≤ the old one — the own component genuinely increased.
+  fn tick_gt(i: Nat, v: VC, hir: InRange(i, v)) -> Equivalent(Bool, vc_le(tick(i, v), v), F()) = match hir
+    IRHere(x, r)          -> rewrite leq_succ_self_f(x) in reflexive(F())
+    IRThere(x, k, r, hir2) -> rewrite leq_refl(x) in rewrite tick_gt(k, r, hir2) in reflexive(F())
+  ## **A LOCAL EVENT STRICTLY ADVANCES THE CLOCK**: v ≺ tick(i, v). So successive events on ONE process are
+  ## strictly ordered by their clocks — the program-order soundness of vector clocks (a leg of Fidge–Mattern).
+  fn tick_strict(i: Nat, v: VC, hir: InRange(i, v)) -> Equivalent(Bool, vc_lt(v, tick(i, v)), T()) =
+    andb_intro(vc_le(v, tick(i, v)), notb(vc_le(tick(i, v), v)), tick_mono(i, v), notb_f(vc_le(tick(i, v), v), tick_gt(i, v, hir)))
+end

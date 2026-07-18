@@ -203,4 +203,11 @@ mod FiniteFixpoint
   fn map_lfp_le(f: (IF) -> IF, mono: (x: IF) -> (y: IF) -> (Sub(x, y)) -> Sub(f(x), f(y))) -> Sub(f(iter(f, S(S(S(S(Z)))))), iter(f, S(S(S(S(Z)))))) = match chain_bound(f, mono, S(S(S(S(Z)))))
     CFixed(fx) -> fx
     CSize(sz)  -> match le_irrefl_succ(S(S(S(Z))), le_trans(sz, size_bound(iter(f, S(S(S(S(Z))))))))
+
+  ## **le_lfp (le_sInf).** The dual of `lfp_le`: `lfp` is the INFIMUM of the pre-fixed points, so
+  ## anything below EVERY pre-fixed point is below `lfp`. Since `lfp = iter(f, 4)` is itself a
+  ## pre-fixed point (`map_lfp_le`), instantiate the hypothesis there. With `lfp_le` this gives the
+  ## full universal property (`lfp = ⨅ {b | f(b) ⊑ b}`), completing Knaster–Tarski over the `IF` lattice.
+  fn le_lfp(f: (IF) -> IF, mono: (x: IF) -> (y: IF) -> (Sub(x, y)) -> Sub(f(x), f(y)), a: IF, hyp: (b: IF) -> (Sub(f(b), b)) -> Sub(a, b)) -> Sub(a, iter(f, S(S(S(S(Z())))))) =
+    hyp(iter(f, S(S(S(S(Z()))))), map_lfp_le(f, mono))
 end

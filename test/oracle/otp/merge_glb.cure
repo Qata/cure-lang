@@ -1,0 +1,61 @@
+mod MergeGlb
+  use Std.Equivalent
+  ## THE MERGE UNIVERSAL PROPERTY — merge is the GREATEST lower bound (meet) of the subtyping order.
+  ## branch_merge proves merge is A lower bound (merge <: each branch); this proves it is the LARGEST
+  ## such — any common lower bound is below the merge. In the faithful n-ary MPST model, external choice
+  ## is a branch SET, width subtyping is "offers a superset of branches" (Covers), and merge is the branch
+  ## UNION. Then the meet law is clean set reasoning: a type covering both s and t covers their union.
+  ## This is the property that pins merge as THE canonical projection-combining operation (a lattice meet).
+  type Tag = TA | TB | TC
+  type Branches = BNil | BCons(Tag, Branches)
+  type Local = LB(Branches)
+  ## Membership of a tag in a branch set.
+  type InB indices (x: Tag, bs: Branches)
+    InHead : InB(x, BCons(x, rest))
+    InTail : InB(x, rest) -> InB(x, BCons(y, rest))
+  ## Covers(big, small): every branch offered by `small` is offered by `big` — the width-subtyping
+  ## witness (an external choice offering MORE branches is a subtype: safer for the receiver).
+  type Covers indices (big: Branches, small: Branches)
+    CovNil  : Covers(big, BNil)
+    CovCons : InB(x, big) -> Covers(big, rest) -> Covers(big, BCons(x, rest))
+  fn bappend(s: Branches, t: Branches) -> Branches = match s
+    BNil()        -> t
+    BCons(x, rest) -> BCons(x, bappend(rest, t))
+  ## Adding a branch to the covering (big) side preserves coverage.
+  fn covers_weaken({big: Branches}, {small: Branches}, y: Tag, w: Covers(big, small)) -> Covers(BCons(y, big), small) = match w
+    CovNil()          -> CovNil()
+    CovCons(inx, w2)  -> CovCons(InTail(inx), covers_weaken(y, w2))
+  ## Covering is reflexive (subtyping refl): every branch set covers itself.
+  fn covers_refl(bs: Branches) -> Covers(bs, bs) = match bs
+    BNil()        -> CovNil()
+    BCons(x, rest) -> CovCons(InHead(), covers_weaken(x, covers_refl(rest)))
+  ## Width subtyping on external choice: LB(s) <: LB(t) exactly when s covers t.
+  type Sub indices (a: Local, b: Local)
+    SubB : Covers(s, t) -> Sub(LB(s), LB(t))
+  ## Merge of two external choices = the UNION of their branches.
+  fn merge(x: Local, y: Local) -> Local = match x
+    LB(s) -> match y
+      LB(t) -> LB(bappend(s, t))
+  ## **MERGE IS A LOWER BOUND**: the union covers each operand, so merge(x,y) <: x and <: y.
+  fn merge_lower_l(s: Branches, t: Branches) -> Covers(bappend(s, t), s) = match s
+    BNil()        -> CovNil()
+    BCons(x, rest) -> CovCons(InHead(), covers_weaken(x, merge_lower_l(rest, t)))
+  fn merge_lower_r(s: Branches, t: Branches) -> Covers(bappend(s, t), t) = match s
+    BNil()        -> covers_refl(t)
+    BCons(x, rest) -> covers_weaken(x, merge_lower_r(rest, t))
+  fn merge_sub_l(s: Branches, t: Branches) -> Sub(merge(LB(s), LB(t)), LB(s)) = SubB(merge_lower_l(s, t))
+  fn merge_sub_r(s: Branches, t: Branches) -> Sub(merge(LB(s), LB(t)), LB(t)) = SubB(merge_lower_r(s, t))
+  ## **COVERS MEET LAW**: a set covering both s and t covers their union — the heart of the universal
+  ## property. Induction on the first Covers derivation: at each branch of s its membership carries over,
+  ## and the tail is handled by the induction hypothesis with t appended.
+  fn covers_glb({z: Branches}, {s: Branches}, {t: Branches}, cs: Covers(z, s), ct: Covers(z, t)) -> Covers(z, bappend(s, t)) = match cs
+    CovNil()          -> ct
+    CovCons(inx, cs2) -> CovCons(inx, covers_glb(cs2, ct))
+  ## **MERGE IS THE GREATEST LOWER BOUND (the meet)**: any common lower bound z of x and y is below
+  ## merge(x,y). With merge_sub_l/r (lower bound) this makes merge the MEET of the subtyping lattice —
+  ## the canonical, most-permissive combination of branch projections. The universal property of branch-merge.
+  fn merge_greatest({z: Branches}, {s: Branches}, {t: Branches}, zs: Sub(LB(z), LB(s)), zt: Sub(LB(z), LB(t))) -> Sub(LB(z), merge(LB(s), LB(t))) =
+    match zs
+      SubB(cs) -> match zt
+        SubB(ct) -> SubB(covers_glb(cs, ct))
+end
