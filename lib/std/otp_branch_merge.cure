@@ -262,4 +262,123 @@ mod Std.Otp.BranchMerge
     WFBC(t, w2)             -> reflexive(F())
     WFAC(t, w2)             -> reflexive(F())
     WFCho(tL, wL, tR, wR, mg) -> merge_ok(mg)
+  type Sub indices (s: Local, t: Local)
+    SubEnd  : Sub(LEnd, LEnd)
+    SubSend : (t: Tag) -> Sub(k1, k2) -> Sub(LSend(t, k1), LSend(t, k2))
+    SubRecv : (t: Tag) -> Sub(k1, k2) -> Sub(LRecv(t, k1), LRecv(t, k2))
+    SubSel  : (a: Tag) -> (b: Tag) -> Sub(A1, A2) -> Sub(B1, B2) -> Sub(LSel(a, A1, b, B1), LSel(a, A2, b, B2))
+    SubBra  : (a: Tag) -> (b: Tag) -> Sub(A1, A2) -> Sub(B1, B2) -> Sub(LBra(a, A1, b, B1), LBra(a, A2, b, B2))
+    SubBraL : Sub(LBra(a, k, b, kb), LRecv(a, k))
+    SubBraR : Sub(LBra(a, ka, b, k), LRecv(b, k))
+    SubErr  : Sub(LErr, LErr)
+  fn sub_refl(l: Local) -> Sub(l, l) = match l
+    LEnd()          -> SubEnd()
+    LSend(t, k)     -> SubSend(t, sub_refl(k))
+    LRecv(t, k)     -> SubRecv(t, sub_refl(k))
+    LSel(a, A, b, B) -> SubSel(a, b, sub_refl(A), sub_refl(B))
+    LBra(a, A, b, B) -> SubBra(a, b, sub_refl(A), sub_refl(B))
+    LErr()          -> SubErr()
+  ## **BRANCH-MERGE IS A LOWER BOUND.** `Mergeable(x,y) ⟹ merge(x,y) <: x` (and `<: y`) — the
+  ## merged type is a SUBTYPE of BOTH branches, so a bystander typed `merge(x,y)` is safely usable in
+  ## place of EITHER branch's expected type. This is the correctness justification for branch-merge:
+  ## the union of differing receives (`LBra`) offers more than each single receive, hence subsumes it
+  ## (`SubBraL`/`SubBraR`); matching actions recurse covariantly.
+  fn merge_sub_l({x: Local}, {y: Local}, w: Mergeable(x, y)) -> Sub(merge(x, y), x) = match w
+    MgEnd()            -> SubEnd()
+    MgSend(t, w2)      -> match t
+      TA() -> SubSend(TA(), merge_sub_l(w2))
+      TB() -> SubSend(TB(), merge_sub_l(w2))
+      TC() -> SubSend(TC(), merge_sub_l(w2))
+    MgRecvEq(t, w2)    -> match t
+      TA() -> SubRecv(TA(), merge_sub_l(w2))
+      TB() -> SubRecv(TB(), merge_sub_l(w2))
+      TC() -> SubRecv(TC(), merge_sub_l(w2))
+    MgRecvNe(a, b, pne) -> match a
+      TA() -> match b
+        TA() -> match pne
+        TB() -> SubBraL()
+        TC() -> SubBraL()
+      TB() -> match b
+        TA() -> SubBraL()
+        TB() -> match pne
+        TC() -> SubBraL()
+      TC() -> match b
+        TA() -> SubBraL()
+        TB() -> SubBraL()
+        TC() -> match pne
+    MgSel(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> SubSel(TA(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubSel(TA(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubSel(TA(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+      TB() -> match b
+        TA() -> SubSel(TB(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubSel(TB(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubSel(TB(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+      TC() -> match b
+        TA() -> SubSel(TC(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubSel(TC(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubSel(TC(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+    MgBra(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> SubBra(TA(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubBra(TA(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubBra(TA(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+      TB() -> match b
+        TA() -> SubBra(TB(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubBra(TB(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubBra(TB(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+      TC() -> match b
+        TA() -> SubBra(TC(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubBra(TC(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubBra(TC(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+  fn merge_sub_r({x: Local}, {y: Local}, w: Mergeable(x, y)) -> Sub(merge(x, y), y) = match w
+    MgEnd()            -> SubEnd()
+    MgSend(t, w2)      -> match t
+      TA() -> SubSend(TA(), merge_sub_r(w2))
+      TB() -> SubSend(TB(), merge_sub_r(w2))
+      TC() -> SubSend(TC(), merge_sub_r(w2))
+    MgRecvEq(t, w2)    -> match t
+      TA() -> SubRecv(TA(), merge_sub_r(w2))
+      TB() -> SubRecv(TB(), merge_sub_r(w2))
+      TC() -> SubRecv(TC(), merge_sub_r(w2))
+    MgRecvNe(a, b, pne) -> match a
+      TA() -> match b
+        TA() -> match pne
+        TB() -> SubBraR()
+        TC() -> SubBraR()
+      TB() -> match b
+        TA() -> SubBraR()
+        TB() -> match pne
+        TC() -> SubBraR()
+      TC() -> match b
+        TA() -> SubBraR()
+        TB() -> SubBraR()
+        TC() -> match pne
+    MgSel(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> SubSel(TA(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubSel(TA(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubSel(TA(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+      TB() -> match b
+        TA() -> SubSel(TB(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubSel(TB(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubSel(TB(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+      TC() -> match b
+        TA() -> SubSel(TC(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubSel(TC(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubSel(TC(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+    MgBra(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> SubBra(TA(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubBra(TA(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubBra(TA(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+      TB() -> match b
+        TA() -> SubBra(TB(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubBra(TB(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubBra(TB(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+      TC() -> match b
+        TA() -> SubBra(TC(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubBra(TC(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubBra(TC(), TC(), merge_sub_r(wA), merge_sub_r(wB))
 end

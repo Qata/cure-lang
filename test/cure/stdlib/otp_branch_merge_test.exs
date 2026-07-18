@@ -29,6 +29,10 @@ defmodule Cure.Stdlib.OtpBranchMergeTest do
         merge_ok(w)
       fn bystander_ok(g: Global, w: WF(g)) -> Equivalent(TB2, is_err(project(g, RC())), F()) =
         bystander_defined(w)
+      fn lower_bound_l(x: Local, y: Local, w: Mergeable(x, y)) -> Sub(merge(x, y), x) =
+        merge_sub_l(w)
+      fn lower_bound_r(x: Local, y: Local, w: Mergeable(x, y)) -> Sub(merge(x, y), y) =
+        merge_sub_r(w)
     end
     """
 

@@ -219,3 +219,93 @@ bystander_defined (WFBA t w2) = bystander_defined w2
 bystander_defined (WFBC t w2) = Refl
 bystander_defined (WFAC t w2) = Refl
 bystander_defined (WFCho tL wL tR wR mg) = merge_ok mg
+
+data Sub : Local -> Local -> Type where
+  SubEnd : Sub LEnd LEnd
+  SubSend : (t : Tag) -> Sub k1 k2 -> Sub (LSend t k1) (LSend t k2)
+  SubRecv : (t : Tag) -> Sub k1 k2 -> Sub (LRecv t k1) (LRecv t k2)
+  SubSel : (a : Tag) -> (b : Tag) -> Sub pa1 pa2 -> Sub pb1 pb2 -> Sub (LSel a pa1 b pb1) (LSel a pa2 b pb2)
+  SubBra : (a : Tag) -> (b : Tag) -> Sub pa1 pa2 -> Sub pb1 pb2 -> Sub (LBra a pa1 b pb1) (LBra a pa2 b pb2)
+  SubBraL : Sub (LBra a k b kb) (LRecv a k)
+  SubBraR : Sub (LBra a ka b k) (LRecv b k)
+  SubErr : Sub LErr LErr
+
+sub_refl : (l : Local) -> Sub l l
+sub_refl LEnd = SubEnd
+sub_refl (LSend t k) = SubSend t (sub_refl k)
+sub_refl (LRecv t k) = SubRecv t (sub_refl k)
+sub_refl (LSel a la b lb) = SubSel a b (sub_refl la) (sub_refl lb)
+sub_refl (LBra a la b lb) = SubBra a b (sub_refl la) (sub_refl lb)
+sub_refl LErr = SubErr
+
+merge_sub_l : Mergeable x y -> Sub (merge x y) x
+merge_sub_l MgEnd = SubEnd
+merge_sub_l (MgSend TA w2) = SubSend TA (merge_sub_l w2)
+merge_sub_l (MgSend TB w2) = SubSend TB (merge_sub_l w2)
+merge_sub_l (MgSend TC w2) = SubSend TC (merge_sub_l w2)
+merge_sub_l (MgRecvEq TA w2) = SubRecv TA (merge_sub_l w2)
+merge_sub_l (MgRecvEq TB w2) = SubRecv TB (merge_sub_l w2)
+merge_sub_l (MgRecvEq TC w2) = SubRecv TC (merge_sub_l w2)
+merge_sub_l (MgRecvNe TA TA pne) = void (tNeF pne)
+merge_sub_l (MgRecvNe TA TB pne) = SubBraL
+merge_sub_l (MgRecvNe TA TC pne) = SubBraL
+merge_sub_l (MgRecvNe TB TA pne) = SubBraL
+merge_sub_l (MgRecvNe TB TB pne) = void (tNeF pne)
+merge_sub_l (MgRecvNe TB TC pne) = SubBraL
+merge_sub_l (MgRecvNe TC TA pne) = SubBraL
+merge_sub_l (MgRecvNe TC TB pne) = SubBraL
+merge_sub_l (MgRecvNe TC TC pne) = void (tNeF pne)
+merge_sub_l (MgSel TA TA wA wB) = SubSel TA TA (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgSel TA TB wA wB) = SubSel TA TB (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgSel TA TC wA wB) = SubSel TA TC (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgSel TB TA wA wB) = SubSel TB TA (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgSel TB TB wA wB) = SubSel TB TB (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgSel TB TC wA wB) = SubSel TB TC (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgSel TC TA wA wB) = SubSel TC TA (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgSel TC TB wA wB) = SubSel TC TB (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgSel TC TC wA wB) = SubSel TC TC (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgBra TA TA wA wB) = SubBra TA TA (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgBra TA TB wA wB) = SubBra TA TB (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgBra TA TC wA wB) = SubBra TA TC (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgBra TB TA wA wB) = SubBra TB TA (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgBra TB TB wA wB) = SubBra TB TB (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgBra TB TC wA wB) = SubBra TB TC (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgBra TC TA wA wB) = SubBra TC TA (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgBra TC TB wA wB) = SubBra TC TB (merge_sub_l wA) (merge_sub_l wB)
+merge_sub_l (MgBra TC TC wA wB) = SubBra TC TC (merge_sub_l wA) (merge_sub_l wB)
+
+merge_sub_r : Mergeable x y -> Sub (merge x y) y
+merge_sub_r MgEnd = SubEnd
+merge_sub_r (MgSend TA w2) = SubSend TA (merge_sub_r w2)
+merge_sub_r (MgSend TB w2) = SubSend TB (merge_sub_r w2)
+merge_sub_r (MgSend TC w2) = SubSend TC (merge_sub_r w2)
+merge_sub_r (MgRecvEq TA w2) = SubRecv TA (merge_sub_r w2)
+merge_sub_r (MgRecvEq TB w2) = SubRecv TB (merge_sub_r w2)
+merge_sub_r (MgRecvEq TC w2) = SubRecv TC (merge_sub_r w2)
+merge_sub_r (MgRecvNe TA TA pne) = void (tNeF pne)
+merge_sub_r (MgRecvNe TA TB pne) = SubBraR
+merge_sub_r (MgRecvNe TA TC pne) = SubBraR
+merge_sub_r (MgRecvNe TB TA pne) = SubBraR
+merge_sub_r (MgRecvNe TB TB pne) = void (tNeF pne)
+merge_sub_r (MgRecvNe TB TC pne) = SubBraR
+merge_sub_r (MgRecvNe TC TA pne) = SubBraR
+merge_sub_r (MgRecvNe TC TB pne) = SubBraR
+merge_sub_r (MgRecvNe TC TC pne) = void (tNeF pne)
+merge_sub_r (MgSel TA TA wA wB) = SubSel TA TA (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgSel TA TB wA wB) = SubSel TA TB (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgSel TA TC wA wB) = SubSel TA TC (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgSel TB TA wA wB) = SubSel TB TA (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgSel TB TB wA wB) = SubSel TB TB (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgSel TB TC wA wB) = SubSel TB TC (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgSel TC TA wA wB) = SubSel TC TA (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgSel TC TB wA wB) = SubSel TC TB (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgSel TC TC wA wB) = SubSel TC TC (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgBra TA TA wA wB) = SubBra TA TA (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgBra TA TB wA wB) = SubBra TA TB (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgBra TA TC wA wB) = SubBra TA TC (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgBra TB TA wA wB) = SubBra TB TA (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgBra TB TB wA wB) = SubBra TB TB (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgBra TB TC wA wB) = SubBra TB TC (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgBra TC TA wA wB) = SubBra TC TA (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgBra TC TB wA wB) = SubBra TC TB (merge_sub_r wA) (merge_sub_r wB)
+merge_sub_r (MgBra TC TC wA wB) = SubBra TC TC (merge_sub_r wA) (merge_sub_r wB)
