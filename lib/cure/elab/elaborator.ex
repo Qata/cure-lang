@@ -198,6 +198,31 @@ defmodule Cure.Elab.Elaborator do
           end
       end
 
+    # Ph2 label enforcement for a SINGLE call target. An overloaded name (≥2
+    # candidates) is handled by the pruner clause below, which tie-breaks on
+    # exact label agreement; a lone target instead only enforces its declared
+    # labels here (mandatory two-name labels must be written, optional single-name
+    # ones are free). Inert for every pre-Ph2 call: a target with no mandatory
+    # label called without labels checks `:ok`.
+    overloaded? =
+      not String.contains?(name, ".") and
+        length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2
+
+    label_check =
+      if overloaded?,
+        do: :ok,
+        else: Cure.Elab.Overload.check_labels(env, resolved, Keyword.get(meta, :arg_labels))
+
+    case label_check do
+      {:error, _} = err ->
+        err
+
+      :ok ->
+        elaborate_named_call_resolved(meta, name, atom, args, names, resolved, ctx, env)
+    end
+  end
+
+  defp elaborate_named_call_resolved(meta, name, atom, args, names, resolved, ctx, env) do
     cond do
       # An interface-method call (`eqs(x, y)`) resolves to a concrete instance
       # from the head-positioned argument's type — inlined at a concrete head,

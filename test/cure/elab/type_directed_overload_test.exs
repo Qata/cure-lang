@@ -242,6 +242,66 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     assert match?({:no_matching_overload, :pick, _}, unwrap_inner(err))
   end
 
+  # Slice E — a two-name parameter declares a MANDATORY external label even on a
+  # function that is not overloaded. The single-fn path never reaches the overload
+  # pruner, so it validates labels itself: the labelled call is accepted and binds
+  # positionally.
+  test "a mandatory label is enforced on a non-overloaded function" do
+    src = """
+    mod LabelSingleOk
+      fn move(to dest: Int) -> Int = dest
+      fn go() -> Int = move(to: 7)
+    end
+    """
+
+    assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(mod, :go, []) == 7
+  end
+
+  # The enforcement half: a bare positional call omits a label the parameter
+  # declares mandatory, so it is rejected rather than silently bound.
+  test "a bare call to a mandatorily-labelled non-overloaded function is rejected" do
+    src = """
+    mod LabelSingleMiss
+      fn move(to dest: Int) -> Int = dest
+      fn bad() -> Int = move(5)
+    end
+    """
+
+    assert {:error, err} = compile_and_load_error(src)
+    assert match?({:label_mismatch, _, _, _}, unwrap_inner(err))
+  end
+
+  # A written label that names no parameter of a non-overloaded function is
+  # likewise rejected.
+  test "a wrong label on a non-overloaded function is rejected" do
+    src = """
+    mod LabelSingleWrong
+      fn move(to dest: Int) -> Int = dest
+      fn bad() -> Int = move(from: 5)
+    end
+    """
+
+    assert {:error, err} = compile_and_load_error(src)
+    assert match?({:label_mismatch, _, _, _}, unwrap_inner(err))
+  end
+
+  # A single-name parameter's label is OPTIONAL: the caller may write it or omit
+  # it, and both forms elaborate to the same positional binding.
+  test "an optional single-name label is accepted written or omitted" do
+    src = """
+    mod LabelSingleOptional
+      fn inc(x: Int) -> Int = x + 1
+      fn bare() -> Int = inc(4)
+      fn labelled() -> Int = inc(x: 4)
+    end
+    """
+
+    assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(mod, :bare, []) == 5
+    assert apply(mod, :labelled, []) == 5
+  end
+
   # Task 6 — cross-module resolution (Design "Both"). Two `use`d modules each
   # export `to_int` on a different type; an unqualified `to_int(x)` resolves by
   # `x`'s type. Faithful mirror of `Std.Char.code_point` vs `Std.String.to_int`,

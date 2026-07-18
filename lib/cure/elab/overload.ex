@@ -38,6 +38,52 @@ defmodule Cure.Elab.Overload do
     end
   end
 
+  @doc """
+  Ph2 label check for a SINGLE (non-overloaded) call target. The overload pruner
+  above tie-breaks a set by exact label agreement; a lone function instead only
+  ENFORCES its declared labels: a mandatory (two-name) label must be written and
+  match, while an optional (single-name) label may be omitted or written freely.
+
+  Returns `:ok`, or `{:error, {:label_mismatch, key, declared_present, written}}`
+  where both vectors are aligned to the present (non-erased) parameters. A key
+  that names no def, or a def with no mandatory labels called without labels, is
+  inert `:ok` — keeping every pre-Ph2 call unaffected.
+  """
+  @spec check_labels(Env.t(), atom(), [String.t() | nil] | nil) ::
+          :ok | {:error, {:label_mismatch, atom(), [String.t() | nil], [String.t() | nil] | nil}}
+  def check_labels(%Env{} = env, key, written) do
+    case Env.get_def(env, key) do
+      %{type: pi} = def ->
+        declared = present_labels(def, pi)
+        if single_labels_ok?(declared, written),
+          do: :ok,
+          else: {:error, {:label_mismatch, key, declared, written}}
+
+      _ ->
+        :ok
+    end
+  end
+
+  # A lone target's present-param labels versus what the caller wrote. An
+  # unwritten call (`written == nil`) is legal only when no present parameter
+  # carries a mandatory label — matching every pre-Ph2 def, whose present labels
+  # are all `nil`. When labels ARE written, a mandatory (non-nil declared) label
+  # must be written identically; an optional (nil declared, single-name) position
+  # accepts any written label or none, since the internal binder name the caller
+  # may echo is not retained on the def record. A length mismatch defers to the
+  # arity machinery rather than double-diagnosing here.
+  defp single_labels_ok?(declared, nil), do: Enum.all?(declared, &is_nil/1)
+
+  defp single_labels_ok?(declared, written) when length(declared) == length(written) do
+    Enum.zip(declared, written)
+    |> Enum.all?(fn
+      {nil, _w} -> true
+      {d, w} -> d == w
+    end)
+  end
+
+  defp single_labels_ok?(_declared, _written), do: true
+
   # A candidate's present-param declared labels must agree with the labels the
   # caller actually wrote. Both vectors are aligned to the PRESENT (non-erased)
   # parameters — the same positions `present_param_types/1` prunes on and the same
