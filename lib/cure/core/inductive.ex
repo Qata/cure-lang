@@ -20,6 +20,7 @@ defmodule Cure.Core.Env do
             constrained: %{},
             primitives: %{},
             import_modules: MapSet.new(),
+            lemmas: %{},
             module_owner: nil
 
   @type t :: %__MODULE__{
@@ -42,7 +43,11 @@ defmodule Cure.Core.Env do
           # (explicit `use` + auto-prelude). Bare-name resolution prefers a
           # direct owner over a name reachable only via a module's transitive
           # re-export, matching must-import semantics (Haskell/Elm/Idris/Swift).
-          import_modules: MapSet.t(String.t())
+          import_modules: MapSet.t(String.t()),
+          # Inert elaborator metadata (the kernel never reads it): `@lemma`-tagged
+          # theorems keyed by their conclusion-head atom, for auto proof-search
+          # (see `Cure.Elab.ProofSearch`). Same status as `interfaces`/`coherence`.
+          lemmas: %{atom() => [map()]}
         }
 
   @doc "An empty signature."
@@ -182,6 +187,19 @@ defmodule Cure.Core.Env do
   @doc "The interface descriptor for `name`, or nil."
   @spec get_interface(t(), atom()) :: map() | nil
   def get_interface(%__MODULE__{interfaces: ifaces}, name), do: Map.get(ifaces, name)
+
+  @doc """
+  Register a `@lemma`-tagged theorem for auto proof-search, filed under the
+  head atom of its conclusion type. Inert elaborator metadata — the kernel
+  never reads it (like `interfaces`/`coherence`). See `Cure.Elab.ProofSearch`.
+  """
+  @spec put_lemma(t(), atom(), map()) :: t()
+  def put_lemma(%__MODULE__{lemmas: ls} = env, head, entry) when is_atom(head),
+    do: %{env | lemmas: Map.update(ls, head, [entry], &(&1 ++ [entry]))}
+
+  @doc "The `@lemma` entries filed under conclusion head `head`, or `[]`."
+  @spec lemmas(t(), atom()) :: [map()]
+  def lemmas(%__MODULE__{lemmas: ls}, head) when is_atom(head), do: Map.get(ls, head, [])
 
   @doc "Replace the coherence registry (instance table) carried in the env."
   @spec put_coherence(t(), term()) :: t()
