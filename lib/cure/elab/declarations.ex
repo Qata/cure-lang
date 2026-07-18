@@ -673,7 +673,17 @@ defmodule Cure.Elab.Declarations do
   # parameter telescope and the Π type. Deterministic in the type environment, so
   # the signature computed in the registration pass and the body pass agree.
   defp function_signature(meta, env) do
-    name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+    # A member of an overload set (tagged with :overload_ordinal by
+    # `annotate_overload_ordinals/1`) registers under a discriminated bare name
+    # `plus~<ord>`; `Env.add_def`'s `owned_name` then qualifies it to
+    # `Mod#plus~<ord>`. An untagged def keeps its plain bare name (inert).
+    base_name = meta |> Keyword.fetch!(:name) |> String.to_atom()
+
+    name =
+      case Keyword.get(meta, :overload_ordinal) do
+        nil -> base_name
+        ord -> Cure.Elab.Name.overload_key(base_name, ord)
+      end
     params0 = Keyword.get(meta, :params, [])
     # The parser makes `-> Type` optional (`fn f() = expr`); when omitted the
     # `:return_type` key is absent. An annotation-free function's codomain is
