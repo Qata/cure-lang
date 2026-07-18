@@ -1041,7 +1041,18 @@ defmodule Cure.Elab.Emit do
   # not. (Each field of a multi-field clause must call this once per field —
   # never derive further names by adding an offset to one reserved id, since
   # that reintroduces the exact same collision class against other reserved ids.)
-  defp fresh_var(prefix), do: :"#{prefix}#{System.unique_integer([:positive, :monotonic])}"
+  #
+  # The `_` between prefix and id is load-bearing, not decoration. Positional
+  # parameter binders use a SEPARATE scheme — `V<pos>` / `_e<pos>` (see
+  # `peel_params/4`, ~line 455), where `<pos>` is a small de Bruijn index — and
+  # are NOT minted here. `System.unique_integer/1` is only unique among ITS OWN
+  # ids; it can (and early in the VM's life does) return a small value like `1`,
+  # so a bare `:"V#{1}"` would alias the parameter `V1`. In Erlang an already-bound
+  # `V1` in `[V1|V2]` is an equality match, not a fresh bind, corrupting the clause
+  # (a non-deterministic `CaseClauseError`). The separator makes the fresh
+  # namespace `<prefix>_<digits>` provably disjoint from the positional
+  # `<prefix><digits>` shape — no fresh binder can ever spell a positional name.
+  defp fresh_var(prefix), do: :"#{prefix}_#{System.unique_integer([:positive, :monotonic])}"
 
   # `erl_lint` flags a bound-but-unused variable (`unused_var`). An erased proof
   # discards its parameters — an equality proof erases to the runtime-irrelevant
