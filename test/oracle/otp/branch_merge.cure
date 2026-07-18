@@ -475,4 +475,35 @@ mod BranchMerge
       RA() -> LStBraL()
       RB() -> LStBraL()
       RC() -> match neq
+  fn proj_bystander_msg(fr: Role, to: Role, r: Role, t: Tag, k: Global, n1: Equivalent(TB2, role_eq(fr, r), F()), n2: Equivalent(TB2, role_eq(to, r), F())) -> Equivalent(Local, project(GMsg(fr, to, t, k), r), project(k, r)) = match r
+    RA() -> match fr
+      RA() -> match n1
+      RB() -> match to
+        RA() -> match n2
+        RB() -> reflexive(project(k, RA()))
+        RC() -> reflexive(project(k, RA()))
+      RC() -> match to
+        RA() -> match n2
+        RB() -> reflexive(project(k, RA()))
+        RC() -> reflexive(project(k, RA()))
+    RB() -> match fr
+      RA() -> match to
+        RA() -> reflexive(project(k, RB()))
+        RB() -> match n2
+        RC() -> reflexive(project(k, RB()))
+      RB() -> match n1
+      RC() -> match to
+        RA() -> reflexive(project(k, RB()))
+        RB() -> match n2
+        RC() -> reflexive(project(k, RB()))
+    RC() -> match fr
+      RA() -> match to
+        RA() -> reflexive(project(k, RC()))
+        RB() -> reflexive(project(k, RC()))
+        RC() -> match n2
+      RB() -> match to
+        RA() -> reflexive(project(k, RC()))
+        RB() -> reflexive(project(k, RC()))
+        RC() -> match n2
+      RC() -> match n1
 end

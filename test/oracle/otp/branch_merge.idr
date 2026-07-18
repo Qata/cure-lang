@@ -403,3 +403,6 @@ proj_offerer_steps RB RC tL gL tR gR neq = LStBraL
 proj_offerer_steps RC RA tL gL tR gR neq = LStBraL
 proj_offerer_steps RC RB tL gL tR gR neq = LStBraL
 proj_offerer_steps RC RC tL gL tR gR Refl impossible
+
+proj_bystander_msg : (fr : Role) -> (to : Role) -> (r : Role) -> (t : Tag) -> (k : Global) -> role_eq fr r = F -> role_eq to r = F -> project (GMsg fr to t k) r = project k r
+proj_bystander_msg fr to r t k p1 p2 = rewrite p1 in rewrite p2 in Refl
