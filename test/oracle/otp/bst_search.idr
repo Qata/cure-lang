@@ -287,3 +287,57 @@ lmem_delete_neq x OC (Node l OC r) neq = trans (lmem_merge l r x) (sym (trans (o
 
 mem_delete_neq : (x : OKey) -> (k : OKey) -> (t : Tree) -> isbst t = OT -> keq x k = OF -> mem x (delete k t) = mem x t
 mem_delete_neq x k t bst neq = trans (mem_eq_lmem x (delete k t) (delete_bst k t bst)) (trans (lmem_delete_neq x k t neq) (sym (mem_eq_lmem x t bst)))
+
+data KList = KNil | KCons OKey KList
+
+kapp : KList -> KList -> KList
+kapp KNil ys = ys
+kapp (KCons x rest) ys = KCons x (kapp rest ys)
+
+flatten : Tree -> KList
+flatten Leaf = KNil
+flatten (Node l v r) = kapp (flatten l) (KCons v (flatten r))
+
+all_gt_list : KList -> OKey -> OBit
+all_gt_list KNil b = OT
+all_gt_list (KCons x rest) b = andb (cmp b x) (all_gt_list rest b)
+
+all_lt_list : KList -> OKey -> OBit
+all_lt_list KNil b = OT
+all_lt_list (KCons x rest) b = andb (cmp x b) (all_lt_list rest b)
+
+sorted : KList -> OBit
+sorted KNil = OT
+sorted (KCons x rest) = andb (all_gt_list rest x) (sorted rest)
+
+all_gt_list_weaken : (xs : KList) -> (v : OKey) -> (b : OKey) -> cmp b v = OT -> all_gt_list xs v = OT -> all_gt_list xs b = OT
+all_gt_list_weaken KNil v b pbv pgt = Refl
+all_gt_list_weaken (KCons x rest) v b pbv pgt = andb_intro (cmp b x) (all_gt_list rest b) (strict_trans b v x pbv (andb_l (cmp v x) (all_gt_list rest v) pgt)) (all_gt_list_weaken rest v b pbv (andb_r (cmp v x) (all_gt_list rest v) pgt))
+
+all_lt_list_weaken : (xs : KList) -> (v : OKey) -> (b : OKey) -> cmp v b = OT -> all_lt_list xs v = OT -> all_lt_list xs b = OT
+all_lt_list_weaken KNil v b pvb plt = Refl
+all_lt_list_weaken (KCons x rest) v b pvb plt = andb_intro (cmp x b) (all_lt_list rest b) (strict_trans x v b (andb_l (cmp x v) (all_lt_list rest v) plt) pvb) (all_lt_list_weaken rest v b pvb (andb_r (cmp x v) (all_lt_list rest v) plt))
+
+all_gt_list_app_cons : (xs : KList) -> (v : OKey) -> (ys : KList) -> (b : OKey) -> all_gt_list xs b = OT -> cmp b v = OT -> all_gt_list ys b = OT -> all_gt_list (kapp xs (KCons v ys)) b = OT
+all_gt_list_app_cons KNil v ys b pxs pbv pys = andb_intro (cmp b v) (all_gt_list ys b) pbv pys
+all_gt_list_app_cons (KCons x rest) v ys b pxs pbv pys = andb_intro (cmp b x) (all_gt_list (kapp rest (KCons v ys)) b) (andb_l (cmp b x) (all_gt_list rest b) pxs) (all_gt_list_app_cons rest v ys b (andb_r (cmp b x) (all_gt_list rest b) pxs) pbv pys)
+
+all_lt_list_app_cons : (xs : KList) -> (v : OKey) -> (ys : KList) -> (b : OKey) -> all_lt_list xs b = OT -> cmp v b = OT -> all_lt_list ys b = OT -> all_lt_list (kapp xs (KCons v ys)) b = OT
+all_lt_list_app_cons KNil v ys b pxs pvb pys = andb_intro (cmp v b) (all_lt_list ys b) pvb pys
+all_lt_list_app_cons (KCons x rest) v ys b pxs pvb pys = andb_intro (cmp x b) (all_lt_list (kapp rest (KCons v ys)) b) (andb_l (cmp x b) (all_lt_list rest b) pxs) (all_lt_list_app_cons rest v ys b (andb_r (cmp x b) (all_lt_list rest b) pxs) pvb pys)
+
+sorted_concat : (xs : KList) -> (v : OKey) -> (ys : KList) -> sorted xs = OT -> sorted ys = OT -> all_lt_list xs v = OT -> all_gt_list ys v = OT -> sorted (kapp xs (KCons v ys)) = OT
+sorted_concat KNil v ys sxs sys plt pgt = andb_intro (all_gt_list ys v) (sorted ys) pgt sys
+sorted_concat (KCons x rest) v ys sxs sys plt pgt = andb_intro (all_gt_list (kapp rest (KCons v ys)) x) (sorted (kapp rest (KCons v ys))) (all_gt_list_app_cons rest v ys x (andb_l (all_gt_list rest x) (sorted rest) sxs) (andb_l (cmp x v) (all_lt_list rest v) plt) (all_gt_list_weaken ys v x (andb_l (cmp x v) (all_lt_list rest v) plt) pgt)) (sorted_concat rest v ys (andb_r (all_gt_list rest x) (sorted rest) sxs) sys (andb_r (cmp x v) (all_lt_list rest v) plt) pgt)
+
+flatten_all_gt_list : (t : Tree) -> (b : OKey) -> allgt t b = OT -> all_gt_list (flatten t) b = OT
+flatten_all_gt_list Leaf b pgt = Refl
+flatten_all_gt_list (Node l v r) b pgt = all_gt_list_app_cons (flatten l) v (flatten r) b (flatten_all_gt_list l b (andb_l (allgt l b) (allgt r b) (andb_r (cmp b v) (andb (allgt l b) (allgt r b)) pgt))) (andb_l (cmp b v) (andb (allgt l b) (allgt r b)) pgt) (flatten_all_gt_list r b (andb_r (allgt l b) (allgt r b) (andb_r (cmp b v) (andb (allgt l b) (allgt r b)) pgt)))
+
+flatten_all_lt_list : (t : Tree) -> (b : OKey) -> alllt t b = OT -> all_lt_list (flatten t) b = OT
+flatten_all_lt_list Leaf b plt = Refl
+flatten_all_lt_list (Node l v r) b plt = all_lt_list_app_cons (flatten l) v (flatten r) b (flatten_all_lt_list l b (andb_l (alllt l b) (alllt r b) (andb_r (cmp v b) (andb (alllt l b) (alllt r b)) plt))) (andb_l (cmp v b) (andb (alllt l b) (alllt r b)) plt) (flatten_all_lt_list r b (andb_r (alllt l b) (alllt r b) (andb_r (cmp v b) (andb (alllt l b) (alllt r b)) plt)))
+
+flatten_sorted : (t : Tree) -> isbst t = OT -> sorted (flatten t) = OT
+flatten_sorted Leaf bst = Refl
+flatten_sorted (Node l v r) bst = sorted_concat (flatten l) v (flatten r) (flatten_sorted l (andb_l (isbst l) (andb (isbst r) (andb (alllt l v) (allgt r v))) bst)) (flatten_sorted r (andb_l (isbst r) (andb (alllt l v) (allgt r v)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l v) (allgt r v))) bst))) (flatten_all_lt_list l v (andb_l (alllt l v) (allgt r v) (andb_r (isbst r) (andb (alllt l v) (allgt r v)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l v) (allgt r v))) bst)))) (flatten_all_gt_list r v (andb_r (alllt l v) (allgt r v) (andb_r (isbst r) (andb (alllt l v) (allgt r v)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l v) (allgt r v))) bst))))

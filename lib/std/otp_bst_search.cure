@@ -271,4 +271,44 @@ mod Std.Otp.BstSearch
         OC() -> trans(lmem_merge(l, r, x), sym(trans(orb_cong_l(orb(lmem(x, l), lmem(x, r)), neq), orb_ofl(orb(lmem(x, l), lmem(x, r))))))
   fn mem_delete_neq(x: OKey, k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT()), neq: Equivalent(OBit, keq(x, k), OF())) -> Equivalent(OBit, mem(x, delete(k, t)), mem(x, t)) =
     trans(mem_eq_lmem(x, delete(k, t), delete_bst(k, t, bst)), trans(lmem_delete_neq(x, k, t, neq), sym(mem_eq_lmem(x, t, bst))))
+  type KList = KNil | KCons(OKey, KList)
+  fn kapp(xs: KList, ys: KList) -> KList = match xs
+    KNil()        -> ys
+    KCons(x, rest) -> KCons(x, kapp(rest, ys))
+  fn flatten(t: Tree) -> KList = match t
+    Leaf()        -> KNil()
+    Node(l, v, r) -> kapp(flatten(l), KCons(v, flatten(r)))
+  fn all_gt_list(xs: KList, b: OKey) -> OBit = match xs
+    KNil()        -> OT()
+    KCons(x, rest) -> andb(cmp(b, x), all_gt_list(rest, b))
+  fn all_lt_list(xs: KList, b: OKey) -> OBit = match xs
+    KNil()        -> OT()
+    KCons(x, rest) -> andb(cmp(x, b), all_lt_list(rest, b))
+  fn sorted(xs: KList) -> OBit = match xs
+    KNil()        -> OT()
+    KCons(x, rest) -> andb(all_gt_list(rest, x), sorted(rest))
+  fn all_gt_list_weaken(xs: KList, v: OKey, b: OKey, pbv: Equivalent(OBit, cmp(b, v), OT()), pgt: Equivalent(OBit, all_gt_list(xs, v), OT())) -> Equivalent(OBit, all_gt_list(xs, b), OT()) = match xs
+    KNil()        -> reflexive(OT())
+    KCons(x, rest) -> andb_intro(cmp(b, x), all_gt_list(rest, b), strict_trans(b, v, x, pbv, andb_l(cmp(v, x), all_gt_list(rest, v), pgt)), all_gt_list_weaken(rest, v, b, pbv, andb_r(cmp(v, x), all_gt_list(rest, v), pgt)))
+  fn all_lt_list_weaken(xs: KList, v: OKey, b: OKey, pvb: Equivalent(OBit, cmp(v, b), OT()), plt: Equivalent(OBit, all_lt_list(xs, v), OT())) -> Equivalent(OBit, all_lt_list(xs, b), OT()) = match xs
+    KNil()        -> reflexive(OT())
+    KCons(x, rest) -> andb_intro(cmp(x, b), all_lt_list(rest, b), strict_trans(x, v, b, andb_l(cmp(x, v), all_lt_list(rest, v), plt), pvb), all_lt_list_weaken(rest, v, b, pvb, andb_r(cmp(x, v), all_lt_list(rest, v), plt)))
+  fn all_gt_list_app_cons(xs: KList, v: OKey, ys: KList, b: OKey, pxs: Equivalent(OBit, all_gt_list(xs, b), OT()), pbv: Equivalent(OBit, cmp(b, v), OT()), pys: Equivalent(OBit, all_gt_list(ys, b), OT())) -> Equivalent(OBit, all_gt_list(kapp(xs, KCons(v, ys)), b), OT()) = match xs
+    KNil()        -> andb_intro(cmp(b, v), all_gt_list(ys, b), pbv, pys)
+    KCons(x, rest) -> andb_intro(cmp(b, x), all_gt_list(kapp(rest, KCons(v, ys)), b), andb_l(cmp(b, x), all_gt_list(rest, b), pxs), all_gt_list_app_cons(rest, v, ys, b, andb_r(cmp(b, x), all_gt_list(rest, b), pxs), pbv, pys))
+  fn all_lt_list_app_cons(xs: KList, v: OKey, ys: KList, b: OKey, pxs: Equivalent(OBit, all_lt_list(xs, b), OT()), pvb: Equivalent(OBit, cmp(v, b), OT()), pys: Equivalent(OBit, all_lt_list(ys, b), OT())) -> Equivalent(OBit, all_lt_list(kapp(xs, KCons(v, ys)), b), OT()) = match xs
+    KNil()        -> andb_intro(cmp(v, b), all_lt_list(ys, b), pvb, pys)
+    KCons(x, rest) -> andb_intro(cmp(x, b), all_lt_list(kapp(rest, KCons(v, ys)), b), andb_l(cmp(x, b), all_lt_list(rest, b), pxs), all_lt_list_app_cons(rest, v, ys, b, andb_r(cmp(x, b), all_lt_list(rest, b), pxs), pvb, pys))
+  fn sorted_concat(xs: KList, v: OKey, ys: KList, sxs: Equivalent(OBit, sorted(xs), OT()), sys: Equivalent(OBit, sorted(ys), OT()), plt: Equivalent(OBit, all_lt_list(xs, v), OT()), pgt: Equivalent(OBit, all_gt_list(ys, v), OT())) -> Equivalent(OBit, sorted(kapp(xs, KCons(v, ys))), OT()) = match xs
+    KNil()        -> andb_intro(all_gt_list(ys, v), sorted(ys), pgt, sys)
+    KCons(x, rest) -> andb_intro(all_gt_list(kapp(rest, KCons(v, ys)), x), sorted(kapp(rest, KCons(v, ys))), all_gt_list_app_cons(rest, v, ys, x, andb_l(all_gt_list(rest, x), sorted(rest), sxs), andb_l(cmp(x, v), all_lt_list(rest, v), plt), all_gt_list_weaken(ys, v, x, andb_l(cmp(x, v), all_lt_list(rest, v), plt), pgt)), sorted_concat(rest, v, ys, andb_r(all_gt_list(rest, x), sorted(rest), sxs), sys, andb_r(cmp(x, v), all_lt_list(rest, v), plt), pgt))
+  fn flatten_all_gt_list(t: Tree, b: OKey, pgt: Equivalent(OBit, allgt(t, b), OT())) -> Equivalent(OBit, all_gt_list(flatten(t), b), OT()) = match t
+    Leaf()        -> reflexive(OT())
+    Node(l, v, r) -> all_gt_list_app_cons(flatten(l), v, flatten(r), b, flatten_all_gt_list(l, b, andb_l(allgt(l, b), allgt(r, b), andb_r(cmp(b, v), andb(allgt(l, b), allgt(r, b)), pgt))), andb_l(cmp(b, v), andb(allgt(l, b), allgt(r, b)), pgt), flatten_all_gt_list(r, b, andb_r(allgt(l, b), allgt(r, b), andb_r(cmp(b, v), andb(allgt(l, b), allgt(r, b)), pgt))))
+  fn flatten_all_lt_list(t: Tree, b: OKey, plt: Equivalent(OBit, alllt(t, b), OT())) -> Equivalent(OBit, all_lt_list(flatten(t), b), OT()) = match t
+    Leaf()        -> reflexive(OT())
+    Node(l, v, r) -> all_lt_list_app_cons(flatten(l), v, flatten(r), b, flatten_all_lt_list(l, b, andb_l(alllt(l, b), alllt(r, b), andb_r(cmp(v, b), andb(alllt(l, b), alllt(r, b)), plt))), andb_l(cmp(v, b), andb(alllt(l, b), alllt(r, b)), plt), flatten_all_lt_list(r, b, andb_r(alllt(l, b), alllt(r, b), andb_r(cmp(v, b), andb(alllt(l, b), alllt(r, b)), plt))))
+  fn flatten_sorted(t: Tree, bst: Equivalent(OBit, isbst(t), OT())) -> Equivalent(OBit, sorted(flatten(t)), OT()) = match t
+    Leaf()        -> reflexive(OT())
+    Node(l, v, r) -> sorted_concat(flatten(l), v, flatten(r), flatten_sorted(l, andb_l(isbst(l), andb(isbst(r), andb(alllt(l, v), allgt(r, v))), bst)), flatten_sorted(r, andb_l(isbst(r), andb(alllt(l, v), allgt(r, v)), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, v), allgt(r, v))), bst))), flatten_all_lt_list(l, v, andb_l(alllt(l, v), allgt(r, v), andb_r(isbst(r), andb(alllt(l, v), allgt(r, v)), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, v), allgt(r, v))), bst)))), flatten_all_gt_list(r, v, andb_r(alllt(l, v), allgt(r, v), andb_r(isbst(r), andb(alllt(l, v), allgt(r, v)), andb_r(isbst(l), andb(isbst(r), andb(alllt(l, v), allgt(r, v))), bst)))))
 end

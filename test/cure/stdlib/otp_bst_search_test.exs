@@ -32,6 +32,8 @@ defmodule Cure.Stdlib.OtpBstSearchTest do
         mem_delete_eq(k, t, bst)
       fn del_preserves_others(x: OKey, k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT()), neq: Equivalent(OBit, keq(x, k), OF())) -> Equivalent(OBit, mem(x, delete(k, t)), mem(x, t)) =
         mem_delete_neq(x, k, t, bst, neq)
+      fn flatten_is_sorted(t: Tree, bst: Equivalent(OBit, isbst(t), OT())) -> Equivalent(OBit, sorted(flatten(t)), OT()) =
+        flatten_sorted(t, bst)
     end
     """
 
