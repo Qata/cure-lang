@@ -1,0 +1,47 @@
+mod AsyncChoice
+  use Std.Equivalent
+  ## ASYNC with CHOICE/BRANCHING: internal choice LSel (the process SELECTS a branch and sends its
+  ## label) and external choice LBra (the process RECEIVES the label and branches). The selection is a
+  ## routed async message, like any other. This combines the async model with session branching.
+  type Tag = TA | TB
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LSel(Tag, Local, Tag, Local) | LBra(Tag, Local, Tag, Local)
+  type Buf = BEmpty | BFull(Tag)
+  type Config = MkConfig(Local, Local, Buf, Buf)
+  fn dual(l: Local) -> Local = match l
+    LEnd()                 -> LEnd()
+    LSend(t, k)            -> LRecv(t, dual(k))
+    LRecv(t, k)            -> LSend(t, dual(k))
+    LSel(tL, kL, tR, kR)   -> LBra(tL, dual(kL), tR, dual(kR))
+    LBra(tL, kL, tR, kR)   -> LSel(tL, dual(kL), tR, dual(kR))
+  type AStep indices (c: Config, c2: Config)
+    ASendA : AStep(MkConfig(LSend(t, ka), b, BEmpty, ba), MkConfig(ka, b, BFull(t), ba))
+    ARecvB : AStep(MkConfig(a, LRecv(t, kb), BFull(t), ba), MkConfig(a, kb, BEmpty, ba))
+    ASendB : AStep(MkConfig(a, LSend(t, kb), ab, BEmpty), MkConfig(a, kb, ab, BFull(t)))
+    ARecvA : AStep(MkConfig(LRecv(t, ka), b, ab, BFull(t)), MkConfig(ka, b, ab, BEmpty))
+    ASelA : AStep(MkConfig(LSel(tL, kaL, tR, kaR), b, BEmpty, ba), MkConfig(kaL, b, BFull(tL), ba))
+    ABraB : AStep(MkConfig(a, LBra(tL, kbL, tR, kbR), BFull(tL), ba), MkConfig(a, kbL, BEmpty, ba))
+    ASelB : AStep(MkConfig(a, LSel(tL, kbL, tR, kbR), ab, BEmpty), MkConfig(a, kbL, ab, BFull(tL)))
+    ABraA : AStep(MkConfig(LBra(tL, kaL, tR, kaR), b, ab, BFull(tL)), MkConfig(kaL, b, ab, BEmpty))
+  type ARun indices (c: Config, c2: Config)
+    ARDone : ARun(c, c)
+    ARStep : AStep(c, cm) -> ARun(cm, c2) -> ARun(c, c2)
+  fn send_a(t: Tag, ka: Local) -> AStep(MkConfig(LSend(t, ka), LRecv(t, dual(ka)), BEmpty(), BEmpty()), MkConfig(ka, LRecv(t, dual(ka)), BFull(t), BEmpty())) = ASendA()
+  fn recv_b(t: Tag, ka: Local) -> AStep(MkConfig(ka, LRecv(t, dual(ka)), BFull(t), BEmpty()), MkConfig(ka, dual(ka), BEmpty(), BEmpty())) = ARecvB()
+  fn send_b(t: Tag, ka: Local) -> AStep(MkConfig(LRecv(t, ka), LSend(t, dual(ka)), BEmpty(), BEmpty()), MkConfig(LRecv(t, ka), dual(ka), BEmpty(), BFull(t))) = ASendB()
+  fn recv_a(t: Tag, ka: Local) -> AStep(MkConfig(LRecv(t, ka), dual(ka), BEmpty(), BFull(t)), MkConfig(ka, dual(ka), BEmpty(), BEmpty())) = ARecvA()
+  fn sel_a(tL: Tag, kaL: Local, tR: Tag, kaR: Local) -> AStep(MkConfig(LSel(tL, kaL, tR, kaR), LBra(tL, dual(kaL), tR, dual(kaR)), BEmpty(), BEmpty()), MkConfig(kaL, LBra(tL, dual(kaL), tR, dual(kaR)), BFull(tL), BEmpty())) = ASelA()
+  fn bra_b(tL: Tag, kaL: Local, tR: Tag, kaR: Local) -> AStep(MkConfig(kaL, LBra(tL, dual(kaL), tR, dual(kaR)), BFull(tL), BEmpty()), MkConfig(kaL, dual(kaL), BEmpty(), BEmpty())) = ABraB()
+  fn sel_b(tL: Tag, kaL: Local, tR: Tag, kaR: Local) -> AStep(MkConfig(LBra(tL, kaL, tR, kaR), LSel(tL, dual(kaL), tR, dual(kaR)), BEmpty(), BEmpty()), MkConfig(LBra(tL, kaL, tR, kaR), dual(kaL), BEmpty(), BFull(tL))) = ASelB()
+  fn bra_a(tL: Tag, kaL: Local, tR: Tag, kaR: Local) -> AStep(MkConfig(LBra(tL, kaL, tR, kaR), dual(kaL), BEmpty(), BFull(tL)), MkConfig(kaL, dual(kaL), BEmpty(), BEmpty())) = ABraA()
+  ## **ASYNC CHOICE TERMINATION**: a compatible pair (l against dual(l)) — INCLUDING internal/external
+  ## choices — runs asynchronously to completion (LEnd, LEnd, empty, empty). At each choice the chooser
+  ## selects its LEFT branch, sends the label, the offerer receives it and follows into the matching
+  ## branch; the run continues on the chosen continuation. So a branching async session never deadlocks,
+  ## is orphan-free, and terminates — for every protocol shape, choices and all.
+  fn async_terminates(l: Local) -> ARun(MkConfig(l, dual(l), BEmpty(), BEmpty()), MkConfig(LEnd(), LEnd(), BEmpty(), BEmpty())) = match l
+    LEnd()               -> ARDone()
+    LSend(t, ka)         -> ARStep(send_a(t, ka), ARStep(recv_b(t, ka), async_terminates(ka)))
+    LRecv(t, ka)         -> ARStep(send_b(t, ka), ARStep(recv_a(t, ka), async_terminates(ka)))
+    LSel(tL, kaL, tR, kaR) -> ARStep(sel_a(tL, kaL, tR, kaR), ARStep(bra_b(tL, kaL, tR, kaR), async_terminates(kaL)))
+    LBra(tL, kaL, tR, kaR) -> ARStep(sel_b(tL, kaL, tR, kaR), ARStep(bra_a(tL, kaL, tR, kaR), async_terminates(kaL)))
+end
