@@ -99,12 +99,6 @@ defmodule Cure.Compiler.FormatterTest do
       assert out =~ "a + b - a * b / 1"
     end
 
-    test "spaces around compound assignment" do
-      src = "mod Demo\n  fn f(a: Int) -> Int = a+=1\n"
-      assert {:ok, out} = Formatter.format(src)
-      assert out =~ "a += 1"
-    end
-
     test "spaces around comparison operators" do
       src = "mod Demo\n  fn f(a: Int, b: Int) -> Bool = a==b\n"
       assert {:ok, out} = Formatter.format(src)

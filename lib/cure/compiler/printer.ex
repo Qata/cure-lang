@@ -445,22 +445,6 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
-  # -- Augmented Assignment --------------------------------------------------
-
-  defp to_string({:augmented_assignment, meta, [lhs, rhs]}, depth, indent) do
-    op = Keyword.get(meta, :operator)
-
-    op_str =
-      case op do
-        :+ -> "+="
-        :- -> "-="
-        :* -> "*="
-        :/ -> "/="
-      end
-
-    "#{render(lhs, depth, indent)} #{op_str} #{render(rhs, depth, indent)}"
-  end
-
   # -- Conditional -----------------------------------------------------------
 
   defp to_string({:conditional, _meta, [condition, then_br, else_br]}, depth, indent) do
@@ -1687,7 +1671,6 @@ defmodule Cure.Compiler.Printer do
   defp child_prec({:pickup, _meta, _}), do: :lowest
   defp child_prec({:lambda, _meta, _}), do: :lowest
   defp child_prec({:assignment, _meta, _}), do: :lowest
-  defp child_prec({:augmented_assignment, _meta, _}), do: :lowest
   defp child_prec(_other), do: :atom
 
   # {binding_power, assoc} for an infix operator atom, or `:unknown`, resolved

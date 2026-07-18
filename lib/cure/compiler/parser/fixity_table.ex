@@ -41,7 +41,7 @@ defmodule Cure.Compiler.Parser.FixityTable do
 
   defstruct groups: %{}, ops: %{}, ranks: %{}, reach: %{}
 
-  @type op_entry :: %{group: group_name(), builtin: boolean()}
+  @type op_entry :: %{group: group_name()}
   @type t :: %__MODULE__{
           groups: %{group_name() => %{assoc: assoc(), higher_than: [group_name()], lower_than: [group_name()]}},
           ops: %{String.t() => %{optional(fixity()) => op_entry()}},
@@ -78,10 +78,6 @@ defmodule Cure.Compiler.Parser.FixityTable do
   @doc """
   Register an infix operator `lexeme` in `group`.
 
-  Options:
-    * `:builtin` — when `true`, marks the operator as a fixed syntactic
-      operator that user code may not rebind (default `false`).
-
   A lexeme may hold both an infix and a prefix/postfix registration (e.g. `-`
   is infix subtraction *and* prefix negation); the fixities are stored side by
   side and the per-fixity queries pick out the one they need.
@@ -89,17 +85,17 @@ defmodule Cure.Compiler.Parser.FixityTable do
   @spec add_infix(t(), String.t(), group_name(), keyword()) :: t()
   def add_infix(table, lexeme, group, opts \\ []), do: add_op(table, lexeme, :infix, group, opts)
 
-  @doc "Register a prefix operator `lexeme` in `group`. See `add_infix/4` for options."
+  @doc "Register a prefix operator `lexeme` in `group`. See `add_infix/4`."
   @spec add_prefix(t(), String.t(), group_name(), keyword()) :: t()
   def add_prefix(table, lexeme, group, opts \\ []), do: add_op(table, lexeme, :prefix, group, opts)
 
-  @doc "Register a postfix operator `lexeme` in `group`. See `add_infix/4` for options."
+  @doc "Register a postfix operator `lexeme` in `group`. See `add_infix/4`."
   @spec add_postfix(t(), String.t(), group_name(), keyword()) :: t()
   def add_postfix(table, lexeme, group, opts \\ []), do: add_op(table, lexeme, :postfix, group, opts)
 
-  defp add_op(%__MODULE__{ops: ops} = table, lexeme, fixity, group, opts)
+  defp add_op(%__MODULE__{ops: ops} = table, lexeme, fixity, group, _opts)
        when is_binary(lexeme) and is_atom(group) do
-    entry = %{group: group, builtin: Keyword.get(opts, :builtin, false)}
+    entry = %{group: group}
     by_fixity = ops |> Map.get(lexeme, %{}) |> Map.put(fixity, entry)
     %{table | ops: Map.put(ops, lexeme, by_fixity)}
   end
@@ -167,17 +163,9 @@ defmodule Cure.Compiler.Parser.FixityTable do
     end
   end
 
-  @doc "True when `lexeme` is registered (in any fixity) as a non-overloadable built-in."
-  @spec builtin?(t(), String.t()) :: boolean()
-  def builtin?(%__MODULE__{ops: ops}, lexeme) do
-    case Map.get(ops, lexeme) do
-      by_fixity when is_map(by_fixity) ->
-        Enum.any?(by_fixity, fn {_fixity, %{builtin: b}} -> b end)
-
-      _ ->
-        false
-    end
-  end
+  @doc "True when `lexeme` is registered in any fixity in this table."
+  @spec declares?(t(), String.t()) :: boolean()
+  def declares?(%__MODULE__{ops: ops}, lexeme), do: Map.has_key?(ops, lexeme)
 
   @doc """
   True when the two operators' groups are incomparable: neither group reaches the

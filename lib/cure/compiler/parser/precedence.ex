@@ -62,9 +62,5 @@ defmodule Cure.Compiler.Parser.Precedence do
   def operator_symbol(:dot), do: :.
   def operator_symbol(:melquiades), do: :"<-|"
   def operator_symbol(:assign), do: :=
-  def operator_symbol(:plus_assign), do: :"+="
-  def operator_symbol(:minus_assign), do: :"-="
-  def operator_symbol(:star_assign), do: :"*="
-  def operator_symbol(:slash_assign), do: :"/="
   def operator_symbol(other), do: other
 end

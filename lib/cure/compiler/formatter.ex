@@ -305,11 +305,6 @@ defmodule Cure.Compiler.Formatter do
     # unicode `✉` (U+2709 ENVELOPE) encodes to three bytes in UTF-8.
     {"<-|", :always_binary},
     {"✉", :always_binary},
-    # compound assignments (always binary, unambiguous)
-    {"+=", :always_binary},
-    {"-=", :always_binary},
-    {"*=", :always_binary},
-    {"/=", :always_binary},
     # comparisons / other two-char operators
     {"==", :always_binary},
     {"!=", :always_binary},
@@ -385,16 +380,16 @@ defmodule Cure.Compiler.Formatter do
   #
   # For `:always_binary` operators we always act. For context-sensitive
   # ones we peek at the surrounding byte to weed out false positives:
-  # `=` must not be the first `=` of `==`, `!=`, `<=`, `>=`, `=>`, or
-  # the assign of a compound-assignment like `+=` (already matched),
-  # `/` must not be part of a regex (protected span would have
-  # already blocked that), `%` must not be the start of `%[` or `%{`.
+  # `=` must not be the first `=` of `==`, `!=`, `<=`, `>=`, `=>`, or a
+  # trailing byte of some other operator run, `/` must not be part of a
+  # regex (protected span would have already blocked that), `%` must not
+  # be the start of `%[` or `%{`.
   defp classify_operator(_source, _pos, _len, _text, :always_binary), do: :binary
 
   defp classify_operator(source, pos, _len, _text, :assign_binary) do
     # Reject if next byte makes this part of a longer op that we
     # didn't match (shouldn't happen because the longer ops come
-    # first) or if prev byte is part of an already-spaced compound op.
+    # first) or if the prev byte makes this the tail of an operator run.
     next = byte_at(source, pos + 1)
 
     cond do

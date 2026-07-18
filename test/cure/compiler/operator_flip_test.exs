@@ -112,6 +112,38 @@ defmodule Cure.Compiler.OperatorFlipTest do
     assert {:error, {:builtin_operator_not_overloadable, :|>}} = Cure.Elab.Program.elaborate(src)
   end
 
+  test "redeclaring the fixity of any stdlib operator is rejected by location" do
+    # `+` is overloadable (it desugars to a function call), but its fixity is
+    # fixed by `Std.Operators`. The protection is by LOCATION — presence in the
+    # stdlib, not a per-declaration marker — so redeclaring its group is rejected.
+    src = """
+    mod M
+      use Std.Operators
+      infix `+` : Multiplicative
+    end
+    """
+    assert {:error, {:builtin_operator_not_overloadable, :+}} = Cure.Elab.Program.elaborate(src)
+  end
+
+  test "redeclaring the Melquiades envelope operator is rejected" do
+    src = """
+    mod M
+      use Std.Operators
+      infix `✉` : Additive
+    end
+    """
+
+    assert {:error, {:builtin_operator_not_overloadable, :"✉"}} =
+             Cure.Elab.Program.elaborate(src)
+  end
+
+  test "Std.Operators may declare the operators the location rule protects" do
+    # The stdlib module that IS the source of the built-in table must be exempt
+    # from the location rule, or re-checking it on `use` would reject itself.
+    {:ok, src} = File.read("lib/std/operators.cure")
+    assert {:ok, _env} = Cure.Elab.Program.elaborate(src)
+  end
+
   test "a cyclic precedencegroup relation is rejected" do
     # `Ring` binds tighter than `Loop` while `Loop` binds tighter than `Ring`:
     # an unsatisfiable order the toposort would otherwise linearise silently.

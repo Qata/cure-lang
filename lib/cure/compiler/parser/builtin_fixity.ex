@@ -127,12 +127,10 @@ defmodule Cure.Compiler.Parser.BuiltinFixity do
     group = Keyword.get(meta, :group)
 
     if is_binary(lexeme) and is_atom(group) and not is_nil(group) do
-      opts = [builtin: Keyword.get(meta, :builtin, false)]
-
       case Keyword.get(meta, :fixity) do
-        :infix -> FixityTable.add_infix(table, lexeme, group, opts)
-        :prefix -> FixityTable.add_prefix(table, lexeme, group, opts)
-        :postfix -> FixityTable.add_postfix(table, lexeme, group, opts)
+        :infix -> FixityTable.add_infix(table, lexeme, group)
+        :prefix -> FixityTable.add_prefix(table, lexeme, group)
+        :postfix -> FixityTable.add_postfix(table, lexeme, group)
         _ -> table
       end
     else

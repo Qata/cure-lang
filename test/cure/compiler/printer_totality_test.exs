@@ -122,7 +122,7 @@ defmodule Cure.Compiler.PrinterTotalityTest do
   # the surrounding code). Whoever adds a new node kind to the grammar
   # must add it here in the same commit, or this gate cannot do its job.
   @all_node_kinds ~w(
-    assignment async_operation attribute_access augmented_assignment
+    assignment async_operation attribute_access
     bin_segment binary_op block comment comprehension conditional
     container decorator early_return exception_handling filter
     function_call function_def generator import lambda list literal map

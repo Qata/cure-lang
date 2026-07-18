@@ -137,29 +137,31 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  # A `precedencegroup`/`infix`/`prefix`/`postfix` declaration may not rebind a
-  # fixed SYNTACTIC operator (`.`, `|>`, `<-|`, `=`, augmented assigns, ranges) —
-  # those keep dedicated AST nodes and never route through the overloadable
-  # `:function_call` desugar, so giving one a user fixity/group is meaningless and
-  # rejected (Task 3.4). The built-in operators are exactly the lexemes marked
-  # `builtin` in `Std.Operators`; `FixityTable.builtin?/2` on the memoized
-  # built-in table is the single source of truth. A decl PARSED from that source
-  # (its own `builtin infix …` lines carry `builtin: true` in the node meta) is
-  # exempt, so re-checking `Std.Operators` on `use` does not reject itself.
+  # A `precedencegroup`/`infix`/`prefix`/`postfix` declaration may not redeclare
+  # the fixity of any operator already declared by the stdlib. The protection is
+  # by LOCATION: every operator the language recognises is declared in
+  # `Std.Operators`, and `BuiltinFixity.table()` IS the parse of that module, so
+  # "declared in the stdlib" ≡ "present in the built-in table"
+  # (`FixityTable.declares?/2`). No per-declaration `builtin` marker is needed.
+  # `Std.Operators` itself is exempt (it is the source of the table), so
+  # re-checking it on `use` does not reject itself.
   defp check_no_builtin_rebind(ast) do
-    builtin_table = Cure.Compiler.Parser.BuiltinFixity.table()
+    if find_module_name(ast) == "Std.Operators" do
+      :ok
+    else
+      builtin_table = Cure.Compiler.Parser.BuiltinFixity.table()
 
-    ast
-    |> fixity_decl_nodes()
-    |> Enum.reject(fn {:fixity, meta, _} -> Keyword.get(meta, :builtin, false) end)
-    |> Enum.find_value(:ok, fn {:fixity, meta, _} ->
-      lexeme = Keyword.get(meta, :operator)
+      ast
+      |> fixity_decl_nodes()
+      |> Enum.find_value(:ok, fn {:fixity, meta, _} ->
+        lexeme = Keyword.get(meta, :operator)
 
-      if is_binary(lexeme) and
-           Cure.Compiler.Parser.FixityTable.builtin?(builtin_table, lexeme) do
-        {:error, {:builtin_operator_not_overloadable, String.to_atom(lexeme)}}
-      end
-    end)
+        if is_binary(lexeme) and
+             Cure.Compiler.Parser.FixityTable.declares?(builtin_table, lexeme) do
+          {:error, {:builtin_operator_not_overloadable, String.to_atom(lexeme)}}
+        end
+      end)
+    end
   end
 
   # Deep-walk the AST collecting every `{:fixity, meta, _}` declaration node.
