@@ -5519,10 +5519,35 @@ defmodule Cure.Elab.Elaborator do
           # handles by checking the arm body against the match's expected type; the
           # kernel re-checks either way, so this only ever accepts well-typed terms.
           case elaborate_expr_typed(expr, names, ctx, env) do
-            {:ok, term, _type} -> {:ok, term}
-            {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
-            {:error, {:unsupported_expression, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
-            {:error, _} = err -> err
+            {:ok, term, _type} ->
+              {:ok, term}
+
+            {:error, {:unsolved_metavariables, _}} ->
+              elaborate_expr_checked(expr, expected, names, ctx, env)
+
+            {:error, {:unsupported_expression, _}} ->
+              elaborate_expr_checked(expr, expected, names, ctx, env)
+
+            {:error, _} = orig ->
+              # Inference of a constructor arm can ALSO fail with an index/result
+              # mismatch when a FIELD's type depends on an index that no present
+              # argument determines — the index is only available from the branch's
+              # refined goal. `MkP(reflexive(OT()))` at the refined goal `P(OA)`:
+              # `MkP : Eq(f(x), OT) -> P(x)`, and `reflexive(OT()) : Eq(OT, OT)` hides
+              # `f(OA)` behind an ι-reduction, so the field cannot fix the index `x`;
+              # inference reaches the checking-less ctor path, leaves the index a
+              # metavariable, and rejects with `f(?0) ≠ OT` (`:index_mismatch`). Retry
+              # in checking mode so the goal seeds the constructor's indices
+              # (`elaborate_ctor_app_bidirectional` pins `x := OA` from `P(OA)` before
+              # checking the field). Strictly additive: reached only after inference
+              # already errored, the ORIGINAL inference error is surfaced if the
+              # checked retry also fails, and the kernel re-checks the assembled term —
+              # so this only ever admits well-typed constructors. This is exactly how
+              # Idris checks a constructor arm body against the match's expected type.
+              case elaborate_expr_checked(expr, expected, names, ctx, env) do
+                {:ok, _} = ok -> ok
+                {:error, _} -> orig
+              end
           end
 
         true ->
@@ -7379,8 +7404,35 @@ defmodule Cure.Elab.Elaborator do
           ty_term = resplit_data(Quote.reify(ty, Context.length(ctx)), env)
 
           case Unify.unify(dom_inst, ty_term, mctx, env) do
-            {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [term], rest, deferred}}
-            {:error, reason} -> {:halt, {:error, reason}}
+            {:ok, mctx} ->
+              {:cont, {:ok, mctx, chosen ++ [term], rest, deferred}}
+
+            {:error, reason} ->
+              # The argument HAS a type (`elaborate_expr_typed` succeeded), but it does
+              # not unify against the still-meta-bearing domain — the domain is a redex
+              # STUCK on an unsolved metavariable a LATER sibling determines. Example
+              # (the intrinsic well-scoped-BST recursion): the proof domain
+              # `elt(EFin x, ?hi) = OT` is a case-tree stuck on `?hi`, and the supplied
+              # proof's type is `slt(x, k) = OT`; only once the trailing tree argument
+              # solves `?hi := EFin k` does `elt(EFin x, EFin k)` ι-reduce to `slt(x, k)`
+              # and match. DEFER exactly as the inference-FAILURE branch does — a
+              # placeholder holds the slot, later siblings solve the domain, and
+              # `resolve_deferred_slots` re-checks the argument against the now-concrete
+              # domain. `mctx` here is the PRE-unify context (the failed unify's partial
+              # solution is discarded), so nothing leaks. Only when a later argument
+              # actually exists (`rest != []`) — otherwise nothing could rescue the
+              # domain and the honest unify error is surfaced immediately. The assembled
+              # call is kernel-re-checked by `finish_global_app`, so this order change
+              # rests on nothing unsound.
+              if rest == [] do
+                {:halt, {:error, reason}}
+              else
+                {mctx, ph} = MetaCtx.fresh(mctx)
+
+                {:cont,
+                 {:ok, mctx, chosen ++ [{:meta, ph}], rest,
+                  deferred ++ [{ph, arg, dom, length(chosen)}]}}
+              end
           end
 
         {:error, _} ->
