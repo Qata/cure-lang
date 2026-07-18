@@ -611,4 +611,31 @@ mod BranchMerge
       SubBra(a1, b1, pA, pB) -> MkStepTo(LStBraL(), pA)
     LStBraR() -> match sub
       SubBra(a1, b1, pA, pB) -> MkStepTo(LStBraR(), pB)
+
+  ## **MULTIPARTY SUBSTITUTABILITY (subtyping is sound for implementation refinement).** If each role
+  ## is IMPLEMENTED by a subtype of its protocol projection (`ConfigSub`), the whole configuration
+  ## still steps consistently: whenever the well-formed protocol takes a global step, every role's
+  ## implementation takes a JUSTIFIED step that STAYS a subtype of the new projection (`ConfigStep`).
+  ## Per role: an acting endpoint follows by `sub_step_l` (subtyping simulates the local step); a
+  ## staying role keeps its witness; a subtype-stepping bystander composes via `sub_trans`. So a
+  ## deadlock-free protocol stays deadlock-free under ANY per-role subtype refinement — the Gay-Hole
+  ## substitution principle lifted to the multiparty running system.
+  type JustStepTo indices (i: Local, s2: Local)
+    MkJustStepTo : Justified(i, i2) -> Sub(i2, s2) -> JustStepTo(i, s2)
+
+  fn justified_sub(s2: Local, {i: Local}, {s: Local}, sub: Sub(i, s), j: Justified(s, s2)) -> JustStepTo(i, s2) = match j
+    JStep(st) -> match sub_step_l(s2, sub, st)
+      MkStepTo(lst, sub2) -> MkJustStepTo(JStep(lst), sub2)
+    JSame()   -> MkJustStepTo(JSame(), sub)
+    JSub(sst) -> MkJustStepTo(JSame(), sub_trans(sub, sst))
+
+  type ConfigSub indices (impl: Config, spec: Config)
+    MkConfigSub : Sub(ia, sa) -> Sub(ib, sb) -> Sub(ic, sc) -> ConfigSub(MkConfig(ia, ib, ic), MkConfig(sa, sb, sc))
+
+  type ConfigStep indices (impl: Config, spec2: Config)
+    MkConfigStep : JustStepTo(ia, sa2) -> JustStepTo(ib, sb2) -> JustStepTo(ic, sc2) -> ConfigStep(MkConfig(ia, ib, ic), MkConfig(sa2, sb2, sc2))
+
+  fn config_subst({g: Global}, g2: Global, {impl: Config}, cs: ConfigSub(impl, config(g)), w: WF(g), st: GStep(g, g2)) -> ConfigStep(impl, config(g2)) = match cs
+    MkConfigSub(sa, sb, sc) -> match config_fidelity(w, st)
+      MkCStep(ja, jb, jc) -> MkConfigStep(justified_sub(project(g2, RA()), sa, ja), justified_sub(project(g2, RB()), sb, jb), justified_sub(project(g2, RC()), sc, jc))
 end

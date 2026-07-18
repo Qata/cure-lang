@@ -480,3 +480,22 @@ sub_step_l b2 (SubSel a1 b1 pA pB) LStSelL = MkStepTo LStSelL pA
 sub_step_l b2 (SubSel a1 b1 pA pB) LStSelR = MkStepTo LStSelR pB
 sub_step_l b2 (SubBra a1 b1 pA pB) LStBraL = MkStepTo LStBraL pA
 sub_step_l b2 (SubBra a1 b1 pA pB) LStBraR = MkStepTo LStBraR pB
+
+data JustStepTo : Local -> Local -> Type where
+  MkJustStepTo : Justified i i2 -> Sub i2 s2 -> JustStepTo i s2
+
+justified_sub : (s2 : Local) -> Sub i s -> Justified s s2 -> JustStepTo i s2
+justified_sub s2 sub (JStep st) = case sub_step_l s2 sub st of
+  MkStepTo lst sub2 => MkJustStepTo (JStep lst) sub2
+justified_sub s2 sub JSame = MkJustStepTo JSame sub
+justified_sub s2 sub (JSub sst) = MkJustStepTo JSame (sub_trans sub sst)
+
+data ConfigSub : Config -> Config -> Type where
+  MkConfigSub : Sub ia sa -> Sub ib sb -> Sub ic sc -> ConfigSub (MkConfig ia ib ic) (MkConfig sa sb sc)
+
+data ConfigStep : Config -> Config -> Type where
+  MkConfigStep : JustStepTo ia sa2 -> JustStepTo ib sb2 -> JustStepTo ic sc2 -> ConfigStep (MkConfig ia ib ic) (MkConfig sa2 sb2 sc2)
+
+config_subst : (g2 : Global) -> ConfigSub impl (config g) -> WF g -> GStep g g2 -> ConfigStep impl (config g2)
+config_subst g2 (MkConfigSub sa sb sc) w st = case config_fidelity w st of
+  MkCStep ja jb jc => MkConfigStep (justified_sub (project g2 RA) sa ja) (justified_sub (project g2 RB) sb jb) (justified_sub (project g2 RC) sc jc)
