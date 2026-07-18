@@ -1,0 +1,147 @@
+mod MergeSemidistrib
+  use Std.Equivalent
+  ## THE SEMIDISTRIBUTIVE INCLUSION of session subtyping: (s∩t)∪(s∩u) ⊆ s∩(t∪u), the lattice-general
+  ## direction of distributivity, proved cleanly from intersection monotonicity + the meet universal
+  ## property (covers_glb). (The converse s∩(t∪u) ⊆ (s∩t)∪(s∩u) — the distributivity-SPECIFIC direction,
+  ## true for the powerset model — needs an 8-way mem_dec case split whose 3-inter goal the elaborator
+  ## does not refine via sequential decision matches; recorded as the open distributivity residual.)
+  ## THE LATTICE OPERATIONS ARE MONOTONE — union (meet) and intersection (join) PRESERVE the subtyping
+  ## order. This is the substantive property that makes the lattice usable for refinement: refining the
+  ## operands refines the result. inter_mono_r/inter_mono_l (intersection monotone in each argument) and
+  ## union_mono (union monotone in both). Together with the lattice laws this makes (Branches, ∪, ∩) an
+  ## ORDERED lattice. Underpins compositional subtyping. Builds on the full membership machinery.
+  type Tag = TA | TB | TC
+  type OBit = OF | OT
+  type Branches = BNil | BCons(Tag, Branches)
+  type Empty = |
+  fn teq(a: Tag, b: Tag) -> OBit = match a
+    TA() -> match b
+      TA() -> OT()
+      TB() -> OF()
+      TC() -> OF()
+    TB() -> match b
+      TA() -> OF()
+      TB() -> OT()
+      TC() -> OF()
+    TC() -> match b
+      TA() -> OF()
+      TB() -> OF()
+      TC() -> OT()
+  fn teq_refl(a: Tag) -> Equivalent(OBit, teq(a, a), OT()) = match a
+    TA() -> reflexive(OT())
+    TB() -> reflexive(OT())
+    TC() -> reflexive(OT())
+  fn ot_ne_of(e: Equivalent(OBit, OT(), OF())) -> Empty = match e
+  type InB indices (x: Tag, bs: Branches)
+    InHead : (x2: Tag) -> (rest: Branches) -> InB(x2, BCons(x2, rest))
+    InTail : (y: Tag) -> (rest: Branches) -> InB(x2, rest) -> InB(x2, BCons(y, rest))
+  type NotIn indices (x: Tag, bs: Branches)
+    NINil  : NotIn(x, BNil)
+    NICons : (y2: Tag) -> (rest2: Branches) -> Equivalent(OBit, teq(x, y2), OF()) -> NotIn(x, rest2) -> NotIn(x, BCons(y2, rest2))
+  fn notin_absurd({x: Tag}, {bs: Branches}, nx: NotIn(x, bs), m: InB(x, bs)) -> Empty = match m
+    InHead(x2, rest) -> match nx
+      NICons(y2, rest2, tof, nx2) -> ot_ne_of(trans(sym(teq_refl(x2)), tof))
+    InTail(z, r, m2) -> match nx
+      NICons(y2, rest2, tof, nx2) -> notin_absurd(nx2, m2)
+  type MemDec indices (x: Tag, t: Branches)
+    MYes : InB(x, t) -> MemDec(x, t)
+    MNo  : NotIn(x, t) -> MemDec(x, t)
+  fn mem_dec(x: Tag, t: Branches) -> MemDec(x, t) = match t
+    BNil() -> MNo(NINil())
+    BCons(y, rest) -> match x
+      TA() -> match y
+        TA() -> MYes(InHead(TA(), rest))
+        TB() -> match mem_dec(TA(), rest)
+          MYes(pf) -> MYes(InTail(TB(), rest, pf))
+          MNo(nx) -> MNo(NICons(TB(), rest, reflexive(OF()), nx))
+        TC() -> match mem_dec(TA(), rest)
+          MYes(pf) -> MYes(InTail(TC(), rest, pf))
+          MNo(nx) -> MNo(NICons(TC(), rest, reflexive(OF()), nx))
+      TB() -> match y
+        TA() -> match mem_dec(TB(), rest)
+          MYes(pf) -> MYes(InTail(TA(), rest, pf))
+          MNo(nx) -> MNo(NICons(TA(), rest, reflexive(OF()), nx))
+        TB() -> MYes(InHead(TB(), rest))
+        TC() -> match mem_dec(TB(), rest)
+          MYes(pf) -> MYes(InTail(TC(), rest, pf))
+          MNo(nx) -> MNo(NICons(TC(), rest, reflexive(OF()), nx))
+      TC() -> match y
+        TA() -> match mem_dec(TC(), rest)
+          MYes(pf) -> MYes(InTail(TA(), rest, pf))
+          MNo(nx) -> MNo(NICons(TA(), rest, reflexive(OF()), nx))
+        TB() -> match mem_dec(TC(), rest)
+          MYes(pf) -> MYes(InTail(TB(), rest, pf))
+          MNo(nx) -> MNo(NICons(TB(), rest, reflexive(OF()), nx))
+        TC() -> MYes(InHead(TC(), rest))
+  fn inter_pick(x: Tag, t: Branches, rest: Branches, d: MemDec(x, t)) -> Branches = match d
+    MYes(pf) -> BCons(x, inter(rest, t))
+    MNo(nx)  -> inter(rest, t)
+  fn inter(s: Branches, t: Branches) -> Branches = match s
+    BNil()         -> BNil()
+    BCons(x, rest) -> inter_pick(x, t, rest, mem_dec(x, t))
+  fn bappend(s: Branches, t: Branches) -> Branches = match s
+    BNil()         -> t
+    BCons(x, rest) -> BCons(x, bappend(rest, t))
+  type Covers indices (big: Branches, small: Branches)
+    CovNil  : Covers(big, BNil)
+    CovCons : InB(x, big) -> Covers(big, rest) -> Covers(big, BCons(x, rest))
+  fn covers_weaken(big: Branches, y: Tag, {small: Branches}, w: Covers(big, small)) -> Covers(BCons(y, big), small) = match w
+    CovNil()          -> CovNil()
+    CovCons(inx, w2)  -> CovCons(InTail(y, big, inx), covers_weaken(big, y, w2))
+  fn covers_mem({big: Branches}, {small: Branches}, {x: Tag}, cov: Covers(big, small), inm: InB(x, small)) -> InB(x, big) = match inm
+    InHead(x2, r2)   -> match cov
+      CovCons(inx, cov2) -> inx
+    InTail(z, r, m2) -> match cov
+      CovCons(inx, cov2) -> covers_mem(cov2, m2)
+  fn covers_trans({a: Branches}, {b: Branches}, {c: Branches}, ab: Covers(a, b), bc: Covers(b, c)) -> Covers(a, c) = match bc
+    CovNil()          -> CovNil()
+    CovCons(inx, bc2) -> CovCons(covers_mem(ab, inx), covers_trans(ab, bc2))
+  fn covers_glb({z: Branches}, {s: Branches}, {t: Branches}, cs: Covers(z, s), ct: Covers(z, t)) -> Covers(z, bappend(s, t)) = match cs
+    CovNil()          -> ct
+    CovCons(inx, cs2) -> CovCons(inx, covers_glb(cs2, ct))
+  fn merge_lower_l(s: Branches, t: Branches) -> Covers(bappend(s, t), s) = match s
+    BNil()         -> CovNil()
+    BCons(x, rest) -> CovCons(InHead(x, bappend(rest, t)), covers_weaken(bappend(rest, t), x, merge_lower_l(rest, t)))
+  fn merge_lower_r(s: Branches, t: Branches) -> Covers(bappend(s, t), t) = match s
+    BNil()         -> covers_refl(t)
+    BCons(x, rest) -> covers_weaken(bappend(rest, t), x, merge_lower_r(rest, t))
+  fn covers_refl(bs: Branches) -> Covers(bs, bs) = match bs
+    BNil()         -> CovNil()
+    BCons(x, rest) -> CovCons(InHead(x, rest), covers_weaken(rest, x, covers_refl(rest)))
+  fn in_inter(s: Branches, t: Branches, {x: Tag}, inXs: InB(x, s), inXt: InB(x, t)) -> InB(x, inter(s, t)) = match s
+    BNil()         -> match inXs
+    BCons(y, rest) -> match mem_dec(y, t)
+      MYes(pf) -> match inXs
+        InHead(x2, r2)   -> InHead(x2, inter(rest, t))
+        InTail(z, r, m2) -> InTail(y, inter(rest, t), in_inter(rest, t, m2, inXt))
+      MNo(nx)  -> match inXs
+        InHead(x2, r2)   -> match notin_absurd(nx, inXt)
+        InTail(z, r, m2) -> in_inter(rest, t, m2, inXt)
+  ## **INTERSECTION MONOTONE IN THE 2nd ARG**: t1 ⊆ t2 ⟹ inter(s,t1) ⊆ inter(s,t2). The (x∈t1, x∉t2)
+  ## case is impossible (x∈t1 ⊆ t2 refutes NotIn(x,t2), via covers_mem + notin_absurd).
+  fn inter_mono_r(s: Branches, t1: Branches, t2: Branches, sub: Covers(t2, t1)) -> Covers(inter(s, t2), inter(s, t1)) = match s
+    BNil()         -> CovNil()
+    BCons(x, rest) -> match mem_dec(x, t1)
+      MYes(pf1) -> match mem_dec(x, t2)
+        MYes(pf2) -> CovCons(InHead(x, inter(rest, t2)), covers_weaken(inter(rest, t2), x, inter_mono_r(rest, t1, t2, sub)))
+        MNo(nx2)  -> match notin_absurd(nx2, covers_mem(sub, pf1))
+      MNo(nx1)  -> match mem_dec(x, t2)
+        MYes(pf2) -> covers_weaken(inter(rest, t2), x, inter_mono_r(rest, t1, t2, sub))
+        MNo(nx2)  -> inter_mono_r(rest, t1, t2, sub)
+  ## **INTERSECTION MONOTONE IN THE 1st ARG**: s1 ⊆ s2 ⟹ inter(s1,t) ⊆ inter(s2,t). Each kept branch of
+  ## s1 is in s2 (covers_mem) and in t, hence in inter(s2,t) (in_inter).
+  fn inter_mono_l(s1: Branches, s2: Branches, t: Branches, sub: Covers(s2, s1)) -> Covers(inter(s2, t), inter(s1, t)) = match s1
+    BNil()         -> CovNil()
+    BCons(x, rest) -> match sub
+      CovCons(inXs2, sub2) -> match mem_dec(x, t)
+        MYes(pf) -> CovCons(in_inter(s2, t, inXs2, pf), inter_mono_l(rest, s2, t, sub2))
+        MNo(nx)  -> inter_mono_l(rest, s2, t, sub2)
+  ## **UNION MONOTONE (both args)**: a1⊆a2, b1⊆b2 ⟹ a1∪b1 ⊆ a2∪b2. Via covers_glb + covers_trans.
+  fn union_mono(a1: Branches, a2: Branches, b1: Branches, b2: Branches, subA: Covers(a2, a1), subB: Covers(b2, b1)) -> Covers(bappend(a2, b2), bappend(a1, b1)) =
+    covers_glb(covers_trans(merge_lower_l(a2, b2), subA), covers_trans(merge_lower_r(a2, b2), subB))
+  ## **SEMIDISTRIBUTIVE INCLUSION**: (s∩t)∪(s∩u) ⊆ s∩(t∪u) — one direction of the distributive law
+  ## (this inclusion holds in ANY lattice). Clean via intersection monotonicity: s∩t and s∩u are each ⊆
+  ## s∩(t∪u) (t,u ⊆ t∪u), so their union is. covers_glb assembles the two monotonicity witnesses.
+  fn distrib_fwd(s: Branches, t: Branches, u: Branches) -> Covers(inter(s, bappend(t, u)), bappend(inter(s, t), inter(s, u))) =
+    covers_glb(inter_mono_r(s, t, bappend(t, u), merge_lower_l(t, u)), inter_mono_r(s, u, bappend(t, u), merge_lower_r(t, u)))
+end
