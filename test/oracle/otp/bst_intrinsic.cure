@@ -1,0 +1,56 @@
+mod BstIntrinsic
+  use Std.Equivalent
+  type OKey = OA | OB | OC
+  type OBit = OF | OT
+  fn slt(x: OKey, y: OKey) -> OBit = match x
+    OA() -> match y
+      OA() -> OF()
+      OB() -> OT()
+      OC() -> OT()
+    OB() -> match y
+      OA() -> OF()
+      OB() -> OF()
+      OC() -> OT()
+    OC() -> match y
+      OA() -> OF()
+      OB() -> OF()
+      OC() -> OF()
+  type EKey = EBot | EFin(OKey) | ETop
+  fn elt(a: EKey, b: EKey) -> OBit = match a
+    EBot() -> match b
+      EBot() -> OF()
+      EFin(y) -> OT()
+      ETop() -> OT()
+    EFin(x) -> match b
+      EBot() -> OF()
+      EFin(y) -> slt(x, y)
+      ETop() -> OT()
+    ETop() -> OF()
+  type Tri indices (x: OKey, k: OKey)
+    TLt : Equivalent(OBit, slt(x, k), OT()) -> Tri(x, k)
+    TEq : Equivalent(OKey, x, k) -> Tri(x, k)
+    TGt : Equivalent(OBit, slt(k, x), OT()) -> Tri(x, k)
+  fn owoto(x: OKey, k: OKey) -> Tri(x, k) = match x
+    OA() -> match k
+      OA() -> TEq(reflexive(OA()))
+      OB() -> TLt(reflexive(OT()))
+      OC() -> TLt(reflexive(OT()))
+    OB() -> match k
+      OA() -> TGt(reflexive(OT()))
+      OB() -> TEq(reflexive(OB()))
+      OC() -> TLt(reflexive(OT()))
+    OC() -> match k
+      OA() -> TGt(reflexive(OT()))
+      OB() -> TGt(reflexive(OT()))
+      OC() -> TEq(reflexive(OC()))
+  type BST indices (lo: EKey, hi: EKey)
+    BLeaf : Equivalent(OBit, elt(lo, hi), OT()) -> BST(lo, hi)
+    BNode : (k: OKey) -> BST(lo, EFin(k)) -> BST(EFin(k), hi) -> BST(lo, hi)
+  fn insert_go(lo: EKey, hi: EKey, x: OKey, plo: Equivalent(OBit, elt(lo, EFin(x)), OT()), phi: Equivalent(OBit, elt(EFin(x), hi), OT()), k: OKey, l: BST(lo, EFin(k)), r: BST(EFin(k), hi), tr: Tri(x, k)) -> BST(lo, hi) = match tr
+    TLt(lt) -> BNode(k, insert(lo, EFin(k), x, plo, lt, l), r)
+    TEq(eq) -> BNode(k, l, r)
+    TGt(gt) -> BNode(k, l, insert(EFin(k), hi, x, gt, phi, r))
+  fn insert(lo: EKey, hi: EKey, x: OKey, plo: Equivalent(OBit, elt(lo, EFin(x)), OT()), phi: Equivalent(OBit, elt(EFin(x), hi), OT()), t: BST(lo, hi)) -> BST(lo, hi) = match t
+    BLeaf(pf) -> BNode(x, BLeaf(plo), BLeaf(phi))
+    BNode(k, l, r) -> insert_go(lo, hi, x, plo, phi, k, l, r, owoto(x, k))
+end
