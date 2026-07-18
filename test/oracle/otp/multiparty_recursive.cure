@@ -1,0 +1,105 @@
+mod MultipartyRecursive
+  use Std.Equivalent
+  type TB2 = F | T
+  type Tag = TA | TB | TC
+  type Role = RA | RB | RC
+  fn role_eq(x: Role, y: Role) -> TB2 = match x
+    RA() -> match y
+      RA() -> T()
+      RB() -> F()
+      RC() -> F()
+    RB() -> match y
+      RA() -> F()
+      RB() -> T()
+      RC() -> F()
+    RC() -> match y
+      RA() -> F()
+      RB() -> F()
+      RC() -> T()
+  type Global = GEnd | GMsg(Role, Role, Tag, Global) | GRec(Global) | GVar
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LRec(Local) | LVar
+  ## PROJECTION onto a role, now with RECURSION: GRec projects structurally to LRec, the loop
+  ## variable GVar to LVar. Messages project as before (sender->LSend, receiver->LRecv, bystander skip).
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()               -> LEnd()
+    GMsg(from, to, t, k) -> match role_eq(from, r)
+      T() -> LSend(t, project(k, r))
+      F() -> match role_eq(to, r)
+        T() -> LRecv(t, project(k, r))
+        F() -> project(k, r)
+    GRec(body)           -> LRec(project(body, r))
+    GVar()               -> LVar()
+  ## Unfolding substitutes the loop variable. gsubst replaces GVar by s (opaque under an inner GRec,
+  ## single-variable recursion); lsubst is its local mirror.
+  fn gsubst(g: Global, s: Global) -> Global = match g
+    GEnd()               -> GEnd()
+    GMsg(from, to, t, k) -> GMsg(from, to, t, gsubst(k, s))
+    GRec(body)           -> GRec(body)
+    GVar()               -> s
+  fn lsubst(l: Local, s: Local) -> Local = match l
+    LEnd()      -> LEnd()
+    LSend(t, k) -> LSend(t, lsubst(k, s))
+    LRecv(t, k) -> LRecv(t, lsubst(k, s))
+    LRec(body)  -> LRec(body)
+    LVar()      -> s
+  fn lsend_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LSend(t, a), LSend(t, b)) =
+    rewrite e in reflexive(LSend(t, b))
+  fn lrecv_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LRecv(t, a), LRecv(t, b)) =
+    rewrite e in reflexive(LRecv(t, b))
+  ## **PROJECTION IS A SUBSTITUTION HOMOMORPHISM.** project(gsubst(g,s), r) = lsubst(project(g,r),
+  ## project(s,r)) — projecting after substituting the loop body equals substituting the projected
+  ## body into the projected continuation. The crux lemma making recursive multiparty projection
+  ## well-behaved. Induction on g; the message case cases all three roles concretely so role_eq
+  ## reduces (sender/receiver recurse under lsend/lrecv congruence, a bystander recurses directly).
+  fn project_subst_hom(g: Global, s: Global, r: Role) -> Equivalent(Local, project(gsubst(g, s), r), lsubst(project(g, r), project(s, r))) = match g
+    GEnd()               -> reflexive(LEnd())
+    GVar()               -> reflexive(project(s, r))
+    GRec(body)           -> reflexive(LRec(project(body, r)))
+    GMsg(from, to, t, k) -> match from
+      RA() -> match to
+        RA() -> match r
+          RA() -> lsend_cong(t, project_subst_hom(k, s, RA()))
+          RB() -> project_subst_hom(k, s, RB())
+          RC() -> project_subst_hom(k, s, RC())
+        RB() -> match r
+          RA() -> lsend_cong(t, project_subst_hom(k, s, RA()))
+          RB() -> lrecv_cong(t, project_subst_hom(k, s, RB()))
+          RC() -> project_subst_hom(k, s, RC())
+        RC() -> match r
+          RA() -> lsend_cong(t, project_subst_hom(k, s, RA()))
+          RB() -> project_subst_hom(k, s, RB())
+          RC() -> lrecv_cong(t, project_subst_hom(k, s, RC()))
+      RB() -> match to
+        RA() -> match r
+          RA() -> lrecv_cong(t, project_subst_hom(k, s, RA()))
+          RB() -> lsend_cong(t, project_subst_hom(k, s, RB()))
+          RC() -> project_subst_hom(k, s, RC())
+        RB() -> match r
+          RA() -> project_subst_hom(k, s, RA())
+          RB() -> lsend_cong(t, project_subst_hom(k, s, RB()))
+          RC() -> project_subst_hom(k, s, RC())
+        RC() -> match r
+          RA() -> project_subst_hom(k, s, RA())
+          RB() -> lsend_cong(t, project_subst_hom(k, s, RB()))
+          RC() -> lrecv_cong(t, project_subst_hom(k, s, RC()))
+      RC() -> match to
+        RA() -> match r
+          RA() -> lrecv_cong(t, project_subst_hom(k, s, RA()))
+          RB() -> project_subst_hom(k, s, RB())
+          RC() -> lsend_cong(t, project_subst_hom(k, s, RC()))
+        RB() -> match r
+          RA() -> project_subst_hom(k, s, RA())
+          RB() -> lrecv_cong(t, project_subst_hom(k, s, RB()))
+          RC() -> lsend_cong(t, project_subst_hom(k, s, RC()))
+        RC() -> match r
+          RA() -> project_subst_hom(k, s, RA())
+          RB() -> project_subst_hom(k, s, RB())
+          RC() -> lsend_cong(t, project_subst_hom(k, s, RC()))
+  ## **PROJECTION COMMUTES WITH RECURSION UNFOLDING** (the multiparty analog of dual_unfold_commute):
+  ## project(unfold(GRec body), r) = unfold_local(project(GRec body, r)). Unfolding a recursive global
+  ## then projecting equals projecting then unfolding the local type — so a looping protocol's per-role
+  ## behaviour is stable across every unfolding. Direct corollary of the substitution homomorphism at
+  ## s = GRec(body), since project(GRec body, r) = LRec(project(body, r)).
+  fn unfold_commute(body: Global, r: Role) -> Equivalent(Local, project(gsubst(body, GRec(body)), r), lsubst(project(body, r), LRec(project(body, r)))) =
+    project_subst_hom(body, GRec(body), r)
+end
