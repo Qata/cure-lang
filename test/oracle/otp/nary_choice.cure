@@ -115,4 +115,24 @@ mod NaryChoice
   ## preserved operationally, generalized from binary to n-ary choice.
   fn duality_preserved({g: Global}, {g2: Global}, w: Coherent(g), st: GStep(g, g2)) -> Equivalent(Local, project(g2, RA()), dual(project(g2, RB()))) =
     projection_duality(cstep_preserves(w, st))
+
+  ## Multi-step reduction: the reflexive-transitive closure of GStep (a whole protocol RUN).
+  type GRun indices (g: Global, g2: Global)
+    GRDone : GRun(g, g)
+    GRStep : GStep(g, gm) -> GRun(gm, g2) -> GRun(g, g2)
+  ## **N-ARY SAFETY OVER A RUN**: a coherent protocol stays coherent through EVERY step of any run —
+  ## any sequence of messages and n-ary branch selections. Multi-step strengthening of cstep_preserves.
+  fn grun_preserves({g: Global}, {g2: Global}, w: Coherent(g), r: GRun(g, g2)) -> Coherent(g2) = match r
+    GRDone()        -> w
+    GRStep(st, rest) -> grun_preserves(cstep_preserves(w, st), rest)
+  ## **N-ARY DUALITY AT EVERY REACHABLE STATE**: the two active roles' endpoints are DUAL at every
+  ## point of any run — communication safety holds not just initially but throughout execution,
+  ## generalized from binary to n-ary choice.
+  fn duality_over_run({g: Global}, {g2: Global}, w: Coherent(g), r: GRun(g, g2)) -> Equivalent(Local, project(g2, RA()), dual(project(g2, RB()))) =
+    projection_duality(grun_preserves(w, r))
+  ## **EVERY BRANCH OF A COHERENT CHOICE IS DUAL-COHERENT**: not only the selected branch — for ANY
+  ## branch g of a coherent n-ary choice, its two active roles project to dual endpoints. So coherence
+  ## is uniform across the whole n-ary branch set, not contingent on which branch fires.
+  fn branch_dual({gbs: GBranches}, {g: Global}, wb: CoherentB(gbs), sel: Selects(gbs, g)) -> Equivalent(Local, project(g, RA()), dual(project(g, RB()))) =
+    projection_duality(coherentb_select(wb, sel))
 end

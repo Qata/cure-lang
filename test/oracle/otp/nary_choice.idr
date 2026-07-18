@@ -95,3 +95,17 @@ cstep_preserves (CoCho wb) (GStCho sel) = coherentb_select wb sel
 
 duality_preserved : Coherent g -> GStep g g2 -> project g2 RA = dual (project g2 RB)
 duality_preserved w st = projection_duality (cstep_preserves w st)
+
+data GRun : Global -> Global -> Type where
+  GRDone : GRun g g
+  GRStep : GStep g gm -> GRun gm g2 -> GRun g g2
+
+grun_preserves : Coherent g -> GRun g g2 -> Coherent g2
+grun_preserves w GRDone = w
+grun_preserves w (GRStep st rest) = grun_preserves (cstep_preserves w st) rest
+
+duality_over_run : Coherent g -> GRun g g2 -> project g2 RA = dual (project g2 RB)
+duality_over_run w r = projection_duality (grun_preserves w r)
+
+branch_dual : CoherentB gbs -> Selects gbs g -> project g RA = dual (project g RB)
+branch_dual wb sel = projection_duality (coherentb_select wb sel)
