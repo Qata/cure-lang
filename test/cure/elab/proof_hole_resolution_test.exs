@@ -46,5 +46,10 @@ defmodule Cure.Elab.ProofHoleResolutionTest do
 
     assert has_hole?(demo.body),
            "a declined proof hole must SURVIVE in the elaborated body, not vanish or error"
+
+    # The surviving hole type-checks but must NOT be emittable: the codegen gate
+    # refuses the whole program until the hole is filled.
+    assert {:error, {:unfilled_hole, name}} = Program.check_codegen_ready(env)
+    assert to_string(name) |> String.contains?("demo")
   end
 end
