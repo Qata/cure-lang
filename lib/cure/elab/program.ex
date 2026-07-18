@@ -1456,6 +1456,28 @@ defmodule Cure.Elab.Program do
     with_loader_session(fn -> cached_module_interface(module_name, path) end)
   end
 
+  @doc """
+  Evict `path`'s memoized interface, if one is cached, so the next
+  `module_interface/2` call (and any subsequent `use`-import resolution that
+  goes through the same loader) recomputes it from current source content.
+
+  `cached_module_interface/2` assumes a shipped stdlib source is immutable for
+  the lifetime of a compiler run — true for ordinary one-shot compilation, but
+  violated BY DESIGN whenever incremental compilation recompiles that very
+  source within one long-lived process (two `Cure.Compiler.Incremental`
+  builds sharing a VM, e.g. `mix cure.compile_stdlib` invoked twice in one
+  node). Without this, a module's SECOND same-process recompile can silently
+  report the FIRST run's now-stale interface, and a dependent whose actual
+  interface changed is never recompiled. The incremental driver calls this
+  immediately after recompiling a module, before computing its fresh
+  interface hash.
+  """
+  @spec invalidate_module_interface(String.t()) :: :ok
+  def invalidate_module_interface(path) when is_binary(path) do
+    :persistent_term.erase({__MODULE__, :module_interface, path})
+    :ok
+  end
+
   defp cached_module_interface(module_name, path) do
     if stdlib_source_path?(path) do
       key = {__MODULE__, :module_interface, path}

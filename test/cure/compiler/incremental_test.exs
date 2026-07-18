@@ -380,6 +380,67 @@ defmodule Cure.Compiler.IncrementalTest do
              "this build -- Q must not be served a stale beam"
   end
 
+  # Regression: `interface_hash_for/3` recomputes a module's fresh interface via
+  # `Program.module_interface/2`, which — for a path recognized as a SHIPPED
+  # STDLIB SOURCE — is `:persistent_term`-cached across the WHOLE OS process
+  # (`cached_module_interface/2` in `program.ex`: "Shipped stdlib sources are
+  # immutable for the lifetime of a compiler run: no test writes them and
+  # nothing regenerates them mid-run"). Incremental compilation of the stdlib
+  # itself is the first workload to violate that assumption BY DESIGN:
+  # `mix cure.compile_stdlib` compiles literal `lib/std/*.cure` paths, and its
+  # own regression test (`cure.compile_stdlib_incremental_test.exs`) already
+  # `Mix.Task.rerun`s it TWICE in one process. If a stdlib module's source
+  # changes between two such same-process runs, `Program.module_interface/2`
+  # on the second run silently returns the FIRST run's cached (now-stale)
+  # interface — `interface_hash_for/3` computes the SAME hash as before, the
+  # driver decides "unchanged", and a real dependent is left `skipped_fresh`
+  # even though its dependency's interface genuinely changed on disk.
+  #
+  # `stdlib_source_path?/1` resolves via `Cure.Stdlib.Paths.source_dir/0`,
+  # whose first candidate is the `:stdlib_source_dir` app-env override — the
+  # established fixture (see `test/cure/elab/imported_module_dup_test.exs` and
+  # siblings) for pointing it at an isolated tmp dir without touching the real
+  # `lib/std`. (Verified this is not a BEAM hot-code-loading artifact: the
+  # driver's OWN `s2.compiled`/`skipped_fresh` bookkeeping is asserted below,
+  # never the runtime behavior of a loaded module.)
+  test "a repeated same-process build of a stdlib-recognized path does not serve a stale cached interface",
+       %{out: out} do
+    stdlib_src =
+      Path.join(System.tmp_dir!(), "cure_stdlib_cache_#{:erlang.unique_integer([:positive])}")
+
+    File.mkdir_p!(stdlib_src)
+    previous = Application.get_env(:cure, :stdlib_source_dir)
+    Application.put_env(:cure, :stdlib_source_dir, stdlib_src)
+
+    on_exit(fn ->
+      case previous do
+        nil -> Application.delete_env(:cure, :stdlib_source_dir)
+        value -> Application.put_env(:cure, :stdlib_source_dir, value)
+      end
+
+      File.rm_rf!(stdlib_src)
+    end)
+
+    r_path = Path.join(stdlib_src, "r.cure")
+    p_path = Path.join(stdlib_src, "p.cure")
+    File.write!(r_path, "mod R\n  fn val() -> Int = 1\n")
+    File.write!(p_path, "mod P\n  use R\n  fn pval() -> Int = R.val()\n")
+    paths = Path.wildcard(Path.join(stdlib_src, "*.cure"))
+
+    assert {:ok, s1} = Incremental.compile_dir(paths, out, source_roots: [stdlib_src])
+    assert Enum.sort(s1.compiled) == ["P", "R"]
+
+    File.write!(r_path, "mod R\n  fn val() -> Int = 2\n")
+
+    assert {:ok, s2} = Incremental.compile_dir(paths, out, source_roots: [stdlib_src])
+
+    assert "R" in s2.compiled
+
+    assert "P" in s2.compiled,
+           "R's interface changed (val() 1 -> 2) between two same-process builds of " <>
+             "this stdlib-recognized path -- P must not be served a stale cached interface"
+  end
+
   test "compile_order places every module after its use-dependencies (real stdlib graph)" do
     {:ok, graph} = DepGraph.scan(Path.wildcard("lib/std/*.cure"))
     order = Incremental.compile_order(graph)

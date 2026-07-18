@@ -230,6 +230,15 @@ defmodule Cure.Compiler.Incremental do
   defp compile_and_stage(mod, path, state) do
     case Cure.Compiler.compile_file(path, [output_dir: state.output_dir] ++ state.compile_opts) do
       {:ok, _module, _warnings} ->
+        # `path` may be a shipped-stdlib source, whose interface the loader
+        # memoizes for the lifetime of the OS process (`Program.
+        # cached_module_interface/2` — a sound assumption for ordinary
+        # compilation, but one this exact recompile just violated). Evict any
+        # stale entry before recomputing so a same-process rebuild of a
+        # stdlib-recognized path (e.g. two `mix cure.compile_stdlib` runs, or
+        # two `compile_dir` calls, sharing a VM) is never compared against a
+        # first-run interface that no longer matches the source on disk.
+        Program.invalidate_module_interface(path)
         new_hash = interface_hash_for(mod, path, state.roots)
 
         stored = get_in(state.old, [mod, Access.key(:interface_hash, nil)])
