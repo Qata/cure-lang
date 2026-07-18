@@ -25,6 +25,10 @@ defmodule Cure.Stdlib.OtpBranchMergeTest do
         choice_duality(w)
       fn union_inst() -> Equivalent(Local, merge(LRecv(TA(), LEnd()), LRecv(TB(), LEnd())), LBra(TA(), LEnd(), TB(), LEnd())) =
         reflexive(LBra(TA(), LEnd(), TB(), LEnd()))
+      fn mergeable_defined(x: Local, y: Local, w: Mergeable(x, y)) -> Equivalent(TB2, is_err(merge(x, y)), F()) =
+        merge_ok(w)
+      fn bystander_ok(g: Global, w: WF(g)) -> Equivalent(TB2, is_err(project(g, RC())), F()) =
+        bystander_defined(w)
     end
     """
 

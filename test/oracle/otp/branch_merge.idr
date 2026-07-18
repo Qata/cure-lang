@@ -148,3 +148,74 @@ choice_duality CoEnd = Refl
 choice_duality (CoAB t w2) = lsend_cong t (choice_duality w2)
 choice_duality (CoBA t w2) = lrecv_cong t (choice_duality w2)
 choice_duality (CoCho tL wL tR wR) = lsel_cong tL (choice_duality wL) tR (choice_duality wR)
+
+is_err : Local -> TB2
+is_err LEnd = F
+is_err (LSend t k) = F
+is_err (LRecv t k) = F
+is_err (LSel a la b lb) = F
+is_err (LBra a la b lb) = F
+is_err LErr = T
+
+data Mergeable : Local -> Local -> Type where
+  MgEnd : Mergeable LEnd LEnd
+  MgSend : (t : Tag) -> Mergeable k1 k2 -> Mergeable (LSend t k1) (LSend t k2)
+  MgRecvEq : (t : Tag) -> Mergeable k1 k2 -> Mergeable (LRecv t k1) (LRecv t k2)
+  MgRecvNe : (a : Tag) -> (b : Tag) -> tag_eq a b = F -> Mergeable (LRecv a k1) (LRecv b k2)
+  MgSel : (a : Tag) -> (b : Tag) -> Mergeable pa1 pa2 -> Mergeable pb1 pb2 -> Mergeable (LSel a pa1 b pb1) (LSel a pa2 b pb2)
+  MgBra : (a : Tag) -> (b : Tag) -> Mergeable pa1 pa2 -> Mergeable pb1 pb2 -> Mergeable (LBra a pa1 b pb1) (LBra a pa2 b pb2)
+
+tNeF : T = F -> Void
+tNeF Refl impossible
+
+merge_ok : Mergeable x y -> is_err (merge x y) = F
+merge_ok MgEnd = Refl
+merge_ok (MgSend TA w2) = Refl
+merge_ok (MgSend TB w2) = Refl
+merge_ok (MgSend TC w2) = Refl
+merge_ok (MgRecvEq TA w2) = Refl
+merge_ok (MgRecvEq TB w2) = Refl
+merge_ok (MgRecvEq TC w2) = Refl
+merge_ok (MgRecvNe TA TA pne) = void (tNeF pne)
+merge_ok (MgRecvNe TA TB pne) = Refl
+merge_ok (MgRecvNe TA TC pne) = Refl
+merge_ok (MgRecvNe TB TA pne) = Refl
+merge_ok (MgRecvNe TB TB pne) = void (tNeF pne)
+merge_ok (MgRecvNe TB TC pne) = Refl
+merge_ok (MgRecvNe TC TA pne) = Refl
+merge_ok (MgRecvNe TC TB pne) = Refl
+merge_ok (MgRecvNe TC TC pne) = void (tNeF pne)
+merge_ok (MgSel TA TA wA wB) = Refl
+merge_ok (MgSel TA TB wA wB) = Refl
+merge_ok (MgSel TA TC wA wB) = Refl
+merge_ok (MgSel TB TA wA wB) = Refl
+merge_ok (MgSel TB TB wA wB) = Refl
+merge_ok (MgSel TB TC wA wB) = Refl
+merge_ok (MgSel TC TA wA wB) = Refl
+merge_ok (MgSel TC TB wA wB) = Refl
+merge_ok (MgSel TC TC wA wB) = Refl
+merge_ok (MgBra TA TA wA wB) = Refl
+merge_ok (MgBra TA TB wA wB) = Refl
+merge_ok (MgBra TA TC wA wB) = Refl
+merge_ok (MgBra TB TA wA wB) = Refl
+merge_ok (MgBra TB TB wA wB) = Refl
+merge_ok (MgBra TB TC wA wB) = Refl
+merge_ok (MgBra TC TA wA wB) = Refl
+merge_ok (MgBra TC TB wA wB) = Refl
+merge_ok (MgBra TC TC wA wB) = Refl
+
+data WF : Global -> Type where
+  WFEnd : WF GEnd
+  WFAB : (t : Tag) -> WF k -> WF (GMsg RA RB t k)
+  WFBA : (t : Tag) -> WF k -> WF (GMsg RB RA t k)
+  WFBC : (t : Tag) -> WF k -> WF (GMsg RB RC t k)
+  WFAC : (t : Tag) -> WF k -> WF (GMsg RA RC t k)
+  WFCho : (tL : Tag) -> WF gL -> (tR : Tag) -> WF gR -> Mergeable (project gL RC) (project gR RC) -> WF (GCho RA RB tL gL tR gR)
+
+bystander_defined : WF g -> is_err (project g RC) = F
+bystander_defined WFEnd = Refl
+bystander_defined (WFAB t w2) = bystander_defined w2
+bystander_defined (WFBA t w2) = bystander_defined w2
+bystander_defined (WFBC t w2) = Refl
+bystander_defined (WFAC t w2) = Refl
+bystander_defined (WFCho tL wL tR wR mg) = merge_ok mg
