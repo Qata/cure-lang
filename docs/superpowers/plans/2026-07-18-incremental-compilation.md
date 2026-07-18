@@ -32,6 +32,8 @@
 - **Create** `test/cure/compiler/build_manifest_test.exs` (Task 2).
 - **Create** `test/cure/compiler/incremental_hash_test.exs` (Task 3).
 - **Create** `test/cure/compiler/incremental_test.exs` (Task 4).
+- **Create** `test/mix/tasks/cure.compile_stdlib_incremental_test.exs` (Task 5).
+- **Create** `test/mix/tasks/cure.compile_incremental_test.exs` (Task 6).
 
 ---
 
@@ -297,9 +299,20 @@ defmodule Cure.Compiler.BuildManifest do
   @doc "SHA-256 over the :cure application's compiled .beam files, in sorted path order."
   @spec toolchain_fingerprint() :: binary()
   def toolchain_fingerprint do
+    # NOT `Application.app_dir(:cure, "ebin")`: in this project `:code.lib_dir(:cure)`
+    # resolves to `_build/cure` (not the standard `_build/<env>/lib/cure`), so
+    # `Application.app_dir/2` collides with the driver's own default `output_dir`
+    # (`_build/cure/ebin`, see Global Constraints). Hashing that directory is
+    # self-referential: every compile run writes fresh `Cure.*.beam` files into
+    # the exact directory being fingerprinted as "toolchain", so the very next
+    # run always sees a mismatch and forces a full rebuild — and it never
+    # hashes the compiler's own `Elixir.*.beam` files at all, so a real
+    # toolchain change goes undetected. `Mix.Project.compile_path()` is the
+    # correct, verified location (matches the design spec) — confirmed via a
+    # real `mix test` run in this repo to resolve to `_build/<env>/lib/cure/ebin`,
+    # where the `:cure` app's own compiled bytecode actually lives.
     beams =
-      :cure
-      |> Application.app_dir("ebin")
+      Mix.Project.compile_path()
       |> Path.join("*.beam")
       |> Path.wildcard()
       |> Enum.sort()
@@ -447,14 +460,15 @@ The core of the feature: `compile_dir/3` — a single interleaved topological wa
 **Design contract (the invariants the code below encodes — read before implementing):**
 
 - **Walk order.** `DepGraph.closure_deps_map/1` gives `%{module => [dep module names]}` (superset). `DepGraph.toposort(closure, Map.keys(closure))` gives a deterministic order with every dependency before its dependents (cycles emitted as alphabetical groups). Walk in that order.
+- **Cycle precision loss is accepted, not a correctness gap.** A cycle in `closure_deps_map/1` can only arise among the small prelude-bootstrap set (real `use` cycles are legal per `DepGraph`'s module doc and would appear here too, but `order/1`'s cycle reporting below is unaffected). `toposort/2` is SCC-tolerant: within a deadlocked group it emits members in alphabetical order with no guaranteed *internal* order, so a same-pass interface change on one cycle member is not guaranteed to be visible to another member of the *same* cycle visited earlier in *this* build. This never serves a stale beam — the affected member is simply re-checked (and, if needed, recompiled) on the *next* build, same as any other dependency-changed case. Do not add a fixpoint/re-visit loop to "fix" this; it is deliberate.
 - **`graph.modules`** is `%{module => path}`. Every walked module has a path there.
 - **Forced targets.** A scanned node with `blank?: false` and `module: nil` (a parse error, per `DepGraph`'s `scan_file/1`) has no module name, so it is absent from `closure_deps_map/1` and the walk. It must still be *attempted* (so `compile_file` re-hits and reports the parse error) and never staged in the manifest. Collect these paths from `graph.nodes` and compile them after the module walk; any error fails the build. Blank nodes (`blank?: true`) produce no module/beam and are skipped.
 - **Single interleaved walk.** For each module M in walk order: decide dirty, and if dirty compile it *immediately* and recompute its interface hash — because M's dependents, visited later, read M's fresh interface hash to decide their own dirtiness. Dirty/compile cannot be two separate phases.
 - **Dirty predicate** for M (any one triggers): `all_dirty?`; M absent from the old manifest; `source_hash(M)` differs; any beam in the old entry's `beams` missing on disk; any direct dependency (from `closure_deps_map[M]`) that was **recompiled earlier in this walk** and whose fresh interface hash differs from its stored one (a dependency with no stored interface hash — new or errored — counts as changed).
 - **`all_dirty?`** iff `:force`/`CURE_FULL_REBUILD`, or the stored `toolchain` ≠ current, or (`:stdlib_hash` given and stored `stdlib_hash` ≠ given).
 - **Deletions** run on every build **except** `:force` (which skips manifest load + deletions entirely), *including* an `all_dirty?` toolchain-mismatch build. A manifest entry is a deletion candidate only if its `source_path` is under one of this run's `:source_roots` **and** the file no longer exists; then remove its beams and drop its entry. A foreign entry (outside the roots — e.g. a stdlib entry seen during a project build sharing the output dir) is left untouched.
-- **Manifest write** happens only if no module errored this build. Skipped-fresh modules carry their old entry forward verbatim. Compiled modules get a fresh entry.
-- **Beams of a module** are discovered by naming convention: `Cure.<module>.beam` plus `Cure.<module>.*.beam` (lifted submodules) in `output_dir`. Cure prefixes every emitted module atom with `Cure.` (per project CLAUDE.md), so this captures the module's outputs without an mtime race.
+- **Manifest write** happens only if no module errored this build. Skipped-fresh modules carry their old entry forward verbatim. Compiled modules get a fresh entry. Any kept manifest entry outside this run's walk — a foreign entry from another build sharing this `output_dir`, or a source under `source_roots` not included in this call's `source_paths` — is carried forward into the saved manifest unchanged (seed the accumulator from the post-deletion manifest, not empty).
+- **Beams of a module** are discovered by naming convention: `Cure.<module>.beam` plus `Cure.<module>.*.beam` (lifted submodules) in `output_dir`, **excluding** any `Cure.<module>.*.beam` match whose stripped name (`<module>.<suffix>`) is itself a key in `graph.modules`. Cure's dotted module-naming convention means an independently-declared *sibling* module can share a dotted prefix with `module` without being one of its lifted submodules — e.g. real stdlib modules `Std.Otp` and `Std.Otp.Call` are two separate top-level `mod` declarations in two separate files, not a `lift module` relationship, yet a bare `Cure.Std.Otp.*.beam` wildcard would match `Cure.Std.Otp.Call.beam` too. A genuine lifted submodule never appears as its own scanned entry in `graph.modules`, so this exclusion is exact, not heuristic. Cure prefixes every emitted module atom with `Cure.` (per project CLAUDE.md), so this captures the module's outputs without an mtime race, and the sibling exclusion is what keeps `delete_removed` from destroying an unrelated, still-live module's beam when a shorter dotted-prefix module's source is removed.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -673,6 +687,39 @@ defmodule Cure.Compiler.IncrementalTest do
     assert {:ok, s} = compile(src, out, force: true)
     assert Enum.sort(s.compiled) == ["Amb", "Leaf", "Mid", "Top"]
   end
+
+  # Proves `beams_for/3` does not over-match on Cure's dotted module-naming
+  # convention. `Ns.Base` and `Ns.Base.Child` are two INDEPENDENT top-level
+  # modules (two files, two `mod` declarations) that merely share a dotted
+  # prefix — mirroring real stdlib siblings like `Std.Otp` / `Std.Otp.Call`.
+  # A bare `Cure.Ns.Base.*.beam` wildcard would match `Cure.Ns.Base.Child.beam`
+  # too; deleting `Ns.Base`'s source must not delete `Ns.Base.Child`'s beam.
+  @ns_base """
+  mod Ns.Base do
+    def baseval() : Int = 1
+  end
+  """
+
+  @ns_base_child """
+  mod Ns.Base.Child do
+    def childval() : Int = 2
+  end
+  """
+
+  test "deleting a module does not delete a sibling whose name shares its dotted prefix",
+       %{src: src, out: out, write: write} do
+    write.("ns_base.cure", @ns_base)
+    write.("ns_base_child.cure", @ns_base_child)
+    assert {:ok, s0} = compile(src, out)
+    assert "Ns.Base" in s0.compiled and "Ns.Base.Child" in s0.compiled
+
+    File.rm!(Path.join(src, "ns_base.cure"))
+    assert {:ok, s} = compile(src, out)
+    assert "Ns.Base" in s.deleted
+    refute "Ns.Base.Child" in s.deleted
+    assert File.exists?(Path.join(out, "Cure.Ns.Base.Child.beam"))
+    assert Map.has_key?(BuildManifest.load(out).modules, "Ns.Base.Child")
+  end
 end
 ```
 
@@ -761,7 +808,18 @@ Add to `lib/cure/compiler/incremental.ex` (alongside `interface_hash/1`). This i
       compile_opts: Keyword.get(opts, :compile_opts, []),
       all_dirty?: all_dirty?,
       old: manifest.modules,
-      new: %{},
+      # Seed `new` with the post-deletion kept map, NOT `%{}`. Every module the
+      # walk actually visits overwrites its own key below (skip branch: `old`;
+      # compile branch: a fresh entry), so this is a no-op for walked modules.
+      # For anything NOT in this run's walk — a foreign entry from a build
+      # sharing this output_dir (e.g. stdlib vs project), or a source under
+      # `source_roots` that simply wasn't passed in `source_paths` this call —
+      # it is what carries the entry forward into the saved manifest. Without
+      # this, `delete_removed` correctly protects such entries from *deletion*,
+      # but the final `BuildManifest.save` below would still silently *drop*
+      # them from the manifest file, since it only ever wrote what the walk
+      # touched.
+      new: manifest.modules,
       iface: %{},
       compiled: [],
       skipped_fresh: [],
@@ -828,7 +886,7 @@ Add to `lib/cure/compiler/incremental.ex` (alongside `interface_hash/1`). This i
           source_hash: source_hash(path),
           interface_hash: new_hash,
           deps: Map.get(state.closure, mod, []),
-          beams: beams_for(mod, state.output_dir)
+          beams: beams_for(mod, state.output_dir, state.module_paths)
         }
 
         %{
@@ -885,11 +943,26 @@ Add to `lib/cure/compiler/incremental.ex` (alongside `interface_hash/1`). This i
     Enum.any?(beams, fn b -> not File.exists?(Path.join(output_dir, b)) end)
   end
 
-  defp beams_for(mod, output_dir) do
+  # `known_modules` is `graph.modules` (`state.module_paths`) — every top-level
+  # module name scanned this run. A `Cure.<mod>.*.beam` wildcard match is only a
+  # genuine lifted submodule of `mod` if its stripped name is NOT itself one of
+  # these; Cure's dotted naming convention means an independently-declared
+  # sibling (e.g. real stdlib modules `Std.Otp` / `Std.Otp.Call`) can otherwise
+  # false-positive-match and later get deleted alongside `mod`'s own beam.
+  defp beams_for(mod, output_dir, known_modules) do
     prefix = "Cure." <> mod
 
-    (Path.wildcard(Path.join(output_dir, prefix <> ".beam")) ++
-       Path.wildcard(Path.join(output_dir, prefix <> ".*.beam")))
+    exact = Path.wildcard(Path.join(output_dir, prefix <> ".beam"))
+
+    lifted =
+      Path.join(output_dir, prefix <> ".*.beam")
+      |> Path.wildcard()
+      |> Enum.reject(fn beam_path ->
+        candidate = beam_path |> Path.basename(".beam") |> String.trim_leading("Cure.")
+        Map.has_key?(known_modules, candidate)
+      end)
+
+    (exact ++ lifted)
     |> Enum.map(&Path.basename/1)
     |> Enum.uniq()
     |> Enum.sort()
@@ -899,7 +972,7 @@ Add to `lib/cure/compiler/incremental.ex` (alongside `interface_hash/1`). This i
 - [ ] **Step 4: Run tests to verify they pass**
 
 Run: `mix test test/cure/compiler/incremental_test.exs`
-Expected: PASS (14 tests).
+Expected: PASS (15 tests).
 
 **If the private-helper test fails** (Leaf recompiles Mid/Top): `export_env` includes private defs, so `interface_hash` picks up private-helper changes. Verify by reading what `module_interface`'s `export_env` contains for a non-exported def. If private defs genuinely appear in `export_env` for this language, the test's premise is wrong — replace `@leaf_v2_private` with a provably interface-invariant edit (a comment or whitespace change to `leaf.cure`) and note the finding in the commit message. Do not weaken any other assertion.
 
@@ -918,12 +991,41 @@ git commit -m "feat(compiler): interface-level incremental compile driver"
 
 **Files:**
 - Modify: `lib/mix/tasks/cure.compile_stdlib.ex`
-- Test: reuse `test/cure/stdlib/*` + `mix cure.check.stdlib` (integration); the driver's own tests (Task 4) cover the logic.
+- Test: **create** `test/mix/tasks/cure.compile_stdlib_incremental_test.exs` (below) — Task 4's tests exercise `Incremental.compile_dir/3` directly with hand-built args and cannot catch a *wiring* defect in this task (e.g. forgetting to pass `source_roots: [stdlib_dir]`, which would make the driver treat every stdlib module as foreign). Also reuse `test/cure/stdlib/*` + `mix cure.check.stdlib` as integration coverage.
 
 **Interfaces:**
 - Consumes: `Cure.Compiler.Incremental.compile_dir/3`.
 
-- [ ] **Step 1: Replace the compile loop**
+- [ ] **Step 1: Write the failing test**
+
+```elixir
+# test/mix/tasks/cure.compile_stdlib_incremental_test.exs
+defmodule Mix.Tasks.Cure.CompileStdlibIncrementalTest do
+  use ExUnit.Case, async: false
+  import ExUnit.CaptureIO
+
+  # Compiles the real 81-module stdlib twice — genuinely stdlib-scale, so it
+  # carries the same `:slow` tag as the other whole-stdlib tests (see
+  # test/test_helper.exs); run locally with `mix test --include slow`, always
+  # in CI.
+  @moduletag :slow
+
+  test "a second cure.compile_stdlib run with no source change recompiles nothing" do
+    capture_io(fn -> Mix.Task.rerun("cure.compile_stdlib") end)
+    output = capture_io(fn -> Mix.Task.rerun("cure.compile_stdlib") end)
+    assert output =~ ~r/0 compiled/
+  end
+end
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `mix test --include slow test/mix/tasks/cure.compile_stdlib_incremental_test.exs`
+Expected: FAIL — the current `cure.compile_stdlib` always recompiles every module, so the second run's output does not match `0 compiled`.
+
+**If `Mix.Task.rerun/1` errors or behaves unexpectedly** (e.g. the task depends on `Mix.Task.run("app.start")` in a way that isn't idempotent across `rerun`), read the current `lib/mix/tasks/cure.compile_stdlib.ex` in full first, then adjust the test to invoke the task in whatever way is actually safe to call twice in-process (e.g. calling the task module's `run/1` directly with `capture_io` around each call). Keep the assertion on the printed "0 compiled" summary — that observable behavior is what matters, not the invocation mechanism.
+
+- [ ] **Step 3: Replace the compile loop**
 
 In `lib/mix/tasks/cure.compile_stdlib.ex`, keep the `app.start`, `stdlib_dir`, and `compiler_available?()`/empty-file guards. Replace the `cure_files` scan block (lines 36-50) and the `true ->` compile branch (lines 61-101) so cycles are reported from the driver's summary and compilation routes through it:
 
@@ -979,23 +1081,26 @@ In `lib/mix/tasks/cure.compile_stdlib.ex`, keep the `app.start`, `stdlib_dir`, a
 
 `format_error(reason, target)`: `target` is a module name (from `compile_and_stage`) or a path (from `visit_forced`); `format_error/2` already accepts a path/context string, and a module name is an acceptable context here. If it pattern-matches on a path shape, pass `stdlib_dir` as the context instead of `target`.
 
-- [ ] **Step 2: Verify stdlib compiles clean, cold then warm**
+- [ ] **Step 4: Run the test to verify it passes, then verify stdlib compiles clean cold then warm**
 
-Run: `rm -f _build/cure/ebin/.cure_manifest && mix cure.compile_stdlib`
+Run: `mix test --include slow test/mix/tasks/cure.compile_stdlib_incremental_test.exs`
+Expected: PASS.
+
+Also run by hand: `rm -f _build/cure/ebin/.cure_manifest && mix cure.compile_stdlib`
 Expected: `N compiled, 0 up-to-date, 0 removed` where N is the full stdlib module count.
 
 Run again (no source change): `mix cure.compile_stdlib`
 Expected: `0 compiled, N up-to-date, 0 removed`.
 
-- [ ] **Step 3: Verify the stdlib integrity checks still pass**
+- [ ] **Step 5: Verify the stdlib integrity checks still pass**
 
 Run: `mix cure.check.stdlib`
 Expected: passes (declared == compiled, no orphans).
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add lib/mix/tasks/cure.compile_stdlib.ex
+git add lib/mix/tasks/cure.compile_stdlib.ex test/mix/tasks/cure.compile_stdlib_incremental_test.exs
 git commit -m "perf(compiler): make cure.compile_stdlib incremental"
 ```
 
@@ -1007,12 +1112,48 @@ Route directory builds through the driver, with a `stdlib_hash` guard so a proje
 
 **Files:**
 - Modify: `lib/mix/tasks/cure.compile.ex`
-- Test: reuse `test/cure/project/*` if present (integration); the driver's tests cover the logic.
+- Test: **create** `test/mix/tasks/cure.compile_incremental_test.exs` (below) — same rationale as Task 5: Task 4's tests can't catch a wiring defect in this task's own option-threading (e.g. dropping `stdlib_hash`, which would silently defeat invariant #1 for project builds). Also reuse `test/cure/project/*` if present (integration).
 
 **Interfaces:**
 - Consumes: `Cure.Compiler.Incremental.{compile_dir/3, stdlib_fingerprint/1}`.
 
-- [ ] **Step 1: Route directory builds through the driver**
+- [ ] **Step 1: Write the failing test**
+
+```elixir
+# test/mix/tasks/cure.compile_incremental_test.exs
+defmodule Mix.Tasks.Cure.CompileIncrementalTest do
+  use ExUnit.Case, async: false
+  import ExUnit.CaptureIO
+
+  setup do
+    root = Path.join(System.tmp_dir!(), "cure_compile_task_#{:erlang.unique_integer([:positive])}")
+    src = Path.join(root, "src")
+    out = Path.join(root, "ebin")
+    File.mkdir_p!(src)
+    on_exit(fn -> File.rm_rf!(root) end)
+    File.write!(Path.join(src, "a.cure"), "mod A do\n  def a() : Int = 1\nend\n")
+    File.write!(Path.join(src, "b.cure"), "mod B do\n  use A\n  def b() : Int = a()\nend\n")
+    {:ok, src: src, out: out}
+  end
+
+  test "a second cure.compile run over an unchanged project directory recompiles nothing",
+       %{src: src, out: out} do
+    args = [src, "--output-dir", out]
+    capture_io(fn -> Mix.Task.rerun("cure.compile", args) end)
+    output = capture_io(fn -> Mix.Task.rerun("cure.compile", args) end)
+    assert output =~ ~r/0 compiled/
+  end
+end
+```
+
+**If `mod X do ... end`/`use` isn't valid surface syntax**, use the real forms confirmed in Task 4's fixture pre-check (Task 4 Step 2) instead — the behavior under test (second run is a no-op) is what matters, not this exact snippet.
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `mix test test/mix/tasks/cure.compile_incremental_test.exs`
+Expected: FAIL — the current `cure.compile` always recompiles every file, so the second run's output does not match `0 compiled`.
+
+- [ ] **Step 3: Route directory builds through the driver**
 
 In `lib/mix/tasks/cure.compile.ex`, change the directory branch of the `Enum.each(paths, ...)` loop (lines 37-46) to collect the directory's sources and call the driver once, passing the stdlib fingerprint so a changed stdlib invalidates the whole project. Leave the single-file branch (`compile_one/2`) unchanged — a lone file has nothing to be incremental against.
 
@@ -1054,7 +1195,12 @@ In `lib/mix/tasks/cure.compile.ex`, change the directory branch of the `Enum.eac
     end)
 ```
 
-- [ ] **Step 2: Smoke-test a two-file project directory**
+- [ ] **Step 4: Run the test to verify it passes**
+
+Run: `mix test test/mix/tasks/cure.compile_incremental_test.exs`
+Expected: PASS.
+
+- [ ] **Step 5: Smoke-test a two-file project directory by hand**
 
 Run:
 ```bash
@@ -1065,12 +1211,12 @@ mix cure.compile /tmp/cure_proj_smoke --output-dir /tmp/cure_proj_out && \
 echo "--- second run (no change) ---" && \
 mix cure.compile /tmp/cure_proj_smoke --output-dir /tmp/cure_proj_out
 ```
-Expected: first run `2 compiled, 0 up-to-date`; second run `0 compiled, 2 up-to-date`. (If `mod A do ... end` isn't valid surface syntax, use the real forms confirmed in Task 4's fixture pre-check.) Clean up `/tmp/cure_proj_smoke` and `/tmp/cure_proj_out` after.
+Expected: first run `2 compiled, 0 up-to-date`; second run `0 compiled, 2 up-to-date`. Clean up `/tmp/cure_proj_smoke` and `/tmp/cure_proj_out` after.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add lib/mix/tasks/cure.compile.ex
+git add lib/mix/tasks/cure.compile.ex test/mix/tasks/cure.compile_incremental_test.exs
 git commit -m "perf(compiler): make cure.compile directory builds incremental"
 ```
 
