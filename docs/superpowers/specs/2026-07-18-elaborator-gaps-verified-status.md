@@ -35,6 +35,13 @@ branch) E12 rewrite-δ-blind-occurrence-finder and E1-sub scrutinee-var-not-subs
 both zero-TCB E-layer ergonomics gaps in the scrutinee/rewrite-refinement family (see §3; naming
 matches the handoff spec).
 
+> **Update 2026-07-18 (post-investigation):** re-verifying the E1 family against the live tree found
+> **E1 (the headline) and E1-sub are ALREADY CLOSED** — the intervening
+> `specialize_branch_context_subst` work refines both `ctx.types` and `ctx.env`, so sibling
+> refinement reaches the coverage checker (E1) and written body terms (E1-sub). Both are now locked
+> by oracle probes (`e1sib`, `e1sub`, `rel=same`) and a two-direction antibody. See §3. The handoff
+> spec's OPEN listing for E1/E1-sub is stale.
+
 ## 2. Kernel-layer bugs — the Antigen targets
 
 These are the items the Antigen expansion must trip on **before** any kernel change. Both are
@@ -171,20 +178,39 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
 - Explicit-field + congruence-helper workaround still required (live in
   `lib/std/otp_conversation.cure`).
 
-### NEW — E1-sub — scrutinee-var not substituted into branch-body written terms — **OPEN, E-layer**
-> Naming: the handoff spec tracks this as **E1-sub** (a sub-case of the E1 sibling/context-refinement
-> family), and the rewrite-δ-blind gap below as **E12**. Aligned here to match.
-- Reported from the OTP-metatheory branch (bystander/correspondence lemma). A `match` on a **bare
-  variable** refines the goal/motive (so the goal becomes `project(…, RA)` with `r` refined to the
-  ctor `RA`) but does **not** substitute the scrutinee var into the branch body's **written term
-  occurrences** — a hand-written `project(k, r)` still dereferences the un-refined binder (`r =
-  nvar2`), so the kernel is handed genuinely non-convertible types (`project(k, nvar2)` vs
-  `project(k, RA)`) and **correctly** rejects with `:conversion_failure`. Kernel is right; the E
-  layer simply doesn't propagate the refinement to terms the user wrote.
-- **Workaround (live):** write the concrete literal (`project(k, RA())`) so you don't rely on the
-  un-propagated refinement.
-- **Fix shape:** E-layer — substitute the scrutinee var into body term occurrences (not just the
-  motive). Same **sibling/scrutinee-refinement family** as E8; no TCB change.
+### E1 (headline) — sibling/context refinement on evidence match — **✅ ALREADY CLOSED** (E, no change needed; locked by oracle `e1sib` + antibody)
+> Naming: the handoff spec tracks the parent gap as **E1** ("refinement does not reach sibling
+> context binders on match"), its written-body sub-case as **E1-sub**, and the rewrite-δ-blind gap
+> below as **E12**. Aligned here to match.
+- **Re-verified empirically 2026-07-18** on branch `elaborator-gaps`: a dependent `match` on the
+  **evidence** refines the SIBLING binder in the local context, not just the motive. In the repro,
+  matching `SendsIn` evidence `SendSendK` forces the sibling behaviour `b` to `BSend(y, k)`, so a
+  nested `match b` covering **only** the `BSend` arm is exhaustive — the coverage/impossibility
+  checker sees the refined `b` and prunes the `BNil`/`BRecv` arms. Elaborates `:OK`.
+- **Root of the close:** `specialize_branch_context_subst` (`elaborator.ex`) rewrites BOTH
+  `ctx.types` and `ctx.env` by the branch-unify substitution, so the refined binder reaches the
+  coverage checker. This landed as part of the intervening sibling/scrutinee-refinement work; the
+  handoff spec's "OPEN" listing is **stale**.
+- **Soundness locked:** the same program with a WRONG nested arm (`BRecv` under the `b = BSend`
+  refinement) is **rejected** (`:index_mismatch`) — the refinement is genuine, not a blanket accept.
+- **Regression guard:** oracle probe `test/oracle/e1sib/` (`rel=same`, both accept) + antibody
+  `test/antigen/sibling_context_refinement_antibody_test.exs` (REACH accept + CONTROL reject).
+
+### E1-sub — scrutinee-var substituted into branch-body written terms — **✅ ALREADY CLOSED** (E, no change needed; locked by oracle `e1sub` + antibody)
+- Reported OPEN from the OTP-metatheory branch: a `match` on a **bare variable / evidence** was said
+  to refine the goal/motive but **not** the branch body's **written term occurrences** — a
+  hand-written `project(k, r)` would dereference the un-refined binder and the kernel would reject
+  `project(k, nvar)` vs `project(k, RA)` with `:conversion_failure`.
+- **Re-verified empirically 2026-07-18:** this is **no longer true in this tree**. The same
+  `specialize_branch_context_subst` that closes E1 rewrites `ctx.env` by the branch-unify subst, so
+  the written occurrence of `r` in `reflexive(project(k, r))` evaluates through the refinement
+  `r := RA` and is convertible with the goal RHS `project(k, RA)`. Elaborates `:OK`; the old
+  concrete-literal workaround (`project(k, RA())`) is unnecessary.
+- **Soundness locked:** the same program with goal RHS `project(k, RB)` — where the refinement
+  reaches the written `r`, making `RA` vs `RB` distinct — is **rejected** (`:conversion_failure`).
+- **Regression guard:** oracle probe `test/oracle/e1sub/` (`rel=same`; the faithful Idris mirror
+  keeps `r` implicit — Idris rejects a bare explicit pattern var in a forced position — cf. e8seq) +
+  antibody `test/antigen/sibling_context_refinement_antibody_test.exs` (REACH accept + CONTROL reject).
 
 ### NEW — E12 `rewrite` occurrence-finder is δ-blind (target hidden under an unreduced definition) — **OPEN, E-layer**
 - Reported from the same lemma. `rewrite n1 in …` sugar calls `abstract_term` to find LHS
