@@ -16,7 +16,7 @@ defmodule Cure.Elab.Implementation do
   instance clause nor a default is a `:missing_method` error.
   """
 
-  alias Cure.Core.{Env, Inductive}
+  alias Cure.Core.Env
   alias Cure.Elab.{Coherence, Declarations, Resolve}
 
   @doc """
@@ -26,76 +26,104 @@ defmodule Cure.Elab.Implementation do
   the caller to body-elaborate in the second pass, exactly like ordinary
   functions.
   """
-  @spec register(tuple(), Env.t()) :: {:ok, Env.t(), [tuple()]} | {:error, term()}
+  @spec register(tuple(), Env.t()) ::
+          {:ok, Env.t(), [tuple()], [tuple()]} | {:error, term()}
   def register({:implementation, meta, body}, env) do
     iface = meta |> Keyword.fetch!(:interface) |> String.to_atom()
-    head = meta |> Keyword.fetch!(:for) |> String.to_atom() |> normalize_head(env)
     for_type = Keyword.fetch!(meta, :for_type)
     as_name = Keyword.get(meta, :as)
 
-    case Env.get_interface(env, iface) do
-      nil ->
-        {:error, {:no_such_interface, iface}}
-
-      desc ->
-        with :ok <- check_no_stray_clauses(desc, iface, body),
-             {:ok, method_map, mangled_fns} <-
-               build_methods(desc, iface, head, for_type, body, env),
-             ref = %{iface: iface, head: head, methods: method_map, as: as_name},
-             {:ok, env1} <- register_instance(env, iface, head, as_name, ref),
-             {:ok, env2} <- register_signatures(mangled_fns, env1),
-             {:ok, env3} <- bind_named_instance(env2, desc, iface, head, as_name, ref) do
-          {:ok, env3, mangled_fns}
-        end
+    with {:ok, head} <- head_key(for_type, env),
+         desc when not is_nil(desc) <- Env.get_interface(env, iface),
+         :ok <- check_no_stray_clauses(desc, iface, body),
+         {:ok, method_map, mangled_fns} <-
+           build_methods(desc, iface, head, for_type, body, env),
+         ref = %{iface: iface, head: head, methods: method_map, as: as_name},
+         {:ok, env1} <- register_instance(env, iface, head, as_name, ref),
+         {:ok, env2} <- register_signatures(mangled_fns, env1),
+         {:ok, env3} <- bind_named_instance(env2, desc, iface, head, as_name, ref) do
+      {:ok, env3, mangled_fns, superinterface_obligations(iface, desc, head)}
+    else
+      nil -> {:error, {:no_such_interface, iface}}
+      {:error, _} = err -> err
     end
   end
 
-  # The coherence key's head, resolved through transparent type synonyms.
+  @doc """
+  Resolve the coherence head key for `for_type_ast` in `env` (the same
+  normalisation `register/2` keys an instance on). `{:ok, head}` or an error if the
+  head is ill-formed. Used by the prelude-shadow strip to identify which ambient
+  instances a module's own declarations supersede.
+  """
+  @spec head_of(Env.t(), tuple()) :: {:ok, atom()} | {:error, term()}
+  def head_of(env, for_type_ast), do: head_key(for_type_ast, env)
+
+  # The coherence key: elaborate the instance head to a Core type, whnf it, and
+  # read the head constructor's canonical name. Transparent synonyms unfold via
+  # the kernel's δ-reduction of certified globals, so `MyInt = Int` keys as `:Int`.
   #
   # The parser sets `meta[:for]` to the RAW SURFACE NAME of the `for` clause, with no semantic
   # unfolding. `typealias MyInt = Int` is a transparent synonym at the type-checking level — the
   # two names denote definitionally the same type — but keying coherence on the spelling filed
   # `for Int` and `for MyInt` under two different atoms, so both anonymous instances registered.
-  # Two live dictionaries for one type means `eqs(x, y)` can compute two different answers
+  # Two live dictionaries for one type means `eq(x, y)` can compute two different answers
   # depending on which spelling of the type the call site happened to use. Idris, Agda, Lean and
   # Rust all resolve an instance head to its normal form before comparing, precisely to rule
-  # this out.
+  # this out. Routing through the kernel's `whnf_value` (rather than chasing surface `def` bodies
+  # by hand) reuses the same certified δ-reduction the type checker trusts everywhere else.
   #
-  # A typealias elaborates to a nullary def `Name : Type := RHS`, so the unfolding is a def
-  # lookup. `seen` guards a cyclic chain of aliases rather than trusting none exists.
-  defp normalize_head(head, env), do: normalize_head(head, env, MapSet.new())
+  # Registration and dispatch agree on which synonyms unfold. `whnf_value` with the default
+  # `delta: :certified` δ-unfolds every certified global head; the dispatch classifier
+  # (`Cure.Elab.Resolve.classify/3`) unfolds a nullary type-level def unconditionally. These
+  # coincide for every synonym reachable from surface syntax: a synonym that reduces to a
+  # concrete head (`typealias MyInt = Int`, and chains thereof) is non-recursive, so it is
+  # certified the moment it is elaborated — before any `implementation` for it is registered —
+  # and the certified δ-gate then unfolds it exactly as dispatch does. The only globals
+  # `whnf_value` leaves folded that `classify` would unfold are non-total / not-yet-elaborated
+  # ones, and those never reduce to a concrete head on EITHER path. So there is no certification
+  # asymmetry to close here, and no delta option to pass: `whnf_value` offers only `:certified`
+  # and `:none`, and `:certified` is already the liberality dispatch needs.
+  #
+  # On success returns `{:ok, atom}`; a lowering failure propagates as `{:error, reason}` so two
+  # distinct malformed heads cannot silently collapse onto one sentinel key and misreport as an
+  # overlapping instance.
+  defp head_key(for_type_ast, env) do
+    case Declarations.lower_type(for_type_ast, [], env) do
+      {:ok, core_type} ->
+        atom =
+          core_type
+          |> Cure.Core.Eval.eval([])
+          |> Cure.Core.Normalise.whnf_value(env, [])
+          |> whnf_head_atom()
 
-  defp normalize_head(head, env, seen) do
-    if MapSet.member?(seen, head) do
-      head
-    else
-      case Env.get_def(env, head) do
-        %{type: {:type, _}, body: body} when not is_nil(body) ->
-          head_atom(body, env, MapSet.put(seen, head), head)
+        {:ok, atom}
 
-        _ ->
-          cond do
-            # A primitive still shadows this name — `Int` during the inductive-Int
-            # transition is registered as a family (`Std.Int#Int`) AND is still a
-            # `seed_primitives` machine type. Its instances key by the primitive
-            # head `:Int`, exactly as they did before the family was seeded, until
-            # the primitive is retired (Task 4 drops `Int` from `seed_primitives`),
-            # at which point the family branch below takes over automatically. This
-            # keeps the family registration dormant w.r.t. coherence keying.
-            not is_nil(Env.primitive(env, to_string(head))) -> head
-            Inductive.family?(env, head) -> Env.resolve_key(env, env.families, head)
-            true -> head
-          end
-      end
+      {:error, reason} ->
+        {:error, {:instance_head_ill_formed, reason}}
     end
   end
 
-  defp head_atom({:int_type}, _env, _seen, _fallback), do: :Int
-  defp head_atom({:float_type}, _env, _seen, _fallback), do: :Float
-  defp head_atom({:string_type}, _env, _seen, _fallback), do: :String
-  defp head_atom({:data, name, _params, _indices}, _env, _seen, _fallback), do: name
-  defp head_atom({:global, g}, env, seen, _fallback), do: normalize_head(g, env, seen)
-  defp head_atom(_other, _env, _seen, fallback), do: fallback
+  defp whnf_head_atom({:vint_type}), do: :Int
+  defp whnf_head_atom({:vfloat_type}), do: :Float
+  defp whnf_head_atom({:vbinary_type}), do: :Binary
+  defp whnf_head_atom({:vatom_type}), do: :Atom
+  # A universe, a Π/function type, and an inert `Effect(T)` are all legitimate (if exotic)
+  # instance heads; key them by a descriptive atom rather than the raw Core value. Every
+  # function type shares the `:Function` key — distinguishing them structurally is out of scope,
+  # and function heads never dispatch statically (`classify/3` returns `:unknown` for a `vpi`).
+  defp whnf_head_atom({:vtype, _level}), do: :Type
+  defp whnf_head_atom({:vpi, _grade, _dom, _cod}), do: :Function
+  defp whnf_head_atom({:veffect_type, _inner}), do: :Effect
+  defp whnf_head_atom({:vdata, name, _args}), do: name
+  # A stuck global (uncertified / open synonym) falls back to its own name — the
+  # same behavior the old `head_atom` fallback gave.
+  defp whnf_head_atom({:vneutral, {:nglobal, name}}), do: name
+  # Any other Value former in head position is not a well-formed type head (a λ, a constructor
+  # or primitive-literal VALUE, or a stuck var/application/eliminator). Return a sentinel ATOM —
+  # never the raw Core term, which is not `String.Chars` and crashed `mangled_name`'s
+  # interpolation. Such a head is itself ill-typed and rejected upstream; the sentinel only keeps
+  # the key well-typed if one ever reaches here.
+  defp whnf_head_atom(_other), do: :non_type_head
 
   # Every clause in the implementation body must name one of the interface's methods.
   # `build_methods/5` iterates the INTERFACE's `method_order` and searches the body by
@@ -119,6 +147,23 @@ defmodule Cure.Elab.Implementation do
     end
   end
 
+  # A `interface Big(t) requires Small(t)` declaration obliges every
+  # `implementation Big for T` to already have an `implementation Small for T`.
+  # Rather than check the coherence registry here — which, during the sequential
+  # registration fold, only holds implementations written EARLIER in source order
+  # — we RECORD one `{iface, super_interface, head}` obligation per superinterface
+  # and hand it back to the caller. `Cure.Elab.Program.body_register_pass` drains
+  # every recorded obligation against the FINAL coherence table once all
+  # implementations are registered, so `implementation Big for T` may textually
+  # precede `implementation Small for T` (order-independent, matching Idris). An
+  # interface with no `requires` clause has `super: []`, so this yields no
+  # obligations. Older descriptors without the key default to `[]`.
+  defp superinterface_obligations(iface, desc, head) do
+    desc
+    |> Map.get(:super, [])
+    |> Enum.map(fn super_interface -> {iface, super_interface, head} end)
+  end
+
   # -- methods ----------------------------------------------------------------
 
   # For each interface method (in declaration order) produce a mangled global
@@ -130,7 +175,7 @@ defmodule Cure.Elab.Implementation do
       mangled = mangled_name(env, iface, head, method)
 
       with {:ok, fn_decl, origin} <- method_def(desc, method, for_type, body),
-           :ok <- check_method_signature(desc, iface, method, for_type, fn_decl, origin) do
+           :ok <- check_method_signature(desc, iface, method, for_type, fn_decl, origin, env) do
         renamed = rename_fn(fn_decl, mangled)
         {:cont, {:ok, Map.put(mm, method, mangled), fns ++ [renamed]}}
       else
@@ -180,82 +225,48 @@ defmodule Cure.Elab.Implementation do
   # (`fmap`'s `a`/`b`). Lowercase-initial names are type variables and alpha-renamable;
   # uppercase names are type constructors and must match on the nose — the convention the
   # rest of the compiler already assumes.
-  defp check_method_signature(_desc, _iface, _method, _for_type, _fn_decl, :default), do: :ok
+  # A synthesized default conforms to the interface signature by construction.
+  defp check_method_signature(_desc, _iface, _method, _for_type, _fn_decl, :default, _env), do: :ok
 
-  defp check_method_signature(desc, iface, method, for_type, {:function_def, m, _b}, :instance) do
+  # An instance clause must declare the interface method's type with the head
+  # variable replaced by this instance's head type, up to definitional equality.
+  # We elaborate both the expected (interface, head-substituted) and actual
+  # (instance clause) function types to closed Core Pi types and compare with the
+  # kernel's conversion — which handles α-renaming of the method's other type
+  # variables and δ-unfolding of synonyms for free.
+  defp check_method_signature(desc, iface, method, for_type, {:function_def, m, _b}, :instance, env) do
     info = Map.fetch!(desc.methods, method)
-    hv = desc.head_var
 
-    expected = Enum.map(info.params, &param_type/1) ++ [info.return_type]
-    expected = Enum.map(expected, &subst_head(&1, hv, for_type))
-    actual = Enum.map(Keyword.get(m, :params, []), &param_type/1) ++ [Keyword.get(m, :return_type)]
+    expected_ast = subst_head(info.type_ast, desc.head_var, for_type)
+    actual_ast = function_type_ast(Keyword.get(m, :params, []), Keyword.get(m, :return_type))
 
-    if length(expected) == length(actual) and alpha_equal?(expected, actual) do
+    # The method's OWN type variables (`fmap`'s `a`/`b`) are universally quantified
+    # but written free in the surface AST. Bind each side's free type variables as a
+    # positional de Bruijn scope so `lower_type` lowers them to `{:var, idx}` rather
+    # than distinct global neutrals; a consistent renaming (`a`↔`x`, `b`↔`y`) then
+    # lowers to identical Core terms and passes conversion, while a genuine type
+    # mismatch stays distinct.
+    expected_scope = Declarations.free_type_vars([expected_ast], env)
+    actual_scope = Declarations.free_type_vars([actual_ast], env)
+
+    with {:ok, expected_core} <- Declarations.lower_type(expected_ast, expected_scope, env),
+         {:ok, actual_core} <- Declarations.lower_type(actual_ast, actual_scope, env),
+         true <- Cure.Core.Conv.conv?(expected_core, actual_core, [], 0, env) do
       :ok
     else
-      {:error, {:method_signature_mismatch, iface, method}}
+      _ -> {:error, {:method_signature_mismatch, iface, method}}
     end
   end
 
-  defp param_type({:param, pm, _pname}), do: Keyword.fetch!(pm, :type)
-
-  # Structural equality of two surface type ASTs, modulo a consistent bijective renaming
-  # of type variables (lowercase-initial names).
-  defp alpha_equal?(expected, actual), do: match?({:ok, _}, alpha(expected, actual, %{}))
-
-  defp alpha(xs, ys, sub) when is_list(xs) and is_list(ys) do
-    if length(xs) == length(ys) do
-      Enum.zip(xs, ys)
-      |> Enum.reduce_while({:ok, sub}, fn {x, y}, {:ok, s} ->
-        case alpha(x, y, s) do
-          {:ok, s2} -> {:cont, {:ok, s2}}
-          :error -> {:halt, :error}
-        end
-      end)
-    else
-      :error
-    end
+  # Build the surface function-type AST `T1 -> ... -> Tn -> R` from a param list
+  # and return type, MIRRORING `Interface.build_method_map`'s `method_type_ast`
+  # (interface.ex:140-143) EXACTLY — a single flat `{:function_call,
+  # [function_type: true], [doms..., result]}` node — so the two lower to the same
+  # Core Pi chain and kernel conversion sees identical structure.
+  defp function_type_ast(params, return_type) do
+    dom_asts = Enum.map(params, fn {:param, pm, _pname} -> Keyword.fetch!(pm, :type) end)
+    {:function_call, [function_type: true], dom_asts ++ [return_type]}
   end
-
-  defp alpha({:variable, _, x}, {:variable, _, y}, sub), do: alpha_name(x, y, sub)
-
-  defp alpha({:function_call, m1, a1}, {:function_call, m2, a2}, sub) do
-    with true <- Keyword.get(m1, :function_type, false) == Keyword.get(m2, :function_type, false),
-         {:ok, sub} <- alpha_name(Keyword.get(m1, :name), Keyword.get(m2, :name), sub) do
-      alpha(a1, a2, sub)
-    else
-      _ -> :error
-    end
-  end
-
-  defp alpha(same, same, sub), do: {:ok, sub}
-  defp alpha(_x, _y, _sub), do: :error
-
-  defp alpha_name(nil, nil, sub), do: {:ok, sub}
-
-  defp alpha_name(x, y, sub) when is_binary(x) and is_binary(y) do
-    cond do
-      not (type_var?(x) and type_var?(y)) ->
-        if x == y, do: {:ok, sub}, else: :error
-
-      Map.has_key?(sub, x) ->
-        if Map.fetch!(sub, x) == y, do: {:ok, sub}, else: :error
-
-      y in Map.values(sub) ->
-        # `y` is already the image of a different variable: not a bijection.
-        :error
-
-      true ->
-        {:ok, Map.put(sub, x, y)}
-    end
-  end
-
-  defp alpha_name(_x, _y, _sub), do: :error
-
-  # Cure's convention (and the stdlib's): a lowercase-initial name in type position is a
-  # type variable, an uppercase-initial one is a type constructor.
-  defp type_var?(<<c::utf8, _::binary>>), do: c in ?a..?z
-  defp type_var?(_), do: false
 
   defp function_def_named?({:function_def, m, _body}, name), do: Keyword.get(m, :name) == name
   defp function_def_named?(_other, _name), do: false

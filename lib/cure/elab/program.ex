@@ -112,10 +112,71 @@ defmodule Cure.Elab.Program do
          :ok <- check_no_duplicate_types(ast),
          :ok <- check_no_duplicate_ctors(ast),
          :ok <- check_no_fn_ctor_collision(ast),
+         :ok <- check_no_builtin_rebind(ast),
+         :ok <- check_no_precedence_cycle(ast),
          :ok <- check_proof_shapes(ast) do
       check_no_sibling_collision(ast)
     end
   end
+
+  # A module's `precedencegroup` declarations may not describe a cyclic order —
+  # two groups that each claim to bind tighter than the other (directly or
+  # through the built-in tower) have no satisfiable ranking. The Kahn sort in
+  # `FixityTable.recompute/1` linearises such a cycle silently, so the diagnostic
+  # lives here: assemble the module's groups onto the built-in table (so a cycle
+  # closed through a built-in group like `Additive` is caught) and reject if any
+  # group lies on a cycle. Elaborating `Std.Operators` itself is a no-op — its
+  # groups re-add idempotently onto the identical built-in base.
+  defp check_no_precedence_cycle(ast) do
+    base = Cure.Compiler.Parser.BuiltinFixity.table()
+    table = Cure.Compiler.Parser.BuiltinFixity.extend(base, ast)
+
+    case Cure.Compiler.Parser.FixityTable.cyclic_groups(table) do
+      [] -> :ok
+      groups -> {:error, {:precedence_cycle, groups}}
+    end
+  end
+
+  # A `precedencegroup`/`infix`/`prefix`/`postfix` declaration may not rebind a
+  # fixed SYNTACTIC operator (`.`, `|>`, `<-|`, `=`, augmented assigns, ranges) —
+  # those keep dedicated AST nodes and never route through the overloadable
+  # `:function_call` desugar, so giving one a user fixity/group is meaningless and
+  # rejected (Task 3.4). The built-in operators are exactly the lexemes marked
+  # `builtin` in `Std.Operators`; `FixityTable.builtin?/2` on the memoized
+  # built-in table is the single source of truth. A decl PARSED from that source
+  # (its own `builtin infix …` lines carry `builtin: true` in the node meta) is
+  # exempt, so re-checking `Std.Operators` on `use` does not reject itself.
+  defp check_no_builtin_rebind(ast) do
+    builtin_table = Cure.Compiler.Parser.BuiltinFixity.table()
+
+    ast
+    |> fixity_decl_nodes()
+    |> Enum.reject(fn {:fixity, meta, _} -> Keyword.get(meta, :builtin, false) end)
+    |> Enum.find_value(:ok, fn {:fixity, meta, _} ->
+      lexeme = Keyword.get(meta, :operator)
+
+      if is_binary(lexeme) and
+           Cure.Compiler.Parser.FixityTable.builtin?(builtin_table, lexeme) do
+        {:error, {:builtin_operator_not_overloadable, String.to_atom(lexeme)}}
+      end
+    end)
+  end
+
+  # Deep-walk the AST collecting every `{:fixity, meta, _}` declaration node.
+  defp fixity_decl_nodes(node) when is_tuple(node) do
+    here =
+      case node do
+        {:fixity, meta, _} when is_list(meta) -> [node]
+        _ -> []
+      end
+
+    here ++ (node |> Tuple.to_list() |> fixity_decl_nodes())
+  end
+
+  defp fixity_decl_nodes(list) when is_list(list),
+    do: Enum.flat_map(list, &fixity_decl_nodes/1)
+
+  defp fixity_decl_nodes(_other), do: []
 
   # A top-level container the dependent pipeline elaborates as a module. Classic
   # codegen compiles a `proof` container "exactly like a regular module"; the
@@ -654,6 +715,47 @@ defmodule Cure.Elab.Program do
   # type-alias slice (`String := List(Char)`) needs only its def entry; a
   # `@prelude type` also keeps its family and constructors. `certified` is kept
   # whole — it is a totality whitelist, so a superset is harmless.
+
+  # A whole-module `@prelude` (`names == :all`, e.g. `Std.Equatable`) exports its
+  # OWN surface ambiently, but NOT the defs it merely `use`d: keeping them whole
+  # would leak, say, `Std.String.to_int`/`length`/`reverse` into every module (via
+  # `Std.Equatable`'s `use Std.String`), silently shadowing a user's own `length`
+  # and making unqualified overload resolution ambiguous. Restrict the def/family/
+  # ctor surface to entries this module OWNS (keyed `"<Owner>#name"`). Coherence is
+  # kept WHOLE — instance resolution is the very reason a typeclass module is
+  # `@prelude`, and instances are cumulative, not owned; `certified`/`primitives`
+  # (seeded builtins) are harmless supersets and kept whole too.
+  defp restrict_env_to(%Env{module_owner: owner} = env, :all) when is_binary(owner) do
+    owned_def_keys = env.defs |> Map.keys() |> Enum.filter(&owned_by_module?(&1, owner))
+
+    # Restrict only the FUNCTION-def surface — that is where the leak lives: keeping
+    # `Std.Equatable`'s `use Std.String` whole would make `Std.String.to_int`/`length`/
+    # `reverse` ambient in every module, shadowing a user's own `length` and making
+    # unqualified overload resolution ambiguous. Keep entries this module OWNS *plus
+    # the transitive closure of globals those owned defs reference* — a
+    # `Comparable`/`Equatable` instance body for `Char` (which whnf's to `Bounded`)
+    # calls `Std.Char.code_point`, owned by `Std.Char`, which no WHOLE-module
+    # `@prelude` provider contributes (only its `Char` alias is item-preluded). Drop
+    # it and the ambient instance body dangles — the kernel re-checks it as
+    # `unknown_global`. The closure pulls in exactly the cross-module defs the kept
+    # surface depends on (`code_point`, `string_lt`, …) and NOT the whole imported
+    # surface: `to_int`/`length`/`reverse` are unreachable from any kept body and so
+    # stay out, preserving the no-ambient-`to_int`-leak the owner scoping exists for.
+    #
+    # FAMILIES and CONSTRUCTORS are kept WHOLE: they are TYPES, not the function names
+    # the leak concerns, and the kernel needs the full type surface to re-check the
+    # kept instance bodies (e.g. `string_lt` matches on `String = List(Char)`, so the
+    # `List` family and its constructors must resolve or the scrutinee is
+    # `case_scrutinee_not_data`). Type shadowing (E-layer collision re-key) already
+    # handles a user type that reuses an ambient type name, so a whole type surface is
+    # sound. `certified` is a totality whitelist (superset harmless); coherence is the
+    # very point of a typeclass prelude and stays whole too.
+    keep_keys = reachable_global_closure(env.defs, owned_def_keys)
+    kept_defs = Map.take(env.defs, keep_keys)
+
+    %Env{env | defs: kept_defs}
+  end
+
   defp restrict_env_to(%Env{} = env, :all), do: env
 
   defp restrict_env_to(%Env{} = env, %MapSet{} = names) do
@@ -674,6 +776,59 @@ defmodule Cure.Elab.Program do
         module_owner: env.module_owner
     }
   end
+
+  # Is `key` (an owner-qualified `"<Owner>#name"` atom) owned by module `owner`?
+  # A bare/content-derived key with no `"<owner>#"` prefix is not owned.
+  defp owned_by_module?(key, owner) do
+    case :binary.split(Atom.to_string(key), "#") do
+      [prefix, _rest] -> prefix == owner
+      _ -> false
+    end
+  end
+
+  # Transitive closure of `defs` keys reachable from `seed_keys` by following the
+  # `{:global, g}` references in each def's `type` and `body`. Only globals that
+  # resolve to a def IN `defs` are followed; unresolved names are ignored here — a
+  # genuinely missing global surfaces at kernel re-check, not by silent inclusion.
+  defp reachable_global_closure(defs, seed_keys) do
+    seen = MapSet.new(seed_keys)
+    do_reachable_closure(defs, seen, seed_keys)
+  end
+
+  defp do_reachable_closure(_defs, seen, []), do: MapSet.to_list(seen)
+
+  defp do_reachable_closure(defs, seen, [key | rest]) do
+    case Map.get(defs, key) do
+      %{} = record ->
+        referenced =
+          MapSet.new()
+          |> gather_def_globals(Map.get(record, :type))
+          |> gather_def_globals(Map.get(record, :body))
+
+        fresh =
+          for g <- referenced,
+              Map.has_key?(defs, g),
+              not MapSet.member?(seen, g),
+              do: g
+
+        do_reachable_closure(defs, Enum.reduce(fresh, seen, &MapSet.put(&2, &1)), rest ++ fresh)
+
+      _ ->
+        do_reachable_closure(defs, seen, rest)
+    end
+  end
+
+  # Collect every `{:global, g}` atom mentioned anywhere in a Core term (generic
+  # tuple/list walk — Core terms are plain tuples and lists).
+  defp gather_def_globals(acc, {:global, g}), do: MapSet.put(acc, g)
+
+  defp gather_def_globals(acc, t) when is_tuple(t),
+    do: t |> Tuple.to_list() |> Enum.reduce(acc, &gather_def_globals(&2, &1))
+
+  defp gather_def_globals(acc, l) when is_list(l),
+    do: Enum.reduce(l, acc, &gather_def_globals(&2, &1))
+
+  defp gather_def_globals(acc, _), do: acc
 
   # `@prelude`-marked items across the stdlib tree, as a list of
   # `%{source, path, names}` (names = a `MapSet` of item names, or `:all` for a
@@ -853,8 +1008,33 @@ defmodule Cure.Elab.Program do
     with {:ok, env} <- check_ast(ast) do
       # `implementation` declarations synthesise mangled method globals that are
       # not in the source AST; they are still this module's locals and must be
-      # emitted alongside the source-declared defs.
-      {:ok, env, local_defs ++ impl_def_names(env)}
+      # emitted alongside the source-declared defs. But the coherence table also
+      # carries every AMBIENT instance a `@prelude` module makes visible — and
+      # `Std.Equatable`/`Std.Comparable` are whole-module `@prelude`, so their ~two
+      # dozen instances are ambient in EVERY module. Emitting all of them into
+      # every consumer bloats each beam with instance methods it never defines
+      # (costly on the AtomVM/ESP32 target) and needlessly duplicates code that
+      # already lives in the owning module's beam.
+      #
+      # Each mangled impl key is OWNER-QUALIFIED (`Std.Equatable#__impl_…`), so
+      # emit only the instances THIS module owns. A reference to a non-owned
+      # instance (a resolved `==`, a constructed dictionary) then falls through
+      # `Emit.remote_target/2`'s owner branch to a REMOTE call into the owner's
+      # module (`Cure.Std.Equatable`), where the instance is emitted exactly once.
+      # Unqualified synthesised globals (owner = nil) have no remote home, so this
+      # module must still host them.
+      self_owner = ast |> module_atom() |> Atom.to_string() |> String.replace_prefix("Cure.", "")
+
+      own_impls =
+        Enum.filter(impl_def_names(env), fn key ->
+          case Cure.Elab.Name.owner(key) do
+            nil -> true
+            ^self_owner -> true
+            _ambient -> false
+          end
+        end)
+
+      {:ok, env, local_defs ++ own_impls}
     end
   end
 
@@ -2250,21 +2430,42 @@ defmodule Cure.Elab.Program do
   end
 
   defp body_register_pass(items, env, prelude?) do
-    Enum.reduce_while(items, {:ok, env, []}, fn decl, {:ok, acc, fns} ->
+    # A module's OWN anonymous `implementation` shadows an ambient one for the same
+    # `(interface, head)` reaching it through the `@prelude` slice or an `import`.
+    # Concretely: `Std.Comparable` `use`s `Std.Equatable`, and both are `@prelude`,
+    # so the whole-module prelude slice re-exports `Std.Equatable`'s own
+    # `Equatable for Int` back INTO `Std.Equatable`, where it would collide with the
+    # local declaration. Drop those heads from the incoming coherence before the
+    # register pass so the local declaration registers cleanly. Two LOCAL
+    # declarations for one head still collide with each other (they are re-added into
+    # the now-stripped table in source order), so genuine duplicate-instance errors
+    # are unaffected.
+    env = strip_shadowed_prelude_instances(items, env)
+    # The fold threads a fourth accumulator, `pending`: the list of
+    # `{iface, super_interface, head}` superinterface obligations recorded by each
+    # `implementation`/`deriving` registration. Checking them inline would only
+    # see implementations registered EARLIER in source order; instead we drain
+    # them against the FINAL coherence table after the fold, so a `requires`
+    # obligation is order-independent (see `drain_superinterface_checks/2`).
+    Enum.reduce_while(items, {:ok, env, [], []}, fn decl, {:ok, acc, fns, pending} ->
       case decl do
         {:function_def, _meta, _body} ->
           case Declarations.register_signature(decl, acc) do
-            {:ok, acc2} -> {:cont, {:ok, acc2, fns ++ [decl]}}
+            {:ok, acc2} -> {:cont, {:ok, acc2, fns ++ [decl], pending}}
             {:error, _} = err -> {:halt, err}
           end
 
         # An implementation lowers each method to a mangled global; register its
         # signatures + the coherence entry now, and thread the mangled defs into
         # `fns` so their bodies elaborate in the second pass like any function.
+        # Its superinterface obligations join `pending` for the post-fold drain.
         {:implementation, _meta, _body} ->
           case Cure.Elab.Implementation.register(decl, acc) do
-            {:ok, acc2, mangled_fns} -> {:cont, {:ok, acc2, fns ++ mangled_fns}}
-            {:error, _} = err -> {:halt, err}
+            {:ok, acc2, mangled_fns, obligations} ->
+              {:cont, {:ok, acc2, fns ++ mangled_fns, pending ++ obligations}}
+
+            {:error, _} = err ->
+              {:halt, err}
           end
 
         # A `type … deriving Iface` container elaborates normally, then each named
@@ -2274,9 +2475,9 @@ defmodule Cure.Elab.Program do
         {:container, meta, _body} = decl when is_list(meta) ->
           with {:ok, acc2} <- Declarations.elaborate(decl, acc),
                {:ok, acc3} <- maybe_register_builtin(decl, acc2, prelude?),
-               {:ok, acc4, derived_fns} <-
+               {:ok, acc4, derived_fns, derived_obligations} <-
                  register_derived(Keyword.get(meta, :deriving, []), decl, acc3) do
-            {:cont, {:ok, acc4, fns ++ derived_fns}}
+            {:cont, {:ok, acc4, fns ++ derived_fns, pending ++ derived_obligations}}
           else
             {:error, _} = err -> {:halt, err}
           end
@@ -2287,7 +2488,7 @@ defmodule Cure.Elab.Program do
               # `maybe_register_builtin` is total ({:ok, _} always), so there is no
               # error branch to thread here.
               case maybe_register_builtin(decl, acc2, prelude?) do
-                {:ok, acc3} -> {:cont, {:ok, acc3, fns}}
+                {:ok, acc3} -> {:cont, {:ok, acc3, fns, pending}}
               end
 
             {:error, _} = err ->
@@ -2296,9 +2497,183 @@ defmodule Cure.Elab.Program do
       end
     end)
     |> case do
-      {:ok, _env, _fns} = ok -> ok
-      {:error, _} = err -> err
+      {:ok, env_final, fns, pending} ->
+        # Post-pass over the FINAL env (mirroring `drain_superinterface_checks`):
+        # auto-derive a structural `Equatable` for every ADT with no hand-written
+        # instance, THEN drain superinterface obligations against the now-complete
+        # coherence table — so a hand-written `Comparable for T` may rely on the
+        # auto-derived `Equatable for T` to satisfy its `requires Equatable(t)`.
+        with {:ok, env2, auto_fns} <- auto_derive_equatable(items, env_final),
+             :ok <- drain_superinterface_checks(env2, pending) do
+          {:ok, env2, fns ++ auto_fns}
+        else
+          {:error, _} = err -> err
+        end
+
+      {:error, _} = err ->
+        err
     end
+  end
+
+  # Auto-derive a structural `Equatable` instance for every variant-bearing ADT
+  # declared in this module that has no hand-written (or explicitly-`deriving`d)
+  # instance. This makes the `Equatable` typeclass cover exactly what
+  # `build_binop`'s deleted `:error`-branch `struct_eq` covered — ADT `==` now
+  # routes to a coherence-registered instance whose body is the same `struct_eq`
+  # spine, so it evaluates identically while a user's hand-written instance still
+  # supersedes it (override).
+  #
+  # Runs only when the `Equatable` interface is in scope: a bootstrap-closure
+  # module elaborated with `Env.empty()` (Bool, Int, …, and `Std.Equatable`
+  # itself before it is ambient) has no interface to instantiate, and its ADTs
+  # never route `==` through the typeclass — so there is nothing to derive.
+  #
+  # A type that already carries an anonymous instance is detected by
+  # `Implementation.register/2`'s own `{:overlapping_instance, …}` signal (which
+  # uses the exact same head normalisation the coherence table is keyed on), so no
+  # separate head recomputation can drift from it.
+  # Remove from `env`'s coherence every `(iface, head)` this module declares its own
+  # anonymous `implementation` for AND whose ambient instance this very module OWNS —
+  # i.e. an instance that reached `env` by re-importing THIS module's own methods
+  # through the `@prelude` slice (the `Std.Equatable`/`Std.Comparable` cycle). The
+  # ambient `ref`'s method globals are mangled with their owning module's name
+  # (`Std.Equatable#__impl_Equatable_Int_==`); if that owner is the module now being
+  # elaborated, the "collision" is the module against itself, so the local
+  # declaration re-registers cleanly. A FOREIGN redefinition (a user module
+  # declaring `implementation Equatable for Int`) leaves the ambient ref in place, so
+  # its registration still raises `{:overlapping_instance, …}` — global coherence for
+  # stdlib instances is preserved. Named instances (`… as name`) live in a separate
+  # name-keyed table and never collide, so they are ignored. A head that fails to
+  # resolve is left in place (the local registration will surface the same error).
+  defp strip_shadowed_prelude_instances(items, env) do
+    coherence = Env.coherence(env) || Coherence.new()
+    owner = Env.owner(env)
+
+    # (1) Self-cycle re-imports: an ambient `(iface, head)` this module declares
+    # its own `implementation` for AND whose ambient ref this module OWNS (it
+    # reached `env` by re-importing this module's own methods through the
+    # `@prelude` slice). Stripping lets the local declaration re-register cleanly;
+    # a FOREIGN duplicate is left in place so its registration still collides.
+    self_heads =
+      for {:implementation, meta, _body} <- items,
+          is_nil(Keyword.get(meta, :as)),
+          iface = meta |> Keyword.fetch!(:interface) |> String.to_atom(),
+          for_type = Keyword.fetch!(meta, :for_type),
+          {:ok, head} <- [Cure.Elab.Implementation.head_of(env, for_type)],
+          ref = Map.get(coherence.anon, {iface, head}),
+          not is_nil(ref),
+          instance_owned_by?(ref, owner),
+          do: {iface, head}
+
+    # (2) Interface shadowing: a module that REDECLARES an `interface I` defines a
+    # fresh, locally-scoped typeclass that merely shares the name `I` with the
+    # ambient prelude interface (per the E-layer bare-atom shadowing decision).
+    # The prelude's ambient instances implement the PRELUDE's `I` (a different
+    # method surface — e.g. `Equatable`'s `==` vs. a local `eq`), so none of them
+    # belong to the local `I`. Drop EVERY ambient anon entry for a redeclared
+    # interface so the local interface + its own implementations register against a
+    # clean slate. Genuinely-shared (non-redeclared) interfaces are untouched, so
+    # global coherence for stdlib interfaces is preserved.
+    redeclared = for {:interface, meta, _body} <- items, into: MapSet.new() do
+      meta |> Keyword.fetch!(:name) |> String.to_atom()
+    end
+
+    keys_to_drop =
+      self_heads ++
+        for {{iface, _head} = key, _ref} <- coherence.anon,
+            MapSet.member?(redeclared, iface),
+            do: key
+
+    case keys_to_drop do
+      [] -> env
+      _ -> Env.put_coherence(env, %{coherence | anon: Map.drop(coherence.anon, keys_to_drop)})
+    end
+  end
+
+  # Is every method global of `ref` mangled with `owner` as its module prefix? A
+  # `nil` owner (top-level, un-owned elaboration) owns nothing. The mangled name is
+  # `"<Owner>#__impl_<Iface>_<Head>_<method>"`; the owner is the segment before `#`.
+  defp instance_owned_by?(_ref, nil), do: false
+
+  defp instance_owned_by?(%{methods: methods}, owner) when is_map(methods) do
+    owner_str = to_string(owner)
+
+    methods != %{} and
+      Enum.all?(methods, fn {_m, global} ->
+        case String.split(Atom.to_string(global), "#", parts: 2) do
+          [prefix, _rest] -> prefix == owner_str
+          _ -> false
+        end
+      end)
+  end
+
+  defp instance_owned_by?(_ref, _owner), do: false
+
+  defp auto_derive_equatable(items, env) do
+    case equatable_method_name(Env.get_interface(env, :Equatable)) do
+      # No `Equatable` interface in scope, or it is not the canonical single
+      # structural-equality method shape — nothing to auto-derive against.
+      nil ->
+        {:ok, env, []}
+
+      method_name ->
+        auto_derive_equatable(items, env, method_name)
+    end
+  end
+
+  # The sole method name of a canonical `Equatable` interface (`"=="` for
+  # `Std.Equatable`). A multi-method interface named `Equatable` is not the
+  # structural-equality shape this generator targets — return `nil` to skip.
+  defp equatable_method_name(nil), do: nil
+
+  defp equatable_method_name(%{method_order: [m]}), do: Atom.to_string(m)
+  defp equatable_method_name(%{method_order: _}), do: nil
+  defp equatable_method_name(_), do: nil
+
+  defp auto_derive_equatable(items, env, method_name) do
+    Enum.reduce_while(items, {:ok, env, []}, fn decl, {:ok, acc, fns} ->
+      case Cure.Elab.Deriving.struct_eq_instance(decl, method_name) do
+        :skip ->
+          {:cont, {:ok, acc, fns}}
+
+        {:ok, impl_ast} ->
+          case Cure.Elab.Implementation.register(impl_ast, acc) do
+            {:ok, acc2, mangled_fns, _obligations} ->
+              {:cont, {:ok, acc2, fns ++ mangled_fns}}
+
+            # A hand-written / explicitly-derived instance already covers this type.
+            # `register/2` reports the overlap (its coherence key is head-based, so a
+            # derived instance whose head matches a hand-written one is rejected
+            # BEFORE `register_signatures` runs — the hand-written method body is
+            # never overwritten). Leave it authoritative, derive nothing.
+            {:error, {:overlapping_instance, :Equatable, _head}} ->
+              {:cont, {:ok, acc, fns}}
+
+            {:error, _} = err ->
+              {:halt, err}
+          end
+      end
+    end)
+  end
+
+  # Verify every recorded `{iface, super_interface, head}` obligation against the
+  # FINAL coherence table, now that all implementations in the module are
+  # registered. Each `interface Big(t) requires Small(t)` obliges every
+  # `implementation Big for T` to have an `implementation Small for T` present —
+  # in EITHER source order. On the first unmet obligation, report
+  # `{:missing_superinterface, iface, super_interface, head}` (unchanged shape).
+  defp drain_superinterface_checks(env, pending) do
+    coherence = Env.coherence(env) || Coherence.new()
+
+    Enum.reduce_while(pending, :ok, fn {iface, super_interface, head}, :ok ->
+      case Coherence.lookup_anon(coherence, super_interface, head) do
+        {:ok, _ref} ->
+          {:cont, :ok}
+
+        {:error, _} ->
+          {:halt, {:error, {:missing_superinterface, iface, super_interface, head}}}
+      end
+    end)
   end
 
   # In a designated prelude source, a `@builtin(:key) type Name = ...` container
@@ -2326,16 +2701,18 @@ defmodule Cure.Elab.Program do
 
   # Derive an instance of each named interface for a `deriving` container. Each
   # generated implementation is registered like a hand-written one; its mangled
-  # method defs are threaded back so the second pass elaborates their bodies.
-  defp register_derived([], _decl, env), do: {:ok, env, []}
+  # method defs are threaded back so the second pass elaborates their bodies, and
+  # its superinterface obligations are threaded back for the post-fold drain.
+  defp register_derived([], _decl, env), do: {:ok, env, [], []}
 
   defp register_derived(names, decl, env) do
-    Enum.reduce_while(names, {:ok, env, []}, fn name, {:ok, acc, fns} ->
+    Enum.reduce_while(names, {:ok, env, [], []}, fn name, {:ok, acc, fns, obligations} ->
       iface = String.to_atom(name)
 
       with {:ok, impl_ast} <- Cure.Elab.Deriving.generate(iface, decl, acc),
-           {:ok, acc2, mangled_fns} <- Cure.Elab.Implementation.register(impl_ast, acc) do
-        {:cont, {:ok, acc2, fns ++ mangled_fns}}
+           {:ok, acc2, mangled_fns, new_obligations} <-
+             Cure.Elab.Implementation.register(impl_ast, acc) do
+        {:cont, {:ok, acc2, fns ++ mangled_fns, obligations ++ new_obligations}}
       else
         {:error, _} = err -> {:halt, err}
       end

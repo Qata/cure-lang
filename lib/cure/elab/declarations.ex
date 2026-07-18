@@ -1956,6 +1956,28 @@ defmodule Cure.Elab.Declarations do
   @spec lower_type(tuple(), [String.t()], Env.t()) :: {:ok, tuple()} | {:error, term()}
   def lower_type(ast, scope, env), do: idx_to_core(ast, scope, nil, env, nil)
 
+  @doc """
+  The free type variables of one or more surface type ASTs, in order of first
+  appearance — the same kind-`Type`, family-aware collection Idris-style
+  auto-generalization uses (`auto_generalize/3`), but with an empty bound set.
+
+  Passed as the `scope` to `lower_type/3`, these names lower to positional
+  `{:var, idx}` de Bruijn indices instead of distinct global neutrals, so two
+  signatures that differ only by a consistent renaming of their type variables
+  lower to identical Core terms and compare equal under kernel conversion.
+  """
+  @spec free_type_vars([tuple()], Env.t()) :: [String.t()]
+  def free_type_vars(type_asts, env) do
+    {ordered, _seen} =
+      type_asts
+      |> Enum.reject(&is_nil/1)
+      |> Enum.reduce({[], MapSet.new()}, fn ast, acc ->
+        collect_type_vars(ast, MapSet.new(), env, acc)
+      end)
+
+    ordered
+  end
+
   # Classify an index NAME node as a numeral, since a name STARTING WITH A DIGIT
   # can only be a stringified numeric token from the type parser (Cure identifiers
   # never start with a digit) — never a binder. Returns:

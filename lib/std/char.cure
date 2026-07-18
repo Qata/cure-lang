@@ -14,6 +14,9 @@ mod Std.Char
 
   use Std.Bounded
 
+  ## `@prelude`: `Char` is ambient like `String` (which is `List(Char)`), so a
+  ## bare `Char` return/field type and character literals resolve with no `use`.
+  @prelude
   typealias Char = Bounded(1114112)
 
   ## The Unicode code point of `c` as an `Int` (the Lean `Fin.val` analog for

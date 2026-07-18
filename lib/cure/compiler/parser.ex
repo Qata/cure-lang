@@ -37,7 +37,7 @@ defmodule Cure.Compiler.Parser do
   """
 
   alias Cure.Compiler.{MacroFamily, MacroRaw, Token}
-  alias Cure.Compiler.Parser.Precedence
+  alias Cure.Compiler.Parser.{BuiltinFixity, FixityTable, Precedence}
   alias Cure.Pipeline.Events
 
   # -- Parser State ----------------------------------------------------------
@@ -61,7 +61,14 @@ defmodule Cure.Compiler.Parser do
     computed_macros: %{},
     fresh_counter: 0,
     literal_macros: %{},
-    expansion_context: nil
+    expansion_context: nil,
+    # Declaration-driven binding-power table the Pratt loop consults instead of
+    # the static `Precedence` module. Seeded from the memoized built-in table
+    # (`Std.Operators`) and extended with the current module's own
+    # `precedencegroup`/`infix`/… decls (collected in the harvest pass). `nil`
+    # in sub-parsers that build `%__MODULE__{}` directly — `fixity_table/1`
+    # falls back to the built-in table there.
+    fixity_table: nil
   ]
 
   # Keywords that can open a new top-level definition. Used by the
@@ -97,6 +104,46 @@ defmodule Cure.Compiler.Parser do
   # stages (codegen, preload) can read it as module metadata. `@group(:g)`
   # replaces the historical marker-function hack for stdlib preload groups.
   @module_level_decorators ~w(group)
+
+  # Maps a fixed operator token TYPE to the lexeme STRING it binds under in the
+  # declaration-driven `FixityTable` (keyed on lexemes, as declared in
+  # `Std.Operators`). Word operators keep their remapped token type but bind
+  # under the spelled-out word. A generic `:operator` token carries its own
+  # lexeme in `value` and is handled directly by `lexeme_of/1`. Any token type
+  # absent here is not an operator and yields `:not_infix`.
+  @token_lexemes %{
+    pipe: "|>",
+    melquiades: "<-|",
+    or_op: "or",
+    and_op: "and",
+    eq: "==",
+    neq: "!=",
+    lt: "<",
+    gt: ">",
+    lte: "<=",
+    gte: ">=",
+    range: "..",
+    range_inclusive: "..=",
+    string_concat: "<>",
+    plus: "+",
+    minus: "-",
+    star: "*",
+    slash: "/",
+    percent: "%",
+    band_op: "band",
+    bor_op: "bor",
+    bxor_op: "bxor",
+    bsl_op: "bsl",
+    bsr_op: "bsr",
+    dot: ".",
+    assign: "=",
+    plus_assign: "+=",
+    minus_assign: "-=",
+    star_assign: "*=",
+    slash_assign: "/=",
+    not_op: "not",
+    bnot_op: "bnot"
+  }
 
   @type t :: %__MODULE__{}
   @type ast :: {atom(), keyword(), term()}
@@ -142,12 +189,26 @@ defmodule Cure.Compiler.Parser do
     prelude? = Keyword.get(opts, :prelude_macros, true)
     supplied_macros = Keyword.get(opts, :builtin_macros)
 
+    # The built-in fixity table (memoized). Both passes seed from it; the
+    # authoritative pass layers the module's own decls on top (collected below).
+    builtin_fixity = session_builtin_fixity_table()
+
     # Phase 1 (harvest): parse once with NO active macros, keep only the local
     # macro grammars. Use-sites may mis-parse here; we discard everything but
-    # the {:macro_def, …} nodes and their (recovered) errors.
+    # the {:macro_def, …} nodes and their (recovered) errors. This pass also
+    # yields the module's `precedencegroup`/`infix`/… declaration nodes, which
+    # parse context-free (no fixity table needed) — they feed the module table.
     harvest_state =
-      put_tokens(%__MODULE__{file: file, emit_events: false, edition: edition}, tokens)
+      put_tokens(
+        %__MODULE__{file: file, emit_events: false, edition: edition, fixity_table: builtin_fixity},
+        tokens
+      )
+
     {harvest_exprs, _harvest_state} = parse_program(harvest_state)
+
+    # Extend the built-in table with the current module's fixity declarations so
+    # the authoritative pass binds user-declared operators by their group.
+    module_fixity = session_extend_fixity_table(builtin_fixity, harvest_exprs)
     active = harvest_active_macros(harvest_exprs)
     computed = harvest_computed_macros(harvest_exprs)
     literal = harvest_literal_macros(harvest_exprs)
@@ -177,7 +238,8 @@ defmodule Cure.Compiler.Parser do
           is_map(supplied_macros) -> literal
           prelude? -> Map.merge(prelude_literal_macros(), literal, fn _k, _p, l -> l end)
           true -> literal
-        end
+        end,
+      fixity_table: module_fixity
     }
 
     state = put_tokens(state, tokens)
@@ -2176,35 +2238,109 @@ defmodule Cure.Compiler.Parser do
 
   # -- Core Pratt Loop -------------------------------------------------------
 
-  defp parse_expr(state, min_bp) do
-    {left, state} = parse_prefix(state)
-    parse_infix(state, left, min_bp)
+  # Effective fixity table: the session table when seeded, else the memoized
+  # built-in table (sub-parsers that build `%__MODULE__{}` directly leave the
+  # field `nil`).
+  defp fixity_table(%__MODULE__{fixity_table: nil}), do: session_builtin_fixity_table()
+  defp fixity_table(%__MODULE__{fixity_table: table}), do: table
+
+  # While the built-in table is itself being built (parsing `operators.cure`),
+  # seed an EMPTY table to break the `BuiltinFixity.table` ⇄ `parse` recursion.
+  # `operators.cure` is all inert declarations — no operator expressions to bind
+  # — so an empty table parses it faithfully. Otherwise consult the built-in
+  # table, which lives in the compiler layer (`BuiltinFixity`) precisely so it is
+  # reachable here even while `Preload` bakes its stdlib deps at compile time.
+  defp session_builtin_fixity_table do
+    if Process.get(:cure_building_fixity_table) do
+      FixityTable.new()
+    else
+      BuiltinFixity.table()
+    end
   end
 
-  defp parse_infix(state, left, min_bp) do
+  # Layer a module's own fixity declarations onto `base`.
+  defp session_extend_fixity_table(base, ast), do: BuiltinFixity.extend(base, ast)
+
+  # The lexeme string a token binds under in the fixity table, or `nil` for a
+  # non-operator token.
+  defp lexeme_of(%Token{type: :operator, value: v}) when is_binary(v), do: v
+  defp lexeme_of(%Token{type: type}), do: Map.get(@token_lexemes, type)
+
+  # A `min_bp` that stops a bounded sub-parse just above built-in operator
+  # `lexeme` — i.e. one past its left binding power in the active fixity table,
+  # so the loop stops before `lexeme` and everything looser. This replaces the
+  # former Precedence-domain magic constants (`6` = "above `=`", `42` = "above
+  # comparison"): the flipped table numbers those groups differently, so the
+  # thresholds must be read from the table rather than written as literals.
+  # When the session table carries no infix fixity for `lexeme` (an empty
+  # sub-parser table), fall back to the built-in table — the single source of
+  # truth — which always contains `=`/`<`, so the threshold stays table-relative
+  # rather than a stale old-scale constant.
+  defp bp_above(state, lexeme) do
+    case FixityTable.infix_bp(fixity_table(state), lexeme) do
+      {left_bp, _right_bp} -> left_bp + 1
+      :not_infix -> builtin_bp_above(lexeme)
+    end
+  end
+
+  # Fallback threshold read from the built-in fixity table. Raises only if even
+  # the built-in table lacks `lexeme` as an infix operator, which would be a
+  # genuine bug (every `bp_above` caller passes a built-in infix lexeme).
+  defp builtin_bp_above(lexeme) do
+    case FixityTable.infix_bp(BuiltinFixity.table(), lexeme) do
+      {left_bp, _right_bp} ->
+        left_bp + 1
+
+      :not_infix ->
+        raise "bp_above: #{inspect(lexeme)} is not a built-in infix operator"
+    end
+  end
+
+  defp parse_expr(state, min_bp), do: parse_expr(state, min_bp, nil)
+
+  # `ctx_op` is the lexeme of the operator whose scope this expression sits in:
+  # the enclosing operator for a right operand, or the previously-bound operator
+  # for a same-level chain. It lets `reject_incomparable_chain/5` reject two
+  # operators from incomparable precedence groups meeting without parentheses.
+  defp parse_expr(state, min_bp, ctx_op) do
+    {left, state} = parse_prefix(state)
+    parse_infix(state, left, min_bp, ctx_op)
+  end
+
+  defp parse_infix(state, left, min_bp, ctx_op) do
     token = peek(state)
 
     cond do
-      # Postfix: function call  f(...)
-      token.type == :lparen and min_bp <= 110 ->
+      # Postfix: function call  f(...). Function application is maximal-binding —
+      # it attaches regardless of the surrounding `min_bp` (a call binds tighter
+      # than every operator, including the dot whose right operand carries the
+      # highest binding power in the table). The former `min_bp <= 110` ceiling
+      # was a Precedence-domain constant that never fired (its max right BP was
+      # 101); dropping it keeps existing behaviour byte-identical while staying
+      # correct under the flipped, higher-numbered fixity table.
+      token.type == :lparen ->
         {left, state} = parse_call(state, left)
-        parse_infix(state, left, min_bp)
+        parse_infix(state, left, min_bp, ctx_op)
 
       # Postfix: record construction  Name{...}
-      token.type == :lbrace and min_bp <= 110 and is_pascal_case?(left) ->
+      token.type == :lbrace and is_pascal_case?(left) ->
         {left, state} = parse_record_construction(state, left)
-        parse_infix(state, left, min_bp)
+        parse_infix(state, left, min_bp, ctx_op)
 
       true ->
-        case Precedence.infix_bp(token.type) do
+        table = fixity_table(state)
+        lexeme = lexeme_of(token)
+
+        case FixityTable.infix_bp(table, lexeme) do
           {left_bp, _right_bp} when left_bp < min_bp ->
             {left, state}
 
           {left_bp, right_bp} ->
+            state = reject_incomparable_chain(state, table, ctx_op, lexeme, token)
             state = advance(state)
-            {ast, state} = build_infix_op(state, left, token, right_bp)
-            state = reject_non_assoc_chain(state, token, left_bp)
-            parse_infix(state, ast, min_bp)
+            {ast, state} = build_infix_op(state, left, token, right_bp, lexeme)
+            state = reject_non_assoc_chain(state, table, token, lexeme, left_bp)
+            parse_infix(state, ast, min_bp, lexeme)
 
           :not_infix ->
             {left, state}
@@ -2223,23 +2359,51 @@ defmodule Cure.Compiler.Parser do
   # Reject the chain outright, as Haskell (`infix 4 ==`), Rust, and Agda/Idris all do. The
   # error is recorded rather than raised, so the parser keeps going and reports the rest of
   # the file's problems in the same pass.
-  defp reject_non_assoc_chain(state, token, left_bp) do
+  defp reject_non_assoc_chain(state, table, token, lexeme, left_bp) do
     next = peek(state)
+    next_lexeme = lexeme_of(next)
 
     # Every operator sharing a left BP with a non-associative one is in its class.
     chained? =
-      Precedence.non_assoc?(token.type) and match?({^left_bp, _}, Precedence.infix_bp(next.type))
+      FixityTable.non_assoc?(table, lexeme) and
+        match?({^left_bp, _}, FixityTable.infix_bp(table, next_lexeme))
 
     if chained? do
       error =
-        {:non_associative, Precedence.operator_symbol(token.type), :chained_with, Precedence.operator_symbol(next.type),
-         next.line, next.col}
+        {:non_associative, operator_display(token), :chained_with, operator_display(next), next.line, next.col}
 
       add_error(state, error)
     else
       state
     end
   end
+
+  # Two operators from INCOMPARABLE precedence groups (neither binds tighter than
+  # the other) meeting without parentheses have no defined grouping — reject as
+  # `{:ambiguous_precedence, g1, g2}`, mirroring how `reject_non_assoc_chain`
+  # rejects an illegal chain. `ctx_op` is the operator whose scope the incoming
+  # operator (`lexeme`) is binding within; `nil` (top level, no enclosing
+  # operator) is never ambiguous. Comparable groups (the whole built-in lattice
+  # is totally ordered) never trip this. The error is recorded, not raised, so
+  # the rest of the file is still reported.
+  defp reject_incomparable_chain(state, _table, nil, _lexeme, _token), do: state
+
+  defp reject_incomparable_chain(state, table, ctx_op, lexeme, _token) do
+    if FixityTable.incomparable?(table, ctx_op, lexeme) do
+      add_error(
+        state,
+        {:ambiguous_precedence, FixityTable.group_of(table, ctx_op), FixityTable.group_of(table, lexeme)}
+      )
+    else
+      state
+    end
+  end
+
+  # The operator atom to show in a parse error. Built-in tokens keep their exact
+  # historical symbol (`:<`, `:==`, …) so error messages stay byte-identical; a
+  # generic user operator shows its lexeme.
+  defp operator_display(%Token{type: :operator, value: v}) when is_binary(v), do: String.to_atom(v)
+  defp operator_display(%Token{type: type}), do: Precedence.operator_symbol(type)
 
   # -- Prefix Parsing --------------------------------------------------------
 
@@ -2335,6 +2499,38 @@ defmodule Cure.Compiler.Parser do
             case peek_at(state, 1) do
               %Token{type: :identifier} -> parse_proof_container(state)
               _ -> {variable(token), advance(state)}
+            end
+
+          # `precedencegroup Name` (Phase 3, contextual): declares a precedence
+          # group. It is a declaration only when a group-name identifier follows;
+          # every other position keeps `precedencegroup` an ordinary identifier.
+          "precedencegroup" ->
+            case peek_at(state, 1) do
+              %Token{type: :identifier} -> parse_precedencegroup(state)
+              _ -> {variable(token), advance(state)}
+            end
+
+          # `infix|prefix|postfix <op> : Group` (Phase 3, contextual): assigns an
+          # operator lexeme to a precedence group. The declaration is recognised
+          # only at the distinctive `<op> :` shape, so `prefix + 1`, `prefix: x`,
+          # and a bare `infix` value all stay ordinary identifiers.
+          fixity when fixity in ["infix", "prefix", "postfix"] ->
+            if fixity_decl_ahead?(state) do
+              parse_fixity(state)
+            else
+              {variable(token), advance(state)}
+            end
+
+          # `builtin infix|prefix|postfix <op> : Group` (Phase 3, contextual):
+          # marks an operator as a fixed, non-overloadable syntactic operator
+          # (`.`, `|>`, `<-|`, `=`, `..`, augmented assigns) that user code may
+          # not rebind. Recognised only immediately ahead of a fixity
+          # declaration; every other `builtin` stays an ordinary identifier.
+          "builtin" ->
+            if builtin_fixity_decl_ahead?(state) do
+              parse_fixity(advance(state), builtin: true)
+            else
+              {variable(token), advance(state)}
             end
 
           # Contextual keyword: `with e <arms>` is a with-abstraction only in
@@ -2492,9 +2688,9 @@ defmodule Cure.Compiler.Parser do
   defp parse_assert_type(state, token) do
     # Consume the `assert_type` identifier.
     state = advance(state)
-    # Parse the expression being asserted. Stop before `:` (BP 6 is
-    # high enough to keep the colon for us; let binding uses the same trick).
-    {expr, state} = parse_expr(state, 6)
+    # Parse the expression being asserted. Stop above assignment so a trailing
+    # `:`/`=` stays for us; let binding uses the same trick.
+    {expr, state} = parse_expr(state, bp_above(state, "="))
     state = expect(state, :colon)
     {type_ast, state} = parse_type_expr(state)
     ast = {:assert_type, [line: token.line, col: token.col], [expr, type_ast]}
@@ -2655,12 +2851,27 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_unary(state, category) do
     token = peek(state)
+    rbp = prefix_rbp(state, token)
     state = advance(state)
-    rbp = Precedence.prefix_bp(token.type)
-    {operand, state} = parse_expr(state, rbp)
+    {operand, state} = parse_expr(state, rbp, lexeme_of(token))
     op = Precedence.operator_symbol(token.type)
     ast = {:unary_op, [category: category, operator: op, line: token.line, col: token.col], [operand]}
     {ast, state}
+  end
+
+  # Prefix binding power via the fixity table, falling back to the built-in
+  # table — the single source of truth — when the session table carries no
+  # prefix fixity for the lexeme (e.g. a sub-parser with an empty table). The
+  # built-in `Prefix` group is declared `higher_than: Multiplicative`, so a
+  # prefix operator binds tighter than every infix group but `.` (Dot), exactly
+  # as the retired static rbp (90, below dot's 100) did.
+  defp prefix_rbp(state, token) do
+    lexeme = lexeme_of(token)
+
+    case FixityTable.prefix_bp(fixity_table(state), lexeme) do
+      bp when is_integer(bp) -> bp
+      :not_prefix -> FixityTable.prefix_bp(BuiltinFixity.table(), lexeme)
+    end
   end
 
   # -- Grouping ( ... ) ------------------------------------------------------
@@ -2689,11 +2900,11 @@ defmodule Cure.Compiler.Parser do
 
   # Build the node for one infix operator whose left operand is already parsed. The
   # caller resumes the Pratt loop, so it can see the token that follows.
-  defp build_infix_op(state, left, token, right_bp) do
+  defp build_infix_op(state, left, token, right_bp, op_lexeme) do
     case token.type do
       # Pipe desugaring: a |> f  or  a |> f(b, c)
       :pipe ->
-        {right, state} = parse_expr(state, right_bp)
+        {right, state} = parse_expr(state, right_bp, op_lexeme)
         {desugar_pipe(left, right, token), state}
 
       # Melquiades operator: `pid <-| message` or `pid ✉ message`.
@@ -2701,7 +2912,7 @@ defmodule Cure.Compiler.Parser do
       # author's choice of ASCII vs unicode form in `:melquiades_form` so
       # the printer can round-trip it.
       :melquiades ->
-        {right, state} = parse_expr(state, right_bp)
+        {right, state} = parse_expr(state, right_bp, op_lexeme)
         form = melquiades_form(token.value)
         meta = [line: token.line, col: token.col, melquiades_form: form]
         {{:send, meta, [left, right]}, state}
@@ -2716,25 +2927,37 @@ defmodule Cure.Compiler.Parser do
 
       # Range operators
       type when type in [:range, :range_inclusive] ->
-        {right, state} = parse_expr(state, right_bp)
+        {right, state} = parse_expr(state, right_bp, op_lexeme)
         inclusive = type == :range_inclusive
         {{:range, [inclusive: inclusive, line: token.line, col: token.col], [left, right]}, state}
 
       # Assignment
       :assign ->
-        {right, state} = parse_expr(state, right_bp)
+        {right, state} = parse_expr(state, right_bp, op_lexeme)
         {{:assignment, [line: token.line, col: token.col], [left, right]}, state}
 
       # Augmented assignment
       type when type in [:plus_assign, :minus_assign, :star_assign, :slash_assign] ->
-        {right, state} = parse_expr(state, right_bp)
+        {right, state} = parse_expr(state, right_bp, op_lexeme)
         op = augmented_op(type)
         meta = [operator: op, line: token.line, col: token.col]
         {{:augmented_assignment, meta, [left, right]}, state}
 
-      # Regular binary operator
+      # Generic (user-declared) overloadable operator: build a `:binary_op` node
+      # tagged `category: :overloaded` and carrying the operator lexeme as its
+      # `operator:` atom. The elaborator desugars it to a call on a function
+      # named by the lexeme (`Resolve.method_call`/`Overload.resolve`), keeping
+      # the Phase-2 primitive/`struct_eq`/`combine` fast paths for the built-ins.
+      :operator ->
+        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        op = String.to_atom(token.value)
+        meta = [category: :overloaded, operator: op, line: token.line, col: token.col]
+        {{:binary_op, meta, [left, right]}, state}
+
+      # Regular built-in binary operator (arithmetic/comparison/boolean/…):
+      # dedicated node with its historical category + symbol, unchanged.
       _ ->
-        {right, state} = parse_expr(state, right_bp)
+        {right, state} = parse_expr(state, right_bp, op_lexeme)
         category = Precedence.operator_category(token.type)
         op = Precedence.operator_symbol(token.type)
         meta = [category: category, operator: op, line: token.line, col: token.col]
@@ -3342,7 +3565,7 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_non_binary_generator_or_filter(state) do
     saved_pos = state.pos
-    {expr, state} = parse_expr(state, 42)
+    {expr, state} = parse_expr(state, bp_above(state, "<"))
     state = skip_newlines(state)
 
     case peek(state) do
@@ -3367,7 +3590,7 @@ defmodule Cure.Compiler.Parser do
         # If the expression was just a variable and there's an operator next, re-parse at BP 0.
         token = peek(state)
 
-        if Precedence.infix_bp(token.type) != :not_infix do
+        if FixityTable.infix_bp(fixity_table(state), lexeme_of(token)) != :not_infix do
           state = %{state | pos: saved_pos}
           {filter_expr, state} = parse_expr(state, 0)
           {{:filter, [], [filter_expr]}, state}
@@ -3460,7 +3683,7 @@ defmodule Cure.Compiler.Parser do
   # less-than comparison operator.
   defp parse_bin_generator_segment(state) do
     start_token = peek(state)
-    {value, state} = parse_expr(state, 42)
+    {value, state} = parse_expr(state, bp_above(state, "<"))
 
     {specifier_meta, state} =
       case peek(state) do
@@ -3663,9 +3886,9 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     state = advance(state)
 
-    # Parse pattern (LHS) at high enough BP to NOT consume `=`
-    # Assignment has BP 5, so parsing at BP 6 stops before `=`
-    {pattern, state} = parse_expr(state, 6)
+    # Parse pattern (LHS) at high enough BP to NOT consume `=`: one above the
+    # assignment operator's left binding power, read from the fixity table.
+    {pattern, state} = parse_expr(state, bp_above(state, "="))
 
     # `: Type`, or a graded `:g [Type]` — the type is optional after a grade because
     # `let_inferred/8` synthesises it from the rhs (Idris `letBinder` does the same).
@@ -4776,7 +4999,7 @@ defmodule Cure.Compiler.Parser do
       case peek(state) do
         %Token{type: :keyword, value: :when} ->
           state = advance(state)
-          {g, state} = parse_expr(state, 6)
+          {g, state} = parse_expr(state, bp_above(state, "="))
           {g, state}
 
         _ ->
@@ -4916,7 +5139,7 @@ defmodule Cure.Compiler.Parser do
         {Enum.reverse(acc), state}
 
       _ ->
-        {pat, state} = parse_expr(state, 42)
+        {pat, state} = parse_expr(state, bp_above(state, "<"))
         state = skip_newlines(state)
 
         case peek(state) do
@@ -5113,7 +5336,7 @@ defmodule Cure.Compiler.Parser do
         %Token{type: :assign} ->
           state = advance(state)
           state = skip_newlines(state)
-          {d, state} = parse_expr(state, 6)
+          {d, state} = parse_expr(state, bp_above(state, "="))
           {d, state}
 
         _ ->
@@ -5370,6 +5593,168 @@ defmodule Cure.Compiler.Parser do
     ]
 
     {{:container, meta, body_stmts}, state}
+  end
+
+  # -- Fixity declarations (Phase 3) -----------------------------------------
+  #
+  # `precedencegroup`/`infix`/`prefix`/`postfix` build inert
+  # `{:precedencegroup, …}` and `{:fixity, …}` AST nodes. This is purely
+  # additive: later Phase-3 tasks feed these into `Cure.Compiler.Parser.FixityTable`
+  # ahead of expression parsing, then flip the Pratt loop onto it. In this task
+  # nothing downstream consumes them, and the static `Precedence` table still
+  # governs how expressions bind.
+
+  # True at the distinctive `<op> :` shape a fixity declaration takes, so
+  # `infix`/`prefix`/`postfix` are promoted only there and stay ordinary
+  # identifiers everywhere else (`prefix + 1`, `prefix: x`, a bare `infix`).
+  defp fixity_decl_ahead?(state) do
+    op = peek_at(state, 1)
+    colon = peek_at(state, 2)
+    op != nil and colon != nil and colon.type == :colon and fixity_op_token?(op)
+  end
+
+  # True at `builtin infix|prefix|postfix <op> :` — a `builtin`-prefixed fixity
+  # declaration. The `builtin` marker is contextual: it is promoted only here,
+  # so a bare `builtin` (or `builtin` used as a value/binder) is untouched.
+  defp builtin_fixity_decl_ahead?(state) do
+    case peek_at(state, 1) do
+      %Token{type: :identifier, value: v} when v in ["infix", "prefix", "postfix"] ->
+        op = peek_at(state, 2)
+        colon = peek_at(state, 3)
+        op != nil and colon != nil and colon.type == :colon and fixity_op_token?(op)
+
+      _ ->
+        false
+    end
+  end
+
+  # An operator lexeme is any symbolic-operator token or a word/backtick
+  # identifier used as an operator name — anything that is not a delimiter.
+  defp fixity_op_token?(%Token{type: type}),
+    do: type not in [:colon, :newline, :indent, :dedent, :eof, :comma, :assign]
+
+  defp fixity_op_token?(_), do: false
+
+  # `infix|prefix|postfix <op> : Group` (optionally `builtin`-prefixed, which the
+  # caller signals with `builtin: true`).
+  defp parse_fixity(state, opts \\ []) do
+    kw = peek(state)
+    fixity = String.to_atom(to_string(kw.value))
+    state = advance(state)
+
+    op_token = peek(state)
+    lexeme = fixity_lexeme(op_token)
+    state = advance(state)
+
+    state = expect(state, :colon)
+
+    {group, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: v} -> {String.to_atom(v), advance(state)}
+        _ -> {nil, state}
+      end
+
+    meta = [
+      fixity: fixity,
+      operator: lexeme,
+      group: group,
+      builtin: Keyword.get(opts, :builtin, false),
+      line: kw.line,
+      col: kw.col
+    ]
+
+    {{:fixity, meta, []}, state}
+  end
+
+  defp fixity_lexeme(%Token{value: v}) when is_binary(v), do: v
+  defp fixity_lexeme(%Token{value: v}), do: to_string(v)
+
+  # `precedencegroup Name` with an optional indented body of
+  # `associativity:`/`higher_than:`/`lower_than:` lines.
+  defp parse_precedencegroup(state) do
+    kw = peek(state)
+    state = advance(state)
+
+    name_token = peek(state)
+    name = String.to_atom(to_string(name_token.value))
+    state = advance(state)
+    state = skip_newlines(state)
+
+    {fields, state} = parse_precedencegroup_body(state)
+    meta = [name: name, line: kw.line, col: kw.col] ++ fields
+    {{:precedencegroup, meta, []}, state}
+  end
+
+  defp parse_precedencegroup_body(state) do
+    case peek(state) do
+      %Token{type: :indent} -> collect_precedencegroup_fields(advance(state), [])
+      _ -> {[], state}
+    end
+  end
+
+  defp collect_precedencegroup_fields(state, acc) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :dedent} ->
+        {Enum.reverse(acc), advance(state)}
+
+      %Token{type: :eof} ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: :identifier, value: field} ->
+        state = expect(advance(state), :colon)
+        {value, state} = parse_precedencegroup_value(field, state)
+
+        acc =
+          case precedencegroup_field_key(field) do
+            nil -> acc
+            key -> [{key, value} | acc]
+          end
+
+        collect_precedencegroup_fields(state, acc)
+
+      _ ->
+        # Unrecognised line: skip to the block's end rather than loop.
+        {Enum.reverse(acc), skip_to_dedent(state)}
+    end
+  end
+
+  defp precedencegroup_field_key("associativity"), do: :assoc
+  defp precedencegroup_field_key("higher_than"), do: :higher_than
+  defp precedencegroup_field_key("lower_than"), do: :lower_than
+  defp precedencegroup_field_key(_), do: nil
+
+  defp parse_precedencegroup_value("associativity", state) do
+    case peek(state) do
+      %Token{type: :identifier, value: v} -> {String.to_atom(v), advance(state)}
+      _ -> {nil, state}
+    end
+  end
+
+  defp parse_precedencegroup_value(_field, state), do: collect_group_names(state, [])
+
+  # Collect group-name identifiers on the current line, tolerating `[ ]` and `,`.
+  # Stops at the first non-name, non-delimiter token (newline/dedent/eof).
+  defp collect_group_names(state, acc) do
+    case peek(state) do
+      %Token{type: :identifier, value: v} ->
+        collect_group_names(advance(state), [String.to_atom(v) | acc])
+
+      %Token{type: t} when t in [:comma, :lbracket, :rbracket] ->
+        collect_group_names(advance(state), acc)
+
+      _ ->
+        {Enum.reverse(acc), state}
+    end
+  end
+
+  defp skip_to_dedent(state) do
+    case peek(state) do
+      %Token{type: :dedent} -> advance(state)
+      %Token{type: :eof} -> state
+      _ -> skip_to_dedent(advance(state))
+    end
   end
 
   # -- Record  rec Name [(TypeParams)] ---------------------------------------
@@ -6285,6 +6670,24 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
+    # `requires` is a CONTEXTUAL keyword: it lexes as an ordinary identifier and
+    # is promoted only here, right after the interface param list, so existing
+    # code using `requires` as an identifier is unaffected. The clause names the
+    # superinterfaces this interface extends (`interface Big(t) requires Small(t)`)
+    # — every `implementation Big for T` must then already have an `implementation
+    # Small for T`. We reuse the constraint parser and keep only the interface
+    # names (the descriptor does not need the type variables).
+    {requires, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "requires"} ->
+          state = advance(state)
+          {constraints, state} = parse_constraint_list(state)
+          {superinterface_names(constraints), state}
+
+        _ ->
+          {[], state}
+      end
+
     state = skip_newlines(state)
     {body, state} = parse_definition_block(state)
 
@@ -6299,12 +6702,22 @@ defmodule Cure.Compiler.Parser do
     meta = [
       name: name,
       params: params,
+      requires: requires,
       defaults: defaults,
       line: token.line,
       col: token.col
     ]
 
     {{:interface, meta, body}, state}
+  end
+
+  # Extract the interface names from a parsed constraint list (`Small(t)` →
+  # `"Small"`), dropping the type variables the descriptor does not need.
+  defp superinterface_names(constraints) do
+    Enum.map(constraints, fn
+      {:function_call, m, _args} -> Keyword.get(m, :name)
+      {:variable, _m, name} -> name
+    end)
   end
 
   # -- Implementation  implementation Iface for Type [as Name] ----------------

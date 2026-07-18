@@ -130,7 +130,7 @@ defmodule Cure.Elab.Resolve do
   # value-surface design), so it reaches dispatch as the `nglobal` alias `String`
   # and is unfolded to `List(Char)` by the neutral-global clause below — it never
   # arrives as a `{:vstring_type}`. (`{:string_type}` is only an E-layer head-atom
-  # sentinel in `head_type_core`/`Implementation.head_atom`; it is never evaluated.)
+  # sentinel in `head_type_core`; it is never evaluated.)
   defp classify(_env, {:vdata, name, _vs}, _seen), do: {:concrete, name}
   defp classify(_env, {:vneutral, {:nvar, lvl}}, _seen), do: {:rigid, lvl}
 
@@ -138,8 +138,8 @@ defmodule Cure.Elab.Resolve do
   # dispatch as a neutral global, because delta-reduction is on-demand. Unfold it
   # to its normal form and re-classify, so `combine` on a `String` finds the
   # `List` instance — the same alias-normalisation the coherence *registration*
-  # side does (`Implementation.normalize_head`). Only nullary type-level defs
-  # unfold; `seen` guards a cyclic alias chain.
+  # side does (`Implementation.head_key`, which whnf's the elaborated head). Only
+  # nullary type-level defs unfold; `seen` guards a cyclic alias chain.
   defp classify(env, {:vneutral, {:nglobal, name}} = v, seen) do
     if MapSet.member?(seen, name) do
       {:unknown, v}

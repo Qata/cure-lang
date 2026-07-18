@@ -42,14 +42,16 @@ mod Std.Test
       condition -> :ok
       else      -> raise_error(:assertion_failed)
 
-  ## Assert `a == b`; raises `:not_equal` on mismatch.
-  fn assert_eq(a: t, b: t) -> Atom =
+  ## Assert `a == b`; raises `:not_equal` on mismatch. `where Equatable(t)`
+  ## threads the equality dictionary for the compared type.
+  fn assert_eq(a: t, b: t) -> Atom where Equatable(t) =
     pickup
       a == b -> :ok
       else   -> raise_error(:not_equal)
 
   ## Assert `a != b`; raises `:unexpectedly_equal` when they match.
-  fn assert_ne(a: t, b: t) -> Atom =
+  ## `where Equatable(t)` threads the equality dictionary (`!=` derives from `==`).
+  fn assert_ne(a: t, b: t) -> Atom where Equatable(t) =
     pickup
       a != b -> :ok
       else   -> raise_error(:unexpectedly_equal)
