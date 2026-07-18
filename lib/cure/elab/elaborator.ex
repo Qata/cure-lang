@@ -5603,6 +5603,36 @@ defmodule Cure.Elab.Elaborator do
       else: elaborate_expr_checked(expr, expected, names, ctx, env)
   end
 
+  # A BLOCK branch body (`let x = e ⏎ … ⏎ body`, e.g. `let tri = compareKeys(x, k) in match tri`).
+  # The inference catch-all below elaborates the block's final expression WITHOUT the branch goal,
+  # so an inner DEPENDENT `match` on a let-bound variable never receives the refined checking-mode
+  # type. Its constructor-field index binders then go UNFORCED — a proof field
+  # `p : Equivalent(_, strictLess(x, k), _)` keeps its type over the OPAQUE erased index binders
+  # (`$erased_x`, `$erased_k`) instead of the scrutinee's concrete `x, k`, so a later
+  # reduction-requiring use (the recursive call's `boundLess(Only x, Only k)` domain) fails
+  # conversion at mismatched de Bruijn depths. Retry in CHECKING mode against the branch goal —
+  # `elaborate_let_block` threads `expected` through to the block body, so the inner match reaches
+  # the index-forcing branch path (`elaborate_matched_branch`) exactly as the direct form
+  # `Branch(k, match compareKeys(x, k), r)` already does (a ctor-call body carries the goal). Infer
+  # FIRST to preserve every block that already worked (and its `maybe_inject_union`), surfacing the
+  # ORIGINAL inference error if the checked retry also fails; strictly additive, kernel re-checks.
+  defp elaborate_branch_body({:block, _, _} = expr, expected, names, ctx, env) do
+    if effect_goal?(expected, ctx) do
+      elaborate_effect_branch(expr, expected, names, ctx, env)
+    else
+      case elaborate_expr_typed(expr, names, ctx, env) do
+        {:ok, term, type} ->
+          {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+
+        {:error, _} = orig ->
+          case elaborate_expr_checked(expr, expected, names, ctx, env) do
+            {:ok, _} = ok -> ok
+            {:error, _} -> orig
+          end
+      end
+    end
+  end
+
   # The general branch body: inferred. `maybe_inject_union/5` is a strict no-op unless
   # this branch's goal is a generated anonymous-union family — in which case the
   # inferred body is injected (a member value) or widened (a narrower union, as
