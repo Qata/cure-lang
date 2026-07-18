@@ -78,4 +78,26 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
 
     assert {:ok, _env} = Cure.Elab.Program.elaborate(src)
   end
+
+  # Task 4 — overlap legality. Two members of the same overload set whose
+  # parameter telescopes are position-wise convertible are indistinguishable at
+  # any call site: no argument types can ever pick between them. Registering
+  # them silently would make every applied call ambiguous. This is rejected as
+  # `{:overlapping_overload, name, arity}` — the successor to the old
+  # `duplicate_definition` diagnostic for a true same-signature redefinition.
+  test "same-arity indistinguishable overloads are rejected as overlapping" do
+    src = """
+    mod OverlapReject
+      fn dup(a: Int, b: Int) -> Int = a
+      fn dup(a: Int, b: Int) -> Int = b
+    end
+    """
+
+    assert {:error, {:overlapping_overload, :dup, 2}} = elaborate_error(src)
+  end
+
+  defp elaborate_error(src), do: unwrap(Cure.Elab.Program.elaborate(src))
+
+  defp unwrap({:ok, _} = ok), do: flunk("expected an error, got #{inspect(ok)}")
+  defp unwrap({:error, reason}), do: {:error, reason}
 end

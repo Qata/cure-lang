@@ -1907,6 +1907,7 @@ defmodule Cure.Elab.Program do
     items = annotate_overload_ordinals(items)
 
     with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?),
+         :ok <- check_overload_legality(env1),
          {:ok, alias_order} <- typealias_order(items, env1),
          {:ok, env_completed} <- complete_typealiases(alias_order, items, env1),
          # Alias bodies are all present after the register pass. Certify their
@@ -1965,6 +1966,58 @@ defmodule Cure.Elab.Program do
   end
 
   defp annotate_overload_ordinals(items), do: items
+
+  # Reject an overload set holding two members that no call site could ever tell
+  # apart: same owner, same base name, same arity, and position-wise convertible
+  # parameter types. Such a pair is the successor of the old
+  # `duplicate_definition` collision — under discriminated keys both members
+  # register, so this check is what preserves the "a signature can't be defined
+  # twice" guarantee. Runs after `register_pass/3`, once telescopes exist.
+  defp check_overload_legality(env) do
+    env.defs
+    |> Enum.filter(fn {k, _} -> is_atom(k) and Cure.Elab.Name.overload_member?(k) end)
+    |> Enum.group_by(fn {k, _} ->
+      {Cure.Elab.Name.owner(k), Cure.Elab.Name.overload_base(k)}
+    end)
+    |> Enum.reduce_while(:ok, fn {{_owner, base}, members}, :ok ->
+      case first_overlapping_pair(env, members) do
+        nil -> {:cont, :ok}
+        arity -> {:halt, {:error, {:overlapping_overload, String.to_atom(base), arity}}}
+      end
+    end)
+  end
+
+  # The arity of the first indistinguishable pair among `members`, or nil. Two
+  # members overlap iff their parameter telescopes have equal length and every
+  # position is definitionally convertible.
+  defp first_overlapping_pair(env, members) do
+    typed = for {_key, def} <- members, do: param_types(def.type)
+
+    Enum.find_value(pairs(typed), fn {ps, qs} ->
+      if length(ps) == length(qs) and
+           Enum.all?(Enum.zip(ps, qs), fn {p, q} ->
+             Cure.Elab.TypeConv.convertible?(env, p, q)
+           end) do
+        length(ps)
+      end
+    end)
+  end
+
+  # Every parameter domain of a stored def type, in order. Walks the Pi spine
+  # collecting each domain unconditionally (value- and type-domains alike) —
+  # NOT the `typealias_parameter_count` shape, which only counts `{:type, _}`
+  # domains and would silently drop value-typed parameters here.
+  defp param_types({:pi, _grade, domain, codomain}), do: [domain | param_types(codomain)]
+  defp param_types(_), do: []
+
+  # All unordered pairs of a list, as {earlier, later} tuples.
+  defp pairs(list) do
+    list
+    |> Enum.with_index()
+    |> then(fn indexed ->
+      for {a, i} <- indexed, {b, j} <- indexed, i < j, do: {a, b}
+    end)
+  end
 
   # Transparent aliases are ordinary Core definitions, so a forward chain is
   # harmless once every body is present. A cycle is different: it can never be
