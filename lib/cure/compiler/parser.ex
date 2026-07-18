@@ -5896,7 +5896,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp parse_type_atom_args_list(state) do
-    {arg, state} = parse_type_atom(state)
+    {arg, state} = parse_type_app_arg(state)
     state = skip_newlines(state)
 
     case peek(state) do
@@ -5908,6 +5908,30 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         {[arg], state}
+    end
+  end
+
+  # A type-application argument is normally a type (`Vector(a, Z)`). But a
+  # decidable-boolean reflection type such as `IsTrue(claim: Bool)` is applied to
+  # a *proposition* — a comparison or boolean-connective expression: `IsTrue(5 > 0)`,
+  # `IsTrue(0 <= p and p <= 100)`. Comparison/boolean operators never legitimately
+  # follow a type in ordinary type syntax (arrows use `->`, Cure has no angle-bracket
+  # generics), so a trailing one is an unambiguous signal that this argument is a
+  # proposition.
+  defp parse_type_app_arg(state), do: parse_type_or_proposition(state, &parse_type_atom/1)
+
+  # Parse a type-position argument with `parse_fun`; if a comparison/boolean operator
+  # immediately follows, the argument is actually a proposition, so reparse it from the
+  # original state with the full expression parser. That yields the same `{:binary_op, ...}`
+  # node an expression would, which the index elaborator routes through the type-directed
+  # term elaborator (so its literals get the right primitive type and the spine folds).
+  @type_prop_ops [:eq, :neq, :lt, :gt, :lte, :gte, :and_op, :or_op]
+  defp parse_type_or_proposition(state, parse_fun) do
+    {parsed, after_state} = parse_fun.(state)
+
+    case peek(after_state) do
+      %Token{type: t} when t in @type_prop_ops -> parse_expr(state, 0)
+      _ -> {parsed, after_state}
     end
   end
 
@@ -5977,7 +6001,7 @@ defmodule Cure.Compiler.Parser do
         {[], state}
 
       _ ->
-        {t, state} = parse_type_expr(state)
+        {t, state} = parse_type_or_proposition(state, &parse_type_expr/1)
         state = skip_newlines(state)
 
         case peek(state) do
