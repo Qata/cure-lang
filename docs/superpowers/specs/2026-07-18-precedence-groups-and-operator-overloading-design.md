@@ -363,13 +363,13 @@ postfix `!` : Postfix
 
 ### 3.3 Where the built-in operators are declared
 
-The core operators move to a preloaded stdlib module (`Std.Ops`, `@group(:core)`,
+The core operators move to a preloaded stdlib module (`Std.Operators`, `@group(:core)`,
 consumed by `Cure.Stdlib.Preload`), declared with the **same associativity and
 relative order as today's `Precedence.ex` table** (the old numbers seed the
 group ordering). This is the "compiler owns no operator list" end state: the
 built-ins are declared exactly as a user's would be.
 
-**Bootstrapping.** `Std.Ops` and the interface/connective modules that *define*
+**Bootstrapping.** `Std.Operators` and the interface/connective modules that *define*
 operator meanings must parse before their own operators are available. They
 already avoid infix operators in the relevant bodies (interface leaves are
 primitives; defaults use `pickup`; connectives use `case`) — so the bootstrap
@@ -428,7 +428,7 @@ overload resolver already discriminates by arity, so binary `-`/2 and unary
 - **Bootstrapping order** (Step 3) is the sharpest risk: the modules that define
   operators must parse before those operators exist. Mitigated by the
   no-infix-in-definitions discipline the stdlib already follows and an explicit
-  pinned preload order; a bootstrap test parses `Std.Ops` + interface modules
+  pinned preload order; a bootstrap test parses `Std.Operators` + interface modules
   against an empty fixity table.
 - **Diagnostic regressions.** Moving the signature check onto kernel conversion
   (Step 1) risks worse errors; mitigated by the sited
@@ -458,6 +458,6 @@ have no Core representation; they are gone before the kernel sees a term.
    Divisible/Equatable/Comparable/Bool, on the minimal `==`,`<` basis, with
    superinterface constraints enforced.
 3. **Precedence groups + flip** — green when `Precedence.ex`'s static table is
-   gone, built-in operators are declared in `Std.Ops`, word + custom operators
+   gone, built-in operators are declared in `Std.Operators`, word + custom operators
    work, and the differential corpus re-runs identically through the
    declaration-driven parser.
