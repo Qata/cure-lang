@@ -764,7 +764,16 @@ defmodule Cure.Elab.Elaborator do
 
         {:error, {:unsupported_operand_type, cmp}}
         when cmp in [:<, :>, :<=, :>=] ->
-          compare_op_call(cmp, l, r, names, ctx, env)
+          op_method_call(cmp, l, r, names, ctx, env)
+
+        # `==`/`!=` on a non-primitive operand (String, ADT, abstract/rigid type
+        # variable) — `build_binop`'s `{:==,:!=}` clause reports the operand has no
+        # primitive twin, and the SOLE route is the `Equatable` method desugar. A
+        # rigid type variable with no in-scope dictionary rejects here as
+        # `{:no_instance, :Equatable, {:rigid, _}}`, the intended sole-route error.
+        {:error, {:unsupported_operand_type, eq}}
+        when eq in [:==, :!=] ->
+          op_method_call(eq, l, r, names, ctx, env)
 
         :unsupported_op ->
           {:error, {:unsupported_expression, expr}}
@@ -966,36 +975,29 @@ defmodule Cure.Elab.Elaborator do
   defp combine_call(l, r, names, ctx, env),
     do: elaborate_expr_typed({:function_call, [name: "combine"], [l, r]}, names, ctx, env)
 
-  # Desugar a comparison operator on a NON-primitive operand to the
-  # `Std.Comparable.compare` method, tested against an `Ordering` constructor.
-  # The comparison operators ARE the surface for `Comparable` (there are no
-  # `lt`/`le`/`gt`/`ge` named helpers); each maps to a `compare` + `Ordering`
-  # test:
+  # Desugar an operator on a NON-primitive operand to the bare-name method call
+  # for its lexeme — the SOLE route to `==`/`!=`/`<`/`<=`/`>`/`>=` for any type
+  # `build_binop` does not lower to a primitive. `Comparable` now exposes `` `<` ``
+  # directly (and the derived `` `<=` ``/`` `>` ``/`` `>=` `` are top-level
+  # `where Comparable(t)` functions), and `Equatable` exposes `` `==` `` (with the
+  # derived `` `!=` `` a top-level `where Equatable(t)` function). So each operator
+  # maps to a function-call on its own lexeme:
   #
-  #     a <  b  ~>  compare(a, b) == LessThan()
-  #     a >  b  ~>  compare(a, b) == GreaterThan()
-  #     a <= b  ~>  compare(a, b) != GreaterThan()
-  #     a >= b  ~>  compare(a, b) != LessThan()
+  #     a <  b  ~>  `<`(a, b)      a == b  ~>  `==`(a, b)
+  #     a <= b  ~>  `<=`(a, b)     a != b  ~>  `!=`(a, b)
+  #     a >  b  ~>  `>`(a, b)
+  #     a >= b  ~>  `>=`(a, b)
   #
-  # `compare` dispatches by coherence to the operand's `Ord` instance; the
-  # `==`/`!=` on the `Ordering` result rides the usual `struct_eq`/`struct_ne`
-  # path. Reached only when `build_binop` reports the operand type has no
-  # primitive `<`/`>`/`<=`/`>=` (Int/Float keep their primitive meaning).
-  # Requires `use Std.Comparable` in scope so `compare` and the `Ordering`
-  # constructors resolve (class-import model, like `combine`).
-  defp compare_op_call(cmp, l, r, names, ctx, env) do
-    {ctor, eq_op} =
-      case cmp do
-        :< -> {"LessThan", :==}
-        :> -> {"GreaterThan", :==}
-        :<= -> {"GreaterThan", :!=}
-        :>= -> {"LessThan", :!=}
-      end
-
-    compare = {:function_call, [name: "compare"], [l, r]}
-    ordering = {:function_call, [name: ctor], []}
-    elaborate_expr_typed({:binary_op, [operator: eq_op], [compare, ordering]}, names, ctx, env)
-  end
+  # `` `==` ``/`` `<` `` resolve through the interface (`Resolve.method_call`),
+  # dispatching by coherence to the operand's `Equatable`/`Comparable` instance;
+  # the derived `` `!=` ``/`` `<=` ``/`` `>` ``/`` `>=` `` resolve as ordinary
+  # `where`-constrained globals (`Resolve.constrained_call`). Reached only when
+  # `build_binop` reports the operand type has no primitive lowering (Int/Float —
+  # and, for equality, Bool/Bounded — keep their primitive meaning as an
+  # optimisation of this single route). `Std.Equatable`/`Std.Comparable` are
+  # `@prelude`-ambient, so these names resolve with no explicit `use`.
+  defp op_method_call(op, l, r, names, ctx, env),
+    do: elaborate_expr_typed({:function_call, [name: Atom.to_string(op)], [l, r]}, names, ctx, env)
 
   # Fold a `pickup` clause list into a right-nested `:conditional` chain.
   # The LAST clause is the terminator (its body is the seed); every earlier
@@ -1166,12 +1168,37 @@ defmodule Cure.Elab.Elaborator do
         {:ok, app2(builtin_op_global(if(op_sym == :==, do: :float_eq, else: :float_ne)), l, r)}
 
       # An indexed family (Bounded — Char) erases to a native int but is not a
-      # monomorphic twin, so it takes the same polymorphic struct_eq path.
+      # monomorphic twin, so it takes the polymorphic struct_eq path directly. This
+      # is a concrete-type primitive fast path (Bounded erases to a BEAM int, so
+      # struct_eq IS its native equality), monomorphising to the identical spine
+      # the `Equatable for Char` (keyed `:Bounded`) instance would — kept as an
+      # optimisation of the single route. It is NOT routed to the method because
+      # that instance is index-specialised to Char's `Bounded(1114112)` and would
+      # reject a differently-indexed `Bounded(n)`.
       {:ok, :bounded} ->
         struct_eq_binop(op_sym, l, r, l_type, ctx)
 
-      :error ->
+      # `Atom` is a sealed Int-tier primitive base type (`{:vatom_type}`): a BEAM
+      # atom is its own canonical value, so `:ok == :ok` is native primitive
+      # equality, no more a typeclass obligation than `1 == 1`. This concrete fast
+      # path monomorphises to the identical `struct_eq(Atom, ·, ·)` spine the
+      # `Equatable for Atom` instance emits — an optimisation of the single route,
+      # never reached for an abstract/rigid/ADT operand (those fall to `:error`).
+      # It is required for the bootstrap-closure OTP/syntax modules, which compare
+      # atoms yet elaborate with no ambient `Equatable` dictionary.
+      {:ok, :atom} ->
         struct_eq_binop(op_sym, l, r, l_type, ctx)
+
+      # Any OTHER operand type — String, an ADT, a neutral, or an abstract/rigid
+      # type variable — has no primitive equality. The SOLE route is the
+      # `Equatable` method desugar: report "no primitive operand" so the
+      # `{:binary_op, …}` caller re-elaborates `` `==`(l, r) ``/`` `!=`(l, r) ``.
+      # A concrete type reaches its (hand-written or auto-derived) instance; a
+      # rigid variable with no in-scope dictionary rejects with
+      # `{:no_instance, :Equatable, {:rigid, _}}`. The universal constraint-free
+      # `struct_eq` last-resort for abstract types is retired here.
+      :error ->
+        {:error, {:unsupported_operand_type, op_sym}}
     end
   end
 
@@ -4443,6 +4470,10 @@ defmodule Cure.Elab.Elaborator do
   # via the registry; Int/Float stay primitive type-values.
   defp primitive_scrut_kind({:vint_type}, _sig), do: {:ok, :int}
   defp primitive_scrut_kind({:vfloat_type}, _sig), do: {:ok, :float}
+  # `Atom` is a sealed primitive base type; its `==`/`!=` lowers to the polymorphic
+  # `struct_eq` (a BEAM atom is its own value). Kept out of the arithmetic clause,
+  # which never consults `:atom`, so `:ok + :ok` still rejects.
+  defp primitive_scrut_kind({:vatom_type}, _sig), do: {:ok, :atom}
 
   defp primitive_scrut_kind({:vdata, fid, []}, sig) do
     if fid == Inductive.builtin(sig, :bool), do: {:ok, :bool}, else: :error

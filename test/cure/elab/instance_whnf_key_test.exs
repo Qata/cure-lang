@@ -67,13 +67,19 @@ defmodule Cure.Elab.InstanceWhnfKeyTest do
   # returning the raw Core tuple instead crashed `mangled_name`'s string interpolation with
   # `Protocol.UndefinedError (String.Chars not implemented for Tuple)`. Successful elaboration is
   # the proof the coherence key is a well-typed atom for a higher-order head.
+  #
+  # The body is the structural primitive `struct_eq`, not `a == b`: under the sole-route
+  # `==` (Task 2.6) an operator lowers to the `Equatable` method for the operand's head, and a
+  # function-type operand has no structurally-comparable `==` to dispatch to (functions are not
+  # structurally equal). Spelling `struct_eq` directly keeps the test's subject — the coherence
+  # KEY of a higher-order head — while giving the method a body that stands on its own.
   test "a function-type head yields an atom key, not a raw Core term" do
     src = """
     mod M
       use Std.Equatable
       typealias IntToInt = (Int) -> Int
       implementation Equatable for IntToInt
-        fn `==`(a: IntToInt, b: IntToInt) -> Bool = a == b
+        fn `==`(a: IntToInt, b: IntToInt) -> Bool = Std.Builtin.struct_eq(IntToInt, a, b)
     end
     """
 

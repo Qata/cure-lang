@@ -1,4 +1,5 @@
 @group(:core)
+@prelude
 mod Std.Comparable
   ## `Std.Char` supplies `code_point` (Char -> Int) for the `Char` instance's
   ## code-point ordering; `Std.String` makes `String` the transparent
@@ -65,8 +66,13 @@ mod Std.Comparable
   ## code point, and on a tie recurse into the tails. A prefix sorts before its
   ## extension (`"ad" < "ada"`). Written as a plain top-level recursion (not a
   ## self-recursive interface method) so the impl body carries no nested method
-  ## dispatch.
-  fn string_lt(a: String, b: String) -> Bool =
+  ## dispatch. Typed over the underlying `List(Char)` — the function destructures
+  ## list cells (`[]`/`[h | t]`), so its parameter type is the concrete inductive
+  ## it eliminates, not the transparent `String` presentation alias. (A `match`
+  ## scrutinee typed at a bare typealias global is not a `{:data, …}` head until
+  ## it is δ-unfolded, which the kernel's `case` inference does not do in place;
+  ## `String` values still pass, as `String` *is* `List(Char)`.)
+  fn string_lt(a: List(Char), b: List(Char)) -> Bool =
     match a
       [] ->
         match b

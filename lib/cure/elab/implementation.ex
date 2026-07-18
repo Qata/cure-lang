@@ -49,6 +49,15 @@ defmodule Cure.Elab.Implementation do
     end
   end
 
+  @doc """
+  Resolve the coherence head key for `for_type_ast` in `env` (the same
+  normalisation `register/2` keys an instance on). `{:ok, head}` or an error if the
+  head is ill-formed. Used by the prelude-shadow strip to identify which ambient
+  instances a module's own declarations supersede.
+  """
+  @spec head_of(Env.t(), tuple()) :: {:ok, atom()} | {:error, term()}
+  def head_of(env, for_type_ast), do: head_key(for_type_ast, env)
+
   # The coherence key: elaborate the instance head to a Core type, whnf it, and
   # read the head constructor's canonical name. Transparent synonyms unfold via
   # the kernel's δ-reduction of certified globals, so `MyInt = Int` keys as `:Int`.

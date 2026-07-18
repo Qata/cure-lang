@@ -2,10 +2,14 @@ defmodule Cure.Elab.BinopLoweringTest do
   @moduledoc """
   K2 Phase 2 (spec 2026-07-09-prim-delta-globals + Amendment A1 §1-A): surface
   arithmetic/comparison operators lower to registry-keyed builtin-op GLOBAL
-  spines, not `{:prim, op, args}` nodes. Type-directed 4-way `==`/`!=` dispatch:
-  Bool → Std.Bool eq/ne (unchanged), Int → int_eq/int_ne, Float →
-  float_eq/float_ne, other (ADT/neutral) → struct_eq/struct_ne applied to the
-  quoted operand type (A1 — NOT an error; today's structural semantics verbatim).
+  spines, not `{:prim, op, args}` nodes. Comparison `==`/`!=` dispatch: the
+  concrete primitive operands keep their fast paths (Bool → Std.Bool eq/ne, Int →
+  int_eq/int_ne, Float → float_eq/float_ne) as optimisations of the single route,
+  while an ADT operand routes through the `Equatable` typeclass — `==` dispatches
+  to the coherence-registered instance method for the operand's head (whose body
+  is the structural `struct_eq` spine), and `!=` to the `where`-constrained
+  `Std.Equatable#!=`. There is no longer an inline `struct_eq`/`struct_ne`
+  fallback in `build_binop`; the typeclass is the sole route (Task 2.6).
   """
   use ExUnit.Case, async: true
 
@@ -24,7 +28,6 @@ defmodule Cure.Elab.BinopLoweringTest do
   end
 
   defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
-  defp app3(g, ty, a, b), do: {:app, app2(g, ty, a), b}
 
   # Builtin ops lower to owner-qualified globals (`Std.Builtin#int_add`), matching
   # both `Builtins.seed`'s registration key and the elaborator's emission.
@@ -70,23 +73,44 @@ defmodule Cure.Elab.BinopLoweringTest do
              body("  fn u(x: Float) -> Bool = x == 2.0\n", :u)
   end
 
-  test "A1: ADT `==` lowers to struct_eq applied to the quoted operand type (not prim, not error)" do
+  test "ADT `==` routes through the registered Equatable instance method (sole route)" do
     b = body("  fn t(a: Nat, b: Nat) -> Bool = a == b\n", :t)
+    nat = {:data, :"Std.Nat#Nat", [], []}
+    eq_impl = :"Std.Equatable#__impl_Equatable_Std.Nat#Nat_=="
 
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
-            {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
-             app3(bop(:struct_eq), {:data, :"Std.Nat#Nat", [], []}, {:var, 1}, {:var, 0})}} == b
+    assert {:lam, Cure.Core.Grade.unrestricted(), nat,
+            {:lam, Cure.Core.Grade.unrestricted(), nat, app2(eq_impl, {:var, 1}, {:var, 0})}} == b
 
+    # No inline `struct_eq` fast path in the lowered term: the structural spine
+    # lives inside the instance body, reached only through the instance global.
     assert no_prim?(b)
   end
 
-  test "A1: ADT `!=` lowers to struct_ne" do
+  test "ADT `!=` routes through the where-constrained Std.Equatable#!=" do
     b = body("  fn t(a: Nat, b: Nat) -> Bool = a != b\n", :t)
+    nat = {:data, :"Std.Nat#Nat", [], []}
+    omega = Cure.Core.Grade.unrestricted()
 
-    assert {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
-            {:lam, Cure.Core.Grade.unrestricted(), {:data, :"Std.Nat#Nat", [], []},
-             app3(bop(:struct_ne), {:data, :"Std.Nat#Nat", [], []}, {:var, 1}, {:var, 0})}} == b
+    # `!=` is the derived, dictionary-passing function; at a concrete operand type
+    # its `where Equatable(t)` dictionary is resolved to the `Nat` instance. Assert
+    # only the outer dispatch: the body applies `Std.Equatable#!=` (not any inline
+    # `struct_ne`), which is the sole-route lowering for ADT inequality.
+    assert {:lam, ^omega, ^nat, {:lam, ^omega, ^nat, inner}} = b
+
+    assert refers_to?(inner, :"Std.Equatable#!=")
+    refute refers_to?(inner, bop(:struct_ne))
   end
+
+  # Does the term mention `{:global, g}` anywhere?
+  defp refers_to?(t, g) when is_tuple(t) do
+    case t do
+      {:global, ^g} -> true
+      _ -> t |> Tuple.to_list() |> Enum.any?(&refers_to?(&1, g))
+    end
+  end
+
+  defp refers_to?(l, g) when is_list(l), do: Enum.any?(l, &refers_to?(&1, g))
+  defp refers_to?(_, _), do: false
 
   test "non-numeric arithmetic still rejects (unchanged from decision 3)" do
     assert {:error, _} =
