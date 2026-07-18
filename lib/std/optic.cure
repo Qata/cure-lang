@@ -24,6 +24,7 @@ mod Std.Optic
   use Std.Sigma
   use Std.Option
   use Std.List
+  use Std.Dynamic
 
   # ---- kinds --------------------------------------------------------------
 
@@ -350,6 +351,62 @@ mod Std.Optic
         MkLensO(le2) -> compose_trav(MkTravO(te1), lens_to_trav(MkLensO(le2)))
         MkAffineO(ae2) -> compose_trav(MkTravO(te1), affine_to_trav(MkAffineO(ae2)))
         MkTravO(te2) -> compose_trav(MkTravO(te1), MkTravO(te2))
+
+  # ---- Std.Dynamic case affines -------------------------------------------
+
+  ## One `Affine(Dyn, T)` per constructor of `Std.Dynamic`'s typed-`Any` sum.
+  ## Narrowing a `Dyn` to a concrete leaf is an AFFINE (it may miss), never a
+  ## cast: `preview` yields `Some` only when the tag matches, and `set`/`over`
+  ## rebuild a same-tagged `Dyn`, leaving a mis-tagged value untouched. Each is
+  ## built from a partial getter (a `match` returning `Some`/`None`) and a setter
+  ## that re-injects through the matching constructor. This is the statically-
+  ## kinded replacement for a runtime `is_integer`/`is_map` guess over an `Any`.
+  ##
+  ## The getters are factored out because a `match` does not lower as the direct
+  ## body of the lambda `affine` stores; the setters are constant re-injections
+  ## (they ignore the old, already-narrowed structure) and inline cleanly.
+
+  fn dyn_atom_pre(d: Dyn) -> Option(Atom) = match d
+    DAtom(a) -> Some(a)
+    other -> None()
+  fn dyn_atom() -> Optic(Dyn, Atom, AffineKind) =
+    affine(dyn_atom_pre, fn(v) -> fn(x) -> DAtom(v))
+
+  fn dyn_int_pre(d: Dyn) -> Option(Int) = match d
+    DInt(n) -> Some(n)
+    other -> None()
+  fn dyn_int() -> Optic(Dyn, Int, AffineKind) =
+    affine(dyn_int_pre, fn(v) -> fn(x) -> DInt(v))
+
+  fn dyn_float_pre(d: Dyn) -> Option(Float) = match d
+    DFloat(x) -> Some(x)
+    other -> None()
+  fn dyn_float() -> Optic(Dyn, Float, AffineKind) =
+    affine(dyn_float_pre, fn(v) -> fn(x) -> DFloat(v))
+
+  fn dyn_str_pre(d: Dyn) -> Option(String) = match d
+    DStr(s) -> Some(s)
+    other -> None()
+  fn dyn_str() -> Optic(Dyn, String, AffineKind) =
+    affine(dyn_str_pre, fn(v) -> fn(x) -> DStr(v))
+
+  fn dyn_list_pre(d: Dyn) -> Option(List(Dyn)) = match d
+    DList(xs) -> Some(xs)
+    other -> None()
+  fn dyn_list() -> Optic(Dyn, List(Dyn), AffineKind) =
+    affine(dyn_list_pre, fn(v) -> fn(x) -> DList(v))
+
+  fn dyn_tuple_pre(d: Dyn) -> Option(List(Dyn)) = match d
+    DTuple(xs) -> Some(xs)
+    other -> None()
+  fn dyn_tuple() -> Optic(Dyn, List(Dyn), AffineKind) =
+    affine(dyn_tuple_pre, fn(v) -> fn(x) -> DTuple(v))
+
+  fn dyn_map_pre(d: Dyn) -> Option(List(DynEntry)) = match d
+    DMap(es) -> Some(es)
+    other -> None()
+  fn dyn_map() -> Optic(Dyn, List(DynEntry), AffineKind) =
+    affine(dyn_map_pre, fn(v) -> fn(x) -> DMap(v))
 
   ## Common tuple lenses exposed through the `lens` syntax macro. The macro is
   ## only surface sugar; these are ordinary typed Std.Optic functions.

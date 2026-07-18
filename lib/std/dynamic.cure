@@ -28,7 +28,6 @@ mod Std.Dynamic
 
   use Std.Atom
   use Std.List
-  use Std.Map
   use Std.String
 
   ## A dynamically-shaped value. One constructor per BEAM value shape; the
