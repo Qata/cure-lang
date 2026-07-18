@@ -18,7 +18,16 @@ in `IsTrue` form has nowhere to go.
 
 We connect them with three constructive, zero-trust layers, and we are explicit
 about the one thing that is *not* reachable without trust (§6), so the boundary
-is documented rather than smuggled.
+is documented rather than smuggled. Concretely, three items (referenced by
+these letters throughout the rest of this design):
+
+- **(a)** an open **conjunction** or bounded-range obligation — `IsTrue(and(0 <=
+  n, n <= 100))` — should discharge from its two halves without a solver (§4);
+- **(b)** an open **`Nat`** obligation should stop being computation-only and
+  reach the full `Std.Proof.Math` lemma library — transitivity, monotonicity,
+  positivity of products and sums (§5);
+- **(c)** a refined value should be usable directly where its base type is
+  expected, the reverse of the existing base→refined injection (§7).
 
 ## 2. The trust posture (why this design exists in this shape)
 
@@ -58,7 +67,16 @@ the reflection lemma `<ᵇ⇒<` and the connective lemma `T-∧`; Idris writes `
 | `T-∧` (proj₁ / proj₂) | `left_operand_is_true_from_true_conjunction` / `right_operand_is_true_from_true_conjunction` |
 | `T-∧` (intro) | `conjunction_is_true_when_both_operands_are` |
 | `T-∨` (inj₁ / inj₂) | `disjunction_is_true_from_left_operand` / `disjunction_is_true_from_right_operand` |
-| `T-not` | `true_negation_contradicts_truth` |
+| `soToNotSoNot` (Idris `Data.So`) | `true_negation_contradicts_truth` |
+
+Note on the last row: agda-stdlib's `Data.Bool.Properties` has no lemma named
+`T-not` — the nearest names, `T-not-≡ : T (not x) ⇔ x ≡ false` and `¬T-≡ : (¬ T
+x) ⇔ x ≡ false`, state a different fact (an iff with propositional equality on
+`Bool`), not the ex-falso shape proved here. Idris (`~/Develop/Idris2/libs/base/
+Data/So.idr`) does have the exact match: `soToNotSoNot : So b -> Not (So (not
+b))` is `claim_is_true -> negation_is_true -> Empty` (curried the other way
+round), so this row's tradition name is Idris's, not Agda's, unlike every other
+row in this table.
 
 Bound variables are spelled out too: `left`, `right`, `value`, `predecessor`,
 `left_predecessor`, `evidence`, `claim`, `left_is_true` — never `m`, `n`, `x`,
@@ -76,6 +94,7 @@ obligations alike. New module `Std.Proof.BooleanReflection`:
 ```
 mod Std.Proof.BooleanReflection
   use Std.Bool
+  use Std.Decision           # for Empty (true_negation_contradicts_truth's codomain)
   use Std.Proof.IntMath      # for IsTrue / Confirmed
 
   ## Split a true conjunction into its left operand's truth.
@@ -176,7 +195,7 @@ tie them to the existing families (transliterated from agda-stdlib
   ## inductive relation holding. Both directions, proved by induction.
   @lemma
   fn less_than_holds_when_boolean_comparison_is_true(
-    left: Nat, right: Nat,
+    {left: Nat}, {right: Nat},
     evidence: IsTrue(natural_is_less_than(left, right))
   ) -> IsLessThan(left, right) = ...   # mirrors <ᵇ⇒< : induction on left, right
 
@@ -233,10 +252,16 @@ is guidance plus a test, not machinery.
 
 ## 5c. Automation: how the search *uses* these lemmas (no new solver)
 
-The machinery to *apply* lemmas already exists — the tagged-lemma solver
-(`solver_lemma`) and the positivity seam (`solver_positivity`) in
-`Cure.Elab.ProofSearch`. This design supplies **lemmas**, not a solver. Two
-minimal wirings:
+The machinery to *apply* lemmas already exists in this tree — `lemma_candidates`
+looks up `@lemma`-tagged theorems under a goal's conclusion head, and `try_lemma`
+unifies the goal against a candidate's conclusion and recursively resolves any
+unsolved hypothesis as a sub-goal (`lib/cure/elab/proof_search.ex`). There is no
+separate "positivity solver": `multiplying_positive_numbers_is_positive` already
+goes through this same generic path today (it is `@lemma`-tagged in
+`Std.Proof.Math` and nothing else), which is exactly why the new reflection and
+connective lemmas need no bespoke seam either — they are additional entries
+under the identical mechanism. This design supplies **lemmas**, not a solver.
+Two minimal wirings:
 
 1. **Introduction and reflection lemmas carry `@lemma`.** `conjunction_is_true_
    when_both_operands_are`, the two disjunction lemmas, and the "…holds_when_
@@ -288,11 +313,21 @@ its base type `T` is expected (`conversion_failure` — the symmetric companion 
 the int-refinement level-2 base→refined injection). Add an elaborator coercion:
 when checking a term whose inferred type is `Sigma(refined_value: T,
 predicate(refined_value))` against an expected type `T`, insert the first
-projection (`refined_value(_)`, i.e. `.1`). Pure E change in
-`elaborator.ex` (a coercion site, alongside the existing injection), no trust, no
-kernel touch. This is what unblocks a refined parameter flowing into ordinary
+projection — the kernel builtin `sigma_first`, the same global the level-1
+refinement-type sugar and the generic `.1` projection already lower to
+(`declarations.ex`'s `idx_to_core` clause for `{:attribute_access, meta, [inner_ast]}`,
+which reads the `"1"`/`"2"` selector from `meta`'s `:attribute` key and dispatches
+to `:sigma_first`/`:sigma_second` accordingly). Using
+the builtin directly, rather than `Std.Refine.refined_value`, keeps the
+coercion independent of whether the enclosing module `use`s `Std.Refine` — a
+refined value built purely from the level-1 `{n: Int | n > 0}` sugar never
+requires that import, so the coercion that unwraps it must not either. Pure E
+change in `elaborator.ex` (a coercion site, alongside the existing injection),
+no trust, no kernel touch. This is what unblocks a refined parameter flowing into ordinary
 `T`-typed arithmetic — the other half of making refined values usable, and the
-concrete `moneta` blocker (a) from the int-refinement §8 ledger.
+concrete `moneta` blocker from the int-refinement §8 ledger (that ledger's own
+sub-item "(a)", a different letter scheme from this design's (a)/(b)/(c) above —
+not to be conflated).
 
 ## 8. Testing strategy (TDD, differential oracle where it applies)
 
@@ -301,13 +336,17 @@ Strict red→green per slice; behavioral and immutable once green.
 1. **Connective algebra (Layer 1).** Unit tests: from `IsTrue(and(a, b))` derive
    each operand; from both operands derive the conjunction; disjunction from
    either side; `true_negation_contradicts_truth` yields `Empty`. Oracle probe
-   `test/oracle/refine/boolean_connectives_*.{cure,idr}` against Idris `Data.So`
-   `andSo`/`orSo`, relation `same`.
+   `test/oracle/refine/refine03_boolean_and.{cure,idr}` /
+   `refine04_boolean_or.{cure,idr}` (numbered-prefix naming, matching the
+   directory's existing `refine01_is_true`/`refine02_is_false` convention)
+   against Idris `Data.So` `andSo`/`orSo`, relation `same`.
 2. **Nat reflection (Layer 2).** Unit tests: each `…_holds_when_boolean_
    comparison_is_true` and its converse round-trip on concrete `Nat`; a *proof*
    of `IsLessThan` obtained through the boolean surface equals the hand-written
-   one (structural equality). Oracle probe against agda-stdlib-style reflection
-   expressed in Idris `Data.Nat`/`Data.So`, relation `same`.
+   one (structural equality). Oracle probe
+   `test/oracle/refine/refine05_nat_reflection.{cure,idr}` (same numbered-prefix
+   convention) against agda-stdlib-style reflection expressed in Idris
+   `Data.Nat`/`Data.So`, relation `same`.
 3. **`to_integer`.** Unit test totality + round behavior (`to_integer(of_int(k))`
    on non-negative `k`); a structural, non-`@extern` definition (guard: the
    function has a real body, not an FFI boundary).
@@ -326,12 +365,22 @@ Strict red→green per slice; behavioral and immutable once green.
 
 ## 9. Files
 
-- **Create:** `lib/std/proof_boolean_reflection.cure`;
+- **Create:** `lib/std/proof_boolean_reflection.cure` (`use Std.Bool`, `use
+  Std.Decision` for `Empty`, `use Std.Proof.IntMath` for `IsTrue`/`Confirmed` —
+  per the codebase's must-import convention, every one of these is a direct,
+  explicit import: `Std.Proof.IntMath` already imports `Std.Decision` itself,
+  but that import is not transitive, matching how `Std.Proof.Math` and
+  `Std.Proof.IntMath` each import `Std.Decision` directly for the same
+  `Empty`);
   `test/cure/stdlib/proof_boolean_reflection_test.exs`;
   `test/cure/stdlib/nat_to_integer_test.exs`;
   `test/cure/elab/refinement_base_projection_test.exs`;
-  `test/oracle/refine/boolean_connectives_*.{cure,idr}` + `verdicts.json`;
-  `test/oracle/refine/nat_reflection_*.{cure,idr}` + `verdicts.json`.
+  `test/oracle/refine/refine03_boolean_and.{cure,idr}`,
+  `refine04_boolean_or.{cure,idr}`, `refine05_nat_reflection.{cure,idr}`
+  (numbered-prefix names, matching the directory's existing
+  `refine01_is_true`/`refine02_is_false` convention) — all three add entries to
+  the *existing single* `test/oracle/refine/verdicts.json` (one shared,
+  name-keyed JSON object per directory — not a separate file per test).
 - **Modify (stdlib):** `lib/std/proof_math.cure` (boolean comparisons + reflection
   lemmas; add `use Std.Proof.IntMath` for `IsTrue`); `lib/std/nat.cure`
   (`to_integer`).
