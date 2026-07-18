@@ -1,0 +1,64 @@
+mod GuardedCoherence
+  use Std.Equivalent
+  ## GUARDED RECURSIVE COHERENCE — folds guardedness INTO the well-formedness predicate so recursive
+  ## coherence ENTAILS productivity by construction. Unlike the recursive Coherent in multiparty_recursive
+  ## (whose CoRec accepts any body, admitting the unproductive X = X), GCoRec CARRIES a guardedness proof
+  ## `head_guarded(body) = T`, so GCoherent(GRec(GVar)) is UNCONSTRUCTIBLE (its guard witness would need
+  ## head_guarded(GVar) = F to equal T). A message step also carries sender != receiver. The payoff:
+  ## every coherent recursion is provably productive.
+  type Role = RA | RB | RC
+  type Tag = TA | TB | TC
+  type B = F | T
+  type Global = GEnd | GMsg(Role, Role, Tag, Global) | GRec(Global) | GVar
+  fn role_eq(x: Role, y: Role) -> B = match x
+    RA() -> match y
+      RA() -> T()
+      RB() -> F()
+      RC() -> F()
+    RB() -> match y
+      RA() -> F()
+      RB() -> T()
+      RC() -> F()
+    RC() -> match y
+      RA() -> F()
+      RB() -> F()
+      RC() -> T()
+  fn gsubst(g: Global, s: Global) -> Global = match g
+    GEnd()               -> GEnd()
+    GMsg(from, to, t, k) -> GMsg(from, to, t, gsubst(k, s))
+    GRec(body)           -> GRec(body)
+    GVar()               -> s
+  fn head_guarded(g: Global) -> B = match g
+    GEnd()               -> T()
+    GMsg(from, to, t, k) -> T()
+    GRec(body)           -> head_guarded(body)
+    GVar()               -> F()
+  fn guarded_subst(body: Global, s: Global, hg: Equivalent(B, head_guarded(body), T())) -> Equivalent(B, head_guarded(gsubst(body, s)), T()) =
+    match body
+      GEnd()               -> reflexive(T())
+      GMsg(from, to, t, k) -> reflexive(T())
+      GRec(b)              -> hg
+      GVar()               -> match hg
+  fn unfold_productive(body: Global, hg: Equivalent(B, head_guarded(body), T())) -> Equivalent(B, head_guarded(gsubst(body, GRec(body))), T()) =
+    guarded_subst(body, GRec(body), hg)
+  ## Guarded recursive coherence: distinct roles per message, a guardedness proof per recursion.
+  type GCoherent indices (g: Global)
+    GCoEnd : GCoherent(GEnd)
+    GCoMsg : Equivalent(B, role_eq(p, q), F()) -> GCoherent(k) -> GCoherent(GMsg(p, q, t, k))
+    GCoRec : Equivalent(B, head_guarded(body), T()) -> GCoherent(body) -> GCoherent(GRec(body))
+    GCoVar : GCoherent(GVar)
+  ## **COHERENCE ⟹ HEAD DISTINCTNESS** (as before, now within the guarded predicate).
+  fn gcoherent_head_distinct({p: Role}, {q: Role}, {t: Tag}, {k: Global}, c: GCoherent(GMsg(p, q, t, k))) -> Equivalent(B, role_eq(p, q), F()) = match c
+    GCoMsg(neq, ck) -> neq
+  ## **COHERENCE ⟹ GUARDEDNESS**: extract the guardedness witness a coherent recursion carries.
+  fn gcoherent_guard({body: Global}, c: GCoherent(GRec(body))) -> Equivalent(B, head_guarded(body), T()) = match c
+    GCoRec(hg, cb) -> hg
+  ## **COHERENCE ⟹ PRODUCTIVITY (the payoff)**: every coherent recursion unfolds to a productive head —
+  ## guardedness is now BUILT INTO coherence, so a well-formed recursive protocol can never spin on X = X.
+  fn gcoherent_productive(body: Global, c: GCoherent(GRec(body))) -> Equivalent(B, head_guarded(gsubst(body, GRec(body))), T()) =
+    unfold_productive(body, gcoherent_guard(c))
+  ## The guarded ping-pong loop X = RA->RB:TA. X IS guarded-coherent (constructs), whereas X = X cannot be
+  ## (GCoRec on it would need head_guarded(GVar) = T).
+  fn pingpong_gcoherent() -> GCoherent(GRec(GMsg(RA(), RB(), TA(), GVar()))) =
+    GCoRec(reflexive(T()), GCoMsg(reflexive(F()), GCoVar()))
+end
