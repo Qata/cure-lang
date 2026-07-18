@@ -213,6 +213,35 @@ matching/metacontext work knocks out several of these at once.
   reconstruction: `config_subst` takes `g2` explicit, so the spec continuations `project(g2, role)` are
   writable and thread as `sub_step_l`'s explicit `b2` — avoiding `SubRefl` entirely (`7d0ccad1`).
 
+### K-bug 3 — size-change checker rejects recursive-result-as-argument (more conservative than Idris)
+
+- **Symptom.** A mutually-recursive group where a recursive *result* is passed as an argument to a
+  sibling that then recurses through the original function is not certified total, so it stays opaque
+  to δ (proofs about it fail `:conversion_failure`). Concretely, the faithful n-ary branch-merge
+  `merge`/`union_branches`/`insert_branch`: `union_branches(bs1, BCons(t,k,rest)) = insert_branch(t, k,
+  union_branches(bs1, rest))`, and `insert_branch` calls `merge(k, k2)` on a shared label. The group
+  terminates (the continuation `k2` is a sub-sub-term of the original `merge` argument), but the
+  size-change matrices treat `insert_branch`'s list argument `union_branches(bs1, rest)` — a
+  defined-function *result* — as unknown size, breaking the decrease chain.
+- **Differential (verified 2026-07-18).** **Idris accepts** the identical definitions as `%default
+  total` (probe checked in-tree). So this is a genuine Cure `cure_stricter` — Cure's size-change is
+  more conservative than Idris's on this pattern; NOT a phantom.
+- **Root cause + layer.** K (`certificate.ex`, `mutual_group_total?`/`size_change_total?`). The
+  size-change over-approximates a recursive-result argument as unbounded; the cross-function measure
+  that Idris finds (the argument to `merge` strictly shrinks around the whole cycle) is not derived.
+- **Fix.** HARD-STOP kernel change — extend the size-change matrices so a call whose argument is a
+  sibling's recursive result still contributes the strict-decrease edge Idris derives, WITHOUT
+  certifying any non-total function (Antigen antibody: a genuinely non-terminating recursive-result
+  cycle must stay rejected). Aligns with Idris (TCB-change blanket approval applies), but needs the
+  full HARD-STOP gate. A dedicated run, not a loop tick.
+- **Workaround (in use).** Restructure so the recursion is on structural subterms only — e.g. merge
+  branch lists by POSITIONAL PAIRING (`merge_bra(BCons t1 k1 r1)(BCons t2 k2 r2) = BCons t1 (merge k1
+  k2) (merge_bra r1 r2)`) instead of insert-into-a-recursive-result. Certifies + δ-reduces; used for
+  `otp_nary_merge_idem` `merge_idem` (`01b75884`). Also: a plain FORWARD reference (a fn calling a
+  helper declared *below* it) defers certification until the end-of-module sweep, so a dependent proof
+  checked before the sweep sees the caller non-reducing — same class as the mutual-recursion cert bug
+  (`a4f071fb`) but for non-mutual forward refs; workaround is define-before-use ordering.
+
 ## 3. Recommended order
 
 1. **E9** — highest leverage; a real fix deletes the index-generalization boilerplate from every
