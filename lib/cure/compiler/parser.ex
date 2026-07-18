@@ -2272,12 +2272,27 @@ defmodule Cure.Compiler.Parser do
   # former Precedence-domain magic constants (`6` = "above `=`", `42` = "above
   # comparison"): the flipped table numbers those groups differently, so the
   # thresholds must be read from the table rather than written as literals.
-  # `fallback` is used only when the lexeme carries no infix fixity (an empty
-  # sub-parser table), where every token already halts the loop regardless.
-  defp bp_above(state, lexeme, fallback) do
+  # When the session table carries no infix fixity for `lexeme` (an empty
+  # sub-parser table), fall back to the built-in table — the single source of
+  # truth — which always contains `=`/`<`, so the threshold stays table-relative
+  # rather than a stale old-scale constant.
+  defp bp_above(state, lexeme) do
     case FixityTable.infix_bp(fixity_table(state), lexeme) do
       {left_bp, _right_bp} -> left_bp + 1
-      :not_infix -> fallback
+      :not_infix -> builtin_bp_above(lexeme)
+    end
+  end
+
+  # Fallback threshold read from the built-in fixity table. Raises only if even
+  # the built-in table lacks `lexeme` as an infix operator, which would be a
+  # genuine bug (every `bp_above` caller passes a built-in infix lexeme).
+  defp builtin_bp_above(lexeme) do
+    case FixityTable.infix_bp(BuiltinFixity.table(), lexeme) do
+      {left_bp, _right_bp} ->
+        left_bp + 1
+
+      :not_infix ->
+        raise "bp_above: #{inspect(lexeme)} is not a built-in infix operator"
     end
   end
 
@@ -2675,7 +2690,7 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
     # Parse the expression being asserted. Stop above assignment so a trailing
     # `:`/`=` stays for us; let binding uses the same trick.
-    {expr, state} = parse_expr(state, bp_above(state, "=", 6))
+    {expr, state} = parse_expr(state, bp_above(state, "="))
     state = expect(state, :colon)
     {type_ast, state} = parse_type_expr(state)
     ast = {:assert_type, [line: token.line, col: token.col], [expr, type_ast]}
@@ -2844,14 +2859,18 @@ defmodule Cure.Compiler.Parser do
     {ast, state}
   end
 
-  # Prefix binding power via the fixity table, falling back to the static
-  # `Precedence` table when the lexeme carries no prefix fixity (e.g. a
-  # sub-parser with an empty table). The built-in table's prefix group binds
-  # tighter than every infix group, exactly as the static rbp did.
+  # Prefix binding power via the fixity table, falling back to the built-in
+  # table — the single source of truth — when the session table carries no
+  # prefix fixity for the lexeme (e.g. a sub-parser with an empty table). The
+  # built-in `Prefix` group is declared `higher_than: Multiplicative`, so a
+  # prefix operator binds tighter than every infix group but `.` (Dot), exactly
+  # as the retired static rbp (90, below dot's 100) did.
   defp prefix_rbp(state, token) do
-    case FixityTable.prefix_bp(fixity_table(state), lexeme_of(token)) do
+    lexeme = lexeme_of(token)
+
+    case FixityTable.prefix_bp(fixity_table(state), lexeme) do
       bp when is_integer(bp) -> bp
-      :not_prefix -> Precedence.prefix_bp(token.type)
+      :not_prefix -> FixityTable.prefix_bp(BuiltinFixity.table(), lexeme)
     end
   end
 
@@ -3546,7 +3565,7 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_non_binary_generator_or_filter(state) do
     saved_pos = state.pos
-    {expr, state} = parse_expr(state, bp_above(state, "<", 42))
+    {expr, state} = parse_expr(state, bp_above(state, "<"))
     state = skip_newlines(state)
 
     case peek(state) do
@@ -3571,7 +3590,7 @@ defmodule Cure.Compiler.Parser do
         # If the expression was just a variable and there's an operator next, re-parse at BP 0.
         token = peek(state)
 
-        if Precedence.infix_bp(token.type) != :not_infix do
+        if FixityTable.infix_bp(fixity_table(state), lexeme_of(token)) != :not_infix do
           state = %{state | pos: saved_pos}
           {filter_expr, state} = parse_expr(state, 0)
           {{:filter, [], [filter_expr]}, state}
@@ -3664,7 +3683,7 @@ defmodule Cure.Compiler.Parser do
   # less-than comparison operator.
   defp parse_bin_generator_segment(state) do
     start_token = peek(state)
-    {value, state} = parse_expr(state, bp_above(state, "<", 42))
+    {value, state} = parse_expr(state, bp_above(state, "<"))
 
     {specifier_meta, state} =
       case peek(state) do
@@ -3869,7 +3888,7 @@ defmodule Cure.Compiler.Parser do
 
     # Parse pattern (LHS) at high enough BP to NOT consume `=`: one above the
     # assignment operator's left binding power, read from the fixity table.
-    {pattern, state} = parse_expr(state, bp_above(state, "=", 6))
+    {pattern, state} = parse_expr(state, bp_above(state, "="))
 
     # `: Type`, or a graded `:g [Type]` — the type is optional after a grade because
     # `let_inferred/8` synthesises it from the rhs (Idris `letBinder` does the same).
@@ -4980,7 +4999,7 @@ defmodule Cure.Compiler.Parser do
       case peek(state) do
         %Token{type: :keyword, value: :when} ->
           state = advance(state)
-          {g, state} = parse_expr(state, bp_above(state, "=", 6))
+          {g, state} = parse_expr(state, bp_above(state, "="))
           {g, state}
 
         _ ->
@@ -5120,7 +5139,7 @@ defmodule Cure.Compiler.Parser do
         {Enum.reverse(acc), state}
 
       _ ->
-        {pat, state} = parse_expr(state, bp_above(state, "<", 42))
+        {pat, state} = parse_expr(state, bp_above(state, "<"))
         state = skip_newlines(state)
 
         case peek(state) do
@@ -5317,7 +5336,7 @@ defmodule Cure.Compiler.Parser do
         %Token{type: :assign} ->
           state = advance(state)
           state = skip_newlines(state)
-          {d, state} = parse_expr(state, bp_above(state, "=", 6))
+          {d, state} = parse_expr(state, bp_above(state, "="))
           {d, state}
 
         _ ->
