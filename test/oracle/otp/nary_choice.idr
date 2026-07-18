@@ -61,7 +61,7 @@ mutual
     CoEnd : Coherent GEnd
     CoAB : (t : Tag) -> Coherent k -> Coherent (GMsg RA RB t k)
     CoBA : (t : Tag) -> Coherent k -> Coherent (GMsg RB RA t k)
-    CoCho : CoherentB gbs -> Coherent (GCho RA RB gbs)
+    CoCho : (t : Tag) -> Coherent gh -> CoherentB rest -> Coherent (GCho RA RB (GBCons t gh rest))
   data CoherentB : GBranches -> Type where
     CoBNil : CoherentB GBNil
     CoBCons : (t : Tag) -> Coherent g -> CoherentB rest -> CoherentB (GBCons t g rest)
@@ -71,7 +71,7 @@ mutual
   projection_duality CoEnd = Refl
   projection_duality (CoAB t w2) = cong (LSend t) (projection_duality w2)
   projection_duality (CoBA t w2) = cong (LRecv t) (projection_duality w2)
-  projection_duality (CoCho wb) = cong LSel (projection_gbranches_duality wb)
+  projection_duality (CoCho t ch cr) = cong LSel (projection_gbranches_duality (CoBCons t ch cr))
   projection_gbranches_duality : CoherentB gbs -> project_gbranches gbs RA = dual_branches (project_gbranches gbs RB)
   projection_gbranches_duality CoBNil = Refl
   projection_gbranches_duality (CoBCons t wg wrest) = rewrite projection_duality wg in rewrite projection_gbranches_duality wrest in Refl
@@ -91,7 +91,7 @@ coherentb_select (CoBCons t wg wrest) (SelThere sel2) = coherentb_select wrest s
 cstep_preserves : Coherent g -> GStep g g2 -> Coherent g2
 cstep_preserves (CoAB t w2) GStMsg = w2
 cstep_preserves (CoBA t w2) GStMsg = w2
-cstep_preserves (CoCho wb) (GStCho sel) = coherentb_select wb sel
+cstep_preserves (CoCho t ch cr) (GStCho sel) = coherentb_select (CoBCons t ch cr) sel
 
 duality_preserved : Coherent g -> GStep g g2 -> project g2 RA = dual (project g2 RB)
 duality_preserved w st = projection_duality (cstep_preserves w st)
@@ -109,3 +109,18 @@ duality_over_run w r = projection_duality (grun_preserves w r)
 
 branch_dual : CoherentB gbs -> Selects gbs g -> project g RA = dual (project g RB)
 branch_dual wb sel = projection_duality (coherentb_select wb sel)
+
+global_terminates : Coherent g -> GRun g GEnd
+global_terminates CoEnd = GRDone
+global_terminates (CoAB t w2) = GRStep GStMsg (global_terminates w2)
+global_terminates (CoBA t w2) = GRStep GStMsg (global_terminates w2)
+global_terminates (CoCho t ch cr) = GRStep (GStCho SelHere) (global_terminates ch)
+
+data CanStep : Global -> Type where
+  StepDone : CanStep GEnd
+  StepGo : GStep g g2 -> CanStep g
+
+global_progress : Coherent g -> CanStep g
+global_progress w = case global_terminates w of
+  GRDone => StepDone
+  GRStep st rest => StepGo st
