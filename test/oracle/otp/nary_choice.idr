@@ -75,3 +75,23 @@ mutual
   projection_gbranches_duality : CoherentB gbs -> project_gbranches gbs RA = dual_branches (project_gbranches gbs RB)
   projection_gbranches_duality CoBNil = Refl
   projection_gbranches_duality (CoBCons t wg wrest) = rewrite projection_duality wg in rewrite projection_gbranches_duality wrest in Refl
+
+data Selects : GBranches -> Global -> Type where
+  SelHere : Selects (GBCons t g rest) g
+  SelThere : Selects rest g -> Selects (GBCons t g2 rest) g
+
+data GStep : Global -> Global -> Type where
+  GStMsg : GStep (GMsg from to t k) k
+  GStCho : Selects gbs g2 -> GStep (GCho from to gbs) g2
+
+coherentb_select : CoherentB gbs -> Selects gbs g -> Coherent g
+coherentb_select (CoBCons t wg wrest) SelHere = wg
+coherentb_select (CoBCons t wg wrest) (SelThere sel2) = coherentb_select wrest sel2
+
+cstep_preserves : Coherent g -> GStep g g2 -> Coherent g2
+cstep_preserves (CoAB t w2) GStMsg = w2
+cstep_preserves (CoBA t w2) GStMsg = w2
+cstep_preserves (CoCho wb) (GStCho sel) = coherentb_select wb sel
+
+duality_preserved : Coherent g -> GStep g g2 -> project g2 RA = dual (project g2 RB)
+duality_preserved w st = projection_duality (cstep_preserves w st)

@@ -86,4 +86,33 @@ mod NaryChoice
   fn projection_gbranches_duality({gbs: GBranches}, w: CoherentB(gbs)) -> Equivalent(Branches, project_gbranches(gbs, RA()), dual_branches(project_gbranches(gbs, RB()))) = match w
     CoBNil()             -> reflexive(BNil())
     CoBCons(t, wg, wrest) -> bcons_cong(t, projection_duality(wg), projection_gbranches_duality(wrest))
+
+  ## N-ARY OPERATIONAL SEMANTICS: a choice fires by SELECTING one of its arbitrarily-many branches.
+  ## Selects(gbs, g) witnesses that g is a branch in the list gbs (membership).
+  type Selects indices (gbs: GBranches, g: Global)
+    SelHere  : Selects(GBCons(t, g, rest), g)
+    SelThere : Selects(rest, g) -> Selects(GBCons(t, g2, rest), g)
+  type GStep indices (g: Global, g2: Global)
+    GStMsg : GStep(GMsg(from, to, t, k), k)
+    GStCho : Selects(gbs, g2) -> GStep(GCho(from, to, gbs), g2)
+  ## Selecting a branch from a coherent choice yields a coherent continuation (recursion over the
+  ## branch list, driven by the selection witness).
+  fn coherentb_select({gbs: GBranches}, {g: Global}, wb: CoherentB(gbs), sel: Selects(gbs, g)) -> Coherent(g) = match sel
+    SelHere()      -> match wb
+      CoBCons(t, wg, wrest) -> wg
+    SelThere(sel2) -> match wb
+      CoBCons(t, wg, wrest) -> coherentb_select(wrest, sel2)
+  ## **N-ARY SUBJECT REDUCTION**: firing a coherent protocol (a message, or SELECTING any branch of an
+  ## n-ary choice) yields a coherent protocol.
+  fn cstep_preserves({g: Global}, {g2: Global}, w: Coherent(g), st: GStep(g, g2)) -> Coherent(g2) = match st
+    GStMsg()    -> match w
+      CoAB(t, w2) -> w2
+      CoBA(t, w2) -> w2
+    GStCho(sel) -> match w
+      CoCho(wb) -> coherentb_select(wb, sel)
+  ## **N-ARY DUALITY PRESERVED UNDER REDUCTION**: the two active roles' endpoints stay DUAL at every
+  ## reachable state, including after selecting any branch of an n-ary choice — communication safety
+  ## preserved operationally, generalized from binary to n-ary choice.
+  fn duality_preserved({g: Global}, {g2: Global}, w: Coherent(g), st: GStep(g, g2)) -> Equivalent(Local, project(g2, RA()), dual(project(g2, RB()))) =
+    projection_duality(cstep_preserves(w, st))
 end
