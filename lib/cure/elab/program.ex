@@ -1871,7 +1871,7 @@ defmodule Cure.Elab.Program do
          coherence: coherence,
          constrained: Map.merge(left.constrained, right.constrained),
          import_modules: MapSet.union(left.import_modules, right.import_modules),
-         lemmas: Map.merge(left.lemmas, right.lemmas, fn _head, ls, rs -> ls ++ rs end),
+         lemmas: Map.merge(left.lemmas, right.lemmas, fn _head, ls, rs -> Enum.uniq(ls ++ rs) end),
          module_owner: left.module_owner || right.module_owner
        }}
     end

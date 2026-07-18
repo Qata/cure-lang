@@ -44,10 +44,14 @@ mod Std.Refine
     )
 
   ## Multiplying two positive natural numbers preserves positivity.
+  ##
+  ## The proof is left as a hole: `multiplying_positive_numbers_is_positive` is
+  ## `@lemma`-tagged in `Std.Proof.Math`, so the auto proof-search discharges it
+  ## from the two refinement projections without the author naming the lemma.
   fn multiply_positive_natural_numbers(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
     refine(
       multiply(refined_value(left), refined_value(right)),
-      multiplying_positive_numbers_is_positive(refinement_proof(left), refinement_proof(right))
+      ?
     )
 
 end

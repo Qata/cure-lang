@@ -2,6 +2,20 @@ defmodule Cure.Elab.ProofHoleResolutionTest do
   use ExUnit.Case, async: true
   alias Cure.Elab.Program
 
+  # These fixtures exercise the resolver's TAG-GATING over a LOCAL proposition
+  # (`IsFoo`) that no stdlib module proves. That isolation is deliberate: once
+  # `Std.Proof.Math` ships its `@lemma`-tagged
+  # `multiplying_positive_numbers_is_positive` (the Task 9 stdlib demo), the goal
+  # `IsPositive(multiply(a, b))` is auto-provable ambiently — so a fixture written
+  # over that goal could never demonstrate a DECLINE (the stdlib lemma discharges
+  # it) and would collide with any local duplicate (two tagged lemmas, one goal →
+  # a genuine ambiguity). A fresh proposition under a head no stdlib lemma is filed
+  # under keeps the local `@lemma` tag the ONLY thing that decides resolution,
+  # while still driving the real cross-module refinement-projection path: `FooNat`
+  # is a `Std.Refine` Sigma refinement, so the lemma's `IsFoo(refined_value …)`
+  # hypotheses are discharged by `refinement_proof` projections exactly as the
+  # shipped `PositiveNatural` demo is.
+  #
   # A LOCAL, UNTAGGED lemma. No @lemma anywhere → the argument-position hole
   # must REACH the resolver (proving it is no longer the raw
   # {:unsupported_expression,...} rejection of before), and the resolver DECLINES
@@ -15,15 +29,20 @@ defmodule Cure.Elab.ProofHoleResolutionTest do
   # auto-proof is deferrable, not fatal.
   @red """
   mod RedUntagged
-    use Std.Proof.Math
+    use Std.Nat
     use Std.Refine
 
-    fn untagged_fact({left: Nat}, {right: Nat},
-          lp: IsPositive(left), rp: IsPositive(right)) -> IsPositive(multiply(left, right)) =
-      multiplying_positive_numbers_is_positive(lp, rp)
+    type IsFoo indices (value: Nat)
+      FooEvidence : IsFoo(S(predecessor))
 
-    fn demo(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
-      refine(multiply(refined_value(left), refined_value(right)), ?)
+    type FooNat = {value: Nat | IsFoo(value)}
+
+    fn foo_combines({left: Nat}, {right: Nat},
+          lp: IsFoo(left), rp: IsFoo(right)) -> IsFoo(plus(left, right)) = match lp
+      FooEvidence() -> FooEvidence()
+
+    fn demo(left: FooNat, right: FooNat) -> FooNat =
+      refine(plus(refined_value(left), refined_value(right)), ?)
   end
   """
 
@@ -54,27 +73,32 @@ defmodule Cure.Elab.ProofHoleResolutionTest do
   end
 
   # Identical to @red but the local lemma is TAGGED @lemma. Now the hole must be
-  # discharged automatically: sub-goals IsPositive(refined_value(left/right))
-  # come from the refinement projections of the two PositiveNatural binders.
+  # discharged automatically: sub-goals IsFoo(refined_value(left/right)) come from
+  # the refinement projections of the two FooNat binders.
   #
   # CRITICAL: @green and @reference use the SAME module name (`TaggedDemo`).
-  # Global def names are module-qualified, so the LOCAL lemma `tagged_fact` would
+  # Global def names are module-qualified, so the LOCAL lemma `foo_combines` would
   # resolve to a DIFFERENT global atom in each program if the two modules had
   # different names — making `demo_body(green_env) == demo_body(ref_env)`
   # structurally false no matter how correct ProofSearch is. Each `elaborate`
   # builds an independent Env from scratch, so reusing the name is safe.
   @green """
   mod TaggedDemo
-    use Std.Proof.Math
+    use Std.Nat
     use Std.Refine
 
-    @lemma
-    fn tagged_fact({left: Nat}, {right: Nat},
-          lp: IsPositive(left), rp: IsPositive(right)) -> IsPositive(multiply(left, right)) =
-      multiplying_positive_numbers_is_positive(lp, rp)
+    type IsFoo indices (value: Nat)
+      FooEvidence : IsFoo(S(predecessor))
 
-    fn demo(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
-      refine(multiply(refined_value(left), refined_value(right)), ?)
+    type FooNat = {value: Nat | IsFoo(value)}
+
+    @lemma
+    fn foo_combines({left: Nat}, {right: Nat},
+          lp: IsFoo(left), rp: IsFoo(right)) -> IsFoo(plus(left, right)) = match lp
+      FooEvidence() -> FooEvidence()
+
+    fn demo(left: FooNat, right: FooNat) -> FooNat =
+      refine(plus(refined_value(left), refined_value(right)), ?)
   end
   """
 
@@ -82,17 +106,22 @@ defmodule Cure.Elab.ProofHoleResolutionTest do
   # Its `demo` body is the reference the resolved term must equal.
   @reference """
   mod TaggedDemo
-    use Std.Proof.Math
+    use Std.Nat
     use Std.Refine
 
-    @lemma
-    fn tagged_fact({left: Nat}, {right: Nat},
-          lp: IsPositive(left), rp: IsPositive(right)) -> IsPositive(multiply(left, right)) =
-      multiplying_positive_numbers_is_positive(lp, rp)
+    type IsFoo indices (value: Nat)
+      FooEvidence : IsFoo(S(predecessor))
 
-    fn demo(left: PositiveNatural, right: PositiveNatural) -> PositiveNatural =
-      refine(multiply(refined_value(left), refined_value(right)),
-             tagged_fact(refinement_proof(left), refinement_proof(right)))
+    type FooNat = {value: Nat | IsFoo(value)}
+
+    @lemma
+    fn foo_combines({left: Nat}, {right: Nat},
+          lp: IsFoo(left), rp: IsFoo(right)) -> IsFoo(plus(left, right)) = match lp
+      FooEvidence() -> FooEvidence()
+
+    fn demo(left: FooNat, right: FooNat) -> FooNat =
+      refine(plus(refined_value(left), refined_value(right)),
+             foo_combines(refinement_proof(left), refinement_proof(right)))
   end
   """
 

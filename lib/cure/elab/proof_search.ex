@@ -55,9 +55,20 @@ defmodule Cure.Elab.ProofSearch do
     end
   end
 
-  # Each candidate is {term, provenance}. Keep only the kernel-checked survivors.
+  # Each candidate is {term, provenance}. Keep only the kernel-checked survivors,
+  # then collapse candidates that produce the SAME Core term to one (design §6:
+  # "require the survivors to collapse to a single survivor"). Two structurally
+  # identical proof terms are one proof, not an ambiguity — this is what a
+  # diamond import produces, where the same `@lemma` reaches the goal by more
+  # than one `use` path (e.g. `use Std.Proof.Math` directly and transitively via
+  # `use Std.Refine`), so the same lemma entry is filed twice under the goal head
+  # and yields two byte-identical applications. Only *distinct* proof terms
+  # constitute a genuine ambiguity.
   defp decide(candidates, goal) do
-    survivors = Enum.filter(candidates, fn {term, _prov} -> term != nil end)
+    survivors =
+      candidates
+      |> Enum.filter(fn {term, _prov} -> term != nil end)
+      |> Enum.uniq_by(fn {term, _prov} -> term end)
 
     case survivors do
       [] -> :none
