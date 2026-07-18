@@ -165,4 +165,59 @@ mod Std.Proof.Math
     Z() -> False()
     S(predecessor) -> True()
 
+  ## Reflection: the boolean comparison being true carries the same information as
+  ## the inductive relation. Proved by induction, mirroring the boolean function's
+  ## own match structure; uninhabited arms discharge by empty match on `evidence`.
+  @lemma
+  fn less_than_or_equal_holds_when_boolean_comparison_is_true(
+    left: Nat, right: Nat,
+    evidence: IsTrue(natural_is_less_than_or_equal(left, right))
+  ) -> IsLessThanOrEqual(left, right) = match left
+    Z() -> ZeroIsLessThanOrEqual()
+    S(left_predecessor) -> match right
+      Z() -> match evidence
+      S(right_predecessor) -> SuccessorsAreLessThanOrEqual(
+        less_than_or_equal_holds_when_boolean_comparison_is_true(left_predecessor, right_predecessor, evidence))
+
+  fn boolean_comparison_is_true_when_less_than_or_equal_holds(
+    {left: Nat}, {right: Nat},
+    proof: IsLessThanOrEqual(left, right)
+  ) -> IsTrue(natural_is_less_than_or_equal(left, right)) = match proof
+    ZeroIsLessThanOrEqual() -> Confirmed()
+    SuccessorsAreLessThanOrEqual(inner) ->
+      boolean_comparison_is_true_when_less_than_or_equal_holds(inner)
+
+  @lemma
+  fn less_than_holds_when_boolean_comparison_is_true(
+    left: Nat, right: Nat,
+    evidence: IsTrue(natural_is_less_than(left, right))
+  ) -> IsLessThan(left, right) = match right
+    Z() -> match evidence
+    S(right_predecessor) -> match left
+      Z() -> ZeroIsLessThanSuccessor()
+      S(left_predecessor) -> SuccessorsAreLessThan(
+        less_than_holds_when_boolean_comparison_is_true(left_predecessor, right_predecessor, evidence))
+
+  fn boolean_comparison_is_true_when_less_than_holds(
+    {left: Nat}, {right: Nat},
+    proof: IsLessThan(left, right)
+  ) -> IsTrue(natural_is_less_than(left, right)) = match proof
+    ZeroIsLessThanSuccessor() -> Confirmed()
+    SuccessorsAreLessThan(inner) ->
+      boolean_comparison_is_true_when_less_than_holds(inner)
+
+  @lemma
+  fn positive_holds_when_boolean_comparison_is_true(
+    value: Nat,
+    evidence: IsTrue(natural_is_positive(value))
+  ) -> IsPositive(value) = match value
+    Z() -> match evidence
+    S(predecessor) -> PositiveSuccessor()
+
+  fn boolean_comparison_is_true_when_positive_holds(
+    {value: Nat},
+    proof: IsPositive(value)
+  ) -> IsTrue(natural_is_positive(value)) = match proof
+    PositiveSuccessor() -> Confirmed()
+
 end
