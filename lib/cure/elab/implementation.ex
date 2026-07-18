@@ -90,6 +90,8 @@ defmodule Cure.Elab.Implementation do
     end
   end
 
+  # NOTE(int-facade): kept for totality on a legacy/deserialized `{:int_type}`
+  # node; fresh elaboration never produces one (spec 2026-07-18 §3a).
   defp head_atom({:int_type}, _env, _seen, _fallback), do: :Int
   defp head_atom({:float_type}, _env, _seen, _fallback), do: :Float
   defp head_atom({:string_type}, _env, _seen, _fallback), do: :String

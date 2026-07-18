@@ -124,6 +124,9 @@ defmodule Cure.Elab.Resolve do
   defp applied_head?({:function_call, fmeta, _args}, hv), do: Keyword.get(fmeta, :name) == hv
   defp applied_head?(_type, _hv), do: false
 
+  # NOTE(int-facade): kept for totality on a legacy/deserialized `{:vint_type}`
+  # value; fresh elaboration never produces one (spec 2026-07-18 §3a) — `Int`
+  # normally reaches classification as `{:vdata, int_fid, []}`.
   defp classify(_env, {:vint_type}, _seen), do: {:concrete, :Int}
   defp classify(_env, {:vfloat_type}, _seen), do: {:concrete, :Float}
   # String has no primitive value former: `String = List(Char)` (the landed

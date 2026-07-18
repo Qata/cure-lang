@@ -33,6 +33,9 @@ defmodule Cure.Core.Serialize do
   defp enc({:app, f, a}), do: node("app", [f, a])
   defp enc({:hole, name}), do: ["(hole ", str(name), ")"]
   defp enc({:absurd}), do: "(absurd)"
+  # NOTE(int-facade): `enc`/`build_node("int-type", ...)` below stay so
+  # (de)serialization round-trips a pre-flip saved `{:int_type}` term, even
+  # though fresh elaboration never produces one anymore (spec 2026-07-18 §3a).
   defp enc({:int_type}), do: "(int-type)"
   defp enc({:float_type}), do: "(float-type)"
   defp enc({:binary_type}), do: "(binary-type)"
