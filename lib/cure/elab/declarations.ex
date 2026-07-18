@@ -409,7 +409,14 @@ defmodule Cure.Elab.Declarations do
 
   defp do_register_signature({:function_def, meta, _body}, env) do
     with {:ok, sig} <- function_signature(meta, env) do
-      env1 = Env.add_def(env, sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
+      env1 =
+        env
+        |> Env.add_def(sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
+        # Labels must ride the record from the SIGNATURE pass on: overlap legality
+        # (`check_overload_legality`) runs between the signature and body passes and
+        # needs them to tell `move(to:)` from `move(from:)`. The body pass re-adds
+        # the def (dropping this) and re-attaches its own copy.
+        |> Env.put_labels(sig.name, param_label_vector(sig.params))
 
       env2 =
         case sig.constraints do

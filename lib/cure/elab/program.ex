@@ -2015,19 +2015,37 @@ defmodule Cure.Elab.Program do
   end
 
   # The arity of the first indistinguishable pair among `members`, or nil. Two
-  # members overlap iff their parameter telescopes have equal length and every
-  # position is definitionally convertible.
+  # members overlap iff their parameter telescopes have equal length, every
+  # position is definitionally convertible, AND their argument labels agree at
+  # every position (Ph2). A call site discriminates by both the inferred argument
+  # types and the written labels, so two members with identical types but distinct
+  # labels — `move(to dest: Point)` vs `move(from src: Point)` — ARE tellable
+  # apart and legally co-register; only a pair matching on both is a true overlap.
   defp first_overlapping_pair(env, members) do
-    typed = for {_key, def} <- members, do: param_types(def.type)
+    typed =
+      for {_key, def} <- members do
+        ptypes = param_types(def.type)
+        {ptypes, member_labels(def, length(ptypes))}
+      end
 
-    Enum.find_value(pairs(typed), fn {ps, qs} ->
-      if length(ps) == length(qs) and
+    Enum.find_value(pairs(typed), fn {{ps, plabels}, {qs, qlabels}} ->
+      if length(ps) == length(qs) and plabels == qlabels and
            Enum.all?(Enum.zip(ps, qs), fn {p, q} ->
              Cure.Elab.TypeConv.convertible?(env, p, q)
            end) do
         length(ps)
       end
     end)
+  end
+
+  # A member's telescope-aligned label vector, defaulting a label-free def to an
+  # all-`nil` vector so the position-wise comparison is total. Two positions match
+  # when neither is labelled (`nil == nil`) or both carry the same label.
+  defp member_labels(def, arity) do
+    case Map.get(def, :labels) do
+      nil -> List.duplicate(nil, arity)
+      labels -> labels
+    end
   end
 
   # Every parameter domain of a stored def type, in order. Walks the Pi spine

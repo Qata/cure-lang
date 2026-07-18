@@ -95,6 +95,34 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     assert {:error, {:overlapping_overload, :dup, 2}} = elaborate_error(src)
   end
 
+  # Slice C — argument labels break an otherwise-overlapping pair. Both members
+  # have the identical type `Int -> Int`, so pre-Ph2 they would be rejected as
+  # `overlapping_overload`. Distinct labels (`to` vs `from`) make them tellable
+  # apart at any call site, so they legally co-register.
+  test "same-type overloads with distinct argument labels co-register" do
+    src = """
+    mod LabelDistinct
+      fn move(to dest: Int) -> Int = dest
+      fn move(from src: Int) -> Int = src
+    end
+    """
+
+    assert {:ok, _env} = Cure.Elab.Program.elaborate(src)
+  end
+
+  # The label-relaxation is not a blanket escape: two members that share BOTH the
+  # same types AND the same label are still indistinguishable and rejected.
+  test "same-type overloads with the SAME label are still overlapping" do
+    src = """
+    mod LabelSame
+      fn move(to dest: Int) -> Int = dest
+      fn move(to dest: Int) -> Int = dest
+    end
+    """
+
+    assert {:error, {:overlapping_overload, :move, 1}} = elaborate_error(src)
+  end
+
   # Task 5 — call-site pruning failure. When no member's parameter types match
   # the inferred argument types, the call is `{:no_matching_overload, name, _}`
   # rather than silently dispatching one arbitrarily.
