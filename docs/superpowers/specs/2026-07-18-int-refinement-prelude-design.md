@@ -1,7 +1,10 @@
 # Int Refinement Prelude (decidable-boolean reflection) — Design
 
 **Date:** 2026-07-18
-**Status:** Approved direction (operator: "Do it", then approved surface sugar + auto-discharge: "Both"); building TDD via the differential oracle.
+**Status:** LANDED (UNMERGED, branch `implicit-goal-solving`). Prelude + level-1
+sugar + level-2 auto-discharge + differential oracle shipped and green.
+`dependent_types.cure` re-refined and **un-skipped** (now a live checked example,
+`main() == 6`). Two acceptance sites scoped out with honest reasons — see §8.
 **Layer:** Stdlib (`lib/std/*.cure`) + parser (P) + elaborator (E) + oracle fixtures + example re-refinement. **No kernel (K) change** — `lib/cure/core/*` is untouched; if a change seems to require it, STOP per the elaborator-hard-stop principle.
 
 **Superseded framing:** an earlier draft said "no E change expected." That is retired. Making the natural surface work needed, and the operator approved, three untrusted changes below the stdlib:
@@ -153,27 +156,33 @@ Strict red→green per slice, behavioral and immutable once green.
    type-checks with no explicit proof; `-3` at the same type is rejected; an
    *open* obligation (free binder) is NOT auto-discharged (left for evidence).
 4. **`decide_is_true`** — returns `Yes`/`No` with evidence; unit test both branches.
-5. **Binder-carried evidence via `refine`** — a function taking
-   `{n: Int | is_positive(n)}` and threading the evidence (the `scale` shape)
-   type-checks through the explicit `refine(value, proof)` path.
-6. **Example re-refinement (acceptance)** — `dependent_types.cure` `Positive`/
-   `Percentage`, and `moneta.cure` `scale`'s `factor`, move from plain `Int` +
-   "unchecked" comment to real `{… | …}` refinements; each project's own
-   `mix test` + `cure.check.examples` stays green (the `dependent_types` `@expected`
-   row must stay byte-identical or STOP).
+5. **Binder-carried evidence via `refine`** — a function taking a refined binder
+   and threading the evidence type-checks through the explicit `refine(value, proof)`
+   path. NOTE: the named-predicate form `{n: Int | is_positive(n)}` was superseded
+   by the bare sugar (level 1); a `-> Type = IsTrue(n > 0)` *predicate body* still
+   fails on comparison-in-term-position (see §8). Named predicates are therefore
+   not shipped; the bare comparison surface covers the acceptance cases.
+6. **Example re-refinement (acceptance)** — `dependent_types.cure` `NonZero`/
+   `Positive`/`Percentage` moved from plain-`Int` aliases (which collided on
+   ctor `:Int`, the reason the file was a dependent-gap skip) to distinct
+   `{… | …}` refinements with closed literal demonstrators that auto-discharge.
+   The file is **removed from `@known_dependent_gaps`** and now runs as a live
+   green check; `main()` is byte-identically `6`. `moneta.cure`'s `scale` factor
+   is **not** re-refined — see §8 for the two blockers.
 7. **Full gate once, alone** — `mix test --include slow` + `mix antigen` + oracle replay.
 
 ## 6. Files
 
 - Create: `lib/std/proof_int_math.cure`, `test/cure/stdlib/proof_int_math_test.exs`,
-  `test/oracle/refine/int_is_true.{cure,idr}` (+ verdicts entry).
+  `test/oracle/refine/refine0{1,2}_*.{cure,idr}` + `verdicts.json`,
+  `test/cure/elab/refinement_sugar_test.exs`, `test/cure/elab/refinement_autodischarge_test.exs`.
 - Modify (P): `lib/cure/compiler/parser.ex` (landed `6ea68573`).
 - Modify (E): `lib/cure/elab/declarations.ex` (`idx_to_core` comparison/literal
-  lowering) and the refinement-`{x: T | φ}` desugaring site (level-1 auto-wrap +
-  level-2 closed auto-discharge). Locate the desugarer before writing the test.
-- Modify: `examples/dependent_types.cure`, `examples/cure_moneta/cure_src/moneta.cure`
-  (and `motif.cure` if its ranges reduce to closed checks), dropping the
-  "unchecked pending SMTCoq" comments for the re-refined sites.
+  lowering + `reflect_boolean_proposition` level-1 auto-wrap) and
+  `lib/cure/elab/elaborator.ex` (`try_discharge_refinement` level-2 auto-discharge).
+- Modify: `examples/dependent_types.cure` (re-refined, un-skipped) and
+  `lib/mix/tasks/cure.check.examples.ex` (drop `dependent_types` from
+  `@known_dependent_gaps`). `moneta.cure` **untouched** — see §8.
 - **Untouched:** `lib/cure/core/*` (K). If it needs a change, STOP and report —
   that is a scope violation and a hard-stop per the elaborator principle.
 
@@ -186,3 +195,37 @@ Strict red→green per slice, behavioral and immutable once green.
 - No auto-discharge of *open* obligations (only closed `IsTrue(True())` fires;
   open/stuck obligations wait for explicit evidence or `refine`).
 - No change to `Std.Proof.Math` (Nat) beyond what re-refinement forces.
+
+## 8. Delivered vs. scoped-out (post-implementation, honest ledger)
+
+**Delivered & green:**
+- `Std.Proof.IntMath` (`IsTrue`/`Confirmed`/`decide_is_true`/`true_is_not_false`).
+- Level-1 sugar (`declarations.ex`) + level-2 auto-discharge (`elaborator.ex`),
+  each with unit tests (`refinement_sugar_test.exs`, `refinement_autodischarge_test.exs`).
+- Differential oracle cluster `test/oracle/refine/refine0{1,2}_*` (accept/accept,
+  reject/reject vs Idris `Data.So`), replay green.
+- `dependent_types.cure` re-refined, un-skipped, `main() == 6`.
+
+**Scoped out, with reasons (follow-ups, not workarounds):**
+1. **`moneta.cure` `scale`'s `factor`.** Blocked by two independent gaps: (a) a
+   *refined parameter cannot be used where its base type is expected* — there is no
+   refinement→base projection coercion (`{n: Int | n>0}` used as `Int` fails with
+   `conversion_failure`; the symmetric companion to level-2's base→refined
+   injection), so `scale_amount(amount, factor)` would not type-check; and (b)
+   moneta's build compiles with `check_types: false`, so no refinement is actually
+   *verified* there regardless. A refinement→base projection coercion in the
+   elaborator (E) is the enabling feature; ledger it before claiming this site.
+2. **`moneta.cure` unused typealiases (`PositiveAmount`/`NonNegAmount`).**
+   Refining these is cosmetic (unchecked build) AND hits a nested-stdlib-module
+   resolution gap: out-of-tree builds (via `CURE_LIB`) fail to resolve
+   `use Std.Proof.IntMath` (`Std.Proof.*` nested name → source-path mapping),
+   though `Std.String` resolves. In-tree builds (`Program.elaborate`,
+   `cure.check.examples`) resolve it fine. Fix the nested-module source mapping
+   in the codegen/out-of-tree resolver before importing nested stdlib modules
+   from example subprojects.
+3. **Named predicates (`fn is_positive(n: Int) -> Type = IsTrue(n > 0)`).**
+   A comparison in *term position* inside a `-> Type` body still raises
+   `unsupported_expression` (the `idx_to_core` fix covered type/index positions,
+   not term-elaboration of a type-family index argument). Superseded by the bare
+   sugar for the acceptance cases; if named predicates are wanted, lower
+   comparison args of a type-family application through the same reflection path.
