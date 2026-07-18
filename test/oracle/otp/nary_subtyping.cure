@@ -1,0 +1,42 @@
+mod NarySub
+  use Std.Equivalent
+  ## N-ARY session SUBTYPING with WIDTH (Gay-Hole): an external choice (LBra) offering MORE labels is
+  ## a SUBTYPE of one offering fewer. Sub over Local, BraSub over branch lists, and Lookup (label
+  ## membership) are MUTUALLY recursive — enabled by mutual-recursion delta-reduction.
+  type Tag = TA | TB | TC
+  type Local = LEnd | LRecv(Tag, Local) | LBra(Branches)
+  type Branches = BNil | BCons(Tag, Local, Branches)
+  ## Lookup(bs, t, k): the branch list bs has a branch labelled t with continuation k.
+  type Lookup indices (bs: Branches, t: Tag, k: Local)
+    LookHere  : Lookup(BCons(t, k, rest), t, k)
+    LookThere : Lookup(rest, t, k) -> Lookup(BCons(t2, k2, rest), t, k)
+  fn lookup_weaken({bs: Branches}, {t: Tag}, {k: Local}, t2: Tag, k2: Local, lk: Lookup(bs, t, k)) -> Lookup(BCons(t2, k2, bs), t, k) =
+    LookThere(lk)
+  type Sub indices (s: Local, t: Local)
+    SubEnd  : Sub(LEnd, LEnd)
+    SubRecv : (t: Tag) -> Sub(k1, k2) -> Sub(LRecv(t, k1), LRecv(t, k2))
+    SubBra  : BraSub(bs1, bs2) -> Sub(LBra(bs1), LBra(bs2))
+  ## BraSub(bsSub, bsSup): EXTERNAL-choice width+depth — bsSub offers at least bsSup, i.e. EVERY label
+  ## in bsSup is found in bsSub with a subtype-related continuation. So LBra(bsSub) <: LBra(bsSup) when
+  ## bsSub offers more (extra branches are simply ignored by BraSubNil bottoming out).
+  type BraSub indices (bsSub: Branches, bsSup: Branches)
+    BraSubNil  : BraSub(bsSub, BNil)
+    BraSubCons : (t: Tag) -> Lookup(bsSub, t, kSub) -> Sub(kSub, kSup) -> BraSub(bsSub, rest) -> BraSub(bsSub, BCons(t, kSup, rest))
+  ## Weakening: adding a branch to the SUB side preserves BraSub (every lookup still succeeds deeper).
+  fn brasub_weaken({bsSub: Branches}, {bsSup: Branches}, t2: Tag, k2: Local, bw: BraSub(bsSub, bsSup)) -> BraSub(BCons(t2, k2, bsSub), bsSup) = match bw
+    BraSubNil()               -> BraSubNil()
+    BraSubCons(t, lk, sb, rst) -> BraSubCons(t, lookup_weaken(t2, k2, lk), sb, brasub_weaken(t2, k2, rst))
+  ## **N-ARY SUBTYPING IS REFLEXIVE** — every type is a subtype of itself, including n-ary choice
+  ## (every branch found in itself). Mutually recursive with brasub_refl over branch lists.
+  fn sub_refl(l: Local) -> Sub(l, l) = match l
+    LEnd()      -> SubEnd()
+    LRecv(t, k) -> SubRecv(t, sub_refl(k))
+    LBra(bs)    -> SubBra(brasub_refl(bs))
+  fn brasub_refl(bs: Branches) -> BraSub(bs, bs) = match bs
+    BNil()          -> BraSubNil()
+    BCons(t, k, rest) -> BraSubCons(t, LookHere(), sub_refl(k), brasub_weaken(t, k, brasub_refl(rest)))
+  ## **CONCRETE WIDTH WITNESS**: LBra{TA,TB} <: LBra{TA} — an external choice offering both TA and TB
+  ## is usable where one offering only TA is expected (a process that handles more inputs is safe).
+  fn width_example() -> Sub(LBra(BCons(TA(), LEnd(), BCons(TB(), LEnd(), BNil()))), LBra(BCons(TA(), LEnd(), BNil()))) =
+    SubBra(BraSubCons(TA(), LookHere(), SubEnd(), BraSubNil()))
+end
