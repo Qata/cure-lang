@@ -58,13 +58,21 @@ defmodule Cure.Compiler.IncrementalTest do
   #
   # NOTE (deviation from plan): the plan intended `Top` to call `Amb.thing()`
   # WITHOUT `use Amb`, to exercise a "closure-only" edge (present in
-  # `closure_deps_map` but not `order_deps_map`). Empirically, a qualified call
-  # to a module that is not `use`d does not compile in this compiler
-  # (`{:codegen_error, :unknown_global}`), and neither does an ambient-`@prelude`
-  # user module in a bare temp dir — so a *compilable* closure-only edge cannot
-  # be constructed as a unit fixture. The closure-vs-order superset contract is
-  # instead pinned by a scan-only test below, and its live effect (ambient
-  # stdlib preludes) is exercised by the stdlib integration test (Task 5).
+  # `closure_deps_map` but not `order_deps_map`) by having the dependent
+  # actually resolve a name ambiently. Empirically, a qualified call to a
+  # module that is not `use`d does not compile in this compiler
+  # (`{:codegen_error, :unknown_global}`) -- that SPECIFIC construction (ambient
+  # NAME RESOLUTION without `use`) cannot be built as a unit fixture. That is
+  # not the same claim as "no compilable closure-only edge exists": the edge
+  # itself is a purely structural artifact of `DepGraph.finalize_node/4`, which
+  # appends every `@prelude`-decorated module to EVERY OTHER node's
+  # `closure_deps` unconditionally, regardless of whether that node's body
+  # references it at all. A dependent needs no ambient call to pick up the
+  # edge -- see the closure-only-edge driver fixture (`P`/`Q`/`R`) further
+  # below, which compiles and exercises exactly this. The closure-vs-order
+  # superset contract is also pinned by a scan-only test below, and its live
+  # effect on the real stdlib (ambient preludes) is exercised by the stdlib
+  # integration test (Task 5).
   @top """
   mod Top
     use Mid
@@ -142,10 +150,12 @@ defmodule Cure.Compiler.IncrementalTest do
     # The driver decides propagation over `closure_deps_map/1`, not
     # `order_deps_map/1`. This matters for edges that are NOT `use` edges —
     # ambient `@prelude` providers and qualified-call targets — which appear in
-    # the closure map only. Those programs are not compilable in a bare temp dir
-    # (hence not a full driver fixture), but the graph the driver consumes still
-    # records the extra edge, which is what makes it invalidate an ambient
-    # dependent. Scan-only assertion of that superset relationship:
+    # the closure map only. A dependent that actually RESOLVES a name ambiently
+    # (no `use`) is not compilable in this compiler (see the NOTE on `@top`
+    # above), so that specific shape is scan-only here; the structural
+    # `@prelude`-append edge itself (no ambient call needed) IS compilable and
+    # is exercised end-to-end by the `P`/`Q`/`R` driver fixture further below.
+    # Scan-only assertion of the superset relationship:
     root = Path.join(System.tmp_dir!(), "cure_closure_#{:erlang.unique_integer([:positive])}")
     src = Path.join(root, "src")
     File.mkdir_p!(src)
