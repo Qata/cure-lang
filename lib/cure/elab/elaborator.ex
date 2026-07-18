@@ -1991,14 +1991,68 @@ defmodule Cure.Elab.Elaborator do
     if Unify.has_meta?(expected_core) do
       {:error, {:unsolved_metavariable_in_type, expected_core}}
     else
-      with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
-        term = maybe_inject_union(term, type, expected_core, ctx, env)
-
-        with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      case try_discharge_refinement(expr, expected_core, names, ctx, env) do
+        {:ok, term} ->
           {:ok, term}
-        end
+
+        :no ->
+          with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
+            term = maybe_inject_union(term, type, expected_core, ctx, env)
+
+            with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+              {:ok, term}
+            end
+          end
       end
     end
+  end
+
+  # Auto-discharge a CLOSED refinement obligation (§3a level 2). When a value is
+  # checked against a refinement type `{x: T | φ}` — the dependent pair
+  # `Sigma(T, λx. φ)` — and `φ[x := value]` reduces to an inhabited reflection
+  # proposition (`IsTrue(True())`), fill the proof slot with that proposition's
+  # nullary constructor (`Confirmed()`) and build the pair. The author writes just
+  # the value; no `refine`, no explicit proof.
+  #
+  # Soundness: the elaborator only PROPOSES `mk_pair(value, Confirmed())`; the
+  # kernel re-checks it in the fallback's `Kernel.check`, and here inhabitation of
+  # the obligation is itself decided by `Kernel.check` (not by the elaborator
+  # trusting its own reduction). A violated obligation (`IsTrue(False())`) or an
+  # OPEN one (mentioning a free binder) yields no inhabiting constructor, so this
+  # returns `:no` and the value falls through to ordinary checking — the proof is
+  # required, never invented.
+  defp try_discharge_refinement(expr, expected_core, names, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+
+    with false <- is_nil(sigma_fam),
+         {:data, ^sigma_fam, [dom, cod], []} <- Kernel.normalize(ctx, expected_core),
+         {:ok, value} <- elaborate_expr_checked(expr, dom, names, ctx, env),
+         {:data, _fam_key, _p, _i} = obligation <- Kernel.normalize(ctx, {:app, cod, value}),
+         proof when not is_nil(proof) <- reflection_proof(obligation, ctx, env) do
+      {:ok, {:ctor, sigma_ctor_name(env), [value, proof]}}
+    else
+      _ -> :no
+    end
+  end
+
+  # The nullary constructor of the obligation's reflection family that the kernel
+  # accepts as a proof of the (already-reduced) obligation, or nil if none does.
+  # Trying each nullary constructor and letting `Kernel.check` decide keeps this
+  # general over any `So`-style reflection type and never trusts the elaborator's
+  # own view of inhabitation.
+  defp reflection_proof({:data, fam_key, _p, _i} = obligation, ctx, env) do
+    obligation_value = Eval.eval(obligation, Context.env(ctx))
+
+    Inductive.ctors_of(env, fam_key)
+    |> Enum.filter(fn ctor -> ctor.args == [] end)
+    |> Enum.find_value(fn ctor ->
+      candidate = {:ctor, ctor.name, []}
+
+      case Kernel.check(ctx, candidate, obligation_value) do
+        :ok -> candidate
+        _ -> nil
+      end
+    end)
   end
 
   # The nullary constructor for a LITERAL member of the expected union, or nil if the
