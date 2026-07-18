@@ -585,4 +585,30 @@ mod BranchMerge
     WFBC(t, w2)               -> CPStep(config_fidelity(WFBC(t, w2), GStMsg()))
     WFAC(t, w2)               -> CPStep(config_fidelity(WFAC(t, w2), GStMsg()))
     WFCho(tL, wL, tR, wR, mg) -> CPStep(config_fidelity(WFCho(tL, wL, tR, wR, mg), GStChoL()))
+
+  ## **SUBTYPING SIMULATES LOCAL REDUCTION (operational soundness of `<:`).** If `a <: b` and the
+  ## expected/spec side `b` takes a local step to `b2`, then the implementation `a` takes a MATCHING
+  ## step to some `t` with `t <: b2`. So a subtype can always follow wherever its supertype leads,
+  ## staying a subtype — the operational meaning of the subtyping preorder (`sub_trans` is the algebra;
+  ## this is its dynamics). Internal-choice/send cases match structurally; the width cases show a
+  ## branch (`LBra`) receiving the label a single receive expects, then continuing below it.
+  type StepTo indices (a: Local, b2: Local)
+    MkStepTo : LStep(a, t) -> Sub(t, b2) -> StepTo(a, b2)
+  fn sub_step_l({a: Local}, {b: Local}, b2: Local, sub: Sub(a, b), st: LStep(b, b2)) -> StepTo(a, b2) = match st
+    LStSend() -> match sub
+      SubSend(t2, p) -> MkStepTo(LStSend(), p)
+    LStRecv() -> match sub
+      SubRecv(t2, p) -> MkStepTo(LStRecv(), p)
+      SubBraL()      -> MkStepTo(LStBraL(), sub_refl(b2))
+      SubBraLcov(pk) -> MkStepTo(LStBraL(), pk)
+      SubBraR()      -> MkStepTo(LStBraR(), sub_refl(b2))
+      SubBraRcov(pk) -> MkStepTo(LStBraR(), pk)
+    LStSelL() -> match sub
+      SubSel(a1, b1, pA, pB) -> MkStepTo(LStSelL(), pA)
+    LStSelR() -> match sub
+      SubSel(a1, b1, pA, pB) -> MkStepTo(LStSelR(), pB)
+    LStBraL() -> match sub
+      SubBra(a1, b1, pA, pB) -> MkStepTo(LStBraL(), pA)
+    LStBraR() -> match sub
+      SubBra(a1, b1, pA, pB) -> MkStepTo(LStBraR(), pB)
 end

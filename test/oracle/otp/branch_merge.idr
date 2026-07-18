@@ -465,3 +465,18 @@ config_deadlock_free (WFBA t w2) = CPStep (config_fidelity (WFBA t w2) GStMsg)
 config_deadlock_free (WFBC t w2) = CPStep (config_fidelity (WFBC t w2) GStMsg)
 config_deadlock_free (WFAC t w2) = CPStep (config_fidelity (WFAC t w2) GStMsg)
 config_deadlock_free (WFCho tL wL tR wR mg) = CPStep (config_fidelity (WFCho tL wL tR wR mg) GStChoL)
+
+data StepTo : Local -> Local -> Type where
+  MkStepTo : LStep a t -> Sub t b2 -> StepTo a b2
+
+sub_step_l : (b2 : Local) -> Sub a b -> LStep b b2 -> StepTo a b2
+sub_step_l b2 (SubSend t2 p) LStSend = MkStepTo LStSend p
+sub_step_l b2 (SubRecv t2 p) LStRecv = MkStepTo LStRecv p
+sub_step_l b2 SubBraL LStRecv = MkStepTo LStBraL (sub_refl b2)
+sub_step_l b2 (SubBraLcov pk) LStRecv = MkStepTo LStBraL pk
+sub_step_l b2 SubBraR LStRecv = MkStepTo LStBraR (sub_refl b2)
+sub_step_l b2 (SubBraRcov pk) LStRecv = MkStepTo LStBraR pk
+sub_step_l b2 (SubSel a1 b1 pA pB) LStSelL = MkStepTo LStSelL pA
+sub_step_l b2 (SubSel a1 b1 pA pB) LStSelR = MkStepTo LStSelR pB
+sub_step_l b2 (SubBra a1 b1 pA pB) LStBraL = MkStepTo LStBraL pA
+sub_step_l b2 (SubBra a1 b1 pA pB) LStBraR = MkStepTo LStBraR pB
