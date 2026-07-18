@@ -25,6 +25,7 @@
 - `lib/cure/elab/name.ex` — **modify.** Owns canonical-name spelling. Add the overload discriminator helpers (`overload_key/2`, `overload_member?/1`, `overload_base/1`). Central so registration, resolution, and emit share one convention.
 - `lib/cure/elab/resolution.ex` — **modify.** Add `overload_candidates/2` (gather all providers of a bare name, `prefer_direct` applied); generalize the three suffix matchers (`resolve_canonical_suffix`, `shadowed_origin`, `ambiguous_modules`) to also see `#name~<ord>` keys.
 - `lib/cure/elab/overload.ex` — **create.** The prune engine: given a gathered candidate list and inferred argument types, return `{:ok, winner_key}` | `{:no_matching_overload, …}` | `{:ambiguous_overload, …}`. Pure over `Env` + already-elaborated argument types; no side effects. Keeps `elaborator.ex` from growing another tangled cond arm.
+- `lib/cure/elab/type_conv.ex` — **create.** `Cure.Elab.TypeConv.convertible?/3`: the ONE shared telescope/type-convertibility check, a thin wrapper over the existing normal-form/unify facility (confirm which during Task 4). Both `check_overload_legality/1` (Task 4, `program.ex`) and `Cure.Elab.Overload.resolve/4` (Task 5, `overload.ex`) call this public function — neither defines its own private copy. Public and named identically everywhere it is referenced so the two tasks cannot drift into duplicate implementations.
 - `lib/cure/elab/declarations.ex` — **modify.** `function_signature/2` builds a discriminated bare name from an `:overload_ordinal` meta key so `Env.add_def`'s `owned_name` qualification yields `Mod#plus~0`.
 - `lib/cure/elab/program.ex` — **modify.** Relax `check_no_duplicate_defs`; add the ordinal-annotation pre-pass and the post-signature `check_overload_legality` (emits `:overlapping_overload`).
 - `lib/cure/elab/elaborator.ex` — **modify.** In `elaborate_named_call/5`, add the overload-dispatch clause that calls `Cure.Elab.Overload` and routes the winner through the existing `elaborate_global_app`.
@@ -38,6 +39,7 @@
 - `Cure.Elab.Name.overload_base(key :: atom) :: String.t` — the base with any `~<ord>` stripped: `:"Mod#plus~0"` → `"plus"`, `:"Mod#plus"` → `"plus"`.
 - `Cure.Elab.Resolution.overload_candidates(env, bare :: atom) :: [atom]` — every in-scope canonical def key providing `bare` (local + `prefer_direct` imports), including all members of an overload set. `[]` when unknown; `[key]` for a single provider; `[k0, k1, …]` for a set.
 - `Cure.Elab.Overload.resolve(env, bare :: atom, arg_types :: [Cure.Core.Term.t()], candidates :: [atom]) :: {:ok, atom} | {:error, {:no_matching_overload, atom, [term]}} | {:error, {:ambiguous_overload, atom, [String.t()]}}`.
+- `Cure.Elab.TypeConv.convertible?(env, t1 :: Cure.Core.Term.t(), t2 :: Cure.Core.Term.t()) :: boolean` — the ONE shared type-convertibility check; introduced in Task 4, consumed by both Task 4's `check_overload_legality/1` and Task 5's `Overload.resolve/4`.
 
 ---
 
@@ -166,7 +168,7 @@ defmodule Cure.Elab.ResolutionOverloadTest do
   # A minimal env with two overload members of `plus` owned by "M" and a single
   # `solo`, plus one import "M".
   defp env_with_overloads do
-    %{Env.new() | module_owner: "M", import_modules: MapSet.new(["M"])}
+    %{Env.empty() | module_owner: "M", import_modules: MapSet.new(["M"])}
     |> put_def(:"M#plus~0")
     |> put_def(:"M#plus~1")
     |> put_def(:"M#solo")
@@ -406,6 +408,8 @@ defp annotate_overload_ordinals(items), do: items
 
 Confirm the shape `items` has at this point (list of top-level decls for one module). If `elaborate_declarations` receives a wrapped container, annotate the inner decl list; match the existing `declarations/1` normalization already applied upstream. Only `:function_def` nodes are tagged, so wrapping is irrelevant to other node kinds.
 
+Safety precondition: grouping purely by bare `Keyword.fetch!(meta, :name)` is only sound because `items` can never contain two DIFFERENT sibling modules sharing a function name — `check_no_sibling_collision` (`program.ex:189`) rejects that combination before `elaborate_declarations` runs (both current call sites, `program.ex:370` and `:1518`, are reached through `check_ast/2`, which runs `check_declarations/1` — including `check_no_sibling_collision` — first). Do not call `annotate_overload_ordinals/1` from any new entry point that reaches `elaborate_declarations` without that precondition already having been checked.
+
 - [ ] **Step 3c: Consume the ordinal in `function_signature/2`**
 
 ```elixir
@@ -461,7 +465,23 @@ test "same-arity indistinguishable overloads are rejected as overlapping" do
 end
 ```
 
-Provide a small `elaborate_error/1` helper in the test that returns the raw error tuple (unwrapping the `{:codegen_error, …}` wrapper if `compile_and_load` is used) — assert on the inner tuple.
+Provide these two test helpers, defined once (module-level `defp` in `type_directed_overload_test.exs`) and reused verbatim by Tasks 5 and 6 below — do NOT redefine either name a second time in the same file, Elixir will reject the duplicate `defp`:
+
+```elixir
+# Strips the {:codegen_error, inner} wrapper Cure.Compiler.compile_and_load/2
+# adds around an elaboration error (see the existing pattern at
+# test/cure/project/compile_project_test.exs:179), so assertions can match
+# the same inner tuple regardless of which entry point produced the error.
+defp unwrap({:codegen_error, inner}), do: inner
+defp unwrap(other), do: other
+
+defp elaborate_error(src) do
+  {:error, err} = Cure.Elab.Program.elaborate(src)
+  {:error, unwrap(err)}
+end
+```
+
+`Cure.Elab.Program.elaborate/1` does not add a `:codegen_error` wrapper (`check_overload_legality/1`'s error propagates unwrapped through `check_ast/2`'s `with` chain), so `unwrap/1` is a no-op pass-through on this path — it exists to give `elaborate_error/1` (and the two helpers Tasks 5/6 add below) one consistent inner-tuple shape to assert on regardless of entry point.
 
 - [ ] **Step 2: Run it, verify it fails**
 
@@ -499,7 +519,7 @@ defp first_overlapping_pair(env, members) do
     with ta <- param_types(a.type),
          tb <- param_types(b.type),
          true <- length(ta) == length(tb),
-         true <- Enum.all?(Enum.zip(ta, tb), fn {x, y} -> telescopes_convertible?(env, x, y) end) do
+         true <- Enum.all?(Enum.zip(ta, tb), fn {x, y} -> Cure.Elab.TypeConv.convertible?(env, x, y) end) do
       {:halt, length(ta)}
     else
       _ -> {:cont, nil}
@@ -510,7 +530,9 @@ end
 defp pairs(list), do: for(i <- 0..(length(list) - 1), j <- (i + 1)..(length(list) - 1)//1, i < j, do: {Enum.at(list, i), Enum.at(list, j)})
 ```
 
-Implement `param_types/1` by walking the stored `:pi` telescope (`{:pi, _grade, domain, codomain}` → collect `domain`, recurse into `codomain`; stop at the non-`:pi` return) — mirror `typealias_parameter_count/1` in `declarations.ex:2125` for the walk shape. Implement `telescopes_convertible?/3` using the existing normal-form/conversion facility (confirm: `Cure.Core.Normalise.nf/2` + structural equality, or the elaborator's unify — pick the one already used for parameter-type comparison; do NOT add a kernel function). Erased/implicit leading binders auto-generated by `auto_generalize` are part of the telescope for both members equally, so they compare position-wise like any other.
+Implement `param_types/1` by walking the stored `:pi` telescope (`{:pi, _grade, domain, codomain}` → collect `domain`, recurse into `codomain`; stop at the non-`:pi` return) — collect *every* domain unconditionally, exactly as shown in the snippet above. Do NOT mirror `typealias_parameter_count/1` (`declarations.ex:2125`) for this: that function's walk is guarded on `{:type, _level}` domains only (it counts a typealias's own `Type`-kinded parameters) and would silently return `[]` for an ordinary value-typed telescope like `(a: Meters, b: Meters)` — the two functions solve different problems and must not share a shape.
+
+Implement the shared convertibility check as `Cure.Elab.TypeConv.convertible?/3` in the new `lib/cure/elab/type_conv.ex` (see File Structure) using the existing normal-form/conversion facility (confirm: `Cure.Core.Normalise.nf/2` + structural equality, or the elaborator's unify — pick the one already used for parameter-type comparison; do NOT add a kernel function). Make it a **public** function in its own module from the start, not a private `defp` inside `program.ex` — Task 5's `Cure.Elab.Overload.resolve/4` calls this exact same function, and a private helper in a different module cannot be reused, which would force Task 5 to duplicate the logic the plan says to share. Erased/implicit leading binders auto-generated by `auto_generalize` are part of the telescope for both members equally, so they compare position-wise like any other.
 
 - [ ] **Step 4a: Run the overlap test, verify it passes**
 
@@ -640,28 +662,30 @@ defmodule Cure.Elab.Overload do
     Enum.all?(Enum.zip(ptypes, atypes), fn {p, a} -> types_unify?(env, p, a) end)
   end
 
-  # Walk the stored Pi telescope to its parameter domains (mirror
-  # typealias_parameter_count/1's shape).
+  # Walk the stored Pi telescope to its parameter domains: collect every
+  # domain unconditionally (do NOT reuse typealias_parameter_count/1's
+  # {:type, _level}-guarded shape — see Task 4's note; that guard would drop
+  # ordinary value-typed domains like Meters/Grams).
   defp param_types({:pi, _grade, domain, codomain}), do: [domain | param_types(codomain)]
   defp param_types(_return), do: []
 
   defp owners(keys), do: keys |> Enum.map(&Cure.Elab.Name.owner/1) |> Enum.uniq()
 
   # First-order unification of an argument's inferred type against a parameter
-  # type. Reuse the elaborator's existing convertibility facility (confirm the
-  # exact entry during implementation — the same one Task 4 uses); do NOT add a
-  # kernel function.
+  # type. Calls the SAME shared facility Task 4 uses (Cure.Elab.TypeConv,
+  # lib/cure/elab/type_conv.ex) rather than a local copy; do NOT add a kernel
+  # function.
   defp types_unify?(env, param_type, arg_type) do
-    Cure.Elab.Overload.Conv.convertible?(env, param_type, arg_type)
+    Cure.Elab.TypeConv.convertible?(env, param_type, arg_type)
   end
 end
 ```
 
-Implement `Cure.Elab.Overload.Conv.convertible?/3` as a thin wrapper over whichever normal-form/unify facility Task 4 settled on (share one helper module between Task 4 and Task 5 rather than duplicating — e.g. put `convertible?/3` in a small `Cure.Elab.TypeConv` module and have both call it). Note the erased-leading-implicit subtlety: `param_types/1` yields *every* Pi domain including auto-generalized `{a : Type}` implicits, but the inferred `arg_types` correspond only to the *explicit* arguments. Align them: drop leading erased/implicit domains from `param_types` (quantity 0) before zipping, OR compare only the trailing `length(arg_types)` domains. Confirm which by inspecting a stored `sig.pi` for a function with an auto-generalized implicit; the pin's `plus(a: Meters, b: Meters)` has no free type variable so no implicit is inserted (both domains are explicit `Meters`), but the no-match/cross-module cases must still align correctly. Add a test asserting resolution works for a member with a leading implicit if the stdlib fixture needs it.
+`Cure.Elab.TypeConv.convertible?/3` is implemented once, in Task 4, as a public function (see Task 4 Step 3 and File Structure) — Task 5 only calls it, it does not reimplement or wrap it under a different name. Note the erased-leading-implicit subtlety: `param_types/1` yields *every* Pi domain including auto-generalized `{a : Type}` implicits, but the inferred `arg_types` correspond only to the *explicit* arguments. Align them: drop leading erased/implicit domains from `param_types` (quantity 0) before zipping, OR compare only the trailing `length(arg_types)` domains. Confirm which by inspecting a stored `sig.pi` for a function with an auto-generalized implicit; the pin's `plus(a: Meters, b: Meters)` has no free type variable so no implicit is inserted (both domains are explicit `Meters`), but the no-match/cross-module cases must still align correctly. Add a test asserting resolution works for a member with a leading implicit if the stdlib fixture needs it.
 
 - [ ] **Step 3b: Wire the clause into `elaborate_named_call/5`**
 
-Insert after the `constrained?`/`reflexive`/ctor special cases and before the generic global paths (around `elaborator.ex:299`, ahead of the `String.contains?(name, ".")` global clause and the `ambiguous_modules >= 2` clause):
+Insert as a new `cond` branch immediately before the `ambiguous_modules >= 2` clause (currently `elaborator.ex:305`) — i.e. after the ctor clause (`:239`) AND after the dot-qualified-global clause's entire body ends (that clause starts at `:271` and its `with`/`case`/retry body runs through `:304`; do not insert inside it — `elaborator.ex:299` sits mid-body of that clause, not between clauses, and is the wrong anchor). The new clause's own guard already excludes dotted names (`not String.contains?(name, ".")`), so it is mutually exclusive with the dot-qualified clause regardless of exact position; the hard requirement is only that it precedes `ambiguous_modules >= 2` and everything after it:
 
 ```elixir
 # An applied call to a bare overloaded name (a set of >= 2 members): infer the
@@ -703,6 +727,16 @@ test "no overload matches the argument types" do
 end
 ```
 
+Add the helper this test calls (reuses `unwrap/1` from Task 4; do not redefine `unwrap/1` here):
+
+```elixir
+defp compile_and_load_error(src) do
+  Cure.Compiler.compile_and_load(src, emit_events: false)
+end
+```
+
+This is intentionally a thin, same-shape pass-through (`compile_and_load/2` already returns `{:error, {:codegen_error, inner}}` on failure, per the existing pattern at `test/cure/project/compile_project_test.exs:179`) — its purpose is a stable, greppable name paired with `unwrap/1`, not new logic.
+
 (An ambiguous integration case is exercised in Task 6 across modules, where two direct imports both provide a matching `plus`; a same-module set cannot be ambiguous by type since Task 4 rejects same-arity indistinguishable members at declaration. Keep the ambiguous assertion in Task 6.)
 
 - [ ] **Step 4: Run the pin + unit + no-match**
@@ -732,7 +766,7 @@ The cross-module case proves the parent spec's motivation: two `use`d modules ea
 
 - [ ] **Step 1: Write the failing cross-module test**
 
-Follow the multi-file-fixture pattern from `test/cure/project/compile_project_test.exs` (write modules to a temp dir) combined with the `stdlib_source_dir`-override reachability pattern from `test/cure/elab/cross_module_coherence_test.exs`. Read both first to copy their exact fixture-writing and compile-invocation calls. Structure:
+Follow the multi-file-fixture pattern already proven in `test/cure/project/multi_file_link_test.exs`: write `.cure` files under a temp `src/` dir plus a minimal `Cure.toml`, then `Cure.Project.load(dir)` followed by `Cure.Project.compile_project(project, output_dir: ebin, check_types: false)`, which returns `{:ok, %{modules: [atom(), ...]}}` and writes one `.beam` per module under `output_dir`. Do NOT model this on `test/cure/project/compile_project_test.exs` or `test/cure/elab/cross_module_coherence_test.exs`: the former's `compile_project/2` tests only assert `.app`/`.beam` file *existence* and never load or run the compiled code, and the latter's `stdlib_source_dir` override is for `use Std.X` stdlib resolution, an unrelated concern — neither demonstrates the load-and-invoke step this task needs. Read `multi_file_link_test.exs` first to copy its exact fixture-writing and `compile_project` invocation. Structure:
 
 ```elixir
 test "an unqualified call resolves across two used modules by argument type" do
@@ -766,7 +800,22 @@ test "an unqualified call resolves across two used modules by argument type" do
 end
 ```
 
-Implement `compile_multi/2` using the harness the two referenced tests already use (do not invent a new one). If the project's multi-file entry returns beams rather than a loaded module, load them and return the start module — mirror `run-on-unix.sh`'s Cure.<Mod> convention noted in the pin.
+No existing test loads a `compile_project`-produced `.beam` and invokes it (confirmed: no test in the suite calls `Code.load_file`/`:code.load_binary`/`:code.load_file` on a project-compiled module) — `compile_multi/2` must add that step itself, it is not reusable off the shelf:
+
+```elixir
+defp compile_multi(files, start_module) do
+  # ... write `files` under tmp/src, write a minimal Cure.toml, then:
+  with {:ok, project} <- Cure.Project.load(tmp),
+       {:ok, %{modules: modules}} <-
+         Cure.Project.compile_project(project, output_dir: ebin, check_types: false) do
+    Code.prepend_path(ebin)
+    Enum.each(modules, fn m -> {:module, ^m} = :code.load_file(m) end)
+    {:ok, String.to_existing_atom(start_module)}
+  end
+end
+```
+
+`start_module` is the `Cure.<ModName>` atom (mirrors `run-on-unix.sh`'s convention noted in the pin) — e.g. `"Cure.OvlXConsumer"`.
 
 - [ ] **Step 2: Run it, verify it fails** (before any fix) — expected FAIL, most likely `{:ambiguous_name, :to_int, …}` (the pre-overload ambiguity path fires) or `:no_matching_overload` if gather/ordering is off.
 
@@ -793,10 +842,35 @@ test "genuinely ambiguous cross-module overloads report :ambiguous_overload" do
 end
 
 test "qualifying resolves the ambiguity (escape hatch)" do
-  # Same modules, but OvlAmbA.foo(1) is unambiguous.
-  # ... assert {:ok, _} and runtime == 1 ...
+  # Same modules as the ambiguous case above, but a dot-qualified call names
+  # the provider directly (OvlAmbA.foo(1)), routed through the existing
+  # dot-qualified-global clause (elaborator.ex:271, Resolution.resolve_qualified/3)
+  # rather than the overload clause — bypasses the ambiguity entirely.
+  files = %{
+    "a.cure" => "mod OvlAmbA\n  fn foo(x: Int) -> Int = 1\nend\n",
+    "b.cure" => "mod OvlAmbB\n  fn foo(x: Int) -> Int = 2\nend\n",
+    "main.cure" => """
+    mod OvlAmbD
+      use OvlAmbA
+      use OvlAmbB
+      fn pick() -> Int = OvlAmbA.foo(1)
+    end
+    """
+  }
+  assert {:ok, mod} = compile_multi(files, "Cure.OvlAmbD")
+  assert apply(mod, :pick, []) == 1
 end
 ```
+
+Add the helper the first test above calls (reuses `unwrap/1` from Task 4; do not redefine `unwrap/1` here). `compile_multi/2`'s `with` chain (Step 1 above) short-circuits and returns `Cure.Project.compile_project/2`'s `{:error, reason}` unchanged when a module fails to elaborate, without ever evaluating `start_module`, so passing a placeholder start-module string here is safe:
+
+```elixir
+defp compile_multi_error(files) do
+  {:error, _} = compile_multi(files, "unused")
+end
+```
+
+Confirm empirically (Step 2 below) what `reason` actually is for a per-module elaboration failure inside `compile_project/2` — it may already be `{:codegen_error, {:ambiguous_overload, ...}}` (matching `unwrap/1`'s existing clause) or a differently-tagged wrapper (e.g. `{:module_compile_failed, mod, {:codegen_error, ...}}}`). If it is a shape `unwrap/1` does not already handle, add one more `unwrap/1` clause for it (still in Task 4's single definition site) rather than special-casing here.
 
 - [ ] **Step 4: Run cross-module cases, verify pass**
 
@@ -865,4 +939,4 @@ git commit -m "test(elab): overload inertness guard + oracle probe"
 
 **Placeholder scan:** the confirm-during-implementation notes (exact `map_present_args` return shape; the convertibility facility; the multi-file harness; whether `elaborate_declarations` sees a wrapped list; the body pass's key derivation) are explicit verification steps against named code, not TBDs — each names the file/function to read and the fallback. Acceptable for a plan whose executor reads the tree; the Stage 3 review will tighten any that resolve to a concrete choice.
 
-**Type consistency:** `overload_key/2`, `overload_member?/1`, `overload_base/1`, `overload_candidates/2`, `Overload.resolve/4` used with identical signatures across tasks. Error tuples consistent: `{:overlapping_overload, name, arity}`, `{:no_matching_overload, name, arg_types}`, `{:ambiguous_overload, name, owners}` in both spec §6 and Tasks 4/5/6.
+**Type consistency:** `overload_key/2`, `overload_member?/1`, `overload_base/1`, `overload_candidates/2`, `Overload.resolve/4`, `Cure.Elab.TypeConv.convertible?/3` used with identical signatures and identical module names across tasks (Task 4 defines `TypeConv.convertible?/3` once, public; Task 5 calls the same function, no second name or local copy). Error tuples consistent: `{:overlapping_overload, name, arity}`, `{:no_matching_overload, name, arg_types}`, `{:ambiguous_overload, name, owners}` in both spec §6 and Tasks 4/5/6.
