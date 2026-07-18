@@ -1886,6 +1886,12 @@ defmodule Cure.Elab.Declarations do
 
   # A refinement is an ordinary dependent pair in Core: the value and a proof of
   # the proposition about that value. Solvers receive no trusted representation.
+  #
+  # Surface sugar (§3a level 1): the refinement bar takes the bare boolean
+  # condition and reflects it, like Liquid Haskell / F* / Lean. A comparison or
+  # boolean-connective clause has type `Bool`, so it is wrapped in `IsTrue(φ)`
+  # before lowering — producing the same Σ as an explicit `IsTrue(φ)` clause. A
+  # `Type`-valued clause (a named predicate / proposition) is left unchanged.
   defp idx_to_core(
          {:refinement_type, [binder: bname], [dom_ast, proposition_ast]},
          scope,
@@ -1894,7 +1900,8 @@ defmodule Cure.Elab.Declarations do
          _ctx
        ) do
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
-         {:ok, proposition} <- idx_to_core(proposition_ast, [bname | scope], fam, env) do
+         {:ok, proposition} <-
+           idx_to_core(reflect_boolean_proposition(proposition_ast), [bname | scope], fam, env) do
       {:ok,
        {:data, sigma_family_name(env),
         [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, proposition}], []}}
@@ -1988,7 +1995,72 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
+  # A comparison / boolean-connective PROPOSITION in an index position — the `n > 0`
+  # inside `IsTrue(n > 0)` (decidable-boolean reflection, spec 2026-07-18). The parser
+  # reparses such a type-application argument with the expression parser, so it arrives
+  # as an expression `{:binary_op, ...}` with `{:literal, ...}` operands rather than a
+  # type atom. We lower it to the SAME builtin-op spine the term elaborator's
+  # `build_binop` produces for Int/Bool operands — `Std.Builtin#int_gt` etc., or the
+  # bare `and`/`or` connective globals — so a closed comparison folds to `Std.Bool#True`
+  # by pure computation and `Confirmed : IsTrue(True())` inhabits it. Reflection over
+  # `Int` is the design's scope; Float propositions are a documented non-goal and lower
+  # to the int_* op, which simply will not fold on `{:vfloat, _}` (no discharge, never
+  # unsound). Operands recurse through `idx_to_core`, so nested connectives compose.
+  defp idx_to_core({:binary_op, meta, [l_ast, r_ast]}, scope, fam, env, ctx) do
+    op = Keyword.fetch!(meta, :operator)
+
+    with {:ok, global} <- index_binop_global(op),
+         {:ok, l} <- idx_to_core(l_ast, scope, fam, env, ctx),
+         {:ok, r} <- idx_to_core(r_ast, scope, fam, env, ctx) do
+      {:ok, {:app, {:app, {:global, global}, l}, r}}
+    end
+  end
+
+  # An expression-parsed numeric literal reaching an index position — only produced by
+  # the propositional reparse above (ordinary type-position numerals arrive as stringified
+  # NAME nodes handled by the `{:variable, ...}` clause). An integer operand of an Int
+  # comparison must be a real `{:int_lit, _}` so the kernel's `int_*` fold fires; a Nat
+  # literal (`{:nat_lit, _}`, `{:vnat, _}`) would leave the spine stuck.
+  defp idx_to_core({:literal, meta, value}, _scope, _fam, _env, _ctx) do
+    case Keyword.get(meta, :subtype) do
+      :integer -> {:ok, {:int_lit, value}}
+      :float -> {:ok, {:float_lit, value}}
+      other -> {:error, {:unsupported_index_literal, other}}
+    end
+  end
+
   defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
+
+  # Operator symbol → the Core global its index-position lowering applies. Comparisons map
+  # to the Int builtin op (registered as `Std.Builtin#int_*`, folding via `Eval.fold`);
+  # the boolean connectives map to the bare `and`/`or` connective globals, exactly as the
+  # term elaborator's `build_binop` emits them.
+  defp index_binop_global(:<), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_lt)}
+  defp index_binop_global(:<=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_le)}
+  defp index_binop_global(:>), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_gt)}
+  defp index_binop_global(:>=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ge)}
+  defp index_binop_global(:==), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_eq)}
+  defp index_binop_global(:!=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ne)}
+  defp index_binop_global(:and), do: {:ok, :and}
+  defp index_binop_global(:or), do: {:ok, :or}
+  defp index_binop_global(op), do: {:error, {:unsupported_index_operator, op}}
+
+  # Wrap a `Bool`-typed refinement clause in `IsTrue(·)` (§3a level 1). Only
+  # comparison and boolean-connective operators reflect (they produce `Bool`);
+  # every other clause — a `Type`-valued predicate application, an already-explicit
+  # `IsTrue(…)`, or an arithmetic misuse that should be rejected as ill-sorted —
+  # passes through untouched. The wrapper node is exactly what the parser yields
+  # for an explicit `IsTrue(φ)`, so lowering (and `IsTrue` name resolution) is
+  # shared verbatim.
+  defp reflect_boolean_proposition({:binary_op, meta, _} = prop) do
+    if Keyword.get(meta, :category) in [:comparison, :boolean] do
+      {:function_call, [name: "IsTrue"], [prop]}
+    else
+      prop
+    end
+  end
+
+  defp reflect_boolean_proposition(prop), do: prop
 
   # Surface `Effect(T)` lowers to the kernel's inert effect type former
   # `{:effect_type, ⟦T⟧}` (design 2026-07-09-effect-type-former §3). `Effect` is a
