@@ -61,6 +61,42 @@ Three layers plus two coercions:
   the three new probes `refine03`/`refine04`/`refine05`, all `rel=same`, both
   Cure and Idris `accept`.
 
+## Follow-up: OPEN-refinement discharge wired into proof search (`0d1e2f17`)
+
+After the report above, one gap remained: closed refinement obligations
+discharged via `reflection_proof` (nullary `Confirmed()`), but **open**
+obligations — whose truth depends on a free binder — were not routed to the
+auto-lemma proof search. Commit `0d1e2f17` closes that:
+
+- `try_discharge_refinement/5` now falls through to `discharge_obligation/3`,
+  which tries `reflection_proof` first, then `ProofSearch.resolve/3` for the
+  open case. Every candidate stays kernel-rechecked — no new trust.
+- A **tuple-exclusion guard** (`tuple_telescope_type?/4`, a transitive-closure
+  Unit-terminator probe) keeps unified-tuple `Sigma` telescopes from being
+  mistaken for genuine refinements, so Optic/actor code is untouched.
+- `elaborate_body`'s refinement-return routing is **infer-first**: a body that
+  already infers to a refinement value (`refine(v, pf)`) is kept verbatim; only
+  a base-valued body is re-checked against the refinement goal for discharge.
+  This fixed a differential-golden regression where a hand-written reference's
+  implicit value-args had begun elaborating to `sigma_first` instead of
+  `refined_value`. The discriminator uses value-safe `whnf_value` inspection
+  (`inferred_refinement_value?/3`), never `Kernel.normalize` on a semantic value.
+- `and`/`or` binop globals now qualify to `Std.Bool#and` / `Std.Bool#or`.
+- `Std.Proof.Math.successor_is_positive` carries the `@lemma` tag so the
+  positivity family is reachable by search.
+- Test sweep: `refinement_usecase_matrix_test.exs` (5 use-case tests) and
+  `refinement_proofsearch_discharge_test.exs` (2 tests).
+
+Elaborator-only (E-layer); no `lib/cure/core/*` (TCB) edit.
+
+### Refreshed final gate (run once, serially, after `0d1e2f17`)
+
+- **Full suite** (`mix test --include slow`): **4813 passed, 1 skipped, 0
+  failures**.
+- **Antigen** (`mix antigen`): shape-coverage **318/318 cells**, 138 immune
+  responses (expected), mutant survivors = 0.
+- **Oracle replay** (`test/oracle_replay_test.exs`): **81 passed**.
+
 ## Notes
 
 - refine03/04 pin both connective operands explicitly on *both* sides (Cure
