@@ -54,3 +54,15 @@ mutual
   brasub_trans ab BraSubNil = BraSubNil
   brasub_trans ab (BraSubCons t lk_bc sub_bc rest_bc) = case brasub_lookup ab lk_bc of
     MkLookSub lk_ac sub_ab => BraSubCons t lk_ac (sub_trans sub_ab sub_bc) (brasub_trans ab rest_bc)
+
+data LStep : Local -> Local -> Type where
+  LStRecv : LStep (LRecv t k) k
+  LStBra : Lookup bs t k -> LStep (LBra bs) k
+
+data StepTo : Local -> Local -> Type where
+  MkStepTo : LStep a t -> Sub t b2 -> StepTo a b2
+
+sub_step_l : Sub a b -> LStep b b2 -> StepTo a b2
+sub_step_l (SubRecv t p) LStRecv = MkStepTo LStRecv p
+sub_step_l (SubBra bsub) (LStBra lk) = case brasub_lookup bsub lk of
+  MkLookSub lk_a sub_a => MkStepTo (LStBra lk_a) sub_a

@@ -66,4 +66,23 @@ mod NarySub
     BraSubNil()                    -> BraSubNil()
     BraSubCons(t, lk_bc, sub_bc, rest_bc) -> match brasub_lookup(ab, lk_bc)
       MkLookSub(lk_ac, sub_ab) -> BraSubCons(t, lk_ac, sub_trans(sub_ab, sub_bc), brasub_trans(ab, rest_bc))
+
+  ## LOCAL REDUCTION for the n-ary fragment: a receive consumes its message; an external choice
+  ## (LBra) fires when the environment sends one of its offered labels (Lookup picks the branch).
+  type LStep indices (l: Local, l2: Local)
+    LStRecv : LStep(LRecv(t, k), k)
+    LStBra  : Lookup(bs, t, k) -> LStep(LBra(bs), k)
+  type StepTo indices (a: Local, b2: Local)
+    MkStepTo : LStep(a, t) -> Sub(t, b2) -> StepTo(a, b2)
+  ## **N-ARY SUBTYPING SIMULATES LOCAL REDUCTION** (operational soundness of the preorder): if `a <: b`
+  ## and the spec side `b` takes a local step to `b2`, the implementation `a` takes a MATCHING step to
+  ## some `t` with `t <: b2`. The choice case is the payoff: when the spec external-choice receives a
+  ## label and continues, the subtype — which offers MORE labels — receives that SAME label (transported
+  ## by brasub_lookup) into a subtype continuation. So a process offering more inputs safely follows.
+  fn sub_step_l({a: Local}, {b: Local}, {b2: Local}, sub: Sub(a, b), st: LStep(b, b2)) -> StepTo(a, b2) = match st
+    LStRecv()  -> match sub
+      SubRecv(t, p) -> MkStepTo(LStRecv(), p)
+    LStBra(lk) -> match sub
+      SubBra(bsub) -> match brasub_lookup(bsub, lk)
+        MkLookSub(lk_a, sub_a) -> MkStepTo(LStBra(lk_a), sub_a)
 end
