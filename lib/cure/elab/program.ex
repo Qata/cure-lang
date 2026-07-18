@@ -335,26 +335,19 @@ defmodule Cure.Elab.Program do
     end)
   end
 
-  # A module must not bind the same top-level function name twice: `Env.add_def`
-  # is a silent `Map.put` overwrite, so a duplicate would let a program typecheck
-  # against one body and run another. Every real dependent language rejects this.
-  # Separate signatures parse as `:type_annotation` (not `:function_def`), so
-  # counting `:function_def` names has no sig+body false positives.
+  # Same-name top-level function defs are NO LONGER rejected here. A type-distinct
+  # pair (`plus(Meters,Meters)` and `plus(Grams,Grams)`) is a legal overload set,
+  # and telling a genuine duplicate from a set requires the elaborated parameter
+  # telescopes, which do not exist at this pre-elaboration gate. The overwrite
+  # this check used to guard is prevented instead by registering each member under
+  # a discriminated key (`Mod#plus~0`/`Mod#plus~1`, see `annotate_overload_ordinals/1`
+  # + `Cure.Elab.Name.overload_key/2`), and an accidental same-signature duplicate
+  # is rejected precisely by `check_overload_legality/1` after the register pass.
+  # (This function only ever inspected `:function_def` names, so relaxing it fully
+  # is exactly "stop rejecting same-name function defs"; the `:duplicate_type` and
+  # `:duplicate_constructor` gates are unaffected.)
   @spec check_no_duplicate_defs(tuple() | list()) :: :ok | {:error, term()}
-  defp check_no_duplicate_defs(ast) do
-    extract = fn
-      {:function_def, meta, _body} ->
-        case Keyword.get(meta, :name) do
-          name when is_binary(name) -> [name]
-          _ -> []
-        end
-
-      _ ->
-        []
-    end
-
-    first_dup_per_module(ast, extract, :duplicate_definition, &String.to_atom/1)
-  end
+  defp check_no_duplicate_defs(_ast), do: :ok
 
   @doc false
   @spec check_ast_elixir_core(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
@@ -1911,6 +1904,8 @@ defmodule Cure.Elab.Program do
   # environment. Non-function declarations are elaborated in source order in pass
   # one (a function signature may reference any type declared before it).
   defp elaborate_declarations(items, env, prelude?) do
+    items = annotate_overload_ordinals(items)
+
     with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?),
          {:ok, alias_order} <- typealias_order(items, env1),
          {:ok, env_completed} <- complete_typealiases(alias_order, items, env1),
@@ -1928,6 +1923,48 @@ defmodule Cure.Elab.Program do
       {:ok, TotalityClosure.certify_deferred(env2)}
     end
   end
+
+  # Tag each `:function_def` that shares its bare name with a sibling (same-name
+  # group of size >= 2) with its declaration-order ordinal within that group, so
+  # `function_signature/2` registers it under a discriminated key. Size-one names
+  # are left untouched, keeping non-overloaded code byte-identical.
+  #
+  # Grouping purely by bare `:name` is sound here because `items` can never hold
+  # two DIFFERENT sibling modules that share a function name: `check_no_sibling_collision/1`
+  # (run inside `check_declarations/1`, ahead of every path that reaches
+  # `elaborate_declarations/3`) rejects that combination first. Do not call this
+  # from a new entry point that bypasses that precondition.
+  defp annotate_overload_ordinals(items) when is_list(items) do
+    names =
+      Enum.flat_map(items, fn
+        {:function_def, meta, _} when is_list(meta) -> [Keyword.fetch!(meta, :name)]
+        _ -> []
+      end)
+
+    overloaded = for {n, c} <- Enum.frequencies(names), c >= 2, into: MapSet.new(), do: n
+
+    {tagged, _counters} =
+      Enum.map_reduce(items, %{}, fn
+        {:function_def, meta, body} = decl, counters when is_list(meta) ->
+          name = Keyword.fetch!(meta, :name)
+
+          if MapSet.member?(overloaded, name) do
+            ord = Map.get(counters, name, 0)
+
+            {{:function_def, Keyword.put(meta, :overload_ordinal, ord), body},
+             Map.put(counters, name, ord + 1)}
+          else
+            {decl, counters}
+          end
+
+        other, counters ->
+          {other, counters}
+      end)
+
+    tagged
+  end
+
+  defp annotate_overload_ordinals(items), do: items
 
   # Transparent aliases are ordinary Core definitions, so a forward chain is
   # harmless once every body is present. A cycle is different: it can never be

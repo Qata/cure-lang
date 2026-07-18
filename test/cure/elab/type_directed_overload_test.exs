@@ -60,4 +60,22 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     assert apply(mod, :add_m, []) == 7
     assert apply(mod, :add_g, []) == 30
   end
+
+  # Task 3 — registration probe. Two type-distinct `plus` members must both
+  # register under discriminated keys (no silent overwrite, no
+  # duplicate_definition). No overloaded CALL appears here: pruning an applied
+  # overloaded call arrives with Task 5; this test asserts only that the surface
+  # can now EXPRESS the set.
+  test "two same-name defs both register (no silent overwrite)" do
+    src = """
+    mod OverloadReg
+      type Meters = MkM(Int)
+      type Grams = MkG(Int)
+      fn plus(a: Meters, b: Meters) -> Meters = a
+      fn plus(a: Grams, b: Grams) -> Grams = a
+    end
+    """
+
+    assert {:ok, _env} = Cure.Elab.Program.elaborate(src)
+  end
 end
