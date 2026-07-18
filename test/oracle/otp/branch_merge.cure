@@ -435,4 +435,44 @@ mod BranchMerge
       CoCho(tL, wL, tR, wR) -> wR
   fn duality_preserved({g: Global}, {g2: Global}, w: Coherent(g), st: GStep(g, g2)) -> Equivalent(Local, project(g2, RA()), dual(project(g2, RB()))) =
     choice_duality(cstep_preserves(w, st))
+
+  type LStep indices (l: Local, l2: Local)
+    LStSend : LStep(LSend(t, k), k)
+    LStRecv : LStep(LRecv(t, k), k)
+    LStSelL : LStep(LSel(tL, kL, tR, kR), kL)
+    LStBraL : LStep(LBra(tL, kL, tR, kR), kL)
+  fn proj_sender_steps(fr: Role, to: Role, t: Tag, k: Global) -> LStep(project(GMsg(fr, to, t, k), fr), project(k, fr)) = match fr
+    RA() -> LStSend()
+    RB() -> LStSend()
+    RC() -> LStSend()
+  fn proj_chooser_steps(fr: Role, to: Role, tL: Tag, gL: Global, tR: Tag, gR: Global) -> LStep(project(GCho(fr, to, tL, gL, tR, gR), fr), project(gL, fr)) = match fr
+    RA() -> LStSelL()
+    RB() -> LStSelL()
+    RC() -> LStSelL()
+  fn proj_receiver_steps(fr: Role, to: Role, t: Tag, k: Global, neq: Equivalent(TB2, role_eq(fr, to), F())) -> LStep(project(GMsg(fr, to, t, k), to), project(k, to)) = match fr
+    RA() -> match to
+      RA() -> match neq
+      RB() -> LStRecv()
+      RC() -> LStRecv()
+    RB() -> match to
+      RA() -> LStRecv()
+      RB() -> match neq
+      RC() -> LStRecv()
+    RC() -> match to
+      RA() -> LStRecv()
+      RB() -> LStRecv()
+      RC() -> match neq
+  fn proj_offerer_steps(fr: Role, to: Role, tL: Tag, gL: Global, tR: Tag, gR: Global, neq: Equivalent(TB2, role_eq(fr, to), F())) -> LStep(project(GCho(fr, to, tL, gL, tR, gR), to), project(gL, to)) = match fr
+    RA() -> match to
+      RA() -> match neq
+      RB() -> LStBraL()
+      RC() -> LStBraL()
+    RB() -> match to
+      RA() -> LStBraL()
+      RB() -> match neq
+      RC() -> LStBraL()
+    RC() -> match to
+      RA() -> LStBraL()
+      RB() -> LStBraL()
+      RC() -> match neq
 end

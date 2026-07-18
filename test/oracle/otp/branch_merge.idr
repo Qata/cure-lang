@@ -365,3 +365,41 @@ cstep_preserves (CoCho tL wL tR wR) GStChoR = wR
 
 duality_preserved : Coherent g -> GStep g g2 -> project g2 RA = dual (project g2 RB)
 duality_preserved w st = choice_duality (cstep_preserves w st)
+
+data LStep : Local -> Local -> Type where
+  LStSend : LStep (LSend t k) k
+  LStRecv : LStep (LRecv t k) k
+  LStSelL : LStep (LSel tL kL tR kR) kL
+  LStBraL : LStep (LBra tL kL tR kR) kL
+
+proj_sender_steps : (fr : Role) -> (to : Role) -> (t : Tag) -> (k : Global) -> LStep (project (GMsg fr to t k) fr) (project k fr)
+proj_sender_steps RA to t k = LStSend
+proj_sender_steps RB to t k = LStSend
+proj_sender_steps RC to t k = LStSend
+
+proj_chooser_steps : (fr : Role) -> (to : Role) -> (tL : Tag) -> (gL : Global) -> (tR : Tag) -> (gR : Global) -> LStep (project (GCho fr to tL gL tR gR) fr) (project gL fr)
+proj_chooser_steps RA to tL gL tR gR = LStSelL
+proj_chooser_steps RB to tL gL tR gR = LStSelL
+proj_chooser_steps RC to tL gL tR gR = LStSelL
+
+proj_receiver_steps : (fr : Role) -> (to : Role) -> (t : Tag) -> (k : Global) -> role_eq fr to = F -> LStep (project (GMsg fr to t k) to) (project k to)
+proj_receiver_steps RA RA t k Refl impossible
+proj_receiver_steps RA RB t k neq = LStRecv
+proj_receiver_steps RA RC t k neq = LStRecv
+proj_receiver_steps RB RA t k neq = LStRecv
+proj_receiver_steps RB RB t k Refl impossible
+proj_receiver_steps RB RC t k neq = LStRecv
+proj_receiver_steps RC RA t k neq = LStRecv
+proj_receiver_steps RC RB t k neq = LStRecv
+proj_receiver_steps RC RC t k Refl impossible
+
+proj_offerer_steps : (fr : Role) -> (to : Role) -> (tL : Tag) -> (gL : Global) -> (tR : Tag) -> (gR : Global) -> role_eq fr to = F -> LStep (project (GCho fr to tL gL tR gR) to) (project gL to)
+proj_offerer_steps RA RA tL gL tR gR Refl impossible
+proj_offerer_steps RA RB tL gL tR gR neq = LStBraL
+proj_offerer_steps RA RC tL gL tR gR neq = LStBraL
+proj_offerer_steps RB RA tL gL tR gR neq = LStBraL
+proj_offerer_steps RB RB tL gL tR gR Refl impossible
+proj_offerer_steps RB RC tL gL tR gR neq = LStBraL
+proj_offerer_steps RC RA tL gL tR gR neq = LStBraL
+proj_offerer_steps RC RB tL gL tR gR neq = LStBraL
+proj_offerer_steps RC RC tL gL tR gR Refl impossible
