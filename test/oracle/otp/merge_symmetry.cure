@@ -1,0 +1,164 @@
+mod MergeSymmetry
+  use Std.Equivalent
+  ## MERGEABILITY IS ORDER-INDEPENDENT. The branch-merge OUTPUT is branch-order-sensitive (merge of two
+  ## differing receives is LBra(a,k1,b,k2), whose branch order flips when the operands swap — so merge is
+  ## NOT syntactically commutative). But MERGEABILITY — whether two bystander branch-behaviours combine at
+  ## all — does not depend on order: mergeable_sym proves Mergeable(x,y) => Mergeable(y,x), and its
+  ## corollary merge_defined_sym that the merge in EITHER order is well-defined. So a bystander's
+  ## projectability at a choice is symmetric: it doesn't matter which branch you consider first.
+  type TB2 = F | T
+  type Tag = TA | TB | TC
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LSel(Tag, Local, Tag, Local) | LBra(Tag, Local, Tag, Local) | LErr
+  fn tag_eq(x: Tag, y: Tag) -> TB2 = match x
+    TA() -> match y
+      TA() -> T()
+      TB() -> F()
+      TC() -> F()
+    TB() -> match y
+      TA() -> F()
+      TB() -> T()
+      TC() -> F()
+    TC() -> match y
+      TA() -> F()
+      TB() -> F()
+      TC() -> T()
+  ## tag equality is SYMMETRIC (needed to flip the differing-receive witness).
+  fn tag_eq_sym(a: Tag, b: Tag) -> Equivalent(TB2, tag_eq(a, b), tag_eq(b, a)) = match a
+    TA() -> match b
+      TA() -> reflexive(T())
+      TB() -> reflexive(F())
+      TC() -> reflexive(F())
+    TB() -> match b
+      TA() -> reflexive(F())
+      TB() -> reflexive(T())
+      TC() -> reflexive(F())
+    TC() -> match b
+      TA() -> reflexive(F())
+      TB() -> reflexive(F())
+      TC() -> reflexive(T())
+  fn is_err(l: Local) -> TB2 = match l
+    LEnd()          -> F()
+    LSend(t, k)     -> F()
+    LRecv(t, k)     -> F()
+    LSel(a, A, b, B) -> F()
+    LBra(a, A, b, B) -> F()
+    LErr()          -> T()
+  fn merge(x: Local, y: Local) -> Local = match x
+    LEnd() -> match y
+      LEnd()             -> LEnd()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LSend(t1, k1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> match tag_eq(t1, t2)
+        T() -> LSend(t1, merge(k1, k2))
+        F() -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LRecv(t1, k1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> match tag_eq(t1, t2)
+        T() -> LRecv(t1, merge(k1, k2))
+        F() -> LBra(t1, k1, t2, k2)
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LSel(a1, A1, b1, B1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> match tag_eq(a1, a2)
+        T() -> match tag_eq(b1, b2)
+          T() -> LSel(a1, merge(A1, A2), b1, merge(B1, B2))
+          F() -> LErr()
+        F() -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LBra(a1, A1, b1, B1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> match tag_eq(a1, a2)
+        T() -> match tag_eq(b1, b2)
+          T() -> LBra(a1, merge(A1, A2), b1, merge(B1, B2))
+          F() -> LErr()
+        F() -> LErr()
+      LErr()             -> LErr()
+    LErr() -> LErr()
+  type Mergeable indices (x: Local, y: Local)
+    MgEnd    : Mergeable(LEnd, LEnd)
+    MgSend   : (t: Tag) -> Mergeable(k1, k2) -> Mergeable(LSend(t, k1), LSend(t, k2))
+    MgRecvEq : (t: Tag) -> Mergeable(k1, k2) -> Mergeable(LRecv(t, k1), LRecv(t, k2))
+    MgRecvNe : (a: Tag) -> (b: Tag) -> Equivalent(TB2, tag_eq(a, b), F()) -> Mergeable(LRecv(a, k1), LRecv(b, k2))
+    MgSel    : (a: Tag) -> (b: Tag) -> Mergeable(A1, A2) -> Mergeable(B1, B2) -> Mergeable(LSel(a, A1, b, B1), LSel(a, A2, b, B2))
+    MgBra    : (a: Tag) -> (b: Tag) -> Mergeable(A1, A2) -> Mergeable(B1, B2) -> Mergeable(LBra(a, A1, b, B1), LBra(a, A2, b, B2))
+  fn merge_ok({x: Local}, {y: Local}, w: Mergeable(x, y)) -> Equivalent(TB2, is_err(merge(x, y)), F()) = match w
+    MgEnd()            -> reflexive(F())
+    MgSend(t, w2)      -> match t
+      TA() -> reflexive(F())
+      TB() -> reflexive(F())
+      TC() -> reflexive(F())
+    MgRecvEq(t, w2)    -> match t
+      TA() -> reflexive(F())
+      TB() -> reflexive(F())
+      TC() -> reflexive(F())
+    MgRecvNe(a, b, pne) -> match a
+      TA() -> match b
+        TA() -> match pne
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+      TB() -> match b
+        TA() -> reflexive(F())
+        TB() -> match pne
+        TC() -> reflexive(F())
+      TC() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> match pne
+    MgSel(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+      TB() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+      TC() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+    MgBra(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+      TB() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+      TC() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+  ## **MERGEABILITY IS SYMMETRIC**: Mergeable(x,y) => Mergeable(y,x). Matching prefixes recurse; the
+  ## differing-receive case flips its inequality witness via tag_eq_sym (tag_eq(b,a)=tag_eq(a,b)=F).
+  fn mergeable_sym({x: Local}, {y: Local}, w: Mergeable(x, y)) -> Mergeable(y, x) = match w
+    MgEnd()             -> MgEnd()
+    MgSend(t, w2)       -> MgSend(t, mergeable_sym(w2))
+    MgRecvEq(t, w2)     -> MgRecvEq(t, mergeable_sym(w2))
+    MgRecvNe(a, b, pne) -> MgRecvNe(b, a, trans(tag_eq_sym(b, a), pne))
+    MgSel(a, b, wA, wB) -> MgSel(a, b, mergeable_sym(wA), mergeable_sym(wB))
+    MgBra(a, b, wA, wB) -> MgBra(a, b, mergeable_sym(wA), mergeable_sym(wB))
+  ## **MERGE IS DEFINED IN EITHER ORDER**: Mergeable(x,y) => merge(y,x) is not LErr. Projectability of a
+  ## bystander at a choice does not depend on which branch is considered first. Corollary via merge_ok.
+  fn merge_defined_sym({x: Local}, {y: Local}, w: Mergeable(x, y)) -> Equivalent(TB2, is_err(merge(y, x)), F()) =
+    merge_ok(mergeable_sym(w))
+end
