@@ -31,8 +31,9 @@ relevant, run `idris2 --check` on the byte-equivalent program. No `lib/**` was m
 cause); two are **more bounded than feared** (E8, E11-Stage-2); two are **bigger than the
 handoff's ordering implied** (E2-residual, E6-residual). Four **new** items surfaced that the
 catalog did not list: E11 elaborator crash, E10a parser misparse, and (from the OTP-metatheory
-branch) E12 scrutinee-var-not-substituted-in-bodies and E13 rewrite-under-unreduced-definition —
-both zero-TCB E-layer ergonomics gaps in the scrutinee/rewrite-refinement family (see §3).
+branch) E12 rewrite-δ-blind-occurrence-finder and E1-sub scrutinee-var-not-substituted-in-bodies —
+both zero-TCB E-layer ergonomics gaps in the scrutinee/rewrite-refinement family (see §3; naming
+matches the handoff spec).
 
 ## 2. Kernel-layer bugs — the Antigen targets
 
@@ -151,7 +152,9 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
 - Explicit-field + congruence-helper workaround still required (live in
   `lib/std/otp_conversation.cure`).
 
-### NEW — E12 scrutinee-var not substituted into branch-body written terms — **OPEN, E-layer**
+### NEW — E1-sub — scrutinee-var not substituted into branch-body written terms — **OPEN, E-layer**
+> Naming: the handoff spec tracks this as **E1-sub** (a sub-case of the E1 sibling/context-refinement
+> family), and the rewrite-δ-blind gap below as **E12**. Aligned here to match.
 - Reported from the OTP-metatheory branch (bystander/correspondence lemma). A `match` on a **bare
   variable** refines the goal/motive (so the goal becomes `project(…, RA)` with `r` refined to the
   ctor `RA`) but does **not** substitute the scrutinee var into the branch body's **written term
@@ -164,7 +167,7 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
 - **Fix shape:** E-layer — substitute the scrutinee var into body term occurrences (not just the
   motive). Same **sibling/scrutinee-refinement family** as E8; no TCB change.
 
-### NEW — E13 `rewrite` occurrence-finder doesn't δ-unfold under the target — **OPEN, E-layer**
+### NEW — E12 `rewrite` occurrence-finder is δ-blind (target hidden under an unreduced definition) — **OPEN, E-layer**
 - Reported from the same lemma. `rewrite n1 in …` sugar calls `abstract_term` to find LHS
   occurrences (`role_eq(fr, r)`) in the goal and abstract them into a motive, then applies the
   `Equivalent` eliminator. The occurrence-finder walks the goal **without δ-unfolding defined
@@ -177,8 +180,12 @@ soundness gaps; the trusted kernel never accepts anything ill-typed. So the anti
   limitation (rewrite target hidden under an unreduced definition), **not** a kernel gap.
 - **Workaround (live):** case the scrutinees concretely so `role_eq`/`project` reduce and you lean
   on the kernel's conversion instead of the elaborator's syntactic matching.
-- **Fix shape:** E-layer — let `abstract_term`'s occurrence-finder δ/ι-reduce (or reduce-on-miss)
-  while searching. Distinct from E8's carried-eq detour; no TCB change.
+- **Fix shape:** E-layer — let `abstract_term`'s occurrence-finder WHNF/δ-reduce (or reduce-on-miss)
+  while searching, matching Idris (its evaluator WHNF-reduces `project` to the exposed `case`). No
+  TCB change — kernel conversion already sees through `project`.
+- **Distinct from E8** (same `:rewrite_no_match` tag, different mechanism): E8's redex is
+  PRESENT-but-unrefined (an outer match failed to refine `m`); E12's redex is ABSENT-until-unfolded
+  (buried under a defined-function application). Do not conflate them.
 
 ### E9 headline — stuck-index equation — **OPEN, but NOT a reach gap**
 - The catalog's headline "Idris accepts via `with`-style abstraction" is **empirically false**
