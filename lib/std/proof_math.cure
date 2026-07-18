@@ -35,6 +35,7 @@ mod Std.Proof.Math
   fn zero_is_not_positive(proof: IsPositive(Z)) -> Empty = match proof
 
   ## Every successor natural number is positive.
+  @lemma
   fn successor_is_positive(predecessor: Nat) -> IsPositive(S(predecessor)) = PositiveSuccessor()
 
   ## Decide positivity while carrying either a proof or a disproof.

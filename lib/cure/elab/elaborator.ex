@@ -1460,9 +1460,15 @@ defmodule Cure.Elab.Elaborator do
               end
           end
 
-        with {:ok, term} <- result,
-             :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-          {:ok, term}
+        case result do
+          {:ok, term} ->
+            case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+              :ok -> {:ok, term}
+              {:error, _} = err -> ctor_refinement_fallback(expr, expected_core, names, ctx, env, err)
+            end
+
+          {:error, _} = err ->
+            ctor_refinement_fallback(expr, expected_core, names, ctx, env, err)
         end
 
       true ->
@@ -2008,6 +2014,27 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # A checking-mode constructor whose direct check against the expected type failed
+  # may still inhabit the BASE of a refinement `{x: T | φ}` = `Sigma(T, λx. φ)` —
+  # e.g. `S(k)` at `-> {n: Nat | IsPositive(n)}`, where `S` is a `Nat` (not `Sigma`)
+  # constructor, so the direct check reports `:foreign_ctor`. When the expected type
+  # is such a refinement, route to the refinement-discharge fallback, which checks
+  # the constructor against the base domain `T` and searches for a proof of the
+  # obligation `φ[x := S(k)]`. Additive: reached only after the direct constructor
+  # check already failed, and the original error is surfaced when the expected type
+  # is not a dischargeable refinement or no proof is found — so every
+  # currently-accepted or -rejected constructor body is unchanged.
+  defp ctor_refinement_fallback(expr, expected_core, names, ctx, env, orig_err) do
+    if refinement_return?(expected_core, ctx, env) do
+      case elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
+        {:ok, _} = ok -> ok
+        _ -> orig_err
+      end
+    else
+      orig_err
+    end
+  end
+
   # Auto-discharge a CLOSED refinement obligation (§3a level 2). When a value is
   # checked against a refinement type `{x: T | φ}` — the dependent pair
   # `Sigma(T, λx. φ)` — and `φ[x := value]` reduces to an inhabited reflection
@@ -2015,24 +2042,59 @@ defmodule Cure.Elab.Elaborator do
   # nullary constructor (`Confirmed()`) and build the pair. The author writes just
   # the value; no `refine`, no explicit proof.
   #
-  # Soundness: the elaborator only PROPOSES `mk_pair(value, Confirmed())`; the
-  # kernel re-checks it in the fallback's `Kernel.check`, and here inhabitation of
-  # the obligation is itself decided by `Kernel.check` (not by the elaborator
-  # trusting its own reduction). A violated obligation (`IsTrue(False())`) or an
-  # OPEN one (mentioning a free binder) yields no inhabiting constructor, so this
-  # returns `:no` and the value falls through to ordinary checking — the proof is
-  # required, never invented.
+  # Soundness: the elaborator only PROPOSES `mk_pair(value, proof)`; the proof it
+  # supplies is itself kernel-checked against the obligation before use (by
+  # `reflection_proof` via `Kernel.check`, or — for an open obligation — by every
+  # candidate `ProofSearch.resolve` returns), and `value` is checked against the
+  # base component at elaboration. The Σ-intro rule then makes the pair well-typed
+  # by construction; the elaborator never trusts its own reduction. A CLOSED
+  # obligation with no inhabiting nullary constructor (`IsTrue(False())`), or an
+  # OPEN one with no derivable proof, yields `nil`, so this returns `:no` and the
+  # value falls through to ordinary checking — the proof is required, never
+  # invented.
   defp try_discharge_refinement(expr, expected_core, names, ctx, env) do
     sigma_fam = Inductive.builtin(env, :sigma)
 
     with false <- is_nil(sigma_fam),
          {:data, ^sigma_fam, [dom, cod], []} <- Kernel.normalize(ctx, expected_core),
+         # Exclude a flat tuple / bare nested-pair Σ (`Tuple(T1,…,Tn)` lowers to a
+         # unit-terminated Σ telescope that shares this shape). Its instantiated
+         # second component is itself a Σ, which `ProofSearch` would happily "prove"
+         # by fabricating a pair — silently accepting a program that has no
+         # refinement obligation at all (and mis-elaborating its value). Only a
+         # genuine refinement `{x: T | φ}`, whose predicate is a proposition, may
+         # reach discharge.
+         false <- tuple_telescope_type?(expected_core, sigma_fam, ctx, env),
          {:ok, value} <- elaborate_expr_checked(expr, dom, names, ctx, env),
          {:data, _fam_key, _p, _i} = obligation <- Kernel.normalize(ctx, {:app, cod, value}),
-         proof when not is_nil(proof) <- reflection_proof(obligation, ctx, env) do
+         proof when not is_nil(proof) <- discharge_obligation(obligation, ctx, env) do
       {:ok, {:ctor, sigma_ctor_name(env), [value, proof]}}
     else
       _ -> :no
+    end
+  end
+
+  # Find a proof of a refinement obligation, or nil. A CLOSED obligation
+  # (`IsTrue(True())`) is discharged by its family's nullary constructor via
+  # `reflection_proof`. An OPEN obligation — one whose truth rests on a free
+  # binder, e.g. `IsTrue(int_gt(x, 0))` for a parameter `x` — has no nullary
+  # inhabitant, so it falls through to the auto-lemma proof search, which derives
+  # the proof from in-scope hypotheses (a matching `evidence : IsTrue(x > 0)`
+  # binder), `@lemma`-tagged theorems, or the sign-directed positivity procedure.
+  # Every term `ProofSearch` returns is kernel-checked against this obligation
+  # inside the search, so an open obligation is discharged only when a genuine
+  # proof exists; an unprovable one returns `:none` here (→ nil → `:no` upstream)
+  # and the value is rejected exactly as before.
+  defp discharge_obligation(obligation, ctx, env) do
+    case reflection_proof(obligation, ctx, env) do
+      nil ->
+        case Cure.Elab.ProofSearch.resolve(obligation, ctx, env) do
+          {:ok, proof} -> proof
+          _ -> nil
+        end
+
+      proof ->
+        proof
     end
   end
 
@@ -2160,6 +2222,81 @@ defmodule Cure.Elab.Elaborator do
           term()
   def coerce_refined_to_base(term, type, expected_core, ctx, env),
     do: maybe_coerce_refined_to_base(term, type, expected_core, ctx, env)
+
+  @doc """
+  True when the declared return type is the refinement / dependent-pair Sigma
+  family.
+
+  `Declarations.elaborate_body/6`'s catch-all uses it to route such returns
+  through CHECK mode, so an OPEN refinement obligation (`{n: T | φ}` whose truth
+  depends on a binder) reaches `try_discharge_refinement` and can be discharged by
+  proof search — mirroring how `union_goal?/1` routes union returns through check
+  mode. A metavariable-bearing return type is excluded (it must not be handed to
+  the kernel's `Kernel.normalize`), matching `elaborate_expr_checked_fallback/5`'s
+  own guard; such a body keeps the historical infer path.
+  """
+  @spec refinement_return?(term(), Context.t(), Env.t()) :: boolean()
+  def refinement_return?(expected_core, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+
+    not is_nil(sigma_fam) and not Unify.has_meta?(expected_core) and
+      sigma_typed?(expected_core, sigma_fam, ctx) and
+      not tuple_telescope_type?(expected_core, sigma_fam, ctx, env)
+  end
+
+  @doc """
+  True when an *inferred* body already sits at the refinement / dependent-pair
+  Sigma family — i.e. it is a complete refinement value (`refine(v, pf)`) rather
+  than a bare base value that still owes a refinement obligation.
+
+  `Declarations.elaborate_refinement_return_body/6` uses it to decide whether a
+  body at a refinement return needs the goal threaded in (a base value like
+  `multiply(a, b)` at `{n | IsPositive(n)}`, whose obligation must reach
+  `try_discharge_refinement`) or is already complete and must be kept verbatim (so
+  its projection accessors are not re-derived by a redundant checked pass).
+
+  `type` is a semantic VALUE (the third element of `elaborate_expr_typed/4`, see
+  `coerce_refined_to_base/5`), so it is inspected with `Normalise.whnf_value/2` —
+  never `Kernel.normalize/2`, which expects a Core term and would crash on a value.
+  """
+  @spec inferred_refinement_value?(Cure.Core.Value.t(), Context.t(), Env.t()) :: boolean()
+  def inferred_refinement_value?(type, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+    sig = Context.signature(ctx)
+
+    not is_nil(sigma_fam) and
+      match?({:vdata, ^sigma_fam, [_dom, _pred]}, Normalise.whnf_value(type, sig))
+  end
+
+  # A refinement / bare dependent-pair Σ and a flat tuple Σ share ONE Core shape
+  # (`{:data, Sigma, [dom, λ], []}`) — the unified-tuple encoding lowers
+  # `Tuple(T1,…,Tn)` to the unit-terminated telescope
+  # `Sigma(T1, λ_. … Sigma(Tn, λ_. Unit))`. Only the SPINE TERMINATOR separates
+  # them: a tuple bottoms at `Unit`, a refinement's predicate is a proposition.
+  # Routing a tuple return through the refinement check-first path changes how its
+  # body elaborates (a still-well-typed but different Core term, e.g. an off-by-one
+  # in a nested optic rebuild), so tuples MUST be excluded here.
+  #
+  # This is the transitive closure of `telescope_terminator?/3`'s probe technique:
+  # apply each Σ's predicate to a closed `unit` probe, normalize (β-reducing a
+  # non-dependent tail to its body), and recurse on the tail. A car list that ends
+  # in `Unit` is a tuple; anything else (a proposition, or a bare pair whose tail is
+  # an ordinary type) is not. Mirrors emit's value-level `telescope_cars/2`.
+  defp tuple_telescope_type?(expected_core, sigma_fam, ctx, env) do
+    unit_family = unit_family_name(env)
+
+    case Kernel.normalize(ctx, expected_core) do
+      {:data, ^unit_family, [], []} ->
+        true
+
+      {:data, ^sigma_fam, [_dom, b_fn], []} ->
+        tail = {:app, b_fn, {:ctor, unit_ctor_name(env), []}}
+        tuple_telescope_type?(tail, sigma_fam, ctx, env)
+
+      _ ->
+        false
+    end
+  end
 
   # Anonymous-union subsumption: a coercion inserted by the ELABORATOR in check mode
   # only — never a kernel rule. If the expected type is a generated union family and
