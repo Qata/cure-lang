@@ -1293,9 +1293,65 @@ defmodule Cure.Compiler.Lexer do
     end
   end
 
+  # -- Generic (user-declared) symbolic operators ----------------------------
+
+  # Symbol bytes a generic operator lexeme may contain. `-`, `.`, `:` are
+  # deliberately EXCLUDED so existing multi-byte forms built on them (`<-|`,
+  # `->`, `..`, `..=`, and the `<-` binary-comprehension generator) keep lexing
+  # exactly as before — their runs shrink to a single byte here and fall through
+  # to the dedicated lexers untouched.
+  @generic_op_bytes ~c"<>=!?@|&^%*/+"
+
+  # Multi-byte symbol runs already recognised as FIXED tokens. A run in this set
+  # defers to its dedicated lexer so tokenisation stays byte-identical; only a
+  # run that is NOT here (and is >= 2 bytes) becomes a generic `:operator` token.
+  @fixed_op_runs MapSet.new(~w(<< <> <= >= >> == => != |> *= /=) ++ ["+="])
+
+  # `<<` / `>>` are binary-pattern DELIMITERS, not operators. Maximal munch would
+  # otherwise swallow the empty binary pattern `<<>>` (delimiter `<<` immediately
+  # followed by delimiter `>>`) into one bogus operator run. When a run begins
+  # with a delimiter, defer to the dedicated lexer so it peels just the `<<`/`>>`
+  # and the remainder is retokenised from the next byte.
+  @op_delimiters ["<<", ">>"]
+
+  # Consulted at the head of every hooked operator lexer: if the maximal run of
+  # `@generic_op_bytes` from the cursor is >= 2 bytes and not a fixed form, emit
+  # it as one generic `:operator` token carrying the lexeme string; otherwise
+  # signal `:fixed` so the dedicated lexer runs unchanged.
+  defp generic_operator(state) do
+    run = collect_op_run(state, 0, [])
+
+    cond do
+      byte_size(run) < 2 -> :fixed
+      String.starts_with?(run, @op_delimiters) -> :fixed
+      MapSet.member?(@fixed_op_runs, run) -> :fixed
+      true -> {:operator, run}
+    end
+  end
+
+  defp collect_op_run(state, offset, acc) do
+    case peek_at(state, offset) do
+      c when c in @generic_op_bytes -> collect_op_run(state, offset + 1, [c | acc])
+      _ -> acc |> Enum.reverse() |> IO.iodata_to_binary()
+    end
+  end
+
+  defp emit_operator(state, run) do
+    token = Token.new(:operator, run, state.line, state.col)
+    maybe_emit_event(state, token)
+    {:ok, %{state | tokens: [token | state.tokens]} |> advance(byte_size(run))}
+  end
+
   # -- Binary literal << >> --------------------------------------------------
 
   defp lex_angle_or_op(state) do
+    case generic_operator(state) do
+      {:operator, run} -> emit_operator(state, run)
+      :fixed -> lex_angle_or_op_fixed(state)
+    end
+  end
+
+  defp lex_angle_or_op_fixed(state) do
     start_col = state.col
 
     case {peek(state), peek_at(state, 1), peek_at(state, 2)} do
@@ -1374,6 +1430,13 @@ defmodule Cure.Compiler.Lexer do
   # -- Operators -------------------------------------------------------------
 
   defp lex_plus(state) do
+    case generic_operator(state) do
+      {:operator, run} -> emit_operator(state, run)
+      :fixed -> lex_plus_fixed(state)
+    end
+  end
+
+  defp lex_plus_fixed(state) do
     start_col = state.col
 
     if peek_at(state, 1) == ?= do
@@ -1414,6 +1477,13 @@ defmodule Cure.Compiler.Lexer do
   end
 
   defp lex_star(state) do
+    case generic_operator(state) do
+      {:operator, run} -> emit_operator(state, run)
+      :fixed -> lex_star_fixed(state)
+    end
+  end
+
+  defp lex_star_fixed(state) do
     start_col = state.col
 
     if peek_at(state, 1) == ?= do
@@ -1428,6 +1498,13 @@ defmodule Cure.Compiler.Lexer do
   end
 
   defp lex_slash(state) do
+    case generic_operator(state) do
+      {:operator, run} -> emit_operator(state, run)
+      :fixed -> lex_slash_fixed(state)
+    end
+  end
+
+  defp lex_slash_fixed(state) do
     start_col = state.col
 
     if peek_at(state, 1) == ?= do
@@ -1442,6 +1519,13 @@ defmodule Cure.Compiler.Lexer do
   end
 
   defp lex_equal(state) do
+    case generic_operator(state) do
+      {:operator, run} -> emit_operator(state, run)
+      :fixed -> lex_equal_fixed(state)
+    end
+  end
+
+  defp lex_equal_fixed(state) do
     start_col = state.col
 
     case peek_at(state, 1) do
@@ -1463,6 +1547,13 @@ defmodule Cure.Compiler.Lexer do
   end
 
   defp lex_bang(state) do
+    case generic_operator(state) do
+      {:operator, run} -> emit_operator(state, run)
+      :fixed -> lex_bang_fixed(state)
+    end
+  end
+
+  defp lex_bang_fixed(state) do
     start_col = state.col
 
     if peek_at(state, 1) == ?= do
@@ -1477,6 +1568,13 @@ defmodule Cure.Compiler.Lexer do
   end
 
   defp lex_greater(state) do
+    case generic_operator(state) do
+      {:operator, run} -> emit_operator(state, run)
+      :fixed -> lex_greater_fixed(state)
+    end
+  end
+
+  defp lex_greater_fixed(state) do
     start_col = state.col
 
     case peek_at(state, 1) do
@@ -1498,6 +1596,13 @@ defmodule Cure.Compiler.Lexer do
   end
 
   defp lex_pipe_or_bar(state) do
+    case generic_operator(state) do
+      {:operator, run} -> emit_operator(state, run)
+      :fixed -> lex_pipe_or_bar_fixed(state)
+    end
+  end
+
+  defp lex_pipe_or_bar_fixed(state) do
     start_col = state.col
 
     if peek_at(state, 1) == ?> do

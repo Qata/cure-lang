@@ -750,37 +750,18 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
     op = Keyword.fetch!(meta, :operator)
 
-    if op == :<> do
-      combine_call(l, r, names, ctx, env)
-    else
-      with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
-           {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
-           {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
-           {:ok, type} <- Kernel.infer(ctx, term) do
-        {:ok, term, type}
-      else
-        {:error, {:unsupported_operand_type, :+}} ->
-          combine_call(l, r, names, ctx, env)
+    cond do
+      # A user-declared overloadable operator (parser tagged it `:overloaded`):
+      # desugar to a call on the function named by its lexeme, exactly as the
+      # built-in overloads route (`<>`→combine, non-primitive `==`/`<`→method).
+      Keyword.get(meta, :category) == :overloaded ->
+        overloaded_op_call(op, l, r, names, ctx, env)
 
-        {:error, {:unsupported_operand_type, cmp}}
-        when cmp in [:<, :>, :<=, :>=] ->
-          op_method_call(cmp, l, r, names, ctx, env)
+      op == :<> ->
+        combine_call(l, r, names, ctx, env)
 
-        # `==`/`!=` on a non-primitive operand (String, ADT, abstract/rigid type
-        # variable) — `build_binop`'s `{:==,:!=}` clause reports the operand has no
-        # primitive twin, and the SOLE route is the `Equatable` method desugar. A
-        # rigid type variable with no in-scope dictionary rejects here as
-        # `{:no_instance, :Equatable, {:rigid, _}}`, the intended sole-route error.
-        {:error, {:unsupported_operand_type, eq}}
-        when eq in [:==, :!=] ->
-          op_method_call(eq, l, r, names, ctx, env)
-
-        :unsupported_op ->
-          {:error, {:unsupported_expression, expr}}
-
-        other ->
-          other
-      end
+      true ->
+        elaborate_binop(op, l, r, expr, names, ctx, env)
     end
   end
 
@@ -998,6 +979,67 @@ defmodule Cure.Elab.Elaborator do
   # `@prelude`-ambient, so these names resolve with no explicit `use`.
   defp op_method_call(op, l, r, names, ctx, env),
     do: elaborate_expr_typed({:function_call, [name: Atom.to_string(op)], [l, r]}, names, ctx, env)
+
+  # The built-in binary-operator path (arithmetic/comparison/equality/bitwise):
+  # elaborate both operands, assemble the primitive term, and let the kernel
+  # infer its type; on `{:unsupported_operand_type, _}` fall back to the
+  # typeclass method desugar (Phase 2). Extracted verbatim from the former
+  # `{:binary_op}` body so the `:overloaded` and `<>` routes sit beside it.
+  defp elaborate_binop(op, l, r, expr, names, ctx, env) do
+    with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
+         {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
+         {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
+    else
+      {:error, {:unsupported_operand_type, :+}} ->
+        combine_call(l, r, names, ctx, env)
+
+      {:error, {:unsupported_operand_type, cmp}}
+      when cmp in [:<, :>, :<=, :>=] ->
+        op_method_call(cmp, l, r, names, ctx, env)
+
+      # `==`/`!=` on a non-primitive operand (String, ADT, abstract/rigid type
+      # variable) — `build_binop`'s `{:==,:!=}` clause reports the operand has no
+      # primitive twin, and the SOLE route is the `Equatable` method desugar. A
+      # rigid type variable with no in-scope dictionary rejects here as
+      # `{:no_instance, :Equatable, {:rigid, _}}`, the intended sole-route error.
+      {:error, {:unsupported_operand_type, eq}}
+      when eq in [:==, :!=] ->
+        op_method_call(eq, l, r, names, ctx, env)
+
+      :unsupported_op ->
+        {:error, {:unsupported_expression, expr}}
+
+      other ->
+        other
+    end
+  end
+
+  # A user-declared overloadable operator (`x <?> y`) is sugar for a call on the
+  # function named by its lexeme (`` `<?>`(x, y) ``). If no function/method/ctor
+  # of that name is in scope, the operator has a fixity but no meaning — reject
+  # with `{:no_operator_meaning, op}` rather than letting it dissolve into a
+  # generic `:unknown_global`. Otherwise route through the ordinary
+  # function-call path, so real type errors in the operands still surface.
+  defp overloaded_op_call(op, l, r, names, ctx, env) do
+    if operator_meaning?(env, op) do
+      elaborate_expr_typed({:function_call, [name: Atom.to_string(op)], [l, r]}, names, ctx, env)
+    else
+      {:error, {:no_operator_meaning, op}}
+    end
+  end
+
+  # True when `atom` names anything callable: a top-level definition, an
+  # interface method, a `where`-constrained global, a constructor, or a bare
+  # name resolvable through a single re-keyed import.
+  defp operator_meaning?(env, atom) do
+    Env.get_def(env, atom) != nil or
+      Cure.Elab.Resolve.method?(env, atom) or
+      Cure.Elab.Resolve.constrained?(env, atom) or
+      Inductive.get_ctor(env, atom) != nil or
+      match?({:ok, _}, Cure.Elab.Resolution.resolve_bare(env, atom))
+  end
 
   # Fold a `pickup` clause list into a right-nested `:conditional` chain.
   # The LAST clause is the terminator (its body is the seed); every earlier

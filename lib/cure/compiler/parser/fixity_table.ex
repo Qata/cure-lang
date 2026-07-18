@@ -196,6 +196,14 @@ defmodule Cure.Compiler.Parser.FixityTable do
     end
   end
 
+  @doc """
+  The precedence group a registered `lexeme` belongs to (infix fixity wins, then
+  prefix, then postfix), or `nil` when the lexeme is unregistered. Used to name
+  the groups in an `:ambiguous_precedence` parse error.
+  """
+  @spec group_of(t(), String.t()) :: group_name() | nil
+  def group_of(%__MODULE__{ops: ops}, lexeme), do: primary_group(Map.get(ops, lexeme))
+
   # The representative group for a lexeme (infix wins, then prefix, then
   # postfix), used by `incomparable?/3` when a lexeme carries several fixities.
   defp primary_group(by_fixity) when is_map(by_fixity) do
