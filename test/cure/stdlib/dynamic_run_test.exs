@@ -1,10 +1,10 @@
 defmodule Cure.Stdlib.DynamicRunTest do
   @moduledoc """
   `Std.Dynamic` is a typed stand-in for `Any`: one homogeneous tagged sum
-  (`Dyn`) over the real BEAM value shapes, with a mutually-recursive
-  association-list map (`DynEntry`) so an arbitrarily-nested document has one
+  (`Dynamic`) over the real BEAM value shapes, with a mutually-recursive
+  association-list map (`DynamicEntry`) so an arbitrarily-nested document has one
   static type. These tests exercise the module *on its own* — no optics — by
-  building `Dyn` values through its smart constructors and reading them back
+  building `Dynamic` values through its smart constructors and reading them back
   through its total accessors, proving the recursion round-trips end to end.
   """
   use ExUnit.Case, async: true
@@ -31,8 +31,8 @@ defmodule Cure.Stdlib.DynamicRunTest do
     {:ok, mod: m}
   end
 
-  # DMap([ DEntry(DStr("count"), DInt(3)),
-  #        DEntry(DStr("items"), DList([DInt(1), DInt(2)])) ])
+  # Map([ Entry(Str("count"), Int(3)),
+  #       Entry(Str("items"), List([Int(1), Int(2)])) ])
   defp sample_doc(m) do
     count = apply(m, :entry, [apply(m, :of_str, [~c"count"]), apply(m, :of_int, [3])])
 

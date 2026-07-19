@@ -16,7 +16,7 @@ defmodule Cure.Stdlib.OpticLawsTest do
   Antigen-internal dependency, not an ExUnit style). Implicits erase, so the
   runtime arities are `lens/2`, `view/2`, `set/3`, `over/3`, `preview/2`,
   `lens_to_trav/1`, `affine_to_trav/1`. Option lowers OTP-lowercase
-  (`{:some, v}` / `:none`); `Dyn` constructors stay PascalCase (`{:DInt, n}`).
+  (`{:some, v}` / `:none`); `Dynamic` constructors stay PascalCase (`{:Int, n}`).
   """
   use ExUnit.Case, async: true
 
@@ -81,7 +81,7 @@ defmodule Cure.Stdlib.OpticLawsTest do
     end
   end
 
-  describe "affine laws (dyn_int over Dyn)" do
+  describe "affine laws (dyn_int over Dynamic)" do
     setup %{m: _m, d: d} do
       hit = fn n -> apply(d, :of_int, [n]) end
       miss = apply(d, :of_str, [~c"nope"])

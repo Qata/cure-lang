@@ -1,17 +1,17 @@
 defmodule Cure.Stdlib.OpticDynamicRunTest do
   @moduledoc """
-  The `Std.Dynamic` case affines: one `Affine(Dyn, T)` per constructor of the
-  typed-`Any` sum. Narrowing a `Dyn` to a concrete leaf is an *affine* — it may
-  miss — never a cast: `preview` yields `Some(focus)` when the tag matches and
-  `None` when it does not, and `set`/`over` rebuild the same-tagged `Dyn`,
+  The `Std.Dynamic` case affines: one `Affine(Dynamic, T)` per constructor of the
+  typed-`Any` sum. Narrowing a `Dynamic` to a concrete leaf is an *affine* — it
+  may miss — never a cast: `preview` yields `Some(focus)` when the tag matches and
+  `None` when it does not, and `set`/`over` rebuild the same-tagged `Dynamic`,
   leaving a mis-tagged value untouched (the statically-kinded replacement for a
   runtime `is_integer`/`is_map` guess over an opaque `Any`).
 
   These ride the same GADT `Optic(s, a, k)` machinery as tuple lenses, so this
   test also pins that the cross-module `Std.Optic`←`Std.Dynamic` lowering works.
   Implicits erase, so runtime arities are `dyn_int/0`, `preview/2`, `set/3`,
-  `over/3`; Option lowers OTP-lowercase (`{:some, v}` / `:none`), while `Dyn`
-  constructors stay PascalCase-tagged (`{:DInt, 5}`).
+  `over/3`; Option lowers OTP-lowercase (`{:some, v}` / `:none`), while `Dynamic`
+  constructors stay PascalCase-tagged (`{:Int, 5}`).
   """
   use ExUnit.Case, async: true
 
@@ -47,7 +47,7 @@ defmodule Cure.Stdlib.OpticDynamicRunTest do
         origins: oorigins
       )
 
-    # Dynamic module: the smart constructors that build the Dyn values under
+    # Dynamic module: the smart constructors that build the Dynamic values under
     # test. Compiled separately, but the runtime reps are shared (PascalCase
     # tagged tuples), so the values flow straight into the optic affines.
     dsrc = File.read!("lib/std/dynamic.cure")
@@ -64,10 +64,10 @@ defmodule Cure.Stdlib.OpticDynamicRunTest do
     assert apply(m, :preview, [di, apply(d, :of_str, [~c"x"])]) == :none
   end
 
-  test "set rebuilds a same-tagged Dyn and no-ops on a mismatch", %{m: m, d: d} do
+  test "set rebuilds a same-tagged Dynamic and no-ops on a mismatch", %{m: m, d: d} do
     di = apply(m, :dyn_int, [])
-    # focus present → replace, keeping the Dyn shape
-    assert apply(m, :set, [di, 9, apply(d, :of_int, [5])]) == {:DInt, 9}
+    # focus present → replace, keeping the Dynamic shape
+    assert apply(m, :set, [di, 9, apply(d, :of_int, [5])]) == {:Int, 9}
     # focus absent → structure untouched (affine set is a no-op on a miss)
     other = apply(d, :of_str, [~c"x"])
     assert apply(m, :set, [di, 9, other]) == other
@@ -75,7 +75,7 @@ defmodule Cure.Stdlib.OpticDynamicRunTest do
 
   test "over modifies the focus in place through the affine", %{m: m, d: d} do
     di = apply(m, :dyn_int, [])
-    assert apply(m, :over, [di, fn n -> n + 1 end, apply(d, :of_int, [5])]) == {:DInt, 6}
+    assert apply(m, :over, [di, fn n -> n + 1 end, apply(d, :of_int, [5])]) == {:Int, 6}
   end
 
   test "dyn_str narrows a string leaf", %{m: m, d: d} do
@@ -85,8 +85,8 @@ defmodule Cure.Stdlib.OpticDynamicRunTest do
   end
 
   test "dyn_map narrows a heterogeneous association list", %{m: m, d: d} do
-    # DMap([ DEntry(DStr("n"), DInt(1)), DEntry(DStr("s"), DStr("x")) ]) — mixed
-    # value types under one Dyn; dyn_map focuses the whole entry list.
+    # Map([ Entry(Str("n"), Int(1)), Entry(Str("s"), Str("x")) ]) — mixed
+    # value types under one Dynamic; dyn_map focuses the whole entry list.
     e1 = apply(d, :entry, [apply(d, :of_str, [~c"n"]), apply(d, :of_int, [1])])
     e2 = apply(d, :entry, [apply(d, :of_str, [~c"s"]), apply(d, :of_str, [~c"x"])])
     doc = apply(d, :of_map, [[e1, e2]])
@@ -94,7 +94,7 @@ defmodule Cure.Stdlib.OpticDynamicRunTest do
     dm = apply(m, :dyn_map, [])
     assert apply(m, :preview, [dm, doc]) == {:some, [e1, e2]}
 
-    # a non-map Dyn has no map focus
+    # a non-map Dynamic has no map focus
     assert apply(m, :preview, [dm, apply(d, :of_int, [0])]) == :none
   end
 end
