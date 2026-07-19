@@ -466,7 +466,7 @@ defmodule Cure.Elab.Elaborator do
   defp check_app_args(term, type, [arg | rest], names, ctx, env) do
     case type do
       {:vpi, _g, dom_value, cod_closure} ->
-        dom_term = Quote.reify(dom_value, Context.length(ctx))
+        dom_term = resplit_data(Quote.reify(dom_value, Context.length(ctx)), env)
 
         with {:ok, arg_term} <- elaborate_expr_checked(arg, dom_term, names, ctx, env) do
           arg_value = Eval.eval(arg_term, Context.env(ctx))

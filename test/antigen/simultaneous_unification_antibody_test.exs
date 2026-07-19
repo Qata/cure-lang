@@ -64,6 +64,21 @@ defmodule Antigen.SimultaneousUnificationAntibodyTest do
     assert {:ok, _} = Program.elaborate(reach_src())
   end
 
+  # REACH: the same constructor at a fully concrete goal exercises the checked
+  # application path's reification of the callee domain. Reification flattens a
+  # data family's params and indices, so that boundary must restore the split
+  # before bidirectional constructor elaboration compares result and goal.
+  defp concrete_goal_src do
+    "mod SimUniConcreteGoal\n" <>
+      defs() <>
+      "  fn star_fold(x: Acc(PTimes(PA(TA), PStar(PA(TA))), S(Z))) -> Unit = unit()\n" <>
+      "  fn use() -> Unit = star_fold(ATimes(AAtomA(), AStar()))\nend\n"
+  end
+
+  test "REACH: computed-index ctor at a concrete goal preserves the data index split" do
+    assert {:ok, _} = Program.elaborate(concrete_goal_src())
+  end
+
   # CONTROL: concrete measure `S(S(Z))` vs goal `S(Z)` — the tolerated component is
   # still checked, so index unification rejects the mismatch.
   defp measure_src do
