@@ -110,6 +110,27 @@ defmodule Cure.Compiler do
   @spec prelude_provider_names(Cure.Compiler.DepGraph.t()) :: [String.t()]
   defdelegate prelude_provider_names(graph), to: Cure.Compiler.DepGraph
 
+  @doc """
+  Scan and order a bulk Cure compilation universe, returning the ambient
+  prelude-provider names alongside the ordered paths and any tolerated cycles.
+  Bulk drivers share this entry point so parser scope and compile order cannot
+  disagree about user `@prelude` modules.
+  """
+  @spec prepare_files([Path.t()]) ::
+          {:ok, %{ordered: [Path.t()], providers: [String.t()], cycles: [list()]}}
+          | {:error, term()}
+  def prepare_files(files) when is_list(files) do
+    with {:ok, graph} <- Cure.Compiler.DepGraph.scan(files),
+         {:ok, ordered, cycles} <- Cure.Compiler.DepGraph.order(graph) do
+      {:ok,
+       %{
+         ordered: ordered,
+         providers: Cure.Compiler.DepGraph.prelude_provider_names(graph),
+         cycles: cycles
+       }}
+    end
+  end
+
   # `BeamWriter.compile_forms/2` returns `{:error, errors, warnings}` (3-tuple)
   # on lint/compile failures, but the public `compile_string/2`,
   # `compile_file/2`, and `compile_and_load/2` contracts are `{:ok, ...}` or

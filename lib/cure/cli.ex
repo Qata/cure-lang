@@ -447,15 +447,13 @@ defmodule Cure.CLI do
       |> Enum.uniq()
 
     {ordered, providers} =
-      case Cure.Compiler.DepGraph.scan(files) do
-        {:ok, graph} ->
-          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
-
+      case Cure.Compiler.prepare_files(files) do
+        {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
           Enum.each(cycles, fn walk ->
             warn(Cure.Compiler.Errors.format_error({:import_cycle, walk}, hd(paths)))
           end)
 
-          {ordered, Cure.Compiler.DepGraph.prelude_provider_names(graph)}
+          {ordered, providers}
 
         {:error, reason} ->
           diagnostic(Cure.Compiler.Errors.format_error(reason, hd(paths)))

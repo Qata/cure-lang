@@ -762,15 +762,13 @@ defmodule Cure.Project do
       end)
 
     {cure_files_result, providers} =
-      case Cure.Compiler.DepGraph.scan(discovered) do
-        {:ok, graph} ->
-          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
-
+      case Cure.Compiler.prepare_files(discovered) do
+        {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
           Enum.each(cycles, fn walk ->
             Logger.warning(Cure.Compiler.Errors.format_error({:import_cycle, walk}, project.root))
           end)
 
-          {{:ok, ordered}, Cure.Compiler.DepGraph.prelude_provider_names(graph)}
+          {{:ok, ordered}, providers}
 
         {:error, _} = err ->
           {err, []}
