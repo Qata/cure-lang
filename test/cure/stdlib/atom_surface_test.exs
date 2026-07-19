@@ -3,6 +3,26 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
 
   alias Cure.Elab.Program
 
+  test "safe stdlib signatures do not regress to the removed atom shortcuts" do
+    signatures = %{
+      "lib/std/string.cure" => ["fn to_atom(s: String) -> Atom"],
+      "lib/std/system.cure" => ["fn system_time(unit: Atom)", "fn system_info(key: Atom)"],
+      "lib/std/process.cure" => ["fn link(pid: Pid) -> Atom", "fn unlink(pid: Pid) -> Atom", "fn exit(pid: Pid, reason: Atom)"],
+      "lib/std/io.cure" => ["fn println(text: String) -> Atom", "fn print(text: String) -> Atom"],
+      "lib/std/gen.cure" => ["fn seed(_alg: Atom"],
+      "lib/std/test.cure" => ["fn assert(condition: Bool) -> Atom", "fn forall(gen: Atom ->"],
+      "lib/std/fsm.cure" => ["type Transition = Row(Atom, Atom, Atom)"],
+      "lib/std/crdt.cure" => ["node: Atom"]
+    }
+
+    Enum.each(signatures, fn {file, forbidden} ->
+      source = File.read!(file)
+      Enum.each(forbidden, fn signature ->
+        refute String.contains?(source, signature), "#{file} restored #{signature}"
+      end)
+    end)
+  end
+
   test "closed system-time vocabulary rejects a raw atom" do
     assert {:error, _} =
              Program.elaborate("""
