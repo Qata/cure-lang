@@ -55,6 +55,20 @@ defmodule Cure.Elab.Deriving do
     end
   end
 
+  def generate(:BeamDecode, {:container, _meta, _body} = container, env) do
+    case Env.get_interface(env, :BeamDecode) do
+      %{method_order: [method], methods: methods} ->
+        info = Map.fetch!(methods, method)
+        beam_decode_instance(container, info, env)
+
+      nil ->
+        {:error, {:no_such_interface, :BeamDecode}}
+
+      _ ->
+        {:error, {:cannot_derive, :BeamDecode}}
+    end
+  end
+
   def generate(iface, {:container, meta, body}, env) when iface in [:Equatable, :Ord] do
     case Env.get_interface(env, iface) do
       nil ->
@@ -193,6 +207,154 @@ defmodule Cure.Elab.Deriving do
   end
 
   def beam_encode_instance(_decl, _method_name, _return_type), do: :skip
+
+  @doc "Synthesise a shape-validating `BeamDecode` implementation for a concrete ADT."
+  def beam_decode_instance({:container, meta, body}, info, env) do
+    type_name = Keyword.fetch!(meta, :name)
+    type_params = Keyword.get(meta, :type_params, [])
+    specs = constructor_specs(body)
+    decoder_context = {env, type_name, derived_decoder_name(env, type_name)}
+
+    cond do
+      specs == [] ->
+        :skip
+
+      type_params != [] ->
+        {:error, {:deriving_needs_constraints, :BeamDecode, String.to_atom(type_name)}}
+
+      Enum.any?(specs, fn {_name, fields} ->
+        Enum.any?(fields, &(decode_function(&1, decoder_context) == nil))
+      end) ->
+        {:error, {:deriving_needs_constraints, :BeamDecode, String.to_atom(type_name)}}
+
+      true ->
+        for_type = for_type_ast(type_name, [])
+        impl_meta = [interface: "BeamDecode", for: type_name, for_type: for_type, as: nil]
+        [{:param, pm, term_name}] = info.params
+        params = [{:param, pm, term_name}]
+        return_type = subst(info.return_type, "t", for_type)
+        method_meta = [name: info.name, params: params, return_type: return_type, visibility: :public, arity: 1]
+        method = {:function_def, method_meta, [decode_body(term_name, specs, decoder_context)]}
+        {:ok, {:implementation, impl_meta, [method]}}
+    end
+  end
+
+  def beam_decode_instance(_decl, _info, _env), do: :skip
+
+  defp decode_body(term_name, specs, env) do
+    tag_name = "decoded_constructor_tag"
+
+    match(call("Std.Beam.adt_tag", [var(term_name)]), [
+      arm(call("Some", [var(tag_name)]), decode_tag_choices(term_name, tag_name, specs, env)),
+      arm(wildcard(), decode_error())
+    ])
+  end
+
+  defp decode_tag_choices(_term_name, _tag_name, [], _env), do: decode_error()
+
+  defp decode_tag_choices(term_name, tag_name, [{name, fields} | rest], env) do
+    match(call("==", [var(tag_name), atom_lit(String.to_atom(name))]), [
+      arm(bool(true), decode_constructor(term_name, name, fields, env)),
+      arm(bool(false), decode_tag_choices(term_name, tag_name, rest, env))
+    ])
+  end
+
+  defp decode_constructor(term_name, name, fields, env) do
+    arity = length(fields)
+    valid = decode_fields(term_name, name, fields, 0, [], env)
+    actual = "decoded_constructor_arity"
+
+    match(call("Std.Beam.adt_arity", [var(term_name)]), [
+      arm(
+        call("Some", [var(actual)]),
+        match(call("==", [var(actual), int_lit(arity)]), [
+          arm(bool(true), valid),
+          arm(bool(false), decode_error())
+        ])
+      ),
+      arm(wildcard(), decode_error())
+    ])
+  end
+
+  defp decode_fields(_term_name, ctor, [], _index, values, _env),
+    do: call("Ok", [call(ctor, Enum.map(Enum.reverse(values), &var/1))])
+
+  defp decode_fields(term_name, ctor, [field_type | rest], index, values, env) do
+    field_name = "decoded_field_#{index}"
+    raw_name = "raw_field_#{index}"
+    decoder = decode_function(field_type, env)
+
+    decoded =
+      match(call(decoder, [var(raw_name)]), [
+        arm(
+          call("Ok", [var(field_name)]),
+          decode_fields(term_name, ctor, rest, index + 1, [field_name | values], env)
+        ),
+        arm(wildcard(), decode_error())
+      ])
+
+    match(call("Std.Beam.tuple_element", [var(term_name), int_lit(index + 1)]), [
+      arm(call("Some", [var(raw_name)]), decoded),
+      arm(wildcard(), decode_error())
+    ])
+  end
+
+  defp decode_function({:variable, _meta, "Int"}, _context), do: "Std.Beam.decode_int"
+  defp decode_function({:variable, _meta, "Float"}, _context), do: "Std.Beam.decode_float"
+  defp decode_function({:variable, _meta, "Bool"}, _context), do: "Std.Beam.decode_bool"
+  defp decode_function({:variable, _meta, "Atom"}, _context), do: "Std.Beam.decode_atom"
+  defp decode_function({:variable, _meta, "String"}, _context), do: "Std.Beam.decode_string"
+
+  defp decode_function({:variable, _meta, name}, {_env, name, self_decoder}), do: self_decoder
+
+  defp decode_function({:variable, _meta, name}, {env, _self_name, _self_decoder}) do
+    with {:ok, head} <- Cure.Elab.Resolution.resolve_bare(env, String.to_atom(name)),
+         {:ok, ref} <- Cure.Elab.Coherence.lookup_anon(Env.coherence(env), :BeamDecode, head) do
+      ref.methods.from_beam |> Atom.to_string()
+    else
+      _ -> nil
+    end
+  end
+
+  defp decode_function(_, _context), do: nil
+
+  defp derived_decoder_name(env, type_name) do
+    head =
+      case Cure.Elab.Resolution.resolve_bare(env, String.to_atom(type_name)) do
+        {:ok, value} -> value
+        _ -> String.to_atom(type_name)
+      end
+
+    base = :"__impl_BeamDecode_#{head}_from_beam"
+
+    case Env.owner(env) do
+      nil -> Atom.to_string(base)
+      owner -> owner |> Cure.Elab.Name.qualify(base) |> Atom.to_string()
+    end
+  end
+
+  defp decode_error(), do: call("Error", [call("InvalidBeamTerm", [])])
+
+  defp constructor_specs(body) do
+    Enum.flat_map(body, fn
+      {:function_def, meta, _} ->
+        if Keyword.get(meta, :variant, false) do
+          fields = Enum.map(Keyword.get(meta, :params, []), &constructor_field_type/1)
+          [{Keyword.fetch!(meta, :name), fields}]
+        else
+          []
+        end
+
+      {:variable, meta, name} ->
+        if Keyword.get(meta, :variant, false), do: [{name, []}], else: []
+
+      _ ->
+        []
+    end)
+  end
+
+  defp constructor_field_type({:param, meta, _name}), do: Keyword.fetch!(meta, :type)
+  defp constructor_field_type(type), do: type
 
   # The single `` `==` ``(l: T, r: T) -> Bool = Std.Builtin.struct_eq(_, l, r)`
   # method clause. `T` is the fully-applied `for_type` (`Option(t)` for a
@@ -495,6 +657,8 @@ defmodule Cure.Elab.Deriving do
 
   defp wildcard(), do: {:variable, [scope: :local], "_"}
   defp bool(b), do: {:literal, [subtype: :boolean], b}
+  defp int_lit(value), do: {:literal, [subtype: :integer], value}
+  defp atom_lit(value), do: {:literal, [subtype: :symbol], value}
   defp call(name, args), do: {:function_call, [name: name], args}
   defp match(scrut, arms), do: {:pattern_match, [], [scrut | arms]}
   defp arm(pattern, body), do: {:match_arm, [pattern: pattern], [body]}

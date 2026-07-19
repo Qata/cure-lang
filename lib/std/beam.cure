@@ -84,6 +84,22 @@ mod Std.Beam
         true -> Some(raw_term_tuple_element(index + 1, term))
         false -> None()
 
+  ## Native ADTs use an atom for a nullary constructor and a tuple whose first
+  ## element is the constructor atom otherwise. These observations expose only
+  ## the validated tag and field count; structural decoders still validate and
+  ## reconstruct every field before producing a typed value.
+  fn adt_tag(term: BeamTerm) -> Option(Atom) = match atom(term)
+    Some(value) -> Some(value)
+    None() -> match tuple_element(term, 0)
+      Some(value) -> atom(value)
+      None() -> None()
+
+  fn adt_arity(term: BeamTerm) -> Option(Int) = match atom(term)
+    Some(_) -> Some(0)
+    None() -> match tuple_arity(term)
+      Some(size) -> Some(size - 1)
+      None() -> None()
+
   fn decode_atom(term: BeamTerm) -> Result(Atom, BeamDecodeError) = match atom(term)
     Some(value) -> Ok(value)
     None() -> Error(InvalidBeamTerm())

@@ -188,6 +188,7 @@ defmodule Cure.Elab.Resolve do
   # normally reaches classification as `{:vdata, int_fid, []}`.
   defp classify(_env, {:vint_type}, _seen), do: {:concrete, :Int}
   defp classify(_env, {:vfloat_type}, _seen), do: {:concrete, :Float}
+  defp classify(_env, {:vatom_type}, _seen), do: {:concrete, :Atom}
   # String has no primitive value former: `String = List(Char)` (the landed
   # value-surface design), so it reaches dispatch as the `nglobal` alias `String`
   # and is unfolded to `List(Char)` by the neutral-global clause below — it never
