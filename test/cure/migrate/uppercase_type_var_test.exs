@@ -430,8 +430,9 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     mod M
       use Std.Fsm
 
-      fsm Cure.Generated.Derived state Int derive
-        match event
+      fsm Cure.Generated.Derived
+        state Int
+        events
           Start -> :keep_state_and_data
           Stop -> :keep_state_and_data
 
@@ -472,8 +473,9 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     mod M
       use Std.Fsm
 
-      fsm Cure.Generated.Derived state Int derive
-        match event
+      fsm Cure.Generated.Derived
+        state Int
+        events
           Start -> :keep_state_and_data
 
     fn make_start() -> FsmEvent = Start

@@ -1555,6 +1555,22 @@ defmodule Cure.Compiler.Printer do
   defp computed_use_segment({:hole, _}, [arg | rest], depth, indent, _pad),
     do: {" " <> render(arg, depth, indent), rest}
 
+  defp computed_use_segment(
+         {:family, %{fields: fields}},
+         [{:family_input, _meta, values} | rest],
+         depth,
+         indent,
+         pad
+       ) do
+    rendered =
+      fields
+      |> Enum.zip(values)
+      |> Enum.flat_map(fn {field, value} -> render_family_capture(field, value, depth, indent, pad) end)
+      |> Enum.join("")
+
+    {rendered, rest}
+  end
+
   defp computed_use_segment({kind, %{delimiter: "dedent"}}, [arg | rest], depth, indent, pad)
        when kind in [:code_hole, :raw_hole, :declarations_hole],
        do: {"\n" <> pad <> render(arg, depth + 1, indent), rest}
@@ -1567,6 +1583,31 @@ defmodule Cure.Compiler.Printer do
     do: Atom.to_string(value)
 
   defp computed_use_module_name(arg, depth, indent), do: render(arg, depth, indent)
+
+  defp render_family_capture(%{name: name, cardinality: :optional}, {:family_option, meta, values}, depth, indent, pad) do
+    if Keyword.get(meta, :present, false) do
+      Enum.flat_map(values, fn value ->
+        ["\n#{pad}#{name}" | render_family_capture_value(value, depth, indent, pad)]
+      end)
+    else
+      []
+    end
+  end
+
+  defp render_family_capture(%{cardinality: cardinality} = field, values, depth, indent, pad)
+       when cardinality in [:repeated, :one_or_more] and is_list(values),
+       do: Enum.flat_map(values, &render_family_capture(field, &1, depth, indent, pad))
+
+  defp render_family_capture(%{name: name}, value, depth, indent, pad),
+    do: ["\n#{pad}#{name}" | render_family_capture_value(value, depth, indent, pad)]
+
+  defp render_family_capture_value({:case_block, _meta, arms}, depth, indent, pad) do
+    body_pad = pad <> indent
+    ["\n", body_pad, Enum.map_join(arms, "\n#{body_pad}", &render(&1, depth + 2, indent))]
+  end
+
+  defp render_family_capture_value(value, depth, indent, _pad),
+    do: [" ", render(value, depth + 1, indent)]
 
   defp macro_segments_to_string(segments), do: Enum.map_join(segments, " ", &macro_segment_to_string/1)
   defp macro_segment_to_string({:lit, word}), do: word

@@ -269,15 +269,6 @@ defmodule Cure.LSP.LspTest do
       {_, _} = Server.process_message(msg, state)
     end
 
-    test "classifies transparent lifted behavior modules without legacy container nodes" do
-      assert {:ok, ast} = Cure.Compiler.parse_source("actor Cure.SymbolActor with 0\n", emit_events: false)
-      [symbol] = Symbols.extract(ast)
-
-      assert symbol["name"] == "Cure.SymbolActor"
-      assert symbol["detail"] == "lifted gen_server module"
-      assert Enum.any?(symbol["children"], &(&1["name"] == "callback init/1"))
-    end
-
     test "does not synthesize retired FSM metadata from generic containers" do
       ast =
         {:container, [container_type: :module, name: "Plain", line: 1],

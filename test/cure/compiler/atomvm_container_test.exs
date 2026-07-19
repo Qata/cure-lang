@@ -17,32 +17,6 @@ defmodule Cure.Compiler.AtomVMContainerTest do
 
       assert {:ok, :"Cure.Main", _} =
                Cure.Compiler.compile_string(
-                 "use Std.Supervisor\nactor Cure.AtomVMTestWorker with 0\nsup Cure.AtomVMTestSup children [child_spec Cure.AtomVMTestWorker :worker]\n",
-                 output_dir: out,
-                 emit_events: false
-               )
-
-      assert {:ok, :"Cure.AtomVMTestApp", _} =
-               Cure.Compiler.compile_string("app Cure.AtomVMTestApp\n",
-                 output_dir: out,
-                 emit_events: false
-               )
-
-      assert {:ok, :"Cure.AtomVMTestActor", _} =
-               Cure.Compiler.compile_string("actor Cure.AtomVMTestActor with 0\n",
-                 output_dir: out,
-                 emit_events: false
-               )
-
-      assert {:ok, :"Cure.AtomVMTestFsm", _} =
-               Cure.Compiler.compile_string(
-                 "fsm Cure.AtomVMTestFsm state Int transitions [transition :ready :tick :ready]\n",
-                 output_dir: out,
-                 emit_events: false
-               )
-
-      assert {:ok, :"Cure.Main", _} =
-               Cure.Compiler.compile_string(
                  "use Std.Actor\nactor Cure.AtomVMStructuredActor\n  state Int\n  on_cast\n    Inc -> state + 1\n",
                  output_dir: out,
                  emit_events: false
@@ -76,10 +50,6 @@ defmodule Cure.Compiler.AtomVMContainerTest do
          [
            {:clause, 1, [], [],
             [
-              remote_call(:"Cure.AtomVMTestSup", :start_link, []),
-              remote_call(:"Cure.AtomVMTestApp", :start, [{:atom, 1, :normal}, {nil, 1}]),
-              remote_call(:"Cure.AtomVMTestActor", :start_link, []),
-              remote_call(:"Cure.AtomVMTestFsm", :start_link, [{:integer, 1, 0}]),
               remote_call(:"Cure.AtomVMStructuredSup", :start_link, []),
               remote_call(:"Cure.AtomVMStructuredApp", :start, [{:atom, 1, :normal}, {nil, 1}]),
               remote_call(:"Cure.AtomVMStructuredActor", :start_link, [{:integer, 1, 0}]),

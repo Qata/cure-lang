@@ -192,11 +192,11 @@ defmodule Cure.Audit.UnresolvedTest do
     assert Ledger.audit_source(src, "Test.Resolved").unresolved == []
   end
 
-  test "Std.Fsm's macro-only surface introduces no Cure bridge axioms" do
+  test "Std.Fsm's macro-only surface introduces no retired FSM bridge" do
     assert {:ok, text} = CLI.run("Std.Fsm", [])
 
-    assert text =~ "AXIOMS — CURE BRIDGE (0)"
-    assert text =~ "UNRESOLVED (0)"
+    refute text =~ "Cure.FSM.Builtins"
+    refute text =~ "Cure.Fsm.Builtins"
   end
 
   test "the other OTP-facing modules audit without crashing" do

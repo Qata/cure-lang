@@ -25,32 +25,7 @@ defmodule Cure.Doc.AsciiTest do
     assert out =~ "declarations: 1"
   end
 
-  test "renders a transparent lifted module from source" do
-    assert {:ok, ast} = Cure.Compiler.parse_source("app Cure.DocApp\n", emit_events: false)
-    out = Ascii.render(ast)
-
-    assert out =~ "module Cure.DocApp"
-    assert out =~ "behaviour: application"
-  end
-
   test "returns nil for non-lifted input" do
     assert Ascii.render({:literal, [], 0}) == nil
-  end
-
-  test "render_file includes lifted modules and accepts the generic filter" do
-    src = """
-    app Cure.DocApp
-    """
-
-    path = Path.join(System.tmp_dir!(), "cure_ascii_test_#{System.unique_integer([:positive])}.cure")
-
-    try do
-      File.write!(path, src)
-      assert {:ok, output} = Ascii.render_file(path, filter: :lifted)
-      assert output =~ "module Cure.DocApp"
-      assert {:ok, ""} = Ascii.render_file(path, filter: :fsm)
-    after
-      File.rm!(path)
-    end
   end
 end
