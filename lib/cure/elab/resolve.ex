@@ -124,6 +124,9 @@ defmodule Cure.Elab.Resolve do
   defp applied_head?({:function_call, fmeta, _args}, hv), do: Keyword.get(fmeta, :name) == hv
   defp applied_head?(_type, _hv), do: false
 
+  # NOTE(int-facade): kept for totality on a legacy/deserialized `{:vint_type}`
+  # value; fresh elaboration never produces one (spec 2026-07-18 §3a) — `Int`
+  # normally reaches classification as `{:vdata, int_fid, []}`.
   defp classify(_env, {:vint_type}, _seen), do: {:concrete, :Int}
   defp classify(_env, {:vfloat_type}, _seen), do: {:concrete, :Float}
   # String has no primitive value former: `String = List(Char)` (the landed
@@ -315,7 +318,9 @@ defmodule Cure.Elab.Resolve do
   defp peel_domains({:pi, _g, dom, cod}, n), do: [dom | peel_domains(cod, n - 1)]
   defp peel_domains(_other, _n), do: []
 
-  defp head_type_core(:Int), do: {:int_type}
+  # `Int` is no longer a primitive: surface `Int` resolves to the inductive family
+  # `Std.Int#Int` via the generic data clause below (spec 2026-07-18 surface flip),
+  # exactly as `Nat` does. Float/String remain primitive base types.
   defp head_type_core(:Float), do: {:float_type}
   defp head_type_core(:String), do: {:string_type}
   defp head_type_core(name), do: {:data, name, [], []}

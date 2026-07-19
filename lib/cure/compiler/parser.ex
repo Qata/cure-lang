@@ -2772,11 +2772,13 @@ defmodule Cure.Compiler.Parser do
   defp parse_rewrite(state, token) do
     state = advance(state)
     {proof, state} = parse_expr(state, 0)
-    # `in` may sit on the next line for a multi-line `rewrite … in …` chain. `rewrite`
-    # always requires `in`, so skipping newlines to find it is unambiguous; `skip_newlines`
-    # skips only `:newline` (never `:indent`/`:dedent`), so it cannot cross a branch boundary.
+    # `in` may sit on the next line for a multi-line `rewrite … in …` chain, and the BODY may
+    # likewise start on the line after `in`. `rewrite` always requires both, so skipping newlines
+    # to find each is unambiguous; `skip_newlines` skips only `:newline` (never `:indent`/`:dedent`),
+    # so it cannot cross a branch boundary — a missing `in`/body still stops at the dedent and errors.
     state = skip_newlines(state)
     state = expect_keyword(state, :in)
+    state = skip_newlines(state)
     {body, state} = parse_expr(state, 0)
     {{:rewrite_expr, [line: token.line, col: token.col], [proof, body]}, state}
   end
@@ -2931,8 +2933,11 @@ defmodule Cure.Compiler.Parser do
   # caller resumes the Pratt loop, so it can see the token that follows.
   defp build_infix_op(state, left, token, right_bp, op_lexeme) do
     case token.type do
-      # Pipe desugaring: a |> f  or  a |> f(b, c)
+      # Pipe desugaring: a |> f  or  a |> f(b, c). A trailing `|>` may sit at the end of a line with its
+      # right operand on the next line (`a |> \n f() |> \n g()`); `|>` always demands an operand, so skipping
+      # the intervening newline to find it is unambiguous (skip_newlines skips only `:newline`).
       :pipe ->
+        state = skip_newlines(state)
         {right, state} = parse_expr(state, right_bp, op_lexeme)
         {desugar_pipe(left, right, token), state}
 
@@ -6245,8 +6250,48 @@ defmodule Cure.Compiler.Parser do
         state = expect(state, :rparen)
         {{:named_dom, name, inner}, state}
 
+      # A RELEVANT IMPLICIT domain `{k: Type}` (Idris `{k : Nat}`): implicit at
+      # application/pattern (solved by unification, never positional) but
+      # runtime-relevant (quantity ω, retained) — the fourth quadrant Cure's
+      # inferred-index (implicit+erased) and explicit-dom (explicit+ω) categories
+      # can't spell. Distinguished from a REFINEMENT type `{x: T | P}` (which
+      # `parse_type_atom` routes to `parse_refinement_type`) by the ABSENCE of a
+      # top-level `|` before the closing `}`: `parse_refinement_type` requires the
+      # bar, so a bar-less `{ident: …}` is never a valid refinement here.
+      {%Token{type: :lbrace}, %Token{type: :colon}} ->
+        if implicit_dom_brace?(state) do
+          state = advance(state)
+          name_token = peek(state)
+          name = to_string(name_token.value)
+          state = advance(state)
+          state = expect(state, :colon)
+          {inner, state} = parse_type_atom(state)
+          state = expect(state, :rbrace)
+          {{:implicit_dom, name, inner}, state}
+        else
+          parse_type_atom(state)
+        end
+
       _ ->
         parse_type_atom(state)
+    end
+  end
+
+  # Peek: does the brace group at `state` (peek == `{`) close WITHOUT a top-level
+  # `|`? True → relevant-implicit domain `{k: T}`; false → refinement `{x: T | P}`.
+  # Scans from just inside the `{`, tracking nested-brace depth so a `|` inside a
+  # nested group doesn't count. A malformed/unterminated group returns true and
+  # lets the domain parser surface the error normally.
+  defp implicit_dom_brace?(state), do: scan_implicit_dom_brace(state, 1, 0)
+
+  defp scan_implicit_dom_brace(state, offset, depth) do
+    case peek_at(state, offset) do
+      %Token{type: :lbrace} -> scan_implicit_dom_brace(state, offset + 1, depth + 1)
+      %Token{type: :rbrace} when depth == 0 -> true
+      %Token{type: :rbrace} -> scan_implicit_dom_brace(state, offset + 1, depth - 1)
+      %Token{type: :bar} when depth == 0 -> false
+      nil -> true
+      _ -> scan_implicit_dom_brace(state, offset + 1, depth)
     end
   end
 
@@ -7748,6 +7793,24 @@ defmodule Cure.Compiler.Parser do
   defp parse_type_arrow(state) do
     token = peek(state)
 
+    # A `fn(y) -> …` LAMBDA literal appearing in a dependent index/term position
+    # (e.g. `Equivalent(Eff, bind(m, fn(y) -> Pure(y)), m)`). `fn` lexes as
+    # `%Token{type: :keyword, value: :fn}`, so it is caught here before the
+    # `token.type` dispatch below. Without it the `fn` fell through to the
+    # "Simple type" arm, `(y)` was read as a type-param list and the trailing
+    # `->` turned the whole thing into a bogus arrow type `Function(y, …)` — `y`
+    # then dangled as `{:global, :y}` and normalisation crashed (E10a). Reuse the
+    # expression lambda entry so the SAME `{:lambda,…}` AST is produced here as in
+    # term position; a lambda is a complete term, so (unlike the arrow arms) it is
+    # NOT chained through `maybe_parse_function_type`.
+    if token.type == :keyword and token.value == :fn do
+      parse_fn_or_lambda(state)
+    else
+      parse_type_arrow_dispatch(state, token)
+    end
+  end
+
+  defp parse_type_arrow_dispatch(state, token) do
     case token.type do
       :lbrace ->
         parse_refinement_type(state)

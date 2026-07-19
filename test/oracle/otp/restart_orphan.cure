@@ -1,0 +1,84 @@
+mod RestartOrphan
+  use Std.Equivalent
+  ## BRIDGE: ASYNC session buffers × SUPERVISION restart. An async config carries an in-flight message
+  ## BUFFER between the two participants. A crash mid-protocol leaves messages in that buffer. A correct
+  ## one_for_all restart must reset the locals to their duals AND FLUSH the buffer — a fresh session has
+  ## no in-flight messages. Restarting locals but keeping a stale buffer leaves an ORPHAN message that no
+  ## fresh participant expects. This bridges the async pillar (buffers/orphan-freedom) to supervision.
+  type Bool = False | True
+  type Msg = MReq | MAns
+  type Local = LSend(Msg, Local) | LRecv(Msg, Local) | LEnd
+  type Buffer = BEmpty | BFull(Msg)
+  type Config = MkCfg(Local, Local, Buffer)
+  fn andb(a: Bool, b: Bool) -> Bool = match a
+    True()   -> b
+    False()  -> False()
+  fn meq(a: Msg, b: Msg) -> Bool = match a
+    MReq()  -> match b
+      MReq()  -> True()
+      MAns()  -> False()
+    MAns()  -> match b
+      MReq()  -> False()
+      MAns()  -> True()
+  fn dual(l: Local) -> Local = match l
+    LEnd()        -> LEnd()
+    LSend(m, k)   -> LRecv(m, dual(k))
+    LRecv(m, k)   -> LSend(m, dual(k))
+  fn compatible(w: Local, p: Local) -> Bool = match w
+    LEnd()        -> match p
+      LEnd()        -> True()
+      LSend(m2, k2) -> False()
+      LRecv(m2, k2) -> False()
+    LSend(m, k)   -> match p
+      LEnd()        -> False()
+      LSend(m2, k2) -> False()
+      LRecv(m2, k2) -> andb(meq(m, m2), compatible(k, k2))
+    LRecv(m, k)   -> match p
+      LEnd()        -> False()
+      LSend(m2, k2) -> andb(meq(m, m2), compatible(k, k2))
+      LRecv(m2, k2) -> False()
+  fn is_empty(b: Buffer) -> Bool = match b
+    BEmpty()   -> True()
+    BFull(m)   -> False()
+  ## A FRESH session config: participants dual AND no in-flight messages.
+  fn well_formed_fresh(c: Config) -> Bool = match c
+    MkCfg(w, p, b)  -> andb(compatible(w, p), is_empty(b))
+  fn one_for_all_restores(pr: Local) -> Equivalent(Bool, compatible(pr, dual(pr)), True()) = match pr
+    LEnd()        -> reflexive(True())
+    LSend(m, k)   -> match m
+      MReq()  -> one_for_all_restores(k)
+      MAns()  -> one_for_all_restores(k)
+    LRecv(m, k)   -> match m
+      MReq()  -> one_for_all_restores(k)
+      MAns()  -> one_for_all_restores(k)
+  ## **RESTART-WITH-FLUSH IS FRESH (general)**: resetting both participants to a protocol and its dual
+  ## AND emptying the buffer yields a well-formed fresh config for EVERY protocol — the correct restart.
+  ## Reduces (buffer empty ⇒ is_empty = True, andb(x, True) waits on x) to one_for_all_restores.
+  fn flush_is_fresh(pr: Local) -> Equivalent(Bool, well_formed_fresh(MkCfg(pr, dual(pr), BEmpty())), True()) =
+    match pr
+      LEnd()        -> reflexive(True())
+      LSend(m, k)   -> match m
+        MReq()  -> flush_is_fresh(k)
+        MAns()  -> flush_is_fresh(k)
+      LRecv(m, k)   -> match m
+        MReq()  -> flush_is_fresh(k)
+        MAns()  -> flush_is_fresh(k)
+  ## **RESTART-WITHOUT-FLUSH ORPHANS (general)**: reset the locals to their duals but KEEP a non-empty
+  ## buffer BFull(m) — the config is NOT fresh (`well_formed_fresh = False`) whatever the protocol,
+  ## because the buffered message is an orphan no fresh participant is waiting to receive. So a correct
+  ## restart of an async session must flush its in-flight buffer, not merely reset the protocol states.
+  fn noflush_orphans(pr: Local, m: Msg) -> Equivalent(Bool, well_formed_fresh(MkCfg(pr, dual(pr), BFull(m))), False()) =
+    match pr
+      LEnd()        -> reflexive(False())
+      LSend(m2, k)  -> match m2
+        MReq()  -> noflush_orphans_tail(k, m)
+        MAns()  -> noflush_orphans_tail(k, m)
+      LRecv(m2, k)  -> match m2
+        MReq()  -> noflush_orphans_tail(k, m)
+        MAns()  -> noflush_orphans_tail(k, m)
+  ## helper: with the locals dual and compatible reducing to True, well_formed_fresh(...BFull) = andb(True, False) = False.
+  fn noflush_orphans_tail(pr: Local, m: Msg) -> Equivalent(Bool, andb(compatible(pr, dual(pr)), False()), False()) =
+    match compatible(pr, dual(pr))
+      True()   -> reflexive(False())
+      False()  -> reflexive(False())
+end

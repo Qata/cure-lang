@@ -1,5 +1,6 @@
 @group(:concurrency)
 mod Std.Otp.Raw
+  use Std.Option
   ## SEALED unsafe raw base for the typed BEAM process algebra.
   ##
   ## Honest, permissive, effect-typed externs over stock Erlang/OTP BIFs — the
@@ -146,6 +147,13 @@ mod Std.Otp.Raw
   @extern(:gen_server, :call, 2)
   fn raw_call({q: Type}, {r: Type}, server: RawPid(q, r, Server), req: q) -> Effect(r)
 
+  ## Dependent-reply variant of `raw_call`: the server's reply-index slot `kr` and the RESULT `res` are
+  ## DECOUPLED, so the caller may choose `res = ReplyOf(request)` — a function of the EXPLICIT request. Same BIF
+  ## (`gen_server:call/2`), same partiality/trust as `raw_call`; `Std.Otp.call_dep` threads it, with server-side
+  ## soundness in `Std.Otp.Proof`.
+  @extern(:gen_server, :call, 2)
+  fn raw_call_dep({q: Type}, {kr: Type}, {res: Type}, server: RawPid(q, kr, Server), req: q) -> Effect(res)
+
   ## Reply explicitly to a `gen_server` caller. The public wrapper gives the
   ## callback-side `from` value a linear binder before consuming it.
   @extern(:gen, :reply, 2)
@@ -216,4 +224,52 @@ mod Std.Otp.Raw
   ## turns that into an `Option`.
   @extern(:erlang, :whereis, 1)
   fn raw_whereis(name: Atom) -> Effect(BarePid | :undefined)
+
+  ## ── Subject: a typed message ADDRESS `{owner_pid, tag_ref}` (Gleam-style, F-1 addressing) ──
+  ##
+  ## A subject is a fresh `(pid, unique reference)` pair. A send delivers `{tag, message}` to the owner's mailbox
+  ## and a receive matches THAT tag, so one process may own several subjects of different message types and
+  ## receive each independently — the decoupling `Pid(m)` (one message type per process) cannot give. The tagged
+  ## `receive … after … end` is not a BIF, so these route through the `Cure.Otp.Builtins` runtime helper;
+  ## `Std.Otp` narrows them into the typed `Subject(m)` surface. Ordinary effect discipline (each op is `Effect`).
+  @extern(Elixir.Cure.Otp.Builtins, :subject_new, 0)
+  fn raw_subject_new({m: Type}) -> Effect(Tuple(RawPid(m, m, Plain), Ref))
+
+  @extern(Elixir.Cure.Otp.Builtins, :subject_send, 2)
+  fn raw_subject_send({m: Type}, subject: Tuple(RawPid(m, m, Plain), Ref), message: m) -> Effect(Atom)
+
+  @extern(Elixir.Cure.Otp.Builtins, :subject_receive, 2)
+  fn raw_subject_receive({m: Type}, subject: Tuple(RawPid(m, m, Plain), Ref), timeout: Int) -> Effect(Option(m))
+
+  ## ── Selector: typed selective receive over several heterogeneous subjects ──
+  ##
+  ## A SELECTOR is a set of `(subject-tag → transform)` handlers; `selector_receive` does ONE guarded receive that
+  ## matches ANY registered tag (the dynamic multi-tag select) and maps the message into the common payload `p`.
+  ## Building/extending a selector is PURE (a data structure); only the receive is an `Effect`. Erases to
+  ## `{selector, #{ {tag,2} => handler }}`. `Std.Otp` gives it the typed `Selector(p)` surface.
+  opaque type Selector(p)
+
+  @extern(Elixir.Cure.Otp.Builtins, :selector_new, 0)
+  fn raw_selector_new({p: Type}) -> Selector(p)
+
+  @extern(Elixir.Cure.Otp.Builtins, :selector_select_map, 3)
+  fn raw_selector_select_map({p: Type}, {m: Type}, selector: Selector(p), subject: Tuple(RawPid(m, m, Plain), Ref), transform: (m) -> p) -> Selector(p)
+
+  @extern(Elixir.Cure.Otp.Builtins, :selector_receive, 2)
+  fn raw_selector_receive({p: Type}, selector: Selector(p), timeout: Int) -> Effect(Option(p))
+
+  ## ── Name: typed process registration (the F-1 typed name → handle) ──
+  ##
+  ## `name_whereis` returns a TYPED `Option(RawPid(m,m,Plain))` — a sendable handle — instead of the untyped bare
+  ## pid `raw_whereis` gives, closing F-1: the message type `m` rides on the caller's `Std.Otp.Name(m)` (the trust
+  ## point, as in Gleam's `Name(message)`). Register/unregister are Bool-safe via the helper. AtomVM caveat:
+  ## needs `erlang:register/whereis`; confirm support before relying on it there (host OTP is fine).
+  @extern(Elixir.Cure.Otp.Builtins, :name_register, 2)
+  fn raw_name_register({m: Type}, name: Atom, pid: RawPid(m, m, Plain)) -> Effect(Bool)
+
+  @extern(Elixir.Cure.Otp.Builtins, :name_whereis, 1)
+  fn raw_name_whereis({m: Type}, name: Atom) -> Effect(Option(RawPid(m, m, Plain)))
+
+  @extern(Elixir.Cure.Otp.Builtins, :name_unregister, 1)
+  fn raw_name_unregister(name: Atom) -> Effect(Bool)
 end

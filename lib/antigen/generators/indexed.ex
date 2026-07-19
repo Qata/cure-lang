@@ -88,7 +88,12 @@ defmodule Antigen.Generators.Indexed do
   @doc "Rebuild the Env: declare every family, then add the def under test."
   @spec env_of(Challenge.t()) :: Env.t()
   def env_of(%Challenge{payload: %{families: families, def_name: dn, def_type: dt, def_body: db}}) do
-    env = Enum.reduce(families, Env.empty(), fn {fam, ctors}, e -> Inductive.declare(e, fam, ctors) end)
+    # Seed the canonical :nat/:int builtins first: the W3 deletion challenge's
+    # def types the compact literal `{:int_lit, 3}` (IxN's index is now the Int
+    # family, `{:int_lit}` at wrapn's result index), which reads the :int builtin.
+    # The families are inert to every Dec/Wr/IW-based indexed probe.
+    seed = Antigen.CanonBuiltins.seed(Env.empty())
+    env = Enum.reduce(families, seed, fn {fam, ctors}, e -> Inductive.declare(e, fam, ctors) end)
     Env.add_def(env, dn, dt, db)
   end
 
@@ -529,7 +534,7 @@ defmodule Antigen.Generators.Indexed do
   # by the DELETION rule (r == s ⇒ consistent, kernel.ex `unify_one`). The branch
   # is therefore REACHABLE with no refinement.
   defp ixn_family,
-    do: {Inductive.family(:IxN, [], [{:i, {:int_type}}], 0), [Inductive.ctor(:wrapn, [{:p, @dec}], [{:int_lit, 3}])]}
+    do: {Inductive.family(:IxN, [], [{:i, {:data, :Int, [], []}}], 0), [Inductive.ctor(:wrapn, [{:p, @dec}], [{:int_lit, 3}])]}
 
   @doc """
   Deletion-rule obligation. `:well_typed`: the reachable-via-deletion branch has a
@@ -544,7 +549,7 @@ defmodule Antigen.Generators.Indexed do
     ixn3 = {:data, :IxN, [], [{:int_lit, 3}]}
 
     motive =
-      {:lam, Cure.Core.Grade.unrestricted(), {:int_type},
+      {:lam, Cure.Core.Grade.unrestricted(), {:data, :Int, [], []},
        {:lam, Cure.Core.Grade.unrestricted(), {:data, :IxN, [], [{:var, 0}]}, @dec}}
 
     def_type = {:pi, Cure.Core.Grade.unrestricted(), ixn3, @dec}

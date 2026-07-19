@@ -22,7 +22,7 @@ defmodule Antigen.Generators.InductiveEnvTest do
           B.interp(InductiveEnv.gen()) |> Enum.take(20) do
       assert fam.name == :AntigenEnv
       assert fam.params == [{:a, {:type, 0}}]
-      assert fam.indices == [{:n, {:int_type}}]
+      assert fam.indices == [{:n, {:data, :Int, [], []}}]
       assert fam.level == 0
 
       assert ctor.name == :antigenA

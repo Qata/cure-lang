@@ -806,7 +806,12 @@ defmodule Cure.Elab.Program do
   # membership lives at the definition site, not in a hand-kept list. Cached in
   # `:persistent_term`: the stdlib is fixed for a compiler build, and this runs
   # only in the HOST compiler, never on AtomVM (where `persistent_term` is absent).
-  defp prelude_manifest do
+  #
+  # Public (but `@doc false`) so the incremental driver can observe the cached
+  # set and so tests can assert its content; not part of the stable API.
+  @doc false
+  @spec prelude_manifest() :: [%{source: String.t(), path: String.t(), names: :all | MapSet.t()}]
+  def prelude_manifest do
     case Paths.source_dir() do
       nil ->
         []
@@ -824,6 +829,28 @@ defmodule Cure.Elab.Program do
             cached
         end
     end
+  end
+
+  @doc """
+  Evict the memoized `@prelude` manifest for the current stdlib source dir, if
+  cached, so the next `prelude_manifest/0` re-scans current source content.
+
+  `prelude_manifest/0` caches per source dir under the same "stdlib is immutable
+  for the process lifetime" assumption `cached_module_interface/2` makes — and
+  that incremental compilation of the stdlib likewise violates. If a stdlib
+  source's `@prelude` markers change between two same-process builds, a stale
+  manifest would keep elaborating later modules against the OLD ambient set. The
+  incremental driver calls this once at the start of a build that recompiles any
+  stdlib source, mirroring `invalidate_module_interface/1`.
+  """
+  @spec invalidate_prelude_manifest() :: :ok
+  def invalidate_prelude_manifest do
+    case Paths.source_dir() do
+      nil -> :ok
+      dir -> :persistent_term.erase({__MODULE__, :prelude_manifest, dir})
+    end
+
+    :ok
   end
 
   defp scan_prelude_manifest(dir) do
@@ -1613,6 +1640,46 @@ defmodule Cure.Elab.Program do
   #
   # Bookkeeping (cycle stack, duplicate identity, path/identity agreement) lives
   # in the caller and still runs per generation on every load, hit or miss.
+  @doc """
+  Return the canonical module interface for `module_name` at `path`.
+
+  The interface map carries the elaborated `:export_env` a consumer merges in
+  when it imports this module, plus its `:source_hash`. This is the exact
+  artifact incremental compilation hashes to decide whether a change to this
+  module can affect its dependents. Semantics match the internal loader cache:
+  `:persistent_term`-cached for stdlib paths, recomputed otherwise.
+  """
+  @spec module_interface(String.t(), String.t()) :: {:ok, map()} | {:error, term()}
+  def module_interface(module_name, path) when is_binary(module_name) and is_binary(path) do
+    # Runs inside a loader session so a cold, standalone call (no enclosing
+    # `elaborate/1`) still has the `@loader_state_key` generation its dependency
+    # loading reads. `with_loader_session/1` reuses an existing generation when
+    # one is already open, so this is a no-op cost under normal elaboration.
+    with_loader_session(fn -> cached_module_interface(module_name, path) end)
+  end
+
+  @doc """
+  Evict `path`'s memoized interface, if one is cached, so the next
+  `module_interface/2` call (and any subsequent `use`-import resolution that
+  goes through the same loader) recomputes it from current source content.
+
+  `cached_module_interface/2` assumes a shipped stdlib source is immutable for
+  the lifetime of a compiler run — true for ordinary one-shot compilation, but
+  violated BY DESIGN whenever incremental compilation recompiles that very
+  source within one long-lived process (two `Cure.Compiler.Incremental`
+  builds sharing a VM, e.g. `mix cure.compile_stdlib` invoked twice in one
+  node). Without this, a module's SECOND same-process recompile can silently
+  report the FIRST run's now-stale interface, and a dependent whose actual
+  interface changed is never recompiled. The incremental driver calls this
+  immediately after recompiling a module, before computing its fresh
+  interface hash.
+  """
+  @spec invalidate_module_interface(String.t()) :: :ok
+  def invalidate_module_interface(path) when is_binary(path) do
+    :persistent_term.erase({__MODULE__, :module_interface, path})
+    :ok
+  end
+
   defp cached_module_interface(module_name, path) do
     if stdlib_source_path?(path) do
       key = {__MODULE__, :module_interface, path}
@@ -2013,7 +2080,8 @@ defmodule Cure.Elab.Program do
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
   @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
-                      primitives interfaces coherence constrained import_modules lemmas module_owner)a
+                      primitives interfaces coherence constrained import_modules lemmas module_owner
+                      current_def)a
 
   @env_keys Map.keys(Map.from_struct(%Env{}))
   missing = @env_keys -- @merged_env_keys
@@ -2042,7 +2110,11 @@ defmodule Cure.Elab.Program do
          constrained: Map.merge(left.constrained, right.constrained),
          import_modules: MapSet.union(left.import_modules, right.import_modules),
          lemmas: Map.merge(left.lemmas, right.lemmas, fn _head, ls, rs -> Enum.uniq(ls ++ rs) end),
-         module_owner: left.module_owner || right.module_owner
+         module_owner: left.module_owner || right.module_owner,
+         # Transient (set only for the duration of one def's body elaboration in
+         # `Declarations.elaborate_real_body/3`, never part of a stored/merged
+         # env in practice); mirrors `module_owner`'s merge for consistency.
+         current_def: left.current_def || right.current_def
        }}
     end
   end

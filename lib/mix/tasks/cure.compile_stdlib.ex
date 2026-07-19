@@ -32,22 +32,7 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
     Mix.Task.run("app.start", ["--no-deps-check"])
 
     stdlib_dir = Path.join(["lib", "std"])
-
-    cure_files =
-      case Cure.Compiler.DepGraph.scan(Path.wildcard(Path.join(stdlib_dir, "*.cure"))) do
-        {:ok, graph} ->
-          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
-
-          Enum.each(cycles, fn walk ->
-            Mix.shell().info(Cure.Compiler.Errors.format_error({:import_cycle, walk}, stdlib_dir))
-          end)
-
-          ordered
-
-        {:error, reason} ->
-          Mix.shell().error(Cure.Compiler.Errors.format_error(reason, stdlib_dir))
-          exit({:shutdown, 1})
-      end
+    cure_files = Path.wildcard(Path.join(stdlib_dir, "*.cure"))
 
     cond do
       not compiler_available?() ->
@@ -69,34 +54,34 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
           :code.add_patha(String.to_charlist(abs_dir))
         end
 
-        results =
-          Enum.map(cure_files, fn path ->
-            name = Path.basename(path, ".cure")
-            Mix.shell().info("  #{name}")
+        case Cure.Compiler.Incremental.compile_dir(cure_files, output_dir,
+               source_roots: [stdlib_dir],
+               compile_opts: [emit_events: false]
+             ) do
+          {:ok, summary} ->
+            Enum.each(summary.cycles, fn walk ->
+              Mix.shell().info(Cure.Compiler.Errors.format_error({:import_cycle, walk}, stdlib_dir))
+            end)
 
-            case Cure.Compiler.compile_file(path, output_dir: output_dir, emit_events: false) do
-              {:ok, module, warnings} ->
-                Enum.each(warnings, fn w ->
-                  Mix.shell().info("    warning: #{inspect(w)}")
-                end)
+            Mix.shell().info(
+              "  #{length(summary.compiled)} compiled, " <>
+                "#{length(summary.skipped_fresh)} up-to-date, " <>
+                "#{length(summary.deleted)} removed"
+            )
 
-                {:ok, module}
+            Mix.shell().info("  Output: #{output_dir}")
 
-              {:error, reason} ->
-                formatted = Cure.Compiler.Errors.format_error(reason, path)
-                Mix.shell().error("    #{formatted}")
-                {:error, path}
+            unless summary.errors == [] do
+              Enum.each(summary.errors, fn {target, reason} ->
+                Mix.shell().error("  #{Cure.Compiler.Errors.format_error(reason, target)}")
+              end)
+
+              exit({:shutdown, 1})
             end
-          end)
 
-        ok_count = Enum.count(results, &match?({:ok, _}, &1))
-        err_count = Enum.count(results, &match?({:error, _}, &1))
-
-        Mix.shell().info("  #{ok_count} compiled, #{err_count} errors")
-        Mix.shell().info("  Output: #{output_dir}")
-
-        if err_count > 0 do
-          exit({:shutdown, 1})
+          {:error, reason} ->
+            Mix.shell().error(Cure.Compiler.Errors.format_error(reason, stdlib_dir))
+            exit({:shutdown, 1})
         end
     end
   end

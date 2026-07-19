@@ -153,3 +153,191 @@ mem_eq_lmem OC (Node l OA r) bst =
 mem_eq_lmem OC (Node l OB r) bst =
   rewrite above_not_lmem OC OB l Refl (andb_l (alllt l OB) (allgt r OB) (andb_r (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst))) in
   mem_eq_lmem OC r (andb_l (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst))
+
+andb_intro : (a : OBit) -> (c : OBit) -> a = OT -> c = OT -> andb a c = OT
+andb_intro OT c pa pc = pc
+andb_intro OF c pa pc = void (ofNeOt pa)
+
+allgt_weaken : (t : Tree) -> (v : OKey) -> (w : OKey) -> cmp w v = OT -> allgt t v = OT -> allgt t w = OT
+allgt_weaken Leaf v w pwv pgt = Refl
+allgt_weaken (Node l u r) v w pwv pgt = andb_intro (cmp w u) (andb (allgt l w) (allgt r w)) (strict_trans w v u pwv (andb_l (cmp v u) (andb (allgt l v) (allgt r v)) pgt)) (andb_intro (allgt l w) (allgt r w) (allgt_weaken l v w pwv (andb_l (allgt l v) (allgt r v) (andb_r (cmp v u) (andb (allgt l v) (allgt r v)) pgt))) (allgt_weaken r v w pwv (andb_r (allgt l v) (allgt r v) (andb_r (cmp v u) (andb (allgt l v) (allgt r v)) pgt))))
+
+alllt_weaken : (t : Tree) -> (v : OKey) -> (w : OKey) -> cmp v w = OT -> alllt t v = OT -> alllt t w = OT
+alllt_weaken Leaf v w pvw plt = Refl
+alllt_weaken (Node l u r) v w pvw plt = andb_intro (cmp u w) (andb (alllt l w) (alllt r w)) (strict_trans u v w (andb_l (cmp u v) (andb (alllt l v) (alllt r v)) plt) pvw) (andb_intro (alllt l w) (alllt r w) (alllt_weaken l v w pvw (andb_l (alllt l v) (alllt r v) (andb_r (cmp u v) (andb (alllt l v) (alllt r v)) plt))) (alllt_weaken r v w pvw (andb_r (alllt l v) (alllt r v) (andb_r (cmp u v) (andb (alllt l v) (alllt r v)) plt))))
+
+merge : Tree -> Tree -> Tree
+merge Leaf r = r
+merge (Node ll lv lr) r = Node ll lv (merge lr r)
+
+merge_allgt : (l : Tree) -> (r : Tree) -> (b : OKey) -> allgt l b = OT -> allgt r b = OT -> allgt (merge l r) b = OT
+merge_allgt Leaf r b pl pr = pr
+merge_allgt (Node ll lv lr) r b pl pr = andb_intro (cmp b lv) (andb (allgt ll b) (allgt (merge lr r) b)) (andb_l (cmp b lv) (andb (allgt ll b) (allgt lr b)) pl) (andb_intro (allgt ll b) (allgt (merge lr r) b) (andb_l (allgt ll b) (allgt lr b) (andb_r (cmp b lv) (andb (allgt ll b) (allgt lr b)) pl)) (merge_allgt lr r b (andb_r (allgt ll b) (allgt lr b) (andb_r (cmp b lv) (andb (allgt ll b) (allgt lr b)) pl)) pr))
+
+merge_alllt : (l : Tree) -> (r : Tree) -> (b : OKey) -> alllt l b = OT -> alllt r b = OT -> alllt (merge l r) b = OT
+merge_alllt Leaf r b pl pr = pr
+merge_alllt (Node ll lv lr) r b pl pr = andb_intro (cmp lv b) (andb (alllt ll b) (alllt (merge lr r) b)) (andb_l (cmp lv b) (andb (alllt ll b) (alllt lr b)) pl) (andb_intro (alllt ll b) (alllt (merge lr r) b) (andb_l (alllt ll b) (alllt lr b) (andb_r (cmp lv b) (andb (alllt ll b) (alllt lr b)) pl)) (merge_alllt lr r b (andb_r (alllt ll b) (alllt lr b) (andb_r (cmp lv b) (andb (alllt ll b) (alllt lr b)) pl)) pr))
+
+merge_bst : (l : Tree) -> (r : Tree) -> (m : OKey) -> isbst l = OT -> isbst r = OT -> alllt l m = OT -> allgt r m = OT -> isbst (merge l r) = OT
+merge_bst Leaf r m bl br plt pgt = br
+merge_bst (Node ll lv lr) r m bl br plt pgt =
+  let bl_r = andb_r (isbst ll) (andb (isbst lr) (andb (alllt ll lv) (allgt lr lv))) bl
+      bl_r2 = andb_r (isbst lr) (andb (alllt ll lv) (allgt lr lv)) bl_r
+      plt_r = andb_r (cmp lv m) (andb (alllt ll m) (alllt lr m)) plt in
+  andb_intro (isbst ll) (andb (isbst (merge lr r)) (andb (alllt ll lv) (allgt (merge lr r) lv))) (andb_l (isbst ll) (andb (isbst lr) (andb (alllt ll lv) (allgt lr lv))) bl) (andb_intro (isbst (merge lr r)) (andb (alllt ll lv) (allgt (merge lr r) lv)) (merge_bst lr r m (andb_l (isbst lr) (andb (alllt ll lv) (allgt lr lv)) bl_r) br (andb_r (alllt ll m) (alllt lr m) plt_r) pgt) (andb_intro (alllt ll lv) (allgt (merge lr r) lv) (andb_l (alllt ll lv) (allgt lr lv) bl_r2) (merge_allgt lr r lv (andb_r (alllt ll lv) (allgt lr lv) bl_r2) (allgt_weaken r m lv (andb_l (cmp lv m) (andb (alllt ll m) (alllt lr m)) plt) pgt))))
+
+delete : OKey -> Tree -> Tree
+delete k Leaf = Leaf
+delete k (Node l v r) = case cmp k v of
+  OT => Node (delete k l) v r
+  OF => case keq k v of
+    OT => merge l r
+    OF => Node l v (delete k r)
+
+delete_alllt : (k : OKey) -> (t : Tree) -> (b : OKey) -> alllt t b = OT -> alllt (delete k t) b = OT
+delete_alllt k Leaf b plt = Refl
+delete_alllt OA (Node l OB r) b plt = andb_intro (cmp OB b) (andb (alllt (delete OA l) b) (alllt r b)) (andb_l (cmp OB b) (andb (alllt l b) (alllt r b)) plt) (andb_intro (alllt (delete OA l) b) (alllt r b) (delete_alllt OA l b (andb_l (alllt l b) (alllt r b) (andb_r (cmp OB b) (andb (alllt l b) (alllt r b)) plt))) (andb_r (alllt l b) (alllt r b) (andb_r (cmp OB b) (andb (alllt l b) (alllt r b)) plt)))
+delete_alllt OA (Node l OC r) b plt = andb_intro (cmp OC b) (andb (alllt (delete OA l) b) (alllt r b)) (andb_l (cmp OC b) (andb (alllt l b) (alllt r b)) plt) (andb_intro (alllt (delete OA l) b) (alllt r b) (delete_alllt OA l b (andb_l (alllt l b) (alllt r b) (andb_r (cmp OC b) (andb (alllt l b) (alllt r b)) plt))) (andb_r (alllt l b) (alllt r b) (andb_r (cmp OC b) (andb (alllt l b) (alllt r b)) plt)))
+delete_alllt OB (Node l OC r) b plt = andb_intro (cmp OC b) (andb (alllt (delete OB l) b) (alllt r b)) (andb_l (cmp OC b) (andb (alllt l b) (alllt r b)) plt) (andb_intro (alllt (delete OB l) b) (alllt r b) (delete_alllt OB l b (andb_l (alllt l b) (alllt r b) (andb_r (cmp OC b) (andb (alllt l b) (alllt r b)) plt))) (andb_r (alllt l b) (alllt r b) (andb_r (cmp OC b) (andb (alllt l b) (alllt r b)) plt)))
+delete_alllt OA (Node l OA r) b plt = merge_alllt l r b (andb_l (alllt l b) (alllt r b) (andb_r (cmp OA b) (andb (alllt l b) (alllt r b)) plt)) (andb_r (alllt l b) (alllt r b) (andb_r (cmp OA b) (andb (alllt l b) (alllt r b)) plt))
+delete_alllt OB (Node l OB r) b plt = merge_alllt l r b (andb_l (alllt l b) (alllt r b) (andb_r (cmp OB b) (andb (alllt l b) (alllt r b)) plt)) (andb_r (alllt l b) (alllt r b) (andb_r (cmp OB b) (andb (alllt l b) (alllt r b)) plt))
+delete_alllt OC (Node l OC r) b plt = merge_alllt l r b (andb_l (alllt l b) (alllt r b) (andb_r (cmp OC b) (andb (alllt l b) (alllt r b)) plt)) (andb_r (alllt l b) (alllt r b) (andb_r (cmp OC b) (andb (alllt l b) (alllt r b)) plt))
+delete_alllt OB (Node l OA r) b plt = andb_intro (cmp OA b) (andb (alllt l b) (alllt (delete OB r) b)) (andb_l (cmp OA b) (andb (alllt l b) (alllt r b)) plt) (andb_intro (alllt l b) (alllt (delete OB r) b) (andb_l (alllt l b) (alllt r b) (andb_r (cmp OA b) (andb (alllt l b) (alllt r b)) plt)) (delete_alllt OB r b (andb_r (alllt l b) (alllt r b) (andb_r (cmp OA b) (andb (alllt l b) (alllt r b)) plt))))
+delete_alllt OC (Node l OA r) b plt = andb_intro (cmp OA b) (andb (alllt l b) (alllt (delete OC r) b)) (andb_l (cmp OA b) (andb (alllt l b) (alllt r b)) plt) (andb_intro (alllt l b) (alllt (delete OC r) b) (andb_l (alllt l b) (alllt r b) (andb_r (cmp OA b) (andb (alllt l b) (alllt r b)) plt)) (delete_alllt OC r b (andb_r (alllt l b) (alllt r b) (andb_r (cmp OA b) (andb (alllt l b) (alllt r b)) plt))))
+delete_alllt OC (Node l OB r) b plt = andb_intro (cmp OB b) (andb (alllt l b) (alllt (delete OC r) b)) (andb_l (cmp OB b) (andb (alllt l b) (alllt r b)) plt) (andb_intro (alllt l b) (alllt (delete OC r) b) (andb_l (alllt l b) (alllt r b) (andb_r (cmp OB b) (andb (alllt l b) (alllt r b)) plt)) (delete_alllt OC r b (andb_r (alllt l b) (alllt r b) (andb_r (cmp OB b) (andb (alllt l b) (alllt r b)) plt))))
+
+delete_allgt : (k : OKey) -> (t : Tree) -> (b : OKey) -> allgt t b = OT -> allgt (delete k t) b = OT
+delete_allgt k Leaf b pgt = Refl
+delete_allgt OA (Node l OB r) b pgt = andb_intro (cmp b OB) (andb (allgt (delete OA l) b) (allgt r b)) (andb_l (cmp b OB) (andb (allgt l b) (allgt r b)) pgt) (andb_intro (allgt (delete OA l) b) (allgt r b) (delete_allgt OA l b (andb_l (allgt l b) (allgt r b) (andb_r (cmp b OB) (andb (allgt l b) (allgt r b)) pgt))) (andb_r (allgt l b) (allgt r b) (andb_r (cmp b OB) (andb (allgt l b) (allgt r b)) pgt)))
+delete_allgt OA (Node l OC r) b pgt = andb_intro (cmp b OC) (andb (allgt (delete OA l) b) (allgt r b)) (andb_l (cmp b OC) (andb (allgt l b) (allgt r b)) pgt) (andb_intro (allgt (delete OA l) b) (allgt r b) (delete_allgt OA l b (andb_l (allgt l b) (allgt r b) (andb_r (cmp b OC) (andb (allgt l b) (allgt r b)) pgt))) (andb_r (allgt l b) (allgt r b) (andb_r (cmp b OC) (andb (allgt l b) (allgt r b)) pgt)))
+delete_allgt OB (Node l OC r) b pgt = andb_intro (cmp b OC) (andb (allgt (delete OB l) b) (allgt r b)) (andb_l (cmp b OC) (andb (allgt l b) (allgt r b)) pgt) (andb_intro (allgt (delete OB l) b) (allgt r b) (delete_allgt OB l b (andb_l (allgt l b) (allgt r b) (andb_r (cmp b OC) (andb (allgt l b) (allgt r b)) pgt))) (andb_r (allgt l b) (allgt r b) (andb_r (cmp b OC) (andb (allgt l b) (allgt r b)) pgt)))
+delete_allgt OA (Node l OA r) b pgt = merge_allgt l r b (andb_l (allgt l b) (allgt r b) (andb_r (cmp b OA) (andb (allgt l b) (allgt r b)) pgt)) (andb_r (allgt l b) (allgt r b) (andb_r (cmp b OA) (andb (allgt l b) (allgt r b)) pgt))
+delete_allgt OB (Node l OB r) b pgt = merge_allgt l r b (andb_l (allgt l b) (allgt r b) (andb_r (cmp b OB) (andb (allgt l b) (allgt r b)) pgt)) (andb_r (allgt l b) (allgt r b) (andb_r (cmp b OB) (andb (allgt l b) (allgt r b)) pgt))
+delete_allgt OC (Node l OC r) b pgt = merge_allgt l r b (andb_l (allgt l b) (allgt r b) (andb_r (cmp b OC) (andb (allgt l b) (allgt r b)) pgt)) (andb_r (allgt l b) (allgt r b) (andb_r (cmp b OC) (andb (allgt l b) (allgt r b)) pgt))
+delete_allgt OB (Node l OA r) b pgt = andb_intro (cmp b OA) (andb (allgt l b) (allgt (delete OB r) b)) (andb_l (cmp b OA) (andb (allgt l b) (allgt r b)) pgt) (andb_intro (allgt l b) (allgt (delete OB r) b) (andb_l (allgt l b) (allgt r b) (andb_r (cmp b OA) (andb (allgt l b) (allgt r b)) pgt)) (delete_allgt OB r b (andb_r (allgt l b) (allgt r b) (andb_r (cmp b OA) (andb (allgt l b) (allgt r b)) pgt))))
+delete_allgt OC (Node l OA r) b pgt = andb_intro (cmp b OA) (andb (allgt l b) (allgt (delete OC r) b)) (andb_l (cmp b OA) (andb (allgt l b) (allgt r b)) pgt) (andb_intro (allgt l b) (allgt (delete OC r) b) (andb_l (allgt l b) (allgt r b) (andb_r (cmp b OA) (andb (allgt l b) (allgt r b)) pgt)) (delete_allgt OC r b (andb_r (allgt l b) (allgt r b) (andb_r (cmp b OA) (andb (allgt l b) (allgt r b)) pgt))))
+delete_allgt OC (Node l OB r) b pgt = andb_intro (cmp b OB) (andb (allgt l b) (allgt (delete OC r) b)) (andb_l (cmp b OB) (andb (allgt l b) (allgt r b)) pgt) (andb_intro (allgt l b) (allgt (delete OC r) b) (andb_l (allgt l b) (allgt r b) (andb_r (cmp b OB) (andb (allgt l b) (allgt r b)) pgt)) (delete_allgt OC r b (andb_r (allgt l b) (allgt r b) (andb_r (cmp b OB) (andb (allgt l b) (allgt r b)) pgt))))
+
+delete_bst : (k : OKey) -> (t : Tree) -> isbst t = OT -> isbst (delete k t) = OT
+delete_bst k Leaf bst = Refl
+delete_bst OA (Node l OB r) bst = andb_intro (isbst (delete OA l)) (andb (isbst r) (andb (alllt (delete OA l) OB) (allgt r OB))) (delete_bst OA l (andb_l (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst)) (andb_intro (isbst r) (andb (alllt (delete OA l) OB) (allgt r OB)) (andb_l (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst)) (andb_intro (alllt (delete OA l) OB) (allgt r OB) (delete_alllt OA l OB (andb_l (alllt l OB) (allgt r OB) (andb_r (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst)))) (andb_r (alllt l OB) (allgt r OB) (andb_r (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst)))))
+delete_bst OA (Node l OC r) bst = andb_intro (isbst (delete OA l)) (andb (isbst r) (andb (alllt (delete OA l) OC) (allgt r OC))) (delete_bst OA l (andb_l (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)) (andb_intro (isbst r) (andb (alllt (delete OA l) OC) (allgt r OC)) (andb_l (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)) (andb_intro (alllt (delete OA l) OC) (allgt r OC) (delete_alllt OA l OC (andb_l (alllt l OC) (allgt r OC) (andb_r (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)))) (andb_r (alllt l OC) (allgt r OC) (andb_r (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)))))
+delete_bst OB (Node l OC r) bst = andb_intro (isbst (delete OB l)) (andb (isbst r) (andb (alllt (delete OB l) OC) (allgt r OC))) (delete_bst OB l (andb_l (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)) (andb_intro (isbst r) (andb (alllt (delete OB l) OC) (allgt r OC)) (andb_l (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)) (andb_intro (alllt (delete OB l) OC) (allgt r OC) (delete_alllt OB l OC (andb_l (alllt l OC) (allgt r OC) (andb_r (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)))) (andb_r (alllt l OC) (allgt r OC) (andb_r (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)))))
+delete_bst OA (Node l OA r) bst = merge_bst l r OA (andb_l (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst) (andb_l (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst)) (andb_l (alllt l OA) (allgt r OA) (andb_r (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))) (andb_r (alllt l OA) (allgt r OA) (andb_r (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst)))
+delete_bst OB (Node l OB r) bst = merge_bst l r OB (andb_l (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst) (andb_l (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst)) (andb_l (alllt l OB) (allgt r OB) (andb_r (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst))) (andb_r (alllt l OB) (allgt r OB) (andb_r (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst)))
+delete_bst OC (Node l OC r) bst = merge_bst l r OC (andb_l (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst) (andb_l (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)) (andb_l (alllt l OC) (allgt r OC) (andb_r (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst))) (andb_r (alllt l OC) (allgt r OC) (andb_r (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)))
+delete_bst OB (Node l OA r) bst = andb_intro (isbst l) (andb (isbst (delete OB r)) (andb (alllt l OA) (allgt (delete OB r) OA))) (andb_l (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst) (andb_intro (isbst (delete OB r)) (andb (alllt l OA) (allgt (delete OB r) OA)) (delete_bst OB r (andb_l (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))) (andb_intro (alllt l OA) (allgt (delete OB r) OA) (andb_l (alllt l OA) (allgt r OA) (andb_r (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))) (delete_allgt OB r OA (andb_r (alllt l OA) (allgt r OA) (andb_r (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))))))
+delete_bst OC (Node l OA r) bst = andb_intro (isbst l) (andb (isbst (delete OC r)) (andb (alllt l OA) (allgt (delete OC r) OA))) (andb_l (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst) (andb_intro (isbst (delete OC r)) (andb (alllt l OA) (allgt (delete OC r) OA)) (delete_bst OC r (andb_l (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))) (andb_intro (alllt l OA) (allgt (delete OC r) OA) (andb_l (alllt l OA) (allgt r OA) (andb_r (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))) (delete_allgt OC r OA (andb_r (alllt l OA) (allgt r OA) (andb_r (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))))))
+delete_bst OC (Node l OB r) bst = andb_intro (isbst l) (andb (isbst (delete OC r)) (andb (alllt l OB) (allgt (delete OC r) OB))) (andb_l (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst) (andb_intro (isbst (delete OC r)) (andb (alllt l OB) (allgt (delete OC r) OB)) (delete_bst OC r (andb_l (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst))) (andb_intro (alllt l OB) (allgt (delete OC r) OB) (andb_l (alllt l OB) (allgt r OB) (andb_r (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst))) (delete_allgt OC r OB (andb_r (alllt l OB) (allgt r OB) (andb_r (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst))))))
+
+orb_cong_r : (a : OBit) -> b = b2 -> orb a b = orb a b2
+orb_cong_r a e = cong (\y => orb a y) e
+
+orb_cong_l : (c : OBit) -> a = a2 -> orb a c = orb a2 c
+orb_cong_l c e = cong (\y => orb y c) e
+
+orb_ofl : (a : OBit) -> orb OF a = a
+orb_ofl a = Refl
+
+orb_assoc : (a : OBit) -> (b : OBit) -> (c : OBit) -> orb (orb a b) c = orb a (orb b c)
+orb_assoc OF b c = Refl
+orb_assoc OT b c = Refl
+
+lmem_merge : (l : Tree) -> (r : Tree) -> (x : OKey) -> lmem x (merge l r) = orb (lmem x l) (lmem x r)
+lmem_merge Leaf r x = Refl
+lmem_merge (Node ll lv lr) r x = trans (orb_cong_r (keq x lv) (orb_cong_r (lmem x ll) (lmem_merge lr r x))) (sym (trans (orb_assoc (keq x lv) (orb (lmem x ll) (lmem x lr)) (lmem x r)) (orb_cong_r (keq x lv) (orb_assoc (lmem x ll) (lmem x lr) (lmem x r)))))
+
+alllt_absent : (x : OKey) -> (t : Tree) -> alllt t x = OT -> lmem x t = OF
+alllt_absent x Leaf plt = Refl
+alllt_absent x (Node l v r) plt =
+  rewrite strict_neq_r x v (andb_l (cmp v x) (andb (alllt l x) (alllt r x)) plt) in
+  rewrite alllt_absent x l (andb_l (alllt l x) (alllt r x) (andb_r (cmp v x) (andb (alllt l x) (alllt r x)) plt)) in
+  rewrite alllt_absent x r (andb_r (alllt l x) (alllt r x) (andb_r (cmp v x) (andb (alllt l x) (alllt r x)) plt)) in Refl
+
+allgt_absent : (x : OKey) -> (t : Tree) -> allgt t x = OT -> lmem x t = OF
+allgt_absent x Leaf pgt = Refl
+allgt_absent x (Node l v r) pgt =
+  rewrite strict_neq x v (andb_l (cmp x v) (andb (allgt l x) (allgt r x)) pgt) in
+  rewrite allgt_absent x l (andb_l (allgt l x) (allgt r x) (andb_r (cmp x v) (andb (allgt l x) (allgt r x)) pgt)) in
+  rewrite allgt_absent x r (andb_r (allgt l x) (allgt r x) (andb_r (cmp x v) (andb (allgt l x) (allgt r x)) pgt)) in Refl
+
+mem_delete_eq : (k : OKey) -> (t : Tree) -> isbst t = OT -> mem k (delete k t) = OF
+mem_delete_eq k Leaf bst = Refl
+mem_delete_eq OA (Node l OB r) bst = mem_delete_eq OA l (andb_l (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst)
+mem_delete_eq OA (Node l OC r) bst = mem_delete_eq OA l (andb_l (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)
+mem_delete_eq OB (Node l OC r) bst = mem_delete_eq OB l (andb_l (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)
+mem_delete_eq OB (Node l OA r) bst = mem_delete_eq OB r (andb_l (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))
+mem_delete_eq OC (Node l OA r) bst = mem_delete_eq OC r (andb_l (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))
+mem_delete_eq OC (Node l OB r) bst = mem_delete_eq OC r (andb_l (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst))
+mem_delete_eq OA (Node l OA r) bst = trans (mem_eq_lmem OA (merge l r) (merge_bst l r OA (andb_l (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst) (andb_l (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst)) (andb_l (alllt l OA) (allgt r OA) (andb_r (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))) (andb_r (alllt l OA) (allgt r OA) (andb_r (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))))) (trans (lmem_merge l r OA) (trans (orb_cong_l (lmem OA r) (alllt_absent OA l (andb_l (alllt l OA) (allgt r OA) (andb_r (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst))))) (trans (orb_ofl (lmem OA r)) (allgt_absent OA r (andb_r (alllt l OA) (allgt r OA) (andb_r (isbst r) (andb (alllt l OA) (allgt r OA)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OA) (allgt r OA))) bst)))))))
+mem_delete_eq OB (Node l OB r) bst = trans (mem_eq_lmem OB (merge l r) (merge_bst l r OB (andb_l (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst) (andb_l (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst)) (andb_l (alllt l OB) (allgt r OB) (andb_r (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst))) (andb_r (alllt l OB) (allgt r OB) (andb_r (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst))))) (trans (lmem_merge l r OB) (trans (orb_cong_l (lmem OB r) (alllt_absent OB l (andb_l (alllt l OB) (allgt r OB) (andb_r (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst))))) (trans (orb_ofl (lmem OB r)) (allgt_absent OB r (andb_r (alllt l OB) (allgt r OB) (andb_r (isbst r) (andb (alllt l OB) (allgt r OB)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OB) (allgt r OB))) bst)))))))
+mem_delete_eq OC (Node l OC r) bst = trans (mem_eq_lmem OC (merge l r) (merge_bst l r OC (andb_l (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst) (andb_l (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)) (andb_l (alllt l OC) (allgt r OC) (andb_r (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst))) (andb_r (alllt l OC) (allgt r OC) (andb_r (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst))))) (trans (lmem_merge l r OC) (trans (orb_cong_l (lmem OC r) (alllt_absent OC l (andb_l (alllt l OC) (allgt r OC) (andb_r (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst))))) (trans (orb_ofl (lmem OC r)) (allgt_absent OC r (andb_r (alllt l OC) (allgt r OC) (andb_r (isbst r) (andb (alllt l OC) (allgt r OC)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l OC) (allgt r OC))) bst)))))))
+
+lmem_delete_neq : (x : OKey) -> (k : OKey) -> (t : Tree) -> keq x k = OF -> lmem x (delete k t) = lmem x t
+lmem_delete_neq x k Leaf neq = Refl
+lmem_delete_neq x OA (Node l OB r) neq = orb_cong_r (keq x OB) (orb_cong_l (lmem x r) (lmem_delete_neq x OA l neq))
+lmem_delete_neq x OA (Node l OC r) neq = orb_cong_r (keq x OC) (orb_cong_l (lmem x r) (lmem_delete_neq x OA l neq))
+lmem_delete_neq x OB (Node l OC r) neq = orb_cong_r (keq x OC) (orb_cong_l (lmem x r) (lmem_delete_neq x OB l neq))
+lmem_delete_neq x OB (Node l OA r) neq = orb_cong_r (keq x OA) (orb_cong_r (lmem x l) (lmem_delete_neq x OB r neq))
+lmem_delete_neq x OC (Node l OA r) neq = orb_cong_r (keq x OA) (orb_cong_r (lmem x l) (lmem_delete_neq x OC r neq))
+lmem_delete_neq x OC (Node l OB r) neq = orb_cong_r (keq x OB) (orb_cong_r (lmem x l) (lmem_delete_neq x OC r neq))
+lmem_delete_neq x OA (Node l OA r) neq = trans (lmem_merge l r x) (sym (trans (orb_cong_l (orb (lmem x l) (lmem x r)) neq) (orb_ofl (orb (lmem x l) (lmem x r)))))
+lmem_delete_neq x OB (Node l OB r) neq = trans (lmem_merge l r x) (sym (trans (orb_cong_l (orb (lmem x l) (lmem x r)) neq) (orb_ofl (orb (lmem x l) (lmem x r)))))
+lmem_delete_neq x OC (Node l OC r) neq = trans (lmem_merge l r x) (sym (trans (orb_cong_l (orb (lmem x l) (lmem x r)) neq) (orb_ofl (orb (lmem x l) (lmem x r)))))
+
+mem_delete_neq : (x : OKey) -> (k : OKey) -> (t : Tree) -> isbst t = OT -> keq x k = OF -> mem x (delete k t) = mem x t
+mem_delete_neq x k t bst neq = trans (mem_eq_lmem x (delete k t) (delete_bst k t bst)) (trans (lmem_delete_neq x k t neq) (sym (mem_eq_lmem x t bst)))
+
+data KList = KNil | KCons OKey KList
+
+kapp : KList -> KList -> KList
+kapp KNil ys = ys
+kapp (KCons x rest) ys = KCons x (kapp rest ys)
+
+flatten : Tree -> KList
+flatten Leaf = KNil
+flatten (Node l v r) = kapp (flatten l) (KCons v (flatten r))
+
+all_gt_list : KList -> OKey -> OBit
+all_gt_list KNil b = OT
+all_gt_list (KCons x rest) b = andb (cmp b x) (all_gt_list rest b)
+
+all_lt_list : KList -> OKey -> OBit
+all_lt_list KNil b = OT
+all_lt_list (KCons x rest) b = andb (cmp x b) (all_lt_list rest b)
+
+sorted : KList -> OBit
+sorted KNil = OT
+sorted (KCons x rest) = andb (all_gt_list rest x) (sorted rest)
+
+all_gt_list_weaken : (xs : KList) -> (v : OKey) -> (b : OKey) -> cmp b v = OT -> all_gt_list xs v = OT -> all_gt_list xs b = OT
+all_gt_list_weaken KNil v b pbv pgt = Refl
+all_gt_list_weaken (KCons x rest) v b pbv pgt = andb_intro (cmp b x) (all_gt_list rest b) (strict_trans b v x pbv (andb_l (cmp v x) (all_gt_list rest v) pgt)) (all_gt_list_weaken rest v b pbv (andb_r (cmp v x) (all_gt_list rest v) pgt))
+
+all_lt_list_weaken : (xs : KList) -> (v : OKey) -> (b : OKey) -> cmp v b = OT -> all_lt_list xs v = OT -> all_lt_list xs b = OT
+all_lt_list_weaken KNil v b pvb plt = Refl
+all_lt_list_weaken (KCons x rest) v b pvb plt = andb_intro (cmp x b) (all_lt_list rest b) (strict_trans x v b (andb_l (cmp x v) (all_lt_list rest v) plt) pvb) (all_lt_list_weaken rest v b pvb (andb_r (cmp x v) (all_lt_list rest v) plt))
+
+all_gt_list_app_cons : (xs : KList) -> (v : OKey) -> (ys : KList) -> (b : OKey) -> all_gt_list xs b = OT -> cmp b v = OT -> all_gt_list ys b = OT -> all_gt_list (kapp xs (KCons v ys)) b = OT
+all_gt_list_app_cons KNil v ys b pxs pbv pys = andb_intro (cmp b v) (all_gt_list ys b) pbv pys
+all_gt_list_app_cons (KCons x rest) v ys b pxs pbv pys = andb_intro (cmp b x) (all_gt_list (kapp rest (KCons v ys)) b) (andb_l (cmp b x) (all_gt_list rest b) pxs) (all_gt_list_app_cons rest v ys b (andb_r (cmp b x) (all_gt_list rest b) pxs) pbv pys)
+
+all_lt_list_app_cons : (xs : KList) -> (v : OKey) -> (ys : KList) -> (b : OKey) -> all_lt_list xs b = OT -> cmp v b = OT -> all_lt_list ys b = OT -> all_lt_list (kapp xs (KCons v ys)) b = OT
+all_lt_list_app_cons KNil v ys b pxs pvb pys = andb_intro (cmp v b) (all_lt_list ys b) pvb pys
+all_lt_list_app_cons (KCons x rest) v ys b pxs pvb pys = andb_intro (cmp x b) (all_lt_list (kapp rest (KCons v ys)) b) (andb_l (cmp x b) (all_lt_list rest b) pxs) (all_lt_list_app_cons rest v ys b (andb_r (cmp x b) (all_lt_list rest b) pxs) pvb pys)
+
+sorted_concat : (xs : KList) -> (v : OKey) -> (ys : KList) -> sorted xs = OT -> sorted ys = OT -> all_lt_list xs v = OT -> all_gt_list ys v = OT -> sorted (kapp xs (KCons v ys)) = OT
+sorted_concat KNil v ys sxs sys plt pgt = andb_intro (all_gt_list ys v) (sorted ys) pgt sys
+sorted_concat (KCons x rest) v ys sxs sys plt pgt = andb_intro (all_gt_list (kapp rest (KCons v ys)) x) (sorted (kapp rest (KCons v ys))) (all_gt_list_app_cons rest v ys x (andb_l (all_gt_list rest x) (sorted rest) sxs) (andb_l (cmp x v) (all_lt_list rest v) plt) (all_gt_list_weaken ys v x (andb_l (cmp x v) (all_lt_list rest v) plt) pgt)) (sorted_concat rest v ys (andb_r (all_gt_list rest x) (sorted rest) sxs) sys (andb_r (cmp x v) (all_lt_list rest v) plt) pgt)
+
+flatten_all_gt_list : (t : Tree) -> (b : OKey) -> allgt t b = OT -> all_gt_list (flatten t) b = OT
+flatten_all_gt_list Leaf b pgt = Refl
+flatten_all_gt_list (Node l v r) b pgt = all_gt_list_app_cons (flatten l) v (flatten r) b (flatten_all_gt_list l b (andb_l (allgt l b) (allgt r b) (andb_r (cmp b v) (andb (allgt l b) (allgt r b)) pgt))) (andb_l (cmp b v) (andb (allgt l b) (allgt r b)) pgt) (flatten_all_gt_list r b (andb_r (allgt l b) (allgt r b) (andb_r (cmp b v) (andb (allgt l b) (allgt r b)) pgt)))
+
+flatten_all_lt_list : (t : Tree) -> (b : OKey) -> alllt t b = OT -> all_lt_list (flatten t) b = OT
+flatten_all_lt_list Leaf b plt = Refl
+flatten_all_lt_list (Node l v r) b plt = all_lt_list_app_cons (flatten l) v (flatten r) b (flatten_all_lt_list l b (andb_l (alllt l b) (alllt r b) (andb_r (cmp v b) (andb (alllt l b) (alllt r b)) plt))) (andb_l (cmp v b) (andb (alllt l b) (alllt r b)) plt) (flatten_all_lt_list r b (andb_r (alllt l b) (alllt r b) (andb_r (cmp v b) (andb (alllt l b) (alllt r b)) plt)))
+
+flatten_sorted : (t : Tree) -> isbst t = OT -> sorted (flatten t) = OT
+flatten_sorted Leaf bst = Refl
+flatten_sorted (Node l v r) bst = sorted_concat (flatten l) v (flatten r) (flatten_sorted l (andb_l (isbst l) (andb (isbst r) (andb (alllt l v) (allgt r v))) bst)) (flatten_sorted r (andb_l (isbst r) (andb (alllt l v) (allgt r v)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l v) (allgt r v))) bst))) (flatten_all_lt_list l v (andb_l (alllt l v) (allgt r v) (andb_r (isbst r) (andb (alllt l v) (allgt r v)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l v) (allgt r v))) bst)))) (flatten_all_gt_list r v (andb_r (alllt l v) (allgt r v) (andb_r (isbst r) (andb (alllt l v) (allgt r v)) (andb_r (isbst l) (andb (isbst r) (andb (alllt l v) (allgt r v))) bst))))

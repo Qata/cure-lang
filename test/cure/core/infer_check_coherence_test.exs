@@ -14,7 +14,7 @@ defmodule Cure.Core.InferCheckCoherenceTest do
     Context.empty(env)
   end
 
-  @spine_refl {:ctor, :reflexive, [{:int_type}, {:int_lit, 3}]}
+  @spine_refl {:ctor, :reflexive, [{:data, :"Std.Int#Int", [], []}, {:int_lit, 3}]}
 
   test "coherence: the spine reflexive checks against its own inferred type" do
     ctx = ctx()
@@ -24,20 +24,20 @@ defmodule Cure.Core.InferCheckCoherenceTest do
 
   test "wrong-endpoint expected rejects with conversion_failure, not ctor_arity" do
     ctx = ctx()
-    wrong = {:vdata, :"Std.Equivalent#Equivalent", [{:vint_type}, {:vint, 3}, {:vint, 4}]}
+    wrong = {:vdata, :"Std.Equivalent#Equivalent", [{:vdata, :"Std.Int#Int", []}, {:vint, 3}, {:vint, 4}]}
     assert {:error, {:conversion_failure, _, _}} = Kernel.check(ctx, @spine_refl, wrong)
   end
 
   test "genuinely malformed arity still rejects :ctor_arity" do
     ctx = ctx()
-    bad = {:ctor, :reflexive, [{:int_type}, {:int_lit, 3}, {:int_lit, 3}]}
+    bad = {:ctor, :reflexive, [{:data, :"Std.Int#Int", [], []}, {:int_lit, 3}, {:int_lit, 3}]}
     {:ok, good_ty} = Kernel.infer(ctx, @spine_refl)
     assert {:error, :ctor_arity} = Kernel.check(ctx, bad, good_ty)
   end
 
   test "checking position inside inference: (λ p : Eq(Int,3,3). p)(spine_refl) infers" do
     ctx = ctx()
-    eq_ty = {:data, :"Std.Equivalent#Equivalent", [{:int_type}], [{:int_lit, 3}, {:int_lit, 3}]}
+    eq_ty = {:data, :"Std.Equivalent#Equivalent", [{:data, :"Std.Int#Int", [], []}], [{:int_lit, 3}, {:int_lit, 3}]}
     term = {:app, {:lam, Cure.Core.Grade.unrestricted(), eq_ty, {:var, 0}}, @spine_refl}
     assert {:ok, _} = Kernel.infer(ctx, term)
   end

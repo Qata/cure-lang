@@ -23,7 +23,7 @@ defmodule Cure.Compiler.MacroReducerTest do
 
     flag_type = Eval.eval({:data, :"M#Flag", [], []}, Context.env(Context.empty(env)))
     ctx = Context.extend(Context.empty(env), flag_type)
-    assert {:ok, _term, {:vint_type}} = Elaborator.elaborate_expr_typed(ast, ["flag"], ctx, env)
+    assert {:ok, _term, {:vdata, :"Std.Int#Int", []}} = Elaborator.elaborate_expr_typed(ast, ["flag"], ctx, env)
   end
 
   test "rejects incomplete, duplicate, unknown, and wrongly shaped constructor arms" do
@@ -64,7 +64,7 @@ defmodule Cure.Compiler.MacroReducerTest do
 
     flag_type = Eval.eval({:data, :"M#Flag", [], []}, Context.env(Context.empty(env)))
     ctx = Context.extend(Context.empty(env), flag_type)
-    assert {:ok, _term, {:vint_type}} = Elaborator.elaborate_expr_typed(flow_ast, ["flag"], ctx, env)
+    assert {:ok, _term, {:vdata, :"Std.Int#Int", []}} = Elaborator.elaborate_expr_typed(flow_ast, ["flag"], ctx, env)
   end
 
   test "declaration bundle integrates reducer, view, and flow outputs" do

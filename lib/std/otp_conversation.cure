@@ -29,10 +29,11 @@ mod Std.Otp.Conversation
     SVSkip : SingleRecv(t, rest, after) -> SingleRecv(t, BCons(h, rest), BCons(h, after))
 
   ## Run a whole protocol over a mailbox, receiving each expected message in turn. The received
-  ## tag `t` is carried explicitly on the step so the ordering proof can name it.
+  ## tag `t` is a RELEVANT IMPLICIT (`{t: Tag}`): solved from the `SingleRecv`/protocol indices,
+  ## so callers omit it, yet retained (ω) so the ordering proof can still name it on the pattern.
   type ConvRecv indices (proto: Protocol, before: Mailbox, after: Mailbox, received: MList)
     CRDone : ConvRecv(PDone, mbox, mbox, MNil)
-    CRStep : (t: Tag) -> SingleRecv(t, before, mid) -> ConvRecv(rest, mid, after, msgs) -> ConvRecv(PExpect(t, rest), before, after, MCons(t, msgs))
+    CRStep : {t: Tag} -> SingleRecv(t, before, mid) -> ConvRecv(rest, mid, after, msgs) -> ConvRecv(PExpect(t, rest), before, after, MCons(t, msgs))
 
   ## Congruence for `MCons` under equality (`xs ≡ ys ⟹ t::xs ≡ t::ys`).
   fn mcons_cong(t: Tag, {xs: MList}, {ys: MList}, e: Equivalent(MList, xs, ys)) -> Equivalent(MList, MCons(t, xs), MCons(t, ys)) =
@@ -43,5 +44,5 @@ mod Std.Otp.Conversation
   ## messages in protocol order. Induction on the conversation.
   fn conv_order({proto: Protocol}, {before: Mailbox}, {after: Mailbox}, {received: MList}, cr: ConvRecv(proto, before, after, received)) -> Equivalent(MList, received, ptags(proto)) = match cr
     CRDone()           -> reflexive(MNil())
-    CRStep(t, sv, cr2) -> mcons_cong(t, conv_order(cr2))
+    CRStep({t = t}, sv, cr2) -> mcons_cong(t, conv_order(cr2))
 end

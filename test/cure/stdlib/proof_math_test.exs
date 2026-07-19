@@ -72,4 +72,45 @@ defmodule Cure.Stdlib.ProofMathTest do
 
     assert {:ok, _environment} = Program.elaborate(source)
   end
+
+  test "boolean-valued Nat comparisons reduce correctly" do
+    source = """
+    mod NatComparisonClient
+      use Std.Bool
+      use Std.Nat
+      use Std.Proof.IntMath
+      use Std.Proof.Math
+
+      # Confirmed() only type-checks if each comparison reduces to True().
+      fn lte_true() -> IsTrue(natural_is_less_than_or_equal(S(Z()), S(S(Z())))) = Confirmed()
+      fn lt_true() -> IsTrue(natural_is_less_than(S(Z()), S(S(Z())))) = Confirmed()
+      fn positive_true() -> IsTrue(natural_is_positive(S(Z()))) = Confirmed()
+    end
+    """
+
+    assert {:ok, _environment} = Program.elaborate(source)
+  end
+
+  test "Nat reflection lemmas round-trip between boolean and inductive forms" do
+    source = """
+    mod NatReflectionClient
+      use Std.Bool
+      use Std.Nat
+      use Std.Proof.IntMath
+      use Std.Proof.Math
+
+      # 1 < 2 obtained through the boolean surface, then reflected back.
+      fn lt_from_bool() -> IsLessThan(S(Z()), S(S(Z()))) =
+        less_than_holds_when_boolean_comparison_is_true(S(Z()), S(S(Z())), Confirmed())
+
+      fn bool_from_lt(proof: IsLessThan(S(Z()), S(S(Z())))) -> IsTrue(natural_is_less_than(S(Z()), S(S(Z())))) =
+        boolean_comparison_is_true_when_less_than_holds(proof)
+
+      fn positive_from_bool() -> IsPositive(S(Z())) =
+        positive_holds_when_boolean_comparison_is_true(S(Z()), Confirmed())
+    end
+    """
+
+    assert {:ok, _environment} = Program.elaborate(source)
+  end
 end

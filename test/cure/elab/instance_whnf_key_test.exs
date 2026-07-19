@@ -25,7 +25,8 @@ defmodule Cure.Elab.InstanceWhnfKeyTest do
 
     # Std.Equatable already provides `Equatable for Int`. Registering a second
     # anonymous instance for `MyInt` (which whnf's to Int) must collide.
-    assert {:error, {:overlapping_instance, :Equatable, :Int}} = Program.elaborate(src)
+    assert {:error, {:overlapping_instance, :Equatable, :"Std.Int#Int"}} =
+             Program.elaborate(src)
   end
 
   test "an instance for a genuine data type registers under its family name" do
@@ -44,8 +45,8 @@ defmodule Cure.Elab.InstanceWhnfKeyTest do
   # A CHAIN of transparent synonyms must resolve to the underlying type's key, not just a
   # single hop. `MyInt2 -> MyInt -> Int` are all non-recursive, so each certifies the moment it
   # is elaborated and the certified δ-gate in `whnf_value` unfolds the whole chain — exactly what
-  # the dispatch classifier does on demand. Registration keying `MyInt2` under `:Int` (and so
-  # colliding with `Std.Equatable`'s `Int` instance) is the observable proof the two paths agree,
+  # the dispatch classifier does on demand. Registration keying `MyInt2` under `:"Std.Int#Int"`
+  # (and so colliding with `Std.Equatable`'s `Int` instance) is the observable proof the two paths agree,
   # which is why Finding 1's claimed registration/dispatch certification asymmetry does not arise
   # for any surface-reachable synonym.
   test "a two-hop transparent synonym chain collides under the underlying type" do
@@ -59,7 +60,8 @@ defmodule Cure.Elab.InstanceWhnfKeyTest do
     end
     """
 
-    assert {:error, {:overlapping_instance, :Equatable, :Int}} = Program.elaborate(src)
+    assert {:error, {:overlapping_instance, :Equatable, :"Std.Int#Int"}} =
+             Program.elaborate(src)
   end
 
   # A non-primitive head shape (here a function type `(Int) -> Int`) whnf's to a `{:vpi, …}`

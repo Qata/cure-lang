@@ -1,0 +1,112 @@
+mod PQueueMin
+  use Std.Equivalent
+  ## MIN-PRIORITY-QUEUE CORRECTNESS — the extracted minimum is ≤ EVERY element in the queue (the pqueue
+  ## probe only proved ≤ the seed sentinel). This is the defining property of a min-PQ, and it CONSUMES the
+  ## certified total order: kmin_lower (the meet is below each operand) chained through le_trans (order
+  ## transitivity) along the fold. With min_le_seed it pins pq_min as a genuine lower bound of the whole
+  ## queue — an element and the seed alike.
+  type OKey = OA | OB | OC
+  type OBit = OF | OT
+  fn le(a: OKey, b: OKey) -> OBit = match a
+    OA() -> OT()
+    OB() -> match b
+      OA() -> OF()
+      OB() -> OT()
+      OC() -> OT()
+    OC() -> match b
+      OA() -> OF()
+      OB() -> OF()
+      OC() -> OT()
+  fn kmin(a: OKey, b: OKey) -> OKey = match le(a, b)
+    OT() -> a
+    OF() -> b
+  fn le_refl(a: OKey) -> Equivalent(OBit, le(a, a), OT()) = match a
+    OA() -> reflexive(OT())
+    OB() -> reflexive(OT())
+    OC() -> reflexive(OT())
+  fn le_trans(a: OKey, b: OKey, c: OKey, p: Equivalent(OBit, le(a, b), OT()), q: Equivalent(OBit, le(b, c), OT())) -> Equivalent(OBit, le(a, c), OT()) = match a
+    OA() -> match b
+      OA() -> match c
+        OA() -> reflexive(OT())
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OB() -> match c
+        OA() -> reflexive(OT())
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OC() -> match c
+        OA() -> reflexive(OT())
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> match c
+        OA() -> match p
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OB() -> match c
+        OA() -> match q
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+      OC() -> match c
+        OA() -> match q
+        OB() -> reflexive(OT())
+        OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> match c
+        OA() -> match p
+        OB() -> match p
+        OC() -> reflexive(OT())
+      OB() -> match c
+        OA() -> match p
+        OB() -> match p
+        OC() -> reflexive(OT())
+      OC() -> match c
+        OA() -> match q
+        OB() -> match q
+        OC() -> reflexive(OT())
+  fn kmin_lower_l(a: OKey, b: OKey) -> Equivalent(OBit, le(kmin(a, b), a), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+  fn kmin_lower_r(a: OKey, b: OKey) -> Equivalent(OBit, le(kmin(a, b), b), OT()) = match a
+    OA() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OB() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+    OC() -> match b
+      OA() -> reflexive(OT())
+      OB() -> reflexive(OT())
+      OC() -> reflexive(OT())
+  type PQ = PNil | PCons(OKey, PQ)
+  fn pq_min(seed: OKey, q: PQ) -> OKey = match q
+    PNil()         -> seed
+    PCons(k, rest) -> kmin(k, pq_min(seed, rest))
+  fn min_le_seed(seed: OKey, q: PQ) -> Equivalent(OBit, le(pq_min(seed, q), seed), OT()) = match q
+    PNil()         -> le_refl(seed)
+    PCons(k, rest) -> le_trans(kmin(k, pq_min(seed, rest)), pq_min(seed, rest), seed, kmin_lower_r(k, pq_min(seed, rest)), min_le_seed(seed, rest))
+  ## Membership in the queue (the tail carried explicitly so the proof can name it).
+  type InQ indices (x: OKey, q: PQ)
+    InQHead : (rest: PQ) -> InQ(x, PCons(x, rest))
+    InQTail : (y: OKey) -> (rest: PQ) -> InQ(x, rest) -> InQ(x, PCons(y, rest))
+  ## **THE MINIMUM IS ≤ EVERY ELEMENT**: for any x actually in the queue, pq_min(seed, q) ≤ x. Induction
+  ## on the membership witness: at the head, the fold's kmin puts pq_min below x directly (kmin_lower_l);
+  ## in the tail, pq_min ≤ the sub-min (kmin_lower_r) ≤ x (induction hypothesis), chained by le_trans.
+  ## This is the defining correctness of a min-priority-queue.
+  fn min_le_member(seed: OKey, {q: PQ}, x: OKey, m: InQ(x, q)) -> Equivalent(OBit, le(pq_min(seed, q), x), OT()) =
+    match m
+      InQHead(rest)         -> kmin_lower_l(x, pq_min(seed, rest))
+      InQTail(y, rest, m2)  -> le_trans(kmin(y, pq_min(seed, rest)), pq_min(seed, rest), x, kmin_lower_r(y, pq_min(seed, rest)), min_le_member(seed, x, m2))
+end

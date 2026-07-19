@@ -39,9 +39,9 @@ defmodule Cure.Core.CompactNatTest do
     end
 
     test "a Nat literal is NOT an Int (no primitive-type confusion)" do
-      assert {:error, _} = Kernel.check(ctx(), {:nat_lit, 5}, {:vint_type})
+      assert {:error, _} = Kernel.check(ctx(), {:nat_lit, 5}, {:vdata, :"Std.Int#Int", []})
       # and a bare Int literal still infers Int, unchanged
-      assert {:ok, {:vint_type}} = Kernel.infer(ctx(), {:int_lit, 5})
+      assert {:ok, {:vdata, :"Std.Int#Int", []}} = Kernel.infer(ctx(), {:int_lit, 5})
     end
   end
 
@@ -124,7 +124,7 @@ defmodule Cure.Core.CompactNatTest do
       s = sig()
       c = Context.empty(s)
       lit = {:literal, [subtype: :integer], 5}
-      assert {:ok, {:int_lit, 5}} = Elaborator.elaborate_expr_checked(lit, {:int_type}, [], c, s)
+      assert {:ok, {:int_lit, 5}} = Elaborator.elaborate_expr_checked(lit, {:data, :"Std.Int#Int", [], []}, [], c, s)
     end
 
     test "a negative literal is not lowered to Nat (rejected at Nat)" do

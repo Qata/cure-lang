@@ -1,0 +1,53 @@
+mod SignalKwc
+  type Bool = False | True
+  type Sender = SA | SB
+  type Tag = TA | TB
+  type Reason = Normal | Abnormal | Kill
+  type Sig = SMsg(Tag) | SLink | SExit(Reason) | SMon | SDown(Reason)
+  fn is_death(g: Sig) -> Bool = match g
+    SMsg(t)   -> False
+    SLink()   -> False
+    SExit(r)  -> True
+    SMon()    -> False
+    SDown(r)  -> True
+  type SItem = MkItem(Sender, Sig)
+  fn is_death_item(it: SItem) -> Bool = match it
+    MkItem(s, g) -> is_death(g)
+  type SList = SNil | SCons(SItem, SList)
+  fn proj(s: Sender, mbox: SList) -> SList = match mbox
+    SNil()          -> SNil
+    SCons(it, rest) -> match it
+      MkItem(sndr, g) -> match sndr
+        SA() -> match s
+          SA() -> SCons(MkItem(SA, g), proj(s, rest))
+          SB() -> proj(s, rest)
+        SB() -> match s
+          SA() -> proj(s, rest)
+          SB() -> SCons(MkItem(SB, g), proj(s, rest))
+  type Interleave indices (xs: SList, ys: SList, mbox: SList)
+    ILNil   : Interleave(SNil, SNil, SNil)
+    ILLeft  : Interleave(xs, ys, mbox) -> Interleave(SCons(MkItem(SA, g), xs), ys, SCons(MkItem(SA, g), mbox))
+    ILRight : Interleave(xs, ys, mbox) -> Interleave(xs, SCons(MkItem(SB, g), ys), SCons(MkItem(SB, g), mbox))
+  fn proj_left({xs: SList}, {ys: SList}, {mbox: SList}, il: Interleave(xs, ys, mbox)) -> Equivalent(SList, proj(SA, mbox), xs) = match il
+    ILNil()      -> reflexive(SNil())
+    ILLeft(il2)  -> rewrite proj_left(il2) in reflexive(xs)
+    ILRight(il2) -> proj_left(il2)
+  fn proj_right({xs: SList}, {ys: SList}, {mbox: SList}, il: Interleave(xs, ys, mbox)) -> Equivalent(SList, proj(SB, mbox), ys) = match il
+    ILNil()      -> reflexive(SNil())
+    ILLeft(il2)  -> proj_right(il2)
+    ILRight(il2) -> rewrite proj_right(il2) in reflexive(ys)
+  type DeathLast indices (xs: SList)
+    DLNil  : DeathLast(SNil)
+    DLOne  : DeathLast(SCons(it, SNil))
+    DLCons : Equivalent(Bool, is_death_item(it), False) -> DeathLast(SCons(h2, t2)) -> DeathLast(SCons(it, SCons(h2, t2)))
+  fn death_last_proj({xs: SList}, {ys: SList}, {mbox: SList}, il: Interleave(xs, ys, mbox), dl: DeathLast(xs)) -> DeathLast(proj(SA, mbox)) =
+    rewrite proj_left(il) in dl
+  fn death_last_proj_b({xs: SList}, {ys: SList}, {mbox: SList}, il: Interleave(xs, ys, mbox), dl: DeathLast(ys)) -> DeathLast(proj(SB, mbox)) =
+    rewrite proj_right(il) in dl
+  fn example_interleave() -> Interleave(SCons(MkItem(SA, SMsg(TA)), SCons(MkItem(SA, SExit(Normal)), SNil)), SCons(MkItem(SB, SMsg(TB)), SNil), SCons(MkItem(SA, SMsg(TA)), SCons(MkItem(SB, SMsg(TB)), SCons(MkItem(SA, SExit(Normal)), SNil)))) =
+    ILLeft(ILRight(ILLeft(ILNil())))
+  fn example_death_last() -> DeathLast(SCons(MkItem(SA, SMsg(TA)), SCons(MkItem(SA, SExit(Normal)), SNil))) =
+    DLCons(reflexive(False()), DLOne())
+  fn example_kwc() -> DeathLast(proj(SA, SCons(MkItem(SA, SMsg(TA)), SCons(MkItem(SB, SMsg(TB)), SCons(MkItem(SA, SExit(Normal)), SNil))))) =
+    death_last_proj(example_interleave(), example_death_last())
+end

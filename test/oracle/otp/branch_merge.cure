@@ -1,0 +1,641 @@
+mod BranchMerge
+  use Std.Equivalent
+  type Tag = TA | TB | TC
+  type TB2 = F | T
+  fn tag_eq(x: Tag, y: Tag) -> TB2 = match x
+    TA() -> match y
+      TA() -> T()
+      TB() -> F()
+      TC() -> F()
+    TB() -> match y
+      TA() -> F()
+      TB() -> T()
+      TC() -> F()
+    TC() -> match y
+      TA() -> F()
+      TB() -> F()
+      TC() -> T()
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LSel(Tag, Local, Tag, Local) | LBra(Tag, Local, Tag, Local) | LErr
+  fn dual(l: Local) -> Local = match l
+    LEnd()          -> LEnd()
+    LSend(t, k)     -> LRecv(t, dual(k))
+    LRecv(t, k)     -> LSend(t, dual(k))
+    LSel(a, A, b, B) -> LBra(a, dual(A), b, dual(B))
+    LBra(a, A, b, B) -> LSel(a, dual(A), b, dual(B))
+    LErr()          -> LErr()
+  ## The BRANCH-MERGE operator (TOTAL, `LErr` on conflict). Same actions merge pointwise; DIFFERING
+  ## RECEIVES UNION into an external choice (the bystander offers both labels); differing SENDS or
+  ## mismatched shapes CONFLICT (`LErr`).
+  fn merge(x: Local, y: Local) -> Local = match x
+    LEnd() -> match y
+      LEnd()             -> LEnd()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LSend(t1, k1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> match tag_eq(t1, t2)
+        T() -> LSend(t1, merge(k1, k2))
+        F() -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LRecv(t1, k1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> match tag_eq(t1, t2)
+        T() -> LRecv(t1, merge(k1, k2))
+        F() -> LBra(t1, k1, t2, k2)
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LSel(a1, A1, b1, B1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> match tag_eq(a1, a2)
+        T() -> match tag_eq(b1, b2)
+          T() -> LSel(a1, merge(A1, A2), b1, merge(B1, B2))
+          F() -> LErr()
+        F() -> LErr()
+      LBra(a2, A2, b2, B2) -> LErr()
+      LErr()             -> LErr()
+    LBra(a1, A1, b1, B1) -> match y
+      LEnd()             -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2) -> LErr()
+      LBra(a2, A2, b2, B2) -> match tag_eq(a1, a2)
+        T() -> match tag_eq(b1, b2)
+          T() -> LBra(a1, merge(A1, A2), b1, merge(B1, B2))
+          F() -> LErr()
+        F() -> LErr()
+      LErr()             -> LErr()
+    LErr() -> LErr()
+  ## **MERGE IS IDEMPOTENT.** `merge(L, L) = L` — a local type merges with itself to itself: the
+  ## base of projection coherence (a bystander with IDENTICAL behaviour in both branches).
+  fn merge_idem(l: Local) -> Equivalent(Local, merge(l, l), l) = match l
+    LEnd()          -> reflexive(LEnd())
+    LSend(t, k)     -> match t
+      TA() -> rewrite merge_idem(k) in reflexive(LSend(TA(), k))
+      TB() -> rewrite merge_idem(k) in reflexive(LSend(TB(), k))
+      TC() -> rewrite merge_idem(k) in reflexive(LSend(TC(), k))
+    LRecv(t, k)     -> match t
+      TA() -> rewrite merge_idem(k) in reflexive(LRecv(TA(), k))
+      TB() -> rewrite merge_idem(k) in reflexive(LRecv(TB(), k))
+      TC() -> rewrite merge_idem(k) in reflexive(LRecv(TC(), k))
+    LSel(a, A, b, B) -> match a
+      TA() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TA(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TA(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TA(), A, TC(), B))
+      TB() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TB(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TB(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TB(), A, TC(), B))
+      TC() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TC(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TC(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LSel(TC(), A, TC(), B))
+    LBra(a, A, b, B) -> match a
+      TA() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TA(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TA(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TA(), A, TC(), B))
+      TB() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TB(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TB(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TB(), A, TC(), B))
+      TC() -> match b
+        TA() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TC(), A, TA(), B))
+        TB() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TC(), A, TB(), B))
+        TC() -> rewrite merge_idem(A) in rewrite merge_idem(B) in reflexive(LBra(TC(), A, TC(), B))
+    LErr()          -> reflexive(LErr())
+  fn lsend_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LSend(t, a), LSend(t, b)) =
+    rewrite e in reflexive(LSend(t, b))
+  fn lrecv_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LRecv(t, a), LRecv(t, b)) =
+    rewrite e in reflexive(LRecv(t, b))
+  fn lsel_cong(a: Tag, {A1: Local}, {A2: Local}, eA: Equivalent(Local, A1, A2), b: Tag, {B1: Local}, {B2: Local}, eB: Equivalent(Local, B1, B2)) -> Equivalent(Local, LSel(a, A1, b, B1), LSel(a, A2, b, B2)) =
+    rewrite eA in rewrite eB in reflexive(LSel(a, A2, b, B2))
+  type Role = RA | RB | RC
+  fn role_eq(x: Role, y: Role) -> TB2 = match x
+    RA() -> match y
+      RA() -> T()
+      RB() -> F()
+      RC() -> F()
+    RB() -> match y
+      RA() -> F()
+      RB() -> T()
+      RC() -> F()
+    RC() -> match y
+      RA() -> F()
+      RB() -> F()
+      RC() -> T()
+  type Global = GEnd | GMsg(Role, Role, Tag, Global) | GCho(Role, Role, Tag, Global, Tag, Global)
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()               -> LEnd()
+    GMsg(from, to, t, k) -> match role_eq(from, r)
+      T() -> LSend(t, project(k, r))
+      F() -> match role_eq(to, r)
+        T() -> LRecv(t, project(k, r))
+        F() -> project(k, r)
+    GCho(from, to, tL, gL, tR, gR) -> match role_eq(from, r)
+      T() -> LSel(tL, project(gL, r), tR, project(gR, r))
+      F() -> match role_eq(to, r)
+        T() -> LBra(tL, project(gL, r), tR, project(gR, r))
+        F() -> merge(project(gL, r), project(gR, r))
+  type Coherent indices (g: Global)
+    CoEnd : Coherent(GEnd)
+    CoAB  : (t: Tag) -> Coherent(k) -> Coherent(GMsg(RA, RB, t, k))
+    CoBA  : (t: Tag) -> Coherent(k) -> Coherent(GMsg(RB, RA, t, k))
+    CoCho : (tL: Tag) -> Coherent(gL) -> (tR: Tag) -> Coherent(gR) -> Coherent(GCho(RA, RB, tL, gL, tR, gR))
+  ## **CHOICE PROJECTION COHERENCE.** A coherent RA/RB protocol WITH CHOICE projects its two active
+  ## roles to DUAL endpoints: `project(g, RA) = dual(project(g, RB))`. The choice case projects RA to
+  ## an internal choice (`LSel` — RA picks) and RB to an external choice (`LBra` — RB offers); `dual`
+  ## swaps them, so the endpoints stay dual across branching. `bilateral_duality` LIFTED to branching
+  ## protocols, in a system carrying the branch-merge operator (for the bystander RC).
+  fn choice_duality({g: Global}, w: Coherent(g)) -> Equivalent(Local, project(g, RA), dual(project(g, RB))) = match w
+    CoEnd()             -> reflexive(LEnd())
+    CoAB(t, w2)         -> lsend_cong(t, choice_duality(w2))
+    CoBA(t, w2)         -> lrecv_cong(t, choice_duality(w2))
+    CoCho(tL, wL, tR, wR) -> lsel_cong(tL, choice_duality(wL), tR, choice_duality(wR))
+  fn is_err(l: Local) -> TB2 = match l
+    LEnd()          -> F()
+    LSend(t, k)     -> F()
+    LRecv(t, k)     -> F()
+    LSel(a, A, b, B) -> F()
+    LBra(a, A, b, B) -> F()
+    LErr()          -> T()
+  ## The MERGEABILITY relation: exactly when two bystander branch-behaviours can be combined. Same
+  ## sends and same-tag receives merge pointwise; DIFFERING receives (`a ≠ b`) are mergeable and
+  ## union into an external choice; internal/external choices merge with matching labels. (A
+  ## bystander that would SEND differently, or act with mismatched shape, is NOT mergeable — the
+  ## protocol would be ill-formed.)
+  type Mergeable indices (x: Local, y: Local)
+    MgEnd    : Mergeable(LEnd, LEnd)
+    MgSend   : (t: Tag) -> Mergeable(k1, k2) -> Mergeable(LSend(t, k1), LSend(t, k2))
+    MgRecvEq : (t: Tag) -> Mergeable(k1, k2) -> Mergeable(LRecv(t, k1), LRecv(t, k2))
+    MgRecvNe : (a: Tag) -> (b: Tag) -> Equivalent(TB2, tag_eq(a, b), F()) -> Mergeable(LRecv(a, k1), LRecv(b, k2))
+    MgSel    : (a: Tag) -> (b: Tag) -> Mergeable(A1, A2) -> Mergeable(B1, B2) -> Mergeable(LSel(a, A1, b, B1), LSel(a, A2, b, B2))
+    MgBra    : (a: Tag) -> (b: Tag) -> Mergeable(A1, A2) -> Mergeable(B1, B2) -> Mergeable(LBra(a, A1, b, B1), LBra(a, A2, b, B2))
+  ## **MERGEABLE TYPES HAVE A DEFINED MERGE.** `Mergeable(x, y) ⟹ merge(x, y) ≠ LErr` — the
+  ## bystander projection at a choice is WELL-DEFINED exactly when its two branch-behaviours are
+  ## mergeable. This is the projectability foundation of multiparty coherence: a well-formed global
+  ## keeps every bystander's branches mergeable, so projection never conflicts. Induction on the
+  ## mergeability derivation; the differing-receive case fires the `LBra` union via the `a ≠ b`
+  ## witness.
+  fn merge_ok({x: Local}, {y: Local}, w: Mergeable(x, y)) -> Equivalent(TB2, is_err(merge(x, y)), F()) = match w
+    MgEnd()            -> reflexive(F())
+    MgSend(t, w2)      -> match t
+      TA() -> reflexive(F())
+      TB() -> reflexive(F())
+      TC() -> reflexive(F())
+    MgRecvEq(t, w2)    -> match t
+      TA() -> reflexive(F())
+      TB() -> reflexive(F())
+      TC() -> reflexive(F())
+    MgRecvNe(a, b, pne) -> match a
+      TA() -> match b
+        TA() -> match pne
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+      TB() -> match b
+        TA() -> reflexive(F())
+        TB() -> match pne
+        TC() -> reflexive(F())
+      TC() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> match pne
+    MgSel(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+      TB() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+      TC() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+    MgBra(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+      TB() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+      TC() -> match b
+        TA() -> reflexive(F())
+        TB() -> reflexive(F())
+        TC() -> reflexive(F())
+  ## A WELL-FORMED protocol with a genuine bystander RC (who may RECEIVE from RA or RB). The choice
+  ## constructor carries a MERGEABILITY WITNESS for RC's two branch-projections — the multiparty
+  ## well-formedness side condition that makes projection total: a coherent global keeps every
+  ## bystander's branches mergeable.
+  type WF indices (g: Global)
+    WFEnd : WF(GEnd)
+    WFAB  : (t: Tag) -> WF(k) -> WF(GMsg(RA, RB, t, k))
+    WFBA  : (t: Tag) -> WF(k) -> WF(GMsg(RB, RA, t, k))
+    WFBC  : (t: Tag) -> WF(k) -> WF(GMsg(RB, RC, t, k))
+    WFAC  : (t: Tag) -> WF(k) -> WF(GMsg(RA, RC, t, k))
+    WFCho : (tL: Tag) -> WF(gL) -> (tR: Tag) -> WF(gR) -> Mergeable(project(gL, RC), project(gR, RC)) -> WF(GCho(RA, RB, tL, gL, tR, gR))
+  ## **BYSTANDER PROJECTION IS DEFINED (N-ROLE PROJECTABILITY).** A well-formed global projects the
+  ## bystander RC to a DEFINED local type (`is_err(project(g, RC)) = F`), never a conflict. The
+  ## CHOICE case is where the branch-merge earns its keep: `project(g, RC) = merge(project(gL, RC),
+  ## project(gR, RC))`, defined exactly because the well-formedness carries a mergeability witness —
+  ## discharged by `merge_ok`. So the merge operator is CONSUMED in the coherence proof, and
+  ## multiparty projection is total on well-formed protocols. (RC-receiving messages give `LRecv`;
+  ## RA/RB-only messages are skipped, carrying the induction hypothesis.)
+  fn bystander_defined({g: Global}, w: WF(g)) -> Equivalent(TB2, is_err(project(g, RC)), F()) = match w
+    WFEnd()                 -> reflexive(F())
+    WFAB(t, w2)             -> bystander_defined(w2)
+    WFBA(t, w2)             -> bystander_defined(w2)
+    WFBC(t, w2)             -> reflexive(F())
+    WFAC(t, w2)             -> reflexive(F())
+    WFCho(tL, wL, tR, wR, mg) -> merge_ok(mg)
+  type Sub indices (s: Local, t: Local)
+    SubEnd  : Sub(LEnd, LEnd)
+    SubSend : (t: Tag) -> Sub(k1, k2) -> Sub(LSend(t, k1), LSend(t, k2))
+    SubRecv : (t: Tag) -> Sub(k1, k2) -> Sub(LRecv(t, k1), LRecv(t, k2))
+    SubSel  : (a: Tag) -> (b: Tag) -> Sub(A1, A2) -> Sub(B1, B2) -> Sub(LSel(a, A1, b, B1), LSel(a, A2, b, B2))
+    SubBra  : (a: Tag) -> (b: Tag) -> Sub(A1, A2) -> Sub(B1, B2) -> Sub(LBra(a, A1, b, B1), LBra(a, A2, b, B2))
+    SubBraL : Sub(LBra(a, k, b, kb), LRecv(a, k))
+    SubBraR : Sub(LBra(a, ka, b, k), LRecv(b, k))
+    SubBraLcov : Sub(k, k2) -> Sub(LBra(a, k, b, kb), LRecv(a, k2))
+    SubBraRcov : Sub(k, k2) -> Sub(LBra(a, ka, b, k), LRecv(b, k2))
+    SubErr  : Sub(LErr, LErr)
+  fn sub_refl(l: Local) -> Sub(l, l) = match l
+    LEnd()          -> SubEnd()
+    LSend(t, k)     -> SubSend(t, sub_refl(k))
+    LRecv(t, k)     -> SubRecv(t, sub_refl(k))
+    LSel(a, A, b, B) -> SubSel(a, b, sub_refl(A), sub_refl(B))
+    LBra(a, A, b, B) -> SubBra(a, b, sub_refl(A), sub_refl(B))
+    LErr()          -> SubErr()
+  ## **BRANCH-MERGE IS A LOWER BOUND.** `Mergeable(x,y) ⟹ merge(x,y) <: x` (and `<: y`) — the
+  ## merged type is a SUBTYPE of BOTH branches, so a bystander typed `merge(x,y)` is safely usable in
+  ## place of EITHER branch's expected type. This is the correctness justification for branch-merge:
+  ## the union of differing receives (`LBra`) offers more than each single receive, hence subsumes it
+  ## (`SubBraL`/`SubBraR`); matching actions recurse covariantly.
+  fn merge_sub_l({x: Local}, {y: Local}, w: Mergeable(x, y)) -> Sub(merge(x, y), x) = match w
+    MgEnd()            -> SubEnd()
+    MgSend(t, w2)      -> match t
+      TA() -> SubSend(TA(), merge_sub_l(w2))
+      TB() -> SubSend(TB(), merge_sub_l(w2))
+      TC() -> SubSend(TC(), merge_sub_l(w2))
+    MgRecvEq(t, w2)    -> match t
+      TA() -> SubRecv(TA(), merge_sub_l(w2))
+      TB() -> SubRecv(TB(), merge_sub_l(w2))
+      TC() -> SubRecv(TC(), merge_sub_l(w2))
+    MgRecvNe(a, b, pne) -> match a
+      TA() -> match b
+        TA() -> match pne
+        TB() -> SubBraL()
+        TC() -> SubBraL()
+      TB() -> match b
+        TA() -> SubBraL()
+        TB() -> match pne
+        TC() -> SubBraL()
+      TC() -> match b
+        TA() -> SubBraL()
+        TB() -> SubBraL()
+        TC() -> match pne
+    MgSel(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> SubSel(TA(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubSel(TA(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubSel(TA(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+      TB() -> match b
+        TA() -> SubSel(TB(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubSel(TB(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubSel(TB(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+      TC() -> match b
+        TA() -> SubSel(TC(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubSel(TC(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubSel(TC(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+    MgBra(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> SubBra(TA(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubBra(TA(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubBra(TA(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+      TB() -> match b
+        TA() -> SubBra(TB(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubBra(TB(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubBra(TB(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+      TC() -> match b
+        TA() -> SubBra(TC(), TA(), merge_sub_l(wA), merge_sub_l(wB))
+        TB() -> SubBra(TC(), TB(), merge_sub_l(wA), merge_sub_l(wB))
+        TC() -> SubBra(TC(), TC(), merge_sub_l(wA), merge_sub_l(wB))
+  fn merge_sub_r({x: Local}, {y: Local}, w: Mergeable(x, y)) -> Sub(merge(x, y), y) = match w
+    MgEnd()            -> SubEnd()
+    MgSend(t, w2)      -> match t
+      TA() -> SubSend(TA(), merge_sub_r(w2))
+      TB() -> SubSend(TB(), merge_sub_r(w2))
+      TC() -> SubSend(TC(), merge_sub_r(w2))
+    MgRecvEq(t, w2)    -> match t
+      TA() -> SubRecv(TA(), merge_sub_r(w2))
+      TB() -> SubRecv(TB(), merge_sub_r(w2))
+      TC() -> SubRecv(TC(), merge_sub_r(w2))
+    MgRecvNe(a, b, pne) -> match a
+      TA() -> match b
+        TA() -> match pne
+        TB() -> SubBraR()
+        TC() -> SubBraR()
+      TB() -> match b
+        TA() -> SubBraR()
+        TB() -> match pne
+        TC() -> SubBraR()
+      TC() -> match b
+        TA() -> SubBraR()
+        TB() -> SubBraR()
+        TC() -> match pne
+    MgSel(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> SubSel(TA(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubSel(TA(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubSel(TA(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+      TB() -> match b
+        TA() -> SubSel(TB(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubSel(TB(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubSel(TB(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+      TC() -> match b
+        TA() -> SubSel(TC(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubSel(TC(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubSel(TC(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+    MgBra(a, b, wA, wB) -> match a
+      TA() -> match b
+        TA() -> SubBra(TA(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubBra(TA(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubBra(TA(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+      TB() -> match b
+        TA() -> SubBra(TB(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubBra(TB(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubBra(TB(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+      TC() -> match b
+        TA() -> SubBra(TC(), TA(), merge_sub_r(wA), merge_sub_r(wB))
+        TB() -> SubBra(TC(), TB(), merge_sub_r(wA), merge_sub_r(wB))
+        TC() -> SubBra(TC(), TC(), merge_sub_r(wA), merge_sub_r(wB))
+
+  fn active_a_defined({g: Global}, w: WF(g)) -> Equivalent(TB2, is_err(project(g, RA())), F()) = match w
+    WFEnd()                   -> reflexive(F())
+    WFAB(t, w2)               -> reflexive(F())
+    WFBA(t, w2)               -> reflexive(F())
+    WFBC(t, w2)               -> active_a_defined(w2)
+    WFAC(t, w2)               -> reflexive(F())
+    WFCho(tL, wL, tR, wR, mg) -> reflexive(F())
+  fn active_b_defined({g: Global}, w: WF(g)) -> Equivalent(TB2, is_err(project(g, RB())), F()) = match w
+    WFEnd()                   -> reflexive(F())
+    WFAB(t, w2)               -> reflexive(F())
+    WFBA(t, w2)               -> reflexive(F())
+    WFBC(t, w2)               -> reflexive(F())
+    WFAC(t, w2)               -> active_b_defined(w2)
+    WFCho(tL, wL, tR, wR, mg) -> reflexive(F())
+  type AllDefined indices (g: Global)
+    MkAllDefined : Equivalent(TB2, is_err(project(g, RA())), F()) -> Equivalent(TB2, is_err(project(g, RB())), F()) -> Equivalent(TB2, is_err(project(g, RC())), F()) -> AllDefined(g)
+  fn all_projections_defined({g: Global}, w: WF(g)) -> AllDefined(g) =
+    MkAllDefined(active_a_defined(w), active_b_defined(w), bystander_defined(w))
+
+  type GStep indices (g: Global, g2: Global)
+    GStMsg  : GStep(GMsg(from, to, t, k), k)
+    GStChoL : GStep(GCho(from, to, tL, gL, tR, gR), gL)
+    GStChoR : GStep(GCho(from, to, tL, gL, tR, gR), gR)
+  fn gstep_preserves({g: Global}, {g2: Global}, w: WF(g), st: GStep(g, g2)) -> WF(g2) = match st
+    GStMsg()  -> match w
+      WFAB(t, w2) -> w2
+      WFBA(t, w2) -> w2
+      WFBC(t, w2) -> w2
+      WFAC(t, w2) -> w2
+    GStChoL() -> match w
+      WFCho(tL, wL, tR, wR, mg) -> wL
+    GStChoR() -> match w
+      WFCho(tL, wL, tR, wR, mg) -> wR
+  type GRun indices (g: Global, g2: Global)
+    GRDone : GRun(g, g)
+    GRStep : GStep(g, gm) -> GRun(gm, g2) -> GRun(g, g2)
+  fn branch_terminates({g: Global}, w: WF(g)) -> GRun(g, GEnd()) = match w
+    WFEnd()                   -> GRDone()
+    WFAB(t, w2)               -> GRStep(GStMsg(), branch_terminates(w2))
+    WFBA(t, w2)               -> GRStep(GStMsg(), branch_terminates(w2))
+    WFBC(t, w2)               -> GRStep(GStMsg(), branch_terminates(w2))
+    WFAC(t, w2)               -> GRStep(GStMsg(), branch_terminates(w2))
+    WFCho(tL, wL, tR, wR, mg) -> GRStep(GStChoL(), branch_terminates(wL))
+
+  fn cstep_preserves({g: Global}, {g2: Global}, w: Coherent(g), st: GStep(g, g2)) -> Coherent(g2) = match st
+    GStMsg()  -> match w
+      CoAB(t, w2) -> w2
+      CoBA(t, w2) -> w2
+    GStChoL() -> match w
+      CoCho(tL, wL, tR, wR) -> wL
+    GStChoR() -> match w
+      CoCho(tL, wL, tR, wR) -> wR
+  fn duality_preserved({g: Global}, {g2: Global}, w: Coherent(g), st: GStep(g, g2)) -> Equivalent(Local, project(g2, RA()), dual(project(g2, RB()))) =
+    choice_duality(cstep_preserves(w, st))
+
+  type LStep indices (l: Local, l2: Local)
+    LStSend : LStep(LSend(t, k), k)
+    LStRecv : LStep(LRecv(t, k), k)
+    LStSelL : LStep(LSel(tL, kL, tR, kR), kL)
+    LStBraL : LStep(LBra(tL, kL, tR, kR), kL)
+    LStSelR : LStep(LSel(tL, kL, tR, kR), kR)
+    LStBraR : LStep(LBra(tL, kL, tR, kR), kR)
+  fn proj_sender_steps(fr: Role, to: Role, t: Tag, k: Global) -> LStep(project(GMsg(fr, to, t, k), fr), project(k, fr)) = match fr
+    RA() -> LStSend()
+    RB() -> LStSend()
+    RC() -> LStSend()
+  fn proj_chooser_steps(fr: Role, to: Role, tL: Tag, gL: Global, tR: Tag, gR: Global) -> LStep(project(GCho(fr, to, tL, gL, tR, gR), fr), project(gL, fr)) = match fr
+    RA() -> LStSelL()
+    RB() -> LStSelL()
+    RC() -> LStSelL()
+  fn proj_receiver_steps(fr: Role, to: Role, t: Tag, k: Global, neq: Equivalent(TB2, role_eq(fr, to), F())) -> LStep(project(GMsg(fr, to, t, k), to), project(k, to)) = match fr
+    RA() -> match to
+      RA() -> match neq
+      RB() -> LStRecv()
+      RC() -> LStRecv()
+    RB() -> match to
+      RA() -> LStRecv()
+      RB() -> match neq
+      RC() -> LStRecv()
+    RC() -> match to
+      RA() -> LStRecv()
+      RB() -> LStRecv()
+      RC() -> match neq
+  fn proj_offerer_steps(fr: Role, to: Role, tL: Tag, gL: Global, tR: Tag, gR: Global, neq: Equivalent(TB2, role_eq(fr, to), F())) -> LStep(project(GCho(fr, to, tL, gL, tR, gR), to), project(gL, to)) = match fr
+    RA() -> match to
+      RA() -> match neq
+      RB() -> LStBraL()
+      RC() -> LStBraL()
+    RB() -> match to
+      RA() -> LStBraL()
+      RB() -> match neq
+      RC() -> LStBraL()
+    RC() -> match to
+      RA() -> LStBraL()
+      RB() -> LStBraL()
+      RC() -> match neq
+  fn proj_bystander_msg(fr: Role, to: Role, r: Role, t: Tag, k: Global, n1: Equivalent(TB2, role_eq(fr, r), F()), n2: Equivalent(TB2, role_eq(to, r), F())) -> Equivalent(Local, project(GMsg(fr, to, t, k), r), project(k, r)) = match r
+    RA() -> match fr
+      RA() -> match n1
+      RB() -> match to
+        RA() -> match n2
+        RB() -> reflexive(project(k, RA()))
+        RC() -> reflexive(project(k, RA()))
+      RC() -> match to
+        RA() -> match n2
+        RB() -> reflexive(project(k, RA()))
+        RC() -> reflexive(project(k, RA()))
+    RB() -> match fr
+      RA() -> match to
+        RA() -> reflexive(project(k, RB()))
+        RB() -> match n2
+        RC() -> reflexive(project(k, RB()))
+      RB() -> match n1
+      RC() -> match to
+        RA() -> reflexive(project(k, RB()))
+        RB() -> match n2
+        RC() -> reflexive(project(k, RB()))
+    RC() -> match fr
+      RA() -> match to
+        RA() -> reflexive(project(k, RC()))
+        RB() -> reflexive(project(k, RC()))
+        RC() -> match n2
+      RB() -> match to
+        RA() -> reflexive(project(k, RC()))
+        RB() -> reflexive(project(k, RC()))
+        RC() -> match n2
+      RC() -> match n1
+
+  ## **SUBTYPING IS TRANSITIVE.** `Sub(a,b) -> Sub(b,c) -> Sub(a,c)` — with reflexivity (sub_refl)
+  ## this makes `<:` a PREORDER, the algebraic precondition for using subtyping as a substitution
+  ## principle (a process of type a is safe wherever b, hence wherever c, is expected). The load-
+  ## bearing case is SubBra-then-width: a branch that subsumes another branch, then subsumes a single
+  ## receive, must subsume that receive with COVARIANT continuation (SubBra;SubBraL = SubBraLcov) —
+  ## which is exactly why the rigid nullary width rule is not closed under composition and the
+  ## covariant SubBraLcov/SubBraRcov are needed. Induction on both derivations.
+  fn sub_trans({a: Local}, {b: Local}, {c: Local}, s1: Sub(a, b), s2: Sub(b, c)) -> Sub(a, c) = match s1
+    SubEnd()               -> match s2
+      SubEnd() -> SubEnd()
+    SubErr()               -> match s2
+      SubErr() -> SubErr()
+    SubSend(t, p)          -> match s2
+      SubSend(t2, q) -> SubSend(t, sub_trans(p, q))
+    SubRecv(t, p)          -> match s2
+      SubRecv(t2, q) -> SubRecv(t, sub_trans(p, q))
+    SubSel(a1, b1, pA, pB) -> match s2
+      SubSel(a2, b2, qA, qB) -> SubSel(a1, b1, sub_trans(pA, qA), sub_trans(pB, qB))
+    SubBra(a1, b1, pA, pB) -> match s2
+      SubBra(a2, b2, qA, qB) -> SubBra(a1, b1, sub_trans(pA, qA), sub_trans(pB, qB))
+      SubBraL()              -> SubBraLcov(pA)
+      SubBraLcov(qk)         -> SubBraLcov(sub_trans(pA, qk))
+      SubBraR()              -> SubBraRcov(pB)
+      SubBraRcov(qk)         -> SubBraRcov(sub_trans(pB, qk))
+    SubBraL()              -> match s2
+      SubRecv(t2, q) -> SubBraLcov(q)
+    SubBraLcov(pk)         -> match s2
+      SubRecv(t2, q) -> SubBraLcov(sub_trans(pk, q))
+    SubBraR()              -> match s2
+      SubRecv(t2, q) -> SubBraRcov(q)
+    SubBraRcov(pk)         -> match s2
+      SubRecv(t2, q) -> SubBraRcov(sub_trans(pk, q))
+
+  ## **CONFIGURATION-LEVEL SESSION FIDELITY + DEADLOCK-FREEDOM.** A running system is the TRIPLE of
+  ## the three roles' local projections. `config(g)` snapshots it; `CStep` reduces it with each role
+  ## individually JUSTIFIED — an acting endpoint by a real local `LStep`, an uninvolved one by staying
+  ## put, a choice bystander by a SUBTYPING step (its merged type absorbs into the taken branch). The
+  ## headline `config_fidelity` proves every global step is mirrored by one justified configuration
+  ## step (Honda-Yoshida-Carbone session fidelity), composing all the per-role step lemmas. Then
+  ## `config_deadlock_free` (`WF(g) ⟹` the config is DONE or STEPS) is the corollary: the projected
+  ## configuration of a well-formed protocol never gets stuck.
+  type Config = MkConfig(Local, Local, Local)
+  fn config(g: Global) -> Config = MkConfig(project(g, RA()), project(g, RB()), project(g, RC()))
+
+  type Justified indices (s: Local, t: Local)
+    JStep : LStep(s, t) -> Justified(s, t)
+    JSame : Justified(s, s)
+    JSub  : Sub(s, t) -> Justified(s, t)
+
+  type CStep indices (c: Config, c2: Config)
+    MkCStep : Justified(a, a2) -> Justified(b, b2) -> Justified(cc, cc2) -> CStep(MkConfig(a, b, cc), MkConfig(a2, b2, cc2))
+
+  fn config_fidelity({g: Global}, {g2: Global}, w: WF(g), st: GStep(g, g2)) -> CStep(config(g), config(g2)) = match st
+    GStMsg()  -> match w
+      WFAB(t, w2) -> MkCStep(JStep(LStSend()), JStep(LStRecv()), JSame())
+      WFBA(t, w2) -> MkCStep(JStep(LStRecv()), JStep(LStSend()), JSame())
+      WFBC(t, w2) -> MkCStep(JSame(), JStep(LStSend()), JStep(LStRecv()))
+      WFAC(t, w2) -> MkCStep(JStep(LStSend()), JSame(), JStep(LStRecv()))
+    GStChoL() -> match w
+      WFCho(tL, wL, tR, wR, mg) -> MkCStep(JStep(LStSelL()), JStep(LStBraL()), JSub(merge_sub_l(mg)))
+    GStChoR() -> match w
+      WFCho(tL, wL, tR, wR, mg) -> MkCStep(JStep(LStSelR()), JStep(LStBraR()), JSub(merge_sub_r(mg)))
+
+  type ConfigProgress indices (c: Config)
+    CPDone : ConfigProgress(MkConfig(LEnd(), LEnd(), LEnd()))
+    CPStep : CStep(c, c2) -> ConfigProgress(c)
+
+  fn config_deadlock_free({g: Global}, w: WF(g)) -> ConfigProgress(config(g)) = match w
+    WFEnd()                   -> CPDone()
+    WFAB(t, w2)               -> CPStep(config_fidelity(WFAB(t, w2), GStMsg()))
+    WFBA(t, w2)               -> CPStep(config_fidelity(WFBA(t, w2), GStMsg()))
+    WFBC(t, w2)               -> CPStep(config_fidelity(WFBC(t, w2), GStMsg()))
+    WFAC(t, w2)               -> CPStep(config_fidelity(WFAC(t, w2), GStMsg()))
+    WFCho(tL, wL, tR, wR, mg) -> CPStep(config_fidelity(WFCho(tL, wL, tR, wR, mg), GStChoL()))
+
+  ## **SUBTYPING SIMULATES LOCAL REDUCTION (operational soundness of `<:`).** If `a <: b` and the
+  ## expected/spec side `b` takes a local step to `b2`, then the implementation `a` takes a MATCHING
+  ## step to some `t` with `t <: b2`. So a subtype can always follow wherever its supertype leads,
+  ## staying a subtype — the operational meaning of the subtyping preorder (`sub_trans` is the algebra;
+  ## this is its dynamics). Internal-choice/send cases match structurally; the width cases show a
+  ## branch (`LBra`) receiving the label a single receive expects, then continuing below it.
+  type StepTo indices (a: Local, b2: Local)
+    MkStepTo : LStep(a, t) -> Sub(t, b2) -> StepTo(a, b2)
+  fn sub_step_l({a: Local}, {b: Local}, b2: Local, sub: Sub(a, b), st: LStep(b, b2)) -> StepTo(a, b2) = match st
+    LStSend() -> match sub
+      SubSend(t2, p) -> MkStepTo(LStSend(), p)
+    LStRecv() -> match sub
+      SubRecv(t2, p) -> MkStepTo(LStRecv(), p)
+      SubBraL()      -> MkStepTo(LStBraL(), sub_refl(b2))
+      SubBraLcov(pk) -> MkStepTo(LStBraL(), pk)
+      SubBraR()      -> MkStepTo(LStBraR(), sub_refl(b2))
+      SubBraRcov(pk) -> MkStepTo(LStBraR(), pk)
+    LStSelL() -> match sub
+      SubSel(a1, b1, pA, pB) -> MkStepTo(LStSelL(), pA)
+    LStSelR() -> match sub
+      SubSel(a1, b1, pA, pB) -> MkStepTo(LStSelR(), pB)
+    LStBraL() -> match sub
+      SubBra(a1, b1, pA, pB) -> MkStepTo(LStBraL(), pA)
+    LStBraR() -> match sub
+      SubBra(a1, b1, pA, pB) -> MkStepTo(LStBraR(), pB)
+
+  ## **MULTIPARTY SUBSTITUTABILITY (subtyping is sound for implementation refinement).** If each role
+  ## is IMPLEMENTED by a subtype of its protocol projection (`ConfigSub`), the whole configuration
+  ## still steps consistently: whenever the well-formed protocol takes a global step, every role's
+  ## implementation takes a JUSTIFIED step that STAYS a subtype of the new projection (`ConfigStep`).
+  ## Per role: an acting endpoint follows by `sub_step_l` (subtyping simulates the local step); a
+  ## staying role keeps its witness; a subtype-stepping bystander composes via `sub_trans`. So a
+  ## deadlock-free protocol stays deadlock-free under ANY per-role subtype refinement — the Gay-Hole
+  ## substitution principle lifted to the multiparty running system.
+  type JustStepTo indices (i: Local, s2: Local)
+    MkJustStepTo : Justified(i, i2) -> Sub(i2, s2) -> JustStepTo(i, s2)
+
+  fn justified_sub(s2: Local, {i: Local}, {s: Local}, sub: Sub(i, s), j: Justified(s, s2)) -> JustStepTo(i, s2) = match j
+    JStep(st) -> match sub_step_l(s2, sub, st)
+      MkStepTo(lst, sub2) -> MkJustStepTo(JStep(lst), sub2)
+    JSame()   -> MkJustStepTo(JSame(), sub)
+    JSub(sst) -> MkJustStepTo(JSame(), sub_trans(sub, sst))
+
+  type ConfigSub indices (impl: Config, spec: Config)
+    MkConfigSub : Sub(ia, sa) -> Sub(ib, sb) -> Sub(ic, sc) -> ConfigSub(MkConfig(ia, ib, ic), MkConfig(sa, sb, sc))
+
+  type ConfigStep indices (impl: Config, spec2: Config)
+    MkConfigStep : JustStepTo(ia, sa2) -> JustStepTo(ib, sb2) -> JustStepTo(ic, sc2) -> ConfigStep(MkConfig(ia, ib, ic), MkConfig(sa2, sb2, sc2))
+
+  fn config_subst({g: Global}, g2: Global, {impl: Config}, cs: ConfigSub(impl, config(g)), w: WF(g), st: GStep(g, g2)) -> ConfigStep(impl, config(g2)) = match cs
+    MkConfigSub(sa, sb, sc) -> match config_fidelity(w, st)
+      MkCStep(ja, jb, jc) -> MkConfigStep(justified_sub(project(g2, RA()), sa, ja), justified_sub(project(g2, RB()), sb, jb), justified_sub(project(g2, RC()), sc, jc))
+end

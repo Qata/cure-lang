@@ -1,0 +1,102 @@
+mod ModRing
+  use Std.Equivalent
+  ## MODULAR ARITHMETIC IS A RING — congruence respects MULTIPLICATION too, so Z/n is a well-defined
+  ## COMMUTATIVE RING (extending `mod_congruence`, where addition-respect made it an additive structure).
+  ## Built on the full commutative-semiring `times` algebra proved here from scratch: `times_zero_r`,
+  ## `times_succ_r`, `times_comm`, `times_assoc`, and BOTH distributivities (`times_plus_l` right, `times_plus_r`
+  ## left). `cong_times_r` (a≡a' ⟹ a·b ≡ a'·b — multiply the witness equation by b, carrying the multiple
+  ## through via `times_swap`: `(p·n)·b = (p·b)·n`) and `cong_times_l` (b≡b' ⟹ a·b ≡ a·b') are the one-sided
+  ## laws; `cong_mul` composes them through `cong_trans` — `a·b ≡ a'·b ≡ a'·b'` — to prove congruence respects
+  ## full multiplication. With `cong_add` from the base probe, +/· are both well-defined on residue classes.
+  type Nat = Z | S(Nat)
+  fn plus(a: Nat, b: Nat) -> Nat = match a
+    Z()   -> b
+    S(k)  -> S(plus(k, b))
+  fn times(a: Nat, b: Nat) -> Nat = match a
+    Z()   -> Z()
+    S(k)  -> plus(b, times(k, b))
+  fn snat_cong(a: Nat, b: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) = rewrite e in reflexive(S(b))
+  fn plus_zero(n: Nat) -> Equivalent(Nat, plus(n, Z()), n) = match n
+    Z()   -> reflexive(Z())
+    S(k)  -> snat_cong(plus(k, Z()), k, plus_zero(k))
+  fn plus_succ_r(a: Nat, b: Nat) -> Equivalent(Nat, plus(a, S(b)), S(plus(a, b))) = match a
+    Z()   -> reflexive(S(b))
+    S(k)  -> snat_cong(plus(k, S(b)), S(plus(k, b)), plus_succ_r(k, b))
+  fn plus_assoc(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, plus(plus(a, b), c), plus(a, plus(b, c))) = match a
+    Z()   -> reflexive(plus(b, c))
+    S(k)  -> snat_cong(plus(plus(k, b), c), plus(k, plus(b, c)), plus_assoc(k, b, c))
+  fn plus_comm(a: Nat, b: Nat) -> Equivalent(Nat, plus(a, b), plus(b, a)) = match a
+    Z()   -> sym(plus_zero(b))
+    S(k)  -> trans(snat_cong(plus(k, b), plus(b, k), plus_comm(k, b)), sym(plus_succ_r(b, k)))
+  fn plus_cong_r(a: Nat, b: Nat, c: Nat, e: Equivalent(Nat, b, c)) -> Equivalent(Nat, plus(a, b), plus(a, c)) = rewrite e in reflexive(plus(a, c))
+  fn plus_cong_l(a: Nat, b: Nat, c: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, plus(a, c), plus(b, c)) = rewrite e in reflexive(plus(b, c))
+  fn plus_cong2(a: Nat, ap: Nat, b: Nat, bp: Nat, ea: Equivalent(Nat, a, ap), eb: Equivalent(Nat, b, bp)) -> Equivalent(Nat, plus(a, b), plus(ap, bp)) = rewrite ea in rewrite eb in reflexive(plus(ap, bp))
+  fn rearrange4(w: Nat, x: Nat, y: Nat, z: Nat) -> Equivalent(Nat, plus(plus(w, x), plus(y, z)), plus(plus(w, y), plus(x, z))) =
+    trans(plus_assoc(w, x, plus(y, z)),
+      trans(plus_cong_r(w, plus(x, plus(y, z)), plus(plus(x, y), z), sym(plus_assoc(x, y, z))),
+        trans(plus_cong_r(w, plus(plus(x, y), z), plus(plus(y, x), z), plus_cong_l(plus(x, y), plus(y, x), z, plus_comm(x, y))),
+          trans(plus_cong_r(w, plus(plus(y, x), z), plus(y, plus(x, z)), plus_assoc(y, x, z)),
+            sym(plus_assoc(w, y, plus(x, z)))))))
+  ## Right-distributivity: (p+q)*n = p*n + q*n.
+  fn times_plus_l(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, times(plus(a, b), c), plus(times(a, c), times(b, c))) = match a
+    Z()   -> reflexive(times(b, c))
+    S(k)  -> trans(plus_cong_r(c, times(plus(k, b), c), plus(times(k, c), times(b, c)), times_plus_l(k, b, c)), sym(plus_assoc(c, times(k, c), times(b, c))))
+  fn swap12(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, plus(a, plus(b, c)), plus(b, plus(a, c))) =
+    trans(sym(plus_assoc(a, b, c)), trans(plus_cong_l(plus(a, b), plus(b, a), c, plus_comm(a, b)), plus_assoc(b, a, c)))
+  fn times_cong_r(a: Nat, b: Nat, c: Nat, e: Equivalent(Nat, b, c)) -> Equivalent(Nat, times(a, b), times(a, c)) = rewrite e in reflexive(times(a, c))
+  fn times_cong_l(a: Nat, b: Nat, c: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, times(a, c), times(b, c)) = rewrite e in reflexive(times(b, c))
+  fn times_zero_r(a: Nat) -> Equivalent(Nat, times(a, Z()), Z()) = match a
+    Z()   -> reflexive(Z())
+    S(k)  -> times_zero_r(k)
+  fn times_succ_r(a: Nat, b: Nat) -> Equivalent(Nat, times(a, S(b)), plus(a, times(a, b))) = match a
+    Z()   -> reflexive(Z())
+    S(k)  -> snat_cong(plus(b, times(k, S(b))), plus(k, plus(b, times(k, b))), trans(plus_cong_r(b, times(k, S(b)), plus(k, times(k, b)), times_succ_r(k, b)), swap12(b, k, times(k, b))))
+  fn times_comm(a: Nat, b: Nat) -> Equivalent(Nat, times(a, b), times(b, a)) = match a
+    Z()   -> sym(times_zero_r(b))
+    S(k)  -> trans(plus_cong_r(b, times(k, b), times(b, k), times_comm(k, b)), sym(times_succ_r(b, k)))
+  fn times_assoc(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, times(times(a, b), c), times(a, times(b, c))) = match a
+    Z()   -> reflexive(Z())
+    S(k)  -> trans(times_plus_l(b, times(k, b), c), plus_cong_r(times(b, c), times(times(k, b), c), times(k, times(b, c)), times_assoc(k, b, c)))
+  fn times_swap(p: Nat, n: Nat, b: Nat) -> Equivalent(Nat, times(times(p, n), b), times(times(p, b), n)) =
+    trans(times_assoc(p, n, b), trans(times_cong_r(p, times(n, b), times(b, n), times_comm(n, b)), sym(times_assoc(p, b, n))))
+  fn times_plus_r(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, times(a, plus(b, c)), plus(times(a, b), times(a, c))) =
+    trans(times_comm(a, plus(b, c)), trans(times_plus_l(b, c, a), plus_cong2(times(b, a), times(a, b), times(c, a), times(a, c), times_comm(b, a), times_comm(c, a))))
+  ## a ≡ b (mod n): a and b differ by a multiple of n, witnessed by p, q with a + p·n = b + q·n.
+  type Cong indices (n: Nat, a: Nat, b: Nat)
+    MkCong : (n2: Nat) -> (a2: Nat) -> (b2: Nat) -> (p: Nat) -> (q: Nat) -> Equivalent(Nat, plus(a2, times(p, n2)), plus(b2, times(q, n2))) -> Cong(n2, a2, b2)
+  ## **CONGRUENCE IS REFLEXIVE**: a ≡ a (take p = q = 0).
+  fn cong_refl(n: Nat, a: Nat) -> Cong(n, a, a) = MkCong(n, a, a, Z(), Z(), reflexive(plus(a, times(Z(), n))))
+  ## **CONGRUENCE IS SYMMETRIC**: swap the two witnesses.
+  fn cong_sym(n: Nat, a: Nat, b: Nat, c: Cong(n, a, b)) -> Cong(n, b, a) = match c
+    MkCong(n2, a2, b2, p, q, e) -> MkCong(n2, b2, a2, q, p, sym(e))
+  ## **CONGRUENCE IS TRANSITIVE**: combine the witnesses (p1+p2, q1+q2); the equation follows by distributing
+  ## the multiple and re-associating both offsets around the shared middle term b.
+  fn cong_trans(n: Nat, a: Nat, b: Nat, c: Nat, c1: Cong(n, a, b), c2: Cong(n, b, c)) -> Cong(n, a, c) = match c1
+    MkCong(n1, a1, b1, p1, q1, e1) -> match c2
+      MkCong(n2, b2, c2v, p2, q2, e2) ->
+        MkCong(n, a, c, plus(p1, p2), plus(q1, q2),
+          trans(plus_cong_r(a, times(plus(p1, p2), n), plus(times(p1, n), times(p2, n)), times_plus_l(p1, p2, n)), trans(sym(plus_assoc(a, times(p1, n), times(p2, n))), trans(plus_cong_l(plus(a, times(p1, n)), plus(b, times(q1, n)), times(p2, n), e1), trans(plus_assoc(b, times(q1, n), times(p2, n)), trans(plus_cong_r(b, plus(times(q1, n), times(p2, n)), plus(times(p2, n), times(q1, n)), plus_comm(times(q1, n), times(p2, n))), trans(sym(plus_assoc(b, times(p2, n), times(q1, n))), trans(plus_cong_l(plus(b, times(p2, n)), plus(c, times(q2, n)), times(q1, n), e2), trans(plus_assoc(c, times(q2, n), times(q1, n)), trans(plus_cong_r(c, plus(times(q2, n), times(q1, n)), plus(times(q1, n), times(q2, n)), plus_comm(times(q2, n), times(q1, n))), plus_cong_r(c, plus(times(q1, n), times(q2, n)), times(plus(q1, q2), n), sym(times_plus_l(q1, q2, n)))))))))))))
+  ## **CONGRUENCE RESPECTS ADDITION**: a≡a' and b≡b' ⟹ a+b ≡ a'+b'. So addition is well-defined on residue
+  ## classes — Z/n is a well-defined additive structure. Witnesses (p1+p2, q1+q2); interleave the two offsets.
+  fn cong_add(n: Nat, a: Nat, ap: Nat, b: Nat, bp: Nat, c1: Cong(n, a, ap), c2: Cong(n, b, bp)) -> Cong(n, plus(a, b), plus(ap, bp)) = match c1
+    MkCong(n1, a1, ap1, p1, q1, e1) -> match c2
+      MkCong(n2, b2, bp2, p2, q2, e2) -> MkCong(n, plus(a, b), plus(ap, bp), plus(p1, p2), plus(q1, q2),
+        trans(plus_cong_r(plus(a, b), times(plus(p1, p2), n), plus(times(p1, n), times(p2, n)), times_plus_l(p1, p2, n)),
+          trans(rearrange4(a, b, times(p1, n), times(p2, n)),
+            trans(plus_cong2(plus(a, times(p1, n)), plus(ap, times(q1, n)), plus(b, times(p2, n)), plus(bp, times(q2, n)), e1, e2),
+              trans(sym(rearrange4(ap, bp, times(q1, n), times(q2, n))),
+                plus_cong_r(plus(ap, bp), plus(times(q1, n), times(q2, n)), times(plus(q1, q2), n), sym(times_plus_l(q1, q2, n))))))))
+  ## **CONGRUENCE RESPECTS RIGHT MULTIPLICATION**: a≡a' ⟹ a·b ≡ a'·b (multiply the witness equation by b,
+  ## carrying the multiple through with times commutativity/associativity).
+  fn cong_times_r(n: Nat, a: Nat, ap: Nat, b: Nat, c1: Cong(n, a, ap)) -> Cong(n, times(a, b), times(ap, b)) = match c1
+    MkCong(n1, a1, ap1, p, q, e) -> MkCong(n, times(a, b), times(ap, b), times(p, b), times(q, b),
+      trans(plus_cong_r(times(a, b), times(times(p, b), n), times(times(p, n), b), sym(times_swap(p, n, b))), trans(sym(times_plus_l(a, times(p, n), b)), trans(times_cong_l(plus(a, times(p, n)), plus(ap, times(q, n)), b, e), trans(times_plus_l(ap, times(q, n), b), plus_cong_r(times(ap, b), times(times(q, n), b), times(times(q, b), n), times_swap(q, n, b)))))))
+  ## **CONGRUENCE RESPECTS LEFT MULTIPLICATION**: b≡b' ⟹ a·b ≡ a·b' (multiply on the left).
+  fn cong_times_l(n: Nat, b: Nat, bp: Nat, a: Nat, c2: Cong(n, b, bp)) -> Cong(n, times(a, b), times(a, bp)) = match c2
+    MkCong(n2, b2, bp2, p, q, e) -> MkCong(n, times(a, b), times(a, bp), times(a, p), times(a, q),
+      trans(plus_cong_r(times(a, b), times(times(a, p), n), times(a, times(p, n)), times_assoc(a, p, n)), trans(sym(times_plus_r(a, b, times(p, n))), trans(times_cong_r(a, plus(b, times(p, n)), plus(bp, times(q, n)), e), trans(times_plus_r(a, bp, times(q, n)), plus_cong_r(times(a, bp), times(a, times(q, n)), times(times(a, q), n), sym(times_assoc(a, q, n))))))))
+  ## **CONGRUENCE RESPECTS MULTIPLICATION**: a≡a' and b≡b' ⟹ a·b ≡ a'·b'. So multiplication too is well-defined
+  ## on residue classes — with cong_add, Z/n is a well-defined COMMUTATIVE RING. Proved a·b ≡ a'·b ≡ a'·b'.
+  fn cong_mul(n: Nat, a: Nat, ap: Nat, b: Nat, bp: Nat, c1: Cong(n, a, ap), c2: Cong(n, b, bp)) -> Cong(n, times(a, b), times(ap, bp)) =
+    cong_trans(n, times(a, b), times(ap, b), times(ap, bp), cong_times_r(n, a, ap, b, c1), cong_times_l(n, b, bp, ap, c2))
+end

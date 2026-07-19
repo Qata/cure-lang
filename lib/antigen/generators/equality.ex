@@ -138,7 +138,7 @@ defmodule Antigen.Generators.Equality do
   # stuck-case of a context variable). The assay's claimed-vs-inferred
   # conversion compares `s` with itself, driving Conv's neutral machinery
   # (same_neutral_no_delta? / conv_neutral? / conv_branches?). One-binder ctx.
-  @int {:int_type}
+  @int {:data, :Int, [], []}
   @sig_nat {:data, :Sigma, [@nat, {:lam, Cure.Core.Grade.unrestricted(), @nat, @nat}], []}
 
   defp neutral_eq_prop_term do
@@ -201,7 +201,7 @@ defmodule Antigen.Generators.Equality do
   defp inhabitant do
     Gen.frequency([
       {3, Gen.bind(nat_numeral(), fn n -> Gen.return({n, @nat}) end)},
-      {2, Gen.bind(int_lit(), fn n -> Gen.return({n, {:int_type}}) end)},
+      {2, Gen.bind(int_lit(), fn n -> Gen.return({n, {:data, :Int, [], []}}) end)},
       {2, Gen.bind(float_lit(), fn f -> Gen.return({f, {:float_type}}) end)},
       {1, Gen.bind(Gen.member_of([{:ctor, :T, []}, {:ctor, :F, []}]), fn t -> Gen.return({t, @bd}) end)},
       {1, Gen.bind(Gen.member_of([{:ctor, :False, []}, {:ctor, :True, []}]), fn t -> Gen.return({t, @bool}) end)}
@@ -212,7 +212,7 @@ defmodule Antigen.Generators.Equality do
   defp typed_pair do
     Gen.frequency([
       {3, both(nat_numeral(), @nat)},
-      {2, both(int_lit(), {:int_type})},
+      {2, both(int_lit(), {:data, :Int, [], []})},
       {2, both(float_lit(), {:float_type})},
       {1, both(Gen.member_of([{:ctor, :T, []}, {:ctor, :F, []}]), @bd)},
       {1, both(Gen.member_of([{:ctor, :False, []}, {:ctor, :True, []}]), @bool)}

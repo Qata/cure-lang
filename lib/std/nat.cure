@@ -15,10 +15,11 @@ mod Std.Nat
       Z() -> n
       S(k) -> S(plus(k, n))
 
-  ## Cast an `Int` to a `Nat`, clamping negatives to `Z` (== `max(i, 0)`). A
-  ## primitive machine `Int` is not structurally well-founded, so this is an
-  ## asserted FFI boundary — exactly where Idris marks `integerToNat` total. It
-  ## is the ONLY trusted step behind integer ranges; the enumeration itself
+  ## Cast an `Int` to a `Nat`, clamping negatives to `Z` (== `max(i, 0)`). Even
+  ## though `Int` is now inductive, it compiles to a native BEAM machine integer,
+  ## so this cast is kept as an asserted FFI boundary against that native
+  ## representation — exactly where Idris marks `integerToNat` total. It is the
+  ## ONLY trusted step behind integer ranges; the enumeration itself
   ## (`range_from`) is genuine structural recursion.
   @extern(:cure_std_nat, :of_int, 1)
   fn of_int(i: Int) -> Nat
@@ -39,3 +40,10 @@ mod Std.Nat
   ## here.
   fn range_upto_incl(from: Int, to: Int) -> List(Int) =
     range_from(from, of_int(to - from + 1))
+
+  ## Project a natural number to a machine integer (structural, total; the
+  ## constructive inverse of the trusted `of_int` clamp — this direction needs no
+  ## assertion because `Nat` is well-founded).
+  fn to_integer(value: Nat) -> Int = match value
+    Z() -> 0
+    S(predecessor) -> to_integer(predecessor) + 1

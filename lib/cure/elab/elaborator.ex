@@ -358,13 +358,16 @@ defmodule Cure.Elab.Elaborator do
       not String.contains?(name, ".") and
           length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2 ->
         cands = Cure.Elab.Resolution.overload_candidates(env, atom)
-        arg_labels = Keyword.get(meta, :arg_labels)
 
-        with {:ok, present} <- map_present_args(args, names, ctx, env),
-             arg_types = Enum.map(present, fn {_term, ty} -> ty end),
-             {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, arg_labels, cands) do
-          elaborate_global_app(env, winner, present, ctx)
-        end
+        elaborate_overloaded_app(
+          env,
+          atom,
+          args,
+          Keyword.get(meta, :arg_labels),
+          names,
+          ctx,
+          cands
+        )
 
       # A bare name provided by ≥2 distinct re-keyed imports with no local/
       # unshadowed winner: unqualified use is ambiguous (R7). Checked before the
@@ -486,7 +489,7 @@ defmodule Cure.Elab.Elaborator do
   defp check_app_args(term, type, [arg | rest], names, ctx, env) do
     case type do
       {:vpi, _g, dom_value, cod_closure} ->
-        dom_term = Quote.reify(dom_value, Context.length(ctx))
+        dom_term = resplit_data(Quote.reify(dom_value, Context.length(ctx)), env)
 
         with {:ok, arg_term} <- elaborate_expr_checked(arg, dom_term, names, ctx, env) do
           arg_value = Eval.eval(arg_term, Context.env(ctx))
@@ -631,7 +634,13 @@ defmodule Cure.Elab.Elaborator do
         {:ok, {:ctor, ctor, []}, Kernel.bool_type_value(Context.signature(ctx))}
 
       :integer when is_integer(value) ->
-        {:ok, {:int_lit, value}, {:vint_type}}
+        # The compact `{:int_lit, value}` Core node stays canonical, but its TYPE
+        # is the inductive `Int` family value (post-2026-07-18 surface flip),
+        # exactly as the bool arm above types its ctor at `bool_type_value`. Handing
+        # back the retired facade `{:vint_type}` here made every elaborated literal
+        # fail conversion against a family-typed context (`{:data, Std.Int#Int}` vs
+        # `{:int_type}`).
+        {:ok, {:int_lit, value}, Kernel.int_type_value(Context.signature(ctx))}
 
       :float when is_float(value) ->
         {:ok, {:float_lit, value}, {:vfloat_type}}
@@ -723,12 +732,23 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term, type}
         end
 
-      # Numeric negation. Desugars to `negate` when the `Additive` method is in
-      # scope; otherwise type-directed like binary arithmetic: infer the operand's
-      # primitive kind, then lower to `int_neg`/`float_neg` (both return their
-      # operand type). A non-numeric operand rejects as unsupported.
+      # Numeric negation. Desugars to `negate` ONLY when it is a genuine
+      # overloadable interface method (`Std.Arithmetic`'s `Additive.negate`) in
+      # scope — mirroring the binary-operator path, which routes through
+      # `Resolve.method?` (see `elaborate_named_call_resolved`). Otherwise it is
+      # type-directed like binary arithmetic: infer the operand's primitive kind,
+      # then lower to `int_neg`/`float_neg` (both return their operand type).
+      #
+      # The trigger MUST be the interface-method check, not the broad
+      # `operator_meaning?`: the latter also matches an ordinary function named
+      # `negate` (e.g. the ambient `Std.Int.negate`, prelude-visible because
+      # `type Int` is `@prelude`). Routing `-x` to that monomorphic `Int -> Int`
+      # function hijacked negation for EVERY operand kind, so `-(f : Float)`
+      # lowered to an `Int` result and failed conversion against `Float`. Keying
+      # on `method?` lets a real `Additive` instance dispatch per operand type
+      # while a plain `negate` function falls through to the built-in lowering.
       :- ->
-        if operator_meaning?(env, :negate) do
+        if Cure.Elab.Resolve.method?(env, :negate) do
           elaborate_expr_typed({:function_call, [name: "negate"], [operand]}, names, ctx, env)
         else
           with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
@@ -805,11 +825,12 @@ defmodule Cure.Elab.Elaborator do
       with {:ok, _scrut_term, {:vdata, dname, combined_vals}} <-
              elaborate_expr_typed(scrut, names, ctx, env),
            {:ok, {cname, pattern_vars, body_expr}} <- first_constructor_arm(arms, env),
-           %{args: telescope, quantities: quantities} <- Inductive.get_ctor(env, cname),
+           %{args: telescope, quantities: quantities, plicities: plicities} <-
+             Inductive.get_ctor(env, cname),
            arity = length(telescope),
            pc = Inductive.param_count(env, dname),
            {param_vals, _idx_vals} = Enum.split(combined_vals, pc),
-           branch_names = branch_scope(telescope, quantities, pattern_vars) ++ names,
+           branch_names = branch_scope(telescope, quantities, plicities, pattern_vars) ++ names,
            branch_ctx = extend_context(ctx, telescope, param_vals),
            {:ok, _b_term, t_branch_val} <-
              elaborate_expr_typed(body_expr, branch_names, branch_ctx, env),
@@ -1609,9 +1630,15 @@ defmodule Cure.Elab.Elaborator do
               end
           end
 
-        with {:ok, term} <- result,
-             :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-          {:ok, term}
+        case result do
+          {:ok, term} ->
+            case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+              :ok -> {:ok, term}
+              {:error, _} = err -> ctor_refinement_fallback(expr, expected_core, names, ctx, env, err)
+            end
+
+          {:error, _} = err ->
+            ctor_refinement_fallback(expr, expected_core, names, ctx, env, err)
         end
 
       true ->
@@ -2147,12 +2174,34 @@ defmodule Cure.Elab.Elaborator do
         :no ->
           with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
             term = maybe_inject_union(term, type, expected_core, ctx, env)
+            term = maybe_coerce_refined_to_base(term, type, expected_core, ctx, env)
 
             with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
               {:ok, term}
             end
           end
       end
+    end
+  end
+
+  # A checking-mode constructor whose direct check against the expected type failed
+  # may still inhabit the BASE of a refinement `{x: T | φ}` = `Sigma(T, λx. φ)` —
+  # e.g. `S(k)` at `-> {n: Nat | IsPositive(n)}`, where `S` is a `Nat` (not `Sigma`)
+  # constructor, so the direct check reports `:foreign_ctor`. When the expected type
+  # is such a refinement, route to the refinement-discharge fallback, which checks
+  # the constructor against the base domain `T` and searches for a proof of the
+  # obligation `φ[x := S(k)]`. Additive: reached only after the direct constructor
+  # check already failed, and the original error is surfaced when the expected type
+  # is not a dischargeable refinement or no proof is found — so every
+  # currently-accepted or -rejected constructor body is unchanged.
+  defp ctor_refinement_fallback(expr, expected_core, names, ctx, env, orig_err) do
+    if refinement_return?(expected_core, ctx, env) do
+      case elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
+        {:ok, _} = ok -> ok
+        _ -> orig_err
+      end
+    else
+      orig_err
     end
   end
 
@@ -2163,24 +2212,59 @@ defmodule Cure.Elab.Elaborator do
   # nullary constructor (`Confirmed()`) and build the pair. The author writes just
   # the value; no `refine`, no explicit proof.
   #
-  # Soundness: the elaborator only PROPOSES `mk_pair(value, Confirmed())`; the
-  # kernel re-checks it in the fallback's `Kernel.check`, and here inhabitation of
-  # the obligation is itself decided by `Kernel.check` (not by the elaborator
-  # trusting its own reduction). A violated obligation (`IsTrue(False())`) or an
-  # OPEN one (mentioning a free binder) yields no inhabiting constructor, so this
-  # returns `:no` and the value falls through to ordinary checking — the proof is
-  # required, never invented.
+  # Soundness: the elaborator only PROPOSES `mk_pair(value, proof)`; the proof it
+  # supplies is itself kernel-checked against the obligation before use (by
+  # `reflection_proof` via `Kernel.check`, or — for an open obligation — by every
+  # candidate `ProofSearch.resolve` returns), and `value` is checked against the
+  # base component at elaboration. The Σ-intro rule then makes the pair well-typed
+  # by construction; the elaborator never trusts its own reduction. A CLOSED
+  # obligation with no inhabiting nullary constructor (`IsTrue(False())`), or an
+  # OPEN one with no derivable proof, yields `nil`, so this returns `:no` and the
+  # value falls through to ordinary checking — the proof is required, never
+  # invented.
   defp try_discharge_refinement(expr, expected_core, names, ctx, env) do
     sigma_fam = Inductive.builtin(env, :sigma)
 
     with false <- is_nil(sigma_fam),
          {:data, ^sigma_fam, [dom, cod], []} <- Kernel.normalize(ctx, expected_core),
+         # Exclude a flat tuple / bare nested-pair Σ (`Tuple(T1,…,Tn)` lowers to a
+         # unit-terminated Σ telescope that shares this shape). Its instantiated
+         # second component is itself a Σ, which `ProofSearch` would happily "prove"
+         # by fabricating a pair — silently accepting a program that has no
+         # refinement obligation at all (and mis-elaborating its value). Only a
+         # genuine refinement `{x: T | φ}`, whose predicate is a proposition, may
+         # reach discharge.
+         false <- tuple_telescope_type?(expected_core, sigma_fam, ctx, env),
          {:ok, value} <- elaborate_expr_checked(expr, dom, names, ctx, env),
          {:data, _fam_key, _p, _i} = obligation <- Kernel.normalize(ctx, {:app, cod, value}),
-         proof when not is_nil(proof) <- reflection_proof(obligation, ctx, env) do
+         proof when not is_nil(proof) <- discharge_obligation(obligation, ctx, env) do
       {:ok, {:ctor, sigma_ctor_name(env), [value, proof]}}
     else
       _ -> :no
+    end
+  end
+
+  # Find a proof of a refinement obligation, or nil. A CLOSED obligation
+  # (`IsTrue(True())`) is discharged by its family's nullary constructor via
+  # `reflection_proof`. An OPEN obligation — one whose truth rests on a free
+  # binder, e.g. `IsTrue(int_gt(x, 0))` for a parameter `x` — has no nullary
+  # inhabitant, so it falls through to the auto-lemma proof search, which derives
+  # the proof from in-scope hypotheses (a matching `evidence : IsTrue(x > 0)`
+  # binder), `@lemma`-tagged theorems, or the sign-directed positivity procedure.
+  # Every term `ProofSearch` returns is kernel-checked against this obligation
+  # inside the search, so an open obligation is discharged only when a genuine
+  # proof exists; an unprovable one returns `:none` here (→ nil → `:no` upstream)
+  # and the value is rejected exactly as before.
+  defp discharge_obligation(obligation, ctx, env) do
+    case reflection_proof(obligation, ctx, env) do
+      nil ->
+        case Cure.Elab.ProofSearch.resolve(obligation, ctx, env) do
+          {:ok, proof} -> proof
+          _ -> nil
+        end
+
+      proof ->
+        proof
     end
   end
 
@@ -2203,6 +2287,64 @@ defmodule Cure.Elab.Elaborator do
       end
     end)
   end
+
+  # If `term`'s inferred `type` WHNFs to the Sigma refinement family and the
+  # expected base type is convertible to the Sigma's first-component type, coerce
+  # by inserting the first projection (`sigma_first`, or `Std.Refine.refined_value`
+  # when that idiomatic accessor is in scope) — the reverse of the base->refined
+  # injection. This is the ONLY new behavior; if the shapes don't match, return
+  # `term` unchanged so ordinary checking (and its error) stands.
+  #
+  # `type` is a semantic VALUE here (not a Core term — see the call site), so it is
+  # inspected with `Normalise.whnf_value/2` (mirror `sigma_params/3` in
+  # proof_search.ex), never `Kernel.normalize/2` (which expects a Core term and
+  # matches `:data`, not `:vdata`). The inserted projection is independently
+  # re-verified by the fallback's `Kernel.check`, so a wrong coercion is caught.
+  defp maybe_coerce_refined_to_base(term, type, expected_core, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+    depth = Context.length(ctx)
+    sig = Context.signature(ctx)
+
+    with false <- is_nil(sigma_fam),
+         {:vdata, ^sigma_fam, [dom_value, predicate_value]} <- Normalise.whnf_value(type, sig),
+         # Do not coerce when the expected type is itself that Sigma (no coercion
+         # needed) — only when expected is the base component type.
+         false <- sigma_typed?(expected_core, sigma_fam, ctx),
+         dom_term <- Quote.reify(dom_value, depth, sig),
+         true <- convertible?(dom_term, expected_core, ctx, env) do
+      predicate_term = Quote.reify(predicate_value, depth, sig)
+      build_app({:global, first_projection_head(env)}, [dom_term, predicate_term, term])
+    else
+      _ -> term
+    end
+  end
+
+  # The global to head the first projection with: `Std.Refine.refined_value` when
+  # the refinement API is in scope (the idiomatic accessor a human writes,
+  # mirroring `refinement_proof`), else the kernel builtin `sigma_first`. Mirror
+  # `second_projection_head/1` in `proof_search.ex`: nil-check via `Env.get_def`
+  # FIRST, because `Env.resolve_key/3` falls back to the bare input atom (never
+  # nil) and would otherwise hand back a nonexistent global.
+  defp first_projection_head(env) do
+    case Env.get_def(env, "refined_value") do
+      nil -> :sigma_first
+      _def -> Env.resolve_key(env, env.defs, "refined_value")
+    end
+  end
+
+  # True when the expected Core type normalises to the Sigma family itself (so no
+  # coercion is needed — the refined value is already at the expected type).
+  defp sigma_typed?(expected_core, sigma_fam, ctx) do
+    match?({:data, ^sigma_fam, _, []}, Kernel.normalize(ctx, expected_core))
+  end
+
+  # Up-to-conversion equality of two Core types, mirroring proof_search.ex:317.
+  # `Conv.conv?/5` takes Core terms and evaluates them itself.
+  defp convertible?(a_term, b_term, ctx, env) do
+    Conv.conv?(a_term, b_term, Context.env(ctx), Context.length(ctx), env)
+  end
+
+  defp build_app(head, args), do: Enum.reduce(args, head, fn a, f -> {:app, f, a} end)
 
   # The nullary constructor for a LITERAL member of the expected union, or nil if the
   # expected type is not a union or the literal is not one of its members.
@@ -2235,6 +2377,96 @@ defmodule Cure.Elab.Elaborator do
   @spec coerce_union(term(), Cure.Core.Value.t(), term(), Context.t(), Env.t()) :: term()
   def coerce_union(term, type, expected_core, ctx, env),
     do: maybe_inject_union(term, type, expected_core, ctx, env)
+
+  @doc """
+  Coerce an already-inferred refinement value to its base type.
+
+  A STRICT no-op unless the inferred `type` WHNFs to the Sigma refinement family and
+  `expected_core` is convertible to the Sigma's first-component type, so it is safe to
+  apply anywhere a term has been inferred but the expected base type is known.
+  `Declarations.elaborate_body/6`'s catch-all needs it for the same reason it needs
+  `coerce_union/5`: that clause elaborates in INFER mode, so a body like
+  `fn underlying(p: PositiveNatural) -> Nat = p` never reaches the check-mode fallback.
+  """
+  @spec coerce_refined_to_base(term(), Cure.Core.Value.t(), term(), Context.t(), Env.t()) ::
+          term()
+  def coerce_refined_to_base(term, type, expected_core, ctx, env),
+    do: maybe_coerce_refined_to_base(term, type, expected_core, ctx, env)
+
+  @doc """
+  True when the declared return type is the refinement / dependent-pair Sigma
+  family.
+
+  `Declarations.elaborate_body/6`'s catch-all uses it to route such returns
+  through CHECK mode, so an OPEN refinement obligation (`{n: T | φ}` whose truth
+  depends on a binder) reaches `try_discharge_refinement` and can be discharged by
+  proof search — mirroring how `union_goal?/1` routes union returns through check
+  mode. A metavariable-bearing return type is excluded (it must not be handed to
+  the kernel's `Kernel.normalize`), matching `elaborate_expr_checked_fallback/5`'s
+  own guard; such a body keeps the historical infer path.
+  """
+  @spec refinement_return?(term(), Context.t(), Env.t()) :: boolean()
+  def refinement_return?(expected_core, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+
+    not is_nil(sigma_fam) and not Unify.has_meta?(expected_core) and
+      sigma_typed?(expected_core, sigma_fam, ctx) and
+      not tuple_telescope_type?(expected_core, sigma_fam, ctx, env)
+  end
+
+  @doc """
+  True when an *inferred* body already sits at the refinement / dependent-pair
+  Sigma family — i.e. it is a complete refinement value (`refine(v, pf)`) rather
+  than a bare base value that still owes a refinement obligation.
+
+  `Declarations.elaborate_refinement_return_body/6` uses it to decide whether a
+  body at a refinement return needs the goal threaded in (a base value like
+  `multiply(a, b)` at `{n | IsPositive(n)}`, whose obligation must reach
+  `try_discharge_refinement`) or is already complete and must be kept verbatim (so
+  its projection accessors are not re-derived by a redundant checked pass).
+
+  `type` is a semantic VALUE (the third element of `elaborate_expr_typed/4`, see
+  `coerce_refined_to_base/5`), so it is inspected with `Normalise.whnf_value/2` —
+  never `Kernel.normalize/2`, which expects a Core term and would crash on a value.
+  """
+  @spec inferred_refinement_value?(Cure.Core.Value.t(), Context.t(), Env.t()) :: boolean()
+  def inferred_refinement_value?(type, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+    sig = Context.signature(ctx)
+
+    not is_nil(sigma_fam) and
+      match?({:vdata, ^sigma_fam, [_dom, _pred]}, Normalise.whnf_value(type, sig))
+  end
+
+  # A refinement / bare dependent-pair Σ and a flat tuple Σ share ONE Core shape
+  # (`{:data, Sigma, [dom, λ], []}`) — the unified-tuple encoding lowers
+  # `Tuple(T1,…,Tn)` to the unit-terminated telescope
+  # `Sigma(T1, λ_. … Sigma(Tn, λ_. Unit))`. Only the SPINE TERMINATOR separates
+  # them: a tuple bottoms at `Unit`, a refinement's predicate is a proposition.
+  # Routing a tuple return through the refinement check-first path changes how its
+  # body elaborates (a still-well-typed but different Core term, e.g. an off-by-one
+  # in a nested optic rebuild), so tuples MUST be excluded here.
+  #
+  # This is the transitive closure of `telescope_terminator?/3`'s probe technique:
+  # apply each Σ's predicate to a closed `unit` probe, normalize (β-reducing a
+  # non-dependent tail to its body), and recurse on the tail. A car list that ends
+  # in `Unit` is a tuple; anything else (a proposition, or a bare pair whose tail is
+  # an ordinary type) is not. Mirrors emit's value-level `telescope_cars/2`.
+  defp tuple_telescope_type?(expected_core, sigma_fam, ctx, env) do
+    unit_family = unit_family_name(env)
+
+    case Kernel.normalize(ctx, expected_core) do
+      {:data, ^unit_family, [], []} ->
+        true
+
+      {:data, ^sigma_fam, [_dom, b_fn], []} ->
+        tail = {:app, b_fn, {:ctor, unit_ctor_name(env), []}}
+        tuple_telescope_type?(tail, sigma_fam, ctx, env)
+
+      _ ->
+        false
+    end
+  end
 
   # Anonymous-union subsumption: a coercion inserted by the ELABORATOR in check mode
   # only — never a kernel rule. If the expected type is a generated union family and
@@ -2502,11 +2734,19 @@ defmodule Cure.Elab.Elaborator do
   defp abstract_term({:var, i}, _target, depth) when i >= depth, do: {:var, i + 1}
   defp abstract_term({:var, _} = var, _target, _depth), do: var
 
+  # Descending a binder shifts every free de Bruijn variable — including any in
+  # `target` — up by one, so the target must be shifted to keep matching the SAME
+  # occurrence one binder deeper. Without this, abstracting a scrutinee that occurs
+  # under a binder (e.g. a Π/λ-typed SIBLING like `g : (b = T) -> (c = T)`) both
+  # MISSES the real occurrence (now at `target+1`) and spuriously matches whatever
+  # else sits at the un-shifted index (`c`). Callers whose target occurs only at the
+  # abstraction depth (the common goal case) cross no binder before the match, so the
+  # shift is a no-op for them.
   defp abstract_term({:pi, _g, d, c}, target, depth),
-    do: {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(c, target, depth + 1)}
+    do: {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(c, Subst.shift(target, 1, 0), depth + 1)}
 
   defp abstract_term({:lam, _g, d, b}, target, depth),
-    do: {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(b, target, depth + 1)}
+    do: {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(b, Subst.shift(target, 1, 0), depth + 1)}
 
   # A `:case` branch `{ctor, arity, body}` binds `arity` de Bruijn variables in
   # `body` (see `Cure.Core.Term` shift/3's `:case` clause). Mirror that here:
@@ -2518,7 +2758,7 @@ defmodule Cure.Elab.Elaborator do
   defp abstract_term({:case, scrut, motive, branches}, target, depth) do
     {:case, abstract_term(scrut, target, depth), abstract_term(motive, target, depth),
      Enum.map(branches, fn {ctor, arity, body} ->
-       {ctor, arity, abstract_term(body, target, depth + arity)}
+       {ctor, arity, abstract_term(body, Subst.shift(target, arity, 0), depth + arity)}
      end)}
   end
 
@@ -2643,6 +2883,37 @@ defmodule Cure.Elab.Elaborator do
         {:ok, key} -> key
         _ -> atom
       end
+    end
+  end
+
+  @doc """
+  Resolve and elaborate an applied call to a bare OVERLOADED name (a set of ≥2
+  members sharing one spelling — same-module discriminated members, or
+  cross-module providers with no unique winner) by inferring the argument types,
+  pruning candidates by first-order convertibility, and dispatching the survivor.
+
+  Shared verbatim by TERM-position elaboration (`elaborate_named_call_resolved`)
+  and dependent-INDEX-position lowering (`declarations.ex:lower_applied_type`) so
+  both disambiguate identically — index position previously ran the pre-overload
+  resolver and either mis-picked an ambient same-name provider (crashing in ι) or
+  reported `:ambiguous_name`. Returns the standard `{:ok, term, type}` on a unique
+  survivor, or `Overload.resolve`'s `{:error, {:no_matching_overload | :ambiguous_overload, …}}`.
+  `candidates` is the caller's already-computed `overload_candidates/2` (≥2).
+  """
+  @spec elaborate_overloaded_app(
+          Env.t(),
+          atom(),
+          [tuple()],
+          [String.t()] | nil,
+          [String.t()],
+          Context.t(),
+          [atom()]
+        ) :: {:ok, term(), term()} | {:error, term()}
+  def elaborate_overloaded_app(env, atom, args, arg_labels, names, ctx, candidates) do
+    with {:ok, present} <- map_present_args(args, names, ctx, env),
+         arg_types = Enum.map(present, fn {_term, ty} -> ty end),
+         {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, arg_labels, candidates) do
+      elaborate_global_app(env, winner, present, ctx)
     end
   end
 
@@ -3285,9 +3556,9 @@ defmodule Cure.Elab.Elaborator do
          result_type_term
        ) do
     {:ok, {^cname, pattern_vars}} = constructor_pattern(with_pattern)
-    %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
+    %{args: telescope, quantities: quantities, plicities: plicities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
-    branch_names = branch_scope(telescope, quantities, pattern_vars) ++ names
+    branch_names = branch_scope(telescope, quantities, plicities, pattern_vars) ++ names
 
     case verdict do
       :impossible ->
@@ -3445,9 +3716,9 @@ defmodule Cure.Elab.Elaborator do
     } = cfg
 
     {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
-    %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
+    %{args: telescope, quantities: quantities, plicities: plicities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
-    branch_names0 = branch_scope(telescope, quantities, pattern_vars) ++ names
+    branch_names0 = branch_scope(telescope, quantities, plicities, pattern_vars) ++ names
     branch_ctx0 = extend_context(ctx, telescope, param_vals)
 
     ctor_term = branch_constructor_term(cname, arity)
@@ -3639,9 +3910,9 @@ defmodule Cure.Elab.Elaborator do
     %{names: names, ctx: ctx, env: env, param_vals: param_vals, motive: motive, sibling_names: snames} = cfg
 
     {:ok, {^cname, pattern_vars}} = constructor_pattern(pattern)
-    %{args: telescope, quantities: quantities} = Inductive.get_ctor(env, cname)
+    %{args: telescope, quantities: quantities, plicities: plicities} = Inductive.get_ctor(env, cname)
     arity = length(telescope)
-    branch_names0 = branch_scope(telescope, quantities, pattern_vars) ++ names
+    branch_names0 = branch_scope(telescope, quantities, plicities, pattern_vars) ++ names
     branch_ctx0 = extend_context(ctx, telescope, param_vals)
 
     ctor_term = branch_constructor_term(cname, arity)
@@ -3769,18 +4040,23 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A computed index that is a constructor spine over variables (`S(m)`,
-  # `Cons(h, t)`) is INVERTIBLE by ordinary index refinement — matching unifies the
-  # scrutinee's constructor index with each branch constructor's index directly
-  # (Idris's `yr : Vect m a` in the `(::)` branch). It needs no carried equation:
-  # the plain 3a motive handles it, and forcing the carried-eq transport onto a
-  # sibling with a fresh-variable constructor index (e.g. `S(n')` for a bound tail
-  # length) spuriously fails `:branch_type` even when the branch body never uses
-  # that sibling. Only a NON-invertible computed index — a defined-function
-  # application like `app(p, q)`, whose head is not a constructor and cannot be
-  # inverted — genuinely needs the carried equation (see `carried_index_sibling_test`).
-  # A bare variable is trivially invertible (and was already excluded before).
-  defp invertible_index?({:ctor, _name, args}), do: Enum.all?(args, &invertible_index?/1)
+  # A computed index whose HEAD is a constructor (`S(m)`, `Cons(h, t)`, and also
+  # `Node(p, twist(q))` where an argument carries a computed subterm) is INVERTIBLE
+  # by ordinary index refinement — matching unifies the scrutinee's constructor
+  # index with each branch constructor's index directly (Idris's `yr : Vect m a` in
+  # the `(::)` branch), and structural unification descends THROUGH the ctor head,
+  # binding any computed argument subterm to the ctor's own argument binder. So the
+  # test is on the HEAD only, not the argument shapes: it needs no carried equation.
+  # Forcing the carried-eq transport onto a sibling with a constructor index (e.g.
+  # `S(n')` for a bound tail length) spuriously fails `:branch_type` even when the
+  # branch body never uses that sibling; and recursing into ctor args used to
+  # misclassify `Node(p, twist(q))` as non-invertible merely because `twist(q)` is a
+  # function application, dropping the branch-unify subst (E8, `:rewrite_no_match`).
+  # Only a NON-constructor head — a defined-function application like `app(p, q)`,
+  # which cannot be inverted structurally — genuinely needs the carried equation
+  # (see `carried_index_sibling_test` and the E8 antibody). A bare variable is
+  # trivially invertible (and was already excluded before).
+  defp invertible_index?({:ctor, _name, _args}), do: true
   defp invertible_index?({:var, _}), do: true
   defp invertible_index?(_), do: false
 
@@ -4524,6 +4800,10 @@ defmodule Cure.Elab.Elaborator do
 
   # A Bool scrutinee is now the inductive family (`{:vdata, :Bool, []}`), resolved
   # via the registry; Int/Float stay primitive type-values.
+  #
+  # NOTE(int-facade): `{:vint_type}` is retired from surface production (spec
+  # 2026-07-18 §3a); this clause stays so scrutinee-kind resolution remains
+  # total on a legacy/deserialized value still carrying it.
   defp primitive_scrut_kind({:vint_type}, _sig), do: {:ok, :int}
   defp primitive_scrut_kind({:vfloat_type}, _sig), do: {:ok, :float}
   # `Atom` is a sealed primitive base type; its `==`/`!=` lowers to the polymorphic
@@ -4531,8 +4811,17 @@ defmodule Cure.Elab.Elaborator do
   # which never consults `:atom`, so `:ok + :ok` still rejects.
   defp primitive_scrut_kind({:vatom_type}, _sig), do: {:ok, :atom}
 
+  # `Bool` and `Int` are both nullary inductive families now (spec 2026-07-18
+  # surface flip retired the primitive `{:vint_type}` node). An `Int`-typed operand
+  # is `{:vdata, int_fid, []}`; it maps to `:int` so the arithmetic/comparison/eq
+  # `build_binop` clauses fold to the monomorphic native ops exactly as before the
+  # flip. Any other nullary family (e.g. `Nat`) stays `:error` → struct_eq path.
   defp primitive_scrut_kind({:vdata, fid, []}, sig) do
-    if fid == Inductive.builtin(sig, :bool), do: {:ok, :bool}, else: :error
+    cond do
+      fid == Inductive.builtin(sig, :bool) -> {:ok, :bool}
+      fid == Inductive.builtin(sig, :int) -> {:ok, :int}
+      true -> :error
+    end
   end
 
   # An applied `Bounded(n)` (Char's underlying type) is an indexed family that
@@ -5404,8 +5693,10 @@ defmodule Cure.Elab.Elaborator do
          carried
        ) do
     {:ok, {cname, pattern_vars}} = constructor_pattern(pattern)
-    %{args: telescope, quantities: quantities, result_indices: result_indices} = Inductive.get_ctor(env, cname)
-    branch_names = branch_scope(telescope, quantities, pattern_vars) ++ names
+    %{args: telescope, quantities: quantities, result_indices: result_indices, plicities: plicities} =
+      Inductive.get_ctor(env, cname)
+
+    branch_names = branch_scope(telescope, quantities, plicities, pattern_vars) ++ names
 
     case verdict do
       :impossible ->
@@ -5443,7 +5734,7 @@ defmodule Cure.Elab.Elaborator do
         {bindings, checks} = split_named_implicits(pattern, subst, arity, telescope)
 
         tele_names =
-          Enum.reduce(bindings, branch_scope(telescope, quantities, pattern_vars), fn {name, {:variable, _, vname}},
+          Enum.reduce(bindings, branch_scope(telescope, quantities, plicities, pattern_vars), fn {name, {:variable, _, vname}},
                                                                                       acc ->
             p = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
             List.replace_at(acc, arity - 1 - p, to_string(vname))
@@ -5763,10 +6054,35 @@ defmodule Cure.Elab.Elaborator do
           # handles by checking the arm body against the match's expected type; the
           # kernel re-checks either way, so this only ever accepts well-typed terms.
           case elaborate_expr_typed(expr, names, ctx, env) do
-            {:ok, term, _type} -> {:ok, term}
-            {:error, {:unsolved_metavariables, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
-            {:error, {:unsupported_expression, _}} -> elaborate_expr_checked(expr, expected, names, ctx, env)
-            {:error, _} = err -> err
+            {:ok, term, _type} ->
+              {:ok, term}
+
+            {:error, {:unsolved_metavariables, _}} ->
+              elaborate_expr_checked(expr, expected, names, ctx, env)
+
+            {:error, {:unsupported_expression, _}} ->
+              elaborate_expr_checked(expr, expected, names, ctx, env)
+
+            {:error, _} = orig ->
+              # Inference of a constructor arm can ALSO fail with an index/result
+              # mismatch when a FIELD's type depends on an index that no present
+              # argument determines — the index is only available from the branch's
+              # refined goal. `MkP(reflexive(OT()))` at the refined goal `P(OA)`:
+              # `MkP : Eq(f(x), OT) -> P(x)`, and `reflexive(OT()) : Eq(OT, OT)` hides
+              # `f(OA)` behind an ι-reduction, so the field cannot fix the index `x`;
+              # inference reaches the checking-less ctor path, leaves the index a
+              # metavariable, and rejects with `f(?0) ≠ OT` (`:index_mismatch`). Retry
+              # in checking mode so the goal seeds the constructor's indices
+              # (`elaborate_ctor_app_bidirectional` pins `x := OA` from `P(OA)` before
+              # checking the field). Strictly additive: reached only after inference
+              # already errored, the ORIGINAL inference error is surfaced if the
+              # checked retry also fails, and the kernel re-checks the assembled term —
+              # so this only ever admits well-typed constructors. This is exactly how
+              # Idris checks a constructor arm body against the match's expected type.
+              case elaborate_expr_checked(expr, expected, names, ctx, env) do
+                {:ok, _} = ok -> ok
+                {:error, _} -> orig
+              end
           end
 
         true ->
@@ -5822,18 +6138,39 @@ defmodule Cure.Elab.Elaborator do
       else: elaborate_expr_checked(expr, expected, names, ctx, env)
   end
 
-  # The general branch body: inferred. `maybe_inject_union/5` is a strict no-op unless
+  # The general branch body: inferred FIRST. `maybe_inject_union/5` is a strict no-op unless
   # this branch's goal is a generated anonymous-union family — in which case the
   # inferred body is injected (a member value) or widened (a narrower union, as
   # produced by a sub-union arm's `assert_type` ascription) into the goal. Without it
   # a sub-union arm's body has the SUB-union's type while the motive demands the wide
   # one, and the kernel rejects the branch with `:branch_type`.
+  #
+  # On inference FAILURE, retry in CHECKING mode against the branch goal. Inference
+  # does not thread the refined goal, so a body that needs it to make progress is
+  # wrongly rejected — canonically a BLOCK body (`let x = e in body`) whose inner
+  # DEPENDENT `match` on a local/let-bound variable relies on the goal to FORCE the
+  # constructor-field index binders (else a proof field keeps its type over the OPAQUE
+  # erased indices `$erased_x`/`$erased_k` instead of the scrutinee's concrete `x, k`,
+  # and a later reduction-requiring use fails conversion at mismatched de Bruijn
+  # depths). Checking mode threads the goal in — reaching the index-forcing branch
+  # path exactly as a ctor-call body (`Branch(k, match compareKeys(x, k), r)`) already
+  # does. Not per-shape (block, and any other shape reaching this catch-all): whatever
+  # body inference rejects for lack of the goal gets one goal-informed retry. Surface
+  # the ORIGINAL inference error if the checked retry also fails; strictly additive
+  # (only on failure), and the kernel re-checks the assembled branch.
   defp elaborate_branch_body(expr, expected, names, ctx, env) do
     if effect_goal?(expected, ctx) do
       elaborate_effect_branch(expr, expected, names, ctx, env)
     else
-      with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
-        {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+      case elaborate_expr_typed(expr, names, ctx, env) do
+        {:ok, term, type} ->
+          {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+
+        {:error, _} = orig ->
+          case elaborate_expr_checked(expr, expected, names, ctx, env) do
+            {:ok, _} = ok -> ok
+            {:error, _} -> orig
+          end
       end
     end
   end
@@ -7149,13 +7486,20 @@ defmodule Cure.Elab.Elaborator do
   # computational use), but branch substitutions can address each slot without
   # collapsing them all to the old, ambiguous `_erased` name. A source-level name
   # requested with `{index = binder}` replaces this internal name below.
-  defp branch_scope(telescope, quantities, pattern_vars) do
+  # Assign each constructor telescope slot a branch-scope name. POSITIONAL slots
+  # (plicity `:explicit`) consume the next surface pattern variable; NON-positional
+  # slots (plicity `:implicit` — an erased inferred index OR a relevant implicit
+  # `{k:T}`) get a synthetic name, replaced by the user's binder only if they name
+  # it via `{k = kk}` (see `split_named_implicits`). Positional-vs-not keys off
+  # PLICITY, not quantity: a relevant implicit is ω yet non-positional.
+  defp branch_scope(telescope, quantities, plicities, pattern_vars) do
     {names_in_order, _rest} =
-      Enum.zip(telescope, quantities)
+      Enum.zip([telescope, quantities, plicities])
       |> Enum.with_index()
       |> Enum.map_reduce(pattern_vars, fn
-        {{{_tele_name, _type}, :unrestricted}, _i}, [v | rest] -> {v, rest}
-        {{{tele_name, _type}, :erased}, i}, vars -> {"$erased_#{tele_name}_#{i}", vars}
+        {{{_tele_name, _type}, _q, :explicit}, _i}, [v | rest] -> {v, rest}
+        {{{tele_name, _type}, :erased, :implicit}, i}, vars -> {"$erased_#{tele_name}_#{i}", vars}
+        {{{tele_name, _type}, _q, :implicit}, i}, vars -> {"$implicit_#{tele_name}_#{i}", vars}
       end)
 
     Enum.reverse(names_in_order)
@@ -7291,8 +7635,10 @@ defmodule Cure.Elab.Elaborator do
       # the substitution frame and solved by unifying the present arguments. For
       # a parameter-free family this prefix is empty (unchanged behavior).
       param_tele = Inductive.param_telescope(env, family) || []
-      param_slots = Enum.map(param_tele, fn entry -> {entry, :erased} end)
-      telescope = param_slots ++ Enum.zip(ctor.args, ctor.quantities)
+      # Family parameters are always solved (never positional) → plicity :implicit.
+      param_slots = Enum.map(param_tele, fn entry -> {entry, :erased, :implicit} end)
+      plicities = Inductive.plicities_of(ctor)
+      telescope = param_slots ++ Enum.zip([ctor.args, ctor.quantities, plicities])
       pc = length(param_tele)
       init = {:ok, MetaCtx.new(), [], present_args}
 
@@ -7334,21 +7680,23 @@ defmodule Cure.Elab.Elaborator do
   # the expected `DDec` — closing the composed-computed-index reach (Idris parity)
   # without any kernel change (`Unify` uses the trusted `Conv`; the kernel still
   # re-checks the assembled ctor). See `Unify.unify/4`.
-  defp solve_arg({{_name, type_term}, :erased}, {:ok, mctx, chosen, present}, _env) do
+  # An IMPLICIT slot (an erased inferred index OR a relevant implicit `{k:T}`) is
+  # never positional: insert a fresh meta, solved by unifying a later explicit
+  # argument's type or the expected result. Positional-vs-not keys off PLICITY,
+  # not quantity — a relevant implicit is ω yet still solved, not passed.
+  defp solve_arg({{_name, type_term}, _grade, :implicit}, {:ok, mctx, chosen, present}, _env) do
     {mctx, id} = MetaCtx.fresh(mctx, Subst.instantiate(type_term, chosen))
     {:cont, {:ok, mctx, chosen ++ [{:meta, id}], present}}
   end
 
-  defp solve_arg({{_name, _type_term}, grade}, {:ok, _mctx, _chosen, []}, _env)
-       when grade in [:unrestricted, :linear, :affine],
-       do: {:halt, {:error, :too_few_arguments}}
+  defp solve_arg({{_name, _type_term}, _grade, :explicit}, {:ok, _mctx, _chosen, []}, _env),
+    do: {:halt, {:error, :too_few_arguments}}
 
   defp solve_arg(
-         {{_name, type_term}, grade},
+         {{_name, type_term}, _grade, :explicit},
          {:ok, mctx, chosen, [{arg, arg_type_term} | rest]},
          env
-       )
-       when grade in [:unrestricted, :linear, :affine] do
+       ) do
     expected = Subst.instantiate(type_term, chosen)
 
     case Unify.unify(expected, arg_type_term, mctx, env) do
@@ -7623,8 +7971,35 @@ defmodule Cure.Elab.Elaborator do
           ty_term = resplit_data(Quote.reify(ty, Context.length(ctx)), env)
 
           case Unify.unify(dom_inst, ty_term, mctx, env) do
-            {:ok, mctx} -> {:cont, {:ok, mctx, chosen ++ [term], rest, deferred}}
-            {:error, reason} -> {:halt, {:error, reason}}
+            {:ok, mctx} ->
+              {:cont, {:ok, mctx, chosen ++ [term], rest, deferred}}
+
+            {:error, reason} ->
+              # The argument HAS a type (`elaborate_expr_typed` succeeded), but it does
+              # not unify against the still-meta-bearing domain — the domain is a redex
+              # STUCK on an unsolved metavariable a LATER sibling determines. Example
+              # (the intrinsic well-scoped-BST recursion): the proof domain
+              # `elt(EFin x, ?hi) = OT` is a case-tree stuck on `?hi`, and the supplied
+              # proof's type is `slt(x, k) = OT`; only once the trailing tree argument
+              # solves `?hi := EFin k` does `elt(EFin x, EFin k)` ι-reduce to `slt(x, k)`
+              # and match. DEFER exactly as the inference-FAILURE branch does — a
+              # placeholder holds the slot, later siblings solve the domain, and
+              # `resolve_deferred_slots` re-checks the argument against the now-concrete
+              # domain. `mctx` here is the PRE-unify context (the failed unify's partial
+              # solution is discarded), so nothing leaks. Only when a later argument
+              # actually exists (`rest != []`) — otherwise nothing could rescue the
+              # domain and the honest unify error is surfaced immediately. The assembled
+              # call is kernel-re-checked by `finish_global_app`, so this order change
+              # rests on nothing unsound.
+              if rest == [] do
+                {:halt, {:error, reason}}
+              else
+                {mctx, ph} = MetaCtx.fresh(mctx)
+
+                {:cont,
+                 {:ok, mctx, chosen ++ [{:meta, ph}], rest,
+                  deferred ++ [{ph, arg, dom, length(chosen)}]}}
+              end
           end
 
         {:error, _} ->
@@ -7814,7 +8189,7 @@ defmodule Cure.Elab.Elaborator do
          {mctx_try, seed} <- fresh_seed(mctx, pc + length(ctor.args)),
          params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, seed)),
          indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, seed)),
-         {:ok, mctx_try} <- Unify.unify({:data, family, params, indices}, dom_inst, mctx_try, env) do
+         {:ok, mctx_try} <- unify_data_components(family, params, indices, dom_inst, mctx_try, env) do
       solve_ctor_present_fields(ctor, cargs, seed, pc, mctx_try, names, ctx, env)
     else
       _ -> mctx
@@ -7822,6 +8197,46 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp solve_deferred_domain(_arg, _dom_inst, mctx, _names, _ctx, _env), do: mctx
+
+  # Simultaneous (component-wise) unification of a constructor's result-type
+  # template `{:data, family, params, indices}` against a domain `dom_inst`,
+  # tolerating a stuck component. A whole-tuple `Unify.unify` is all-or-nothing:
+  # a single index that cannot unify NOW aborts every other component's solving.
+  # For a constructor whose result carries a COMPUTED index — `ATimes : Acc(l,m1)
+  # -> Acc(r,m2) -> Acc(PTimes(l,r), add(m1,m2))` — the `add(m1',m2')` index is a
+  # stuck neutral at deferral time (its scrutinee `m1'` is an unsolved seed meta),
+  # so whole-tuple unification against `Acc(PTimes(PA(?a),…), S(Z))` fails and the
+  # caller's `solve_ctor_present_fields` never runs — leaving the sibling implicit
+  # `?a` (which the STRUCTURAL first index and the present field `AAtomA : …PA(TA)…`
+  # jointly determine) unsolved. Unifying each param/index pair independently and
+  # KEEPING the solutions from the pairs that succeed lets the structural component
+  # solve what it can while the stuck one is simply skipped; the present fields then
+  # finish the job, and the computed index reduces once its arguments are known.
+  #
+  # Meta-solving only, and best-effort: a failing pair leaves `mctx` untouched (never
+  # fabricates a solution), and the assembled call is kernel-re-checked by
+  # `finish_global_app`, so a genuinely ambiguous domain still rejects and nothing
+  # unsound rests on the partial solve. Family/arity mismatch is a real error, not a
+  # stuck component, so it returns `:mismatch` and the caller keeps the original mctx.
+  defp unify_data_components(family, params, indices, dom_inst, mctx, env) do
+    case dom_inst do
+      {:data, ^family, dparams, dindices}
+      when length(dparams) == length(params) and length(dindices) == length(indices) ->
+        mctx =
+          Enum.zip(params ++ indices, dparams ++ dindices)
+          |> Enum.reduce(mctx, fn {a, b}, m ->
+            case Unify.unify(a, b, m, env) do
+              {:ok, m2} -> m2
+              {:error, _} -> m
+            end
+          end)
+
+        {:ok, mctx}
+
+      _ ->
+        :mismatch
+    end
+  end
 
   # Allocate `n` fresh metavariables from `mctx`, returning the updated context and
   # the `[{:meta, id}]` seed frame.
@@ -7846,21 +8261,24 @@ defmodule Cure.Elab.Elaborator do
   # gates, so a genuinely ambiguous domain still rejects.
   defp solve_ctor_present_fields(ctor, arg_asts, seed, pc, mctx, names, ctx, env) do
     params = Enum.take(seed, pc)
-    slots = Enum.zip(ctor.args, ctor.quantities)
+    slots = Enum.zip([ctor.args, ctor.quantities, Inductive.plicities_of(ctor)])
     solve_fields(slots, arg_asts, seed, pc, params, [], mctx, names, ctx, env)
   end
 
   defp solve_fields([], _asts, _seed, _pc, _params, _acc, mctx, _names, _ctx, _env), do: mctx
 
-  defp solve_fields([{{_fn, _ft}, :erased} | slots], asts, seed, pc, params, acc, mctx, names, ctx, env) do
+  # IMPLICIT slot (erased index OR relevant `{k:T}`): non-positional, its value is
+  # the seed metavariable a present field determines. Keyed off plicity, not
+  # quantity — a relevant implicit is ω yet still seeded, not consumed.
+  defp solve_fields([{{_fn, _ft}, _q, :implicit} | slots], asts, seed, pc, params, acc, mctx, names, ctx, env) do
     val = seed |> Enum.at(pc + length(acc)) |> Unify.zonk(mctx)
     solve_fields(slots, asts, seed, pc, params, [val | acc], mctx, names, ctx, env)
   end
 
-  defp solve_fields([{{_fn, _ft}, :unrestricted} | _slots], [], _seed, _pc, _params, _acc, mctx, _names, _ctx, _env),
+  defp solve_fields([{{_fn, _ft}, _q, :explicit} | _slots], [], _seed, _pc, _params, _acc, mctx, _names, _ctx, _env),
     do: mctx
 
-  defp solve_fields([{{_fn, ftype}, :unrestricted} | slots], [arg | rest], seed, pc, params, acc, mctx, names, ctx, env) do
+  defp solve_fields([{{_fn, ftype}, _q, :explicit} | slots], [arg | rest], seed, pc, params, acc, mctx, names, ctx, env) do
     ftype_inst = ftype |> Subst.instantiate(params ++ Enum.reverse(acc)) |> Unify.zonk(mctx)
 
     {mctx, val} = solve_field(arg, ftype_inst, mctx, names, ctx, env)
@@ -7937,10 +8355,11 @@ defmodule Cure.Elab.Elaborator do
       is_nil(ctor) or is_nil(family) ->
         {:error, {:unknown_constructor, cname}}
 
-      # Guard-ordered AFTER the nil check: `ctor.quantities` is only reached once
-      # `ctor` is known non-nil (an unknown ctor would otherwise crash here before
-      # the graceful error above could fire).
-      Enum.count(ctor.quantities, &Grade.present?/1) != length(arg_asts) ->
+      # Guard-ordered AFTER the nil check: the ctor's plicities are only reached
+      # once `ctor` is known non-nil (an unknown ctor would otherwise crash here
+      # before the graceful error above could fire). Positional arg count is the
+      # number of EXPLICIT slots — an implicit `{k:T}` is solved, not passed.
+      Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit)) != length(arg_asts) ->
         {:error, {:constructor_arity_mismatch, cname}}
 
       true ->
@@ -7958,23 +8377,49 @@ defmodule Cure.Elab.Elaborator do
         params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, seed))
         indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, seed))
 
-        case Unify.unify({:data, family, params, indices}, expected_core, mctx, env) do
-          {:error, _} ->
-            {:error, {:constructor_result_mismatch, cname}}
+        result_term = {:data, family, params, indices}
 
+        slots =
+          [ctor.args, ctor.quantities, Inductive.plicities_of(ctor)]
+          |> Enum.zip()
+          |> Enum.with_index()
+          |> Enum.map(fn {{{_fn, ftype}, q, p}, i} -> {i, ftype, q, p} end)
+
+        case Unify.unify(result_term, expected_core, mctx, env) do
           {:ok, mctx} ->
             solved_params = seed |> Enum.take(pc) |> Enum.map(&Unify.zonk(&1, mctx))
 
             if Enum.any?(solved_params, &has_meta?/1) do
               {:error, {:unsolved_parameters, cname}}
             else
-              slots =
-                ctor.args
-                |> Enum.zip(ctor.quantities)
-                |> Enum.with_index()
-                |> Enum.map(fn {{{_fn, ftype}, q}, i} -> {i, ftype, q} end)
+              check_ctor_args(slots, arg_asts, seed, pc, solved_params, [], mctx, names, ctx, env, cname, [])
+            end
 
-              check_ctor_args(slots, arg_asts, seed, pc, solved_params, [], mctx, names, ctx, env, cname)
+          {:error, _} ->
+            # The full result-pin failed. It may fail only because a COMPUTED result
+            # index is stuck — `ATimes : … -> Acc(PTimes(l,r), add(m1,m2))` checked
+            # against `Acc(…, S(Z))`, where `add(m1,m2)` cannot reduce until the field
+            # `AAtomA` fixes `m1`. Rather than reject, pin the indices that DO unify
+            # (structural ones — `PTimes(l,r)`, solving `l`/`r`) and DEFER the stuck
+            # equations. The deferred equations are retried inside the field-resolution
+            # fixpoint (`resolve_ctor_fields`): once a sibling field solves their metas
+            # the computed index reduces (`add(S(Z),m2)` → `S(m2)`) and solves the rest.
+            # This is Idris's simultaneous-unification behaviour, scoped to the one
+            # constructor: field checks and result-index constraints solve as ONE
+            # constraint set with postponement. The assembled term is still
+            # kernel-re-checked by the caller, so nothing unsound is admitted — a
+            # deferred equation that stays unsatisfiable surfaces as an unsolved
+            # metavariable or a kernel type error, never silent acceptance.
+            case partial_pin_result(result_term, expected_core, mctx, env) do
+              :mismatch ->
+                {:error, {:constructor_result_mismatch, cname}}
+
+              {mctx, deferred} ->
+                # Params that pinned structurally are passed for the de Bruijn frame;
+                # any still-open param is caught downstream (unsolved metavariable /
+                # kernel re-check), never silently accepted.
+                partial_params = seed |> Enum.take(pc) |> Enum.map(&Unify.zonk(&1, mctx))
+                check_ctor_args(slots, arg_asts, seed, pc, partial_params, [], mctx, names, ctx, env, cname, deferred)
             end
         end
     end
@@ -7987,24 +8432,29 @@ defmodule Cure.Elab.Elaborator do
   # parameters and every earlier field value (the same `params ++ fields` frame the
   # de Bruijn layout uses). The erased field values are kept in the assembled
   # `{:ctor, …}`, matching `finish_ctor_app`.
-  defp check_ctor_args(slots, arg_asts, seed, pc, params, _acc0, mctx, names, ctx, env, cname) do
+  defp check_ctor_args(slots, arg_asts, seed, pc, params, _acc0, mctx, names, ctx, env, cname, deferred) do
     # Idris-style DEFERRAL (TTImp.Elab.App `checkRestApp`/`checkRtoL`): a present field whose
     # instantiated type still carries a metavariable is POSTPONED, its siblings resolved first —
     # which solves that metavariable — and it is then checked. Iterated to a fixpoint so any
     # dependency order works. Erased index slots seed the assembly with their goal-pinned
     # metavariable and are re-zonked at the end; positions are kept so the de Bruijn frame stays
     # correct regardless of resolution order.
+    # Positional-vs-not keys off PLICITY: EXPLICIT slots consume the surface
+    # arguments; IMPLICIT slots (erased index OR relevant `{k:T}`) seed from their
+    # goal-pinned metavariable and are solved by unification. The retained value
+    # (relevant implicit) vs dropped one (erased) is a quantity concern erasure
+    # handles later — both flow identically here.
     args_by_pos =
       slots
-      |> Enum.filter(fn {_i, _ft, q} -> q == :unrestricted end)
+      |> Enum.filter(fn {_i, _ft, _q, p} -> p == :explicit end)
       |> Enum.map(&elem(&1, 0))
       |> Enum.zip(arg_asts)
       |> Map.new()
 
-    acc0 = for {i, _ft, :erased} <- slots, into: %{}, do: {i, Enum.at(seed, pc + i)}
-    pending = for {i, ft, :unrestricted} <- slots, do: {i, ft}
+    acc0 = for {i, _ft, _q, :implicit} <- slots, into: %{}, do: {i, Enum.at(seed, pc + i)}
+    pending = for {i, ft, _q, :explicit} <- slots, do: {i, ft}
 
-    case resolve_ctor_fields(pending, acc0, args_by_pos, seed, pc, params, mctx, names, ctx, env, cname) do
+    case resolve_ctor_fields(pending, acc0, args_by_pos, seed, pc, params, mctx, names, ctx, env, cname, deferred) do
       {:ok, acc_map, mctx} ->
         vals = for i <- 0..(length(slots) - 1)//1, do: Unify.zonk(Map.fetch!(acc_map, i), mctx)
 
@@ -8024,12 +8474,20 @@ defmodule Cure.Elab.Elaborator do
   # tried by INFERENCE (solving the metavariable from the argument's own type, as a recursive
   # call or concrete constructor does) and otherwise DEFERRED to a later sweep, once a sibling
   # solves it.
-  defp resolve_ctor_fields([], acc_map, _args, _seed, _pc, _params, mctx, _names, _ctx, _env, _cname),
+  defp resolve_ctor_fields([], acc_map, _args, _seed, _pc, _params, mctx, _names, _ctx, _env, _cname, _deferred),
     do: {:ok, acc_map, mctx}
 
-  defp resolve_ctor_fields(pending, acc_map, args, seed, pc, params, mctx, names, ctx, env, cname) do
+  defp resolve_ctor_fields(pending, acc_map, args, seed, pc, params, mctx, names, ctx, env, cname, deferred) do
+    # A DEFERRED result-index equation (`add(m1,m2) = S(Z)`) is retried at the head of
+    # every sweep: once a sibling field solves its metas the computed index reduces
+    # (`add(S(Z),m2)` → `S(m2)` via the meta-aware whnf in `Unify`) and the equation
+    # solves the remaining index metas — which unblocks the fields that reference them.
+    # Discharging one counts as progress, so the fixpoint keeps sweeping even when the
+    # field sweep alone stalls.
+    {mctx, deferred, deferred_prog} = retry_deferred(deferred, mctx, env)
+
     swept =
-      Enum.reduce(pending, {[], acc_map, mctx, false, nil}, fn {i, ftype}, {pend, amap, mctx, prog, err} ->
+      Enum.reduce(pending, {[], acc_map, mctx, deferred_prog, nil}, fn {i, ftype}, {pend, amap, mctx, prog, err} ->
         if err != nil do
           {pend, amap, mctx, prog, err}
         else
@@ -8059,12 +8517,46 @@ defmodule Cure.Elab.Elaborator do
         {:ok, acc_map, mctx}
 
       {pend, acc_map, mctx, true, nil} ->
-        resolve_ctor_fields(Enum.reverse(pend), acc_map, args, seed, pc, params, mctx, names, ctx, env, cname)
+        resolve_ctor_fields(Enum.reverse(pend), acc_map, args, seed, pc, params, mctx, names, ctx, env, cname, deferred)
 
       {_pend, _amap, _mctx, false, nil} ->
-        # A full sweep resolved nothing but fields remain: their types stay under-determined.
+        # A full sweep resolved nothing — no field AND no deferred equation — but fields
+        # remain: their types stay under-determined.
         {:error, {:unsolved_field_type, cname}}
     end
+  end
+
+  # Pin a constructor's result type against the goal COMPONENT-WISE, tolerating a
+  # stuck computed index. Each result parameter/index is unified against the
+  # corresponding goal component independently; the ones that unify refine `mctx`,
+  # and the ones that don't (a computed index like `add(m1,m2)` whose metas aren't
+  # yet known) are returned as DEFERRED `{actual, expected}` equations for the field
+  # fixpoint to retry. Returns `:mismatch` when the goal is not the same data family
+  # at the same arity — a genuine result-type mismatch, not a solving-order issue.
+  defp partial_pin_result({:data, fam, ap, ai}, {:data, fam, ep, ei}, mctx, env)
+       when length(ap) == length(ep) and length(ai) == length(ei) do
+    Enum.zip(ap ++ ai, ep ++ ei)
+    |> Enum.reduce({mctx, []}, fn {actual, expected}, {m, deferred} ->
+      case Unify.unify(actual, expected, m, env) do
+        {:ok, m2} -> {m2, deferred}
+        {:error, _} -> {m, [{actual, expected} | deferred]}
+      end
+    end)
+  end
+
+  defp partial_pin_result(_actual, _expected, _mctx, _env), do: :mismatch
+
+  # Retry each deferred result-index equation after zonking both sides. Solved
+  # equations are dropped; unsolved ones are kept for a later sweep. Returns the
+  # refined context, the still-deferred equations, and whether any were discharged
+  # (progress, which keeps the field fixpoint iterating).
+  defp retry_deferred(deferred, mctx, env) do
+    Enum.reduce(deferred, {mctx, [], false}, fn {lhs, rhs}, {m, still, prog} ->
+      case Unify.unify(Unify.zonk(lhs, m), Unify.zonk(rhs, m), m, env) do
+        {:ok, m2} -> {m2, still, true}
+        {:error, _} -> {m, [{lhs, rhs} | still], prog}
+      end
+    end)
   end
 
   # The de Bruijn frame prefix for the field at position `i`: positions `0..i-1`, each taken from
@@ -8112,7 +8604,11 @@ defmodule Cure.Elab.Elaborator do
       is_nil(ctor) or is_nil(family) ->
         {:error, {:unknown_constructor, cname}}
 
-      Enum.any?(ctor.quantities, &Grade.erased?/1) ->
+      # Bail on any IMPLICIT slot (erased inferred index OR relevant implicit
+      # `{k:T}`): this all-positional inference fallback can't solve a
+      # non-positional field. The primary `elaborate_ctor_app` inserts and solves
+      # implicit metas correctly, so leaving it to that path is complete.
+      Enum.any?(Inductive.plicities_of(ctor), &(&1 == :implicit)) ->
         {:error, {:bidirectional_erased_field, cname}}
 
       length(ctor.args) != length(arg_asts) ->
@@ -8176,7 +8672,12 @@ defmodule Cure.Elab.Elaborator do
     %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
-    telescope = Enum.zip(Enum.map(domains, &{:_, &1}), quantities)
+    # A global def has no relevant-implicit surface (that is a constructor-index
+    # feature), so plicity derives from quantity: erased ⇒ :implicit (meta),
+    # else :explicit (positional) — preserving the pre-plicity `solve_arg`
+    # behavior now that the slot carries an explicit plicity.
+    slot_plicities = Enum.map(quantities, fn :erased -> :implicit; _ -> :explicit end)
+    telescope = Enum.zip([Enum.map(domains, &{:_, &1}), quantities, slot_plicities])
     init = {:ok, MetaCtx.new(), [], present_args}
 
     # GOAL-DIRECTED solving, for an anonymous-union goal only.
@@ -8199,7 +8700,7 @@ defmodule Cure.Elab.Elaborator do
     # call is the fully Idris-faithful behaviour and is the natural generalisation, but
     # it reorders solving for every call in the language — a broad regression surface
     # that deserves its own change. Gated, no non-union program's inference can differ.
-    {erased, rest} = Enum.split_while(telescope, fn {_d, q} -> q == :erased end)
+    {erased, rest} = Enum.split_while(telescope, fn {_d, q, _p} -> q == :erased end)
 
     init =
       if union_goal?(expected) do
@@ -8256,7 +8757,7 @@ defmodule Cure.Elab.Elaborator do
   # real arguments are unified against their domains by `solve_arg` as usual.
   defp solve_codomain_from_goal({:ok, mctx, chosen, present}, codomain, expected, env, remaining) do
     {mctx_padded, padded} =
-      Enum.reduce(remaining, {mctx, chosen}, fn {{_n, ty}, _q}, {m, acc} ->
+      Enum.reduce(remaining, {mctx, chosen}, fn {{_n, ty}, _q, _p}, {m, acc} ->
         {m, id} = MetaCtx.fresh(m, Subst.instantiate(ty, acc))
         {m, acc ++ [{:meta, id}]}
       end)

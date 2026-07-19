@@ -46,30 +46,124 @@ defmodule Cure.Elab.ProofSearch do
       # reduces back to it (a self-referential lemma set) is cut here, not below.
       state = %{state | trying: [goal | ts]}
 
-      {lemma_ok, lemma_errors} = lemma_candidates(goal, ctx, env, state)
+      # Ordered solver seam (design §4.2). Each solver is a disjoint strategy;
+      # `run_solvers` consults them in order and the first NON-`:none` verdict
+      # wins — an `{:ok, term}` discharge OR an `{:error, …}` ambiguity, which
+      # must surface rather than be masked by a later solver that happens to
+      # find something. Only a `:none` (this strategy does not apply) falls
+      # through to the next. `solver_lemma` (local hypotheses + refinement
+      # projections + `@lemma`-tagged theorems) runs first; `solver_positivity`
+      # (the syntax-directed arithmetic-sign procedure over the stdlib's
+      # untagged sign lemmas) is the fallback.
+      run_solvers(
+        [
+          fn -> solver_lemma(goal, ctx, env, state) end,
+          fn -> solver_positivity(goal, ctx, env, state) end
+        ],
+        goal
+      )
+    end
+  end
 
-      candidates =
-        local_candidates(goal, ctx, env) ++
-          projection_candidates(goal, ctx, env) ++
-          lemma_ok
+  # Consult solvers in order; first non-`:none` verdict wins. See `resolve/4`.
+  defp run_solvers([], _goal), do: :none
 
-      # An ambiguous SUB-goal (e.g. a lemma's own hypothesis matches two local
-      # witnesses) means that particular lemma-application path itself yields
-      # more than one distinct proof term — a genuine ambiguity, not "this
-      # lemma doesn't apply". If some OTHER candidate independently and
-      # unambiguously proves the goal, prefer it (the ambiguous branch was
-      # simply unneeded). Only surface the inner ambiguity when it is the
-      # only path this goal has, so it is never silently downgraded to :none.
-      case decide(candidates, goal) do
-        :none ->
-          case lemma_errors do
-            [] -> :none
-            [first | _] -> first
+  defp run_solvers([solver | rest], goal) do
+    case solver.() do
+      :none -> run_solvers(rest, goal)
+      verdict -> verdict
+    end
+  end
+
+  # The v1 solver: pool local-context hypotheses, refinement/Sigma projections,
+  # and `@lemma`-tagged theorems filed under the goal's head, then apply the
+  # unique-or-defer discipline (`decide/2`).
+  defp solver_lemma(goal, ctx, env, state) do
+    {lemma_ok, lemma_errors} = lemma_candidates(goal, ctx, env, state)
+
+    candidates =
+      local_candidates(goal, ctx, env) ++
+        projection_candidates(goal, ctx, env) ++
+        conjunction_candidates(goal, ctx, env) ++
+        lemma_ok
+
+    # An ambiguous SUB-goal (e.g. a lemma's own hypothesis matches two local
+    # witnesses) means that particular lemma-application path itself yields
+    # more than one distinct proof term — a genuine ambiguity, not "this
+    # lemma doesn't apply". If some OTHER candidate independently and
+    # unambiguously proves the goal, prefer it (the ambiguous branch was
+    # simply unneeded). Only surface the inner ambiguity when it is the
+    # only path this goal has, so it is never silently downgraded to :none.
+    case decide(candidates, goal) do
+      :none ->
+        case lemma_errors do
+          [] -> :none
+          [first | _] -> first
+        end
+
+      other ->
+        other
+    end
+  end
+
+  # The syntax-directed arithmetic-sign procedure (design §4.2, a Lean-`positivity`
+  # style decision procedure). The stdlib's `Std.Proof.Math` ships the sign lemmas
+  # for the successor and addition fragments WITHOUT `@lemma`, so the tagged-lemma
+  # solver never reaches them. This solver applies them by name through the same
+  # `try_lemma` machinery, using VIRTUAL lemma entries built from the stdlib defs.
+  #
+  # Order matters for the two overlapping addition lemmas: both conclude
+  # `IsPositive(plus(a, b))`, so when both summands are provably positive both
+  # apply. Pooling them (as `decide/2` would) is a false `:ambiguous_proof_search`.
+  # Here we try the curated lemmas in a fixed order and take the FIRST that
+  # discharges — a deterministic choice, not an ambiguity. `multiply` is
+  # intentionally absent: its lemma IS `@lemma`-tagged in the stdlib, so the
+  # primary solver already discharges `IsPositive(multiply(a, b))` and this
+  # fallback never sees it.
+  @positivity_lemmas [
+    "successor_is_positive",
+    "adding_a_positive_number_is_positive",
+    "adding_to_a_positive_number_is_positive"
+  ]
+
+  defp solver_positivity(goal, ctx, env, state) do
+    case head_of(goal) do
+      nil ->
+        :none
+
+      _head ->
+        @positivity_lemmas
+        |> Enum.map(&virtual_lemma_entry(env, &1))
+        |> Enum.reject(&is_nil/1)
+        |> Enum.reduce_while(:none, fn entry, _acc ->
+          case try_lemma(entry, goal, ctx, env, state) do
+            # A genuine ambiguity in a recursive sub-goal must surface, not be
+            # papered over by trying the next sign lemma.
+            {:error, _} = err ->
+              {:halt, err}
+
+            # This lemma discharged the goal — the first to do so wins.
+            {term, _prov} when term != nil ->
+              {:halt, {:ok, term}}
+
+            # This lemma does not apply (head mismatch, or an unprovable
+            # hypothesis): try the next one in the curated order.
+            _ ->
+              {:cont, :none}
           end
+        end)
+    end
+  end
 
-        other ->
-          other
-      end
+  # A lemma entry `%{name, type}` (the shape `try_lemma/5` consumes) synthesised
+  # from an ordinary — untagged — stdlib def looked up by name. `name` is the
+  # resolved global key so the assembled `{:global, name}` application refers to
+  # the same def the kernel will check against. Returns nil when the def is not
+  # in scope (e.g. `Std.Proof.Math` not `use`d), so the solver simply skips it.
+  defp virtual_lemma_entry(env, name) do
+    case Cure.Core.Env.get_def(env, name) do
+      %{type: pi} -> %{name: Cure.Core.Env.resolve_key(env, env.defs, name), type: pi}
+      _ -> nil
     end
   end
 
@@ -186,6 +280,96 @@ defmodule Cure.Elab.ProofSearch do
     case Cure.Core.Env.get_def(env, "refinement_proof") do
       nil -> :sigma_second
       _def -> Cure.Core.Env.resolve_key(env, env.defs, "refinement_proof")
+    end
+  end
+
+  # Conjunction-elimination search: for every local binder whose type WHNFs to
+  # `IsTrue(and(left, right))`, both operands' truths follow — the left via
+  # `left_operand_is_true_from_true_conjunction`, the right via its counterpart.
+  # Each projection is assembled with the operands reified from the binder's own
+  # type (meta-free, like the Sigma second projection) and kernel-checked against
+  # the goal, so an `IsTrue(left)` or `IsTrue(right)` obligation is discharged
+  # from a conjunctive hypothesis without the author naming the lemma. Only the
+  # projection whose conclusion matches the goal survives the kernel check.
+  defp conjunction_candidates(goal, ctx, env) do
+    goal_val = Eval.eval(goal, Context.env(ctx))
+    len = Context.length(ctx)
+
+    for k <- 0..(len - 1)//1,
+        len > 0,
+        {left_term, right_term} <- is_true_and_binder(Context.lookup(ctx, k), ctx, env),
+        {global, prov} <- [
+          {and_left_projection_head(env), {:conjunction_left, k}},
+          {and_right_projection_head(env), {:conjunction_right, k}}
+        ],
+        global != nil do
+      term = build_app({:global, global}, [left_term, right_term, {:var, k}])
+
+      case Kernel.check(ctx, term, goal_val) do
+        :ok -> {term, prov}
+        _ -> {nil, prov}
+      end
+    end
+    |> Enum.filter(fn {term, _} -> term != nil end)
+  end
+
+  # If a Value WHNFs to `IsTrue(and(left, right))`, return `[{left, right}]` with
+  # both operands reified to Core terms; else `[]` (so the comprehension skips
+  # this binder). `IsTrue` has zero params and one index — the reflected claim —
+  # which must itself be the two-argument `and`-application spine. The operands
+  # are reified at the current context depth, so they can head the projection
+  # application in the same scope as the binder `{:var, k}`.
+  defp is_true_and_binder(nil, _ctx, _env), do: []
+
+  defp is_true_and_binder(type_value, ctx, env) do
+    is_true_key = is_true_family(env)
+    and_key = boolean_and_head(env)
+
+    with true <- is_true_key != nil and and_key != nil,
+         depth = Context.length(ctx),
+         sig = Context.signature(ctx),
+         core = Cure.Core.Quote.reify(type_value, depth, sig),
+         {:data, ^is_true_key, _params, [claim]} <- Cure.Core.Normalise.whnf(ctx, core),
+         {:app, {:app, {:global, ^and_key}, left_term}, right_term} <- claim do
+      [{left_term, right_term}]
+    else
+      _ -> []
+    end
+  end
+
+  # The resolved `Std.Proof.IntMath#IsTrue` family key, or nil when the reflection
+  # family is not in scope (so conjunction elimination stays inert).
+  defp is_true_family(env) do
+    case Cure.Core.Inductive.get_family(env, :IsTrue) do
+      nil -> nil
+      _fam -> Cure.Core.Env.resolve_key(env, env.families, :IsTrue)
+    end
+  end
+
+  # The resolved `Std.Bool#and` def key, or nil when `Std.Bool` is not in scope.
+  defp boolean_and_head(env) do
+    case Cure.Core.Env.get_def(env, "and") do
+      nil -> nil
+      _def -> Cure.Core.Env.resolve_key(env, env.defs, "and")
+    end
+  end
+
+  # The global heading the left-operand projection, or nil when
+  # `Std.Proof.BooleanReflection` is not in scope (so the candidate is dropped by
+  # the `global != nil` guard). Mirrors `second_projection_head/1`.
+  defp and_left_projection_head(env) do
+    case Cure.Core.Env.get_def(env, "left_operand_is_true_from_true_conjunction") do
+      nil -> nil
+      _def -> Cure.Core.Env.resolve_key(env, env.defs, "left_operand_is_true_from_true_conjunction")
+    end
+  end
+
+  # The global heading the right-operand projection, or nil when the module is not
+  # in scope. Mirrors `second_projection_head/1`.
+  defp and_right_projection_head(env) do
+    case Cure.Core.Env.get_def(env, "right_operand_is_true_from_true_conjunction") do
+      nil -> nil
+      _def -> Cure.Core.Env.resolve_key(env, env.defs, "right_operand_is_true_from_true_conjunction")
     end
   end
 

@@ -60,7 +60,7 @@ defmodule Cure.Elab.CrossModuleCoherenceTest do
     assert {:ok, env} = Program.elaborate("mod P\n  use Std.CoImpl\n  fn ignore() -> Int = 0\nend\n")
 
     assert Env.get_interface(env, :Eqs) != nil
-    assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :Int)
+    assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :"Std.Int#Int")
   end
 
   test "two imported modules supplying the same NAMED instance is an overlap error", %{tmp: tmp} do
@@ -69,11 +69,10 @@ defmodule Cure.Elab.CrossModuleCoherenceTest do
     # be unique, and before this fix the second import wiped the first's table so the
     # two could never be compared.
     #
-    # KNOWN GAP: the anonymous case cannot be detected the same way. An instance's
-    # descriptor is `%{iface, head, methods, as}` and its method globals mangle to
-    # Method globals carry their declaring module in the canonical identity, so
-    # two modules can no longer merge byte-identical anonymous descriptors by
-    # accident. Named-instance overlap remains a separate coherence rule.
+    # Method globals now carry their declaring module in their canonical identity,
+    # so two modules can no longer merge byte-identical ANONYMOUS descriptors by
+    # accident (that overlap is detected — see the anonymous-overlap test below).
+    # Named-instance overlap is a separate coherence rule, checked on the `as` name.
     File.write!(Path.join(tmp, "coiface.cure"), """
     mod Std.CoIface
       interface Eqs(a)
@@ -100,6 +99,45 @@ defmodule Cure.Elab.CrossModuleCoherenceTest do
     src = "mod P\n  use Std.CoOne\n  use Std.CoTwo\n  fn ignore() -> Int = 0\nend\n"
 
     assert {:error, {:overlapping_named_instance, :fast}} = Program.elaborate(src)
+  end
+
+  test "two imported modules supplying the same ANONYMOUS instance is an overlap error", %{
+    tmp: tmp
+  } do
+    # The anonymous-provenance gap: two modules each declaring `implementation Eqs
+    # for Int` used to produce byte-identical descriptors (`%{iface, head, methods,
+    # as}` with no declaring module), so `merge_coherence/2` merged them idempotently
+    # as if they were one instance and their method defs collided silently in
+    # `env.defs`. Now that method globals carry their declaring module in their
+    # canonical identity, the two distinct instances are distinguishable and their
+    # global-(interface, head) overlap is caught — while the diamond (same instance,
+    # two paths, next test) still merges cleanly.
+    File.write!(Path.join(tmp, "anoniface.cure"), """
+    mod Std.AnonIface
+      interface Eqs(a)
+        fn eqs(x: a, y: a) -> Bool
+    end
+    """)
+
+    File.write!(Path.join(tmp, "anonone.cure"), """
+    mod Std.AnonOne
+      use Std.AnonIface
+      implementation Eqs for Int
+        fn eqs(x: Int, y: Int) -> Bool = int_eq(x, y)
+    end
+    """)
+
+    File.write!(Path.join(tmp, "anontwo.cure"), """
+    mod Std.AnonTwo
+      use Std.AnonIface
+      implementation Eqs for Int
+        fn eqs(x: Int, y: Int) -> Bool = true
+    end
+    """)
+
+    src = "mod P\n  use Std.AnonOne\n  use Std.AnonTwo\n  fn ignore() -> Int = 0\nend\n"
+
+    assert {:error, {:overlapping_instance, :Eqs, :"Std.Int#Int"}} = Program.elaborate(src)
   end
 
   test "a transitively imported module can use builtin globals", %{tmp: tmp} do
@@ -138,6 +176,6 @@ defmodule Cure.Elab.CrossModuleCoherenceTest do
     src = "mod P\n  use Std.CoDiaA\n  use Std.CoDiaB\n  fn ignore() -> Int = 0\nend\n"
 
     assert {:ok, env} = Program.elaborate(src)
-    assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :Int)
+    assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :"Std.Int#Int")
   end
 end

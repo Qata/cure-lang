@@ -1,0 +1,75 @@
+mod AsyncGlobal
+  use Std.Equivalent
+  ## GENERAL multiparty async safety: a whole PROTOCOL (a global built from directed messages) projected
+  ## to peer-annotated endpoints runs asynchronously to completion — for EVERY such protocol, not just a
+  ## fixed one. Directed-pair message constructors (GAB = RA→RB, …) make from≠to hold by construction and
+  ## keep the continuation nameable, so the projected intermediate configs are writable.
+  type Tag = TA | TB
+  type Role = RA | RB | RC
+  type Local = LEnd | LSendTo(Role, Tag, Local) | LRecvFrom(Role, Tag, Local)
+  type Buf = BEmpty | BFull(Role, Role, Tag)
+  type Config = MkConfig(Local, Local, Local, Buf)
+  type AStep indices (c: Config, c2: Config)
+    ASendA : AStep(MkConfig(LSendTo(to, t, ka), lb, lc, BEmpty), MkConfig(ka, lb, lc, BFull(RA, to, t)))
+    ASendB : AStep(MkConfig(la, LSendTo(to, t, kb), lc, BEmpty), MkConfig(la, kb, lc, BFull(RB, to, t)))
+    ASendC : AStep(MkConfig(la, lb, LSendTo(to, t, kc), BEmpty), MkConfig(la, lb, kc, BFull(RC, to, t)))
+    ARecvA : AStep(MkConfig(LRecvFrom(from, t, ka), lb, lc, BFull(from, RA, t)), MkConfig(ka, lb, lc, BEmpty))
+    ARecvB : AStep(MkConfig(la, LRecvFrom(from, t, kb), lc, BFull(from, RB, t)), MkConfig(la, kb, lc, BEmpty))
+    ARecvC : AStep(MkConfig(la, lb, LRecvFrom(from, t, kc), BFull(from, RC, t)), MkConfig(la, lb, kc, BEmpty))
+  type ARun indices (c: Config, c2: Config)
+    ARDone : ARun(c, c)
+    ARStep : AStep(c, cm) -> ARun(cm, c2) -> ARun(c, c2)
+  type Global = GEnd | GAB(Tag, Global) | GBA(Tag, Global) | GAC(Tag, Global) | GCA(Tag, Global) | GBC(Tag, Global) | GCB(Tag, Global)
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()      -> LEnd()
+    GAB(t, k) -> match r
+      RA() -> LSendTo(RB(), t, project(k, r))
+      RB() -> LRecvFrom(RA(), t, project(k, r))
+      RC() -> project(k, r)
+    GBA(t, k) -> match r
+      RA() -> LRecvFrom(RB(), t, project(k, r))
+      RB() -> LSendTo(RA(), t, project(k, r))
+      RC() -> project(k, r)
+    GAC(t, k) -> match r
+      RA() -> LSendTo(RC(), t, project(k, r))
+      RB() -> project(k, r)
+      RC() -> LRecvFrom(RA(), t, project(k, r))
+    GCA(t, k) -> match r
+      RA() -> LRecvFrom(RC(), t, project(k, r))
+      RB() -> project(k, r)
+      RC() -> LSendTo(RA(), t, project(k, r))
+    GBC(t, k) -> match r
+      RA() -> project(k, r)
+      RB() -> LSendTo(RC(), t, project(k, r))
+      RC() -> LRecvFrom(RB(), t, project(k, r))
+    GCB(t, k) -> match r
+      RA() -> project(k, r)
+      RB() -> LRecvFrom(RC(), t, project(k, r))
+      RC() -> LSendTo(RB(), t, project(k, r))
+  fn config(g: Global) -> Config = MkConfig(project(g, RA()), project(g, RB()), project(g, RC()), BEmpty())
+  fn send_ab(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(LSendTo(RB(), t, kA), LRecvFrom(RA(), t, kB), kC, BEmpty()), MkConfig(kA, LRecvFrom(RA(), t, kB), kC, BFull(RA(), RB(), t))) = ASendA()
+  fn recv_ab(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(kA, LRecvFrom(RA(), t, kB), kC, BFull(RA(), RB(), t)), MkConfig(kA, kB, kC, BEmpty())) = ARecvB()
+  fn send_ba(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(LRecvFrom(RB(), t, kA), LSendTo(RA(), t, kB), kC, BEmpty()), MkConfig(LRecvFrom(RB(), t, kA), kB, kC, BFull(RB(), RA(), t))) = ASendB()
+  fn recv_ba(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(LRecvFrom(RB(), t, kA), kB, kC, BFull(RB(), RA(), t)), MkConfig(kA, kB, kC, BEmpty())) = ARecvA()
+  fn send_ac(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(LSendTo(RC(), t, kA), kB, LRecvFrom(RA(), t, kC), BEmpty()), MkConfig(kA, kB, LRecvFrom(RA(), t, kC), BFull(RA(), RC(), t))) = ASendA()
+  fn recv_ac(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(kA, kB, LRecvFrom(RA(), t, kC), BFull(RA(), RC(), t)), MkConfig(kA, kB, kC, BEmpty())) = ARecvC()
+  fn send_ca(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(LRecvFrom(RC(), t, kA), kB, LSendTo(RA(), t, kC), BEmpty()), MkConfig(LRecvFrom(RC(), t, kA), kB, kC, BFull(RC(), RA(), t))) = ASendC()
+  fn recv_ca(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(LRecvFrom(RC(), t, kA), kB, kC, BFull(RC(), RA(), t)), MkConfig(kA, kB, kC, BEmpty())) = ARecvA()
+  fn send_bc(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(kA, LSendTo(RC(), t, kB), LRecvFrom(RB(), t, kC), BEmpty()), MkConfig(kA, kB, LRecvFrom(RB(), t, kC), BFull(RB(), RC(), t))) = ASendB()
+  fn recv_bc(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(kA, kB, LRecvFrom(RB(), t, kC), BFull(RB(), RC(), t)), MkConfig(kA, kB, kC, BEmpty())) = ARecvC()
+  fn send_cb(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(kA, LRecvFrom(RC(), t, kB), LSendTo(RB(), t, kC), BEmpty()), MkConfig(kA, LRecvFrom(RC(), t, kB), kC, BFull(RC(), RB(), t))) = ASendC()
+  fn recv_cb(t: Tag, kA: Local, kB: Local, kC: Local) -> AStep(MkConfig(kA, LRecvFrom(RC(), t, kB), kC, BFull(RC(), RB(), t)), MkConfig(kA, kB, kC, BEmpty())) = ARecvB()
+  ## **GENERAL MULTIPARTY ASYNC SAFETY**: for ANY protocol g, the projected asynchronous configuration
+  ## runs all the way to (LEnd,LEnd,LEnd,empty). Every routed message is delivered and consumed, the
+  ## mailbox ends empty (orphan-freedom), and every role finishes (progress + termination) — for all
+  ## protocols, by induction on the global, each message a routed send-then-receive driving the
+  ## continuation forward.
+  fn async_global_terminates(g: Global) -> ARun(config(g), config(GEnd())) = match g
+    GEnd()      -> ARDone()
+    GAB(t, k) -> ARStep(send_ab(t, project(k, RA()), project(k, RB()), project(k, RC())), ARStep(recv_ab(t, project(k, RA()), project(k, RB()), project(k, RC())), async_global_terminates(k)))
+    GBA(t, k) -> ARStep(send_ba(t, project(k, RA()), project(k, RB()), project(k, RC())), ARStep(recv_ba(t, project(k, RA()), project(k, RB()), project(k, RC())), async_global_terminates(k)))
+    GAC(t, k) -> ARStep(send_ac(t, project(k, RA()), project(k, RB()), project(k, RC())), ARStep(recv_ac(t, project(k, RA()), project(k, RB()), project(k, RC())), async_global_terminates(k)))
+    GCA(t, k) -> ARStep(send_ca(t, project(k, RA()), project(k, RB()), project(k, RC())), ARStep(recv_ca(t, project(k, RA()), project(k, RB()), project(k, RC())), async_global_terminates(k)))
+    GBC(t, k) -> ARStep(send_bc(t, project(k, RA()), project(k, RB()), project(k, RC())), ARStep(recv_bc(t, project(k, RA()), project(k, RB()), project(k, RC())), async_global_terminates(k)))
+    GCB(t, k) -> ARStep(send_cb(t, project(k, RA()), project(k, RB()), project(k, RC())), ARStep(recv_cb(t, project(k, RA()), project(k, RB()), project(k, RC())), async_global_terminates(k)))
+end

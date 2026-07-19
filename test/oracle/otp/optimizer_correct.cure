@@ -1,0 +1,130 @@
+mod OptimizerCorrect
+  use Std.Equivalent
+  ## A VERIFIED OPTIMIZING COMPILER — the second pillar of verified compilation (semantic preservation of a
+  ## TRANSFORMATION), composed with the first (compiler correctness) into an end-to-end optimize-then-compile
+  ## pipeline. CONSTANT FOLDING (`fold`, via `fold_add`/`fold_mul`) evaluates constant subexpressions at compile
+  ## time. `fold_preserves` proves it never changes a program's value (`eval(fold(e)) = eval(e)`), the
+  ## optimization-soundness theorem, by induction with the per-node lemmas `fold_add_correct`/`fold_mul_correct`
+  ## (folding a binary node computes the same value whether or not the operands collapsed to literals) and
+  ## congruence of `plus`/`times`. `opt_correct` then COMPOSES `fold_preserves` with `compile_correct` (the
+  ## stack-machine compiler, reproved here) to give `exec(compile(fold(e)), s) = SCons(eval(e), s)`: compiling
+  ## the OPTIMIZED program still yields the ORIGINAL expression's value — a fully verified optimizing pipeline.
+  type Nat = Z | S(Nat)
+  fn plus(a: Nat, b: Nat) -> Nat = match a
+    Z()   -> b
+    S(k)  -> S(plus(k, b))
+  fn times(a: Nat, b: Nat) -> Nat = match a
+    Z()   -> Z()
+    S(k)  -> plus(b, times(k, b))
+  ## Source: arithmetic expressions.
+  type Expr = Lit(Nat) | Add(Expr, Expr) | Mul(Expr, Expr)
+  fn eval(e: Expr) -> Nat = match e
+    Lit(n)     -> n
+    Add(a, b)  -> plus(eval(a), eval(b))
+    Mul(a, b)  -> times(eval(a), eval(b))
+  ## Target: a stack machine.
+  type Instr = Push(Nat) | AddOp | MulOp
+  type Program = PNil | PCons(Instr, Program)
+  type Stack = SNil | SCons(Nat, Stack)
+  fn app(p: Program, q: Program) -> Program = match p
+    PNil()        -> q
+    PCons(i, is)  -> PCons(i, app(is, q))
+  fn compile(e: Expr) -> Program = match e
+    Lit(n)     -> PCons(Push(n), PNil())
+    Add(a, b)  -> app(compile(a), app(compile(b), PCons(AddOp(), PNil())))
+    Mul(a, b)  -> app(compile(a), app(compile(b), PCons(MulOp(), PNil())))
+  fn exec(p: Program, s: Stack) -> Stack = match p
+    PNil()        -> s
+    PCons(i, rest) -> match i
+      Push(n)  -> exec(rest, SCons(n, s))
+      AddOp()  -> match s
+        SNil()            -> exec(rest, s)
+        SCons(top, s1)    -> match s1
+          SNil()            -> exec(rest, s)
+          SCons(below, s2)  -> exec(rest, SCons(plus(below, top), s2))
+      MulOp()  -> match s
+        SNil()            -> exec(rest, s)
+        SCons(top, s1)    -> match s1
+          SNil()            -> exec(rest, s)
+          SCons(below, s2)  -> exec(rest, SCons(times(below, top), s2))
+  ## **EXEC DISTRIBUTES OVER PROGRAM CONCATENATION**: running p++q is running q on the result of running p.
+  fn exec_append(p: Program, q: Program, s: Stack) -> Equivalent(Stack, exec(app(p, q), s), exec(q, exec(p, s))) = match p
+    PNil()        -> reflexive(exec(q, s))
+    PCons(i, rest) -> match i
+      Push(n)  -> exec_append(rest, q, SCons(n, s))
+      AddOp()  -> match s
+        SNil()            -> exec_append(rest, q, s)
+        SCons(top, s1)    -> match s1
+          SNil()            -> exec_append(rest, q, s)
+          SCons(below, s2)  -> exec_append(rest, q, SCons(plus(below, top), s2))
+      MulOp()  -> match s
+        SNil()            -> exec_append(rest, q, s)
+        SCons(top, s1)    -> match s1
+          SNil()            -> exec_append(rest, q, s)
+          SCons(below, s2)  -> exec_append(rest, q, SCons(times(below, top), s2))
+  fn exec_cong(p: Program, s1: Stack, s2: Stack, e: Equivalent(Stack, s1, s2)) -> Equivalent(Stack, exec(p, s1), exec(p, s2)) = rewrite e in reflexive(exec(p, s2))
+  ## **COMPILER CORRECTNESS**: exec(compile(e), s) = eval(e) :: s — the compiled stack code leaves exactly the
+  ## evaluator's value on top of the stack, for every expression and every initial stack. A miniature verified
+  ## compiler (McCarthy–Painter / Hutton): source semantics `eval` and target semantics `exec` agree via `compile`.
+  fn compile_correct(e: Expr, s: Stack) -> Equivalent(Stack, exec(compile(e), s), SCons(eval(e), s)) = match e
+    Lit(n)     -> reflexive(SCons(n, s))
+    Add(a, b)  -> trans(exec_append(compile(a), app(compile(b), PCons(AddOp(), PNil())), s),
+      trans(exec_cong(app(compile(b), PCons(AddOp(), PNil())), exec(compile(a), s), SCons(eval(a), s), compile_correct(a, s)),
+        trans(exec_append(compile(b), PCons(AddOp(), PNil()), SCons(eval(a), s)),
+          trans(exec_cong(PCons(AddOp(), PNil()), exec(compile(b), SCons(eval(a), s)), SCons(eval(b), SCons(eval(a), s)), compile_correct(b, SCons(eval(a), s))),
+            reflexive(SCons(plus(eval(a), eval(b)), s))))))
+    Mul(a, b)  -> trans(exec_append(compile(a), app(compile(b), PCons(MulOp(), PNil())), s),
+      trans(exec_cong(app(compile(b), PCons(MulOp(), PNil())), exec(compile(a), s), SCons(eval(a), s), compile_correct(a, s)),
+        trans(exec_append(compile(b), PCons(MulOp(), PNil()), SCons(eval(a), s)),
+          trans(exec_cong(PCons(MulOp(), PNil()), exec(compile(b), SCons(eval(a), s)), SCons(eval(b), SCons(eval(a), s)), compile_correct(b, SCons(eval(a), s))),
+            reflexive(SCons(times(eval(a), eval(b)), s))))))
+  ## CONSTANT FOLDING: evaluate constant subexpressions at compile time.
+  fn fold_add(x: Expr, y: Expr) -> Expr = match x
+    Lit(m)    -> match y
+      Lit(k)    -> Lit(plus(m, k))
+      Add(p, q) -> Add(x, y)
+      Mul(p, q) -> Add(x, y)
+    Add(p, q) -> Add(x, y)
+    Mul(p, q) -> Add(x, y)
+  fn fold_mul(x: Expr, y: Expr) -> Expr = match x
+    Lit(m)    -> match y
+      Lit(k)    -> Lit(times(m, k))
+      Add(p, q) -> Mul(x, y)
+      Mul(p, q) -> Mul(x, y)
+    Add(p, q) -> Mul(x, y)
+    Mul(p, q) -> Mul(x, y)
+  fn fold(e: Expr) -> Expr = match e
+    Lit(n)    -> Lit(n)
+    Add(a, b) -> fold_add(fold(a), fold(b))
+    Mul(a, b) -> fold_mul(fold(a), fold(b))
+  fn plus_cong2(a: Nat, ap: Nat, b: Nat, bp: Nat, ea: Equivalent(Nat, a, ap), eb: Equivalent(Nat, b, bp)) -> Equivalent(Nat, plus(a, b), plus(ap, bp)) = rewrite ea in rewrite eb in reflexive(plus(ap, bp))
+  fn times_cong2(a: Nat, ap: Nat, b: Nat, bp: Nat, ea: Equivalent(Nat, a, ap), eb: Equivalent(Nat, b, bp)) -> Equivalent(Nat, times(a, b), times(ap, bp)) = rewrite ea in rewrite eb in reflexive(times(ap, bp))
+  fn scons_cong(a: Nat, b: Nat, s: Stack, e: Equivalent(Nat, a, b)) -> Equivalent(Stack, SCons(a, s), SCons(b, s)) = rewrite e in reflexive(SCons(b, s))
+  ## **CONSTANT FOLDING ON A BINARY NODE IS SOUND**: folding an add/mul of two subexpressions computes the
+  ## same value whether or not the operands collapsed to literals.
+  fn fold_add_correct(x: Expr, y: Expr) -> Equivalent(Nat, eval(fold_add(x, y)), plus(eval(x), eval(y))) = match x
+    Lit(m)    -> match y
+      Lit(k)    -> reflexive(plus(eval(x), eval(y)))
+      Add(p, q) -> reflexive(plus(eval(x), eval(y)))
+      Mul(p, q) -> reflexive(plus(eval(x), eval(y)))
+    Add(p, q) -> reflexive(plus(eval(x), eval(y)))
+    Mul(p, q) -> reflexive(plus(eval(x), eval(y)))
+  fn fold_mul_correct(x: Expr, y: Expr) -> Equivalent(Nat, eval(fold_mul(x, y)), times(eval(x), eval(y))) = match x
+    Lit(m)    -> match y
+      Lit(k)    -> reflexive(times(eval(x), eval(y)))
+      Add(p, q) -> reflexive(times(eval(x), eval(y)))
+      Mul(p, q) -> reflexive(times(eval(x), eval(y)))
+    Add(p, q) -> reflexive(times(eval(x), eval(y)))
+    Mul(p, q) -> reflexive(times(eval(x), eval(y)))
+  ## **CONSTANT FOLDING PRESERVES SEMANTICS**: eval(fold(e)) = eval(e) — the optimization changes the program
+  ## but never its value. (Semantic preservation of a transformation — the second pillar of verified compilation.)
+  fn fold_preserves(e: Expr) -> Equivalent(Nat, eval(fold(e)), eval(e)) = match e
+    Lit(n)    -> reflexive(n)
+    Add(a, b) -> trans(fold_add_correct(fold(a), fold(b)), plus_cong2(eval(fold(a)), eval(a), eval(fold(b)), eval(b), fold_preserves(a), fold_preserves(b)))
+    Mul(a, b) -> trans(fold_mul_correct(fold(a), fold(b)), times_cong2(eval(fold(a)), eval(a), eval(fold(b)), eval(b), fold_preserves(a), fold_preserves(b)))
+  ## **THE OPTIMIZING COMPILER IS CORRECT**: exec(compile(fold(e)), s) = eval(e) :: s — compiling the OPTIMIZED
+  ## program still yields the ORIGINAL expression's value. Compose semantic preservation (fold_preserves) with
+  ## compiler correctness (compile_correct): a verified optimize-then-compile pipeline.
+  fn opt_correct(e: Expr, s: Stack) -> Equivalent(Stack, exec(compile(fold(e)), s), SCons(eval(e), s)) =
+    trans(compile_correct(fold(e), s), scons_cong(eval(fold(e)), eval(e), s, fold_preserves(e)))
+end

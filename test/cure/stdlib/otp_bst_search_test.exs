@@ -24,6 +24,16 @@ defmodule Cure.Stdlib.OtpBstSearchTest do
         mem_eq_lmem(x, t, bst)
       fn below(x: OKey, b: OKey, t: Tree, pxb: Equivalent(OBit, cmp(x, b), OT()), pgt: Equivalent(OBit, allgt(t, b), OT())) -> Equivalent(OBit, lmem(x, t), OF()) =
         below_not_lmem(x, b, t, pxb, pgt)
+      fn del_preserves(k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT())) -> Equivalent(OBit, isbst(delete(k, t)), OT()) =
+        delete_bst(k, t, bst)
+      fn merge_preserves(l: Tree, r: Tree, m: OKey, bl: Equivalent(OBit, isbst(l), OT()), br: Equivalent(OBit, isbst(r), OT()), plt: Equivalent(OBit, alllt(l, m), OT()), pgt: Equivalent(OBit, allgt(r, m), OT())) -> Equivalent(OBit, isbst(merge(l, r)), OT()) =
+        merge_bst(l, r, m, bl, br, plt, pgt)
+      fn del_removes(k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT())) -> Equivalent(OBit, mem(k, delete(k, t)), OF()) =
+        mem_delete_eq(k, t, bst)
+      fn del_preserves_others(x: OKey, k: OKey, t: Tree, bst: Equivalent(OBit, isbst(t), OT()), neq: Equivalent(OBit, keq(x, k), OF())) -> Equivalent(OBit, mem(x, delete(k, t)), mem(x, t)) =
+        mem_delete_neq(x, k, t, bst, neq)
+      fn flatten_is_sorted(t: Tree, bst: Equivalent(OBit, isbst(t), OT())) -> Equivalent(OBit, sorted(flatten(t)), OT()) =
+        flatten_sorted(t, bst)
     end
     """
 

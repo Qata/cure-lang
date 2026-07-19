@@ -1,0 +1,94 @@
+mod MultipartyCoherence
+  use Std.Equivalent
+  ## COHERENCE — the well-formedness premise that LICENSES multiparty progress and preservation. A global
+  ## type is coherent when every communication has a DISTINCT sender and receiver (no self-send) and its
+  ## continuation is coherent. This probe closes the MPST triple: coherence ⟹ progress (a coherent global
+  ## never gets stuck) and coherence is PRESERVED by reduction (the continuation of a coherent type is
+  ## coherent), so a coherent session progresses and stays coherent through its whole run — global safety.
+  type Role = RA | RB | RC
+  type Tag = TA | TB | TC
+  type B = F | T
+  type Global = GEnd | GMsg(Role, Role, Tag, Global)
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local)
+  fn role_eq(x: Role, y: Role) -> B = match x
+    RA() -> match y
+      RA() -> T()
+      RB() -> F()
+      RC() -> F()
+    RB() -> match y
+      RA() -> F()
+      RB() -> T()
+      RC() -> F()
+    RC() -> match y
+      RA() -> F()
+      RB() -> F()
+      RC() -> T()
+  fn teq(a: Tag, b: Tag) -> B = match a
+    TA() -> match b
+      TA() -> T()
+      TB() -> F()
+      TC() -> F()
+    TB() -> match b
+      TA() -> F()
+      TB() -> T()
+      TC() -> F()
+    TC() -> match b
+      TA() -> F()
+      TB() -> F()
+      TC() -> T()
+  fn teq_refl(t: Tag) -> Equivalent(B, teq(t, t), T()) = match t
+    TA() -> reflexive(T())
+    TB() -> reflexive(T())
+    TC() -> reflexive(T())
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()               -> LEnd()
+    GMsg(from, to, t, k) -> match role_eq(from, r)
+      T() -> LSend(t, project(k, r))
+      F() -> match role_eq(to, r)
+        T() -> LRecv(t, project(k, r))
+        F() -> project(k, r)
+  fn tmatches(s: Local, r: Local) -> B = match s
+    LEnd()       -> F()
+    LSend(t, k)  -> match r
+      LEnd()        -> F()
+      LSend(t2, k2) -> F()
+      LRecv(t2, k2) -> teq(t, t2)
+    LRecv(t, k)  -> match r
+      LEnd()        -> F()
+      LSend(t2, k2) -> F()
+      LRecv(t2, k2) -> F()
+  fn sender_ready(p: Role, q: Role, t: Tag, k: Global) -> Equivalent(Local, project(GMsg(p, q, t, k), p), LSend(t, project(k, p))) = match p
+    RA() -> reflexive(LSend(t, project(k, RA())))
+    RB() -> reflexive(LSend(t, project(k, RB())))
+    RC() -> reflexive(LSend(t, project(k, RC())))
+  fn receiver_ready(p: Role, q: Role, t: Tag, k: Global, neq: Equivalent(B, role_eq(p, q), F())) -> Equivalent(Local, project(GMsg(p, q, t, k), q), LRecv(t, project(k, q))) = match p
+    RA() -> match q
+      RA() -> match neq
+      RB() -> reflexive(LRecv(t, project(k, RB())))
+      RC() -> reflexive(LRecv(t, project(k, RC())))
+    RB() -> match q
+      RA() -> reflexive(LRecv(t, project(k, RA())))
+      RB() -> match neq
+      RC() -> reflexive(LRecv(t, project(k, RC())))
+    RC() -> match q
+      RA() -> reflexive(LRecv(t, project(k, RA())))
+      RB() -> reflexive(LRecv(t, project(k, RB())))
+      RC() -> match neq
+  fn progress(p: Role, q: Role, t: Tag, k: Global, neq: Equivalent(B, role_eq(p, q), F())) -> Equivalent(B, tmatches(project(GMsg(p, q, t, k), p), project(GMsg(p, q, t, k), q)), T()) =
+    rewrite sender_ready(p, q, t, k) in rewrite receiver_ready(p, q, t, k, neq) in teq_refl(t)
+  ## Coherence: GEnd is coherent; GMsg(p,q,t,k) is coherent when p != q (role_eq(p,q)=F) and k is coherent.
+  type Coherent indices (g: Global)
+    CohEnd : Coherent(GEnd)
+    CohMsg : Equivalent(B, role_eq(p, q), F()) -> Coherent(k) -> Coherent(GMsg(p, q, t, k))
+  ## **COHERENCE ⟹ HEAD DISTINCTNESS**: extract the sender != receiver witness from a coherent GMsg.
+  fn coherent_head_distinct({p: Role}, {q: Role}, {t: Tag}, {k: Global}, c: Coherent(GMsg(p, q, t, k))) -> Equivalent(B, role_eq(p, q), F()) = match c
+    CohMsg(neq, ck) -> neq
+  ## **COHERENCE PRESERVED BY REDUCTION**: the continuation of a coherent global type is coherent — after
+  ## a step the residual session is still well-formed, so subject reduction stays within coherent types.
+  fn coherent_tail({p: Role}, {q: Role}, {t: Tag}, {k: Global}, c: Coherent(GMsg(p, q, t, k))) -> Coherent(k) = match c
+    CohMsg(neq, ck) -> ck
+  ## **COHERENCE ⟹ PROGRESS**: a coherent global type never gets stuck — its head roles can communicate.
+  ## Coherence supplies exactly the distinctness premise progress needs; deadlock-freedom for well-formed sessions.
+  fn coherent_progresses(p: Role, q: Role, t: Tag, k: Global, c: Coherent(GMsg(p, q, t, k))) -> Equivalent(B, tmatches(project(GMsg(p, q, t, k), p), project(GMsg(p, q, t, k), q)), T()) =
+    progress(p, q, t, k, coherent_head_distinct(c))
+end

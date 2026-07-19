@@ -1,10 +1,20 @@
 defmodule Cure.Elab.FoldAccumulatorPolySeedReachTest do
-  use ExUnit.Case, async: false
+  use ExUnit.Case, async: true
 
   alias Cure.Elab.Program
 
-  @moduletag :reach
-
+  # RESOLVED (2026-07-18). This reach pin — a polymorphic seed in `foldl`
+  # accumulator position whose type parameters are determined only through the
+  # fold's lambda — now elaborates, so the `@tag :skip` / `:reach` pin is retired
+  # and this is a live regression guard. The deferred-argument machinery
+  # (`bidir_app_slot` now postpones an arg that infers a type but does not yet
+  # unify against a still-meta domain, and `resolve_deferred_slots` re-checks it
+  # once a later sibling — here the lambda — solves the accumulator type) resolves
+  # the mutually-determined `b`/`?k`/`?v` that the old single-pass, in-order path
+  # could not. Kept verbatim (the exact from_list-over-Map probe) as the guard.
+  #
+  # Historical diagnosis retained below for the bisection record.
+  #
   # REACH PIN (#23 value-surface parity) — a general elaborator inference gap,
   # NOT a soundness issue. Surfaced while parameterising `Std.Map` to `Map(k, v)`
   # so `Std.Set` could elaborate: `Std.Set.from_list`/`intersection`/`difference`
@@ -62,9 +72,8 @@ defmodule Cure.Elab.FoldAccumulatorPolySeedReachTest do
   # FUNCTION arg's instantiated codomain shape into its domain at defer time
   # (parallel to `solve_deferred_domain`'s constructor branch, which today only
   # handles ctors), AND (b) iterate to a fixpoint with mctx-threading re-checking
-  # so a later arg can solve an earlier arg's domain. Then delete the `@tag :skip`
-  # and this must pass. See [[dep-pipeline-survey-2026-07-11]].
-  @tag :skip
+  # so a later arg can solve an earlier arg's domain. See
+  # [[dep-pipeline-survey-2026-07-11]].
   test "polymorphic seed in foldl accumulator position is solved from the lambda" do
     src = """
     mod Probe

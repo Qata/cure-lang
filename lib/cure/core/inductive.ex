@@ -9,6 +9,16 @@ defmodule Cure.Core.Env do
   closures — only Core terms and metadata — so it stays serializable.
   """
 
+  # Where `alias_index/1` memoizes its indexes, and how many table versions it
+  # keeps. `resolve_key/3` is called with five tables (`defs`, `families`,
+  # `ctors`, `ctor_to_family`, `constrained`); a handful of slots holds their
+  # current versions, and the bound is what stops a long elaboration — which
+  # produces a new table term on every registration — from retaining every
+  # superseded one. Entries are pure derived data, so evicting one only costs a
+  # rebuild.
+  @alias_index_key {__MODULE__, :alias_index}
+  @alias_index_slots 8
+
   defstruct families: %{},
             ctors: %{},
             ctor_to_family: %{},
@@ -21,7 +31,8 @@ defmodule Cure.Core.Env do
             primitives: %{},
             import_modules: MapSet.new(),
             lemmas: %{},
-            module_owner: nil
+            module_owner: nil,
+            current_def: nil
 
   @type t :: %__MODULE__{
           families: %{atom() => map()},
@@ -47,7 +58,16 @@ defmodule Cure.Core.Env do
           # Inert elaborator metadata (the kernel never reads it): `@lemma`-tagged
           # theorems keyed by their conclusion-head atom, for auto proof-search
           # (see `Cure.Elab.ProofSearch`). Same status as `interfaces`/`coherence`.
-          lemmas: %{atom() => [map()]}
+          lemmas: %{atom() => [map()]},
+          # Inert elaborator metadata (the kernel never reads it): the name of the
+          # def whose body is currently being elaborated, set for the duration of
+          # `Declarations.elaborate_real_body/3`. Consumed ONLY by
+          # `Declarations.hole_id/2` so a hole id is qualified by
+          # `<module>.<def>`, not just `<module>` — two different defs writing the
+          # same named hole (`?goal` in `a` and `?goal` in `b`) must mint DISTINCT
+          # ids, or `Conv` would judge them definitionally equal (first-class
+          # holes soundness pivot).
+          current_def: atom() | nil
         }
 
   @doc "An empty signature."
@@ -67,6 +87,18 @@ defmodule Cure.Core.Env do
   @doc "Return the source-module owner for the current elaboration environment."
   @spec owner(t()) :: String.t() | nil
   def owner(%__MODULE__{module_owner: owner}), do: owner
+
+  @doc """
+  Attach the name of the def whose body is currently being elaborated (see the
+  `current_def` field doc). Set once per top-level def, at the single entry
+  point `Declarations.elaborate_real_body/3`, before body elaboration begins.
+  """
+  @spec with_current_def(t(), atom() | nil) :: t()
+  def with_current_def(%__MODULE__{} = env, name), do: %{env | current_def: name}
+
+  @doc "The name of the def currently being elaborated, or `nil` outside one."
+  @spec current_def(t()) :: atom() | nil
+  def current_def(%__MODULE__{current_def: name}), do: name
 
   @doc """
   Register a global function definition (declared type + Core body). The kernel
@@ -144,27 +176,71 @@ defmodule Cure.Core.Env do
 
       true ->
         # Last resort: the name is bare and unowned, so find the unique
-        # owner-qualified key whose base it is. This walks every key in the
-        # table, so keep the per-key work to a single split, and hoist the
-        # target spelling out of the loop rather than re-deriving it per key.
-        target = Atom.to_string(name)
-
-        case Enum.filter(Map.keys(table), &owned_alias?(&1, target)) do
+        # owner-qualified key whose base it is — via an index, because
+        # rediscovering it by walking every key made this O(table) on every
+        # unresolved lookup.
+        case Map.get(alias_index(table), Atom.to_string(name), []) do
           [key] -> key
           _ -> name
         end
     end
   end
 
-  # Whether `key` is an owner-qualified name whose base is `target`.
-  defp owned_alias?(key, target) when is_atom(key) do
-    case Cure.Elab.Name.split(key) do
-      {nil, _base} -> false
-      {_owner, base} -> base == target
+  # base => [owner-qualified keys with that base], for `resolve_key/3`'s fallback.
+  #
+  # The index is a pure function of the table's KEY SET, so it is cached under
+  # the table value itself rather than maintained at the (scattered) sites that
+  # write `defs`/`families`/`ctors`. That choice is what makes a stale read
+  # impossible: a table whose keys changed is a different term, so it misses the
+  # cache and the index is rebuilt. A hit means the terms compare equal, which
+  # means the key sets are equal, which means the index describes this table.
+  # There is no invariant for a future writer to maintain, and nothing to drift.
+  #
+  # Lookup compares with `:erts_debug.same/2` — physical identity, O(1) — rather
+  # than `===`, which would deep-compare these nested def maps whenever the
+  # pointers differ and could cost more than the walk it replaces. Identity is
+  # only ever a conservative approximation of equality: two structurally equal
+  # tables at different addresses simply miss and rebuild, which is correct and
+  # costs the same O(table) walk the fallback used to pay unconditionally. So
+  # this is never the slower choice, and never the wrong one.
+  defp alias_index(table) do
+    cache = Process.get(@alias_index_key, [])
+
+    case cached_index(cache, table) do
+      nil ->
+        index = build_alias_index(table)
+        Process.put(@alias_index_key, Enum.take([{table, index} | cache], @alias_index_slots))
+        index
+
+      index ->
+        index
     end
   end
 
-  defp owned_alias?(_key, _target), do: false
+  defp cached_index([], _table), do: nil
+
+  defp cached_index([{cached, index} | rest], table),
+    do: if(:erts_debug.same(cached, table), do: index, else: cached_index(rest, table))
+
+  defp build_alias_index(table) do
+    Enum.reduce(Map.keys(table), %{}, fn key, acc ->
+      case owned_base(key) do
+        nil -> acc
+        base -> Map.update(acc, base, [key], &[key | &1])
+      end
+    end)
+  end
+
+  # The base of an owner-qualified key, or nil for anything else. Non-atom keys
+  # are not owner-qualified names and are skipped.
+  defp owned_base(key) when is_atom(key) do
+    case Cure.Elab.Name.split(key) do
+      {nil, _base} -> nil
+      {_owner, base} -> base
+    end
+  end
+
+  defp owned_base(_key), do: nil
 
   @doc "Register a primitive base type: surface name → its Core type node."
   @spec put_primitive(t(), String.t(), tuple()) :: t()
@@ -375,12 +451,25 @@ defmodule Cure.Core.Inductive do
           # kernel refuses to eliminate; absent on ordinary inductive families.
           optional(:opaque) => boolean()
         }
+  @typedoc """
+  A constructor argument's **plicity** — whether it is supplied *positionally*
+  (`:explicit`, written at application and bound positionally in a pattern) or
+  *implicitly* (`:implicit`, solved by unification at application and bound by
+  name in a pattern). Plicity is orthogonal to `quantity` (`Cure.Core.Grade`):
+  an inferred index is `:implicit` + `:erased`, an ordinary field is `:explicit`
+  + `:unrestricted`, and a *relevant implicit* (Idris `{k : Nat}`) is `:implicit`
+  + `:unrestricted`. The kernel type-checker never reads plicity — it is
+  elaboration metadata (argument insertion / pattern binding) riding on the ctor
+  record — so it stays outside the soundness core.
+  """
+  @type plicity :: :implicit | :explicit
   @type ctor :: %{
           name: atom(),
           args: telescope(),
           result_indices: [Cure.Core.Term.t()],
           result_params: [Cure.Core.Term.t()],
-          quantities: [quantity()]
+          quantities: [quantity()],
+          plicities: [plicity()]
         }
 
   @doc """
@@ -466,13 +555,38 @@ defmodule Cure.Core.Inductive do
   @spec ctor(atom(), telescope(), [Cure.Core.Term.t()], [quantity()], [Cure.Core.Term.t()]) ::
           ctor()
   def ctor(name, arg_tele, result_indices, quantities, result_params),
+    do: ctor(name, arg_tele, result_indices, quantities, result_params, derive_plicities(quantities))
+
+  @doc """
+  Build a constructor signature carrying explicit per-argument **plicities**
+  (`:implicit`/`:explicit`) alongside quantities. The `ctor/5` form derives
+  plicity from quantity (`:erased` ⇒ `:implicit`, else `:explicit`), reproducing
+  the pre-plicity behavior where every erased argument was an inferred index and
+  every runtime-relevant argument was positional. Only a *relevant implicit*
+  (`:implicit` + `:unrestricted`, Idris `{k : Nat}`) needs the explicit form.
+  """
+  @spec ctor(
+          atom(),
+          telescope(),
+          [Cure.Core.Term.t()],
+          [quantity()],
+          [Cure.Core.Term.t()],
+          [plicity()]
+        ) :: ctor()
+  def ctor(name, arg_tele, result_indices, quantities, result_params, plicities),
     do: %{
       name: name,
       args: arg_tele,
       result_indices: result_indices,
       result_params: result_params,
-      quantities: quantities
+      quantities: quantities,
+      plicities: plicities
     }
+
+  # Back-compat plicity default: an erased argument was always an inferred index
+  # (implicit); everything runtime-relevant was positional (explicit).
+  defp derive_plicities(quantities),
+    do: Enum.map(quantities, fn :erased -> :implicit; _ -> :explicit end)
 
   @doc "Register a family and its constructors in the env."
   @spec declare(Env.t(), family(), [ctor()]) :: Env.t()
@@ -566,6 +680,35 @@ defmodule Cure.Core.Inductive do
       _ -> nil
     end
   end
+
+  @doc """
+  A constructor's per-argument **plicities** (`:implicit` / `:explicit`). Older
+  ctor records built before the field existed derive it from quantity (`:erased`
+  ⇒ `:implicit`), so this is total for every constructor with a telescope.
+  """
+  @spec ctor_plicities(Env.t(), atom()) :: [plicity()] | nil
+  def ctor_plicities(env, cname) do
+    case get_ctor(env, cname) do
+      %{plicities: ps} when is_list(ps) -> ps
+      %{quantities: qs} when is_list(qs) -> derive_plicities(qs)
+      _ -> nil
+    end
+  end
+
+  @doc """
+  A constructor's plicity list, defaulting to derived-from-quantity when the
+  record predates the field. `arg_tele` is used only for its length when neither
+  is present (all-`:explicit`). The single authority elaboration consults to tell
+  positional fields from solved-implicit ones.
+  """
+  @spec plicities_of(ctor()) :: [plicity()]
+  def plicities_of(%{plicities: ps}) when is_list(ps), do: ps
+  def plicities_of(%{quantities: qs}) when is_list(qs), do: derive_plicities(qs)
+  def plicities_of(%{args: tele}), do: List.duplicate(:explicit, length(tele))
+
+  @doc "How many of a constructor's arguments are supplied positionally (`:explicit`)."
+  @spec explicit_arity(ctor()) :: non_neg_integer()
+  def explicit_arity(ctor), do: Enum.count(plicities_of(ctor), &(&1 == :explicit))
 
   @doc "A family's index telescope."
   @spec index_telescope(Env.t(), atom()) :: telescope() | nil

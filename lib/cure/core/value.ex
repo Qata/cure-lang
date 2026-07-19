@@ -83,6 +83,9 @@ defmodule Cure.Core.Value do
   def value?({:vneutral, n}), do: neutral?(n)
   def value?({:vdata, name, vs}), do: is_atom(name) and values?(vs)
   def value?({:vctor, name, vs}), do: is_atom(name) and values?(vs)
+  # NOTE(int-facade): `{:vint_type}` is retired from live surface production
+  # (spec 2026-07-18) but kept as a value shape — legacy envs / deserialized
+  # values may still carry it, and `Eval`/`Conv`/`Quote` clauses handle it.
   def value?({:vint_type}), do: true
   def value?({:vint, n}), do: is_integer(n)
   # Compact Nat literal value (defeq to the n-fold `S`-tower over `Z`).
