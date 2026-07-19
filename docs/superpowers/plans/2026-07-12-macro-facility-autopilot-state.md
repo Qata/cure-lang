@@ -121,8 +121,11 @@ Cure code in the same compilation.
 `on_message` folds. Constructor heads with typed payload binders derive the
 nominal message ADT through ordinary reflection; a real BEAM test covers an
 `Add(Int)` message changing multiple record fields and a nullary reset. The
-compiler remains unaware of actor vocabulary. Dependent query grammar and its
-named `ReplyOf` adapters remain the next Phase-3 seam.
+compiler remains unaware of actor vocabulary. An explicit `reply ReplyOf`
+family now selects the dependent actor path: the generated callback and client
+adapter preserve request-indexed reply types, validated by heterogeneous live
+calls and a wrong-branch negative test. Automatic `ReplyOf` derivation and
+named query adapters remain the next Phase-3 seam.
 
 - **Transparent BEAM plan:** Phases 0, 1, 2, and 2.5 are COMPLETE. Phase 3 (`beam_ops`)
   is unblocked (2.5 done) and substantially landed. Phase 4 has replaced all four OTP

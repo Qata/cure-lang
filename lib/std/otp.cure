@@ -74,6 +74,12 @@ mod Std.Otp
 
   type StartResult(handle) = Started(handle) | StartFailed | StartIgnored | InvalidStartResult
 
+  fn map_start({a: Type}, {b: Type}, result: StartResult(a), convert: (a) -> b) -> StartResult(b) = match result
+    Started(handle) -> Started(convert(handle))
+    StartFailed() -> StartFailed()
+    StartIgnored() -> StartIgnored()
+    InvalidStartResult() -> InvalidStartResult()
+
   type DepActorServer(m: Type, q: Type, rep: (q) -> Type) indices ()
     mk_dep_actor_server : (raw: RawServerPid(m, q, Unit)) -> DepActorServer(m, q, rep)
 
@@ -316,6 +322,14 @@ mod Std.Otp
 
   fn actor_call_dep({m: Type}, {q: Type}, {rep: (q) -> Type}, server: DepActorServer(m, q, rep), request: q) -> Effect(rep(request)) =
     raw_server_call_dep(dep_actor_raw(server), request)
+
+  fn dep_actor_cast({m: Type}, {q: Type}, {rep: (q) -> Type}, server: DepActorServer(m, q, rep), message: m) -> Effect(Unit) =
+    let acked = raw_server_cast(dep_actor_raw(server), message)
+    ()
+
+  fn dep_actor_stop({m: Type}, {q: Type}, {rep: (q) -> Type}, server: DepActorServer(m, q, rep)) -> Effect(Unit) =
+    let stopped = raw_server_stop(dep_actor_raw(server))
+    ()
 
   fn actor_stop({m: Type}, {q: Type}, {r: Type}, server: ActorServer(m, q, r)) -> Effect(Unit) =
     let stopped = raw_server_stop(server)

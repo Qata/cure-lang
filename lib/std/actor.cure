@@ -15,6 +15,7 @@ mod Std.Actor
       optional on_message Cases
       optional on_cast Cases
       optional on_call Cases
+      optional reply Code
       optional on_info Cases
       optional handle_cast Code
       optional handle_info Code
@@ -66,10 +67,14 @@ mod Std.Actor
         let message_declarations = match definition.messages
           None() -> [enum_type("ActorMessage", heads)]
           Some(_) -> []
-        match derive_reply_contract(call_body, definition.state)
-          NoCall -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, info_body, terminate_body, code_change_body, heads, extra_declarations, true, false)
-          InvalidCall(reason) -> Failure(reason, [])
-          CallContract(request_heads, reply_type) -> emit_actor_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, heads, request_heads, reply_type, extra_declarations)
+        match definition.reply
+          Some(reply_fn) -> match derive_pattern_heads(call_body)
+            InvalidHeads(reason) -> Failure(reason, [])
+            Heads(request_heads) -> emit_actor_dep_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, request_heads, reply_fn, extra_declarations)
+          None() -> match derive_reply_contract(call_body, definition.state)
+            NoCall -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, info_body, terminate_body, code_change_body, heads, extra_declarations, true, false)
+            InvalidCall(reason) -> Failure(reason, [])
+            CallContract(request_heads, reply_type) -> emit_actor_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, heads, request_heads, reply_type, extra_declarations)
 
   ## The Tier-0 raw branch of the family: `handle_cast`/`handle_info` bodies are
   ## full GenServer callback results spliced verbatim (no `:noreply` wrapping,
@@ -432,6 +437,59 @@ mod Std.Actor
         function("stop", [parameter("actor", variable("Handle"))], call("Effect", [variable("Unit")]), call("Std.Otp.actor_stop", [variable("actor")]))
       ], extra_declarations))
     ]))
+
+  fn emit_actor_dep_call_parts(module_name: SynLit, module_expr: Syntax, state_type: Syntax, init_spec: ActorInitSpec, message_type: Syntax, message_declarations: List(Syntax), cast_body: Syntax, call_body: Syntax, info_body: Syntax, terminate_body: Syntax, code_change_body: Syntax, request_heads: List(Syntax), reply_fn: Syntax, extra_declarations: List(Syntax)) -> Syntax =
+    let request_type: Syntax = enum_type("ActorRequest", request_heads)
+    let init_type: Syntax = call("Effect", [tuple_type([variable("Atom"), variable("State")])])
+    let reply_value_type: Syntax = behavior_reply_apply(reply_fn)
+    let reply_tuple_type: Syntax = tuple_type([variable("Atom"), reply_value_type, variable("State")])
+    let call_result_type: Syntax = call("Effect", [reply_tuple_type])
+    let handle_type: Syntax = call("Std.Otp.DepActorServer", [variable("Message"), variable("Request"), reply_fn])
+    let base_handle_type: Syntax = call("Std.Otp.ActorServer", [variable("Message"), variable("Request"), variable("Unit")])
+    let start_result_type: Syntax = call("Effect", [call("Std.Otp.StartResult", [handle_type])])
+    let cast_handler: Syntax = actor_handler(cast_body)
+    let dependent_call_body: Syntax = dependent_actor_call_body(call_body)
+    let reply_for_fn: Syntax = function("reply_for", [parameter("request", variable("Request")), parameter("state", variable("State"))], reply_tuple_type, dependent_call_body)
+    let attach_server_fn: Syntax = function("attach_server", [parameter("server", base_handle_type)], handle_type, call("Std.Otp.as_dep_actor", [variable("server")]))
+    let start_base_fn: Syntax = function("start_base", init_spec.start_parameters, call("Effect", [call("Std.Otp.StartResult", [base_handle_type])]), call("Std.Otp.start_actor", [module_expr, init_spec.start_argument]))
+    let start_body: Syntax = block([
+      let_binding("started", call("start_base", actor_start_adapter_args(init_spec.start_parameters))),
+      call("Std.Otp.map_start", [variable("started"), variable("attach_server")])
+    ])
+    let info_handler: Syntax = actor_info_handler(info_body)
+    let terminate_handler: Syntax = actor_terminate_handler(terminate_body)
+    let code_change_handler: Syntax = actor_code_change_handler(code_change_body)
+    block(append(message_declarations, [
+      request_type,
+      gen_server_module(module_name, state_type, append([
+        alias_node("Message", message_type),
+        alias_node("Request", variable("ActorRequest"))
+      ], append(extra_declarations, [
+        alias_node("Handle", handle_type),
+        function("init", [init_spec.parameter], init_type, init_spec.body),
+        reply_for_fn,
+        attach_server_fn,
+        start_base_fn,
+        function("handle_call", [parameter("request", variable("Request")), parameter("from", variable("f")), parameter("state", variable("State"))], call_result_type, call("reply_for", [variable("request"), variable("state")])),
+        quote (fn handle_cast(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(cast_handler)),
+        quote (fn handle_info(message: Message, state: State) -> Effect(Tuple(Atom, State)) = $(info_handler)),
+        quote (fn terminate(reason: Atom, state: State) -> Effect(Atom) = $(terminate_handler)),
+        quote (fn code_change(old: Atom, state: State, extra: Atom) -> Effect(Tuple(Atom, State)) = $(code_change_handler)),
+        function("start_link", init_spec.start_parameters, call("Effect", [variable("Tuple")]), call("Std.Otp.start_link", [module_expr, init_spec.start_argument])),
+        function("start", init_spec.start_parameters, start_result_type, start_body),
+        function("send", [parameter("actor", handle_type), parameter("message", variable("Message"))], call("Effect", [variable("Unit")]), call("Std.Otp.dep_actor_cast", [variable("actor"), variable("message")])),
+        function("request", [parameter("actor", handle_type), parameter("request", variable("Request"))], call("Effect", [reply_value_type]), call("Std.Otp.actor_call_dep", [variable("actor"), variable("request")])),
+        function("stop", [parameter("actor", handle_type)], call("Effect", [variable("Unit")]), call("Std.Otp.dep_actor_stop", [variable("actor")]))
+      ])))
+    ]))
+
+  fn dependent_actor_call_body(call_body: Syntax) -> Syntax = match children(call_body)
+    [_scrutinee | arms] -> Node(:pattern_match, [], [variable("request") | behavior_reply_arms(arms)])
+    _ -> call_body
+
+  fn actor_start_adapter_args(parameters: List(Syntax)) -> List(Syntax) = match parameters
+    [] -> []
+    _ -> [variable("initial")]
 
   ## Shared transparent declaration bundle for generated GenServer modules.
   ## Domain-specific builders supply only aliases and callback overrides; the

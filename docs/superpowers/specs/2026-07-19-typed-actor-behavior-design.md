@@ -234,8 +234,13 @@ arity/type consistency, and ordinary elaboration checks payload binder scope.
 A live actor test sends `Add(Int)`, updates two fields of an immutable record,
 observes the suspended accumulator, and resets it through a nullary message.
 `on_cast` remains a compatibility spelling and raw callback sections remain
-explicit escape hatches. The dependent `on_call`/`ReplyOf` grammar and full
-handler-exhaustiveness diagnostic remain open.
+explicit escape hatches. Actors may now select an explicit source-defined
+`reply ReplyOf` family: generation then uses `DepActorServer`, checks each
+`on_call` branch against `ReplyOf(request)`, and exposes request-indexed calls.
+A positive live test exercises distinct reply types from one PID and a negative
+test rejects returning the `Ping` reply from the `Count` branch. Deriving
+`ReplyOf` and named query adapters directly from annotated clauses, plus the
+full handler-exhaustiveness diagnostic, remain open.
 
 ### Phase 4: lifecycle and failures
 

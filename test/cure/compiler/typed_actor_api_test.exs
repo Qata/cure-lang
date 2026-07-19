@@ -73,4 +73,61 @@ defmodule Cure.Compiler.TypedActorApiTest do
     assert :sys.get_state(pid) == {:CounterState, 0, false}
     assert :unit = apply(actor, :stop, [pid])
   end
+
+  test "an explicit reply family gives one actor request-specific reply types" do
+    source = """
+    mod DependentActorDefinition
+      use Std.Actor
+
+      actor Cure.Generated.DependentCounter
+        state Int
+        initial 3
+        on_message
+          Increment() -> state + 1
+        on_call
+          Count() -> CountReply(state)
+          Ping() -> Ack()
+        reply ReplyOf
+        body
+          type CountResult = CountReply(Int)
+          type AckResult = Ack
+          fn ReplyOf(request: ActorRequest) -> Type = match request
+            Count() -> CountResult
+            Ping() -> AckResult
+    """
+
+    assert {:ok, _definition} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    actor = :"Cure.Generated.DependentCounter"
+    assert {:Started, pid} = apply(actor, :start, [])
+
+    assert {:CountReply, 3} = apply(actor, :request, [pid, :Count])
+    assert :Ack = apply(actor, :request, [pid, :Ping])
+    assert :unit = apply(actor, :send, [pid, :Increment])
+    assert {:CountReply, 4} = apply(actor, :request, [pid, :Count])
+    assert :unit = apply(actor, :stop, [pid])
+  end
+
+  test "dependent actor queries reject a reply from another request branch" do
+    source = """
+    mod InvalidDependentActorDefinition
+      use Std.Actor
+
+      actor Cure.Generated.InvalidDependentCounter
+        state Int
+        on_message
+          Increment() -> state + 1
+        on_call
+          Count() -> Ack()
+          Ping() -> Ack()
+        reply ReplyOf
+        body
+          type CountResult = CountReply(Int)
+          type AckResult = Ack
+          fn ReplyOf(request: ActorRequest) -> Type = match request
+            Count() -> CountResult
+            Ping() -> AckResult
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
 end
