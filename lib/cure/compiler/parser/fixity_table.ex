@@ -101,6 +101,64 @@ defmodule Cure.Compiler.Parser.FixityTable do
   end
 
   @doc """
+  Conflict-aware registration of an operator `lexeme` in a fixity slot.
+
+  Unlike `add_infix`/`add_prefix`/`add_postfix` (last-write-wins), `merge_op`
+  enforces the single-fixity-per-slot invariant used when assembling a module's
+  fixity table from its `use`-closure:
+
+    * slot empty → add it, `{:ok, table}`
+    * slot holds the *same* group → no-op, `{:ok, table}`
+    * slot holds a *different* group → `{:error, {:conflicting_operator_fixity,
+      {lexeme, existing_group, new_group}}}`
+
+  Different fixity slots for one lexeme (e.g. infix `-` and prefix `-`) never
+  conflict.
+  """
+  @spec merge_op(t(), String.t(), fixity(), group_name()) ::
+          {:ok, t()} | {:error, {:conflicting_operator_fixity, {String.t(), group_name(), group_name()}}}
+  def merge_op(%__MODULE__{ops: ops} = table, lexeme, fixity, group)
+      when is_binary(lexeme) and is_atom(group) and fixity in [:infix, :prefix, :postfix] do
+    case ops |> Map.get(lexeme, %{}) |> Map.get(fixity) do
+      nil -> {:ok, add_op(table, lexeme, fixity, group, [])}
+      %{group: ^group} -> {:ok, table}
+      %{group: other} -> {:error, {:conflicting_operator_fixity, {lexeme, other, group}}}
+    end
+  end
+
+  @doc """
+  Conflict-aware registration of a precedence group.
+
+  Unlike `add_group` (last-write-wins), `merge_group` enforces one body per
+  group name when assembling a module's fixity table:
+
+    * name absent → add it, `{:ok, table}`
+    * name present with an *identical* body → no-op, `{:ok, table}`
+    * name present with a *different* body → `{:error,
+      {:conflicting_precedence_group, {name, existing_body, new_body}}}`
+  """
+  @spec merge_group(t(), group_name(), keyword()) ::
+          {:ok, t()} | {:error, {:conflicting_precedence_group, {group_name(), map(), map()}}}
+  def merge_group(%__MODULE__{groups: groups} = table, name, opts) when is_atom(name) do
+    new_body = group_body(opts)
+
+    case Map.get(groups, name) do
+      nil -> {:ok, add_group(table, name, opts)}
+      ^new_body -> {:ok, table}
+      existing -> {:error, {:conflicting_precedence_group, {name, existing, new_body}}}
+    end
+  end
+
+  # Mirror EXACTLY the map `add_group/3` stores in `groups`.
+  defp group_body(opts) do
+    %{
+      assoc: Keyword.get(opts, :assoc, :left),
+      higher_than: Keyword.get(opts, :higher_than, []),
+      lower_than: Keyword.get(opts, :lower_than, [])
+    }
+  end
+
+  @doc """
   Returns `{left_bp, right_bp}` for an infix operator `lexeme`, or `:not_infix`
   when the lexeme is unregistered or registered with a non-infix fixity.
   """
