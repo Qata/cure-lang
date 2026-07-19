@@ -7,7 +7,12 @@ defmodule Cure.Compiler.FixityPropagationTest do
     File.mkdir_p!(dir)
     prev = Process.get(:cure_source_roots, [])
     Process.put(:cure_source_roots, [dir])
-    on_exit(fn -> Process.put(:cure_source_roots, prev); File.rm_rf!(dir) end)
+
+    on_exit(fn ->
+      Process.put(:cure_source_roots, prev)
+      File.rm_rf!(dir)
+    end)
+
     {:ok, dir: dir}
   end
 
@@ -31,8 +36,15 @@ defmodule Cure.Compiler.FixityPropagationTest do
   end
 
   test "conflicting fixity across two used modules is a parse error", %{dir: dir} do
-    File.write!(Path.join(dir, "a.cure"), "mod A\n  precedencegroup Ga\n    associativity: left\n  infix `<?>` : Ga\nend\n")
-    File.write!(Path.join(dir, "b.cure"), "mod B\n  precedencegroup Gb\n    associativity: left\n  infix `<?>` : Gb\nend\n")
+    File.write!(
+      Path.join(dir, "a.cure"),
+      "mod A\n  precedencegroup Ga\n    associativity: left\n  infix `<?>` : Ga\nend\n"
+    )
+
+    File.write!(
+      Path.join(dir, "b.cure"),
+      "mod B\n  precedencegroup Gb\n    associativity: left\n  infix `<?>` : Gb\nend\n"
+    )
 
     src = "mod C\n  use A\n  use B\nend\n"
     assert {:error, errors} = parse(src)
@@ -46,7 +58,7 @@ defmodule Cure.Compiler.FixityPropagationTest do
     assert {:ok, _ast} = parse(src)
   end
 
-  test "a user @prelude module reaches a sibling via the compile driver", %{dir: dir} do
+  test "a user @prelude module reaches and compiles in a sibling via the driver", %{dir: dir} do
     # P is marked @prelude, so its operator is ambient — a sibling that never
     # `use`s P must still see `<?>`. The compile driver harvests P as a prelude
     # provider (DepGraph.prelude_provider_names/1) and threads it into the
@@ -66,15 +78,31 @@ defmodule Cure.Compiler.FixityPropagationTest do
     {:ok, graph} =
       Cure.Compiler.DepGraph.scan([Path.join(dir, "p.cure"), Path.join(dir, "m.cure")])
 
+    {:ok, ordered, []} = Cure.Compiler.DepGraph.order(graph)
     providers = Cure.Compiler.prelude_provider_names(graph)
     assert "P" in providers
+    assert Enum.map(ordered, &Path.basename/1) == ["p.cure", "m.cure"]
 
     # Without the provider list, M cannot see `<?>` (it never `use`s P).
     assert {:error, _} = parse(File.read!(Path.join(dir, "m.cure")))
 
-    # With the provider list threaded in, the sibling parses.
-    assert {:ok, _ast} =
-             parse(File.read!(Path.join(dir, "m.cure")), prelude_providers: providers)
+    # The real driver boundary must do more than parse: P is an implicit import
+    # and order dependency, so M elaborates the operator meaning and runs.
+    out = Path.join(dir, "ebin")
+
+    Enum.each(ordered, fn path ->
+      assert {:ok, module, []} =
+               Cure.Compiler.compile_file(path,
+                 output_dir: out,
+                 emit_events: false,
+                 source_roots: [dir],
+                 prelude_providers: providers
+               )
+
+      assert :ok = Cure.Compiler.load_emitted(module, out)
+    end)
+
+    assert apply(:"Cure.M", :go, []) == 1
   end
 
   test "a @prelude provider propagates operators from its own use-closure", %{dir: dir} do
