@@ -3,6 +3,7 @@ mod Std.Actor
   use Std.Syntax
   use Std.List
   use Std.Option
+  use Std.ActorBehavior
 
   ## The structured actor surface is a source-defined family.
   macro actor <name: ModuleName>
@@ -402,9 +403,7 @@ mod Std.Actor
   ## Domain-specific builders supply only aliases and callback overrides; the
   ## common import and state plumbing live in one ordinary Cure function.
   fn gen_server_module(module_name: SynLit, state_type: Syntax, declarations: List(Syntax)) -> Syntax =
-    gen_server_module_raw(module_name, append([
-      alias_node("State", state_type)
-    ], declarations))
+    Std.ActorBehavior.actor_module(module_name, state_type, declarations)
 
   ## State-alias-free variant of `gen_server_module`. Stateless actor forms keep
   ## the state polymorphic (a free `p` on every callback), so they must NOT emit a
@@ -413,9 +412,7 @@ mod Std.Actor
   ## the State alias, so the aliased path stays byte-identical (append is
   ## associative: [use_module] ++ ([alias] ++ decls) = [use_module, alias, ...decls]).
   fn gen_server_module_raw(module_name: SynLit, declarations: List(Syntax)) -> Syntax =
-    lift_module_isolated(module_name, :gen_server, append([
-      use_module("Std.Otp")
-    ], declarations))
+    Std.ActorBehavior.actor_module_raw(module_name, declarations)
 
   fn actor_call_handler(body: Syntax) -> Syntax = match tag(body) == :pattern_match
     true -> actor_call_handler_node(attrs(body), children(body))

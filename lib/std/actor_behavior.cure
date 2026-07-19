@@ -1,0 +1,30 @@
+@group(:concurrency)
+mod Std.ActorBehavior
+  use Std.Syntax
+  use Std.List
+
+  ## Shared compile-time substrate for actor-like abstractions.  Both public
+  ## `actor` declarations and constrained actors such as `fsm` supply ordinary
+  ## checked declarations here; this function emits the final direct BEAM
+  ## behaviour module without introducing a runtime container or dispatcher.
+  fn behavior_module(module_name: SynLit, kind: Atom, imports: List(Syntax), declarations: List(Syntax)) -> Syntax =
+    lift_module_isolated(module_name, kind, append(imports, declarations))
+
+  fn actor_module(module_name: SynLit, state_type: Syntax, declarations: List(Syntax)) -> Syntax =
+    actor_module_raw(module_name, append([
+      alias_node("State", state_type)
+    ], declarations))
+
+  fn actor_module_raw(module_name: SynLit, declarations: List(Syntax)) -> Syntax =
+    behavior_module(module_name, :gen_server, [
+      use_module("Std.Otp")
+    ], declarations)
+
+  ## An FSM is an actor whose mailbox protocol is constrained by a transition
+  ## graph.  It retains gen_statem's direct wire protocol while sharing the
+  ## same transparent module-construction path as every other actor family.
+  fn state_machine_module(module_name: SynLit, declarations: List(Syntax)) -> Syntax =
+    behavior_module(module_name, :gen_statem, [
+      use_module("Std.Otp"),
+      use_module("Std.Fsm")
+    ], declarations)

@@ -5,6 +5,7 @@ mod Std.Fsm
   use Std.Option
   use Std.Beam
   use Std.ExitReason
+  use Std.ActorBehavior
 
   ## The structured FSM surface reuses the generic family parser.
   macro fsm <name: ModuleName>
@@ -87,9 +88,7 @@ mod Std.Fsm
     let action_type = call("FsmAction", [variable("State"), variable("Data")])
     let decision = transition_decision(transitions)
     let encoded = call("Std.Fsm.action_to_beam", [call("decide", [variable("event"), variable("state"), variable("data")])])
-    lift_module_isolated(module_name, :gen_statem, [
-      use_module("Std.Otp"),
-      use_module("Std.Fsm"),
+    Std.ActorBehavior.state_machine_module(module_name, [
       enum_type("State", syntax_variants(states)),
       enum_type("Event", syntax_variants(events)),
       alias_node("Data", data),
@@ -176,8 +175,7 @@ mod Std.Fsm
         let init_type = call("Effect", [tuple_type([variable("Atom"), variable("Atom"), variable("State")])])
         let start_type = call("Effect", [variable("Tuple")])
         block(append(event_declarations, [
-          lift_module_isolated(module_name, :gen_statem, [
-            use_module("Std.Otp"),
+          Std.ActorBehavior.state_machine_module(module_name, [
             alias_node("State", state_type),
             alias_node("Event", event_type),
             function("callback_mode", [], variable("Atom"), quote :handle_event_function),
@@ -201,9 +199,7 @@ mod Std.Fsm
     let decided = call("decide", [variable("event"), variable("state"), variable("data")])
     let encoded_body = call("Std.Fsm.action_to_beam", [decided])
     block(append(event_declarations, [
-      lift_module_isolated(module_name, :gen_statem, [
-        use_module("Std.Otp"),
-        use_module("Std.Fsm"),
+      Std.ActorBehavior.state_machine_module(module_name, [
         alias_node("Data", data_type),
         alias_node("StateName", state_name_type),
         alias_node("Event", event_type),
