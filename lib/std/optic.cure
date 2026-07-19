@@ -352,6 +352,21 @@ mod Std.Optic
         MkAffineO(ae2) -> compose_trav(MkTravO(te1), affine_to_trav(MkAffineO(ae2)))
         MkTravO(te2) -> compose_trav(MkTravO(te1), MkTravO(te2))
 
+  # ---- List index affine --------------------------------------------------
+
+  ## Focus the element at index `i` of a `List(a)`. A bare `List` carries no
+  ## length, so the index genuinely may miss — `ix(i)` is an AFFINE, not a lens:
+  ## `preview` yields `Some(elem)` in range and `None` out of range or on `[]`,
+  ## and `set`/`over` replace in place when the index exists and are a NO-OP
+  ## otherwise (the affine miss-is-a-no-op law). Totality is available by choosing
+  ## a length-indexed container instead — a `Vector(a, n)` with a `Bounded(n)`
+  ## index is a total lens; the container is the totality declaration.
+  ##
+  ## The getter and putter are the total `Std.List.at`/`set_at`; both are ordinary
+  ## calls (not a `match`), so they inline as the affine's stored lambdas.
+  fn ix({a: Type}, i: Int) -> Optic(List(a), a, AffineKind) =
+    affine(fn(xs) -> Std.List.at(xs, i), fn(v) -> fn(xs) -> Std.List.set_at(xs, i, v))
+
   # ---- Std.Dynamic case affines -------------------------------------------
 
   ## One `Affine(Dynamic, T)` per constructor of `Std.Dynamic`'s typed-`Any` sum.
