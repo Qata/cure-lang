@@ -41,6 +41,14 @@ defmodule Cure.Elab.Deriving do
   @spec generate(atom(), tuple(), Env.t()) :: {:ok, tuple()} | {:error, term()}
   def generate(:Show, _container, _env), do: {:error, {:deriving_needs_strings, :Show}}
 
+  def generate(:BeamEncode, {:container, _meta, _body} = container, env) do
+    case Env.get_interface(env, :BeamEncode) do
+      %{method_order: [method]} -> beam_encode_instance(container, Atom.to_string(method))
+      nil -> {:error, {:no_such_interface, :BeamEncode}}
+      _ -> {:error, {:cannot_derive, :BeamEncode}}
+    end
+  end
+
   def generate(iface, {:container, meta, body}, env) when iface in [:Equatable, :Ord] do
     case Env.get_interface(env, iface) do
       nil ->
@@ -143,8 +151,7 @@ defmodule Cure.Elab.Deriving do
 
   Cure constructors already erase to their native BEAM representation. The
   generated method therefore calls `Std.Beam.forget/1`, which changes only the
-  static type to the opaque boundary carrier. Hand-written implementations win
-  through the ordinary coherence check in `Cure.Elab.Program`.
+  static type to the opaque boundary carrier.
   """
   @spec beam_encode_instance(tuple(), String.t()) :: {:ok, tuple()} | :skip
   def beam_encode_instance({:container, meta, body}, method_name) do

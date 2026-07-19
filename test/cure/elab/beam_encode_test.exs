@@ -1,12 +1,12 @@
 defmodule Cure.Elab.BeamEncodeTest do
   use ExUnit.Case, async: true
 
-  test "an ADT automatically receives its native BEAM representation" do
+  test "an ADT can derive its native BEAM representation" do
     source = """
     mod Cure.BeamDerived
       use Std.Beam
 
-      type Message = Ping | Data(Int)
+      type Message = Ping | Data(Int) deriving BeamEncode
 
       fn encode(message: Message) -> BeamTerm = to_beam(message)
       fn ping() -> BeamTerm = encode(Ping())
@@ -18,7 +18,7 @@ defmodule Cure.Elab.BeamEncodeTest do
     assert apply(module, :data, [7]) == {:Data, 7}
   end
 
-  test "a hand-written BeamEncode implementation overrides automatic derivation" do
+  test "a hand-written BeamEncode implementation overrides the derived representation" do
     source = """
     mod Cure.BeamOverride
       use Std.Beam
