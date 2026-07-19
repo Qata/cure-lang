@@ -103,6 +103,25 @@ mod Std.Otp
   fn subject_receive({m: Type}, subject: Subject(m), timeout: Int) -> Effect(Option(m)) =
     raw_subject_receive(subject, timeout)
 
+  ## Typed SELECTIVE RECEIVE (Gleam-style `Selector`). Accumulate handlers over several subjects of DIFFERENT
+  ## message types — each mapped into a common payload `p` by `select_map` — then `selector_receive` returns
+  ## whichever arrives first, typed as `p`. `select` is the identity case (the subject's messages ARE the
+  ## payload). Building a selector is pure; only the receive is an `Effect`. The safety of merging heterogeneous
+  ## channels into one exhaustively-handled payload is what `Std.Otp.SelectiveReceive` proves.
+  fn new_selector({p: Type}) -> Selector(p) = raw_selector_new()
+
+  ## Add `subject`, mapping its messages into the selector's payload `p`.
+  fn select_map({p: Type}, {m: Type}, selector: Selector(p), subject: Subject(m), transform: (m) -> p) -> Selector(p) =
+    raw_selector_select_map(selector, subject, transform)
+
+  ## Add a subject whose message type IS the payload (identity mapping).
+  fn select({p: Type}, selector: Selector(p), subject: Subject(p)) -> Selector(p) =
+    raw_selector_select_map(selector, subject, fn(x) -> x)
+
+  ## Receive from whichever selected subject arrives first within `timeout` ms; `None` on timeout.
+  fn selector_receive({p: Type}, selector: Selector(p), timeout: Int) -> Effect(Option(p)) =
+    raw_selector_receive(selector, timeout)
+
   ## A process message set. The first algebra floor stores tag and arity
   ## shapes; typed ADT payload derivation is added by the transparent macro
   ## phase once callback syntax is available.
