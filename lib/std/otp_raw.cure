@@ -55,6 +55,11 @@ mod Std.Otp.Raw
   @erases(:pid)
   opaque type RawServerPid(m, q, r)
 
+  ## Request-indexed reply family over the same native PID. All parameters are
+  ## phantom and the carrier has no constructor or runtime wrapper.
+  @erases(:pid)
+  opaque type RawDepServerPid(m: Type, q: Type, rep: (q) -> Type)
+
   ## An uninhabited message type. `BarePid` carries it, which is what makes a pid
   ## recovered from the registry UNSENDABLE: `tell` would demand a `NoMessage` value and
   ## no constructor produces one.
@@ -142,6 +147,12 @@ mod Std.Otp.Raw
   ## not accept an arbitrary BeamTerm.
   @extern(:erlang, :element, 2)
   fn raw_actor_server({m: Type}, {q: Type}, {r: Type}, index: Int, checked: Tuple(BarePid, Atom)) -> RawServerPid(m, q, r)
+
+  @extern(:erlang, :element, 2)
+  fn raw_dep_actor_server({m: Type}, {q: Type}, {rep: (q) -> Type}, index: Int, checked: Tuple(RawServerPid(m, q, Unit), Atom)) -> RawDepServerPid(m, q, rep)
+
+  @extern(:erlang, :element, 2)
+  fn raw_dep_actor_base({m: Type}, {q: Type}, {rep: (q) -> Type}, index: Int, checked: Tuple(RawDepServerPid(m, q, rep), Atom)) -> RawServerPid(m, q, Unit)
 
   ## The calling process's own pid. A process the VM spawned for us speaks no
   ## gen_server protocol, so the handle is `Plain`.

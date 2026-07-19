@@ -80,11 +80,10 @@ mod Std.Otp
     StartIgnored() -> StartIgnored()
     InvalidStartResult() -> InvalidStartResult()
 
-  type DepActorServer(m: Type, q: Type, rep: (q) -> Type) indices ()
-    mk_dep_actor_server : (raw: RawServerPid(m, q, Unit)) -> DepActorServer(m, q, rep)
+  typealias DepActorServer(m: Type, q: Type, rep: (q) -> Type) = RawDepServerPid(m, q, rep)
 
   fn as_dep_actor({m: Type}, {q: Type}, {rep: (q) -> Type}, server: ActorServer(m, q, Unit)) -> DepActorServer(m, q, rep) =
-    mk_dep_actor_server(server)
+    raw_dep_actor_server(1, %[server, :checked_dep_actor])
 
   ## A DEPENDENT `gen_server` handle: requests `q`, reply computed PER REQUEST by `rep : q -> Type` (an
   ## `ReplyOf`). The SAME server answers different requests at different reply types. A real datatype INDEXED by
@@ -310,8 +309,7 @@ mod Std.Otp
     raw_call_dep(dep_raw(server), request)
 
   local fn dep_actor_raw({m: Type}, {q: Type}, {rep: (q) -> Type}, server: DepActorServer(m, q, rep)) -> RawServerPid(m, q, Unit) =
-    match server
-      mk_dep_actor_server(raw) -> raw
+    raw_dep_actor_base(1, %[server, :checked_dep_actor])
 
   fn actor_cast({m: Type}, {q: Type}, {r: Type}, server: ActorServer(m, q, r), message: m) -> Effect(Unit) =
     let acked = raw_server_cast(server, message)

@@ -10,8 +10,8 @@ defmodule Cure.Compiler.TypedActorApiTest do
         state Int
         on_cast
           Inc -> state + 1
-        on_call
-          Read -> state
+        on_call Read() returns Int
+          reply state
 
     """
 
@@ -21,7 +21,7 @@ defmodule Cure.Compiler.TypedActorApiTest do
 
     assert :unit = apply(actor, :send, [pid, :Inc])
     assert :unit = apply(actor, :send, [pid, :Inc])
-    assert 2 = apply(actor, :request, [pid, :Read])
+    assert 2 = apply(actor, :read, [pid])
     assert :unit = apply(actor, :stop, [pid])
     refute Process.alive?(pid)
   end
@@ -84,26 +84,23 @@ defmodule Cure.Compiler.TypedActorApiTest do
         initial 3
         on_message
           Increment() -> state + 1
-        on_call
-          Count() -> CountReply(state)
-          Ping() -> Ack()
-        reply ReplyOf
+        on_call Count() returns CountResult
+          reply CountReply(state)
+        on_call Ping() returns AckResult
+          reply Ack()
         body
           type CountResult = CountReply(Int)
           type AckResult = Ack
-          fn ReplyOf(request: ActorRequest) -> Type = match request
-            Count() -> CountResult
-            Ping() -> AckResult
     """
 
     assert {:ok, _definition} = Cure.Compiler.compile_and_load(source, emit_events: false)
     actor = :"Cure.Generated.DependentCounter"
     assert {:Started, pid} = apply(actor, :start, [])
 
-    assert {:CountReply, 3} = apply(actor, :request, [pid, :Count])
-    assert :Ack = apply(actor, :request, [pid, :Ping])
+    assert {:CountReply, 3} = apply(actor, :count, [pid])
+    assert :Ack = apply(actor, :ping, [pid])
     assert :unit = apply(actor, :send, [pid, :Increment])
-    assert {:CountReply, 4} = apply(actor, :request, [pid, :Count])
+    assert {:CountReply, 4} = apply(actor, :count, [pid])
     assert :unit = apply(actor, :stop, [pid])
   end
 
@@ -116,18 +113,38 @@ defmodule Cure.Compiler.TypedActorApiTest do
         state Int
         on_message
           Increment() -> state + 1
-        on_call
-          Count() -> Ack()
-          Ping() -> Ack()
-        reply ReplyOf
+        on_call Count() returns CountResult
+          reply Ack()
+        on_call Ping() returns AckResult
+          reply Ack()
         body
           type CountResult = CountReply(Int)
           type AckResult = Ack
-          fn ReplyOf(request: ActorRequest) -> Type = match request
-            Count() -> CountResult
-            Ping() -> AckResult
     """
 
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
+  test "payload-bearing named queries can update state explicitly" do
+    source = """
+    mod UpdatingQueryActorDefinition
+      use Std.Actor
+
+      actor Cure.Generated.UpdatingQueryCounter
+        state Int
+        initial 1
+        on_message
+          Reset() -> 0
+        on_call AddAndRead(amount: Int) returns Int
+          reply state + amount
+          update state + amount
+    """
+
+    assert {:ok, _definition} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    actor = :"Cure.Generated.UpdatingQueryCounter"
+    assert {:Started, pid} = apply(actor, :start, [])
+    assert 4 = apply(actor, :addAndRead, [pid, 3])
+    assert 6 = apply(actor, :addAndRead, [pid, 2])
+    assert :unit = apply(actor, :stop, [pid])
   end
 end

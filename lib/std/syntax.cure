@@ -268,6 +268,17 @@ mod Std.Syntax
       None() -> None()
       Some(kind) -> Some(typed_pattern(name, kind))
 
+  ## Generic identifier transformations for declaration-producing macros.
+  ## These inspect reflected identifier syntax only; domain macros decide what
+  ## generated name means (for example, an actor query adapter).
+  fn identifier_name(value: Syntax) -> Option(String) = match value
+    Leaf(_, _, SStr(name)) -> Some(name)
+    Node(_, values, _) -> match attr(values, :name)
+      Found(SStr(name)) -> Some(name)
+      _ -> None()
+    _ -> None()
+
+
   fn parameter_linear(name: String, kind: Syntax) -> Syntax =
     Node(:param, [KV(:name, SStr(name)), KV(:type, SSyntax(kind)), KV(:grade, SAtom(:linear))], [])
 
@@ -298,6 +309,17 @@ mod Std.Syntax
   fn function(name: String, params: List(Syntax), return_type: Syntax, body: Syntax) -> Syntax =
     Node(:function_def, [
       KV(:name, SStr(name)),
+      KV(:params, parameter_literals(params)),
+      KV(:return_type, SSyntax(return_type))
+    ], [body])
+
+  ## Build a function whose name is derived from reflected identifier syntax.
+  ## The generic syntax bridge performs the requested Unicode-safe transform
+  ## while converting the compile-time Syntax value back to parser AST.
+  fn function_downcase_identifier(identifier: Syntax, params: List(Syntax), return_type: Syntax, body: Syntax) -> Syntax =
+    Node(:function_def, [
+      KV(:name_from_identifier, SSyntax(identifier)),
+      KV(:identifier_transform, SAtom(:lower_initial)),
       KV(:params, parameter_literals(params)),
       KV(:return_type, SSyntax(return_type))
     ], [body])

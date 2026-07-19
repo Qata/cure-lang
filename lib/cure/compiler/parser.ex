@@ -1188,7 +1188,9 @@ defmodule Cure.Compiler.Parser do
                 parse_family_sections(state, family_meta, values)
 
               :error ->
-                state = add_error(state, {:unknown_syntax_family_field, family_meta.family, name, token.line, token.col})
+                state =
+                  add_error(state, {:unknown_syntax_family_field, family_meta.family, name, token.line, token.col})
+
                 {_ignored, state} = parse_expr_or_block(advance(state))
                 parse_family_sections(state, family_meta, values)
             end
@@ -5943,13 +5945,13 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    {type_params, state} =
+    {head_params, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           state = advance(state)
           {tp, state} = parse_typed_params(state)
           state = expect(state, :rparen)
-          {Enum.map(tp, fn {:param, _meta, n} -> n end), state}
+          {tp, state}
 
         _ ->
           {[], state}
@@ -5964,7 +5966,9 @@ defmodule Cure.Compiler.Parser do
     # to predeclare transparent aliases without accidentally turning a
     # forward-referenced one-constructor ADT into an alias.
     meta = [name: name, line: token.line, col: token.col, typealias: true]
+    type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
     meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+    meta = if head_params != [], do: Keyword.put(meta, :params, head_params), else: meta
     {{:type_annotation, meta, [rhs]}, state}
   end
 
@@ -6023,6 +6027,7 @@ defmodule Cure.Compiler.Parser do
         type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
         meta = [container_type: :opaque, name: name, line: token.line, col: token.col]
         meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+        meta = if head_params != [], do: Keyword.put(meta, :params, head_params), else: meta
         {{:container, meta, []}, state}
 
       match?(%Token{type: :keyword, value: :indices}, peek(state)) ->

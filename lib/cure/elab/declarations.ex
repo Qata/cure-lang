@@ -117,7 +117,11 @@ defmodule Cure.Elab.Declarations do
         # positivity checks (there are none); the marker makes the kernel refuse
         # to eliminate it (Agda `postulate`).
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-        params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+
+        params =
+          Keyword.get_lazy(meta, :params, fn ->
+            Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+          end)
 
         with :ok <- reject_reserved_family_name(name),
              {:ok, erasure} <- erasure_class(meta, name),
@@ -292,17 +296,12 @@ defmodule Cure.Elab.Declarations do
   # uniformly erased `Type 0` binders, matching `elaborate_typealias/2`.
   defp register_typealias_header(meta, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    params = Keyword.get(meta, :type_params, [])
-    grade = Grade.zero()
 
-    type =
-      Enum.reduce(Enum.reverse(params), {:type, @ceiling}, fn _param, acc ->
-        {:pi, grade, {:type, 0}, acc}
-      end)
+    params = typealias_params(meta)
 
-    quantities = List.duplicate(:erased, length(params))
-
-    with :ok <- reject_reserved_family_name(name) do
+    with :ok <- reject_reserved_family_name(name),
+         {:ok, telescope, quantities, _scope} <- elaborate_param_telescope(params, env) do
+      type = wrap_binders(:pi, telescope, quantities, {:type, @ceiling})
       {:ok, Env.add_def(env, name, type, nil, quantities)}
     end
   end
@@ -355,12 +354,8 @@ defmodule Cure.Elab.Declarations do
   # `typealias U = Type` is legal and lives at `Type 1`, not `Type 0`.
   defp elaborate_typealias({:type_annotation, meta, [rhs]}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    type_params = Keyword.get(meta, :type_params, [])
 
-    params =
-      Enum.map(type_params, fn p ->
-        {:param, [type: {:variable, [scope: :local], "Type"}], p}
-      end)
+    params = typealias_params(meta)
 
     with :ok <- reject_reserved_family_name(name),
          {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
@@ -380,6 +375,18 @@ defmodule Cure.Elab.Declarations do
       {:ok, other} -> {:error, {:typealias_not_a_type, name, Quote.reify(other, 0)}}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp typealias_params(meta) do
+    meta
+    |> Keyword.get_lazy(:params, fn ->
+      Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+    end)
+    |> Enum.map(fn
+      {:param, pmeta, name} ->
+        type = Keyword.get(pmeta, :type, {:variable, [scope: :local], "Type"})
+        {:param, Keyword.put(pmeta, :type, type), name}
+    end)
   end
 
   defp maybe_certify(env, name) do

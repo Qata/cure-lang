@@ -320,6 +320,11 @@ defmodule Cure.Compiler.MacroSyntax do
   # -- from_syntax: repr -> parser AST ---------------------------------------
 
   @spec from_syntax(repr) :: tuple()
+  def from_syntax({:syn_node, :function_def, attrs, kids}) do
+    attrs = materialize_identifier_name(attrs)
+    {:function_def, from_attrs(attrs), Enum.map(kids, &from_syntax/1)}
+  end
+
   def from_syntax({:syn_node, tag, attrs, kids}) do
     {tag, from_attrs(attrs), Enum.map(kids, &from_syntax/1)}
   end
@@ -348,6 +353,39 @@ defmodule Cure.Compiler.MacroSyntax do
 
   def from_syntax({:syn_failure, name, args}),
     do: {:macro_failure, name, Enum.map(args, &from_syntax/1)}
+
+  defp materialize_identifier_name(attrs) do
+    source = Keyword.get(attrs, :name_from_identifier)
+    transform = Keyword.get(attrs, :identifier_transform)
+
+    name =
+      case source do
+        {:s_syntax, {:syn_leaf, _tag, _source_attrs, {:s_str, value}}} ->
+          value
+
+        {:s_syntax, {:syn_node, _tag, source_attrs, _kids}} ->
+          case Keyword.get(source_attrs, :name) do
+            {:s_str, value} -> value
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    transformed =
+      case {name, transform} do
+        {value, {:s_atom, :lower_initial}} when is_binary(value) -> lower_initial(value)
+        {value, _} when is_binary(value) -> value
+        _ -> nil
+      end
+
+    attrs = Keyword.drop(attrs, [:name_from_identifier, :identifier_transform])
+    if transformed, do: Keyword.put(attrs, :name, {:s_str, transformed}), else: attrs
+  end
+
+  defp lower_initial(<<first::utf8, rest::binary>>), do: String.downcase(<<first::utf8>>) <> rest
+  defp lower_initial(""), do: ""
 
   defp from_attrs(attrs) do
     for {key, lit} <- attrs, key not in [:pascal_case, :constructor_key, :variable_name] do

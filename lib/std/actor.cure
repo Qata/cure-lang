@@ -3,10 +3,15 @@ mod Std.Actor
   use Std.Syntax
   use Std.List
   use Std.Option
+  use Std.String
   use Std.ActorBehavior
 
   ## The structured actor surface is a source-defined family.
   macro actor <name: ModuleName>
+    syntax family ActorQueryDefinition
+      syntax on_call <request: Name> (<parameters: Parameters>) returns <reply_type: Type>
+      reply Expression
+      optional update Expression
     syntax family ActorDefinition
       state Type
       optional messages Type
@@ -14,8 +19,7 @@ mod Std.Actor
       optional init Code
       optional on_message Cases
       optional on_cast Cases
-      optional on_call Cases
-      optional reply Code
+      repeated queries ActorQueryDefinition
       optional on_info Cases
       optional handle_cast Code
       optional handle_info Code
@@ -37,9 +41,7 @@ mod Std.Actor
   ## GDerived/GStructuredCall/GLifecycle byte-identical goldens.
   fn derive_actor_family_cases(name: ModuleNameSyntax, definition: ActorDefinitionSyntax, cast_cases: Syntax) -> Syntax =
     let body = Node(:pattern_match, [], [variable("message") | children(cast_cases)])
-    let call_body = match definition.on_call
-      None() -> Raw(SOpaque)
-      Some(value) -> Node(:pattern_match, [], [variable("request") | children(value)])
+    let call_body = actor_query_body(definition.queries)
     let info_body = match definition.on_info
       None() -> Raw(SOpaque)
       Some(value) -> Node(:pattern_match, [], [variable("message") | children(value)])
@@ -67,14 +69,14 @@ mod Std.Actor
         let message_declarations = match definition.messages
           None() -> [enum_type("ActorMessage", heads)]
           Some(_) -> []
-        match definition.reply
-          Some(reply_fn) -> match derive_pattern_heads(call_body)
-            InvalidHeads(reason) -> Failure(reason, [])
-            Heads(request_heads) -> emit_actor_dep_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, request_heads, reply_fn, extra_declarations)
-          None() -> match derive_reply_contract(call_body, definition.state)
-            NoCall -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, info_body, terminate_body, code_change_body, heads, extra_declarations, true, false)
-            InvalidCall(reason) -> Failure(reason, [])
-            CallContract(request_heads, reply_type) -> emit_actor_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, heads, request_heads, reply_type, extra_declarations)
+        match definition.queries
+          [] -> emit_actor_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, info_body, terminate_body, code_change_body, heads, extra_declarations, true, false)
+          queries ->
+            let request_heads = actor_query_variants(queries)
+            let reply_family = actor_reply_family(queries)
+            let query_handle = call("Std.Otp.DepActorServer", [variable("Message"), variable("Request"), variable("ReplyOf")])
+            let query_adapters = actor_query_adapters(queries, query_handle)
+            emit_actor_dep_call_parts(module_name, module_expr, definition.state, init_spec, message_type, message_declarations, body, call_body, info_body, terminate_body, code_change_body, request_heads, variable("ReplyOf"), append([reply_family], append(query_adapters, extra_declarations)))
 
   ## The Tier-0 raw branch of the family: `handle_cast`/`handle_info` bodies are
   ## full GenServer callback results spliced verbatim (no `:noreply` wrapping,
@@ -199,6 +201,76 @@ mod Std.Actor
   fn actor_handler_arm_node(values: List(Attr), children: List(Syntax)) -> Syntax = match children
     [body] -> Node(:match_arm, values, [block([quote %[:noreply, $(body)]])])
     _ -> Node(:match_arm, values, children)
+
+  fn actor_query_body(queries: List(ActorQueryDefinitionSyntax)) -> Syntax = match queries
+    [] -> Raw(SOpaque)
+    _ -> Node(:pattern_match, [], [variable("request") | actor_query_arms(queries)])
+
+  fn actor_query_arms(queries: List(ActorQueryDefinitionSyntax)) -> List(Syntax) = match queries
+    [] -> []
+    [query | rest] -> [actor_query_arm(query) | actor_query_arms(rest)]
+
+  fn actor_query_arm(query: ActorQueryDefinitionSyntax) -> Syntax =
+    let next_state = match query.update
+      None() -> variable("state")
+      Some(value) -> value
+    Node(:match_arm, [
+      KV(:pattern, SSyntax(actor_query_pattern(query))),
+      KV(:actor_query_state, SSyntax(next_state))
+    ], [query.reply])
+
+  fn actor_query_pattern(query: ActorQueryDefinitionSyntax) -> Syntax = match identifier_name(query.request)
+    None() -> variable("_")
+    Some(name) -> call(name, actor_query_parameter_patterns(query.parameters))
+
+  fn actor_query_parameter_patterns(parameters: List(Syntax)) -> List(Syntax) = match parameters
+    [] -> []
+    [parameter | rest] -> match captured_parameter_name(parameter)
+      None() -> [variable("_") | actor_query_parameter_patterns(rest)]
+      Some(name) -> [variable(name) | actor_query_parameter_patterns(rest)]
+
+  fn actor_query_parameter_types(parameters: List(Syntax)) -> List(Syntax) = match parameters
+    [] -> []
+    [parameter | rest] -> match captured_parameter_type(parameter)
+      None() -> actor_query_parameter_types(rest)
+      Some(kind) -> [kind | actor_query_parameter_types(rest)]
+
+  fn actor_query_argument_values(parameters: List(Syntax)) -> List(Syntax) = match parameters
+    [] -> []
+    [parameter | rest] -> match captured_parameter_name(parameter)
+      None() -> actor_query_argument_values(rest)
+      Some(name) -> [variable(name) | actor_query_argument_values(rest)]
+
+  fn actor_query_adapter_parameters(parameters: List(Syntax)) -> List(Syntax) = match parameters
+    [] -> []
+    [captured | rest] -> match captured_parameter_name(captured)
+      None() -> actor_query_adapter_parameters(rest)
+      Some(name) -> match captured_parameter_type(captured)
+        None() -> actor_query_adapter_parameters(rest)
+        Some(kind) -> [parameter(name, kind) | actor_query_adapter_parameters(rest)]
+
+  fn actor_query_variants(queries: List(ActorQueryDefinitionSyntax)) -> List(Syntax) = match queries
+    [] -> []
+    [query | rest] -> match identifier_name(query.request)
+      None() -> actor_query_variants(rest)
+      Some(name) -> [enum_variant_payload(name, actor_query_parameter_types(query.parameters)) | actor_query_variants(rest)]
+
+  fn actor_reply_family(queries: List(ActorQueryDefinitionSyntax)) -> Syntax =
+    function("ReplyOf", [parameter("request", variable("ActorRequest"))], variable("Type"), Node(:pattern_match, [], [variable("request") | actor_reply_type_arms(queries)]))
+
+  fn actor_reply_type_arms(queries: List(ActorQueryDefinitionSyntax)) -> List(Syntax) = match queries
+    [] -> []
+    [query | rest] -> [match_arm(actor_query_pattern(query), query.reply_type) | actor_reply_type_arms(rest)]
+
+  fn actor_query_adapters(queries: List(ActorQueryDefinitionSyntax), handle_type: Syntax) -> List(Syntax) = match queries
+    [] -> []
+    [query | rest] ->
+      let request_value = match identifier_name(query.request)
+        None() -> variable("request")
+        Some(constructor) -> call(constructor, actor_query_argument_values(query.parameters))
+      let parameters = [parameter("actor", handle_type) | actor_query_adapter_parameters(query.parameters)]
+      let adapter = function_downcase_identifier(query.request, parameters, call("Effect", [query.reply_type]), call("request", [variable("actor"), request_value]))
+      [adapter | actor_query_adapters(rest, handle_type)]
 
   type ReplyInference = NoCall | CallContract(List(Syntax), Syntax) | InvalidCall(Atom)
   type ReplyTypeInference = ReplyType(Syntax, Atom) | InvalidReply(Atom)
@@ -593,7 +665,9 @@ mod Std.Actor
     false -> arm
 
   fn behavior_reply_arm_node(values: List(Attr), children: List(Syntax)) -> Syntax = match children
-    [body] -> Node(:match_arm, values, [tuple([atom_literal(:reply), body, variable("state")])])
+    [body] -> match attr(values, :actor_query_state)
+      Found(SSyntax(next_state)) -> Node(:match_arm, values, [tuple([atom_literal(:reply), body, next_state])])
+      _ -> Node(:match_arm, values, [tuple([atom_literal(:reply), body, variable("state")])])
     _ -> Node(:match_arm, values, children)
 
   ## Build `reply(request)` — the request's own reply type — from the captured `reply` family name applied to the

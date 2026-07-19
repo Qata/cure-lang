@@ -51,11 +51,11 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
          state Int
          on_cast
            Inc -> state + 1
-         on_call
-           Read -> state
+         on_call Read() returns Int
+           reply state
 
-     fn make_request() -> ActorRequest = Read
-     """, "ebdc21771a5a5ea1dc16158e6d7c02112afd0809eaad401f9b855d67de52f7a5"},
+     fn make_request() -> ActorRequest = Read()
+     """, "6dbb6d8aaa93d6ed9e3636d544f0ef80c71919a518319b51af251da1c050bab2"},
     {"GSup",
      """
      mod M

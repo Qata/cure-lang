@@ -454,11 +454,11 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
         state Int
         on_cast
           Inc -> state + 1
-        on_call
-          Read -> state
+        on_call Read() returns Int
+          reply state
 
     fn make_message() -> ActorMessage = Inc
-      fn make_request() -> ActorRequest = Read
+      fn make_request() -> ActorRequest = Read()
     """
 
     warns = migrate_warns(src, "actor_use.cure")
