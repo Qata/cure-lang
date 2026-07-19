@@ -46,6 +46,55 @@ defmodule Cure.Compiler.Parser.FixityScan do
         _ -> []
       end)
 
+  @doc """
+  Fold the `precedencegroup`/`infix`/`prefix`/`postfix` declarations found in
+  `ast` into `base`, returning the extended `FixityTable`. Groups are registered
+  first (so `higher_than`/`lower_than` links resolve against groups declared
+  later in the same source) then operator lexemes bind to those groups.
+
+  Table-independent: reads only the harvested declaration nodes, never the
+  fixity table it is building, so it is safe to call while assembling the
+  built-in table at compile time.
+  """
+  @spec build_table(term(), FixityTable.t()) :: FixityTable.t()
+  def build_table(ast, base) do
+    nodes = collect_fixity(ast)
+
+    table =
+      Enum.reduce(nodes, base, fn
+        {:precedencegroup, meta, _}, acc ->
+          FixityTable.add_group(acc, Keyword.fetch!(meta, :name),
+            assoc: Keyword.get(meta, :assoc, :left),
+            higher_than: Keyword.get(meta, :higher_than, []),
+            lower_than: Keyword.get(meta, :lower_than, [])
+          )
+
+        _other, acc ->
+          acc
+      end)
+
+    Enum.reduce(nodes, table, fn
+      {:fixity, meta, _}, acc -> add_fixity_op(acc, meta)
+      _other, acc -> acc
+    end)
+  end
+
+  defp add_fixity_op(table, meta) do
+    lexeme = Keyword.get(meta, :operator)
+    group = Keyword.get(meta, :group)
+
+    if is_binary(lexeme) and is_atom(group) and not is_nil(group) do
+      case Keyword.get(meta, :fixity) do
+        :infix -> FixityTable.add_infix(table, lexeme, group)
+        :prefix -> FixityTable.add_prefix(table, lexeme, group)
+        :postfix -> FixityTable.add_postfix(table, lexeme, group)
+        _ -> table
+      end
+    else
+      table
+    end
+  end
+
   @spec collect_uses(term()) :: [%{target: String.t(), line: pos_integer()}]
   def collect_uses(ast),
     do:

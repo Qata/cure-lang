@@ -14,7 +14,7 @@ defmodule Cure.Compiler.BuiltinFixityPreludeTest do
     end
   end
 
-  test "the built-in table is memoized (same term on repeat)" do
+  test "the built-in table is a stable constant (same term on repeat)" do
     assert BuiltinFixity.table() == BuiltinFixity.table()
   end
 end

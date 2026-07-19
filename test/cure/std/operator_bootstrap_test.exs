@@ -30,11 +30,15 @@ defmodule Cure.Std.OperatorBootstrapTest do
   assertion under that flag would not actually verify anything for four of the
   five modules.
 
-  In real compilation the ordering is: `operators.cure` is parsed FIRST against
-  an empty table (this very seam, in `BuiltinFixity.compute/0`) to build the
-  table; the four interface modules are then parsed against the FULL built-in
-  table. So the only module with a hard empty-table obligation is
-  `operators.cure`, and it is exercised genuinely below. The property that
+  In real compilation the ordering is: `operators.cure` is harvested FIRST
+  against an empty table — at Elixir compile time, when `BuiltinFixity` bakes its
+  `@builtin_fixity_table` constant via `Parser.harvest/4` seeded with an explicit
+  empty base — to build the table; the four interface modules are then parsed
+  against the FULL built-in table. (The bake seeds the empty base directly rather
+  than through the `:cure_building_fixity_table` flag, but the obligation is the
+  same, and this test injects that empty base via the flag.) So the only module
+  with a hard empty-table obligation is `operators.cure`, and it is exercised
+  genuinely below. The property that
   matters for the other four — "no body uses an operator it itself defines" — is
   verified structurally: parse them through the real default pipeline and assert
   their AST contains ZERO infix/prefix operator nodes (`:binary_op`/`:unary_op`).
@@ -71,9 +75,9 @@ defmodule Cure.Std.OperatorBootstrapTest do
   defp operator_nodes(_other), do: []
 
   test "operators.cure parses against a genuinely empty fixity table" do
-    # The load-bearing bootstrap obligation: `operators.cure` is parsed to BUILD
-    # the built-in table, so it must parse with NO table present. This is exactly
-    # `BuiltinFixity.compute/0`'s seam. It is all inert precedence/fixity
+    # The load-bearing bootstrap obligation: `operators.cure` is harvested to
+    # BUILD the built-in table (at `BuiltinFixity`'s compile time), so it must
+    # parse with NO table present. It is all inert precedence/fixity
     # declarations, so an empty table parses it faithfully (no false-pass risk).
     prev = Process.put(:cure_building_fixity_table, true)
 

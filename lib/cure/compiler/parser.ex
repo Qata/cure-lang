@@ -2272,11 +2272,14 @@ defmodule Cure.Compiler.Parser do
   defp fixity_table(%__MODULE__{fixity_table: nil}), do: session_builtin_fixity_table()
   defp fixity_table(%__MODULE__{fixity_table: table}), do: table
 
-  # While the built-in table is itself being built (parsing `operators.cure`),
-  # seed an EMPTY table to break the `BuiltinFixity.table` ⇄ `parse` recursion.
-  # `operators.cure` is all inert declarations — no operator expressions to bind
-  # — so an empty table parses it faithfully. Otherwise consult the built-in
-  # table, which lives in the compiler layer (`BuiltinFixity`) precisely so it is
+  # `BuiltinFixity.table/0` is a compile-time constant, so consulting it here can
+  # never recurse back into parsing. The `:cure_building_fixity_table` flag is a
+  # supported seam for parsing an operator-defining source against an EMPTY table
+  # — `operators.cure` is all inert declarations, so an empty table parses it
+  # faithfully. The compile-time bake seeds `Parser.harvest/4` with an explicit
+  # empty base directly (never this flag); the flag path is exercised by
+  # `Cure.Std.OperatorBootstrapTest` and left as a defensive escape hatch.
+  # `BuiltinFixity` lives in the compiler layer precisely so the table is
   # reachable here even while `Preload` bakes its stdlib deps at compile time.
   defp session_builtin_fixity_table do
     if Process.get(:cure_building_fixity_table) do
