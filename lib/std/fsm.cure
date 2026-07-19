@@ -2,12 +2,17 @@
 mod Std.Fsm
   use Std.Syntax
   use Std.List
+  use Std.Option
+  use Std.Beam
+  use Std.ExitReason
 
   ## The structured FSM surface reuses the generic family parser. Legacy forms
   ## in FsmContainers remain available through ordinary grammar fallback.
   macro fsm <name: ModuleName>
     syntax family FsmDefinition
       state Type
+      optional states Type
+      optional initial Expression
       events Cases
       optional event_type Type
     accepts FsmDefinition
@@ -25,7 +30,11 @@ mod Std.Fsm
         let event_declarations = match definition.event_type
           None() -> [enum_type("FsmEvent", heads)]
           Some(_) -> []
-        emit_fsm_parts(name_syntax, definition.state, event_type, event_declarations, fsm_handler(body))
+        match definition.states
+          None() -> emit_fsm_parts(name_syntax, definition.state, event_type, event_declarations, fsm_handler(body))
+          Some(state_names) -> match definition.initial
+            None() -> Failure(:typed_fsm_requires_initial_state, [])
+            Some(initial_state) -> emit_typed_fsm_parts(name_syntax, definition.state, state_names, initial_state, event_type, event_declarations, body)
 
   ## `fsm` is a transparent standard-library macro. The base state-machine is
   ## an ordinary lifted GenStatem module; transition derivation and handlers
@@ -144,6 +153,26 @@ mod Std.Fsm
   type Transition(state, event) = Row(state, event, state)
   typealias AtomTransition = Transition(Atom, Atom)
 
+  ## Checked callback result for the preferred typed FSM surface. Constructors
+  ## are ordinary Cure values; `action_to_beam` is the single private-shape
+  ## lowering point to the tuple vocabulary required by `gen_statem`.
+  type FsmAction(state, data) = Keep(data) | Next(state, data) | Stop(ExitReason, data)
+
+  fn keep({s: Type}, data: d) -> FsmAction(s, d) = Keep(data)
+  fn next(state: s, data: d) -> FsmAction(s, d) = Next(state, data)
+  fn stop({s: Type}, reason: ExitReason, data: d) -> FsmAction(s, d) = Stop(reason, data)
+
+  local fn exit_reason_atom(reason: ExitReason) -> Atom = match reason
+    Normal() -> :normal
+    Kill() -> :kill
+    Shutdown() -> :shutdown
+    Because(value) -> value
+
+  fn action_to_beam(action: FsmAction(s, d)) -> BeamTerm = match action
+    Keep(data) -> Std.Beam.forget(%[:keep_state, data])
+    Next(state, data) -> Std.Beam.forget(%[:next_state, state, data])
+    Stop(reason, data) -> Std.Beam.forget(%[:stop, exit_reason_atom(reason), data])
+
   fn emit_fsm(input: FsmSyntax, event_body: Syntax) -> Syntax =
     match derive_pattern_heads(event_body)
       InvalidHeads(reason) -> Failure(reason, [])
@@ -173,6 +202,34 @@ mod Std.Fsm
             function("start_link", [parameter("initial", variable("State"))], start_type, call("Std.Otp.start_statem", [module_expr, variable("initial")]))
           ])
         ]))
+
+  fn emit_typed_fsm_parts(name_syntax: Syntax, data_type: Syntax, state_name_type: Syntax, initial_state: Syntax, event_type: Syntax, event_declarations: List(Syntax), event_body: Syntax) -> Syntax =
+    let module_name = match name_syntax
+      Leaf(_, _, SAtom(name)) -> SAtom(name)
+      _ -> SStr("Cure.Generated.TypedFsm")
+    let module_expr = match name_syntax
+      Leaf(_, _, SAtom(name)) -> atom_literal(name)
+      _ -> atom_literal(:generated_typed_fsm)
+    let init_type = call("Effect", [tuple_type([variable("Atom"), variable("StateName"), variable("Data")])])
+    let result_type = call("Effect", [variable("BeamTerm")])
+    let action_type = call("FsmAction", [variable("StateName"), variable("Data")])
+    let start_type = call("Effect", [variable("Tuple")])
+    let decided = call("decide", [variable("event"), variable("state"), variable("data")])
+    let encoded_body = call("Std.Fsm.action_to_beam", [decided])
+    block(append(event_declarations, [
+      lift_module_isolated(module_name, :gen_statem, [
+        use_module("Std.Otp"),
+        use_module("Std.Fsm"),
+        alias_node("Data", data_type),
+        alias_node("StateName", state_name_type),
+        alias_node("Event", event_type),
+        function("callback_mode", [], variable("Atom"), quote :handle_event_function),
+        function("init", [parameter("initial", variable("Data"))], init_type, tuple([atom_literal(:ok), initial_state, variable("initial")])),
+        function("decide", [parameter("event", variable("Event")), parameter("state", variable("StateName")), parameter("data", variable("Data"))], action_type, event_body),
+        function("handle_event", [parameter("event_type", variable("Atom")), parameter("event", variable("Event")), parameter("state", variable("StateName")), parameter("data", variable("Data"))], result_type, encoded_body),
+        function("start_link", [parameter("initial", variable("Data"))], start_type, call("Std.Otp.start_statem", [module_expr, variable("initial")]))
+      ])
+    ]))
 
   fn derive_fsm(input: FsmSyntax) -> Syntax =
     emit_fsm(input, input.event_body)

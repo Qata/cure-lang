@@ -51,6 +51,37 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     assert apply(:"Cure.Generated.ExplicitEvents", :handle_event, [:cast, :Stop, :initial, 3]) == :keep_state_and_data
   end
 
+  test "typed FSM states and actions lower to the native gen_statem protocol" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      type DoorState = Locked | Unlocked
+      type DoorEvent = Coin | Push
+
+      fsm Cure.Generated.TypedDoor
+        state Int
+        states DoorState
+        initial Locked
+        event_type DoorEvent
+        events
+          Coin -> Next(Unlocked(), data + 1)
+          Push -> Keep(data)
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert {:ok, pid} = apply(:"Cure.Generated.TypedDoor", :start_link, [0])
+    assert :sys.get_state(pid) == {:Locked, 0}
+
+    assert :ok = :gen_statem.cast(pid, :Coin)
+    assert :sys.get_state(pid) == {:Unlocked, 1}
+
+    assert :ok = :gen_statem.cast(pid, :Push)
+    assert :sys.get_state(pid) == {:Unlocked, 1}
+    :gen_statem.stop(pid)
+  end
+
   test "supervisor accepts the reusable structured family surface" do
     source = """
     mod M
