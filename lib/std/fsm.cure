@@ -17,6 +17,106 @@ mod Std.Fsm
     accepts FsmDefinition
     expands with derive_fsm_family
 
+  ## A state machine's transition graph is itself a grammar, not an opaque
+  ## callback body. State and event constructors are catalogued from these
+  ## rows and emitted as nominal types in the generated module.
+  macro fsm <name: ModuleName> with <data: Type>
+    syntax family TransitionDefinition
+      syntax <from: Name> --<event: Name>--> <to: Name>
+      optional update Expression
+    syntax family TransitionTableDefinition
+      one_or_more transitions TransitionDefinition
+    accepts TransitionTableDefinition
+    expands with derive_transition_table
+
+  fn derive_transition_table(name: ModuleNameSyntax, data: TypeSyntax, definition: TransitionTableDefinitionSyntax) -> Syntax =
+    match definition.transitions
+      [] -> Failure(:fsm_requires_transition, [])
+      [first | _] ->
+        let states = transition_states(definition.transitions, [])
+        let events = transition_events(definition.transitions, [])
+        emit_transition_table(name, data, first.from, states, events, definition.transitions)
+
+  fn transition_states(transitions: List(TransitionDefinitionSyntax), found: List(Syntax)) -> List(Syntax) = match transitions
+    [] -> found
+    [edge | rest] -> transition_states(rest, add_syntax_name(edge.to, add_syntax_name(edge.from, found)))
+
+  fn transition_events(transitions: List(TransitionDefinitionSyntax), found: List(Syntax)) -> List(Syntax) = match transitions
+    [] -> found
+    [edge | rest] -> transition_events(rest, add_syntax_name(edge.event, found))
+
+  fn add_syntax_name(value: Syntax, found: List(Syntax)) -> List(Syntax) = match syntax_key(value)
+    None() -> found
+    Some(key) -> match contains_syntax_name(found, key)
+      true -> found
+      false -> append(found, [value])
+
+  fn contains_syntax_name(values: List(Syntax), expected: Atom) -> Bool = match values
+    [] -> false
+    [value | rest] -> match syntax_key(value)
+      None() -> contains_syntax_name(rest, expected)
+      Some(name) -> match name == expected
+        true -> true
+        false -> contains_syntax_name(rest, expected)
+
+  fn syntax_key(value: Syntax) -> Option(Atom) = match attr(attrs(value), :constructor_key)
+    Found(SAtom(key)) -> Some(key)
+    _ -> None()
+
+  fn syntax_name(value: Syntax) -> Option(String) = match value
+    Leaf(_, _, SStr(name)) -> Some(name)
+    _ -> None()
+
+  fn syntax_variants(values: List(Syntax)) -> List(Syntax) = match values
+    [] -> []
+    [value | rest] -> match syntax_name(value)
+      None() -> syntax_variants(rest)
+      Some(name) -> [enum_variant(name) | syntax_variants(rest)]
+
+  fn syntax_constructor(value: Syntax) -> Syntax = match syntax_name(value)
+    None() -> value
+    Some(name) -> call(name, [])
+
+  fn emit_transition_table(name: Syntax, data: Syntax, initial: Syntax, states: List(Syntax), events: List(Syntax), transitions: List(TransitionDefinitionSyntax)) -> Syntax =
+    let module_name = match name
+      Leaf(_, _, SAtom(value)) -> SAtom(value)
+      _ -> SStr("Cure.Generated.Fsm")
+    let module_expr = match name
+      Leaf(_, _, SAtom(value)) -> atom_literal(value)
+      _ -> atom_literal(:generated_fsm)
+    let action_type = call("FsmAction", [variable("State"), variable("Data")])
+    let decision = transition_decision(transitions)
+    let encoded = call("Std.Fsm.action_to_beam", [call("decide", [variable("event"), variable("state"), variable("data")])])
+    lift_module_isolated(module_name, :gen_statem, [
+      use_module("Std.Otp"),
+      use_module("Std.Fsm"),
+      enum_type("State", syntax_variants(states)),
+      enum_type("Event", syntax_variants(events)),
+      alias_node("Data", data),
+      function("callback_mode", [], variable("Atom"), quote :handle_event_function),
+      function("init", [parameter("initial", variable("Data"))], call("Effect", [tuple_type([variable("Atom"), variable("State"), variable("Data")])]), tuple([atom_literal(:ok), syntax_constructor(initial), variable("initial")])),
+      function("decide", [parameter("event", variable("Event")), parameter("state", variable("State")), parameter("data", variable("Data"))], action_type, decision),
+      function("handle_event", [parameter("event_type", variable("Atom")), parameter("event", variable("Event")), parameter("state", variable("State")), parameter("data", variable("Data"))], call("Effect", [variable("BeamTerm")]), encoded),
+      function("start_link", [parameter("initial", variable("Data"))], call("Effect", [variable("Tuple")]), call("Std.Otp.start_statem", [module_expr, variable("initial")]))
+    ])
+
+  fn transition_decision(transitions: List(TransitionDefinitionSyntax)) -> Syntax = match transitions
+    [] -> call("Keep", [variable("data")])
+    [edge | rest] ->
+      let fallback = transition_decision(rest)
+      let event_match = Node(:pattern_match, [], [variable("event"),
+        match_arm(syntax_constructor(edge.event), call("Next", [syntax_constructor(edge.to), transition_update(edge.update)])),
+        match_arm(variable("_"), fallback)
+      ])
+      Node(:pattern_match, [], [variable("state"),
+        match_arm(syntax_constructor(edge.from), event_match),
+        match_arm(variable("_"), fallback)
+      ])
+
+  fn transition_update(update: Option(ExpressionSyntax)) -> Syntax = match update
+    None() -> variable("data")
+    Some(value) -> value
+
   fn derive_fsm_family(name: ModuleNameSyntax, definition: FsmDefinitionSyntax) -> Syntax =
     let body = Node(:pattern_match, [], [variable("event") | children(definition.events)])
     let name_syntax: Syntax = name

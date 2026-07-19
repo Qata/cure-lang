@@ -296,7 +296,7 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
 
       macro machine <name: ModuleName>
         syntax family Transition
-          syntax <from: Name> -- <event: Name> --> <to: Name>
+          syntax <from: Name> --<event: Name>--> <to: Name>
         syntax family Definition
           one_or_more transitions Transition
         accepts Definition
@@ -310,8 +310,8 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
           [] -> int_literal(0)
 
       fn result() -> Int = machine Turnstile
-        Locked -- Coin --> Unlocked
-        Unlocked -- Push --> Locked
+        Locked --Coin--> Unlocked
+        Unlocked --Push--> Locked
     end
     """
 

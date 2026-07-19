@@ -58,6 +58,16 @@ dated status blocks under `OPEN GATE — automatic message-code derivation` (cur
 through 2026-07-15). Read those for detail; this is the map.** Where the branch
 actually stands:
 
+**Structured production update (2026-07-19).** Reusable syntax families now
+support source-defined token productions and typed indented child sections.
+`Std.Fsm` uses that generic facility for the release-facing
+`State --Event--> State` graph: it derives nominal `State` and `Event` types,
+emits direct nested callback matches, preserves data by default, and accepts a
+local edge `update` expression. No FSM token rule or runtime table interpreter
+was added to the compiler. The same nested-production mechanism is the parser
+foundation required by the `knit` algebra's section/row grammar. Focused parser,
+printer, expansion, and live `gen_statem` tests are green.
+
 - **Transparent BEAM plan:** Phases 0, 1, 2, and 2.5 are COMPLETE. Phase 3 (`beam_ops`)
   is unblocked (2.5 done) and substantially landed. Phase 4 has replaced all four OTP
   forms — `sup`, `actor`, `fsm`, `app` each now lower through a source-defined

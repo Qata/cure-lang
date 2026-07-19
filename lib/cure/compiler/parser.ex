@@ -1206,8 +1206,8 @@ defmodule Cure.Compiler.Parser do
           {:ok, bindings, _progress, matched_state} ->
             case peek(matched_state) do
               %Token{type: type} when type in [:newline, :dedent, :eof] ->
-                values = Enum.map(production.fields, &Map.fetch!(bindings, &1))
-                value = {:family_input, [family: field.grammar.name], values}
+                production_values = Map.take(bindings, production.fields)
+                {value, matched_state} = parse_production_body(matched_state, field.grammar, production_values)
                 {:ok, field, value, matched_state}
 
               _ ->
@@ -1219,6 +1219,19 @@ defmodule Cure.Compiler.Parser do
         end
       end)
     end)
+  end
+
+  defp parse_production_body(state, grammar, values) do
+    nested_state = skip_newlines(state)
+
+    case peek(nested_state) do
+      %Token{type: :indent} ->
+        {value, nested_state} = parse_family_sections(advance(nested_state), grammar, values)
+        {value, expect_dedent(nested_state)}
+
+      _ ->
+        family_value(grammar, values, state)
+    end
   end
 
   defp parse_family_field_value(state, %{shape: "Type"}) do

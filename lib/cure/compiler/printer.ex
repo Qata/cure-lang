@@ -1495,7 +1495,7 @@ defmodule Cure.Compiler.Printer do
     production_lines =
       rule
       |> Map.get(:productions, [])
-      |> Enum.map(&("syntax " <> macro_segments_to_string(&1.segments)))
+      |> Enum.map(&("syntax " <> macro_production_segments_to_string(&1.segments)))
 
     ["syntax family #{name}\n#{pad}" <> Enum.join(include_lines ++ production_lines ++ field_lines, "\n#{pad}")]
   end
@@ -1599,6 +1599,27 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
+  defp render_family_capture(
+         %{grammar: %{productions: [production | _], fields: grammar_fields}},
+         {:family_input, _meta, values},
+         depth,
+         indent,
+         pad
+       ) do
+    bindings = Map.new(Enum.zip(Enum.map(grammar_fields, & &1.name), values))
+    head = render_family_production(production.segments, bindings, depth, indent)
+
+    nested =
+      grammar_fields
+      |> Enum.reject(&(&1.name in production.fields))
+      |> Enum.flat_map(fn field ->
+        render_family_capture(field, Map.get(bindings, field.name), depth + 1, indent, pad <> indent)
+      end)
+      |> Enum.join("")
+
+    ["\n#{pad}#{head}#{nested}"]
+  end
+
   defp render_family_capture(%{cardinality: cardinality} = field, values, depth, indent, pad)
        when cardinality in [:repeated, :one_or_more] and is_list(values),
        do: Enum.flat_map(values, &render_family_capture(field, &1, depth, indent, pad))
@@ -1614,7 +1635,45 @@ defmodule Cure.Compiler.Printer do
   defp render_family_capture_value(value, depth, indent, _pad),
     do: [" ", render(value, depth + 1, indent)]
 
+  defp render_family_production(segments, bindings, depth, indent) do
+    {pieces, _previous} =
+      segments
+      |> Enum.with_index()
+      |> Enum.map_reduce(nil, fn {segment, index}, previous ->
+        text =
+          case segment do
+            {:lit, word} -> word
+            {:hole, %{name: name}} -> render(Map.fetch!(bindings, name), depth, indent)
+          end
+
+        separator =
+          if compact_production_boundary?(previous, segment, index), do: "", else: if(previous, do: " ", else: "")
+        {separator <> text, segment}
+      end)
+
+    Enum.join(pieces)
+  end
+
+  defp compact_production_boundary?({:lit, "-"}, {:lit, word}, _index) when word in ["-", "->"], do: true
+  defp compact_production_boundary?({:lit, "-"}, {:hole, _}, _index), do: true
+  defp compact_production_boundary?({:hole, _}, {:lit, "-"}, index), do: index > 1
+  defp compact_production_boundary?(_previous, _current, _index), do: false
+
   defp macro_segments_to_string(segments), do: Enum.map_join(segments, " ", &macro_segment_to_string/1)
+
+  defp macro_production_segments_to_string(segments) do
+    {pieces, _previous} =
+      segments
+      |> Enum.with_index()
+      |> Enum.map_reduce(nil, fn {segment, index}, previous ->
+        separator =
+          if compact_production_boundary?(previous, segment, index), do: "", else: if(previous, do: " ", else: "")
+
+        {separator <> macro_segment_to_string(segment), segment}
+      end)
+
+    Enum.join(pieces)
+  end
   defp macro_segment_to_string({:lit, word}), do: word
   defp macro_segment_to_string({:hole, %{name: name, kind: kind}}), do: "<#{name}: #{kind}>"
 

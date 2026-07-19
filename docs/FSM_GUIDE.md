@@ -6,79 +6,43 @@ not contain a separate FSM parser or object class.
 
 ## Defining An FSM
 
-The smallest form creates a lifted module with a default state payload:
+The preferred surface is the transition graph itself:
 
 ```cure
-fsm Cure.TrafficLight
+fsm Cure.Turnstile with Int
+  Locked --Coin--> Unlocked
+    update data + 1
+  Unlocked --Push--> Locked
+  Unlocked --Coin--> Unlocked
+    update data + 1
+  Locked --Push--> Locked
 ```
 
-State and callback result types can be made explicit:
+`with Int` declares the machine's data type. The macro catalogs every endpoint
+into a nominal `State` type (`Locked | Unlocked`) and every label into a nominal
+`Event` type (`Coin | Push`). The first source state is the initial state.
 
-```cure
-fsm Cure.TrafficLight state Atom handle_event
-  :keep_state_and_data
-```
-
-The macro emits `callback_mode/0`, `init/1`, `handle_event/4`, and a typed
-`start_link/1`. The callback result is declared as `Effect(Atom)` and erased
-to the ordinary `gen_statem` return value after checking. A pure callback body
-is lifted automatically; an effectful body may sequence `beam_ops`:
-
-```cure
-fsm Cure.Observed state Int handle_event
-  let pid: Pid(Atom) = beam_ops self
-  :keep_state_and_data
-```
-
-## Initial State And Payload
-
-`state T` gives the module-local `State` alias used by `init/1` and the data
-slot of `handle_event/4`. The explicit initializer form controls the returned
-state tuple:
-
-```cure
-fsm Cure.Ready state Int init
-  %[:ok, :ready, 0]
-```
-
-`with value` creates a zero-argument starter that passes the value as the
-initial callback argument:
-
-```cure
-fsm Cure.Payload with 0
-```
-
-## Event Callback
-
-The callback form receives the standard `gen_statem` arguments:
-
-```cure
-fsm Cure.Counter state Int handle_event
-  match event
-    :increment -> :keep_state_and_data
-    _ -> :keep_state_and_data
-```
-
-The `event_type`, `event`, `state`, and `data` names are available in the
-callback body. The body must elaborate to the declared `Effect(Atom)` result.
-Nested macros are expanded before the callback is checked.
+An edge preserves `data` unless it has an indented `update` expression. The
+expression is checked as the declared data type and may refer to `data`; the
+target state is already fixed by the edge and is not repeated in callback
+tuples.
 
 ## Transition Tables
 
-Transition rows are ordinary checked Cure ADT values. They are not parsed by a
-compiler-owned transition grammar:
+Transition rows are parsed by a grammar production declared in `Std.Fsm`, not
+by a compiler-owned FSM parser:
 
 ```cure
-fsm Cure.Light state Int transitions [
-  transition :locked :coin :unlocked,
-  transition :unlocked :push :locked
-]
+fsm Cure.Light with Int
+  Red --Timer--> Green
+  Green --Timer--> Yellow
+  Yellow --Timer--> Red
 ```
 
-The generated callback calls the polymorphic `Std.Fsm.dispatch/4` function.
-Matching rows return the ordinary `{:next_state, state, data}` tuple; an
-unmatched row keeps the current state. Additional lifecycle and payload
-policies belong in standard-library macros over this vocabulary.
+The generated callback is direct nested pattern matching over the derived
+constructors. It returns checked `FsmAction` values and lowers them to the
+native `gen_statem` protocol; no transition table or syntax interpreter remains
+at runtime.
 
 ## Runtime
 
@@ -109,5 +73,6 @@ marker, raw-source compilation, or direct code-server load. Generated modules
 are collected and emitted by the same generic lifted-module path as any
 user-defined macro.
 
-Transition-table and richer event/state derivation remain language-level
-macro work built on this callback floor; they are not compiler-owned syntax.
+The transition grammar and event/state derivation are language-level macro
+work. Another package can define the same kind of declarative algebra without
+changing the compiler.

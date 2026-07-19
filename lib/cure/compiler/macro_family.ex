@@ -329,8 +329,12 @@ defmodule Cure.Compiler.MacroFamily do
       Enum.map(family.fields, fn field ->
         case Map.get(family_map, field.shape) do
           %{productions: [_ | _]} = nested ->
-            nested_fields = production_fields(nested.productions)
-            nested = nested |> Map.put(:fields, nested_fields) |> Map.put(:name, field.shape)
+            nested_fields = production_fields(nested.productions) ++ Map.get(nested, :fields, [])
+            nested =
+              nested
+              |> Map.put(:fields, nested_fields)
+              |> Map.put(:name, field.shape)
+              |> Map.put(:family, field.shape)
             Map.put(field, :grammar, nested)
 
           _ ->

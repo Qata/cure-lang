@@ -93,7 +93,7 @@ defmodule Cure.Compiler.MacroDefParseTest do
       parse!("""
       macro Machine
         syntax family Transition
-          syntax <from: Name> -- <event: Name> --> <to: Name>
+          syntax <from: Name> --<event: Name>--> <to: Name>
         syntax family Definition
           one_or_more transitions Transition
         accepts Definition

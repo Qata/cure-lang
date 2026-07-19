@@ -82,6 +82,33 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     :gen_statem.stop(pid)
   end
 
+  test "transition-table FSM derives nominal State and Event types from its graph" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      fsm Cure.Generated.Turnstile with Int
+        Locked --Coin--> Unlocked
+          update data + 1
+        Unlocked --Push--> Locked
+        Unlocked --Coin--> Unlocked
+          update data + 1
+        Locked --Push--> Locked
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+    assert {:ok, pid} = apply(:"Cure.Generated.Turnstile", :start_link, [0])
+    assert :sys.get_state(pid) == {:Locked, 0}
+
+    assert :ok = :gen_statem.cast(pid, :Coin)
+    assert :sys.get_state(pid) == {:Unlocked, 1}
+
+    assert :ok = :gen_statem.cast(pid, :Push)
+    assert :sys.get_state(pid) == {:Locked, 1}
+    :gen_statem.stop(pid)
+  end
+
   test "supervisor accepts the reusable structured family surface" do
     source = """
     mod M

@@ -525,6 +525,27 @@ expander, preserving the distinction between an absent section and a section
 whose semantic value happens to be defaulted. Cross-field validation remains
 ordinary Cure code returning structured diagnostics, not a new constraint DSL.
 
+Families may also declare reusable token productions. A production captures
+ordinary typed grammar categories, and a field whose shape names that family
+may consume the production without adding an artificial section keyword:
+
+```cure
+syntax family Transition
+  syntax <from: Name> --<event: Name>--> <to: Name>
+  optional update Expression
+
+syntax family Machine
+  one_or_more transitions Transition
+```
+
+The production's holes and structured child sections form one generated typed
+record. Thus `Locked --Coin--> Unlocked` is data for the source-defined macro,
+not compiler-owned FSM syntax. An optional indented body belongs to that record,
+so the same facility can represent nested grammars such as knitting sections
+and rows. Production matching, indentation, cardinality, provenance, reflection,
+printing, and diagnostics are generic compiler mechanisms; the meaning of the
+captured names and punctuation remains ordinary Cure expander code.
+
 The semantic contract is fixed: a user can define an actor-like macro by
 reusing the generic family and changing only its expansion function. The
 generated result remains direct Cure declarations and direct foreign

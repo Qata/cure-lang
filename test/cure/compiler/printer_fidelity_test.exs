@@ -174,7 +174,7 @@ defmodule Cure.Compiler.PrinterFidelityTest do
     source = """
     macro fsm <name: ModuleName>
       syntax family Transition
-        syntax <from: Name> -- <event: Name> --> <to: Name>
+        syntax <from: Name> --<event: Name>--> <to: Name>
       syntax family Definition
         one_or_more transitions Transition
       accepts Definition
@@ -182,7 +182,7 @@ defmodule Cure.Compiler.PrinterFidelityTest do
     """
 
     out = source |> parse!() |> Printer.quoted_to_string()
-    assert out =~ "syntax <from: Name> - - <event: Name> - -> <to: Name>"
+    assert out =~ "syntax <from: Name> --<event: Name>--> <to: Name>"
     assert out =~ "one_or_more transitions Transition"
     assert {:macro_def, _, [transition, _, _, _]} = parse!(out)
     assert length(transition.productions) == 1
