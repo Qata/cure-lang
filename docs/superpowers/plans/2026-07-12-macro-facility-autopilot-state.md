@@ -78,6 +78,17 @@ optional operations; cleanup and full gates. Legacy `on_transition`, raw Atom
 events, and the opaque caller/meta/payload runtime container are not compatibility
 requirements.
 
+**Shared actor substrate update (2026-07-19).** `Std.ActorBehavior` now owns
+the transparent behavior-module construction boundary. `Std.Actor` delegates
+both its state-aliased and state-polymorphic forms to that substrate, while
+all three `Std.Fsm` emitters delegate to its constrained `gen_statem` strategy.
+Architecture guards prohibit either public macro from calling
+`lift_module_isolated` directly and prohibit host Builtins/runtime indirection
+in the substrate. The 120-module standard library and 16 focused architecture,
+actor-family, and live typed-FSM tests pass. The next ordered FSM item is typed
+event payload production; richer process APIs/lifecycle remain governed by the
+FSM specification.
+
 - **Transparent BEAM plan:** Phases 0, 1, 2, and 2.5 are COMPLETE. Phase 3 (`beam_ops`)
   is unblocked (2.5 done) and substantially landed. Phase 4 has replaced all four OTP
   forms — `sup`, `actor`, `fsm`, `app` each now lower through a source-defined

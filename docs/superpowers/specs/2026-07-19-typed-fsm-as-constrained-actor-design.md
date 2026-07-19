@@ -1,6 +1,6 @@
 # Typed FSMs as Constrained Actors
 
-**Status:** Proposed authoritative design for the remaining FSM work
+**Status:** Authoritative; phases 1–2 foundation implemented
 
 **Date:** 2026-07-19
 
@@ -523,6 +523,18 @@ edge or lifecycle section.
 
 Implement in this order. Each phase requires a focused commit and green focused
 tests before the next phase.
+
+**Implementation status (2026-07-19):** `Std.ActorBehavior` now owns the one
+transparent behavior-module emission boundary. `Std.Actor` targets its
+`actor_module`/`actor_module_raw` strategies and `Std.Fsm` targets its
+`state_machine_module` strategy. Thus both surfaces recursively produce direct
+OTP callback modules through the same source-defined compile-time substrate;
+neither surface invokes `lift_module_isolated` independently. Existing derived
+actor behavior and the typed FSM graph—including default-preserving,
+single-field, multi-field, and multiline record updates—pass live Unix BEAM
+tests. This establishes the phase 1 substrate and phase 2 lowering foundation;
+the richer shared lifecycle/API work remains incremental work in the phases
+below rather than a reason to reintroduce a standalone FSM shell.
 
 ### Phase 1: shared actor behavior substrate
 
