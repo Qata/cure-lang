@@ -299,6 +299,9 @@ mod Std.Syntax
   fn let_binding(name: String, value: Syntax) -> Syntax =
     Node(:assignment, [KV(:let, SBool(true))], [variable(name), value])
 
+  fn typed_let_binding(name: String, kind: Syntax, value: Syntax) -> Syntax =
+    Node(:assignment, [KV(:let, SBool(true)), KV(:type_annotation, SSyntax(kind))], [variable(name), value])
+
   fn parameter_literals(params: List(Syntax)) -> SynLit =
     match params
       [] -> SList([])

@@ -147,4 +147,33 @@ defmodule Cure.Compiler.TypedActorApiTest do
     assert 6 = apply(actor, :addAndRead, [pid, 2])
     assert :unit = apply(actor, :stop, [pid])
   end
+
+  test "typed lifecycle hooks transform startup state and receive ExitReason on stop" do
+    source = """
+    mod LifecycleActorDefinition
+      use Std.Actor
+
+      actor Cure.Generated.LifecycleCounter
+        state Int
+        initial 4
+        on_start state + 1
+        on_message
+          Increment() -> state + 1
+        on_call Value() returns Int
+          reply state
+        on_stop
+          match reason
+            Normal() -> :ok
+            Kill() -> :ok
+            Shutdown() -> :ok
+            Because(_) -> :ok
+    """
+
+    assert {:ok, _definition} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    actor = :"Cure.Generated.LifecycleCounter"
+    assert {:Started, pid} = apply(actor, :start, [])
+    assert 5 = apply(actor, :value, [pid])
+    assert :unit = apply(actor, :stop, [pid])
+    refute Process.alive?(pid)
+  end
 end

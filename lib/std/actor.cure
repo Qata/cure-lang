@@ -17,6 +17,7 @@ mod Std.Actor
       optional messages Type
       optional initial Expression
       optional init Code
+      optional on_start Expression
       optional on_message Cases
       optional on_cast Cases
       repeated queries ActorQueryDefinition
@@ -24,6 +25,7 @@ mod Std.Actor
       optional handle_cast Code
       optional handle_info Code
       optional terminate Code
+      optional on_stop Expression
       optional code_change Code
       optional body Declarations
     accepts ActorDefinition
@@ -45,14 +47,12 @@ mod Std.Actor
     let info_body = match definition.on_info
       None() -> Raw(SOpaque)
       Some(value) -> Node(:pattern_match, [], [variable("message") | children(value)])
-    let terminate_body = match definition.terminate
-      None() -> Raw(SOpaque)
-      Some(value) -> value
+    let terminate_body = derive_actor_stop(definition.on_stop, definition.terminate)
     let code_change_body = match definition.code_change
       None() -> Raw(SOpaque)
       Some(value) -> value
     let extra_declarations = optional_declarations(definition.body)
-    let init_spec = derive_actor_init(definition.state, definition.initial, definition.init)
+    let init_spec = derive_actor_init(definition.state, definition.initial, definition.init, definition.on_start)
     let name_syntax: Syntax = name
     let module_name: SynLit = match name_syntax
       Leaf(_, _, SAtom(value)) -> SAtom(value)
@@ -91,7 +91,7 @@ mod Std.Actor
     let module_expr: Syntax = match name_syntax
       Leaf(_, _, SAtom(value)) -> atom_literal(value)
       _ -> atom_literal(:generated_actor)
-    let init_spec = derive_actor_init(definition.state, definition.initial, definition.init)
+    let init_spec = derive_actor_init(definition.state, definition.initial, definition.init, definition.on_start)
     let extra_declarations = optional_declarations(definition.body)
     let cast_body = match definition.handle_cast
       None() -> quote %[:noreply, state]
@@ -99,9 +99,7 @@ mod Std.Actor
     let info_body = match definition.handle_info
       None() -> Raw(SOpaque)
       Some(value) -> value
-    let terminate_body = match definition.terminate
-      None() -> Raw(SOpaque)
-      Some(value) -> value
+    let terminate_body = derive_actor_stop(definition.on_stop, definition.terminate)
     let code_change_body = match definition.code_change
       None() -> Raw(SOpaque)
       Some(value) -> value
@@ -289,12 +287,31 @@ mod Std.Actor
   fn default_actor_init(state_type: Syntax) -> ActorInitSpec =
     ActorInitSpec{parameter: parameter("initial", variable("State")), body: quote %[:ok, initial], start_parameters: [parameter("initial", state_type)], start_argument: variable("initial")}
 
-  fn derive_actor_init(state_type: Syntax, initial: Option(Syntax), init: Option(Syntax)) -> ActorInitSpec =
+  fn derive_actor_init(state_type: Syntax, initial: Option(Syntax), init: Option(Syntax), on_start: Option(Syntax)) -> ActorInitSpec =
     match initial
-      Some(value) -> ActorInitSpec{parameter: parameter("args", variable("Atom")), body: quote %[:ok, $(value)], start_parameters: [], start_argument: atom_literal(:unit)}
+      Some(value) -> ActorInitSpec{parameter: parameter("args", variable("Atom")), body: actor_start_body(value, on_start), start_parameters: [], start_argument: atom_literal(:unit)}
       None() -> match init
         Some(value) -> ActorInitSpec{parameter: parameter("args", variable("Atom")), body: value, start_parameters: [], start_argument: atom_literal(:unit)}
-        None() -> default_actor_init(state_type)
+        None() ->
+          let base = default_actor_init(state_type)
+          ActorInitSpec{parameter: base.parameter, body: actor_start_body(variable("initial"), on_start), start_parameters: base.start_parameters, start_argument: base.start_argument}
+
+  fn actor_start_body(initial_state: Syntax, on_start: Option(Syntax)) -> Syntax = match on_start
+    None() -> tuple([atom_literal(:ok), initial_state])
+    Some(body) -> block([
+      let_binding("state", initial_state),
+      tuple([atom_literal(:ok), body])
+    ])
+
+  fn derive_actor_stop(on_stop: Option(Syntax), raw_terminate: Option(Syntax)) -> Syntax = match on_stop
+    Some(body) -> block([
+      let_binding("reason", call("Std.ExitReason.from_atom", [variable("reason")])),
+      typed_let_binding("stopped", variable("Atom"), body),
+      atom_literal(:ok)
+    ])
+    None() -> match raw_terminate
+      Some(body) -> body
+      None() -> Raw(SOpaque)
 
   ## State-polymorphic default init for stateless actor forms. Mirrors
   ## `default_actor_init` but binds the state to a free type var `p` instead of the

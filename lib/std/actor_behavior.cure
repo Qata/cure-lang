@@ -17,7 +17,8 @@ mod Std.ActorBehavior
 
   fn actor_module_raw(module_name: SynLit, declarations: List(Syntax)) -> Syntax =
     behavior_module(module_name, :gen_server, [
-      use_module("Std.Otp")
+      use_module("Std.Otp"),
+      use_module("Std.ExitReason")
     ], declarations)
 
   ## An FSM is an actor whose mailbox protocol is constrained by a transition
