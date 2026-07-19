@@ -83,6 +83,26 @@ mod Std.Otp
   ## erases to OTP's `{pid, tag}` tuple but remains linear at Cure call sites.
   typealias Reply(r) = Tuple(RawPid(NoMessage, NoMessage, Plain), Ref)
 
+  ## A typed message ADDRESS — the Gleam-style `Subject`. A fresh `(owner-pid, unique-tag)` pair; UNLIKE `Pid(m)`
+  ## (one message type per process) a single process may own SEVERAL subjects of different types, each a distinct
+  ## typed channel. `subject_send` delivers a TAGGED message to the owner; `subject_receive` matches that tag, so
+  ## channels never cross. Erases to the bare `{pid, ref}` tuple — no registry / `persistent_term` (AtomVM-safe).
+  ## This is the addressing layer `Selector` (typed selective receive) and typed `Name` build on.
+  typealias Subject(m) = Tuple(Pid(m), Ref)
+
+  ## Mint a fresh subject owned by the calling process.
+  fn new_subject({m: Type}) -> Effect(Subject(m)) = raw_subject_new()
+
+  ## Send a typed message to a subject — delivered TAGGED to the owner's mailbox (fire-and-forget, like `tell`).
+  fn subject_send({m: Type}, subject: Subject(m), message: m) -> Effect(Unit) =
+    let sent = raw_subject_send(subject, message)
+    ()
+
+  ## Receive the next message addressed to `subject` within `timeout` ms; `None` on timeout. Only the subject's
+  ## OWNER (the process that created it) may receive.
+  fn subject_receive({m: Type}, subject: Subject(m), timeout: Int) -> Effect(Option(m)) =
+    raw_subject_receive(subject, timeout)
+
   ## A process message set. The first algebra floor stores tag and arity
   ## shapes; typed ADT payload derivation is added by the transparent macro
   ## phase once callback syntax is available.

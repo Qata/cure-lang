@@ -1,5 +1,6 @@
 @group(:concurrency)
 mod Std.Otp.Raw
+  use Std.Option
   ## SEALED unsafe raw base for the typed BEAM process algebra.
   ##
   ## Honest, permissive, effect-typed externs over stock Erlang/OTP BIFs — the
@@ -223,4 +224,20 @@ mod Std.Otp.Raw
   ## turns that into an `Option`.
   @extern(:erlang, :whereis, 1)
   fn raw_whereis(name: Atom) -> Effect(BarePid | :undefined)
+
+  ## ── Subject: a typed message ADDRESS `{owner_pid, tag_ref}` (Gleam-style, F-1 addressing) ──
+  ##
+  ## A subject is a fresh `(pid, unique reference)` pair. A send delivers `{tag, message}` to the owner's mailbox
+  ## and a receive matches THAT tag, so one process may own several subjects of different message types and
+  ## receive each independently — the decoupling `Pid(m)` (one message type per process) cannot give. The tagged
+  ## `receive … after … end` is not a BIF, so these route through the `Cure.Otp.Builtins` runtime helper;
+  ## `Std.Otp` narrows them into the typed `Subject(m)` surface. Ordinary effect discipline (each op is `Effect`).
+  @extern(Elixir.Cure.Otp.Builtins, :subject_new, 0)
+  fn raw_subject_new({m: Type}) -> Effect(Tuple(RawPid(m, m, Plain), Ref))
+
+  @extern(Elixir.Cure.Otp.Builtins, :subject_send, 2)
+  fn raw_subject_send({m: Type}, subject: Tuple(RawPid(m, m, Plain), Ref), message: m) -> Effect(Atom)
+
+  @extern(Elixir.Cure.Otp.Builtins, :subject_receive, 2)
+  fn raw_subject_receive({m: Type}, subject: Tuple(RawPid(m, m, Plain), Ref), timeout: Int) -> Effect(Option(m))
 end
