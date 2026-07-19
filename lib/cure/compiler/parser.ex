@@ -7815,6 +7815,26 @@ defmodule Cure.Compiler.Parser do
       :lbrace ->
         parse_refinement_type(state)
 
+      # Tuple type `%[A, B]` — the canonical tuple-type sigil, mirroring the value tuple `%[a, b]` and removing
+      # the value/type inconsistency where values were `%[a, b]` but their types were `(A, B)`. It produces the
+      # SAME `{:tuple_type, …}` node as `Tuple(A, B)` — including optional per-position binders `%[x: A, B(x)]`
+      # for a dependent telescope — so resolution, display, and codegen are unchanged. `%[]` is the empty tuple.
+      # (Original `%[A, B]` proposal: Aleksei Matiushkin / am-kantox; adapted here to the dependent parser.)
+      :tuple_open ->
+        state = advance(state)
+
+        case peek(state) do
+          %Token{type: :rbracket} ->
+            {{:tuple_type, [arity: 0, binders: []], []}, advance(state)}
+
+          _ ->
+            {positions, state} = parse_tuple_positions(state, [])
+            state = expect(state, :rbracket)
+            binders = Enum.map(positions, &elem(&1, 0))
+            types = Enum.map(positions, &elem(&1, 1))
+            {{:tuple_type, [arity: length(positions), binders: binders], types}, state}
+        end
+
       :lparen ->
         # Grouped/tuple type `(A, B)` or function type `(A, B) -> C`. Each element
         # may carry an optional binder name `(x: A) -> …` — a DEPENDENT arrow whose
@@ -7846,7 +7866,7 @@ defmodule Cure.Compiler.Parser do
             # Grouped type or tuple type — binders (if any) are not meaningful here.
             case Enum.map(inner, &elem(&1, 1)) do
               [single] -> {single, state}
-              many -> {{:tuple, [], many}, state}
+              many -> {{:tuple, [], many}, deprecate_paren_tuple(state, token, length(many))}
             end
         end
 
@@ -8013,6 +8033,28 @@ defmodule Cure.Compiler.Parser do
       _ -> {Enum.reverse(acc), state}
     end
   end
+
+  # Soft-deprecate the legacy parenthesised tuple type `(A, B)` in favour of the value/type-consistent `%[A, B]`
+  # sigil. Emitted only as a pipeline event (never a hard error) and only when events are on and a real file is
+  # known, so `(A, B)` keeps compiling to identical output — the only change is the hint.
+  defp deprecate_paren_tuple(%__MODULE__{emit_events: true, file: file} = state, token, arity)
+       when is_binary(file) do
+    Events.emit(
+      :parser,
+      :deprecation,
+      %{
+        code: "E-TYPE-TUPLE-PAREN",
+        arity: arity,
+        message:
+          "parenthesised tuple type `(A, B)` is deprecated; write `%[A, B]` (the tuple-type sigil matching the value tuple `%[a, b]`)"
+      },
+      Events.meta(file, token.line)
+    )
+
+    state
+  end
+
+  defp deprecate_paren_tuple(state, _token, _arity), do: state
 
   defp maybe_parse_function_type(state, left) do
     case peek(state) do
