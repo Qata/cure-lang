@@ -732,12 +732,23 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term, type}
         end
 
-      # Numeric negation. Desugars to `negate` when the `Additive` method is in
-      # scope; otherwise type-directed like binary arithmetic: infer the operand's
-      # primitive kind, then lower to `int_neg`/`float_neg` (both return their
-      # operand type). A non-numeric operand rejects as unsupported.
+      # Numeric negation. Desugars to `negate` ONLY when it is a genuine
+      # overloadable interface method (`Std.Arithmetic`'s `Additive.negate`) in
+      # scope — mirroring the binary-operator path, which routes through
+      # `Resolve.method?` (see `elaborate_named_call_resolved`). Otherwise it is
+      # type-directed like binary arithmetic: infer the operand's primitive kind,
+      # then lower to `int_neg`/`float_neg` (both return their operand type).
+      #
+      # The trigger MUST be the interface-method check, not the broad
+      # `operator_meaning?`: the latter also matches an ordinary function named
+      # `negate` (e.g. the ambient `Std.Int.negate`, prelude-visible because
+      # `type Int` is `@prelude`). Routing `-x` to that monomorphic `Int -> Int`
+      # function hijacked negation for EVERY operand kind, so `-(f : Float)`
+      # lowered to an `Int` result and failed conversion against `Float`. Keying
+      # on `method?` lets a real `Additive` instance dispatch per operand type
+      # while a plain `negate` function falls through to the built-in lowering.
       :- ->
-        if operator_meaning?(env, :negate) do
+        if Cure.Elab.Resolve.method?(env, :negate) do
           elaborate_expr_typed({:function_call, [name: "negate"], [operand]}, names, ctx, env)
         else
           with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
