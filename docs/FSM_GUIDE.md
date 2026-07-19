@@ -39,8 +39,8 @@ rec TurnstileData
 fsm Cure.Turnstile with TurnstileData
   Locked --Coin--> Unlocked
     update TurnstileData{
-      data |
-      coins: data.coins + 1,
+      data
+      | coins: data.coins + 1,
       enabled: true
     }
   Unlocked --Push--> Locked
@@ -49,6 +49,9 @@ fsm Cure.Turnstile with TurnstileData
     update TurnstileData{data | coins: data.coins + 1}
   Locked --Push--> Locked
 ```
+
+The `|` may instead occupy its own line before the first field; both layouts
+parse as the same typed record update.
 
 ## Transition Tables
 

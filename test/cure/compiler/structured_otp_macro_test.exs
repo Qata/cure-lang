@@ -177,6 +177,47 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     :gen_statem.stop(pid)
   end
 
+  test "multiline record updates accept the bar alone or beside the first field" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      rec LayoutData
+        count: Int
+        active: Bool
+        generation: Int
+
+      fsm Cure.Generated.RecordLayoutFsm with LayoutData
+        Idle --Activate--> Active
+          update LayoutData{
+            data
+            |
+            count: data.count + 1,
+            active: true
+          }
+        Active --Deactivate--> Idle
+          update LayoutData{
+            data
+            | count: data.count + 10,
+            active: false
+          }
+
+      fn initial_data() -> LayoutData =
+        LayoutData{count: 4, active: false, generation: 99}
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    initial = apply(module, :initial_data, [])
+    assert {:ok, pid} = apply(:"Cure.Generated.RecordLayoutFsm", :start_link, [initial])
+
+    assert :ok = :gen_statem.cast(pid, :Activate)
+    assert :sys.get_state(pid) == {:Active, {:LayoutData, 5, true, 99}}
+
+    assert :ok = :gen_statem.cast(pid, :Deactivate)
+    assert :sys.get_state(pid) == {:Idle, {:LayoutData, 15, false, 99}}
+    :gen_statem.stop(pid)
+  end
+
   test "supervisor accepts the reusable structured family surface" do
     source = """
     mod M
