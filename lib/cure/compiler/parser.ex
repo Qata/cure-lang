@@ -5621,10 +5621,13 @@ defmodule Cure.Compiler.Parser do
 
   defp fixity_op_token?(_), do: false
 
-  # `infix|prefix|postfix <op> : Group`. Whether the operator is "built in"
-  # (non-redeclarable) is not marked here — it is decided by LOCATION at
-  # elaboration: any operator declared in `Std.Operators` is protected. See
-  # `Cure.Elab.Program.check_no_builtin_rebind`.
+  # `infix|prefix|postfix <op> : Group`. Whether the operator conflicts with an
+  # existing declaration is not decided here — it is decided when the module's
+  # declarations are folded into `fixity(M)`
+  # (`Cure.Compiler.Parser.FixityResolver.assemble/5`): a same-lexeme
+  # different-group (or same-group-name different-body) redeclaration is a
+  # `:conflicting_operator_fixity` / `:conflicting_precedence_group` error; an
+  # identical redeclaration is a no-op.
   defp parse_fixity(state) do
     kw = peek(state)
     fixity = String.to_atom(to_string(kw.value))

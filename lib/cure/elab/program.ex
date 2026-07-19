@@ -112,7 +112,6 @@ defmodule Cure.Elab.Program do
          :ok <- check_no_duplicate_types(ast),
          :ok <- check_no_duplicate_ctors(ast),
          :ok <- check_no_fn_ctor_collision(ast),
-         :ok <- check_no_builtin_rebind(ast),
          :ok <- check_no_precedence_cycle(ast),
          :ok <- check_proof_shapes(ast) do
       check_no_sibling_collision(ast)
@@ -120,65 +119,34 @@ defmodule Cure.Elab.Program do
   end
 
   # A module's `precedencegroup` declarations may not describe a cyclic order —
-  # two groups that each claim to bind tighter than the other (directly or
-  # through the built-in tower) have no satisfiable ranking. The Kahn sort in
-  # `FixityTable.recompute/1` linearises such a cycle silently, so the diagnostic
-  # lives here: assemble the module's groups onto the built-in table (so a cycle
-  # closed through a built-in group like `Additive` is caught) and reject if any
-  # group lies on a cycle. Elaborating `Std.Operators` itself is a no-op — its
+  # two groups that each claim to bind tighter than the other (directly, through
+  # the built-in tower, or through a group reached across a `use` edge) have no
+  # satisfiable ranking. The Kahn sort in `FixityTable.recompute/1` linearises
+  # such a cycle silently, so the diagnostic lives here: assemble the module's
+  # full `fixity(M)` — built-in prelude base ∪ own decls ∪ the `use`-closure —
+  # and reject if any group lies on a cycle. This is the SAME union the parser
+  # builds (`FixityResolver.assemble/5`), so a cycle closed only through a used
+  # module's group is caught. Elaborating `Std.Operators` itself is a no-op — its
   # groups re-add idempotently onto the identical built-in base.
   defp check_no_precedence_cycle(ast) do
     base = Cure.Compiler.Parser.BuiltinFixity.table()
-    table = Cure.Compiler.Parser.BuiltinFixity.extend(base, ast)
+    own_fixity = Cure.Compiler.Parser.FixityScan.collect_fixity(ast)
+    own_uses = Cure.Compiler.Parser.FixityScan.collect_use_targets(ast)
 
-    case Cure.Compiler.Parser.FixityTable.cyclic_groups(table) do
-      [] -> :ok
-      groups -> {:error, {:precedence_cycle, groups}}
-    end
-  end
-
-  # A `precedencegroup`/`infix`/`prefix`/`postfix` declaration may not redeclare
-  # the fixity of any operator already declared by the stdlib. The protection is
-  # by LOCATION: every operator the language recognises is declared in
-  # `Std.Operators`, and `BuiltinFixity.table()` IS the parse of that module, so
-  # "declared in the stdlib" ≡ "present in the built-in table"
-  # (`FixityTable.declares?/2`). No per-declaration `builtin` marker is needed.
-  # `Std.Operators` itself is exempt (it is the source of the table), so
-  # re-checking it on `use` does not reject itself.
-  defp check_no_builtin_rebind(ast) do
-    if find_module_name(ast) == "Std.Operators" do
-      :ok
-    else
-      builtin_table = Cure.Compiler.Parser.BuiltinFixity.table()
-
-      ast
-      |> fixity_decl_nodes()
-      |> Enum.find_value(:ok, fn {:fixity, meta, _} ->
-        lexeme = Keyword.get(meta, :operator)
-
-        if is_binary(lexeme) and
-             Cure.Compiler.Parser.FixityTable.declares?(builtin_table, lexeme) do
-          {:error, {:builtin_operator_not_overloadable, String.to_atom(lexeme)}}
+    case Cure.Compiler.Parser.FixityResolver.assemble(base, own_fixity, own_uses, []) do
+      {:ok, table} ->
+        case Cure.Compiler.Parser.FixityTable.cyclic_groups(table) do
+          [] -> :ok
+          groups -> {:error, {:precedence_cycle, groups}}
         end
-      end)
+
+      # A fixity conflict is already reported at parse time (the module never
+      # reaches elaboration with one). Treat a defensive conflict here as "no
+      # cycle to add" rather than double-reporting a parse-stage error.
+      {:error, _conflict} ->
+        :ok
     end
   end
-
-  # Deep-walk the AST collecting every `{:fixity, meta, _}` declaration node.
-  defp fixity_decl_nodes(node) when is_tuple(node) do
-    here =
-      case node do
-        {:fixity, meta, _} when is_list(meta) -> [node]
-        _ -> []
-      end
-
-    here ++ (node |> Tuple.to_list() |> fixity_decl_nodes())
-  end
-
-  defp fixity_decl_nodes(list) when is_list(list),
-    do: Enum.flat_map(list, &fixity_decl_nodes/1)
-
-  defp fixity_decl_nodes(_other), do: []
 
   # A top-level container the dependent pipeline elaborates as a module. Classic
   # codegen compiles a `proof` container "exactly like a regular module"; the
