@@ -117,7 +117,7 @@ defmodule Cure.Stdlib.OtpTest do
       use Std.Option
       fn timer(p: Pid(Atom)) -> Effect(TimerRef) = beam_ops send_after 10 p :tick
       fn cancel(r: TimerRef) -> Effect(Option(Int)) = beam_ops cancel_timer r
-      fn observe(p: Pid(Atom)) -> Effect(MonitorRef) = beam_ops monitor :process p
+      fn observe(p: Pid(Atom)) -> Effect(MonitorRef) = beam_ops monitor Process() p
       fn unobserve(r: MonitorRef) -> Effect(Unit) = beam_ops demonitor r
       fn connect(p: Pid(Atom)) -> Effect(Unit) = beam_ops link p
       fn disconnect(p: Pid(Atom)) -> Effect(Unit) = beam_ops unlink p

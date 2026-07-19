@@ -738,7 +738,11 @@ mod Std.Actor
 
   ## Stop a running actor instance.
   @extern(Elixir.Cure.Actor.Builtins, :actor_stop, 1)
-  fn stop(pid: Pid) -> Atom
+  local fn raw_stop(pid: Pid) -> Atom
+
+  fn stop(pid: Pid) -> Unit =
+    let _ = raw_stop(pid)
+    ()
 
   ## Send a message to an actor (cast semantics: fire-and-forget).
   ## This is the runtime counterpart of the Melquiades operator

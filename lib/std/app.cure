@@ -145,15 +145,27 @@ mod Std.App
   ## Ensure the application and all of its dependencies are started.
   ## Returns `:ok` whether or not the application was already running.
   @extern(Elixir.Cure.App.Builtins, :ensure_all_started, 1)
-  fn ensure_all_started(name: Atom) -> Atom
+  local fn raw_ensure_all_started(name: Atom) -> Atom
+
+  fn ensure_all_started(name: Atom) -> Unit =
+    let _ = raw_ensure_all_started(name)
+    ()
 
   ## Start a loaded application by name. Idempotent.
   @extern(Elixir.Cure.App.Builtins, :start, 1)
-  fn start(name: Atom) -> Atom
+  local fn raw_start(name: Atom) -> Atom
+
+  fn start(name: Atom) -> Unit =
+    let _ = raw_start(name)
+    ()
 
   ## Stop a running application by name. Idempotent.
   @extern(Elixir.Cure.App.Builtins, :stop, 1)
-  fn stop(name: Atom) -> Atom
+  local fn raw_stop(name: Atom) -> Atom
+
+  fn stop(name: Atom) -> Unit =
+    let _ = raw_stop(name)
+    ()
 
   ## Fetch an environment variable at the caller's expected type.
   ## Returns `nil` when unset.
@@ -167,7 +179,11 @@ mod Std.App
 
   ## Set an environment variable for an application.
   @extern(Elixir.Cure.App.Builtins, :put_env, 3)
-  fn put_env(name: Atom, key: Atom, value: a) -> Atom
+  local fn raw_put_env(name: Atom, key: Atom, value: a) -> Atom
+
+  fn put_env(name: Atom, key: Atom, value: a) -> Unit =
+    let _ = raw_put_env(name, key, value)
+    ()
 
   ## Return a list of `%[name, description, vsn]` tuples for every
   ## currently-running application.
@@ -182,4 +198,8 @@ mod Std.App
   ## Normally the OTP boot script drives this; exposed here for
   ## tests and scripted scenarios.
   @extern(Elixir.Cure.App.Builtins, :start_phase, 3)
-  fn start_phase(name: Atom, phase: Atom, phase_args: a) -> Atom
+  local fn raw_start_phase(name: Atom, phase: Atom, phase_args: a) -> Atom
+
+  fn start_phase(name: Atom, phase: Atom, phase_args: a) -> Unit =
+    let _ = raw_start_phase(name, phase, phase_args)
+    ()

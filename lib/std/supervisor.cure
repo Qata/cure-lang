@@ -173,7 +173,11 @@ mod Std.Supervisor
 
   ## Stop a running supervisor tree.
   @extern(Elixir.Cure.Sup.Builtins, :sup_stop, 1)
-  fn stop(sup_module: Atom) -> Atom
+  local fn raw_stop(sup_module: Atom) -> Atom
+
+  fn stop(sup_module: Atom) -> Unit =
+    let _ = raw_stop(sup_module)
+    ()
 
   ## Return the list of `%[id, child_pid, type, modules]` tuples for
   ## the supervisor's direct children.

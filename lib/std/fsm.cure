@@ -269,19 +269,35 @@ mod Std.Fsm
 
   ## Stop a running FSM instance.
   @extern(Elixir.Cure.FSM.Builtins, :fsm_stop, 1)
-  fn stop(pid: Pid) -> Atom
+  local fn raw_stop(pid: Pid) -> Atom
+
+  fn stop(pid: Pid) -> Unit =
+    let _ = raw_stop(pid)
+    ()
 
   ## Send an event (without a payload) to an FSM.
   @extern(Elixir.Cure.FSM.Builtins, :fsm_send, 2)
-  fn send(pid: Pid, event: Atom) -> Atom
+  local fn raw_send(pid: Pid, event: Atom) -> Atom
+
+  fn send(pid: Pid, event: Atom) -> Unit =
+    let _ = raw_send(pid, event)
+    ()
 
   ## Send an event carrying a payload to an FSM.
   @extern(Elixir.Cure.FSM.Builtins, :fsm_send_with, 3)
-  fn send_with(pid: Pid, event: Atom, payload: Any) -> Atom
+  local fn raw_send_with(pid: Pid, event: Atom, payload: Any) -> Atom
+
+  fn send_with(pid: Pid, event: Atom, payload: Any) -> Unit =
+    let _ = raw_send_with(pid, event, payload)
+    ()
 
   ## Send a batch of events; each is delivered in order.
   @extern(Elixir.Cure.FSM.Builtins, :fsm_send_batch, 2)
-  fn send_batch(pid: Pid, events: List(Atom)) -> Atom
+  local fn raw_send_batch(pid: Pid, events: List(Atom)) -> Atom
+
+  fn send_batch(pid: Pid, events: List(Atom)) -> Unit =
+    let _ = raw_send_batch(pid, events)
+    ()
 
   ## Get the current state of an FSM as `%[state_atom, payload]`.
   @extern(Elixir.Cure.FSM.Builtins, :fsm_get_state, 1)

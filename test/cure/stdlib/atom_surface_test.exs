@@ -37,6 +37,41 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
              """)
   end
 
+  test "typed OTP monitoring rejects the raw BEAM kind atom" do
+    assert {:ok, _} =
+             Program.elaborate("""
+             mod GoodMonitorKind
+               use Std.Otp
+               fn observe(pid: Pid(Atom)) -> Effect(MonitorRef) = monitor(Process(), pid)
+             """)
+
+    assert {:error, _} =
+             Program.elaborate("""
+             mod BadMonitorKind
+               use Std.Otp
+               fn observe(pid: Pid(Atom)) -> Effect(MonitorRef) = monitor(:process, pid)
+             """)
+  end
+
+  test "convenience lifecycle APIs expose Unit instead of success atoms" do
+    assert {:ok, _} =
+             Program.elaborate("""
+             mod LifecycleUnits
+               use Std.Actor
+               use Std.Fsm
+               use Std.Supervisor
+               use Std.App
+
+               fn stop_actor(pid: Pid) -> Unit = Std.Actor.stop(pid)
+               fn stop_fsm(pid: Pid) -> Unit = Std.Fsm.stop(pid)
+               fn stop_supervisor(name: Atom) -> Unit = Std.Supervisor.stop(name)
+               fn stop_application(name: Atom) -> Unit = Std.App.stop(name)
+               fn start_application(name: Atom) -> Unit = Std.App.start(name)
+               fn set_application_value(name: Atom, key: Atom, value: Int) -> Unit =
+                 Std.App.put_env(name, key, value)
+             """)
+  end
+
   test "safe atom lookup preserves existing atoms without interning input" do
     assert :ok = :"Cure.Std.String".to_existing_atom(~c"ok")
 

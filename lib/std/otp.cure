@@ -292,8 +292,8 @@ mod Std.Otp
       ms: Int -> Some(ms)
       already: Bool -> None()
 
-  fn monitor({m: Type}, {r: Type}, {k: Type}, kind: Atom, pid: RawPid(m, r, k)) -> Effect(MonitorRef) =
-    raw_monitor(kind, pid)
+  fn monitor({m: Type}, {r: Type}, {k: Type}, kind: MonitorKind, pid: RawPid(m, r, k)) -> Effect(MonitorRef) =
+    raw_monitor(monitor_kind_atom(kind), pid)
 
   ## Remove a monitor AND flush any `DOWN` already sitting in the mailbox. Without `flush`
   ## a stale `DOWN` outlives the call, and every receiving `match` has to carry an arm for
@@ -359,3 +359,9 @@ mod Std.Otp
       p: BarePid -> Some(p)
       :undefined -> None()
 end
+  ## Closed vocabulary accepted by `erlang:monitor/2`. More kinds can be added
+  ## here without exposing the raw atom boundary to ordinary callers.
+  type MonitorKind = Process
+
+  local fn monitor_kind_atom(kind: MonitorKind) -> Atom = match kind
+    Process() -> :process
