@@ -83,6 +83,17 @@ defmodule Cure.Elab.Resolve do
     end
   end
 
+  @doc "Resolve an interface dictionary directly from an already inferred type value."
+  @spec dictionary_for_type_value(Env.t(), atom(), term(), term()) ::
+          {:ok, term(), term()} | {:error, term()}
+  def dictionary_for_type_value(env, iface, type_value, ctx) do
+    case classify(env, type_value, MapSet.new()) do
+      {:concrete, head} -> dict_value(env, iface, head, ctx)
+      {:rigid, level} -> {:error, {:no_instance, iface, {:rigid, level}}}
+      {:unknown, value} -> {:error, {:no_instance, iface, value}}
+    end
+  end
+
   # -- head classification ----------------------------------------------------
 
   # The head-positioned parameter is the one whose interface-signature type mentions

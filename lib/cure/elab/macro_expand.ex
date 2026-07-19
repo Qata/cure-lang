@@ -10,7 +10,7 @@ defmodule Cure.Elab.MacroExpand do
 
   alias Cure.Compiler.{MacroFamily, MacroSyntax, Parser}
   alias Cure.Core.{Context, Kernel, Normalise}
-  alias Cure.Elab.{Elaborator, TotalityClosure}
+  alias Cure.Elab.{Elaborator, Resolve, TotalityClosure}
 
   @normalise_fuel 10_000
   # Termination is guaranteed by active-stack cycle detection. Production
@@ -184,6 +184,13 @@ defmodule Cure.Elab.MacroExpand do
   defp expansion_frame(_), do: %{keyword: nil, line: nil, col: nil}
 
   defp execute(meta, elab_ast, input_ast, env, fresh_counter) do
+    with {:ok, evidence} <- check_capture_obligations(meta, env) do
+      meta = Keyword.put(meta, :resolved_obligations, evidence)
+      execute_after_obligations(meta, elab_ast, input_ast, env, fresh_counter)
+    end
+  end
+
+  defp execute_after_obligations(meta, elab_ast, input_ast, env, fresh_counter) do
     # Definition-site (ambient) macro hygiene, as a ZERO-OVERHEAD FALLBACK. A
     # stdlib computed/family macro's expander is a global of its HOME module. If
     # the use-site has `use Std.X` (or the macro is lexical), the expander already
@@ -211,6 +218,30 @@ defmodule Cure.Elab.MacroExpand do
       ok ->
         ok
     end
+  end
+
+  defp check_capture_obligations(meta, env) do
+    ctx = Context.empty(env)
+
+    meta
+    |> Keyword.get(:capture_obligations, [])
+    |> Enum.reduce_while({:ok, []}, fn obligation, {:ok, evidence} ->
+      iface = String.to_atom(obligation.interface)
+
+      with {:ok, _term, type_value} <-
+             Elaborator.elaborate_expr_typed(obligation.expression, [], ctx, env),
+           {:ok, dictionary, dictionary_type} <-
+             Resolve.dictionary_for_type_value(env, iface, type_value, ctx) do
+        witness = Map.merge(obligation, %{dictionary: dictionary, dictionary_type: dictionary_type})
+        {:cont, {:ok, evidence ++ [witness]}}
+      else
+        {:error, reason} ->
+          {:halt,
+           {:error,
+            {:macro_capture_obligation_failed, Keyword.get(meta, :keyword), obligation.interface, obligation.capture,
+             reason}}}
+      end
+    end)
   end
 
   # Only an unresolved-expander failure merits retrying in the definition-site

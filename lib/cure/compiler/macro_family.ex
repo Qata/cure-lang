@@ -70,6 +70,7 @@ defmodule Cure.Compiler.MacroFamily do
                  syntax_fields: fields,
                  syntax_repeated_fields: [],
                  direct_inputs: true,
+                 obligations: family_obligations(family.fields),
                  syntax_field_types:
                    Map.put(leading_field_types(leading_segments), "definition", {
                      :record,
@@ -97,6 +98,12 @@ defmodule Cure.Compiler.MacroFamily do
   end
 
   def computed_rule(_meta, _rules), do: :none
+
+  defp family_obligations(fields) do
+    Enum.flat_map(fields, fn field ->
+      Enum.map(Map.get(field, :obligations, []), &Map.put(&1, :field, field.name))
+    end)
+  end
 
   @doc "Add the computed-rule view without changing the source AST."
   @spec lowered_rules(keyword(), [map()]) :: [map()]

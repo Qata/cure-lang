@@ -220,6 +220,45 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
            end)
   end
 
+  test "an expression obligation resolves at the macro use site" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Beam
+
+      macro Gate
+        syntax gated <value: Expression> where BeamEncode(value) computed directly by pass
+
+      fn pass(value: Syntax) -> Syntax = value
+      type Identity = Primary | Secondary deriving BeamEncode
+      fn result() -> Identity = gated Primary()
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == :Primary
+  end
+
+  test "an unsatisfied expression obligation fails before expansion" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Beam
+
+      macro Gate
+        syntax gated <value: Expression> where BeamEncode(value) computed directly by pass
+
+      fn pass(value: Syntax) -> Syntax = value
+      type Identity = Primary | Secondary
+      fn result() -> Identity = gated Primary()
+    end
+    """
+
+    assert {:error,
+            {:codegen_error, {:macro_capture_obligation_failed, "gated", "BeamEncode", "value", {:no_instance, _, _}}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "repeated and one_or_more family sections are ordinary lists" do
     source = """
     mod M

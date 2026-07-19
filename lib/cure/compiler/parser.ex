@@ -655,6 +655,12 @@ defmodule Cure.Compiler.Parser do
           col: keyword_token.col
         ]
 
+        meta =
+          case computed_use_obligations(rule, bindings) do
+            [] -> meta
+            obligations -> Keyword.put(meta, :capture_obligations, obligations)
+          end
+
         # The matched rule's segments (literals interleaved with holes). The
         # printer needs the literal separators (`state`/`messages`/…) to
         # reconstruct the surface invocation — the flattened arg list drops
@@ -726,6 +732,29 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp match_computed_rule([], state), do: {:error, %{segments: []}, 0, state}
+
+  defp computed_use_obligations(rule, bindings) do
+    Enum.flat_map(Map.get(rule, :obligations, []), fn obligation ->
+      expression =
+        case Map.get(obligation, :field) do
+          nil -> Map.get(bindings, obligation.capture)
+          field -> family_binding_field(bindings["definition"], rule.syntax_family.fields, field)
+        end
+
+      if is_nil(expression), do: [], else: [Map.put(obligation, :expression, expression)]
+    end)
+  end
+
+  defp family_binding_field({:family_input, _meta, values}, fields, field) do
+    fields
+    |> Enum.zip(values)
+    |> Enum.find_value(fn
+      {%{name: ^field}, value} -> value
+      _ -> nil
+    end)
+  end
+
+  defp family_binding_field(_binding, _fields, _field), do: nil
 
   # A computed rule may deliberately share a keyword with an older transparent
   # rule. Let the computed grammar win when it matches, but preserve the
