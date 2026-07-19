@@ -194,13 +194,7 @@ defmodule Cure.Compiler.Parser do
     # the {:macro_def, …} nodes and their (recovered) errors. This pass also
     # yields the module's `precedencegroup`/`infix`/… declaration nodes, which
     # parse context-free (no fixity table needed) — they feed the module table.
-    harvest_state =
-      put_tokens(
-        %__MODULE__{file: file, emit_events: false, edition: edition, fixity_table: builtin_fixity},
-        tokens
-      )
-
-    {harvest_exprs, _harvest_state} = parse_program(harvest_state)
+    harvest_exprs = harvest(tokens, file, builtin_fixity, edition)
 
     # Extend the built-in table with the current module's fixity declarations so
     # the authoritative pass binds user-declared operators by their group.
@@ -256,6 +250,27 @@ defmodule Cure.Compiler.Parser do
       [] -> {:ok, ast}
       errors -> {:error, Enum.reverse(errors)}
     end
+  end
+
+  @doc """
+  Run the table-independent harvest pass over `tokens`: a single `parse_program`
+  seeded with `base`, with per-statement recovery. Returns the surviving
+  top-level declaration/expression nodes. Never raises — used to extract a
+  module's own fixity/`use`/`@prelude`/module-name structure without a fully
+  successful body parse.
+  """
+  @spec harvest([term()], String.t(), FixityTable.t(), term()) :: [tuple()]
+  def harvest(tokens, file, base, edition \\ nil) do
+    edition = edition || Cure.Edition.current()
+
+    harvest_state =
+      put_tokens(
+        %__MODULE__{file: file, emit_events: false, edition: edition, fixity_table: base},
+        tokens
+      )
+
+    {exprs, _state} = parse_program(harvest_state)
+    exprs
   end
 
   defp prelude_macros do
