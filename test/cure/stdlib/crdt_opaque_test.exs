@@ -28,4 +28,20 @@ defmodule Cure.Stdlib.CrdtOpaqueTest do
 
     assert {:ok, _env} = Program.elaborate(src)
   end
+
+  test "replica identities are application types rather than forced atoms" do
+    src = """
+    mod TypedReplica
+      use Std.Crdt
+
+      type Replica = Sydney | Melbourne
+
+      fn count() -> Int =
+        let a = g_increment(g_empty(), Sydney(), 2)
+        let b = g_increment(g_empty(), Melbourne(), 3)
+        g_value(g_merge(a, b))
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
 end
