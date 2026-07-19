@@ -12,7 +12,7 @@ mod Std.Test
   ## mod MyTest
   ##   use Std.Test
   ##
-  ##   fn test_sanity() -> Atom =
+  ##   fn test_sanity() -> Unit =
   ##     assert_eq(1 + 1, 2)
   ## ```
   ##
@@ -34,38 +34,38 @@ mod Std.Test
 
   ## Private: raise `reason` as an Erlang error.
   @extern(:erlang, :error, 1)
-  local fn raise_error(reason: Atom) -> Atom
+  local fn raise_error(reason: Atom) -> Unit
 
   ## Assert `condition` is `true`; raises `:assertion_failed` on false.
-  fn assert(condition: Bool) -> Atom =
+  fn assert(condition: Bool) -> Unit =
     pickup
-      condition -> :ok
+      condition -> ()
       else      -> raise_error(:assertion_failed)
 
   ## Assert `a == b`; raises `:not_equal` on mismatch. `where Equatable(t)`
   ## threads the equality dictionary for the compared type.
-  fn assert_eq(a: t, b: t) -> Atom where Equatable(t) =
+  fn assert_eq(a: t, b: t) -> Unit where Equatable(t) =
     pickup
-      a == b -> :ok
+      a == b -> ()
       else   -> raise_error(:not_equal)
 
   ## Assert `a != b`; raises `:unexpectedly_equal` when they match.
   ## `where Equatable(t)` threads the equality dictionary (`!=` derives from `==`).
-  fn assert_ne(a: t, b: t) -> Atom where Equatable(t) =
+  fn assert_ne(a: t, b: t) -> Unit where Equatable(t) =
     pickup
-      a != b -> :ok
+      a != b -> ()
       else   -> raise_error(:unexpectedly_equal)
 
   ## Assert `a > b`; raises `:not_greater` otherwise.
-  fn assert_gt(a: t, b: t) -> Atom where Comparable(t) =
+  fn assert_gt(a: t, b: t) -> Unit where Comparable(t) =
     pickup
-      a > b -> :ok
+      a > b -> ()
       else  -> raise_error(:not_greater)
 
   ## Assert `a < b`; raises `:not_less` otherwise.
-  fn assert_lt(a: t, b: t) -> Atom where Comparable(t) =
+  fn assert_lt(a: t, b: t) -> Unit where Comparable(t) =
     pickup
-      a < b -> :ok
+      a < b -> ()
       else  -> raise_error(:not_less)
 
   # -- Property-based testing (v0.19.0) --------------------------------------
@@ -77,16 +77,16 @@ mod Std.Test
   ## `gen` is a zero-argument function (e.g.
   ## `fn(_) -> Std.Gen.int_in(0, 100)`) that returns a fresh value
   ## on every call.
-  fn forall(gen: Atom -> t, property: t -> Bool, runs: Int) -> Atom =
+  fn forall(gen: Unit -> t, property: t -> Bool, runs: Int) -> Unit =
     match runs
-      0 -> :ok
+      0 -> ()
       _ ->
-        match property(gen(:draw))
+        match property(gen(()))
           true  -> forall(gen, property, runs - 1)
           false -> raise_error(:property_failed)
 
   ## Convenience wrapper that uses 100 runs by default.
-  fn forall_default(gen: Atom -> t, property: t -> Bool) -> Atom =
+  fn forall_default(gen: Unit -> t, property: t -> Bool) -> Unit =
     forall(gen, property, 100)
 
   # -- Shrinking-aware property runner (v0.23.0) -----------------------------
@@ -101,8 +101,8 @@ mod Std.Test
   ## and property this never raises; a generator that throws has no witness
   ## value to return and is a caller error.
   @extern(:cure_std_test, :forall_shrunk, 3)
-  fn forall_shrunk(gen: Atom -> t, property: t -> Bool, runs: Int) -> Result(Atom, t)
+  fn forall_shrunk(gen: Unit -> t, property: t -> Bool, runs: Int) -> Result(Unit, t)
 
   ## Same as `forall_shrunk/3` but with a 100-run default.
-  fn forall_shrunk_default(gen: Atom -> t, property: t -> Bool) -> Result(Atom, t) =
+  fn forall_shrunk_default(gen: Unit -> t, property: t -> Bool) -> Result(Unit, t) =
     forall_shrunk(gen, property, 100)

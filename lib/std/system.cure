@@ -16,6 +16,17 @@ mod Std.System
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
+  ## Units accepted by BEAM wall-clock time operations. Constructors are
+  ## translated at the private foreign boundary; callers cannot pass an
+  ## arbitrary atom that `:os.system_time/1` does not understand.
+  type TimeUnit = Second | Millisecond | Microsecond | Nanosecond
+
+  local fn time_unit_atom(unit: TimeUnit) -> Atom = match unit
+    Second()      -> :second
+    Millisecond() -> :millisecond
+    Microsecond() -> :microsecond
+    Nanosecond()  -> :nanosecond
+
   ## Native monotonic-time reading in implementation-defined units.
   ## Use for measuring durations (`a - b` is meaningful); not
   ## wall-clock.
@@ -25,13 +36,15 @@ mod Std.System
   ## OS wall-clock time in `unit` (typically `:second`, `:millisecond`,
   ## `:microsecond`, or `:nanosecond`).
   @extern(:os, :system_time, 1)
-  fn system_time(unit: Atom) -> Int
+  local fn raw_system_time(unit: Atom) -> Int
+
+  fn system_time(unit: TimeUnit) -> Int = raw_system_time(time_unit_atom(unit))
 
   ## Current millisecond timestamp since the Unix epoch.
-  fn timestamp_ms() -> Int = system_time(:millisecond)
+  fn timestamp_ms() -> Int = system_time(Millisecond())
 
   ## Current microsecond timestamp since the Unix epoch.
-  fn timestamp_us() -> Int = system_time(:microsecond)
+  fn timestamp_us() -> Int = system_time(Microsecond())
 
   ## Pid of the calling process.
   @extern(:erlang, :self, 0)
@@ -44,13 +57,13 @@ mod Std.System
   ## Query the VM with `:erlang.system_info/1`. Return type depends on
   ## `key`; callers should narrow it via the wrappers below.
   @extern(:erlang, :system_info, 1)
-  fn system_info(key: Atom) -> t
+  local fn raw_system_info(key: Atom) -> t
 
   ## Running OTP release version (as a charlist, per the BIF).
-  fn otp_version() -> t = system_info(:otp_release)
+  fn otp_version() -> String = raw_system_info(:otp_release)
 
   ## Number of logical processors available to the VM.
-  fn cpu_count() -> Int = system_info(:logical_processors)
+  fn cpu_count() -> Int = raw_system_info(:logical_processors)
 
   ## Halt the whole BEAM node with the given exit status.
   @extern(:erlang, :halt, 1)

@@ -5,14 +5,14 @@ defmodule :cure_std_test do
   When a property fails, walk the shrink candidates in aggressive-first order
   and pick the smallest value that still makes the property return `false`.
 
-  Returns a `Std.Result`: `{:Ok, :ok}` when every sample satisfied the property,
+  Returns a `Std.Result`: `{:Ok, :unit}` when every sample satisfied the property,
   `{:Error, minimal}` carrying the minimised counterexample when one did not.
 
   It used to return the bare atom `:ok` and raise
   `{:property_failed_with_shrunk, minimal}`, under an `@extern` postulating
   `∀t. (Atom -> t) -> (t -> Bool) -> Int -> t`. Neither branch inhabited `t`,
   and the raise made the postulated totality false. The type is now
-  `Result(Atom, t)` and both branches produce a value.
+  `Result(Unit, t)` and both branches produce a value.
 
   The tags are the DEPENDENT-pipeline erasure: `Ok(v)` → `{:Ok, v}`,
   `Error(e)` → `{:Error, e}`.
@@ -21,7 +21,7 @@ defmodule :cure_std_test do
   def forall_shrunk(gen, property, runs) when is_function(gen) and is_function(property) do
     case find_counterexample(gen, property, runs) do
       :all_pass ->
-        {:Ok, :ok}
+        {:Ok, :unit}
 
       {:failed, value} ->
         {:Error, shrink_loop(value, property)}
@@ -33,7 +33,7 @@ defmodule :cure_std_test do
   defp find_counterexample(_gen, _property, n) when n <= 0, do: :all_pass
 
   defp find_counterexample(gen, property, n) when n > 0 do
-    value = gen.(:draw)
+    value = gen.(:unit)
 
     # `safe_invoke` treats a raising property as `false`: a property that blows
     # up on a drawn value has not been shown to hold, so that value is a

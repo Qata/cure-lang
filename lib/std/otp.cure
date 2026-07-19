@@ -1,6 +1,7 @@
 @group(:concurrency)
 mod Std.Otp
   use Std.Otp.Raw
+  use Std.ExitReason
   use Std.Bool
   use Std.Option
 
@@ -321,12 +322,11 @@ mod Std.Otp
   ##                         trappable — but this op only ever sends explicitly.)
   ##   * `Because(reason)` — terminates a non-trapping target; a trapping target receives
   ##                         `{'EXIT', From, reason}` at the END of its mailbox.
-  type ExitReason = Normal | Kill | Because(Atom)
-
   local fn exit_atom(reason: ExitReason) -> Atom =
     match reason
       Normal() -> :normal
       Kill() -> :kill
+      Shutdown() -> :shutdown
       Because(why) -> why
 
   ## Send an exit signal. Makes NO type-level claim that the target dies — correctly: which
