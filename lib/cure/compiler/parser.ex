@@ -902,6 +902,14 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  # The production owns the surrounding parentheses. Capture their contents
+  # with Cure's ordinary parameter parser so every source-defined macro can use
+  # typed, graded, implicit, and multiple binders without a bespoke parser.
+  defp match_segments(state, [{:hole, %{name: name, kind: "Parameters"}} | rest], bindings, progress) do
+    {params, state} = parse_typed_params(state)
+    match_segments(state, rest, Map.put(bindings, name, params), progress + 1)
+  end
+
   defp match_segments(state, [{:hole, %{name: name, kind: kind}} | rest], bindings, progress)
        when kind in ["Int", "Float", "Atom", "Bool"] do
     {arg, state} = parse_expr(state, 0)

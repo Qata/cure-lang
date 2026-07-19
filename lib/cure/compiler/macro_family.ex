@@ -241,7 +241,7 @@ defmodule Cure.Compiler.MacroFamily do
     base_type =
       case Map.get(field, :grammar) do
         %{name: name} -> {:variable, [scope: :local], syntax_type(name)}
-        _ -> {:variable, [scope: :local], shape_type(family_field_shape(field))}
+        _ -> shape_type_ast(family_field_shape(field))
       end
 
     base_type =
@@ -267,7 +267,6 @@ defmodule Cure.Compiler.MacroFamily do
               "Statement",
               "Code",
               "Cases",
-              "Parameters",
               "Fields",
               "Declarations",
               "ModuleBody",
@@ -276,6 +275,11 @@ defmodule Cure.Compiler.MacroFamily do
        do: shape <> "Syntax"
 
   defp shape_type(_shape), do: "Syntax"
+
+  defp shape_type_ast("Parameters"),
+    do: {:function_call, [name: "List"], [{:variable, [scope: :local], "Syntax"}]}
+
+  defp shape_type_ast(shape), do: {:variable, [scope: :local], shape_type(shape)}
 
   defp family_field_shape(%{shape: shape}), do: shape
   defp family_field_shape(_field), do: "Syntax"
@@ -345,22 +349,30 @@ defmodule Cure.Compiler.MacroFamily do
     Map.put(family, :fields, fields)
   end
 
-  defp production_fields([production | _]) do
-    Enum.map(production.fields, fn name ->
+  defp production_fields(productions) do
+    names = productions |> Enum.flat_map(& &1.fields) |> Enum.uniq()
+
+    Enum.map(names, fn name ->
       %{
         name: name,
-        shape: production_field_shape(production, name),
-        cardinality: :required,
+        shape: production_field_shape(productions, name),
+        cardinality: production_field_cardinality(productions, name),
         obligations: []
       }
     end)
   end
 
-  defp production_field_shape(production, name) do
-    Enum.find_value(production.segments, "Syntax", fn
-      {:hole, %{name: ^name, kind: kind}} -> kind
-      _ -> nil
+  defp production_field_shape(productions, name) do
+    Enum.find_value(productions, "Syntax", fn production ->
+      Enum.find_value(production.segments, fn
+        {:hole, %{name: ^name, kind: kind}} -> kind
+        _ -> nil
+      end)
     end)
+  end
+
+  defp production_field_cardinality(productions, name) do
+    if Enum.all?(productions, &(name in &1.fields)), do: :required, else: :optional
   end
 
   defp resolve_family_fields(family, families, stack) do

@@ -109,6 +109,23 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert [%{name: "transitions", shape: "Transition", cardinality: :one_or_more}] = definition.fields
   end
 
+  test "alternative productions may add an optional typed parameter-list capture" do
+    node =
+      parse!("""
+      macro Machine
+        syntax family Event
+          syntax <name: Name>(<payload: Parameters>)
+          syntax <name: Name>
+        syntax family Definition
+          one_or_more events Event
+        accepts Definition
+        expands with build
+      """)
+
+    assert {:macro_def, _, [_event, _definition, _, _]} = node
+    assert :ok = Cure.Compiler.MacroFamily.validate(elem(node, 2))
+  end
+
   test "a structured macro header records accepts and expands with" do
     node =
       parse!("""

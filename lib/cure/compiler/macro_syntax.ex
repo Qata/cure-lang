@@ -484,6 +484,9 @@ defmodule Cure.Compiler.MacroSyntax do
     if field in repeated_fields, do: to_core_primitive_list(kid, shape), else: to_core_primitive(kid, shape)
   end
 
+  defp encode_core_record_field(kid, :syntax_list, _repeated_fields, _field_types, _field),
+    do: to_core_syntax_list(kid)
+
   defp encode_core_record_field(kid, _field_type, repeated_fields, _field_types, field) do
     if field in repeated_fields, do: to_core_syntax_list(kid), else: to_core(kid)
   end
@@ -521,6 +524,7 @@ defmodule Cure.Compiler.MacroSyntax do
           _ ->
             case field.shape do
               shape when shape in ["Int", "Float", "Atom", "Bool"] -> {:primitive, shape}
+              "Parameters" -> :syntax_list
               _ -> :syntax
             end
         end

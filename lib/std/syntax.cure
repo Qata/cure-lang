@@ -13,6 +13,7 @@ mod Std.Syntax
   ## losslessly. Source positions are not represented (the expansion is
   ## re-elaborated, K3 firewall).
   use Std.String
+  use Std.Option
 
   type Syntax =
     | Node(Atom, List(Attr), List(Syntax))
@@ -242,6 +243,30 @@ mod Std.Syntax
 
   fn parameter(name: String, kind: Syntax) -> Syntax =
     Node(:param, [KV(:name, SStr(name)), KV(:type, SSyntax(kind))], [])
+
+  fn typed_pattern(name: String, kind: Syntax) -> Syntax =
+    Node(:typed_pattern, [], [variable(name), kind])
+
+  fn captured_parameter_name(value: Syntax) -> Option(String) = match value
+    Leaf(_, _, SStr(name)) -> match tag(value) == :param
+      true -> Some(name)
+      false -> None()
+    Node(_, values, _) -> match tag(value) == :param
+      true -> match attr(values, :name)
+        Found(SStr(name)) -> Some(name)
+        _ -> None()
+      false -> None()
+    _ -> None()
+
+  fn captured_parameter_type(value: Syntax) -> Option(Syntax) = match attr(attrs(value), :type)
+    Found(SSyntax(kind)) -> Some(kind)
+    _ -> None()
+
+  fn captured_parameter_pattern(value: Syntax) -> Option(Syntax) = match captured_parameter_name(value)
+    None() -> None()
+    Some(name) -> match captured_parameter_type(value)
+      None() -> None()
+      Some(kind) -> Some(typed_pattern(name, kind))
 
   fn parameter_linear(name: String, kind: Syntax) -> Syntax =
     Node(:param, [KV(:name, SStr(name)), KV(:type, SSyntax(kind)), KV(:grade, SAtom(:linear))], [])
