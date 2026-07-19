@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Zero TCB change.** Nothing under `lib/cure/core/**` is modified. Every task below lives in `lib/cure/compiler/**`, `lib/cure/elab/**`, `lib/std/operators.cure`, or `test/**`.
+- **Zero TCB change.** Nothing under `lib/cure/core/**` is modified. Every task below lives in `lib/cure/compiler/**`, `lib/cure/elab/**`, `lib/std/operators.cure`, `lib/cure/compiler.ex`, `lib/cure/cli.ex`, `lib/cure/project.ex` (Task 10's driver-threading needs the latter three — direct siblings of, not inside, `lib/cure/compiler/`, so `lib/cure/compiler/**` alone doesn't cover them), or `test/**`.
 - **Fixity is syntactic**, resolved at parse time. It must not depend on elaboration, type-checking, or name resolution.
 - **Fixity extraction for a module must never fail because that module's function bodies fail to parse** — declarations are inert and extracted via the tolerant harvest pass with `synchronize_to_statement` recovery.
 - **Overloading (multiple `fn <op>`) is orthogonal to fixity and never produces a fixity conflict.** The conflict check keys on `{:fixity, ...}` / `{:precedencegroup, ...}` declaration nodes only, never on function definitions.
@@ -450,10 +450,23 @@ defmodule Cure.Compiler.Parser.FixityScan do
     end)
   end
 
+  # Mirrors `DepGraph.find_module/1`'s filter exactly: `:container` is also
+  # emitted for non-module constructs (`:struct`, `:primitive`, `:opaque`,
+  # `:enum`, `:protocol`, `:trait` — parser.ex :5746/:5874/:5914/:5997/:6499/
+  # :6547), so matching on the tag alone risks returning a nested type's name
+  # instead of the module's, especially on a `synchronize_to_statement`-
+  # recovered harvest of malformed source where node order/nesting can't be
+  # assumed well-formed.
+  @module_container_types [:module, :proof]
+
   @spec module_name(term()) :: String.t() | nil
   def module_name(ast) do
     deep_reduce(ast, nil, fn
-      {:container, meta, _}, nil when is_list(meta) -> Keyword.get(meta, :name)
+      {:container, meta, _}, nil when is_list(meta) ->
+        if Keyword.get(meta, :container_type) in @module_container_types,
+          do: Keyword.get(meta, :name),
+          else: nil
+
       _, acc -> acc
     end)
   end
@@ -479,7 +492,7 @@ defmodule Cure.Compiler.Parser.FixityScan do
 end
 ```
 
-**Note on `module_name`:** `Program.find_module_name/1` matches `{:container, meta, _}` (program.ex:1301). Confirm the container tag your harvest emits is `:container` (grep `parse_program`/module production). If the top-level module node uses a different tag, match that tag instead — the `fixity_scan_test.exs` `s.module == "M"` assertion is the guard.
+**Note on `module_name`:** `Program.find_module_name/1` matches `{:container, meta, _}` (program.ex:1301). Confirm the container tag your harvest emits is `:container` (grep `parse_program`/module production). If the top-level module node uses a different tag, match that tag instead — the `fixity_scan_test.exs` `s.module == "M"` assertion is the guard. Also confirm `@module_container_types` (`[:module, :proof]`) still matches `DepGraph`'s own list (dep_graph.ex:46) — keep the two in sync so a module recognized by one is recognized by the other.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -525,9 +538,8 @@ defmodule Cure.Compiler.SourceResolverTest do
     assert :not_found = SourceResolver.module_path("Totally.Bogus.Module")
   end
 
-  test "resolves a user module by declared name from a source root", %{tmp_dir: _} = ctx do
-    dir = ctx[:tmp_dir] || System.tmp_dir!() |> Path.join("sr_test_#{System.unique_integer([:positive])}")
-    File.mkdir_p!(dir)
+  @tag :tmp_dir
+  test "resolves a user module by declared name from a source root", %{tmp_dir: dir} do
     file = Path.join(dir, "weird_name.cure")
     File.write!(file, "mod My.Widget\n  fn go() -> Int = 1\nend\n")
 
@@ -538,11 +550,12 @@ defmodule Cure.Compiler.SourceResolverTest do
       assert {:ok, ^file} = SourceResolver.module_path("My.Widget")
     after
       Process.put(:cure_source_roots, prev)
-      File.rm_rf!(dir)
     end
   end
 end
 ```
+
+**Note on the fix above:** the original draft of this test destructured `%{tmp_dir: _} = ctx` with no `@tag :tmp_dir` and no `setup` populating `:tmp_dir` — that pattern-match crashes with `FunctionClauseError` on every run (ExUnit only injects a real `:tmp_dir` into the test context when the test or module carries the `:tmp_dir` tag), regardless of whether `SourceResolver` exists, contradicting this task's own Step 2 (“FAIL — module `SourceResolver` undefined”) and Step 4 (“PASS”) expectations. `@tag :tmp_dir` is this codebase's existing convention for exactly this need (see `test/cure/compiler/dep_graph_test.exs`'s `@moduletag :tmp_dir`) — ExUnit creates and removes the directory automatically, so the manual `mkdir_p!`/`rm_rf!` calls are dropped too.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -961,7 +974,7 @@ case module_fixity do
 end
 ```
 
-Wrap the existing Phase 2 code (currently ~:212-258) inside the `%FixityTable{} = module_fixity ->` branch unchanged. `session_extend_fixity_table/1` (:2258) becomes unused — remove it to avoid a compiler warning.
+Wrap the existing Phase 2 code (currently ~:212-258) inside the `%FixityTable{} = module_fixity ->` branch unchanged. `session_extend_fixity_table/2` (:2258) becomes unused — remove it to avoid a compiler warning.
 
 **Do NOT** thread `module_fixity` back to `harvest_active_macros`/`harvest_computed_macros`/`harvest_literal_macros` (:208-210) — those already read `harvest_exprs` and are unaffected.
 
@@ -1022,7 +1035,7 @@ end
 Run: `cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/use-propagated-fixity && mix test test/cure/compiler/builtin_fixity_prelude_test.exs`
 Expected: FAIL on the `@prelude` regex (not added yet). The other two may pass under the old `compute`.
 
-- [ ] **Step 3a: Add `@prelude` to operators.cure**
+- [ ] **Step 3a: Add `@prelude` to operators.cure and fix its now-stale header comment**
 
 Edit `lib/std/operators.cure` so lines 1-2 become (matching the `bool.cure` stacking of `@group` then `@prelude` then `mod`):
 
@@ -1032,9 +1045,28 @@ Edit `lib/std/operators.cure` so lines 1-2 become (matching the `bool.cure` stac
 mod Std.Operators
 ```
 
+The file's header comment (current lines 4-9) describes the OLD location-based
+rule this change retires: *"the protection is by LOCATION — anything declared
+in this stdlib module is 'built in' and off-limits to user fixity
+declarations (see `Program.check_no_builtin_rebind`)."* Once Task 8 deletes
+`check_no_builtin_rebind`, this sentence names a function that no longer
+exists and describes semantics (`use`-independent, unconditional protection)
+this design replaces with `@prelude`-driven conflict detection. Update it to:
+
+```
+# The fixity-declaration authority for Cure's core operators — the operators
+# every module gets, unconditionally, via `@prelude`. A user module may
+# declare NEW operators of its own; redeclaring one of THESE with a
+# different group/body is a conflict (`Cure.Compiler.Parser.FixityResolver`,
+# `:conflicting_operator_fixity` / `:conflicting_precedence_group`), not a
+# location-based rejection — because `@prelude` places this module's
+# declarations in every table via the same union every `use` triggers, a
+# redeclaration always collides. An identical redeclaration is a no-op.
+```
+
 - [ ] **Step 3b: Reimplement `compute/0`**
 
-In `lib/cure/compiler/parser/builtin_fixity.ex`, replace `compute/0` (:55) so it unions fixity over the compiler-bundled `@prelude` stdlib closure. Keep the `@fixity_table_key` memo in `table/0` (:31) unchanged. Keep the re-entrancy guard — while building, `Parser.harvest` (via `session_builtin_fixity_table/0`, parser.ex:2249) sees the `:cure_building_fixity_table` flag and seeds an empty table, which is safe because we only extract declaration-level nodes.
+In `lib/cure/compiler/parser/builtin_fixity.ex`, replace `compute/0` (:55) so it unions fixity over the compiler-bundled `@prelude` stdlib closure. Keep the `@fixity_table_key` memo in `table/0` (:31) unchanged. **Keep the `Process.put(:cure_building_fixity_table, true)` re-entrancy guard, but note its actual role changes here.** Today it guards a real recursion: `compute/0` calls full `Parser.parse/2`, whose line-190 `builtin_fixity = session_builtin_fixity_table()` would otherwise call `BuiltinFixity.table()` again mid-computation. The new `compute/0` below calls `Parser.harvest/4` (Task 2) directly, never `Parser.parse/2` — and `harvest/4` takes its seed table as an explicit `base` argument, never consulting `session_builtin_fixity_table/0` itself (confirm: `grep -n "session_builtin_fixity_table" lib/cure/compiler/parser.ex` shows its only callers are `Parser.parse/2`'s line ~190 and the Pratt loop's nil-fallback `fixity_table/1` accessor — neither is reached by a bare `harvest/4` call with a non-nil `base`). So this specific recursion no longer exists on the `compute/0` → `bundled_prelude_sources/0` → `Parser.harvest/4` path. Keep the guard anyway, as a cheap defensive belt against a *future* change that routes prelude-source scanning back through full `Parser.parse/2` (which would reintroduce the recursion) — but do not describe it as guarding something `harvest/4` currently does, since it doesn't.
 
 ```elixir
 defp compute do
@@ -1125,6 +1157,7 @@ git commit -m "feat(fixity): @prelude operators.cure; table/0 = bundled prelude 
 
 **Files:**
 - Modify: `lib/cure/elab/program.ex` (`check_declarations/1` :110-118; `check_no_precedence_cycle/1` :130; delete `check_no_builtin_rebind/1` :148 + call at :115; delete `fixity_decl_nodes/1` :168 if unused)
+- Modify: `lib/cure/compiler/parser.ex` (fix the stale `check_no_builtin_rebind` reference in `parse_fixity/1`'s comment, ~:5595-5598)
 - Modify: `test/cure/compiler/operator_flip_test.exs` (migrate 3 assertions; add cross-module cycle test)
 
 **Interfaces:**
@@ -1258,6 +1291,18 @@ end
 
 3. Delete `fixity_decl_nodes/1` (:168-183) — it was used only by the deleted check. (Grep to confirm no other caller: `grep -n fixity_decl_nodes lib/cure/elab/program.ex` → only the deleted references.)
 
+3.5. **Fix the now-stale comment in `lib/cure/compiler/parser.ex`.** `parse_fixity/1`'s preceding comment (~:5595-5598) reads: *"Whether the operator is 'built in' (non-redeclarable) is not marked here — it is decided by LOCATION at elaboration: any operator declared in `Std.Operators` is protected. See `Cure.Elab.Program.check_no_builtin_rebind`."* This names a function this step just deleted and describes the retired location rule. Replace it with:
+
+```elixir
+  # `infix|prefix|postfix <op> : Group`. Whether the operator conflicts with
+  # an existing declaration is not decided here — it is decided when the
+  # module's declarations are folded into `fixity(M)`
+  # (`Cure.Compiler.Parser.FixityResolver.assemble/5`): a same-lexeme
+  # different-group (or same-group-name different-body) redeclaration is a
+  # `:conflicting_operator_fixity` / `:conflicting_precedence_group` error;
+  # an identical redeclaration is a no-op.
+```
+
 4. Repoint `check_no_precedence_cycle/1` (:130) at `fixity(M)`:
 
 ```elixir
@@ -1293,7 +1338,7 @@ Expected: PASS (all, including both cycle tests and the 3 migrated conflict test
 
 ```bash
 cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/use-propagated-fixity
-git add lib/cure/elab/program.ex test/cure/compiler/operator_flip_test.exs
+git add lib/cure/elab/program.ex lib/cure/compiler/parser.ex test/cure/compiler/operator_flip_test.exs
 git commit -m "feat(fixity): cycle-check on fixity(M); drop builtin-rebind rule"
 ```
 
@@ -1384,7 +1429,7 @@ Change the `{:error, reason}` branch to recover declaration-level facts from the
 ```
 
 Notes:
-- `closure_deps` is computed later in `finalize_node` (dep_graph.ex:229) from `order_deps` + the prelude set; a recovered node with `order_deps` populated flows through the existing aggregation unchanged.
+- **`closure_deps` stays `[]` for a recovered node — this is a known, accepted gap, not a bug to fix here.** `finalize_node` (dep_graph.ex:224-227) early-returns the node UNCHANGED whenever `parse_error` is non-nil — it never reaches the third clause that derives `closure_deps` from `order_deps` + the prelude set. Since this recovery branch deliberately keeps `parse_error: reason` set, every node recovered by it hits that early return, so `closure_deps` never gets computed and stays at the `base` map's default `[]`. Verified this does NOT break `order/1` (the CLI/`Cure.Project` compile-order function `cli.ex`/`project.ex` actually call): it reads `node.order_deps` directly and re-filters against `real_map`/`modules` itself (dep_graph.ex:91-99), never `closure_deps`. It DOES mean `closure_deps_map/1` (dep_graph.ex:157-161, docstring "Baking input for Preload") silently under-reports the closure of any module recovered this way — out of scope for this plan (Preload/`closure_deps_map` isn't touched by any task here), but worth the implementer knowing rather than assuming finalization "just works" for these nodes.
 - The `{:ok, ast}` branch already sets `:prelude_provider?` via `Map.put(..., prelude_decorated?(ast))` (:210). Confirm the recovered branch's `scan.prelude?` matches `prelude_decorated?` semantics — both derive from the same recognition (Task 3 copied it), so they agree.
 - If `scan.module` is `nil` (genuinely unrecoverable), the node still has `module: nil` and drops as before — no regression.
 
@@ -1579,7 +1624,7 @@ Expected: exactly `Made In Heaven <madeinheaven@madeinheaven.com>`. If any other
 **1. Spec coverage** (each spec section → task):
 - Unified model `fixity(M)` → Tasks 5, 6.
 - Table-independent extraction / harvest reuse → Tasks 2, 3.
-- Component 1 per-module scanner `own(X)` → Task 3; provenance-scoped caching concern → addressed in Task 7 Step 3b note (table() stays stdlib-only, so unconditional memo is provenance-safe; user prelude routed via option not table()).
+- Component 1 per-module scanner `own(X)` → Task 3. **Caching scope, partially deferred:** the design's "provenance-scoped caching" discussion (spec lines 124-141) has two parts — (a) `BuiltinFixity.table()` stays an unconditional stdlib-only memo, which Task 7 Step 3b's note addresses; (b) `own(X)`/`fixity(M)` (Component 2) being "memoized per module" for arbitrary `use_reach(M)` modules, which this plan does NOT implement — `SourceResolver.module_path` (Task 4) and `FixityResolver.gather` (Task 5) re-read and re-harvest from disk on every BFS step, with no memoization at all. This is intentionally left uncached rather than unsafely cached: since correctness is what the spec's caching discussion protects (a stale unconditional cache silently missing a user edit), an uncached implementation can never go stale and satisfies that invariant trivially, just without the memoization the spec describes as the eventual per-module cache shape. Flagged here as a known, deliberate scope reduction (performance-only, not correctness) rather than a silent gap — a follow-up may add provenance-scoped memoization to `SourceResolver`/`FixityResolver` per spec Components 1-2 if `use_reach` BFS cost becomes material.
 - Component 2 `use`-closure resolver + on-demand name resolution (not DepGraph) → Tasks 4, 5; the `DepGraph.scan_file` precondition → Task 9.
 - Component 3 parser hook (3 phases; conflict is a hard whole-module parse error before body parse) → Task 6.
 - Component 4 `@prelude` on operators module → Task 7.
@@ -1596,4 +1641,4 @@ Expected: exactly `Made In Heaven <madeinheaven@madeinheaven.com>`. If any other
 
 **2. Placeholder scan:** The Task 7 `compute/0` intentionally shows a non-compiling `then/2` placeholder FOLLOWED by the clean shipping version, with an explicit "delete the placeholder" instruction — this is a deliberate guard to force reading `build/2`, not an unfilled TODO. All other steps carry complete code. No "TBD"/"handle edge cases"/"similar to Task N" remain.
 
-**3. Type consistency:** `assemble/5` signature identical in Tasks 5, 6, 8. `FixityScan.collect_fixity/1`, `collect_use_targets/1`, `harvest_source/3`, `prelude?/1`, `module_name/1` used with the same arities across Tasks 3, 6, 7, 8, 9. `merge_op/4`/`merge_group/3` payloads (`{:conflicting_operator_fixity, {lexeme, g_a, g_b}}` / `{:conflicting_precedence_group, {name, body_a, body_b}}`) consistent across Tasks 1, 5, 6, 8. `prelude_provider_names/1` consistent across Tasks 9(exposed)/10(used). `uses` shape `%{target, line}` consistent (FixityScan T3 → resolver T5 → dep_graph T9).
+**3. Type consistency:** `assemble/5` signature identical in Tasks 5, 6, 8. `FixityScan.collect_fixity/1`, `collect_use_targets/1`, `harvest_source/3`, `prelude?/1`, `module_name/1` used with the same arities across Tasks 3, 6, 7, 8, 9. `merge_op/4`/`merge_group/3` payloads (`{:conflicting_operator_fixity, {lexeme, g_a, g_b}}` / `{:conflicting_precedence_group, {name, body_a, body_b}}`) consistent across Tasks 1, 5, 6, 8. `prelude_provider_names/1` defined and used within Task 10 (exposed in Step 3a, consumed in Step 3c) — Task 9 only ensures the underlying `:prelude_provider?` *field* it reads survives a recoverable parse error; it does not define the accessor itself. `uses` shape `%{target, line}` consistent (FixityScan T3 → resolver T5 → dep_graph T9).
