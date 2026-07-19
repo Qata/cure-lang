@@ -171,6 +171,55 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :present, []) == 7
   end
 
+  test "an optional-only family does not match without consuming a section" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro optional_only <name: ModuleName>
+        syntax family Definition
+          optional initial Expression
+        accepts Definition
+        expands with expand
+
+      fn expand(name: ModuleNameSyntax, definition: DefinitionSyntax) -> Syntax = int_literal(0)
+      fn result() -> Int = optional_only Empty
+    end
+    """
+
+    assert {:error, {:parse_error, errors}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert Enum.any?(errors, &match?({:macro_use_mismatch, "optional_only", _, _, _, _}, &1))
+  end
+
+  test "a recognized family body diagnoses a missing required section" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro complete <name: ModuleName>
+        syntax family Definition
+          state Type
+          optional initial Expression
+        accepts Definition
+        expands with expand
+
+      fn expand(name: ModuleNameSyntax, definition: DefinitionSyntax) -> Syntax = int_literal(0)
+      fn result() -> Int = complete Incomplete
+        initial 7
+    end
+    """
+
+    assert {:error, {:parse_error, errors}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert Enum.any?(errors, fn
+             {:missing_syntax_family_field, "Definition", "state", _, _} -> true
+             _ -> false
+           end)
+  end
+
   test "repeated and one_or_more family sections are ordinary lists" do
     source = """
     mod M
