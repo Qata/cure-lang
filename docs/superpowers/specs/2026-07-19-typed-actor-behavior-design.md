@@ -227,6 +227,16 @@ with actor-aware resolution.
 - Check constructor consistency, handler exhaustiveness, and binder scope.
 - Remove syntax-level reply-type guessing from the preferred path.
 
+**Implementation status (2026-07-19): in progress.** `on_message` is now the
+preferred asynchronous fold section and derives nominal constructors with
+ordinary typed payload binders. The reflected constructor checker supplies
+arity/type consistency, and ordinary elaboration checks payload binder scope.
+A live actor test sends `Add(Int)`, updates two fields of an immutable record,
+observes the suspended accumulator, and resets it through a nullary message.
+`on_cast` remains a compatibility spelling and raw callback sections remain
+explicit escape hatches. The dependent `on_call`/`ReplyOf` grammar and full
+handler-exhaustiveness diagnostic remain open.
+
 ### Phase 4: lifecycle and failures
 
 - Add typed `on_start`, `on_stop`, `on_info`, and `on_failure` sections.

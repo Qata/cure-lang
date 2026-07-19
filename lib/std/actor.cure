@@ -12,6 +12,7 @@ mod Std.Actor
       optional messages Type
       optional initial Expression
       optional init Code
+      optional on_message Cases
       optional on_cast Cases
       optional on_call Cases
       optional on_info Cases
@@ -23,9 +24,11 @@ mod Std.Actor
     accepts ActorDefinition
     expands with derive_actor_family
 
-  fn derive_actor_family(name: ModuleNameSyntax, definition: ActorDefinitionSyntax) -> Syntax = match definition.on_cast
-    None() -> derive_actor_family_raw(name, definition)
-    Some(cast_cases) -> derive_actor_family_cases(name, definition, cast_cases)
+  fn derive_actor_family(name: ModuleNameSyntax, definition: ActorDefinitionSyntax) -> Syntax = match definition.on_message
+    Some(message_cases) -> derive_actor_family_cases(name, definition, message_cases)
+    None() -> match definition.on_cast
+      None() -> derive_actor_family_raw(name, definition)
+      Some(cast_cases) -> derive_actor_family_cases(name, definition, cast_cases)
 
   ## The derived (Cases) branch of the family: `on_cast` arms are reflected into
   ## a message type and each arm body is wrapped in the GenServer `:noreply`

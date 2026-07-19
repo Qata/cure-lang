@@ -117,6 +117,13 @@ evolution and mailbox rejection. Phase 2 remains open for dependent `ReplyOf`
 query adapters and generic lifted-module declaration publication to sibling
 Cure code in the same compilation.
 
+**Typed actor grammar update (2026-07-19).** Phase 3 now accepts preferred
+`on_message` folds. Constructor heads with typed payload binders derive the
+nominal message ADT through ordinary reflection; a real BEAM test covers an
+`Add(Int)` message changing multiple record fields and a nullary reset. The
+compiler remains unaware of actor vocabulary. Dependent query grammar and its
+named `ReplyOf` adapters remain the next Phase-3 seam.
+
 - **Transparent BEAM plan:** Phases 0, 1, 2, and 2.5 are COMPLETE. Phase 3 (`beam_ops`)
   is unblocked (2.5 done) and substantially landed. Phase 4 has replaced all four OTP
   forms — `sup`, `actor`, `fsm`, `app` each now lower through a source-defined
