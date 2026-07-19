@@ -109,6 +109,42 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     :gen_statem.stop(pid)
   end
 
+  test "transition updates support typed record updates and preserve untouched fields" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      rec TurnstileData
+        coins: Int
+        pushes: Int
+        enabled: Bool
+
+      fsm Cure.Generated.RecordTurnstile with TurnstileData
+        Locked --Coin--> Unlocked
+          update TurnstileData{data | coins: data.coins + 1}
+        Unlocked --Push--> Locked
+          update TurnstileData{data | pushes: data.pushes + 1}
+        Unlocked --Coin--> Unlocked
+          update TurnstileData{data | coins: data.coins + 1}
+        Locked --Push--> Locked
+
+      fn initial_data() -> TurnstileData =
+        TurnstileData{coins: 0, pushes: 7, enabled: true}
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    initial = apply(module, :initial_data, [])
+    assert {:ok, pid} = apply(:"Cure.Generated.RecordTurnstile", :start_link, [initial])
+    assert :sys.get_state(pid) == {:Locked, {:TurnstileData, 0, 7, true}}
+
+    assert :ok = :gen_statem.cast(pid, :Coin)
+    assert :sys.get_state(pid) == {:Unlocked, {:TurnstileData, 1, 7, true}}
+
+    assert :ok = :gen_statem.cast(pid, :Push)
+    assert :sys.get_state(pid) == {:Locked, {:TurnstileData, 1, 8, true}}
+    :gen_statem.stop(pid)
+  end
+
   test "supervisor accepts the reusable structured family surface" do
     source = """
     mod M

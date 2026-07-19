@@ -27,6 +27,25 @@ expression is checked as the declared data type and may refer to `data`; the
 target state is already fixed by the edge and is not repeated in callback
 tuples.
 
+Record data uses Cure's ordinary typed record-update syntax. Fields not named
+after the bar are preserved:
+
+```cure
+rec TurnstileData
+  coins: Int
+  pushes: Int
+  enabled: Bool
+
+fsm Cure.Turnstile with TurnstileData
+  Locked --Coin--> Unlocked
+    update TurnstileData{data | coins: data.coins + 1}
+  Unlocked --Push--> Locked
+    update TurnstileData{data | pushes: data.pushes + 1}
+  Unlocked --Coin--> Unlocked
+    update TurnstileData{data | coins: data.coins + 1}
+  Locked --Push--> Locked
+```
+
 ## Transition Tables
 
 Transition rows are parsed by a grammar production declared in `Std.Fsm`, not
