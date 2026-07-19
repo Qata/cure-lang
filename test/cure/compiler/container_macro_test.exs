@@ -437,6 +437,57 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     assert function_exported?(module, :start, 2)
   end
 
+  test "macro-derived app boots and stops through OTP's application controller" do
+    source = """
+    use Std.Supervisor
+    actor Cure.ApplicationControllerWorker with 0
+    sup Cure.ApplicationControllerRoot children [child_spec Cure.ApplicationControllerWorker :worker]
+    app Cure.ApplicationControllerApp root Cure.ApplicationControllerRoot
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    application = :cure_macro_app_controller_test
+
+    specification =
+      {:application, application,
+       [
+         description: ~c"Cure macro-derived application integration test",
+         vsn: ~c"1",
+         modules: [
+           :"Cure.ApplicationControllerApp",
+           :"Cure.ApplicationControllerRoot",
+           :"Cure.ApplicationControllerWorker"
+         ],
+         registered: [:"Cure.ApplicationControllerRoot"],
+         applications: [:kernel, :stdlib],
+         mod: {:"Cure.ApplicationControllerApp", []}
+       ]}
+
+    on_exit(fn ->
+      Application.stop(application)
+      Application.unload(application)
+    end)
+
+    assert :ok = :application.load(specification)
+    assert :ok = Application.start(application)
+
+    supervisor = Process.whereis(:"Cure.ApplicationControllerRoot")
+    assert is_pid(supervisor)
+    assert Process.alive?(supervisor)
+
+    assert [{:worker, worker, :worker, [:"Cure.ApplicationControllerWorker"]}] =
+             :supervisor.which_children(supervisor)
+
+    assert is_pid(worker)
+    assert Process.alive?(worker)
+
+    monitor = Process.monitor(supervisor)
+    assert :ok = Application.stop(application)
+    assert_receive {:DOWN, ^monitor, :process, ^supervisor, _reason}
+    refute Process.whereis(:"Cure.ApplicationControllerRoot")
+  end
+
   test "app phase syntax emits an ordinary start phase callback" do
     source = """
     app Cure.PhasedApp phase :warm_cache
