@@ -101,6 +101,18 @@ ordered work is: honest server handle; generated actor API; modern typed
 message/query grammar; lifecycle/failures; optional capabilities; cleanup and
 the shared FSM gate.
 
+**Typed actor algebra update (2026-07-19).** Phase 1 now has an erased
+`RawServerPid(message, request, reply)` carrier and the checked
+`ActorServer`/`DepActorServer` aliases. `actor_cast`, `actor_call`,
+`actor_call_dep`, and `actor_stop` keep asynchronous and synchronous protocols
+distinct; focused negative tests prove neither code can be used in the other's
+operation. Sixty-one OTP, actor, FSM, golden, and architecture tests pass. The
+remaining Phase-1 seam is typed startup: raw OTP returns
+`{:ok, pid} | {:error, reason} | :ignore`, while the current `Tuple` boundary
+cannot safely refine the success PID. Do not add a polymorphic tuple projection
+or claim every second element is a PID; close this through an honest validated
+start-result boundary before generating the preferred actor API.
+
 - **Transparent BEAM plan:** Phases 0, 1, 2, and 2.5 are COMPLETE. Phase 3 (`beam_ops`)
   is unblocked (2.5 done) and substantially landed. Phase 4 has replaced all four OTP
   forms — `sup`, `actor`, `fsm`, `app` each now lower through a source-defined
