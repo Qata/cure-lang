@@ -285,6 +285,29 @@ defmodule Cure.Elab.Elaborator do
             end
         end
 
+      # A saturated call to a registered builtin primitive op — `Std.Builtin.int_add`,
+      # `struct_eq`, … — spelled by its qualified name. These globals are body-less:
+      # the arithmetic/comparison ops carry `quantities: nil`, so the general
+      # `elaborate_global_app` path crashes on `length(quantities)`, and `struct_eq`'s
+      # leading ERASED type param makes that path auto-solve the type as a metavar
+      # instead of consuming the explicitly-passed one (an index mismatch). Emit the
+      # raw left-nested app spine directly and let the kernel infer the whole term;
+      # `struct_eq`'s type argument sits in an erased slot the kernel accepts by fiat
+      # (builtins.ex `seed_struct_ops`). Guarded on the `builtin_op` marker (set only
+      # by `Builtins.seed_ops`), so it fires for no user-defined global. Restricted to
+      # the QUALIFIED spelling (`name` carries a `.`): a bare `struct_eq(x, y)` still
+      # routes through the general path, which auto-solves the leading erased type
+      # param as a metavar rather than expecting it as an explicit positional arg.
+      # Placed before the general global-application arm, which would otherwise
+      # intercept the qualified name.
+      String.contains?(name, ".") and
+          match?(%{builtin_op: op} when not is_nil(op), Env.get_def(env, resolved)) ->
+        with {:ok, arg_terms} <- elaborate_all_args(args, names, ctx, env),
+             term = build_app_spine({:global, resolved}, arg_terms),
+             {:ok, type} <- Kernel.infer(ctx, term) do
+          {:ok, term, type}
+        end
+
       # A QUALIFIED call to a plain (non-ctor) global def: `A.foo(x)`. The
       # qualified branch above mapped the dotted `name` to the def's registry key
       # (`resolved`, bare or re-keyed `Mod#foo`) via `resolve_qualified/3`; without
@@ -611,7 +634,13 @@ defmodule Cure.Elab.Elaborator do
         {:ok, {:ctor, ctor, []}, Kernel.bool_type_value(Context.signature(ctx))}
 
       :integer when is_integer(value) ->
-        {:ok, {:int_lit, value}, {:vint_type}}
+        # The compact `{:int_lit, value}` Core node stays canonical, but its TYPE
+        # is the inductive `Int` family value (post-2026-07-18 surface flip),
+        # exactly as the bool arm above types its ctor at `bool_type_value`. Handing
+        # back the retired facade `{:vint_type}` here made every elaborated literal
+        # fail conversion against a family-typed context (`{:data, Std.Int#Int}` vs
+        # `{:int_type}`).
+        {:ok, {:int_lit, value}, Kernel.int_type_value(Context.signature(ctx))}
 
       :float when is_float(value) ->
         {:ok, {:float_lit, value}, {:vfloat_type}}
@@ -672,10 +701,19 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A surface unary operator. `not` is retired as a kernel primitive: it lowers to
-  # an application of the `Std.Bool` prelude def `not` (a `case`-eliminating
-  # function over the inductive Bool). The kernel checks the operand against Bool
-  # and infers the result. Any other unary operator is unsupported here.
+  # A surface unary operator. Prefix `-` DESUGARS to a call on `negate` (the
+  # `Std.Arithmetic` `Additive` method) so a user type with an `Additive`
+  # instance gets prefix negation for free, exactly as an infix overloadable
+  # operator desugars to a `:function_call` (Task 3.3). The desugar fires only
+  # when `negate` has a meaning in scope (`operator_meaning?/2`); otherwise it
+  # falls back to the built-in type-directed lowering, so a unary expression that
+  # compiles today with no `use Std.Arithmetic` (bare `-(5)`) is UNCHANGED.
+  #
+  # `not` is NOT desugared to a call: it is `Std.Bool.\`not\``, a plain function
+  # (not an overloadable interface method), so a `:function_call` gives no user
+  # benefit and would change its Core lowering (breaking the parity with the
+  # `and`/`or` connectives, which stay `{:global, :and/:or}`). It keeps its direct
+  # application of the `Std.Bool` prelude def, unchanged.
   def elaborate_expr_typed({:unary_op, meta, [operand]} = expr, names, ctx, env) do
     case Keyword.fetch!(meta, :operator) do
       :not ->
@@ -694,15 +732,31 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term, type}
         end
 
-      # Numeric negation. Type-directed exactly like binary arithmetic: infer the
-      # operand's primitive kind, then lower to `int_neg`/`float_neg` (both return
-      # their operand type). A non-numeric operand rejects as unsupported.
+      # Numeric negation. Desugars to `negate` ONLY when it is a genuine
+      # overloadable interface method (`Std.Arithmetic`'s `Additive.negate`) in
+      # scope — mirroring the binary-operator path, which routes through
+      # `Resolve.method?` (see `elaborate_named_call_resolved`). Otherwise it is
+      # type-directed like binary arithmetic: infer the operand's primitive kind,
+      # then lower to `int_neg`/`float_neg` (both return their operand type).
+      #
+      # The trigger MUST be the interface-method check, not the broad
+      # `operator_meaning?`: the latter also matches an ordinary function named
+      # `negate` (e.g. the ambient `Std.Int.negate`, prelude-visible because
+      # `type Int` is `@prelude`). Routing `-x` to that monomorphic `Int -> Int`
+      # function hijacked negation for EVERY operand kind, so `-(f : Float)`
+      # lowered to an `Int` result and failed conversion against `Float`. Keying
+      # on `method?` lets a real `Additive` instance dispatch per operand type
+      # while a plain `negate` function falls through to the built-in lowering.
       :- ->
-        with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
-             {:ok, g} <- neg_global(o_type, ctx),
-             term = {:app, {:global, builtin_op_global(g)}, o_core},
-             {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
+        if Cure.Elab.Resolve.method?(env, :negate) do
+          elaborate_expr_typed({:function_call, [name: "negate"], [operand]}, names, ctx, env)
+        else
+          with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
+               {:ok, g} <- neg_global(o_type, ctx),
+               term = {:app, {:global, builtin_op_global(g)}, o_core},
+               {:ok, type} <- Kernel.infer(ctx, term) do
+            {:ok, term, type}
+          end
         end
 
       _ ->
@@ -730,28 +784,18 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:binary_op, meta, [l, r]} = expr, names, ctx, env) do
     op = Keyword.fetch!(meta, :operator)
 
-    if op == :<> do
-      combine_call(l, r, names, ctx, env)
-    else
-      with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
-           {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
-           {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
-           {:ok, type} <- Kernel.infer(ctx, term) do
-        {:ok, term, type}
-      else
-        {:error, {:unsupported_operand_type, :+}} ->
-          combine_call(l, r, names, ctx, env)
+    cond do
+      # A user-declared overloadable operator (parser tagged it `:overloaded`):
+      # desugar to a call on the function named by its lexeme, exactly as the
+      # built-in overloads route (`<>`→combine, non-primitive `==`/`<`→method).
+      Keyword.get(meta, :category) == :overloaded ->
+        overloaded_op_call(op, l, r, names, ctx, env)
 
-        {:error, {:unsupported_operand_type, cmp}}
-        when cmp in [:<, :>, :<=, :>=] ->
-          compare_op_call(cmp, l, r, names, ctx, env)
+      op == :<> ->
+        combine_call(l, r, names, ctx, env)
 
-        :unsupported_op ->
-          {:error, {:unsupported_expression, expr}}
-
-        other ->
-          other
-      end
+      true ->
+        elaborate_binop(op, l, r, expr, names, ctx, env)
     end
   end
 
@@ -947,35 +991,89 @@ defmodule Cure.Elab.Elaborator do
   defp combine_call(l, r, names, ctx, env),
     do: elaborate_expr_typed({:function_call, [name: "combine"], [l, r]}, names, ctx, env)
 
-  # Desugar a comparison operator on a NON-primitive operand to the
-  # `Std.Comparable.compare` method, tested against an `Ordering` constructor.
-  # The comparison operators ARE the surface for `Comparable` (there are no
-  # `lt`/`le`/`gt`/`ge` named helpers); each maps to a `compare` + `Ordering`
-  # test:
+  # Desugar an operator on a NON-primitive operand to the bare-name method call
+  # for its lexeme — the SOLE route to `==`/`!=`/`<`/`<=`/`>`/`>=` for any type
+  # `build_binop` does not lower to a primitive. `Comparable` now exposes `` `<` ``
+  # directly (and the derived `` `<=` ``/`` `>` ``/`` `>=` `` are top-level
+  # `where Comparable(t)` functions), and `Equatable` exposes `` `==` `` (with the
+  # derived `` `!=` `` a top-level `where Equatable(t)` function). So each operator
+  # maps to a function-call on its own lexeme:
   #
-  #     a <  b  ~>  compare(a, b) == LessThan()
-  #     a >  b  ~>  compare(a, b) == GreaterThan()
-  #     a <= b  ~>  compare(a, b) != GreaterThan()
-  #     a >= b  ~>  compare(a, b) != LessThan()
+  #     a <  b  ~>  `<`(a, b)      a == b  ~>  `==`(a, b)
+  #     a <= b  ~>  `<=`(a, b)     a != b  ~>  `!=`(a, b)
+  #     a >  b  ~>  `>`(a, b)
+  #     a >= b  ~>  `>=`(a, b)
   #
-  # `compare` dispatches by coherence to the operand's `Ord` instance; the
-  # `==`/`!=` on the `Ordering` result rides the usual `struct_eq`/`struct_ne`
-  # path. Reached only when `build_binop` reports the operand type has no
-  # primitive `<`/`>`/`<=`/`>=` (Int/Float keep their primitive meaning).
-  # Requires `use Std.Comparable` in scope so `compare` and the `Ordering`
-  # constructors resolve (class-import model, like `combine`).
-  defp compare_op_call(cmp, l, r, names, ctx, env) do
-    {ctor, eq_op} =
-      case cmp do
-        :< -> {"LessThan", :==}
-        :> -> {"GreaterThan", :==}
-        :<= -> {"GreaterThan", :!=}
-        :>= -> {"LessThan", :!=}
-      end
+  # `` `==` ``/`` `<` `` resolve through the interface (`Resolve.method_call`),
+  # dispatching by coherence to the operand's `Equatable`/`Comparable` instance;
+  # the derived `` `!=` ``/`` `<=` ``/`` `>` ``/`` `>=` `` resolve as ordinary
+  # `where`-constrained globals (`Resolve.constrained_call`). Reached only when
+  # `build_binop` reports the operand type has no primitive lowering (Int/Float —
+  # and, for equality, Bool/Bounded — keep their primitive meaning as an
+  # optimisation of this single route). `Std.Equatable`/`Std.Comparable` are
+  # `@prelude`-ambient, so these names resolve with no explicit `use`.
+  defp op_method_call(op, l, r, names, ctx, env),
+    do: elaborate_expr_typed({:function_call, [name: Atom.to_string(op)], [l, r]}, names, ctx, env)
 
-    compare = {:function_call, [name: "compare"], [l, r]}
-    ordering = {:function_call, [name: ctor], []}
-    elaborate_expr_typed({:binary_op, [operator: eq_op], [compare, ordering]}, names, ctx, env)
+  # The built-in binary-operator path (arithmetic/comparison/equality/bitwise):
+  # elaborate both operands, assemble the primitive term, and let the kernel
+  # infer its type; on `{:unsupported_operand_type, _}` fall back to the
+  # typeclass method desugar (Phase 2). Extracted verbatim from the former
+  # `{:binary_op}` body so the `:overloaded` and `<>` routes sit beside it.
+  defp elaborate_binop(op, l, r, expr, names, ctx, env) do
+    with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
+         {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
+         {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
+    else
+      {:error, {:unsupported_operand_type, :+}} ->
+        combine_call(l, r, names, ctx, env)
+
+      {:error, {:unsupported_operand_type, cmp}}
+      when cmp in [:<, :>, :<=, :>=] ->
+        op_method_call(cmp, l, r, names, ctx, env)
+
+      # `==`/`!=` on a non-primitive operand (String, ADT, abstract/rigid type
+      # variable) — `build_binop`'s `{:==,:!=}` clause reports the operand has no
+      # primitive twin, and the SOLE route is the `Equatable` method desugar. A
+      # rigid type variable with no in-scope dictionary rejects here as
+      # `{:no_instance, :Equatable, {:rigid, _}}`, the intended sole-route error.
+      {:error, {:unsupported_operand_type, eq}}
+      when eq in [:==, :!=] ->
+        op_method_call(eq, l, r, names, ctx, env)
+
+      :unsupported_op ->
+        {:error, {:unsupported_expression, expr}}
+
+      other ->
+        other
+    end
+  end
+
+  # A user-declared overloadable operator (`x <?> y`) is sugar for a call on the
+  # function named by its lexeme (`` `<?>`(x, y) ``). If no function/method/ctor
+  # of that name is in scope, the operator has a fixity but no meaning — reject
+  # with `{:no_operator_meaning, op}` rather than letting it dissolve into a
+  # generic `:unknown_global`. Otherwise route through the ordinary
+  # function-call path, so real type errors in the operands still surface.
+  defp overloaded_op_call(op, l, r, names, ctx, env) do
+    if operator_meaning?(env, op) do
+      elaborate_expr_typed({:function_call, [name: Atom.to_string(op)], [l, r]}, names, ctx, env)
+    else
+      {:error, {:no_operator_meaning, op}}
+    end
+  end
+
+  # True when `atom` names anything callable: a top-level definition, an
+  # interface method, a `where`-constrained global, a constructor, or a bare
+  # name resolvable through a single re-keyed import.
+  defp operator_meaning?(env, atom) do
+    Env.get_def(env, atom) != nil or
+      Cure.Elab.Resolve.method?(env, atom) or
+      Cure.Elab.Resolve.constrained?(env, atom) or
+      Inductive.get_ctor(env, atom) != nil or
+      match?({:ok, _}, Cure.Elab.Resolution.resolve_bare(env, atom))
   end
 
   # Fold a `pickup` clause list into a right-nested `:conditional` chain.
@@ -1147,12 +1245,37 @@ defmodule Cure.Elab.Elaborator do
         {:ok, app2(builtin_op_global(if(op_sym == :==, do: :float_eq, else: :float_ne)), l, r)}
 
       # An indexed family (Bounded — Char) erases to a native int but is not a
-      # monomorphic twin, so it takes the same polymorphic struct_eq path.
+      # monomorphic twin, so it takes the polymorphic struct_eq path directly. This
+      # is a concrete-type primitive fast path (Bounded erases to a BEAM int, so
+      # struct_eq IS its native equality), monomorphising to the identical spine
+      # the `Equatable for Char` (keyed `:Bounded`) instance would — kept as an
+      # optimisation of the single route. It is NOT routed to the method because
+      # that instance is index-specialised to Char's `Bounded(1114112)` and would
+      # reject a differently-indexed `Bounded(n)`.
       {:ok, :bounded} ->
         struct_eq_binop(op_sym, l, r, l_type, ctx)
 
-      :error ->
+      # `Atom` is a sealed Int-tier primitive base type (`{:vatom_type}`): a BEAM
+      # atom is its own canonical value, so `:ok == :ok` is native primitive
+      # equality, no more a typeclass obligation than `1 == 1`. This concrete fast
+      # path monomorphises to the identical `struct_eq(Atom, ·, ·)` spine the
+      # `Equatable for Atom` instance emits — an optimisation of the single route,
+      # never reached for an abstract/rigid/ADT operand (those fall to `:error`).
+      # It is required for the bootstrap-closure OTP/syntax modules, which compare
+      # atoms yet elaborate with no ambient `Equatable` dictionary.
+      {:ok, :atom} ->
         struct_eq_binop(op_sym, l, r, l_type, ctx)
+
+      # Any OTHER operand type — String, an ADT, a neutral, or an abstract/rigid
+      # type variable — has no primitive equality. The SOLE route is the
+      # `Equatable` method desugar: report "no primitive operand" so the
+      # `{:binary_op, …}` caller re-elaborates `` `==`(l, r) ``/`` `!=`(l, r) ``.
+      # A concrete type reaches its (hand-written or auto-derived) instance; a
+      # rigid variable with no in-scope dictionary rejects with
+      # `{:no_instance, :Equatable, {:rigid, _}}`. The universal constraint-free
+      # `struct_eq` last-resort for abstract types is retired here.
+      :error ->
+        {:error, {:unsupported_operand_type, op_sym}}
     end
   end
 
@@ -1215,6 +1338,23 @@ defmodule Cure.Elab.Elaborator do
   # A saturated `f(a)(b)` application of a global by name, most-recently-applied
   # argument outermost — the shape the kernel + emit expect for a curried def.
   defp app2(name, l, r), do: {:app, {:app, {:global, name}, l}, r}
+
+  # Left-nested application of a head term to a list of argument terms, in order:
+  # `[a, b, c]` becomes `{:app, {:app, {:app, head, a}, b}, c}` — the curried spine
+  # the kernel and emit expect.
+  defp build_app_spine(head, arg_terms), do: Enum.reduce(arg_terms, head, &{:app, &2, &1})
+
+  # Elaborate every surface argument to its Core term (discarding the inferred
+  # types), short-circuiting on the first failure. Returns `{:ok, terms}` in call
+  # order or the first `{:error, _}`.
+  defp elaborate_all_args(args, names, ctx, env) do
+    Enum.reduce_while(args, {:ok, []}, fn a, {:ok, acc} ->
+      case elaborate_expr_typed(a, names, ctx, env) do
+        {:ok, term, _ty} -> {:cont, {:ok, acc ++ [term]}}
+        {:error, _} = err -> {:halt, err}
+      end
+    end)
+  end
 
   # The canonical global identity of a kernel builtin op. `Builtins.seed/2`
   # registers these under `Std.Builtin#<op>` (see `builtin_op_name/1` there), so a
@@ -1490,9 +1630,15 @@ defmodule Cure.Elab.Elaborator do
               end
           end
 
-        with {:ok, term} <- result,
-             :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-          {:ok, term}
+        case result do
+          {:ok, term} ->
+            case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+              :ok -> {:ok, term}
+              {:error, _} = err -> ctor_refinement_fallback(expr, expected_core, names, ctx, env, err)
+            end
+
+          {:error, _} = err ->
+            ctor_refinement_fallback(expr, expected_core, names, ctx, env, err)
         end
 
       true ->
@@ -2028,12 +2174,34 @@ defmodule Cure.Elab.Elaborator do
         :no ->
           with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
             term = maybe_inject_union(term, type, expected_core, ctx, env)
+            term = maybe_coerce_refined_to_base(term, type, expected_core, ctx, env)
 
             with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
               {:ok, term}
             end
           end
       end
+    end
+  end
+
+  # A checking-mode constructor whose direct check against the expected type failed
+  # may still inhabit the BASE of a refinement `{x: T | φ}` = `Sigma(T, λx. φ)` —
+  # e.g. `S(k)` at `-> {n: Nat | IsPositive(n)}`, where `S` is a `Nat` (not `Sigma`)
+  # constructor, so the direct check reports `:foreign_ctor`. When the expected type
+  # is such a refinement, route to the refinement-discharge fallback, which checks
+  # the constructor against the base domain `T` and searches for a proof of the
+  # obligation `φ[x := S(k)]`. Additive: reached only after the direct constructor
+  # check already failed, and the original error is surfaced when the expected type
+  # is not a dischargeable refinement or no proof is found — so every
+  # currently-accepted or -rejected constructor body is unchanged.
+  defp ctor_refinement_fallback(expr, expected_core, names, ctx, env, orig_err) do
+    if refinement_return?(expected_core, ctx, env) do
+      case elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env) do
+        {:ok, _} = ok -> ok
+        _ -> orig_err
+      end
+    else
+      orig_err
     end
   end
 
@@ -2044,24 +2212,59 @@ defmodule Cure.Elab.Elaborator do
   # nullary constructor (`Confirmed()`) and build the pair. The author writes just
   # the value; no `refine`, no explicit proof.
   #
-  # Soundness: the elaborator only PROPOSES `mk_pair(value, Confirmed())`; the
-  # kernel re-checks it in the fallback's `Kernel.check`, and here inhabitation of
-  # the obligation is itself decided by `Kernel.check` (not by the elaborator
-  # trusting its own reduction). A violated obligation (`IsTrue(False())`) or an
-  # OPEN one (mentioning a free binder) yields no inhabiting constructor, so this
-  # returns `:no` and the value falls through to ordinary checking — the proof is
-  # required, never invented.
+  # Soundness: the elaborator only PROPOSES `mk_pair(value, proof)`; the proof it
+  # supplies is itself kernel-checked against the obligation before use (by
+  # `reflection_proof` via `Kernel.check`, or — for an open obligation — by every
+  # candidate `ProofSearch.resolve` returns), and `value` is checked against the
+  # base component at elaboration. The Σ-intro rule then makes the pair well-typed
+  # by construction; the elaborator never trusts its own reduction. A CLOSED
+  # obligation with no inhabiting nullary constructor (`IsTrue(False())`), or an
+  # OPEN one with no derivable proof, yields `nil`, so this returns `:no` and the
+  # value falls through to ordinary checking — the proof is required, never
+  # invented.
   defp try_discharge_refinement(expr, expected_core, names, ctx, env) do
     sigma_fam = Inductive.builtin(env, :sigma)
 
     with false <- is_nil(sigma_fam),
          {:data, ^sigma_fam, [dom, cod], []} <- Kernel.normalize(ctx, expected_core),
+         # Exclude a flat tuple / bare nested-pair Σ (`Tuple(T1,…,Tn)` lowers to a
+         # unit-terminated Σ telescope that shares this shape). Its instantiated
+         # second component is itself a Σ, which `ProofSearch` would happily "prove"
+         # by fabricating a pair — silently accepting a program that has no
+         # refinement obligation at all (and mis-elaborating its value). Only a
+         # genuine refinement `{x: T | φ}`, whose predicate is a proposition, may
+         # reach discharge.
+         false <- tuple_telescope_type?(expected_core, sigma_fam, ctx, env),
          {:ok, value} <- elaborate_expr_checked(expr, dom, names, ctx, env),
          {:data, _fam_key, _p, _i} = obligation <- Kernel.normalize(ctx, {:app, cod, value}),
-         proof when not is_nil(proof) <- reflection_proof(obligation, ctx, env) do
+         proof when not is_nil(proof) <- discharge_obligation(obligation, ctx, env) do
       {:ok, {:ctor, sigma_ctor_name(env), [value, proof]}}
     else
       _ -> :no
+    end
+  end
+
+  # Find a proof of a refinement obligation, or nil. A CLOSED obligation
+  # (`IsTrue(True())`) is discharged by its family's nullary constructor via
+  # `reflection_proof`. An OPEN obligation — one whose truth rests on a free
+  # binder, e.g. `IsTrue(int_gt(x, 0))` for a parameter `x` — has no nullary
+  # inhabitant, so it falls through to the auto-lemma proof search, which derives
+  # the proof from in-scope hypotheses (a matching `evidence : IsTrue(x > 0)`
+  # binder), `@lemma`-tagged theorems, or the sign-directed positivity procedure.
+  # Every term `ProofSearch` returns is kernel-checked against this obligation
+  # inside the search, so an open obligation is discharged only when a genuine
+  # proof exists; an unprovable one returns `:none` here (→ nil → `:no` upstream)
+  # and the value is rejected exactly as before.
+  defp discharge_obligation(obligation, ctx, env) do
+    case reflection_proof(obligation, ctx, env) do
+      nil ->
+        case Cure.Elab.ProofSearch.resolve(obligation, ctx, env) do
+          {:ok, proof} -> proof
+          _ -> nil
+        end
+
+      proof ->
+        proof
     end
   end
 
@@ -2084,6 +2287,64 @@ defmodule Cure.Elab.Elaborator do
       end
     end)
   end
+
+  # If `term`'s inferred `type` WHNFs to the Sigma refinement family and the
+  # expected base type is convertible to the Sigma's first-component type, coerce
+  # by inserting the first projection (`sigma_first`, or `Std.Refine.refined_value`
+  # when that idiomatic accessor is in scope) — the reverse of the base->refined
+  # injection. This is the ONLY new behavior; if the shapes don't match, return
+  # `term` unchanged so ordinary checking (and its error) stands.
+  #
+  # `type` is a semantic VALUE here (not a Core term — see the call site), so it is
+  # inspected with `Normalise.whnf_value/2` (mirror `sigma_params/3` in
+  # proof_search.ex), never `Kernel.normalize/2` (which expects a Core term and
+  # matches `:data`, not `:vdata`). The inserted projection is independently
+  # re-verified by the fallback's `Kernel.check`, so a wrong coercion is caught.
+  defp maybe_coerce_refined_to_base(term, type, expected_core, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+    depth = Context.length(ctx)
+    sig = Context.signature(ctx)
+
+    with false <- is_nil(sigma_fam),
+         {:vdata, ^sigma_fam, [dom_value, predicate_value]} <- Normalise.whnf_value(type, sig),
+         # Do not coerce when the expected type is itself that Sigma (no coercion
+         # needed) — only when expected is the base component type.
+         false <- sigma_typed?(expected_core, sigma_fam, ctx),
+         dom_term <- Quote.reify(dom_value, depth, sig),
+         true <- convertible?(dom_term, expected_core, ctx, env) do
+      predicate_term = Quote.reify(predicate_value, depth, sig)
+      build_app({:global, first_projection_head(env)}, [dom_term, predicate_term, term])
+    else
+      _ -> term
+    end
+  end
+
+  # The global to head the first projection with: `Std.Refine.refined_value` when
+  # the refinement API is in scope (the idiomatic accessor a human writes,
+  # mirroring `refinement_proof`), else the kernel builtin `sigma_first`. Mirror
+  # `second_projection_head/1` in `proof_search.ex`: nil-check via `Env.get_def`
+  # FIRST, because `Env.resolve_key/3` falls back to the bare input atom (never
+  # nil) and would otherwise hand back a nonexistent global.
+  defp first_projection_head(env) do
+    case Env.get_def(env, "refined_value") do
+      nil -> :sigma_first
+      _def -> Env.resolve_key(env, env.defs, "refined_value")
+    end
+  end
+
+  # True when the expected Core type normalises to the Sigma family itself (so no
+  # coercion is needed — the refined value is already at the expected type).
+  defp sigma_typed?(expected_core, sigma_fam, ctx) do
+    match?({:data, ^sigma_fam, _, []}, Kernel.normalize(ctx, expected_core))
+  end
+
+  # Up-to-conversion equality of two Core types, mirroring proof_search.ex:317.
+  # `Conv.conv?/5` takes Core terms and evaluates them itself.
+  defp convertible?(a_term, b_term, ctx, env) do
+    Conv.conv?(a_term, b_term, Context.env(ctx), Context.length(ctx), env)
+  end
+
+  defp build_app(head, args), do: Enum.reduce(args, head, fn a, f -> {:app, f, a} end)
 
   # The nullary constructor for a LITERAL member of the expected union, or nil if the
   # expected type is not a union or the literal is not one of its members.
@@ -2116,6 +2377,96 @@ defmodule Cure.Elab.Elaborator do
   @spec coerce_union(term(), Cure.Core.Value.t(), term(), Context.t(), Env.t()) :: term()
   def coerce_union(term, type, expected_core, ctx, env),
     do: maybe_inject_union(term, type, expected_core, ctx, env)
+
+  @doc """
+  Coerce an already-inferred refinement value to its base type.
+
+  A STRICT no-op unless the inferred `type` WHNFs to the Sigma refinement family and
+  `expected_core` is convertible to the Sigma's first-component type, so it is safe to
+  apply anywhere a term has been inferred but the expected base type is known.
+  `Declarations.elaborate_body/6`'s catch-all needs it for the same reason it needs
+  `coerce_union/5`: that clause elaborates in INFER mode, so a body like
+  `fn underlying(p: PositiveNatural) -> Nat = p` never reaches the check-mode fallback.
+  """
+  @spec coerce_refined_to_base(term(), Cure.Core.Value.t(), term(), Context.t(), Env.t()) ::
+          term()
+  def coerce_refined_to_base(term, type, expected_core, ctx, env),
+    do: maybe_coerce_refined_to_base(term, type, expected_core, ctx, env)
+
+  @doc """
+  True when the declared return type is the refinement / dependent-pair Sigma
+  family.
+
+  `Declarations.elaborate_body/6`'s catch-all uses it to route such returns
+  through CHECK mode, so an OPEN refinement obligation (`{n: T | φ}` whose truth
+  depends on a binder) reaches `try_discharge_refinement` and can be discharged by
+  proof search — mirroring how `union_goal?/1` routes union returns through check
+  mode. A metavariable-bearing return type is excluded (it must not be handed to
+  the kernel's `Kernel.normalize`), matching `elaborate_expr_checked_fallback/5`'s
+  own guard; such a body keeps the historical infer path.
+  """
+  @spec refinement_return?(term(), Context.t(), Env.t()) :: boolean()
+  def refinement_return?(expected_core, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+
+    not is_nil(sigma_fam) and not Unify.has_meta?(expected_core) and
+      sigma_typed?(expected_core, sigma_fam, ctx) and
+      not tuple_telescope_type?(expected_core, sigma_fam, ctx, env)
+  end
+
+  @doc """
+  True when an *inferred* body already sits at the refinement / dependent-pair
+  Sigma family — i.e. it is a complete refinement value (`refine(v, pf)`) rather
+  than a bare base value that still owes a refinement obligation.
+
+  `Declarations.elaborate_refinement_return_body/6` uses it to decide whether a
+  body at a refinement return needs the goal threaded in (a base value like
+  `multiply(a, b)` at `{n | IsPositive(n)}`, whose obligation must reach
+  `try_discharge_refinement`) or is already complete and must be kept verbatim (so
+  its projection accessors are not re-derived by a redundant checked pass).
+
+  `type` is a semantic VALUE (the third element of `elaborate_expr_typed/4`, see
+  `coerce_refined_to_base/5`), so it is inspected with `Normalise.whnf_value/2` —
+  never `Kernel.normalize/2`, which expects a Core term and would crash on a value.
+  """
+  @spec inferred_refinement_value?(Cure.Core.Value.t(), Context.t(), Env.t()) :: boolean()
+  def inferred_refinement_value?(type, ctx, env) do
+    sigma_fam = Inductive.builtin(env, :sigma)
+    sig = Context.signature(ctx)
+
+    not is_nil(sigma_fam) and
+      match?({:vdata, ^sigma_fam, [_dom, _pred]}, Normalise.whnf_value(type, sig))
+  end
+
+  # A refinement / bare dependent-pair Σ and a flat tuple Σ share ONE Core shape
+  # (`{:data, Sigma, [dom, λ], []}`) — the unified-tuple encoding lowers
+  # `Tuple(T1,…,Tn)` to the unit-terminated telescope
+  # `Sigma(T1, λ_. … Sigma(Tn, λ_. Unit))`. Only the SPINE TERMINATOR separates
+  # them: a tuple bottoms at `Unit`, a refinement's predicate is a proposition.
+  # Routing a tuple return through the refinement check-first path changes how its
+  # body elaborates (a still-well-typed but different Core term, e.g. an off-by-one
+  # in a nested optic rebuild), so tuples MUST be excluded here.
+  #
+  # This is the transitive closure of `telescope_terminator?/3`'s probe technique:
+  # apply each Σ's predicate to a closed `unit` probe, normalize (β-reducing a
+  # non-dependent tail to its body), and recurse on the tail. A car list that ends
+  # in `Unit` is a tuple; anything else (a proposition, or a bare pair whose tail is
+  # an ordinary type) is not. Mirrors emit's value-level `telescope_cars/2`.
+  defp tuple_telescope_type?(expected_core, sigma_fam, ctx, env) do
+    unit_family = unit_family_name(env)
+
+    case Kernel.normalize(ctx, expected_core) do
+      {:data, ^unit_family, [], []} ->
+        true
+
+      {:data, ^sigma_fam, [_dom, b_fn], []} ->
+        tail = {:app, b_fn, {:ctor, unit_ctor_name(env), []}}
+        tuple_telescope_type?(tail, sigma_fam, ctx, env)
+
+      _ ->
+        false
+    end
+  end
 
   # Anonymous-union subsumption: a coercion inserted by the ELABORATOR in check mode
   # only — never a kernel rule. If the expected type is a generated union family and
@@ -2383,11 +2734,19 @@ defmodule Cure.Elab.Elaborator do
   defp abstract_term({:var, i}, _target, depth) when i >= depth, do: {:var, i + 1}
   defp abstract_term({:var, _} = var, _target, _depth), do: var
 
+  # Descending a binder shifts every free de Bruijn variable — including any in
+  # `target` — up by one, so the target must be shifted to keep matching the SAME
+  # occurrence one binder deeper. Without this, abstracting a scrutinee that occurs
+  # under a binder (e.g. a Π/λ-typed SIBLING like `g : (b = T) -> (c = T)`) both
+  # MISSES the real occurrence (now at `target+1`) and spuriously matches whatever
+  # else sits at the un-shifted index (`c`). Callers whose target occurs only at the
+  # abstraction depth (the common goal case) cross no binder before the match, so the
+  # shift is a no-op for them.
   defp abstract_term({:pi, _g, d, c}, target, depth),
-    do: {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(c, target, depth + 1)}
+    do: {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(c, Subst.shift(target, 1, 0), depth + 1)}
 
   defp abstract_term({:lam, _g, d, b}, target, depth),
-    do: {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(b, target, depth + 1)}
+    do: {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(b, Subst.shift(target, 1, 0), depth + 1)}
 
   # A `:case` branch `{ctor, arity, body}` binds `arity` de Bruijn variables in
   # `body` (see `Cure.Core.Term` shift/3's `:case` clause). Mirror that here:
@@ -2399,7 +2758,7 @@ defmodule Cure.Elab.Elaborator do
   defp abstract_term({:case, scrut, motive, branches}, target, depth) do
     {:case, abstract_term(scrut, target, depth), abstract_term(motive, target, depth),
      Enum.map(branches, fn {ctor, arity, body} ->
-       {ctor, arity, abstract_term(body, target, depth + arity)}
+       {ctor, arity, abstract_term(body, Subst.shift(target, arity, 0), depth + arity)}
      end)}
   end
 
@@ -4441,11 +4800,28 @@ defmodule Cure.Elab.Elaborator do
 
   # A Bool scrutinee is now the inductive family (`{:vdata, :Bool, []}`), resolved
   # via the registry; Int/Float stay primitive type-values.
+  #
+  # NOTE(int-facade): `{:vint_type}` is retired from surface production (spec
+  # 2026-07-18 §3a); this clause stays so scrutinee-kind resolution remains
+  # total on a legacy/deserialized value still carrying it.
   defp primitive_scrut_kind({:vint_type}, _sig), do: {:ok, :int}
   defp primitive_scrut_kind({:vfloat_type}, _sig), do: {:ok, :float}
+  # `Atom` is a sealed primitive base type; its `==`/`!=` lowers to the polymorphic
+  # `struct_eq` (a BEAM atom is its own value). Kept out of the arithmetic clause,
+  # which never consults `:atom`, so `:ok + :ok` still rejects.
+  defp primitive_scrut_kind({:vatom_type}, _sig), do: {:ok, :atom}
 
+  # `Bool` and `Int` are both nullary inductive families now (spec 2026-07-18
+  # surface flip retired the primitive `{:vint_type}` node). An `Int`-typed operand
+  # is `{:vdata, int_fid, []}`; it maps to `:int` so the arithmetic/comparison/eq
+  # `build_binop` clauses fold to the monomorphic native ops exactly as before the
+  # flip. Any other nullary family (e.g. `Nat`) stays `:error` → struct_eq path.
   defp primitive_scrut_kind({:vdata, fid, []}, sig) do
-    if fid == Inductive.builtin(sig, :bool), do: {:ok, :bool}, else: :error
+    cond do
+      fid == Inductive.builtin(sig, :bool) -> {:ok, :bool}
+      fid == Inductive.builtin(sig, :int) -> {:ok, :int}
+      true -> :error
+    end
   end
 
   # An applied `Bounded(n)` (Char's underlying type) is an indexed family that

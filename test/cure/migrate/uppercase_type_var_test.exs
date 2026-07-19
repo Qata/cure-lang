@@ -10,6 +10,16 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     {Printer.quoted_to_string(new_ast), warns}
   end
 
+  # Warnings only, skipping the Printer render step — some structured
+  # computed-use surfaces (e.g. an actor `on_call` channel) hit an unrelated
+  # Printer limitation, and a warning-only assertion isolates the lint.
+  defp migrate_warns(src, file) do
+    {:ok, toks} = Lexer.tokenize(src, file: file, emit_events: false)
+    {:ok, ast} = Parser.parse(toks, file: file, emit_events: false)
+    {_new_ast, warns} = Migrate.run(ast, file: file)
+    warns
+  end
+
   test "free uppercase type var is lowercased across the signature" do
     {out, warns} = migrate("mod M\nfn id(x: T) -> T = x\n", "a.cure")
     assert out =~ "x: t"
@@ -405,6 +415,74 @@ defmodule Cure.Migrate.UppercaseTypeVarTest do
     {out, warns} = migrate(src, "mixed.cure")
     assert out =~ "x: t"
     assert out =~ "definition: FsmDefinitionSyntax"
+    assert Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "an fsm computed-use's derived FsmEvent type is not lowercased at the use site" do
+    # `fsm … derive` is a `:computed_use` macro invocation. Its expander emits an
+    # ambient `enum_type("FsmEvent", …)` into the *caller's* module during
+    # `expand_declaration_uses` — after the migration lint runs. A handwritten
+    # sibling `fn make_start() -> FsmEvent = Start` references that derived type,
+    # but `build_ctx/1` walks the pre-expansion surface AST where `FsmEvent` does
+    # not yet exist, so it was misread as a free type variable and lowercased to
+    # `fsmevent`. The use-site analog of the declaration-site macro-family gap.
+    src = """
+    mod M
+      use Std.Fsm
+
+      fsm Cure.Generated.Derived state Int derive
+        match event
+          Start -> :keep_state_and_data
+          Stop -> :keep_state_and_data
+
+    fn make_start() -> FsmEvent = Start
+    """
+
+    {out, warns} = migrate(src, "fsm_use.cure")
+    assert out =~ "-> FsmEvent"
+    refute out =~ "fsmevent"
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "an actor computed-use's derived ActorMessage/ActorRequest types are not lowercased" do
+    src = """
+    mod M
+      use Std.Actor
+
+      actor Cure.Generated.StructuredCall
+        state Int
+        on_cast
+          Inc -> state + 1
+        on_call
+          Read -> state
+
+    fn make_message() -> ActorMessage = Inc
+      fn make_request() -> ActorRequest = Read
+    """
+
+    warns = migrate_warns(src, "actor_use.cure")
+    refute Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
+  end
+
+  test "a genuinely free type var still warns even alongside a computed-use" do
+    # Guards against the computed-use type-name collection degenerating into
+    # blanket suppression: a real free type var `T` in a sibling function must
+    # still be flagged when the module also contains an fsm/actor computed-use.
+    src = """
+    mod M
+      use Std.Fsm
+
+      fsm Cure.Generated.Derived state Int derive
+        match event
+          Start -> :keep_state_and_data
+
+    fn make_start() -> FsmEvent = Start
+      fn id(x: T) -> T = x
+    """
+
+    {out, warns} = migrate(src, "fsm_use_free.cure")
+    assert out =~ "-> FsmEvent"
+    assert out =~ "x: t"
     assert Enum.any?(warns, &(&1.rule == :W_uppercase_type_var))
   end
 

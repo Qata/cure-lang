@@ -14,6 +14,20 @@ defmodule Cure.StdlibTest do
     module
   end
 
+  # A `where Equatable(t)` function (e.g. `List.contains`) is elaborated in the
+  # dictionary-passing model Idris/Agda use: the resolved `Equatable` instance is
+  # threaded as a trailing runtime argument. At the element type `Int`, that
+  # dictionary is the single-field record `Equatable(==)` — emitted as a tagged
+  # tuple whose field is the *curried* `==` method (the callee applies it one
+  # argument at a time). A BEAM caller of a generic constrained function supplies
+  # this dictionary exactly as an internal Cure caller would; the tag itself is
+  # inert (the callee projects field 1 positionally).
+  defp equatable_int_dict do
+    {:module, _} = :code.ensure_loaded(:"Cure.Std.Equatable")
+    eq = fn a -> fn b -> apply(:"Cure.Std.Equatable", :"__impl_Equatable_Std.Int#Int_==", [a, b]) end end
+    {:"Std.Equatable#Equatable", eq}
+  end
+
   # ============================================================================
   # Std.Math
   # ============================================================================
@@ -416,9 +430,10 @@ defmodule Cure.StdlibTest do
     end
 
     test "contains", %{m: m} do
-      assert m.contains([1, 2, 3], 2) == true
-      assert m.contains([1, 2, 3], 5) == false
-      assert m.contains([], 1) == false
+      dict = equatable_int_dict()
+      assert m.contains([1, 2, 3], 2, dict) == true
+      assert m.contains([1, 2, 3], 5, dict) == false
+      assert m.contains([], 1, dict) == false
     end
 
     test "find", %{m: m} do

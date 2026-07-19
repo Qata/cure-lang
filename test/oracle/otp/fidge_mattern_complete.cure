@@ -1,0 +1,105 @@
+mod FidgeMatternComplete
+  use Std.Equivalent
+  ## FIDGE–MATTERN COMPLETENESS — the converse of the clock condition, the direction `FidgeMattern` left open.
+  ## Soundness shows a → b ⟹ VC(a) < VC(b). Completeness is the converse: VC(a) ≤ VC(b) ⟹ a causally
+  ## precedes-or-equals b. It is FALSE on raw vector clocks (unrelated stamps can compare), so it needs event
+  ## IDENTITY and the RETROSPECTIVE clock VC(e)[i] = #{ process-i events causally ≤ e }.
+  ##
+  ## The proof pivots on the DIAGONAL coordinate p = proc(a). Two facts about a valid execution:
+  ##   * diagonal: VC(a)[p] = S(pos a) — a's own coordinate counts a and every earlier same-process event;
+  ##   * b's causal-past mask on process p is DOWNWARD CLOSED (`Prefix(mb)`), its popcount = VC(b)[p].
+  ## Then `vec_le(VC a, VC b)` projected at p gives VC(a)[p] ≤ VC(b)[p], i.e. S(pos a) ≤ popcount(mb); the
+  ## threshold lemma ([[fm-prefix-count]] `FmPrefixCount`) turns that into nth(mb, pos a) = T — precisely "a is
+  ## in b's causal past". `ex_complete` discharges a concrete CROSS-PROCESS instance (a message 0→1) so the
+  ## theorem is non-vacuous: a = event (proc 0, pos 1) causally precedes b = event (proc 1, pos 1) through the
+  ## message, and the vector-clock order correctly detects it.
+  type Nat = Z | S(Nat)
+  type Bool = F | T
+  fn leq(a: Nat, b: Nat) -> Bool = match a
+    Z()   -> T()
+    S(k)  -> match b
+      Z()   -> F()
+      S(j)  -> leq(k, j)
+  fn andb(a: Bool, b: Bool) -> Bool = match a
+    T() -> b
+    F() -> F()
+  fn andb_true_l(a: Bool, b: Bool, e: Equivalent(Bool, andb(a, b), T())) -> Equivalent(Bool, a, T()) = match a
+    T() -> reflexive(T())
+    F() -> match e
+  fn andb_true_r(a: Bool, b: Bool, e: Equivalent(Bool, andb(a, b), T())) -> Equivalent(Bool, b, T()) = match a
+    T() -> e
+    F() -> match e
+  ## Process p's causal-past bitmask relative to an event b: entry k = "k-th event of p causally ≤ b?".
+  type Flags = FNil | FCons(Bool, Flags)
+  fn count_true(fs: Flags) -> Nat = match fs
+    FNil()        -> Z()
+    FCons(b, r)   -> match b
+      T()   -> S(count_true(r))
+      F()   -> count_true(r)
+  fn nth(fs: Flags, k: Nat) -> Bool = match fs
+    FNil()        -> F()
+    FCons(x, r)   -> match k
+      Z()   -> x
+      S(k2) -> nth(r, k2)
+  type AllF indices (fs: Flags)
+    AFNil  : AllF(FNil)
+    AFCons : (r: Flags) -> AllF(r) -> AllF(FCons(F, r))
+  fn allf_nth(fs: Flags, h: AllF(fs), k: Nat) -> Equivalent(Bool, nth(fs, k), F()) = match h
+    AFNil()        -> reflexive(F())
+    AFCons(r, h2)  -> match k
+      Z()   -> reflexive(F())
+      S(k2) -> allf_nth(r, h2, k2)
+  fn allf_count(fs: Flags, h: AllF(fs)) -> Equivalent(Nat, count_true(fs), Z()) = match h
+    AFNil()        -> reflexive(Z())
+    AFCons(r, h2)  -> allf_count(r, h2)
+  type Prefix indices (fs: Flags)
+    PBase : (fs: Flags) -> AllF(fs) -> Prefix(fs)
+    PT    : (fs: Flags) -> Prefix(fs) -> Prefix(FCons(T, fs))
+  ## THE THRESHOLD LEMMA: position k is in the past exactly when k is below the popcount.
+  fn threshold(fs: Flags, h: Prefix(fs), k: Nat) -> Equivalent(Bool, nth(fs, k), leq(S(k), count_true(fs))) = match h
+    PBase(fs2, af)  -> rewrite allf_count(fs2, af) in rewrite allf_nth(fs2, af, k) in reflexive(F())
+    PT(fs2, p2)     -> match k
+      Z()   -> reflexive(T())
+      S(k2) -> threshold(fs2, p2, k2)
+  ## A full vector clock and its pointwise order.
+  type Vec = VNil | VCons(Nat, Vec)
+  fn proj(v: Vec, i: Nat) -> Nat = match v
+    VNil()        -> Z()
+    VCons(x, r)   -> match i
+      Z()   -> x
+      S(i2) -> proj(r, i2)
+  fn vec_le(u: Vec, v: Vec) -> Bool = match u
+    VNil()        -> T()
+    VCons(x, u2)  -> match v
+      VNil()        -> F()
+      VCons(y, v2)  -> andb(leq(x, y), vec_le(u2, v2))
+  ## Pointwise ≤ projects to each coordinate.
+  fn vec_le_proj(u: Vec, v: Vec, h: Equivalent(Bool, vec_le(u, v), T()), i: Nat) -> Equivalent(Bool, leq(proj(u, i), proj(v, i)), T()) = match u
+    VNil()        -> reflexive(T())
+    VCons(x, u2)  -> match v
+      VNil()        -> match h
+      VCons(y, v2)  -> match i
+        Z()   -> andb_true_l(leq(x, y), vec_le(u2, v2), h)
+        S(i2) -> vec_le_proj(u2, v2, andb_true_r(leq(x, y), vec_le(u2, v2), h), i2)
+  ## The diagonal coordinate carries the whole argument: S(pos a) ≤ popcount(b's mask on proc a).
+  fn le_coord(va: Vec, vb: Vec, p: Nat, ka: Nat, mb: Flags, hdiag: Equivalent(Nat, proj(va, p), S(ka)), hcoord: Equivalent(Nat, proj(vb, p), count_true(mb)), hle: Equivalent(Bool, vec_le(va, vb), T())) -> Equivalent(Bool, leq(S(ka), count_true(mb)), T()) =
+    rewrite sym(hdiag) in rewrite sym(hcoord) in vec_le_proj(va, vb, hle, p)
+  ## **COMPLETENESS**: if VC(a) ≤ VC(b) pointwise, then a is in b's causal past (nth(mb, pos a) = T), given the
+  ## diagonal and the downward-closed past mask — comparing vector clocks is COMPLETE for causality.
+  fn completeness(va: Vec, vb: Vec, p: Nat, ka: Nat, mb: Flags, pb: Prefix(mb), hdiag: Equivalent(Nat, proj(va, p), S(ka)), hcoord: Equivalent(Nat, proj(vb, p), count_true(mb)), hle: Equivalent(Bool, vec_le(va, vb), T())) -> Equivalent(Bool, nth(mb, ka), T()) =
+    trans(threshold(mb, pb, ka), le_coord(va, vb, p, ka, mb, hdiag, hcoord, hle))
+  ## NON-VACUOUS concrete instance: a genuine cross-process message 0→1.
+  ## a = (proc 0, pos 1), VC = [2,0];  b = (proc 1, pos 1), VC = [2,2];  b's mask on proc 0 = [T,T].
+  ## completeness fires at coordinate p=0: S(1) ≤ 2 = popcount, so a is in b's cut — which is TRUE (a precedes
+  ## b through the message), and the vector-clock order detected it.
+  fn ex_complete() -> Equivalent(Bool, nth(FCons(T(), FCons(T(), FNil())), S(Z())), T()) =
+    completeness(
+      VCons(S(S(Z())), VCons(Z(), VNil())),
+      VCons(S(S(Z())), VCons(S(S(Z())), VNil())),
+      Z(), S(Z()),
+      FCons(T(), FCons(T(), FNil())),
+      PT(FCons(T(), FNil()), PT(FNil(), PBase(FNil(), AFNil()))),
+      reflexive(S(S(Z()))),
+      reflexive(S(S(Z()))),
+      reflexive(T()))
+end

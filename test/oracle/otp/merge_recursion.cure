@@ -1,0 +1,311 @@
+mod MergeRecursion
+  use Std.Equivalent
+  type TB2 = F | T
+  type Tag = TA | TB | TC
+  fn tag_eq(x: Tag, y: Tag) -> TB2 = match x
+    TA() -> match y
+      TA() -> T()
+      TB() -> F()
+      TC() -> F()
+    TB() -> match y
+      TA() -> F()
+      TB() -> T()
+      TC() -> F()
+    TC() -> match y
+      TA() -> F()
+      TB() -> F()
+      TC() -> T()
+  ## Local types with CHOICE (LSel/LBra), RECURSION (LRec/LVar), and the conflict marker LErr.
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local) | LSel(Tag, Local, Tag, Local) | LBra(Tag, Local, Tag, Local) | LRec(Local) | LVar | LErr
+  fn merge(x: Local, y: Local) -> Local = match x
+    LEnd() -> match y
+      LEnd()      -> LEnd()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2)      -> LErr()
+      LBra(a2, A2, b2, B2)      -> LErr()
+      LRec(p2)      -> LErr()
+      LVar()      -> LErr()
+      LErr()      -> LErr()
+    LSend(t1, k1) -> match y
+      LEnd()      -> LErr()
+      LSend(t2, k2)      -> match tag_eq(t1, t2)
+        T() -> LSend(t1, merge(k1, k2))
+        F() -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2)      -> LErr()
+      LBra(a2, A2, b2, B2)      -> LErr()
+      LRec(p2)      -> LErr()
+      LVar()      -> LErr()
+      LErr()      -> LErr()
+    LRecv(t1, k1) -> match y
+      LEnd()      -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> match tag_eq(t1, t2)
+        T() -> LRecv(t1, merge(k1, k2))
+        F() -> LBra(t1, k1, t2, k2)
+      LSel(a2, A2, b2, B2)      -> LErr()
+      LBra(a2, A2, b2, B2)      -> LErr()
+      LRec(p2)      -> LErr()
+      LVar()      -> LErr()
+      LErr()      -> LErr()
+    LSel(a1, A1, b1, B1) -> match y
+      LEnd()      -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2)      -> match tag_eq(a1, a2)
+        T() -> match tag_eq(b1, b2)
+          T() -> LSel(a1, merge(A1, A2), b1, merge(B1, B2))
+          F() -> LErr()
+        F() -> LErr()
+      LBra(a2, A2, b2, B2)      -> LErr()
+      LRec(p2)      -> LErr()
+      LVar()      -> LErr()
+      LErr()      -> LErr()
+    LBra(a1, A1, b1, B1) -> match y
+      LEnd()      -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2)      -> LErr()
+      LBra(a2, A2, b2, B2)      -> match tag_eq(a1, a2)
+        T() -> match tag_eq(b1, b2)
+          T() -> LBra(a1, merge(A1, A2), b1, merge(B1, B2))
+          F() -> LErr()
+        F() -> LErr()
+      LRec(p2)      -> LErr()
+      LVar()      -> LErr()
+      LErr()      -> LErr()
+    LRec(p1) -> match y
+      LEnd()      -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2)      -> LErr()
+      LBra(a2, A2, b2, B2)      -> LErr()
+      LRec(p2)      -> LRec(merge(p1, p2))
+      LVar()      -> LErr()
+      LErr()      -> LErr()
+    LVar() -> match y
+      LEnd()      -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2)      -> LErr()
+      LBra(a2, A2, b2, B2)      -> LErr()
+      LRec(p2)      -> LErr()
+      LVar()      -> LVar()
+      LErr()      -> LErr()
+    LErr() -> match y
+      LEnd()      -> LErr()
+      LSend(t2, k2)      -> LErr()
+      LRecv(t2, k2)      -> LErr()
+      LSel(a2, A2, b2, B2)      -> LErr()
+      LBra(a2, A2, b2, B2)      -> LErr()
+      LRec(p2)      -> LErr()
+      LVar()      -> LErr()
+      LErr()      -> LErr()
+  fn lsend_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LSend(t, a), LSend(t, b)) = rewrite e in reflexive(LSend(t, b))
+  fn lrecv_cong(t: Tag, {a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LRecv(t, a), LRecv(t, b)) = rewrite e in reflexive(LRecv(t, b))
+  fn lrec_cong({a: Local}, {b: Local}, e: Equivalent(Local, a, b)) -> Equivalent(Local, LRec(a), LRec(b)) = rewrite e in reflexive(LRec(b))
+  fn lsel_cong(a: Tag, {A1: Local}, {A2: Local}, eA: Equivalent(Local, A1, A2), b: Tag, {B1: Local}, {B2: Local}, eB: Equivalent(Local, B1, B2)) -> Equivalent(Local, LSel(a, A1, b, B1), LSel(a, A2, b, B2)) = rewrite eA in rewrite eB in reflexive(LSel(a, A2, b, B2))
+  fn lbra_cong(a: Tag, {A1: Local}, {A2: Local}, eA: Equivalent(Local, A1, A2), b: Tag, {B1: Local}, {B2: Local}, eB: Equivalent(Local, B1, B2)) -> Equivalent(Local, LBra(a, A1, b, B1), LBra(a, A2, b, B2)) = rewrite eA in rewrite eB in reflexive(LBra(a, A2, b, B2))
+  ## Single-variable substitution (unfolding): opaque under an inner LRec.
+  fn lsubst(l: Local, s: Local) -> Local = match l
+    LEnd()           -> LEnd()
+    LSend(t, k)      -> LSend(t, lsubst(k, s))
+    LRecv(t, k)      -> LRecv(t, lsubst(k, s))
+    LSel(a, A, b, B) -> LSel(a, lsubst(A, s), b, lsubst(B, s))
+    LBra(a, A, b, B) -> LBra(a, lsubst(A, s), b, lsubst(B, s))
+    LRec(body)       -> LRec(body)
+    LVar()           -> s
+    LErr()           -> LErr()
+  ## **MERGE IS IDEMPOTENT** (needed for the recursion-variable case below): merge(l, l) = l.
+  fn merge_idem(l: Local) -> Equivalent(Local, merge(l, l), l) = match l
+    LEnd()          -> reflexive(LEnd())
+    LSend(t, k)     -> match t
+      TA() -> lsend_cong(TA(), merge_idem(k))
+      TB() -> lsend_cong(TB(), merge_idem(k))
+      TC() -> lsend_cong(TC(), merge_idem(k))
+    LRecv(t, k)     -> match t
+      TA() -> lrecv_cong(TA(), merge_idem(k))
+      TB() -> lrecv_cong(TB(), merge_idem(k))
+      TC() -> lrecv_cong(TC(), merge_idem(k))
+    LSel(a, A, b, B) -> match a
+      TA() -> match b
+        TA() -> lsel_cong(TA(), merge_idem(A), TA(), merge_idem(B))
+        TB() -> lsel_cong(TA(), merge_idem(A), TB(), merge_idem(B))
+        TC() -> lsel_cong(TA(), merge_idem(A), TC(), merge_idem(B))
+      TB() -> match b
+        TA() -> lsel_cong(TB(), merge_idem(A), TA(), merge_idem(B))
+        TB() -> lsel_cong(TB(), merge_idem(A), TB(), merge_idem(B))
+        TC() -> lsel_cong(TB(), merge_idem(A), TC(), merge_idem(B))
+      TC() -> match b
+        TA() -> lsel_cong(TC(), merge_idem(A), TA(), merge_idem(B))
+        TB() -> lsel_cong(TC(), merge_idem(A), TB(), merge_idem(B))
+        TC() -> lsel_cong(TC(), merge_idem(A), TC(), merge_idem(B))
+    LBra(a, A, b, B) -> match a
+      TA() -> match b
+        TA() -> lbra_cong(TA(), merge_idem(A), TA(), merge_idem(B))
+        TB() -> lbra_cong(TA(), merge_idem(A), TB(), merge_idem(B))
+        TC() -> lbra_cong(TA(), merge_idem(A), TC(), merge_idem(B))
+      TB() -> match b
+        TA() -> lbra_cong(TB(), merge_idem(A), TA(), merge_idem(B))
+        TB() -> lbra_cong(TB(), merge_idem(A), TB(), merge_idem(B))
+        TC() -> lbra_cong(TB(), merge_idem(A), TC(), merge_idem(B))
+      TC() -> match b
+        TA() -> lbra_cong(TC(), merge_idem(A), TA(), merge_idem(B))
+        TB() -> lbra_cong(TC(), merge_idem(A), TB(), merge_idem(B))
+        TC() -> lbra_cong(TC(), merge_idem(A), TC(), merge_idem(B))
+    LRec(p)         -> lrec_cong(merge_idem(p))
+    LVar()          -> reflexive(LVar())
+    LErr()          -> reflexive(LErr())
+  ## MERGEABILITY, extended with a recursion-variable case (MgVar) and a recursion case (MgRec).
+  ## Differing receives carry their continuations as explicit fields so the union LBra is nameable.
+  type Mergeable indices (x: Local, y: Local)
+    MgEnd    : Mergeable(LEnd, LEnd)
+    MgSend   : (t: Tag) -> Mergeable(k1, k2) -> Mergeable(LSend(t, k1), LSend(t, k2))
+    MgRecvEq : (t: Tag) -> Mergeable(k1, k2) -> Mergeable(LRecv(t, k1), LRecv(t, k2))
+    MgRecvNe : (a: Tag) -> (b: Tag) -> (xk: Local) -> (yk: Local) -> Equivalent(TB2, tag_eq(a, b), F()) -> Mergeable(LRecv(a, xk), LRecv(b, yk))
+    MgSel    : (a: Tag) -> (b: Tag) -> Mergeable(A1, A2) -> Mergeable(B1, B2) -> Mergeable(LSel(a, A1, b, B1), LSel(a, A2, b, B2))
+    MgBra    : (a: Tag) -> (b: Tag) -> Mergeable(A1, A2) -> Mergeable(B1, B2) -> Mergeable(LBra(a, A1, b, B1), LBra(a, A2, b, B2))
+    MgVar    : Mergeable(LVar, LVar)
+    MgRec    : (p1: Local) -> (p2: Local) -> Mergeable(p1, p2) -> Mergeable(LRec(p1), LRec(p2))
+  ## **MERGE COMMUTES WITH SUBSTITUTION FOR MERGEABLE BRANCHES** (the crux of choice-under-recursion):
+  ## Mergeable(x, y) ⟹ merge(lsubst(x, s), lsubst(y, s)) = lsubst(merge(x, y), s). So unfolding a
+  ## recursive protocol and THEN merging a bystander's two branch-behaviours equals merging first and
+  ## then unfolding — hence bystander projection is stable under unfolding. The apparent obstacle
+  ## (substituting into a bare LVar merged with a concrete type could change mergeability) never arises
+  ## BECAUSE that pair is exactly non-mergeable; the only variable case is MgVar (LVar with LVar),
+  ## discharged by MERGE IDEMPOTENCE on the substituted value merge(s, s) = s. Induction on the
+  ## mergeability derivation.
+  fn merge_lsubst_commute({x: Local}, {y: Local}, m: Mergeable(x, y), s: Local) -> Equivalent(Local, merge(lsubst(x, s), lsubst(y, s)), lsubst(merge(x, y), s)) = match m
+    MgEnd()               -> reflexive(LEnd())
+    MgSend(t, m2)         -> match t
+      TA() -> lsend_cong(TA(), merge_lsubst_commute(m2, s))
+      TB() -> lsend_cong(TB(), merge_lsubst_commute(m2, s))
+      TC() -> lsend_cong(TC(), merge_lsubst_commute(m2, s))
+    MgRecvEq(t, m2)       -> match t
+      TA() -> lrecv_cong(TA(), merge_lsubst_commute(m2, s))
+      TB() -> lrecv_cong(TB(), merge_lsubst_commute(m2, s))
+      TC() -> lrecv_cong(TC(), merge_lsubst_commute(m2, s))
+    MgRecvNe(a, b, xk, yk, pne) -> match a
+      TA() -> match b
+        TA() -> match pne
+        TB() -> reflexive(LBra(TA(), lsubst(xk, s), TB(), lsubst(yk, s)))
+        TC() -> reflexive(LBra(TA(), lsubst(xk, s), TC(), lsubst(yk, s)))
+      TB() -> match b
+        TA() -> reflexive(LBra(TB(), lsubst(xk, s), TA(), lsubst(yk, s)))
+        TB() -> match pne
+        TC() -> reflexive(LBra(TB(), lsubst(xk, s), TC(), lsubst(yk, s)))
+      TC() -> match b
+        TA() -> reflexive(LBra(TC(), lsubst(xk, s), TA(), lsubst(yk, s)))
+        TB() -> reflexive(LBra(TC(), lsubst(xk, s), TB(), lsubst(yk, s)))
+        TC() -> match pne
+    MgSel(a, b, mA, mB)   -> match a
+      TA() -> match b
+        TA() -> lsel_cong(TA(), merge_lsubst_commute(mA, s), TA(), merge_lsubst_commute(mB, s))
+        TB() -> lsel_cong(TA(), merge_lsubst_commute(mA, s), TB(), merge_lsubst_commute(mB, s))
+        TC() -> lsel_cong(TA(), merge_lsubst_commute(mA, s), TC(), merge_lsubst_commute(mB, s))
+      TB() -> match b
+        TA() -> lsel_cong(TB(), merge_lsubst_commute(mA, s), TA(), merge_lsubst_commute(mB, s))
+        TB() -> lsel_cong(TB(), merge_lsubst_commute(mA, s), TB(), merge_lsubst_commute(mB, s))
+        TC() -> lsel_cong(TB(), merge_lsubst_commute(mA, s), TC(), merge_lsubst_commute(mB, s))
+      TC() -> match b
+        TA() -> lsel_cong(TC(), merge_lsubst_commute(mA, s), TA(), merge_lsubst_commute(mB, s))
+        TB() -> lsel_cong(TC(), merge_lsubst_commute(mA, s), TB(), merge_lsubst_commute(mB, s))
+        TC() -> lsel_cong(TC(), merge_lsubst_commute(mA, s), TC(), merge_lsubst_commute(mB, s))
+    MgBra(a, b, mA, mB)   -> match a
+      TA() -> match b
+        TA() -> lbra_cong(TA(), merge_lsubst_commute(mA, s), TA(), merge_lsubst_commute(mB, s))
+        TB() -> lbra_cong(TA(), merge_lsubst_commute(mA, s), TB(), merge_lsubst_commute(mB, s))
+        TC() -> lbra_cong(TA(), merge_lsubst_commute(mA, s), TC(), merge_lsubst_commute(mB, s))
+      TB() -> match b
+        TA() -> lbra_cong(TB(), merge_lsubst_commute(mA, s), TA(), merge_lsubst_commute(mB, s))
+        TB() -> lbra_cong(TB(), merge_lsubst_commute(mA, s), TB(), merge_lsubst_commute(mB, s))
+        TC() -> lbra_cong(TB(), merge_lsubst_commute(mA, s), TC(), merge_lsubst_commute(mB, s))
+      TC() -> match b
+        TA() -> lbra_cong(TC(), merge_lsubst_commute(mA, s), TA(), merge_lsubst_commute(mB, s))
+        TB() -> lbra_cong(TC(), merge_lsubst_commute(mA, s), TB(), merge_lsubst_commute(mB, s))
+        TC() -> lbra_cong(TC(), merge_lsubst_commute(mA, s), TC(), merge_lsubst_commute(mB, s))
+    MgVar()               -> merge_idem(s)
+    MgRec(p1, p2, mp)     -> reflexive(LRec(merge(p1, p2)))
+
+  type Role = RA | RB | RC
+  fn role_eq(x: Role, y: Role) -> TB2 = match x
+    RA() -> match y
+      RA() -> T()
+      RB() -> F()
+      RC() -> F()
+    RB() -> match y
+      RA() -> F()
+      RB() -> T()
+      RC() -> F()
+    RC() -> match y
+      RA() -> F()
+      RB() -> F()
+      RC() -> T()
+  type Global = GEnd | GMsg(Role, Role, Tag, Global) | GCho(Role, Role, Tag, Global, Tag, Global) | GRec(Global) | GVar
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()                          -> LEnd()
+    GMsg(from, to, t, k)            -> match role_eq(from, r)
+      T() -> LSend(t, project(k, r))
+      F() -> match role_eq(to, r)
+        T() -> LRecv(t, project(k, r))
+        F() -> project(k, r)
+    GCho(from, to, tL, gL, tR, gR)  -> match role_eq(from, r)
+      T() -> LSel(tL, project(gL, r), tR, project(gR, r))
+      F() -> match role_eq(to, r)
+        T() -> LBra(tL, project(gL, r), tR, project(gR, r))
+        F() -> merge(project(gL, r), project(gR, r))
+    GRec(body)                      -> LRec(project(body, r))
+    GVar()                          -> LVar()
+  fn gsubst(g: Global, s: Global) -> Global = match g
+    GEnd()                          -> GEnd()
+    GMsg(from, to, t, k)            -> GMsg(from, to, t, gsubst(k, s))
+    GCho(from, to, tL, gL, tR, gR)  -> GCho(from, to, tL, gsubst(gL, s), tR, gsubst(gR, s))
+    GRec(body)                      -> GRec(body)
+    GVar()                          -> s
+  type WF indices (g: Global)
+    WFEnd : WF(GEnd)
+    WFAB  : (t: Tag) -> WF(k) -> WF(GMsg(RA, RB, t, k))
+    WFBA  : (t: Tag) -> WF(k) -> WF(GMsg(RB, RA, t, k))
+    WFBC  : (t: Tag) -> WF(k) -> WF(GMsg(RB, RC, t, k))
+    WFAC  : (t: Tag) -> WF(k) -> WF(GMsg(RA, RC, t, k))
+    WFCho : (tL: Tag) -> WF(gL) -> (tR: Tag) -> WF(gR) -> Mergeable(project(gL, RC), project(gR, RC)) -> WF(GCho(RA, RB, tL, gL, tR, gR))
+    WFRec : (body: Global) -> WF(body) -> WF(GRec(body))
+    WFVar : WF(GVar)
+  fn eqv_trans({a: Local}, {b: Local}, {c: Local}, e1: Equivalent(Local, a, b), e2: Equivalent(Local, b, c)) -> Equivalent(Local, a, c) =
+    rewrite e1 in e2
+  fn merge_cong({a: Local}, {a2: Local}, {b: Local}, {b2: Local}, ea: Equivalent(Local, a, a2), eb: Equivalent(Local, b, b2)) -> Equivalent(Local, merge(a, b), merge(a2, b2)) =
+    rewrite ea in rewrite eb in reflexive(merge(a2, b2))
+  ## **PROJECTION IS A SUBSTITUTION HOMOMORPHISM, WITH CHOICE + RECURSION** (the full choice-under-
+  ## recursion result). For a WELL-FORMED recursive global with choice, project(gsubst(g,s), r) =
+  ## lsubst(project(g,r), project(s,r)). The bystander CHOICE case needs merge to commute with
+  ## substitution, discharged by merge_lsubst_commute on the mergeability witness carried in WFCho.
+  fn project_subst_hom({g: Global}, s: Global, r: Role, w: WF(g)) -> Equivalent(Local, project(gsubst(g, s), r), lsubst(project(g, r), project(s, r))) = match w
+    WFEnd()                   -> reflexive(LEnd())
+    WFAB(t, w2)               -> match r
+      RA() -> lsend_cong(t, project_subst_hom(s, RA(), w2))
+      RB() -> lrecv_cong(t, project_subst_hom(s, RB(), w2))
+      RC() -> project_subst_hom(s, RC(), w2)
+    WFBA(t, w2)               -> match r
+      RA() -> lrecv_cong(t, project_subst_hom(s, RA(), w2))
+      RB() -> lsend_cong(t, project_subst_hom(s, RB(), w2))
+      RC() -> project_subst_hom(s, RC(), w2)
+    WFBC(t, w2)               -> match r
+      RA() -> project_subst_hom(s, RA(), w2)
+      RB() -> lsend_cong(t, project_subst_hom(s, RB(), w2))
+      RC() -> lrecv_cong(t, project_subst_hom(s, RC(), w2))
+    WFAC(t, w2)               -> match r
+      RA() -> lsend_cong(t, project_subst_hom(s, RA(), w2))
+      RB() -> project_subst_hom(s, RB(), w2)
+      RC() -> lrecv_cong(t, project_subst_hom(s, RC(), w2))
+    WFCho(tL, wL, tR, wR, mg) -> match r
+      RA() -> lsel_cong(tL, project_subst_hom(s, RA(), wL), tR, project_subst_hom(s, RA(), wR))
+      RB() -> lbra_cong(tL, project_subst_hom(s, RB(), wL), tR, project_subst_hom(s, RB(), wR))
+      RC() -> eqv_trans(merge_cong(project_subst_hom(s, RC(), wL), project_subst_hom(s, RC(), wR)), merge_lsubst_commute(mg, project(s, RC())))
+    WFRec(body, w2)           -> reflexive(LRec(project(body, r)))
+    WFVar()                   -> reflexive(project(s, r))
+  ## **PROJECTION COMMUTES WITH UNFOLDING, WITH CHOICE** — the capstone: a looping multiparty protocol
+  ## with branching keeps every role's projection (active AND bystander) stable across every unfolding.
+  fn unfold_commute(body: Global, r: Role, w: WF(body)) -> Equivalent(Local, project(gsubst(body, GRec(body)), r), lsubst(project(body, r), LRec(project(body, r)))) =
+    project_subst_hom(GRec(body), r, w)
+end

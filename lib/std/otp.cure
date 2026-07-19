@@ -66,9 +66,84 @@ mod Std.Otp
   ## / `Server` tag is a phantom at kind `Type`: no values, no runtime cost.
   typealias GenServer(q, r) = RawPid(q, r, Server)
 
+  ## A DEPENDENT `gen_server` handle: requests `q`, reply computed PER REQUEST by `rep : q -> Type` (an
+  ## `ReplyOf`). The SAME server answers different requests at different reply types. A real datatype INDEXED by
+  ## `rep` (mirroring `Std.Sigma`), so `call_dep` recovers the reply family from the handle — a phantom typealias
+  ## could not. Wraps the raw server pid and shares its bare-pid representation. The reply soundness (a reply
+  ## really has type `rep(req)`, consumed once) is `Std.Otp.Proof`.
+  type DepGenServer(q: Type, rep: (q) -> Type) indices ()
+    mk_dep_server : (raw: RawPid(q, Unit, Server)) -> DepGenServer(q, rep)
+
+  ## View a running `gen_server` as a dependent server under a chosen reply family `rep` (from the expected
+  ## result type). Zero runtime content beyond the wrapped pid.
+  fn as_dep({q: Type}, {rep: (q) -> Type}, server: GenServer(q, Unit)) -> DepGenServer(q, rep) =
+    mk_dep_server(server)
+
   ## The callback-side one-shot reply capability supplied by `gen_server`. It
   ## erases to OTP's `{pid, tag}` tuple but remains linear at Cure call sites.
   typealias Reply(r) = Tuple(RawPid(NoMessage, NoMessage, Plain), Ref)
+
+  ## A typed message ADDRESS — the Gleam-style `Subject`. A fresh `(owner-pid, unique-tag)` pair; UNLIKE `Pid(m)`
+  ## (one message type per process) a single process may own SEVERAL subjects of different types, each a distinct
+  ## typed channel. `subject_send` delivers a TAGGED message to the owner; `subject_receive` matches that tag, so
+  ## channels never cross. Erases to the bare `{pid, ref}` tuple — no registry / `persistent_term` (AtomVM-safe).
+  ## This is the addressing layer `Selector` (typed selective receive) and typed `Name` build on.
+  typealias Subject(m) = Tuple(Pid(m), Ref)
+
+  ## Mint a fresh subject owned by the calling process.
+  fn new_subject({m: Type}) -> Effect(Subject(m)) = raw_subject_new()
+
+  ## Send a typed message to a subject — delivered TAGGED to the owner's mailbox (fire-and-forget, like `tell`).
+  fn subject_send({m: Type}, subject: Subject(m), message: m) -> Effect(Unit) =
+    let sent = raw_subject_send(subject, message)
+    ()
+
+  ## Receive the next message addressed to `subject` within `timeout` ms; `None` on timeout. Only the subject's
+  ## OWNER (the process that created it) may receive.
+  fn subject_receive({m: Type}, subject: Subject(m), timeout: Int) -> Effect(Option(m)) =
+    raw_subject_receive(subject, timeout)
+
+  ## Typed SELECTIVE RECEIVE (Gleam-style `Selector`). Accumulate handlers over several subjects of DIFFERENT
+  ## message types — each mapped into a common payload `p` by `select_map` — then `selector_receive` returns
+  ## whichever arrives first, typed as `p`. `select` is the identity case (the subject's messages ARE the
+  ## payload). Building a selector is pure; only the receive is an `Effect`. The safety of merging heterogeneous
+  ## channels into one exhaustively-handled payload is what `Std.Otp.SelectiveReceive` proves.
+  fn new_selector({p: Type}) -> Selector(p) = raw_selector_new()
+
+  ## Add `subject`, mapping its messages into the selector's payload `p`.
+  fn select_map({p: Type}, {m: Type}, selector: Selector(p), subject: Subject(m), transform: (m) -> p) -> Selector(p) =
+    raw_selector_select_map(selector, subject, transform)
+
+  ## Add a subject whose message type IS the payload (identity mapping).
+  fn select({p: Type}, selector: Selector(p), subject: Subject(p)) -> Selector(p) =
+    raw_selector_select_map(selector, subject, fn(x) -> x)
+
+  ## Receive from whichever selected subject arrives first within `timeout` ms; `None` on timeout.
+  fn selector_receive({p: Type}, selector: Selector(p), timeout: Int) -> Effect(Option(p)) =
+    raw_selector_receive(selector, timeout)
+
+  ## A typed process NAME (Gleam-style `Name(m)`) — a registered atom carrying the message type `m` its process
+  ## accepts. Registering binds a `Pid(m)` to the name; `whereis_name` looks it up as a TYPED, sendable
+  ## `Option(Pid(m))` — closing F-1 (a name lookup previously yielded only an untyped, unsendable `BarePid`). The
+  ## type `m` is the caller's claim, carried by the `Name` (the sole trust point, as in Gleam). AtomVM caveat:
+  ## uses `erlang:register`/`whereis` — host OTP is fine; confirm AtomVM support before relying on it there.
+  type Name(m: Type) indices ()
+    MkName : (registered: Atom) -> Name(m)
+
+  ## A typed name over a registered atom. `m` asserts what the named process accepts.
+  fn name({m: Type}, registered: Atom) -> Name(m) = MkName(registered)
+
+  local fn name_atom({m: Type}, n: Name(m)) -> Atom = match n
+    MkName(a) -> a
+
+  ## Register a `Pid(m)` under the name. Returns whether registration succeeded (false if the name is taken).
+  fn register_name({m: Type}, n: Name(m), pid: Pid(m)) -> Effect(Bool) = raw_name_register(name_atom(n), pid)
+
+  ## Look up the process registered under the name as a TYPED, sendable `Pid(m)`; `None` if unregistered.
+  fn whereis_name({m: Type}, n: Name(m)) -> Effect(Option(Pid(m))) = raw_name_whereis(name_atom(n))
+
+  ## Remove the name's registration. Returns whether it was registered.
+  fn unregister_name({m: Type}, n: Name(m)) -> Effect(Bool) = raw_name_unregister(name_atom(n))
 
   ## A process message set. The first algebra floor stores tag and arity
   ## shapes; typed ADT payload derivation is added by the transparent macro
@@ -158,6 +233,19 @@ mod Std.Otp
   ## shim and is deferred (audit §6).
   fn call({q: Type}, {r: Type}, server: GenServer(q, r), request: q) -> Effect(r) =
     raw_call(server, request)
+
+  ## Synchronous DEPENDENT `gen_server` call: send `request`, block for the reply at the request's OWN type
+  ## `rep(request)`. The dependent counterpart of `call` — one server answers heterogeneous requests, each at its
+  ## own reply type, checked at the call site. `rep(request)` is fixed by the EXPLICIT request argument (not a
+  ## return-only implicit), so it threads through the extern. Soundness is `Std.Otp.Proof` (oracle
+  ## `dep_call_boundary`); same PARTIAL caveat as `call`.
+  ## Project the wrapped raw pid (constant, non-Effect motive so the dependent match is trivial).
+  local fn dep_raw({q: Type}, {rep: (q) -> Type}, server: DepGenServer(q, rep)) -> RawPid(q, Unit, Server) =
+    match server
+      mk_dep_server(raw) -> raw
+
+  fn call_dep({q: Type}, {rep: (q) -> Type}, server: DepGenServer(q, rep), request: q) -> Effect(rep(request)) =
+    raw_call_dep(dep_raw(server), request)
 
   ## Send one reply through a callback's linear `from` capability. Generated
   ## actor callbacks use this direct operation and return `noreply`.

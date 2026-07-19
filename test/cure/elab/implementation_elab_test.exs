@@ -19,11 +19,11 @@ defmodule Cure.Elab.ImplementationElabTest do
       end
       """)
 
-    assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(e), :Eqs, :Int)
+    assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(e), :Eqs, :"Std.Int#Int")
   end
 
   test "a duplicate anonymous instance is an overlap error" do
-    assert {:error, {:overlapping_instance, :Eqs, :Int}} =
+    assert {:error, {:overlapping_instance, :Eqs, :"Std.Int#Int"}} =
              Program.elaborate("""
              mod M
                interface Eqs(a)
@@ -52,6 +52,6 @@ defmodule Cure.Elab.ImplementationElabTest do
     # registration must still succeed. Deeper behavioural verification of the
     # filled-in default's value happens once method-call resolution exists
     # (Task 4) and via the stdlib's real `Equatable.ne` default (Task 8).
-    assert {:ok, _} = Coherence.lookup_anon(Env.coherence(e), :Eqs, :Int)
+    assert {:ok, _} = Coherence.lookup_anon(Env.coherence(e), :Eqs, :"Std.Int#Int")
   end
 end

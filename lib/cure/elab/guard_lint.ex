@@ -122,10 +122,9 @@ defmodule Cure.Elab.GuardLint do
   defp int_form({:int_lit, n}, _ctx, st), do: {:ok, int_lit(n), st}
 
   defp int_form({:var, i}, ctx, st) do
-    case Context.lookup(ctx, i) do
-      {:vint_type} -> {:ok, var_name(i), %{st | ints: MapSet.put(st.ints, i)}}
-      _ -> :error
-    end
+    if int_typed?(Context.lookup(ctx, i), Context.signature(ctx)),
+      do: {:ok, var_name(i), %{st | ints: MapSet.put(st.ints, i)}},
+      else: :error
   end
 
   # Builtin-op global spine twins of the prim arithmetic clauses (K2 §1.6).
@@ -151,6 +150,17 @@ defmodule Cure.Elab.GuardLint do
   end
 
   defp int_form(_other, _ctx, _st), do: :error
+
+  # NOTE(int-facade): An `Int`-typed operand. Post-2026-07-18 surface flip, `Int`
+  # is the nullary inductive family `{:vdata, int_fid, []}` (the primitive
+  # `{:vint_type}` node is retired for value terms); the facade value is still
+  # tolerated so a legacy `{:vint_type}`-typed operand (serialization
+  # round-trips, old envs) keeps rendering. Any other family (e.g. `Nat`,
+  # `Float`) is NOT int → uninterpreted fallback, exactly as the float gate did
+  # before.
+  defp int_typed?({:vint_type}, _sig), do: true
+  defp int_typed?({:vdata, fid, []}, sig), do: fid == Cure.Core.Inductive.builtin(sig, :int)
+  defp int_typed?(_ty, _sig), do: false
 
   defp arith(sym, a, b, ctx, st) do
     with {:ok, sa, st} <- int_form(a, ctx, st),

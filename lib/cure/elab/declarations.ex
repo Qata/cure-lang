@@ -586,9 +586,13 @@ defmodule Cure.Elab.Declarations do
            MacroExpand.expand(body_expr, env, callback_context: Keyword.get(meta, :callback_context)),
          {:ok, sig} <- function_signature(meta, env) do
       ctx = build_context(env, sig.telescope)
+      # Qualify any hole minted while elaborating THIS body by its enclosing def
+      # (`hole_id/2`) — local to this call, never merged back into `final` below,
+      # so it cannot leak into another def's elaboration.
+      def_env = Env.with_current_def(env, sig.name)
 
       with {:ok, body_term, return_core, _return_value} <-
-             elaborate_body_typed(body_expr, sig, ctx, env),
+             elaborate_body_typed(body_expr, sig, ctx, def_env),
            # A `where`-introduced dictionary parameter is present by default but
            # SAFELY demoted to `:erased` when the body never uses it relevantly (an
            # `ignore`-style constrained function): the same criterion the relevance
@@ -994,43 +998,19 @@ defmodule Cure.Elab.Declarations do
         # failing with unsolved metavariables under pure inference.
         Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
+      Elaborator.refinement_return?(return_core, ctx, env) ->
+        # A non-constructor call at a refinement return (`fn f(...) -> {n: T | φ} =
+        # g(...)`). Route it through `elaborate_refinement_return_body/6`: a call
+        # that already infers to a refinement value (`refine(v, pf)`) is a complete
+        # term and is kept verbatim; only a call inferring to the base type
+        # (`multiply(a, b)` at `{n | IsPositive(n)}`) is CHECKED so its obligation
+        # reaches the proof-search discharge (`try_discharge_refinement`).
+        elaborate_refinement_return_body(expr, return_core, scope, ctx, env, fn ->
+          elaborate_call_body_infer(expr, return_core, scope, ctx, env)
+        end)
+
       true ->
-        # A non-constructor call body is inferred, then (mirroring the constructor
-        # branch above, and `elaborate_branch_body`'s function-call arm) retried in
-        # *checking* mode when inference fails only because it could not synthesise a
-        # standalone type. Two such failures both want the goal threaded in:
-        #
-        #   * `:unsolved_metavariables` — an implicit determined by NEITHER argument,
-        #     only by the declared return type (`mk(Z()) : Const(Nat, Bool)`, whose
-        #     phantom `{b}` no argument fixes) — solved from the goal;
-        #   * `:unsupported_expression` — an argument that cannot infer standalone,
-        #     the load-bearing case being an unannotated lambda whose domain only the
-        #     goal fixes (`mk(fn(x) -> x.1) : Box(Tuple(Int,Int), Int)`): checking
-        #     against the goal solves the callee's implicit `s`/`a` first, giving the
-        #     lambda a concrete (tuple) domain so its `.i` projection lowers.
-        #
-        # Additive: the checked retry runs only after inference already errored, and
-        # the original error is surfaced if the retry also fails, so every
-        # currently-accepted or -rejected body is unchanged.
-        case Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
-          {:ok, term, type} ->
-            # `coerce_union/5` is a strict no-op unless the declared return type is a
-            # generated anonymous-union family. This branch discards `return_core`, so
-            # without it a call body like `fn wide(n: Int) -> Int | Bool | Atom =
-            # narrow(n)` would never be injected or widened.
-            {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
-
-          {:error, reason} = orig
-          when is_tuple(reason) and
-                 elem(reason, 0) in [:unsolved_metavariables, :unsupported_expression] ->
-            case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do
-              {:ok, term} -> {:ok, term}
-              {:error, _} -> orig
-            end
-
-          {:error, _} = orig ->
-            orig
-        end
+        elaborate_call_body_infer(expr, return_core, scope, ctx, env)
     end
   end
 
@@ -1066,8 +1046,12 @@ defmodule Cure.Elab.Declarations do
 
   # A hole body `?name` elaborates to a `:hole` term (accepted at the declared
   # return type by the kernel; it blocks codegen until filled).
-  defp elaborate_body({:hole, meta, _}, _return_core, _scope, _ctx, env, _params) do
-    {:ok, {:hole, hole_id(env, meta)}}
+  defp elaborate_body({:hole, _meta, _} = expr, return_core, scope, ctx, env, _params) do
+    # A whole-body proof hole is a check-position hole against the declared return
+    # type: route it through the proof-hole trigger so `@lemma`-tagged theorems and
+    # local hypotheses can auto-discharge it. Strictly additive — on `:none` the
+    # trigger returns the same surviving `{:hole, id}` this clause used to build.
+    Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
   end
 
   # A `let … ⏎ body` block: check it against the declared return type (there is
@@ -1117,16 +1101,113 @@ defmodule Cure.Elab.Declarations do
   # clause discards `return_core`), so the injection would never fire and the kernel
   # would reject `Int` at the union type.
   defp elaborate_body(expr, return_core, scope, ctx, env, _params) do
-    # A union-goal body (e.g. a map literal at `Map(Atom, Int | Bool)`) is CHECKED, so
-    # the goal reaches the application and its implicits are solved from the goal rather
-    # than from the first value. Everything else keeps the historical infer-first path;
-    # `coerce_union/5` is a strict no-op unless the goal is a union family.
-    if Elaborator.union_goal?(return_core) do
-      Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
-    else
-      with {:ok, term, type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
+    cond do
+      # A union-goal body (e.g. a map literal at `Map(Atom, Int | Bool)`) is CHECKED,
+      # so the goal reaches the application and its implicits are solved from the goal
+      # rather than from the first value.
+      Elaborator.union_goal?(return_core) ->
+        Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
+      # A refinement return `{x: T | φ}` is CHECKED so an OPEN obligation (one whose
+      # truth depends on a binder, e.g. `{n: Int | n > 0}` for a body mentioning a
+      # parameter) reaches `try_discharge_refinement` and can be discharged by proof
+      # search — the infer path below discards `return_core` and so never reaches
+      # check-position. Check mode is kernel-sound (every proposed proof is
+      # re-checked), so this only ACCEPTS more, never wrongly; if it does not apply
+      # (the body is not a value that discharges), fall back to the infer path, which
+      # still coerces an already-refined body down to its base where needed.
+      Elaborator.refinement_return?(return_core, ctx, env) ->
+        elaborate_refinement_return_body(expr, return_core, scope, ctx, env, fn ->
+          elaborate_body_infer(expr, return_core, scope, ctx, env)
+        end)
+
+      true ->
+        elaborate_body_infer(expr, return_core, scope, ctx, env)
+    end
+  end
+
+  # A body at a refinement return (`fn f(...) -> {x: T | φ} = body`). Infer the
+  # body first: if it ALREADY has a refinement type (it constructed the pair
+  # itself — `refine(v, pf)`, or is a variable of refinement type), it is a
+  # complete term and is kept verbatim via `infer_fallback`, so its author-written
+  # or proof-searched projection accessors are NOT re-derived by a redundant
+  # checked pass (which picks a different-but-convertible projection head —
+  # `Std.Sigma#sigma_first` where the direct term used `Std.Refine#refined_value`,
+  # the ProofHole differential regression). Only a body inferring to a
+  # NON-refinement base value (`multiply(a, b)` at `{n | IsPositive(n)}`) needs the
+  # goal threaded in so its refinement obligation reaches `try_discharge_refinement`
+  # — that is the CHECK pass. Every proposed proof is kernel-rechecked, so checking
+  # only ever ACCEPTS more; on any failure, `infer_fallback` restores the exact
+  # currently-accepted/-rejected behaviour.
+  defp elaborate_refinement_return_body(expr, return_core, scope, ctx, env, infer_fallback) do
+    case Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
+      {:ok, _term, type} ->
+        if Elaborator.inferred_refinement_value?(type, ctx, env) do
+          infer_fallback.()
+        else
+          case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do
+            {:ok, checked} -> {:ok, checked}
+            _ -> infer_fallback.()
+          end
+        end
+
+      {:error, _} ->
+        case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do
+          {:ok, checked} -> {:ok, checked}
+          _ -> infer_fallback.()
+        end
+    end
+  end
+
+  # The historical infer-first body path. `coerce_union/5` is a strict no-op unless
+  # the declared return type is a generated anonymous-union family (then the inferred
+  # term is injected into the matching member constructor); `coerce_refined_to_base/5`
+  # is a strict no-op unless the inferred type is a refinement Sigma and the return is
+  # its base component (then the first projection is inserted).
+  defp elaborate_body_infer(expr, return_core, scope, ctx, env) do
+    with {:ok, term, type} <- Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
+      term = Elaborator.coerce_union(term, type, return_core, ctx, env)
+      {:ok, Elaborator.coerce_refined_to_base(term, type, return_core, ctx, env)}
+    end
+  end
+
+  # A non-constructor call body is inferred, then (mirroring the constructor branch
+  # in the `{:function_call, …}` clause of `elaborate_body/6`, and
+  # `elaborate_branch_body`'s function-call arm) retried in *checking* mode when
+  # inference fails only because it could not synthesise a standalone type. Two such
+  # failures both want the goal threaded in:
+  #
+  #   * `:unsolved_metavariables` — an implicit determined by NEITHER argument, only
+  #     by the declared return type (`mk(Z()) : Const(Nat, Bool)`, whose phantom `{b}`
+  #     no argument fixes) — solved from the goal;
+  #   * `:unsupported_expression` — an argument that cannot infer standalone, the
+  #     load-bearing case being an unannotated lambda whose domain only the goal fixes
+  #     (`mk(fn(x) -> x.1) : Box(Tuple(Int,Int), Int)`): checking against the goal
+  #     solves the callee's implicit `s`/`a` first, giving the lambda a concrete
+  #     (tuple) domain so its `.i` projection lowers.
+  #
+  # Additive: the checked retry runs only after inference already errored, and the
+  # original error is surfaced if the retry also fails, so every currently-accepted or
+  # -rejected body is unchanged.
+  defp elaborate_call_body_infer(expr, return_core, scope, ctx, env) do
+    case Elaborator.elaborate_expr_typed(expr, scope, ctx, env) do
+      {:ok, term, type} ->
+        # `coerce_union/5` is a strict no-op unless the declared return type is a
+        # generated anonymous-union family. This branch discards `return_core`, so
+        # without it a call body like `fn wide(n: Int) -> Int | Bool | Atom =
+        # narrow(n)` would never be injected or widened.
         {:ok, Elaborator.coerce_union(term, type, return_core, ctx, env)}
-      end
+
+      {:error, reason} = orig
+      when is_tuple(reason) and
+             elem(reason, 0) in [:unsolved_metavariables, :unsupported_expression] ->
+        case Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env) do
+          {:ok, term} -> {:ok, term}
+          {:error, _} -> orig
+        end
+
+      {:error, _} = orig ->
+        orig
     end
   end
 
@@ -1134,16 +1215,15 @@ defmodule Cure.Elab.Declarations do
   # must get a UNIQUE id: once holes flow through the kernel as stuck neutrals,
   # two holes sharing an id are definitionally equal, so `refl : ?a = ?b` would
   # type-check and a false equality be forgeable. A NAMED `?foo` keys on its name
-  # so repeating `?foo` within a scope refers to the SAME unknown; an unnamed `?`
-  # keys on its source position (`line:col`), unique per occurrence. Both are
-  # module-qualified via `Env.owner/1`. No gensym counter is used, so Antigen and
-  # the differential oracle stay replay-stable.
-  #
-  # Soundness note: `line:col` within a module is inherently unique per source
-  # occurrence, and a hole never escapes its own def's normalisation — a
-  # hole-bearing def is never certified and so never δ-unfolded into another def's
-  # conversion — so position alone is soundness-sufficient. The module qualifier
-  # is defense-in-depth and readability for later slices (goal reporting).
+  # so repeating `?foo` *within one def* refers to the SAME unknown; an unnamed
+  # `?` keys on its source position (`line:col`), unique per occurrence. Both are
+  # qualified by `<module>.<def>` (`Env.owner/1` + `Env.current_def/1`) — the
+  # <def> qualifier is REQUIRED for the named case: without it, `?goal` written
+  # in two different defs of the same module mints the SAME id, and `Conv`
+  # (`conv_neutral?({:nhole,id},{:nhole,id}) -> true`) judges those two,
+  # semantically-unrelated holes definitionally equal (cross-def collision — see
+  # `Cure.Elab.HoleIdentityTest` "cross-def collision guard"). No gensym counter
+  # is used, so Antigen and the differential oracle stay replay-stable.
   #
   # Public so the elaborator's proof-hole trigger (Elaborator.elaborate_expr_checked
   # for `{:hole,_}` in argument position) mints ids by the SAME scheme — one
@@ -1151,12 +1231,14 @@ defmodule Cure.Elab.Declarations do
   @doc false
   def hole_id(env, meta) do
     mod = Env.owner(env) || ""
+    def_name = Env.current_def(env)
+    qualifier = if def_name, do: "#{mod}.#{def_name}", else: mod
     name = Keyword.get(meta, :name, "")
 
     if name != "" do
-      "#{mod}##{name}"
+      "#{qualifier}##{name}"
     else
-      "#{mod}:#{Keyword.get(meta, :line, 0)}:#{Keyword.get(meta, :col, 0)}"
+      "#{qualifier}:#{Keyword.get(meta, :line, 0)}:#{Keyword.get(meta, :col, 0)}"
     end
   end
 
@@ -1874,6 +1956,28 @@ defmodule Cure.Elab.Declarations do
   @spec lower_type(tuple(), [String.t()], Env.t()) :: {:ok, tuple()} | {:error, term()}
   def lower_type(ast, scope, env), do: idx_to_core(ast, scope, nil, env, nil)
 
+  @doc """
+  The free type variables of one or more surface type ASTs, in order of first
+  appearance — the same kind-`Type`, family-aware collection Idris-style
+  auto-generalization uses (`auto_generalize/3`), but with an empty bound set.
+
+  Passed as the `scope` to `lower_type/3`, these names lower to positional
+  `{:var, idx}` de Bruijn indices instead of distinct global neutrals, so two
+  signatures that differ only by a consistent renaming of their type variables
+  lower to identical Core terms and compare equal under kernel conversion.
+  """
+  @spec free_type_vars([tuple()], Env.t()) :: [String.t()]
+  def free_type_vars(type_asts, env) do
+    {ordered, _seen} =
+      type_asts
+      |> Enum.reject(&is_nil/1)
+      |> Enum.reduce({[], MapSet.new()}, fn ast, acc ->
+        collect_type_vars(ast, MapSet.new(), env, acc)
+      end)
+
+    ordered
+  end
+
   # Classify an index NAME node as a numeral, since a name STARTING WITH A DIGIT
   # can only be a stringified numeric token from the type parser (Cure identifiers
   # never start with a digit) — never a binder. Returns:
@@ -2080,18 +2184,24 @@ defmodule Cure.Elab.Declarations do
   # reparses such a type-application argument with the expression parser, so it arrives
   # as an expression `{:binary_op, ...}` with `{:literal, ...}` operands rather than a
   # type atom. We lower it to the SAME builtin-op spine the term elaborator's
-  # `build_binop` produces for Int/Bool operands — `Std.Builtin#int_gt` etc., or the
-  # bare `and`/`or` connective globals — so a closed comparison folds to `Std.Bool#True`
-  # by pure computation and `Confirmed : IsTrue(True())` inhabits it. Reflection over
-  # `Int` is the design's scope; Float propositions are a documented non-goal and lower
-  # to the int_* op, which simply will not fold on `{:vfloat, _}` (no discharge, never
-  # unsound). Operands recurse through `idx_to_core`, so nested connectives compose.
+  # `build_binop` produces — the Int builtins (`Std.Builtin#int_gt` etc.) for Int
+  # operands, the Float builtins (`float_gt` etc.) when an operand is a float literal,
+  # or the bare `and`/`or` connective globals — so a closed comparison folds to
+  # `Std.Bool#True` by pure computation and `Confirmed : IsTrue(True())` inhabits it.
+  # Operands are lowered FIRST so the dispatch can see whether a `{:float_lit, _}` is
+  # present; this mirrors `build_binop`'s Int→int_*/Float→float_* split and keeps the
+  # comparison well-typed on Float operands (`float_le(0.0, q) : Bool`), which the Int
+  # op would reject as `{:float_type}` vs `{:int_type}`. A comparison of two Float
+  # VARIABLES with no literal operand cannot be detected here (scope carries names, not
+  # types) and stays on the int op: it simply will not type-check or discharge — a
+  # documented residual, never unsound. Operands recurse through `idx_to_core`, so
+  # nested connectives compose.
   defp idx_to_core({:binary_op, meta, [l_ast, r_ast]}, scope, fam, env, ctx) do
     op = Keyword.fetch!(meta, :operator)
 
-    with {:ok, global} <- index_binop_global(op),
-         {:ok, l} <- idx_to_core(l_ast, scope, fam, env, ctx),
-         {:ok, r} <- idx_to_core(r_ast, scope, fam, env, ctx) do
+    with {:ok, l} <- idx_to_core(l_ast, scope, fam, env, ctx),
+         {:ok, r} <- idx_to_core(r_ast, scope, fam, env, ctx),
+         {:ok, global} <- index_binop_global(op, float_operands?(l, r)) do
       {:ok, {:app, {:app, {:global, global}, l}, r}}
     end
   end
@@ -2111,19 +2221,39 @@ defmodule Cure.Elab.Declarations do
 
   defp idx_to_core(other, _scope, _fam, _env, _ctx), do: {:error, {:unsupported_index_expr, other}}
 
-  # Operator symbol → the Core global its index-position lowering applies. Comparisons map
-  # to the Int builtin op (registered as `Std.Builtin#int_*`, folding via `Eval.fold`);
-  # the boolean connectives map to the bare `and`/`or` connective globals, exactly as the
-  # term elaborator's `build_binop` emits them.
-  defp index_binop_global(:<), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_lt)}
-  defp index_binop_global(:<=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_le)}
-  defp index_binop_global(:>), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_gt)}
-  defp index_binop_global(:>=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ge)}
-  defp index_binop_global(:==), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_eq)}
-  defp index_binop_global(:!=), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ne)}
-  defp index_binop_global(:and), do: {:ok, :and}
-  defp index_binop_global(:or), do: {:ok, :or}
-  defp index_binop_global(op), do: {:error, {:unsupported_index_operator, op}}
+  # A comparison is over Float when either lowered operand is a float literal. This is
+  # the only operand-type signal available in an index position (the scope threaded
+  # through `idx_to_core` is a list of binder NAMES, not typed context), and it covers
+  # every refinement whose bound is a literal — `x > 0.0`, `0.0 <= p`, `p <= 1.0`.
+  defp float_operands?(l, r), do: float_operand?(l) or float_operand?(r)
+  defp float_operand?({:float_lit, _}), do: true
+  defp float_operand?(_), do: false
+
+  # Operator symbol + Float-operand flag → the Core global its index-position lowering
+  # applies. Comparisons map to the Int builtin op (registered as `Std.Builtin#int_*`,
+  # folding via `Eval.fold`) or, when the flag is set, the Float twin (`Std.Builtin#float_*`)
+  # so a Float comparison stays well-typed. The boolean connectives map to the qualified
+  # `Std.Bool#and`/`#or` defs — the SAME spelling the function-call form (`` `and`(l, r) ``)
+  # resolves to, so an operator-written conjunction proposition is recognized by the
+  # conjunction-elimination candidate source in `Cure.Elab.ProofSearch` (which matches the
+  # resolved `Std.Bool#and` head); the flag does not affect them. Emitting the bare
+  # `:and`/`:or` the term-level `build_binop` uses would leave operator-`and` refinements
+  # undischargeable, since the projection lemmas speak the qualified `and`.
+  defp index_binop_global(:<, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_lt)}
+  defp index_binop_global(:<, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_lt)}
+  defp index_binop_global(:<=, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_le)}
+  defp index_binop_global(:<=, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_le)}
+  defp index_binop_global(:>, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_gt)}
+  defp index_binop_global(:>, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_gt)}
+  defp index_binop_global(:>=, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ge)}
+  defp index_binop_global(:>=, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_ge)}
+  defp index_binop_global(:==, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_eq)}
+  defp index_binop_global(:==, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_eq)}
+  defp index_binop_global(:!=, false), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :int_ne)}
+  defp index_binop_global(:!=, true), do: {:ok, Cure.Elab.Name.qualify("Std.Builtin", :float_ne)}
+  defp index_binop_global(:and, _), do: {:ok, Cure.Elab.Name.qualify("Std.Bool", :and)}
+  defp index_binop_global(:or, _), do: {:ok, Cure.Elab.Name.qualify("Std.Bool", :or)}
+  defp index_binop_global(op, _), do: {:error, {:unsupported_index_operator, op}}
 
   # Wrap a `Bool`-typed refinement clause in `IsTrue(·)` (§3a level 1). Only
   # comparison and boolean-connective operators reflect (they produce `Bool`);
@@ -2659,8 +2789,17 @@ defmodule Cure.Elab.Declarations do
   defp pi_arity(_), do: 0
 
   # The fixed tag→Core-node table — the ONLY inherent mapping (keyed by builtin
-  # tag, not by surface name). Exactly four tags are legal.
-  defp primitive_tag_node(:int), do: {:ok, {:int_type}}
+  # tag, not by surface name). Exactly three tags are legal now that `Int` has
+  # moved off the primitive floor onto the inductive `Std.Int#Int` family
+  # (spec 2026-07-18-inductive-int §3a(i)): `:int` is NOT a valid `@builtin`
+  # primitive tag anymore. Without this clause, `confirm_primitive_floor/3`
+  # trivially accepts ANY `@builtin(_) primitive Int` declaration — `Env.primitive
+  # (env, "Int")` is now `nil` (Int is no longer seeded as a primitive), so the
+  # floor-disagreement guard has nothing to disagree with — silently creating an
+  # incoherent `{:int_type}`/`{:float_type}`-shaped local binding for `Int` that
+  # only fails much later, at codegen, with a cryptic `conversion_failure`
+  # against the family type. Rejecting `:int` here at the declaration site closes
+  # that hole with a clear, early diagnostic instead.
   defp primitive_tag_node(:float), do: {:ok, {:float_type}}
   defp primitive_tag_node(:binary), do: {:ok, {:binary_type}}
   defp primitive_tag_node(:atom), do: {:ok, {:atom_type}}

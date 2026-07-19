@@ -1,0 +1,48 @@
+mod SessionDeadlockFree
+  use Std.Equivalent
+  ## SESSION ↔ CONCURRENCY BRIDGE — two DUAL session-typed processes are DEADLOCK-FREE by their protocol,
+  ## connecting session-type duality to the concurrent progress guarantee. When p1 and p2 are dual, every
+  ## send of one meets a matching receive of the other: the composed pair is NEVER STUCK (progress: it is
+  ## either terminated or a communication redex) and always COMMUNICATES to completion (no_deadlock). So a
+  ## well-typed session pair cannot deadlock — the protocol's duality is exactly the concurrent liveness.
+  type Msg = MA | MB
+  type Local = LEnd | LSend(Msg, Local) | LRecv(Msg, Local)
+  fn dual(l: Local) -> Local = match l
+    LEnd()        -> LEnd()
+    LSend(m, k)   -> LRecv(m, dual(k))
+    LRecv(m, k)   -> LSend(m, dual(k))
+  ## Compatibility of two endpoints: they are dual (send meets recv on the same message, pointwise).
+  type Dual indices (a: Local, b: Local)
+    DEnd : Dual(LEnd, LEnd)
+    DSR  : (m: Msg) -> Dual(k1, k2) -> Dual(LSend(m, k1), LRecv(m, k2))
+    DRS  : (m: Msg) -> Dual(k1, k2) -> Dual(LRecv(m, k1), LSend(m, k2))
+  ## **EVERY SESSION IS DUAL TO ITS DUAL**: composing a process with dual(its type) is always compatible,
+  ## so deadlock-freedom applies to any well-typed session.
+  fn dual_sound(l: Local) -> Dual(l, dual(l)) = match l
+    LEnd()        -> DEnd()
+    LSend(m, k)   -> DSR(m, dual_sound(k))
+    LRecv(m, k)   -> DRS(m, dual_sound(k))
+  ## A compatible pair is either terminated or a communication redex — never stuck.
+  type Progress indices (p1: Local, p2: Local)
+    Terminated : Progress(LEnd, LEnd)
+    CommSR     : (m: Msg) -> Progress(LSend(m, k1), LRecv(m, k2))
+    CommRS     : (m: Msg) -> Progress(LRecv(m, k1), LSend(m, k2))
+  ## **NEVER STUCK (single step)**: Dual(p1,p2) ⟹ the pair is terminated or can communicate. No dual
+  ## configuration is deadlocked (one blocked waiting on the other).
+  fn progress({p1: Local}, {p2: Local}, d: Dual(p1, p2)) -> Progress(p1, p2) = match d
+    DEnd()        -> Terminated()
+    DSR(m, d2)    -> CommSR(m)
+    DRS(m, d2)    -> CommRS(m)
+  ## The pair communicates step-by-step all the way to termination.
+  type CReach indices (p1: Local, p2: Local)
+    CRDone : CReach(LEnd, LEnd)
+    CRSR   : (m: Msg) -> CReach(k1, k2) -> CReach(LSend(m, k1), LRecv(m, k2))
+    CRRS   : (m: Msg) -> CReach(k1, k2) -> CReach(LRecv(m, k1), LSend(m, k2))
+  ## **DEADLOCK-FREE TERMINATION**: Dual(p1,p2) ⟹ the pair communicates to completion (both LEnd) — no
+  ## step is ever blocked, and the session runs out. Session duality IS the concurrent progress guarantee.
+  ## Induction on the duality witness: each dual continuation gives the next communication.
+  fn no_deadlock({p1: Local}, {p2: Local}, d: Dual(p1, p2)) -> CReach(p1, p2) = match d
+    DEnd()        -> CRDone()
+    DSR(m, d2)    -> CRSR(m, no_deadlock(d2))
+    DRS(m, d2)    -> CRRS(m, no_deadlock(d2))
+end

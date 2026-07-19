@@ -418,6 +418,26 @@ defmodule Cure.Migrate do
     end)
   end
 
+  # A `:computed_use` is a use-site macro invocation (`fsm … derive`, `actor …
+  # on_call …`). The invoked family's expander emits an *ambient* enum type into
+  # the CALLER's module during `expand_declaration_uses` — a step that runs after
+  # this lint (`compiler.ex`: `migrate_warn` precedes `expand_declaration_uses`).
+  # A handwritten sibling then annotates against that derived type
+  # (`fn make_start() -> FsmEvent = Start`), but it is absent from the surface AST
+  # this walk sees, so it was misread as a free type variable and lowercased
+  # (`FsmEvent` -> `fsmevent`). The generated names are string literals inside the
+  # expander bodies (`enum_type("FsmEvent", …)` in `lib/std/fsm.cure`;
+  # `enum_type("ActorMessage"/"ActorRequest", …)` in `lib/std/actor.cure`), so —
+  # unlike a `:macro_def`'s records — they are not recoverable from lowering
+  # rules; the family keyword names them here. Over-listing a name only makes the
+  # lint MORE conservative (these family-reserved names never double as free type
+  # variables), and the addition is scoped to modules that actually invoke the
+  # family, so a real free `T` in a fsm/actor module still warns.
+  defp collect_type_names({:computed_use, meta, ch}, acc) when is_list(ch) do
+    acc = Enum.reduce(computed_use_ambient_types(meta), acc, fn n, a -> [n | a] end)
+    Enum.reduce(ch, acc, &collect_type_names/2)
+  end
+
   defp collect_type_names({_k, _meta, ch}, acc) when is_list(ch) do
     Enum.reduce(ch, acc, &collect_type_names/2)
   end
@@ -425,6 +445,20 @@ defmodule Cure.Migrate do
   defp collect_type_names({_k, _meta, _name, inner}, acc), do: collect_type_names(inner, acc)
   defp collect_type_names(l, acc) when is_list(l), do: Enum.reduce(l, acc, &collect_type_names/2)
   defp collect_type_names(_other, acc), do: acc
+
+  # The ambient enum type names a stdlib concurrency family emits into its
+  # caller. Keyed on the surface keyword carried by the `:computed_use` node
+  # (`fsm`/`actor`), matching the `enum_type(…)` emit sites in the family sources.
+  # `ActorRequest` only materializes when an `on_call` channel is present, but
+  # listing it unconditionally is harmless — it is a reserved family type name,
+  # never a free type variable.
+  defp computed_use_ambient_types(meta) do
+    case Keyword.get(meta, :keyword) do
+      "fsm" -> ["FsmEvent"]
+      "actor" -> ["ActorMessage", "ActorRequest"]
+      _ -> []
+    end
+  end
 
   defp maybe_name(meta, acc) do
     case Keyword.get(meta, :name) do

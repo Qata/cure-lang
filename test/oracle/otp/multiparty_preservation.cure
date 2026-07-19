@@ -1,0 +1,92 @@
+mod MultipartyPreservation
+  use Std.Equivalent
+  ## MULTIPARTY SUBJECT REDUCTION (type PRESERVATION), the companion to progress. When the head
+  ## communication of a global type fires (GMsg(p,q,t,k) reduces to its continuation k), the two active
+  ## roles consume their send/recv and every bystander is untouched. The preservation theorem: AFTER the
+  ## step, EVERY role's local equals project(k, role) — the whole system stays exactly in projection-
+  ## correspondence with the reduced global. With progress this is full multiparty type safety
+  ## (well-typed => never stuck, stays well-typed), for arbitrary roles.
+  type Role = RA | RB | RC
+  type Tag = TA | TB | TC
+  type B = F | T
+  type Global = GEnd | GMsg(Role, Role, Tag, Global)
+  type Local = LEnd | LSend(Tag, Local) | LRecv(Tag, Local)
+  fn role_eq(x: Role, y: Role) -> B = match x
+    RA() -> match y
+      RA() -> T()
+      RB() -> F()
+      RC() -> F()
+    RB() -> match y
+      RA() -> F()
+      RB() -> T()
+      RC() -> F()
+    RC() -> match y
+      RA() -> F()
+      RB() -> F()
+      RC() -> T()
+  fn project(g: Global, r: Role) -> Local = match g
+    GEnd()               -> LEnd()
+    GMsg(from, to, t, k) -> match role_eq(from, r)
+      T() -> LSend(t, project(k, r))
+      F() -> match role_eq(to, r)
+        T() -> LRecv(t, project(k, r))
+        F() -> project(k, r)
+  ## Consume the head action of a local (perform the send / receive).
+  fn lstep(l: Local) -> Local = match l
+    LEnd()      -> LEnd()
+    LSend(t, c) -> c
+    LRecv(t, c) -> c
+  ## Role r's local AFTER the head communication of g fires: the two active roles step, bystanders keep.
+  fn after_step(g: Global, r: Role) -> Local = match g
+    GEnd()               -> LEnd()
+    GMsg(from, to, t, k) -> match role_eq(from, r)
+      T() -> lstep(project(GMsg(from, to, t, k), r))
+      F() -> match role_eq(to, r)
+        T() -> lstep(project(GMsg(from, to, t, k), r))
+        F() -> project(GMsg(from, to, t, k), r)
+  ## **SUBJECT REDUCTION (all roles at once)**: after GMsg(p,q,t,k) fires, EVERY role r lands on
+  ## project(k, r) — projection is preserved by the global step. Holds for arbitrary p,q,r (no well-
+  ## formedness premise needed: active roles consume their head, bystanders skip, and both after_step and
+  ## project branch on the SAME role_eq guards, so each of the 27 role cases reduces reflexively).
+  fn subject_reduction(p: Role, q: Role, t: Tag, k: Global, r: Role) -> Equivalent(Local, after_step(GMsg(p, q, t, k), r), project(k, r)) =
+    match p
+      RA() -> match q
+        RA() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RB() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RC() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+      RB() -> match q
+        RA() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RB() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RC() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+      RC() -> match q
+        RA() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RB() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+        RC() -> match r
+          RA() -> reflexive(project(k, RA()))
+          RB() -> reflexive(project(k, RB()))
+          RC() -> reflexive(project(k, RC()))
+end

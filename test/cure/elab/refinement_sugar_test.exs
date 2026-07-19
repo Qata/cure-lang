@@ -55,7 +55,7 @@ defmodule Cure.Elab.RefinementSugarTest do
 
     # Sigma(Int, λp. IsTrue(<and ...>)) — the codomain body must be the IsTrue data,
     # not a bare Bool value.
-    assert {:data, :"Std.Sigma#Sigma", [{:int_type}, {:lam, _g, {:int_type}, body}], []} = domain
+    assert {:data, :"Std.Sigma#Sigma", [{:data, :"Std.Int#Int", [], []}, {:lam, _g, {:data, :"Std.Int#Int", [], []}, body}], []} = domain
     assert {:data, :"Std.Proof.IntMath#IsTrue", [], [_claim]} = body
   end
 
@@ -71,7 +71,7 @@ defmodule Cure.Elab.RefinementSugarTest do
 
     domain = param_type(env, "ident")
 
-    assert {:data, :"Std.Sigma#Sigma", [{:int_type}, {:lam, _g, {:int_type}, body}], []} = domain
+    assert {:data, :"Std.Sigma#Sigma", [{:data, :"Std.Int#Int", [], []}, {:lam, _g, {:data, :"Std.Int#Int", [], []}, body}], []} = domain
     # The predicate body is the applied global `is_positive`, NOT `IsTrue(is_positive(...))`.
     refute match?({:data, :"Std.Proof.IntMath#IsTrue", [], _}, body)
   end

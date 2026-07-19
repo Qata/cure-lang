@@ -1,0 +1,48 @@
+mod GuardedRecursion
+  use Std.Equivalent
+  ## GUARDEDNESS — the well-formedness condition for RECURSIVE global types that the existing recursive
+  ## Coherent is MISSING (it admits CoRec(CoVar) : Coherent(GRec(GVar)), the unproductive loop X = X). A
+  ## recursive protocol is well-formed only when its recursion variable sits under a message PREFIX; that
+  ## is exactly what makes it PRODUCTIVE — unfolding always exposes a communication (or end), never spins
+  ## on a bare variable. head_guarded flags a productive head; the theorems show substitution/unfolding
+  ## preserve it, and that ping-pong is guarded while X = X is correctly rejected.
+  type Role = RA | RB | RC
+  type Tag = TA | TB | TC
+  type B = F | T
+  type Global = GEnd | GMsg(Role, Role, Tag, Global) | GRec(Global) | GVar
+  ## gsubst: replace the loop variable GVar by s (opaque under an inner GRec — single-variable recursion),
+  ## same convention as multiparty_recursive.
+  fn gsubst(g: Global, s: Global) -> Global = match g
+    GEnd()               -> GEnd()
+    GMsg(from, to, t, k) -> GMsg(from, to, t, gsubst(k, s))
+    GRec(body)           -> GRec(body)
+    GVar()               -> s
+  ## head_guarded: does the type lead with a productive head (a message or end), rather than a bare
+  ## recursion variable? GRec descends to its body; a lone GVar is UNguarded (unproductive).
+  fn head_guarded(g: Global) -> B = match g
+    GEnd()               -> T()
+    GMsg(from, to, t, k) -> T()
+    GRec(body)           -> head_guarded(body)
+    GVar()               -> F()
+  ## **SUBSTITUTION PRESERVES GUARDEDNESS**: if a body is head-guarded, substituting into it keeps it
+  ## head-guarded — the leading message/end survives the substitution (which only touches GVar leaves,
+  ## and a head-guarded body has none at its head). The GVar case is vacuous (a bare var isn't guarded).
+  fn guarded_subst(body: Global, s: Global, hg: Equivalent(B, head_guarded(body), T())) -> Equivalent(B, head_guarded(gsubst(body, s)), T()) =
+    match body
+      GEnd()               -> reflexive(T())
+      GMsg(from, to, t, k) -> reflexive(T())
+      GRec(b)              -> hg
+      GVar()               -> match hg
+  ## **GUARDED RECURSION IS PRODUCTIVE**: unfolding a head-guarded recursive body yields a productive
+  ## head (a communication or end), never a stuck bare variable. The recursive analogue of progress: a
+  ## guarded loop always makes an observable step on unfolding. Corollary of guarded_subst at s = GRec(body).
+  fn unfold_productive(body: Global, hg: Equivalent(B, head_guarded(body), T())) -> Equivalent(B, head_guarded(gsubst(body, GRec(body))), T()) =
+    guarded_subst(body, GRec(body), hg)
+  ## Ping-pong X = RA->RB:TA. X is guarded, and unfolds to a real communication then the loop.
+  fn pingpong_guarded() -> Equivalent(B, head_guarded(GRec(GMsg(RA(), RB(), TA(), GVar()))), T()) = reflexive(T())
+  fn pingpong_unfolds_to_comm() -> Equivalent(Global, gsubst(GMsg(RA(), RB(), TA(), GVar()), GRec(GMsg(RA(), RB(), TA(), GVar()))), GMsg(RA(), RB(), TA(), GRec(GMsg(RA(), RB(), TA(), GVar())))) =
+    reflexive(GMsg(RA(), RB(), TA(), GRec(GMsg(RA(), RB(), TA(), GVar()))))
+  ## The unproductive loop X = X is correctly flagged UNguarded — the case the existing recursive
+  ## Coherent wrongly accepts.
+  fn barerec_unguarded() -> Equivalent(B, head_guarded(GRec(GVar())), F()) = reflexive(F())
+end

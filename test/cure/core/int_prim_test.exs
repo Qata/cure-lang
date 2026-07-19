@@ -57,8 +57,8 @@ defmodule Cure.Core.IntPrimTest do
   end
 
   test "kernel infers Int for literals and arithmetic spines, and Int : Type0" do
-    assert {:ok, {:vint_type}} = Kernel.infer(ctx(), {:int_lit, 42})
-    assert {:ok, {:vint_type}} = Kernel.infer(ctx(), app2(:int_add, {:int_lit, 1}, {:int_lit, 2}))
+    assert {:ok, {:vdata, :"Std.Int#Int", []}} = Kernel.infer(ctx(), {:int_lit, 42})
+    assert {:ok, {:vdata, :"Std.Int#Int", []}} = Kernel.infer(ctx(), app2(:int_add, {:int_lit, 1}, {:int_lit, 2}))
     assert {:ok, {:vtype, 0}} = Kernel.infer(ctx(), {:int_type})
   end
 

@@ -31,7 +31,8 @@ defmodule Cure.Core.Env do
             primitives: %{},
             import_modules: MapSet.new(),
             lemmas: %{},
-            module_owner: nil
+            module_owner: nil,
+            current_def: nil
 
   @type t :: %__MODULE__{
           families: %{atom() => map()},
@@ -57,7 +58,16 @@ defmodule Cure.Core.Env do
           # Inert elaborator metadata (the kernel never reads it): `@lemma`-tagged
           # theorems keyed by their conclusion-head atom, for auto proof-search
           # (see `Cure.Elab.ProofSearch`). Same status as `interfaces`/`coherence`.
-          lemmas: %{atom() => [map()]}
+          lemmas: %{atom() => [map()]},
+          # Inert elaborator metadata (the kernel never reads it): the name of the
+          # def whose body is currently being elaborated, set for the duration of
+          # `Declarations.elaborate_real_body/3`. Consumed ONLY by
+          # `Declarations.hole_id/2` so a hole id is qualified by
+          # `<module>.<def>`, not just `<module>` — two different defs writing the
+          # same named hole (`?goal` in `a` and `?goal` in `b`) must mint DISTINCT
+          # ids, or `Conv` would judge them definitionally equal (first-class
+          # holes soundness pivot).
+          current_def: atom() | nil
         }
 
   @doc "An empty signature."
@@ -77,6 +87,18 @@ defmodule Cure.Core.Env do
   @doc "Return the source-module owner for the current elaboration environment."
   @spec owner(t()) :: String.t() | nil
   def owner(%__MODULE__{module_owner: owner}), do: owner
+
+  @doc """
+  Attach the name of the def whose body is currently being elaborated (see the
+  `current_def` field doc). Set once per top-level def, at the single entry
+  point `Declarations.elaborate_real_body/3`, before body elaboration begins.
+  """
+  @spec with_current_def(t(), atom() | nil) :: t()
+  def with_current_def(%__MODULE__{} = env, name), do: %{env | current_def: name}
+
+  @doc "The name of the def currently being elaborated, or `nil` outside one."
+  @spec current_def(t()) :: atom() | nil
+  def current_def(%__MODULE__{current_def: name}), do: name
 
   @doc """
   Register a global function definition (declared type + Core body). The kernel

@@ -1,0 +1,94 @@
+mod EuclidDiv
+  use Std.Equivalent
+  ## VERIFIED EUCLIDEAN DIVISION — a classic hard result. For every `a` and divisor `S b0`, `divmod` yields a
+  ## quotient `q` and remainder `r` with `q·(S b0) + r = a` and `r < S b0`. CORRECT BY CONSTRUCTION: `dm`
+  ## returns a `DivResult` that BUNDLES q, r and the two proofs, indexed by the INPUTS `a, b0` (crucially NOT
+  ## by the stuck division-result value — a QR-value index cannot be structurally unified with `MkQR(q,r)` when
+  ## the computation is stuck, so the certificate must ride WITH the function). Fuel-bounded recursion with a
+  ## SUFFICIENCY argument (`div_fuel_ok`: if `a ≤ S f` and `S b0 ≤ a` then `a - S b0 ≤ f`, via `monus_lt` +
+  ## `le_trans`); the strict comparison is evidence-carrying (`LtDec`, routed through `dm_pick` so the recursive
+  ## step's reduction stays visible — the A6 decision-as-argument lesson). The recursive step reconstitutes
+  ## `a = S b0 + (q·(S b0)+r) = (S q)·(S b0)+r` via `plus_monus` (`b ≤ a ⟹ b + (a - b) = a`). Fuel = a is always
+  ## sufficient (`divmod`), since the quotient is at most a.
+  type Nat = Z | S(Nat)
+  type Bool = F | T
+  fn leq(a: Nat, b: Nat) -> Bool = match a
+    Z()   -> T()
+    S(k)  -> match b
+      Z()   -> F()
+      S(j)  -> leq(k, j)
+  fn leq_refl(a: Nat) -> Equivalent(Bool, leq(a, a), T()) = match a
+    Z()   -> reflexive(T())
+    S(k)  -> leq_refl(k)
+  fn le_succ(a: Nat) -> Equivalent(Bool, leq(a, S(a)), T()) = match a
+    Z()   -> reflexive(T())
+    S(k)  -> le_succ(k)
+  fn le_trans(a: Nat, b: Nat, c: Nat, hab: Equivalent(Bool, leq(a, b), T()), hbc: Equivalent(Bool, leq(b, c), T())) -> Equivalent(Bool, leq(a, c), T()) = match a
+    Z()   -> reflexive(T())
+    S(a2) -> match b
+      Z()   -> match hab
+      S(b2) -> match c
+        Z()   -> match hbc
+        S(c2) -> le_trans(a2, b2, c2, hab, hbc)
+  fn plus(a: Nat, b: Nat) -> Nat = match a
+    Z()   -> b
+    S(k)  -> S(plus(k, b))
+  fn times(a: Nat, b: Nat) -> Nat = match a
+    Z()   -> Z()
+    S(k)  -> plus(b, times(k, b))
+  fn snat_cong(a: Nat, b: Nat, e: Equivalent(Nat, a, b)) -> Equivalent(Nat, S(a), S(b)) = rewrite e in reflexive(S(b))
+  fn plus_assoc(a: Nat, b: Nat, c: Nat) -> Equivalent(Nat, plus(plus(a, b), c), plus(a, plus(b, c))) = match a
+    Z()   -> reflexive(plus(b, c))
+    S(k)  -> snat_cong(plus(plus(k, b), c), plus(k, plus(b, c)), plus_assoc(k, b, c))
+  fn plus_cong_r(a: Nat, b: Nat, c: Nat, e: Equivalent(Nat, b, c)) -> Equivalent(Nat, plus(a, b), plus(a, c)) = rewrite e in reflexive(plus(a, c))
+  fn monus(a: Nat, b: Nat) -> Nat = match b
+    Z()   -> a
+    S(j)  -> match a
+      Z()   -> Z()
+      S(k)  -> monus(k, j)
+  fn monus_le(a: Nat, b: Nat) -> Equivalent(Bool, leq(monus(a, b), a), T()) = match a
+    Z()   -> match b
+      Z()   -> reflexive(T())
+      S(j)  -> reflexive(T())
+    S(a0) -> match b
+      Z()   -> leq_refl(S(a0))
+      S(b0) -> le_trans(monus(a0, b0), a0, S(a0), monus_le(a0, b0), le_succ(a0))
+  fn monus_lt(a: Nat, b0: Nat, hge: Equivalent(Bool, leq(S(b0), a), T())) -> Equivalent(Bool, leq(S(monus(a, S(b0))), a), T()) = match a
+    Z()   -> match hge
+    S(a0) -> monus_le(a0, b0)
+  fn plus_monus(b: Nat, a: Nat, h: Equivalent(Bool, leq(b, a), T())) -> Equivalent(Nat, plus(b, monus(a, b)), a) = match b
+    Z()   -> reflexive(a)
+    S(b0) -> match a
+      Z()   -> match h
+      S(a0) -> snat_cong(plus(b0, monus(a0, b0)), a0, plus_monus(b0, a0, h))
+  type LtDec indices (x: Nat, y: Nat)
+    LtYes : (x2: Nat) -> (y2: Nat) -> Equivalent(Bool, leq(S(x2), y2), T()) -> LtDec(x2, y2)
+    LtNo  : (x2: Nat) -> (y2: Nat) -> Equivalent(Bool, leq(y2, x2), T()) -> LtDec(x2, y2)
+  fn lt_dec(x: Nat, y: Nat) -> LtDec(x, y) = match y
+    Z()   -> LtNo(x, Z(), reflexive(T()))
+    S(y0) -> match x
+      Z()   -> LtYes(Z(), S(y0), reflexive(T()))
+      S(x0) -> match lt_dec(x0, y0)
+        LtYes(a, b, e) -> LtYes(S(x0), S(y0), e)
+        LtNo(a, b, e)  -> LtNo(S(x0), S(y0), e)
+  ## Enough fuel to divide the reduced dividend: if a ≤ S f and S b0 ≤ a, then a - S b0 ≤ f.
+  fn div_fuel_ok(a: Nat, b0: Nat, f: Nat, hf: Equivalent(Bool, leq(a, S(f)), T()), hge: Equivalent(Bool, leq(S(b0), a), T())) -> Equivalent(Bool, leq(monus(a, S(b0)), f), T()) =
+    le_trans(S(monus(a, S(b0))), a, S(f), monus_lt(a, b0, hge), hf)
+  ## A CERTIFIED division result for a / (S b0): quotient q, remainder r, with q·(S b0)+r = a and r < S b0.
+  type DivResult indices (a: Nat, b0: Nat)
+    MkRes : (q: Nat) -> (r: Nat) -> (a2: Nat) -> (b02: Nat) -> Equivalent(Nat, plus(times(q, S(b02)), r), a2) -> Equivalent(Bool, leq(S(r), S(b02)), T()) -> DivResult(a2, b02)
+  ## CORRECT-BY-CONSTRUCTION division: dm returns its own certificate. The decision is routed through dm_pick
+  ## (LtDec as an explicit argument) so the recursive step's reduction stays visible.
+  fn dm_pick(f: Nat, a: Nat, b0: Nat, hf: Equivalent(Bool, leq(a, S(f)), T()), d: LtDec(a, S(b0))) -> DivResult(a, b0) = match d
+    LtYes(x2, y2, e) -> MkRes(Z(), a, a, b0, reflexive(a), e)
+    LtNo(x2, y2, e)  -> match dm(f, monus(a, S(b0)), b0, div_fuel_ok(a, b0, f, hf, e))
+      MkRes(q, r, ma, mb, eid, erem) -> MkRes(S(q), r, a, b0, trans(plus_assoc(S(b0), times(q, S(b0)), r), trans(plus_cong_r(S(b0), plus(times(q, S(b0)), r), monus(a, S(b0)), eid), plus_monus(S(b0), a, e))), erem)
+  fn dm(fuel: Nat, a: Nat, b0: Nat, hf: Equivalent(Bool, leq(a, fuel), T())) -> DivResult(a, b0) = match fuel
+    Z()   -> match a
+      Z()   -> MkRes(Z(), Z(), Z(), b0, reflexive(Z()), reflexive(T()))
+      S(a0) -> match hf
+    S(f)  -> dm_pick(f, a, b0, hf, lt_dec(a, S(b0)))
+  ## **EUCLIDEAN DIVISION**: for every a and divisor S b0, `divmod` yields a certificate (q, r) with
+  ## q·(S b0) + r = a and r < S b0. Fuel = a is always sufficient (the quotient is at most a).
+  fn divmod(a: Nat, b0: Nat) -> DivResult(a, b0) = dm(a, a, b0, leq_refl(a))
+end

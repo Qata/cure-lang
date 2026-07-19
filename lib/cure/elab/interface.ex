@@ -31,6 +31,11 @@ defmodule Cure.Elab.Interface do
     name_atom = String.to_atom(name)
     head_var = meta |> Keyword.get(:params, []) |> List.first()
     defaults = Keyword.get(meta, :defaults, %{})
+    # Superinterface names from the `requires` clause, normalized to atoms. An
+    # interface with no `requires` clause gets `super: []`, so the obligation
+    # check at instance registration is a no-op for it.
+    super_interfaces =
+      meta |> Keyword.get(:requires, []) |> Enum.map(&String.to_atom/1)
 
     with {:ok, head_kind} <- infer_head_kind(name_atom, head_var, methods) do
       desc = %{
@@ -39,7 +44,8 @@ defmodule Cure.Elab.Interface do
         head_kind: head_kind,
         methods: build_method_map(methods),
         method_order: method_order(methods),
-        defaults: defaults
+        defaults: defaults,
+        super: super_interfaces
       }
 
       with :ok <- check_method_names_free(desc, env),

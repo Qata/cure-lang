@@ -189,6 +189,9 @@ defmodule Cure.Elab.Union do
 
   @doc "The type-distinguishing canonical printing of a lowered, nf'd Core type."
   @spec member_key(tuple()) :: String.t()
+  # NOTE(int-facade): `member_key`/`class_of_core` below are kept for totality
+  # on a legacy/deserialized `{:int_type}` node; fresh elaboration never
+  # produces one (spec 2026-07-18 §3a).
   def member_key({:int_type}), do: "Int"
   def member_key({:float_type}), do: "Float"
   def member_key({:binary_type}), do: "Binary"
@@ -269,6 +272,10 @@ defmodule Cure.Elab.Union do
   end
 
   defp class_of_data_name(:Bool), do: :boolean
+  # `Int` is now the inductive family Std.Int#Int (spec 2026-07-18 surface flip); it
+  # erases to a native BEAM integer, exactly like `Nat`, so its runtime guard class is
+  # `:integer` (this is what the retired `class_of_core({:int_type})` clause provided).
+  defp class_of_data_name(:Int), do: :integer
   defp class_of_data_name(:Nat), do: :integer
   defp class_of_data_name(:Bounded), do: :integer
   defp class_of_data_name(:List), do: :list

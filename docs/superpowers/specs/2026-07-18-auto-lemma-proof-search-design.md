@@ -345,3 +345,74 @@ The design is grounded in the vendored `reference/` snapshots:
   re-check) and the *attribute-tagged rule database* template (scoped
   env-extension + `add` callback + `getState` reader) that a future
   discrimination-tree registry would follow.
+
+## 11. v2 — the syntax-directed positivity solver (shipped)
+
+The "future solver behind the same dispatch seam" anticipated by §2 and §4.2 is
+now shipped as a second solver. It is a Lean-`positivity`-style, syntax-directed
+decision procedure for the arithmetic-**sign** fragment, and it exists because a
+naive lemma pool cannot handle that fragment honestly.
+
+### 11.1 The seam, made real
+
+`resolve/4` no longer inlines a single pool. It builds an ordered solver list and
+delegates to `run_solvers/2`:
+
+1. `solver_lemma` — the v1 pool (local hypotheses + refinement/Sigma projections
+   + `@lemma`-tagged theorems), unchanged in behaviour.
+2. `solver_positivity` — the new decision procedure.
+
+`run_solvers` returns the **first non-`:none` verdict**. Crucially that includes
+an `{:error, {:ambiguous_proof_search, …}}` from `solver_lemma`: a genuine
+ambiguity in the primary solver surfaces immediately and is never masked by the
+fallback. Only a `:none` ("this strategy does not apply") falls through. Because
+each solver is internally deterministic, ordering *disjoint* strategies does not
+reintroduce order-sensitivity within a proposition domain (§4.2).
+
+### 11.2 What it decides, and why it is not redundant
+
+`Std.Proof.Math` ships the sign lemmas for the successor and addition fragments
+**without** `@lemma`:
+
+- `successor_is_positive(predecessor: Nat) -> IsPositive(S(predecessor))`
+- `adding_a_positive_number_is_positive(natural, {positive}, IsPositive(positive)) -> IsPositive(plus(natural, positive))`
+- `adding_to_a_positive_number_is_positive({positive}, {other}, IsPositive(positive)) -> IsPositive(plus(positive, other))`
+
+Untagged, they are invisible to `solver_lemma`, so `IsPositive(S(n))` and
+`IsPositive(plus(a, b))` have no automatic proof at all today. `solver_positivity`
+reaches them by name through **virtual lemma entries** — `%{name, type}` records
+synthesised from the stdlib defs via `Env.get_def/2` — fed to the *same*
+`try_lemma/5` path the tagged solver uses (instantiate telescope → unify
+conclusion with goal → resolve hypothesis sub-goals recursively → assemble →
+kernel-check). No new proof-construction machinery.
+
+The addition case is the load-bearing reason the procedure is syntax-directed
+rather than "just tag the two lemmas." Both lemmas conclude
+`IsPositive(plus(a, b))`, so when *both* summands are provably positive, *both*
+apply and produce distinct proof terms. Tagging them would make `decide/2` raise
+a **false** `:ambiguous_proof_search`. `solver_positivity` instead tries the
+curated lemmas in a **fixed order** and takes the first that discharges — a
+deterministic decision. On a plain decline (head mismatch, or an unprovable
+hypothesis) it advances to the next lemma, so the procedure is complete for the
+"at least one summand provably positive" fragment: left-only positive falls
+through `adding_a…` to `adding_to…`, right-only positive is caught by
+`adding_a…` first.
+
+`multiply` is **deliberately excluded** from the curated set:
+`multiplying_positive_numbers_is_positive` *is* `@lemma`-tagged in the stdlib, so
+`solver_lemma` already owns `IsPositive(multiply(a, b))` and the fallback never
+sees that goal. Including it would be untestable dead code given the shipped tag.
+
+### 11.3 Verification stance — why the differential oracle is not the vehicle
+
+The differential oracle derives Cure's verdict from `Program.elaborate/1`
+(`:accept` iff it returns `{:ok, env}`). An **unfilled** proof hole still
+elaborates to `{:ok, env}`; it only fails the separate `check_codegen_ready/1`
+gate. So an oracle probe over a positivity goal would report `:accept` whether or
+not `solver_positivity` exists — it cannot demonstrate the DECLINE that the
+feature turns into a discharge, and would be exactly the non-discriminating probe
+the codebase warns against. The honest differential lives one layer down, at the
+codegen gate: `test/cure/elab/positivity_solver_test.exs` asserts the hole
+*survives* (`{:error, {:unfilled_hole, _}}`) without the solver and the gate is
+`:ok` with it. Soundness is unchanged by construction: every discharged term is
+re-checked by the kernel exactly as a hand-written proof would be (§3).

@@ -1,6 +1,7 @@
 defmodule Cure.Compiler.PrinterPrecedenceTest do
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser, Printer}
+  alias Cure.Compiler.Parser.BuiltinFixity
 
   # The printer used to drop grouping parentheses unconditionally, so a
   # sub-expression whose precedence is LOWER than its surrounding operator was
@@ -64,6 +65,35 @@ defmodule Cure.Compiler.PrinterPrecedenceTest do
     "(throw x) + 1",
     "(yield x) + 1"
   ]
+
+  # A user-declared operator has no entry in the printer's hardcoded precedence
+  # table, so the printer used to treat it as :unknown and defensively wrap every
+  # operand of (and every operand that was) such an operator in parentheses. Given
+  # the session `FixityTable` the parser assembled, the printer must instead
+  # parenthesise a custom operator by its real precedence — no redundant parens.
+  test "a custom operator reprints by its declared precedence, not over-parenthesised" do
+    src = """
+    mod M
+      use Std.Operators
+      precedencegroup Weighted
+        associativity: left
+        higher_than: Additive
+      infix `<+>` : Weighted
+      fn `<+>`(a: Int, b: Int) -> Int = a
+      fn f(x: Int) -> Int = x + x <+> x
+    end
+    """
+
+    ast = parse!(src)
+    table = BuiltinFixity.extend(BuiltinFixity.table(), ast)
+    out = Printer.quoted_to_string(ast, fixity: table)
+
+    # `<+>` binds tighter than `+`, so `x + x <+> x` needs no parentheses.
+    assert out =~ "x + x <+> x", "expected minimal parens, got:\n#{out}"
+    refute out =~ "(x <+> x)", "custom operator was over-parenthesised:\n#{out}"
+    # And the reprint must still recover the same parse.
+    assert strip(ast) == strip(parse!(out))
+  end
 
   for expr <- @exprs do
     @expr expr

@@ -1,13 +1,29 @@
 @group(:core)
+@prelude
 mod Std.Equatable
   ## `use Std.String` makes `String` the transparent `List(Char)` synonym, so
   ## the `Equatable for String` instance's `==` resolves like any other list.
   use Std.String
+  ## `use Std.Char` keeps the `Char` type name in scope for the Char instance;
+  ## `use Std.Bool` supplies `` `not` `` for the derived `` `!=` ``.
+  use Std.Char
+  use Std.Bool
+  ## `use Std.Nat` keeps the `Nat` type name in scope for the `Nat` instance.
+  ## `Nat` is a `@prelude` bootstrap type, so its `==` cannot be auto-derived
+  ## (bootstrap modules elaborate with no ambient `Equatable` in scope); the
+  ## instance is provided here, where `Equatable` is declared and `Std.Nat`
+  ## already precedes this module in the bootstrap order (via `Char`/`Bounded`).
+  use Std.Nat
   ## Equality protocol for structural comparison of values.
   ##
-  ## The `Equatable(T)` protocol mirrors the built-in `==` operator but
-  ## can be implemented for user-defined types so generic algorithms stay
-  ## polymorphic. `ne/2` is derived from `eq/2`.
+  ## The `Equatable(t)` protocol mirrors the built-in `==` operator but can be
+  ## implemented for user-defined types so generic algorithms stay polymorphic.
+  ## The minimal basis is a single primitive method, `` `==` ``; `` `!=` `` is a
+  ## derived, `where`-constrained top-level function (`not (a == b)`), written
+  ## without the operator to avoid regress. It is a standalone function rather
+  ## than an interface default so it is never monomorphised per instance (an
+  ## instance-specialised default that re-dispatches `` `==` `` at a concrete
+  ## operand cannot be elaborated for every leaf today).
   ##
   ## (This is the *comparison* protocol — "can these two values be checked
   ## for equality?". It is unrelated to `Equivalent`, the identity type
@@ -18,46 +34,64 @@ mod Std.Equatable
   ## ```cure
   ## use Std.Equatable
   ##
-  ## eq(1, 1)                                # => true
-  ## ne("a", "b")                            # => true
-  ## eq(:ok, :ok)                            # => true
+  ## `==`(1, 1)                               # => true
+  ## `!=`("a", "b")                           # => true
+  ## `==`(:ok, :ok)                           # => true
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
-  ## Equality between two `T` values.
+  ## Equality between two `t` values. Sole primitive obligation of the class.
   interface Equatable(t)
-    ## `true` when `a` equals `b`.
-    fn eq(a: t, b: t) -> Bool
+    ## `true` when `a` equals `b`. The return type is spelled as the qualified
+    ## `Std.Bool.Bool` (not bare `Bool`) so it denotes the ambient boolean in
+    ## EVERY implementing module — including one that shadows the prelude with a
+    ## local `type Bool = ...`. A bare `Bool` re-resolves in the consumer's scope
+    ## and would bind to that local shadow, so an auto-derived structural `==`
+    ## (whose `Std.Builtin.struct_eq` body returns `Std.Bool#Bool`) could not
+    ## satisfy the interface signature there.
+    fn `==`(a: t, b: t) -> Std.Bool.Bool
 
-  ## `Equatable` impl for `Int`: primitive `==`.
+  ## `Equatable` impl for `Int`: primitive integer equality.
   implementation Equatable for Int
-    ## Primitive integer equality.
-    fn eq(a: Int, b: Int) -> Bool = a == b
+    ## Primitive integer equality (matches `build_binop`'s `int_eq` lowering).
+    fn `==`(a: Int, b: Int) -> Bool = Std.Builtin.int_eq(a, b)
 
-  ## `Equatable` impl for `Float`: primitive `==`. IEEE-754 NaNs are not
-  ## equal to themselves.
+  ## `Equatable` impl for `Float`: primitive float equality. IEEE-754 NaNs are
+  ## not equal to themselves (`float_eq` is IEEE-correct).
   implementation Equatable for Float
-    ## Primitive float equality.
-    fn eq(a: Float, b: Float) -> Bool = a == b
+    ## Primitive float equality (matches `build_binop`'s `float_eq` lowering).
+    fn `==`(a: Float, b: Float) -> Bool = Std.Builtin.float_eq(a, b)
 
-  ## `Equatable` impl for `String`: byte-wise equality.
+  ## `Equatable` impl for `String`: structural (byte-wise) equality.
   implementation Equatable for String
-    ## Primitive string equality.
-    fn eq(a: String, b: String) -> Bool = a == b
+    ## Structural string equality (matches `build_binop`'s `struct_eq` lowering).
+    fn `==`(a: String, b: String) -> Bool = Std.Builtin.struct_eq(String, a, b)
 
   ## `Equatable` impl for `Bool`.
   implementation Equatable for Bool
-    ## Primitive boolean equality.
-    fn eq(a: Bool, b: Bool) -> Bool = a == b
+    ## Boolean equality via `Std.Bool`'s canonical `` `eq` `` (the primitive
+    ## `build_binop` selects for Bool operands).
+    fn `==`(a: Bool, b: Bool) -> Bool = Std.Bool.`eq`(a, b)
 
   ## `Equatable` impl for `Atom`.
   implementation Equatable for Atom
-    ## Primitive atom equality.
-    fn eq(a: Atom, b: Atom) -> Bool = a == b
+    ## Structural atom equality (matches `build_binop`'s `struct_eq` lowering).
+    fn `==`(a: Atom, b: Atom) -> Bool = Std.Builtin.struct_eq(Atom, a, b)
 
-  ## Inequality derived from `eq/2`. The `where Equatable(t)` constraint
-  ## threads the dictionary that dispatches `eq` at the caller's type.
-  fn ne(a: t, b: t) -> Bool where Equatable(t) =
-    pickup
-      eq(a, b) -> false
-      else     -> true
+  ## `Equatable` impl for `Char`: structural equality on the code-point-erased
+  ## value (matches `build_binop`'s `struct_eq` lowering for `:bounded` Char).
+  implementation Equatable for Char
+    ## Character equality.
+    fn `==`(a: Char, b: Char) -> Bool = Std.Builtin.struct_eq(Char, a, b)
+
+  ## `Equatable` impl for `Nat`: structural equality on the Peano value. `Nat`
+  ## is a bootstrap `@prelude` ADT, so it cannot auto-derive its own instance;
+  ## this hand-written instance is the value-surface `Nat == Nat` route and is
+  ## the same structural spine auto-derivation would synthesise for any ADT.
+  implementation Equatable for Nat
+    ## Structural Peano equality (matches a derived ADT `struct_eq` lowering).
+    fn `==`(a: Nat, b: Nat) -> Bool = Std.Builtin.struct_eq(Nat, a, b)
+
+  ## Inequality derived from `` `==` ``. The `where Equatable(t)` constraint
+  ## threads the dictionary that dispatches `` `==` `` at the caller's type.
+  fn `!=`(a: t, b: t) -> Bool where Equatable(t) = Std.Bool.`not`(`==`(a, b))

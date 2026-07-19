@@ -64,7 +64,7 @@ defmodule Antigen.Assays.InductiveEnv do
         label: label,
         payload: %{family: fam, ctors: [ctor] = ctors}
       }) do
-    env = Inductive.declare(Env.empty(), fam, ctors)
+    env = Inductive.declare(Antigen.CanonBuiltins.seed(Env.empty()), fam, ctors)
 
     with :ok <- check_kernel_accepts(env, fam, ctors, label),
          :ok <- check_roundtrip(env, fam, ctor),

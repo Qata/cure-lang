@@ -124,13 +124,16 @@ defmodule Cure.Elab.Resolve do
   defp applied_head?({:function_call, fmeta, _args}, hv), do: Keyword.get(fmeta, :name) == hv
   defp applied_head?(_type, _hv), do: false
 
+  # NOTE(int-facade): kept for totality on a legacy/deserialized `{:vint_type}`
+  # value; fresh elaboration never produces one (spec 2026-07-18 §3a) — `Int`
+  # normally reaches classification as `{:vdata, int_fid, []}`.
   defp classify(_env, {:vint_type}, _seen), do: {:concrete, :Int}
   defp classify(_env, {:vfloat_type}, _seen), do: {:concrete, :Float}
   # String has no primitive value former: `String = List(Char)` (the landed
   # value-surface design), so it reaches dispatch as the `nglobal` alias `String`
   # and is unfolded to `List(Char)` by the neutral-global clause below — it never
   # arrives as a `{:vstring_type}`. (`{:string_type}` is only an E-layer head-atom
-  # sentinel in `head_type_core`/`Implementation.head_atom`; it is never evaluated.)
+  # sentinel in `head_type_core`; it is never evaluated.)
   defp classify(_env, {:vdata, name, _vs}, _seen), do: {:concrete, name}
   defp classify(_env, {:vneutral, {:nvar, lvl}}, _seen), do: {:rigid, lvl}
 
@@ -138,8 +141,8 @@ defmodule Cure.Elab.Resolve do
   # dispatch as a neutral global, because delta-reduction is on-demand. Unfold it
   # to its normal form and re-classify, so `combine` on a `String` finds the
   # `List` instance — the same alias-normalisation the coherence *registration*
-  # side does (`Implementation.normalize_head`). Only nullary type-level defs
-  # unfold; `seen` guards a cyclic alias chain.
+  # side does (`Implementation.head_key`, which whnf's the elaborated head). Only
+  # nullary type-level defs unfold; `seen` guards a cyclic alias chain.
   defp classify(env, {:vneutral, {:nglobal, name}} = v, seen) do
     if MapSet.member?(seen, name) do
       {:unknown, v}
@@ -315,7 +318,9 @@ defmodule Cure.Elab.Resolve do
   defp peel_domains({:pi, _g, dom, cod}, n), do: [dom | peel_domains(cod, n - 1)]
   defp peel_domains(_other, _n), do: []
 
-  defp head_type_core(:Int), do: {:int_type}
+  # `Int` is no longer a primitive: surface `Int` resolves to the inductive family
+  # `Std.Int#Int` via the generic data clause below (spec 2026-07-18 surface flip),
+  # exactly as `Nat` does. Float/String remain primitive base types.
   defp head_type_core(:Float), do: {:float_type}
   defp head_type_core(:String), do: {:string_type}
   defp head_type_core(name), do: {:data, name, [], []}

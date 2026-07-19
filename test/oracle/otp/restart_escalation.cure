@@ -1,0 +1,38 @@
+mod RestartEscalation
+  use Std.Equivalent
+  ## SUPERVISION-TREE ESCALATION — the recursive fault-tolerance structure. A two-level tree: an inner
+  ## child-supervisor (budget `i`, reset cap `cap`) under an outer supervisor (budget `o`). Each leaf
+  ## crash consumes one inner restart; when the inner budget is exhausted the crash ESCALATES, consuming
+  ## one OUTER restart and resetting the inner child to a FRESH budget `cap`. When the outer is also
+  ## exhausted the whole tree dies. This is how OTP escalation composes up a supervision tree.
+  type Nat = Z | S(Nat)
+  type Tree = L(Nat, Nat, Nat) | Dead
+  ## One leaf crash.
+  fn tick(s: Tree) -> Tree = match s
+    Dead()        -> Dead()
+    L(o, i, cap)  -> match i
+      S(k)  -> L(o, k, cap)
+      Z()   -> match o
+        S(j)  -> L(j, cap, cap)
+        Z()   -> Dead()
+  fn crashes(s: Tree, n: Nat) -> Tree = match n
+    Z()    -> s
+    S(m)   -> crashes(tick(s), m)
+  ## **DEATH IS ABSORBING**: once the tree is Dead, no further crash revives it — escalation past the
+  ## root is irreversible (no zombie restarts). By induction on the crash count.
+  fn dead_absorbing(n: Nat) -> Equivalent(Tree, crashes(Dead(), n), Dead()) = match n
+    Z()    -> reflexive(Dead())
+    S(m)   -> dead_absorbing(m)
+  ## **INNER-EXHAUSTION CYCLE (the escalation step)**: with outer budget still S(j), one full inner
+  ## cycle — S(i) crashes — consumes exactly ONE outer restart and resets the inner child to `cap`.
+  ## This is the general inductive step of tree escalation. Induction on the inner budget `i`.
+  fn inner_cycle(j: Nat, i: Nat, cap: Nat) -> Equivalent(Tree, crashes(L(S(j), i, cap), S(i)), L(j, cap, cap)) = match i
+    Z()    -> reflexive(L(j, cap, cap))
+    S(m)   -> inner_cycle(j, m, cap)
+  ## **FINAL CYCLE ⇒ TREE DEATH**: with the outer budget exhausted (Z), the last inner cycle — S(i)
+  ## crashes — kills the whole tree. Composed with inner_cycle across the outer budget, this drives any
+  ## persistently-crashing leaf to global escalation. Induction on the inner budget.
+  fn final_cycle(i: Nat, cap: Nat) -> Equivalent(Tree, crashes(L(Z(), i, cap), S(i)), Dead()) = match i
+    Z()    -> reflexive(Dead())
+    S(m)   -> final_cycle(m, cap)
+end

@@ -1,0 +1,77 @@
+mod NMutex
+  use Std.Equivalent
+  ## N-PROCESS MUTUAL EXCLUSION — the arbitrary-process-count generalization (a LIST of processes, not a
+  ## fixed pair). The joint invariant AtMostOne (at most one process critical) is a global property over the
+  ## list; entry (acquire) is GUARDED by an evidence-carrying "all idle" decision, release frees everyone.
+  ## step_amo proves every guarded operation preserves AtMostOne; mutex_safe lifts it to all reachable
+  ## states from an all-idle start. Mutual exclusion for N processes, whatever N and whatever the schedule.
+  type P = Idle | Crit
+  type Procs = PNil | PCons(P, Procs)
+  type Move = Acquire | Release
+  ## Global predicates over the process list.
+  type AllIdle indices (procs: Procs)
+    AINil  : AllIdle(PNil)
+    AICons : AllIdle(rest) -> AllIdle(PCons(Idle, rest))
+  type AtMostOne indices (procs: Procs)
+    AMONil  : AtMostOne(PNil)
+    AMOIdle : AtMostOne(rest) -> AtMostOne(PCons(Idle, rest))
+    AMOCrit : AllIdle(rest) -> AtMostOne(PCons(Crit, rest))
+  ## All-idle is trivially at-most-one.
+  fn allidle_amo(procs: Procs, ai: AllIdle(procs)) -> AtMostOne(procs) = match procs
+    PNil()          -> AMONil()
+    PCons(p, rest)  -> match ai
+      AICons(ai2)   -> AMOIdle(allidle_amo(rest, ai2))
+  ## Evidence-carrying "is everyone idle?" decision — the entry guard.
+  type IdleDec indices (procs: Procs)
+    IYes : AllIdle(procs) -> IdleDec(procs)
+    INo  : IdleDec(procs)
+  fn check_idle(procs: Procs) -> IdleDec(procs) = match procs
+    PNil()          -> IYes(AINil())
+    PCons(p, rest)  -> match p
+      Idle()  -> match check_idle(rest)
+        IYes(ai) -> IYes(AICons(ai))
+        INo()    -> INo()
+      Crit()  -> INo()
+  ## acquire: a process takes the critical section (flip the head to Crit); only sound when all were idle.
+  fn acquire(procs: Procs) -> Procs = match procs
+    PNil()          -> PNil()
+    PCons(p, rest)  -> PCons(Crit(), rest)
+  ## **ACQUIRE FROM ALL-IDLE GIVES MUTUAL EXCLUSION**: entering when everyone is idle yields exactly one
+  ## critical process (AtMostOne). This is why the guard enforces safety.
+  fn acquire_amo(procs: Procs, ai: AllIdle(procs)) -> AtMostOne(acquire(procs)) = match procs
+    PNil()          -> AMONil()
+    PCons(p, rest)  -> match ai
+      AICons(ai2)   -> AMOCrit(ai2)
+  ## release frees every process.
+  fn release(procs: Procs) -> Procs = match procs
+    PNil()          -> PNil()
+    PCons(p, rest)  -> PCons(Idle(), release(rest))
+  fn release_ai(procs: Procs) -> AllIdle(release(procs)) = match procs
+    PNil()          -> AINil()
+    PCons(p, rest)  -> AICons(release_ai(rest))
+  ## The guarded transition, routed through acquire_step so a proof-side match on the decision refines it.
+  fn acquire_step(procs: Procs, d: IdleDec(procs)) -> Procs = match d
+    IYes(ai) -> acquire(procs)
+    INo()    -> procs
+  fn step(procs: Procs, m: Move) -> Procs = match m
+    Acquire() -> acquire_step(procs, check_idle(procs))
+    Release() -> release(procs)
+  ## **EVERY GUARDED OPERATION PRESERVES AT-MOST-ONE**: AtMostOne(procs) ⟹ AtMostOne(step(procs,m)). Acquire
+  ## uses the guard's AllIdle evidence (acquire_amo) or is a no-op; release lands on all-idle (⊆ AtMostOne).
+  fn step_amo(procs: Procs, m: Move, h: AtMostOne(procs)) -> AtMostOne(step(procs, m)) = match m
+    Acquire() -> match check_idle(procs)
+      IYes(ai) -> acquire_amo(procs, ai)
+      INo()    -> h
+    Release() -> allidle_amo(release(procs), release_ai(procs))
+  type Run indices (procs: Procs, procs2: Procs)
+    RDone : Run(procs, procs)
+    RStep : (m: Move) -> Run(step(procs, m), procs2) -> Run(procs, procs2)
+  ## **AT-MOST-ONE IN ALL REACHABLE STATES**: induction on the run, applying step_amo at each move.
+  fn amo_reachable(procs: Procs, {procs2: Procs}, h: AtMostOne(procs), run: Run(procs, procs2)) -> AtMostOne(procs2) = match run
+    RDone()        -> h
+    RStep(m, run2) -> amo_reachable(step(procs, m), step_amo(procs, m, h), run2)
+  ## **N-PROCESS MUTUAL EXCLUSION IS SAFE**: from an all-idle start, no reachable state ever has two
+  ## processes critical — for any number of processes and any schedule of acquires/releases.
+  fn mutex_safe(procs: Procs, {procs2: Procs}, ai: AllIdle(procs), run: Run(procs, procs2)) -> AtMostOne(procs2) =
+    amo_reachable(procs, allidle_amo(procs, ai), run)
+end

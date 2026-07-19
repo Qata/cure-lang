@@ -508,6 +508,23 @@ defmodule Cure.Elab.Emit do
           {:Cons, [h, t]} -> {:cons, @line, lower(env, h, ctx), lower(env, t, ctx)}
         end
 
+      # case-on-Int construction: both ctors are 1-ary, so dispatch by NAME.
+      #   FromNat(n)           -> n            (identity — NO +1, unlike Nat's S)
+      #   NegativeSuccessor(n) -> -(n + 1) = 0 - n - 1
+      # A closed application already folds to {:int_lit,_} before emit (Task 2), so
+      # this path fires only on OPEN constructor terms.
+      int_ctor?(env, name) ->
+        [n] = args
+
+        case base_name(name) do
+          :FromNat ->
+            lower(env, n, ctx)
+
+          :NegativeSuccessor ->
+            {:op, @line, :-, {:op, @line, :-, {:integer, @line, 0}, lower(env, n, ctx)},
+             {:integer, @line, 1}}
+        end
+
       true ->
         case Enum.map(args, &lower(env, &1, ctx)) do
           [] -> {:atom, @line, otp_tag(name)}
@@ -904,6 +921,7 @@ defmodule Cure.Elab.Emit do
   defp branch_clause(env, {cname, arity, body}, ctx) do
     cond do
       nat_ctor?(env, cname) -> nat_branch_clause(env, {cname, arity, body}, ctx)
+      int_ctor?(env, cname) -> int_branch_clause(env, {cname, arity, body}, ctx)
       bounded_ctor?(env, cname) -> bounded_branch_clause(env, {cname, arity, body}, ctx)
       sigma_ctor?(env, cname) -> sigma_branch_clause(env, {cname, arity, body}, ctx)
       list_ctor?(env, cname) -> list_branch_clause(env, {cname, arity, body}, ctx)
@@ -966,6 +984,39 @@ defmodule Cure.Elab.Emit do
     k_var = underscore_if_unused({:var, @line, k}, body_form)
     bind = {:match, @line, k_var, {:op, @line, :-, {:var, @line, n}, {:integer, @line, 1}}}
     guard = [[{:op, @line, :>, {:var, @line, n}, {:integer, @line, 0}}]]
+    {:clause, @line, [{:var, @line, n}], guard, [bind, body_form]}
+  end
+
+  # case-on-Int (spec 2026-07-18-inductive-int §3.4): the runtime scrutinee is a
+  # native BEAM integer. FromNat(n) matches any N with guard `N >= 0`, binding the
+  # field n = N (identity — no `-1`, unlike Nat's S). NegativeSuccessor(n) matches
+  # any N with guard `N < 0`, binding the field n = -N - 1 (since
+  # NegativeSuccessor(n) = -(n + 1)). Both ctors are 1-ary, so dispatch is by
+  # constructor NAME + sign guard, not arity. Erlang patterns/guards cannot
+  # compute-and-bind, so the field binding opens the body as its first form; the
+  # body's de Bruijn frame counts the single field (index 0), exactly as the tuple
+  # form would have. The guards are mutually exclusive and exhaustive over ℤ, so
+  # clause order follows source-arm order.
+  defp int_branch_clause(env, {name, 1, body}, ctx) do
+    n = fresh_var("N")
+    field = fresh_var("V")
+    body_form = lower(env, body, [field | ctx])
+    field_pat = underscore_if_unused({:var, @line, field}, body_form)
+
+    {guard_cmp, field_expr} =
+      case base_name(name) do
+        :FromNat ->
+          {:>=, {:var, @line, n}}
+
+        :NegativeSuccessor ->
+          # field = -N - 1 = 0 - N - 1
+          {:<,
+           {:op, @line, :-, {:op, @line, :-, {:integer, @line, 0}, {:var, @line, n}},
+            {:integer, @line, 1}}}
+      end
+
+    guard = [[{:op, @line, guard_cmp, {:var, @line, n}, {:integer, @line, 0}}]]
+    bind = {:match, @line, field_pat, field_expr}
     {:clause, @line, [{:var, @line, n}], guard, [bind, body_form]}
   end
 
@@ -1041,7 +1092,18 @@ defmodule Cure.Elab.Emit do
   # not. (Each field of a multi-field clause must call this once per field —
   # never derive further names by adding an offset to one reserved id, since
   # that reintroduces the exact same collision class against other reserved ids.)
-  defp fresh_var(prefix), do: :"#{prefix}#{System.unique_integer([:positive, :monotonic])}"
+  #
+  # The `_` between prefix and id is load-bearing, not decoration. Positional
+  # parameter binders use a SEPARATE scheme — `V<pos>` / `_e<pos>` (see
+  # `peel_params/4`, ~line 455), where `<pos>` is a small de Bruijn index — and
+  # are NOT minted here. `System.unique_integer/1` is only unique among ITS OWN
+  # ids; it can (and early in the VM's life does) return a small value like `1`,
+  # so a bare `:"V#{1}"` would alias the parameter `V1`. In Erlang an already-bound
+  # `V1` in `[V1|V2]` is an equality match, not a fresh bind, corrupting the clause
+  # (a non-deterministic `CaseClauseError`). The separator makes the fresh
+  # namespace `<prefix>_<digits>` provably disjoint from the positional
+  # `<prefix><digits>` shape — no fresh binder can ever spell a positional name.
+  defp fresh_var(prefix), do: :"#{prefix}_#{System.unique_integer([:positive, :monotonic])}"
 
   # `erl_lint` flags a bound-but-unused variable (`unused_var`). An erased proof
   # discards its parameters — an equality proof erases to the runtime-irrelevant
@@ -1078,6 +1140,17 @@ defmodule Cure.Elab.Emit do
   # structural twin has a different family-id and keeps tuples.
   defp nat_ctor?(env, name) do
     fam = Inductive.builtin(env, :nat)
+    fam != nil and Inductive.ctor_family(env, name) == fam
+  end
+
+  # The canonical Std.Int family (registry-keyed, nominal): its values are native
+  # BEAM machine integers (spec 2026-07-18-inductive-int). Both constructors are
+  # 1-ary, so — unlike Nat's Z/S — the erasure MUST key off the constructor NAME:
+  #   FromNat(n)           -> n            (identity, no +1)
+  #   NegativeSuccessor(n) -> -(n + 1)
+  # A locally-redeclared structural twin has a different family-id and keeps tuples.
+  defp int_ctor?(env, name) do
+    fam = Inductive.builtin(env, :int)
     fam != nil and Inductive.ctor_family(env, name) == fam
   end
 

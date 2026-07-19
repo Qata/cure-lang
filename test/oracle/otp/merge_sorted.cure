@@ -1,0 +1,87 @@
+mod MergeSorted
+  use Std.Equivalent
+  ## MERGE OF TWO SORTED LISTS IS SORTED — the core of merge sort, and a genuine termination challenge:
+  ## merge interleaves TWO lists and is not structurally recursive on a single argument. Routing the whole
+  ## thing through one comparison helper (`merge_pick(x,r1,y,r2,·)`) DEFEATS size-change termination in BOTH
+  ## Cure and Idris — the `LCons(y,r2)` reconstruction happens where `l2` is out of scope, so the checker
+  ## loses the "combined length decreases" relation. The fix (Idris-verified total) is a THREE-function
+  ## split: `merge` recurses on l1, `merge_into` recurses on l2 where l2 IS in scope (so reconstruct-equal
+  ## is preserved), and `merge_pick` routes the ordering decision as an explicit LeDec argument. The proofs
+  ## mirror that exact three-function shape; `merge_pick_*` matches the decision PARAMETER directly (the same
+  ## refinement idiom that makes insertion sort's `insert_pick` work), so the head-ordering obligation reduces.
+  type Nat = Z | S(Nat)
+  type Bool = F | T
+  type List = LNil | LCons(Nat, List)
+  fn leq(a: Nat, b: Nat) -> Bool = match a
+    Z()   -> T()
+    S(k)  -> match b
+      Z()   -> F()
+      S(j)  -> leq(k, j)
+  fn le_trans(a: Nat, b: Nat, c: Nat, hab: Equivalent(Bool, leq(a, b), T()), hbc: Equivalent(Bool, leq(b, c), T())) -> Equivalent(Bool, leq(a, c), T()) = match a
+    Z()   -> reflexive(T())
+    S(a2) -> match b
+      Z()   -> match hab
+      S(b2) -> match c
+        Z()   -> match hbc
+        S(c2) -> le_trans(a2, b2, c2, hab, hbc)
+  ## Evidence-carrying comparison (indices explicit so the constructor pins the right LeDec).
+  type LeDec indices (x: Nat, y: Nat)
+    LeYes : (x2: Nat) -> (y2: Nat) -> Equivalent(Bool, leq(x2, y2), T()) -> LeDec(x2, y2)
+    LeNo  : (x2: Nat) -> (y2: Nat) -> Equivalent(Bool, leq(y2, x2), T()) -> LeDec(x2, y2)
+  fn cmp(x: Nat, y: Nat) -> LeDec(x, y) = match x
+    Z()   -> LeYes(Z(), y, reflexive(T()))
+    S(x2) -> match y
+      Z()   -> LeNo(S(x2), Z(), reflexive(T()))
+      S(y2) -> match cmp(x2, y2)
+        LeYes(a, b, e) -> LeYes(S(x2), S(y2), e)
+        LeNo(a, b, e)  -> LeNo(S(x2), S(y2), e)
+  type LeAll indices (x: Nat, l: List)
+    LANil  : LeAll(x, LNil)
+    LACons : (y: Nat) -> (rest: List) -> Equivalent(Bool, leq(x, y), T()) -> LeAll(x, rest) -> LeAll(x, LCons(y, rest))
+  type Sorted indices (l: List)
+    SNil  : Sorted(LNil)
+    SCons : (x: Nat) -> (rest: List) -> LeAll(x, rest) -> Sorted(rest) -> Sorted(LCons(x, rest))
+  fn leall_trans(x: Nat, y: Nat, l: List, hxy: Equivalent(Bool, leq(x, y), T()), hl: LeAll(y, l)) -> LeAll(x, l) = match hl
+    LANil()                   -> LANil()
+    LACons(z, rest, hyz, hl2) -> LACons(z, rest, le_trans(x, y, z, hxy, hyz), leall_trans(x, y, rest, hxy, hl2))
+  ## Three-function total merge. `merge_pick` carries the decision as an explicit LeDec argument so it
+  ## freezes with the decision VISIBLE (like insert_pick); `merge_into` recurses on l2 with l2 in scope.
+  fn merge_pick(x: Nat, r1: List, y: Nat, r2: List, d: LeDec(x, y)) -> List = match d
+    LeYes(a, b, e) -> LCons(x, merge(r1, LCons(y, r2)))
+    LeNo(a, b, e)  -> LCons(y, merge_into(x, r1, r2))
+  fn merge_into(x: Nat, r1: List, l2: List) -> List = match l2
+    LNil()        -> LCons(x, r1)
+    LCons(y, r2)  -> merge_pick(x, r1, y, r2, cmp(x, y))
+  fn merge(l1: List, l2: List) -> List = match l1
+    LNil()        -> l2
+    LCons(x, r1)  -> merge_into(x, r1, l2)
+  ## **A COMMON LOWER BOUND SURVIVES THE MERGE**: z ≤ all of l1 and z ≤ all of l2 ⟹ z ≤ all of merge(l1,l2).
+  ## Mirrors the three-function merge; the head chosen at each step is one of the two heads, both bounded by z.
+  fn merge_pick_leall(z: Nat, x: Nat, r1: List, y: Nat, r2: List, h1: LeAll(z, LCons(x, r1)), h2: LeAll(z, LCons(y, r2)), d: LeDec(x, y)) -> LeAll(z, merge_pick(x, r1, y, r2, d)) = match d
+    LeYes(a, b, e) -> match h1
+      LACons(x3, r13, hzx, h1r) -> LACons(x, merge(r1, LCons(y, r2)), hzx, merge_leall(z, r1, LCons(y, r2), h1r, h2))
+    LeNo(a, b, e)  -> match h2
+      LACons(y3, r23, hzy, h2r) -> LACons(y, merge_into(x, r1, r2), hzy, merge_into_leall(z, x, r1, r2, h1, h2r))
+  fn merge_into_leall(z: Nat, x: Nat, r1: List, l2: List, h1: LeAll(z, LCons(x, r1)), h2: LeAll(z, l2)) -> LeAll(z, merge_into(x, r1, l2)) = match l2
+    LNil()        -> h1
+    LCons(y, r2)  -> merge_pick_leall(z, x, r1, y, r2, h1, h2, cmp(x, y))
+  fn merge_leall(z: Nat, l1: List, l2: List, h1: LeAll(z, l1), h2: LeAll(z, l2)) -> LeAll(z, merge(l1, l2)) = match l1
+    LNil()        -> h2
+    LCons(x, r1)  -> merge_into_leall(z, x, r1, l2, h1, h2)
+  ## **MERGE PRESERVES SORTEDNESS**: Sorted(l1) and Sorted(l2) ⟹ Sorted(merge(l1,l2)). At each interleaving
+  ## step the chosen head is ≤ the whole rest of the merge (merge_leall), pushing the smaller head below the
+  ## other list's elements by transitivity. Same three-function mirror.
+  fn merge_pick_sorted(x: Nat, r1: List, y: Nat, r2: List, s1: Sorted(LCons(x, r1)), s2: Sorted(LCons(y, r2)), d: LeDec(x, y)) -> Sorted(merge_pick(x, r1, y, r2, d)) = match d
+    LeYes(a, b, e) -> match s1
+      SCons(x3, r13, la1, sr1) -> match s2
+        SCons(y3, r23, la2, sr2) -> SCons(x, merge(r1, LCons(y, r2)), merge_leall(x, r1, LCons(y, r2), la1, LACons(y, r2, e, leall_trans(x, y, r2, e, la2))), merge_sorted(r1, LCons(y, r2), sr1, SCons(y, r2, la2, sr2)))
+    LeNo(a, b, e)  -> match s1
+      SCons(x3, r13, la1, sr1) -> match s2
+        SCons(y3, r23, la2, sr2) -> SCons(y, merge_into(x, r1, r2), merge_into_leall(y, x, r1, r2, LACons(x, r1, e, leall_trans(y, x, r1, e, la1)), la2), merge_into_sorted(x, r1, r2, SCons(x, r1, la1, sr1), sr2))
+  fn merge_into_sorted(x: Nat, r1: List, l2: List, s1: Sorted(LCons(x, r1)), s2: Sorted(l2)) -> Sorted(merge_into(x, r1, l2)) = match l2
+    LNil()        -> s1
+    LCons(y, r2)  -> merge_pick_sorted(x, r1, y, r2, s1, s2, cmp(x, y))
+  fn merge_sorted(l1: List, l2: List, s1: Sorted(l1), s2: Sorted(l2)) -> Sorted(merge(l1, l2)) = match l1
+    LNil()        -> s2
+    LCons(x, r1)  -> merge_into_sorted(x, r1, l2, s1, s2)
+end
