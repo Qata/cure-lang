@@ -1,6 +1,0 @@
-mod Hello
-  use Std.String
-  use Std.Semigroup
-
-  fn greet(name: String) -> String = "Hello, " <> name <> "!"
-  fn main() -> Int = 42

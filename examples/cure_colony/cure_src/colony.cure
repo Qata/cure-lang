@@ -1,3 +1,0 @@
-## Transparent supervisor example. Child-spec algebra is defined in Cure.
-
-sup Cure.Colony children [child_spec Cure.Worker :worker_a, child_spec Cure.Worker :worker_b, child_spec Cure.Echo :echo]
