@@ -43,7 +43,7 @@ defmodule Cure.Elab.BeamEncodeTest do
 
       type Message = Ping
 
-      fn decode(term: BeamTerm) -> Result(BeamDecodeError, Message) = from_beam(term)
+      fn decode(term: BeamTerm) -> Result(Message, BeamDecodeError) = from_beam(term)
     """
 
     assert {:error, {:no_instance, :BeamDecode, _type}} = Cure.Elab.Program.elaborate(source)

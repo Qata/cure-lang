@@ -11,6 +11,20 @@ defmodule Cure.Stdlib.OtpTest do
   alias Cure.Elab.Program
   alias Cure.Core.Env
 
+  defmodule IgnoreStart do
+    use GenServer
+    def start_link(arg), do: GenServer.start_link(__MODULE__, arg)
+    @impl true
+    def init(_arg), do: :ignore
+  end
+
+  defmodule FailedStart do
+    use GenServer
+    def start_link(arg), do: GenServer.start_link(__MODULE__, arg)
+    @impl true
+    def init(_arg), do: {:stop, :deliberate_start_failure}
+  end
+
   # A program in module `App` that `use`s Std.Otp and declares a request ADT.
   defp app(body) do
     Program.elaborate("mod App\n  use Std.Otp\n  type Cmd = Inc | Dec\n#{body}end\n")
@@ -225,6 +239,79 @@ defmodule Cure.Stdlib.OtpTest do
 
       assert {:error, _} = Program.elaborate(source)
     end
+
+    test "checked startup decodes the OTP result and preserves protocol indices" do
+      source = """
+      mod ActorStartProof
+        use Std.Actor
+        use Std.Otp
+
+        type Msg = Increment
+        type Req = Value
+
+        actor Cure.Generated.TypedActorStart
+          state Int
+          messages Msg
+          on_cast
+            Increment -> state + 1
+
+        fn launch(module: Atom) -> Effect(StartResult(ActorServer(Msg, Req, Unit))) =
+          start_actor(module, 0)
+
+        fn increment(server: ActorServer(Msg, Req, Unit)) -> Effect(Unit) =
+          actor_cast(server, Increment())
+      """
+
+      assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+      assert {:ok, direct} = apply(:"Cure.Generated.TypedActorStart", :start_link, [0])
+      GenServer.stop(direct)
+      assert {:ok, raw} = apply(:"Cure.Std.Otp.Raw", :raw_start_link_term, [:"Cure.Generated.TypedActorStart", 0, []])
+      GenServer.stop(raw)
+      assert {:Started, pid} = apply(module, :launch, [:"Cure.Generated.TypedActorStart"])
+      assert :sys.get_state(pid) == 0
+      assert :unit = apply(module, :increment, [pid])
+      assert :sys.get_state(pid) == 1
+      GenServer.stop(pid)
+
+      assert :StartIgnored = apply(module, :launch, [IgnoreStart])
+
+      previous = Process.flag(:trap_exit, true)
+      assert :StartFailed = apply(module, :launch, [FailedStart])
+      Process.flag(:trap_exit, previous)
+    end
+  end
+
+  test "BeamTerm observations validate atoms, tuples, bounds, and pids" do
+    source = """
+    mod BeamObservationProof
+      use Std.Beam
+      use Std.Option
+
+      fn atom_view() -> Option(Atom) = atom(forget(:ready))
+      fn tuple_size_view() -> Option(Int) = tuple_arity(forget(%[:ok, 3]))
+      fn tuple_tag_view() -> Option(Atom) = match tuple_element(forget(%[:ok, 3]), 0)
+        Some(term) -> atom(term)
+        None() -> None()
+      fn out_of_bounds() -> Option(BeamTerm) = tuple_element(forget(%[:ok, 3]), 2)
+      fn pid_view(process: BarePid) -> Option(BarePid) = pid(forget(process))
+      fn tuple_pid_view(process: BarePid) -> Option(BarePid) = match tuple_element(forget(%[:ok, process]), 1)
+        Some(term) -> pid(term)
+        None() -> None()
+      fn decode_atom_value(term: BeamTerm) -> Result(Atom, BeamDecodeError) = decode_atom(term)
+      fn decode_pid_value(term: BeamTerm) -> Result(BarePid, BeamDecodeError) = decode_pid(term)
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :atom_view, []) == {:some, :ready}
+    assert apply(module, :tuple_size_view, []) == {:some, 2}
+    assert apply(module, :tuple_tag_view, []) == {:some, :ok}
+    assert apply(module, :out_of_bounds, []) == :none
+    assert apply(module, :pid_view, [self()]) == {:some, self()}
+    assert apply(module, :tuple_pid_view, [self()]) == {:some, self()}
+    assert apply(module, :decode_atom_value, [:ready]) == {:ok, :ready}
+    assert apply(module, :decode_atom_value, [self()]) == {:error, :InvalidBeamTerm}
+    assert apply(module, :decode_pid_value, [self()]) == {:ok, self()}
+    assert apply(module, :decode_pid_value, [:ready]) == {:error, :InvalidBeamTerm}
   end
 
   test "a sequenced typed conversation elaborates (tell then call, via effect bind)" do

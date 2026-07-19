@@ -22,7 +22,7 @@ mod Std.Beam
   ## Fallible validation of an opaque foreign term. Implementations are explicit
   ## until structural decoder derivation can prove every field recursively.
   interface BeamDecode(t)
-    fn from_beam(term: BeamTerm) -> Result(BeamDecodeError, t)
+    fn from_beam(term: BeamTerm) -> Result(t, BeamDecodeError)
 
   ## The primitive boundary used by derived and hand-written encoders. `raw_term`
   ## is an erasing identity at runtime; the tuple merely prevents an unconstrained
@@ -44,3 +44,35 @@ mod Std.Beam
 
   implementation BeamEncode for String
     fn to_beam(value: String) -> BeamTerm = forget(value)
+
+  ## Total inbound observations. A projection is performed only after its BEAM
+  ## guard succeeds, so no unvalidated RawTerm is claimed as a Cure value.
+  fn atom(term: BeamTerm) -> Option(Atom) = match raw_term_is_atom(term)
+    true -> Some(raw_term_atom(1, %[term, :checked_atom]))
+    false -> None()
+
+  fn pid(term: BeamTerm) -> Option(BarePid) = match raw_term_is_pid(term)
+    true -> Some(raw_term_pid(1, %[term, :checked_pid]))
+    false -> None()
+
+  fn tuple_arity(term: BeamTerm) -> Option(Int) = match raw_term_is_tuple(term)
+    true -> Some(raw_term_tuple_size(term))
+    false -> None()
+
+  ## Zero-based checked tuple access for Cure callers; Erlang's element/2 is
+  ## one-based. Negative and out-of-range indices return None.
+  fn tuple_element(term: BeamTerm, index: Int) -> Option(BeamTerm) = match tuple_arity(term)
+    None() -> None()
+    Some(size) -> match index < 0
+      true -> None()
+      false -> match index < size
+        true -> Some(raw_term_tuple_element(index + 1, term))
+        false -> None()
+
+  fn decode_atom(term: BeamTerm) -> Result(Atom, BeamDecodeError) = match atom(term)
+    Some(value) -> Ok(value)
+    None() -> Error(InvalidBeamTerm())
+
+  fn decode_pid(term: BeamTerm) -> Result(BarePid, BeamDecodeError) = match pid(term)
+    Some(value) -> Ok(value)
+    None() -> Error(InvalidBeamTerm())

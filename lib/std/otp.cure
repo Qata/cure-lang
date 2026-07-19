@@ -4,6 +4,7 @@ mod Std.Otp
   use Std.ExitReason
   use Std.Bool
   use Std.Option
+  use Std.Beam
 
   ## Transparent process-operation syntax. Each rule produces ordinary Cure
   ## syntax; the checked algebra remains the only semantic implementation.
@@ -70,6 +71,8 @@ mod Std.Otp
   ## An actor-like server has independent asynchronous and synchronous input
   ## codes. All three indices are erased; the runtime value is the native pid.
   typealias ActorServer(m, q, r) = RawServerPid(m, q, r)
+
+  type StartResult(handle) = Started(handle) | StartFailed | StartIgnored | InvalidStartResult
 
   type DepActorServer(m: Type, q: Type, rep: (q) -> Type) indices ()
     mk_dep_actor_server : (raw: RawServerPid(m, q, Unit)) -> DepActorServer(m, q, rep)
@@ -211,6 +214,48 @@ mod Std.Otp
   ## result tuple; transparent behavior macros provide the typed specialization.
   fn start_link({a: Type}, module: Atom, args: a) -> Effect(Tuple) =
     raw_start_link_unnamed(module, args, assert_type [] : List(Atom))
+
+  ## Start a checked actor callback module and decode OTP's heterogeneous result.
+  ## Only the `:ok` branch may attach actor protocol indices, and only after the
+  ## second tuple element has passed the native PID guard.
+  fn start_actor({a: Type}, {m: Type}, {q: Type}, {r: Type}, module: Atom, args: a) -> Effect(StartResult(ActorServer(m, q, r))) =
+    let outcome = raw_start_link_term(module, args, assert_type [] : List(Atom))
+    decode_actor_start(outcome)
+
+  local fn decode_actor_start({m: Type}, {q: Type}, {r: Type}, outcome: BeamTerm) -> StartResult(ActorServer(m, q, r)) =
+    match atom(outcome)
+      Some(tag) -> match tag == :ignore
+        true -> StartIgnored()
+        false -> InvalidStartResult()
+      None() -> decode_actor_start_tuple(outcome)
+
+  local fn decode_actor_start_tuple({m: Type}, {q: Type}, {r: Type}, outcome: BeamTerm) -> StartResult(ActorServer(m, q, r)) =
+    match tuple_arity(outcome)
+      None() -> InvalidStartResult()
+      Some(size) -> match size == 2
+        true -> decode_actor_start_pair(outcome)
+        false -> InvalidStartResult()
+
+  local fn decode_actor_start_pair({m: Type}, {q: Type}, {r: Type}, outcome: BeamTerm) -> StartResult(ActorServer(m, q, r)) =
+    match tuple_element(outcome, 0)
+      None() -> InvalidStartResult()
+      Some(tag_term) -> match atom(tag_term)
+        None() -> InvalidStartResult()
+        Some(tag) -> match tag == :ok
+          true -> decode_started_actor(outcome)
+          false -> match tag == :error
+            true -> match tuple_element(outcome, 1)
+              Some(reason) -> StartFailed()
+              None() -> InvalidStartResult()
+            false -> InvalidStartResult()
+
+  local fn decode_started_actor({m: Type}, {q: Type}, {r: Type}, outcome: BeamTerm) -> StartResult(ActorServer(m, q, r)) =
+    match tuple_element(outcome, 1)
+      None() -> InvalidStartResult()
+      Some(pid_term) -> match pid(pid_term)
+        None() -> InvalidStartResult()
+        Some(process) -> Started(raw_actor_server(1, %[process, :checked_actor]))
+
 
   fn start_statem({a: Type}, module: Atom, args: a) -> Effect(Tuple) =
     raw_statem_start_link_unnamed(module, args, assert_type [] : List(Atom))

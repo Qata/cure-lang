@@ -14,7 +14,7 @@ interface BeamEncode(t)
   fn to_beam(value: t) -> BeamTerm
 
 interface BeamDecode(t)
-  fn from_beam(term: BeamTerm) -> Result(BeamDecodeError, t)
+  fn from_beam(term: BeamTerm) -> Result(t, BeamDecodeError)
 ```
 
 `BeamTerm` is opaque. Encoding is total; decoding is fallible. No API may use a
