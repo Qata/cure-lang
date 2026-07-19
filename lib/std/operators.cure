@@ -1,12 +1,15 @@
 @group(:core)
+@prelude
 mod Std.Operators
 
-# The single fixity-declaration authority for Cure. Every operator the language
-# recognises is declared here. A user module may declare NEW operators of its
-# own, but may not redeclare any operator named here: the protection is by
-# LOCATION — anything declared in this stdlib module is "built in" and off-limits
-# to user fixity declarations (see `Program.check_no_builtin_rebind`). No
-# per-declaration `builtin` marker is needed; presence in this file IS the mark.
+# The fixity-declaration authority for Cure's core operators — the operators
+# every module gets, unconditionally, via `@prelude`. A user module may
+# declare NEW operators of its own; redeclaring one of THESE with a
+# different group/body is a conflict (`Cure.Compiler.Parser.FixityResolver`,
+# `:conflicting_operator_fixity` / `:conflicting_precedence_group`), not a
+# location-based rejection — because `@prelude` places this module's
+# declarations in every table via the same union every `use` triggers, a
+# redeclaration always collides. An identical redeclaration is a no-op.
 #
 # Binding power rises with each `higher_than` link (the numbers below are
 # illustrative; only the ORDER is significant):
@@ -26,7 +29,7 @@ mod Std.Operators
 #
 # `.`, `|>`, `<-|`, `✉`, `=`, and the ranges keep dedicated AST nodes and never
 # route through the overloadable function-call desugar, so redeclaring their
-# fixity would be meaningless; the location rule rejects any attempt.
+# fixity would be meaningless; the conflict check rejects any attempt.
 
 precedencegroup Assignment
   associativity: right
