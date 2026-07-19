@@ -6,8 +6,7 @@ mod Std.Fsm
   use Std.Beam
   use Std.ExitReason
 
-  ## The structured FSM surface reuses the generic family parser. Legacy forms
-  ## in FsmContainers remain available through ordinary grammar fallback.
+  ## The structured FSM surface reuses the generic family parser.
   macro fsm <name: ModuleName>
     syntax family FsmDefinition
       state Type
@@ -36,119 +35,9 @@ mod Std.Fsm
             None() -> Failure(:typed_fsm_requires_initial_state, [])
             Some(initial_state) -> emit_typed_fsm_parts(name_syntax, definition.state, state_names, initial_state, event_type, event_declarations, body)
 
-  ## `fsm` is a transparent standard-library macro. The base state-machine is
-  ## an ordinary lifted GenStatem module; transition derivation and handlers
-  ## are layered on top of this floor.
-  macro FsmContainers
+  ## Supporting transition syntax remains independent of the structured family.
+  macro FsmSyntax
     syntax transition <from: Code> <event: Code> <to: Code> becomes Std.Fsm.transition(from, event, to)
-
-    syntax fsm <name: ModuleName> state <state_type: Type> derive <event_body: Code> contextual computed by derive_fsm
-
-    syntax fsm <name: ModuleName> state <state_type: Type> transitions <table: Code> contextual becomes lift module name
-      use Std.Otp
-      use Std.Fsm
-      behaviour gen_statem
-      typealias State = state_type
-      callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, Std.Fsm.first_state(table), initial]
-      callback handle_event(event_type: Atom, event: Atom, state: Atom, data: State) returns Effect(Tuple(Atom, Atom, State)) = Std.Fsm.dispatch_atom(table, state, event, data)
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
-
-    syntax fsm <name: ModuleName> state <state_type: Type> init <init_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_statem
-      typealias State = state_type
-      callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = init_body
-      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
-
-    syntax fsm <name: ModuleName> state <state_type: Type> terminate <terminate_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_statem
-      typealias State = state_type
-      callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
-      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
-      callback terminate(reason: r, state: s, data: State) returns Effect(Atom) = terminate_body
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
-
-    syntax fsm <name: ModuleName> state <state_type: Type> code_change <code_change_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_statem
-      typealias State = state_type
-      callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
-      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
-      callback code_change(old: v, state: s, data: State, extra: x) returns Effect(Tuple(Atom, Atom, State)) = code_change_body
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
-
-    syntax fsm <name: ModuleName> state <state_type: Type> events <event_type: Type> handle_event <event_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_statem
-      typealias State = state_type
-      typealias Event = event_type
-      callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
-      callback handle_event(event_type: Atom, event: Event, state: s, data: State) returns Effect(Atom) = event_body
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
-
-    syntax fsm <name: ModuleName> state <state_type: Type> initial <initial_state: Code> events <event_type: Type> transition <transition_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_statem
-      typealias State = state_type
-      typealias Event = event_type
-      callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, initial_state, initial]
-      callback handle_event(event_type: Atom, event: Event, state: Atom, data: State) returns Effect(Tuple(Atom, Atom, State)) = transition_body
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
-
-    syntax fsm <name: ModuleName> state <state_type: Type> handle_event <event_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_statem
-      typealias State = state_type
-      callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
-      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = event_body
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
-
-    syntax fsm <name: ModuleName> state <state_type: Type> with <payload: Code> <body: raw until dedent> becomes lift module name
-      use Std.Otp
-      behaviour gen_statem
-      typealias State = state_type
-      callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
-      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
-      fn start_link() -> Effect(Tuple) = beam_ops start_statem name payload
-      body
-
-    syntax fsm <name: ModuleName> state <state_type: Type> <body: raw until dedent> becomes lift module name
-      use Std.Otp
-      behaviour gen_statem
-      typealias State = state_type
-      callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, :initial, initial]
-      callback handle_event(event_type: Atom, event: e, state: s, data: State) returns Effect(Atom) = :keep_state_and_data
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
-      body
-
-    syntax fsm <name: ModuleName> with <payload: Code> <body: raw until dedent> becomes lift module name
-      use Std.Otp
-      behaviour gen_statem
-      callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: p) returns Effect(Tuple(Atom, Atom, p)) = %[:ok, :initial, initial]
-      callback handle_event(event_type: Atom, event: e, state: s, data: p) returns Effect(Atom) = :keep_state_and_data
-      fn start_link() -> Effect(Tuple) = beam_ops start_statem name payload
-      body
-
-    syntax fsm <name: ModuleName> <body: raw until dedent> becomes lift module name
-      use Std.Otp
-      behaviour gen_statem
-      callback callback_mode() returns Atom = :handle_event_function
-      callback init(initial: p) returns Effect(Tuple(Atom, Atom, p)) = %[:ok, :initial, initial]
-      callback handle_event(event_type: Atom, event: e, state: s, data: p) returns Effect(Atom) = :keep_state_and_data
-      fn start_link(initial: p) -> Effect(Tuple) = beam_ops start_statem name initial
-      body
 
   type Transition(state, event) = Row(state, event, state)
   typealias AtomTransition = Transition(Atom, Atom)
@@ -172,11 +61,6 @@ mod Std.Fsm
     Keep(data) -> Std.Beam.forget(%[:keep_state, data])
     Next(state, data) -> Std.Beam.forget(%[:next_state, state, data])
     Stop(reason, data) -> Std.Beam.forget(%[:stop, exit_reason_atom(reason), data])
-
-  fn emit_fsm(input: FsmSyntax, event_body: Syntax) -> Syntax =
-    match derive_pattern_heads(event_body)
-      InvalidHeads(reason) -> Failure(reason, [])
-      Heads(heads) -> emit_fsm_parts(input.name, input.state_type, variable("FsmEvent"), [enum_type("FsmEvent", heads)], event_body)
 
   fn emit_fsm_parts(name_syntax: Syntax, state_type: Syntax, event_type: Syntax, event_declarations: List(Syntax), event_body: Syntax) -> Syntax =
     let module_name = match name_syntax
@@ -231,10 +115,6 @@ mod Std.Fsm
       ])
     ]))
 
-  fn derive_fsm(input: FsmSyntax) -> Syntax =
-    emit_fsm(input, input.event_body)
-
-  ## Family cases contain plain expression bodies. Lifted callbacks consume a
   ## checked block, so normalize each arm here in ordinary source-level syntax.
   fn fsm_handler(body: Syntax) -> Syntax = match tag(body) == :pattern_match
     true -> fsm_handler_node(attrs(body), children(body))
@@ -284,7 +164,7 @@ mod Std.Fsm
           false -> dispatch(rest, state, event, data)
         false -> dispatch(rest, state, event, data)
 
-  ## Exact compatibility encoder used by the legacy atom-labelled table macro.
+  ## Exact encoder for atom-labelled transition tables.
   ## Keeping it separate lets the ordinary `dispatch` algebra remain generic.
   fn dispatch_atom(transitions: List(Transition(Atom, Atom)), state: Atom, event: Atom, data: a) -> Tuple(Atom, Atom, a) =
     match transitions

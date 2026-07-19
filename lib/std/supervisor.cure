@@ -3,8 +3,7 @@ mod Std.Supervisor
   use Std.Syntax
   use Std.Otp.Raw
 
-  ## The structured supervisor surface is source-defined. Legacy forms in
-  ## SupervisorContainers remain available through ordinary grammar fallback.
+  ## The structured supervisor surface is source-defined.
   macro sup <name: ModuleName>
     syntax family SupervisorDefinition
       children Code
@@ -39,28 +38,6 @@ mod Std.Supervisor
     syntax child_spec <module: ModuleName> <id: Atom> with <args: Code> contextual becomes Std.Supervisor.child_with_typed_args(module, id, args, Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(5000), Std.Supervisor.worker())
     syntax child_spec <module: ModuleName> <id: Atom> becomes Std.Supervisor.child(module, id)
 
-    syntax sup <name: ModuleName> children <children: Code> contextual becomes lift module name
-      use Std.Otp
-      use Std.Supervisor
-      behaviour supervisor
-      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(ChildSpec)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, more(4)), children]]
-      fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name
-
-    syntax sup <name: ModuleName> with <payload: Code> <body: raw until dedent> becomes lift module name
-      use Std.Otp
-      use Std.Supervisor
-      behaviour supervisor
-      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(Atom)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, more(4)), assert_type [] : List(Atom)]]
-      fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name [payload]
-      body
-
-    syntax sup <name: ModuleName> <body: raw until dedent> becomes lift module name
-      use Std.Otp
-      use Std.Supervisor
-      behaviour supervisor
-      callback init(arg: List(p)) returns Effect(Tuple(Atom, Tuple(Tuple(Atom, Nat, Nat), List(Atom)))) = %[:ok, %[supervision_strategy(one_for_one(), 3, more(4)), assert_type [] : List(Atom)]]
-      fn start_link() -> Effect(Tuple) = beam_ops start_supervisor name
-      body
 
   type Restart = Permanent | Temporary | Transient
   type Shutdown = Brutal | Timeout(Nat)

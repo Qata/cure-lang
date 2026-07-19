@@ -4,8 +4,7 @@ mod Std.Actor
   use Std.List
   use Std.Option
 
-  ## The structured actor surface is a source-defined family. Legacy forms in
-  ## ActorContainers remain available through ordinary grammar fallback.
+  ## The structured actor surface is a source-defined family.
   macro actor <name: ModuleName>
     syntax family ActorDefinition
       state Type
@@ -167,71 +166,6 @@ mod Std.Actor
     true -> quote %[:ok, state]
     false -> body
 
-  ## `actor` is a transparent standard-library macro. The base actor is an
-  ## ordinary lifted GenServer module; message-code derivation and user
-  ## handlers are layered on top of this floor.
-  macro ActorContainers
-    syntax actor <name: ModuleName> state <state_type: Type> derive <cast_body: Code until call> (call <call_body: Code>)? contextual computed by derive_actor
-
-    syntax actor <name: ModuleName> state <state_type: Type> call <request_type: Type> returns <reply_type: Type> <call_body: delayed raw until dedent> contextual becomes lift module name
-      use Std.Otp
-      behaviour gen_server
-      typealias State = state_type
-      callback init(initial: State) returns Effect(Tuple(Atom, State)) = %[:ok, initial]
-      callback handle_call(request: request_type, from: f, state: State) returns Effect(Tuple(Atom, reply_type, State)) = call_body
-      callback handle_cast(message: m, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
-      callback handle_info(message: i, state: State) returns Effect(Tuple(Atom, State)) = %[:noreply, state]
-      callback terminate(reason: e, state: State) returns Effect(Atom) = :ok
-      callback code_change(old: v, state: State, extra: x) returns Effect(Tuple(Atom, State)) = %[:ok, state]
-      fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_link name initial
-
-    syntax actor <name: ModuleName> state <state_type: Type> init <init_body: Code until dedent> contextual computed directly by emit_raw_state_init
-
-    syntax actor <name: ModuleName> state <state_type: Type> terminate <terminate_body: Code until dedent> contextual computed directly by emit_raw_state_terminate
-
-    syntax actor <name: ModuleName> state <state_type: Type> code_change <code_change_body: Code until dedent> contextual computed directly by emit_raw_state_code_change
-
-    syntax actor <name: ModuleName> state <state_type: Type> messages <message_type: Type> handle_cast <cast_body: Code until dedent> contextual computed directly by emit_raw_state_messages_cast
-
-    syntax actor <name: ModuleName> state <state_type: Type> handle_cast <cast_body: Code until call> (call <call_body: Code>)? contextual computed by emit_raw_state_cast
-
-    syntax actor <name: ModuleName> state <state_type: Type> initial <payload: Code> handle_cast <cast_body: Code until dedent> contextual computed directly by emit_raw_state_initial_cast
-
-    syntax actor <name: ModuleName> state <state_type: Type> initial <payload: Code> messages <message_type: Type> handle_cast <cast_body: Code until dedent> contextual computed directly by emit_raw_state_initial_messages_cast
-
-    syntax actor <name: ModuleName> handle_cast <cast_body: Code until dedent> contextual computed directly by emit_raw_cast_stateless
-
-    syntax actor <name: ModuleName> state <state_type: Type> messages <message_type: Type> handle_info <info_body: Code until dedent> contextual computed directly by emit_raw_state_messages_info
-
-    syntax actor <name: ModuleName> state <state_type: Type> handle_info <info_body: Code until dedent> contextual computed directly by emit_raw_state_info
-
-    syntax actor <name: ModuleName> state <state_type: Type> with <payload: Code> <body: Declarations until dedent> contextual computed directly by emit_raw_state_initial_body
-
-    syntax actor <name: ModuleName> state <state_type: Type> <body: Declarations until dedent> contextual computed directly by emit_raw_state_body
-
-    syntax actor <name: ModuleName> with <payload: Code> <body: Declarations until dedent> becomes lift module name
-      use Std.Otp
-      behaviour gen_server
-      callback init(initial: p) returns Effect(Tuple(Atom, p)) = %[:ok, initial]
-      callback handle_call(request: r, from: f, state: p) returns Effect(Tuple(Atom, Atom, p)) = %[:reply, :ok, state]
-      callback handle_cast(message: m, state: p) returns Effect(Tuple(Atom, p)) = %[:noreply, state]
-      callback handle_info(message: i, state: p) returns Effect(Tuple(Atom, p)) = %[:noreply, state]
-      callback terminate(reason: e, state: p) returns Effect(Atom) = :ok
-      callback code_change(old: v, state: p, extra: x) returns Effect(Tuple(Atom, p)) = %[:ok, state]
-      fn start_link() -> Effect(Tuple) = beam_ops start_link name payload
-      body
-
-    syntax actor <name: ModuleName> <body: Declarations until dedent> becomes lift module name
-      use Std.Otp
-      behaviour gen_server
-      callback init(initial: p) returns Effect(Tuple(Atom, p)) = %[:ok, initial]
-      callback handle_call(request: r, from: f, state: p) returns Effect(Tuple(Atom, Atom, p)) = %[:reply, :ok, state]
-      callback handle_cast(message: m, state: p) returns Effect(Tuple(Atom, p)) = %[:noreply, state]
-      callback handle_info(message: i, state: p) returns Effect(Tuple(Atom, p)) = %[:noreply, state]
-      callback terminate(reason: e, state: p) returns Effect(Atom) = :ok
-      callback code_change(old: v, state: p, extra: x) returns Effect(Tuple(Atom, p)) = %[:ok, state]
-      fn start_link(initial: p) -> Effect(Tuple) = beam_ops start_link name initial
-      body
 
   ## Adapt the state-valued body of an inferred actor handler to the ordinary
   ## GenServer callback result. This remains in the actor macro module: it is
@@ -298,121 +232,6 @@ mod Std.Actor
         Some(value) -> ActorInitSpec{parameter: parameter("args", variable("Atom")), body: value, start_parameters: [], start_argument: atom_literal(:unit)}
         None() -> default_actor_init_poly()
 
-  fn derive_actor(input: ActorSyntax) -> Syntax =
-    let on_call = match input.call_body
-      Raw(_) -> None()
-      value -> Some(derive_cases(value))
-    let definition = ActorDefinitionSyntax{state: input.state_type, messages: None(), initial: None(), init: None(), on_cast: Some(derive_cases(input.cast_body)), on_call: on_call, on_info: None(), handle_cast: None(), handle_info: None(), terminate: None(), code_change: None(), body: None()}
-    derive_actor_family(input.name, definition)
-
-  ## Tier-0 raw adapter for `actor <name> state <T> handle_cast <raw body>`. The
-  ## `handle_cast` body is a full GenServer result spliced verbatim, so it routes
-  ## through the family's raw branch (on_cast None, handle_cast Some) instead of
-  ## the Cases path. One thin adapter over the shared emitter, replacing the
-  ## spelled-out template.
-  fn emit_raw_state_cast(input: ActorSyntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: input.state_type, messages: None(), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: Some(input.cast_body), handle_info: None(), terminate: None(), code_change: None(), body: None()}
-    derive_actor_family(input.name, definition)
-
-  ## Tier-0 raw adapter for `actor <name> state <T> messages <M> handle_cast <raw
-  ## body>`. Unlike `emit_raw_state_cast`, this rule carries a `messages` hole, so
-  ## its hole set does not match the shared `ActorSyntax` record — it opts into
-  ## the `computed directly by` multi-arg input path instead, receiving each hole
-  ## positionally. The `messages` annotation is threaded as `Some(message_type)`
-  ## so the family raw branch aliases the message type on the callbacks; the
-  ## `handle_cast` body is spliced verbatim.
-  fn emit_raw_state_messages_cast(name: Syntax, state_type: Syntax, message_type: Syntax, cast_body: Syntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: state_type, messages: Some(message_type), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: Some(cast_body), handle_info: None(), terminate: None(), code_change: None(), body: None()}
-    derive_actor_family(name, definition)
-
-  ## Tier-0 raw adapter for `actor <name> state <T> init <raw body>`. The `init`
-  ## body is a full GenServer init result spliced verbatim, so it routes through
-  ## the family raw branch (init Some) via `derive_actor_init`. Its hole set
-  ## {name, state_type, init_body} does not match the shared `ActorSyntax` record,
-  ## so it opts into the `computed directly by` multi-arg input path, receiving
-  ## each hole positionally.
-  fn emit_raw_state_init(name: Syntax, state_type: Syntax, init_body: Syntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: state_type, messages: None(), initial: None(), init: Some(init_body), on_cast: None(), on_call: None(), on_info: None(), handle_cast: None(), handle_info: None(), terminate: None(), code_change: None(), body: None()}
-    derive_actor_family(name, definition)
-
-  ## Tier-0 raw adapter for `actor <name> state <T> terminate <raw body>`. The
-  ## `terminate` body is a full callback result spliced verbatim, so it routes
-  ## through the family raw branch (terminate Some). Hole set {name, state_type,
-  ## terminate_body} does not match `ActorSyntax`, so it takes the `computed
-  ## directly by` multi-arg input path.
-  fn emit_raw_state_terminate(name: Syntax, state_type: Syntax, terminate_body: Syntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: state_type, messages: None(), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: None(), handle_info: None(), terminate: Some(terminate_body), code_change: None(), body: None()}
-    derive_actor_family(name, definition)
-
-  ## Tier-0 raw adapter for `actor <name> state <T> code_change <raw body>`. The
-  ## `code_change` body is a full callback result spliced verbatim, so it routes
-  ## through the family raw branch (code_change Some) via the `computed directly
-  ## by` multi-arg input path.
-  fn emit_raw_state_code_change(name: Syntax, state_type: Syntax, code_change_body: Syntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: state_type, messages: None(), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: None(), handle_info: None(), terminate: None(), code_change: Some(code_change_body), body: None()}
-    derive_actor_family(name, definition)
-
-  ## Tier-0 raw adapter for `actor <name> state <T> initial <payload> handle_cast
-  ## <raw body>`. The `initial` payload seeds the family via `initial: Some`, which
-  ## `derive_actor_init` turns into `init(args: Atom) = %[:ok, payload]` with a
-  ## nullary start_link — behaviorally equivalent to the template's
-  ## `init(initial: State) = %[:ok, assert_type payload : State]` (both ignore the
-  ## init arg and yield the spliced payload). Multi-arg `computed directly by` path.
-  fn emit_raw_state_initial_cast(name: Syntax, state_type: Syntax, payload: Syntax, cast_body: Syntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: state_type, messages: None(), initial: Some(payload), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: Some(cast_body), handle_info: None(), terminate: None(), code_change: None(), body: None()}
-    derive_actor_family(name, definition)
-
-  ## Tier-0 raw adapter for `actor <name> state <T> initial <payload> messages <M>
-  ## handle_cast <raw body>`. As `emit_raw_state_initial_cast` but also threads the
-  ## `messages` annotation so the family aliases the message type on the callbacks.
-  fn emit_raw_state_initial_messages_cast(name: Syntax, state_type: Syntax, payload: Syntax, message_type: Syntax, cast_body: Syntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: state_type, messages: Some(message_type), initial: Some(payload), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: Some(cast_body), handle_info: None(), terminate: None(), code_change: None(), body: None()}
-    derive_actor_family(name, definition)
-
-  ## Tier-0 raw adapter for `actor <name> state <T> messages <M> handle_info <raw
-  ## body>`. The `handle_info` body is a full callback result spliced verbatim via
-  ## the family raw branch (`raw_info_handler`, wall-4 safe); the `messages`
-  ## annotation aliases the message type. Multi-arg `computed directly by` path.
-  fn emit_raw_state_messages_info(name: Syntax, state_type: Syntax, message_type: Syntax, info_body: Syntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: state_type, messages: Some(message_type), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: None(), handle_info: Some(info_body), terminate: None(), code_change: None(), body: None()}
-    derive_actor_family(name, definition)
-
-  ## Tier-0 raw adapter for `actor <name> state <T> handle_info <raw body>`. As
-  ## `emit_raw_state_messages_info` but without a `messages` annotation, so the
-  ## message type stays polymorphic on the callbacks.
-  fn emit_raw_state_info(name: Syntax, state_type: Syntax, info_body: Syntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: state_type, messages: None(), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: None(), handle_info: Some(info_body), terminate: None(), code_change: None(), body: None()}
-    derive_actor_family(name, definition)
-
-  fn emit_raw_state_body(name: Syntax, state_type: Syntax, body: Syntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: state_type, messages: None(), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: None(), handle_info: None(), terminate: None(), code_change: None(), body: Some(body)}
-    derive_actor_family(name, definition)
-
-  ## Tier-0 raw adapter for STATELESS `actor <name> handle_cast <raw body>`. No
-  ## `state` annotation, so the state stays polymorphic (free `p`): routes through
-  ## the state-poly family entry `derive_actor_family_raw_stateless`, which emits a
-  ## default `init(initial: p)`/`start_link(initial: p)` and NO `typealias State`.
-  ## The `handle_cast` body is a full GenServer result spliced verbatim. Hole set
-  ## {name, cast_body} takes the `computed directly by` multi-arg input path.
-  fn emit_raw_cast_stateless(name: Syntax, cast_body: Syntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: variable("p"), messages: None(), initial: None(), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: Some(cast_body), handle_info: None(), terminate: None(), code_change: None(), body: None()}
-    derive_actor_family_raw_stateless(name, definition)
-
-  ## Tier-0 raw adapter for `actor <name> state <T> with <payload> <body-decls>`.
-  ## Combines the `with` seed (initial: Some(payload), which derive_actor_init
-  ## turns into init(args: Atom) = %[:ok, payload] with a nullary start_link —
-  ## behaviorally equivalent to the template's `init(initial: State)` + nullary
-  ## `start_link() = beam_ops start_link name payload`, both seeding the payload)
-  ## with the trailing declaration block (body: Some(body), captured by the
-  ## positional `Declarations until dedent` hole). Multi-arg `computed directly
-  ## by` path.
-  fn emit_raw_state_initial_body(name: Syntax, state_type: Syntax, payload: Syntax, body: Syntax) -> Syntax =
-    let definition = ActorDefinitionSyntax{state: state_type, messages: None(), initial: Some(payload), init: None(), on_cast: None(), on_call: None(), on_info: None(), handle_cast: None(), handle_info: None(), terminate: None(), code_change: None(), body: Some(body)}
-    derive_actor_family(name, definition)
-
-  fn derive_cases(body: Syntax) -> Syntax = match children(body)
-    [_scrutinee | arms] -> Node(:cases, [], arms)
-    _ -> Node(:cases, [], [])
 
   fn optional_declarations(value: Option(Syntax)) -> List(Syntax) = match value
     None() -> []

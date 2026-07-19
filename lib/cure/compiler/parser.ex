@@ -308,6 +308,7 @@ defmodule Cure.Compiler.Parser do
     case {Process.get(:cure_loading_prelude), :persistent_term.get({__MODULE__, :prelude_literal_macros}, :missing)} do
       {true, _} -> %{}
       {_, rules} when is_map(rules) -> rules
+
       _ ->
         load_prelude_macros()
         :persistent_term.get({__MODULE__, :prelude_literal_macros}, %{})
@@ -3826,64 +3827,10 @@ defmodule Cure.Compiler.Parser do
         {[], _next} -> true
         {[{:lit, "("} | _], %Token{type: :lparen}} -> true
         {_segments, %Token{type: :lparen}} -> false
-        {_segments, _next} -> not legacy_block_ambiguity?(state, name, rule)
+        {_segments, _next} -> true
       end
     end)
   end
-
-  # A structured family and an older raw-body rule may share a keyword. If the
-  # use-site starts with the legacy rule's nested block form, let the legacy
-  # matcher own it; an inline structured field remains unambiguous. This keeps
-  # migration source-compatible without making the family parser know anything
-  # about the legacy rule's domain vocabulary.
-  defp legacy_block_ambiguity?(state, name, rule) do
-    Map.get(rule, :direct_inputs, false) and
-      (Map.has_key?(state.active_macros, name) or Map.has_key?(state.builtin_macros, name)) and
-      nested_family_block_head?(state)
-  end
-
-  defp nested_family_block_head?(state) do
-    state
-    |> tokens_from(state.pos + 1)
-    |> drop_until_newline()
-    |> case do
-      [%Token{type: :newline} | rest] ->
-        rest
-        |> drop_whitespace_tokens()
-        |> case do
-          [%Token{type: :indent} | rest] ->
-            rest
-            |> drop_whitespace_tokens()
-            |> case do
-              [%Token{type: :identifier} | rest] ->
-                rest
-                |> drop_whitespace_tokens()
-                |> starts_with_indent?()
-
-              _ ->
-                false
-            end
-
-          _ ->
-            false
-        end
-
-      _ ->
-        false
-    end
-  end
-
-  defp drop_until_newline([%Token{type: :newline} | _] = tokens), do: tokens
-  defp drop_until_newline([_token | rest]), do: drop_until_newline(rest)
-  defp drop_until_newline([]), do: []
-
-  defp drop_whitespace_tokens([%Token{type: type} | rest]) when type in [:newline],
-    do: drop_whitespace_tokens(rest)
-
-  defp drop_whitespace_tokens(tokens), do: tokens
-
-  defp starts_with_indent?([%Token{type: :indent} | _]), do: true
-  defp starts_with_indent?(_tokens), do: false
 
   # -- Let Binding -----------------------------------------------------------
 

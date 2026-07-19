@@ -21,6 +21,20 @@ defmodule Cure.Stdlib.MacroOnlyOtpArchitectureTest do
     end)
   end
 
+  test "OTP object surfaces expose only structured family rules" do
+    source = @surfaces |> Map.keys() |> Enum.map_join("\n", &File.read!/1)
+
+    for keyword <- ~w(actor fsm sup app) do
+      refute Regex.match?(~r/syntax\s+#{keyword}\s+/, source),
+             "restored legacy `syntax #{keyword} ...` rule"
+    end
+
+    refute source =~ "ActorContainers"
+    refute source =~ "FsmContainers"
+    refute source =~ "AppContainers"
+    refute File.read!("lib/cure/compiler/parser.ex") =~ "legacy_block_ambiguity?"
+  end
+
   test "no active standard-library OTP object module references the retired bridges" do
     forbidden = [
       "Cure.Actor.Builtins",

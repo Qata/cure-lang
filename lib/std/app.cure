@@ -2,8 +2,7 @@
 mod Std.App
   use Std.Syntax
 
-  ## The structured application surface is source-defined. Legacy forms in
-  ## AppContainers remain available through ordinary grammar fallback.
+  ## The structured application surface is source-defined.
   macro app <name: ModuleName>
     syntax family ApplicationDefinition
       root ModuleName
@@ -26,92 +25,3 @@ mod Std.App
       function("stop", [parameter("state", variable("s"))], stop_type, quote :ok),
       function("start_phase", [parameter("phase", variable("Atom")), parameter("kind", variable("t")), parameter("args", variable("a"))], stop_type, quote :ok)
     ])
-
-  ## `app` is a transparent standard-library macro. The base application is
-  ## an ordinary lifted Application module; root-supervisor startup and
-  ## lifecycle phases are layered on top of this floor.
-  macro AppContainers
-    syntax app <name: ModuleName> phase <phase: Code> <phase_body: delayed raw until dedent> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple(Atom, Atom)) = %[:ok, :undefined]
-      callback stop(state: s) returns Effect(Atom) = :ok
-      callback start_phase(requested: Atom, kind: t, args: a) returns Effect(Atom) = match requested == phase
-        true -> phase_body
-        false -> :ok
-
-    syntax app <name: ModuleName> phases <phases: Code> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple(Atom, Atom)) = %[:ok, :undefined]
-      callback stop(state: s) returns Effect(Atom) = :ok
-      fn dispatch_phase(requested: Atom, remaining: List(Atom)) -> Atom = match remaining
-        [] -> :ok
-        [declared | rest] -> match rest
-          [] -> :ok
-          [result | tail] -> match requested == declared
-            true -> result
-            false -> dispatch_phase(requested, tail)
-      callback start_phase(requested: Atom, kind: t, args: a) returns Effect(Atom) = dispatch_phase(requested, phases)
-
-    syntax app <name: ModuleName> root <root: Code> with <payload: Code> <body: raw until dedent> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      use Std.Supervisor
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root payload
-      callback stop(state: s) returns Effect(Atom) = :ok
-      body
-
-    syntax app <name: ModuleName> root <root: ModuleName> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      use Std.Supervisor
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root
-      callback stop(state: s) returns Effect(Atom) = :ok
-      callback start_phase(phase: Atom, kind: t, args: a) returns Effect(Atom) = :ok
-
-    syntax app <name: ModuleName> root <root: Code> <body: raw until dedent> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      use Std.Supervisor
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root
-      callback stop(state: s) returns Effect(Atom) = :ok
-      callback start_phase(phase: Atom, kind: t, args: a) returns Effect(Atom) = :ok
-      body
-
-    syntax app <name: ModuleName> root <root: Code> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      use Std.Supervisor
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root
-      callback stop(state: s) returns Effect(Atom) = :ok
-      callback start_phase(phase: Atom, kind: t, args: a) returns Effect(Atom) = :ok
-
-    syntax app <name: ModuleName> state <state_type: Type> with <payload: Code> <body: raw until dedent> becomes lift module Cure.App.name
-      use Std.Otp
-      behaviour application
-      typealias State = state_type
-      callback start(kind: t, args: State) returns Effect(Tuple(Atom, State)) = %[:ok, payload]
-      callback stop(state: State) returns Effect(Atom) = :ok
-      body
-
-    syntax app <name: ModuleName> state <state_type: Type> <body: raw until dedent> becomes lift module Cure.App.name
-      use Std.Otp
-      behaviour application
-      typealias State = state_type
-      callback start(kind: t, args: State) returns Effect(Tuple(Atom, State)) = %[:ok, args]
-      callback stop(state: State) returns Effect(Atom) = :ok
-      body
-
-    syntax app <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module Cure.App.name
-      use Std.Otp
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple(Atom, Atom)) = %[:ok, :undefined]
-      callback stop(state: s) returns Effect(Atom) = :ok
-      body
