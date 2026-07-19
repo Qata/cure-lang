@@ -83,6 +83,21 @@ typed `fsm` + `otp_gen_statem` + `otp_gen_event`. So on the behaviour axis Cure 
 an actor. So a typed future/await is a *potential shared addition*, not a Cure gap — worth a small `Std.Otp.Task`
 (spawn + monitor + typed await) if we want the ergonomic, since it's cheap on top of gap A's `Subject`.
 
+## Status: gaps A/B/C CLOSED (2026-07-19)
+
+All three addressing/ergonomics gaps are now landed in `Std.Otp` and runtime-verified on host OTP (`Cure.Otp.Builtins`
+runtime helpers; tests `otp_subject_test` / `otp_selector_test` / `otp_name_test`):
+
+- **A. `Subject(m)`** — `new_subject` / `subject_send` / `subject_receive`; two subjects of different types received
+  independently by one owner. Erases to `{pid, ref}`; no registry (AtomVM-safe).
+- **B. `Selector(p)`** — `new_selector` / `select` / `select_map` / `selector_receive`; heterogeneous subjects merged
+  into one payload, dispatched by tag (mirrors Gleam's `gleam_erlang_ffi:select`).
+- **C. `Name(m)`** — `name` / `register_name` / `whereis_name : Effect(Option(Pid(m)))` / `unregister_name`; the
+  typed lookup **closes F-1** (a name now yields a typed, sendable handle, not a bare `BarePid`).
+
+Remaining: **D** (dynamic accepted-set swap) and the ergonomic SUGAR (`beam_ops` verbs over subjects + a declarative
+`select` block macro that desugars to the Selector API and ties to `Std.Otp.SelectiveReceive`).
+
 ## The gaps to close (all ergonomic / addressing-model)
 
 ### A. `Subject` — a typed address, many per process  ⟵ biggest conceptual gap
