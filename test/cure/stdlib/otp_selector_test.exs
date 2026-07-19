@@ -53,6 +53,30 @@ defmodule Cure.Stdlib.OtpSelectorTest do
     assert apply(mod, :run, []) == {{:some, {:NoteEv, :Hello}}, {:some, {:CmdEv, :Dec}}}
   end
 
+  test "the Gleam-style pipe pipeline builds and runs a selector (multi-line |>)" do
+    # Ergonomic surface: `new_selector() |> select_map(..) |> select_map(..)` then `selector_receive`, matching
+    # Gleam's pipe style. The payload annotation seeds new_selector's return-only type parameter.
+    src = """
+    mod SelPipe
+      use Std.Otp
+      type Cmd = Inc | Dec
+      type Note = Hello | Bye
+      type Event = CmdEv(Cmd) | NoteEv(Note)
+      fn run() -> Effect(Option(Event)) =
+        let commands: Subject(Cmd) = new_subject()
+        let notes: Subject(Note) = new_subject()
+        let a = subject_send(notes, Hello())
+        let sel: Selector(Event) =
+          new_selector() |>
+          select_map(commands, fn(c) -> CmdEv(c)) |>
+          select_map(notes, fn(n) -> NoteEv(n))
+        selector_receive(sel, 100)
+    """
+
+    {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(mod, :run, []) == {:some, {:NoteEv, :Hello}}
+  end
+
   test "selector_receive times out to None when nothing selected arrives" do
     src = """
     mod SelTimeout

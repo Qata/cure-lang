@@ -2904,8 +2904,11 @@ defmodule Cure.Compiler.Parser do
   # caller resumes the Pratt loop, so it can see the token that follows.
   defp build_infix_op(state, left, token, right_bp, op_lexeme) do
     case token.type do
-      # Pipe desugaring: a |> f  or  a |> f(b, c)
+      # Pipe desugaring: a |> f  or  a |> f(b, c). A trailing `|>` may sit at the end of a line with its
+      # right operand on the next line (`a |> \n f() |> \n g()`); `|>` always demands an operand, so skipping
+      # the intervening newline to find it is unambiguous (skip_newlines skips only `:newline`).
       :pipe ->
+        state = skip_newlines(state)
         {right, state} = parse_expr(state, right_bp, op_lexeme)
         {desugar_pipe(left, right, token), state}
 
