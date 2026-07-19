@@ -208,6 +208,19 @@ Each phase receives a focused commit and green focused tests.
 - Generate typed start, send, stop, and declared query adapters.
 - Prove no raw module Atom is required by ordinary callers.
 
+**Implementation status (2026-07-19): in progress.** Structured actors now
+derive nominal `Message`, `Request`, and `Handle` protocols and emit direct
+validated `start`, typed `send`, and typed `stop` functions. Uniform-reply
+actors additionally emit a typed `request` adapter. Live BEAM tests prove two
+sequential messages update the suspended immutable state before a synchronous
+request observes it, and a negative elaboration test rejects an `Int` sent to
+an `Inc` mailbox. The remaining Phase-2 work is the preferred dependent query
+surface (`ReplyOf` plus named adapters) and generic publication of declarations
+from a lifted module to same-compilation Cure clients; the latter currently
+reports `bad_projection` after the lifted module is intentionally stripped from
+the host AST. It must be solved in the generic transparent module pipeline, not
+with actor-aware resolution.
+
 ### Phase 3: modern message/query grammar
 
 - Add payload-bearing `on_message` and `on_call` productions.

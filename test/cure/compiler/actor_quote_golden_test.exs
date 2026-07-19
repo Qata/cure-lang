@@ -33,6 +33,11 @@
 # Std.Equatable/Std.Comparable `@prelude` no longer duplicates their ~two dozen
 # ambient instances into every consumer — owner-qualified instances now emit once
 # in their owning module and are reached by remote call (see `check_ast_with_locals`).
+#
+# Re-frozen for typed actor Phase 2: structured actors intentionally add their
+# nominal Handle plus validated start/send/stop adapters; call-capable actors
+# also add request. This is a public generated-API change, not a quote-port
+# refactor. Supervisor and application output remains byte-identical.
 defmodule Cure.Compiler.ActorQuoteGoldenTest do
   use ExUnit.Case, async: false
 
@@ -50,7 +55,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
            Read -> state
 
      fn make_request() -> ActorRequest = Read
-     """, "186928fe2d506b59861830ca6355c1ded20654001245c52dd9436ff90a4b2fe7"},
+     """, "ebdc21771a5a5ea1dc16158e6d7c02112afd0809eaad401f9b855d67de52f7a5"},
     {"GSup",
      """
      mod M
@@ -78,7 +83,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
            Inc -> state + 1
          terminate :shutdown
          code_change %[:ok, state + 1]
-     """, "d9764518758cb4e3499b6bbdf95167b07c53909b2afd79eadd0441c68350df24"}
+     """, "9a13e85e59e6a53f8647b25efb2e4f2da698a83bafde0aa8a47c14fc40e8403a"}
   ]
 
   defp beam_sha256(name, src) do

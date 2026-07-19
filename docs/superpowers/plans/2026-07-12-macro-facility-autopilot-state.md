@@ -107,11 +107,15 @@ the shared FSM gate.
 `actor_call_dep`, and `actor_stop` keep asynchronous and synchronous protocols
 distinct; focused negative tests prove neither code can be used in the other's
 operation. Sixty-one OTP, actor, FSM, golden, and architecture tests pass. The
-remaining Phase-1 seam is typed startup: raw OTP returns
-`{:ok, pid} | {:error, reason} | :ignore`, while the current `Tuple` boundary
-cannot safely refine the success PID. Do not add a polymorphic tuple projection
-or claim every second element is a PID; close this through an honest validated
-start-result boundary before generating the preferred actor API.
+typed-startup seam is now closed by guarded `BeamTerm` observation and
+`StartResult`: only a two-tuple tagged `:ok` whose payload passes the native PID
+guard receives actor protocol indices; `:error`, `:ignore`, and malformed terms
+remain explicit outcomes. Structured actors now emit nominal Message/Request/
+Handle declarations plus validated `start`, typed `send`/`stop`, and (for the
+current uniform-reply path) typed `request`; live and negative tests cover state
+evolution and mailbox rejection. Phase 2 remains open for dependent `ReplyOf`
+query adapters and generic lifted-module declaration publication to sibling
+Cure code in the same compilation.
 
 - **Transparent BEAM plan:** Phases 0, 1, 2, and 2.5 are COMPLETE. Phase 3 (`beam_ops`)
   is unblocked (2.5 done) and substantially landed. Phase 4 has replaced all four OTP
