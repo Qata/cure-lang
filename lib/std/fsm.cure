@@ -180,21 +180,25 @@ mod Std.Fsm
     let module_name = match name
       Leaf(_, _, SAtom(value)) -> SAtom(value)
       _ -> SStr("Cure.Generated.Fsm")
-    let module_expr = match name
+    let module_expr: Syntax = match name
       Leaf(_, _, SAtom(value)) -> atom_literal(value)
       _ -> atom_literal(:generated_fsm)
     let action_type = call("FsmAction", [variable("State"), variable("Data")])
+    let handle_type = call("Std.Otp.FsmPid", [variable("Event"), variable("State"), variable("Data")])
     let decision = transition_decision_explicit(transitions, transition_decision_wildcard(transitions))
     let encoded = call("Std.Fsm.action_to_beam", [call("decide", [variable("event"), variable("state"), variable("data")])])
     Std.ActorBehavior.state_machine_module(module_name, [
       enum_type("State", syntax_variants(states)),
       enum_type("Event", event_variants(events)),
       alias_node("Data", data),
+      alias_node("Handle", handle_type),
       function("callback_mode", [], variable("Atom"), quote :handle_event_function),
       function("init", [parameter("initial", variable("Data"))], call("Effect", [tuple_type([variable("Atom"), variable("State"), variable("Data")])]), tuple([atom_literal(:ok), syntax_constructor(initial), variable("initial")])),
       function("decide", [parameter("event", variable("Event")), parameter("state", variable("State")), parameter("data", variable("Data"))], action_type, decision),
       function("handle_event", [parameter("event_type", variable("Atom")), parameter("event", variable("Event")), parameter("state", variable("State")), parameter("data", variable("Data"))], call("Effect", [variable("BeamTerm")]), encoded),
-      function("start_link", [parameter("initial", variable("Data"))], call("Effect", [variable("Tuple")]), call("Std.Otp.start_statem", [module_expr, variable("initial")]))
+      function("start_link", [parameter("initial", variable("Data"))], call("Effect", [variable("Tuple")]), call("Std.Otp.start_statem", [module_expr, variable("initial")])),
+      function("start", [parameter("initial", variable("Data"))], call("Effect", [call("Std.Otp.StartResult", [variable("Handle")])]), call("Std.Otp.start_fsm", [module_expr, variable("initial")])),
+      function("send", [parameter("machine", variable("Handle")), parameter("event", variable("Event"))], call("Effect", [variable("Unit")]), call("Std.Otp.fsm_send", [variable("machine"), variable("event")]))
     ])
 
   fn transition_decision_explicit(transitions: List(TransitionDefinitionSyntax), wildcard: Syntax) -> Syntax = match transitions

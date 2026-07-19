@@ -72,6 +72,10 @@ mod Std.Otp
   ## codes. All three indices are erased; the runtime value is the native pid.
   typealias ActorServer(m, q, r) = RawServerPid(m, q, r)
 
+  ## Typed handle for a generated finite-state machine. `state` and `data` are
+  ## phantom observations; `event` is the only asynchronously accepted code.
+  typealias FsmPid(event, state, data) = RawFsmPid(event, state, data)
+
   type StartResult(handle) = Started(handle) | StartFailed | StartIgnored | InvalidStartResult
 
   fn map_start({a: Type}, {b: Type}, result: StartResult(a), convert: (a) -> b) -> StartResult(b) = match result
@@ -264,6 +268,38 @@ mod Std.Otp
 
   fn start_statem({a: Type}, module: Atom, args: a) -> Effect(Tuple) =
     raw_statem_start_link_unnamed(module, args, assert_type [] : List(Atom))
+
+  fn start_fsm({a: Type}, {event: Type}, {state: Type}, {data: Type}, module: Atom, args: a) -> Effect(StartResult(FsmPid(event, state, data))) =
+    let outcome = raw_statem_start_link_term(module, args, assert_type [] : List(Atom))
+    decode_fsm_start(outcome)
+
+  local fn decode_fsm_start({event: Type}, {state: Type}, {data: Type}, outcome: BeamTerm) -> StartResult(FsmPid(event, state, data)) = match atom(outcome)
+    Some(tag) -> match tag == :ignore
+      true -> StartIgnored()
+      false -> InvalidStartResult()
+    None() -> match tuple_arity(outcome)
+      Some(size) -> match size == 2
+        true -> match tuple_element(outcome, 0)
+          Some(tag_term) -> match atom(tag_term)
+            Some(tag) -> match tag == :ok
+              true -> decode_started_fsm(outcome)
+              false -> match tag == :error
+                true -> StartFailed()
+                false -> InvalidStartResult()
+            None() -> InvalidStartResult()
+          None() -> InvalidStartResult()
+        false -> InvalidStartResult()
+      None() -> InvalidStartResult()
+
+  local fn decode_started_fsm({event: Type}, {state: Type}, {data: Type}, outcome: BeamTerm) -> StartResult(FsmPid(event, state, data)) = match tuple_element(outcome, 1)
+    None() -> InvalidStartResult()
+    Some(pid_term) -> match pid(pid_term)
+      None() -> InvalidStartResult()
+      Some(process) -> Started(raw_fsm_pid(1, %[process, :checked_fsm]))
+
+  fn fsm_send({event: Type}, {state: Type}, {data: Type}, machine: FsmPid(event, state, data), value: event) -> Effect(Unit) =
+    let acked = raw_statem_cast(machine, value)
+    ()
 
   fn start_supervisor(module: Atom) -> Effect(Tuple) =
     raw_supervisor_start_link(%[:local, module], module, assert_type [] : List(Atom))

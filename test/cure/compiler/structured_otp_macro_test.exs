@@ -128,6 +128,11 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     assert :ok = :gen_statem.cast(pid, :Reset)
     assert :sys.get_state(pid) == {:Locked, 0}
     :gen_statem.stop(pid)
+
+    assert {:Started, typed_pid} = apply(:"Cure.Generated.PayloadFsm", :start, [1])
+    assert :unit = apply(:"Cure.Generated.PayloadFsm", :send, [typed_pid, {:Coin, 5}])
+    assert :sys.get_state(typed_pid) == {:Unlocked, 6}
+    :gen_statem.stop(typed_pid)
   end
 
   test "transition-table FSM rejects inconsistent payload declarations" do

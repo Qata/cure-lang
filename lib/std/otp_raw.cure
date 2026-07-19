@@ -60,6 +60,9 @@ mod Std.Otp.Raw
   @erases(:pid)
   opaque type RawDepServerPid(m: Type, q: Type, rep: (q) -> Type)
 
+  @erases(:pid)
+  opaque type RawFsmPid(event, state, data)
+
   ## An uninhabited message type. `BarePid` carries it, which is what makes a pid
   ## recovered from the registry UNSENDABLE: `tell` would demand a `NoMessage` value and
   ## no constructor produces one.
@@ -149,6 +152,9 @@ mod Std.Otp.Raw
   fn raw_actor_server({m: Type}, {q: Type}, {r: Type}, index: Int, checked: Tuple(BarePid, Atom)) -> RawServerPid(m, q, r)
 
   @extern(:erlang, :element, 2)
+  fn raw_fsm_pid({event: Type}, {state: Type}, {data: Type}, index: Int, checked: Tuple(BarePid, Atom)) -> RawFsmPid(event, state, data)
+
+  @extern(:erlang, :element, 2)
   fn raw_dep_actor_server({m: Type}, {q: Type}, {rep: (q) -> Type}, index: Int, checked: Tuple(RawServerPid(m, q, Unit), Atom)) -> RawDepServerPid(m, q, rep)
 
   @extern(:erlang, :element, 2)
@@ -193,6 +199,12 @@ mod Std.Otp.Raw
 
   @extern(:gen_statem, :start_link, 3)
   fn raw_statem_start_link_unnamed({a: Type}, module: Atom, args: a, opts: List(Atom)) -> Effect(Tuple)
+
+  @extern(:gen_statem, :start_link, 3)
+  fn raw_statem_start_link_term({a: Type}, module: Atom, args: a, opts: List(Atom)) -> Effect(RawTerm)
+
+  @extern(:gen_statem, :cast, 2)
+  fn raw_statem_cast({event: Type}, {state: Type}, {data: Type}, server: RawFsmPid(event, state, data), value: event) -> Effect(Atom)
 
   @extern(:supervisor, :start_link, 3)
   fn raw_supervisor_start_link({a: Type}, name: Tuple(Atom, Atom), module: Atom, args: List(a)) -> Effect(Tuple)
