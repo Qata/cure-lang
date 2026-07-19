@@ -85,6 +85,7 @@ defmodule Cure.Compiler.Lexer do
     preserve_comments: false,
     collect_trivia: false,
     trivia: [],
+    emit_events: true,
     keyword_set: @keyword_string_set
   ]
 
@@ -138,6 +139,7 @@ defmodule Cure.Compiler.Lexer do
       file: file,
       preserve_comments: preserve?,
       collect_trivia: trivia?,
+      emit_events: emit?,
       keyword_set: keyword_set
     }
 
@@ -1716,6 +1718,13 @@ defmodule Cure.Compiler.Lexer do
 
     state
   end
+
+  # When the caller passed `emit_events: false`, skip entirely — do not even build
+  # the metadata, whose `Events.meta/2` computes a per-token `System.monotonic_time`.
+  # This is called once per token, so the guard is what keeps a `emit_events: false`
+  # tokenize (migration verify reparse, batch tooling, tests) free of timestamp and
+  # registry-dispatch overhead — and honours the option, which was silently ignored.
+  defp maybe_emit_event(%__MODULE__{emit_events: false}, _token), do: :ok
 
   defp maybe_emit_event(state, token) do
     Events.emit(:lexer, :token_produced, token, Events.meta(state.file, token.line))
