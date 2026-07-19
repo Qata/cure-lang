@@ -456,20 +456,28 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  defp encode_core_record_field(kid, {:record, nested_name, nested_fields}, _repeated_fields, _field_types, _field) do
+  defp encode_core_record_field(kid, {:record, nested_name, nested_fields}, repeated_fields, _field_types, field) do
     nested_repeated =
       nested_fields
       |> Enum.filter(&(&1.cardinality in [:repeated, :one_or_more]))
       |> Enum.map(& &1.name)
 
-    to_core_record(
-      nested_name,
-      Enum.map(nested_fields, & &1.name),
-      nested_repeated,
-      kid,
-      family_field_types(nested_fields),
-      false
-    )
+    encode = fn item ->
+      to_core_record(
+        nested_name,
+        Enum.map(nested_fields, & &1.name),
+        nested_repeated,
+        item,
+        family_field_types(nested_fields),
+        false
+      )
+    end
+
+    if field in repeated_fields do
+      kid |> nested_record_items() |> Enum.map(encode) |> to_core_list()
+    else
+      encode.(kid)
+    end
   end
 
   defp encode_core_record_field(kid, {:primitive, shape}, repeated_fields, _field_types, field) do
@@ -479,6 +487,13 @@ defmodule Cure.Compiler.MacroSyntax do
   defp encode_core_record_field(kid, _field_type, repeated_fields, _field_types, field) do
     if field in repeated_fields, do: to_core_syntax_list(kid), else: to_core(kid)
   end
+
+  defp nested_record_items({:syn_raw, {:s_list, [{:s_list, items}]}}), do: Enum.map(items, &nested_record_item/1)
+  defp nested_record_items({:syn_raw, {:s_list, items}}), do: Enum.map(items, &nested_record_item/1)
+  defp nested_record_items(item), do: [item]
+
+  defp nested_record_item({:s_syntax, repr}), do: repr
+  defp nested_record_item(lit), do: {:syn_raw, lit}
 
   defp option_kid({:syn_leaf, :option_none, _attrs, :s_opaque}, _inner, _repeated_fields, _field_types),
     do: {:ctor, option_ctor(:None), []}
@@ -496,9 +511,18 @@ defmodule Cure.Compiler.MacroSyntax do
   def family_field_types(fields) when is_list(fields) do
     Map.new(fields, fn field ->
       base =
-        case field.shape do
-          shape when shape in ["Int", "Float", "Atom", "Bool"] -> {:primitive, shape}
-          _ -> :syntax
+        case Map.get(field, :grammar) do
+          %{name: name, fields: fields} when is_atom(name) ->
+            {:record, name, fields}
+
+          %{name: name, fields: fields} ->
+            {:record, Cure.Compiler.MacroFamily.syntax_type(name), fields}
+
+          _ ->
+            case field.shape do
+              shape when shape in ["Int", "Float", "Atom", "Bool"] -> {:primitive, shape}
+              _ -> :syntax
+            end
         end
 
       value = if field.cardinality == :optional, do: {:optional, base}, else: base

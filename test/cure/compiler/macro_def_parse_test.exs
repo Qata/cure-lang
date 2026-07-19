@@ -88,6 +88,27 @@ defmodule Cure.Compiler.MacroDefParseTest do
            ]
   end
 
+  test "a syntax family records source-defined productions" do
+    node =
+      parse!("""
+      macro Machine
+        syntax family Transition
+          syntax <from: Name> -- <event: Name> --> <to: Name>
+        syntax family Definition
+          one_or_more transitions Transition
+        accepts Definition
+        expands with build
+      """)
+
+    assert {:macro_def, _, [transition, definition, _, _]} = node
+    assert [%{fields: ["from", "event", "to"], segments: segments}] = transition.productions
+    assert Enum.map(segments, fn
+             {:lit, value} -> value
+             {:hole, %{name: name}} -> name
+           end) == ["from", "-", "-", "event", "-", "->", "to"]
+    assert [%{name: "transitions", shape: "Transition", cardinality: :one_or_more}] = definition.fields
+  end
+
   test "a structured macro header records accepts and expands with" do
     node =
       parse!("""

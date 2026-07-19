@@ -310,7 +310,11 @@ defmodule Cure.Elab.MacroExpand do
 
         {field,
          {:record, Cure.Core.Env.resolve_key(env, env.ctors, name),
-          Enum.map(fields, &Map.put(&1, :repeated, &1.name in repeated))}}
+          Enum.map(fields, fn nested_field ->
+            nested_field
+            |> Map.put(:repeated, nested_field.name in repeated)
+            |> resolve_nested_grammar(env)
+          end)}}
 
       {field, value} ->
         {field, value}
@@ -318,6 +322,12 @@ defmodule Cure.Elab.MacroExpand do
   end
 
   defp resolve_field_types(_field_types, _env), do: %{}
+
+  defp resolve_nested_grammar(%{grammar: %{name: name} = grammar} = field, env) do
+    Map.put(field, :grammar, Map.put(grammar, :name, Cure.Core.Env.resolve_key(env, env.ctors, MacroFamily.syntax_type(name))))
+  end
+
+  defp resolve_nested_grammar(field, _env), do: field
 
   defp primitive_field_types?(field_types) when is_map(field_types) do
     Enum.any?(field_types, fn {_field, type} -> match?({:primitive, _shape}, type) end)

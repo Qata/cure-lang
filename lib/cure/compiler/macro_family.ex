@@ -47,6 +47,7 @@ defmodule Cure.Compiler.MacroFamily do
 
           family ->
             with {:ok, family} <- effective_family(family, families) do
+              family = attach_nested_grammars(family, families)
               leading_segments = Keyword.get(meta, :leading_segments, [])
               leading_fields = leading_segments |> Enum.flat_map(&hole_names/1) |> Enum.uniq()
               fields = leading_fields ++ ["definition"]
@@ -150,7 +151,20 @@ defmodule Cure.Compiler.MacroFamily do
             |> Enum.filter(&(field_cardinality(&1) in [:repeated, :one_or_more]))
             |> Enum.map(& &1.name)
 
-          [
+          nested =
+            fields
+            |> Enum.flat_map(fn
+              %{grammar: %{name: nested_name, fields: nested_fields}} ->
+                [record_declaration(syntax_type(nested_name), Enum.map(nested_fields, & &1.name), meta, %{}, %{
+                   syntax_repeated_fields: [],
+                   syntax_family: %{fields: nested_fields}
+                 })]
+
+              _ ->
+                []
+            end)
+
+          nested ++ [
             record_declaration(
               syntax_type(name),
               Enum.map(fields, & &1.name),
@@ -224,7 +238,11 @@ defmodule Cure.Compiler.MacroFamily do
         if family_field.name == field_name, do: family_field, else: nil
       end)
 
-    base_type = {:variable, [scope: :local], shape_type(family_field_shape(field))}
+    base_type =
+      case Map.get(field, :grammar) do
+        %{name: name} -> {:variable, [scope: :local], syntax_type(name)}
+        _ -> {:variable, [scope: :local], shape_type(family_field_shape(field))}
+      end
 
     base_type =
       if field_name in Map.get(rule, :syntax_repeated_fields, []),
@@ -302,6 +320,43 @@ defmodule Cure.Compiler.MacroFamily do
     with {:ok, fields} <- resolve_family_fields(family, family_map, []) do
       {:ok, Map.put(family, :fields, fields)}
     end
+  end
+
+  defp attach_nested_grammars(family, families) do
+    family_map = Map.new(families, &{&1.name, &1})
+
+    fields =
+      Enum.map(family.fields, fn field ->
+        case Map.get(family_map, field.shape) do
+          %{productions: [_ | _]} = nested ->
+            nested_fields = production_fields(nested.productions)
+            nested = nested |> Map.put(:fields, nested_fields) |> Map.put(:name, field.shape)
+            Map.put(field, :grammar, nested)
+
+          _ ->
+            field
+        end
+      end)
+
+    Map.put(family, :fields, fields)
+  end
+
+  defp production_fields([production | _]) do
+    Enum.map(production.fields, fn name ->
+      %{
+        name: name,
+        shape: production_field_shape(production, name),
+        cardinality: :required,
+        obligations: []
+      }
+    end)
+  end
+
+  defp production_field_shape(production, name) do
+    Enum.find_value(production.segments, "Syntax", fn
+      {:hole, %{name: ^name, kind: kind}} -> kind
+      _ -> nil
+    end)
   end
 
   defp resolve_family_fields(family, families, stack) do

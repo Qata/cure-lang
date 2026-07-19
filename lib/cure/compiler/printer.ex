@@ -1492,7 +1492,12 @@ defmodule Cure.Compiler.Printer do
       |> Map.get(:fields, [])
       |> Enum.map(&family_field_to_string/1)
 
-    ["syntax family #{name}\n#{pad}" <> Enum.join(include_lines ++ field_lines, "\n#{pad}")]
+    production_lines =
+      rule
+      |> Map.get(:productions, [])
+      |> Enum.map(&("syntax " <> macro_segments_to_string(&1.segments)))
+
+    ["syntax family #{name}\n#{pad}" <> Enum.join(include_lines ++ production_lines ++ field_lines, "\n#{pad}")]
   end
 
   defp macro_rule_lines(%{kind: :accepts, family: family}, _depth, _indent),

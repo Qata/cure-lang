@@ -891,6 +891,17 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp match_segments(state, [{:hole, %{name: name, kind: "Name"}} | rest], bindings, progress) do
+    case peek(state) do
+      %Token{type: :identifier} = token ->
+        name_ast = variable(token)
+        match_segments(advance(state), rest, Map.put(bindings, name, name_ast), progress + 1)
+
+      _ ->
+        {:error, progress, state}
+    end
+  end
+
   defp match_segments(state, [{:hole, %{name: name, kind: kind}} | rest], bindings, progress)
        when kind in ["Int", "Float", "Atom", "Bool"] do
     {arg, state} = parse_expr(state, 0)
@@ -974,7 +985,10 @@ defmodule Cure.Compiler.Parser do
             {:error, progress, state}
 
           %Token{type: :identifier, value: field_name} ->
-            if Enum.any?(family_meta.fields, &(&1.name == field_name)) do
+            if Enum.any?(family_meta.fields, fn field ->
+                 field.name == field_name or
+                   (Map.has_key?(field, :grammar) and field.cardinality in [:repeated, :one_or_more])
+               end) do
               {captured, state} = capture_family_body(state)
               {family_value, parsed_state} = parse_family_body(captured, family_meta, state)
 
@@ -1160,9 +1174,16 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :identifier, value: name} = token ->
         case Enum.find(family_meta.fields, &(&1.name == name)) do
           nil ->
-            state = add_error(state, {:unknown_syntax_family_field, family_meta.family, name, token.line, token.col})
-            {_ignored, state} = parse_expr_or_block(advance(state))
-            parse_family_sections(state, family_meta, values)
+            case parse_bare_family_production(state, family_meta) do
+              {:ok, field, value, state} ->
+                {values, state} = record_family_value(values, field, value, token, state)
+                parse_family_sections(state, family_meta, values)
+
+              :error ->
+                state = add_error(state, {:unknown_syntax_family_field, family_meta.family, name, token.line, token.col})
+                {_ignored, state} = parse_expr_or_block(advance(state))
+                parse_family_sections(state, family_meta, values)
+            end
 
           field ->
             {value, state} = parse_family_field_value(advance(state), field)
@@ -1174,6 +1195,30 @@ defmodule Cure.Compiler.Parser do
         state = add_error(state, {:expected, :syntax_family_field, :got, token.type, token.line, token.col})
         parse_family_sections(advance(state), family_meta, values)
     end
+  end
+
+  defp parse_bare_family_production(state, family_meta) do
+    family_meta.fields
+    |> Enum.filter(&(Map.has_key?(&1, :grammar) and &1.cardinality in [:repeated, :one_or_more]))
+    |> Enum.find_value(:error, fn field ->
+      Enum.find_value(field.grammar.productions, fn production ->
+        case match_segments(state, production.segments, %{}, 0) do
+          {:ok, bindings, _progress, matched_state} ->
+            case peek(matched_state) do
+              %Token{type: type} when type in [:newline, :dedent, :eof] ->
+                values = Enum.map(production.fields, &Map.fetch!(bindings, &1))
+                value = {:family_input, [family: field.grammar.name], values}
+                {:ok, field, value, matched_state}
+
+              _ ->
+                nil
+            end
+
+          _ ->
+            nil
+        end
+      end)
+    end)
   end
 
   defp parse_family_field_value(state, %{shape: "Type"}) do
@@ -7090,7 +7135,7 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :indent} ->
-        {fields, includes, state} = parse_syntax_family_fields(advance(state), [], [])
+        {fields, includes, productions, state} = parse_syntax_family_fields(advance(state), [], [], [])
         state = expect_dedent(state)
 
         {%{
@@ -7098,6 +7143,7 @@ defmodule Cure.Compiler.Parser do
            name: name,
            fields: fields,
            includes: includes,
+           productions: productions,
            line: family_token.line,
            col: family_token.col
          }, state}
@@ -7108,17 +7154,32 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_syntax_family_fields(state, fields, includes) do
+  defp parse_syntax_family_fields(state, fields, includes, productions) do
     state = skip_macro_trivia(state)
 
     case peek(state) do
       %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(fields), Enum.reverse(includes), state}
+        {Enum.reverse(fields), Enum.reverse(includes), Enum.reverse(productions), state}
+
+      %Token{type: :identifier, value: "syntax"} = token ->
+        {segments, state} = parse_rule_segments(advance(state), [])
+        state = consume_line_end(state)
+
+        production = %{
+          kind: :family_production,
+          segments: segments,
+          fields: macro_syntax_fields(segments),
+          field_types: macro_syntax_field_types(segments),
+          line: token.line,
+          col: token.col
+        }
+
+        parse_syntax_family_fields(state, fields, includes, [production | productions])
 
       %Token{type: :identifier, value: "includes"} = token ->
         {include, state} = parse_dotted_name(advance(state))
         state = consume_line_end(state)
-        parse_syntax_family_fields(state, fields, [{include, token.line, token.col} | includes])
+        parse_syntax_family_fields(state, fields, [{include, token.line, token.col} | includes], productions)
 
       %Token{type: :identifier} = token ->
         {cardinality, state} = parse_family_cardinality(state)
@@ -7141,11 +7202,11 @@ defmodule Cure.Compiler.Parser do
           col: token.col
         }
 
-        parse_syntax_family_fields(state, [field_entry | fields], includes)
+        parse_syntax_family_fields(state, [field_entry | fields], includes, productions)
 
       other ->
         state = add_error(state, {:expected, :family_field, :got, other.type, other.line, other.col})
-        parse_syntax_family_fields(advance(state), fields, includes)
+        parse_syntax_family_fields(advance(state), fields, includes, productions)
     end
   end
 

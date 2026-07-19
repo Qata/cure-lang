@@ -289,6 +289,36 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :result, []) == 3
   end
 
+  test "a repeated custom production becomes a typed nested family record" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro machine <name: ModuleName>
+        syntax family Transition
+          syntax <from: Name> -- <event: Name> --> <to: Name>
+        syntax family Definition
+          one_or_more transitions Transition
+        accepts Definition
+        expands with build
+
+      fn build(name: ModuleNameSyntax, definition: DefinitionSyntax) -> Syntax =
+        match definition.transitions
+          [first | _] -> match tag(first.from) == :variable
+            true -> int_literal(1)
+            false -> int_literal(0)
+          [] -> int_literal(0)
+
+      fn result() -> Int = machine Turnstile
+        Locked -- Coin --> Unlocked
+        Unlocked -- Push --> Locked
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == 1
+  end
+
   test "a structured expander may receive leading captures directly" do
     source = """
     mod M
