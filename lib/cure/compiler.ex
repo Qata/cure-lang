@@ -265,7 +265,8 @@ defmodule Cure.Compiler do
            file: file,
            emit_events: emit?,
            edition: edition,
-           prelude_providers: prelude_providers
+           prelude_providers: prelude_providers,
+           validate_fixity_cycles: true
          ) do
       {:ok, ast} -> {:ok, ast}
       {:error, errors} -> {:error, {:parse_error, errors}}

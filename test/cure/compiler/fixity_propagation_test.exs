@@ -134,4 +134,33 @@ defmodule Cure.Compiler.FixityPropagationTest do
     assert {:ok, _ast} =
              parse(File.read!(Path.join(dir, "m.cure")), prelude_providers: providers)
   end
+
+  test "a precedence cycle closed through an ambient provider is rejected", %{dir: dir} do
+    File.write!(Path.join(dir, "p.cure"), """
+    @prelude
+    mod P
+      precedencegroup A
+        associativity: left
+        higher_than: B
+    end
+    """)
+
+    src = """
+    mod M
+      precedencegroup B
+        associativity: left
+        higher_than: A
+      fn go() -> Int = 1
+    end
+    """
+
+    {:ok, graph} = Cure.Compiler.DepGraph.scan([Path.join(dir, "p.cure")])
+    providers = Cure.Compiler.prelude_provider_names(graph)
+
+    assert {:error, errors} =
+             parse(src, prelude_providers: providers, validate_fixity_cycles: true)
+
+    assert {:precedence_cycle, groups} = Enum.find(errors, &match?({:precedence_cycle, _}, &1))
+    assert MapSet.new(groups) == MapSet.new([:A, :B])
+  end
 end

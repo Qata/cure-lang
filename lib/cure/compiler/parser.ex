@@ -185,6 +185,7 @@ defmodule Cure.Compiler.Parser do
     prelude? = Keyword.get(opts, :prelude_macros, true)
     supplied_macros = Keyword.get(opts, :builtin_macros)
     prelude_providers = Keyword.get(opts, :prelude_providers, [])
+    validate_fixity_cycles? = Keyword.get(opts, :validate_fixity_cycles, false)
 
     # The built-in fixity table (memoized). Both passes seed from it; the
     # authoritative pass layers the module's own decls on top (collected below).
@@ -206,8 +207,14 @@ defmodule Cure.Compiler.Parser do
 
     module_fixity =
       case FixityResolver.assemble(builtin_fixity, own_fixity, own_uses, prelude_providers) do
-        {:ok, table} -> table
-        {:error, conflict} -> {:__fixity_conflict__, conflict}
+        {:ok, table} ->
+          case {validate_fixity_cycles?, FixityTable.cyclic_groups(table)} do
+            {true, [_ | _] = groups} -> {:__fixity_error__, {:precedence_cycle, groups}}
+            _ -> table
+          end
+
+        {:error, conflict} ->
+          {:__fixity_error__, conflict}
       end
 
     active = harvest_active_macros(harvest_exprs)
@@ -215,8 +222,8 @@ defmodule Cure.Compiler.Parser do
     literal = harvest_literal_macros(harvest_exprs)
 
     case module_fixity do
-      {:__fixity_conflict__, conflict} ->
-        {:error, [conflict]}
+      {:__fixity_error__, reason} ->
+        {:error, [reason]}
 
       %FixityTable{} = module_fixity ->
         # Phase 2 (authoritative): parse with the macro grammars seeded so use-sites expand.
@@ -334,8 +341,12 @@ defmodule Cure.Compiler.Parser do
   # itself loading, no prelude literal rules are active (self-reference guard).
   defp prelude_literal_macros do
     case {Process.get(:cure_loading_prelude), :persistent_term.get({__MODULE__, :prelude_literal_macros}, :missing)} do
-      {true, _} -> %{}
-      {_, rules} when is_map(rules) -> rules
+      {true, _} ->
+        %{}
+
+      {_, rules} when is_map(rules) ->
+        rules
+
       _ ->
         load_prelude_macros()
         :persistent_term.get({__MODULE__, :prelude_literal_macros}, %{})
@@ -2853,8 +2864,10 @@ defmodule Cure.Compiler.Parser do
         {:expr, expr_tokens} ->
           # Append an EOF token so the sub-parser terminates
           sub_tokens = expr_tokens ++ [Token.new(:eof, nil, token.line, token.col)]
+
           sub_state =
             put_tokens(%__MODULE__{file: state.file, emit_events: false}, sub_tokens)
+
           {expr, _} = parse_expr(sub_state, 0)
           expr
       end)
@@ -7332,6 +7345,7 @@ defmodule Cure.Compiler.Parser do
 
   defp optional_segment_inputs({:declarations_hole, %{name: name}}, bindings),
     do: [Map.get(bindings, name)]
+
   defp optional_segment_inputs({:repeat, segment}, bindings), do: optional_segment_inputs(segment, bindings)
 
   defp optional_segment_inputs({:optional, segments}, bindings),
