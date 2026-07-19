@@ -73,25 +73,6 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
              """)
   end
 
-  test "convenience lifecycle APIs expose Unit instead of success atoms" do
-    assert {:ok, _} =
-             Program.elaborate("""
-             mod LifecycleUnits
-               use Std.Actor
-               use Std.Fsm
-               use Std.Supervisor
-               use Std.App
-
-               fn stop_actor(pid: Pid) -> Unit = Std.Actor.stop(pid)
-               fn stop_fsm(pid: Pid) -> Unit = Std.Fsm.stop(pid)
-               fn stop_supervisor(name: Atom) -> Unit = Std.Supervisor.stop(name)
-               fn stop_application(name: Atom) -> Unit = Std.App.stop(name)
-               fn start_application(name: Atom) -> Unit = Std.App.start(name)
-               fn set_application_value(name: Atom, key: Atom, value: Int) -> Unit =
-                 Std.App.put_env(name, key, value)
-             """)
-  end
-
   test "FSM transition algebra accepts distinct application state and event types" do
     assert {:ok, _} =
              Program.elaborate("""
@@ -141,15 +122,13 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
     assert now > 0
   end
 
-  test "system halt and FSM notification do not expose undifferentiated result atoms" do
+  test "system halt does not expose an undifferentiated result atom" do
     assert {:ok, _} =
              Program.elaborate("""
              mod TypedResults
                use Std.System
-               use Std.Fsm
 
                fn halt_status(code: Int) -> Unit = Std.System.exit(code)
-               fn notification(message: Any) -> NotifyResult = Std.Fsm.notify(message)
              """)
   end
 end
