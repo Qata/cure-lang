@@ -45,4 +45,65 @@ defmodule Cure.Compiler.FixityPropagationTest do
     src = "mod M\n  fn f(a: Int, b: Int) -> Int = a + b * 2\nend\n"
     assert {:ok, _ast} = parse(src)
   end
+
+  test "a user @prelude module reaches a sibling via the compile driver", %{dir: dir} do
+    # P is marked @prelude, so its operator is ambient — a sibling that never
+    # `use`s P must still see `<?>`. The compile driver harvests P as a prelude
+    # provider (DepGraph.prelude_provider_names/1) and threads it into the
+    # parse of M via the :prelude_providers option.
+    File.write!(Path.join(dir, "p.cure"), """
+    @prelude
+    mod P
+      precedencegroup G
+        associativity: left
+      infix `<?>` : G
+      fn `<?>`(a: Int, b: Int) -> Int = a
+    end
+    """)
+
+    File.write!(Path.join(dir, "m.cure"), "mod M\n  fn go() -> Int = 1 <?> 2\nend\n")
+
+    {:ok, graph} =
+      Cure.Compiler.DepGraph.scan([Path.join(dir, "p.cure"), Path.join(dir, "m.cure")])
+
+    providers = Cure.Compiler.prelude_provider_names(graph)
+    assert "P" in providers
+
+    # Without the provider list, M cannot see `<?>` (it never `use`s P).
+    assert {:error, _} = parse(File.read!(Path.join(dir, "m.cure")))
+
+    # With the provider list threaded in, the sibling parses.
+    assert {:ok, _ast} =
+             parse(File.read!(Path.join(dir, "m.cure")), prelude_providers: providers)
+  end
+
+  test "a @prelude provider propagates operators from its own use-closure", %{dir: dir} do
+    # P is @prelude but declares no operator itself; it `use`s H, which declares
+    # `<?>`. A sibling M that never `use`s either must still see `<?>` — the
+    # provider's operators are its whole use-closure, not just its own(P).
+    File.write!(Path.join(dir, "h.cure"), """
+    mod H
+      precedencegroup G
+        associativity: left
+      infix `<?>` : G
+      fn `<?>`(a: Int, b: Int) -> Int = a
+    end
+    """)
+
+    File.write!(Path.join(dir, "p.cure"), "@prelude\nmod P\n  use H\nend\n")
+    File.write!(Path.join(dir, "m.cure"), "mod M\n  fn go() -> Int = 1 <?> 2\nend\n")
+
+    {:ok, graph} =
+      Cure.Compiler.DepGraph.scan([
+        Path.join(dir, "h.cure"),
+        Path.join(dir, "p.cure"),
+        Path.join(dir, "m.cure")
+      ])
+
+    providers = Cure.Compiler.prelude_provider_names(graph)
+    assert "P" in providers
+
+    assert {:ok, _ast} =
+             parse(File.read!(Path.join(dir, "m.cure")), prelude_providers: providers)
+  end
 end

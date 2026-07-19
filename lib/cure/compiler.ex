@@ -87,11 +87,12 @@ defmodule Cure.Compiler do
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
     emit? = Keyword.get(opts, :emit_events, true)
     declared_phases = Keyword.get(opts, :declared_phases)
+    prelude_providers = Keyword.get(opts, :prelude_providers, [])
 
     with_source_roots(file, opts, fn ->
       with {:ok, edition} <- resolve_edition(source, opts),
            {:ok, tokens} <- lex(source, file, emit?, edition),
-           {:ok, ast} <- parse(tokens, file, emit?, edition),
+           {:ok, ast} <- parse(tokens, file, emit?, edition, prelude_providers),
            {:ok, ast} <- migrate_warn(ast, file),
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
            {:ok, units, cg_warnings} <- codegen(ast, file, emit?, output_dir, declared_phases) do
@@ -99,6 +100,14 @@ defmodule Cure.Compiler do
       end
     end)
   end
+
+  @doc """
+  Module names of every `@prelude`-marked module in a scanned dependency graph.
+  A driver passes this list as the `:prelude_providers` compile option so a user
+  `@prelude` module's operators reach every sibling in the same run.
+  """
+  @spec prelude_provider_names(Cure.Compiler.DepGraph.t()) :: [String.t()]
+  defdelegate prelude_provider_names(graph), to: Cure.Compiler.DepGraph
 
   # `BeamWriter.compile_forms/2` returns `{:error, errors, warnings}` (3-tuple)
   # on lint/compile failures, but the public `compile_string/2`,
@@ -178,7 +187,9 @@ defmodule Cure.Compiler do
     case Cure.Edition.resolve(%{source: source, project_dir: project_dir}) do
       {:ok, edition} ->
         with {:ok, tokens} <- lex(source, file, false, edition) do
-          parse(tokens, file, false, edition)
+          # Single-file tooling utility: no driver, so no user `@prelude`
+          # providers — falls back to the compiler-bundled prelude only.
+          parse(tokens, file, false, edition, [])
         end
 
       {:error, reason} ->
@@ -197,11 +208,12 @@ defmodule Cure.Compiler do
     file = Keyword.get(opts, :file, "nofile")
     emit? = Keyword.get(opts, :emit_events, false)
     declared_phases = Keyword.get(opts, :declared_phases)
+    prelude_providers = Keyword.get(opts, :prelude_providers, [])
 
     with_source_roots(file, opts, fn ->
       with {:ok, edition} <- resolve_edition(source, opts),
            {:ok, tokens} <- lex(source, file, emit?, edition),
-           {:ok, ast} <- parse(tokens, file, emit?, edition),
+           {:ok, ast} <- parse(tokens, file, emit?, edition, prelude_providers),
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
            {:ok, units, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
         # compile_and_load/2 intentionally does NOT persist bytecode to
@@ -246,8 +258,13 @@ defmodule Cure.Compiler do
     end
   end
 
-  defp parse(tokens, file, emit?, edition) do
-    case Parser.parse(tokens, file: file, emit_events: emit?, edition: edition) do
+  defp parse(tokens, file, emit?, edition, prelude_providers) do
+    case Parser.parse(tokens,
+           file: file,
+           emit_events: emit?,
+           edition: edition,
+           prelude_providers: prelude_providers
+         ) do
       {:ok, ast} -> {:ok, ast}
       {:error, errors} -> {:error, {:parse_error, errors}}
     end

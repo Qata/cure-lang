@@ -761,7 +761,7 @@ defmodule Cure.Project do
         if File.dir?(dir), do: Path.wildcard(Path.join(dir, "**/*.cure")), else: []
       end)
 
-    cure_files_result =
+    {cure_files_result, providers} =
       case Cure.Compiler.DepGraph.scan(discovered) do
         {:ok, graph} ->
           {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
@@ -770,10 +770,10 @@ defmodule Cure.Project do
             Logger.warning(Cure.Compiler.Errors.format_error({:import_cycle, walk}, project.root))
           end)
 
-          {:ok, ordered}
+          {{:ok, ordered}, Cure.Compiler.DepGraph.prelude_provider_names(graph)}
 
         {:error, _} = err ->
-          err
+          {err, []}
       end
 
     with {:ok, cure_files} <- cure_files_result,
@@ -786,7 +786,8 @@ defmodule Cure.Project do
              emit_events?,
              check?,
              declared_phases(project),
-             extra_paths
+             extra_paths,
+             providers
            ),
          :ok <- maybe_write_app_resource(app_info, modules, project, output_dir) do
       {:ok, %{modules: modules, app_module: app_module(app_info)}}
@@ -937,7 +938,7 @@ defmodule Cure.Project do
 
   defp declared_phases(_), do: nil
 
-  defp compile_all_files(files, output_dir, emit?, check?, declared_phases, source_roots) do
+  defp compile_all_files(files, output_dir, emit?, check?, declared_phases, source_roots, prelude_providers) do
     base_opts = [
       output_dir: output_dir,
       emit_events: emit?,
@@ -950,6 +951,10 @@ defmodule Cure.Project do
         else: base_opts
 
     opts = Keyword.put(opts, :source_roots, source_roots)
+
+    # A user `@prelude` module reached by the project scan contributes its
+    # operators to every file compiled in this run (see `:prelude_providers`).
+    opts = Keyword.put(opts, :prelude_providers, prelude_providers)
 
     result =
       Enum.reduce_while(files, {:ok, []}, fn file, {:ok, acc} ->

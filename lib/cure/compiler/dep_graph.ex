@@ -161,6 +161,20 @@ defmodule Cure.Compiler.DepGraph do
     end
   end
 
+  @doc """
+  Module names of every scanned node marked `@prelude`. A driver hands this set
+  to `Parser.parse/2` as `:prelude_providers` so a user `@prelude` module's
+  operators reach every sibling in the same compile run, even siblings that do
+  not `use` it.
+  """
+  @spec prelude_provider_names(t()) :: [String.t()]
+  def prelude_provider_names(%__MODULE__{nodes: nodes}) do
+    for {_path, node} <- nodes,
+        Map.get(node, :prelude_provider?, false),
+        is_binary(node.module),
+        do: node.module
+  end
+
   # -- scanning ---------------------------------------------------------------
 
   defp duplicate_module(nodes) do

@@ -55,7 +55,9 @@ defmodule Cure.Compiler.Printer do
     against. Defaults to the built-in operator table, which already ranks every
     built-in operator; pass the module's assembled table to rank user-declared
     operators correctly (otherwise a custom operator is treated as unknown and
-    its operands are conservatively parenthesised).
+    its operands are conservatively parenthesised). The module-specific table is
+    the one produced by `Cure.Compiler.Parser.FixityResolver.assemble/5` — the
+    same use-propagated union the parser resolved the module against.
   """
   @spec quoted_to_string(term(), keyword()) :: String.t()
   def quoted_to_string(ast, opts \\ []) do
