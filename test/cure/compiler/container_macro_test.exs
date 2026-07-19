@@ -630,6 +630,32 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     :supervisor.stop(supervisor)
   end
 
+  test "supervisor child identities use an explicitly derived BEAM representation" do
+    source = """
+    use Std.Beam
+    use Std.Supervisor
+
+    type ChildIdentity = CounterWorker | BackupWorker deriving BeamEncode
+
+    actor Cure.TypedIdentityWorker with 0
+    sup Cure.TypedIdentityRoot children [Std.Supervisor.with_encoded_id(child_spec Cure.TypedIdentityWorker :placeholder, to_beam(CounterWorker()))]
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert {:ok, {_strategy, [encoded_spec]}} = apply(:"Cure.TypedIdentityRoot", :init, [[]])
+    assert elem(encoded_spec, 0) == :CounterWorker
+
+    assert {:ok, supervisor} = apply(:"Cure.TypedIdentityRoot", :start_link, [])
+
+    assert [{:CounterWorker, worker, :worker, [:"Cure.TypedIdentityWorker"]}] =
+             :supervisor.which_children(supervisor)
+
+    assert is_pid(worker)
+    assert Process.alive?(worker)
+    :supervisor.stop(supervisor)
+  end
+
   test "supervisor child policies are closed typed values" do
     source = """
     mod Main
@@ -648,7 +674,7 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     source = """
     mod Main
       use Std.Supervisor
-      fn build() -> Tuple(Atom, Tuple(Atom, Atom, List(Int)), Atom, Nat, Atom, List(Atom)) =
+      fn build() -> Tuple(Std.Otp.Raw.RawTerm, Tuple(Atom, Atom, List(Int)), Atom, Nat, Atom, List(Atom)) =
         Std.Supervisor.child_with_args(:worker_module, :worker, [1], Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
     """
 
@@ -683,7 +709,7 @@ defmodule Cure.Compiler.TransparentObjectMacroTest do
     source = """
     mod Main
       use Std.Supervisor
-      fn build() -> Tuple(Atom, Tuple(Atom, Atom, List(Std.Otp.Raw.RawTerm)), Atom, Nat, Atom, List(Atom)) =
+      fn build() -> Tuple(Std.Otp.Raw.RawTerm, Tuple(Atom, Atom, List(Std.Otp.Raw.RawTerm)), Atom, Nat, Atom, List(Atom)) =
         Std.Supervisor.child_with_raw_args(:worker_module, :worker, [Std.Supervisor.raw_arg(1), Std.Supervisor.raw_arg(:boot)], Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(1000), Std.Supervisor.worker())
     """
 

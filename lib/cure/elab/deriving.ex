@@ -43,9 +43,15 @@ defmodule Cure.Elab.Deriving do
 
   def generate(:BeamEncode, {:container, _meta, _body} = container, env) do
     case Env.get_interface(env, :BeamEncode) do
-      %{method_order: [method]} -> beam_encode_instance(container, Atom.to_string(method))
-      nil -> {:error, {:no_such_interface, :BeamEncode}}
-      _ -> {:error, {:cannot_derive, :BeamEncode}}
+      %{method_order: [method], methods: methods} ->
+        info = Map.fetch!(methods, method)
+        beam_encode_instance(container, Atom.to_string(method), info.return_type)
+
+      nil ->
+        {:error, {:no_such_interface, :BeamEncode}}
+
+      _ ->
+        {:error, {:cannot_derive, :BeamEncode}}
     end
   end
 
@@ -153,8 +159,8 @@ defmodule Cure.Elab.Deriving do
   generated method therefore calls `Std.Beam.forget/1`, which changes only the
   static type to the opaque boundary carrier.
   """
-  @spec beam_encode_instance(tuple(), String.t()) :: {:ok, tuple()} | :skip
-  def beam_encode_instance({:container, meta, body}, method_name) do
+  @spec beam_encode_instance(tuple(), String.t(), tuple()) :: {:ok, tuple()} | :skip
+  def beam_encode_instance({:container, meta, body}, method_name, return_type) do
     type_name = Keyword.fetch!(meta, :name)
     type_params = Keyword.get(meta, :type_params, [])
 
@@ -174,7 +180,7 @@ defmodule Cure.Elab.Deriving do
           method_meta = [
             name: method_name,
             params: params,
-            return_type: {:variable, [scope: :local], "BeamTerm"},
+            return_type: return_type,
             visibility: :public,
             arity: 1
           ]
@@ -186,7 +192,7 @@ defmodule Cure.Elab.Deriving do
     end
   end
 
-  def beam_encode_instance(_decl, _method_name), do: :skip
+  def beam_encode_instance(_decl, _method_name, _return_type), do: :skip
 
   # The single `` `==` ``(l: T, r: T) -> Bool = Std.Builtin.struct_eq(_, l, r)`
   # method clause. `T` is the fully-applied `for_type` (`Option(t)` for a

@@ -25,6 +25,7 @@ mod Std.Supervisor
     let init_type = call("Effect", [tuple_type([variable("Atom"), tuple_type([strategy_type, call("List", [variable("ChildSpec")])])])])
     lift_module_isolated(module_name, :supervisor, [
       use_module("Std.Otp"),
+      use_module("Std.Beam"),
       use_module("Std.Supervisor"),
       function("init", [parameter("arg", call("List", [variable("p")]))], init_type, init_body),
       function("start_link", [], call("Effect", [variable("Tuple")]), call("Std.Otp.start_supervisor", [module_expr]))
@@ -68,7 +69,7 @@ mod Std.Supervisor
   type Positive = One | More(Nat)
 
   typealias StrategySpec = Tuple(Atom, Nat, Nat)
-  typealias ChildSpec = Tuple(Atom, Tuple(Atom, Atom, List(RawTerm)), Atom, Nat, Atom, List(Atom))
+  typealias ChildSpec = Tuple(RawTerm, Tuple(Atom, Atom, List(RawTerm)), Atom, Nat, Atom, List(Atom))
 
   fn permanent() -> Restart = Permanent()
   fn temporary() -> Restart = Temporary()
@@ -121,8 +122,8 @@ mod Std.Supervisor
 
   ## The MFA argument list is polymorphic for direct homogeneous child specs.
   ## Heterogeneous supervisor lists still require the raw BEAM term boundary.
-  fn child_with_args({a: Type}, module: Atom, id: Atom, args: List(a), restart: Restart, shutdown: Shutdown, child_type: ChildType) -> Tuple(Atom, Tuple(Atom, Atom, List(a)), Atom, Nat, Atom, List(Atom)) =
-    %[id, %[module, :start_link, args], restart_atom(restart), shutdown_value(shutdown), child_type_atom(child_type), [module]]
+  fn child_with_args({a: Type}, module: Atom, id: Atom, args: List(a), restart: Restart, shutdown: Shutdown, child_type: ChildType) -> Tuple(RawTerm, Tuple(Atom, Atom, List(a)), Atom, Nat, Atom, List(Atom)) =
+    %[raw_arg(id), %[module, :start_link, args], restart_atom(restart), shutdown_value(shutdown), child_type_atom(child_type), [module]]
 
   local fn raw_args({a: Type}, args: List(a)) -> List(RawTerm) =
     match args
@@ -137,11 +138,26 @@ mod Std.Supervisor
   ## silently widened by this constructor.
   fn raw_arg({a: Type}, value: a) -> RawTerm = raw_term(1, %[value, :raw_term])
 
-  fn child_with_raw_args(module: Atom, id: Atom, args: List(RawTerm), restart: Restart, shutdown: Shutdown, child_type: ChildType) -> Tuple(Atom, Tuple(Atom, Atom, List(RawTerm)), Atom, Nat, Atom, List(Atom)) =
-    %[id, %[module, :start_link, args], restart_atom(restart), shutdown_value(shutdown), child_type_atom(child_type), [module]]
+  fn child_with_raw_args(module: Atom, id: Atom, args: List(RawTerm), restart: Restart, shutdown: Shutdown, child_type: ChildType) -> ChildSpec =
+    %[raw_arg(id), %[module, :start_link, args], restart_atom(restart), shutdown_value(shutdown), child_type_atom(child_type), [module]]
 
   fn child_with(module: Atom, id: Atom, restart: Restart, shutdown: Shutdown, child_type: ChildType) -> ChildSpec =
-    %[id, %[module, :start_link, assert_type [] : List(RawTerm)], restart_atom(restart), shutdown_value(shutdown), child_type_atom(child_type), [module]]
+    %[raw_arg(id), %[module, :start_link, assert_type [] : List(RawTerm)], restart_atom(restart), shutdown_value(shutdown), child_type_atom(child_type), [module]]
 
   fn child(module: Atom, id: Atom) -> ChildSpec =
     child_with(module, id, permanent(), shutdown_after(5000), worker())
+
+  ## Preferred typed-ID boundary. The caller resolves `BeamEncode(id)` and passes
+  ## the resulting opaque term here; macro expansion itself carries no hidden
+  ## dictionary argument. At runtime the term is the exact supervisor child ID.
+  fn encoded_child(module: Atom, id: RawTerm) -> ChildSpec =
+    %[id, %[module, :start_link, assert_type [] : List(RawTerm)], restart_atom(permanent()), shutdown_value(shutdown_after(5000)), child_type_atom(worker()), [module]]
+
+  ## Replace the compatibility atom ID in an otherwise checked child spec. This
+  ## lets `child_spec Module :placeholder` continue to perform ModuleName
+  ## reflection while the preferred identity comes from `BeamEncode`.
+  @extern(:erlang, :setelement, 3)
+  local fn replace_child_id(index: Int, spec: ChildSpec, id: RawTerm) -> ChildSpec
+
+  fn with_encoded_id(spec: ChildSpec, id: RawTerm) -> ChildSpec =
+    replace_child_id(1, spec, id)

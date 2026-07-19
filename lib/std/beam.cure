@@ -6,6 +6,7 @@ mod Std.Beam
   ## Opaque native term at the foreign boundary. It can be passed to trusted
   ## primitives, but ordinary Cure code cannot inspect it or claim a type for it.
   typealias BeamTerm = RawTerm
+  typealias EncodedTerm = RawTerm
 
   ## Why an inbound BEAM term could not be validated as the requested Cure type.
   ## Decoding is deliberately separate from encoding: outbound conversion is
@@ -16,7 +17,7 @@ mod Std.Beam
   ## ADTs receive an automatically-derived implementation unless their owner
   ## supplies a hand-written implementation.
   interface BeamEncode(t)
-    fn to_beam(value: t) -> BeamTerm
+    fn to_beam(value: t) -> EncodedTerm
 
   ## Fallible validation of an opaque foreign term. Implementations are explicit
   ## until structural decoder derivation can prove every field recursively.
