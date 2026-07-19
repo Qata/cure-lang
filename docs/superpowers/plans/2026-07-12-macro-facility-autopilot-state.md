@@ -2530,3 +2530,25 @@ retirement (option B) is *optional* polish layered on the now-landed derivation 
 note the derive rules (`actor.cure:75` etc.) still carry `contextual`, and the
 sound way to drop it there is the same option-(B) synthetic-proof-frame. Until a
 planned slice takes it, `contextual` stays and is honest.
+
+**Structured-only OTP and constrained-capture status (2026-07-19).** The
+unreleased positional `actor`/`fsm`/`sup`/`app` compatibility rules and their
+orphaned emitters are removed (`84b83d30`), along with the generic parser
+ambiguity heuristic they required. Characterization fixtures whose only subject
+was that unreleased grammar were retired; structured-family, live OTP, and
+generic-Unix AtomVM gates remain. Structured matching now pins zero-progress and
+missing-required-field rejection (`7dac09b3`). `Expression` is a supported proof
+domain (`10fde963`). Rule and family-field obligations parse, print, preserve
+order, validate capture ownership, and resolve through the ordinary coherence
+table at the real caller-side inferred type (`0cc167ae`, `e192bd7a`).
+Obligation-bearing rules defer definition-site fuzzing because evidence is
+necessarily contextual, while positive and negative use-site tests prove
+resolution and `no_instance` rejection. `Std.Supervisor` consumes the generic
+facility through `child Module id Expression where BeamEncode(identity)` and
+emits direct `encoded_child(module, to_beam(identity))` code; the placeholder-ID
+mutation workaround is gone (`8a5eaa66`). The structured computed-use printer
+now renders family sections, so migration round-trips the new surface
+(`06fc990a`). The final structured AtomVM test passes (`6cb53670`). Full `mix
+test`: 4,961 tests, 3 failures, all three caused solely by the intentionally
+empty `examples/` directory (`examples/hello.cure` absent), matching the known
+workspace baseline.
