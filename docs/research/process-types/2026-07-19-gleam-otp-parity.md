@@ -95,8 +95,16 @@ runtime helpers; tests `otp_subject_test` / `otp_selector_test` / `otp_name_test
 - **C. `Name(m)`** — `name` / `register_name` / `whereis_name : Effect(Option(Pid(m)))` / `unregister_name`; the
   typed lookup **closes F-1** (a name now yields a typed, sendable handle, not a bare `BarePid`).
 
-Remaining: **D** (dynamic accepted-set swap) and the ergonomic SUGAR (`beam_ops` verbs over subjects + a declarative
-`select` block macro that desugars to the Selector API and ties to `Std.Otp.SelectiveReceive`).
+**Ergonomic surface = the pipe.** Once trailing multi-line `|>` was fixed in the parser, the plain API IS the
+Gleam-ergonomic surface — `new_selector() |> select_map(..) |> select_map(..) |> selector_receive(t)` — so NO
+`select`-block macro or `beam_ops` verbs were needed (a second syntax would be redundant). One wrinkle: the
+return-only type parameters of `new_subject` / `new_selector` / `self` need a binding annotation (`let s: Subject(T)
+= new_subject()`, or annotate the pipeline's `Selector(P)` result) — a general Cure return-only-implicit
+limitation, the one place Gleam infers where Cure asks for an annotation.
+
+Remaining (optional): **D** (dynamic accepted-set swap, tied to `Std.Otp.Session`), and improving return-only
+implicit inference so the annotations above are unnecessary. Leading `|>` on a continuation line is also deferred
+(needs indent-token handling; trailing `|>` covers multi-line pipelines).
 
 ## The gaps to close (all ergonomic / addressing-model)
 
