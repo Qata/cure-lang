@@ -280,7 +280,7 @@ elaboration and does not leave a metavariable unsolved. The goal is to retire
 the *need* for this proof exemption by deriving message/callback types (§9), so
 that the transparent rules either disappear or become provable standalone — not
 to "unmark" a callback. Retiring `contextual` therefore depends on the
-derivation work and cannot precede it (see §11).
+derivation work and cannot precede it (see §12).
 
 ### 7.2 Structural analysis
 
@@ -608,7 +608,546 @@ These later features must build on the same typed family records, hygiene,
 diagnostic, and direct-emission contracts. None may reintroduce string-based
 rewriting, runtime macro interpretation, or compiler-owned OTP knowledge.
 
-## 11. Required implementation order
+## 11. Complete standard OTP macro contract
+
+This section is normative and exhaustive for the first complete implementation
+of `actor`, `fsm`, `sup`, and `app`. A feature described here is not optional
+merely because an older macro, public document, or test exercises a smaller
+surface. The implementation ledger may divide the work into smaller commits,
+but completion means every requirement and gate in this section is satisfied.
+
+The four forms are ordinary standard-library macros. Their authored syntax is
+parsed by generic syntax families, their expanders are total Cure functions,
+and their output is ordinary declarations plus direct checked BEAM operations.
+They share infrastructure; they do not share a runtime object system.
+
+### 11.1 Shared architecture and representation boundary
+
+All four macros MUST use the following compilation architecture:
+
+```text
+authored container syntax
+  -> typed source-defined syntax-family records
+  -> total source-defined validation and derivation
+  -> recursively expanded ordinary Cure declarations
+  -> ordinary elaboration and kernel checking
+  -> erasure of types, indices, syntax, and proofs
+  -> direct OTP callbacks and checked foreign operations
+```
+
+`Std.ActorBehavior` (or a later source-defined replacement) is the reusable
+compile-time module-emission substrate. It may construct direct `gen_server`,
+`gen_statem`, `supervisor`, and `application` callback modules, but it MUST NOT
+exist as a runtime dispatcher or wrapper. `fsm` is a constrained actor and MUST
+reuse this substrate for process lifecycle, delivery, calls, stop behavior, and
+optional capabilities. `sup` and `app` reuse the same declaration builders and
+checked startup algebra without pretending to be actors.
+
+The raw BEAM boundary is explicit and narrow:
+
+- `BeamTerm`/`RawTerm`, module atoms, callback tuples, and foreign result shapes
+  may occur in `Std.Otp.Raw`, representation codecs, and visibly raw escape
+  hatches;
+- preferred APIs use nominal Cure types, `ExitReason`, typed handles, typed
+  messages/requests/events, closed policy types, and `StartResult`;
+- `BeamEncode`/`BeamDecode` (or their final consistently named equivalents)
+  define how typed values cross the boundary; derivation is structural and may
+  be overridden by an explicit implementation;
+- inbound decoding MUST validate the runtime shape before attaching phantom
+  indices or constructing a typed value; an unchecked polymorphic projection
+  from `BeamTerm` is forbidden;
+- outbound encoding MUST not silently widen arbitrary typed values to atoms or
+  raw terms; use of the raw representation is syntactically visible;
+- codec failures are typed results or declared process failures, never a forged
+  typed value.
+
+The compiler remains unaware of OTP behavior names, callbacks, actor state,
+transition graphs, child policies, application phases, and all vocabulary in
+the following subsections. Generic support for identifier transformation,
+typed patterns, nested productions, declaration publication, or diagnostics
+must be added to `Std.Syntax`/the generic macro pipeline when required. An
+actor-specific Elixir helper is not an acceptable shortcut.
+
+### 11.2 Actor: typed mailbox fold
+
+An actor is an effectful mailbox fold whose accumulator is an immutable Cure
+value retained as the argument of OTP's suspended receive loop:
+
+```text
+loop(state)
+  receive message
+  next <- handle(message, state)
+  loop(next)
+```
+
+OTP owns scheduling, suspension, mailbox receipt, and tail recursion. Cure owns
+the state type, message/request algebras, handler coverage, reply family, and
+every state update. State MUST NOT live in a mandatory ETS registry, host-side
+mutable actor object, process-dictionary state slot, or hidden
+`%State{caller, meta, payload}` wrapper.
+
+#### 11.2.1 Preferred actor surface
+
+The preferred structured surface is domain vocabulary, not callback tuples:
+
+```cure
+rec CounterState
+  count: Int
+
+actor Counter
+  state CounterState
+  initial CounterState{count: 0}
+
+  on_message
+    Increment() -> CounterState{state | count: state.count + 1}
+    Add(amount: Int) -> CounterState{state | count: state.count + amount}
+
+  on_call Value() returns Int
+    reply state.count
+```
+
+The final query production MAY use equivalent layout punctuation, but it MUST
+capture the request constructor, typed payload binders, declared reply type,
+reply expression, and optional state update as typed fields. It MUST NOT infer
+reply types by sniffing integer, float, atom, boolean, tuple, or variable syntax.
+The explicit `returns` information derives `ReplyOf`; it is not a redundant
+annotation on a raw callback.
+
+The complete preferred grammar provides:
+
+- exactly one `state Type`;
+- optional `initial Expression` or typed `on_start`, with a diagnostic for an
+  invalid combination or uninitialised state;
+- one nonempty `on_message` section containing nominal constructor patterns;
+- zero or more typed `on_call Request(...) returns ReplyType` productions;
+- optional typed `on_info`, limited to an explicitly declared external/system
+  message code rather than `Any`;
+- optional `on_start`, `on_stop`, and `on_failure` lifecycle sections;
+- optional typed observer, timer, name, link, monitor, and introspection
+  capabilities, each requested explicitly;
+- an optional declaration body for helper types/functions used by the generated
+  behavior, with deterministic declaration ordering and hygiene.
+
+`on_message` bodies return the next `State`. Query clauses return a value of
+their declared reply type and preserve state unless an explicit `update State`
+section is present. Lifecycle hooks receive typed values: `on_stop` receives
+`ExitReason`, failures receive a closed generated or declared error type, and
+observers receive only their declared notice type. Preferred handlers never see
+OTP `from` tuples, callback result tags, raw module atoms, or `BeamTerm`.
+
+Raw `init`, `handle_cast`, `handle_call`, `handle_info`, `terminate`, and
+`code_change` remain available only under a visibly raw escape-hatch surface.
+They use checked raw boundary types and do not weaken or silently merge with the
+preferred derived contract. Unreleased legacy aliases and duplicate backend
+templates MUST be removed; compatibility is not a reason to retain them.
+
+#### 11.2.2 Derived actor declarations
+
+The actor macro derives, as applicable:
+
+```cure
+type Message = Increment | Add(Int)
+type Request = Value
+
+fn ReplyOf(request: Request) -> Type = match request
+  Value() -> Int
+
+typealias Handle = DepActorServer(Message, Request, ReplyOf)
+```
+
+An asynchronous-only actor derives a nominal empty `Request` type and uses
+`ActorServer(Message, Request, Unit)`. A uniform-reply optimization MAY use
+`ActorServer(Message, Request, Reply)` internally, but it must preserve the
+same separation between asynchronous messages and synchronous requests.
+
+Repeated constructor appearances MUST agree on payload arity, type, relevance,
+and order. Binder names may differ when their positional types agree. Catch-all,
+variable-only, guarded, overlapping, malformed, or open constructor sets MUST
+be rejected unless an explicit typed protocol override makes the accepted set
+closed and sound. Handler coverage is checked against the derived or declared
+protocol. A message value can never be used as a request, and a request cannot
+be sent asynchronously unless it also appears independently in `Message`.
+
+Dependent replies are mandatory. Distinct request constructors may return
+distinct types from one PID. The generated callback is checked against
+`ReplyOf(request)` under constructor refinement, and the client adapter returns
+`Effect(ReplyOf(request))`. Returning another request's reply type is a compile
+error. Syntax-level uniform reply guessing is removed from the preferred path.
+
+#### 11.2.3 Generated actor API
+
+Every preferred actor generates direct typed adapters:
+
+```cure
+fn start(...) -> Effect(StartResult(Handle))
+fn send(handle: Handle, message: Message) -> Effect(Unit)
+fn stop(handle: Handle, reason: ExitReason) -> Effect(Unit)
+```
+
+The startup parameters are derived from the initialization mode. A stable
+surface SHOULD expose `start()` for a declared initial value and
+`start_with(initial: State)` when callers supply state; temporary compatibility
+`start_link` helpers may remain only until all in-tree callers migrate.
+`StartResult` models `Started(handle)`, startup failure with its typed/opaque
+reason policy, `StartIgnored`, and malformed foreign results honestly. Only a
+validated `{:ok, pid}` result may acquire the actor indices.
+
+Each declared query generates a lower-case, hygienic named adapter, including
+payload parameters, for example:
+
+```cure
+fn value(handle: Handle) -> Effect(Int)
+fn lookup(handle: Handle, key: Key) -> Effect(Option(Value))
+```
+
+Identifier case conversion is a generic pure compile-time `Std.Syntax`
+operation. It MUST NOT invoke a runtime string extern during expansion or add
+an actor-specific host callback. A generic `request(handle, request)` MAY also
+be emitted. There is no universal `get_state`; state is private unless an
+authored query exposes it.
+
+Observer delivery is opt-in:
+
+```cure
+actor Worker notifying WorkerNotice
+```
+
+Startup then requires a typed observer capability, and `notify` accepts only
+`WorkerNotice`. With no observer declaration, no observer field, process-
+dictionary registration, notification branch, or runtime call is emitted.
+Names, history, health, registry membership, timers, links, and monitors follow
+the same capability rule.
+
+#### 11.2.4 Actor completion gates
+
+Actor is complete only when tests prove:
+
+- sequential messages observe immutable state evolution;
+- payload-bearing messages update multiple record fields;
+- wrong messages and message/request crossing fail before emission;
+- multiple request constructors return distinct dependent reply types;
+- wrong-branch replies and missing/duplicate handlers fail;
+- generated named query adapters have correct payload and result types;
+- startup success, error, ignore, and malformed results are decoded safely;
+- lifecycle ordering and typed stop reasons;
+- observer delivery when enabled and zero observer machinery when absent;
+- no undeclared state inspection API exists;
+- a user-defined actor-like macro targets the same substrate without compiler
+  changes;
+- emitted BEAM contains direct callbacks/operations and no syntax interpreter,
+  registry requirement, actor wrapper, or type witness call.
+
+### 11.3 FSM: verified constrained actor
+
+The normative FSM design is additionally detailed in
+`2026-07-19-typed-fsm-as-constrained-actor-design.md`. If wording conflicts,
+the stricter requirement applies. The complete public surface begins with the
+compact graph:
+
+```cure
+fsm TrafficLight with TrafficData
+  initial Red
+  terminal Failed
+
+  Red --Timer--> Green
+  Green --Timer--> Yellow
+  Yellow --Timer--> Red
+  * --Emergency(reason: EmergencyReason)--> Failed
+    update TrafficData{data | failure: Some(reason)}
+```
+
+There is no space between `--` and the event constructor. States and events are
+PascalCase nominal constructors, never preferred Atom labels. The macro derives
+closed `State` and `Event` types by cataloguing the graph. Typed event payload
+binders are scoped over that edge's `when`, `update`, and `perform` sections;
+every occurrence of an event agrees on positional payload structure.
+
+The graph grammar and implementation MUST support:
+
+- explicit `initial` plus first-non-wildcard-source defaulting;
+- repeatable terminal states;
+- wildcard source rows with explicit-row precedence;
+- typed payload-bearing events;
+- pure `when Bool` guards and pure `update Data` expressions;
+- every valid record-update layout supported by Cure, including multiple-field
+  updates and a `|` beside either the source record or first field;
+- visibly effectful `perform` sections through the checked BEAM algebra;
+- typed notices and optional transition telemetry;
+- `on_start`, `on_stop`, `on_enter`, `on_exit`, `on_failure`, and `on_timer`;
+- timer declarations, hard events (`Event!`), and soft events (`Event?`);
+- optional history, registry, and health layers with zero generated residue when
+  disabled.
+
+`update` defaults to preserving data. Effects are sequenced separately and do
+not mutate the pure reducer's value behind the type checker. Hard events fire
+automatically after entry and are valid only as the sole unconditional outgoing
+event. Soft failure preserves the current state/data and bypasses normal failure
+routing as declared. Timers deliver a typed event or typed hook; they do not
+inject an untyped mailbox term into the public event algebra.
+
+#### 11.3.1 FSM derivation and lowering
+
+Each FSM derives at least:
+
+```cure
+type State = ...
+type Event = ...
+
+rec MachineState
+  state: State
+  data: Data
+```
+
+It then derives a total pure transition reducer containing direct nested matches
+over these constructors. The reducer returns a typed keep/next/failure result;
+it is not a runtime transition table. The generated actor behavior owns the
+suspended `MachineState`, receives typed events, evaluates the reducer, performs
+declared effects, commits the returned state/data, and serves explicitly
+specified administrative queries.
+
+The preferred implementation MUST NOT retain `on_transition`, callback-mode
+maps, lowercase event atoms, `%[:ok, ...]` result tuples,
+`%Cure.FSM.State{caller, meta, payload}`, a host-side FSM runtime shell, or a
+runtime graph/verifier for compatibility. A direct `gen_statem` callback module
+is acceptable when produced by the shared source-defined behavior substrate;
+an interpreter over reflected transitions is not.
+
+The generated typed API includes:
+
+```cure
+fn start(data: Data) -> Effect(StartResult(Handle))
+fn send(handle: Handle, event: Event) -> Effect(Unit)
+fn state(handle: Handle) -> Effect(State)
+fn data(handle: Handle) -> Effect(Data)
+fn snapshot(handle: Handle) -> Effect(Snapshot(State, Data))
+fn stop(handle: Handle, reason: ExitReason) -> Effect(Unit)
+```
+
+Payload delivery uses the event constructor itself, not
+`send_with(pid, :event, arbitrary_payload)`. The generated module name is the
+authored name; no hidden `Cure.FSM.` prefix is added.
+
+#### 11.3.2 FSM compile-time verifier
+
+Verification is a total source-defined Cure computation over reflected graph
+records and emits structured diagnostics with both original source locations.
+It MUST check:
+
+1. closed and well-formed state/event catalogues;
+2. event payload consistency;
+3. initial and terminal state validity;
+4. reachability from the selected initial state;
+5. deadlock freedom for reachable non-terminal states;
+6. duplicate unguarded transitions;
+7. guarded-edge ambiguity, rejecting when disjointness is not established;
+8. wildcard precedence and complete shadowing;
+9. hard-event exclusivity and soft-event policy;
+10. update result type and payload/data binder scope;
+11. hook, notice, timer, and failure typing;
+12. total reducer coverage for every accepted state/event pair.
+
+The compiler MUST contain no FSM verifier knowledge. Unsound ambiguity is an
+error, not a warning resolved by source order.
+
+#### 11.3.3 FSM completion gates
+
+FSM is complete only when positive and negative tests cover every feature and
+verifier item above, shared-actor-substrate architecture, absence of forbidden
+legacy/runtime machinery, live Unix behavior, and live AtomVM behavior for the
+documented supported subset. The nested production mechanism must also be
+generic enough to implement the knitting algebra without an FSM parser case.
+
+### 11.4 Supervisor: typed static supervision tree
+
+`sup` declares a statically checked supervision tree and emits a direct OTP
+`supervisor` behavior module. Its preferred surface is structured data:
+
+```cure
+sup App.Root
+  strategy OneForOne
+  intensity 3
+  period 5
+
+  children
+    actor Counter as CounterChild
+      start Counter.start_with(0)
+      restart Permanent
+      shutdown After(5000)
+
+    supervisor App.Workers as WorkersChild
+      restart Permanent
+```
+
+Equivalent concise defaults are allowed, but the reflected family MUST retain
+the distinction between absent and explicitly supplied fields. Module names are
+`ModuleName` syntax known at compile time, not user-authored module atoms.
+Child identities are derived nominal constructors (or values of an explicitly
+declared `ChildId` type), not an untyped Atom requirement. At the final OTP
+boundary they are encoded through `BeamEncode`. Startup arguments retain their
+typed values until that explicit encoding boundary; heterogeneous raw MFA lists
+require a visibly raw form.
+
+The closed policy vocabulary is:
+
+- strategy: `OneForOne`, `OneForAll`, or `RestForOne`;
+- restart: `Permanent`, `Transient`, or `Temporary`;
+- shutdown: `BrutalKill`, `Infinity`, or `After(PositiveDuration)`;
+- child kind: actor/worker or supervisor;
+- restart intensity: `Nat` (zero allowed);
+- restart period: a strictly positive duration.
+
+Arbitrary atoms and negative/unrestricted integers are rejected by ordinary
+elaboration. Policy conversion to OTP atoms/integers occurs in one private
+source-defined boundary. If AtomVM supports a smaller policy subset, the
+unsupported choice receives a compile/package diagnostic rather than silently
+changing semantics.
+
+The supervisor verifier MUST check before emission:
+
+1. child IDs are unique;
+2. each child start expression has the generated/declared typed startup result;
+3. actor and supervisor child kinds match their handle/start contract;
+4. restart, shutdown, strategy, intensity, and period are closed valid values;
+5. a supervisor is not its own direct or transitive descendant;
+6. referenced generated modules exist in the project graph;
+7. dependency cycles and duplicate nested ownership are diagnosed with paths;
+8. child ordering is preserved where `RestForOne` gives it semantics;
+9. raw argument/foreign forms are explicit and cannot contaminate typed sibling
+   specs.
+
+Cross-module existence and cycle checks integrate with the generic project
+dependency graph and exported macro/module metadata. They do not justify a
+compiler-owned supervisor object model.
+
+The macro derives an ordinary nominal child catalogue and checked child specs,
+then emits direct `init/1` and startup callbacks. The public API includes a
+typed supervisor handle, honest `StartResult`, stop with `ExitReason`, and typed
+child inspection when requested. A mandatory ETS registry keyed by module atom
+is forbidden; naming and discovery are optional layers.
+
+Supervisor is complete only when tests prove default and every policy,
+typed/encoded identities and startup arguments, nested supervisors, real child
+restart behavior, duplicate/cycle/unknown-child failures, `RestForOne` order,
+optional inspection, no registry when absent, direct Unix execution, and the
+supported AtomVM subset. Emitted code contains no child-spec interpreter or
+opaque supervisor container.
+
+### 11.5 Application: typed OTP ownership and release entry point
+
+`app` declares the OTP application callback module that owns one root
+supervision tree. Project/package metadata remains in `Cure.toml`; callback
+behavior remains in Cure source:
+
+```cure
+app CureForge
+  root Forge.Root
+
+  phase WarmCache
+    perform Cache.warm()
+
+  phase Ready
+    after WarmCache
+    perform Metrics.ready()
+
+  on_stop reason
+    perform Telemetry.stopped(reason)
+```
+
+The complete application family supports:
+
+- exactly one root supervisor module and its typed startup input;
+- optional typed application state when more than the root handle is required;
+- zero or more nominal start phases with typed phase arguments/results;
+- explicit phase dependencies and deterministic order;
+- effectful phase bodies through the checked algebra;
+- typed `on_start`, `on_stop ExitReason`, and declared startup-failure policy;
+- optional included OTP applications and environment requirements validated
+  against project metadata;
+- direct release/application-resource generation for Unix and AtomVM.
+
+Phase names are derived nominal constructors in Cure. Conversion to OTP's phase
+atom and inbound phase-argument decoding occur at the representation boundary.
+The preferred source does not use a flat alternating Atom list. Duplicate
+phases, unknown dependencies, dependency cycles, phase declarations absent from
+the manifest, and manifest phases absent from source are compile errors. Phase
+bodies are ordinary effects and execute once in dependency order under OTP's
+application lifecycle.
+
+The generated application callbacks:
+
+- validate/decode OTP's startup kind and arguments where the program uses them;
+- start the declared root through its typed generated API or the checked
+  supervisor algebra;
+- return the honest OTP application start result without asserting success;
+- retain exactly the typed application state required for `stop` and phases;
+- route phase dispatch through direct constructor matches, not a runtime phase
+  table or macro dispatcher;
+- stop/clean up through typed lifecycle code and `ExitReason`.
+
+Project compilation MUST enforce one application owner per application
+artifact, source/manifest name agreement, root inclusion in the emitted module
+set, included-application availability, phase agreement, and deterministic
+`.app`/release metadata. Release construction uses already checked emitted
+modules; it does not reparse Cure source or resurrect a container compiler.
+
+The public control API (`ensure_started`, `ensure_all_started`, stop, and typed
+environment access) belongs to `Std.App` over checked/raw boundaries. Environment
+decoding uses `BeamDecode`; a missing or malformed value is represented by
+`Option`/`Result`, not an unchecked cast.
+
+Application is complete only when tests prove root startup and failure,
+stateful stop, multiple ordered effectful phases, phase dependency diagnostics,
+manifest/source agreement, environment decoding, `.app` generation, bootable
+Unix release behavior, supported AtomVM packaging/boot, and absence of a runtime
+phase interpreter or opaque application container.
+
+### 11.6 Cross-container composition requirements
+
+The four completed macros MUST compose in one real program:
+
+1. an application starts a generated root supervisor;
+2. the supervisor starts generated actors and an FSM with typed initial values;
+3. actors exchange only their declared message/request values;
+4. the FSM receives payload-bearing events and emits a typed notice to an
+   explicitly supplied actor observer;
+5. dependent queries return distinct types from the same actor;
+6. a supervised failure exercises the declared restart/shutdown policy;
+7. application phases perform checked operations before readiness;
+8. shutdown delivers typed reasons and runs lifecycle hooks in observable order.
+
+This integration program MUST compile and run on Unix BEAM. A documented subset
+MUST package and run on the supported generic-unix AtomVM; target exclusions
+must be explicit diagnostics and tests, not silent skips. The test inspects the
+emitted BEAM/imports to prove there is no syntax value, macro dispatcher,
+transition/child/phase interpreter, mandatory registry, legacy container class,
+or runtime type witness introduced by expansion.
+
+### 11.7 Mandatory removal and documentation work
+
+Completion also requires deletion, not merely disuse, of:
+
+- bespoke compiler cases or host helpers recognizing `actor`, `fsm`, `sup`, or
+  `app` semantics;
+- duplicate legacy macro backends and unreleased compatibility grammars;
+- preferred APIs based on untyped Atom messages/events/IDs/phases;
+- mandatory actor/FSM registries, hidden callers, metadata/payload wrappers,
+  history, and health state;
+- runtime syntax, operation, transition, child-spec, or phase interpreters;
+- opaque `__otp_container`-style expansion targets;
+- obsolete docs/tests that advertise deleted syntax or runtime architecture.
+
+Raw foreign escape hatches remain, but their names, types, documentation, and
+tests MUST make unsafety visible. Examples are migrated to the preferred
+surfaces only when examples are restored; an intentionally empty examples
+directory is not repopulated merely to satisfy this gate.
+
+Public documentation MUST show the final authored syntax, derived types,
+generated APIs, capability model, runtime state location, FFI encoding/decoding,
+diagnostics, and target support for all four macros. The roadmap and autopilot
+ledger must contain no stale claim that an intermediate floor is complete
+parity.
+
+## 12. Required implementation order
 
 Implement in this order; do not use a later layer to paper over an earlier gap:
 
@@ -618,7 +1157,7 @@ Implement in this order; do not use a later layer to paper over an earlier gap:
    context as explicit typed staged input, so no callback relies on context
    recovered by a bespoke compiler branch. (Retiring the `contextual`
    proof-exemption is *not* this step — it depends on derivation and lands in
-   step 10; see §7.1.)
+    step 10; see §7.1.)
 4. **Declaration bundles:** support generated nominal declarations plus lifted
    modules in one expansion.
 5. **Generic syntax analysis:** add the structural traversal and declaration
@@ -628,51 +1167,87 @@ Implement in this order; do not use a later layer to paper over an earlier gap:
    then add generic grammar-family composition usable by user macros. Preserve
    ordinary parsing, diagnostics, lexical scope, hygiene, recursive expansion,
    and direct checked emission.
-6. **Actor derivation:** remove the required explicit message type in the
-   inferred path and test external `Pid(m)`/`send` calls.
-7. **FSM derivation:** derive events and transition contracts.
-8. **BEAM algebra integration:** make `beam_ops` use derived codes and direct
-   operation expansion.
-9. **Supervisor and application parity:** complete `sup` and `app` using the
-   same source vocabulary.
-10. **Compiler cleanup:** remove every bespoke OTP object path and forbidden
+6. **Representation boundary and checked BEAM algebra:** complete structural
+   and overridable `BeamEncode`/`BeamDecode`, inbound validation, nominal
+   handles, `ExitReason`, `StartResult`, and the raw escape-hatch namespace;
+   make `beam_ops` use derived operation codes and direct expansion.
+7. **Actor derivation and behavior:** implement §11.2 completely: derive the
+   message, request, dependent reply, notice, and failure algebras; generate
+   the typed lifecycle and API; prove state is threaded by the direct receive
+   loop; add named query adapters through generic identifier transformation;
+   and implement each optional capability without a mandatory wrapper.
+8. **FSM derivation and verification:** implement §11.3 completely on the actor
+   substrate: payload-bearing events, graph expansion, total reducer,
+   wildcard/guard/update/effect ordering, lifecycle, timers, hard/soft events,
+   typed API, all static verifier passes, and the generic hooks required by a
+   later knitting-algebra macro.
+9. **Supervisor derivation and verification:** implement §11.4 completely:
+   typed child identifiers and policies, typed child starts, structural and
+   transitive verification, direct supervisor callbacks, and typed lifecycle
+   and inspection APIs without a mandatory registry.
+10. **Application derivation and release integration:** implement §11.5
+    completely: typed phases and dependencies, root-supervisor startup,
+    lifecycle, environment decoding, manifest generation, project discovery,
+    release integration, and direct application callbacks.
+11. **Cross-container composition:** pass the §11.6 application → supervisor →
+    actor/FSM proof, including messages, dependent queries, notices, restart,
+    phases, shutdown, and inspection of emitted BEAM for forbidden machinery.
+12. **Compiler and legacy cleanup:** perform every deletion in §11.7, remove
+    every bespoke OTP object path and forbidden
     opaque helper, and retire the `contextual` proof-exemption once the derived
-    rules (steps 6–7) have replaced the transparent templates that required it —
+    rules (steps 7–8) have replaced the transparent templates that required it —
     every remaining rule must then pass the standalone expansion-soundness
     proof rather than being recorded `deferred`.
-11. **Branch integration:** merge `kernel-parity-batch` into `idris-parity`,
+13. **Branch integration:** merge `kernel-parity-batch` into `idris-parity`,
     then merge `idris-parity` into `core-let-binder`, resolving in favor of
     source-defined macros and the generic pipeline.
-12. **Runtime gates:** run Unix and generic-unix AtomVM proofs, then focused,
+14. **Runtime gates:** run Unix and generic-unix AtomVM proofs, then focused,
     full-suite, Antigen, formatting, and warnings-as-errors gates.
 
 Every item is a phase with a descriptive commit. Run `mix format` after each
 phase commit and commit formatter changes separately when they occur.
 
-## 12. Verification requirements
+## 13. Verification requirements
 
-Each phase must include focused tests and preserve the full existing suite. The
-final gate must prove that transparent macros expand recursively and terminate;
-callback helpers normalize and resolve through imports; Atom equality is
-compile-time reduction only; generated declarations are nominally shared and
-type-correct; no reflection or syntax values remain in runtime code; emitted
-actor/FSM/supervisor/application code has no macro interpreter; direct BEAM
-operation calls match handwritten behavior; all four standard macros work on
-Unix and AtomVM; the compiler has no OTP-specific object cases or opaque
-container helper; the required merge order is complete; and all test, Antigen,
-formatting, and warnings-as-errors gates pass.
+Each phase must include positive, negative, diagnostic, expansion-shape, and
+runtime tests appropriate to that phase and preserve the full existing suite.
+The final verification matrix MUST include:
+
+| Area | Required proof |
+|---|---|
+| Generic macro facility | Recursive inside-out expansion terminates; hygiene, provenance, nested production families, declaration publication, typed callback context, and generic identifier transformation work without OTP-specific compiler knowledge. |
+| Representation boundary | Derived and overridden encoders round-trip supported values; decoders reject malformed terms before constructing typed values; raw escape hatches are visibly raw; no unchecked polymorphic decode exists. |
+| Actor | All derived message/request/reply types are nominally shared; dependent query replies type-check at callers; malformed sends and replies fail statically; lifecycle and opt-in capabilities work; state survives between messages only through the receive-loop accumulator. |
+| FSM | State/event cataloguing, payloads, wildcards, initial/terminal rules, guards, updates, effects, timers, hard/soft events, lifecycle, static graph diagnostics, and typed state/data APIs work; invalid graphs fail at compile time. |
+| Supervisor | Typed child IDs and policies, typed startup, nested trees, ordering, cycle/duplicate/self-reference checks, restart behavior, shutdown, and opt-in inspection work without a mandatory registry. |
+| Application | Typed phases and dependencies, root startup, environment decoding, lifecycle, manifest/project/release integration, and phase diagnostics work without atom-list protocols or runtime phase interpretation. |
+| Composition | One real application boots a supervisor containing actors and FSMs, exchanges typed messages and dependent queries, restarts a failed child, executes phases, emits typed notices, and shuts down cleanly. |
+| Architecture | Emitted Core/BEAM and imports contain no runtime `Syntax`, macro dispatcher, operation/transition/child/phase interpreter, opaque OTP container, mandatory registry, legacy container class, or runtime type witness introduced by expansion. |
+| Targets and quality | The same required surface passes Unix and generic-unix AtomVM gates, the full test suite, Antigen, formatter checks, warnings-as-errors, and the trusted-core/termination gates required by any primitive-reduction change. |
+
+Direct BEAM operation calls must match equivalent handwritten behavior. The
+compiler source scan must find no OTP-specific object cases, behavior names,
+callback vocabularies, or opaque container helper. Documentation tests must use
+the final authored syntax and generated API, so stale examples cannot preserve
+an obsolete architecture accidentally.
 
 Useful negative tests must assert that generated runtime code does **not** call
 any syntax interpreter, macro dispatcher, or opaque OTP container helper.
 
-## 13. Design references
+## 14. Design references
 
 Repository references:
 
 - `docs/superpowers/specs/2026-07-09-typed-beam-process-algebra-design.md`
 - `docs/superpowers/specs/2026-07-12-tier3-computed-by-execution-design.md`
 - `docs/superpowers/specs/2026-07-13-transparent-beam-algebra-otp-macros-design.md`
+- `docs/superpowers/specs/2026-07-19-typed-beam-representation-design.md`
+- `docs/superpowers/specs/2026-07-19-typed-actor-behavior-design.md`
+- `docs/superpowers/specs/2026-07-19-typed-fsm-as-constrained-actor-design.md`
+- `docs/superpowers/specs/2026-07-19-constrained-macro-expansions-design.md`
 - `docs/superpowers/plans/2026-07-12-macro-facility-autopilot-state.md`
+- `docs/SUPERVISION.md` and `docs/APP.md` (migration inputs; update them to
+  describe the final architecture rather than preserving legacy behavior)
 - `docs/research/metaprogramming/`
 - `docs/research/process-types/`
 
