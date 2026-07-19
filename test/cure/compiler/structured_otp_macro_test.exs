@@ -143,6 +143,55 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
   end
 
+  test "transition-table FSM supports explicit initial states, terminals, and explicit-over-wildcard precedence" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      fsm Cure.Generated.GraphPolicyFsm with Int
+        initial Green
+        terminal Red
+
+        * --Emergency--> Red
+          update 99
+        Green --Emergency--> Yellow
+          update data + 1
+        Yellow --Reset--> Green
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ok, pid} = apply(:"Cure.Generated.GraphPolicyFsm", :start_link, [4])
+    assert :sys.get_state(pid) == {:Green, 4}
+
+    assert :ok = :gen_statem.cast(pid, :Emergency)
+    assert :sys.get_state(pid) == {:Yellow, 5}
+
+    assert :ok = :gen_statem.cast(pid, :Emergency)
+    assert :sys.get_state(pid) == {:Red, 99}
+    :gen_statem.stop(pid)
+  end
+
+  test "transition guards see typed event payload and machine data binders" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      fsm Cure.Generated.GuardedFsm with Int
+        Locked --Add(amount: Int)--> Unlocked
+          when amount > 0
+          update data + amount
+        Unlocked --Reset--> Locked
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ok, pid} = apply(:"Cure.Generated.GuardedFsm", :start_link, [2])
+    assert :ok = :gen_statem.cast(pid, {:Add, -1})
+    assert :sys.get_state(pid) == {:Locked, 2}
+    assert :ok = :gen_statem.cast(pid, {:Add, 4})
+    assert :sys.get_state(pid) == {:Unlocked, 6}
+    :gen_statem.stop(pid)
+  end
+
   test "transition updates support typed record updates and preserve untouched fields" do
     source = """
     mod M

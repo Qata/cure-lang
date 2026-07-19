@@ -1179,8 +1179,10 @@ defmodule Cure.Compiler.Parser do
       %Token{type: type} when type in [:dedent, :eof] ->
         family_value(family_meta, values, state)
 
-      %Token{type: :identifier, value: name} = token ->
-        case Enum.find(family_meta.fields, &(&1.name == name)) do
+      %Token{type: type, value: name} = token when type in [:identifier, :keyword] ->
+        field_name = to_string(name)
+
+        case Enum.find(family_meta.fields, &(&1.name == field_name)) do
           nil ->
             case parse_bare_family_production(state, family_meta) do
               {:ok, field, value, state} ->
@@ -1202,8 +1204,15 @@ defmodule Cure.Compiler.Parser do
         end
 
       token ->
-        state = add_error(state, {:expected, :syntax_family_field, :got, token.type, token.line, token.col})
-        parse_family_sections(advance(state), family_meta, values)
+        case parse_bare_family_production(state, family_meta) do
+          {:ok, field, value, state} ->
+            {values, state} = record_family_value(values, field, value, token, state)
+            parse_family_sections(state, family_meta, values)
+
+          :error ->
+            state = add_error(state, {:expected, :syntax_family_field, :got, token.type, token.line, token.col})
+            parse_family_sections(advance(state), family_meta, values)
+        end
     end
   end
 

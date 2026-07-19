@@ -25,8 +25,13 @@ mod Std.Fsm
     syntax family TransitionDefinition
       syntax <from: Name> --<event: Name>(<payload: Parameters>)--> <to: Name>
       syntax <from: Name> --<event: Name>--> <to: Name>
+      syntax * --<event: Name>(<payload: Parameters>)--> <to: Name>
+      syntax * --<event: Name>--> <to: Name>
+      optional when Expression
       optional update Expression
     syntax family TransitionTableDefinition
+      optional initial Name
+      repeated terminal Name
       one_or_more transitions TransitionDefinition
     accepts TransitionTableDefinition
     expands with derive_transition_table
@@ -34,16 +39,32 @@ mod Std.Fsm
   fn derive_transition_table(name: ModuleNameSyntax, data: TypeSyntax, definition: TransitionTableDefinitionSyntax) -> Syntax =
     match definition.transitions
       [] -> Failure(:fsm_requires_transition, [])
-      [first | _] -> match validate_event_payloads(definition.transitions, [])
+      [_ | _] -> match validate_event_payloads(definition.transitions, [])
         Some(reason) -> Failure(reason, [])
-        None() ->
-          let states = transition_states(definition.transitions, [])
-          let events = transition_events(definition.transitions, [])
-          emit_transition_table(name, data, first.from, states, events, definition.transitions)
+        None() -> match select_initial(definition.initial, definition.transitions)
+          None() -> Failure(:fsm_requires_initial_state, [])
+          Some(initial) ->
+            let states = transition_states(definition.transitions, [])
+            let events = transition_events(definition.transitions, [])
+            emit_transition_table(name, data, initial, states, events, definition.transitions)
+
+  fn select_initial(explicit: Option(Syntax), transitions: List(TransitionDefinitionSyntax)) -> Option(Syntax) = match explicit
+    Some(value) -> Some(value)
+    None() -> first_explicit_source(transitions)
+
+  fn first_explicit_source(transitions: List(TransitionDefinitionSyntax)) -> Option(Syntax) = match transitions
+    [] -> None()
+    [edge | rest] -> match edge.from
+      Some(value) -> Some(value)
+      None() -> first_explicit_source(rest)
 
   fn transition_states(transitions: List(TransitionDefinitionSyntax), found: List(Syntax)) -> List(Syntax) = match transitions
     [] -> found
-    [edge | rest] -> transition_states(rest, add_syntax_name(edge.to, add_syntax_name(edge.from, found)))
+    [edge | rest] -> transition_states(rest, add_optional_syntax_name(edge.from, add_syntax_name(edge.to, found)))
+
+  fn add_optional_syntax_name(value: Option(Syntax), found: List(Syntax)) -> List(Syntax) = match value
+    None() -> found
+    Some(name) -> add_syntax_name(name, found)
 
   type EventSpec = EventSpec(Syntax, List(Syntax))
 
@@ -163,7 +184,7 @@ mod Std.Fsm
       Leaf(_, _, SAtom(value)) -> atom_literal(value)
       _ -> atom_literal(:generated_fsm)
     let action_type = call("FsmAction", [variable("State"), variable("Data")])
-    let decision = transition_decision(transitions)
+    let decision = transition_decision_explicit(transitions, transition_decision_wildcard(transitions))
     let encoded = call("Std.Fsm.action_to_beam", [call("decide", [variable("event"), variable("state"), variable("data")])])
     Std.ActorBehavior.state_machine_module(module_name, [
       enum_type("State", syntax_variants(states)),
@@ -176,18 +197,39 @@ mod Std.Fsm
       function("start_link", [parameter("initial", variable("Data"))], call("Effect", [variable("Tuple")]), call("Std.Otp.start_statem", [module_expr, variable("initial")]))
     ])
 
-  fn transition_decision(transitions: List(TransitionDefinitionSyntax)) -> Syntax = match transitions
-    [] -> call("Keep", [variable("data")])
+  fn transition_decision_explicit(transitions: List(TransitionDefinitionSyntax), wildcard: Syntax) -> Syntax = match transitions
+    [] -> wildcard
     [edge | rest] ->
-      let fallback = transition_decision(rest)
-      let event_match = Node(:pattern_match, [], [variable("event"),
-        match_arm(event_pattern(edge.event, optional_payload(edge.payload)), call("Next", [syntax_constructor(edge.to), transition_update(edge.update)])),
-        match_arm(variable("_"), fallback)
-      ])
-      Node(:pattern_match, [], [variable("state"),
-        match_arm(syntax_constructor(edge.from), event_match),
-        match_arm(variable("_"), fallback)
-      ])
+      let fallback = transition_decision_explicit(rest, wildcard)
+      match edge.from
+        None() -> fallback
+        Some(from) ->
+          let event_match = Node(:pattern_match, [], [variable("event"),
+            transition_match_arm(edge, fallback),
+            match_arm(variable("_"), fallback)
+          ])
+          Node(:pattern_match, [], [variable("state"),
+            match_arm(syntax_constructor(from), event_match),
+            match_arm(variable("_"), fallback)
+          ])
+
+  fn transition_decision_wildcard(transitions: List(TransitionDefinitionSyntax)) -> Syntax = match transitions
+    [] -> call("Keep", [variable("data")])
+    [edge | rest] -> match edge.from
+      Some(_) -> transition_decision_wildcard(rest)
+      None() ->
+        let fallback = transition_decision_wildcard(rest)
+        Node(:pattern_match, [], [variable("event"),
+          transition_match_arm(edge, fallback),
+          match_arm(variable("_"), fallback)
+        ])
+
+  fn transition_match_arm(edge: TransitionDefinitionSyntax, fallback: Syntax) -> Syntax =
+    let pattern = event_pattern(edge.event, optional_payload(edge.payload))
+    let body = call("Next", [syntax_constructor(edge.to), transition_update(edge.update)])
+    match edge.when
+      None() -> match_arm(pattern, body)
+      Some(guard) -> match_arm(pattern, Node(:conditional, [], [guard, body, fallback]))
 
   fn event_pattern(event: Syntax, parameters: List(Syntax)) -> Syntax = match identifier_name(event)
     None() -> variable("_")
