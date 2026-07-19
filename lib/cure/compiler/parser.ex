@@ -37,7 +37,7 @@ defmodule Cure.Compiler.Parser do
   """
 
   alias Cure.Compiler.{MacroFamily, MacroRaw, Token}
-  alias Cure.Compiler.Parser.{BuiltinFixity, FixityTable, Precedence}
+  alias Cure.Compiler.Parser.{BuiltinFixity, FixityTable, FixityScan, FixityResolver, Precedence}
   alias Cure.Pipeline.Events
 
   # -- Parser State ----------------------------------------------------------
@@ -184,6 +184,7 @@ defmodule Cure.Compiler.Parser do
     edition = Keyword.get(opts, :edition, Cure.Edition.current())
     prelude? = Keyword.get(opts, :prelude_macros, true)
     supplied_macros = Keyword.get(opts, :builtin_macros)
+    prelude_providers = Keyword.get(opts, :prelude_providers, [])
 
     # The built-in fixity table (memoized). Both passes seed from it; the
     # authoritative pass layers the module's own decls on top (collected below).
@@ -196,59 +197,75 @@ defmodule Cure.Compiler.Parser do
     # parse context-free (no fixity table needed) — they feed the module table.
     harvest_exprs = harvest(tokens, file, builtin_fixity, edition)
 
-    # Extend the built-in table with the current module's fixity declarations so
-    # the authoritative pass binds user-declared operators by their group.
-    module_fixity = session_extend_fixity_table(builtin_fixity, harvest_exprs)
+    # Assemble the module's fixity table = built-in prelude base ∪ own(M) ∪ the
+    # fixity of every module in M's transitive `use`-closure ∪ user `@prelude`
+    # providers. A same-lexeme/different-group (or same-group/different-body)
+    # clash is a hard PARSE error, raised here before the authoritative pass.
+    own_fixity = FixityScan.collect_fixity(harvest_exprs)
+    own_uses = FixityScan.collect_use_targets(harvest_exprs)
+
+    module_fixity =
+      case FixityResolver.assemble(builtin_fixity, own_fixity, own_uses, prelude_providers) do
+        {:ok, table} -> table
+        {:error, conflict} -> {:__fixity_conflict__, conflict}
+      end
+
     active = harvest_active_macros(harvest_exprs)
     computed = harvest_computed_macros(harvest_exprs)
     literal = harvest_literal_macros(harvest_exprs)
 
-    # Phase 2 (authoritative): parse with the macro grammars seeded so use-sites expand.
-    builtin_rules =
-      cond do
-        is_map(supplied_macros) -> supplied_macros
-        prelude? -> prelude_macros()
-        true -> %{}
-      end
+    case module_fixity do
+      {:__fixity_conflict__, conflict} ->
+        {:error, [conflict]}
 
-    state = %__MODULE__{
-      file: file,
-      emit_events: emit?,
-      edition: edition,
-      builtin_macros: syntax_macro_rules(builtin_rules),
-      builtin_computed_macros: computed_macro_rules(builtin_rules),
-      active_macros: active,
-      computed_macros: computed,
-      # Local `literal` rules always apply. In the normal (non-self-harvest)
-      # case, standard-library `literal` rules join them so a suffix like `ms`
-      # expands in ANY file, exactly as `:syntax` macros are globally active via
-      # `builtin_macros`. Local rules win on a suffix collision.
-      literal_macros:
-        cond do
-          is_map(supplied_macros) -> literal
-          prelude? -> Map.merge(prelude_literal_macros(), literal, fn _k, _p, l -> l end)
-          true -> literal
-        end,
-      fixity_table: module_fixity
-    }
+      %FixityTable{} = module_fixity ->
+        # Phase 2 (authoritative): parse with the macro grammars seeded so use-sites expand.
+        builtin_rules =
+          cond do
+            is_map(supplied_macros) -> supplied_macros
+            prelude? -> prelude_macros()
+            true -> %{}
+          end
 
-    state = put_tokens(state, tokens)
+        state = %__MODULE__{
+          file: file,
+          emit_events: emit?,
+          edition: edition,
+          builtin_macros: syntax_macro_rules(builtin_rules),
+          builtin_computed_macros: computed_macro_rules(builtin_rules),
+          active_macros: active,
+          computed_macros: computed,
+          # Local `literal` rules always apply. In the normal (non-self-harvest)
+          # case, standard-library `literal` rules join them so a suffix like `ms`
+          # expands in ANY file, exactly as `:syntax` macros are globally active via
+          # `builtin_macros`. Local rules win on a suffix collision.
+          literal_macros:
+            cond do
+              is_map(supplied_macros) -> literal
+              prelude? -> Map.merge(prelude_literal_macros(), literal, fn _k, _p, l -> l end)
+              true -> literal
+            end,
+          fixity_table: module_fixity
+        }
 
-    {exprs, state} = parse_program(state)
+        state = put_tokens(state, tokens)
 
-    ast =
-      case exprs do
-        [single] -> single
-        many -> {:block, [line: 1, col: 1], many}
-      end
+        {exprs, state} = parse_program(state)
 
-    if emit? do
-      Events.emit(:parser, :parse_complete, ast, Events.meta(file, 1))
-    end
+        ast =
+          case exprs do
+            [single] -> single
+            many -> {:block, [line: 1, col: 1], many}
+          end
 
-    case state.errors do
-      [] -> {:ok, ast}
-      errors -> {:error, Enum.reverse(errors)}
+        if emit? do
+          Events.emit(:parser, :parse_complete, ast, Events.meta(file, 1))
+        end
+
+        case state.errors do
+          [] -> {:ok, ast}
+          errors -> {:error, Enum.reverse(errors)}
+        end
     end
   end
 
@@ -2268,9 +2285,6 @@ defmodule Cure.Compiler.Parser do
       BuiltinFixity.table()
     end
   end
-
-  # Layer a module's own fixity declarations onto `base`.
-  defp session_extend_fixity_table(base, ast), do: BuiltinFixity.extend(base, ast)
 
   # The lexeme string a token binds under in the fixity table, or `nil` for a
   # non-operator token.
