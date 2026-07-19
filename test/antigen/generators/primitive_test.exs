@@ -63,7 +63,7 @@ defmodule Antigen.Generators.PrimitiveTest do
         do: assert(op in ops, "op #{op} never generated")
 
     types = sample |> Enum.map(fn c -> c.payload.type end) |> MapSet.new()
-    assert {:int_type} in types
+    assert {:data, :Int, [], []} in types
     assert {:float_type} in types
   end
 

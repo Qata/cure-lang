@@ -170,7 +170,7 @@ defmodule Antigen.Generators.IndexedDecl do
 
   defp idxi(kind), do: Inductive.family(:IdxI, [], [{:n, itype(kind)}], 0)
 
-  defp itype(:int), do: {:int_type}
+  defp itype(:int), do: {:data, :Int, [], []}
   defp itype(:float), do: {:float_type}
 
   defp single(lit_gen), do: Gen.bind(lit_gen, fn v -> Gen.return([v]) end)

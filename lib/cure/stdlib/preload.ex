@@ -238,6 +238,44 @@ defmodule Cure.Stdlib.Preload do
   @spec module_closure_deps() :: %{module() => [module()]}
   def module_closure_deps, do: @std_closure_deps
 
+  # ---------------------------------------------------------------------------
+  # Built-in operator fixity table (Phase 3, Task 3.2)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Assemble the built-in operator `Cure.Compiler.Parser.FixityTable` by parsing
+  the `Std.Operators` stdlib module (`lib/std/operators.cure`).
+
+  `Std.Operators` declares every built-in operator with the same relative
+  binding power and associativity as the legacy static
+  `Cure.Compiler.Parser.Precedence` table. This accessor reads those
+  `precedencegroup`/`infix`/`prefix`/`postfix` declarations and reduces them
+  into a `FixityTable`.
+
+  Purely additive in this task: nothing in the expression parser consults the
+  returned table yet (the static `Precedence` module still governs how
+  expressions bind). A later Phase-3 task flips the Pratt loop onto it.
+
+  Returns an empty table when the source cannot be found or parsed (e.g. a
+  packaged release that ships neither `lib/std/` nor `priv/std/`).
+  """
+  #
+  # The table computation itself now lives in
+  # `Cure.Compiler.Parser.BuiltinFixity` (compiler layer) so the parser can reach
+  # it during THIS module's own compile-time dependency bake without a load-order
+  # cycle. These are thin delegators kept for the public API.
+  @spec builtin_fixity_table() :: Cure.Compiler.Parser.FixityTable.t()
+  defdelegate builtin_fixity_table(), to: Cure.Compiler.Parser.BuiltinFixity, as: :table
+
+  @doc """
+  Extend an existing `FixityTable` with the `precedencegroup`/`infix`/… decls
+  found in `ast`. Used by the parser to layer a module's own fixity declarations
+  onto the memoized built-in table.
+  """
+  @spec extend_fixity_table(Cure.Compiler.Parser.FixityTable.t(), term()) ::
+          Cure.Compiler.Parser.FixityTable.t()
+  defdelegate extend_fixity_table(base, ast), to: Cure.Compiler.Parser.BuiltinFixity, as: :extend
+
   @doc """
   `stdlib_modules(kind)` expanded to its dependency closure over the baked
   closure map. Selection semantics are unchanged — closure only adds the

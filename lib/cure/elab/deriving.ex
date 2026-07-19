@@ -63,6 +63,124 @@ defmodule Cure.Elab.Deriving do
 
   def generate(iface, _container, _env), do: {:error, {:cannot_derive, iface}}
 
+  @doc """
+  Synthesise a *structural* `Equatable` instance for a data type that has no
+  hand-written one, used by the auto-derive post-pass (`Cure.Elab.Program`).
+
+  Unlike `generate(:Equatable, …)` — which builds a per-field recursive-dispatch
+  body and therefore rejects a constructor field whose type is the bound type
+  parameter (`Some(t)`) — this emits a single opaque
+  `Std.Builtin.struct_eq(T, a, b)` call. `struct_eq`'s type argument is
+  computationally irrelevant (erased at emit), so there is no per-field
+  dictionary and hence no field-shape restriction: it covers `Option(t)`,
+  `Result(t, e)`, and every other generic container uniformly. The emitted spine
+  is exactly what `build_binop`'s deleted `:error`-branch `struct_eq` produced, so
+  ADT `==` evaluates identically to before.
+
+  `method_name` is the `Equatable` interface's sole method name (`"=="` for the
+  canonical `Std.Equatable`), taken from the in-scope interface descriptor rather
+  than hardcoded, so the synthesised clause always names a real method of the
+  interface it is being registered against.
+
+  Returns `{:ok, impl_ast}` for a variant-bearing container, or `:skip` for a
+  shape with no constructors (a bare record / an empty enum), which has no
+  structural equality to derive.
+  """
+  @spec struct_eq_instance(tuple(), String.t()) :: {:ok, tuple()} | :skip
+  def struct_eq_instance({:container, meta, body}, method_name) do
+    type_name = Keyword.fetch!(meta, :name)
+    type_params = Keyword.get(meta, :type_params, [])
+
+    case constructors(body) do
+      [] ->
+        :skip
+
+      ctors ->
+        cond do
+          # The `struct_eq` type argument is spelled as `for_type` in TERM position.
+          # When the type's name is also one of its constructor names (`type Iter(a) =
+          # Iter(...)`, `type NonEmpty(t) = NonEmpty(t, List(t))`), that spelling
+          # resolves to the constructor, not the type former, and the derived method
+          # fails to elaborate (`:too_few_arguments`, or a `Pi`-vs-`Type0` mismatch when
+          # the sole field is a function). No unambiguous surface spelling of the type
+          # exists there, so decline to auto-derive; a hand-written `instance Equatable`
+          # can still be provided.
+          type_name in Enum.map(ctors, fn {name, _arity} -> name end) ->
+            :skip
+
+          # `struct_eq : Pi(a: Type0). a -> a -> Bool` accepts only `Type0` inhabitants.
+          # A type with a `Type`-kinded constructor field (`type Telescope = Empty |
+          # More(Type, Telescope)`) lives one universe up (`Type1`), so `struct_eq`
+          # cannot be applied to it (`{:conversion_failure, {:type, 1}, {:type, 0}}`).
+          Enum.any?(field_types(body), &mentions_type_universe?/1) ->
+            :skip
+
+          # An UPPER-case type parameter (`type Result(T, E) = …`) does not
+          # auto-generalise: it leaks as an unbound `{:nglobal}` wherever it appears,
+          # so the synthesised `for_type` (`Result(T, E)`, used both to type the
+          # operands and as `struct_eq`'s erased type argument) fails to elaborate
+          # with `:unknown_global`. Lower-case parameters generalise normally and
+          # derive fine (`Option(t)`, `Result(t, e)`), including `==` at a concrete
+          # instantiation. Rather than break elaboration of a type that merely
+          # *has* an upper-case parameter (its `==` may never be used), decline to
+          # auto-derive; a hand-written instance or lower-case parameters both work.
+          Enum.any?(type_params, &upper_initial?/1) ->
+            :skip
+
+          true ->
+            for_type = for_type_ast(type_name, type_params)
+            impl_meta = [interface: "Equatable", for: type_name, for_type: for_type, as: nil]
+            method = struct_eq_method_def(method_name, for_type, type_params)
+            {:ok, {:implementation, impl_meta, [method]}}
+        end
+    end
+  end
+
+  def struct_eq_instance(_decl, _method_name), do: :skip
+
+  # The single `` `==` ``(l: T, r: T) -> Bool = Std.Builtin.struct_eq(_, l, r)`
+  # method clause. `T` is the fully-applied `for_type` (`Option(t)` for a
+  # parametric type), used only to type the two value parameters — a
+  # type-annotation position, where a name shared by a type and its constructor
+  # (`NonEmpty`, `Iter`) resolves to the type former.
+  #
+  # The `struct_eq` type-argument slot is a goal-directed `_`, inferred from the
+  # first value operand, NOT the written `for_type`. Naming the type there would
+  # re-resolve it in TERM position, where a type/constructor name clash picks the
+  # constructor: `NonEmpty(t)` becomes the arity-2 constructor applied to one arg
+  # (`:too_few_arguments`), and `Iter(a)` applies the `Iter` constructor — whose
+  # sole field is a function type — to a type argument (`cannot_unify Pi Type0`).
+  # Inferring the type from the operand sidesteps the clash entirely; the operand's
+  # type is exactly `for_type`, so the erased `struct_eq` call is unchanged.
+  defp struct_eq_method_def(method_name, for_type, type_params) do
+    {left, right} = operand_names(type_params)
+    params = [{:param, [type: for_type], left}, {:param, [type: for_type], right}]
+
+    meta = [
+      name: method_name,
+      params: params,
+      return_type: ambient_bool(),
+      visibility: :public,
+      arity: 2
+    ]
+
+    body =
+      {:function_call, [name: "Std.Builtin.struct_eq"], [for_type, var(left), var(right)]}
+
+    {:function_def, meta, [body]}
+  end
+
+  # A pair of value-parameter names guaranteed disjoint from the type's own
+  # parameter names, so neither shadows a type variable that appears in `for_type`.
+  defp operand_names(type_params) do
+    Enum.find(
+      [{"left_value", "right_value"}, {"lhs_operand", "rhs_operand"},
+       {"equatable_left", "equatable_right"}],
+      {"left_value", "right_value"},
+      fn {l, r} -> l not in type_params and r not in type_params end
+    )
+  end
+
   # `constructors/1` recognises only `variant: true`-tagged entries, and falls through to
   # `[]` for anything else — a `rec`'s named-field list, say. With no constructors the
   # derived method's body is `match(x, [])`: a scrutinee and zero arms, unsatisfiable for
@@ -118,6 +236,22 @@ defmodule Cure.Elab.Deriving do
     do: name in type_params
 
   defp bare_type_param?(_ast, _type_params), do: false
+
+  # `true` when a type-parameter name begins with an upper-case letter — the shape
+  # that does not auto-generalise and leaks as a global (see the auto-derive skip).
+  defp upper_initial?(<<c, _rest::binary>>) when c in ?A..?Z, do: true
+  defp upper_initial?(_name), do: false
+
+  # `true` when a constructor-field type AST references the `Type` universe anywhere
+  # (`More(Type, Telescope)`, or nested as in `List(Type)`). Such a field pushes the
+  # whole type into `Type1`, above the `Type0` domain of `struct_eq`.
+  defp mentions_type_universe?({:variable, _m, name}) when is_binary(name),
+    do: name == "Type" or String.match?(name, ~r/^Type\d+$/)
+
+  defp mentions_type_universe?({:function_call, _m, args}) when is_list(args),
+    do: Enum.any?(args, &mentions_type_universe?/1)
+
+  defp mentions_type_universe?(_ast), do: false
 
   # -- constructor extraction -------------------------------------------------
 
@@ -290,6 +424,19 @@ defmodule Cure.Elab.Deriving do
   # -- AST constructors -------------------------------------------------------
 
   defp var(name), do: {:variable, [scope: :local], name}
+
+  # The ambient `Std.Bool.Bool` as a qualified type reference, NOT bare `Bool`.
+  # `struct_eq`'s result is fixed to `Std.Bool#Bool`, so an auto-derived `==`
+  # must declare that exact return type. A bare `Bool` re-resolves in the host
+  # module's scope, and a module that shadows the prelude (`type Bool = T | F`)
+  # would bind it to the LOCAL type — the derived body then fails conversion
+  # (`struct_eq : … -> Std.Bool#Bool` vs declared local `Bool`). The qualified
+  # spelling routes through `Resolution.resolve_qualified/3`, which is immune to
+  # local shadowing and lands on the canonical family in every module.
+  defp ambient_bool(),
+    do:
+      {:attribute_access, [attribute: "Bool"],
+       [{:attribute_access, [attribute: "Bool"], [{:variable, [scope: :local], "Std"}]}]}
   defp wildcard(), do: {:variable, [scope: :local], "_"}
   defp bool(b), do: {:literal, [subtype: :boolean], b}
   defp call(name, args), do: {:function_call, [name: name], args}

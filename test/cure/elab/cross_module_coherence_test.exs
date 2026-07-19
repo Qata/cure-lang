@@ -60,7 +60,7 @@ defmodule Cure.Elab.CrossModuleCoherenceTest do
     assert {:ok, env} = Program.elaborate("mod P\n  use Std.CoImpl\n  fn ignore() -> Int = 0\nend\n")
 
     assert Env.get_interface(env, :Eqs) != nil
-    assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :Int)
+    assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :"Std.Int#Int")
   end
 
   test "two imported modules supplying the same NAMED instance is an overlap error", %{tmp: tmp} do
@@ -137,7 +137,7 @@ defmodule Cure.Elab.CrossModuleCoherenceTest do
 
     src = "mod P\n  use Std.AnonOne\n  use Std.AnonTwo\n  fn ignore() -> Int = 0\nend\n"
 
-    assert {:error, {:overlapping_instance, :Eqs, :Int}} = Program.elaborate(src)
+    assert {:error, {:overlapping_instance, :Eqs, :"Std.Int#Int"}} = Program.elaborate(src)
   end
 
   test "a transitively imported module can use builtin globals", %{tmp: tmp} do
@@ -176,6 +176,6 @@ defmodule Cure.Elab.CrossModuleCoherenceTest do
     src = "mod P\n  use Std.CoDiaA\n  use Std.CoDiaB\n  fn ignore() -> Int = 0\nend\n"
 
     assert {:ok, env} = Program.elaborate(src)
-    assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :Int)
+    assert {:ok, _dict_ref} = Coherence.lookup_anon(Env.coherence(env), :Eqs, :"Std.Int#Int")
   end
 end

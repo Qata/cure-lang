@@ -25,7 +25,7 @@ defmodule Cure.Elab.UnionIdentityTest do
     """
 
     assert {:ok, env} = Program.elaborate(src)
-    assert union_families(env) == [:"Union<Int|Std.Bool#Bool>"]
+    assert union_families(env) == [:"Union<Std.Bool#Bool|Std.Int#Int>"]
   end
 
   test "a union value built in A typechecks and eliminates in B" do
@@ -74,8 +74,8 @@ defmodule Cure.Elab.UnionIdentityTest do
 
     assert {:ok, env} = Program.elaborate(src)
 
-    assert Map.has_key?(env.families, :"Union<Int|Std.Bool#Bool>")
+    assert Map.has_key?(env.families, :"Union<Std.Bool#Bool|Std.Int#Int>")
     refute Enum.any?(Map.keys(env.families), &String.starts_with?(Atom.to_string(&1), "M#Union<"))
-    assert Map.has_key?(env.ctors, :"Union<Int|Std.Bool#Bool>$Int")
+    assert Map.has_key?(env.ctors, :"Union<Std.Bool#Bool|Std.Int#Int>$Std.Int#Int")
   end
 end

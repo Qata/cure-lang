@@ -39,7 +39,7 @@ defmodule Antigen.Generators.InductiveEnv do
   @spec gen(keyword()) :: Gen.t()
   def gen(_opts \\ []) do
     Gen.bind(Gen.int(-9, 9), fn n ->
-      fam = Inductive.family(:AntigenEnv, [{:a, {:type, 0}}], [{:n, {:int_type}}], 0)
+      fam = Inductive.family(:AntigenEnv, [{:a, {:type, 0}}], [{:n, {:data, :Int, [], []}}], 0)
 
       ctor =
         Inductive.ctor(

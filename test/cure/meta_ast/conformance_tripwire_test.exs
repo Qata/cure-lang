@@ -71,6 +71,11 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
   # cannot reach. These are normalization targets, not permanent shape.
   @structural_allowlist MapSet.new([
                           {:bad_shape, :named_dom, nil},
+                          # Relevant-implicit binder `{name: Type}` — like :named_dom, a
+                          # dependent binder whose 2nd slot is a bare name, not canonical
+                          # children. Deliberate construct (E2-residual); subterms handled
+                          # by the elaborator, not a canonical-guard walker.
+                          {:bad_shape, :implicit_dom, nil},
                           {:node_child, :gadt_ctor, nil}
                         ])
 

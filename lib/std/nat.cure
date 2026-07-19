@@ -39,3 +39,10 @@ mod Std.Nat
   ## here.
   fn range_upto_incl(from: Int, to: Int) -> List(Int) =
     range_from(from, of_int(to - from + 1))
+
+  ## Project a natural number to a machine integer (structural, total; the
+  ## constructive inverse of the trusted `of_int` clamp — this direction needs no
+  ## assertion because `Nat` is well-founded).
+  fn to_integer(value: Nat) -> Int = match value
+    Z() -> 0
+    S(predecessor) -> to_integer(predecessor) + 1

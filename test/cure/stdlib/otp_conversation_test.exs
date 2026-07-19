@@ -24,9 +24,9 @@ defmodule Cure.Stdlib.OtpConversationTest do
       fn sv2() -> SingleRecv(TB, BCons(TB, BNil()), BNil()) = SVHere()
       fn cdone() -> ConvRecv(PDone(), BNil(), BNil(), MNil()) = CRDone()
       fn cr2() -> ConvRecv(PExpect(TB, PDone()), BCons(TB, BNil()), BNil(), MCons(TB, MNil())) =
-        CRStep(TB, sv2(), cdone())
+        CRStep(sv2(), cdone())
       fn cr() -> ConvRecv(PExpect(TA, PExpect(TB, PDone())), BCons(TB, BCons(TA, BNil())), BNil(), MCons(TA, MCons(TB, MNil()))) =
-        CRStep(TA, sv1(), cr2())
+        CRStep(sv1(), cr2())
       fn ordered() -> Equivalent(MList, MCons(TA, MCons(TB, MNil())), ptags(PExpect(TA, PExpect(TB, PDone())))) =
         conv_order(cr())
     end

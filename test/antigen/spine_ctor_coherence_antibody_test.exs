@@ -11,7 +11,7 @@ defmodule Antigen.SpineCtorCoherenceAntibodyTest do
 
   test "infer→check round-trip on the spine reflexive" do
     ctx = Context.empty(Builtins.seed(Env.empty()))
-    t = {:ctor, :reflexive, [{:int_type}, {:int_lit, 3}]}
+    t = {:ctor, :reflexive, [{:data, :"Std.Int#Int", [], []}, {:int_lit, 3}]}
     assert {:ok, ty} = Kernel.infer(ctx, t)
     assert :ok = Kernel.check(ctx, t, ty)
   end

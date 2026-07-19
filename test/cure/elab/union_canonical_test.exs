@@ -6,8 +6,8 @@ defmodule Cure.Elab.UnionCanonicalTest do
   `Int | Bool` and `Bool | Int` are literally the same `{:data, name}`.
 
   These are unit tests over the raw canonicaliser, so they run against the BUILTIN
-  seeded env (families `Bool`/`Equivalent`/`List`/`Nat`/`Sigma`, primitives
-  `Atom`/`Binary`/`Float`/`Int`). `String` is `List(Char)` from the stdlib, not a
+  seeded env (families `Bool`/`Equivalent`/`Int`/`List`/`Nat`/`Sigma`, primitives
+  `Atom`/`Binary`/`Float`). `String` is `List(Char)` from the stdlib, not a
   builtin, so union members involving it are exercised in `union_test.exs`, which
   goes through `Program.elaborate/1` and gets the prelude.
   """
@@ -62,17 +62,17 @@ defmodule Cure.Elab.UnionCanonicalTest do
 
     test "the key is sorted lexically" do
       env = base_env()
-      assert key("Int | Bool", env) == :"Union<Int|Std.Bool#Bool>"
+      assert key("Int | Bool", env) == :"Union<Std.Bool#Bool|Std.Int#Int>"
     end
 
     test "Int | Int dedupes to a single member (caller collapses to Int)" do
       env = base_env()
-      assert {:ok, [%{key: "Int"}]} = members("Int | Int", env)
+      assert {:ok, [%{key: "Std.Int#Int"}]} = members("Int | Int", env)
     end
 
     test "an applied type keys with its arguments" do
       env = base_env()
-      assert key("List(Int) | Int", env) == :"Union<Int|Std.List#List(Int)>"
+      assert key("List(Int) | Int", env) == :"Union<Std.Int#Int|Std.List#List(Std.Int#Int)>"
     end
   end
 
@@ -141,7 +141,7 @@ defmodule Cure.Elab.UnionCanonicalTest do
       env = base_env()
       {:ok, ms} = members("Int | 3", env)
 
-      assert Enum.map(ms, & &1.key) == ["Int", "Int#3"]
+      assert Enum.map(ms, & &1.key) == ["Int#3", "Std.Int#Int"]
     end
 
     # The reason this case used to be interesting: it proves admission runs AFTER
@@ -151,7 +151,7 @@ defmodule Cure.Elab.UnionCanonicalTest do
       env = env_for("typealias T2 = Int\n")
 
       assert key("T2 | 3", env) == key("Int | 3", env)
-      assert key("T2 | 3", env) == :"Disjoint<Int|Int#3>"
+      assert key("T2 | 3", env) == :"Disjoint<Int#3|Std.Int#Int>"
     end
   end
 
@@ -167,18 +167,18 @@ defmodule Cure.Elab.UnionCanonicalTest do
       env = base_env()
 
       # Int / Bool  — integers vs the atoms true/false. Nothing is both.
-      assert key("Int | Bool", env) == :"Union<Int|Std.Bool#Bool>"
+      assert key("Int | Bool", env) == :"Union<Std.Bool#Bool|Std.Int#Int>"
       # Int / List(Int) — integers vs lists.
-      assert key("Int | List(Int)", env) == :"Union<Int|Std.List#List(Int)>"
+      assert key("Int | List(Int)", env) == :"Union<Std.Int#Int|Std.List#List(Std.Int#Int)>"
       # a literal whose class no type member occupies
-      assert key(":north | Int", env) == :"Union<Atom#:north|Int>"
+      assert key(":north | Int", env) == :"Union<Atom#:north|Std.Int#Int>"
     end
 
     test "a literal inside a type member's class is Disjoint" do
       env = base_env()
 
       # {3} subset-of Int: a value can be BOTH, so the tag is what separates them.
-      assert key("Int | 3", env) == :"Disjoint<Int|Int#3>"
+      assert key("Int | 3", env) == :"Disjoint<Int#3|Std.Int#Int>"
       assert key("3 | Nat", env) == :"Disjoint<Int#3|Std.Nat#Nat>"
       assert key(":north | Atom", env) == :"Disjoint<Atom|Atom#:north>"
     end
@@ -189,14 +189,14 @@ defmodule Cure.Elab.UnionCanonicalTest do
       # true/false are atoms, so Bool and Atom overlap.
       assert key("Bool | Atom", env) == :"Disjoint<Atom|Std.Bool#Bool>"
       # ...and it propagates through a wider union.
-      assert key("Int | Bool | Atom", env) == :"Disjoint<Atom|Int|Std.Bool#Bool>"
+      assert key("Int | Bool | Atom", env) == :"Disjoint<Atom|Std.Bool#Bool|Std.Int#Int>"
     end
 
     test "two type members sharing a class are Disjoint" do
       env = base_env()
 
       # Both erase to Erlang integers.
-      assert key("Int | Nat", env) == :"Disjoint<Int|Std.Nat#Nat>"
+      assert key("Int | Nat", env) == :"Disjoint<Std.Int#Int|Std.Nat#Nat>"
     end
 
     test "union_family?/1 recognises BOTH prefixes" do
@@ -211,9 +211,9 @@ defmodule Cure.Elab.UnionCanonicalTest do
       env = base_env()
       {:ok, ms} = members("Int | Bool", env)
       fk = Union.family_key(ms, env)
-      int_m = Enum.find(ms, &(&1.key == "Int"))
+      int_m = Enum.find(ms, &(&1.key == "Std.Int#Int"))
 
-      assert Union.ctor_key(fk, int_m) == :"Union<Int|Std.Bool#Bool>$Int"
+      assert Union.ctor_key(fk, int_m) == :"Union<Std.Bool#Bool|Std.Int#Int>$Std.Int#Int"
     end
 
     test "union_family?/1 recognises a generated key and rejects a user type name" do
