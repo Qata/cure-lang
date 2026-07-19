@@ -74,6 +74,15 @@ the **`Effect(T)`** discipline; the **linear** reply capability (exactly-once); 
 **kernel-checked metatheory** (preservation, progress, mailbox exhaustiveness, restart-preservation, Fidge–Mattern
 soundness+completeness). None of this exists in Gleam OTP.
 
+**More behaviours than Gleam.** Gleam ships exactly ONE behaviour — the `actor` (gen_server-shaped); it has **no
+`gen_statem`/FSM and no `gen_event`** (state machines are hand-rolled as an actor over a sum-type state). Cure has
+typed `fsm` + `otp_gen_statem` + `otp_gen_event`. So on the behaviour axis Cure is strictly ahead.
+
+**Neither ships `task`** (async/await). Gleam *had* a `task` module and deliberately removed it in
+`gleam_otp` 1.0.0-rc1 (2025-05); the current guidance is to model async work as a monitored `spawn` + selector or
+an actor. So a typed future/await is a *potential shared addition*, not a Cure gap — worth a small `Std.Otp.Task`
+(spawn + monitor + typed await) if we want the ergonomic, since it's cheap on top of gap A's `Subject`.
+
 ## The gaps to close (all ergonomic / addressing-model)
 
 ### A. `Subject` — a typed address, many per process  ⟵ biggest conceptual gap
