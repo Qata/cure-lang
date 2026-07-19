@@ -96,6 +96,23 @@ defmodule Cure.Compiler.MacroFuzz do
              ])
          }}
 
+      "Expression" ->
+        {:ok,
+         %{
+           category: category,
+           domain: :expression,
+           env: generation_env,
+           ctx: ctx,
+           goal: nil,
+           generator:
+             Gen.member_of([
+               {:raw_text, "0"},
+               {:raw_text, "1 + 2 * 3"},
+               {:raw_text, "Some(7)"},
+               {:raw_text, "%[:identity, 9]"}
+             ])
+         }}
+
       "Identifier" ->
         {:ok,
          %{
@@ -802,6 +819,22 @@ defmodule Cure.Compiler.MacroFuzz do
 
   defp check_samples(%{domain: :raw}, terms) do
     case Enum.find(terms, &(not match?({:raw_text, text} when is_binary(text), &1))) do
+      nil -> :ok
+      bad -> {:error, {:generated_hole_not_well_typed, bad}}
+    end
+  end
+
+  defp check_samples(%{domain: :expression}, terms) do
+    case Enum.find(terms, fn
+           {:raw_text, text} ->
+             case Lexer.tokenize(text, emit_events: false) do
+               {:ok, tokens} -> match?({:ok, _}, Parser.parse(tokens, emit_events: false)) == false
+               {:error, _} -> true
+             end
+
+           _ ->
+             true
+         end) do
       nil -> :ok
       bad -> {:error, {:generated_hole_not_well_typed, bad}}
     end

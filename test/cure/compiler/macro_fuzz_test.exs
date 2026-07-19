@@ -31,8 +31,32 @@ defmodule Cure.Compiler.MacroFuzzTest do
     assert {:ok, %{domain: :code}, code} = MacroFuzz.sample_holes("Code", 12, 19)
     assert Enum.all?(code, &is_tuple/1)
 
+    assert {:ok, %{domain: :expression}, expressions} =
+             MacroFuzz.sample_holes("Expression", 12, 19)
+
+    assert Enum.all?(expressions, &match?({:raw_text, _}, &1))
+
     assert {:ok, %{goal: {:type, 0}}, kinds} = MacroFuzz.sample_holes("Kind", 12, 19)
     assert Enum.all?(kinds, &match?({:data, _, _, _}, &1))
+  end
+
+  test "Expression fillers preserve complete ordinary expressions at use sites" do
+    source = """
+    macro Identity
+      syntax identity <value: Expression> becomes value
+    """
+
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:macro_def, _, [rule]}} = Parser.parse(tokens, emit_events: false)
+
+    assert {:ok, use_site} =
+             MacroFuzz.assemble_use_site(rule, %{"value" => {:raw_text, "1 + 2 * 3"}})
+
+    assert {:binary_op, outer_meta, [_, {:binary_op, inner_meta, _}]} =
+             Parser.expand_example([rule], use_site)
+
+    assert outer_meta[:operator] == :+
+    assert inner_meta[:operator] == :*
   end
 
   test "module-aware generation resolves closed user enum categories" do
