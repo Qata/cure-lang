@@ -72,6 +72,33 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
              """)
   end
 
+  test "FSM transition algebra accepts distinct application state and event types" do
+    assert {:ok, _} =
+             Program.elaborate("""
+             mod TypedTransitions
+               use Std.Fsm
+
+               type Door = Open | Closed
+               type Event = Push | Pull
+
+               fn row() -> Transition(Door, Event) = transition(Closed(), Push(), Open())
+
+               fn step(state: Door, event: Event) -> Tuple(Atom, Door, Int) =
+                 dispatch([row()], state, event, 0)
+             """)
+
+    assert {:error, _} =
+             Program.elaborate("""
+             mod BadTypedTransition
+               use Std.Fsm
+
+               type Door = Open | Closed
+               type Event = Push | Pull
+
+               fn bad() -> Transition(Door, Event) = transition(Closed(), Push(), Push())
+             """)
+  end
+
   test "safe atom lookup preserves existing atoms without interning input" do
     assert :ok = :"Cure.Std.String".to_existing_atom(~c"ok")
 

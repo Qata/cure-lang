@@ -31,7 +31,7 @@ mod Std.Fsm
   ## an ordinary lifted GenStatem module; transition derivation and handlers
   ## are layered on top of this floor.
   macro FsmContainers
-    syntax transition <from: Atom> <event: Atom> <to: Atom> becomes Std.Fsm.transition(from, event, to)
+    syntax transition <from: Code> <event: Code> <to: Code> becomes Std.Fsm.transition(from, event, to)
 
     syntax fsm <name: ModuleName> state <state_type: Type> derive <event_body: Code> contextual computed by derive_fsm
 
@@ -42,7 +42,7 @@ mod Std.Fsm
       typealias State = state_type
       callback callback_mode() returns Atom = :handle_event_function
       callback init(initial: State) returns Effect(Tuple(Atom, Atom, State)) = %[:ok, Std.Fsm.first_state(table), initial]
-      callback handle_event(event_type: Atom, event: Atom, state: Atom, data: State) returns Effect(Tuple(Atom, Atom, State)) = Std.Fsm.dispatch(table, state, event, data)
+      callback handle_event(event_type: Atom, event: Atom, state: Atom, data: State) returns Effect(Tuple(Atom, Atom, State)) = Std.Fsm.dispatch_atom(table, state, event, data)
       fn start_link(initial: State) -> Effect(Tuple) = beam_ops start_statem name initial
 
     syntax fsm <name: ModuleName> state <state_type: Type> init <init_body: delayed raw until dedent> contextual becomes lift module name
@@ -141,7 +141,8 @@ mod Std.Fsm
       fn start_link(initial: p) -> Effect(Tuple) = beam_ops start_statem name initial
       body
 
-  type Transition = Row(Atom, Atom, Atom)
+  type Transition(state, event) = Row(state, event, state)
+  typealias AtomTransition = Transition(Atom, Atom)
 
   fn emit_fsm(input: FsmSyntax, event_body: Syntax) -> Syntax =
     match derive_pattern_heads(event_body)
@@ -201,14 +202,23 @@ mod Std.Fsm
   ## A transition row is ordinary data. The macro surface above expands rows to
   ## this checked ADT so users can compose, inspect, and transform tables with
   ## normal Cure functions.
-  fn transition(from: Atom, event: Atom, to: Atom) -> Transition = Row(from, event, to)
+  fn transition({s: Type}, {e: Type}, from: s, event: e, to: s) -> Transition(s, e) =
+    Row(from, event, to)
 
-  fn first_state(transitions: List(Transition)) -> Atom =
+  ## Compatibility helper for the original atom-labelled transition-table
+  ## macro. Typed callers use `first_state_or`, whose fallback has the same
+  ## state type as the table.
+  fn first_state(transitions: List(Transition(Atom, Atom))) -> Atom =
     match transitions
       [] -> :initial
       [Row(from, _, _) | _] -> from
 
-  fn dispatch(transitions: List(Transition), state: Atom, event: Atom, data: a) -> Tuple(Atom, Atom, a) =
+  fn first_state_or({s: Type}, {e: Type}, transitions: List(Transition(s, e)), fallback: s) -> s =
+    match transitions
+      [] -> fallback
+      [Row(from, _, _) | _] -> from
+
+  fn dispatch({s: Type}, {e: Type}, transitions: List(Transition(s, e)), state: s, event: e, data: a) -> Tuple(Atom, s, a) where Equatable(s), Equatable(e) =
     match transitions
       [] -> %[:next_state, state, data]
       [Row(from, expected, next) | rest] -> match state == from
@@ -216,6 +226,17 @@ mod Std.Fsm
           true -> %[:next_state, next, data]
           false -> dispatch(rest, state, event, data)
         false -> dispatch(rest, state, event, data)
+
+  ## Exact compatibility encoder used by the legacy atom-labelled table macro.
+  ## Keeping it separate lets the ordinary `dispatch` algebra remain generic.
+  fn dispatch_atom(transitions: List(Transition(Atom, Atom)), state: Atom, event: Atom, data: a) -> Tuple(Atom, Atom, a) =
+    match transitions
+      [] -> %[:next_state, state, data]
+      [Row(from, expected, next) | rest] -> match state == from
+        true -> match event == expected
+          true -> %[:next_state, next, data]
+          false -> dispatch_atom(rest, state, event, data)
+        false -> dispatch_atom(rest, state, event, data)
 
   ## FSM runtime operations: spawn, stop, send events, get state.
   ##
