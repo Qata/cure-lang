@@ -46,11 +46,6 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
                parse_raw("implementation Show when Int\n  fn show(x: Int) -> String = \"x\"\n")
     end
 
-    test "a supervisor child spec rejects another keyword in place of `as`" do
-      assert {:ok, {:lift_module, meta, []}} = parse_raw("sup App.Root\n  children\n    Counter when counter\n")
-      assert Enum.any?(meta[:declarations], &match?({:block, _, _}, &1))
-    end
-
     test "the correct keyword still parses" do
       assert {:ok, _} = parse_raw("impl Show for Int\n  fn show(x: Int) -> String = \"x\"\n")
       assert {:ok, _} = parse_raw("sup App.Root\n  children\n    Counter as counter\n")

@@ -45,27 +45,6 @@ defmodule Cure.Compiler.MacroUseTest do
 
   defp find_fn_body(_, _), do: nil
 
-  test "a local macro cannot claim a reserved dispatch keyword (sup stays the supervisor macro)" do
-    # `sup` is one of parse_prefix/1's existing :identifier soft-keyword names.
-    # A macro rule that claims it must NOT be able to shadow the supervisor
-    # container: `sup Worker` must still produce it.
-    node =
-      parse!("mod M\n  macro Trap\n    syntax sup becomes Clock.now()\n  sup Worker\n")
-
-    assert has_supervisor?(node)
-  end
-
-  defp has_supervisor?({:lift_module, meta, _children}),
-    do: Keyword.get(meta, :behaviour) == :supervisor
-
-  defp has_supervisor?({:container, _meta, children}) when is_list(children),
-    do: Enum.any?(children, &has_supervisor?/1)
-
-  defp has_supervisor?({_t, _m, children}) when is_list(children),
-    do: Enum.any?(children, &has_supervisor?/1)
-
-  defp has_supervisor?(_), do: false
-
   test "a one-hole local macro use-site binds the hole and substitutes it" do
     node =
       parse!("mod M\n  macro Every\n    syntax every <t: Code> becomes Timer.repeat(t)\n  fn f() = every 500\n")

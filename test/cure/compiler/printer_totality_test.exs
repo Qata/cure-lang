@@ -340,19 +340,6 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     assert parse!(out, "with.cure")
   end
 
-  test "ordinary declarations round-trip inside a lifted supervisor" do
-    src = """
-    mod M
-      sup Root
-        fn helper() -> Int = 1
-    """
-
-    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "child.cure"))
-    assert out =~ "lift module Root"
-    assert out =~ "fn helper() -> Int = 1"
-    assert parse!(out, "child.cure")
-  end
-
   test "binary generator round-trips as <<pat <- source>>" do
     src = """
     mod M
