@@ -89,6 +89,18 @@ actor-family, and live typed-FSM tests pass. The next ordered FSM item is typed
 event payload production; richer process APIs/lifecycle remain governed by the
 FSM specification.
 
+**Typed actor contract (2026-07-19).** The actor-first work required before
+further FSM expansion is specified by
+`../specs/2026-07-19-typed-actor-behavior-design.md`. The checked OTP carrier
+must distinguish asynchronous messages from synchronous requests on the same
+server PID; `actor` then derives nominal message/request/reply codes and thin
+typed adapters over that algebra. State remains the immutable accumulator of
+OTP's suspended mailbox loop. Universal state inspection, hidden caller state,
+the process dictionary, and a mandatory runtime registry are excluded. The
+ordered work is: honest server handle; generated actor API; modern typed
+message/query grammar; lifecycle/failures; optional capabilities; cleanup and
+the shared FSM gate.
+
 - **Transparent BEAM plan:** Phases 0, 1, 2, and 2.5 are COMPLETE. Phase 3 (`beam_ops`)
   is unblocked (2.5 done) and substantially landed. Phase 4 has replaced all four OTP
   forms — `sup`, `actor`, `fsm`, `app` each now lower through a source-defined
