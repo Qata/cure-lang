@@ -1,0 +1,45 @@
+@group(:concurrency)
+mod Std.Beam
+  use Std.Otp.Raw
+  use Std.Result
+
+  ## Opaque native term at the foreign boundary. It can be passed to trusted
+  ## primitives, but ordinary Cure code cannot inspect it or claim a type for it.
+  typealias BeamTerm = RawTerm
+
+  ## Why an inbound BEAM term could not be validated as the requested Cure type.
+  ## Decoding is deliberately separate from encoding: outbound conversion is
+  ## total, while a foreign term may have any tag or payload shape.
+  type BeamDecodeError = InvalidBeamTerm
+
+  ## Total translation of a typed Cure value to its native BEAM representation.
+  ## ADTs receive an automatically-derived implementation unless their owner
+  ## supplies a hand-written implementation.
+  interface BeamEncode(t)
+    fn to_beam(value: t) -> BeamTerm
+
+  ## Fallible validation of an opaque foreign term. Implementations are explicit
+  ## until structural decoder derivation can prove every field recursively.
+  interface BeamDecode(t)
+    fn from_beam(term: BeamTerm) -> Result(BeamDecodeError, t)
+
+  ## The primitive boundary used by derived and hand-written encoders. `raw_term`
+  ## is an erasing identity at runtime; the tuple merely prevents an unconstrained
+  ## polymorphic extern from manufacturing `RawTerm` in Core.
+  fn forget({a: Type}, value: a) -> BeamTerm =
+    raw_term(1, %[value, :beam_term])
+
+  implementation BeamEncode for Int
+    fn to_beam(value: Int) -> BeamTerm = forget(value)
+
+  implementation BeamEncode for Float
+    fn to_beam(value: Float) -> BeamTerm = forget(value)
+
+  implementation BeamEncode for Bool
+    fn to_beam(value: Bool) -> BeamTerm = forget(value)
+
+  implementation BeamEncode for Atom
+    fn to_beam(value: Atom) -> BeamTerm = forget(value)
+
+  implementation BeamEncode for String
+    fn to_beam(value: String) -> BeamTerm = forget(value)

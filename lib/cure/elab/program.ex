@@ -2503,9 +2503,10 @@ defmodule Cure.Elab.Program do
         # instance, THEN drain superinterface obligations against the now-complete
         # coherence table — so a hand-written `Comparable for T` may rely on the
         # auto-derived `Equatable for T` to satisfy its `requires Equatable(t)`.
-        with {:ok, env2, auto_fns} <- auto_derive_equatable(items, env_final),
-             :ok <- drain_superinterface_checks(env2, pending) do
-          {:ok, env2, fns ++ auto_fns}
+        with {:ok, env2, equatable_fns} <- auto_derive_equatable(items, env_final),
+             {:ok, env3, beam_fns} <- auto_derive_beam_encode(items, env2),
+             :ok <- drain_superinterface_checks(env3, pending) do
+          {:ok, env3, fns ++ equatable_fns ++ beam_fns}
         else
           {:error, _} = err -> err
         end
@@ -2574,9 +2575,10 @@ defmodule Cure.Elab.Program do
     # interface so the local interface + its own implementations register against a
     # clean slate. Genuinely-shared (non-redeclared) interfaces are untouched, so
     # global coherence for stdlib interfaces is preserved.
-    redeclared = for {:interface, meta, _body} <- items, into: MapSet.new() do
-      meta |> Keyword.fetch!(:name) |> String.to_atom()
-    end
+    redeclared =
+      for {:interface, meta, _body} <- items, into: MapSet.new() do
+        meta |> Keyword.fetch!(:name) |> String.to_atom()
+      end
 
     keys_to_drop =
       self_heads ++
@@ -2647,6 +2649,38 @@ defmodule Cure.Elab.Program do
             # BEFORE `register_signatures` runs — the hand-written method body is
             # never overwritten). Leave it authoritative, derive nothing.
             {:error, {:overlapping_instance, :Equatable, _head}} ->
+              {:cont, {:ok, acc, fns}}
+
+            {:error, _} = err ->
+              {:halt, err}
+          end
+      end
+    end)
+  end
+
+  defp auto_derive_beam_encode(items, env) do
+    case unary_interface_method_name(Env.get_interface(env, :BeamEncode)) do
+      nil -> {:ok, env, []}
+      method_name -> auto_derive_beam_encode(items, env, method_name)
+    end
+  end
+
+  defp unary_interface_method_name(nil), do: nil
+  defp unary_interface_method_name(%{method_order: [m]}), do: Atom.to_string(m)
+  defp unary_interface_method_name(_), do: nil
+
+  defp auto_derive_beam_encode(items, env, method_name) do
+    Enum.reduce_while(items, {:ok, env, []}, fn decl, {:ok, acc, fns} ->
+      case Cure.Elab.Deriving.beam_encode_instance(decl, method_name) do
+        :skip ->
+          {:cont, {:ok, acc, fns}}
+
+        {:ok, impl_ast} ->
+          case Cure.Elab.Implementation.register(impl_ast, acc) do
+            {:ok, acc2, mangled_fns, _obligations} ->
+              {:cont, {:ok, acc2, fns ++ mangled_fns}}
+
+            {:error, {:overlapping_instance, :BeamEncode, _head}} ->
               {:cont, {:ok, acc, fns}}
 
             {:error, _} = err ->

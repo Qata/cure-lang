@@ -138,6 +138,49 @@ defmodule Cure.Elab.Deriving do
 
   def struct_eq_instance(_decl, _method_name), do: :skip
 
+  @doc """
+  Synthesise the canonical zero-copy `BeamEncode` implementation for an ADT.
+
+  Cure constructors already erase to their native BEAM representation. The
+  generated method therefore calls `Std.Beam.forget/1`, which changes only the
+  static type to the opaque boundary carrier. Hand-written implementations win
+  through the ordinary coherence check in `Cure.Elab.Program`.
+  """
+  @spec beam_encode_instance(tuple(), String.t()) :: {:ok, tuple()} | :skip
+  def beam_encode_instance({:container, meta, body}, method_name) do
+    type_name = Keyword.fetch!(meta, :name)
+    type_params = Keyword.get(meta, :type_params, [])
+
+    case constructors(body) do
+      [] ->
+        :skip
+
+      _ctors ->
+        if Enum.any?(type_params, &upper_initial?/1) do
+          :skip
+        else
+          for_type = for_type_ast(type_name, type_params)
+          impl_meta = [interface: "BeamEncode", for: type_name, for_type: for_type, as: nil]
+          value = "beam_value"
+          params = [{:param, [type: for_type], value}]
+
+          method_meta = [
+            name: method_name,
+            params: params,
+            return_type: {:variable, [scope: :local], "BeamTerm"},
+            visibility: :public,
+            arity: 1
+          ]
+
+          body = {:function_call, [name: "Std.Beam.forget"], [var(value)]}
+          method = {:function_def, method_meta, [body]}
+          {:ok, {:implementation, impl_meta, [method]}}
+        end
+    end
+  end
+
+  def beam_encode_instance(_decl, _method_name), do: :skip
+
   # The single `` `==` ``(l: T, r: T) -> Bool = Std.Builtin.struct_eq(_, l, r)`
   # method clause. `T` is the fully-applied `for_type` (`Option(t)` for a
   # parametric type), used only to type the two value parameters — a
@@ -174,8 +217,7 @@ defmodule Cure.Elab.Deriving do
   # parameter names, so neither shadows a type variable that appears in `for_type`.
   defp operand_names(type_params) do
     Enum.find(
-      [{"left_value", "right_value"}, {"lhs_operand", "rhs_operand"},
-       {"equatable_left", "equatable_right"}],
+      [{"left_value", "right_value"}, {"lhs_operand", "rhs_operand"}, {"equatable_left", "equatable_right"}],
       {"left_value", "right_value"},
       fn {l, r} -> l not in type_params and r not in type_params end
     )
@@ -437,6 +479,7 @@ defmodule Cure.Elab.Deriving do
     do:
       {:attribute_access, [attribute: "Bool"],
        [{:attribute_access, [attribute: "Bool"], [{:variable, [scope: :local], "Std"}]}]}
+
   defp wildcard(), do: {:variable, [scope: :local], "_"}
   defp bool(b), do: {:literal, [subtype: :boolean], b}
   defp call(name, args), do: {:function_call, [name: name], args}
