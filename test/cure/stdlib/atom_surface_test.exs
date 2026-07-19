@@ -7,7 +7,11 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
     signatures = %{
       "lib/std/string.cure" => ["fn to_atom(s: String) -> Atom"],
       "lib/std/system.cure" => ["fn system_time(unit: Atom)", "fn system_info(key: Atom)"],
-      "lib/std/process.cure" => ["fn link(pid: Pid) -> Atom", "fn unlink(pid: Pid) -> Atom", "fn exit(pid: Pid, reason: Atom)"],
+      "lib/std/process.cure" => [
+        "fn link(pid: Pid) -> Atom",
+        "fn unlink(pid: Pid) -> Atom",
+        "fn exit(pid: Pid, reason: Atom)"
+      ],
       "lib/std/io.cure" => ["fn println(text: String) -> Atom", "fn print(text: String) -> Atom"],
       "lib/std/gen.cure" => ["fn seed(_alg: Atom"],
       "lib/std/test.cure" => ["fn assert(condition: Bool) -> Atom", "fn forall(gen: Atom ->"],
@@ -17,6 +21,7 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
 
     Enum.each(signatures, fn {file, forbidden} ->
       source = File.read!(file)
+
       Enum.each(forbidden, fn signature ->
         refute String.contains?(source, signature), "#{file} restored #{signature}"
       end)
@@ -104,6 +109,7 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
     assert :ok = :"Cure.Std.String".to_existing_atom(~c"ok")
 
     unknown = "cure_atom_surface_#{System.unique_integer([:positive])}"
+
     assert_raise ArgumentError, fn ->
       apply(:"Cure.Std.String", :to_existing_atom, [String.to_charlist(unknown)])
     end
