@@ -68,11 +68,6 @@ defmodule Cure.Compiler.AtomVMContainerTest do
 
       beams =
         [
-          Path.join(out, "Cure.AtomVMTestSup.beam"),
-          Path.join(out, "Cure.AtomVMTestWorker.beam"),
-          Path.join(out, "Cure.AtomVMTestApp.beam"),
-          Path.join(out, "Cure.AtomVMTestActor.beam"),
-          Path.join(out, "Cure.AtomVMTestFsm.beam"),
           Path.join(out, "Cure.AtomVMStructuredSup.beam"),
           Path.join(out, "Cure.AtomVMStructuredApp.beam"),
           Path.join(out, "Cure.AtomVMStructuredActor.beam"),
