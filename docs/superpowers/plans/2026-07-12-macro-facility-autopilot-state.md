@@ -1788,6 +1788,17 @@ old `get_state/1` helpers, and eager source-string/container compilation have
 been removed from the migrated surfaces. Historical documentation and ordinary
 Elixir `@impl` annotations remain unrelated to compiler OTP knowledge.
 
+**Macro-only stdlib runtime surface (2026-07-19).** The final parallel
+convenience tails in `Std.Actor`, `Std.Fsm`, `Std.Supervisor`, and `Std.App`
+have been removed. Those tails called `Cure.Actor.Builtins`,
+`Cure.FSM.Builtins`, `Cure.Sup.Builtins`, and `Cure.App.Builtins` and exposed a
+second runtime architecture beside the transparent macros. The four modules now
+own only source-defined macro derivation, checked helper data/functions, and
+ordinary calls into `Std.Otp`; each generated lifted module carries its own
+`start_link`/application callback surface. A dedicated forbidden-remnant test
+requires the macro and `Std.Otp` fragments and rejects restoration of any
+`.Builtins` bridge in these active stdlib modules.
+
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new
 user-defined behavior/macro must not require adding an OTP-specific compiler
