@@ -81,13 +81,12 @@ defmodule Cure.Compiler.FixityPropagationTest do
     {:ok, ordered, []} = Cure.Compiler.DepGraph.order(graph)
     providers = Cure.Compiler.prelude_provider_names(graph)
     assert "P" in providers
-    assert Enum.map(ordered, &Path.basename/1) == ["p.cure", "m.cure"]
 
     # Without the provider list, M cannot see `<?>` (it never `use`s P).
     assert {:error, _} = parse(File.read!(Path.join(dir, "m.cure")))
 
-    # The real driver boundary must do more than parse: P is an implicit import
-    # and order dependency, so M elaborates the operator meaning and runs.
+    # The real driver boundary must do more than parse: P is an implicit source
+    # import, so M elaborates the operator meaning regardless of sibling order.
     out = Path.join(dir, "ebin")
 
     Enum.each(ordered, fn path ->

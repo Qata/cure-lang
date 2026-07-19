@@ -257,9 +257,7 @@ defmodule Cure.Compiler.DepGraph do
   end
 
   defp finalize_node(%{blank?: true} = node, _modules, _universe, _prelude), do: node
-
-  defp finalize_node(%{parse_error: e} = node, _modules, universe, prelude_modules) when e != nil,
-    do: add_prelude_order_deps(node, universe, prelude_modules)
+  defp finalize_node(%{parse_error: e} = node, _modules, _universe, _prelude) when e != nil, do: node
 
   defp finalize_node(node, _modules, universe, prelude_modules) do
     closure =
@@ -270,31 +268,12 @@ defmodule Cure.Compiler.DepGraph do
       |> Enum.uniq()
       |> Enum.sort()
 
-    node
-    |> Map.put(:closure_deps, closure)
-    |> add_prelude_order_deps(universe, prelude_modules)
-  end
-
-  # Ambient prelude modules are implicit imports, not merely parser metadata:
-  # every other module must be compiled after them so their exported operator
-  # meanings are available to classic codegen as well as source elaboration.
-  defp add_prelude_order_deps(node, universe, prelude_modules) do
-    implicit =
-      prelude_modules
-      # Bundled `Std.*` preludes already use the compiler's established preload
-      # and bootstrap ordering. These new implicit order edges are only for user
-      # prelude providers; adding them among the stdlib modules creates a large
-      # artificial SCC and can change order-sensitive classic codegen.
-      |> Enum.reject(&String.starts_with?(&1, "Std."))
-      |> Enum.filter(&(MapSet.member?(universe, &1) and &1 != node.module))
-      |> Enum.map(&%{target: &1, line: node.line || 1})
-
     order_deps =
-      (node.order_deps ++ implicit)
+      node.order_deps
       |> Enum.reject(&(&1.target == node.module))
       |> Enum.uniq_by(& &1.target)
 
-    %{node | order_deps: order_deps}
+    %{node | closure_deps: closure, order_deps: order_deps}
   end
 
   defp prelude_decorated?(ast) do
