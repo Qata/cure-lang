@@ -146,6 +146,13 @@ mod Std.Otp.Raw
   @extern(:gen_server, :call, 2)
   fn raw_call({q: Type}, {r: Type}, server: RawPid(q, r, Server), req: q) -> Effect(r)
 
+  ## Dependent-reply variant of `raw_call`: the server's reply-index slot `kr` and the RESULT `res` are
+  ## DECOUPLED, so the caller may choose `res = ReplyOf(request)` — a function of the EXPLICIT request. Same BIF
+  ## (`gen_server:call/2`), same partiality/trust as `raw_call`; `Std.Otp.call_dep` threads it, with server-side
+  ## soundness in `Std.Otp.Proof`.
+  @extern(:gen_server, :call, 2)
+  fn raw_call_dep({q: Type}, {kr: Type}, {res: Type}, server: RawPid(q, kr, Server), req: q) -> Effect(res)
+
   ## Reply explicitly to a `gen_server` caller. The public wrapper gives the
   ## callback-side `from` value a linear binder before consuming it.
   @extern(:gen, :reply, 2)

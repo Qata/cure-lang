@@ -26,6 +26,7 @@ defmodule Cure.Stdlib.OtpRawPinTest do
     # `:gen.reply/2` returns the atom `:ok` after delivering the reply.
     "raw_reply" => "Effect(Atom)",
     "raw_call" => "Effect(r)",
+    "raw_call_dep" => "Effect(res)",
     "raw_link" => "Effect(Bool)",
     "raw_unlink" => "Effect(Bool)",
     "raw_exit" => "Effect(Bool)",
