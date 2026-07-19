@@ -58,6 +58,33 @@ defmodule Cure.Compiler.MacroStagedResolutionTest do
     purge(:StagedAmbiguousResolution)
   end
 
+  test "a recursively expanded lifted module resolves a derived BeamEncode dictionary" do
+    source = """
+    mod StagedBeamDictionary
+      use Std.Syntax
+      use Std.Beam
+
+      type ChildIdentity = Worker | OtherWorker deriving BeamEncode
+
+      macro Boundary
+        syntax boundary <name: ModuleName> becomes lift module name
+          use Std.Beam
+          behaviour gen_server
+          fn encode(id: ChildIdentity) -> BeamTerm = to_beam(id)
+          fn encoded() -> BeamTerm = encode(Worker())
+
+      boundary Cure.Generated.StagedBeamBoundary
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.StagedBeamDictionary"
+    assert apply(:"Cure.Generated.StagedBeamBoundary", :encoded, []) == :Worker
+  after
+    purge(:StagedBeamDictionary)
+    :code.purge(:"Cure.Generated.StagedBeamBoundary")
+    :code.delete(:"Cure.Generated.StagedBeamBoundary")
+  end
+
   defp purge(name) do
     module = Module.concat(Cure, name)
     :code.purge(module)
