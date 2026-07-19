@@ -101,6 +101,18 @@ mod Std.Otp.Raw
   @extern(:erlang, :is_tuple, 1)
   fn raw_term_is_tuple(term: RawTerm) -> Bool
 
+  @extern(:erlang, :is_integer, 1)
+  fn raw_term_is_integer(term: RawTerm) -> Bool
+
+  @extern(:erlang, :is_float, 1)
+  fn raw_term_is_float(term: RawTerm) -> Bool
+
+  @extern(:erlang, :is_boolean, 1)
+  fn raw_term_is_boolean(term: RawTerm) -> Bool
+
+  @extern(:erlang, :is_binary, 1)
+  fn raw_term_is_binary(term: RawTerm) -> Bool
+
   @extern(:erlang, :tuple_size, 1)
   fn raw_term_tuple_size(term: RawTerm) -> Int
 
@@ -112,6 +124,18 @@ mod Std.Otp.Raw
 
   @extern(:erlang, :element, 2)
   fn raw_term_pid(index: Int, checked: Tuple(RawTerm, Atom)) -> BarePid
+
+  @extern(:erlang, :element, 2)
+  fn raw_term_integer(index: Int, checked: Tuple(RawTerm, Atom)) -> Int
+
+  @extern(:erlang, :element, 2)
+  fn raw_term_float(index: Int, checked: Tuple(RawTerm, Atom)) -> Float
+
+  @extern(:erlang, :element, 2)
+  fn raw_term_boolean(index: Int, checked: Tuple(RawTerm, Atom)) -> Bool
+
+  @extern(:erlang, :element, 2)
+  fn raw_term_string(index: Int, checked: Tuple(RawTerm, Atom)) -> String
 
   ## Attach erased actor protocol indices to an already PID-validated carrier.
   ## This is the construction trust point used by Std.Otp.start_actor; it does

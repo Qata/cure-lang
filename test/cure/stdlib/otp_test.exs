@@ -299,6 +299,10 @@ defmodule Cure.Stdlib.OtpTest do
         None() -> None()
       fn decode_atom_value(term: BeamTerm) -> Result(Atom, BeamDecodeError) = decode_atom(term)
       fn decode_pid_value(term: BeamTerm) -> Result(BarePid, BeamDecodeError) = decode_pid(term)
+      fn decode_int_value(term: BeamTerm) -> Result(Int, BeamDecodeError) = from_beam(term)
+      fn decode_float_value(term: BeamTerm) -> Result(Float, BeamDecodeError) = from_beam(term)
+      fn decode_bool_value(term: BeamTerm) -> Result(Bool, BeamDecodeError) = from_beam(term)
+      fn decode_string_value(term: BeamTerm) -> Result(String, BeamDecodeError) = from_beam(term)
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
@@ -312,6 +316,14 @@ defmodule Cure.Stdlib.OtpTest do
     assert apply(module, :decode_atom_value, [self()]) == {:error, :InvalidBeamTerm}
     assert apply(module, :decode_pid_value, [self()]) == {:ok, self()}
     assert apply(module, :decode_pid_value, [:ready]) == {:error, :InvalidBeamTerm}
+    assert apply(module, :decode_int_value, [7]) == {:ok, 7}
+    assert apply(module, :decode_int_value, [7.0]) == {:error, :InvalidBeamTerm}
+    assert apply(module, :decode_float_value, [7.0]) == {:ok, 7.0}
+    assert apply(module, :decode_float_value, [7]) == {:error, :InvalidBeamTerm}
+    assert apply(module, :decode_bool_value, [true]) == {:ok, true}
+    assert apply(module, :decode_bool_value, [:ready]) == {:error, :InvalidBeamTerm}
+    assert apply(module, :decode_string_value, ["beam"]) == {:ok, "beam"}
+    assert apply(module, :decode_string_value, [:beam]) == {:error, :InvalidBeamTerm}
   end
 
   test "a sequenced typed conversation elaborates (tell then call, via effect bind)" do

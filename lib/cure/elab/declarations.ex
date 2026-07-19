@@ -982,6 +982,13 @@ defmodule Cure.Elab.Declarations do
       name == "reflexive" ->
         Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
+      atom && Cure.Elab.Resolve.result_dispatched_method?(env, atom) ->
+        # A method such as `BeamDecode.from_beam : BeamTerm -> Result(t, E)`
+        # determines its interface head from the declared result, not an input.
+        # Keep the body in checking mode so result-directed instance selection
+        # receives that goal instead of classifying the BeamTerm argument.
+        Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
       # A call whose declared return type mentions a generated anonymous-union family
       # must be CHECKED, not inferred. Inferring `Std.Map.put(:a, 1, …)` solves the
       # map's implicit `v := Int` from the first value argument, and only then compares
@@ -1719,9 +1726,7 @@ defmodule Cure.Elab.Declarations do
     dom_exprs
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, [], []}, fn {dom, i},
-                                                                                       {:ok, tele,
-                                                                                        scope, names,
-                                                                                        plics} ->
+                                                                                        {:ok, tele, scope, names, plics} ->
       # A NAMED / IMPLICIT dependent binder uses its declared name (so later
       # domains and the result index can reference it); an unnamed arg keeps its
       # anonymous `_aN` name byte-for-byte. Either way the scope is threaded so
@@ -1736,8 +1741,7 @@ defmodule Cure.Elab.Declarations do
       case idx_to_core(type_expr, scope, fam, env) do
         {:ok, core} ->
           {:cont,
-           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname],
-            plics ++ [plicity]}}
+           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname], plics ++ [plicity]}}
 
         {:error, _} = err ->
           {:halt, err}

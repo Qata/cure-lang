@@ -23,6 +23,14 @@ defmodule Cure.Elab.Resolve do
   @spec method?(Env.t(), atom()) :: boolean()
   def method?(env, atom), do: Interface.for_method(env, atom) != nil
 
+  @doc "Does this interface method determine its instance head only from its result?"
+  def result_dispatched_method?(env, method) do
+    case Interface.for_method(env, method) do
+      nil -> false
+      desc -> is_nil(head_argument_index(desc, method))
+    end
+  end
+
   @doc "Does `atom` name a global function that carries `where` constraints?"
   @spec constrained?(Env.t(), atom()) :: boolean()
   def constrained?(env, atom), do: Env.constrained(env, atom) != nil
@@ -48,6 +56,42 @@ defmodule Cure.Elab.Resolve do
         {:rigid, lvl} -> abstract(env, desc, method, args, lvl, names, ctx)
         {:unknown, tval2} -> {:error, {:no_instance, desc.name, tval2}}
       end
+    end
+  end
+
+  @doc "Resolve a result-dispatched method using its checking-mode expected type."
+  def method_call_checked(env, method, args, expected_core, names, ctx) do
+    desc = Interface.for_method(env, method)
+
+    candidates =
+      case Env.coherence(env) do
+        %Coherence{anon: anon} ->
+          for {{iface, _head}, ref} <- anon, iface == desc.name, do: ref
+
+        _ ->
+          []
+      end
+
+    successes =
+      Enum.reduce(candidates, [], fn ref, acc ->
+        mangled = Map.fetch!(ref.methods, method)
+
+        case Elaborator.elaborate_implicit_global_app(env, mangled, args, names, ctx) do
+          {:ok, term, type} ->
+            case Cure.Core.Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+              :ok -> [{term, type} | acc]
+              {:error, _} -> acc
+            end
+
+          {:error, _} ->
+            acc
+        end
+      end)
+
+    case successes do
+      [{term, _type}] -> {:ok, term}
+      [] -> {:error, {:no_instance, desc.name, expected_core}}
+      _ -> {:error, {:ambiguous_instance_for_expected_type, desc.name, expected_core}}
     end
   end
 
@@ -110,6 +154,10 @@ defmodule Cure.Elab.Resolve do
   #
   # `Interface.collect_head_uses/3` classifies the same two shapes; keep them aligned.
   defp head_param_index(desc, method) do
+    head_argument_index(desc, method) || 0
+  end
+
+  defp head_argument_index(desc, method) do
     info = Map.fetch!(desc.methods, method)
     hv = desc.head_var
 
@@ -126,7 +174,7 @@ defmodule Cure.Elab.Resolve do
     # `|| 0` is unreachable for any interface `Interface.infer_head_kind/3` accepted
     # (it requires at least one bare or applied use somewhere in the interface), but a
     # method that mentions the head only in its RETURN type has no head parameter.
-    bare || applied || 0
+    bare || applied
   end
 
   # `f(a)` — the head variable in applied (higher-kinded) position. A function type
