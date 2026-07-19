@@ -1437,10 +1437,11 @@ defmodule Cure.Compiler.Printer do
         true -> "becomes"
       end
 
+    obligations = macro_obligations_to_string(rule)
     context = if rule[:contextual], do: " contextual", else: ""
 
     head =
-      "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} #{verb} #{render(template, depth, indent)}"
+      "syntax #{keyword} #{macro_segments_to_string(segments)}#{obligations}#{context} #{verb} #{render(template, depth, indent)}"
 
     [head | macro_rule_examples(rule, depth, indent)]
   end
@@ -1450,11 +1451,12 @@ defmodule Cure.Compiler.Printer do
   # and the catch-all dropped it — silently deleting the legacy `syntax actor …
   # computed by derive_actor` rule (whence the generated `ActorSyntax` record).
   defp macro_rule_lines(%{kind: :computed, keyword: keyword, segments: segments, elab: elab} = rule, depth, indent) do
+    obligations = macro_obligations_to_string(rule)
     context = if rule[:contextual], do: " contextual", else: ""
     verb = if rule[:direct_inputs], do: "computed directly by", else: "computed by"
 
     head =
-      "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} #{verb} #{render(elab, depth, indent)}"
+      "syntax #{keyword} #{macro_segments_to_string(segments)}#{obligations}#{context} #{verb} #{render(elab, depth, indent)}"
 
     [head | macro_rule_examples(rule, depth, indent)]
   end
@@ -1521,7 +1523,15 @@ defmodule Cure.Compiler.Printer do
         _ -> ""
       end
 
-    "#{prefix}#{name} #{shape}"
+    "#{prefix}#{name} #{shape}#{macro_obligations_to_string(field)}"
+  end
+
+  defp macro_obligations_to_string(owner) do
+    owner
+    |> Map.get(:obligations, [])
+    |> Enum.map_join("", fn %{interface: interface, capture: capture} ->
+      " where #{interface}(#{capture})"
+    end)
   end
 
   # Reconstruct a `:computed_use` invocation's surface by walking the matched

@@ -306,8 +306,11 @@ defmodule Cure.Compiler.Parser do
   # itself loading, no prelude literal rules are active (self-reference guard).
   defp prelude_literal_macros do
     case {Process.get(:cure_loading_prelude), :persistent_term.get({__MODULE__, :prelude_literal_macros}, :missing)} do
-      {true, _} -> %{}
-      {_, rules} when is_map(rules) -> rules
+      {true, _} ->
+        %{}
+
+      {_, rules} when is_map(rules) ->
+        rules
 
       _ ->
         load_prelude_macros()
@@ -2840,8 +2843,10 @@ defmodule Cure.Compiler.Parser do
         {:expr, expr_tokens} ->
           # Append an EOF token so the sub-parser terminates
           sub_tokens = expr_tokens ++ [Token.new(:eof, nil, token.line, token.col)]
+
           sub_state =
             put_tokens(%__MODULE__{file: state.file, emit_events: false}, sub_tokens)
+
           {expr, _} = parse_expr(sub_state, 0)
           expr
       end)
@@ -7094,12 +7099,14 @@ defmodule Cure.Compiler.Parser do
         shape_token = peek(state)
         shape = to_string(shape_token.value)
         state = advance(state)
+        {obligations, state} = parse_capture_obligations(state, [field])
         state = consume_line_end(state)
 
         field_entry = %{
           kind: :family_field,
           name: field,
           shape: shape,
+          obligations: obligations,
           cardinality: cardinality,
           line: token.line,
           col: token.col
@@ -7161,6 +7168,7 @@ defmodule Cure.Compiler.Parser do
 
     {segments, state} = parse_rule_segments(state, [])
     {category, state} = parse_rule_category(state)
+    {obligations, state} = parse_capture_obligations(state, macro_syntax_fields(segments))
 
     {contextual, state} =
       case peek(state) do
@@ -7170,15 +7178,40 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :identifier, value: "computed"} ->
-        parse_computed_rule(state, kw_token, keyword, segments, category, contextual)
+        parse_computed_rule(state, kw_token, keyword, segments, category, contextual, obligations)
 
       _ ->
-        parse_becomes_rule(state, kw_token, keyword, segments, category, contextual)
+        parse_becomes_rule(state, kw_token, keyword, segments, category, contextual, obligations)
+    end
+  end
+
+  defp parse_capture_obligations(state, capture_names, obligations \\ []) do
+    case peek(state) do
+      %Token{value: value} = token when value in ["where", :where] ->
+        {interface, state} = parse_dotted_name(advance(state))
+        state = expect(state, :lparen)
+        capture_token = peek(state)
+        capture = to_string(capture_token.value)
+        state = advance(state)
+        state = expect(state, :rparen)
+
+        state =
+          if capture in capture_names do
+            state
+          else
+            add_error(state, {:unknown_macro_obligation_capture, capture, token.line, token.col})
+          end
+
+        obligation = %{interface: interface, capture: capture, line: token.line, col: token.col}
+        parse_capture_obligations(state, capture_names, obligations ++ [obligation])
+
+      _ ->
+        {obligations, state}
     end
   end
 
   # Tier-2: `becomes <template>` (unchanged behaviour, just extracted).
-  defp parse_becomes_rule(state, kw_token, keyword, segments, category, contextual) do
+  defp parse_becomes_rule(state, kw_token, keyword, segments, category, contextual, obligations) do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "becomes"} -> advance(state)
@@ -7196,6 +7229,7 @@ defmodule Cure.Compiler.Parser do
       examples: examples,
       category: category,
       contextual: contextual,
+      obligations: obligations,
       module_rule: keyword == "module",
       progress: nil,
       line: kw_token.line
@@ -7208,7 +7242,7 @@ defmodule Cure.Compiler.Parser do
   # reference; running it is a later slice. NOT harvested into active_macros
   # (harvest filters kind: :syntax), so a computed macro's use-site is inert
   # until the execution slice lands.
-  defp parse_computed_rule(state, kw_token, keyword, segments, category, contextual) do
+  defp parse_computed_rule(state, kw_token, keyword, segments, category, contextual, obligations) do
     state = advance(state)
 
     # Optional `directly` opt-in: the elab fn receives each matched hole as its
@@ -7243,6 +7277,7 @@ defmodule Cure.Compiler.Parser do
       examples: examples,
       category: category,
       contextual: contextual,
+      obligations: obligations,
       module_rule: keyword == "module",
       progress: nil,
       line: kw_token.line
@@ -7331,6 +7366,7 @@ defmodule Cure.Compiler.Parser do
 
   defp optional_segment_inputs({:declarations_hole, %{name: name}}, bindings),
     do: [Map.get(bindings, name)]
+
   defp optional_segment_inputs({:repeat, segment}, bindings), do: optional_segment_inputs(segment, bindings)
 
   defp optional_segment_inputs({:optional, segments}, bindings),
@@ -7542,6 +7578,9 @@ defmodule Cure.Compiler.Parser do
       # same trade-off `becomes` already made alone. No known `.cure` source
       # relies on `computed` as a matched token.
       %Token{type: :identifier, value: v} when v in ["becomes", "computed", "is", "contextual"] ->
+        {Enum.reverse(acc), state}
+
+      %Token{value: value} when value in ["where", :where] and mode == :rule ->
         {Enum.reverse(acc), state}
 
       %Token{type: type} when type in [:newline, :dedent, :eof] ->
