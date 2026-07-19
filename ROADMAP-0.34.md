@@ -160,6 +160,49 @@ rejected before authoritative parsing. An ambient user-prelude operator brings
 both its syntax and its Cure definition into elaboration, so sibling modules
 can compile and call it without an explicit `use`.
 
+Fixity follows ordinary `use` edges, including transitively:
+
+```cure
+mod MathOps
+  precedencegroup BetweenAddAndMul
+    associativity: left
+    higher_than: Additive
+    lower_than: Multiplicative
+
+  infix `<?>` : BetweenAddAndMul
+  fn `<?>`(x: Int, y: Int) -> Int = x * x + y
+end
+
+mod Helpers
+  use MathOps
+end
+
+mod Example
+  use Helpers
+  fn result() -> Int = 2 + 3 <?> 4 * 5
+end
+```
+
+A project-local prelude makes an operator ambient to sibling modules; its
+definition is imported along with its grammar:
+
+```cure
+@prelude
+mod Project.Operators
+  precedencegroup PipelineChoice
+    associativity: left
+    higher_than: Pipe
+
+  infix choose : PipelineChoice
+  fn choose(fallback: Int, chosen: Int) -> Int = chosen
+end
+
+mod Project.Main
+  # No `use Project.Operators` is required in a multi-file project build.
+  fn answer() -> Int = 0 choose 42
+end
+```
+
 ---
 
 ## 5. FFI & effects
