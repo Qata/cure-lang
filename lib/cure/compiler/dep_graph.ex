@@ -281,6 +281,11 @@ defmodule Cure.Compiler.DepGraph do
   defp add_prelude_order_deps(node, universe, prelude_modules) do
     implicit =
       prelude_modules
+      # Bundled `Std.*` preludes already use the compiler's established preload
+      # and bootstrap ordering. These new implicit order edges are only for user
+      # prelude providers; adding them among the stdlib modules creates a large
+      # artificial SCC and can change order-sensitive classic codegen.
+      |> Enum.reject(&String.starts_with?(&1, "Std."))
       |> Enum.filter(&(MapSet.member?(universe, &1) and &1 != node.module))
       |> Enum.map(&%{target: &1, line: node.line || 1})
 
