@@ -61,6 +61,9 @@ defmodule Cure.Core.Quote do
 
   def reify({:vctor, name, vs}, depth, sig), do: {:ctor, name, Enum.map(vs, &reify(&1, depth, sig))}
 
+  # NOTE(int-facade): kept so read-back stays total on a legacy/deserialized
+  # `{:vint_type}` value, even though fresh elaboration never produces one
+  # (spec 2026-07-18 §3a).
   def reify({:vint_type}, _depth, _sig), do: {:int_type}
   def reify({:vint, n}, _depth, _sig), do: {:int_lit, n}
   # Read a compact Nat back to a compact literal term — NOT an `S`-tower (which

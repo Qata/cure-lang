@@ -46,6 +46,8 @@ defmodule Cure.Core.MetaCheck do
   defp canonical_head?({:type, _}), do: true
   defp canonical_head?({:pi, _, _, _}), do: true
   defp canonical_head?({:data, _, _, _}), do: true
+  # NOTE(int-facade): kept for totality on a legacy/deserialized `{:int_type}`
+  # node; fresh elaboration never produces one (spec 2026-07-18 §3a).
   defp canonical_head?({:int_type}), do: true
   defp canonical_head?({:int_lit, _}), do: true
   defp canonical_head?({:nat_lit, _}), do: true

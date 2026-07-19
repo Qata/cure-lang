@@ -4789,6 +4789,10 @@ defmodule Cure.Elab.Elaborator do
 
   # A Bool scrutinee is now the inductive family (`{:vdata, :Bool, []}`), resolved
   # via the registry; Int/Float stay primitive type-values.
+  #
+  # NOTE(int-facade): `{:vint_type}` is retired from surface production (spec
+  # 2026-07-18 §3a); this clause stays so scrutinee-kind resolution remains
+  # total on a legacy/deserialized value still carrying it.
   defp primitive_scrut_kind({:vint_type}, _sig), do: {:ok, :int}
   defp primitive_scrut_kind({:vfloat_type}, _sig), do: {:ok, :float}
   # `Atom` is a sealed primitive base type; its `==`/`!=` lowers to the polymorphic

@@ -1,13 +1,20 @@
 @group(:core)
 mod Std.Proof.IntMath
-  ## Proof-carrying facts about the primitive `Int`.
+  ## Proof-carrying facts about `Int`, via decidable-Boolean reflection.
   ##
-  ## `Int` is a primitive, not an inductive, so it admits no structural
-  ## induction. Following Idris (`So`/`Oh`), Agda (`T`), and Lean (`Decidable`),
-  ## this module reflects a *decidable Boolean condition* into a proposition:
-  ## the primitive comparisons already fold to the inductive `Bool`, so a closed
-  ## condition reduces to `True()` and is inhabited by pure computation, while an
-  ## open condition is carried as evidence by whoever constructs the value.
+  ## Following Idris (`So`/`Oh`), Agda (`T`), and Lean (`Decidable`), this module
+  ## reflects a *decidable Boolean condition* into a proposition: the comparisons
+  ## already fold to the inductive `Bool`, so a closed condition reduces to
+  ## `True()` and is inhabited by pure computation, while an open condition is
+  ## carried as evidence by whoever constructs the value. This reflection is the
+  ## refinement-surface encoding and is entirely generic over the reflected
+  ## `Bool` — it does NOT depend on how `Int` is represented.
+  ##
+  ## (`Int` is now the inductive family `FromNat(Nat) | NegativeSuccessor(Nat)`
+  ## rather than a primitive, so open arithmetic `IsTrue`-claims can additionally
+  ## be discharged by structural induction — see `Std.Proof.IntOrder`. The
+  ## `IsTrue`/`Confirmed`/`decide_is_true` machinery below is unchanged and
+  ## continues to coexist as the decidable-Boolean reflector.)
 
   use Std.Bool
   use Std.Decision

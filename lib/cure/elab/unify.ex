@@ -530,6 +530,8 @@ defmodule Cure.Elab.Unify do
   defp escapes?({:meta, _}, _depth, _local), do: false
   defp escapes?({:type, _}, _depth, _local), do: false
   defp escapes?({:global, _}, _depth, _local), do: false
+  # NOTE(int-facade): kept for totality on a legacy/deserialized `{:int_type}`
+  # node; fresh elaboration never produces one (spec 2026-07-18 §3a).
   defp escapes?({:int_type}, _depth, _local), do: false
   defp escapes?({:int_lit, _}, _depth, _local), do: false
   defp escapes?({:nat_lit, _}, _depth, _local), do: false

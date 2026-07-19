@@ -2789,8 +2789,17 @@ defmodule Cure.Elab.Declarations do
   defp pi_arity(_), do: 0
 
   # The fixed tag→Core-node table — the ONLY inherent mapping (keyed by builtin
-  # tag, not by surface name). Exactly four tags are legal.
-  defp primitive_tag_node(:int), do: {:ok, {:int_type}}
+  # tag, not by surface name). Exactly three tags are legal now that `Int` has
+  # moved off the primitive floor onto the inductive `Std.Int#Int` family
+  # (spec 2026-07-18-inductive-int §3a(i)): `:int` is NOT a valid `@builtin`
+  # primitive tag anymore. Without this clause, `confirm_primitive_floor/3`
+  # trivially accepts ANY `@builtin(_) primitive Int` declaration — `Env.primitive
+  # (env, "Int")` is now `nil` (Int is no longer seeded as a primitive), so the
+  # floor-disagreement guard has nothing to disagree with — silently creating an
+  # incoherent `{:int_type}`/`{:float_type}`-shaped local binding for `Int` that
+  # only fails much later, at codegen, with a cryptic `conversion_failure`
+  # against the family type. Rejecting `:int` here at the declaration site closes
+  # that hole with a clear, early diagnostic instead.
   defp primitive_tag_node(:float), do: {:ok, {:float_type}}
   defp primitive_tag_node(:binary), do: {:ok, {:binary_type}}
   defp primitive_tag_node(:atom), do: {:ok, {:atom_type}}

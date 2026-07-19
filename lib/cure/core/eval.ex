@@ -67,6 +67,9 @@ defmodule Cure.Core.Eval do
   # Primitive Int/Float literals. Arithmetic is builtin-op GLOBALS (K2, spec
   # 2026-07-09): Eval leaves every global neutral; the certified-δ engine
   # (Normalise) folds saturated literal spines via `fold/2` below.
+  # NOTE(int-facade): `{:int_type}` no longer arises from surface elaboration
+  # (spec 2026-07-18 §3a) but this clause stays so `Eval` remains total on any
+  # legacy/deserialized term that still carries the retired primitive node.
   def eval({:int_type}, _env), do: {:vint_type}
   def eval({:int_lit, n}, _env), do: {:vint, n}
 
