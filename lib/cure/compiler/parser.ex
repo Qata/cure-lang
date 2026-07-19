@@ -2745,11 +2745,13 @@ defmodule Cure.Compiler.Parser do
   defp parse_rewrite(state, token) do
     state = advance(state)
     {proof, state} = parse_expr(state, 0)
-    # `in` may sit on the next line for a multi-line `rewrite … in …` chain. `rewrite`
-    # always requires `in`, so skipping newlines to find it is unambiguous; `skip_newlines`
-    # skips only `:newline` (never `:indent`/`:dedent`), so it cannot cross a branch boundary.
+    # `in` may sit on the next line for a multi-line `rewrite … in …` chain, and the BODY may
+    # likewise start on the line after `in`. `rewrite` always requires both, so skipping newlines
+    # to find each is unambiguous; `skip_newlines` skips only `:newline` (never `:indent`/`:dedent`),
+    # so it cannot cross a branch boundary — a missing `in`/body still stops at the dedent and errors.
     state = skip_newlines(state)
     state = expect_keyword(state, :in)
+    state = skip_newlines(state)
     {body, state} = parse_expr(state, 0)
     {{:rewrite_expr, [line: token.line, col: token.col], [proof, body]}, state}
   end

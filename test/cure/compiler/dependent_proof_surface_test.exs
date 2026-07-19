@@ -74,4 +74,47 @@ defmodule Cure.Compiler.DependentProofSurfaceTest do
     assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
     assert apply(mod, :plus_zero_right, [{:S, {:S, :Z}}]) == :reflexive
   end
+
+  test "rewrite … in parses (and proves) with the BODY on the next line" do
+    # Symmetric to the previous test: the body after `in` may start on the next line. The parser
+    # must skip the newline AFTER `in` before reading the body (regression: `:unexpected_token :newline`).
+    src = """
+    mod ProofRewriteBodyMultiline
+      type Nat = Z | S(Nat)
+      fn plus(m: Nat, n: Nat) -> Nat = match m
+        Z() -> n
+        S(k) -> S(plus(k, n))
+      fn plus_zero_right(n: Nat) -> Equivalent(Nat, plus(n, Z), n) = match n
+        Z() -> reflexive(Z)
+        S(k) ->
+          rewrite plus_zero_right(k) in
+          reflexive(S(k))
+    end
+    """
+
+    assert {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert apply(mod, :plus_zero_right, [{:S, {:S, :Z}}]) == :reflexive
+  end
+
+  test "a multi-line rewrite CHAIN parses (body of each `in` on the next line)" do
+    # A `rewrite … in / rewrite … in / body` chain spanning several lines must parse — each `in`
+    # skips the following newline before the next form. Parse-level check (the grammar is what is
+    # under test; the proof's soundness is covered by the oracle probe `mailbox_exhaustive`).
+    src = """
+    mod ProofRewriteChain
+      use Std.Equivalent
+      type Nat = Z | S(Nat)
+      fn plus(m: Nat, n: Nat) -> Nat = match m
+        Z() -> n
+        S(k) -> S(plus(k, n))
+      fn chain(n: Nat, e: Equivalent(Nat, plus(n, Z), n)) -> Equivalent(Nat, plus(n, Z), n) =
+        rewrite e in
+        rewrite e in
+        reflexive(n)
+    end
+    """
+
+    assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(src, emit_events: false)
+    assert {:ok, _ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
+  end
 end

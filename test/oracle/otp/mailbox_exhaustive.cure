@@ -75,7 +75,10 @@ mod MailboxExhaustive
   ## steps — every receive obligation discharged, never stuck.
   fn exhaustive_progress(set: TagSet, s: Session, hcov: Equivalent(Bool, covers(set, s), T())) -> Equivalent(Nat, steps(set, s), len(s)) = match s
     SEnd()        -> reflexive(Z())
-    SRecv(t, k)   -> rewrite andb_true_l(member(set, t), covers(set, k), hcov) in rewrite exhaustive_progress(set, k, andb_true_r(member(set, t), covers(set, k), hcov)) in reflexive(S(len(k)))
+    SRecv(t, k)   ->
+      rewrite andb_true_l(member(set, t), covers(set, k), hcov) in
+      rewrite exhaustive_progress(set, k, andb_true_r(member(set, t), covers(set, k), hcov)) in
+      reflexive(S(len(k)))
   ## Necessity, concretely: mailbox `{TA}` does NOT cover a session expecting `TB`, so the loop stalls at 0 steps
   ## while the protocol still had one obligation (`len = 1`). Coverage is thus exactly the no-stuck condition.
   fn stuck_example() -> Equivalent(Nat, steps(TCons(TA(), TNil()), SRecv(TB(), SEnd())), Z()) = reflexive(Z())
