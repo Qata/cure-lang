@@ -151,12 +151,13 @@ defmodule Cure.Elab.GuardLint do
 
   defp int_form(_other, _ctx, _st), do: :error
 
-  # An `Int`-typed operand. Post-2026-07-18 surface flip, `Int` is the nullary
-  # inductive family `{:vdata, int_fid, []}` (the primitive `{:vint_type}` node is
-  # retired for value terms); the facade value is still tolerated so a legacy
-  # `{:vint_type}`-typed operand (serialization round-trips, old envs) keeps
-  # rendering. Any other family (e.g. `Nat`, `Float`) is NOT int → uninterpreted
-  # fallback, exactly as the float gate did before.
+  # NOTE(int-facade): An `Int`-typed operand. Post-2026-07-18 surface flip, `Int`
+  # is the nullary inductive family `{:vdata, int_fid, []}` (the primitive
+  # `{:vint_type}` node is retired for value terms); the facade value is still
+  # tolerated so a legacy `{:vint_type}`-typed operand (serialization
+  # round-trips, old envs) keeps rendering. Any other family (e.g. `Nat`,
+  # `Float`) is NOT int → uninterpreted fallback, exactly as the float gate did
+  # before.
   defp int_typed?({:vint_type}, _sig), do: true
   defp int_typed?({:vdata, fid, []}, sig), do: fid == Cure.Core.Inductive.builtin(sig, :int)
   defp int_typed?(_ty, _sig), do: false

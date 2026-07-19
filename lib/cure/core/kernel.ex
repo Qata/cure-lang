@@ -59,6 +59,10 @@ defmodule Cure.Core.Kernel do
   # Primitive Int/Bool/Float: base types live in `Type0`, literals inhabit them,
   # and each primitive op is typed against the kernel (arithmetic/comparison are
   # numeric-polymorphic over Int or Float; connectives are on Bool).
+  #
+  # NOTE(int-facade): `{:int_type}` is retired from surface production (spec
+  # 2026-07-18 §3a — `Int` is the inductive family); this clause stays so
+  # `infer` remains total on a legacy/deserialized term still carrying it.
   def infer(_ctx, {:int_type}), do: {:ok, {:vtype, 0}}
 
   # A compact `Int` literal inhabits the canonical `Int` inductive family — its type
@@ -1015,6 +1019,8 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  # NOTE(int-facade): kept for totality on a legacy/deserialized `{:vint_type}`
+  # value; fresh elaboration never produces one (spec 2026-07-18 §3a).
   defp infer_type_value_sort(_ctx, {:vint_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vfloat_type}), do: {:ok, 0}
   defp infer_type_value_sort(_ctx, {:vbinary_type}), do: {:ok, 0}
@@ -1581,6 +1587,8 @@ defmodule Cure.Core.Kernel do
   defp rigid_index?({:data, _, _, _}), do: true
   defp rigid_index?({:type, _}), do: true
   defp rigid_index?({:pi, _, _, _}), do: true
+  # NOTE(int-facade): kept for totality on a legacy/deserialized `{:int_type}`
+  # node; fresh elaboration never produces one (spec 2026-07-18 §3a).
   defp rigid_index?({:int_type}), do: true
   defp rigid_index?({:float_type}), do: true
   defp rigid_index?({:binary_type}), do: true

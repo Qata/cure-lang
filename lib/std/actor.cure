@@ -621,6 +621,79 @@ mod Std.Actor
     ])])
     _ -> Node(:match_arm, values, children)
 
+  ## The DEPENDENT-reply gen_server spine as a ONE-FORM surface (OTP metatheory obligation (1), made sugar):
+  ##
+  ##     behavior <Name>
+  ##       state <S>
+  ##       request <Q>
+  ##       reply <R>
+  ##       body
+  ##         <the request algebra Q, its reply family R : Q -> Type, and any aux types>
+  ##       handle
+  ##         <Ctor(args) -> the reply VALUE (of type R(Ctor …)) per request>
+  ##
+  ## derives a complete gen_server whose `handle_call` answers each request at its OWN reply type `R(request)` —
+  ## the per-constructor `ReplyOf`, not a single uniform reply. The `body` declarations are emitted INTO the
+  ## lifted module (so `Q`/`R` are in scope); each `handle` arm gives ONLY the reply value, which the macro wraps
+  ## into the OTP result tuple `%[:reply, <value>, state]` — the STATE IS HELD CONSTANT (this form is for reply-
+  ## shaped / query servers; a state-mutating server writes its own `reply_for` returning `%[:reply, v, s']`, or
+  ## uses `Std.Otp.call_dep` against a hand-written `lift module`). The macro synthesises the `reply_for` helper
+  ## (the elaboration seam that keeps the dependent `Sigma` in checking position), and emits every callback
+  ## (init/handle_call/handle_cast/handle_info) + `start_link`. The dependent reply type is static and erases, so
+  ## the result is an ordinary OTP callback module a stock `gen_server:call` drives (client side:
+  ## `Std.Otp.call_dep`). Built programmatically (not a `becomes` template) for full control over the
+  ## dependent-type splicing.
+  macro behavior <name: ModuleName>
+    syntax family BehaviorDefinition
+      state Type
+      request Type
+      reply Code
+      optional body Declarations
+      handle Cases
+    accepts BehaviorDefinition
+    expands with derive_behavior_family
+
+  fn derive_behavior_family(name: ModuleNameSyntax, definition: BehaviorDefinitionSyntax) -> Syntax =
+    let name_syntax: Syntax = name
+    let module_expr: Syntax = match name_syntax
+      Leaf(_, _, SAtom(value)) -> atom_literal(value)
+      _ -> atom_literal(:generated_behavior)
+    let module_name: SynLit = match name_syntax
+      Leaf(_, _, SAtom(value)) -> SAtom(value)
+      _ -> SStr("Cure.Generated.Behavior")
+    let request_type: Syntax = definition.request
+    let reply_fn: Syntax = definition.reply
+    let user_decls: List(Syntax) = optional_declarations(definition.body)
+    let reply_match: Syntax = Node(:pattern_match, [], [variable("request") | behavior_reply_arms(children(definition.handle))])
+    let reply_type: Syntax = tuple_type([variable("Atom"), behavior_reply_apply(reply_fn), variable("State")])
+    let reply_for_fn: Syntax = function("reply_for", [parameter("request", request_type), parameter("state", variable("State"))], reply_type, reply_match)
+    let handle_call_fn: Syntax = function("handle_call", [parameter("request", request_type), parameter("from", variable("f")), parameter("state", variable("State"))], call("Effect", [reply_type]), call("reply_for", [variable("request"), variable("state")]))
+    let init_fn: Syntax = quote (fn init(initial: State) -> Effect(Tuple(Atom, State)) = %[:ok, initial])
+    let cast_fn: Syntax = quote (fn handle_cast(message: m, state: State) -> Effect(Tuple(Atom, State)) = %[:noreply, state])
+    let info_fn: Syntax = quote (fn handle_info(message: i, state: State) -> Effect(Tuple(Atom, State)) = %[:noreply, state])
+    let start_fn: Syntax = quote (fn start_link(initial: State) -> Effect(Tuple) = Std.Otp.start_link($(module_expr), initial))
+    gen_server_module(module_name, definition.state, append(user_decls, [reply_for_fn, init_fn, handle_call_fn, cast_fn, info_fn, start_fn]))
+
+  ## Wrap each `handle` arm's reply VALUE into the OTP call result tuple `%[:reply, <value>, state]`, so the user
+  ## writes only the answer and the macro supplies the protocol shape and the (unchanged) state.
+  fn behavior_reply_arms(arms: List(Syntax)) -> List(Syntax) = match arms
+    [] -> []
+    [arm | rest] -> [behavior_reply_arm(arm) | behavior_reply_arms(rest)]
+
+  fn behavior_reply_arm(arm: Syntax) -> Syntax = match tag(arm) == :match_arm
+    true -> behavior_reply_arm_node(attrs(arm), children(arm))
+    false -> arm
+
+  fn behavior_reply_arm_node(values: List(Attr), children: List(Syntax)) -> Syntax = match children
+    [body] -> Node(:match_arm, values, [tuple([atom_literal(:reply), body, variable("state")])])
+    _ -> Node(:match_arm, values, children)
+
+  ## Build `reply(request)` — the request's own reply type — from the captured `reply` family name applied to the
+  ## `request` binder, the dependent middle of the `%[:reply, _, state]` result tuple.
+  fn behavior_reply_apply(reply_fn: Syntax) -> Syntax = match leaf_value(reply_fn)
+    SStr(name) -> call(name, [variable("request")])
+    _ -> call("ReplyOf", [variable("request")])
+
   ## Typed-actor runtime operations: spawn, stop, send, introspect.
   ##
   ## Raw compatibility helpers for already-running process modules. New actor

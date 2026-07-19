@@ -28,6 +28,9 @@ defmodule Cure.Core.Printer do
   def print({:type, 0}, _names), do: "Type"
   def print({:type, level}, _names), do: "Type#{level}"
   def print({:var, k}, names), do: Enum.at(names, k) || "?#{k}"
+  # NOTE(int-facade): kept so printing stays total on a legacy/deserialized
+  # `{:int_type}` node, even though fresh elaboration never produces one
+  # (spec 2026-07-18 §3a).
   def print({:int_type}, _names), do: "Int"
   def print({:int_lit, n}, _names), do: Integer.to_string(n)
   def print({:nat_lit, n}, _names), do: Integer.to_string(n)

@@ -189,6 +189,9 @@ defmodule Cure.Elab.Union do
 
   @doc "The type-distinguishing canonical printing of a lowered, nf'd Core type."
   @spec member_key(tuple()) :: String.t()
+  # NOTE(int-facade): `member_key`/`class_of_core` below are kept for totality
+  # on a legacy/deserialized `{:int_type}` node; fresh elaboration never
+  # produces one (spec 2026-07-18 §3a).
   def member_key({:int_type}), do: "Int"
   def member_key({:float_type}), do: "Float"
   def member_key({:binary_type}), do: "Binary"

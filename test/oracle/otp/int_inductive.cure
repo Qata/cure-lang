@@ -1,0 +1,15 @@
+mod IntInductive
+  ## Phase-1 substrate probe: the inductive `Int` supports structural `match`
+  ## and the real `Std.Int.negate` composes with a magnitude fold. The Idris
+  ## mirror (int_inductive.idr) reproduces the same algorithm on a local
+  ## `Int'`/`Nat'`; `rel=same` — both accept.
+  use Std.Nat
+  use Std.Int
+
+  fn magnitude(i: Int) -> Nat =
+    match i
+      FromNat(n) -> n
+      NegativeSuccessor(n) -> S(n)
+
+  fn start() -> Nat = magnitude(negate(FromNat(S(S(Z())))))
+end

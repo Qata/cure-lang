@@ -87,6 +87,9 @@ defmodule Cure.Core.Conv do
 
   defp conv_struct?({:vtype, l1}, {:vtype, l2}, _depth, _sig), do: l1 == l2
 
+  # NOTE(int-facade): `{:vint_type}` can no longer arise from fresh elaboration
+  # (spec 2026-07-18 §3a) but this clause (and its `same_value_no_delta?` twin
+  # below) stay so conversion remains total on legacy/deserialized values.
   defp conv_struct?({:vint_type}, {:vint_type}, _depth, _sig), do: true
   defp conv_struct?({:vint, a}, {:vint, b}, _depth, _sig), do: a == b
 

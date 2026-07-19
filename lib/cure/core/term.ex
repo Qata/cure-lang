@@ -128,6 +128,12 @@ defmodule Cure.Core.Term do
 
   def term?({:global, name}), do: is_atom(name)
 
+  # NOTE(int-facade): the primitive `{:int_type}` node is retired from the surface
+  # (spec 2026-07-18 §3a(i) — `Int` is the inductive `FromNat`/`NegativeSuccessor`
+  # family) but this and the `shift`/`subst`/`to_external`/`from_external` clauses
+  # below are kept as an internal facade: `from_external` must still deserialize
+  # pre-flip saved terms (certificates, quasiquote captures) that spell the old
+  # node. No surface elaboration path can produce a fresh `{:int_type}` anymore.
   def term?({:int_type}), do: true
   def term?({:int_lit, n}), do: is_integer(n)
   def term?({:nat_lit, n}), do: is_integer(n) and n >= 0

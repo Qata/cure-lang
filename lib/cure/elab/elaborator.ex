@@ -732,12 +732,23 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term, type}
         end
 
-      # Numeric negation. Desugars to `negate` when the `Additive` method is in
-      # scope; otherwise type-directed like binary arithmetic: infer the operand's
-      # primitive kind, then lower to `int_neg`/`float_neg` (both return their
-      # operand type). A non-numeric operand rejects as unsupported.
+      # Numeric negation. Desugars to `negate` ONLY when it is a genuine
+      # overloadable interface method (`Std.Arithmetic`'s `Additive.negate`) in
+      # scope — mirroring the binary-operator path, which routes through
+      # `Resolve.method?` (see `elaborate_named_call_resolved`). Otherwise it is
+      # type-directed like binary arithmetic: infer the operand's primitive kind,
+      # then lower to `int_neg`/`float_neg` (both return their operand type).
+      #
+      # The trigger MUST be the interface-method check, not the broad
+      # `operator_meaning?`: the latter also matches an ordinary function named
+      # `negate` (e.g. the ambient `Std.Int.negate`, prelude-visible because
+      # `type Int` is `@prelude`). Routing `-x` to that monomorphic `Int -> Int`
+      # function hijacked negation for EVERY operand kind, so `-(f : Float)`
+      # lowered to an `Int` result and failed conversion against `Float`. Keying
+      # on `method?` lets a real `Additive` instance dispatch per operand type
+      # while a plain `negate` function falls through to the built-in lowering.
       :- ->
-        if operator_meaning?(env, :negate) do
+        if Cure.Elab.Resolve.method?(env, :negate) do
           elaborate_expr_typed({:function_call, [name: "negate"], [operand]}, names, ctx, env)
         else
           with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
@@ -2723,11 +2734,19 @@ defmodule Cure.Elab.Elaborator do
   defp abstract_term({:var, i}, _target, depth) when i >= depth, do: {:var, i + 1}
   defp abstract_term({:var, _} = var, _target, _depth), do: var
 
+  # Descending a binder shifts every free de Bruijn variable — including any in
+  # `target` — up by one, so the target must be shifted to keep matching the SAME
+  # occurrence one binder deeper. Without this, abstracting a scrutinee that occurs
+  # under a binder (e.g. a Π/λ-typed SIBLING like `g : (b = T) -> (c = T)`) both
+  # MISSES the real occurrence (now at `target+1`) and spuriously matches whatever
+  # else sits at the un-shifted index (`c`). Callers whose target occurs only at the
+  # abstraction depth (the common goal case) cross no binder before the match, so the
+  # shift is a no-op for them.
   defp abstract_term({:pi, _g, d, c}, target, depth),
-    do: {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(c, target, depth + 1)}
+    do: {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(c, Subst.shift(target, 1, 0), depth + 1)}
 
   defp abstract_term({:lam, _g, d, b}, target, depth),
-    do: {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(b, target, depth + 1)}
+    do: {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(b, Subst.shift(target, 1, 0), depth + 1)}
 
   # A `:case` branch `{ctor, arity, body}` binds `arity` de Bruijn variables in
   # `body` (see `Cure.Core.Term` shift/3's `:case` clause). Mirror that here:
@@ -2739,7 +2758,7 @@ defmodule Cure.Elab.Elaborator do
   defp abstract_term({:case, scrut, motive, branches}, target, depth) do
     {:case, abstract_term(scrut, target, depth), abstract_term(motive, target, depth),
      Enum.map(branches, fn {ctor, arity, body} ->
-       {ctor, arity, abstract_term(body, target, depth + arity)}
+       {ctor, arity, abstract_term(body, Subst.shift(target, arity, 0), depth + arity)}
      end)}
   end
 
@@ -4781,6 +4800,10 @@ defmodule Cure.Elab.Elaborator do
 
   # A Bool scrutinee is now the inductive family (`{:vdata, :Bool, []}`), resolved
   # via the registry; Int/Float stay primitive type-values.
+  #
+  # NOTE(int-facade): `{:vint_type}` is retired from surface production (spec
+  # 2026-07-18 §3a); this clause stays so scrutinee-kind resolution remains
+  # total on a legacy/deserialized value still carrying it.
   defp primitive_scrut_kind({:vint_type}, _sig), do: {:ok, :int}
   defp primitive_scrut_kind({:vfloat_type}, _sig), do: {:ok, :float}
   # `Atom` is a sealed primitive base type; its `==`/`!=` lowers to the polymorphic
