@@ -145,6 +145,34 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     :gen_statem.stop(pid)
   end
 
+  test "one transition update can change multiple record fields" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      rec SessionData
+        count: Int
+        active: Bool
+        generation: Int
+
+      fsm Cure.Generated.MultiFieldFsm with SessionData
+        Idle --Activate--> Active
+          update SessionData{data | count: data.count + 1, active: true}
+        Active --Deactivate--> Idle
+
+      fn initial_data() -> SessionData =
+        SessionData{count: 4, active: false, generation: 99}
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    initial = apply(module, :initial_data, [])
+    assert {:ok, pid} = apply(:"Cure.Generated.MultiFieldFsm", :start_link, [initial])
+
+    assert :ok = :gen_statem.cast(pid, :Activate)
+    assert :sys.get_state(pid) == {:Active, {:SessionData, 5, true, 99}}
+    :gen_statem.stop(pid)
+  end
+
   test "supervisor accepts the reusable structured family surface" do
     source = """
     mod M
