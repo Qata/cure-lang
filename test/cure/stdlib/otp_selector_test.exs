@@ -50,7 +50,7 @@ defmodule Cure.Stdlib.OtpSelectorTest do
     {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
     # Both messages arrive in the one mailbox; the selector dispatches each by its subject's tag and maps it into
     # the Event payload. Hello was sent first, so it is received first. Ctor reps: CmdEv(Dec) -> {:CmdEv, :Dec}.
-    assert apply(mod, :run, []) == {{:Some, {:NoteEv, :Hello}}, {:Some, {:CmdEv, :Dec}}}
+    assert apply(mod, :run, []) == {{:some, {:NoteEv, :Hello}}, {:some, {:CmdEv, :Dec}}}
   end
 
   test "selector_receive times out to None when nothing selected arrives" do
@@ -65,6 +65,6 @@ defmodule Cure.Stdlib.OtpSelectorTest do
     """
 
     {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
-    assert apply(mod, :run, []) == :None
+    assert apply(mod, :run, []) == :none
   end
 end

@@ -23,14 +23,14 @@ defmodule Cure.Otp.Builtins do
 
   @doc """
   Tagged selective receive with a millisecond `timeout`. Only the owning process
-  should call this. Returns the Cure `Option` representation — `{:Some, message}`
-  on receipt, `:None` on timeout.
+  should call this. Returns the Cure `Option` representation — `{:some, message}`
+  on receipt, `:none` on timeout.
   """
   def subject_receive({_owner, tag}, timeout) do
     receive do
-      {^tag, message} -> {:Some, message}
+      {^tag, message} -> {:some, message}
     after
-      timeout -> :None
+      timeout -> :none
     end
   end
 
@@ -51,15 +51,46 @@ defmodule Cure.Otp.Builtins do
 
   @doc """
   Receive from whichever registered subject arrives first, within `timeout` ms, applying that subject's
-  transform. Returns `{:Some, payload}` or `:None` on timeout. Unregistered messages stay in the mailbox.
+  transform. Returns `{:some, payload}` or `:none` on timeout. Unregistered messages stay in the mailbox.
   """
   def selector_receive({:selector, handlers}, timeout) do
     receive do
       # NB: Elixir's `is_map_key/2` is `(map, key)` — the reverse of Erlang's `is_map_key(key, map)`.
       {tag, payload} when is_map_key(handlers, tag) ->
-        {:Some, Map.get(handlers, tag).(payload)}
+        {:some, Map.get(handlers, tag).(payload)}
     after
-      timeout -> :None
+      timeout -> :none
     end
+  end
+
+  # -- Name: typed process registration (Std.Otp.Name / the F-1 typed name → handle) -----------------------
+  #
+  # A `Name(m)` is a registered atom carrying a phantom claim `m` about the message type its process accepts.
+  # `name_whereis` returns the Cure `Option(Pid(m))` — a TYPED, sendable handle — rather than an untyped bare pid;
+  # the type `m` rides on the `Name` (the trust point, exactly as Gleam's `Name(message)`). Register/unregister
+  # are Bool-safe (Erlang `register/2` raises on a taken name or dead pid).
+
+  @doc "Register `pid` under `name_atom`. Returns whether registration succeeded."
+  def name_register(name_atom, pid) do
+    :erlang.register(name_atom, pid)
+    true
+  rescue
+    ArgumentError -> false
+  end
+
+  @doc "Look up the process registered under `name_atom` as a typed handle: `{:some, pid}` or `:none`."
+  def name_whereis(name_atom) do
+    case :erlang.whereis(name_atom) do
+      :undefined -> :none
+      pid -> {:some, pid}
+    end
+  end
+
+  @doc "Remove the registration for `name_atom`. Returns whether it was registered."
+  def name_unregister(name_atom) do
+    :erlang.unregister(name_atom)
+    true
+  rescue
+    ArgumentError -> false
   end
 end

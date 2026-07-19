@@ -257,4 +257,19 @@ mod Std.Otp.Raw
 
   @extern(Elixir.Cure.Otp.Builtins, :selector_receive, 2)
   fn raw_selector_receive({p: Type}, selector: Selector(p), timeout: Int) -> Effect(Option(p))
+
+  ## ── Name: typed process registration (the F-1 typed name → handle) ──
+  ##
+  ## `name_whereis` returns a TYPED `Option(RawPid(m,m,Plain))` — a sendable handle — instead of the untyped bare
+  ## pid `raw_whereis` gives, closing F-1: the message type `m` rides on the caller's `Std.Otp.Name(m)` (the trust
+  ## point, as in Gleam's `Name(message)`). Register/unregister are Bool-safe via the helper. AtomVM caveat:
+  ## needs `erlang:register/whereis`; confirm support before relying on it there (host OTP is fine).
+  @extern(Elixir.Cure.Otp.Builtins, :name_register, 2)
+  fn raw_name_register({m: Type}, name: Atom, pid: RawPid(m, m, Plain)) -> Effect(Bool)
+
+  @extern(Elixir.Cure.Otp.Builtins, :name_whereis, 1)
+  fn raw_name_whereis({m: Type}, name: Atom) -> Effect(Option(RawPid(m, m, Plain)))
+
+  @extern(Elixir.Cure.Otp.Builtins, :name_unregister, 1)
+  fn raw_name_unregister(name: Atom) -> Effect(Bool)
 end

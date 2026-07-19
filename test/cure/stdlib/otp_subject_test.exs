@@ -47,8 +47,8 @@ defmodule Cure.Stdlib.OtpSubjectTest do
       """
 
       {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
-      # run/0 performs the effects and returns the received Option(Cmd). Inc() -> :Inc; Some(x) -> {:Some, x}.
-      assert apply(mod, :run, []) == {:Some, :Inc}
+      # run/0 performs the effects and returns the received Option(Cmd). Inc() -> :Inc; Cure Option is lowercase: Some(x) -> {:some, x}.
+      assert apply(mod, :run, []) == {:some, :Inc}
     end
 
     test "two subjects of DIFFERENT types are received independently by one owner" do
@@ -69,7 +69,7 @@ defmodule Cure.Stdlib.OtpSubjectTest do
 
       {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
       # Each subject's unique tag keeps the two channels separate despite arriving in the same mailbox.
-      assert apply(mod, :run, []) == {{:Some, :Dec}, {:Some, :Hello}}
+      assert apply(mod, :run, []) == {{:some, :Dec}, {:some, :Hello}}
     end
 
     test "receive times out to None when nothing is sent" do
@@ -83,7 +83,7 @@ defmodule Cure.Stdlib.OtpSubjectTest do
       """
 
       {:ok, mod} = Cure.Compiler.compile_and_load(src, emit_events: false)
-      assert apply(mod, :run, []) == :None
+      assert apply(mod, :run, []) == :none
     end
   end
 end

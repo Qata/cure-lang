@@ -122,6 +122,29 @@ mod Std.Otp
   fn selector_receive({p: Type}, selector: Selector(p), timeout: Int) -> Effect(Option(p)) =
     raw_selector_receive(selector, timeout)
 
+  ## A typed process NAME (Gleam-style `Name(m)`) — a registered atom carrying the message type `m` its process
+  ## accepts. Registering binds a `Pid(m)` to the name; `whereis_name` looks it up as a TYPED, sendable
+  ## `Option(Pid(m))` — closing F-1 (a name lookup previously yielded only an untyped, unsendable `BarePid`). The
+  ## type `m` is the caller's claim, carried by the `Name` (the sole trust point, as in Gleam). AtomVM caveat:
+  ## uses `erlang:register`/`whereis` — host OTP is fine; confirm AtomVM support before relying on it there.
+  type Name(m: Type) indices ()
+    MkName : (registered: Atom) -> Name(m)
+
+  ## A typed name over a registered atom. `m` asserts what the named process accepts.
+  fn name({m: Type}, registered: Atom) -> Name(m) = MkName(registered)
+
+  local fn name_atom({m: Type}, n: Name(m)) -> Atom = match n
+    MkName(a) -> a
+
+  ## Register a `Pid(m)` under the name. Returns whether registration succeeded (false if the name is taken).
+  fn register_name({m: Type}, n: Name(m), pid: Pid(m)) -> Effect(Bool) = raw_name_register(name_atom(n), pid)
+
+  ## Look up the process registered under the name as a TYPED, sendable `Pid(m)`; `None` if unregistered.
+  fn whereis_name({m: Type}, n: Name(m)) -> Effect(Option(Pid(m))) = raw_name_whereis(name_atom(n))
+
+  ## Remove the name's registration. Returns whether it was registered.
+  fn unregister_name({m: Type}, n: Name(m)) -> Effect(Bool) = raw_name_unregister(name_atom(n))
+
   ## A process message set. The first algebra floor stores tag and arity
   ## shapes; typed ADT payload derivation is added by the transparent macro
   ## phase once callback syntax is available.
