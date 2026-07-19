@@ -1,0 +1,43 @@
+defmodule Cure.Compiler.Parser.FixityScanTest do
+  use ExUnit.Case, async: true
+  alias Cure.Compiler.Parser.{FixityScan, BuiltinFixity, FixityTable}
+
+  @src """
+  @prelude
+  mod M
+    use Std.Operators
+    use Other.Mod
+    precedencegroup G
+      associativity: left
+    infix `<?>` : G
+    fn go() -> Int = 1 <?> 2
+  end
+  """
+
+  defp scan(src), do: FixityScan.harvest_source(src, "m.cure", BuiltinFixity.table())
+
+  test "extracts fixity + precedencegroup nodes despite a body using <?>" do
+    s = scan(@src)
+    ops = for {:fixity, meta, _} <- s.fixity, do: Keyword.get(meta, :operator)
+    groups = for {:precedencegroup, meta, _} <- s.fixity, do: Keyword.get(meta, :name)
+    assert "<?>" in ops
+    assert :G in groups
+  end
+
+  test "extracts use targets" do
+    targets = Enum.map(scan(@src).uses, & &1.target)
+    assert "Std.Operators" in targets
+    assert "Other.Mod" in targets
+  end
+
+  test "detects @prelude and module name" do
+    s = scan(@src)
+    assert s.prelude? == true
+    assert s.module == "M"
+  end
+
+  test "a lexer error yields the empty scan rather than raising" do
+    s = FixityScan.harvest_source(~s|mod M\n  fn f() = "unterminated|, "m.cure", FixityTable.new())
+    assert s == %{fixity: [], uses: [], prelude?: false, module: nil}
+  end
+end
