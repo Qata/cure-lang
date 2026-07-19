@@ -162,6 +162,29 @@ mod Std.List
           idx == 0 -> h
           else     -> nth(t, idx - 1, default)
 
+  ## 0-based lookup as an `Option`: `Some(element)` when `0 <= idx < length`,
+  ## `None()` otherwise (past either end, on `[]`, or a negative index). The
+  ## total, honest counterpart to `nth/3` — no default to invent. Structural
+  ## recursion; a negative index falls off the end and yields `None()`.
+  fn at(list: List(t), idx: Int) -> Option(t) =
+    match list
+      [] -> None()
+      [h | t] ->
+        pickup
+          idx == 0 -> Some(h)
+          else     -> at(t, idx - 1)
+
+  ## Replace the element at `idx` with `value` when `0 <= idx < length`; return
+  ## `list` unchanged otherwise (past either end, on `[]`, or a negative index).
+  ## Total; structural recursion. This is the putter half of the `ix` affine.
+  fn set_at(list: List(t), idx: Int, value: t) -> List(t) =
+    match list
+      [] -> []
+      [h | t] ->
+        pickup
+          idx == 0 -> [value | t]
+          else     -> [h | set_at(t, idx - 1, value)]
+
   ## First `n` elements; `[]` when `n <= 0`.
   fn take(list: List(t), n: Int) -> List(t) =
     pickup
