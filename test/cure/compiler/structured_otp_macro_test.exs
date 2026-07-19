@@ -109,6 +109,40 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     :gen_statem.stop(pid)
   end
 
+  test "transition-table FSM derives payload-bearing events and scopes their binders in updates" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      fsm Cure.Generated.PayloadFsm with Int
+        Locked --Coin(amount: Int)--> Unlocked
+          update data + amount
+        Unlocked --Reset--> Locked
+          update 0
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ok, pid} = apply(:"Cure.Generated.PayloadFsm", :start_link, [4])
+    assert :ok = :gen_statem.cast(pid, {:Coin, 3})
+    assert :sys.get_state(pid) == {:Unlocked, 7}
+    assert :ok = :gen_statem.cast(pid, :Reset)
+    assert :sys.get_state(pid) == {:Locked, 0}
+    :gen_statem.stop(pid)
+  end
+
+  test "transition-table FSM rejects inconsistent payload declarations" do
+    source = """
+    mod M
+      use Std.Fsm
+
+      fsm Cure.Generated.BadPayloadFsm with Int
+        Locked --Coin(amount: Int)--> Unlocked
+        Unlocked --Coin(source: String)--> Locked
+    """
+
+    assert {:error, _reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "transition updates support typed record updates and preserve untouched fields" do
     source = """
     mod M

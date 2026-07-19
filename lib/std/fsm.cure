@@ -23,6 +23,7 @@ mod Std.Fsm
   ## rows and emitted as nominal types in the generated module.
   macro fsm <name: ModuleName> with <data: Type>
     syntax family TransitionDefinition
+      syntax <from: Name> --<event: Name>(<payload: Parameters>)--> <to: Name>
       syntax <from: Name> --<event: Name>--> <to: Name>
       optional update Expression
     syntax family TransitionTableDefinition
@@ -33,18 +34,76 @@ mod Std.Fsm
   fn derive_transition_table(name: ModuleNameSyntax, data: TypeSyntax, definition: TransitionTableDefinitionSyntax) -> Syntax =
     match definition.transitions
       [] -> Failure(:fsm_requires_transition, [])
-      [first | _] ->
-        let states = transition_states(definition.transitions, [])
-        let events = transition_events(definition.transitions, [])
-        emit_transition_table(name, data, first.from, states, events, definition.transitions)
+      [first | _] -> match validate_event_payloads(definition.transitions, [])
+        Some(reason) -> Failure(reason, [])
+        None() ->
+          let states = transition_states(definition.transitions, [])
+          let events = transition_events(definition.transitions, [])
+          emit_transition_table(name, data, first.from, states, events, definition.transitions)
 
   fn transition_states(transitions: List(TransitionDefinitionSyntax), found: List(Syntax)) -> List(Syntax) = match transitions
     [] -> found
     [edge | rest] -> transition_states(rest, add_syntax_name(edge.to, add_syntax_name(edge.from, found)))
 
-  fn transition_events(transitions: List(TransitionDefinitionSyntax), found: List(Syntax)) -> List(Syntax) = match transitions
+  type EventSpec = EventSpec(Syntax, List(Syntax))
+
+  fn transition_events(transitions: List(TransitionDefinitionSyntax), found: List(EventSpec)) -> List(EventSpec) = match transitions
     [] -> found
-    [edge | rest] -> transition_events(rest, add_syntax_name(edge.event, found))
+    [edge | rest] -> transition_events(rest, add_event(edge.event, optional_payload(edge.payload), found))
+
+  fn optional_payload(payload: Option(List(Syntax))) -> List(Syntax) = match payload
+    None() -> []
+    Some(parameters) -> parameters
+
+  fn validate_event_payloads(transitions: List(TransitionDefinitionSyntax), found: List(EventSpec)) -> Option(Atom) = match transitions
+    [] -> None()
+    [edge | rest] -> match syntax_key(edge.event)
+      None() -> validate_event_payloads(rest, found)
+      Some(key) -> match find_event(found, key)
+        None() -> validate_event_payloads(rest, append(found, [EventSpec(edge.event, optional_payload(edge.payload))]))
+        Some(EventSpec(_, expected)) -> match payload_types_equal(expected, optional_payload(edge.payload))
+          true -> validate_event_payloads(rest, found)
+          false -> Some(:fsm_inconsistent_event_payload)
+
+  fn find_event(values: List(EventSpec), expected: Atom) -> Option(EventSpec) = match values
+    [] -> None()
+    [EventSpec(name, payload) | rest] -> match syntax_key(name)
+      Some(actual) -> match actual == expected
+        true -> Some(EventSpec(name, payload))
+        false -> find_event(rest, expected)
+      None() -> find_event(rest, expected)
+
+  fn payload_types_equal(left: List(Syntax), right: List(Syntax)) -> Bool = match left
+    [] -> match right
+      [] -> true
+      _ -> false
+    [a | rest_a] -> match right
+      [] -> false
+      [b | rest_b] -> match captured_parameter_type(a)
+        None() -> false
+        Some(a_type) -> match captured_parameter_type(b)
+          None() -> false
+          Some(b_type) -> match identifier_name(a_type)
+            None() -> false
+            Some(a_key) -> match identifier_name(b_type)
+              None() -> false
+              Some(b_key) -> match a_key == b_key
+                true -> payload_types_equal(rest_a, rest_b)
+                false -> false
+
+  fn add_event(event: Syntax, payload: List(Syntax), found: List(EventSpec)) -> List(EventSpec) = match syntax_key(event)
+    None() -> found
+    Some(key) -> match contains_event(found, key)
+      true -> found
+      false -> append(found, [EventSpec(event, payload)])
+
+  fn contains_event(values: List(EventSpec), expected: Atom) -> Bool = match values
+    [] -> false
+    [EventSpec(value, _) | rest] -> match syntax_key(value)
+      None() -> contains_event(rest, expected)
+      Some(name) -> match name == expected
+        true -> true
+        false -> contains_event(rest, expected)
 
   fn add_syntax_name(value: Syntax, found: List(Syntax)) -> List(Syntax) = match syntax_key(value)
     None() -> found
@@ -74,11 +133,29 @@ mod Std.Fsm
       None() -> syntax_variants(rest)
       Some(name) -> [enum_variant(name) | syntax_variants(rest)]
 
+  fn event_variants(values: List(EventSpec)) -> List(Syntax) = match values
+    [] -> []
+    [EventSpec(value, parameters) | rest] -> match syntax_name(value)
+      None() -> event_variants(rest)
+      Some(name) -> [enum_variant_payload(name, captured_parameter_types(parameters)) | event_variants(rest)]
+
+  fn captured_parameter_types(parameters: List(Syntax)) -> List(Syntax) = match parameters
+    [] -> []
+    [parameter | rest] -> match captured_parameter_type(parameter)
+      None() -> captured_parameter_types(rest)
+      Some(kind) -> [kind | captured_parameter_types(rest)]
+
+  fn captured_parameter_patterns(parameters: List(Syntax)) -> List(Syntax) = match parameters
+    [] -> []
+    [parameter | rest] -> match captured_parameter_name(parameter)
+      None() -> [variable("_") | captured_parameter_patterns(rest)]
+      Some(name) -> [variable(name) | captured_parameter_patterns(rest)]
+
   fn syntax_constructor(value: Syntax) -> Syntax = match syntax_name(value)
     None() -> value
     Some(name) -> call(name, [])
 
-  fn emit_transition_table(name: Syntax, data: Syntax, initial: Syntax, states: List(Syntax), events: List(Syntax), transitions: List(TransitionDefinitionSyntax)) -> Syntax =
+  fn emit_transition_table(name: Syntax, data: Syntax, initial: Syntax, states: List(Syntax), events: List(EventSpec), transitions: List(TransitionDefinitionSyntax)) -> Syntax =
     let module_name = match name
       Leaf(_, _, SAtom(value)) -> SAtom(value)
       _ -> SStr("Cure.Generated.Fsm")
@@ -90,7 +167,7 @@ mod Std.Fsm
     let encoded = call("Std.Fsm.action_to_beam", [call("decide", [variable("event"), variable("state"), variable("data")])])
     Std.ActorBehavior.state_machine_module(module_name, [
       enum_type("State", syntax_variants(states)),
-      enum_type("Event", syntax_variants(events)),
+      enum_type("Event", event_variants(events)),
       alias_node("Data", data),
       function("callback_mode", [], variable("Atom"), quote :handle_event_function),
       function("init", [parameter("initial", variable("Data"))], call("Effect", [tuple_type([variable("Atom"), variable("State"), variable("Data")])]), tuple([atom_literal(:ok), syntax_constructor(initial), variable("initial")])),
@@ -104,13 +181,17 @@ mod Std.Fsm
     [edge | rest] ->
       let fallback = transition_decision(rest)
       let event_match = Node(:pattern_match, [], [variable("event"),
-        match_arm(syntax_constructor(edge.event), call("Next", [syntax_constructor(edge.to), transition_update(edge.update)])),
+        match_arm(event_pattern(edge.event, optional_payload(edge.payload)), call("Next", [syntax_constructor(edge.to), transition_update(edge.update)])),
         match_arm(variable("_"), fallback)
       ])
       Node(:pattern_match, [], [variable("state"),
         match_arm(syntax_constructor(edge.from), event_match),
         match_arm(variable("_"), fallback)
       ])
+
+  fn event_pattern(event: Syntax, parameters: List(Syntax)) -> Syntax = match identifier_name(event)
+    None() -> variable("_")
+    Some(name) -> call(name, captured_parameter_patterns(parameters))
 
   fn transition_update(update: Option(ExpressionSyntax)) -> Syntax = match update
     None() -> variable("data")
