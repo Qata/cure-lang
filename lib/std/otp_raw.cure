@@ -49,6 +49,12 @@ mod Std.Otp.Raw
   @erases(:pid)
   opaque type RawPid(m, r, k)
 
+  ## A gen_server PID with distinct asynchronous-message, synchronous-request,
+  ## and reply indices. This is the honest carrier for actor-like behaviors;
+  ## it has the same native pid representation as RawPid and no wrapper.
+  @erases(:pid)
+  opaque type RawServerPid(m, q, r)
+
   ## An uninhabited message type. `BarePid` carries it, which is what makes a pid
   ## recovered from the registry UNSENDABLE: `tell` would demand a `NoMessage` value and
   ## no constructor produces one.
@@ -132,6 +138,9 @@ mod Std.Otp.Raw
   @extern(:gen_server, :cast, 2)
   fn raw_cast({q: Type}, {r: Type}, server: RawPid(q, r, Server), msg: q) -> Effect(Atom)
 
+  @extern(:gen_server, :cast, 2)
+  fn raw_server_cast({m: Type}, {q: Type}, {r: Type}, server: RawServerPid(m, q, r), msg: m) -> Effect(Atom)
+
   ## Synchronous `gen_server` call — the reply type is where `Std.Otp` threads
   ## the dependent `ReplyOf(req)`; here it is a free (return-polymorphic) result.
   ## The *soundness* of that threading — that a reply must have the request's own
@@ -146,6 +155,12 @@ mod Std.Otp.Raw
   ## deferred (audit §6).
   @extern(:gen_server, :call, 2)
   fn raw_call({q: Type}, {r: Type}, server: RawPid(q, r, Server), req: q) -> Effect(r)
+
+  @extern(:gen_server, :call, 2)
+  fn raw_server_call({m: Type}, {q: Type}, {r: Type}, server: RawServerPid(m, q, r), req: q) -> Effect(r)
+
+  @extern(:gen_server, :call, 2)
+  fn raw_server_call_dep({m: Type}, {q: Type}, {kr: Type}, {res: Type}, server: RawServerPid(m, q, kr), req: q) -> Effect(res)
 
   ## Dependent-reply variant of `raw_call`: the server's reply-index slot `kr` and the RESULT `res` are
   ## DECOUPLED, so the caller may choose `res = ReplyOf(request)` — a function of the EXPLICIT request. Same BIF
@@ -169,6 +184,9 @@ mod Std.Otp.Raw
   ## gen_server protocol. Returns the atom `ok`.
   @extern(:gen_server, :stop, 1)
   fn raw_stop({q: Type}, {r: Type}, pid: RawPid(q, r, Server)) -> Effect(Atom)
+
+  @extern(:gen_server, :stop, 1)
+  fn raw_server_stop({m: Type}, {q: Type}, {r: Type}, pid: RawServerPid(m, q, r)) -> Effect(Atom)
 
   ## Schedule a message for a process and receive an opaque timer reference.
   @extern(:erlang, :send_after, 3)

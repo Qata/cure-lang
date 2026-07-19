@@ -67,6 +67,16 @@ mod Std.Otp
   ## / `Server` tag is a phantom at kind `Type`: no values, no runtime cost.
   typealias GenServer(q, r) = RawPid(q, r, Server)
 
+  ## An actor-like server has independent asynchronous and synchronous input
+  ## codes. All three indices are erased; the runtime value is the native pid.
+  typealias ActorServer(m, q, r) = RawServerPid(m, q, r)
+
+  type DepActorServer(m: Type, q: Type, rep: (q) -> Type) indices ()
+    mk_dep_actor_server : (raw: RawServerPid(m, q, Unit)) -> DepActorServer(m, q, rep)
+
+  fn as_dep_actor({m: Type}, {q: Type}, {rep: (q) -> Type}, server: ActorServer(m, q, Unit)) -> DepActorServer(m, q, rep) =
+    mk_dep_actor_server(server)
+
   ## A DEPENDENT `gen_server` handle: requests `q`, reply computed PER REQUEST by `rep : q -> Type` (an
   ## `ReplyOf`). The SAME server answers different requests at different reply types. A real datatype INDEXED by
   ## `rep` (mirroring `Std.Sigma`), so `call_dep` recovers the reply family from the handle — a phantom typealias
@@ -247,6 +257,24 @@ mod Std.Otp
 
   fn call_dep({q: Type}, {rep: (q) -> Type}, server: DepGenServer(q, rep), request: q) -> Effect(rep(request)) =
     raw_call_dep(dep_raw(server), request)
+
+  local fn dep_actor_raw({m: Type}, {q: Type}, {rep: (q) -> Type}, server: DepActorServer(m, q, rep)) -> RawServerPid(m, q, Unit) =
+    match server
+      mk_dep_actor_server(raw) -> raw
+
+  fn actor_cast({m: Type}, {q: Type}, {r: Type}, server: ActorServer(m, q, r), message: m) -> Effect(Unit) =
+    let acked = raw_server_cast(server, message)
+    ()
+
+  fn actor_call({m: Type}, {q: Type}, {r: Type}, server: ActorServer(m, q, r), request: q) -> Effect(r) =
+    raw_server_call(server, request)
+
+  fn actor_call_dep({m: Type}, {q: Type}, {rep: (q) -> Type}, server: DepActorServer(m, q, rep), request: q) -> Effect(rep(request)) =
+    raw_server_call_dep(dep_actor_raw(server), request)
+
+  fn actor_stop({m: Type}, {q: Type}, {r: Type}, server: ActorServer(m, q, r)) -> Effect(Unit) =
+    let stopped = raw_server_stop(server)
+    ()
 
   ## Send one reply through a callback's linear `from` capability. Generated
   ## actor callbacks use this direct operation and return `noreply`.

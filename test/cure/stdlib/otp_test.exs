@@ -188,6 +188,45 @@ defmodule Cure.Stdlib.OtpTest do
     end
   end
 
+  describe "ActorServer(m, q, r) — distinct asynchronous and synchronous protocols" do
+    test "accepts its message and request codes independently" do
+      source = """
+      mod App
+        use Std.Otp
+        type Msg = Increment | Add(Int)
+        type Req = Value
+        fn send(server: ActorServer(Msg, Req, Int)) -> Effect(Unit) = actor_cast(server, Add(2))
+        fn query(server: ActorServer(Msg, Req, Int)) -> Effect(Int) = actor_call(server, Value())
+      """
+
+      assert {:ok, _} = Program.elaborate(source)
+    end
+
+    test "rejects using a synchronous request as an asynchronous message" do
+      source = """
+      mod App
+        use Std.Otp
+        type Msg = Increment | Add(Int)
+        type Req = Value
+        fn wrong(server: ActorServer(Msg, Req, Int)) -> Effect(Unit) = actor_cast(server, Value())
+      """
+
+      assert {:error, _} = Program.elaborate(source)
+    end
+
+    test "rejects using an asynchronous message as a synchronous request" do
+      source = """
+      mod App
+        use Std.Otp
+        type Msg = Increment | Add(Int)
+        type Req = Value
+        fn wrong(server: ActorServer(Msg, Req, Int)) -> Effect(Int) = actor_call(server, Increment())
+      """
+
+      assert {:error, _} = Program.elaborate(source)
+    end
+  end
+
   test "a sequenced typed conversation elaborates (tell then call, via effect bind)" do
     assert {:ok, _} =
              app("""
