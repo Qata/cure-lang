@@ -115,6 +115,45 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
              {:worker, {:"Cure.Generated.Child", :start_link, []}, :permanent, 5000, :worker, [:"Cure.Generated.Child"]}
   end
 
+  test "structured supervisor encodes an explicitly derived child identity" do
+    source = """
+    mod M
+      use Std.Beam
+      use Std.Supervisor
+
+      type ChildIdentity = CounterWorker | BackupWorker deriving BeamEncode
+
+      sup Cure.Generated.TypedIdentitySup
+        children [child Cure.Generated.Child id CounterWorker()]
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert module == :"Cure.M"
+
+    assert {:ok, {_strategy, [child]}} =
+             apply(:"Cure.Generated.TypedIdentitySup", :init, [[]])
+
+    assert elem(child, 0) == :CounterWorker
+    assert elem(elem(child, 1), 0) == :"Cure.Generated.Child"
+  end
+
+  test "structured supervisor rejects a child identity without BeamEncode" do
+    source = """
+    mod M
+      use Std.Beam
+      use Std.Supervisor
+
+      type ChildIdentity = CounterWorker | BackupWorker
+
+      sup Cure.Generated.UnencodedIdentitySup
+        children [child Cure.Generated.Child id CounterWorker()]
+    """
+
+    assert {:error, reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert inspect(reason) =~ "macro_capture_obligation_failed"
+    assert inspect(reason) =~ "BeamEncode"
+  end
+
   test "application accepts the reusable structured family surface" do
     source = """
     mod M

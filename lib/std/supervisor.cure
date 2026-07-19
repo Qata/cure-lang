@@ -30,13 +30,16 @@ mod Std.Supervisor
       function("start_link", [], call("Effect", [variable("Tuple")]), call("Std.Otp.start_supervisor", [module_expr]))
     ])
 
-  ## `sup` is a transparent standard-library macro. The empty supervisor floor
-  ## is a normal lifted module; child-spec declarations are added as checked
-  ## syntax in the next algebra slice.
-  macro SupervisorContainers
+  ## Child entries are transparent expression macros. Typed identities are
+  ## checked at the use site and encoded only in the generated ordinary code.
+  macro SupervisorSyntax
+    syntax child <module: ModuleName> id <identity: Expression> where BeamEncode(identity) computed directly by derive_typed_child
     syntax child_spec <module: ModuleName> <id: Atom> raw with <args: Code> contextual becomes Std.Supervisor.child_with_raw_args(module, id, args, Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(5000), Std.Supervisor.worker())
     syntax child_spec <module: ModuleName> <id: Atom> with <args: Code> contextual becomes Std.Supervisor.child_with_typed_args(module, id, args, Std.Supervisor.permanent(), Std.Supervisor.shutdown_after(5000), Std.Supervisor.worker())
     syntax child_spec <module: ModuleName> <id: Atom> becomes Std.Supervisor.child(module, id)
+
+  fn derive_typed_child(module: ModuleNameSyntax, identity: Syntax) -> Syntax =
+    quote Std.Supervisor.encoded_child($(module), to_beam($(identity)))
 
 
   type Restart = Permanent | Temporary | Transient
@@ -129,12 +132,3 @@ mod Std.Supervisor
   ## dictionary argument. At runtime the term is the exact supervisor child ID.
   fn encoded_child(module: Atom, id: RawTerm) -> ChildSpec =
     %[id, %[module, :start_link, assert_type [] : List(RawTerm)], restart_atom(permanent()), shutdown_value(shutdown_after(5000)), child_type_atom(worker()), [module]]
-
-  ## Replace the compatibility atom ID in an otherwise checked child spec. This
-  ## lets `child_spec Module :placeholder` continue to perform ModuleName
-  ## reflection while the preferred identity comes from `BeamEncode`.
-  @extern(:erlang, :setelement, 3)
-  local fn replace_child_id(index: Int, spec: ChildSpec, id: RawTerm) -> ChildSpec
-
-  fn with_encoded_id(spec: ChildSpec, id: RawTerm) -> ChildSpec =
-    replace_child_id(1, spec, id)
