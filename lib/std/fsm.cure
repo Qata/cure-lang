@@ -353,7 +353,14 @@ mod Std.Fsm
   ## FSM. Intended to be called from inside a lifecycle-hook body; a
   ## no-op returning `:no_caller` when invoked outside an FSM process.
   @extern(Elixir.Cure.FSM.Builtins, :fsm_notify, 1)
-  fn notify(message: Any) -> Atom
+  local fn raw_notify(message: Any) -> Atom
+
+  type NotifyResult = Notified | NoCaller
+
+  fn notify(message: Any) -> NotifyResult =
+    pickup
+      raw_notify(message) == :no_caller -> NoCaller()
+      else -> Notified()
 
   ## Return the caller pid registered for a running FSM, or `nil`.
   @extern(Elixir.Cure.FSM.Builtins, :fsm_caller, 1)

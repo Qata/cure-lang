@@ -120,4 +120,16 @@ defmodule Cure.Stdlib.AtomSurfaceTest do
     assert is_integer(now)
     assert now > 0
   end
+
+  test "system halt and FSM notification do not expose undifferentiated result atoms" do
+    assert {:ok, _} =
+             Program.elaborate("""
+             mod TypedResults
+               use Std.System
+               use Std.Fsm
+
+               fn halt_status(code: Int) -> Unit = Std.System.exit(code)
+               fn notification(message: Any) -> NotifyResult = Std.Fsm.notify(message)
+             """)
+  end
 end

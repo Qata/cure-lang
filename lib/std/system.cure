@@ -67,4 +67,11 @@ mod Std.System
 
   ## Halt the whole BEAM node with the given exit status.
   @extern(:erlang, :halt, 1)
-  fn exit(code: Int) -> Atom
+  local fn raw_exit(code: Int) -> Atom
+
+  ## Halt never reports a meaningful atom to its caller. The raw declaration
+  ## records BEAM's boundary shape; this safe surface communicates that there
+  ## is no result to inspect if a host substitutes or intercepts the call.
+  fn exit(code: Int) -> Unit =
+    let _ = raw_exit(code)
+    ()
