@@ -427,6 +427,10 @@ The four standard macros are thin adapters:
 - `supervisor.cure` validates child declarations and emits supervisor code;
 - `app.cure` emits application startup and supervision wiring.
 
+The detailed FSM surface, verification contract, and normative lowering of an
+FSM through the shared source-defined actor behavior substrate are specified in
+`2026-07-19-typed-fsm-as-constrained-actor-design.md`.
+
 The compiler must not recognize these four names specially. A user-defined
 macro that emits the same generic declaration vocabulary must use the same
 pipeline.

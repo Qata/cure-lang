@@ -68,6 +68,16 @@ was added to the compiler. The same nested-production mechanism is the parser
 foundation required by the `knit` algebra's section/row grammar. Focused parser,
 printer, expansion, and live `gen_statem` tests are green.
 
+**Typed FSM architecture decision (2026-07-19).** The remaining FSM work is
+specified by `../specs/2026-07-19-typed-fsm-as-constrained-actor-design.md`.
+An FSM normatively derives a finite state/event reducer and expands through the
+same source-defined `ActorBehavior` substrate as `actor`. The ordered FSM work
+is: shared actor substrate; FSM-to-actor lowering; typed event payloads; graph
+policy and verification; guards; effects/notifications; lifecycle/timers;
+optional operations; cleanup and full gates. Legacy `on_transition`, raw Atom
+events, and the opaque caller/meta/payload runtime container are not compatibility
+requirements.
+
 - **Transparent BEAM plan:** Phases 0, 1, 2, and 2.5 are COMPLETE. Phase 3 (`beam_ops`)
   is unblocked (2.5 done) and substantially landed. Phase 4 has replaced all four OTP
   forms — `sup`, `actor`, `fsm`, `app` each now lower through a source-defined
