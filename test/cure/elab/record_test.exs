@@ -128,6 +128,21 @@ defmodule Cure.Elab.RecordTest do
     assert apply(mod, :kepty, []) == {:S, {:S, :Z}}
   end
 
+  test "multiline record update accepts layout and multiple overrides" do
+    src =
+      @pt <>
+        "  fn bump(p: Point) -> Point = Point{\n" <>
+        "    p |\n" <>
+        "    x: S(Z()),\n" <>
+        "    y: Z()\n" <>
+        "  }\n" <>
+        "  fn result() -> Point = bump(Point{x: Z(), y: S(Z())})\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.MultilineRecUpdate", functions: [:bump, :result])
+    assert apply(mod, :result, []) == {:Point, {:S, :Z}, :Z}
+  end
+
   test "updating a non-field is rejected" do
     assert {:error, {:record_field_mismatch, :Point}} =
              Program.elaborate(@pt <> "  fn f(p: Point) -> Point = Point{p | z: Z()}\nend\n")

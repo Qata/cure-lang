@@ -3234,10 +3234,21 @@ defmodule Cure.Compiler.Parser do
 
     state = skip_newlines(state)
 
+    {layout?, state} =
+      case peek(state) do
+        %Token{type: :indent} -> {true, state |> advance() |> skip_newlines()}
+        _ -> {false, state}
+      end
+
     case peek(state) do
       %Token{type: :rbrace} ->
         # Empty construction: TypeName{}
         state = advance(state)
+        ast = {:function_call, [name: rec_name, record: true, line: line, col: col], []}
+        {ast, state}
+
+      %Token{type: :dedent} when layout? ->
+        state = state |> close_record_layout(true) |> expect(:rbrace)
         ast = {:function_call, [name: rec_name, record: true, line: line, col: col], []}
         {ast, state}
 
@@ -3257,6 +3268,7 @@ defmodule Cure.Compiler.Parser do
             probe_state = advance(probe_state)
             probe_state = skip_newlines(probe_state)
             {fields, probe_state} = parse_map_pairs(probe_state, :rbrace)
+            probe_state = close_record_layout(probe_state, layout?)
             probe_state = expect(probe_state, :rbrace)
             ast = {:record_update, [name: rec_name, line: line, col: col], [base_expr | fields]}
             {ast, probe_state}
@@ -3265,12 +3277,16 @@ defmodule Cure.Compiler.Parser do
             # Not update syntax: rewind completely and parse as plain construction.
             state = %{state | pos: saved_pos, errors: saved_errors}
             {fields, state} = parse_map_pairs(state, :rbrace)
+            state = close_record_layout(state, layout?)
             state = expect(state, :rbrace)
             ast = {:function_call, [name: rec_name, record: true, line: line, col: col], fields}
             {ast, state}
         end
     end
   end
+
+  defp close_record_layout(state, true), do: state |> skip_newlines() |> expect_dedent() |> skip_newlines()
+  defp close_record_layout(state, false), do: state
 
   defp is_pascal_case?({:variable, _, <<first, _rest::binary>>}) when first in ?A..?Z, do: true
 

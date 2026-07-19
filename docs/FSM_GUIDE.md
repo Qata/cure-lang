@@ -38,7 +38,11 @@ rec TurnstileData
 
 fsm Cure.Turnstile with TurnstileData
   Locked --Coin--> Unlocked
-    update TurnstileData{data | coins: data.coins + 1}
+    update TurnstileData{
+      data |
+      coins: data.coins + 1,
+      enabled: true
+    }
   Unlocked --Push--> Locked
     update TurnstileData{data | pushes: data.pushes + 1}
   Unlocked --Coin--> Unlocked

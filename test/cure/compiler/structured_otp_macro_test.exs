@@ -157,7 +157,11 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
 
       fsm Cure.Generated.MultiFieldFsm with SessionData
         Idle --Activate--> Active
-          update SessionData{data | count: data.count + 1, active: true}
+          update SessionData{
+            data |
+            count: data.count + 1,
+            active: true
+          }
         Active --Deactivate--> Idle
 
       fn initial_data() -> SessionData =
