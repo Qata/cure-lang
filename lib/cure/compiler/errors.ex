@@ -1737,6 +1737,11 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:arity_mismatch, _message, meta}) when is_list(meta), do: true
   defp structured_error?({:extern_untyped_head, _message, meta}) when is_list(meta), do: true
   defp structured_error?({:extern_has_body, _message, meta}) when is_list(meta), do: true
+
+  defp structured_error?({kind, _message, meta})
+       when kind in [:pickup_no_else, :pickup_else_not_last, :pickup_multiple_else] and is_list(meta),
+       do: true
+
   defp structured_error?({:duplicate_module_identity, _name, _other_path, _path}), do: true
   defp structured_error?({:duplicate_module_identity, _name, paths}) when is_list(paths), do: true
   defp structured_error?({:unfilled_hole, _name}), do: true

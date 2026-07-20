@@ -200,6 +200,32 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({kind, message, meta}, opts)
+      when kind in [:pickup_no_else, :pickup_else_not_last, :pickup_multiple_else] and
+             is_binary(message) and is_list(meta) do
+    {code, key, title, hint} =
+      case kind do
+        :pickup_no_else ->
+          {"E076", :pickup_missing_else, "pickup without else", "add a final `else -> ...` clause"}
+
+        :pickup_else_not_last ->
+          {"E077", :pickup_else_not_last, "pickup else is not last", "move `else -> ...` to the final clause"}
+
+        :pickup_multiple_else ->
+          {"E078", :pickup_multiple_else, "pickup has multiple else clauses", "keep exactly one `else -> ...` clause"}
+      end
+
+    Diagnostic.new(
+      code: code,
+      key: key,
+      severity: :error,
+      title: title,
+      message: message,
+      primary: primary_label(opts, hint),
+      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
+    )
+  end
+
   def from_error({:ambiguous_name, name, modules}, opts) when is_list(modules) do
     spelling = name_to_string(name)
     owners = Enum.map(modules, &name_to_string/1)

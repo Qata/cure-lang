@@ -52,7 +52,7 @@ defmodule Cure.Diagnostic.Registry do
     "E015" => "The former error path was consolidated into the contextual declaration diagnostics.",
     "E018" => "The former error path was consolidated into the contextual declaration diagnostics."
   }
-  @structured ~w[E002 E003 E011 E014 E035 E056 E057 E063 E087 E089 E090 E091 E092 E093 E094 W086 W088]
+  @structured ~w[E002 E003 E011 E014 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 W086 W088]
   @catalog_cases %{
     "E002" => :unbound_variable,
     "E003" => :arity_mismatch,
@@ -61,6 +61,9 @@ defmodule Cure.Diagnostic.Registry do
     "E035" => :unterminated_lambda,
     "E056" => :extern_untyped_head,
     "E057" => :extern_has_body,
+    "E076" => :pickup_missing_else,
+    "E077" => :pickup_else_not_last,
+    "E078" => :pickup_multiple_else,
     "E063" => :parse_recovered,
     "E087" => :duplicate_module,
     "E089" => :ambiguous_name,
@@ -223,6 +226,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E003"), do: [:elaboration, :kernel]
   defp producers("E035"), do: [:parser]
   defp producers(code) when code in ~w[E056 E057], do: [:elaboration]
+  defp producers(code) when code in ~w[E076 E077 E078], do: [:parser]
   defp producers("E063"), do: [:parser]
   defp producers("E087"), do: [:module_loader]
   defp producers("E089"), do: [:name_resolution]
