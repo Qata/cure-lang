@@ -1740,6 +1740,8 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:unknown_record, _name}), do: true
   defp structured_error?({:record_field_mismatch, _name}), do: true
   defp structured_error?({:proof_shape_mismatch, _message, _name}), do: true
+  defp structured_error?({:totality_required, _name}), do: true
+  defp structured_error?({:compile_time_totality, _name, _reason}), do: true
 
   defp structured_error?({kind, _message, meta})
        when kind in [:pickup_no_else, :pickup_else_not_last, :pickup_multiple_else] and is_list(meta),

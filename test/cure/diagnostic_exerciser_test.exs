@@ -36,6 +36,7 @@ defmodule Cure.DiagnosticExerciserTest do
       {"extern untyped head", "E056", {:extern_untyped_head, "parameter is untyped", [line: 1, col: 1]}},
       {"extern has body", "E057", {:extern_has_body, "body is not allowed", [line: 1, col: 1]}},
       {"proof shape mismatch", "E026", {:proof_shape_mismatch, "not a proof", "bad"}},
+      {"totality failure", "E013", {:totality_required, :loop}},
       {"pickup without else", "E076", {:pickup_no_else, "missing else", [line: 1, col: 1]}},
       {"pickup else not last", "E077", {:pickup_else_not_last, "else is not last", [line: 1, col: 1]}},
       {"pickup multiple else", "E078", {:pickup_multiple_else, "multiple else", [line: 1, col: 1]}},

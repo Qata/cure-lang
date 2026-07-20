@@ -240,6 +240,23 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:totality_required, name}, opts) do
+    Diagnostic.new(
+      code: "E013",
+      key: :totality_failure,
+      severity: :error,
+      title: "Totality failure",
+      body: Doc.paragraph("`#{name}` must be total because it is used during type-level computation."),
+      primary: primary_label(opts, "make this definition structurally total"),
+      payload: %{name: name}
+    )
+  end
+
+  def from_error({:compile_time_totality, name, reason}, opts) do
+    diagnostic = from_error({:totality_required, name}, opts)
+    %{diagnostic | payload: Map.put(diagnostic.payload, :reason, inspect(reason))}
+  end
+
   def from_error({kind, message, meta}, opts)
       when kind in [:pickup_no_else, :pickup_else_not_last, :pickup_multiple_else] and
              is_binary(message) and is_list(meta) do
