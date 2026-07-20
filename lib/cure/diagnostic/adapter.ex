@@ -153,6 +153,33 @@ defmodule Cure.Diagnostic.Adapter do
     operator_conflict(:builtin_operator_not_overloadable, %{operator: operator}, opts)
   end
 
+  def from_error({:unsupported_operand_type, operator}, opts) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Operator operand type mismatch",
+      body: Doc.paragraph("The operands of `#{name_to_string(operator)}` do not have a supported type combination."),
+      primary: primary_label(opts, "change the operand types or use a supported operator"),
+      payload: %{kind: :unsupported_operand_type, operator: operator}
+    )
+  end
+
+  def from_error({:no_operator_meaning, operator}, opts) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Operator has no valid meaning",
+      body:
+        Doc.paragraph(
+          "The operator `#{name_to_string(operator)}` has no valid meaning for the surrounding operand types."
+        ),
+      primary: primary_label(opts, "use an operator supported by these types"),
+      payload: %{kind: :no_operator_meaning, operator: operator}
+    )
+  end
+
   def from_error({:unsupported_async, message, meta}, opts)
       when is_binary(message) and is_list(meta) do
     Diagnostic.new(

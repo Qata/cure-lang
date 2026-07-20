@@ -266,6 +266,19 @@ defmodule Cure.Diagnostic.HostTest do
     refute non_record =~ ":projection_non_record"
   end
 
+  test "renders operator type failures with operator-specific context" do
+    operand = Host.render({:unsupported_operand_type, :+}, "demo.cure")
+    meaning = Host.render({:no_operator_meaning, :<<<}, "demo.cure")
+
+    assert operand =~ "[E093]"
+    assert operand =~ "OPERATOR OPERAND TYPE MISMATCH"
+    assert operand =~ "`+`"
+    assert meaning =~ "[E093]"
+    assert meaning =~ "<<<"
+    refute operand =~ ":unsupported_operand_type"
+    refute meaning =~ ":no_operator_meaning"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 

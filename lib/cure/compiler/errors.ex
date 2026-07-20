@@ -471,6 +471,8 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:sibling_module_collision, _name, _owners}), do: true
   defp structured_error?({:precedence_cycle, _groups}), do: true
   defp structured_error?({:builtin_operator_not_overloadable, _operator}), do: true
+  defp structured_error?({:unsupported_operand_type, _operator}), do: true
+  defp structured_error?({:no_operator_meaning, _operator}), do: true
   defp structured_error?({:unsupported_async, _message, meta}) when is_list(meta), do: true
   defp structured_error?({:splice_outside_quote, _tag, meta}) when is_list(meta), do: true
   defp structured_error?({:unbound_variable, _message, meta}) when is_list(meta), do: true
