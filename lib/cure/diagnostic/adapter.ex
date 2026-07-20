@@ -709,6 +709,14 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:no_matching_overload, name, arguments}, opts),
     do: contextual_type_failure(:no_matching_overload, %{name: name, arguments: arguments}, opts)
 
+  def from_error({:label_mismatch, key, declared, written}, opts),
+    do:
+      contextual_type_failure(
+        :label_mismatch,
+        %{key: key, declared: declared, written: written},
+        opts
+      )
+
   def from_error({:ambiguous_overload, name, owners}, opts),
     do: contextual_type_failure(:ambiguous_overload, %{name: name, owners: owners}, opts)
 
@@ -732,6 +740,15 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:unsolved_field_type, constructor}, opts),
     do: contextual_type_failure(:unsolved_field_type, %{constructor: constructor}, opts)
+
+  def from_error({:forced_pattern_not_in_pattern, meta}, opts),
+    do: contextual_type_failure(:forced_pattern_not_in_pattern, %{detail: meta}, opts)
+
+  def from_error({:named_implicit_not_in_pattern, meta}, opts),
+    do: contextual_type_failure(:named_implicit_not_in_pattern, %{detail: meta}, opts)
+
+  def from_error({:unsolved_parameters, constructor}, opts),
+    do: contextual_type_failure(:unsolved_parameters, %{constructor: constructor}, opts)
 
   def from_error({kind, detail}, opts)
       when kind in [
@@ -1374,6 +1391,10 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:expected_module, _ast}, opts), do: codegen_failure(:expected_module, opts)
   def from_error({:unsupported_container, type}, opts), do: codegen_failure({:unsupported_container, type}, opts)
+  def from_error({:cannot_emit, reason}, opts), do: codegen_failure({:cannot_emit, reason}, opts)
+
+  def from_error({:inconsistent_head_kind, name}, opts),
+    do: declaration_conflict(:inconsistent_head_kind, %{name: name}, opts)
 
   def from_error({:lift_module_error, details}, opts) when is_map(details) do
     macro = get_in(details, [:source_provenance, :macro]) || :macro
@@ -1861,6 +1882,11 @@ defmodule Cure.Diagnostic.Adapter do
            "No overload of `#{name_to_string(details.name)}` accepts the argument types at this call site.",
            "change the arguments or choose a different overload"}
 
+        :label_mismatch ->
+          {"Argument label mismatch",
+           "The argument label `#{name_to_string(details.key)}` does not match the labels declared by this overload.",
+           "use the declared argument label"}
+
         :ambiguous_overload ->
           {"Overload resolution is ambiguous",
            "More than one overload of `#{name_to_string(details.name)}` matches this call.",
@@ -1887,6 +1913,19 @@ defmodule Cure.Diagnostic.Adapter do
         :unsolved_field_type ->
           {"Constructor field type is unresolved", "Cure could not determine the type of a field in this constructor.",
            "add an annotation that determines the field type"}
+
+        :forced_pattern_not_in_pattern ->
+          {"Forced pattern is unavailable", "This forced pattern refers to a name that is not bound by the pattern.",
+           "bind the name in the pattern before forcing it"}
+
+        :named_implicit_not_in_pattern ->
+          {"Named implicit is unavailable", "This named implicit is not bound by the surrounding pattern.",
+           "bind the implicit in the pattern or remove the reference"}
+
+        :unsolved_parameters ->
+          {"Constructor parameters are unresolved",
+           "Cure could not determine all parameters required by this constructor.",
+           "add an annotation or make the constructor parameters explicit"}
 
         :unsupported_expression ->
           {"Expression is not supported here", "This expression form is not valid in the current elaboration context.",
