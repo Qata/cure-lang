@@ -45,6 +45,7 @@ defmodule Cure.Compiler.MacroComputedTest do
               syntax_fields: [],
               syntax_repeated_fields: [],
               syntax_field_types: %{},
+              file: "nofile",
               line: _,
               col: _
             ], _} =
@@ -63,9 +64,7 @@ defmodule Cure.Compiler.MacroComputedTest do
   test "computed rules can capture a positional declarations block hole" do
     [rule] =
       rules(
-        parse!(
-          "macro Mk\n  syntax mk state <t: Type> <body: Declarations until dedent> computed directly by build\n"
-        )
+        parse!("macro Mk\n  syntax mk state <t: Type> <body: Declarations until dedent> computed directly by build\n")
       )
 
     assert rule.kind == :computed
@@ -200,6 +199,7 @@ defmodule Cure.Compiler.MacroComputedTest do
               syntax_fields: [],
               syntax_repeated_fields: [],
               syntax_field_types: %{},
+              file: "nofile",
               line: _,
               col: _
             ], [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
@@ -259,7 +259,9 @@ defmodule Cure.Compiler.MacroComputedTest do
 
   test "the direct opt-in propagates to the deferred use-site node meta" do
     node =
-      parse!("mod M\n  macro Mk\n    syntax mk <x: Code> computed directly by build_it\n  fn f(a: Int) -> Syntax = mk a\n")
+      parse!(
+        "mod M\n  macro Mk\n    syntax mk <x: Code> computed directly by build_it\n  fn f(a: Int) -> Syntax = mk a\n"
+      )
 
     find = fn find, n ->
       case n do
