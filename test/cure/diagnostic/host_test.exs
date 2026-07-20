@@ -317,6 +317,18 @@ defmodule Cure.Diagnostic.HostTest do
     refute mismatch =~ ":app_name_mismatch"
   end
 
+  test "preserves the inner diagnostic through project compile-failure envelopes" do
+    rendered =
+      Host.render(
+        {:compile_failed, {:extern_arity_mismatch, :head, 2, 1}},
+        "Cure.toml"
+      )
+
+    assert rendered =~ "[E003]"
+    assert rendered =~ "head"
+    refute rendered =~ ":compile_failed"
+  end
+
   test "converts aggregate type errors through the contextual type family" do
     rendered =
       Host.render(

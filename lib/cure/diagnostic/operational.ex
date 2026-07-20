@@ -51,6 +51,9 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:app_name_mismatch, expected, actual}, _opts),
     do: project_artifact_failure(:app_name_mismatch, %{expected: expected, actual: actual})
 
+  def from_error({:compile_failed, reason}, opts),
+    do: Cure.Diagnostic.Adapter.from_error(reason, opts)
+
   def from_error({:undocumented_public_function, file, line}, _opts), do: undocumented_public_function(file, line)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
