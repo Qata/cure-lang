@@ -683,13 +683,14 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp attach_source_context({:error, reason}, expression, checking) do
-    meta = expression_meta(expression)
+    {line, column, length} = expression_extent(expression)
 
     {:error,
      {:source_context, reason,
       %{
-        line: Keyword.get(meta, :line),
-        column: Keyword.get(meta, :col),
+        line: line,
+        column: column,
+        length: length,
         checking: checking
       }}}
   end
@@ -699,6 +700,44 @@ defmodule Cure.Elab.Declarations do
   defp expression_meta({_kind, meta, _children}) when is_list(meta), do: meta
   defp expression_meta({_kind, meta, _left, _right}) when is_list(meta), do: meta
   defp expression_meta(_expression), do: []
+
+  defp expression_extent({:function_call, meta, arguments}) when is_list(meta) do
+    line = Keyword.get(meta, :line)
+    open_column = Keyword.get(meta, :col)
+    name = meta |> Keyword.get(:name, "") |> to_string()
+    start_column = if is_integer(open_column), do: max(1, open_column - String.length(name)), else: nil
+
+    end_column =
+      case List.last(arguments) do
+        nil ->
+          if(is_integer(open_column), do: open_column + 1, else: nil)
+
+        argument ->
+          argument |> expression_extent() |> extent_end_column() |> then(&if(is_integer(&1), do: &1 + 1, else: nil))
+      end
+
+    {line, start_column, extent_length(start_column, end_column)}
+  end
+
+  defp expression_extent({:variable, meta, name}) when is_list(meta) do
+    {Keyword.get(meta, :line), Keyword.get(meta, :col), String.length(to_string(name))}
+  end
+
+  defp expression_extent(expression) do
+    meta = expression_meta(expression)
+    {Keyword.get(meta, :line), Keyword.get(meta, :col), 1}
+  end
+
+  defp extent_end_column({_line, column, length}) when is_integer(column) and is_integer(length),
+    do: column + length
+
+  defp extent_end_column(_extent), do: nil
+
+  defp extent_length(start_column, end_column)
+       when is_integer(start_column) and is_integer(end_column),
+       do: max(1, end_column - start_column)
+
+  defp extent_length(_start_column, _end_column), do: 1
 
   defp elaborate_declared_body(body_expr, return_core, scope, ctx, env, params) do
     if Elaborator.effect_goal?(return_core, ctx) do

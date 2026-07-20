@@ -114,13 +114,13 @@ defmodule Cure.Diagnostic.Renderer do
   defp excerpt(nil, _registry), do: nil
   defp excerpt(_label, nil), do: nil
 
-  defp excerpt(%Label{span: %Span{} = span, message: message}, %SourceRegistry{} = registry) do
+  defp excerpt(%Label{span: %Span{} = span, message: message} = label, %SourceRegistry{} = registry) do
     lines = span.start_line..span.end_line
 
     rendered =
       Enum.map(lines, fn line_number ->
         case SourceRegistry.line(registry, span, line_number) do
-          {:ok, source_line} -> render_excerpt_line(span, line_number, source_line, message)
+          {:ok, source_line} -> render_excerpt_line(span, line_number, source_line, message, label.style)
           :error -> nil
         end
       end)
@@ -132,7 +132,7 @@ defmodule Cure.Diagnostic.Renderer do
     end
   end
 
-  defp render_excerpt_line(span, line_number, source_line, message) do
+  defp render_excerpt_line(span, line_number, source_line, message, style) do
     start_column = if line_number == span.start_line, do: span.start_column, else: 1
 
     end_column =
@@ -144,7 +144,8 @@ defmodule Cure.Diagnostic.Renderer do
     visual_start = visual_column(source_line, start_column)
     visual_end = visual_column(source_line, end_column)
     width = max(visual_end - visual_start, 1)
-    marker = String.duplicate(" ", visual_start - 1) <> String.duplicate("^", width)
+    marker_character = if style == :secondary, do: "-", else: "^"
+    marker = String.duplicate(" ", visual_start - 1) <> String.duplicate(marker_character, width)
     suffix = if line_number == span.end_line and message, do: " " <> message, else: ""
     gutter = String.length(Integer.to_string(line_number))
     "#{line_number} | #{expand_tabs(source_line)}\n#{String.duplicate(" ", gutter)} | #{marker}#{suffix}"
@@ -317,7 +318,27 @@ defmodule Cure.Diagnostic.Renderer do
   defp stringify_keys(value) when is_atom(value), do: Atom.to_string(value)
   defp stringify_keys(value), do: value
 
-  defp colorize(rendered, :error), do: IO.ANSI.red() <> rendered <> IO.ANSI.reset()
-  defp colorize(rendered, :warning), do: IO.ANSI.yellow() <> rendered <> IO.ANSI.reset()
-  defp colorize(rendered, _), do: rendered
+  defp colorize(rendered, severity) do
+    primary_color = if severity == :warning, do: IO.ANSI.yellow(), else: IO.ANSI.red()
+    reset = IO.ANSI.reset()
+
+    rendered
+    |> String.split("\n")
+    |> Enum.with_index()
+    |> Enum.map_join("\n", fn
+      {line, 0} -> primary_color <> line <> reset
+      {line, _index} -> color_marker_line(line, primary_color, reset)
+    end)
+  end
+
+  defp color_marker_line(line, primary_color, reset) do
+    Regex.replace(~r/^(\s*\|\s*\s*)(\^+)(.*)$/u, line, fn _, prefix, marker, suffix ->
+      prefix <> primary_color <> marker <> reset <> suffix
+    end)
+    |> then(fn colored ->
+      Regex.replace(~r/^(\s*\|\s*\s*)(-+)(.*)$/u, colored, fn _, prefix, marker, suffix ->
+        prefix <> IO.ANSI.cyan() <> marker <> reset <> suffix
+      end)
+    end)
+  end
 end

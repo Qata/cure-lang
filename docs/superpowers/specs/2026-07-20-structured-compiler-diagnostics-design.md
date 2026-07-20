@@ -518,6 +518,14 @@ internal atom such as `unknown_global` or `file_read`. The stable Cure code
 remains visible in the banner. Colour may distinguish the banner and marked
 source, but the colour-free rendering must preserve the same hierarchy.
 
+Primary underlines cover the complete offending authored token or expression,
+not merely its first column. A two-character arrow receives two carets; a
+rejected call or expression receives one caret per displayed character across
+its full span. Primary carets are red in a colour-capable terminal. Secondary
+labels use a distinct marker and colour so related context cannot be mistaken
+for the source of the error. ANSI styling is applied only to semantic emphasis
+(the banner and markers), never to the entire paragraph.
+
 After the banner, the renderer presents information in this order:
 
 1. a diagnostic-specific explanation in the vocabulary of the authored Cure

@@ -1754,7 +1754,7 @@ defmodule Cure.Compiler.Errors do
     opts =
       case error_location(error) do
         {line, col} when line > 0 and col > 0 ->
-          case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, line, col) do
+          case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, line, col, error_span_length(error)) do
             {:ok, span} -> [span: span]
             {:error, _} -> []
           end
@@ -1817,6 +1817,21 @@ defmodule Cure.Compiler.Errors do
        do: {line, col}
 
   defp error_location(_error), do: {0, 0}
+
+  defp error_span_length({:codegen_error, reason}), do: error_span_length(reason)
+  defp error_span_length({:parse_error, [reason | _]}), do: error_span_length(reason)
+  defp error_span_length({:source_context, _reason, %{length: length}}) when is_integer(length), do: max(1, length)
+  defp error_span_length({:unknown_global, name, _details}), do: String.length(to_string(name))
+  defp error_span_length({:unknown_global, name}), do: String.length(to_string(name))
+  defp error_span_length({:expected, _expected, :got, actual, _line, _col}), do: syntax_width(actual)
+  defp error_span_length({:unexpected_token, actual, _line, _col}), do: syntax_width(actual)
+  defp error_span_length(_error), do: 1
+
+  defp syntax_width(:arrow), do: 2
+  defp syntax_width(:fat_arrow), do: 2
+  defp syntax_width(:pipe_forward), do: 2
+  defp syntax_width(:melquiades), do: 3
+  defp syntax_width(_token), do: 1
 
   # -- Formatting Helper -------------------------------------------------------
 

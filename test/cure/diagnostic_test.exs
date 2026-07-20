@@ -39,6 +39,7 @@ defmodule Cure.DiagnosticTest do
       )
 
     plain = Renderer.plain(diagnostic, registry)
+    terminal = Renderer.terminal(diagnostic, registry, color: true)
     machine = Renderer.to_map(diagnostic)
     lsp = Renderer.lsp(diagnostic, registry)
     host = Renderer.code_diagnostic(diagnostic)
@@ -47,6 +48,7 @@ defmodule Cure.DiagnosticTest do
     assert plain =~ "-- UNKNOWN VALUE [E101]"
     assert plain =~ "2 |   fn answer() -> Int = unknowñ"
     assert plain =~ "^^^^^^^ not found"
+    assert terminal =~ IO.ANSI.red() <> "^^^^^^^" <> IO.ANSI.reset()
     assert plain =~ "expansion: actor Worker"
     assert machine["code"] == lsp["code"]
     assert machine["primary"]["span"]["start_byte"] == span.start_byte
@@ -56,6 +58,18 @@ defmodule Cure.DiagnosticTest do
     assert host.position == {2, 24}
     assert mix.compiler_name == "Cure"
     assert {:ok, ^diagnostic} = Renderer.from_host_diagnostic(mix)
+  end
+
+  test "parser diagnostics underline the full unexpected token" do
+    source = "mod Demo\n  fn run(] -> Int = 1\n"
+    error = {:parse_error, [{:expected, :rparen, :got, :arrow, 2, 12}]}
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
+
+    assert diagnostic.primary.span.end_column - diagnostic.primary.span.start_column == 2
+    assert Renderer.plain(diagnostic, registry) =~ "^^ unexpected syntax here"
+
+    assert Renderer.terminal(diagnostic, registry, color: true) =~
+             IO.ANSI.red() <> "^^" <> IO.ANSI.reset()
   end
 
   test "LSP positions count UTF-16 code units rather than Unicode scalars" do
@@ -146,7 +160,7 @@ defmodule Cure.DiagnosticTest do
     rendered = Renderer.plain(diagnostic, registry)
     assert rendered =~ "also at src/token.cure:1:6"
     assert rendered =~ "1 | type Token = Token"
-    assert rendered =~ "^^^^^ defined here"
+    assert rendered =~ "----- defined here"
   end
 
   test "carets align after tabs and multiline labels underline every covered line" do

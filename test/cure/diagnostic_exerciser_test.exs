@@ -22,9 +22,9 @@ defmodule Cure.DiagnosticExerciserTest do
           {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, "#{label}.cure", source)
           assert diagnostic.code == expected_code
           assert diagnostic.primary, "#{label} did not retain an authored source span"
-          rendered = Renderer.plain(diagnostic, registry)
-          assert rendered =~ " | ", "#{label} did not render an authored source excerpt"
-          IO.puts(:stderr, "[#{label}]\n" <> rendered)
+          plain = Renderer.plain(diagnostic, registry)
+          assert plain =~ " | ", "#{label} did not render an authored source excerpt"
+          IO.puts(:stderr, "[#{label}]\n" <> Renderer.terminal(diagnostic, registry, color: true))
       end
     end)
 
@@ -43,7 +43,7 @@ defmodule Cure.DiagnosticExerciserTest do
     ]
 
     Enum.each(diagnostics, fn diagnostic ->
-      IO.puts(:stderr, Renderer.plain(diagnostic))
+      IO.puts(:stderr, Renderer.terminal(diagnostic, nil, color: true))
     end)
 
     operational_codes = Enum.map(diagnostics, & &1.code)
