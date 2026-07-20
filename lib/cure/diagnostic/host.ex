@@ -35,6 +35,20 @@ defmodule Cure.Diagnostic.Host do
     |> Sink.render(diagnostic)
   end
 
+  @doc "Emit a structured diagnostic through the shared sink."
+  @spec emit_diagnostic(Cure.Diagnostic.t(), keyword()) :: {:ok, Sink.t()} | {:error, term()}
+  def emit_diagnostic(%Cure.Diagnostic{} = diagnostic, opts \\ []) do
+    Sink.new(
+      format: :terminal,
+      color: Keyword.get(opts, :color, :auto),
+      width: Keyword.get(opts, :width, 80),
+      output_device: Keyword.get(opts, :output_device, :standard_error),
+      registry: Keyword.get(opts, :registry)
+    )
+    |> Sink.emit(diagnostic)
+    |> Sink.flush()
+  end
+
   defp convert(reason, _file, _source) when is_struct(reason, Cure.Diagnostic) do
     {:ok, reason, nil}
   end

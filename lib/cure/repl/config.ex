@@ -235,6 +235,6 @@ defmodule Cure.REPL.Config do
 
   defp warn(message) do
     diagnostic = Cure.Diagnostic.Operational.configuration_warning(message)
-    IO.puts(:stderr, Cure.Diagnostic.Host.render_diagnostic(diagnostic))
+    Cure.Diagnostic.Host.emit_diagnostic(diagnostic, output_device: :stderr)
   end
 end

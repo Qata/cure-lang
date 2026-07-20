@@ -32,6 +32,16 @@ defmodule Cure.Diagnostic.HostTest do
            |> Map.fetch!("code") == "E091"
   end
 
+  test "emits diagnostics through a caller-selected device" do
+    {:ok, device} = StringIO.open("")
+    diagnostic = Cure.Diagnostic.Operational.file_read("demo.cure", :enoent)
+
+    assert {:ok, _sink} = Host.emit_diagnostic(diagnostic, output_device: device, color: :never)
+    {_input, output} = StringIO.contents(device)
+    assert output =~ "[E095]"
+    assert output =~ "Cannot read `demo.cure`"
+  end
+
   test "renders operational failures without fabricating source context" do
     rendered = Host.render({:file_read_error, "demo.cure", :enoent}, "demo.cure")
 

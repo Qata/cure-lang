@@ -90,7 +90,10 @@ defmodule Cure.REPL.Snap do
       Enum.filter(loaded_paths, fn p -> not File.exists?(p) end)
 
     Enum.each(missing, fn p ->
-      IO.puts(:stderr, Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.snap_missing(p)))
+      Cure.Diagnostic.Host.emit_diagnostic(
+        Cure.Diagnostic.Operational.snap_missing(p),
+        output_device: :stderr
+      )
     end)
 
     present_paths = Enum.reject(loaded_paths, &(&1 in missing))
