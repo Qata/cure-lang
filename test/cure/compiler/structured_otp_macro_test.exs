@@ -358,6 +358,31 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     assert {:ok, {{:one_for_one, 3, 5}, [_]}} = apply(:"Cure.Generated.StructuredSup", :init, [[]])
   end
 
+  test "structured supervisor exposes a validated typed lifecycle" do
+    source = """
+    mod M
+      use Std.Actor
+      use Std.Supervisor
+
+      actor Cure.Generated.Child
+        state Int
+        initial 0
+        on_message
+          Ping -> state
+
+      sup Cure.Generated.TypedLifecycleSup
+        children
+          actor Cure.Generated.Child as Worker
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:Started, pid} = apply(:"Cure.Generated.TypedLifecycleSup", :start, [])
+    assert is_pid(pid)
+    assert Process.alive?(pid)
+    assert :unit = apply(:"Cure.Generated.TypedLifecycleSup", :stop, [pid, :Normal])
+    refute Process.alive?(pid)
+  end
+
   test "structured supervisor recursively expands nested child syntax" do
     source = """
     mod M

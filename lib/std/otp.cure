@@ -76,6 +76,10 @@ mod Std.Otp
   ## phantom observations; `event` is the only asynchronously accepted code.
   typealias FsmPid(event, state, data) = RawFsmPid(event, state, data)
 
+  ## Typed handle to an OTP supervisor. The carrier is a bare native pid, but
+  ## it is not interchangeable with an actor, FSM, or freely sendable process.
+  typealias SupervisorHandle = RawSupervisorPid
+
   type StartResult(handle) = Started(handle) | StartFailed | StartIgnored | InvalidStartResult
 
   fn map_start({a: Type}, {b: Type}, result: StartResult(a), convert: (a) -> b) -> StartResult(b) = match result
@@ -306,6 +310,38 @@ mod Std.Otp
 
   fn start_supervisor_with({a: Type}, module: Atom, args: List(a)) -> Effect(Tuple) =
     raw_supervisor_start_link(%[:local, module], module, args)
+
+  fn start_typed_supervisor(module: Atom) -> Effect(StartResult(SupervisorHandle)) =
+    let outcome = raw_supervisor_start_link_term(%[:local, module], module, assert_type [] : List(Atom))
+    decode_supervisor_start(outcome)
+
+  local fn decode_supervisor_start(outcome: BeamTerm) -> StartResult(SupervisorHandle) = match atom(outcome)
+    Some(tag) -> match tag == :ignore
+      true -> StartIgnored()
+      false -> InvalidStartResult()
+    None() -> match tuple_arity(outcome)
+      Some(size) -> match size == 2
+        true -> match tuple_element(outcome, 0)
+          Some(tag_term) -> match atom(tag_term)
+            Some(tag) -> match tag == :ok
+              true -> decode_started_supervisor(outcome)
+              false -> match tag == :error
+                true -> StartFailed()
+                false -> InvalidStartResult()
+            None() -> InvalidStartResult()
+          None() -> InvalidStartResult()
+        false -> InvalidStartResult()
+      None() -> InvalidStartResult()
+
+  local fn decode_started_supervisor(outcome: BeamTerm) -> StartResult(SupervisorHandle) = match tuple_element(outcome, 1)
+    None() -> InvalidStartResult()
+    Some(pid_term) -> match pid(pid_term)
+      None() -> InvalidStartResult()
+      Some(process) -> Started(raw_supervisor_pid(1, %[process, :checked_supervisor]))
+
+  fn stop_supervisor(supervisor: SupervisorHandle, reason: ExitReason) -> Effect(Unit) =
+    let stopped = raw_supervisor_stop(supervisor, exit_atom(reason), 5000)
+    ()
 
   ## Send a well-typed message: `msg : m` must match `dest`'s accepted type `m`,
   ## so a `Pid(Command)` can never be sent a `Telemetry`. (Named `tell`, not

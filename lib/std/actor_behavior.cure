@@ -33,7 +33,8 @@ mod Std.ActorBehavior
   fn supervisor_module(module_name: SynLit, declarations: List(Syntax)) -> Syntax =
     behavior_module(module_name, :supervisor, [
       use_module("Std.Otp"),
-      use_module("Std.Supervisor")
+      use_module("Std.Supervisor"),
+      use_module("Std.ExitReason")
     ], declarations)
 
   fn application_module(module_name: SynLit, declarations: List(Syntax)) -> Syntax =

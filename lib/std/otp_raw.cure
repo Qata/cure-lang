@@ -63,6 +63,12 @@ mod Std.Otp.Raw
   @erases(:pid)
   opaque type RawFsmPid(event, state, data)
 
+  ## A supervisor handle is the native supervisor pid with no message algebra
+  ## claim. Its distinct carrier prevents actor/FSM operations from being used
+  ## on it while erasing to the same pid at runtime.
+  @erases(:pid)
+  opaque type RawSupervisorPid
+
   ## An uninhabited message type. `BarePid` carries it, which is what makes a pid
   ## recovered from the registry UNSENDABLE: `tell` would demand a `NoMessage` value and
   ## no constructor produces one.
@@ -155,6 +161,9 @@ mod Std.Otp.Raw
   fn raw_fsm_pid({event: Type}, {state: Type}, {data: Type}, index: Int, checked: Tuple(BarePid, Atom)) -> RawFsmPid(event, state, data)
 
   @extern(:erlang, :element, 2)
+  fn raw_supervisor_pid(index: Int, checked: Tuple(BarePid, Atom)) -> RawSupervisorPid
+
+  @extern(:erlang, :element, 2)
   fn raw_dep_actor_server({m: Type}, {q: Type}, {rep: (q) -> Type}, index: Int, checked: Tuple(RawServerPid(m, q, Unit), Atom)) -> RawDepServerPid(m, q, rep)
 
   @extern(:erlang, :element, 2)
@@ -208,6 +217,13 @@ mod Std.Otp.Raw
 
   @extern(:supervisor, :start_link, 3)
   fn raw_supervisor_start_link({a: Type}, name: Tuple(Atom, Atom), module: Atom, args: List(a)) -> Effect(Tuple)
+
+  ## Honest supervisor startup result, including OTP's bare `ignore` outcome.
+  @extern(:supervisor, :start_link, 3)
+  fn raw_supervisor_start_link_term({a: Type}, name: Tuple(Atom, Atom), module: Atom, args: List(a)) -> Effect(RawTerm)
+
+  @extern(:gen_server, :stop, 3)
+  fn raw_supervisor_stop(pid: RawSupervisorPid, reason: Atom, timeout: Int) -> Effect(Atom)
 
   ## Send `msg` to `dest`. Fire-and-forget; the effect is performing the send.
   ## Tag-polymorphic: a raw send to a gen_server is legitimate — it lands in
