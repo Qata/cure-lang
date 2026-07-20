@@ -105,6 +105,20 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert :ok = Cure.Diagnostic.Registry.Inventory.validate(inventory)
   end
 
+  test "inventory rejects new production calls to the legacy compiler formatter" do
+    inventory = %{
+      error_constructors: [],
+      deliberate_raises: [],
+      formatter_consumers: [
+        %{path: "lib/cure/cli.ex", line: 1, text: "Cure.Compiler.Errors.format_error(reason)"}
+      ],
+      stderr_sites: []
+    }
+
+    assert {:error, {:legacy_formatter_path, [_]}} =
+             Cure.Diagnostic.Registry.Inventory.validate(inventory)
+  end
+
   test "source validation reports an unregistered stable code" do
     path = Path.join(System.tmp_dir!(), "cure-diagnostic-registry-fixture.ex")
     File.write!(path, ~S(defmodule Fixture do

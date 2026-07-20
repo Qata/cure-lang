@@ -40,7 +40,17 @@ defmodule Cure.Diagnostic.Registry.Inventory do
           path not in ["lib/cure/diagnostic/sink.ex", "lib/cure/diagnostic/registry/inventory.ex"]
       end)
 
-    if direct_renderer_sites == [], do: :ok, else: {:error, {:direct_renderer_bypass, direct_renderer_sites}}
+    legacy_formatter_sites =
+      Enum.filter(inventory.formatter_consumers, fn %{text: text, path: path} ->
+        String.contains?(text, "Cure.Compiler.Errors.format_error(") and
+          path != "lib/cure/compiler/errors.ex"
+      end)
+
+    cond do
+      direct_renderer_sites != [] -> {:error, {:direct_renderer_bypass, direct_renderer_sites}}
+      legacy_formatter_sites != [] -> {:error, {:legacy_formatter_path, legacy_formatter_sites}}
+      true -> :ok
+    end
   end
 
   defp scan_file(path) do
