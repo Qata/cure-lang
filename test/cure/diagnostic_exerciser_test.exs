@@ -92,6 +92,10 @@ defmodule Cure.DiagnosticExerciserTest do
         Cure.Compiler.Errors.to_diagnostic(reason, "#{label}.cure", "fn run() -> Int = 1\n")
 
       assert diagnostic.code == expected_code
+
+      assert Cure.Compiler.Errors.format_with_source(reason, "#{label}.cure", "fn run() -> Int = 1\n") =~
+               expected_code,
+             "#{label} still uses the legacy source formatter path"
     end)
 
     diagnostics = [
