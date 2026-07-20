@@ -7300,6 +7300,7 @@ defmodule Cure.Compiler.Parser do
       col: token.col
     ]
 
+    meta = put_container_source_info(meta, token, name_token, name_token, state)
     ast = {:container, meta, body}
     {ast, state}
   end
@@ -7311,7 +7312,9 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     # Protocol name
+    proto_start = peek(state)
     {proto_name, state} = parse_dotted_name(state)
+    proto_end = last_authored_token(state)
 
     # Expect `for`
     state = expect_keyword(state, :for)
@@ -7351,6 +7354,7 @@ defmodule Cure.Compiler.Parser do
     ]
 
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
+    meta = put_container_source_info(meta, token, proto_start, proto_end, state)
     ast = {:container, meta, body}
     {ast, state}
   end
@@ -7423,6 +7427,7 @@ defmodule Cure.Compiler.Parser do
       col: token.col
     ]
 
+    meta = put_container_source_info(meta, token, name_token, name_token, state)
     {{:interface, meta, body}, state}
   end
 
@@ -7444,7 +7449,9 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     state = advance(state)
 
+    iface_start = peek(state)
     {iface_name, state} = parse_dotted_name(state)
+    iface_end = last_authored_token(state)
 
     # Consume the `for` keyword.
     state = expect_keyword(state, :for)
@@ -7492,6 +7499,7 @@ defmodule Cure.Compiler.Parser do
     ]
 
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
+    meta = put_container_source_info(meta, token, iface_start, iface_end, state)
     {{:implementation, meta, body}, state}
   end
 

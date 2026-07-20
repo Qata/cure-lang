@@ -141,6 +141,22 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, fixity_info.operator) == "+"
   end
 
+  test "protocol and interface declarations retain authored name ranges" do
+    source = "proto Show(T)\n  fn show(x: T) -> String\ninterface Eq(T)\n  fn eq(x: T, y: T) -> Bool\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "traits.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "traits.cure", emit_events: false, prelude_macros: false)
+
+    proto = find_node(ast, :container)
+    interface = find_node(ast, :interface)
+    proto_info = Metadata.source_info(elem(proto, 1))
+    interface_info = Metadata.source_info(elem(interface, 1))
+
+    assert slice(source, proto_info.whole) == "proto Show(T)\n  fn show(x: T) -> String"
+    assert slice(source, proto_info.name) == "Show"
+    assert slice(source, interface_info.whole) == "interface Eq(T)\n  fn eq(x: T, y: T) -> Bool"
+    assert slice(source, interface_info.name) == "Eq"
+  end
+
   test "type applications in annotations retain their closing delimiter" do
     source = "mod Demo\n  fn answer(x: Option(Int)) -> Option(Int) = x\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "demo.cure", emit_events: false)
