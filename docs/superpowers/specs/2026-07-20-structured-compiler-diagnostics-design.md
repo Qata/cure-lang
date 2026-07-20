@@ -13,6 +13,12 @@ LSP/machine consumers
 platform, or replacement of the current parser implementation. Those remain
 0.35 work.
 
+**Mandatory human-presentation subsidiary:**
+[`2026-07-20-elm-quality-compiler-diagnostics-design.md`](2026-07-20-elm-quality-compiler-diagnostics-design.md).
+It makes the document algebra, exact-range ownership, contextual syntax/type
+reports, Elm-style snippet layouts, and presentation verification gates
+normative for this work.
+
 ## 1. Decision
 
 Cure 0.34 will ship a shared structured diagnostic foundation before the
@@ -820,6 +826,8 @@ copying Racket's runtime syntax-object or exception architecture.
 
 ## 15. Related specifications
 
+- `2026-07-20-elm-quality-compiler-diagnostics-design.md` (authoritative
+  human-presentation architecture and completion gates)
 - `2026-07-14-compile-time-reflective-beam-macros-design.md`
 - `2026-07-10-compiler-error-expansion-design.md` (superseded for implementation
   scope by this document)
