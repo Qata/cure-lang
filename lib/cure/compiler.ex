@@ -292,7 +292,11 @@ defmodule Cure.Compiler do
   # never modified. `cure migrate` is the separate rewrite-and-write consumer.
   defp migrate_warn(ast, file) do
     {ast, warnings} = Cure.Migrate.run(ast, file: file, apply: :safe_only)
-    Enum.each(warnings, fn w -> IO.warn("#{w.file}:#{w.line}: #{w.message}", []) end)
+
+    Enum.each(warnings, fn w ->
+      IO.puts(:stderr, Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.migration_warning(w)))
+    end)
+
     {:ok, ast}
   end
 

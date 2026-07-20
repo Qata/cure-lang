@@ -288,4 +288,19 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.key == :file_read
     assert diagnostic.payload.path == "Cure.toml"
   end
+
+  test "migration warnings render as rich diagnostics" do
+    warning =
+      Cure.Diagnostic.Operational.migration_warning(%{
+        rule: :legacy,
+        file: "demo.cure",
+        line: 3,
+        message: "use the modern form"
+      })
+
+    assert warning.severity == :warning
+    assert warning.code == "W001"
+    assert Cure.Diagnostic.Renderer.plain(warning) =~ "W001"
+    assert Cure.Diagnostic.Renderer.plain(warning) =~ "use the modern form"
+  end
 end

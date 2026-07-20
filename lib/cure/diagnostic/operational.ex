@@ -30,6 +30,31 @@ defmodule Cure.Diagnostic.Operational do
         reason: inspect(reason)
       })
 
+  def migration_warning(%{rule: rule, file: file, line: line, message: message}) do
+    Diagnostic.new(
+      code: "W001",
+      key: :migration_warning,
+      severity: :warning,
+      title: "Migration warning",
+      message: message,
+      primary: %Cure.Diagnostic.Label{
+        span: %Cure.Diagnostic.Span{
+          source_id: file,
+          path: file,
+          start_byte: 0,
+          end_byte: 0,
+          start_line: line || 1,
+          end_line: line || 1,
+          start_column: 1,
+          end_column: 1
+        },
+        style: :primary,
+        message: "rule #{rule} applies here"
+      },
+      payload: %{rule: rule, file: file, line: line}
+    )
+  end
+
   defp diagnostic(code, key, message, payload),
     do: Diagnostic.new(code: code, key: key, severity: :error, title: "#{key}", message: message, payload: payload)
 
