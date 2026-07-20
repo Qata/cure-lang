@@ -484,19 +484,13 @@ defmodule Cure.Compiler.Errors do
   defp error_location({:lambda_block_unterminated, line, col, _code}), do: {line, col}
   defp error_location({:lex_error, reason}), do: lex_error_location(reason)
   defp error_location({_, _, meta}) when is_list(meta), do: {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)}
-  defp error_location({_, _, line, col}) when is_integer(line) and is_integer(col), do: {line, col}
 
-  defp error_location({:expected, _expected, :got, _actual, line, col})
-       when is_integer(line) and is_integer(col),
-       do: {line, col}
-
-  defp error_location({:expected_token, _expected, _actual_type, _actual_value, line, col})
-       when is_integer(line) and is_integer(col),
-       do: {line, col}
-
-  defp error_location({:macro_use_mismatch, _keyword, _expected, _got, line, col})
-       when is_integer(line) and is_integer(col),
-       do: {line, col}
+  defp error_location(error) when is_tuple(error) and tuple_size(error) >= 4 do
+    case error |> Tuple.to_list() |> Enum.reverse() do
+      [col, line | _] when is_integer(line) and is_integer(col) -> {line, col}
+      _ -> {0, 0}
+    end
+  end
 
   defp error_location({:malformed_hole, line, col})
        when is_integer(line) and is_integer(col),

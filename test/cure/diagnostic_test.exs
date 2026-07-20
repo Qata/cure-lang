@@ -106,6 +106,22 @@ defmodule Cure.DiagnosticTest do
     refute Renderer.plain(diagnostic, registry) =~ "{:tab_not_allowed"
   end
 
+  test "parser producer tuples retain trailing source coordinates" do
+    source = "mod Demo\n  x\n"
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(
+        {:unknown_syntax_family_field, :Expr, :field, 2, 3},
+        "demo.cure",
+        source
+      )
+
+    assert diagnostic.code == "E092"
+    assert diagnostic.primary.span.start_line == 2
+    assert diagnostic.primary.span.start_column == 3
+    assert Renderer.plain(diagnostic, registry) =~ "2 |   x"
+  end
+
   test "operational failure tuples use the declared registry converter" do
     entry = Cure.Diagnostic.Registry.fetch!("E095")
     diagnostic = apply(entry.converter, entry.converter_function, [{:file_read_error, "demo.cure", :enoent}, []])
