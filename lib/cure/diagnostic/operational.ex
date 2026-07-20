@@ -22,6 +22,8 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:proof_verification_failed, detail}, _opts), do: proof_verification_failed(detail)
   def from_error({:proof_schema_incompatible, detail}, _opts), do: proof_schema_incompatible(detail)
   def from_error({:snap_schema_incompatible, detail}, _opts), do: snap_schema_incompatible(detail)
+  def from_error({:registry_signature_invalid, detail}, _opts), do: registry_signature_invalid(detail)
+  def from_error({:transparency_log_unreachable, detail}, _opts), do: transparency_log_unreachable(detail)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
@@ -110,6 +112,13 @@ defmodule Cure.Diagnostic.Operational do
   def snap_schema_incompatible(detail),
     do: diagnostic("E069", :snap_schema_incompatible, "Snap schema is incompatible: #{detail}", %{detail: detail})
 
+  def registry_signature_invalid(detail),
+    do: diagnostic("E041", :registry_signature_invalid, "Registry signature is invalid: #{detail}", %{detail: detail})
+
+  def transparency_log_unreachable(detail),
+    do:
+      diagnostic("E042", :transparency_log_unreachable, "Transparency log is unreachable: #{detail}", %{detail: detail})
+
   @doc "Build E101 only for a caught exception at an explicit compiler boundary."
   def internal_exception(exception, stacktrace, opts \\ []) when is_exception(exception) and is_list(stacktrace) do
     fingerprint = fingerprint({exception.__struct__, Exception.message(exception), stack_head(stacktrace)})
@@ -174,6 +183,8 @@ defmodule Cure.Diagnostic.Operational do
   defp title(:proof_verification_failed), do: "Proof verification failed"
   defp title(:proof_schema_incompatible), do: "Proof schema incompatible"
   defp title(:snap_schema_incompatible), do: "Snap schema incompatible"
+  defp title(:registry_signature_invalid), do: "Registry signature invalid"
+  defp title(:transparency_log_unreachable), do: "Transparency log unreachable"
 
   defp fingerprint(term) do
     term
