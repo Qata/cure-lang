@@ -3332,7 +3332,7 @@ defmodule Cure.Compiler.Parser do
     # (`identifier :`), so the head's case is what disambiguates them. Only allow
     # label-grabbing for the non-constructor (function) head.
     allow_labels = not is_pascal_case?(func)
-    {args, arg_labels, state} = parse_call_args(state, allow_labels)
+    {args, arg_labels, state, close_token} = parse_call_args(state, allow_labels)
     name = extract_call_name(func)
 
     meta = [name: name, line: token.line, col: token.col]
@@ -3351,13 +3351,13 @@ defmodule Cure.Compiler.Parser do
         meta
       end
 
-    meta = put_call_source_info(meta, func, args, state, token)
+    meta = put_call_source_info(meta, func, args, token, close_token)
 
     ast = {:function_call, meta, args}
     {ast, state}
   end
 
-  defp put_call_source_info(meta, func, args, state, open_token) do
+  defp put_call_source_info(meta, func, args, open_token, close_token) do
     callee_span =
       case func do
         {_, func_meta, _} when is_list(func_meta) ->
@@ -3378,8 +3378,6 @@ defmodule Cure.Compiler.Parser do
         _ ->
           []
       end)
-
-    close_token = last_authored_token(state)
 
     whole =
       case {callee_span, close_token, open_token.span} do
@@ -3448,7 +3446,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  # Returns {args, labels, state}: `labels` is position-aligned with `args`, each
+  # Returns {args, labels, state, close_token}: `labels` is position-aligned with `args`, each
   # entry the written argument label (`f(to: v)`) or `nil` when the argument is
   # positional. Callers that ignore labels bind the middle element to `_`.
   defp parse_call_args(state, allow_labels) do
@@ -3456,7 +3454,8 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :rparen} ->
-        {[], [], advance(state)}
+        close_token = peek(state)
+        {[], [], advance(state), close_token}
 
       _ ->
         {label, state} = parse_arg_label(state, allow_labels)
@@ -3465,8 +3464,14 @@ defmodule Cure.Compiler.Parser do
         state = skip_newlines(state)
         {rest, rest_labels, state} = parse_more_args(state, allow_labels)
         state = skip_newlines(state)
-        state = expect(state, :rparen)
-        {[first | rest], [label | rest_labels], state}
+
+        {state, close_token} =
+          case expect_token(state, :rparen) do
+            {:ok, token, next_state} -> {next_state, token}
+            {:error, next_state} -> {next_state, nil}
+          end
+
+        {[first | rest], [label | rest_labels], state, close_token}
     end
   end
 
@@ -9095,7 +9100,7 @@ defmodule Cure.Compiler.Parser do
       case peek(state) do
         %Token{type: :lparen} ->
           state = advance(state)
-          {a, _labels, state} = parse_call_args(state, false)
+          {a, _labels, state, _close_token} = parse_call_args(state, false)
           {a, state}
 
         %Token{type: :bool, value: bval} ->
