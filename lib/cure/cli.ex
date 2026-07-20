@@ -1537,7 +1537,7 @@ defmodule Cure.CLI do
             :ok
 
           {:error, reason} ->
-            error("could not bump project edition: #{inspect(reason)}")
+            error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("edition bump", reason)))
             {:error, reason}
         end
 
@@ -1755,7 +1755,11 @@ defmodule Cure.CLI do
           :ok
         else
           {:error, reason} ->
-            error("  #{file}: #{inspect(reason)}")
+            error(
+              "  " <>
+                Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("compile #{file}", reason))
+            )
+
             :error
         end
       end)
@@ -1842,7 +1846,13 @@ defmodule Cure.CLI do
                   :ok
 
                 {:error, reason} ->
-                  error("  #{f}: #{inspect(reason)}")
+                  error(
+                    "  " <>
+                      Cure.Diagnostic.Renderer.plain(
+                        Cure.Diagnostic.Operational.command_failure("compile #{f}", reason)
+                      )
+                  )
+
                   :error
               end
 
@@ -2046,7 +2056,7 @@ defmodule Cure.CLI do
           info("Generated keypair for '#{handle}' under ~/.cure/keys/")
 
         other ->
-          error("key generation returned unexpected: #{inspect(other)}")
+          raise Cure.Diagnostic.UnhandledError, error: {:unexpected_key_generation_result, other}
           exit({:shutdown, 1})
       end
     rescue
