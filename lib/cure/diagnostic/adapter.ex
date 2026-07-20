@@ -228,6 +228,18 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:proof_shape_mismatch, message, name}, opts) when is_binary(message) do
+    Diagnostic.new(
+      code: "E026",
+      key: :proof_shape_mismatch,
+      severity: :error,
+      title: "Proof shape mismatch",
+      message: message,
+      primary: primary_label(opts, "return a propositional equality from this proof binding"),
+      payload: %{name: name}
+    )
+  end
+
   def from_error({kind, message, meta}, opts)
       when kind in [:pickup_no_else, :pickup_else_not_last, :pickup_multiple_else] and
              is_binary(message) and is_list(meta) do
