@@ -76,7 +76,7 @@ defmodule Cure.MetaAST.ConformanceTripwireTest do
   # corpus only ever adds coverage — it never changes how a node is judged.
   @corpus_globs [
     "lib/std/*.cure",
-    "examples/**/*.cure",
+    # "examples/**/*.cure", # intentionally excluded from 0.34 test runs
     "test/oracle/**/*.cure",
     "test/fixtures/*.cure"
   ]

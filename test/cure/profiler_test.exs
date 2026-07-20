@@ -26,6 +26,7 @@ defmodule Cure.ProfilerTest do
   end
 
   describe "profile_file" do
+    @tag :examples
     test "profiles an example file" do
       {:ok, report} = Profiler.profile_file("examples/hello.cure")
 

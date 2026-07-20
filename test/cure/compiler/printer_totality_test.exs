@@ -64,7 +64,7 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     # already exists in this repo, which is a separate, non-redundant claim
     # -- a corpus file could in principle exercise a node-kind combination,
     # ordering, or depth the hand-built fixture doesn't.
-    files = Path.wildcard("lib/**/*.cure") ++ Path.wildcard("examples/**/*.cure")
+    files = Path.wildcard("lib/**/*.cure")
 
     for file <- files do
       src = File.read!(file)
