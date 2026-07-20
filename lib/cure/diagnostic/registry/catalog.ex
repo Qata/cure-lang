@@ -1142,6 +1142,22 @@ defmodule Cure.Diagnostic.Registry.Catalog do
     Fix: remove the cycle and use a user-defined operator with a supported
     fixity.
     """,
+    "E107" => """
+    E107: Unsupported Asynchronous Primitive
+
+    This asynchronous primitive is not available in the current Cure
+    runtime or execution context.
+
+    Fix: use a supported actor or supervisor operation, or move the work to
+    an explicit asynchronous boundary.
+    """,
+    "E108" => """
+    E108: Splice Outside Quote
+
+    A splice was used where no quote exists to receive the generated syntax.
+
+    Fix: place the splice inside a quote or use an ordinary expression.
+    """,
     "W000" => """
     W000: Compiler Warning
 

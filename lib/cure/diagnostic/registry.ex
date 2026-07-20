@@ -89,7 +89,7 @@ defmodule Cure.Diagnostic.Registry do
     "W081" => "No first-party producer remains; pickup reachability warnings are not emitted.",
     "W082" => "No first-party producer remains; pickup reachability warnings are not emitted."
   }
-  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 W086 W088]
+  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 W086 W088]
   @known_producers ~w[
     dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
     module_loader name_resolution operational parser pattern_checker proof_checker
@@ -143,6 +143,8 @@ defmodule Cure.Diagnostic.Registry do
     "E104" => :erased_value_used_relevantly,
     "E105" => :declaration_conflict,
     "E106" => :operator_declaration_conflict,
+    "E107" => :unsupported_async,
+    "E108" => :splice_outside_quote,
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
     "W002" => :configuration_warning,
@@ -269,6 +271,8 @@ defmodule Cure.Diagnostic.Registry do
   defp stable_key("E104", _title), do: :erased_value_used_relevantly
   defp stable_key("E105", _title), do: :declaration_conflict
   defp stable_key("E106", _title), do: :operator_declaration_conflict
+  defp stable_key("E107", _title), do: :unsupported_async
+  defp stable_key("E108", _title), do: :splice_outside_quote
 
   defp stable_key(_code, title) do
     title
@@ -313,6 +317,8 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E104"), do: [:elaboration]
   defp producers("E105"), do: [:elaboration, :name_resolution]
   defp producers("E106"), do: [:parser, :elaboration]
+  defp producers("E107"), do: [:elaboration]
+  defp producers("E108"), do: [:elaboration]
   defp producers("E008"), do: [:doctor]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
@@ -324,6 +330,8 @@ defmodule Cure.Diagnostic.Registry do
   defp subsystem("E104"), do: :elaboration
   defp subsystem("E105"), do: :elaboration
   defp subsystem("E106"), do: :elaboration
+  defp subsystem("E107"), do: :elaboration
+  defp subsystem("E108"), do: :elaboration
   defp subsystem("E091"), do: :resolution
   defp subsystem("E092"), do: :macros
   defp subsystem("E093"), do: :elaboration

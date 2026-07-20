@@ -116,6 +116,16 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "cannot be overloaded"
   end
 
+  test "renders unsupported async and quote-boundary failures" do
+    async = Host.render({:unsupported_async, "async primitive is unavailable", [line: 2]}, "demo.cure")
+    assert async =~ "[E107]"
+    assert async =~ "async primitive is unavailable"
+
+    splice = Host.render({:splice_outside_quote, :splice, [line: 2]}, "demo.cure")
+    assert splice =~ "[E108]"
+    assert splice =~ "quote"
+  end
+
   test "does not fall through to legacy formatting for an unregistered reason" do
     rendered = Host.render({:unregistered_compiler_reason, :detail}, "demo.cure")
 

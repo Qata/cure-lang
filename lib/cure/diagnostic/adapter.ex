@@ -104,6 +104,33 @@ defmodule Cure.Diagnostic.Adapter do
     operator_conflict(:builtin_operator_not_overloadable, %{operator: operator}, opts)
   end
 
+  def from_error({:unsupported_async, message, meta}, opts)
+      when is_binary(message) and is_list(meta) do
+    Diagnostic.new(
+      code: "E107",
+      key: :unsupported_async,
+      severity: :error,
+      title: "Unsupported asynchronous primitive",
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, "use a supported asynchronous boundary"),
+      payload: %{message: message, meta: meta}
+    )
+  end
+
+  def from_error({:splice_outside_quote, tag, meta}, opts) when is_list(meta) do
+    form = if tag == :splice_group, do: "$(e ...)", else: "$(e)"
+
+    Diagnostic.new(
+      code: "E108",
+      key: :splice_outside_quote,
+      severity: :error,
+      title: "Splice outside quote",
+      body: Doc.paragraph("The `#{form}` splice has no surrounding quote to receive generated syntax."),
+      primary: primary_label(opts, "place this splice inside a quote"),
+      payload: %{tag: tag, meta: meta}
+    )
+  end
+
   def from_error({:missing_diagnosis, points}, opts), do: macro_validation_failure(:missing_diagnosis, points, opts)
   def from_error({:rule_unpinned, keywords}, opts), do: macro_validation_failure(:rule_unpinned, keywords, opts)
 

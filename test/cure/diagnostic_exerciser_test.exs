@@ -53,7 +53,9 @@ defmodule Cure.DiagnosticExerciserTest do
       {"positivity rejection", "E103", {:non_strictly_positive, :Bad}},
       {"relevance rejection", "E104", {:erased_used_relevantly, %{binder: 0, site: :returned}}},
       {"declaration conflict", "E105", {:duplicate_type, :Widget}},
-      {"operator conflict", "E106", {:builtin_operator_not_overloadable, :|>}}
+      {"operator conflict", "E106", {:builtin_operator_not_overloadable, :|>}},
+      {"unsupported async", "E107", {:unsupported_async, "async primitive is unavailable", [line: 2]}},
+      {"splice outside quote", "E108", {:splice_outside_quote, :splice, [line: 2]}}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))
