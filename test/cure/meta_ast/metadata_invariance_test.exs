@@ -8,19 +8,30 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
   test "recursive source decoration preserves an accepted program verdict and semantics" do
     source = "mod Invariance\n  fn id(x: Int) -> Int = x\n"
     {ast, decorated} = parse_pair(source)
+    stripped = Metadata.strip_diagnostics(decorated)
 
-    assert Metadata.semantic_equal?(ast, Metadata.strip_diagnostics(decorated))
-    assert {:ok, _env} = Program.check_ast(ast)
-    assert {:ok, _env} = Program.check_ast(decorated)
+    assert Metadata.semantic_equal?(ast, stripped)
+    assert {:ok, plain_env} = Program.check_ast(ast)
+    assert {:ok, decorated_env} = Program.check_ast(decorated)
+    assert {:ok, stripped_env} = Program.check_ast(stripped)
+    assert plain_env == decorated_env
+    assert plain_env == stripped_env
   end
 
   test "recursive source decoration preserves a rejected program category" do
     source = "mod InvarianceReject\n  fn bad() -> Int = missing_name\n"
     {ast, decorated} = parse_pair(source)
+    stripped = Metadata.strip_diagnostics(decorated)
 
     assert {:error, original} = Program.check_ast(ast)
     assert {:error, decorated_error} = Program.check_ast(decorated)
-    assert Program.semantic_error(original) |> error_head() == error_head(Program.semantic_error(decorated_error))
+    assert {:error, stripped_error} = Program.check_ast(stripped)
+
+    assert Program.semantic_error(original) |> error_head() ==
+             error_head(Program.semantic_error(decorated_error))
+
+    assert Program.semantic_error(original) |> error_head() ==
+             error_head(Program.semantic_error(stripped_error))
   end
 
   defp parse_pair(source) do
