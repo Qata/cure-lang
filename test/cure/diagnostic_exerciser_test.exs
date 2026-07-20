@@ -24,6 +24,8 @@ defmodule Cure.DiagnosticExerciserTest do
     ]
 
     boundary_cases = [
+      {"unbound variable", "E002", {:unbound_variable, "x is not bound", [line: 1, col: 17]}},
+      {"arity mismatch", "E003", {:arity_mismatch, "expected 2 arguments", [line: 1, col: 17]}},
       {"duplicate module", "E087", {:duplicate_module_identity, "Demo", "a.cure", "b.cure"}},
       {"ambiguous name", "E089", {:ambiguous_name, :helper, ["Demo.A", "Demo.B"]}},
       {"import cycle", "W086", {:import_cycle, [%{module: "Demo.A", path: "a.cure", line: 1}]}},
