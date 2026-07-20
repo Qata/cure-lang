@@ -254,6 +254,18 @@ defmodule Cure.Diagnostic.HostTest do
     refute overlap =~ ":overlapping_instance"
   end
 
+  test "renders record projection failures with record-field identity" do
+    unknown = Host.render({:unknown_field, :Point, :colour}, "demo.cure")
+    non_record = Host.render({:source_context, {:projection_non_record, :x}, %{}}, "demo.cure")
+
+    assert unknown =~ "[E091]"
+    assert unknown =~ "Point.colour"
+    assert non_record =~ "[E093]"
+    assert non_record =~ "`x`"
+    refute unknown =~ ":unknown_field"
+    refute non_record =~ ":projection_non_record"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 

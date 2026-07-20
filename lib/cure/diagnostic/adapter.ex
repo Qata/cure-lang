@@ -302,6 +302,34 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:source_context, {:unknown_field, record, field}, context}, opts) when is_map(context) do
+    opts =
+      opts
+      |> Keyword.put_new(:span, Map.get(context, :span))
+      |> Keyword.put(:owner, record)
+      |> Keyword.put(:checking, Map.get(context, :checking))
+
+    unknown_name(:member, "#{name_to_string(record)}.#{name_to_string(field)}", opts)
+  end
+
+  def from_error({:unknown_field, record, field}, opts) do
+    unknown_name(:member, "#{name_to_string(record)}.#{name_to_string(field)}", Keyword.put(opts, :owner, record))
+  end
+
+  def from_error({:source_context, {:projection_non_record, field}, context}, opts) when is_map(context) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Record projection requires a record",
+      body: Doc.paragraph("The value being projected with `#{name_to_string(field)}` is not a record."),
+      primary: primary_label(opts, "project a field from a record value"),
+      payload: %{kind: :projection_non_record, field: field, checking: Map.get(context, :checking)}
+    )
+  end
+
   def from_error({:unknown_record, name}, opts),
     do: from_error({:source_context, {:unknown_record, name}, %{}}, opts)
 
