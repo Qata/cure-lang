@@ -2,7 +2,15 @@
 
 **Branch:** `smt-solver` (off `feature/idris-parity`)
 **Date:** 2026-07-18
-**Status:** design, awaiting review → `writing-plans`
+**Status:** approved design, rebased 2026-07-20 onto canonical inductive `Int`
+
+> **2026-07-20 authoritative amendment.** The original design predated the
+> inductive-`Int` and ordered-ring work. `Std.Int.Int = FromNat(Nat) |
+> NegativeSuccessor(Nat)` and `Std.Proof.IntOrder` are now the sole integer
+> substrate. Do not create the formerly-planned parallel `Std.Integer.Zed`
+> family. The checker proof also requires the algebra, vector-semantics, shape,
+> and Boolean-inversion layers specified in §3.5–§3.9; scalar order
+> monotonicity alone is not enough to justify Farkas combination.
 
 ## 0. Motivation
 
@@ -89,7 +97,7 @@ kernel discharges goal by COMPUTING check_lia(hyps, goal, c)  ⇓  True()
   Cure function. This is the elaborator-hard-stop guarantee: if the checker ever
   *seems* to need a kernel change, STOP and report.
 
-## 3. The verified checker (the only trusted addition — TCB does not grow)
+## 3. The verified checker (kernel-checked metatheory; TCB does not grow)
 
 "Trusted" here means: trusted *because the existing kernel checks its soundness
 proof*. Nothing new is assumed.
@@ -97,7 +105,8 @@ proof*. Nothing new is assumed.
 ### 3.1 Types (Cure, `Std.Proof.LinearArithmetic` — descriptive naming)
 
 - `LinearAtom` — a linear comparison over integer variables: a coefficient vector
-  `List Int`, a constant `Int`, and a relation (`LessEqual`/`Less`/`Equal`). Models
+  `List Int`, a constant `Int`, and a relation (`LessEqual`/`Less`/`Equal`). `Int`
+  here is the canonical inductive `Std.Int.Int`, never a second `Zed` family. Models
   Micromega's `nFormula` / `op1`. `GreaterEqual`/`Greater` are not separate
   constructors: `a ≥ b` / `a > b` are built by negating the coefficient vector and
   constant and using `LessEqual`/`Less` (`a ≥ b ≡ -a ≤ -b`) — every `≥`/`>` example
@@ -115,7 +124,7 @@ proof*. Nothing new is assumed.
   supplying the reverse direction as a second hypothesis covers the other.
 - `Hypotheses = List LinearAtom` — the in-scope facts (from refinement binders and
   local hypotheses).
-- `FarkasWitness = List Int` — nonnegative multipliers, one per atom in
+- `FarkasWitness = List Nat` — nonnegative multipliers, one per atom in
   `hyps ++ [negate(goal)]` (i.e. length `|hyps| + 1`: one per hypothesis plus one
   for the negated goal, matching the combination §3.2 forms). Dense positional list,
   index-aligned with the atom list it multiplies — decided now so `check_lia`'s
@@ -133,6 +142,11 @@ proof*. Nothing new is assumed.
   evaluates to `True()` under `env` (via `evalAtom`); the semantic reading of a
   hypothesis list, dual to `Hypotheses` itself being the syntactic reading.
 
+All atoms in one problem have the same coefficient-vector length as the
+valuation, and the witness has exactly `length(hyps) + 1` entries. P1 carries
+explicit checked shape evidence. `List.zip_with` truncation is not an admissible
+meaning for malformed certificates.
+
 ### 3.2 `check_lia`
 
 ```
@@ -144,12 +158,20 @@ combination `Σ witnessᵢ · atomᵢ`, and check the combination reduces to a m
 contradiction (`0 ≤ -1` / `0 < 0`). Returns `True()` iff the witness certifies
 unsatisfiability of `hyps ∧ ¬goal`. Mirrors `zChecker` restricted to `RatProof`.
 
+The Boolean facade is not by itself the proof object consumed by soundness. P1
+defines `ValidFarkasCertificate(hyps, goal, witness)`, carrying checked shape,
+normalized-combination, zero-coefficient, and negative-bound evidence. A
+decision procedure constructs or refutes this evidence; `check_lia` is its
+computable Boolean projection. A Boolean-only implementation is acceptable only
+if it proves equivalent inversion lemmas for every carried fact before proving
+soundness.
+
 ### 3.3 `check_lia_sound` (the metatheory payoff)
 
 ```
 fn check_lia_sound(
   hyps: Hypotheses, goal: LinearAtom, witness: FarkasWitness,
-  ok: IsTrue(check_lia(hyps, goal, witness)),
+  valid: ValidFarkasCertificate(hyps, goal, witness),
   env: Valuation,
   holds: AllHold(hyps, env)
 ) -> IsTrue(evalAtom(goal, env))
@@ -160,12 +182,9 @@ Proven in Cure, Idris-mirrored `rel=same`. Structure mirrors Micromega's
 have all constituents hold, so `¬goal` is refuted and `goal` holds in `env`. The
 target `IsTrue(evalAtom(goal,env))` is exactly the L1/L2 Int-sugar proposition, so
 the result plugs straight into the existing refinement pathway and hands off to #4.
-`ok`'s type deliberately reuses `IsTrue` (not a general `Equivalent(Bool, ..., True())`
-equality proof) for the "the check succeeded" premise, matching both §0's stated
-idiom (`IsTrue`/`Confirmed` decidable-Boolean reflection, the same mechanism the
-existing `Std.Proof.IntMath` obligations already use) and §2's discharge diagram,
-which is exactly this pattern: the kernel computes `check_lia(...)` to `True()` and
-`Confirmed()` inhabits `IsTrue` at that point.
+An exported, Cure-proven `check_lia_true_implies_valid` connects
+`IsTrue(check_lia(...))` to `ValidFarkasCertificate`, preserving the §2 reflection
+diagram without asking the elaborator to invent structural facts.
 
 ### 3.4 Completeness boundary (honest)
 
@@ -177,6 +196,47 @@ without reshaping `check_lia_sound` — new constructors, new sub-proofs, same t
 shape. Until then, the *producer* (§4) reports `Unknown` for ℤ-only instances (legal)
 — `check_lia` itself never returns `Unknown`; see §6's boundary case for what that
 means at the checker level.
+
+### 3.5 Canonical integer algebra substrate
+
+P1 reuses `Std.Proof.IntOrder` for reflexivity, transitivity, same-addend
+monotonicity, sign facts, and the `0 ≤ -1` refutation. Before checker soundness it
+adds general integer addition identity/associativity/commutativity,
+first-argument and two-sided addition monotonicity, `scale_nat_int : Nat -> Int
+-> Int`, monotonicity of that scaling for arbitrary signed operands, and the
+signed coefficient-application laws required by affine evaluation.
+
+The existing `scaling_by_nonneg_preserves_less_than_or_equal` only covers
+`FromNat(left) ≤ FromNat(right)`. It is not sufficient for Farkas atoms, whose
+evaluated sides may be negative.
+
+### 3.6 Affine-vector semantics
+
+P1 proves that syntactic coefficient operations agree with evaluation: zero
+coefficients evaluate to zero, pointwise addition evaluates to integer addition,
+natural scaling evaluates to scaling of the dot product, and folding a witness
+over atoms preserves evaluation. These homomorphism lemmas are the necessary
+bridge between syntactic Farkas combination and semantic inequality.
+
+### 3.7 Shape and totality discipline
+
+Certificate validity carries a common variable dimension, atom/valuation length
+agreement, exact witness length, and deterministic rejection of malformed input.
+Ordinary lists with evidence or length-indexed vectors are both acceptable; silent
+truncation is not.
+
+### 3.8 Boolean/list reflection substrate
+
+`AllHold` has constructive head/tail and append/snoc elimination lemmas so the
+soundness induction can extract atom proofs and append the negated goal. The
+checker also proves the Boolean-to-`ValidFarkasCertificate` inversion bridge.
+
+### 3.9 Goal-negation correctness
+
+P1 proves `not (a ≤ b)` iff `b < a`, `not (a < b)` iff `b ≤ a`, and, when
+strict atoms are normalized away, `a < b` iff `a + 1 ≤ b`. Existing
+decidability does not by itself prove that a generated negated atom is the
+semantic complement of the original goal.
 
 ## 4. The untrusted producer (Elixir, `lib/cure/*`, NOT TCB)
 
@@ -200,9 +260,9 @@ means at the checker level.
   checking `check_lia_sound`.
 - **Producer** = untrusted tooling in `lib/cure/*` (Elixir).
 - **Seam** = E-layer, in `lib/cure/elab/*`, additive; kernel re-checks.
-- **Two-pipeline steer:** work in `lib/cure/elab/*` + `lib/cure/core/*`. IGNORE
-  `lib/cure/compiler/*` (non-dependent decoy; `lib/cure/types/*` no longer exists in
-  this tree — the classic pipeline it belonged to was already deleted).
+- **Layer steer:** P1 works in `lib/std/*` only. P2 adds untrusted producer code
+  under `lib/cure/*`; P3 alone touches `lib/cure/elab/*`. IGNORE
+  `lib/cure/compiler/*` for dependent proof discharge. No P1 core edit is allowed.
 - **TCB discipline:** no kernel rules. If P1 seems to need one, STOP and report
   (prove no untrusted term works first — elaborator-hard-stop).
 - **Ghost commits:** author as the user only; no Co-Authored-By; explicit-pathspec
@@ -219,18 +279,17 @@ re-deriving only the needed subset is safer than extending a heavy module.
 Must include:
 1. **Positive certificate** — an inequality the current paths cannot close, e.g.
    multi-hypothesis Farkas: from `a ≥ 0`, `b ≥ 0` conclude `2a + 3b ≥ 0`; and a
-   genuine refinement `fn f({n:Int|n>0}) -> {m:Int| m > n}` style obligation (the
-   return binder `m` is actually constrained, unlike a predicate that only mentions
-   the input).
+   genuine refinement-shaped obligation such as proving `n + 1 > n` from an open
+   `n`, represented in P1 as symbolic atoms and exercised through the actual surface
+   only after the P3 bridge exists.
 2. **Negative antibody** — a bad witness where `check_lia = False` (soundness of the
    checker: it *rejects* forged certificates).
-3. **Boundary case (§3.4)** — a ℤ-only unsat instance (e.g. `2n = 1`) for which *no*
-   `FarkasWitness` makes `check_lia` return `True()`: check a small enumerated set of
-   candidate witnesses and show each yields `False()`. This is a `check_lia`-level
-   demonstration of the documented incompleteness boundary, not a third return value
-   — `check_lia` is `Bool`-valued only; `Unknown` is exclusively a *producer*-level
-   result (§4) and is exercised in P2, not P1.
-4. The soundness theorem `check_lia_sound` type-checks (that is the kernel-level
+3. **Shape antibodies** — wrong witness length and coefficient/valuation dimension
+   mismatch are rejected rather than truncated.
+4. **Boundary case (§3.4)** — record `2n = 1` as a producer-level `Unknown` case for
+   P2. A finite enumeration of rejected witnesses is only a regression sample and
+   must not be described as proving that no Farkas witness exists.
+5. The soundness theorem `check_lia_sound` type-checks (that is the kernel-level
    guarantee), Idris mirror `rel=same`.
 
 **Discipline:** write these four probes (or explicit skeletons of their
@@ -248,10 +307,12 @@ fails against the pre-phase state, then implement to green.
 
 ## 7. Phasing
 
-- **P1 — verified checker + soundness (core; no producer).** `LinearAtom`,
-  `FarkasWitness`, `check_lia`, `check_lia_sound`, over an *explicit* witness in the
-  probe. Positive + negative + boundary cases (§6), Idris `rel=same`. **This is the
-  whole metatheory core and the definition of done for the branch's trusted part.**
+- **P1 — verified checker + soundness (stdlib metatheory; no producer).** Complete
+  the canonical-`Int` algebra, affine-vector homomorphisms, shape evidence,
+  negation/list reflection, `ValidFarkasCertificate`, `check_lia`, and
+  `check_lia_sound`, over an explicit witness. Positive, negative, malformed-shape,
+  and symbolic cases (§6), Idris `rel=same`. **This is the whole metatheory core and
+  the definition of done for the branch's trusted part.**
 - **P2 — untrusted producer.** Deterministic Fourier–Motzkin/simplex → `FarkasWitness`,
   with the `Prf | Model | Unknown` result. Property-test that every `Prf` it emits is
   accepted by `check_lia` (producer/checker agreement), and every `Model` genuinely
@@ -263,9 +324,10 @@ fails against the pre-phase state, then implement to green.
 
 ## 8. Definition of done
 
-**P1** — `check_lia` + `check_lia_sound` proven in Cure, Idris `rel=same`, with a
-positive certificate outside the current syntactic fragment, a negative antibody, and
-a ℤ-only boundary case (no accepted witness exists), all green under replay. P2/P3
+**P1** — the canonical-`Int` algebra, vector semantics, shape/reflection layer,
+`ValidFarkasCertificate`, `check_lia`, and `check_lia_sound` are proven in Cure,
+Idris `rel=same`, with a positive certificate outside the current syntactic
+fragment plus forged and malformed antibodies, all green under replay. P2/P3
 are follow-on integration once P1 lands. Honest generality statement in the final
 report: which LIA instances the checker decides (ℚ-complete / ℤ-sound Farkas core) vs
 the producer's completeness.
