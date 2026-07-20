@@ -326,6 +326,9 @@ defmodule Antigen.Assays.Elab do
   # §2.3): parser grammar failures carry a LIST, and a normalized raise has no
   # head — neither can ever match an `expect_error` atom, so both land in the
   # wrong-reject-reason violation instead of crashing `elem/2`.
+  defp reject_head({:error, {:source_context, reason, _context}}),
+    do: reject_head({:error, reason})
+
   defp reject_head({:error, e}) when is_tuple(e) and tuple_size(e) > 0, do: elem(e, 0)
   defp reject_head({:error, _non_tuple}), do: :non_tuple_error
   defp reject_head({:raise, _}), do: :raised_error
