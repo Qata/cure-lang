@@ -277,6 +277,21 @@ defmodule Cure.Diagnostic.HostTest do
     assert splice =~ "quote"
   end
 
+  test "renders dependency resolution branches as operational diagnostics" do
+    invalid = Host.render({:invalid_dependency, "bad"}, "Cure.toml")
+    missing = Host.render({:no_versions, "json"}, "Cure.toml")
+    edition = Host.render({:dependency_edition_error, "dep", {:unknown_edition, "9999"}}, "Cure.toml")
+
+    assert invalid =~ "[E097]"
+    assert invalid =~ "bad"
+    assert missing =~ "[E097]"
+    assert missing =~ "json"
+    assert edition =~ "[E097]"
+    assert edition =~ "dep"
+    refute invalid =~ ":invalid_dependency"
+    refute edition =~ ":dependency_edition_error"
+  end
+
   test "converts aggregate type errors through the contextual type family" do
     rendered =
       Host.render(

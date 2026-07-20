@@ -569,6 +569,11 @@ defmodule Cure.Compiler.Errors do
   defp operational_error?({:registry_hash_mismatch, _}), do: true
   defp operational_error?({:registry_package_not_found, _}), do: true
   defp operational_error?({:version_conflict, _, _}), do: true
+  defp operational_error?({:invalid_dependency, _}), do: true
+  defp operational_error?({:invalid_constraint, _, _}), do: true
+  defp operational_error?({:no_versions, _}), do: true
+  defp operational_error?({:dependency_clone_failed, _, _}), do: true
+  defp operational_error?({:dependency_edition_error, _, _}), do: true
   defp operational_error?({:undocumented_public_function, _, _}), do: true
   defp operational_error?(_), do: false
 

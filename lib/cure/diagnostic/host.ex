@@ -59,6 +59,11 @@ defmodule Cure.Diagnostic.Host do
   defp operational_reason?({:registry_hash_mismatch, _}), do: true
   defp operational_reason?({:registry_package_not_found, _}), do: true
   defp operational_reason?({:version_conflict, _, _}), do: true
+  defp operational_reason?({:invalid_dependency, _}), do: true
+  defp operational_reason?({:invalid_constraint, _, _}), do: true
+  defp operational_reason?({:no_versions, _}), do: true
+  defp operational_reason?({:dependency_clone_failed, _, _}), do: true
+  defp operational_reason?({:dependency_edition_error, _, _}), do: true
   defp operational_reason?({:undocumented_public_function, _, _}), do: true
   defp operational_reason?(_), do: false
 end

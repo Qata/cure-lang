@@ -32,6 +32,19 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:hash_mismatch, detail}, _opts), do: registry_hash_mismatch(detail)
   def from_error({:package_not_found, name}, _opts), do: registry_package_not_found(name)
   def from_error({:version_conflict, name, constraints}, _opts), do: package_version_conflict(name, constraints)
+  def from_error({:invalid_dependency, name}, _opts), do: dependency_failure(:invalid_dependency, %{name: name})
+
+  def from_error({:invalid_constraint, name, reason}, _opts),
+    do: dependency_failure(:invalid_constraint, %{name: name, reason: reason})
+
+  def from_error({:no_versions, name}, _opts), do: dependency_failure(:no_versions, %{name: name})
+
+  def from_error({:dependency_clone_failed, name, output}, _opts),
+    do: dependency_failure(:dependency_clone_failed, %{name: name, output: output})
+
+  def from_error({:dependency_edition_error, name, reason}, _opts),
+    do: dependency_failure(:dependency_edition_error, %{name: name, reason: reason})
+
   def from_error({:undocumented_public_function, file, line}, _opts), do: undocumented_public_function(file, line)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
@@ -146,6 +159,28 @@ defmodule Cure.Diagnostic.Operational do
         package: name,
         constraints: constraints
       })
+
+  defp dependency_failure(kind, details) do
+    message =
+      case kind do
+        :invalid_dependency ->
+          "Dependency `#{details.name}` has an invalid source declaration."
+
+        :invalid_constraint ->
+          "Dependency `#{details.name}` has an invalid version constraint: #{inspect(details.reason)}."
+
+        :no_versions ->
+          "No published versions are available for dependency `#{details.name}`."
+
+        :dependency_clone_failed ->
+          "Cloning dependency `#{details.name}` failed: #{details.output}."
+
+        :dependency_edition_error ->
+          "Dependency `#{details.name}` declares an unsupported edition: #{inspect(details.reason)}."
+      end
+
+    diagnostic("E097", :dependency_resolution, message, Map.put(details, :kind, kind))
+  end
 
   def undocumented_public_function(file, line) do
     Diagnostic.new(
