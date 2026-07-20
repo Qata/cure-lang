@@ -16,7 +16,17 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:parse_error, [reason | _]}, opts), do: from_error(reason, opts)
 
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
-    from_error(reason, Keyword.put(opts, :checking, Map.get(context, :checking)))
+    opts =
+      opts
+      |> Keyword.put(:checking, Map.get(context, :checking))
+      |> then(fn opts ->
+        case Map.get(context, :span) do
+          %Span{} = span -> Keyword.put(opts, :span, span)
+          _ -> opts
+        end
+      end)
+
+    from_error(reason, opts)
   end
 
   def from_error({:unknown_global, name}, opts),

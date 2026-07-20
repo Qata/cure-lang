@@ -76,6 +76,46 @@ defmodule Cure.Diagnostic.Operational do
   def usage(message), do: diagnostic("E099", :usage_error, message, %{})
   def artifact_error(message), do: diagnostic("E100", :artifact_error, message, %{})
 
+  @doc "Build E101 only for a caught exception at an explicit compiler boundary."
+  def internal_exception(exception, stacktrace, opts \\ []) when is_exception(exception) and is_list(stacktrace) do
+    fingerprint = fingerprint({exception.__struct__, Exception.message(exception), stack_head(stacktrace)})
+
+    payload = %{
+      fingerprint: fingerprint,
+      exception: inspect(exception.__struct__),
+      context: Keyword.get(opts, :context)
+    }
+
+    payload = if Keyword.get(opts, :debug, false), do: Map.put(payload, :stacktrace, stacktrace), else: payload
+
+    Diagnostic.new(
+      code: "E101",
+      key: :internal_compiler_error,
+      severity: :error,
+      title: "Internal compiler error",
+      message: "The compiler failed unexpectedly. Please report fingerprint `#{fingerprint}`.",
+      payload: payload
+    )
+  end
+
+  @doc "Build E101 for a return shape that violates an internal boundary contract."
+  def impossible_return(context, value, opts \\ []) do
+    fingerprint = fingerprint({context, value})
+
+    Diagnostic.new(
+      code: "E101",
+      key: :internal_compiler_error,
+      severity: :error,
+      title: "Internal compiler error",
+      message: "The compiler reached an impossible state. Please report fingerprint `#{fingerprint}`.",
+      payload: %{
+        fingerprint: fingerprint,
+        context: context,
+        impossible_shape: if(Keyword.get(opts, :debug, false), do: inspect(value), else: nil)
+      }
+    )
+  end
+
   defp diagnostic(code, key, message, payload) do
     Diagnostic.new(
       code: code,
@@ -96,6 +136,17 @@ defmodule Cure.Diagnostic.Operational do
   defp title(:configuration_warning), do: "Invalid configuration"
   defp title(:usage_error), do: "Invalid command usage"
   defp title(:artifact_error), do: "Invalid build artifact"
+
+  defp fingerprint(term) do
+    term
+    |> :erlang.term_to_binary()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 12)
+  end
+
+  defp stack_head([{module, function, arity, location} | _]), do: {module, function, arity, location}
+  defp stack_head(_), do: nil
 
   defp file_reason(reason) when is_atom(reason), do: :file.format_error(reason)
   defp file_reason({kind, detail}) when is_atom(kind), do: "#{kind}: #{file_reason(detail)}"

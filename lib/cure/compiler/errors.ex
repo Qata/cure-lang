@@ -1604,6 +1604,16 @@ defmodule Cure.Compiler.Errors do
     A required build, proof, snapshot, or release artifact is absent,
     corrupt, incompatible, or has the wrong format.
     """,
+    "E101" => """
+    E101: Internal Compiler Error
+
+    Cure caught an exception or received an impossible return shape inside the
+    compiler. The diagnostic includes a stable fingerprint; stacktraces are
+    retained only in debug payloads.
+
+    Ordinary source errors must never use E101. Please report the fingerprint
+    with a minimal reproducer.
+    """,
     "W000" => """
     W000: Compiler Warning
 
@@ -1752,15 +1762,9 @@ defmodule Cure.Compiler.Errors do
       |> Cure.Diagnostic.SourceRegistry.register(source_id, source, file)
 
     opts =
-      case error_location(error) do
-        {line, col} when line > 0 and col > 0 ->
-          case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, line, col, error_span_length(error)) do
-            {:ok, span} -> [span: span]
-            {:error, _} -> []
-          end
-
-        _ ->
-          []
+      case exact_error_span(error, source, source_id, registry) do
+        {:ok, span} -> [span: span]
+        :error -> []
       end
 
     {Cure.Diagnostic.Adapter.from_error(error, opts), registry}
@@ -1818,20 +1822,52 @@ defmodule Cure.Compiler.Errors do
 
   defp error_location(_error), do: {0, 0}
 
-  defp error_span_length({:codegen_error, reason}), do: error_span_length(reason)
-  defp error_span_length({:parse_error, [reason | _]}), do: error_span_length(reason)
-  defp error_span_length({:source_context, _reason, %{length: length}}) when is_integer(length), do: max(1, length)
-  defp error_span_length({:unknown_global, name, _details}), do: String.length(to_string(name))
-  defp error_span_length({:unknown_global, name}), do: String.length(to_string(name))
-  defp error_span_length({:expected, _expected, :got, actual, _line, _col}), do: syntax_width(actual)
-  defp error_span_length({:unexpected_token, actual, _line, _col}), do: syntax_width(actual)
-  defp error_span_length(_error), do: 1
+  defp exact_error_span(error, source, source_id, registry) do
+    case embedded_span(error) do
+      %Cure.Diagnostic.Span{} = span ->
+        Cure.Diagnostic.SourceRegistry.span(registry, source_id, span.start_byte, span.end_byte)
 
-  defp syntax_width(:arrow), do: 2
-  defp syntax_width(:fat_arrow), do: 2
-  defp syntax_width(:pipe_forward), do: 2
-  defp syntax_width(:melquiades), do: 3
-  defp syntax_width(_token), do: 1
+      nil ->
+        token_span_at_error(error, source, source_id, registry)
+    end
+  end
+
+  defp token_span_at_error(error, source, source_id, registry) do
+    case error_location(error) do
+      {line, col} when line > 0 and col > 0 ->
+        token =
+          with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: "diagnostic", emit_events: false) do
+            Enum.find(tokens, fn
+              %Cure.Compiler.Token{span: %Cure.Diagnostic.Span{} = span} ->
+                span.start_line == line and span.start_column == col
+
+              _ ->
+                false
+            end)
+          else
+            _ -> nil
+          end
+
+        case token do
+          %Cure.Compiler.Token{span: %Cure.Diagnostic.Span{} = span} ->
+            Cure.Diagnostic.SourceRegistry.span(registry, source_id, span.start_byte, span.end_byte)
+
+          nil ->
+            case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, line, col, 0) do
+              {:ok, span} -> {:ok, span}
+              {:error, _} -> :error
+            end
+        end
+
+      _ ->
+        :error
+    end
+  end
+
+  defp embedded_span({:parse_error, [reason | _]}), do: embedded_span(reason)
+  defp embedded_span({:codegen_error, reason}), do: embedded_span(reason)
+  defp embedded_span({:source_context, _reason, %{span: %Cure.Diagnostic.Span{} = span}}), do: span
+  defp embedded_span(_error), do: nil
 
   # -- Formatting Helper -------------------------------------------------------
 

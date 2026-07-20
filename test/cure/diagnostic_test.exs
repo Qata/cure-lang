@@ -73,6 +73,16 @@ defmodule Cure.DiagnosticTest do
              IO.ANSI.red() <> "^^" <> IO.ANSI.reset()
   end
 
+  test "parser diagnostic widths come from lexer spans rather than a token-width table" do
+    source = "mod Demo\n  fn run(x) => Int = x\n"
+    error = {:parse_error, [{:expected, :arrow, :got, :fat_arrow, 2, 13}]}
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
+
+    assert diagnostic.primary.span.end_byte - diagnostic.primary.span.start_byte == 2
+    assert binary_part(source, diagnostic.primary.span.start_byte, 2) == "=>"
+    assert Renderer.plain(diagnostic, registry) =~ "^^ unexpected syntax here"
+  end
+
   test "LSP positions count UTF-16 code units rather than Unicode scalars" do
     registry = SourceRegistry.new() |> SourceRegistry.register(:astral, "a😀b", "astral.cure")
     {:ok, span} = SourceRegistry.span(registry, :astral, 5, 6)
