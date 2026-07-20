@@ -390,7 +390,7 @@ defmodule Cure.LSP.Server do
 
   @doc false
   def compute_diagnostics(uri, text, encoding \\ :utf16) do
-    case Cure.Elab.Program.elaborate(text) do
+    case Cure.Elab.Program.elaborate(text, file: uri) do
       {:ok, _env} ->
         []
 

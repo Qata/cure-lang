@@ -178,6 +178,22 @@ defmodule Cure.LSP.LspTest do
       assert diagnostic["message"] =~ "type"
       assert diagnostic["range"]["start"]["line"] == 2
     end
+
+    test "unsaved Unicode buffers use the negotiated position encoding" do
+      source = "mod X\n  fn bad() -> Int = \"😀\"\n"
+      uri = "file:///unsaved-unicode.cure"
+
+      utf8 = hd(Server.compute_diagnostics(uri, source, :utf8))
+      utf16 = hd(Server.compute_diagnostics(uri, source, :utf16))
+      utf32 = hd(Server.compute_diagnostics(uri, source, :utf32))
+
+      assert utf8["range"]["start"]["character"] == 20
+      assert utf16["range"]["start"]["character"] == 20
+      assert utf32["range"]["start"]["character"] == 20
+      assert utf8["range"]["end"]["character"] == 26
+      assert utf16["range"]["end"]["character"] == 24
+      assert utf32["range"]["end"]["character"] == 23
+    end
   end
 
   # ============================================================================

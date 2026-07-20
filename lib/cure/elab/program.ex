@@ -14,12 +14,14 @@ defmodule Cure.Elab.Program do
 
   @loader_state_key {__MODULE__, :module_loader_state}
 
-  @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
-  def elaborate(source) when is_binary(source) do
+  @spec elaborate(String.t(), keyword()) :: {:ok, Env.t()} | {:error, term()}
+  def elaborate(source, opts \\ []) when is_binary(source) and is_list(opts) do
+    file = Keyword.get(opts, :file, "nofile")
+
     Cure.Elab.GuardLint.reset_warnings()
 
-    with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
+    with {:ok, tokens} <- Lexer.tokenize(source, file: file, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, file: file, emit_events: false) do
       check_ast(ast)
     end
   end

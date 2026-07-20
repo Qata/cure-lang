@@ -309,7 +309,7 @@ defmodule Cure.Compiler.Errors do
     column = Keyword.get(meta, :col, Keyword.get(meta, :column, 1))
 
     %Cure.Diagnostic.Span{
-      source_id: {:compiler_source, file},
+      source_id: file,
       path: file,
       start_byte: 0,
       end_byte: 0,
@@ -402,7 +402,10 @@ defmodule Cure.Compiler.Errors do
   @spec to_diagnostic(term(), String.t(), String.t()) ::
           {Cure.Diagnostic.t(), Cure.Diagnostic.SourceRegistry.t()}
   def to_diagnostic(error, file, source) do
-    source_id = {:compiler_source, file}
+    # The source identity is the same identity carried by lexer/parser spans.
+    # Keeping it stable lets unsaved LSP buffers and generated source registries
+    # resolve exact UTF-8/16/32 positions without a scalar-column fallback.
+    source_id = file
 
     registry =
       Cure.Diagnostic.SourceRegistry.new()
