@@ -76,6 +76,16 @@ defmodule Cure.Diagnostic.Host do
   defp operational_reason?({:no_versions, _}), do: true
   defp operational_reason?({:dependency_clone_failed, _, _}), do: true
   defp operational_reason?({:dependency_edition_error, _, _}), do: true
+  defp operational_reason?({:unknown_watch_action, _}), do: true
+  defp operational_reason?({:file_error, _}), do: true
+  defp operational_reason?({:decode_failed, _}), do: true
+  defp operational_reason?({:parse, _}), do: true
+  defp operational_reason?({:fetch_failed, _, _}), do: true
+  defp operational_reason?({:hash_mismatch, _}), do: true
+  defp operational_reason?({:package_not_found, _}), do: true
+  defp operational_reason?({:unreachable, _}), do: true
+  defp operational_reason?({:chain_broken, _}), do: true
+  defp operational_reason?({:app_resource_write_failed, _, _}), do: true
   defp operational_reason?({:duplicate_app, _}), do: true
   defp operational_reason?({:app_name_mismatch, _, _}), do: true
   defp operational_reason?({:compile_failed, _}), do: true

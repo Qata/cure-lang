@@ -450,6 +450,16 @@ defmodule Cure.Compiler.Errors do
   defp operational_error?({:no_versions, _}), do: true
   defp operational_error?({:dependency_clone_failed, _, _}), do: true
   defp operational_error?({:dependency_edition_error, _, _}), do: true
+  defp operational_error?({:unknown_watch_action, _}), do: true
+  defp operational_error?({:file_error, _}), do: true
+  defp operational_error?({:decode_failed, _}), do: true
+  defp operational_error?({:parse, _}), do: true
+  defp operational_error?({:fetch_failed, _, _}), do: true
+  defp operational_error?({:hash_mismatch, _}), do: true
+  defp operational_error?({:package_not_found, _}), do: true
+  defp operational_error?({:unreachable, _}), do: true
+  defp operational_error?({:chain_broken, _}), do: true
+  defp operational_error?({:app_resource_write_failed, _, _}), do: true
   defp operational_error?({:duplicate_app, _}), do: true
   defp operational_error?({:app_name_mismatch, _, _}), do: true
   defp operational_error?({:compile_failed, _}), do: true

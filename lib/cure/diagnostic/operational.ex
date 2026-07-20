@@ -45,6 +45,16 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:dependency_edition_error, name, reason}, _opts),
     do: dependency_failure(:dependency_edition_error, %{name: name, reason: reason})
 
+  def from_error({:file_error, reason}, _opts), do: command_failure("project", reason)
+  def from_error({:edition_error, reason}, _opts), do: command_failure("project", reason)
+  def from_error({:decode_failed, reason}, _opts), do: command_failure("registry", reason)
+  def from_error({:parse, reason}, _opts), do: command_failure("project", reason)
+  def from_error({:unreachable, reason}, _opts), do: transparency_log_unreachable(reason)
+  def from_error({:chain_broken, index}, _opts), do: transparency_log_unreachable("chain at #{index}")
+
+  def from_error({:app_resource_write_failed, path, reason}, _opts),
+    do: file_write(path, reason)
+
   def from_error({:duplicate_app, applications}, _opts),
     do: project_artifact_failure(:duplicate_app, %{applications: applications})
 

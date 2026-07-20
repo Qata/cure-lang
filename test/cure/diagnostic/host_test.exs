@@ -548,6 +548,27 @@ defmodule Cure.Diagnostic.HostTest do
     refute edition =~ ":dependency_edition_error"
   end
 
+  test "recognizes project, registry, transparency, watch, and resource failures at the host boundary" do
+    cases = [
+      {{:unknown_watch_action, :explode}, "E098"},
+      {{:file_error, :enoent}, "E098"},
+      {{:decode_failed, :invalid_json}, "E098"},
+      {{:parse, :invalid_lock}, "E098"},
+      {{:fetch_failed, "registry.json", :timeout}, "E038"},
+      {{:hash_mismatch, "Demo@1.0.0"}, "E039"},
+      {{:package_not_found, "Demo"}, "E040"},
+      {{:unreachable, :econnrefused}, "E042"},
+      {{:chain_broken, 3}, "E042"},
+      {{:app_resource_write_failed, "priv/app.json", :eacces}, "E096"}
+    ]
+
+    for {reason, expected_code} <- cases do
+      rendered = Cure.Diagnostic.Host.render(reason, "project.cure", "")
+      assert rendered =~ "[#{expected_code}]", "#{inspect(reason)} was not operationally classified"
+      refute rendered =~ "INTERNAL COMPILER ERROR"
+    end
+  end
+
   test "renders project application validation failures as artifact diagnostics" do
     duplicate = Host.render({:duplicate_app, [{"one.cure", "One"}, {"two.cure", "Two"}]}, "Cure.toml")
     mismatch = Host.render({:app_name_mismatch, "Expected", "Actual"}, "Cure.toml")
