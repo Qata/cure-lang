@@ -158,9 +158,8 @@ defmodule Cure.Compiler.Errors do
 
   # -- Lex Errors --------------------------------------------------------------
 
-  def format_error({:lex_error, reason}, file) do
-    format_diagnostic("error", "lexer error", file, 0, inspect(reason))
-  end
+  def format_error({:lex_error, _reason} = error, file),
+    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
 
   # -- Codegen Errors ----------------------------------------------------------
 
@@ -1740,6 +1739,7 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:expected, _, :got, _, _, _}), do: true
   defp structured_error?({:parse_recovered, _, _, _}), do: true
   defp structured_error?({:lambda_block_unterminated, _, _, _}), do: true
+  defp structured_error?({:lex_error, _reason}), do: true
   defp structured_error?({:codegen_error, reason}), do: structured_error?(reason)
   defp structured_error?({:parse_error, [reason | _]}), do: structured_error?(reason)
   defp structured_error?({:source_context, reason, context}) when is_map(context), do: structured_error?(reason)
@@ -1751,6 +1751,7 @@ defmodule Cure.Compiler.Errors do
   defp error_location({:duplicate_module, _name, _paths}), do: {1, 1}
   defp error_location({:ambiguous_name, _name, _modules}), do: {1, 1}
   defp error_location({:lambda_block_unterminated, line, col, _code}), do: {line, col}
+  defp error_location({:lex_error, reason}), do: lex_error_location(reason)
   defp error_location({_, _, meta}) when is_list(meta), do: {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)}
   defp error_location({_, _, line, col}) when is_integer(line) and is_integer(col), do: {line, col}
 
@@ -1768,14 +1769,26 @@ defmodule Cure.Compiler.Errors do
   defp error_location(_error), do: {0, 0}
 
   defp exact_error_span(error, source, source_id, registry) do
-    case embedded_span(error) do
-      %Cure.Diagnostic.Span{} = span ->
-        Cure.Diagnostic.SourceRegistry.span(registry, source_id, span.start_byte, span.end_byte)
+    if insertion_at_eof?(error) do
+      ending = byte_size(source)
+      Cure.Diagnostic.SourceRegistry.span(registry, source_id, ending, ending)
+    else
+      case embedded_span(error) do
+        %Cure.Diagnostic.Span{} = span ->
+          Cure.Diagnostic.SourceRegistry.span(registry, source_id, span.start_byte, span.end_byte)
 
-      nil ->
-        token_span_at_error(error, source, source_id, registry)
+        nil ->
+          token_span_at_error(error, source, source_id, registry)
+      end
     end
   end
+
+  defp insertion_at_eof?({:lex_error, {kind, _line, _column}})
+       when kind in [:unterminated_string, :unterminated_char, :unterminated_quoted_identifier],
+       do: true
+
+  defp insertion_at_eof?({:parse_error, [reason | _]}), do: insertion_at_eof?(reason)
+  defp insertion_at_eof?(_error), do: false
 
   defp token_span_at_error(error, source, source_id, registry) do
     case error_location(error) do
@@ -1813,6 +1826,15 @@ defmodule Cure.Compiler.Errors do
   defp embedded_span({:codegen_error, reason}), do: embedded_span(reason)
   defp embedded_span({:source_context, _reason, %{span: %Cure.Diagnostic.Span{} = span}}), do: span
   defp embedded_span(_error), do: nil
+
+  defp lex_error_location(reason) when is_tuple(reason) do
+    case reason |> Tuple.to_list() |> Enum.reverse() do
+      [col, line | _] when is_integer(line) and is_integer(col) -> {line, col}
+      _ -> {0, 0}
+    end
+  end
+
+  defp lex_error_location(_reason), do: {0, 0}
 
   # -- Formatting Helper -------------------------------------------------------
 

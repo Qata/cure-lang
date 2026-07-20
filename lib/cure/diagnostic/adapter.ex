@@ -318,6 +318,8 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:lex_error, reason}, opts), do: from_error(lex_problem(reason, opts), opts)
+
   def from_error({:lift_module_error, details}, opts) when is_map(details) do
     macro = get_in(details, [:source_provenance, :macro]) || :macro
     cause = Map.get(details, :cause)
@@ -412,11 +414,43 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_title(_origin), do: "Type mismatch"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_lambda}), do: "Lambda body is not closed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :tab_not_allowed}), do: "Tabs are not valid indentation"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_string}), do: "String is not closed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_char}), do: "Character is not closed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_quoted_identifier}), do: "Quoted name is not closed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :invalid_number}), do: "Number literal is incomplete"
+  defp syntax_problem_title(%SyntaxProblem{kind: :invalid_char_escape}), do: "Invalid character escape"
+  defp syntax_problem_title(%SyntaxProblem{kind: :atom_too_long}), do: "Atom literal is too long"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unexpected_character}), do: "Unexpected character"
   defp syntax_problem_title(%SyntaxProblem{kind: :recovered_statement}), do: "Invalid statement"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
   defp syntax_problem_context(%SyntaxProblem{kind: :unterminated_lambda}),
     do: "This multi-statement lambda body reaches the end of its container without a closing delimiter."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :tab_not_allowed}),
+    do: "Cure indentation uses spaces so that block structure is the same in every editor."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unterminated_string}),
+    do: "This string reaches the end of the source without its closing double quote."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unterminated_char}),
+    do: "A character literal must contain one character and a closing single quote."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unterminated_quoted_identifier}),
+    do: "This quoted name reaches the end of the source without its closing backtick."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :invalid_number}),
+    do: "This numeric prefix or exponent is missing digits required by its literal form."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :invalid_char_escape, observed: observed}),
+    do: "`\\#{syntax_name(observed)}` is not a supported character escape."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :atom_too_long}),
+    do: "BEAM atom names may contain at most 255 bytes; this authored atom exceeds that limit."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unexpected_character, observed: observed}),
+    do: "#{syntax_name(observed)} does not begin any Cure token at this location."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :recovered_statement, observed: observed}),
     do:
@@ -478,7 +512,47 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_insertion(:rbracket), do: "]"
   defp syntax_insertion(:rbrace), do: "}"
   defp syntax_insertion(:end), do: "end"
+  defp syntax_insertion(:double_quote), do: "\""
+  defp syntax_insertion(:single_quote), do: "'"
+  defp syntax_insertion(:backtick), do: "`"
   defp syntax_insertion(_expected), do: nil
+
+  defp lex_problem({:tab_not_allowed, line, column}, opts),
+    do: syntax_problem(:tab_not_allowed, nil, :tab, line, column, opts)
+
+  defp lex_problem({:unterminated_string, line, column}, opts),
+    do: syntax_problem(:unterminated_string, :double_quote, :eof, line, column, opts)
+
+  defp lex_problem({:unterminated_char, line, column}, opts),
+    do: syntax_problem(:unterminated_char, :single_quote, :eof, line, column, opts)
+
+  defp lex_problem({:unterminated_quoted_identifier, line, column}, opts),
+    do: syntax_problem(:unterminated_quoted_identifier, :backtick, :eof, line, column, opts)
+
+  defp lex_problem({kind, line, column}, opts)
+       when kind in [:invalid_hex_literal, :invalid_binary_literal, :invalid_float_literal],
+       do: syntax_problem(:invalid_number, :digits, kind, line, column, opts)
+
+  defp lex_problem({:invalid_char_escape, line, column}, opts),
+    do: syntax_problem(:invalid_char_escape, :valid_escape, :escape, line, column, opts)
+
+  defp lex_problem({:atom_too_long, line, column}, opts),
+    do: syntax_problem(:atom_too_long, :shorter_atom, :atom, line, column, opts)
+
+  defp lex_problem({:unexpected_character, character, line, column}, opts),
+    do: syntax_problem(:unexpected_character, :token, character, line, column, opts)
+
+  defp lex_problem(reason, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: {:lex_error, reason})
+
+  defp syntax_problem(kind, expected, observed, line, column, opts) do
+    %SyntaxProblem{
+      kind: kind,
+      expected: expected,
+      observed: observed,
+      at: Keyword.get(opts, :span),
+      context: %{line: line, column: column}
+    }
+  end
 
   defp type_problem_context(%ExpectationOrigin{kind: :annotation}),
     do: "This expression does not match the type written in its annotation."

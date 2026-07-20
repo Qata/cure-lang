@@ -83,6 +83,26 @@ defmodule Cure.DiagnosticTest do
     assert Renderer.plain(diagnostic, registry) =~ "^^ this syntax does not fit here"
   end
 
+  test "lexer failures explain authored syntax without exposing raw tuples" do
+    source = "mod Demo\n\tfn run() = 1\n"
+    error = {:lex_error, {:tab_not_allowed, 2, 1}}
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
+
+    assert diagnostic.code == "E094"
+    assert diagnostic.title == "Tabs are not valid indentation"
+    assert Renderer.plain(diagnostic, registry) =~ "indentation uses spaces"
+    refute Renderer.plain(diagnostic, registry) =~ "{:tab_not_allowed"
+  end
+
+  test "unique missing lexer delimiters provide an insertion edit" do
+    source = "\"not closed"
+    error = {:lex_error, {:unterminated_string, 1, 1}}
+    {diagnostic, _registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
+
+    assert [%Suggestion{applicability: :machine_applicable, edits: [%TextEdit{replacement: "\""}]}] =
+             diagnostic.suggestions
+  end
+
   test "LSP positions count UTF-16 code units rather than Unicode scalars" do
     registry = SourceRegistry.new() |> SourceRegistry.register(:astral, "a😀b", "astral.cure")
     {:ok, span} = SourceRegistry.span(registry, :astral, 5, 6)
