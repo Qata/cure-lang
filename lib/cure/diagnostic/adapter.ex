@@ -756,6 +756,42 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(kind, opts)
       when kind in [
+             :no_compatible_macro_input,
+             :normalization_fuel_exhausted,
+             :invalid_parse_production,
+             :duplicate_parse_production,
+             :invalid_macro_diagnostics,
+             :invalid_macro_diagnostic,
+             :invalid_syntax_attr,
+             :invalid_syntax_list,
+             :invalid_syntax_string,
+             :invalid_syntax_literal,
+             :invalid_syntax_pair,
+             :invalid_check_property,
+             :duplicate_check_property,
+             :invalid_protocol_role,
+             :duplicate_protocol_role,
+             :duplicate_reducer_constructor,
+             :not_a_nat,
+             :invalid_lift_module_ast,
+             :invalid_lift_callback,
+             :invalid_lift_declaration,
+             :invalid_lift_import,
+             :invalid_driver_register,
+             :duplicate_driver_register,
+             :overlapping_driver_register,
+             :module_rule_not_fully_consumed,
+             :not_a_module_rule,
+             :expander_without_accepts,
+             :accepts_without_syntax_family,
+             :accepts_without_expander,
+             :multiple_accepts_declarations,
+             :multiple_expands_declarations
+           ],
+      do: macro_validation_failure(kind, %{}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
              :applied_non_function,
              :rewrite_requires_expected_type,
              :rewrite_proof_not_equality,
