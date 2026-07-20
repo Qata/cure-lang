@@ -7,6 +7,11 @@
 **Applies to:** the macro facility, source-defined BEAM algebra, `actor`,
 `fsm`, `sup`, `app`, and the final AtomVM integration work
 
+**Mandatory diagnostic dependency:**
+`2026-07-20-structured-compiler-diagnostics-design.md`. The remaining macro
+phases use its structured errors, source labels, and expansion provenance; they
+must not introduce new bare verifier errors.
+
 ## 1. Purpose
 
 Cure is moving from compiler-owned OTP object classes to source-defined,

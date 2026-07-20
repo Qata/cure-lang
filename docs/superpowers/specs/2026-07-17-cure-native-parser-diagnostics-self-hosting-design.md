@@ -2,8 +2,11 @@
 
 **Date:** 2026-07-17  
 **Target:** Cure 0.35  
-**Status:** PARKED — specified now, intentionally deferred until the 0.34
-dependent-type rewrite has landed and stabilized.
+**Status:** PARTIALLY UNPARKED — the shared structured compiler diagnostic
+foundation moved into 0.34 under
+`2026-07-20-structured-compiler-diagnostics-design.md`. Cure-native parser
+self-hosting, the public parsing platform, bootstrap, and cutover remain parked
+for 0.35.
 
 **Related specifications:**
 
@@ -48,11 +51,11 @@ parallel parsing or diagnostic framework.
 This work is user-facing 0.35 scope. It is not required for the 0.34
 dependent-type rewrite.
 
-The 0.34 branch may retain already-landed substrate (`Consumed`, `Step`, `Acc`)
-and may fix general compiler completeness defects exposed by that substrate.
-It must not expand into completing `Std.Parse`, diagnostic presentation, editor
-features, or self-hosting merely because those future libraries make useful
-test cases.
+The 0.34 branch implements the shared diagnostic model, source-caret and
+machine renderers, elaboration/kernel diagnostics, and macro provenance defined
+by the 2026-07-20 specification. It must not expand into completing `Std.Parse`
+or parser self-hosting merely because those future libraries make useful test
+cases.
 
 0.35 starts only after the 0.34 dependent elaborator, erasure model, and code
 generation path are stable enough to serve as the implementation platform.

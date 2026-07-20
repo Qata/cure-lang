@@ -1,9 +1,10 @@
 # Compiler Error Expansion & Cleanup — Design Spec
 
-> **Status: PARKED.** Written to capture the design while the motivation is
-> fresh; not scheduled for implementation. Pick up after the stdlib
-> dependent-pipeline migration (the work that surfaced it) reaches a natural
-> stopping point, or whenever error-quality becomes the bottleneck again.
+> **Status: SUPERSEDED FOR IMPLEMENTATION.** Error quality became a material
+> blocker during the 0.34 reflective OTP macro work. The authoritative 0.34
+> design is now
+> [`2026-07-20-structured-compiler-diagnostics-design.md`](2026-07-20-structured-compiler-diagnostics-design.md).
+> This document remains the historical audit that motivated it.
 
 **0.35 integration note (2026-07-17):** this cleanup is the seed of, but not the
 complete design for, the shared diagnostic foundation in
