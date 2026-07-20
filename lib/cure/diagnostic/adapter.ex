@@ -633,13 +633,25 @@ defmodule Cure.Diagnostic.Adapter do
              :invalid_lift_import,
              :invalid_lift_module_ast,
              :lifted_module_dependency_cycle,
-             :duplicate_lifted_module
+             :duplicate_lifted_module,
+             :invalid_generated_syntax,
+             :unknown_syntax_family,
+             :duplicate_syntax_family,
+             :duplicate_syntax_family_field,
+             :syntax_family_cycle,
+             :primitive_missing_builtin,
+             :unknown_primitive_tag,
+             :primitive_floor_mismatch,
+             :unsupported_declaration
            ],
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
   def from_error({kind, first, second}, opts)
       when kind in [:forward_packet_length, :invalid_packet_crc_fields],
       do: macro_validation_failure(kind, %{first: first, second: second}, opts)
+
+  def from_error({:primitive_floor_mismatch, name, node, other}, opts),
+    do: macro_validation_failure(:primitive_floor_mismatch, %{name: name, node: node, other: other}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -726,6 +738,18 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:unknown_global, name}, opts),
     do: unknown_name(:value, name, opts)
+
+  def from_error({:unbound_var, name}, opts),
+    do: unknown_name(:value, name, opts)
+
+  def from_error({:unknown_family, name}, opts),
+    do: unknown_name(:type, name, opts)
+
+  def from_error({:unknown_ctor, name}, opts),
+    do: unknown_name(:constructor, name, opts)
+
+  def from_error({:foreign_ctor, name}, opts),
+    do: unknown_name(:constructor, name, opts)
 
   def from_error({:unknown_global, name, details}, opts) when is_map(details),
     do: unknown_name(:value, name, Keyword.put(opts, :kernel_context, details))
