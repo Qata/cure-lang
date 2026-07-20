@@ -348,6 +348,12 @@ defmodule Cure.Diagnostic.Registry do
       entry.status == :reachable and not is_nil(entry.retirement_reason) ->
         {:error, {:reachable_with_retirement_reason, entry.code}}
 
+      entry.status == :reachable and is_nil(entry.catalog_case) ->
+        {:error, {:reachable_without_catalog_case, entry.code}}
+
+      entry.status == :reachable and is_nil(entry.fixture_id) ->
+        {:error, {:reachable_without_fixture, entry.code}}
+
       true ->
         :ok
     end

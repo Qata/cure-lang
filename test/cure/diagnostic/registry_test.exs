@@ -51,6 +51,12 @@ defmodule Cure.Diagnostic.RegistryTest do
 
     assert {:error, {:missing_converter_function, ^code}} =
              Registry.validate([%{entry | converter_function: :does_not_exist}])
+
+    assert {:error, {:reachable_without_catalog_case, ^code}} =
+             Registry.validate([%{entry | catalog_case: nil}])
+
+    assert {:error, {:reachable_without_fixture, ^code}} =
+             Registry.validate([%{entry | fixture_id: nil}])
   end
 
   test "first-party stable diagnostic literals are registered" do
