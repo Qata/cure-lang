@@ -342,6 +342,18 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:source_context, {:missing_branch, branch}, context}, opts) when is_map(context) do
+    coverage_problem(:missing_branch, branch, context, opts)
+  end
+
+  def from_error({:source_context, {:reachable_impossible, branch}, context}, opts) when is_map(context) do
+    coverage_problem(:reachable_impossible, branch, context, opts)
+  end
+
+  def from_error({:source_context, {:duplicate_branch, branch}, context}, opts) when is_map(context) do
+    coverage_problem(:duplicate_branch, branch, context, opts)
+  end
+
   def from_error({:source_context, {:unknown_record, name}, context}, opts) when is_map(context) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
 
@@ -1223,6 +1235,35 @@ defmodule Cure.Diagnostic.Adapter do
       body: Doc.paragraph(body),
       primary: primary_label(opts, "adjust this operator declaration"),
       payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp coverage_problem(kind, branch, context, opts) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+
+    {title, body, label} =
+      case kind do
+        :missing_branch ->
+          {"Incomplete pattern match", "This match does not cover the branch `#{name_to_string(branch)}`.",
+           "add a branch for this constructor or a catch-all pattern"}
+
+        :reachable_impossible ->
+          {"Impossible pattern branch", "This branch can never be reached for the matched type.",
+           "remove this branch or correct its pattern"}
+
+        :duplicate_branch ->
+          {"Duplicate pattern branch", "This branch repeats a constructor already handled by an earlier branch.",
+           "remove the duplicate branch"}
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: primary_label(opts, label),
+      payload: %{kind: kind, branch: branch, checking: Map.get(context, :checking)}
     )
   end
 

@@ -315,6 +315,19 @@ defmodule Cure.Diagnostic.HostTest do
     refute lambda =~ ":lambda_expected_pi"
   end
 
+  test "renders pattern coverage failures with branch identity" do
+    missing = Host.render({:source_context, {:missing_branch, :None}, %{}}, "match.cure")
+    impossible = Host.render({:source_context, {:reachable_impossible, :Some}, %{}}, "match.cure")
+
+    assert missing =~ "[E093]"
+    assert missing =~ "INCOMPLETE PATTERN MATCH"
+    assert missing =~ "None"
+    assert impossible =~ "[E093]"
+    assert impossible =~ "IMPOSSIBLE PATTERN BRANCH"
+    refute missing =~ ":missing_branch"
+    refute impossible =~ ":reachable_impossible"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 
