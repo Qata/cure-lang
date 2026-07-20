@@ -6328,7 +6328,23 @@ defmodule Cure.Compiler.Parser do
       col: kw.col
     ]
 
+    meta = put_fixity_source_info(meta, kw, op_token, state)
+
     {{:fixity, meta, []}, state}
+  end
+
+  defp put_fixity_source_info(meta, %Token{} = first, %Token{} = operator, state) do
+    case {first.span, operator.span, last_authored_token(state)} do
+      {%Cure.Diagnostic.Span{} = first_span, %Cure.Diagnostic.Span{} = operator_span,
+       %Token{span: %Cure.Diagnostic.Span{} = last_span}} ->
+        case Range.through(first_span, last_span) do
+          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole, operator: operator_span})
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   defp fixity_lexeme(%Token{value: v}) when is_binary(v), do: v
@@ -6347,6 +6363,7 @@ defmodule Cure.Compiler.Parser do
 
     {fields, state} = parse_precedencegroup_body(state)
     meta = [name: name, line: kw.line, col: kw.col] ++ fields
+    meta = put_container_source_info(meta, kw, name_token, name_token, state)
     {{:precedencegroup, meta, []}, state}
   end
 
@@ -7485,7 +7502,9 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     # Parse module path
+    path_start = peek(state)
     {path, state} = parse_dotted_name(state)
+    path_end = last_authored_token(state)
 
     # Check for selective import: .{a, b, c}
     {items, state} =
@@ -7522,6 +7541,7 @@ defmodule Cure.Compiler.Parser do
     meta = [source: path, import_type: :use, language: :cure, line: token.line, col: token.col]
     meta = if items != [], do: Keyword.put(meta, :items, items), else: meta
     meta = if alias_name, do: Keyword.put(meta, :alias, alias_name), else: meta
+    meta = put_container_source_info(meta, token, path_start, path_end, state)
     ast = {:import, meta, []}
     {ast, state}
   end

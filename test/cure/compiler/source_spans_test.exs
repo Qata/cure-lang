@@ -121,6 +121,26 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, enum_info.name) == "Color"
   end
 
+  test "imports and fixity declarations retain authored source roles" do
+    source = "use Std.List as L\nprecedencegroup additive\ninfix + : additive\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "declarations.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "declarations.cure", emit_events: false, prelude_macros: false)
+
+    import = find_node(ast, :import)
+    group = find_node(ast, :precedencegroup)
+    fixity = find_node(ast, :fixity)
+    import_info = Metadata.source_info(elem(import, 1))
+    group_info = Metadata.source_info(elem(group, 1))
+    fixity_info = Metadata.source_info(elem(fixity, 1))
+
+    assert slice(source, import_info.whole) == "use Std.List as L"
+    assert slice(source, import_info.name) == "Std.List"
+    assert slice(source, group_info.whole) == "precedencegroup additive"
+    assert slice(source, group_info.name) == "additive"
+    assert slice(source, fixity_info.whole) == "infix + : additive"
+    assert slice(source, fixity_info.operator) == "+"
+  end
+
   test "type applications in annotations retain their closing delimiter" do
     source = "mod Demo\n  fn answer(x: Option(Int)) -> Option(Int) = x\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "demo.cure", emit_events: false)
