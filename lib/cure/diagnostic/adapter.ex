@@ -26,6 +26,18 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:parse_error, [reason | _]}, opts), do: from_error(reason, opts)
 
+  def from_error({:source_context, {:unsupported_pattern, shape}, context}, opts) when is_map(context) do
+    from_error(
+      %SyntaxProblem{
+        kind: :unrecognized_pattern,
+        observed: shape,
+        at: Keyword.get(opts, :span, Map.get(context, :span)),
+        context: %{code: "E090", checking: Map.get(context, :checking)}
+      },
+      opts
+    )
+  end
+
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
       opts

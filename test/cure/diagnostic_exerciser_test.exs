@@ -15,7 +15,9 @@ defmodule Cure.DiagnosticExerciserTest do
       {"type mismatch", "E093",
        "mod DiagnosticType\n  type Nat = Z | S(Nat)\n  fn bad() -> Equivalent(Nat, Z, S(Z)) = reflexive(Z)\n"},
       {"unfilled hole", "E014", "mod DiagnosticHole\n  fn bad() -> Int = ???\n"},
-      {"unterminated lambda", "E035", "fn (x) -> x; x;"}
+      {"unterminated lambda", "E035", "fn (x) -> x; x;"},
+      {"unrecognized pattern", "E090",
+       "mod DiagnosticPattern\n  fn bad(x: Int) -> Int = match x\n    1..10 -> 1\n    _ -> 0\n"}
     ]
 
     compiler_codes = Enum.map(compiler_cases, &elem(&1, 1))
