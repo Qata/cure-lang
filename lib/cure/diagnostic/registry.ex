@@ -95,6 +95,22 @@ defmodule Cure.Diagnostic.Registry do
     module_loader name_resolution operational parser pattern_checker proof_checker
     totality_checker
   ]a
+  @producer_modules %{
+    dependency_graph: Cure.Compiler.DepGraph,
+    doctor: Cure.Doctor,
+    elaboration: Cure.Elab.Program,
+    kernel: Cure.Core.Kernel,
+    kernel_conversion: Cure.Elab.TypeConv,
+    lexer: Cure.Compiler.Lexer,
+    macro_expansion: Cure.Elab.MacroExpand,
+    module_loader: Cure.Compiler.Incremental,
+    name_resolution: Cure.Elab.Resolution,
+    operational: Cure.Diagnostic.Operational,
+    parser: Cure.Compiler.Parser,
+    pattern_checker: Cure.Elab.Elaborator,
+    proof_checker: Cure.Elab.ProofSearch,
+    totality_checker: Cure.Elab.TotalityClosure
+  }
   @catalog_cases %{
     "E002" => :unbound_variable,
     "E008" => :undocumented_public_function,
@@ -383,6 +399,10 @@ defmodule Cure.Diagnostic.Registry do
           Enum.any?(entry.producers, &(&1 not in @known_producers)) ->
         {:error, {:unowned_producer, entry.code}}
 
+      entry.status == :reachable and
+          Enum.any?(entry.producers, &(not producer_loaded?(&1))) ->
+        {:error, {:unreachable_producer, entry.code}}
+
       entry.status == :reachable and entry.converter == Cure.Compiler.Errors ->
         {:error, {:legacy_converter, entry.code}}
 
@@ -413,6 +433,13 @@ defmodule Cure.Diagnostic.Registry do
 
       true ->
         :ok
+    end
+  end
+
+  defp producer_loaded?(producer) do
+    case Map.fetch(@producer_modules, producer) do
+      {:ok, module} -> Code.ensure_loaded?(module)
+      :error -> false
     end
   end
 end
