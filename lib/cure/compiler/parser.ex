@@ -6215,7 +6215,9 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     # Parse module name (dotted path)
+    name_start = peek(state)
     {name, state} = parse_dotted_name(state)
+    name_end = last_authored_token(state)
     state = skip_newlines(state)
 
     # Parse indented body. Leading `##` docs immediately after `mod Name`
@@ -6224,6 +6226,7 @@ defmodule Cure.Compiler.Parser do
     {body_stmts, leading_doc, state} = parse_definition_block_with_lead_doc(state)
 
     meta = [container_type: :module, name: name, language: :cure, line: token.line, col: token.col]
+    meta = put_container_source_info(meta, token, name_start, name_end, state)
     meta = if leading_doc != "", do: Keyword.put(meta, :doc, leading_doc), else: meta
     ast = {:container, meta, body_stmts}
     {ast, state}
@@ -6238,7 +6241,9 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     state = advance(state)
 
+    name_start = peek(state)
     {name, state} = parse_dotted_name(state)
+    name_end = last_authored_token(state)
     state = skip_newlines(state)
     {body_stmts, state} = parse_definition_block(state)
 
@@ -6249,6 +6254,8 @@ defmodule Cure.Compiler.Parser do
       line: token.line,
       col: token.col
     ]
+
+    meta = put_container_source_info(meta, token, name_start, name_end, state)
 
     {{:container, meta, body_stmts}, state}
   end
@@ -6445,8 +6452,25 @@ defmodule Cure.Compiler.Parser do
 
     meta = [container_type: :struct, name: name, line: token.line, col: token.col]
     meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+    meta = put_container_source_info(meta, token, name_token, name_token, state)
     ast = {:container, meta, fields}
     {ast, state}
+  end
+
+  defp put_container_source_info(meta, %Token{} = first, %Token{} = name_start, %Token{} = name_end, state) do
+    case {first.span, name_start.span, name_end.span, last_authored_token(state)} do
+      {%Cure.Diagnostic.Span{} = first_span, %Cure.Diagnostic.Span{} = name_start_span,
+       %Cure.Diagnostic.Span{} = name_end_span, %Token{span: %Cure.Diagnostic.Span{} = last_span}} ->
+        with {:ok, whole} <- Range.through(first_span, last_span),
+             {:ok, name} <- Range.through(name_start_span, name_end_span) do
+          Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name})
+        else
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   defp parse_record_fields(state) do

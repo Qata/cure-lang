@@ -90,6 +90,22 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.name) == "Every"
   end
 
+  test "named containers retain exact declaration and qualified-name ranges" do
+    source = "mod Demo.Core\n  rec Point\n    x: Int\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "containers.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "containers.cure", emit_events: false, prelude_macros: false)
+
+    {:container, module_meta, [record]} = ast
+    {:container, record_meta, _fields} = record
+
+    module_info = Metadata.source_info(module_meta)
+    record_info = Metadata.source_info(record_meta)
+    assert slice(source, module_info.whole) == "mod Demo.Core\n  rec Point\n    x: Int"
+    assert slice(source, module_info.name) == "Demo.Core"
+    assert slice(source, record_info.whole) == "rec Point\n    x: Int"
+    assert slice(source, record_info.name) == "Point"
+  end
+
   test "type applications in annotations retain their closing delimiter" do
     source = "mod Demo\n  fn answer(x: Option(Int)) -> Option(Int) = x\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "demo.cure", emit_events: false)
