@@ -13,6 +13,8 @@ defmodule Mix.Tasks.Cure.Diagnostics do
 
   @impl true
   def run(args) do
+    validate_registry!()
+
     {opts, [], invalid} =
       OptionParser.parse(args,
         strict: [color: :string, width: :integer, coverage: :boolean],
@@ -42,5 +44,14 @@ defmodule Mix.Tasks.Cure.Diagnostics do
         else: ["test/cure/diagnostic_exerciser_test.exs"]
 
     Mix.Task.run("test", test_args)
+  end
+
+  defp validate_registry! do
+    with :ok <- Cure.Diagnostic.Registry.validate(),
+         :ok <- Cure.Diagnostic.Registry.validate_sources() do
+      :ok
+    else
+      {:error, reason} -> Mix.raise("diagnostic registry validation failed: #{inspect(reason)}")
+    end
   end
 end

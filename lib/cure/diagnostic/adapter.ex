@@ -38,6 +38,10 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:codegen_error, {:conversion_failure, _, _} = reason}, opts), do: from_error(reason, opts)
 
+  def from_error({:codegen_error, {:source_context, _, _} = reason}, opts), do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:unfilled_hole, _} = reason}, opts), do: from_error(reason, opts)
+
   def from_error({:codegen_error, reason}, opts), do: codegen_failure(reason, opts)
 
   def from_error({:parse_error, [reason | _]}, opts), do: from_error(reason, opts)
