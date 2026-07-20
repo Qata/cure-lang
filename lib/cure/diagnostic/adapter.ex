@@ -70,6 +70,9 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:unknown_record, name}, opts),
+    do: from_error({:source_context, {:unknown_record, name}, %{}}, opts)
+
   def from_error({:source_context, {:record_field_mismatch, name}, context}, opts) when is_map(context) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
 
