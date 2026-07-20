@@ -38,4 +38,23 @@ defmodule Cure.Diagnostic.SinkTest do
     {_input, output} = StringIO.contents(device)
     assert [%{"code" => "E099"}] = Jason.decode!(output)
   end
+
+  test "LSP rendering honors the configured position encoding" do
+    source = "😀 value\n"
+    registry = Cure.Diagnostic.SourceRegistry.new() |> Cure.Diagnostic.SourceRegistry.register(:source, source)
+    {:ok, span} = Cure.Diagnostic.SourceRegistry.span(registry, :source, 5, 10)
+
+    diagnostic =
+      Cure.Diagnostic.new(
+        code: "E099",
+        key: :usage_error,
+        severity: :error,
+        title: "Usage",
+        body: Cure.Diagnostic.Doc.paragraph("bad"),
+        primary: %Cure.Diagnostic.Label{span: span, style: :primary}
+      )
+
+    sink = Sink.new(format: :lsp, registry: registry, position_encoding: :utf8)
+    assert Sink.render(sink, diagnostic)["range"]["start"]["character"] == 5
+  end
 end

@@ -4,7 +4,13 @@ defmodule Cure.Diagnostic.Sink do
   alias Cure.Diagnostic
   alias Cure.Diagnostic.{Renderer, SourceRegistry}
 
-  defstruct diagnostics: [], registry: nil, format: :terminal, output_device: :standard_error, color: :auto, width: 80
+  defstruct diagnostics: [],
+            registry: nil,
+            format: :terminal,
+            output_device: :standard_error,
+            color: :auto,
+            width: 80,
+            position_encoding: :utf16
 
   @type format :: :terminal | :plain | :json | :code | :lsp
   @type t :: %__MODULE__{
@@ -13,7 +19,8 @@ defmodule Cure.Diagnostic.Sink do
           format: format(),
           output_device: atom() | pid(),
           color: :auto | :always | :never | boolean(),
-          width: pos_integer()
+          width: pos_integer(),
+          position_encoding: :utf8 | :utf16 | :utf32
         }
 
   @spec new(keyword()) :: t()
@@ -23,7 +30,8 @@ defmodule Cure.Diagnostic.Sink do
       format: Keyword.get(opts, :format, :terminal),
       output_device: Keyword.get(opts, :output_device, :standard_error),
       color: Keyword.get(opts, :color, :auto),
-      width: Keyword.get(opts, :width, 80)
+      width: Keyword.get(opts, :width, 80),
+      position_encoding: Keyword.get(opts, :position_encoding, :utf16)
     }
   end
 
@@ -47,7 +55,7 @@ defmodule Cure.Diagnostic.Sink do
       :plain -> Renderer.plain(diagnostic, sink.registry, width: sink.width)
       :json -> Renderer.to_map(diagnostic)
       :code -> Renderer.code_diagnostic(diagnostic)
-      :lsp -> Renderer.lsp(diagnostic, sink.registry)
+      :lsp -> Renderer.lsp(diagnostic, sink.registry, sink.position_encoding)
     end
   end
 
