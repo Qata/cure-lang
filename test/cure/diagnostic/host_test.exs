@@ -196,4 +196,15 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "fingerprint"
     refute rendered =~ ":unregistered_compiler_reason"
   end
+
+  test "simple name-resolution families use structured host output" do
+    assert Cure.Compiler.Errors.format_with_source({:unknown_type, "Missing"}, "demo.cure", "type Use = Missing\n") =~
+             "[E091]"
+
+    assert Cure.Compiler.Errors.format_with_source({:unknown_module, "Missing"}, "demo.cure", "use Missing\n") =~
+             "[E091]"
+
+    assert Cure.Compiler.Errors.format_with_source({:unknown_member, "Demo", "missing"}, "demo.cure", "Demo.missing\n") =~
+             "[E091]"
+  end
 end
