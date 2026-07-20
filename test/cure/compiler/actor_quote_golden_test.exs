@@ -37,7 +37,8 @@
 # Re-frozen for typed actor Phase 2: structured actors intentionally add their
 # nominal Handle plus validated start/send/stop adapters; call-capable actors
 # also add request. This is a public generated-API change, not a quote-port
-# refactor. Supervisor and application output remains byte-identical.
+# refactor. The supervisor lifecycle-handle additions likewise update GSup's
+# generated module; application output remains byte-identical.
 defmodule Cure.Compiler.ActorQuoteGoldenTest do
   use ExUnit.Case, async: false
 
@@ -63,7 +64,7 @@ defmodule Cure.Compiler.ActorQuoteGoldenTest do
 
        sup Cure.Generated.GSup
          children []
-     """, "c946d1c98c57efe5fc692ecad9c313ff11da59893f6cdad3cd2b06990d2c9818"},
+     """, "89d79a0183396494b6ee3cb9a10e7870c23a6e394627a0c916da92f3a64504a0"},
     {"GApp",
      """
      mod M
