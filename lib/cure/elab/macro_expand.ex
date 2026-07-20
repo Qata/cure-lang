@@ -75,6 +75,7 @@ defmodule Cure.Elab.MacroExpand do
            |> Keyword.put(:provenance, expansion_chain(state))
            |> put_expansion_context(state.context),
          {:ok, expanded, fresh_counter} <- execute(meta, elab, input, env, state.fresh_counter),
+         expanded = stamp_generated_provenance(expanded, meta),
          state = %{state | fresh_counter: fresh_counter},
          {:ok, expanded, state} <- expand_node(expanded, env, state),
          {:ok, state} <- end_expansion(node, state) do
@@ -159,6 +160,55 @@ defmodule Cure.Elab.MacroExpand do
 
   defp put_expansion_context(meta, nil), do: meta
   defp put_expansion_context(meta, context), do: Keyword.put(meta, :expansion_context, context)
+
+  # Generated modules cross a later compilation-unit boundary. Stamp the
+  # authored invocation and complete expansion chain on the unit and each of
+  # its declarations now, while that information is still available.
+  defp stamp_generated_provenance({:lift_module, node_meta, children}, expansion_meta) do
+    source = %{
+      file: Keyword.get(expansion_meta, :file),
+      line: Keyword.get(expansion_meta, :line),
+      col: Keyword.get(expansion_meta, :col),
+      macro: Keyword.get(expansion_meta, :keyword)
+    }
+
+    chain = Keyword.get(expansion_meta, :provenance, [])
+
+    declarations =
+      node_meta
+      |> Keyword.get(:declarations, [])
+      |> Enum.map(&stamp_declaration_provenance(&1, source, chain))
+
+    node_meta =
+      node_meta
+      |> Keyword.put(:source_provenance, source)
+      |> Keyword.put(:expansion_provenance, chain)
+      |> Keyword.put(:declarations, declarations)
+
+    {:lift_module, node_meta, children}
+  end
+
+  defp stamp_generated_provenance({tag, meta, children}, expansion_meta)
+       when is_atom(tag) and is_list(meta) and is_list(children) do
+    {tag, meta, Enum.map(children, &stamp_generated_provenance(&1, expansion_meta))}
+  end
+
+  defp stamp_generated_provenance(list, expansion_meta) when is_list(list),
+    do: Enum.map(list, &stamp_generated_provenance(&1, expansion_meta))
+
+  defp stamp_generated_provenance(other, _expansion_meta), do: other
+
+  defp stamp_declaration_provenance({tag, meta, children}, source, chain)
+       when is_atom(tag) and is_list(meta) and is_list(children) do
+    meta =
+      meta
+      |> Keyword.put(:source_provenance, source)
+      |> Keyword.put(:expansion_provenance, chain)
+
+    {tag, meta, children}
+  end
+
+  defp stamp_declaration_provenance(other, _source, _chain), do: other
 
   defp over_limit?(_value, :infinity), do: false
   defp over_limit?(value, limit) when is_integer(limit), do: value > limit
@@ -326,7 +376,11 @@ defmodule Cure.Elab.MacroExpand do
   defp resolve_field_types(_field_types, _env), do: %{}
 
   defp resolve_nested_grammar(%{grammar: %{name: name} = grammar} = field, env) do
-    Map.put(field, :grammar, Map.put(grammar, :name, Cure.Core.Env.resolve_key(env, env.ctors, MacroFamily.syntax_type(name))))
+    Map.put(
+      field,
+      :grammar,
+      Map.put(grammar, :name, Cure.Core.Env.resolve_key(env, env.ctors, MacroFamily.syntax_type(name)))
+    )
   end
 
   defp resolve_nested_grammar(field, _env), do: field

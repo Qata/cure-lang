@@ -651,6 +651,7 @@ defmodule Cure.Compiler.Parser do
           syntax_fields: Map.get(rule, :syntax_fields, macro_syntax_fields(rule.segments)),
           syntax_repeated_fields: Map.get(rule, :syntax_repeated_fields, macro_syntax_repeated_fields(rule.segments)),
           syntax_field_types: Map.get(rule, :syntax_field_types, %{}),
+          file: state.file,
           line: keyword_token.line,
           col: keyword_token.col
         ]

@@ -2,7 +2,7 @@ defmodule Cure.Diagnostic.Adapter do
   @moduledoc "Converts phase-specific and legacy error values into shared diagnostics."
 
   alias Cure.Diagnostic
-  alias Cure.Diagnostic.{Label, Span, Suggestion}
+  alias Cure.Diagnostic.{Label, ProvenanceFrame, Span, Suggestion}
 
   @unknown_name_code "E091"
 
@@ -25,6 +25,28 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:unknown_member, module, name}, opts),
     do: unknown_name(:member, "#{module}.#{name}", Keyword.put(opts, :owner, module))
+
+  def from_error({:lift_module_error, details}, _opts) when is_map(details) do
+    macro = get_in(details, [:source_provenance, :macro]) || :macro
+    cause = Map.get(details, :cause)
+    cause_diagnostic = from_error(cause)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_expansion_failed,
+      severity: :error,
+      title: "#{macro_title(macro)} expansion failed",
+      message: macro_failure_message(macro, details.module, cause_diagnostic),
+      notes: ["The generated module is an implementation detail; edit the `#{macro}` declaration instead."],
+      provenance: provenance_frames(details),
+      payload: %{
+        macro: name_to_string(macro),
+        module: name_to_string(details.module),
+        behaviour: Map.get(details, :behaviour),
+        cause: %{code: cause_diagnostic.code, key: cause_diagnostic.key, payload: cause_diagnostic.payload}
+      }
+    )
+  end
 
   def from_error(error, opts) do
     key = Diagnostic.key(error) || :compilation_error
@@ -98,6 +120,31 @@ defmodule Cure.Diagnostic.Adapter do
   defp namespace_title(:module), do: "module"
   defp namespace_title(:member), do: "module member"
   defp namespace_title(other), do: to_string(other)
+
+  defp macro_title(macro), do: macro |> name_to_string() |> String.capitalize()
+
+  defp macro_failure_message(macro, module, %Diagnostic{} = cause) do
+    "The `#{macro}` declaration could not generate `#{module}`. #{cause.message}"
+  end
+
+  defp provenance_frames(details) do
+    source = Map.get(details, :source_provenance) || %{}
+    chain = Map.get(details, :expansion_provenance, [])
+
+    frames =
+      Enum.map(chain, fn frame ->
+        %ProvenanceFrame{kind: :macro_expansion, name: Map.get(frame, :keyword) || "macro"}
+      end)
+
+    source_frame =
+      case Map.get(source, :macro) do
+        nil -> []
+        macro -> [%ProvenanceFrame{kind: :macro_expansion, name: macro}]
+      end
+
+    (frames ++ source_frame)
+    |> Enum.uniq_by(& &1.name)
+  end
 
   defp name_to_string(name) when is_atom(name), do: Atom.to_string(name)
   defp name_to_string(name) when is_binary(name), do: name

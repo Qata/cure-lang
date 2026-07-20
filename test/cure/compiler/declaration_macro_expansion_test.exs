@@ -25,6 +25,20 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(:"Cure.DeclarationMacroActor", :init, [7]) == {:ok, 7}
   end
 
+  test "a generated module and each declaration retain the authored macro provenance" do
+    assert {:ok, ast} = Cure.Compiler.parse_source(@source, file: "generated.cure")
+    assert {:ok, expanded} = Program.expand_declaration_uses(ast)
+    assert {:lift_module, meta, []} = find_lift_module(expanded)
+
+    assert meta[:source_provenance] == %{file: "generated.cure", line: 9, col: 3, macro: "make"}
+    assert [%{keyword: "make", line: 9, col: 3}] = meta[:expansion_provenance]
+
+    assert Enum.all?(meta[:declarations], fn {_tag, declaration_meta, _children} ->
+             declaration_meta[:source_provenance] == meta[:source_provenance] and
+               declaration_meta[:expansion_provenance] == meta[:expansion_provenance]
+           end)
+  end
+
   test "the declaration pass does not consume computed uses in function bodies" do
     source = """
     mod M
@@ -582,4 +596,12 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
 
   defp find_computed_use(list) when is_list(list), do: Enum.any?(list, &find_computed_use/1)
   defp find_computed_use(_other), do: false
+
+  defp find_lift_module({:lift_module, _meta, _children} = node), do: node
+
+  defp find_lift_module({_tag, _meta, children}) when is_list(children),
+    do: Enum.find_value(children, &find_lift_module/1)
+
+  defp find_lift_module(list) when is_list(list), do: Enum.find_value(list, &find_lift_module/1)
+  defp find_lift_module(_other), do: nil
 end

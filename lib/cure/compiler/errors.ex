@@ -32,6 +32,10 @@ defmodule Cure.Compiler.Errors do
     error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
   end
 
+  def format_error({:lift_module_error, details} = error, file) when is_map(details) do
+    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+  end
+
   # -- Type Errors -------------------------------------------------------------
 
   def format_error(errors, file) when is_list(errors) do
@@ -1514,6 +1518,18 @@ defmodule Cure.Compiler.Errors do
     Fix: correct the spelling, import or qualify the definition, or use a name
     from the required namespace. Suggestions are filtered by namespace and
     visibility before they are shown.
+    """,
+    "E092" => """
+    E092: Macro Expansion Failed
+
+    A public macro generated a declaration that the compiler rejected. The
+    default diagnostic names the macro and its authored declaration rather
+    than exposing generated implementation source. Its structured cause and
+    complete expansion provenance remain available to compiler tooling.
+
+    Fix the authored macro declaration or captured argument identified by the
+    diagnostic. If generated syntax alone is invalid, report the macro or
+    compiler defect; users must never be asked to edit generated code.
     """,
     "W088" => """
     W088: Unresolved Import

@@ -126,6 +126,28 @@ defmodule Cure.DiagnosticTest do
     assert rendered =~ "^^^^^ defined here"
   end
 
+  test "lifted module failures are reported at the public macro boundary" do
+    diagnostic =
+      Adapter.from_error(
+        {:lift_module_error,
+         %{
+           module: "Cure.Actor.Worker",
+           behaviour: :GenServer,
+           source_provenance: %{file: "worker.cure", line: 3, col: 1, macro: "actor"},
+           expansion_provenance: [%{keyword: "actor", line: 3, col: 1}],
+           cause: {:unknown_global, :MissingMessage}
+         }}
+      )
+
+    assert diagnostic.code == "E092"
+    assert diagnostic.title == "Actor expansion failed"
+    assert diagnostic.message =~ "`MissingMessage` is not available"
+    assert diagnostic.payload.cause.code == "E091"
+    assert diagnostic.payload.cause.payload.name == "MissingMessage"
+    refute diagnostic.message =~ "{:unknown_global"
+    assert Renderer.plain(diagnostic) =~ "edit the `actor` declaration instead"
+  end
+
   test "invalid spans and codes are rejected", %{registry: registry} do
     assert {:error, :span_out_of_bounds} = SourceRegistry.span(registry, :demo, 0, 10_000)
 

@@ -176,7 +176,8 @@ defmodule Cure.Compiler.LiftModule do
          imports: imports,
          inherit_imports: inherit_imports,
          dependencies: imports,
-         source_provenance: Keyword.get(meta, :source_provenance)
+         source_provenance: Keyword.get(meta, :source_provenance),
+         expansion_provenance: Keyword.get(meta, :expansion_provenance, [])
        }}
     else
       _ -> {:error, :invalid_lift_module_ast}
@@ -227,7 +228,16 @@ defmodule Cure.Compiler.LiftModule do
          source_provenance: Map.get(request, :source_provenance)
        }}
     else
-      {:error, reason} -> {:error, {:lift_module_error, module, reason}}
+      {:error, reason} ->
+        {:error,
+         {:lift_module_error,
+          %{
+            module: module,
+            behaviour: behaviour,
+            source_provenance: Map.get(request, :source_provenance),
+            expansion_provenance: Map.get(request, :expansion_provenance, []),
+            cause: reason
+          }}}
     end
   end
 
