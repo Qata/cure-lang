@@ -1132,6 +1132,16 @@ defmodule Cure.Diagnostic.Registry.Catalog do
     Fix: rename the declaration or change its signature so each visible
     declaration has a unique identity.
     """,
+    "E106" => """
+    E106: Operator Declaration Conflict
+
+    An operator declaration is invalid because its precedence declarations
+    form a cycle or it attempts to overload a built-in operator that cannot
+    be redefined.
+
+    Fix: remove the cycle and use a user-defined operator with a supported
+    fixity.
+    """,
     "W000" => """
     W000: Compiler Warning
 

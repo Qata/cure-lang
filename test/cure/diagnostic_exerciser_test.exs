@@ -52,7 +52,8 @@ defmodule Cure.DiagnosticExerciserTest do
       {"erasure violation", "E102", {:unknown_erasure_class, :Handle, :banana}},
       {"positivity rejection", "E103", {:non_strictly_positive, :Bad}},
       {"relevance rejection", "E104", {:erased_used_relevantly, %{binder: 0, site: :returned}}},
-      {"declaration conflict", "E105", {:duplicate_type, :Widget}}
+      {"declaration conflict", "E105", {:duplicate_type, :Widget}},
+      {"operator conflict", "E106", {:builtin_operator_not_overloadable, :|>}}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))

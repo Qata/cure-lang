@@ -109,6 +109,13 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "arity 1"
   end
 
+  test "renders operator declaration conflicts" do
+    rendered = Host.render({:builtin_operator_not_overloadable, :|>}, "demo.cure")
+
+    assert rendered =~ "[E106]"
+    assert rendered =~ "cannot be overloaded"
+  end
+
   test "does not fall through to legacy formatting for an unregistered reason" do
     rendered = Host.render({:unregistered_compiler_reason, :detail}, "demo.cure")
 

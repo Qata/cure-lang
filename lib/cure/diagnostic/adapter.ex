@@ -96,6 +96,14 @@ defmodule Cure.Diagnostic.Adapter do
     declaration_conflict(:sibling_module_collision, %{name: name, owners: owners}, opts)
   end
 
+  def from_error({:precedence_cycle, groups}, opts) do
+    operator_conflict(:precedence_cycle, %{groups: groups}, opts)
+  end
+
+  def from_error({:builtin_operator_not_overloadable, operator}, opts) do
+    operator_conflict(:builtin_operator_not_overloadable, %{operator: operator}, opts)
+  end
+
   def from_error({:missing_diagnosis, points}, opts), do: macro_validation_failure(:missing_diagnosis, points, opts)
   def from_error({:rule_unpinned, keywords}, opts), do: macro_validation_failure(:rule_unpinned, keywords, opts)
 
@@ -782,6 +790,27 @@ defmodule Cure.Diagnostic.Adapter do
       title: "Declaration conflict",
       body: Doc.paragraph("The declaration `#{name}` conflicts with another visible declaration#{detail}."),
       primary: primary_label(opts, "rename this declaration or make its identity unique"),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp operator_conflict(kind, details, opts) do
+    body =
+      case kind do
+        :precedence_cycle ->
+          "The operator precedence declarations contain a cycle: #{inspect(details.groups)}."
+
+        :builtin_operator_not_overloadable ->
+          "The built-in operator `#{details.operator}` cannot be overloaded."
+      end
+
+    Diagnostic.new(
+      code: "E106",
+      key: :operator_declaration_conflict,
+      severity: :error,
+      title: "Operator declaration conflict",
+      body: Doc.paragraph(body),
+      primary: primary_label(opts, "adjust this operator declaration"),
       payload: Map.put(details, :kind, kind)
     )
   end
