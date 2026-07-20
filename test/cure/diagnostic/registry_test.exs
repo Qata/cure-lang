@@ -55,6 +55,12 @@ defmodule Cure.Diagnostic.RegistryTest do
 
     assert {:error, {:missing_producer, ^code}} = Registry.validate([%{entry | producers: []}])
 
+    assert {:error, {:unowned_producer, ^code}} =
+             Registry.validate([%{entry | producers: [:unowned_phase]}])
+
+    assert {:error, {:legacy_converter, ^code}} =
+             Registry.validate([%{entry | converter: Cure.Compiler.Errors}])
+
     assert {:error, {:missing_converter_function, ^code}} =
              Registry.validate([%{entry | converter_function: :does_not_exist}])
 

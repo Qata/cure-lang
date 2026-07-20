@@ -90,6 +90,11 @@ defmodule Cure.Diagnostic.Registry do
     "W082" => "No first-party producer remains; pickup reachability warnings are not emitted."
   }
   @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 W086 W088]
+  @known_producers ~w[
+    dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
+    module_loader name_resolution operational parser pattern_checker proof_checker
+    totality_checker
+  ]a
   @catalog_cases %{
     "E002" => :unbound_variable,
     "E008" => :undocumented_public_function,
@@ -328,6 +333,13 @@ defmodule Cure.Diagnostic.Registry do
     cond do
       entry.producers == [] ->
         {:error, {:missing_producer, entry.code}}
+
+      entry.status == :reachable and
+          Enum.any?(entry.producers, &(&1 not in @known_producers)) ->
+        {:error, {:unowned_producer, entry.code}}
+
+      entry.status == :reachable and entry.converter == Cure.Compiler.Errors ->
+        {:error, {:legacy_converter, entry.code}}
 
       not is_atom(entry.converter) ->
         {:error, {:missing_converter, entry.code}}
