@@ -78,6 +78,9 @@ defmodule Cure.MixProject do
       # Core -- MetaAST backing
       {:metastatic, "~> 0.18"},
 
+      # Terminal diagnostics -- Unicode display-width properties
+      {:unicode, "~> 1.21"},
+
       # REPL -- syntax highlighting and Markdown-to-ANSI rendering
       {:marcli, "~> 0.3"},
       {:makeup, "~> 1.2"},
