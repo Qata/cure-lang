@@ -292,6 +292,19 @@ defmodule Cure.Diagnostic.HostTest do
     refute edition =~ ":dependency_edition_error"
   end
 
+  test "renders project application validation failures as artifact diagnostics" do
+    duplicate = Host.render({:duplicate_app, [{"one.cure", "One"}, {"two.cure", "Two"}]}, "Cure.toml")
+    mismatch = Host.render({:app_name_mismatch, "Expected", "Actual"}, "Cure.toml")
+
+    assert duplicate =~ "[E100]"
+    assert duplicate =~ "more than one application"
+    assert mismatch =~ "[E100]"
+    assert mismatch =~ "Expected"
+    assert mismatch =~ "Actual"
+    refute duplicate =~ ":duplicate_app"
+    refute mismatch =~ ":app_name_mismatch"
+  end
+
   test "converts aggregate type errors through the contextual type family" do
     rendered =
       Host.render(

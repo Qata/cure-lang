@@ -45,6 +45,12 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:dependency_edition_error, name, reason}, _opts),
     do: dependency_failure(:dependency_edition_error, %{name: name, reason: reason})
 
+  def from_error({:duplicate_app, applications}, _opts),
+    do: project_artifact_failure(:duplicate_app, %{applications: applications})
+
+  def from_error({:app_name_mismatch, expected, actual}, _opts),
+    do: project_artifact_failure(:app_name_mismatch, %{expected: expected, actual: actual})
+
   def from_error({:undocumented_public_function, file, line}, _opts), do: undocumented_public_function(file, line)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
@@ -180,6 +186,19 @@ defmodule Cure.Diagnostic.Operational do
       end
 
     diagnostic("E097", :dependency_resolution, message, Map.put(details, :kind, kind))
+  end
+
+  defp project_artifact_failure(kind, details) do
+    message =
+      case kind do
+        :duplicate_app ->
+          "The project contains more than one application module: #{inspect(details.applications)}."
+
+        :app_name_mismatch ->
+          "The application module name `#{details.actual}` does not match the project name `#{details.expected}`."
+      end
+
+    diagnostic("E100", :artifact_error, message, Map.put(details, :kind, kind))
   end
 
   def undocumented_public_function(file, line) do

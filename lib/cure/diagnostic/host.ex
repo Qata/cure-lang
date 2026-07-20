@@ -64,6 +64,8 @@ defmodule Cure.Diagnostic.Host do
   defp operational_reason?({:no_versions, _}), do: true
   defp operational_reason?({:dependency_clone_failed, _, _}), do: true
   defp operational_reason?({:dependency_edition_error, _, _}), do: true
+  defp operational_reason?({:duplicate_app, _}), do: true
+  defp operational_reason?({:app_name_mismatch, _, _}), do: true
   defp operational_reason?({:undocumented_public_function, _, _}), do: true
   defp operational_reason?(_), do: false
 end
