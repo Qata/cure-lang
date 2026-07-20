@@ -20,8 +20,13 @@ defmodule Mix.Tasks.Cure.Profile do
     case args do
       [path | _] ->
         case Cure.Profiler.profile_file(path) do
-          {:ok, report} -> IO.puts(Cure.Profiler.format_report(report))
-          {:error, reason} -> Mix.shell().error("Error: #{inspect(reason)}")
+          {:ok, report} ->
+            IO.puts(Cure.Profiler.format_report(report))
+
+          {:error, reason} ->
+            Mix.shell().error(
+              Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("profile", reason))
+            )
         end
 
       [] ->

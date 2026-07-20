@@ -139,7 +139,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
         {:pass, name}
 
       {:error, reason} ->
-        msg = "compile error: #{inspect(reason)}"
+        msg = Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("example compile", reason))
         IO.puts("  FAIL #{pad(name)} #{msg}")
         {:fail, name, msg}
     end

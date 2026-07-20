@@ -122,8 +122,11 @@ defmodule Cure.Watch do
 
     Enum.each(paths, fn p ->
       case Cure.Compiler.compile_file(p, emit_events: false) do
-        {:ok, mod, _warnings} -> info("  #{p} -> #{mod}")
-        {:error, reason} -> error("  #{p}: #{inspect(reason)}")
+        {:ok, mod, _warnings} ->
+          info("  #{p} -> #{mod}")
+
+        {:error, reason} ->
+          error("  " <> Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("watch", reason)))
       end
     end)
   end
@@ -146,7 +149,10 @@ defmodule Cure.Watch do
                {:ok, _env} <- Cure.Elab.Program.check_ast(ast) do
             info("  #{p}: OK")
           else
-            {:error, reason} -> error("  #{p}: #{inspect(reason)}")
+            {:error, reason} ->
+              error(
+                "  " <> Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("watch", reason))
+              )
           end
 
         {:error, reason} ->
@@ -161,7 +167,7 @@ defmodule Cure.Watch do
   end
 
   def run_action(other, _path) do
-    error("unknown watch action: #{inspect(other)}")
+    raise Cure.Diagnostic.UnhandledError, error: {:unknown_watch_action, other}
   end
 
   # -- Helpers -----------------------------------------------------------------

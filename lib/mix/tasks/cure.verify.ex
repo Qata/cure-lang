@@ -149,7 +149,10 @@ defmodule Mix.Tasks.Cure.Verify do
         Mix.shell().error("  #{label}: #{length(failures)} certificate(s) failed (E066):")
 
         Enum.each(failures, fn {mod, stmt, reason} ->
-          Mix.shell().error("    #{mod}: #{inspect(stmt)} -- #{inspect(reason)}")
+          Mix.shell().error(
+            "    #{mod}: #{inspect(stmt)} -- " <>
+              Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("verification", reason))
+          )
         end)
 
         exit({:shutdown, 1})
