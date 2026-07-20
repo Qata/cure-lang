@@ -129,7 +129,7 @@ defmodule Cure.REPL.Config do
               end
           end
 
-        other ->
+        _other ->
           warn(
             Cure.Diagnostic.Renderer.plain(
               Cure.Diagnostic.Operational.configuration_warning("Ignoring non-string stdlib group entry")
@@ -147,7 +147,7 @@ defmodule Cure.REPL.Config do
     end
   end
 
-  def parse_stdlib(other) do
+  def parse_stdlib(_other) do
     warn(
       Cure.Diagnostic.Renderer.plain(
         Cure.Diagnostic.Operational.configuration_warning("Ignoring unrecognised `[stdlib] preload` value")
