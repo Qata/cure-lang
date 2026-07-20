@@ -16,6 +16,22 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_global, name}, opts),
     do: unknown_name(:value, name, opts)
 
+  def from_error({:unknown_name, details}, opts) when is_map(details) do
+    namespace = Map.get(details, :namespace, :value)
+    name = Map.get(details, :name, "<unknown>")
+
+    unknown_name(
+      namespace,
+      name,
+      opts
+      |> Keyword.put(:candidates, Map.get(details, :candidates, []))
+      |> Keyword.put(:owner, Map.get(details, :owner))
+      |> Keyword.put(:checking, Map.get(details, :checking))
+      |> Keyword.put(:span, Map.get(details, :span))
+      |> Keyword.put(:provenance, Map.get(details, :provenance, []))
+    )
+  end
+
   def from_error({:unknown_constructor, name}, opts),
     do: unknown_name(:constructor, name, opts)
 
@@ -107,7 +123,10 @@ defmodule Cure.Diagnostic.Adapter do
         name: spelling,
         candidates: candidates,
         owner: Keyword.get(opts, :owner),
-        checking: Keyword.get(opts, :checking)
+        checking: Keyword.get(opts, :checking),
+        arity: Keyword.get(opts, :arity),
+        expected_namespace: Keyword.get(opts, :expected_namespace),
+        imported_from: Keyword.get(opts, :imported_from)
       }
     )
   end

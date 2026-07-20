@@ -320,4 +320,17 @@ defmodule Cure.DiagnosticTest do
     assert rendered =~ "E091"
     refute rendered =~ "{:unknown_global"
   end
+
+  test "payload-bearing unknown names retain resolution context" do
+    diagnostic =
+      Adapter.from_error(
+        {:unknown_name, %{namespace: :type, name: :Missing, candidates: [:Maybe], arity: 1, checking: :Demo}}
+      )
+
+    assert diagnostic.code == "E091"
+    assert diagnostic.payload.namespace == :type
+    assert diagnostic.payload.candidates == ["Maybe"]
+    assert diagnostic.payload.arity == 1
+    assert diagnostic.payload.checking == :Demo
+  end
 end

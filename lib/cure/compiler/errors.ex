@@ -28,6 +28,10 @@ defmodule Cure.Compiler.Errors do
     error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
   end
 
+  def format_error({:unknown_name, details} = error, file) when is_map(details) do
+    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+  end
+
   def format_error({:codegen_error, {:unknown_global, _name}} = error, file) do
     error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
   end
@@ -1727,6 +1731,7 @@ defmodule Cure.Compiler.Errors do
   end
 
   defp structured_error?({:unknown_global, _name}), do: true
+  defp structured_error?({:unknown_name, details}) when is_map(details), do: true
   defp structured_error?({:codegen_error, {:unknown_global, _name}}), do: true
   defp structured_error?({:unknown_constructor, _name}), do: true
   defp structured_error?({:lift_module_error, details}) when is_map(details), do: true
