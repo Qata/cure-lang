@@ -642,13 +642,38 @@ defmodule Cure.Diagnostic.Adapter do
              :primitive_missing_builtin,
              :unknown_primitive_tag,
              :primitive_floor_mismatch,
-             :unsupported_declaration
+             :unsupported_declaration,
+             :invalid_syntax_node,
+             :invalid_syntax_leaf,
+             :invalid_syntax_failure,
+             :unsupported_syntax_core,
+             :raw_syntax_in_expansion,
+             :quoted_syntax_in_expansion,
+             :malformed_expansion_syntax,
+             :malformed_expansion_attribute,
+             :malformed_expansion_map,
+             :malformed_expansion_literal,
+             :malformed_reflected_syntax,
+             :malformed_reflected_attribute,
+             :malformed_reflected_literal,
+             :malformed_reflected_map,
+             :invalid_syntax_attrs,
+             :unknown_reducer_constructor,
+             :incomplete_reducer
            ],
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
   def from_error({kind, first, second}, opts)
       when kind in [:forward_packet_length, :invalid_packet_crc_fields],
       do: macro_validation_failure(kind, %{first: first, second: second}, opts)
+
+  def from_error({:reducer_arity, constructor, actual, expected}, opts),
+    do:
+      macro_validation_failure(
+        :reducer_arity,
+        %{constructor: constructor, actual: actual, expected: expected},
+        opts
+      )
 
   def from_error({:primitive_floor_mismatch, name, node, other}, opts),
     do: macro_validation_failure(:primitive_floor_mismatch, %{name: name, node: node, other: other}, opts)
@@ -1393,22 +1418,7 @@ defmodule Cure.Diagnostic.Adapter do
              :unknown_macro_failure,
              :unsolved_metavariable_in_type,
              :lambda_expected_pi,
-             :missing_raw_delimiter,
-             :invalid_syntax_node,
-             :invalid_syntax_leaf,
-             :invalid_syntax_failure,
-             :unsupported_syntax_core,
-             :raw_syntax_in_expansion,
-             :quoted_syntax_in_expansion,
-             :malformed_expansion_syntax,
-             :malformed_expansion_attribute,
-             :malformed_expansion_map,
-             :malformed_expansion_literal,
-             :malformed_reflected_syntax,
-             :malformed_reflected_attribute,
-             :malformed_reflected_literal,
-             :malformed_reflected_map,
-             :invalid_syntax_attrs
+             :missing_raw_delimiter
            ],
       do: contextual_type_failure(kind, %{detail: detail}, opts)
 
