@@ -12,7 +12,35 @@ defmodule Mix.Tasks.Cure.Diagnostics do
   """
 
   @impl true
-  def run(_args) do
-    Mix.Task.run("test", ["--cover", "test/cure/diagnostic_exerciser_test.exs"])
+  def run(args) do
+    {opts, [], invalid} =
+      OptionParser.parse(args,
+        strict: [color: :string, width: :integer, coverage: :boolean],
+        aliases: [w: :width]
+      )
+
+    if invalid != [], do: Mix.raise("invalid cure.diagnostics options: #{inspect(invalid)}")
+
+    color =
+      case Keyword.get(opts, :color, "auto") do
+        value when value in ["auto", "always", "never"] -> String.to_atom(value)
+        value -> Mix.raise("invalid --color=#{value}; expected auto, always, or never")
+      end
+
+    width = Keyword.get(opts, :width, 80)
+    if not is_integer(width) or width < 1, do: Mix.raise("--width must be a positive integer")
+
+    Application.put_env(:cure, :diagnostics_exerciser,
+      color: color,
+      width: width,
+      coverage: Keyword.get(opts, :coverage, false)
+    )
+
+    test_args =
+      if Keyword.get(opts, :coverage, false),
+        do: ["--cover", "test/cure/diagnostic_exerciser_test.exs"],
+        else: ["test/cure/diagnostic_exerciser_test.exs"]
+
+    Mix.Task.run("test", test_args)
   end
 end

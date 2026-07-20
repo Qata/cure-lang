@@ -3,6 +3,11 @@ defmodule Cure.DiagnosticExerciserTest do
 
   alias Cure.Diagnostic.{Operational, Renderer}
 
+  defp render_options do
+    config = Application.get_env(:cure, :diagnostics_exerciser, [])
+    [color: Keyword.get(config, :color, :always), width: Keyword.get(config, :width, 80)]
+  end
+
   test "exercises every public diagnostic family and shows user output" do
     compiler_cases = [
       {"unknown global", "E091", "mod DiagnosticUnknown\n  fn run() -> Int = missing_name\n"},
@@ -24,7 +29,14 @@ defmodule Cure.DiagnosticExerciserTest do
           assert diagnostic.primary, "#{label} did not retain an authored source span"
           plain = Renderer.plain(diagnostic, registry)
           assert plain =~ " | ", "#{label} did not render an authored source excerpt"
-          terminal = Renderer.terminal(diagnostic, registry, color: true, output_device: :standard_error, width: 80)
+
+          terminal =
+            Renderer.terminal(
+              diagnostic,
+              registry,
+              Keyword.merge(render_options(), output_device: :standard_error)
+            )
+
           assert Enum.any?(String.split(source, "\n"), &(&1 != "" and String.contains?(terminal, &1)))
           IO.puts(:stderr, "[#{label}]\n" <> terminal)
       end
@@ -45,7 +57,14 @@ defmodule Cure.DiagnosticExerciserTest do
     ]
 
     Enum.each(diagnostics, fn diagnostic ->
-      IO.puts(:stderr, Renderer.terminal(diagnostic, nil, color: true, output_device: :standard_error, width: 80))
+      IO.puts(
+        :stderr,
+        Renderer.terminal(
+          diagnostic,
+          nil,
+          Keyword.merge(render_options(), output_device: :standard_error)
+        )
+      )
     end)
 
     operational_codes = Enum.map(diagnostics, & &1.code)
@@ -62,5 +81,9 @@ defmodule Cure.DiagnosticExerciserTest do
 
     IO.puts(:stderr, "UNCOVERED REGISTERED CODES: " <> Enum.join(missing_codes, ", "))
     assert MapSet.subset?(covered_codes, registered_codes)
+
+    if Keyword.get(Application.get_env(:cure, :diagnostics_exerciser, []), :coverage, false) do
+      assert missing_codes == [], "diagnostic coverage is incomplete"
+    end
   end
 end
