@@ -433,6 +433,24 @@ defmodule Cure.Diagnostic.HostTest do
     refute missing =~ ":missing_stdlib_source"
   end
 
+  test "renders overload, projection, and unresolved-index failures contextually" do
+    overload = Host.render({:no_matching_overload, :map, [:Int, :String]}, "types.cure")
+    ambiguous = Host.render({:ambiguous_overload, :map, ["List.map/2", "Seq.map/2"]}, "types.cure")
+    projection = Host.render({:projection_not_a_record, :Int}, "types.cure")
+    pattern = Host.render({:typed_pattern_arity, 2}, "types.cure")
+    index = Host.render({:unsolved_index, :VCons}, "types.cure")
+    occurs = Host.render({:occurs_check, 1, {:var, 1}}, "types.cure")
+
+    assert overload =~ "[E093]"
+    assert overload =~ "NO MATCHING OVERLOAD"
+    assert ambiguous =~ "OVERLOAD RESOLUTION IS AMBIGUOUS"
+    assert projection =~ "RECORD PROJECTION REQUIRES A RECORD"
+    assert pattern =~ "[E003]"
+    assert index =~ "UNRESOLVED INDEX"
+    assert occurs =~ "[E093]"
+    assert occurs =~ "INFINITE TYPE DETECTED"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 

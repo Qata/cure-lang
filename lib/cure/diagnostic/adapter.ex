@@ -575,6 +575,42 @@ defmodule Cure.Diagnostic.Adapter do
     kernel_type_failure(kind, opts)
   end
 
+  def from_error({:occurs_check, id, _term}, opts),
+    do: kernel_type_failure(:occurs_check, Keyword.put(opts, :variable, id))
+
+  def from_error({:no_instance, interface, head}, opts),
+    do: contextual_type_failure(:no_instance, %{interface: interface, head: head}, opts)
+
+  def from_error({:ambiguous_instance_for_expected_type, interface, expected}, opts),
+    do: contextual_type_failure(:ambiguous_instance, %{interface: interface, expected: expected}, opts)
+
+  def from_error({:no_matching_overload, name, arguments}, opts),
+    do: contextual_type_failure(:no_matching_overload, %{name: name, arguments: arguments}, opts)
+
+  def from_error({:ambiguous_overload, name, owners}, opts),
+    do: contextual_type_failure(:ambiguous_overload, %{name: name, owners: owners}, opts)
+
+  def from_error({:ambiguous_method, method, interfaces}, opts),
+    do: ambiguous_member(method, interfaces, opts)
+
+  def from_error({:projection_not_a_record, record}, opts),
+    do: contextual_type_failure(:projection_not_a_record, %{record: record}, opts)
+
+  def from_error({:bad_projection, details}, opts),
+    do: contextual_type_failure(:bad_projection, %{details: details}, opts)
+
+  def from_error({:typed_pattern_arity, position}, opts),
+    do: arity_failure(:typed_pattern, %{position: position}, opts)
+
+  def from_error({:typed_pattern_type_error, reason}, opts),
+    do: contextual_type_failure(:typed_pattern_type_error, %{reason: reason}, opts)
+
+  def from_error({:unsolved_index, constructor}, opts),
+    do: contextual_type_failure(:unsolved_index, %{constructor: constructor}, opts)
+
+  def from_error({:unsolved_field_type, constructor}, opts),
+    do: contextual_type_failure(:unsolved_field_type, %{constructor: constructor}, opts)
+
   def from_error({:unknown_global, name}, opts),
     do: unknown_name(:value, name, opts)
 
@@ -1547,6 +1583,10 @@ defmodule Cure.Diagnostic.Adapter do
           {"Type variable escapes its scope", "A type variable would escape the scope in which it was introduced.",
            "keep this type variable within its binding"}
 
+        :occurs_check ->
+          {"Infinite type detected", "A type variable would have to contain itself, producing an infinite type.",
+           "break the recursive type equation"}
+
         :arg_arity ->
           {"Wrong number of type arguments",
            "This type application has a different number of arguments than its declaration.",
@@ -1594,6 +1634,96 @@ defmodule Cure.Diagnostic.Adapter do
       body: Doc.paragraph(message),
       primary: primary_label(opts, label),
       payload: %{kind: kind}
+    )
+  end
+
+  defp contextual_type_failure(kind, details, opts) do
+    {title, message, label} =
+      case kind do
+        :no_instance ->
+          {"No instance found",
+           "Cure could not find an implementation of `#{name_to_string(details.interface)}` for the required type `#{surface_type(details.head)}`.",
+           "add or import an instance for this type"}
+
+        :ambiguous_instance ->
+          {"Instance resolution is ambiguous",
+           "More than one `#{name_to_string(details.interface)}` instance can satisfy this expected type.",
+           "make the instance selection unambiguous"}
+
+        :no_matching_overload ->
+          {"No matching overload",
+           "No overload of `#{name_to_string(details.name)}` accepts the argument types at this call site.",
+           "change the arguments or choose a different overload"}
+
+        :ambiguous_overload ->
+          {"Overload resolution is ambiguous",
+           "More than one overload of `#{name_to_string(details.name)}` matches this call.",
+           "add an annotation or qualify the overload"}
+
+        :projection_not_a_record ->
+          {"Record projection requires a record", "This projection was applied to a value that is not a record.",
+           "project a field from a record value"}
+
+        :bad_projection ->
+          {"Invalid record projection", "This record projection is not valid for the value's type.",
+           "use a field declared by the record"}
+
+        :typed_pattern_type_error ->
+          {"Pattern annotation does not match",
+           "The type annotation on this pattern is incompatible with the value it matches.",
+           "change the pattern or its annotation"}
+
+        :unsolved_index ->
+          {"Indexed constructor has an unresolved index",
+           "Cure could not determine an index required by this constructor.",
+           "provide an annotation or make the index explicit"}
+
+        :unsolved_field_type ->
+          {"Constructor field type is unresolved", "Cure could not determine the type of a field in this constructor.",
+           "add an annotation that determines the field type"}
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp ambiguous_member(method, interfaces, opts) do
+    spelling = name_to_string(method)
+    owners = Enum.map(interfaces, &name_to_string/1)
+
+    Diagnostic.new(
+      code: "E089",
+      key: :ambiguous_name,
+      severity: :error,
+      title: "Ambiguous interface method",
+      body: Doc.paragraph("Method `#{spelling}` is declared by more than one visible interface."),
+      primary: primary_label(opts, "qualify or disambiguate this method"),
+      suggestions: [
+        %Suggestion{
+          message: "Choose one of #{Enum.map_join(owners, ", ", &"`#{&1}`")}",
+          applicability: :manual
+        }
+      ],
+      payload: %{kind: :ambiguous_method, method: spelling, interfaces: owners}
+    )
+  end
+
+  defp arity_failure(kind, details, opts) do
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Pattern arity mismatch",
+      body: Doc.paragraph("This typed pattern has the wrong number of elements at position #{details.position}."),
+      primary: primary_label(opts, "make the pattern arity match the value"),
+      payload: Map.put(details, :kind, kind)
     )
   end
 
