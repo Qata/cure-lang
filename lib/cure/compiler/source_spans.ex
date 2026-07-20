@@ -113,13 +113,13 @@ defmodule Cure.Compiler.SourceSpans do
 
   defp attach_metadata(meta, tag, span, context, child_spans) do
     info = Metadata.source_info(meta) || %SourceInfo{}
-    info = %{info | whole: span}
+    info = put_if_missing(info, :whole, span)
 
     info =
       case Map.get(context.opening_delimiters, {span.source_id, span.start_byte}) do
         %Span{} = opener ->
           closer = Map.get(context.closing_delimiters, {span.source_id, span.start_byte})
-          %{info | opener: opener, closer: closer}
+          info |> put_if_missing(:opener, opener) |> put_if_missing(:closer, closer)
 
         _ ->
           info
@@ -127,7 +127,7 @@ defmodule Cure.Compiler.SourceSpans do
 
     info =
       case operator_span(meta, context.by_position) do
-        %Span{} = operator -> %{info | operator: operator}
+        %Span{} = operator -> put_if_missing(info, :operator, operator)
         nil -> info
       end
 
@@ -138,24 +138,25 @@ defmodule Cure.Compiler.SourceSpans do
         put_source_info(meta, info)
 
       name_span when tag in [:function_call, :remote_call] ->
-        put_source_info(meta, %{info | name: name_span, callee: name_span})
+        info = info |> put_if_missing(:name, name_span) |> put_if_missing(:callee, name_span)
+        put_source_info(meta, info)
 
       name_span ->
-        put_source_info(meta, %{info | name: name_span})
+        put_source_info(meta, put_if_missing(info, :name, name_span))
     end
   end
 
   defp role_spans(info, :function_call, _meta, child_spans),
-    do: %{info | arguments: child_spans}
+    do: put_if_missing(info, :arguments, child_spans)
 
   defp role_spans(info, :remote_call, _meta, child_spans),
-    do: %{info | arguments: child_spans}
+    do: put_if_missing(info, :arguments, child_spans)
 
   defp role_spans(info, :binary_op, _meta, child_spans),
-    do: %{info | operands: child_spans}
+    do: put_if_missing(info, :operands, child_spans)
 
   defp role_spans(info, :unary_op, _meta, child_spans),
-    do: %{info | operands: child_spans}
+    do: put_if_missing(info, :operands, child_spans)
 
   defp role_spans(info, :function_def, meta, child_spans) do
     info
@@ -190,7 +191,12 @@ defmodule Cure.Compiler.SourceSpans do
   defp source_whole(_), do: nil
 
   defp maybe_role(info, _field, nil), do: info
-  defp maybe_role(info, field, span), do: Map.put(info, field, span)
+  defp maybe_role(info, field, span), do: put_if_missing(info, field, span)
+
+  defp put_if_missing(info, _field, value) when value in [nil, []], do: info
+
+  defp put_if_missing(info, field, value),
+    do: if(Map.get(info, field) in [nil, []], do: Map.put(info, field, value), else: info)
 
   defp direct_child_spans(payload) when is_list(payload) do
     Enum.flat_map(payload, fn
