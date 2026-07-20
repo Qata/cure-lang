@@ -21,6 +21,8 @@ defmodule Cure.MetaAST.Metadata do
     :opener_span,
     :closer_span,
     :provenance,
+    :source_provenance,
+    :expansion_provenance,
     :line,
     :col,
     :column
@@ -73,6 +75,10 @@ defmodule Cure.MetaAST.Metadata do
 
   @doc false
   def source_keys, do: @source_keys
+
+  @doc "Whether a metadata key belongs to the diagnostic/source contract."
+  @spec diagnostic_key?(term()) :: boolean()
+  def diagnostic_key?(key), do: key in @source_keys
 
   defp strip_metadata(meta) do
     meta

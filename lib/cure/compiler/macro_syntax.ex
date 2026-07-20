@@ -7,6 +7,8 @@ defmodule Cure.Compiler.MacroSyntax do
   maps it to Core values of `Std.Syntax` and runs the elab.
   """
 
+  alias Cure.MetaAST.Metadata
+
   @doc """
   Lower internal standard-library macro markers into ordinary parser AST.
 
@@ -271,11 +273,17 @@ defmodule Cure.Compiler.MacroSyntax do
   # meta values remain {key, synlit}; unrepresentable values become opaque.
   defp attrs(meta) when is_list(meta) do
     Enum.flat_map(meta, fn
-      {:line, value} -> [{:source_line, synlit(value)}]
-      {:col, value} -> [{:source_col, synlit(value)}]
-      {key, _value} when key in [:source_info, :span, :name_span, :callee_span, :construct_span, :provenance] -> []
-      {key, value} -> [{key, synlit(value)}]
-      _ -> []
+      {:line, value} ->
+        [{:source_line, synlit(value)}]
+
+      {:col, value} ->
+        [{:source_col, synlit(value)}]
+
+      {key, value} ->
+        if Metadata.diagnostic_key?(key), do: [], else: [{key, synlit(value)}]
+
+      _ ->
+        []
     end)
   end
 
