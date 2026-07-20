@@ -192,7 +192,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp macro_title(macro), do: macro |> name_to_string() |> String.capitalize()
 
   defp macro_failure_message(macro, module, %Diagnostic{} = cause) do
-    "The `#{macro}` declaration could not generate `#{module}`. #{cause.message}"
+    "The `#{macro}` declaration could not generate `#{module}`. #{Diagnostic.message(cause)}"
   end
 
   defp provenance_frames(details, opts) do

@@ -136,7 +136,7 @@ defmodule Cure.DiagnosticTest do
     diagnostic = Adapter.from_error({:conversion_failure, actual, expected}, span: span)
 
     assert diagnostic.code == "E093"
-    assert diagnostic.message == "Expected `Int`, but found `Bool`."
+    assert Diagnostic.message(diagnostic) == "Expected `Int`, but found `Bool`."
     assert diagnostic.payload.expected_surface == "Int"
     assert diagnostic.payload.actual_surface == "Bool"
     assert diagnostic.payload.expected_core == inspect(expected)
@@ -253,11 +253,12 @@ defmodule Cure.DiagnosticTest do
 
     assert diagnostic.code == "E092"
     assert diagnostic.title == "Actor expansion failed"
-    assert diagnostic.message =~ "`MissingMessage` is not available"
+    assert Diagnostic.message(diagnostic) =~ "`MissingMessage` is not available"
     assert diagnostic.payload.cause.code == "E091"
     assert diagnostic.payload.cause.payload.name == "MissingMessage"
-    refute diagnostic.message =~ "{:unknown_global"
-    assert Renderer.plain(diagnostic) =~ "edit the `actor` declaration instead"
+    refute Diagnostic.message(diagnostic) =~ "{:unknown_global"
+    assert Renderer.plain(diagnostic) =~ "edit the `actor`"
+    assert Renderer.plain(diagnostic) =~ "declaration instead"
   end
 
   test "compiler presentation attaches a real caret to an authored macro failure" do
@@ -347,5 +348,56 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.payload.candidates == ["Maybe"]
     assert diagnostic.payload.arity == 1
     assert diagnostic.payload.checking == :Demo
+  end
+
+  test "structured body is authoritative and machine output retains its semantics" do
+    diagnostic =
+      Diagnostic.new(
+        code: "E093",
+        key: :conversion_failure,
+        severity: :error,
+        title: "Type mismatch",
+        body:
+          Cure.Diagnostic.Doc.paragraph([
+            "Expected",
+            Cure.Diagnostic.Doc.emphasis(:expected, "Int"),
+            "but found",
+            Cure.Diagnostic.Doc.emphasis(:observed, "Bool")
+          ])
+      )
+
+    refute Map.has_key?(diagnostic, :message)
+    assert Diagnostic.message(diagnostic) == "Expected Int but found Bool"
+    assert Renderer.to_map(diagnostic)["body"]["kind"] == "paragraph"
+  end
+
+  test "renderer wraps at an explicit width and normalizes the banner path", %{registry: registry, span: span} do
+    diagnostic =
+      Diagnostic.new(
+        code: "E091",
+        key: :unknown_name,
+        severity: :error,
+        title: "Unknown value",
+        message: "This deliberately long explanation wraps at the requested terminal width.",
+        primary: %Label{span: span, style: :primary}
+      )
+
+    rendered = Renderer.plain(diagnostic, registry, width: 38, project_root: File.cwd!())
+    [banner | _] = String.split(rendered, "\n")
+
+    assert banner =~ "[E091]"
+    assert String.ends_with?(banner, " src/demo.cure")
+    assert rendered =~ "This deliberately long explanation\nwraps at the requested terminal width."
+  end
+
+  test "auto color emits no ANSI when output is redirected" do
+    diagnostic =
+      Diagnostic.new(code: "E095", key: :file_read, severity: :error, title: "File error", message: "missing")
+
+    {:ok, output} = StringIO.open("")
+
+    refute Renderer.terminal(diagnostic, nil, color: :auto, output_device: output) =~ "\e["
+    assert Renderer.terminal(diagnostic, nil, color: :always) =~ IO.ANSI.cyan()
+    refute Renderer.terminal(diagnostic, nil, color: :never) =~ "\e["
   end
 end

@@ -87,15 +87,15 @@ defmodule Cure.Diagnostic do
   reconstructs semantic information from prose.
   """
 
-  alias Cure.Diagnostic.{Label, ProvenanceFrame, Suggestion}
+  alias Cure.Diagnostic.{Doc, Label, ProvenanceFrame, Suggestion}
 
-  @enforce_keys [:code, :key, :severity, :title, :message]
+  @enforce_keys [:code, :key, :severity, :title, :body]
   defstruct [
     :code,
     :key,
     :severity,
     :title,
-    :message,
+    :body,
     :primary,
     secondary: [],
     notes: [],
@@ -110,10 +110,10 @@ defmodule Cure.Diagnostic do
           key: atom(),
           severity: severity(),
           title: String.t(),
-          message: String.t(),
+          body: Doc.t(),
           primary: Label.t() | nil,
           secondary: [Label.t()],
-          notes: [String.t()],
+          notes: [Doc.t()],
           suggestions: [Suggestion.t()],
           provenance: [ProvenanceFrame.t()],
           payload: map()
@@ -121,6 +121,17 @@ defmodule Cure.Diagnostic do
 
   @spec new(keyword()) :: t()
   def new(attrs) do
+    {legacy_message, attrs} = Keyword.pop(attrs, :message)
+
+    attrs =
+      Keyword.put_new_lazy(attrs, :body, fn ->
+        case legacy_message do
+          nil -> Doc.empty()
+          message -> Doc.paragraph(message)
+        end
+      end)
+
+    attrs = Keyword.update(attrs, :notes, [], &Enum.map(&1, fn note -> normalize_doc(note) end))
     diagnostic = struct!(__MODULE__, attrs)
 
     unless diagnostic.severity in [:error, :warning, :information, :hint] do
@@ -133,6 +144,19 @@ defmodule Cure.Diagnostic do
 
     diagnostic
   end
+
+  @doc "Derive the host-compatible plain message from the structured body."
+  @spec message(t()) :: String.t()
+  def message(%__MODULE__{body: body}), do: Doc.plain(body, width: 1_000_000)
+
+  defp normalize_doc(:empty), do: Doc.empty()
+
+  defp normalize_doc({kind, _} = doc)
+       when kind in [:text, :concat, :paragraph, :stack, :code, :note, :hint, :bullet_list],
+       do: doc
+
+  defp normalize_doc({kind, _, _} = doc) when kind in [:indent, :emphasis], do: doc
+  defp normalize_doc(value), do: Doc.paragraph(value)
 
   @doc "Extract the stable key from a new diagnostic or a legacy error value."
   @spec key(term()) :: atom() | nil

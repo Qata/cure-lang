@@ -2,38 +2,62 @@ defmodule Cure.Diagnostic.Renderer do
   @moduledoc "Human and machine renderers for the shared diagnostic model."
 
   alias Cure.Diagnostic
-  alias Cure.Diagnostic.{Label, SourceRegistry, Span, Suggestion, TextEdit}
+  alias Cure.Diagnostic.{Doc, Label, SourceRegistry, Span, Suggestion, TextEdit}
 
-  @spec plain(Diagnostic.t(), SourceRegistry.t() | nil) :: String.t()
-  def plain(%Diagnostic{} = diagnostic, registry \\ nil) do
-    heading = heading(diagnostic)
-    location = location_line(diagnostic.primary)
-    excerpt = excerpt(diagnostic.primary, registry)
-    secondary = Enum.map(diagnostic.secondary, &secondary_excerpt(&1, registry))
-    message = diagnostic.message
-    notes = Enum.map(diagnostic.notes, &"note: #{&1}")
-    suggestions = Enum.map(diagnostic.suggestions, &"help: #{&1.message}")
-    provenance = provenance_line(diagnostic.provenance)
+  @default_width 80
 
-    body =
-      [message, location, excerpt, secondary, notes, suggestions, provenance]
-      |> List.flatten()
-      |> Enum.reject(&(&1 in [nil, ""]))
-      |> Enum.join("\n\n")
+  @spec plain(Diagnostic.t(), SourceRegistry.t() | nil, keyword()) :: String.t()
+  def plain(diagnostic, registry \\ nil, opts \\ [])
 
-    heading <> if(body == "", do: "", else: "\n\n" <> body)
-  end
+  def plain(%Diagnostic{} = diagnostic, opts, []) when is_list(opts),
+    do: plain(diagnostic, nil, opts)
 
-  defp heading(%Diagnostic{} = diagnostic) do
-    label = diagnostic.title |> String.upcase()
-    prefix = "-- #{label} [#{diagnostic.code}] "
-    prefix <> String.duplicate("-", max(2, 72 - String.length(prefix)))
+  def plain(%Diagnostic{} = diagnostic, registry, opts) do
+    opts = Keyword.put_new(opts, :width, @default_width)
+    diagnostic |> report_doc(registry, opts) |> Doc.plain(opts)
   end
 
   @spec terminal(Diagnostic.t(), SourceRegistry.t() | nil, keyword()) :: String.t()
-  def terminal(%Diagnostic{} = diagnostic, registry \\ nil, opts \\ []) do
-    rendered = plain(diagnostic, registry)
-    if Keyword.get(opts, :color, false), do: colorize(rendered, diagnostic.severity), else: rendered
+  def terminal(diagnostic, registry \\ nil, opts \\ [])
+
+  def terminal(%Diagnostic{} = diagnostic, opts, []) when is_list(opts),
+    do: terminal(diagnostic, nil, opts)
+
+  def terminal(%Diagnostic{} = diagnostic, registry, opts) do
+    opts = Keyword.put_new_lazy(opts, :width, fn -> terminal_width(opts) end)
+    document = report_doc(diagnostic, registry, opts)
+
+    if color_enabled?(Keyword.get(opts, :color, :auto), opts),
+      do: Doc.ansi(document, opts),
+      else: Doc.plain(document, opts)
+  end
+
+  defp report_doc(%Diagnostic{} = diagnostic, registry, opts) do
+    secondary = Enum.map(diagnostic.secondary, &secondary_excerpt(&1, registry, opts))
+    notes = Enum.map(diagnostic.notes, &Doc.note/1)
+    suggestions = Enum.map(diagnostic.suggestions, &Doc.hint(&1.message))
+
+    body =
+      Doc.stack([
+        diagnostic.body,
+        location_doc(diagnostic.primary, opts),
+        excerpt(diagnostic.primary, registry, diagnostic.severity),
+        Doc.stack(secondary),
+        Doc.stack(notes),
+        Doc.stack(suggestions),
+        provenance_doc(diagnostic.provenance)
+      ])
+
+    Doc.stack([Doc.emphasis(:banner, heading(diagnostic, opts)), body])
+  end
+
+  defp heading(%Diagnostic{} = diagnostic, opts) do
+    width = Keyword.fetch!(opts, :width)
+    prefix = "-- #{String.upcase(diagnostic.title)} [#{diagnostic.code}] "
+    path = diagnostic.primary && normalize_path(diagnostic.primary.span.path, opts)
+    suffix = if path in [nil, ""], do: "", else: " " <> path
+    fill = max(2, width - Doc.display_width(prefix) - Doc.display_width(suffix))
+    prefix <> String.duplicate("-", fill) <> suffix
   end
 
   @spec to_map(Diagnostic.t()) :: map()
@@ -43,10 +67,11 @@ defmodule Cure.Diagnostic.Renderer do
       "key" => Atom.to_string(diagnostic.key),
       "severity" => Atom.to_string(diagnostic.severity),
       "title" => diagnostic.title,
-      "message" => diagnostic.message,
+      "message" => Diagnostic.message(diagnostic),
+      "body" => Doc.to_map(diagnostic.body),
       "primary" => label_map(diagnostic.primary),
       "secondary" => Enum.map(diagnostic.secondary, &label_map/1),
-      "notes" => diagnostic.notes,
+      "notes" => Enum.map(diagnostic.notes, &Doc.to_map/1),
       "suggestions" => Enum.map(diagnostic.suggestions, &suggestion_map/1),
       "provenance" => Enum.map(diagnostic.provenance, &provenance_map/1),
       "payload" => stringify_keys(diagnostic.payload)
@@ -63,7 +88,7 @@ defmodule Cure.Diagnostic.Renderer do
 
     %{
       severity: diagnostic.severity,
-      message: "[#{diagnostic.code}] #{diagnostic.title}\n\n#{diagnostic.message}",
+      message: "[#{diagnostic.code}] #{diagnostic.title}\n\n#{Diagnostic.message(diagnostic)}",
       source: authored_source_path(diagnostic) || path(span),
       file: path(span),
       position: start_position(span),
@@ -94,7 +119,7 @@ defmodule Cure.Diagnostic.Renderer do
       "severity" => lsp_severity(diagnostic.severity),
       "code" => diagnostic.code,
       "source" => "cure",
-      "message" => diagnostic.title <> "\n\n" <> diagnostic.message,
+      "message" => diagnostic.title <> "\n\n" <> Diagnostic.message(diagnostic),
       "relatedInformation" => Enum.map(diagnostic.secondary, &related_information(&1, registry, encoding)),
       "data" => %{
         "key" => Atom.to_string(diagnostic.key),
@@ -105,34 +130,35 @@ defmodule Cure.Diagnostic.Renderer do
     }
   end
 
-  defp location_line(nil), do: nil
+  defp location_doc(nil, _opts), do: Doc.empty()
 
-  defp location_line(%Label{span: span}) do
-    "at #{span.path || inspect(span.source_id)}:#{span.start_line}:#{span.start_column}"
+  defp location_doc(%Label{span: span}, opts) do
+    path = normalize_path(span.path, opts) || inspect(span.source_id)
+    Doc.paragraph("at #{path}:#{span.start_line}:#{span.start_column}")
   end
 
-  defp excerpt(nil, _registry), do: nil
-  defp excerpt(_label, nil), do: nil
+  defp excerpt(nil, _registry, _severity), do: Doc.empty()
+  defp excerpt(_label, nil, _severity), do: Doc.empty()
 
-  defp excerpt(%Label{span: %Span{} = span, message: message} = label, %SourceRegistry{} = registry) do
+  defp excerpt(%Label{span: %Span{} = span, message: message} = label, %SourceRegistry{} = registry, severity) do
     lines = span.start_line..span.end_line
 
     rendered =
       Enum.map(lines, fn line_number ->
         case SourceRegistry.line(registry, span, line_number) do
-          {:ok, source_line} -> render_excerpt_line(span, line_number, source_line, message, label.style)
+          {:ok, source_line} -> render_excerpt_line(span, line_number, source_line, message, label.style, severity)
           :error -> nil
         end
       end)
       |> Enum.reject(&is_nil/1)
 
     case rendered do
-      [] -> nil
-      lines -> Enum.join(lines, "\n")
+      [] -> Doc.empty()
+      lines -> Doc.concat(Enum.intersperse(lines, Doc.line()))
     end
   end
 
-  defp render_excerpt_line(span, line_number, source_line, message, style) do
+  defp render_excerpt_line(span, line_number, source_line, message, style, severity) do
     start_column = if line_number == span.start_line, do: span.start_column, else: 1
 
     end_column =
@@ -145,10 +171,18 @@ defmodule Cure.Diagnostic.Renderer do
     visual_end = visual_column(source_line, end_column)
     width = max(visual_end - visual_start, 1)
     marker_character = if style == :secondary, do: "-", else: "^"
-    marker = String.duplicate(" ", visual_start - 1) <> String.duplicate(marker_character, width)
+    marker = String.duplicate(marker_character, width)
     suffix = if line_number == span.end_line and message, do: " " <> message, else: ""
     gutter = String.length(Integer.to_string(line_number))
-    "#{line_number} | #{expand_tabs(source_line)}\n#{String.duplicate(" ", gutter)} | #{marker}#{suffix}"
+    marker_role = marker_role(style, severity)
+
+    Doc.concat([
+      Doc.code("#{line_number} | #{expand_tabs(source_line)}"),
+      Doc.line(),
+      Doc.text("#{String.duplicate(" ", gutter)} | #{String.duplicate(" ", visual_start - 1)}"),
+      Doc.emphasis(marker_role, marker),
+      Doc.text(suffix)
+    ])
   end
 
   @tab_width 4
@@ -157,10 +191,9 @@ defmodule Cure.Diagnostic.Renderer do
     line
     |> String.codepoints()
     |> Enum.take(scalar_column - 1)
-    |> Enum.reduce(1, fn
-      "\t", column -> column + (@tab_width - rem(column - 1, @tab_width))
-      _codepoint, column -> column + 1
-    end)
+    |> Enum.join()
+    |> Doc.display_width(1, tab_width: @tab_width)
+    |> Kernel.+(1)
   end
 
   defp expand_tabs(line) do
@@ -179,24 +212,53 @@ defmodule Cure.Diagnostic.Renderer do
     IO.iodata_to_binary(parts)
   end
 
-  defp secondary_excerpt(_label, nil), do: nil
+  defp secondary_excerpt(_label, nil, _opts), do: Doc.empty()
 
-  defp secondary_excerpt(%Label{} = label, %SourceRegistry{} = registry) do
-    case excerpt(label, registry) do
-      nil ->
-        nil
+  defp secondary_excerpt(%Label{} = label, %SourceRegistry{} = registry, opts) do
+    path = normalize_path(label.span.path, opts) || inspect(label.span.source_id)
 
-      rendered ->
-        "also at #{label.span.path || inspect(label.span.source_id)}:#{label.span.start_line}:#{label.span.start_column}\n" <>
-          rendered
+    Doc.concat([
+      Doc.paragraph("also at #{path}:#{label.span.start_line}:#{label.span.start_column}"),
+      Doc.line(),
+      excerpt(label, registry, :information)
+    ])
+  end
+
+  defp provenance_doc([]), do: Doc.empty()
+
+  defp provenance_doc(frames) do
+    chain = Enum.map_join(frames, " -> ", &to_string(&1.name))
+    Doc.paragraph("expansion: " <> chain)
+  end
+
+  defp marker_role(:secondary, _severity), do: :secondary_marker
+  defp marker_role(:primary, :warning), do: :warning_marker
+  defp marker_role(:primary, _severity), do: :error_marker
+
+  defp normalize_path(nil, _opts), do: nil
+
+  defp normalize_path(path, opts) do
+    case Keyword.get(opts, :project_root) do
+      nil -> path
+      root -> Path.relative_to(Path.expand(path), Path.expand(root))
     end
   end
 
-  defp provenance_line([]), do: nil
+  defp terminal_width(opts) do
+    device = Keyword.get(opts, :output_device, Keyword.get(opts, :device, :standard_io))
 
-  defp provenance_line(frames) do
-    chain = Enum.map_join(frames, " -> ", &to_string(&1.name))
-    "expansion: " <> chain
+    case :io.columns(device) do
+      {:ok, columns} when columns > 0 -> columns
+      _ -> @default_width
+    end
+  end
+
+  defp color_enabled?(value, _opts) when value in [true, :always], do: true
+  defp color_enabled?(value, _opts) when value in [false, :never], do: false
+
+  defp color_enabled?(:auto, opts) do
+    device = Keyword.get(opts, :output_device, Keyword.get(opts, :device, :standard_io))
+    is_nil(System.get_env("NO_COLOR")) and IO.ANSI.enabled?() and match?({:ok, _}, :io.columns(device))
   end
 
   defp label_map(nil), do: nil
@@ -317,28 +379,4 @@ defmodule Cure.Diagnostic.Renderer do
   defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
   defp stringify_keys(value) when is_atom(value), do: Atom.to_string(value)
   defp stringify_keys(value), do: value
-
-  defp colorize(rendered, severity) do
-    primary_color = if severity == :warning, do: IO.ANSI.yellow(), else: IO.ANSI.red()
-    reset = IO.ANSI.reset()
-
-    rendered
-    |> String.split("\n")
-    |> Enum.with_index()
-    |> Enum.map_join("\n", fn
-      {line, 0} -> IO.ANSI.cyan() <> line <> reset
-      {line, _index} -> color_marker_line(line, primary_color, reset)
-    end)
-  end
-
-  defp color_marker_line(line, primary_color, reset) do
-    Regex.replace(~r/^(\s*\|\s*\s*)(\^+)(.*)$/u, line, fn _, prefix, marker, suffix ->
-      prefix <> primary_color <> marker <> reset <> suffix
-    end)
-    |> then(fn colored ->
-      Regex.replace(~r/^(\s*\|\s*\s*)(-+)(.*)$/u, colored, fn _, prefix, marker, suffix ->
-        prefix <> IO.ANSI.cyan() <> marker <> reset <> suffix
-      end)
-    end)
-  end
 end
