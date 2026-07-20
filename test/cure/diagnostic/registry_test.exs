@@ -22,6 +22,12 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert :ok = Registry.validate(entries)
   end
 
+  test "registry records the real producer for operational documentation warnings" do
+    assert {:ok, entry} = Registry.fetch("E008")
+    assert entry.producers == [:doctor]
+    assert entry.converter == Cure.Diagnostic.Operational
+  end
+
   test "retired codes remain explainable but are excluded from reachable coverage" do
     retired_codes = Enum.map(Registry.retired(), & &1.code)
     assert "E015" in retired_codes

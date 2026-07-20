@@ -271,7 +271,7 @@ defmodule Cure.Diagnostic.Registry do
   defp converter_function(_code), do: :format_error
 
   defp producers(code)
-       when code in ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002],
+       when code in ~w[E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002],
        do: [:operational]
 
   defp producers(code) when code in ~w[E011 E014], do: [:elaboration]
