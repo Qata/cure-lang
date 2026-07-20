@@ -1651,7 +1651,7 @@ defmodule Cure.REPL do
     do: Cure.Diagnostic.Host.render(reason, "repl.cure")
 
   defp format_error(other),
-    do: Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("repl", other))
+    do: Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("repl", other))
 
   @doc false
   def __format_error__(reason), do: format_error(reason)

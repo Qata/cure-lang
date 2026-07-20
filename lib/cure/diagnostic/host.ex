@@ -15,6 +15,18 @@ defmodule Cure.Diagnostic.Host do
     end
   end
 
+  @doc "Render an already-structured diagnostic through the shared sink."
+  @spec render_diagnostic(Cure.Diagnostic.t(), keyword()) :: String.t()
+  def render_diagnostic(%Cure.Diagnostic{} = diagnostic, opts \\ []) do
+    Sink.new(
+      format: :plain,
+      color: Keyword.get(opts, :color, :auto),
+      width: Keyword.get(opts, :width, 80),
+      registry: Keyword.get(opts, :registry)
+    )
+    |> Sink.render(diagnostic)
+  end
+
   defp convert(reason, _file, _source) when is_struct(reason, Cure.Diagnostic) do
     {:ok, reason, nil}
   end

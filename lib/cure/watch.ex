@@ -126,7 +126,9 @@ defmodule Cure.Watch do
           info("  #{p} -> #{mod}")
 
         {:error, reason} ->
-          error("  " <> Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("watch", reason)))
+          error(
+            "  " <> Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("watch", reason))
+          )
       end
     end)
   end
@@ -151,7 +153,8 @@ defmodule Cure.Watch do
           else
             {:error, reason} ->
               error(
-                "  " <> Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("watch", reason))
+                "  " <>
+                  Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("watch", reason))
               )
           end
 
@@ -168,7 +171,7 @@ defmodule Cure.Watch do
 
   def run_action(other, _path) do
     diagnostic = Cure.Diagnostic.Operational.unknown_watch_action(other)
-    error(Cure.Diagnostic.Renderer.plain(diagnostic))
+    error(Cure.Diagnostic.Host.render_diagnostic(diagnostic))
   end
 
   # -- Helpers -----------------------------------------------------------------
