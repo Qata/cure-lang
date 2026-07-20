@@ -279,6 +279,14 @@ defmodule Cure.DiagnosticTest do
     refute Diagnostic.message(diagnostic) =~ "{:expected_literal_capture"
   end
 
+  test "new elaboration producers retain contextual E093 explanations" do
+    assert Diagnostic.message(Adapter.from_error({:unknown_grade, :future, 1, 2})) =~
+             "relevance grade"
+
+    assert Diagnostic.message(Adapter.from_error({:with_multi_no_arms, "arms", []})) =~
+             "multiple-scrutinee"
+  end
+
   test "unique missing lexer delimiters provide an insertion edit" do
     source = "\"not closed"
     error = {:lex_error, {:unterminated_string, 1, 1}}

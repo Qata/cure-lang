@@ -2346,6 +2346,42 @@ defmodule Cure.Diagnostic.Adapter do
           {"Scrutinee must be a variable", "This dependent operation requires a variable scrutinee.",
            "bind the scrutinee before using it"}
 
+        :graded_let_requires_variable ->
+          {"Graded binding needs a variable", "A graded binding must bind a variable so its relevance can be tracked.",
+           "bind a variable before applying the grade"}
+
+        :unknown_grade ->
+          {"Unknown relevance grade", "The written relevance grade is not defined by the current language edition.",
+           "use a supported relevance grade"}
+
+        :grade_requires_type ->
+          {"Graded binding needs a type", "A graded binding must declare the type whose usage is being restricted.",
+           "add a type annotation to the graded binding"}
+
+        :with_multi_proof_unsupported ->
+          {"Multiple with-scrutinee proof is unsupported",
+           "A `proof` binding cannot be combined with multiple `with` scrutinees in this form.",
+           "use one scrutinee or move the proof binding into a separate match"}
+
+        :with_multi_rematch_unsupported ->
+          {"Multiple with-scrutinee rematch is unsupported",
+           "An LHS rematch cannot be combined with multiple `with` scrutinees in this form.",
+           "use one scrutinee or restructure the rematch"}
+
+        :with_multi_arity_mismatch ->
+          {"Multiple with-arm arity mismatch",
+           "Each arm of a multiple-scrutinee `with` must provide one pattern per scrutinee.",
+           "make the arm pattern count match the scrutinee count"}
+
+        :with_multi_no_arms ->
+          {"Multiple with-scrutinee has no arms", "A multiple-scrutinee `with` must contain at least one matching arm.",
+           "add a `with` arm"}
+
+        :with_multi_inconsistent_pattern ->
+          {"Multiple with patterns disagree",
+           "Multiple-scrutinee `with` arms must use structurally consistent outer patterns.",
+           "make the outer patterns agree or split the match"}
+
         _ ->
           {"Elaboration failed", "This expression or declaration is not valid in the current checking context.",
            "change the source construct or add an annotation"}
