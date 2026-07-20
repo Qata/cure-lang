@@ -1201,7 +1201,13 @@ defmodule Cure.Compiler.Parser do
             end
 
           field ->
-            {value, state} = parse_family_field_value(advance(state), field)
+            # Structured family fields use declaration-style assignment in
+            # the surface language (`strategy = ...`). The family schema
+            # describes the value after the field name, so consume the
+            # optional separator here rather than making every family repeat
+            # it in its grammar.
+            state = consume_family_field_separator(advance(state))
+            {value, state} = parse_family_field_value(state, field)
             {values, state} = record_family_value(values, field, value, token, state)
             parse_family_sections(state, family_meta, values)
         end
@@ -1232,23 +1238,58 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_family_production(state, grammar) do
     Enum.find_value(grammar.productions, :error, fn production ->
-      case match_segments(state, production.segments, %{}, 0) do
-        {:ok, bindings, _progress, matched_state} ->
-          case peek(matched_state) do
-            %Token{type: type} when type in [:newline, :dedent, :eof] ->
-              production_values = Map.take(bindings, production.fields)
-              {value, matched_state} = parse_production_body(matched_state, grammar, production_values)
-              {:ok, value, matched_state}
+      case match_bare_family_production(state, grammar, production) do
+        {:ok, value, matched_state} ->
+          {:ok, value, matched_state}
+
+        :none ->
+          case match_segments(state, production.segments, %{}, 0) do
+            {:ok, bindings, _progress, matched_state} ->
+              case peek(matched_state) do
+                %Token{type: type} when type in [:newline, :dedent, :eof] ->
+                  production_values = Map.take(bindings, production.fields)
+                  {value, matched_state} = parse_production_body(matched_state, grammar, production_values)
+                  {:ok, value, matched_state}
+
+                _ ->
+                  nil
+              end
 
             _ ->
               nil
           end
-
-        _ ->
-          nil
       end
     end)
   end
+
+  # A family production may use the conventional `kind module as identity`
+  # spelling while allowing the kind to be omitted for the common worker case:
+  # `module as identity`. Keep this compatibility in the generic matcher so
+  # source-defined families do not need a second production with a different
+  # field prefix (which would change the generated family record shape).
+  defp match_bare_family_production(
+         state,
+         grammar,
+         %{segments: [{:hole, _}, {:hole, module_hole}, {:lit, "as"} | rest]} = production
+       ) do
+    case match_segments(state, [{:hole, module_hole}, {:lit, "as"} | rest], %{}, 0) do
+      {:ok, bindings, _progress, matched_state} ->
+        case peek(matched_state) do
+          %Token{type: type} when type in [:newline, :dedent, :eof] ->
+            production_values = Map.put(Map.take(bindings, production.fields), "kind", nil)
+            {value, matched_state} = parse_production_body(matched_state, grammar, production_values)
+            {:ok, value, matched_state}
+
+          _ ->
+            :none
+        end
+
+      _ ->
+        :none
+    end
+  end
+
+  defp match_bare_family_production(_state, _grammar, _production), do: :none
 
   defp parse_production_body(state, grammar, values) do
     nested_state = skip_newlines(state)
@@ -1356,6 +1397,13 @@ defmodule Cure.Compiler.Parser do
   defp parse_family_field_value(state, _field) do
     state = skip_newlines(state)
     parse_expr_or_block(state)
+  end
+
+  defp consume_family_field_separator(state) do
+    case peek(state) do
+      %Token{type: :assign} -> advance(state)
+      _ -> state
+    end
   end
 
   defp parse_family_production_entries(state, grammar, values) do

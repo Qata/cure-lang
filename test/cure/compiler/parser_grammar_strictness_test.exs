@@ -38,6 +38,19 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
   end
 
   describe "a keyword slot accepts only its own keyword" do
+    test "the documented supervisor surface accepts assignments and bare worker children" do
+      source = """
+      sup App.Root
+        strategy = :one_for_one
+        intensity = 3
+        period = 5
+        children
+          Counter as counter
+      """
+
+      assert {:ok, _} = parse_raw(source)
+    end
+
     test "`impl Proto for Type` rejects another keyword in place of `for`" do
       assert {:error, _} = parse_raw("impl Show when Int\n  fn show(x: Int) -> String = \"x\"\n")
     end
