@@ -587,7 +587,7 @@ defmodule Cure.REPL do
         %{state | defs: candidate_defs}
 
       {:error, reason} ->
-        render_error(state, format_error(reason))
+        render_reason_error(state, reason)
         state
     end
   end
@@ -671,7 +671,7 @@ defmodule Cure.REPL do
         state
 
       {:error, reason} ->
-        render_error(state, format_error(reason))
+        render_reason_error(state, reason)
         state
     end
   end
@@ -777,7 +777,7 @@ defmodule Cure.REPL do
         {:ok, src} ->
           case Cure.Compiler.compile_and_load(src, file: path, emit_events: false) do
             {:ok, mod} -> render_info(state, "  #{path} -> #{mod}")
-            {:error, reason} -> render_error(state, "  #{path}: #{format_error(reason)}")
+            {:error, reason} -> render_error(state, "  #{path}: #{render_reason(reason)}")
           end
 
         {:error, reason} ->
@@ -857,7 +857,7 @@ defmodule Cure.REPL do
             %{state | loaded: Enum.uniq([path | state.loaded])}
 
           {:error, reason} ->
-            render_error(state, format_error(reason))
+            render_reason_error(state, reason)
             state
         end
 
@@ -917,7 +917,7 @@ defmodule Cure.REPL do
   defp cmd_fmt(state, expr) do
     case Cure.quote(expr) do
       {:ok, ast} -> render_info(state, Printer.quoted_to_string(ast))
-      {:error, reason} -> render_error(state, format_error(reason))
+      {:error, reason} -> render_reason_error(state, reason)
     end
 
     state
@@ -1183,7 +1183,7 @@ defmodule Cure.REPL do
         %{state | defs: candidate_defs}
 
       {:error, reason} ->
-        render_error(state, format_error(reason))
+        render_reason_error(state, reason)
         state
     end
   end
@@ -1233,7 +1233,7 @@ defmodule Cure.REPL do
         )
 
       {:error, reason} ->
-        render_error(state, format_error(reason))
+        render_reason_error(state, reason)
     end
 
     state
@@ -1246,7 +1246,7 @@ defmodule Cure.REPL do
         Render.write_line(pretty)
 
       {:error, reason} ->
-        render_error(state, format_error(reason))
+        render_reason_error(state, reason)
     end
 
     state
@@ -1449,6 +1449,20 @@ defmodule Cure.REPL do
     body = state.theme.error <> "error: " <> msg <> state.theme.reset
     IO.binwrite(state.error_device, body <> "\n")
   end
+
+  defp render_reason_error(state, reason), do: render_error(state, render_reason(reason))
+
+  defp render_reason(reason) when is_binary(reason), do: reason
+
+  defp render_reason({:error, message} = reason) when is_binary(message), do: format_error(reason)
+
+  defp render_reason({:error, _kind, message} = reason) when is_binary(message),
+    do: format_error(reason)
+
+  defp render_reason({stage, msg, _opts} = reason) when is_atom(stage) and is_binary(msg),
+    do: format_error(reason)
+
+  defp render_reason(reason), do: Cure.Diagnostic.Host.render(reason, "repl.cure")
 
   # ==========================================================================
   # Helpers
