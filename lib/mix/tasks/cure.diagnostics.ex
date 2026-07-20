@@ -48,10 +48,21 @@ defmodule Mix.Tasks.Cure.Diagnostics do
 
   defp validate_registry! do
     with :ok <- Cure.Diagnostic.Registry.validate(),
-         :ok <- Cure.Diagnostic.Registry.validate_sources() do
+         :ok <- Cure.Diagnostic.Registry.validate_sources(),
+         :ok <- validate_inventory() do
       :ok
     else
       {:error, reason} -> Mix.raise("diagnostic registry validation failed: #{inspect(reason)}")
+    end
+  end
+
+  defp validate_inventory do
+    inventory = Cure.Diagnostic.Registry.Inventory.scan()
+
+    if inventory.error_constructors == [] do
+      {:error, :empty_producer_inventory}
+    else
+      :ok
     end
   end
 end
