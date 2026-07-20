@@ -1,0 +1,22 @@
+@group(:core)
+@prelude
+mod Std.Decimal
+
+  type Sign =
+    | Positive
+    | Negative
+
+  rec FiniteDecimal
+    sign: Sign
+    coefficient: Nat
+    exponent: Int
+
+  type NaNPayload =
+    | NoPayload
+    | Diagnostic(Nat)
+
+  type Decimal =
+    | Finite(FiniteDecimal)
+    | Infinity(Sign)
+    | QuietNaN(NaNPayload)
+    | SignallingNaN(NaNPayload)
