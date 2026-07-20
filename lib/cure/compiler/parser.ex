@@ -2279,6 +2279,9 @@ defmodule Cure.Compiler.Parser do
     end)
   end
 
+  defp subst_lift_module_value(%Cure.MetaAST.SourceInfo{} = value, _bindings, _state, _module_hole, _module_name),
+    do: value
+
   defp subst_lift_module_value(value, bindings, state, module_hole, module_name) when is_map(value) do
     value =
       Map.new(value, fn {key, item} ->
@@ -2328,6 +2331,8 @@ defmodule Cure.Compiler.Parser do
 
   defp resolve_delayed_raw(list, state, context) when is_list(list),
     do: Enum.map(list, &resolve_delayed_raw(&1, state, context))
+
+  defp resolve_delayed_raw(%Cure.MetaAST.SourceInfo{} = value, _state, _context), do: value
 
   defp resolve_delayed_raw(map, state, context) when is_map(map),
     do: Map.new(map, fn {key, value} -> {key, resolve_delayed_raw(value, state, context)} end)
