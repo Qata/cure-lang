@@ -615,6 +615,32 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:duplicate_unit, suffix}, opts),
     do: macro_validation_failure(:duplicate_unit, %{suffix: suffix}, opts)
 
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :invalid_packet_name,
+             :invalid_packet_endian,
+             :unknown_packet_scalar,
+             :missing_packet_endian,
+             :forward_packet_length,
+             :invalid_packet_crc_fields,
+             :invalid_packet_field,
+             :invalid_lift_module,
+             :invalid_lift_module_name,
+             :invalid_lift_callback,
+             :invalid_module_name,
+             :invalid_behaviour,
+             :invalid_lift_declaration,
+             :invalid_lift_import,
+             :invalid_lift_module_ast,
+             :lifted_module_dependency_cycle,
+             :duplicate_lifted_module
+           ],
+      do: macro_validation_failure(kind, %{detail: detail}, opts)
+
+  def from_error({kind, first, second}, opts)
+      when kind in [:forward_packet_length, :invalid_packet_crc_fields],
+      do: macro_validation_failure(kind, %{first: first, second: second}, opts)
+
   def from_error(kind, opts)
       when kind in [
              :arg_arity,
