@@ -40,6 +40,10 @@ defmodule Cure.Compiler.Errors do
     error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
   end
 
+  def format_error({:codegen_error, {:unknown_global, _name, details}} = error, file) when is_map(details) do
+    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+  end
+
   def format_error({:unknown_constructor, _name} = error, file) do
     error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
   end
@@ -1738,9 +1742,14 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:unknown_global, _name, details}) when is_map(details), do: true
   defp structured_error?({:unknown_name, details}) when is_map(details), do: true
   defp structured_error?({:codegen_error, {:unknown_global, _name}}), do: true
+  defp structured_error?({:codegen_error, {:unknown_global, _name, details}}) when is_map(details), do: true
   defp structured_error?({:unknown_constructor, _name}), do: true
   defp structured_error?({:lift_module_error, details}) when is_map(details), do: true
   defp structured_error?({:conversion_failure, _actual, _expected}), do: true
+  defp structured_error?({:codegen_error, {:conversion_failure, _actual, _expected}}), do: true
+  defp structured_error?({:codegen_error, reason}), do: structured_error?(reason)
+  defp structured_error?({:parse_error, [reason | _]}), do: structured_error?(reason)
+  defp structured_error?({:source_context, reason, context}) when is_map(context), do: structured_error?(reason)
   defp structured_error?(_error), do: false
 
   defp error_location({:lift_module_error, %{source_provenance: %{line: line, col: col}}}), do: {line, col}
@@ -1748,6 +1757,13 @@ defmodule Cure.Compiler.Errors do
   defp error_location({_, _, line, col}) when is_integer(line) and is_integer(col), do: {line, col}
 
   defp error_location({:expected, _expected, :got, _actual, line, col})
+       when is_integer(line) and is_integer(col),
+       do: {line, col}
+
+  defp error_location({:parse_error, [reason | _]}), do: error_location(reason)
+  defp error_location({:codegen_error, reason}), do: error_location(reason)
+
+  defp error_location({:source_context, _reason, %{line: line, column: col}})
        when is_integer(line) and is_integer(col),
        do: {line, col}
 

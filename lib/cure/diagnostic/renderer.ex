@@ -6,7 +6,7 @@ defmodule Cure.Diagnostic.Renderer do
 
   @spec plain(Diagnostic.t(), SourceRegistry.t() | nil) :: String.t()
   def plain(%Diagnostic{} = diagnostic, registry \\ nil) do
-    heading = "#{diagnostic.severity}[#{diagnostic.code}]: #{diagnostic.title}"
+    heading = heading(diagnostic)
     location = location_line(diagnostic.primary)
     excerpt = excerpt(diagnostic.primary, registry)
     secondary = Enum.map(diagnostic.secondary, &secondary_excerpt(&1, registry))
@@ -15,10 +15,19 @@ defmodule Cure.Diagnostic.Renderer do
     suggestions = Enum.map(diagnostic.suggestions, &"help: #{&1.message}")
     provenance = provenance_line(diagnostic.provenance)
 
-    [heading, location, excerpt, secondary, message, notes, suggestions, provenance]
-    |> List.flatten()
-    |> Enum.reject(&(&1 in [nil, ""]))
-    |> Enum.join("\n")
+    body =
+      [message, location, excerpt, secondary, notes, suggestions, provenance]
+      |> List.flatten()
+      |> Enum.reject(&(&1 in [nil, ""]))
+      |> Enum.join("\n\n")
+
+    heading <> if(body == "", do: "", else: "\n\n" <> body)
+  end
+
+  defp heading(%Diagnostic{} = diagnostic) do
+    label = diagnostic.title |> String.upcase()
+    prefix = "-- #{label} [#{diagnostic.code}] "
+    prefix <> String.duplicate("-", max(2, 72 - String.length(prefix)))
   end
 
   @spec terminal(Diagnostic.t(), SourceRegistry.t() | nil, keyword()) :: String.t()
@@ -99,7 +108,7 @@ defmodule Cure.Diagnostic.Renderer do
   defp location_line(nil), do: nil
 
   defp location_line(%Label{span: span}) do
-    " --> #{span.path || inspect(span.source_id)}:#{span.start_line}:#{span.start_column}"
+    "at #{span.path || inspect(span.source_id)}:#{span.start_line}:#{span.start_column}"
   end
 
   defp excerpt(nil, _registry), do: nil
@@ -137,7 +146,8 @@ defmodule Cure.Diagnostic.Renderer do
     width = max(visual_end - visual_start, 1)
     marker = String.duplicate(" ", visual_start - 1) <> String.duplicate("^", width)
     suffix = if line_number == span.end_line and message, do: " " <> message, else: ""
-    "#{line_number} | #{expand_tabs(source_line)}\n  | #{marker}#{suffix}"
+    gutter = String.length(Integer.to_string(line_number))
+    "#{line_number} | #{expand_tabs(source_line)}\n#{String.duplicate(" ", gutter)} | #{marker}#{suffix}"
   end
 
   @tab_width 4
@@ -176,7 +186,7 @@ defmodule Cure.Diagnostic.Renderer do
         nil
 
       rendered ->
-        " ::: #{label.span.path || inspect(label.span.source_id)}:#{label.span.start_line}:#{label.span.start_column}\n" <>
+        "also at #{label.span.path || inspect(label.span.source_id)}:#{label.span.start_line}:#{label.span.start_column}\n" <>
           rendered
     end
   end

@@ -672,11 +672,33 @@ defmodule Cure.Elab.Declarations do
     return_value = Eval.eval(sig.return_core, Context.env(ctx))
 
     with {:ok, body_term} <-
-           elaborate_declared_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
-         :ok <- Kernel.check(ctx, body_term, return_value) do
+           attach_source_context(
+             elaborate_declared_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
+             body_expr,
+             sig.name
+           ),
+         :ok <- attach_source_context(Kernel.check(ctx, body_term, return_value), body_expr, sig.name) do
       {:ok, body_term, sig.return_core, return_value}
     end
   end
+
+  defp attach_source_context({:error, reason}, expression, checking) do
+    meta = expression_meta(expression)
+
+    {:error,
+     {:source_context, reason,
+      %{
+        line: Keyword.get(meta, :line),
+        column: Keyword.get(meta, :col),
+        checking: checking
+      }}}
+  end
+
+  defp attach_source_context(result, _expression, _checking), do: result
+
+  defp expression_meta({_kind, meta, _children}) when is_list(meta), do: meta
+  defp expression_meta({_kind, meta, _left, _right}) when is_list(meta), do: meta
+  defp expression_meta(_expression), do: []
 
   defp elaborate_declared_body(body_expr, return_core, scope, ctx, env, params) do
     if Elaborator.effect_goal?(return_core, ctx) do

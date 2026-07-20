@@ -76,8 +76,26 @@ defmodule Cure.Diagnostic.Operational do
   def usage(message), do: diagnostic("E099", :usage_error, message, %{})
   def artifact_error(message), do: diagnostic("E100", :artifact_error, message, %{})
 
-  defp diagnostic(code, key, message, payload),
-    do: Diagnostic.new(code: code, key: key, severity: :error, title: "#{key}", message: message, payload: payload)
+  defp diagnostic(code, key, message, payload) do
+    Diagnostic.new(
+      code: code,
+      key: key,
+      severity: if(String.starts_with?(code, "W"), do: :warning, else: :error),
+      title: title(key),
+      message: message,
+      payload: payload
+    )
+  end
+
+  defp title(:file_read), do: "Could not read file"
+  defp title(:file_write), do: "Could not write file"
+  defp title(:dependency_resolution), do: "Dependency resolution failed"
+  defp title(:command_failure), do: "Command failed"
+  defp title(:export_type_unmappable), do: "Type cannot cross this boundary"
+  defp title(:snap_path_missing), do: "Saved path is missing"
+  defp title(:configuration_warning), do: "Invalid configuration"
+  defp title(:usage_error), do: "Invalid command usage"
+  defp title(:artifact_error), do: "Invalid build artifact"
 
   defp file_reason(reason) when is_atom(reason), do: :file.format_error(reason)
   defp file_reason({kind, detail}) when is_atom(kind), do: "#{kind}: #{file_reason(detail)}"

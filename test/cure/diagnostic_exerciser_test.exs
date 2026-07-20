@@ -5,20 +5,23 @@ defmodule Cure.DiagnosticExerciserTest do
 
   test "exercises every public diagnostic family and shows user output" do
     compiler_cases = [
-      {"unknown global", "mod DiagnosticUnknown\n  fn run() -> Int = missing_name\n"},
-      {"syntax error", "mod DiagnosticSyntax\n  fn run( -> Int = 1\n"},
-      {"type mismatch", "mod DiagnosticType\n  fn run() -> Int = \"not an int\"\n"}
+      {"unknown global", "E091", "mod DiagnosticUnknown\n  fn run() -> Int = missing_name\n"},
+      {"syntax error", "E094", "mod DiagnosticSyntax\n  fn run(] -> Int = 1\n"},
+      {"type mismatch", "E093",
+       "mod DiagnosticType\n  type Nat = Z | S(Nat)\n  fn bad() -> Equivalent(Nat, Z, S(Z)) = reflexive(Z)\n"}
     ]
 
-    Enum.each(compiler_cases, fn {label, source} ->
+    Enum.each(compiler_cases, fn {label, expected_code, source} ->
       case Cure.Compiler.compile_string(source, emit_events: false) do
-        {:ok, _module, warnings} ->
-          Enum.each(warnings, fn warning ->
-            IO.puts(:stderr, "[#{label}] " <> Renderer.plain(Operational.compiler_warning(warning)))
-          end)
+        {:ok, module, warnings} ->
+          flunk("#{label} unexpectedly compiled as #{inspect(module)} with #{length(warnings)} warning(s)")
 
         {:error, reason} ->
-          rendered = Cure.Compiler.Errors.format_with_source(reason, "#{label}.cure", source)
+          {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, "#{label}.cure", source)
+          assert diagnostic.code == expected_code
+          assert diagnostic.primary, "#{label} did not retain an authored source span"
+          rendered = Renderer.plain(diagnostic, registry)
+          assert rendered =~ " | ", "#{label} did not render an authored source excerpt"
           IO.puts(:stderr, "[#{label}]\n" <> rendered)
       end
     end)

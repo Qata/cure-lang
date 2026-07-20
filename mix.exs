@@ -63,6 +63,7 @@ defmodule Cure.MixProject do
         # run fine in :dev and are intentionally omitted.
         antigen: :test,
         "antigen.regen_seeds": :test,
+        "cure.diagnostics": :test,
         coveralls: :test,
         "coveralls.detail": :test,
         "coveralls.post": :test,

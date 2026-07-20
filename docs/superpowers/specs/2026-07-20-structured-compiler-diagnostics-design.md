@@ -504,6 +504,48 @@ the already imported unqualified type name.
 
 Exact chrome is renderer policy; diagnostic content is structured.
 
+#### 7.1.1 Elm-style human presentation
+
+The canonical terminal presentation deliberately follows Elm's compiler-error
+grammar. A diagnostic begins with a visually scannable banner:
+
+```text
+-- UNKNOWN VALUE [E091] -----------------------------------------------
+```
+
+The title is short, human, and uppercased by the renderer; it is never an
+internal atom such as `unknown_global` or `file_read`. The stable Cure code
+remains visible in the banner. Colour may distinguish the banner and marked
+source, but the colour-free rendering must preserve the same hierarchy.
+
+After the banner, the renderer presents information in this order:
+
+1. a diagnostic-specific explanation in the vocabulary of the authored Cure
+   program;
+2. the exact source as written, with line numbers and a precise underline;
+3. secondary source excerpts where they materially explain the problem;
+4. focused expected/observed information, hiding irrelevant type structure;
+5. notes and concrete help, including a safe edit when one is known;
+6. a collapsed expansion trace when macro provenance matters.
+
+Whitespace separates these conceptual blocks. A path-and-coordinate line is
+supporting navigation, not a substitute for showing the source. Locationless
+diagnostics omit the excerpt honestly rather than inventing a position.
+
+This is a semantic presentation requirement, not merely visual styling. An
+uppercase banner wrapped around a raw tuple, Core term, generic category, or
+unexplained `expected/got` pair does not satisfy it. Each public diagnostic
+family owns human prose that explains what the user was trying to do, what
+prevented it, and the most useful next action. Internal terms remain available
+only in machine/debug payloads.
+
+The repository maintains an error-message catalog driven by real failing Cure
+programs. `mix cure.diagnostics` compiles those programs, prints their actual
+user-facing diagnostics, and runs the catalog with coverage. A catalog case is
+valid only when it asserts that compilation reached its intended stable code;
+constructor-only examples supplement this catalog but cannot stand in for a
+compiler-path proof.
+
 ### 7.2 Plain renderer
 
 A deterministic color-free renderer supports tests, logs, and environments

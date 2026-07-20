@@ -13,6 +13,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:codegen_error, reason}, opts), do: from_error(reason, opts)
 
+  def from_error({:parse_error, [reason | _]}, opts), do: from_error(reason, opts)
+
+  def from_error({:source_context, reason, context}, opts) when is_map(context) do
+    from_error(reason, Keyword.put(opts, :checking, Map.get(context, :checking)))
+  end
+
   def from_error({:unknown_global, name}, opts),
     do: unknown_name(:value, name, opts)
 
@@ -81,6 +87,19 @@ defmodule Cure.Diagnostic.Adapter do
       message: "Expected #{syntax_name(expected)}, but found #{syntax_name(actual)}.",
       primary: primary_label(opts, "unexpected syntax here"),
       payload: %{expected: expected, actual: actual, line: line, column: column}
+    )
+  end
+
+  def from_error({:unexpected_token, actual, line, column}, opts) do
+    Diagnostic.new(
+      code: "E094",
+      key: :unexpected_token,
+      severity: :error,
+      title: "I got stuck while parsing this",
+      message: "I did not expect #{syntax_name(actual)} here.",
+      primary: primary_label(opts, "the parser got stuck here"),
+      notes: ["Check the punctuation and indentation immediately before this point."],
+      payload: %{actual: actual, line: line, column: column}
     )
   end
 
@@ -205,10 +224,21 @@ defmodule Cure.Diagnostic.Adapter do
   defp name_to_string(name), do: inspect(name)
 
   defp print_core(term) do
-    Cure.Core.Printer.print(term)
+    term
+    |> printable_core()
+    |> Cure.Core.Printer.print()
   rescue
     ArgumentError -> inspect(term)
   end
+
+  defp printable_core(term) when is_tuple(term) do
+    case term |> elem(0) |> Atom.to_string() do
+      "v" <> _ -> Cure.Core.Quote.reify(term, 0)
+      _ -> term
+    end
+  end
+
+  defp printable_core(term), do: term
 
   defp syntax_name(name) when is_atom(name), do: "`#{name}`"
   defp syntax_name(name), do: inspect(name)

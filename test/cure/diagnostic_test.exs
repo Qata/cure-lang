@@ -44,7 +44,7 @@ defmodule Cure.DiagnosticTest do
     host = Renderer.code_diagnostic(diagnostic)
     mix = Renderer.mix_diagnostic(diagnostic)
 
-    assert plain =~ "error[E101]: Unknown value"
+    assert plain =~ "-- UNKNOWN VALUE [E101]"
     assert plain =~ "2 |   fn answer() -> Int = unknowñ"
     assert plain =~ "^^^^^^^ not found"
     assert plain =~ "expansion: actor Worker"
@@ -144,7 +144,7 @@ defmodule Cure.DiagnosticTest do
       )
 
     rendered = Renderer.plain(diagnostic, registry)
-    assert rendered =~ "::: src/token.cure:1:6"
+    assert rendered =~ "also at src/token.cure:1:6"
     assert rendered =~ "1 | type Token = Token"
     assert rendered =~ "^^^^^ defined here"
   end
