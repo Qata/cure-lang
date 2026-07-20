@@ -93,6 +93,25 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:usage_violation, details}, opts) when is_map(details) do
+    declared = Map.get(details, :declared, :unknown)
+    used = Map.get(details, :used, :unknown)
+    binder = Map.get(details, :binder)
+
+    Diagnostic.new(
+      code: "E104",
+      key: :erased_value_used_relevantly,
+      severity: :error,
+      title: "Resource usage violates its grade",
+      body:
+        Doc.paragraph(
+          "This #{if is_nil(binder), do: "binding", else: "binder #{binder}"} is declared `#{declared}` but used as `#{used}`. Restricted resources must not be duplicated or consumed at an incompatible grade."
+        ),
+      primary: primary_label(opts, "use this binding according to its declared grade"),
+      payload: details
+    )
+  end
+
   def from_error({kind, name}, opts)
       when kind in [
              :duplicate_type,

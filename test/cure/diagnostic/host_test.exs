@@ -166,6 +166,19 @@ defmodule Cure.Diagnostic.HostTest do
     assert relevance =~ "returned"
   end
 
+  test "renders restricted resource usage violations through the trusted diagnostic family" do
+    rendered =
+      Host.render(
+        {:usage_violation, %{binder: 0, declared: :linear, used: :unrestricted}},
+        "demo.cure"
+      )
+
+    assert rendered =~ "[E104]"
+    assert rendered =~ "linear"
+    assert rendered =~ "unrestricted"
+    refute rendered =~ ":usage_violation"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 

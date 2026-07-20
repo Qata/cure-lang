@@ -587,6 +587,7 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:erases_on_non_opaque, _name}), do: true
   defp structured_error?({:non_strictly_positive, _family}), do: true
   defp structured_error?({:erased_used_relevantly, details}) when is_map(details), do: true
+  defp structured_error?({:usage_violation, details}) when is_map(details), do: true
   defp structured_error?({:duplicate_type, _name}), do: true
   defp structured_error?({:duplicate_ctor, _name}), do: true
   defp structured_error?({:duplicate_field, _name}), do: true
