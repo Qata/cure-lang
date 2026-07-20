@@ -79,6 +79,22 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.body) == "n"
   end
 
+  test "record constructions retain authored name, delimiters, and field spans" do
+    source = "fn origin() -> Point = Point{x: 0, y: 0}\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "record.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "record.cure", emit_events: false, prelude_macros: false)
+
+    {:function_call, meta, _fields} = find_node(ast, :function_call)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "Point{x: 0, y: 0}"
+    assert slice(source, info.name) == "Point"
+    assert slice(source, info.opener) == "{"
+    assert slice(source, info.closer) == "}"
+    assert slice(source, Map.fetch!(info.fields, :x)) == "x"
+    assert slice(source, Map.fetch!(info.fields, :y)) == "y"
+  end
+
   test "operators and containers retain token-owned focused ranges" do
     source =
       "mod Demo\n  fn answer() -> Int = 1 + 2\n  fn xs() -> List(Int) = [1, 2]\n  fn pair() -> Tuple(Int, Int) = %[1, 2]\n" <>

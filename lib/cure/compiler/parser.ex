@@ -3563,12 +3563,20 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :rbrace} ->
         # Empty construction: TypeName{}
         state = advance(state)
-        ast = {:function_call, [name: rec_name, record: true, line: line, col: col], []}
+
+        meta =
+          put_record_source_info([name: rec_name, record: true, line: line, col: col], name_ast, open_token, state, [])
+
+        ast = {:function_call, meta, []}
         {ast, state}
 
       %Token{type: :dedent} when layout? ->
         state = state |> close_record_layout(true) |> expect(:rbrace)
-        ast = {:function_call, [name: rec_name, record: true, line: line, col: col], []}
+
+        meta =
+          put_record_source_info([name: rec_name, record: true, line: line, col: col], name_ast, open_token, state, [])
+
+        ast = {:function_call, meta, []}
         {ast, state}
 
       _ ->
@@ -3589,7 +3597,11 @@ defmodule Cure.Compiler.Parser do
             {fields, probe_state} = parse_map_pairs(probe_state, :rbrace)
             probe_state = close_record_layout(probe_state, layout?)
             probe_state = expect(probe_state, :rbrace)
-            ast = {:record_update, [name: rec_name, line: line, col: col], [base_expr | fields]}
+
+            meta =
+              put_record_source_info([name: rec_name, line: line, col: col], name_ast, open_token, probe_state, fields)
+
+            ast = {:record_update, meta, [base_expr | fields]}
             {ast, probe_state}
 
           _ ->
@@ -3598,7 +3610,17 @@ defmodule Cure.Compiler.Parser do
             {fields, state} = parse_map_pairs(state, :rbrace)
             state = close_record_layout(state, layout?)
             state = expect(state, :rbrace)
-            ast = {:function_call, [name: rec_name, record: true, line: line, col: col], fields}
+
+            meta =
+              put_record_source_info(
+                [name: rec_name, record: true, line: line, col: col],
+                name_ast,
+                open_token,
+                state,
+                fields
+              )
+
+            ast = {:function_call, meta, fields}
             {ast, state}
         end
     end
@@ -3606,6 +3628,54 @@ defmodule Cure.Compiler.Parser do
 
   defp close_record_layout(state, true), do: state |> skip_newlines() |> expect_dedent() |> skip_newlines()
   defp close_record_layout(state, false), do: state
+
+  defp put_record_source_info(meta, name_ast, open_token, state, fields) do
+    name_span = first_node_source_span(name_ast)
+    close_token = last_authored_token(state)
+
+    whole =
+      case {name_span || open_token.span, close_token} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = close} ->
+          case Range.through(first, close) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    field_spans =
+      Enum.reduce(fields, %{}, fn
+        {:pair, pair_meta, _pair_children}, acc ->
+          case Metadata.source_info(pair_meta) do
+            %SourceInfo{name: %Cure.Diagnostic.Span{} = field} ->
+              Map.put(acc, source_span_text(pair_meta), field)
+
+            _ ->
+              acc
+          end
+
+        _, acc ->
+          acc
+      end)
+
+    if whole do
+      Keyword.put(meta, :source_info, %SourceInfo{
+        whole: whole,
+        name: name_span,
+        opener: open_token.span,
+        closer: if(match?(%Token{span: %Cure.Diagnostic.Span{}}, close_token), do: close_token.span),
+        fields: field_spans
+      })
+    else
+      meta
+    end
+  end
+
+  defp source_span_text(meta) do
+    Keyword.get(meta, :field, Keyword.get(meta, :name, :unknown))
+  end
 
   defp is_pascal_case?({:variable, _, <<first, _rest::binary>>}) when first in ?A..?Z, do: true
 
@@ -3798,7 +3868,8 @@ defmodule Cure.Compiler.Parser do
         state = advance(state) |> advance()
         state = skip_newlines(state)
         {value, state} = parse_expr(state, 0)
-        pair = {:pair, [], [{:literal, [subtype: :symbol], key_atom}, value]}
+        pair_meta = put_field_source_info([field: key_atom], token, state, token.span)
+        pair = {:pair, pair_meta, [{:literal, [subtype: :symbol], key_atom}, value]}
         {pair, state}
 
       # Pattern/construction field punning (v0.18.0): a bare identifier
@@ -3810,7 +3881,8 @@ defmodule Cure.Compiler.Parser do
         key_atom = String.to_atom(token.value)
         var_ast = variable(token)
         state = advance(state)
-        pair = {:pair, [pun: true], [{:literal, [subtype: :symbol], key_atom}, var_ast]}
+        pair_meta = put_field_source_info([pun: true, field: key_atom], token, state, token.span)
+        pair = {:pair, pair_meta, [{:literal, [subtype: :symbol], key_atom}, var_ast]}
         {pair, state}
 
       true ->
@@ -3820,10 +3892,38 @@ defmodule Cure.Compiler.Parser do
         state = expect(state, :fat_arrow)
         state = skip_newlines(state)
         {value, state} = parse_expr(state, 0)
-        pair = {:pair, [], [key, value]}
+        pair_meta = put_field_source_info([field: field_name(key)], token, state, first_node_source_span(key))
+        pair = {:pair, pair_meta, [key, value]}
         {pair, state}
     end
   end
+
+  defp put_field_source_info(meta, start_token, state, field_span) do
+    close_token = last_authored_token(state)
+
+    whole =
+      case {start_token.span, close_token} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    if whole do
+      info = %SourceInfo{whole: whole, name: field_span}
+      Keyword.put(meta, :source_info, info)
+    else
+      meta
+    end
+  end
+
+  defp field_name({:variable, _meta, name}), do: name
+  defp field_name({:literal, _meta, name}) when is_atom(name), do: name
+  defp field_name(_), do: :unknown
 
   # Binary literal / pattern: <<seg1, seg2, ...>>
   #
