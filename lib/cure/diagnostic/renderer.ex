@@ -1,0 +1,234 @@
+defmodule Cure.Diagnostic.Renderer do
+  @moduledoc "Human and machine renderers for the shared diagnostic model."
+
+  alias Cure.Diagnostic
+  alias Cure.Diagnostic.{Label, SourceRegistry, Span, Suggestion, TextEdit}
+
+  @spec plain(Diagnostic.t(), SourceRegistry.t() | nil) :: String.t()
+  def plain(%Diagnostic{} = diagnostic, registry \\ nil) do
+    heading = "#{diagnostic.severity}[#{diagnostic.code}]: #{diagnostic.title}"
+    location = location_line(diagnostic.primary)
+    excerpt = excerpt(diagnostic.primary, registry)
+    message = diagnostic.message
+    notes = Enum.map(diagnostic.notes, &"note: #{&1}")
+    suggestions = Enum.map(diagnostic.suggestions, &"help: #{&1.message}")
+    provenance = provenance_line(diagnostic.provenance)
+
+    [heading, location, excerpt, message, notes, suggestions, provenance]
+    |> List.flatten()
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join("\n")
+  end
+
+  @spec terminal(Diagnostic.t(), SourceRegistry.t() | nil, keyword()) :: String.t()
+  def terminal(%Diagnostic{} = diagnostic, registry \\ nil, opts \\ []) do
+    rendered = plain(diagnostic, registry)
+    if Keyword.get(opts, :color, false), do: colorize(rendered, diagnostic.severity), else: rendered
+  end
+
+  @spec to_map(Diagnostic.t()) :: map()
+  def to_map(%Diagnostic{} = diagnostic) do
+    %{
+      "code" => diagnostic.code,
+      "key" => Atom.to_string(diagnostic.key),
+      "severity" => Atom.to_string(diagnostic.severity),
+      "title" => diagnostic.title,
+      "message" => diagnostic.message,
+      "primary" => label_map(diagnostic.primary),
+      "secondary" => Enum.map(diagnostic.secondary, &label_map/1),
+      "notes" => diagnostic.notes,
+      "suggestions" => Enum.map(diagnostic.suggestions, &suggestion_map/1),
+      "provenance" => Enum.map(diagnostic.provenance, &provenance_map/1),
+      "payload" => stringify_keys(diagnostic.payload)
+    }
+  end
+
+  @spec json(Diagnostic.t()) :: String.t()
+  def json(%Diagnostic{} = diagnostic), do: Jason.encode!(to_map(diagnostic))
+
+  @doc "Project a Cure diagnostic into Elixir's compiler diagnostic envelope."
+  @spec code_diagnostic(Diagnostic.t()) :: Code.diagnostic(Diagnostic.severity())
+  def code_diagnostic(%Diagnostic{} = diagnostic) do
+    span = primary_span(diagnostic)
+
+    %{
+      severity: diagnostic.severity,
+      message: "[#{diagnostic.code}] #{diagnostic.title}\n\n#{diagnostic.message}",
+      source: authored_source_path(diagnostic) || path(span),
+      file: path(span),
+      position: start_position(span),
+      span: end_position(span),
+      stacktrace: Map.get(diagnostic.payload, :stacktrace, []),
+      details: diagnostic
+    }
+  end
+
+  @doc "Project a Cure diagnostic into the standard Mix compiler structure."
+  @spec mix_diagnostic(Diagnostic.t()) :: Mix.Task.Compiler.Diagnostic.t()
+  def mix_diagnostic(%Diagnostic{} = diagnostic) do
+    diagnostic
+    |> code_diagnostic()
+    |> Map.put(:compiler_name, "Cure")
+    |> then(&struct!(Mix.Task.Compiler.Diagnostic, &1))
+  end
+
+  @doc "Recover the lossless Cure value carried by a host diagnostic."
+  @spec from_host_diagnostic(map()) :: {:ok, Diagnostic.t()} | :error
+  def from_host_diagnostic(%{details: %Diagnostic{} = diagnostic}), do: {:ok, diagnostic}
+  def from_host_diagnostic(_diagnostic), do: :error
+
+  @spec lsp(Diagnostic.t(), SourceRegistry.t() | nil) :: map()
+  def lsp(%Diagnostic{} = diagnostic, registry \\ nil) do
+    %{
+      "range" => lsp_range(diagnostic.primary, registry),
+      "severity" => lsp_severity(diagnostic.severity),
+      "code" => diagnostic.code,
+      "source" => "cure",
+      "message" => diagnostic.title <> "\n\n" <> diagnostic.message,
+      "relatedInformation" => Enum.map(diagnostic.secondary, &related_information(&1, registry)),
+      "data" => %{
+        "key" => Atom.to_string(diagnostic.key),
+        "suggestions" => Enum.map(diagnostic.suggestions, &suggestion_map/1),
+        "provenance" => Enum.map(diagnostic.provenance, &provenance_map/1),
+        "payload" => stringify_keys(diagnostic.payload)
+      }
+    }
+  end
+
+  defp location_line(nil), do: nil
+
+  defp location_line(%Label{span: span}) do
+    " --> #{span.path || inspect(span.source_id)}:#{span.start_line}:#{span.start_column}"
+  end
+
+  defp excerpt(nil, _registry), do: nil
+  defp excerpt(_label, nil), do: nil
+
+  defp excerpt(%Label{span: %Span{} = span, message: message}, %SourceRegistry{} = registry) do
+    case SourceRegistry.line(registry, span, span.start_line) do
+      {:ok, source_line} ->
+        width = max(span.end_column - span.start_column, 1)
+        marker = String.duplicate(" ", span.start_column - 1) <> String.duplicate("^", width)
+        suffix = if message, do: " " <> message, else: ""
+        "#{span.start_line} | #{source_line}\n  | #{marker}#{suffix}"
+
+      :error ->
+        nil
+    end
+  end
+
+  defp provenance_line([]), do: nil
+
+  defp provenance_line(frames) do
+    chain = Enum.map_join(frames, " -> ", &to_string(&1.name))
+    "expansion: " <> chain
+  end
+
+  defp label_map(nil), do: nil
+
+  defp label_map(%Label{span: span, message: message, style: style}) do
+    %{"span" => span_map(span), "message" => message, "style" => Atom.to_string(style)}
+  end
+
+  defp span_map(%Span{} = span) do
+    span
+    |> Map.from_struct()
+    |> stringify_keys()
+  end
+
+  defp suggestion_map(%Suggestion{} = suggestion) do
+    %{
+      "message" => suggestion.message,
+      "applicability" => Atom.to_string(suggestion.applicability),
+      "edits" => Enum.map(suggestion.edits, &edit_map/1)
+    }
+  end
+
+  defp edit_map(%TextEdit{span: span, replacement: replacement}) do
+    %{"span" => span_map(span), "replacement" => replacement}
+  end
+
+  defp provenance_map(frame) do
+    %{
+      "kind" => Atom.to_string(frame.kind),
+      "name" => to_string(frame.name),
+      "invocation" => optional_span(frame.invocation),
+      "definition" => optional_span(frame.definition),
+      "generated" => optional_span(frame.generated),
+      "parent" => frame.parent
+    }
+  end
+
+  defp optional_span(%Span{} = span), do: span_map(span)
+  defp optional_span(other), do: other
+
+  defp lsp_range(nil, _registry),
+    do: %{"start" => %{"line" => 0, "character" => 0}, "end" => %{"line" => 0, "character" => 0}}
+
+  defp lsp_range(%Label{span: span}, %SourceRegistry{} = registry) do
+    with {:ok, start_position} <- SourceRegistry.lsp_position(registry, span, :start),
+         {:ok, end_position} <- SourceRegistry.lsp_position(registry, span, :end) do
+      %{"start" => start_position, "end" => end_position}
+    else
+      _ -> lsp_range(%Label{span: span, style: :primary}, nil)
+    end
+  end
+
+  defp lsp_range(%Label{span: span}, nil) do
+    %{
+      "start" => %{"line" => span.start_line - 1, "character" => span.start_column - 1},
+      "end" => %{"line" => span.end_line - 1, "character" => span.end_column - 1}
+    }
+  end
+
+  defp related_information(%Label{span: span, message: message} = label, registry) do
+    %{
+      "location" => %{"uri" => path_to_uri(span.path), "range" => lsp_range(label, registry)},
+      "message" => message || "related source"
+    }
+  end
+
+  defp primary_span(%Diagnostic{primary: %Label{span: span}}), do: span
+  defp primary_span(_diagnostic), do: nil
+
+  defp path(%Span{path: path}), do: path
+  defp path(nil), do: nil
+
+  defp start_position(%Span{} = span), do: {span.start_line, span.start_column}
+  defp start_position(nil), do: 0
+
+  defp end_position(%Span{} = span), do: {span.end_line, span.end_column}
+  defp end_position(nil), do: nil
+
+  defp authored_source_path(%Diagnostic{provenance: provenance}) do
+    provenance
+    |> Enum.reverse()
+    |> Enum.find_value(fn frame ->
+      case frame.invocation do
+        %Span{path: path} -> path
+        _ -> nil
+      end
+    end)
+  end
+
+  defp path_to_uri(nil), do: ""
+  defp path_to_uri("file://" <> _ = uri), do: uri
+  defp path_to_uri(path), do: "file://" <> Path.expand(path)
+
+  defp lsp_severity(:error), do: 1
+  defp lsp_severity(:warning), do: 2
+  defp lsp_severity(:information), do: 3
+  defp lsp_severity(:hint), do: 4
+
+  defp stringify_keys(map) when is_map(map) do
+    Map.new(map, fn {key, value} -> {to_string(key), stringify_keys(value)} end)
+  end
+
+  defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
+  defp stringify_keys(value) when is_atom(value), do: Atom.to_string(value)
+  defp stringify_keys(value), do: value
+
+  defp colorize(rendered, :error), do: IO.ANSI.red() <> rendered <> IO.ANSI.reset()
+  defp colorize(rendered, :warning), do: IO.ANSI.yellow() <> rendered <> IO.ANSI.reset()
+  defp colorize(rendered, _), do: rendered
+end

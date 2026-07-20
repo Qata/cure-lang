@@ -396,6 +396,13 @@ defmodule Cure.LSP.Server do
     end
   end
 
+  @doc false
+  def diagnostic_to_lsp(%Cure.Diagnostic{} = diagnostic) do
+    Cure.Diagnostic.Renderer.lsp(diagnostic)
+  end
+
+  defp format_diagnostic(%Cure.Diagnostic{} = diagnostic), do: diagnostic_to_lsp(diagnostic)
+
   defp format_diagnostic({type, msg, opts}) when is_list(opts) do
     line = Keyword.get(opts, :line, 1) - 1
     message = elem_or("", 1, {type, msg, opts})

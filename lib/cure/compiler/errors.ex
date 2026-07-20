@@ -20,6 +20,10 @@ defmodule Cure.Compiler.Errors do
   @spec format_error(term(), String.t()) :: String.t()
   def format_error(error, file \\ "nofile")
 
+  def format_error(%Cure.Diagnostic{} = diagnostic, _file) do
+    Cure.Diagnostic.Renderer.plain(diagnostic)
+  end
+
   # -- Type Errors -------------------------------------------------------------
 
   def format_error(errors, file) when is_list(errors) do
