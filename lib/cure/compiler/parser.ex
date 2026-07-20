@@ -3569,19 +3569,35 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :rbrace} ->
         # Empty construction: TypeName{}
+        close_token = peek(state)
         state = advance(state)
 
         meta =
-          put_record_source_info([name: rec_name, record: true, line: line, col: col], name_ast, open_token, state, [])
+          put_record_source_info(
+            [name: rec_name, record: true, line: line, col: col],
+            name_ast,
+            open_token,
+            state,
+            close_token,
+            []
+          )
 
         ast = {:function_call, meta, []}
         {ast, state}
 
       %Token{type: :dedent} when layout? ->
-        state = state |> close_record_layout(true) |> expect(:rbrace)
+        state = close_record_layout(state, true)
+        {state, close_token} = expect_token_or_nil(state, :rbrace)
 
         meta =
-          put_record_source_info([name: rec_name, record: true, line: line, col: col], name_ast, open_token, state, [])
+          put_record_source_info(
+            [name: rec_name, record: true, line: line, col: col],
+            name_ast,
+            open_token,
+            state,
+            close_token,
+            []
+          )
 
         ast = {:function_call, meta, []}
         {ast, state}
@@ -3603,10 +3619,17 @@ defmodule Cure.Compiler.Parser do
             probe_state = skip_newlines(probe_state)
             {fields, probe_state} = parse_map_pairs(probe_state, :rbrace)
             probe_state = close_record_layout(probe_state, layout?)
-            probe_state = expect(probe_state, :rbrace)
+            {probe_state, close_token} = expect_token_or_nil(probe_state, :rbrace)
 
             meta =
-              put_record_source_info([name: rec_name, line: line, col: col], name_ast, open_token, probe_state, fields)
+              put_record_source_info(
+                [name: rec_name, line: line, col: col],
+                name_ast,
+                open_token,
+                probe_state,
+                close_token,
+                fields
+              )
 
             ast = {:record_update, meta, [base_expr | fields]}
             {ast, probe_state}
@@ -3616,7 +3639,7 @@ defmodule Cure.Compiler.Parser do
             state = %{state | pos: saved_pos, errors: saved_errors}
             {fields, state} = parse_map_pairs(state, :rbrace)
             state = close_record_layout(state, layout?)
-            state = expect(state, :rbrace)
+            {state, close_token} = expect_token_or_nil(state, :rbrace)
 
             meta =
               put_record_source_info(
@@ -3624,6 +3647,7 @@ defmodule Cure.Compiler.Parser do
                 name_ast,
                 open_token,
                 state,
+                close_token,
                 fields
               )
 
@@ -3636,9 +3660,8 @@ defmodule Cure.Compiler.Parser do
   defp close_record_layout(state, true), do: state |> skip_newlines() |> expect_dedent() |> skip_newlines()
   defp close_record_layout(state, false), do: state
 
-  defp put_record_source_info(meta, name_ast, open_token, state, fields) do
+  defp put_record_source_info(meta, name_ast, open_token, _state, close_token, fields) do
     name_span = first_node_source_span(name_ast)
-    close_token = last_authored_token(state)
 
     whole =
       case {name_span || open_token.span, close_token} do
