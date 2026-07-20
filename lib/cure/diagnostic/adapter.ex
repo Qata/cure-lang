@@ -401,6 +401,30 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:constructor_arity_mismatch, name}, opts) do
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Constructor arity mismatch",
+      body: Doc.paragraph("Constructor `#{name_to_string(name)}` was used with the wrong number of arguments."),
+      primary: primary_label(opts, "provide the arguments required by this constructor"),
+      payload: %{kind: :constructor, constructor: name_to_string(name)}
+    )
+  end
+
+  def from_error({:tuple_arity_mismatch, direction, details}, opts) do
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Tuple arity mismatch",
+      body: Doc.paragraph("This tuple pattern has the wrong number of elements (#{direction})."),
+      primary: primary_label(opts, "make the tuple pattern match the value's arity"),
+      payload: %{kind: :tuple, direction: direction, details: details}
+    )
+  end
+
   def from_error({:extern_untyped_head, message, meta}, opts) when is_binary(message) and is_list(meta) do
     Diagnostic.new(
       code: "E056",

@@ -447,6 +447,9 @@ defmodule Cure.Compiler.Errors do
        when is_integer(declared) and is_integer(present),
        do: true
 
+  defp structured_error?({:constructor_arity_mismatch, _name}), do: true
+  defp structured_error?({:tuple_arity_mismatch, _direction, _details}), do: true
+
   defp structured_error?({:extern_untyped_head, _message, meta}) when is_list(meta), do: true
   defp structured_error?({:extern_has_body, _message, meta}) when is_list(meta), do: true
   defp structured_error?({:unknown_record, _name}), do: true

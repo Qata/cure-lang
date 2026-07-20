@@ -236,6 +236,18 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":extern_arity_mismatch"
   end
 
+  test "renders constructor and tuple pattern arity failures as structured diagnostics" do
+    constructor = Host.render({:constructor_arity_mismatch, :Some}, "pattern.cure")
+    tuple = Host.render({:tuple_arity_mismatch, :too_many, {:tuple, 3}}, "pattern.cure")
+
+    assert constructor =~ "[E003]"
+    assert constructor =~ "Some"
+    assert tuple =~ "[E003]"
+    assert tuple =~ "too_many"
+    refute constructor =~ ":constructor_arity_mismatch"
+    refute tuple =~ ":tuple_arity_mismatch"
+  end
+
   test "renders operator declaration conflicts" do
     rendered = Host.render({:builtin_operator_not_overloadable, :|>}, "demo.cure")
 
