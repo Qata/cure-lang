@@ -178,7 +178,7 @@ defmodule Cure.MCP.Server do
         "Compiled successfully: #{module}\nExports: #{exports}"
 
       {:error, reason} ->
-        "Compilation error: #{inspect(reason)}"
+        "Compilation error:\n" <> Cure.Diagnostic.Host.render(reason, "mcp.cure", source)
     end
   end
 
@@ -187,7 +187,7 @@ defmodule Cure.MCP.Server do
          {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
       summarize_ast(ast)
     else
-      {:error, reason} -> "Parse error: #{inspect(reason)}"
+      {:error, reason} -> "Parse error:\n" <> Cure.Diagnostic.Host.render(reason, "mcp.cure", source)
     end
   end
 
@@ -196,10 +196,10 @@ defmodule Cure.MCP.Server do
          {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
       case Cure.Elab.Program.check_ast(ast) do
         {:ok, _env} -> "Type check passed: no errors."
-        {:error, errors} -> "Type errors:\n" <> format_errors(errors)
+        {:error, errors} -> "Type errors:\n" <> Cure.Diagnostic.Host.render(errors, "mcp.cure", source)
       end
     else
-      {:error, reason} -> "Parse error: #{inspect(reason)}"
+      {:error, reason} -> "Parse error:\n" <> Cure.Diagnostic.Host.render(reason, "mcp.cure", source)
     end
   end
 
@@ -208,7 +208,7 @@ defmodule Cure.MCP.Server do
          {:ok, _ast} <- Parser.parse(tokens, emit_events: false) do
       "Syntax is valid. #{length(tokens)} tokens parsed."
     else
-      {:error, reason} -> "Syntax error: #{inspect(reason)}"
+      {:error, reason} -> "Syntax error:\n" <> Cure.Diagnostic.Host.render(reason, "mcp.cure", source)
     end
   end
 
@@ -245,13 +245,6 @@ defmodule Cure.MCP.Server do
   defp summarize_ast(_), do: "(expression)"
 
   # -- Error Formatting --------------------------------------------------------
-
-  defp format_errors(errors) when is_list(errors) do
-    Enum.map_join(errors, "\n", fn
-      {type, msg, _opts} -> "  #{type}: #{msg}"
-      other -> "  #{inspect(other)}"
-    end)
-  end
 
   # -- Syntax Help -------------------------------------------------------------
 
