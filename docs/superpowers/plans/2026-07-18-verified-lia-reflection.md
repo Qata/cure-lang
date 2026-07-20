@@ -54,15 +54,15 @@ and `zero_is_not_at_most_negative_one`. Its current scaling theorem is only for
 
 Prove the exact reusable signatures (names may follow existing module style):
 
-- [ ] left/right identity for `add_int`;
-- [ ] associativity and commutativity of `add_int`;
-- [ ] first-argument monotonicity;
-- [ ] two-sided addition monotonicity:
+- [x] left/right identity for `add_int`;
+- [x] associativity and commutativity of `add_int`;
+- [x] first-argument monotonicity;
+- [x] two-sided addition monotonicity:
   `a<=b -> c<=d -> a+c<=b+d`;
-- [ ] `scale_nat_int(0, x) = 0` and its successor equation;
-- [ ] monotonicity of `scale_nat_int(k, _, _)` for arbitrary signed operands;
-- [ ] distributive laws needed to move natural scaling through integer addition;
-- [ ] signed coefficient-application equations required by dot evaluation.
+- [x] `scale_nat_int(0, x) = 0` and its successor equation;
+- [x] monotonicity of `scale_nat_int(k, _, _)` for arbitrary signed operands;
+- [x] distributive laws needed to move natural scaling through integer addition;
+- [x] signed coefficient-application equations required by dot evaluation.
 
 The red probe must include a genuinely negative inequality, for example scaling
 `-2 <= 1`; a nonnegative-only fixture does not exercise the missing theorem.
