@@ -189,8 +189,7 @@ defmodule Cure.CLI do
           cmd_audit_trust(module, opts)
 
         ["audit" | _] ->
-          IO.puts(:stderr, "Usage: cure audit trust <Module> [--format text|json] [--strict] [--target <t>]")
-          exit({:shutdown, 1})
+          usage_error("Usage: cure audit trust <Module> [--format text|json] [--strict] [--target <t>]")
 
         ["migrate" | paths] ->
           case cmd_migrate(paths, opts) do
@@ -2291,7 +2290,7 @@ defmodule Cure.CLI do
   # A user-facing usage/lookup error that must fail the command: print to stderr
   # and exit non-zero, so `cure <misuse> && next` stops and CI wrappers see it.
   defp usage_error(msg) do
-    error(msg)
+    diagnostic(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.usage(msg)))
     exit({:shutdown, 1})
   end
 
