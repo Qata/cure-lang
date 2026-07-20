@@ -1391,6 +1391,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unit_type_reserved, name}, opts),
     do: macro_validation_failure(:unit_type_reserved, %{name: name}, opts)
 
+  def from_error({:unit_type_reserved, name, line, column}, opts),
+    do: macro_validation_failure(:unit_type_reserved, %{name: name, line: line, column: column}, opts)
+
   def from_error({:with_multi_proof_unsupported, message}, opts),
     do: contextual_type_failure(:with_multi_proof_unsupported, %{message: message}, opts)
 

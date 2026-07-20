@@ -6814,7 +6814,7 @@ defmodule Cure.Compiler.Parser do
           if name == "Unit" do
             {{:container, meta, [{:variable, [variant: true], "unit"}]}, state}
           else
-            state = add_error(state, {:unit_type_reserved, name})
+            state = add_error(state, {:unit_type_reserved, name, token.line, token.col})
             {{:container, meta, []}, state}
           end
 
