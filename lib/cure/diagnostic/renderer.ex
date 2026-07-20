@@ -2,7 +2,7 @@ defmodule Cure.Diagnostic.Renderer do
   @moduledoc "Human and machine renderers for the shared diagnostic model."
 
   alias Cure.Diagnostic
-  alias Cure.Diagnostic.{Doc, Label, SourceRegistry, Span, Suggestion, TextEdit}
+  alias Cure.Diagnostic.{Doc, Label, Snippet, SourceRegistry, Span, Suggestion, TextEdit}
 
   @default_width 80
 
@@ -33,16 +33,13 @@ defmodule Cure.Diagnostic.Renderer do
   end
 
   defp report_doc(%Diagnostic{} = diagnostic, registry, opts) do
-    secondary = Enum.map(diagnostic.secondary, &secondary_excerpt(&1, registry, opts))
     notes = Enum.map(diagnostic.notes, &Doc.note/1)
     suggestions = Enum.map(diagnostic.suggestions, &Doc.hint(&1.message))
 
     body =
       Doc.stack([
         diagnostic.body,
-        location_doc(diagnostic.primary, opts),
-        excerpt(diagnostic.primary, registry, diagnostic.severity),
-        Doc.stack(secondary),
+        evidence_doc(diagnostic, registry, opts),
         Doc.stack(notes),
         Doc.stack(suggestions),
         provenance_doc(diagnostic.provenance)
@@ -50,6 +47,14 @@ defmodule Cure.Diagnostic.Renderer do
 
     Doc.stack([Doc.emphasis(:banner, heading(diagnostic, opts)), body])
   end
+
+  defp evidence_doc(%Diagnostic{} = diagnostic, %SourceRegistry{} = registry, opts) do
+    diagnostic.primary
+    |> Snippet.plan(diagnostic.secondary, registry, opts)
+    |> Snippet.to_doc(diagnostic.severity, opts)
+  end
+
+  defp evidence_doc(%Diagnostic{} = diagnostic, nil, opts), do: location_doc(diagnostic.primary, opts)
 
   defp heading(%Diagnostic{} = diagnostic, opts) do
     width = Keyword.fetch!(opts, :width)
@@ -137,103 +142,12 @@ defmodule Cure.Diagnostic.Renderer do
     Doc.paragraph("at #{path}:#{span.start_line}:#{span.start_column}")
   end
 
-  defp excerpt(nil, _registry, _severity), do: Doc.empty()
-  defp excerpt(_label, nil, _severity), do: Doc.empty()
-
-  defp excerpt(%Label{span: %Span{} = span, message: message} = label, %SourceRegistry{} = registry, severity) do
-    lines = span.start_line..span.end_line
-
-    rendered =
-      Enum.map(lines, fn line_number ->
-        case SourceRegistry.line(registry, span, line_number) do
-          {:ok, source_line} -> render_excerpt_line(span, line_number, source_line, message, label.style, severity)
-          :error -> nil
-        end
-      end)
-      |> Enum.reject(&is_nil/1)
-
-    case rendered do
-      [] -> Doc.empty()
-      lines -> Doc.concat(Enum.intersperse(lines, Doc.line()))
-    end
-  end
-
-  defp render_excerpt_line(span, line_number, source_line, message, style, severity) do
-    start_column = if line_number == span.start_line, do: span.start_column, else: 1
-
-    end_column =
-      cond do
-        line_number == span.end_line -> span.end_column
-        true -> String.length(source_line) + 1
-      end
-
-    visual_start = visual_column(source_line, start_column)
-    visual_end = visual_column(source_line, end_column)
-    width = max(visual_end - visual_start, 1)
-    marker_character = if style == :secondary, do: "-", else: "^"
-    marker = String.duplicate(marker_character, width)
-    suffix = if line_number == span.end_line and message, do: " " <> message, else: ""
-    gutter = String.length(Integer.to_string(line_number))
-    marker_role = marker_role(style, severity)
-
-    Doc.concat([
-      Doc.code("#{line_number} | #{expand_tabs(source_line)}"),
-      Doc.line(),
-      Doc.text("#{String.duplicate(" ", gutter)} | #{String.duplicate(" ", visual_start - 1)}"),
-      Doc.emphasis(marker_role, marker),
-      Doc.text(suffix)
-    ])
-  end
-
-  @tab_width 4
-
-  defp visual_column(line, scalar_column) do
-    line
-    |> String.codepoints()
-    |> Enum.take(scalar_column - 1)
-    |> Enum.join()
-    |> Doc.display_width(1, tab_width: @tab_width)
-    |> Kernel.+(1)
-  end
-
-  defp expand_tabs(line) do
-    {parts, _column} =
-      line
-      |> String.codepoints()
-      |> Enum.map_reduce(1, fn
-        "\t", column ->
-          width = @tab_width - rem(column - 1, @tab_width)
-          {String.duplicate(" ", width), column + width}
-
-        codepoint, column ->
-          {codepoint, column + 1}
-      end)
-
-    IO.iodata_to_binary(parts)
-  end
-
-  defp secondary_excerpt(_label, nil, _opts), do: Doc.empty()
-
-  defp secondary_excerpt(%Label{} = label, %SourceRegistry{} = registry, opts) do
-    path = normalize_path(label.span.path, opts) || inspect(label.span.source_id)
-
-    Doc.concat([
-      Doc.paragraph("also at #{path}:#{label.span.start_line}:#{label.span.start_column}"),
-      Doc.line(),
-      excerpt(label, registry, :information)
-    ])
-  end
-
   defp provenance_doc([]), do: Doc.empty()
 
   defp provenance_doc(frames) do
     chain = Enum.map_join(frames, " -> ", &to_string(&1.name))
     Doc.paragraph("expansion: " <> chain)
   end
-
-  defp marker_role(:secondary, _severity), do: :secondary_marker
-  defp marker_role(:primary, :warning), do: :warning_marker
-  defp marker_role(:primary, _severity), do: :error_marker
 
   defp normalize_path(nil, _opts), do: nil
 

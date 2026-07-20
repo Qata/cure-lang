@@ -159,7 +159,7 @@ defmodule Cure.DiagnosticTest do
       )
 
     rendered = Renderer.plain(diagnostic, registry)
-    assert rendered =~ "also at src/token.cure:1:6"
+    assert rendered =~ "at src/token.cure:1:6"
     assert rendered =~ "1 | type Token = Token"
     assert rendered =~ "----- defined here"
   end
@@ -180,9 +180,9 @@ defmodule Cure.DiagnosticTest do
       )
 
     rendered = Renderer.plain(diagnostic, registry)
-    assert rendered =~ "1 | head\n  |   ^^"
-    assert rendered =~ "2 |     body\n  | ^^^^^^^^"
-    assert rendered =~ "3 | last\n  | ^^ whole expression"
+    assert rendered =~ "1 | head\n  >   ^^"
+    assert rendered =~ "2 |     body\n  > ^^^^^^^^"
+    assert rendered =~ "3 | last\n  > ^^ whole expression"
   end
 
   test "zero-width insertion spans still render one caret" do
