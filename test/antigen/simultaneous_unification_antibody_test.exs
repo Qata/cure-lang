@@ -89,7 +89,7 @@ defmodule Antigen.SimultaneousUnificationAntibodyTest do
   end
 
   test "CONTROL measure-checked: a tolerated-then-determined measure mismatch is rejected" do
-    assert {:error, {:index_mismatch, _}} = Program.elaborate(measure_src())
+    assert {:error, {:source_context, {:index_mismatch, _}, _}} = Program.elaborate(measure_src())
   end
 
   # CONTROL: `a` occurs in no index position (all indices concrete) — underdetermined.
@@ -101,6 +101,6 @@ defmodule Antigen.SimultaneousUnificationAntibodyTest do
   end
 
   test "CONTROL no-fabrication: an underdetermined implicit rejects, not fabricated" do
-    assert {:error, {:unsolved_metavariables, _}} = Program.elaborate(unsolvable_src())
+    assert {:error, {:source_context, {:unsolved_metavariables, _}, _}} = Program.elaborate(unsolvable_src())
   end
 end

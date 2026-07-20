@@ -37,8 +37,14 @@ defmodule Cure.Compiler.OperatorFlipTest do
 
     found =
       case payload do
-        list when is_list(list) -> Enum.find(list, &match?({^tag, _, _}, &1)) || Enum.find(list, &match?({^tag, _}, &1))
-        other -> if match?({^tag, _, _}, other) or match?({^tag, _}, other), do: other
+        list when is_list(list) ->
+          Enum.find(list, &match?({^tag, _, _}, &1)) || Enum.find(list, &match?({^tag, _}, &1))
+
+        {:source_context, reason, _context} ->
+          if match?({^tag, _, _}, reason) or match?({^tag, _}, reason), do: reason
+
+        other ->
+          if match?({^tag, _, _}, other) or match?({^tag, _}, other), do: other
       end
 
     assert found, "expected an #{inspect(tag)} error, got: #{inspect(payload)}"
@@ -109,6 +115,7 @@ defmodule Cure.Compiler.OperatorFlipTest do
       infix `|>` : Additive
     end
     """
+
     assert {:error, {:builtin_operator_not_overloadable, :|>}} = Cure.Elab.Program.elaborate(src)
   end
 

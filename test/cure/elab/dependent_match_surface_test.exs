@@ -37,7 +37,7 @@ defmodule Cure.Elab.DependentMatchSurfaceTest do
           empty() -> Z()
         """
 
-    assert {:error, {:missing_branch, :"Main#prepend"}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:missing_branch, :"Main#prepend"}, _}} = Program.elaborate(src)
   end
 
   # Pre-impl: {:error, :unknown_global} (impossible lexes as an identifier body).
@@ -87,6 +87,6 @@ defmodule Cure.Elab.DependentMatchSurfaceTest do
           prepend(x, rest) -> impossible
         """
 
-    assert {:error, {:reachable_impossible, :"Main#prepend"}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:reachable_impossible, :"Main#prepend"}, _}} = Program.elaborate(src)
   end
 end

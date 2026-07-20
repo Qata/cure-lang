@@ -14,7 +14,7 @@ defmodule Cure.Elab.StructEqErasureTest do
     end
     """
 
-    assert {:error, {:no_instance, :Equatable, {:rigid, 0}}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:no_instance, :Equatable, {:rigid, 0}}, _}} = Program.elaborate(src)
   end
 
   # With `where Equatable(t)`, the same comparison elaborates: `==` resolves to the

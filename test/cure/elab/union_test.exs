@@ -320,7 +320,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:missing_branch, _}} = Program.elaborate(src)
+      assert {:error, {:source_context, {:missing_branch, _}, _}} = Program.elaborate(src)
     end
 
     test "a branch naming a non-member is rejected" do
@@ -508,7 +508,7 @@ defmodule Cure.Elab.UnionTest do
       end
       """
 
-      assert {:error, {:unsupported_expression, {:lambda, _, _}}} = Program.elaborate(src)
+      assert {:error, {:source_context, {:unsupported_expression, {:lambda, _, _}}, _}} = Program.elaborate(src)
     end
 
     test "a nested match rebinding the sub-union arm's name is refused, not silently corrupted" do
@@ -537,7 +537,7 @@ defmodule Cure.Elab.UnionTest do
       # `:shadowed_tuple`, `:shadowed_catchall`, …) is refused here too, with an
       # honest, correctly-labelled diagnostic instead of a confusing downstream
       # type error.
-      assert {:error, {:unsupported_pattern, :shadowed_sub_union}} = Program.elaborate(src)
+      assert {:error, {:source_context, {:unsupported_pattern, :shadowed_sub_union}, _}} = Program.elaborate(src)
     end
 
     test "a lambda parameter rebinding the sub-union arm's name is refused, not silently corrupted" do
@@ -557,7 +557,7 @@ defmodule Cure.Elab.UnionTest do
       # rewritten to reference the OUTER Bool|Atom union value instead of the
       # lambda's own Bool parameter. Refused outright, for the same reason as
       # the nested-match case above.
-      assert {:error, {:unsupported_pattern, :shadowed_sub_union}} = Program.elaborate(src)
+      assert {:error, {:source_context, {:unsupported_pattern, :shadowed_sub_union}, _}} = Program.elaborate(src)
     end
   end
 

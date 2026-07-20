@@ -140,7 +140,7 @@ defmodule Cure.Elab.TypeShadowingTest do
     end
     """
 
-    assert {:error, {:shadowed_ctor, info}} = elaborate(src)
+    assert {:error, {:source_context, {:shadowed_ctor, info}, _}} = elaborate(src)
     assert info[:ctor] == :Z
     assert info[:shadowed_module] == "Std.Nat"
     assert info[:hint] == "Std.Nat.Z"

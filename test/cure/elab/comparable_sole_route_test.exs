@@ -17,7 +17,7 @@ defmodule Cure.Elab.ComparableSoleRouteTest do
     end
     """
 
-    assert {:error, {:no_instance, :Comparable, :"NC#Color"}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:no_instance, :Comparable, :"NC#Color"}, _}} = Program.elaborate(src)
   end
 
   test "`<` on an unconstrained abstract type variable is rejected" do
@@ -27,7 +27,7 @@ defmodule Cure.Elab.ComparableSoleRouteTest do
     end
     """
 
-    assert {:error, {:no_instance, :Comparable, {:rigid, 0}}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:no_instance, :Comparable, {:rigid, 0}}, _}} = Program.elaborate(src)
   end
 
   test "`<` on a `where Comparable(t)`-constrained variable elaborates" do

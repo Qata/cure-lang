@@ -55,7 +55,7 @@ defmodule Cure.Compiler.DotPatternParseTest do
     fn f() -> Nat = .x
     """
 
-    assert {:error, {:forced_pattern_not_in_pattern, _meta}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:forced_pattern_not_in_pattern, _meta}, _}} = Program.elaborate(src)
   end
 
   # (d) NON-REGRESSION: infix `.` (module paths) is unaffected. A bare module

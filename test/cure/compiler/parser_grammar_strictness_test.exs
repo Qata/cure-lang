@@ -8,8 +8,9 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
   swallowed *any* keyword. `impl Show when Int` parsed as `impl Show for Int`. No error
   was recorded, and since the keyword's value never reaches the AST, no later stage could
   notice the substitution either. `expect_keyword/2`, which checks both, already existed
-  and was already used elsewhere. Three sites now use it: `impl … for`,
-  `implementation … for`, and a supervisor child's `Module as child_id`.
+  and was already used elsewhere. The implementation forms still use it for `for`.
+  Supervisor children have since moved to source-defined syntax-family productions;
+  their literal `as` segment is checked by that grammar matcher instead.
 
   **Non-associativity that was never implemented.** The spec's operator table and
   `Precedence`'s moduledoc both say comparison, range, and the Melquiades send are
@@ -46,9 +47,15 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
                parse_raw("implementation Show when Int\n  fn show(x: Int) -> String = \"x\"\n")
     end
 
+    test "a supervisor child production rejects another keyword in place of `as`" do
+      assert {:error, _} =
+               parse_raw("sup App.Root\n  children\n    actor Counter when counter\n")
+    end
+
     test "the correct keyword still parses" do
       assert {:ok, _} = parse_raw("impl Show for Int\n  fn show(x: Int) -> String = \"x\"\n")
-      assert {:ok, _} = parse_raw("sup App.Root\n  children\n    Counter as counter\n")
+      assert {:ok, _} = parse_raw("sup App.Root\n  children\n    actor Counter as counter\n")
+      assert {:ok, _} = parse_raw("sup App.Root\n  children []\n")
     end
   end
 

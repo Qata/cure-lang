@@ -46,7 +46,7 @@ defmodule Cure.Elab.MutualRecursionTest do
   end
 
   test "an actually-unknown global is still rejected" do
-    assert {:error, {:unknown_global, :nope}} =
+    assert {:error, {:source_context, {:unknown_global, :nope, _}, _}} =
              Program.elaborate(@nat <> "  fn f(n: Nat) -> Nat = nope(n)\nend\n")
   end
 end

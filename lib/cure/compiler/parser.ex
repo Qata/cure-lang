@@ -1325,6 +1325,21 @@ defmodule Cure.Compiler.Parser do
         {values, state} = parse_family_production_entries(advance(state), grammar, [])
         {{:family_repeated_values, values}, expect_dedent(state)}
 
+      # `children []` is the explicit empty spelling for a structured repeated
+      # field. It predates syntax families and remains useful for deliberately
+      # childless supervisors; do not feed it to the row grammar, where `[` is
+      # correctly not the start of a production.
+      %Token{type: :lbracket} ->
+        case peek_at(state, 1) do
+          %Token{type: :rbracket} ->
+            {{:family_repeated_values, []}, advance_n(state, 2)}
+
+          _ ->
+            token = peek(state)
+            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+            {{:family_repeated_values, []}, state}
+        end
+
       _ ->
         case parse_family_production(state, grammar) do
           {:ok, value, state} ->

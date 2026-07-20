@@ -38,18 +38,24 @@ defmodule Cure.Compiler.MacroComputedTest do
       end
     end
 
-    assert {:computed_use,
-            [
-              keyword: "mk",
-              syntax_type: "MkSyntax",
-              syntax_fields: [],
-              syntax_repeated_fields: [],
-              syntax_field_types: %{},
-              file: "nofile",
-              line: _,
-              col: _
-            ], _} =
-             find.(find, node)
+    assert {:computed_use, meta, _} = find.(find, node)
+
+    assert Keyword.take(meta, [
+             :keyword,
+             :syntax_type,
+             :syntax_fields,
+             :syntax_repeated_fields,
+             :syntax_field_types,
+             :file
+           ]) ==
+             [
+               keyword: "mk",
+               syntax_type: "MkSyntax",
+               syntax_fields: [],
+               syntax_repeated_fields: [],
+               syntax_field_types: %{},
+               file: "nofile"
+             ]
   end
 
   test "computed rules can delimit one parsed code hole before a following literal" do
@@ -192,18 +198,25 @@ defmodule Cure.Compiler.MacroComputedTest do
       end
     end
 
-    assert {:computed_use,
-            [
-              keyword: "mk",
-              syntax_type: "MkSyntax",
-              syntax_fields: [],
-              syntax_repeated_fields: [],
-              syntax_field_types: %{},
-              file: "nofile",
-              line: _,
-              col: _
-            ], [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
+    assert {:computed_use, meta, [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
              find.(find, node)
+
+    assert Keyword.take(meta, [
+             :keyword,
+             :syntax_type,
+             :syntax_fields,
+             :syntax_repeated_fields,
+             :syntax_field_types,
+             :file
+           ]) ==
+             [
+               keyword: "mk",
+               syntax_type: "MkSyntax",
+               syntax_fields: [],
+               syntax_repeated_fields: [],
+               syntax_field_types: %{},
+               file: "nofile"
+             ]
   end
 
   test "a computed use preserves matched hole inputs in segment order" do

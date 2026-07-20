@@ -147,7 +147,7 @@ defmodule Cure.Elab.GuardLintTest do
           "    x when x < b -> Z()\n" <>
           "    x when x > b -> S(Z())\nend\n"
 
-      assert {:error, {:unsupported_guard, :non_exhaustive}} = Program.elaborate(src)
+      assert {:error, {:source_context, {:unsupported_guard, :non_exhaustive}, _}} = Program.elaborate(src)
     end
 
     test "semantically exhaustive but untranslatable guards still reject (K13 observable)" do
@@ -159,7 +159,7 @@ defmodule Cure.Elab.GuardLintTest do
           "    x when pos(x) -> Z()\n" <>
           "    x when nonpos(x) -> S(Z())\nend\n"
 
-      assert {:error, {:unsupported_guard, :non_exhaustive}} = Program.elaborate(src)
+      assert {:error, {:source_context, {:unsupported_guard, :non_exhaustive}, _}} = Program.elaborate(src)
     end
 
     test "a shadowed guard warns; the program still elaborates" do

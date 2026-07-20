@@ -82,7 +82,7 @@ defmodule Cure.Elab.RecordTest do
   end
 
   test "projecting an unknown field is rejected" do
-    assert {:error, {:unknown_field, :"M#Point", "z"}} =
+    assert {:error, {:source_context, {:unknown_field, :"M#Point", "z"}, _}} =
              Program.elaborate(@pt <> "  fn f(p: Point) -> Nat = p.z\nend\n")
   end
 
@@ -144,17 +144,17 @@ defmodule Cure.Elab.RecordTest do
   end
 
   test "updating a non-field is rejected" do
-    assert {:error, {:record_field_mismatch, :Point}} =
+    assert {:error, {:source_context, {:record_field_mismatch, :Point}, _}} =
              Program.elaborate(@pt <> "  fn f(p: Point) -> Point = Point{p | z: Z()}\nend\n")
   end
 
   test "a missing record field is rejected" do
-    assert {:error, {:record_field_mismatch, :Point}} =
+    assert {:error, {:source_context, {:record_field_mismatch, :Point}, _}} =
              Program.elaborate(@pt <> "  fn g() -> Point = Point{x: S(Z())}\nend\n")
   end
 
   test "an unknown record field is rejected" do
-    assert {:error, {:record_field_mismatch, :Point}} =
+    assert {:error, {:source_context, {:record_field_mismatch, :Point}, _}} =
              Program.elaborate(@pt <> "  fn g() -> Point = Point{x: S(Z()), z: Z()}\nend\n")
   end
 end
