@@ -43,12 +43,26 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert {:ok, ast} = Parser.parse(tokens, file: "demo.cure", emit_events: false, prelude_macros: false)
 
     {:function_def, meta, _body} = find_node(ast, :function_def)
+    function_info = Metadata.source_info(meta)
     {:variable, return_meta, "Int"} = Keyword.fetch!(meta, :return_type)
     [{:param, parameter_meta, "x"}] = Keyword.fetch!(meta, :params)
     {:variable, parameter_type_meta, "Int"} = Keyword.fetch!(parameter_meta, :type)
 
     assert slice(source, Metadata.source_info(return_meta).whole) == "Int"
     assert slice(source, Metadata.source_info(parameter_type_meta).whole) == "Int"
+    assert slice(source, function_info.annotation) == "Int"
+  end
+
+  test "parameter source info owns the authored annotation range" do
+    source = "fn answer({value: Int}, count :linear Nat) -> Int = count\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "params.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "params.cure", emit_events: false, prelude_macros: false)
+
+    {:function_def, meta, _body} = find_node(ast, :function_def)
+    [{:param, implicit_meta, "value"}, {:param, explicit_meta, "count"}] = Keyword.fetch!(meta, :params)
+
+    assert slice(source, Metadata.source_info(implicit_meta).annotation) == ": Int"
+    assert slice(source, Metadata.source_info(explicit_meta).annotation) == ":linear Nat"
   end
 
   test "type applications in annotations retain their closing delimiter" do

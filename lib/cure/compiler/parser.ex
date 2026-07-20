@@ -4409,7 +4409,7 @@ defmodule Cure.Compiler.Parser do
         _ -> "let binding"
       end
 
-    {grade, type_ann, state} = parse_binder_annotation(state, let_name, [:assign])
+    {grade, type_ann, state, annotation_span} = parse_binder_annotation(state, let_name, [:assign])
 
     # A grade attaches to a SIMPLE VARIABLE binder only. A destructuring `let` lowers
     # to a `case`, whose binders take their grades from the constructor's field
@@ -4432,6 +4432,7 @@ defmodule Cure.Compiler.Parser do
     meta = [let: true, line: token.line, col: token.col]
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
     meta = if grade, do: Keyword.put(meta, :grade, grade), else: meta
+    meta = if annotation_span, do: Keyword.put(meta, :source_info, %SourceInfo{annotation: annotation_span}), else: meta
 
     assignment = {:assignment, meta, [pattern, value]}
 
@@ -5664,14 +5665,27 @@ defmodule Cure.Compiler.Parser do
     case {fn_token.span, name_token.span, last_authored_token(state)} do
       {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = name_span, %Token{} = last} ->
         case Range.through(first, last) do
-          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name_span})
-          _ -> meta
+          {:ok, whole} ->
+            info = %SourceInfo{whole: whole, name: name_span, annotation: ast_source_span(return_type)}
+            Keyword.put(meta, :source_info, info)
+
+          _ ->
+            meta
         end
 
       _ ->
         meta
     end
   end
+
+  defp ast_source_span({_, meta, _}) when is_list(meta) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{whole: span} -> span
+      _ -> nil
+    end
+  end
+
+  defp ast_source_span(_), do: nil
 
   defp parse_fn_clauses(state) do
     state = skip_newlines(state)
@@ -5824,37 +5838,56 @@ defmodule Cure.Compiler.Parser do
   # `let` stops on `=`, because Idris's `letBinder` leaves the type optional even when
   # graded (`Idris/Parser.idr:821-824`) and `let_inferred/8` will synthesise it.
   defp parse_binder_annotation(state, name, stop_on \\ []) do
+    annotation_start = peek(state)
+
     case parse_grade(state) do
       {:none, state} ->
         case peek(state) do
           %Token{type: :colon} ->
             {type_ast, state} = parse_type_expr(advance(state))
-            {nil, type_ast, state}
+            {nil, type_ast, state, annotation_span(annotation_start, state)}
 
           _ ->
-            {nil, nil, state}
+            {nil, nil, state, nil}
         end
 
       {:unknown, bad, tok, state} ->
         # Consume the stray atom (already advanced past it) and name it, so the error
         # points at the grade rather than cascading onto the next real token.
-        {nil, nil, add_error(state, {:unknown_grade, bad, tok.line, tok.col})}
+        {nil, nil, add_error(state, {:unknown_grade, bad, tok.line, tok.col}), tok.span}
 
       {:grade, grade, state} ->
         cond do
           peek(state).type in stop_on ->
-            {grade, nil, state}
+            {grade, nil, state, annotation_span(annotation_start, state)}
 
           peek(state).type in @non_type_tokens ->
             tok = peek(state)
-            {grade, nil, add_error(state, {:grade_requires_type, name, grade, tok.line, tok.col})}
+
+            {grade, nil, add_error(state, {:grade_requires_type, name, grade, tok.line, tok.col}),
+             annotation_span(annotation_start, state)}
 
           true ->
             {type_ast, state} = parse_type_expr(state)
-            {grade, type_ast, state}
+            {grade, type_ast, state, annotation_span(annotation_start, state)}
         end
     end
   end
+
+  defp annotation_span(%Token{span: %Cure.Diagnostic.Span{} = first}, state) do
+    case last_authored_token(state) do
+      %Token{span: %Cure.Diagnostic.Span{} = last} ->
+        case Range.through(first, last) do
+          {:ok, span} -> span
+          _ -> nil
+        end
+
+      _ ->
+        first
+    end
+  end
+
+  defp annotation_span(_start, _state), do: nil
 
   defp put_binder_meta(meta, grade, type_ast) do
     meta = if type_ast, do: Keyword.put(meta, :type, type_ast), else: meta
@@ -5871,12 +5904,12 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    {grade, type_ast, state} = parse_binder_annotation(state, name)
+    {grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
 
     state = expect(state, :rbrace)
 
     meta = put_binder_meta([implicit: true], grade, type_ast)
-    {{:param, put_param_source_info(meta, start_token, name_token, state), name}, state}
+    {{:param, put_param_source_info(meta, start_token, name_token, state, annotation_span), name}, state}
   end
 
   defp parse_explicit_param(state) do
@@ -5918,7 +5951,7 @@ defmodule Cure.Compiler.Parser do
       end
 
     # Optional type annotation `: Type`, or a graded one `:g Type`.
-    {grade, type_ast, state} = parse_binder_annotation(state, name)
+    {grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
 
     # Optional default value: = expr
     {default, state} =
@@ -5938,15 +5971,18 @@ defmodule Cure.Compiler.Parser do
     param_meta = if default, do: Keyword.put(param_meta, :default, default), else: param_meta
     param_meta = if kind != :positional, do: Keyword.put(param_meta, :kind, kind), else: param_meta
 
-    {{:param, put_param_source_info(param_meta, start_token, name_token, state), name}, state}
+    {{:param, put_param_source_info(param_meta, start_token, name_token, state, annotation_span), name}, state}
   end
 
-  defp put_param_source_info(meta, %Token{} = start_token, %Token{} = name_token, state) do
+  defp put_param_source_info(meta, %Token{} = start_token, %Token{} = name_token, state, annotation_span) do
     case {start_token.span, name_token.span, last_authored_token(state)} do
       {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = name_span, %Token{} = last} ->
         case Range.through(first, last) do
-          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name_span})
-          _ -> meta
+          {:ok, whole} ->
+            Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name_span, annotation: annotation_span})
+
+          _ ->
+            meta
         end
 
       _ ->
