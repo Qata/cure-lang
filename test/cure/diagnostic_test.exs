@@ -314,4 +314,10 @@ defmodule Cure.DiagnosticTest do
     assert Cure.Diagnostic.Operational.usage("bad args").code == "E099"
     assert Cure.Diagnostic.Operational.artifact_error("missing").code == "E100"
   end
+
+  test "codegen-wrapped unknown globals remain structured" do
+    rendered = Cure.Compiler.Errors.format_error({:codegen_error, {:unknown_global, :Missing}}, "demo.cure")
+    assert rendered =~ "E091"
+    refute rendered =~ "{:unknown_global"
+  end
 end

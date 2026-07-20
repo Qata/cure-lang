@@ -11,6 +11,8 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:error, reason}, opts), do: from_error(reason, opts)
 
+  def from_error({:codegen_error, reason}, opts), do: from_error(reason, opts)
+
   def from_error({:unknown_global, name}, opts),
     do: unknown_name(:value, name, opts)
 
