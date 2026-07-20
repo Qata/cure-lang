@@ -3647,10 +3647,10 @@ defmodule Cure.Compiler.Parser do
 
     field_spans =
       Enum.reduce(fields, %{}, fn
-        {:pair, pair_meta, _pair_children}, acc ->
+        {:pair, pair_meta, [key | _]}, acc ->
           case Metadata.source_info(pair_meta) do
             %SourceInfo{name: %Cure.Diagnostic.Span{} = field} ->
-              Map.put(acc, source_span_text(pair_meta), field)
+              Map.put(acc, field_name(key), field)
 
             _ ->
               acc
@@ -3671,10 +3671,6 @@ defmodule Cure.Compiler.Parser do
     else
       meta
     end
-  end
-
-  defp source_span_text(meta) do
-    Keyword.get(meta, :field, Keyword.get(meta, :name, :unknown))
   end
 
   defp is_pascal_case?({:variable, _, <<first, _rest::binary>>}) when first in ?A..?Z, do: true
@@ -3868,7 +3864,7 @@ defmodule Cure.Compiler.Parser do
         state = advance(state) |> advance()
         state = skip_newlines(state)
         {value, state} = parse_expr(state, 0)
-        pair_meta = put_field_source_info([field: key_atom], token, state, token.span)
+        pair_meta = put_field_source_info([], token, state, token.span)
         pair = {:pair, pair_meta, [{:literal, [subtype: :symbol], key_atom}, value]}
         {pair, state}
 
@@ -3881,7 +3877,7 @@ defmodule Cure.Compiler.Parser do
         key_atom = String.to_atom(token.value)
         var_ast = variable(token)
         state = advance(state)
-        pair_meta = put_field_source_info([pun: true, field: key_atom], token, state, token.span)
+        pair_meta = put_field_source_info([pun: true], token, state, token.span)
         pair = {:pair, pair_meta, [{:literal, [subtype: :symbol], key_atom}, var_ast]}
         {pair, state}
 
