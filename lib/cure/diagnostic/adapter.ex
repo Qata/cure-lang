@@ -176,6 +176,30 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:extern_untyped_head, message, meta}, opts) when is_binary(message) and is_list(meta) do
+    Diagnostic.new(
+      code: "E056",
+      key: :extern_untyped_head,
+      severity: :error,
+      title: "@extern declaration missing a typed head",
+      message: message,
+      primary: primary_label(opts, "add parameter and return type annotations"),
+      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
+    )
+  end
+
+  def from_error({:extern_has_body, message, meta}, opts) when is_binary(message) and is_list(meta) do
+    Diagnostic.new(
+      code: "E057",
+      key: :extern_has_body,
+      severity: :error,
+      title: "@extern declaration has a body",
+      message: message,
+      primary: primary_label(opts, "remove the body from this extern declaration"),
+      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
+    )
+  end
+
   def from_error({:ambiguous_name, name, modules}, opts) when is_list(modules) do
     spelling = name_to_string(name)
     owners = Enum.map(modules, &name_to_string/1)
