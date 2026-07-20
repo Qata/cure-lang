@@ -31,7 +31,7 @@ defmodule Cure.Compiler.SourceSpans do
       case own do
         %Span{} ->
           span = expand_construct(tag, meta, span, context)
-          {attach_metadata(meta, tag, span, context), span}
+          {attach_metadata(meta, tag, span, context, direct_child_spans(payload)), span}
 
         nil ->
           {meta, span}
@@ -111,7 +111,7 @@ defmodule Cure.Compiler.SourceSpans do
 
   defp merge_spans(_right, left), do: left
 
-  defp attach_metadata(meta, tag, span, context) do
+  defp attach_metadata(meta, tag, span, context, child_spans) do
     info = Metadata.source_info(meta) || %SourceInfo{}
     info = %{info | whole: span}
 
@@ -131,6 +131,8 @@ defmodule Cure.Compiler.SourceSpans do
         nil -> info
       end
 
+    info = role_spans(info, tag, meta, child_spans)
+
     case name_span(meta, span, context) do
       nil ->
         put_source_info(meta, info)
@@ -142,6 +144,68 @@ defmodule Cure.Compiler.SourceSpans do
         put_source_info(meta, %{info | name: name_span})
     end
   end
+
+  defp role_spans(info, :function_call, _meta, child_spans),
+    do: %{info | arguments: child_spans}
+
+  defp role_spans(info, :remote_call, _meta, child_spans),
+    do: %{info | arguments: child_spans}
+
+  defp role_spans(info, :binary_op, _meta, child_spans),
+    do: %{info | operands: child_spans}
+
+  defp role_spans(info, :unary_op, _meta, child_spans),
+    do: %{info | operands: child_spans}
+
+  defp role_spans(info, :function_def, meta, child_spans) do
+    info
+    |> maybe_role(:annotation, metadata_value_span(meta, :return_type))
+    |> maybe_role(:guard, metadata_value_span(meta, :guards))
+    |> maybe_role(:body, List.last(child_spans))
+  end
+
+  defp role_spans(info, :match_arm, meta, child_spans) do
+    info
+    |> maybe_role(:pattern, metadata_value_span(meta, :pattern))
+    |> maybe_role(:guard, metadata_value_span(meta, :guard))
+    |> maybe_role(:body, List.last(child_spans))
+  end
+
+  defp role_spans(info, _tag, _meta, _child_spans), do: info
+
+  defp metadata_value_span(meta, key) do
+    case Keyword.get(meta, key) do
+      value when is_tuple(value) -> Metadata.source_info(elem(value, 1)) |> source_whole()
+      values when is_list(values) -> Enum.find_value(values, &metadata_value_span_value/1)
+      _ -> nil
+    end
+  end
+
+  defp metadata_value_span_value(value) when is_tuple(value),
+    do: Metadata.source_info(elem(value, 1)) |> source_whole()
+
+  defp metadata_value_span_value(_), do: nil
+
+  defp source_whole(%SourceInfo{whole: span}), do: span
+  defp source_whole(_), do: nil
+
+  defp maybe_role(info, _field, nil), do: info
+  defp maybe_role(info, field, span), do: Map.put(info, field, span)
+
+  defp direct_child_spans(payload) when is_list(payload) do
+    Enum.flat_map(payload, fn
+      {_, meta, _} when is_list(meta) ->
+        case Metadata.source_info(meta) do
+          %SourceInfo{whole: %Span{} = span} -> [span]
+          _ -> []
+        end
+
+      _ ->
+        []
+    end)
+  end
+
+  defp direct_child_spans(_), do: []
 
   defp put_source_info(meta, %SourceInfo{} = info) do
     # Keep the parser's existing line/column fields available during the

@@ -25,6 +25,7 @@ defmodule Cure.Compiler.SourceSpansTest do
     call_info = Metadata.source_info(call_meta)
     assert slice(source, call_info.callee) == "helper"
     assert slice(source, call_info.whole) == "helper(x)"
+    assert Enum.map(call_info.arguments, &slice(source, &1)) == ["x"]
     assert Enum.all?(elem(call, 2), fn child -> match?({_, meta, _} when is_list(meta), child) end)
   end
 
@@ -65,7 +66,9 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert {:ok, ast} = Parser.parse(tokens, file: "demo.cure", emit_events: false, prelude_macros: false)
 
     binary = find_node(ast, :binary_op)
-    assert slice(source, Metadata.source_info(elem(binary, 1)).operator) == "+"
+    binary_info = Metadata.source_info(elem(binary, 1))
+    assert slice(source, binary_info.operator) == "+"
+    assert Enum.map(binary_info.operands, &slice(source, &1)) == ["1", "2"]
 
     for {tag, expected} <- [
           {:list, "[1, 2]"},
