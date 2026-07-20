@@ -126,6 +126,17 @@ defmodule Cure.Diagnostic.HostTest do
     assert splice =~ "quote"
   end
 
+  test "converts aggregate type errors through the contextual type family" do
+    rendered =
+      Host.render(
+        {:type_error, [{:type_mismatch, "expected Int, found String", [line: 1, col: 1]}]},
+        "demo.cure"
+      )
+
+    assert rendered =~ "[E093]"
+    assert rendered =~ "expected Int, found String"
+  end
+
   test "does not fall through to legacy formatting for an unregistered reason" do
     rendered = Host.render({:unregistered_compiler_reason, :detail}, "demo.cure")
 

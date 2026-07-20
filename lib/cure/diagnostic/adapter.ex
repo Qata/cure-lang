@@ -22,6 +22,24 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:error, reason}, opts), do: from_error(reason, opts)
 
+  def from_error({:type_error, errors}, opts) when is_list(errors) do
+    from_error(errors, opts)
+  end
+
+  def from_error([reason | _], opts), do: from_error(reason, opts)
+
+  def from_error([], opts) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Type mismatch",
+      body: Doc.paragraph("The type checker reported an unsatisfied constraint without further detail."),
+      primary: primary_label(opts, "this expression does not satisfy its type constraints"),
+      payload: %{errors: []}
+    )
+  end
+
   def from_error({:type_mismatch, message, meta}, opts) when is_binary(message) and is_list(meta) do
     Diagnostic.new(
       code: "E093",
