@@ -46,15 +46,53 @@ defmodule Cure.Diagnostic.Registry do
 
   alias Cure.Diagnostic.Registry.Entry
 
-  @retired ~w[E015 E018]
-  @operational ~w[E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
+  @retired ~w[E001 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E064 E071 E072 E073 E074 E075 E079 E080 E085 H083 H084 W081 W082]
+  @operational ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
   @retirement_reasons %{
+    "E001" => "No first-party producer remains; contextual E093 is the active type-mismatch path.",
+    "E004" => "No first-party producer remains; match coverage is not emitted as this catalog code.",
+    "E005" => "No first-party producer remains; guard constraints are reported through contextual checking.",
+    "E006" => "No first-party producer remains; effect failures use contextual checking diagnostics.",
+    "E007" => "No first-party producer remains; unused-variable analysis is not emitted by the compiler.",
+    "E009" => "No first-party producer remains; unreachable-clause analysis is not emitted by the compiler.",
+    "E010" => "No first-party producer remains; effect annotations are checked contextually.",
+    "E012" => "No first-party producer remains; sigma failures use dependent type diagnostics.",
     "E015" => "The former error path was consolidated into the contextual declaration diagnostics.",
-    "E018" => "The former error path was consolidated into the contextual declaration diagnostics."
+    "E016" => "No first-party producer remains; dependent mismatches use contextual E093 diagnostics.",
+    "E017" => "No first-party producer remains; equality failures use contextual E093 diagnostics.",
+    "E018" => "The former error path was consolidated into the contextual declaration diagnostics.",
+    "E019" => "No first-party producer remains; implicit failures use E011.",
+    "E020" => "No first-party producer remains; doctest reporting is not emitted by the compiler.",
+    "E023" => "No first-party producer remains; map-pattern keys are rejected by generic syntax handling.",
+    "E024" => "No first-party producer remains; pin failures are not emitted as this catalog code.",
+    "E025" => "No first-party producer remains; nested coverage is not emitted as this catalog code.",
+    "E027" => "No first-party producer remains; assert_type failures use contextual E093 diagnostics.",
+    "E028" => "No first-party producer remains; record defaults use contextual type checking.",
+    "E029" => "No first-party producer remains; mutual-recursion structural checks are not emitted as this code.",
+    "E031" => "No first-party producer remains; binary coverage is not emitted as this catalog code.",
+    "E032" => "No first-party producer remains; unreachable match clauses are not emitted as this code.",
+    "E033" => "No first-party producer remains; branch joins use contextual E093 diagnostics.",
+    "E034" => "No first-party producer remains; let-pattern coverage is not emitted as this code.",
+    "E036" => "No first-party producer remains; binary comprehension failures use generic syntax handling.",
+    "E037" => "No first-party producer remains; binary segment failures use generic type checking.",
+    "E064" => "No first-party producer remains; monomorphisation budget warnings are not emitted.",
+    "E071" => "No first-party producer remains; function payload failures use name/type diagnostics.",
+    "E072" => "No first-party producer remains; multiline type layout failures use syntax diagnostics.",
+    "E073" => "No first-party producer remains; empty pickup blocks use E076.",
+    "E074" => "No first-party producer remains; nullary pattern failures use pattern diagnostics.",
+    "E075" => "No first-party producer remains; constructor arity failures use contextual checking.",
+    "E079" => "No first-party producer remains; pickup guards use contextual E093 diagnostics.",
+    "E080" => "No first-party producer remains; pickup branch joins use contextual E093 diagnostics.",
+    "E085" => "The legacy if migration is emitted as a migration event, not a compiler diagnostic.",
+    "H083" => "Formatter normalization is not emitted as a diagnostic code.",
+    "H084" => "Formatter normalization is not emitted as a diagnostic code.",
+    "W081" => "No first-party producer remains; pickup reachability warnings are not emitted.",
+    "W082" => "No first-party producer remains; pickup reachability warnings are not emitted."
   }
   @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 W086 W088]
   @catalog_cases %{
     "E002" => :unbound_variable,
+    "E008" => :undocumented_public_function,
     "E003" => :arity_mismatch,
     "E011" => :missing_implicit,
     "E013" => :totality_failure,
@@ -233,7 +271,7 @@ defmodule Cure.Diagnostic.Registry do
   defp converter_function(_code), do: :format_error
 
   defp producers(code)
-       when code in ~w[E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002],
+       when code in ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002],
        do: [:operational]
 
   defp producers(code) when code in ~w[E011 E014], do: [:elaboration]
@@ -254,6 +292,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E093"), do: [:elaboration, :kernel_conversion]
   defp producers("E094"), do: [:lexer, :parser]
   defp producers("E101"), do: [:operational]
+  defp producers("E008"), do: [:doctor]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
   defp producers(_code), do: [:compiler_errors]

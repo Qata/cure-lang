@@ -31,6 +31,7 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:hash_mismatch, detail}, _opts), do: registry_hash_mismatch(detail)
   def from_error({:package_not_found, name}, _opts), do: registry_package_not_found(name)
   def from_error({:version_conflict, name, constraints}, _opts), do: package_version_conflict(name, constraints)
+  def from_error({:undocumented_public_function, file, line}, _opts), do: undocumented_public_function(file, line)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
@@ -141,6 +142,18 @@ defmodule Cure.Diagnostic.Operational do
         package: name,
         constraints: constraints
       })
+
+  def undocumented_public_function(file, line) do
+    Diagnostic.new(
+      code: "E008",
+      key: :undocumented_public_function,
+      severity: :information,
+      title: "Undocumented public function",
+      message: "Public function on line #{line} in #{file} has no ## doc comment.",
+      payload: %{file: file, line: line},
+      notes: ["Prepend a `##` doc comment describing the function."]
+    )
+  end
 
   @doc "Build E101 only for a caught exception at an explicit compiler boundary."
   def internal_exception(exception, stacktrace, opts \\ []) when is_exception(exception) and is_list(stacktrace) do
