@@ -175,7 +175,7 @@ defmodule Cure.LSP.Server do
     docs = Map.get(state, :documents, %{})
     state = Map.put(state, :documents, Map.put(docs, uri, text))
 
-    diagnostics = compute_diagnostics(uri, text)
+    diagnostics = compute_diagnostics(uri, text, Map.get(state, :position_encoding, :utf16))
     publish_diagnostics(uri, diagnostics)
 
     {state, diagnostics}
@@ -204,7 +204,7 @@ defmodule Cure.LSP.Server do
       # Same version, skip diagnostics
       {state, []}
     else
-      diagnostics = compute_diagnostics(uri, text)
+      diagnostics = compute_diagnostics(uri, text, Map.get(state, :position_encoding, :utf16))
       publish_diagnostics(uri, diagnostics)
 
       # Update cache
@@ -387,16 +387,16 @@ defmodule Cure.LSP.Server do
   # -- Diagnostics -------------------------------------------------------------
 
   @doc false
-  def compute_diagnostics(uri, text) do
+  def compute_diagnostics(uri, text, encoding \\ :utf16) do
     case Lexer.tokenize(text, emit_events: false) do
       {:ok, tokens} ->
         case Parser.parse(tokens, emit_events: false) do
           {:ok, _ast} -> []
-          {:error, errors} -> Enum.map(errors, &source_diagnostic(&1, uri, text))
+          {:error, errors} -> Enum.map(errors, &source_diagnostic(&1, uri, text, encoding))
         end
 
       {:error, reason} ->
-        [source_diagnostic(reason, uri, text)]
+        [source_diagnostic(reason, uri, text, encoding)]
     end
   end
 
@@ -405,9 +405,9 @@ defmodule Cure.LSP.Server do
     Cure.Diagnostic.Renderer.lsp(diagnostic, registry, encoding)
   end
 
-  defp source_diagnostic(error, uri, source) do
+  defp source_diagnostic(error, uri, source, encoding) do
     {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, uri, source)
-    diagnostic_to_lsp(diagnostic, registry)
+    diagnostic_to_lsp(diagnostic, registry, encoding)
   end
 
   defp negotiate_position_encoding(params) do

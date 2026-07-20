@@ -269,6 +269,10 @@ defmodule Cure.DiagnosticTest do
     refute Diagnostic.message(diagnostic) =~ "{:unknown_global"
     assert Renderer.plain(diagnostic) =~ "edit the `actor`"
     assert Renderer.plain(diagnostic) =~ "declaration instead"
+
+    machine = Jason.decode!(Renderer.json(diagnostic))
+    assert machine["payload"]["cause"]["code"] == "E091"
+    assert machine["body"]["kind"] == "paragraph"
   end
 
   test "compiler presentation attaches a real caret to an authored macro failure" do

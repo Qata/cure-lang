@@ -286,11 +286,19 @@ defmodule Cure.Diagnostic.Renderer do
   defp lsp_severity(:information), do: 3
   defp lsp_severity(:hint), do: 4
 
+  defp stringify_keys(%Diagnostic{} = diagnostic), do: to_map(diagnostic)
+  defp stringify_keys(%Span{} = span), do: span_map(span)
+
+  defp stringify_keys(%{__struct__: _module} = value) do
+    value |> Map.from_struct() |> stringify_keys()
+  end
+
   defp stringify_keys(map) when is_map(map) do
     Map.new(map, fn {key, value} -> {to_string(key), stringify_keys(value)} end)
   end
 
   defp stringify_keys(list) when is_list(list), do: Enum.map(list, &stringify_keys/1)
+  defp stringify_keys(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> Enum.map(&stringify_keys/1)
   defp stringify_keys(value) when is_atom(value), do: Atom.to_string(value)
   defp stringify_keys(value), do: value
 end
