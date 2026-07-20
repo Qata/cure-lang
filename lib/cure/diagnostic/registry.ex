@@ -35,7 +35,7 @@ defmodule Cure.Diagnostic.Registry do
   alias Cure.Diagnostic.Registry.Entry
 
   @retired ~w[E015 E018]
-  @structured ~w[E068 E070 E091 E092 E093 E094 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
+  @structured ~w[E035 E063 E068 E070 E091 E092 E093 E094 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
   @catalog_cases %{
     "E068" => :export_unmappable,
     "E070" => :snap_missing,

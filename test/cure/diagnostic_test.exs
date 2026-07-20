@@ -67,7 +67,7 @@ defmodule Cure.DiagnosticTest do
     {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
 
     assert diagnostic.primary.span.end_column - diagnostic.primary.span.start_column == 2
-    assert Renderer.plain(diagnostic, registry) =~ "^^ unexpected syntax here"
+    assert Renderer.plain(diagnostic, registry) =~ "^^ this syntax does not fit here"
 
     assert Renderer.terminal(diagnostic, registry, color: true) =~
              IO.ANSI.red() <> "^^" <> IO.ANSI.reset()
@@ -80,7 +80,7 @@ defmodule Cure.DiagnosticTest do
 
     assert diagnostic.primary.span.end_byte - diagnostic.primary.span.start_byte == 2
     assert binary_part(source, diagnostic.primary.span.start_byte, 2) == "=>"
-    assert Renderer.plain(diagnostic, registry) =~ "^^ unexpected syntax here"
+    assert Renderer.plain(diagnostic, registry) =~ "^^ this syntax does not fit here"
   end
 
   test "LSP positions count UTF-16 code units rather than Unicode scalars" do
@@ -151,6 +151,36 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.payload.actual_surface == "Bool"
     assert diagnostic.payload.expected_core == inspect(expected)
     assert Renderer.plain(diagnostic, registry) =~ "this expression has the wrong type"
+  end
+
+  test "type mismatch prose follows its expectation origin", %{registry: registry, span: span} do
+    annotation_origin = %Cure.Diagnostic.ExpectationOrigin{kind: :annotation, span: span}
+    condition_origin = %Cure.Diagnostic.ExpectationOrigin{kind: :condition}
+
+    annotation =
+      Adapter.from_error(%Cure.Diagnostic.TypeProblem{
+        kind: :type_mismatch,
+        actual: "String",
+        expected: "Int",
+        origin: annotation_origin,
+        span: span
+      })
+
+    condition =
+      Adapter.from_error(%Cure.Diagnostic.TypeProblem{
+        kind: :type_mismatch,
+        actual: "Int",
+        expected: "Bool",
+        origin: condition_origin,
+        span: span
+      })
+
+    assert annotation.title == "Annotation does not match"
+    assert Renderer.plain(annotation, registry) =~ "type written in its annotation"
+    assert condition.title == "Condition is not boolean"
+    assert Renderer.plain(condition, registry) =~ "condition must produce `Bool`"
+    assert Renderer.terminal(condition, registry, color: :always) =~ IO.ANSI.green() <> "Bool"
+    assert condition.payload.actual_core == inspect("Int")
   end
 
   test "plain rendering includes cross-file secondary labels", %{registry: registry, span: span} do

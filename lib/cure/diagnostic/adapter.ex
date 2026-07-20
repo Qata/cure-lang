@@ -2,7 +2,18 @@ defmodule Cure.Diagnostic.Adapter do
   @moduledoc "Converts phase-specific and legacy error values into shared diagnostics."
 
   alias Cure.Diagnostic
-  alias Cure.Diagnostic.{Label, ProvenanceFrame, Span, Suggestion}
+
+  alias Cure.Diagnostic.{
+    Doc,
+    ExpectationOrigin,
+    Label,
+    ProvenanceFrame,
+    Span,
+    Suggestion,
+    SyntaxProblem,
+    TextEdit,
+    TypeProblem
+  }
 
   @unknown_name_code "E091"
 
@@ -66,6 +77,175 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_member, module, name}, opts),
     do: unknown_name(:member, "#{module}.#{name}", Keyword.put(opts, :owner, module))
 
+  def from_error({:unbound_variable, message, meta}, opts) when is_binary(message) and is_list(meta) do
+    Diagnostic.new(
+      code: "E002",
+      key: :unbound_variable,
+      severity: :error,
+      title: "Unbound variable",
+      message: message,
+      primary: primary_label(opts, "this variable is not bound here"),
+      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
+    )
+  end
+
+  def from_error({:arity_mismatch, message, meta}, opts) when is_binary(message) and is_list(meta) do
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Arity mismatch",
+      message: message,
+      primary: primary_label(opts, "the number of arguments does not match"),
+      payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
+    )
+  end
+
+  def from_error({:ambiguous_name, name, modules}, opts) when is_list(modules) do
+    spelling = name_to_string(name)
+    owners = Enum.map(modules, &name_to_string/1)
+
+    Diagnostic.new(
+      code: "E089",
+      key: :ambiguous_name,
+      severity: :error,
+      title: "Ambiguous name",
+      message: "`#{spelling}` is provided by more than one imported module.",
+      primary: primary_label(opts, "qualification is required here"),
+      suggestions: [
+        %Suggestion{
+          message: "Qualify the name as #{Enum.map_join(owners, " or ", &"`#{&1}.#{spelling}`")}",
+          applicability: :manual
+        }
+      ],
+      payload: %{namespace: :value, name: spelling, owners: owners}
+    )
+  end
+
+  def from_error({:duplicate_module, name, paths}, opts) when is_list(paths) do
+    Diagnostic.new(
+      code: "E087",
+      key: :duplicate_module,
+      severity: :error,
+      title: "Duplicate module",
+      message: "Module `#{name_to_string(name)}` is declared by more than one file: #{Enum.join(paths, ", ")}.",
+      primary: primary_label(opts, "one declaration is here"),
+      payload: %{module: name_to_string(name), paths: paths}
+    )
+  end
+
+  def from_error({:import_cycle, hops}, opts) when is_list(hops) do
+    chain = Enum.map_join(hops, " -> ", fn hop -> "#{hop.module} (#{hop.path}:#{hop.line})" end)
+
+    Diagnostic.new(
+      code: "W086",
+      key: :import_cycle,
+      severity: :warning,
+      title: "Import cycle",
+      message: "This warning means the modules form a `use` cycle: #{chain}.",
+      primary: primary_label(opts, "the cycle begins here"),
+      notes: ["Cycle members compile together in deterministic order; qualify cross-module calls when order matters."],
+      payload: %{hops: hops}
+    )
+  end
+
+  def from_error({:unresolved_import, name, arity, imports, line}, opts) when is_list(imports) do
+    spelling = name_to_string(name)
+    modules = Enum.map(imports, &name_to_string/1)
+
+    Diagnostic.new(
+      code: "W088",
+      key: :unresolved_import,
+      severity: :warning,
+      title: "Unresolved import",
+      message: "This warning means `#{spelling}/#{arity}` matches no export of #{Enum.join(modules, ", ")}.",
+      primary: primary_label(opts, "this call falls back to a local call"),
+      suggestions: [
+        %Suggestion{message: "Qualify the call with the module that defines it", applicability: :manual}
+      ],
+      payload: %{name: spelling, arity: arity, imports: modules, line: line}
+    )
+  end
+
+  def from_error(%TypeProblem{} = problem, opts) do
+    actual_surface = surface_type(problem.actual)
+    expected_surface = surface_type(problem.expected)
+    primary_span = problem.span || Keyword.get(opts, :span)
+
+    primary =
+      if primary_span do
+        %Label{span: primary_span, style: :primary, message: type_problem_label(problem.origin)}
+      end
+
+    secondary = expectation_labels(problem.origin, primary_span, problem.related)
+
+    Diagnostic.new(
+      code: "E093",
+      key: problem.kind,
+      severity: :error,
+      title: type_problem_title(problem.origin),
+      body:
+        Doc.stack([
+          Doc.paragraph(type_problem_context(problem.origin)),
+          Doc.paragraph([
+            "Expected",
+            Doc.emphasis(:expected, expected_surface),
+            "but found",
+            Doc.concat([Doc.emphasis(:observed, actual_surface), Doc.text(".")])
+          ])
+        ]),
+      primary: primary,
+      secondary: secondary,
+      notes: Keyword.get(opts, :notes, []),
+      provenance: Keyword.get(opts, :provenance, []),
+      payload: %{
+        expected_surface: expected_surface,
+        actual_surface: actual_surface,
+        origin: Map.from_struct(problem.origin),
+        expression_category: problem.expression,
+        expected_core: inspect(problem.expected),
+        actual_core: inspect(problem.actual),
+        debug: problem.debug
+      }
+    )
+  end
+
+  def from_error(%SyntaxProblem{} = problem, opts) do
+    span = problem.at || Keyword.get(opts, :span)
+    code = Map.get(problem.context, :code, "E094")
+
+    primary =
+      if span do
+        %Label{span: span, style: :primary, message: syntax_problem_label(problem)}
+      end
+
+    Diagnostic.new(
+      code: code,
+      key: problem.kind,
+      severity: :error,
+      title: syntax_problem_title(problem),
+      body:
+        Doc.stack([
+          Doc.paragraph(syntax_problem_context(problem)),
+          syntax_expected_doc(problem)
+        ]),
+      primary: primary,
+      secondary: syntax_secondary_labels(problem, span),
+      suggestions: syntax_insertions(problem, span),
+      payload: %{
+        kind: problem.kind,
+        expected: problem.expected,
+        alternatives: problem.alternatives,
+        observed: problem.observed,
+        at: problem.at,
+        within: problem.within,
+        opener: problem.opener,
+        previous: problem.previous,
+        context: problem.context
+      }
+    )
+  end
+
   def from_error({:conversion_failure, actual, expected}, opts) do
     actual_surface = print_core(actual)
     expected_surface = print_core(expected)
@@ -89,27 +269,52 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   def from_error({:expected, expected, :got, actual, line, column}, opts) do
-    Diagnostic.new(
-      code: "E094",
-      key: :unexpected_token,
-      severity: :error,
-      title: "Syntax error",
-      message: "Expected #{syntax_name(expected)}, but found #{syntax_name(actual)}.",
-      primary: primary_label(opts, "unexpected syntax here"),
-      payload: %{expected: expected, actual: actual, line: line, column: column}
+    from_error(
+      %SyntaxProblem{
+        kind: :unexpected_token,
+        expected: expected,
+        observed: actual,
+        at: Keyword.get(opts, :span),
+        context: %{line: line, column: column}
+      },
+      opts
     )
   end
 
   def from_error({:unexpected_token, actual, line, column}, opts) do
-    Diagnostic.new(
-      code: "E094",
-      key: :unexpected_token,
-      severity: :error,
-      title: "I got stuck while parsing this",
-      message: "I did not expect #{syntax_name(actual)} here.",
-      primary: primary_label(opts, "the parser got stuck here"),
-      notes: ["Check the punctuation and indentation immediately before this point."],
-      payload: %{actual: actual, line: line, column: column}
+    from_error(
+      %SyntaxProblem{
+        kind: :unexpected_token,
+        observed: actual,
+        at: Keyword.get(opts, :span),
+        context: %{line: line, column: column}
+      },
+      opts
+    )
+  end
+
+  def from_error({:parse_recovered, actual, line, column}, opts) do
+    from_error(
+      %SyntaxProblem{
+        kind: :recovered_statement,
+        observed: actual,
+        at: Keyword.get(opts, :span),
+        context: %{line: line, column: column, code: "E063"}
+      },
+      opts
+    )
+  end
+
+  def from_error({:lambda_block_unterminated, line, column, code}, opts) do
+    from_error(
+      %SyntaxProblem{
+        kind: :unterminated_lambda,
+        expected: :rbrace,
+        observed: :eof,
+        at: Keyword.get(opts, :span),
+        context: %{line: line, column: column, code: code}
+      },
+      opts
     )
   end
 
@@ -198,6 +403,119 @@ defmodule Cure.Diagnostic.Adapter do
   defp namespace_title(:module), do: "module"
   defp namespace_title(:member), do: "module member"
   defp namespace_title(other), do: to_string(other)
+
+  defp type_problem_title(%ExpectationOrigin{kind: :annotation}), do: "Annotation does not match"
+  defp type_problem_title(%ExpectationOrigin{kind: :branch}), do: "Branches have different types"
+  defp type_problem_title(%ExpectationOrigin{kind: :condition}), do: "Condition is not boolean"
+  defp type_problem_title(%ExpectationOrigin{kind: :call_argument}), do: "Argument has the wrong type"
+  defp type_problem_title(%ExpectationOrigin{kind: :operator_operand}), do: "Operator cannot use this value"
+  defp type_problem_title(_origin), do: "Type mismatch"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_lambda}), do: "Lambda body is not closed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :recovered_statement}), do: "Invalid statement"
+  defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unterminated_lambda}),
+    do: "This multi-statement lambda body reaches the end of its container without a closing delimiter."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :recovered_statement, observed: observed}),
+    do:
+      "The parser could not continue this statement after #{syntax_name(observed)}, so it resumed at the next statement boundary."
+
+  defp syntax_problem_context(%SyntaxProblem{observed: :eof}),
+    do: "The source ended while I was still parsing this construct."
+
+  defp syntax_problem_context(%SyntaxProblem{observed: observed}),
+    do: "#{String.capitalize(syntax_name(observed))} cannot appear at this point in the construct."
+
+  defp syntax_expected_doc(%SyntaxProblem{expected: nil, alternatives: []}), do: Doc.empty()
+
+  defp syntax_expected_doc(%SyntaxProblem{} = problem) do
+    expected = [problem.expected | problem.alternatives] |> Enum.reject(&is_nil/1) |> Enum.map(&syntax_name/1)
+
+    Doc.paragraph([
+      "A valid continuation here starts with",
+      Doc.emphasis(:expected, Enum.join(expected, " or ")) |> then(&Doc.concat([&1, Doc.text(".")]))
+    ])
+  end
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda}), do: "the unclosed body reaches here"
+  defp syntax_problem_label(%SyntaxProblem{kind: :recovered_statement}), do: "parsing resumed after this token"
+  defp syntax_problem_label(_problem), do: "this syntax does not fit here"
+
+  defp syntax_secondary_labels(%SyntaxProblem{opener: %Span{} = opener}, primary_span) when opener != primary_span,
+    do: [%Label{span: opener, style: :secondary, message: "the construct starts here"}]
+
+  defp syntax_secondary_labels(%SyntaxProblem{within: %Span{} = within}, primary_span) when within != primary_span,
+    do: [%Label{span: within, style: :secondary, message: "while parsing this construct"}]
+
+  defp syntax_secondary_labels(_problem, _primary_span), do: []
+
+  defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
+    case syntax_insertion(expected) do
+      nil ->
+        []
+
+      replacement ->
+        [
+          %Suggestion{
+            message: "Insert `#{replacement}` to close the construct",
+            applicability: :machine_applicable,
+            edits: [
+              %TextEdit{
+                span: %{span | end_byte: span.start_byte, end_line: span.start_line, end_column: span.start_column},
+                replacement: replacement
+              }
+            ]
+          }
+        ]
+    end
+  end
+
+  defp syntax_insertions(_problem, _span), do: []
+
+  defp syntax_insertion(:rparen), do: ")"
+  defp syntax_insertion(:rbracket), do: "]"
+  defp syntax_insertion(:rbrace), do: "}"
+  defp syntax_insertion(:end), do: "end"
+  defp syntax_insertion(_expected), do: nil
+
+  defp type_problem_context(%ExpectationOrigin{kind: :annotation}),
+    do: "This expression does not match the type written in its annotation."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :branch}),
+    do: "Every branch of this expression must produce the same type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :condition}),
+    do: "A condition must produce `Bool` before either branch can run."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :call_argument, index: index, owner: owner}),
+    do: "Argument #{display_index(index)} of `#{name_to_string(owner || "this function")}` has an incompatible type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :operator_operand, owner: owner}),
+    do: "The `#{name_to_string(owner || "operator")}` operator cannot use this operand type."
+
+  defp type_problem_context(_origin), do: "This expression has a different type than its context requires."
+
+  defp type_problem_label(%ExpectationOrigin{kind: :condition}), do: "this condition has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :branch}), do: "this branch disagrees with another branch"
+  defp type_problem_label(%ExpectationOrigin{kind: :call_argument}), do: "this argument has the wrong type"
+  defp type_problem_label(_origin), do: "this expression has the wrong type"
+
+  defp expectation_labels(%ExpectationOrigin{span: %Span{} = span}, primary_span, _related)
+       when span != primary_span,
+       do: [%Label{span: span, style: :secondary, message: "the expectation comes from here"}]
+
+  defp expectation_labels(_origin, primary_span, %Span{} = related) when related != primary_span,
+    do: [%Label{span: related, style: :secondary, message: "the compared expression is here"}]
+
+  defp expectation_labels(_origin, _primary_span, _related), do: []
+
+  defp display_index(nil), do: ""
+  defp display_index(index), do: index + 1
+
+  defp surface_type(type) when is_binary(type), do: type
+  defp surface_type(type), do: print_core(type)
 
   defp macro_title(macro), do: macro |> name_to_string() |> String.capitalize()
 

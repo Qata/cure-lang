@@ -56,6 +56,19 @@ defmodule Cure.Compiler.Errors do
     error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
   end
 
+  def format_error({kind, _, _} = error, file)
+      when kind in [:unbound_variable, :arity_mismatch, :ambiguous_name, :duplicate_module] do
+    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+  end
+
+  def format_error({:import_cycle, _} = error, file) do
+    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+  end
+
+  def format_error({:unresolved_import, _, _, _, _} = error, file) do
+    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+  end
+
   # -- Type Errors -------------------------------------------------------------
 
   def format_error(errors, file) when is_list(errors) do
@@ -72,11 +85,6 @@ defmodule Cure.Compiler.Errors do
   def format_error({:type_mismatch, message, meta}, file) do
     line = Keyword.get(meta, :line, 0)
     format_diagnostic("error", "type mismatch", file, line, message)
-  end
-
-  def format_error({:unbound_variable, message, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-    format_diagnostic("error", "unbound variable", file, line, message)
   end
 
   def format_error({:unknown_erasure_class, name, class}, file) do
@@ -104,11 +112,6 @@ defmodule Cure.Compiler.Errors do
   def format_error({:unsupported_async, message, meta}, file) do
     line = Keyword.get(meta, :line, 0)
     format_diagnostic("error", "unsupported asynchronous primitive", file, line, message)
-  end
-
-  def format_error({:arity_mismatch, message, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-    format_diagnostic("error", "arity mismatch", file, line, message)
   end
 
   def format_error({:splice_outside_quote, tag, meta}, file) do
@@ -141,33 +144,17 @@ defmodule Cure.Compiler.Errors do
     format_error(errors, file)
   end
 
-  def format_error({:unexpected_token, token_type, line, col}, file) do
-    format_diagnostic("error", "unexpected token", file, line, "unexpected #{token_type} at column #{col}")
-  end
+  def format_error({:unexpected_token, _, _, _} = error, file),
+    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
 
-  def format_error({:parse_recovered, token_type, line, col}, file) do
-    format_diagnostic(
-      "error",
-      "parse error (E063)",
-      file,
-      line,
-      "unexpected #{token_type} at column #{col}; subsequent tokens skipped until next statement boundary"
-    )
-  end
+  def format_error({:parse_recovered, _, _, _} = error, file),
+    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
 
-  def format_error({:expected, expected, :got, got, line, col}, file) do
-    format_diagnostic("error", "syntax error", file, line, "expected #{expected}, got #{got} at column #{col}")
-  end
+  def format_error({:expected, _, :got, _, _, _} = error, file),
+    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
 
-  def format_error({:lambda_block_unterminated, line, col, code}, file) do
-    format_diagnostic(
-      "error",
-      "lambda block unterminated (#{code})",
-      file,
-      line,
-      "multi-statement lambda body at column #{col} was not closed with '}' or 'end'"
-    )
-  end
+  def format_error({:lambda_block_unterminated, _, _, _} = error, file),
+    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
 
   # -- Lex Errors --------------------------------------------------------------
 
@@ -226,64 +213,6 @@ defmodule Cure.Compiler.Errors do
   end
 
   # -- DepGraph / Build-Order Errors -------------------------------------------
-
-  def format_error({:import_cycle, hops}, file) do
-    chain =
-      hops
-      |> Enum.map(fn %{module: m, path: p, line: l} -> "#{m} (#{p}:#{l})" end)
-      |> Enum.join(" -> ")
-
-    format_diagnostic(
-      "warning",
-      "import cycle (W086)",
-      file,
-      hops |> List.first() |> Map.get(:line, 1),
-      "modules form a `use` cycle: #{chain}. " <>
-        "They compile together as one group in deterministic order. " <>
-        "Type-level mutual recursion across modules is fine; but if these " <>
-        "modules CALL each other's imported functions unqualified, resolution " <>
-        "inside the group is order-dependent (see W088). Consider qualifying " <>
-        "such calls, merging the modules, or dropping a redundant `use`."
-    )
-  end
-
-  def format_error({:duplicate_module, name, paths}, file) do
-    format_diagnostic(
-      "error",
-      "duplicate module (E087)",
-      file,
-      1,
-      "module '#{name}' is declared by more than one file in this compile set: " <>
-        Enum.join(paths, ", ")
-    )
-  end
-
-  def format_error({:unresolved_import, name, arity, imports, line}, file) do
-    probed = imports |> Enum.map(&Atom.to_string/1) |> Enum.join(", ")
-
-    format_diagnostic(
-      "warning",
-      "unresolved import (W088)",
-      file,
-      line,
-      "call to #{name}/#{arity} matches no export of the imported modules " <>
-        "(probed: #{probed}); emitting a local call. If #{name} lives in an " <>
-        "imported module, make sure that module is compiled and loaded before " <>
-        "this file, or qualify the call."
-    )
-  end
-
-  def format_error({:ambiguous_name, name, modules}, file) do
-    format_diagnostic(
-      "error",
-      "ambiguous name (E089)",
-      file,
-      1,
-      "'#{name}' is provided by #{Enum.join(modules, " and ")}; qualify the " <>
-        "call (e.g. #{hd(modules)}.#{name}(...)) or define a local #{name} to " <>
-        "shadow them."
-    )
-  end
 
   # -- Edition Errors ----------------------------------------------------------
 
@@ -1800,12 +1729,28 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:lift_module_error, details}) when is_map(details), do: true
   defp structured_error?({:conversion_failure, _actual, _expected}), do: true
   defp structured_error?({:codegen_error, {:conversion_failure, _actual, _expected}}), do: true
+
+  defp structured_error?({kind, _, _})
+       when kind in [:unbound_variable, :arity_mismatch, :ambiguous_name, :duplicate_module],
+       do: true
+
+  defp structured_error?({:import_cycle, _hops}), do: true
+  defp structured_error?({:unresolved_import, _, _, _, _}), do: true
+  defp structured_error?({:unexpected_token, _, _, _}), do: true
+  defp structured_error?({:expected, _, :got, _, _, _}), do: true
+  defp structured_error?({:parse_recovered, _, _, _}), do: true
+  defp structured_error?({:lambda_block_unterminated, _, _, _}), do: true
   defp structured_error?({:codegen_error, reason}), do: structured_error?(reason)
   defp structured_error?({:parse_error, [reason | _]}), do: structured_error?(reason)
   defp structured_error?({:source_context, reason, context}) when is_map(context), do: structured_error?(reason)
   defp structured_error?(_error), do: false
 
   defp error_location({:lift_module_error, %{source_provenance: %{line: line, col: col}}}), do: {line, col}
+  defp error_location({:unresolved_import, _name, _arity, _imports, line}) when is_integer(line), do: {line, 1}
+  defp error_location({:import_cycle, [%{line: line} | _]}) when is_integer(line), do: {line, 1}
+  defp error_location({:duplicate_module, _name, _paths}), do: {1, 1}
+  defp error_location({:ambiguous_name, _name, _modules}), do: {1, 1}
+  defp error_location({:lambda_block_unterminated, line, col, _code}), do: {line, col}
   defp error_location({_, _, meta}) when is_list(meta), do: {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)}
   defp error_location({_, _, line, col}) when is_integer(line) and is_integer(col), do: {line, col}
 
