@@ -19,6 +19,7 @@ defmodule Cure.Compiler.SourceSpansTest do
     function_span = function |> elem(1) |> Metadata.source_info() |> Map.fetch!(:whole)
     assert slice(source, function_span) =~ "fn answer"
     assert slice(source, function_span) =~ "helper(x)"
+    assert slice(source, Metadata.source_info(elem(function, 1)).name) == "answer"
 
     call = find_node(ast, :function_call)
     call_meta = elem(call, 1)

@@ -38,6 +38,8 @@ defmodule Cure.Compiler.Parser do
 
   alias Cure.Compiler.{MacroFamily, MacroRaw, Token}
   alias Cure.Compiler.Parser.{BuiltinFixity, FixityTable, Precedence}
+  alias Cure.Compiler.Parser.Range
+  alias Cure.MetaAST.SourceInfo
   alias Cure.Pipeline.Events
 
   # -- Parser State ----------------------------------------------------------
@@ -5246,7 +5248,9 @@ defmodule Cure.Compiler.Parser do
         {body, state} = parse_expr_or_block(state)
         {body, state} = parse_expression_let_chain_body(body, state)
 
-        meta = build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
+        meta =
+          build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects)
+
         ast = {:function_def, meta, [body]}
         {ast, state}
 
@@ -5263,7 +5267,18 @@ defmodule Cure.Compiler.Parser do
             state = expect_dedent(state)
 
             meta =
-              build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
+              build_fn_meta(
+                state,
+                fn_token,
+                name_token,
+                name,
+                params,
+                return_type,
+                visibility,
+                guard,
+                constraints,
+                effects
+              )
 
             ast = {:function_def, meta, [body]}
             {ast, state}
@@ -5274,7 +5289,18 @@ defmodule Cure.Compiler.Parser do
             state = expect_dedent(state)
 
             meta =
-              build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
+              build_fn_meta(
+                state,
+                fn_token,
+                name_token,
+                name,
+                params,
+                return_type,
+                visibility,
+                guard,
+                constraints,
+                effects
+              )
 
             meta = Keyword.put(meta, :clauses, clauses)
             ast = {:function_def, meta, []}
@@ -5283,13 +5309,15 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         # Function signature only (no body, e.g. in protocol)
-        meta = build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
+        meta =
+          build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects)
+
         ast = {:function_def, meta, []}
         {ast, state}
     end
   end
 
-  defp build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects) do
+  defp build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects) do
     meta = [
       name: name,
       params: params,
@@ -5303,7 +5331,17 @@ defmodule Cure.Compiler.Parser do
     meta = if guard, do: Keyword.put(meta, :guards, guard), else: meta
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
     meta = if effects, do: Keyword.put(meta, :effects, effects), else: meta
-    meta
+
+    case {fn_token.span, name_token.span, last_authored_token(state)} do
+      {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = name_span, %Token{} = last} ->
+        case Range.through(first, last) do
+          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name_span})
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   defp parse_fn_clauses(state) do
@@ -9138,6 +9176,22 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp token_at(_state, _idx), do: nil
+
+  defp last_authored_token(%{pos: pos} = state) when pos > 0 do
+    pos
+    |> Stream.iterate(&(&1 - 1))
+    |> Stream.take_while(&(&1 >= 0))
+    |> Stream.drop_while(fn idx ->
+      case token_at(state, idx) do
+        %Token{type: type} when type in [:newline, :indent, :dedent] -> true
+        %Token{span: %Cure.Diagnostic.Span{}} -> false
+        _ -> true
+      end
+    end)
+    |> Enum.find_value(fn idx -> token_at(state, idx) end)
+  end
+
+  defp last_authored_token(_state), do: nil
 
   # The tokens from `pos` to the end, as a list. Callers that scan or split the
   # remaining stream want a list; this is O(n) like the `Enum.drop/2` it
