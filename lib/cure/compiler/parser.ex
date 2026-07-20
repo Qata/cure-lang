@@ -7518,7 +7518,22 @@ defmodule Cure.Compiler.Parser do
       end
 
     meta = [name: name, leading_segments: leading_segments, line: token.line, col: token.col]
+    meta = put_named_declaration_source_info(meta, token, name_token, state)
     {{:macro_def, meta, rules}, state}
+  end
+
+  defp put_named_declaration_source_info(meta, %Token{} = first, %Token{} = name_token, state) do
+    case {first.span, name_token.span, last_authored_token(state)} do
+      {%Cure.Diagnostic.Span{} = first_span, %Cure.Diagnostic.Span{} = name_span,
+       %Token{span: %Cure.Diagnostic.Span{} = last_token_span}} ->
+        case Range.through(first_span, last_token_span) do
+          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name_span})
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   # Pure surface representation for §14's `lift module` value. The resulting

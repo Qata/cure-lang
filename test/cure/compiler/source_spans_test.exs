@@ -78,6 +78,18 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.annotation) == ": Int"
   end
 
+  test "macro declarations retain the authored container and macro name ranges" do
+    source = "macro Every\n  syntax every becomes Clock.now()\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "macro.cure", emit_events: false)
+
+    assert {:ok, {:macro_def, meta, _rules}} =
+             Parser.parse(tokens, file: "macro.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == "macro Every\n  syntax every becomes Clock.now()"
+    assert slice(source, info.name) == "Every"
+  end
+
   test "type applications in annotations retain their closing delimiter" do
     source = "mod Demo\n  fn answer(x: Option(Int)) -> Option(Int) = x\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "demo.cure", emit_events: false)
