@@ -82,7 +82,7 @@ defmodule Mix.Tasks.Cure.Snap do
         Mix.shell().info("Saved empty snap to #{path}")
 
       {:error, {:file_write_error, p, reason}} ->
-        Mix.shell().error("Cannot write #{p}: #{inspect(reason)}")
+        Mix.shell().error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_write(p, reason)))
         exit({:shutdown, 1})
     end
   end
@@ -119,7 +119,7 @@ defmodule Mix.Tasks.Cure.Snap do
         exit({:shutdown, 1})
 
       {:error, {:file_read_error, p, reason}} ->
-        Mix.shell().error("Cannot read #{p}: #{inspect(reason)}")
+        Mix.shell().error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read(p, reason)))
         exit({:shutdown, 1})
     end
   end

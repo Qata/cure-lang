@@ -43,7 +43,7 @@ defmodule Mix.Tasks.Cure.Replay do
 
     case Cure.Observe.Journal.load(path) do
       {:error, reason} ->
-        Mix.Shell.IO.error("Cannot load #{path}: #{inspect(reason)}")
+        Mix.Shell.IO.error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read(path, reason)))
         exit({:shutdown, 1})
 
       {:ok, entries} ->
@@ -75,7 +75,10 @@ defmodule Mix.Tasks.Cure.Replay do
                   Mix.Shell.IO.info("Replay complete: #{ok} ok, #{warn} warnings.")
 
                 {:error, reason} ->
-                  Mix.Shell.IO.error("Replay failed: #{inspect(reason)}")
+                  Mix.Shell.IO.error(
+                    Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("Replay", reason))
+                  )
+
                   exit({:shutdown, 1})
               end
             else

@@ -52,7 +52,10 @@ defmodule Mix.Tasks.Cure.Release do
             Mix.shell().info("Release built: #{dir}")
 
           {:error, reason} ->
-            Mix.shell().error("cure release failed: #{inspect(reason)}")
+            Mix.shell().error(
+              Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure release", reason))
+            )
+
             exit({:shutdown, 1})
         end
 
@@ -61,7 +64,10 @@ defmodule Mix.Tasks.Cure.Release do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        Mix.shell().error("cure release failed: #{inspect(reason)}")
+        Mix.shell().error(
+          Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure release", reason))
+        )
+
         exit({:shutdown, 1})
     end
   end

@@ -61,8 +61,8 @@ defmodule Mix.Tasks.Cure.Story do
         end
 
       {:error, {:file_write_error, path, reason}} ->
-        msg = "cannot write #{path}: #{inspect(reason)}"
-        Mix.shell().error("cure.story: #{msg}")
+        diagnostic = Cure.Diagnostic.Operational.file_write(path, reason)
+        Mix.shell().error("cure.story: " <> Cure.Diagnostic.Renderer.plain(diagnostic))
         exit({:shutdown, 1})
     end
   end
