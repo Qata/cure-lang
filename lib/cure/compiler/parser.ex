@@ -54,6 +54,10 @@ defmodule Cure.Compiler.Parser do
     :file,
     count: 0,
     pos: 0,
+    # The most recent authored token consumed by `advance/1`. Keeping this in
+    # parser state makes range endpoints ownership-preserving across nested
+    # expression parsers; callers no longer need to rescan backwards from pos.
+    last_authored: nil,
     errors: [],
     emit_events: false,
     edition: nil,
@@ -3607,6 +3611,7 @@ defmodule Cure.Compiler.Parser do
         # :bar ("|") is not an infix operator, so parse_expr stops naturally at it.
         # We save pos+errors so we can fully rewind on a non-update literal.
         saved_pos = state.pos
+        saved_last_authored = state.last_authored
         saved_errors = state.errors
         {base_expr, probe_state} = parse_expr(state, 0)
         probe_state = skip_newlines(probe_state)
@@ -3636,7 +3641,7 @@ defmodule Cure.Compiler.Parser do
 
           _ ->
             # Not update syntax: rewind completely and parse as plain construction.
-            state = %{state | pos: saved_pos, errors: saved_errors}
+            state = %{state | pos: saved_pos, last_authored: saved_last_authored, errors: saved_errors}
             {fields, state} = parse_map_pairs(state, :rbrace)
             state = close_record_layout(state, layout?)
             {state, close_token} = expect_token_or_nil(state, :rbrace)
@@ -4178,6 +4183,7 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_non_binary_generator_or_filter(state) do
     saved_pos = state.pos
+    saved_last_authored = state.last_authored
     {expr, state} = parse_expr(state, bp_above(state, "<"))
     state = skip_newlines(state)
 
@@ -4193,7 +4199,7 @@ defmodule Cure.Compiler.Parser do
           {{:generator, [], [expr, collection]}, state}
         else
           # Not a generator. Re-parse from saved position at BP 0 for full filter expression.
-          state = %{state | pos: saved_pos}
+          state = %{state | pos: saved_pos, last_authored: saved_last_authored}
           {filter_expr, state} = parse_expr(state, 0)
           {{:filter, [], [filter_expr]}, state}
         end
@@ -4204,7 +4210,7 @@ defmodule Cure.Compiler.Parser do
         token = peek(state)
 
         if FixityTable.infix_bp(fixity_table(state), lexeme_of(token)) != :not_infix do
-          state = %{state | pos: saved_pos}
+          state = %{state | pos: saved_pos, last_authored: saved_last_authored}
           {filter_expr, state} = parse_expr(state, 0)
           {{:filter, [], [filter_expr]}, state}
         else
@@ -6153,6 +6159,7 @@ defmodule Cure.Compiler.Parser do
   # otherwise parse a single expression as the lambda body.
   defp parse_bare_lambda_body(state, token) do
     saved_pos = state.pos
+    saved_last_authored = state.last_authored
     {first, state} = parse_expr(state, 0)
 
     case peek(state) do
@@ -6161,7 +6168,7 @@ defmodule Cure.Compiler.Parser do
         {build_block([first], :end, token), state}
 
       %Token{type: :semicolon} ->
-        state = %{state | pos: saved_pos}
+        state = %{state | pos: saved_pos, last_authored: saved_last_authored}
         parse_end_terminated_lambda_body(state, token)
 
       _ ->
@@ -9710,7 +9717,7 @@ defmodule Cure.Compiler.Parser do
   # Store `tokens` as a tuple + cached `count`. This is the single writer for
   # both fields; keeping them in lockstep is what makes O(1) lookup safe.
   defp put_tokens(state, tokens) when is_list(tokens) do
-    %{state | tokens: List.to_tuple(tokens), count: length(tokens)}
+    %{state | tokens: List.to_tuple(tokens), count: length(tokens), last_authored: nil}
   end
 
   # Token at an absolute index, or nil when out of range — mirroring the
@@ -9721,20 +9728,7 @@ defmodule Cure.Compiler.Parser do
 
   defp token_at(_state, _idx), do: nil
 
-  defp last_authored_token(%{pos: pos} = state) when pos > 0 do
-    (pos - 1)
-    |> Stream.iterate(&(&1 - 1))
-    |> Stream.take_while(&(&1 >= 0))
-    |> Stream.drop_while(fn idx ->
-      case token_at(state, idx) do
-        %Token{type: type} when type in [:newline, :indent, :dedent] -> true
-        %Token{span: %Cure.Diagnostic.Span{}} -> false
-        _ -> true
-      end
-    end)
-    |> Enum.find_value(fn idx -> token_at(state, idx) end)
-  end
-
+  defp last_authored_token(%{last_authored: token}), do: token
   defp last_authored_token(_state), do: nil
 
   # The tokens from `pos` to the end, as a list. Callers that scan or split the
@@ -9763,7 +9757,16 @@ defmodule Cure.Compiler.Parser do
 
   defp peek_at(%{pos: pos} = state, offset), do: token_at(state, pos + offset)
 
-  defp advance(state), do: %{state | pos: state.pos + 1}
+  defp advance(state) do
+    last_authored =
+      case token_at(state, state.pos) do
+        %Token{type: type} when type in [:newline, :indent, :dedent] -> state.last_authored
+        %Token{span: %Cure.Diagnostic.Span{}} = token -> token
+        _ -> state.last_authored
+      end
+
+    %{state | pos: state.pos + 1, last_authored: last_authored}
+  end
 
   # `:line_comment` tokens are emitted by the lexer only when
   # `preserve_comments: true` is set. In that mode `parse_program/2`
