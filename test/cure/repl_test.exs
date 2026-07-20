@@ -102,11 +102,13 @@ defmodule Cure.REPLTest do
 
   describe "error formatting" do
     test "string passes through" do
-      assert "boom" = REPL.__format_error__("boom")
+      assert REPL.__format_error__("boom") =~ "[E098]"
+      assert REPL.__format_error__("boom") =~ "repl failed: boom"
     end
 
     test "structured tuple is human-readable" do
-      assert "parse: oops" = REPL.__format_error__({:parse, "oops", []})
+      assert REPL.__format_error__({:parse, "oops", []}) =~ "[E098]"
+      assert REPL.__format_error__({:parse, "oops", []}) =~ "repl parse failed: oops"
     end
 
     test "fallback uses inspect" do

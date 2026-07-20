@@ -1453,7 +1453,7 @@ defmodule Cure.REPL do
 
   defp render_reason_error(state, reason), do: render_error(state, render_reason(reason))
 
-  defp render_reason(reason) when is_binary(reason), do: reason
+  defp render_reason(reason) when is_binary(reason), do: format_error(reason)
 
   defp render_reason({:error, message} = reason) when is_binary(message), do: format_error(reason)
 
@@ -1649,15 +1649,18 @@ defmodule Cure.REPL do
   # so we don't print the farewell twice.
   defp bye(state), do: %{state | running: false}
 
-  defp format_error(reason) when is_binary(reason), do: reason
+  defp format_error(reason) when is_binary(reason),
+    do: operational_error("repl", reason)
 
   defp format_error({stage, msg, _opts}) when is_atom(stage) and is_binary(msg) do
-    "#{stage}: #{msg}"
+    operational_error("repl #{stage}", msg)
   end
 
-  defp format_error({:error, message}) when is_binary(message), do: message
+  defp format_error({:error, message}) when is_binary(message),
+    do: operational_error("repl", message)
 
-  defp format_error({:error, _kind, message}) when is_binary(message), do: message
+  defp format_error({:error, _kind, message}) when is_binary(message),
+    do: operational_error("repl", message)
 
   defp format_error({:codegen_error, _reason} = reason),
     do: Cure.Diagnostic.Host.render(reason, "repl.cure")
@@ -1667,6 +1670,9 @@ defmodule Cure.REPL do
 
   defp format_error(other),
     do: Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("repl", other))
+
+  defp operational_error(command, message),
+    do: Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure(command, message))
 
   @doc false
   def __format_error__(reason), do: format_error(reason)
