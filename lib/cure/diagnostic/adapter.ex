@@ -1057,6 +1057,12 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:invalid_macro_family, reason, line, column}, opts)
+      when is_integer(line) and is_integer(column) do
+    diagnostic = macro_validation_failure(:invalid_macro_family, reason, opts)
+    %{diagnostic | payload: Map.merge(diagnostic.payload, %{line: line, column: column})}
+  end
+
   def from_error({:macro_expansion_cycle, chain}, opts) when is_list(chain) do
     macro_expansion_failure(
       :cycle,
@@ -1459,6 +1465,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp macro_validation_message(:computed_example_error, failures),
     do: "A computed macro example failed while being checked: #{inspect(failures)}."
+
+  defp macro_validation_message(:invalid_macro_family, reason),
+    do: "The macro's syntax-family declarations are inconsistent: #{inspect(reason)}."
 
   defp macro_failure_points(points) do
     Enum.map_join(points, ", ", fn

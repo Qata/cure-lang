@@ -362,6 +362,19 @@ defmodule Cure.Diagnostic.HostTest do
     refute escaping =~ ":escaping_variable"
   end
 
+  test "renders invalid macro families as authored macro diagnostics" do
+    rendered =
+      Host.render(
+        {:invalid_macro_family, {:syntax_family_cycle, ["First", "Second", "First"]}, 4, 1},
+        "macro.cure"
+      )
+
+    assert rendered =~ "[E092]"
+    assert rendered =~ "MACRO VALIDATION FAILED"
+    assert rendered =~ "syntax-family declarations"
+    refute rendered =~ ":invalid_macro_family"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 
