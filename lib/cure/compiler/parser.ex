@@ -3709,8 +3709,9 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :rbracket} ->
         # Empty list
-        {_, state} = {nil, advance(state)}
-        meta = put_container_source_info([line: token.line, col: token.col], token, state)
+        close_token = peek(state)
+        state = advance(state)
+        meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
         {{:list, meta, []}, state}
 
       _ ->
@@ -3728,8 +3729,16 @@ defmodule Cure.Compiler.Parser do
             state = skip_newlines(state)
             {tail, state} = parse_expr(state, 0)
             state = skip_newlines(state)
-            state = expect(state, :rbracket)
-            meta = put_container_source_info([cons: true, line: token.line, col: token.col], token, state)
+            {state, close_token} = expect_token_or_nil(state, :rbracket)
+
+            meta =
+              put_container_source_info(
+                [cons: true, line: token.line, col: token.col],
+                token,
+                state,
+                close_token
+              )
+
             ast = {:list, meta, [first, tail]}
             {ast, state}
 
@@ -3745,17 +3754,17 @@ defmodule Cure.Compiler.Parser do
                 state = skip_newlines(state)
                 {tail, state} = parse_expr(state, 0)
                 state = skip_newlines(state)
-                state = expect(state, :rbracket)
+                {state, close_token} = expect_token_or_nil(state, :rbracket)
 
                 heads = [first | rest_heads]
                 ast = build_multi_head_cons(heads, tail, token)
-                ast = put_container_source_info_ast(ast, token, state)
+                ast = put_container_source_info_ast(ast, token, state, close_token)
                 {ast, state}
 
               _ ->
                 state = skip_newlines(state)
-                state = expect(state, :rbracket)
-                meta = put_container_source_info([line: token.line, col: token.col], token, state)
+                {state, close_token} = expect_token_or_nil(state, :rbracket)
+                meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
                 ast = {:list, meta, [first | rest_heads]}
                 {ast, state}
             end
@@ -3799,17 +3808,18 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :rbracket} ->
+        close_token = peek(state)
         state = advance(state)
-        meta = put_container_source_info([line: token.line, col: token.col], token, state)
+        meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
         {{:tuple, meta, []}, state}
 
       _ ->
         {first, state} = parse_expr(state, 0)
         {rest, state} = parse_comma_exprs(state)
         state = skip_newlines(state)
-        state = expect(state, :rbracket)
+        {state, close_token} = expect_token_or_nil(state, :rbracket)
 
-        meta = put_container_source_info([line: token.line, col: token.col], token, state)
+        meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
 
         {:tuple, meta, [first | rest]}
         |> then(&{&1, state})
@@ -3824,15 +3834,16 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :rbrace} ->
+        close_token = peek(state)
         state = advance(state)
-        meta = put_container_source_info([line: token.line, col: token.col], token, state)
+        meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
         {{:map, meta, []}, state}
 
       _ ->
         {pairs, state} = parse_map_pairs(state, :rbrace)
         state = skip_newlines(state)
-        state = expect(state, :rbrace)
-        meta = put_container_source_info([line: token.line, col: token.col], token, state)
+        {state, close_token} = expect_token_or_nil(state, :rbrace)
+        meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
         {{:map, meta, pairs}, state}
     end
   end
@@ -4077,15 +4088,21 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
     {generators_and_filters, state} = parse_generators(state)
     state = skip_newlines(state)
-    state = expect(state, :rbracket)
-    meta = put_container_source_info([line: open_token.line, col: open_token.col], open_token, state)
+    {state, close_token} = expect_token_or_nil(state, :rbracket)
+
+    meta =
+      put_container_source_info(
+        [line: open_token.line, col: open_token.col],
+        open_token,
+        state,
+        close_token
+      )
+
     ast = {:comprehension, meta, [body | generators_and_filters]}
     {ast, state}
   end
 
-  defp put_container_source_info(meta, open_token, state) do
-    close_token = last_authored_token(state)
-
+  defp put_container_source_info(meta, open_token, _state, close_token) do
     case {open_token.span, close_token} do
       {%Cure.Diagnostic.Span{} = opener, %Token{span: %Cure.Diagnostic.Span{} = closer}} ->
         case Range.through(opener, closer) do
@@ -4101,11 +4118,12 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp put_container_source_info_ast({tag, meta, children}, open_token, state) when is_list(meta) do
-    {tag, put_container_source_info(meta, open_token, state), children}
+  defp put_container_source_info_ast({tag, meta, children}, open_token, state, close_token)
+       when is_list(meta) do
+    {tag, put_container_source_info(meta, open_token, state, close_token), children}
   end
 
-  defp put_container_source_info_ast(ast, _open_token, _state), do: ast
+  defp put_container_source_info_ast(ast, _open_token, _state, _close_token), do: ast
 
   defp parse_generators(state) do
     {item, state} = parse_generator_or_filter(state)
