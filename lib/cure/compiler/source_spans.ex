@@ -3,7 +3,7 @@ defmodule Cure.Compiler.SourceSpans do
 
   alias Cure.Compiler.Token
   alias Cure.Diagnostic.Span
-  alias Cure.MetaAST.Metadata
+  alias Cure.MetaAST.{Metadata, SourceInfo}
 
   @spec attach(term(), [Token.t()]) :: term()
   def attach(ast, tokens) do
@@ -70,6 +70,16 @@ defmodule Cure.Compiler.SourceSpans do
   end
 
   defp metadata_span(meta, by_position) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{whole: %Span{} = span} ->
+        span
+
+      _ ->
+        metadata_span_from_position(meta, by_position)
+    end
+  end
+
+  defp metadata_span_from_position(meta, by_position) do
     case {Keyword.get(meta, :line), Keyword.get(meta, :col, Keyword.get(meta, :column))} do
       {line, column} when is_integer(line) and is_integer(column) ->
         case Map.get(by_position, {line, column}) do
@@ -102,24 +112,44 @@ defmodule Cure.Compiler.SourceSpans do
   defp merge_spans(_right, left), do: left
 
   defp attach_metadata(meta, tag, span, context) do
-    meta = meta |> Keyword.put(:span, span) |> Keyword.put(:construct_span, span)
+    info = Metadata.source_info(meta) || %SourceInfo{}
+    info = %{info | whole: span}
 
-    meta =
+    info =
+      case Map.get(context.opening_delimiters, {span.source_id, span.start_byte}) do
+        %Span{} = opener ->
+          closer = Map.get(context.closing_delimiters, {span.source_id, span.start_byte})
+          %{info | opener: opener, closer: closer}
+
+        _ ->
+          info
+      end
+
+    info =
       case operator_span(meta, context.by_position) do
-        %Span{} = operator -> Keyword.put(meta, :operator_span, operator)
-        nil -> meta
+        %Span{} = operator -> %{info | operator: operator}
+        nil -> info
       end
 
     case name_span(meta, span, context) do
       nil ->
-        meta
+        put_source_info(meta, info)
 
       name_span when tag in [:function_call, :remote_call] ->
-        meta |> Keyword.put(:name_span, name_span) |> Keyword.put(:callee_span, name_span)
+        put_source_info(meta, %{info | name: name_span, callee: name_span})
 
       name_span ->
-        Keyword.put(meta, :name_span, name_span)
+        put_source_info(meta, %{info | name: name_span})
     end
+  end
+
+  defp put_source_info(meta, %SourceInfo{} = info) do
+    # Keep the parser's existing line/column fields available during the
+    # compatibility window; all range and provenance roles have one canonical
+    # owner under :source_info.
+    meta
+    |> Keyword.drop(Metadata.source_keys() -- [:line, :col, :column])
+    |> Keyword.put(:source_info, info)
   end
 
   defp expand_construct(:function_call, meta, %Span{} = span, context) do
@@ -210,6 +240,7 @@ defmodule Cure.Compiler.SourceSpans do
         end),
       opening_parens: opening_parens(tokens),
       closing_parens: closing_parens(tokens),
+      opening_delimiters: opening_delimiters(tokens),
       closing_delimiters: closing_delimiters(tokens)
     }
   end
@@ -286,6 +317,17 @@ defmodule Cure.Compiler.SourceSpans do
       end)
 
     pairs
+  end
+
+  defp opening_delimiters(tokens) do
+    Enum.reduce(tokens, %{}, fn
+      %Token{type: type, span: %Span{} = span}, openings
+      when type in [:lparen, :lbracket, :lbrace, :tuple_open, :map_open] ->
+        Map.put(openings, {span.source_id, span.start_byte}, span)
+
+      _token, openings ->
+        openings
+    end)
   end
 
   defp add_span(spans, %Span{} = span), do: [span | spans]

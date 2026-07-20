@@ -693,7 +693,7 @@ defmodule Cure.Elab.Declarations do
         column: column,
         length: length,
         checking: checking,
-        span: Keyword.get(meta, :span),
+        span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
         expression_category: expression_category(expression),
         expectation_origin: :annotation
       }}}

@@ -4,6 +4,7 @@ defmodule Cure.Compiler.SourceSpansTest do
   alias Cure.Compiler.{Lexer, Parser, SourceSpans}
   alias Cure.Diagnostic.Span
   alias Cure.Elab.MacroExpand
+  alias Cure.MetaAST.Metadata
 
   test "parser metadata retains complete authored construct and focused name spans" do
     source = "mod Demo\n  fn answer(x: Int) -> Int = helper(x)\n"
@@ -15,14 +16,15 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert Enum.all?(spans, &match?(%Span{source_id: "demo.cure"}, &1))
 
     function = find_node(ast, :function_def)
-    function_span = function |> elem(1) |> Keyword.fetch!(:span)
+    function_span = function |> elem(1) |> Metadata.source_info() |> Map.fetch!(:whole)
     assert slice(source, function_span) =~ "fn answer"
     assert slice(source, function_span) =~ "helper(x)"
 
     call = find_node(ast, :function_call)
     call_meta = elem(call, 1)
-    assert slice(source, Keyword.fetch!(call_meta, :callee_span)) == "helper"
-    assert slice(source, Keyword.fetch!(call_meta, :construct_span)) == "helper(x)"
+    call_info = Metadata.source_info(call_meta)
+    assert slice(source, call_info.callee) == "helper"
+    assert slice(source, call_info.whole) == "helper(x)"
     assert Enum.all?(elem(call, 2), fn child -> match?({_, meta, _} when is_list(meta), child) end)
   end
 
@@ -36,8 +38,8 @@ defmodule Cure.Compiler.SourceSpansTest do
     [{:param, parameter_meta, "x"}] = Keyword.fetch!(meta, :params)
     {:variable, parameter_type_meta, "Int"} = Keyword.fetch!(parameter_meta, :type)
 
-    assert slice(source, Keyword.fetch!(return_meta, :span)) == "Int"
-    assert slice(source, Keyword.fetch!(parameter_type_meta, :span)) == "Int"
+    assert slice(source, Metadata.source_info(return_meta).whole) == "Int"
+    assert slice(source, Metadata.source_info(parameter_type_meta).whole) == "Int"
   end
 
   test "type applications in annotations retain their closing delimiter" do
@@ -50,8 +52,8 @@ defmodule Cure.Compiler.SourceSpansTest do
     [{:param, parameter_meta, "x"}] = Keyword.fetch!(meta, :params)
     {:function_call, parameter_type_meta, _} = Keyword.fetch!(parameter_meta, :type)
 
-    assert slice(source, Keyword.fetch!(return_meta, :construct_span)) == "Option(Int)"
-    assert slice(source, Keyword.fetch!(parameter_type_meta, :construct_span)) == "Option(Int)"
+    assert slice(source, Metadata.source_info(return_meta).whole) == "Option(Int)"
+    assert slice(source, Metadata.source_info(parameter_type_meta).whole) == "Option(Int)"
   end
 
   test "operators and containers retain token-owned focused ranges" do
@@ -63,7 +65,7 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert {:ok, ast} = Parser.parse(tokens, file: "demo.cure", emit_events: false, prelude_macros: false)
 
     binary = find_node(ast, :binary_op)
-    assert slice(source, Keyword.fetch!(elem(binary, 1), :operator_span)) == "+"
+    assert slice(source, Metadata.source_info(elem(binary, 1)).operator) == "+"
 
     for {tag, expected} <- [
           {:list, "[1, 2]"},
@@ -71,7 +73,18 @@ defmodule Cure.Compiler.SourceSpansTest do
           {:map, "%{x: 1}"}
         ] do
       node = find_node(ast, tag)
-      assert slice(source, Keyword.fetch!(elem(node, 1), :construct_span)) == expected
+      info = Metadata.source_info(elem(node, 1))
+      assert slice(source, info.whole) == expected
+
+      expected_opener =
+        case tag do
+          :tuple -> "%["
+          :map -> "%{"
+          :list -> "["
+        end
+
+      assert slice(source, info.opener) == expected_opener
+      assert slice(source, info.closer) == String.last(expected)
     end
   end
 
@@ -96,8 +109,8 @@ defmodule Cure.Compiler.SourceSpansTest do
 
   defp collect_spans({_, meta, payload}) when is_list(meta) do
     own =
-      case Keyword.get(meta, :span) do
-        %Span{} = span -> [span]
+      case Metadata.source_info(meta) do
+        %{whole: %Span{} = span} -> [span]
         _ -> []
       end
 
