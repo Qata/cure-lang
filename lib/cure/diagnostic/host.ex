@@ -1,7 +1,7 @@
 defmodule Cure.Diagnostic.Host do
   @moduledoc "Single presentation boundary for compiler and host command output."
 
-  alias Cure.Diagnostic.{Operational, Renderer}
+  alias Cure.Diagnostic.{Operational, Sink}
 
   @doc "Render a compiler or host failure with its authored source context."
   @spec render(term(), String.t(), String.t() | nil) :: String.t()
@@ -9,8 +9,12 @@ defmodule Cure.Diagnostic.Host do
     source = source || read_source(file)
 
     case convert(reason, file, source) do
-      {:ok, diagnostic, registry} -> Renderer.plain(diagnostic, registry)
-      {:legacy, text} -> text
+      {:ok, diagnostic, registry} ->
+        Sink.new(format: :plain, registry: registry)
+        |> Sink.render(diagnostic)
+
+      {:legacy, text} ->
+        text
     end
   end
 
