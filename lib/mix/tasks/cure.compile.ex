@@ -81,7 +81,7 @@ defmodule Mix.Tasks.Cure.Compile do
     case Cure.Compiler.compile_file(path, output_dir: output_dir) do
       {:ok, module, warnings} ->
         Enum.each(warnings, fn w ->
-          Mix.shell().info("  warning: #{inspect(w)}")
+          Mix.shell().info("  " <> Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.compiler_warning(w)))
         end)
 
         Mix.shell().info("  -> #{module}")

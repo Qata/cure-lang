@@ -470,7 +470,10 @@ defmodule Cure.CLI do
 
     case Cure.Compiler.compile_file(path, opts) do
       {:ok, module, warnings} ->
-        Enum.each(warnings, fn w -> warn("  #{inspect(w)}") end)
+        Enum.each(warnings, fn w ->
+          warn("  " <> Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.compiler_warning(w)))
+        end)
+
         _ = Cure.Compiler.load_emitted(module, Keyword.fetch!(opts, :output_dir))
         info("  -> #{module}")
 

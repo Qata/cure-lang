@@ -55,6 +55,17 @@ defmodule Cure.Diagnostic.Operational do
     )
   end
 
+  def compiler_warning(%{file: file, line: line, message: message}) do
+    Diagnostic.new(
+      code: "W000",
+      key: :compiler_warning,
+      severity: :warning,
+      title: "Compiler warning",
+      message: message,
+      payload: %{file: file, line: line}
+    )
+  end
+
   defp diagnostic(code, key, message, payload),
     do: Diagnostic.new(code: code, key: key, severity: :error, title: "#{key}", message: message, payload: payload)
 
