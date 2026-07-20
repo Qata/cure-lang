@@ -417,6 +417,22 @@ defmodule Cure.Diagnostic.HostTest do
     end
   end
 
+  test "renders deriving and stdlib source failures without internal errors" do
+    derive = Host.render({:cannot_derive, :Show}, "derive.cure")
+    constraints = Host.render({:deriving_needs_constraints, :BeamDecode, :Packet}, "derive.cure")
+    method = Host.render({:cannot_derive_method, :Show, :show, :unsupported}, "derive.cure")
+    missing = Host.render({:missing_stdlib_source, "Std.Missing", "/tmp/Std/Missing.cure"}, "derive.cure")
+
+    assert derive =~ "[E105]"
+    assert derive =~ "CANNOT DERIVE INTERFACE"
+    assert constraints =~ "DERIVING CONSTRAINTS ARE NOT SATISFIED"
+    assert method =~ "CANNOT DERIVE INTERFACE METHOD"
+    assert missing =~ "[E095]"
+    assert missing =~ "Cannot read"
+    refute derive =~ ":cannot_derive"
+    refute missing =~ ":missing_stdlib_source"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 

@@ -490,6 +490,27 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:same_erased_literal, members}, opts),
     do: union_declaration_failure(:same_erased_literal, %{members: members}, opts)
 
+  def from_error({:cannot_derive, interface}, opts),
+    do: deriving_failure(:cannot_derive, %{interface: interface}, opts)
+
+  def from_error({:deriving_needs_strings, interface}, opts),
+    do: deriving_failure(:deriving_needs_strings, %{interface: interface}, opts)
+
+  def from_error({:deriving_needs_constraints, interface, type_name}, opts),
+    do: deriving_failure(:deriving_needs_constraints, %{interface: interface, type: type_name}, opts)
+
+  def from_error({:cannot_derive_shape, interface, type_name}, opts),
+    do: deriving_failure(:cannot_derive_shape, %{interface: interface, type: type_name}, opts)
+
+  def from_error({:cannot_derive_method, interface, method, reason}, opts),
+    do: deriving_failure(:cannot_derive_method, %{interface: interface, method: method, reason: reason}, opts)
+
+  def from_error({:missing_stdlib_source, source, path}, _opts),
+    do: Cure.Diagnostic.Operational.file_read(path || source, :enoent)
+
+  def from_error({:missing_stdlib_source_dir, source}, _opts),
+    do: Cure.Diagnostic.Operational.file_read(source, :enoent)
+
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
       opts
@@ -1372,6 +1393,46 @@ defmodule Cure.Diagnostic.Adapter do
           {"Union members have the same erased literal",
            "Two union members erase to the same literal value and would overlap at runtime.",
            "use distinct literal values"}
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp deriving_failure(kind, details, opts) do
+    {title, message, label} =
+      case kind do
+        :cannot_derive ->
+          {"Cannot derive interface",
+           "Cure cannot derive interface `#{name_to_string(details.interface)}` for this declaration.",
+           "provide the required deriving implementation"}
+
+        :deriving_needs_strings ->
+          {"Deriving requires string support",
+           "Interface `#{name_to_string(details.interface)}` can only be derived for a type with string-compatible members.",
+           "use string-compatible members or implement the interface manually"}
+
+        :deriving_needs_constraints ->
+          {"Deriving constraints are not satisfied",
+           "Deriving `#{name_to_string(details.interface)}` for `#{name_to_string(details.type)}` requires constraints that are not available.",
+           "add the required constraints or implement the interface manually"}
+
+        :cannot_derive_shape ->
+          {"Cannot derive for this type shape",
+           "Interface `#{name_to_string(details.interface)}` cannot be derived for `#{name_to_string(details.type)}` because its shape is unsupported.",
+           "change the type shape or implement the interface manually"}
+
+        :cannot_derive_method ->
+          {"Cannot derive interface method",
+           "Method `#{name_to_string(details.method)}` of `#{name_to_string(details.interface)}` cannot be generated for this type.",
+           "implement this method explicitly"}
       end
 
     Diagnostic.new(
