@@ -962,7 +962,7 @@ defmodule Cure.REPL do
         render_info(state, "session saved to #{path}")
 
       {:error, {:file_write_error, p, reason}} ->
-        render_error(state, "cannot write #{p}: #{:file.format_error(reason)}")
+        render_error(state, Cure.Diagnostic.Host.render({:file_write_error, p, reason}, p))
     end
 
     state
@@ -985,7 +985,7 @@ defmodule Cure.REPL do
         state
 
       {:error, {:file_read_error, p, reason}} ->
-        render_error(state, "cannot read #{p}: #{:file.format_error(reason)}")
+        render_error(state, Cure.Diagnostic.Host.render({:file_read_error, p, reason}, p))
         state
     end
   end

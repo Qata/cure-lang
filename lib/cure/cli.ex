@@ -654,7 +654,7 @@ defmodule Cure.CLI do
               :ok
 
             {:error, reason} ->
-              error("  #{name}: #{inspect(reason)}")
+              error("  #{name}: #{Cure.Diagnostic.Host.render(reason, path)}")
               :error
           end
         end)
@@ -879,7 +879,7 @@ defmodule Cure.CLI do
           :ok
 
         {:error, reason} ->
-          warn("#{file}: #{inspect(reason)}")
+          warn(Cure.Diagnostic.Host.render(reason, file))
       end
     end)
   end

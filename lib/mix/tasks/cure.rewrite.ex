@@ -126,7 +126,7 @@ defmodule Mix.Tasks.Cure.Rewrite do
         rewrite_one(file, source, opts, stats)
 
       {:error, reason} ->
-        Mix.Shell.IO.error("  cannot read #{file}: #{:file.format_error(reason)}")
+        Mix.Shell.IO.error("  " <> Cure.Diagnostic.Host.render({:file_read_error, file, reason}, file))
         Map.update!(stats, :errored, &(&1 + 1))
     end
   end
