@@ -111,6 +111,20 @@ defmodule Cure.Diagnostic.HostTest do
            ) =~ "[E101]"
   end
 
+  test "renders trusted Final-Core rejection paths as structured internal diagnostics" do
+    rendered =
+      Host.render(
+        {:final_core_violation, :run, [%{clause: :no_hole, message: "hole present in Core term"}]},
+        "demo.cure"
+      )
+
+    assert rendered =~ "[E101]"
+    assert rendered =~ "FINAL-CORE VALIDATION FAILED"
+    assert rendered =~ "hole"
+    refute rendered =~ ":final_core_violation"
+    refute rendered =~ "{:hole"
+  end
+
   test "codegen rejection families retain a stable public explanation" do
     rendered = Host.render({:unsupported_container, :protocol}, "demo.cure")
     assert rendered =~ "UNSUPPORTED CONTAINER"

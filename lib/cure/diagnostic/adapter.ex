@@ -818,6 +818,14 @@ defmodule Cure.Diagnostic.Adapter do
     codegen_failure({:beam_lint, errors}, opts)
   end
 
+  def from_error({:final_core_violation, rejections}, opts) when is_list(rejections) do
+    final_core_failure(nil, rejections, opts)
+  end
+
+  def from_error({:final_core_violation, name, rejections}, opts) when is_list(rejections) do
+    final_core_failure(name, rejections, opts)
+  end
+
   def from_error({:expected_module, _ast}, opts), do: codegen_failure(:expected_module, opts)
   def from_error({:unsupported_container, type}, opts), do: codegen_failure({:unsupported_container, type}, opts)
 
@@ -908,6 +916,25 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp codegen_failure_content(_reason) do
     {"Code generation failed", "The compiler could not produce a valid BEAM artifact for this source.", :codegen}
+  end
+
+  defp final_core_failure(name, rejections, opts) do
+    clauses = Enum.map(rejections, &Map.get(&1, :clause))
+    messages = Enum.map(rejections, &Map.get(&1, :message))
+
+    Diagnostic.new(
+      code: "E101",
+      key: :internal_compiler_error,
+      severity: :error,
+      title: "Final-Core validation failed",
+      body:
+        Doc.paragraph(
+          "The compiler rejected an internal Core term at the trusted boundary (#{Enum.join(Enum.map(messages, &to_string/1), "; ")})."
+        ),
+      primary: primary_label(opts, "this definition produced invalid internal Core"),
+      notes: ["This is an internal compiler failure; report it with the diagnostic fingerprint."],
+      payload: %{kind: :final_core_violation, name: name, clauses: clauses, messages: messages}
+    )
   end
 
   defp erasure_failure(kind, details, opts) do

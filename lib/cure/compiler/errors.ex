@@ -683,6 +683,8 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:undocumented_public_function, _file, _line}), do: true
   defp structured_error?({:beam_lint_error, _errors, _warnings}), do: true
   defp structured_error?({:beam_lint_error, _errors}), do: true
+  defp structured_error?({:final_core_violation, rejections}) when is_list(rejections), do: true
+  defp structured_error?({:final_core_violation, _name, rejections}) when is_list(rejections), do: true
   defp structured_error?({:expected_module, _ast}), do: true
   defp structured_error?({:unsupported_container, _type}), do: true
   defp structured_error?({:edition_error, {:unknown_edition, _edition}}), do: true
