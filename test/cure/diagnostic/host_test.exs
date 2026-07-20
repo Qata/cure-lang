@@ -68,6 +68,12 @@ defmodule Cure.Diagnostic.HostTest do
     rendered = Host.render({:beam_lint_error, [], []}, "demo.cure")
     assert rendered =~ "[E101]"
     refute rendered =~ ":beam_lint_error"
+
+    assert Cure.Compiler.Errors.format_with_source(
+             {:beam_lint_error, [], []},
+             "demo.cure",
+             "fn run() -> Int = 1\n"
+           ) =~ "[E101]"
   end
 
   test "codegen rejection families retain a stable public explanation" do

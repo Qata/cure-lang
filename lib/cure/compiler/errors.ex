@@ -638,6 +638,10 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:expansion_ill_typed, details}) when is_map(details), do: true
   defp structured_error?({:macro_use_mismatch, _keyword, _expected, _got, _line, _column}), do: true
   defp structured_error?({:malformed_hole, _line, _column}), do: true
+  defp structured_error?({:beam_lint_error, _errors, _warnings}), do: true
+  defp structured_error?({:beam_lint_error, _errors}), do: true
+  defp structured_error?({:expected_module, _ast}), do: true
+  defp structured_error?({:unsupported_container, _type}), do: true
   defp structured_error?({:edition_error, {:unknown_edition, _edition}}), do: true
 
   defp structured_error?({kind, _, _})
