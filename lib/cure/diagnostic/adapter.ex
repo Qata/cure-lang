@@ -708,6 +708,18 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:edition_error, {:unknown_edition, edition}}, opts) do
+    Diagnostic.new(
+      code: "E094",
+      key: :edition_pragma_unknown,
+      severity: :error,
+      title: "Unknown edition",
+      body: Doc.paragraph("The edition `#{edition}` is not supported. Use edition `#{Cure.Edition.current()}`."),
+      primary: primary_label(opts, "choose a supported edition"),
+      payload: %{edition: edition, current: Cure.Edition.current()}
+    )
+  end
+
   def from_error({:computed_macro_error, meta, reason}, opts) when is_list(meta) do
     keyword = Keyword.get(meta, :keyword, "computed")
 

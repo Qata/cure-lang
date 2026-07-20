@@ -78,6 +78,17 @@ defmodule Cure.Diagnostic.HostTest do
     edition_rendered = Host.render({:edition_pragma_malformed, 1, 1}, "demo.cure")
     assert edition_rendered =~ "[E094]"
     assert edition_rendered =~ "EDITION PRAGMA IS MALFORMED"
+
+    contextual =
+      Cure.Compiler.Errors.format_with_source(
+        {:edition_error, {:unknown_edition, "9999"}},
+        "demo.cure",
+        "@edition(\"9999\")\n"
+      )
+
+    assert contextual =~ "[E094]"
+    assert contextual =~ "9999"
+    refute contextual =~ "| @edition"
   end
 
   test "keeps macro validation failures structured at the host boundary" do
