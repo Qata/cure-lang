@@ -104,6 +104,12 @@ defmodule Cure.Compiler.SourceSpans do
   defp attach_metadata(meta, tag, span, context) do
     meta = meta |> Keyword.put(:span, span) |> Keyword.put(:construct_span, span)
 
+    meta =
+      case operator_span(meta, context.by_position) do
+        %Span{} = operator -> Keyword.put(meta, :operator_span, operator)
+        nil -> meta
+      end
+
     case name_span(meta, span, context) do
       nil ->
         meta
@@ -136,7 +142,30 @@ defmodule Cure.Compiler.SourceSpans do
     end
   end
 
+  defp expand_construct(_tag, _meta, %Span{} = span, context) do
+    case Map.get(context.closing_delimiters, {span.source_id, span.start_byte}) do
+      %Span{} = closing -> merge_spans(closing, span)
+      nil -> span
+    end
+  end
+
   defp expand_construct(_tag, _meta, span, _context), do: span
+
+  defp operator_span(meta, by_position) do
+    operator = Keyword.get(meta, :operator)
+    line = Keyword.get(meta, :line)
+    column = Keyword.get(meta, :col, Keyword.get(meta, :column))
+
+    if not is_nil(operator) and is_integer(line) and is_integer(column) do
+      case Map.get(by_position, {line, column}) do
+        %Token{span: %Span{} = span} = token ->
+          if token_spelling(token) == to_string(operator), do: span
+
+        _ ->
+          nil
+      end
+    end
+  end
 
   defp name_span(meta, span, context) do
     name = Keyword.get(meta, :name)
@@ -180,7 +209,8 @@ defmodule Cure.Compiler.SourceSpans do
           end
         end),
       opening_parens: opening_parens(tokens),
-      closing_parens: closing_parens(tokens)
+      closing_parens: closing_parens(tokens),
+      closing_delimiters: closing_delimiters(tokens)
     }
   end
 
@@ -210,6 +240,45 @@ defmodule Cure.Compiler.SourceSpans do
 
             [] ->
               {pairs, stacks}
+          end
+
+        _token, acc ->
+          acc
+      end)
+
+    pairs
+  end
+
+  defp closing_delimiters(tokens) do
+    pairs = [
+      {:lparen, :rparen},
+      {:lbracket, :rbracket},
+      {:lbrace, :rbrace},
+      {:tuple_open, :rbracket},
+      {:map_open, :rbrace}
+    ]
+
+    {pairs, _stacks} =
+      Enum.reduce(tokens, {%{}, %{}}, fn
+        %Token{type: opening, span: %Span{} = span}, {pairs_by_position, stacks}
+        when opening in [:lparen, :lbracket, :lbrace, :tuple_open, :map_open] ->
+          key = span.source_id
+          {pairs_by_position, Map.update(stacks, key, [{opening, span}], &[{opening, span} | &1])}
+
+        %Token{type: closing, span: %Span{} = closing_span}, {pairs_by_position, stacks}
+        when closing in [:rparen, :rbracket, :rbrace] ->
+          key = closing_span.source_id
+
+          case Map.get(stacks, key, []) do
+            [{opening, opening_span} | rest] ->
+              if {opening, closing} in pairs do
+                {Map.put(pairs_by_position, {key, opening_span.start_byte}, closing_span), Map.put(stacks, key, rest)}
+              else
+                {pairs_by_position, stacks}
+              end
+
+            _ ->
+              {pairs_by_position, stacks}
           end
 
         _token, acc ->

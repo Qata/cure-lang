@@ -54,6 +54,27 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, Keyword.fetch!(parameter_type_meta, :construct_span)) == "Option(Int)"
   end
 
+  test "operators and containers retain token-owned focused ranges" do
+    source =
+      "mod Demo\n  fn answer() -> Int = 1 + 2\n  fn xs() -> List(Int) = [1, 2]\n  fn pair() -> Tuple(Int, Int) = %[1, 2]\n" <>
+        "  fn fields() = %{x: 1}\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "demo.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "demo.cure", emit_events: false, prelude_macros: false)
+
+    binary = find_node(ast, :binary_op)
+    assert slice(source, Keyword.fetch!(elem(binary, 1), :operator_span)) == "+"
+
+    for {tag, expected} <- [
+          {:list, "[1, 2]"},
+          {:tuple, "%[1, 2]"},
+          {:map, "%{x: 1}"}
+        ] do
+      node = find_node(ast, tag)
+      assert slice(source, Keyword.fetch!(elem(node, 1), :construct_span)) == expected
+    end
+  end
+
   test "diagnostic metadata is excluded from semantic comparisons" do
     span = %Span{
       source_id: :one,
