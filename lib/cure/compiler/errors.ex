@@ -153,6 +153,9 @@ defmodule Cure.Compiler.Errors do
   def format_error({:expected, _, :got, _, _, _} = error, file),
     do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
 
+  def format_error({:expected_token, _, _, _, _, _} = error, file),
+    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+
   def format_error({:lambda_block_unterminated, _, _, _} = error, file),
     do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
 
@@ -635,6 +638,7 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:import_cycle, _hops}), do: true
   defp structured_error?({:unresolved_import, _, _, _, _}), do: true
   defp structured_error?({:unexpected_token, _, _, _}), do: true
+  defp structured_error?({:expected_token, _, _, _, _, _}), do: true
   defp structured_error?({:expected, _, :got, _, _, _}), do: true
   defp structured_error?({:parse_recovered, _, _, _}), do: true
   defp structured_error?({:lambda_block_unterminated, _, _, _}), do: true
@@ -721,6 +725,10 @@ defmodule Cure.Compiler.Errors do
   defp error_location({_, _, line, col}) when is_integer(line) and is_integer(col), do: {line, col}
 
   defp error_location({:expected, _expected, :got, _actual, line, col})
+       when is_integer(line) and is_integer(col),
+       do: {line, col}
+
+  defp error_location({:expected_token, _expected, _actual_type, _actual_value, line, col})
        when is_integer(line) and is_integer(col),
        do: {line, col}
 

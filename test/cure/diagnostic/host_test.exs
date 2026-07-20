@@ -54,6 +54,25 @@ defmodule Cure.Diagnostic.HostTest do
            ) =~ "[E094]"
   end
 
+  test "expected-token syntax failures retain the authored token spelling" do
+    source = "fn run(] -> Int = 1\n"
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(
+        {:expected_token, :rparen, :rbracket, "]", 1, 8},
+        "syntax.cure",
+        source
+      )
+
+    assert diagnostic.code == "E094"
+    assert diagnostic.payload.observed == "]"
+    assert diagnostic.payload.context.token_type == :rbracket
+
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry)
+    assert rendered =~ "']'"
+    assert rendered =~ "')'"
+  end
+
   test "blames computed macro rejection on the authored invocation" do
     source = "fn run() -> Int = actor()\n"
 

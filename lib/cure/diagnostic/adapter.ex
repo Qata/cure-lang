@@ -628,6 +628,19 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:expected_token, expected, actual_type, actual_value, line, column}, opts) do
+    from_error(
+      %SyntaxProblem{
+        kind: :unexpected_token,
+        expected: expected,
+        observed: if(is_nil(actual_value), do: actual_type, else: actual_value),
+        at: Keyword.get(opts, :span),
+        context: %{line: line, column: column, token_type: actual_type}
+      },
+      opts
+    )
+  end
+
   def from_error({:unexpected_token, actual, line, column}, opts) do
     from_error(
       %SyntaxProblem{
