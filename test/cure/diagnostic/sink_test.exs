@@ -39,6 +39,16 @@ defmodule Cure.Diagnostic.SinkTest do
     assert [%{"code" => "E099"}] = Jason.decode!(output)
   end
 
+  test "Code flush emits structured JSON rather than an Elixir inspection" do
+    diagnostic = Operational.usage("cure check")
+    {:ok, device} = StringIO.open("")
+    sink = Sink.new(format: :code, output_device: device) |> Sink.emit(diagnostic)
+
+    assert {:ok, _flushed} = Sink.flush(sink)
+    {_input, output} = StringIO.contents(device)
+    assert [%{"code" => "E099"}] = Jason.decode!(output)
+  end
+
   test "LSP rendering honors the configured position encoding" do
     source = "😀 value\n"
     registry = Cure.Diagnostic.SourceRegistry.new() |> Cure.Diagnostic.SourceRegistry.register(:source, source)
