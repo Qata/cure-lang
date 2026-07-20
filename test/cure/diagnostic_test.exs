@@ -77,6 +77,14 @@ defmodule Cure.DiagnosticTest do
              IO.ANSI.red() <> "^^" <> IO.ANSI.reset()
   end
 
+  test "parser diagnostics quote binary token spellings with single quotes" do
+    error = {:parse_error, [{:expected, :rparen, :got, "->", 2, 12}]}
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", "fn f( -> Int = 1\n")
+
+    assert Renderer.plain(diagnostic, registry) =~ "'->' cannot appear"
+    refute Renderer.plain(diagnostic, registry) =~ "\"->\""
+  end
+
   test "parser diagnostic widths come from lexer spans rather than a token-width table" do
     source = "mod Demo\n  fn run(x) => Int = x\n"
     error = {:parse_error, [{:expected, :arrow, :got, :fat_arrow, 2, 13}]}

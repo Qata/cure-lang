@@ -1478,6 +1478,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_name(:hole), do: "a hole"
   defp syntax_name(:macro_hole), do: "a macro hole"
   defp syntax_name({:literal, value}), do: "the literal #{inspect(value)}"
+  defp syntax_name(name) when is_binary(name), do: "'#{name}'"
   defp syntax_name(name) when is_atom(name), do: "'#{name}'"
   defp syntax_name(name), do: inspect(name)
 end
