@@ -163,13 +163,18 @@ defmodule Mix.Tasks.Cure.Check.Examples do
               end
             catch
               kind, reason ->
-                msg = "#{kind}: #{inspect(reason)}"
+                msg =
+                  "#{kind}: " <>
+                    Cure.Diagnostic.Renderer.plain(
+                      Cure.Diagnostic.Operational.command_failure("example compile", reason)
+                    )
+
                 IO.puts("  FAIL #{pad(name)} #{msg}")
                 {:fail, name, msg}
             end
 
           {:error, reason} ->
-            msg = "compile error: #{inspect(reason)}"
+            msg = Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("example compile", reason))
             IO.puts("  FAIL #{pad(name)} #{msg}")
             {:fail, name, msg}
         end

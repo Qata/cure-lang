@@ -98,7 +98,10 @@ defmodule Mix.Tasks.Cure.Verify do
         end
 
       {:error, reason} ->
-        Mix.shell().error("cure.verify: cannot read #{path}: #{inspect(reason)}")
+        Mix.shell().error(
+          "cure.verify: " <> Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read(path, reason))
+        )
+
         exit({:shutdown, 1})
     end
   end

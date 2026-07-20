@@ -43,7 +43,7 @@ defmodule Mix.Tasks.Cure.Check.Stdlib do
             {:fail, name, msg}
 
           {:error, reason} ->
-            msg = "compile error: #{inspect(reason)}"
+            msg = Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("stdlib compile", reason))
             IO.puts("  FAIL #{pad(name)} #{msg}")
             {:fail, name, msg}
         end

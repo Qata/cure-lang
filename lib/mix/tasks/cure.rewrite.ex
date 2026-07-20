@@ -158,7 +158,10 @@ defmodule Mix.Tasks.Cure.Rewrite do
       end
     else
       {:error, reason} ->
-        Mix.Shell.IO.error("  parse error in #{file}: #{inspect(reason)}")
+        Mix.Shell.IO.error(
+          "  " <> Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("parse #{file}", reason))
+        )
+
         Map.update!(stats, :errored, &(&1 + 1))
     end
   end
