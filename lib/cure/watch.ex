@@ -180,5 +180,17 @@ defmodule Cure.Watch do
   end
 
   defp info(msg), do: IO.puts(msg)
-  defp error(msg), do: IO.puts(:stderr, "error: #{msg}")
+
+  defp error(msg) do
+    rendered = String.trim_leading(msg)
+
+    if String.starts_with?(rendered, "--") or String.contains?(rendered, "\n--") do
+      IO.puts(:stderr, msg)
+    else
+      IO.puts(
+        :stderr,
+        Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("watch", msg))
+      )
+    end
+  end
 end
