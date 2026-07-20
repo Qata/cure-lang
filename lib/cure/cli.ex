@@ -329,7 +329,7 @@ defmodule Cure.CLI do
 
     case Cure.Observe.Journal.load(path) do
       {:error, reason} ->
-        error("Cannot load #{path}: #{inspect(reason)}")
+        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read(path, reason)))
         exit({:shutdown, 1})
 
       {:ok, entries} ->
@@ -348,7 +348,7 @@ defmodule Cure.CLI do
                 info("Replay complete.")
 
               {:error, reason} ->
-                error("Replay failed: #{inspect(reason)}")
+                error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("Replay", reason)))
                 exit({:shutdown, 1})
             end
           else
@@ -554,7 +554,7 @@ defmodule Cure.CLI do
         IO.puts(source)
 
       {:error, reason} ->
-        error("cannot draw #{path}: #{inspect(reason)}")
+        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_write(path, reason)))
         exit({:shutdown, 1})
     end
   end
@@ -734,7 +734,7 @@ defmodule Cure.CLI do
                     :ok
 
                   {:error, reason} ->
-                    error("Failed to update dependency #{Map.get(dep, :name, "?")}: #{inspect(reason)}")
+                    error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.dependency(reason)))
                     exit({:shutdown, 1})
                 end
               end
@@ -749,7 +749,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error("Cannot load Cure.toml: #{inspect(reason)}")
+        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
         exit({:shutdown, 1})
     end
   end
@@ -764,7 +764,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error("Cannot load Cure.toml: #{inspect(reason)}")
+        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
         exit({:shutdown, 1})
     end
   end
@@ -1996,7 +1996,7 @@ defmodule Cure.CLI do
         end
 
       {:error, reason} ->
-        error("cure search failed: #{inspect(reason)}")
+        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure search", reason)))
         exit({:shutdown, 1})
     end
   end
@@ -2023,7 +2023,7 @@ defmodule Cure.CLI do
             end)
 
           {:error, reason} ->
-            error("cure info failed: #{inspect(reason)}")
+            error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure info", reason)))
             exit({:shutdown, 1})
         end
 
@@ -2033,7 +2033,7 @@ defmodule Cure.CLI do
             IO.puts(Cure.Project.Json.encode(manifest))
 
           {:error, reason} ->
-            error("cure info failed: #{inspect(reason)}")
+            error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure info", reason)))
             exit({:shutdown, 1})
         end
     end
@@ -2074,7 +2074,7 @@ defmodule Cure.CLI do
             info("Release built: #{dir}")
 
           {:error, reason} ->
-            error("cure release failed: #{inspect(reason)}")
+            error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure release", reason)))
             exit({:shutdown, 1})
         end
 
@@ -2083,7 +2083,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error("cure release failed: #{inspect(reason)}")
+        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure release", reason)))
         exit({:shutdown, 1})
     end
   end
