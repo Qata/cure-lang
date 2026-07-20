@@ -354,6 +354,40 @@ defmodule Cure.Diagnostic.Adapter do
     coverage_problem(:duplicate_branch, branch, context, opts)
   end
 
+  def from_error({:source_context, {:forced_pattern_mismatch, actual, expected}, context}, opts)
+      when is_map(context) do
+    pattern_problem(:forced_pattern_mismatch, %{actual: actual, expected: expected}, context, opts)
+  end
+
+  def from_error({:source_context, {:named_implicit_unforced, name}, context}, opts) when is_map(context) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+
+    Diagnostic.new(
+      code: "E011",
+      key: :missing_implicit_argument,
+      severity: :error,
+      title: "Named implicit was not forced",
+      body: Doc.paragraph("The named implicit `#{name_to_string(name)}` must be explicitly forced in this pattern."),
+      primary: primary_label(opts, "force this named implicit or remove the pattern reference"),
+      payload: %{kind: :named_implicit_unforced, name: name, checking: Map.get(context, :checking)}
+    )
+  end
+
+  def from_error({:source_context, {kind, first, second}, context}, opts)
+      when kind in [:with_rematch_ctor_mismatch] and is_map(context) do
+    pattern_problem(kind, %{actual: first, expected: second}, context, opts)
+  end
+
+  def from_error({:source_context, {kind, details}, context}, opts)
+      when kind in [
+             :with_rematch_ctor_mismatch,
+             :with_rematch_non_constructor_pattern,
+             :with_rematch_inconsistent_binding
+           ] and
+             is_map(context) do
+    pattern_problem(kind, %{details: details}, context, opts)
+  end
+
   def from_error({:source_context, {:unknown_record, name}, context}, opts) when is_map(context) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
 
@@ -1264,6 +1298,42 @@ defmodule Cure.Diagnostic.Adapter do
       body: Doc.paragraph(body),
       primary: primary_label(opts, label),
       payload: %{kind: kind, branch: branch, checking: Map.get(context, :checking)}
+    )
+  end
+
+  defp pattern_problem(kind, details, context, opts) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+
+    {title, body, label} =
+      case kind do
+        :forced_pattern_mismatch ->
+          {"Forced pattern does not match", "This forced pattern does not match the value's expected type.",
+           "change the forced pattern or its expected type"}
+
+        :with_rematch_ctor_mismatch ->
+          {"With rematch constructor mismatch",
+           "The rematched value uses a different constructor than the original `with` pattern.",
+           "keep the rematch constructor aligned"}
+
+        :with_rematch_non_constructor_pattern ->
+          {"With rematch must use a constructor",
+           "This `with` rematch is not a constructor pattern that can be checked against the original value.",
+           "rematch with the corresponding constructor"}
+
+        :with_rematch_inconsistent_binding ->
+          {"With rematch binding is inconsistent",
+           "The rematch binds a name differently from the original `with` pattern.",
+           "keep bindings consistent across the rematch"}
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(body),
+      primary: primary_label(opts, label),
+      payload: Map.merge(%{kind: kind, checking: Map.get(context, :checking)}, details)
     )
   end
 

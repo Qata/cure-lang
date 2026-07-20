@@ -328,6 +328,28 @@ defmodule Cure.Diagnostic.HostTest do
     refute impossible =~ ":reachable_impossible"
   end
 
+  test "renders forced and rematched pattern failures contextually" do
+    forced = Host.render({:source_context, {:forced_pattern_mismatch, :Int, :String}, %{}}, "pattern.cure")
+
+    rematch =
+      Host.render(
+        {:source_context, {:with_rematch_ctor_mismatch, :Some, :None}, %{}},
+        "pattern.cure"
+      )
+
+    named = Host.render({:source_context, {:named_implicit_unforced, :value}, %{}}, "pattern.cure")
+
+    assert forced =~ "[E093]"
+    assert forced =~ "FORCED PATTERN DOES NOT MATCH"
+    assert rematch =~ "[E093]"
+    assert rematch =~ "WITH REMATCH CONSTRUCTOR MISMATCH"
+    assert named =~ "[E011]"
+    assert named =~ "value"
+    refute forced =~ ":forced_pattern_mismatch"
+    refute rematch =~ ":with_rematch_ctor_mismatch"
+    refute named =~ ":named_implicit_unforced"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 
