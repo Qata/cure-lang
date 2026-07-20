@@ -5,7 +5,7 @@ defmodule Cure.Elab.IndexedTypeParseTest do
   defp parse(src) do
     {:ok, toks} = Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Parser.parse(toks, emit_events: false)
-    ast
+    Cure.Compiler.SourceSpans.strip_diagnostic_meta(ast)
   end
 
   test "parses an indexed type declaration with constructor signatures" do

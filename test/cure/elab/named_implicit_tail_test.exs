@@ -64,7 +64,7 @@ defmodule Cure.Elab.NamedImplicitTailTest do
             hmk({m = .(S(j))}) -> Z()
         """)
 
-      assert {:error, {:forced_pattern_mismatch, _, _}} = Program.elaborate(src)
+      assert {:error, {:forced_pattern_mismatch, _, _}} = semantic_elaborate(src)
     end
 
     test "right dot on a carried-eq branch accepts (over-rejection guard)" do
@@ -142,7 +142,7 @@ defmodule Cure.Elab.NamedImplicitTailTest do
             pk({m = mm}, v) -> mm
         """)
 
-      assert {:error, {:erased_used_relevantly, _}} = Program.elaborate(src)
+      assert {:error, {:erased_used_relevantly, _}} = semantic_elaborate(src)
     end
 
     test "dot form on an unforced position still errors" do
@@ -152,7 +152,14 @@ defmodule Cure.Elab.NamedImplicitTailTest do
             pk({m = .(S(Z()))}, v) -> Z()
         """)
 
-      assert {:error, {:named_implicit_unforced, "m"}} = Program.elaborate(src)
+      assert {:error, {:named_implicit_unforced, "m"}} = semantic_elaborate(src)
+    end
+  end
+
+  defp semantic_elaborate(src) do
+    case Program.elaborate(src) do
+      {:error, error} -> {:error, Program.semantic_error(error)}
+      result -> result
     end
   end
 end

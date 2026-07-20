@@ -52,9 +52,9 @@ defmodule Cure.Elab.RewritePlanAuditTest do
 
     assert {:error, e1} = Program.elaborate(non_eq)
     assert {:error, e2} = Program.elaborate(no_change)
-    assert error_tag(e1) == :rewrite_proof_not_equality
-    assert error_tag(e2) == :rewrite_no_match
-    refute error_tag(e1) == error_tag(e2)
+    assert error_tag(Program.semantic_error(e1)) == :rewrite_proof_not_equality
+    assert error_tag(Program.semantic_error(e2)) == :rewrite_no_match
+    refute error_tag(Program.semantic_error(e1)) == error_tag(Program.semantic_error(e2))
   end
 
   # Candidate 3 — in-scope fix (red-green). The rewrite goal reifies a stuck

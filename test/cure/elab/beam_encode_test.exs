@@ -46,7 +46,8 @@ defmodule Cure.Elab.BeamEncodeTest do
       fn decode(term: BeamTerm) -> Result(Message, BeamDecodeError) = from_beam(term)
     """
 
-    assert {:error, {:no_instance, :BeamDecode, _type}} = Cure.Elab.Program.elaborate(source)
+    assert {:error, error} = Cure.Elab.Program.elaborate(source)
+    assert {:no_instance, :BeamDecode, _type} = Cure.Elab.Program.semantic_error(error)
   end
 
   test "a derived BeamDecode validates constructor tags, arities, and primitive fields" do
@@ -108,6 +109,7 @@ defmodule Cure.Elab.BeamEncodeTest do
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     tree = {:Branch, {:Leaf, 1}, {:Branch, {:Leaf, 2}, {:Leaf, 3}}}
     assert apply(module, :decode, [tree]) == {:ok, tree}
+
     assert apply(module, :decode, [{:Branch, {:Leaf, 1}, {:Leaf, :bad}}]) ==
              {:error, :InvalidBeamTerm}
   end

@@ -24,6 +24,12 @@ defmodule Cure.Elab.Program do
     end
   end
 
+  @doc "Project an elaboration result's surface context away for semantic comparisons."
+  @spec semantic_error(term()) :: term()
+  def semantic_error({:source_context, reason, _context}), do: semantic_error(reason)
+  def semantic_error({:codegen_error, reason}), do: {:codegen_error, semantic_error(reason)}
+  def semantic_error(reason), do: reason
+
   @doc """
   Elaborate + totality-certify an already-parsed module/declaration AST. Unwraps
   a `mod ... end` container to its body. This is the entry the real compiler's

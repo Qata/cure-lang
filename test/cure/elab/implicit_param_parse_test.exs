@@ -18,7 +18,8 @@ defmodule Cure.Elab.ImplicitParamParseTest do
     assert Keyword.get(m1, :implicit) == true
     assert Keyword.get(m2, :implicit) == true
     assert Keyword.get(m3, :implicit) != true
-    assert {:function_call, [name: "SF"], _} = Keyword.get(m3, :type)
+    assert {:function_call, meta, _} = Keyword.get(m3, :type)
+    assert Keyword.get(meta, :name) == "SF"
   end
 
   test "parses an implicit parameter with an explicit type annotation" do
