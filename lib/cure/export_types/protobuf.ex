@@ -217,7 +217,7 @@ defmodule Cure.ExportTypes.Protobuf do
   end
 
   defp emit_e068_warning(reason) do
-    IO.puts(:stderr, Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.export_unmappable(reason)))
+    IO.puts(:stderr, Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.export_unmappable(reason)))
   end
 
   # -- Helpers ------------------------------------------------------------------
