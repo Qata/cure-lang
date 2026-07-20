@@ -281,4 +281,11 @@ defmodule Cure.DiagnosticTest do
       Cure.Compiler.Errors.format_error({:new_unregistered_error, :detail}, "source.cure")
     end
   end
+
+  test "operational failures use stable diagnostic codes" do
+    diagnostic = Cure.Diagnostic.Operational.file_read("Cure.toml", :enoent)
+    assert diagnostic.code == "E095"
+    assert diagnostic.key == :file_read
+    assert diagnostic.payload.path == "Cure.toml"
+  end
 end
