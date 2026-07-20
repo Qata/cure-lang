@@ -3,6 +3,24 @@ defmodule Cure.Diagnostic.Operational do
 
   alias Cure.Diagnostic
 
+  @doc "Convert an operational failure tuple at a host boundary."
+  @spec from_error(term(), keyword()) :: Diagnostic.t()
+  def from_error(error, _opts \\ [])
+
+  def from_error({:file_read_error, path, reason}, _opts), do: file_read(path, reason)
+  def from_error({:file_write_error, path, reason}, _opts), do: file_write(path, reason)
+  def from_error({:dependency_resolution_failed, reason}, _opts), do: dependency(reason)
+  def from_error({:command_failed, command, reason}, _opts), do: command_failure(command, reason)
+  def from_error({:migration_warning, details}, _opts) when is_map(details), do: migration_warning(details)
+  def from_error({:compiler_warning, details}, _opts) when is_map(details), do: compiler_warning(details)
+  def from_error({:export_unmappable, reason}, _opts), do: export_unmappable(reason)
+  def from_error({:snap_missing, path}, _opts), do: snap_missing(path)
+  def from_error({:configuration_warning, message}, _opts), do: configuration_warning(message)
+  def from_error({:usage_error, message}, _opts), do: usage(message)
+  def from_error({:artifact_error, message}, _opts), do: artifact_error(message)
+
+  def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
   def file_read(path, reason),
     do:
       diagnostic("E095", :file_read, "Cannot read `#{path}`: #{file_reason(reason)}", %{

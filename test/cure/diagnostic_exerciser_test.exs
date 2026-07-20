@@ -24,7 +24,9 @@ defmodule Cure.DiagnosticExerciserTest do
           assert diagnostic.primary, "#{label} did not retain an authored source span"
           plain = Renderer.plain(diagnostic, registry)
           assert plain =~ " | ", "#{label} did not render an authored source excerpt"
-          IO.puts(:stderr, "[#{label}]\n" <> Renderer.terminal(diagnostic, registry, color: true))
+          terminal = Renderer.terminal(diagnostic, registry, color: true, output_device: :standard_error, width: 80)
+          assert Enum.any?(String.split(source, "\n"), &(&1 != "" and String.contains?(terminal, &1)))
+          IO.puts(:stderr, "[#{label}]\n" <> terminal)
       end
     end)
 
@@ -43,7 +45,7 @@ defmodule Cure.DiagnosticExerciserTest do
     ]
 
     Enum.each(diagnostics, fn diagnostic ->
-      IO.puts(:stderr, Renderer.terminal(diagnostic, nil, color: true))
+      IO.puts(:stderr, Renderer.terminal(diagnostic, nil, color: true, output_device: :standard_error, width: 80))
     end)
 
     operational_codes = Enum.map(diagnostics, & &1.code)

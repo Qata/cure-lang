@@ -32,7 +32,11 @@ defmodule Cure.Diagnostic.Adapter do
       |> Keyword.put(:checking, Map.get(context, :checking))
       |> then(fn opts ->
         case Map.get(context, :span) do
-          %Span{} = span -> Keyword.put(opts, :span, span)
+          # A presentation boundary may have remapped this span into its own
+          # source registry (for example `Errors.to_diagnostic/3`). Preserve
+          # that registry-owned span instead of restoring the compiler's
+          # original `nofile` identity.
+          %Span{} = span -> Keyword.put_new(opts, :span, span)
           _ -> opts
         end
       end)
@@ -50,7 +54,7 @@ defmodule Cure.Diagnostic.Adapter do
               owner: Map.get(context, :checking)
             },
             expression: Map.get(context, :expression_category, :expression),
-            span: Map.get(context, :span),
+            span: Keyword.get(opts, :span, Map.get(context, :span)),
             debug: %{cause: reason, checking: Map.get(context, :checking)}
           },
           opts
@@ -208,12 +212,7 @@ defmodule Cure.Diagnostic.Adapter do
       body:
         Doc.stack([
           Doc.paragraph(type_problem_context(problem.origin)),
-          Doc.paragraph([
-            "Expected",
-            Doc.emphasis(:expected, expected_surface),
-            "but found",
-            Doc.concat([Doc.emphasis(:observed, actual_surface), Doc.text(".")])
-          ])
+          type_comparison_doc(problem.expected, problem.actual)
         ]),
       primary: primary,
       secondary: secondary,
@@ -276,7 +275,7 @@ defmodule Cure.Diagnostic.Adapter do
       key: :conversion_failure,
       severity: :error,
       title: "Type mismatch",
-      message: "Expected `#{expected_surface}`, but found `#{actual_surface}`.",
+      body: type_comparison_doc(expected, actual),
       primary: primary_label(opts, "this expression has the wrong type"),
       notes: Keyword.get(opts, :notes, []),
       provenance: Keyword.get(opts, :provenance, []),
@@ -661,6 +660,89 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp type_problem_context(_origin), do: "This expression has a different type than its context requires."
 
+  # The labels take the same width, keeping the first type character in both
+  # rows aligned for quick visual comparison. Core terms retain enough shape to
+  # colour only the divergent descendants; strings and unrelated roots stay
+  # uncoloured because a textual resemblance is not semantic evidence.
+  defp type_comparison_doc(expected, actual) do
+    {expected_doc, actual_doc} = type_difference_docs(printable_core(expected), printable_core(actual), false)
+
+    Doc.concat([
+      Doc.concat(["Expected: ", expected_doc]),
+      Doc.text("\n"),
+      Doc.concat(["Found:    ", actual_doc])
+    ])
+  end
+
+  defp type_difference_docs(expected, actual, _within_common?) when expected == actual do
+    {plain_type_doc(expected), plain_type_doc(actual)}
+  end
+
+  defp type_difference_docs(
+         {:data, name, expected_params, expected_indices},
+         {:data, name, actual_params, actual_indices},
+         _within_common?
+       )
+       when length(expected_params) == length(actual_params) and length(expected_indices) == length(actual_indices) do
+    type_application_docs(
+      Cure.Elab.Name.base(name),
+      expected_params ++ expected_indices,
+      actual_params ++ actual_indices
+    )
+  end
+
+  defp type_difference_docs({:ctor, name, expected_args}, {:ctor, name, actual_args}, _within_common?)
+       when length(expected_args) == length(actual_args) do
+    type_application_docs(Cure.Elab.Name.base(name), expected_args, actual_args)
+  end
+
+  defp type_difference_docs({:app, expected_fun, expected_arg}, {:app, actual_fun, actual_arg}, _within_common?) do
+    {expected_fun_doc, actual_fun_doc} = type_difference_docs(expected_fun, actual_fun, true)
+    {expected_arg_doc, actual_arg_doc} = type_difference_docs(expected_arg, actual_arg, true)
+
+    {
+      Doc.concat([expected_fun_doc, Doc.text(" "), expected_arg_doc]),
+      Doc.concat([actual_fun_doc, Doc.text(" "), actual_arg_doc])
+    }
+  end
+
+  defp type_difference_docs(expected, actual, true) do
+    {
+      Doc.emphasis(:expected, plain_type_doc(expected)),
+      Doc.emphasis(:observed, plain_type_doc(actual))
+    }
+  end
+
+  defp type_difference_docs(expected, actual, false) do
+    {plain_type_doc(expected), plain_type_doc(actual)}
+  end
+
+  defp type_application_docs(head, expected_args, actual_args) do
+    {expected_args, actual_args} =
+      expected_args
+      |> Enum.zip(actual_args)
+      |> Enum.map(&type_difference_docs(elem(&1, 0), elem(&1, 1), true))
+      |> Enum.unzip()
+
+    {
+      type_application_doc(head, expected_args),
+      type_application_doc(head, actual_args)
+    }
+  end
+
+  defp type_application_doc(head, []), do: Doc.text(head)
+
+  defp type_application_doc(head, args) do
+    args_doc = args |> Enum.intersperse(Doc.text(", ")) |> Doc.concat()
+    Doc.concat([Doc.text(head), Doc.text("("), args_doc, Doc.text(")")])
+  end
+
+  # Some diagnostic entry points already provide a user-facing type string.
+  # Do not pass those through Core's printer, which would render them as quoted
+  # Elixir strings rather than as the type the user wrote.
+  defp plain_type_doc(type) when is_binary(type), do: Doc.text(type)
+  defp plain_type_doc(type), do: Doc.text(print_core(type))
+
   defp type_problem_label(%ExpectationOrigin{kind: :condition}), do: "this condition has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :branch}), do: "this branch disagrees with another branch"
   defp type_problem_label(%ExpectationOrigin{kind: :call_argument}), do: "this argument has the wrong type"
@@ -732,6 +814,76 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp printable_core(term), do: term
 
-  defp syntax_name(name) when is_atom(name), do: "`#{name}`"
+  # Parser errors retain token *kinds* for stable machine handling. Translate
+  # punctuation and operators back to the spelling a user sees in the source;
+  # `:arrow` and `:rparen` are implementation names, whereas `->` and `)` tell
+  # the user precisely what needs attention.
+  @syntax_token_spellings %{
+    lparen: "(",
+    rparen: ")",
+    lbracket: "[",
+    rbracket: "]",
+    lbrace: "{",
+    rbrace: "}",
+    splice_open: "$(",
+    tuple_open: "%[",
+    map_open: "%{",
+    binary_open: "<<",
+    binary_close: ">>",
+    comma: ",",
+    semicolon: ";",
+    colon: ":",
+    colon_colon: "::",
+    dot: ".",
+    ellipsis: "...",
+    range: "..",
+    range_inclusive: "..=",
+    arrow: "->",
+    fat_arrow: "=>",
+    assign: "=",
+    plus_assign: "+=",
+    minus_assign: "-=",
+    star_assign: "*=",
+    slash_assign: "/=",
+    plus: "+",
+    minus: "-",
+    star: "*",
+    slash: "/",
+    eq: "==",
+    neq: "!=",
+    lt: "<",
+    lte: "<=",
+    gt: ">",
+    gte: ">=",
+    pipe: "|>",
+    bar: "|",
+    at: "@",
+    caret: "^",
+    percent: "%",
+    bang: "!",
+    string_concat: "<>",
+    melquiades: "✉",
+    double_quote: "\"",
+    single_quote: "'",
+    backtick: "`"
+  }
+
+  defp syntax_name(name) when is_map_key(@syntax_token_spellings, name),
+    do: "'#{Map.fetch!(@syntax_token_spellings, name)}'"
+
+  defp syntax_name(:eof), do: "the end of the file"
+  defp syntax_name(:newline), do: "a new line"
+  defp syntax_name(:indent), do: "an indented block"
+  defp syntax_name(:dedent), do: "the end of this block"
+  defp syntax_name(:identifier), do: "an identifier"
+  defp syntax_name(:keyword), do: "a keyword"
+  defp syntax_name(:integer), do: "an integer"
+  defp syntax_name(:float), do: "a number"
+  defp syntax_name(:string), do: "a string"
+  defp syntax_name(:char), do: "a character"
+  defp syntax_name(:atom), do: "an atom"
+  defp syntax_name(:bool), do: "a boolean"
+  defp syntax_name(:hole), do: "a hole"
+  defp syntax_name(name) when is_atom(name), do: "'#{name}'"
   defp syntax_name(name), do: inspect(name)
 end

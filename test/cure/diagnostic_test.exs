@@ -68,6 +68,10 @@ defmodule Cure.DiagnosticTest do
 
     assert diagnostic.primary.span.end_column - diagnostic.primary.span.start_column == 2
     assert Renderer.plain(diagnostic, registry) =~ "^^ this syntax does not fit here"
+    assert Renderer.plain(diagnostic, registry) =~ "'->' cannot appear"
+    assert Renderer.plain(diagnostic, registry) =~ "starts with ')'"
+    refute Renderer.plain(diagnostic, registry) =~ "'arrow'"
+    refute Renderer.plain(diagnostic, registry) =~ "'rparen'"
 
     assert Renderer.terminal(diagnostic, registry, color: true) =~
              IO.ANSI.red() <> "^^" <> IO.ANSI.reset()
@@ -92,6 +96,14 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.title == "Tabs are not valid indentation"
     assert Renderer.plain(diagnostic, registry) =~ "indentation uses spaces"
     refute Renderer.plain(diagnostic, registry) =~ "{:tab_not_allowed"
+  end
+
+  test "operational failure tuples use the declared registry converter" do
+    entry = Cure.Diagnostic.Registry.fetch!("E095")
+    diagnostic = apply(entry.converter, entry.converter_function, [{:file_read_error, "demo.cure", :enoent}, []])
+
+    assert diagnostic.code == "E095"
+    assert Diagnostic.message(diagnostic) == "Cannot read `demo.cure`: no such file or directory"
   end
 
   test "unique missing lexer delimiters provide an insertion edit" do
@@ -184,11 +196,47 @@ defmodule Cure.DiagnosticTest do
     diagnostic = Adapter.from_error({:conversion_failure, actual, expected}, span: span)
 
     assert diagnostic.code == "E093"
-    assert Diagnostic.message(diagnostic) == "Expected `Int`, but found `Bool`."
+    assert Diagnostic.message(diagnostic) == "Expected: Int\nFound:    Bool"
     assert diagnostic.payload.expected_surface == "Int"
     assert diagnostic.payload.actual_surface == "Bool"
     assert diagnostic.payload.expected_core == inspect(expected)
     assert Renderer.plain(diagnostic, registry) =~ "this expression has the wrong type"
+  end
+
+  test "type comparisons highlight only a mismatch below a shared type constructor", %{
+    registry: registry,
+    span: span
+  } do
+    nat = {:data, :"Std.Nat#Nat", [], []}
+    zero = {:ctor, :"Std.Nat#Z", []}
+    successor = {:ctor, :"Std.Nat#S", [zero]}
+
+    expected = {:data, :"Std.Equivalent#Equivalent", [nat, zero, successor], []}
+    actual = {:data, :"Std.Equivalent#Equivalent", [nat, zero, zero], []}
+
+    diagnostic = Adapter.from_error({:conversion_failure, actual, expected}, span: span)
+    terminal = Renderer.terminal(diagnostic, registry, color: :always)
+
+    assert Diagnostic.message(diagnostic) ==
+             "Expected: Equivalent(Nat, Z, S(Z))\nFound:    Equivalent(Nat, Z, Z)"
+
+    refute terminal =~ IO.ANSI.green() <> "Equivalent"
+    refute terminal =~ IO.ANSI.red() <> "Equivalent"
+    assert terminal =~ IO.ANSI.green() <> "S(Z)"
+    assert terminal =~ IO.ANSI.red() <> "Z"
+  end
+
+  test "unrelated type roots remain uncoloured", %{registry: registry, span: span} do
+    actual = {:data, :"Std.Bool#Bool", [], []}
+    expected = {:data, :"Std.Int#Int", [], []}
+
+    terminal =
+      {:conversion_failure, actual, expected}
+      |> Adapter.from_error(span: span)
+      |> Renderer.terminal(registry, color: :always)
+
+    refute terminal =~ IO.ANSI.green() <> "Int"
+    refute terminal =~ IO.ANSI.red() <> "Bool"
   end
 
   test "type mismatch prose follows its expectation origin", %{registry: registry, span: span} do
@@ -215,9 +263,12 @@ defmodule Cure.DiagnosticTest do
 
     assert annotation.title == "Annotation does not match"
     assert Renderer.plain(annotation, registry) =~ "type written in its annotation"
+    assert Renderer.plain(annotation, registry) =~ "Expected: Int\nFound:    String"
     assert condition.title == "Condition is not boolean"
     assert Renderer.plain(condition, registry) =~ "condition must produce `Bool`"
-    assert Renderer.terminal(condition, registry, color: :always) =~ IO.ANSI.green() <> "Bool"
+    condition_terminal = Renderer.terminal(condition, registry, color: :always)
+    refute condition_terminal =~ IO.ANSI.green() <> "Bool"
+    refute condition_terminal =~ IO.ANSI.red() <> "Int"
     assert condition.payload.actual_core == inspect("Int")
   end
 

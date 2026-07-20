@@ -9,8 +9,14 @@ defmodule Cure.Diagnostic.Registry.Entry do
     :status,
     :subsystem,
     :payload_schema,
+    :schema_version,
+    :producers,
     :converter,
+    :converter_function,
     :catalog_case,
+    :fixture_id,
+    :retirement_reason,
+    :brief,
     :explanation
   ]
   defstruct @enforce_keys
@@ -23,8 +29,14 @@ defmodule Cure.Diagnostic.Registry.Entry do
           status: :reachable | :retired,
           subsystem: atom(),
           payload_schema: pos_integer(),
+          schema_version: pos_integer(),
+          producers: [atom(), ...],
           converter: module(),
+          converter_function: atom(),
           catalog_case: atom() | nil,
+          fixture_id: atom() | nil,
+          retirement_reason: String.t() | nil,
+          brief: String.t(),
           explanation: String.t()
         }
 end
@@ -35,6 +47,11 @@ defmodule Cure.Diagnostic.Registry do
   alias Cure.Diagnostic.Registry.Entry
 
   @retired ~w[E015 E018]
+  @operational ~w[E068 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002]
+  @retirement_reasons %{
+    "E015" => "The former error path was consolidated into the contextual declaration diagnostics.",
+    "E018" => "The former error path was consolidated into the contextual declaration diagnostics."
+  }
   @structured ~w[E035 E063 E068 E070 E091 E092 E093 E094 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
   @catalog_cases %{
     "E068" => :export_unmappable,
@@ -56,7 +73,7 @@ defmodule Cure.Diagnostic.Registry do
 
   @spec entries() :: [Entry.t()]
   def entries do
-    Cure.Compiler.Errors.list_all()
+    Cure.Compiler.Errors.catalog_entries()
     |> Enum.map(fn {code, title, brief} ->
       %Entry{
         code: code,
@@ -66,9 +83,15 @@ defmodule Cure.Diagnostic.Registry do
         status: if(code in @retired, do: :retired, else: :reachable),
         subsystem: subsystem(code),
         payload_schema: 1,
+        schema_version: 1,
+        producers: producers(code),
         converter: converter(code),
+        converter_function: converter_function(code),
         catalog_case: Map.get(@catalog_cases, code),
-        explanation: brief
+        fixture_id: Map.get(@catalog_cases, code),
+        retirement_reason: Map.get(@retirement_reasons, code),
+        brief: brief,
+        explanation: Cure.Compiler.Errors.catalog_explanation!(code)
       }
     end)
   end
@@ -97,6 +120,32 @@ defmodule Cure.Diagnostic.Registry do
   @spec retired() :: [Entry.t()]
   def retired, do: Enum.filter(entries(), &(&1.status == :retired))
 
+  @doc "Return the legacy explain-list shape derived from typed registry entries."
+  @spec list_all() :: [{String.t(), String.t(), String.t()}]
+  def list_all do
+    entries()
+    |> Enum.map(&{&1.code, &1.title, &1.brief})
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  @doc "Look up the complete explanation for a registered diagnostic code."
+  @spec explain(String.t()) :: {:ok, String.t()} | :error
+  def explain(code) when is_binary(code) do
+    case fetch(code) do
+      {:ok, entry} -> {:ok, entry.explanation}
+      :error -> :error
+    end
+  end
+
+  @doc "Validate registry invariants used by the diagnostic catalog and CI."
+  @spec validate([Entry.t()]) :: :ok | {:error, term()}
+  def validate(entries \\ entries()) when is_list(entries) do
+    with :ok <- unique_codes(entries),
+         :ok <- valid_entries(entries) do
+      :ok
+    end
+  end
+
   defp severity("E" <> _), do: :error
   defp severity("W" <> _), do: :warning
   defp severity("I" <> _), do: :information
@@ -116,8 +165,22 @@ defmodule Cure.Diagnostic.Registry do
     |> String.to_atom()
   end
 
+  defp converter(code) when code in @operational, do: Cure.Diagnostic.Operational
   defp converter(code) when code in @structured, do: Cure.Diagnostic.Adapter
   defp converter(_code), do: Cure.Compiler.Errors
+
+  defp converter_function(code) when code in @operational, do: :from_error
+  defp converter_function(code) when code in @structured, do: :from_error
+  defp converter_function(_code), do: :format_error
+
+  defp producers(code) when code in ~w[E068 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002],
+    do: [:operational]
+
+  defp producers("E091"), do: [:name_resolution]
+  defp producers("E092"), do: [:macro_expansion]
+  defp producers("E093"), do: [:elaboration, :kernel_conversion]
+  defp producers("E094"), do: [:lexer, :parser]
+  defp producers(_code), do: [:compiler_errors]
 
   defp subsystem("E101"), do: :compiler
   defp subsystem("E091"), do: :resolution
@@ -127,4 +190,47 @@ defmodule Cure.Diagnostic.Registry do
   defp subsystem(code) when code in ~w[E095 E096 E097 E098 E099 E100], do: :operations
   defp subsystem("W" <> _), do: :analysis
   defp subsystem(_code), do: :compiler
+
+  defp unique_codes(entries) do
+    entries
+    |> Enum.map(& &1.code)
+    |> Enum.frequencies()
+    |> Enum.find_value(:ok, fn
+      {code, count} when count > 1 -> {:error, {:duplicate_code, code}}
+      _ -> nil
+    end)
+  end
+
+  defp valid_entries(entries) do
+    Enum.find_value(entries, :ok, &validate_entry/1)
+  end
+
+  defp validate_entry(%Entry{} = entry) do
+    cond do
+      entry.producers == [] ->
+        {:error, {:missing_producer, entry.code}}
+
+      not is_atom(entry.converter) ->
+        {:error, {:missing_converter, entry.code}}
+
+      not is_atom(entry.converter_function) ->
+        {:error, {:missing_converter_function, entry.code}}
+
+      not Code.ensure_loaded?(entry.converter) or
+          not function_exported?(entry.converter, entry.converter_function, 2) ->
+        {:error, {:missing_converter_function, entry.code}}
+
+      not is_integer(entry.schema_version) or entry.schema_version < 1 ->
+        {:error, {:invalid_schema_version, entry.code}}
+
+      entry.status == :retired and (not is_binary(entry.retirement_reason) or entry.retirement_reason == "") ->
+        {:error, {:retired_without_reason, entry.code}}
+
+      entry.status == :reachable and not is_nil(entry.retirement_reason) ->
+        {:error, {:reachable_with_retirement_reason, entry.code}}
+
+      true ->
+        :ok
+    end
+  end
 end

@@ -1587,12 +1587,7 @@ defmodule Cure.Compiler.Errors do
   Returns `{:ok, text}` or `:error` if the code is unknown.
   """
   @spec explain(String.t()) :: {:ok, String.t()} | :error
-  def explain(code) do
-    case Map.get(@error_catalog, String.upcase(code)) do
-      nil -> :error
-      text -> {:ok, String.trim(text)}
-    end
-  end
+  def explain(code), do: Cure.Diagnostic.Registry.explain(code)
 
   @doc """
   Return all known error codes with a one-line summary each.
@@ -1602,7 +1597,20 @@ defmodule Cure.Compiler.Errors do
   The list is sorted by code.
   """
   @spec list_all() :: [{String.t(), String.t(), String.t()}]
-  def list_all do
+  def list_all, do: Cure.Diagnostic.Registry.list_all()
+
+  @doc false
+  @spec catalog_explanation!(String.t()) :: String.t()
+  def catalog_explanation!(code) do
+    case Map.fetch(@error_catalog, String.upcase(code)) do
+      {:ok, text} -> String.trim(text)
+      :error -> raise ArgumentError, "unregistered diagnostic code: #{inspect(code)}"
+    end
+  end
+
+  @doc false
+  @spec catalog_entries() :: [{String.t(), String.t(), String.t()}]
+  def catalog_entries do
     @error_catalog
     |> Enum.map(fn {code, text} ->
       lines = text |> String.trim() |> String.split("\n") |> Enum.map(&String.trim/1)
