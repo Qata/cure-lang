@@ -650,6 +650,12 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:example_type_mismatch, _failures}), do: true
   defp structured_error?({:computed_example_error, _failures}), do: true
   defp structured_error?({:computed_macro_error, meta, _reason}) when is_list(meta), do: true
+  defp structured_error?({:macro_expansion_cycle, chain}) when is_list(chain), do: true
+
+  defp structured_error?({:macro_expansion_budget, kind, frames})
+       when is_atom(kind) and is_list(frames),
+       do: true
+
   defp structured_error?({:expansion_ill_typed, details}) when is_map(details), do: true
   defp structured_error?({:macro_use_mismatch, _keyword, _expected, _got, _line, _column}), do: true
   defp structured_error?({:malformed_hole, _line, _column}), do: true

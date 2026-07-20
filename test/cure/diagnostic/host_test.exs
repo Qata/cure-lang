@@ -147,6 +147,27 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":rule_unpinned"
   end
 
+  test "keeps macro expansion cycles and budgets structured with provenance" do
+    cycle =
+      Host.render(
+        {:macro_expansion_cycle, [%{keyword: "outer", line: 3, col: 5}]},
+        "macro.cure"
+      )
+
+    budget =
+      Host.render(
+        {:macro_expansion_budget, :expansion_count, [%{keyword: "outer", line: 3, col: 5}]},
+        "macro.cure"
+      )
+
+    assert cycle =~ "[E092]"
+    assert cycle =~ "recursive"
+    assert budget =~ "[E092]"
+    assert budget =~ "expansion_count"
+    refute cycle =~ ":macro_expansion_cycle"
+    refute budget =~ ":macro_expansion_budget"
+  end
+
   test "renders erasure violations with the supported runtime classes" do
     rendered = Host.render({:unknown_erasure_class, :Handle, :banana}, "demo.cure")
 

@@ -771,6 +771,24 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:macro_expansion_cycle, chain}, opts) when is_list(chain) do
+    macro_expansion_failure(
+      :cycle,
+      "Macro expansion is recursive and did not reach a stable result.",
+      chain,
+      opts
+    )
+  end
+
+  def from_error({:macro_expansion_budget, kind, frames}, opts) when is_atom(kind) and is_list(frames) do
+    macro_expansion_failure(
+      {:budget, kind},
+      "Macro expansion exceeded its #{kind} limit.",
+      frames,
+      opts
+    )
+  end
+
   def from_error({:expansion_ill_typed, details}, opts) when is_map(details) do
     keyword = Map.get(details, :keyword, "computed")
 
@@ -827,6 +845,30 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp macro_expansion_failure(kind, message, frames, opts) do
+    provenance =
+      frames
+      |> Enum.filter(&is_map/1)
+      |> Enum.map(fn frame ->
+        %ProvenanceFrame{
+          kind: :macro_expansion,
+          name: Map.get(frame, :keyword, "macro"),
+          invocation: Keyword.get(opts, :span)
+        }
+      end)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_expansion_failed,
+      severity: :error,
+      title: if(kind == :cycle, do: "Macro expansion cycle", else: "Macro expansion limit exceeded"),
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, "reduce or stop this macro expansion"),
+      provenance: provenance ++ Keyword.get(opts, :provenance, []),
+      payload: %{kind: kind, frames: frames}
+    )
+  end
 
   defp codegen_failure(reason, opts) do
     {title, body, kind} = codegen_failure_content(reason)
