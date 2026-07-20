@@ -378,7 +378,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E090"), do: [:elaboration, :kernel_conversion]
   defp producers("E091"), do: [:name_resolution, :pattern_checker]
   defp producers("E092"), do: [:macro_expansion]
-  defp producers("E093"), do: [:elaboration, :kernel_conversion]
+  defp producers("E093"), do: [:elaboration, :kernel, :kernel_conversion]
   defp producers("E094"), do: [:lexer, :parser]
   defp producers("E101"), do: [:operational, :kernel]
   defp producers("E102"), do: [:elaboration]

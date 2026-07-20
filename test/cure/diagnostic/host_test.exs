@@ -350,6 +350,18 @@ defmodule Cure.Diagnostic.HostTest do
     refute named =~ ":named_implicit_unforced"
   end
 
+  test "renders kernel rejection paths as contextual type diagnostics" do
+    index = Host.render({:source_context, {:index_mismatch, :different_index}, %{}}, "kernel.cure")
+    escaping = Host.render({:source_context, {:escaping_variable, 3}, %{}}, "kernel.cure")
+
+    assert index =~ "[E093]"
+    assert index =~ "DEPENDENT INDEX MISMATCH"
+    assert escaping =~ "[E093]"
+    assert escaping =~ "TYPE VARIABLE ESCAPES ITS SCOPE"
+    refute index =~ ":index_mismatch"
+    refute escaping =~ ":escaping_variable"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 
