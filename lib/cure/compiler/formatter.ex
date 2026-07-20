@@ -1,4 +1,6 @@
 defmodule Cure.Compiler.Formatter do
+  alias Cure.MetaAST.Metadata
+
   @moduledoc ~S"""
   Safe, source-preserving formatter for Cure source files.
 
@@ -957,10 +959,10 @@ defmodule Cure.Compiler.Formatter do
 
   defp strip_meta(meta) do
     meta
+    |> Metadata.drop_source_info()
     |> Keyword.delete(:line)
     |> Keyword.delete(:col)
     |> Keyword.delete(:column)
-    |> Keyword.drop([:span, :name_span, :callee_span, :construct_span, :provenance])
     |> Enum.map(fn {k, v} -> {k, strip(v)} end)
   end
 
