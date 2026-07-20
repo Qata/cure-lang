@@ -585,6 +585,10 @@ defmodule Cure.Compiler.Errors do
   defp operational_error?({:duplicate_app, _}), do: true
   defp operational_error?({:app_name_mismatch, _, _}), do: true
   defp operational_error?({:compile_failed, _}), do: true
+  defp operational_error?({:release_build_failed, _}), do: true
+  defp operational_error?({:release_app_missing, _, _}), do: true
+  defp operational_error?({:sys_config_read_failed, _, _}), do: true
+  defp operational_error?({:vm_args_read_failed, _, _}), do: true
   defp operational_error?({:undocumented_public_function, _, _}), do: true
   defp operational_error?(_), do: false
 

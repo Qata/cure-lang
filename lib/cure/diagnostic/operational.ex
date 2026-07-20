@@ -54,6 +54,24 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:compile_failed, reason}, opts),
     do: Cure.Diagnostic.Adapter.from_error(reason, opts)
 
+  def from_error({:release_build_failed, details}, _opts),
+    do:
+      diagnostic("E098", :command_failure, "Release script generation failed: #{inspect(details)}", %{
+        kind: :release_build,
+        details: details
+      })
+
+  def from_error({:release_app_missing, app, reason}, _opts),
+    do:
+      diagnostic("E100", :artifact_error, "Release application `#{app}` is missing: #{inspect(reason)}", %{
+        kind: :release_app_missing,
+        app: app,
+        reason: reason
+      })
+
+  def from_error({:sys_config_read_failed, path, reason}, _opts), do: file_read(path, reason)
+  def from_error({:vm_args_read_failed, path, reason}, _opts), do: file_read(path, reason)
+
   def from_error({:undocumented_public_function, file, line}, _opts), do: undocumented_public_function(file, line)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)

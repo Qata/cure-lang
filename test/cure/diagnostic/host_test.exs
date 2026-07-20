@@ -329,6 +329,20 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":compile_failed"
   end
 
+  test "renders release operational failures through shared diagnostics" do
+    build = Host.render({:release_build_failed, :systools}, "release.cure")
+    app = Host.render({:release_app_missing, :demo, :missing_app_file}, "release.cure")
+    config = Host.render({:sys_config_read_failed, "sys.config", :enoent}, "release.cure")
+
+    assert build =~ "[E098]"
+    assert build =~ "Release script generation failed"
+    assert app =~ "[E100]"
+    assert app =~ "demo"
+    assert config =~ "[E095]"
+    assert config =~ "sys.config"
+    refute build =~ ":release_build_failed"
+  end
+
   test "converts aggregate type errors through the contextual type family" do
     rendered =
       Host.render(

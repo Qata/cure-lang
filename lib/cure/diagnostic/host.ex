@@ -67,6 +67,10 @@ defmodule Cure.Diagnostic.Host do
   defp operational_reason?({:duplicate_app, _}), do: true
   defp operational_reason?({:app_name_mismatch, _, _}), do: true
   defp operational_reason?({:compile_failed, _}), do: true
+  defp operational_reason?({:release_build_failed, _}), do: true
+  defp operational_reason?({:release_app_missing, _, _}), do: true
+  defp operational_reason?({:sys_config_read_failed, _, _}), do: true
+  defp operational_reason?({:vm_args_read_failed, _, _}), do: true
   defp operational_reason?({:undocumented_public_function, _, _}), do: true
   defp operational_reason?(_), do: false
 end
