@@ -1346,6 +1346,75 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:expected_literal_capture, shape, line, column}, opts),
+    do:
+      from_error(
+        %SyntaxProblem{
+          kind: :macro_literal_capture,
+          expected: shape,
+          observed: :non_literal,
+          at: Keyword.get(opts, :span),
+          context: %{line: line, column: column, code: "E094"}
+        },
+        opts
+      )
+
+  def from_error({:unknown_syntax_family_field, family, field, line, column}, opts),
+    do:
+      macro_validation_failure(
+        :unknown_syntax_family_field,
+        %{family: family, field: field, line: line, column: column},
+        opts
+      )
+
+  def from_error({:missing_syntax_family_field, family, field, line, column}, opts),
+    do:
+      macro_validation_failure(
+        :missing_syntax_family_field,
+        %{family: family, field: field, line: line, column: column},
+        opts
+      )
+
+  def from_error({:unknown_macro_obligation_capture, capture, line, column}, opts),
+    do:
+      macro_validation_failure(:unknown_macro_obligation_capture, %{capture: capture, line: line, column: column}, opts)
+
+  def from_error({:graded_let_requires_variable, grade, line, column}, opts),
+    do: contextual_type_failure(:graded_let_requires_variable, %{grade: grade, line: line, column: column}, opts)
+
+  def from_error({:unknown_grade, grade, line, column}, opts),
+    do: contextual_type_failure(:unknown_grade, %{grade: grade, line: line, column: column}, opts)
+
+  def from_error({:grade_requires_type, name, grade, line, column}, opts),
+    do: contextual_type_failure(:grade_requires_type, %{name: name, grade: grade, line: line, column: column}, opts)
+
+  def from_error({:unit_type_reserved, name}, opts),
+    do: macro_validation_failure(:unit_type_reserved, %{name: name}, opts)
+
+  def from_error({:with_multi_proof_unsupported, message}, opts),
+    do: contextual_type_failure(:with_multi_proof_unsupported, %{message: message}, opts)
+
+  def from_error({:with_multi_rematch_unsupported, message}, opts),
+    do: contextual_type_failure(:with_multi_rematch_unsupported, %{message: message}, opts)
+
+  def from_error({:with_multi_arity_mismatch, message}, opts),
+    do: contextual_type_failure(:with_multi_arity_mismatch, %{message: message}, opts)
+
+  def from_error({:with_multi_proof_unsupported, message, meta}, opts),
+    do: contextual_type_failure(:with_multi_proof_unsupported, %{message: message, meta: meta}, opts)
+
+  def from_error({:with_multi_rematch_unsupported, message, meta}, opts),
+    do: contextual_type_failure(:with_multi_rematch_unsupported, %{message: message, meta: meta}, opts)
+
+  def from_error({:with_multi_arity_mismatch, message, meta}, opts),
+    do: contextual_type_failure(:with_multi_arity_mismatch, %{message: message, meta: meta}, opts)
+
+  def from_error({:with_multi_no_arms, message, meta}, opts),
+    do: contextual_type_failure(:with_multi_no_arms, %{message: message, meta: meta}, opts)
+
+  def from_error({:with_multi_inconsistent_pattern, message, meta}, opts),
+    do: contextual_type_failure(:with_multi_inconsistent_pattern, %{message: message, meta: meta}, opts)
+
   def from_error({:unexpected_token, actual, line, column}, opts) do
     from_error(
       %SyntaxProblem{
@@ -2592,6 +2661,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :atom_too_long}), do: "Atom literal is too long"
   defp syntax_problem_title(%SyntaxProblem{kind: :unexpected_character}), do: "Unexpected character"
   defp syntax_problem_title(%SyntaxProblem{kind: :macro_use_mismatch}), do: "Macro syntax does not match"
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_literal_capture}), do: "Macro literal capture is invalid"
   defp syntax_problem_title(%SyntaxProblem{kind: :malformed_macro_hole}), do: "Macro hole is incomplete"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_placement}), do: "Edition pragma is misplaced"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_malformed}), do: "Edition pragma is malformed"
@@ -2635,6 +2705,9 @@ defmodule Cure.Diagnostic.Adapter do
     "The `#{keyword}` macro invocation does not match its declared syntax. " <>
       macro_expectation(expected, observed)
   end
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_literal_capture, expected: expected}),
+    do: "This macro capture must match the literal shape `#{syntax_name(expected)}`."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :malformed_macro_hole}),
     do: "This macro hole is incomplete; write it as `<name: Kind>`."

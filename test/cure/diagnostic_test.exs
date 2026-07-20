@@ -223,7 +223,23 @@ defmodule Cure.DiagnosticTest do
       {:accepts_without_syntax_family, "E092"},
       {:accepts_without_expander, "E092"},
       {:multiple_accepts_declarations, "E092"},
-      {:multiple_expands_declarations, "E092"}
+      {:multiple_expands_declarations, "E092"},
+      {{:expected_literal_capture, "{name}", 1, 2}, "E094"},
+      {{:unknown_syntax_family_field, :Expr, :field, 1, 2}, "E092"},
+      {{:missing_syntax_family_field, :Expr, :field, 1, 2}, "E092"},
+      {{:unknown_macro_obligation_capture, :capture, 1, 2}, "E092"},
+      {{:graded_let_requires_variable, :linear, 1, 2}, "E093"},
+      {{:unknown_grade, :future, 1, 2}, "E093"},
+      {{:grade_requires_type, :value, :linear, 1, 2}, "E093"},
+      {{:unit_type_reserved, "ms"}, "E092"},
+      {{:with_multi_proof_unsupported, "proof"}, "E093"},
+      {{:with_multi_rematch_unsupported, "rematch"}, "E093"},
+      {{:with_multi_arity_mismatch, "arity"}, "E093"},
+      {{:with_multi_proof_unsupported, "proof", []}, "E093"},
+      {{:with_multi_rematch_unsupported, "rematch", []}, "E093"},
+      {{:with_multi_arity_mismatch, "arity", []}, "E093"},
+      {{:with_multi_no_arms, "arms", []}, "E093"},
+      {{:with_multi_inconsistent_pattern, "patterns", []}, "E093"}
     ]
 
     for {reason, code} <- cases do
@@ -231,6 +247,15 @@ defmodule Cure.DiagnosticTest do
       assert diagnostic.code == code, "#{inspect(reason)} rendered as #{diagnostic.code}"
       assert is_binary(Diagnostic.message(diagnostic))
     end
+  end
+
+  test "literal macro captures retain a contextual syntax diagnostic" do
+    diagnostic = Adapter.from_error({:expected_literal_capture, "{name}", 1, 2})
+
+    assert diagnostic.code == "E094"
+    assert diagnostic.title == "Macro literal capture is invalid"
+    assert Diagnostic.message(diagnostic) =~ "literal shape"
+    refute Diagnostic.message(diagnostic) =~ "{:expected_literal_capture"
   end
 
   test "unique missing lexer delimiters provide an insertion edit" do
