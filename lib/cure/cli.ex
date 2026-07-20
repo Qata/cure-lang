@@ -2285,7 +2285,16 @@ defmodule Cure.CLI do
 
   defp info(msg), do: IO.puts(msg)
   defp warn(msg), do: IO.puts(:stderr, "warning: #{msg}")
-  defp error(msg), do: IO.puts(:stderr, "error: #{msg}")
+
+  defp error(msg) do
+    rendered = String.trim_leading(msg)
+
+    if String.starts_with?(rendered, "--") or String.contains?(rendered, "\n--") do
+      IO.puts(:stderr, msg)
+    else
+      diagnostic(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("cure", msg)))
+    end
+  end
 
   # A user-facing usage/lookup error that must fail the command: print to stderr
   # and exit non-zero, so `cure <misuse> && next` stops and CI wrappers see it.
