@@ -4,6 +4,25 @@ defmodule Cure.DiagnosticExerciserTest do
   alias Cure.Diagnostic.{Operational, Renderer}
 
   test "exercises every public diagnostic family and shows user output" do
+    compiler_cases = [
+      {"unknown global", "mod DiagnosticUnknown\n  fn run() -> Int = missing_name\n"},
+      {"syntax error", "mod DiagnosticSyntax\n  fn run( -> Int = 1\n"},
+      {"type mismatch", "mod DiagnosticType\n  fn run() -> Int = \"not an int\"\n"}
+    ]
+
+    Enum.each(compiler_cases, fn {label, source} ->
+      case Cure.Compiler.compile_string(source, emit_events: false) do
+        {:ok, _module, warnings} ->
+          Enum.each(warnings, fn warning ->
+            IO.puts(:stderr, "[#{label}] " <> Renderer.plain(Operational.compiler_warning(warning)))
+          end)
+
+        {:error, reason} ->
+          rendered = Cure.Compiler.Errors.format_with_source(reason, "#{label}.cure", source)
+          IO.puts(:stderr, "[#{label}]\n" <> rendered)
+      end
+    end)
+
     diagnostics = [
       Operational.file_read("demo.cure", :enoent),
       Operational.file_write("demo.cure", :eacces),
