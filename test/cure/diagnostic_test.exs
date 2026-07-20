@@ -133,6 +133,44 @@ defmodule Cure.DiagnosticTest do
     assert rendered =~ "^^^^^ defined here"
   end
 
+  test "carets align after tabs and multiline labels underline every covered line" do
+    source = "head\n\tbody\nlast"
+    registry = SourceRegistry.new() |> SourceRegistry.register(:multi, source, "multi.cure")
+    {:ok, span} = SourceRegistry.span(registry, :multi, 2, 13)
+
+    diagnostic =
+      Diagnostic.new(
+        code: "E101",
+        key: :type_mismatch,
+        severity: :error,
+        title: "Type mismatch",
+        message: "covered expression failed",
+        primary: %Label{span: span, style: :primary, message: "whole expression"}
+      )
+
+    rendered = Renderer.plain(diagnostic, registry)
+    assert rendered =~ "1 | head\n  |   ^^"
+    assert rendered =~ "2 |     body\n  | ^^^^^^^^"
+    assert rendered =~ "3 | last\n  | ^^ whole expression"
+  end
+
+  test "zero-width insertion spans still render one caret" do
+    registry = SourceRegistry.new() |> SourceRegistry.register(:insert, "abc", "insert.cure")
+    {:ok, span} = SourceRegistry.span(registry, :insert, 1, 1)
+
+    diagnostic =
+      Diagnostic.new(
+        code: "E101",
+        key: :missing_token,
+        severity: :error,
+        title: "Missing token",
+        message: "insert a token",
+        primary: %Label{span: span, style: :primary, message: "insert here"}
+      )
+
+    assert Renderer.plain(diagnostic, registry) =~ "1 | abc\n  |  ^ insert here"
+  end
+
   test "lifted module failures are reported at the public macro boundary" do
     diagnostic =
       Adapter.from_error(

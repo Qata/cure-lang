@@ -106,16 +106,66 @@ defmodule Cure.Diagnostic.Renderer do
   defp excerpt(_label, nil), do: nil
 
   defp excerpt(%Label{span: %Span{} = span, message: message}, %SourceRegistry{} = registry) do
-    case SourceRegistry.line(registry, span, span.start_line) do
-      {:ok, source_line} ->
-        width = max(span.end_column - span.start_column, 1)
-        marker = String.duplicate(" ", span.start_column - 1) <> String.duplicate("^", width)
-        suffix = if message, do: " " <> message, else: ""
-        "#{span.start_line} | #{source_line}\n  | #{marker}#{suffix}"
+    lines = span.start_line..span.end_line
 
-      :error ->
-        nil
+    rendered =
+      Enum.map(lines, fn line_number ->
+        case SourceRegistry.line(registry, span, line_number) do
+          {:ok, source_line} -> render_excerpt_line(span, line_number, source_line, message)
+          :error -> nil
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    case rendered do
+      [] -> nil
+      lines -> Enum.join(lines, "\n")
     end
+  end
+
+  defp render_excerpt_line(span, line_number, source_line, message) do
+    start_column = if line_number == span.start_line, do: span.start_column, else: 1
+
+    end_column =
+      cond do
+        line_number == span.end_line -> span.end_column
+        true -> String.length(source_line) + 1
+      end
+
+    visual_start = visual_column(source_line, start_column)
+    visual_end = visual_column(source_line, end_column)
+    width = max(visual_end - visual_start, 1)
+    marker = String.duplicate(" ", visual_start - 1) <> String.duplicate("^", width)
+    suffix = if line_number == span.end_line and message, do: " " <> message, else: ""
+    "#{line_number} | #{expand_tabs(source_line)}\n  | #{marker}#{suffix}"
+  end
+
+  @tab_width 4
+
+  defp visual_column(line, scalar_column) do
+    line
+    |> String.codepoints()
+    |> Enum.take(scalar_column - 1)
+    |> Enum.reduce(1, fn
+      "\t", column -> column + (@tab_width - rem(column - 1, @tab_width))
+      _codepoint, column -> column + 1
+    end)
+  end
+
+  defp expand_tabs(line) do
+    {parts, _column} =
+      line
+      |> String.codepoints()
+      |> Enum.map_reduce(1, fn
+        "\t", column ->
+          width = @tab_width - rem(column - 1, @tab_width)
+          {String.duplicate(" ", width), column + width}
+
+        codepoint, column ->
+          {codepoint, column + 1}
+      end)
+
+    IO.iodata_to_binary(parts)
   end
 
   defp secondary_excerpt(_label, nil), do: nil
