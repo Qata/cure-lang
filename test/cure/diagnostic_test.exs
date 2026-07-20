@@ -160,6 +160,24 @@ defmodule Cure.DiagnosticTest do
     assert hd(diagnostic.suggestions).message =~ "`Nothing`"
   end
 
+  test "name candidates rank usable namespace and arity matches before spelling" do
+    diagnostic =
+      Adapter.unknown_name(:value, "map",
+        arity: 2,
+        candidates: [
+          %{name: "map", namespace: :type, arity: 2, visibility: :public},
+          %{name: "map", namespace: :value, arity: 2, visibility: :private},
+          %{name: "mop", namespace: :value, arity: 1, visibility: :public},
+          %{name: "map_values", namespace: :value, arity: 2, visibility: :private},
+          %{name: "map_values", namespace: :value, arity: 2, visibility: :public}
+        ]
+      )
+
+    assert diagnostic.payload.candidates == ["map_values", "mop", "map"]
+    assert hd(diagnostic.payload.candidate_details).visibility == :public
+    assert hd(diagnostic.payload.candidate_details).arity == 2
+  end
+
   test "conversion failures present Cure types and retain Core payloads", %{registry: registry, span: span} do
     actual = {:data, :"Std.Bool#Bool", [], []}
     expected = {:data, :"Std.Int#Int", [], []}

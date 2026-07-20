@@ -369,7 +369,8 @@ defmodule Cure.Diagnostic.Adapter do
   @spec unknown_name(atom(), term(), keyword()) :: Diagnostic.t()
   def unknown_name(namespace, name, opts \\ []) do
     spelling = name_to_string(name)
-    candidates = opts |> Keyword.get(:candidates, []) |> Enum.map(&name_to_string/1) |> Enum.uniq()
+    candidate_details = rank_candidates(Keyword.get(opts, :candidates, []), spelling, namespace, opts)
+    candidates = Enum.map(candidate_details, & &1.name)
 
     Diagnostic.new(
       code: @unknown_name_code,
@@ -385,6 +386,7 @@ defmodule Cure.Diagnostic.Adapter do
         namespace: namespace,
         name: spelling,
         candidates: candidates,
+        candidate_details: candidate_details,
         owner: Keyword.get(opts, :owner),
         checking: Keyword.get(opts, :checking),
         arity: Keyword.get(opts, :arity),
@@ -418,6 +420,73 @@ defmodule Cure.Diagnostic.Adapter do
         applicability: :maybe_incorrect
       }
     ]
+  end
+
+  defp rank_candidates(candidates, spelling, namespace, opts) do
+    candidates
+    |> Enum.map(&candidate_detail/1)
+    |> Enum.sort_by(fn candidate ->
+      {
+        unusable_candidate?(candidate),
+        candidate.namespace not in [nil, namespace],
+        arity_mismatch?(candidate.arity, Keyword.get(opts, :arity)),
+        candidate.visibility not in [nil, :public],
+        qualification_cost(candidate),
+        edit_distance(spelling, candidate.name),
+        candidate.name
+      }
+    end)
+    |> Enum.uniq_by(& &1.name)
+    |> Enum.take(3)
+  end
+
+  defp candidate_detail(candidate) when is_map(candidate) do
+    %{
+      name: name_to_string(Map.get(candidate, :name, Map.get(candidate, "name", "<unknown>"))),
+      namespace: Map.get(candidate, :namespace, Map.get(candidate, "namespace")),
+      visibility: Map.get(candidate, :visibility, Map.get(candidate, "visibility")),
+      arity: Map.get(candidate, :arity, Map.get(candidate, "arity")),
+      owner: Map.get(candidate, :owner, Map.get(candidate, "owner")),
+      imported: Map.get(candidate, :imported, Map.get(candidate, "imported", true))
+    }
+  end
+
+  defp candidate_detail(candidate) do
+    %{name: name_to_string(candidate), namespace: nil, visibility: nil, arity: nil, owner: nil, imported: true}
+  end
+
+  defp unusable_candidate?(%{visibility: visibility, imported: imported}),
+    do: visibility == :private or imported == false
+
+  defp arity_mismatch?(_candidate, nil), do: false
+  defp arity_mismatch?(nil, _expected), do: false
+  defp arity_mismatch?(candidate, expected), do: candidate != expected
+
+  defp qualification_cost(%{owner: nil}), do: 0
+  defp qualification_cost(%{imported: true}), do: 0
+  defp qualification_cost(_candidate), do: 1
+
+  defp edit_distance(left, right) do
+    right_graphemes = String.graphemes(right)
+    initial = Enum.to_list(0..length(right_graphemes))
+
+    left
+    |> String.graphemes()
+    |> Enum.with_index(1)
+    |> Enum.reduce(initial, fn {left_char, row_index}, previous ->
+      {_last, row} =
+        right_graphemes
+        |> Enum.with_index(1)
+        |> Enum.reduce({row_index, [row_index]}, fn {right_char, column}, {left_cell, row} ->
+          above = Enum.at(previous, column)
+          diagonal = Enum.at(previous, column - 1)
+          cell = min(above + 1, min(left_cell + 1, diagonal + if(left_char == right_char, do: 0, else: 1)))
+          {cell, [cell | row]}
+        end)
+
+      Enum.reverse(row)
+    end)
+    |> List.last()
   end
 
   defp namespace_title(:value), do: "value"
