@@ -665,7 +665,8 @@ defmodule Cure.REPL do
           result = module.main()
           render_value(state, result)
         catch
-          kind, reason -> render_error(state, "#{kind}: #{inspect(reason)}")
+          kind, reason ->
+            render_reason_error(state, Cure.Diagnostic.Operational.command_failure("repl", {kind, reason}))
         end
 
         state
@@ -781,7 +782,7 @@ defmodule Cure.REPL do
           end
 
         {:error, reason} ->
-          render_error(state, "  #{path}: #{reason}")
+          render_reason_error(state, Cure.Diagnostic.Operational.file_read(path, reason))
       end
     end)
 
@@ -862,7 +863,7 @@ defmodule Cure.REPL do
         end
 
       {:error, reason} ->
-        render_error(state, "cannot read #{path}: #{reason}")
+        render_reason_error(state, Cure.Diagnostic.Operational.file_read(path, reason))
         state
     end
   end
@@ -977,11 +978,11 @@ defmodule Cure.REPL do
         state
 
       {:error, :E069} ->
-        render_error(state, "snap schema incompatible (E069): re-create the snap with this version of Cure")
+        render_reason_error(state, Cure.Diagnostic.Operational.snap_schema_incompatible(path))
         state
 
       {:error, :corrupt} ->
-        render_error(state, "snap file is corrupt or truncated")
+        render_reason_error(state, Cure.Diagnostic.Operational.file_read(path, :corrupt))
         state
 
       {:error, {:file_read_error, p, reason}} ->
@@ -1015,7 +1016,7 @@ defmodule Cure.REPL do
 
     case File.write(path, content) do
       :ok -> render_info(state, "saved session to #{path}")
-      {:error, reason} -> render_error(state, "cannot write #{path}: #{reason}")
+      {:error, reason} -> render_reason_error(state, Cure.Diagnostic.Operational.file_write(path, reason))
     end
 
     state
