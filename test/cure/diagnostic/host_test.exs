@@ -451,6 +451,25 @@ defmodule Cure.Diagnostic.HostTest do
     assert occurs =~ "INFINITE TYPE DETECTED"
   end
 
+  test "renders ordinary unsupported elaboration forms without E101" do
+    expression = Host.render({:unsupported_expression, :effectful_value}, "forms.cure")
+    annotation = Host.render({:let_needs_annotation, :value}, "forms.cure")
+    pattern = Host.render({:nonlinear_pattern, :x}, "forms.cure")
+    alias_error = Host.render({:typealias_not_a_type, :value}, "forms.cure")
+    effect = Host.render({:effect_arity, :send, 2, 1}, "forms.cure")
+
+    assert expression =~ "EXPRESSION IS NOT SUPPORTED"
+    assert annotation =~ "BINDING NEEDS AN ANNOTATION"
+    assert pattern =~ "PATTERN BINDS A NAME TWICE"
+    assert alias_error =~ "TYPE ALIAS DOES NOT NAME A TYPE"
+    assert effect =~ "EFFECT OPERATION ARITY MISMATCH"
+
+    for output <- [expression, annotation, pattern, alias_error, effect] do
+      assert output =~ "[E093]"
+      refute output =~ "INTERNAL COMPILER ERROR"
+    end
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 

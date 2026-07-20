@@ -611,6 +611,34 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unsolved_field_type, constructor}, opts),
     do: contextual_type_failure(:unsolved_field_type, %{constructor: constructor}, opts)
 
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :unsupported_expression,
+             :unsupported_pattern,
+             :unsupported_guard,
+             :untyped_parameter,
+             :let_needs_annotation,
+             :graded_let_needs_annotation,
+             :binary_match_needs_default,
+             :map_match_needs_default,
+             :nonlinear_pattern,
+             :duplicate_default_pattern,
+             :impossible_default_pattern,
+             :typealias_not_a_type,
+             :result_type_not_family,
+             :constructor_result_mismatch,
+             :dependent_record_projection,
+             :with_indexed_scrutinee_unsupported,
+             :with_rematch_unsupported_parent_pattern,
+             :with_sibling_dependency_unsupported,
+             :telescope_index_out_of_bounds,
+             :effect_binder_erased
+           ],
+      do: contextual_type_failure(kind, %{detail: detail}, opts)
+
+  def from_error({:effect_arity, name, expected, actual}, opts),
+    do: contextual_type_failure(:effect_arity, %{name: name, expected: expected, actual: actual}, opts)
+
   def from_error({:unknown_global, name}, opts),
     do: unknown_name(:value, name, opts)
 
@@ -1681,6 +1709,95 @@ defmodule Cure.Diagnostic.Adapter do
         :unsolved_field_type ->
           {"Constructor field type is unresolved", "Cure could not determine the type of a field in this constructor.",
            "add an annotation that determines the field type"}
+
+        :unsupported_expression ->
+          {"Expression is not supported here", "This expression form is not valid in the current elaboration context.",
+           "rewrite this expression using a supported form"}
+
+        :unsupported_pattern ->
+          {"Pattern is not supported here", "This pattern form cannot be checked in the current context.",
+           "use a supported pattern"}
+
+        :unsupported_guard ->
+          {"Guard is not supported here", "This guard expression cannot be used in a pattern guard.",
+           "rewrite the guard using supported operations"}
+
+        :untyped_parameter ->
+          {"Parameter needs a type", "This parameter must have an explicit type annotation here.",
+           "add a type annotation to the parameter"}
+
+        :let_needs_annotation ->
+          {"Binding needs an annotation", "Cure cannot infer the type of this binding from its initializer.",
+           "add a type annotation to this binding"}
+
+        :graded_let_needs_annotation ->
+          {"Graded binding needs an annotation",
+           "A graded binding must state the type required by its relevance grade.",
+           "add a type annotation to this graded binding"}
+
+        :binary_match_needs_default ->
+          {"Binary match needs a default", "This binary match does not cover all possible segment lengths.",
+           "add a default binary-match arm"}
+
+        :map_match_needs_default ->
+          {"Map match needs a default", "This map match does not cover unmatched keys.", "add a default map-match arm"}
+
+        :nonlinear_pattern ->
+          {"Pattern binds a name twice", "A pattern cannot bind the same name more than once.",
+           "use distinct names or a forced pattern"}
+
+        :duplicate_default_pattern ->
+          {"Duplicate default pattern", "This match contains more than one default pattern.",
+           "keep only one default pattern"}
+
+        :impossible_default_pattern ->
+          {"Default pattern is unreachable", "This default pattern cannot be reached after the earlier patterns.",
+           "remove or revise the unreachable pattern"}
+
+        :typealias_not_a_type ->
+          {"Type alias does not name a type", "The right-hand side of this type alias is not a well-formed type.",
+           "define the alias using a type expression"}
+
+        :result_type_not_family ->
+          {"Result type is not a type family",
+           "This dependent result must be a type family indexed by the function's result.",
+           "return a valid indexed type"}
+
+        :constructor_result_mismatch ->
+          {"Constructor result does not match",
+           "This constructor's result type does not match the family being defined.",
+           "correct the constructor result indices"}
+
+        :dependent_record_projection ->
+          {"Dependent record projection is invalid",
+           "This record field projection does not preserve the required dependent type.",
+           "project a field with a compatible dependent type"}
+
+        :with_indexed_scrutinee_unsupported ->
+          {"Indexed with-scrutinee is unsupported",
+           "This indexed value cannot be used as the parent of a `with` rematch.", "rematch a supported parent value"}
+
+        :with_rematch_unsupported_parent_pattern ->
+          {"With parent pattern is unsupported",
+           "The parent pattern cannot be structurally rematched in this `with` expression.",
+           "use a supported parent pattern"}
+
+        :with_sibling_dependency_unsupported ->
+          {"With sibling dependency is unsupported",
+           "This rematch depends on a sibling binding that is not available here.",
+           "restructure the dependent bindings"}
+
+        :telescope_index_out_of_bounds ->
+          {"Dependent index is out of scope", "This indexed reference points outside the available telescope.",
+           "use an index that is in scope"}
+
+        :effect_binder_erased ->
+          {"Effect binder is erased", "An erased effect binder is used where a runtime-relevant value is required.",
+           "make the binder relevant or remove the runtime use"}
+
+        :effect_arity ->
+          {"Effect operation arity mismatch", "This effect operation was given the wrong number of arguments.",
+           "provide the arguments required by the effect operation"}
       end
 
     Diagnostic.new(
