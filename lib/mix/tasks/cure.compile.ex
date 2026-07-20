@@ -14,6 +14,8 @@ defmodule Mix.Tasks.Cure.Compile do
 
   use Mix.Task
 
+  alias Cure.Diagnostic.Sink
+
   @shortdoc "Compiles Cure source files to BEAM bytecode"
 
   @impl Mix.Task
@@ -28,9 +30,7 @@ defmodule Mix.Tasks.Cure.Compile do
 
     if paths == [] do
       Mix.shell().error(
-        Cure.Diagnostic.Renderer.plain(
-          Cure.Diagnostic.Operational.usage("Usage: mix cure.compile <path> [--output-dir DIR]")
-        )
+        render_diagnostic(Cure.Diagnostic.Operational.usage("Usage: mix cure.compile <path> [--output-dir DIR]"))
       )
 
       exit({:shutdown, 1})
@@ -86,7 +86,7 @@ defmodule Mix.Tasks.Cure.Compile do
     case Cure.Compiler.compile_file(path, output_dir: output_dir) do
       {:ok, module, warnings} ->
         Enum.each(warnings, fn w ->
-          Mix.shell().info("  " <> Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.compiler_warning(w)))
+          Mix.shell().info("  " <> render_diagnostic(Cure.Diagnostic.Operational.compiler_warning(w)))
         end)
 
         Mix.shell().info("  -> #{module}")
@@ -95,5 +95,10 @@ defmodule Mix.Tasks.Cure.Compile do
         formatted = Cure.Diagnostic.Host.render(reason, path)
         Mix.shell().error(formatted)
     end
+  end
+
+  defp render_diagnostic(diagnostic) do
+    Sink.new(format: :plain, color: :auto, width: 80)
+    |> Sink.render(diagnostic)
   end
 end
