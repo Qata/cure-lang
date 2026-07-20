@@ -645,6 +645,12 @@ defmodule Cure.Diagnostic.Adapter do
              :invalid_syntax_string,
              :invalid_syntax_literal,
              :invalid_syntax_pair,
+             :left_recursive_parse_production,
+             :protocol_role_count,
+             :invalid_macro_segment,
+             :unsupported_surface_filler,
+             :missing_hole_filler,
+             :unsupported_hole_type,
              :invalid_lift_module,
              :invalid_lift_module_name,
              :invalid_lift_callback,
@@ -685,7 +691,7 @@ defmodule Cure.Diagnostic.Adapter do
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
   def from_error({kind, first, second}, opts)
-      when kind in [:forward_packet_length, :invalid_packet_crc_fields],
+      when kind in [:forward_packet_length, :invalid_packet_crc_fields, :reserved_syntax_field, :invalid_unit_literal],
       do: macro_validation_failure(kind, %{first: first, second: second}, opts)
 
   def from_error({:reducer_arity, constructor, actual, expected}, opts),
