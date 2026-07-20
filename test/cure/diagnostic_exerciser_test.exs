@@ -37,6 +37,9 @@ defmodule Cure.DiagnosticExerciserTest do
           plain = Renderer.plain(diagnostic, registry)
           assert plain =~ " | ", "#{label} did not render an authored source excerpt"
 
+          assert Cure.Compiler.Errors.format_with_source(reason, "#{label}.cure", source) =~ expected_code,
+                 "#{label} still uses the legacy formatter path"
+
           terminal =
             Renderer.terminal(
               diagnostic,

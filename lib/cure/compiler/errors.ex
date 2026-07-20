@@ -1733,6 +1733,14 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:codegen_error, {:unknown_global, _name}}), do: true
   defp structured_error?({:codegen_error, {:unknown_global, _name, details}}) when is_map(details), do: true
   defp structured_error?({:unknown_constructor, _name}), do: true
+  defp structured_error?({:unfilled_hole, _name}), do: true
+  defp structured_error?({:unsolved_metavariables, _name}), do: true
+  defp structured_error?({:unsupported_pattern, _shape}), do: true
+
+  defp structured_error?({kind, _name})
+       when kind in [:unknown_ctor, :foreign_ctor, :unknown_pattern_constructor, :unknown_family],
+       do: true
+
   defp structured_error?({:lift_module_error, details}) when is_map(details), do: true
   defp structured_error?({:conversion_failure, _actual, _expected}), do: true
   defp structured_error?({:codegen_error, {:conversion_failure, _actual, _expected}}), do: true
