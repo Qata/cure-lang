@@ -21,7 +21,9 @@ defmodule Cure.LSP.Server do
   use GenServer
 
   alias Cure.LSP.Transport
+  alias Cure.LSP.Positions
   alias Cure.Compiler.{Formatter, Lexer, Parser}
+  alias Cure.MetaAST.Metadata
 
   defstruct [
     :reader_pid,
@@ -265,7 +267,7 @@ defmodule Cure.LSP.Server do
 
     docs = Map.get(state, :documents, %{})
     text = Map.get(docs, uri, "")
-    result = find_definition(text, uri, line, char)
+    result = find_definition(text, uri, line, char, Map.get(state, :position_encoding, :utf16))
 
     Transport.send_response(id, result)
     {state, []}
@@ -277,7 +279,7 @@ defmodule Cure.LSP.Server do
     docs = Map.get(state, :documents, %{})
     text = Map.get(docs, uri, "")
 
-    symbols = compute_symbols(text)
+    symbols = compute_symbols(text, Map.get(state, :position_encoding, :utf16))
     Transport.send_response(id, symbols)
     {state, []}
   end
@@ -376,7 +378,7 @@ defmodule Cure.LSP.Server do
   defp do_handle("workspace/symbol", id, params, state) do
     query = Map.get(params, "query", "")
     docs = Map.get(state, :documents, %{})
-    Transport.send_response(id, compute_workspace_symbols(query, docs))
+    Transport.send_response(id, compute_workspace_symbols(query, docs, Map.get(state, :position_encoding, :utf16)))
     {state, []}
   end
 
@@ -518,7 +520,7 @@ defmodule Cure.LSP.Server do
 
   # -- Go-to-Definition --------------------------------------------------------
 
-  defp find_definition(text, uri, line, char) do
+  defp find_definition(text, uri, line, char, encoding) do
     lines = String.split(text, "\n")
     target_line = Enum.at(lines, line, "")
     word = extract_word_at(target_line, char)
@@ -528,7 +530,7 @@ defmodule Cure.LSP.Server do
       definition_line =
         case parse_to_ast(text) do
           {:ok, ast} ->
-            symbols = build_symbol_table(ast)
+            symbols = build_symbol_table(ast, text, encoding)
 
             case Enum.find(symbols, fn s -> s.name == word and s.kind == :function end) do
               %{line: l} -> l - 1
@@ -547,12 +549,21 @@ defmodule Cure.LSP.Server do
           end)
 
       if definition_line do
+        symbol_range =
+          case parse_to_ast(text) do
+            {:ok, ast} ->
+              case Enum.find(build_symbol_table(ast, text, encoding), fn s -> s.name == word and s.kind == :function end) do
+                %{span: span} -> Positions.range(span, text, encoding)
+                _ -> Positions.line_range(definition_line + 1, text, encoding)
+              end
+
+            _ ->
+              Positions.line_range(definition_line + 1, text, encoding)
+          end
+
         %{
           "uri" => uri,
-          "range" => %{
-            "start" => %{"line" => definition_line, "character" => 0},
-            "end" => %{"line" => definition_line, "character" => 999}
-          }
+          "range" => symbol_range
         }
       else
         nil
@@ -591,10 +602,10 @@ defmodule Cure.LSP.Server do
 
   # -- Document Symbols --------------------------------------------------------
 
-  defp compute_symbols(text) do
+  defp compute_symbols(text, encoding) do
     with {:ok, tokens} <- Lexer.tokenize(text, emit_events: false),
          {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
-      Cure.LSP.Symbols.extract(ast)
+      Cure.LSP.Symbols.extract(ast, text, encoding)
     else
       _ -> []
     end
@@ -742,23 +753,24 @@ defmodule Cure.LSP.Server do
   end
 
   @doc false
-  def build_symbol_table(ast) do
-    extract_symbols(ast, [])
+  def build_symbol_table(ast, source \\ nil, encoding \\ :utf16) do
+    extract_symbols(ast, [], source, encoding)
   end
 
-  defp extract_symbols({:container, meta, body}, acc) do
+  defp extract_symbols({:container, meta, body}, acc, source, encoding) do
     name = Keyword.get(meta, :name, "unknown")
     line = Keyword.get(meta, :line, 1)
     type = Keyword.get(meta, :container_type, :module)
-    acc = [%{name: name, kind: :module, line: line, signature: "#{type} #{name}"} | acc]
-    Enum.reduce(body, acc, &extract_symbols/2)
+    info = Metadata.source_info(meta)
+    acc = [%{name: name, kind: :module, line: line, signature: "#{type} #{name}", span: info && info.whole} | acc]
+    Enum.reduce(body, acc, &extract_symbols(&1, &2, source, encoding))
   end
 
-  defp extract_symbols({:block, _, children}, acc) do
-    Enum.reduce(children, acc, &extract_symbols/2)
+  defp extract_symbols({:block, _, children}, acc, source, encoding) do
+    Enum.reduce(children, acc, &extract_symbols(&1, &2, source, encoding))
   end
 
-  defp extract_symbols({:function_def, meta, _body}, acc) do
+  defp extract_symbols({:function_def, meta, _body}, acc, _source, _encoding) do
     name = Keyword.get(meta, :name, "unknown")
     params = Keyword.get(meta, :params, [])
     line = Keyword.get(meta, :line, 1)
@@ -766,10 +778,11 @@ defmodule Cure.LSP.Server do
     param_str = Enum.map_join(params, ", ", &format_param/1)
 
     sig = "fn #{name}(#{param_str})"
-    [%{name: name, kind: :function, line: line, signature: sig} | acc]
+    info = Metadata.source_info(meta)
+    [%{name: name, kind: :function, line: line, signature: sig, span: info && info.whole} | acc]
   end
 
-  defp extract_symbols(_, acc), do: acc
+  defp extract_symbols(_, acc, _source, _encoding), do: acc
 
   # Parameter pretty-printer tolerant of the various AST shapes the parser
   # can emit (full `:param` tuples, bare `:variable` tuples in generic type
@@ -1010,13 +1023,13 @@ defmodule Cure.LSP.Server do
   # -- Workspace symbols --------------------------------------------------------
 
   @doc false
-  def compute_workspace_symbols(query, documents) do
+  def compute_workspace_symbols(query, documents, encoding \\ :utf16) do
     documents
     |> Enum.flat_map(fn {uri, text} ->
       case parse_to_ast(text) do
         {:ok, ast} ->
           ast
-          |> build_symbol_table()
+          |> build_symbol_table(text, encoding)
           |> Enum.filter(fn s -> query == "" or String.contains?(s.name, query) end)
           |> Enum.map(fn s ->
             %{
@@ -1024,10 +1037,11 @@ defmodule Cure.LSP.Server do
               "kind" => if(s.kind == :function, do: 12, else: 2),
               "location" => %{
                 "uri" => uri,
-                "range" => %{
-                  "start" => %{"line" => max(s.line - 1, 0), "character" => 0},
-                  "end" => %{"line" => max(s.line - 1, 0), "character" => 999}
-                }
+                "range" =>
+                  if(s.span,
+                    do: Positions.range(s.span, text, encoding),
+                    else: Positions.line_range(s.line, text, encoding)
+                  )
               }
             }
           end)

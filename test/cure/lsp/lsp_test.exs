@@ -305,7 +305,7 @@ defmodule Cure.LSP.LspTest do
     test "suggests wildcard for non-exhaustive match" do
       diag = %{
         "message" => "match expression is not exhaustive, missing: false",
-        "range" => %{"start" => %{"line" => 3, "character" => 0}, "end" => %{"line" => 3, "character" => 999}}
+        "range" => %{"start" => %{"line" => 3, "character" => 0}, "end" => %{"line" => 3, "character" => 0}}
       }
 
       actions = Server.compute_code_actions("file:///test.cure", [diag])
