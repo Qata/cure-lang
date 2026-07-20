@@ -51,6 +51,11 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
       assert {:ok, _} = parse_raw(source)
     end
 
+    test "the real compiler parser path accepts the supervisor header" do
+      source = "sup App.Root\n  children []\n"
+      assert {:ok, _} = Cure.Compiler.parse_source(source, file: "sup.cure")
+    end
+
     test "`impl Proto for Type` rejects another keyword in place of `for`" do
       assert {:error, _} = parse_raw("impl Show when Int\n  fn show(x: Int) -> String = \"x\"\n")
     end
