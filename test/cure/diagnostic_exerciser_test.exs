@@ -17,7 +17,8 @@ defmodule Cure.DiagnosticExerciserTest do
       {"unfilled hole", "E014", "mod DiagnosticHole\n  fn bad() -> Int = ???\n"},
       {"unterminated lambda", "E035", "fn (x) -> x; x;"},
       {"unrecognized pattern", "E090",
-       "mod DiagnosticPattern\n  fn bad(x: Int) -> Int = match x\n    1..10 -> 1\n    _ -> 0\n"}
+       "mod DiagnosticPattern\n  fn bad(x: Int) -> Int = match x\n    1..10 -> 1\n    _ -> 0\n"},
+      {"missing implicit", "E011", "mod DiagnosticImplicit\n  fn bad() -> Int = reflexive()\n"}
     ]
 
     compiler_codes = Enum.map(compiler_cases, &elem(&1, 1))

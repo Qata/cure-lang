@@ -38,6 +38,24 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:source_context, {:unsolved_metavariables, name}, context}, opts) when is_map(context) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+
+    Diagnostic.new(
+      code: "E011",
+      key: :missing_implicit_argument,
+      severity: :error,
+      title: "Missing implicit argument",
+      body: Doc.paragraph("Cure could not infer every implicit argument for `#{name}` at this call site."),
+      primary: primary_label(opts, "the implicit argument cannot be inferred"),
+      payload: %{
+        name: name,
+        checking: Map.get(context, :checking),
+        expectation_origin: Map.get(context, :expectation_origin)
+      }
+    )
+  end
+
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
       opts
