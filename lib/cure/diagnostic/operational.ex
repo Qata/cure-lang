@@ -66,6 +66,14 @@ defmodule Cure.Diagnostic.Operational do
     )
   end
 
+  def export_unmappable(reason),
+    do: diagnostic("E068", :export_type_unmappable, "Export type cannot be represented: #{reason}", %{reason: reason})
+
+  def snap_missing(path),
+    do: diagnostic("E070", :snap_path_missing, "Snap loaded path no longer exists: #{path}", %{path: path})
+
+  def configuration_warning(message), do: diagnostic("W002", :configuration_warning, message, %{})
+
   defp diagnostic(code, key, message, payload),
     do: Diagnostic.new(code: code, key: key, severity: :error, title: "#{key}", message: message, payload: payload)
 

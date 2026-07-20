@@ -303,4 +303,10 @@ defmodule Cure.DiagnosticTest do
     assert Cure.Diagnostic.Renderer.plain(warning) =~ "W001"
     assert Cure.Diagnostic.Renderer.plain(warning) =~ "use the modern form"
   end
+
+  test "specialized operational warnings retain stable codes" do
+    assert Cure.Diagnostic.Operational.export_unmappable("dependent").code == "E068"
+    assert Cure.Diagnostic.Operational.snap_missing("missing.cure").code == "E070"
+    assert Cure.Diagnostic.Operational.configuration_warning("bad setting").code == "W002"
+  end
 end

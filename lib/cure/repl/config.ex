@@ -130,7 +130,12 @@ defmodule Cure.REPL.Config do
           end
 
         other ->
-          warn("ignoring non-string stdlib group entry: #{inspect(other)}")
+          warn(
+            Cure.Diagnostic.Renderer.plain(
+              Cure.Diagnostic.Operational.configuration_warning("Ignoring non-string stdlib group entry")
+            )
+          )
+
           []
       end)
       |> Enum.uniq()
@@ -143,7 +148,12 @@ defmodule Cure.REPL.Config do
   end
 
   def parse_stdlib(other) do
-    warn("ignoring unrecognised `[stdlib] preload` value: #{inspect(other)}")
+    warn(
+      Cure.Diagnostic.Renderer.plain(
+        Cure.Diagnostic.Operational.configuration_warning("Ignoring unrecognised `[stdlib] preload` value")
+      )
+    )
+
     :none
   end
 
