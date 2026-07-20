@@ -1640,7 +1640,13 @@ defmodule Cure.REPL do
     "#{stage}: #{msg}"
   end
 
-  defp format_error(other), do: inspect(other)
+  defp format_error({:error, message}) when is_binary(message), do: message
+
+  defp format_error({:error, _kind, message}) when is_binary(message), do: message
+
+  defp format_error(other) do
+    raise Cure.Diagnostic.UnhandledError, error: {:repl_error, other}
+  end
 
   @doc false
   def __format_error__(reason), do: format_error(reason)
