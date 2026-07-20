@@ -50,11 +50,16 @@ defmodule Mix.Tasks.Cure.Diagnostics do
     with :ok <- Cure.Diagnostic.Registry.validate(),
          :ok <- Cure.Diagnostic.Registry.validate_reachability(),
          :ok <- Cure.Diagnostic.Registry.validate_sources(),
+         :ok <- Cure.MetaAST.MetadataLint.validate(metadata_semantic_paths()),
          :ok <- validate_inventory() do
       :ok
     else
       {:error, reason} -> Mix.raise("diagnostic registry validation failed: #{inspect(reason)}")
     end
+  end
+
+  defp metadata_semantic_paths do
+    Path.wildcard("lib/cure/elab/**/*.ex") ++ Path.wildcard("lib/cure/compiler/**/*.ex")
   end
 
   defp validate_inventory do

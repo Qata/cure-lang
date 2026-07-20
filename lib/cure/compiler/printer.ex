@@ -466,21 +466,22 @@ defmodule Cure.Compiler.Printer do
   defp to_string({:conditional, _meta, [condition, then_br, else_br]}, depth, indent) do
     cond_str = render(condition, depth, indent)
 
-    case {then_br, else_br} do
-      {_, {:literal, [subtype: :null], nil}} ->
-        # No else branch
-        "if #{cond_str} then #{render(then_br, depth, indent)}"
+    case else_br do
+      {:literal, meta, nil} when is_list(meta) ->
+        if Keyword.get(meta, :subtype) == :null do
+          "if #{cond_str} then #{render(then_br, depth, indent)}"
+        else
+          "if #{cond_str} then #{render(then_br, depth, indent)} else #{render(else_br, depth, indent)}"
+        end
 
-      {_, {:conditional, _, _}} ->
+      {:conditional, _, _} ->
         # elif chain
         then_str = render(then_br, depth, indent)
         elif_str = conditional_to_elif(else_br, depth, indent)
         "if #{cond_str} then #{then_str} #{elif_str}"
 
       _ ->
-        then_str = render(then_br, depth, indent)
-        else_str = render(else_br, depth, indent)
-        "if #{cond_str} then #{then_str} else #{else_str}"
+        "if #{cond_str} then #{render(then_br, depth, indent)} else #{render(else_br, depth, indent)}"
     end
   end
 
@@ -714,9 +715,15 @@ defmodule Cure.Compiler.Printer do
   defp to_string({:string_interpolation, _meta, parts}, depth, indent) do
     inner =
       Enum.map_join(parts, fn
-        {:literal, [subtype: :string], s} -> escape_string(s)
-        {:literal, _, s} when is_binary(s) -> escape_string(s)
-        expr -> "\#{#{render(expr, depth, indent)}}"
+        {:literal, meta, s} when is_list(meta) and is_binary(s) ->
+          if Keyword.get(meta, :subtype) == :string do
+            escape_string(s)
+          else
+            "\#{#{render({:literal, meta, s}, depth, indent)}}"
+          end
+
+        expr ->
+          "\#{#{render(expr, depth, indent)}}"
       end)
 
     ~s("#{inner}")
@@ -1648,6 +1655,7 @@ defmodule Cure.Compiler.Printer do
 
         separator =
           if compact_production_boundary?(previous, segment, index), do: "", else: if(previous, do: " ", else: "")
+
         {separator <> text, segment}
       end)
 
@@ -1674,6 +1682,7 @@ defmodule Cure.Compiler.Printer do
 
     Enum.join(pieces)
   end
+
   defp macro_segment_to_string({:lit, word}), do: word
   defp macro_segment_to_string({:hole, %{name: name, kind: kind}}), do: "<#{name}: #{kind}>"
 
@@ -1933,8 +1942,12 @@ defmodule Cure.Compiler.Printer do
 
   defp pair_to_string(key, value, depth, indent) do
     case key do
-      {:literal, [subtype: :symbol], atom_val} when is_atom(atom_val) ->
-        "#{atom_val}: #{render(value, depth, indent)}"
+      {:literal, meta, atom_val} when is_list(meta) and is_atom(atom_val) ->
+        if Keyword.get(meta, :subtype) == :symbol do
+          "#{atom_val}: #{render(value, depth, indent)}"
+        else
+          "#{render(key, depth, indent)} => #{render(value, depth, indent)}"
+        end
 
       _ ->
         "#{render(key, depth, indent)} => #{render(value, depth, indent)}"
@@ -1971,8 +1984,12 @@ defmodule Cure.Compiler.Printer do
     then_str = render(then_br, depth, indent)
 
     case else_br do
-      {:literal, [subtype: :null], nil} ->
-        "elif #{cond_str} then #{then_str}"
+      {:literal, meta, nil} when is_list(meta) ->
+        if Keyword.get(meta, :subtype) == :null do
+          "elif #{cond_str} then #{then_str}"
+        else
+          "elif #{cond_str} then #{then_str} else #{render(else_br, depth, indent)}"
+        end
 
       {:conditional, _, _} ->
         "elif #{cond_str} then #{then_str} #{conditional_to_elif(else_br, depth, indent)}"
@@ -2082,9 +2099,13 @@ defmodule Cure.Compiler.Printer do
 
     args_str =
       case args do
-        [{:literal, [subtype: :boolean], bval}] ->
-          # Single boolean arg: emit as @name true / @name false (no parens)
-          " #{bval}"
+        [{:literal, meta, bval}] when is_list(meta) ->
+          if Keyword.get(meta, :subtype) == :boolean do
+            # Single boolean arg: emit as @name true / @name false (no parens)
+            " #{bval}"
+          else
+            "(#{render(hd(args), depth, indent)})"
+          end
 
         [] ->
           ""
