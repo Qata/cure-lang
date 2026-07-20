@@ -231,6 +231,8 @@ mod Std.Syntax
 
   fn tuple(items: List(Syntax)) -> Syntax = Node(:tuple, [], items)
 
+  fn list(items: List(Syntax)) -> Syntax = Node(:list, [], items)
+
   fn tuple_type(items: List(Syntax)) -> Syntax =
     Node(:tuple_type, [KV(:binders, parameter_names(items))], items)
 

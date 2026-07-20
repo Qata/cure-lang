@@ -345,12 +345,12 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
       use Std.Supervisor
 
       sup Cure.Generated.StructuredSup
-        children []
+        actor Cure.Generated.Child as Worker
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert module == :"Cure.M"
-    assert apply(:"Cure.Generated.StructuredSup", :init, [[]]) == {:ok, {{:one_for_one, 3, 5}, []}}
+    assert {:ok, {{:one_for_one, 3, 5}, [_]}} = apply(:"Cure.Generated.StructuredSup", :init, [[]])
   end
 
   test "structured supervisor recursively expands nested child syntax" do
@@ -359,7 +359,7 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
       use Std.Supervisor
 
       sup Cure.Generated.NestedSup
-        children [child_spec Cure.Generated.Child :worker]
+        supervisor Cure.Generated.Child as Workers
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
@@ -368,20 +368,18 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     assert {:ok, {{:one_for_one, 3, 5}, [child]}} =
              apply(:"Cure.Generated.NestedSup", :init, [[]])
 
-    assert child ==
-             {:worker, {:"Cure.Generated.Child", :start_link, []}, :permanent, 5000, :worker, [:"Cure.Generated.Child"]}
+    assert elem(child, 0) == :Workers
+    assert elem(elem(child, 1), 0) == :"Cure.Generated.Child"
+    assert elem(child, 4) == :supervisor
   end
 
   test "structured supervisor encodes an explicitly derived child identity" do
     source = """
     mod M
-      use Std.Beam
       use Std.Supervisor
 
-      type ChildIdentity = CounterWorker | BackupWorker deriving BeamEncode
-
       sup Cure.Generated.TypedIdentitySup
-        children [child Cure.Generated.Child id CounterWorker()]
+        actor Cure.Generated.Child as CounterWorker
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
@@ -394,21 +392,52 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     assert elem(elem(child, 1), 0) == :"Cure.Generated.Child"
   end
 
-  test "structured supervisor rejects a child identity without BeamEncode" do
+  test "structured supervisor rejects duplicate nominal child identities" do
     source = """
     mod M
-      use Std.Beam
       use Std.Supervisor
 
-      type ChildIdentity = CounterWorker | BackupWorker
-
       sup Cure.Generated.UnencodedIdentitySup
-        children [child Cure.Generated.Child id CounterWorker()]
+        actor Cure.Generated.Child as CounterWorker
+        actor Cure.Generated.Other as CounterWorker
     """
 
     assert {:error, reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
-    assert inspect(reason) =~ "macro_capture_obligation_failed"
-    assert inspect(reason) =~ "BeamEncode"
+    assert :erlang.term_to_binary(reason) =~ "duplicate_supervisor_child_identity"
+  end
+
+  test "structured supervisor rejects unknown child kinds" do
+    source = """
+    mod M
+      use Std.Supervisor
+
+      sup Cure.Generated.InvalidKindSup
+        database Cure.Generated.Child as Worker
+    """
+
+    assert {:error, reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert :erlang.term_to_binary(reason) =~ "invalid_supervisor_child_kind"
+  end
+
+  test "structured supervisor lowers closed strategy and child policies" do
+    source = """
+    mod M
+      use Std.Supervisor
+
+      sup Cure.Generated.PolicySup
+        strategy OneForAll()
+        intensity S(S(Z()))
+        period More(S(S(S(S(Z())))))
+
+        actor Cure.Generated.Child as Worker
+          restart Transient()
+          shutdown Brutal()
+    """
+
+    assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert {:ok, {{:one_for_all, 2, 5}, [child]}} = apply(:"Cure.Generated.PolicySup", :init, [[]])
+    assert elem(child, 2) == :transient
+    assert elem(child, 3) == 0
   end
 
   test "application accepts the reusable structured family surface" do
