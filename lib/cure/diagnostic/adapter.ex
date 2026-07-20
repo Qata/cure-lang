@@ -129,6 +129,18 @@ defmodule Cure.Diagnostic.Adapter do
     declaration_conflict(:overlapping_overload, %{name: name, arity: arity}, opts)
   end
 
+  def from_error({:overlapping_instance, interface, head}, opts) do
+    declaration_conflict(:overlapping_instance, %{interface: interface, head: head}, opts)
+  end
+
+  def from_error({:overlapping_named_instance, name, interface, head}, opts) do
+    declaration_conflict(
+      :overlapping_named_instance,
+      %{name: name, interface: interface, head: head},
+      opts
+    )
+  end
+
   def from_error({:sibling_module_collision, name, owners}, opts) do
     declaration_conflict(:sibling_module_collision, %{name: name, owners: owners}, opts)
   end
@@ -259,6 +271,20 @@ defmodule Cure.Diagnostic.Adapter do
         expectation_origin: origin,
         checking: Map.get(context, :checking)
       }
+    )
+  end
+
+  def from_error({:source_context, {:no_named_instance, name}, context}, opts) when is_map(context) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+
+    Diagnostic.new(
+      code: "E011",
+      key: :missing_implicit_argument,
+      severity: :error,
+      title: "Named instance not found",
+      body: Doc.paragraph("The named instance `#{name_to_string(name)}` is not available in this scope."),
+      primary: primary_label(opts, "import or define this named instance"),
+      payload: %{kind: :no_named_instance, name: name, checking: Map.get(context, :checking)}
     )
   end
 
@@ -1070,9 +1096,20 @@ defmodule Cure.Diagnostic.Adapter do
 
     detail =
       case kind do
-        :overlapping_overload -> " with arity #{Map.get(details, :arity)}"
-        :sibling_module_collision -> " across modules #{inspect(Map.get(details, :owners))}"
-        _ -> ""
+        :overlapping_overload ->
+          " with arity #{Map.get(details, :arity)}"
+
+        :sibling_module_collision ->
+          " across modules #{inspect(Map.get(details, :owners))}"
+
+        :overlapping_instance ->
+          " for interface `#{name_to_string(Map.get(details, :interface))}` and head `#{surface_type(Map.get(details, :head))}`"
+
+        :overlapping_named_instance ->
+          " for named interface instance `#{name_to_string(Map.get(details, :name))}`"
+
+        _ ->
+          ""
       end
 
     Diagnostic.new(

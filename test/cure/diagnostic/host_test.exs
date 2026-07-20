@@ -241,6 +241,19 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":no_instance"
   end
 
+  test "renders named-instance and coherence failures through shared diagnostics" do
+    named = Host.render({:source_context, {:no_named_instance, :strictInt}, %{}}, "demo.cure")
+    overlap = Host.render({:overlapping_instance, :Comparable, :Int}, "demo.cure")
+
+    assert named =~ "[E011]"
+    assert named =~ "strictInt"
+    refute named =~ ":no_named_instance"
+    assert overlap =~ "[E105]"
+    assert overlap =~ "Comparable"
+    assert overlap =~ "Int"
+    refute overlap =~ ":overlapping_instance"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 

@@ -506,6 +506,9 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:unfilled_hole, _name}), do: true
   defp structured_error?({:unsolved_metavariables, _name}), do: true
   defp structured_error?({:no_instance, _interface, _head}), do: true
+  defp structured_error?({:no_named_instance, _name}), do: true
+  defp structured_error?({:overlapping_instance, _interface, _head}), do: true
+  defp structured_error?({:overlapping_named_instance, _name, _interface, _head}), do: true
   defp structured_error?({:unsupported_pattern, _shape}), do: true
 
   defp structured_error?({kind, _name})
