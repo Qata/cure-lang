@@ -190,6 +190,15 @@ defmodule Cure.DiagnosticTest do
     assert hd(diagnostic.payload.candidate_details).arity == 2
   end
 
+  test "name ranking is case-insensitive and recognizes adjacent transpositions" do
+    diagnostic =
+      Adapter.unknown_name(:value, "Nmae",
+        candidates: [%{name: "Name", namespace: :value, visibility: :public, imported: true}]
+      )
+
+    assert diagnostic.payload.candidates == ["Name"]
+  end
+
   test "conversion failures present Cure types and retain Core payloads", %{registry: registry, span: span} do
     actual = {:data, :"Std.Bool#Bool", [], []}
     expected = {:data, :"Std.Int#Int", [], []}

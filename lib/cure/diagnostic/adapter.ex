@@ -771,26 +771,56 @@ defmodule Cure.Diagnostic.Adapter do
   defp qualification_cost(_candidate), do: 1
 
   defp edit_distance(left, right) do
-    right_graphemes = String.graphemes(right)
-    initial = Enum.to_list(0..length(right_graphemes))
+    left = left |> String.downcase() |> String.graphemes()
+    right = right |> String.downcase() |> String.graphemes()
+    left_size = length(left)
+    right_size = length(right)
 
-    left
-    |> String.graphemes()
-    |> Enum.with_index(1)
-    |> Enum.reduce(initial, fn {left_char, row_index}, previous ->
-      {_last, row} =
-        right_graphemes
-        |> Enum.with_index(1)
-        |> Enum.reduce({row_index, [row_index]}, fn {right_char, column}, {left_cell, row} ->
-          above = Enum.at(previous, column)
-          diagonal = Enum.at(previous, column - 1)
-          cell = min(above + 1, min(left_cell + 1, diagonal + if(left_char == right_char, do: 0, else: 1)))
-          {cell, [cell | row]}
-        end)
+    cond do
+      left_size == 0 ->
+        right_size
 
-      Enum.reverse(row)
-    end)
-    |> List.last()
+      right_size == 0 ->
+        left_size
+
+      true ->
+        matrix =
+          Enum.reduce(0..left_size, %{}, fn row, matrix ->
+            Map.put(matrix, {row, 0}, row)
+          end)
+          |> then(fn matrix ->
+            Enum.reduce(0..right_size, matrix, fn column, matrix ->
+              Map.put(matrix, {0, column}, column)
+            end)
+          end)
+
+        matrix =
+          Enum.reduce(1..left_size, matrix, fn row, matrix ->
+            Enum.reduce(1..right_size, matrix, fn column, matrix ->
+              substitution =
+                Map.fetch!(matrix, {row - 1, column - 1}) +
+                  if(Enum.at(left, row - 1) == Enum.at(right, column - 1), do: 0, else: 1)
+
+              transposition =
+                if row > 1 and column > 1 and Enum.at(left, row - 1) == Enum.at(right, column - 2) and
+                     Enum.at(left, row - 2) == Enum.at(right, column - 1) do
+                  Map.fetch!(matrix, {row - 2, column - 2}) + 1
+                else
+                  substitution + 1
+                end
+
+              value =
+                min(
+                  Map.fetch!(matrix, {row - 1, column}) + 1,
+                  min(Map.fetch!(matrix, {row, column - 1}) + 1, min(substitution, transposition))
+                )
+
+              Map.put(matrix, {row, column}, value)
+            end)
+          end)
+
+        Map.fetch!(matrix, {left_size, right_size})
+    end
   end
 
   defp namespace_title(:value), do: "value"
