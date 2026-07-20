@@ -217,6 +217,12 @@ defmodule Cure.Diagnostic.Registry do
   @spec retired() :: [Entry.t()]
   def retired, do: Enum.filter(entries(), &(&1.status == :retired))
 
+  @doc "Return the checked code-to-producer inventory used by CI and catalog tooling."
+  @spec producer_inventory() :: %{String.t() => [atom()]}
+  def producer_inventory do
+    Map.new(entries(), &{&1.code, &1.producers})
+  end
+
   @doc "Return the legacy explain-list shape derived from typed registry entries."
   @spec list_all() :: [{String.t(), String.t(), String.t()}]
   def list_all do

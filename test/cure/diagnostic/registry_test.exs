@@ -89,6 +89,17 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert :ok = Registry.validate_sources(Path.wildcard("lib/**/*.ex"))
   end
 
+  test "producer inventory has no legacy owner for reachable codes" do
+    assert Enum.all?(Registry.reachable(), fn entry -> :compiler_errors not in entry.producers end)
+
+    assert Map.keys(Registry.producer_inventory()) |> Enum.sort() ==
+             Registry.entries() |> Enum.map(& &1.code) |> Enum.sort()
+
+    inventory = Cure.Diagnostic.Registry.Inventory.scan(["lib/cure/diagnostic/registry.ex"])
+    assert inventory.error_constructors != []
+    assert inventory.formatter_consumers != []
+  end
+
   test "source validation reports an unregistered stable code" do
     path = Path.join(System.tmp_dir!(), "cure-diagnostic-registry-fixture.ex")
     File.write!(path, ~S(defmodule Fixture do
