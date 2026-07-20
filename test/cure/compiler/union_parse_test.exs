@@ -6,7 +6,7 @@ defmodule Cure.Compiler.UnionParseTest do
   defp parse!(source) do
     {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
-    ast
+    Cure.Compiler.SourceSpans.strip_diagnostic_meta(ast)
   end
 
   # Collect every {tag, meta, children} 3-tuple in the AST.

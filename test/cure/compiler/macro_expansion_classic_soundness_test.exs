@@ -26,7 +26,7 @@ defmodule Cure.Compiler.MacroExpansionClassicSoundnessTest do
   defp verdict(src) do
     case Compiler.compile_string(src, []) do
       {:ok, _mod, _forms} -> :accept
-      {:error, term} -> {:reject, strip(term)}
+      {:error, term} -> {:reject, strip(Cure.Elab.Program.semantic_error(term))}
     end
   end
 

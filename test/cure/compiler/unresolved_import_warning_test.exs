@@ -29,11 +29,14 @@ defmodule Cure.Compiler.UnresolvedImportWarningTest do
     # `phantom` is neither a local function of GhostUser nor an export of
     # Ghost, so dependent elaboration rejects the unresolved global before
     # code generation.
-    assert {:error, {:codegen_error, {:unknown_global, :phantom}}} =
+    assert {:error, error} =
              Cure.Compiler.compile_file(user,
                output_dir: out,
                emit_events: false,
                check_types: false
              )
+
+    assert {:codegen_error, {:unknown_global, :phantom, _detail}} =
+             Cure.Elab.Program.semantic_error(error)
   end
 end

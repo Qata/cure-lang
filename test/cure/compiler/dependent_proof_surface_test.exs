@@ -49,8 +49,8 @@ defmodule Cure.Compiler.DependentProofSurfaceTest do
     # conversion check refuses to unify with the declared goal
     # `Equivalent(Nat, Z, S(Z))`. The sole (dependent) pipeline surfaces that as
     # a `conversion_failure` rather than the classic `dependent_type_error`.
-    assert {:error, {:codegen_error, {:conversion_failure, _lhs, _rhs}}} =
-             Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert {:error, error} = Cure.Compiler.compile_and_load(src, emit_events: false)
+    assert {:codegen_error, {:conversion_failure, _lhs, _rhs}} = Cure.Elab.Program.semantic_error(error)
   end
 
   test "rewrite … in parses with `in` on the next line (multi-line chain)" do

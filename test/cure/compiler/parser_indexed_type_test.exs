@@ -4,7 +4,9 @@ defmodule Cure.Compiler.ParserIndexedTypeTest do
 
   defp parse_decl(src) do
     {:ok, toks} = Lexer.tokenize(src, emit_events: false)
-    Parser.parse(toks, emit_events: false)
+
+    with {:ok, ast} <- Parser.parse(toks, emit_events: false),
+         do: {:ok, Cure.Compiler.SourceSpans.strip_diagnostic_meta(ast)}
   end
 
   # Collect every {tag, meta, children} 3-tuple in the AST.
