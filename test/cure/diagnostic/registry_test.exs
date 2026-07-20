@@ -53,6 +53,14 @@ defmodule Cure.Diagnostic.RegistryTest do
 
     assert {:error, {:duplicate_code, ^code}} = Registry.validate([entry, entry])
 
+    sibling = Enum.find(Registry.entries(), &(&1.status == :reachable and &1.code != code))
+
+    assert {:error, {:duplicate_catalog_case, _}} =
+             Registry.validate([%{entry | catalog_case: sibling.catalog_case}, sibling])
+
+    assert {:error, {:duplicate_fixture_id, _}} =
+             Registry.validate([%{entry | fixture_id: sibling.fixture_id}, sibling])
+
     assert {:error, {:retired_without_reason, ^code}} =
              Registry.validate([%{entry | status: :retired, retirement_reason: nil}])
 

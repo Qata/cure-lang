@@ -215,6 +215,7 @@ defmodule Cure.Diagnostic.Registry do
   @spec validate([Entry.t()]) :: :ok | {:error, term()}
   def validate(entries \\ entries()) when is_list(entries) do
     with :ok <- unique_codes(entries),
+         :ok <- unique_catalog_metadata(entries),
          :ok <- valid_entries(entries) do
       :ok
     end
@@ -319,6 +320,22 @@ defmodule Cure.Diagnostic.Registry do
       {code, count} when count > 1 -> {:error, {:duplicate_code, code}}
       _ -> nil
     end)
+  end
+
+  defp unique_catalog_metadata(entries) do
+    reachable = Enum.filter(entries, &(&1.status == :reachable))
+
+    with :ok <- unique_field(reachable, :catalog_case, :duplicate_catalog_case),
+         :ok <- unique_field(reachable, :fixture_id, :duplicate_fixture_id) do
+      :ok
+    end
+  end
+
+  defp unique_field(entries, field, error_tag) do
+    case entries |> Enum.group_by(&Map.fetch!(&1, field)) |> Enum.find(fn {_value, owners} -> length(owners) > 1 end) do
+      {value, _owners} -> {:error, {error_tag, value}}
+      nil -> :ok
+    end
   end
 
   defp valid_entries(entries) do
