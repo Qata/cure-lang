@@ -15,6 +15,8 @@ defmodule Cure.Diagnostic.Adapter do
     TypeProblem
   }
 
+  alias Cure.Diagnostic.Operational
+
   @unknown_name_code "E091"
 
   @spec from_error(term(), keyword()) :: Diagnostic.t()
@@ -615,6 +617,23 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:duplicate_unit, suffix}, opts),
     do: macro_validation_failure(:duplicate_unit, %{suffix: suffix}, opts)
 
+  # These are public macro-library validation boundaries. Keep them in the
+  # macro family so users are directed to the authored board/unit declaration,
+  # rather than seeing an internal tuple or a generic compiler failure.
+  def from_error({kind, detail}, opts)
+      when kind in [:invalid_unit, :unknown_unit, :invalid_board_name],
+      do: macro_validation_failure(kind, %{detail: detail}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :invalid_board_pins,
+             :invalid_board_capabilities,
+             :invalid_board_buses,
+             :invalid_board_flash,
+             :flash_offset_out_of_bounds
+           ],
+      do: macro_validation_failure(kind, %{}, opts)
+
   def from_error({kind, detail}, opts)
       when kind in [
              :invalid_packet_name,
@@ -686,13 +705,27 @@ defmodule Cure.Diagnostic.Adapter do
              :malformed_reflected_map,
              :invalid_syntax_attrs,
              :unknown_reducer_constructor,
-             :incomplete_reducer
+             :incomplete_reducer,
+             :unsupported_hole_arity
            ],
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
   def from_error({kind, first, second}, opts)
       when kind in [:forward_packet_length, :invalid_packet_crc_fields, :reserved_syntax_field, :invalid_unit_literal],
       do: macro_validation_failure(kind, %{first: first, second: second}, opts)
+
+  # C2/Core artifact decoding is an untrusted boundary. Its failures are
+  # operational artifact diagnostics, not kernel terms to expose in default
+  # output. The detail is retained only as machine/debug data by the
+  # operational converter.
+  def from_error({:bad_grade, _grade}, _opts),
+    do: Operational.artifact_error("Core artifact contains an invalid relevance grade")
+
+  def from_error({:unknown_symbol, _symbol}, _opts),
+    do: Operational.artifact_error("Core artifact contains an unknown symbol")
+
+  def from_error({:ill_formed_term, _term}, _opts),
+    do: Operational.artifact_error("Core artifact contains an ill-formed term")
 
   def from_error({:reducer_arity, constructor, actual, expected}, opts),
     do:

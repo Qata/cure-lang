@@ -161,7 +161,19 @@ defmodule Cure.DiagnosticTest do
       {{:generated_hole_not_well_typed, :term}, "E092"},
       {{:example_use_site_not_fully_consumed, [], :ast}, "E092"},
       {{:closed_category_extension, [:expression]}, "E092"},
-      {{:duplicate_unit, "ms"}, "E092"}
+      {{:duplicate_unit, "ms"}, "E092"},
+      {{:invalid_unit, "ms"}, "E092"},
+      {{:unknown_unit, "ms"}, "E092"},
+      {{:invalid_board_name, 42}, "E092"},
+      {:invalid_board_pins, "E092"},
+      {:invalid_board_capabilities, "E092"},
+      {:invalid_board_buses, "E092"},
+      {:invalid_board_flash, "E092"},
+      {:flash_offset_out_of_bounds, "E092"},
+      {{:unsupported_hole_arity, 3}, "E092"},
+      {{:bad_grade, :not_a_grade}, "E100"},
+      {{:unknown_symbol, "not_loaded"}, "E100"},
+      {{:ill_formed_term, {:not_core, 1}}, "E100"}
     ]
 
     for {reason, code} <- cases do

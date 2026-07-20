@@ -91,7 +91,19 @@ defmodule Cure.DiagnosticExerciserTest do
       {"splice outside quote", "E108", {:splice_outside_quote, :splice, [line: 2]}},
       {"beam write failure", "E096", {:write_failed, "_build/Demo.beam", :eacces}},
       {"beam load failure", "E098", {:load_failed, :badfile}},
-      {"beam compilation failure", "E098", {:compilation_failed, [{:bad_form, :detail}]}}
+      {"beam compilation failure", "E098", {:compilation_failed, [{:bad_form, :detail}]}},
+      {"invalid macro unit", "E092", {:invalid_unit, "ms"}},
+      {"unknown macro unit", "E092", {:unknown_unit, "ms"}},
+      {"invalid board name", "E092", {:invalid_board_name, 42}},
+      {"invalid board pins", "E092", :invalid_board_pins},
+      {"invalid board capabilities", "E092", :invalid_board_capabilities},
+      {"invalid board buses", "E092", :invalid_board_buses},
+      {"invalid board flash", "E092", :invalid_board_flash},
+      {"board flash offset", "E092", :flash_offset_out_of_bounds},
+      {"unsupported macro hole arity", "E092", {:unsupported_hole_arity, 3}},
+      {"invalid Core grade", "E100", {:bad_grade, :not_a_grade}},
+      {"unknown Core symbol", "E100", {:unknown_symbol, "not_loaded"}},
+      {"ill-formed Core term", "E100", {:ill_formed_term, {:not_core, 1}}}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))
