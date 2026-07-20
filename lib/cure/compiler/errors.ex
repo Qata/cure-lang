@@ -24,6 +24,14 @@ defmodule Cure.Compiler.Errors do
     Cure.Diagnostic.Renderer.plain(diagnostic)
   end
 
+  def format_error({:unknown_global, _name} = error, file) do
+    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+  end
+
+  def format_error({:unknown_constructor, _name} = error, file) do
+    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+  end
+
   # -- Type Errors -------------------------------------------------------------
 
   def format_error(errors, file) when is_list(errors) do
@@ -1494,6 +1502,18 @@ defmodule Cure.Compiler.Errors do
 
     Fix: use a `when` guard for a range test (`n when n >= 1 and n <= 10`),
     capitalize a constructor name, or bind a variable and test in the body.
+    """,
+    "E091" => """
+    E091: Unknown Name
+
+    A value, type, constructor, module, or module member is not available in
+    the namespace where it was referenced. The diagnostic payload records the
+    namespace, original spelling, visible candidates, owner when applicable,
+    and the declaration currently being checked.
+
+    Fix: correct the spelling, import or qualify the definition, or use a name
+    from the required namespace. Suggestions are filtered by namespace and
+    visibility before they are shown.
     """,
     "W088" => """
     W088: Unresolved Import

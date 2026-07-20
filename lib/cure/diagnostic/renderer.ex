@@ -9,12 +9,13 @@ defmodule Cure.Diagnostic.Renderer do
     heading = "#{diagnostic.severity}[#{diagnostic.code}]: #{diagnostic.title}"
     location = location_line(diagnostic.primary)
     excerpt = excerpt(diagnostic.primary, registry)
+    secondary = Enum.map(diagnostic.secondary, &secondary_excerpt(&1, registry))
     message = diagnostic.message
     notes = Enum.map(diagnostic.notes, &"note: #{&1}")
     suggestions = Enum.map(diagnostic.suggestions, &"help: #{&1.message}")
     provenance = provenance_line(diagnostic.provenance)
 
-    [heading, location, excerpt, message, notes, suggestions, provenance]
+    [heading, location, excerpt, secondary, message, notes, suggestions, provenance]
     |> List.flatten()
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join("\n")
@@ -114,6 +115,19 @@ defmodule Cure.Diagnostic.Renderer do
 
       :error ->
         nil
+    end
+  end
+
+  defp secondary_excerpt(_label, nil), do: nil
+
+  defp secondary_excerpt(%Label{} = label, %SourceRegistry{} = registry) do
+    case excerpt(label, registry) do
+      nil ->
+        nil
+
+      rendered ->
+        " ::: #{label.span.path || inspect(label.span.source_id)}:#{label.span.start_line}:#{label.span.start_column}\n" <>
+          rendered
     end
   end
 

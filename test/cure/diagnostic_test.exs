@@ -2,7 +2,7 @@ defmodule Cure.DiagnosticTest do
   use ExUnit.Case, async: true
 
   alias Cure.Diagnostic
-  alias Cure.Diagnostic.{Label, ProvenanceFrame, Renderer, SourceRegistry, Suggestion, TextEdit}
+  alias Cure.Diagnostic.{Adapter, Label, ProvenanceFrame, Renderer, SourceRegistry, Suggestion, TextEdit}
 
   setup do
     source = "mod Demo\n  fn answer() -> Int = unknowñ\n"
@@ -86,6 +86,44 @@ defmodule Cure.DiagnosticTest do
     assert Diagnostic.key(diagnostic) == :unknown_value
     assert Diagnostic.key({:error, {:unknown_global, :missing}}) == :unknown_global
     assert Diagnostic.code({:extern_untyped_head, "needs a type (E056)", line: 2}) == "E056"
+  end
+
+  test "unknown-name adapter retains namespace, offender, candidates, and source", %{registry: registry, span: span} do
+    diagnostic =
+      Adapter.from_error({:unknown_constructor, :Nothng},
+        span: span,
+        candidates: [:Nothing, :Something],
+        checking: :decode
+      )
+
+    assert diagnostic.code == "E091"
+    assert diagnostic.key == :unknown_name
+    assert diagnostic.payload.namespace == :constructor
+    assert diagnostic.payload.name == "Nothng"
+    assert diagnostic.payload.checking == :decode
+    assert Renderer.plain(diagnostic, registry) =~ "`Nothng` was not found"
+    assert hd(diagnostic.suggestions).message =~ "`Nothing`"
+  end
+
+  test "plain rendering includes cross-file secondary labels", %{registry: registry, span: span} do
+    registry = SourceRegistry.register(registry, :definition, "type Token = Token\n", "src/token.cure")
+    {:ok, definition_span} = SourceRegistry.span(registry, :definition, 5, 10)
+
+    diagnostic =
+      Diagnostic.new(
+        code: "E101",
+        key: :type_mismatch,
+        severity: :error,
+        title: "Type mismatch",
+        message: "The values have different types.",
+        primary: %Label{span: span, style: :primary, message: "used here"},
+        secondary: [%Label{span: definition_span, style: :secondary, message: "defined here"}]
+      )
+
+    rendered = Renderer.plain(diagnostic, registry)
+    assert rendered =~ "::: src/token.cure:1:6"
+    assert rendered =~ "1 | type Token = Token"
+    assert rendered =~ "^^^^^ defined here"
   end
 
   test "invalid spans and codes are rejected", %{registry: registry} do
