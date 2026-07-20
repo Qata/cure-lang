@@ -256,7 +256,10 @@ defmodule Cure.DiagnosticTest do
       {{:with_multi_rematch_unsupported, "rematch", []}, "E093"},
       {{:with_multi_arity_mismatch, "arity", []}, "E093"},
       {{:with_multi_no_arms, "arms", []}, "E093"},
-      {{:with_multi_inconsistent_pattern, "patterns", []}, "E093"}
+      {{:with_multi_inconsistent_pattern, "patterns", []}, "E093"},
+      {{:duplicate_syntax_family_field, :field, 1, 2}, "E092"},
+      {{:non_associative, :==, :chained_with, :==, 1, 2}, "E094"},
+      {{:ambiguous_precedence, :left, :right, 1, 2}, "E094"}
     ]
 
     for {reason, code} <- cases do

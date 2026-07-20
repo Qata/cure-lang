@@ -135,7 +135,10 @@ defmodule Cure.DiagnosticExerciserTest do
       {"multi-with rematch", "E093", {:with_multi_rematch_unsupported, "rematch", []}},
       {"multi-with arity", "E093", {:with_multi_arity_mismatch, "arity", []}},
       {"multi-with no arms", "E093", {:with_multi_no_arms, "arms", []}},
-      {"multi-with inconsistent pattern", "E093", {:with_multi_inconsistent_pattern, "patterns", []}}
+      {"multi-with inconsistent pattern", "E093", {:with_multi_inconsistent_pattern, "patterns", []}},
+      {"duplicate syntax family field", "E092", {:duplicate_syntax_family_field, :field, 1, 2}},
+      {"non-associative operator", "E094", {:non_associative, :==, :chained_with, :==, 1, 2}},
+      {"ambiguous precedence", "E094", {:ambiguous_precedence, :left, :right, 1, 2}}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))

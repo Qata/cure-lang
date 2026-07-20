@@ -2648,11 +2648,12 @@ defmodule Cure.Compiler.Parser do
   # the rest of the file is still reported.
   defp reject_incomparable_chain(state, _table, nil, _lexeme, _token), do: state
 
-  defp reject_incomparable_chain(state, table, ctx_op, lexeme, _token) do
+  defp reject_incomparable_chain(state, table, ctx_op, lexeme, token) do
     if FixityTable.incomparable?(table, ctx_op, lexeme) do
       add_error(
         state,
-        {:ambiguous_precedence, FixityTable.group_of(table, ctx_op), FixityTable.group_of(table, lexeme)}
+        {:ambiguous_precedence, FixityTable.group_of(table, ctx_op), FixityTable.group_of(table, lexeme), token.line,
+         token.col}
       )
     else
       state

@@ -1394,6 +1394,35 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unit_type_reserved, name, line, column}, opts),
     do: macro_validation_failure(:unit_type_reserved, %{name: name, line: line, column: column}, opts)
 
+  def from_error({:duplicate_syntax_family_field, field, line, column}, opts),
+    do: macro_validation_failure(:duplicate_syntax_family_field, %{field: field, line: line, column: column}, opts)
+
+  def from_error({:non_associative, operator, :chained_with, next_operator, line, column}, opts),
+    do:
+      from_error(
+        %SyntaxProblem{
+          kind: :non_associative,
+          expected: :parentheses,
+          observed: next_operator,
+          at: Keyword.get(opts, :span),
+          context: %{line: line, column: column, operator: operator}
+        },
+        opts
+      )
+
+  def from_error({:ambiguous_precedence, left_group, right_group, line, column}, opts),
+    do:
+      from_error(
+        %SyntaxProblem{
+          kind: :ambiguous_precedence,
+          expected: :parentheses,
+          observed: right_group,
+          at: Keyword.get(opts, :span),
+          context: %{line: line, column: column, left_group: left_group}
+        },
+        opts
+      )
+
   def from_error({:with_multi_proof_unsupported, message}, opts),
     do: contextual_type_failure(:with_multi_proof_unsupported, %{message: message}, opts)
 
@@ -2665,6 +2694,8 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :unexpected_character}), do: "Unexpected character"
   defp syntax_problem_title(%SyntaxProblem{kind: :macro_use_mismatch}), do: "Macro syntax does not match"
   defp syntax_problem_title(%SyntaxProblem{kind: :macro_literal_capture}), do: "Macro literal capture is invalid"
+  defp syntax_problem_title(%SyntaxProblem{kind: :non_associative}), do: "Operator chain needs parentheses"
+  defp syntax_problem_title(%SyntaxProblem{kind: :ambiguous_precedence}), do: "Operator precedence is ambiguous"
   defp syntax_problem_title(%SyntaxProblem{kind: :malformed_macro_hole}), do: "Macro hole is incomplete"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_placement}), do: "Edition pragma is misplaced"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_malformed}), do: "Edition pragma is malformed"
@@ -2711,6 +2742,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :macro_literal_capture, expected: expected}),
     do: "This macro capture must match the literal shape `#{syntax_name(expected)}`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :non_associative, context: %{operator: operator}}),
+    do: "The `#{syntax_name(operator)}` operator cannot be chained without parentheses."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :ambiguous_precedence}),
+    do: "These operators have no declared relative precedence; add parentheses to choose the grouping."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :malformed_macro_hole}),
     do: "This macro hole is incomplete; write it as `<name: Kind>`."
