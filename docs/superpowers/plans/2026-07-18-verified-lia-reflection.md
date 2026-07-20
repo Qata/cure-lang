@@ -82,13 +82,13 @@ Define:
 - total `dot`, `evaluate_atom`, strict-to-nonstrict normalization,
   `negate_atom`, coefficient addition/scaling, and atom combination.
 
-- [ ] Reject coefficient/valuation length disagreement.
-- [ ] Reject witness length other than `length(hyps) + 1`.
-- [ ] Add positive, forged-witness, wrong-length, and wrong-dimension compute
+- [x] Reject coefficient/valuation length disagreement.
+- [x] Reject witness length other than `length(hyps) + 1`.
+- [x] Add positive, forged-witness, wrong-length, and wrong-dimension compute
   probes before implementation.
-- [ ] Include the documented integer-only boundary example without claiming
+- [x] Include the documented integer-only boundary example without claiming
   that a finite witness sample proves global nonexistence.
-- [ ] Run focused oracle replay and commit.
+- [x] Run focused oracle replay and commit.
 
 ## Task 4: Prove affine evaluation homomorphisms
 
