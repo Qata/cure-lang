@@ -48,6 +48,7 @@ defmodule Mix.Tasks.Cure.Diagnostics do
 
   defp validate_registry! do
     with :ok <- Cure.Diagnostic.Registry.validate(),
+         :ok <- Cure.Diagnostic.Registry.validate_reachability(),
          :ok <- Cure.Diagnostic.Registry.validate_sources(),
          :ok <- validate_inventory() do
       :ok

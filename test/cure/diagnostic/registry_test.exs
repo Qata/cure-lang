@@ -98,6 +98,8 @@ defmodule Cure.Diagnostic.RegistryTest do
     inventory = Cure.Diagnostic.Registry.Inventory.scan(["lib/cure/diagnostic/registry.ex"])
     assert inventory.error_constructors != []
     assert inventory.formatter_consumers != []
+    assert :ok = Registry.validate_reachability()
+    assert :ok = Registry.validate_producer_coverage()
   end
 
   test "source validation reports an unregistered stable code" do

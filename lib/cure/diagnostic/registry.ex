@@ -250,6 +250,38 @@ defmodule Cure.Diagnostic.Registry do
     end
   end
 
+  @doc "Verify that reachable codes and declared producers have first-party source evidence."
+  @spec validate_reachability([Path.t()]) :: :ok | {:error, term()}
+  def validate_reachability(paths \\ default_producer_paths()) when is_list(paths) do
+    referenced =
+      paths
+      |> Enum.flat_map(&source_codes/1)
+      |> MapSet.new()
+
+    missing_codes =
+      reachable()
+      |> Enum.reject(&MapSet.member?(referenced, &1.code))
+      |> Enum.map(& &1.code)
+      |> Enum.sort()
+
+    with :ok <- if(missing_codes == [], do: :ok, else: {:error, {:unreachable_code, missing_codes}}),
+         :ok <- validate_producer_coverage() do
+      :ok
+    end
+  end
+
+  @doc "Ensure every known producer owns a reachable registry entry."
+  @spec validate_producer_coverage() :: :ok | {:error, term()}
+  def validate_producer_coverage do
+    owned =
+      reachable()
+      |> Enum.flat_map(& &1.producers)
+      |> MapSet.new()
+
+    missing = @known_producers |> Enum.reject(&MapSet.member?(owned, &1)) |> Enum.sort()
+    if missing == [], do: :ok, else: {:error, {:producer_without_reachable_code, missing}}
+  end
+
   @doc "Validate stable diagnostic codes referenced by first-party source files."
   @spec validate_sources([Path.t()]) :: :ok | {:error, {:unregistered_source_codes, [String.t()]}}
   def validate_sources(paths \\ default_source_paths()) when is_list(paths) do
@@ -394,6 +426,11 @@ defmodule Cure.Diagnostic.Registry do
 
   defp default_source_paths do
     Path.wildcard("lib/**/*.ex")
+  end
+
+  defp default_producer_paths do
+    default_source_paths()
+    |> Enum.reject(&String.contains?(&1, "lib/cure/diagnostic/registry"))
   end
 
   defp validate_entry(%Entry{} = entry) do
