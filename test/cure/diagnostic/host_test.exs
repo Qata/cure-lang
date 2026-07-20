@@ -81,4 +81,12 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "every"
     refute rendered =~ ":rule_unpinned"
   end
+
+  test "does not fall through to legacy formatting for an unregistered reason" do
+    rendered = Host.render({:unregistered_compiler_reason, :detail}, "demo.cure")
+
+    assert rendered =~ "[E101]"
+    assert rendered =~ "fingerprint"
+    refute rendered =~ ":unregistered_compiler_reason"
+  end
 end

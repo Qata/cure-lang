@@ -12,9 +12,6 @@ defmodule Cure.Diagnostic.Host do
       {:ok, diagnostic, registry} ->
         Sink.new(format: :plain, registry: registry)
         |> Sink.render(diagnostic)
-
-      {:legacy, text} ->
-        text
     end
   end
 
@@ -31,7 +28,7 @@ defmodule Cure.Diagnostic.Host do
     end
   rescue
     Cure.Diagnostic.UnhandledError ->
-      {:legacy, Cure.Compiler.Errors.format_with_source(reason, file, source)}
+      {:ok, Operational.impossible_return(:unregistered_diagnostic, reason), nil}
   end
 
   defp read_source(file) do
