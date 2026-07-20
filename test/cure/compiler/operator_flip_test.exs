@@ -38,13 +38,15 @@ defmodule Cure.Compiler.OperatorFlipTest do
     found =
       case payload do
         list when is_list(list) ->
-          Enum.find(list, &match?({^tag, _, _}, &1)) || Enum.find(list, &match?({^tag, _}, &1))
+          Enum.find(list, fn candidate ->
+            is_tuple(candidate) and tuple_size(candidate) > 0 and elem(candidate, 0) == tag
+          end)
 
         {:source_context, reason, _context} ->
-          if match?({^tag, _, _}, reason) or match?({^tag, _}, reason), do: reason
+          if is_tuple(reason) and tuple_size(reason) > 0 and elem(reason, 0) == tag, do: reason
 
         other ->
-          if match?({^tag, _, _}, other) or match?({^tag, _}, other), do: other
+          if is_tuple(other) and tuple_size(other) > 0 and elem(other, 0) == tag, do: other
       end
 
     assert found, "expected an #{inspect(tag)} error, got: #{inspect(payload)}"
