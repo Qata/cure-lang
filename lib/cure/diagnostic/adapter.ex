@@ -1441,9 +1441,38 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :recovered_statement}), do: "parsing resumed after this token"
   defp syntax_problem_label(_problem), do: "this syntax does not fit here"
 
-  defp computed_macro_reason({:invalid_generated_syntax, {kind, _path}}), do: Atom.to_string(kind)
-  defp computed_macro_reason({:author_failure, name, _args}), do: "the macro reported `#{name}`"
+  defp computed_macro_reason({:invalid_generated_syntax, {:raw_syntax_in_expansion, path}}),
+    do:
+      "invalid macro expansion: raw syntax is only valid for reflection, not generated Cure code (#{format_syntax_path(path)})"
+
+  defp computed_macro_reason({:invalid_generated_syntax, {:quoted_syntax_in_expansion, path}}),
+    do:
+      "invalid macro expansion: quoted syntax must be unquoted before it is emitted as Cure code (#{format_syntax_path(path)})"
+
+  defp computed_macro_reason({:invalid_generated_syntax, {reason, path}}),
+    do: "invalid macro expansion: #{inspect(reason)} (#{format_syntax_path(path)})"
+
+  defp computed_macro_reason({:author_diagnostics, diagnostics}) when is_list(diagnostics),
+    do: "macro rejected expansion: the macro reported #{length(diagnostics)} diagnostic(s): #{inspect(diagnostics)}"
+
+  defp computed_macro_reason({:author_failure, name, args}) when is_list(args),
+    do: "macro rejected expansion: the macro reported `#{name}`: #{inspect(args)}"
+
   defp computed_macro_reason(reason), do: inspect(reason)
+
+  defp format_syntax_path(path) do
+    path
+    |> Enum.reverse()
+    |> Enum.map_join(".", fn
+      {:child, index} -> "child[#{index}]"
+      {:attribute, key, index} -> "attribute #{key}[#{index}]"
+      {:syntax_literal} -> "syntax literal"
+      {:map_key} -> "map key"
+      {:map_value} -> "map value"
+      {:list_item} -> "list item"
+      other -> inspect(other)
+    end)
+  end
 
   defp syntax_secondary_labels(%SyntaxProblem{opener: %Span{} = opener}, primary_span) when opener != primary_span,
     do: [%Label{span: opener, style: :secondary, message: "the construct starts here"}]

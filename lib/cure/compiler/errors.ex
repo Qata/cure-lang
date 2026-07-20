@@ -29,7 +29,17 @@ defmodule Cure.Compiler.Errors do
       |> Enum.join(" ")
 
     body = [body, extras] |> Enum.reject(&(&1 == "")) |> Enum.join(" ") |> String.replace(~r/\s+/, " ")
-    "-- #{String.upcase(diagnostic.title)} [#{diagnostic.code}]\n--> #{file}\n#{body}"
+
+    location =
+      case diagnostic.primary do
+        %Cure.Diagnostic.Label{span: %{start_line: line}} when is_integer(line) and line > 0 ->
+          "#{file}:#{line}"
+
+        _ ->
+          file
+      end
+
+    "-- #{String.upcase(diagnostic.title)} [#{diagnostic.code}]\n--> #{location}\n#{body}"
   end
 
   def format_error({:unknown_global, _name} = error, file) do
@@ -278,7 +288,7 @@ defmodule Cure.Compiler.Errors do
 
   def format_error({:computed_macro_error, meta, reason}, file) do
     {:computed_macro_error, meta, reason}
-    |> Cure.Diagnostic.Adapter.from_error()
+    |> Cure.Diagnostic.Adapter.from_error(span: macro_span(file, meta))
     |> format_error(file)
   end
 
@@ -292,6 +302,22 @@ defmodule Cure.Compiler.Errors do
 
   def format_error(error, file) do
     raise Cure.Diagnostic.UnhandledError, error: %{error: error, file: file}
+  end
+
+  defp macro_span(file, meta) do
+    line = Keyword.get(meta, :line, 1)
+    column = Keyword.get(meta, :col, Keyword.get(meta, :column, 1))
+
+    %Cure.Diagnostic.Span{
+      source_id: {:compiler_source, file},
+      path: file,
+      start_byte: 0,
+      end_byte: 0,
+      start_line: max(line, 1),
+      end_line: max(line, 1),
+      start_column: max(column, 1),
+      end_column: max(column, 1)
+    }
   end
 
   # -- "Did you mean?" Suggestions ---------------------------------------------
