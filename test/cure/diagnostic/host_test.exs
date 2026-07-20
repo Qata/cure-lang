@@ -248,6 +248,18 @@ defmodule Cure.Diagnostic.HostTest do
     refute tuple =~ ":tuple_arity_mismatch"
   end
 
+  test "renders typed-pattern and with-rematch failures contextually" do
+    pattern = Host.render({:typed_pattern_type_mismatch, {:named, "Int"}}, "pattern.cure")
+    rematch = Host.render({:with_rematch_arity_mismatch, 2, 1}, "pattern.cure")
+
+    assert pattern =~ "[E093]"
+    assert pattern =~ "PATTERN ANNOTATION DOES NOT MATCH"
+    assert rematch =~ "[E003]"
+    assert rematch =~ "2 pattern(s)"
+    refute pattern =~ ":typed_pattern_type_mismatch"
+    refute rematch =~ ":with_rematch_arity_mismatch"
+  end
+
   test "renders operator declaration conflicts" do
     rendered = Host.render({:builtin_operator_not_overloadable, :|>}, "demo.cure")
 

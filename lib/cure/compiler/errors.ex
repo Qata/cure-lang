@@ -449,6 +449,8 @@ defmodule Cure.Compiler.Errors do
 
   defp structured_error?({:constructor_arity_mismatch, _name}), do: true
   defp structured_error?({:tuple_arity_mismatch, _direction, _details}), do: true
+  defp structured_error?({:with_rematch_arity_mismatch, _expected, _actual}), do: true
+  defp structured_error?({:typed_pattern_type_mismatch, _type_ast}), do: true
 
   defp structured_error?({:extern_untyped_head, _message, meta}) when is_list(meta), do: true
   defp structured_error?({:extern_has_body, _message, meta}) when is_list(meta), do: true

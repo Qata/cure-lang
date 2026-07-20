@@ -425,6 +425,30 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:with_rematch_arity_mismatch, expected, actual}, opts) do
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "With-pattern arity mismatch",
+      body: Doc.paragraph("The original `with` match has #{expected} pattern(s), but its rematch has #{actual}."),
+      primary: primary_label(opts, "keep the rematched patterns aligned with the original values"),
+      payload: %{kind: :with_rematch, expected: expected, actual: actual}
+    )
+  end
+
+  def from_error({:typed_pattern_type_mismatch, type_ast}, opts) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Pattern annotation does not match",
+      body: Doc.paragraph("This pattern's annotation is incompatible with the value it matches."),
+      primary: primary_label(opts, "change the pattern or its type annotation"),
+      payload: %{kind: :typed_pattern, annotation: type_ast}
+    )
+  end
+
   def from_error({:extern_untyped_head, message, meta}, opts) when is_binary(message) and is_list(meta) do
     Diagnostic.new(
       code: "E056",
