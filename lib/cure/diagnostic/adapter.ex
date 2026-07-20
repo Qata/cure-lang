@@ -22,7 +22,23 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:error, reason}, opts), do: from_error(reason, opts)
 
-  def from_error({:codegen_error, reason}, opts), do: from_error(reason, opts)
+  def from_error({:codegen_error, {:computed_macro_error, _, _} = reason}, opts),
+    do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:expansion_ill_typed, _} = reason}, opts),
+    do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:unknown_global, _} = reason}, opts), do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:unknown_global, _, _} = reason}, opts), do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:unknown_name, _} = reason}, opts), do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:unknown_constructor, _} = reason}, opts), do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:conversion_failure, _, _} = reason}, opts), do: from_error(reason, opts)
+
+  def from_error({:codegen_error, reason}, opts), do: codegen_failure(reason, opts)
 
   def from_error({:parse_error, [reason | _]}, opts), do: from_error(reason, opts)
 
@@ -575,6 +591,17 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:beam_lint_error, errors, warnings}, opts) do
+    codegen_failure({:beam_lint, errors, warnings}, opts)
+  end
+
+  def from_error({:beam_lint_error, errors}, opts) do
+    codegen_failure({:beam_lint, errors}, opts)
+  end
+
+  def from_error({:expected_module, _ast}, opts), do: codegen_failure(:expected_module, opts)
+  def from_error({:unsupported_container, type}, opts), do: codegen_failure({:unsupported_container, type}, opts)
+
   def from_error({:lift_module_error, details}, opts) when is_map(details) do
     macro = get_in(details, [:source_provenance, :macro]) || :macro
     cause = Map.get(details, :cause)
@@ -599,6 +626,19 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp codegen_failure(reason, opts) do
+    Diagnostic.new(
+      code: "E101",
+      key: :internal_compiler_error,
+      severity: :error,
+      title: "Code generation failed",
+      body: Doc.paragraph("The compiler could not produce a valid BEAM artifact for this source."),
+      primary: primary_label(opts, "code generation failed here"),
+      notes: ["This is an internal compiler failure; report it with the diagnostic fingerprint."],
+      payload: %{reason: inspect(reason)}
+    )
+  end
 
   @spec unknown_name(atom(), term(), keyword()) :: Diagnostic.t()
   def unknown_name(namespace, name, opts \\ []) do

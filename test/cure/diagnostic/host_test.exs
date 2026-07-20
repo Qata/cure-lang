@@ -54,4 +54,13 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "demo.cure"
     refute rendered =~ ":computed_macro_error"
   end
+
+  test "converts code generation and BEAM lint failures to a stable internal code" do
+    assert Host.render({:codegen_error, :bad_artifact}, "demo.cure") =~
+             "[E101]"
+
+    rendered = Host.render({:beam_lint_error, [], []}, "demo.cure")
+    assert rendered =~ "[E101]"
+    refute rendered =~ ":beam_lint_error"
+  end
 end
