@@ -455,6 +455,29 @@ defmodule Cure.Diagnostic.Adapter do
     unknown_name(namespace, name, Keyword.put(opts, :checking, Map.get(context, :checking)))
   end
 
+  def from_error({:no_such_interface, interface}, opts),
+    do: unknown_name(:interface, interface, opts)
+
+  def from_error({:unknown_interface_method, interface, method}, opts),
+    do: unknown_name(:member, method, Keyword.put(opts, :checking, interface))
+
+  def from_error({:missing_method, interface, method}, opts),
+    do: interface_failure(:missing_method, %{interface: interface, method: method}, opts)
+
+  def from_error({:method_signature_mismatch, interface, method}, opts),
+    do: interface_failure(:method_signature_mismatch, %{interface: interface, method: method}, opts)
+
+  def from_error({:instance_head_ill_formed, reason}, opts),
+    do: interface_failure(:instance_head_ill_formed, %{reason: reason}, opts)
+
+  def from_error({:missing_superinterface, interface, super_interface, head}, opts),
+    do:
+      interface_failure(
+        :missing_superinterface,
+        %{interface: interface, superinterface: super_interface, head: head},
+        opts
+      )
+
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
       opts
@@ -1282,6 +1305,41 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  defp interface_failure(kind, details, opts) do
+    {title, message, label} =
+      case kind do
+        :missing_method ->
+          {"Interface method is missing",
+           "The implementation of `#{name_to_string(details.interface)}` does not define required method `#{name_to_string(details.method)}`.",
+           "implement this required method"}
+
+        :method_signature_mismatch ->
+          {"Interface method signature mismatch",
+           "Method `#{name_to_string(details.method)}` does not match the signature required by `#{name_to_string(details.interface)}`.",
+           "make this method match the interface signature"}
+
+        :instance_head_ill_formed ->
+          {"Instance head is not well formed",
+           "The interface instance head cannot be used as a valid implementation head.",
+           "use a well-formed instance head"}
+
+        :missing_superinterface ->
+          {"Required superinterface is missing",
+           "Interface `#{name_to_string(details.interface)}` requires `#{name_to_string(details.superinterface)}` for this implementation.",
+           "implement the required superinterface first"}
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
   defp operator_conflict(kind, details, opts) do
     body =
       case kind do
@@ -1678,6 +1736,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp namespace_title(:type), do: "type"
   defp namespace_title(:module), do: "module"
   defp namespace_title(:member), do: "module member"
+  defp namespace_title(:interface), do: "interface"
   defp namespace_title(other), do: to_string(other)
 
   defp type_problem_title(%ExpectationOrigin{kind: :annotation}), do: "Annotation does not match"

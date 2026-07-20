@@ -375,6 +375,30 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":invalid_macro_family"
   end
 
+  test "renders interface implementation failures with declaration context" do
+    unknown = Host.render({:no_such_interface, :Missing}, "impl.cure")
+    method = Host.render({:unknown_interface_method, :Eq, :compare}, "impl.cure")
+    missing = Host.render({:missing_method, :Eq, :compare}, "impl.cure")
+    mismatch = Host.render({:method_signature_mismatch, :Eq, :compare}, "impl.cure")
+    superinterface = Host.render({:missing_superinterface, :Ord, :Eq, :Int}, "impl.cure")
+
+    assert unknown =~ "[E091]"
+    assert unknown =~ "UNKNOWN INTERFACE"
+    assert method =~ "[E091]"
+    assert method =~ "compare"
+    assert missing =~ "[E105]"
+    assert missing =~ "INTERFACE METHOD IS MISSING"
+    assert mismatch =~ "[E105]"
+    assert mismatch =~ "SIGNATURE MISMATCH"
+    assert superinterface =~ "[E105]"
+    assert superinterface =~ "REQUIRED SUPERINTERFACE IS MISSING"
+
+    for output <- [unknown, method, missing, mismatch, superinterface] do
+      refute output =~ ":no_such_interface"
+      refute output =~ ":missing_method"
+    end
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 
