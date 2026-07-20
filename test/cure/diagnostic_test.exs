@@ -249,6 +249,7 @@ defmodule Cure.DiagnosticTest do
       {{:grade_requires_type, :value, :linear, 1, 2}, "E093"},
       {{:unit_type_reserved, "ms"}, "E092"},
       {{:unit_type_reserved, "ms", 1, 2}, "E092"},
+      {{:duplicate_index, :n}, "E105"},
       {{:with_multi_proof_unsupported, "proof"}, "E093"},
       {{:with_multi_rematch_unsupported, "rematch"}, "E093"},
       {{:with_multi_arity_mismatch, "arity"}, "E093"},

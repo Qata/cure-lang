@@ -131,6 +131,7 @@ defmodule Cure.DiagnosticExerciserTest do
       {"unknown grade", "E093", {:unknown_grade, :future, 1, 2}},
       {"grade requires type", "E093", {:grade_requires_type, :value, :linear, 1, 2}},
       {"reserved unit type", "E092", {:unit_type_reserved, "ms", 1, 1}},
+      {"duplicate index", "E105", {:duplicate_index, :n}},
       {"multi-with proof", "E093", {:with_multi_proof_unsupported, "proof", []}},
       {"multi-with rematch", "E093", {:with_multi_rematch_unsupported, "rematch", []}},
       {"multi-with arity", "E093", {:with_multi_arity_mismatch, "arity", []}},

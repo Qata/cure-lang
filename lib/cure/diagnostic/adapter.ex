@@ -120,6 +120,7 @@ defmodule Cure.Diagnostic.Adapter do
              :duplicate_ctor,
              :duplicate_field,
              :duplicate_parameter,
+             :duplicate_index,
              :reserved_union_type_name,
              :constructor_function_collision,
              :duplicate_definition
