@@ -114,6 +114,18 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:unfilled_hole, name}, opts) do
+    Diagnostic.new(
+      code: "E014",
+      key: :unfilled_hole,
+      severity: :error,
+      title: "Unfilled hole",
+      body: Doc.paragraph("The compiler reached the unfinished hole `?#{name}`."),
+      primary: primary_label(opts, "replace this hole with an expression"),
+      payload: %{name: name}
+    )
+  end
+
   def from_error({:arity_mismatch, message, meta}, opts) when is_binary(message) and is_list(meta) do
     Diagnostic.new(
       code: "E003",

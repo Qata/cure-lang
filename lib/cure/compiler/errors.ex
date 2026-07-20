@@ -1777,6 +1777,16 @@ defmodule Cure.Compiler.Errors do
   defp error_location(_error), do: {0, 0}
 
   defp exact_error_span(error, source, source_id, registry) do
+    case hole_span(error, source) do
+      {:ok, start_byte, end_byte} ->
+        Cure.Diagnostic.SourceRegistry.span(registry, source_id, start_byte, end_byte)
+
+      :error ->
+        exact_error_span_without_hole(error, source, source_id, registry)
+    end
+  end
+
+  defp exact_error_span_without_hole(error, source, source_id, registry) do
     if insertion_at_eof?(error) do
       ending = byte_size(source)
       Cure.Diagnostic.SourceRegistry.span(registry, source_id, ending, ending)
@@ -1790,6 +1800,17 @@ defmodule Cure.Compiler.Errors do
       end
     end
   end
+
+  defp hole_span({:codegen_error, reason}, source), do: hole_span(reason, source)
+
+  defp hole_span({:unfilled_hole, _name}, source) do
+    case Regex.run(~r/\?{3}|\?{1,2}[A-Za-z_][A-Za-z0-9_]*/, source, return: :index) do
+      [{start_byte, length}] -> {:ok, start_byte, start_byte + length}
+      _ -> :error
+    end
+  end
+
+  defp hole_span(_error, _source), do: :error
 
   defp insertion_at_eof?({:lex_error, {kind, _line, _column}})
        when kind in [:unterminated_string, :unterminated_char, :unterminated_quoted_identifier],
