@@ -16,6 +16,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_global, name}, opts),
     do: unknown_name(:value, name, opts)
 
+  def from_error({:unknown_global, name, details}, opts) when is_map(details),
+    do: unknown_name(:value, name, Keyword.put(opts, :kernel_context, details))
+
   def from_error({:unknown_name, details}, opts) when is_map(details) do
     namespace = Map.get(details, :namespace, :value)
     name = Map.get(details, :name, "<unknown>")
@@ -126,7 +129,8 @@ defmodule Cure.Diagnostic.Adapter do
         checking: Keyword.get(opts, :checking),
         arity: Keyword.get(opts, :arity),
         expected_namespace: Keyword.get(opts, :expected_namespace),
-        imported_from: Keyword.get(opts, :imported_from)
+        imported_from: Keyword.get(opts, :imported_from),
+        kernel_context: Keyword.get(opts, :kernel_context)
       }
     )
   end

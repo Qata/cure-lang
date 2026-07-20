@@ -157,8 +157,11 @@ defmodule Cure.Core.Kernel do
 
   def infer(ctx, {:global, name}) do
     case Env.get_def(Context.signature(ctx), name) do
-      nil -> {:error, {:unknown_global, name}}
-      %{type: type_term} -> {:ok, Eval.eval(type_term, [])}
+      nil ->
+        {:error, {:unknown_global, name, %{core_term: {:global, name}, context_size: Context.length(ctx)}}}
+
+      %{type: type_term} ->
+        {:ok, Eval.eval(type_term, [])}
     end
   end
 
@@ -566,7 +569,7 @@ defmodule Cure.Core.Kernel do
   def check_def(env, name) do
     case Env.get_def(env, name) do
       nil ->
-        {:error, {:unknown_global, name}}
+        {:error, {:unknown_global, name, %{core_term: {:global, name}, context_size: nil}}}
 
       # Builtin-op def (K2, R4): body-less by design. Check its DECLARED TYPE
       # only — the nil body must never reach `check`/`infer` (no nil clause →
