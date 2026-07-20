@@ -147,7 +147,7 @@ defmodule Cure.Diagnostic.Registry do
 
   @spec entries() :: [Entry.t()]
   def entries do
-    Cure.Compiler.Errors.catalog_entries()
+    Cure.Diagnostic.Registry.Catalog.entries()
     |> Enum.map(fn {code, title, brief} ->
       %Entry{
         code: code,
@@ -165,7 +165,7 @@ defmodule Cure.Diagnostic.Registry do
         fixture_id: Map.get(@catalog_cases, code),
         retirement_reason: Map.get(@retirement_reasons, code),
         brief: brief,
-        explanation: Cure.Compiler.Errors.catalog_explanation!(code)
+        explanation: Cure.Diagnostic.Registry.Catalog.explanation!(code)
       }
     end)
   end

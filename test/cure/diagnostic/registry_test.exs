@@ -22,6 +22,12 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert :ok = Registry.validate(entries)
   end
 
+  test "catalog text is owned by the registry catalog, with a compatibility delegate" do
+    assert Registry.Catalog.explanation!("E093") =~ "type"
+    assert Cure.Compiler.Errors.catalog_explanation!("E093") == Registry.Catalog.explanation!("E093")
+    assert Cure.Compiler.Errors.catalog_entries() == Registry.Catalog.entries()
+  end
+
   test "registry records the real producer for operational documentation warnings" do
     assert {:ok, entry} = Registry.fetch("E008")
     assert entry.producers == [:doctor]
