@@ -44,6 +44,7 @@ defmodule Cure.REPL do
   """
 
   alias Cure.Compiler.Printer
+  alias Cure.Diagnostic.{Sink, Operational}
   alias Cure.REPL.{Config, Docs, History, LineEditor, Markdown, Render, Search, Session, Snap, Terminal, Theme}
   alias Cure.Stdlib.Preload
 
@@ -778,7 +779,7 @@ defmodule Cure.REPL do
         {:ok, src} ->
           case Cure.Compiler.compile_and_load(src, file: path, emit_events: false) do
             {:ok, mod} -> render_info(state, "  #{path} -> #{mod}")
-            {:error, reason} -> render_error(state, "  #{path}: #{render_reason(reason)}")
+            {:error, reason} -> render_reason_diagnostic(state, reason, path, src)
           end
 
         {:error, reason} ->
@@ -1463,22 +1464,27 @@ defmodule Cure.REPL do
         :command -> {:command_failed, "repl", message}
       end
 
-    render_error(state, Cure.Diagnostic.Host.render(reason, "repl.cure"))
+    render_reason_diagnostic(state, reason)
   end
 
-  defp render_reason_error(state, reason), do: render_error(state, render_reason(reason))
+  defp render_reason_error(state, reason), do: render_reason_diagnostic(state, reason)
 
-  defp render_reason(reason) when is_binary(reason), do: format_error(reason)
+  defp render_reason_diagnostic(state, reason, file \\ "repl.cure", source \\ "") do
+    reason = if is_binary(reason), do: Operational.command_failure("repl", reason), else: reason
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, file, source)
 
-  defp render_reason({:error, message} = reason) when is_binary(message), do: format_error(reason)
+    Sink.new(
+      format: :terminal,
+      registry: registry,
+      output_device: state.error_device,
+      color: if(state.color, do: :always, else: :never),
+      width: 80
+    )
+    |> Sink.emit(diagnostic)
+    |> Sink.flush()
 
-  defp render_reason({:error, _kind, message} = reason) when is_binary(message),
-    do: format_error(reason)
-
-  defp render_reason({stage, msg, _opts} = reason) when is_atom(stage) and is_binary(msg),
-    do: format_error(reason)
-
-  defp render_reason(reason), do: Cure.Diagnostic.Host.render(reason, "repl.cure")
+    state
+  end
 
   # ==========================================================================
   # Helpers
@@ -1665,17 +1671,17 @@ defmodule Cure.REPL do
   defp bye(state), do: %{state | running: false}
 
   defp format_error(reason) when is_binary(reason),
-    do: operational_error("repl", reason)
+    do: Cure.Diagnostic.Host.render(Operational.command_failure("repl", reason), "repl.cure")
 
   defp format_error({stage, msg, _opts}) when is_atom(stage) and is_binary(msg) do
-    operational_error("repl #{stage}", msg)
+    Cure.Diagnostic.Host.render(Operational.command_failure("repl #{stage}", msg), "repl.cure")
   end
 
   defp format_error({:error, message}) when is_binary(message),
-    do: operational_error("repl", message)
+    do: Cure.Diagnostic.Host.render(Operational.command_failure("repl", message), "repl.cure")
 
   defp format_error({:error, _kind, message}) when is_binary(message),
-    do: operational_error("repl", message)
+    do: Cure.Diagnostic.Host.render(Operational.command_failure("repl", message), "repl.cure")
 
   defp format_error({:codegen_error, _reason} = reason),
     do: Cure.Diagnostic.Host.render(reason, "repl.cure")
@@ -1685,9 +1691,6 @@ defmodule Cure.REPL do
 
   defp format_error(other),
     do: Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("repl", other))
-
-  defp operational_error(command, message),
-    do: Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure(command, message))
 
   @doc false
   def __format_error__(reason), do: format_error(reason)

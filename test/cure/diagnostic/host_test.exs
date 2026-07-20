@@ -19,6 +19,19 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "^"
   end
 
+  test "exposes structured conversion for embedded sinks" do
+    {diagnostic, registry} = Host.to_diagnostic({:unknown_global, "missing_name"}, "repl.cure", "")
+
+    assert diagnostic.code == "E091"
+    assert registry != nil
+
+    assert Cure.Diagnostic.Sink.new(format: :json, registry: registry)
+           |> Cure.Diagnostic.Sink.emit(diagnostic)
+           |> Cure.Diagnostic.Sink.render_all()
+           |> hd()
+           |> Map.fetch!("code") == "E091"
+  end
+
   test "renders operational failures without fabricating source context" do
     rendered = Host.render({:file_read_error, "demo.cure", :enoent}, "demo.cure")
 

@@ -6,12 +6,20 @@ defmodule Cure.Diagnostic.Host do
   @doc "Render a compiler or host failure with its authored source context."
   @spec render(term(), String.t(), String.t() | nil) :: String.t()
   def render(reason, file, source \\ nil) when is_binary(file) do
+    {diagnostic, registry} = to_diagnostic(reason, file, source)
+
+    Sink.new(format: :plain, registry: registry)
+    |> Sink.render(diagnostic)
+  end
+
+  @doc "Convert a host or compiler failure without selecting an output format."
+  @spec to_diagnostic(term(), String.t(), String.t() | nil) ::
+          {Cure.Diagnostic.t(), Cure.Diagnostic.SourceRegistry.t() | nil}
+  def to_diagnostic(reason, file, source \\ nil) when is_binary(file) do
     source = source || read_source(file)
 
     case convert(reason, file, source) do
-      {:ok, diagnostic, registry} ->
-        Sink.new(format: :plain, registry: registry)
-        |> Sink.render(diagnostic)
+      {:ok, diagnostic, registry} -> {diagnostic, registry}
     end
   end
 
