@@ -34,6 +34,18 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:missing_diagnosis, points}, opts), do: macro_validation_failure(:missing_diagnosis, points, opts)
+  def from_error({:rule_unpinned, keywords}, opts), do: macro_validation_failure(:rule_unpinned, keywords, opts)
+
+  def from_error({:example_mismatch, mismatches}, opts),
+    do: macro_validation_failure(:example_mismatch, mismatches, opts)
+
+  def from_error({:example_type_mismatch, failures}, opts),
+    do: macro_validation_failure(:example_type_mismatch, failures, opts)
+
+  def from_error({:computed_example_error, failures}, opts),
+    do: macro_validation_failure(:computed_example_error, failures, opts)
+
   def from_error({:codegen_error, {:computed_macro_error, _, _} = reason}, opts),
     do: from_error(reason, opts)
 
@@ -669,6 +681,34 @@ defmodule Cure.Diagnostic.Adapter do
       payload: %{reason: inspect(reason)}
     )
   end
+
+  defp macro_validation_failure(kind, details, opts) do
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_validation_failed,
+      severity: :error,
+      title: "Macro validation failed",
+      body: Doc.paragraph(macro_validation_message(kind, details)),
+      primary: primary_label(opts, "this macro declaration is incomplete or inconsistent"),
+      notes: ["Fix the authored macro rules or their pinned examples."],
+      payload: %{kind: kind, details: details}
+    )
+  end
+
+  defp macro_validation_message(:missing_diagnosis, points),
+    do: "The macro does not explain every declared failure point: #{inspect(points)}."
+
+  defp macro_validation_message(:rule_unpinned, keywords),
+    do: "These macro rules have no worked example: #{inspect(keywords)}."
+
+  defp macro_validation_message(:example_mismatch, mismatches),
+    do: "These macro examples do not match their actual expansions: #{inspect(mismatches)}."
+
+  defp macro_validation_message(:example_type_mismatch, failures),
+    do: "These macro examples have the wrong type: #{inspect(failures)}."
+
+  defp macro_validation_message(:computed_example_error, failures),
+    do: "These computed macro examples failed while being checked: #{inspect(failures)}."
 
   @spec unknown_name(atom(), term(), keyword()) :: Diagnostic.t()
   def unknown_name(namespace, name, opts \\ []) do

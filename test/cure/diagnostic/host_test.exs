@@ -72,4 +72,13 @@ defmodule Cure.Diagnostic.HostTest do
     assert edition_rendered =~ "[E094]"
     assert edition_rendered =~ "EDITION PRAGMA IS MALFORMED"
   end
+
+  test "keeps macro validation failures structured at the host boundary" do
+    rendered = Host.render({:rule_unpinned, ["every"]}, "macro.cure")
+
+    assert rendered =~ "[E092]"
+    assert rendered =~ "MACRO VALIDATION FAILED"
+    assert rendered =~ "every"
+    refute rendered =~ ":rule_unpinned"
+  end
 end
