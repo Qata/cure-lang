@@ -177,7 +177,7 @@ defmodule CureSiteWeb.PlaygroundLive do
                   <% {:error, errors} -> %>
                     <%= for err <- errors do %>
                       <p class="text-red-700 mb-1">
-                        {Cure.Compiler.Errors.format_error(err)}
+                        {Cure.Diagnostic.Host.render(err, "playground.cure", @source)}
                       </p>
                     <% end %>
                 <% end %>

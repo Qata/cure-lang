@@ -28,7 +28,7 @@ defmodule Cure.Diagnostic.Registry.Inventory do
 
   @spec default_paths() :: [Path.t()]
   def default_paths do
-    Path.wildcard("lib/**/*.ex")
+    Path.wildcard("lib/**/*.ex") ++ Path.wildcard("site/lib/**/*.ex")
   end
 
   @doc "Validate inventory invariants required by the shared output boundary."

@@ -174,7 +174,7 @@ defmodule CureSiteWeb.Eval do
   end
 
   defp format_compile_error(reason) when is_binary(reason), do: reason
-  defp format_compile_error(reason), do: Cure.Compiler.Errors.format_error(reason)
+  defp format_compile_error(reason), do: Cure.Diagnostic.Host.render(reason, "playground.cure")
 
   defp format_exit_reason(:normal), do: {:ok, "", ":ok"}
   defp format_exit_reason(:killed), do: {:error, "Process killed (memory limit exceeded)"}
