@@ -39,6 +39,7 @@ defmodule Cure.Compiler.Parser do
   alias Cure.Compiler.{MacroFamily, MacroRaw, Token}
   alias Cure.Compiler.Parser.{BuiltinFixity, FixityTable, Precedence}
   alias Cure.Compiler.Parser.Range
+  alias Cure.MetaAST.Metadata
   alias Cure.MetaAST.SourceInfo
   alias Cure.Pipeline.Events
 
@@ -3070,12 +3071,24 @@ defmodule Cure.Compiler.Parser do
   # -- Literals --------------------------------------------------------------
 
   defp literal(subtype, token) do
-    {:literal, [subtype: subtype, line: token.line, col: token.col], token.value}
+    meta = [subtype: subtype, line: token.line, col: token.col]
+    {:literal, put_token_source_info(meta, token), token.value}
   end
 
   defp variable(token) do
-    {:variable, [scope: :local, line: token.line, col: token.col], token.value}
+    meta = [scope: :local, line: token.line, col: token.col]
+    {:variable, put_token_source_info(meta, token, :name), token.value}
   end
+
+  defp put_token_source_info(meta, token, role \\ nil)
+
+  defp put_token_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = span}, role) do
+    info = %SourceInfo{whole: span}
+    info = if role == :name, do: %{info | name: span}, else: info
+    Keyword.put(meta, :source_info, info)
+  end
+
+  defp put_token_source_info(meta, _token, _role), do: meta
 
   defp error_node(token) do
     {:literal, [subtype: :null, line: token.line, col: token.col, error: true], nil}
@@ -3288,9 +3301,69 @@ defmodule Cure.Compiler.Parser do
         meta
       end
 
+    meta = put_call_source_info(meta, func, args, state, token)
+
     ast = {:function_call, meta, args}
     {ast, state}
   end
+
+  defp put_call_source_info(meta, func, args, state, open_token) do
+    callee_span =
+      case func do
+        {_, func_meta, _} when is_list(func_meta) ->
+          func_meta |> Metadata.source_info() |> source_whole()
+
+        _ ->
+          nil
+      end
+
+    argument_spans =
+      Enum.flat_map(args, fn
+        {_, argument_meta, _} when is_list(argument_meta) ->
+          case Metadata.source_info(argument_meta) do
+            %SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> [span]
+            _ -> []
+          end
+
+        _ ->
+          []
+      end)
+
+    close_token = last_authored_token(state)
+
+    whole =
+      case {callee_span, close_token, open_token.span} do
+        {%Cure.Diagnostic.Span{} = callee, %Token{} = close, _} ->
+          case Range.through(callee, close) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        {nil, %Token{} = close, %Cure.Diagnostic.Span{} = open} ->
+          case Range.through(open, close) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    case whole do
+      %Cure.Diagnostic.Span{} = span ->
+        Keyword.put(meta, :source_info, %SourceInfo{
+          whole: span,
+          callee: callee_span,
+          arguments: argument_spans
+        })
+
+      _ ->
+        meta
+    end
+  end
+
+  defp source_whole(%SourceInfo{whole: span}), do: span
+  defp source_whole(_), do: nil
 
   # Returns {args, labels, state}: `labels` is position-aligned with `args`, each
   # entry the written argument label (`f(to: v)`) or `nil` when the argument is

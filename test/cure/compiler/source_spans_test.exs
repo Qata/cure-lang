@@ -29,6 +29,8 @@ defmodule Cure.Compiler.SourceSpansTest do
     call = find_node(ast, :function_call)
     call_meta = elem(call, 1)
     call_info = Metadata.source_info(call_meta)
+    assert call_info.callee != nil
+    assert length(call_info.arguments) == 1
     assert slice(source, call_info.callee) == "helper"
     assert slice(source, call_info.whole) == "helper(x)"
     assert Enum.map(call_info.arguments, &slice(source, &1)) == ["x"]
