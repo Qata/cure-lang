@@ -28,4 +28,14 @@ defmodule Cure.Diagnostic.SinkTest do
     sink = Sink.new(format: :json) |> Sink.emit(diagnostic)
     assert [%{"code" => "E099"}] = Sink.render_all(sink)
   end
+
+  test "LSP flush emits JSON rather than an Elixir inspection" do
+    diagnostic = Operational.usage("cure check")
+    {:ok, device} = StringIO.open("")
+    sink = Sink.new(format: :lsp, output_device: device) |> Sink.emit(diagnostic)
+
+    assert {:ok, _flushed} = Sink.flush(sink)
+    {_input, output} = StringIO.contents(device)
+    assert [%{"code" => "E099"}] = Jason.decode!(output)
+  end
 end

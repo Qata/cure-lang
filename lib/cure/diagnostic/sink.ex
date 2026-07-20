@@ -69,7 +69,10 @@ defmodule Cure.Diagnostic.Sink do
 
   def flush(%__MODULE__{format: :json} = sink), do: flush_serialized(sink, Jason.encode!(render_all(sink)))
 
-  def flush(%__MODULE__{format: format} = sink) when format in [:code, :lsp],
+  def flush(%__MODULE__{format: :lsp} = sink),
+    do: flush_serialized(sink, Jason.encode!(render_all(sink)))
+
+  def flush(%__MODULE__{format: :code} = sink),
     do: flush_serialized(sink, inspect(render_all(sink)))
 
   defp flush_serialized(sink, output) do
