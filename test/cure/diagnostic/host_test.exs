@@ -91,6 +91,16 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":unknown_erasure_class"
   end
 
+  test "renders trusted positivity and relevance rejections" do
+    positivity = Host.render({:non_strictly_positive, :Bad}, "demo.cure")
+    assert positivity =~ "[E103]"
+    assert positivity =~ "Bad"
+
+    relevance = Host.render({:erased_used_relevantly, %{binder: 0, site: :returned}}, "demo.cure")
+    assert relevance =~ "[E104]"
+    assert relevance =~ "returned"
+  end
+
   test "does not fall through to legacy formatting for an unregistered reason" do
     rendered = Host.render({:unregistered_compiler_reason, :detail}, "demo.cure")
 

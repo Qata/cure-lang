@@ -42,6 +42,39 @@ defmodule Cure.Diagnostic.Adapter do
     erasure_failure(:erases_on_non_opaque, %{name: name}, opts)
   end
 
+  def from_error({:non_strictly_positive, family}, opts) do
+    Diagnostic.new(
+      code: "E103",
+      key: :non_strictly_positive_type,
+      severity: :error,
+      title: "Non-strictly-positive type",
+      body:
+        Doc.paragraph(
+          "The recursive occurrence in `#{name_to_string(family)}` is not strictly positive, so this type cannot be accepted by the normalising kernel."
+        ),
+      primary: primary_label(opts, "this recursive type definition is not strictly positive"),
+      payload: %{family: family}
+    )
+  end
+
+  def from_error({:erased_used_relevantly, details}, opts) when is_map(details) do
+    site = Map.get(details, :site, :runtime)
+    binder = Map.get(details, :binder)
+
+    Diagnostic.new(
+      code: "E104",
+      key: :erased_value_used_relevantly,
+      severity: :error,
+      title: "Erased value used relevantly",
+      body:
+        Doc.paragraph(
+          "An erased value#{if is_nil(binder), do: "", else: " (binder #{binder})"} is used in the runtime-relevant `#{site}` position."
+        ),
+      primary: primary_label(opts, "remove this runtime use or make the binding relevant"),
+      payload: details
+    )
+  end
+
   def from_error({:missing_diagnosis, points}, opts), do: macro_validation_failure(:missing_diagnosis, points, opts)
   def from_error({:rule_unpinned, keywords}, opts), do: macro_validation_failure(:rule_unpinned, keywords, opts)
 

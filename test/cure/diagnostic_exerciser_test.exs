@@ -49,7 +49,9 @@ defmodule Cure.DiagnosticExerciserTest do
       {"macro expansion", "E092",
        {:lift_module_error,
         %{module: "Demo.Generated", cause: {:unknown_global, :missing}, source_provenance: %{macro: :spawn}}}},
-      {"erasure violation", "E102", {:unknown_erasure_class, :Handle, :banana}}
+      {"erasure violation", "E102", {:unknown_erasure_class, :Handle, :banana}},
+      {"positivity rejection", "E103", {:non_strictly_positive, :Bad}},
+      {"relevance rejection", "E104", {:erased_used_relevantly, %{binder: 0, site: :returned}}}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))

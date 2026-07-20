@@ -1104,6 +1104,25 @@ defmodule Cure.Diagnostic.Registry.Catalog do
     Fix: use one of the supported erasure classes on a constructor-less
     opaque type, or remove the declaration from a constructed type.
     """,
+    "E103" => """
+    E103: Non-Strictly-Positive Type
+
+    An inductive type refers to itself in a negative or otherwise
+    non-strictly-positive position. Such a definition would make the
+    normalising kernel unsound.
+
+    Fix: move the recursive occurrence to a strictly positive constructor
+    argument or introduce an appropriate external boundary.
+    """,
+    "E104" => """
+    E104: Erased Value Used Relevantly
+
+    A value marked erased is used in a runtime-relevant position. Erased
+    values are unavailable after compilation and cannot influence returned
+    values, present arguments, or other runtime computation.
+
+    Fix: remove the runtime use or make the binding relevant.
+    """,
     "W000" => """
     W000: Compiler Warning
 
