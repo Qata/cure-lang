@@ -840,7 +840,7 @@ defmodule Cure.REPL do
         suggestion -> " Did you mean '#{suggestion}'?"
       end
 
-    render_error(state, "unknown command: #{other}.#{suffix} Try :help.")
+    render_operational_error(state, "unknown command: #{other}.#{suffix} Try :help.", :usage)
     state
   end
 
@@ -886,7 +886,12 @@ defmodule Cure.REPL do
               suggestion -> " Did you mean '#{suggestion}'?"
             end
 
-          render_error(state, "no stdlib module '#{mod}'.#{suffix} Type :stdlib to list known modules.")
+          render_operational_error(
+            state,
+            "no stdlib module '#{mod}'.#{suffix} Type :stdlib to list known modules.",
+            :usage
+          )
+
           state
         else
           state
@@ -1063,7 +1068,7 @@ defmodule Cure.REPL do
 
     cond do
       exit_code != 0 ->
-        render_error(state, "editor exited with status #{exit_code}; buffer discarded")
+        render_operational_error(state, "editor exited with status #{exit_code}; buffer discarded")
         %{state | input_buffer: []}
 
       String.trim(new_content) == "" ->
@@ -1122,7 +1127,7 @@ defmodule Cure.REPL do
         install_let_binding(state, name, expr_src)
 
       {:error, msg} ->
-        render_error(state, msg)
+        render_operational_error(state, msg, :usage)
         state
     end
   end
@@ -1260,7 +1265,7 @@ defmodule Cure.REPL do
   end
 
   defp cmd_theme(state, other) do
-    render_error(state, "unknown theme #{inspect(other)} (expected: dark, light, mono)")
+    render_operational_error(state, "unknown theme #{inspect(other)} (expected: dark, light, mono)", :usage)
     state
   end
 
@@ -1271,7 +1276,7 @@ defmodule Cure.REPL do
   end
 
   defp cmd_mode(state, other) do
-    render_error(state, "unknown mode #{inspect(other)} (expected: emacs, vi)")
+    render_operational_error(state, "unknown mode #{inspect(other)} (expected: emacs, vi)", :usage)
     state
   end
 
@@ -1290,7 +1295,7 @@ defmodule Cure.REPL do
   end
 
   defp cmd_color(state, other) do
-    render_error(state, "expected :color on|off, got #{inspect(other)}")
+    render_operational_error(state, "expected :color on|off, got #{inspect(other)}", :usage)
     state
   end
 
@@ -1449,6 +1454,16 @@ defmodule Cure.REPL do
   defp render_error(state, msg) do
     body = state.theme.error <> "error: " <> msg <> state.theme.reset
     IO.binwrite(state.error_device, body <> "\n")
+  end
+
+  defp render_operational_error(state, message, kind \\ :command) do
+    reason =
+      case kind do
+        :usage -> {:usage_error, message}
+        :command -> {:command_failed, "repl", message}
+      end
+
+    render_error(state, Cure.Diagnostic.Host.render(reason, "repl.cure"))
   end
 
   defp render_reason_error(state, reason), do: render_error(state, render_reason(reason))
