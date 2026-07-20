@@ -24,6 +24,12 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:snap_schema_incompatible, detail}, _opts), do: snap_schema_incompatible(detail)
   def from_error({:registry_signature_invalid, detail}, _opts), do: registry_signature_invalid(detail)
   def from_error({:transparency_log_unreachable, detail}, _opts), do: transparency_log_unreachable(detail)
+  def from_error({:registry_fetch_failed, detail}, _opts), do: registry_fetch_failed(detail)
+  def from_error({:registry_hash_mismatch, detail}, _opts), do: registry_hash_mismatch(detail)
+  def from_error({:registry_package_not_found, detail}, _opts), do: registry_package_not_found(detail)
+  def from_error({:fetch_failed, _path, detail}, _opts), do: registry_fetch_failed(detail)
+  def from_error({:hash_mismatch, detail}, _opts), do: registry_hash_mismatch(detail)
+  def from_error({:package_not_found, name}, _opts), do: registry_package_not_found(name)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
@@ -119,6 +125,15 @@ defmodule Cure.Diagnostic.Operational do
     do:
       diagnostic("E042", :transparency_log_unreachable, "Transparency log is unreachable: #{detail}", %{detail: detail})
 
+  def registry_fetch_failed(detail),
+    do: diagnostic("E038", :registry_fetch_failed, "Registry fetch failed: #{detail}", %{detail: detail})
+
+  def registry_hash_mismatch(detail),
+    do: diagnostic("E039", :registry_hash_mismatch, "Registry hash mismatch: #{detail}", %{detail: detail})
+
+  def registry_package_not_found(detail),
+    do: diagnostic("E040", :registry_package_not_found, "Registry package not found: #{detail}", %{detail: detail})
+
   @doc "Build E101 only for a caught exception at an explicit compiler boundary."
   def internal_exception(exception, stacktrace, opts \\ []) when is_exception(exception) and is_list(stacktrace) do
     fingerprint = fingerprint({exception.__struct__, Exception.message(exception), stack_head(stacktrace)})
@@ -185,6 +200,9 @@ defmodule Cure.Diagnostic.Operational do
   defp title(:snap_schema_incompatible), do: "Snap schema incompatible"
   defp title(:registry_signature_invalid), do: "Registry signature invalid"
   defp title(:transparency_log_unreachable), do: "Transparency log unreachable"
+  defp title(:registry_fetch_failed), do: "Registry fetch failed"
+  defp title(:registry_hash_mismatch), do: "Registry hash mismatch"
+  defp title(:registry_package_not_found), do: "Registry package not found"
 
   defp fingerprint(term) do
     term

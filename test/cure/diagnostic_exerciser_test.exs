@@ -101,6 +101,9 @@ defmodule Cure.DiagnosticExerciserTest do
       Operational.snap_schema_incompatible("version 9"),
       Operational.registry_signature_invalid("Demo@1.0.0"),
       Operational.transparency_log_unreachable(:econnrefused),
+      Operational.registry_fetch_failed(:timeout),
+      Operational.registry_hash_mismatch("Demo@1.0.0"),
+      Operational.registry_package_not_found("Demo@1.0.0"),
       Operational.configuration_warning("invalid setting"),
       Operational.usage("Usage: cure compile FILE"),
       Operational.artifact_error("artifact is invalid"),
@@ -121,7 +124,7 @@ defmodule Cure.DiagnosticExerciserTest do
     operational_codes = Enum.map(diagnostics, & &1.code)
 
     assert operational_codes ==
-             ~w[E095 E096 E097 E098 W001 W000 E068 E070 E065 E066 E067 E069 E041 E042 W002 E099 E100 E101]
+             ~w[E095 E096 E097 E098 W001 W000 E068 E070 E065 E066 E067 E069 E041 E042 E038 E039 E040 W002 E099 E100 E101]
 
     registered_codes = Cure.Compiler.Errors.list_all() |> Enum.map(&elem(&1, 0)) |> MapSet.new()
     covered_codes = MapSet.new(compiler_codes ++ operational_codes)
