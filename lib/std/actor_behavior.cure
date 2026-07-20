@@ -29,3 +29,16 @@ mod Std.ActorBehavior
       use_module("Std.Otp"),
       use_module("Std.Fsm")
     ], declarations)
+
+  fn supervisor_module(module_name: SynLit, declarations: List(Syntax)) -> Syntax =
+    behavior_module(module_name, :supervisor, [
+      use_module("Std.Otp"),
+      use_module("Std.Supervisor")
+    ], declarations)
+
+  fn application_module(module_name: SynLit, declarations: List(Syntax)) -> Syntax =
+    behavior_module(module_name, :application, [
+      use_module("Std.Otp"),
+      use_module("Std.App"),
+      use_module("Std.ExitReason")
+    ], declarations)

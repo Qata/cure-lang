@@ -2,6 +2,7 @@
 mod Std.Supervisor
   use Std.Syntax
   use Std.Otp.Raw
+  use Std.ActorBehavior
 
   ## The structured supervisor surface is source-defined.
   macro sup <name: ModuleName>
@@ -22,10 +23,8 @@ mod Std.Supervisor
     let init_body = quote %[:ok, %[$(strategy), $(definition.children)]]
     let strategy_type = tuple_type([variable("Atom"), variable("Nat"), variable("Nat")])
     let init_type = call("Effect", [tuple_type([variable("Atom"), tuple_type([strategy_type, call("List", [variable("ChildSpec")])])])])
-    lift_module_isolated(module_name, :supervisor, [
-      use_module("Std.Otp"),
+    Std.ActorBehavior.supervisor_module(module_name, [
       use_module("Std.Beam"),
-      use_module("Std.Supervisor"),
       function("init", [parameter("arg", call("List", [variable("p")]))], init_type, init_body),
       function("start_link", [], call("Effect", [variable("Tuple")]), call("Std.Otp.start_supervisor", [module_expr]))
     ])

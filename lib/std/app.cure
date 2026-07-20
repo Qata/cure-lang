@@ -1,6 +1,7 @@
 @group(:system)
 mod Std.App
   use Std.Syntax
+  use Std.ActorBehavior
 
   ## The structured application surface is source-defined.
   macro app <name: ModuleName>
@@ -17,9 +18,7 @@ mod Std.App
     let start_type = call("Effect", [variable("Tuple")])
     let stop_type = call("Effect", [variable("Atom")])
     let start_body = call("Std.Otp.start_supervisor", [definition.root])
-    lift_module_isolated(module_name, :application, [
-      use_module("Std.Otp"),
-      use_module("Std.App"),
+    Std.ActorBehavior.application_module(module_name, [
       use_module("Std.Supervisor"),
       function("start", [parameter("kind", variable("t")), parameter("args", variable("a"))], start_type, start_body),
       function("stop", [parameter("state", variable("s"))], stop_type, quote :ok),
