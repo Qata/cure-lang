@@ -55,6 +55,10 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:app_resource_write_failed, path, reason}, _opts),
     do: file_write(path, reason)
 
+  def from_error({:write_failed, path, reason}, _opts), do: file_write(path, reason)
+  def from_error({:load_failed, reason}, _opts), do: command_failure("beam loader", reason)
+  def from_error({:compilation_failed, errors}, _opts), do: command_failure("beam compiler", errors)
+
   def from_error({:duplicate_app, applications}, _opts),
     do: project_artifact_failure(:duplicate_app, %{applications: applications})
 

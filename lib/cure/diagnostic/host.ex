@@ -86,6 +86,9 @@ defmodule Cure.Diagnostic.Host do
   defp operational_reason?({:unreachable, _}), do: true
   defp operational_reason?({:chain_broken, _}), do: true
   defp operational_reason?({:app_resource_write_failed, _, _}), do: true
+  defp operational_reason?({:write_failed, _, _}), do: true
+  defp operational_reason?({:load_failed, _}), do: true
+  defp operational_reason?({:compilation_failed, _}), do: true
   defp operational_reason?({:duplicate_app, _}), do: true
   defp operational_reason?({:app_name_mismatch, _, _}), do: true
   defp operational_reason?({:compile_failed, _}), do: true

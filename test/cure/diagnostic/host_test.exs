@@ -111,6 +111,19 @@ defmodule Cure.Diagnostic.HostTest do
            ) =~ "[E101]"
   end
 
+  test "converts BEAM writer boundary failures without exposing raw tuples" do
+    assert Host.render({:write_failed, "_build/Demo.beam", :eacces}, "demo.cure") =~
+             "[E096]"
+
+    loaded = Host.render({:load_failed, :badfile}, "demo.cure")
+    assert loaded =~ "[E098]"
+    refute loaded =~ ":load_failed"
+
+    compiled = Host.render({:compilation_failed, [{:bad_form, :detail}]}, "demo.cure")
+    assert compiled =~ "[E098]"
+    refute compiled =~ ":compilation_failed"
+  end
+
   test "renders trusted Final-Core rejection paths as structured internal diagnostics" do
     rendered =
       Host.render(
