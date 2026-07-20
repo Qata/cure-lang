@@ -255,8 +255,6 @@ defmodule Cure.Compiler.Parser do
         many -> {:block, [line: 1, col: 1], many}
       end
 
-    ast = Cure.Compiler.SourceSpans.attach(ast, tokens)
-
     if emit? do
       Events.emit(:parser, :parse_complete, ast, Events.meta(file, 1))
     end
@@ -3078,6 +3076,11 @@ defmodule Cure.Compiler.Parser do
   defp variable(token) do
     meta = [scope: :local, line: token.line, col: token.col]
     {:variable, put_token_source_info(meta, token, :name), token.value}
+  end
+
+  defp type_variable(token) do
+    meta = [scope: :local, line: token.line, col: token.col]
+    {:variable, put_token_source_info(meta, token, :name), to_string(token.value)}
   end
 
   defp put_token_source_info(meta, token, role \\ nil)
@@ -7048,7 +7051,7 @@ defmodule Cure.Compiler.Parser do
             {{:function_call, meta, args}, state}
 
           _ ->
-            {{:variable, [scope: :local, line: token.line, col: token.col], name}, state}
+            {type_variable(token), state}
         end
     end
   end
@@ -8665,12 +8668,12 @@ defmodule Cure.Compiler.Parser do
             # A -> B  (unary function type)
             state = advance(state)
             {ret, state} = parse_type_arrow(state)
-            base = {:variable, [scope: :local, line: token.line, col: token.col], base_name}
+            base = type_variable(token)
             ast = {:function_call, [name: "Function", function_type: true], [base, ret]}
             {ast, state}
 
           true ->
-            base = {:variable, [scope: :local, line: token.line, col: token.col], base_name}
+            base = type_variable(token)
             maybe_parse_type_projection(base, state)
         end
     end
