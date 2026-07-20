@@ -33,6 +33,8 @@ defmodule Mix.Tasks.Cure.Verify do
 
   use Mix.Task
 
+  alias Cure.Diagnostic.Sink
+
   @shortdoc "Verify .cureproof artifacts in a package tarball or dependency directory"
 
   @impl Mix.Task
@@ -57,9 +59,7 @@ defmodule Mix.Tasks.Cure.Verify do
 
       true ->
         Mix.shell().error(
-          Cure.Diagnostic.Renderer.plain(
-            Cure.Diagnostic.Operational.artifact_error("#{path} is not a .tar.gz file or directory")
-          )
+          render_diagnostic(Cure.Diagnostic.Operational.artifact_error("#{path} is not a .tar.gz file or directory"))
         )
 
         exit({:shutdown, 1})
@@ -103,9 +103,7 @@ defmodule Mix.Tasks.Cure.Verify do
         end
 
       {:error, reason} ->
-        Mix.shell().error(
-          "cure.verify: " <> Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read(path, reason))
-        )
+        Mix.shell().error("cure.verify: " <> render_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason)))
 
         exit({:shutdown, 1})
     end
@@ -156,7 +154,7 @@ defmodule Mix.Tasks.Cure.Verify do
         Enum.each(failures, fn {mod, stmt, reason} ->
           Mix.shell().error(
             "    #{mod}: #{inspect(stmt)} -- " <>
-              Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("verification", reason))
+              render_diagnostic(Cure.Diagnostic.Operational.command_failure("verification", reason))
           )
         end)
 
@@ -166,9 +164,7 @@ defmodule Mix.Tasks.Cure.Verify do
 
   defp handle_missing(true, label) do
     Mix.shell().error(
-      Cure.Diagnostic.Renderer.plain(
-        Cure.Diagnostic.Operational.artifact_error("no .cureproof artifact found in #{label} (E065)")
-      )
+      render_diagnostic(Cure.Diagnostic.Operational.artifact_error("no .cureproof artifact found in #{label} (E065)"))
     )
 
     exit({:shutdown, 1})
@@ -176,5 +172,10 @@ defmodule Mix.Tasks.Cure.Verify do
 
   defp handle_missing(false, label) do
     Mix.shell().info("cure.verify: no .cureproof artifact found in #{label} (use --strict to treat as error)")
+  end
+
+  defp render_diagnostic(diagnostic) do
+    Sink.new(format: :plain, color: :auto, width: 80)
+    |> Sink.render(diagnostic)
   end
 end

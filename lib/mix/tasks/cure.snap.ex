@@ -31,6 +31,8 @@ defmodule Mix.Tasks.Cure.Snap do
 
   use Mix.Task
 
+  alias Cure.Diagnostic.Sink
+
   @shortdoc "Save or load Cure REPL session snapshots"
 
   @impl Mix.Task
@@ -82,7 +84,7 @@ defmodule Mix.Tasks.Cure.Snap do
         Mix.shell().info("Saved empty snap to #{path}")
 
       {:error, {:file_write_error, p, reason}} ->
-        Mix.shell().error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_write(p, reason)))
+        Mix.shell().error(render_diagnostic(Cure.Diagnostic.Operational.file_write(p, reason)))
         exit({:shutdown, 1})
     end
   end
@@ -112,22 +114,20 @@ defmodule Mix.Tasks.Cure.Snap do
 
       {:error, :E069} ->
         Mix.shell().error(
-          Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.artifact_error("Snap schema incompatible (E069)"))
+          render_diagnostic(Cure.Diagnostic.Operational.artifact_error("Snap schema incompatible (E069)"))
         )
 
         exit({:shutdown, 1})
 
       {:error, :corrupt} ->
         Mix.shell().error(
-          Cure.Diagnostic.Renderer.plain(
-            Cure.Diagnostic.Operational.artifact_error("Snap file is corrupt or truncated")
-          )
+          render_diagnostic(Cure.Diagnostic.Operational.artifact_error("Snap file is corrupt or truncated"))
         )
 
         exit({:shutdown, 1})
 
       {:error, {:file_read_error, p, reason}} ->
-        Mix.shell().error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read(p, reason)))
+        Mix.shell().error(render_diagnostic(Cure.Diagnostic.Operational.file_read(p, reason)))
         exit({:shutdown, 1})
     end
   end
@@ -141,5 +141,10 @@ defmodule Mix.Tasks.Cure.Snap do
       Mix.shell().info("Snap files in #{dir} (#{length(files)}):")
       Enum.each(files, &Mix.shell().info("  #{&1}"))
     end
+  end
+
+  defp render_diagnostic(diagnostic) do
+    Sink.new(format: :plain, color: :auto, width: 80)
+    |> Sink.render(diagnostic)
   end
 end

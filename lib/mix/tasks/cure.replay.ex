@@ -24,6 +24,8 @@ defmodule Mix.Tasks.Cure.Replay do
 
   use Mix.Task
 
+  alias Cure.Diagnostic.Sink
+
   @impl Mix.Task
   def run(args) do
     Application.ensure_all_started(:cure)
@@ -38,7 +40,7 @@ defmodule Mix.Tasks.Cure.Replay do
 
     if is_nil(path) do
       Mix.Shell.IO.error(
-        Cure.Diagnostic.Renderer.plain(
+        render_diagnostic(
           Cure.Diagnostic.Operational.usage("Usage: mix cure.replay <path.journal> [--module ModuleName] [--step]")
         )
       )
@@ -48,7 +50,7 @@ defmodule Mix.Tasks.Cure.Replay do
 
     case Cure.Observe.Journal.load(path) do
       {:error, reason} ->
-        Mix.Shell.IO.error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read(path, reason)))
+        Mix.Shell.IO.error(render_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason)))
         exit({:shutdown, 1})
 
       {:ok, entries} ->
@@ -80,15 +82,13 @@ defmodule Mix.Tasks.Cure.Replay do
                   Mix.Shell.IO.info("Replay complete: #{ok} ok, #{warn} warnings.")
 
                 {:error, reason} ->
-                  Mix.Shell.IO.error(
-                    Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("Replay", reason))
-                  )
+                  Mix.Shell.IO.error(render_diagnostic(Cure.Diagnostic.Operational.command_failure("Replay", reason)))
 
                   exit({:shutdown, 1})
               end
             else
               Mix.Shell.IO.error(
-                Cure.Diagnostic.Renderer.plain(
+                render_diagnostic(
                   Cure.Diagnostic.Operational.artifact_error(
                     "Module #{mod_str} is not loaded. Compile the project first."
                   )
@@ -99,5 +99,10 @@ defmodule Mix.Tasks.Cure.Replay do
             end
         end
     end
+  end
+
+  defp render_diagnostic(diagnostic) do
+    Sink.new(format: :plain, color: :auto, width: 80)
+    |> Sink.render(diagnostic)
   end
 end
