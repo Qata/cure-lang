@@ -2841,6 +2841,12 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_context(%ExpectationOrigin{kind: :call_argument, index: index, owner: owner}),
     do: "Argument #{display_index(index)} of `#{name_to_string(owner || "this function")}` has an incompatible type."
 
+  defp type_problem_context(%ExpectationOrigin{kind: :application, owner: owner}),
+    do: "This application of `#{name_to_string(owner || "this function")}` has an incompatible type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :overload, owner: owner}),
+    do: "The overloaded call `#{name_to_string(owner || "this function")}` has no compatible type."
+
   defp type_problem_context(%ExpectationOrigin{kind: :operator_operand, owner: owner}),
     do: "The `#{name_to_string(owner || "operator")}` operator cannot use this operand type."
 
@@ -2975,6 +2981,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_label(%ExpectationOrigin{kind: :branch}), do: "this branch disagrees with another branch"
   defp type_problem_label(%ExpectationOrigin{kind: :call_argument}), do: "this argument has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :application}), do: "this application has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :overload}), do: "this overloaded call has no matching type"
   defp type_problem_label(%ExpectationOrigin{kind: :element}), do: "this collection element has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :collection}), do: "this collection element has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :record}), do: "this record has the wrong type"
@@ -2991,6 +2998,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_label(%ExpectationOrigin{kind: :actor}), do: "this actor message has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :fsm}), do: "this FSM transition has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :supervisor}), do: "this supervisor value has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :operator_operand}), do: "this operator operand has the wrong type"
   defp type_problem_label(_origin), do: "this expression has the wrong type"
 
   defp expectation_labels(%ExpectationOrigin{span: %Span{} = span}, primary_span, _related)

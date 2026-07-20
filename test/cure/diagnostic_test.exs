@@ -415,12 +415,23 @@ defmodule Cure.DiagnosticTest do
         span: span
       })
 
+    overload =
+      Adapter.from_error(%Cure.Diagnostic.TypeProblem{
+        kind: :type_mismatch,
+        actual: "String",
+        expected: "Int",
+        origin: %Cure.Diagnostic.ExpectationOrigin{kind: :overload, owner: "map"},
+        span: span
+      })
+
     assert annotation.title == "Annotation does not match"
     assert Renderer.plain(annotation, registry) =~ "type written in its annotation"
     assert Renderer.plain(annotation, registry) =~ "Expected: Int\nFound:    String"
     assert condition.title == "Condition is not boolean"
     assert application.title == "Application has the wrong type"
     assert Renderer.plain(application, registry) =~ "application has the wrong type"
+    assert overload.title == "No matching overload"
+    assert Renderer.plain(overload, registry) =~ "overloaded call `map`"
     assert Renderer.plain(condition, registry) =~ "condition must produce `Bool`"
     condition_terminal = Renderer.terminal(condition, registry, color: :always)
     refute condition_terminal =~ IO.ANSI.green() <> "Bool"
