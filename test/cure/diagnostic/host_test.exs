@@ -201,6 +201,18 @@ defmodule Cure.Diagnostic.HostTest do
     assert relevance =~ "returned"
   end
 
+  test "renders ambiguous proof search with proof-specific context" do
+    rendered =
+      Host.render(
+        {:ambiguous_proof_search, {:global, :Goal}, [{:lemma, :first}, {:lemma, :second}]},
+        "proof.cure"
+      )
+
+    assert rendered =~ "[E026]"
+    assert rendered =~ "AMBIGUOUS"
+    refute rendered =~ ":ambiguous_proof_search"
+  end
+
   test "renders restricted resource usage violations through the trusted diagnostic family" do
     rendered =
       Host.render(

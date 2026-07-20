@@ -485,6 +485,21 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:ambiguous_proof_search, goal, candidates}, opts) when is_list(candidates) do
+    Diagnostic.new(
+      code: "E026",
+      key: :proof_shape_mismatch,
+      severity: :error,
+      title: "Proof search is ambiguous",
+      body:
+        Doc.paragraph(
+          "More than one proof can solve the current obligation, so the compiler cannot choose a deterministic witness."
+        ),
+      primary: primary_label(opts, "make the proof obligation unambiguous"),
+      payload: %{kind: :ambiguous_proof_search, goal: goal, candidates: candidates}
+    )
+  end
+
   def from_error({:totality_required, name}, opts) do
     Diagnostic.new(
       code: "E013",
