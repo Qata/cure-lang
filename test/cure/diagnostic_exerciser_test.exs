@@ -25,7 +25,9 @@ defmodule Cure.DiagnosticExerciserTest do
       {"pickup else not last", "E077",
        "mod DiagnosticPickupElseLast\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    x > 0 -> 2\n"},
       {"pickup multiple else", "E078",
-       "mod DiagnosticPickupMultipleElse\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    else -> 2\n"}
+       "mod DiagnosticPickupMultipleElse\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    else -> 2\n"},
+      {"record field mismatch", "E022",
+       "mod DiagnosticRecord\n  type Nat = Z | S(Nat)\n  rec Point\n    x: Nat\n    y: Nat\n  fn bad() -> Point = Point{x: S(Z()), z: Z()}\nend\n"}
     ]
 
     boundary_cases = [

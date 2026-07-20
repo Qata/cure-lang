@@ -56,6 +56,34 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:source_context, {:unknown_record, name}, context}, opts) when is_map(context) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+
+    Diagnostic.new(
+      code: "E021",
+      key: :unknown_record,
+      severity: :error,
+      title: "Unknown record",
+      body: Doc.paragraph("The record `#{name}` is not declared in this module or its imports."),
+      primary: primary_label(opts, "declare this record before constructing it"),
+      payload: %{record: name, checking: Map.get(context, :checking)}
+    )
+  end
+
+  def from_error({:source_context, {:record_field_mismatch, name}, context}, opts) when is_map(context) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+
+    Diagnostic.new(
+      code: "E022",
+      key: :record_field_mismatch,
+      severity: :error,
+      title: "Record field mismatch",
+      body: Doc.paragraph("The fields supplied to `#{name}` do not match its declared record shape."),
+      primary: primary_label(opts, "use exactly the declared record fields"),
+      payload: %{record: name, checking: Map.get(context, :checking)}
+    )
+  end
+
   def from_error({:source_context, {kind, name}, context}, opts)
       when kind in [:unknown_ctor, :foreign_ctor, :unknown_pattern_constructor, :unknown_family] and
              is_map(context) do
