@@ -121,7 +121,35 @@ syntax that can be changed to fix the problem. Generated syntax and outer macro
 invocations are secondary context. Internal Core is never the default user
 presentation.
 
-### 3.6 Compatibility is by code, not tuple shape or prose
+### 3.6 Macro abstraction is preserved in diagnostics
+
+A user invoking a macro receives a diagnostic in the vocabulary of that
+macro, not a raw parser, elaborator, kernel, or code-generation failure from
+its expansion. The default terminal and editor presentation names the macro,
+identifies the authored invocation or captured argument, and explains the
+failed macro-level obligation.
+
+The compiler still retains the complete underlying diagnostic and generated
+source/provenance chain for compiler debugging, verbose output, and machine
+consumers. Retaining that evidence must not leak implementation details into
+the default user presentation.
+
+There are three blame cases:
+
+- If an invocation violates the macro's declared grammar, categories, or
+  verifier rules, the macro's declared diagnostic is primary.
+- If authored syntax captured by the macro is semantically invalid, the
+  diagnostic describes that semantic error at the captured authored syntax
+  and states the macro role in which it was checked.
+- If only compiler-generated syntax is invalid, the diagnostic reports a macro
+  implementation/compiler defect at the invocation and offers the expansion
+  failure only as diagnostic context. It must not instruct the user to edit
+  generated code they cannot see or own.
+
+Consequently, an expansion-internal code may be recorded as a cause, but it is
+not the public primary code when a macro-specific code applies.
+
+### 3.7 Compatibility is by code, not tuple shape or prose
 
 Tests, Antigen assays, CLI integrations, and editor clients match stable
 diagnostic codes and structured fields. They must not require exact internal
@@ -507,6 +535,13 @@ The existing `Failure(name, args)` representation is a migration floor, not the
 final interface. It must lower into a structured diagnostic while preserving
 all captured syntax arguments and provenance.
 
+Every public macro must define or derive a diagnostic boundary that translates
+expansion failures into its own stable diagnostic namespace. Standard macros
+(`actor`, `fsm`, `sup`, and `app`) must cover every structural and semantic
+failure exposed by their public contracts. A generic expansion failure is
+permitted only as the macro-defect fallback described in section 3.6, and its
+default rendering still names and blames the macro invocation.
+
 ## 10. Security, trust, and performance
 
 - Diagnostics cannot affect kernel acceptance.
@@ -655,4 +690,3 @@ copying Racket's runtime syntax-object or exception architecture.
   the 0.34 shared foundation)
 - `2026-07-17-cure-native-parser-diagnostics-self-hosting-design.md` (still
   authoritative for the deferred 0.35 parser/public-library phases)
-
