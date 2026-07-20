@@ -484,6 +484,24 @@ defmodule Cure.Compiler.LexerTest do
       assert is_list(tokens)
     end
 
+    test "token events carry the same exact spans as the completed token stream" do
+      Cure.Pipeline.Events.subscribe(:lexer, :token_produced)
+      Cure.Pipeline.Events.subscribe(:lexer, :lex_complete)
+
+      assert {:ok, returned} = Lexer.tokenize("fn value() = 1", file: "events.cure")
+
+      produced =
+        Enum.map(returned, fn expected ->
+          assert_receive {Cure.Pipeline.Events, :lexer, :token_produced, token, _meta}
+          assert token == expected
+          assert %Cure.Diagnostic.Span{} = token.span
+          token
+        end)
+
+      assert_receive {Cure.Pipeline.Events, :lexer, :lex_complete, completed, _meta}
+      assert produced == completed
+    end
+
     test "error event is emitted on failure" do
       Cure.Pipeline.Events.subscribe(:lexer, :error)
       Lexer.tokenize("\t", emit_events: true)

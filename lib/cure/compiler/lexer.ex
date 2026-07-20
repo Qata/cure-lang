@@ -152,6 +152,10 @@ defmodule Cure.Compiler.Lexer do
           |> attach_token_spans(source, file)
 
         if emit? do
+          Enum.each(tokens, fn token ->
+            Events.emit(:lexer, :token_produced, token, Events.meta(file, token.line))
+          end)
+
           Events.emit(:lexer, :lex_complete, tokens, Events.meta(file, state.line))
         end
 
@@ -1721,9 +1725,10 @@ defmodule Cure.Compiler.Lexer do
     state
   end
 
-  defp maybe_emit_event(state, token) do
-    Events.emit(:lexer, :token_produced, token, Events.meta(state.file, token.line))
-  end
+  # Token events are emitted after the source-order span pass, immediately
+  # before `:lex_complete`, so event consumers receive the same complete token
+  # values returned by `tokenize/2`.
+  defp maybe_emit_event(_state, _token), do: :ok
 
   # Attach spans in one source-order pass. The scanner cursor is authoritative:
   # it avoids inheriting the legacy lexer's byte-counted columns after Unicode
