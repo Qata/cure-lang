@@ -23,6 +23,6 @@ defmodule Cure.Core.PrimBoolInductiveTest do
     tt = app2(:int_lt, {:int_lit, 1}, {:int_lit, 2})
     # `and` is the Std.Bool case-def, absent from the bare seeded env
     # (was {:unknown_prim, :and} in the prim world).
-    assert {:error, {:unknown_global, :and}} = Kernel.infer(ctx, app2(:and, tt, tt))
+    assert {:error, {:unknown_global, :and, _details}} = Kernel.infer(ctx, app2(:and, tt, tt))
   end
 end

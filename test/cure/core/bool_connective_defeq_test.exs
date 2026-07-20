@@ -80,9 +80,9 @@ defmodule Cure.Core.BoolConnectiveDefeqTest do
   defp app2(g, a, b), do: {:app, {:app, {:global, g}, a}, b}
 
   test "a connective spine over the bare seeded env is an unknown global (was {:unknown_prim, _})" do
-    assert {:error, {:unknown_global, :and}} = Kernel.infer(ctx(), app2(:and, @tt, @ff))
-    assert {:error, {:unknown_global, :or}} = Kernel.infer(ctx(), app2(:or, @tt, @ff))
-    assert {:error, {:unknown_global, :not}} = Kernel.infer(ctx(), {:app, {:global, :not}, @tt})
+    assert {:error, {:unknown_global, :and, _details}} = Kernel.infer(ctx(), app2(:and, @tt, @ff))
+    assert {:error, {:unknown_global, :or, _details}} = Kernel.infer(ctx(), app2(:or, @tt, @ff))
+    assert {:error, {:unknown_global, :not, _details}} = Kernel.infer(ctx(), {:app, {:global, :not}, @tt})
   end
 
   test "a connective spine over the bare seeded env does not fold in eval (stuck neutral)" do
