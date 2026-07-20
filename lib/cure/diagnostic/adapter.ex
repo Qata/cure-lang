@@ -1282,7 +1282,7 @@ defmodule Cure.Diagnostic.Adapter do
       message: "`#{spelling}` is not available in this #{namespace} namespace.",
       primary: primary_label(opts, "`#{spelling}` was not found"),
       notes: Keyword.get(opts, :notes, []),
-      suggestions: candidate_suggestions(candidates),
+      suggestions: candidate_suggestions(candidate_details),
       provenance: Keyword.get(opts, :provenance, []),
       payload: %{
         namespace: namespace,
@@ -1316,9 +1316,11 @@ defmodule Cure.Diagnostic.Adapter do
   defp candidate_suggestions([]), do: []
 
   defp candidate_suggestions(candidates) do
+    names = Enum.map(candidates, &suggestion_name/1)
+
     [
       %Suggestion{
-        message: "Did you mean #{Enum.map_join(candidates, ", ", &"`#{&1}`")}?",
+        message: "Did you mean #{Enum.map_join(names, ", ", &"`#{&1}`")}?",
         applicability: :maybe_incorrect
       }
     ]
@@ -1327,6 +1329,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp rank_candidates(candidates, spelling, namespace, opts) do
     candidates
     |> Enum.map(&candidate_detail/1)
+    |> Enum.filter(&candidate_allowed?(&1, namespace, opts))
     |> Enum.sort_by(fn candidate ->
       {
         unusable_candidate?(candidate),
@@ -1338,8 +1341,15 @@ defmodule Cure.Diagnostic.Adapter do
         candidate.name
       }
     end)
+    |> Enum.filter(&(edit_distance(spelling, &1.name) <= 2))
     |> Enum.uniq_by(& &1.name)
     |> Enum.take(3)
+  end
+
+  defp candidate_allowed?(candidate, namespace, opts) do
+    candidate.namespace in [nil, namespace] and
+      candidate.visibility not in [:private, "private"] and
+      not arity_mismatch?(candidate.arity, Keyword.get(opts, :arity))
   end
 
   defp candidate_detail(candidate) when is_map(candidate) do
@@ -1349,13 +1359,29 @@ defmodule Cure.Diagnostic.Adapter do
       visibility: Map.get(candidate, :visibility, Map.get(candidate, "visibility")),
       arity: Map.get(candidate, :arity, Map.get(candidate, "arity")),
       owner: Map.get(candidate, :owner, Map.get(candidate, "owner")),
-      imported: Map.get(candidate, :imported, Map.get(candidate, "imported", true))
+      imported: Map.get(candidate, :imported, Map.get(candidate, "imported", true)),
+      origin: Map.get(candidate, :origin, Map.get(candidate, "origin")),
+      candidate_id: Map.get(candidate, :id, Map.get(candidate, "id", Map.get(candidate, :name)))
     }
   end
 
   defp candidate_detail(candidate) do
-    %{name: name_to_string(candidate), namespace: nil, visibility: nil, arity: nil, owner: nil, imported: true}
+    %{
+      name: name_to_string(candidate),
+      namespace: nil,
+      visibility: nil,
+      arity: nil,
+      owner: nil,
+      imported: true,
+      origin: nil,
+      candidate_id: candidate
+    }
   end
+
+  defp suggestion_name(%{name: name, owner: owner, imported: false}) when not is_nil(owner),
+    do: "#{name_to_string(owner)}.#{name}"
+
+  defp suggestion_name(%{name: name}), do: name
 
   defp unusable_candidate?(%{visibility: visibility, imported: imported}),
     do: visibility == :private or imported == false

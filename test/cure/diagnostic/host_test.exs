@@ -266,6 +266,29 @@ defmodule Cure.Diagnostic.HostTest do
     refute non_record =~ ":projection_non_record"
   end
 
+  test "filters name suggestions semantically before edit-distance ranking" do
+    diagnostic =
+      Cure.Diagnostic.Adapter.unknown_name(:value, "pritn",
+        candidates: [
+          %{id: :private_print, name: "print", namespace: :value, visibility: :private},
+          %{id: :wrong_ns, name: "pritn", namespace: :type, visibility: :public},
+          %{id: :wrong_arity, name: "print", namespace: :value, arity: 2},
+          %{id: :qualified, name: "print", namespace: :value, owner: "Std.Io", imported: false},
+          %{id: :usable, name: "println", namespace: :value, visibility: :public, arity: 1}
+        ],
+        arity: 1
+      )
+
+    assert diagnostic.payload.candidate_details |> Enum.map(& &1.candidate_id) == [:usable, :qualified]
+
+    assert diagnostic.suggestions == [
+             %Cure.Diagnostic.Suggestion{
+               message: "Did you mean `println`, `Std.Io.print`?",
+               applicability: :maybe_incorrect
+             }
+           ]
+  end
+
   test "renders operator type failures with operator-specific context" do
     operand = Host.render({:unsupported_operand_type, :+}, "demo.cure")
     meaning = Host.render({:no_operator_meaning, :<<<}, "demo.cure")
