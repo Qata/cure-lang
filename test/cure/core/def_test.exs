@@ -47,7 +47,7 @@ defmodule Cure.Core.DefTest do
   end
 
   test "negative: a reference to an unregistered global" do
-    assert {:error, :unknown_global} =
+    assert {:error, {:unknown_global, :missing}} =
              Kernel.infer(Context.empty(base()), {:global, :missing})
   end
 end

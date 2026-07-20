@@ -48,7 +48,7 @@ defmodule Cure.Core.BoolPrimTest do
 
     # The connectives are Std.Bool defs, absent from the bare seeded env — an
     # `and`-headed spine is an ordinary unknown global (was {:unknown_prim, :and}).
-    assert {:error, :unknown_global} =
+    assert {:error, {:unknown_global, :and}} =
              Kernel.infer(ctx(), app2(:and, {:ctor, :"Std.Bool#True", []}, {:ctor, :"Std.Bool#False", []}))
 
     assert {:error, _} = Kernel.infer(ctx(), app2(:int_lt, {:ctor, :"Std.Bool#True", []}, {:int_lit, 2}))
