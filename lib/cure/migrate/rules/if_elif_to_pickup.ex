@@ -174,8 +174,19 @@ defmodule Cure.Migrate.Rules.IfElifToPickup do
     do_chain(c2, t2, e2, [{:pickup_clause, [], [cond_expr, then_branch]} | acc])
   end
 
-  defp do_chain(_cond_expr, _then_branch, {:literal, [subtype: :null], nil}, acc) do
-    {:no_else, Enum.reverse(acc)}
+  defp do_chain(cond_expr, then_branch, {:literal, meta, nil} = else_branch, acc)
+       when is_list(meta) do
+    if Keyword.get(meta, :subtype) == :null do
+      {:no_else, Enum.reverse(acc)}
+    else
+      clauses =
+        Enum.reverse([
+          {:pickup_else, [], [else_branch]},
+          {:pickup_clause, [], [cond_expr, then_branch]} | acc
+        ])
+
+      {:ok, clauses}
+    end
   end
 
   defp do_chain(cond_expr, then_branch, else_branch, acc) do

@@ -59,7 +59,7 @@ defmodule Mix.Tasks.Cure.Diagnostics do
   end
 
   defp metadata_semantic_paths do
-    Path.wildcard("lib/cure/elab/**/*.ex") ++ Path.wildcard("lib/cure/compiler/**/*.ex")
+    Path.wildcard("lib/cure/**/*.ex")
   end
 
   defp validate_inventory do

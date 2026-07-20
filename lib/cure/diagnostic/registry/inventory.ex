@@ -43,7 +43,10 @@ defmodule Cure.Diagnostic.Registry.Inventory do
     legacy_formatter_sites =
       Enum.filter(inventory.formatter_consumers, fn %{text: text, path: path} ->
         String.contains?(text, "Cure.Compiler.Errors.format_error(") and
-          path != "lib/cure/compiler/errors.ex"
+          path not in [
+            "lib/cure/compiler/errors.ex",
+            "lib/cure/diagnostic/registry/inventory.ex"
+          ]
       end)
 
     cond do
