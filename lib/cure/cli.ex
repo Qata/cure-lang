@@ -1140,7 +1140,10 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, :not_found} ->
-        IO.puts(:stderr, "no such module: #{module}")
+        diagnostic(
+          Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.usage("no such module: #{module}"))
+        )
+
         exit({:shutdown, 1})
     end
   end
@@ -2244,7 +2247,12 @@ defmodule Cure.CLI do
   # -- snap (v0.32.0) -----------------------------------------------------------
 
   defp cmd_snap([], _opts) do
-    IO.puts(:stderr, "Usage: cure snap <save|load|list> [options]")
+    diagnostic(
+      Cure.Diagnostic.Host.render_diagnostic(
+        Cure.Diagnostic.Operational.usage("Usage: cure snap <save|load|list> [options]")
+      )
+    )
+
     exit({:shutdown, 1})
   end
 
