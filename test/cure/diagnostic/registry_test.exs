@@ -23,8 +23,11 @@ defmodule Cure.Diagnostic.RegistryTest do
   end
 
   test "retired codes remain explainable but are excluded from reachable coverage" do
-    assert Enum.map(Registry.retired(), & &1.code) == ~w[E015 E018]
-    refute Enum.any?(Registry.reachable(), &(&1.code in ~w[E015 E018]))
+    retired_codes = Enum.map(Registry.retired(), & &1.code)
+    assert "E015" in retired_codes
+    assert "E018" in retired_codes
+    assert length(retired_codes) > 2
+    refute Enum.any?(Registry.reachable(), &(&1.code in retired_codes))
     assert {:ok, _} = Cure.Compiler.Errors.explain("E015")
     assert Enum.all?(Registry.retired(), &(is_binary(&1.retirement_reason) and &1.retirement_reason != ""))
     assert Enum.all?(Registry.reachable(), &is_nil(&1.retirement_reason))
@@ -33,7 +36,7 @@ defmodule Cure.Diagnostic.RegistryTest do
   end
 
   test "registry validation rejects duplicate ownership and invalid retirement metadata" do
-    [entry | _] = Registry.entries()
+    entry = Enum.find(Registry.entries(), &(&1.status == :reachable))
     code = entry.code
 
     assert {:error, {:duplicate_code, ^code}} = Registry.validate([entry, entry])
