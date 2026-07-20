@@ -572,6 +572,7 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:codegen_error, {:unknown_global, _name, details}}) when is_map(details), do: true
   defp structured_error?({:unknown_constructor, _name}), do: true
   defp structured_error?({:type_mismatch, _message, meta}) when is_list(meta), do: true
+  defp structured_error?({:type_error, errors}) when is_list(errors), do: true
   defp structured_error?({:unknown_erasure_class, _name, _class}), do: true
   defp structured_error?({:erases_on_non_opaque, _name}), do: true
   defp structured_error?({:non_strictly_positive, _family}), do: true
@@ -631,6 +632,8 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:codegen_error, reason}), do: structured_error?(reason)
   defp structured_error?({:parse_error, [reason | _]}), do: structured_error?(reason)
   defp structured_error?({:source_context, reason, context}) when is_map(context), do: structured_error?(reason)
+  defp structured_error?([reason | _]), do: structured_error?(reason)
+  defp structured_error?([]), do: true
   defp structured_error?(_error), do: false
 
   defp error_location({:lift_module_error, %{source_provenance: %{line: line, col: col}}}), do: {line, col}

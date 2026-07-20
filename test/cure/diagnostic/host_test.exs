@@ -135,6 +135,12 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert rendered =~ "[E093]"
     assert rendered =~ "expected Int, found String"
+
+    assert Cure.Compiler.Errors.format_with_source(
+             {:type_error, [{:type_mismatch, "expected Int, found String", [line: 1, col: 1]}]},
+             "demo.cure",
+             "fn run() -> Int = 1\n"
+           ) =~ "[E093]"
   end
 
   test "does not fall through to legacy formatting for an unregistered reason" do
