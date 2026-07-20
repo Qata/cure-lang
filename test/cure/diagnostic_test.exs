@@ -114,6 +114,33 @@ defmodule Cure.DiagnosticTest do
     assert Diagnostic.message(diagnostic) == "Cannot read `demo.cure`: no such file or directory"
   end
 
+  test "kernel, module, extern, and macro rejection families have structured verdicts" do
+    cases = [
+      {{:hole_in_inference_position, "h"}, "E093"},
+      {{:ctor_requires_checking_mode, "Nat"}, "E093"},
+      {{:bounded_bound_not_concrete, {:literal, 10}}, "E093"},
+      {{:cyclic_typealiases, ["A", "B"]}, "E105"},
+      {{:module_identity_missing, "demo.cure"}, "E095"},
+      {{:module_identity_mismatch, "Demo", "Other", "demo.cure"}, "E105"},
+      {{:char_literal_needs_bounded, 97}, "E093"},
+      {{:char_literal_out_of_range, 0x110000}, "E093"},
+      {{:extern_returns_union, "foreign", {:union, []}}, "E093"},
+      {{:extern_union_indistinct, "foreign", :duplicate}, "E093"},
+      {{:cannot_infer_dependent_match, :branch}, "E093"},
+      {{:bidirectional_erased_field, "Ctor"}, "E093"},
+      {{:generated_hole_not_well_typed, :term}, "E092"},
+      {{:example_use_site_not_fully_consumed, [], :ast}, "E092"},
+      {{:closed_category_extension, [:expression]}, "E092"},
+      {{:duplicate_unit, "ms"}, "E092"}
+    ]
+
+    for {reason, code} <- cases do
+      diagnostic = Adapter.from_error(reason)
+      assert diagnostic.code == code, "#{inspect(reason)} rendered as #{diagnostic.code}"
+      assert is_binary(Diagnostic.message(diagnostic))
+    end
+  end
+
   test "unique missing lexer delimiters provide an insertion edit" do
     source = "\"not closed"
     error = {:lex_error, {:unterminated_string, 1, 1}}

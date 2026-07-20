@@ -559,6 +559,62 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:escaping_variable, _id}, opts),
     do: kernel_type_failure(:escaping_variable, opts)
 
+  def from_error({:hole_in_inference_position, name}, opts),
+    do: kernel_type_failure(:hole_in_inference_position, Keyword.put(opts, :name, name))
+
+  def from_error({:ctor_requires_checking_mode, family}, opts),
+    do: kernel_type_failure(:ctor_requires_checking_mode, Keyword.put(opts, :family, family))
+
+  def from_error({:bounded_bound_not_concrete, bound}, opts),
+    do: kernel_type_failure(:bounded_bound_not_concrete, Keyword.put(opts, :bound, bound))
+
+  def from_error({:cyclic_typealiases, aliases}, opts),
+    do: declaration_conflict(:cyclic_typealiases, %{aliases: aliases}, opts)
+
+  def from_error({:module_identity_missing, path}, _opts),
+    do: Cure.Diagnostic.Operational.file_read(path, :module_identity_missing)
+
+  def from_error({:module_identity_mismatch, requested, declared, path}, opts),
+    do: declaration_conflict(:module_identity_mismatch, %{requested: requested, declared: declared, path: path}, opts)
+
+  def from_error({:module_path_identity_mismatch, path, declared, requested}, opts),
+    do:
+      declaration_conflict(
+        :module_path_identity_mismatch,
+        %{path: path, declared: declared, requested: requested},
+        opts
+      )
+
+  def from_error({:char_literal_needs_bounded, value}, opts),
+    do: contextual_type_failure(:char_literal_needs_bounded, %{value: value}, opts)
+
+  def from_error({:char_literal_out_of_range, value}, opts),
+    do: contextual_type_failure(:char_literal_out_of_range, %{value: value}, opts)
+
+  def from_error({:extern_returns_union, name, codomain}, opts),
+    do: contextual_type_failure(:extern_returns_union, %{name: name, codomain: codomain}, opts)
+
+  def from_error({:extern_union_indistinct, name, reason}, opts),
+    do: contextual_type_failure(:extern_union_indistinct, %{name: name, reason: reason}, opts)
+
+  def from_error({:cannot_infer_dependent_match, branch}, opts),
+    do: contextual_type_failure(:cannot_infer_dependent_match, %{branch: branch}, opts)
+
+  def from_error({:bidirectional_erased_field, constructor}, opts),
+    do: contextual_type_failure(:bidirectional_erased_field, %{constructor: constructor}, opts)
+
+  def from_error({:generated_hole_not_well_typed, term}, opts),
+    do: macro_validation_failure(:generated_hole_not_well_typed, %{term: term}, opts)
+
+  def from_error({:example_use_site_not_fully_consumed, _unused, _ast}, opts),
+    do: macro_validation_failure(:example_use_site_not_fully_consumed, %{}, opts)
+
+  def from_error({:closed_category_extension, categories}, opts),
+    do: macro_validation_failure(:closed_category_extension, %{categories: categories}, opts)
+
+  def from_error({:duplicate_unit, suffix}, opts),
+    do: macro_validation_failure(:duplicate_unit, %{suffix: suffix}, opts)
+
   def from_error(kind, opts)
       when kind in [
              :arg_arity,
@@ -570,7 +626,10 @@ defmodule Cure.Diagnostic.Adapter do
              :not_a_type_value,
              :index_mismatch,
              :universe_level,
-             :universe_ceiling
+             :universe_ceiling,
+             :hole_in_inference_position,
+             :ctor_requires_checking_mode,
+             :bounded_bound_not_concrete
            ] do
     kernel_type_failure(kind, opts)
   end
@@ -1652,6 +1711,18 @@ defmodule Cure.Diagnostic.Adapter do
         :universe_ceiling ->
           {"Universe level is too high", "This type would exceed Cure's supported universe ceiling.",
            "reduce the universe level"}
+
+        :hole_in_inference_position ->
+          {"Hole needs an expected type", "This hole appears where the kernel cannot infer its type.",
+           "add an annotation that determines the hole's type"}
+
+        :ctor_requires_checking_mode ->
+          {"Constructor needs an expected type", "This constructor cannot be inferred without checking information.",
+           "add a type annotation at the constructor use"}
+
+        :bounded_bound_not_concrete ->
+          {"Bound must be concrete", "This bounded type declaration requires a concrete bound.",
+           "replace the bound with a concrete value"}
       end
 
     Diagnostic.new(
@@ -1798,6 +1869,30 @@ defmodule Cure.Diagnostic.Adapter do
         :effect_arity ->
           {"Effect operation arity mismatch", "This effect operation was given the wrong number of arguments.",
            "provide the arguments required by the effect operation"}
+
+        :char_literal_needs_bounded ->
+          {"Character literal needs a bound", "This character literal requires an explicit bounded character type.",
+           "add the required bounded character annotation"}
+
+        :char_literal_out_of_range ->
+          {"Character literal is out of range", "This character value is outside the supported character range.",
+           "use a valid character literal"}
+
+        :extern_returns_union ->
+          {"Extern return type is unsupported", "An extern declaration cannot return this union type.",
+           "use a representable foreign return type"}
+
+        :extern_union_indistinct ->
+          {"Extern union is indistinct", "The extern union members cannot be distinguished at the foreign boundary.",
+           "make the foreign union members representationally distinct"}
+
+        :cannot_infer_dependent_match ->
+          {"Dependent match needs an expected type", "Cure cannot infer the indexed result of this match expression.",
+           "add an annotation that determines the dependent result"}
+
+        :bidirectional_erased_field ->
+          {"Erased field cannot be inferred here", "This erased constructor field requires checking information.",
+           "add an annotation or make the field relevant"}
       end
 
     Diagnostic.new(
@@ -1879,6 +1974,21 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp macro_validation_message(:invalid_macro_family, reason),
     do: "The macro's syntax-family declarations are inconsistent: #{inspect(reason)}."
+
+  defp macro_validation_message(:generated_hole_not_well_typed, details),
+    do: "A generated hole is not well typed: #{inspect(details)}."
+
+  defp macro_validation_message(:example_use_site_not_fully_consumed, _details),
+    do: "A macro example did not consume the complete use site."
+
+  defp macro_validation_message(:closed_category_extension, details),
+    do: "A closed macro category was extended unexpectedly: #{inspect(details)}."
+
+  defp macro_validation_message(:duplicate_unit, details),
+    do: "A macro literal unit was declared more than once: #{inspect(details)}."
+
+  defp macro_validation_message(kind, details),
+    do: "Macro validation failed for #{inspect(kind)}: #{inspect(details)}."
 
   defp macro_failure_points(points) do
     Enum.map_join(points, ", ", fn
