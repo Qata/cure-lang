@@ -122,7 +122,20 @@ defmodule Cure.DiagnosticExerciserTest do
       {"with non-data", "E093", :with_scrutinee_not_data},
       {"too few arguments", "E093", :too_few_arguments},
       {"too many arguments", "E093", :too_many_arguments},
-      {"non-variable scrutinee", "E093", :nonvariable_scrutinee}
+      {"non-variable scrutinee", "E093", :nonvariable_scrutinee},
+      {"literal macro capture", "E094", {:expected_literal_capture, "{name}", 1, 2}},
+      {"unknown syntax family field", "E092", {:unknown_syntax_family_field, :Expr, :field, 1, 2}},
+      {"missing syntax family field", "E092", {:missing_syntax_family_field, :Expr, :field, 1, 2}},
+      {"unknown macro obligation capture", "E092", {:unknown_macro_obligation_capture, :capture, 1, 2}},
+      {"graded let requires variable", "E093", {:graded_let_requires_variable, :linear, 1, 2}},
+      {"unknown grade", "E093", {:unknown_grade, :future, 1, 2}},
+      {"grade requires type", "E093", {:grade_requires_type, :value, :linear, 1, 2}},
+      {"reserved unit type", "E092", {:unit_type_reserved, "ms"}},
+      {"multi-with proof", "E093", {:with_multi_proof_unsupported, "proof", []}},
+      {"multi-with rematch", "E093", {:with_multi_rematch_unsupported, "rematch", []}},
+      {"multi-with arity", "E093", {:with_multi_arity_mismatch, "arity", []}},
+      {"multi-with no arms", "E093", {:with_multi_no_arms, "arms", []}},
+      {"multi-with inconsistent pattern", "E093", {:with_multi_inconsistent_pattern, "patterns", []}}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))
