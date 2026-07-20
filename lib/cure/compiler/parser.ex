@@ -9193,13 +9193,20 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp expect(state, expected_type) do
+    case expect_token(state, expected_type) do
+      {:ok, _token, state} -> state
+      {:error, state} -> state
+    end
+  end
+
+  defp expect_token(state, expected_type) do
     token = peek(state)
 
     if token.type == expected_type do
-      advance(state)
+      {:ok, token, advance(state)}
     else
       error = {:expected, expected_type, :got, token.type, token.line, token.col}
-      add_error(state, error)
+      {:error, add_error(state, error)}
     end
   end
 
