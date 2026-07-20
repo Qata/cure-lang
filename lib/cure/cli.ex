@@ -329,7 +329,7 @@ defmodule Cure.CLI do
 
     case Cure.Observe.Journal.load(path) do
       {:error, reason} ->
-        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read(path, reason)))
+        error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason)))
         exit({:shutdown, 1})
 
       {:ok, entries} ->
@@ -348,7 +348,10 @@ defmodule Cure.CLI do
                 info("Replay complete.")
 
               {:error, reason} ->
-                error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("Replay", reason)))
+                error(
+                  Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("Replay", reason))
+                )
+
                 exit({:shutdown, 1})
             end
           else
@@ -471,7 +474,7 @@ defmodule Cure.CLI do
     case Cure.Compiler.compile_file(path, opts) do
       {:ok, module, warnings} ->
         Enum.each(warnings, fn w ->
-          warn("  " <> Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.compiler_warning(w)))
+          warn("  " <> Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.compiler_warning(w)))
         end)
 
         _ = Cure.Compiler.load_emitted(module, Keyword.fetch!(opts, :output_dir))
@@ -556,7 +559,7 @@ defmodule Cure.CLI do
         IO.puts(source)
 
       {:error, reason} ->
-        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_write(path, reason)))
+        error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_write(path, reason)))
         exit({:shutdown, 1})
     end
   end
@@ -698,7 +701,7 @@ defmodule Cure.CLI do
                 info("Dependencies resolved. Cure.lock written.")
 
               {:error, reason} ->
-                error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.dependency(reason)))
+                error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.dependency(reason)))
                 exit({:shutdown, 1})
             end
         end
@@ -708,7 +711,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
+        error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
         exit({:shutdown, 1})
     end
   end
@@ -736,7 +739,7 @@ defmodule Cure.CLI do
                     :ok
 
                   {:error, reason} ->
-                    error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.dependency(reason)))
+                    error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.dependency(reason)))
                     exit({:shutdown, 1})
                 end
               end
@@ -751,7 +754,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
+        error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
         exit({:shutdown, 1})
     end
   end
@@ -766,7 +769,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
+        error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
         exit({:shutdown, 1})
     end
   end
@@ -1539,7 +1542,12 @@ defmodule Cure.CLI do
             :ok
 
           {:error, reason} ->
-            error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("edition bump", reason)))
+            error(
+              Cure.Diagnostic.Host.render_diagnostic(
+                Cure.Diagnostic.Operational.command_failure("edition bump", reason)
+              )
+            )
+
             {:error, reason}
         end
 
@@ -1759,7 +1767,9 @@ defmodule Cure.CLI do
           {:error, reason} ->
             error(
               "  " <>
-                Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("compile #{file}", reason))
+                Cure.Diagnostic.Host.render_diagnostic(
+                  Cure.Diagnostic.Operational.command_failure("compile #{file}", reason)
+                )
             )
 
             :error
@@ -1850,7 +1860,7 @@ defmodule Cure.CLI do
                 {:error, reason} ->
                   error(
                     "  " <>
-                      Cure.Diagnostic.Renderer.plain(
+                      Cure.Diagnostic.Host.render_diagnostic(
                         Cure.Diagnostic.Operational.command_failure("compile #{f}", reason)
                       )
                   )
@@ -1946,7 +1956,9 @@ defmodule Cure.CLI do
 
           {:error, reason} ->
             error(
-              Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure publish --hex", reason))
+              Cure.Diagnostic.Host.render_diagnostic(
+                Cure.Diagnostic.Operational.command_failure("cure publish --hex", reason)
+              )
             )
 
             exit({:shutdown, 1})
@@ -1962,7 +1974,7 @@ defmodule Cure.CLI do
 
           {:error, reason} ->
             error(
-              Cure.Diagnostic.Renderer.plain(
+              Cure.Diagnostic.Host.render_diagnostic(
                 Cure.Diagnostic.Operational.command_failure("cure publish --dry-run", reason)
               )
             )
@@ -1986,7 +1998,12 @@ defmodule Cure.CLI do
             info("Published: #{inspect(resp)}")
 
           {:error, reason} ->
-            error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure publish", reason)))
+            error(
+              Cure.Diagnostic.Host.render_diagnostic(
+                Cure.Diagnostic.Operational.command_failure("cure publish", reason)
+              )
+            )
+
             exit({:shutdown, 1})
         end
     end
@@ -2008,7 +2025,10 @@ defmodule Cure.CLI do
         end
 
       {:error, reason} ->
-        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure search", reason)))
+        error(
+          Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("cure search", reason))
+        )
+
         exit({:shutdown, 1})
     end
   end
@@ -2035,7 +2055,10 @@ defmodule Cure.CLI do
             end)
 
           {:error, reason} ->
-            error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure info", reason)))
+            error(
+              Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("cure info", reason))
+            )
+
             exit({:shutdown, 1})
         end
 
@@ -2045,7 +2068,10 @@ defmodule Cure.CLI do
             IO.puts(Cure.Project.Json.encode(manifest))
 
           {:error, reason} ->
-            error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure info", reason)))
+            error(
+              Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("cure info", reason))
+            )
+
             exit({:shutdown, 1})
         end
     end
@@ -2086,7 +2112,12 @@ defmodule Cure.CLI do
             info("Release built: #{dir}")
 
           {:error, reason} ->
-            error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure release", reason)))
+            error(
+              Cure.Diagnostic.Host.render_diagnostic(
+                Cure.Diagnostic.Operational.command_failure("cure release", reason)
+              )
+            )
+
             exit({:shutdown, 1})
         end
 
@@ -2095,7 +2126,10 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure release", reason)))
+        error(
+          Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("cure release", reason))
+        )
+
         exit({:shutdown, 1})
     end
   end
