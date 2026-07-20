@@ -199,28 +199,32 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
 
   test "transition-table verifier rejects invalid graph structure at expansion time" do
     invalid = [
-      {:fsm_unknown_terminal_state, """
-      fsm Cure.Generated.UnknownTerminal with Int
-        terminal Missing
-        A --Go--> A
-      """},
-      {:fsm_unreachable_state, """
-      fsm Cure.Generated.Unreachable with Int
-        terminal B
-        terminal D
-        A --Go--> B
-        C --Go--> D
-      """},
-      {:fsm_deadlocked_state, """
-      fsm Cure.Generated.Deadlocked with Int
-        A --Go--> B
-      """},
-      {:fsm_duplicate_transition, """
-      fsm Cure.Generated.Duplicate with Int
-        terminal B
-        A --Go--> B
-        A --Go--> B
-      """}
+      {:fsm_unknown_terminal_state,
+       """
+       fsm Cure.Generated.UnknownTerminal with Int
+         terminal Missing
+         A --Go--> A
+       """},
+      {:fsm_unreachable_state,
+       """
+       fsm Cure.Generated.Unreachable with Int
+         terminal B
+         terminal D
+         A --Go--> B
+         C --Go--> D
+       """},
+      {:fsm_deadlocked_state,
+       """
+       fsm Cure.Generated.Deadlocked with Int
+         A --Go--> B
+       """},
+      {:fsm_duplicate_transition,
+       """
+       fsm Cure.Generated.Duplicate with Int
+         terminal B
+         A --Go--> B
+         A --Go--> B
+       """}
     ]
 
     Enum.each(invalid, fn {reason, declaration} ->
@@ -345,7 +349,8 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
       use Std.Supervisor
 
       sup Cure.Generated.StructuredSup
-        actor Cure.Generated.Child as Worker
+        children
+          actor Cure.Generated.Child as Worker
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
@@ -359,7 +364,8 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
       use Std.Supervisor
 
       sup Cure.Generated.NestedSup
-        supervisor Cure.Generated.Child as Workers
+        children
+          supervisor Cure.Generated.Child as Workers
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
@@ -379,7 +385,8 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
       use Std.Supervisor
 
       sup Cure.Generated.TypedIdentitySup
-        actor Cure.Generated.Child as CounterWorker
+        children
+          actor Cure.Generated.Child as CounterWorker
     """
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
@@ -398,8 +405,9 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
       use Std.Supervisor
 
       sup Cure.Generated.UnencodedIdentitySup
-        actor Cure.Generated.Child as CounterWorker
-        actor Cure.Generated.Other as CounterWorker
+        children
+          actor Cure.Generated.Child as CounterWorker
+          actor Cure.Generated.Other as CounterWorker
     """
 
     assert {:error, reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
@@ -412,7 +420,8 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
       use Std.Supervisor
 
       sup Cure.Generated.InvalidKindSup
-        database Cure.Generated.Child as Worker
+        children
+          database Cure.Generated.Child as Worker
     """
 
     assert {:error, reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
@@ -429,9 +438,10 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
         intensity S(S(Z()))
         period More(S(S(S(S(Z())))))
 
-        actor Cure.Generated.Child as Worker
-          restart Transient()
-          shutdown Brutal()
+        children
+          actor Cure.Generated.Child as Worker
+            restart Transient()
+            shutdown Brutal()
     """
 
     assert {:ok, _module} = Cure.Compiler.compile_and_load(source, emit_events: false)

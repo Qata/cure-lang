@@ -1220,23 +1220,30 @@ defmodule Cure.Compiler.Parser do
     family_meta.fields
     |> Enum.filter(&(Map.has_key?(&1, :grammar) and &1.cardinality in [:repeated, :one_or_more]))
     |> Enum.find_value(:error, fn field ->
-      Enum.find_value(field.grammar.productions, fn production ->
-        case match_segments(state, production.segments, %{}, 0) do
-          {:ok, bindings, _progress, matched_state} ->
-            case peek(matched_state) do
-              %Token{type: type} when type in [:newline, :dedent, :eof] ->
-                production_values = Map.take(bindings, production.fields)
-                {value, matched_state} = parse_production_body(matched_state, field.grammar, production_values)
-                {:ok, field, value, matched_state}
+      case parse_family_production(state, field.grammar) do
+        {:ok, value, matched_state} -> {:ok, field, value, matched_state}
+        :error -> nil
+      end
+    end)
+  end
 
-              _ ->
-                nil
-            end
+  defp parse_family_production(state, grammar) do
+    Enum.find_value(grammar.productions, :error, fn production ->
+      case match_segments(state, production.segments, %{}, 0) do
+        {:ok, bindings, _progress, matched_state} ->
+          case peek(matched_state) do
+            %Token{type: type} when type in [:newline, :dedent, :eof] ->
+              production_values = Map.take(bindings, production.fields)
+              {value, matched_state} = parse_production_body(matched_state, grammar, production_values)
+              {:ok, value, matched_state}
 
-          _ ->
-            nil
-        end
-      end)
+            _ ->
+              nil
+          end
+
+        _ ->
+          nil
+      end
     end)
   end
 
@@ -1292,9 +1299,76 @@ defmodule Cure.Compiler.Parser do
     {{:declarations_block, [line: token.line, col: token.col], stmts}, state}
   end
 
+  # A named repeated production field is an indented collection of that
+  # family's rows. This is the structured spelling of the already-supported
+  # bare production form:
+  #
+  #     children
+  #       actor Counter as CounterChild
+  #       supervisor Workers as WorkersChild
+  #
+  # The parser remains domain-neutral: `children`, `actor`, and `supervisor`
+  # are merely literals from the source-defined family metadata. Each row may
+  # itself own an optional indented production body.
+  defp parse_family_field_value(
+         state,
+         %{grammar: grammar, cardinality: cardinality}
+       )
+       when cardinality in [:repeated, :one_or_more] do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :indent} ->
+        {values, state} = parse_family_production_entries(advance(state), grammar, [])
+        {{:family_repeated_values, values}, expect_dedent(state)}
+
+      _ ->
+        case parse_family_production(state, grammar) do
+          {:ok, value, state} ->
+            {{:family_repeated_values, [value]}, state}
+
+          :error ->
+            token = peek(state)
+            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+            {{:family_repeated_values, []}, state}
+        end
+    end
+  end
+
   defp parse_family_field_value(state, _field) do
     state = skip_newlines(state)
     parse_expr_or_block(state)
+  end
+
+  defp parse_family_production_entries(state, grammar, values) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(values), state}
+
+      token ->
+        case parse_family_production(state, grammar) do
+          {:ok, value, state} ->
+            parse_family_production_entries(state, grammar, [value | values])
+
+          :error ->
+            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+            {_ignored, state} = parse_expr_or_block(advance(state))
+            parse_family_production_entries(state, grammar, values)
+        end
+    end
+  end
+
+  defp record_family_value(
+         values,
+         %{name: name, cardinality: cardinality},
+         {:family_repeated_values, entries},
+         _token,
+         state
+       )
+       when cardinality in [:repeated, :one_or_more] do
+    {Map.update(values, name, entries, &(&1 ++ entries)), state}
   end
 
   defp record_family_value(values, %{name: name, cardinality: cardinality}, value, _token, state)

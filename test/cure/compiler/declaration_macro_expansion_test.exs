@@ -293,6 +293,7 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     source = """
     mod M
       use Std.Syntax
+      use Std.Option
 
       macro machine <name: ModuleName>
         syntax family Transition
@@ -317,6 +318,40 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert apply(module, :result, []) == 1
+  end
+
+  test "a named section groups repeated nested production records" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Option
+
+      macro machine <name: ModuleName>
+        syntax family Transition
+          syntax <from: Name> --<event: Name>--> <to: Name>
+          optional update Expression
+        syntax family Definition
+          one_or_more transitions Transition
+        accepts Definition
+        expands with build
+
+      fn build(name: ModuleNameSyntax, definition: DefinitionSyntax) -> Syntax =
+        match definition.transitions
+          [first, second] -> match second.update
+            Some(value) -> value
+            None() -> int_literal(0)
+          _ -> int_literal(0)
+
+      fn result() -> Int = machine Turnstile
+        transitions
+          Locked --Coin--> Unlocked
+          Unlocked --Push--> Locked
+            update 7
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == 7
   end
 
   test "a structured expander may receive leading captures directly" do
