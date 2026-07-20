@@ -6513,8 +6513,10 @@ defmodule Cure.Compiler.Parser do
       _ ->
         name_token = peek(state)
         state = advance(state)
+        annotation_start = peek(state)
         state = expect(state, :colon)
         {type_ast, state} = parse_type_expr(state)
+        field_annotation_span = annotation_span(annotation_start, state)
 
         # v0.19.0: optional `= default_expr` per record field.
         {default_ast, state} =
@@ -6532,6 +6534,15 @@ defmodule Cure.Compiler.Parser do
 
         meta = [type: type_ast]
         meta = if default_ast, do: Keyword.put(meta, :default, default_ast), else: meta
+
+        meta =
+          put_param_source_info(
+            meta,
+            name_token,
+            name_token,
+            state,
+            field_annotation_span
+          )
 
         field = {:param, meta, to_string(name_token.value)}
         {rest, state} = parse_record_field_list(state)

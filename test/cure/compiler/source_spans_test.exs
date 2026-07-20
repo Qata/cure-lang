@@ -157,6 +157,20 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, interface_info.name) == "Eq"
   end
 
+  test "record declaration fields retain authored parameter ranges" do
+    source = "rec Point\n  x: Int = 0\n  y: String\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "record_decl.cure", emit_events: false)
+
+    assert {:ok, {:container, _meta, fields}} =
+             Parser.parse(tokens, file: "record_decl.cure", emit_events: false, prelude_macros: false)
+
+    [{:param, x_meta, "x"}, {:param, y_meta, "y"}] = fields
+    assert slice(source, Metadata.source_info(x_meta).whole) == "x: Int = 0"
+    assert slice(source, Metadata.source_info(x_meta).name) == "x"
+    assert slice(source, Metadata.source_info(x_meta).annotation) == ": Int"
+    assert slice(source, Metadata.source_info(y_meta).whole) == "y: String"
+  end
+
   test "type applications in annotations retain their closing delimiter" do
     source = "mod Demo\n  fn answer(x: Option(Int)) -> Option(Int) = x\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "demo.cure", emit_events: false)
