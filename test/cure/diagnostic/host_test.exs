@@ -36,6 +36,12 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "MACRO SYNTAX DOES NOT MATCH"
     assert rendered =~ "demo.cure"
     refute rendered =~ ":macro_use_mismatch"
+
+    assert Cure.Compiler.Errors.format_with_source(
+             {:macro_use_mismatch, "say", {:literal, "hello"}, "nope", 1, 20},
+             "demo.cure",
+             source
+           ) =~ "[E094]"
   end
 
   test "blames computed macro rejection on the authored invocation" do

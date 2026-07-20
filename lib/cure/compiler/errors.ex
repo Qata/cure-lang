@@ -629,6 +629,15 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:parse_recovered, _, _, _}), do: true
   defp structured_error?({:lambda_block_unterminated, _, _, _}), do: true
   defp structured_error?({:lex_error, _reason}), do: true
+  defp structured_error?({:missing_diagnosis, _points}), do: true
+  defp structured_error?({:rule_unpinned, _keywords}), do: true
+  defp structured_error?({:example_mismatch, _mismatches}), do: true
+  defp structured_error?({:example_type_mismatch, _failures}), do: true
+  defp structured_error?({:computed_example_error, _failures}), do: true
+  defp structured_error?({:computed_macro_error, meta, _reason}) when is_list(meta), do: true
+  defp structured_error?({:expansion_ill_typed, details}) when is_map(details), do: true
+  defp structured_error?({:macro_use_mismatch, _keyword, _expected, _got, _line, _column}), do: true
+  defp structured_error?({:malformed_hole, _line, _column}), do: true
   defp structured_error?({:edition_error, {:unknown_edition, _edition}}), do: true
 
   defp structured_error?({kind, _, _})
