@@ -21,6 +21,11 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, function_span) =~ "helper(x)"
     assert slice(source, Metadata.source_info(elem(function, 1)).name) == "answer"
 
+    [{:param, parameter_meta, "x"}] = Keyword.fetch!(elem(function, 1), :params)
+    parameter_info = Metadata.source_info(parameter_meta)
+    assert slice(source, parameter_info.whole) == "x: Int"
+    assert slice(source, parameter_info.name) == "x"
+
     call = find_node(ast, :function_call)
     call_meta = elem(call, 1)
     call_info = Metadata.source_info(call_meta)

@@ -5536,6 +5536,7 @@ defmodule Cure.Compiler.Parser do
   # Its type may be omitted and inferred by the elaborator from later parameter
   # types / the return type. `{name :g Type}` overrides the erased default.
   defp parse_implicit_param(state) do
+    start_token = peek(state)
     state = advance(state)
     name_token = peek(state)
     name = to_string(name_token.value)
@@ -5545,10 +5546,13 @@ defmodule Cure.Compiler.Parser do
 
     state = expect(state, :rbrace)
 
-    {{:param, put_binder_meta([implicit: true], grade, type_ast), name}, state}
+    meta = put_binder_meta([implicit: true], grade, type_ast)
+    {{:param, put_param_source_info(meta, start_token, name_token, state), name}, state}
   end
 
   defp parse_explicit_param(state) do
+    start_token = peek(state)
+
     # Check for variadic: *name or **name
     {kind, state} =
       case peek(state) do
@@ -5605,7 +5609,20 @@ defmodule Cure.Compiler.Parser do
     param_meta = if default, do: Keyword.put(param_meta, :default, default), else: param_meta
     param_meta = if kind != :positional, do: Keyword.put(param_meta, :kind, kind), else: param_meta
 
-    {{:param, param_meta, name}, state}
+    {{:param, put_param_source_info(param_meta, start_token, name_token, state), name}, state}
+  end
+
+  defp put_param_source_info(meta, %Token{} = start_token, %Token{} = name_token, state) do
+    case {start_token.span, name_token.span, last_authored_token(state)} do
+      {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = name_span, %Token{} = last} ->
+        case Range.through(first, last) do
+          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name_span})
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   # -- Lambda (anonymous fn) -------------------------------------------------
@@ -9178,7 +9195,7 @@ defmodule Cure.Compiler.Parser do
   defp token_at(_state, _idx), do: nil
 
   defp last_authored_token(%{pos: pos} = state) when pos > 0 do
-    pos
+    (pos - 1)
     |> Stream.iterate(&(&1 - 1))
     |> Stream.take_while(&(&1 >= 0))
     |> Stream.drop_while(fn idx ->
