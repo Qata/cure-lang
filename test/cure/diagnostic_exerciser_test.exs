@@ -27,7 +27,11 @@ defmodule Cure.DiagnosticExerciserTest do
       {"duplicate module", "E087", {:duplicate_module_identity, "Demo", "a.cure", "b.cure"}},
       {"ambiguous name", "E089", {:ambiguous_name, :helper, ["Demo.A", "Demo.B"]}},
       {"import cycle", "W086", {:import_cycle, [%{module: "Demo.A", path: "a.cure", line: 1}]}},
-      {"unresolved import", "W088", {:unresolved_import, :helper, 1, ["Demo.A"], 2}}
+      {"unresolved import", "W088", {:unresolved_import, :helper, 1, ["Demo.A"], 2}},
+      {"recovered parse", "E063", {:parse_recovered, :semicolon, 1, 1}},
+      {"macro expansion", "E092",
+       {:lift_module_error,
+        %{module: "Demo.Generated", cause: {:unknown_global, :missing}, source_provenance: %{macro: :spawn}}}}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))
@@ -77,7 +81,8 @@ defmodule Cure.DiagnosticExerciserTest do
       Operational.snap_missing("gone.cure"),
       Operational.configuration_warning("invalid setting"),
       Operational.usage("Usage: cure compile FILE"),
-      Operational.artifact_error("artifact is invalid")
+      Operational.artifact_error("artifact is invalid"),
+      Operational.internal_exception(%ArgumentError{message: "boom"}, [])
     ]
 
     Enum.each(diagnostics, fn diagnostic ->
@@ -92,7 +97,7 @@ defmodule Cure.DiagnosticExerciserTest do
     end)
 
     operational_codes = Enum.map(diagnostics, & &1.code)
-    assert operational_codes == ~w[E095 E096 E097 E098 W001 W000 E068 E070 W002 E099 E100]
+    assert operational_codes == ~w[E095 E096 E097 E098 W001 W000 E068 E070 W002 E099 E100 E101]
 
     registered_codes = Cure.Compiler.Errors.list_all() |> Enum.map(&elem(&1, 0)) |> MapSet.new()
     covered_codes = MapSet.new(compiler_codes ++ operational_codes)

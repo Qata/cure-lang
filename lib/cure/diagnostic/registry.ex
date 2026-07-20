@@ -47,16 +47,17 @@ defmodule Cure.Diagnostic.Registry do
   alias Cure.Diagnostic.Registry.Entry
 
   @retired ~w[E015 E018]
-  @operational ~w[E068 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002]
+  @operational ~w[E068 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
   @retirement_reasons %{
     "E015" => "The former error path was consolidated into the contextual declaration diagnostics.",
     "E018" => "The former error path was consolidated into the contextual declaration diagnostics."
   }
-  @structured ~w[E011 E014 E035 E063 E068 E070 E087 E089 E090 E091 E092 E093 E094 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002 W086 W088]
+  @structured ~w[E011 E014 E035 E063 E087 E089 E090 E091 E092 E093 E094 W086 W088]
   @catalog_cases %{
     "E011" => :missing_implicit,
     "E014" => :unfilled_hole,
     "E035" => :unterminated_lambda,
+    "E063" => :parse_recovered,
     "E087" => :duplicate_module,
     "E089" => :ambiguous_name,
     "E068" => :export_unmappable,
@@ -72,6 +73,7 @@ defmodule Cure.Diagnostic.Registry do
     "E098" => :command,
     "E099" => :usage,
     "E100" => :artifact,
+    "E101" => :internal_compiler_error,
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
     "W002" => :configuration_warning,
@@ -214,6 +216,7 @@ defmodule Cure.Diagnostic.Registry do
 
   defp producers(code) when code in ~w[E011 E014], do: [:elaboration]
   defp producers("E035"), do: [:parser]
+  defp producers("E063"), do: [:parser]
   defp producers("E087"), do: [:module_loader]
   defp producers("E089"), do: [:name_resolution]
   defp producers("E090"), do: [:elaboration, :kernel_conversion]
@@ -221,6 +224,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E092"), do: [:macro_expansion]
   defp producers("E093"), do: [:elaboration, :kernel_conversion]
   defp producers("E094"), do: [:lexer, :parser]
+  defp producers("E101"), do: [:operational]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
   defp producers(_code), do: [:compiler_errors]
