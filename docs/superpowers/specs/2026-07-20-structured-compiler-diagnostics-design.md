@@ -203,9 +203,11 @@ Span
 
 Byte offsets are authoritative for slicing. Line/column values use Elixir's
 one-based `Code.diagnostic` convention and are cached presentation coordinates
-derived under one canonical UTF-8 and tab-width policy. The LSP adapter converts
-columns to zero-based UTF-16 code-unit offsets. A zero-width span is allowed for
-insertion suggestions.
+derived under one canonical UTF-8 and tab-width policy. At LSP initialization,
+the server advertises UTF-8, UTF-16, and UTF-32 position support and prefers
+UTF-8 when the client offers it. The LSP adapter converts columns to zero-based
+offsets in the negotiated encoding; UTF-16 is the protocol fallback for clients
+that do not negotiate. A zero-width span is allowed for insertion suggestions.
 
 Source buffers are stored once in a compilation source registry and referenced
 by `source_id`; diagnostics do not copy the complete source string per label.

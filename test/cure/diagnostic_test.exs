@@ -77,6 +77,9 @@ defmodule Cure.DiagnosticTest do
              "start" => %{"line" => 0, "character" => 3},
              "end" => %{"line" => 0, "character" => 4}
            }
+
+    assert Renderer.lsp(diagnostic, registry, :utf8)["range"]["start"]["character"] == 5
+    assert Renderer.lsp(diagnostic, registry, :utf32)["range"]["start"]["character"] == 2
   end
 
   test "one-based source coordinates normalize to canonical byte spans" do

@@ -26,6 +26,7 @@ defmodule Cure.LSP.Server do
   defstruct [
     :reader_pid,
     initialized: false,
+    position_encoding: :utf16,
     documents: %{},
     ast_cache: %{},
     buffer: ""
@@ -90,9 +91,12 @@ defmodule Cure.LSP.Server do
 
   # -- Message Dispatch --------------------------------------------------------
 
-  defp do_handle("initialize", id, _params, state) do
+  defp do_handle("initialize", id, params, state) do
+    position_encoding = negotiate_position_encoding(params)
+
     result = %{
       "capabilities" => %{
+        "positionEncoding" => position_encoding_name(position_encoding),
         "textDocumentSync" => %{
           "openClose" => true,
           "change" => 1,
@@ -146,7 +150,7 @@ defmodule Cure.LSP.Server do
     }
 
     Transport.send_response(id, result)
-    {Map.put(state, :initialized, true), []}
+    {state |> Map.put(:initialized, true) |> Map.put(:position_encoding, position_encoding), []}
   end
 
   defp do_handle("initialized", _id, _params, state) do
@@ -397,8 +401,8 @@ defmodule Cure.LSP.Server do
   end
 
   @doc false
-  def diagnostic_to_lsp(%Cure.Diagnostic{} = diagnostic) do
-    Cure.Diagnostic.Renderer.lsp(diagnostic)
+  def diagnostic_to_lsp(%Cure.Diagnostic{} = diagnostic, registry \\ nil, encoding \\ :utf16) do
+    Cure.Diagnostic.Renderer.lsp(diagnostic, registry, encoding)
   end
 
   defp format_diagnostic(%Cure.Diagnostic{} = diagnostic), do: diagnostic_to_lsp(diagnostic)
@@ -441,6 +445,21 @@ defmodule Cure.LSP.Server do
       "message" => inspect(other)
     }
   end
+
+  defp negotiate_position_encoding(params) do
+    offered = get_in(params, ["capabilities", "general", "positionEncodings"]) || []
+
+    cond do
+      "utf-8" in offered -> :utf8
+      "utf-16" in offered -> :utf16
+      "utf-32" in offered -> :utf32
+      true -> :utf16
+    end
+  end
+
+  defp position_encoding_name(:utf8), do: "utf-8"
+  defp position_encoding_name(:utf16), do: "utf-16"
+  defp position_encoding_name(:utf32), do: "utf-32"
 
   defp elem_or(default, index, tuple) when is_tuple(tuple) do
     if tuple_size(tuple) > index, do: elem(tuple, index), else: default

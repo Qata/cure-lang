@@ -69,6 +69,20 @@ defmodule Cure.LSP.LspTest do
 
       {new_state, _} = Server.process_message(msg, state)
       assert new_state.initialized == true
+      assert new_state.position_encoding == :utf16
+    end
+
+    test "prefers UTF-8 when the client offers position encodings" do
+      msg = %{
+        "method" => "initialize",
+        "id" => 1,
+        "params" => %{
+          "capabilities" => %{"general" => %{"positionEncodings" => ["utf-16", "utf-8", "utf-32"]}}
+        }
+      }
+
+      {new_state, _} = Server.process_message(msg, %{initialized: false, documents: %{}})
+      assert new_state.position_encoding == :utf8
     end
   end
 

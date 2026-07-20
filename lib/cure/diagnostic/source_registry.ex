@@ -68,9 +68,11 @@ defmodule Cure.Diagnostic.SourceRegistry do
     end
   end
 
-  @doc "Convert a span endpoint to the zero-based UTF-16 position required by LSP."
-  @spec lsp_position(t(), Span.t(), :start | :end) :: {:ok, map()} | {:error, term()}
-  def lsp_position(%__MODULE__{} = registry, %Span{} = span, endpoint) when endpoint in [:start, :end] do
+  @doc "Convert a span endpoint to a zero-based position in the negotiated LSP encoding."
+  @spec lsp_position(t(), Span.t(), :start | :end, :utf8 | :utf16 | :utf32) ::
+          {:ok, map()} | {:error, term()}
+  def lsp_position(%__MODULE__{} = registry, %Span{} = span, endpoint, encoding \\ :utf16)
+      when endpoint in [:start, :end] and encoding in [:utf8, :utf16, :utf32] do
     byte = if endpoint == :start, do: span.start_byte, else: span.end_byte
     line = if endpoint == :start, do: span.start_line, else: span.end_line
 
@@ -78,13 +80,20 @@ defmodule Cure.Diagnostic.SourceRegistry do
          true <- byte <= byte_size(source) do
       prefix = binary_part(source, 0, byte)
       line_prefix = prefix |> String.split("\n") |> List.last()
-      utf16 = :unicode.characters_to_binary(line_prefix, :utf8, {:utf16, :little})
-      {:ok, %{"line" => line - 1, "character" => div(byte_size(utf16), 2)}}
+      {:ok, %{"line" => line - 1, "character" => encoded_length(line_prefix, encoding)}}
     else
       :error -> {:error, :unknown_source}
       false -> {:error, :span_out_of_bounds}
     end
   end
+
+  defp encoded_length(text, :utf8), do: byte_size(text)
+
+  defp encoded_length(text, :utf16) do
+    text |> :unicode.characters_to_binary(:utf8, {:utf16, :little}) |> byte_size() |> div(2)
+  end
+
+  defp encoded_length(text, :utf32), do: String.length(text)
 
   # Columns are Unicode scalar columns. LSP's UTF-16 conversion belongs in its adapter.
   defp coordinates(source, byte) do

@@ -78,18 +78,18 @@ defmodule Cure.Diagnostic.Renderer do
   def from_host_diagnostic(%{details: %Diagnostic{} = diagnostic}), do: {:ok, diagnostic}
   def from_host_diagnostic(_diagnostic), do: :error
 
-  @spec lsp(Diagnostic.t(), SourceRegistry.t() | nil) :: map()
-  def lsp(%Diagnostic{} = diagnostic, registry \\ nil) do
+  @spec lsp(Diagnostic.t(), SourceRegistry.t() | nil, :utf8 | :utf16 | :utf32) :: map()
+  def lsp(%Diagnostic{} = diagnostic, registry \\ nil, encoding \\ :utf16) do
     %{
-      "range" => lsp_range(diagnostic.primary, registry),
+      "range" => lsp_range(diagnostic.primary, registry, encoding),
       "severity" => lsp_severity(diagnostic.severity),
       "code" => diagnostic.code,
       "source" => "cure",
       "message" => diagnostic.title <> "\n\n" <> diagnostic.message,
-      "relatedInformation" => Enum.map(diagnostic.secondary, &related_information(&1, registry)),
+      "relatedInformation" => Enum.map(diagnostic.secondary, &related_information(&1, registry, encoding)),
       "data" => %{
         "key" => Atom.to_string(diagnostic.key),
-        "suggestions" => Enum.map(diagnostic.suggestions, &lsp_suggestion_map(&1, registry)),
+        "suggestions" => Enum.map(diagnostic.suggestions, &lsp_suggestion_map(&1, registry, encoding)),
         "provenance" => Enum.map(diagnostic.provenance, &provenance_map/1),
         "payload" => stringify_keys(diagnostic.payload)
       }
@@ -208,7 +208,7 @@ defmodule Cure.Diagnostic.Renderer do
     }
   end
 
-  defp lsp_suggestion_map(%Suggestion{} = suggestion, registry) do
+  defp lsp_suggestion_map(%Suggestion{} = suggestion, registry, encoding) do
     %{
       "message" => suggestion.message,
       "applicability" => Atom.to_string(suggestion.applicability),
@@ -216,7 +216,7 @@ defmodule Cure.Diagnostic.Renderer do
         Enum.map(suggestion.edits, fn %TextEdit{span: span, replacement: replacement} ->
           %{
             "uri" => path_to_uri(span.path),
-            "range" => lsp_range(%Label{span: span, style: :primary}, registry),
+            "range" => lsp_range(%Label{span: span, style: :primary}, registry, encoding),
             "newText" => replacement
           }
         end)
@@ -241,28 +241,28 @@ defmodule Cure.Diagnostic.Renderer do
   defp optional_span(%Span{} = span), do: span_map(span)
   defp optional_span(other), do: other
 
-  defp lsp_range(nil, _registry),
+  defp lsp_range(nil, _registry, _encoding),
     do: %{"start" => %{"line" => 0, "character" => 0}, "end" => %{"line" => 0, "character" => 0}}
 
-  defp lsp_range(%Label{span: span}, %SourceRegistry{} = registry) do
-    with {:ok, start_position} <- SourceRegistry.lsp_position(registry, span, :start),
-         {:ok, end_position} <- SourceRegistry.lsp_position(registry, span, :end) do
+  defp lsp_range(%Label{span: span}, %SourceRegistry{} = registry, encoding) do
+    with {:ok, start_position} <- SourceRegistry.lsp_position(registry, span, :start, encoding),
+         {:ok, end_position} <- SourceRegistry.lsp_position(registry, span, :end, encoding) do
       %{"start" => start_position, "end" => end_position}
     else
-      _ -> lsp_range(%Label{span: span, style: :primary}, nil)
+      _ -> lsp_range(%Label{span: span, style: :primary}, nil, encoding)
     end
   end
 
-  defp lsp_range(%Label{span: span}, nil) do
+  defp lsp_range(%Label{span: span}, nil, _encoding) do
     %{
       "start" => %{"line" => span.start_line - 1, "character" => span.start_column - 1},
       "end" => %{"line" => span.end_line - 1, "character" => span.end_column - 1}
     }
   end
 
-  defp related_information(%Label{span: span, message: message} = label, registry) do
+  defp related_information(%Label{span: span, message: message} = label, registry, encoding) do
     %{
-      "location" => %{"uri" => path_to_uri(span.path), "range" => lsp_range(label, registry)},
+      "location" => %{"uri" => path_to_uri(span.path), "range" => lsp_range(label, registry, encoding)},
       "message" => message || "related source"
     }
   end
