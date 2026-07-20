@@ -52,11 +52,15 @@ defmodule Cure.Diagnostic.Registry do
     "E015" => "The former error path was consolidated into the contextual declaration diagnostics.",
     "E018" => "The former error path was consolidated into the contextual declaration diagnostics."
   }
-  @structured ~w[E035 E063 E068 E070 E091 E092 E093 E094 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
+  @structured ~w[E011 E014 E035 E063 E068 E070 E090 E091 E092 E093 E094 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
   @catalog_cases %{
+    "E011" => :missing_implicit,
+    "E014" => :unfilled_hole,
+    "E035" => :unterminated_lambda,
     "E068" => :export_unmappable,
     "E070" => :snap_missing,
     "E091" => :unknown_name,
+    "E090" => :unrecognized_pattern,
     "E092" => :macro_expansion,
     "E093" => :type_mismatch,
     "E094" => :syntax_error,
@@ -204,7 +208,10 @@ defmodule Cure.Diagnostic.Registry do
   defp producers(code) when code in ~w[E068 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002],
     do: [:operational]
 
-  defp producers("E091"), do: [:name_resolution]
+  defp producers(code) when code in ~w[E011 E014], do: [:elaboration]
+  defp producers("E035"), do: [:parser]
+  defp producers("E090"), do: [:elaboration, :kernel_conversion]
+  defp producers("E091"), do: [:name_resolution, :pattern_checker]
   defp producers("E092"), do: [:macro_expansion]
   defp producers("E093"), do: [:elaboration, :kernel_conversion]
   defp producers("E094"), do: [:lexer, :parser]
