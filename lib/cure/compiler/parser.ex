@@ -3129,7 +3129,9 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
     {operand, state} = parse_expr(state, rbp, lexeme_of(token))
     op = Precedence.operator_symbol(token.type)
-    ast = {:unary_op, [category: category, operator: op, line: token.line, col: token.col], [operand]}
+    meta = [category: category, operator: op, line: token.line, col: token.col]
+    meta = put_operator_source_info(meta, nil, operand, token)
+    ast = {:unary_op, meta, [operand]}
     {ast, state}
   end
 
@@ -3229,6 +3231,7 @@ defmodule Cure.Compiler.Parser do
         {right, state} = parse_expr(state, right_bp, op_lexeme)
         op = String.to_atom(token.value)
         meta = [category: :overloaded, operator: op, line: token.line, col: token.col]
+        meta = put_operator_source_info(meta, left, right, token)
         {{:binary_op, meta, [left, right]}, state}
 
       # Regular built-in binary operator (arithmetic/comparison/boolean/…):
@@ -3238,6 +3241,7 @@ defmodule Cure.Compiler.Parser do
         category = Precedence.operator_category(token.type)
         op = Precedence.operator_symbol(token.type)
         meta = [category: category, operator: op, line: token.line, col: token.col]
+        meta = put_operator_source_info(meta, left, right, token)
         {{:binary_op, meta, [left, right]}, state}
     end
   end
@@ -3246,6 +3250,49 @@ defmodule Cure.Compiler.Parser do
   defp augmented_op(:minus_assign), do: :-
   defp augmented_op(:star_assign), do: :*
   defp augmented_op(:slash_assign), do: :/
+
+  defp put_operator_source_info(meta, left, right, token) do
+    operands = Enum.flat_map([left, right], &node_source_span/1)
+    operator = if match?(%Cure.Diagnostic.Span{}, token.span), do: token.span, else: nil
+
+    whole_spans = if is_nil(left) and operator, do: [operator | operands], else: operands
+
+    whole =
+      case whole_spans do
+        [first | rest] ->
+          Enum.reduce(rest, first, &merge_source_spans/2)
+
+        [] ->
+          operator
+      end
+
+    if whole || operator do
+      Keyword.put(meta, :source_info, %SourceInfo{whole: whole, operator: operator, operands: operands})
+    else
+      meta
+    end
+  end
+
+  defp node_source_span({_, node_meta, _}) when is_list(node_meta) do
+    case Metadata.source_info(node_meta) do
+      %SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> [span]
+      _ -> []
+    end
+  end
+
+  defp node_source_span(_), do: []
+
+  defp merge_source_spans(%Cure.Diagnostic.Span{} = right, %Cure.Diagnostic.Span{} = left) do
+    start = if left.start_byte <= right.start_byte, do: left, else: right
+    ending = if left.end_byte >= right.end_byte, do: left, else: right
+
+    %Cure.Diagnostic.Span{
+      start
+      | end_byte: ending.end_byte,
+        end_line: ending.end_line,
+        end_column: ending.end_column
+    }
+  end
 
   # `<-|` -> :ascii, `✉` -> :unicode. Any other lexeme (unlikely, but
   # we guard anyway) falls back to :ascii.
