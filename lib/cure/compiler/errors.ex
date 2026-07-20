@@ -189,7 +189,7 @@ defmodule Cure.Compiler.Errors do
           "line #{line}: #{module}: #{inspect(payload)}"
 
         other ->
-          inspect(other)
+          raise Cure.Diagnostic.UnhandledError, error: {:beam_lint_entry, other}
       end)
 
     format_diagnostic("error", "BEAM lint error", file, 0, Enum.join(lines, "\n      | "))
@@ -483,7 +483,7 @@ defmodule Cure.Compiler.Errors do
       {:map_key} -> "map key"
       {:map_value} -> "map value"
       {:list_item} -> "list item"
-      other -> inspect(other)
+      other -> raise Cure.Diagnostic.UnhandledError, error: {:syntax_path_segment, other}
     end)
   end
 
