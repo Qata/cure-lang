@@ -57,7 +57,7 @@ defmodule Mix.Tasks.Cure.Compile do
          ) do
       {:ok, summary} ->
         Enum.each(summary.cycles, fn walk ->
-          Mix.shell().info(Cure.Compiler.Errors.format_error({:import_cycle, walk}, path))
+          Mix.shell().info(Cure.Diagnostic.Host.render({:import_cycle, walk}, path))
         end)
 
         Mix.shell().info(
@@ -68,14 +68,14 @@ defmodule Mix.Tasks.Cure.Compile do
 
         unless summary.errors == [] do
           Enum.each(summary.errors, fn {target, reason} ->
-            Mix.shell().error("  #{Cure.Compiler.Errors.format_error(reason, target)}")
+            Mix.shell().error("  #{Cure.Diagnostic.Host.render(reason, target)}")
           end)
 
           exit({:shutdown, 1})
         end
 
       {:error, reason} ->
-        Mix.shell().error(Cure.Compiler.Errors.format_error(reason, path))
+        Mix.shell().error(Cure.Diagnostic.Host.render(reason, path))
         exit({:shutdown, 1})
     end
   end
@@ -92,7 +92,7 @@ defmodule Mix.Tasks.Cure.Compile do
         Mix.shell().info("  -> #{module}")
 
       {:error, reason} ->
-        formatted = Cure.Compiler.Errors.format_error(reason, path)
+        formatted = Cure.Diagnostic.Host.render(reason, path)
         Mix.shell().error(formatted)
     end
   end

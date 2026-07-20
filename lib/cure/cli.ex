@@ -452,13 +452,13 @@ defmodule Cure.CLI do
           {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
 
           Enum.each(cycles, fn walk ->
-            warn(Cure.Compiler.Errors.format_error({:import_cycle, walk}, hd(paths)))
+            warn(Cure.Diagnostic.Host.render({:import_cycle, walk}, hd(paths)))
           end)
 
           ordered
 
         {:error, reason} ->
-          diagnostic(Cure.Compiler.Errors.format_error(reason, hd(paths)))
+          diagnostic(Cure.Diagnostic.Host.render(reason, hd(paths)))
           exit({:shutdown, 1})
       end
 
@@ -478,8 +478,7 @@ defmodule Cure.CLI do
         info("  -> #{module}")
 
       {:error, reason} ->
-        source = File.read(path) |> elem(1)
-        formatted = Cure.Compiler.Errors.format_with_source(reason, path, source || "")
+        formatted = Cure.Diagnostic.Host.render(reason, path)
         # `formatted` already carries the `error: <category>` diagnostic;
         # go straight to stderr so `error/1`'s own `error: ` prefix does
         # not double-wrap the output.
@@ -516,7 +515,7 @@ defmodule Cure.CLI do
         end
 
       {:error, reason} ->
-        formatted = Cure.Compiler.Errors.format_error(reason, path)
+        formatted = Cure.Diagnostic.Host.render(reason, path)
         diagnostic(formatted)
         exit({:shutdown, 1})
     end
@@ -612,7 +611,7 @@ defmodule Cure.CLI do
       {:error, reason} ->
         # The dependent checker returns a tagged `{:error, term}`; funnel it
         # through `format_error/2` and print the formatted string to stderr.
-        formatted = Cure.Compiler.Errors.format_error(reason, path)
+        formatted = Cure.Diagnostic.Host.render(reason, path)
         diagnostic(formatted)
         exit({:shutdown, 1})
     end
