@@ -1,0 +1,231 @@
+defmodule Cure.Compiler.SourceSpans do
+  @moduledoc "Attach authored token ranges to parser AST metadata without changing semantic identity."
+
+  alias Cure.Compiler.Token
+  alias Cure.Diagnostic.Span
+
+  @diagnostic_keys [:span, :name_span, :callee_span, :construct_span, :provenance]
+
+  @spec attach(term(), [Token.t()]) :: term()
+  def attach(ast, tokens) do
+    tokens = tokens |> flatten_tokens() |> Enum.filter(&match?(%Token{span: %Span{}}, &1))
+    context = index_tokens(tokens)
+    {ast, _span} = attach_term(ast, context)
+    ast
+  end
+
+  @doc "Remove source/provenance metadata before a semantic comparison."
+  @spec strip_diagnostic_meta(term()) :: term()
+  def strip_diagnostic_meta({tag, meta, payload}) when is_atom(tag) and is_list(meta) do
+    {tag, Keyword.drop(meta, @diagnostic_keys), strip_diagnostic_meta(payload)}
+  end
+
+  def strip_diagnostic_meta(list) when is_list(list), do: Enum.map(list, &strip_diagnostic_meta/1)
+
+  def strip_diagnostic_meta(tuple) when is_tuple(tuple) do
+    tuple |> Tuple.to_list() |> Enum.map(&strip_diagnostic_meta/1) |> List.to_tuple()
+  end
+
+  def strip_diagnostic_meta(map) when is_map(map) and not is_struct(map) do
+    Map.new(map, fn {key, value} -> {strip_diagnostic_meta(key), strip_diagnostic_meta(value)} end)
+  end
+
+  def strip_diagnostic_meta(other), do: other
+
+  defp attach_term({tag, meta, payload}, context) when is_atom(tag) and is_list(meta) do
+    {payload, child_spans} = attach_payload(payload, context)
+    own = metadata_span(meta, context.by_position)
+    span = complete_span(own, child_spans)
+
+    {meta, span} =
+      case own do
+        %Span{} ->
+          span = expand_construct(tag, meta, span, context)
+          {attach_metadata(meta, tag, span, context), span}
+
+        nil ->
+          {meta, span}
+      end
+
+    {{tag, meta, payload}, span}
+  end
+
+  defp attach_term(list, context) when is_list(list) do
+    {items, spans} =
+      Enum.map_reduce(list, [], fn item, spans ->
+        {item, span} = attach_term(item, context)
+        {item, add_span(spans, span)}
+      end)
+
+    {items, complete_span(nil, spans)}
+  end
+
+  defp attach_term(tuple, context) when is_tuple(tuple) do
+    {items, spans} =
+      tuple
+      |> Tuple.to_list()
+      |> Enum.map_reduce([], fn item, spans ->
+        {item, span} = attach_term(item, context)
+        {item, add_span(spans, span)}
+      end)
+
+    {List.to_tuple(items), complete_span(nil, spans)}
+  end
+
+  defp attach_term(other, _context), do: {other, nil}
+
+  defp attach_payload(payload, context) do
+    {payload, span} = attach_term(payload, context)
+    {payload, add_span([], span)}
+  end
+
+  defp metadata_span(meta, by_position) do
+    case {Keyword.get(meta, :line), Keyword.get(meta, :col, Keyword.get(meta, :column))} do
+      {line, column} when is_integer(line) and is_integer(column) ->
+        case Map.get(by_position, {line, column}) do
+          %Token{span: %Span{} = span} -> span
+          _ -> nil
+        end
+
+      _ ->
+        Keyword.get(meta, :span)
+    end
+  end
+
+  defp complete_span(nil, []), do: nil
+  defp complete_span(%Span{} = own, []), do: own
+  defp complete_span(nil, spans), do: Enum.reduce(spans, &merge_spans/2)
+  defp complete_span(%Span{} = own, spans), do: Enum.reduce(spans, own, &merge_spans/2)
+
+  defp merge_spans(%Span{source_id: source_id} = right, %Span{source_id: source_id} = left) do
+    start = if left.start_byte <= right.start_byte, do: left, else: right
+    ending = if left.end_byte >= right.end_byte, do: left, else: right
+
+    %Span{
+      start
+      | end_byte: ending.end_byte,
+        end_line: ending.end_line,
+        end_column: ending.end_column
+    }
+  end
+
+  defp merge_spans(_right, left), do: left
+
+  defp attach_metadata(meta, tag, span, context) do
+    meta = meta |> Keyword.put(:span, span) |> Keyword.put(:construct_span, span)
+
+    case name_span(meta, span, context) do
+      nil ->
+        meta
+
+      name_span when tag in [:function_call, :remote_call] ->
+        meta |> Keyword.put(:name_span, name_span) |> Keyword.put(:callee_span, name_span)
+
+      name_span ->
+        Keyword.put(meta, :name_span, name_span)
+    end
+  end
+
+  defp expand_construct(:function_call, meta, %Span{} = span, context) do
+    name_span = name_span(meta, span, context)
+    start_span = name_span || span
+
+    case Map.get(context.closing_parens, {span.source_id, span.start_byte}) do
+      %Span{} = closing_span -> merge_spans(closing_span, start_span)
+      nil -> merge_spans(span, start_span)
+    end
+  end
+
+  defp expand_construct(_tag, _meta, span, _context), do: span
+
+  defp name_span(meta, span, context) do
+    name = Keyword.get(meta, :name)
+
+    if is_binary(name) or is_atom(name) do
+      spelling = to_string(name)
+
+      context.by_name
+      |> Map.get({span.source_id, span.start_line, spelling}, [])
+      |> Enum.reverse()
+      |> Enum.filter(fn %Token{span: token_span} ->
+        token_span.start_byte >= span.start_byte and token_span.end_byte <= span.end_byte
+      end)
+      |> Enum.find_value(fn token -> if token_spelling(token) == spelling, do: token.span end)
+      |> case do
+        nil ->
+          context.by_name
+          |> Map.get({span.source_id, span.start_line, spelling}, [])
+          |> Enum.filter(fn %Token{span: token_span} -> token_span.end_byte <= span.start_byte end)
+          |> Enum.reverse()
+          |> Enum.find_value(fn token -> if token_spelling(token) == spelling, do: token.span end)
+
+        found ->
+          found
+      end
+    end
+  end
+
+  defp token_spelling(%Token{value: value}) when is_binary(value), do: value
+  defp token_spelling(%Token{value: value}) when is_atom(value), do: Atom.to_string(value)
+  defp token_spelling(_token), do: nil
+
+  defp index_tokens(tokens) do
+    %{
+      by_position: Map.new(tokens, fn token -> {{token.line, token.col}, token} end),
+      by_name:
+        Enum.reduce(tokens, %{}, fn token, index ->
+          case token_spelling(token) do
+            nil -> index
+            spelling -> Map.update(index, {token.span.source_id, token.line, spelling}, [token], &[token | &1])
+          end
+        end),
+      closing_parens: closing_parens(tokens)
+    }
+  end
+
+  defp closing_parens(tokens) do
+    {pairs, _stacks} =
+      Enum.reduce(tokens, {%{}, %{}}, fn
+        %Token{type: :lparen, span: span}, {pairs, stacks} ->
+          key = span.source_id
+          {pairs, Map.update(stacks, key, [span], &[span | &1])}
+
+        %Token{type: :rparen, span: closing}, {pairs, stacks} ->
+          key = closing.source_id
+
+          case Map.get(stacks, key, []) do
+            [opening | rest] ->
+              {Map.put(pairs, {key, opening.start_byte}, closing), Map.put(stacks, key, rest)}
+
+            [] ->
+              {pairs, stacks}
+          end
+
+        _token, acc ->
+          acc
+      end)
+
+    pairs
+  end
+
+  defp add_span(spans, %Span{} = span), do: [span | spans]
+  defp add_span(spans, _span), do: spans
+
+  defp flatten_tokens(tokens) do
+    Enum.flat_map(tokens, fn token ->
+      nested =
+        case token.value do
+          parts when is_list(parts) ->
+            Enum.flat_map(parts, fn
+              {:expr, expression_tokens} -> flatten_tokens(expression_tokens)
+              _ -> []
+            end)
+
+          _ ->
+            []
+        end
+
+      [token | nested]
+    end)
+  end
+end

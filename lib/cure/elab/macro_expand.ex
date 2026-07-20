@@ -60,6 +60,8 @@ defmodule Cure.Elab.MacroExpand do
 
   def contains_computed_use?(term) when is_list(term), do: Enum.any?(term, &contains_computed_use?/1)
 
+  def contains_computed_use?(term) when is_struct(term), do: false
+
   def contains_computed_use?(term) when is_map(term),
     do: Enum.any?(term, fn {k, v} -> contains_computed_use?(k) or contains_computed_use?(v) end)
 
@@ -95,6 +97,10 @@ defmodule Cure.Elab.MacroExpand do
   end
 
   defp expand_node(term, env, state) when is_list(term), do: expand_children(term, env, state)
+
+  defp expand_node(term, _env, state) when is_struct(term) do
+    with {:ok, state} <- visit_node(state), do: {:ok, term, state}
+  end
 
   defp expand_node(term, env, state) when is_map(term) do
     with {:ok, entries, state} <- expand_children(Map.to_list(term), env, state),

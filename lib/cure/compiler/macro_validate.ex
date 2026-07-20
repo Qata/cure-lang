@@ -333,7 +333,7 @@ defmodule Cure.Compiler.MacroValidate do
   defp strip_pos(meta) when is_list(meta) do
     meta
     |> Enum.reject(fn
-      {k, _} when k in [:line, :col] -> true
+      {k, _} when k in [:line, :col, :span, :name_span, :callee_span, :construct_span, :provenance] -> true
       _ -> false
     end)
     |> Enum.map(fn

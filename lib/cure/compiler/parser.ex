@@ -252,6 +252,8 @@ defmodule Cure.Compiler.Parser do
         many -> {:block, [line: 1, col: 1], many}
       end
 
+    ast = Cure.Compiler.SourceSpans.attach(ast, tokens)
+
     if emit? do
       Events.emit(:parser, :parse_complete, ast, Events.meta(file, 1))
     end

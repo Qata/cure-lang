@@ -960,6 +960,7 @@ defmodule Cure.Compiler.Formatter do
     |> Keyword.delete(:line)
     |> Keyword.delete(:col)
     |> Keyword.delete(:column)
+    |> Keyword.drop([:span, :name_span, :callee_span, :construct_span, :provenance])
     |> Enum.map(fn {k, v} -> {k, strip(v)} end)
   end
 

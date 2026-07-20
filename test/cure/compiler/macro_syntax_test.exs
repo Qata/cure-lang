@@ -25,9 +25,18 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     ast
   end
 
-  # Recursively drop :line/:col so round-trip equality is position-insensitive.
+  # Recursively drop diagnostic metadata so round-trip equality is position-insensitive.
   defp strip(t) when is_list(t),
-    do: Enum.reject(t, &match?({k, _} when k in [:line, :col], &1)) |> Enum.map(&strip/1)
+    do:
+      Enum.reject(
+        t,
+        &match?(
+          {k, _}
+          when k in [:line, :col, :span, :name_span, :callee_span, :construct_span, :provenance],
+          &1
+        )
+      )
+      |> Enum.map(&strip/1)
 
   defp strip(t) when is_tuple(t),
     do: t |> Tuple.to_list() |> Enum.map(&strip/1) |> List.to_tuple()
