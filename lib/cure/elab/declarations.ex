@@ -2143,7 +2143,10 @@ defmodule Cure.Elab.Declarations do
   # lowers to the builtin inductive `Sigma(D, λx:D. U)`: `body` was elaborated with
   # `bname` in scope, so it is already in the frame of one new lambda binder, and
   # wrapping it under `{:lam, Cure.Core.Grade.unrestricted(), dom, body}` is exactly that frame.
-  defp idx_to_core({:sigma_type, [binder: bname], [dom_ast, body_ast]}, scope, fam, env, _ctx) do
+  defp idx_to_core({:sigma_type, meta, [dom_ast, body_ast]}, scope, fam, env, _ctx)
+       when is_list(meta) do
+    bname = Keyword.fetch!(meta, :binder)
+
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
       {:ok, {:data, sigma_family_name(env), [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
@@ -2159,12 +2162,15 @@ defmodule Cure.Elab.Declarations do
   # before lowering — producing the same Σ as an explicit `IsTrue(φ)` clause. A
   # `Type`-valued clause (a named predicate / proposition) is left unchanged.
   defp idx_to_core(
-         {:refinement_type, [binder: bname], [dom_ast, proposition_ast]},
+         {:refinement_type, meta, [dom_ast, proposition_ast]},
          scope,
          fam,
          env,
          _ctx
-       ) do
+       )
+       when is_list(meta) do
+    bname = Keyword.fetch!(meta, :binder)
+
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, proposition} <-
            idx_to_core(reflect_boolean_proposition(proposition_ast), [bname | scope], fam, env) do
@@ -2189,7 +2195,8 @@ defmodule Cure.Elab.Declarations do
   # `n` in `P(n)` as the Π-bound variable (de Bruijn `{:var, 0}`). Direct analog of
   # the `sigma_type` binder threading above; `nil` binders (anonymous domains, from
   # a mixed `(a, x: B) -> …`) push a placeholder so indices stay aligned.
-  defp idx_to_core({:pi_type, [binders: names], asts}, scope, fam, env, _ctx) do
+  defp idx_to_core({:pi_type, meta, asts}, scope, fam, env, _ctx) when is_list(meta) do
+    names = Keyword.fetch!(meta, :binders)
     {domains, [ret_ast]} = Enum.split(asts, length(asts) - 1)
 
     folded =
