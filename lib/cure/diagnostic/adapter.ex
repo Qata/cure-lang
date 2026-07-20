@@ -1019,7 +1019,7 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp macro_validation_message(:missing_diagnosis, points),
-    do: "The macro does not explain every declared failure point: #{inspect(points)}."
+    do: "The macro does not explain every declared failure point: #{macro_failure_points(points)}."
 
   defp macro_validation_message(:rule_unpinned, keywords),
     do: "These macro rules have no worked example: #{inspect(keywords)}."
@@ -1031,7 +1031,16 @@ defmodule Cure.Diagnostic.Adapter do
     do: "These macro examples have the wrong type: #{inspect(failures)}."
 
   defp macro_validation_message(:computed_example_error, failures),
-    do: "These computed macro examples failed while being checked: #{inspect(failures)}."
+    do: "A computed macro example failed while being checked: #{inspect(failures)}."
+
+  defp macro_failure_points(points) do
+    Enum.map_join(points, ", ", fn
+      {:failure, name} -> "author failure `#{name}`"
+      {:hole_kind, kind} -> "#{kind} hole"
+      {:keyword, keyword} -> "keyword `#{keyword}`"
+      point -> inspect(point)
+    end)
+  end
 
   @spec unknown_name(atom(), term(), keyword()) :: Diagnostic.t()
   def unknown_name(namespace, name, opts \\ []) do
@@ -1263,8 +1272,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :unexpected_character, observed: observed}),
     do: "#{syntax_name(observed)} does not begin any Cure token at this location."
 
-  defp syntax_problem_context(%SyntaxProblem{kind: :macro_use_mismatch, context: %{keyword: keyword}}),
-    do: "The `#{keyword}` macro invocation does not match its declared syntax."
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :macro_use_mismatch,
+         context: %{keyword: keyword},
+         expected: expected,
+         observed: observed
+       }) do
+    "The `#{keyword}` macro invocation does not match its declared syntax. " <>
+      macro_expectation(expected, observed)
+  end
 
   defp syntax_problem_context(%SyntaxProblem{kind: :malformed_macro_hole}),
     do: "This macro hole is incomplete; write it as `<name: Kind>`."
@@ -1273,10 +1289,12 @@ defmodule Cure.Diagnostic.Adapter do
     do: "The edition pragma must be the first authored construct in the file."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :edition_pragma_malformed}),
-    do: "The edition pragma must contain one four-digit year."
+    do: "The edition pragma must contain one 4-digit year, for example `@edition(\"2026\")`."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :edition_pragma_unknown}),
-    do: "This edition is not supported by the current compiler."
+    do:
+      "Unknown edition: this edition is not supported by the current compiler. " <>
+        "Use one of: #{Enum.join(Cure.Edition.all(), ", ")}."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :recovered_statement, observed: observed}),
     do:
@@ -1289,6 +1307,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: "#{String.capitalize(syntax_name(observed))} cannot appear at this point in the construct."
 
   defp syntax_expected_doc(%SyntaxProblem{expected: nil, alternatives: []}), do: Doc.empty()
+  defp syntax_expected_doc(%SyntaxProblem{kind: :macro_use_mismatch}), do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{} = problem) do
     expected = [problem.expected | problem.alternatives] |> Enum.reject(&is_nil/1) |> Enum.map(&syntax_name/1)
@@ -1297,6 +1316,46 @@ defmodule Cure.Diagnostic.Adapter do
       "A valid continuation here starts with",
       Doc.emphasis(:expected, Enum.join(expected, " or ")) |> then(&Doc.concat([&1, Doc.text(".")]))
     ])
+  end
+
+  defp macro_expectation({:literal, expected}, observed),
+    do: "expected `#{escape_macro_text(expected)}` here, but found #{macro_observed(observed)}."
+
+  defp macro_expectation({:hole_kind, kind}, observed),
+    do: "expected #{article_for_kind(kind)} #{kind} here, but found #{macro_observed(observed)}."
+
+  defp macro_expectation(:nothing_more, observed),
+    do: "This macro has no more to match here, but found #{macro_observed(observed)}."
+
+  defp macro_expectation(expected, observed),
+    do: "expected #{syntax_name(expected)} here, but found #{macro_observed(observed)}."
+
+  defp article_for_kind(<<c, _::binary>>) when c in ~c"AEIOUaeiou", do: "an"
+  defp article_for_kind(_kind), do: "a"
+
+  defp macro_observed(:newline), do: "`end of line`"
+  defp macro_observed(:dedent), do: "`a dedent`"
+  defp macro_observed(nil), do: "`nil`"
+
+  defp macro_observed({:char, value}) when is_integer(value) do
+    "`'#{escape_macro_text(<<value::utf8>>)}'`"
+  end
+
+  defp macro_observed({:regex, _value}), do: "`a regex`"
+  defp macro_observed(value) when is_list(value), do: "`an interpolated string`"
+
+  defp macro_observed(value) when is_binary(value),
+    do: "`#{escape_macro_text(value)}`"
+
+  defp macro_observed(value) when is_atom(value), do: "`#{syntax_name(value)}`"
+  defp macro_observed(value), do: "`#{escape_macro_text(inspect(value))}`"
+
+  defp escape_macro_text(value) when is_binary(value) do
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("\n", "\\n")
+    |> String.replace("\r", "\\r")
+    |> String.replace("\t", "\\t")
   end
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda}), do: "the unclosed body reaches here"

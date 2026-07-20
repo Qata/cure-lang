@@ -20,8 +20,9 @@ defmodule Cure.Compiler.Errors do
   @spec format_error(term(), String.t()) :: String.t()
   def format_error(error, file \\ "nofile")
 
-  def format_error(%Cure.Diagnostic{} = diagnostic, _file) do
-    Cure.Diagnostic.Renderer.plain(diagnostic)
+  def format_error(%Cure.Diagnostic{} = diagnostic, file) do
+    body = diagnostic |> Cure.Diagnostic.message() |> String.replace(~r/\s+/, " ")
+    "-- #{String.upcase(diagnostic.title)} [#{diagnostic.code}]\n--> #{file}\n#{body}"
   end
 
   def format_error({:unknown_global, _name} = error, file) do
@@ -83,59 +84,45 @@ defmodule Cure.Compiler.Errors do
   end
 
   def format_error({:type_mismatch, message, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-    format_diagnostic("error", "type mismatch", file, line, message)
+    {:type_mismatch, message, meta}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:unknown_erasure_class, name, class}, file) do
-    format_diagnostic(
-      "error",
-      "unknown erasure class",
-      file,
-      0,
-      "`@erases(#{inspect(class)})` on `#{name}` is not a known erasure class; " <>
-        "known classes: #{known_erasure_classes_hint()}"
-    )
+    {:unknown_erasure_class, name, class}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:erases_on_non_opaque, name}, file) do
-    format_diagnostic(
-      "error",
-      "@erases on a non-opaque type",
-      file,
-      0,
-      "`#{name}` has constructors, so its erasure is already determined; `@erases` " <>
-        "declares the runtime shape of a CONSTRUCTOR-LESS carrier (`opaque type`)"
-    )
+    {:erases_on_non_opaque, name}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:unsupported_async, message, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-    format_diagnostic("error", "unsupported asynchronous primitive", file, line, message)
+    {:unsupported_async, message, meta}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:splice_outside_quote, tag, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-
-    form = if tag == :splice_group, do: "$(e ...)", else: "$(e)"
-
-    format_diagnostic(
-      "error",
-      "splice outside quote",
-      file,
-      line,
-      "a #{form} splice is only meaningful inside a `quote`; there is no quoted form here to splice into"
-    )
+    {:splice_outside_quote, tag, meta}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:extern_untyped_head, message, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-    format_diagnostic("error", "@extern declaration missing a typed head (E056)", file, line, message)
+    {:extern_untyped_head, message, meta}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:extern_has_body, message, meta}, file) do
-    line = Keyword.get(meta, :line, 0)
-    format_diagnostic("error", "@extern declaration has a body (E057)", file, line, message)
+    {:extern_has_body, message, meta}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   # -- Parse Errors ------------------------------------------------------------
@@ -170,48 +157,40 @@ defmodule Cure.Compiler.Errors do
     do: format_error(error, file)
 
   def format_error({:codegen_error, reason}, file) do
-    format_diagnostic("error", "codegen error", file, 0, inspect(reason))
+    {:codegen_error, reason}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:beam_lint_error, errors, warnings}, file) do
-    warned = Enum.map_join(warnings, "\n", &format_error(&1, file))
-    warned <> "\n" <> format_error({:beam_lint_error, errors}, file)
+    {:beam_lint_error, errors, warnings}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:beam_lint_error, errors}, file) do
-    # erl_lint errors come as `[{file_info, [{line, module, payload}, ...]}]`.
-    lines =
-      errors
-      |> Enum.flat_map(fn
-        {_file_info, entries} when is_list(entries) -> entries
-        other -> [other]
-      end)
-      |> Enum.map(fn
-        {line, :erl_lint, {:undefined_function, {fn_name, arity}}} ->
-          "line #{line}: undefined function #{fn_name}/#{arity}"
-
-        {line, module, payload} ->
-          "line #{line}: #{module}: #{inspect(payload)}"
-
-        other ->
-          raise Cure.Diagnostic.UnhandledError, error: {:beam_lint_entry, other}
-      end)
-
-    format_diagnostic("error", "BEAM lint error", file, 0, Enum.join(lines, "\n      | "))
+    {:beam_lint_error, errors}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:expected_module, _ast}, file) do
-    format_diagnostic("error", "codegen error", file, 0, "expected a module definition")
+    {:expected_module, nil}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:unsupported_container, type}, file) do
-    format_diagnostic("error", "codegen error", file, 0, "unsupported container type: #{type}")
+    {:unsupported_container, type}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   # -- File Errors -------------------------------------------------------------
 
   def format_error({:file_read_error, path, reason}, _file) do
-    format_diagnostic("error", "file error", path, 0, "cannot read file: #{:file.format_error(reason)}")
+    Cure.Diagnostic.Operational.from_error({:file_read_error, path, reason})
+    |> format_error(path)
   end
 
   # -- DepGraph / Build-Order Errors -------------------------------------------
@@ -219,168 +198,83 @@ defmodule Cure.Compiler.Errors do
   # -- Edition Errors ----------------------------------------------------------
 
   def format_error({:edition_pragma_placement, line, col}, file) do
-    format_diagnostic(
-      "error",
-      "misplaced edition pragma",
-      file,
-      line,
-      "the `@edition(\"YYYY\")` pragma must be the first thing in the file, " <>
-        "before any statement or decorated definition (column #{col})"
-    )
+    {:edition_pragma_placement, line, col}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:edition_pragma_malformed, line, col}, file) do
-    format_diagnostic(
-      "error",
-      "malformed edition pragma",
-      file,
-      line,
-      "the `@edition` argument must be a single 4-digit year string on one line, " <>
-        "e.g. `@edition(\"#{Cure.Edition.current()}\")` (column #{col})"
-    )
+    {:edition_pragma_malformed, line, col}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:edition_pragma_unknown, line, col}, file) do
-    format_diagnostic(
-      "error",
-      "unknown edition",
-      file,
-      line,
-      "not a known edition (column #{col}); known editions: #{known_editions_hint()}"
-    )
+    {:edition_pragma_unknown, line, col}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:edition_error, {:unknown_edition, edition}}, file) do
-    format_diagnostic(
-      "error",
-      "unknown edition",
-      file,
-      0,
-      "#{inspect(edition)} is not a known edition; known editions: #{known_editions_hint()}"
-    )
+    {:edition_error, {:unknown_edition, edition}}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   # -- Macro error floor (SP1 §2) ----------------------------------------------
 
   def format_error({:macro_use_mismatch, keyword, expected, got, line, col}, file) do
-    detail =
-      case expected do
-        {:literal, w} -> "the `#{keyword}` macro expected `#{w}` here, but found `#{got}`"
-        {:hole_kind, k} -> "the `#{keyword}` macro expected #{article(k)} #{k} here, but found `#{got}`"
-        :nothing_more -> "the `#{keyword}` macro has no more to match here, but found `#{got}`"
-      end
-
-    format_diagnostic("error", "macro syntax", file, line, "#{detail} (at column #{col})")
+    {:macro_use_mismatch, keyword, expected, got, line, col}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:malformed_hole, line, col}, file) do
-    format_diagnostic(
-      "error",
-      "macro syntax",
-      file,
-      line,
-      "malformed hole at column #{col} — a macro hole is written `<name: Kind>` " <>
-        "(e.g. `<period: Duration>`); check for a missing `:` or closing `>`"
-    )
+    {:malformed_hole, line, col}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:missing_diagnosis, points}, file) do
-    listed = points |> Enum.map(&describe_point/1) |> Enum.join(", ")
-
-    format_diagnostic(
-      "error",
-      "macro is missing a failure description",
-      file,
-      0,
-      "this macro can fail in ways it does not describe: #{listed}. Add an `explain` " <>
-        "clause for each (a `Category =>` covers a typed hole, `keyword \"w\" =>` a literal)."
-    )
+    {:missing_diagnosis, points}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:rule_unpinned, keywords}, file) do
-    listed = keywords |> Enum.map(&"`#{&1}`") |> Enum.join(", ")
-
-    format_diagnostic(
-      "error",
-      "macro rule has no worked example",
-      file,
-      0,
-      "these rules are not pinned by an example: #{listed}. Add an indented " <>
-        "`example <use> expands <result>` under each rule so its intent is checked, not just its type."
-    )
+    {:rule_unpinned, keywords}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:example_mismatch, mismatches}, file) do
-    listed = mismatches |> Enum.map(&"`#{&1.keyword}`") |> Enum.join(", ")
-
-    format_diagnostic(
-      "error",
-      "macro example does not match its expansion",
-      file,
-      0,
-      "these rules have an `example … expands …` whose stated result is not what the rule " <>
-        "actually produces: #{listed}. Fix the `expands` side to the real expansion (or the rule)."
-    )
+    {:example_mismatch, mismatches}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:example_type_mismatch, failures}, file) do
-    listed =
-      failures
-      |> Enum.map_join(", ", fn failure ->
-        "`#{failure.keyword}` (expected #{inspect(failure.expected)}, got #{inspect(failure.reason)})"
-      end)
-
-    format_diagnostic(
-      "error",
-      "macro example has the wrong type",
-      file,
-      0,
-      "these rules have a type-only example pin that their expansion does not satisfy: #{listed}"
-    )
+    {:example_type_mismatch, failures}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:computed_example_error, failures}, file) do
-    listed =
-      failures
-      |> Enum.map_join(", ", fn failure ->
-        "`#{failure.keyword}` (#{inspect(failure.reason)})"
-      end)
-
-    format_diagnostic(
-      "error",
-      "computed macro example failed",
-      file,
-      0,
-      "these computed rules could not execute their pinned examples: #{listed}"
-    )
+    {:computed_example_error, failures}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:computed_macro_error, meta, reason}, file) do
-    line = Keyword.get(meta, :line, 0)
-    keyword = Keyword.get(meta, :keyword, "computed")
-
-    {title, detail} = format_generated_syntax_reason(reason)
-
-    format_diagnostic(
-      "error",
-      title,
-      file,
-      line,
-      "the `#{keyword}` computed macro could not produce a valid Syntax expansion: #{detail}"
-    )
+    {:computed_macro_error, meta, reason}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   def format_error({:expansion_ill_typed, details}, file) do
-    keyword = Map.get(details, :keyword, "?")
-    reason = Map.get(details, :kernel_error)
-
-    format_diagnostic(
-      "error",
-      "macro expansion proof failed",
-      file,
-      0,
-      "the generated `#{keyword}` expansion was rejected by the dependent elaborator: #{inspect(reason)}"
-    )
+    {:expansion_ill_typed, details}
+    |> Cure.Diagnostic.Adapter.from_error()
+    |> format_error(file)
   end
 
   # -- Exhaustiveness guard ----------------------------------------------------
@@ -388,65 +282,6 @@ defmodule Cure.Compiler.Errors do
   def format_error(error, file) do
     raise Cure.Diagnostic.UnhandledError, error: %{error: error, file: file}
   end
-
-  defp format_generated_syntax_reason({:invalid_generated_syntax, {:raw_syntax_in_expansion, path}}),
-    do:
-      {"invalid macro expansion",
-       "raw syntax is only valid for reflection, not generated Cure code (#{format_syntax_path(path)})"}
-
-  defp format_generated_syntax_reason({:invalid_generated_syntax, {:quoted_syntax_in_expansion, path}}),
-    do:
-      {"invalid macro expansion",
-       "quoted syntax must be unquoted before it is emitted as Cure code (#{format_syntax_path(path)})"}
-
-  defp format_generated_syntax_reason({:invalid_generated_syntax, {reason, path}}),
-    do: {"invalid macro expansion", "#{inspect(reason)} (#{format_syntax_path(path)})"}
-
-  defp format_generated_syntax_reason({:author_diagnostics, diagnostics}) when is_list(diagnostics),
-    do: {"macro rejected expansion", format_author_diagnostics(diagnostics)}
-
-  defp format_generated_syntax_reason({:author_failure, name, args}) when is_list(args),
-    do: {"macro rejected expansion", "the macro reported `#{name}`#{format_author_args(args)}"}
-
-  defp format_generated_syntax_reason(reason), do: {"computed macro failed", inspect(reason)}
-
-  defp format_author_diagnostics([]), do: "the macro returned no diagnostic details"
-
-  defp format_author_diagnostics(diagnostics) do
-    details = Enum.map_join(diagnostics, "; ", &inspect/1)
-    "the macro reported #{length(diagnostics)} diagnostic(s): #{details}"
-  end
-
-  defp format_author_args([]), do: ""
-  defp format_author_args(args), do: ": #{Enum.map_join(args, ", ", &inspect/1)}"
-
-  defp format_syntax_path(path) do
-    path
-    |> Enum.reverse()
-    |> Enum.map_join(".", fn
-      {:child, index} -> "child[#{index}]"
-      {:attribute, key, index} -> "attribute #{key}[#{index}]"
-      {:syntax_literal} -> "syntax literal"
-      {:map_key} -> "map key"
-      {:map_value} -> "map value"
-      {:list_item} -> "list item"
-      other -> raise Cure.Diagnostic.UnhandledError, error: {:syntax_path_segment, other}
-    end)
-  end
-
-  defp known_editions_hint, do: Enum.join(Cure.Edition.all(), ", ")
-
-  defp known_erasure_classes_hint,
-    do: Cure.Elab.Declarations.erasure_classes() |> Enum.map_join(", ", &to_string/1)
-
-  defp describe_point({:hole_kind, k}), do: "a `#{k}` hole"
-  defp describe_point({:keyword, w}), do: "the keyword `#{w}`"
-  defp describe_point({:failure, name}), do: "the author failure `#{name}`"
-
-  # Grammatical article for the macro hole-kind diagnostic ("a Duration" / "an
-  # Int"). Placed after the format_error/2 clause group to keep those contiguous.
-  defp article(<<c, _::binary>>) when c in ~c"AEIOUaeiou", do: "an"
-  defp article(_), do: "a"
 
   # -- "Did you mean?" Suggestions ---------------------------------------------
 
@@ -855,29 +690,6 @@ defmodule Cure.Compiler.Errors do
   end
 
   defp lex_error_location(_reason), do: {0, 0}
-
-  # -- Formatting Helper -------------------------------------------------------
-
-  defp format_diagnostic(severity, category, file, line, message) do
-    location =
-      cond do
-        line > 0 ->
-          " --> " <> Cure.Term.Hyperlink.file_line_link(file, line)
-
-        file in ["", "nofile", nil] ->
-          " --> #{file}"
-
-        true ->
-          " --> " <> Cure.Term.Hyperlink.file_link(file)
-      end
-
-    """
-    #{severity}: #{category}
-    #{location}
-      | #{message}\
-    """
-    |> String.trim_trailing()
-  end
 
   defp extract_line({_, _, meta}) when is_list(meta), do: Keyword.get(meta, :line, 0)
   defp extract_line({_, _, line, _col}) when is_integer(line), do: line
