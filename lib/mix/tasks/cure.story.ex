@@ -25,6 +25,8 @@ defmodule Mix.Tasks.Cure.Story do
 
   use Mix.Task
 
+  alias Cure.Diagnostic.Sink
+
   @shortdoc "Generate a narrative STORY.md for the current Cure project"
 
   @impl Mix.Task
@@ -62,7 +64,7 @@ defmodule Mix.Tasks.Cure.Story do
 
       {:error, {:file_write_error, path, reason}} ->
         diagnostic = Cure.Diagnostic.Operational.file_write(path, reason)
-        Mix.shell().error("cure.story: " <> Cure.Diagnostic.Renderer.plain(diagnostic))
+        Mix.shell().error("cure.story: " <> render_diagnostic(diagnostic))
         exit({:shutdown, 1})
     end
   end
@@ -75,5 +77,10 @@ defmodule Mix.Tasks.Cure.Story do
 
   defp maybe_put_pred(opts, key, value, pred) do
     if pred.(value), do: Keyword.put(opts, key, value), else: opts
+  end
+
+  defp render_diagnostic(diagnostic) do
+    Sink.new(format: :plain, color: :auto, width: 80)
+    |> Sink.render(diagnostic)
   end
 end

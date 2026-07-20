@@ -27,6 +27,8 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
   use Mix.Task
 
+  alias Cure.Diagnostic.Sink
+
   @shortdoc "Compile and run every .cure example and check their output"
 
   @examples_dir "examples"
@@ -139,7 +141,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
         {:pass, name}
 
       {:error, reason} ->
-        msg = Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("example compile", reason))
+        msg = render_diagnostic(Cure.Diagnostic.Operational.command_failure("example compile", reason))
         IO.puts("  FAIL #{pad(name)} #{msg}")
         {:fail, name, msg}
     end
@@ -165,16 +167,14 @@ defmodule Mix.Tasks.Cure.Check.Examples do
               kind, reason ->
                 msg =
                   "#{kind}: " <>
-                    Cure.Diagnostic.Renderer.plain(
-                      Cure.Diagnostic.Operational.command_failure("example compile", reason)
-                    )
+                    render_diagnostic(Cure.Diagnostic.Operational.command_failure("example compile", reason))
 
                 IO.puts("  FAIL #{pad(name)} #{msg}")
                 {:fail, name, msg}
             end
 
           {:error, reason} ->
-            msg = Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("example compile", reason))
+            msg = render_diagnostic(Cure.Diagnostic.Operational.command_failure("example compile", reason))
             IO.puts("  FAIL #{pad(name)} #{msg}")
             {:fail, name, msg}
         end
@@ -194,6 +194,11 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   end
 
   defp pad(name), do: String.pad_trailing(name, 26)
+
+  defp render_diagnostic(diagnostic) do
+    Sink.new(format: :plain, color: :auto, width: 80)
+    |> Sink.render(diagnostic)
+  end
 
   # -- Stdlib preload ---------------------------------------------------------
 
