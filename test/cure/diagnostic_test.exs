@@ -112,6 +112,19 @@ defmodule Cure.DiagnosticTest do
     assert hd(diagnostic.suggestions).message =~ "`Nothing`"
   end
 
+  test "conversion failures present Cure types and retain Core payloads", %{registry: registry, span: span} do
+    actual = {:data, :"Std.Bool#Bool", [], []}
+    expected = {:data, :"Std.Int#Int", [], []}
+    diagnostic = Adapter.from_error({:conversion_failure, actual, expected}, span: span)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.message == "Expected `Int`, but found `Bool`."
+    assert diagnostic.payload.expected_surface == "Int"
+    assert diagnostic.payload.actual_surface == "Bool"
+    assert diagnostic.payload.expected_core == inspect(expected)
+    assert Renderer.plain(diagnostic, registry) =~ "this expression has the wrong type"
+  end
+
   test "plain rendering includes cross-file secondary labels", %{registry: registry, span: span} do
     registry = SourceRegistry.register(registry, :definition, "type Token = Token\n", "src/token.cure")
     {:ok, definition_span} = SourceRegistry.span(registry, :definition, 5, 10)

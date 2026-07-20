@@ -26,6 +26,28 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_member, module, name}, opts),
     do: unknown_name(:member, "#{module}.#{name}", Keyword.put(opts, :owner, module))
 
+  def from_error({:conversion_failure, actual, expected}, opts) do
+    actual_surface = print_core(actual)
+    expected_surface = print_core(expected)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :conversion_failure,
+      severity: :error,
+      title: "Type mismatch",
+      message: "Expected `#{expected_surface}`, but found `#{actual_surface}`.",
+      primary: primary_label(opts, "this expression has the wrong type"),
+      notes: Keyword.get(opts, :notes, []),
+      provenance: Keyword.get(opts, :provenance, []),
+      payload: %{
+        expected_surface: expected_surface,
+        actual_surface: actual_surface,
+        expected_core: inspect(expected),
+        actual_core: inspect(actual)
+      }
+    )
+  end
+
   def from_error({:lift_module_error, details}, opts) when is_map(details) do
     macro = get_in(details, [:source_provenance, :macro]) || :macro
     cause = Map.get(details, :cause)
@@ -155,4 +177,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp name_to_string(name) when is_atom(name), do: Atom.to_string(name)
   defp name_to_string(name) when is_binary(name), do: name
   defp name_to_string(name), do: inspect(name)
+
+  defp print_core(term) do
+    Cure.Core.Printer.print(term)
+  rescue
+    ArgumentError -> inspect(term)
+  end
 end

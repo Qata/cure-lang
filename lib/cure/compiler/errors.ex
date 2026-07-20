@@ -36,6 +36,10 @@ defmodule Cure.Compiler.Errors do
     error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
   end
 
+  def format_error({:conversion_failure, _actual, _expected} = error, file) do
+    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+  end
+
   # -- Type Errors -------------------------------------------------------------
 
   def format_error(errors, file) when is_list(errors) do
@@ -1531,6 +1535,17 @@ defmodule Cure.Compiler.Errors do
     diagnostic. If generated syntax alone is invalid, report the macro or
     compiler defect; users must never be asked to edit generated code.
     """,
+    "E093" => """
+    E093: Type Mismatch
+
+    An expression's inferred type is not definitionally equal to the type
+    required at that position. Dependent indices and normalized type forms are
+    retained in the structured payload, while the ordinary message uses Cure
+    surface spelling instead of raw Core tuples.
+
+    Fix the expression, its annotation, or the relevant dependent index so the
+    actual type agrees with the expected type.
+    """,
     "W088" => """
     W088: Unresolved Import
 
@@ -1701,6 +1716,7 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:unknown_global, _name}), do: true
   defp structured_error?({:unknown_constructor, _name}), do: true
   defp structured_error?({:lift_module_error, details}) when is_map(details), do: true
+  defp structured_error?({:conversion_failure, _actual, _expected}), do: true
   defp structured_error?(_error), do: false
 
   defp error_location({:lift_module_error, %{source_provenance: %{line: line, col: col}}}), do: {line, col}
