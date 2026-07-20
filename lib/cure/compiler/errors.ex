@@ -21,7 +21,14 @@ defmodule Cure.Compiler.Errors do
   def format_error(error, file \\ "nofile")
 
   def format_error(%Cure.Diagnostic{} = diagnostic, file) do
-    body = diagnostic |> Cure.Diagnostic.message() |> String.replace(~r/\s+/, " ")
+    body = Cure.Diagnostic.message(diagnostic)
+
+    extras =
+      (Enum.map(diagnostic.notes, &Cure.Diagnostic.Doc.plain(&1, width: 1_000_000)) ++
+         Enum.map(diagnostic.suggestions, & &1.message))
+      |> Enum.join(" ")
+
+    body = [body, extras] |> Enum.reject(&(&1 == "")) |> Enum.join(" ") |> String.replace(~r/\s+/, " ")
     "-- #{String.upcase(diagnostic.title)} [#{diagnostic.code}]\n--> #{file}\n#{body}"
   end
 
