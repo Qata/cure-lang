@@ -2154,6 +2154,10 @@ defmodule Cure.Elab.Program do
   # environment. Non-function declarations are elaborated in source order in pass
   # one (a function signature may reference any type declared before it).
   defp elaborate_declarations(items, env, prelude?) do
+    # Function-local `where` bindings are surface sugar.  Lambda-lift them to
+    # private sibling definitions before the normal signature pass so forward
+    # references, recursion, and ordinary name resolution remain unchanged.
+    items = expand_where_declarations(items)
     items = annotate_overload_ordinals(items)
 
     with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?),
@@ -2172,6 +2176,124 @@ defmodule Cure.Elab.Program do
       # uncertified and no later pass revisits. Sound: the kernel re-derives each
       # certificate; genuinely partial defs are rejected exactly as before.
       {:ok, TotalityClosure.certify_deferred(env2)}
+    end
+  end
+
+  defp expand_where_declarations(items) when is_list(items) do
+    {expanded, _counter} =
+      Enum.map_reduce(items, 0, fn
+        {:function_def, meta, [body]}, counter when is_list(meta) ->
+          case Keyword.get(meta, :where, []) do
+            [] ->
+              {{:function_def, meta, [body]}, counter}
+
+            bindings ->
+              parent = Keyword.fetch!(meta, :name)
+              params = Keyword.get(meta, :params, [])
+              param_names = Enum.map(params, &param_name/1)
+              param_map = Map.new(params, fn p -> {param_name(p), p} end)
+
+              {helpers, helper_names, counter} =
+                Enum.reduce(bindings, {[], %{}, counter}, fn
+                  {:function_def, hmeta, hbody}, {acc, names, n} ->
+                    hname = Keyword.fetch!(hmeta, :name)
+
+                    captures =
+                      param_names
+                      |> Enum.filter(&surface_occurs?({hbody, hmeta}, &1))
+
+                    fresh = "#{parent}$#{hname}$#{n}"
+                    lifted_params = Enum.map(captures, &Map.fetch!(param_map, &1)) ++ Keyword.get(hmeta, :params, [])
+
+                    hmeta =
+                      hmeta
+                      |> Keyword.put(:name, fresh)
+                      |> Keyword.put(:visibility, :private)
+                      |> Keyword.put(:params, lifted_params)
+                      |> Keyword.put(:arity, length(lifted_params))
+                      |> Keyword.delete(:where)
+
+                    {body0, _} = List.pop_at(hbody, 0)
+                    helper = {:function_def, hmeta, [body0]}
+                    {[helper | acc], Map.put(names, hname, {fresh, captures}), n + 1}
+
+                  {:where_value, _vmeta, _expr}, acc ->
+                    acc
+                end)
+
+              helpers = Enum.reverse(helpers)
+              # A second pass sees the complete helper table, allowing mutual
+              # recursion and calls between helpers.
+              helpers =
+                Enum.map(helpers, fn {:function_def, hm, [hb]} ->
+                  {:function_def, hm, [rewrite_where_calls(hb, helper_names)]}
+                end)
+
+              body =
+                bindings
+                |> Enum.reverse()
+                |> Enum.reduce(body, fn
+                  {:where_value, vmeta, expr}, acc ->
+                    {:block, [line: Keyword.get(vmeta, :line, 0)],
+                     [
+                       {:assignment, [let: true, line: Keyword.get(vmeta, :line, 0)],
+                        [{:variable, [scope: :local], Keyword.fetch!(vmeta, :name)}, expr]},
+                       acc
+                     ]}
+
+                  _, acc ->
+                    acc
+                end)
+
+              parent_meta = Keyword.delete(meta, :where)
+              parent_decl = {:function_def, parent_meta, [rewrite_where_calls(body, helper_names)]}
+              {helpers ++ [parent_decl], counter}
+          end
+
+        other, counter ->
+          {other, counter}
+      end)
+
+    List.flatten(expanded)
+  end
+
+  defp expand_where_declarations(items), do: items
+
+  defp param_name({:param, _meta, name}), do: name
+  defp param_name({name, _type}), do: name
+
+  defp surface_occurs?(term, name) do
+    case term do
+      {:variable, _meta, ^name} -> true
+      {tag, _meta, children} when is_atom(tag) and is_list(children) -> Enum.any?(children, &surface_occurs?(&1, name))
+      list when is_list(list) -> Enum.any?(list, &surface_occurs?(&1, name))
+      _ -> false
+    end
+  end
+
+  defp rewrite_where_calls(term, names) do
+    case term do
+      {:function_call, meta, args} ->
+        name = Keyword.get(meta, :name)
+        args = Enum.map(args, &rewrite_where_calls(&1, names))
+
+        case Map.get(names, name) do
+          {fresh, caps} ->
+            cap_args = Enum.map(caps, &{:variable, [scope: :local], &1})
+            {:function_call, Keyword.put(meta, :name, fresh), cap_args ++ args}
+
+          nil ->
+            {:function_call, meta, args}
+        end
+
+      {tag, meta, children} when is_atom(tag) and is_list(children) ->
+        {tag, meta, Enum.map(children, &rewrite_where_calls(&1, names))}
+
+      list when is_list(list) ->
+        Enum.map(list, &rewrite_where_calls(&1, names))
+
+      other ->
+        other
     end
   end
 
@@ -2544,9 +2666,10 @@ defmodule Cure.Elab.Program do
     # interface so the local interface + its own implementations register against a
     # clean slate. Genuinely-shared (non-redeclared) interfaces are untouched, so
     # global coherence for stdlib interfaces is preserved.
-    redeclared = for {:interface, meta, _body} <- items, into: MapSet.new() do
-      meta |> Keyword.fetch!(:name) |> String.to_atom()
-    end
+    redeclared =
+      for {:interface, meta, _body} <- items, into: MapSet.new() do
+        meta |> Keyword.fetch!(:name) |> String.to_atom()
+      end
 
     keys_to_drop =
       self_heads ++
