@@ -46,6 +46,18 @@ defmodule Cure.Diagnostic.SourceRegistry do
     end
   end
 
+  @doc "Build a span from Elixir-style one-based line and Unicode scalar columns."
+  @spec span_at(t(), term(), pos_integer(), pos_integer(), non_neg_integer()) ::
+          {:ok, Span.t()} | {:error, term()}
+  def span_at(%__MODULE__{} = registry, source_id, line, column, length \\ 1)
+      when line > 0 and column > 0 and length >= 0 do
+    with {:ok, source} <- fetch(registry, source_id),
+         {:ok, start_byte} <- byte_at(source, line, column),
+         {:ok, end_byte} <- byte_at(source, line, column + length) do
+      span(registry, source_id, start_byte, end_byte)
+    end
+  end
+
   @spec line(t(), Span.t(), pos_integer()) :: {:ok, String.t()} | :error
   def line(%__MODULE__{} = registry, %Span{source_id: source_id}, line_number) do
     with {:ok, source} <- fetch(registry, source_id),
@@ -79,5 +91,24 @@ defmodule Cure.Diagnostic.SourceRegistry do
     prefix = binary_part(source, 0, byte)
     lines = String.split(prefix, "\n")
     {length(lines), String.length(List.last(lines) || "") + 1}
+  end
+
+  defp byte_at(source, wanted_line, wanted_column) do
+    lines = String.split(source, "\n")
+
+    case Enum.at(lines, wanted_line - 1) do
+      nil ->
+        {:error, :line_out_of_bounds}
+
+      line ->
+        prefix = line |> String.codepoints() |> Enum.take(wanted_column - 1) |> Enum.join()
+
+        if String.length(prefix) == wanted_column - 1 do
+          preceding = lines |> Enum.take(wanted_line - 1) |> Enum.map_join("", &(&1 <> "\n"))
+          {:ok, byte_size(preceding) + byte_size(prefix)}
+        else
+          {:error, :column_out_of_bounds}
+        end
+    end
   end
 end

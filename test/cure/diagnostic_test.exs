@@ -79,6 +79,13 @@ defmodule Cure.DiagnosticTest do
            }
   end
 
+  test "one-based source coordinates normalize to canonical byte spans" do
+    registry = SourceRegistry.new() |> SourceRegistry.register(:source, "αβ\nvalue\n", "unicode.cure")
+    assert {:ok, span} = SourceRegistry.span_at(registry, :source, 2, 2, 3)
+    assert {span.start_byte, span.end_byte} == {6, 9}
+    assert {span.start_line, span.start_column, span.end_column} == {2, 2, 5}
+  end
+
   test "stable category extraction supports diagnostics and legacy shapes" do
     diagnostic =
       Diagnostic.new(code: "E101", key: :unknown_value, severity: :error, title: "Unknown", message: "missing")
@@ -146,6 +153,25 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.payload.cause.payload.name == "MissingMessage"
     refute diagnostic.message =~ "{:unknown_global"
     assert Renderer.plain(diagnostic) =~ "edit the `actor` declaration instead"
+  end
+
+  test "compiler presentation attaches a real caret to an authored macro failure" do
+    source = "mod Demo\n  actor Worker\n"
+
+    error =
+      {:lift_module_error,
+       %{
+         module: "Cure.Actor.Worker",
+         behaviour: :GenServer,
+         source_provenance: %{file: "worker.cure", line: 2, col: 3, macro: "actor"},
+         expansion_provenance: [%{keyword: "actor", line: 2, col: 3}],
+         cause: {:unknown_global, :MissingMessage}
+       }}
+
+    rendered = Cure.Compiler.Errors.format_with_source(error, "worker.cure", source)
+    assert rendered =~ "2 |   actor Worker"
+    assert rendered =~ "  ^ this `actor` declaration generated the failing module"
+    refute rendered =~ "{:unknown_global"
   end
 
   test "invalid spans and codes are rejected", %{registry: registry} do

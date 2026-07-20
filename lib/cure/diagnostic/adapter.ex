@@ -26,7 +26,7 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_member, module, name}, opts),
     do: unknown_name(:member, "#{module}.#{name}", Keyword.put(opts, :owner, module))
 
-  def from_error({:lift_module_error, details}, _opts) when is_map(details) do
+  def from_error({:lift_module_error, details}, opts) when is_map(details) do
     macro = get_in(details, [:source_provenance, :macro]) || :macro
     cause = Map.get(details, :cause)
     cause_diagnostic = from_error(cause)
@@ -37,8 +37,9 @@ defmodule Cure.Diagnostic.Adapter do
       severity: :error,
       title: "#{macro_title(macro)} expansion failed",
       message: macro_failure_message(macro, details.module, cause_diagnostic),
+      primary: primary_label(opts, "this `#{macro}` declaration generated the failing module"),
       notes: ["The generated module is an implementation detail; edit the `#{macro}` declaration instead."],
-      provenance: provenance_frames(details),
+      provenance: provenance_frames(details, opts),
       payload: %{
         macro: name_to_string(macro),
         module: name_to_string(details.module),
@@ -127,19 +128,24 @@ defmodule Cure.Diagnostic.Adapter do
     "The `#{macro}` declaration could not generate `#{module}`. #{cause.message}"
   end
 
-  defp provenance_frames(details) do
+  defp provenance_frames(details, opts) do
     source = Map.get(details, :source_provenance) || %{}
     chain = Map.get(details, :expansion_provenance, [])
+    invocation = Keyword.get(opts, :span)
 
     frames =
       Enum.map(chain, fn frame ->
-        %ProvenanceFrame{kind: :macro_expansion, name: Map.get(frame, :keyword) || "macro"}
+        %ProvenanceFrame{
+          kind: :macro_expansion,
+          name: Map.get(frame, :keyword) || "macro",
+          invocation: invocation
+        }
       end)
 
     source_frame =
       case Map.get(source, :macro) do
         nil -> []
-        macro -> [%ProvenanceFrame{kind: :macro_expansion, name: macro}]
+        macro -> [%ProvenanceFrame{kind: :macro_expansion, name: macro, invocation: invocation}]
       end
 
     (frames ++ source_frame)

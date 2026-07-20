@@ -1644,6 +1644,40 @@ defmodule Cure.Compiler.Errors do
   """
   @spec format_with_source(term(), String.t(), String.t()) :: String.t()
   def format_with_source(error, file, source) do
+    if structured_error?(error) do
+      {diagnostic, registry} = to_diagnostic(error, file, source)
+      Cure.Diagnostic.Renderer.plain(diagnostic, registry)
+    else
+      format_legacy_with_source(error, file, source)
+    end
+  end
+
+  @doc "Convert an error at the compiler presentation boundary."
+  @spec to_diagnostic(term(), String.t(), String.t()) ::
+          {Cure.Diagnostic.t(), Cure.Diagnostic.SourceRegistry.t()}
+  def to_diagnostic(error, file, source) do
+    source_id = {:compiler_source, file}
+
+    registry =
+      Cure.Diagnostic.SourceRegistry.new()
+      |> Cure.Diagnostic.SourceRegistry.register(source_id, source, file)
+
+    opts =
+      case error_location(error) do
+        {line, col} when line > 0 and col > 0 ->
+          case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, line, col) do
+            {:ok, span} -> [span: span]
+            {:error, _} -> []
+          end
+
+        _ ->
+          []
+      end
+
+    {Cure.Diagnostic.Adapter.from_error(error, opts), registry}
+  end
+
+  defp format_legacy_with_source(error, file, source) do
     base = format_error(error, file)
     line_num = extract_line(error)
 
@@ -1663,6 +1697,16 @@ defmodule Cure.Compiler.Errors do
       base
     end
   end
+
+  defp structured_error?({:unknown_global, _name}), do: true
+  defp structured_error?({:unknown_constructor, _name}), do: true
+  defp structured_error?({:lift_module_error, details}) when is_map(details), do: true
+  defp structured_error?(_error), do: false
+
+  defp error_location({:lift_module_error, %{source_provenance: %{line: line, col: col}}}), do: {line, col}
+  defp error_location({_, _, meta}) when is_list(meta), do: {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)}
+  defp error_location({_, _, line, col}) when is_integer(line) and is_integer(col), do: {line, col}
+  defp error_location(_error), do: {0, 0}
 
   # -- Formatting Helper -------------------------------------------------------
 
