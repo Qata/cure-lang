@@ -67,4 +67,18 @@ defmodule Cure.Diagnostic.SinkTest do
     sink = Sink.new(format: :lsp, registry: registry, position_encoding: :utf8)
     assert Sink.render(sink, diagnostic)["range"]["start"]["character"] == 5
   end
+
+  test "LSP rendering omits a range when a diagnostic has no authored span" do
+    diagnostic =
+      Cure.Diagnostic.new(
+        code: "E100",
+        key: :artifact_error,
+        severity: :error,
+        title: "Invalid build artifact",
+        message: "artifact is invalid"
+      )
+
+    rendered = Sink.render(Sink.new(format: :lsp), diagnostic)
+    refute Map.has_key?(rendered, "range")
+  end
 end

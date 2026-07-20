@@ -119,8 +119,9 @@ defmodule Cure.Diagnostic.Renderer do
 
   @spec lsp(Diagnostic.t(), SourceRegistry.t() | nil, :utf8 | :utf16 | :utf32) :: map()
   def lsp(%Diagnostic{} = diagnostic, registry \\ nil, encoding \\ :utf16) do
-    %{
-      "range" => lsp_range(diagnostic.primary, registry, encoding),
+    range = if diagnostic.primary, do: %{"range" => lsp_range(diagnostic.primary, registry, encoding)}, else: %{}
+
+    Map.merge(range, %{
       "severity" => lsp_severity(diagnostic.severity),
       "code" => diagnostic.code,
       "source" => "cure",
@@ -132,7 +133,7 @@ defmodule Cure.Diagnostic.Renderer do
         "provenance" => Enum.map(diagnostic.provenance, &provenance_map/1),
         "payload" => stringify_keys(diagnostic.payload)
       }
-    }
+    })
   end
 
   defp location_doc(nil, _opts), do: Doc.empty()
