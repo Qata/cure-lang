@@ -203,6 +203,26 @@ defmodule Cure.DiagnosticTest do
     assert condition.payload.actual_core == inspect("Int")
   end
 
+  test "source checking context upgrades kernel conversion failures", %{registry: registry, span: span} do
+    diagnostic =
+      Adapter.from_error(
+        {:source_context, {:conversion_failure, {:bool_type}, {:int_type}},
+         %{
+           checking: :answer,
+           span: span,
+           expression_category: :literal,
+           expectation_origin: :annotation
+         }}
+      )
+
+    assert diagnostic.title == "Annotation does not match"
+    assert diagnostic.payload.origin.kind == :annotation
+    assert diagnostic.payload.origin.owner == :answer
+    assert diagnostic.payload.expression_category == :literal
+    assert diagnostic.payload.debug.cause == {:conversion_failure, {:bool_type}, {:int_type}}
+    assert Renderer.plain(diagnostic, registry) =~ "type written in its annotation"
+  end
+
   test "plain rendering includes cross-file secondary labels", %{registry: registry, span: span} do
     registry = SourceRegistry.register(registry, :definition, "type Token = Token\n", "src/token.cure")
     {:ok, definition_span} = SourceRegistry.span(registry, :definition, 5, 10)

@@ -684,6 +684,7 @@ defmodule Cure.Elab.Declarations do
 
   defp attach_source_context({:error, reason}, expression, checking) do
     {line, column, length} = expression_extent(expression)
+    meta = expression_meta(expression)
 
     {:error,
      {:source_context, reason,
@@ -691,7 +692,10 @@ defmodule Cure.Elab.Declarations do
         line: line,
         column: column,
         length: length,
-        checking: checking
+        checking: checking,
+        span: Keyword.get(meta, :span),
+        expression_category: expression_category(expression),
+        expectation_origin: :annotation
       }}}
   end
 
@@ -700,6 +704,10 @@ defmodule Cure.Elab.Declarations do
   defp expression_meta({_kind, meta, _children}) when is_list(meta), do: meta
   defp expression_meta({_kind, meta, _left, _right}) when is_list(meta), do: meta
   defp expression_meta(_expression), do: []
+
+  defp expression_category({kind, _meta, _children}) when is_atom(kind), do: kind
+  defp expression_category({kind, _meta, _left, _right}) when is_atom(kind), do: kind
+  defp expression_category(_expression), do: :expression
 
   defp expression_extent({:function_call, meta, arguments}) when is_list(meta) do
     line = Keyword.get(meta, :line)

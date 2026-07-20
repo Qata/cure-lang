@@ -37,7 +37,28 @@ defmodule Cure.Diagnostic.Adapter do
         end
       end)
 
-    from_error(reason, opts)
+    case {reason, Map.get(context, :expectation_origin)} do
+      {{:conversion_failure, actual, expected}, origin} when not is_nil(origin) ->
+        from_error(
+          %TypeProblem{
+            kind: :conversion_failure,
+            actual: actual,
+            expected: expected,
+            origin: %ExpectationOrigin{
+              kind: origin,
+              span: Map.get(context, :expectation_span),
+              owner: Map.get(context, :checking)
+            },
+            expression: Map.get(context, :expression_category, :expression),
+            span: Map.get(context, :span),
+            debug: %{cause: reason, checking: Map.get(context, :checking)}
+          },
+          opts
+        )
+
+      _ ->
+        from_error(reason, opts)
+    end
   end
 
   def from_error({:unknown_global, name}, opts),
