@@ -473,6 +473,8 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:builtin_operator_not_overloadable, _operator}), do: true
   defp structured_error?({:unsupported_operand_type, _operator}), do: true
   defp structured_error?({:no_operator_meaning, _operator}), do: true
+  defp structured_error?({:cannot_infer_match_type, _expression}), do: true
+  defp structured_error?({:lambda_expected_pi, _expected}), do: true
   defp structured_error?({:unsupported_async, _message, meta}) when is_list(meta), do: true
   defp structured_error?({:splice_outside_quote, _tag, meta}) when is_list(meta), do: true
   defp structured_error?({:unbound_variable, _message, meta}) when is_list(meta), do: true

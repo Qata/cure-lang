@@ -180,6 +180,33 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:cannot_infer_match_type, expression}, opts) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Cannot infer match type",
+      body: Doc.paragraph("The compiler cannot determine one common type for the branches of this match expression."),
+      primary: primary_label(opts, "add an annotation or make the branches agree"),
+      payload: %{kind: :cannot_infer_match_type, expression: expression}
+    )
+  end
+
+  def from_error({:lambda_expected_pi, expected}, opts) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Lambda used where a function was not expected",
+      body:
+        Doc.paragraph(
+          "This lambda can only be checked against a function type, but the expected type is `#{surface_type(expected)}`."
+        ),
+      primary: primary_label(opts, "change the expected type or remove this lambda"),
+      payload: %{kind: :lambda_expected_pi, expected: expected}
+    )
+  end
+
   def from_error({:unsupported_async, message, meta}, opts)
       when is_binary(message) and is_list(meta) do
     Diagnostic.new(

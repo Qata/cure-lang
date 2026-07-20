@@ -279,6 +279,19 @@ defmodule Cure.Diagnostic.HostTest do
     refute meaning =~ ":no_operator_meaning"
   end
 
+  test "renders inference failures with actionable contextual type guidance" do
+    match = Host.render({:cannot_infer_match_type, {:match, :branches}}, "demo.cure")
+    lambda = Host.render({:lambda_expected_pi, {:global, :Int}}, "demo.cure")
+
+    assert match =~ "[E093]"
+    assert match =~ "CANNOT INFER MATCH TYPE"
+    assert lambda =~ "[E093]"
+    assert lambda =~ "LAMBDA USED WHERE A FUNCTION WAS NOT EXPECTED"
+    assert lambda =~ "Int"
+    refute match =~ ":cannot_infer_match_type"
+    refute lambda =~ ":lambda_expected_pi"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 
