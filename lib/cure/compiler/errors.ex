@@ -344,11 +344,11 @@ defmodule Cure.Compiler.Errors do
 
   @doc false
   @spec catalog_explanation!(String.t()) :: String.t()
-  def catalog_explanation!(code), do: Cure.Diagnostic.Registry.Catalog.explanation!(code)
+  def catalog_explanation!(code), do: Cure.Diagnostic.Registry.catalog_explanation!(code)
 
   @doc false
   @spec catalog_entries() :: [{String.t(), String.t(), String.t()}]
-  def catalog_entries, do: Cure.Diagnostic.Registry.Catalog.entries()
+  def catalog_entries, do: Cure.Diagnostic.Registry.catalog_entries()
 
   @doc """
   Suggest similar names for typos using Levenshtein distance.

@@ -240,6 +240,19 @@ defmodule Cure.Diagnostic.Registry do
     end
   end
 
+  @doc "Return the complete catalog projection owned by the registry."
+  @spec catalog_entries() :: [{String.t(), String.t(), String.t()}]
+  def catalog_entries, do: list_all()
+
+  @doc "Return a complete explanation for a registered code or raise for unknown codes."
+  @spec catalog_explanation!(String.t()) :: String.t()
+  def catalog_explanation!(code) do
+    case explain(code) do
+      {:ok, explanation} -> explanation
+      :error -> raise ArgumentError, "unregistered diagnostic code: #{inspect(code)}"
+    end
+  end
+
   @doc "Validate registry invariants used by the diagnostic catalog and CI."
   @spec validate([Entry.t()]) :: :ok | {:error, term()}
   def validate(entries \\ entries()) when is_list(entries) do
