@@ -64,6 +64,13 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":beam_lint_error"
   end
 
+  test "codegen rejection families retain a stable public explanation" do
+    rendered = Host.render({:unsupported_container, :protocol}, "demo.cure")
+    assert rendered =~ "UNSUPPORTED CONTAINER"
+    assert rendered =~ "protocol"
+    refute rendered =~ "codegen error"
+  end
+
   test "converts legacy type and edition tuples into structured diagnostics" do
     type_rendered = Host.render({:type_mismatch, "expected Int, found String", [line: 1, col: 20]}, "demo.cure")
     assert type_rendered =~ "[E093]"

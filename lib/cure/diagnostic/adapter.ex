@@ -785,16 +785,43 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
   defp codegen_failure(reason, opts) do
+    {title, body, kind} = codegen_failure_content(reason)
+
     Diagnostic.new(
       code: "E101",
       key: :internal_compiler_error,
       severity: :error,
-      title: "Code generation failed",
-      body: Doc.paragraph("The compiler could not produce a valid BEAM artifact for this source."),
+      title: title,
+      body: Doc.paragraph(body),
       primary: primary_label(opts, "code generation failed here"),
       notes: ["This is an internal compiler failure; report it with the diagnostic fingerprint."],
-      payload: %{reason: inspect(reason)}
+      payload: %{kind: kind, debug_reason: inspect(reason)}
     )
+  end
+
+  defp codegen_failure_content(:expected_module) do
+    {"Module emission failed", "The compiler expected a module definition before emitting a BEAM artifact.",
+     :expected_module}
+  end
+
+  defp codegen_failure_content({:unsupported_container, type}) do
+    {"Unsupported container", "The compiler cannot emit the `#{name_to_string(type)}` container in this context.",
+     :unsupported_container}
+  end
+
+  defp codegen_failure_content({:beam_lint, errors, warnings}) when is_list(errors) and is_list(warnings) do
+    {"BEAM validation failed",
+     "The generated BEAM artifact was rejected by the BEAM validator (#{length(errors)} error(s), #{length(warnings)} warning(s)).",
+     :beam_lint}
+  end
+
+  defp codegen_failure_content({:beam_lint, errors}) when is_list(errors) do
+    {"BEAM validation failed",
+     "The generated BEAM artifact was rejected by the BEAM validator (#{length(errors)} error(s)).", :beam_lint}
+  end
+
+  defp codegen_failure_content(_reason) do
+    {"Code generation failed", "The compiler could not produce a valid BEAM artifact for this source.", :codegen}
   end
 
   defp erasure_failure(kind, details, opts) do
