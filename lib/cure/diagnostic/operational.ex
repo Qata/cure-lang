@@ -30,6 +30,7 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:fetch_failed, _path, detail}, _opts), do: registry_fetch_failed(detail)
   def from_error({:hash_mismatch, detail}, _opts), do: registry_hash_mismatch(detail)
   def from_error({:package_not_found, name}, _opts), do: registry_package_not_found(name)
+  def from_error({:version_conflict, name, constraints}, _opts), do: package_version_conflict(name, constraints)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
@@ -134,6 +135,13 @@ defmodule Cure.Diagnostic.Operational do
   def registry_package_not_found(detail),
     do: diagnostic("E040", :registry_package_not_found, "Registry package not found: #{detail}", %{detail: detail})
 
+  def package_version_conflict(name, constraints),
+    do:
+      diagnostic("E030", :package_version_conflict, "Package version conflict for #{name}: #{inspect(constraints)}", %{
+        package: name,
+        constraints: constraints
+      })
+
   @doc "Build E101 only for a caught exception at an explicit compiler boundary."
   def internal_exception(exception, stacktrace, opts \\ []) when is_exception(exception) and is_list(stacktrace) do
     fingerprint = fingerprint({exception.__struct__, Exception.message(exception), stack_head(stacktrace)})
@@ -203,6 +211,7 @@ defmodule Cure.Diagnostic.Operational do
   defp title(:registry_fetch_failed), do: "Registry fetch failed"
   defp title(:registry_hash_mismatch), do: "Registry hash mismatch"
   defp title(:registry_package_not_found), do: "Registry package not found"
+  defp title(:package_version_conflict), do: "Package version conflict"
 
   defp fingerprint(term) do
     term

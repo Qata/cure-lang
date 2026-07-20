@@ -47,7 +47,7 @@ defmodule Cure.Diagnostic.Registry do
   alias Cure.Diagnostic.Registry.Entry
 
   @retired ~w[E015 E018]
-  @operational ~w[E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
+  @operational ~w[E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
   @retirement_reasons %{
     "E015" => "The former error path was consolidated into the contextual declaration diagnostics.",
     "E018" => "The former error path was consolidated into the contextual declaration diagnostics."
@@ -62,6 +62,7 @@ defmodule Cure.Diagnostic.Registry do
     "E021" => :unknown_record,
     "E022" => :record_field_mismatch,
     "E026" => :proof_shape_mismatch,
+    "E030" => :package_version_conflict,
     "E035" => :unterminated_lambda,
     "E041" => :registry_signature_invalid,
     "E042" => :transparency_log_unreachable,
@@ -232,7 +233,7 @@ defmodule Cure.Diagnostic.Registry do
   defp converter_function(_code), do: :format_error
 
   defp producers(code)
-       when code in ~w[E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002],
+       when code in ~w[E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002],
        do: [:operational]
 
   defp producers(code) when code in ~w[E011 E014], do: [:elaboration]
