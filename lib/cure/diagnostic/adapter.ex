@@ -22,6 +22,18 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:error, reason}, opts), do: from_error(reason, opts)
 
+  def from_error({:type_mismatch, message, meta}, opts) when is_binary(message) and is_list(meta) do
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Type mismatch",
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, "this expression has the wrong type"),
+      payload: %{message: message, meta: meta}
+    )
+  end
+
   def from_error({:codegen_error, {:computed_macro_error, _, _} = reason}, opts),
     do: from_error(reason, opts)
 
@@ -555,6 +567,20 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({kind, line, column}, opts)
+      when kind in [:edition_pragma_placement, :edition_pragma_malformed, :edition_pragma_unknown] and
+             is_integer(line) and is_integer(column) do
+    from_error(
+      %SyntaxProblem{
+        kind: kind,
+        observed: :edition_pragma,
+        at: Keyword.get(opts, :span),
+        context: %{column: column}
+      },
+      opts
+    )
+  end
+
   def from_error({:computed_macro_error, meta, reason}, opts) when is_list(meta) do
     keyword = Keyword.get(meta, :keyword, "computed")
 
@@ -792,6 +818,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :unexpected_character}), do: "Unexpected character"
   defp syntax_problem_title(%SyntaxProblem{kind: :macro_use_mismatch}), do: "Macro syntax does not match"
   defp syntax_problem_title(%SyntaxProblem{kind: :malformed_macro_hole}), do: "Macro hole is incomplete"
+  defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_placement}), do: "Edition pragma is misplaced"
+  defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_malformed}), do: "Edition pragma is malformed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_unknown}), do: "Edition is unknown"
   defp syntax_problem_title(%SyntaxProblem{kind: :recovered_statement}), do: "Invalid statement"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
@@ -827,6 +856,15 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :malformed_macro_hole}),
     do: "This macro hole is incomplete; write it as `<name: Kind>`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :edition_pragma_placement}),
+    do: "The edition pragma must be the first authored construct in the file."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :edition_pragma_malformed}),
+    do: "The edition pragma must contain one four-digit year."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :edition_pragma_unknown}),
+    do: "This edition is not supported by the current compiler."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :recovered_statement, observed: observed}),
     do:

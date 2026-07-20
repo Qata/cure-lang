@@ -63,4 +63,13 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "[E101]"
     refute rendered =~ ":beam_lint_error"
   end
+
+  test "converts legacy type and edition tuples into structured diagnostics" do
+    type_rendered = Host.render({:type_mismatch, "expected Int, found String", [line: 1, col: 20]}, "demo.cure")
+    assert type_rendered =~ "[E093]"
+
+    edition_rendered = Host.render({:edition_pragma_malformed, 1, 1}, "demo.cure")
+    assert edition_rendered =~ "[E094]"
+    assert edition_rendered =~ "EDITION PRAGMA IS MALFORMED"
+  end
 end

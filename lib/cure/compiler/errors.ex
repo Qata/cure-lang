@@ -641,6 +641,11 @@ defmodule Cure.Compiler.Errors do
     {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, Keyword.get(meta, :column, 0))}
   end
 
+  defp error_location({kind, line, col})
+       when kind in [:edition_pragma_placement, :edition_pragma_malformed, :edition_pragma_unknown] and
+              is_integer(line) and is_integer(col),
+       do: {line, col}
+
   defp error_location({:parse_error, [reason | _]}), do: error_location(reason)
   defp error_location({:codegen_error, reason}), do: error_location(reason)
 
