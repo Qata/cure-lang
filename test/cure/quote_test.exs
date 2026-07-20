@@ -47,6 +47,7 @@ defmodule Cure.QuoteTest do
     |> Keyword.delete(:column)
     |> Keyword.delete(:span)
     |> Keyword.delete(:construct_span)
+    |> Keyword.delete(:source_info)
     |> Keyword.delete(:provenance)
     |> Enum.map(fn {k, v} -> {k, strip_positions(v)} end)
   end

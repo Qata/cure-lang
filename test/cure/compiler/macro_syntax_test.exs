@@ -32,7 +32,7 @@ defmodule Cure.Compiler.MacroSyntaxTest do
         t,
         &match?(
           {k, _}
-          when k in [:line, :col, :span, :name_span, :callee_span, :construct_span, :provenance],
+          when k in [:line, :col, :span, :name_span, :callee_span, :construct_span, :source_info, :provenance],
           &1
         )
       )
