@@ -27,18 +27,24 @@ defmodule Cure.Diagnostic.ExpectationOrigin do
           :annotation
           | :call_argument
           | :call_result
+          | :application
+          | :overload
           | :operator_operand
           | :condition
           | :branch
           | :element
+          | :collection
+          | :record
           | :record_field
           | :record_update
           | :pattern
           | :constructor_argument
           | :implicit
+          | :effects
           | :ffi
           | :actor
           | :fsm
+          | :supervisor
 
   @type t :: %__MODULE__{
           kind: kind(),

@@ -834,6 +834,12 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_title(%ExpectationOrigin{kind: :branch}), do: "Branches have different types"
   defp type_problem_title(%ExpectationOrigin{kind: :condition}), do: "Condition is not boolean"
   defp type_problem_title(%ExpectationOrigin{kind: :call_argument}), do: "Argument has the wrong type"
+  defp type_problem_title(%ExpectationOrigin{kind: :application}), do: "Application has the wrong type"
+  defp type_problem_title(%ExpectationOrigin{kind: :overload}), do: "No matching overload"
+  defp type_problem_title(%ExpectationOrigin{kind: :collection}), do: "Collection elements have different types"
+  defp type_problem_title(%ExpectationOrigin{kind: :record}), do: "Record has the wrong type"
+  defp type_problem_title(%ExpectationOrigin{kind: :effects}), do: "Effect is not allowed here"
+  defp type_problem_title(%ExpectationOrigin{kind: :supervisor}), do: "Supervisor value has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :operator_operand}), do: "Operator cannot use this value"
   defp type_problem_title(_origin), do: "Type mismatch"
 
@@ -1105,6 +1111,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_label(%ExpectationOrigin{kind: :condition}), do: "this condition has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :branch}), do: "this branch disagrees with another branch"
   defp type_problem_label(%ExpectationOrigin{kind: :call_argument}), do: "this argument has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :application}), do: "this application has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :collection}), do: "this collection element has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :record_field}), do: "this record field has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :effects}), do: "this expression has an invalid effect"
   defp type_problem_label(_origin), do: "this expression has the wrong type"
 
   defp expectation_labels(%ExpectationOrigin{span: %Span{} = span}, primary_span, _related)
