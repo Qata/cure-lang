@@ -146,6 +146,34 @@ defmodule Cure.Diagnostic.Registry do
     end
   end
 
+  @doc "Validate stable diagnostic codes referenced by first-party source files."
+  @spec validate_sources([Path.t()]) :: :ok | {:error, {:unregistered_source_codes, [String.t()]}}
+  def validate_sources(paths \\ default_source_paths()) when is_list(paths) do
+    referenced =
+      paths
+      |> Enum.flat_map(&source_codes/1)
+      |> MapSet.new()
+
+    registered = entries() |> Enum.map(& &1.code) |> MapSet.new()
+    missing = referenced |> MapSet.difference(registered) |> Enum.sort()
+
+    if missing == [], do: :ok, else: {:error, {:unregistered_source_codes, missing}}
+  end
+
+  @doc false
+  @spec source_codes(Path.t()) :: [String.t()]
+  def source_codes(path) do
+    case File.read(path) do
+      {:ok, source} ->
+        Regex.scan(~r/[\"']((?:E|W|I|H)\d{3})[\"']/, source, capture: :all_but_first)
+        |> List.flatten()
+        |> Enum.uniq()
+
+      {:error, _reason} ->
+        []
+    end
+  end
+
   defp severity("E" <> _), do: :error
   defp severity("W" <> _), do: :warning
   defp severity("I" <> _), do: :information
@@ -203,6 +231,10 @@ defmodule Cure.Diagnostic.Registry do
 
   defp valid_entries(entries) do
     Enum.find_value(entries, :ok, &validate_entry/1)
+  end
+
+  defp default_source_paths do
+    Path.wildcard("lib/**/*.ex")
   end
 
   defp validate_entry(%Entry{} = entry) do

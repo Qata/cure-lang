@@ -50,6 +50,22 @@ defmodule Cure.Diagnostic.RegistryTest do
              Registry.validate([%{entry | converter_function: :does_not_exist}])
   end
 
+  test "first-party stable diagnostic literals are registered" do
+    assert :ok = Registry.validate_sources(Path.wildcard("lib/**/*.ex"))
+  end
+
+  test "source validation reports an unregistered stable code" do
+    path = Path.join(System.tmp_dir!(), "cure-diagnostic-registry-fixture.ex")
+    File.write!(path, ~S(defmodule Fixture do
+  @code "E999"
+end
+))
+
+    on_exit(fn -> File.rm(path) end)
+
+    assert {:error, {:unregistered_source_codes, ["E999"]}} = Registry.validate_sources([path])
+  end
+
   test "E101 is reserved for internal compiler exceptions" do
     entry = Registry.fetch!("e101")
     assert entry.key == :internal_compiler_error
