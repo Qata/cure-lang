@@ -265,7 +265,8 @@ defmodule Cure.Diagnostic.Registry do
       |> Enum.sort()
 
     with :ok <- if(missing_codes == [], do: :ok, else: {:error, {:unreachable_code, missing_codes}}),
-         :ok <- validate_producer_coverage() do
+         :ok <- validate_producer_coverage(),
+         :ok <- validate_producer_catalog() do
       :ok
     end
   end
@@ -280,6 +281,20 @@ defmodule Cure.Diagnostic.Registry do
 
     missing = @known_producers |> Enum.reject(&MapSet.member?(owned, &1)) |> Enum.sort()
     if missing == [], do: :ok, else: {:error, {:producer_without_reachable_code, missing}}
+  end
+
+  @doc "Ensure every known producer has a reachable catalog fixture for a public path."
+  @spec validate_producer_catalog() :: :ok | {:error, {:producer_without_catalog_fixture, [atom()]}}
+  def validate_producer_catalog do
+    missing =
+      @known_producers
+      |> Enum.reject(fn producer ->
+        Enum.any?(reachable(), fn entry ->
+          producer in entry.producers and not is_nil(entry.catalog_case) and not is_nil(entry.fixture_id)
+        end)
+      end)
+
+    if missing == [], do: :ok, else: {:error, {:producer_without_catalog_fixture, missing}}
   end
 
   @doc "Validate stable diagnostic codes referenced by first-party source files."
