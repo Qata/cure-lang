@@ -4432,7 +4432,7 @@ defmodule Cure.Compiler.Parser do
     meta = [let: true, line: token.line, col: token.col]
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
     meta = if grade, do: Keyword.put(meta, :grade, grade), else: meta
-    meta = if annotation_span, do: Keyword.put(meta, :source_info, %SourceInfo{annotation: annotation_span}), else: meta
+    meta = put_let_source_info(meta, token, pattern, annotation_span, state)
 
     assignment = {:assignment, meta, [pattern, value]}
 
@@ -5753,6 +5753,25 @@ defmodule Cure.Compiler.Parser do
         end
     end
   end
+
+  defp put_let_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = first}, pattern, annotation, state) do
+    case last_authored_token(state) do
+      %Token{span: %Cure.Diagnostic.Span{} = last} ->
+        case Range.through(first, last) do
+          {:ok, whole} ->
+            info = %SourceInfo{whole: whole, name: ast_source_span(pattern), annotation: annotation}
+            Keyword.put(meta, :source_info, info)
+
+          _ ->
+            meta
+        end
+
+      _ ->
+        meta
+    end
+  end
+
+  defp put_let_source_info(meta, _token, _pattern, _annotation, _state), do: meta
 
   # -- Typed Parameters  name: Type [= default] ------------------------------
 

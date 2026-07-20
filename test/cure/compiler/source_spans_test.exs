@@ -65,6 +65,19 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, Metadata.source_info(explicit_meta).annotation) == ":linear Nat"
   end
 
+  test "let bindings retain their authored whole, name, and annotation ranges" do
+    source = "fn answer() -> Int = let value: Int = 1\n  value\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "let.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "let.cure", emit_events: false, prelude_macros: false)
+
+    assignment = find_node(ast, :assignment)
+    info = Metadata.source_info(elem(assignment, 1))
+
+    assert slice(source, info.whole) == "let value: Int = 1"
+    assert slice(source, info.name) == "value"
+    assert slice(source, info.annotation) == ": Int"
+  end
+
   test "type applications in annotations retain their closing delimiter" do
     source = "mod Demo\n  fn answer(x: Option(Int)) -> Option(Int) = x\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "demo.cure", emit_events: false)
