@@ -126,9 +126,7 @@ defmodule Cure.Watch do
           info("  #{p} -> #{mod}")
 
         {:error, reason} ->
-          error(
-            "  " <> Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("watch", reason))
-          )
+          error("  " <> Cure.Diagnostic.Host.render(reason, p))
       end
     end)
   end
@@ -152,14 +150,11 @@ defmodule Cure.Watch do
             info("  #{p}: OK")
           else
             {:error, reason} ->
-              error(
-                "  " <>
-                  Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("watch", reason))
-              )
+              error("  " <> Cure.Diagnostic.Host.render(reason, p, src))
           end
 
         {:error, reason} ->
-          error("  #{p}: #{reason}")
+          error("  " <> Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_read(p, reason)))
       end
     end)
   end
