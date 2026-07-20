@@ -10,7 +10,9 @@ defmodule Cure.Elab.MacroExpand do
 
   alias Cure.Compiler.{MacroFamily, MacroSyntax, Parser}
   alias Cure.Core.{Context, Kernel, Normalise}
+  alias Cure.Diagnostic.ProvenanceFrame
   alias Cure.Elab.{Elaborator, Resolve, TotalityClosure}
+  alias Cure.MetaAST.{Metadata, SourceInfo}
 
   @normalise_fuel 10_000
   @normalise_fuel_per_node 100
@@ -187,6 +189,7 @@ defmodule Cure.Elab.MacroExpand do
 
     node_meta =
       node_meta
+      |> stamp_canonical_provenance(expansion_meta, :generated_declaration)
       |> Keyword.put(:source_provenance, source)
       |> Keyword.put(:expansion_provenance, chain)
       |> Keyword.put(:declarations, declarations)
@@ -196,6 +199,7 @@ defmodule Cure.Elab.MacroExpand do
 
   defp stamp_generated_provenance({tag, meta, children}, expansion_meta)
        when is_atom(tag) and is_list(meta) and is_list(children) do
+    meta = stamp_canonical_provenance(meta, expansion_meta, :macro_expansion)
     {tag, meta, Enum.map(children, &stamp_generated_provenance(&1, expansion_meta))}
   end
 
@@ -208,6 +212,7 @@ defmodule Cure.Elab.MacroExpand do
        when is_atom(tag) and is_list(meta) and is_list(children) do
     meta =
       meta
+      |> stamp_canonical_provenance_from_chain(chain, :generated_declaration)
       |> Keyword.put(:source_provenance, source)
       |> Keyword.put(:expansion_provenance, chain)
 
@@ -215,6 +220,38 @@ defmodule Cure.Elab.MacroExpand do
   end
 
   defp stamp_declaration_provenance(other, _source, _chain), do: other
+
+  defp stamp_canonical_provenance(meta, expansion_meta, kind) when is_list(meta) do
+    stamp_canonical_provenance_from_chain(
+      meta,
+      Keyword.get(expansion_meta, :provenance, []),
+      kind,
+      Metadata.source_info(expansion_meta)
+    )
+  end
+
+  defp stamp_canonical_provenance_from_chain(meta, chain, kind, expansion_info \\ nil)
+       when is_list(meta) and is_list(chain) do
+    info = Metadata.source_info(meta) || %SourceInfo{}
+    invocation = expansion_info && expansion_info.whole
+
+    frames =
+      Enum.map(chain, fn frame ->
+        %ProvenanceFrame{
+          kind: :macro_expansion,
+          name: Map.get(frame, :keyword, "macro"),
+          invocation: invocation,
+          parent: Map.get(frame, :parent)
+        }
+      end)
+
+    frame = %ProvenanceFrame{kind: kind, name: Keyword.get(meta, :name, "generated"), invocation: invocation}
+
+    Metadata.put_source_info(meta, %{
+      info
+      | provenance: Enum.uniq_by([frame | frames ++ info.provenance], &{&1.kind, &1.name})
+    })
+  end
 
   defp over_limit?(_value, :infinity), do: false
   defp over_limit?(value, limit) when is_integer(limit), do: value > limit
