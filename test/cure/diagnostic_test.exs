@@ -171,6 +171,42 @@ defmodule Cure.DiagnosticTest do
     assert Renderer.plain(diagnostic, registry) =~ "1 | abc\n  |  ^ insert here"
   end
 
+  test "machine-applicable structured edits become LSP quick fixes", %{registry: registry, span: span} do
+    diagnostic =
+      Diagnostic.new(
+        code: "E091",
+        key: :unknown_name,
+        severity: :error,
+        title: "Unknown value",
+        message: "The value is not in scope.",
+        primary: %Label{span: span, style: :primary},
+        suggestions: [
+          %Suggestion{
+            message: "Replace it with `known`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: "known"}]
+          }
+        ]
+      )
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert [action] = Cure.LSP.Server.compute_code_actions("file:///fallback.cure", [lsp])
+    assert action["title"] == "Replace it with `known`"
+
+    assert [{uri, edits}] = Map.to_list(get_in(action, ["edit", "changes"]))
+    assert String.ends_with?(uri, "/src/demo.cure")
+
+    assert edits == [
+             %{
+               "range" => %{
+                 "start" => %{"line" => 1, "character" => 23},
+                 "end" => %{"line" => 1, "character" => 30}
+               },
+               "newText" => "known"
+             }
+           ]
+  end
+
   test "lifted module failures are reported at the public macro boundary" do
     diagnostic =
       Adapter.from_error(

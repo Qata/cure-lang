@@ -89,7 +89,7 @@ defmodule Cure.Diagnostic.Renderer do
       "relatedInformation" => Enum.map(diagnostic.secondary, &related_information(&1, registry)),
       "data" => %{
         "key" => Atom.to_string(diagnostic.key),
-        "suggestions" => Enum.map(diagnostic.suggestions, &suggestion_map/1),
+        "suggestions" => Enum.map(diagnostic.suggestions, &lsp_suggestion_map(&1, registry)),
         "provenance" => Enum.map(diagnostic.provenance, &provenance_map/1),
         "payload" => stringify_keys(diagnostic.payload)
       }
@@ -205,6 +205,21 @@ defmodule Cure.Diagnostic.Renderer do
       "message" => suggestion.message,
       "applicability" => Atom.to_string(suggestion.applicability),
       "edits" => Enum.map(suggestion.edits, &edit_map/1)
+    }
+  end
+
+  defp lsp_suggestion_map(%Suggestion{} = suggestion, registry) do
+    %{
+      "message" => suggestion.message,
+      "applicability" => Atom.to_string(suggestion.applicability),
+      "edits" =>
+        Enum.map(suggestion.edits, fn %TextEdit{span: span, replacement: replacement} ->
+          %{
+            "uri" => path_to_uri(span.path),
+            "range" => lsp_range(%Label{span: span, style: :primary}, registry),
+            "newText" => replacement
+          }
+        end)
     }
   end
 

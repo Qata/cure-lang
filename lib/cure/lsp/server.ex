@@ -627,8 +627,12 @@ defmodule Cure.LSP.Server do
   def compute_code_actions(uri, diagnostics) do
     Enum.flat_map(diagnostics, fn diag ->
       message = Map.get(diag, "message", "")
+      structured = structured_code_actions(uri, diag)
 
       cond do
+        structured != [] ->
+          structured
+
         String.contains?(message, "not exhaustive") ->
           range = Map.get(diag, "range", %{})
           end_line = get_in(range, ["end", "line"]) || 0
@@ -683,6 +687,38 @@ defmodule Cure.LSP.Server do
       end
     end)
   end
+
+  defp structured_code_actions(default_uri, diagnostic) do
+    diagnostic
+    |> get_in(["data", "suggestions"])
+    |> List.wrap()
+    |> Enum.flat_map(fn suggestion ->
+      edits = Map.get(suggestion, "edits", [])
+
+      if Map.get(suggestion, "applicability") == "machine_applicable" and edits != [] do
+        changes =
+          Enum.group_by(
+            edits,
+            fn edit -> Map.get(edit, "uri") |> present_uri(default_uri) end,
+            &Map.take(&1, ["range", "newText"])
+          )
+
+        [
+          %{
+            "title" => Map.fetch!(suggestion, "message"),
+            "kind" => "quickfix",
+            "diagnostics" => [diagnostic],
+            "edit" => %{"changes" => changes}
+          }
+        ]
+      else
+        []
+      end
+    end)
+  end
+
+  defp present_uri(uri, default_uri) when uri in [nil, ""], do: default_uri
+  defp present_uri(uri, _default_uri), do: uri
 
   # -- Completions -------------------------------------------------------------
 
