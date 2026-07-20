@@ -1860,12 +1860,22 @@ defmodule Cure.Elab.Declarations do
   defp collect_index_expr_vars(acc, {:variable, _, vname}, type, fam, env),
     do: maybe_add_implicit(acc, vname, type, fam, env)
 
-  defp collect_index_expr_vars(acc, {:function_call, cmeta, cargs}, _type, fam, env) do
+  defp collect_index_expr_vars(acc, {:function_call, cmeta, cargs}, expected_type, fam, env) do
     cname = cmeta |> Keyword.fetch!(:name) |> String.to_atom()
 
     case Inductive.get_ctor(env, cname) do
-      %{args: fields} ->
-        field_types = Enum.map(fields, fn {_n, t} -> t end)
+      %{args: fields} = ctor ->
+        # A surface constructor call contains only its positional (explicit)
+        # arguments. Its full Core telescope also contains inferred/relevant
+        # implicit slots. Aligning written args directly with `fields` assigned
+        # the first payload to the leading erased type index (`Cons(left, xs)`
+        # inferred `left : Type` instead of `left : a`), and computed result
+        # indices later escaped as out-of-frame de Bruijn variables. Mirror the
+        # ordinary constructor applicator: skip every implicit slot here.
+        plicities = Map.get(ctor, :plicities) || List.duplicate(:explicit, length(fields))
+
+        expected_params = expected_ctor_params(expected_type, ctor, env)
+        field_types = written_ctor_field_types(fields, plicities, expected_params)
 
         cargs
         |> Enum.with_index()
@@ -1879,6 +1889,41 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp collect_index_expr_vars(acc, _other, _type, _fam, _env), do: acc
+
+  # Parameters known from the enclosing expected family application specialize
+  # a constructor's omitted leading implicit slots. For `Cons(left, rest)` under
+  # expected `List(Int)`, this supplies `a := Int` before reading the written
+  # head field's internal type `a`.
+  defp expected_ctor_params({:data, dname, params, _indices}, ctor, env) do
+    if Inductive.ctor_family(env, ctor.name) == dname, do: params, else: []
+  end
+
+  defp expected_ctor_params(_other, _ctor, _env), do: []
+
+  defp written_ctor_field_types(fields, plicities, expected_params) do
+    {types, _chosen} =
+      Enum.zip(fields, plicities)
+      # Constructor field types live in `family params ++ earlier ctor args`.
+      # Seed substitution with the known family parameters; they are outside
+      # `ctor.args` and therefore have no plicity slot of their own.
+      |> Enum.reduce({[], expected_params}, fn {{_name, field_type}, plicity}, {types, chosen} ->
+        specialized = Subst.instantiate(field_type, chosen)
+
+        case plicity do
+          :implicit ->
+            {types, chosen ++ [{:hole, "__ctor_index_inference__"}]}
+
+          :explicit ->
+            # The written value itself is irrelevant to this field's type. Keep
+            # a placeholder in the telescope substitution for any later field;
+            # if a later type genuinely depends on it, its own occurrence will
+            # still be checked by the constructor elaborator proper.
+            {types ++ [specialized], chosen ++ [{:hole, "__ctor_payload_inference__"}]}
+        end
+      end)
+
+    types
+  end
 
   # Domain (argument) types of a defined global function, peeled from its Pi
   # type, or nil if `name` is not a defined global. Used to type index variables
@@ -1924,7 +1969,26 @@ defmodule Cure.Elab.Declarations do
 
     cond do
       type == nil -> acc
-      MapSet.member?(seen, vname) -> acc
+      MapSet.member?(seen, vname) ->
+        # A constructor payload type can initially be open because an omitted
+        # implicit slot precedes it in the constructor telescope (`Cons`'s head
+        # has type `a`). A later occurrence in a computed index often supplies
+        # the closed domain (`plus(left, right)` pins both to Nat). Retain first-
+        # appearance ordering, but refine that provisional open type when the
+        # later evidence is closed. Keeping the open term leaks the constructor's
+        # private telescope variable into the enclosing constructor and produces
+        # an out-of-frame Core `{:var, k}`.
+        ordered2 =
+          Enum.map(ordered, fn
+            {^vname, old_type} ->
+              if not Term.closed?(old_type) and Term.closed?(type), do: {vname, type}, else: {vname, old_type}
+
+            entry ->
+              entry
+          end)
+
+        {ordered2, seen}
+
       vname == "Type" -> acc
       atom == fam -> acc
       Inductive.get_ctor(env, atom) -> acc
