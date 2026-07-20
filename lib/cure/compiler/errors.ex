@@ -676,7 +676,7 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({kind, _, _})
        when kind in [:edition_pragma_placement, :edition_pragma_malformed, :edition_pragma_unknown], do: true
 
-  defp structured_error?({:codegen_error, reason}), do: structured_error?(reason)
+  defp structured_error?({:codegen_error, _reason}), do: true
   defp structured_error?({:parse_error, [reason | _]}), do: structured_error?(reason)
   defp structured_error?({:source_context, reason, context}) when is_map(context), do: structured_error?(reason)
   defp structured_error?([reason | _]), do: structured_error?(reason)

@@ -84,6 +84,12 @@ defmodule Cure.Diagnostic.HostTest do
              "demo.cure",
              "fn run() -> Int = 1\n"
            ) =~ "[E101]"
+
+    assert Cure.Compiler.Errors.format_with_source(
+             {:codegen_error, :bad_artifact},
+             "demo.cure",
+             "fn run() -> Int = 1\n"
+           ) =~ "[E101]"
   end
 
   test "codegen rejection families retain a stable public explanation" do
