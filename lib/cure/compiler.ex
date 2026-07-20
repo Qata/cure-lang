@@ -294,9 +294,18 @@ defmodule Cure.Compiler do
     {ast, warnings} = Cure.Migrate.run(ast, file: file, apply: :safe_only)
     registry = migration_source_registry(file)
 
-    Enum.each(warnings, fn w ->
-      IO.puts(:stderr, Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.migration_warning(w), registry))
-    end)
+    sink =
+      Cure.Diagnostic.Sink.new(
+        registry: registry,
+        format: :plain,
+        output_device: :stderr,
+        width: 80
+      )
+
+    warnings
+    |> Enum.map(&Cure.Diagnostic.Operational.migration_warning/1)
+    |> then(&Cure.Diagnostic.Sink.emit_all(sink, &1))
+    |> Cure.Diagnostic.Sink.flush()
 
     {:ok, ast}
   end
