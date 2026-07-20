@@ -478,6 +478,18 @@ defmodule Cure.Diagnostic.Adapter do
         opts
       )
 
+  def from_error({:union_member_not_ground, member}, opts),
+    do: union_declaration_failure(:union_member_not_ground, %{member: member}, opts)
+
+  def from_error({:unsupported_member_shape, members}, opts),
+    do: union_declaration_failure(:unsupported_member_shape, %{members: members}, opts)
+
+  def from_error({:same_runtime_shape, members}, opts),
+    do: union_declaration_failure(:same_runtime_shape, %{members: members}, opts)
+
+  def from_error({:same_erased_literal, members}, opts),
+    do: union_declaration_failure(:same_erased_literal, %{members: members}, opts)
+
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
       opts
@@ -1327,6 +1339,39 @@ defmodule Cure.Diagnostic.Adapter do
           {"Required superinterface is missing",
            "Interface `#{name_to_string(details.interface)}` requires `#{name_to_string(details.superinterface)}` for this implementation.",
            "implement the required superinterface first"}
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp union_declaration_failure(kind, details, opts) do
+    {title, message, label} =
+      case kind do
+        :union_member_not_ground ->
+          {"Union member is not ground", "Every union member must be a concrete, fully-resolved type.",
+           "make this union member concrete"}
+
+        :unsupported_member_shape ->
+          {"Unsupported union member shape", "This union member has a runtime shape that Cure cannot represent safely.",
+           "use a supported union member shape"}
+
+        :same_runtime_shape ->
+          {"Union members have the same runtime shape",
+           "Two union members erase to the same runtime representation and cannot be distinguished.",
+           "change one member's runtime shape"}
+
+        :same_erased_literal ->
+          {"Union members have the same erased literal",
+           "Two union members erase to the same literal value and would overlap at runtime.",
+           "use distinct literal values"}
       end
 
     Diagnostic.new(

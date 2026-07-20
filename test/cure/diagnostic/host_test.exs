@@ -399,6 +399,24 @@ defmodule Cure.Diagnostic.HostTest do
     end
   end
 
+  test "renders union declaration collisions as actionable diagnostics" do
+    ground = Host.render({:union_member_not_ground, {:var, "T"}}, "union.cure")
+    shape = Host.render({:unsupported_member_shape, [:Map]}, "union.cure")
+    runtime = Host.render({:same_runtime_shape, ["A", "B"]}, "union.cure")
+    literal = Host.render({:same_erased_literal, [1, 1]}, "union.cure")
+
+    assert ground =~ "[E105]"
+    assert ground =~ "UNION MEMBER IS NOT GROUND"
+    assert shape =~ "UNSUPPORTED UNION MEMBER SHAPE"
+    assert runtime =~ "SAME RUNTIME SHAPE"
+    assert literal =~ "SAME ERASED LITERAL"
+
+    for output <- [ground, shape, runtime, literal] do
+      refute output =~ ":same_runtime_shape"
+      refute output =~ ":same_erased_literal"
+    end
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 
