@@ -145,7 +145,11 @@ defmodule Cure.Compiler.Lexer do
       {:ok, state} ->
         # Close remaining indentation levels
         state = close_indents(state)
-        tokens = Enum.reverse([Token.new(:eof, nil, state.line, state.col) | state.tokens])
+
+        tokens =
+          [Token.new(:eof, nil, state.line, state.col) | state.tokens]
+          |> Enum.reverse()
+          |> attach_token_spans(source, file)
 
         if emit? do
           Events.emit(:lexer, :lex_complete, tokens, Events.meta(file, state.line))
@@ -1720,4 +1724,283 @@ defmodule Cure.Compiler.Lexer do
   defp maybe_emit_event(state, token) do
     Events.emit(:lexer, :token_produced, token, Events.meta(state.file, token.line))
   end
+
+  # Attach spans in one source-order pass. The scanner cursor is authoritative:
+  # it avoids inheriting the legacy lexer's byte-counted columns after Unicode
+  # and gives omitted trivia honest ownership between authored tokens.
+  defp attach_token_spans(tokens, source, file) do
+    line_starts = source_line_starts(source)
+    {tokens, _cursor} = attach_token_spans(tokens, source, file, line_starts, 0)
+    tokens
+  end
+
+  defp attach_token_spans(tokens, source, file, line_starts, initial_cursor) do
+    Enum.map_reduce(tokens, initial_cursor, fn token, cursor ->
+      {start_byte, end_byte, next_cursor} = token_bytes(token, source, cursor)
+      span = token_span(source, file, line_starts, start_byte, end_byte)
+      token = %Token{token | span: span, line: span.start_line, col: span.start_column}
+      {attach_interpolation_spans(token, source, file, line_starts), next_cursor}
+    end)
+  end
+
+  defp attach_interpolation_spans(
+         %Token{type: :string_interpolation, value: parts, span: span} = token,
+         source,
+         file,
+         line_starts
+       ) do
+    {parts, _cursor} =
+      Enum.map_reduce(parts, span.start_byte, fn
+        {:expr, tokens}, cursor ->
+          expr_start = find_sequence_end(source, cursor, "\#{")
+          {tokens, token_end} = attach_token_spans(tokens, source, file, line_starts, expr_start)
+          {{:expr, tokens}, token_end}
+
+        text, cursor when is_binary(text) ->
+          {text, cursor}
+
+        part, cursor ->
+          {part, cursor}
+      end)
+
+    %{token | value: parts}
+  end
+
+  defp attach_interpolation_spans(token, _source, _file, _line_starts), do: token
+
+  defp source_line_starts(source) do
+    starts =
+      source
+      |> :binary.matches("\n")
+      |> Enum.map(fn {offset, 1} -> offset + 1 end)
+
+    List.to_tuple([0 | starts])
+  end
+
+  defp token_span(source, file, line_starts, start_byte, end_byte) do
+    {start_line, start_column} = source_coordinates(source, line_starts, start_byte)
+    {end_line, end_column} = source_coordinates(source, line_starts, end_byte)
+
+    Cure.Diagnostic.Span.new(
+      source_id: file,
+      path: file,
+      start_byte: start_byte,
+      end_byte: end_byte,
+      start_line: start_line,
+      start_column: start_column,
+      end_line: end_line,
+      end_column: end_column
+    )
+  end
+
+  defp source_coordinates(source, line_starts, byte) do
+    index = line_index(line_starts, byte, 0, tuple_size(line_starts) - 1)
+    line_start = elem(line_starts, index)
+    column = source |> binary_part(line_start, byte - line_start) |> scalar_length() |> Kernel.+(1)
+    {index + 1, column}
+  end
+
+  defp scalar_length(binary) do
+    case :unicode.characters_to_list(binary, :utf8) do
+      characters when is_list(characters) -> length(characters)
+      {:error, valid, rest} -> length(valid) + byte_size(rest)
+      {:incomplete, valid, rest} -> length(valid) + byte_size(rest)
+    end
+  end
+
+  defp line_index(starts, byte, low, high) when low >= high do
+    if elem(starts, high) <= byte, do: high, else: max(0, high - 1)
+  end
+
+  defp line_index(starts, byte, low, high) do
+    middle = div(low + high + 1, 2)
+
+    if elem(starts, middle) <= byte,
+      do: line_index(starts, byte, middle, high),
+      else: line_index(starts, byte, low, middle - 1)
+  end
+
+  defp token_bytes(%Token{type: :eof}, source, _cursor) do
+    ending = byte_size(source)
+    {ending, ending, ending}
+  end
+
+  defp token_bytes(%Token{type: type}, source, cursor) when type in [:indent, :dedent] do
+    insertion = skip_trivia(source, cursor)
+    {insertion, insertion, cursor}
+  end
+
+  defp token_bytes(%Token{type: :newline}, source, cursor) do
+    start = find_byte(source, cursor, ?\n)
+    {start, min(start + 1, byte_size(source)), min(start + 1, byte_size(source))}
+  end
+
+  defp token_bytes(%Token{type: type} = token, source, cursor) when type in [:doc_comment, :line_comment] do
+    start = skip_space_only(source, cursor)
+    ending = start + authored_length(token, binary_part(source, start, byte_size(source) - start))
+    {start, ending, ending}
+  end
+
+  defp token_bytes(%Token{} = token, source, cursor) do
+    start = skip_trivia(source, cursor)
+    ending = start + authored_length(token, binary_part(source, start, byte_size(source) - start))
+    {start, ending, ending}
+  end
+
+  defp authored_length(%Token{type: type}, rest) when type in [:string, :string_interpolation],
+    do: string_length(rest)
+
+  defp authored_length(%Token{type: :char}, rest), do: quoted_length(rest, ?')
+  defp authored_length(%Token{type: :regex}, rest), do: regex_length(rest)
+  defp authored_length(%Token{type: type}, rest) when type in [:doc_comment, :line_comment], do: comment_length(rest)
+
+  defp authored_length(%Token{type: :identifier}, <<?`, _::binary>> = rest), do: quoted_length(rest, ?`)
+
+  defp authored_length(%Token{type: :identifier}, rest), do: take_while_bytes(rest, &identifier_byte?/1)
+  defp authored_length(%Token{type: :hole}, rest), do: take_while_bytes(rest, &hole_byte?/1)
+  defp authored_length(%Token{type: :atom}, rest), do: take_while_bytes(rest, &atom_byte?/1)
+
+  defp authored_length(%Token{type: type}, rest) when type in [:integer, :float] do
+    case Regex.run(~r/^(?:0[xX][0-9A-Fa-f_]+|0[bB][01_]+|[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][+-]?[0-9]+)?)/, rest) do
+      [number] -> byte_size(number)
+      _ -> 1
+    end
+  end
+
+  defp authored_length(%Token{type: :keyword, value: value}, _rest), do: value |> Atom.to_string() |> byte_size()
+  defp authored_length(%Token{type: :bool, value: value}, _rest), do: value |> Atom.to_string() |> byte_size()
+  defp authored_length(%Token{type: nil}, _rest), do: 3
+
+  defp authored_length(%Token{value: value}, _rest) when is_binary(value), do: byte_size(value)
+  defp authored_length(%Token{value: value}, _rest) when is_atom(value), do: value |> Atom.to_string() |> byte_size()
+  defp authored_length(_token, _rest), do: 1
+
+  defp quoted_length(<<delimiter, tail::binary>>, delimiter),
+    do: 1 + scan_quoted(tail, delimiter, 0, false)
+
+  defp quoted_length(rest, _delimiter), do: min(1, byte_size(rest))
+
+  defp scan_quoted(<<>>, _delimiter, consumed, _escaped), do: consumed
+
+  defp scan_quoted(<<_byte, tail::binary>>, delimiter, consumed, true),
+    do: scan_quoted(tail, delimiter, consumed + 1, false)
+
+  defp scan_quoted(<<?\\, tail::binary>>, delimiter, consumed, false),
+    do: scan_quoted(tail, delimiter, consumed + 1, true)
+
+  defp scan_quoted(<<byte, _tail::binary>>, delimiter, consumed, false) when byte == delimiter,
+    do: consumed + 1
+
+  defp scan_quoted(<<_byte, tail::binary>>, delimiter, consumed, false),
+    do: scan_quoted(tail, delimiter, consumed + 1, false)
+
+  defp string_length(<<?", tail::binary>>), do: 1 + scan_string(tail, 0, false, 0)
+  defp string_length(rest), do: min(1, byte_size(rest))
+
+  defp scan_string(<<>>, consumed, _escaped, _interpolation_depth), do: consumed
+  defp scan_string(<<_byte, tail::binary>>, consumed, true, depth), do: scan_string(tail, consumed + 1, false, depth)
+  defp scan_string(<<?\\, tail::binary>>, consumed, false, depth), do: scan_string(tail, consumed + 1, true, depth)
+  defp scan_string(<<?", _tail::binary>>, consumed, false, 0), do: consumed + 1
+
+  defp scan_string(<<?#, ?{, tail::binary>>, consumed, false, 0),
+    do: scan_string(tail, consumed + 2, false, 1)
+
+  defp scan_string(<<?{, tail::binary>>, consumed, false, depth) when depth > 0,
+    do: scan_string(tail, consumed + 1, false, depth + 1)
+
+  defp scan_string(<<?}, tail::binary>>, consumed, false, depth) when depth > 0,
+    do: scan_string(tail, consumed + 1, false, depth - 1)
+
+  defp scan_string(<<?", _::binary>> = rest, consumed, false, depth) when depth > 0 do
+    inner_length = quoted_length(rest, ?")
+    tail = binary_part(rest, inner_length, byte_size(rest) - inner_length)
+    scan_string(tail, consumed + inner_length, false, depth)
+  end
+
+  defp scan_string(<<_byte, tail::binary>>, consumed, false, depth),
+    do: scan_string(tail, consumed + 1, false, depth)
+
+  defp regex_length(<<?~, ?r, ?/, tail::binary>>) do
+    body = scan_until_unescaped(tail, ?/, 0, false)
+    after_slash = binary_part(tail, min(body + 1, byte_size(tail)), max(0, byte_size(tail) - body - 1))
+    3 + body + 1 + take_while_bytes(after_slash, &(&1 in ?a..?z))
+  end
+
+  defp regex_length(_rest), do: 1
+
+  defp scan_until_unescaped(<<>>, _delimiter, consumed, _escaped), do: consumed
+
+  defp scan_until_unescaped(<<_byte, tail::binary>>, delimiter, consumed, true),
+    do: scan_until_unescaped(tail, delimiter, consumed + 1, false)
+
+  defp scan_until_unescaped(<<?\\, tail::binary>>, delimiter, consumed, false),
+    do: scan_until_unescaped(tail, delimiter, consumed + 1, true)
+
+  defp scan_until_unescaped(<<delimiter, _tail::binary>>, delimiter, consumed, false), do: consumed
+
+  defp scan_until_unescaped(<<_byte, tail::binary>>, delimiter, consumed, false),
+    do: scan_until_unescaped(tail, delimiter, consumed + 1, false)
+
+  defp comment_length(rest) do
+    if String.starts_with?(rest, "###") do
+      case :binary.matches(rest, "###") do
+        [{0, 3}, {closing, 3} | _] -> closing + 3
+        _ -> byte_size(rest)
+      end
+    else
+      case :binary.match(rest, "\n") do
+        {length, 1} -> length
+        :nomatch -> byte_size(rest)
+      end
+    end
+  end
+
+  defp skip_trivia(source, cursor) when cursor >= byte_size(source), do: byte_size(source)
+
+  defp skip_trivia(source, cursor) do
+    case :binary.at(source, cursor) do
+      byte when byte in [?\s, ?\t, ?\r, ?\n] -> skip_trivia(source, cursor + 1)
+      ?# -> skip_trivia(source, skip_comment(source, cursor))
+      _ -> cursor
+    end
+  end
+
+  defp skip_space_only(source, cursor) when cursor >= byte_size(source), do: byte_size(source)
+
+  defp skip_space_only(source, cursor) do
+    case :binary.at(source, cursor) do
+      byte when byte in [?\s, ?\t, ?\r] -> skip_space_only(source, cursor + 1)
+      _ -> cursor
+    end
+  end
+
+  defp skip_comment(source, cursor) do
+    rest = binary_part(source, cursor, byte_size(source) - cursor)
+    cursor + comment_length(rest)
+  end
+
+  defp find_byte(source, cursor, _byte) when cursor >= byte_size(source), do: byte_size(source)
+
+  defp find_byte(source, cursor, byte),
+    do: if(:binary.at(source, cursor) == byte, do: cursor, else: find_byte(source, cursor + 1, byte))
+
+  defp find_sequence_end(source, cursor, sequence) do
+    rest = binary_part(source, cursor, byte_size(source) - cursor)
+
+    case :binary.match(rest, sequence) do
+      {offset, length} -> cursor + offset + length
+      :nomatch -> cursor
+    end
+  end
+
+  defp take_while_bytes(binary, predicate), do: take_while_bytes(binary, predicate, 0)
+
+  defp take_while_bytes(<<byte, tail::binary>>, predicate, count),
+    do: if(predicate.(byte), do: take_while_bytes(tail, predicate, count + 1), else: count)
+
+  defp take_while_bytes(<<>>, _predicate, count), do: count
+
+  defp identifier_byte?(byte), do: byte in ?a..?z or byte in ?A..?Z or byte in ?0..?9 or byte in [?_, ?$, ??]
+  defp hole_byte?(byte), do: identifier_byte?(byte) or byte == ??
+  defp atom_byte?(byte), do: identifier_byte?(byte) or byte in [?:, ?!]
 end
