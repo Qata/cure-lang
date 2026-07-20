@@ -33,6 +33,11 @@ defmodule Cure.Compiler.SourceSpans do
   def strip_diagnostic_meta(other), do: other
 
   defp attach_term({tag, meta, payload}, context) when is_atom(tag) and is_list(meta) do
+    # Declarations keep annotations, parameters, guards, and constraints in
+    # metadata rather than their payload. Descend through those authored syntax
+    # values before attaching this node's own range; otherwise diagnostics can
+    # locate a function body but not the type that was written on its header.
+    {meta, _metadata_span} = attach_term(meta, context)
     {payload, child_spans} = attach_payload(payload, context)
     own = metadata_span(meta, context.by_position)
     span = complete_span(own, child_spans)
@@ -130,7 +135,17 @@ defmodule Cure.Compiler.SourceSpans do
     name_span = name_span(meta, span, context)
     start_span = name_span || span
 
-    case Map.get(context.closing_parens, {span.source_id, span.start_byte}) do
+    # Expression calls historically carry the opening-paren location, while
+    # type applications carry the type-name location. Support both without a
+    # width guess: locate the authored `(` immediately after the callee and use
+    # the lexer-derived matching `)` range.
+    opening_start =
+      case Map.get(context.opening_parens, {start_span.source_id, start_span.end_byte}) do
+        %Span{} = opening -> opening.start_byte
+        nil -> span.start_byte
+      end
+
+    case Map.get(context.closing_parens, {span.source_id, opening_start}) do
       %Span{} = closing_span -> merge_spans(closing_span, start_span)
       nil -> merge_spans(span, start_span)
     end
@@ -179,8 +194,19 @@ defmodule Cure.Compiler.SourceSpans do
             spelling -> Map.update(index, {token.span.source_id, token.line, spelling}, [token], &[token | &1])
           end
         end),
+      opening_parens: opening_parens(tokens),
       closing_parens: closing_parens(tokens)
     }
+  end
+
+  defp opening_parens(tokens) do
+    Enum.reduce(tokens, %{}, fn
+      %Token{type: :lparen, span: %Span{} = span}, openings ->
+        Map.put(openings, {span.source_id, span.start_byte}, span)
+
+      _token, openings ->
+        openings
+    end)
   end
 
   defp closing_parens(tokens) do

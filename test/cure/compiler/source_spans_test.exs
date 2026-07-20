@@ -22,7 +22,36 @@ defmodule Cure.Compiler.SourceSpansTest do
     call = find_node(ast, :function_call)
     call_meta = elem(call, 1)
     assert slice(source, Keyword.fetch!(call_meta, :callee_span)) == "helper"
+    assert slice(source, Keyword.fetch!(call_meta, :construct_span)) == "helper(x)"
     assert Enum.all?(elem(call, 2), fn child -> match?({_, meta, _} when is_list(meta), child) end)
+  end
+
+  test "annotations stored in declaration metadata retain their authored spans" do
+    source = "mod Demo\n  fn answer(x: Int) -> Int = x\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "demo.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "demo.cure", emit_events: false, prelude_macros: false)
+
+    {:function_def, meta, _body} = find_node(ast, :function_def)
+    {:variable, return_meta, "Int"} = Keyword.fetch!(meta, :return_type)
+    [{:param, parameter_meta, "x"}] = Keyword.fetch!(meta, :params)
+    {:variable, parameter_type_meta, "Int"} = Keyword.fetch!(parameter_meta, :type)
+
+    assert slice(source, Keyword.fetch!(return_meta, :span)) == "Int"
+    assert slice(source, Keyword.fetch!(parameter_type_meta, :span)) == "Int"
+  end
+
+  test "type applications in annotations retain their closing delimiter" do
+    source = "mod Demo\n  fn answer(x: Option(Int)) -> Option(Int) = x\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "demo.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "demo.cure", emit_events: false, prelude_macros: false)
+
+    {:function_def, meta, _body} = find_node(ast, :function_def)
+    {:function_call, return_meta, _} = Keyword.fetch!(meta, :return_type)
+    [{:param, parameter_meta, "x"}] = Keyword.fetch!(meta, :params)
+    {:function_call, parameter_type_meta, _} = Keyword.fetch!(parameter_meta, :type)
+
+    assert slice(source, Keyword.fetch!(return_meta, :construct_span)) == "Option(Int)"
+    assert slice(source, Keyword.fetch!(parameter_type_meta, :construct_span)) == "Option(Int)"
   end
 
   test "diagnostic metadata is excluded from semantic comparisons" do

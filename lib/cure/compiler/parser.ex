@@ -6493,10 +6493,10 @@ defmodule Cure.Compiler.Parser do
             state = advance(state)
             {args, state} = parse_type_atom_args(state)
             state = expect(state, :rparen)
-            {{:function_call, [name: name], args}, state}
+            {{:function_call, [name: name, line: token.line, col: token.col], args}, state}
 
           _ ->
-            {{:variable, [scope: :local], name}, state}
+            {{:variable, [scope: :local, line: token.line, col: token.col], name}, state}
         end
     end
   end
@@ -8078,19 +8078,19 @@ defmodule Cure.Compiler.Parser do
             state = advance(state)
             {params, state} = parse_type_param_list(state)
             state = expect(state, :rparen)
-            ast = {:function_call, [name: base_name], params}
+            ast = {:function_call, [name: base_name, line: token.line, col: token.col], params}
             maybe_parse_function_type(state, ast)
 
           match?(%Token{type: :arrow}, peek(state)) ->
             # A -> B  (unary function type)
             state = advance(state)
             {ret, state} = parse_type_arrow(state)
-            base = {:variable, [scope: :local], base_name}
+            base = {:variable, [scope: :local, line: token.line, col: token.col], base_name}
             ast = {:function_call, [name: "Function", function_type: true], [base, ret]}
             {ast, state}
 
           true ->
-            base = {:variable, [scope: :local], base_name}
+            base = {:variable, [scope: :local, line: token.line, col: token.col], base_name}
             maybe_parse_type_projection(base, state)
         end
     end
