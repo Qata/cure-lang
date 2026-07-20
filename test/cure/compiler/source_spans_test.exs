@@ -106,6 +106,21 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, record_info.name) == "Point"
   end
 
+  test "type declarations and aliases retain exact declaration and name ranges" do
+    source = "typealias UserId = Int\ntype Color = Red | Blue deriving Show\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "types.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "types.cure", emit_events: false, prelude_macros: false)
+
+    {:block, _, [alias, enum]} = ast
+    alias_info = Metadata.source_info(elem(alias, 1))
+    enum_info = Metadata.source_info(elem(enum, 1))
+
+    assert slice(source, alias_info.whole) == "typealias UserId = Int"
+    assert slice(source, alias_info.name) == "UserId"
+    assert slice(source, enum_info.whole) == "type Color = Red | Blue deriving Show"
+    assert slice(source, enum_info.name) == "Color"
+  end
+
   test "type applications in annotations retain their closing delimiter" do
     source = "mod Demo\n  fn answer(x: Option(Int)) -> Option(Int) = x\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "demo.cure", emit_events: false)

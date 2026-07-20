@@ -6581,7 +6581,8 @@ defmodule Cure.Compiler.Parser do
     type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
     meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
     meta = if head_params != [], do: Keyword.put(meta, :params, head_params), else: meta
-    {{:type_annotation, meta, [rhs]}, state}
+    ast = {:type_annotation, meta, [rhs]}
+    {put_type_decl_source_info(ast, token, name_token, state), state}
   end
 
   # `primitive Name` → a constructor-less primitive-type container. The optional
@@ -6604,7 +6605,8 @@ defmodule Cure.Compiler.Parser do
       col: token.col
     ]
 
-    {{:container, meta, []}, state}
+    ast = {:container, meta, []}
+    {put_type_decl_source_info(ast, token, name_token, state), state}
   end
 
   defp parse_type_def(state, opts \\ []) do
@@ -6640,14 +6642,16 @@ defmodule Cure.Compiler.Parser do
         meta = [container_type: :opaque, name: name, line: token.line, col: token.col]
         meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
         meta = if head_params != [], do: Keyword.put(meta, :params, head_params), else: meta
-        {{:container, meta, []}, state}
+        ast = {:container, meta, []}
+        {put_type_decl_source_info(ast, token, name_token, state), state}
 
       match?(%Token{type: :keyword, value: :indices}, peek(state)) ->
-        parse_indexed_family(state, name, head_params, token)
+        {ast, state} = parse_indexed_family(state, name, head_params, token)
+        {put_type_decl_source_info(ast, token, name_token, state), state}
 
       true ->
         type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
-        parse_type_def_adt(state, name, type_params, token)
+        parse_type_def_adt(state, name, type_params, token, name_token)
     end
   end
 
@@ -6681,7 +6685,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   # Ordinary ADT / alias body: `type NAME(type_params) = …`.
-  defp parse_type_def_adt(state, name, type_params, token) do
+  defp parse_type_def_adt(state, name, type_params, token, name_token) do
     state = skip_newlines(state)
 
     {pre_assign_block, state} =
@@ -6817,8 +6821,15 @@ defmodule Cure.Compiler.Parser do
         _, acc -> acc
       end)
 
-    {ast, state}
+    {put_type_decl_source_info(ast, token, name_token, state), state}
   end
+
+  defp put_type_decl_source_info({tag, meta, payload}, %Token{} = token, %Token{} = name_token, state)
+       when is_list(meta) do
+    {tag, put_container_source_info(meta, token, name_token, name_token, state), payload}
+  end
+
+  defp put_type_decl_source_info(ast, _token, _name_token, _state), do: ast
 
   defp layout_block_count(opened_block, pre_assign_block) do
     Enum.count([opened_block, pre_assign_block], & &1)
