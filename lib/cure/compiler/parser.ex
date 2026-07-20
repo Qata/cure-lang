@@ -5090,11 +5090,50 @@ defmodule Cure.Compiler.Parser do
       meta =
         if guard, do: [pattern: pattern, guard: guard, impossible: true], else: [pattern: pattern, impossible: true]
 
+      meta = put_match_arm_source_info(meta, pattern, guard, nil, state)
+
       {{:match_arm, meta, [nil]}, state}
     else
       {body, state} = parse_expr_or_block(state)
       meta = if guard, do: [pattern: pattern, guard: guard], else: [pattern: pattern]
+      meta = put_match_arm_source_info(meta, pattern, guard, body, state)
       {{:match_arm, meta, [body]}, state}
+    end
+  end
+
+  defp put_match_arm_source_info(meta, pattern, guard, body, state) do
+    pattern_span = first_node_source_span(pattern)
+    guard_span = first_node_source_span(guard)
+    body_span = first_node_source_span(body)
+
+    whole =
+      case {pattern_span, last_authored_token(state)} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    if whole do
+      Keyword.put(meta, :source_info, %SourceInfo{
+        whole: whole,
+        pattern: pattern_span,
+        guard: guard_span,
+        body: body_span
+      })
+    else
+      meta
+    end
+  end
+
+  defp first_node_source_span(node) do
+    case node_source_span(node) do
+      [span | _] -> span
+      _ -> nil
     end
   end
 

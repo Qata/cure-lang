@@ -65,6 +65,20 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, Metadata.source_info(parameter_type_meta).whole) == "Option(Int)"
   end
 
+  test "match arms retain parser-owned pattern, guard, body, and whole spans" do
+    source = "fn choose(x: Int) -> Int = match x\n  n when n > 0 -> n\n  _ -> 0\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "match.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "match.cure", emit_events: false, prelude_macros: false)
+
+    {:match_arm, arm_meta, _} = find_node(ast, :match_arm)
+    info = Metadata.source_info(arm_meta)
+
+    assert slice(source, info.whole) == "n when n > 0 -> n"
+    assert slice(source, info.pattern) == "n"
+    assert slice(source, info.guard) == "n > 0"
+    assert slice(source, info.body) == "n"
+  end
+
   test "operators and containers retain token-owned focused ranges" do
     source =
       "mod Demo\n  fn answer() -> Int = 1 + 2\n  fn xs() -> List(Int) = [1, 2]\n  fn pair() -> Tuple(Int, Int) = %[1, 2]\n" <>
