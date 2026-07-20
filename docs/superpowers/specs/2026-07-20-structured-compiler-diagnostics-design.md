@@ -31,6 +31,10 @@ introduce diagnostic metadata into definitional equality.
 
 The architecture combines three precedents:
 
+- **Elixir:** `Code.diagnostic/1`, `Code.with_diagnostics/2`,
+  `Code.print_diagnostic/2`, `Kernel.ParallelCompiler`, and
+  `Mix.Task.Compiler.Diagnostic` define the host-facing diagnostic envelope,
+  capture path, coordinate conventions, and Mix/editor integration.
 - **Gleam:** domain errors are converted into one shared diagnostic value used
   by both source-caret terminal rendering and LSP output.
 - **Racket:** syntax carries source identity independently from expansion
@@ -155,7 +159,30 @@ Tests, Antigen assays, CLI integrations, and editor clients match stable
 diagnostic codes and structured fields. They must not require exact internal
 error tuple arity or prose, except dedicated rendering snapshots.
 
-## 4. Canonical data model
+## 4. Canonical data model and Elixir envelope
+
+Cure does not invent a second BEAM-facing compiler diagnostic protocol.
+`Cure.Diagnostic` is the richer canonical semantic value, and it projects
+losslessly into Elixir's compiler diagnostic envelope by storing the complete
+Cure value in `:details`. `Code.diagnostic/1` and
+`Mix.Task.Compiler.Diagnostic` are host integration formats, not replacements
+for Cure's typed payload.
+
+The shared fields deliberately align:
+
+| Cure | Elixir `Code.diagnostic` / Mix |
+| --- | --- |
+| `severity` | `:severity` |
+| primary path | `:file` |
+| authored/root path | `:source` |
+| primary start | `:position` |
+| primary end | `:span` |
+| rendered title/message | `:message` |
+| complete diagnostic | `:details` |
+
+The host envelope cannot represent multiple labelled ranges, structured edits,
+stable codes, typed semantic payloads, or expansion provenance directly. Those
+remain in `:details` and in Cure's JSON/LSP projections.
 
 The implementation language may use Elixir structs internally, but the model
 is language-neutral and serializable.
@@ -168,15 +195,17 @@ Span
   path          optional user-facing path
   start_byte    zero-based byte offset, inclusive
   end_byte      zero-based byte offset, exclusive
-  start_line    one-based line
-  start_column  one-based Unicode display column
-  end_line      one-based line
-  end_column    one-based Unicode display column
+  start_line    one-based line, matching Code.position
+  start_column  one-based Unicode scalar column, matching Code.position
+  end_line      one-based line, matching Code.diagnostic :span
+  end_column    one-based Unicode scalar column, matching Code.diagnostic :span
 ```
 
-Byte offsets are authoritative for slicing and LSP conversion. Line/column
-values are cached presentation coordinates derived under one canonical UTF-8
-and tab-width policy. A zero-width span is allowed for insertion suggestions.
+Byte offsets are authoritative for slicing. Line/column values use Elixir's
+one-based `Code.diagnostic` convention and are cached presentation coordinates
+derived under one canonical UTF-8 and tab-width policy. The LSP adapter converts
+columns to zero-based UTF-16 code-unit offsets. A zero-width span is allowed for
+insertion suggestions.
 
 Source buffers are stored once in a compilation source registry and referenced
 by `source_id`; diagnostics do not copy the complete source string per label.
@@ -406,6 +435,22 @@ diagnostic is honestly locationless and identifies the checked definition.
 
 ## 7. Rendering
 
+### 7.0 Elixir and Mix adapters
+
+Every `Cure.Diagnostic` can be converted to a `Code.diagnostic`-compatible map
+and to `Mix.Task.Compiler.Diagnostic`. The adapter sets `:source`, `:file`,
+`:position`, `:span`, `:severity`, and `:message`, retains an honest stacktrace
+when one exists, and places the complete Cure diagnostic in `:details`.
+
+BEAM compiler warnings and errors are captured with `Code.with_diagnostics/2`
+or received from `Kernel.ParallelCompiler`; adapters preserve their original
+`:details` rather than parsing formatted messages.
+
+`Code.print_diagnostic/2` may render a simple, single-location diagnostic when
+its output satisfies the Cure presentation contract. It is a fallback and host
+interop path, not the canonical renderer: it cannot show Cure's cross-file
+labels, macro provenance, structured suggestions, or unsaved source buffers.
+
 ### 7.1 Terminal renderer
 
 The default terminal renderer provides:
@@ -572,6 +617,8 @@ default rendering still names and blames the macro invocation.
 2. Implement stable code/category extraction for legacy and new errors.
 3. Migrate Antigen and non-rendering tests away from exact legacy shapes.
 4. Establish the code registry and `cure explain` integration.
+5. Implement lossless `Code.diagnostic` and `Mix.Task.Compiler.Diagnostic`
+   adapters with the Cure value retained in `:details`.
 
 ### Phase C — renderers and source registry
 
@@ -579,6 +626,8 @@ default rendering still names and blames the macro invocation.
 2. Implement terminal caret/multi-label rendering.
 3. Implement deterministic plain and JSON renderers.
 4. Connect LSP diagnostics and code actions to the same values.
+5. Capture host compiler diagnostics through `Code.with_diagnostics/2` and
+   `Kernel.ParallelCompiler` without scraping terminal prose.
 
 ### Phase D — name-resolution vertical slice
 
@@ -629,13 +678,17 @@ The 0.34 diagnostic foundation is complete only when:
    imports, and package boundaries; applicability is conservative.
 7. **Machine parity:** terminal, JSON, and LSP outputs originate from the same
    diagnostic and agree on code and ranges.
-8. **Compatibility proof:** Antigen and behavioral tests use stable code/payload
+8. **BEAM interop:** every Cure diagnostic round-trips through its
+   `Code.diagnostic`/Mix envelope without losing its stable code, payload,
+   labels, suggestions, or provenance from `:details`; captured BEAM
+   diagnostics preserve their native details.
+9. **Compatibility proof:** Antigen and behavioral tests use stable code/payload
    matching rather than legacy tuple arity.
-9. **TCB gate:** kernel rejection-path changes pass trusted-core tests, complete
+10. **TCB gate:** kernel rejection-path changes pass trusted-core tests, complete
    Antigen, and prove no accepted verdict changed.
-10. **Performance:** source/provenance retention stays within agreed compile-time
+11. **Performance:** source/provenance retention stays within agreed compile-time
     and memory budgets on repository and generated macro corpora.
-11. **Full suite:** formatter, warnings-as-errors, focused suites, and complete
+12. **Full suite:** formatter, warnings-as-errors, focused suites, and complete
     ExUnit are green.
 
 ## 13. Explicitly deferred to 0.35
@@ -655,7 +708,21 @@ second diagnostic framework is forbidden.
 
 ## 14. Reference implementation findings
 
-### 14.1 Gleam
+### 14.1 Elixir
+
+Elixir 1.15 and later provide a shared compiler diagnostic map through
+`Code.with_diagnostics/2`, `Code.print_diagnostic/2`, and
+`Kernel.ParallelCompiler`. Mix exposes the corresponding
+`Mix.Task.Compiler.Diagnostic` for compiler tasks and editor integrations. The
+model distinguishes authored `:source` from displayed `:file`, supports a
+primary start/end range, carries an optional stacktrace, and reserves
+`:details` for producer-specific structured information.
+
+Cure adopts that envelope and its coordinate conventions. Cure retains its own
+semantic value because the Elixir envelope has no stable codes, multiple
+labels, structured edits, typed payload schema, or explicit macro provenance.
+
+### 14.2 Gleam
 
 The local Gleam compiler (`/Users/ch/Develop/gleam-gleam`) demonstrates:
 
@@ -668,7 +735,7 @@ The local Gleam compiler (`/Users/ch/Develop/gleam-gleam`) demonstrates:
 Cure adds stable codes, richer severity, structured edits, typed payloads, and
 explicit provenance.
 
-### 14.2 Racket
+### 14.3 Racket
 
 The local Racket implementation (`/Users/ch/Develop/racket`) demonstrates:
 
