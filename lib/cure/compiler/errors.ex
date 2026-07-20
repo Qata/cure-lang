@@ -392,12 +392,10 @@ defmodule Cure.Compiler.Errors do
   """
   @spec format_with_source(term(), String.t(), String.t()) :: String.t()
   def format_with_source(error, file, source) do
-    if structured_error?(error) do
-      {diagnostic, registry} = to_diagnostic(error, file, source)
-      Cure.Diagnostic.Renderer.plain(diagnostic, registry)
-    else
-      format_legacy_with_source(error, file, source)
-    end
+    {diagnostic, registry} = to_diagnostic(error, file, source)
+
+    Cure.Diagnostic.Sink.new(format: :plain, registry: registry)
+    |> Cure.Diagnostic.Sink.render(diagnostic)
   end
 
   @doc "Convert an error at the compiler presentation boundary."
@@ -425,172 +423,6 @@ defmodule Cure.Compiler.Errors do
 
     {diagnostic, registry}
   end
-
-  defp format_legacy_with_source(error, file, source) do
-    base = format_error(error, file)
-    line_num = extract_line(error)
-
-    if line_num > 0 and source != "" do
-      lines = String.split(source, "\n")
-
-      case Enum.at(lines, line_num - 1) do
-        nil ->
-          base
-
-        src_line ->
-          col = extract_col(error)
-          caret = if col > 0, do: "\n      | #{String.duplicate(" ", col - 1)}^", else: ""
-          base <> "\n      | #{src_line}" <> caret
-      end
-    else
-      base
-    end
-  end
-
-  defp structured_error?({:unknown_global, _name}), do: true
-  defp structured_error?({:unknown_global, _name, details}) when is_map(details), do: true
-  defp structured_error?({:unknown_name, details}) when is_map(details), do: true
-  defp structured_error?({:codegen_error, {:unknown_global, _name}}), do: true
-  defp structured_error?({:codegen_error, {:unknown_global, _name, details}}) when is_map(details), do: true
-  defp structured_error?({:unknown_constructor, _name}), do: true
-  defp structured_error?({:type_mismatch, _message, meta}) when is_list(meta), do: true
-  defp structured_error?({:type_error, errors}) when is_list(errors), do: true
-  defp structured_error?({:unknown_erasure_class, _name, _class}), do: true
-  defp structured_error?({:erases_on_non_opaque, _name}), do: true
-  defp structured_error?({:non_strictly_positive, _family}), do: true
-  defp structured_error?({:erased_used_relevantly, details}) when is_map(details), do: true
-  defp structured_error?({:usage_violation, details}) when is_map(details), do: true
-  defp structured_error?({:duplicate_type, _name}), do: true
-  defp structured_error?({:duplicate_ctor, _name}), do: true
-  defp structured_error?({:duplicate_field, _name}), do: true
-  defp structured_error?({:duplicate_parameter, _name}), do: true
-  defp structured_error?({:reserved_union_type_name, _name}), do: true
-  defp structured_error?({:constructor_function_collision, _name}), do: true
-  defp structured_error?({:duplicate_definition, _name}), do: true
-  defp structured_error?({:overlapping_overload, _name, _arity}), do: true
-  defp structured_error?({:sibling_module_collision, _name, _owners}), do: true
-  defp structured_error?({:precedence_cycle, _groups}), do: true
-  defp structured_error?({:builtin_operator_not_overloadable, _operator}), do: true
-  defp structured_error?({:unsupported_operand_type, _operator}), do: true
-  defp structured_error?({:no_operator_meaning, _operator}), do: true
-  defp structured_error?({:cannot_infer_match_type, _expression}), do: true
-  defp structured_error?({:lambda_expected_pi, _expected}), do: true
-  defp structured_error?({:unsupported_async, _message, meta}) when is_list(meta), do: true
-  defp structured_error?({:splice_outside_quote, _tag, meta}) when is_list(meta), do: true
-  defp structured_error?({:unbound_variable, _message, meta}) when is_list(meta), do: true
-  defp structured_error?({:arity_mismatch, _message, meta}) when is_list(meta), do: true
-
-  defp structured_error?({:extern_arity_mismatch, _name, declared, present})
-       when is_integer(declared) and is_integer(present),
-       do: true
-
-  defp structured_error?({:constructor_arity_mismatch, _name}), do: true
-  defp structured_error?({:tuple_arity_mismatch, _direction, _details}), do: true
-  defp structured_error?({:with_rematch_arity_mismatch, _expected, _actual}), do: true
-  defp structured_error?({:typed_pattern_type_mismatch, _type_ast}), do: true
-
-  defp structured_error?({:extern_untyped_head, _message, meta}) when is_list(meta), do: true
-  defp structured_error?({:extern_has_body, _message, meta}) when is_list(meta), do: true
-  defp structured_error?({:unknown_record, _name}), do: true
-  defp structured_error?({:unknown_field, _record, _field}), do: true
-  defp structured_error?({:record_field_mismatch, _name}), do: true
-  defp structured_error?({:unknown_type, _name}), do: true
-  defp structured_error?({:unknown_module, _name}), do: true
-  defp structured_error?({:unknown_member, _module, _name}), do: true
-  defp structured_error?({:projection_non_record, _field}), do: true
-  defp structured_error?({:proof_shape_mismatch, _message, _name}), do: true
-  defp structured_error?({:ambiguous_proof_search, _goal, candidates}) when is_list(candidates), do: true
-  defp structured_error?({:totality_required, _name}), do: true
-  defp structured_error?({:compile_time_totality, _name, _reason}), do: true
-
-  defp structured_error?({kind, _message, meta})
-       when kind in [:pickup_no_else, :pickup_else_not_last, :pickup_multiple_else] and is_list(meta),
-       do: true
-
-  defp structured_error?({:duplicate_module_identity, _name, _other_path, _path}), do: true
-  defp structured_error?({:duplicate_module_identity, _name, paths}) when is_list(paths), do: true
-  defp structured_error?({:unfilled_hole, _name}), do: true
-  defp structured_error?({:unsolved_metavariables, _name}), do: true
-  defp structured_error?({:no_instance, _interface, _head}), do: true
-  defp structured_error?({:no_named_instance, _name}), do: true
-  defp structured_error?({:overlapping_instance, _interface, _head}), do: true
-  defp structured_error?({:overlapping_named_instance, _name, _interface, _head}), do: true
-  defp structured_error?({:unsupported_pattern, _shape}), do: true
-
-  defp structured_error?({kind, _name})
-       when kind in [:unknown_ctor, :foreign_ctor, :unknown_pattern_constructor, :unknown_family],
-       do: true
-
-  defp structured_error?({:lift_module_error, details}) when is_map(details), do: true
-  defp structured_error?({:conversion_failure, _actual, _expected}), do: true
-  defp structured_error?({:codegen_error, {:conversion_failure, _actual, _expected}}), do: true
-
-  defp structured_error?({kind, _, _})
-       when kind in [:unbound_variable, :arity_mismatch, :ambiguous_name, :duplicate_module],
-       do: true
-
-  defp structured_error?({:import_cycle, _hops}), do: true
-  defp structured_error?({:unresolved_import, _, _, _, _}), do: true
-  defp structured_error?({:unexpected_token, _, _, _}), do: true
-  defp structured_error?({:expected_token, _, _, _, _, _}), do: true
-  defp structured_error?({:expected, _, :got, _, _, _}), do: true
-  defp structured_error?({:parse_recovered, _, _, _}), do: true
-  defp structured_error?({:lambda_block_unterminated, _, _, _}), do: true
-  defp structured_error?({:lex_error, _reason}), do: true
-  defp structured_error?({:missing_diagnosis, _points}), do: true
-  defp structured_error?({:rule_unpinned, _keywords}), do: true
-  defp structured_error?({:example_mismatch, _mismatches}), do: true
-  defp structured_error?({:example_type_mismatch, _failures}), do: true
-  defp structured_error?({:computed_example_error, _failures}), do: true
-  defp structured_error?({:computed_macro_error, meta, _reason}) when is_list(meta), do: true
-  defp structured_error?({:macro_expansion_cycle, chain}) when is_list(chain), do: true
-
-  defp structured_error?({:macro_expansion_budget, kind, frames})
-       when is_atom(kind) and is_list(frames),
-       do: true
-
-  defp structured_error?({:expansion_ill_typed, details}) when is_map(details), do: true
-  defp structured_error?({:macro_use_mismatch, _keyword, _expected, _got, _line, _column}), do: true
-  defp structured_error?({:malformed_hole, _line, _column}), do: true
-  defp structured_error?({:file_read_error, _path, _reason}), do: true
-  defp structured_error?({:file_write_error, _path, _reason}), do: true
-  defp structured_error?({:dependency_resolution_failed, _reason}), do: true
-  defp structured_error?({:command_failed, _command, _reason}), do: true
-  defp structured_error?({:migration_warning, details}) when is_map(details), do: true
-  defp structured_error?({:compiler_warning, details}) when is_map(details), do: true
-  defp structured_error?({:export_unmappable, _reason}), do: true
-  defp structured_error?({:snap_missing, _path}), do: true
-  defp structured_error?({:configuration_warning, _message}), do: true
-  defp structured_error?({:usage_error, _message}), do: true
-  defp structured_error?({:artifact_error, _message}), do: true
-  defp structured_error?({:proof_file_missing, _detail}), do: true
-  defp structured_error?({:proof_verification_failed, _detail}), do: true
-  defp structured_error?({:proof_schema_incompatible, _detail}), do: true
-  defp structured_error?({:snap_schema_incompatible, _detail}), do: true
-  defp structured_error?({:registry_signature_invalid, _detail}), do: true
-  defp structured_error?({:transparency_log_unreachable, _detail}), do: true
-  defp structured_error?({:registry_fetch_failed, _detail}), do: true
-  defp structured_error?({:registry_hash_mismatch, _detail}), do: true
-  defp structured_error?({:registry_package_not_found, _detail}), do: true
-  defp structured_error?({:version_conflict, _name, _constraints}), do: true
-  defp structured_error?({:undocumented_public_function, _file, _line}), do: true
-  defp structured_error?({:beam_lint_error, _errors, _warnings}), do: true
-  defp structured_error?({:beam_lint_error, _errors}), do: true
-  defp structured_error?({:final_core_violation, rejections}) when is_list(rejections), do: true
-  defp structured_error?({:final_core_violation, _name, rejections}) when is_list(rejections), do: true
-  defp structured_error?({:expected_module, _ast}), do: true
-  defp structured_error?({:unsupported_container, _type}), do: true
-  defp structured_error?({:edition_error, {:unknown_edition, _edition}}), do: true
-
-  defp structured_error?({kind, _, _})
-       when kind in [:edition_pragma_placement, :edition_pragma_malformed, :edition_pragma_unknown], do: true
-
-  defp structured_error?({:codegen_error, _reason}), do: true
-  defp structured_error?({:parse_error, [reason | _]}), do: structured_error?(reason)
-  defp structured_error?({:source_context, reason, context}) when is_map(context), do: structured_error?(reason)
-  defp structured_error?([reason | _]), do: structured_error?(reason)
-  defp structured_error?([]), do: true
-  defp structured_error?(_error), do: false
 
   defp operational_error?({:file_read_error, _, _}), do: true
   defp operational_error?({:file_write_error, _, _}), do: true
@@ -760,13 +592,6 @@ defmodule Cure.Compiler.Errors do
   end
 
   defp lex_error_location(_reason), do: {0, 0}
-
-  defp extract_line({_, _, meta}) when is_list(meta), do: Keyword.get(meta, :line, 0)
-  defp extract_line({_, _, line, _col}) when is_integer(line), do: line
-  defp extract_line(_), do: 0
-
-  defp extract_col({_, _, _line, col}) when is_integer(col), do: col
-  defp extract_col(_), do: 0
 
   # Levenshtein distance for typo suggestions
   defp levenshtein(s, t) do
