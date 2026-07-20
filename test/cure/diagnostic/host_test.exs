@@ -115,7 +115,8 @@ defmodule Cure.Diagnostic.HostTest do
     rendered =
       Host.render(
         {:final_core_violation, :run, [%{clause: :no_hole, message: "hole present in Core term"}]},
-        "demo.cure"
+        "demo.cure",
+        "fn run() -> Int = 1\nfn other() -> Int = 2\n"
       )
 
     assert rendered =~ "[E101]"
@@ -224,6 +225,20 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "linear"
     assert rendered =~ "unrestricted"
     refute rendered =~ ":usage_violation"
+  end
+
+  test "renders missing interface instances with contextual type information" do
+    rendered =
+      Host.render(
+        {:source_context, {:no_instance, :Comparable, {:rigid, 0}}, %{expectation_origin: :call_argument}},
+        "demo.cure"
+      )
+
+    assert rendered =~ "[E093]"
+    assert rendered =~ "NO INSTANCE FOUND"
+    assert rendered =~ "Comparable"
+    assert rendered =~ "{:rigid, 0}"
+    refute rendered =~ ":no_instance"
   end
 
   test "renders declaration conflicts with their authored identity" do

@@ -234,6 +234,34 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:source_context, {:no_instance, interface, head}, context}, opts)
+      when is_map(context) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+    origin = Map.get(context, :expectation_origin, :implicit)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "No instance found",
+      body:
+        Doc.stack([
+          Doc.paragraph(
+            "Cure could not find an implementation of `#{name_to_string(interface)}` for the required type `#{surface_type(head)}`."
+          ),
+          Doc.paragraph("Add an instance, import the module that provides it, or change the expression's type.")
+        ]),
+      primary: primary_label(opts, "this implicit constraint has no available instance"),
+      payload: %{
+        kind: :no_instance,
+        interface: interface,
+        head: head,
+        expectation_origin: origin,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
   def from_error({:source_context, {:unknown_record, name}, context}, opts) when is_map(context) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
 

@@ -505,6 +505,7 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:duplicate_module_identity, _name, paths}) when is_list(paths), do: true
   defp structured_error?({:unfilled_hole, _name}), do: true
   defp structured_error?({:unsolved_metavariables, _name}), do: true
+  defp structured_error?({:no_instance, _interface, _head}), do: true
   defp structured_error?({:unsupported_pattern, _shape}), do: true
 
   defp structured_error?({kind, _name})
