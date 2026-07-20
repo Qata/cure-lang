@@ -56,6 +56,14 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:source_context, {kind, name}, context}, opts)
+      when kind in [:unknown_ctor, :foreign_ctor, :unknown_pattern_constructor, :unknown_family] and
+             is_map(context) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+    namespace = if kind == :unknown_family, do: :type, else: :constructor
+    unknown_name(namespace, name, Keyword.put(opts, :checking, Map.get(context, :checking)))
+  end
+
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
       opts
