@@ -95,6 +95,10 @@ defmodule Cure.DiagnosticExerciserTest do
       Operational.compiler_warning(%{file: "demo.cure", line: 3, message: "check this"}),
       Operational.export_unmappable("dependent type"),
       Operational.snap_missing("gone.cure"),
+      Operational.proof_file_missing("demo.cureproof"),
+      Operational.proof_verification_failed("Demo#lemma"),
+      Operational.proof_schema_incompatible("version 2"),
+      Operational.snap_schema_incompatible("version 9"),
       Operational.configuration_warning("invalid setting"),
       Operational.usage("Usage: cure compile FILE"),
       Operational.artifact_error("artifact is invalid"),
@@ -113,7 +117,7 @@ defmodule Cure.DiagnosticExerciserTest do
     end)
 
     operational_codes = Enum.map(diagnostics, & &1.code)
-    assert operational_codes == ~w[E095 E096 E097 E098 W001 W000 E068 E070 W002 E099 E100 E101]
+    assert operational_codes == ~w[E095 E096 E097 E098 W001 W000 E068 E070 E065 E066 E067 E069 W002 E099 E100 E101]
 
     registered_codes = Cure.Compiler.Errors.list_all() |> Enum.map(&elem(&1, 0)) |> MapSet.new()
     covered_codes = MapSet.new(compiler_codes ++ operational_codes)

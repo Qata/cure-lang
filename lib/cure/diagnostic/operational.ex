@@ -18,6 +18,10 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:configuration_warning, message}, _opts), do: configuration_warning(message)
   def from_error({:usage_error, message}, _opts), do: usage(message)
   def from_error({:artifact_error, message}, _opts), do: artifact_error(message)
+  def from_error({:proof_file_missing, detail}, _opts), do: proof_file_missing(detail)
+  def from_error({:proof_verification_failed, detail}, _opts), do: proof_verification_failed(detail)
+  def from_error({:proof_schema_incompatible, detail}, _opts), do: proof_schema_incompatible(detail)
+  def from_error({:snap_schema_incompatible, detail}, _opts), do: snap_schema_incompatible(detail)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
@@ -94,6 +98,18 @@ defmodule Cure.Diagnostic.Operational do
   def usage(message), do: diagnostic("E099", :usage_error, message, %{})
   def artifact_error(message), do: diagnostic("E100", :artifact_error, message, %{})
 
+  def proof_file_missing(detail),
+    do: diagnostic("E065", :proof_file_missing, "Proof file is missing: #{detail}", %{detail: detail})
+
+  def proof_verification_failed(detail),
+    do: diagnostic("E066", :proof_verification_failed, "Proof verification failed: #{detail}", %{detail: detail})
+
+  def proof_schema_incompatible(detail),
+    do: diagnostic("E067", :proof_schema_incompatible, "Proof schema is incompatible: #{detail}", %{detail: detail})
+
+  def snap_schema_incompatible(detail),
+    do: diagnostic("E069", :snap_schema_incompatible, "Snap schema is incompatible: #{detail}", %{detail: detail})
+
   @doc "Build E101 only for a caught exception at an explicit compiler boundary."
   def internal_exception(exception, stacktrace, opts \\ []) when is_exception(exception) and is_list(stacktrace) do
     fingerprint = fingerprint({exception.__struct__, Exception.message(exception), stack_head(stacktrace)})
@@ -154,6 +170,10 @@ defmodule Cure.Diagnostic.Operational do
   defp title(:configuration_warning), do: "Invalid configuration"
   defp title(:usage_error), do: "Invalid command usage"
   defp title(:artifact_error), do: "Invalid build artifact"
+  defp title(:proof_file_missing), do: "Proof file missing"
+  defp title(:proof_verification_failed), do: "Proof verification failed"
+  defp title(:proof_schema_incompatible), do: "Proof schema incompatible"
+  defp title(:snap_schema_incompatible), do: "Snap schema incompatible"
 
   defp fingerprint(term) do
     term
