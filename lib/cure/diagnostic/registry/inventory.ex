@@ -20,7 +20,7 @@ defmodule Cure.Diagnostic.Registry.Inventory do
 
     %{
       error_constructors: Enum.filter(sites, &match_site?(&1, ~r/\{:error\s*,/)),
-      deliberate_raises: Enum.filter(sites, &match_site?(&1, ~r/\braise\s*\(|\braise\s*$/)),
+      deliberate_raises: Enum.filter(sites, &match_site?(&1, ~r/\braise\b/)),
       formatter_consumers: Enum.filter(sites, &match_site?(&1, ~r/format_error|format_with_source|Renderer\./)),
       stderr_sites: Enum.filter(sites, &match_site?(&1, ~r/IO\.(puts|write)|Mix\.shell\(\)\.(error|info)/))
     }
@@ -29,6 +29,18 @@ defmodule Cure.Diagnostic.Registry.Inventory do
   @spec default_paths() :: [Path.t()]
   def default_paths do
     Path.wildcard("lib/**/*.ex")
+  end
+
+  @doc "Validate inventory invariants required by the shared output boundary."
+  @spec validate(map()) :: :ok | {:error, term()}
+  def validate(inventory) when is_map(inventory) do
+    direct_renderer_sites =
+      Enum.filter(inventory.formatter_consumers, fn %{text: text, path: path} ->
+        String.contains?(text, "Renderer.plain") and
+          path not in ["lib/cure/diagnostic/sink.ex", "lib/cure/diagnostic/registry/inventory.ex"]
+      end)
+
+    if direct_renderer_sites == [], do: :ok, else: {:error, {:direct_renderer_bypass, direct_renderer_sites}}
   end
 
   defp scan_file(path) do

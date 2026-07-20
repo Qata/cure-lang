@@ -101,6 +101,7 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert :ok = Registry.validate_reachability()
     assert :ok = Registry.validate_producer_coverage()
     assert :ok = Registry.validate_producer_catalog()
+    assert :ok = Cure.Diagnostic.Registry.Inventory.validate(inventory)
   end
 
   test "source validation reports an unregistered stable code" do

@@ -60,10 +60,12 @@ defmodule Mix.Tasks.Cure.Diagnostics do
   defp validate_inventory do
     inventory = Cure.Diagnostic.Registry.Inventory.scan()
 
-    if inventory.error_constructors == [] do
-      {:error, :empty_producer_inventory}
-    else
-      :ok
+    cond do
+      inventory.error_constructors == [] -> {:error, :empty_producer_inventory}
+      inventory.deliberate_raises == [] -> {:error, :empty_raise_inventory}
+      inventory.formatter_consumers == [] -> {:error, :empty_formatter_inventory}
+      inventory.stderr_sites == [] -> {:error, :empty_stderr_inventory}
+      true -> Cure.Diagnostic.Registry.Inventory.validate(inventory)
     end
   end
 end
