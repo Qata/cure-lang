@@ -68,6 +68,16 @@ defmodule Cure.Diagnostic.Suggestion do
         }
 end
 
+defmodule Cure.Diagnostic.UnhandledError do
+  @moduledoc "Raised in development when a domain error lacks an explicit diagnostic converter."
+  defexception [:error]
+
+  @impl true
+  def message(%__MODULE__{error: error}) do
+    "domain error has no registered diagnostic conversion: #{inspect(error)}"
+  end
+end
+
 defmodule Cure.Diagnostic do
   @moduledoc """
   Shared compiler diagnostic consumed by terminal, JSON, and editor adapters.

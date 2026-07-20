@@ -48,6 +48,18 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:expected, expected, :got, actual, line, column}, opts) do
+    Diagnostic.new(
+      code: "E094",
+      key: :unexpected_token,
+      severity: :error,
+      title: "Syntax error",
+      message: "Expected #{syntax_name(expected)}, but found #{syntax_name(actual)}.",
+      primary: primary_label(opts, "unexpected syntax here"),
+      payload: %{expected: expected, actual: actual, line: line, column: column}
+    )
+  end
+
   def from_error({:lift_module_error, details}, opts) when is_map(details) do
     macro = get_in(details, [:source_provenance, :macro]) || :macro
     cause = Map.get(details, :cause)
@@ -71,21 +83,7 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error(error, opts) do
-    key = Diagnostic.key(error) || :compilation_error
-
-    Diagnostic.new(
-      code: Keyword.get(opts, :code, "E000"),
-      key: key,
-      severity: Keyword.get(opts, :severity, :error),
-      title: Keyword.get(opts, :title, "Compilation error"),
-      message: Keyword.get(opts, :message, "The compiler rejected this program."),
-      primary: primary_label(opts),
-      notes: Keyword.get(opts, :notes, []),
-      provenance: Keyword.get(opts, :provenance, []),
-      payload: %{legacy_reason: inspect(error)}
-    )
-  end
+  def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
   @spec unknown_name(atom(), term(), keyword()) :: Diagnostic.t()
   def unknown_name(namespace, name, opts \\ []) do
@@ -112,7 +110,7 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  defp primary_label(opts, default_message \\ nil) do
+  defp primary_label(opts, default_message) do
     case Keyword.get(opts, :span) do
       %Span{} = span ->
         %Label{
@@ -183,4 +181,7 @@ defmodule Cure.Diagnostic.Adapter do
   rescue
     ArgumentError -> inspect(term)
   end
+
+  defp syntax_name(name) when is_atom(name), do: "`#{name}`"
+  defp syntax_name(name), do: inspect(name)
 end

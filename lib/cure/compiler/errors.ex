@@ -436,10 +436,10 @@ defmodule Cure.Compiler.Errors do
     )
   end
 
-  # -- Catch-all ---------------------------------------------------------------
+  # -- Exhaustiveness guard ----------------------------------------------------
 
   def format_error(error, file) do
-    format_diagnostic("error", "compilation error", file, 0, inspect(error))
+    raise Cure.Diagnostic.UnhandledError, error: %{error: error, file: file}
   end
 
   defp format_generated_syntax_reason({:invalid_generated_syntax, {:raw_syntax_in_expansion, path}}),
@@ -1546,6 +1546,15 @@ defmodule Cure.Compiler.Errors do
     Fix the expression, its annotation, or the relevant dependent index so the
     actual type agrees with the expected type.
     """,
+    "E094" => """
+    E094: Syntax Error
+
+    The parser encountered a token or construct that cannot appear at this
+    point. The diagnostic records the expected and actual syntax categories and
+    labels the offending authored source.
+
+    Fix the indicated delimiter, keyword, expression, or declaration shape.
+    """,
     "W088" => """
     W088: Unresolved Import
 
@@ -1722,6 +1731,11 @@ defmodule Cure.Compiler.Errors do
   defp error_location({:lift_module_error, %{source_provenance: %{line: line, col: col}}}), do: {line, col}
   defp error_location({_, _, meta}) when is_list(meta), do: {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)}
   defp error_location({_, _, line, col}) when is_integer(line) and is_integer(col), do: {line, col}
+
+  defp error_location({:expected, _expected, :got, _actual, line, col})
+       when is_integer(line) and is_integer(col),
+       do: {line, col}
+
   defp error_location(_error), do: {0, 0}
 
   # -- Formatting Helper -------------------------------------------------------

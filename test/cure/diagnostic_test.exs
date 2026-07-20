@@ -271,4 +271,14 @@ defmodule Cure.DiagnosticTest do
       Diagnostic.new(code: "unknown", key: :bad, severity: :error, title: "Bad", message: "bad")
     end
   end
+
+  test "unregistered domain errors fail loudly instead of becoming generic diagnostics" do
+    assert_raise Cure.Diagnostic.UnhandledError, ~r/no registered diagnostic conversion/, fn ->
+      Adapter.from_error({:new_unregistered_error, :detail})
+    end
+
+    assert_raise Cure.Diagnostic.UnhandledError, fn ->
+      Cure.Compiler.Errors.format_error({:new_unregistered_error, :detail}, "source.cure")
+    end
+  end
 end

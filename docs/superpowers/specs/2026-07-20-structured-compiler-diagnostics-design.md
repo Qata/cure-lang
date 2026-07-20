@@ -323,7 +323,21 @@ that maps them to a stable code and records that their detail is unavailable.
 No new macro verifier may return only `:invalid_graph`, `:unknown_child`, or
 `:ambiguous_transition`. It must name and locate the relevant declarations.
 
-### 5.3 Unknown-name errors
+### 5.3 Diagnostic conversion is exhaustive
+
+There is no generic domain-error catch-all and no public "unclassified error"
+diagnostic. Every error variant that a compiler phase can deliberately return
+has an explicit conversion clause, registered stable code, payload schema, and
+test. Adding a domain-error variant without its conversion fails development
+and CI loudly through `Cure.Diagnostic.UnhandledError`; it must never silently
+fall through to `inspect(reason)` or generic prose.
+
+Actual host exceptions and impossible unexpected return shapes cross a
+separate top-level crash boundary and become a stable Internal Compiler Error
+diagnostic. That boundary accepts exceptions with stacktraces, not ordinary
+domain-error terms, and therefore cannot conceal an incomplete converter.
+
+### 5.4 Unknown-name errors
 
 Unknown names are classified before rendering:
 
@@ -350,7 +364,7 @@ This avoids putting presentation metadata into trusted Core terms. The caller
 may attach the nearest honest elaboration/declaration context to a locationless
 kernel diagnostic.
 
-### 5.4 Type and conversion errors
+### 5.5 Type and conversion errors
 
 Expected and actual types are retained as semantic values until they can be
 re-presented using surface syntax and stable names. The diagnostic may retain
@@ -360,7 +374,7 @@ Dependent mismatches include relevant indices, normalized forms, local
 telescope entries, and unresolved constraints without dumping unrelated
 compiler state.
 
-### 5.5 Multiple diagnostics and recovery
+### 5.6 Multiple diagnostics and recovery
 
 0.34 does not require global error recovery. A phase may still stop at its
 first fatal diagnostic. Where a verifier already examines a closed collection

@@ -387,16 +387,16 @@ defmodule Cure.LSP.Server do
   # -- Diagnostics -------------------------------------------------------------
 
   @doc false
-  def compute_diagnostics(_uri, text) do
+  def compute_diagnostics(uri, text) do
     case Lexer.tokenize(text, emit_events: false) do
       {:ok, tokens} ->
         case Parser.parse(tokens, emit_events: false) do
           {:ok, _ast} -> []
-          {:error, errors} -> Enum.map(errors, &format_diagnostic/1)
+          {:error, errors} -> Enum.map(errors, &source_diagnostic(&1, uri, text))
         end
 
       {:error, reason} ->
-        [format_diagnostic(reason)]
+        [source_diagnostic(reason, uri, text)]
     end
   end
 
@@ -405,45 +405,9 @@ defmodule Cure.LSP.Server do
     Cure.Diagnostic.Renderer.lsp(diagnostic, registry, encoding)
   end
 
-  defp format_diagnostic(%Cure.Diagnostic{} = diagnostic), do: diagnostic_to_lsp(diagnostic)
-
-  defp format_diagnostic({type, msg, opts}) when is_list(opts) do
-    line = Keyword.get(opts, :line, 1) - 1
-    message = elem_or("", 1, {type, msg, opts})
-
-    %{
-      "range" => %{
-        "start" => %{"line" => max(line, 0), "character" => 0},
-        "end" => %{"line" => max(line, 0), "character" => 999}
-      },
-      "severity" => 1,
-      "source" => "cure",
-      "message" => to_string(message)
-    }
-  end
-
-  defp format_diagnostic({type, msg, line, _col}) do
-    %{
-      "range" => %{
-        "start" => %{"line" => max(line - 1, 0), "character" => 0},
-        "end" => %{"line" => max(line - 1, 0), "character" => 999}
-      },
-      "severity" => 1,
-      "source" => "cure",
-      "message" => "#{type}: #{msg}"
-    }
-  end
-
-  defp format_diagnostic(other) do
-    %{
-      "range" => %{
-        "start" => %{"line" => 0, "character" => 0},
-        "end" => %{"line" => 0, "character" => 999}
-      },
-      "severity" => 1,
-      "source" => "cure",
-      "message" => inspect(other)
-    }
+  defp source_diagnostic(error, uri, source) do
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, uri, source)
+    diagnostic_to_lsp(diagnostic, registry)
   end
 
   defp negotiate_position_encoding(params) do
@@ -460,10 +424,6 @@ defmodule Cure.LSP.Server do
   defp position_encoding_name(:utf8), do: "utf-8"
   defp position_encoding_name(:utf16), do: "utf-16"
   defp position_encoding_name(:utf32), do: "utf-32"
-
-  defp elem_or(default, index, tuple) when is_tuple(tuple) do
-    if tuple_size(tuple) > index, do: elem(tuple, index), else: default
-  end
 
   defp publish_diagnostics(uri, diagnostics) do
     Transport.send_notification("textDocument/publishDiagnostics", %{
