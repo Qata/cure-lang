@@ -385,6 +385,22 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:extern_arity_mismatch, name, declared, present}, opts)
+      when is_integer(declared) and is_integer(present) do
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Arity mismatch",
+      body:
+        Doc.paragraph(
+          "Extern `#{name_to_string(name)}` declares target arity #{declared}, but its present Cure arity is #{present}."
+        ),
+      primary: primary_label(opts, "make the extern declaration match its callable arity"),
+      payload: %{name: name_to_string(name), declared: declared, present: present, kind: :extern}
+    )
+  end
+
   def from_error({:extern_untyped_head, message, meta}, opts) when is_binary(message) and is_list(meta) do
     Diagnostic.new(
       code: "E056",

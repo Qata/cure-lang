@@ -222,6 +222,20 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "arity 1"
   end
 
+  test "renders extern target-arity conflicts through contextual arity diagnostics" do
+    rendered =
+      Host.render(
+        {:extern_arity_mismatch, :head, 2, 1},
+        "extern.cure"
+      )
+
+    assert rendered =~ "[E003]"
+    assert rendered =~ "head"
+    assert rendered =~ "declares target arity 2"
+    assert rendered =~ "present Cure arity is 1"
+    refute rendered =~ ":extern_arity_mismatch"
+  end
+
   test "renders operator declaration conflicts" do
     rendered = Host.render({:builtin_operator_not_overloadable, :|>}, "demo.cure")
 

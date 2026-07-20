@@ -70,6 +70,10 @@ defmodule Cure.Compiler.Errors do
     error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
   end
 
+  def format_error({:extern_arity_mismatch, _, _, _} = error, file) do
+    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+  end
+
   # -- Type Errors -------------------------------------------------------------
 
   def format_error(errors, file) when is_list(errors) do
@@ -438,6 +442,11 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:splice_outside_quote, _tag, meta}) when is_list(meta), do: true
   defp structured_error?({:unbound_variable, _message, meta}) when is_list(meta), do: true
   defp structured_error?({:arity_mismatch, _message, meta}) when is_list(meta), do: true
+
+  defp structured_error?({:extern_arity_mismatch, _name, declared, present})
+       when is_integer(declared) and is_integer(present),
+       do: true
+
   defp structured_error?({:extern_untyped_head, _message, meta}) when is_list(meta), do: true
   defp structured_error?({:extern_has_body, _message, meta}) when is_list(meta), do: true
   defp structured_error?({:unknown_record, _name}), do: true
