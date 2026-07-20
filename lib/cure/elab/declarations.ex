@@ -563,7 +563,7 @@ defmodule Cure.Elab.Declarations do
     case Keyword.get(meta, :clauses) do
       [_ | _] = clauses ->
         formals = Keyword.get(meta, :params, [])
-        fmeta = Keyword.take(meta, [:line, :col])
+        fmeta = generated_meta(meta)
         scrut = clause_scrutinee(formals, fmeta)
         arms = Enum.map(clauses, &clause_to_arm(&1, length(formals), fmeta))
         match_expr = {:pattern_match, fmeta, [scrut | arms]}
@@ -572,6 +572,18 @@ defmodule Cure.Elab.Declarations do
       _ ->
         decl
     end
+  end
+
+  defp generated_meta(meta) when is_list(meta) do
+    Keyword.take(meta, [
+      :line,
+      :col,
+      :column,
+      :source_info,
+      :provenance,
+      :source_provenance,
+      :expansion_provenance
+    ])
   end
 
   defp clause_scrutinee([{:param, _pm, pname}], fmeta),

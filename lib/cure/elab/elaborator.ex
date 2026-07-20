@@ -7151,7 +7151,7 @@ defmodule Cure.Elab.Elaborator do
   # `List(Char)` and reuses all of `desugar_list`'s Cons/Nil machinery. The empty
   # string yields the empty list (`Nil`).
   defp desugar_string(value, meta) when is_binary(value) do
-    loc = Keyword.take(meta, [:line, :col])
+    loc = generated_meta(meta)
     chars = Enum.map(String.to_charlist(value), fn cp -> {:literal, [subtype: :char] ++ loc, cp} end)
     {:list, meta, chars}
   end
@@ -7163,7 +7163,21 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp ctor_call(name, m, args),
-    do: {:function_call, [name: name] ++ Keyword.take(m, [:line, :col]), args}
+    do: {:function_call, [name: name] ++ generated_meta(m), args}
+
+  defp generated_meta(meta) when is_list(meta) do
+    Keyword.take(meta, [
+      :line,
+      :col,
+      :column,
+      :source_info,
+      :provenance,
+      :source_provenance,
+      :expansion_provenance
+    ])
+  end
+
+  defp generated_meta(_meta), do: []
 
   # Rewrite `:list` patterns in each match arm to the ctor-call form before any
   # downstream pattern pass runs (the pattern-position half of desugar_list/1).
