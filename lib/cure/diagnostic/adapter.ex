@@ -1054,14 +1054,27 @@ defmodule Cure.Diagnostic.Adapter do
   defp namespace_title(other), do: to_string(other)
 
   defp type_problem_title(%ExpectationOrigin{kind: :annotation}), do: "Annotation does not match"
+  defp type_problem_title(%ExpectationOrigin{kind: :call_result}), do: "Call result has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :branch}), do: "Branches have different types"
   defp type_problem_title(%ExpectationOrigin{kind: :condition}), do: "Condition is not boolean"
   defp type_problem_title(%ExpectationOrigin{kind: :call_argument}), do: "Argument has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :application}), do: "Application has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :overload}), do: "No matching overload"
+  defp type_problem_title(%ExpectationOrigin{kind: :element}), do: "Collection element has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :collection}), do: "Collection elements have different types"
   defp type_problem_title(%ExpectationOrigin{kind: :record}), do: "Record has the wrong type"
+  defp type_problem_title(%ExpectationOrigin{kind: :record_field}), do: "Record field has the wrong type"
+  defp type_problem_title(%ExpectationOrigin{kind: :record_update}), do: "Record update has the wrong type"
+  defp type_problem_title(%ExpectationOrigin{kind: :pattern}), do: "Pattern has the wrong type"
+
+  defp type_problem_title(%ExpectationOrigin{kind: :constructor_argument}),
+    do: "Constructor argument has the wrong type"
+
+  defp type_problem_title(%ExpectationOrigin{kind: :implicit}), do: "Implicit argument has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :effects}), do: "Effect is not allowed here"
+  defp type_problem_title(%ExpectationOrigin{kind: :ffi}), do: "FFI boundary has the wrong type"
+  defp type_problem_title(%ExpectationOrigin{kind: :actor}), do: "Actor message has the wrong type"
+  defp type_problem_title(%ExpectationOrigin{kind: :fsm}), do: "FSM transition has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :supervisor}), do: "Supervisor value has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :operator_operand}), do: "Operator cannot use this value"
   defp type_problem_title(_origin), do: "Type mismatch"
@@ -1234,6 +1247,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_context(%ExpectationOrigin{kind: :annotation}),
     do: "This expression does not match the type written in its annotation."
 
+  defp type_problem_context(%ExpectationOrigin{kind: :call_result, owner: owner}),
+    do: "The result of `#{name_to_string(owner || "this call")}` does not match the surrounding expectation."
+
   defp type_problem_context(%ExpectationOrigin{kind: :branch}),
     do: "Every branch of this expression must produce the same type."
 
@@ -1245,6 +1261,47 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp type_problem_context(%ExpectationOrigin{kind: :operator_operand, owner: owner}),
     do: "The `#{name_to_string(owner || "operator")}` operator cannot use this operand type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :element, index: index}),
+    do: "Element #{display_index(index)} of this collection has an incompatible type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :collection}),
+    do: "All elements of this collection must agree on one type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :record, owner: owner}),
+    do: "This value does not match the declared shape of record `#{name_to_string(owner || "this record")}`."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :record_field, owner: owner}),
+    do: "Field `#{name_to_string(owner || "this field")}` does not match the record's declared field type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :record_update, owner: owner}),
+    do: "This record update does not preserve the declared record shape of `#{name_to_string(owner || "this record")}`."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :pattern}),
+    do: "This pattern must match the type of the value it is checking."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :constructor_argument, index: index, owner: owner}),
+    do:
+      "Argument #{display_index(index)} of constructor `#{name_to_string(owner || "this constructor")}` has an incompatible type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :implicit, owner: owner}),
+    do: "The implicit argument required by `#{name_to_string(owner || "this call")}` has the wrong type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :effects}),
+    do: "This expression performs an effect that is not allowed in its context."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :ffi, owner: owner}),
+    do: "The FFI boundary `#{name_to_string(owner || "this declaration")}` does not match its Cure type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :actor, owner: owner}),
+    do: "Actor `#{name_to_string(owner || "this actor")}` received a value with the wrong message type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :fsm, owner: owner}),
+    do: "FSM transition `#{name_to_string(owner || "this transition")}` does not produce the required state type."
+
+  defp type_problem_context(%ExpectationOrigin{kind: :supervisor, owner: owner}),
+    do:
+      "Supervisor `#{name_to_string(owner || "this supervisor")}` does not match the required child specification type."
 
   defp type_problem_context(_origin), do: "This expression has a different type than its context requires."
 
@@ -1332,12 +1389,26 @@ defmodule Cure.Diagnostic.Adapter do
   defp plain_type_doc(type), do: Doc.text(print_core(type))
 
   defp type_problem_label(%ExpectationOrigin{kind: :condition}), do: "this condition has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :call_result}), do: "this call result has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :branch}), do: "this branch disagrees with another branch"
   defp type_problem_label(%ExpectationOrigin{kind: :call_argument}), do: "this argument has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :application}), do: "this application has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :element}), do: "this collection element has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :collection}), do: "this collection element has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :record}), do: "this record has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :record_field}), do: "this record field has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :record_update}), do: "this record update has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :pattern}), do: "this pattern has the wrong type"
+
+  defp type_problem_label(%ExpectationOrigin{kind: :constructor_argument}),
+    do: "this constructor argument has the wrong type"
+
+  defp type_problem_label(%ExpectationOrigin{kind: :implicit}), do: "this implicit argument has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :effects}), do: "this expression has an invalid effect"
+  defp type_problem_label(%ExpectationOrigin{kind: :ffi}), do: "this FFI boundary has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :actor}), do: "this actor message has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :fsm}), do: "this FSM transition has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :supervisor}), do: "this supervisor value has the wrong type"
   defp type_problem_label(_origin), do: "this expression has the wrong type"
 
   defp expectation_labels(%ExpectationOrigin{span: %Span{} = span}, primary_span, _related)

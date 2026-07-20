@@ -300,6 +300,37 @@ defmodule Cure.DiagnosticTest do
     assert condition.payload.actual_core == inspect("Int")
   end
 
+  test "all contextual type origins retain specialized user-facing titles", %{span: span} do
+    origins = [
+      {:call_result, "Call result has the wrong type"},
+      {:element, "Collection element has the wrong type"},
+      {:record, "Record has the wrong type"},
+      {:record_field, "Record field has the wrong type"},
+      {:record_update, "Record update has the wrong type"},
+      {:pattern, "Pattern has the wrong type"},
+      {:constructor_argument, "Constructor argument has the wrong type"},
+      {:implicit, "Implicit argument has the wrong type"},
+      {:ffi, "FFI boundary has the wrong type"},
+      {:actor, "Actor message has the wrong type"},
+      {:fsm, "FSM transition has the wrong type"},
+      {:supervisor, "Supervisor value has the wrong type"}
+    ]
+
+    for {kind, title} <- origins do
+      diagnostic =
+        Adapter.from_error(%Cure.Diagnostic.TypeProblem{
+          kind: :type_mismatch,
+          actual: "String",
+          expected: "Int",
+          origin: %Cure.Diagnostic.ExpectationOrigin{kind: kind},
+          span: span
+        })
+
+      assert diagnostic.title == title
+      assert diagnostic.title != "Type mismatch"
+    end
+  end
+
   test "source checking context upgrades kernel conversion failures", %{registry: registry, span: span} do
     diagnostic =
       Adapter.from_error(
