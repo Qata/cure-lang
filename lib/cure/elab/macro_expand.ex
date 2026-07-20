@@ -306,6 +306,7 @@ defmodule Cure.Elab.MacroExpand do
   # scope; any other computed-macro error is genuine and returned as-is.
   defp resolution_failure?(:unknown_global), do: true
   defp resolution_failure?({:unknown_global, _}), do: true
+  defp resolution_failure?({:unknown_global, _, _details}), do: true
   defp resolution_failure?(_), do: false
 
   defp execute_with_env(meta, elab_ast, input_ast, env, fresh_counter) do
