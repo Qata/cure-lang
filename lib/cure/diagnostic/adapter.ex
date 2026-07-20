@@ -1537,6 +1537,9 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp rank_candidates(candidates, spelling, namespace, opts) do
+    strict? = Enum.any?(candidates, &candidate_with_identity?/1)
+    opts = Keyword.put(opts, :strict_candidate_filter, strict?)
+
     candidates
     |> Enum.map(&candidate_detail/1)
     |> Enum.filter(&candidate_allowed?(&1, namespace, opts))
@@ -1551,16 +1554,27 @@ defmodule Cure.Diagnostic.Adapter do
         candidate.name
       }
     end)
-    |> Enum.filter(&(edit_distance(spelling, &1.name) <= 2))
+    |> Enum.filter(&candidate_matches_spelling?(&1, spelling, strict?))
     |> Enum.uniq_by(& &1.name)
     |> Enum.take(3)
   end
 
   defp candidate_allowed?(candidate, namespace, opts) do
-    candidate.namespace in [nil, namespace] and
+    strict? = Keyword.get(opts, :strict_candidate_filter, false)
+
+    (not strict? or not candidate.rich? or candidate.namespace in [nil, namespace]) and
       candidate.visibility not in [:private, "private"] and
-      not arity_mismatch?(candidate.arity, Keyword.get(opts, :arity))
+      (not strict? or not arity_mismatch?(candidate.arity, Keyword.get(opts, :arity)))
   end
+
+  defp candidate_matches_spelling?(%{rich?: false}, _spelling, _strict?), do: true
+  defp candidate_matches_spelling?(_candidate, _spelling, false), do: true
+  defp candidate_matches_spelling?(candidate, spelling, true), do: edit_distance(spelling, candidate.name) <= 2
+
+  defp candidate_with_identity?(candidate) when is_map(candidate),
+    do: Map.has_key?(candidate, :id) or Map.has_key?(candidate, "id")
+
+  defp candidate_with_identity?(_candidate), do: false
 
   defp candidate_detail(candidate) when is_map(candidate) do
     %{
@@ -1571,7 +1585,8 @@ defmodule Cure.Diagnostic.Adapter do
       owner: Map.get(candidate, :owner, Map.get(candidate, "owner")),
       imported: Map.get(candidate, :imported, Map.get(candidate, "imported", true)),
       origin: Map.get(candidate, :origin, Map.get(candidate, "origin")),
-      candidate_id: Map.get(candidate, :id, Map.get(candidate, "id", Map.get(candidate, :name)))
+      candidate_id: Map.get(candidate, :id, Map.get(candidate, "id", Map.get(candidate, :name))),
+      rich?: true
     }
   end
 
@@ -1584,7 +1599,8 @@ defmodule Cure.Diagnostic.Adapter do
       owner: nil,
       imported: true,
       origin: nil,
-      candidate_id: candidate
+      candidate_id: candidate,
+      rich?: false
     }
   end
 
