@@ -167,7 +167,8 @@ defmodule Cure.Watch do
   end
 
   def run_action(other, _path) do
-    raise Cure.Diagnostic.UnhandledError, error: {:unknown_watch_action, other}
+    diagnostic = Cure.Diagnostic.Operational.unknown_watch_action(other)
+    error(Cure.Diagnostic.Renderer.plain(diagnostic))
   end
 
   # -- Helpers -----------------------------------------------------------------

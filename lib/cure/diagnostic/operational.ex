@@ -11,6 +11,7 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:file_write_error, path, reason}, _opts), do: file_write(path, reason)
   def from_error({:dependency_resolution_failed, reason}, _opts), do: dependency(reason)
   def from_error({:command_failed, command, reason}, _opts), do: command_failure(command, reason)
+  def from_error({:unknown_watch_action, action}, _opts), do: unknown_watch_action(action)
   def from_error({:migration_warning, details}, _opts) when is_map(details), do: migration_warning(details)
   def from_error({:compiler_warning, details}, _opts) when is_map(details), do: compiler_warning(details)
   def from_error({:export_unmappable, reason}, _opts), do: export_unmappable(reason)
@@ -61,6 +62,9 @@ defmodule Cure.Diagnostic.Operational do
         command: command,
         reason: inspect(reason)
       })
+
+  def unknown_watch_action(action),
+    do: diagnostic("E098", :command_failure, "unknown watch action: #{inspect(action)}", %{action: action})
 
   def migration_warning(%{rule: rule, file: file, line: line, message: message}) do
     Diagnostic.new(

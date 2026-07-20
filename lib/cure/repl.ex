@@ -1644,9 +1644,14 @@ defmodule Cure.REPL do
 
   defp format_error({:error, _kind, message}) when is_binary(message), do: message
 
-  defp format_error(other) do
-    raise Cure.Diagnostic.UnhandledError, error: {:repl_error, other}
-  end
+  defp format_error({:codegen_error, _reason} = reason),
+    do: Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Adapter.from_error(reason))
+
+  defp format_error({:source_context, _reason, _context} = reason),
+    do: Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Adapter.from_error(reason))
+
+  defp format_error(other),
+    do: Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("repl", other))
 
   @doc false
   def __format_error__(reason), do: format_error(reason)
