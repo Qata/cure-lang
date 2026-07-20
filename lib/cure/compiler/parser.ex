@@ -3412,6 +3412,39 @@ defmodule Cure.Compiler.Parser do
   defp source_whole(%SourceInfo{whole: span}), do: span
   defp source_whole(_), do: nil
 
+  defp put_type_application_source_info(meta, start, args, state) do
+    start_span =
+      case start do
+        %Token{span: %Cure.Diagnostic.Span{} = span} -> span
+        %Cure.Diagnostic.Span{} = span -> span
+        {_, node_meta, _} when is_list(node_meta) -> node_meta |> Metadata.source_info() |> source_whole()
+        _ -> nil
+      end
+
+    argument_spans = Enum.flat_map(args, &node_source_span/1)
+    close_token = last_authored_token(state)
+
+    whole =
+      case {start_span, close_token} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = close} ->
+          case Range.through(first, close) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    case whole do
+      %Cure.Diagnostic.Span{} = span ->
+        Keyword.put(meta, :source_info, %SourceInfo{whole: span, arguments: argument_spans})
+
+      _ ->
+        meta
+    end
+  end
+
   # Returns {args, labels, state}: `labels` is position-aligned with `args`, each
   # entry the written argument label (`f(to: v)`) or `nil` when the argument is
   # positional. Callers that ignore labels bind the middle element to `_`.
@@ -6721,7 +6754,9 @@ defmodule Cure.Compiler.Parser do
             state = advance(state)
             {args, state} = parse_type_atom_args(state)
             state = expect(state, :rparen)
-            {{:function_call, [name: name, line: token.line, col: token.col], args}, state}
+            meta = [name: name, line: token.line, col: token.col]
+            meta = put_type_application_source_info(meta, token, args, state)
+            {{:function_call, meta, args}, state}
 
           _ ->
             {{:variable, [scope: :local, line: token.line, col: token.col], name}, state}
@@ -8306,7 +8341,9 @@ defmodule Cure.Compiler.Parser do
             state = advance(state)
             {params, state} = parse_type_param_list(state)
             state = expect(state, :rparen)
-            ast = {:function_call, [name: base_name, line: token.line, col: token.col], params}
+            meta = [name: base_name, line: token.line, col: token.col]
+            meta = put_type_application_source_info(meta, token, params, state)
+            ast = {:function_call, meta, params}
             maybe_parse_function_type(state, ast)
 
           match?(%Token{type: :arrow}, peek(state)) ->
@@ -8365,7 +8402,9 @@ defmodule Cure.Compiler.Parser do
             state = advance(state)
             {params, state} = parse_type_param_list(state)
             state = expect(state, :rparen)
-            ast = {:function_call, [name: name, qualified: true], params}
+            meta = [name: name, qualified: true]
+            meta = put_type_application_source_info(meta, inner, params, state)
+            ast = {:function_call, meta, params}
             maybe_parse_function_type(state, ast)
 
           :error ->
