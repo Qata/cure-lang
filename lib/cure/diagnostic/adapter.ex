@@ -508,6 +508,33 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:lex_error, reason}, opts), do: from_error(lex_problem(reason, opts), opts)
 
+  def from_error({:macro_use_mismatch, keyword, expected, got, _line, _column}, opts) do
+    from_error(
+      %SyntaxProblem{
+        kind: :macro_use_mismatch,
+        expected: expected,
+        observed: got,
+        at: Keyword.get(opts, :span),
+        alternatives: [],
+        context: %{keyword: keyword}
+      },
+      opts
+    )
+  end
+
+  def from_error({:malformed_hole, _line, _column}, opts) do
+    from_error(
+      %SyntaxProblem{
+        kind: :malformed_macro_hole,
+        expected: :macro_hole,
+        observed: :eof,
+        at: Keyword.get(opts, :span),
+        context: %{repair: "<name: Kind>"}
+      },
+      opts
+    )
+  end
+
   def from_error({:lift_module_error, details}, opts) when is_map(details) do
     macro = get_in(details, [:source_provenance, :macro]) || :macro
     cause = Map.get(details, :cause)
@@ -679,6 +706,8 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_char_escape}), do: "Invalid character escape"
   defp syntax_problem_title(%SyntaxProblem{kind: :atom_too_long}), do: "Atom literal is too long"
   defp syntax_problem_title(%SyntaxProblem{kind: :unexpected_character}), do: "Unexpected character"
+  defp syntax_problem_title(%SyntaxProblem{kind: :macro_use_mismatch}), do: "Macro syntax does not match"
+  defp syntax_problem_title(%SyntaxProblem{kind: :malformed_macro_hole}), do: "Macro hole is incomplete"
   defp syntax_problem_title(%SyntaxProblem{kind: :recovered_statement}), do: "Invalid statement"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
@@ -708,6 +737,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :unexpected_character, observed: observed}),
     do: "#{syntax_name(observed)} does not begin any Cure token at this location."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :macro_use_mismatch, context: %{keyword: keyword}}),
+    do: "The `#{keyword}` macro invocation does not match its declared syntax."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :malformed_macro_hole}),
+    do: "This macro hole is incomplete; write it as `<name: Kind>`."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :recovered_statement, observed: observed}),
     do:
@@ -1052,6 +1087,8 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_name(:atom), do: "an atom"
   defp syntax_name(:bool), do: "a boolean"
   defp syntax_name(:hole), do: "a hole"
+  defp syntax_name(:macro_hole), do: "a macro hole"
+  defp syntax_name({:literal, value}), do: "the literal #{inspect(value)}"
   defp syntax_name(name) when is_atom(name), do: "'#{name}'"
   defp syntax_name(name), do: inspect(name)
 end

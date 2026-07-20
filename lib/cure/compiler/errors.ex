@@ -1791,6 +1791,14 @@ defmodule Cure.Compiler.Errors do
        when is_integer(line) and is_integer(col),
        do: {line, col}
 
+  defp error_location({:macro_use_mismatch, _keyword, _expected, _got, line, col})
+       when is_integer(line) and is_integer(col),
+       do: {line, col}
+
+  defp error_location({:malformed_hole, line, col})
+       when is_integer(line) and is_integer(col),
+       do: {line, col}
+
   defp error_location({:parse_error, [reason | _]}), do: error_location(reason)
   defp error_location({:codegen_error, reason}), do: error_location(reason)
 

@@ -26,4 +26,15 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "Cannot read `demo.cure`"
     refute rendered =~ "^"
   end
+
+  test "renders macro syntax failures as contextual syntax diagnostics" do
+    source = "fn run() -> Int = say nope\n"
+
+    rendered = Host.render({:macro_use_mismatch, "say", {:literal, "hello"}, "nope", 1, 20}, "demo.cure", source)
+
+    assert rendered =~ "[E094]"
+    assert rendered =~ "MACRO SYNTAX DOES NOT MATCH"
+    assert rendered =~ "demo.cure"
+    refute rendered =~ ":macro_use_mismatch"
+  end
 end
