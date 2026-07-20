@@ -23,7 +23,14 @@ defmodule Cure.DiagnosticExerciserTest do
        "mod DiagnosticCtor\n  type Nat = Z | S(Nat)\n  fn bad(x: Nat) -> Nat = match x\n    Missing() -> Z\n    _ -> Z\n"}
     ]
 
-    compiler_codes = Enum.map(compiler_cases, &elem(&1, 1))
+    boundary_cases = [
+      {"duplicate module", "E087", {:duplicate_module_identity, "Demo", "a.cure", "b.cure"}},
+      {"ambiguous name", "E089", {:ambiguous_name, :helper, ["Demo.A", "Demo.B"]}},
+      {"import cycle", "W086", {:import_cycle, [%{module: "Demo.A", path: "a.cure", line: 1}]}},
+      {"unresolved import", "W088", {:unresolved_import, :helper, 1, ["Demo.A"], 2}}
+    ]
+
+    compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))
 
     Enum.each(compiler_cases, fn {label, expected_code, source} ->
       case Cure.Compiler.compile_string(source, emit_events: false) do
@@ -50,6 +57,13 @@ defmodule Cure.DiagnosticExerciserTest do
           assert Enum.any?(String.split(source, "\n"), &(&1 != "" and String.contains?(terminal, &1)))
           IO.puts(:stderr, "[#{label}]\n" <> terminal)
       end
+    end)
+
+    Enum.each(boundary_cases, fn {label, expected_code, reason} ->
+      {diagnostic, _registry} =
+        Cure.Compiler.Errors.to_diagnostic(reason, "#{label}.cure", "fn run() -> Int = 1\n")
+
+      assert diagnostic.code == expected_code
     end)
 
     diagnostics = [

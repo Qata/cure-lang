@@ -209,6 +209,14 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:duplicate_module_identity, name, other_path, path}, opts) do
+    from_error({:duplicate_module, name, [other_path, path]}, opts)
+  end
+
+  def from_error({:duplicate_module_identity, name, paths}, opts) when is_list(paths) do
+    from_error({:duplicate_module, name, paths}, opts)
+  end
+
   def from_error({:import_cycle, hops}, opts) when is_list(hops) do
     chain = Enum.map_join(hops, " -> ", fn hop -> "#{hop.module} (#{hop.path}:#{hop.line})" end)
 

@@ -1733,6 +1733,8 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:codegen_error, {:unknown_global, _name}}), do: true
   defp structured_error?({:codegen_error, {:unknown_global, _name, details}}) when is_map(details), do: true
   defp structured_error?({:unknown_constructor, _name}), do: true
+  defp structured_error?({:duplicate_module_identity, _name, _other_path, _path}), do: true
+  defp structured_error?({:duplicate_module_identity, _name, paths}) when is_list(paths), do: true
   defp structured_error?({:unfilled_hole, _name}), do: true
   defp structured_error?({:unsolved_metavariables, _name}), do: true
   defp structured_error?({:unsupported_pattern, _shape}), do: true
