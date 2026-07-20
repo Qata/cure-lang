@@ -541,7 +541,14 @@ defmodule Cure.Compiler.Errors do
         :error -> []
       end
 
-    {Cure.Diagnostic.Adapter.from_error(error, opts), registry}
+    diagnostic =
+      if operational_error?(error) do
+        Cure.Diagnostic.Operational.from_error(error)
+      else
+        Cure.Diagnostic.Adapter.from_error(error, opts)
+      end
+
+    {diagnostic, registry}
   end
 
   defp format_legacy_with_source(error, file, source) do
@@ -638,6 +645,28 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?({:expansion_ill_typed, details}) when is_map(details), do: true
   defp structured_error?({:macro_use_mismatch, _keyword, _expected, _got, _line, _column}), do: true
   defp structured_error?({:malformed_hole, _line, _column}), do: true
+  defp structured_error?({:file_read_error, _path, _reason}), do: true
+  defp structured_error?({:file_write_error, _path, _reason}), do: true
+  defp structured_error?({:dependency_resolution_failed, _reason}), do: true
+  defp structured_error?({:command_failed, _command, _reason}), do: true
+  defp structured_error?({:migration_warning, details}) when is_map(details), do: true
+  defp structured_error?({:compiler_warning, details}) when is_map(details), do: true
+  defp structured_error?({:export_unmappable, _reason}), do: true
+  defp structured_error?({:snap_missing, _path}), do: true
+  defp structured_error?({:configuration_warning, _message}), do: true
+  defp structured_error?({:usage_error, _message}), do: true
+  defp structured_error?({:artifact_error, _message}), do: true
+  defp structured_error?({:proof_file_missing, _detail}), do: true
+  defp structured_error?({:proof_verification_failed, _detail}), do: true
+  defp structured_error?({:proof_schema_incompatible, _detail}), do: true
+  defp structured_error?({:snap_schema_incompatible, _detail}), do: true
+  defp structured_error?({:registry_signature_invalid, _detail}), do: true
+  defp structured_error?({:transparency_log_unreachable, _detail}), do: true
+  defp structured_error?({:registry_fetch_failed, _detail}), do: true
+  defp structured_error?({:registry_hash_mismatch, _detail}), do: true
+  defp structured_error?({:registry_package_not_found, _detail}), do: true
+  defp structured_error?({:version_conflict, _name, _constraints}), do: true
+  defp structured_error?({:undocumented_public_function, _file, _line}), do: true
   defp structured_error?({:beam_lint_error, _errors, _warnings}), do: true
   defp structured_error?({:beam_lint_error, _errors}), do: true
   defp structured_error?({:expected_module, _ast}), do: true
@@ -653,6 +682,30 @@ defmodule Cure.Compiler.Errors do
   defp structured_error?([reason | _]), do: structured_error?(reason)
   defp structured_error?([]), do: true
   defp structured_error?(_error), do: false
+
+  defp operational_error?({:file_read_error, _, _}), do: true
+  defp operational_error?({:file_write_error, _, _}), do: true
+  defp operational_error?({:dependency_resolution_failed, _}), do: true
+  defp operational_error?({:command_failed, _, _}), do: true
+  defp operational_error?({:migration_warning, details}) when is_map(details), do: true
+  defp operational_error?({:compiler_warning, details}) when is_map(details), do: true
+  defp operational_error?({:export_unmappable, _}), do: true
+  defp operational_error?({:snap_missing, _}), do: true
+  defp operational_error?({:configuration_warning, _}), do: true
+  defp operational_error?({:usage_error, _}), do: true
+  defp operational_error?({:artifact_error, _}), do: true
+  defp operational_error?({:proof_file_missing, _}), do: true
+  defp operational_error?({:proof_verification_failed, _}), do: true
+  defp operational_error?({:proof_schema_incompatible, _}), do: true
+  defp operational_error?({:snap_schema_incompatible, _}), do: true
+  defp operational_error?({:registry_signature_invalid, _}), do: true
+  defp operational_error?({:transparency_log_unreachable, _}), do: true
+  defp operational_error?({:registry_fetch_failed, _}), do: true
+  defp operational_error?({:registry_hash_mismatch, _}), do: true
+  defp operational_error?({:registry_package_not_found, _}), do: true
+  defp operational_error?({:version_conflict, _, _}), do: true
+  defp operational_error?({:undocumented_public_function, _, _}), do: true
+  defp operational_error?(_), do: false
 
   defp error_location({:lift_module_error, %{source_provenance: %{line: line, col: col}}}), do: {line, col}
   defp error_location({:unresolved_import, _name, _arity, _imports, line}) when is_integer(line), do: {line, 1}

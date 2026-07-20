@@ -25,6 +25,16 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "[E095]"
     assert rendered =~ "Cannot read `demo.cure`"
     refute rendered =~ "^"
+
+    contextual =
+      Cure.Compiler.Errors.format_with_source(
+        {:file_read_error, "demo.cure", :enoent},
+        "demo.cure",
+        "fn run() -> Int = 1\n"
+      )
+
+    assert contextual =~ "[E095]"
+    refute contextual =~ "| fn run"
   end
 
   test "renders macro syntax failures as contextual syntax diagnostics" do
