@@ -1,0 +1,45 @@
+mod IntAdditiveGroup
+  ## Verified-LIA Task 1 computation probe. These operations deliberately live
+  ## in Std.Proof.IntOrder: later algebra proofs must unfold the same structural
+  ## definitions that the certificate checker evaluates.
+  use Std.Bool
+  use Std.Nat
+  use Std.Int
+  use Std.Equivalent
+  use Std.Proof.IntOrder
+
+  fn zero_scale_negative() -> Equivalent(Int,
+    scale_nat_int(Z(), NegativeSuccessor(S(Z()))),
+    FromNat(Z())) =
+    reflexive(FromNat(Z()))
+
+  fn positive_scale_negative() -> Equivalent(Int,
+    scale_nat_int(S(S(Z())), NegativeSuccessor(Z())),
+    NegativeSuccessor(S(Z()))) =
+    reflexive(NegativeSuccessor(S(Z())))
+
+  fn positive_times_positive() -> Equivalent(Int,
+    multiply_int(FromNat(S(S(Z()))), FromNat(S(S(S(Z()))))),
+    FromNat(S(S(S(S(S(S(Z())))))))) =
+    reflexive(FromNat(S(S(S(S(S(S(Z()))))))))
+
+  fn positive_times_negative() -> Equivalent(Int,
+    multiply_int(FromNat(S(S(Z()))), NegativeSuccessor(Z())),
+    NegativeSuccessor(S(Z()))) =
+    reflexive(NegativeSuccessor(S(Z())))
+
+  fn negative_times_positive() -> Equivalent(Int,
+    multiply_int(NegativeSuccessor(Z()), FromNat(S(S(S(Z()))))),
+    NegativeSuccessor(S(S(Z())))) =
+    reflexive(NegativeSuccessor(S(S(Z()))))
+
+  fn negative_times_negative() -> Equivalent(Int,
+    multiply_int(NegativeSuccessor(Z()), NegativeSuccessor(S(Z()))),
+    FromNat(S(S(Z())))) =
+    reflexive(FromNat(S(S(Z()))))
+
+  fn start() -> Bool =
+    le_int(
+      multiply_int(NegativeSuccessor(Z()), FromNat(S(S(S(Z()))))),
+      scale_nat_int(Z(), NegativeSuccessor(S(Z()))))
+end

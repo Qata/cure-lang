@@ -40,13 +40,13 @@ and `zero_is_not_at_most_negative_one`. Its current scaling theorem is only for
 **Files:** modify `lib/std/proof_int_order.cure`; add paired
 `test/oracle/otp/int_additive_group.{cure,idr}`.
 
-- [ ] Choose and document the proof-level operations used by LIA:
+- [x] Choose and document the proof-level operations used by LIA:
   `add_int`, canonical zero/one/negative-one, `scale_nat_int`, and signed
   `multiply_int` or an equivalently total signed coefficient application.
-- [ ] Add closed computation probes covering every sign quadrant and zero.
-- [ ] Ensure definitions recurse structurally on `Nat`/inductive `Int`; do not
+- [x] Add closed computation probes covering every sign quadrant and zero.
+- [x] Ensure definitions recurse structurally on `Nat`/inductive `Int`; do not
   rely on an opaque builtin reduction in a proof.
-- [ ] Run the focused oracle cluster and commit.
+- [x] Run the focused oracle cluster and commit.
 
 ## Task 2: Complete the general integer additive/order kit
 

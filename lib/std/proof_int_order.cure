@@ -38,6 +38,11 @@ mod Std.Proof.IntOrder
   ##   add_nat_succ(count: Nat, x: Int) -> Int
   ##   add_nat_pred(count: Nat, x: Int) -> Int
   ##   add_int(addend: Int, x: Int) -> Int
+  ##   int_zero() -> Int
+  ##   int_one() -> Int
+  ##   int_negative_one() -> Int
+  ##   scale_nat_int(scalar: Nat, value: Int) -> Int
+  ##   multiply_int(coefficient: Int, value: Int) -> Int
   ##   multiply(left: Nat, right: Nat) -> Nat   ## local Std.Proof.Math.multiply mirror
   ##
   ## Proof-carrying order families (reflected form):
@@ -191,6 +196,28 @@ mod Std.Proof.IntOrder
     match addend
       FromNat(m) -> add_nat_succ(m, x)
       NegativeSuccessor(k) -> add_nat_pred(S(k), x)
+
+  ## Canonical integer constants used by the reflective LIA checker. Functions,
+  ## rather than a second data representation, keep every caller on Std.Int.Int.
+  fn int_zero() -> Int = FromNat(Z())
+  fn int_one() -> Int = FromNat(S(Z()))
+  fn int_negative_one() -> Int = NegativeSuccessor(Z())
+
+  ## Scale an arbitrary signed integer by a nonnegative natural. This is repeated
+  ## proof-level integer addition, structural on the certificate coefficient.
+  ## Task 2 proves its monotonicity and distributive laws from these equations.
+  fn scale_nat_int(scalar: Nat, value: Int) -> Int =
+    match scalar
+      Z() -> int_zero()
+      S(predecessor) -> add_int(value, scale_nat_int(predecessor, value))
+
+  ## Signed coefficient application for affine evaluation. A nonnegative
+  ## coefficient delegates directly to natural scaling; -(n+1) negates the
+  ## result of scaling by n+1. Both recursions are therefore over Nat.
+  fn multiply_int(coefficient: Int, value: Int) -> Int =
+    match coefficient
+      FromNat(n) -> scale_nat_int(n, value)
+      NegativeSuccessor(n) -> negate(scale_nat_int(S(n), value))
 
   ## Evidence that one integer is ≤ another: the reflected proposition that the
   ## decidable Boolean test `le_int` returns `True`.
