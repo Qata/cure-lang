@@ -1323,6 +1323,49 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({kind, detail}, opts)
+      when kind in [
+             :bad_result_type,
+             :non_integer_index,
+             :unsupported_index_literal,
+             :unsupported_index_expr,
+             :unsupported_index_operator,
+             :sigma_projection_needs_ctx,
+             :unsupported_comprehension_pattern,
+             :unsupported_binary_generator_pattern,
+             :unsupported_binary_segment,
+             :unsupported_binary_match_arm,
+             :unsupported_map_match_arm,
+             :unsupported_map_value_pattern,
+             :unsupported_map_key_pattern,
+             :unsupported_block_statement,
+             :unsupported_block,
+             :unknown_macro_failure,
+             :unsolved_metavariable_in_type,
+             :lambda_expected_pi,
+             :missing_raw_delimiter,
+             :invalid_syntax_node,
+             :invalid_syntax_leaf,
+             :invalid_syntax_failure,
+             :unsupported_syntax_core,
+             :raw_syntax_in_expansion,
+             :quoted_syntax_in_expansion,
+             :malformed_expansion_syntax,
+             :malformed_expansion_attribute,
+             :malformed_expansion_map,
+             :malformed_expansion_literal,
+             :malformed_reflected_syntax,
+             :malformed_reflected_attribute,
+             :malformed_reflected_literal,
+             :malformed_reflected_map,
+             :invalid_syntax_attrs
+           ],
+      do: contextual_type_failure(kind, %{detail: detail}, opts)
+
+  def from_error({kind, first, second}, opts)
+      when kind in [:rewrite_no_match, :non_uniform_parameter, :bounded_lit_out_of_range],
+      do: contextual_type_failure(kind, %{first: first, second: second}, opts)
+
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
 
   defp macro_expansion_failure(kind, message, frames, opts) do
@@ -1723,6 +1766,10 @@ defmodule Cure.Diagnostic.Adapter do
         :bounded_bound_not_concrete ->
           {"Bound must be concrete", "This bounded type declaration requires a concrete bound.",
            "replace the bound with a concrete value"}
+
+        _ ->
+          {"Kernel type check failed", "The kernel could not validate this type or term.",
+           "add an annotation or revise the term"}
       end
 
     Diagnostic.new(
@@ -1893,6 +1940,10 @@ defmodule Cure.Diagnostic.Adapter do
         :bidirectional_erased_field ->
           {"Erased field cannot be inferred here", "This erased constructor field requires checking information.",
            "add an annotation or make the field relevant"}
+
+        _ ->
+          {"Elaboration failed", "This expression or declaration is not valid in the current checking context.",
+           "change the source construct or add an annotation"}
       end
 
     Diagnostic.new(
