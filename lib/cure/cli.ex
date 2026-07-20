@@ -696,7 +696,7 @@ defmodule Cure.CLI do
                 info("Dependencies resolved. Cure.lock written.")
 
               {:error, reason} ->
-                error("Failed to resolve dependencies: #{inspect(reason)}")
+                error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.dependency(reason)))
                 exit({:shutdown, 1})
             end
         end
@@ -706,7 +706,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error("Cannot load Cure.toml: #{inspect(reason)}")
+        error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
         exit({:shutdown, 1})
     end
   end
@@ -1933,7 +1933,10 @@ defmodule Cure.CLI do
             info("Next: `mix hex.publish package --replace` with the tarball above.")
 
           {:error, reason} ->
-            error("cure publish --hex failed: #{inspect(reason)}")
+            error(
+              Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure publish --hex", reason))
+            )
+
             exit({:shutdown, 1})
         end
 
@@ -1946,7 +1949,12 @@ defmodule Cure.CLI do
             info("  files  = #{length(Map.get(manifest, "dependencies", []))} declared deps")
 
           {:error, reason} ->
-            error("cure publish --dry-run failed: #{inspect(reason)}")
+            error(
+              Cure.Diagnostic.Renderer.plain(
+                Cure.Diagnostic.Operational.command_failure("cure publish --dry-run", reason)
+              )
+            )
+
             exit({:shutdown, 1})
         end
 
@@ -1966,7 +1974,7 @@ defmodule Cure.CLI do
             info("Published: #{inspect(resp)}")
 
           {:error, reason} ->
-            error("cure publish failed: #{inspect(reason)}")
+            error(Cure.Diagnostic.Renderer.plain(Cure.Diagnostic.Operational.command_failure("cure publish", reason)))
             exit({:shutdown, 1})
         end
     end
