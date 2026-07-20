@@ -3941,7 +3941,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp put_field_source_info(meta, start_token, state, field_span) do
-    close_token = last_authored_token(state)
+    close_token = authored_token(state)
 
     whole =
       case {start_token.span, close_token} do
@@ -5294,7 +5294,7 @@ defmodule Cure.Compiler.Parser do
     body_span = first_node_source_span(body)
 
     whole =
-      case {pattern_span, last_authored_token(state)} do
+      case {pattern_span, authored_token(state)} do
         {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
           case Range.through(first, last) do
             {:ok, span} -> span
@@ -5716,7 +5716,7 @@ defmodule Cure.Compiler.Parser do
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
     meta = if effects, do: Keyword.put(meta, :effects, effects), else: meta
 
-    case {fn_token.span, name_token.span, last_authored_token(state)} do
+    case {fn_token.span, name_token.span, authored_token(state)} do
       {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = name_span, %Token{} = last} ->
         case Range.through(first, last) do
           {:ok, whole} ->
@@ -5809,7 +5809,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp put_let_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = first}, pattern, annotation, state) do
-    case last_authored_token(state) do
+    case authored_token(state) do
       %Token{span: %Cure.Diagnostic.Span{} = last} ->
         case Range.through(first, last) do
           {:ok, whole} ->
@@ -5948,7 +5948,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp annotation_span(%Token{span: %Cure.Diagnostic.Span{} = first}, state) do
-    case last_authored_token(state) do
+    case authored_token(state) do
       %Token{span: %Cure.Diagnostic.Span{} = last} ->
         case Range.through(first, last) do
           {:ok, span} -> span
@@ -6048,7 +6048,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp put_param_source_info(meta, %Token{} = start_token, %Token{} = name_token, state, annotation_span) do
-    case {start_token.span, name_token.span, last_authored_token(state)} do
+    case {start_token.span, name_token.span, authored_token(state)} do
       {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = name_span, %Token{} = last} ->
         case Range.through(first, last) do
           {:ok, whole} ->
@@ -6272,7 +6272,7 @@ defmodule Cure.Compiler.Parser do
     # Parse module name (dotted path)
     name_start = peek(state)
     {name, state} = parse_dotted_name(state)
-    name_end = last_authored_token(state)
+    name_end = authored_token(state)
     state = skip_newlines(state)
 
     # Parse indented body. Leading `##` docs immediately after `mod Name`
@@ -6298,7 +6298,7 @@ defmodule Cure.Compiler.Parser do
 
     name_start = peek(state)
     {name, state} = parse_dotted_name(state)
-    name_end = last_authored_token(state)
+    name_end = authored_token(state)
     state = skip_newlines(state)
     {body_stmts, state} = parse_definition_block(state)
 
@@ -6389,7 +6389,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp put_fixity_source_info(meta, %Token{} = first, %Token{} = operator, state) do
-    case {first.span, operator.span, last_authored_token(state)} do
+    case {first.span, operator.span, authored_token(state)} do
       {%Cure.Diagnostic.Span{} = first_span, %Cure.Diagnostic.Span{} = operator_span,
        %Token{span: %Cure.Diagnostic.Span{} = last_span}} ->
         case Range.through(first_span, last_span) do
@@ -6530,7 +6530,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp put_container_source_info(meta, %Token{} = first, %Token{} = name_start, %Token{} = name_end, state) do
-    case {first.span, name_start.span, name_end.span, last_authored_token(state)} do
+    case {first.span, name_start.span, name_end.span, authored_token(state)} do
       {%Cure.Diagnostic.Span{} = first_span, %Cure.Diagnostic.Span{} = name_start_span,
        %Cure.Diagnostic.Span{} = name_end_span, %Token{span: %Cure.Diagnostic.Span{} = last_span}} ->
         with {:ok, whole} <- Range.through(first_span, last_span),
@@ -7380,7 +7380,7 @@ defmodule Cure.Compiler.Parser do
     # Protocol name
     proto_start = peek(state)
     {proto_name, state} = parse_dotted_name(state)
-    proto_end = last_authored_token(state)
+    proto_end = authored_token(state)
 
     # Expect `for`
     state = expect_keyword(state, :for)
@@ -7517,7 +7517,7 @@ defmodule Cure.Compiler.Parser do
 
     iface_start = peek(state)
     {iface_name, state} = parse_dotted_name(state)
-    iface_end = last_authored_token(state)
+    iface_end = authored_token(state)
 
     # Consume the `for` keyword.
     state = expect_keyword(state, :for)
@@ -7578,7 +7578,7 @@ defmodule Cure.Compiler.Parser do
     # Parse module path
     path_start = peek(state)
     {path, state} = parse_dotted_name(state)
-    path_end = last_authored_token(state)
+    path_end = authored_token(state)
 
     # Check for selective import: .{a, b, c}
     {items, state} =
@@ -7652,7 +7652,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp put_named_declaration_source_info(meta, %Token{} = first, %Token{} = name_token, state) do
-    case {first.span, name_token.span, last_authored_token(state)} do
+    case {first.span, name_token.span, authored_token(state)} do
       {%Cure.Diagnostic.Span{} = first_span, %Cure.Diagnostic.Span{} = name_span,
        %Token{span: %Cure.Diagnostic.Span{} = last_token_span}} ->
         case Range.through(first_span, last_token_span) do
@@ -9728,8 +9728,8 @@ defmodule Cure.Compiler.Parser do
 
   defp token_at(_state, _idx), do: nil
 
-  defp last_authored_token(%{last_authored: token}), do: token
-  defp last_authored_token(_state), do: nil
+  defp authored_token(%{last_authored: token}), do: token
+  defp authored_token(_state), do: nil
 
   # The tokens from `pos` to the end, as a list. Callers that scan or split the
   # remaining stream want a list; this is O(n) like the `Enum.drop/2` it
