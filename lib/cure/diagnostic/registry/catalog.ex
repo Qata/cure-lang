@@ -1094,6 +1094,16 @@ defmodule Cure.Diagnostic.Registry.Catalog do
     Ordinary source errors must never use E101. Please report the fingerprint
     with a minimal reproducer.
     """,
+    "E102" => """
+    E102: Erasure Violation
+
+    An opaque type declares an invalid runtime erasure, or an erasure
+    declaration is applied to a type whose runtime shape is determined by
+    constructors.
+
+    Fix: use one of the supported erasure classes on a constructor-less
+    opaque type, or remove the declaration from a constructed type.
+    """,
     "W000" => """
     W000: Compiler Warning
 

@@ -34,6 +34,14 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:unknown_erasure_class, name, class}, opts) do
+    erasure_failure(:unknown_erasure_class, %{name: name, class: class}, opts)
+  end
+
+  def from_error({:erases_on_non_opaque, name}, opts) do
+    erasure_failure(:erases_on_non_opaque, %{name: name}, opts)
+  end
+
   def from_error({:missing_diagnosis, points}, opts), do: macro_validation_failure(:missing_diagnosis, points, opts)
   def from_error({:rule_unpinned, keywords}, opts), do: macro_validation_failure(:rule_unpinned, keywords, opts)
 
@@ -680,6 +688,32 @@ defmodule Cure.Diagnostic.Adapter do
       notes: ["This is an internal compiler failure; report it with the diagnostic fingerprint."],
       payload: %{reason: inspect(reason)}
     )
+  end
+
+  defp erasure_failure(kind, details, opts) do
+    body =
+      case kind do
+        :unknown_erasure_class ->
+          "`@erases(#{inspect(details.class)})` on `#{name_to_string(details.name)}` is not a supported erasure class. Supported classes: #{known_erasure_classes_hint()}."
+
+        :erases_on_non_opaque ->
+          "`#{name_to_string(details.name)}` has constructors, so its runtime erasure is already determined. `@erases` is only valid on a constructor-less opaque type."
+      end
+
+    Diagnostic.new(
+      code: "E102",
+      key: :erasure_violation,
+      severity: :error,
+      title: "Erasure violation",
+      body: Doc.paragraph(body),
+      primary: primary_label(opts, "this erasure declaration is invalid"),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp known_erasure_classes_hint do
+    [:pid, :reference, :integer, :float, :binary, :atom, :boolean, :list]
+    |> Enum.map_join(", ", &Atom.to_string/1)
   end
 
   defp macro_validation_failure(kind, details, opts) do

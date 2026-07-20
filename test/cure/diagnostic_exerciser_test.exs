@@ -48,7 +48,8 @@ defmodule Cure.DiagnosticExerciserTest do
       {"recovered parse", "E063", {:parse_recovered, :semicolon, 1, 1}},
       {"macro expansion", "E092",
        {:lift_module_error,
-        %{module: "Demo.Generated", cause: {:unknown_global, :missing}, source_provenance: %{macro: :spawn}}}}
+        %{module: "Demo.Generated", cause: {:unknown_global, :missing}, source_provenance: %{macro: :spawn}}}},
+      {"erasure violation", "E102", {:unknown_erasure_class, :Handle, :banana}}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))

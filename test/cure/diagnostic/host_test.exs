@@ -82,6 +82,15 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":rule_unpinned"
   end
 
+  test "renders erasure violations with the supported runtime classes" do
+    rendered = Host.render({:unknown_erasure_class, :Handle, :banana}, "demo.cure")
+
+    assert rendered =~ "[E102]"
+    assert rendered =~ "banana"
+    assert rendered =~ "pid"
+    refute rendered =~ ":unknown_erasure_class"
+  end
+
   test "does not fall through to legacy formatting for an unregistered reason" do
     rendered = Host.render({:unregistered_compiler_reason, :detail}, "demo.cure")
 

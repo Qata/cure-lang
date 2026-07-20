@@ -89,7 +89,7 @@ defmodule Cure.Diagnostic.Registry do
     "W081" => "No first-party producer remains; pickup reachability warnings are not emitted.",
     "W082" => "No first-party producer remains; pickup reachability warnings are not emitted."
   }
-  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 W086 W088]
+  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 W086 W088]
   @known_producers ~w[
     dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
     module_loader name_resolution operational parser pattern_checker proof_checker
@@ -138,6 +138,7 @@ defmodule Cure.Diagnostic.Registry do
     "E099" => :usage,
     "E100" => :artifact,
     "E101" => :internal_compiler_error,
+    "E102" => :erasure_violation,
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
     "W002" => :configuration_warning,
@@ -259,6 +260,7 @@ defmodule Cure.Diagnostic.Registry do
   defp stable_key("E093", _title), do: :type_mismatch
   defp stable_key("E094", _title), do: :syntax_error
   defp stable_key("E101", _title), do: :internal_compiler_error
+  defp stable_key("E102", _title), do: :erasure_violation
 
   defp stable_key(_code, title) do
     title
@@ -298,12 +300,14 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E093"), do: [:elaboration, :kernel_conversion]
   defp producers("E094"), do: [:lexer, :parser]
   defp producers("E101"), do: [:operational]
+  defp producers("E102"), do: [:elaboration]
   defp producers("E008"), do: [:doctor]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
   defp producers(_code), do: [:compiler_errors]
 
   defp subsystem("E101"), do: :compiler
+  defp subsystem("E102"), do: :elaboration
   defp subsystem("E091"), do: :resolution
   defp subsystem("E092"), do: :macros
   defp subsystem("E093"), do: :elaboration
