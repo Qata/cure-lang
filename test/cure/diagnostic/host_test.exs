@@ -101,6 +101,14 @@ defmodule Cure.Diagnostic.HostTest do
     assert relevance =~ "returned"
   end
 
+  test "renders declaration conflicts with their authored identity" do
+    rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
+
+    assert rendered =~ "[E105]"
+    assert rendered =~ "move"
+    assert rendered =~ "arity 1"
+  end
+
   test "does not fall through to legacy formatting for an unregistered reason" do
     rendered = Host.render({:unregistered_compiler_reason, :detail}, "demo.cure")
 

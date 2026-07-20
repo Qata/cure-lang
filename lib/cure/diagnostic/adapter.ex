@@ -75,6 +75,27 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({kind, name}, opts)
+      when kind in [
+             :duplicate_type,
+             :duplicate_ctor,
+             :duplicate_field,
+             :duplicate_parameter,
+             :reserved_union_type_name,
+             :constructor_function_collision,
+             :duplicate_definition
+           ] do
+    declaration_conflict(kind, %{name: name}, opts)
+  end
+
+  def from_error({:overlapping_overload, name, arity}, opts) do
+    declaration_conflict(:overlapping_overload, %{name: name, arity: arity}, opts)
+  end
+
+  def from_error({:sibling_module_collision, name, owners}, opts) do
+    declaration_conflict(:sibling_module_collision, %{name: name, owners: owners}, opts)
+  end
+
   def from_error({:missing_diagnosis, points}, opts), do: macro_validation_failure(:missing_diagnosis, points, opts)
   def from_error({:rule_unpinned, keywords}, opts), do: macro_validation_failure(:rule_unpinned, keywords, opts)
 
@@ -740,6 +761,27 @@ defmodule Cure.Diagnostic.Adapter do
       title: "Erasure violation",
       body: Doc.paragraph(body),
       primary: primary_label(opts, "this erasure declaration is invalid"),
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp declaration_conflict(kind, details, opts) do
+    name = name_to_string(Map.get(details, :name, :declaration))
+
+    detail =
+      case kind do
+        :overlapping_overload -> " with arity #{Map.get(details, :arity)}"
+        :sibling_module_collision -> " across modules #{inspect(Map.get(details, :owners))}"
+        _ -> ""
+      end
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Declaration conflict",
+      body: Doc.paragraph("The declaration `#{name}` conflicts with another visible declaration#{detail}."),
+      primary: primary_label(opts, "rename this declaration or make its identity unique"),
       payload: Map.put(details, :kind, kind)
     )
   end

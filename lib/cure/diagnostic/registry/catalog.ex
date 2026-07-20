@@ -1123,6 +1123,15 @@ defmodule Cure.Diagnostic.Registry.Catalog do
 
     Fix: remove the runtime use or make the binding relevant.
     """,
+    "E105" => """
+    E105: Declaration Conflict
+
+    A declaration conflicts with another declaration, constructor, field,
+    parameter, or reserved name in the same visible namespace.
+
+    Fix: rename the declaration or change its signature so each visible
+    declaration has a unique identity.
+    """,
     "W000" => """
     W000: Compiler Warning
 
