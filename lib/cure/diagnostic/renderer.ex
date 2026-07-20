@@ -326,7 +326,7 @@ defmodule Cure.Diagnostic.Renderer do
     |> String.split("\n")
     |> Enum.with_index()
     |> Enum.map_join("\n", fn
-      {line, 0} -> primary_color <> line <> reset
+      {line, 0} -> IO.ANSI.cyan() <> line <> reset
       {line, _index} -> color_marker_line(line, primary_color, reset)
     end)
   end

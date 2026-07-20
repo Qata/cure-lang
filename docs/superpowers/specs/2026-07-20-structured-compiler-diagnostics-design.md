@@ -518,6 +518,10 @@ internal atom such as `unknown_global` or `file_read`. The stable Cure code
 remains visible in the banner. Colour may distinguish the banner and marked
 source, but the colour-free rendering must preserve the same hierarchy.
 
+The banner is cyan for every severity. Severity colour is reserved for source
+markers so the header remains a stable visual separator: error carets are red,
+warning carets are yellow, and secondary markers are cyan.
+
 Primary underlines cover the complete offending authored token or expression,
 not merely its first column. A two-character arrow receives two carets; a
 rejected call or expression receives one caret per displayed character across

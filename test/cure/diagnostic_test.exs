@@ -46,6 +46,7 @@ defmodule Cure.DiagnosticTest do
     mix = Renderer.mix_diagnostic(diagnostic)
 
     assert plain =~ "-- UNKNOWN VALUE [E101]"
+    assert terminal =~ IO.ANSI.cyan() <> "-- UNKNOWN VALUE [E101]"
     assert plain =~ "2 |   fn answer() -> Int = unknowñ"
     assert plain =~ "^^^^^^^ not found"
     assert terminal =~ IO.ANSI.red() <> "^^^^^^^" <> IO.ANSI.reset()
