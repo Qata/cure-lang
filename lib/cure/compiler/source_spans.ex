@@ -3,8 +3,7 @@ defmodule Cure.Compiler.SourceSpans do
 
   alias Cure.Compiler.Token
   alias Cure.Diagnostic.Span
-
-  @diagnostic_keys [:span, :name_span, :callee_span, :construct_span, :provenance]
+  alias Cure.MetaAST.Metadata
 
   @spec attach(term(), [Token.t()]) :: term()
   def attach(ast, tokens) do
@@ -16,21 +15,7 @@ defmodule Cure.Compiler.SourceSpans do
 
   @doc "Remove source/provenance metadata before a semantic comparison."
   @spec strip_diagnostic_meta(term()) :: term()
-  def strip_diagnostic_meta({tag, meta, payload}) when is_atom(tag) and is_list(meta) do
-    {tag, Keyword.drop(meta, @diagnostic_keys), strip_diagnostic_meta(payload)}
-  end
-
-  def strip_diagnostic_meta(list) when is_list(list), do: Enum.map(list, &strip_diagnostic_meta/1)
-
-  def strip_diagnostic_meta(tuple) when is_tuple(tuple) do
-    tuple |> Tuple.to_list() |> Enum.map(&strip_diagnostic_meta/1) |> List.to_tuple()
-  end
-
-  def strip_diagnostic_meta(map) when is_map(map) and not is_struct(map) do
-    Map.new(map, fn {key, value} -> {strip_diagnostic_meta(key), strip_diagnostic_meta(value)} end)
-  end
-
-  def strip_diagnostic_meta(other), do: other
+  def strip_diagnostic_meta(ast), do: Metadata.strip_diagnostics(ast)
 
   defp attach_term({tag, meta, payload}, context) when is_atom(tag) and is_list(meta) do
     # Declarations keep annotations, parameters, guards, and constraints in

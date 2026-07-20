@@ -1,0 +1,40 @@
+defmodule Cure.MetaAST.SourceInfo do
+  @moduledoc "Canonical authored source roles carried by a MetaAST node."
+
+  alias Cure.Diagnostic.{ProvenanceFrame, Span}
+
+  defstruct whole: nil,
+            name: nil,
+            callee: nil,
+            operator: nil,
+            operands: [],
+            arguments: [],
+            annotation: nil,
+            body: nil,
+            pattern: nil,
+            guard: nil,
+            branches: [],
+            fields: %{},
+            opener: nil,
+            closer: nil,
+            provenance: []
+
+  @type span_or_nil :: Span.t() | nil
+  @type t :: %__MODULE__{
+          whole: span_or_nil(),
+          name: span_or_nil(),
+          callee: span_or_nil(),
+          operator: span_or_nil(),
+          operands: [Span.t()],
+          arguments: [Span.t()],
+          annotation: span_or_nil(),
+          body: span_or_nil(),
+          pattern: span_or_nil(),
+          guard: span_or_nil(),
+          branches: [Span.t()],
+          fields: %{optional(term()) => Span.t()},
+          opener: span_or_nil(),
+          closer: span_or_nil(),
+          provenance: [ProvenanceFrame.t()]
+        }
+end
