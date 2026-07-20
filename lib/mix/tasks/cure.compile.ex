@@ -27,7 +27,12 @@ defmodule Mix.Tasks.Cure.Compile do
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
 
     if paths == [] do
-      Mix.shell().error("Usage: mix cure.compile <path> [--output-dir DIR]")
+      Mix.shell().error(
+        Cure.Diagnostic.Renderer.plain(
+          Cure.Diagnostic.Operational.usage("Usage: mix cure.compile <path> [--output-dir DIR]")
+        )
+      )
+
       exit({:shutdown, 1})
     end
 

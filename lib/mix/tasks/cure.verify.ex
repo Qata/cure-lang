@@ -56,7 +56,12 @@ defmodule Mix.Tasks.Cure.Verify do
         verify_directory(path, strict?)
 
       true ->
-        Mix.shell().error("cure.verify: #{path} is not a .tar.gz file or directory")
+        Mix.shell().error(
+          Cure.Diagnostic.Renderer.plain(
+            Cure.Diagnostic.Operational.artifact_error("#{path} is not a .tar.gz file or directory")
+          )
+        )
+
         exit({:shutdown, 1})
     end
   end
@@ -160,7 +165,12 @@ defmodule Mix.Tasks.Cure.Verify do
   end
 
   defp handle_missing(true, label) do
-    Mix.shell().error("cure.verify: no .cureproof artifact found in #{label} (E065)")
+    Mix.shell().error(
+      Cure.Diagnostic.Renderer.plain(
+        Cure.Diagnostic.Operational.artifact_error("no .cureproof artifact found in #{label} (E065)")
+      )
+    )
+
     exit({:shutdown, 1})
   end
 

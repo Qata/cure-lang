@@ -37,7 +37,12 @@ defmodule Mix.Tasks.Cure.Replay do
     path = List.first(rest)
 
     if is_nil(path) do
-      Mix.Shell.IO.error("Usage: mix cure.replay <path.journal> [--module ModuleName] [--step]")
+      Mix.Shell.IO.error(
+        Cure.Diagnostic.Renderer.plain(
+          Cure.Diagnostic.Operational.usage("Usage: mix cure.replay <path.journal> [--module ModuleName] [--step]")
+        )
+      )
+
       exit({:shutdown, 1})
     end
 
@@ -82,7 +87,14 @@ defmodule Mix.Tasks.Cure.Replay do
                   exit({:shutdown, 1})
               end
             else
-              Mix.Shell.IO.error("Module #{mod_str} is not loaded. Compile the project first.")
+              Mix.Shell.IO.error(
+                Cure.Diagnostic.Renderer.plain(
+                  Cure.Diagnostic.Operational.artifact_error(
+                    "Module #{mod_str} is not loaded. Compile the project first."
+                  )
+                )
+              )
+
               exit({:shutdown, 1})
             end
         end

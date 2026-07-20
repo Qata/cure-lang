@@ -309,4 +309,9 @@ defmodule Cure.DiagnosticTest do
     assert Cure.Diagnostic.Operational.snap_missing("missing.cure").code == "E070"
     assert Cure.Diagnostic.Operational.configuration_warning("bad setting").code == "W002"
   end
+
+  test "task usage and artifact failures are structured" do
+    assert Cure.Diagnostic.Operational.usage("bad args").code == "E099"
+    assert Cure.Diagnostic.Operational.artifact_error("missing").code == "E100"
+  end
 end

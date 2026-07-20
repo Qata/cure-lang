@@ -60,7 +60,12 @@ defmodule Mix.Tasks.Cure.Release do
         end
 
       {:error, :no_project_file} ->
-        Mix.shell().error("No Cure.toml found in current directory.")
+        Mix.shell().error(
+          Cure.Diagnostic.Renderer.plain(
+            Cure.Diagnostic.Operational.artifact_error("No Cure.toml found in current directory.")
+          )
+        )
+
         exit({:shutdown, 1})
 
       {:error, reason} ->

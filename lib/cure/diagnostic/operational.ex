@@ -73,6 +73,8 @@ defmodule Cure.Diagnostic.Operational do
     do: diagnostic("E070", :snap_path_missing, "Snap loaded path no longer exists: #{path}", %{path: path})
 
   def configuration_warning(message), do: diagnostic("W002", :configuration_warning, message, %{})
+  def usage(message), do: diagnostic("E099", :usage_error, message, %{})
+  def artifact_error(message), do: diagnostic("E100", :artifact_error, message, %{})
 
   defp diagnostic(code, key, message, payload),
     do: Diagnostic.new(code: code, key: key, severity: :error, title: "#{key}", message: message, payload: payload)
