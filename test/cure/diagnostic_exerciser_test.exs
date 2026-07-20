@@ -103,7 +103,26 @@ defmodule Cure.DiagnosticExerciserTest do
       {"unsupported macro hole arity", "E092", {:unsupported_hole_arity, 3}},
       {"invalid Core grade", "E100", {:bad_grade, :not_a_grade}},
       {"unknown Core symbol", "E100", {:unknown_symbol, "not_loaded"}},
-      {"ill-formed Core term", "E100", {:ill_formed_term, {:not_core, 1}}}
+      {"ill-formed Core term", "E100", {:ill_formed_term, {:not_core, 1}}},
+      {"unregistered bounded family", "E093", :bounded_family_unregistered},
+      {"reachable absurd branch", "E093", :absurd_in_reachable_position},
+      {"opaque elimination", "E093", :opaque_not_eliminable},
+      {"non-data case", "E093", :case_scrutinee_not_data},
+      {"non-total definition", "E093", :not_total},
+      {"non-function application", "E093", :not_a_function},
+      {"non-exhaustive pattern", "E093", :coverage},
+      {"branch arity", "E093", :branch_arity},
+      {"branch type", "E093", :branch_type},
+      {"index arity", "E093", :index_arity},
+      {"applied non-function", "E093", :applied_non_function},
+      {"rewrite expected type", "E093", :rewrite_requires_expected_type},
+      {"rewrite proof", "E093", :rewrite_proof_not_equality},
+      {"match non-data", "E093", :match_scrutinee_not_data},
+      {"mixed rematch arms", "E093", :with_mixed_rematch_arms},
+      {"with non-data", "E093", :with_scrutinee_not_data},
+      {"too few arguments", "E093", :too_few_arguments},
+      {"too many arguments", "E093", :too_many_arguments},
+      {"non-variable scrutinee", "E093", :nonvariable_scrutinee}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))

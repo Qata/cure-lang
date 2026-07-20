@@ -718,14 +718,15 @@ defmodule Cure.Diagnostic.Adapter do
   # operational artifact diagnostics, not kernel terms to expose in default
   # output. The detail is retained only as machine/debug data by the
   # operational converter.
-  def from_error({:bad_grade, _grade}, _opts),
-    do: Operational.artifact_error("Core artifact contains an invalid relevance grade")
+  def from_error({:bad_grade, grade}, _opts),
+    do:
+      Operational.artifact_error("Core artifact contains an invalid relevance grade", %{kind: :bad_grade, grade: grade})
 
-  def from_error({:unknown_symbol, _symbol}, _opts),
-    do: Operational.artifact_error("Core artifact contains an unknown symbol")
+  def from_error({:unknown_symbol, symbol}, _opts),
+    do: Operational.artifact_error("Core artifact contains an unknown symbol", %{kind: :unknown_symbol, symbol: symbol})
 
-  def from_error({:ill_formed_term, _term}, _opts),
-    do: Operational.artifact_error("Core artifact contains an ill-formed term")
+  def from_error({:ill_formed_term, term}, _opts),
+    do: Operational.artifact_error("Core artifact contains an ill-formed term", %{kind: :ill_formed_term, term: term})
 
   def from_error({:reducer_arity, constructor, actual, expected}, opts),
     do:
@@ -737,6 +738,38 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:primitive_floor_mismatch, name, node, other}, opts),
     do: macro_validation_failure(:primitive_floor_mismatch, %{name: name, node: node, other: other}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :bounded_family_unregistered,
+             :absurd_in_reachable_position,
+             :opaque_not_eliminable,
+             :case_scrutinee_not_data,
+             :not_total,
+             :not_a_function,
+             :coverage,
+             :branch_arity,
+             :branch_type,
+             :index_arity
+           ],
+      do: contextual_type_failure(kind, %{}, opts)
+
+  def from_error(kind, opts)
+      when kind in [
+             :applied_non_function,
+             :rewrite_requires_expected_type,
+             :rewrite_proof_not_equality,
+             :match_scrutinee_not_data,
+             :with_mixed_rematch_arms,
+             :with_scrutinee_not_data,
+             :too_few_arguments,
+             :too_many_arguments,
+             :nonvariable_scrutinee
+           ],
+      do: contextual_type_failure(kind, %{}, opts)
+
+  def from_error(:shadowed, opts),
+    do: declaration_conflict(:shadowed, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -1908,6 +1941,46 @@ defmodule Cure.Diagnostic.Adapter do
           {"Bound must be concrete", "This bounded type declaration requires a concrete bound.",
            "replace the bound with a concrete value"}
 
+        :bounded_family_unregistered ->
+          {"Bounded literal type is unavailable", "This literal requires the standard Bounded type family.",
+           "import or register the Bounded type family"}
+
+        :absurd_in_reachable_position ->
+          {"Impossible branch is reachable", "This absurd branch is reachable in the current type.",
+           "make the branch unreachable or prove the contradiction"}
+
+        :opaque_not_eliminable ->
+          {"Opaque value cannot be eliminated", "This opaque value cannot be reduced or matched here.",
+           "use the public interface of the opaque value"}
+
+        :case_scrutinee_not_data ->
+          {"Case scrutinee is not data", "A case expression must scrutinize a data value.",
+           "match on a data constructor"}
+
+        :not_total ->
+          {"Definition is not total", "This definition is used in a total context but is not total.",
+           "cover every case or remove the total-context use"}
+
+        :not_a_function ->
+          {"Application target is not a function", "This expression is applied but has no function type.",
+           "apply a function-valued expression"}
+
+        :coverage ->
+          {"Pattern match is not exhaustive", "This pattern match does not cover every possible value.",
+           "add the missing pattern or a default arm"}
+
+        :branch_arity ->
+          {"Pattern branch has the wrong arity", "The branch binds a different number of fields than its constructor.",
+           "make the pattern match the constructor fields"}
+
+        :branch_type ->
+          {"Pattern branches disagree", "The branches of this expression do not produce one compatible type.",
+           "make every branch return the same type"}
+
+        :index_arity ->
+          {"Indexed type has the wrong number of indices", "This indexed application does not match its declaration.",
+           "supply exactly the declared indices"}
+
         _ ->
           {"Kernel type check failed", "The kernel could not validate this type or term.",
            "add an annotation or revise the term"}
@@ -2099,6 +2172,41 @@ defmodule Cure.Diagnostic.Adapter do
         :bidirectional_erased_field ->
           {"Erased field cannot be inferred here", "This erased constructor field requires checking information.",
            "add an annotation or make the field relevant"}
+
+        :applied_non_function ->
+          {"Application target is not callable", "This expression is applied but does not have a callable type.",
+           "apply a function or constructor"}
+
+        :rewrite_requires_expected_type ->
+          {"Rewrite needs an expected type", "Cure cannot infer the type required by this rewrite.",
+           "add an annotation that fixes the rewritten type"}
+
+        :rewrite_proof_not_equality ->
+          {"Rewrite proof is not an equality", "The proof supplied to rewrite does not prove an equality.",
+           "use an equality proof for the value being rewritten"}
+
+        :match_scrutinee_not_data ->
+          {"Match scrutinee is not data", "This match expression scrutinizes a value without data constructors.",
+           "match a data value"}
+
+        :with_mixed_rematch_arms ->
+          {"With arms use incompatible rematches", "The rematch arms of this with expression do not have one shape.",
+           "use the same rematch form in every arm"}
+
+        :with_scrutinee_not_data ->
+          {"With scrutinee is not data", "A with rematch requires a data-valued scrutinee.", "rematch a data value"}
+
+        :too_few_arguments ->
+          {"Too few arguments", "This application does not provide every required argument.",
+           "supply the remaining arguments"}
+
+        :too_many_arguments ->
+          {"Too many arguments", "This application provides more arguments than the declaration accepts.",
+           "remove the extra arguments"}
+
+        :nonvariable_scrutinee ->
+          {"Scrutinee must be a variable", "This dependent operation requires a variable scrutinee.",
+           "bind the scrutinee before using it"}
 
         _ ->
           {"Elaboration failed", "This expression or declaration is not valid in the current checking context.",

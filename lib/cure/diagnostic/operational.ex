@@ -19,6 +19,7 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:configuration_warning, message}, _opts), do: configuration_warning(message)
   def from_error({:usage_error, message}, _opts), do: usage(message)
   def from_error({:artifact_error, message}, _opts), do: artifact_error(message)
+  def from_error({:artifact_error, message, details}, _opts), do: artifact_error(message, details)
   def from_error({:proof_file_missing, detail}, _opts), do: proof_file_missing(detail)
   def from_error({:proof_verification_failed, detail}, _opts), do: proof_verification_failed(detail)
   def from_error({:proof_schema_incompatible, detail}, _opts), do: proof_schema_incompatible(detail)
@@ -164,7 +165,9 @@ defmodule Cure.Diagnostic.Operational do
 
   def configuration_warning(message), do: diagnostic("W002", :configuration_warning, message, %{})
   def usage(message), do: diagnostic("E099", :usage_error, message, %{})
-  def artifact_error(message), do: diagnostic("E100", :artifact_error, message, %{})
+
+  def artifact_error(message, details \\ %{}) when is_map(details),
+    do: diagnostic("E100", :artifact_error, message, details)
 
   def proof_file_missing(detail),
     do: diagnostic("E065", :proof_file_missing, "Proof file is missing: #{detail}", %{detail: detail})

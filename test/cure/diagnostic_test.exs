@@ -173,7 +173,26 @@ defmodule Cure.DiagnosticTest do
       {{:unsupported_hole_arity, 3}, "E092"},
       {{:bad_grade, :not_a_grade}, "E100"},
       {{:unknown_symbol, "not_loaded"}, "E100"},
-      {{:ill_formed_term, {:not_core, 1}}, "E100"}
+      {{:ill_formed_term, {:not_core, 1}}, "E100"},
+      {:bounded_family_unregistered, "E093"},
+      {:absurd_in_reachable_position, "E093"},
+      {:opaque_not_eliminable, "E093"},
+      {:case_scrutinee_not_data, "E093"},
+      {:not_total, "E093"},
+      {:not_a_function, "E093"},
+      {:coverage, "E093"},
+      {:branch_arity, "E093"},
+      {:branch_type, "E093"},
+      {:index_arity, "E093"},
+      {:applied_non_function, "E093"},
+      {:rewrite_requires_expected_type, "E093"},
+      {:rewrite_proof_not_equality, "E093"},
+      {:match_scrutinee_not_data, "E093"},
+      {:with_mixed_rematch_arms, "E093"},
+      {:with_scrutinee_not_data, "E093"},
+      {:too_few_arguments, "E093"},
+      {:too_many_arguments, "E093"},
+      {:nonvariable_scrutinee, "E093"}
     ]
 
     for {reason, code} <- cases do
@@ -190,6 +209,15 @@ defmodule Cure.DiagnosticTest do
 
     assert [%Suggestion{applicability: :machine_applicable, edits: [%TextEdit{replacement: "\""}]}] =
              diagnostic.suggestions
+  end
+
+  test "Core artifact failures keep native details out of prose but in payload" do
+    diagnostic = Adapter.from_error({:unknown_symbol, "not_loaded"})
+
+    assert diagnostic.code == "E100"
+    assert diagnostic.payload == %{kind: :unknown_symbol, symbol: "not_loaded"}
+    refute Diagnostic.message(diagnostic) =~ "not_loaded"
+    refute Diagnostic.message(diagnostic) =~ "{:unknown_symbol"
   end
 
   test "LSP positions count UTF-16 code units rather than Unicode scalars" do
