@@ -273,7 +273,7 @@ defmodule Cure.Compiler.MacroSyntax do
     Enum.flat_map(meta, fn
       {:line, value} -> [{:source_line, synlit(value)}]
       {:col, value} -> [{:source_col, synlit(value)}]
-      {key, _value} when key in [:span, :name_span, :callee_span, :construct_span, :provenance] -> []
+      {key, _value} when key in [:source_info, :span, :name_span, :callee_span, :construct_span, :provenance] -> []
       {key, value} -> [{key, synlit(value)}]
       _ -> []
     end)
