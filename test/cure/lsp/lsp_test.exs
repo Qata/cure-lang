@@ -166,6 +166,18 @@ defmodule Cure.LSP.LspTest do
         assert diag["source"] == "cure"
       end
     end
+
+    test "unsaved buffers receive elaboration diagnostics" do
+      source =
+        "mod X\n  type Nat = Z | S(Nat)\n  fn bad() -> Equivalent(Nat, Z, S(Z)) = reflexive(Z)\n"
+
+      [diagnostic | _] = Server.compute_diagnostics("file:///unsaved.cure", source)
+
+      assert diagnostic["source"] == "cure"
+      assert diagnostic["code"] == "E093"
+      assert diagnostic["message"] =~ "type"
+      assert diagnostic["range"]["start"]["line"] == 2
+    end
   end
 
   # ============================================================================

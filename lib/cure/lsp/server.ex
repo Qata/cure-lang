@@ -390,17 +390,21 @@ defmodule Cure.LSP.Server do
 
   @doc false
   def compute_diagnostics(uri, text, encoding \\ :utf16) do
-    case Lexer.tokenize(text, emit_events: false) do
-      {:ok, tokens} ->
-        case Parser.parse(tokens, emit_events: false) do
-          {:ok, _ast} -> []
-          {:error, errors} -> Enum.map(errors, &source_diagnostic(&1, uri, text, encoding))
-        end
+    case Cure.Elab.Program.elaborate(text) do
+      {:ok, _env} ->
+        []
 
       {:error, reason} ->
-        [source_diagnostic(reason, uri, text, encoding)]
+        reason
+        |> lsp_error_list()
+        |> Enum.map(&source_diagnostic(&1, uri, text, encoding))
     end
   end
+
+  defp lsp_error_list({:parse_error, errors}) when is_list(errors), do: errors
+  defp lsp_error_list({:type_error, errors}) when is_list(errors), do: errors
+  defp lsp_error_list(errors) when is_list(errors), do: errors
+  defp lsp_error_list(error), do: [error]
 
   @doc false
   def diagnostic_to_lsp(%Cure.Diagnostic{} = diagnostic, registry \\ nil, encoding \\ :utf16) do
