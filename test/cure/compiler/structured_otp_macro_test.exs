@@ -197,6 +197,39 @@ defmodule Cure.Compiler.StructuredOtpMacroTest do
     :gen_statem.stop(pid)
   end
 
+  test "transition-table verifier rejects invalid graph structure at expansion time" do
+    invalid = [
+      {:fsm_unknown_terminal_state, """
+      fsm Cure.Generated.UnknownTerminal with Int
+        terminal Missing
+        A --Go--> A
+      """},
+      {:fsm_unreachable_state, """
+      fsm Cure.Generated.Unreachable with Int
+        terminal B
+        terminal D
+        A --Go--> B
+        C --Go--> D
+      """},
+      {:fsm_deadlocked_state, """
+      fsm Cure.Generated.Deadlocked with Int
+        A --Go--> B
+      """},
+      {:fsm_duplicate_transition, """
+      fsm Cure.Generated.Duplicate with Int
+        terminal B
+        A --Go--> B
+        A --Go--> B
+      """}
+    ]
+
+    Enum.each(invalid, fn {reason, declaration} ->
+      source = "mod M\n  use Std.Fsm\n\n  " <> String.replace(declaration, "\n", "\n  ")
+      assert {:error, error} = Cure.Compiler.compile_and_load(source, emit_events: false)
+      assert :erlang.term_to_binary(error) =~ Atom.to_string(reason)
+    end)
+  end
+
   test "transition updates support typed record updates and preserve untouched fields" do
     source = """
     mod M

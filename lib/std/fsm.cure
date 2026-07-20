@@ -46,7 +46,126 @@ mod Std.Fsm
           Some(initial) ->
             let states = transition_states(definition.transitions, [])
             let events = transition_events(definition.transitions, [])
-            emit_transition_table(name, data, initial, states, events, definition.transitions)
+            match validate_compact_graph(initial, states, definition.terminal, definition.transitions)
+              Some(reason) -> Failure(reason, [])
+              None() -> emit_transition_table(name, data, initial, states, events, definition.transitions)
+
+  type GraphEdge = GraphEdge(Option(Atom), Atom, Atom, Bool)
+
+  fn validate_compact_graph(initial: Syntax, states: List(Syntax), terminals: List(Syntax), transitions: List(TransitionDefinitionSyntax)) -> Option(Atom) = match syntax_key(initial)
+    None() -> Some(:fsm_unknown_initial_state)
+    Some(initial_key) ->
+      let state_keys = syntax_keys(states)
+      let terminal_keys = syntax_keys(terminals)
+      let edges = compact_edges(transitions)
+      match atom_in(initial_key, state_keys)
+        false -> Some(:fsm_unknown_initial_state)
+        true -> match all_atoms_in(terminal_keys, state_keys)
+          false -> Some(:fsm_unknown_terminal_state)
+          true -> match duplicate_compact_edge(edges)
+            true -> Some(:fsm_duplicate_transition)
+            false ->
+              let reachable = reachable_atoms(state_keys, [initial_key], edges)
+              match all_atoms_in(state_keys, reachable)
+                false -> Some(:fsm_unreachable_state)
+                true -> match compact_deadlock(state_keys, terminal_keys, edges)
+                  true -> Some(:fsm_deadlocked_state)
+                  false -> None()
+
+  fn syntax_keys(values: List(Syntax)) -> List(Atom) = match values
+    [] -> []
+    [value | rest] -> match syntax_key(value)
+      None() -> syntax_keys(rest)
+      Some(key) -> [key | syntax_keys(rest)]
+
+  fn compact_edges(transitions: List(TransitionDefinitionSyntax)) -> List(GraphEdge) = match transitions
+    [] -> []
+    [edge | rest] -> match syntax_key(edge.event)
+      None() -> compact_edges(rest)
+      Some(event) -> match syntax_key(edge.to)
+        None() -> compact_edges(rest)
+        Some(to) -> [GraphEdge(optional_syntax_key(edge.from), event, to, option_present(edge.when)) | compact_edges(rest)]
+
+  fn optional_syntax_key(value: Option(Syntax)) -> Option(Atom) = match value
+    None() -> None()
+    Some(item) -> syntax_key(item)
+
+  fn option_present({a: Type}, value: Option(a)) -> Bool = match value
+    None() -> false
+    Some(_) -> true
+
+  fn atom_in(value: Atom, values: List(Atom)) -> Bool = match values
+    [] -> false
+    [head | rest] -> match head == value
+      true -> true
+      false -> atom_in(value, rest)
+
+  fn all_atoms_in(values: List(Atom), catalogue: List(Atom)) -> Bool = match values
+    [] -> true
+    [value | rest] -> match atom_in(value, catalogue)
+      true -> all_atoms_in(rest, catalogue)
+      false -> false
+
+  fn duplicate_compact_edge(edges: List(GraphEdge)) -> Bool = match edges
+    [] -> false
+    [GraphEdge(from, event, _, guarded) | rest] -> match guarded
+      true -> duplicate_compact_edge(rest)
+      false -> match compact_edge_in(from, event, rest)
+        true -> true
+        false -> duplicate_compact_edge(rest)
+
+  fn compact_edge_in(from: Option(Atom), event: Atom, edges: List(GraphEdge)) -> Bool = match edges
+    [] -> false
+    [GraphEdge(other_from, other_event, _, guarded) | rest] -> match guarded
+      true -> compact_edge_in(from, event, rest)
+      false -> match same_optional_atom(from, other_from)
+        false -> compact_edge_in(from, event, rest)
+        true -> match event == other_event
+          true -> true
+          false -> compact_edge_in(from, event, rest)
+
+  fn same_optional_atom(left: Option(Atom), right: Option(Atom)) -> Bool = match left
+    None() -> match right
+      None() -> true
+      Some(_) -> false
+    Some(a) -> match right
+      None() -> false
+      Some(b) -> a == b
+
+  ## At most |states| monotone passes are needed to saturate a finite graph.
+  ## Recursing on the shrinking catalogue is visibly structural to the totality
+  ## checker, unlike a conventional BFS whose work queue can grow.
+  fn reachable_atoms(fuel: List(Atom), reachable: List(Atom), edges: List(GraphEdge)) -> List(Atom) = match fuel
+    [] -> reachable
+    [_ | rest] -> reachable_atoms(rest, expand_reachable(edges, reachable), edges)
+
+  fn expand_reachable(edges: List(GraphEdge), reachable: List(Atom)) -> List(Atom) = match edges
+    [] -> reachable
+    [GraphEdge(from, _, to, _) | rest] -> match from
+      None() -> expand_reachable(rest, add_atom(to, reachable))
+      Some(source) -> match atom_in(source, reachable)
+        true -> expand_reachable(rest, add_atom(to, reachable))
+        false -> expand_reachable(rest, reachable)
+
+  fn add_atom(value: Atom, values: List(Atom)) -> List(Atom) = match atom_in(value, values)
+    true -> values
+    false -> [value | values]
+
+  fn compact_deadlock(states: List(Atom), terminals: List(Atom), edges: List(GraphEdge)) -> Bool = match states
+    [] -> false
+    [state | rest] -> match atom_in(state, terminals)
+      true -> compact_deadlock(rest, terminals, edges)
+      false -> match compact_outgoing(state, edges)
+        true -> compact_deadlock(rest, terminals, edges)
+        false -> true
+
+  fn compact_outgoing(state: Atom, edges: List(GraphEdge)) -> Bool = match edges
+    [] -> false
+    [GraphEdge(from, _, _, _) | rest] -> match from
+      None() -> true
+      Some(source) -> match source == state
+        true -> true
+        false -> compact_outgoing(state, rest)
 
   fn select_initial(explicit: Option(Syntax), transitions: List(TransitionDefinitionSyntax)) -> Option(Syntax) = match explicit
     Some(value) -> Some(value)

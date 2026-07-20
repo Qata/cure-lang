@@ -13,6 +13,8 @@ defmodule Cure.Elab.MacroExpand do
   alias Cure.Elab.{Elaborator, Resolve, TotalityClosure}
 
   @normalise_fuel 10_000
+  @normalise_fuel_per_node 100
+  @normalise_fuel_ceiling 1_000_000
   # Termination is guaranteed by active-stack cycle detection. Production
   # expansion therefore has no arbitrary depth/size ceiling; embedders and
   # tests may still supply defensive finite limits explicitly.
@@ -400,7 +402,7 @@ defmodule Cure.Elab.MacroExpand do
 
     case Kernel.infer(context, application) do
       {:ok, _result_type} ->
-        result = Normalise.nf(context, application, fuel: @normalise_fuel)
+        result = Normalise.nf(context, application, fuel: normalise_fuel(application))
 
         case decode_result(result) do
           {:ok, _ast} = success ->
@@ -425,6 +427,26 @@ defmodule Cure.Elab.MacroExpand do
 
   defp execute_application(_context, _elab_core, []),
     do: {:error, :no_compatible_macro_input}
+
+  # Declaration macros receive reflected records whose Core representation is
+  # proportional to the authored declaration. A fixed expression-sized budget
+  # made valid four-row grammars fail while two-row versions passed. Scale the
+  # bounded evaluator budget with that input, retaining a hard ceiling for
+  # termination and denial-of-service resistance.
+  defp normalise_fuel(application) do
+    min(@normalise_fuel_ceiling, @normalise_fuel + @normalise_fuel_per_node * core_nodes(application))
+  end
+
+  defp core_nodes(value) when is_tuple(value) do
+    value
+    |> Tuple.to_list()
+    |> Enum.reduce(1, fn child, count -> count + core_nodes(child) end)
+  end
+
+  defp core_nodes(value) when is_list(value),
+    do: Enum.reduce(value, 1, fn child, count -> count + core_nodes(child) end)
+
+  defp core_nodes(_value), do: 1
 
   defp fallback_decode_error?({:author_failure, _name, _args}), do: false
   defp fallback_decode_error?({:author_diagnostics, _diagnostics}), do: false
