@@ -11,6 +11,8 @@ defmodule Cure.DiagnosticExerciserTest do
        "mod DiagnosticType\n  type Nat = Z | S(Nat)\n  fn bad() -> Equivalent(Nat, Z, S(Z)) = reflexive(Z)\n"}
     ]
 
+    compiler_codes = Enum.map(compiler_cases, &elem(&1, 1))
+
     Enum.each(compiler_cases, fn {label, expected_code, source} ->
       case Cure.Compiler.compile_string(source, emit_events: false) do
         {:ok, module, warnings} ->
@@ -44,6 +46,19 @@ defmodule Cure.DiagnosticExerciserTest do
       IO.puts(:stderr, Renderer.plain(diagnostic))
     end)
 
-    assert Enum.map(diagnostics, & &1.code) == ~w[E095 E096 E097 E098 W001 W000 E068 E070 W002 E099 E100]
+    operational_codes = Enum.map(diagnostics, & &1.code)
+    assert operational_codes == ~w[E095 E096 E097 E098 W001 W000 E068 E070 W002 E099 E100]
+
+    registered_codes = Cure.Compiler.Errors.list_all() |> Enum.map(&elem(&1, 0)) |> MapSet.new()
+    covered_codes = MapSet.new(compiler_codes ++ operational_codes)
+    missing_codes = MapSet.difference(registered_codes, covered_codes) |> Enum.sort()
+
+    IO.puts(
+      :stderr,
+      "\nDIAGNOSTIC PATH COVERAGE: #{MapSet.size(covered_codes)}/#{MapSet.size(registered_codes)} registered codes"
+    )
+
+    IO.puts(:stderr, "UNCOVERED REGISTERED CODES: " <> Enum.join(missing_codes, ", "))
+    assert MapSet.subset?(covered_codes, registered_codes)
   end
 end

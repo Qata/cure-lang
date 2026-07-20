@@ -1571,6 +1571,55 @@ defmodule Cure.Compiler.Errors do
 
     Fix the indicated delimiter, keyword, expression, or declaration shape.
     """,
+    "E095" => """
+    E095: Could Not Read File
+
+    Cure could not read a required source, manifest, journal, or artifact.
+    The payload retains the path and host file-system reason.
+    """,
+    "E096" => """
+    E096: Could Not Write File
+
+    Cure could not write a generated source, artifact, journal, or report.
+    The payload retains the path and host file-system reason.
+    """,
+    "E097" => """
+    E097: Dependency Resolution Failed
+
+    The project dependency graph could not be resolved consistently.
+    """,
+    "E098" => """
+    E098: Command Failed
+
+    An external or project operation returned a deliberate failure.
+    """,
+    "E099" => """
+    E099: Invalid Command Usage
+
+    A Cure command was invoked with missing or incompatible arguments.
+    """,
+    "E100" => """
+    E100: Invalid Build Artifact
+
+    A required build, proof, snapshot, or release artifact is absent,
+    corrupt, incompatible, or has the wrong format.
+    """,
+    "W000" => """
+    W000: Compiler Warning
+
+    Compatibility code for a compiler warning awaiting a more specific public
+    category. New producers must allocate a specific warning code.
+    """,
+    "W001" => """
+    W001: Migration Warning
+
+    Authored syntax is accepted for compatibility but has a modern form.
+    """,
+    "W002" => """
+    W002: Invalid Configuration
+
+    A configuration value was ignored because it is not valid in its setting.
+    """,
     "W088" => """
     W088: Unresolved Import
 
