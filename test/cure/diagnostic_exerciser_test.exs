@@ -88,7 +88,10 @@ defmodule Cure.DiagnosticExerciserTest do
       {"missing stdlib source", "E095", {:missing_stdlib_source, "Std.Missing", "/tmp/Std/Missing.cure"}},
       {"operator conflict", "E106", {:builtin_operator_not_overloadable, :|>}},
       {"unsupported async", "E107", {:unsupported_async, "async primitive is unavailable", [line: 2]}},
-      {"splice outside quote", "E108", {:splice_outside_quote, :splice, [line: 2]}}
+      {"splice outside quote", "E108", {:splice_outside_quote, :splice, [line: 2]}},
+      {"beam write failure", "E096", {:write_failed, "_build/Demo.beam", :eacces}},
+      {"beam load failure", "E098", {:load_failed, :badfile}},
+      {"beam compilation failure", "E098", {:compilation_failed, [{:bad_form, :detail}]}}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))
