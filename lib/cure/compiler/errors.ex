@@ -1799,6 +1799,10 @@ defmodule Cure.Compiler.Errors do
        when is_integer(line) and is_integer(col),
        do: {line, col}
 
+  defp error_location({:computed_macro_error, meta, _reason}) when is_list(meta) do
+    {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, Keyword.get(meta, :column, 0))}
+  end
+
   defp error_location({:parse_error, [reason | _]}), do: error_location(reason)
   defp error_location({:codegen_error, reason}), do: error_location(reason)
 

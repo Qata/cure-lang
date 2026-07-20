@@ -37,4 +37,21 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "demo.cure"
     refute rendered =~ ":macro_use_mismatch"
   end
+
+  test "blames computed macro rejection on the authored invocation" do
+    source = "fn run() -> Int = actor()\n"
+
+    rendered =
+      Host.render(
+        {:computed_macro_error, [keyword: "actor", line: 1, col: 20],
+         {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}},
+        "demo.cure",
+        source
+      )
+
+    assert rendered =~ "[E092]"
+    assert rendered =~ "actor"
+    assert rendered =~ "demo.cure"
+    refute rendered =~ ":computed_macro_error"
+  end
 end

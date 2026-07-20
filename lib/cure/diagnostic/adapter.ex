@@ -535,6 +535,46 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:computed_macro_error, meta, reason}, opts) when is_list(meta) do
+    keyword = Keyword.get(meta, :keyword, "computed")
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_expansion_failed,
+      severity: :error,
+      title: "Computed macro expansion failed",
+      body:
+        Doc.paragraph(
+          "The `#{keyword}` computed macro could not produce valid Cure syntax: #{computed_macro_reason(reason)}"
+        ),
+      primary: primary_label(opts, "this macro invocation generated the failing syntax"),
+      notes: ["Edit the authored macro invocation or its rule; generated syntax is not the user-facing source."],
+      provenance: Keyword.get(opts, :provenance, []),
+      payload: %{keyword: keyword, reason: inspect(reason)}
+    )
+  end
+
+  def from_error({:expansion_ill_typed, details}, opts) when is_map(details) do
+    keyword = Map.get(details, :keyword, "computed")
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_expansion_failed,
+      severity: :error,
+      title: "Macro expansion proof failed",
+      body: Doc.paragraph("The `#{keyword}` macro generated code that does not satisfy the dependent elaborator."),
+      primary: primary_label(opts, "this macro invocation generated the invalid expansion"),
+      notes: ["Edit the authored macro invocation; generated code is an implementation detail."],
+      provenance: Keyword.get(opts, :provenance, []),
+      payload: %{
+        keyword: keyword,
+        input: Map.get(details, :input),
+        expansion: Map.get(details, :expansion),
+        reason: inspect(Map.get(details, :kernel_error) || Map.get(details, :reason))
+      }
+    )
+  end
+
   def from_error({:lift_module_error, details}, opts) when is_map(details) do
     macro = get_in(details, [:source_provenance, :macro]) || :macro
     cause = Map.get(details, :cause)
@@ -768,6 +808,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda}), do: "the unclosed body reaches here"
   defp syntax_problem_label(%SyntaxProblem{kind: :recovered_statement}), do: "parsing resumed after this token"
   defp syntax_problem_label(_problem), do: "this syntax does not fit here"
+
+  defp computed_macro_reason({:invalid_generated_syntax, {kind, _path}}), do: Atom.to_string(kind)
+  defp computed_macro_reason({:author_failure, name, _args}), do: "the macro reported `#{name}`"
+  defp computed_macro_reason(reason), do: inspect(reason)
 
   defp syntax_secondary_labels(%SyntaxProblem{opener: %Span{} = opener}, primary_span) when opener != primary_span,
     do: [%Label{span: opener, style: :secondary, message: "the construct starts here"}]
