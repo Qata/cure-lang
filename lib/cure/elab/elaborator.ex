@@ -2035,8 +2035,12 @@ defmodule Cure.Elab.Elaborator do
 
   # Wave-2 List sugar in checked position: desugar to Nil/Cons and re-check
   # against the same expected type.
-  def elaborate_expr_checked({:list, _, _} = node, expected_core, names, ctx, env),
-    do: elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env)
+  def elaborate_expr_checked({:list, _meta, elements} = node, expected_core, names, ctx, env) do
+    case elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env) do
+      {:error, reason} -> {:error, attach_collection_context(reason, elements)}
+      result -> result
+    end
+  end
 
   # Map literal in checked position: desugar to the `put`/`new` chain and re-check
   # against the expected type. This is what lets an empty `%{}` (a bare `new()`
@@ -2160,6 +2164,54 @@ defmodule Cure.Elab.Elaborator do
       argument_index: index
     }
   end
+
+  defp attach_collection_context({:source_context, reason, context}, elements)
+       when is_map(context) do
+    case collection_offender(reason, elements) do
+      {element, index} ->
+        {:source_context, reason, Map.merge(context, expectation_context(element, :collection, :list, index))}
+
+      nil ->
+        {:source_context, reason, context}
+    end
+  end
+
+  defp attach_collection_context(reason, elements) do
+    case collection_offender(reason, elements) do
+      {element, index} -> {:source_context, reason, expectation_context(element, :collection, :list, index)}
+      nil -> reason
+    end
+  end
+
+  defp collection_offender({:source_context, reason, _context}, elements),
+    do: collection_offender(reason, elements)
+
+  defp collection_offender({:index_mismatch, {:cannot_unify, actual, expected}}, elements) do
+    elements
+    |> Enum.with_index()
+    |> Enum.reverse()
+    |> Enum.find(fn {element, _index} ->
+      literal_matches_type?(element, actual) or literal_matches_type?(element, expected)
+    end)
+  end
+
+  defp collection_offender(_reason, _elements), do: nil
+
+  defp literal_matches_type?({:literal, _meta, value}, type) when is_boolean(value),
+    do: type_family?(type, "Bool")
+
+  defp literal_matches_type?({:literal, _meta, value}, type) when is_integer(value),
+    do: type_family?(type, "Int") or type_family?(type, "Nat")
+
+  defp literal_matches_type?({:literal, _meta, value}, type) when is_float(value),
+    do: type_family?(type, "Float")
+
+  defp literal_matches_type?(_element, _type), do: false
+
+  defp type_family?({:data, name, _params, _indices}, suffix),
+    do: String.ends_with?(Atom.to_string(name), "##{suffix}")
+
+  defp type_family?(_type, _suffix), do: false
 
   defp attach_record_field_context({:error, reason}, meta, field_pairs, env),
     do: {:error, attach_record_field_reason(reason, meta, field_pairs, env)}

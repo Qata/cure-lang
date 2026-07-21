@@ -99,6 +99,26 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this FFI boundary has the wrong type"
   end
 
+  test "a list element mismatch retains its authored element context" do
+    source = "mod M\n  use Std.List\n  fn bad() -> List(Int) = [1, true]\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "list.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "list.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :collection
+    assert diagnostic.payload.origin.owner == :list
+    assert diagnostic.payload.origin.index == 1
+    assert rendered =~ "3 |   fn bad() -> List(Int) = [1, true]"
+    assert rendered =~ "this collection element has the wrong type"
+  end
+
   test "a real conditional mismatch reports the authored guard" do
     source = "fn main() -> Int = if 1 then 2 else 3\n"
 
