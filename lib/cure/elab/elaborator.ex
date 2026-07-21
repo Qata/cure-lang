@@ -8113,19 +8113,31 @@ defmodule Cure.Elab.Elaborator do
   # downstream pattern pass runs (the pattern-position half of desugar_list/1).
   defp desugar_list_patterns(arms) do
     Enum.map(arms, fn
-      {:match_arm, meta, body} = arm ->
-        case Keyword.get(meta, :pattern) do
-          {:list, _, _} = lp ->
-            {:match_arm, Keyword.put(meta, :pattern, desugar_list(lp)), body}
-
-          _ ->
-            arm
-        end
+      {:match_arm, meta, body} ->
+        pattern = meta |> Keyword.fetch!(:pattern) |> desugar_pattern_lists()
+        {:match_arm, Keyword.put(meta, :pattern, pattern), body}
 
       other ->
         other
     end)
   end
+
+  # List sugar may occur at any depth in a constructor pattern. Rewriting only
+  # a top-level `:list` leaves e.g. `Parsed(_, ['*' | _])` opaque to the pattern
+  # matrix: it sees neither a constructor nor a variable in that column and
+  # drops the row while constructing the fallback branch. Normalize recursively
+  # so every downstream pattern pass receives the same Cons/Nil representation.
+  defp desugar_pattern_lists({:list, _, _} = pattern), do: desugar_list(pattern)
+
+  defp desugar_pattern_lists({:function_call, meta, args}) do
+    {:function_call, meta, Enum.map(args, &desugar_pattern_lists/1)}
+  end
+
+  defp desugar_pattern_lists({:named_implicit_pat, meta, children}) do
+    {:named_implicit_pat, meta, Enum.map(children, &desugar_pattern_lists/1)}
+  end
+
+  defp desugar_pattern_lists(pattern), do: pattern
 
   # Typed constructor payloads (`Some(value: Int)`) are a surface ascription on
   # an ordinary constructor binder. Remove the annotation before the existing

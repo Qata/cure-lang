@@ -38,4 +38,26 @@ defmodule Cure.Elab.NestedLiteralPatternTest do
     assert apply(module, :classify, [~c"acz"]) == 2
     assert apply(module, :classify, [~c"zab"]) == 3
   end
+
+  test "literal list patterns remain refutable inside an outer constructor" do
+    module =
+      compile("""
+      mod NestedLiteralConstructorPattern
+        type Parsed = Parsed(Int, String) | Invalid
+
+        fn classify(value: Parsed) -> Int = match value
+          Parsed(_, ['*' | _]) -> 1
+          Parsed(_, ['+' | _]) -> 2
+          _ -> 3
+
+        fn star() -> Int = classify(Parsed(0, "*tail"))
+        fn plus() -> Int = classify(Parsed(0, "+tail"))
+        fn other() -> Int = classify(Parsed(0, "tail"))
+      end
+      """)
+
+    assert apply(module, :star, []) == 1
+    assert apply(module, :plus, []) == 2
+    assert apply(module, :other, []) == 3
+  end
 end
