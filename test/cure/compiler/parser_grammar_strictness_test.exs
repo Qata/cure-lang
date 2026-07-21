@@ -203,6 +203,34 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     assert diagnostic.suggestions == []
   end
 
+  test "missing closing delimiters at EOF name the construct and offer the unique insertion" do
+    for {source, expected, title, replacement} <- [
+          {"(1", :rparen, "Parenthesized expression is not closed", ")"},
+          {"[1", :rbracket, "Bracketed expression is not closed", "]"}
+        ] do
+      {:ok, tokens} = Lexer.tokenize(source, file: "unclosed.cure", emit_events: false)
+
+      assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+      assert {:expected_token, ^expected, :eof, nil, _line, _column, _span} =
+               Enum.find(errors, &match?({:expected_token, ^expected, _, _, _, _, _}, &1))
+
+      {diagnostic, registry} =
+        Cure.Compiler.Errors.to_diagnostic({:parse_error, errors}, "unclosed.cure", source)
+
+      rendered = Renderer.plain(diagnostic, registry, width: 80)
+      assert rendered =~ "-- #{String.upcase(title)} [E094]"
+      assert rendered =~ "the closing delimiter belongs here"
+      assert rendered =~ "Hint: Insert `#{replacement}` to close the construct"
+
+      assert [%{applicability: :machine_applicable, edits: [%{replacement: ^replacement}]}] =
+               diagnostic.suggestions
+
+      assert [%{"newText" => ^replacement}] =
+               Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+    end
+  end
+
   describe "associative operators still chain" do
     test "`a + b + c` left-associates" do
       assert {:binary_op, _, [{:binary_op, _, [_a, _b]}, _c]} = parse!("a + b + c")

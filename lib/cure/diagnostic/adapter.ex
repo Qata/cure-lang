@@ -2170,7 +2170,7 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:expected_token, expected, actual_type, actual_value, line, column, %Span{} = span}, opts) do
     from_error(
       %SyntaxProblem{
-        kind: :unexpected_token,
+        kind: missing_delimiter_kind(expected, actual_type),
         expected: expected,
         observed: if(is_nil(actual_value), do: actual_type, else: actual_value),
         at: Keyword.get(opts, :span, span),
@@ -4883,6 +4883,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :missing_function_body}), do: "Function body is missing"
   defp syntax_problem_title(%SyntaxProblem{kind: :bare_brace_expression}), do: "Brace cannot start an expression"
   defp syntax_problem_title(%SyntaxProblem{kind: :unmatched_closer}), do: "Closing delimiter has no opener"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_parentheses}), do: "Parenthesized expression is not closed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_brackets}), do: "Bracketed expression is not closed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_braces}), do: "Braced expression is not closed"
   defp syntax_problem_title(%SyntaxProblem{expected: :explain_point}), do: "Explanation clause needs a failure point"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
@@ -4963,6 +4966,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :unmatched_closer, observed: observed}),
     do: "#{syntax_name(observed)} closes a construct, but there is no matching opener here."
 
+  defp syntax_problem_context(%SyntaxProblem{kind: :unclosed_parentheses}),
+    do: "This parenthesized expression reaches the end of the source without its closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unclosed_brackets}),
+    do: "This bracketed expression reaches the end of the source without its closing ']'."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unclosed_braces}),
+    do: "This braced expression reaches the end of the source without its closing '}'."
+
   defp syntax_problem_context(%SyntaxProblem{expected: :explain_point, observed: observed}),
     do:
       "#{String.capitalize(syntax_name(observed))} starts an explanation message, but each clause must first name a failure category or `keyword \"...\"`."
@@ -5041,6 +5053,11 @@ defmodule Cure.Diagnostic.Adapter do
     do: "choose record, map, or block syntax here"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unmatched_closer}), do: "this delimiter has nothing to close"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: kind})
+       when kind in [:unclosed_parentheses, :unclosed_brackets, :unclosed_braces],
+       do: "the closing delimiter belongs here"
+
   defp syntax_problem_label(%SyntaxProblem{expected: :explain_point}), do: "name the failure point before this arrow"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :non_associative}),
@@ -5192,11 +5209,17 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_insertion(:rparen), do: ")"
   defp syntax_insertion(:rbracket), do: "]"
   defp syntax_insertion(:rbrace), do: "}"
+
   defp syntax_insertion(:end), do: "end"
   defp syntax_insertion(:double_quote), do: "\""
   defp syntax_insertion(:single_quote), do: "'"
   defp syntax_insertion(:backtick), do: "`"
   defp syntax_insertion(_expected), do: nil
+
+  defp missing_delimiter_kind(:rparen, :eof), do: :unclosed_parentheses
+  defp missing_delimiter_kind(:rbracket, :eof), do: :unclosed_brackets
+  defp missing_delimiter_kind(:rbrace, :eof), do: :unclosed_braces
+  defp missing_delimiter_kind(_expected, _observed), do: :unexpected_token
 
   defp lex_problem({:tab_not_allowed, line, column}, opts),
     do: syntax_problem(:tab_not_allowed, nil, :tab, line, column, opts)
