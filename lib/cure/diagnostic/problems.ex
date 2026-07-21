@@ -33,6 +33,7 @@ defmodule Cure.Diagnostic.ExpectationOrigin do
           | :operator_operand
           | :condition
           | :branch
+          | :dependent_branch
           | :element
           | :collection
           | :record

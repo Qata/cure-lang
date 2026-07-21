@@ -2594,7 +2594,13 @@ defmodule Cure.Diagnostic.Adapter do
         detail -> detail
       end
 
-    failing = Map.get(selected_detail, :constructor)
+    failing =
+      Map.get(selected_detail, :constructor) ||
+        case singleton_type_branches(branch_details) do
+          [{constructor, _type}] -> constructor
+          _ -> nil
+        end
+
     actual = Map.get(selected_detail, :actual)
     expected = Map.get(selected_detail, :expected)
     singleton_branches = singleton_type_branches(branch_details)
@@ -2633,6 +2639,7 @@ defmodule Cure.Diagnostic.Adapter do
         %Label{span: span, style: :primary, message: message}
       end)
       |> Enum.reject(&is_nil(&1.span))
+      |> Enum.sort_by(fn label -> if String.starts_with?(label.message || "", "possible outlier"), do: 0, else: 1 end)
 
     {primary, secondary} =
       case labels do
@@ -2640,15 +2647,26 @@ defmodule Cure.Diagnostic.Adapter do
         [] -> {primary_label(opts, "make these branches return the same type"), []}
       end
 
+    dependent? = Map.get(context, :expectation_origin) == :dependent_branch
+
     Diagnostic.new(
       code: "E093",
       key: :type_mismatch,
       severity: :error,
-      title: "Pattern branches disagree#{subject}",
+      title:
+        if(dependent?,
+          do: "Dependent branch has the wrong result#{subject}",
+          else: "Pattern branches disagree#{subject}"
+        ),
       body:
         Doc.stack([
           Doc.paragraph(detail),
-          Doc.paragraph("Check each branch expression against the result type written after the function name.")
+          Doc.paragraph(
+            if dependent?,
+              do:
+                "This constructor refines indices in the branch context. Check the authored branch against the resulting specialized proposition.",
+              else: "Check each branch expression against the result type written after the function name."
+          )
         ]),
       primary: primary,
       secondary: secondary,
@@ -3375,6 +3393,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_title(%ExpectationOrigin{kind: :local_fact}), do: "Local fact does not match"
   defp type_problem_title(%ExpectationOrigin{kind: :call_result}), do: "Call result has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :branch}), do: "Branches have different types"
+  defp type_problem_title(%ExpectationOrigin{kind: :dependent_branch}), do: "Dependent branch has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :condition}), do: "Condition is not boolean"
   defp type_problem_title(%ExpectationOrigin{kind: :call_argument}), do: "Argument has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :application}), do: "Application has the wrong type"
@@ -3666,6 +3685,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_context(%ExpectationOrigin{kind: :branch}),
     do: "Every branch of this expression must produce the same type."
 
+  defp type_problem_context(%ExpectationOrigin{kind: :dependent_branch}),
+    do: "The constructor specializes this branch's indices, and its body must produce that refined result type."
+
   defp type_problem_context(%ExpectationOrigin{kind: :condition}),
     do: "A condition must produce `Bool` before either branch can run."
 
@@ -3811,6 +3833,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_label(%ExpectationOrigin{kind: :local_fact}), do: "this evidence has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :call_result}), do: "this call result has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :branch}), do: "this branch disagrees with another branch"
+
+  defp type_problem_label(%ExpectationOrigin{kind: :dependent_branch}),
+    do: "this branch does not satisfy its refined result"
+
   defp type_problem_label(%ExpectationOrigin{kind: :call_argument}), do: "this argument has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :application}), do: "this application has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :overload}), do: "this overloaded call has no matching type"

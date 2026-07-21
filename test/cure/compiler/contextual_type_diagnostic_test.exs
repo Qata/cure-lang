@@ -254,9 +254,9 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     {diagnostic, registry} = Errors.to_diagnostic(reason, "proof_int_order.cure", source)
     rendered = Renderer.plain(diagnostic, registry)
 
-    assert diagnostic.primary.message == "compare this branch with the declared result"
+    assert diagnostic.primary.message == "possible outlier: this branch has the incompatible type"
     assert [secondary] = diagnostic.secondary
-    assert secondary.message == "possible outlier: this branch has the incompatible type"
+    assert secondary.message == "compare this branch with the declared result"
     assert diagnostic.payload.failing_branch == :"Std.Int#NegativeSuccessor"
     assert rendered =~ "Possible outlier"
     assert rendered =~ "FromNat(n) -> first"

@@ -399,8 +399,12 @@ match `acc` directly and mutually recurse with `deriv_sound`; the sum index then
 extra top-level lemma per shape, and mutual recursion (which the kernel's termination cert accepts
 here on structural descent).
 
-**Status.** OPEN (worked around). Same fix as E1/E2 — full context-refinement / simultaneous
-matching closes it.
+**Status.** ✅ FIXED. Whole-context branch substitution now composes through nested and
+sequential matches, and constructor-headed indices with computed subterms stay on the
+structural-inversion path instead of losing sibling substitutions in the carried-equation
+detour (`3d9f6b1a`). The proof-language acceptance probe exercises the original `AddedCons`
+shape below an earlier independent match; the direct reconstruction checks without a helper.
+Wrong-result and impossible-coverage controls remain rejecting.
 
 ---
 
@@ -426,8 +430,13 @@ the inversion proofs.
 **Workaround.** None clean — the completeness directions are deferred. (The SOUNDNESS directions
 avoid inversion entirely and are proved.)
 
-**Status.** OPEN. Distinct from E8: E8 is refinement not *composing*; E9 is the index equation not
-*existing* as a term even for a single match.
+**Status.** ✅ FIXED. A stuck computed constructor index is retained as an ordinary local
+`Equivalent` premise in the case motive (`b32702bf`, `c6c98e93`). Branch elaboration checks under
+that premise and uses equality elimination to transport every affected sibling; the kernel
+independently checks the resulting lambda/case term. Reconstruction and sibling-use probes cover
+the positive path, while swapped constructor fields, wrong-family siblings, unrelated indices,
+and unreachable constructors remain rejecting. This evidence is elaboration-local and erases by
+the ordinary proof grade; no new Core or kernel rule was introduced.
 
 ---
 

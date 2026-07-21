@@ -353,8 +353,8 @@ baseline Core hashes remain unchanged after extraction into `Cure.Elab.Rewrite`;
 forward, backward, selected, nested-application, binder-aware, and local-
 hypothesis rewrites kernel-check through ordinary `Equivalent` elimination.
 E111's five planned variants project through plain, ANSI, JSON, and LSP, with
-machine edits for direction and every numbered ambiguity candidate. The
-canonical 122-module stdlib compiles, all changed files are formatted,
+machine edits for direction and every numbered ambiguity candidate.
+The canonical 122-module stdlib compiles, all changed files are formatted,
 the full suite is 5,321 tests with 0 failures and 6 excluded, 147 expected
 immune responses fire, and complete Antigen coverage is 318/318.
 
@@ -544,28 +544,39 @@ responses).
 **Purpose:** make constructor-implied index information available without
 defensive rematching or explicit proof-only carries.
 
-- [ ] Restore only the smallest LIA semantic proof fixture needed to expose the
+- [x] Restore only the smallest LIA semantic proof fixture needed to expose the
   current dependent `AddedCons` friction, or build an equivalent isolated probe.
-- [ ] Use `Cure.Dev.Trace` first. Classify each failure against the July 17
+- [x] Use `Cure.Dev.Trace` first. Classify each failure against the July 17
   catalog: already-fixed whole-context substitution, residual sequential-match
   composition (E8), or missing residual index evidence (E9).
-- [ ] Add red tests for branch context values/types, sibling shapes, existential
+- [x] Add red tests for branch context values/types, sibling shapes, existential
   names, sequential matches, impossible pruning, and residual stuck equations.
-- [ ] Extend branch substitution to the whole accumulated context and coverage
+- [x] Extend branch substitution to the whole accumulated context and coverage
   consumer where missing. Retain non-definitional residual equations as local
   `Equivalent` evidence with honest provenance.
-- [ ] Prefer elaborator changes. If a kernel change is genuinely required, stop
+- [x] Prefer elaborator changes. If a kernel change is genuinely required, stop
   this task for the dedicated TCB review and add wrong-body, conversion,
   termination, and Antigen antibodies before implementation.
-- [ ] Surface ordinary mismatches as contextual E093 with a new dependent-branch
+- [x] Surface ordinary mismatches as contextual E093 with a new dependent-branch
   origin; do not expose motives/de Bruijn indices in primary prose.
-- [ ] Prove existing match verdicts, Core, erasure, and coverage remain unchanged
+- [x] Prove existing match verdicts, Core, erasure, and coverage remain unchanged
   outside newly accepted completeness cases.
 
 **Green gate:** dependent match/elab/core/coverage tests, wrong-proof negatives,
 Idris oracle, full suite, complete Antigen.
 
 **Commit:** `feat(elab): propagate dependent proof refinements`
+
+**Completed evidence (2026-07-21):** `Cure.Dev.Trace` classified the isolated
+`AddedCons` probe before implementation audit. Seven dedicated dependent-proof
+tests cover sequential composition, whole-context sibling and existential
+refinement, impossible pruning, stuck computed indices, false reconstruction,
+and contextual dependent-branch E093 output in plain, JSON, and LSP forms.
+Existing carried-index, rewrite-as-case, coverage, wrong-family, and Idris-oracle
+controls remain green; no Core or kernel rule changed. The combined dependent,
+match, diagnostic, and oracle gates pass, warnings-as-errors compilation passes,
+complete Antigen is 318/318, and the full suite passes 5,392 tests with 0
+failures and 6 excluded (138 expected immune responses).
 
 ## Task 10: Upgrade argument labels into reorderable named arguments
 

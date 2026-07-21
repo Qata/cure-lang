@@ -707,6 +707,11 @@ defmodule Cure.Elab.Declarations do
     {line, column, length} = expression_extent(expression)
     meta = expression_meta(expression)
 
+    expectation_origin =
+      if branch_type_reason?(reason) and dependent_match?(expression, env),
+        do: :dependent_branch,
+        else: :annotation
+
     outer_context = %{
       line: line,
       column: column,
@@ -714,7 +719,7 @@ defmodule Cure.Elab.Declarations do
       checking: checking,
       span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
       expression_category: expression_category(expression),
-      expectation_origin: :annotation,
+      expectation_origin: expectation_origin,
       branch_patterns: branch_patterns(expression)
     }
 
@@ -839,6 +844,40 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp branch_patterns(_expression), do: []
+
+  defp branch_type_reason?(:branch_type), do: true
+  defp branch_type_reason?({:branch_type, _details}), do: true
+  defp branch_type_reason?({:source_context, reason, _context}), do: branch_type_reason?(reason)
+  defp branch_type_reason?(_reason), do: false
+
+  defp dependent_match?({:pattern_match, _meta, [_scrutinee | arms]}, env) do
+    Enum.any?(arms, fn
+      {:match_arm, arm_meta, _body} ->
+        with name when not is_nil(name) <- pattern_constructor(Keyword.get(arm_meta, :pattern)),
+             key <- Env.resolve_key(env, env.ctors, name),
+             family when not is_nil(family) <- Inductive.ctor_family(env, key),
+             %{indices: indices} <- Inductive.get_family(env, family) do
+          indices != []
+        else
+          _ -> false
+        end
+
+      _ ->
+        false
+    end)
+  end
+
+  defp dependent_match?(_expression, _env), do: false
+
+  defp pattern_constructor({:function_call, meta, _args}) when is_list(meta) do
+    case Keyword.get(meta, :name) do
+      name when is_binary(name) -> String.to_atom(name)
+      name -> name
+    end
+  end
+
+  defp pattern_constructor({:variable, _meta, name}) when is_binary(name), do: String.to_atom(name)
+  defp pattern_constructor(_pattern), do: nil
 
   defp pattern_label({:function_call, meta, _args}) when is_list(meta),
     do: meta |> Keyword.get(:name, "constructor") |> to_string()
