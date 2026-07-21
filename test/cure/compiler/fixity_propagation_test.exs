@@ -48,7 +48,11 @@ defmodule Cure.Compiler.FixityPropagationTest do
 
     src = "mod C\n  use A\n  use B\nend\n"
     assert {:error, errors} = parse(src)
-    assert Enum.any?(errors, &match?({:conflicting_operator_fixity, {"<?>", _, _}}, &1))
+
+    assert Enum.any?(
+             errors,
+             &match?({:conflicting_operator_fixity, %{operator: "<?>", spans: [_, _]}}, &1)
+           )
   end
 
   test "single-file parse with no source universe still binds core operators" do
@@ -159,7 +163,9 @@ defmodule Cure.Compiler.FixityPropagationTest do
     assert {:error, errors} =
              parse(src, prelude_providers: providers, validate_fixity_cycles: true)
 
-    assert {:precedence_cycle, groups} = Enum.find(errors, &match?({:precedence_cycle, _}, &1))
+    assert {:precedence_cycle, %{groups: groups, spans: [_]}} =
+             Enum.find(errors, &match?({:precedence_cycle, _}, &1))
+
     assert MapSet.new(groups) == MapSet.new([:A, :B])
   end
 end

@@ -2,6 +2,7 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
   use ExUnit.Case, async: false
 
   alias Cure.Compiler.Errors
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.Program
   alias Cure.MetaAST.Metadata
 
@@ -209,7 +210,7 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert {:error, {:parse_error, errors}} =
              Cure.Compiler.compile_and_load(source, emit_events: false)
 
-    assert Enum.any?(errors, &match?({:macro_use_mismatch, "optional_only", _, _, _, _}, &1))
+    assert Enum.any?(errors, &match?({:macro_use_mismatch, %{keyword: "optional_only"}}, &1))
   end
 
   test "a recognized family body diagnoses a missing required section" do
@@ -234,9 +235,193 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
              Cure.Compiler.compile_and_load(source, emit_events: false)
 
     assert Enum.any?(errors, fn
-             {:missing_syntax_family_field, "Definition", "state", _, _} -> true
+             {:missing_syntax_family_field, %{family: "Definition", field: "state"}} -> true
              _ -> false
            end)
+
+    error = Enum.find(errors, &match?({:missing_syntax_family_field, _}, &1))
+    {diagnostic, registry} = Errors.to_diagnostic({:parse_error, [error]}, "missing_family.cure", source)
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert diagnostic.primary.span.start_line == 13
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- SYNTAX-FAMILY FIELD IS MISSING [E092] ------------------- missing_family.cure
+
+             The `Definition` syntax family requires a `state` section here.
+
+             at missing_family.cure:13:14
+             13 |     initial 7
+                |              ^ add `state` here
+
+             Hint: Add a `state ...` section to this family body
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 12, "character" => 13},
+             "end" => %{"line" => 12, "character" => 13}
+           }
+  end
+
+  test "family field mistakes label the authored field and offer a unique repair" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro complete <name: ModuleName>
+        syntax family Definition
+          state Type
+          optional initial Expression
+        accepts Definition
+        expands with expand
+
+      fn expand(name: ModuleNameSyntax, definition: DefinitionSyntax) -> Syntax = int_literal(0)
+      fn result() -> Int = complete Broken
+        state Int
+        inital 7
+    end
+    """
+
+    assert {:error, {:parse_error, errors}} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert [{:unknown_syntax_family_field, details}] = errors
+    assert details.field == "inital"
+    assert details.span.start_line == 14
+    assert details.span.start_column == 5
+    assert details.span.end_column == 11
+
+    {diagnostic, registry} =
+      Errors.to_diagnostic({:parse_error, errors}, "unknown_family_field.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- UNKNOWN SYNTAX-FAMILY FIELD [E092] ---------------- unknown_family_field.cure
+
+             `inital` is not a field of the `Definition` syntax family.
+
+             at unknown_family_field.cure:14:5
+             14 |     inital 7
+                |     ^^^^^^ this field is not declared by the family
+
+             Hint: Replace it with `initial`
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "initial"}]}] =
+             diagnostic.suggestions
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 13, "character" => 4},
+             "end" => %{"line" => 13, "character" => 10}
+           }
+  end
+
+  test "duplicate family fields label both authored sections" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro complete <name: ModuleName>
+        syntax family Definition
+          state Type
+        accepts Definition
+        expands with expand
+
+      fn expand(name: ModuleNameSyntax, definition: DefinitionSyntax) -> Syntax = int_literal(0)
+      fn result() -> Int = complete Broken
+        state Int
+        state Bool
+    end
+    """
+
+    assert {:error, {:parse_error, [{:duplicate_syntax_family_field, details}] = errors}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert details.first_span.start_line == 12
+    assert details.span.start_line == 13
+
+    {diagnostic, registry} =
+      Errors.to_diagnostic({:parse_error, errors}, "duplicate_family_field.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- SYNTAX-FAMILY FIELD IS DUPLICATED [E092] -------- duplicate_family_field.cure
+
+             The `state` field may be supplied only once in this family body.
+
+             at duplicate_family_field.cure:13:5
+             12 |     state Int
+                |     ----- the field was first supplied here
+             13 |     state Bool
+                |     ^^^^^ this second `state` field is redundant
+
+             Hint: Keep one `state` section
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 12, "character" => 4},
+             "end" => %{"line" => 12, "character" => 9}
+           }
+
+    assert [%{"location" => %{"range" => first_range}}] = lsp["relatedInformation"]
+
+    assert first_range == %{
+             "start" => %{"line" => 11, "character" => 4},
+             "end" => %{"line" => 11, "character" => 9}
+           }
+  end
+
+  test "primitive family fields underline the non-matching literal" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro configure <name: ModuleName>
+        syntax family Config
+          count Int
+        accepts Config
+        expands with expand
+
+      fn expand(name: ModuleNameSyntax, config: ConfigSyntax) -> Syntax = int_literal(0)
+      fn result() -> Int = configure Broken
+        count true
+    end
+    """
+
+    assert {:error, {:parse_error, [{:expected_literal_capture, details}] = errors}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert details.shape == "Int"
+    assert details.span.start_line == 12
+    assert details.span.start_column == 11
+    assert details.span.end_column == 15
+
+    {diagnostic, registry} = Errors.to_diagnostic({:parse_error, errors}, "literal_family.cure", source)
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- MACRO FIELD NEEDS A LITERAL [E094] ---------------------- literal_family.cure
+
+             This syntax-family field accepts an `Int` literal, not an expression of another
+             shape.
+
+             at literal_family.cure:12:11
+             12 |     count true
+                |           ^^^^ this is not an `Int` literal
+
+             Hint: Replace this value with an `Int` literal
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 11, "character" => 10},
+             "end" => %{"line" => 11, "character" => 14}
+           }
   end
 
   test "an expression obligation resolves at the macro use site" do

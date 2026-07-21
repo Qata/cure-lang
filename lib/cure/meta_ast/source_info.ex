@@ -11,10 +11,14 @@ defmodule Cure.MetaAST.SourceInfo do
             arguments: [],
             annotation: nil,
             body: nil,
+            condition: nil,
+            then_branch: nil,
+            else_branch: nil,
             pattern: nil,
             guard: nil,
             branches: [],
             fields: %{},
+            decorators: %{},
             opener: nil,
             closer: nil,
             provenance: []
@@ -29,10 +33,16 @@ defmodule Cure.MetaAST.SourceInfo do
           arguments: [Span.t()],
           annotation: span_or_nil(),
           body: span_or_nil(),
+          condition: span_or_nil(),
+          then_branch: span_or_nil(),
+          else_branch: span_or_nil(),
           pattern: span_or_nil(),
           guard: span_or_nil(),
           branches: [Span.t()],
           fields: %{optional(term()) => Span.t()},
+          decorators: %{
+            optional(String.t()) => %{whole: span_or_nil(), name: span_or_nil(), arguments: [Span.t()]}
+          },
           opener: span_or_nil(),
           closer: span_or_nil(),
           provenance: [ProvenanceFrame.t()]

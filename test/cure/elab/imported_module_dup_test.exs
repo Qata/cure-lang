@@ -75,7 +75,9 @@ defmodule Cure.Elab.ImportedModuleDupTest do
 
   test "a duplicate type name inside an imported module is rejected, not kept last-wins" do
     src = "mod Q\n  use Std.DupType\n  fn g() -> Widget = MkB\nend\n"
-    assert {:error, {:duplicate_type, :Widget}} = elaborate(src)
+    assert {:error, {:duplicate_type, %{name: :Widget, spans: [first, second]}}} = elaborate(src)
+    assert first.start_line == 2
+    assert second.start_line == 3
   end
 
   test "an imported module with no duplicates still elaborates" do

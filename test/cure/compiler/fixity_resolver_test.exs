@@ -7,7 +7,12 @@ defmodule Cure.Compiler.Parser.FixityResolverTest do
     File.mkdir_p!(dir)
     prev = Process.get(:cure_source_roots, [])
     Process.put(:cure_source_roots, [dir])
-    on_exit(fn -> Process.put(:cure_source_roots, prev); File.rm_rf!(dir) end)
+
+    on_exit(fn ->
+      Process.put(:cure_source_roots, prev)
+      File.rm_rf!(dir)
+    end)
+
     {:ok, dir: dir}
   end
 
@@ -42,14 +47,26 @@ defmodule Cure.Compiler.Parser.FixityResolverTest do
     write(dir, "a.cure", "mod A\n  precedencegroup Ga\n    associativity: left\n  infix `<?>` : Ga\nend\n")
     write(dir, "b.cure", "mod B\n  precedencegroup Gb\n    associativity: left\n  infix `<?>` : Gb\nend\n")
 
-    assert {:error, {:conflicting_operator_fixity, {"<?>", _, _}}} = assemble(["A", "B"])
+    assert {:error,
+            {:conflicting_operator_fixity,
+             %{operator: "<?>", existing_group: :Ga, new_group: :Gb, spans: [first, second]}}} =
+             assemble(["A", "B"])
+
+    assert first.path == Path.join(dir, "a.cure")
+    assert second.path == Path.join(dir, "b.cure")
   end
 
   test "two used modules declaring the same group name with different bodies conflict", %{dir: dir} do
     write(dir, "a.cure", "mod A\n  precedencegroup G\n    associativity: left\nend\n")
     write(dir, "b.cure", "mod B\n  precedencegroup G\n    associativity: right\nend\n")
 
-    assert {:error, {:conflicting_precedence_group, {:G, _, _}}} = assemble(["A", "B"])
+    assert {:error,
+            {:conflicting_precedence_group,
+             %{name: :G, existing: %{assoc: :left}, new: %{assoc: :right}, spans: [first, second]}}} =
+             assemble(["A", "B"])
+
+    assert first.path == Path.join(dir, "a.cure")
+    assert second.path == Path.join(dir, "b.cure")
   end
 
   test "an unresolved use contributes nothing (no crash)", %{dir: _dir} do

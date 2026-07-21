@@ -20,17 +20,26 @@ defmodule Cure.Elab.DeclHygieneTest do
 
   test "duplicate type declaration in one module is rejected" do
     src = "mod DupType\n  type Foo = A\n  type Foo = B\nend\n"
-    assert {:error, {:duplicate_type, :Foo}} = elaborate(src)
+
+    assert {:error, {:duplicate_type, %{name: :Foo, spans: [first, second]}}} = elaborate(src)
+    assert {first.start_line, first.start_column} == {2, 8}
+    assert {second.start_line, second.start_column} == {3, 8}
   end
 
   test "duplicate constructor within one type is rejected" do
     src = "mod DupCtor\n  type Foo = A | A\nend\n"
-    assert {:error, {:duplicate_constructor, :A}} = elaborate(src)
+
+    assert {:error, {:duplicate_constructor, %{name: :A, spans: [first, second]}}} = elaborate(src)
+    assert {first.start_line, first.start_column} == {2, 14}
+    assert {second.start_line, second.start_column} == {2, 18}
   end
 
   test "constructor name shared across two types in a module is rejected (no ctor namespacing)" do
     src = "mod DupCtorX\n  type Foo = C | D\n  type Bar = C | E\nend\n"
-    assert {:error, {:duplicate_constructor, :C}} = elaborate(src)
+
+    assert {:error, {:duplicate_constructor, %{name: :C, spans: [first, second]}}} = elaborate(src)
+    assert {first.start_line, first.start_column} == {2, 14}
+    assert {second.start_line, second.start_column} == {3, 14}
   end
 
   test "distinct types and constructors still elaborate" do
@@ -40,7 +49,10 @@ defmodule Cure.Elab.DeclHygieneTest do
 
   test "duplicate parameter name in a function is rejected" do
     src = "mod DupParam\n  fn f(x: Int, x: Int) -> Int = x\nend\n"
-    assert {:error, {:duplicate_parameter, :x}} = elaborate(src)
+
+    assert {:error, {:duplicate_parameter, %{name: :x, spans: [first, second]}}} = elaborate(src)
+    assert {first.start_line, first.start_column} == {2, 8}
+    assert {second.start_line, second.start_column} == {2, 16}
   end
 
   test "distinct parameter names still elaborate" do
@@ -50,7 +62,10 @@ defmodule Cure.Elab.DeclHygieneTest do
 
   test "duplicate record field is rejected" do
     src = "mod DupField\n  rec Point\n    x: Int\n    x: Int\nend\n"
-    assert {:error, {:duplicate_field, :x}} = elaborate(src)
+
+    assert {:error, {:duplicate_field, %{name: :x, spans: [first, second]}}} = elaborate(src)
+    assert {first.start_line, first.start_column} == {3, 5}
+    assert {second.start_line, second.start_column} == {4, 5}
   end
 
   test "distinct record fields still elaborate" do

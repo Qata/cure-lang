@@ -20,6 +20,7 @@ defmodule Cure.MCP.Server do
   """
 
   alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Diagnostic.Sink
 
   @tools [
     %{
@@ -79,6 +80,8 @@ defmodule Cure.MCP.Server do
       }
     }
   ]
+
+  @tool_names Enum.map(@tools, & &1["name"])
 
   # -- Public API --------------------------------------------------------------
 
@@ -153,13 +156,11 @@ defmodule Cure.MCP.Server do
   end
 
   defp dispatch("tools/call", %{"name" => name, "arguments" => args}) do
-    tool_result = call_tool(name, args)
-    %{"content" => [%{"type" => "text", "text" => tool_result}]}
+    call_tool(name, args)
   end
 
   defp dispatch("tools/call", %{"name" => name}) do
-    tool_result = call_tool(name, %{})
-    %{"content" => [%{"type" => "text", "text" => tool_result}]}
+    call_tool(name, %{})
   end
 
   defp dispatch(_method, _params), do: %{"error" => "unknown method"}
@@ -167,7 +168,7 @@ defmodule Cure.MCP.Server do
   # -- Tool Implementations ----------------------------------------------------
 
   defp call_tool("compile_cure", %{"source" => source}) do
-    case Cure.Compiler.compile_and_load(source, emit_events: false) do
+    case Cure.Compiler.compile_and_load(source, file: "mcp.cure", emit_events: false) do
       {:ok, module} ->
         exports =
           module.module_info(:exports)
@@ -175,52 +176,82 @@ defmodule Cure.MCP.Server do
           |> Enum.map(fn {n, a} -> "#{n}/#{a}" end)
           |> Enum.join(", ")
 
-        "Compiled successfully: #{module}\nExports: #{exports}"
+        text_result("Compiled successfully: #{module}\nExports: #{exports}")
 
       {:error, reason} ->
-        "Compilation error:\n" <> Cure.Diagnostic.Host.render(reason, "mcp.cure", source)
+        diagnostic_result(reason, source)
     end
   end
 
   defp call_tool("parse_cure", %{"source" => source}) do
-    with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
-      summarize_ast(ast)
+    with {:ok, tokens} <- Lexer.tokenize(source, file: "mcp.cure", emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, file: "mcp.cure", emit_events: false) do
+      text_result(summarize_ast(ast))
     else
-      {:error, reason} -> "Parse error:\n" <> Cure.Diagnostic.Host.render(reason, "mcp.cure", source)
+      {:error, reason} -> diagnostic_result(reason, source)
     end
   end
 
   defp call_tool("type_check_cure", %{"source" => source}) do
-    with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
+    with {:ok, tokens} <- Lexer.tokenize(source, file: "mcp.cure", emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, file: "mcp.cure", emit_events: false) do
       case Cure.Elab.Program.check_ast(ast) do
-        {:ok, _env} -> "Type check passed: no errors."
-        {:error, errors} -> "Type errors:\n" <> Cure.Diagnostic.Host.render(errors, "mcp.cure", source)
+        {:ok, _env} -> text_result("Type check passed: no errors.")
+        {:error, errors} -> diagnostic_result(errors, source)
       end
     else
-      {:error, reason} -> "Parse error:\n" <> Cure.Diagnostic.Host.render(reason, "mcp.cure", source)
+      {:error, reason} -> diagnostic_result(reason, source)
     end
   end
 
   defp call_tool("validate_syntax", %{"source" => source}) do
-    with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, _ast} <- Parser.parse(tokens, emit_events: false) do
-      "Syntax is valid. #{length(tokens)} tokens parsed."
+    with {:ok, tokens} <- Lexer.tokenize(source, file: "mcp.cure", emit_events: false),
+         {:ok, _ast} <- Parser.parse(tokens, file: "mcp.cure", emit_events: false) do
+      text_result("Syntax is valid. #{length(tokens)} tokens parsed.")
     else
-      {:error, reason} -> "Syntax error:\n" <> Cure.Diagnostic.Host.render(reason, "mcp.cure", source)
+      {:error, reason} -> diagnostic_result(reason, source)
     end
   end
 
   defp call_tool("get_syntax_help", %{"topic" => topic}) do
-    syntax_help(topic)
+    text_result(syntax_help(topic))
   end
 
   defp call_tool("get_stdlib_docs", %{"module" => module}) do
-    stdlib_docs(module)
+    text_result(stdlib_docs(module))
   end
 
-  defp call_tool(name, _args), do: "Unknown tool: #{name}"
+  defp call_tool(name, _args) when name in @tool_names do
+    diagnostic = Cure.Diagnostic.Operational.usage("Invalid arguments for MCP tool '#{name}'")
+    diagnostic_result(diagnostic, nil)
+  end
+
+  defp call_tool(name, _args) do
+    diagnostic = Cure.Diagnostic.Operational.usage("Unknown MCP tool '#{name}'")
+    diagnostic_result(diagnostic, nil)
+  end
+
+  defp text_result(text) when is_binary(text) do
+    %{"content" => [%{"type" => "text", "text" => text}], "isError" => false}
+  end
+
+  defp diagnostic_result(reason, source) do
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, "mcp.cure", source)
+
+    text =
+      Sink.new(format: :plain, color: :never, width: 80, registry: registry)
+      |> Sink.render(diagnostic)
+
+    machine =
+      Sink.new(format: :json, registry: registry)
+      |> Sink.render(diagnostic)
+
+    %{
+      "content" => [%{"type" => "text", "text" => text}],
+      "isError" => true,
+      "structuredContent" => %{"diagnostic" => machine}
+    }
+  end
 
   # -- AST Summary -------------------------------------------------------------
 

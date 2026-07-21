@@ -56,7 +56,7 @@ defmodule Cure.Elab.RelevanceCountLevelEffectTest do
           """
 
       assert {:error, {:usage_violation, %{declared: :affine, kind: :param}}} =
-               Program.elaborate(src)
+               Program.semantic_result(Program.elaborate(src))
     end
 
     test "the pure twin — same shape, calls NOT hidden in effect nodes — was always rejected" do
@@ -76,7 +76,7 @@ defmodule Cure.Elab.RelevanceCountLevelEffectTest do
       """
 
       assert {:error, {:usage_violation, %{declared: :affine, kind: :param}}} =
-               Program.elaborate(src)
+               Program.semantic_result(Program.elaborate(src))
     end
 
     test "a genuinely one-shot continuation still un-joins and is ACCEPTED" do
@@ -93,7 +93,7 @@ defmodule Cure.Elab.RelevanceCountLevelEffectTest do
                 F() -> k(0)
           """
 
-      assert {:ok, _env} = Program.elaborate(src)
+      assert {:ok, _env} = Program.semantic_result(Program.elaborate(src))
     end
   end
 end

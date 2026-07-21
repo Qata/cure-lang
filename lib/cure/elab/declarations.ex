@@ -546,7 +546,14 @@ defmodule Cure.Elab.Declarations do
     if arity == present do
       :ok
     else
-      {:error, {:extern_arity_mismatch, sig.name, arity, present}}
+      {:error,
+       {:extern_arity_mismatch,
+        %{
+          name: sig.name,
+          declared: arity,
+          present: present,
+          span: sig.extern_arity_span
+        }}}
     end
   end
 
@@ -679,7 +686,13 @@ defmodule Cure.Elab.Declarations do
   # return_value}` so the caller rebuilds the final Π from the settled codomain.
   defp elaborate_body_typed(body_expr, %{inferred_return: true} = sig, ctx, env) do
     with {:ok, body_term, ret_val} <-
-           Elaborator.elaborate_expr_typed(body_expr, sig.scope, ctx, env) do
+           attach_source_context(
+             Elaborator.elaborate_expr_typed(body_expr, sig.scope, ctx, env),
+             body_expr,
+             sig.name,
+             env,
+             nil
+           ) do
       ret_core = Quote.reify(ret_val, length(sig.telescope))
       {:ok, body_term, ret_core, ret_val}
     end
@@ -693,20 +706,23 @@ defmodule Cure.Elab.Declarations do
              elaborate_declared_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
              body_expr,
              sig.name,
-             env
+             env,
+             sig.return_span
            ),
          :ok <-
            attach_source_context(
              Kernel.check_with_branch_details(ctx, body_term, return_value),
              body_expr,
              sig.name,
-             env
+             env,
+             sig.return_span
            ) do
       {:ok, body_term, sig.return_core, return_value}
     end
   end
 
-  defp attach_source_context({:error, reason}, expression, checking, env) do
+  defp attach_source_context({:error, reason}, expression, checking, env, expectation_span) do
+    reason = Elaborator.contextualize_call_arity(reason, expression, env)
     {line, column, length} = expression_extent(expression)
     meta = expression_meta(expression)
 
@@ -721,6 +737,7 @@ defmodule Cure.Elab.Declarations do
       length: length,
       checking: checking,
       span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
+      expectation_span: expectation_span,
       expression_category: expression_category(expression),
       expectation_origin: expectation_origin,
       branch_patterns: branch_patterns(expression)
@@ -748,6 +765,13 @@ defmodule Cure.Elab.Declarations do
             merged_context
           end
 
+        merged_context =
+          if Map.get(merged_context, :expectation_origin) == :annotation and expectation_span do
+            Map.put(merged_context, :expectation_span, expectation_span)
+          else
+            merged_context
+          end
+
         {:error, {:source_context, nested_reason, merged_context}}
 
       _ ->
@@ -755,7 +779,7 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp attach_source_context(result, _expression, _checking, _env), do: result
+  defp attach_source_context(result, _expression, _checking, _env, _expectation_span), do: result
 
   defp declaration_expectation_context({:function_call, meta, _args}, reason, context, env)
        when is_list(meta) do
@@ -897,43 +921,34 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp expression_extent({:function_call, meta, arguments}) when is_list(meta) do
-    line = Keyword.get(meta, :line)
-    open_column = Keyword.get(meta, :col)
-    name = meta |> Keyword.get(:name, "") |> to_string()
-    start_column = if is_integer(open_column), do: max(1, open_column - String.length(name)), else: nil
+  defp expression_extent({_, meta, _} = expression) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} ->
+        {span.start_line, span.start_column, max(1, span.end_column - span.start_column)}
 
-    end_column =
-      case List.last(arguments) do
-        nil ->
-          if(is_integer(open_column), do: open_column + 1, else: nil)
-
-        argument ->
-          argument |> expression_extent() |> extent_end_column() |> then(&if(is_integer(&1), do: &1 + 1, else: nil))
-      end
-
-    {line, start_column, extent_length(start_column, end_column)}
+      _ ->
+        coordinate_extent(expression)
+    end
   end
 
-  defp expression_extent({:variable, meta, name}) when is_list(meta) do
-    {Keyword.get(meta, :line), Keyword.get(meta, :col), String.length(to_string(name))}
+  defp expression_extent({_, meta, _, _} = expression) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} ->
+        {span.start_line, span.start_column, max(1, span.end_column - span.start_column)}
+
+      _ ->
+        coordinate_extent(expression)
+    end
   end
 
   defp expression_extent(expression) do
-    meta = expression_meta(expression)
-    {Keyword.get(meta, :line), Keyword.get(meta, :col), 1}
+    coordinate_extent(expression)
   end
 
-  defp extent_end_column({_line, column, length}) when is_integer(column) and is_integer(length),
-    do: column + length
-
-  defp extent_end_column(_extent), do: nil
-
-  defp extent_length(start_column, end_column)
-       when is_integer(start_column) and is_integer(end_column),
-       do: max(1, end_column - start_column)
-
-  defp extent_length(_start_column, _end_column), do: 1
+  defp coordinate_extent(expression) do
+    meta = expression_meta(expression)
+    {Keyword.get(meta, :line), Keyword.get(meta, :col), nil}
+  end
 
   defp elaborate_declared_body(body_expr, return_core, scope, ctx, env, params) do
     if Elaborator.effect_goal?(return_core, ctx) do
@@ -1001,6 +1016,8 @@ defmodule Cure.Elab.Declarations do
          quantities: quantities,
          scope: scope,
          return_core: return_core,
+         return_span: function_return_span(meta),
+         extern_arity_span: decorator_argument_span(meta, "extern", 2),
          inferred_return: is_nil(return_expr),
          constraints: constraint_specs,
          # The PRE-REGISTRATION type, honest about the ORIGINAL quantities (implicit
@@ -1009,6 +1026,23 @@ defmodule Cure.Elab.Declarations do
          # agrees with the λ (see `elaborate_function_body`).
          pi: wrap_binders(:pi, telescope, quantities, return_core)
        }}
+    end
+  end
+
+  defp function_return_span(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{annotation: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp decorator_argument_span(meta, decorator, index) do
+    with %Cure.MetaAST.SourceInfo{decorators: decorators} <- Cure.MetaAST.Metadata.source_info(meta),
+         %{arguments: arguments} <- Map.get(decorators, decorator),
+         %Cure.Diagnostic.Span{} = span <- Enum.at(arguments, index) do
+      span
+    else
+      _ -> nil
     end
   end
 
@@ -1627,7 +1661,7 @@ defmodule Cure.Elab.Declarations do
 
     case names -- Enum.uniq(names) do
       [] -> :ok
-      [dup | _] -> {:error, {:duplicate_field, String.to_atom(dup)}}
+      [dup | _] -> {:error, {:duplicate_field, duplicate_binder_details(fields, dup)}}
     end
   end
 
@@ -1663,11 +1697,26 @@ defmodule Cure.Elab.Declarations do
 
     case pnames -- Enum.uniq(pnames) do
       [dup | _] ->
-        {:error, {:duplicate_parameter, String.to_atom(dup)}}
+        {:error, {:duplicate_parameter, duplicate_binder_details(params, dup)}}
 
       [] ->
         elaborate_param_telescope_rec(params, env)
     end
+  end
+
+  defp duplicate_binder_details(params, duplicate) do
+    spans =
+      params
+      |> Enum.filter(fn {:param, _meta, name} -> name == duplicate end)
+      |> Enum.map(fn {:param, meta, _name} ->
+        case Cure.MetaAST.Metadata.source_info(meta) do
+          %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+          _ -> nil
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    %{name: String.to_atom(duplicate), spans: spans}
   end
 
   # The telescope-aligned external-label vector for a signature's parameters

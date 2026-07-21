@@ -60,10 +60,76 @@ defmodule Cure.Diagnostic.HostTest do
     refute contextual =~ "| fn run"
   end
 
+  test "source-aware migration warnings resolve their reported line" do
+    source = "line one\nline two\nline three\n"
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(
+        {:migration_warning, %{rule: :legacy, file: "demo.cure", line: 2, message: "migrate this"}},
+        "demo.cure",
+        source
+      )
+
+    assert diagnostic.primary.span.start_line == 2
+    assert diagnostic.primary.span.start_byte == byte_size("line one\n")
+
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry)
+    assert rendered =~ "2 | line two"
+    assert rendered =~ "^"
+  end
+
+  test "Host preserves a source registry for operational warning carets" do
+    source = "line one\nline two\nline three\n"
+
+    {diagnostic, registry} =
+      Host.to_diagnostic(
+        {:migration_warning, %{rule: :legacy, file: "demo.cure", line: 2, message: "migrate this"}},
+        "demo.cure",
+        source
+      )
+
+    assert registry != nil
+    assert diagnostic.primary.span.start_line == 2
+    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry) =~ "2 | line two"
+  end
+
+  test "Host attaches source carets to line-based compiler warnings" do
+    source = "line one\nline two\nline three\n"
+
+    {diagnostic, registry} =
+      Host.to_diagnostic(
+        {:compiler_warning, %{file: "demo.cure", line: 3, message: "check this"}},
+        "demo.cure",
+        source
+      )
+
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.message == "warning applies here"
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry)
+    assert rendered =~ "3 | line three"
+    assert rendered =~ "warning applies here"
+  end
+
   test "renders macro syntax failures as contextual syntax diagnostics" do
     source = "fn run() -> Int = say nope\n"
+    {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "demo.cure", emit_events: false)
+    mismatch = Enum.find(tokens, &(&1.value == "nope"))
 
-    rendered = Host.render({:macro_use_mismatch, "say", {:literal, "hello"}, "nope", 1, 20}, "demo.cure", source)
+    rendered =
+      Host.render(
+        {:macro_use_mismatch,
+         %{
+           keyword: "say",
+           expected: {:literal, "hello"},
+           got: "nope",
+           token_type: :identifier,
+           span: mismatch.span,
+           line: mismatch.line,
+           column: mismatch.col
+         }},
+        "demo.cure",
+        source
+      )
 
     assert rendered =~ "[E094]"
     assert rendered =~ "MACRO SYNTAX DOES NOT MATCH"
@@ -71,7 +137,16 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":macro_use_mismatch"
 
     assert Cure.Compiler.Errors.format_with_source(
-             {:macro_use_mismatch, "say", {:literal, "hello"}, "nope", 1, 20},
+             {:macro_use_mismatch,
+              %{
+                keyword: "say",
+                expected: {:literal, "hello"},
+                got: "nope",
+                token_type: :identifier,
+                span: mismatch.span,
+                line: mismatch.line,
+                column: mismatch.col
+              }},
              "demo.cure",
              source
            ) =~ "[E094]"
@@ -79,10 +154,12 @@ defmodule Cure.Diagnostic.HostTest do
 
   test "expected-token syntax failures retain the authored token spelling" do
     source = "fn run(] -> Int = 1\n"
+    assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "syntax.cure", emit_events: false)
+    token = Enum.find(tokens, &(&1.type == :rbracket))
 
     {diagnostic, registry} =
       Cure.Compiler.Errors.to_diagnostic(
-        {:expected_token, :rparen, :rbracket, "]", 1, 8},
+        {:expected_token, :rparen, :rbracket, "]", token.line, token.col, token.span},
         "syntax.cure",
         source
       )
@@ -148,6 +225,21 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":computed_macro_error"
   end
 
+  test "computed macro source context does not fabricate a byte-zero span" do
+    source = "fn run() -> Int = actor()\n"
+
+    {diagnostic, _registry} =
+      Host.to_diagnostic(
+        {:computed_macro_error, [keyword: "actor", line: 1, col: 20],
+         {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}},
+        "demo.cure",
+        source
+      )
+
+    assert diagnostic.primary.span.start_byte == :binary.match(source, "actor") |> elem(0)
+    refute diagnostic.primary.span.start_byte == 0
+  end
+
   test "converts code generation and BEAM lint failures to a stable internal code" do
     assert Host.render({:codegen_error, :bad_artifact}, "demo.cure") =~
              "[E101]"
@@ -167,6 +259,20 @@ defmodule Cure.Diagnostic.HostTest do
              "demo.cure",
              "fn run() -> Int = 1\n"
            ) =~ "[E101]"
+  end
+
+  test "includes the unresolved stdlib module in E101 code-generation failures" do
+    rendered =
+      Host.render(
+        {:codegen_error,
+         {:missing_stdlib_module, :"Cure.Std.Missing",
+          "use Std.Missing: module 'Cure.Std.Missing' not found. Set CURE_LIB."}},
+        "demo.cure"
+      )
+
+    assert rendered =~ "STDLIB MODULE RESOLUTION FAILED [E101]"
+    assert rendered =~ "Cure.Std.Missing"
+    assert rendered =~ "Set CURE_LIB"
   end
 
   test "converts BEAM writer boundary failures without exposing raw tuples" do
@@ -363,7 +469,7 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert diagnostic.suggestions == [
              %Cure.Diagnostic.Suggestion{
-               message: "Did you mean `println`, `Std.Io.print`?",
+               message: "Did you mean `println`, `Std.Io.print`? Qualify it or import its module.",
                applicability: :maybe_incorrect
              }
            ]
@@ -445,13 +551,14 @@ defmodule Cure.Diagnostic.HostTest do
   test "renders invalid macro families as authored macro diagnostics" do
     rendered =
       Host.render(
-        {:invalid_macro_family, {:syntax_family_cycle, ["First", "Second", "First"]}, 4, 1},
+        {:invalid_macro_family,
+         %{reason: {:syntax_family_cycle, ["First", "Second", "First"]}, related_spans: [], line: 4, column: 1}},
         "macro.cure"
       )
 
     assert rendered =~ "[E092]"
-    assert rendered =~ "MACRO VALIDATION FAILED"
-    assert rendered =~ "syntax-family declarations"
+    assert rendered =~ "SYNTAX FAMILIES FORM A CYCLE"
+    assert rendered =~ "First → Second → First"
     refute rendered =~ ":invalid_macro_family"
   end
 

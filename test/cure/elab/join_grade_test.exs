@@ -50,7 +50,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "  fn sink(x :linear Int) -> Int = x\n" <>
           "  fn f(x: C) -> Int =\n    let v :linear = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n"
 
-      assert {:ok, _} = Program.elaborate(src)
+      assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
 
     test "an affine variable captured by a catch-all is ACCEPTED" do
@@ -59,7 +59,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "  fn sink(x :linear Int) -> Int = x\n" <>
           "  fn f(x: C) -> Int =\n    let v :affine = 1\n    match x\n      A() -> sink(v)\n      _ -> sink(v)\nend\n"
 
-      assert {:ok, _} = Program.elaborate(src)
+      assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
   end
 
@@ -73,7 +73,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "  fn f(x: C) -> Int =\n    let v :linear = 1\n    match x\n      A() -> use2(v, v)\n      _ -> use2(v, v)\nend\n"
 
       assert {:error, {:usage_violation, %{declared: :linear, used: :unrestricted}}} =
-               Program.elaborate(src)
+               Program.semantic_result(Program.elaborate(src))
     end
 
     test "a linear variable used in the catch-all AND after the match is rejected" do
@@ -86,7 +86,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "  fn f(x: C) -> Int =\n    let v :linear = 1\n" <>
           "    let r = match x\n      A() -> sink(v)\n      _ -> sink(v)\n    add(r, sink(v))\nend\n"
 
-      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.elaborate(src)
+      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.semantic_result(Program.elaborate(src))
     end
 
     test "a linear variable used in ONLY SOME branches is rejected (must be used on every path)" do
@@ -97,7 +97,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "  fn sink(x :linear Int) -> Int = x\n" <>
           "  fn f(x: C) -> Int =\n    let v :linear = 1\n    match x\n      A() -> 0\n      _ -> sink(v)\nend\n"
 
-      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.elaborate(src)
+      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.semantic_result(Program.elaborate(src))
     end
   end
 
@@ -119,7 +119,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "  fn f(x: Two) -> Int =\n    let g :linear (Int) -> Int = fn(k) -> sink(k)\n" <>
           "    match x\n      T() -> 0\n      F() -> g(1)\nend\n"
 
-      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.elaborate(src)
+      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.semantic_result(Program.elaborate(src))
     end
 
     test "a linear let-bound closure applied in EVERY branch is accepted" do
@@ -129,7 +129,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "  fn f(x: Two) -> Int =\n    let g :linear (Int) -> Int = fn(k) -> sink(k)\n" <>
           "    match x\n      T() -> g(0)\n      F() -> g(1)\nend\n"
 
-      assert {:ok, _} = Program.elaborate(src)
+      assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
 
     test "an erased let-bound closure applied at runtime is REJECTED" do
@@ -138,7 +138,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "  fn f(x: Two) -> Int =\n    let g :erased (Int) -> Int = fn(k) -> k\n" <>
           "    match x\n      T() -> 0\n      F() -> g(1)\nend\n"
 
-      assert {:error, _} = Program.elaborate(src)
+      assert {:error, _} = Program.semantic_result(Program.elaborate(src))
     end
   end
 
@@ -162,7 +162,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "    let j : (Int) -> Int = fn(z) -> add(z, z)\n" <>
           "    match x\n      T() -> j(v)\n      F() -> j(v)\nend\n"
 
-      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.elaborate(src)
+      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.semantic_result(Program.elaborate(src))
     end
 
     test "an AFFINE var consumed twice while computing a join arg is REJECTED even if the continuation ignores its parameter" do
@@ -176,7 +176,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "    let j : (Int) -> Int = fn(z) -> 0\n" <>
           "    match x\n      T() -> j(dup(w, w))\n      F() -> 0\nend\n"
 
-      assert {:error, {:usage_violation, %{declared: :affine}}} = Program.elaborate(src)
+      assert {:error, {:usage_violation, %{declared: :affine}}} = Program.semantic_result(Program.elaborate(src))
     end
 
     test "a linear var used once outside AND once as a join arg (continuation ignores it) is REJECTED" do
@@ -189,7 +189,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "    let j : (Int) -> Int = fn(z) -> 0\n" <>
           "    match x\n      T() -> j(v)\n      F() -> x2\nend\n"
 
-      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.elaborate(src)
+      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.semantic_result(Program.elaborate(src))
     end
   end
 
@@ -214,7 +214,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "    let g : (Int) -> Int = fn(k) -> sink(v)\n" <>
           "    match x\n      T() -> add(g(1), g(2))\n      F() -> add(g(1), g(2))\nend\n"
 
-      assert {:error, {:usage_violation, %{used: :unrestricted}}} = Program.elaborate(src)
+      assert {:error, {:usage_violation, %{used: :unrestricted}}} = Program.semantic_result(Program.elaborate(src))
     end
 
     test "an AFFINE var captured by a lambda applied twice per path is REJECTED (gate soundness)" do
@@ -231,7 +231,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "    let g : (Int) -> Int = fn(k) -> asink(v)\n" <>
           "    match x\n      T() -> add(g(1), g(2))\n      F() -> add(g(1), g(2))\nend\n"
 
-      assert {:error, {:usage_violation, %{declared: :affine}}} = Program.elaborate(src)
+      assert {:error, {:usage_violation, %{declared: :affine}}} = Program.semantic_result(Program.elaborate(src))
     end
   end
 
@@ -243,7 +243,7 @@ defmodule Cure.Elab.JoinGradeTest do
           "  fn hit(a: Int) -> Int = a\n" <>
           "  fn f(x: C, n: Int) -> Int =\n    match x\n      A() -> hit(n)\n      _ -> kont(n)\nend\n"
 
-      {:ok, env} = Program.elaborate(src)
+      {:ok, env} = Program.semantic_result(Program.elaborate(src))
       # Join fired: exactly one copy of the catch-all callee, bound by a `:let`.
       assert calls(env, :f, :kont) == 1
       assert lets(env, :f) == 1

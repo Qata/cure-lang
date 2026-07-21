@@ -111,6 +111,19 @@ defmodule Cure.CLITest do
       assert output =~ "INVALID COMMAND USAGE"
       refute output =~ "{:usage_error"
     end
+
+    test "unknown options fail as E099 before compilation" do
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["compile", "--verbsoe", "examples/hello.cure"])) ==
+                   {:shutdown, 1}
+        end)
+
+      assert output =~ "INVALID COMMAND USAGE [E099]"
+      assert output =~ "--verbsoe"
+      refute output =~ "UNKNOWN VALUE"
+      refute output =~ "Compiling examples/hello.cure"
+    end
   end
 
   describe "cure run" do
@@ -144,6 +157,20 @@ defmodule Cure.CLITest do
       :code.delete(:"Cure.CliRun")
     end
 
+    test "a missing source is an E095 file-read diagnostic" do
+      path = "/no/such/cure_cli_run_missing.cure"
+
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["run", path])) == {:shutdown, 1}
+        end)
+
+      assert output =~ "COULD NOT READ FILE [E095]"
+      assert output =~ path
+      refute output =~ "[E098]"
+      refute output =~ "1 |"
+    end
+
     test "compiles module without main" do
       path = Path.join(System.tmp_dir!(), "cure_cli_nomain.cure")
 
@@ -169,6 +196,20 @@ defmodule Cure.CLITest do
         end)
 
       assert output =~ "OK"
+    end
+
+    test "a missing source is an E095 file-read diagnostic" do
+      path = "/no/such/cure_cli_check_missing.cure"
+
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["check", path])) == {:shutdown, 1}
+        end)
+
+      assert output =~ "COULD NOT READ FILE [E095]"
+      assert output =~ path
+      refute output =~ "[E098]"
+      refute output =~ "1 |"
     end
   end
 
@@ -200,7 +241,9 @@ defmodule Cure.CLITest do
           assert catch_exit(Cure.CLI.main(["foobar"])) == {:shutdown, 1}
         end)
 
-      assert stderr =~ "Unknown command"
+      assert stderr =~ "INVALID COMMAND USAGE [E099]"
+      assert stderr =~ "Unknown command: foobar"
+      refute stderr =~ "[E098]"
     end
   end
 
@@ -270,7 +313,16 @@ defmodule Cure.CLITest do
           assert catch_exit(Cure.CLI.main(["fmt", "--aggressive", path])) == {:shutdown, 1}
         end)
 
+      assert output =~ "[E094]"
       assert output =~ Path.basename(path)
+      assert output =~ "^"
+      assert length(Regex.scan(~r/-- .* \[E094\]/, output)) == 1
+      assert output =~ "FORMATTING MAY DISCARD SOURCE DETAILS [W003]"
+      assert output =~ "`cure fmt --aggressive`"
+      assert output =~ "Commit or copy these files before continuing"
+      assert length(Regex.scan(~r/-- .* \[W003\]/, output)) == 1
+      assert :binary.match(output, "[W003]") < :binary.match(output, "[E094]")
+      refute output =~ "{:expected_token"
     end
   end
 
@@ -313,7 +365,8 @@ defmodule Cure.CLITest do
           assert catch_exit(Cure.CLI.main(["deps"])) == {:shutdown, 1}
         end)
 
-      assert stderr =~ "No Cure.toml found"
+      assert stderr =~ "COULD NOT READ FILE [E095]"
+      assert stderr =~ "Cannot read `Cure.toml`"
     end
 
     test "an unknown deps subcommand names the bad subcommand and exits nonzero", %{tmp: tmp} do
@@ -329,7 +382,9 @@ defmodule Cure.CLITest do
         end)
 
       assert stderr =~ "Unknown deps subcommand: frobnicate"
+      assert stderr =~ "INVALID COMMAND USAGE [E099]"
       refute stderr =~ "Unknown command: deps"
+      refute stderr =~ "[E098]"
     end
   end
 
@@ -352,7 +407,26 @@ defmodule Cure.CLITest do
           end)
 
         assert stderr =~ "keys"
+        assert stderr =~ "INVALID COMMAND USAGE [E099]"
         refute stderr =~ "Unknown command: keys"
+        refute stderr =~ "[E098]"
+      end
+    end
+  end
+
+  describe "positional command usage diagnostics" do
+    for command <- ~w(replay draw) do
+      @command command
+
+      test "cure #{command} without a path is E099" do
+        stderr =
+          capture_io(:stderr, fn ->
+            assert catch_exit(Cure.CLI.main([@command])) == {:shutdown, 1}
+          end)
+
+        assert stderr =~ "INVALID COMMAND USAGE [E099]"
+        assert stderr =~ "Usage: cure #{@command}"
+        refute stderr =~ "[E098]"
       end
     end
   end
@@ -363,10 +437,16 @@ defmodule Cure.CLITest do
     # missing file — unlike run/check/compile, which report + exit 1. A missing
     # explicit target must be a clean non-zero exit, never a crash.
     test "cure fmt on a missing file exits 1 without crashing" do
-      capture_io(:stderr, fn ->
-        assert catch_exit(Cure.CLI.main(["fmt", "/no/such/missing_fmt_xyz.cure"])) ==
-                 {:shutdown, 1}
-      end)
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["fmt", "/no/such/missing_fmt_xyz.cure"])) ==
+                   {:shutdown, 1}
+        end)
+
+      assert output =~ "COULD NOT READ FILE [E095]"
+      assert output =~ "/no/such/missing_fmt_xyz.cure"
+      refute output =~ "[E098]"
+      refute output =~ "1 |"
     end
 
     test "cure fmt --check on a missing file exits 1 without crashing" do
@@ -377,10 +457,16 @@ defmodule Cure.CLITest do
     end
 
     test "cure doc on a missing file exits 1 without crashing" do
-      capture_io(:stderr, fn ->
-        assert catch_exit(Cure.CLI.main(["doc", "/no/such/missing_doc_xyz.cure"])) ==
-                 {:shutdown, 1}
-      end)
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["doc", "/no/such/missing_doc_xyz.cure"])) ==
+                   {:shutdown, 1}
+        end)
+
+      assert output =~ "COULD NOT READ FILE [E095]"
+      assert output =~ "/no/such/missing_doc_xyz.cure"
+      refute output =~ "[E098]"
+      refute output =~ "1 |"
     end
 
     # `File.exists?` returns true for a file that exists but is unreadable
@@ -448,6 +534,69 @@ defmodule Cure.CLITest do
       output = capture_io(fn -> Cure.CLI.main(["help", "bogus"]) end)
       assert output =~ "Usage: cure"
       refute output =~ "Unknown command"
+    end
+  end
+
+  describe "cure test" do
+    test "runtime failures use an operational diagnostic" do
+      root = Path.join(System.tmp_dir!(), "cure_cli_test_#{System.unique_integer([:positive])}")
+      test_dir = Path.join(root, "test")
+      File.mkdir_p!(test_dir)
+
+      File.write!(Path.join(test_dir, "failure.cure"), """
+      mod FailingCureTest
+        @extern(:erlang, :error, 1)
+        local fn explode(reason: Atom) -> Unit
+        fn test_failure() -> Unit = explode(:boom)
+      end
+      """)
+
+      on_exit(fn -> File.rm_rf!(root) end)
+
+      stderr =
+        capture_io(:stderr, fn ->
+          File.cd!(root, fn ->
+            assert catch_exit(Cure.CLI.main(["test"])) == {:shutdown, 1}
+          end)
+        end)
+
+      assert stderr =~ "[E098]"
+      assert length(Regex.scan(~r/-- COMMAND FAILED \[E098\]/, stderr)) == 1
+      refute stderr =~ "FAIL test/failure.cure"
+      refute stderr =~ "{:"
+    end
+
+    test "doctest compile failures keep their compiler category and source caret" do
+      root = Path.join(System.tmp_dir!(), "cure_cli_doctest_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(root, "lib"))
+      File.mkdir_p!(Path.join(root, "test"))
+
+      File.write!(Path.join(root, "lib/demo.cure"), """
+      mod Demo
+        ## Example.
+        ##
+        ##   cure> missing_name
+        ##   => 0
+        fn example() -> Int = 0
+      end
+      """)
+
+      File.write!(Path.join(root, "test/empty.cure"), "mod EmptyTests\nend\n")
+      on_exit(fn -> File.rm_rf!(root) end)
+
+      stderr =
+        capture_io(:stderr, fn ->
+          File.cd!(root, fn ->
+            assert catch_exit(Cure.CLI.main(["test", "--doctests"])) == {:shutdown, 1}
+          end)
+        end)
+
+      assert stderr =~ "UNKNOWN VALUE [E091]"
+      assert stderr =~ "fn main() = missing_name"
+      assert stderr =~ "^^^^^^^^^^^^"
+      refute stderr =~ "COMMAND FAILED [E098]"
+      refute stderr =~ "compile error:"
+      refute stderr =~ "{:unknown_global"
     end
   end
 

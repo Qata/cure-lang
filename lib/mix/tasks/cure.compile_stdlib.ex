@@ -60,7 +60,7 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
              ) do
           {:ok, summary} ->
             Enum.each(summary.cycles, fn walk ->
-              Mix.shell().info(Cure.Diagnostic.Host.render({:import_cycle, walk}, stdlib_dir))
+              Mix.shell().error(render_host_diagnostic({:import_cycle, walk}, stdlib_dir))
             end)
 
             Mix.shell().info(
@@ -80,7 +80,7 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
               end)
               |> Enum.uniq_by(&elem(&1, 0))
               |> Enum.each(fn {_fingerprint, reason, path} ->
-                Mix.shell().error("  " <> render_host_diagnostic(reason, path))
+                Mix.shell().error(render_host_diagnostic(reason, path))
               end)
 
               exit({:shutdown, 1})

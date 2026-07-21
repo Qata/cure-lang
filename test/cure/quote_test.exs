@@ -120,7 +120,7 @@ defmodule Cure.QuoteTest do
 
     test "regex" do
       ast = quote!("~r/[a-z]+/i")
-      assert Cure.quoted_to_string(ast) == "~r/[a-z]+/i"
+      assert Cure.quoted_to_string(ast) == ~s|Std.Regex.literal("[a-z]+", "i")|
     end
 
     test "char" do

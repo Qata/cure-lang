@@ -74,6 +74,39 @@ defmodule Cure.Elab.CanonicalModuleLoaderTest do
     Process.delete(:cure_module_loader_observer)
   end
 
+  test "a totality failure in an imported module renders that module's authored definition", %{root: root} do
+    path = Path.join(root, "non_total.cure")
+
+    imported = """
+    mod Loader.NonTotal
+      type Dec = Dcoupled | Causal
+      type Sig = CSig | ESig
+      type SVDesc = SVNil | SVCons(Sig, SVDesc)
+      fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)
+      type SF indices (as: SVDesc, bs: SVDesc, d: Dec)
+        prim : SF(as, bs, Causal)
+        seq : SF(as, bs, d1) -> SF(bs, cs, d2) -> SF(as, cs, andd(d1, d2))
+    end
+    """
+
+    File.write!(path, imported)
+    main = "mod Loader.Main\n  use Loader.NonTotal\nend\n"
+
+    assert {:error, error} = Program.elaborate(main, file: "main.cure")
+    assert {:totality_required, :"Loader.NonTotal#andd"} = Program.semantic_error(error)
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "main.cure", main)
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80)
+
+    assert diagnostic.primary.span.path == path
+    assert diagnostic.primary.span.start_line == 5
+    assert rendered =~ path
+    assert rendered =~ "non_total.cure:5:6"
+    assert rendered =~ "5 |   fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)"
+    assert rendered =~ "^^^^ this definition is used in a type and must always terminate"
+    refute rendered =~ "at main.cure"
+  end
+
   defp write_module(root, file, module_name, body) do
     path = Path.join(root, file)
     File.write!(path, "mod #{module_name}\n  #{body}\nend\n")

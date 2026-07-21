@@ -40,7 +40,19 @@ defmodule Cure.Elab.ErasesDecoratorTest do
     end
     """
 
-    assert {:error, {:unknown_erasure_class, :Handle, :banana}} = Program.elaborate(src)
+    assert {:error, error} = Program.elaborate(src, file: "erasure.cure")
+    assert {:unknown_erasure_class, :Handle, :banana} = Program.semantic_error(error)
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "erasure.cure", src)
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80)
+
+    assert diagnostic.code == "E102"
+    assert diagnostic.primary.span.start_line == 2
+    assert diagnostic.primary.span.start_column == 3
+    assert diagnostic.primary.span.end_column == 19
+    assert rendered =~ "2 |   @erases(:banana)"
+    assert rendered =~ "^^^^^^^^^^^^^^^^ this erasure declaration is invalid"
+    assert rendered =~ "Hint: Choose one of"
   end
 
   test "the unrecognised-class error names the admissible set (spec §4 item 2)" do
@@ -61,7 +73,8 @@ defmodule Cure.Elab.ErasesDecoratorTest do
     end
     """
 
-    assert {:error, {:erases_on_non_opaque, :Colour}} = Program.elaborate(src)
+    assert {:error, error} = Program.elaborate(src)
+    assert {:erases_on_non_opaque, :Colour} = Program.semantic_error(error)
   end
 
   # A malformed `@erases(...)` shape must not be silently treated as "no erasure
@@ -76,7 +89,8 @@ defmodule Cure.Elab.ErasesDecoratorTest do
     end
     """
 
-    assert {:error, {:unknown_erasure_class, :Handle, _}} = Program.elaborate(src)
+    assert {:error, error} = Program.elaborate(src)
+    assert {:unknown_erasure_class, :Handle, _} = Program.semantic_error(error)
   end
 
   test "@erases with more than one argument is a compile error" do
@@ -87,7 +101,8 @@ defmodule Cure.Elab.ErasesDecoratorTest do
     end
     """
 
-    assert {:error, {:unknown_erasure_class, :Handle, _}} = Program.elaborate(src)
+    assert {:error, error} = Program.elaborate(src)
+    assert {:unknown_erasure_class, :Handle, _} = Program.semantic_error(error)
   end
 
   test "@erases(bare_identifier) without the atom colon is a compile error" do
@@ -98,6 +113,7 @@ defmodule Cure.Elab.ErasesDecoratorTest do
     end
     """
 
-    assert {:error, {:unknown_erasure_class, :Handle, _}} = Program.elaborate(src)
+    assert {:error, error} = Program.elaborate(src)
+    assert {:unknown_erasure_class, :Handle, _} = Program.semantic_error(error)
   end
 end

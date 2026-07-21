@@ -11,6 +11,8 @@ defmodule Cure.Compiler.Parser.FixityResolver do
 
   alias Cure.Compiler.Parser.{FixityTable, FixityScan}
   alias Cure.Compiler.SourceResolver
+  alias Cure.Diagnostic.Span
+  alias Cure.MetaAST.SourceInfo
 
   @spec assemble(FixityTable.t(), [tuple()], [String.t()], [String.t()], keyword()) ::
           {:ok, FixityTable.t()} | {:error, term()}
@@ -58,41 +60,93 @@ defmodule Cure.Compiler.Parser.FixityResolver do
     groups = Enum.filter(nodes, &match?({:precedencegroup, _, _}, &1))
     ops = Enum.filter(nodes, &match?({:fixity, _, _}, &1))
 
-    with {:ok, t1} <- reduce_merge(base, groups),
-         {:ok, t2} <- reduce_merge(t1, ops) do
-      {:ok, t2}
+    initial = %{table: base, origins: %{}}
+
+    with {:ok, state1} <- reduce_merge(initial, groups),
+         {:ok, state2} <- reduce_merge(state1, ops) do
+      {:ok, state2.table}
     end
   end
 
-  defp reduce_merge(table, nodes) do
-    Enum.reduce_while(nodes, {:ok, table}, fn node, {:ok, t} ->
-      case merge_node(t, node) do
-        {:ok, t2} -> {:cont, {:ok, t2}}
+  defp reduce_merge(state, nodes) do
+    Enum.reduce_while(nodes, {:ok, state}, fn node, {:ok, current} ->
+      case merge_node(current, node) do
+        {:ok, next} -> {:cont, {:ok, next}}
         {:error, _} = err -> {:halt, err}
       end
     end)
   end
 
-  defp merge_node(table, {:precedencegroup, meta, _}) when is_list(meta) do
-    FixityTable.merge_group(table, Keyword.fetch!(meta, :name),
-      assoc: Keyword.get(meta, :assoc, :left),
-      higher_than: Keyword.get(meta, :higher_than, []),
-      lower_than: Keyword.get(meta, :lower_than, [])
-    )
+  defp merge_node(%{table: table} = state, {:precedencegroup, meta, _}) when is_list(meta) do
+    name = Keyword.fetch!(meta, :name)
+    key = {:group, name}
+
+    case FixityTable.merge_group(table, name,
+           assoc: Keyword.get(meta, :assoc, :left),
+           higher_than: Keyword.get(meta, :higher_than, []),
+           lower_than: Keyword.get(meta, :lower_than, [])
+         ) do
+      {:ok, next} ->
+        {:ok, remember_origin(state, next, key, declaration_span(meta, :name))}
+
+      {:error, {:conflicting_precedence_group, {^name, existing, new}}} ->
+        {:error,
+         {:conflicting_precedence_group,
+          %{
+            name: name,
+            existing: existing,
+            new: new,
+            spans: conflict_spans(state, key, declaration_span(meta, :name))
+          }}}
+    end
   end
 
-  defp merge_node(table, {:fixity, meta, _}) when is_list(meta) do
+  defp merge_node(%{table: table} = state, {:fixity, meta, _}) when is_list(meta) do
     lexeme = Keyword.get(meta, :operator)
     group = Keyword.get(meta, :group)
     fixity = Keyword.get(meta, :fixity)
 
     if is_binary(lexeme) and is_atom(group) and not is_nil(group) and
          fixity in [:infix, :prefix, :postfix] do
-      FixityTable.merge_op(table, lexeme, fixity, group)
+      key = {:operator, lexeme, fixity}
+
+      case FixityTable.merge_op(table, lexeme, fixity, group) do
+        {:ok, next} ->
+          {:ok, remember_origin(state, next, key, declaration_span(meta, :operator))}
+
+        {:error, {:conflicting_operator_fixity, {^lexeme, existing_group, ^group}}} ->
+          {:error,
+           {:conflicting_operator_fixity,
+            %{
+              operator: lexeme,
+              fixity: fixity,
+              existing_group: existing_group,
+              new_group: group,
+              spans: conflict_spans(state, key, declaration_span(meta, :operator))
+            }}}
+      end
     else
-      {:ok, table}
+      {:ok, state}
     end
   end
 
-  defp merge_node(table, _), do: {:ok, table}
+  defp merge_node(state, _), do: {:ok, state}
+
+  defp remember_origin(state, table, key, %Span{} = span),
+    do: %{state | table: table, origins: Map.put_new(state.origins, key, span)}
+
+  defp remember_origin(state, table, _key, _span), do: %{state | table: table}
+
+  defp conflict_spans(state, key, incoming) do
+    [Map.get(state.origins, key), incoming]
+    |> Enum.filter(&match?(%Span{}, &1))
+    |> Enum.uniq()
+  end
+
+  defp declaration_span(meta, role) do
+    case Keyword.get(meta, :source_info) do
+      %SourceInfo{} = info -> Map.get(info, role) || info.whole
+      _ -> nil
+    end
+  end
 end

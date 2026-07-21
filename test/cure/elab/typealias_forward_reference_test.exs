@@ -73,4 +73,21 @@ defmodule Cure.Elab.TypealiasForwardReferenceTest do
 
     assert {:ok, _env} = Program.elaborate(src)
   end
+
+  test "match dispatch unfolds an alias nested inside an applied data type" do
+    src = """
+    mod M
+      type Item = Item(Int)
+      typealias Items = List(Item)
+
+      fn empty(groups: List(Items)) -> Bool =
+        match groups
+          [] -> true
+          [_ | _] -> false
+    end
+    """
+
+    assert {:ok, env} = Program.elaborate(src)
+    assert Kernel.check_def(env, :empty) == :ok
+  end
 end

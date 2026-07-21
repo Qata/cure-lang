@@ -1,6 +1,7 @@
 defmodule Cure.Compiler.MacroDefParseTest do
   use ExUnit.Case, async: true
-  alias Cure.Compiler.{Lexer, Parser, Printer}
+  alias Cure.Compiler.{Errors, Lexer, Parser, Printer}
+  alias Cure.Diagnostic.Renderer
 
   defp parse!(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
@@ -38,7 +39,7 @@ defmodule Cure.Compiler.MacroDefParseTest do
   test "a body line that isn't a recognized rule keyword records a parse error" do
     {:ok, tokens} = Lexer.tokenize("macro Bad\n  oops\n", emit_events: false)
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
-    assert Enum.any?(errors, &match?({:expected, :syntax_rule, :got, _, _, _}, &1))
+    assert Enum.any?(errors, &match?({:expected, :syntax_rule, :got, _, _, _, %Cure.Diagnostic.Span{}}, &1))
   end
 
   test "a syntax rule with a typed hole captures name + kind in order" do
@@ -102,10 +103,12 @@ defmodule Cure.Compiler.MacroDefParseTest do
 
     assert {:macro_def, _, [transition, definition, _, _]} = node
     assert [%{fields: ["from", "event", "to"], segments: segments}] = transition.productions
+
     assert Enum.map(segments, fn
              {:lit, value} -> value
              {:hole, %{name: name}} -> name
            end) == ["from", "-", "-", "event", "-", "->", "to"]
+
     assert [%{name: "transitions", shape: "Transition", cardinality: :one_or_more}] = definition.fields
   end
 
@@ -179,14 +182,46 @@ defmodule Cure.Compiler.MacroDefParseTest do
   end
 
   test "an obligation must name a capture owned by its rule" do
+    source =
+      "macro Bad\n  syntax child <identity: Expression> where BeamEncode(identitty) becomes identity\n"
+
     {:ok, tokens} =
       Lexer.tokenize(
-        "macro Bad\n  syntax child <identity: Expression> where BeamEncode(missing) becomes identity\n",
+        source,
         emit_events: false
       )
 
     assert {:error, errors} = Parser.parse(tokens, emit_events: false, prelude_macros: false)
-    assert Enum.any?(errors, &match?({:unknown_macro_obligation_capture, "missing", _, _}, &1))
+    assert [{:unknown_macro_obligation_capture, details} = error] = errors
+    assert details.capture == "identitty"
+    assert details.span.start_line == 2
+    assert details.span.start_column == 56
+    assert details.span.end_column == 65
+
+    {diagnostic, registry} = Errors.to_diagnostic({:parse_error, [error]}, "obligation.cure", source)
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- UNKNOWN MACRO CAPTURE [E092] -------------------------------- obligation.cure
+
+             The `BeamEncode` obligation refers to `identitty`, but this rule declares no
+             capture with that name.
+
+             at obligation.cure:2:56
+             2 | …ession> where BeamEncode(identitty) becomes identity
+               |                           ^^^^^^^^^ this capture is not declared by the rule
+
+             Hint: Replace it with the declared capture `identity`
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "identity"}]}] =
+             diagnostic.suggestions
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 1, "character" => 55},
+             "end" => %{"line" => 1, "character" => 64}
+           }
   end
 
   test "capture obligations survive printing and reparsing" do
@@ -242,7 +277,7 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
 
     assert Enum.any?(errors, fn
-             {:invalid_macro_family, {:unknown_syntax_family, "Missing"}, _, _} -> true
+             {:invalid_macro_family, %{reason: {:unknown_syntax_family, "Missing"}}} -> true
              _ -> false
            end)
   end
@@ -265,7 +300,7 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
 
     assert Enum.any?(errors, fn
-             {:invalid_macro_family, {:syntax_family_cycle, ["First", "Second", "First"]}, _, _} -> true
+             {:invalid_macro_family, %{reason: {:syntax_family_cycle, ["First", "Second", "First"]}}} -> true
              _ -> false
            end)
   end
@@ -285,9 +320,88 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert {:error, errors} = Parser.parse(tokens, emit_events: false, prelude_macros: false)
 
     assert Enum.any?(errors, fn
-             {:invalid_macro_family, {:duplicate_syntax_family_field, [{"Definition", "state"}]}, _, _} -> true
+             {:invalid_macro_family, %{reason: {:duplicate_syntax_family_field, [{"Definition", "state"}]}}} -> true
              _ -> false
            end)
+  end
+
+  test "family validation failures retain exact authored regions and explanations" do
+    cases = [
+      {
+        "unknown_family.cure",
+        "macro Bad\n  syntax family Service\n    includes Missing\n    state Type\n  accepts Service\n  expands with build\n",
+        """
+        -- INCLUDED SYNTAX FAMILY IS UNKNOWN [E092] ---------------- unknown_family.cure
+
+        `Missing` is included here, but this macro does not declare a syntax family with
+        that name.
+
+        at unknown_family.cure:3:14
+        3 |     includes Missing
+          |              ^^^^^^^ this included family is not declared
+
+        Hint: Declare `syntax family Missing` or change `includes` to a declared family
+        """,
+        %{"start" => %{"line" => 2, "character" => 13}, "end" => %{"line" => 2, "character" => 20}},
+        []
+      },
+      {
+        "family_cycle.cure",
+        "macro Bad\n  syntax family First\n    includes Second\n  syntax family Second\n    includes First\n  accepts First\n  expands with build\n",
+        """
+        -- SYNTAX FAMILIES FORM A CYCLE [E092] ----------------------- family_cycle.cure
+
+        These syntax families include one another in a cycle: First → Second → First.
+
+        at family_cycle.cure:2:3
+        2 |   syntax family First
+          >   ^^^^^^^^^^^^^^^^^^^
+        3 |     includes Second
+          > ^^^^^^^^^^^^^^^^^^^ the inclusion cycle starts here
+        4 |   syntax family Second
+          >   --------------------
+        5 |     includes First
+          > ------------------ this family also participates in the cycle
+
+        Hint: Remove one `includes` edge so the family graph is acyclic
+        """,
+        %{"start" => %{"line" => 1, "character" => 2}, "end" => %{"line" => 2, "character" => 19}},
+        [%{"start" => %{"line" => 3, "character" => 2}, "end" => %{"line" => 4, "character" => 18}}]
+      },
+      {
+        "duplicate_family.cure",
+        "macro Actor\n  syntax family Definition\n    state Type\n    state Type\n",
+        """
+        -- SYNTAX-FAMILY FIELD IS DUPLICATED [E092] -------------- duplicate_family.cure
+
+        The same field is declared more than once: `Definition.state`.
+
+        at duplicate_family.cure:4:5
+        3 |     state Type
+          |     ---------- the field was already declared here
+        4 |     state Type
+          |     ^^^^^^^^^^ this field is declared again
+
+        Hint: Keep one declaration of the field
+        """,
+        %{"start" => %{"line" => 3, "character" => 4}, "end" => %{"line" => 3, "character" => 14}},
+        [%{"start" => %{"line" => 2, "character" => 4}, "end" => %{"line" => 2, "character" => 14}}]
+      }
+    ]
+
+    for {file, source, expected, expected_range, related_ranges} <- cases do
+      assert {:ok, tokens} = Lexer.tokenize(source, file: file, emit_events: false)
+
+      assert {:error, [{:invalid_macro_family, _details} = error]} =
+               Parser.parse(tokens, emit_events: false, prelude_macros: false)
+
+      {diagnostic, registry} = Errors.to_diagnostic(error, file, source)
+      assert Renderer.plain(diagnostic, registry, width: 80) == String.trim_trailing(expected)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+      assert lsp["range"] == expected_range
+      assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == related_ranges
+    end
   end
 
   test "an open category and qualified category extension are retained" do
@@ -328,7 +442,7 @@ defmodule Cure.Compiler.MacroDefParseTest do
       Lexer.tokenize("macro Bad\n  syntax every <t: Duration becomes x\n", emit_events: false)
 
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
-    assert Enum.any?(errors, &match?({:malformed_hole, _, _}, &1))
+    assert Enum.any?(errors, &match?({:malformed_hole, %{observed: "becomes"}}, &1))
   end
 
   # `##` doc-comments are ALWAYS emitted by the lexer as `:doc_comment` tokens

@@ -433,6 +433,7 @@ defmodule Cure.Compiler.Errors do
       case exact_error_span(error, source, source_id, registry) do
         {:ok, span} -> [span: span]
         :error -> []
+        {:error, _reason} -> []
       end
 
     opts =

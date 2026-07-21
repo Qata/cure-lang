@@ -20,20 +20,20 @@ defmodule Mix.Tasks.Cure.Compile do
 
   @impl Mix.Task
   def run(args) do
-    {opts, paths, _} =
+    {opts, paths, invalid} =
       OptionParser.parse(args,
-        switches: [output_dir: :string],
+        strict: [output_dir: :string],
         aliases: [o: :output_dir]
       )
+
+    if invalid != [] do
+      usage_error("Invalid options for mix cure.compile: #{inspect(invalid)}")
+    end
 
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
 
     if paths == [] do
-      Mix.shell().error(
-        render_diagnostic(Cure.Diagnostic.Operational.usage("Usage: mix cure.compile <path> [--output-dir DIR]"))
-      )
-
-      exit({:shutdown, 1})
+      usage_error("Usage: mix cure.compile <path> [--output-dir DIR]")
     end
 
     # Ensure the application is started (for Registry)
@@ -57,7 +57,7 @@ defmodule Mix.Tasks.Cure.Compile do
          ) do
       {:ok, summary} ->
         Enum.each(summary.cycles, fn walk ->
-          Mix.shell().info(Cure.Diagnostic.Host.render({:import_cycle, walk}, path))
+          Mix.shell().error(render_host_diagnostic({:import_cycle, walk}, path))
         end)
 
         Mix.shell().info(
@@ -75,7 +75,7 @@ defmodule Mix.Tasks.Cure.Compile do
           end)
           |> Enum.uniq_by(&elem(&1, 0))
           |> Enum.each(fn {_fingerprint, reason, path} ->
-            Mix.shell().error("  " <> render_host_diagnostic(reason, path))
+            Mix.shell().error(render_host_diagnostic(reason, path))
           end)
 
           exit({:shutdown, 1})
@@ -111,6 +111,11 @@ defmodule Mix.Tasks.Cure.Compile do
   defp render_diagnostic(diagnostic, registry \\ nil) do
     Sink.new(format: :plain, color: :auto, width: 80, registry: registry)
     |> Sink.render(diagnostic)
+  end
+
+  defp usage_error(message) do
+    Mix.shell().error(render_diagnostic(Cure.Diagnostic.Operational.usage(message)))
+    exit({:shutdown, 1})
   end
 
   defp source_path_for(target, files) do

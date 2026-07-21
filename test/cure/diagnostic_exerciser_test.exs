@@ -44,8 +44,6 @@ defmodule Cure.DiagnosticExerciserTest do
       {"duplicate module", "E087", {:duplicate_module_identity, "Demo", "a.cure", "b.cure"}},
       {"ambiguous name", "E089", {:ambiguous_name, :helper, ["Demo.A", "Demo.B"]}},
       {"import cycle", "W086", {:import_cycle, [%{module: "Demo.A", path: "a.cure", line: 1}]}},
-      {"unresolved import", "W088", {:unresolved_import, :helper, 1, ["Demo.A"], 2}},
-      {"recovered parse", "E063", {:parse_recovered, :semicolon, 1, 1}},
       {"macro expansion", "E092",
        {:lift_module_error,
         %{module: "Demo.Generated", cause: {:unknown_global, :missing}, source_provenance: %{macro: :spawn}}}},
@@ -84,7 +82,9 @@ defmodule Cure.DiagnosticExerciserTest do
       {"unsupported expression", "E093", {:unsupported_expression, :unknown_form}},
       {"occurs check", "E093", {:occurs_check, 1, {:var, 1}}},
       {"forced pattern mismatch", "E093", {:source_context, {:forced_pattern_mismatch, :Int, :String}, %{}}},
-      {"macro family failure", "E092", {:invalid_macro_family, {:syntax_family_cycle, ["A", "B", "A"]}, 1, 1}},
+      {"macro family failure", "E092",
+       {:invalid_macro_family,
+        %{reason: {:syntax_family_cycle, ["A", "B", "A"]}, related_spans: [], line: 1, column: 1}}},
       {"missing stdlib source", "E095", {:missing_stdlib_source, "Std.Missing", "/tmp/Std/Missing.cure"}},
       {"operator conflict", "E106", {:builtin_operator_not_overloadable, :|>}},
       {"unsupported async", "E107", {:unsupported_async, "async primitive is unavailable", [line: 2]}},
@@ -172,23 +172,28 @@ defmodule Cure.DiagnosticExerciserTest do
       {"too few arguments", "E093", :too_few_arguments},
       {"too many arguments", "E093", :too_many_arguments},
       {"non-variable scrutinee", "E093", :nonvariable_scrutinee},
-      {"literal macro capture", "E094", {:expected_literal_capture, "{name}", 1, 2}},
-      {"unknown syntax family field", "E092", {:unknown_syntax_family_field, :Expr, :field, 1, 2}},
-      {"missing syntax family field", "E092", {:missing_syntax_family_field, :Expr, :field, 1, 2}},
-      {"unknown macro obligation capture", "E092", {:unknown_macro_obligation_capture, :capture, 1, 2}},
-      {"graded let requires variable", "E093", {:graded_let_requires_variable, :linear, 1, 2}},
-      {"unknown grade", "E093", {:unknown_grade, :future, 1, 2}},
-      {"grade requires type", "E093", {:grade_requires_type, :value, :linear, 1, 2}},
-      {"reserved unit type", "E092", {:unit_type_reserved, "ms", 1, 1}},
+      {"literal macro capture", "E094", {:expected_literal_capture, %{shape: "Int", line: 1, column: 2}}},
+      {"unknown syntax family field", "E092",
+       {:unknown_syntax_family_field, %{family: :Expr, field: :field, valid_fields: [:value], line: 1, column: 2}}},
+      {"missing syntax family field", "E092",
+       {:missing_syntax_family_field, %{family: :Expr, field: :field, line: 1, column: 2}}},
+      {"unknown macro obligation capture", "E092",
+       {:unknown_macro_obligation_capture,
+        %{capture: :capture, interface: :Comparable, available_captures: [:value], line: 1, column: 2}}},
+      {"graded let requires variable", "E093", {:graded_let_requires_variable, %{grade: :linear}}},
+      {"unknown grade", "E093", {:unknown_grade, %{grade: :future, supported: [:erased, :linear, :affine]}}},
+      {"grade requires type", "E093", {:grade_requires_type, %{name: :value, grade: :linear}}},
+      {"reserved unit type", "E092", {:unit_type_reserved, %{name: "ms", line: 1, column: 1}}},
       {"duplicate index", "E105", {:duplicate_index, :n}},
       {"multi-with proof", "E093", {:with_multi_proof_unsupported, "proof", []}},
       {"multi-with rematch", "E093", {:with_multi_rematch_unsupported, "rematch", []}},
       {"multi-with arity", "E093", {:with_multi_arity_mismatch, "arity", []}},
       {"multi-with no arms", "E093", {:with_multi_no_arms, "arms", []}},
       {"multi-with inconsistent pattern", "E093", {:with_multi_inconsistent_pattern, "patterns", []}},
-      {"duplicate syntax family field", "E092", {:duplicate_syntax_family_field, :field, 1, 2}},
-      {"non-associative operator", "E094", {:non_associative, :==, :chained_with, :==, 1, 2}},
-      {"ambiguous precedence", "E094", {:ambiguous_precedence, :left, :right, 1, 2}}
+      {"duplicate syntax family field", "E092", {:duplicate_syntax_family_field, %{field: :field, line: 1, column: 2}}},
+      {"non-associative operator", "E094", {:non_associative, %{operator: :==, next_operator: :==}}},
+      {"ambiguous precedence", "E094",
+       {:ambiguous_precedence, %{left_group: :left, right_group: :right, operator: :"<?>"}}}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))
@@ -254,6 +259,7 @@ defmodule Cure.DiagnosticExerciserTest do
       Operational.package_version_conflict("Demo", [">= 1.0", "< 0.9"]),
       Operational.undocumented_public_function("demo.cure", 3),
       Operational.configuration_warning("invalid setting"),
+      Operational.destructive_format_warning(%{files: ["demo.cure"]}),
       Operational.usage("Usage: cure compile FILE"),
       Operational.artifact_error("artifact is invalid"),
       Operational.internal_exception(%ArgumentError{message: "boom"}, [])
@@ -273,7 +279,7 @@ defmodule Cure.DiagnosticExerciserTest do
     operational_codes = Enum.map(diagnostics, & &1.code)
 
     assert operational_codes ==
-             ~w[E095 E096 E097 E098 W001 W000 E068 E070 E065 E066 E067 E069 E041 E042 E038 E039 E040 E030 E008 W002 E099 E100 E101]
+             ~w[E095 E096 E097 E098 W001 W000 E068 E070 E065 E066 E067 E069 E041 E042 E038 E039 E040 E030 E008 W002 W003 E099 E100 E101]
 
     registered_codes = Cure.Diagnostic.Registry.reachable() |> Enum.map(& &1.code) |> MapSet.new()
     covered_codes = MapSet.new(compiler_codes ++ operational_codes)

@@ -44,7 +44,7 @@ defmodule Cure.Elab.PiGradeSourceTest do
   describe "the Pi binder carries the real grade, matching quantities" do
     test "an erased implicit is erased on the Pi, not omega" do
       src = "mod I\n  fn id({a: Type}, x: a) -> a = x\nend\n"
-      {:ok, env} = Program.elaborate(src)
+      {:ok, env} = Program.semantic_result(Program.elaborate(src))
       d = Env.get_def(env, :id)
 
       assert d.quantities == [:erased, :unrestricted]
@@ -77,7 +77,7 @@ defmodule Cure.Elab.PiGradeSourceTest do
 
     test "an all-explicit function is all-omega on the Pi (unchanged)" do
       src = "mod P\n  fn add(x: Int, y: Int) -> Int = x\nend\n"
-      {:ok, env} = Program.elaborate(src)
+      {:ok, env} = Program.semantic_result(Program.elaborate(src))
       d = Env.get_def(env, :add)
 
       assert d.quantities == [:unrestricted, :unrestricted]
@@ -127,7 +127,7 @@ defmodule Cure.Elab.PiGradeSourceTest do
       end
       """
 
-      assert {:ok, env} = Program.elaborate(src)
+      assert {:ok, env} = Program.semantic_result(Program.elaborate(src))
       d = Env.get_def(env, :is_empty2)
       # And the grade is still recorded honestly (one explicit param, omega).
       assert d.quantities == [:unrestricted]
@@ -149,7 +149,7 @@ defmodule Cure.Elab.PiGradeSourceTest do
       end
       """
 
-      assert {:ok, _env} = Program.elaborate(src)
+      assert {:ok, _env} = Program.semantic_result(Program.elaborate(src))
     end
   end
 
@@ -175,7 +175,7 @@ defmodule Cure.Elab.PiGradeSourceTest do
       end
       """
 
-      assert {:ok, _env} = Program.elaborate(src)
+      assert {:ok, _env} = Program.semantic_result(Program.elaborate(src))
     end
 
     test "linearity is STILL enforced through the implicit-app path (drop rejects)" do
@@ -191,7 +191,7 @@ defmodule Cure.Elab.PiGradeSourceTest do
       end
       """
 
-      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.elaborate(src)
+      assert {:error, {:usage_violation, %{declared: :linear}}} = Program.semantic_result(Program.elaborate(src))
     end
   end
 
@@ -234,7 +234,7 @@ defmodule Cure.Elab.PiGradeSourceTest do
       end
       """
 
-      assert {:ok, _env} = Program.elaborate(src)
+      assert {:ok, _env} = Program.semantic_result(Program.elaborate(src))
     end
   end
 end

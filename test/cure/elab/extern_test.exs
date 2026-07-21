@@ -128,7 +128,10 @@ defmodule Cure.Elab.ExternTest do
       end
       """
 
-      assert {:error, {:extern_arity_mismatch, :head, 2, 1}} = Program.elaborate(src)
+      assert {:error, {:extern_arity_mismatch, %{name: :head, declared: 2, present: 1, span: span}}} =
+               Program.elaborate(src)
+
+      assert {span.start_line, span.start_column, span.end_column} == {2, 25, 26}
     end
 
     test "a nullary extern still means arity 0" do

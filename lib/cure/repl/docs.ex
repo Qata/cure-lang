@@ -23,6 +23,7 @@ defmodule Cure.REPL.Docs do
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Doc.Extractor
+  alias Cure.Diagnostic.{Host, Sink}
   alias Cure.REPL.{Markdown, Render}
   alias Cure.Stdlib.{Paths, Preload}
 
@@ -106,8 +107,8 @@ defmodule Cure.REPL.Docs do
       :not_found ->
         info(state, "(no documentation source found for `#{mod_name}`)")
 
-      {:error, reason} ->
-        info(state, "(cannot extract docs for `#{mod_name}`: #{reason})")
+      {:error, error} ->
+        render_extract_error(state, mod_name, error)
     end
   end
 
@@ -133,8 +134,8 @@ defmodule Cure.REPL.Docs do
       :not_found ->
         info(state, "(no documentation source found for `#{mod_name}`)")
 
-      {:error, reason} ->
-        info(state, "(cannot extract docs for `#{mod_name}`: #{reason})")
+      {:error, error} ->
+        render_extract_error(state, mod_name, error)
     end
   end
 
@@ -300,13 +301,38 @@ defmodule Cure.REPL.Docs do
   end
 
   defp extract_docs(path) do
-    with {:ok, src} <- File.read(path),
-         {:ok, tokens} <- Lexer.tokenize(src, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
-      {:ok, Extractor.extract(ast)}
-    else
-      {:error, reason} -> {:error, inspect(reason)}
+    case File.read(path) do
+      {:ok, src} ->
+        result =
+          with {:ok, tokens} <- Lexer.tokenize(src, file: path, emit_events: false),
+               {:ok, ast} <- Parser.parse(tokens, file: path, emit_events: false) do
+            {:ok, Extractor.extract(ast)}
+          end
+
+        case result do
+          {:ok, docs} -> {:ok, docs}
+          {:error, reason} -> {:error, {:source_diagnostic, reason, path, src}}
+        end
+
+      {:error, reason} ->
+        {:error, {:source_diagnostic, {:file_read_error, path, reason}, path, nil}}
     end
+  end
+
+  defp render_extract_error(state, mod_name, {:source_diagnostic, reason, path, source}) do
+    {diagnostic, registry} = Host.to_diagnostic(reason, path, source)
+
+    Sink.new(
+      format: :terminal,
+      registry: registry,
+      output_device: Map.get(state, :error_device, :stdio),
+      color: if(Map.get(state, :color, false), do: :always, else: :never),
+      width: 80
+    )
+    |> Sink.emit(diagnostic)
+    |> Sink.flush()
+
+    info(state, "(cannot extract docs for `#{mod_name}`)")
   end
 
   defp search_roots(state) do

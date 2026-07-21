@@ -217,8 +217,12 @@ defmodule Cure.Compiler.Parser do
       case FixityResolver.assemble(builtin_fixity, own_fixity, own_uses, prelude_providers) do
         {:ok, table} ->
           case {validate_fixity_cycles?, FixityTable.cyclic_groups(table)} do
-            {true, [_ | _] = groups} -> {:__fixity_error__, {:precedence_cycle, groups}}
-            _ -> table
+            {true, [_ | _] = groups} ->
+              {:__fixity_error__,
+               {:precedence_cycle, %{groups: groups, spans: FixityScan.group_spans(harvest_exprs, groups)}}}
+
+            _ ->
+              table
           end
 
         {:error, conflict} ->
@@ -625,6 +629,7 @@ defmodule Cure.Compiler.Parser do
   defp parse_macro_use(state, keyword, registry) do
     rules = Map.fetch!(registry, keyword)
     # consume the keyword token
+    keyword_token = peek(state)
     state = advance(state)
 
     case match_macro_rule(rules, state) do
@@ -637,7 +642,18 @@ defmodule Cure.Compiler.Parser do
         state =
           add_error(
             state,
-            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
+            {:macro_use_mismatch,
+             %{
+               keyword: keyword,
+               expected: macro_expected_at(rule, progress),
+               got: macro_got_desc(t),
+               token_type: t.type,
+               span: t.span,
+               invocation_span: keyword_token.span,
+               definition_span: Map.get(rule, :source_span),
+               line: t.line,
+               column: t.col
+             }}
           )
 
         # Recover: yield the bare keyword variable so the outer parse continues.
@@ -746,7 +762,18 @@ defmodule Cure.Compiler.Parser do
             state =
               add_error(
                 state,
-                {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
+                {:macro_use_mismatch,
+                 %{
+                   keyword: keyword,
+                   expected: macro_expected_at(rule, progress),
+                   got: macro_got_desc(t),
+                   token_type: t.type,
+                   span: t.span,
+                   invocation_span: keyword_token.span,
+                   definition_span: Map.get(rule, :source_span),
+                   line: t.line,
+                   column: t.col
+                 }}
               )
 
             {variable(%Cure.Compiler.Token{
@@ -1192,6 +1219,7 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_family_body(tokens, family_meta, parser_state) do
     target_indent = Enum.find_value(tokens, &indent_value/1) || 0
+    family_meta = Map.put(family_meta, :body_span, family_body_span(tokens))
 
     # Built against `parser_state` before its tokens are swapped out.
     family_tokens =
@@ -1211,7 +1239,9 @@ defmodule Cure.Compiler.Parser do
         {value, family_state}
 
       token ->
-        family_state = add_error(family_state, {:expected, :indent, :got, token.type, token.line, token.col})
+        family_state =
+          add_error(family_state, {:expected, :indent, :got, token.type, token.line, token.col, token.span})
+
         family_value(family_meta, %{}, family_state)
     end
   end
@@ -1235,7 +1265,17 @@ defmodule Cure.Compiler.Parser do
 
               :error ->
                 state =
-                  add_error(state, {:unknown_syntax_family_field, family_meta.family, name, token.line, token.col})
+                  add_error(state, {
+                    :unknown_syntax_family_field,
+                    %{
+                      family: family_meta.family,
+                      field: name,
+                      valid_fields: Enum.map(family_meta.fields, & &1.name),
+                      span: token.span,
+                      line: token.line,
+                      column: token.col
+                    }
+                  })
 
                 {_ignored, state} = parse_expr_or_block(advance(state))
                 parse_family_sections(state, family_meta, values)
@@ -1260,7 +1300,12 @@ defmodule Cure.Compiler.Parser do
             parse_family_sections(state, family_meta, values)
 
           :error ->
-            state = add_error(state, {:expected, :syntax_family_field, :got, token.type, token.line, token.col})
+            state =
+              add_error(
+                state,
+                {:expected, :syntax_family_field, :got, token.type, token.line, token.col, token.span}
+              )
+
             parse_family_sections(advance(state), family_meta, values)
         end
     end
@@ -1418,7 +1463,13 @@ defmodule Cure.Compiler.Parser do
 
           _ ->
             token = peek(state)
-            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+
+            state =
+              add_error(
+                state,
+                {:expected, :syntax_family_production, :got, token.type, token.line, token.col, token.span}
+              )
+
             {{:family_repeated_values, []}, state}
         end
 
@@ -1429,7 +1480,13 @@ defmodule Cure.Compiler.Parser do
 
           :error ->
             token = peek(state)
-            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+
+            state =
+              add_error(
+                state,
+                {:expected, :syntax_family_production, :got, token.type, token.line, token.col, token.span}
+              )
+
             {{:family_repeated_values, []}, state}
         end
     end
@@ -1460,7 +1517,12 @@ defmodule Cure.Compiler.Parser do
             parse_family_production_entries(state, grammar, [value | values])
 
           :error ->
-            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+            state =
+              add_error(
+                state,
+                {:expected, :syntax_family_production, :got, token.type, token.line, token.col, token.span}
+              )
+
             {_ignored, state} = parse_expr_or_block(advance(state))
             parse_family_production_entries(state, grammar, values)
         end
@@ -1489,10 +1551,44 @@ defmodule Cure.Compiler.Parser do
 
   defp record_family_value(values, %{name: name}, value, token, state) do
     if Map.has_key?(values, name) do
-      {values, add_error(state, {:duplicate_syntax_family_field, name, token.line, token.col})}
+      first_span = previous_family_field_span(state, name, token.span)
+
+      {values,
+       add_error(state, {
+         :duplicate_syntax_family_field,
+         %{
+           field: name,
+           span: token.span,
+           first_span: first_span,
+           line: token.line,
+           column: token.col
+         }
+       })}
     else
       {Map.put(values, name, value), state}
     end
+  end
+
+  defp previous_family_field_span(state, name, current_span) do
+    tokens = if is_tuple(state.tokens), do: Tuple.to_list(state.tokens), else: state.tokens
+
+    tokens
+    |> Enum.take(state.pos)
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %Token{type: type, value: value, span: %Cure.Diagnostic.Span{} = span}
+      when type in [:identifier, :keyword] ->
+        if to_string(value) == to_string(name) and span != current_span, do: span
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp family_body_span(tokens) do
+    tokens
+    |> Enum.reject(&(&1.type in [:newline, :indent, :dedent, :eof]))
+    |> authored_token_span()
   end
 
   defp family_value(family_meta, values, state) do
@@ -1509,11 +1605,31 @@ defmodule Cure.Compiler.Parser do
             {{:family_option, [present: false], []}, state}
 
           :error when field.cardinality == :one_or_more ->
-            error = {:missing_syntax_family_field, family_meta.family, field.name, field.line, field.col}
+            error =
+              {:missing_syntax_family_field,
+               %{
+                 family: family_meta.family,
+                 field: field.name,
+                 span: insertion_at_end(Map.get(family_meta, :body_span)),
+                 body_span: Map.get(family_meta, :body_span),
+                 line: field.line,
+                 column: field.col
+               }}
+
             {[], add_error(state, error)}
 
           :error ->
-            error = {:missing_syntax_family_field, family_meta.family, field.name, field.line, field.col}
+            error =
+              {:missing_syntax_family_field,
+               %{
+                 family: family_meta.family,
+                 field: field.name,
+                 span: insertion_at_end(Map.get(family_meta, :body_span)),
+                 body_span: Map.get(family_meta, :body_span),
+                 line: field.line,
+                 column: field.col
+               }}
+
             {nil, add_error(state, error)}
         end
       end)
@@ -1533,12 +1649,37 @@ defmodule Cure.Compiler.Parser do
     if Keyword.get(meta, :subtype) == expected do
       state
     else
-      add_error(state, {:expected_literal_capture, shape, Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)})
+      value = {:literal, meta, nil}
+
+      add_error(state, {
+        :expected_literal_capture,
+        %{
+          shape: shape,
+          span: first_node_source_span(value),
+          line: Keyword.get(meta, :line, 0),
+          column: Keyword.get(meta, :col, 0)
+        }
+      })
     end
   end
 
   defp validate_primitive_capture(_value, shape, state),
-    do: add_error(state, {:expected_literal_capture, shape, peek(state).line, peek(state).col})
+    do:
+      add_error(state, {
+        :expected_literal_capture,
+        %{shape: shape, span: peek(state).span, line: peek(state).line, column: peek(state).col}
+      })
+
+  defp insertion_at_end(%Cure.Diagnostic.Span{} = span) do
+    %{
+      span
+      | start_byte: span.end_byte,
+        start_line: span.end_line,
+        start_column: span.end_column
+    }
+  end
+
+  defp insertion_at_end(_span), do: nil
 
   defp advance_n(state, 0), do: state
   defp advance_n(state, count), do: advance_n(advance(state), count - 1)
@@ -2606,6 +2747,26 @@ defmodule Cure.Compiler.Parser do
   defp parse_infix(state, left, min_bp, ctx_op) do
     token = peek(state)
 
+    # A pipe at the start of a continuation line belongs to the expression
+    # above it.  Layout normally terminates an expression, and an indented
+    # continuation also emits an `:indent`; consume only that layout when the
+    # next significant token is `|>`.
+    {token, state} =
+      case token.type do
+        :newline ->
+          case continuation_pipe?(state) do
+            true ->
+              state = skip_pipe_continuation_layout(state)
+              {peek(state), state}
+
+            false ->
+              {token, state}
+          end
+
+        _ ->
+          {token, state}
+      end
+
     cond do
       # Postfix: function call  f(...). Function application is maximal-binding —
       # it attaches regardless of the surrounding `min_bp` (a call binds tighter
@@ -2636,11 +2797,29 @@ defmodule Cure.Compiler.Parser do
             state = advance(state)
             {ast, state} = build_infix_op(state, left, token, right_bp, lexeme)
             state = reject_non_assoc_chain(state, table, token, lexeme, left_bp)
-            parse_infix(state, ast, min_bp, lexeme)
+            parse_infix(state, ast, min_bp, {lexeme, token.span})
 
           :not_infix ->
             {left, state}
         end
+    end
+  end
+
+  defp continuation_pipe?(state) do
+    state
+    |> peek_ahead(1)
+    |> then(fn token ->
+      token.type == :pipe or
+        (token.type == :indent and peek_ahead(state, 2).type == :pipe)
+    end)
+  end
+
+  defp skip_pipe_continuation_layout(state) do
+    state = advance(state)
+
+    case peek(state).type do
+      :indent -> advance(state)
+      _ -> state
     end
   end
 
@@ -2666,7 +2845,15 @@ defmodule Cure.Compiler.Parser do
 
     if chained? do
       error =
-        {:non_associative, operator_display(token), :chained_with, operator_display(next), next.line, next.col}
+        {:non_associative,
+         %{
+           operator: operator_display(token),
+           next_operator: operator_display(next),
+           operator_span: token.span,
+           span: next.span,
+           line: next.line,
+           column: next.col
+         }}
 
       add_error(state, error)
     else
@@ -2684,12 +2871,28 @@ defmodule Cure.Compiler.Parser do
   # the rest of the file is still reported.
   defp reject_incomparable_chain(state, _table, nil, _lexeme, _token), do: state
 
+  defp reject_incomparable_chain(state, table, {ctx_op, ctx_span}, lexeme, token) do
+    reject_incomparable_chain(state, table, ctx_op, ctx_span, lexeme, token)
+  end
+
   defp reject_incomparable_chain(state, table, ctx_op, lexeme, token) do
+    reject_incomparable_chain(state, table, ctx_op, nil, lexeme, token)
+  end
+
+  defp reject_incomparable_chain(state, table, ctx_op, ctx_span, lexeme, token) do
     if FixityTable.incomparable?(table, ctx_op, lexeme) do
       add_error(
         state,
-        {:ambiguous_precedence, FixityTable.group_of(table, ctx_op), FixityTable.group_of(table, lexeme), token.line,
-         token.col}
+        {:ambiguous_precedence,
+         %{
+           left_group: FixityTable.group_of(table, ctx_op),
+           right_group: FixityTable.group_of(table, lexeme),
+           operator: operator_display(token),
+           operator_span: ctx_span,
+           span: token.span,
+           line: token.line,
+           column: token.col
+         }}
       )
     else
       state
@@ -2728,7 +2931,7 @@ defmodule Cure.Compiler.Parser do
         {literal(:symbol, token), advance(state)}
 
       :regex ->
-        {literal(:regex, token), advance(state)}
+        {regex_literal_macro(token), advance(state)}
 
       :char ->
         {literal(:char, token), advance(state)}
@@ -2947,7 +3150,7 @@ defmodule Cure.Compiler.Parser do
             parse_named_implicit_pat(state, token)
 
           _ ->
-            error = {:unexpected_token, token.type, token.line, token.col}
+            error = unexpected_token_error(token)
             state = add_error(state, error)
             {error_node(token), advance(state)}
         end
@@ -2975,16 +3178,27 @@ defmodule Cure.Compiler.Parser do
             {node, state}
 
           _ ->
-            error = {:unexpected_token, token.type, token.line, token.col}
+            error = unexpected_token_error(token)
             state = add_error(state, error)
             {error_node(token), advance(state)}
         end
 
       _ ->
-        error = {:unexpected_token, token.type, token.line, token.col}
+        error = unexpected_token_error(token)
         state = add_error(state, error)
         {error_node(token), advance(state)}
     end
+  end
+
+  defp unexpected_token_error(%Token{} = token) do
+    {:unexpected_token,
+     %{
+       observed: token.value || token.type,
+       token_type: token.type,
+       span: token.span,
+       line: token.line,
+       column: token.col
+     }}
   end
 
   # -- assert_type builtin (v0.19.0) ----------------------------------------
@@ -3017,7 +3231,7 @@ defmodule Cure.Compiler.Parser do
           advance(state)
 
         t ->
-          add_error(state, {:expected, :else, :got, t.type, t.line, t.col})
+          add_error(state, {:expected, :else, :got, t.type, t.line, t.col, t.span})
       end
 
     {failure_kw, state} =
@@ -3036,8 +3250,9 @@ defmodule Cure.Compiler.Parser do
         {{:macro_check, check_meta, [condition, {:macro_fail, failure_meta, args}]}, state}
 
       _ ->
-        state =
-          add_error(state, {:expected, :failure_constructor, :got, peek(state).type, peek(state).line, peek(state).col})
+        t = peek(state)
+
+        state = add_error(state, {:expected, :failure_constructor, :got, t.type, t.line, t.col, t.span})
 
         {{:macro_check, [line: token.line, col: token.col], [condition, {:macro_fail, [name: "?"], []}]}, state}
     end
@@ -3573,6 +3788,21 @@ defmodule Cure.Compiler.Parser do
     {:literal, put_token_source_info(meta, token), token.value}
   end
 
+  # Regex syntax is a compile-time literal macro, not a runtime OTP handle.
+  # Preserve the source pattern as a normal string argument to the pure Cure
+  # `Std.Regex.literal/2` entry point; elaboration therefore infers `Regex` from
+  # its typed signature and generated code contains no `:re` dispatch.
+  defp regex_literal_macro(%Token{value: {body, flags}, line: line, col: col}) do
+    {
+      :function_call,
+      [name: "Std.Regex.literal", line: line, col: col],
+      [
+        {:literal, [subtype: :string, line: line, col: col], body},
+        {:literal, [subtype: :string, line: line, col: col], flags}
+      ]
+    }
+  end
+
   defp variable(token) do
     meta = [scope: :local, line: token.line, col: token.col]
     {:variable, put_token_source_info(meta, token, :name), token.value}
@@ -3668,7 +3898,7 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     rbp = prefix_rbp(state, token)
     state = advance(state)
-    {operand, state} = parse_expr(state, rbp, lexeme_of(token))
+    {operand, state} = parse_expr(state, rbp, {lexeme_of(token), token.span})
     op = Precedence.operator_symbol(token.type)
     meta = [category: category, operator: op, line: token.line, col: token.col]
     meta = put_operator_source_info(meta, nil, operand, token)
@@ -3724,7 +3954,7 @@ defmodule Cure.Compiler.Parser do
       # the intervening newline to find it is unambiguous (skip_newlines skips only `:newline`).
       :pipe ->
         state = skip_newlines(state)
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         {desugar_pipe(left, right, token), state}
 
       # Melquiades operator: `pid <-| message` or `pid ✉ message`.
@@ -3732,7 +3962,7 @@ defmodule Cure.Compiler.Parser do
       # author's choice of ASCII vs unicode form in `:melquiades_form` so
       # the printer can round-trip it.
       :melquiades ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         form = melquiades_form(token.value)
         meta = [line: token.line, col: token.col, melquiades_form: form]
         {{:send, meta, [left, right]}, state}
@@ -3757,13 +3987,15 @@ defmodule Cure.Compiler.Parser do
 
       # Range operators
       type when type in [:range, :range_inclusive] ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         inclusive = type == :range_inclusive
-        {{:range, [inclusive: inclusive, line: token.line, col: token.col], [left, right]}, state}
+        meta = [inclusive: inclusive, line: token.line, col: token.col]
+        meta = put_operator_source_info(meta, left, right, token)
+        {{:range, meta, [left, right]}, state}
 
       # Assignment
       :assign ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         {{:assignment, [line: token.line, col: token.col], [left, right]}, state}
 
       # Generic (user-declared) overloadable operator: build a `:binary_op` node
@@ -3772,7 +4004,7 @@ defmodule Cure.Compiler.Parser do
       # named by the lexeme (`Resolve.method_call`/`Overload.resolve`), keeping
       # the Phase-2 primitive/`struct_eq`/`combine` fast paths for the built-ins.
       :operator ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         op = String.to_atom(token.value)
         meta = [category: :overloaded, operator: op, line: token.line, col: token.col]
         meta = put_operator_source_info(meta, left, right, token)
@@ -3781,7 +4013,7 @@ defmodule Cure.Compiler.Parser do
       # Regular built-in binary operator (arithmetic/comparison/boolean/…):
       # dedicated node with its historical category + symbol, unchanged.
       _ ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         category = Precedence.operator_category(token.type)
         op = Precedence.operator_symbol(token.type)
         meta = [category: category, operator: op, line: token.line, col: token.col]
@@ -5025,7 +5257,16 @@ defmodule Cure.Compiler.Parser do
     # it here rather than parse it and silently ignore the annotation.
     state =
       if grade && not match?({:variable, _, _}, pattern) do
-        add_error(state, {:graded_let_requires_variable, grade, token.line, token.col})
+        add_error(state, {
+          :graded_let_requires_variable,
+          %{
+            grade: grade,
+            pattern_span: first_node_source_span(pattern),
+            grade_span: annotation_span,
+            line: token.line,
+            column: token.col
+          }
+        })
       else
         state
       end
@@ -5107,7 +5348,17 @@ defmodule Cure.Compiler.Parser do
               {{:literal, [subtype: :null], nil}, state}
           end
 
-        ast = {:conditional, [line: token.line, col: token.col], [condition, then_branch, else_branch]}
+        meta =
+          put_conditional_source_info(
+            [line: token.line, col: token.col],
+            token,
+            condition,
+            then_branch,
+            else_branch,
+            state
+          )
+
+        ast = {:conditional, meta, [condition, then_branch, else_branch]}
         {ast, state}
 
       _ ->
@@ -5131,7 +5382,17 @@ defmodule Cure.Compiler.Parser do
               {{:literal, [subtype: :null], nil}, state}
           end
 
-        ast = {:conditional, [line: token.line, col: token.col], [condition, then_branch, else_branch]}
+        meta =
+          put_conditional_source_info(
+            [line: token.line, col: token.col],
+            token,
+            condition,
+            then_branch,
+            else_branch,
+            state
+          )
+
+        ast = {:conditional, meta, [condition, then_branch, else_branch]}
         {ast, state}
     end
   end
@@ -5153,18 +5414,21 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         {arms, state} = parse_inline_match_arms(state)
         state = expect(state, :rbrace)
-        ast = {:pattern_match, [line: token.line, col: token.col], [scrutinee | arms]}
+        meta = put_match_source_info([line: token.line, col: token.col], token, scrutinee, arms, state)
+        ast = {:pattern_match, meta, [scrutinee | arms]}
         {ast, state}
 
       %Token{type: :indent} ->
         state = advance(state)
         {arms, state} = parse_block_match_arms(state)
         state = expect_dedent(state)
-        ast = {:pattern_match, [line: token.line, col: token.col], [scrutinee | arms]}
+        meta = put_match_source_info([line: token.line, col: token.col], token, scrutinee, arms, state)
+        ast = {:pattern_match, meta, [scrutinee | arms]}
         {ast, state}
 
       _ ->
-        ast = {:pattern_match, [line: token.line, col: token.col], [scrutinee]}
+        meta = put_match_source_info([line: token.line, col: token.col], token, scrutinee, [], state)
+        ast = {:pattern_match, meta, [scrutinee]}
         {ast, state}
     end
   end
@@ -5204,20 +5468,23 @@ defmodule Cure.Compiler.Parser do
             state = advance(state)
             {arms, state} = parse_inline_match_arms(state)
             state = expect(state, :rbrace)
+            meta = put_match_source_info(meta, token, single, arms, state)
             {{:with_abs, meta, [single | arms]}, state}
 
           %Token{type: :indent} ->
             state = advance(state)
             {arms, state} = parse_with_block_arms(state)
             state = expect_dedent(state)
+            meta = put_match_source_info(meta, token, single, arms, state)
             {{:with_abs, meta, [single | arms]}, state}
 
           _ ->
+            meta = put_match_source_info(meta, token, single, [], state)
             {{:with_abs, meta, [single]}, state}
         end
 
       _ ->
-        parse_multi_with_abs(scruts, proof, base_meta, state)
+        parse_multi_with_abs(scruts, proof, base_meta, token, state)
     end
   end
 
@@ -5265,7 +5532,7 @@ defmodule Cure.Compiler.Parser do
   # [scrut | arms]}` shape it already dispatches on. Combining an LHS re-match
   # (`| pat`) or a `proof` binding with multiple scrutinees is out of scope in
   # this first slice and is reported as a clean parse error.
-  defp parse_multi_with_abs(scruts, proof, base_meta, state) do
+  defp parse_multi_with_abs(scruts, proof, base_meta, token, state) do
     n = length(scruts)
 
     {arms, state} =
@@ -5295,7 +5562,8 @@ defmodule Cure.Compiler.Parser do
              base_meta}
           )
 
-        {{:with_abs, base_meta, [hd(scruts)]}, state}
+        {ast, state} = {{:with_abs, base_meta, [hd(scruts)]}, state}
+        {put_multi_with_source_info(ast, token, state), state}
 
       arms == [] ->
         state =
@@ -5304,11 +5572,19 @@ defmodule Cure.Compiler.Parser do
             {:with_multi_no_arms, "with-abstraction over multiple scrutinees requires at least one arm", base_meta}
           )
 
-        {{:with_abs, base_meta, [hd(scruts)]}, state}
+        {ast, state} = {{:with_abs, base_meta, [hd(scruts)]}, state}
+        {put_multi_with_source_info(ast, token, state), state}
 
       true ->
-        build_multi_with(scruts, arms, base_meta, state)
+        {ast, state} = build_multi_with(scruts, arms, base_meta, state)
+        {put_multi_with_source_info(ast, token, state), state}
     end
+  end
+
+  defp put_multi_with_source_info({:with_abs, meta, [scrutinee | _] = children}, token, state) do
+    arms = Enum.drop(children, 1)
+    meta = put_match_source_info(meta, token, scrutinee, arms, state)
+    {:with_abs, meta, children}
   end
 
   # Block-form arms for a multiple-with. Each arm is a list of `n` comma-
@@ -5879,6 +6155,76 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp put_match_source_info(meta, match_token, scrutinee, arms, state) do
+    match_span = if match_token.span, do: match_token.span, else: nil
+    scrutinee_span = first_node_source_span(scrutinee)
+
+    branch_spans =
+      arms
+      |> Enum.map(&match_arm_source_span/1)
+      |> Enum.reject(&is_nil/1)
+
+    whole =
+      case {match_span || scrutinee_span, authored_token(state)} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          scrutinee_span
+      end
+
+    if whole || branch_spans != [] do
+      Keyword.put(meta, :source_info, %SourceInfo{whole: whole, branches: branch_spans})
+    else
+      meta
+    end
+  end
+
+  defp match_arm_source_span({:match_arm, arm_meta, _}) when is_list(arm_meta) do
+    case first_node_source_span({:match_arm, arm_meta, []}) do
+      nil -> first_node_source_span(Keyword.get(arm_meta, :pattern))
+      span -> span
+    end
+  end
+
+  defp match_arm_source_span(arm), do: first_node_source_span(arm)
+
+  defp put_conditional_source_info(meta, if_token, condition, then_branch, else_branch, state) do
+    condition_span = first_node_source_span(condition)
+    then_span = first_node_source_span(then_branch)
+    else_span = first_node_source_span(else_branch)
+
+    whole =
+      case {if_token.span, authored_token(state)} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    if whole || condition_span || then_span || else_span do
+      Keyword.put(
+        meta,
+        :source_info,
+        %SourceInfo{
+          whole: whole,
+          condition: condition_span,
+          then_branch: then_span,
+          else_branch: else_span
+        }
+      )
+    else
+      meta
+    end
+  end
+
   defp first_node_source_span(node) do
     case node_source_span(node) do
       [span | _] -> span
@@ -5980,7 +6326,7 @@ defmodule Cure.Compiler.Parser do
         state = expect(state, :arrow)
         state = skip_newlines(state)
         {body, state} = parse_expr_or_block(state)
-        meta = [line: tok.line, col: tok.col]
+        meta = put_pickup_clause_source_info([line: tok.line, col: tok.col], tok, nil, body, state)
         {{:pickup_else, meta, [body]}, state}
 
       tok ->
@@ -5989,9 +6335,33 @@ defmodule Cure.Compiler.Parser do
         state = expect(state, :arrow)
         state = skip_newlines(state)
         {body, state} = parse_expr_or_block(state)
-        meta = [line: tok.line, col: tok.col]
+        meta = put_pickup_clause_source_info([line: tok.line, col: tok.col], tok, guard, body, state)
         {{:pickup_clause, meta, [guard, body]}, state}
     end
+  end
+
+  defp put_pickup_clause_source_info(meta, token, guard, body, state) do
+    whole =
+      case {token.span, authored_token(state)} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> first
+          end
+
+        {%Cure.Diagnostic.Span{} = first, _} ->
+          first
+
+        _ ->
+          nil
+      end
+
+    Keyword.put(meta, :source_info, %SourceInfo{
+      whole: whole,
+      name: token.span,
+      condition: first_node_source_span(guard),
+      body: first_node_source_span(body)
+    })
   end
 
   # PICKUP §5.2 / §4.1 enforcement. The four well-formedness errors
@@ -6002,53 +6372,36 @@ defmodule Cure.Compiler.Parser do
   defp validate_pickup_clauses([], token, state) do
     add_error(
       state,
-      {:pickup_no_else,
-       "pickup block must contain at least one clause and a terminating `else ->` arm (E-PICKUP-NO-ELSE)",
-       [line: token.line, col: token.col]}
+      {:pickup_no_else, %{pickup: token.span, clauses: [], line: token.line, column: token.col}}
     )
   end
 
   defp validate_pickup_clauses(clauses, token, state) do
-    {else_count, _last_else?, has_terminator?, after_terminator?} =
-      clauses
-      |> Enum.with_index()
-      |> Enum.reduce({0, false, false, false}, fn {clause, idx}, {ec, last_e, term, after_t} ->
-        is_last = idx == length(clauses) - 1
-        terminator? = pickup_terminator?(clause, is_last)
+    indexed = Enum.with_index(clauses)
+    else_clauses = Enum.filter(indexed, fn {clause, _idx} -> pickup_else?(clause) end)
+    terminator_index = Enum.find_index(clauses, &pickup_terminator?(&1, false))
+    last_index = length(clauses) - 1
+    trailing_true? = pickup_terminator?(List.last(clauses), true)
+    has_terminator? = else_clauses != [] or trailing_true?
 
-        ec = if pickup_else?(clause), do: ec + 1, else: ec
-        last_e = if pickup_else?(clause), do: is_last, else: last_e
-
-        # Anything after a real terminator clause counts as `after_t`
-        # for the diagnostic below, mirroring PICKUP §4.1.
-        term = term or terminator?
-        after_t = after_t or (term and not terminator?)
-
-        {ec, last_e, term, after_t}
-      end)
+    details = %{
+      pickup: token.span,
+      clauses: Enum.map(clauses, &pickup_clause_span/1),
+      else_clauses: Enum.map(else_clauses, fn {clause, idx} -> {idx, pickup_else_span(clause)} end),
+      line: token.line,
+      column: token.col
+    }
 
     state =
       cond do
-        else_count > 1 ->
-          add_error(
-            state,
-            {:pickup_multiple_else, "pickup block has more than one `else ->` arm (E-PICKUP-MULTIPLE-ELSE)",
-             [line: token.line, col: token.col]}
-          )
+        length(else_clauses) > 1 ->
+          add_error(state, {:pickup_multiple_else, details})
 
-        after_terminator? ->
-          add_error(
-            state,
-            {:pickup_else_not_last, "pickup `else ->` must be the final clause (E-PICKUP-ELSE-NOT-LAST)",
-             [line: token.line, col: token.col]}
-          )
+        is_integer(terminator_index) and terminator_index < last_index ->
+          add_error(state, {:pickup_else_not_last, Map.put(details, :terminator_index, terminator_index)})
 
         not has_terminator? ->
-          add_error(
-            state,
-            {:pickup_no_else, "pickup block must end in `else -> ...` (or trailing `true -> ...`) (E-PICKUP-NO-ELSE)",
-             [line: token.line, col: token.col]}
-          )
+          add_error(state, {:pickup_no_else, details})
 
         true ->
           state
@@ -6059,6 +6412,22 @@ defmodule Cure.Compiler.Parser do
 
   defp pickup_else?({:pickup_else, _, _}), do: true
   defp pickup_else?(_), do: false
+
+  defp pickup_clause_span({_, meta, _}) when is_list(meta) do
+    meta |> Metadata.source_info() |> source_whole()
+  end
+
+  defp pickup_clause_span(_), do: nil
+
+  defp pickup_else_span({:pickup_else, meta, _}) when is_list(meta) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      %SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp pickup_else_span(_), do: nil
 
   defp pickup_terminator?({:pickup_else, _, _}, _is_last), do: true
 
@@ -6120,7 +6489,8 @@ defmodule Cure.Compiler.Parser do
         end
 
       _ ->
-        error = {:expected, :fn, :got, peek(state).type, token.line, token.col}
+        observed = peek(state)
+        error = {:expected, :fn, :got, observed.type, observed.line, observed.col, observed.span}
         state = add_error(state, error)
         {error_node(token), state}
     end
@@ -6188,9 +6558,12 @@ defmodule Cure.Compiler.Parser do
         {body, state} = parse_expr_or_block(state)
         {body, state} = parse_expression_let_chain_body(body, state)
 
+        {where_bindings, state} = parse_post_body_where(state)
+
         meta =
           build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects)
 
+        meta = if where_bindings == [], do: meta, else: Keyword.put(meta, :where, where_bindings)
         ast = {:function_def, meta, [body]}
         {ast, state}
 
@@ -6206,6 +6579,8 @@ defmodule Cure.Compiler.Parser do
             {body, state} = parse_expression_let_chain_body(body, state)
             state = expect_dedent(state)
 
+            {where_bindings, state} = parse_post_body_where(state)
+
             meta =
               build_fn_meta(
                 state,
@@ -6219,6 +6594,8 @@ defmodule Cure.Compiler.Parser do
                 constraints,
                 effects
               )
+
+            meta = if where_bindings == [], do: meta, else: Keyword.put(meta, :where, where_bindings)
 
             ast = {:function_def, meta, [body]}
             {ast, state}
@@ -6254,6 +6631,50 @@ defmodule Cure.Compiler.Parser do
 
         ast = {:function_def, meta, []}
         {ast, state}
+    end
+  end
+
+  # A function-local `where` follows the function body at the function's own
+  # indentation.  It is kept as metadata and lowered by the dependent
+  # elaborator before signatures are registered.
+  defp parse_post_body_where(state) do
+    probe = skip_newlines(state)
+
+    case peek(probe) do
+      %Token{type: :keyword, value: :where} ->
+        probe = advance(probe) |> skip_newlines()
+        probe = expect(probe, :indent)
+        {bindings, probe} = parse_where_bindings(probe, [])
+        {Enum.reverse(bindings), expect_dedent(probe)}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp parse_where_bindings(state, acc) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :dedent} ->
+        {acc, state}
+
+      %Token{type: :eof} ->
+        {acc, state}
+
+      %Token{type: :keyword, value: :fn} = token ->
+        {binding, state} = parse_fn_def(advance(state), token, :private)
+        parse_where_bindings(state, [binding | acc])
+
+      %Token{type: :identifier} = token ->
+        name = to_string(token.value)
+        state = advance(state) |> expect(:assign) |> skip_newlines()
+        {expr, state} = parse_expr_or_block(state)
+        binding = {:where_value, [name: name, line: token.line, col: token.col], expr}
+        parse_where_bindings(state, [binding | acc])
+
+      _ ->
+        {acc, state}
     end
   end
 
@@ -6489,7 +6910,19 @@ defmodule Cure.Compiler.Parser do
       {:unknown, bad, tok, state} ->
         # Consume the stray atom (already advanced past it) and name it, so the error
         # points at the grade rather than cascading onto the next real token.
-        {nil, nil, add_error(state, {:unknown_grade, bad, tok.line, tok.col}), tok.span}
+        state =
+          if peek(state).type in @non_type_tokens do
+            state
+          else
+            {_discarded_type, state} = parse_type_expr(state)
+            state
+          end
+
+        {nil, nil,
+         add_error(state, {
+           :unknown_grade,
+           %{grade: bad, span: tok.span, supported: @grade_atoms, line: tok.line, column: tok.col}
+         }), tok.span}
 
       {:grade, grade, state} ->
         cond do
@@ -6499,8 +6932,18 @@ defmodule Cure.Compiler.Parser do
           peek(state).type in @non_type_tokens ->
             tok = peek(state)
 
-            {grade, nil, add_error(state, {:grade_requires_type, name, grade, tok.line, tok.col}),
-             annotation_span(annotation_start, state)}
+            {grade, nil,
+             add_error(state, {
+               :grade_requires_type,
+               %{
+                 name: name,
+                 grade: grade,
+                 span: annotation_span(annotation_start, state),
+                 observed_span: tok.span,
+                 line: tok.line,
+                 column: tok.col
+               }
+             }), annotation_span(annotation_start, state)}
 
           true ->
             {type_ast, state} = parse_type_expr(state)
@@ -6749,10 +7192,18 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         {build_block(exprs, :end, token), state}
 
-      other ->
-        line = if is_nil(other), do: token.line, else: other.line
-        col = if is_nil(other), do: token.col, else: other.col
-        error = {:lambda_block_unterminated, line, col, "E035"}
+      %Token{} = other ->
+        error =
+          {:lambda_block_unterminated,
+           %{
+             expected: :end,
+             observed: other.type,
+             span: other.span,
+             opener_span: token.span,
+             line: other.line,
+             column: other.col
+           }}
+
         state = add_error(state, error)
         {build_block(exprs, :end, token), state}
     end
@@ -7357,6 +7808,12 @@ defmodule Cure.Compiler.Parser do
           # any other name declared as `()` is a hard error. When permitted, this
           # builds exactly the nullary single-`unit`-ctor family the compiler
           # seeds into every module (see program.ex seed_with_telescope_support/1).
+          unit_span =
+            case Range.through(peek(state), peek_at(state, 1)) do
+              {:ok, span} -> span
+              {:error, _reason} -> peek(state).span
+            end
+
           state = advance(advance(state))
 
           meta = [container_type: :enum, name: name, line: token.line, col: token.col]
@@ -7365,7 +7822,18 @@ defmodule Cure.Compiler.Parser do
           if name == "Unit" do
             {{:container, meta, [{:variable, [variant: true], "unit"}]}, state}
           else
-            state = add_error(state, {:unit_type_reserved, name, token.line, token.col})
+            state =
+              add_error(state, {
+                :unit_type_reserved,
+                %{
+                  name: name,
+                  span: name_token.span,
+                  unit_span: unit_span,
+                  line: name_token.line,
+                  column: name_token.col
+                }
+              })
+
             {{:container, meta, []}, state}
           end
 
@@ -8179,12 +8647,89 @@ defmodule Cure.Compiler.Parser do
           state
 
         {:error, reason} ->
-          add_error(state, {:invalid_macro_family, reason, token.line, token.col})
+          details = macro_family_error_details(reason, rules, state, token)
+          add_error(state, {:invalid_macro_family, details})
       end
 
     meta = [name: name, leading_segments: leading_segments, line: token.line, col: token.col]
     meta = put_named_declaration_source_info(meta, token, name_token, state)
     {{:macro_def, meta, rules}, state}
+  end
+
+  defp macro_family_error_details(reason, rules, state, token) do
+    families = Enum.filter(rules, &(&1[:kind] == :syntax_family))
+
+    {span, related_spans} =
+      case reason do
+        {:unknown_syntax_family, name} ->
+          include =
+            Enum.find_value(families, fn family ->
+              Enum.find(family.includes, fn
+                {include_name, _line, _col} -> include_name == name
+                _ -> false
+              end)
+            end)
+
+          case include do
+            {^name, line, _col} -> {token_span_on_line(state, line, name) || token.span, []}
+            _ -> {token.span, []}
+          end
+
+        {:syntax_family_cycle, names} ->
+          spans =
+            names
+            |> Enum.uniq()
+            |> Enum.flat_map(fn name ->
+              case Enum.find(families, &(&1.name == name)) do
+                %{source_span: %Cure.Diagnostic.Span{} = span} -> [span]
+                _ -> []
+              end
+            end)
+
+          {List.first(spans) || token.span, Enum.drop(spans, 1)}
+
+        {:duplicate_syntax_family_field, pairs} ->
+          spans =
+            Enum.flat_map(pairs, fn {family_name, field_name} ->
+              case Enum.find(families, &(&1.name == family_name)) do
+                %{fields: fields} ->
+                  fields
+                  |> Enum.filter(&(&1.name == field_name))
+                  |> Enum.flat_map(fn
+                    %{source_span: %Cure.Diagnostic.Span{} = span} -> [span]
+                    _ -> []
+                  end)
+
+                _ ->
+                  []
+              end
+            end)
+
+          {List.last(spans) || token.span, spans |> Enum.drop(-1)}
+
+        _ ->
+          {token.span, []}
+      end
+
+    %{
+      reason: reason,
+      span: span,
+      related_spans: related_spans,
+      line: (span && span.start_line) || token.line,
+      column: (span && span.start_column) || token.col
+    }
+  end
+
+  defp token_span_on_line(state, line, value) do
+    tokens = if is_tuple(state.tokens), do: Tuple.to_list(state.tokens), else: state.tokens
+
+    Enum.find_value(tokens, fn
+      %Token{line: ^line, value: token_value, span: %Cure.Diagnostic.Span{} = span} ->
+        if to_string(token_value) == to_string(value), do: span
+
+      _ ->
+        nil
+    end)
   end
 
   defp put_named_declaration_source_info(meta, %Token{} = first, %Token{} = name_token, state) do
@@ -8200,6 +8745,21 @@ defmodule Cure.Compiler.Parser do
         meta
     end
   end
+
+  defp macro_rule_source_span(%Token{span: %Cure.Diagnostic.Span{} = first}, state) do
+    case authored_token(state) do
+      %Token{span: %Cure.Diagnostic.Span{} = last} ->
+        case Range.through(first, last) do
+          {:ok, span} -> span
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp macro_rule_source_span(_token, _state), do: nil
 
   # Pure surface representation for §14's `lift module` value. The resulting
   # node contains quoted callback bodies and declarations; the generic module
@@ -8409,7 +8969,9 @@ defmodule Cure.Compiler.Parser do
         parse_macro_rules(state, [entry | acc])
 
       other ->
-        state = add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col})
+        state =
+          add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col, other.span})
+
         # Recover: skip a token so one bad line does not eat the block.
         parse_macro_rules(advance(state), acc)
     end
@@ -8419,7 +8981,14 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     state = advance(state)
     {family, state} = parse_dotted_name(state)
-    {%{kind: :accepts, family: family, line: token.line, col: token.col}, state}
+
+    {%{
+       kind: :accepts,
+       family: family,
+       line: token.line,
+       col: token.col,
+       source_span: macro_rule_source_span(token, state)
+     }, state}
   end
 
   defp parse_macro_expands_with(state) do
@@ -8429,14 +8998,22 @@ defmodule Cure.Compiler.Parser do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "with"} -> advance(state)
-        t -> add_error(state, {:expected, :with, :got, t.type, t.line, t.col})
+        t -> add_error(state, {:expected, :with, :got, t.type, t.line, t.col, t.span})
       end
 
     {expander, state} = parse_expr(state, 0)
-    {%{kind: :expands_with, expander: expander, line: token.line, col: token.col}, state}
+
+    {%{
+       kind: :expands_with,
+       expander: expander,
+       line: token.line,
+       col: token.col,
+       source_span: macro_rule_source_span(token, state)
+     }, state}
   end
 
   defp parse_syntax_family(state) do
+    syntax_token = peek(state)
     family_token = peek_at(state, 1)
     state = advance(state)
     state = advance(state)
@@ -8457,12 +9034,21 @@ defmodule Cure.Compiler.Parser do
            includes: includes,
            productions: productions,
            line: family_token.line,
-           col: family_token.col
+           col: family_token.col,
+           source_span: macro_rule_source_span(syntax_token, state)
          }, state}
 
       t ->
-        state = add_error(state, {:expected, :indent, :got, t.type, t.line, t.col})
-        {%{kind: :syntax_family, name: name, fields: [], line: family_token.line, col: family_token.col}, state}
+        state = add_error(state, {:expected, :indent, :got, t.type, t.line, t.col, t.span})
+
+        {%{
+           kind: :syntax_family,
+           name: name,
+           fields: [],
+           line: family_token.line,
+           col: family_token.col,
+           source_span: macro_rule_source_span(syntax_token, state)
+         }, state}
     end
   end
 
@@ -8483,7 +9069,8 @@ defmodule Cure.Compiler.Parser do
           fields: macro_syntax_fields(segments),
           field_types: macro_syntax_field_types(segments),
           line: token.line,
-          col: token.col
+          col: token.col,
+          source_span: macro_rule_source_span(token, state)
         }
 
         parse_syntax_family_fields(state, fields, includes, [production | productions])
@@ -8511,13 +9098,16 @@ defmodule Cure.Compiler.Parser do
           obligations: obligations,
           cardinality: cardinality,
           line: token.line,
-          col: token.col
+          col: token.col,
+          source_span: macro_rule_source_span(token, state)
         }
 
         parse_syntax_family_fields(state, [field_entry | fields], includes, productions)
 
       other ->
-        state = add_error(state, {:expected, :family_field, :got, other.type, other.line, other.col})
+        state =
+          add_error(state, {:expected, :family_field, :got, other.type, other.line, other.col, other.span})
+
         parse_syntax_family_fields(advance(state), fields, includes, productions)
     end
   end
@@ -8551,13 +9141,25 @@ defmodule Cure.Compiler.Parser do
     {params, state} = parse_typed_params(state)
     state = expect(state, :rparen)
 
-    {%{kind: :fail, name: name, params: params, line: token.line}, state}
+    {%{
+       kind: :fail,
+       name: name,
+       params: params,
+       line: token.line,
+       source_span: macro_rule_source_span(token, state)
+     }, state}
   end
 
   defp parse_open_category(state) do
     token = peek(state)
     {name, state} = parse_dotted_name(advance(state))
-    {%{kind: :open_category, name: name, line: token.line}, state}
+
+    {%{
+       kind: :open_category,
+       name: name,
+       line: token.line,
+       source_span: macro_rule_source_span(token, state)
+     }, state}
   end
 
   defp parse_macro_rule(state) do
@@ -8601,7 +9203,17 @@ defmodule Cure.Compiler.Parser do
           if capture in capture_names do
             state
           else
-            add_error(state, {:unknown_macro_obligation_capture, capture, token.line, token.col})
+            add_error(state, {
+              :unknown_macro_obligation_capture,
+              %{
+                capture: capture,
+                interface: interface,
+                available_captures: capture_names,
+                span: capture_token.span,
+                line: capture_token.line,
+                column: capture_token.col
+              }
+            })
           end
 
         obligation = %{interface: interface, capture: capture, line: token.line, col: token.col}
@@ -8617,7 +9229,7 @@ defmodule Cure.Compiler.Parser do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "becomes"} -> advance(state)
-        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col})
+        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col, t.span})
       end
 
     {template, state} = parse_expr(state, 0)
@@ -8634,7 +9246,8 @@ defmodule Cure.Compiler.Parser do
       obligations: obligations,
       module_rule: keyword == "module",
       progress: nil,
-      line: kw_token.line
+      line: kw_token.line,
+      source_span: macro_rule_source_span(kw_token, state)
     }
 
     {rule, state}
@@ -8660,7 +9273,7 @@ defmodule Cure.Compiler.Parser do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "by"} -> advance(state)
-        t -> add_error(state, {:expected, :by, :got, t.type, t.line, t.col})
+        t -> add_error(state, {:expected, :by, :got, t.type, t.line, t.col, t.span})
       end
 
     {elab, state} = parse_expr(state, 0)
@@ -8682,7 +9295,8 @@ defmodule Cure.Compiler.Parser do
       obligations: obligations,
       module_rule: keyword == "module",
       progress: nil,
-      line: kw_token.line
+      line: kw_token.line,
+      source_span: macro_rule_source_span(kw_token, state)
     }
 
     {rule, state}
@@ -8806,7 +9420,7 @@ defmodule Cure.Compiler.Parser do
         parse_example_lines(state, [ex | acc])
 
       other ->
-        state = add_error(state, {:expected, :example, :got, other.type, other.line, other.col})
+        state = add_error(state, {:expected, :example, :got, other.type, other.line, other.col, other.span})
         # Recover: skip one token so a bad line does not eat the block.
         parse_example_lines(advance(state), acc)
     end
@@ -8825,7 +9439,7 @@ defmodule Cure.Compiler.Parser do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "expands"} -> advance(state)
-        t -> add_error(state, {:expected, :expands, :got, t.type, t.line, t.col})
+        t -> add_error(state, {:expected, :expands, :got, t.type, t.line, t.col, t.span})
       end
 
     {expected, state} =
@@ -8839,7 +9453,12 @@ defmodule Cure.Compiler.Parser do
           {{:expansion, ast}, state}
       end
 
-    {%{use_site: Enum.reverse(use_site), expected: expected, line: kw.line}, state}
+    {%{
+       use_site: Enum.reverse(use_site),
+       expected: expected,
+       line: kw.line,
+       source_span: macro_rule_source_span(kw, state)
+     }, state}
   end
 
   # Collect the filled use-site tokens up to the `expands` keyword (or end of
@@ -8866,7 +9485,7 @@ defmodule Cure.Compiler.Parser do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "becomes"} -> advance(state)
-        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col})
+        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col, t.span})
       end
 
     {template, state} = parse_expr(state, 0)
@@ -8878,7 +9497,8 @@ defmodule Cure.Compiler.Parser do
       suffix: literal_suffix(segments),
       template: template,
       progress: nil,
-      line: kw_token.line
+      line: kw_token.line,
+      source_span: macro_rule_source_span(kw_token, state)
     }
 
     {rule, state}
@@ -8911,7 +9531,12 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
-    {%{kind: :explain, clauses: clauses, line: kw.line}, state}
+    {%{
+       kind: :explain,
+       clauses: clauses,
+       line: kw.line,
+       source_span: macro_rule_source_span(kw, state)
+     }, state}
   end
 
   defp parse_explain_clauses(state, acc) do
@@ -8922,11 +9547,19 @@ defmodule Cure.Compiler.Parser do
         {Enum.reverse(acc), state}
 
       _ ->
+        clause_start = peek(state)
         {point, state} = parse_explain_point(state)
         state = expect(state, :fat_arrow)
         state = skip_macro_trivia(state)
         {body, state} = parse_expr(state, 0)
-        clause = %{point: point, body: body, line: peek(state).line}
+
+        clause = %{
+          point: point,
+          body: body,
+          line: peek(state).line,
+          source_span: macro_rule_source_span(clause_start, state)
+        }
+
         parse_explain_clauses(state, [clause | acc])
     end
   end
@@ -8949,7 +9582,7 @@ defmodule Cure.Compiler.Parser do
         {{:category, cat}, advance(state)}
 
       other ->
-        error = {:expected, :explain_point, :got, other.type, other.line, other.col}
+        error = {:expected, :explain_point, :got, other.type, other.line, other.col, other.span}
         state = add_error(state, error)
         {{:category, "?"}, state}
     end
@@ -9035,8 +9668,21 @@ defmodule Cure.Compiler.Parser do
               parse_rule_segments(state, [hole | acc], mode)
             else
               _ ->
-                t = peek(state)
-                state = add_error(state, {:malformed_hole, t.line, t.col})
+                opener = peek(state)
+                observed = peek_at(state, 4)
+
+                state =
+                  add_error(state, {
+                    :malformed_hole,
+                    %{
+                      opener_span: opener.span,
+                      span: observed.span || opener.span,
+                      observed: observed.value || observed.type,
+                      line: observed.line,
+                      column: observed.col
+                    }
+                  })
+
                 {Enum.reverse(acc), advance(state)}
             end
         end
@@ -9737,21 +10383,23 @@ defmodule Cure.Compiler.Parser do
     dec_name = to_string(name_token.value)
 
     # Check if it's a call: @name(args) or @name value (bare boolean)
-    {args, state} =
+    {args, close_token, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           state = advance(state)
-          {a, _labels, _label_spans, state, _close_token} = parse_call_args(state, false)
-          {a, state}
+          {a, _labels, _label_spans, state, close_token} = parse_call_args(state, false)
+          {a, close_token, state}
 
         %Token{type: :bool, value: bval} ->
           state = advance(state)
           arg = {:literal, [subtype: :boolean], bval}
-          {[arg], state}
+          {[arg], nil, state}
 
         _ ->
-          {[], state}
+          {[], nil, state}
       end
+
+    decorator_info = decorator_source_info(token, name_token, args, close_token)
 
     state = skip_newlines(state)
 
@@ -9777,10 +10425,10 @@ defmodule Cure.Compiler.Parser do
       state =
         cond do
           not file_leading?(state) ->
-            add_error(state, {:edition_pragma_placement, token.line, token.col})
+            add_error(state, edition_pragma_error(:edition_pragma_placement, token, decorator_info, args))
 
           not valid_edition_pragma_arg?(args) ->
-            add_error(state, {:edition_pragma_malformed, token.line, token.col})
+            add_error(state, edition_pragma_error(:edition_pragma_malformed, token, decorator_info, args))
 
           not single_line_edition_pragma?(token, args) ->
             # Canonical pragma is a single line. The pre-parse resolver
@@ -9788,7 +10436,7 @@ defmodule Cure.Compiler.Parser do
             # regex, so a multi-line pragma is invisible to it — honouring it here
             # would lex under the resolver's (default) edition while accepting a
             # different declared one (F1, audit iteration 4). Reject it as malformed.
-            add_error(state, {:edition_pragma_malformed, token.line, token.col})
+            add_error(state, edition_pragma_error(:edition_pragma_malformed, token, decorator_info, args))
 
           not known_edition_pragma_arg?(args) ->
             # Well-formed "YYYY" but not a minted edition. The compile entrypoints
@@ -9798,7 +10446,7 @@ defmodule Cure.Compiler.Parser do
             # gate for DIRECT Parser.parse callers that skip resolve_edition
             # (detect_app, parse_source) — spec §3.1 ("a typo'd edition must fail
             # loudly") / §3.3 ("its argument is validated as an edition").
-            add_error(state, {:edition_pragma_unknown, token.line, token.col})
+            add_error(state, edition_pragma_error(:edition_pragma_unknown, token, decorator_info, args))
 
           true ->
             state
@@ -9812,7 +10460,7 @@ defmodule Cure.Compiler.Parser do
         case peek(state) do
           %Token{type: :keyword, value: :mod} ->
             {mod_ast, state} = parse_module(state)
-            {attach_decorator(mod_ast, dec_name, args), state}
+            {attach_decorator(mod_ast, dec_name, args, decorator_info), state}
 
           _ ->
             state = emit_group_placement_deprecation(state, token, dec_name)
@@ -9820,26 +10468,26 @@ defmodule Cure.Compiler.Parser do
             {ast, state}
         end
       else
-        parse_at_attach(state, token, dec_name, args)
+        parse_at_attach(state, token, dec_name, args, decorator_info)
       end
     end
   end
 
   # Attach `@name(args)` to a following fn/rec/type declaration, or emit a
   # standalone decorator/property node when nothing attachable follows.
-  defp parse_at_attach(state, token, dec_name, args) do
+  defp parse_at_attach(state, token, dec_name, args, decorator_info) do
     # Check if the next thing is a function definition -- if so, attach decorator
     case peek(state) do
       %Token{type: :keyword, value: kw} when kw in [:fn, :local] ->
         {fn_ast, state} = parse_expr(state, 0)
-        fn_ast = attach_decorator(fn_ast, dec_name, args)
+        fn_ast = attach_decorator(fn_ast, dec_name, args, decorator_info)
         {fn_ast, state}
 
       # v0.19.0: `@derive(Show, Eq, ...) rec Name` attaches the
       # derive list to the record container.
       %Token{type: :keyword, value: :rec} ->
         {rec_ast, state} = parse_expr(state, 0)
-        rec_ast = attach_decorator(rec_ast, dec_name, args)
+        rec_ast = attach_decorator(rec_ast, dec_name, args, decorator_info)
         {rec_ast, state}
 
       # `@builtin(:key) type Name = ...` attaches the decorator to the type
@@ -9850,7 +10498,7 @@ defmodule Cure.Compiler.Parser do
       # form is still silently dropped — no attach_decorator clause today.
       %Token{type: :keyword, value: :type} ->
         {type_ast, state} = parse_type_def(state)
-        type_ast = attach_decorator(type_ast, dec_name, args)
+        type_ast = attach_decorator(type_ast, dec_name, args, decorator_info)
         {type_ast, state}
 
       # `@erases(:pid) opaque type Name` attaches the decorator to the opaque
@@ -9861,7 +10509,7 @@ defmodule Cure.Compiler.Parser do
       # carrier is left with no declared erasure.
       %Token{type: :keyword, value: :opaque} ->
         {type_ast, state} = parse_type_def(advance(state), opaque: true)
-        type_ast = attach_decorator(type_ast, dec_name, args)
+        type_ast = attach_decorator(type_ast, dec_name, args, decorator_info)
         {type_ast, state}
 
       # `@builtin(:tag) primitive Name` attaches the decorator to the primitive
@@ -9869,7 +10517,7 @@ defmodule Cure.Compiler.Parser do
       # into :decorator meta, like `@builtin(:key) type Name`).
       %Token{type: :keyword, value: :primitive} ->
         {prim_ast, state} = parse_primitive_def(state)
-        prim_ast = attach_decorator(prim_ast, dec_name, args)
+        prim_ast = attach_decorator(prim_ast, dec_name, args, decorator_info)
         {prim_ast, state}
 
       # `@prelude typealias Name = RHS` attaches the decorator to the
@@ -9878,7 +10526,7 @@ defmodule Cure.Compiler.Parser do
       # prelude at its definition site.
       %Token{type: :keyword, value: :typealias} ->
         {ta_ast, state} = parse_typealias(state)
-        ta_ast = attach_decorator(ta_ast, dec_name, args)
+        ta_ast = attach_decorator(ta_ast, dec_name, args, decorator_info)
         {ta_ast, state}
 
       _ ->
@@ -9893,9 +10541,10 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp attach_decorator(fn_ast, dec_name, args) do
+  defp attach_decorator(fn_ast, dec_name, args, decorator_info) do
     case fn_ast do
       {:container, meta, body} ->
+        meta = put_decorator_source_info(meta, dec_name, decorator_info)
         # Record container with @derive(Show, Eq, Ord).
         case Keyword.get(meta, :container_type) do
           :struct when dec_name == "derive" ->
@@ -9917,9 +10566,12 @@ defmodule Cure.Compiler.Parser do
       # program.ex's maybe_register_builtin can see it (mirrors the
       # {:container} enum-ADT clause above).
       {:indexed_type, meta, ctors} ->
+        meta = put_decorator_source_info(meta, dec_name, decorator_info)
         {:indexed_type, Keyword.put(meta, :decorator, {:decorator, [name: String.to_atom(dec_name)], args}), ctors}
 
       {:function_def, meta, body} ->
+        meta = put_decorator_source_info(meta, dec_name, decorator_info)
+
         decoration =
           case dec_name do
             "extern" ->
@@ -9942,10 +10594,84 @@ defmodule Cure.Compiler.Parser do
       # decorator into the `{:type_annotation}` meta so program.ex's prelude
       # discovery can see it (mirrors the `{:container}`/`{:indexed_type}` clauses).
       {:type_annotation, meta, rhs} ->
+        meta = put_decorator_source_info(meta, dec_name, decorator_info)
         {:type_annotation, Keyword.put(meta, :decorator, {:decorator, [name: String.to_atom(dec_name)], args}), rhs}
 
       other ->
         other
+    end
+  end
+
+  defp decorator_source_info(%Token{} = at, %Token{} = name, args, close_token) do
+    last = if match?(%Token{}, close_token), do: close_token, else: name
+
+    whole =
+      case {at.span, last.span} do
+        {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = final} ->
+          case Range.through(first, final) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    argument_spans =
+      Enum.flat_map(args, fn
+        {_tag, meta, _payload} when is_list(meta) ->
+          case Metadata.source_info(meta) do
+            %SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> [span]
+            _ -> []
+          end
+
+        _ ->
+          []
+      end)
+
+    %{whole: whole, name: name.span, arguments: argument_spans}
+  end
+
+  defp edition_pragma_error(kind, token, decorator_info, args) do
+    argument_span = List.first(decorator_info.arguments)
+    single_line? = match?(%Cure.Diagnostic.Span{start_line: line, end_line: line}, decorator_info.whole)
+
+    span =
+      cond do
+        kind == :edition_pragma_placement -> decorator_info.whole
+        not single_line? -> decorator_info.whole
+        true -> argument_span || decorator_info.whole
+      end
+
+    details = %{
+      span: span,
+      pragma_span: decorator_info.whole,
+      argument_span: argument_span,
+      observed: edition_pragma_argument(args),
+      known_editions: Cure.Edition.all(),
+      single_line: single_line?,
+      line: token.line,
+      column: token.col
+    }
+
+    {kind, details}
+  end
+
+  defp edition_pragma_argument([{:literal, _meta, value}]), do: value
+  defp edition_pragma_argument([]), do: :missing
+  defp edition_pragma_argument(args), do: Enum.map(args, &edition_pragma_argument_value/1)
+
+  defp edition_pragma_argument_value({:literal, _meta, value}), do: value
+  defp edition_pragma_argument_value({:variable, _meta, value}), do: value
+  defp edition_pragma_argument_value(_argument), do: :invalid
+
+  defp put_decorator_source_info(meta, dec_name, decorator_info) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{} = info ->
+        Keyword.put(meta, :source_info, %{info | decorators: Map.put(info.decorators, dec_name, decorator_info)})
+
+      _ ->
+        meta
     end
   end
 

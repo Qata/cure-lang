@@ -119,6 +119,17 @@ defmodule Cure.Elab.TuplePatternTest do
     assert apply(mod, :f, [{:Z, {:S, :Z}, {:S, {:S, :Z}}}]) == {:S, {:S, :Z}}
   end
 
+  test "tuple pattern arity is checked even when extra or missing binders are unused" do
+    too_few = @nat <> "  fn f(p: Tuple(Nat, Nat)) -> Nat = match p\n    %[x] -> Z()\nend\n"
+    too_many = @nat <> "  fn f(p: Tuple(Nat, Nat)) -> Nat = match p\n    %[x, y, z] -> Z()\nend\n"
+
+    assert {:error, {:source_context, {:tuple_arity_mismatch, 2, 1}, %{span: %Cure.Diagnostic.Span{}}}} =
+             Program.elaborate(too_few)
+
+    assert {:error, {:source_context, {:tuple_arity_mismatch, 2, 3}, %{span: %Cure.Diagnostic.Span{}}}} =
+             Program.elaborate(too_many)
+  end
+
   test "a nested tuple pattern binds through the inner Σ" do
     src =
       @nat <>

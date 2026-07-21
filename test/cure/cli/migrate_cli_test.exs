@@ -98,8 +98,19 @@ defmodule Cure.CLI.MigrateCliTest do
     before_clean = File.read!(clean_f)
     before_untracked = File.read!(untracked_f)
 
-    assert {:error, {:git_guard_failed, reasons}} = CLI.cmd_migrate([clean_f, untracked_f], [])
+    parent = self()
+
+    stderr =
+      ExUnit.CaptureIO.capture_io(:stderr, fn ->
+        send(parent, {:migration_result, CLI.cmd_migrate([clean_f, untracked_f], [])})
+      end)
+
+    assert_receive {:migration_result, {:error, {:git_guard_failed, reasons}}}
     assert {untracked_f, :untracked} in reasons
+    assert stderr =~ "COMMAND FAILED [E098]"
+    assert stderr =~ "because it is not tracked by git"
+    assert stderr =~ untracked_f
+    refute stderr =~ "{:git_guard_failed"
     refute Enum.any?(reasons, &match?({^clean_f, _}, &1))
     # nothing was written -- the git guard runs before the batch preflight
     assert File.read!(clean_f) == before_clean
@@ -120,8 +131,18 @@ defmodule Cure.CLI.MigrateCliTest do
     {_, 0} = System.cmd("git", ["-C", dir, "commit", "-qm", "x"])
 
     before_good = File.read!(good)
-    assert {:error, {:preflight_failed, failed}} = CLI.cmd_migrate([good, bad], [])
+    parent = self()
+
+    stderr =
+      ExUnit.CaptureIO.capture_io(:stderr, fn ->
+        send(parent, {:migration_result, CLI.cmd_migrate([good, bad], [])})
+      end)
+
+    assert_receive {:migration_result, {:error, {:preflight_failed, failed}}}
     assert bad in failed
+    assert stderr =~ "COMMAND FAILED [E098]"
+    assert stderr =~ "producing invalid syntax or changing its comments"
+    assert stderr =~ bad
     # good is untouched because bad failed the in-memory preflight
     assert File.read!(good) == before_good
   end
@@ -177,8 +198,17 @@ defmodule Cure.CLI.MigrateCliTest do
     {_, 0} = System.cmd("git", ["-C", dir, "commit", "-qm", "x"])
     before = File.read!(f)
 
-    assert {:error, {:strict_violation, violators}} = CLI.cmd_migrate([f], strict: true)
+    parent = self()
+
+    stderr =
+      ExUnit.CaptureIO.capture_io(:stderr, fn ->
+        send(parent, {:migration_result, CLI.cmd_migrate([f], strict: true)})
+      end)
+
+    assert_receive {:migration_result, {:error, {:strict_violation, violators}}}
     assert Enum.any?(violators, fn {p, ids} -> p == f and :W_if_elif_pickup in ids end)
+    assert stderr =~ "rejected by `--strict`"
+    assert stderr =~ "W_if_elif_pickup"
     assert File.read!(f) == before
   end
 
@@ -193,8 +223,17 @@ defmodule Cure.CLI.MigrateCliTest do
     {_, 0} = System.cmd("git", ["-C", dir, "commit", "-qm", "x"])
     before = File.read!(f)
 
-    assert {:error, {:blocked, blocked}} = CLI.cmd_migrate([f], strict: true)
+    parent = self()
+
+    stderr =
+      ExUnit.CaptureIO.capture_io(:stderr, fn ->
+        send(parent, {:migration_result, CLI.cmd_migrate([f], strict: true)})
+      end)
+
+    assert_receive {:migration_result, {:error, {:blocked, blocked}}}
     assert Enum.any?(blocked, fn {p, ids} -> p == f and :W_removed_module in ids end)
+    assert stderr =~ "manual migration for"
+    assert stderr =~ "W_removed_module"
     refute match?({:error, {:strict_violation, _}}, CLI.cmd_migrate([f], strict: true))
     assert File.read!(f) == before
   end

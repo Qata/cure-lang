@@ -188,10 +188,16 @@ defmodule Cure.REPL.Config do
       {:ok, parsed}
     else
       {:error, reason} = err ->
-        warn("failed to parse #{path}: #{inspect(reason)}")
+        warn("failed to parse `#{path}`: #{config_reason(reason)}")
         err
     end
   end
+
+  defp config_reason(:invalid), do: "the TOML document is invalid"
+  defp config_reason(:unexpected_eof), do: "the TOML document ended unexpectedly"
+  defp config_reason(:enoent), do: "the file could not be read"
+  defp config_reason(reason) when is_binary(reason), do: reason
+  defp config_reason(_reason), do: "the TOML document is invalid"
 
   defp decode_toml(binary) when is_binary(binary) do
     # `Toml.decode/1` only returns `{:ok, map}` or `{:error, reason}`;

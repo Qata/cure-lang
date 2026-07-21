@@ -80,6 +80,12 @@ defmodule Cure.Diagnostic.Adapter do
           "The recursive occurrence in `#{name_to_string(family)}` is not strictly positive, so this type cannot be accepted by the normalising kernel."
         ),
       primary: primary_label(opts, "this recursive type definition is not strictly positive"),
+      suggestions: [
+        %Suggestion{
+          message: "Move the recursive type out of function-input positions in this constructor",
+          applicability: :manual
+        }
+      ],
       payload: %{family: family}
     )
   end
@@ -98,6 +104,12 @@ defmodule Cure.Diagnostic.Adapter do
           "An erased value#{if is_nil(binder), do: "", else: " (binder #{binder})"} is used in the runtime-relevant `#{site}` position."
         ),
       primary: primary_label(opts, "remove this runtime use or make the binding relevant"),
+      suggestions: [
+        %Suggestion{
+          message: "Pass a runtime value here, or remove the erased/implicit grade from the binding",
+          applicability: :manual
+        }
+      ],
       payload: details
     )
   end
@@ -125,6 +137,7 @@ defmodule Cure.Diagnostic.Adapter do
       when kind in [
              :duplicate_type,
              :duplicate_ctor,
+             :duplicate_constructor,
              :duplicate_field,
              :duplicate_parameter,
              :duplicate_index,
@@ -132,7 +145,16 @@ defmodule Cure.Diagnostic.Adapter do
              :constructor_function_collision,
              :duplicate_definition
            ] do
-    declaration_conflict(kind, %{name: name}, opts)
+    if is_map(name) do
+      declaration_conflict(kind, name, opts)
+    else
+      declaration_conflict(kind, %{name: name}, opts)
+    end
+  end
+
+  def from_error({kind, %{name: _name} = details}, opts)
+      when kind in [:duplicate_parameter, :duplicate_field, :duplicate_index] do
+    declaration_conflict(kind, details, opts)
   end
 
   def from_error({:overlapping_overload, name, arity}, opts) do
@@ -155,8 +177,20 @@ defmodule Cure.Diagnostic.Adapter do
     declaration_conflict(:sibling_module_collision, %{name: name, owners: owners}, opts)
   end
 
-  def from_error({:precedence_cycle, groups}, opts) do
+  def from_error({:precedence_cycle, %{groups: groups} = details}, opts) when is_list(groups) do
+    operator_conflict(:precedence_cycle, details, opts)
+  end
+
+  def from_error({:precedence_cycle, groups}, opts) when is_list(groups) do
     operator_conflict(:precedence_cycle, %{groups: groups}, opts)
+  end
+
+  def from_error({:conflicting_operator_fixity, details}, opts) when is_map(details) do
+    operator_conflict(:conflicting_operator_fixity, details, opts)
+  end
+
+  def from_error({:conflicting_precedence_group, details}, opts) when is_map(details) do
+    operator_conflict(:conflicting_precedence_group, details, opts)
   end
 
   def from_error({:builtin_operator_not_overloadable, operator}, opts) do
@@ -785,7 +819,8 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_record, name}, opts),
     do: from_error({:source_context, {:unknown_record, name}, %{}}, opts)
 
-  def from_error({:source_context, {:record_field_mismatch, name}, context}, opts) when is_map(context) do
+  def from_error({:source_context, {:record_field_mismatch, name}, context}, opts)
+      when is_map(context) and not is_map(name) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
 
     Diagnostic.new(
@@ -799,10 +834,81 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:source_context, {:record_field_mismatch, details}, context}, opts)
+      when is_map(details) and is_map(context) do
+    unknown = Map.get(details, :unknown, [])
+    missing = Map.get(details, :missing, [])
+    declared = Map.get(details, :declared, [])
+    record = Map.get(details, :record)
+    field_spans = Map.get(context, :field_spans, %{})
+    offending = List.first(unknown)
+    field_span = Map.get(field_spans, offending) || Map.get(field_spans, name_to_string(offending))
+
+    opts =
+      if field_span do
+        Keyword.put(opts, :span, field_span)
+      else
+        Keyword.put_new(opts, :span, Map.get(context, :span))
+      end
+
+    candidates = record_field_candidates(offending, declared, record)
+
+    body =
+      cond do
+        offending && candidates != [] ->
+          candidate = hd(candidates).name
+
+          Doc.paragraph(
+            "`#{name_to_string(offending)}` is not a field of `#{name_to_string(record)}`. Did you mean `#{candidate}`?"
+          )
+
+        offending ->
+          Doc.paragraph(
+            "`#{name_to_string(offending)}` is not a field of `#{name_to_string(record)}`. Available fields are #{field_list(declared)}."
+          )
+
+        missing != [] ->
+          Doc.paragraph("This `#{name_to_string(record)}` value is missing #{field_list(missing)}.")
+
+        true ->
+          Doc.paragraph("The supplied fields do not match `#{name_to_string(record)}`.")
+      end
+
+    suggestions = record_field_suggestions(offending, candidates, field_span)
+
+    Diagnostic.new(
+      code: "E022",
+      key: :record_field_mismatch,
+      severity: :error,
+      title: if(offending, do: "Unknown record field", else: "Missing record field"),
+      body: body,
+      primary:
+        primary_label(
+          opts,
+          if(offending, do: "this field is not declared by the record", else: "add the missing field here")
+        ),
+      suggestions: suggestions,
+      payload: %{
+        record: record,
+        declared: declared,
+        provided: Map.get(details, :provided, []),
+        unknown: unknown,
+        missing: missing,
+        candidates: candidates,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
   def from_error({:source_context, {kind, name}, context}, opts)
       when kind in [:unknown_ctor, :foreign_ctor, :unknown_pattern_constructor, :unknown_family] and
              is_map(context) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+    opts =
+      opts
+      |> Keyword.put_new(:span, Map.get(context, :span))
+      |> Keyword.put(:candidates, Map.get(context, :name_candidates, []))
+      |> Keyword.put(:arity, Map.get(context, :name_arity))
+
     namespace = if kind == :unknown_family, do: :type, else: :constructor
     unknown_name(namespace, name, Keyword.put(opts, :checking, Map.get(context, :checking)))
   end
@@ -877,6 +983,15 @@ defmodule Cure.Diagnostic.Adapter do
           _ -> opts
         end
       end)
+      |> then(fn opts ->
+        if is_list(Map.get(context, :name_candidates)) do
+          opts
+          |> Keyword.put(:candidates, Map.get(context, :name_candidates))
+          |> Keyword.put(:arity, Map.get(context, :name_arity))
+        else
+          opts
+        end
+      end)
 
     case {reason, Map.get(context, :expectation_origin)} do
       {{:index_mismatch, {:cannot_unify, actual, expected}}, origin} when not is_nil(origin) ->
@@ -893,7 +1008,7 @@ defmodule Cure.Diagnostic.Adapter do
             expected: expected,
             origin: %ExpectationOrigin{
               kind: origin,
-              span: Keyword.get(opts, :span, Map.get(context, :expectation_span)),
+              span: Map.get(context, :expectation_span),
               owner: Map.get(context, :checking),
               index: Map.get(context, :argument_index)
             },
@@ -997,79 +1112,80 @@ defmodule Cure.Diagnostic.Adapter do
       do: macro_validation_failure(kind, %{}, opts)
 
   def from_error({kind, detail}, opts)
-      when kind in [
-             :invalid_packet_name,
-             :invalid_packet_endian,
-             :unknown_packet_scalar,
-             :missing_packet_endian,
-             :forward_packet_length,
-             :invalid_packet_crc_fields,
-             :invalid_packet_field,
-             :invalid_packet_field_name,
-             :duplicate_packet_field,
-             :invalid_macro_rules,
-             :accepts_without_syntax_family,
-             :accepts_without_expander,
-             :expander_without_accepts,
-             :multiple_accepts_declarations,
-             :multiple_expands_declarations,
-             :invalid_driver_base,
-             :invalid_driver_register,
-             :duplicate_driver_register,
-             :overlapping_driver_register,
-             :module_rule_not_fully_consumed,
-             :not_a_module_rule,
-             :ambiguous_macro_extension,
-             :invalid_macro_diagnostics,
-             :invalid_macro_diagnostic,
-             :invalid_syntax_list,
-             :invalid_syntax_string,
-             :invalid_syntax_literal,
-             :invalid_syntax_pair,
-             :left_recursive_parse_production,
-             :protocol_role_count,
-             :invalid_macro_segment,
-             :unsupported_surface_filler,
-             :missing_hole_filler,
-             :unsupported_hole_type,
-             :invalid_lift_module,
-             :invalid_lift_module_name,
-             :invalid_lift_callback,
-             :invalid_module_name,
-             :invalid_behaviour,
-             :invalid_lift_declaration,
-             :invalid_lift_import,
-             :invalid_lift_module_ast,
-             :lifted_module_dependency_cycle,
-             :duplicate_lifted_module,
-             :invalid_generated_syntax,
-             :unknown_syntax_family,
-             :duplicate_syntax_family,
-             :duplicate_syntax_family_field,
-             :syntax_family_cycle,
-             :primitive_missing_builtin,
-             :unknown_primitive_tag,
-             :primitive_floor_mismatch,
-             :unsupported_declaration,
-             :invalid_syntax_node,
-             :invalid_syntax_leaf,
-             :invalid_syntax_failure,
-             :unsupported_syntax_core,
-             :raw_syntax_in_expansion,
-             :quoted_syntax_in_expansion,
-             :malformed_expansion_syntax,
-             :malformed_expansion_attribute,
-             :malformed_expansion_map,
-             :malformed_expansion_literal,
-             :malformed_reflected_syntax,
-             :malformed_reflected_attribute,
-             :malformed_reflected_literal,
-             :malformed_reflected_map,
-             :invalid_syntax_attrs,
-             :unknown_reducer_constructor,
-             :incomplete_reducer,
-             :unsupported_hole_arity
-           ],
+      when not is_map(detail) and
+             kind in [
+               :invalid_packet_name,
+               :invalid_packet_endian,
+               :unknown_packet_scalar,
+               :missing_packet_endian,
+               :forward_packet_length,
+               :invalid_packet_crc_fields,
+               :invalid_packet_field,
+               :invalid_packet_field_name,
+               :duplicate_packet_field,
+               :invalid_macro_rules,
+               :accepts_without_syntax_family,
+               :accepts_without_expander,
+               :expander_without_accepts,
+               :multiple_accepts_declarations,
+               :multiple_expands_declarations,
+               :invalid_driver_base,
+               :invalid_driver_register,
+               :duplicate_driver_register,
+               :overlapping_driver_register,
+               :module_rule_not_fully_consumed,
+               :not_a_module_rule,
+               :ambiguous_macro_extension,
+               :invalid_macro_diagnostics,
+               :invalid_macro_diagnostic,
+               :invalid_syntax_list,
+               :invalid_syntax_string,
+               :invalid_syntax_literal,
+               :invalid_syntax_pair,
+               :left_recursive_parse_production,
+               :protocol_role_count,
+               :invalid_macro_segment,
+               :unsupported_surface_filler,
+               :missing_hole_filler,
+               :unsupported_hole_type,
+               :invalid_lift_module,
+               :invalid_lift_module_name,
+               :invalid_lift_callback,
+               :invalid_module_name,
+               :invalid_behaviour,
+               :invalid_lift_declaration,
+               :invalid_lift_import,
+               :invalid_lift_module_ast,
+               :lifted_module_dependency_cycle,
+               :duplicate_lifted_module,
+               :invalid_generated_syntax,
+               :unknown_syntax_family,
+               :duplicate_syntax_family,
+               :duplicate_syntax_family_field,
+               :syntax_family_cycle,
+               :primitive_missing_builtin,
+               :unknown_primitive_tag,
+               :primitive_floor_mismatch,
+               :unsupported_declaration,
+               :invalid_syntax_node,
+               :invalid_syntax_leaf,
+               :invalid_syntax_failure,
+               :unsupported_syntax_core,
+               :raw_syntax_in_expansion,
+               :quoted_syntax_in_expansion,
+               :malformed_expansion_syntax,
+               :malformed_expansion_attribute,
+               :malformed_expansion_map,
+               :malformed_expansion_literal,
+               :malformed_reflected_syntax,
+               :malformed_reflected_attribute,
+               :malformed_reflected_literal,
+               :malformed_reflected_map,
+               :invalid_syntax_attrs,
+               :unknown_reducer_constructor,
+               :incomplete_reducer,
+               :unsupported_hole_arity
+             ],
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
   def from_error({kind, first, second}, opts)
@@ -1355,6 +1471,47 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:extern_arity_mismatch, name, declared, present}, opts)
       when is_integer(declared) and is_integer(present) do
+    from_error(
+      {:extern_arity_mismatch, %{name: name, declared: declared, present: present}},
+      opts
+    )
+  end
+
+  def from_error({:call_arity_mismatch, %{name: name, expected: expected, actual: actual} = details}, opts)
+      when is_integer(expected) and is_integer(actual) do
+    difference = abs(expected - actual)
+
+    {label, hint} =
+      if actual < expected do
+        {"add #{argument_count(difference)} to this call",
+         "Supply the remaining #{argument_count(difference)}, or use this partial application where a function is expected."}
+      else
+        {"remove #{argument_count(difference)} from this call",
+         "Remove the extra #{argument_count(difference)}, or call the returned function separately if that was intended."}
+      end
+
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Function arity mismatch",
+      body:
+        Doc.paragraph(
+          "`#{name_to_string(name)}` accepts #{argument_count(expected)}, but this call supplies #{argument_count(actual)}."
+        ),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, :function)
+    )
+  end
+
+  def from_error(
+        {:extern_arity_mismatch, %{name: name, declared: declared, present: present} = details},
+        opts
+      )
+      when is_integer(declared) and is_integer(present) do
+    opts = Keyword.put_new(opts, :span, Map.get(details, :span))
+
     Diagnostic.new(
       code: "E003",
       key: :arity_mismatch,
@@ -1364,20 +1521,104 @@ defmodule Cure.Diagnostic.Adapter do
         Doc.paragraph(
           "Extern `#{name_to_string(name)}` declares target arity #{declared}, but its present Cure arity is #{present}."
         ),
-      primary: primary_label(opts, "make the extern declaration match its callable arity"),
-      payload: %{name: name_to_string(name), declared: declared, present: present, kind: :extern}
+      primary:
+        primary_label(
+          opts,
+          "change this target arity to #{present} so it matches the values present at runtime"
+        ),
+      suggestions: [
+        %Suggestion{
+          message: "Use target arity #{present}; erased parameters do not cross the FFI boundary.",
+          applicability: :manual
+        }
+      ],
+      payload:
+        details
+        |> Map.put(:name, name_to_string(name))
+        |> Map.put(:kind, :extern)
     )
   end
 
-  def from_error({:constructor_arity_mismatch, name}, opts) do
+  def from_error({:constructor_arity_mismatch, %{name: name} = details}, opts) do
+    expected = Map.get(details, :expected)
+    actual = Map.get(details, :actual)
+    display_name = Map.get(details, :display_name) || name_to_string(name)
+
     Diagnostic.new(
       code: "E003",
       key: :arity_mismatch,
       severity: :error,
       title: "Constructor arity mismatch",
-      body: Doc.paragraph("Constructor `#{name_to_string(name)}` was used with the wrong number of arguments."),
-      primary: primary_label(opts, "provide the arguments required by this constructor"),
-      payload: %{kind: :constructor, constructor: name_to_string(name)}
+      body:
+        Doc.paragraph(
+          "Constructor `#{display_name}` requires #{argument_count(expected)}, but this call supplies #{argument_count(actual)}."
+        ),
+      primary: primary_label(opts, constructor_arity_label(expected, actual)),
+      payload:
+        details
+        |> Map.put(:kind, :constructor)
+        |> Map.put(:constructor, display_name)
+    )
+  end
+
+  def from_error({:constructor_arity_mismatch, name}, opts),
+    do: from_error({:constructor_arity_mismatch, %{name: name}}, opts)
+
+  def from_error(
+        {:pattern_arity_mismatch, %{constructor: constructor, expected: expected, actual: actual} = details},
+        opts
+      ) do
+    opts = Keyword.put(opts, :span, Map.get(details, :span))
+    difference = abs(expected - actual)
+    display_name = Map.get(details, :display_name) || name_to_string(constructor)
+
+    {label, hint} =
+      if actual < expected do
+        {"add #{argument_count(difference)} to this pattern",
+         "Bind the remaining constructor field#{if difference == 1, do: "", else: "s"}, or use `_` for fields you do not need."}
+      else
+        {"remove #{argument_count(difference)} from this pattern",
+         "Remove the extra pattern field#{if difference == 1, do: "", else: "s"}; this constructor does not contain them."}
+      end
+
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Pattern arity mismatch",
+      body:
+        Doc.paragraph(
+          "Constructor `#{display_name}` has #{argument_count(expected)}, but this pattern matches #{argument_count(actual)}."
+        ),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, :pattern)
+    )
+  end
+
+  def from_error({:tuple_arity_mismatch, expected, actual}, opts)
+      when is_integer(expected) and is_integer(actual) do
+    difference = abs(expected - actual)
+
+    {label, hint} =
+      if actual < expected do
+        {"add #{argument_count(difference)} to this tuple pattern",
+         "Add #{argument_count(difference)} to match all #{expected} tuple elements; use `_` for values you do not need."}
+      else
+        {"remove #{argument_count(difference)} from this tuple pattern",
+         "Remove #{argument_count(difference)}; this value has only #{argument_count(expected)}."}
+      end
+
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Tuple pattern has the wrong size",
+      body:
+        Doc.paragraph("This value has #{argument_count(expected)}, but the pattern contains #{argument_count(actual)}."),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{kind: :tuple_pattern, expected: expected, actual: actual}
     )
   end
 
@@ -1469,20 +1710,114 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   def from_error({:totality_required, name}, opts) do
+    spelling = name_to_string(name)
+
     Diagnostic.new(
       code: "E013",
       key: :totality_failure,
       severity: :error,
-      title: "Totality failure",
-      body: Doc.paragraph("`#{name}` must be total because it is used during type-level computation."),
-      primary: primary_label(opts, "make this definition structurally total"),
-      payload: %{name: name}
+      title: "Function must be total",
+      body:
+        Doc.paragraph(
+          "`#{spelling}` is evaluated while checking types, but the compiler cannot prove that every call to it terminates."
+        ),
+      primary: primary_label(opts, "this definition is used in a type and must always terminate"),
+      suggestions: [
+        %Suggestion{
+          message: "Make each recursive call use a structurally smaller argument, or keep this function out of types",
+          applicability: :manual
+        }
+      ],
+      notes: ["Runtime-only functions may remain partial; only compile-time computation requires a total definition."],
+      payload: %{name: name, checking: Keyword.get(opts, :checking)}
     )
   end
 
   def from_error({:compile_time_totality, name, reason}, opts) do
     diagnostic = from_error({:totality_required, name}, opts)
     %{diagnostic | payload: Map.put(diagnostic.payload, :reason, inspect(reason))}
+  end
+
+  def from_error({:pickup_no_else, details}, opts) when is_map(details) do
+    clauses = pickup_spans(details.clauses)
+    span = List.last(clauses) || details.pickup || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E076",
+      key: :pickup_missing_else,
+      severity: :error,
+      title: "Pickup needs a fallback",
+      body:
+        Doc.paragraph(
+          "A `pickup` must finish with a fallback branch so it has a result when no earlier condition is true."
+        ),
+      primary: pickup_label(span, :primary, "this is the final branch, but it is not a fallback"),
+      suggestions: [
+        %Suggestion{
+          message: "Add `else -> ...` after this branch, or change the final condition to `true`",
+          applicability: :manual
+        }
+      ],
+      payload: Map.put(details, :repair_alternatives, [:append_else_branch, :use_trailing_true])
+    )
+  end
+
+  def from_error({:pickup_else_not_last, details}, opts) when is_map(details) do
+    clauses = pickup_spans(details.clauses)
+    index = details.terminator_index
+    else_span = details.else_clauses |> Enum.find_value(fn {idx, span} -> if idx == index, do: span end)
+    primary_span = else_span || Enum.at(clauses, index) || Keyword.get(opts, :span)
+
+    secondary =
+      clauses
+      |> Enum.drop(index + 1)
+      |> Enum.map(&pickup_label(&1, :secondary, "this branch can never be reached after `else`"))
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E077",
+      key: :pickup_else_not_last,
+      severity: :error,
+      title: "Fallback branch is not last",
+      body: Doc.paragraph("An `else` branch matches every remaining case, so no branch may follow it."),
+      primary: pickup_label(primary_span, :primary, "this fallback matches everything that reaches it"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{message: "Move the `else` branch after every conditional branch", applicability: :manual}
+      ],
+      payload: details
+    )
+  end
+
+  def from_error({:pickup_multiple_else, details}, opts) when is_map(details) do
+    else_spans = details.else_clauses |> Enum.map(&elem(&1, 1)) |> pickup_spans()
+    primary_span = Enum.at(else_spans, 1) || List.first(else_spans) || Keyword.get(opts, :span)
+
+    secondary =
+      else_spans
+      |> List.delete_at(1)
+      |> Enum.map(&pickup_label(&1, :secondary, "another fallback branch is here"))
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E078",
+      key: :pickup_multiple_else,
+      severity: :error,
+      title: "Pickup has more than one fallback",
+      body:
+        Doc.paragraph(
+          "Only one `else` branch is allowed because the first fallback already matches every remaining case."
+        ),
+      primary: pickup_label(primary_span, :primary, "this second fallback is redundant"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Keep one `else` branch and remove or give conditions to the others",
+          applicability: :manual
+        }
+      ],
+      payload: details
+    )
   end
 
   def from_error({kind, message, meta}, opts)
@@ -1625,7 +1960,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(%SyntaxProblem{} = problem, opts) do
     span = problem.at || Keyword.get(opts, :span)
-    code = Map.get(problem.context, :code, "E094")
+    code = Map.get(problem.context, :code, syntax_problem_code(problem.kind))
 
     primary =
       if span do
@@ -1681,19 +2016,6 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:expected, expected, :got, actual, line, column}, opts) do
-    from_error(
-      %SyntaxProblem{
-        kind: :unexpected_token,
-        expected: expected,
-        observed: actual,
-        at: Keyword.get(opts, :span),
-        context: %{line: line, column: column}
-      },
-      opts
-    )
-  end
-
   def from_error({:expected, expected, :got, actual, line, column, %Span{} = span}, opts) do
     from_error(
       %SyntaxProblem{
@@ -1702,19 +2024,6 @@ defmodule Cure.Diagnostic.Adapter do
         observed: actual,
         at: Keyword.get(opts, :span, span),
         context: %{line: line, column: column}
-      },
-      opts
-    )
-  end
-
-  def from_error({:expected_token, expected, actual_type, actual_value, line, column}, opts) do
-    from_error(
-      %SyntaxProblem{
-        kind: :unexpected_token,
-        expected: expected,
-        observed: if(is_nil(actual_value), do: actual_type, else: actual_value),
-        at: Keyword.get(opts, :span),
-        context: %{line: line, column: column, token_type: actual_type}
       },
       opts
     )
@@ -1733,79 +2042,224 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:expected_literal_capture, shape, line, column}, opts),
-    do:
-      from_error(
-        %SyntaxProblem{
-          kind: :macro_literal_capture,
-          expected: shape,
-          observed: :non_literal,
-          at: Keyword.get(opts, :span),
-          context: %{line: line, column: column, code: "E094"}
-        },
-        opts
-      )
+  def from_error({:expected_literal_capture, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+    article = article_for_kind(details.shape)
 
-  def from_error({:unknown_syntax_family_field, family, field, line, column}, opts),
-    do:
-      macro_validation_failure(
-        :unknown_syntax_family_field,
-        %{family: family, field: field, line: line, column: column},
-        opts
-      )
+    Diagnostic.new(
+      code: "E094",
+      key: :macro_literal_capture,
+      severity: :error,
+      title: "Macro field needs a literal",
+      body:
+        Doc.paragraph(
+          "This syntax-family field accepts #{article} `#{details.shape}` literal, not an expression of another shape."
+        ),
+      primary: pickup_label(span, :primary, "this is not #{article} `#{details.shape}` literal"),
+      suggestions: [
+        %Suggestion{
+          message: "Replace this value with #{article} `#{details.shape}` literal",
+          applicability: :manual
+        }
+      ],
+      payload: details
+    )
+  end
 
-  def from_error({:missing_syntax_family_field, family, field, line, column}, opts),
-    do:
-      macro_validation_failure(
-        :missing_syntax_family_field,
-        %{family: family, field: field, line: line, column: column},
-        opts
-      )
+  def from_error({:unknown_syntax_family_field, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
 
-  def from_error({:unknown_macro_obligation_capture, capture, line, column}, opts),
-    do:
-      macro_validation_failure(:unknown_macro_obligation_capture, %{capture: capture, line: line, column: column}, opts)
+    Diagnostic.new(
+      code: "E092",
+      key: :unknown_syntax_family_field,
+      severity: :error,
+      title: "Unknown syntax-family field",
+      body: Doc.paragraph("`#{details.field}` is not a field of the `#{details.family}` syntax family."),
+      primary: pickup_label(span, :primary, "this field is not declared by the family"),
+      suggestions: syntax_family_field_suggestions(details, span),
+      payload: details
+    )
+  end
 
-  def from_error({:graded_let_requires_variable, grade, line, column}, opts),
-    do: contextual_type_failure(:graded_let_requires_variable, %{grade: grade, line: line, column: column}, opts)
+  def from_error({:missing_syntax_family_field, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
 
-  def from_error({:unknown_grade, grade, line, column}, opts),
-    do: contextual_type_failure(:unknown_grade, %{grade: grade, line: line, column: column}, opts)
+    Diagnostic.new(
+      code: "E092",
+      key: :missing_syntax_family_field,
+      severity: :error,
+      title: "Syntax-family field is missing",
+      body: Doc.paragraph("The `#{details.family}` syntax family requires a `#{details.field}` section here."),
+      primary: pickup_label(span, :primary, "add `#{details.field}` here"),
+      suggestions: [
+        %Suggestion{
+          message: "Add a `#{details.field} ...` section to this family body",
+          applicability: :manual
+        }
+      ],
+      payload: details
+    )
+  end
 
-  def from_error({:grade_requires_type, name, grade, line, column}, opts),
-    do: contextual_type_failure(:grade_requires_type, %{name: name, grade: grade, line: line, column: column}, opts)
+  def from_error({:unknown_macro_obligation_capture, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
 
-  def from_error({:unit_type_reserved, name}, opts),
-    do: macro_validation_failure(:unit_type_reserved, %{name: name}, opts)
+    Diagnostic.new(
+      code: "E092",
+      key: :unknown_macro_obligation_capture,
+      severity: :error,
+      title: "Unknown macro capture",
+      body:
+        Doc.paragraph(
+          "The `#{details.interface}` obligation refers to `#{details.capture}`, but this rule declares no capture with that name."
+        ),
+      primary: pickup_label(span, :primary, "this capture is not declared by the rule"),
+      suggestions: macro_capture_suggestions(details, span),
+      payload: details
+    )
+  end
 
-  def from_error({:unit_type_reserved, name, line, column}, opts),
-    do: macro_validation_failure(:unit_type_reserved, %{name: name, line: line, column: column}, opts)
+  def from_error({:graded_let_requires_variable, details}, opts) when is_map(details) do
+    pattern_span = Map.get(details, :pattern_span) || Keyword.get(opts, :span)
+    grade_span = Map.get(details, :grade_span)
 
-  def from_error({:duplicate_syntax_family_field, field, line, column}, opts),
-    do: macro_validation_failure(:duplicate_syntax_family_field, %{field: field, line: line, column: column}, opts)
+    secondary =
+      case pickup_label(grade_span, :secondary, "this grade applies to the binding") do
+        nil -> []
+        label -> [label]
+      end
 
-  def from_error({:non_associative, operator, :chained_with, next_operator, line, column}, opts),
+    Diagnostic.new(
+      code: "E093",
+      key: :graded_let_requires_variable,
+      severity: :error,
+      title: "Graded binding needs a variable",
+      body:
+        Doc.paragraph(
+          "A `#{details.grade}` grade controls one Core binder, but this pattern introduces multiple or destructured bindings."
+        ),
+      primary: pickup_label(pattern_span, :primary, "this pattern is not a single variable binding"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Bind the value to one graded variable, then destructure it in a separate `let`",
+          applicability: :manual
+        }
+      ],
+      payload: details
+    )
+  end
+
+  def from_error({:unknown_grade, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+    supported = Map.get(details, :supported, [:erased, :linear, :affine])
+    supported_text = Enum.map_join(supported, ", ", &"`:#{&1}`")
+
+    Diagnostic.new(
+      code: "E093",
+      key: :unknown_grade,
+      severity: :error,
+      title: "Unknown relevance grade",
+      body: Doc.paragraph("`:#{details.grade}` is not a relevance grade. Cure supports #{supported_text}."),
+      primary: pickup_label(span, :primary, "this grade is not defined"),
+      suggestions: grade_suggestions(details, span),
+      payload: details
+    )
+  end
+
+  def from_error({:grade_requires_type, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :grade_requires_type,
+      severity: :error,
+      title: "Graded parameter needs a type",
+      body:
+        Doc.paragraph(
+          "The `:#{details.grade}` grade on `#{details.name}` controls how a value may be used, but no value type follows it."
+        ),
+      primary: pickup_label(span, :primary, "add the parameter type after this grade"),
+      suggestions: [
+        %Suggestion{message: "Write `#{details.name} :#{details.grade} TypeName`", applicability: :manual}
+      ],
+      payload: details
+    )
+  end
+
+  def from_error({:unit_type_reserved, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case pickup_label(Map.get(details, :unit_span), :secondary, "this spelling denotes the built-in `Unit` type") do
+        nil -> []
+        label -> [label]
+      end
+
+    Diagnostic.new(
+      code: "E092",
+      key: :unit_type_reserved,
+      severity: :error,
+      title: "Unit syntax cannot define another type",
+      body: Doc.paragraph("`()` has exactly one type, `Unit`, so it cannot define the new type `#{details.name}`."),
+      primary: pickup_label(span, :primary, "this declaration must not reuse `Unit` syntax"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Give `#{details.name}` its own constructor, or rename the type to `Unit`",
+          applicability: :manual
+        }
+      ],
+      payload: details
+    )
+  end
+
+  def from_error({:duplicate_syntax_family_field, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case pickup_label(Map.get(details, :first_span), :secondary, "the field was first supplied here") do
+        nil -> []
+        label -> [label]
+      end
+
+    Diagnostic.new(
+      code: "E092",
+      key: :duplicate_syntax_family_field,
+      severity: :error,
+      title: "Syntax-family field is duplicated",
+      body: Doc.paragraph("The `#{details.field}` field may be supplied only once in this family body."),
+      primary: pickup_label(span, :primary, "this second `#{details.field}` field is redundant"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{message: "Keep one `#{details.field}` section", applicability: :manual}
+      ],
+      payload: details
+    )
+  end
+
+  def from_error({:non_associative, details}, opts) when is_map(details),
     do:
       from_error(
         %SyntaxProblem{
           kind: :non_associative,
-          expected: :parentheses,
-          observed: next_operator,
-          at: Keyword.get(opts, :span),
-          context: %{line: line, column: column, operator: operator}
+          observed: details.next_operator,
+          at: Map.get(details, :span) || Keyword.get(opts, :span),
+          previous: Map.get(details, :operator_span),
+          context: details
         },
         opts
       )
 
-  def from_error({:ambiguous_precedence, left_group, right_group, line, column}, opts),
+  def from_error({:ambiguous_precedence, details}, opts) when is_map(details),
     do:
       from_error(
         %SyntaxProblem{
           kind: :ambiguous_precedence,
-          expected: :parentheses,
-          observed: right_group,
-          at: Keyword.get(opts, :span),
-          context: %{line: line, column: column, left_group: left_group}
+          observed: details.operator,
+          at: Map.get(details, :span) || Keyword.get(opts, :span),
+          previous: Map.get(details, :operator_span),
+          context: details
         },
         opts
       )
@@ -1834,38 +2288,27 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:with_multi_inconsistent_pattern, message, meta}, opts),
     do: contextual_type_failure(:with_multi_inconsistent_pattern, %{message: message, meta: meta}, opts)
 
-  def from_error({:unexpected_token, actual, line, column}, opts) do
+  def from_error({:unexpected_token, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
         kind: :unexpected_token,
-        observed: actual,
-        at: Keyword.get(opts, :span),
-        context: %{line: line, column: column}
+        observed: details.observed,
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        context: details
       },
       opts
     )
   end
 
-  def from_error({:parse_recovered, actual, line, column}, opts) do
-    from_error(
-      %SyntaxProblem{
-        kind: :recovered_statement,
-        observed: actual,
-        at: Keyword.get(opts, :span),
-        context: %{line: line, column: column, code: "E063"}
-      },
-      opts
-    )
-  end
-
-  def from_error({:lambda_block_unterminated, line, column, code}, opts) do
+  def from_error({:lambda_block_unterminated, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
         kind: :unterminated_lambda,
-        expected: :rbrace,
-        observed: :eof,
-        at: Keyword.get(opts, :span),
-        context: %{line: line, column: column, code: code}
+        expected: Map.get(details, :expected, :end),
+        observed: Map.get(details, :observed, :eof),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        context: details
       },
       opts
     )
@@ -1873,30 +2316,118 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:lex_error, reason}, opts), do: from_error(lex_problem(reason, opts), opts)
 
-  def from_error({:macro_use_mismatch, keyword, expected, got, _line, _column}, opts) do
+  def from_error({:macro_use_mismatch, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
         kind: :macro_use_mismatch,
-        expected: expected,
-        observed: got,
-        at: Keyword.get(opts, :span),
+        expected: details.expected,
+        observed: details.got,
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :invocation_span),
+        within: Map.get(details, :definition_span),
         alternatives: [],
-        context: %{keyword: keyword}
+        context: details
       },
       opts
     )
   end
 
-  def from_error({:malformed_hole, _line, _column}, opts) do
-    from_error(
-      %SyntaxProblem{
-        kind: :malformed_macro_hole,
-        expected: :macro_hole,
-        observed: :eof,
-        at: Keyword.get(opts, :span),
-        context: %{repair: "<name: Kind>"}
-      },
-      opts
+  def from_error({:malformed_hole, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case pickup_label(Map.get(details, :opener_span), :secondary, "the macro hole starts here") do
+        nil -> []
+        label -> [label]
+      end
+
+    suggestions =
+      case insertion_before(span) do
+        %Span{} = insertion ->
+          [
+            %Suggestion{
+              message: "Insert `>` to close the macro hole",
+              applicability: :machine_applicable,
+              edits: [%TextEdit{span: insertion, replacement: ">"}]
+            }
+          ]
+
+        _ ->
+          [%Suggestion{message: "Write the hole as `<name: Kind>`", applicability: :manual}]
+      end
+
+    Diagnostic.new(
+      code: "E094",
+      key: :malformed_macro_hole,
+      severity: :error,
+      title: "Macro hole is not closed",
+      body:
+        Doc.paragraph(
+          "A typed macro hole has the form `<name: Kind>`. The closing `>` is missing before #{syntax_name(details.observed)}."
+        ),
+      primary: pickup_label(span, :primary, "expected `>` before this token"),
+      secondary: secondary,
+      suggestions: suggestions,
+      payload: details
+    )
+  end
+
+  def from_error({:edition_pragma_placement, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E094",
+      key: :edition_pragma_placement,
+      severity: :error,
+      title: "Edition pragma is too late",
+      body:
+        Doc.paragraph(
+          "`@edition(...)` selects how the entire file is read, so it must be the first non-comment item in the file."
+        ),
+      primary: pickup_label(span, :primary, "the edition cannot change after parsing has started"),
+      suggestions: [
+        %Suggestion{message: "Move this pragma above every declaration and decorator", applicability: :manual}
+      ],
+      payload: details
+    )
+  end
+
+  def from_error({:edition_pragma_malformed, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E094",
+      key: :edition_pragma_malformed,
+      severity: :error,
+      title: "Malformed edition pragma",
+      body:
+        Doc.paragraph(
+          "An edition pragma must use the single-line form `@edition(\"YYYY\")` with exactly one four-digit string."
+        ),
+      primary: pickup_label(span, :primary, "this is not a valid edition argument"),
+      suggestions: edition_replacement_suggestion(details),
+      payload: details
+    )
+  end
+
+  def from_error({:edition_pragma_unknown, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+    observed = Map.get(details, :observed)
+    known = Map.get(details, :known_editions, Cure.Edition.all())
+    supported = Enum.map_join(known, ", ", &"`#{&1}`")
+
+    Diagnostic.new(
+      code: "E094",
+      key: :edition_pragma_unknown,
+      severity: :error,
+      title: "Unknown edition",
+      body:
+        Doc.paragraph(
+          "`#{name_to_string(observed)}` is not a supported Cure edition. This compiler supports #{supported}."
+        ),
+      primary: pickup_label(span, :primary, "this edition is not available"),
+      suggestions: edition_replacement_suggestion(details),
+      payload: details
     )
   end
 
@@ -1928,6 +2459,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:computed_macro_error, meta, reason}, opts) when is_list(meta) do
     keyword = Keyword.get(meta, :keyword, "computed")
+    payload = %{keyword: keyword, reason: inspect(reason)} |> maybe_put_meta_location(meta)
 
     Diagnostic.new(
       code: "E092",
@@ -1941,14 +2473,32 @@ defmodule Cure.Diagnostic.Adapter do
       primary: primary_label(opts, "this macro invocation generated the failing syntax"),
       notes: ["Edit the authored macro invocation or its rule; generated syntax is not the user-facing source."],
       provenance: Keyword.get(opts, :provenance, []),
-      payload: %{keyword: keyword, reason: inspect(reason)}
+      payload: payload
     )
   end
 
-  def from_error({:invalid_macro_family, reason, line, column}, opts)
-      when is_integer(line) and is_integer(column) do
-    diagnostic = macro_validation_failure(:invalid_macro_family, reason, opts)
-    %{diagnostic | payload: Map.merge(diagnostic.payload, %{line: line, column: column})}
+  def from_error({:invalid_macro_family, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      details
+      |> Map.get(:related_spans, [])
+      |> Enum.map(&pickup_label(&1, :secondary, macro_family_related_label(details.reason)))
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :invalid_macro_family,
+      severity: :error,
+      title: macro_family_title(details.reason),
+      body: Doc.paragraph(macro_family_body(details.reason)),
+      primary: pickup_label(span, :primary, macro_family_primary_label(details.reason)),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{message: macro_family_hint(details.reason), applicability: :manual}
+      ],
+      payload: details
+    )
   end
 
   def from_error({:macro_expansion_cycle, chain}, opts) when is_list(chain) do
@@ -2031,7 +2581,7 @@ defmodule Cure.Diagnostic.Adapter do
           title: "#{macro_title(macro)} expansion failed",
           message: macro_failure_message(macro, details.module, cause_diagnostic),
           primary: primary_label(opts, "this `#{macro}` declaration generated the failing module"),
-          notes: ["The generated module is an implementation detail; edit the authored `#{macro}` declaration instead."],
+          notes: ["The generated module is an implementation detail; edit the `#{macro}` declaration instead."],
           provenance: provenance_frames(details, opts),
           payload: %{
             macro: name_to_string(macro),
@@ -2072,6 +2622,21 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{first: first, second: second}, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp argument_count(1), do: "1 argument"
+  defp argument_count(count) when is_integer(count), do: "#{count} arguments"
+  defp argument_count(_count), do: "a different number of arguments"
+
+  defp constructor_arity_label(expected, actual)
+       when is_integer(expected) and is_integer(actual) and actual < expected,
+       do: "add #{argument_count(expected - actual)} to this constructor call"
+
+  defp constructor_arity_label(expected, actual)
+       when is_integer(expected) and is_integer(actual) and actual > expected,
+       do: "remove #{argument_count(actual - expected)} from this constructor call"
+
+  defp constructor_arity_label(_expected, _actual),
+    do: "provide the arguments required by this constructor"
 
   # Generated OTP callbacks still represent authored family sections. Preserve
   # a real type relation at that boundary instead of presenting it as E092.
@@ -2152,7 +2717,7 @@ defmodule Cure.Diagnostic.Adapter do
         expected: expected,
         origin: %ExpectationOrigin{
           kind: origin,
-          span: Keyword.get(opts, :span, Map.get(context, :expectation_span)),
+          span: Map.get(context, :expectation_span),
           owner: Map.get(context, :checking),
           index: Map.get(context, :argument_index)
         },
@@ -2224,6 +2789,14 @@ defmodule Cure.Diagnostic.Adapter do
      "The generated BEAM artifact was rejected by the BEAM validator (#{length(errors)} error(s)).", :beam_lint}
   end
 
+  defp codegen_failure_content({:missing_stdlib_module, module, message}) do
+    module_name = name_to_string(module)
+
+    {"Stdlib module resolution failed",
+     "The compiler could not resolve `#{module_name}` while generating the BEAM artifact. #{message}",
+     :missing_stdlib_module}
+  end
+
   defp codegen_failure_content(_reason) do
     {"Code generation failed", "The compiler could not produce a valid BEAM artifact for this source.", :codegen}
   end
@@ -2264,8 +2837,17 @@ defmodule Cure.Diagnostic.Adapter do
       title: "Erasure violation",
       body: Doc.paragraph(body),
       primary: primary_label(opts, "this erasure declaration is invalid"),
+      suggestions: erasure_suggestions(kind),
       payload: Map.put(details, :kind, kind)
     )
+  end
+
+  defp erasure_suggestions(:unknown_erasure_class) do
+    [%Suggestion{message: "Choose one of #{known_erasure_classes_hint()}", applicability: :manual}]
+  end
+
+  defp erasure_suggestions(:erases_on_non_opaque) do
+    [%Suggestion{message: "Remove `@erases`, or make this a constructor-less `opaque type`", applicability: :manual}]
   end
 
   defp declaration_conflict(kind, details, opts) do
@@ -2289,16 +2871,66 @@ defmodule Cure.Diagnostic.Adapter do
           ""
       end
 
+    spans = Map.get(details, :spans, [])
+    {primary, secondary} = conflict_labels(spans, opts, kind)
+
     Diagnostic.new(
       code: "E105",
       key: :declaration_conflict,
       severity: :error,
-      title: "Declaration conflict",
-      body: Doc.paragraph("The declaration `#{name}` conflicts with another visible declaration#{detail}."),
-      primary: primary_label(opts, "rename this declaration or make its identity unique"),
+      title: declaration_conflict_title(kind),
+      body: Doc.paragraph(declaration_conflict_message(kind, name, detail)),
+      primary: primary,
+      secondary: secondary,
       payload: Map.put(details, :kind, kind)
     )
   end
+
+  defp conflict_labels([first, second | rest], _opts, kind) do
+    primary = %Label{span: second, style: :primary, message: duplicate_primary_label(kind)}
+
+    secondary =
+      [%Label{span: first, style: :secondary, message: "the name was first declared here"}] ++
+        Enum.map(rest, &%Label{span: &1, style: :secondary, message: "another duplicate is here"})
+
+    {primary, secondary}
+  end
+
+  defp conflict_labels(_spans, opts, kind),
+    do: {primary_label(opts, duplicate_primary_label(kind)), []}
+
+  defp declaration_conflict_title(:duplicate_parameter), do: "Duplicate parameter"
+  defp declaration_conflict_title(:duplicate_field), do: "Duplicate field"
+  defp declaration_conflict_title(:duplicate_index), do: "Duplicate index"
+  defp declaration_conflict_title(:duplicate_type), do: "Duplicate type declaration"
+  defp declaration_conflict_title(:duplicate_constructor), do: "Duplicate constructor"
+  defp declaration_conflict_title(_kind), do: "Declaration conflict"
+
+  defp declaration_conflict_message(:duplicate_parameter, name, _detail),
+    do:
+      "The parameter `#{name}` is declared more than once. Rename or remove one occurrence so every parameter has a unique name."
+
+  defp declaration_conflict_message(:duplicate_field, name, _detail),
+    do:
+      "The field `#{name}` is declared more than once. Rename or remove one occurrence so every record field has a unique name."
+
+  defp declaration_conflict_message(:duplicate_type, name, _detail),
+    do:
+      "The type `#{name}` is declared more than once in this module. Rename or remove one declaration so the type has a unique identity."
+
+  defp declaration_conflict_message(:duplicate_constructor, name, _detail),
+    do:
+      "The constructor `#{name}` is declared more than once in this module. Rename or remove one declaration so pattern matching stays unambiguous."
+
+  defp declaration_conflict_message(_kind, name, detail),
+    do: "The declaration `#{name}` conflicts with another visible declaration#{detail}."
+
+  defp duplicate_primary_label(:duplicate_parameter), do: "this parameter repeats an earlier name"
+  defp duplicate_primary_label(:duplicate_field), do: "this field repeats an earlier name"
+  defp duplicate_primary_label(:duplicate_index), do: "this index repeats an earlier name"
+  defp duplicate_primary_label(:duplicate_type), do: "this type repeats an earlier declaration"
+  defp duplicate_primary_label(:duplicate_constructor), do: "this constructor repeats an earlier declaration"
+  defp duplicate_primary_label(_kind), do: "rename this declaration or make its identity unique"
 
   defp interface_failure(kind, details, opts) do
     {title, message, label} =
@@ -2409,25 +3041,59 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp operator_conflict(kind, details, opts) do
-    body =
+    {title, body, primary_message, secondary_message} =
       case kind do
         :precedence_cycle ->
-          "The operator precedence declarations contain a cycle among #{Enum.map_join(details.groups, ", ", &name_to_string/1)}."
+          {"Cyclic operator precedence",
+           "The precedence groups #{Enum.map_join(details.groups, ", ", &"`#{name_to_string(&1)}`")} form a cycle, so the compiler cannot decide which operators bind tighter. Remove or reverse one `higher_than`/`lower_than` relation to break the cycle.",
+           "this precedence group participates in the cycle", "this precedence group also participates in the cycle"}
+
+        :conflicting_operator_fixity ->
+          {"Conflicting operator fixity",
+           "The #{details.fixity} operator `#{details.operator}` is assigned to both `#{name_to_string(details.existing_group)}` and `#{name_to_string(details.new_group)}`. Keep one precedence group for this operator, or choose a different operator spelling.",
+           "this declaration assigns `#{details.operator}` to `#{name_to_string(details.new_group)}`",
+           "the conflicting assignment is here"}
+
+        :conflicting_precedence_group ->
+          {"Conflicting precedence group",
+           "The precedence group `#{name_to_string(details.name)}` is declared with incompatible associativity or ordering rules. Give the declarations identical bodies, or rename one group.",
+           "this declaration conflicts with the earlier group", "the incompatible group declaration is here"}
 
         :builtin_operator_not_overloadable ->
-          "The built-in operator `#{details.operator}` cannot be overloaded."
+          {"Operator declaration conflict", "The built-in operator `#{details.operator}` cannot be overloaded.",
+           "adjust this operator declaration", nil}
       end
+
+    {primary, secondary} =
+      operator_conflict_labels(Map.get(details, :spans, []), opts, primary_message, secondary_message)
 
     Diagnostic.new(
       code: "E106",
       key: :operator_declaration_conflict,
       severity: :error,
-      title: "Operator declaration conflict",
+      title: title,
       body: Doc.paragraph(body),
-      primary: primary_label(opts, "adjust this operator declaration"),
+      primary: primary,
+      secondary: secondary,
       payload: Map.put(details, :kind, kind)
     )
   end
+
+  defp operator_conflict_labels([first, second | rest], _opts, primary_message, secondary_message) do
+    primary = %Label{span: second, style: :primary, message: primary_message}
+
+    secondary =
+      [%Label{span: first, style: :secondary, message: secondary_message}] ++
+        Enum.map(rest, &%Label{span: &1, style: :secondary, message: secondary_message})
+
+    {primary, secondary}
+  end
+
+  defp operator_conflict_labels([span], _opts, primary_message, _secondary_message),
+    do: {%Label{span: span, style: :primary, message: primary_message}, []}
+
+  defp operator_conflict_labels([], opts, primary_message, _secondary_message),
+    do: {primary_label(opts, primary_message), []}
 
   defp coverage_problem(kind, branch, context, opts) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
@@ -2666,7 +3332,7 @@ defmodule Cure.Diagnostic.Adapter do
           end
       end
 
-    labels =
+    branch_labels =
       Enum.map(branches, fn branch ->
         span = branch_span(branch)
         name = branch_name(branch)
@@ -2676,15 +3342,28 @@ defmodule Cure.Diagnostic.Adapter do
             do: "possible outlier: this branch has the incompatible type",
             else: "compare this branch with the declared result"
 
-        %Label{span: span, style: :primary, message: message}
+        %{span: span, name: name, message: message}
       end)
       |> Enum.reject(&is_nil(&1.span))
       |> Enum.sort_by(fn label -> if String.starts_with?(label.message || "", "possible outlier"), do: 0, else: 1 end)
 
     {primary, secondary} =
-      case labels do
-        [first | rest] -> {first, rest}
-        [] -> {primary_label(opts, "make these branches return the same type"), []}
+      case branch_labels do
+        [] ->
+          {primary_label(opts, "make these branches return the same type"), []}
+
+        labels ->
+          {outliers, comparisons} = Enum.split_with(labels, &same_branch?(&1.name, failing))
+          [chosen | rest] = if outliers == [], do: labels, else: outliers ++ comparisons
+
+          primary = %Label{span: chosen.span, style: :primary, message: chosen.message}
+
+          secondary =
+            Enum.map(rest, fn label ->
+              %Label{span: label.span, style: :secondary, message: label.message}
+            end)
+
+          {primary, secondary}
       end
 
     dependent? = Map.get(context, :expectation_origin) == :dependent_branch
@@ -3011,6 +3690,33 @@ defmodule Cure.Diagnostic.Adapter do
            "Multiple-scrutinee `with` arms must use structurally consistent outer patterns.",
            "make the outer patterns agree or split the match"}
 
+        :bounded_family_unregistered ->
+          {"Bounded type family is not registered",
+           "This bounded type family is not available in the current checking environment.",
+           "declare or import the bounded family before using it"}
+
+        :absurd_in_reachable_position ->
+          {"Absurd branch is reachable", "This branch claims an impossible value, but the scrutinee can reach it.",
+           "refine the index or handle the reachable constructor"}
+
+        :opaque_not_eliminable ->
+          {"Opaque value cannot be eliminated",
+           "This opaque value cannot be inspected in the current checking context.",
+           "use its public interface instead of matching on its representation"}
+
+        :case_scrutinee_not_data ->
+          {"Case scrutinee is not data", "This case expression scrutinizes a value without data constructors.",
+           "match a data-valued expression"}
+
+        :not_total ->
+          {"Definition is not total",
+           "This definition does not cover every input or does not terminate by the required measure.",
+           "add the missing cases or provide a decreasing recursive argument"}
+
+        :not_a_function ->
+          {"Application target is not callable", "This value is used as a function, but its type is not callable.",
+           "apply a function or constructor value"}
+
         :branch_arity ->
           {"Pattern branch has the wrong arity",
            "A pattern branch does not bind the number of values required by the matched constructor.",
@@ -3026,8 +3732,7 @@ defmodule Cure.Diagnostic.Adapter do
            "supply exactly the declared indices"}
 
         _ ->
-          {"Elaboration failed", "This expression or declaration is not valid in the current checking context.",
-           "change the source construct or add an annotation"}
+          contextual_type_fallback(kind, opts)
       end
 
     Diagnostic.new(
@@ -3039,6 +3744,42 @@ defmodule Cure.Diagnostic.Adapter do
       primary: primary_label(opts, label),
       payload: Map.put(details, :kind, kind)
     )
+  end
+
+  defp contextual_type_fallback(_kind, opts) do
+    checking = Keyword.get(opts, :checking)
+    origin = Keyword.get(opts, :expectation_origin)
+
+    context_suffix =
+      case checking do
+        nil -> ""
+        checking -> " while checking `#{name_to_string(checking)}`"
+      end
+
+    {title, message, label} =
+      case origin do
+        :annotation ->
+          {"Expression does not match its annotation",
+           "This expression does not satisfy the type required by its annotation#{context_suffix}.",
+           "change the expression or its annotation"}
+
+        :branch ->
+          {"Branches have different types",
+           "The branches of this match do not produce one compatible type#{context_suffix}.",
+           "make the branches produce the same type"}
+
+        :condition ->
+          {"Condition has the wrong type",
+           "This condition does not produce the type required by the conditional expression#{context_suffix}.",
+           "make the condition produce `Bool`"}
+
+        _ ->
+          {"Cannot determine this expression's type",
+           "Cure could not determine a valid type for this expression in its current checking context#{context_suffix}.",
+           "add an annotation or revise this expression"}
+      end
+
+    {title, message, label}
   end
 
   defp ambiguous_member(method, interfaces, opts) do
@@ -3125,6 +3866,45 @@ defmodule Cure.Diagnostic.Adapter do
   defp macro_validation_message(kind, _details),
     do: "Macro validation failed for #{name_to_string(kind)}."
 
+  defp macro_family_title({:unknown_syntax_family, _name}), do: "Included syntax family is unknown"
+  defp macro_family_title({:syntax_family_cycle, _names}), do: "Syntax families form a cycle"
+  defp macro_family_title({:duplicate_syntax_family_field, _pairs}), do: "Syntax-family field is duplicated"
+  defp macro_family_title(_reason), do: "Syntax-family declaration is invalid"
+
+  defp macro_family_body({:unknown_syntax_family, name}),
+    do: "`#{name}` is included here, but this macro does not declare a syntax family with that name."
+
+  defp macro_family_body({:syntax_family_cycle, names}),
+    do: "These syntax families include one another in a cycle: #{Enum.map_join(names, " → ", &to_string/1)}."
+
+  defp macro_family_body({:duplicate_syntax_family_field, pairs}) do
+    fields = Enum.map_join(pairs, ", ", fn {family, field} -> "`#{family}.#{field}`" end)
+    "The same field is declared more than once: #{fields}."
+  end
+
+  defp macro_family_body(reason),
+    do: "The syntax-family declarations are inconsistent: #{name_to_string(reason)}."
+
+  defp macro_family_primary_label({:unknown_syntax_family, _name}), do: "this included family is not declared"
+  defp macro_family_primary_label({:syntax_family_cycle, _names}), do: "the inclusion cycle starts here"
+  defp macro_family_primary_label({:duplicate_syntax_family_field, _pairs}), do: "this field is declared again"
+  defp macro_family_primary_label(_reason), do: "this macro family is inconsistent"
+
+  defp macro_family_related_label({:syntax_family_cycle, _names}), do: "this family also participates in the cycle"
+  defp macro_family_related_label({:duplicate_syntax_family_field, _pairs}), do: "the field was already declared here"
+  defp macro_family_related_label(_reason), do: "related family declaration"
+
+  defp macro_family_hint({:unknown_syntax_family, name}),
+    do: "Declare `syntax family #{name}` or change `includes` to a declared family"
+
+  defp macro_family_hint({:syntax_family_cycle, _names}),
+    do: "Remove one `includes` edge so the family graph is acyclic"
+
+  defp macro_family_hint({:duplicate_syntax_family_field, _pairs}),
+    do: "Keep one declaration of the field"
+
+  defp macro_family_hint(_reason), do: "Make the syntax-family declarations consistent"
+
   defp macro_failure_points(points) do
     Enum.map_join(points, ", ", fn
       {:failure, name} -> "author failure `#{name}`"
@@ -3164,7 +3944,7 @@ defmodule Cure.Diagnostic.Adapter do
       message: "`#{Keyword.get(opts, :display_name, spelling)}` is not available in this #{namespace} namespace.",
       primary: primary_label(opts, "`#{spelling}` was not found"),
       notes: Keyword.get(opts, :notes, []),
-      suggestions: candidate_suggestions(candidate_details),
+      suggestions: candidate_suggestions(candidate_details, spelling, opts),
       provenance: Keyword.get(opts, :provenance, []),
       payload: %{
         namespace: namespace,
@@ -3500,18 +4280,206 @@ defmodule Cure.Diagnostic.Adapter do
     end)
   end
 
-  defp candidate_suggestions([]), do: []
+  defp pickup_spans(spans), do: Enum.filter(spans, &match?(%Span{}, &1))
 
-  defp candidate_suggestions(candidates) do
-    names = Enum.map(candidates, &suggestion_name/1)
+  defp pickup_label(%Span{} = span, style, message), do: %Label{span: span, style: style, message: message}
+  defp pickup_label(_, _style, _message), do: nil
 
+  defp edition_replacement_suggestion(%{
+         argument_span: %Span{} = span,
+         known_editions: [edition],
+         single_line: true
+       }) do
     [
       %Suggestion{
-        message: "Did you mean #{Enum.map_join(names, ", ", &"`#{&1}`")}?",
-        applicability: :maybe_incorrect
+        message: "Use the supported edition `#{edition}`",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: inspect(edition)}]
       }
     ]
   end
+
+  defp edition_replacement_suggestion(%{known_editions: editions}) when is_list(editions) do
+    [
+      %Suggestion{
+        message: "Use one of the supported editions: #{Enum.map_join(editions, ", ", &"`#{&1}`")}",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp edition_replacement_suggestion(_details), do: []
+
+  defp grade_suggestions(%{grade: grade, supported: supported}, %Span{} = span) do
+    spelling = to_string(grade)
+
+    ranked =
+      supported
+      |> Enum.map(&{&1, Suggest.distance(spelling, to_string(&1))})
+      |> Enum.sort_by(fn {candidate, distance} -> {distance, to_string(candidate)} end)
+
+    case ranked do
+      [{candidate, distance}, {_other, next_distance} | _] when distance <= 2 and distance < next_distance ->
+        [
+          %Suggestion{
+            message: "Replace it with `:#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: ":#{candidate}"}]
+          }
+        ]
+
+      [{candidate, distance}] when distance <= 2 ->
+        [
+          %Suggestion{
+            message: "Replace it with `:#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: ":#{candidate}"}]
+          }
+        ]
+
+      _ ->
+        [
+          %Suggestion{
+            message: "Use `:erased`, `:linear`, `:affine`, or omit the grade for unrestricted use",
+            applicability: :manual
+          }
+        ]
+    end
+  end
+
+  defp grade_suggestions(_details, _span), do: []
+
+  defp syntax_family_field_suggestions(%{field: field, valid_fields: fields}, %Span{} = span)
+       when is_list(fields) do
+    spelling = to_string(field)
+
+    ranked =
+      fields
+      |> Enum.map(&{to_string(&1), Suggest.distance(spelling, to_string(&1))})
+      |> Enum.sort_by(fn {candidate, distance} -> {distance, String.downcase(candidate), candidate} end)
+
+    case ranked do
+      [{candidate, distance}, {_other, next_distance} | _]
+      when distance <= 2 and distance < next_distance ->
+        [
+          %Suggestion{
+            message: "Replace it with `#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: candidate}]
+          }
+        ]
+
+      [{candidate, distance}] when distance <= 2 ->
+        [
+          %Suggestion{
+            message: "Replace it with `#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: candidate}]
+          }
+        ]
+
+      _ ->
+        [
+          %Suggestion{
+            message: "Use one of: #{Enum.map_join(fields, ", ", &"`#{&1}`")}",
+            applicability: :manual
+          }
+        ]
+    end
+  end
+
+  defp syntax_family_field_suggestions(_details, _span), do: []
+
+  defp macro_capture_suggestions(%{capture: capture, available_captures: captures}, %Span{} = span)
+       when is_list(captures) do
+    spelling = to_string(capture)
+
+    ranked =
+      captures
+      |> Enum.map(&{to_string(&1), Suggest.distance(spelling, to_string(&1))})
+      |> Enum.sort_by(fn {candidate, distance} -> {distance, String.downcase(candidate), candidate} end)
+
+    case ranked do
+      [{candidate, distance}, {_other, next_distance} | _]
+      when distance <= 2 and distance < next_distance ->
+        [
+          %Suggestion{
+            message: "Replace it with the declared capture `#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: candidate}]
+          }
+        ]
+
+      [{candidate, distance}] when distance <= 2 ->
+        [
+          %Suggestion{
+            message: "Replace it with the declared capture `#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: candidate}]
+          }
+        ]
+
+      _ ->
+        [
+          %Suggestion{
+            message: "Refer to one of this rule's captures: #{Enum.map_join(captures, ", ", &"`#{&1}`")}",
+            applicability: :manual
+          }
+        ]
+    end
+  end
+
+  defp macro_capture_suggestions(_details, _span), do: []
+
+  defp insertion_before(%Span{} = span) do
+    %{
+      span
+      | end_byte: span.start_byte,
+        end_line: span.start_line,
+        end_column: span.start_column
+    }
+  end
+
+  defp insertion_before(_span), do: nil
+
+  defp candidate_suggestions([], _spelling, _opts), do: []
+
+  defp candidate_suggestions(candidates, spelling, opts) do
+    names = Enum.map(candidates, &suggestion_name/1)
+
+    qualification_hint =
+      if Enum.any?(candidates, &requires_qualification?/1), do: " Qualify it or import its module.", else: ""
+
+    {applicability, edits} = unique_name_repair(candidates, spelling, opts)
+
+    [
+      %Suggestion{
+        message: "Did you mean #{Enum.map_join(names, ", ", &"`#{&1}`")}?#{qualification_hint}",
+        applicability: applicability,
+        edits: edits
+      }
+    ]
+  end
+
+  defp unique_name_repair(
+         [%{name: replacement, imported: imported, requires_import: requires_import}],
+         spelling,
+         opts
+       ) do
+    case Keyword.get(opts, :span) do
+      %Span{} = span when imported != false and requires_import != true and replacement != spelling ->
+        {:machine_applicable, [%TextEdit{span: span, replacement: replacement}]}
+
+      _ ->
+        {:maybe_incorrect, []}
+    end
+  end
+
+  defp unique_name_repair(_candidates, _spelling, _opts), do: {:maybe_incorrect, []}
+
+  defp requires_qualification?(%{imported: false}), do: true
+  defp requires_qualification?(%{requires_import: true}), do: true
+  defp requires_qualification?(_candidate), do: false
 
   defp rank_candidates(candidates, spelling, namespace, opts) do
     Suggest.rank(candidates, spelling, namespace, opts)
@@ -3521,6 +4489,54 @@ defmodule Cure.Diagnostic.Adapter do
     do: "#{name_to_string(owner)}.#{name}"
 
   defp suggestion_name(%{name: name}), do: name
+
+  defp record_field_candidates(nil, _declared, _record), do: []
+
+  defp record_field_candidates(field, declared, record) do
+    candidates =
+      Enum.map(declared, fn name ->
+        %{
+          id: {record, name},
+          name: name_to_string(name),
+          namespace: :field,
+          owner: record,
+          visibility: :public,
+          imported: true,
+          origin: :record_shape
+        }
+      end)
+
+    Suggest.rank(candidates, name_to_string(field), :field)
+  end
+
+  defp record_field_suggestions(field, [%{name: candidate} = first | rest], %Span{} = span) do
+    unique? =
+      Enum.all?(rest, fn other ->
+        Suggest.distance(name_to_string(field), first.name) <
+          Suggest.distance(name_to_string(field), other.name)
+      end)
+
+    if unique? do
+      [
+        %Suggestion{
+          message: "Replace it with `#{candidate}`",
+          applicability: :machine_applicable,
+          edits: [%TextEdit{span: span, replacement: candidate}]
+        }
+      ]
+    else
+      []
+    end
+  end
+
+  defp record_field_suggestions(_field, _candidates, _span), do: []
+
+  defp field_list([field]), do: "`#{name_to_string(field)}`"
+
+  defp field_list(fields) do
+    fields
+    |> Enum.map_join(", ", &"`#{name_to_string(&1)}`")
+  end
 
   defp namespace_title(:value), do: "value"
   defp namespace_title(:constructor), do: "constructor"
@@ -3558,7 +4574,12 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_title(%ExpectationOrigin{kind: :operator_operand}), do: "Operator cannot use this value"
   defp type_problem_title(_origin), do: "Type mismatch"
 
+  defp syntax_problem_code(:unterminated_lambda), do: "E035"
+  defp syntax_problem_code(:unrecognized_pattern), do: "E090"
+  defp syntax_problem_code(_kind), do: "E094"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_lambda}), do: "Lambda body is not closed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unrecognized_pattern}), do: "Pattern is not supported"
   defp syntax_problem_title(%SyntaxProblem{kind: :tab_not_allowed}), do: "Tabs are not valid indentation"
   defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_string}), do: "String is not closed"
   defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_char}), do: "Character is not closed"
@@ -3575,11 +4596,18 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_placement}), do: "Edition pragma is misplaced"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_malformed}), do: "Edition pragma is malformed"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_unknown}), do: "Edition is unknown"
-  defp syntax_problem_title(%SyntaxProblem{kind: :recovered_statement}), do: "Invalid statement"
+  defp syntax_problem_title(%SyntaxProblem{expected: :explain_point}), do: "Explanation clause needs a failure point"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
   defp syntax_problem_context(%SyntaxProblem{kind: :unterminated_lambda}),
     do: "This multi-statement lambda body reaches the end of its container without a closing delimiter."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unrecognized_pattern, observed: :range}),
+    do:
+      "A range describes many values, but a pattern must describe a shape Cure can deconstruct. Bind the value and test the range in a guard instead."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unrecognized_pattern, observed: observed}),
+    do: "#{String.capitalize(syntax_name(observed))} is not a pattern form Cure can deconstruct here."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :tab_not_allowed}),
     do: "Cure indentation uses spaces so that block structure is the same in every editor."
@@ -3612,14 +4640,14 @@ defmodule Cure.Diagnostic.Adapter do
          observed: observed
        }) do
     "The `#{keyword}` macro invocation does not match its declared syntax. " <>
-      macro_expectation(expected, observed)
+      capitalize_sentence(macro_expectation(expected, observed))
   end
 
   defp syntax_problem_context(%SyntaxProblem{kind: :macro_literal_capture, expected: expected}),
     do: "This macro capture must match the literal shape `#{syntax_name(expected)}`."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :non_associative, context: %{operator: operator}}),
-    do: "The `#{syntax_name(operator)}` operator cannot be chained without parentheses."
+    do: "The #{syntax_name(operator)} operator cannot be chained without parentheses."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :ambiguous_precedence}),
     do: "These operators have no declared relative precedence; add parentheses to choose the grouping."
@@ -3638,9 +4666,9 @@ defmodule Cure.Diagnostic.Adapter do
       "Unknown edition: this edition is not supported by the current compiler. " <>
         "Use one of: #{Enum.join(Cure.Edition.all(), ", ")}."
 
-  defp syntax_problem_context(%SyntaxProblem{kind: :recovered_statement, observed: observed}),
+  defp syntax_problem_context(%SyntaxProblem{expected: :explain_point, observed: observed}),
     do:
-      "The parser could not continue this statement after #{syntax_name(observed)}, so it resumed at the next statement boundary."
+      "#{String.capitalize(syntax_name(observed))} starts an explanation message, but each clause must first name a failure category or `keyword \"...\"`."
 
   defp syntax_problem_context(%SyntaxProblem{observed: :eof}),
     do: "The source ended while I was still parsing this construct."
@@ -3648,8 +4676,12 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{observed: observed}),
     do: "#{String.capitalize(syntax_name(observed))} cannot appear at this point in the construct."
 
+  defp capitalize_sentence(<<first::utf8, rest::binary>>), do: String.upcase(<<first::utf8>>) <> rest
+  defp capitalize_sentence(text), do: text
+
   defp syntax_expected_doc(%SyntaxProblem{expected: nil, alternatives: []}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :macro_use_mismatch}), do: Doc.empty()
+  defp syntax_expected_doc(%SyntaxProblem{expected: :explain_point}), do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{} = problem) do
     expected = [problem.expected | problem.alternatives] |> Enum.reject(&is_nil/1) |> Enum.map(&syntax_name/1)
@@ -3701,7 +4733,19 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda}), do: "the unclosed body reaches here"
-  defp syntax_problem_label(%SyntaxProblem{kind: :recovered_statement}), do: "parsing resumed after this token"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unrecognized_pattern, observed: :range}),
+    do: "a range operator cannot be used in a pattern"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unrecognized_pattern}), do: "this pattern form is not supported"
+  defp syntax_problem_label(%SyntaxProblem{expected: :explain_point}), do: "name the failure point before this arrow"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :non_associative}),
+    do: "this second operator makes the chain ambiguous"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :ambiguous_precedence}),
+    do: "this operator has no precedence relative to the surrounding one"
+
   defp syntax_problem_label(_problem), do: "this syntax does not fit here"
 
   defp computed_macro_reason({:invalid_generated_syntax, {:raw_syntax_in_expansion, path}}),
@@ -3737,13 +4781,54 @@ defmodule Cure.Diagnostic.Adapter do
     end)
   end
 
+  defp syntax_secondary_labels(%SyntaxProblem{kind: :macro_use_mismatch} = problem, primary_span) do
+    [
+      pickup_label(problem.opener, :secondary, "this macro invocation starts here"),
+      pickup_label(problem.within, :secondary, "the matching rule is declared here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :unterminated_lambda, opener: %Span{} = opener},
+         primary_span
+       )
+       when opener != primary_span,
+       do: [%Label{span: opener, style: :secondary, message: "this lambda starts here"}]
+
   defp syntax_secondary_labels(%SyntaxProblem{opener: %Span{} = opener}, primary_span) when opener != primary_span,
     do: [%Label{span: opener, style: :secondary, message: "the construct starts here"}]
+
+  defp syntax_secondary_labels(%SyntaxProblem{kind: kind, previous: %Span{} = previous}, primary_span)
+       when kind in [:non_associative, :ambiguous_precedence] and previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "the conflicting operator is here"}]
 
   defp syntax_secondary_labels(%SyntaxProblem{within: %Span{} = within}, primary_span) when within != primary_span,
     do: [%Label{span: within, style: :secondary, message: "while parsing this construct"}]
 
   defp syntax_secondary_labels(_problem, _primary_span), do: []
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :macro_use_mismatch,
+           expected: {:literal, expected},
+           context: %{token_type: token_type}
+         },
+         %Span{} = span
+       )
+       when token_type not in [:newline, :dedent, :eof] do
+    [
+      %Suggestion{
+        message: "Replace it with `#{expected}`",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: to_string(expected)}]
+      }
+    ]
+  end
 
   defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
     case syntax_insertion(expected) do
@@ -3765,6 +4850,31 @@ defmodule Cure.Diagnostic.Adapter do
         ]
     end
   end
+
+  defp syntax_insertions(%SyntaxProblem{kind: kind}, %Span{})
+       when kind in [:non_associative, :ambiguous_precedence],
+       do: [
+         %Suggestion{
+           message: "Add parentheses around the operation that should happen first",
+           applicability: :manual
+         }
+       ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :unrecognized_pattern, observed: :range}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Bind the value, then test its bounds with `when`",
+        applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(%SyntaxProblem{expected: :explain_point}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Write `Category => message` or `keyword \"word\" => message`",
+        applicability: :manual
+      }
+    ]
 
   defp syntax_insertions(_problem, _span), do: []
 
@@ -4065,6 +5175,19 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp printable_core(term), do: term
+
+  defp maybe_put_meta_location(payload, meta) do
+    case {Keyword.get(meta, :line), Keyword.get(meta, :col, Keyword.get(meta, :column))} do
+      {line, column} when is_integer(line) and is_integer(column) ->
+        Map.merge(payload, %{line: line, column: column})
+
+      {line, _column} when is_integer(line) ->
+        Map.put(payload, :line, line)
+
+      _ ->
+        payload
+    end
+  end
 
   # Parser errors retain token *kinds* for stable machine handling. Translate
   # punctuation and operators back to the spelling a user sees in the source;

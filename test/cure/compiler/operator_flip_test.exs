@@ -7,6 +7,7 @@ defmodule Cure.Compiler.OperatorFlipTest do
   """
   use ExUnit.Case, async: true
 
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.{Emit, Program}
 
   # -- real evaluation harness (mirrors the Phase-2 differential test) --------
@@ -55,6 +56,9 @@ defmodule Cure.Compiler.OperatorFlipTest do
 
   test "word operators resolve to their functions" do
     assert eval("true and false") == false
+    assert eval("false or true") == true
+    assert eval("true or false and false") == true
+    assert eval("false or true and false") == false
     assert eval("not true") == false
   end
 
@@ -90,7 +94,44 @@ defmodule Cure.Compiler.OperatorFlipTest do
     end
     """
 
-    assert_error_tag(src, :ambiguous_precedence)
+    error = assert_error_tag(src, :ambiguous_precedence)
+    assert {:ambiguous_precedence, details} = error
+    assert details.operator_span.start_line == 11
+    assert details.operator_span.start_column == 23
+    assert details.span.start_line == 11
+    assert details.span.start_column == 29
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "precedence.cure", src)
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- OPERATOR PRECEDENCE IS AMBIGUOUS [E094] --------------------- precedence.cure
+
+             These operators have no declared relative precedence; add parentheses to choose
+             the grouping.
+
+             at precedence.cure:11:29
+             11 |   fn bad() -> Int = 1 <?> 2 <!> 3
+                |                       ---   ^^^ the conflicting operator is here; this operator has no precedence relative to the surrounding one
+
+             Hint: Add parentheses around the operation that should happen first
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 10, "character" => 28},
+             "end" => %{"line" => 10, "character" => 31}
+           }
+
+    assert [%{"location" => %{"range" => first_range}, "message" => "the conflicting operator is here"}] =
+             lsp["relatedInformation"]
+
+    assert first_range == %{
+             "start" => %{"line" => 10, "character" => 22},
+             "end" => %{"line" => 10, "character" => 25}
+           }
   end
 
   test "a fixity declaration with no function errors at use" do
@@ -117,6 +158,7 @@ defmodule Cure.Compiler.OperatorFlipTest do
       infix `|>` : Additive
     end
     """
+
     assert_error_tag(src, :conflicting_operator_fixity)
   end
 
@@ -168,8 +210,11 @@ defmodule Cure.Compiler.OperatorFlipTest do
     end
     """
 
-    assert {:error, {:precedence_cycle, groups}} = Cure.Elab.Program.elaborate(src)
+    assert {:error, {:precedence_cycle, %{groups: groups, spans: spans}}} =
+             Cure.Elab.Program.elaborate(src)
+
     assert Enum.sort(groups) == [:Loop, :Ring]
+    assert Enum.map(spans, & &1.start_line) == [3, 6]
   end
 
   test "a group closing a cycle through the built-in tower is rejected" do
@@ -187,7 +232,9 @@ defmodule Cure.Compiler.OperatorFlipTest do
     end
     """
 
-    assert {:error, {:precedence_cycle, groups}} = Cure.Elab.Program.elaborate(src)
+    assert {:error, {:precedence_cycle, %{groups: groups, spans: [_weighted]}}} =
+             Cure.Elab.Program.elaborate(src)
+
     assert :Weighted in groups
   end
 
@@ -216,7 +263,9 @@ defmodule Cure.Compiler.OperatorFlipTest do
     """
 
     try do
-      assert {:error, {:precedence_cycle, groups}} = Cure.Elab.Program.elaborate(src)
+      assert {:error, {:precedence_cycle, %{groups: groups, spans: [_gb]}}} =
+               Cure.Elab.Program.elaborate(src)
+
       assert :Ga in groups and :Gb in groups
     after
       Process.put(:cure_source_roots, prev)

@@ -268,6 +268,15 @@ defmodule Cure.Compiler.LexerTest do
     test "regex without flags" do
       assert [%Token{type: :regex, value: {"\\d+", ""}}, _] = lex!("~r/\\d+/")
     end
+
+    test "bare slash regex is recognized where an expression starts" do
+      assert [_assign, %Token{type: :regex, value: {"[A-z]*", ""}} | _] =
+               lex!("= /[A-z]*/")
+    end
+
+    test "slash remains division after an expression" do
+      assert [:identifier, :slash, :identifier] = types(lex!("left / right"))
+    end
   end
 
   # ── Operators ────────────────────────────────────────────────────────

@@ -82,12 +82,73 @@ defmodule Cure.Compiler.SourceSpansTest do
     source = "macro Every\n  syntax every becomes Clock.now()\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "macro.cure", emit_events: false)
 
-    assert {:ok, {:macro_def, meta, _rules}} =
+    assert {:ok, {:macro_def, meta, [rule]}} =
              Parser.parse(tokens, file: "macro.cure", emit_events: false, prelude_macros: false)
 
     info = Metadata.source_info(meta)
     assert slice(source, info.whole) == "macro Every\n  syntax every becomes Clock.now()"
     assert slice(source, info.name) == "Every"
+    assert slice(source, rule.source_span) == "syntax every becomes Clock.now()"
+  end
+
+  test "structured macro sections retain authored entry ranges" do
+    source =
+      "macro actor <name: ModuleName>\n" <>
+        "  syntax family ActorDefinition\n" <>
+        "    syntax actor <name: ModuleName>\n" <>
+        "    state Type\n" <>
+        "  accepts ActorDefinition\n" <>
+        "  expands with derive_actor\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "macro_sections.cure", emit_events: false)
+
+    assert {:ok, {:macro_def, _meta, [family, accepts, expands]}} =
+             Parser.parse(tokens, file: "macro_sections.cure", emit_events: false, prelude_macros: false)
+
+    assert slice(source, family.source_span) ==
+             "syntax family ActorDefinition\n    syntax actor <name: ModuleName>\n    state Type"
+
+    assert slice(source, accepts.source_span) == "accepts ActorDefinition"
+    assert slice(source, expands.source_span) == "expands with derive_actor"
+    assert [field] = family.fields
+    assert slice(source, field.source_span) == "state Type"
+    assert [production] = family.productions
+    assert slice(source, production.source_span) == "syntax actor <name: ModuleName>"
+  end
+
+  test "macro failure and explanation sections retain authored ranges" do
+    source =
+      "macro Protocol\n" <>
+        "  fail ReplyBeforeRequest(state: Code)\n" <>
+        "  explain\n" <>
+        "    ReplyBeforeRequest => \"a reply needs an open request\"\n" <>
+        "  open Category\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "macro_diagnosis.cure", emit_events: false)
+
+    assert {:ok, {:macro_def, _meta, [failure, explanation, open]}} =
+             Parser.parse(tokens, file: "macro_diagnosis.cure", emit_events: false, prelude_macros: false)
+
+    assert slice(source, failure.source_span) == "fail ReplyBeforeRequest(state: Code)"
+    assert slice(source, explanation.source_span) =~ "explain\n    ReplyBeforeRequest"
+    [clause] = explanation.clauses
+    assert slice(source, clause.source_span) == "ReplyBeforeRequest => \"a reply needs an open request\""
+    assert slice(source, open.source_span) == "open Category"
+  end
+
+  test "macro examples retain their authored range" do
+    source =
+      "macro Every\n" <>
+        "  syntax every <t: Duration> becomes Timer.repeat(t)\n" <>
+        "    example every 500 expands Timer.repeat(500)\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "macro_example.cure", emit_events: false)
+
+    assert {:ok, {:macro_def, _meta, [rule]}} =
+             Parser.parse(tokens, file: "macro_example.cure", emit_events: false, prelude_macros: false)
+
+    [example] = rule.examples
+    assert slice(source, example.source_span) == "example every 500 expands Timer.repeat(500)"
   end
 
   test "named containers retain exact declaration and qualified-name ranges" do
@@ -119,6 +180,24 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, alias_info.name) == "UserId"
     assert slice(source, enum_info.whole) == "type Color = Red | Blue deriving Show"
     assert slice(source, enum_info.name) == "Color"
+  end
+
+  test "ADT variants retain exact constructor names and extents" do
+    source = "type Maybe = None | Some(Int)\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "variants.cure", emit_events: false)
+
+    assert {:ok, {:container, _meta, [none, some]}} =
+             Parser.parse(tokens, file: "variants.cure", emit_events: false, prelude_macros: false)
+
+    {:variable, none_meta, "None"} = none
+    {:function_def, some_meta, []} = some
+    none_info = Metadata.source_info(none_meta)
+    some_info = Metadata.source_info(some_meta)
+
+    assert slice(source, none_info.name) == "None"
+    assert slice(source, none_info.whole) == "None"
+    assert slice(source, some_info.name) == "Some"
+    assert slice(source, some_info.whole) == "Some(Int)"
   end
 
   test "imports and fixity declarations retain authored source roles" do
@@ -199,6 +278,56 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.body) == "n"
   end
 
+  test "match expressions retain their whole and branch-owned spans" do
+    source = "fn choose(x: Int) -> Int = match x\n  n -> n\n  _ -> 0\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "match.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "match.cure", emit_events: false, prelude_macros: false)
+
+    {:pattern_match, meta, _} = find_node(ast, :pattern_match)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "match x\n  n -> n\n  _ -> 0"
+    assert Enum.map(info.branches, &slice(source, &1)) == ["n -> n", "_ -> 0"]
+  end
+
+  test "conditionals retain condition and branch-owned spans" do
+    source = "fn choose(x: Int) -> Int = if x > 0 then x else 0\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "conditional.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "conditional.cure", emit_events: false, prelude_macros: false)
+
+    {:conditional, meta, _} = find_node(ast, :conditional)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "if x > 0 then x else 0"
+    assert slice(source, info.condition) == "x > 0"
+    assert slice(source, info.then_branch) == "x"
+    assert slice(source, info.else_branch) == "0"
+  end
+
+  test "single-scrutinee with expressions retain whole and branch spans" do
+    source = "fn choose(x: Int) -> Int = with x\n  n -> n\n  _ -> 0\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "with.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "with.cure", emit_events: false, prelude_macros: false)
+
+    {:with_abs, meta, _} = find_node(ast, :with_abs)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "with x\n  n -> n\n  _ -> 0"
+    assert Enum.map(info.branches, &slice(source, &1)) == ["n -> n", "_ -> 0"]
+  end
+
+  test "multi-scrutinee with preserves the outer authored range" do
+    source = "fn choose(a: Int, b: Int) -> Int = with a b\n  x, y -> x\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "with_multi.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "with_multi.cure", emit_events: false, prelude_macros: false)
+
+    {:with_abs, meta, _} = find_node(ast, :with_abs)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "with a b\n  x, y -> x"
+    assert Enum.map(info.branches, &slice(source, &1)) == ["x"]
+  end
+
   test "record constructions retain authored name, delimiters, and field spans" do
     source = "fn origin() -> Point = Point{x: 0, y: 0}\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "record.cure", emit_events: false)
@@ -249,6 +378,19 @@ defmodule Cure.Compiler.SourceSpansTest do
     end
   end
 
+  test "range expressions retain their exact operator and operand ranges" do
+    source = "fn values() = 1..=10\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "range.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "range.cure", emit_events: false, prelude_macros: false)
+
+    {:range, meta, _operands} = find_node(ast, :range)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "1..=10"
+    assert slice(source, info.operator) == "..="
+    assert Enum.map(info.operands, &slice(source, &1)) == ["1", "10"]
+  end
+
   test "string interpolation retains its whole and embedded expression ranges" do
     source = ~S|fn message(name: String) -> String = "hello #{name}! #{name + 1}"| <> "\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "interpolation.cure", emit_events: false)
@@ -261,6 +403,20 @@ defmodule Cure.Compiler.SourceSpansTest do
 
     assert slice(source, info.whole) == ~S|"hello #{name}! #{name + 1}"|
     assert Enum.map(info.arguments, &slice(source, &1)) == ["name", "name + 1"]
+  end
+
+  test "attached decorators retain their own name and argument ranges" do
+    source = "mod Demo\n  @extern(:erlang, :hd, 2)\n  fn head({T: Type}, xs: List(T)) -> T\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "decorator.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "decorator.cure", emit_events: false, prelude_macros: false)
+
+    function = find_node(ast, :function_def)
+    info = function |> elem(1) |> Metadata.source_info()
+    extern = Map.fetch!(info.decorators, "extern")
+
+    assert slice(source, extern.whole) == "@extern(:erlang, :hd, 2)"
+    assert slice(source, extern.name) == "extern"
+    assert Enum.map(extern.arguments, &slice(source, &1)) == [":erlang", ":hd", "2"]
   end
 
   test "diagnostic metadata is excluded from semantic comparisons" do

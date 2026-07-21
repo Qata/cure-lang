@@ -63,7 +63,9 @@ defmodule Cure.DiagnosticTest do
 
   test "parser diagnostics underline the full unexpected token" do
     source = "mod Demo\n  fn run(] -> Int = 1\n"
-    error = {:parse_error, [{:expected, :rparen, :got, :arrow, 2, 12}]}
+    assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "demo.cure", emit_events: false)
+    token = Enum.find(tokens, &(&1.type == :arrow))
+    error = {:parse_error, [{:expected, :rparen, :got, :arrow, token.line, token.col, token.span}]}
     {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
 
     assert diagnostic.primary.span.end_column - diagnostic.primary.span.start_column == 2
@@ -78,8 +80,11 @@ defmodule Cure.DiagnosticTest do
   end
 
   test "parser diagnostics quote binary token spellings with single quotes" do
-    error = {:parse_error, [{:expected, :rparen, :got, "->", 2, 12}]}
-    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", "fn f( -> Int = 1\n")
+    source = "fn f( -> Int = 1\n"
+    assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "demo.cure", emit_events: false)
+    token = Enum.find(tokens, &(&1.type == :arrow))
+    error = {:parse_error, [{:expected, :rparen, :got, "->", token.line, token.col, token.span}]}
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
 
     assert Renderer.plain(diagnostic, registry) =~ "'->' cannot appear"
     refute Renderer.plain(diagnostic, registry) =~ "\"->\""
@@ -87,12 +92,104 @@ defmodule Cure.DiagnosticTest do
 
   test "parser diagnostic widths come from lexer spans rather than a token-width table" do
     source = "mod Demo\n  fn run(x) => Int = x\n"
-    error = {:parse_error, [{:expected, :arrow, :got, :fat_arrow, 2, 13}]}
+    assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "demo.cure", emit_events: false)
+    token = Enum.find(tokens, &(&1.type == :fat_arrow))
+    error = {:parse_error, [{:expected, :arrow, :got, :fat_arrow, token.line, token.col, token.span}]}
     {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
 
     assert diagnostic.primary.span.end_byte - diagnostic.primary.span.start_byte == 2
     assert binary_part(source, diagnostic.primary.span.start_byte, 2) == "=>"
     assert Renderer.plain(diagnostic, registry) =~ "^^ this syntax does not fit here"
+  end
+
+  test "pickup grammar failures render the offending branches with stable explanations" do
+    cases = [
+      {
+        "missing_else.cure",
+        "mod Demo\n  fn bad(x: Int) -> Int = pickup\n    x > 0 -> 1\n",
+        """
+        -- PICKUP NEEDS A FALLBACK [E076] ---------------------------- missing_else.cure
+
+        A `pickup` must finish with a fallback branch so it has a result when no earlier
+        condition is true.
+
+        at missing_else.cure:3:5
+        3 |     x > 0 -> 1
+          |     ^^^^^^^^^^ this is the final branch, but it is not a fallback
+
+        Hint: Add `else -> ...` after this branch, or change the final condition to `true`
+        """
+      },
+      {
+        "else_not_last.cure",
+        "mod Demo\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    x > 0 -> 2\n",
+        """
+        -- FALLBACK BRANCH IS NOT LAST [E077] ----------------------- else_not_last.cure
+
+        An `else` branch matches every remaining case, so no branch may follow it.
+
+        at else_not_last.cure:3:5
+        3 |     else -> 1
+          |     ^^^^ this fallback matches everything that reaches it
+        4 |     x > 0 -> 2
+          |     ---------- this branch can never be reached after `else`
+
+        Hint: Move the `else` branch after every conditional branch
+        """
+      },
+      {
+        "multiple_else.cure",
+        "mod Demo\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    else -> 2\n",
+        """
+        -- PICKUP HAS MORE THAN ONE FALLBACK [E078] ----------------- multiple_else.cure
+
+        Only one `else` branch is allowed because the first fallback already matches
+        every remaining case.
+
+        at multiple_else.cure:4:5
+        3 |     else -> 1
+          |     ---- another fallback branch is here
+        4 |     else -> 2
+          |     ^^^^ this second fallback is redundant
+
+        Hint: Keep one `else` branch and remove or give conditions to the others
+        """
+      }
+    ]
+
+    for {path, source, expected} <- cases do
+      assert {:error, reason} = Cure.Compiler.compile_string(source, emit_events: false)
+      {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, path, source)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) == String.trim_trailing(expected)
+      assert diagnostic.primary.span.path == path
+      assert diagnostic.primary.span.start_line in [3, 4]
+      assert diagnostic.primary.span.start_column == 5
+    end
+  end
+
+  test "pickup branch labels retain exact LSP ranges and related information" do
+    source =
+      "mod Demo\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    x > 0 -> 2\n    x < 0 -> 3\n"
+
+    assert {:error, reason} = Cure.Compiler.compile_string(source, emit_events: false)
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, "pickup.cure", source)
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 2, "character" => 4},
+             "end" => %{"line" => 2, "character" => 8}
+           }
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             %{"start" => %{"line" => 3, "character" => 4}, "end" => %{"line" => 3, "character" => 14}},
+             %{"start" => %{"line" => 4, "character" => 4}, "end" => %{"line" => 4, "character" => 14}}
+           ]
+
+    assert Enum.map(lsp["relatedInformation"], & &1["message"]) == [
+             "this branch can never be reached after `else`",
+             "this branch can never be reached after `else`"
+           ]
   end
 
   test "lexer failures explain authored syntax without exposing raw tuples" do
@@ -106,12 +203,25 @@ defmodule Cure.DiagnosticTest do
     refute Renderer.plain(diagnostic, registry) =~ "{:tab_not_allowed"
   end
 
-  test "parser producer tuples retain trailing source coordinates" do
+  test "structured parser producer details retain source coordinates" do
     source = "mod Demo\n  x\n"
+
+    span =
+      Cure.Diagnostic.Span.new(
+        source_id: "demo.cure",
+        path: "demo.cure",
+        start_byte: 11,
+        end_byte: 12,
+        start_line: 2,
+        start_column: 3,
+        end_line: 2,
+        end_column: 4
+      )
 
     {diagnostic, registry} =
       Cure.Compiler.Errors.to_diagnostic(
-        {:unknown_syntax_family_field, :Expr, :field, 2, 3},
+        {:unknown_syntax_family_field,
+         %{family: :Expr, field: :field, valid_fields: [:value], span: span, line: 2, column: 3}},
         "demo.cure",
         source
       )
@@ -120,6 +230,24 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.primary.span.start_line == 2
     assert diagnostic.primary.span.start_column == 3
     assert Renderer.plain(diagnostic, registry) =~ "2 |   x"
+  end
+
+  test "presentation remaps nested nofile context onto the caller's authored source" do
+    source =
+      "mod DiagnosticRecord\n  type Nat = Z | S(Nat)\n  rec Point\n    x: Nat\n    y: Nat\n  fn bad() -> Point = Point{x: S(Z()), z: Z()}\nend\n"
+
+    assert {:error, reason} = Cure.Compiler.compile_string(source, emit_events: false)
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(reason, "record_field_mismatch.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.primary.span.source_id == "record_field_mismatch.cure"
+    assert diagnostic.primary.span.path == "record_field_mismatch.cure"
+    assert rendered =~ "6 |   fn bad() -> Point = Point{x: S(Z()), z: Z()}"
+    assert rendered =~ "^ this field is not declared by the record"
+    refute rendered =~ "at nofile:"
   end
 
   test "operational failure tuples use the declared registry converter" do
@@ -240,15 +368,16 @@ defmodule Cure.DiagnosticTest do
       {:accepts_without_expander, "E092"},
       {:multiple_accepts_declarations, "E092"},
       {:multiple_expands_declarations, "E092"},
-      {{:expected_literal_capture, "{name}", 1, 2}, "E094"},
-      {{:unknown_syntax_family_field, :Expr, :field, 1, 2}, "E092"},
-      {{:missing_syntax_family_field, :Expr, :field, 1, 2}, "E092"},
-      {{:unknown_macro_obligation_capture, :capture, 1, 2}, "E092"},
-      {{:graded_let_requires_variable, :linear, 1, 2}, "E093"},
-      {{:unknown_grade, :future, 1, 2}, "E093"},
-      {{:grade_requires_type, :value, :linear, 1, 2}, "E093"},
-      {{:unit_type_reserved, "ms"}, "E092"},
-      {{:unit_type_reserved, "ms", 1, 2}, "E092"},
+      {{:expected_literal_capture, %{shape: "Int", line: 1, column: 2}}, "E094"},
+      {{:unknown_syntax_family_field, %{family: :Expr, field: :field, valid_fields: [:value], line: 1, column: 2}},
+       "E092"},
+      {{:missing_syntax_family_field, %{family: :Expr, field: :field, line: 1, column: 2}}, "E092"},
+      {{:unknown_macro_obligation_capture,
+        %{capture: :capture, interface: :Comparable, available_captures: [:value], line: 1, column: 2}}, "E092"},
+      {{:graded_let_requires_variable, %{grade: :linear}}, "E093"},
+      {{:unknown_grade, %{grade: :future, supported: [:erased, :linear, :affine]}}, "E093"},
+      {{:grade_requires_type, %{name: :value, grade: :linear}}, "E093"},
+      {{:unit_type_reserved, %{name: "ms", line: 1, column: 2}}, "E092"},
       {{:duplicate_index, :n}, "E105"},
       {{:with_multi_proof_unsupported, "proof"}, "E093"},
       {{:with_multi_rematch_unsupported, "rematch"}, "E093"},
@@ -258,9 +387,9 @@ defmodule Cure.DiagnosticTest do
       {{:with_multi_arity_mismatch, "arity", []}, "E093"},
       {{:with_multi_no_arms, "arms", []}, "E093"},
       {{:with_multi_inconsistent_pattern, "patterns", []}, "E093"},
-      {{:duplicate_syntax_family_field, :field, 1, 2}, "E092"},
-      {{:non_associative, :==, :chained_with, :==, 1, 2}, "E094"},
-      {{:ambiguous_precedence, :left, :right, 1, 2}, "E094"}
+      {{:duplicate_syntax_family_field, %{field: :field, line: 1, column: 2}}, "E092"},
+      {{:non_associative, %{operator: :==, next_operator: :==}}, "E094"},
+      {{:ambiguous_precedence, %{left_group: :left, right_group: :right, operator: :"<?>"}}, "E094"}
     ]
 
     for {reason, code} <- cases do
@@ -271,20 +400,42 @@ defmodule Cure.DiagnosticTest do
   end
 
   test "literal macro captures retain a contextual syntax diagnostic" do
-    diagnostic = Adapter.from_error({:expected_literal_capture, "{name}", 1, 2})
+    diagnostic = Adapter.from_error({:expected_literal_capture, %{shape: "Int", line: 1, column: 2}})
 
     assert diagnostic.code == "E094"
-    assert diagnostic.title == "Macro literal capture is invalid"
-    assert Diagnostic.message(diagnostic) =~ "literal shape"
+    assert diagnostic.title == "Macro field needs a literal"
+    assert Diagnostic.message(diagnostic) =~ "accepts an `Int` literal"
     refute Diagnostic.message(diagnostic) =~ "{:expected_literal_capture"
   end
 
   test "new elaboration producers retain contextual E093 explanations" do
-    assert Diagnostic.message(Adapter.from_error({:unknown_grade, :future, 1, 2})) =~
+    assert Diagnostic.message(
+             Adapter.from_error({:unknown_grade, %{grade: :future, supported: [:erased, :linear, :affine]}})
+           ) =~
              "relevance grade"
 
     assert Diagnostic.message(Adapter.from_error({:with_multi_no_arms, "arms", []})) =~
              "multiple-scrutinee"
+
+    assert Diagnostic.message(Adapter.from_error(:not_total)) =~ "does not terminate"
+    assert Diagnostic.message(Adapter.from_error(:not_a_function)) =~ "not callable"
+    assert Diagnostic.message(Adapter.from_error(:opaque_not_eliminable)) =~ "opaque value"
+  end
+
+  test "contextual failures retain checking context and source carets", %{registry: registry, span: span} do
+    diagnostic =
+      Adapter.from_error(:not_a_function,
+        span: span,
+        checking: :run,
+        expectation_origin: :annotation
+      )
+
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Application target is not callable"
+    assert Diagnostic.message(diagnostic) =~ "not callable"
+    assert rendered =~ "^^^^^^^"
+    refute rendered =~ "Elaboration failed"
   end
 
   test "unique missing lexer delimiters provide an insertion edit" do
@@ -378,6 +529,33 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.payload.candidates == ["map_values", "mop", "map"]
     assert hd(diagnostic.payload.candidate_details).visibility == :public
     assert hd(diagnostic.payload.candidate_details).arity == 2
+  end
+
+  test "name suggestions preserve qualification and import requirements" do
+    diagnostic =
+      Adapter.unknown_name(:value, "prnt",
+        candidates: [
+          %{
+            id: :qualified_print,
+            name: "print",
+            namespace: :value,
+            owner: "Std.Io",
+            imported: false,
+            qualification: "Std.Io",
+            requires_import: true,
+            visibility: :public
+          }
+        ]
+      )
+
+    [candidate] = diagnostic.payload.candidate_details
+    assert candidate.candidate_id == :qualified_print
+    assert candidate.owner == "Std.Io"
+    assert candidate.qualification == "Std.Io"
+    assert candidate.requires_import
+    assert [%Cure.Diagnostic.Suggestion{message: message}] = diagnostic.suggestions
+    assert message =~ "`Std.Io.print`"
+    assert message =~ "Qualify it or import its module"
   end
 
   test "name ranking is case-insensitive and recognizes adjacent transpositions" do
@@ -722,8 +900,36 @@ defmodule Cure.DiagnosticTest do
 
     assert warning.severity == :warning
     assert warning.code == "W001"
+    assert warning.primary == nil
     assert Cure.Diagnostic.Renderer.plain(warning) =~ "W001"
     assert Cure.Diagnostic.Renderer.plain(warning) =~ "use the modern form"
+  end
+
+  test "migration failures preserve their variant data and render actionable messages" do
+    cases = [
+      {:project_downgrade, %{target: "2026", current: "2027"}, "project uses newer edition `2027`"},
+      {:invalid_project_edition, %{edition: "1999", path: "Cure.toml"}, "declared in `Cure.toml`"},
+      {:unknown_target_edition, %{edition: "1999"}, "target edition `1999` is not supported"},
+      {:git_guard, %{path: "lib/a.cure", reason: :dirty}, "because it is modified"},
+      {:file_downgrade, %{path: "lib/a.cure", from: "2027", target: "2026"},
+       "from edition `2027` to older edition `2026`"},
+      {:preflight, %{path: "lib/a.cure"}, "without producing invalid syntax"},
+      {:manual_required, %{path: "lib/a.cure", rules: [:W_removed_module]}, "manual migration for `W_removed_module`"},
+      {:strict_warning, %{path: "lib/a.cure", rules: [:W_if_elif_pickup]}, "rejected by `--strict`"}
+    ]
+
+    for {kind, details, expected} <- cases do
+      diagnostic = Cure.Diagnostic.Operational.migration_failure(kind, details)
+      rendered = Cure.Diagnostic.Renderer.plain(diagnostic)
+
+      assert diagnostic.code == "E098"
+      assert diagnostic.key == :command_failure
+      assert diagnostic.payload.kind == kind
+      assert Map.drop(diagnostic.payload, [:kind]) == details
+      assert rendered =~ expected
+      if kind == :strict_warning, do: assert(rendered =~ "`W_if_elif_pickup`")
+      refute rendered =~ inspect({kind, details})
+    end
   end
 
   test "specialized operational warnings retain stable codes" do

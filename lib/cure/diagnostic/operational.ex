@@ -13,10 +13,15 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:command_failed, command, reason}, _opts), do: command_failure(command, reason)
   def from_error({:unknown_watch_action, action}, _opts), do: unknown_watch_action(action)
   def from_error({:migration_warning, details}, _opts) when is_map(details), do: migration_warning(details)
+  def from_error({:migration_failed, kind, details}, _opts) when is_map(details), do: migration_failure(kind, details)
   def from_error({:compiler_warning, details}, _opts) when is_map(details), do: compiler_warning(details)
   def from_error({:export_unmappable, reason}, _opts), do: export_unmappable(reason)
   def from_error({:snap_missing, path}, _opts), do: snap_missing(path)
   def from_error({:configuration_warning, message}, _opts), do: configuration_warning(message)
+
+  def from_error({:destructive_format_warning, details}, _opts) when is_map(details),
+    do: destructive_format_warning(details)
+
   def from_error({:usage_error, message}, _opts), do: usage(message)
   def from_error({:artifact_error, message}, _opts), do: artifact_error(message)
   def from_error({:artifact_error, message, details}, _opts), do: artifact_error(message, details)
@@ -118,6 +123,40 @@ defmodule Cure.Diagnostic.Operational do
         reason: inspect(reason)
       })
 
+  def migration_failure(kind, details) when is_atom(kind) and is_map(details) do
+    message =
+      case {kind, details} do
+        {:project_downgrade, %{target: target, current: current}} ->
+          "Cannot migrate to edition `#{target}` because the project uses newer edition `#{current}`."
+
+        {:invalid_project_edition, %{edition: edition, path: path}} ->
+          "The edition `#{edition}` declared in `#{path}` is not supported."
+
+        {:unknown_target_edition, %{edition: edition}} ->
+          "The migration target edition `#{edition}` is not supported."
+
+        {:git_guard, %{path: path, reason: reason}} ->
+          "Cannot migrate `#{path}` because it is #{migration_guard_reason(reason)}."
+
+        {:file_downgrade, %{path: path, from: from, target: target}} ->
+          "Cannot migrate `#{path}` from edition `#{from}` to older edition `#{target}`."
+
+        {:preflight, %{path: path}} ->
+          "Could not migrate `#{path}` without producing invalid syntax or changing its comments."
+
+        {:manual_required, %{path: path, rules: rules}} ->
+          "`#{path}` needs a manual migration for #{format_rules(rules)}."
+
+        {:strict_warning, %{path: path, rules: rules}} ->
+          "`#{path}` has fixable migration warnings rejected by `--strict`: #{format_rules(rules)}."
+
+        _ ->
+          "Migration failed (#{kind})."
+      end
+
+    diagnostic("E098", :command_failure, message, Map.put(details, :kind, kind))
+  end
+
   def unknown_watch_action(action),
     do: diagnostic("E098", :command_failure, "unknown watch action `#{display_value(action)}`", %{action: action})
 
@@ -128,21 +167,7 @@ defmodule Cure.Diagnostic.Operational do
       severity: :warning,
       title: "Migration warning",
       message: message,
-      primary: %Cure.Diagnostic.Label{
-        span: %Cure.Diagnostic.Span{
-          source_id: file,
-          path: file,
-          start_byte: 0,
-          end_byte: 0,
-          start_line: line || 1,
-          end_line: line || 1,
-          start_column: 1,
-          end_column: 1
-        },
-        style: :primary,
-        message: "rule #{rule} applies here"
-      },
-      payload: %{rule: rule, file: file, line: line}
+      payload: %{rule: rule, file: file, line: line, source_location: :line}
     )
   end
 
@@ -164,6 +189,20 @@ defmodule Cure.Diagnostic.Operational do
     do: diagnostic("E070", :snap_path_missing, "Snap loaded path no longer exists: #{path}", %{path: path})
 
   def configuration_warning(message), do: diagnostic("W002", :configuration_warning, message, %{})
+
+  def destructive_format_warning(details \\ %{}) when is_map(details) do
+    Diagnostic.new(
+      code: "W003",
+      key: :destructive_format_warning,
+      severity: :warning,
+      title: title(:destructive_format_warning),
+      message:
+        "`cure fmt --aggressive` rebuilds source from the AST, so plain `#` comments and non-canonical whitespace may be removed.",
+      notes: [Cure.Diagnostic.Doc.paragraph("Commit or copy these files before continuing.")],
+      payload: Map.put_new(details, :mode, :aggressive)
+    )
+  end
+
   def usage(message), do: diagnostic("E099", :usage_error, message, %{})
 
   def artifact_error(message, details \\ %{}) when is_map(details),
@@ -314,6 +353,7 @@ defmodule Cure.Diagnostic.Operational do
   defp title(:export_type_unmappable), do: "Type cannot cross this boundary"
   defp title(:snap_path_missing), do: "Saved path is missing"
   defp title(:configuration_warning), do: "Invalid configuration"
+  defp title(:destructive_format_warning), do: "Formatting may discard source details"
   defp title(:usage_error), do: "Invalid command usage"
   defp title(:artifact_error), do: "Invalid build artifact"
   defp title(:proof_file_missing), do: "Proof file missing"
@@ -326,6 +366,12 @@ defmodule Cure.Diagnostic.Operational do
   defp title(:registry_hash_mismatch), do: "Registry hash mismatch"
   defp title(:registry_package_not_found), do: "Registry package not found"
   defp title(:package_version_conflict), do: "Package version conflict"
+
+  defp migration_guard_reason(:dirty), do: "modified"
+  defp migration_guard_reason(:untracked), do: "not tracked by git"
+  defp migration_guard_reason(reason), do: display_value(reason)
+
+  defp format_rules(rules), do: Enum.map_join(rules, ", ", &"`#{&1}`")
 
   defp fingerprint(term) do
     term

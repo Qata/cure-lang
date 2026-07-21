@@ -66,13 +66,13 @@ defmodule Cure.Elab.Elaborator do
         cond do
           # A named field is not a field of this record.
           not Enum.all?(Map.keys(provided), &(&1 in order)) ->
-            {:error, {:record_field_mismatch, atom}}
+            {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
 
           # Every field must be supplied by the caller or carry a declared default
           # (`name: String = "Anonymous"`); an omitted field with no default is a
           # genuine mismatch.
           not Enum.all?(order, &(Map.has_key?(provided, &1) or Map.has_key?(defaults, &1))) ->
-            {:error, {:record_field_mismatch, atom}}
+            {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
 
           true ->
             values =
@@ -115,9 +115,20 @@ defmodule Cure.Elab.Elaborator do
 
           {:ok, {:function_call, [name: name], values}}
         else
-          {:error, {:record_field_mismatch, atom}}
+          {:error, record_field_mismatch(atom, order, Map.new(order, &{&1, :from_base}), Map.keys(overrides))}
         end
     end
+  end
+
+  defp record_field_mismatch(record, declared, defaults, provided) do
+    %{
+      record: record,
+      declared: declared,
+      provided: provided,
+      unknown: Enum.reject(provided, &(&1 in declared)),
+      missing: Enum.reject(declared, &(Enum.member?(provided, &1) or Map.has_key?(defaults, &1)))
+    }
+    |> then(&{:record_field_mismatch, &1})
   end
 
   # Normalize a constructor atom to a registry key via the resolution layer:
@@ -340,7 +351,8 @@ defmodule Cure.Elab.Elaborator do
 
       Inductive.get_ctor(env, resolved) ->
         result =
-          with {:ok, present} <- map_present_args(args, names, ctx, env) do
+          with :ok <- validate_constructor_arity(env, resolved, args, name),
+               {:ok, present} <- map_present_args(args, names, ctx, env) do
             elaborate_ctor_app(env, resolved, present, ctx)
           end
 
@@ -714,7 +726,7 @@ defmodule Cure.Elab.Elaborator do
             |> attach_record_context(meta, args)
 
           {:error, reason} ->
-            {:error, reason}
+            attach_record_context({:error, reason}, meta, args)
         end
 
       # `f(x)(y)` parses with the inner call preserved as `:callee` (and `name`
@@ -729,7 +741,7 @@ defmodule Cure.Elab.Elaborator do
         case elaborate_named_call(meta, args, names, ctx, env) do
           {:error, reason} when is_tuple(reason) ->
             if unresolved_call_reason?(reason) do
-              {:error, attach_call_result_context(reason, {:function_call, meta, args}, env)}
+              {:error, attach_unresolved_call_context(reason, {:function_call, meta, args}, env)}
             else
               {:error, reason}
             end
@@ -747,7 +759,7 @@ defmodule Cure.Elab.Elaborator do
         |> attach_record_update_context(meta, children, env)
 
       {:error, reason} ->
-        {:error, reason}
+        attach_record_update_context({:error, reason}, meta, children, env)
     end
   end
 
@@ -1424,22 +1436,31 @@ defmodule Cure.Elab.Elaborator do
   # inference-position match's result type. Variable/wildcard (default) arms are
   # skipped; if no constructor arm exists the match cannot be synthesised here.
   defp first_constructor_arm(arms, env) do
-    Enum.find_value(arms, {:error, {:cannot_infer_match_type, :no_constructor_arm}}, fn
-      {:match_arm, arm_meta, body} ->
-        case constructor_pattern(Keyword.fetch!(arm_meta, :pattern)) do
+    Enum.reduce_while(arms, {:error, {:cannot_infer_match_type, :no_constructor_arm}}, fn
+      {:match_arm, arm_meta, body}, acc ->
+        pattern = Keyword.fetch!(arm_meta, :pattern)
+
+        case constructor_pattern(pattern) do
           {:ok, {cname0, pattern_vars}} ->
             cname = resolve_ctor_key(env, cname0)
 
-            if Inductive.get_ctor(env, cname),
-              do: {:ok, {cname, pattern_vars, single_body(body)}},
-              else: false
+            case Inductive.get_ctor(env, cname) do
+              nil ->
+                {:cont, acc}
+
+              ctor ->
+                case validate_constructor_pattern_arity(pattern, ctor, cname, pattern_vars) do
+                  :ok -> {:halt, {:ok, {cname, pattern_vars, single_body(body)}}}
+                  {:error, _} = error -> {:halt, error}
+                end
+            end
 
           {:error, _} ->
-            false
+            {:cont, acc}
         end
 
-      _other ->
-        false
+      _other, acc ->
+        {:cont, acc}
     end)
   end
 
@@ -1882,7 +1903,7 @@ defmodule Cure.Elab.Elaborator do
         |> attach_record_update_context(meta, children, env)
 
       {:error, reason} ->
-        {:error, attach_record_field_context(reason, meta, tl(children), env)}
+        attach_record_update_context({:error, reason}, meta, children, env)
     end
   end
 
@@ -1906,7 +1927,7 @@ defmodule Cure.Elab.Elaborator do
             |> attach_record_context(meta, args)
 
           {:error, reason} ->
-            {:error, reason}
+            attach_record_context({:error, reason}, meta, args)
         end
 
       name == "reflexive" and length(args) == 1 ->
@@ -1944,25 +1965,20 @@ defmodule Cure.Elab.Elaborator do
               error
 
             {:ok, aligned_args} ->
-              inferred =
-                with {:ok, present} <- map_present_args(aligned_args, names, ctx, env),
-                     {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
-                  {:ok, term}
+              with :ok <- validate_constructor_arity(env, cres, aligned_args, name),
+                   {:ok, present} <- map_present_args(aligned_args, names, ctx, env) do
+                case elaborate_ctor_app(env, cres, present, ctx, expected_core) do
+                  {:ok, term, _type} ->
+                    {:ok, term}
+
+                  {:error, _} = orig ->
+                    # Try the bidirectional fallback, but only let it win when
+                    # it succeeds; otherwise retain the original inference error.
+                    case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
+                      {:ok, _} = ok -> ok
+                      {:error, _} -> orig
+                    end
                 end
-
-              case inferred do
-                {:ok, _} = ok ->
-                  ok
-
-                {:error, _} = orig ->
-                  # Try the bidirectional fallback, but only let it *win when it
-                  # succeeds*: if it also fails, surface the original inference error
-                  # (e.g. a GADT `seq`'s genuine `:index_mismatch`), so the fallback is
-                  # strictly additive and never masks a real diagnostic.
-                  case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
-                    {:ok, _} = ok -> ok
-                    {:error, _} -> orig
-                  end
               end
           end
 
@@ -2050,15 +2066,23 @@ defmodule Cure.Elab.Elaborator do
                 env
               )
             else
-              elaborate_checked_call_saturated(
-                aligned_expr,
-                resolved,
-                expected_core,
-                aligned_args,
-                names,
-                ctx,
-                env
-              )
+              case elaborate_checked_call_saturated(
+                     aligned_expr,
+                     resolved,
+                     expected_core,
+                     aligned_args,
+                     names,
+                     ctx,
+                     env
+                   ) do
+                {:error, reason} when is_tuple(reason) ->
+                  if unresolved_call_reason?(reason),
+                    do: {:error, attach_unresolved_call_context(reason, aligned_expr, env)},
+                    else: {:error, reason}
+
+                result ->
+                  result
+              end
             end
         end
     end
@@ -2507,7 +2531,16 @@ defmodule Cure.Elab.Elaborator do
 
   defp record_context(meta, args) do
     expression = {:function_call, meta, args}
+
     expectation_context(expression, :record, Keyword.get(meta, :name, :record), nil)
+    |> Map.put(:field_spans, record_field_spans(meta))
+  end
+
+  defp record_field_spans(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{fields: fields} when is_map(fields) -> fields
+      _ -> %{}
+    end
   end
 
   defp attach_record_update_context({:error, {:source_context, reason, context}}, meta, children, env)
@@ -2530,7 +2563,9 @@ defmodule Cure.Elab.Elaborator do
 
   defp record_update_context(meta, children, context) do
     expression = {:record_update, meta, children}
+
     Map.merge(context, expectation_context(expression, :record_update, Keyword.get(meta, :name, :record_update), nil))
+    |> Map.put(:field_spans, record_field_spans(meta))
   end
 
   defp attach_record_field_reason({:source_context, reason, context}, meta, field_pairs, env)
@@ -2833,6 +2868,8 @@ defmodule Cure.Elab.Elaborator do
          env
        )
        when is_map(context) do
+    reason = contextualize_call_arity(reason, expression, env)
+
     if Map.get(context, :expectation_origin) in [:call_argument, :operator_operand] do
       {:source_context, reason, context}
     else
@@ -2846,6 +2883,8 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp attach_call_result_context(reason, {:function_call, meta, _args} = expression, env) do
+    reason = contextualize_call_arity(reason, expression, env)
+
     context =
       if extern_call_mismatch?(reason, meta, env),
         do: ffi_result_context(expression),
@@ -2856,11 +2895,103 @@ defmodule Cure.Elab.Elaborator do
 
   defp attach_call_result_context(reason, _expression, _env), do: reason
 
+  @doc false
+  def contextualize_call_arity({:source_context, reason, context}, expression, env) when is_map(context) do
+    {:source_context, contextualize_call_arity(reason, expression, env), context}
+  end
+
+  def contextualize_call_arity(reason, {:function_call, meta, args}, env) do
+    name = Keyword.get(meta, :name)
+
+    with name when is_binary(name) <- name,
+         key <- resolve_def_key(env, name, String.to_atom(name)),
+         %{type: type, quantities: quantities} when is_list(quantities) <- Env.get_def(env, key),
+         expected when is_integer(expected) <- callable_surface_arity(type, quantities),
+         actual = length(args),
+         true <- call_arity_reason?(reason, expected, actual) do
+      {:call_arity_mismatch,
+       %{
+         name: name,
+         expected: expected,
+         actual: actual,
+         direction: if(actual < expected, do: :too_few, else: :too_many)
+       }}
+    else
+      _ -> reason
+    end
+  end
+
+  def contextualize_call_arity(reason, _expression, _env), do: reason
+
+  defp callable_surface_arity(type, quantities) do
+    {_declared_domains, codomain} = peel_pi(type, length(quantities))
+    Enum.count(quantities, &Grade.present?/1) + residual_pi_arity(codomain)
+  end
+
+  defp residual_pi_arity({:pi, _grade, _domain, codomain}), do: 1 + residual_pi_arity(codomain)
+  defp residual_pi_arity(_type), do: 0
+
+  defp call_arity_reason?(_reason, expected, actual) when expected == actual, do: false
+  defp call_arity_reason?(:not_a_function, expected, actual), do: actual > expected
+  defp call_arity_reason?(:too_many_arguments, expected, actual), do: actual > expected
+  defp call_arity_reason?(:too_few_arguments, expected, actual), do: actual < expected
+
+  defp call_arity_reason?({:conversion_failure, {:pi, _, _, _}, _expected}, expected, actual),
+    do: actual < expected
+
+  defp call_arity_reason?(_reason, _expected, _actual), do: false
+
   defp unresolved_call_reason?({:unknown_global, _}), do: true
+  defp unresolved_call_reason?({:unknown_global, _, _}), do: true
   defp unresolved_call_reason?({:unknown_name, _}), do: true
+  defp unresolved_call_reason?({:unknown_name, _, _}), do: true
   defp unresolved_call_reason?({:unknown_ctor, _}), do: true
   defp unresolved_call_reason?({:ambiguous_name, _, _}), do: true
   defp unresolved_call_reason?(_reason), do: false
+
+  defp attach_unresolved_call_context(reason, {:function_call, meta, args} = expression, env) do
+    {:source_context, _nested_reason, context} = attach_call_result_context(reason, expression, env)
+
+    {:source_context, reason,
+     Map.merge(context, %{
+       name_candidates: name_candidates(env, Keyword.get(meta, :name)),
+       name_arity: length(args),
+       checking: Keyword.get(meta, :name)
+     })}
+  end
+
+  defp name_candidates(
+         %Cure.Core.Env{defs: defs, module_owner: module_owner, import_modules: import_modules},
+         spelling
+       ) do
+    spelling = to_string(spelling)
+
+    defs
+    |> Enum.map(fn {key, _definition} ->
+      {owner, name} = Cure.Elab.Name.split(key)
+
+      {owner, name,
+       %{
+         id: key,
+         name: name,
+         namespace: :value,
+         owner: owner,
+         imported: owner == module_owner or is_nil(owner),
+         candidate_id: key
+       }}
+    end)
+    |> Enum.filter(fn {owner, _name, _candidate} ->
+      owner == module_owner or is_nil(owner) or MapSet.member?(import_modules, owner)
+    end)
+    |> Enum.map(&elem(&1, 2))
+    |> Enum.filter(fn %{name: name} -> abs(String.length(name) - String.length(spelling)) <= 2 end)
+    |> Enum.sort_by(fn %{name: name, owner: owner} ->
+      {owner != module_owner, not String.starts_with?(String.downcase(name), String.downcase(spelling)), name}
+    end)
+    |> Enum.take(128)
+  end
+
+  defp name_candidates(_env, _spelling), do: []
 
   defp extern_call_mismatch?(reason, meta, env) do
     name = Keyword.get(meta, :name)
@@ -2904,9 +3035,6 @@ defmodule Cure.Elab.Elaborator do
       expectation_origin: origin
     }
   end
-
-  defp call_result_context(expression),
-    do: expectation_context(expression, :call_result, :application, nil)
 
   # A checking-mode constructor whose direct check against the expected type failed
   # may still inhabit the BASE of a refinement `{x: T | φ}` = `Sigma(T, λx. φ)` —
@@ -3604,7 +3732,11 @@ defmodule Cure.Elab.Elaborator do
              ctx,
              env
            ) do
-      case scrut_type do
+      # Parameters can retain a transparent applied alias at their head (for
+      # example `List(String)`, where `String = List(Char)`). Match dispatch
+      # needs the weak-head-normal form so the outer data family is visible;
+      # conversion still preserves the authored alias for diagnostics.
+      case Normalise.whnf_value(scrut_type, Context.signature(ctx)) do
         {:vdata, dname, combined_vals} ->
           family = Inductive.get_family(env, dname)
           # The scrutinee's args are parameters ++ indices; split off the leading
@@ -4051,7 +4183,7 @@ defmodule Cure.Elab.Elaborator do
 
         cond do
           Inductive.get_ctor(env, cname) == nil ->
-            {:halt, {:error, {:unknown_pattern_constructor, cname}}}
+            {:halt, unknown_pattern_constructor_error(with_pattern, cname, env, dname)}
 
           Inductive.ctor_family(sig, cname) != dname ->
             {:halt, shadowed_or_foreign_ctor(env, sig, cname0, cname, dname)}
@@ -5091,12 +5223,15 @@ defmodule Cure.Elab.Elaborator do
   # destructures. Lower it to the (already-supported) projections `.1`/`.2`:
   # `body[x ↦ p.1, y ↦ p.2]`, elaborated directly. Restricted to a VARIABLE
   # scrutinee (so the projections are cheap and re-evaluation-free) and a flat
-  # 2-element tuple of variables/wildcards; anything else falls through to the
-  # ordinary (`{:vdata}`) dispatch and its clean error.
+  # tuple of variables/wildcards. The scrutinee type owns the arity: checking it
+  # here prevents unused extra binders from making a malformed pattern appear to
+  # work merely because their out-of-bounds projections are never elaborated.
   defp try_tuple_match({:variable, _sm, _sn} = scrut, [{:match_arm, meta, body}], expected, names, ctx, env) do
     case Keyword.fetch!(meta, :pattern) do
-      {:tuple, _tm, [_, _ | _] = elems} ->
-        with {:ok, subs} <- tuple_subs(elems, scrut) do
+      {:tuple, _tm, elems} = pattern when is_list(elems) ->
+        with {:ok, tuple_arity} <- tuple_pattern_arity(scrut, names, ctx, env),
+             :ok <- validate_tuple_pattern_arity(pattern, tuple_arity, length(elems)),
+             {:ok, subs} <- tuple_subs(elems, scrut) do
           b = single_body(body)
 
           if binds_any?(b, Enum.map(subs, &elem(&1, 0))) do
@@ -5113,6 +5248,41 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp try_tuple_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
+
+  defp tuple_pattern_arity(scrut, names, ctx, env) do
+    with {:ok, _term, type_value} <- elaborate_expr_typed(scrut, names, ctx, env),
+         sigma_fam when not is_nil(sigma_fam) <- Inductive.builtin(env, :sigma) do
+      type_term = Quote.reify(type_value, Context.length(ctx), Context.signature(ctx))
+      unit_fam = unit_family_name(env)
+      unit_ctor = unit_ctor_name(env)
+
+      case count_tele(type_term, ctx, sigma_fam, unit_fam, unit_ctor, 0) do
+        {:telescope, arity} -> {:ok, arity}
+        :not_telescope -> bare_pair_arity(type_term, ctx, sigma_fam)
+      end
+    else
+      _ -> :not_applicable
+    end
+  end
+
+  defp bare_pair_arity(type_term, ctx, sigma_fam) do
+    case Kernel.normalize(ctx, type_term) do
+      {:data, ^sigma_fam, [_domain, _codomain], []} -> {:ok, 2}
+      _ -> :not_applicable
+    end
+  end
+
+  defp validate_tuple_pattern_arity(_pattern, arity, arity), do: :ok
+
+  defp validate_tuple_pattern_arity(pattern, expected, actual) do
+    {:error,
+     {:source_context, {:tuple_arity_mismatch, expected, actual},
+      %{
+        span: surface_expression_span(pattern),
+        expectation_origin: :pattern,
+        expression_category: :tuple_pattern
+      }}}
+  end
 
   # A single variable/wildcard arm ignores the scrutinee's structure — an
   # irrefutable bind valid at ANY scrutinee type (Σ, primitive, data), not just
@@ -6082,14 +6252,19 @@ defmodule Cure.Elab.Elaborator do
 
             {:ok, {cname0, _vars}} ->
               cname = resolve_ctor_key(env, cname0)
+              ctor = Inductive.get_ctor(env, cname)
+              arity_check = if ctor, do: validate_constructor_pattern_arity(pattern, ctor, cname), else: :ok
               pattern = rekey_pattern_name(pattern, cname)
 
               cond do
-                Inductive.get_ctor(env, cname) == nil ->
-                  {:halt, {:error, {:unknown_pattern_constructor, cname}}}
+                ctor == nil ->
+                  {:halt, unknown_pattern_constructor_error(pattern, cname, env, dname)}
 
                 Inductive.ctor_family(sig, cname) != dname ->
                   {:halt, shadowed_or_foreign_ctor(env, sig, cname0, cname, dname)}
+
+                match?({:error, _}, arity_check) ->
+                  {:halt, arity_check}
 
                 Map.has_key?(acc, cname) ->
                   {:halt, {:error, {:duplicate_branch, cname}}}
@@ -8029,7 +8204,103 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp constructor_pattern(other), do: {:error, {:unsupported_pattern, pattern_shape(other)}}
+  defp constructor_pattern(other), do: unsupported_pattern_error(other)
+
+  defp unsupported_pattern_error(pattern) do
+    reason = {:unsupported_pattern, pattern_shape(pattern)}
+
+    span =
+      case pattern do
+        {:range, meta, _children} when is_list(meta) ->
+          case Cure.MetaAST.Metadata.source_info(meta) do
+            %Cure.MetaAST.SourceInfo{operator: %Cure.Diagnostic.Span{} = operator} -> operator
+            %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = whole} -> whole
+            _ -> nil
+          end
+
+        _ ->
+          surface_expression_span(pattern)
+      end
+
+    case span do
+      %Cure.Diagnostic.Span{} ->
+        {:error,
+         {:source_context, reason,
+          %{
+            line: span.start_line,
+            column: span.start_column,
+            length: max(1, span.end_byte - span.start_byte),
+            span: span,
+            checking: :pattern,
+            expression_category: :pattern,
+            expectation_origin: :pattern
+          }}}
+
+      _ ->
+        {:error, reason}
+    end
+  end
+
+  defp unknown_pattern_constructor_error(pattern, cname, env, family) do
+    span =
+      case pattern do
+        {:function_call, meta, _args} when is_list(meta) ->
+          case Cure.MetaAST.Metadata.source_info(meta) do
+            %Cure.MetaAST.SourceInfo{callee: %Cure.Diagnostic.Span{} = callee} -> callee
+            %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = name} -> name
+            %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = whole} -> whole
+            _ -> nil
+          end
+
+        _ ->
+          surface_expression_span(pattern)
+      end
+
+    candidates =
+      env
+      |> Inductive.ctors_of(family)
+      |> Enum.map(fn ctor ->
+        {owner, name} = Cure.Elab.Name.split(ctor.name)
+
+        %{
+          id: ctor.name,
+          candidate_id: ctor.name,
+          name: name,
+          namespace: :constructor,
+          owner: owner || family,
+          arity: Enum.count(Map.get(ctor, :plicities, []), &(&1 == :explicit)),
+          imported: true,
+          origin: :matched_type
+        }
+      end)
+
+    context = %{
+      span: span,
+      checking: :pattern,
+      expectation_origin: :pattern,
+      expression_category: :pattern,
+      name_candidates: candidates,
+      name_arity: pattern_argument_count(pattern)
+    }
+
+    context =
+      case span do
+        %Cure.Diagnostic.Span{} ->
+          Map.merge(context, %{
+            line: span.start_line,
+            column: span.start_column,
+            length: max(1, span.end_byte - span.start_byte)
+          })
+
+        _ ->
+          context
+      end
+
+    {:error, {:source_context, {:unknown_pattern_constructor, cname}, context}}
+  end
+
+  defp pattern_argument_count({:function_call, _meta, args}) when is_list(args), do: length(args)
+  defp pattern_argument_count(_pattern), do: nil
 
   defp named_implicit_arg?({:named_implicit_pat, _m, _children}), do: true
   defp named_implicit_arg?(_), do: false
@@ -8213,6 +8484,43 @@ defmodule Cure.Elab.Elaborator do
 
     Enum.reverse(names_in_order)
   end
+
+  defp validate_constructor_pattern_arity(pattern, ctor, cname, pattern_vars \\ nil) do
+    pattern_vars =
+      case pattern_vars do
+        nil ->
+          case constructor_pattern(pattern) do
+            {:ok, {_name, vars}} -> vars
+            _ -> []
+          end
+
+        vars ->
+          vars
+      end
+
+    expected = Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit))
+    actual = length(pattern_vars)
+
+    if expected == actual do
+      :ok
+    else
+      {:error,
+       {:pattern_arity_mismatch,
+        %{
+          constructor: cname,
+          display_name: pattern_display_name(pattern, cname),
+          expected: expected,
+          actual: actual,
+          direction: if(actual < expected, do: :too_few, else: :too_many),
+          span: surface_expression_span(pattern)
+        }}}
+    end
+  end
+
+  defp pattern_display_name({:function_call, meta, _args}, fallback) when is_list(meta),
+    do: Keyword.get(meta, :name, to_string(fallback))
+
+  defp pattern_display_name(_pattern, fallback), do: to_string(fallback)
 
   # Shared branch-goal refinement (Task 3.4) — ONE equation-compiler refinement
   # behind two front-ends (plain `match` `elaborate_matched_branch` and
@@ -9067,7 +9375,7 @@ defmodule Cure.Elab.Elaborator do
       # before the graceful error above could fire). Positional arg count is the
       # number of EXPLICIT slots — an implicit `{k:T}` is solved, not passed.
       Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit)) != length(arg_asts) ->
-        {:error, {:constructor_arity_mismatch, cname}}
+        constructor_arity_error(ctor, cname, arg_asts)
 
       true ->
         # Fresh metas for the params ++ every argument (including erased index
@@ -9319,7 +9627,7 @@ defmodule Cure.Elab.Elaborator do
         {:error, {:bidirectional_erased_field, cname}}
 
       length(ctor.args) != length(arg_asts) ->
-        {:error, {:constructor_arity_mismatch, cname}}
+        constructor_arity_error(ctor, cname, arg_asts)
 
       true ->
         {mctx, param_metas} =
@@ -9333,6 +9641,32 @@ defmodule Cure.Elab.Elaborator do
           {:error, _} = err -> err
         end
     end
+  end
+
+  defp validate_constructor_arity(env, cname, args, display_name) do
+    case Inductive.get_ctor(env, cname) do
+      nil ->
+        :ok
+
+      ctor ->
+        expected = Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit))
+        actual = length(args)
+
+        if expected == actual,
+          do: :ok,
+          else: constructor_arity_error(ctor, cname, args, display_name)
+    end
+  end
+
+  defp constructor_arity_error(ctor, cname, args, display_name \\ nil) do
+    {:error,
+     {:constructor_arity_mismatch,
+      %{
+        name: cname,
+        display_name: display_name,
+        expected: Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit)),
+        actual: length(args)
+      }}}
   end
 
   # Elaborate each constructor argument, threading the (scratch) parameter
@@ -9596,10 +9930,16 @@ defmodule Cure.Elab.Elaborator do
   @doc false
   def elaborate_expr({:variable, _meta, "Type"}, _scope, _env), do: {:ok, {:type, 0}}
 
-  def elaborate_expr({:variable, _meta, name}, scope, env) do
+  def elaborate_expr({:variable, meta, name}, scope, env) do
     case Enum.find_index(scope, &(&1 == name)) do
-      nil -> resolve_free(name, env)
-      index -> {:ok, {:var, index}}
+      nil ->
+        case resolve_free(name, env) do
+          {:error, reason} -> {:error, attach_variable_context(reason, meta, name)}
+          result -> result
+        end
+
+      index ->
+        {:ok, {:var, index}}
     end
   end
 

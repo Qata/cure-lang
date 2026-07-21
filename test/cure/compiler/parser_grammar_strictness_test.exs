@@ -26,6 +26,7 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
   use ExUnit.Case, async: true
 
   alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Diagnostic.Renderer
 
   defp parse_raw(source) do
     {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
@@ -80,23 +81,96 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
   describe "non-associative operators reject chaining" do
     test "comparison: `a == b == c`" do
       assert {:error, errors} = parse_raw("a == b == c")
-      assert Enum.any?(errors, &match?({:non_associative, :==, :chained_with, :==, _, _}, &1))
+      assert Enum.any?(errors, &match?({:non_associative, %{operator: :==, next_operator: :==}}, &1))
     end
 
     test "comparison, mixed operators at the same level: `a < b <= c`" do
       assert {:error, errors} = parse_raw("a < b <= c")
-      assert Enum.any?(errors, &match?({:non_associative, :<, :chained_with, :<=, _, _}, &1))
+      assert Enum.any?(errors, &match?({:non_associative, %{operator: :<, next_operator: :<=}}, &1))
     end
 
     test "range: `a..b..c`" do
       assert {:error, errors} = parse_raw("a..b..c")
-      assert Enum.any?(errors, &match?({:non_associative, :.., :chained_with, :.., _, _}, &1))
+      assert Enum.any?(errors, &match?({:non_associative, %{operator: :.., next_operator: :..}}, &1))
     end
 
     test "Melquiades send: `a <-| b <-| c`" do
       assert {:error, errors} = parse_raw("a <-| b <-| c")
-      assert Enum.any?(errors, &match?({:non_associative, :"<-|", :chained_with, :"<-|", _, _}, &1))
+      assert Enum.any?(errors, &match?({:non_associative, %{operator: :"<-|", next_operator: :"<-|"}}, &1))
     end
+
+    test "the conflicting operators receive separate exact source labels" do
+      source = "a == b == c"
+      assert {:error, [{:non_associative, details} = reason]} = parse_raw(source)
+
+      assert details.operator_span.start_column == 3
+      assert details.operator_span.end_column == 5
+      assert details.span.start_column == 8
+      assert details.span.end_column == 10
+
+      {diagnostic, registry} =
+        Cure.Compiler.Errors.to_diagnostic({:parse_error, [reason]}, "operator.cure", source)
+
+      rendered = Renderer.plain(diagnostic, registry, width: 80)
+      assert diagnostic.code == "E094"
+      assert diagnostic.key == :non_associative
+
+      assert rendered ==
+               String.trim_trailing("""
+               -- OPERATOR CHAIN NEEDS PARENTHESES [E094] ----------------------- operator.cure
+
+               The '==' operator cannot be chained without parentheses.
+
+               at operator.cure:1:8
+               1 | a == b == c
+                 |   --   ^^ the conflicting operator is here; this second operator makes the chain ambiguous
+
+               Hint: Add parentheses around the operation that should happen first
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 0, "character" => 7},
+               "end" => %{"line" => 0, "character" => 9}
+             }
+
+      assert [%{"location" => %{"range" => first_range}, "message" => first_message}] =
+               lsp["relatedInformation"]
+
+      assert first_range == %{
+               "start" => %{"line" => 0, "character" => 2},
+               "end" => %{"line" => 0, "character" => 4}
+             }
+
+      assert first_message == "the conflicting operator is here"
+    end
+  end
+
+  test "an otherwise-unclassified token keeps its exact source range" do
+    source = "{\n"
+    {:ok, tokens} = Lexer.tokenize(source, file: "unexpected.cure", emit_events: false)
+    assert {:error, [{:unexpected_token, details} | _]} = Parser.parse(tokens, emit_events: false)
+    assert details.observed == "{"
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [{:unexpected_token, details}]}, "unexpected.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- I GOT STUCK WHILE PARSING THIS [E094] ----------------------- unexpected.cure
+
+             '{' cannot appear at this point in the construct.
+
+             at unexpected.cure:1:1
+             1 | {
+               | ^ this syntax does not fit here
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 0, "character" => 0},
+             "end" => %{"line" => 0, "character" => 1}
+           }
   end
 
   describe "associative operators still chain" do

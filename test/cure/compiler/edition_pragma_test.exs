@@ -14,6 +14,6 @@ defmodule Cure.Compiler.EditionPragmaTest do
 
   test "an @edition pragma that is not file-leading is a hard parse error" do
     assert {:error, errors} = parse("mod M\n  @edition(\"2026\")\n  fn f() -> Int = 1\n")
-    assert Enum.any?(errors, &match?({:edition_pragma_placement, _, _}, &1))
+    assert Enum.any?(errors, &match?({:edition_pragma_placement, %{span: %Cure.Diagnostic.Span{}}}, &1))
   end
 end

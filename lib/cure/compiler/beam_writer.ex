@@ -42,6 +42,54 @@ defmodule Cure.Compiler.BeamWriter do
   end
 
   @doc """
+  Convert warnings from `:compile.forms/2` into the public compiler-warning
+  schema consumed by diagnostic sinks.
+
+  BEAM compilation operates on generated forms and commonly reports the
+  synthetic filename `nofile`. The authored Cure path is therefore retained
+  as the honest source boundary.
+  """
+  @spec normalize_warnings(list(), String.t()) :: [
+          %{file: String.t(), line: pos_integer(), message: String.t()}
+        ]
+  def normalize_warnings(warnings, source_file) when is_list(warnings) and is_binary(source_file) do
+    Enum.flat_map(warnings, fn
+      {_generated_file, entries} when is_list(entries) ->
+        Enum.map(entries, &normalize_warning(&1, source_file))
+
+      entry ->
+        [normalize_warning(entry, source_file)]
+    end)
+  end
+
+  defp normalize_warning({location, formatter, detail}, source_file) when is_atom(formatter) do
+    %{
+      file: source_file,
+      line: warning_line(location),
+      message: format_warning(formatter, detail)
+    }
+  end
+
+  defp normalize_warning(_unknown, source_file) do
+    %{
+      file: source_file,
+      line: 1,
+      message: "The BEAM compiler reported an unclassified warning while validating generated code."
+    }
+  end
+
+  defp warning_line({line, _column}) when is_integer(line) and line > 0, do: line
+  defp warning_line(line) when is_integer(line) and line > 0, do: line
+  defp warning_line(_location), do: 1
+
+  defp format_warning(formatter, detail) do
+    formatter.format_error(detail)
+    |> IO.iodata_to_binary()
+  rescue
+    _ -> "The BEAM compiler reported a warning while validating generated code."
+  end
+
+  @doc """
   Write a compiled BEAM binary to disk.
 
   Creates the output directory if it does not exist. Emits a

@@ -64,8 +64,11 @@ defmodule Cure.Elab.TypeDeclarationTest do
     end
 
     test "a one-constructor enum whose constructor already exists is a duplicate" do
-      assert {:error, {:duplicate_constructor, :Z}} =
+      assert {:error, {:duplicate_constructor, %{name: :Z, spans: [first, second]}}} =
                Program.elaborate("mod M\n" <> @nat <> "  type Bad = Z\nend\n")
+
+      assert first.start_line == 2
+      assert second.start_line == 3
     end
   end
 
@@ -79,7 +82,11 @@ defmodule Cure.Elab.TypeDeclarationTest do
       end
       """
 
-      assert {:error, {:duplicate_type, :Equatable}} = Program.elaborate(src)
+      assert {:error, {:duplicate_type, %{name: :Equatable, spans: [first, second]}}} =
+               Program.elaborate(src)
+
+      assert first.start_line == 2
+      assert second.start_line == 4
     end
   end
 
@@ -95,7 +102,19 @@ defmodule Cure.Elab.TypeDeclarationTest do
       # puts `Bad` to the left of an arrow in its own constructor.
       src = "mod M\n" <> @nat <> "  type Bad = MkBad((Bad) -> Nat)\nend\n"
 
-      assert {:error, _} = Program.elaborate(src)
+      assert {:error, error} = Program.elaborate(src, file: "positivity.cure")
+      assert {:non_strictly_positive, :"M#MkBad"} = Program.semantic_error(error)
+
+      {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "positivity.cure", src)
+      rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80)
+
+      assert diagnostic.code == "E103"
+      assert diagnostic.primary.span.start_line == 3
+      assert diagnostic.primary.span.start_column == 14
+      assert diagnostic.primary.span.end_column == 19
+      assert rendered =~ "3 |   type Bad = MkBad((Bad) -> Nat)"
+      assert rendered =~ "^^^^^ this recursive type definition is not strictly positive"
+      assert rendered =~ "Hint: Move the recursive type out of function-input positions"
     end
   end
 end

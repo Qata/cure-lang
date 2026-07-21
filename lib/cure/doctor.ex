@@ -190,13 +190,20 @@ defmodule Cure.Doctor do
           %{
             severity: :error,
             code: "DOC-PROJ-BAD",
-            message: "Cure.toml unreadable: #{inspect(reason)}",
+            message: "Cure.toml unreadable: #{project_error_reason(reason)}",
             file: Path.join(root, "Cure.toml"),
             fix: "Check file permissions and TOML syntax."
           }
         ]
     end
   end
+
+  defp project_error_reason(:enoent), do: "the file does not exist"
+  defp project_error_reason(:eacces), do: "permission was denied"
+  defp project_error_reason(:invalid_toml), do: "the TOML document is invalid"
+  defp project_error_reason(:invalid), do: "the project document is invalid"
+  defp project_error_reason(reason) when is_binary(reason), do: reason
+  defp project_error_reason(_reason), do: "the project document could not be read"
 
   defp lock_findings(project, root) do
     registry_deps =

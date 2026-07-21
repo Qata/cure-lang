@@ -32,6 +32,11 @@ defmodule Cure.Elab.Program do
   def semantic_error({:codegen_error, reason}), do: {:codegen_error, semantic_error(reason)}
   def semantic_error(reason), do: reason
 
+  @doc "Project diagnostic context away from an elaboration result while preserving its verdict."
+  @spec semantic_result({:ok, term()} | {:error, term()}) :: {:ok, term()} | {:error, term()}
+  def semantic_result({:error, reason}), do: {:error, semantic_error(reason)}
+  def semantic_result(result), do: result
+
   @doc """
   Elaborate + totality-certify an already-parsed module/declaration AST. Unwraps
   a `mod ... end` container to its body. This is the entry the real compiler's
@@ -144,8 +149,12 @@ defmodule Cure.Elab.Program do
     case Cure.Compiler.Parser.FixityResolver.assemble(base, own_fixity, own_uses, []) do
       {:ok, table} ->
         case Cure.Compiler.Parser.FixityTable.cyclic_groups(table) do
-          [] -> :ok
-          groups -> {:error, {:precedence_cycle, groups}}
+          [] ->
+            :ok
+
+          groups ->
+            {:error,
+             {:precedence_cycle, %{groups: groups, spans: Cure.Compiler.Parser.FixityScan.group_spans(ast, groups)}}}
         end
 
       # A fixity conflict is already reported at parse time (the module never
@@ -295,26 +304,50 @@ defmodule Cure.Elab.Program do
 
   defp top_modules(_), do: []
 
-  # Runs `extract` over each module's declarations independently; the first
-  # within-module duplicate becomes {:error, {tag, norm.(name)}}.
-  defp first_dup_per_module(ast, extract, tag, norm) do
-    ast
-    |> module_decl_groups()
-    |> Enum.reduce_while(:ok, fn decls, :ok ->
-      names = Enum.flat_map(decls, extract)
-
-      case names -- Enum.uniq(names) do
-        [] -> {:cont, :ok}
-        [dup | _] -> {:halt, {:error, {tag, norm.(dup)}}}
-      end
-    end)
-  end
-
   # A module must not declare the same type name twice: `env.families` is a silent
   # `Map.put`, so the second would overwrite the first.
   @spec check_no_duplicate_types(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_types(ast) do
-    first_dup_per_module(ast, &type_names/1, :duplicate_type, & &1)
+    ast
+    |> module_decl_groups()
+    |> Enum.reduce_while(:ok, fn decls, :ok ->
+      case first_duplicate_type(decls) do
+        nil -> {:cont, :ok}
+        details -> {:halt, {:error, {:duplicate_type, details}}}
+      end
+    end)
+  end
+
+  defp first_duplicate_type(decls) do
+    decls
+    |> Enum.reduce_while(%{}, fn decl, seen ->
+      case type_names(decl) do
+        [name] ->
+          span = declaration_name_span(decl)
+
+          case Map.fetch(seen, name) do
+            {:ok, first_span} ->
+              {:halt, %{name: name, spans: Enum.reject([first_span, span], &is_nil/1)}}
+
+            :error ->
+              {:cont, Map.put(seen, name, span)}
+          end
+
+        _ ->
+          {:cont, seen}
+      end
+    end)
+    |> case do
+      %{name: _name, spans: _spans} = details -> details
+      _seen -> nil
+    end
+  end
+
+  defp declaration_name_span({_tag, meta, _payload}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
   end
 
   # Type names a declaration binds. `:interface` belongs here: `Cure.Elab.Interface`
@@ -340,7 +373,72 @@ defmodule Cure.Elab.Program do
   # since Cure has no type-directed constructor disambiguation).
   @spec check_no_duplicate_ctors(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_ctors(ast) do
-    first_dup_per_module(ast, &ctor_names/1, :duplicate_constructor, & &1)
+    ast
+    |> module_decl_groups()
+    |> Enum.reduce_while(:ok, fn decls, :ok ->
+      case first_duplicate_constructor(decls) do
+        nil -> {:cont, :ok}
+        details -> {:halt, {:error, {:duplicate_constructor, details}}}
+      end
+    end)
+  end
+
+  defp first_duplicate_constructor(decls) do
+    decls
+    |> Enum.flat_map(&constructor_bindings/1)
+    |> Enum.reduce_while(%{}, fn {name, span}, seen ->
+      case Map.fetch(seen, name) do
+        {:ok, first_span} ->
+          {:halt, {:duplicate, %{name: name, spans: Enum.reject([first_span, span], &is_nil/1)}}}
+
+        :error ->
+          {:cont, Map.put(seen, name, span)}
+      end
+    end)
+    |> case do
+      {:duplicate, details} -> details
+      _seen -> nil
+    end
+  end
+
+  defp constructor_bindings({:container, meta, variants}) when is_list(meta) do
+    case Keyword.get(meta, :container_type) do
+      :enum ->
+        Enum.flat_map(variants, &variant_constructor_binding/1)
+
+      :struct ->
+        [{meta |> Keyword.fetch!(:name) |> String.to_atom(), declaration_name_span({:container, meta, variants})}]
+
+      _ ->
+        []
+    end
+  end
+
+  # The parser keeps a single bare RHS in the compact `:type_annotation` form
+  # until elaboration decides whether it names an alias target or a nullary
+  # constructor. Preserve the existing conservative rule used by `ctor_names/1`:
+  # a `variant: true` RHS participates in collision checks, with its exact name
+  # range, so `type Bad = Z` cannot silently erase an earlier `Z` constructor.
+  defp constructor_bindings({:type_annotation, _meta, [{_tag, rmeta, _} = rhs]})
+       when is_list(rmeta) do
+    if Keyword.get(rmeta, :variant, false), do: variant_constructor_binding(rhs), else: []
+  end
+
+  defp constructor_bindings(_decl), do: []
+
+  defp variant_constructor_binding({:variable, meta, name}) when is_list(meta) and is_binary(name),
+    do: [{String.to_atom(name), metadata_name_span(meta)}]
+
+  defp variant_constructor_binding({:function_def, meta, _body}) when is_list(meta),
+    do: [{meta |> Keyword.fetch!(:name) |> String.to_atom(), metadata_name_span(meta)}]
+
+  defp variant_constructor_binding(_variant), do: []
+
+  defp metadata_name_span(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
   end
 
   # A module must not bind one name as BOTH a constructor and a top-level function.
@@ -401,12 +499,66 @@ defmodule Cure.Elab.Program do
          {:ok, env0} <- merge_env(base, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
          :ok <- MacroValidate.check_program(ast, env),
-         {:ok, certified} <- TotalityClosure.certify_type_level(env),
+         {:ok, certified} <- certify_type_level_with_source(ast, env),
          {:ok, certified} <- Cure.Elab.Equation.generate_all(certified, ast) do
       # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
       # defs so their intra-module uses keep inlining; any other module name
       # is a no-op here (its hinted imports were marked slice-side).
       {:ok, mark_inline_hints(certified, find_module_name(ast))}
+    end
+  end
+
+  defp certify_type_level_with_source(ast, env, opts \\ []) do
+    case TotalityClosure.certify_type_level(env) do
+      {:ok, certified} ->
+        {:ok, certified}
+
+      {:error, {:totality_required, name} = reason} ->
+        {:error, {:source_context, reason, totality_source_context(ast, name, opts)}}
+
+      {:error, {:compile_time_totality, name, _detail} = reason} ->
+        {:error, {:source_context, reason, totality_source_context(ast, name, opts)}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp totality_source_context(ast, qualified_name, opts) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    declaration =
+      Enum.find(declarations(ast), fn
+        {:function_def, meta, _body} when is_list(meta) -> to_string(Keyword.get(meta, :name)) == bare_name
+        _ -> false
+      end)
+
+    {name_span, definition_span} =
+      case declaration do
+        {:function_def, meta, _body} ->
+          case Cure.MetaAST.Metadata.source_info(meta) do
+            %Cure.MetaAST.SourceInfo{name: name, whole: whole} -> {name, whole}
+            _ -> {nil, nil}
+          end
+
+        _ ->
+          {nil, nil}
+      end
+
+    context = %{
+      span: name_span || definition_span,
+      definition_span: definition_span,
+      checking: qualified_name,
+      expectation_origin: :type_level_totality,
+      expression_category: :function_definition
+    }
+
+    case {Keyword.get(opts, :source), Keyword.get(opts, :file)} do
+      {source, file} when is_binary(source) and is_binary(file) ->
+        Map.merge(context, %{source: source, file: file})
+
+      _ ->
+        context
     end
   end
 
@@ -1754,8 +1906,8 @@ defmodule Cure.Elab.Program do
 
   defp compute_module_interface(requested_name, path) do
     with {:ok, source} <- File.read(path),
-         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+         {:ok, tokens} <- Lexer.tokenize(source, file: path, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, file: path, emit_events: false),
          :ok <- validate_module_identity(ast, requested_name, path),
          :ok <- check_declarations(ast),
          dependencies = module_dependency_sources(ast),
@@ -1766,7 +1918,7 @@ defmodule Cure.Elab.Program do
          {:ok, env0_base} <- merge_env(base, imported),
          env0 = Map.put(env0_base, :import_modules, direct_import_ids(dependencies)),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
-         {:ok, certified} <- TotalityClosure.certify_type_level(env),
+         {:ok, certified} <- certify_type_level_with_source(ast, env, source: source, file: path),
          {:ok, certified} <- Cure.Elab.Equation.generate_all(certified, ast) do
       direct_ids = direct_import_ids(imports(ast))
 
@@ -2170,29 +2322,254 @@ defmodule Cure.Elab.Program do
   # one (a function signature may reference any type declared before it).
   defp elaborate_declarations(items, env, prelude?) do
     with {:ok, items} <- Cure.Elab.Induction.lift_declarations(items) do
-      elaborate_lifted_declarations(items, env, prelude?)
+      elaborate_lifted_declarations(expand_where_declarations(items), env, prelude?)
     end
   end
 
   defp elaborate_lifted_declarations(items, env, prelude?) do
     items = annotate_overload_ordinals(items)
 
-    with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?),
-         :ok <- check_overload_legality(env1),
-         {:ok, alias_order} <- typealias_order(items, env1),
-         {:ok, env_completed} <- complete_typealiases(alias_order, items, env1),
-         # Alias bodies are all present after the register pass. Certify their
-         # forward chains now so an earlier function body can use conversion
-         # through `A -> B -> RHS`; the final sweep below still handles
-         # functions whose bodies are only installed by `body_pass/2`.
-         env_aliases = TotalityClosure.certify_deferred(env_completed),
-         {:ok, env2} <- body_pass(fn_decls, env_aliases) do
-      # Every body is now present. Re-certify defs whose totality was DEFERRED
-      # in declaration order (a total function calling a helper declared below
-      # it — `reverse` → `reverse_acc`), which the in-order per-def certify left
-      # uncertified and no later pass revisits. Sound: the kernel re-derives each
-      # certificate; genuinely partial defs are rejected exactly as before.
-      {:ok, TotalityClosure.certify_deferred(env2)}
+    result =
+      with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?),
+           :ok <- check_overload_legality(env1),
+           {:ok, alias_order} <- typealias_order(items, env1),
+           {:ok, env_completed} <- complete_typealiases(alias_order, items, env1),
+           # Alias bodies are all present after the register pass. Certify their
+           # forward chains now so an earlier function body can use conversion
+           # through `A -> B -> RHS`; the final sweep below still handles
+           # functions whose bodies are only installed by `body_pass/2`.
+           env_aliases = TotalityClosure.certify_deferred(env_completed),
+           {:ok, env2} <- body_pass(fn_decls, env_aliases) do
+        # Every body is now present. Re-certify defs whose totality was DEFERRED
+        # in declaration order (a total function calling a helper declared below
+        # it — `reverse` → `reverse_acc`), which the in-order per-def certify left
+        # uncertified and no later pass revisits. Sound: the kernel re-derives each
+        # certificate; genuinely partial defs are rejected exactly as before.
+        {:ok, TotalityClosure.certify_deferred(env2)}
+      end
+
+    contextualize_trusted_declaration_error(result, items)
+  end
+
+  defp contextualize_trusted_declaration_error({:error, {:source_context, _, _}} = error, _items), do: error
+
+  defp contextualize_trusted_declaration_error({:error, reason} = error, items) do
+    case trusted_declaration_span(reason, items) do
+      {%Cure.Diagnostic.Span{} = span, checking, category} ->
+        {:error,
+         {:source_context, reason,
+          %{
+            span: span,
+            checking: checking,
+            expectation_origin: :trusted_declaration_check,
+            expression_category: category
+          }}}
+
+      _ ->
+        error
+    end
+  end
+
+  defp contextualize_trusted_declaration_error(result, _items), do: result
+
+  defp trusted_declaration_span({:unknown_erasure_class, name, _class}, items),
+    do: declaration_role_span(items, name, :erases_decorator, :erasure_annotation)
+
+  defp trusted_declaration_span({:erases_on_non_opaque, name}, items),
+    do: declaration_role_span(items, name, :erases_decorator, :erasure_annotation)
+
+  defp trusted_declaration_span({:non_strictly_positive, constructor}, items),
+    do: constructor_role_span(items, constructor)
+
+  defp trusted_declaration_span({:erased_used_relevantly, %{def: name}}, items),
+    do: declaration_role_span(items, name, :body, :relevance_check)
+
+  defp trusted_declaration_span({:usage_violation, %{def: name}}, items),
+    do: declaration_role_span(items, name, :body, :relevance_check)
+
+  defp trusted_declaration_span(_reason, _items), do: nil
+
+  defp declaration_role_span(items, qualified_name, role, category) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {tag, meta, _body} when tag in [:function_def, :container, :indexed_type] and is_list(meta) ->
+        if to_string(Keyword.get(meta, :name)) == bare_name do
+          info = Cure.MetaAST.Metadata.source_info(meta)
+          span = source_role_span(info, role) || source_role_span(info, :name) || source_role_span(info, :whole)
+          if span, do: {span, qualified_name, category}
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp source_role_span(%Cure.MetaAST.SourceInfo{decorators: decorators}, :erases_decorator) do
+    case Map.get(decorators, "erases") do
+      %{whole: %Cure.Diagnostic.Span{} = span} -> span
+      %{name: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp source_role_span(%Cure.MetaAST.SourceInfo{} = info, role) when role in [:name, :whole, :body],
+    do: Map.get(info, role)
+
+  defp source_role_span(_info, _role), do: nil
+
+  defp constructor_role_span(items, constructor) do
+    spelling = constructor |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {:container, _meta, variants} when is_list(variants) ->
+        Enum.find_value(variants, fn
+          {:function_def, meta, _} when is_list(meta) ->
+            if to_string(Keyword.get(meta, :name)) == spelling do
+              case Cure.MetaAST.Metadata.source_info(meta) do
+                %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} ->
+                  {span, constructor, :constructor_declaration}
+
+                _ ->
+                  nil
+              end
+            end
+
+          {:variable, meta, name} when is_list(meta) ->
+            if to_string(name) == spelling do
+              case Cure.MetaAST.Metadata.source_info(meta) do
+                %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} ->
+                  {span, constructor, :constructor_declaration}
+
+                _ ->
+                  nil
+              end
+            end
+
+          _ ->
+            nil
+        end)
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp expand_where_declarations(items) when is_list(items) do
+    {expanded, _counter} =
+      Enum.map_reduce(items, 0, fn
+        {:function_def, meta, [body]}, counter when is_list(meta) ->
+          case Keyword.get(meta, :where, []) do
+            [] ->
+              {{:function_def, meta, [body]}, counter}
+
+            bindings ->
+              parent = Keyword.fetch!(meta, :name)
+              params = Keyword.get(meta, :params, [])
+              param_names = Enum.map(params, &param_name/1)
+              param_map = Map.new(params, fn p -> {param_name(p), p} end)
+
+              {helpers, helper_names, counter} =
+                Enum.reduce(bindings, {[], %{}, counter}, fn
+                  {:function_def, hmeta, hbody}, {acc, names, n} ->
+                    hname = Keyword.fetch!(hmeta, :name)
+
+                    captures =
+                      param_names
+                      |> Enum.filter(&surface_occurs?({hbody, hmeta}, &1))
+
+                    fresh = "#{parent}$#{hname}$#{n}"
+                    lifted_params = Enum.map(captures, &Map.fetch!(param_map, &1)) ++ Keyword.get(hmeta, :params, [])
+
+                    hmeta =
+                      hmeta
+                      |> Keyword.put(:name, fresh)
+                      |> Keyword.put(:visibility, :private)
+                      |> Keyword.put(:params, lifted_params)
+                      |> Keyword.put(:arity, length(lifted_params))
+                      |> Keyword.delete(:where)
+
+                    {body0, _} = List.pop_at(hbody, 0)
+                    helper = {:function_def, hmeta, [body0]}
+                    {[helper | acc], Map.put(names, hname, {fresh, captures}), n + 1}
+
+                  {:where_value, _vmeta, _expr}, acc ->
+                    acc
+                end)
+
+              helpers = Enum.reverse(helpers)
+              # A second pass sees the complete helper table, allowing mutual
+              # recursion and calls between helpers.
+              helpers =
+                Enum.map(helpers, fn {:function_def, hm, [hb]} ->
+                  {:function_def, hm, [rewrite_where_calls(hb, helper_names)]}
+                end)
+
+              body =
+                bindings
+                |> Enum.reverse()
+                |> Enum.reduce(body, fn
+                  {:where_value, vmeta, expr}, acc ->
+                    {:block, [line: Keyword.get(vmeta, :line, 0)],
+                     [
+                       {:assignment, [let: true, line: Keyword.get(vmeta, :line, 0)],
+                        [{:variable, [scope: :local], Keyword.fetch!(vmeta, :name)}, expr]},
+                       acc
+                     ]}
+
+                  _, acc ->
+                    acc
+                end)
+
+              parent_meta = Keyword.delete(meta, :where)
+              parent_decl = {:function_def, parent_meta, [rewrite_where_calls(body, helper_names)]}
+              {helpers ++ [parent_decl], counter}
+          end
+
+        other, counter ->
+          {other, counter}
+      end)
+
+    List.flatten(expanded)
+  end
+
+  defp expand_where_declarations(items), do: items
+
+  defp param_name({:param, _meta, name}), do: name
+  defp param_name({name, _type}), do: name
+
+  defp surface_occurs?(term, name) do
+    case term do
+      {:variable, _meta, ^name} -> true
+      {tag, _meta, children} when is_atom(tag) and is_list(children) -> Enum.any?(children, &surface_occurs?(&1, name))
+      list when is_list(list) -> Enum.any?(list, &surface_occurs?(&1, name))
+      _ -> false
+    end
+  end
+
+  defp rewrite_where_calls(term, names) do
+    case term do
+      {:function_call, meta, args} ->
+        name = Keyword.get(meta, :name)
+        args = Enum.map(args, &rewrite_where_calls(&1, names))
+
+        case Map.get(names, name) do
+          {fresh, caps} ->
+            cap_args = Enum.map(caps, &{:variable, [scope: :local], &1})
+            {:function_call, Keyword.put(meta, :name, fresh), cap_args ++ args}
+
+          nil ->
+            {:function_call, meta, args}
+        end
+
+      {tag, meta, children} when is_atom(tag) and is_list(children) ->
+        {tag, meta, Enum.map(children, &rewrite_where_calls(&1, names))}
+
+      list when is_list(list) ->
+        Enum.map(list, &rewrite_where_calls(&1, names))
+
+      other ->
+        other
     end
   end
 

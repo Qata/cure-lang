@@ -113,15 +113,13 @@ defmodule Mix.Tasks.Cure.Snap do
         end
 
       {:error, :E069} ->
-        Mix.shell().error(
-          render_diagnostic(Cure.Diagnostic.Operational.artifact_error("Snap schema incompatible (E069)"))
-        )
+        Mix.shell().error(render_diagnostic(Cure.Diagnostic.Operational.snap_schema_incompatible(path)))
 
         exit({:shutdown, 1})
 
       {:error, :corrupt} ->
         Mix.shell().error(
-          render_diagnostic(Cure.Diagnostic.Operational.artifact_error("Snap file is corrupt or truncated"))
+          render_diagnostic(Cure.Diagnostic.Operational.artifact_error("Snap file is corrupt or truncated: #{path}"))
         )
 
         exit({:shutdown, 1})

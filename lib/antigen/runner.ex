@@ -457,23 +457,23 @@ defmodule Antigen.Runner do
     end
   end
 
-  # Loud, inline report of a record that could NOT be banked because it reconstructs
-  # an atom absent from `Challenge.__known_atoms__/0` (it would crash the replay gate
-  # on a fresh VM). Printed to stderr so it stands out in a banking loop's output; the
-  # message names the missing atom and how to fix it.
+  # A record that reconstructs an atom absent from `Challenge.__known_atoms__/0`
+  # would crash replay on a fresh VM. Keep this on stderr, but route it through
+  # the same structured boundary as every other host-visible failure.
   defp report_unportable(c, e) do
-    IO.puts(:stderr, "")
+    diagnostic =
+      Cure.Diagnostic.Operational.artifact_error(
+        "Antigen could not bank a non-portable record for assay `#{c.assay}` (kind `#{c.kind}`): " <>
+          Exception.message(e),
+        %{assay: c.assay, kind: c.kind, reason: Exception.message(e)}
+      )
 
-    IO.puts(
-      :stderr,
-      IO.ANSI.format([
-        :red,
-        :bright,
-        "!!! ANTIGEN: non-portable record NOT banked (assay=#{c.assay} kind=#{c.kind}) !!!"
-      ])
+    Cure.Diagnostic.Host.emit_diagnostic(
+      diagnostic,
+      output_device: :standard_error,
+      color: :auto,
+      width: 80
     )
-
-    IO.puts(:stderr, "  " <> Exception.message(e))
   end
 
   @doc """

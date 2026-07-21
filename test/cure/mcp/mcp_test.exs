@@ -37,6 +37,14 @@ defmodule Cure.MCP.McpTest do
       resp = Server.handle_request(%{"method" => "unknown/thing", "id" => 3, "params" => %{}})
       assert resp["result"]["error"]
     end
+
+    test "invalid tool arguments return a machine-readable usage diagnostic" do
+      result = call_tool_result("compile_cure", %{})
+
+      assert result["isError"]
+      assert result["structuredContent"]["diagnostic"]["code"] == "E099"
+      assert call_tool("compile_cure", %{}) =~ "Invalid arguments for MCP tool 'compile_cure'"
+    end
   end
 
   # ============================================================================
@@ -57,8 +65,15 @@ defmodule Cure.MCP.McpTest do
       # Use source that genuinely fails to parse. (The old "not valid cure at
       # all ???" fixture happened to lex into a degenerate empty module the
       # lenient front-end accepts now that the classic checker is gone.)
-      resp = call_tool("compile_cure", %{"source" => "@@@ %%% not cure"})
-      assert resp =~ "error" or resp =~ "Error"
+      result = call_tool_result("compile_cure", %{"source" => "mod Bad\n  fn run(] -> Int = 1\nend\n"})
+      resp = result["content"] |> hd() |> Map.fetch!("text")
+
+      assert result["isError"]
+      assert result["structuredContent"]["diagnostic"]["code"] =~ ~r/^E09\d$/
+      assert resp =~ "fn run(] -> Int = 1"
+      assert resp =~ "^"
+      refute resp =~ "Compilation error:"
+      refute resp =~ "{:unexpected"
     end
   end
 
@@ -99,8 +114,14 @@ defmodule Cure.MCP.McpTest do
     end
 
     test "invalid syntax" do
-      resp = call_tool("validate_syntax", %{"source" => "???!!!"})
-      assert resp =~ "error" or resp =~ "Error"
+      result = call_tool_result("validate_syntax", %{"source" => "mod V\n  fn a(] -> Int = 1\nend\n"})
+      resp = result["content"] |> hd() |> Map.fetch!("text")
+
+      assert result["isError"]
+      assert result["structuredContent"]["diagnostic"]["code"] =~ ~r/^E09\d$/
+      assert resp =~ "fn a(] -> Int = 1"
+      assert resp =~ "^"
+      refute resp =~ "Syntax error:"
     end
   end
 
@@ -164,13 +185,19 @@ defmodule Cure.MCP.McpTest do
   # ============================================================================
 
   defp call_tool(name, args) do
-    resp =
+    resp = call_tool_result(name, args)
+
+    resp["content"] |> hd() |> Map.get("text")
+  end
+
+  defp call_tool_result(name, args) do
+    response =
       Server.handle_request(%{
         "method" => "tools/call",
         "id" => System.unique_integer([:positive]),
         "params" => %{"name" => name, "arguments" => args}
       })
 
-    resp["result"]["content"] |> hd() |> Map.get("text")
+    response["result"]
   end
 end

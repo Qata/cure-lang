@@ -29,9 +29,9 @@ defmodule Cure.CLI do
     # Ensure the application is started
     Application.ensure_all_started(:cure)
 
-    {opts, rest, _} =
+    {opts, rest, invalid} =
       OptionParser.parse(args,
-        switches: [
+        strict: [
           output_dir: :string,
           type_check: :boolean,
           optimize: :boolean,
@@ -92,6 +92,10 @@ defmodule Cure.CLI do
         ],
         aliases: [o: :output_dir, v: :verbose, h: :help, f: :filter, t: :template]
       )
+
+    if invalid != [] do
+      usage_error("Invalid command options: #{format_invalid_options(invalid)}")
+    end
 
     if opts[:help] do
       help()
@@ -155,8 +159,7 @@ defmodule Cure.CLI do
         # offender and fail, not fall through to the generic catch-all (which
         # would bind `unknown = "deps"`, blame a valid command, and exit 0).
         ["deps" | rest] ->
-          error("Unknown deps subcommand: #{Enum.join(rest, " ")}. Known: update, tree.")
-          exit({:shutdown, 1})
+          usage_error("Unknown deps subcommand: #{Enum.join(rest, " ")}. Known: update, tree.")
 
         ["test"] ->
           cmd_test(opts)
@@ -252,8 +255,7 @@ defmodule Cure.CLI do
         # must give a keys-specific usage error and fail — not fall through to the
         # generic catch-all, which would misblame `keys` as an unknown command.
         ["keys" | _rest] ->
-          error("Usage: cure keys generate <handle> | cure keys list")
-          exit({:shutdown, 1})
+          usage_error("Usage: cure keys generate <handle> | cure keys list")
 
         ["release" | rest] ->
           cmd_release(rest, opts)
@@ -307,10 +309,7 @@ defmodule Cure.CLI do
               suggestion -> " Did you mean '#{suggestion}'?"
             end
 
-          error("Unknown command: #{unknown}.#{suffix} Run 'cure help' for usage.")
-          # A mistyped command must not exit 0, or `cure <typo> && next` proceeds
-          # and CI wrappers cannot detect the mistake.
-          exit({:shutdown, 1})
+          usage_error("Unknown command: #{unknown}.#{suffix} Run 'cure help' for usage.")
       end
     end
   end
@@ -318,8 +317,7 @@ defmodule Cure.CLI do
   # -- replay (v0.28.0) --------------------------------------------------------
 
   defp cmd_replay([], _opts) do
-    error("Usage: cure replay <path.journal> [--module ModuleName] [--step]")
-    exit({:shutdown, 1})
+    usage_error("Usage: cure replay <path.journal> [--module ModuleName] [--step]")
   end
 
   defp cmd_replay([path | _], opts) do
@@ -352,7 +350,13 @@ defmodule Cure.CLI do
                 exit({:shutdown, 1})
             end
           else
-            error("Module #{mod_str} not loaded. Run 'cure compile' first.")
+            error_diagnostic(
+              Cure.Diagnostic.Operational.artifact_error(
+                "Module `#{mod_str}` is not loaded. Run `cure compile` first.",
+                %{kind: :module_not_loaded, module: mod_str}
+              )
+            )
+
             exit({:shutdown, 1})
           end
         end
@@ -392,8 +396,7 @@ defmodule Cure.CLI do
         info("Trace stopped.")
 
       {:error, _} ->
-        error("Cannot parse `#{target}`; expected Module.fun/arity")
-        exit({:shutdown, 1})
+        usage_error("Cannot parse `#{target}`; expected Module.fun/arity")
     end
   end
 
@@ -450,7 +453,7 @@ defmodule Cure.CLI do
       case Cure.Compiler.prepare_files(files) do
         {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
           Enum.each(cycles, fn walk ->
-            warn(Cure.Diagnostic.Host.render({:import_cycle, walk}, hd(paths)))
+            emit_host_diagnostic({:import_cycle, walk}, hd(paths))
           end)
 
           {ordered, providers}
@@ -472,7 +475,7 @@ defmodule Cure.CLI do
     case Cure.Compiler.compile_file(path, opts) do
       {:ok, module, warnings} ->
         Enum.each(warnings, fn w ->
-          warn("  " <> Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.compiler_warning(w)))
+          emit_host_diagnostic({:compiler_warning, w}, w.file)
         end)
 
         _ = Cure.Compiler.load_emitted(module, Keyword.fetch!(opts, :output_dir))
@@ -498,8 +501,12 @@ defmodule Cure.CLI do
 
     source =
       case File.read(path) do
-        {:ok, s} -> s
-        {:error, reason} -> error("Cannot read #{path}: #{reason}") && exit({:shutdown, 1})
+        {:ok, s} ->
+          s
+
+        {:error, reason} ->
+          error_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason))
+          exit({:shutdown, 1})
       end
 
     case Cure.Compiler.compile_and_load(source, file: path, emit_events: false) do
@@ -520,8 +527,7 @@ defmodule Cure.CLI do
   # -- draw (v0.31.0) ----------------------------------------------------------
 
   defp cmd_draw([], _opts) do
-    error("Usage: cure draw <path.cure> [--filter lifted|all]")
-    exit({:shutdown, 1})
+    usage_error("Usage: cure draw <path.cure> [--filter lifted|all]")
   end
 
   defp cmd_draw([kind, path], opts) when kind in ["lifted", "all"] do
@@ -595,8 +601,12 @@ defmodule Cure.CLI do
   defp cmd_check(path, _opts) do
     source =
       case File.read(path) do
-        {:ok, s} -> s
-        {:error, reason} -> error("Cannot read #{path}: #{reason}") && exit({:shutdown, 1})
+        {:ok, s} ->
+          s
+
+        {:error, reason} ->
+          error_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason))
+          exit({:shutdown, 1})
       end
 
     with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
@@ -649,7 +659,8 @@ defmodule Cure.CLI do
               :ok
 
             {:error, reason} ->
-              error("  #{name}: #{Cure.Diagnostic.Host.render(reason, path)}")
+              info("  #{name}: compilation failed")
+              emit_host_diagnostic(reason, path)
               :error
           end
         end)
@@ -699,7 +710,7 @@ defmodule Cure.CLI do
         end
 
       {:error, :no_project_file} ->
-        error("No Cure.toml found in current directory. Run `cure new <name>` first.")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", :enoent))
         exit({:shutdown, 1})
 
       {:error, reason} ->
@@ -742,7 +753,7 @@ defmodule Cure.CLI do
         end
 
       {:error, :no_project_file} ->
-        error("No Cure.toml found in current directory.")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", :enoent))
         exit({:shutdown, 1})
 
       {:error, reason} ->
@@ -757,7 +768,7 @@ defmodule Cure.CLI do
         IO.puts(Cure.Project.dep_tree(project))
 
       {:error, :no_project_file} ->
-        error("No Cure.toml found in current directory.")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", :enoent))
         exit({:shutdown, 1})
 
       {:error, reason} ->
@@ -800,7 +811,9 @@ defmodule Cure.CLI do
     else
       results =
         Enum.map(test_files, fn file ->
-          case Cure.Compiler.compile_and_load(File.read!(file), file: file, emit_events: false) do
+          source = File.read!(file)
+
+          case Cure.Compiler.compile_and_load(source, file: file, emit_events: false) do
             {:ok, mod} ->
               # Run all test_ functions
               exports = mod.module_info(:exports)
@@ -819,12 +832,20 @@ defmodule Cure.CLI do
                   apply(mod, name, [])
                   {:pass, "#{file}: #{name}"}
                 catch
-                  _, reason -> {:fail, "#{file}: #{name} -- #{inspect(reason)}"}
+                  kind, reason ->
+                    emit_host_diagnostic(
+                      {:command_failed, "test #{name}", {kind, reason}},
+                      file,
+                      source
+                    )
+
+                    {:fail, "#{file}: #{name}"}
                 end
               end)
 
-            {:error, _} ->
-              [{:fail, "#{file}: compilation error"}]
+            {:error, reason} ->
+              emit_host_diagnostic(reason, file, source)
+              [{:fail, "#{file}: compilation failed"}]
           end
         end)
         |> List.flatten()
@@ -841,7 +862,7 @@ defmodule Cure.CLI do
 
       Enum.each(results, fn
         {:pass, name} -> info("  PASS #{name}")
-        {:fail, name} -> error("  FAIL #{name}")
+        {:fail, name} -> info("  FAIL #{name}")
       end)
 
       info("#{pass} passed, #{fail} failed")
@@ -874,7 +895,7 @@ defmodule Cure.CLI do
           :ok
 
         {:error, reason} ->
-          warn(Cure.Diagnostic.Host.render(reason, file))
+          emit_host_diagnostic(reason, file)
       end
     end)
   end
@@ -890,9 +911,14 @@ defmodule Cure.CLI do
           cases
           |> Enum.filter(fn %{name: n} -> filter == nil or String.contains?(n, filter) end)
           |> Enum.map(fn %{name: name, expr: expr, expected: expected} ->
-            case Cure.Doc.Doctests.run_one(expr, expected) do
-              :ok -> {:pass, "#{file}: doctest #{name}"}
-              {:fail, reason} -> {:fail, "#{file}: doctest #{name} -- #{reason}"}
+            case Cure.Doc.Doctests.run_one(expr, expected, file) do
+              :ok ->
+                {:pass, "#{file}: doctest #{name}"}
+
+              {:fail, diagnostic, registry} ->
+                emit_diagnostic(diagnostic, registry)
+
+                {:fail, "#{file}: doctest #{name}"}
             end
           end)
       end
@@ -1037,7 +1063,10 @@ defmodule Cure.CLI do
         end)
 
       missing ->
-        error("Cannot read #{Enum.join(missing, ", ")}: no such file or directory")
+        Enum.each(missing, fn path ->
+          error_diagnostic(Cure.Diagnostic.Operational.file_read(path, :enoent))
+        end)
+
         exit({:shutdown, 1})
     end
   end
@@ -1050,8 +1079,12 @@ defmodule Cure.CLI do
   # need a tolerant read. Mirrors how run/check/compile read with File.read.
   defp read_source_or_exit(file) do
     case File.read(file) do
-      {:ok, source} -> source
-      {:error, reason} -> error("Cannot read #{file}: #{reason}") && exit({:shutdown, 1})
+      {:ok, source} ->
+        source
+
+      {:error, reason} ->
+        error_diagnostic(Cure.Diagnostic.Operational.file_read(file, reason))
+        exit({:shutdown, 1})
     end
   end
 
@@ -1168,10 +1201,7 @@ defmodule Cure.CLI do
          {:ok, project_edition} <- migrate_project_edition(".") do
       case plan_migration(target: target, current: project_edition) do
         {:error, :downgrade} ->
-          error(
-            "refusing to downgrade: target edition `#{target}` is older than " <>
-              "the project edition `#{project_edition}`"
-          )
+          migration_error(:project_downgrade, %{target: target, current: project_edition})
 
           {:error, :downgrade}
 
@@ -1208,7 +1238,11 @@ defmodule Cure.CLI do
         {:ok, ed}
 
       {:error, {:unknown_edition, ed}} = err ->
-        error("invalid edition `#{ed}` declared in #{Path.join(dir, "Cure.toml")}")
+        migration_error(:invalid_project_edition, %{
+          edition: ed,
+          path: Path.join(dir, "Cure.toml")
+        })
+
         err
 
       {:error, _} ->
@@ -1231,7 +1265,7 @@ defmodule Cure.CLI do
             {:ok, raw}
 
           {:error, {:unknown_edition, _}} = err ->
-            error("unknown edition: `#{raw}`")
+            migration_error(:unknown_target_edition, %{edition: raw})
             err
         end
     end
@@ -1346,7 +1380,10 @@ defmodule Cure.CLI do
         :ok
 
       {:error, reasons} ->
-        Enum.each(reasons, fn {path, reason} -> error("#{path}: #{reason}") end)
+        Enum.each(reasons, fn {path, reason} ->
+          migration_error(:git_guard, %{path: path, reason: reason})
+        end)
+
         {:error, {:git_guard_failed, reasons}}
     end
   end
@@ -1372,21 +1409,21 @@ defmodule Cure.CLI do
         # rather than silently downgrade any file (Finding 2), mirroring the
         # project-level downgrade guard in plan_migration/1.
         Enum.each(downgraded, fn {path, from, tgt} ->
-          error("#{path}: edition #{from} is newer than the migration target #{tgt} — refusing to downgrade")
+          migration_error(:file_downgrade, %{path: path, from: from, target: tgt})
         end)
 
         {:error, {:downgrade, downgraded}}
 
       failed != [] ->
         Enum.each(failed, fn path ->
-          error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)")
+          migration_error(:preflight, %{path: path})
         end)
 
         {:error, {:preflight_failed, failed}}
 
       blocked != [] ->
         Enum.each(blocked, fn {path, ids} ->
-          error("#{path}: manual migration required — #{Enum.map_join(ids, ", ", &to_string/1)}")
+          migration_error(:manual_required, %{path: path, rules: ids})
         end)
 
         {:error, {:blocked, blocked}}
@@ -1456,7 +1493,7 @@ defmodule Cure.CLI do
       :ok
     else
       Enum.each(violators, fn {path, ids} ->
-        error("#{path}: fixable migration warnings present (--strict) — #{Enum.map_join(ids, ", ", &to_string/1)}")
+        migration_error(:strict_warning, %{path: path, rules: ids})
       end)
 
       {:error, {:strict_violation, violators}}
@@ -1676,7 +1713,13 @@ defmodule Cure.CLI do
     if changed == 0 do
       info("All files are formatted")
     else
-      error("#{changed} file(s) would be reformatted")
+      error_diagnostic(
+        Cure.Diagnostic.Operational.command_failure(
+          "cure fmt --diff",
+          "#{changed} file(s) would be reformatted"
+        )
+      )
+
       exit({:shutdown, 1})
     end
   end
@@ -1736,11 +1779,7 @@ defmodule Cure.CLI do
   end
 
   defp fmt_aggressive(files) do
-    warn(
-      "`cure fmt --aggressive` rewrites from the AST: plain `#` comments " <>
-        "and non-canonical whitespace will be stripped. Make sure the target " <>
-        "files are committed before continuing."
-    )
+    error_diagnostic(Cure.Diagnostic.Operational.destructive_format_warning(%{files: files}))
 
     outcomes =
       Enum.map(files, fn file ->
@@ -1754,12 +1793,8 @@ defmodule Cure.CLI do
           :ok
         else
           {:error, reason} ->
-            error(
-              "  " <>
-                Cure.Diagnostic.Host.render_diagnostic(
-                  Cure.Diagnostic.Operational.command_failure("compile #{file}", reason)
-                )
-            )
+            {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, file, source)
+            emit_diagnostic(diagnostic, registry)
 
             :error
         end
@@ -1847,18 +1882,13 @@ defmodule Cure.CLI do
                   :ok
 
                 {:error, reason} ->
-                  error(
-                    "  " <>
-                      Cure.Diagnostic.Host.render_diagnostic(
-                        Cure.Diagnostic.Operational.command_failure("compile #{f}", reason)
-                      )
-                  )
+                  emit_host_diagnostic(reason, f, src)
 
                   :error
               end
 
             {:error, reason} ->
-              error("  #{f}: #{reason}")
+              error_diagnostic(Cure.Diagnostic.Operational.file_read(f, reason))
               :error
           end
         end)
@@ -2090,7 +2120,7 @@ defmodule Cure.CLI do
         end
 
       {:error, :no_project_file} ->
-        error("No Cure.toml found in current directory.")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", :enoent))
         exit({:shutdown, 1})
 
       {:error, reason} ->
@@ -2244,32 +2274,32 @@ defmodule Cure.CLI do
   # -- Output helpers ----------------------------------------------------------
 
   defp info(msg), do: IO.puts(msg)
-  defp warn(msg), do: IO.puts(:stderr, "warning: #{msg}")
+
+  defp format_invalid_options(invalid) do
+    Enum.map_join(invalid, ", ", fn
+      {option, nil} -> to_string(option)
+      {option, value} -> "#{option}=#{value}"
+    end)
+  end
 
   defp error_diagnostic(%Cure.Diagnostic{} = diagnostic) do
-    case Cure.Diagnostic.Host.emit_diagnostic(diagnostic) do
+    emit_diagnostic(diagnostic)
+  end
+
+  defp migration_error(kind, details) do
+    error_diagnostic(Cure.Diagnostic.Operational.migration_failure(kind, details))
+  end
+
+  defp emit_diagnostic(%Cure.Diagnostic{} = diagnostic, registry \\ nil) do
+    case Cure.Diagnostic.Host.emit_diagnostic(diagnostic, registry: registry) do
       {:ok, _sink} -> :ok
       {:error, _reason} -> raise "failed to emit diagnostic"
     end
   end
 
-  defp emit_host_diagnostic(reason, path) do
-    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path)
-
-    case Cure.Diagnostic.Host.emit_diagnostic(diagnostic, registry: registry) do
-      {:ok, _sink} -> :ok
-      {:error, emit_reason} -> raise "failed to emit diagnostic: #{inspect(emit_reason)}"
-    end
-  end
-
-  defp error(msg) do
-    rendered = String.trim_leading(msg)
-
-    if String.starts_with?(rendered, "--") or String.contains?(rendered, "\n--") do
-      IO.puts(:stderr, msg)
-    else
-      error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure", msg))
-    end
+  defp emit_host_diagnostic(reason, path, source \\ nil) do
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path, source)
+    emit_diagnostic(diagnostic, registry)
   end
 
   # A user-facing usage/lookup error that must fail the command: print to stderr

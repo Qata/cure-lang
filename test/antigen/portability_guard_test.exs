@@ -85,9 +85,11 @@ defmodule Antigen.PortabilityGuardTest do
 
     assert r.seeds_banked == 0
     assert r.rejected >= 1
+    assert err =~ "INVALID BUILD ARTIFACT [E100]"
     assert err =~ "non-portable"
     assert err =~ "antigen_unportable_probe_qty"
     assert err =~ "__known_atoms__"
+    refute err =~ "!!! ANTIGEN"
     assert Corpus.record_lines(path) == []
   end
 end

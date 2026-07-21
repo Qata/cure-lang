@@ -34,7 +34,7 @@ defmodule Cure.Elab.SubstGradeLaunderingTest do
   # Six constructors, so a `_` arm leaves ≥2 uncovered and `join_point?` fires.
   @enum "  type C = A | B | D | E | G | H\n"
 
-  defp elab(body), do: Program.elaborate("mod SGL\n" <> @enum <> body <> "end\n")
+  defp elab(body), do: Program.semantic_result(Program.elaborate("mod SGL\n" <> @enum <> body <> "end\n"))
 
   describe "a join-eligible case (default arm) — the branch bodies go through Subst.shift" do
     test "an erased let-binding used at runtime in a matched arm is REJECTED" do

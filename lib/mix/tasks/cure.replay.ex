@@ -30,22 +30,20 @@ defmodule Mix.Tasks.Cure.Replay do
   def run(args) do
     Application.ensure_all_started(:cure)
 
-    {opts, rest, _} =
+    {opts, rest, invalid} =
       OptionParser.parse(args,
-        switches: [module: :string, step: :boolean, print: :boolean],
+        strict: [module: :string, step: :boolean, print: :boolean],
         aliases: [m: :module, s: :step]
       )
+
+    if invalid != [] or length(rest) > 1 do
+      usage_error("Usage: mix cure.replay <path.journal> [--module ModuleName] [--step]")
+    end
 
     path = List.first(rest)
 
     if is_nil(path) do
-      Mix.Shell.IO.error(
-        render_diagnostic(
-          Cure.Diagnostic.Operational.usage("Usage: mix cure.replay <path.journal> [--module ModuleName] [--step]")
-        )
-      )
-
-      exit({:shutdown, 1})
+      usage_error("Usage: mix cure.replay <path.journal> [--module ModuleName] [--step]")
     end
 
     case Cure.Observe.Journal.load(path) do
@@ -104,5 +102,10 @@ defmodule Mix.Tasks.Cure.Replay do
   defp render_diagnostic(diagnostic) do
     Sink.new(format: :plain, color: :auto, width: 80)
     |> Sink.render(diagnostic)
+  end
+
+  defp usage_error(message) do
+    Mix.Shell.IO.error(render_diagnostic(Cure.Diagnostic.Operational.usage(message)))
+    exit({:shutdown, 1})
   end
 end

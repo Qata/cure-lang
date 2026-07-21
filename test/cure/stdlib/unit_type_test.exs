@@ -37,12 +37,46 @@ defmodule Cure.Stdlib.UnitTypeTest do
   end
 
   test "`type Foo = ()` for a non-Unit name is a reserved-syntax compile error" do
-    assert {:error, errors} = elab("mod U\n  type Foo = ()\n")
+    source = "mod U\n  type Foo = ()\n"
+    assert {:error, errors} = elab(source)
     flat = List.wrap(errors)
 
-    assert Enum.any?(flat, fn e ->
-             match?({:unit_type_reserved, _}, e) or match?({:unit_type_reserved, _, _, _}, e)
-           end),
-           "expected a :unit_type_reserved error, got: #{inspect(flat)}"
+    assert [{:unit_type_reserved, details} = error] = flat
+    assert details.name == "Foo"
+    assert details.span.start_line == 2
+    assert details.span.start_column == 8
+    assert details.span.end_column == 11
+    assert details.unit_span.start_column == 14
+    assert details.unit_span.end_column == 16
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "unit.cure", source)
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- UNIT SYNTAX CANNOT DEFINE ANOTHER TYPE [E092] --------------------- unit.cure
+
+             `()` has exactly one type, `Unit`, so it cannot define the new type `Foo`.
+
+             at unit.cure:2:8
+             2 |   type Foo = ()
+               |        ^^^   -- this declaration must not reuse `Unit` syntax; this spelling denotes the built-in `Unit` type
+
+             Hint: Give `Foo` its own constructor, or rename the type to `Unit`
+             """)
+
+    lsp = Cure.Diagnostic.Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 1, "character" => 7},
+             "end" => %{"line" => 1, "character" => 10}
+           }
+
+    assert [%{"location" => %{"range" => unit_range}}] = lsp["relatedInformation"]
+
+    assert unit_range == %{
+             "start" => %{"line" => 1, "character" => 13},
+             "end" => %{"line" => 1, "character" => 15}
+           }
   end
 end

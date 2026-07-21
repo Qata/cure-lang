@@ -21,7 +21,7 @@ defmodule Cure.Compiler.Parser.FixityScan do
           module: String.t() | nil
         }
   def harvest_source(source, file, base) do
-    case Lexer.tokenize(source, emit_events: false) do
+    case Lexer.tokenize(source, file: file, emit_events: false) do
       {:ok, tokens} ->
         exprs = Parser.harvest(tokens, file, base, Cure.Edition.current())
 
@@ -45,6 +45,29 @@ defmodule Cure.Compiler.Parser.FixityScan do
         {:precedencegroup, _, _} = n -> [n]
         _ -> []
       end)
+
+  @doc "Return exact authored name ranges for the selected precedence groups."
+  @spec group_spans(term(), [atom()]) :: [Cure.Diagnostic.Span.t()]
+  def group_spans(ast, groups) do
+    wanted = MapSet.new(groups)
+
+    ast
+    |> collect_fixity()
+    |> Enum.flat_map(fn
+      {:precedencegroup, meta, _} when is_list(meta) ->
+        with name when not is_nil(name) <- Keyword.get(meta, :name),
+             true <- MapSet.member?(wanted, name),
+             %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} <-
+               Keyword.get(meta, :source_info) do
+          [span]
+        else
+          _ -> []
+        end
+
+      _ ->
+        []
+    end)
+  end
 
   @doc """
   Fold the `precedencegroup`/`infix`/`prefix`/`postfix` declarations found in
