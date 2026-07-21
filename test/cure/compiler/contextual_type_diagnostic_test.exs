@@ -439,6 +439,29 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this call result has the wrong type"
   end
 
+  test "a real chained application reports an application result" do
+    source =
+      "fn mk() -> (Nat) -> Nat = fn(y) -> y\n" <>
+        "fn main() -> Bool = mk()(Z())\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "application.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "application.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :application
+    assert diagnostic.primary.span.start_line == 2
+    assert rendered =~ "APPLICATION HAS THE WRONG TYPE"
+    assert rendered =~ "This application"
+    assert rendered =~ "2 | fn main() -> Bool = mk()(Z())"
+    assert rendered =~ "this application has the wrong type"
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 

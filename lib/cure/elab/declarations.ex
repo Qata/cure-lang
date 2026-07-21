@@ -728,14 +728,31 @@ defmodule Cure.Elab.Declarations do
   defp attach_source_context(result, _expression, _checking), do: result
 
   defp declaration_expectation_context({:function_call, meta, _args}, context) when is_list(meta) do
+    {origin, owner} =
+      if Keyword.has_key?(meta, :callee) do
+        {:application, declaration_application_owner(meta)}
+      else
+        {:call_result, Keyword.get(meta, :name, context.checking)}
+      end
+
     Map.merge(context, %{
-      checking: Keyword.get(meta, :name, context.checking),
-      expectation_origin: :call_result,
+      checking: owner,
+      expectation_origin: origin,
       expression_category: :function_call
     })
   end
 
   defp declaration_expectation_context(_expression, context), do: context
+
+  defp declaration_application_owner(meta) do
+    case Keyword.get(meta, :callee) do
+      {:function_call, inner_meta, _args} when is_list(inner_meta) ->
+        Keyword.get(inner_meta, :name, :application)
+
+      _ ->
+        :application
+    end
+  end
 
   defp expression_meta({_kind, meta, _children}) when is_list(meta), do: meta
   defp expression_meta({_kind, meta, _left, _right}) when is_list(meta), do: meta

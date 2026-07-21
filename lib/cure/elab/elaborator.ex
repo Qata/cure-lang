@@ -2480,15 +2480,22 @@ defmodule Cure.Elab.Elaborator do
   defp call_result_context({:function_call, meta, _args}) when is_list(meta) do
     span = surface_expression_span({:function_call, meta, []})
 
+    {origin, owner} =
+      if Keyword.has_key?(meta, :callee) do
+        {:application, :application}
+      else
+        {:call_result, Keyword.get(meta, :name)}
+      end
+
     %{
       line: span && span.start_line,
       column: span && span.start_column,
       length: span && max(1, span.end_byte - span.start_byte),
       span: span,
       expectation_span: span,
-      checking: Keyword.get(meta, :name),
+      checking: owner,
       expression_category: :function_call,
-      expectation_origin: :call_result
+      expectation_origin: origin
     }
   end
 
