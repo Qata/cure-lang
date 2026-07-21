@@ -41,9 +41,30 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert entry.converter == Cure.Diagnostic.Operational
   end
 
+  test "optimistic legacy ownership is retired or narrowed to source-backed producers" do
+    e002 = Registry.fetch!("E002")
+    assert e002.status == :retired
+    assert e002.producers == []
+    assert e002.producer_fixtures == %{}
+    assert e002.retirement_reason =~ "E091"
+    assert {:ok, explanation} = Registry.explain("E002")
+    assert explanation =~ "Unbound Variable"
+
+    e003 = Registry.fetch!("E003")
+    assert e003.producers == [:elaboration]
+    assert e003.producer_fixtures == %{elaboration: :arity_mismatch_elaboration}
+    assert File.read!("lib/cure/elab/unify.ex") =~ "{:error, {:arity_mismatch"
+
+    e090 = Registry.fetch!("E090")
+    assert e090.producers == [:elaboration]
+    assert e090.producer_fixtures == %{elaboration: :unrecognized_pattern_elaboration}
+    assert File.read!("lib/cure/elab/elaborator.ex") =~ "{:error, {:unsupported_pattern"
+  end
+
   test "retired codes remain explainable but are excluded from reachable coverage" do
     retired_codes = Enum.map(Registry.retired(), & &1.code)
     assert "E015" in retired_codes
+    assert "E002" in retired_codes
     assert "E018" in retired_codes
     assert "E063" in retired_codes
     assert "W088" in retired_codes

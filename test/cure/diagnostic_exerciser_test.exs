@@ -33,7 +33,6 @@ defmodule Cure.DiagnosticExerciserTest do
     ]
 
     boundary_cases = [
-      {"unbound variable", "E002", {:unbound_variable, "x is not bound", [line: 1, col: 17]}},
       {"arity mismatch", "E003", {:arity_mismatch, "expected 2 arguments", [line: 1, col: 17]}},
       {"extern untyped head", "E056", {:extern_untyped_head, "parameter is untyped", [line: 1, col: 1]}},
       {"extern has body", "E057", {:extern_has_body, "body is not allowed", [line: 1, col: 1]}},
