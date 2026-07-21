@@ -85,6 +85,10 @@ defmodule Mix.Tasks.Cure.CompileTest do
       end)
 
     assert output =~ "PATTERN BRANCHES DISAGREE"
+    assert output =~ "On -> 1"
+    assert output =~ "^^^^^^^ compare this branch with the declared result"
+    assert output =~ "Off -> true"
+    assert output =~ "^^^^^^^^^^^ possible outlier: this branch has the incompatible type"
     refute output =~ "ELABORATION FAILED"
   end
 end
