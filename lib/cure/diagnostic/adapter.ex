@@ -560,6 +560,15 @@ defmodule Cure.Diagnostic.Adapter do
           _ -> opts
         end
       end)
+      |> then(fn opts ->
+        if is_list(Map.get(context, :name_candidates)) do
+          opts
+          |> Keyword.put(:candidates, Map.get(context, :name_candidates))
+          |> Keyword.put(:arity, Map.get(context, :name_arity))
+        else
+          opts
+        end
+      end)
 
     case {reason, Map.get(context, :expectation_origin)} do
       {{:index_mismatch, {:cannot_unify, actual, expected}}, origin} when not is_nil(origin) ->

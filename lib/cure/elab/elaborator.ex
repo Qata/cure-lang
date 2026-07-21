@@ -650,7 +650,7 @@ defmodule Cure.Elab.Elaborator do
         case elaborate_named_call(meta, args, names, ctx, env) do
           {:error, reason} when is_tuple(reason) ->
             if unresolved_call_reason?(reason) do
-              {:error, attach_call_result_context(reason, {:function_call, meta, args}, env)}
+              {:error, attach_unresolved_call_context(reason, {:function_call, meta, args}, env)}
             else
               {:error, reason}
             end
@@ -1868,7 +1868,17 @@ defmodule Cure.Elab.Elaborator do
             env
           )
         else
-          elaborate_checked_call_saturated(expr, resolved, expected_core, args, names, ctx, env)
+          case elaborate_checked_call_saturated(expr, resolved, expected_core, args, names, ctx, env) do
+            {:error, reason} when is_tuple(reason) ->
+              if unresolved_call_reason?(reason) do
+                {:error, attach_unresolved_call_context(reason, expr, env)}
+              else
+                {:error, reason}
+              end
+
+            result ->
+              result
+          end
         end
     end
   end
@@ -2618,10 +2628,56 @@ defmodule Cure.Elab.Elaborator do
   defp attach_call_result_context(reason, _expression, _env), do: reason
 
   defp unresolved_call_reason?({:unknown_global, _}), do: true
+  defp unresolved_call_reason?({:unknown_global, _, _}), do: true
   defp unresolved_call_reason?({:unknown_name, _}), do: true
+  defp unresolved_call_reason?({:unknown_name, _, _}), do: true
   defp unresolved_call_reason?({:unknown_ctor, _}), do: true
   defp unresolved_call_reason?({:ambiguous_name, _, _}), do: true
   defp unresolved_call_reason?(_reason), do: false
+
+  defp attach_unresolved_call_context(reason, {:function_call, meta, args} = expression, env) do
+    {:source_context, _nested_reason, context} = attach_call_result_context(reason, expression, env)
+
+    {:source_context, reason,
+     Map.merge(context, %{
+       name_candidates: name_candidates(env, Keyword.get(meta, :name)),
+       name_arity: length(args),
+       checking: Keyword.get(meta, :name)
+     })}
+  end
+
+  defp name_candidates(
+         %Cure.Core.Env{defs: defs, module_owner: module_owner, import_modules: import_modules},
+         spelling
+       ) do
+    spelling = to_string(spelling)
+
+    defs
+    |> Enum.map(fn {key, _definition} ->
+      {owner, name} = Cure.Elab.Name.split(key)
+
+      {owner, name,
+       %{
+         id: key,
+         name: name,
+         namespace: :value,
+         owner: owner,
+         imported: owner == module_owner or is_nil(owner),
+         candidate_id: key
+       }}
+    end)
+    |> Enum.filter(fn {owner, _name, _candidate} ->
+      owner == module_owner or is_nil(owner) or MapSet.member?(import_modules, owner)
+    end)
+    |> Enum.map(&elem(&1, 2))
+    |> Enum.filter(fn %{name: name} -> abs(String.length(name) - String.length(spelling)) <= 2 end)
+    |> Enum.sort_by(fn %{name: name, owner: owner} ->
+      {owner != module_owner, not String.starts_with?(String.downcase(name), String.downcase(spelling)), name}
+    end)
+    |> Enum.take(128)
+  end
+
+  defp name_candidates(_env, _spelling), do: []
 
   defp extern_call_mismatch?(reason, meta, env) do
     name = Keyword.get(meta, :name)

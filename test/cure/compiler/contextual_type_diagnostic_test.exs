@@ -60,6 +60,28 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "^^^^^^^^^^^^^"
   end
 
+  test "an unknown function offers a nearby in-scope call suggestion" do
+    source = """
+    mod Suggestions
+      fn print() -> Int = 1
+      fn run() -> Int = prnt()
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "suggestions.cure",
+               emit_events: false
+             )
+
+    {diagnostic, _registry} = Errors.to_diagnostic(reason, "suggestions.cure", source)
+
+    assert diagnostic.code == "E091"
+    assert diagnostic.payload.candidates == ["print"]
+    assert [%Cure.Diagnostic.Suggestion{message: message}] = diagnostic.suggestions
+    assert message =~ "`print`"
+  end
+
   test "a missing implicit instance retains the authored call context" do
     source = "mod M\n  fn has(x: t, y: t) -> Bool = x == y\nend\n"
 
