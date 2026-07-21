@@ -231,6 +231,29 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     end
   end
 
+  test "the real parser path replaces a mismatched closing delimiter" do
+    source = "fn run(] -> Int = 1\n"
+    {:ok, tokens} = Lexer.tokenize(source, file: "mismatch.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    assert {:expected_token, :rparen, :rbracket, "]", _line, _column, _span} =
+             mismatch = Enum.find(errors, &match?({:expected_token, :rparen, :rbracket, _, _, _, _}, &1))
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [mismatch]}, "mismatch.cure", source)
+
+    assert diagnostic.key == :mismatched_closer
+    assert Renderer.plain(diagnostic, registry, width: 80) =~ "Hint: Replace ']' with `)`"
+
+    assert [%{"newText" => ")", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 7},
+             "end" => %{"line" => 0, "character" => 8}
+           }
+  end
+
   describe "associative operators still chain" do
     test "`a + b + c` left-associates" do
       assert {:binary_op, _, [{:binary_op, _, [_a, _b]}, _c]} = parse!("a + b + c")

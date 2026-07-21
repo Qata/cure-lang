@@ -4883,6 +4883,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :missing_function_body}), do: "Function body is missing"
   defp syntax_problem_title(%SyntaxProblem{kind: :bare_brace_expression}), do: "Brace cannot start an expression"
   defp syntax_problem_title(%SyntaxProblem{kind: :unmatched_closer}), do: "Closing delimiter has no opener"
+  defp syntax_problem_title(%SyntaxProblem{kind: :mismatched_closer}), do: "Closing delimiter does not match"
   defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_parentheses}), do: "Parenthesized expression is not closed"
   defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_brackets}), do: "Bracketed expression is not closed"
   defp syntax_problem_title(%SyntaxProblem{kind: :unclosed_braces}), do: "Braced expression is not closed"
@@ -4966,6 +4967,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :unmatched_closer, observed: observed}),
     do: "#{syntax_name(observed)} closes a construct, but there is no matching opener here."
 
+  defp syntax_problem_context(%SyntaxProblem{kind: :mismatched_closer, expected: expected, observed: observed}),
+    do: "This construct needs #{syntax_name(expected)}, but it is closed with #{syntax_name(observed)} instead."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :unclosed_parentheses}),
     do: "This parenthesized expression reaches the end of the source without its closing ')'."
 
@@ -4990,6 +4994,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_expected_doc(%SyntaxProblem{expected: nil, alternatives: []}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :macro_use_mismatch}), do: Doc.empty()
+  defp syntax_expected_doc(%SyntaxProblem{kind: :mismatched_closer}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{expected: :explain_point}), do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{} = problem) do
@@ -5053,6 +5058,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: "choose record, map, or block syntax here"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unmatched_closer}), do: "this delimiter has nothing to close"
+  defp syntax_problem_label(%SyntaxProblem{kind: :mismatched_closer}), do: "replace this mismatched delimiter"
 
   defp syntax_problem_label(%SyntaxProblem{kind: kind})
        when kind in [:unclosed_parentheses, :unclosed_brackets, :unclosed_braces],
@@ -5171,6 +5177,25 @@ defmodule Cure.Diagnostic.Adapter do
     end
   end
 
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :mismatched_closer, expected: expected, observed: observed},
+         %Span{} = span
+       ) do
+    replacement = syntax_insertion(expected)
+
+    if replacement do
+      [
+        %Suggestion{
+          message: "Replace #{syntax_name(observed)} with `#{replacement}`",
+          applicability: :machine_applicable,
+          edits: [%TextEdit{span: span, replacement: replacement}]
+        }
+      ]
+    else
+      []
+    end
+  end
+
   defp syntax_insertions(%SyntaxProblem{kind: kind}, %Span{})
        when kind in [:non_associative, :ambiguous_precedence],
        do: [
@@ -5219,6 +5244,11 @@ defmodule Cure.Diagnostic.Adapter do
   defp missing_delimiter_kind(:rparen, :eof), do: :unclosed_parentheses
   defp missing_delimiter_kind(:rbracket, :eof), do: :unclosed_brackets
   defp missing_delimiter_kind(:rbrace, :eof), do: :unclosed_braces
+
+  defp missing_delimiter_kind(expected, observed)
+       when expected in [:rparen, :rbracket, :rbrace] and observed in [:rparen, :rbracket, :rbrace],
+       do: :mismatched_closer
+
   defp missing_delimiter_kind(_expected, _observed), do: :unexpected_token
 
   defp lex_problem({:tab_not_allowed, line, column}, opts),

@@ -169,8 +169,34 @@ defmodule Cure.Diagnostic.HostTest do
     assert diagnostic.payload.context.token_type == :rbracket
 
     rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry)
-    assert rendered =~ "']'"
-    assert rendered =~ "')'"
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- CLOSING DELIMITER DOES NOT MATCH [E094] ------------------------- syntax.cure
+
+             This construct needs ')', but it is closed with ']' instead.
+
+             at syntax.cure:1:8
+             1 | fn run(] -> Int = 1
+               |        ^ replace this mismatched delimiter
+
+             Hint: Replace ']' with `)`
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{span: edit_span, replacement: ")"}]}] =
+             diagnostic.suggestions
+
+    assert edit_span == token.span
+
+    assert [%{"newText" => ")", "range" => range}] =
+             Cure.Diagnostic.Renderer.lsp(diagnostic, registry)["data"]["suggestions"]
+             |> hd()
+             |> Map.fetch!("edits")
+
+    assert range == %{
+             "start" => %{"line" => 0, "character" => 7},
+             "end" => %{"line" => 0, "character" => 8}
+           }
   end
 
   test "parser-owned expected-token spans survive the compiler boundary" do

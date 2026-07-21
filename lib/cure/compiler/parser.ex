@@ -7003,6 +7003,7 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :rparen} -> {[], state}
+      %Token{type: type} when type in [:rbracket, :rbrace] -> {[], state}
       _ -> parse_typed_params_list(state)
     end
   end
@@ -7015,7 +7016,13 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :comma} ->
         state = advance(state)
         state = skip_newlines(state)
-        {rest, state} = parse_typed_params_list(state)
+
+        {rest, state} =
+          case peek(state) do
+            %Token{type: type} when type in [:rbracket, :rbrace] -> {[], state}
+            _ -> parse_typed_params_list(state)
+          end
+
         {[param | rest], state}
 
       _ ->
