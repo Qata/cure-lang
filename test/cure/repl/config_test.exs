@@ -208,6 +208,8 @@ defmodule Cure.REPL.ConfigTest do
 
       out = capture_io(:stderr, fn -> assert Config.load() == %{preload: :all, imports: :none} end)
       assert out =~ "failed to parse"
+      assert out =~ "[W002]"
+      refute out =~ "{:"
     end
   end
 end
