@@ -11,6 +11,7 @@ defmodule Cure.Diagnostic.Registry.Entry do
     :payload_schema,
     :schema_version,
     :producers,
+    :producer_fixtures,
     :converter,
     :converter_function,
     :catalog_case,
@@ -31,6 +32,7 @@ defmodule Cure.Diagnostic.Registry.Entry do
           payload_schema: pos_integer(),
           schema_version: pos_integer(),
           producers: [atom(), ...],
+          producer_fixtures: %{optional(atom()) => atom()},
           converter: module(),
           converter_function: atom(),
           catalog_case: atom() | nil,
@@ -1416,6 +1418,7 @@ defmodule Cure.Diagnostic.Registry do
         payload_schema: 1,
         schema_version: 1,
         producers: producers(code),
+        producer_fixtures: producer_fixtures(code),
         converter: converter(code),
         converter_function: converter_function(code),
         catalog_case: Map.get(@catalog_cases, code),
@@ -1492,7 +1495,8 @@ defmodule Cure.Diagnostic.Registry do
   def validate(entries \\ entries()) when is_list(entries) do
     with :ok <- unique_codes(entries),
          :ok <- unique_catalog_metadata(entries),
-         :ok <- valid_entries(entries) do
+         :ok <- valid_entries(entries),
+         :ok <- validate_producer_catalog(entries) do
       :ok
     end
   end
@@ -1530,18 +1534,38 @@ defmodule Cure.Diagnostic.Registry do
     if missing == [], do: :ok, else: {:error, {:producer_without_reachable_code, missing}}
   end
 
-  @doc "Ensure every known producer has a reachable catalog fixture for a public path."
-  @spec validate_producer_catalog() :: :ok | {:error, {:producer_without_catalog_fixture, [atom()]}}
-  def validate_producer_catalog do
-    missing =
-      @known_producers
-      |> Enum.reject(fn producer ->
-        Enum.any?(reachable(), fn entry ->
-          producer in entry.producers and not is_nil(entry.catalog_case) and not is_nil(entry.fixture_id)
-        end)
-      end)
+  @doc "Ensure every reachable code/producer branch has its own catalog fixture identity."
+  @spec validate_producer_catalog([Entry.t()]) :: :ok | {:error, term()}
+  def validate_producer_catalog(entries \\ reachable()) do
+    entries = Enum.filter(entries, &(&1.status == :reachable))
 
-    if missing == [], do: :ok, else: {:error, {:producer_without_catalog_fixture, missing}}
+    expected =
+      entries
+      |> Enum.flat_map(fn entry -> Enum.map(entry.producers, &{entry.code, &1}) end)
+      |> MapSet.new()
+
+    actual =
+      entries
+      |> Enum.flat_map(fn entry ->
+        Enum.map(entry.producer_fixtures || %{}, fn {producer, _id} -> {entry.code, producer} end)
+      end)
+      |> MapSet.new()
+
+    missing = expected |> MapSet.difference(actual) |> Enum.sort()
+    unexpected = actual |> MapSet.difference(expected) |> Enum.sort()
+
+    fixture_ids =
+      entries
+      |> Enum.flat_map(fn entry -> Map.values(entry.producer_fixtures || %{}) end)
+
+    duplicate_ids = fixture_ids -- Enum.uniq(fixture_ids)
+
+    cond do
+      missing != [] -> {:error, {:producer_branches_without_catalog_fixture, missing}}
+      unexpected != [] -> {:error, {:catalog_fixtures_without_producer_branch, unexpected}}
+      duplicate_ids != [] -> {:error, {:duplicate_producer_fixture_id, Enum.uniq(duplicate_ids) |> Enum.sort()}}
+      true -> :ok
+    end
   end
 
   @doc "Validate stable diagnostic codes referenced by first-party source files."
@@ -1639,6 +1663,49 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
   defp producers(_code), do: [:compiler_errors]
+
+  defp producer_fixtures(code) when code in @retired, do: %{}
+
+  defp producer_fixtures("E002"),
+    do: %{name_resolution: :unbound_variable_name_resolution, kernel: :unbound_variable_kernel}
+
+  defp producer_fixtures("E003"),
+    do: %{elaboration: :arity_mismatch_elaboration, kernel: :arity_mismatch_kernel}
+
+  defp producer_fixtures("E090"),
+    do: %{elaboration: :unrecognized_pattern_elaboration, kernel_conversion: :unrecognized_pattern_kernel_conversion}
+
+  defp producer_fixtures("E091"),
+    do: %{name_resolution: :unknown_name_resolution, pattern_checker: :unknown_pattern_name}
+
+  defp producer_fixtures("E092"),
+    do: %{macro_expansion: :macro_expansion_failure, parser: :parser_macro_failure}
+
+  defp producer_fixtures("E093"),
+    do: %{
+      elaboration: :type_mismatch_elaboration,
+      kernel: :type_mismatch_kernel,
+      kernel_conversion: :type_mismatch_kernel_conversion
+    }
+
+  defp producer_fixtures("E094"),
+    do: %{lexer: :syntax_error_lexer, parser: :syntax_error_parser}
+
+  defp producer_fixtures("E101"),
+    do: %{operational: :internal_failure_operational, kernel: :internal_failure_kernel}
+
+  defp producer_fixtures("E105"),
+    do: %{elaboration: :declaration_conflict_elaboration, name_resolution: :declaration_conflict_name_resolution}
+
+  defp producer_fixtures("E106"),
+    do: %{parser: :operator_conflict_parser, elaboration: :operator_conflict_elaboration}
+
+  defp producer_fixtures(code) do
+    case {producers(code), Map.get(@catalog_cases, code)} do
+      {[producer], fixture_id} when is_atom(fixture_id) -> %{producer => fixture_id}
+      _ -> %{}
+    end
+  end
 
   defp subsystem("E101"), do: :compiler
   defp subsystem("E102"), do: :elaboration

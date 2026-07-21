@@ -14,6 +14,12 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert Enum.all?(entries, &(is_integer(&1.schema_version) and &1.schema_version >= 1))
     assert Enum.all?(entries, &(is_list(&1.producers) and &1.producers != []))
 
+    assert Enum.all?(Registry.reachable(), fn entry ->
+             Map.keys(entry.producer_fixtures) |> Enum.sort() == Enum.sort(entry.producers)
+           end)
+
+    assert Enum.all?(Registry.retired(), &(&1.producer_fixtures == %{}))
+
     assert Enum.all?(entries, fn entry ->
              is_atom(entry.converter) and is_atom(entry.converter_function) and
                Code.ensure_loaded?(entry.converter) and function_exported?(entry.converter, entry.converter_function, 2)
@@ -104,6 +110,16 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert :ok = Registry.validate_producer_coverage()
     assert :ok = Registry.validate_producer_catalog()
     assert :ok = Cure.Diagnostic.Registry.Inventory.validate(inventory)
+  end
+
+  test "producer catalog validation requires every code and producer branch independently" do
+    entry = Registry.fetch!("E094")
+    assert entry.producers |> Enum.sort() == [:lexer, :parser]
+
+    without_lexer = %{entry | producer_fixtures: Map.delete(entry.producer_fixtures, :lexer)}
+
+    assert {:error, {:producer_branches_without_catalog_fixture, [{"E094", :lexer}]}} =
+             Registry.validate_producer_catalog([without_lexer])
   end
 
   test "inventory rejects new production calls to the legacy compiler formatter" do
