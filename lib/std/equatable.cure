@@ -14,6 +14,12 @@ mod Std.Equatable
   ## instance is provided here, where `Equatable` is declared and `Std.Nat`
   ## already precedes this module in the bootstrap order (via `Char`/`Bounded`).
   use Std.Nat
+  ## `use Std.Option` keeps `Option` in scope for the Option instance below.
+  ## Importing it here does NOT make `Std.Option`'s function surface ambient:
+  ## a whole-module `@prelude` provider's slice is owner-restricted, and it
+  ## confers no directness at all, so `map`/`filter`/`unwrap` neither resolve
+  ## nor shadow a consumer's `use Std.List`.
+  use Std.Option
   ## Equality protocol for structural comparison of values.
   ##
   ## The `Equatable(t)` protocol mirrors the built-in `==` operator but can be
@@ -92,6 +98,18 @@ mod Std.Equatable
     ## Structural Peano equality (matches a derived ADT `struct_eq` lowering).
     fn `==`(a: Nat, b: Nat) -> Bool = Std.Builtin.struct_eq(Nat, a, b)
 
-  ## Inequality derived from `` `==` ``. The `requires Equatable(t)` constraint
+  ## `Equatable` impl for `Option`: structural equality on the constructor spine.
+  ## `Option` cannot auto-derive its own instance: `Std.Equatable` reaches it via
+  ## `use Std.String` -> `use Std.Option`, which puts `Std.Option` in the prelude
+  ## BOOTSTRAP closure, and a bootstrap module elaborates with no ambient
+  ## `Equatable` in scope for `auto_derive_equatable/2` to key off. Without this
+  ## hand-written instance every consumer's `Some(1) == Some(1)` fails with
+  ## `{:no_instance, :Equatable, :"Std.Option#Option"}`. Same reason as `Nat`
+  ## above, and the same structural spine auto-derivation would have synthesised.
+  implementation Equatable for Option(t)
+  ## Structural Option equality (matches a derived ADT `struct_eq` lowering).
+  fn `==`(a: Option(t), b: Option(t)) -> Bool = Std.Builtin.struct_eq(Option(t), a, b)
+
+  ## Inequality derived from `` `==` ``. The `where Equatable(t)` constraint
   ## threads the dictionary that dispatches `` `==` `` at the caller's type.
   fn `!=`(a: t, b: t) -> Bool requires Equatable(t) = Std.Bool.`not`(`==`(a, b))

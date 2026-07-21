@@ -476,7 +476,7 @@ when *every* decl elaborates. Migration policy:
 - **Note on the KEEP count mechanism (verified, not this spec's gap alone):**
   "re-run the stdlib disposition script" is how the roadmap and every wave plan
   before this one describe re-checking the N/39 count, but no such script or
-  mix task is actually checked into the repo — `docs/superpowers/specs/2026-07-09-value-surface-roadmap-design.md`
+  mix task is actually checked into the repo — `docs/superpowers/specs/roadmap/2026-07-09-value-surface-roadmap-design.md`
   §0 describes the metric in prose only ("modules that
   `Cure.Elab.Program.elaborate/1` accepts"), and every downstream wave plan
   just re-cites that same prose. (`mix cure.check.stdlib` is a *different*,

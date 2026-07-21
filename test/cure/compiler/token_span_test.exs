@@ -61,7 +61,7 @@ defmodule Cure.Compiler.TokenSpanTest do
   end
 
   test "literal and delimiter families retain their authored spelling" do
-    source = "0xCA_FE 0b10_01 12.5e-2 'x' '\\n' :ready? ~r/a+/iu <<x::8>> %[1] %{key: true} \"\#{\"quoted\"}\""
+    source = "0xCA_FE 0b10_01 12.5e-2 'x' '\\n' :ready? = /a+/iu <<x::8>> %[1] %{key: true} \"\#{\"quoted\"}\""
     assert {:ok, tokens} = Lexer.tokenize(source, file: "literals.cure", emit_events: false)
 
     slices =
@@ -76,7 +76,8 @@ defmodule Cure.Compiler.TokenSpanTest do
              "'x'",
              "'\\n'",
              ":ready?",
-             "~r/a+/iu",
+             "=",
+             "/a+/iu",
              "<<",
              "x",
              "::",

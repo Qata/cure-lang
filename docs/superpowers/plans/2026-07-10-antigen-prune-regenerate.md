@@ -14,7 +14,7 @@
 - **Tests must stay git-clean.** No test may mutate a committed store (`test/antigen/corpus.sexp`, `seeds.sexp`, `reach.sexp`, `retired.sexp`). All fixture I/O goes to a per-test `tmp/…` directory, removed in `setup`/`on_exit`. (Committed stores are read-only inputs at most.)
 - **No term rewriting, no `schema=` versioning, no rule registry** (YAGNI — spec "Why no rewrite engine"). Stale generator-derived records are re-derived; stale antibodies are kept or retired, never translated.
 - **Canonical paths:** corpus `test/antigen/corpus.sexp`, seeds `test/antigen/seeds.sexp`, retired `test/antigen/retired.sexp`. Every task's requirements implicitly include this section.
-- Spec: `docs/superpowers/specs/2026-07-10-antigen-migration-design.md`. Merge tool (`Corpus.merge/2` + `mix antigen.merge`) already landed (930ffd6) and is out of scope.
+- Spec: `docs/superpowers/specs/antigen/2026-07-10-antigen-migration-design.md`. Merge tool (`Corpus.merge/2` + `mix antigen.merge`) already landed (930ffd6) and is out of scope.
 
 ---
 
@@ -805,7 +805,7 @@ git commit -m "test(antigen): end-to-end prune + regen leaves the replay gate gr
 
 ## Self-Review
 
-**1. Spec coverage** (`docs/superpowers/specs/2026-07-10-antigen-migration-design.md`):
+**1. Spec coverage** (`docs/superpowers/specs/antigen/2026-07-10-antigen-migration-design.md`):
 - C1 Regeneration (`mix antigen.regen-seeds`, replace-not-append, reuse generate path) → Tasks 4 + 5. ✓
 - C2 Antibody prune (`mix antigen.prune`, keep-if-decodes-and-:ok, retire-with-reason, shared registry, never rewrite/silently-delete) → Tasks 1 + 2 + 3. ✓
 - C3 Retirement store (`test/antigen/retired.sexp`, append-only, git-tracked, not gate-replayed) → Task 2 Step 3c (created empty + tracked; excluded from all scanner file lists). ✓

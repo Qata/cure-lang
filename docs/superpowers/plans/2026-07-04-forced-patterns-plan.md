@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Source of truth:** the hardened spec `docs/superpowers/specs/2026-07-04-forced-patterns-design.md`. Read it before Task 2.
+- **Source of truth:** the hardened spec `docs/superpowers/specs/antigen/2026-07-04-forced-patterns-design.md`. Read it before Task 2.
 - **Ghost-writer commits:** `--author="Made In Heaven <madeinheaven@madeinheaven.com>"`, NO `Co-Authored-By`, no Claude signature.
 - **Explicit-pathspec staging only:** `git add -- <path>` / `git commit -- <path>`; NEVER `git add -A`/`git add .` (a concurrent agent may share this worktree).
 - **One build at a time:** never run two `mix` suites concurrently. Prefer scoped `mix test <file>`; run the full suite once, alone, only at the gates (Task 4, Task 8).
@@ -497,7 +497,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "feat(er
 ### Task 8: Roadmap update + final full-suite gate
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (§2 row #5)
+- Modify: `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (§2 row #5)
 
 - [ ] **Step 1: Confirm no unintended TCB spread.**
 
@@ -515,8 +515,8 @@ Expected: PASS (2585+ prior tests plus all new ones, 0 failures).
 
 - [ ] **Step 4: Commit.**
 ```bash
-git add -- docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
-git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "docs(spec): #5 forced/dot patterns landed — roadmap update" -- docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+git add -- docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
+git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "docs(spec): #5 forced/dot patterns landed — roadmap update" -- docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 ```
 
 ---

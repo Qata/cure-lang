@@ -188,7 +188,7 @@ defmodule Cure.Compiler.MacroSyntaxTest do
   end
 
   test "a regex literal reflects as its typed pure Cure constructor call" do
-    ast = expr!("~r/foo/")
+    ast = expr!("/foo/")
     repr = MacroSyntax.to_syntax(ast)
 
     assert {:syn_node, :function_call, attrs,

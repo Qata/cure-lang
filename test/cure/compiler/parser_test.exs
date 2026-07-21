@@ -48,7 +48,7 @@ defmodule Cure.Compiler.ParserTest do
     end
 
     test "regex" do
-      assert {:function_call, meta, [pattern, flags]} = parse!("~r/[a-z]+/i")
+      assert {:function_call, meta, [pattern, flags]} = parse!("/[a-z]+/i")
       assert meta[:name] == "Std.Regex.literal"
       assert {:literal, pattern_meta, "[a-z]+"} = pattern
       assert pattern_meta[:subtype] == :string
@@ -66,9 +66,51 @@ defmodule Cure.Compiler.ParserTest do
       assert flags_meta[:subtype] == :string
     end
 
+    test "preserves the complete Elixir modifier string for the pure macro" do
+      assert {:function_call, meta, [_pattern, {:literal, _flags_meta, "imsxurfUE"}]} =
+               parse!("/foo/imsxurfUE")
+
+      assert meta[:name] == "Std.Regex.literal"
+    end
+
     test "char" do
       assert {:literal, meta, ?x} = parse!("'x'")
       assert meta[:subtype] == :char
+    end
+  end
+
+  describe "match-chain function definitions" do
+    test "parses unguarded pattern clauses without an equals body" do
+      ast =
+        parse!("""
+        fn factorial(n: Nat) -> Nat
+          | 0 -> 1
+          | n -> n * factorial(n - 1)
+        """)
+
+      assert {:function_def, meta, []} = ast
+      assert meta[:name] == "factorial"
+      assert [%{guard: nil, params: [zero], body: [{:literal, _, 1}]}, second] = meta[:clauses]
+      assert {:literal, _, 0} = zero
+      assert second.guard == nil
+      assert [{:binary_op, _, _}] = second.body
+    end
+
+    test "parses guarded clauses and preserves the fallback pattern" do
+      ast =
+        parse!("""
+        fn classify(x: Int) -> Sign
+          | x when x > 0 -> Positive
+          | x when x < 0 -> Negative
+          | _             -> Zero
+        """)
+
+      assert {:function_def, meta, []} = ast
+      [positive, negative, fallback] = meta[:clauses]
+      assert positive.guard != nil
+      assert negative.guard != nil
+      assert fallback.guard == nil
+      assert [{:variable, _, "_"}] = fallback.params
     end
   end
 

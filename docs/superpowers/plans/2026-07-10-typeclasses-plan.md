@@ -6,7 +6,7 @@
 
 **Architecture:** Dictionary-passing (Idris2-faithful). Reuses existing dependent-record Core (no new kernel node anticipated). A new elaborator-scoped **coherence registry** keys anonymous instances by `(interface, head type constructor)` and named instances by name. Resolution recovers a head key from the method's interface-head argument type — directly for kind-`Type` interfaces, via Miller-pattern-fragment unification for the higher-kinded `Functor`.
 
-**Tech Stack:** Elixir; Cure dependent elaborator (`lib/cure/elab/*`) + kernel (`lib/cure/core/*`); parser (`lib/cure/compiler/parser.ex`, `lexer.ex`). Spec: `docs/superpowers/specs/2026-07-10-typeclasses-design.md` (read it — this plan implements it).
+**Tech Stack:** Elixir; Cure dependent elaborator (`lib/cure/elab/*`) + kernel (`lib/cure/core/*`); parser (`lib/cure/compiler/parser.ex`, `lexer.ex`). Spec: `docs/superpowers/specs/types/2026-07-10-typeclasses-design.md` (read it — this plan implements it).
 
 ## Global Constraints
 

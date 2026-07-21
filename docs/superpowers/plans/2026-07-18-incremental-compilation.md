@@ -401,7 +401,7 @@ defmodule Cure.Compiler.Incremental do
 
   Recompiles a module only when its source content changed, one of its output
   beams is missing, a direct dependency's interface changed, or the compiler
-  itself changed. See `docs/superpowers/specs/2026-07-18-incremental-compilation-design.md`.
+  itself changed. See `docs/superpowers/specs/tooling/2026-07-18-incremental-compilation-design.md`.
   """
 
   @doc """

@@ -18,7 +18,7 @@ untrusted `elaborator.ex`.
 
 **Tech Stack:** Elixir; the Cure compiler under `lib/cure/`; ExUnit tests under
 `test/`. Full design in
-`docs/superpowers/specs/2026-07-02-param-index-split-design.md`.
+`docs/superpowers/specs/types/2026-07-02-param-index-split-design.md`.
 
 ## Global Constraints
 

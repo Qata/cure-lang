@@ -5353,7 +5353,7 @@ defmodule Cure.Elab.Elaborator do
   defp bind_once_guard(scrut_expr, arms, expected, names, ctx, env) do
     with {:ok, scrut_core, scrut_type} <- elaborate_expr_typed(scrut_expr, names, ctx, env) do
       fresh = "$gscrut" <> Integer.to_string(Context.length(ctx))
-      dom = Quote.reify(scrut_type, Context.length(ctx))
+      dom = Quote.reify(scrut_type, Context.length(ctx), Context.signature(ctx))
       ctx1 = Context.extend(ctx, scrut_type)
       names1 = [fresh | names]
       expected1 = Subst.shift(expected, 1, 0)
@@ -5467,6 +5467,12 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  defp bind_catchall_body(scrut_expr, {:tuple, _m, pats}, body, expected, names, ctx, env) do
+    with {:ok, body_expr} <- tuple_guard_bind(scrut_expr, pats, body) do
+      elaborate_expr_checked(body_expr, expected, names, ctx, env)
+    end
+  end
+
   defp bind_catchall_body(_scrut, _pat, _body, _expected, _names, _ctx, _env),
     do: {:error, {:unsupported_guard, :non_catchall_pattern}}
 
@@ -5482,7 +5488,37 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  defp guard_bind(scrut_expr, {:tuple, _m, pats}, expr),
+    do: tuple_guard_bind(scrut_expr, pats, expr)
+
   defp guard_bind(_scrut, _pat, _expr), do: {:error, {:unsupported_guard, :non_catchall_pattern}}
+
+  # Multi-parameter function clauses desugar to a match over a flat tuple of
+  # formal arguments. Such a tuple pattern is irrefutable when every leaf is a
+  # variable or wildcard, so bind each leaf to its positional projection before
+  # elaborating the guard/body. This is the guarded counterpart of
+  # `try_tuple_match/6`; constructor/literal leaves remain deliberately outside
+  # the catch-all guard chain and are rejected by `tuple_subs/2`.
+  defp tuple_guard_bind(scrut_expr, pats, expr) do
+    if match?({:variable, _sm, _sn}, scrut_expr) do
+      with {:ok, subs} <- tuple_subs(pats, scrut_expr) do
+        bound_names = Enum.map(subs, &elem(&1, 0))
+
+        if binds_any?(expr, bound_names) do
+          {:error, {:unsupported_guard, :shadowed}}
+        else
+          {:ok,
+           Enum.reduce(subs, expr, fn {name, replacement}, acc ->
+             subst_surface_var(acc, name, replacement)
+           end)}
+        end
+      else
+        {:error, _} -> {:error, {:unsupported_guard, :non_catchall_pattern}}
+      end
+    else
+      {:error, {:unsupported_guard, :complex_scrutinee}}
+    end
+  end
 
   # Literal patterns on a PRIMITIVE scrutinee (Int/Bool/Float) desugar to a chain
   # of `:case`-on-Bool decisions (`bool_case/5`) — there is no `:vdata` to
@@ -5493,7 +5529,10 @@ defmodule Cure.Elab.Elaborator do
   # assembled chain. Returns `:not_applicable` for a non-primitive scrutinee or
   # arms that are not a clean literal/catch-all list (the ordinary path handles it).
   defp try_literal_match(scrut_expr, arms, scrut_term, scrut_type, expected, names, ctx, env) do
-    case primitive_scrut_kind(scrut_type, Context.signature(ctx)) do
+    sig = Context.signature(ctx)
+    scrut_type = Normalise.whnf_value(scrut_type, sig)
+
+    case primitive_scrut_kind(scrut_type, sig) do
       {:ok, prim} ->
         pats = Enum.map(arms, fn {:match_arm, m, b} -> {Keyword.fetch!(m, :pattern), single_body(b)} end)
 

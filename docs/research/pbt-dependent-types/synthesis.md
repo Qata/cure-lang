@@ -5,7 +5,7 @@
 kernel (`Cure.Core.*`). It is the durable record of that reading: what each
 paper contributes, the cross-cutting conclusions, and the concrete design
 implications for Antigen. It feeds the Antigen design spec
-(`docs/superpowers/specs/2026-07-01-antigen-design.md`) — this is the *research*
+(`docs/superpowers/specs/antigen/2026-07-01-antigen-design.md`) — this is the *research*
 layer; that is the *design* layer.
 
 **Kernel under test (context).** Intensional Martin-Löf Type Theory:

@@ -4,7 +4,7 @@
 
 **Goal:** Land cluster **P0** of the Idris-transliteration program: refresh the reference snapshot, build the pinned `idris2`, stand up the differential-oracle harness with a first rewrite corpus, audit `rewrite_plan/5` against `elabRewrite`, and correct the parity ledger — all at near-zero port risk, calibrating the brief/oracle machinery for P1–P5.
 
-**Architecture:** Follows the program charter [`2026-07-02-idris-transliteration-program-design.md`](../specs/2026-07-02-idris-transliteration-program-design.md) §6 "P0" and §7 "differential oracle". P0 writes no port code except an audit-level delta in the untrusted elaborator (`Cure.Elab.Elaborator.rewrite_plan/5`); the kernel is untouched. The oracle is a two-mode harness (`live` regenerates fixtures from a pinned `idris2 --check`; `replay` asserts Cure's verdicts against committed fixtures with no Idris toolchain), enforcing a relation contract (`same` / `cure_stricter` / `idris_only`) where every divergence carries a written reason.
+**Architecture:** Follows the program charter [`2026-07-02-idris-transliteration-program-design.md`](../specs/roadmap/2026-07-02-idris-transliteration-program-design.md) §6 "P0" and §7 "differential oracle". P0 writes no port code except an audit-level delta in the untrusted elaborator (`Cure.Elab.Elaborator.rewrite_plan/5`); the kernel is untouched. The oracle is a two-mode harness (`live` regenerates fixtures from a pinned `idris2 --check`; `replay` asserts Cure's verdicts against committed fixtures with no Idris toolchain), enforcing a relation contract (`same` / `cure_stricter` / `idris_only`) where every divergence carries a written reason.
 
 **Tech Stack:** Elixir (Cure compiler + Mix tasks), ExUnit, Elixir 1.20 bundled `JSON` module (no new dep), the pinned `idris2` (Chez backend), Idris 2 / Agda vendored reference sources under `~/Develop/esp32-beam/reference/`.
 
@@ -902,7 +902,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 Correct the parity roadmap's **§2 ledger only** to match the tree (charter D5, findings 2/3/4/6). §3 is reserved for the banking plan so the two parallel worktrees never edit the same section — do NOT touch §3.
 
 **Files:**
-- Modify: `$WT/docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (§2 table + the two prose paragraphs after it; §1, §3, §4, §5 untouched)
+- Modify: `$WT/docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (§2 table + the two prose paragraphs after it; §1, §3, §4, §5 untouched)
 
 **Edits (finding-by-finding):**
 - Row **#7** (Propositional equality / rewrite motive inference): status is stale `⬜`. Per finding 2, `rewrite_plan/5` substantially implements `elabRewrite`; P0's audit (Task 5) closes any residual delta. Change the work-item wording to reflect *reach* (what remains), and set status to `✅` if Task 5 confirmed parity, else `🔵` with a note. Default: `✅` (audit-complete).
@@ -924,7 +924,7 @@ Expected: the commits are present in history; the totality assay (with `divergin
 
 - [ ] **Step 2: Edit the §2 table rows**
 
-In `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`, change these five table rows. Row #2:
+In `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md`, change these five table rows. Row #2:
 ```
 | 2 | Dependent case surface | Impossible clauses (omit + verified `-> impossible`) + constructor-headed motive completeness (verbatim-reuse case) | E, P, C | additive | ✅ |
 ```
@@ -954,8 +954,8 @@ The legend line (§1 end) may keep `🔴 live soundness hole` as a legend entry,
 Run:
 ```bash
 cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0
-grep -nE "^\| (2|7|8|13|16) \|" docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
-grep -c "🔴" docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+grep -nE "^\| (2|7|8|13|16) \|" docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
+grep -c "🔴" docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 ```
 Expected: rows 2/7/8/16 show `✅`, row 13 shows `⬜` with reach wording; the `🔴` count is `1` (legend only) or `0` — never on a data row. Confirm §3/§4/§5 are byte-identical to before (`git diff` touches only §1 legend prose + §2).
 
@@ -964,10 +964,10 @@ Expected: rows 2/7/8/16 show `✅`, row 13 shows `⬜` with reach wording; the `
 Run:
 ```bash
 cd /Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/transliteration-p0
-git add -- docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+git add -- docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "docs(roadmap): §2 ledger to tree — #2/#8/#16 ✅, #7 ✅ (audited), #13 hole closed→reach" \
-  -- docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+  -- docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 ```
 
 ---

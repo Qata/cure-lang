@@ -3,7 +3,7 @@
 **Status:** Draft (ready for review)
 **Date:** 2026-07-01
 **Author:** brainstormed with the operator.
-**Umbrella:** `docs/superpowers/specs/2026-07-01-antigen-design.md` (vocabulary,
+**Umbrella:** `docs/superpowers/specs/antigen/2026-07-01-antigen-design.md` (vocabulary,
 architecture, the totality vertical). **Research basis:**
 `docs/research/pbt-dependent-types/synthesis.md` (11-paper synthesis).
 

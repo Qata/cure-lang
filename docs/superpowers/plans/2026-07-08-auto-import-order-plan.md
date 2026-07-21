@@ -8,7 +8,7 @@
 
 **Tech Stack:** Elixir (~> 1.14 per mix.exs), ExUnit, `:beam_lib` for beam-import-table assertions. No new dependencies.
 
-**Spec:** `docs/superpowers/specs/2026-07-08-auto-import-order-design.md` (hardened). Read it before starting; §2 "verified ground truth" explains WHY each change is shaped the way it is.
+**Spec:** `docs/superpowers/specs/tooling/2026-07-08-auto-import-order-design.md` (hardened). Read it before starting; §2 "verified ground truth" explains WHY each change is shaped the way it is.
 
 ## Global Constraints
 
@@ -1742,7 +1742,7 @@ the build derives them from the dependency graph (`Cure.Compiler.DepGraph`
 runtime closure), and `preload(kind:)` expands a selection to everything it
 needs at runtime, so e.g. selecting `:collections` also loads the `:core`
 modules its members call. See
-`docs/superpowers/specs/2026-07-08-auto-import-order-design.md`.
+`docs/superpowers/specs/tooling/2026-07-08-auto-import-order-design.md`.
 ```
 
 - [ ] **Step 6: Run tests**

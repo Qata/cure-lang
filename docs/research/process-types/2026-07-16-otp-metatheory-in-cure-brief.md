@@ -99,7 +99,7 @@ of the correctness ladder and the Evidential-Systems doctrine.
 
 1. `docs/research/process-types/raw-algebra-conformance-checklist.md` — the audit; F-1…F-5 defect definitions and the raw algebra.
 2. `docs/research/process-types/2026-07-16-oracle-papers-synthesis.md` — how the three newest papers re-rank the ledger (the source of the §3 table above; §2a/§2b there are the F-1 and reply-typing analyses).
-3. `docs/superpowers/specs/2026-07-02-lean-shape-matching-design.md` and `2026-07-02-dependent-match-surface-design.md` — the dependent-match coverage algorithm; **its incompleteness is your most likely roadblock** (§8).
+3. `docs/superpowers/specs/types/2026-07-02-lean-shape-matching-design.md` and `2026-07-02-dependent-match-surface-design.md` — the dependent-match coverage algorithm; **its incompleteness is your most likely roadblock** (§8).
 
 ---
 
@@ -313,4 +313,4 @@ before resuming the proof.
 | `test/oracle/with/`, `test/oracle/largeelim/`, `test/oracle/rewrite/` | Oracle pattern to copy |
 | `lib/mix/tasks/cure.oracle.ex` | The `mix cure.oracle` harness |
 | `lib/cure/core/certificate.ex`, `lib/cure/elab/guard_lint.ex` | Totality + exhaustiveness checkers |
-| `docs/superpowers/specs/2026-07-02-lean-shape-matching-design.md` | Dependent-match coverage (roadblock #2) |
+| `docs/superpowers/specs/types/2026-07-02-lean-shape-matching-design.md` | Dependent-match coverage (roadblock #2) |

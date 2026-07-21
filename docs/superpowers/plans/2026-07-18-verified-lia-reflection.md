@@ -4,7 +4,7 @@
 search, and open-refinement discharge landed.
 
 **Goal:** Implement the P1 trusted metatheory core from
-`docs/superpowers/specs/2026-07-18-verified-lia-reflection-design.md`: a total
+`docs/superpowers/specs/kernel/2026-07-18-verified-lia-reflection-design.md`: a total
 Farkas certificate checker and kernel-checked soundness theorem over canonical
 `Std.Int.Int`. P2 (untrusted producer) and P3 (elaborator integration) remain
 separate follow-on phases, but this plan pins the interfaces they consume.

@@ -2,7 +2,7 @@
 
 **Branch:** `autopilot/transliteration-p0`
 **Date:** 2026-07-02
-**Charter:** [`2026-07-02-idris-transliteration-program-design.md`](../specs/2026-07-02-idris-transliteration-program-design.md) §6 (P0: audit + program setup)
+**Charter:** [`2026-07-02-idris-transliteration-program-design.md`](../specs/roadmap/2026-07-02-idris-transliteration-program-design.md) §6 (P0: audit + program setup)
 **Plan:** [`2026-07-02-transliteration-p0-plan.md`](../plans/2026-07-02-transliteration-p0-plan.md)
 
 ## Outcome

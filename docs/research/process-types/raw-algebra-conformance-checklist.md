@@ -16,7 +16,7 @@ audit of the AtomVM clone** at `/Users/ch/Develop/esp32-beam/AtomVM` @ `efa90df6
 (v0.7.0-alpha.1-209), cited by `file:line` (§4).
 
 **Code under audit:** `lib/std/otp_raw.cure` (sealed raw base, 24 ops) narrowed by
-`lib/std/otp.cure` (typed surface). Design: `docs/superpowers/specs/2026-07-09-typed-beam-process-algebra-design.md`.
+`lib/std/otp.cure` (typed surface). Design: `docs/superpowers/specs/beam/2026-07-09-typed-beam-process-algebra-design.md`.
 
 ---
 

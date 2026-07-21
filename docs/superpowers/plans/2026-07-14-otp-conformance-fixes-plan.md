@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **TCB delta: zero.** `lib/cure/core/**` is the kernel. The ONLY file under it this plan touches is `lib/cure/core/inductive.ex`, and only to add an `erasure` field to the opaque-family *record* (a map key with a `nil` default). No typing rule, no conversion rule, no elimination rule changes. If a task finds itself editing `kernel.ex`, `normalise.ex`, `conv.ex`, or `context.ex`, **stop** — the design is wrong.
-- **Spec:** `docs/superpowers/specs/2026-07-14-otp-conformance-fixes-design.md`, **including its §7 planning amendments**, which supersede §3.2 and §3.3 where they conflict. **Evidence base:** `docs/research/process-types/raw-algebra-conformance-checklist.md`.
+- **Spec:** `docs/superpowers/specs/beam/2026-07-14-otp-conformance-fixes-design.md`, **including its §7 planning amendments**, which supersede §3.2 and §3.3 where they conflict. **Evidence base:** `docs/research/process-types/raw-algebra-conformance-checklist.md`.
 - **Out of scope, do not implement:** F-1 (grounding the pid index — Rung 2), the honest `start_link` return, `try_call`, retargeting `send_after` at `start_timer/3`. Spec §2 and §6.
 - **Test discipline:** strict red-green-refactor. Write the test, run it, confirm it fails *for the stated reason*, then write the minimal code to pass. A green test is immutable — never weaken or delete one to accommodate a later step. **Two pre-existing tests are the sole sanctioned exception** (Tasks 4 and 7), named there explicitly because they encode the very defects this batch closes.
 - **One build at a time.** Never launch concurrent `mix test` runs.

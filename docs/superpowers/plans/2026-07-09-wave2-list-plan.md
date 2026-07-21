@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Spec:** `docs/superpowers/specs/2026-07-09-wave2-list-design.md` (hardened, commit f7b9464). Read it fully first; this plan implements it exactly.
+- **Spec:** `docs/superpowers/specs/roadmap/2026-07-09-wave2-list-design.md` (hardened, commit f7b9464). Read it fully first; this plan implements it exactly.
 - **Diff scope:** `lib/cure/core/builtins.ex` (schema line + `seed/2` chain link + new `list_family`/`list_ctors` helpers — NOT the kernel proper), `lib/std/list.cure`, `lib/cure/elab/elaborator.ex` (+ possibly a small new desugar helper module under `lib/cure/elab/`), `lib/cure/elab/emit.ex`, and new test files. The **kernel proper** — `lib/cure/core/{eval,normalise,conv,quote,kernel,term,erase,inductive}.ex` — MUST stay EMPTY of changes (builtins.ex is the seeder, not the TCB; it is the ONE `core/` file this wave touches).
 - **Two-pipeline steer:** the dependent machinery lives ONLY in `lib/cure/elab/*` + `lib/cure/core/*` + `emit.ex`. IGNORE `lib/cure/compiler/*` (`codegen.ex`, `pattern_compiler.ex`) and `lib/cure/types/*` — their list/cons handling is the classic pipeline (a DECOY), read ONLY as a behavioral oracle (see §Oracle).
 - **BUILD-LOCK:** #22 and Wave-1 have landed, so the build lock is free at plan-execution time. Still: only ONE `mix` suite at a time (a past concurrent run caused a kernel panic). Prefer scoped `mix test <file>`; full suite exactly ONCE at the gate. No `iex -S mix`.

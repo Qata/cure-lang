@@ -1243,13 +1243,13 @@ any syntax interpreter, macro dispatcher, or opaque OTP container helper.
 
 Repository references:
 
-- `docs/superpowers/specs/2026-07-09-typed-beam-process-algebra-design.md`
-- `docs/superpowers/specs/2026-07-12-tier3-computed-by-execution-design.md`
-- `docs/superpowers/specs/2026-07-13-transparent-beam-algebra-otp-macros-design.md`
-- `docs/superpowers/specs/2026-07-19-typed-beam-representation-design.md`
-- `docs/superpowers/specs/2026-07-19-typed-actor-behavior-design.md`
-- `docs/superpowers/specs/2026-07-19-typed-fsm-as-constrained-actor-design.md`
-- `docs/superpowers/specs/2026-07-19-constrained-macro-expansions-design.md`
+- `docs/superpowers/specs/beam/2026-07-09-typed-beam-process-algebra-design.md`
+- `docs/superpowers/specs/tooling/2026-07-12-tier3-computed-by-execution-design.md`
+- `docs/superpowers/specs/macros/2026-07-13-transparent-beam-algebra-otp-macros-design.md`
+- `docs/superpowers/specs/beam/2026-07-19-typed-beam-representation-design.md`
+- `docs/superpowers/specs/beam/2026-07-19-typed-actor-behavior-design.md`
+- `docs/superpowers/specs/beam/2026-07-19-typed-fsm-as-constrained-actor-design.md`
+- `docs/superpowers/specs/macros/2026-07-19-constrained-macro-expansions-design.md`
 - `docs/superpowers/plans/2026-07-12-macro-facility-autopilot-state.md`
 - `docs/SUPERVISION.md` and `docs/APP.md` (migration inputs; update them to
   describe the final architecture rather than preserving legacy behavior)

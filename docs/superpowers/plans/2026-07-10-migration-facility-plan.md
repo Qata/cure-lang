@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - **Compiler is Elixir**; escript built via `mix escript.build`. Run tests with `mix test`.
-- **Source of truth spec:** `docs/superpowers/specs/2026-07-10-migration-facility-implementation-design.md`. Every task's requirements implicitly include it.
+- **Source of truth spec:** `docs/superpowers/specs/tooling/2026-07-10-migration-facility-implementation-design.md`. Every task's requirements implicitly include it.
 - **Lossless is mandatory** — every comment survives a rewrite; an unplaced trivia item is a hard error, never a silent drop (spec §5.2).
 - **AST shape is fixed:** Metastatic 3-tuples `{type, meta, children_or_value}`; `meta` is a keyword list. Trivia lives in `meta` under new keys (`:leading`, `:trailing`, `:trailer`) — **no tuple-shape change** (spec §4.2).
 - **Blank-line policy (spec §5.4), fully opinionated:** top of file 0 blanks; bottom exactly 1; exactly 1 between top-level defs; inside a block cap runs at 1 and trim adjacent to open/close; normalization applies to statement lists only, not arbitrary expression spans (§5.4.5).

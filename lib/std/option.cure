@@ -12,31 +12,25 @@ mod Std.Option
   ## ```cure
   ## use Std.Option
   ##
-  ## some(3)                                 # => Some(3)
-  ## map(some(3), fn(x) -> x * 2)            # => Some(6)
-  ## unwrap(none(), 0)                       # => 0
-  ## filter(some(3), fn(x) -> x > 5)         # => None()
+  ## map(Some(3), fn(x) -> x * 2)            # => Some(6)
+  ## unwrap(None(), 0)                       # => 0
+  ## filter(Some(3), fn(x) -> x > 5)         # => None()
   ## ```
   ##
   ## ```cure
   ## use Std.Option
   ##
   ## # Chain two Options into one.
-  ## zip(some("Ada"), some(1815))            # => Some(%["Ada", 1815])
-  ## zip(some("Ada"), none())                # => None()
+  ## zip(Some("Ada"), Some(1815))            # => Some(%["Ada", 1815])
+  ## zip(Some("Ada"), None())                # => None()
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
   ## An optional value: either present (`Some`) or absent (`None`). `Some(v)`
   ## erases to `{:Some, v}` and the nullary `None()` to the bare atom `:None`
   ## on the BEAM.
+  @prelude
   type Option(t) = Some(t) | None()
-
-  ## Build a `Some(value)` Option.
-  fn some(value: t) -> Option(t) = Some(value)
-
-  ## The empty Option.
-  fn none() -> Option(t) = None()
 
   ## `true` when the option holds a value.
   fn is_some(opt: Option(t)) -> Bool =

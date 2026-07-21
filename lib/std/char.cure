@@ -27,3 +27,90 @@ mod Std.Char
   ## and the dependent pipeline resolves globals by bare name.
   @extern(:cure_std_char, :code_point, 1)
   fn code_point(c: Char) -> Int
+
+  ## Scalar equality and ordering. Keeping these operations here prevents
+  ## consumers from unpacking `Char` into implementation-level integers.
+  @extern(:cure_std_char, :same?, 2)
+  fn same(a: Char, b: Char) -> Bool
+
+  @extern(:cure_std_char, :less_than?, 2)
+  fn less_than(a: Char, b: Char) -> Bool
+
+  @extern(:cure_std_char, :between?, 3)
+  fn between(c: Char, first: Char, last: Char) -> Bool
+
+  @extern(:cure_std_char, :ascii?, 1)
+  fn is_ascii(c: Char) -> Bool
+
+  @extern(:cure_std_char, :ascii_value, 1)
+  fn ascii_value(c: Char) -> Option(Int)
+
+  @extern(:cure_std_char, :letter?, 1)
+  fn is_letter(c: Char) -> Bool
+
+  @extern(:cure_std_char, :punctuation?, 1)
+  fn is_punctuation(c: Char) -> Bool
+
+  @extern(:cure_std_char, :newline?, 1)
+  fn is_newline(c: Char) -> Bool
+
+  @extern(:cure_std_char, :whitespace?, 1)
+  fn is_whitespace(c: Char) -> Bool
+
+  @extern(:cure_std_char, :symbol?, 1)
+  fn is_symbol(c: Char) -> Bool
+
+  @extern(:cure_std_char, :math_symbol?, 1)
+  fn is_math_symbol(c: Char) -> Bool
+
+  @extern(:cure_std_char, :currency_symbol?, 1)
+  fn is_currency_symbol(c: Char) -> Bool
+
+  @extern(:cure_std_char, :cased?, 1)
+  fn is_cased(c: Char) -> Bool
+
+  @extern(:cure_std_char, :uppercase?, 1)
+  fn is_uppercase(c: Char) -> Bool
+
+  @extern(:cure_std_char, :lowercase?, 1)
+  fn is_lowercase(c: Char) -> Bool
+
+  ## Case conversion returns a String because Unicode mappings may expand one
+  ## scalar into several (`'ß'.uppercased()` is `"SS"`).
+  @extern(:cure_std_char, :uppercased, 1)
+  fn uppercased(c: Char) -> String
+
+  @extern(:cure_std_char, :lowercased, 1)
+  fn lowercased(c: Char) -> String
+
+  ## ASCII-only one-to-one fold for protocols (such as non-Unicode regex
+  ## caseless matching) that explicitly require ASCII semantics.
+  @extern(:cure_std_char, :ascii_lowercased, 1)
+  fn ascii_lowercased(c: Char) -> Char
+
+  @extern(:cure_std_char, :number?, 1)
+  fn is_number(c: Char) -> Bool
+
+  @extern(:cure_std_char, :whole_number?, 1)
+  fn is_whole_number(c: Char) -> Bool
+
+  @extern(:cure_std_char, :whole_number_value, 1)
+  fn whole_number_value(c: Char) -> Option(Int)
+
+  @extern(:cure_std_char, :hex_digit?, 1)
+  fn is_hex_digit(c: Char) -> Bool
+
+  @extern(:cure_std_char, :hex_digit_value, 1)
+  fn hex_digit_value(c: Char) -> Option(Int)
+
+  ## Unicode property predicates used by pure Cure text parsers. These expose
+  ## immutable Unicode tables only; no regex engine or compiled handle crosses
+  ## the boundary.
+  @extern(:cure_std_char, :unicode_digit?, 1)
+  fn is_unicode_digit(c: Char) -> Bool
+
+  @extern(:cure_std_char, :unicode_word?, 1)
+  fn is_unicode_word(c: Char) -> Bool
+
+  @extern(:cure_std_char, :unicode_space?, 1)
+  fn is_unicode_space(c: Char) -> Bool

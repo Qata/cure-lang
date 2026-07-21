@@ -63,6 +63,25 @@ defmodule Cure.Elab.GuardTest do
     assert apply(mod, :c, []) == {:S, {:S, :Z}}
   end
 
+  test "multi-parameter function clauses bind tuple leaves in guards and bodies" do
+    src = """
+    mod M
+      fn choose(char: Char, fallback: Char) -> Char
+        | char, fallback when char == '.' -> char
+        | _, fallback -> fallback
+
+      fn hit() -> Char = choose('.', 'x')
+      fn miss() -> Char = choose('a', 'x')
+    end
+    """
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.GuardMulti", functions: [:choose, :hit, :miss])
+
+    assert apply(mod, :hit, []) == ?.
+    assert apply(mod, :miss, []) == ?x
+  end
+
   test "a guard whose test is false and has no fallback is rejected (non-exhaustive)" do
     src =
       @nat <>

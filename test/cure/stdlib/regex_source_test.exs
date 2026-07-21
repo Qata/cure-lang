@@ -15,6 +15,16 @@ defmodule Cure.Stdlib.RegexSourceTest do
     assert {:ok, _ast} = Parser.parse(tokens, emit_events: false)
   end
 
+  test "the legacy OTP regex runtime wrapper is absent" do
+    legacy = Path.expand("../../../lib/cure/stdlib/cure_std_regex.ex", __DIR__)
+
+    refute File.exists?(legacy)
+
+    refute Enum.any?(Path.wildcard("lib/**/*.ex"), fn file ->
+             File.read!(file) =~ ":re."
+           end)
+  end
+
   test "slash literals expand to the typed pure Regex constructor" do
     {:ok, tokens} = Lexer.tokenize("fn f() -> Regex = /[A-z]*/", emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)

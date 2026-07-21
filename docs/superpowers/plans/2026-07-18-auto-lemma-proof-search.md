@@ -345,7 +345,7 @@ Expected: FAIL — `Cure.Elab.ProofSearch.resolve/3 is undefined`.
 defmodule Cure.Elab.ProofSearch do
   @moduledoc """
   Auto proof-search over `@lemma`-tagged theorems and local hypotheses
-  (design: docs/superpowers/specs/2026-07-18-auto-lemma-proof-search-design.md).
+  (design: docs/superpowers/specs/kernel/2026-07-18-auto-lemma-proof-search-design.md).
 
   Untrusted: only *builds* Core proof terms; every candidate is re-checked by
   the kernel (`Cure.Core.Kernel.check/3`), so search can never make an

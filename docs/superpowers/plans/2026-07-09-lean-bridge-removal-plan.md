@@ -6,7 +6,7 @@
 
 **Architecture:** Pure removal. Twelve tracked files deleted (nine bridge-only + three backend-selection-layer files collapsed away), two live files surgically edited (`lib/cure/elab/program.ex`, `lib/cure/elab/declarations.ex`). No behavior change: the deleted `:lean` path had no live caller; the default path already routed to `check_ast_elixir_core/1`.
 
-**Tech Stack:** Elixir, git. Spec: `docs/superpowers/specs/2026-07-09-lean-bridge-removal-design.md` (hardened `00da9ce`).
+**Tech Stack:** Elixir, git. Spec: `docs/superpowers/specs/tooling/2026-07-09-lean-bridge-removal-design.md` (hardened `00da9ce`).
 
 ## Global Constraints
 

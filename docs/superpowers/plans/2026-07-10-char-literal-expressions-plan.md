@@ -6,7 +6,7 @@
 
 **Architecture:** A char literal is sugar for a bounded literal at the full Unicode bound `Bounded(0x110000)`. The elaborator change is infer-only (check mode works via the existing `elaborate_expr_checked_fallback` = infer-then-`Kernel.check`). A companion lexer fix decodes UTF-8 so non-ASCII char literals can be produced from real source.
 
-**Tech Stack:** Elixir; Cure dependent elaborator (`lib/cure/elab/elaborator.ex`) + kernel (`lib/cure/core/*`); lexer (`lib/cure/compiler/lexer.ex`). Spec: `docs/superpowers/specs/2026-07-10-char-literal-expressions-design.md`.
+**Tech Stack:** Elixir; Cure dependent elaborator (`lib/cure/elab/elaborator.ex`) + kernel (`lib/cure/core/*`); lexer (`lib/cure/compiler/lexer.ex`). Spec: `docs/superpowers/specs/language/2026-07-10-char-literal-expressions-design.md`.
 
 ## Global Constraints
 

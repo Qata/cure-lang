@@ -14,12 +14,12 @@ defmodule Cure.Audit.ShimConformanceTest do
     executed = length(SC.axioms())
     excluded = length(SC.excluded())
 
-    assert executed == 44
+    assert executed == 37
     assert excluded == 4
 
-    # 48 = the `:cure_std_*` extern count after `shrink` was retired to an
-    # interface. Keep this honest: "44 checked" must never read as "48 checked".
-    assert executed + excluded == 48
+    # Std.Regex is now a pure Cure value and no longer contributes seven shim
+    # axioms to this transitional runtime audit.
+    assert executed + excluded == 41
 
     for {_mfa, reason} <- SC.excluded(), do: assert(reason == "network I/O")
   end
@@ -47,28 +47,10 @@ defmodule Cure.Audit.ShimConformanceTest do
       assert {:conformant, []} = p[{:cure_std_crdt, :lww_value, 1}]
     end
 
-    test "regex compilation allocates a fresh reference, so it is not a pure function",
-         %{partition: p} do
-      # `:re.compile/2` embeds a `#Reference<>` in the compiled pattern, so
-      # `compile("a+") != compile("a+")` structurally. Not repairable by
-      # rewriting in Cure: the reference comes from the NIF.
-      assert {:effectful, failures} = p[{:cure_std_regex, :compile, 1}]
-      assert Keyword.has_key?(failures, :referential_transparency)
-
-      assert {:effectful, _} = p[{:cure_std_regex, :compile_bang, 1}]
-
-      # Everything downstream of a compiled pattern IS pure.
-      assert {:conformant, []} = p[{:cure_std_regex, :is_match, 2}]
-      assert {:conformant, []} = p[{:cure_std_regex, :run, 2}]
-      assert {:conformant, []} = p[{:cure_std_regex, :split, 2}]
-    end
-
     test "every other executed axiom is conformant on all four properties", %{partition: p} do
       known = [
         {:cure_std_time, :now, 0},
-        {:cure_std_time, :utc_now, 0},
-        {:cure_std_regex, :compile, 1},
-        {:cure_std_regex, :compile_bang, 1}
+        {:cure_std_time, :utc_now, 0}
       ]
 
       offenders =

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Retire the kernel-primitive Sigma (`{:sigma}`/`{:pair}`/`{:fst}`/`{:snd}` + `vsigma`/`vpair`/`nfst`/`nsnd`) in favor of a stdlib inductive registered `@builtin(:sigma)`, with surface behavior, oracle verdicts, and the BEAM bare-2-tuple ABI all invariant — spec `docs/superpowers/specs/2026-07-09-sigma-retirement-design.md` (hardened `466fd36`).
+**Goal:** Retire the kernel-primitive Sigma (`{:sigma}`/`{:pair}`/`{:fst}`/`{:snd}` + `vsigma`/`vpair`/`nfst`/`nsnd`) in favor of a stdlib inductive registered `@builtin(:sigma)`, with surface behavior, oracle verdicts, and the BEAM bare-2-tuple ABI all invariant — spec `docs/superpowers/specs/kernel/2026-07-09-sigma-retirement-design.md` (hardened `466fd36`).
 
 **Architecture:** Producers first, strip last, validator ratchet in between (spec §1.8): T1 registry+stdlib inductive → T2 elaborator re-point (crux) → T3 emit hooks → T4a `no_sigma_node: :warn` → T6 Antigen migration → T7 test/example sweep → T5 kernel/core+traversal strip → T4b `:reject` → full gate. Kernel work is REMOVAL-ONLY (no new judgements; the D1 napp clause survives, spec §1.3).
 

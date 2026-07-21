@@ -3,6 +3,7 @@ defmodule Antigen.Gen do
   @type t ::
           {:return, term()}
           | {:member_of, [term()]}
+          | {:integer, integer(), integer()}
           | {:one_of, [t()]}
           | {:frequency, [{pos_integer(), t()}]}
           | {:bind, t(), (term() -> t())}
@@ -20,6 +21,8 @@ defmodule Antigen.Gen do
   def resize(n, g) when is_integer(n) and n >= 0, do: {:resize, n, g}
   def tag(g, t) when t in [:unsized, :size_monotonic], do: {:tagged, t, g}
   def int(lo, hi) when lo <= hi, do: member_of(Enum.to_list(lo..hi))
+  def integer(lo, hi) when is_integer(lo) and is_integer(hi) and lo <= hi,
+    do: {:integer, lo, hi}
 
   @doc """
   Defer construction of a sub-generator until it is actually sampled. The backend
@@ -35,6 +38,7 @@ defmodule Antigen.Gen do
   @spec support(t()) :: {:finite, MapSet.t()} | :over_approx
   def support({:return, x}), do: {:finite, MapSet.new([x])}
   def support({:member_of, xs}), do: {:finite, MapSet.new(xs)}
+  def support({:integer, _lo, _hi}), do: :over_approx
   def support({:one_of, gs}), do: union_support(gs)
   def support({:frequency, ws}), do: union_support(Enum.map(ws, fn {_w, g} -> g end))
   def support({:resize, _n, g}), do: support(g)

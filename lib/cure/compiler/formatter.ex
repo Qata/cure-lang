@@ -38,7 +38,7 @@ defmodule Cure.Compiler.Formatter do
 
     * `"..."` string literals (including `#{...}` interpolation),
     * `'...'` character literals,
-    * `~r/.../flags` regex literals,
+    * `/.../flags` regex literals,
     * `## ...` single-line doc comments,
     * `### ... ###` fenced multi-line doc comments.
 
@@ -667,9 +667,9 @@ defmodule Cure.Compiler.Formatter do
         stop = scan_char(source, pos + 1, size)
         do_scan(source, stop, size, [{:char, pos, stop} | acc])
 
-      ?~ ->
-        if byte_at(source, pos + 1) == ?r and byte_at(source, pos + 2) == ?/ do
-          stop = scan_regex(source, pos + 3, size)
+      ?/ ->
+        if regex_start?(source, pos) do
+          stop = scan_regex(source, pos + 1, size)
           do_scan(source, stop, size, [{:regex, pos, stop} | acc])
         else
           do_scan(source, pos + 1, size, acc)
@@ -770,8 +770,25 @@ defmodule Cure.Compiler.Formatter do
 
   defp scan_regex_flags(source, pos, size) do
     case :binary.at(source, pos) do
-      c when c in ?a..?z -> scan_regex_flags(source, pos + 1, size)
+      c when c in [?i, ?m, ?s, ?x, ?u, ?f, ?r, ?U, ?E] ->
+        scan_regex_flags(source, pos + 1, size)
       _ -> pos
+    end
+  end
+
+  defp regex_start?(_source, 0), do: true
+
+  defp regex_start?(source, pos) do
+    previous = previous_nonspace(source, pos - 1)
+    previous in [?=, ?(, ?[, ?{, ?,, ?:, ?\n]
+  end
+
+  defp previous_nonspace(_source, pos) when pos < 0, do: nil
+
+  defp previous_nonspace(source, pos) do
+    case :binary.at(source, pos) do
+      c when c in [?s, ?\t, ?\r] -> previous_nonspace(source, pos - 1)
+      c -> c
     end
   end
 

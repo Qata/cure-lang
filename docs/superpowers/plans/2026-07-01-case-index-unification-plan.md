@@ -4,7 +4,7 @@
 
 **Goal:** Replace the one-directional `branch_index_subst/4` zip in the kernel's dependent-`case` checker with a sound bidirectional first-order unifier over the scrutinee-vs-constructor index vectors — closing the Antigen 4.3 incompleteness (a dropped ground result index) and, with the same unifier, discharging provably-unreachable branches.
 
-**Architecture:** One new private kernel function `unify_indices/4` returning `{:solved, subst} | :trivial | :impossible`, feeding the EXISTING `specialize_branch_context`/`specialize_branch_value`/`replace_branch_vars` application layer unchanged. `check_case_branches` gains one `:impossible` arm. No new modules; no change to the `rewrite`/transport layer, coverage, or exhaustiveness. Spec: `docs/superpowers/specs/2026-07-01-case-index-unification-design.md`.
+**Architecture:** One new private kernel function `unify_indices/4` returning `{:solved, subst} | :trivial | :impossible`, feeding the EXISTING `specialize_branch_context`/`specialize_branch_value`/`replace_branch_vars` application layer unchanged. `check_case_branches` gains one `:impossible` arm. No new modules; no change to the `rewrite`/transport layer, coverage, or exhaustiveness. Spec: `docs/superpowers/specs/kernel/2026-07-01-case-index-unification-design.md`.
 
 **Tech Stack:** Elixir, ExUnit, the existing `Cure.Core.*` kernel.
 

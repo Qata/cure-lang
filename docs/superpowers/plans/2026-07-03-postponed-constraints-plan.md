@@ -313,7 +313,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 ## Task 6 — Roadmap update + final verification gate
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (§2 row #11)
+- Modify: `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (§2 row #11)
 
 - [ ] **Step 1: Update roadmap row #11** from open → **landed**: name the four probes (`postpone01`–`04`), the app-telescope granularity + the deferred definition-wide threading, the retry-all fixpoint, the weak/strong occurs split, and the no-TCB / kernel-backstop note. Mark the deferred items (definition-wide threading, pruning, Σ-flattening, blocker-keyed wakeup) as follow-ups.
 
@@ -323,7 +323,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 - [ ] **Step 4: Commit.**
 ```bash
-git add -- docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+git add -- docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "docs(spec): #11 postponed constraints landed (app-telescope cut) — roadmap update"
 ```

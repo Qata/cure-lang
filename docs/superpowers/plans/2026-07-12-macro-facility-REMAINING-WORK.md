@@ -40,11 +40,11 @@
 8. **Reference specs (source of truth for behaviour):**
    - `docs/superpowers/specs/macros/2026-07-08-macro-facility-design.md` (base; §3 quoted-AST,
      §5 hygiene, §6 name res, §7 import scope, §8 reflection API, §13 Tier 5, §14 BEAM/OTP).
-   - `docs/superpowers/specs/2026-07-11-self-proving-macros-design.md` (§3 exhaustive explain,
+   - `docs/superpowers/specs/macros/2026-07-11-self-proving-macros-design.md` (§3 exhaustive explain,
      §4 generative proof, §5 required examples).
    - `docs/superpowers/specs/macros/2026-07-12-racket-syntax-parse-comparison.md` (error machinery).
-   - `docs/superpowers/specs/2026-07-12-tier3-computed-by-execution-design.md` (Tier-3 exec arch).
-   - `docs/superpowers/specs/2026-07-12-generator-typeclass-pbt-architecture.md` (SP3 arch).
+   - `docs/superpowers/specs/tooling/2026-07-12-tier3-computed-by-execution-design.md` (Tier-3 exec arch).
+   - `docs/superpowers/specs/tooling/2026-07-12-generator-typeclass-pbt-architecture.md` (SP3 arch).
    - `docs/superpowers/plans/2026-07-12-macro-facility-program.md` (the 6 SPs + gates).
 
 ---

@@ -91,7 +91,7 @@ Expected: FAIL — `Cure.Edition` is undefined.
 defmodule Cure.Edition do
   @moduledoc """
   Cure editions: a coarse, declared, calendar-named compatibility line a file or
-  project is read against (design: docs/superpowers/specs/2026-07-10-editions-design.md).
+  project is read against (design: docs/superpowers/specs/roadmap/2026-07-10-editions-design.md).
 
   An edition is a 4-digit calendar-year string. The set of real editions is the
   closed allow-list `@known`; `current/0` is the newest. Ordering is by integer

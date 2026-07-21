@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land the D1 kernel enabler — `check_motive_wf` accepts neutral type-valued applications (`b(first(p))`-shaped motives) via a reify+infer clause, plus the §2.4 defensive `{:pair,…}` infer clause — spec `docs/superpowers/specs/2026-07-08-neutral-app-sort-design.md` (hardened `fb68e84`).
+**Goal:** Land the D1 kernel enabler — `check_motive_wf` accepts neutral type-valued applications (`b(first(p))`-shaped motives) via a reify+infer clause, plus the §2.4 defensive `{:pair,…}` infer clause — spec `docs/superpowers/specs/tooling/2026-07-08-neutral-app-sort-design.md` (hardened `fb68e84`).
 
 **Architecture:** Exactly two new clauses in `lib/cure/core/kernel.ex` (TCB — blanket-approved as Agda/Lean-aligned, FULL verification gate mandatory): an `infer_type_value_sort` clause that reifies the neutral application signature-aware and accepts only if the kernel's own term-level `infer/2` yields `{:vtype, l}`, and a one-line defensive `infer(_, {:pair,_,_})` rejection. **[AMENDED 2026-07-09, spec §7]** Plus Task 1b, the E-layer enabler execution uncovered: type-position implicit insertion in the return-type lowering (`lib/cure/elab/declarations.ex` + one public wrapper in `elaborator.ex`) — without it the elaborator hands the kernel an under-applied motive and the probe can never elaborate. Plus: unit tests, an Antigen antibody (a property-based `DepMatch` accepting variant + fixed accept/reject pins + a Malformed reject seed — see Task 2's gap note), and a new `sg` differential-oracle cluster.
 

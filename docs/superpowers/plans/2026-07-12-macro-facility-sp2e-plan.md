@@ -1,6 +1,6 @@
 # SP2 Tier-3 slice 2 — `Std.Syntax` value + reflection bridge — Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: superpowers:executing-plans (autopilot Stage 4). Steps use `- [ ]`. Strict red-green TDD; commit per task. Second Tier-3 slice (the value model). Grounded by `docs/superpowers/specs/2026-07-12-tier3-computed-by-execution-design.md`.
+> **For agentic workers:** REQUIRED SUB-SKILL: superpowers:executing-plans (autopilot Stage 4). Steps use `- [ ]`. Strict red-green TDD; commit per task. Second Tier-3 slice (the value model). Grounded by `docs/superpowers/specs/tooling/2026-07-12-tier3-computed-by-execution-design.md`.
 
 **Goal:** Build the **generic `Syntax` value model** an elab function operates on, and the **reflection bridge** that converts a parser AST to/from it losslessly. This is the substrate for slice 3 (compile-time elab execution). NO execution here — just the type + a round-tripping reflection.
 

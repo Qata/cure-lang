@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `infer(t) = {:ok, A}` implies `check(t, A) = :ok` for params-on-spine constructor applications — route the arity `check`'s fields-only strategy cannot measure to the existing infer+conv fallback — spec `docs/superpowers/specs/2026-07-09-infer-check-coherence-design.md` (hardened `5b7b46e`).
+**Goal:** `infer(t) = {:ok, A}` implies `check(t, A) = :ok` for params-on-spine constructor applications — route the arity `check`'s fields-only strategy cannot measure to the existing infer+conv fallback — spec `docs/superpowers/specs/kernel/2026-07-09-infer-check-coherence-design.md` (hardened `5b7b46e`).
 
 **Architecture:** One clause-body restructure in `lib/cure/core/kernel.ex` `check/3` (TCB, Lean-aligned: check = infer + def-eq; blanket-approved, FULL gate mandatory), with the generic fallback body extracted into a shared `check_via_infer/3`. Then Antigen widening (the round-trip assay already exists — widening the equality generator arms it) and a docs-only ledger filing of the sibling value-spelling-dichotomy finding.
 
@@ -208,7 +208,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 ### Task 3: file the sibling finding (docs-only)
 
-**Files (in-repo, git-tracked):** the parity-ledger roadmap spec (locate `docs/superpowers/specs/*idris-parity-roadmap*.md` → `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`, §2) + the task-#14 spec already carries §3.
+**Files (in-repo, git-tracked):** the parity-ledger roadmap spec (locate `docs/superpowers/specs/*idris-parity-roadmap*.md` → `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md`, §2) + the task-#14 spec already carries §3.
 **Files (NOT in-repo, NOT git-tracked — do not pathspec these into any worktree commit):** a NEW memory-note file under the operator's Claude memory directory (`~/.claude/projects/-Users-ch-Develop-esp32-beam-cure-lang/memory/`) + its index entry in that directory's `MEMORY.md` (spec §4 item 6 requires "a parity-ledger row PLUS a memory note" — both, not either; completion is not claimed until both are checked off). That memory directory lives outside `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/kernel-parity-batch` entirely — it is not part of this git repo, so it is edited directly (no `git add`/commit for it, no pathspec, no ghost-authorship concern).
 
 - [ ] **Step 1:** Add a ledger row/finding note to the roadmap spec: "value-level ctor-spelling dichotomy — spine vs fields-only vctors are NOT definitionally equal (conv.ex length-strict spine compare); case ι-reduction over a spine-form scrutinee mis-binds OPEN branch bodies (ambient de Bruijn refs shift by pc, eval.ex ι env); erase keeps spine params. Pre-existing, incidence raised by #14's coherence fix; resolution = canonical-spelling design fork (Lean params-always vs Agda fields-only) — OPERATOR decision, prose. Evidence anchors in spec 2026-07-09-infer-check-coherence §3." Also mark the #14 row done.

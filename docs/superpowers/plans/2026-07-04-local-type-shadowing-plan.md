@@ -1870,9 +1870,9 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "test(sh
 
 - [ ] **Step 6: Update the parity ledger**
 
-The shadowing fix is a correctness defect gating ledger row #5's auto-generalization path; note its resolution in `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (a one-line pointer near #4/#5), then commit:
+The shadowing fix is a correctness defect gating ledger row #5's auto-generalization path; note its resolution in `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (a one-line pointer near #4/#5), then commit:
 ```bash
-git add -- docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+git add -- docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" -m "docs(parity): note local type/ctor shadowing fix (unblocks #5)"
 ```
 

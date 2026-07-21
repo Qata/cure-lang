@@ -1,5 +1,4 @@
 defmodule Cure.Audit.ShimConformance do
-  @compile {:no_warn_undefined, :cure_std_regex}
 
   @moduledoc """
   Phase 1 of the axiom-surface program: mechanically check the `CURE RUNTIME`
@@ -25,7 +24,7 @@ defmodule Cure.Audit.ShimConformance do
   `Std.Http`'s four axioms perform network I/O. Executing them in a test suite is
   not acceptable and mocking `:httpc` would test the mock, so they are excluded
   and classified `:effectful` by inspection. The harness reports how many axioms
-  it executed so "44 checked" never reads as "48 checked".
+  it executed so the checked and excluded totals remain explicit.
 
   Passing on generated arguments is evidence, not proof. It is strictly more than
   the zero evidence available today, and a rewrite in Cure is what turns evidence
@@ -84,12 +83,6 @@ defmodule Cure.Audit.ShimConformance do
   defp elem, do: int()
 
   defp int_list, do: {:member_of, [[], [1], [3, 1, 2], [5, 5], [-1, 0, 1]]}
-  # Includes "ab" so the `(a)(b)` pattern actually matches and yields capture
-  # groups — otherwise `run`/`scan` only ever produce `{:Matched, whole, []}`
-  # and the groups field is never exercised.
-  defp text, do: {:member_of, ["", "a", "aa b aaa", "1a2", "hello", "ab", "xabx"]}
-  defp pattern, do: {:member_of, ["a+", "[0-9]+", "\\s", "(a)(b)"]}
-
   # -- CRDT states, built from the module's own constructors -------------------
 
   defp gcounter do
@@ -145,8 +138,6 @@ defmodule Cure.Audit.ShimConformance do
     end)
   end
 
-  defp regex, do: map(pattern(), &:cure_std_regex.compile_bang/1)
-
   # Exercise every Value constructor `encode/1` handles, not just Num and empty
   # Arr: the nullary `:Null`, `Bool`, `Str`, a non-empty nested `Arr`, and an
   # `Obj` of `JsonPair`s.
@@ -168,12 +159,12 @@ defmodule Cure.Audit.ShimConformance do
   defp prop_fn, do: {:member_of, [fn _ -> true end, fn n -> n < 50 end]}
 
   # ---------------------------------------------------------------------------
-  # The axiom table. 44 executable axioms; `cure_std_http`'s 4 are excluded.
+  # The axiom table. 37 executable axioms; `cure_std_http`'s 4 are excluded.
   # ---------------------------------------------------------------------------
 
   @doc "Every `CURE RUNTIME` axiom this harness executes."
   def axioms do
-    crdt() ++ time() ++ regex_axioms() ++ json() ++ gen() ++ test_axioms()
+    crdt() ++ time() ++ json() ++ gen() ++ test_axioms()
   end
 
   @doc """
@@ -250,28 +241,6 @@ defmodule Cure.Audit.ShimConformance do
       ),
       a({:cure_std_time, :to_unix, 1}, seq([instant()]), :int),
       a({:cure_std_time, :of_unix, 1}, seq([int()]), inst)
-    ]
-  end
-
-  defp regex_axioms do
-    rx = :regex
-    matched = :matched
-
-    [
-      # `:re.compile/2` returns a pattern embedding a freshly-allocated
-      # `#Reference<>`, so two compilations of the same pattern are structurally
-      # unequal. Postulating `compile : String -> Result(Regex, RegexError)` as a
-      # pure function is therefore false: it is not a function of its argument.
-      # Rewriting in Cure cannot fix it — the reference comes from the NIF. It
-      # needs either the `Effect` former or a `Regex` whose equality is not
-      # structural (an opaque family the kernel refuses to eliminate).
-      a({:cure_std_regex, :compile, 1}, seq([{:member_of, ["a+", "["]}]), {:result, rx, :any}, :effectful),
-      a({:cure_std_regex, :compile_bang, 1}, seq([pattern()]), rx, :effectful),
-      a({:cure_std_regex, :is_match, 2}, seq([regex(), text()]), :bool),
-      a({:cure_std_regex, :run, 2}, seq([regex(), text()]), {:option, matched}),
-      a({:cure_std_regex, :scan, 2}, seq([regex(), text()]), {:list, matched}),
-      a({:cure_std_regex, :replace, 3}, seq([regex(), text(), {:member_of, ["-", ""]}]), :binary),
-      a({:cure_std_regex, :split, 2}, seq([regex(), text()]), {:list, :binary})
     ]
   end
 
@@ -434,7 +403,6 @@ defmodule Cure.Audit.ShimConformance do
   defp shape?(:atom, v), do: is_atom(v)
   defp shape?(:bool, v), do: is_boolean(v)
   defp shape?(:binary, v), do: is_binary(v)
-  defp shape?(:regex, v), do: is_map(v) and Map.has_key?(v, :handle)
   defp shape?({:struct, tag}, v), do: is_map(v) and Map.get(v, :__struct__) == tag
   defp shape?({:list, s}, v), do: is_list(v) and Enum.all?(v, &shape?(s, &1))
   defp shape?({:result, ok, _err}, {:Ok, v}), do: shape?(ok, v)

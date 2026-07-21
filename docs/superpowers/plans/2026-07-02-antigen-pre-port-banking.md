@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Bank, before any transliteration port lands, every Antigen antibody expressible with today's surface/Core forms: the W1 adversarial diverging set, the W2 reach pins (new `reach.sexp` store), the W3 deletion/occurs antibodies, the W4 positivity escape hatches (with a likely kernel fix), and the W5 universes vertical — per `docs/superpowers/specs/2026-07-02-antigen-pre-port-banking-design.md`.
+**Goal:** Bank, before any transliteration port lands, every Antigen antibody expressible with today's surface/Core forms: the W1 adversarial diverging set, the W2 reach pins (new `reach.sexp` store), the W3 deletion/occurs antibodies, the W4 positivity escape hatches (with a likely kernel fix), and the W5 universes vertical — per `docs/superpowers/specs/antigen/2026-07-02-antigen-pre-port-banking-design.md`.
 
 **Architecture:** Antigen challenges are hand-built Core-term programs whose label (`:diverging`/`:terminating`, `:well_typed`/`:ill_typed`, `:positive`/`:negative`) is correct *by construction*; assays run the kernel and report `:ok` iff the kernel's verdict matches the label. Antibodies are banked as append-only records in `test/antigen/corpus.sexp` (replayed to `:ok` forever); reach pins go in a new third store `test/antigen/reach.sexp` whose replay test pins today's *documented violation*.
 
@@ -15,7 +15,7 @@
 - **Closed atom set:** every new generator-produced name (def names, family names, ctor names, telescope binder names) MUST be added to `@known_atoms` in `lib/cure/elab/../../antigen/challenge.ex` (`lib/antigen/challenge.ex:26-42`) or `:safe` corpus decode crashes in processes that never loaded the generator.
 - **Full suite before every commit:** `mix test` (not just `test/antigen`). Any task touching `lib/cure/core/` is a TCB change — say so in the commit body with a `TCB:` line.
 - **Labels state mathematical truth** (spec D3): a well-founded def is `:terminating` even while the checker rejects it. Every new challenge's `@doc` states its by-construction ground-truth argument.
-- Work happens on a dedicated worktree branched from `autopilot/case-index-unification` (creation via superpowers:using-git-worktrees at execution time). Roadmap edits in this plan touch ONLY §3 of `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` plus the status cells (and stale-hole parenthetical of row 13) of §2 rows 13, 19, 23 — all other §2 text belongs to the parallel P0 plan (keeps the merge trivial).
+- Work happens on a dedicated worktree branched from `autopilot/case-index-unification` (creation via superpowers:using-git-worktrees at execution time). Roadmap edits in this plan touch ONLY §3 of `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` plus the status cells (and stale-hole parenthetical of row 13) of §2 rows 13, 19, 23 — all other §2 text belongs to the parallel P0 plan (keeps the merge trivial).
 - **D4 symmetric reroute (hardened spec D4/gate 4):** a must-*accept*-today challenge (W3's `deletion(:well_typed)`; W5's `:well_typed` probes — NOT W2, whose pins are expected-rejected) that the kernel wrongly rejects is an *incompleteness surprise*, not a soundness hole: keep its `:well_typed` label (D3), pin its current documented violation, and bank it in `test/antigen/reach.sexp` instead of `corpus.sexp`/`seeds.sexp`; the affected ledger row stays open in Task 11 (gate 5). Never relabel, never silently drop.
 - **Tests are immutable once they correctly encode intended/observed behavior:** make a red test green by changing implementation code only (or, for a reach/pin entry, by the sanctioned reach→corpus migration in the port that achieves it) — never by deleting, skipping, or weakening an assertion. The one exception is a test that is provably wrong. Reach/pin/audit tests are characterizations of *current* kernel behavior by design (D2/D3): if a Step-1 prediction of the exact violation shape doesn't match what the kernel actually returns on the first red run, correcting the literal to the observed truth *before that entry is banked* is the intended workflow, not a violation of this rule — the record becomes immutable only once committed (append-only, above).
 
@@ -25,7 +25,7 @@
 
 **Files:**
 - Modify: `lib/antigen/generators/totality.ex` (moduledoc + `diverging_mutual_pair/0` doc/note)
-- Modify: `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (§3.1 table cell, §3.2 A1 row, §3.3 first bullet)
+- Modify: `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (§3.1 table cell, §3.2 A1 row, §3.3 first bullet)
 
 **Interfaces:**
 - Consumes: nothing.
@@ -63,7 +63,7 @@ In the same file's `@moduledoc`, replace the sentence
 
 - [ ] **Step 3: Fix roadmap §3 (three spots)**
 
-In `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`:
+In `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md`:
 
 1. §3.1 table — replace the row
 `| `totality/diverging` | non-terminating defs rejected | `diverging_mutual_pair` | 🔴 checker fails it — confirmed hole |`
@@ -87,7 +87,7 @@ Expected: PASS (docs-only change).
 - [ ] **Step 5: Commit**
 
 ```bash
-git add lib/antigen/generators/totality.ex docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+git add lib/antigen/generators/totality.ex docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 git commit -m "docs(antigen): retire the stale mutual-recursion hole narrative (W6/A1 closed)" --author="Made In Heaven <madeinheaven@madeinheaven.com>"
 ```
 
@@ -1148,7 +1148,7 @@ visited-set family expansion, sigma traversal). No signature changes."
 **Files:**
 - Create: `test/antigen/positivity_seed_test.exs`
 - Modify (generated): `test/antigen/corpus.sexp`
-- Modify: `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (§3.1 positivity row)
+- Modify: `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (§3.1 positivity row)
 
 **Interfaces:**
 - Consumes: Task 7's three generators (now green through the Task 8 kernel).
@@ -1211,7 +1211,7 @@ with
 
 ```bash
 mix test
-git add test/antigen/positivity_seed_test.exs test/antigen/corpus.sexp docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+git add test/antigen/positivity_seed_test.exs test/antigen/corpus.sexp docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 git commit -m "test(antigen): bank W4 positivity escape-hatch antibodies (A3/#19)" --author="Made In Heaven <madeinheaven@madeinheaven.com>"
 ```
 
@@ -1515,7 +1515,7 @@ If Step 6's D4 reroute fired, also `git add test/antigen/reach_pin_test.exs test
 ### Task 11: close the ledger (§3) + final gate
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (§3.1 table rows, §3.2 rows A2/A3/A4/A9, §2 row 19 status cell only, §2 row 23 status cell only)
+- Modify: `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (§3.1 table rows, §3.2 rows A2/A3/A4/A9, §2 row 19 status cell only, §2 row 23 status cell only)
 
 **Interfaces:** consumes all prior tasks' outcomes; produces the corrected ledger.
 
@@ -1547,6 +1547,6 @@ Expected: full PASS. Then re-run all five banking/pin test files once more (`tot
 - [ ] **Step 5: Commit**
 
 ```bash
-git add docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+git add docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 git commit -m "docs(roadmap): pre-port banking run complete — A2/A3/A4/A9 done, #19/#23 closed" --author="Made In Heaven <madeinheaven@madeinheaven.com>"
 ```

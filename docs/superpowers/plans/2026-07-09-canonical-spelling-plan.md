@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax.
 
-**Goal:** Canonicalize constructor values to fields-only (ledger #28) and make `Normalise` readback signature-aware (nf_ill_typed class), per the hardened spec `docs/superpowers/specs/2026-07-09-canonical-spelling-design.md` (commit 4d3b2b8) — the SPEC is authoritative; this plan sequences it into red-green tasks.
+**Goal:** Canonicalize constructor values to fields-only (ledger #28) and make `Normalise` readback signature-aware (nf_ill_typed class), per the hardened spec `docs/superpowers/specs/language/2026-07-09-canonical-spelling-design.md` (commit 4d3b2b8) — the SPEC is authoritative; this plan sequences it into red-green tasks.
 
 **Architecture:** Two kernel commits. **C-A** (Part A): ι-rule coercion (eval.ex + normalise.ex) + conversion mixed-spelling completeness (conv.ex) + the `ctor_spelling` antibody. **C-B** (Part B): signature-aware readback at all four `Normalise` reify sites + the `equality.ex`/`equality_test.exs` companion flip + the `nf_welltyped` antibody. Each change is red-first.
 

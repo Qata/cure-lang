@@ -2510,7 +2510,7 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
-  defp regex_to_string({body, flags}), do: "~r/#{body}/#{flags}"
+  defp regex_to_string({body, flags}), do: "/#{body}/#{flags}"
   defp regex_to_string(other), do: inspect(other)
 
   defp char_to_string(c) when is_integer(c) do

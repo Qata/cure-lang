@@ -1,7 +1,7 @@
 # Type-Directed Overload Resolution (Ph1) — Design
 
 **Status:** design approved 2026-07-18 (operator gate). Buildable slice of the
-parent design `docs/superpowers/specs/2026-07-10-overloading-and-argument-labels-design.md`
+parent design `docs/superpowers/specs/types/2026-07-10-overloading-and-argument-labels-design.md`
 (commit `b25081e`). This spec pins the implementation-level decisions the parent
 left open and narrows scope to the piece we build now.
 

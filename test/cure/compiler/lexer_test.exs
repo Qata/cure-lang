@@ -254,7 +254,17 @@ defmodule Cure.Compiler.LexerTest do
 
     test "escaped char" do
       assert [%Token{type: :char, value: ?\n}, _] = lex!("'\\n'")
+      assert [%Token{type: :char, value: ?\r}, _] = lex!("'\\r'")
       assert [%Token{type: :char, value: ?\\}, _] = lex!("'\\\\'")
+    end
+
+    test "three quotes denote a literal single quote" do
+      assert [%Token{type: :char, value: ?'}, _] = lex!(<<39, 39, 39>>)
+    end
+
+    test "both quote escape spellings remain valid" do
+      assert [%Token{type: :char, value: ?'}, _] = lex!(<<39, 92, 39, 39>>)
+      assert [%Token{type: :char, value: ?\\}, _] = lex!(<<39, 92, 92, 39>>)
     end
   end
 
@@ -262,11 +272,21 @@ defmodule Cure.Compiler.LexerTest do
 
   describe "regex literals" do
     test "simple regex" do
-      assert [%Token{type: :regex, value: {"[a-z]+", "i"}}, _] = lex!("~r/[a-z]+/i")
+      assert [%Token{type: :regex, value: {"[a-z]+", "i"}}, _] = lex!("/[a-z]+/i")
     end
 
     test "regex without flags" do
-      assert [%Token{type: :regex, value: {"\\d+", ""}}, _] = lex!("~r/\\d+/")
+      assert [%Token{type: :regex, value: {"\\d+", ""}}, _] = lex!("/\\d+/")
+    end
+
+    test "accepts the complete Elixir modifier alphabet" do
+      assert [%Token{type: :regex, value: {"foo", "imsxurfUE"}}, _] =
+               lex!("/foo/imsxurfUE")
+    end
+
+    test "rejects an unknown modifier instead of lexing it as an identifier" do
+      assert {:error, {:invalid_regex_modifier, ?z, 1, _col}} =
+               Lexer.tokenize("/foo/z", emit_events: false)
     end
 
     test "bare slash regex is recognized where an expression starts" do

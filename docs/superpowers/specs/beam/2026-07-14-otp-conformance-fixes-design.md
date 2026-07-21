@@ -3,7 +3,7 @@
 **Date:** 2026-07-14
 **Status:** approved (design gate); implementation pending
 **Source:** `docs/research/process-types/raw-algebra-conformance-checklist.md` (executed audit, 2026-07-14)
-**Design being repaired:** `docs/superpowers/specs/2026-07-09-typed-beam-process-algebra-design.md`
+**Design being repaired:** `docs/superpowers/specs/beam/2026-07-09-typed-beam-process-algebra-design.md`
 **TCB delta:** zero — every change is elaborator + stdlib. The kernel is untouched.
 
 ---

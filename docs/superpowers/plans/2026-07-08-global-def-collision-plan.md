@@ -6,7 +6,7 @@
 
 **Architecture:** `shadow_resolved_imports/1` (program.ex) gains a def-ownership scan parallel to `family_owners`; `Resolution.classify/2` output for defs drives `rekey_module_env` to move colliding def KEYS (and their `certified` membership) to `"Mod#name"` atoms; `ambiguous_modules/2` generalizes to consult `defs`; the trichotomy (local wins → unique import → E089 ambiguity) is enforced in `elaborate_named_call/5` (call position — extends the existing R7 check) and `resolve_free/2` (bare-value position — currently has zero checking). Orthogonal to the trichotomy (which governs BARE references only): qualified CALLS to plain defs (`A.foo(x)`) do not resolve at all today, independent of any collision — verified on this checkout (`resolve_qualified(env, name, :value)` is ctor-only; `elaborate_named_call/5` never consults its qualified `resolved` value outside the ctor clause). Task 2 closes this as a prerequisite for "qualified always reaches the import," since Approach B's escape hatch is meaningless for defs if it never worked in the first place.
 
-**Spec:** `docs/superpowers/specs/2026-07-08-global-def-collision-design.md` (hardened). §2.1-2.2 are the contract; §4 names the red tests.
+**Spec:** `docs/superpowers/specs/language/2026-07-08-global-def-collision-design.md` (hardened). §2.1-2.2 are the contract; §4 names the red tests.
 
 ## Global Constraints
 

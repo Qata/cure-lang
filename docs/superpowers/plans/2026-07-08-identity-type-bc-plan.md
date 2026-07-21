@@ -4,7 +4,7 @@
 
 **Goal:** Retire the primitive `{:rewrite}` transport (Phase B: every producer emits a single-branch inductive `:case` instead, via in-branch re-elaboration) and then strip the dead `{:eq}`/`{:refl}`/`{:veq}`/`{:rewrite}` Core forms (Phase C), flipping the validator to `:reject`, under the full TCB gate.
 
-**Spec:** `docs/superpowers/specs/2026-07-04-identity-type-as-inductive.md` — read the "Current state — REVISED 2026-07-08 (evening)" section FIRST; it is the authoritative re-scope (K6 gate stale; params-on-spine landed `b355753` kernel / `f3b0e73` elaborator; B′ stdlib already done; the real problem is computed-endpoint desugaring, diagnosed in `c635e8c`'s revert message — read that commit message in full with `git show c635e8c --format="%B" -s`).
+**Spec:** `docs/superpowers/specs/antigen/2026-07-04-identity-type-as-inductive.md` — read the "Current state — REVISED 2026-07-08 (evening)" section FIRST; it is the authoritative re-scope (K6 gate stale; params-on-spine landed `b355753` kernel / `f3b0e73` elaborator; B′ stdlib already done; the real problem is computed-endpoint desugaring, diagnosed in `c635e8c`'s revert message — read that commit message in full with `git show c635e8c --format="%B" -s`).
 
 ## Global Constraints (cure-porting discipline — non-negotiable)
 
@@ -72,7 +72,7 @@
 
 - [ ] Extend `test/antigen/eq_inductive_antibody_test.exs` per spec Gate C: (i) refl-matching discharges/refines exactly as the index unifier dictates and equates NO distinct normal forms (defeq non-collapse obligation — generate distinct-normal-form pairs and assert conversion still rejects); (ii) termination unaffected; (iii) retired nodes unreachable (reuse Task C1's red test forms). Red-first where the obligation is new.
 - [ ] Sequential gate: full Antigen suite → full `mix test` → `mix cure.check.examples` → full oracle replay (`mix test test/oracle_replay_test.exs`) → `mix cure.oracle rewrite/refl/frp/with/withmulti/cycle/dotpat` live re-run, byte-identical.
-- [ ] Update the parity ledger (§2 of `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`): the Eq/rewrite rows graduate; note K/UIP stance unchanged.
+- [ ] Update the parity ledger (§2 of `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md`): the Eq/rewrite rows graduate; note K/UIP stance unchanged.
 - [ ] Commit: `feat(kernel): identity type fully inductive — primitives retired (Phase B/C complete)`.
 
 ## STOP conditions (report, don't improvise)
