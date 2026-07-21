@@ -574,7 +574,12 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:source_context, {kind, name}, context}, opts)
       when kind in [:unknown_ctor, :foreign_ctor, :unknown_pattern_constructor, :unknown_family] and
              is_map(context) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+    opts =
+      opts
+      |> Keyword.put_new(:span, Map.get(context, :span))
+      |> Keyword.put(:candidates, Map.get(context, :name_candidates, []))
+      |> Keyword.put(:arity, Map.get(context, :name_arity))
+
     namespace = if kind == :unknown_family, do: :type, else: :constructor
     unknown_name(namespace, name, Keyword.put(opts, :checking, Map.get(context, :checking)))
   end
@@ -3235,7 +3240,7 @@ defmodule Cure.Diagnostic.Adapter do
       message: "`#{Keyword.get(opts, :display_name, spelling)}` is not available in this #{namespace} namespace.",
       primary: primary_label(opts, "`#{spelling}` was not found"),
       notes: Keyword.get(opts, :notes, []),
-      suggestions: candidate_suggestions(candidate_details),
+      suggestions: candidate_suggestions(candidate_details, spelling, opts),
       provenance: Keyword.get(opts, :provenance, []),
       payload: %{
         namespace: namespace,
@@ -3267,21 +3272,40 @@ defmodule Cure.Diagnostic.Adapter do
     end
   end
 
-  defp candidate_suggestions([]), do: []
+  defp candidate_suggestions([], _spelling, _opts), do: []
 
-  defp candidate_suggestions(candidates) do
+  defp candidate_suggestions(candidates, spelling, opts) do
     names = Enum.map(candidates, &suggestion_name/1)
 
     qualification_hint =
       if Enum.any?(candidates, &requires_qualification?/1), do: " Qualify it or import its module.", else: ""
 
+    {applicability, edits} = unique_name_repair(candidates, spelling, opts)
+
     [
       %Suggestion{
         message: "Did you mean #{Enum.map_join(names, ", ", &"`#{&1}`")}?#{qualification_hint}",
-        applicability: :maybe_incorrect
+        applicability: applicability,
+        edits: edits
       }
     ]
   end
+
+  defp unique_name_repair(
+         [%{name: replacement, imported: imported, requires_import: requires_import}],
+         spelling,
+         opts
+       ) do
+    case Keyword.get(opts, :span) do
+      %Span{} = span when imported != false and requires_import != true and replacement != spelling ->
+        {:machine_applicable, [%TextEdit{span: span, replacement: replacement}]}
+
+      _ ->
+        {:maybe_incorrect, []}
+    end
+  end
+
+  defp unique_name_repair(_candidates, _spelling, _opts), do: {:maybe_incorrect, []}
 
   defp requires_qualification?(%{imported: false}), do: true
   defp requires_qualification?(%{requires_import: true}), do: true

@@ -4113,7 +4113,7 @@ defmodule Cure.Elab.Elaborator do
 
         cond do
           Inductive.get_ctor(env, cname) == nil ->
-            {:halt, {:error, {:unknown_pattern_constructor, cname}}}
+            {:halt, unknown_pattern_constructor_error(with_pattern, cname, env, dname)}
 
           Inductive.ctor_family(sig, cname) != dname ->
             {:halt, shadowed_or_foreign_ctor(env, sig, cname0, cname, dname)}
@@ -6188,7 +6188,7 @@ defmodule Cure.Elab.Elaborator do
 
               cond do
                 ctor == nil ->
-                  {:halt, {:error, {:unknown_pattern_constructor, cname}}}
+                  {:halt, unknown_pattern_constructor_error(pattern, cname, env, dname)}
 
                 Inductive.ctor_family(sig, cname) != dname ->
                   {:halt, shadowed_or_foreign_ctor(env, sig, cname0, cname, dname)}
@@ -8107,6 +8107,67 @@ defmodule Cure.Elab.Elaborator do
         {:error, reason}
     end
   end
+
+  defp unknown_pattern_constructor_error(pattern, cname, env, family) do
+    span =
+      case pattern do
+        {:function_call, meta, _args} when is_list(meta) ->
+          case Cure.MetaAST.Metadata.source_info(meta) do
+            %Cure.MetaAST.SourceInfo{callee: %Cure.Diagnostic.Span{} = callee} -> callee
+            %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = name} -> name
+            %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = whole} -> whole
+            _ -> nil
+          end
+
+        _ ->
+          surface_expression_span(pattern)
+      end
+
+    candidates =
+      env
+      |> Inductive.ctors_of(family)
+      |> Enum.map(fn ctor ->
+        {owner, name} = Cure.Elab.Name.split(ctor.name)
+
+        %{
+          id: ctor.name,
+          candidate_id: ctor.name,
+          name: name,
+          namespace: :constructor,
+          owner: owner || family,
+          arity: Enum.count(Map.get(ctor, :plicities, []), &(&1 == :explicit)),
+          imported: true,
+          origin: :matched_type
+        }
+      end)
+
+    context = %{
+      span: span,
+      checking: :pattern,
+      expectation_origin: :pattern,
+      expression_category: :pattern,
+      name_candidates: candidates,
+      name_arity: pattern_argument_count(pattern)
+    }
+
+    context =
+      case span do
+        %Cure.Diagnostic.Span{} ->
+          Map.merge(context, %{
+            line: span.start_line,
+            column: span.start_column,
+            length: max(1, span.end_byte - span.start_byte)
+          })
+
+        _ ->
+          context
+      end
+
+    {:error, {:source_context, {:unknown_pattern_constructor, cname}, context}}
+  end
+
+  defp pattern_argument_count({:function_call, _meta, args}) when is_list(args), do: length(args)
+  defp pattern_argument_count(_pattern), do: nil
 
   defp named_implicit_arg?({:named_implicit_pat, _m, _children}), do: true
   defp named_implicit_arg?(_), do: false

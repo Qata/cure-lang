@@ -510,6 +510,44 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
            }
   end
 
+  test "an unknown pattern constructor points at its name and suggests constructors from the matched type" do
+    source = """
+    mod PatternName
+      type Maybe = None | Some(Int)
+      fn value(maybe: Maybe) -> Int = match maybe
+        Smoe(value) -> value
+        None() -> 0
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "pattern_name.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "pattern_name.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E091"
+    assert diagnostic.primary.span.start_line == 4
+    assert diagnostic.primary.span.start_column == 5
+    assert diagnostic.primary.span.end_column == 9
+    assert rendered =~ "4 |     Smoe(value) -> value"
+    assert rendered =~ "^^^^ `Smoe` was not found"
+    assert rendered =~ "Did you mean `Some`?"
+    refute rendered =~ "3 |   fn value"
+
+    [suggestion | _] = diagnostic.suggestions
+    assert suggestion.applicability == :machine_applicable
+    assert [%Cure.Diagnostic.TextEdit{replacement: "Some"}] = suggestion.edits
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 3, "character" => 4},
+             "end" => %{"line" => 3, "character" => 8}
+           }
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 
