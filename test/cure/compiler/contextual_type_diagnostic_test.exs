@@ -415,6 +415,30 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this operator operand has the wrong type"
   end
 
+  test "a real call result mismatch names and highlights the call" do
+    source =
+      "fn id(x: Int) -> Int = x\n" <>
+        "fn main() -> Bool = id(1)\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "call_result.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "call_result.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :call_result
+    assert diagnostic.payload.origin.owner == "id"
+    assert diagnostic.primary.span.start_line == 2
+    assert rendered =~ "CALL RESULT HAS THE WRONG TYPE"
+    assert rendered =~ "The result of `id` does not match"
+    assert rendered =~ "2 | fn main() -> Bool = id(1)"
+    assert rendered =~ "this call result has the wrong type"
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 

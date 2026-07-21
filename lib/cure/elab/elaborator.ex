@@ -2448,13 +2448,52 @@ defmodule Cure.Elab.Elaborator do
             term = maybe_inject_union(term, type, expected_core, ctx, env)
             term = maybe_coerce_refined_to_base(term, type, expected_core, ctx, env)
 
-            with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-              {:ok, term}
+            case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+              :ok ->
+                {:ok, term}
+
+              {:error, reason} ->
+                {:error, attach_call_result_context(reason, expr)}
             end
           end
       end
     end
   end
+
+  defp attach_call_result_context(
+         {:source_context, reason, context},
+         {:function_call, _meta, _args} = expression
+       )
+       when is_map(context) do
+    if Map.get(context, :expectation_origin) in [:call_argument, :operator_operand] do
+      {:source_context, reason, context}
+    else
+      {:source_context, reason, Map.merge(context, call_result_context(expression))}
+    end
+  end
+
+  defp attach_call_result_context(reason, {:function_call, _meta, _args} = expression),
+    do: {:source_context, reason, call_result_context(expression)}
+
+  defp attach_call_result_context(reason, _expression), do: reason
+
+  defp call_result_context({:function_call, meta, _args}) when is_list(meta) do
+    span = surface_expression_span({:function_call, meta, []})
+
+    %{
+      line: span && span.start_line,
+      column: span && span.start_column,
+      length: span && max(1, span.end_byte - span.start_byte),
+      span: span,
+      expectation_span: span,
+      checking: Keyword.get(meta, :name),
+      expression_category: :function_call,
+      expectation_origin: :call_result
+    }
+  end
+
+  defp call_result_context(expression),
+    do: expectation_context(expression, :call_result, :application, nil)
 
   # A checking-mode constructor whose direct check against the expected type failed
   # may still inhabit the BASE of a refinement `{x: T | φ}` = `Sigma(T, λx. φ)` —

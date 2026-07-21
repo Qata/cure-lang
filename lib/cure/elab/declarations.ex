@@ -710,6 +710,8 @@ defmodule Cure.Elab.Declarations do
       branch_patterns: branch_patterns(expression)
     }
 
+    outer_context = declaration_expectation_context(expression, outer_context)
+
     case reason do
       {:source_context, nested_reason, nested_context} when is_map(nested_context) ->
         # A checking-site producer may already know a more precise authored span
@@ -724,6 +726,16 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp attach_source_context(result, _expression, _checking), do: result
+
+  defp declaration_expectation_context({:function_call, meta, _args}, context) when is_list(meta) do
+    Map.merge(context, %{
+      checking: Keyword.get(meta, :name, context.checking),
+      expectation_origin: :call_result,
+      expression_category: :function_call
+    })
+  end
+
+  defp declaration_expectation_context(_expression, context), do: context
 
   defp expression_meta({_kind, meta, _children}) when is_list(meta), do: meta
   defp expression_meta({_kind, meta, _left, _right}) when is_list(meta), do: meta
