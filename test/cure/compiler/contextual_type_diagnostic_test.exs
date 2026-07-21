@@ -44,7 +44,546 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.payload.origin.owner == :answer
     assert diagnostic.payload.expression_category == :literal
     assert diagnostic.primary.span.start_column == 22
-    assert Renderer.plain(diagnostic, registry) =~ "type written in its annotation"
+    assert [%{span: annotation, message: "the expectation comes from here"}] = diagnostic.secondary
+    assert annotation.start_column == 16
+    assert annotation.end_column == 19
+
+    rendered = Renderer.plain(diagnostic, registry)
+    assert rendered =~ "type written in its annotation"
+    assert rendered =~ "the expectation comes from here"
+    assert rendered =~ "this expression has the wrong type"
+
+    [related] = Renderer.lsp(diagnostic, registry)["relatedInformation"]
+    assert related["message"] == "the expectation comes from here"
+    assert related["location"]["range"]["start"]["character"] == 15
+  end
+
+  test "a duplicate parameter labels both authored binders" do
+    source = "mod DupParam\n  fn f(x: Int, x: Int) -> Int = x\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "duplicate_parameter.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "duplicate_parameter.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E105"
+    assert diagnostic.title == "Duplicate parameter"
+    assert diagnostic.payload.name == :x
+    assert diagnostic.primary.span.start_column == 16
+    assert diagnostic.primary.message == "this parameter repeats an earlier name"
+
+    assert [%{span: first, message: "the name was first declared here", style: :secondary}] =
+             diagnostic.secondary
+
+    assert first.start_column == 8
+    assert rendered =~ "2 |   fn f(x: Int, x: Int) -> Int = x"
+    assert rendered =~ "this parameter repeats an earlier name"
+    assert rendered =~ "the name was first declared here"
+    assert rendered =~ "Rename or remove one occurrence"
+
+    [related] = Renderer.lsp(diagnostic, registry)["relatedInformation"]
+    assert related["message"] == "the name was first declared here"
+    assert related["location"]["range"]["start"]["character"] == 7
+  end
+
+  test "a duplicate record field labels both authored declarations" do
+    source = "mod DupField\n  rec Point\n    x: Int\n    x: Bool\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "duplicate_field.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "duplicate_field.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E105"
+    assert diagnostic.title == "Duplicate field"
+    assert diagnostic.primary.span.start_line == 4
+    assert diagnostic.primary.message == "this field repeats an earlier name"
+    assert [%{span: first, message: "the name was first declared here"}] = diagnostic.secondary
+    assert first.start_line == 3
+    assert rendered =~ "3 |     x: Int"
+    assert rendered =~ "4 |     x: Bool"
+    assert rendered =~ "this field repeats an earlier name"
+    assert rendered =~ "the name was first declared here"
+    assert rendered =~ "every record field has a unique name"
+  end
+
+  test "a duplicate type labels both declaration names" do
+    source = "mod DupType\n  type Foo = A\n  type Foo = B\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "duplicate_type.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "duplicate_type.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E105"
+    assert diagnostic.title == "Duplicate type declaration"
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.span.start_column == 8
+    assert diagnostic.primary.message == "this type repeats an earlier declaration"
+    assert [%{span: first, message: "the name was first declared here"}] = diagnostic.secondary
+    assert {first.start_line, first.start_column} == {2, 8}
+    assert rendered =~ "2 |   type Foo = A"
+    assert rendered =~ "3 |   type Foo = B"
+    assert rendered =~ "this type repeats an earlier declaration"
+    assert rendered =~ "the name was first declared here"
+    assert rendered =~ "type has a unique identity"
+  end
+
+  test "a duplicate constructor labels both authored variants" do
+    source = "mod DupCtor\n  type First = Shared | Other\n  type Second = Shared | Last\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "duplicate_constructor.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "duplicate_constructor.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E105"
+    assert diagnostic.title == "Duplicate constructor"
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.span.start_column == 17
+    assert diagnostic.primary.message == "this constructor repeats an earlier declaration"
+    assert [%{span: first, message: "the name was first declared here"}] = diagnostic.secondary
+    assert {first.start_line, first.start_column} == {2, 16}
+    assert rendered =~ "2 |   type First = Shared | Other"
+    assert rendered =~ "3 |   type Second = Shared | Last"
+    assert rendered =~ "this constructor repeats an earlier declaration"
+    assert rendered =~ "the name was first declared here"
+    assert rendered =~ "pattern matching stays unambiguous"
+  end
+
+  test "conflicting operator declarations label both authored operators" do
+    source = """
+    mod FixityConflict
+      precedencegroup Loose
+      precedencegroup Tight
+      infix `<?>` : Loose
+      infix `<?>` : Tight
+    end
+    """
+
+    assert {:error, {:parse_error, [reason]}} =
+             Cure.Compiler.compile_string(source,
+               file: "fixity_conflict.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "fixity_conflict.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E106"
+    assert diagnostic.title == "Conflicting operator fixity"
+    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {5, 9}
+    assert [%{span: first, message: "the conflicting assignment is here"}] = diagnostic.secondary
+    assert {first.start_line, first.start_column} == {4, 9}
+    assert rendered =~ "4 |   infix `<?>` : Loose"
+    assert rendered =~ "5 |   infix `<?>` : Tight"
+    assert rendered =~ "assigned to both `Loose` and `Tight`"
+
+    [related] = Renderer.lsp(diagnostic, registry)["relatedInformation"]
+    assert related["message"] == "the conflicting assignment is here"
+  end
+
+  test "precedence cycles label every authored participating group" do
+    source = """
+    mod PrecedenceCycle
+      precedencegroup Ring
+        higher_than: Loop
+      precedencegroup Loop
+        higher_than: Ring
+    end
+    """
+
+    assert {:error, {:parse_error, [reason]}} =
+             Cure.Compiler.compile_string(source,
+               file: "precedence_cycle.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "precedence_cycle.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E106"
+    assert diagnostic.title == "Cyclic operator precedence"
+    assert diagnostic.primary.span.start_line == 4
+
+    assert [%{span: first, message: "this precedence group also participates in the cycle"}] =
+             diagnostic.secondary
+
+    assert first.start_line == 2
+    assert rendered =~ "2 |   precedencegroup Ring"
+    assert rendered =~ "4 |   precedencegroup Loop"
+    assert rendered =~ "Remove or reverse one `higher_than`/`lower_than`"
+    assert rendered =~ "relation to break the cycle"
+  end
+
+  test "incompatible precedence group bodies label both group names" do
+    source = """
+    mod GroupConflict
+      precedencegroup CustomBinding
+        associativity: left
+      precedencegroup CustomBinding
+        associativity: none
+    end
+    """
+
+    assert {:error, {:parse_error, [reason]}} =
+             Cure.Compiler.compile_string(source,
+               file: "group_conflict.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "group_conflict.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E106"
+    assert diagnostic.title == "Conflicting precedence group"
+    assert diagnostic.payload.existing.assoc == :left
+    assert diagnostic.payload.new.assoc == :none
+    assert diagnostic.primary.span.start_line == 4
+
+    assert [%{span: first, message: "the incompatible group declaration is here"}] =
+             diagnostic.secondary
+
+    assert first.start_line == 2
+    assert rendered =~ "2 |   precedencegroup CustomBinding"
+    assert rendered =~ "4 |   precedencegroup CustomBinding"
+    assert rendered =~ "incompatible associativity"
+    assert rendered =~ "or ordering rules"
+  end
+
+  test "constructor calls report missing arguments at the authored call" do
+    source = """
+    mod ConstructorArity
+      type Maybe = None | Some(Int)
+      fn bad() -> Maybe = Some()
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "constructor_arity.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "constructor_arity.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E003"
+    assert diagnostic.title == "Constructor arity mismatch"
+    assert diagnostic.payload.constructor == "Some"
+    assert diagnostic.payload.expected == 1
+    assert diagnostic.payload.actual == 0
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.message == "add 1 argument to this constructor call"
+    assert rendered =~ "3 |   fn bad() -> Maybe = Some()"
+    assert rendered =~ "requires 1 argument, but this call supplies 0 arguments"
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"]["start"]["line"] == 2
+    assert lsp["message"] =~ "requires 1 argument"
+  end
+
+  test "constructor calls report excess arguments and a removal hint" do
+    source = """
+    mod ConstructorArity
+      type Maybe = None | Some(Int)
+      fn bad() -> Maybe = Some(1, 2)
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "constructor_arity_extra.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "constructor_arity_extra.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.payload.expected == 1
+    assert diagnostic.payload.actual == 2
+    assert diagnostic.primary.message == "remove 1 argument from this constructor call"
+    assert rendered =~ "3 |   fn bad() -> Maybe = Some(1, 2)"
+    assert rendered =~ "requires 1 argument, but this call supplies"
+    assert rendered =~ "2 arguments"
+  end
+
+  test "extern arity errors point at the target arity literal" do
+    source = """
+    mod ExternArity
+      @extern(:erlang, :hd, 2)
+      fn head({T: Type}, xs: List(T)) -> T
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "extern_arity.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "extern_arity.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E003"
+    assert diagnostic.payload.declared == 2
+    assert diagnostic.payload.present == 1
+    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {2, 25}
+    assert diagnostic.primary.message =~ "change this target arity to 1"
+    assert rendered =~ "2 |   @extern(:erlang, :hd, 2)"
+    assert rendered =~ "^ change this target arity to 1"
+    assert rendered =~ "erased parameters do not cross the FFI boundary"
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"]["start"] == %{"line" => 1, "character" => 24}
+  end
+
+  test "under-saturated calls report the callee arity without rejecting valid partial application" do
+    source = """
+    mod CallArity
+      fn id(x: Int) -> Int = x
+      fn bad() -> Int = id()
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "call_arity_few.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "call_arity_few.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E003"
+    assert diagnostic.title == "Function arity mismatch"
+    assert diagnostic.payload == %{kind: :function, name: "id", expected: 1, actual: 0, direction: :too_few}
+    assert diagnostic.primary.message == "add 1 argument to this call"
+    assert rendered =~ "3 |   fn bad() -> Int = id()"
+    assert rendered =~ "`id` accepts 1 argument, but this call supplies 0 arguments"
+    assert rendered =~ "use this partial application where a function is expected"
+  end
+
+  test "over-saturated calls report excess arguments but permit callable results" do
+    source = """
+    mod CallArity
+      fn id(x: Int) -> Int = x
+      fn bad() -> Int = id(1, 2)
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "call_arity_many.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "call_arity_many.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.payload.expected == 1
+    assert diagnostic.payload.actual == 2
+    assert diagnostic.payload.direction == :too_many
+    assert diagnostic.primary.message == "remove 1 argument from this call"
+    assert rendered =~ "3 |   fn bad() -> Int = id(1, 2)"
+    assert rendered =~ "call the returned function separately"
+
+    callable_result = """
+    mod CallableResult
+      fn add_from(x: Int) -> (Int) -> Int = fn(y) -> x + y
+      fn good() -> Int = add_from(1, 2)
+    end
+    """
+
+    assert {:ok, _env} = Cure.Elab.Program.elaborate(callable_result)
+  end
+
+  test "constructor patterns with missing fields report E003 instead of crashing" do
+    source = """
+    mod PatternArity
+      type Pair = MkPair(Int, Int)
+      fn first(pair: Pair) -> Int = match pair
+        MkPair(x) -> x
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "pattern_arity_few.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "pattern_arity_few.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E003"
+    assert diagnostic.title == "Pattern arity mismatch"
+    assert diagnostic.payload.display_name == "MkPair"
+    assert diagnostic.payload.expected == 2
+    assert diagnostic.payload.actual == 1
+    assert diagnostic.primary.span.start_line == 4
+    assert diagnostic.primary.message == "add 1 argument to this pattern"
+    assert rendered =~ "4 |     MkPair(x) -> x"
+    assert rendered =~ "use `_` for fields you do not need"
+
+    assert Renderer.lsp(diagnostic, registry)["range"]["start"]["line"] == 3
+  end
+
+  test "constructor patterns with excess fields identify the exact pattern" do
+    source = """
+    mod PatternArity
+      type Pair = MkPair(Int, Int)
+      fn first(pair: Pair) -> Int = match pair
+        MkPair(x, y, z) -> x
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "pattern_arity_many.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "pattern_arity_many.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.payload.expected == 2
+    assert diagnostic.payload.actual == 3
+    assert diagnostic.payload.direction == :too_many
+    assert diagnostic.primary.message == "remove 1 argument from this pattern"
+    assert rendered =~ "4 |     MkPair(x, y, z) -> x"
+    assert rendered =~ "this constructor does not contain them"
+  end
+
+  test "tuple pattern arity reports the expected and authored sizes with a pattern caret" do
+    source = """
+    mod TuplePatternArity
+      fn first(pair: Tuple(Int, Int)) -> Int = match pair
+        %[x, y, ignored] -> x
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "tuple_pattern_arity.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "tuple_pattern_arity.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E003"
+    assert diagnostic.title == "Tuple pattern has the wrong size"
+    assert diagnostic.payload == %{kind: :tuple_pattern, expected: 2, actual: 3}
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.message == "remove 1 argument from this tuple pattern"
+    assert rendered =~ "3 |     %[x, y, ignored] -> x"
+    assert rendered =~ "^^^^^^^^^^^^^^^^ remove 1 argument from this tuple pattern"
+    assert rendered =~ "this value has only 2 arguments"
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"]["start"] == %{"line" => 2, "character" => 4}
+  end
+
+  test "an unsupported range pattern points only at its operator" do
+    source = """
+    mod RangePattern
+      fn bad(x: Int) -> Int = match x
+        1..10 -> 1
+        _ -> 0
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "range_pattern.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "range_pattern.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E090"
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.span.start_column == 6
+    assert diagnostic.primary.span.end_column == 8
+    assert rendered =~ "3 |     1..10 -> 1"
+    assert rendered =~ "^^ a range operator cannot be used in a pattern"
+    assert rendered =~ "test the range in a guard instead"
+    refute rendered =~ "2 |   fn bad"
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 2, "character" => 5},
+             "end" => %{"line" => 2, "character" => 7}
+           }
+  end
+
+  test "an unknown pattern constructor points at its name and suggests constructors from the matched type" do
+    source = """
+    mod PatternName
+      type Maybe = None | Some(Int)
+      fn value(maybe: Maybe) -> Int = match maybe
+        Smoe(value) -> value
+        None() -> 0
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "pattern_name.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "pattern_name.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E091"
+    assert diagnostic.primary.span.start_line == 4
+    assert diagnostic.primary.span.start_column == 5
+    assert diagnostic.primary.span.end_column == 9
+    assert rendered =~ "4 |     Smoe(value) -> value"
+    assert rendered =~ "^^^^ `Smoe` was not found"
+    assert rendered =~ "Did you mean `Some`?"
+    refute rendered =~ "3 |   fn value"
+
+    [suggestion | _] = diagnostic.suggestions
+    assert suggestion.applicability == :machine_applicable
+    assert [%Cure.Diagnostic.TextEdit{replacement: "Some"}] = suggestion.edits
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 3, "character" => 4},
+             "end" => %{"line" => 3, "character" => 8}
+           }
+  end
+
+  test "declaration context derives its extent from the parser-owned span" do
+    source = "fn bad() -> Int = \"é\"\n"
+
+    assert {:error, {:codegen_error, {:source_context, _reason, context}}} =
+             Cure.Compiler.compile_string(source,
+               file: "extent.cure",
+               emit_events: false
+             )
+
+    assert context.span.start_column == 19
+    assert context.span.end_column == 22
+    assert context.length == context.span.end_column - context.span.start_column
   end
 
   test "an unknown variable points at the variable rather than the whole body" do
@@ -81,6 +620,28 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.primary.span.start_column == 19
     assert rendered =~ "1 | fn run() -> Int = missing_fn(1)"
     assert rendered =~ "^^^^^^^^^^^^^"
+  end
+
+  test "an unknown function offers a nearby in-scope call suggestion" do
+    source = """
+    mod Suggestions
+      fn print() -> Int = 1
+      fn run() -> Int = prnt()
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "suggestions.cure",
+               emit_events: false
+             )
+
+    {diagnostic, _registry} = Errors.to_diagnostic(reason, "suggestions.cure", source)
+
+    assert diagnostic.code == "E091"
+    assert diagnostic.payload.candidates == ["print"]
+    assert [%Cure.Diagnostic.Suggestion{message: message}] = diagnostic.suggestions
+    assert message =~ "`print`"
   end
 
   test "a missing implicit instance retains the authored call context" do
@@ -254,8 +815,14 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     {diagnostic, registry} = Errors.to_diagnostic(reason, "proof_int_order.cure", source)
     rendered = Renderer.plain(diagnostic, registry)
 
+    assert diagnostic.primary.style == :primary
+    assert diagnostic.primary.span.start_line == second.start_line
+    assert diagnostic.primary.span.start_column == second.start_column
     assert diagnostic.primary.message == "possible outlier: this branch has the incompatible type"
     assert [secondary] = diagnostic.secondary
+    assert secondary.style == :secondary
+    assert secondary.span.start_line == first.start_line
+    assert secondary.span.start_column == first.start_column
     assert secondary.message == "compare this branch with the declared result"
     assert diagnostic.payload.failing_branch == :"Std.Int#NegativeSuccessor"
     assert rendered =~ "Possible outlier"
@@ -263,11 +830,20 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "NegativeSuccessor(n) -> second"
     assert rendered =~ "compare this branch with the declared result"
     assert rendered =~ "possible outlier: this branch has the incompatible type"
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert [related] = lsp["relatedInformation"]
+    assert related["message"] == "compare this branch with the declared result"
+    assert related["location"]["range"]["start"]["line"] == 1
   end
 
   test "a singleton branch type is called out when the other arms agree" do
+    source = "match value\n  A -> one\n  B -> two\n  C -> odd\n"
     common = {:data, :Common, [], []}
     outlier = {:data, :Outlier, [], []}
+    a_span = raw_span(source, "A -> one", 2, 3)
+    b_span = raw_span(source, "B -> two", 3, 3)
+    c_span = raw_span(source, "C -> odd", 4, 3)
 
     reason =
       {:source_context,
@@ -281,12 +857,28 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
         }},
        %{
          checking: :three_way_match,
-         branch_patterns: [%{name: "A"}, %{name: "B"}, %{name: "C"}]
+         branch_patterns: [
+           %{name: "A", span: a_span},
+           %{name: "B", span: b_span},
+           %{name: "C", span: c_span}
+         ]
        }}
 
-    {diagnostic, _registry} = Errors.to_diagnostic(reason, "branches.cure", "")
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "branches.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
 
-    assert Renderer.plain(diagnostic) =~ "only the `C` branch has type"
+    assert rendered =~ "only the `C` branch has type"
+    assert rendered =~ "4 |   C -> odd"
+    assert diagnostic.primary.span.start_line == c_span.start_line
+    assert diagnostic.primary.span.start_column == c_span.start_column
+    assert diagnostic.primary.message =~ "possible outlier"
+
+    assert Enum.map(diagnostic.secondary, &{&1.span.start_line, &1.span.start_column}) == [
+             {a_span.start_line, a_span.start_column},
+             {b_span.start_line, b_span.start_column}
+           ]
+
+    assert Enum.all?(diagnostic.secondary, &(&1.style == :secondary))
     assert diagnostic.payload.branch_types |> Enum.map(& &1.branch) == [:A, :B, :C]
   end
 
@@ -509,6 +1101,73 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "Field `x` does not match"
     assert rendered =~ "4 |   fn bad() -> Point = Point{x: \"bad\"}"
     assert rendered =~ "this record field has the wrong type"
+  end
+
+  test "an unknown record field points at its name and suggests from the declared shape" do
+    source =
+      "mod M\n" <>
+        "  rec Point\n" <>
+        "    x: Int\n" <>
+        "    y: Int\n" <>
+        "  fn bad() -> Point = Point{xx: 1, y: 2}\n" <>
+        "end\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "record_typo.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record_typo.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E022"
+    assert diagnostic.title == "Unknown record field"
+    assert diagnostic.payload.record == :Point
+    assert diagnostic.payload.declared == [:x, :y]
+    assert diagnostic.payload.unknown == [:xx]
+    assert Enum.map(diagnostic.payload.candidates, & &1.name) == ["x", "y"]
+    assert diagnostic.primary.span.start_line == 5
+    assert diagnostic.primary.span.start_column == 29
+    assert rendered =~ "5 |   fn bad() -> Point = Point{xx: 1, y: 2}"
+    assert rendered =~ "^^ this field is not declared by the record"
+    assert rendered =~ "Did you mean `x`?"
+
+    assert [suggestion] = diagnostic.suggestions
+    assert suggestion.applicability == :machine_applicable
+    assert [%{replacement: "x", span: edit_span}] = suggestion.edits
+    assert edit_span.start_column == 29
+
+    lsp_diagnostic = Renderer.lsp(diagnostic, registry)
+    [action] = Cure.LSP.Server.compute_code_actions("file:///record_typo.cure", [lsp_diagnostic])
+    assert action["title"] == "Replace it with `x`"
+  end
+
+  test "a missing record field names the field without inventing a source range" do
+    source =
+      "mod M\n" <>
+        "  rec Point\n" <>
+        "    x: Int\n" <>
+        "    y: Int\n" <>
+        "  fn bad() -> Point = Point{x: 1}\n" <>
+        "end\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "record_missing.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record_missing.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E022"
+    assert diagnostic.title == "Missing record field"
+    assert diagnostic.payload.missing == [:y]
+    assert diagnostic.primary.span.start_column == 23
+    assert rendered =~ "missing `y`"
+    assert rendered =~ "add the missing field here"
+    assert diagnostic.suggestions == []
   end
 
   test "a whole-record mismatch retains the authored record boundary" do

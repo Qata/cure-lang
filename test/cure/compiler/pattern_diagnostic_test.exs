@@ -17,6 +17,8 @@ defmodule Cure.Compiler.PatternDiagnosticTest do
 
     {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, "pattern.cure", source)
     assert diagnostic.code == "E090"
+    refute Map.has_key?(diagnostic.payload.context, :code)
+    assert Enum.map(diagnostic.payload.context.branch_patterns, & &1.name) == ["pattern", "_"]
 
     assert Renderer.plain(diagnostic, registry, width: 80) ==
              String.trim_trailing("""

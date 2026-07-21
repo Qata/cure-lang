@@ -1,0 +1,119 @@
+defmodule Cure.Compiler.HoleDiagnosticTest do
+  use ExUnit.Case, async: true
+
+  alias Cure.Compiler.Errors
+  alias Cure.Diagnostic.{Renderer, Sink}
+  alias Cure.Elab.{Emit, Program}
+
+  @source """
+  mod HoleDiagnostic
+    # ??? in prose is not the unfinished program term.
+    fn broken() -> Int = ?todo
+  end
+  """
+
+  test "the real compiler preserves the authored hole and annotation ranges" do
+    assert {:error, {:codegen_error, {:unfilled_hole, details}}} =
+             Cure.Compiler.compile_and_load(@source,
+               file: "hole_diagnostic.cure",
+               emit_events: false
+             )
+
+    assert details.definition == :broken
+    assert details.hole_id == "HoleDiagnostic.broken#todo"
+    assert details.span.start_byte == byte_offset!(@source, "?todo")
+    assert details.span.end_byte - details.span.start_byte == byte_size("?todo")
+    assert details.annotation_span.start_byte == byte_offset!(@source, "Int")
+  end
+
+  test "terminal output labels the hole token rather than matching earlier hole-like text" do
+    {:error, error} =
+      Cure.Compiler.compile_and_load(@source,
+        file: "hole_diagnostic.cure",
+        emit_events: false
+      )
+
+    rendered = Errors.format_with_source(error, "hole_diagnostic.cure", @source)
+
+    assert rendered ==
+             """
+             -- UNFILLED HOLE [E014] ----------------------------------- hole_diagnostic.cure
+
+             The definition `broken` still contains an unfinished hole.
+
+             at hole_diagnostic.cure:3:24
+             3 |   fn broken() -> Int = ?todo
+               |                  ---   ^^^^^ this function's result type is declared here; replace this hole with an expression
+
+             Hint: Replace the hole with an expression that satisfies its surrounding type
+             """
+             |> String.trim_trailing()
+  end
+
+  test "LSP output carries the exact hole range and related annotation" do
+    {:error, error} =
+      Cure.Compiler.compile_and_load(@source,
+        file: "hole_diagnostic.cure",
+        emit_events: false
+      )
+
+    {diagnostic, registry} = Errors.to_diagnostic(error, "hole_diagnostic.cure", @source)
+    rendered = Sink.render(Sink.new(format: :lsp, registry: registry), diagnostic)
+
+    assert rendered["code"] == "E014"
+
+    assert rendered["range"] == %{
+             "start" => %{"line" => 2, "character" => 23},
+             "end" => %{"line" => 2, "character" => 28}
+           }
+
+    assert [
+             %{
+               "location" => %{
+                 "uri" => annotation_uri,
+                 "range" => annotation_range
+               }
+             }
+           ] = rendered["relatedInformation"]
+
+    assert String.ends_with?(annotation_uri, "/hole_diagnostic.cure")
+    assert annotation_range["start"]["line"] == 2
+
+    assert rendered["data"]["suggestions"] == [
+             %{
+               "message" => "Replace the hole with an expression that satisfies its surrounding type",
+               "applicability" => "manual",
+               "edits" => []
+             }
+           ]
+  end
+
+  test "a selected definition reports its own hole when another authored hole comes first" do
+    source = """
+    mod MultipleHoles
+      fn first() -> Int = ?first
+      fn second() -> Int = ?second
+    end
+    """
+
+    assert {:ok, env} = Program.elaborate(source, file: "multiple_holes.cure")
+
+    assert {:error, {:unfilled_hole, details}} =
+             Emit.compile_forms(env, :MultipleHoles, [:"MultipleHoles#second"])
+
+    assert details.definition == :"MultipleHoles#second"
+    assert details.span.start_byte == byte_offset!(source, "?second")
+
+    {diagnostic, registry} =
+      Errors.to_diagnostic({:unfilled_hole, details}, "multiple_holes.cure", source)
+
+    assert diagnostic.primary.span.start_byte == byte_offset!(source, "?second")
+    assert Renderer.plain(diagnostic, registry) =~ "?second"
+    refute Renderer.plain(diagnostic, registry) =~ "?first"
+  end
+
+  defp byte_offset!(source, needle) do
+    {offset, _length} = :binary.match(source, needle)
+    offset
+  end
+end

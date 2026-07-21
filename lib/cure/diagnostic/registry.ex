@@ -11,6 +11,7 @@ defmodule Cure.Diagnostic.Registry.Entry do
     :payload_schema,
     :schema_version,
     :producers,
+    :producer_fixtures,
     :converter,
     :converter_function,
     :catalog_case,
@@ -31,6 +32,7 @@ defmodule Cure.Diagnostic.Registry.Entry do
           payload_schema: pos_integer(),
           schema_version: pos_integer(),
           producers: [atom(), ...],
+          producer_fixtures: %{optional(atom()) => atom()},
           converter: module(),
           converter_function: atom(),
           catalog_case: atom() | nil,
@@ -46,8 +48,8 @@ defmodule Cure.Diagnostic.Registry do
 
   alias Cure.Diagnostic.Registry.Entry
 
-  @retired ~w[E001 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E064 E071 E072 E073 E074 E075 E079 E080 E085 H083 H084 W081 W082]
-  @operational ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
+  @retired ~w[E001 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E063 E064 E071 E072 E073 E074 E075 E079 E080 E085 H083 H084 W081 W082 W088]
+  @operational ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002 W003]
   @retirement_reasons %{
     "E001" => "No first-party producer remains; contextual E093 is the active type-mismatch path.",
     "E004" => "No first-party producer remains; match coverage is not emitted as this catalog code.",
@@ -75,6 +77,8 @@ defmodule Cure.Diagnostic.Registry do
     "E034" => "No first-party producer remains; let-pattern coverage is not emitted as this code.",
     "E036" => "No first-party producer remains; binary comprehension failures use generic syntax handling.",
     "E037" => "No first-party producer remains; binary segment failures use generic type checking.",
+    "E063" =>
+      "No first-party producer remains; parser recovery retains and reports the original contextual E094 error.",
     "E064" => "No first-party producer remains; monomorphisation budget warnings are not emitted.",
     "E071" => "No first-party producer remains; function payload failures use name/type diagnostics.",
     "E072" => "No first-party producer remains; multiline type layout failures use syntax diagnostics.",
@@ -87,15 +91,18 @@ defmodule Cure.Diagnostic.Registry do
     "H083" => "Formatter normalization is not emitted as a diagnostic code.",
     "H084" => "Formatter normalization is not emitted as a diagnostic code.",
     "W081" => "No first-party producer remains; pickup reachability warnings are not emitted.",
-    "W082" => "No first-party producer remains; pickup reachability warnings are not emitted."
+    "W082" => "No first-party producer remains; pickup reachability warnings are not emitted.",
+    "W088" =>
+      "The dependent-only pipeline rejects unresolved imported names as E091 before the classic codegen fallback can occur."
   }
-  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 W086 W088]
+  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 E116 W086 W088]
   @known_producers ~w[
-    dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
+    beam_writer dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
     module_loader name_resolution operational parser pattern_checker proof_checker
     totality_checker
   ]a
   @producer_modules %{
+    beam_writer: Cure.Compiler.BeamWriter,
     dependency_graph: Cure.Compiler.DepGraph,
     doctor: Cure.Doctor,
     elaboration: Cure.Elab.Program,
@@ -168,9 +175,11 @@ defmodule Cure.Diagnostic.Registry do
     "E113" => :induction_failed,
     "E114" => :defining_equation_unavailable,
     "E115" => :named_argument_mismatch,
+    "E116" => :implementation_scope,
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
     "W002" => :configuration_warning,
+    "W003" => :destructive_format_warning,
     "W086" => :import_cycle,
     "W088" => :unresolved_import
   }
@@ -1406,6 +1415,16 @@ defmodule Cure.Diagnostic.Registry do
     Put positional arguments first, then use each declared parameter label at
     most once; named arguments may otherwise appear in any order.
     """,
+    "E116" => """
+    E116: Invalid Implementation Scope
+
+    An implementation has no nested members, usually because an intended member
+    is aligned with the `implementation` declaration instead of indented beneath
+    it. The diagnostic labels both declarations and offers an indentation edit
+    when the following function is the likely member.
+
+    Indent every implementation member beneath its `implementation` declaration.
+    """,
     "W000" => """
     W000: Compiler Warning
 
@@ -1422,13 +1441,20 @@ defmodule Cure.Diagnostic.Registry do
 
     A configuration value was ignored because it is not valid in its setting.
     """,
+    "W003" => """
+    W003: Formatting May Discard Source Details
+
+    An explicitly requested formatting mode reconstructs source from the AST,
+    so comments or non-canonical layout that are not represented there may be
+    discarded. Commit or copy the source before continuing.
+    """,
     "W088" => """
     W088: Unresolved Import
 
-    An unqualified call matched no export of any `use`-imported module,
-    so codegen emitted a plain local call instead. This is the silent
-    fallback that classic codegen took without saying so; W088 makes it
-    visible.
+    Retired. The classic code generator used to emit a plain local call when
+    an unqualified call matched no export of any `use`-imported module. The
+    dependent-only pipeline now rejects that name as E091 before codegen, so
+    this fallback warning is no longer reachable.
 
     It most often fires inside an import cycle (W086), where the callee
     module has not been loaded yet when the caller is compiled, so its
@@ -1489,6 +1515,7 @@ defmodule Cure.Diagnostic.Registry do
         payload_schema: 1,
         schema_version: 1,
         producers: producers(code),
+        producer_fixtures: producer_fixtures(code),
         converter: converter(code),
         converter_function: converter_function(code),
         catalog_case: Map.get(@catalog_cases, code),
@@ -1565,7 +1592,8 @@ defmodule Cure.Diagnostic.Registry do
   def validate(entries \\ entries()) when is_list(entries) do
     with :ok <- unique_codes(entries),
          :ok <- unique_catalog_metadata(entries),
-         :ok <- valid_entries(entries) do
+         :ok <- valid_entries(entries),
+         :ok <- validate_producer_catalog(entries) do
       :ok
     end
   end
@@ -1603,18 +1631,38 @@ defmodule Cure.Diagnostic.Registry do
     if missing == [], do: :ok, else: {:error, {:producer_without_reachable_code, missing}}
   end
 
-  @doc "Ensure every known producer has a reachable catalog fixture for a public path."
-  @spec validate_producer_catalog() :: :ok | {:error, {:producer_without_catalog_fixture, [atom()]}}
-  def validate_producer_catalog do
-    missing =
-      @known_producers
-      |> Enum.reject(fn producer ->
-        Enum.any?(reachable(), fn entry ->
-          producer in entry.producers and not is_nil(entry.catalog_case) and not is_nil(entry.fixture_id)
-        end)
-      end)
+  @doc "Ensure every reachable code/producer branch has its own catalog fixture identity."
+  @spec validate_producer_catalog([Entry.t()]) :: :ok | {:error, term()}
+  def validate_producer_catalog(entries \\ reachable()) do
+    entries = Enum.filter(entries, &(&1.status == :reachable))
 
-    if missing == [], do: :ok, else: {:error, {:producer_without_catalog_fixture, missing}}
+    expected =
+      entries
+      |> Enum.flat_map(fn entry -> Enum.map(entry.producers, &{entry.code, &1}) end)
+      |> MapSet.new()
+
+    actual =
+      entries
+      |> Enum.flat_map(fn entry ->
+        Enum.map(entry.producer_fixtures || %{}, fn {producer, _id} -> {entry.code, producer} end)
+      end)
+      |> MapSet.new()
+
+    missing = expected |> MapSet.difference(actual) |> Enum.sort()
+    unexpected = actual |> MapSet.difference(expected) |> Enum.sort()
+
+    fixture_ids =
+      entries
+      |> Enum.flat_map(fn entry -> Map.values(entry.producer_fixtures || %{}) end)
+
+    duplicate_ids = fixture_ids -- Enum.uniq(fixture_ids)
+
+    cond do
+      missing != [] -> {:error, {:producer_branches_without_catalog_fixture, missing}}
+      unexpected != [] -> {:error, {:catalog_fixtures_without_producer_branch, unexpected}}
+      duplicate_ids != [] -> {:error, {:duplicate_producer_fixture_id, Enum.uniq(duplicate_ids) |> Enum.sort()}}
+      true -> :ok
+    end
   end
 
   @doc "Validate stable diagnostic codes referenced by first-party source files."
@@ -1669,6 +1717,7 @@ defmodule Cure.Diagnostic.Registry do
   defp stable_key("E113", _title), do: :induction_failed
   defp stable_key("E114", _title), do: :defining_equation_unavailable
   defp stable_key("E115", _title), do: :named_argument_mismatch
+  defp stable_key("E116", _title), do: :implementation_scope
 
   defp stable_key(_code, title) do
     title
@@ -1686,8 +1735,10 @@ defmodule Cure.Diagnostic.Registry do
   defp converter_function(code) when code in @structured, do: :from_error
   defp converter_function(_code), do: :format_error
 
+  defp producers(code) when code in @retired, do: []
+
   defp producers(code)
-       when code in ~w[E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002],
+       when code in ~w[E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002 W003],
        do: [:operational]
 
   defp producers(code) when code in ~w[E011 E014], do: [:elaboration]
@@ -1707,7 +1758,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E092"), do: [:macro_expansion, :parser]
   defp producers("E093"), do: [:elaboration, :kernel, :kernel_conversion]
   defp producers("E094"), do: [:lexer, :parser]
-  defp producers("E101"), do: [:operational, :kernel]
+  defp producers("E101"), do: [:beam_writer, :operational, :kernel]
   defp producers("E102"), do: [:elaboration]
   defp producers("E103"), do: [:kernel]
   defp producers("E104"), do: [:elaboration]
@@ -1722,10 +1773,58 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E112"), do: [:elaboration]
   defp producers("E113"), do: [:elaboration]
   defp producers("E115"), do: [:elaboration]
+  defp producers("E116"), do: [:elaboration]
   defp producers("E008"), do: [:doctor]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
   defp producers(_code), do: [:compiler_errors]
+
+  defp producer_fixtures(code) when code in @retired, do: %{}
+
+  defp producer_fixtures("E002"),
+    do: %{name_resolution: :unbound_variable_name_resolution, kernel: :unbound_variable_kernel}
+
+  defp producer_fixtures("E003"),
+    do: %{elaboration: :arity_mismatch_elaboration, kernel: :arity_mismatch_kernel}
+
+  defp producer_fixtures("E090"),
+    do: %{elaboration: :unrecognized_pattern_elaboration, kernel_conversion: :unrecognized_pattern_kernel_conversion}
+
+  defp producer_fixtures("E091"),
+    do: %{name_resolution: :unknown_name_resolution, pattern_checker: :unknown_pattern_name}
+
+  defp producer_fixtures("E092"),
+    do: %{macro_expansion: :macro_expansion_failure, parser: :parser_macro_failure}
+
+  defp producer_fixtures("E093"),
+    do: %{
+      elaboration: :type_mismatch_elaboration,
+      kernel: :type_mismatch_kernel,
+      kernel_conversion: :type_mismatch_kernel_conversion
+    }
+
+  defp producer_fixtures("E094"),
+    do: %{lexer: :syntax_error_lexer, parser: :syntax_error_parser}
+
+  defp producer_fixtures("E101"),
+    do: %{
+      beam_writer: :internal_failure_beam_writer,
+      operational: :internal_failure_operational,
+      kernel: :internal_failure_kernel
+    }
+
+  defp producer_fixtures("E105"),
+    do: %{elaboration: :declaration_conflict_elaboration, name_resolution: :declaration_conflict_name_resolution}
+
+  defp producer_fixtures("E106"),
+    do: %{parser: :operator_conflict_parser, elaboration: :operator_conflict_elaboration}
+
+  defp producer_fixtures(code) do
+    case {producers(code), Map.get(@catalog_cases, code)} do
+      {[producer], fixture_id} when is_atom(fixture_id) -> %{producer => fixture_id}
+      _ -> %{}
+    end
+  end
 
   defp subsystem("E101"), do: :compiler
   defp subsystem("E102"), do: :elaboration
@@ -1742,6 +1841,7 @@ defmodule Cure.Diagnostic.Registry do
   defp subsystem("E112"), do: :elaboration
   defp subsystem("E113"), do: :elaboration
   defp subsystem("E115"), do: :elaboration
+  defp subsystem("E116"), do: :elaboration
   defp subsystem("E091"), do: :resolution
   defp subsystem("E092"), do: :macros
   defp subsystem("E093"), do: :elaboration
@@ -1791,8 +1891,11 @@ defmodule Cure.Diagnostic.Registry do
 
   defp validate_entry(%Entry{} = entry) do
     cond do
-      entry.producers == [] ->
+      entry.status == :reachable and entry.producers == [] ->
         {:error, {:missing_producer, entry.code}}
+
+      entry.status == :retired and entry.producers != [] ->
+        {:error, {:retired_with_producer, entry.code}}
 
       entry.status == :reachable and
           Enum.any?(entry.producers, &(&1 not in @known_producers)) ->

@@ -1977,9 +1977,10 @@ defmodule Cure.Elab.Elaborator do
                   ok
 
                 {:error, _} = orig ->
-                  # Retry after *any* inference failure, including failure while
-                  # elaborating a nested argument. The expected result type pins
-                  # parameters/indices before the fields are checked.
+                  # Argument inference itself may need the constructor field's
+                  # expected type (an untyped lambda or an underdetermined nested
+                  # constructor). Keep the fallback around the whole inference
+                  # attempt, not only elaborate_ctor_app/5.
                   case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
                     {:ok, _} = ok -> ok
                     {:error, _} -> orig

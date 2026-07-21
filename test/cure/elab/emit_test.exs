@@ -44,7 +44,10 @@ defmodule Cure.Elab.EmitTest do
     src = @src <> "\nfn sketch({as: SVDesc}, s: SF(as, as, Causal)) -> Dec = ?todo\n"
     {:ok, env} = Program.elaborate(src)
 
-    assert {:error, {:unfilled_hole, :sketch}} =
+    assert {:error, {:unfilled_hole, details}} =
              Emit.compile_and_load(env, module: :"Cure.Slice1Hole", functions: [:run, :sketch])
+
+    assert details.definition == :sketch
+    assert binary_part(src, details.span.start_byte, details.span.end_byte - details.span.start_byte) == "?todo"
   end
 end
