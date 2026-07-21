@@ -19,7 +19,9 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
     {"constructor pattern",
      "mod PatternInvariant\n  type Maybe = None | Some(Int)\n  fn value(m: Maybe) -> Int = match m\n    None() -> 0\n    Some(x) -> x\nend\n"},
     {"guarded branches",
-     "mod GuardInvariant\n  fn sign(n: Int) -> Int = match n\n    x when x > 0 -> 1\n    x -> 0\nend\n"}
+     "mod GuardInvariant\n  fn sign(n: Int) -> Int = match n\n    x when x > 0 -> 1\n    x -> 0\nend\n"},
+    {"interface descriptor",
+     "mod InterfaceInvariant\n  interface Sized(a)\n    fn size(value: a) -> Int\n  fn keep(x: Int) -> Int = x\nend\n"}
   ]
 
   @rejected_programs [
@@ -102,6 +104,7 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
       assert {:ok, stripped_env} = Program.check_ast(stripped), family
       assert plain_env == decorated_env, family
       assert plain_env == stripped_env, family
+      assert diagnostic_leaks(plain_env) == []
 
       assert Program.check_ast_elixir_core(plain) == {:ok, plain_env}, family
       assert Program.check_ast(plain, diagnostic_metadata: :sentinel) == {:ok, plain_env}, family
@@ -114,6 +117,7 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
       assert {:ok, stripped_forms} = Emit.compile_forms(stripped_env, module, functions), family
       assert normalize_form_vars(plain_forms) == normalize_form_vars(decorated_forms), family
       assert normalize_form_vars(plain_forms) == normalize_form_vars(stripped_forms), family
+      assert diagnostic_leaks(plain_forms) == []
     end)
   end
 
@@ -176,6 +180,50 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
     do: Enum.map_reduce(items, names, &normalize_form_vars/2)
 
   defp normalize_form_vars(value, names), do: {value, names}
+
+  @diagnostic_keys [
+    :source_info,
+    :span,
+    :construct_span,
+    :name_span,
+    :callee_span,
+    :provenance,
+    :source_provenance,
+    :expansion_provenance
+  ]
+
+  defp diagnostic_leaks(term), do: diagnostic_leaks(term, [])
+
+  defp diagnostic_leaks(%Cure.MetaAST.SourceInfo{}, path), do: [Enum.reverse(path)]
+  defp diagnostic_leaks(%Cure.Diagnostic.Span{}, path), do: [Enum.reverse(path)]
+  defp diagnostic_leaks(%Cure.Diagnostic.ProvenanceFrame{}, path), do: [Enum.reverse(path)]
+
+  defp diagnostic_leaks(term, path) when is_list(term) do
+    term
+    |> Enum.with_index()
+    |> Enum.flat_map(fn
+      {{key, _value}, index} when key in @diagnostic_keys -> [Enum.reverse([index, key | path])]
+      {value, index} -> diagnostic_leaks(value, [index | path])
+    end)
+  end
+
+  defp diagnostic_leaks(term, path) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.with_index()
+    |> Enum.flat_map(fn {value, index} -> diagnostic_leaks(value, [index | path]) end)
+  end
+
+  defp diagnostic_leaks(term, path) when is_map(term) do
+    term
+    |> Map.delete(:__struct__)
+    |> Enum.flat_map(fn
+      {key, _value} when key in @diagnostic_keys -> [Enum.reverse([key | path])]
+      {key, value} -> diagnostic_leaks(value, [key | path])
+    end)
+  end
+
+  defp diagnostic_leaks(_term, _path), do: []
 
   defp error_head({tag, _rest}) when is_atom(tag), do: tag
   defp error_head({tag, _, _}) when is_atom(tag), do: tag

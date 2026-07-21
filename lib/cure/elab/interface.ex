@@ -19,6 +19,7 @@ defmodule Cure.Elab.Interface do
   """
 
   alias Cure.Core.Env
+  alias Cure.MetaAST.Metadata
 
   @doc """
   Register the interface descriptor for `{:interface, meta, methods}` in `env`.
@@ -38,15 +39,16 @@ defmodule Cure.Elab.Interface do
       meta |> Keyword.get(:requires, []) |> Enum.map(&String.to_atom/1)
 
     with {:ok, head_kind} <- infer_head_kind(name_atom, head_var, methods) do
-      desc = %{
-        name: name_atom,
-        head_var: head_var,
-        head_kind: head_kind,
-        methods: build_method_map(methods),
-        method_order: method_order(methods),
-        defaults: defaults,
-        super: super_interfaces
-      }
+      desc =
+        Metadata.strip_diagnostics(%{
+          name: name_atom,
+          head_var: head_var,
+          head_kind: head_kind,
+          methods: build_method_map(methods),
+          method_order: method_order(methods),
+          defaults: defaults,
+          super: super_interfaces
+        })
 
       with :ok <- check_method_names_free(desc, env),
            {:ok, env1} <- declare_dictionary_former(desc, env) do
