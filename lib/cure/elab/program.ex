@@ -1012,7 +1012,15 @@ defmodule Cure.Elab.Program do
           end
         end)
 
-      {:ok, env, local_defs ++ own_impls}
+      where_helpers =
+        env.defs
+        |> Map.keys()
+        |> Enum.filter(fn key ->
+          Cure.Elab.Name.owner(key) == self_owner and
+            String.match?(Cure.Elab.Name.base(key) || "", ~r/\$[^$]+\$\d+$/)
+        end)
+
+      {:ok, env, Enum.uniq(local_defs ++ own_impls ++ where_helpers)}
     end
   end
 
@@ -2208,7 +2216,16 @@ defmodule Cure.Elab.Program do
 
                     captures =
                       param_names
-                      |> Enum.filter(&surface_occurs?({hbody, hmeta}, &1))
+                      |> Enum.filter(fn name ->
+                        surface_occurs?(hbody, name) or surface_occurs?(hmeta, name)
+                      end)
+
+                    present_captures =
+                      Enum.reject(captures, fn name ->
+                        name
+                        |> then(&Map.fetch!(param_map, &1))
+                        |> implicit_param?()
+                      end)
 
                     fresh = "#{parent}$#{hname}$#{n}"
                     lifted_params = Enum.map(captures, &Map.fetch!(param_map, &1)) ++ Keyword.get(hmeta, :params, [])
@@ -2219,11 +2236,12 @@ defmodule Cure.Elab.Program do
                       |> Keyword.put(:visibility, :private)
                       |> Keyword.put(:params, lifted_params)
                       |> Keyword.put(:arity, length(lifted_params))
+                      |> prepend_where_capture_patterns(present_captures)
                       |> Keyword.delete(:where)
 
                     {body0, _} = List.pop_at(hbody, 0)
                     helper = {:function_def, hmeta, [body0]}
-                    {[helper | acc], Map.put(names, hname, {fresh, captures}), n + 1}
+                    {[helper | acc], Map.put(names, hname, {fresh, present_captures}), n + 1}
 
                   {:where_value, _vmeta, _expr}, acc ->
                     acc
@@ -2267,13 +2285,34 @@ defmodule Cure.Elab.Program do
 
   defp expand_where_declarations(items), do: items
 
+  # Clause syntax stores its refutable parameter patterns separately from the
+  # declared parameter telescope. Lambda-lifting a captured outer parameter must
+  # extend both in lockstep; extending only `params:` shifts every clause column
+  # and leaves references to the capture unresolved in the branch body.
+  defp prepend_where_capture_patterns(meta, []), do: meta
+
+  defp prepend_where_capture_patterns(meta, captures) do
+    capture_patterns = Enum.map(captures, &{:variable, [scope: :local], &1})
+
+    Keyword.update(meta, :clauses, [], fn clauses ->
+      Enum.map(clauses, fn clause ->
+        Map.update!(clause, :params, &(capture_patterns ++ &1))
+      end)
+    end)
+  end
+
   defp param_name({:param, _meta, name}), do: name
   defp param_name({name, _type}), do: name
+
+  defp implicit_param?({:param, meta, _name}), do: Keyword.get(meta, :implicit, false)
+  defp implicit_param?({_name, _type}), do: false
 
   defp surface_occurs?(term, name) do
     case term do
       {:variable, _meta, ^name} -> true
       {tag, _meta, children} when is_atom(tag) and is_list(children) -> Enum.any?(children, &surface_occurs?(&1, name))
+      {_key, value} -> surface_occurs?(value, name)
+      map when is_map(map) -> Enum.any?(Map.values(map), &surface_occurs?(&1, name))
       list when is_list(list) -> Enum.any?(list, &surface_occurs?(&1, name))
       _ -> false
     end
