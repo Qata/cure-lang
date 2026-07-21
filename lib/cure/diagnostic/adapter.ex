@@ -1810,9 +1810,23 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:unknown_macro_obligation_capture, capture, line, column}, opts),
-    do:
-      macro_validation_failure(:unknown_macro_obligation_capture, %{capture: capture, line: line, column: column}, opts)
+  def from_error({:unknown_macro_obligation_capture, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :unknown_macro_obligation_capture,
+      severity: :error,
+      title: "Unknown macro capture",
+      body:
+        Doc.paragraph(
+          "The `#{details.interface}` obligation refers to `#{details.capture}`, but this rule declares no capture with that name."
+        ),
+      primary: pickup_label(span, :primary, "this capture is not declared by the rule"),
+      suggestions: macro_capture_suggestions(details, span),
+      payload: details
+    )
+  end
 
   def from_error({:graded_let_requires_variable, details}, opts) when is_map(details) do
     pattern_span = Map.get(details, :pattern_span) || Keyword.get(opts, :span)
@@ -2015,16 +2029,43 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:malformed_hole, _line, _column}, opts) do
-    from_error(
-      %SyntaxProblem{
-        kind: :malformed_macro_hole,
-        expected: :macro_hole,
-        observed: :eof,
-        at: Keyword.get(opts, :span),
-        context: %{repair: "<name: Kind>"}
-      },
-      opts
+  def from_error({:malformed_hole, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case pickup_label(Map.get(details, :opener_span), :secondary, "the macro hole starts here") do
+        nil -> []
+        label -> [label]
+      end
+
+    suggestions =
+      case insertion_before(span) do
+        %Span{} = insertion ->
+          [
+            %Suggestion{
+              message: "Insert `>` to close the macro hole",
+              applicability: :machine_applicable,
+              edits: [%TextEdit{span: insertion, replacement: ">"}]
+            }
+          ]
+
+        _ ->
+          [%Suggestion{message: "Write the hole as `<name: Kind>`", applicability: :manual}]
+      end
+
+    Diagnostic.new(
+      code: "E094",
+      key: :malformed_macro_hole,
+      severity: :error,
+      title: "Macro hole is not closed",
+      body:
+        Doc.paragraph(
+          "A typed macro hole has the form `<name: Kind>`. The closing `>` is missing before #{syntax_name(details.observed)}."
+        ),
+      primary: pickup_label(span, :primary, "expected `>` before this token"),
+      secondary: secondary,
+      suggestions: suggestions,
+      payload: details
     )
   end
 
@@ -3666,6 +3707,58 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_family_field_suggestions(_details, _span), do: []
+
+  defp macro_capture_suggestions(%{capture: capture, available_captures: captures}, %Span{} = span)
+       when is_list(captures) do
+    spelling = to_string(capture)
+
+    ranked =
+      captures
+      |> Enum.map(&{to_string(&1), Suggest.distance(spelling, to_string(&1))})
+      |> Enum.sort_by(fn {candidate, distance} -> {distance, String.downcase(candidate), candidate} end)
+
+    case ranked do
+      [{candidate, distance}, {_other, next_distance} | _]
+      when distance <= 2 and distance < next_distance ->
+        [
+          %Suggestion{
+            message: "Replace it with the declared capture `#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: candidate}]
+          }
+        ]
+
+      [{candidate, distance}] when distance <= 2 ->
+        [
+          %Suggestion{
+            message: "Replace it with the declared capture `#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: candidate}]
+          }
+        ]
+
+      _ ->
+        [
+          %Suggestion{
+            message: "Refer to one of this rule's captures: #{Enum.map_join(captures, ", ", &"`#{&1}`")}",
+            applicability: :manual
+          }
+        ]
+    end
+  end
+
+  defp macro_capture_suggestions(_details, _span), do: []
+
+  defp insertion_before(%Span{} = span) do
+    %{
+      span
+      | end_byte: span.start_byte,
+        end_line: span.start_line,
+        end_column: span.start_column
+    }
+  end
+
+  defp insertion_before(_span), do: nil
 
   defp candidate_suggestions([], _spelling, _opts), do: []
 

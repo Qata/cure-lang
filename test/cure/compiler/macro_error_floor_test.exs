@@ -2,6 +2,7 @@
 defmodule Cure.Compiler.MacroErrorFloorTest do
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser, Errors}
+  alias Cure.Diagnostic.Renderer
 
   # Parse a source expected to fail, return its error list.
   defp errors_of(src) do
@@ -156,15 +157,52 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
 
   test "a malformed hole in a macro definition renders a diagnostic explaining the hole syntax" do
     # Missing the closing `>` — the milestone-1 :malformed_hole path.
-    errors = errors_of("macro Bad\n  syntax every <t: Duration becomes x\n")
+    source = "macro Bad\n  syntax every <t: Duration becomes x\n"
+    errors = errors_of(source)
 
-    mh = Enum.find(errors, &match?({:malformed_hole, _, _}, &1))
+    mh = Enum.find(errors, &match?({:malformed_hole, %{observed: "becomes"}}, &1))
     assert mh, "expected a :malformed_hole error"
 
-    rendered = Errors.format_error(mh, "bad.cure")
-    assert rendered =~ "hole"
-    assert rendered =~ "<name: Kind>"
+    {:malformed_hole, details} = mh
+    assert details.opener_span.start_column == 16
+    assert details.span.start_column == 29
+
+    {diagnostic, registry} = Errors.to_diagnostic({:parse_error, [mh]}, "bad.cure", source)
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- MACRO HOLE IS NOT CLOSED [E094] ------------------------------------ bad.cure
+
+             A typed macro hole has the form `<name: Kind>`. The closing `>` is missing
+             before 'becomes'.
+
+             at bad.cure:2:29
+             2 |   syntax every <t: Duration becomes x
+               |                -            ^^^^^^^ the macro hole starts here; expected `>` before this token
+
+             Hint: Insert `>` to close the macro hole
+             """)
+
     refute rendered =~ ":malformed_hole"
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ">"}]}] =
+             diagnostic.suggestions
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 1, "character" => 28},
+             "end" => %{"line" => 1, "character" => 35}
+           }
+
+    assert [suggestion] = lsp["data"]["suggestions"]
+    assert [edit] = suggestion["edits"]
+
+    assert edit["range"] == %{
+             "start" => %{"line" => 1, "character" => 28},
+             "end" => %{"line" => 1, "character" => 28}
+           }
   end
 
   test "a macro-use mismatch against a structured-value token (regex) yields a diagnostic, not a crash" do

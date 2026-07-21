@@ -1,6 +1,7 @@
 defmodule Cure.Compiler.MacroDefParseTest do
   use ExUnit.Case, async: true
-  alias Cure.Compiler.{Lexer, Parser, Printer}
+  alias Cure.Compiler.{Errors, Lexer, Parser, Printer}
+  alias Cure.Diagnostic.Renderer
 
   defp parse!(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
@@ -102,10 +103,12 @@ defmodule Cure.Compiler.MacroDefParseTest do
 
     assert {:macro_def, _, [transition, definition, _, _]} = node
     assert [%{fields: ["from", "event", "to"], segments: segments}] = transition.productions
+
     assert Enum.map(segments, fn
              {:lit, value} -> value
              {:hole, %{name: name}} -> name
            end) == ["from", "-", "-", "event", "-", "->", "to"]
+
     assert [%{name: "transitions", shape: "Transition", cardinality: :one_or_more}] = definition.fields
   end
 
@@ -179,14 +182,46 @@ defmodule Cure.Compiler.MacroDefParseTest do
   end
 
   test "an obligation must name a capture owned by its rule" do
+    source =
+      "macro Bad\n  syntax child <identity: Expression> where BeamEncode(identitty) becomes identity\n"
+
     {:ok, tokens} =
       Lexer.tokenize(
-        "macro Bad\n  syntax child <identity: Expression> where BeamEncode(missing) becomes identity\n",
+        source,
         emit_events: false
       )
 
     assert {:error, errors} = Parser.parse(tokens, emit_events: false, prelude_macros: false)
-    assert Enum.any?(errors, &match?({:unknown_macro_obligation_capture, "missing", _, _}, &1))
+    assert [{:unknown_macro_obligation_capture, details} = error] = errors
+    assert details.capture == "identitty"
+    assert details.span.start_line == 2
+    assert details.span.start_column == 56
+    assert details.span.end_column == 65
+
+    {diagnostic, registry} = Errors.to_diagnostic({:parse_error, [error]}, "obligation.cure", source)
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- UNKNOWN MACRO CAPTURE [E092] -------------------------------- obligation.cure
+
+             The `BeamEncode` obligation refers to `identitty`, but this rule declares no
+             capture with that name.
+
+             at obligation.cure:2:56
+             2 | …ession> where BeamEncode(identitty) becomes identity
+               |                           ^^^^^^^^^ this capture is not declared by the rule
+
+             Hint: Replace it with the declared capture `identity`
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "identity"}]}] =
+             diagnostic.suggestions
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 1, "character" => 55},
+             "end" => %{"line" => 1, "character" => 64}
+           }
   end
 
   test "capture obligations survive printing and reparsing" do
@@ -328,7 +363,7 @@ defmodule Cure.Compiler.MacroDefParseTest do
       Lexer.tokenize("macro Bad\n  syntax every <t: Duration becomes x\n", emit_events: false)
 
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
-    assert Enum.any?(errors, &match?({:malformed_hole, _, _}, &1))
+    assert Enum.any?(errors, &match?({:malformed_hole, %{observed: "becomes"}}, &1))
   end
 
   # `##` doc-comments are ALWAYS emitted by the lexer as `:doc_comment` tokens

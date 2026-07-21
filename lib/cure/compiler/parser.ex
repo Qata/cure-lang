@@ -8560,7 +8560,17 @@ defmodule Cure.Compiler.Parser do
           if capture in capture_names do
             state
           else
-            add_error(state, {:unknown_macro_obligation_capture, capture, token.line, token.col})
+            add_error(state, {
+              :unknown_macro_obligation_capture,
+              %{
+                capture: capture,
+                interface: interface,
+                available_captures: capture_names,
+                span: capture_token.span,
+                line: capture_token.line,
+                column: capture_token.col
+              }
+            })
           end
 
         obligation = %{interface: interface, capture: capture, line: token.line, col: token.col}
@@ -9015,8 +9025,21 @@ defmodule Cure.Compiler.Parser do
               parse_rule_segments(state, [hole | acc], mode)
             else
               _ ->
-                t = peek(state)
-                state = add_error(state, {:malformed_hole, t.line, t.col})
+                opener = peek(state)
+                observed = peek_at(state, 4)
+
+                state =
+                  add_error(state, {
+                    :malformed_hole,
+                    %{
+                      opener_span: opener.span,
+                      span: observed.span || opener.span,
+                      observed: observed.value || observed.type,
+                      line: observed.line,
+                      column: observed.col
+                    }
+                  })
+
                 {Enum.reverse(acc), advance(state)}
             end
         end

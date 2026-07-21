@@ -386,10 +386,6 @@ defmodule Cure.Compiler.Errors do
     end
   end
 
-  defp error_location({:malformed_hole, line, col})
-       when is_integer(line) and is_integer(col),
-       do: {line, col}
-
   defp error_location({:computed_macro_error, meta, _reason}) when is_list(meta) do
     {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, Keyword.get(meta, :column, 0))}
   end
