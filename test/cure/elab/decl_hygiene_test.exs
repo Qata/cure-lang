@@ -20,7 +20,10 @@ defmodule Cure.Elab.DeclHygieneTest do
 
   test "duplicate type declaration in one module is rejected" do
     src = "mod DupType\n  type Foo = A\n  type Foo = B\nend\n"
-    assert {:error, {:duplicate_type, :Foo}} = elaborate(src)
+
+    assert {:error, {:duplicate_type, %{name: :Foo, spans: [first, second]}}} = elaborate(src)
+    assert {first.start_line, first.start_column} == {2, 8}
+    assert {second.start_line, second.start_column} == {3, 8}
   end
 
   test "duplicate constructor within one type is rejected" do

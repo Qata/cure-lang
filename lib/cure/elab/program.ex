@@ -314,7 +314,46 @@ defmodule Cure.Elab.Program do
   # `Map.put`, so the second would overwrite the first.
   @spec check_no_duplicate_types(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_types(ast) do
-    first_dup_per_module(ast, &type_names/1, :duplicate_type, & &1)
+    ast
+    |> module_decl_groups()
+    |> Enum.reduce_while(:ok, fn decls, :ok ->
+      case first_duplicate_type(decls) do
+        nil -> {:cont, :ok}
+        details -> {:halt, {:error, {:duplicate_type, details}}}
+      end
+    end)
+  end
+
+  defp first_duplicate_type(decls) do
+    decls
+    |> Enum.reduce_while(%{}, fn decl, seen ->
+      case type_names(decl) do
+        [name] ->
+          span = declaration_name_span(decl)
+
+          case Map.fetch(seen, name) do
+            {:ok, first_span} ->
+              {:halt, %{name: name, spans: Enum.reject([first_span, span], &is_nil/1)}}
+
+            :error ->
+              {:cont, Map.put(seen, name, span)}
+          end
+
+        _ ->
+          {:cont, seen}
+      end
+    end)
+    |> case do
+      %{name: _name, spans: _spans} = details -> details
+      _seen -> nil
+    end
+  end
+
+  defp declaration_name_span({_tag, meta, _payload}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
   end
 
   # Type names a declaration binds. `:interface` belongs here: `Cure.Elab.Interface`

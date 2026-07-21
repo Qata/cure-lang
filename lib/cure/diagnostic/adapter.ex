@@ -2097,6 +2097,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp declaration_conflict_title(:duplicate_parameter), do: "Duplicate parameter"
   defp declaration_conflict_title(:duplicate_field), do: "Duplicate field"
   defp declaration_conflict_title(:duplicate_index), do: "Duplicate index"
+  defp declaration_conflict_title(:duplicate_type), do: "Duplicate type declaration"
   defp declaration_conflict_title(_kind), do: "Declaration conflict"
 
   defp declaration_conflict_message(:duplicate_parameter, name, _detail),
@@ -2107,12 +2108,17 @@ defmodule Cure.Diagnostic.Adapter do
     do:
       "The field `#{name}` is declared more than once. Rename or remove one occurrence so every record field has a unique name."
 
+  defp declaration_conflict_message(:duplicate_type, name, _detail),
+    do:
+      "The type `#{name}` is declared more than once in this module. Rename or remove one declaration so the type has a unique identity."
+
   defp declaration_conflict_message(_kind, name, detail),
     do: "The declaration `#{name}` conflicts with another visible declaration#{detail}."
 
   defp duplicate_primary_label(:duplicate_parameter), do: "this parameter repeats an earlier name"
   defp duplicate_primary_label(:duplicate_field), do: "this field repeats an earlier name"
   defp duplicate_primary_label(:duplicate_index), do: "this index repeats an earlier name"
+  defp duplicate_primary_label(:duplicate_type), do: "this type repeats an earlier declaration"
   defp duplicate_primary_label(_kind), do: "rename this declaration or make its identity unique"
 
   defp interface_failure(kind, details, opts) do

@@ -92,6 +92,32 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "every record field has a unique name"
   end
 
+  test "a duplicate type labels both declaration names" do
+    source = "mod DupType\n  type Foo = A\n  type Foo = B\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "duplicate_type.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "duplicate_type.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E105"
+    assert diagnostic.title == "Duplicate type declaration"
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.span.start_column == 8
+    assert diagnostic.primary.message == "this type repeats an earlier declaration"
+    assert [%{span: first, message: "the name was first declared here"}] = diagnostic.secondary
+    assert {first.start_line, first.start_column} == {2, 8}
+    assert rendered =~ "2 |   type Foo = A"
+    assert rendered =~ "3 |   type Foo = B"
+    assert rendered =~ "this type repeats an earlier declaration"
+    assert rendered =~ "the name was first declared here"
+    assert rendered =~ "type has a unique identity"
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 
