@@ -420,6 +420,29 @@ defmodule Cure.Diagnostic.Adapter do
     unknown_name(:member, "#{name_to_string(record)}.#{name_to_string(field)}", Keyword.put(opts, :owner, record))
   end
 
+  def from_error({:unknown_field, record, field, available_fields}, opts) when is_list(available_fields) do
+    candidates =
+      Enum.map(available_fields, fn candidate ->
+        %{
+          id: {:record_field, record, candidate},
+          name: name_to_string(candidate),
+          namespace: :member,
+          owner: record,
+          imported: true,
+          origin: :record_shape
+        }
+      end)
+
+    opts =
+      opts
+      |> Keyword.put(:owner, record)
+      |> Keyword.put(:record, record)
+      |> Keyword.put(:candidates, candidates)
+      |> Keyword.put(:display_name, "#{name_to_string(record)}.#{name_to_string(field)}")
+
+    unknown_name(:member, name_to_string(field), opts)
+  end
+
   def from_error({:source_context, {:projection_non_record, field}, context}, opts) when is_map(context) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
 
@@ -2503,7 +2526,7 @@ defmodule Cure.Diagnostic.Adapter do
       key: :unknown_name,
       severity: :error,
       title: "Unknown #{namespace_title(namespace)}",
-      message: "`#{spelling}` is not available in this #{namespace} namespace.",
+      message: "`#{Keyword.get(opts, :display_name, spelling)}` is not available in this #{namespace} namespace.",
       primary: primary_label(opts, "`#{spelling}` was not found"),
       notes: Keyword.get(opts, :notes, []),
       suggestions: candidate_suggestions(candidate_details),
@@ -2514,6 +2537,7 @@ defmodule Cure.Diagnostic.Adapter do
         candidates: candidates,
         candidate_details: candidate_details,
         owner: Keyword.get(opts, :owner),
+        record: Keyword.get(opts, :record),
         checking: Keyword.get(opts, :checking),
         arity: Keyword.get(opts, :arity),
         expected_namespace: Keyword.get(opts, :expected_namespace),

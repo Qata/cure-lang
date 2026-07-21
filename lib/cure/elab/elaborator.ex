@@ -1512,7 +1512,7 @@ defmodule Cure.Elab.Elaborator do
 
               cond do
                 is_nil(idx) ->
-                  {:error, {:unknown_field, rec, field}}
+                  {:error, {:unknown_field, rec, field, Enum.map(fields, &elem(&1, 0))}}
 
                 mentions_prior_field?(ftype) ->
                   {:error, {:dependent_record_projection, rec, field}}

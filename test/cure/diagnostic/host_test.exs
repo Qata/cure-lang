@@ -302,6 +302,15 @@ defmodule Cure.Diagnostic.HostTest do
     refute non_record =~ ":projection_non_record"
   end
 
+  test "record-field suggestions come from the actual record shape" do
+    diagnostic =
+      Cure.Diagnostic.Adapter.from_error({:unknown_field, :Point, "colour", [:x, :y, :color]})
+
+    assert diagnostic.payload.record == :Point
+    assert Enum.map(diagnostic.payload.candidates, & &1) == ["color"]
+    assert hd(diagnostic.suggestions).message == "Did you mean `color`?"
+  end
+
   test "filters name suggestions semantically before edit-distance ranking" do
     diagnostic =
       Cure.Diagnostic.Adapter.unknown_name(:value, "pritn",
