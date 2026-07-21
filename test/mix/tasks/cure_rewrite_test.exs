@@ -60,9 +60,11 @@ defmodule Mix.Tasks.Cure.RewriteTest do
         assert :ok = Mix.Task.run("cure.rewrite", [path])
       end)
 
-    assert output =~ "fn run() -> Int ="
-    assert output =~ "^"
-    assert output =~ ~r/\[E09\d\]/
+    assert output =~ "FUNCTION BODY IS MISSING [E094]"
+    assert output =~ "This function declaration ends after `=`"
+    assert output =~ "2 |   fn run() -> Int ="
+    assert output =~ "^ write the function body after this `=`"
+    assert output =~ "Hint: Write an expression after `=`"
     refute output =~ "{:unexpected"
   end
 

@@ -2003,6 +2003,19 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:missing_function_body, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :missing_function_body,
+        expected: :expression,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:lambda_block_unterminated, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -4008,6 +4021,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_placement}), do: "Edition pragma is misplaced"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_malformed}), do: "Edition pragma is malformed"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_unknown}), do: "Edition is unknown"
+  defp syntax_problem_title(%SyntaxProblem{kind: :missing_function_body}), do: "Function body is missing"
   defp syntax_problem_title(%SyntaxProblem{expected: :explain_point}), do: "Explanation clause needs a failure point"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
@@ -4077,6 +4091,9 @@ defmodule Cure.Diagnostic.Adapter do
     do:
       "Unknown edition: this edition is not supported by the current compiler. " <>
         "Use one of: #{Enum.join(Cure.Edition.all(), ", ")}."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :missing_function_body}),
+    do: "This function declaration ends after `=`, but every function needs a body expression."
 
   defp syntax_problem_context(%SyntaxProblem{expected: :explain_point, observed: observed}),
     do:
@@ -4150,6 +4167,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: "a range operator cannot be used in a pattern"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unrecognized_pattern}), do: "this pattern form is not supported"
+  defp syntax_problem_label(%SyntaxProblem{kind: :missing_function_body}), do: "write the function body after this `=`"
   defp syntax_problem_label(%SyntaxProblem{expected: :explain_point}), do: "name the failure point before this arrow"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :non_associative}),
@@ -4276,6 +4294,14 @@ defmodule Cure.Diagnostic.Adapter do
     do: [
       %Suggestion{
         message: "Bind the value, then test its bounds with `when`",
+        applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :missing_function_body}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Write an expression after `=`",
         applicability: :manual
       }
     ]
