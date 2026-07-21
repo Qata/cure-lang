@@ -12,6 +12,12 @@
 > and Boolean-inversion layers specified in §3.5–§3.9; scalar order
 > monotonicity alone is not enough to justify Farkas combination.
 
+> **2026-07-21 proof-authoring dependency.** The remaining semantic
+> homomorphism and fold-preservation proofs are the acceptance workload for
+> `2026-07-21-proof-language-ergonomics-design.md`. Keep the current work parked
+> until that proof surface is implemented, then restore it without changing the
+> checker mathematics or trust boundary.
+
 ## 0. Motivation
 
 The Int-refinement prelude (`IsTrue`/`Confirmed`, `Std.Proof.IntMath`) discharges

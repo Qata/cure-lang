@@ -5,6 +5,12 @@ metatheory in Cure (`Std.Otp.*`). Layer tags per `cure-porting`: **K** = trusted
 (`lib/cure/core/*`, HARD-STOP), **E** = elaborator (`lib/cure/elab/*`), **C** = codegen/erase,
 **P** = parser.*
 
+> **2026-07-21 surface-design note.** This file remains the historical and
+> ongoing catalog of implementation gaps. The approved, authoritative surface
+> design for proof authoring is now
+> `2026-07-21-proof-language-ergonomics-design.md`. Suggestions in older catalog
+> entries must be interpreted through that specification.
+
 ## Why this exists
 
 Formalizing the OTP process algebra in Cure surfaced a recurring pattern: a lemma that is
