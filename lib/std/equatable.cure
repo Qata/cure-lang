@@ -107,8 +107,8 @@ mod Std.Equatable
   ## `{:no_instance, :Equatable, :"Std.Option#Option"}`. Same reason as `Nat`
   ## above, and the same structural spine auto-derivation would have synthesised.
   implementation Equatable for Option(t)
-  ## Structural Option equality (matches a derived ADT `struct_eq` lowering).
-  fn `==`(a: Option(t), b: Option(t)) -> Bool = Std.Builtin.struct_eq(Option(t), a, b)
+    ## Structural Option equality (matches a derived ADT `struct_eq` lowering).
+    fn `==`(a: Option(t), b: Option(t)) -> Bool = Std.Builtin.struct_eq(Option(t), a, b)
 
   ## Inequality derived from `` `==` ``. The `where Equatable(t)` constraint
   ## threads the dictionary that dispatches `` `==` `` at the caller's type.
