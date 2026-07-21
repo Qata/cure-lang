@@ -1380,14 +1380,26 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   def from_error({:totality_required, name}, opts) do
+    spelling = name_to_string(name)
+
     Diagnostic.new(
       code: "E013",
       key: :totality_failure,
       severity: :error,
-      title: "Totality failure",
-      body: Doc.paragraph("`#{name}` must be total because it is used during type-level computation."),
-      primary: primary_label(opts, "make this definition structurally total"),
-      payload: %{name: name}
+      title: "Function must be total",
+      body:
+        Doc.paragraph(
+          "`#{spelling}` is evaluated while checking types, but the compiler cannot prove that every call to it terminates."
+        ),
+      primary: primary_label(opts, "this definition is used in a type and must always terminate"),
+      suggestions: [
+        %Suggestion{
+          message: "Make each recursive call use a structurally smaller argument, or keep this function out of types",
+          applicability: :manual
+        }
+      ],
+      notes: ["Runtime-only functions may remain partial; only compile-time computation requires a total definition."],
+      payload: %{name: name, checking: Keyword.get(opts, :checking)}
     )
   end
 

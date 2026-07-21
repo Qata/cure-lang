@@ -166,6 +166,7 @@ defmodule Cure.Compiler.Errors do
     registry =
       Cure.Diagnostic.SourceRegistry.new()
       |> Cure.Diagnostic.SourceRegistry.register(source_id, source, file)
+      |> register_embedded_sources(error)
 
     opts =
       case exact_error_span(error, source, source_id, registry) do
@@ -201,6 +202,31 @@ defmodule Cure.Compiler.Errors do
 
     {diagnostic, registry}
   end
+
+  defp register_embedded_sources(registry, error) do
+    error
+    |> embedded_sources()
+    |> Enum.reduce(registry, fn {source_id, source, path}, registry ->
+      Cure.Diagnostic.SourceRegistry.register(registry, source_id, source, path)
+    end)
+  end
+
+  defp embedded_sources(%{source: source, file: file}) when is_binary(source) and is_binary(file),
+    do: [{file, source, file}]
+
+  defp embedded_sources(%_{} = struct), do: struct |> Map.from_struct() |> embedded_sources()
+
+  defp embedded_sources(map) when is_map(map) do
+    map
+    |> Map.values()
+    |> Enum.flat_map(&embedded_sources/1)
+  end
+
+  defp embedded_sources(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.flat_map(&embedded_sources/1)
+
+  defp embedded_sources(list) when is_list(list), do: Enum.flat_map(list, &embedded_sources/1)
+  defp embedded_sources(_term), do: []
 
   defp remap_diagnostic_spans(%Cure.Diagnostic{} = diagnostic, registry, source_id) do
     remap_term_spans(diagnostic, registry, source_id)

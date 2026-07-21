@@ -493,12 +493,67 @@ defmodule Cure.Elab.Program do
          {:ok, base} <- merge_env(seeded, prelude),
          {:ok, env0} <- merge_env(base, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
-         :ok <- MacroValidate.check_program(ast, env),
-         {:ok, certified} <- TotalityClosure.certify_type_level(env) do
-      # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
-      # defs so their intra-module uses keep inlining; any other module name
-      # is a no-op here (its hinted imports were marked slice-side).
-      {:ok, mark_inline_hints(certified, find_module_name(ast))}
+         :ok <- MacroValidate.check_program(ast, env) do
+      with {:ok, certified} <- certify_type_level_with_source(ast, env) do
+        # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
+        # defs so their intra-module uses keep inlining; any other module name
+        # is a no-op here (its hinted imports were marked slice-side).
+        {:ok, mark_inline_hints(certified, find_module_name(ast))}
+      end
+    end
+  end
+
+  defp certify_type_level_with_source(ast, env, opts \\ []) do
+    case TotalityClosure.certify_type_level(env) do
+      {:ok, certified} ->
+        {:ok, certified}
+
+      {:error, {:totality_required, name} = reason} ->
+        {:error, {:source_context, reason, totality_source_context(ast, name, opts)}}
+
+      {:error, {:compile_time_totality, name, _detail} = reason} ->
+        {:error, {:source_context, reason, totality_source_context(ast, name, opts)}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  defp totality_source_context(ast, qualified_name, opts) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    declaration =
+      Enum.find(declarations(ast), fn
+        {:function_def, meta, _body} when is_list(meta) -> to_string(Keyword.get(meta, :name)) == bare_name
+        _ -> false
+      end)
+
+    {name_span, definition_span} =
+      case declaration do
+        {:function_def, meta, _body} ->
+          case Cure.MetaAST.Metadata.source_info(meta) do
+            %Cure.MetaAST.SourceInfo{name: name, whole: whole} -> {name, whole}
+            _ -> {nil, nil}
+          end
+
+        _ ->
+          {nil, nil}
+      end
+
+    context = %{
+      span: name_span || definition_span,
+      definition_span: definition_span,
+      checking: qualified_name,
+      expectation_origin: :type_level_totality,
+      expression_category: :function_definition
+    }
+
+    case {Keyword.get(opts, :source), Keyword.get(opts, :file)} do
+      {source, file} when is_binary(source) and is_binary(file) ->
+        Map.merge(context, %{source: source, file: file})
+
+      _ ->
+        context
     end
   end
 
@@ -1842,8 +1897,8 @@ defmodule Cure.Elab.Program do
 
   defp compute_module_interface(requested_name, path) do
     with {:ok, source} <- File.read(path),
-         {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+         {:ok, tokens} <- Lexer.tokenize(source, file: path, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, file: path, emit_events: false),
          :ok <- validate_module_identity(ast, requested_name, path),
          :ok <- check_declarations(ast),
          dependencies = module_dependency_sources(ast),
@@ -1854,7 +1909,7 @@ defmodule Cure.Elab.Program do
          {:ok, env0_base} <- merge_env(base, imported),
          env0 = Map.put(env0_base, :import_modules, direct_import_ids(dependencies)),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
-         {:ok, certified} <- TotalityClosure.certify_type_level(env) do
+         {:ok, certified} <- certify_type_level_with_source(ast, env, source: source, file: path) do
       direct_ids = direct_import_ids(imports(ast))
 
       export_env =
