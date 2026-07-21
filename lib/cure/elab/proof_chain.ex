@@ -77,6 +77,14 @@ defmodule Cure.Elab.ProofChain do
             {:error, _} = error -> error
           end
 
+        {:simplify_command, command_meta, _rules} = command ->
+          block = {:proof_justification, command_meta, [command]}
+
+          case Cure.Elab.ProofGoal.run(block, expected, names, ctx, env, index) do
+            {:ok, proof, _trace} -> {:ok, proof}
+            {:error, _} = error -> error
+          end
+
         _ ->
           Elaborator.elaborate_expr_checked(justification, expected, names, ctx, env)
       end
@@ -92,6 +100,9 @@ defmodule Cure.Elab.ProofChain do
         {:error, reason}
 
       {:error, {:rewrite_failed, _} = reason} ->
+        {:error, reason}
+
+      {:error, {:simplification_failed, _} = reason} ->
         {:error, reason}
 
       {:error, reason} ->

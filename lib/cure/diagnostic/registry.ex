@@ -89,7 +89,7 @@ defmodule Cure.Diagnostic.Registry do
     "W081" => "No first-party producer remains; pickup reachability warnings are not emitted.",
     "W082" => "No first-party producer remains; pickup reachability warnings are not emitted."
   }
-  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E114 W086 W088]
+  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E114 W086 W088]
   @known_producers ~w[
     dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
     module_loader name_resolution operational parser pattern_checker proof_checker
@@ -164,6 +164,7 @@ defmodule Cure.Diagnostic.Registry do
     "E109" => :proof_chain_syntax,
     "E110" => :proof_chain_mismatch,
     "E111" => :rewrite_failed,
+    "E112" => :simplification_failed,
     "E114" => :defining_equation_unavailable,
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
@@ -1362,6 +1363,16 @@ defmodule Cure.Diagnostic.Registry do
     Use the displayed `at n` occurrence, correct the target, or switch between
     forward and `backwards` rewriting.
     """,
+    "E112" => """
+    E112: Simplification Failed
+
+    Proof-producing simplification rejected a rule, left a residual goal, could
+    not adapt supplied evidence, or reached its explicit resource guard. The
+    structured payload retains the before/after goals and rewrite trace IDs.
+
+    Supply a decreasing equality rule, add the missing defining equation, or
+    continue the proof from the displayed residual proposition.
+    """,
     "E114" => """
     E114: Defining Equation Unavailable
 
@@ -1630,6 +1641,7 @@ defmodule Cure.Diagnostic.Registry do
   defp stable_key("E109", _title), do: :proof_chain_syntax
   defp stable_key("E110", _title), do: :proof_chain_mismatch
   defp stable_key("E111", _title), do: :rewrite_failed
+  defp stable_key("E112", _title), do: :simplification_failed
   defp stable_key("E114", _title), do: :defining_equation_unavailable
 
   defp stable_key(_code, title) do
@@ -1681,6 +1693,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E110"), do: [:elaboration]
   defp producers("E111"), do: [:elaboration]
   defp producers("E114"), do: [:elaboration]
+  defp producers("E112"), do: [:elaboration]
   defp producers("E008"), do: [:doctor]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
@@ -1698,6 +1711,7 @@ defmodule Cure.Diagnostic.Registry do
   defp subsystem("E110"), do: :elaboration
   defp subsystem("E111"), do: :elaboration
   defp subsystem("E114"), do: :elaboration
+  defp subsystem("E112"), do: :elaboration
   defp subsystem("E091"), do: :resolution
   defp subsystem("E092"), do: :macros
   defp subsystem("E093"), do: :elaboration

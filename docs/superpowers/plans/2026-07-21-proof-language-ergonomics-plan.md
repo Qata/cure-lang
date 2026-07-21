@@ -413,29 +413,50 @@ coverage 318/318.
 **Purpose:** solve routine definitional/equational goals without trusting a host
 decision or silently unfolding arbitrary recursion.
 
-- [ ] Define rule admission and orientation. Version 1 rules are generated
+- [x] Define rule admission and orientation. Version 1 rules are generated
   defining equations, an audited finite standard set, and explicit local proofs.
   Orient by a documented well-founded term measure; reject non-decreasing or
   ambiguous rules.
-- [ ] Implement deterministic traversal/order, visited-state cycle protection,
+- [x] Implement deterministic traversal/order, visited-state cycle protection,
   and explicit resource bounds. A resource guard is E112, not a false theorem.
-- [ ] At each rewrite, construct equality evidence through
+- [x] At each rewrite, construct equality evidence through
   `Cure.Elab.Rewrite`; compose the trace with `trans`. Definitional beta/iota/
   zeta/certified-delta normalization may close with `reflexive`, but the kernel
   still checks convertibility.
-- [ ] Parse `simplify` and `simplify using [rule, ...]` only inside a
+- [x] Parse `simplify` and `simplify using [rule, ...]` only inside a
   justification block in version 1.
-- [ ] A solved goal closes the block. A residual goal reports before/after
+- [x] A solved goal closes the block. A residual goal reports before/after
   surface propositions, rules that progressed, and structured trace IDs.
-- [ ] Add opt-in trace rendering without changing the compact default message.
-- [ ] Add E112 registry/catalog/adapter/renderers/JSON/LSP coverage.
-- [ ] Add termination regressions for symmetric equations, recursive equations,
+- [x] Add opt-in trace rendering without changing the compact default message.
+- [x] Add contextual LSP completion and hover for `simplify`, explicit local
+  rules, generated defining equations, and the audited default rule set. Hover
+  must distinguish function-equation members such as `map.Cons` from modules
+  and show their certified propositions and provenance.
+- [x] Add E112 registry/catalog/adapter/renderers/JSON/LSP coverage.
+- [x] Add termination regressions for symmetric equations, recursive equations,
   mutually cycling explicit rules, duplicate rules, and large terms; add forged
   rule and certificate rejection tests.
 
 **Green gate:** simplifier unit/certificate tests, kernel rejection negatives,
 diagnostics, stdlib, full suite, complete Antigen, and an explicit time/step
 ceiling regression.
+
+**Completed evidence (2026-07-21):** the audited beta/iota/zeta/certified-delta
+set and certified generated equations are deterministic defaults; explicit
+rules require a strict Core-node decrease, while generated rules revalidate
+their totality certificate and kernel definition before admission. Traversal is
+left-to-right in user-list order with visited-state protection and a 256-step
+ceiling. Every rewrite builds ordinary equality transport through
+`Cure.Elab.Rewrite`, the enclosing chain composes checked evidence, and final
+conversion closes only with kernel-checked reflexivity. E112 carries authored
+before/after propositions and structured trace IDs through terminal, JSON, and
+LSP, with expanded traces opt-in. Completion and hover cover the command, local
+equality rules, and generated function equations while explicitly
+distinguishing `map.Cons`-style members from modules. Compact chains are now the
+formatter default while the expanded legacy layout remains parse-compatible.
+The 122-module stdlib and 5,352-test full suite pass with 0 failures and 6
+excluded; diagnostic coverage is 59/59, 136 expected immune responses fire,
+and complete Antigen coverage is 318/318.
 
 **Commit:** `feat(proofs): add proof-producing simplification`
 

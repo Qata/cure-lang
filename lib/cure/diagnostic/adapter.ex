@@ -12,6 +12,7 @@ defmodule Cure.Diagnostic.Adapter do
     ProofChainMismatchProblem,
     ProofChainSyntaxProblem,
     RewriteProblem,
+    SimplificationProblem,
     Span,
     Suggestion,
     SyntaxProblem,
@@ -379,6 +380,40 @@ defmodule Cure.Diagnostic.Adapter do
       primary: primary_label(opts, label),
       secondary: rewrite_labels(problem, Keyword.get(opts, :span)),
       suggestions: rewrite_suggestions(problem),
+      payload: problem
+    )
+  end
+
+  def from_error({:simplification_failed, %SimplificationProblem{} = problem}, opts) do
+    {title, message, label} =
+      case problem.kind do
+        :inadmissible_rule ->
+          {"Simplification rule is not admissible", "This rule cannot be given a deterministic decreasing orientation.",
+           "this rule cannot be admitted"}
+
+        :proof_mismatch ->
+          {"Simplified proof does not match", "The supplied proof and current goal simplify to different propositions.",
+           "the simplified propositions still differ"}
+
+        :resource_guard ->
+          {"Simplification stopped safely",
+           "The simplifier reached its explicit resource limit without claiming that the goal is false.",
+           "simplification stopped at its resource limit"}
+
+        _ ->
+          {"Simplification left a residual goal",
+           "The approved rules made no further progress, and the remaining proposition is not definitionally reflexive.",
+           "this goal was not fully simplified"}
+      end
+
+    Diagnostic.new(
+      code: "E112",
+      key: :simplification_failed,
+      severity: :error,
+      title: title,
+      body: simplification_body(message, problem, opts),
+      primary: primary_label(opts, label),
+      secondary: simplification_labels(problem, Keyword.get(opts, :span)),
       payload: problem
     )
   end
@@ -3077,6 +3112,30 @@ defmodule Cure.Diagnostic.Adapter do
       {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
       _ -> []
     end)
+  end
+
+  defp simplification_labels(problem, primary) do
+    [{problem.command, "simplify command"}, {problem.rule, "rule supplied here"}]
+    |> Enum.flat_map(fn
+      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
+      _ -> []
+    end)
+  end
+
+  defp simplification_body(message, problem, opts) do
+    goals =
+      if problem.before_surface && problem.after_surface do
+        "\n\nBefore: #{problem.before_surface}\nAfter: #{problem.after_surface}"
+      else
+        ""
+      end
+
+    if Keyword.get(opts, :trace) == :expanded and (problem.trace_ids || []) != [] do
+      ids = Enum.map_join(problem.trace_ids, ", ", &to_string/1)
+      Doc.paragraph(message <> goals <> "\n\nSimplification trace: " <> ids)
+    else
+      Doc.paragraph(message <> goals)
+    end
   end
 
   defp rewrite_suggestions(%RewriteProblem{kind: :ambiguous_occurrence, command: %Span{} = command} = problem) do

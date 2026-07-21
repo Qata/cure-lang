@@ -111,6 +111,15 @@ defmodule Cure.DiagnosticExerciserTest do
           direction: :forward,
           occurrences: []
         }}},
+      {"simplification failure", "E112",
+       {:simplification_failed,
+        %Cure.Diagnostic.SimplificationProblem{
+          kind: :residual_goal,
+          before_goal: :before,
+          after_goal: :after,
+          progressed_rules: [],
+          trace_ids: []
+        }}},
       {"defining equation unavailable", "E114",
        {:defining_equation_unavailable,
         %Cure.Diagnostic.DefiningEquationProblem{

@@ -38,10 +38,33 @@ defmodule Cure.Compiler.ProofChainTest do
     ast = parse!(@chain)
     printed = Printer.quoted_to_string(ast)
 
-    assert printed == String.trim_trailing(@chain)
+    assert printed ==
+             """
+             proof chain
+               first == second
+               because first_step
+
+               _ == third
+               because second_step
+             """
+             |> String.trim_trailing()
 
     assert SourceSpans.strip_diagnostic_meta(parse!(printed)) ==
              SourceSpans.strip_diagnostic_meta(ast)
+  end
+
+  test "compact and vertically expanded layouts parse to the same proof chain" do
+    compact = """
+    proof chain
+      first == second
+      because first_step
+
+      _ == third
+      because second_step
+    """
+
+    assert SourceSpans.strip_diagnostic_meta(parse!(compact)) ==
+             SourceSpans.strip_diagnostic_meta(parse!(@chain))
   end
 
   test "proof and chain remain ordinary identifiers outside the distinctive block head" do

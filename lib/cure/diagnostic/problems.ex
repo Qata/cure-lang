@@ -71,6 +71,23 @@ defmodule Cure.Diagnostic.ProofChainSyntaxProblem do
         }
 end
 
+defmodule Cure.Diagnostic.SimplificationProblem do
+  @moduledoc "Structured failure from proof-producing simplification."
+  @enforce_keys [:kind]
+  defstruct [
+    :kind,
+    :command,
+    :rule,
+    :before_goal,
+    :after_goal,
+    :before_surface,
+    :after_surface,
+    :progressed_rules,
+    :trace_ids,
+    :cause
+  ]
+end
+
 defmodule Cure.Diagnostic.ProofChainMismatchProblem do
   @moduledoc "Structured typing failure for an equational proof-chain step."
   @enforce_keys [:kind, :step_index]

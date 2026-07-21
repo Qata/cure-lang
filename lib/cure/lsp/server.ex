@@ -253,7 +253,9 @@ defmodule Cure.LSP.Server do
     docs = Map.get(state, :documents, %{})
     text = Map.get(docs, uri, "")
 
-    items = keyword_completions() ++ context_completions(text)
+    position = Map.get(params, "position", %{})
+    prefix = document_prefix(text, Map.get(position, "line", 0), Map.get(position, "character", 0))
+    items = keyword_completions() ++ context_completions(text, prefix)
     Transport.send_response(id, items)
     {state, []}
   end
@@ -440,7 +442,8 @@ defmodule Cure.LSP.Server do
 
   # -- Hover -------------------------------------------------------------------
 
-  defp compute_hover(text, line, char) do
+  @doc false
+  def compute_hover(text, line, char) do
     # Try AST-based hover first, fall back to line-matching
     case parse_to_ast(text) do
       {:ok, ast} ->
@@ -450,14 +453,42 @@ defmodule Cure.LSP.Server do
         word = extract_word_at(target_line, char)
         dotted_word = extract_dotted_word_at(target_line, char)
 
-        case Enum.find(equation_symbols(ast), &(&1.name == dotted_word)) ||
-               Enum.find(symbols, fn s -> s.name == word end) do
-          %{kind: :equation, proposition: proposition, line: fn_line} ->
-            hover_text = "```cure\n#{proposition}\n```\n\n*Certified from the definition at line #{fn_line}*"
+        selected =
+          if word == "simplify" do
+            %{kind: :simplify_command}
+          else
+            Enum.find(equation_symbols(ast), &(&1.name == dotted_word)) ||
+              Enum.find(proof_rule_symbols(ast), &(&1.name == word)) ||
+              Enum.find(symbols, fn s -> s.name == word end)
+          end
+
+        case selected do
+          %{kind: :simplify_command} ->
+            hover_text = """
+            ```cure
+            simplify
+            simplify using [rule, ...]
+            ```
+
+            *Builds a kernel-checked equality certificate using the audited beta/iota/zeta/certified-delta reductions, visible defining equations, and any explicit decreasing rules.*
+            """
+
+            %{"contents" => %{"kind" => "markdown", "value" => String.trim(hover_text)}}
+
+          %{kind: :equation, proposition: proposition, line: fn_line, owner: owner, constructor_path: path} ->
+            hover_text =
+              "```cure\n#{proposition}\n```\n\n*Certified defining equation for function `#{owner}`, constructor case `#{Enum.join(path, ".")}` — not a module. Defined from the clause at line #{fn_line}.*"
+
             %{"contents" => %{"kind" => "markdown", "value" => hover_text}}
 
           %{kind: :function, signature: sig, line: fn_line} ->
             hover_text = "```cure\n#{sig}\n```\n\n*Defined at line #{fn_line}*"
+            %{"contents" => %{"kind" => "markdown", "value" => hover_text}}
+
+          %{kind: :proof_rule, proposition: proposition, line: rule_line} ->
+            hover_text =
+              "```cure\n#{proposition}\n```\n\n*Local equality proof available as an explicit simplification rule. Declared at line #{rule_line}.*"
+
             %{"contents" => %{"kind" => "markdown", "value" => hover_text}}
 
           _ ->
@@ -735,7 +766,7 @@ defmodule Cure.LSP.Server do
 
   defp keyword_completions do
     keywords =
-      ~w(fn mod rec actor fsm sup app proto impl type let have proof because if then else elif match return throw try catch finally use local when requires where)
+      ~w(fn mod rec actor fsm sup app proto impl type let have proof because simplify if then else elif match return throw try catch finally use local when requires where)
 
     Enum.map(keywords, fn kw ->
       %{
@@ -746,7 +777,8 @@ defmodule Cure.LSP.Server do
     end)
   end
 
-  defp context_completions(text) do
+  @doc false
+  def context_completions(text, prefix) do
     ast_completions =
       case parse_to_ast(text) do
         {:ok, ast} ->
@@ -760,16 +792,34 @@ defmodule Cure.LSP.Server do
 
           equations =
             Enum.map(equation_symbols(ast), fn equation ->
-              %{"label" => equation.name, "kind" => 3, "detail" => equation.proposition}
+              %{
+                "label" => equation.name,
+                "kind" => 3,
+                "detail" => "Defining equation rule — #{equation.proposition}"
+              }
             end)
 
-          ordinary ++ equations
+          local_rules =
+            Enum.map(proof_rule_symbols(ast), fn rule ->
+              %{"label" => rule.name, "kind" => 6, "detail" => "Local equality rule — #{rule.proposition}"}
+            end)
+
+          if Regex.match?(~r/simplify\s+using\s+\[[^\]]*$/s, prefix),
+            do: local_rules ++ equations,
+            else: ordinary ++ equations
 
         _ ->
           []
       end
 
     ast_completions
+  end
+
+  defp document_prefix(text, line, character) do
+    lines = String.split(text, "\n", trim: false)
+    prior = lines |> Enum.take(line) |> Enum.join("\n")
+    current = lines |> Enum.at(line, "") |> String.slice(0, character)
+    if line == 0, do: current, else: prior <> "\n" <> current
   end
 
   @doc false
@@ -784,6 +834,48 @@ defmodule Cure.LSP.Server do
     |> Enum.sort_by(& &1.name)
   end
 
+  @doc false
+  def proof_rule_symbols(ast), do: collect_proof_rule_symbols(ast)
+
+  defp collect_proof_rule_symbols(list) when is_list(list), do: Enum.flat_map(list, &collect_proof_rule_symbols/1)
+
+  defp collect_proof_rule_symbols({:function_def, meta, body}) do
+    params =
+      meta
+      |> Keyword.get(:params, [])
+      |> Enum.flat_map(fn
+        {:param, param_meta, name} ->
+          case Keyword.get(param_meta, :type) do
+            {:function_call, type_meta, _args} = type ->
+              if Keyword.get(type_meta, :name) == "Equivalent" do
+                [
+                  %{
+                    name: name,
+                    kind: :proof_rule,
+                    proposition: Printer.quoted_to_string(type),
+                    line: Keyword.get(param_meta, :line, 1)
+                  }
+                ]
+              else
+                []
+              end
+
+            _ ->
+              []
+          end
+
+        _ ->
+          []
+      end)
+
+    params ++ collect_proof_rule_symbols(body)
+  end
+
+  defp collect_proof_rule_symbols({_tag, _meta, children}) when is_list(children),
+    do: Enum.flat_map(children, &collect_proof_rule_symbols/1)
+
+  defp collect_proof_rule_symbols(_other), do: []
+
   defp collect_equation_symbols(list, acc) when is_list(list),
     do: Enum.flat_map(list, &collect_equation_symbols(&1, acc))
 
@@ -793,7 +885,10 @@ defmodule Cure.LSP.Server do
     params =
       meta
       |> Keyword.get(:params, [])
-      |> Enum.map(fn {:param, _param_meta, param_name} -> param_name end)
+      |> Enum.flat_map(fn
+        {:param, _param_meta, param_name} -> [param_name]
+        _type_parameter -> []
+      end)
 
     info = Metadata.source_info(meta)
     collect_equation_paths(body, name, params, %{}, [], Keyword.get(meta, :line, 1), info && info.whole)
@@ -857,6 +952,8 @@ defmodule Cure.LSP.Server do
         name: full_name,
         structural_name: name <> "/" <> Enum.join(path, "/"),
         kind: :equation,
+        owner: name,
+        constructor_path: path,
         line: line,
         span: span,
         proposition: "#{full_name} : Equivalent(_, #{left}, #{right})"

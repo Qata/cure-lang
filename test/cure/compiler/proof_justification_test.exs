@@ -6,11 +6,10 @@ defmodule Cure.Compiler.ProofJustificationTest do
 
   @source """
   proof chain
-    x
-      == x
-      because
-        have fact: Equivalent(Int, x, x) = reflexive(x)
-        fact
+    x == x
+    because
+      have fact: Equivalent(Int, x, x) = reflexive(x)
+      fact
   """
 
   defp parse!(source) do
@@ -28,7 +27,7 @@ defmodule Cure.Compiler.ProofJustificationTest do
     assert whole && body
   end
 
-  test "formatter emits the canonical nested because layout and round-trips" do
+  test "formatter emits the canonical compact proposition layout and round-trips" do
     ast = parse!(@source)
     printed = Printer.quoted_to_string(ast)
     assert printed == String.trim_trailing(@source)
@@ -40,13 +39,12 @@ defmodule Cure.Compiler.ProofJustificationTest do
   test "directed rewrite commands parse, retain selectors, and print canonically" do
     source = """
     proof chain
-      x
-        == y
-        because
-          rewrite using forward_proof
-          rewrite backwards using reverse_proof at 2
-          rewrite using local_proof in hypothesis
-          final_proof
+      x == y
+      because
+        rewrite using forward_proof
+        rewrite backwards using reverse_proof at 2
+        rewrite using local_proof in hypothesis
+        final_proof
     """
 
     assert {:proof_chain, _, [_, {:proof_step, _, [_, _, {:proof_justification, _, statements}]}]} =

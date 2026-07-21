@@ -450,5 +450,70 @@ defmodule Cure.LSP.LspTest do
       assert Enum.map(equations, & &1.line) == [7, 4, 6]
       assert Enum.all?(equations, & &1.span)
     end
+
+    test "simplification rule completion offers defining equations with rule-specific detail" do
+      source = """
+      mod SimplifyLsp
+        type Bit = Off | On
+        fn flip(bit: Bit) -> Bit = match bit
+          Off -> On
+          On -> Off
+        fn proof(bit: Bit) -> Equivalent(Bit, flip(flip(bit)), bit) = proof chain
+          flip(flip(bit)) == bit
+          because simplify using []
+      end
+      """
+
+      prefix = String.replace(source, "[]", "[")
+      items = Server.context_completions(source, prefix)
+
+      assert Enum.map(items, & &1["label"]) == ["flip.Off", "flip.On"]
+      assert Enum.all?(items, &String.starts_with?(&1["detail"], "Defining equation rule —"))
+    end
+
+    test "defining-equation hover identifies a function case rather than a module" do
+      source = """
+      mod EquationHover
+        type Bit = Off | On
+        fn flip(bit: Bit) -> Bit = match bit
+          Off -> On
+          On -> Off
+        fn use() = flip.Off
+      end
+      """
+
+      hover = Server.compute_hover(source, 5, 20)
+      value = get_in(hover, ["contents", "value"])
+      assert value =~ "defining equation for function `flip`"
+      assert value =~ "constructor case `Off`"
+      assert value =~ "not a module"
+      assert value =~ "Equivalent"
+    end
+
+    test "simplification completion and hover include local equality proofs" do
+      source = """
+      mod LocalRuleHover
+        type Nat = Z | S(Nat)
+        fn adapt(x: Nat, y: Nat, equality: Equivalent(Nat, S(x), y)) -> Equivalent(Nat, S(S(x)), S(y)) = proof chain
+          S(S(x)) == S(y)
+          because simplify using [equality]
+      end
+      """
+
+      prefix = source |> String.split("equality]") |> hd()
+      items = Server.context_completions(source, prefix)
+      assert %{"label" => "equality", "detail" => "Local equality rule — " <> detail} = hd(items)
+      assert detail =~ "Equivalent(Nat, S(x), y)"
+
+      hover = Server.compute_hover(source, 4, 30)
+      value = get_in(hover, ["contents", "value"])
+      assert value =~ "Local equality proof"
+      assert value =~ "explicit simplification rule"
+
+      command_hover = Server.compute_hover(source, 4, 12)
+      command_value = get_in(command_hover, ["contents", "value"])
+      assert command_value =~ "simplify using [rule, ...]"
+      assert command_value =~ "kernel-checked equality certificate"
+    end
   end
 end

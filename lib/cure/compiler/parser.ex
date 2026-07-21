@@ -2789,6 +2789,9 @@ defmodule Cure.Compiler.Parser do
           "rewrite" ->
             parse_rewrite(state, token)
 
+          "simplify" ->
+            parse_simplify(state, token)
+
           # `have name [: Type] = value` is a checked local fact only at its
           # distinctive binding-shaped head. Elsewhere `have` remains an
           # ordinary identifier, just like the contextual `proof` vocabulary.
@@ -3134,6 +3137,22 @@ defmodule Cure.Compiler.Parser do
 
   # -- Equational proof chains ----------------------------------------------
 
+  defp parse_simplify(state, token) do
+    state = advance(state)
+
+    case peek(state) do
+      %Token{type: :identifier, value: "using"} ->
+        state = advance(state)
+        {rules, state} = parse_expr(state, 0)
+        meta = put_token_source_info([line: token.line, col: token.col], token)
+        {{:simplify_command, Keyword.put(meta, :using, true), [rules]}, state}
+
+      _ ->
+        meta = put_token_source_info([line: token.line, col: token.col], token)
+        {{:simplify_command, meta, []}, state}
+    end
+  end
+
   defp proof_chain_boundary?(state) do
     match?(%Token{type: :newline}, peek_at(state, 2))
   end
@@ -3170,6 +3189,10 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
 
     case peek(state) do
+      %Token{type: :eq} when first? ->
+        {step, state} = parse_proof_chain_step(state, :implicit)
+        parse_proof_chain_steps(state, [step | acc], false, proof_step_right_span(step))
+
       %Token{type: :indent} when first? ->
         state = advance(state) |> skip_newlines()
         {step, state} = parse_proof_chain_step(state, :implicit)

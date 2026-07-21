@@ -1,7 +1,7 @@
 defmodule Cure.Elab.ProofGoal do
   @moduledoc "Typed, compile-time-only state for compositional proof commands."
 
-  alias Cure.Core.{Context, Eval, Grade, Kernel, Quote}
+  alias Cure.Core.{Context, Env, Eval, Grade, Kernel, Quote}
   alias Cure.Diagnostic.{ProofChainMismatchProblem, ProofChainSyntaxProblem, RewriteProblem}
   alias Cure.Elab.{Elaborator, Rewrite, Subst}
   alias Cure.MetaAST.Metadata
@@ -102,7 +102,280 @@ defmodule Cure.Elab.ProofGoal do
     end
   end
 
+  defp command({:simplify_command, meta, rules}, goal) do
+    with {:ok, simplified} <- simplify_rules(rules, goal, meta),
+         {:ok, evidence, trace} <-
+           Cure.Elab.Simplifier.solve(simplified.expected, simplified.context, surface_span(meta)) do
+      evidence = Enum.reduce(Enum.reverse(simplified.builders), evidence, &apply_builder/2)
+      {:closed, evidence, simplified.trace ++ trace}
+    else
+      {:error, {:simplification_failed, problem}} ->
+        {:error, {:simplification_failed, enrich_simplification(problem, goal.names)}}
+
+      {:error, _} = error ->
+        error
+    end
+  end
+
   defp command(statement, goal), do: close_with_expression(statement, goal)
+
+  defp enrich_simplification(problem, names) do
+    %{
+      problem
+      | before_surface: Cure.Elab.ProofDisplay.format(problem.before_goal, names),
+        after_surface: Cure.Elab.ProofDisplay.format(problem.after_goal, names)
+    }
+  end
+
+  defp simplify_rules([], goal, _meta), do: {:ok, goal}
+  defp simplify_rules([{:list, _list_meta, rules}], goal, meta), do: simplify_rule_list(rules, goal, meta)
+
+  defp simplify_rules(_other, goal, meta),
+    do: simplification_error(:inadmissible_rule, meta, goal, :rules_must_be_a_list)
+
+  defp simplify_rule_list(rules, goal, meta) do
+    Enum.reduce_while(rules, {:ok, goal}, fn rule, {:ok, current} ->
+      case apply_simplification_rule(rule, current, meta) do
+        {:ok, next} -> {:cont, {:ok, next}}
+        {:error, _} = error -> {:halt, error}
+      end
+    end)
+  end
+
+  defp apply_simplification_rule(rule_ast, goal, meta) do
+    surface_builders = Enum.filter(goal.builders, &match?({:assignment, _, _}, &1))
+    proof_block = {:block, [], surface_builders ++ [rule_ast]}
+    original_names = Enum.drop(goal.names, length(surface_builders))
+    depth = Context.length(goal.context)
+
+    with {:ok, proof, proof_type} <-
+           Elaborator.elaborate_expr_typed(proof_block, original_names, goal.context, goal.env) do
+      case generated_rule(proof, goal.env) do
+        {:ok, theorem_type} ->
+          simplify_generated_fixed_point(proof, theorem_type, rule_ast, goal, meta, MapSet.new(), 0)
+
+        :ordinary ->
+          with {:ok, ty_value, a_value, b_value} <- Rewrite.eq_parts(proof_type, Context.signature(goal.context)),
+               ty = Kernel.normalize(goal.context, Quote.reify(ty_value, depth)),
+               a = Kernel.normalize(goal.context, Quote.reify(a_value, depth)),
+               b = Kernel.normalize(goal.context, Quote.reify(b_value, depth)),
+               true <- simplification_measure(a) > simplification_measure(b) do
+            simplify_rule_fixed_point(proof, ty, a, b, rule_ast, goal, meta, MapSet.new(), 0)
+          else
+            false -> simplification_error(:inadmissible_rule, meta, goal, :non_decreasing_orientation, rule_ast)
+            {:error, cause} -> simplification_error(:inadmissible_rule, meta, goal, cause, rule_ast)
+          end
+
+        {:error, cause} ->
+          simplification_error(:inadmissible_rule, meta, goal, cause, rule_ast)
+      end
+    else
+      {:error, cause} -> simplification_error(:inadmissible_rule, meta, goal, cause, rule_ast)
+    end
+  end
+
+  defp generated_rule({:global, theorem}, env) do
+    admit_generated_rule(env, theorem)
+  end
+
+  defp generated_rule(_proof, _env), do: :ordinary
+
+  @doc false
+  def admit_generated_rule(env, theorem) do
+    case Env.get_def(env, theorem) do
+      %{generated_equation: true, type: type} ->
+        if Env.certified?(env, theorem) and Kernel.check_def(env, theorem) == :ok,
+          do: {:ok, type},
+          else: {:error, :forged_generated_equation}
+
+      _ ->
+        :ordinary
+    end
+  end
+
+  defp simplify_generated_fixed_point(_proof, _type, _rule, goal, meta, _visited, 256),
+    do: simplification_error(:resource_guard, meta, goal, {:step_ceiling, 256})
+
+  defp simplify_generated_fixed_point(proof, theorem_type, rule, goal, meta, visited, steps) do
+    normalized = Kernel.normalize(goal.context, goal.expected)
+    fingerprint = :erlang.term_to_binary(normalized)
+
+    cond do
+      MapSet.member?(visited, fingerprint) ->
+        simplification_error(:resource_guard, meta, goal, :visited_state_cycle)
+
+      true ->
+        case instantiate_generated_rule(theorem_type, proof, normalized, goal) do
+          {:ok, instantiated_proof, ty, left, right} ->
+            case Rewrite.directed_plan(instantiated_proof, ty, left, right, normalized, :forward, 1) do
+              {:ok, build, rewritten, _occurrences} ->
+                next = %{
+                  goal
+                  | expected: rewritten,
+                    builders: goal.builders ++ [{:transport, build}],
+                    trace:
+                      goal.trace ++
+                        [%{id: "equation-#{steps + 1}", kind: :defining_equation, rule: surface_span(rule)}]
+                }
+
+                simplify_generated_fixed_point(
+                  proof,
+                  theorem_type,
+                  rule,
+                  next,
+                  meta,
+                  MapSet.put(visited, fingerprint),
+                  steps + 1
+                )
+
+              {:error, cause} ->
+                simplification_error(:inadmissible_rule, meta, goal, cause, rule)
+            end
+
+          :no_match ->
+            {:ok, goal}
+
+          {:error, cause} ->
+            simplification_error(:inadmissible_rule, meta, goal, cause, rule)
+        end
+    end
+  end
+
+  defp instantiate_generated_rule(theorem_type, proof, goal_term, goal) do
+    {telescope, proposition} = peel_pi(theorem_type, [])
+    count = length(telescope)
+
+    case proposition do
+      {:data, equality, [carrier], [left, right]} ->
+        if equality == Cure.Core.Inductive.builtin(Context.signature(goal.context), :eq) do
+          goal_term
+          |> core_subterms()
+          |> Enum.find_value(:no_match, fn candidate ->
+            case match_rule(left, candidate, count, %{}) do
+              {:ok, bindings} when map_size(bindings) == count ->
+                args = for position <- 0..(count - 1), count > 0, do: Map.fetch!(bindings, count - 1 - position)
+                specialized_carrier = Subst.instantiate(carrier, args)
+                specialized_left = Subst.instantiate(left, args)
+                specialized_right = Subst.instantiate(right, args)
+                specialized_proof = Enum.reduce(args, proof, fn argument, call -> {:app, call, argument} end)
+                {:ok, specialized_proof, specialized_carrier, specialized_left, specialized_right}
+
+              _ ->
+                false
+            end
+          end)
+        else
+          {:error, :generated_rule_not_equality}
+        end
+
+      _ ->
+        {:error, :generated_rule_not_equality}
+    end
+  end
+
+  defp peel_pi({:pi, _grade, domain, body}, acc), do: peel_pi(body, acc ++ [domain])
+  defp peel_pi(body, acc), do: {acc, body}
+
+  defp match_rule({:var, index}, candidate, count, bindings) when index < count do
+    case Map.fetch(bindings, index) do
+      {:ok, ^candidate} -> {:ok, bindings}
+      {:ok, _other} -> :no_match
+      :error -> {:ok, Map.put(bindings, index, candidate)}
+    end
+  end
+
+  defp match_rule(pattern, candidate, count, bindings)
+       when is_tuple(pattern) and is_tuple(candidate) and tuple_size(pattern) == tuple_size(candidate) do
+    pattern
+    |> Tuple.to_list()
+    |> Enum.zip(Tuple.to_list(candidate))
+    |> Enum.reduce_while({:ok, bindings}, fn {left, right}, {:ok, current} ->
+      case match_rule(left, right, count, current) do
+        {:ok, next} -> {:cont, {:ok, next}}
+        _ -> {:halt, :no_match}
+      end
+    end)
+  end
+
+  defp match_rule(pattern, candidate, count, bindings) when is_list(pattern) and is_list(candidate) do
+    if length(pattern) == length(candidate) do
+      Enum.zip(pattern, candidate)
+      |> Enum.reduce_while({:ok, bindings}, fn {left, right}, {:ok, current} ->
+        case match_rule(left, right, count, current) do
+          {:ok, next} -> {:cont, {:ok, next}}
+          _ -> {:halt, :no_match}
+        end
+      end)
+    else
+      :no_match
+    end
+  end
+
+  defp match_rule(same, same, _count, bindings), do: {:ok, bindings}
+  defp match_rule(_pattern, _candidate, _count, _bindings), do: :no_match
+
+  defp core_subterms(term) when is_tuple(term),
+    do: [term | term |> Tuple.to_list() |> Enum.flat_map(&core_subterms/1)]
+
+  defp core_subterms(term) when is_list(term), do: Enum.flat_map(term, &core_subterms/1)
+  defp core_subterms(_leaf), do: []
+
+  defp simplify_rule_fixed_point(_proof, _ty, _a, _b, _rule, goal, meta, _visited, 256),
+    do: simplification_error(:resource_guard, meta, goal, {:step_ceiling, 256})
+
+  defp simplify_rule_fixed_point(proof, ty, a, b, rule, goal, meta, visited, steps) do
+    fingerprint = :erlang.term_to_binary(goal.expected)
+
+    if MapSet.member?(visited, fingerprint) do
+      simplification_error(:resource_guard, meta, goal, :visited_state_cycle)
+    else
+      case Rewrite.directed_plan(proof, ty, a, b, Kernel.normalize(goal.context, goal.expected), :forward, 1) do
+        {:ok, build, rewritten, _occurrences} ->
+          next = %{
+            goal
+            | expected: rewritten,
+              builders: goal.builders ++ [{:transport, build}],
+              trace: goal.trace ++ [%{id: "explicit-#{steps + 1}", kind: :explicit_rule, rule: surface_span(rule)}]
+          }
+
+          simplify_rule_fixed_point(proof, ty, a, b, rule, next, meta, MapSet.put(visited, fingerprint), steps + 1)
+
+        {:error, {:no_occurrence, _}} ->
+          {:ok, goal}
+
+        {:error, {:reverse_only, _}} ->
+          {:ok, goal}
+
+        {:error, cause} ->
+          simplification_error(:inadmissible_rule, meta, goal, cause, rule)
+      end
+    end
+  end
+
+  defp simplification_measure(term), do: core_size(term)
+  defp core_size(term) when is_tuple(term), do: 1 + (term |> Tuple.to_list() |> Enum.map(&core_size/1) |> Enum.sum())
+  defp core_size(term) when is_list(term), do: Enum.map(term, &core_size/1) |> Enum.sum()
+  defp core_size(_leaf), do: 0
+
+  defp simplification_error(kind, meta, goal, cause, rule_ast \\ nil) do
+    {:error,
+     {:simplification_failed,
+      %Cure.Diagnostic.SimplificationProblem{
+        kind: kind,
+        command: surface_span(meta),
+        rule: surface_span(rule_ast),
+        before_goal: goal.expected,
+        after_goal: goal.expected,
+        before_surface: Cure.Elab.ProofDisplay.format(goal.expected, goal.names),
+        after_surface: Cure.Elab.ProofDisplay.format(goal.expected, goal.names),
+        progressed_rules: [],
+        trace_ids: Enum.map(goal.trace, &simplification_trace_id/1),
+        cause: cause
+      }}}
+  end
+
+  defp simplification_trace_id(%{id: id}), do: id
+  defp simplification_trace_id(other), do: other
 
   defp close_with_expression(statement, goal) do
     {surface_builders, transports} = Enum.split_with(goal.builders, &match?({:assignment, _, _}, &1))
@@ -248,5 +521,6 @@ defmodule Cure.Elab.ProofGoal do
 
   defp trace_span({_kind, span}), do: span
   defp trace_span({_kind, _name, span}), do: span
+  defp trace_span(%{rule: span}), do: span
   defp trace_span(_other), do: nil
 end

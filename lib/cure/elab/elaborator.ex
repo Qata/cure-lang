@@ -712,6 +712,9 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:proof_chain, _meta, _children} = chain, names, ctx, env),
     do: Cure.Elab.ProofChain.elaborate(chain, names, ctx, env)
 
+  def elaborate_expr_typed({:simplify_command, meta, _rules}, _names, _ctx, _env),
+    do: simplify_outside_justification(meta)
+
   # `assert_type expr : T` — a compile-time ascription. Lower `T`, then elaborate
   # `expr` in CHECKING mode against it (so the assertion can also steer inference).
   # The wrapper carries no runtime content: the result IS the checked term at type
@@ -1985,6 +1988,9 @@ defmodule Cure.Elab.Elaborator do
       {:ok, term}
     end
   end
+
+  def elaborate_expr_checked({:simplify_command, meta, _rules}, _expected_core, _names, _ctx, _env),
+    do: simplify_outside_justification(meta)
 
   # A `match` in nested expression position, in checking mode: the expected type
   # IS the result type its motive needs, so hand it straight to `elaborate_match`
@@ -9577,6 +9583,20 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_type(ast, scope, env), do: Cure.Elab.Declarations.lower_type(ast, scope, env)
 
   # -- helpers ----------------------------------------------------------------
+
+  defp simplify_outside_justification(meta) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    {:error,
+     {:simplification_failed,
+      %Cure.Diagnostic.SimplificationProblem{
+        kind: :inadmissible_rule,
+        command: info && info.whole,
+        before_goal: nil,
+        after_goal: nil,
+        cause: :outside_justification
+      }}}
+  end
 
   defp map_elaborate(asts, scope, env, fun) do
     Enum.reduce_while(asts, {:ok, []}, fn ast, {:ok, acc} ->

@@ -133,23 +133,25 @@ expressions:
 
 ```cure
 proof chain
-  multiply_int(add_int(a, b), value)
-    == add_int(multiply_int(a, value), multiply_int(b, value))
-    because multiply_int_distributes_over_coefficient_add(a, b, value)
+  multiply_int(add_int(a, b), value) == add_int(multiply_int(a, value), multiply_int(b, value))
+  because multiply_int_distributes_over_coefficient_add(a, b, value)
 
   _ == expected
-    because induction_hypothesis
+  because induction_hypothesis
 ```
 
-The first line establishes the initial expression. Every following step has:
+Every step is a complete proposition followed by its justification and has:
 
-- a relation, initially only `==`;
-- a right-hand expression; and
+- a left-hand expression (or `_` for the previous result);
+- a relation, initially only `==`, and a right-hand expression; and
 - a `because` justification.
 
 `_` in the left position means the result of the preceding step. It is not a
-new metavariable or proof-search hole. The formatter emits `_` for continuation
-steps even if a future parser accepts repetition of the previous expression.
+new metavariable or proof-search hole. The formatter emits the compact layout
+above and `_` for continuation steps. The parser also accepts the older
+vertically expanded layout, with the left expression, relation, and `because`
+progressively indented, so existing source and deliberate personal formatting
+remain valid.
 
 Version 1 supports only propositional equality represented by Cure's canonical
 `Equivalent` family. Arbitrary transitive relations, inequality chains, and
@@ -169,17 +171,18 @@ Core constructor.
 Each `because` accepts either a proof expression:
 
 ```cure
-_ == result because known_theorem(arguments)
+_ == result
+because known_theorem(arguments)
 ```
 
 or an indented justification block:
 
 ```cure
 _ == result
-  because
-    rewrite using head_equation
-    rewrite backwards using tail_equation
-    simplify
+because
+  rewrite using head_equation
+  rewrite backwards using tail_equation
+  simplify
 ```
 
 A justification block begins with the equality for that one step as its goal.
@@ -635,6 +638,13 @@ The LSP must support:
 
 - completion for the contextual vocabulary;
 - generated-equation member completion;
+- context-aware simplification-rule completion after `simplify using [`, with
+  local equality facts, visible generated equations, and the audited standard
+  rules filtered and ranked as rules rather than generic values;
+- hover for every simplification command and rule candidate; generated-equation
+  hover must explicitly say that `map.Cons`, for example, is the certified
+  `Cons` defining equation of function `map` (not a module) and show its full
+  proposition and defining-clause provenance;
 - induction-case generation;
 - signature help for named arguments;
 - related information linking a generated equation to its definition; and
@@ -649,14 +659,13 @@ The formatter emits multiline chains in this shape:
 
 ```cure
 proof chain
-  first
-    == second
-    because proof_one
+  first == second
+  because proof_one
 
   _ == third
-    because
-      rewrite using proof_two
-      simplify
+  because
+    rewrite using proof_two
+    simplify
 ```
 
 It keeps short inline justifications inline and indents block justifications one

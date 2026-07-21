@@ -209,6 +209,53 @@ defmodule Cure.Diagnostic.ProofChainDiagnosticTest do
     end
   end
 
+  test "E112 preserves residual simplification data through plain, JSON, and LSP" do
+    source = """
+    mod ResidualSimplification
+      type Nat = Z | S(Nat)
+      fn bad(x: Nat) -> Equivalent(Nat, x, S(x)) = proof chain
+        x == S(x)
+        because simplify
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source, file: "residual_simplify.cure", emit_events: false)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "residual_simplify.cure", source)
+    assert diagnostic.code == "E112"
+    assert diagnostic.key == :simplification_failed
+    assert diagnostic.payload.kind == :residual_goal
+    assert diagnostic.payload.before_goal
+    assert diagnostic.payload.after_goal
+    assert diagnostic.payload.before_surface =~ "Equivalent"
+    assert diagnostic.payload.after_surface =~ "Equivalent"
+    plain = Renderer.plain(diagnostic, registry)
+    assert plain =~ "RESIDUAL GOAL"
+    assert plain =~ "Before: Equivalent"
+    assert plain =~ "After:"
+    assert (diagnostic |> Renderer.json() |> Jason.decode!())["code"] == "E112"
+    assert Renderer.lsp(diagnostic, registry, :utf16)["code"] == "E112"
+  end
+
+  test "E112 keeps the default compact and renders structured trace IDs only on request" do
+    problem = %Cure.Diagnostic.SimplificationProblem{
+      kind: :residual_goal,
+      before_goal: :before,
+      after_goal: :after,
+      trace_ids: ["equation-1", "explicit-2"]
+    }
+
+    compact = Cure.Diagnostic.Adapter.from_error({:simplification_failed, problem})
+    expanded = Cure.Diagnostic.Adapter.from_error({:simplification_failed, problem}, trace: :expanded)
+    compact_text = compact.body |> Cure.Diagnostic.Doc.to_map() |> Jason.encode!()
+    expanded_text = expanded.body |> Cure.Diagnostic.Doc.to_map() |> Jason.encode!()
+
+    refute compact_text =~ "equation-1"
+    assert expanded_text =~ "equation-1"
+    assert expanded_text =~ "explicit-2"
+  end
+
   test "E114 relates an unavailable equation member to its defining function" do
     source = """
     mod MissingEquation
