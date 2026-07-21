@@ -2169,10 +2169,28 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:invalid_macro_family, reason, line, column}, opts)
-      when is_integer(line) and is_integer(column) do
-    diagnostic = macro_validation_failure(:invalid_macro_family, reason, opts)
-    %{diagnostic | payload: Map.merge(diagnostic.payload, %{line: line, column: column})}
+  def from_error({:invalid_macro_family, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      details
+      |> Map.get(:related_spans, [])
+      |> Enum.map(&pickup_label(&1, :secondary, macro_family_related_label(details.reason)))
+      |> Enum.reject(&is_nil/1)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :invalid_macro_family,
+      severity: :error,
+      title: macro_family_title(details.reason),
+      body: Doc.paragraph(macro_family_body(details.reason)),
+      primary: pickup_label(span, :primary, macro_family_primary_label(details.reason)),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{message: macro_family_hint(details.reason), applicability: :manual}
+      ],
+      payload: details
+    )
   end
 
   def from_error({:macro_expansion_cycle, chain}, opts) when is_list(chain) do
@@ -3521,6 +3539,45 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp macro_validation_message(kind, _details),
     do: "Macro validation failed for #{name_to_string(kind)}."
+
+  defp macro_family_title({:unknown_syntax_family, _name}), do: "Included syntax family is unknown"
+  defp macro_family_title({:syntax_family_cycle, _names}), do: "Syntax families form a cycle"
+  defp macro_family_title({:duplicate_syntax_family_field, _pairs}), do: "Syntax-family field is duplicated"
+  defp macro_family_title(_reason), do: "Syntax-family declaration is invalid"
+
+  defp macro_family_body({:unknown_syntax_family, name}),
+    do: "`#{name}` is included here, but this macro does not declare a syntax family with that name."
+
+  defp macro_family_body({:syntax_family_cycle, names}),
+    do: "These syntax families include one another in a cycle: #{Enum.map_join(names, " → ", &to_string/1)}."
+
+  defp macro_family_body({:duplicate_syntax_family_field, pairs}) do
+    fields = Enum.map_join(pairs, ", ", fn {family, field} -> "`#{family}.#{field}`" end)
+    "The same field is declared more than once: #{fields}."
+  end
+
+  defp macro_family_body(reason),
+    do: "The syntax-family declarations are inconsistent: #{name_to_string(reason)}."
+
+  defp macro_family_primary_label({:unknown_syntax_family, _name}), do: "this included family is not declared"
+  defp macro_family_primary_label({:syntax_family_cycle, _names}), do: "the inclusion cycle starts here"
+  defp macro_family_primary_label({:duplicate_syntax_family_field, _pairs}), do: "this field is declared again"
+  defp macro_family_primary_label(_reason), do: "this macro family is inconsistent"
+
+  defp macro_family_related_label({:syntax_family_cycle, _names}), do: "this family also participates in the cycle"
+  defp macro_family_related_label({:duplicate_syntax_family_field, _pairs}), do: "the field was already declared here"
+  defp macro_family_related_label(_reason), do: "related family declaration"
+
+  defp macro_family_hint({:unknown_syntax_family, name}),
+    do: "Declare `syntax family #{name}` or change `includes` to a declared family"
+
+  defp macro_family_hint({:syntax_family_cycle, _names}),
+    do: "Remove one `includes` edge so the family graph is acyclic"
+
+  defp macro_family_hint({:duplicate_syntax_family_field, _pairs}),
+    do: "Keep one declaration of the field"
+
+  defp macro_family_hint(_reason), do: "Make the syntax-family declarations consistent"
 
   defp macro_failure_points(points) do
     Enum.map_join(points, ", ", fn

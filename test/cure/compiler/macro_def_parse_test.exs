@@ -277,7 +277,7 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
 
     assert Enum.any?(errors, fn
-             {:invalid_macro_family, {:unknown_syntax_family, "Missing"}, _, _} -> true
+             {:invalid_macro_family, %{reason: {:unknown_syntax_family, "Missing"}}} -> true
              _ -> false
            end)
   end
@@ -300,7 +300,7 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
 
     assert Enum.any?(errors, fn
-             {:invalid_macro_family, {:syntax_family_cycle, ["First", "Second", "First"]}, _, _} -> true
+             {:invalid_macro_family, %{reason: {:syntax_family_cycle, ["First", "Second", "First"]}}} -> true
              _ -> false
            end)
   end
@@ -320,9 +320,88 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert {:error, errors} = Parser.parse(tokens, emit_events: false, prelude_macros: false)
 
     assert Enum.any?(errors, fn
-             {:invalid_macro_family, {:duplicate_syntax_family_field, [{"Definition", "state"}]}, _, _} -> true
+             {:invalid_macro_family, %{reason: {:duplicate_syntax_family_field, [{"Definition", "state"}]}}} -> true
              _ -> false
            end)
+  end
+
+  test "family validation failures retain exact authored regions and explanations" do
+    cases = [
+      {
+        "unknown_family.cure",
+        "macro Bad\n  syntax family Service\n    includes Missing\n    state Type\n  accepts Service\n  expands with build\n",
+        """
+        -- INCLUDED SYNTAX FAMILY IS UNKNOWN [E092] ---------------- unknown_family.cure
+
+        `Missing` is included here, but this macro does not declare a syntax family with
+        that name.
+
+        at unknown_family.cure:3:14
+        3 |     includes Missing
+          |              ^^^^^^^ this included family is not declared
+
+        Hint: Declare `syntax family Missing` or change `includes` to a declared family
+        """,
+        %{"start" => %{"line" => 2, "character" => 13}, "end" => %{"line" => 2, "character" => 20}},
+        []
+      },
+      {
+        "family_cycle.cure",
+        "macro Bad\n  syntax family First\n    includes Second\n  syntax family Second\n    includes First\n  accepts First\n  expands with build\n",
+        """
+        -- SYNTAX FAMILIES FORM A CYCLE [E092] ----------------------- family_cycle.cure
+
+        These syntax families include one another in a cycle: First → Second → First.
+
+        at family_cycle.cure:2:3
+        2 |   syntax family First
+          >   ^^^^^^^^^^^^^^^^^^^
+        3 |     includes Second
+          > ^^^^^^^^^^^^^^^^^^^ the inclusion cycle starts here
+        4 |   syntax family Second
+          >   --------------------
+        5 |     includes First
+          > ------------------ this family also participates in the cycle
+
+        Hint: Remove one `includes` edge so the family graph is acyclic
+        """,
+        %{"start" => %{"line" => 1, "character" => 2}, "end" => %{"line" => 2, "character" => 19}},
+        [%{"start" => %{"line" => 3, "character" => 2}, "end" => %{"line" => 4, "character" => 18}}]
+      },
+      {
+        "duplicate_family.cure",
+        "macro Actor\n  syntax family Definition\n    state Type\n    state Type\n",
+        """
+        -- SYNTAX-FAMILY FIELD IS DUPLICATED [E092] -------------- duplicate_family.cure
+
+        The same field is declared more than once: `Definition.state`.
+
+        at duplicate_family.cure:4:5
+        3 |     state Type
+          |     ---------- the field was already declared here
+        4 |     state Type
+          |     ^^^^^^^^^^ this field is declared again
+
+        Hint: Keep one declaration of the field
+        """,
+        %{"start" => %{"line" => 3, "character" => 4}, "end" => %{"line" => 3, "character" => 14}},
+        [%{"start" => %{"line" => 2, "character" => 4}, "end" => %{"line" => 2, "character" => 14}}]
+      }
+    ]
+
+    for {file, source, expected, expected_range, related_ranges} <- cases do
+      assert {:ok, tokens} = Lexer.tokenize(source, file: file, emit_events: false)
+
+      assert {:error, [{:invalid_macro_family, _details} = error]} =
+               Parser.parse(tokens, emit_events: false, prelude_macros: false)
+
+      {diagnostic, registry} = Errors.to_diagnostic(error, file, source)
+      assert Renderer.plain(diagnostic, registry, width: 80) == String.trim_trailing(expected)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+      assert lsp["range"] == expected_range
+      assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == related_ranges
+    end
   end
 
   test "an open category and qualified category extension are retained" do

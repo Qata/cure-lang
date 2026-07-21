@@ -526,13 +526,14 @@ defmodule Cure.Diagnostic.HostTest do
   test "renders invalid macro families as authored macro diagnostics" do
     rendered =
       Host.render(
-        {:invalid_macro_family, {:syntax_family_cycle, ["First", "Second", "First"]}, 4, 1},
+        {:invalid_macro_family,
+         %{reason: {:syntax_family_cycle, ["First", "Second", "First"]}, related_spans: [], line: 4, column: 1}},
         "macro.cure"
       )
 
     assert rendered =~ "[E092]"
-    assert rendered =~ "MACRO VALIDATION FAILED"
-    assert rendered =~ "syntax-family declarations"
+    assert rendered =~ "SYNTAX FAMILIES FORM A CYCLE"
+    assert rendered =~ "First → Second → First"
     refute rendered =~ ":invalid_macro_family"
   end
 

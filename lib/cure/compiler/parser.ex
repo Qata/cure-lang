@@ -8129,12 +8129,89 @@ defmodule Cure.Compiler.Parser do
           state
 
         {:error, reason} ->
-          add_error(state, {:invalid_macro_family, reason, token.line, token.col})
+          details = macro_family_error_details(reason, rules, state, token)
+          add_error(state, {:invalid_macro_family, details})
       end
 
     meta = [name: name, leading_segments: leading_segments, line: token.line, col: token.col]
     meta = put_named_declaration_source_info(meta, token, name_token, state)
     {{:macro_def, meta, rules}, state}
+  end
+
+  defp macro_family_error_details(reason, rules, state, token) do
+    families = Enum.filter(rules, &(&1[:kind] == :syntax_family))
+
+    {span, related_spans} =
+      case reason do
+        {:unknown_syntax_family, name} ->
+          include =
+            Enum.find_value(families, fn family ->
+              Enum.find(family.includes, fn
+                {include_name, _line, _col} -> include_name == name
+                _ -> false
+              end)
+            end)
+
+          case include do
+            {^name, line, _col} -> {token_span_on_line(state, line, name) || token.span, []}
+            _ -> {token.span, []}
+          end
+
+        {:syntax_family_cycle, names} ->
+          spans =
+            names
+            |> Enum.uniq()
+            |> Enum.flat_map(fn name ->
+              case Enum.find(families, &(&1.name == name)) do
+                %{source_span: %Cure.Diagnostic.Span{} = span} -> [span]
+                _ -> []
+              end
+            end)
+
+          {List.first(spans) || token.span, Enum.drop(spans, 1)}
+
+        {:duplicate_syntax_family_field, pairs} ->
+          spans =
+            Enum.flat_map(pairs, fn {family_name, field_name} ->
+              case Enum.find(families, &(&1.name == family_name)) do
+                %{fields: fields} ->
+                  fields
+                  |> Enum.filter(&(&1.name == field_name))
+                  |> Enum.flat_map(fn
+                    %{source_span: %Cure.Diagnostic.Span{} = span} -> [span]
+                    _ -> []
+                  end)
+
+                _ ->
+                  []
+              end
+            end)
+
+          {List.last(spans) || token.span, spans |> Enum.drop(-1)}
+
+        _ ->
+          {token.span, []}
+      end
+
+    %{
+      reason: reason,
+      span: span,
+      related_spans: related_spans,
+      line: (span && span.start_line) || token.line,
+      column: (span && span.start_column) || token.col
+    }
+  end
+
+  defp token_span_on_line(state, line, value) do
+    tokens = if is_tuple(state.tokens), do: Tuple.to_list(state.tokens), else: state.tokens
+
+    Enum.find_value(tokens, fn
+      %Token{line: ^line, value: token_value, span: %Cure.Diagnostic.Span{} = span} ->
+        if to_string(token_value) == to_string(value), do: span
+
+      _ ->
+        nil
+    end)
   end
 
   defp put_named_declaration_source_info(meta, %Token{} = first, %Token{} = name_token, state) do
