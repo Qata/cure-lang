@@ -226,7 +226,7 @@ defmodule Cure.Compiler.MacroValidate do
   end
 
   defp check_example_pin(keyword, actual, {:expansion, expected}, _env) do
-    if normalize(actual) == normalize(expected) do
+    if normalize_for_comparison(actual) == normalize_for_comparison(expected) do
       :ok
     else
       {:mismatch, %{keyword: keyword, expected: expected, actual: actual}}
@@ -273,7 +273,7 @@ defmodule Cure.Compiler.MacroValidate do
 
           case MacroExpand.expand(actual, env) do
             {:ok, expanded} ->
-              if normalize(expanded) == normalize(expected) do
+              if normalize_for_comparison(expanded) == normalize_for_comparison(expected) do
                 :ok
               else
                 {:mismatch, %{keyword: rule.keyword, expected: expected, actual: expanded}}
@@ -311,6 +311,8 @@ defmodule Cure.Compiler.MacroValidate do
   # `<fresh>`-as-binder example spuriously mismatch; the only content that
   # participates in α-equivalence for a variable reference is its (degensym'd)
   # name.
+  defp normalize_for_comparison(ast), do: ast |> Metadata.semantic_key() |> normalize()
+
   defp normalize({:variable, _meta, name}) when is_binary(name) do
     {:variable, [], degensym(name)}
   end
@@ -326,7 +328,17 @@ defmodule Cure.Compiler.MacroValidate do
   # so its source position never gets stripped and check_examples rejects almost
   # every real macro example.
   defp normalize({t, meta, value}) when is_list(meta) do
-    {t, strip_pos(meta), value}
+    {t, strip_pos(meta), normalize(value)}
+  end
+
+  defp normalize(values) when is_list(values), do: Enum.map(values, &normalize/1)
+
+  defp normalize(values) when is_map(values) and not is_struct(values) do
+    Map.new(values, fn {key, value} -> {normalize(key), normalize(value)} end)
+  end
+
+  defp normalize(value) when is_tuple(value) do
+    value |> Tuple.to_list() |> Enum.map(&normalize/1) |> List.to_tuple()
   end
 
   defp normalize(other), do: other
@@ -344,6 +356,10 @@ defmodule Cure.Compiler.MacroValidate do
 
   defp normalize_meta_value(v) when is_tuple(v), do: normalize(v)
   defp normalize_meta_value(v) when is_list(v), do: Enum.map(v, &normalize_meta_value/1)
+
+  defp normalize_meta_value(v) when is_map(v) and not is_struct(v),
+    do: Map.new(v, fn {k, value} -> {k, normalize(value)} end)
+
   defp normalize_meta_value(v), do: v
 
   defp degensym(name) do
