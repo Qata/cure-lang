@@ -126,7 +126,7 @@ defmodule Cure.Watch do
           info("  #{p} -> #{mod}")
 
         {:error, reason} ->
-          error("  " <> Cure.Diagnostic.Host.render(reason, p))
+          emit_error(reason, p, read_source(p))
       end
     end)
   end
@@ -150,11 +150,11 @@ defmodule Cure.Watch do
             info("  #{p}: OK")
           else
             {:error, reason} ->
-              error("  " <> Cure.Diagnostic.Host.render(reason, p, src))
+              emit_error(reason, p, src)
           end
 
         {:error, reason} ->
-          error("  " <> Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_read(p, reason)))
+          emit_diagnostic(Cure.Diagnostic.Operational.file_read(p, reason))
       end
     end)
   end
@@ -166,7 +166,7 @@ defmodule Cure.Watch do
 
   def run_action(other, _path) do
     diagnostic = Cure.Diagnostic.Operational.unknown_watch_action(other)
-    error(Cure.Diagnostic.Host.render_diagnostic(diagnostic))
+    emit_diagnostic(diagnostic)
   end
 
   # -- Helpers -----------------------------------------------------------------
@@ -181,16 +181,19 @@ defmodule Cure.Watch do
 
   defp info(msg), do: IO.puts(msg)
 
-  defp error(msg) do
-    rendered = String.trim_leading(msg)
+  defp emit_error(reason, file, source) do
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, file, source)
+    emit_diagnostic(diagnostic, registry)
+  end
 
-    if String.starts_with?(rendered, "--") or String.contains?(rendered, "\n--") do
-      IO.puts(:stderr, msg)
-    else
-      IO.puts(
-        :stderr,
-        Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("watch", msg))
-      )
+  defp read_source(path) do
+    case File.read(path) do
+      {:ok, source} -> source
+      {:error, _reason} -> ""
     end
+  end
+
+  defp emit_diagnostic(diagnostic, registry \\ nil) do
+    Cure.Diagnostic.Host.emit_diagnostic(diagnostic, output_device: :stderr, registry: registry)
   end
 end
