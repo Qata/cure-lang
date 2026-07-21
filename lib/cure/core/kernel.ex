@@ -334,14 +334,14 @@ defmodule Cure.Core.Kernel do
   def check_with_branch_details(ctx, term, expected) do
     key = {__MODULE__, :branch_details}
     previous = Process.get(key)
-    Process.put(key, :active)
+    Process.put(key, {:active, []})
 
     try do
       result = check(ctx, term, expected)
 
       case {result, Process.get(key)} do
-        {{:error, :branch_type}, details} when is_map(details) ->
-          {:error, {:branch_type, details}}
+        {{:error, :branch_type}, {:active, details}} when is_list(details) ->
+          {:error, {:branch_type, %{branches: Enum.reverse(details)}}}
 
         _ ->
           result
@@ -1144,80 +1144,102 @@ defmodule Cure.Core.Kernel do
          scrut_params,
          scrut_value
        ) do
-    Enum.reduce_while(branches, :ok, fn {cname, arity, body}, :ok ->
-      case Inductive.get_ctor(sig, cname) do
-        nil ->
-          {:halt, {:error, {:unknown_ctor, cname}}}
+    result =
+      Enum.reduce_while(branches, :ok, fn {cname, arity, body}, status ->
+        case Inductive.get_ctor(sig, cname) do
+          nil ->
+            {:halt, {:error, {:unknown_ctor, cname}}}
 
-        ctor ->
-          cond do
-            Inductive.ctor_family(sig, cname) != dname ->
-              {:halt, {:error, {:foreign_ctor, cname}}}
+          ctor ->
+            cond do
+              Inductive.ctor_family(sig, cname) != dname ->
+                {:halt, {:error, {:foreign_ctor, cname}}}
 
-            length(ctor.args) != arity ->
-              {:halt, {:error, :branch_arity}}
+              length(ctor.args) != arity ->
+                {:halt, {:error, :branch_arity}}
 
-            true ->
-              %{args: tele, result_indices: result_indices} = ctor
+              true ->
+                %{args: tele, result_indices: result_indices} = ctor
 
-              case unify_indices(ctx, result_indices, scrut_indices, arity, scrut_params) do
-                :impossible ->
-                  # unreachable branch: body NOT checked
-                  {:cont, :ok}
+                case unify_indices(ctx, result_indices, scrut_indices, arity, scrut_params) do
+                  :impossible ->
+                    # unreachable branch: body NOT checked
+                    {:cont, status}
 
-                verdict ->
-                  subst =
-                    case verdict do
-                      {:solved, s} -> s
-                      :trivial -> %{}
-                    end
-
-                  subst = merge_known_branch_args(subst, scrut_value, cname, arity, Context.length(ctx))
-
-                  {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele, scrut_params)
-                  ctx_branch = specialize_branch_context(ctx_branch, subst)
-                  # Result indices are written over the ctor frame `params(outer) ++
-                  # args(inner)` (see check_uniform_params), so the eval env is
-                  # reverse(arg_vals) ++ reverse(scrut_params). Omitting the params
-                  # made a result index that references a family PARAMETER (e.g.
-                  # `MkBar : Bar n n`) resolve to a stray out-of-range neutral.
-                  s_values =
-                    Enum.map(
-                      result_indices,
-                      &Eval.eval(&1, Enum.reverse(arg_vals) ++ Enum.reverse(scrut_params))
-                    )
-
-                  ctor_value = {:vctor, cname, arg_vals}
-
-                  expected =
-                    motive_value
-                    |> apply_motive(s_values ++ [ctor_value])
-                    |> specialize_branch_value(ctx_branch, subst)
-
-                  case check(ctx_branch, body, expected) do
-                    :ok ->
-                      {:cont, :ok}
-
-                    {:error, _} = error ->
-                      if Process.get({__MODULE__, :branch_details}) == :active do
-                        actual =
-                          case infer(ctx_branch, body) do
-                            {:ok, value} -> value
-                            _ -> nil
-                          end
-
-                        Process.put(
-                          {__MODULE__, :branch_details},
-                          %{constructor: cname, actual: actual, expected: expected, reason: error}
-                        )
+                  verdict ->
+                    subst =
+                      case verdict do
+                        {:solved, s} -> s
+                        :trivial -> %{}
                       end
 
-                      {:halt, {:error, :branch_type}}
-                  end
-              end
-          end
+                    subst = merge_known_branch_args(subst, scrut_value, cname, arity, Context.length(ctx))
+
+                    {ctx_branch, arg_vals} = extend_with_telescope(ctx, tele, scrut_params)
+                    ctx_branch = specialize_branch_context(ctx_branch, subst)
+                    # Result indices are written over the ctor frame `params(outer) ++
+                    # args(inner)` (see check_uniform_params), so the eval env is
+                    # reverse(arg_vals) ++ reverse(scrut_params). Omitting the params
+                    # made a result index that references a family PARAMETER (e.g.
+                    # `MkBar : Bar n n`) resolve to a stray out-of-range neutral.
+                    s_values =
+                      Enum.map(
+                        result_indices,
+                        &Eval.eval(&1, Enum.reverse(arg_vals) ++ Enum.reverse(scrut_params))
+                      )
+
+                    ctor_value = {:vctor, cname, arg_vals}
+
+                    expected =
+                      motive_value
+                      |> apply_motive(s_values ++ [ctor_value])
+                      |> specialize_branch_value(ctx_branch, subst)
+
+                    case check(ctx_branch, body, expected) do
+                      :ok ->
+                        record_branch_detail(cname, body, ctx_branch, expected, :ok)
+                        {:cont, status}
+
+                      {:error, _} = error ->
+                        if branch_detail_active?() do
+                          record_branch_detail(cname, body, ctx_branch, expected, {:error, error})
+                          {:cont, :branch_type_seen}
+                        else
+                          {:halt, {:error, :branch_type}}
+                        end
+                    end
+                end
+            end
+        end
+      end)
+
+    case result do
+      :branch_type_seen -> {:error, :branch_type}
+      other -> other
+    end
+  end
+
+  defp branch_detail_active? do
+    match?({:active, _}, Process.get({__MODULE__, :branch_details}))
+  end
+
+  defp record_branch_detail(cname, body, ctx, expected, status) do
+    actual =
+      case infer(ctx, body) do
+        {:ok, value} -> value
+        _ -> nil
       end
-    end)
+
+    case Process.get({__MODULE__, :branch_details}) do
+      {:active, details} ->
+        Process.put(
+          {__MODULE__, :branch_details},
+          {:active, [%{constructor: cname, actual: actual, expected: expected, status: status} | details]}
+        )
+
+      _ ->
+        :ok
+    end
   end
 
   defp merge_known_branch_args(subst, {:vctor, cname, args}, cname, arity, depth)

@@ -2200,11 +2200,26 @@ defmodule Cure.Diagnostic.Adapter do
     checking = Map.get(context, :checking)
     subject = if checking, do: " in `#{checking}`", else: ""
     details = Map.get(context, :branch_details, %{})
-    failing = Map.get(details, :constructor)
+    branch_details = Map.get(details, :branches, [])
+
+    selected_detail =
+      case Enum.find(branch_details, &match?({:error, _}, Map.get(&1, :status))) do
+        nil -> List.first(branch_details, details)
+        detail -> detail
+      end
+
+    failing = Map.get(selected_detail, :constructor)
+    actual = Map.get(selected_detail, :actual)
+    expected = Map.get(selected_detail, :expected)
+    singleton_branches = singleton_type_branches(branch_details)
 
     detail =
-      case {failing, Map.get(details, :actual), Map.get(details, :expected)} do
-        {constructor, actual, expected} when not is_nil(constructor) and not is_nil(actual) and not is_nil(expected) ->
+      case {singleton_branches, failing, actual, expected} do
+        {[{constructor, type}], _, _, _} ->
+          "Possible outlier: only the `#{name_to_string(constructor)}` branch has type `#{type}`; check it against the other branches and the declared result."
+
+        {_, constructor, actual, expected}
+        when not is_nil(constructor) and not is_nil(actual) and not is_nil(expected) ->
           "Possible outlier: the `#{name_to_string(constructor)}` branch has type `#{surface_type(actual)}`, but the declared result requires `#{surface_type(expected)}`."
 
         _ ->
@@ -2255,8 +2270,9 @@ defmodule Cure.Diagnostic.Adapter do
         kind: :branch_type,
         branches: branch_names,
         failing_branch: failing,
-        actual_surface: if(details[:actual], do: surface_type(details[:actual])),
-        expected_surface: if(details[:expected], do: surface_type(details[:expected])),
+        actual_surface: if(actual, do: surface_type(actual)),
+        expected_surface: if(expected, do: surface_type(expected)),
+        branch_types: branch_type_payload(branch_details),
         checking: checking,
         expression_category: Map.get(context, :expression_category),
         expectation_origin: Map.get(context, :expectation_origin)
@@ -2273,6 +2289,32 @@ defmodule Cure.Diagnostic.Adapter do
     name = to_string(name)
     failing = to_string(failing)
     failing == name or String.ends_with?(failing, "#" <> name) or String.ends_with?(failing, "." <> name)
+  end
+
+  defp singleton_type_branches(details) do
+    groups =
+      details
+      |> Enum.filter(&(not is_nil(Map.get(&1, :actual))))
+      |> Enum.group_by(&surface_type(&1.actual))
+
+    if map_size(groups) > 1 and Enum.any?(groups, fn {_type, entries} -> length(entries) > 1 end) do
+      groups
+      |> Enum.filter(fn {_type, entries} -> length(entries) == 1 end)
+      |> Enum.map(fn {type, [entry]} -> {entry.constructor, type} end)
+    else
+      []
+    end
+  end
+
+  defp branch_type_payload(details) do
+    Enum.map(details, fn detail ->
+      %{
+        branch: detail.constructor,
+        status: detail.status,
+        actual: if(detail.actual, do: surface_type(detail.actual)),
+        expected: if(detail.expected, do: surface_type(detail.expected))
+      }
+    end)
   end
 
   defp branch_span(%{span: %Cure.Diagnostic.Span{} = span}), do: span

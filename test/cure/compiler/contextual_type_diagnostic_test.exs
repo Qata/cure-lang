@@ -91,6 +91,31 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "possible outlier: this branch has the incompatible type"
   end
 
+  test "a singleton branch type is called out when the other arms agree" do
+    common = {:data, :Common, [], []}
+    outlier = {:data, :Outlier, [], []}
+
+    reason =
+      {:source_context,
+       {:branch_type,
+        %{
+          branches: [
+            %{constructor: :A, actual: common, expected: common, status: :ok},
+            %{constructor: :B, actual: common, expected: common, status: :ok},
+            %{constructor: :C, actual: outlier, expected: common, status: {:error, :branch_type}}
+          ]
+        }},
+       %{
+         checking: :three_way_match,
+         branch_patterns: [%{name: "A"}, %{name: "B"}, %{name: "C"}]
+       }}
+
+    {diagnostic, _registry} = Errors.to_diagnostic(reason, "branches.cure", "")
+
+    assert Renderer.plain(diagnostic) =~ "only the `C` branch has type"
+    assert diagnostic.payload.branch_types |> Enum.map(& &1.branch) == [:A, :B, :C]
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 
