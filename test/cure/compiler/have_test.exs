@@ -1,7 +1,8 @@
 defmodule Cure.Compiler.HaveTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Formatter, Lexer, MacroSyntax, Parser, Printer, SourceSpans}
+  alias Cure.Compiler.{Formatter, Lexer, MacroSyntax, Parser, Printer}
+  alias Cure.MetaAST.Metadata
   alias Cure.MetaAST.{Metadata, SourceInfo}
 
   defp parse!(source) do
@@ -82,7 +83,7 @@ defmodule Cure.Compiler.HaveTest do
       parse!(
         "mod M\n  macro Fact\n    syntax fact becomes have evidence = 1 in evidence\n  fn f(evidence: Int) -> Int = fact\n"
       )
-      |> SourceSpans.strip_diagnostic_meta()
+      |> Metadata.strip_diagnostics()
 
     {:container, _, children} = ast
 

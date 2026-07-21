@@ -1,7 +1,8 @@
 defmodule Cure.Compiler.ProofJustificationTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Lexer, Parser, Printer, SourceSpans}
+  alias Cure.Compiler.{Lexer, Parser, Printer}
+  alias Cure.MetaAST.Metadata
   alias Cure.MetaAST.{Metadata, SourceInfo}
 
   @source """
@@ -32,8 +33,8 @@ defmodule Cure.Compiler.ProofJustificationTest do
     printed = Printer.quoted_to_string(ast)
     assert printed == String.trim_trailing(@source)
 
-    assert SourceSpans.strip_diagnostic_meta(parse!(printed)) ==
-             SourceSpans.strip_diagnostic_meta(ast)
+    assert Metadata.strip_diagnostics(parse!(printed)) ==
+             Metadata.strip_diagnostics(ast)
   end
 
   test "directed rewrite commands parse, retain selectors, and print canonically" do
@@ -66,6 +67,6 @@ defmodule Cure.Compiler.ProofJustificationTest do
 
     printed = Printer.quoted_to_string(ast)
     assert printed == String.trim_trailing(source)
-    assert SourceSpans.strip_diagnostic_meta(parse!(printed)) == SourceSpans.strip_diagnostic_meta(ast)
+    assert Metadata.strip_diagnostics(parse!(printed)) == Metadata.strip_diagnostics(ast)
   end
 end

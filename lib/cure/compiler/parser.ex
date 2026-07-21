@@ -6566,33 +6566,9 @@ defmodule Cure.Compiler.Parser do
     # Check for multi-clause form (indented | patterns) or = body
     case peek(state) do
       %Token{type: :assign} ->
+        assign_token = peek(state)
         state = advance(state)
-        body_start = peek(state)
-        state = skip_newlines(state)
-
-        {body, state} =
-          case peek(state) do
-            %Token{type: type} when type in [:dedent, :eof] ->
-              token = if body_start.type == :newline, do: body_start, else: peek(state)
-
-              error =
-                {:unexpected_token,
-                 %{
-                   observed: token.type,
-                   token_type: token.type,
-                   expected: :expression,
-                   span: token.span,
-                   line: token.line,
-                   column: token.col
-                 }}
-
-              {error_node(token), add_error(state, error)}
-
-            _ ->
-              parse_expr_or_block(state)
-          end
-
-        {body, state} = parse_expression_let_chain_body(body, state)
+        {body, state} = parse_required_function_body(state, assign_token)
 
         {where_bindings, state} = parse_post_body_where(state)
 
@@ -6609,10 +6585,9 @@ defmodule Cure.Compiler.Parser do
         case peek(skip_newlines(state)) do
           %Token{type: :assign} ->
             state = skip_newlines(state)
+            assign_token = peek(state)
             state = advance(state)
-            state = skip_newlines(state)
-            {body, state} = parse_expr_or_block(state)
-            {body, state} = parse_expression_let_chain_body(body, state)
+            {body, state} = parse_required_function_body(state, assign_token)
             state = expect_dedent(state)
 
             {where_bindings, state} = parse_post_body_where(state)
@@ -6668,6 +6643,36 @@ defmodule Cure.Compiler.Parser do
         ast = {:function_def, meta, []}
         {ast, state}
     end
+  end
+
+  defp parse_required_function_body(state, %Token{} = assign_token) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        missing_function_body(state, assign_token)
+
+      %Token{type: :keyword, value: :end} ->
+        missing_function_body(state, assign_token)
+
+      _ ->
+        {body, state} = parse_expr_or_block(state)
+        parse_expression_let_chain_body(body, state)
+    end
+  end
+
+  defp missing_function_body(state, %Token{} = assign_token) do
+    error =
+      {:missing_function_body,
+       %{
+         expected: :expression,
+         observed: peek(state).type,
+         span: assign_token.span,
+         line: assign_token.line,
+         column: assign_token.col
+       }}
+
+    {error_node(assign_token), add_error(state, error)}
   end
 
   # A function-local `where` follows the function body at the function's own

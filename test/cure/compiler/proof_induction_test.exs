@@ -1,7 +1,8 @@
 defmodule Cure.Compiler.ProofInductionTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Lexer, Parser, Printer, SourceSpans}
+  alias Cure.Compiler.{Lexer, Parser, Printer}
+  alias Cure.MetaAST.Metadata
 
   defp parse!(source) do
     assert {:ok, tokens} = Lexer.tokenize(source, file: "induction.cure", emit_events: false)
@@ -45,8 +46,8 @@ defmodule Cure.Compiler.ProofInductionTest do
     assert printed =~ "induction count"
     assert printed =~ "case S(previous, induction_hypothesis) =>"
 
-    assert SourceSpans.strip_diagnostic_meta(parse!(printed)) ==
-             SourceSpans.strip_diagnostic_meta(ast)
+    assert Metadata.strip_diagnostics(parse!(printed)) ==
+             Metadata.strip_diagnostics(ast)
   end
 
   test "explicit impossible induction cases retain their coverage marker" do

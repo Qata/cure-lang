@@ -91,6 +91,39 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
              error_head(Program.semantic_error(stripped_error))
   end
 
+  test "semantic hashes are identical for plain, decorated, and stripped ASTs" do
+    source = "mod HashInvariant\n  fn id(x: Int) -> Int = x\nend\n"
+    {plain, decorated} = parse_pair(source)
+    stripped = Metadata.strip_diagnostics(decorated)
+
+    assert semantic_digest(plain) == semantic_digest(decorated)
+    assert semantic_digest(plain) == semantic_digest(stripped)
+  end
+
+  test "computed-macro hygiene is invariant under recursive source decoration" do
+    generated =
+      {:tuple, [],
+       [
+         {:fresh_name, [], "temporary"},
+         {:variable, [scope: :local], "temporary"}
+       ]}
+
+    decorated = SourceDecorator.decorate(generated)
+    stripped = Metadata.strip_diagnostics(decorated)
+
+    {plain_hygienic, plain_counter} = Parser.freshen_generated(generated)
+    {decorated_hygienic, decorated_counter} = Parser.freshen_generated(decorated)
+    {stripped_hygienic, stripped_counter} = Parser.freshen_generated(stripped)
+
+    assert plain_counter == decorated_counter
+    assert plain_counter == stripped_counter
+    assert Metadata.semantic_equal?(plain_hygienic, decorated_hygienic)
+    assert Metadata.semantic_equal?(plain_hygienic, stripped_hygienic)
+
+    assert {:tuple, _, [{:variable, _, "temporary$0"}, {:variable, _, "temporary"}]} =
+             decorated_hygienic
+  end
+
   test "source decoration is inert across representative surface families" do
     Enum.each(@accepted_programs, fn {family, source} ->
       {plain, decorated} = parse_pair(source)
@@ -140,6 +173,13 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
     assert {:ok, tokens} = Lexer.tokenize(source, file: "invariance.cure", emit_events: false)
     assert {:ok, ast} = Parser.parse(tokens, file: "invariance.cure", emit_events: false)
     {ast, SourceDecorator.decorate(ast)}
+  end
+
+  defp semantic_digest(ast) do
+    ast
+    |> Metadata.semantic_key()
+    |> :erlang.term_to_binary([:deterministic])
+    |> then(&:crypto.hash(:sha256, &1))
   end
 
   defp owned_functions(env, module) do

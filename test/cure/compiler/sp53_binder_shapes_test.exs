@@ -11,12 +11,13 @@
 defmodule Cure.Compiler.SP53BinderShapesTest do
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.MetaAST.Metadata
 
   defp parse(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
 
     with {:ok, ast} <- Parser.parse(tokens, emit_events: false),
-         do: {:ok, Cure.Compiler.SourceSpans.strip_diagnostic_meta(ast)}
+         do: {:ok, Metadata.strip_diagnostics(ast)}
   end
 
   # Body AST of a single-clause fn `name` (`{:function_def, meta, [body]}`).

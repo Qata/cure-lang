@@ -2,7 +2,7 @@ defmodule Cure.Compiler.ParserDestructuringTest do
   use ExUnit.Case, async: true
 
   alias Cure.Compiler.{Lexer, Parser}
-  alias Cure.Compiler.SourceSpans
+  alias Cure.MetaAST.Metadata
 
   defp parse!(source) do
     {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
@@ -50,7 +50,7 @@ defmodule Cure.Compiler.ParserDestructuringTest do
       assert Keyword.get(fn_meta, :record) == true
       assert Keyword.get(fn_meta, :name) == "Point"
       # Both args should be punning pairs
-      args = SourceSpans.strip_diagnostic_meta(args)
+      args = Metadata.strip_diagnostics(args)
 
       assert [
                {:pair, [pun: true], [{:literal, [subtype: :symbol], :x}, {:variable, _, "x"}]},

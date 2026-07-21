@@ -1,7 +1,8 @@
 defmodule Cure.Compiler.ProofChainTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Lexer, Parser, Printer, SourceSpans}
+  alias Cure.Compiler.{Lexer, Parser, Printer}
+  alias Cure.MetaAST.Metadata
   alias Cure.MetaAST.{Metadata, SourceInfo}
 
   defp parse!(source) do
@@ -49,8 +50,8 @@ defmodule Cure.Compiler.ProofChainTest do
              """
              |> String.trim_trailing()
 
-    assert SourceSpans.strip_diagnostic_meta(parse!(printed)) ==
-             SourceSpans.strip_diagnostic_meta(ast)
+    assert Metadata.strip_diagnostics(parse!(printed)) ==
+             Metadata.strip_diagnostics(ast)
   end
 
   test "compact and vertically expanded layouts parse to the same proof chain" do
@@ -63,8 +64,8 @@ defmodule Cure.Compiler.ProofChainTest do
       because second_step
     """
 
-    assert SourceSpans.strip_diagnostic_meta(parse!(compact)) ==
-             SourceSpans.strip_diagnostic_meta(parse!(@chain))
+    assert Metadata.strip_diagnostics(parse!(compact)) ==
+             Metadata.strip_diagnostics(parse!(@chain))
   end
 
   test "proof and chain remain ordinary identifiers outside the distinctive block head" do
