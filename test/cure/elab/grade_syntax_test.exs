@@ -64,7 +64,7 @@ defmodule Cure.Elab.GradeSyntaxTest do
   defp grades(src), do: params(src) |> Enum.map(fn {:param, m, n} -> {n, Keyword.get(m, :grade)} end)
 
   defp quantities(src) do
-    {:ok, env} = Program.elaborate(src)
+    {:ok, env} = Program.semantic_result(Program.elaborate(src))
     env |> Env.get_def(:f) |> Map.fetch!(:quantities)
   end
 
@@ -138,7 +138,7 @@ defmodule Cure.Elab.GradeSyntaxTest do
 
     test "a linear parameter used zero times is REJECTED" do
       assert {:error, {:usage_violation, %{declared: :linear, used: :erased}}} =
-               Program.elaborate("mod G\n  fn f(c :linear Int) -> Int = 0\nend\n")
+               Program.semantic_result(Program.elaborate("mod G\n  fn f(c :linear Int) -> Int = 0\nend\n"))
     end
 
     test "an affine parameter used zero times is accepted" do
@@ -151,12 +151,12 @@ defmodule Cure.Elab.GradeSyntaxTest do
       src = "mod G\n  fn use2(x: Int) -> Int = x\n  fn f(c :linear Int) -> Int = use2(c)\nend\n"
 
       assert {:error, {:usage_violation, %{declared: :linear, used: :unrestricted}}} =
-               Program.elaborate(src)
+               Program.semantic_result(Program.elaborate(src))
     end
 
     test "a linear parameter passed to a LINEAR position is accepted" do
       src = "mod G\n  fn sink(x :linear Int) -> Int = x\n  fn f(c :linear Int) -> Int = sink(c)\nend\n"
-      assert {:ok, _} = Program.elaborate(src)
+      assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
 
     test "a global application accepts a linear explicit parameter" do
@@ -174,12 +174,12 @@ defmodule Cure.Elab.GradeSyntaxTest do
     # one linear parameter is rejected as an arity mismatch against a computed 0.
     test "an extern with a linear parameter accepts its true present arity" do
       src = "mod G\n  @extern(:erlang, :abs, 1)\n  fn f(c :linear Int) -> Int\nend\n"
-      assert {:ok, _} = Program.elaborate(src)
+      assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
 
     test "an extern with an erased implicit still excludes it from the arity" do
       src = "mod G\n  @extern(:erlang, :hd, 1)\n  fn f({a: Type}, xs: List(a)) -> a\nend\n"
-      assert {:ok, _} = Program.elaborate(src)
+      assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
     end
   end
 

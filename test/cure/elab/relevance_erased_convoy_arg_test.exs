@@ -29,7 +29,7 @@ defmodule Cure.Elab.RelevanceErasedConvoyArgTest do
     end
     """
 
-    assert {:error, {:erased_used_relevantly, _}} = Program.elaborate(src)
+    assert {:error, {:erased_used_relevantly, _}} = Program.semantic_result(Program.elaborate(src))
   end
 
   test "the same helper with an EXPLICIT operand elaborates (the fix is behaviour-preserving)" do
@@ -46,6 +46,6 @@ defmodule Cure.Elab.RelevanceErasedConvoyArgTest do
     end
     """
 
-    assert {:ok, _} = Program.elaborate(src)
+    assert {:ok, _} = Program.semantic_result(Program.elaborate(src))
   end
 end

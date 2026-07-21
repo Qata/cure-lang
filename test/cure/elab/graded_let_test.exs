@@ -40,7 +40,8 @@ defmodule Cure.Elab.GradedLetTest do
               "  fn sink(x :linear Int) -> Int = x\n" <>
               "  fn use2(a: Int, b: Int) -> Int = a\n"
 
-  defp elab(body), do: Program.elaborate(@preamble <> "  fn f() -> Int =\n" <> body <> "end\n")
+  defp elab(body),
+    do: Program.semantic_result(Program.elaborate(@preamble <> "  fn f() -> Int =\n" <> body <> "end\n"))
 
   defp lets(env, name) do
     env

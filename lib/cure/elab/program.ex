@@ -32,6 +32,11 @@ defmodule Cure.Elab.Program do
   def semantic_error({:codegen_error, reason}), do: {:codegen_error, semantic_error(reason)}
   def semantic_error(reason), do: reason
 
+  @doc "Project diagnostic context away from an elaboration result while preserving its verdict."
+  @spec semantic_result({:ok, term()} | {:error, term()}) :: {:ok, term()} | {:error, term()}
+  def semantic_result({:error, reason}), do: {:error, semantic_error(reason)}
+  def semantic_result(result), do: result
+
   @doc """
   Elaborate + totality-certify an already-parsed module/declaration AST. Unwraps
   a `mod ... end` container to its body. This is the entry the real compiler's
@@ -2316,23 +2321,130 @@ defmodule Cure.Elab.Program do
     items = expand_where_declarations(items)
     items = annotate_overload_ordinals(items)
 
-    with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?),
-         :ok <- check_overload_legality(env1),
-         {:ok, alias_order} <- typealias_order(items, env1),
-         {:ok, env_completed} <- complete_typealiases(alias_order, items, env1),
-         # Alias bodies are all present after the register pass. Certify their
-         # forward chains now so an earlier function body can use conversion
-         # through `A -> B -> RHS`; the final sweep below still handles
-         # functions whose bodies are only installed by `body_pass/2`.
-         env_aliases = TotalityClosure.certify_deferred(env_completed),
-         {:ok, env2} <- body_pass(fn_decls, env_aliases) do
-      # Every body is now present. Re-certify defs whose totality was DEFERRED
-      # in declaration order (a total function calling a helper declared below
-      # it — `reverse` → `reverse_acc`), which the in-order per-def certify left
-      # uncertified and no later pass revisits. Sound: the kernel re-derives each
-      # certificate; genuinely partial defs are rejected exactly as before.
-      {:ok, TotalityClosure.certify_deferred(env2)}
+    result =
+      with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?),
+           :ok <- check_overload_legality(env1),
+           {:ok, alias_order} <- typealias_order(items, env1),
+           {:ok, env_completed} <- complete_typealiases(alias_order, items, env1),
+           # Alias bodies are all present after the register pass. Certify their
+           # forward chains now so an earlier function body can use conversion
+           # through `A -> B -> RHS`; the final sweep below still handles
+           # functions whose bodies are only installed by `body_pass/2`.
+           env_aliases = TotalityClosure.certify_deferred(env_completed),
+           {:ok, env2} <- body_pass(fn_decls, env_aliases) do
+        # Every body is now present. Re-certify defs whose totality was DEFERRED
+        # in declaration order (a total function calling a helper declared below
+        # it — `reverse` → `reverse_acc`), which the in-order per-def certify left
+        # uncertified and no later pass revisits. Sound: the kernel re-derives each
+        # certificate; genuinely partial defs are rejected exactly as before.
+        {:ok, TotalityClosure.certify_deferred(env2)}
+      end
+
+    contextualize_trusted_declaration_error(result, items)
+  end
+
+  defp contextualize_trusted_declaration_error({:error, {:source_context, _, _}} = error, _items), do: error
+
+  defp contextualize_trusted_declaration_error({:error, reason} = error, items) do
+    case trusted_declaration_span(reason, items) do
+      {%Cure.Diagnostic.Span{} = span, checking, category} ->
+        {:error,
+         {:source_context, reason,
+          %{
+            span: span,
+            checking: checking,
+            expectation_origin: :trusted_declaration_check,
+            expression_category: category
+          }}}
+
+      _ ->
+        error
     end
+  end
+
+  defp contextualize_trusted_declaration_error(result, _items), do: result
+
+  defp trusted_declaration_span({:unknown_erasure_class, name, _class}, items),
+    do: declaration_role_span(items, name, :erases_decorator, :erasure_annotation)
+
+  defp trusted_declaration_span({:erases_on_non_opaque, name}, items),
+    do: declaration_role_span(items, name, :erases_decorator, :erasure_annotation)
+
+  defp trusted_declaration_span({:non_strictly_positive, constructor}, items),
+    do: constructor_role_span(items, constructor)
+
+  defp trusted_declaration_span({:erased_used_relevantly, %{def: name}}, items),
+    do: declaration_role_span(items, name, :body, :relevance_check)
+
+  defp trusted_declaration_span({:usage_violation, %{def: name}}, items),
+    do: declaration_role_span(items, name, :body, :relevance_check)
+
+  defp trusted_declaration_span(_reason, _items), do: nil
+
+  defp declaration_role_span(items, qualified_name, role, category) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {tag, meta, _body} when tag in [:function_def, :container, :indexed_type] and is_list(meta) ->
+        if to_string(Keyword.get(meta, :name)) == bare_name do
+          info = Cure.MetaAST.Metadata.source_info(meta)
+          span = source_role_span(info, role) || source_role_span(info, :name) || source_role_span(info, :whole)
+          if span, do: {span, qualified_name, category}
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp source_role_span(%Cure.MetaAST.SourceInfo{decorators: decorators}, :erases_decorator) do
+    case Map.get(decorators, "erases") do
+      %{whole: %Cure.Diagnostic.Span{} = span} -> span
+      %{name: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp source_role_span(%Cure.MetaAST.SourceInfo{} = info, role) when role in [:name, :whole, :body],
+    do: Map.get(info, role)
+
+  defp source_role_span(_info, _role), do: nil
+
+  defp constructor_role_span(items, constructor) do
+    spelling = constructor |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {:container, _meta, variants} when is_list(variants) ->
+        Enum.find_value(variants, fn
+          {:function_def, meta, _} when is_list(meta) ->
+            if to_string(Keyword.get(meta, :name)) == spelling do
+              case Cure.MetaAST.Metadata.source_info(meta) do
+                %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} ->
+                  {span, constructor, :constructor_declaration}
+
+                _ ->
+                  nil
+              end
+            end
+
+          {:variable, meta, name} when is_list(meta) ->
+            if to_string(name) == spelling do
+              case Cure.MetaAST.Metadata.source_info(meta) do
+                %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} ->
+                  {span, constructor, :constructor_declaration}
+
+                _ ->
+                  nil
+              end
+            end
+
+          _ ->
+            nil
+        end)
+
+      _ ->
+        nil
+    end)
   end
 
   defp expand_where_declarations(items) when is_list(items) do

@@ -72,7 +72,18 @@ defmodule Cure.Elab.ErasureRelevanceTest do
           fn f({n: Nat}, v: NV(n)) -> Nat = n
         """)
 
-      assert {:error, {:erased_used_relevantly, _}} = Program.elaborate(src)
+      assert {:error, error} = Program.elaborate(src, file: "relevance.cure")
+      assert {:erased_used_relevantly, _} = Program.semantic_error(error)
+
+      {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "relevance.cure", src)
+      rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry, width: 80)
+
+      assert diagnostic.code == "E104"
+      assert diagnostic.primary.span.start_line == 12
+      assert diagnostic.primary.span.end_byte - diagnostic.primary.span.start_byte == 1
+      assert rendered =~ "12 |   fn f({n: Nat}, v: NV(n)) -> Nat = n"
+      assert rendered =~ "^ remove this runtime use or make the binding relevant"
+      assert rendered =~ "Hint: Pass a runtime value here"
     end
 
     test "(b) erased implicit `n` passed in a PRESENT argument position" do
@@ -84,7 +95,8 @@ defmodule Cure.Elab.ErasureRelevanceTest do
           fn f({n: Nat}, v: NV(n)) -> Nat = g(n)
         """)
 
-      assert {:error, {:erased_used_relevantly, _}} = Program.elaborate(src)
+      assert {:error, error} = Program.elaborate(src)
+      assert {:erased_used_relevantly, _} = Program.semantic_error(error)
     end
 
     test "(c) body SCRUTINISES the erased implicit `n`" do
@@ -97,7 +109,8 @@ defmodule Cure.Elab.ErasureRelevanceTest do
               S(k) -> Z()
         """)
 
-      assert {:error, {:erased_used_relevantly, _}} = Program.elaborate(src)
+      assert {:error, error} = Program.elaborate(src)
+      assert {:erased_used_relevantly, _} = Program.semantic_error(error)
     end
   end
 

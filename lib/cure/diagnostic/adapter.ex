@@ -74,6 +74,12 @@ defmodule Cure.Diagnostic.Adapter do
           "The recursive occurrence in `#{name_to_string(family)}` is not strictly positive, so this type cannot be accepted by the normalising kernel."
         ),
       primary: primary_label(opts, "this recursive type definition is not strictly positive"),
+      suggestions: [
+        %Suggestion{
+          message: "Move the recursive type out of function-input positions in this constructor",
+          applicability: :manual
+        }
+      ],
       payload: %{family: family}
     )
   end
@@ -92,6 +98,12 @@ defmodule Cure.Diagnostic.Adapter do
           "An erased value#{if is_nil(binder), do: "", else: " (binder #{binder})"} is used in the runtime-relevant `#{site}` position."
         ),
       primary: primary_label(opts, "remove this runtime use or make the binding relevant"),
+      suggestions: [
+        %Suggestion{
+          message: "Pass a runtime value here, or remove the erased/implicit grade from the binding",
+          applicability: :manual
+        }
+      ],
       payload: details
     )
   end
@@ -2293,8 +2305,17 @@ defmodule Cure.Diagnostic.Adapter do
       title: "Erasure violation",
       body: Doc.paragraph(body),
       primary: primary_label(opts, "this erasure declaration is invalid"),
+      suggestions: erasure_suggestions(kind),
       payload: Map.put(details, :kind, kind)
     )
+  end
+
+  defp erasure_suggestions(:unknown_erasure_class) do
+    [%Suggestion{message: "Choose one of #{known_erasure_classes_hint()}", applicability: :manual}]
+  end
+
+  defp erasure_suggestions(:erases_on_non_opaque) do
+    [%Suggestion{message: "Remove `@erases`, or make this a constructor-less `opaque type`", applicability: :manual}]
   end
 
   defp declaration_conflict(kind, details, opts) do
