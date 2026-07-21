@@ -1210,7 +1210,7 @@ defmodule Cure.Compiler.Printer do
 
   # -- Implementation (typeclass instance) -----------------------------------
   #
-  # `implementation Iface for Type [as Name] [where constraints]` followed by
+  # `implementation Iface for Type [as Name] [requires constraints]` followed by
   # an indented block of method definitions.
 
   defp to_string({:implementation, meta, body}, depth, indent) do
@@ -1221,9 +1221,9 @@ defmodule Cure.Compiler.Printer do
 
     as_str = if as_name, do: " as #{as_name}", else: ""
 
-    where_str =
+    requirements_str =
       if constraints != [] do
-        " where " <> Enum.map_join(constraints, ", ", &render(&1, depth, indent))
+        " requires " <> Enum.map_join(constraints, ", ", &render(&1, depth, indent))
       else
         ""
       end
@@ -1236,7 +1236,7 @@ defmodule Cure.Compiler.Printer do
       |> Enum.join("\n#{pad}")
 
     head =
-      "implementation #{iface} for #{render(for_type, depth, indent)}#{as_str}#{where_str}"
+      "implementation #{iface} for #{render(for_type, depth, indent)}#{as_str}#{requirements_str}"
 
     "#{head}\n#{pad}#{body_str}"
   end
@@ -2035,7 +2035,7 @@ defmodule Cure.Compiler.Printer do
     constraints_str =
       if constraints != [] do
         cs = Enum.map_join(constraints, ", ", &render(&1, depth, indent))
-        " where #{cs}"
+        " requires #{cs}"
       else
         ""
       end
@@ -2359,7 +2359,7 @@ defmodule Cure.Compiler.Printer do
     constraints_str =
       if constraints != [] do
         cs = Enum.map_join(constraints, ", ", &render(&1, depth, indent))
-        " where #{cs}"
+        " requires #{cs}"
       else
         ""
       end

@@ -5661,16 +5661,10 @@ defmodule Cure.Compiler.Parser do
           {nil, state}
       end
 
-    # Optional constraints: where Proto(T), ...
-    {constraints, state} =
-      case peek(state) do
-        %Token{type: :keyword, value: :where} ->
-          state = advance(state)
-          parse_constraint_list(state)
-
-        _ ->
-          {[], state}
-      end
+    # Optional interface requirements: `requires Proto(T), ...`. The former
+    # constraint-position `where` remains a deprecated migration spelling;
+    # declaration-local `where` is reserved for the post-body definition block.
+    {constraints, state} = parse_requirements_clause(state)
 
     state = skip_newlines(state)
 
@@ -7427,16 +7421,8 @@ defmodule Cure.Compiler.Parser do
     # Type being implemented
     {for_type, state} = parse_type_expr(state)
 
-    # Optional where clause
-    {constraints, state} =
-      case peek(state) do
-        %Token{type: :keyword, value: :where} ->
-          state = advance(state)
-          parse_constraint_list(state)
-
-        _ ->
-          {[], state}
-      end
+    # Optional implementation requirements.
+    {constraints, state} = parse_requirements_clause(state)
 
     state = skip_newlines(state)
     {body, state} = parse_definition_block(state)
@@ -7574,15 +7560,7 @@ defmodule Cure.Compiler.Parser do
           {nil, state}
       end
 
-    {constraints, state} =
-      case peek(state) do
-        %Token{type: :keyword, value: :where} ->
-          s = advance(state)
-          parse_constraint_list(s)
-
-        _ ->
-          {[], state}
-      end
+    {constraints, state} = parse_requirements_clause(state)
 
     state = skip_newlines(state)
     {body, state} = parse_definition_block(state)
@@ -9020,6 +8998,22 @@ defmodule Cure.Compiler.Parser do
 
   # -- Constraint List  Proto(T), Proto2(U) ----------------------------------
 
+  defp parse_requirements_clause(state) do
+    case peek(state) do
+      %Token{type: :identifier, value: "requires"} ->
+        state |> advance() |> parse_constraint_list()
+
+      %Token{type: :keyword, value: :where} = token ->
+        state
+        |> emit_constraint_where_deprecation(token)
+        |> advance()
+        |> parse_constraint_list()
+
+      _ ->
+        {[], state}
+    end
+  end
+
   defp parse_constraint_list(state) do
     {first, state} = parse_single_constraint(state)
 
@@ -10006,6 +10000,19 @@ defmodule Cure.Compiler.Parser do
     if state.emit_events do
       payload =
         {:if_deprecated, "`if`/`elif` are deprecated; rewrite as `pickup` (E-IF-REMOVED, see docs/PICKUP.md §17)",
+         line: token.line, col: token.col}
+
+      Events.emit(:parser, :deprecation, payload, Events.meta(state.file, token.line))
+    end
+
+    state
+  end
+
+  defp emit_constraint_where_deprecation(state, token) do
+    if state.emit_events do
+      payload =
+        {:constraint_where_deprecated,
+         "constraint-position `where` is deprecated; write `requires` (`where` now introduces function-local definitions)",
          line: token.line, col: token.col}
 
       Events.emit(:parser, :deprecation, payload, Events.meta(state.file, token.line))

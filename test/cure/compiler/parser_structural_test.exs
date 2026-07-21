@@ -41,7 +41,13 @@ defmodule Cure.Compiler.ParserStructuralTest do
       assert meta[:guards] != nil
     end
 
-    test "fn with where constraints" do
+    test "fn with requires constraints" do
+      ast = parse!("fn sort(xs: List) -> List requires Ord(T) = xs")
+      assert {:function_def, meta, _} = ast
+      assert [_] = meta[:constraints]
+    end
+
+    test "legacy constraint-position where remains parseable during migration" do
       ast = parse!("fn sort(xs: List) -> List where Ord(T) = xs")
       assert {:function_def, meta, _} = ast
       assert [_] = meta[:constraints]

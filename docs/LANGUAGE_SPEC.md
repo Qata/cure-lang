@@ -13,6 +13,18 @@ indentation level, not by keywords like `do`/`end` or braces.
 `and`, `or`, `not`, `spawn`, `send`, `receive`, `after`, `proof`, `extern`,
 `end`, `do`
 
+`requires` is contextual in function and implementation signatures. It lists
+interface obligations without reserving the word as an ordinary identifier:
+
+```cure
+fn show_both(a: t, b: t) -> String requires Show(t) =
+  show(a) <> show(b)
+```
+
+`where` is reserved for declaration-local definition blocks. The former
+constraint spelling `fn ... where Interface(t)` is deprecated; the parser still
+accepts it during migration and the printer canonicalizes it to `requires`.
+
 `sup` is a *contextual* soft keyword (v0.25.0): at the lexer level it is
 an ordinary identifier so legacy code that uses it as a field or variable
 name keeps compiling; the parser dispatches `sup <Name>` to the

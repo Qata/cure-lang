@@ -718,7 +718,7 @@ defmodule Cure.LSP.Server do
 
   defp keyword_completions do
     keywords =
-      ~w(fn mod rec actor fsm sup app proto impl type let if then else elif match return throw try catch finally use local when where)
+      ~w(fn mod rec actor fsm sup app proto impl type let if then else elif match return throw try catch finally use local when requires where)
 
     Enum.map(keywords, fn kw ->
       %{
@@ -992,7 +992,7 @@ defmodule Cure.LSP.Server do
   @doc false
   def compute_semantic_tokens(text) do
     keywords =
-      ~w(fn mod rec fsm proto impl type let if then else elif match return throw try catch finally use local when where)
+      ~w(fn mod rec fsm proto impl type let if then else elif match return throw try catch finally use local when requires where)
 
     lines = String.split(text, "\n")
 

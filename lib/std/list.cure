@@ -212,9 +212,9 @@ mod Std.List
   # -- Search -----------------------------------------------------------------
 
   ## `true` when `elem` appears in `list` (structural equality). The
-  ## `where Equatable(t)` constraint threads the dictionary that dispatches the
+  ## `requires Equatable(t)` constraint threads the dictionary that dispatches the
   ## `h == elem` comparison at the element type.
-  fn contains(list: List(t), elem: t) -> Bool where Equatable(t) =
+  fn contains(list: List(t), elem: t) -> Bool requires Equatable(t) =
     match list
       [] -> false
       [h | t] ->
