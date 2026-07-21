@@ -2499,7 +2499,7 @@ defmodule Cure.Diagnostic.Adapter do
     from_error(
       %SyntaxProblem{
         kind: :branch_arrow_missing,
-        expected: :arrow,
+        expected: Map.get(details, :expected, :arrow),
         observed: Map.get(details, :observed),
         at: Map.get(details, :span) || Keyword.get(opts, :span),
         opener: Map.get(details, :opener_span),
@@ -5066,6 +5066,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{kind: :lambda_arrow_missing}), do: "Lambda arrow is missing"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
+    do: "Induction case arrow is missing"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :match_arm}}),
     do: "Pattern branch arrow is missing"
 
@@ -5463,6 +5466,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :lambda_arrow_missing}),
     do: "A lambda needs `->` between its parameter list and body expression."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
+    do: "An induction case needs `=>` between its pattern and body expression."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: family}}),
     do: "#{branch_family_name(family)} needs `->` between its head and body expression."
@@ -5964,6 +5970,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :lambda_arrow_missing}),
     do: "insert `->` before the lambda body"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :induction_case}}),
+    do: "insert `=>` before this induction case body"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing}),
     do: "insert `->` before this branch body"
 
@@ -6344,6 +6353,26 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(lambda, :secondary, "this lambda starts here"),
       pickup_label(previous, :secondary, "its parameter list ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :branch_arrow_missing,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{family: :induction_case}
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this induction case starts here"),
+      pickup_label(previous, :secondary, "the induction pattern ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7031,6 +7060,23 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `->` before the lambda body",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "-> "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :branch_arrow_missing,
+           context: %{family: :induction_case, token_type: type}
+         },
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `=>` before the induction case body",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "=> "}]
       }
     ]
   end

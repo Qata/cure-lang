@@ -3593,7 +3593,7 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :identifier, value: "case"} = case_token ->
         state = advance(state)
         {pattern, state} = parse_expr(state, 0)
-        state = expect(state, :fat_arrow) |> skip_newlines()
+        state = expect_induction_case_arrow(state, case_token, pattern) |> skip_newlines()
 
         {body, impossible?, state} =
           if impossible_body?(state) do
@@ -3616,6 +3616,34 @@ defmodule Cure.Compiler.Parser do
       observed ->
         state = add_error(state, {:expected, :induction_case, observed.type, observed.line})
         {Enum.reverse(acc), advance(state)}
+    end
+  end
+
+  defp expect_induction_case_arrow(state, case_token, pattern) do
+    case expect_token(state, :fat_arrow) do
+      {:ok, _arrow, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:branch_arrow_missing,
+           %{
+             family: :induction_case,
+             expected: :fat_arrow,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: case_token.span,
+             previous_span: first_node_source_span(pattern),
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
     end
   end
 
