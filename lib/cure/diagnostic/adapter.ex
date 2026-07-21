@@ -6451,6 +6451,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :container_trailing_separator}),
     do: "this comma has no following element"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_string}),
+    do: "insert the closing `\"` here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_char}),
+    do: "insert the closing `'` here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_quoted_identifier}),
+    do: "insert the closing backtick here"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :bare_brace_expression}),
     do: "choose record, map, or block syntax here"
 

@@ -12,6 +12,7 @@ defmodule Cure.DiagnosticExerciserTest do
     compiler_cases = [
       {"unknown global", "E091", "mod DiagnosticUnknown\n  fn run() -> Int = missing_name\n"},
       {"syntax error", "E094", "mod DiagnosticSyntax\n  fn run(] -> Int = 1\n", :syntax_error_parser},
+      {"lexer syntax error", "E094", "mod DiagnosticLexer\n  fn run() -> String = \"not closed\n", :syntax_error_lexer},
       {"type mismatch", "E093",
        "mod DiagnosticType\n  type Nat = Z | S(Nat)\n  fn bad() -> Equivalent(Nat, Z, S(Z)) = reflexive(Z)\n"},
       {"unfilled hole", "E014", "mod DiagnosticHole\n  fn bad() -> Int = ???\n"},
@@ -246,6 +247,11 @@ defmodule Cure.DiagnosticExerciserTest do
     assert :ok =
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
                only_producers: [:parser]
+             )
+
+    assert :ok =
+             Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
+               only_producers: [:lexer]
              )
 
     Enum.each(boundary_cases, fn {label, expected_code, reason} ->
