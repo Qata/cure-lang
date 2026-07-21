@@ -1965,20 +1965,25 @@ defmodule Cure.Elab.Elaborator do
               error
 
             {:ok, aligned_args} ->
-              with :ok <- validate_constructor_arity(env, cres, aligned_args, name),
-                   {:ok, present} <- map_present_args(aligned_args, names, ctx, env) do
-                case elaborate_ctor_app(env, cres, present, ctx, expected_core) do
-                  {:ok, term, _type} ->
-                    {:ok, term}
-
-                  {:error, _} = orig ->
-                    # Try the bidirectional fallback, but only let it win when
-                    # it succeeds; otherwise retain the original inference error.
-                    case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
-                      {:ok, _} = ok -> ok
-                      {:error, _} -> orig
-                    end
+              inferred =
+                with :ok <- validate_constructor_arity(env, cres, aligned_args, name),
+                     {:ok, present} <- map_present_args(aligned_args, names, ctx, env),
+                     {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
+                  {:ok, term}
                 end
+
+              case inferred do
+                {:ok, _} = ok ->
+                  ok
+
+                {:error, _} = orig ->
+                  # Retry after *any* inference failure, including failure while
+                  # elaborating a nested argument. The expected result type pins
+                  # parameters/indices before the fields are checked.
+                  case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
+                    {:ok, _} = ok -> ok
+                    {:error, _} -> orig
+                  end
               end
           end
 
@@ -9498,6 +9503,16 @@ defmodule Cure.Elab.Elaborator do
     # goal-pinned metavariable and are solved by unification. The retained value
     # (relevant implicit) vs dropped one (erased) is a quantity concern erasure
     # handles later — both flow identically here.
+    case resolve_ctor_argument_values(slots, arg_asts, seed, pc, params, mctx, names, ctx, env, cname, deferred) do
+      {:ok, vals, _mctx} ->
+        {:ok, {:ctor, cname, vals}}
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp resolve_ctor_argument_values(slots, arg_asts, seed, pc, params, mctx, names, ctx, env, cname, deferred) do
     args_by_pos =
       slots
       |> Enum.filter(fn {_i, _ft, _q, p} -> p == :explicit end)
@@ -9512,11 +9527,9 @@ defmodule Cure.Elab.Elaborator do
       {:ok, acc_map, mctx} ->
         vals = for i <- 0..(length(slots) - 1)//1, do: Unify.zonk(Map.fetch!(acc_map, i), mctx)
 
-        if Enum.any?(vals, &has_meta?/1) do
-          {:error, {:unsolved_index, cname}}
-        else
-          {:ok, {:ctor, cname, vals}}
-        end
+        if Enum.any?(vals, &has_meta?/1),
+          do: {:error, {:unsolved_index, cname}},
+          else: {:ok, vals, mctx}
 
       {:error, _} = err ->
         err
@@ -9647,7 +9660,12 @@ defmodule Cure.Elab.Elaborator do
   # and *checking* those that do not against their now-concrete field type
   # (`Nil()` against `Lst(Nat)`). The resulting argument/type pairs feed the
   # ordinary `elaborate_ctor_app`, which re-derives parameters and result type, so
-  # nothing new is trusted. Restricted to all-present constructors.
+  # nothing new is trusted. Unlike the original all-present-only fallback, this
+  # uses the same complete constructor slot frame as checking mode: implicit and
+  # erased slots receive metas, explicit fields are solved to a fixpoint, and
+  # blocked fields are retried after their siblings refine the frame. This is the
+  # application strategy used by Idris (`checkRtoL`), Lean (result propagation +
+  # postponed terms), and Agda (blocked argument constraints).
   defp elaborate_ctor_app_infer_bidirectional(env, cname, arg_asts, names, ctx) do
     ctor = Inductive.get_ctor(env, cname)
     family = Inductive.ctor_family(env, cname)
@@ -9658,26 +9676,35 @@ defmodule Cure.Elab.Elaborator do
       is_nil(ctor) or is_nil(family) ->
         {:error, {:unknown_constructor, cname}}
 
-      # Bail on any IMPLICIT slot (erased inferred index OR relevant implicit
-      # `{k:T}`): this all-positional inference fallback can't solve a
-      # non-positional field. The primary `elaborate_ctor_app` inserts and solves
-      # implicit metas correctly, so leaving it to that path is complete.
-      Enum.any?(Inductive.plicities_of(ctor), &(&1 == :implicit)) ->
-        {:error, {:bidirectional_erased_field, cname}}
-
-      length(ctor.args) != length(arg_asts) ->
+      Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit)) != length(arg_asts) ->
         constructor_arity_error(ctor, cname, arg_asts)
 
       true ->
-        {mctx, param_metas} =
-          Enum.reduce(1..pc//1, {MetaCtx.new(), []}, fn _, {m, acc} ->
-            {m, id} = MetaCtx.fresh(m)
-            {m, acc ++ [{:meta, id}]}
-          end)
+        {mctx, seed} = fresh_seed(MetaCtx.new(), pc + length(ctor.args))
+        params = Enum.take(seed, pc)
 
-        case infer_ctor_args(ctor.args, arg_asts, param_metas, [], mctx, names, ctx, env, cname) do
-          {:ok, present} -> elaborate_ctor_app(env, cname, present, ctx)
-          {:error, _} = err -> err
+        slots =
+          [ctor.args, ctor.quantities, Inductive.plicities_of(ctor)]
+          |> Enum.zip()
+          |> Enum.with_index()
+          |> Enum.map(fn {{{_fn, ftype}, q, p}, i} -> {i, ftype, q, p} end)
+
+        case resolve_ctor_argument_values(slots, arg_asts, seed, pc, params, mctx, names, ctx, env, cname, []) do
+          {:ok, vals, mctx} ->
+            param_vals = params |> Enum.map(&Unify.zonk(&1, mctx))
+
+            if Enum.any?(param_vals, &has_meta?/1) do
+              {:error, {:unsolved_parameters, cname}}
+            else
+              full = param_vals ++ vals
+              result_params = Enum.map(Map.get(ctor, :result_params, []), &Subst.instantiate(&1, full))
+              result_indices = Enum.map(ctor.result_indices, &Subst.instantiate(&1, full))
+              type = Eval.eval({:data, family, result_params, result_indices}, Context.env(ctx))
+              {:ok, {:ctor, cname, vals}, type}
+            end
+
+          {:error, _} = err ->
+            err
         end
     end
   end
@@ -9706,55 +9733,6 @@ defmodule Cure.Elab.Elaborator do
         expected: Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit)),
         actual: length(args)
       }}}
-  end
-
-  # Elaborate each constructor argument, threading the (scratch) parameter
-  # metavariables: instantiate the field type with the parameters and the argument
-  # terms chosen so far and zonk it; if it is metavariable-free the argument is
-  # *checked* against it, otherwise it is *inferred* and its type unified against
-  # the field type to solve parameters. Returns `[{term, type_term}]` for
-  # `elaborate_ctor_app`.
-  defp infer_ctor_args(args, arg_asts, params, acc, mctx, names, ctx, env, cname),
-    do: infer_ctor_args(args, arg_asts, params, acc, mctx, names, ctx, env, cname, 0)
-
-  defp infer_ctor_args([], [], _params, acc, _mctx, _names, _ctx, _env, _cname, _index),
-    do: {:ok, Enum.reverse(acc)}
-
-  defp infer_ctor_args(
-         [{_fname, ftype} | fields],
-         [arg | args],
-         params,
-         acc,
-         mctx,
-         names,
-         ctx,
-         env,
-         cname,
-         index
-       ) do
-    frame = params ++ (acc |> Enum.reverse() |> Enum.map(&elem(&1, 0)))
-    ftype_inst = ftype |> Subst.instantiate(frame) |> Unify.zonk(mctx)
-
-    step =
-      if has_meta?(ftype_inst) do
-        with {:ok, term, ty} <- elaborate_expr_typed(arg, names, ctx, env),
-             ty_term = Quote.reify(ty, Context.length(ctx)),
-             {:ok, mctx} <- Unify.unify(ftype_inst, ty_term, mctx, env) do
-          {:ok, term, ty_term, mctx}
-        end
-      else
-        with {:ok, term} <- elaborate_expr_checked(arg, ftype_inst, names, ctx, env) do
-          {:ok, term, ftype_inst, mctx}
-        end
-      end
-
-    case step do
-      {:ok, term, ty_term, mctx} ->
-        infer_ctor_args(fields, args, params, [{term, ty_term} | acc], mctx, names, ctx, env, cname, index + 1)
-
-      {:error, reason} ->
-        {:error, attach_expectation_context(reason, arg, :constructor_argument, cname, index)}
-    end
   end
 
   # A saturated call to a global function with implicit (erased) parameters.
