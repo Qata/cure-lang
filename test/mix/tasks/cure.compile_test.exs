@@ -91,4 +91,32 @@ defmodule Mix.Tasks.Cure.CompileTest do
     assert output =~ "^^^^^^^^^^^ possible outlier: this branch has the incompatible type"
     refute output =~ "ELABORATION FAILED"
   end
+
+  test "unknown options fail as E099 before file compilation" do
+    Mix.shell(Mix.Shell.IO)
+    Mix.Task.reenable("cure.compile")
+
+    output =
+      ExUnit.CaptureIO.capture_io(:stderr, fn ->
+        assert catch_exit(Mix.Task.run("cure.compile", ["--unknown"])) == {:shutdown, 1}
+      end)
+
+    assert output =~ "INVALID COMMAND USAGE [E099]"
+    assert output =~ "Invalid options for mix cure.compile"
+    refute output =~ "Compiling --unknown"
+    refute output =~ "COULD NOT READ FILE"
+  end
+
+  test "missing paths use the shared E099 diagnostic" do
+    Mix.shell(Mix.Shell.IO)
+    Mix.Task.reenable("cure.compile")
+
+    output =
+      ExUnit.CaptureIO.capture_io(:stderr, fn ->
+        assert catch_exit(Mix.Task.run("cure.compile", [])) == {:shutdown, 1}
+      end)
+
+    assert output =~ "INVALID COMMAND USAGE [E099]"
+    assert output =~ "Usage: mix cure.compile <path>"
+  end
 end
