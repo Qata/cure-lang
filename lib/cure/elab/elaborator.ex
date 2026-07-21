@@ -3582,7 +3582,11 @@ defmodule Cure.Elab.Elaborator do
              ctx,
              env
            ) do
-      case scrut_type do
+      # Parameters can retain a transparent applied alias at their head (for
+      # example `List(String)`, where `String = List(Char)`). Match dispatch
+      # needs the weak-head-normal form so the outer data family is visible;
+      # conversion still preserves the authored alias for diagnostics.
+      case Normalise.whnf_value(scrut_type, Context.signature(ctx)) do
         {:vdata, dname, combined_vals} ->
           family = Inductive.get_family(env, dname)
           # The scrutinee's args are parameters ++ indices; split off the leading

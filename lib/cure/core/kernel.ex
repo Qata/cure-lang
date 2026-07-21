@@ -281,21 +281,24 @@ defmodule Cure.Core.Kernel do
     sig = Context.signature(ctx)
 
     case infer(ctx, scrut) do
-      {:ok, {:vdata, dname, scrut_args}} ->
-        family = Inductive.get_family(sig, dname)
-        # An OPAQUE (postulate) family is non-eliminable: refuse the `case`
-        # BEFORE coverage. A zero-constructor family passes coverage vacuously
-        # (empty branch list = ex-falso, §H), so without this guard an opaque
-        # type would be freely ex-falso-eliminable — the marker, not the ctor
-        # count, is what forbids elimination (Agda `postulate`).
-        if Inductive.opaque_family?(family) do
-          {:error, :opaque_not_eliminable}
-        else
-          infer_case_data(ctx, sig, dname, family, scrut, scrut_args, motive, branches)
-        end
+      {:ok, scrut_type} ->
+        case Normalise.whnf_value(scrut_type, sig) do
+          {:vdata, dname, scrut_args} ->
+            family = Inductive.get_family(sig, dname)
+            # An OPAQUE (postulate) family is non-eliminable: refuse the `case`
+            # BEFORE coverage. A zero-constructor family passes coverage vacuously
+            # (empty branch list = ex-falso, §H), so without this guard an opaque
+            # type would be freely ex-falso-eliminable — the marker, not the ctor
+            # count, is what forbids elimination (Agda `postulate`).
+            if Inductive.opaque_family?(family) do
+              {:error, :opaque_not_eliminable}
+            else
+              infer_case_data(ctx, sig, dname, family, scrut, scrut_args, motive, branches)
+            end
 
-      {:ok, _other} ->
-        {:error, :case_scrutinee_not_data}
+          _other ->
+            {:error, :case_scrutinee_not_data}
+        end
 
       {:error, _} = err ->
         err
