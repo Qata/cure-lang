@@ -909,8 +909,8 @@ defmodule Cure.CLI do
               :ok ->
                 {:pass, "#{file}: doctest #{name}"}
 
-              {:fail, reason} ->
-                error_diagnostic(Cure.Diagnostic.Operational.command_failure("doctest #{name}", reason))
+              {:fail, diagnostic, registry} ->
+                emit_diagnostic(diagnostic, registry)
 
                 {:fail, "#{file}: doctest #{name}"}
             end

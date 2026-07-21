@@ -9513,10 +9513,16 @@ defmodule Cure.Elab.Elaborator do
   @doc false
   def elaborate_expr({:variable, _meta, "Type"}, _scope, _env), do: {:ok, {:type, 0}}
 
-  def elaborate_expr({:variable, _meta, name}, scope, env) do
+  def elaborate_expr({:variable, meta, name}, scope, env) do
     case Enum.find_index(scope, &(&1 == name)) do
-      nil -> resolve_free(name, env)
-      index -> {:ok, {:var, index}}
+      nil ->
+        case resolve_free(name, env) do
+          {:error, reason} -> {:error, attach_variable_context(reason, meta, name)}
+          result -> result
+        end
+
+      index ->
+        {:ok, {:var, index}}
     end
   end
 

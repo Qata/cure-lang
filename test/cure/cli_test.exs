@@ -498,6 +498,39 @@ defmodule Cure.CLITest do
       refute stderr =~ "FAIL test/failure.cure"
       refute stderr =~ "{:"
     end
+
+    test "doctest compile failures keep their compiler category and source caret" do
+      root = Path.join(System.tmp_dir!(), "cure_cli_doctest_#{System.unique_integer([:positive])}")
+      File.mkdir_p!(Path.join(root, "lib"))
+      File.mkdir_p!(Path.join(root, "test"))
+
+      File.write!(Path.join(root, "lib/demo.cure"), """
+      mod Demo
+        ## Example.
+        ##
+        ##   cure> missing_name
+        ##   => 0
+        fn example() -> Int = 0
+      end
+      """)
+
+      File.write!(Path.join(root, "test/empty.cure"), "mod EmptyTests\nend\n")
+      on_exit(fn -> File.rm_rf!(root) end)
+
+      stderr =
+        capture_io(:stderr, fn ->
+          File.cd!(root, fn ->
+            assert catch_exit(Cure.CLI.main(["test", "--doctests"])) == {:shutdown, 1}
+          end)
+        end)
+
+      assert stderr =~ "UNKNOWN VALUE [E091]"
+      assert stderr =~ "fn main() = missing_name"
+      assert stderr =~ "^^^^^^^^^^^^"
+      refute stderr =~ "COMMAND FAILED [E098]"
+      refute stderr =~ "compile error:"
+      refute stderr =~ "{:unknown_global"
+    end
   end
 
   describe "unknown-command suggestions" do

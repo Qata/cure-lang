@@ -49,8 +49,22 @@ defmodule Cure.Doc.DoctestsTest do
   end
 
   test "compile failures use a diagnostic code instead of exposing the raw reason" do
-    assert {:fail, message} = Doctests.run_one("missing_name", "0", "doctest.cure")
-    assert message =~ "[E091]"
-    refute message =~ "{:unknown_global"
+    assert {:fail, diagnostic, registry} = Doctests.run_one("missing_name", "0", "doctest.cure")
+
+    rendered =
+      Cure.Diagnostic.Sink.new(format: :plain, color: :never, width: 80, registry: registry)
+      |> Cure.Diagnostic.Sink.render(diagnostic)
+
+    assert rendered =~ "UNKNOWN VALUE [E091]"
+    assert rendered =~ "fn main() = missing_name"
+    assert rendered =~ "^^^^^^^^^^^^"
+    refute rendered =~ "compile error:"
+    refute rendered =~ "{:unknown_global"
+  end
+
+  test "expectation failures remain structured until presentation" do
+    assert {:fail, diagnostic, nil} = Doctests.run_one("1", "2", "doctest.cure")
+    assert diagnostic.code == "E098"
+    assert Cure.Diagnostic.message(diagnostic) == "doctest failed: expected 2, got 1"
   end
 end

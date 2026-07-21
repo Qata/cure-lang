@@ -674,7 +674,12 @@ defmodule Cure.Elab.Declarations do
   # return_value}` so the caller rebuilds the final Π from the settled codomain.
   defp elaborate_body_typed(body_expr, %{inferred_return: true} = sig, ctx, env) do
     with {:ok, body_term, ret_val} <-
-           Elaborator.elaborate_expr_typed(body_expr, sig.scope, ctx, env) do
+           attach_source_context(
+             Elaborator.elaborate_expr_typed(body_expr, sig.scope, ctx, env),
+             body_expr,
+             sig.name,
+             env
+           ) do
       ret_core = Quote.reify(ret_val, length(sig.telescope))
       {:ok, body_term, ret_core, ret_val}
     end

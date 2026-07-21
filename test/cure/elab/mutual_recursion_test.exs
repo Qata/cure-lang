@@ -49,4 +49,15 @@ defmodule Cure.Elab.MutualRecursionTest do
     assert {:error, {:source_context, {:unknown_global, :nope, _}, _}} =
              Program.elaborate(@nat <> "  fn f(n: Nat) -> Nat = nope(n)\nend\n")
   end
+
+  test "an unknown global in an inferred body retains authored source context" do
+    source = "mod InferredContext\n  fn f() = missing_name\nend\n"
+
+    assert {:error, {:source_context, {:unknown_global, :missing_name, _}, %{line: 2, column: column, span: span}}} =
+             Program.elaborate(source, file: "inferred_context.cure")
+
+    assert column > 1
+    assert span.path == "inferred_context.cure"
+    assert span.start_line == 2
+  end
 end
