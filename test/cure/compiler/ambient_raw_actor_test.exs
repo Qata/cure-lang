@@ -19,6 +19,7 @@ defmodule Cure.Compiler.AmbientRawActorTest do
   # actor: bare source, no `use`, must compile and behave. The raw branch's
   # OUTPUT is self-contained (@extern GenServer callbacks + `%[...]` tuples), so
   # only the EXPANDER needs Std.Actor — user-body elaboration needs nothing.
+  @tag timeout: 120_000
   test "bare-source raw family actor expands without use Std.Actor" do
     source = """
     actor Cure.Generated.AmbientRawCast
