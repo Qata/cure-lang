@@ -2361,7 +2361,7 @@ defmodule Cure.Diagnostic.Adapter do
           end
       end
 
-    labels =
+    branch_labels =
       Enum.map(branches, fn branch ->
         span = branch_span(branch)
         name = branch_name(branch)
@@ -2371,14 +2371,27 @@ defmodule Cure.Diagnostic.Adapter do
             do: "possible outlier: this branch has the incompatible type",
             else: "compare this branch with the declared result"
 
-        %Label{span: span, style: :primary, message: message}
+        %{span: span, name: name, message: message}
       end)
       |> Enum.reject(&is_nil(&1.span))
 
     {primary, secondary} =
-      case labels do
-        [first | rest] -> {first, rest}
-        [] -> {primary_label(opts, "make these branches return the same type"), []}
+      case branch_labels do
+        [] ->
+          {primary_label(opts, "make these branches return the same type"), []}
+
+        labels ->
+          {outliers, comparisons} = Enum.split_with(labels, &same_branch?(&1.name, failing))
+          [chosen | rest] = if outliers == [], do: labels, else: outliers ++ comparisons
+
+          primary = %Label{span: chosen.span, style: :primary, message: chosen.message}
+
+          secondary =
+            Enum.map(rest, fn label ->
+              %Label{span: label.span, style: :secondary, message: label.message}
+            end)
+
+          {primary, secondary}
       end
 
     Diagnostic.new(

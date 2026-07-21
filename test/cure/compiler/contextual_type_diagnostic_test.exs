@@ -278,9 +278,15 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     {diagnostic, registry} = Errors.to_diagnostic(reason, "proof_int_order.cure", source)
     rendered = Renderer.plain(diagnostic, registry)
 
-    assert diagnostic.primary.message == "compare this branch with the declared result"
+    assert diagnostic.primary.style == :primary
+    assert diagnostic.primary.span.start_line == second.start_line
+    assert diagnostic.primary.span.start_column == second.start_column
+    assert diagnostic.primary.message == "possible outlier: this branch has the incompatible type"
     assert [secondary] = diagnostic.secondary
-    assert secondary.message == "possible outlier: this branch has the incompatible type"
+    assert secondary.style == :secondary
+    assert secondary.span.start_line == first.start_line
+    assert secondary.span.start_column == first.start_column
+    assert secondary.message == "compare this branch with the declared result"
     assert diagnostic.payload.failing_branch == :"Std.Int#NegativeSuccessor"
     assert rendered =~ "Possible outlier"
     assert rendered =~ "FromNat(n) -> first"
@@ -290,13 +296,17 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
 
     lsp = Renderer.lsp(diagnostic, registry)
     assert [related] = lsp["relatedInformation"]
-    assert related["message"] == "possible outlier: this branch has the incompatible type"
-    assert related["location"]["range"]["start"]["line"] == 2
+    assert related["message"] == "compare this branch with the declared result"
+    assert related["location"]["range"]["start"]["line"] == 1
   end
 
   test "a singleton branch type is called out when the other arms agree" do
+    source = "match value\n  A -> one\n  B -> two\n  C -> odd\n"
     common = {:data, :Common, [], []}
     outlier = {:data, :Outlier, [], []}
+    a_span = raw_span(source, "A -> one", 2, 3)
+    b_span = raw_span(source, "B -> two", 3, 3)
+    c_span = raw_span(source, "C -> odd", 4, 3)
 
     reason =
       {:source_context,
@@ -310,12 +320,28 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
         }},
        %{
          checking: :three_way_match,
-         branch_patterns: [%{name: "A"}, %{name: "B"}, %{name: "C"}]
+         branch_patterns: [
+           %{name: "A", span: a_span},
+           %{name: "B", span: b_span},
+           %{name: "C", span: c_span}
+         ]
        }}
 
-    {diagnostic, _registry} = Errors.to_diagnostic(reason, "branches.cure", "")
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "branches.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
 
-    assert Renderer.plain(diagnostic) =~ "only the `C` branch has type"
+    assert rendered =~ "only the `C` branch has type"
+    assert rendered =~ "4 |   C -> odd"
+    assert diagnostic.primary.span.start_line == c_span.start_line
+    assert diagnostic.primary.span.start_column == c_span.start_column
+    assert diagnostic.primary.message =~ "possible outlier"
+
+    assert Enum.map(diagnostic.secondary, &{&1.span.start_line, &1.span.start_column}) == [
+             {a_span.start_line, a_span.start_column},
+             {b_span.start_line, b_span.start_column}
+           ]
+
+    assert Enum.all?(diagnostic.secondary, &(&1.style == :secondary))
     assert diagnostic.payload.branch_types |> Enum.map(& &1.branch) == [:A, :B, :C]
   end
 
