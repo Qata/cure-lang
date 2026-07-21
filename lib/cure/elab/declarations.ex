@@ -747,6 +747,19 @@ defmodule Cure.Elab.Declarations do
     })
   end
 
+  defp declaration_expectation_context({:binary_op, meta, _args}, reason, context)
+       when is_list(meta) and is_map(context) do
+    if implicit_failure?(reason) do
+      Map.merge(context, %{
+        checking: Keyword.get(meta, :operator, context.checking),
+        expectation_origin: :implicit,
+        expression_category: :binary_op
+      })
+    else
+      context
+    end
+  end
+
   defp declaration_expectation_context(_expression, _reason, context), do: context
 
   defp implicit_failure?({:source_context, reason, _context}), do: implicit_failure?(reason)

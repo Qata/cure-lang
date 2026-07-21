@@ -24,6 +24,25 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert Renderer.plain(diagnostic, registry) =~ "type written in its annotation"
   end
 
+  test "a missing implicit instance retains the authored call context" do
+    source = "mod M\n  fn has(x: t, y: t) -> Bool = x == y\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "implicit.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "implicit.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.expectation_origin == :implicit
+    assert diagnostic.payload.checking == :==
+    assert rendered =~ "implicit"
+    assert rendered =~ "2 |   fn has(x: t, y: t) -> Bool = x == y"
+  end
+
   test "a real conditional mismatch reports the authored guard" do
     source = "fn main() -> Int = if 1 then 2 else 3\n"
 
