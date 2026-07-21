@@ -170,7 +170,9 @@ mod Std.Regex
     PatternConcat : Pattern(left) -> Pattern(right) -> Pattern(PairC(left, right))
     PatternGroup : Pattern(inner) -> Pattern(StringC)
     PatternAlternate : Pattern(left) -> Pattern(right) -> Pattern(ChoiceC(left, right))
+    PatternAlternateMode : Pattern(left) -> Pattern(right) -> Bool -> Pattern(ChoiceC(left, right))
     PatternRepeat : Pattern(inner) -> Pattern(ListC(inner))
+    PatternRepeatMode : Pattern(inner) -> Bool -> Pattern(ListC(inner))
 
   ## State identifiers are naturals below `state_count`. Thompson construction
   ## allocates disjoint contiguous ranges and preserves that invariant by
@@ -250,11 +252,18 @@ mod Std.Regex
     [Accepted(routine) | rest] -> [Accepted(append_routine(routine, [EndCapture()])) | finish_capture(rest)]
     [Active(state, routine) | rest] -> [Active(state, routine) | finish_capture(rest)]
 
-  fn repeat_destinations(destinations: List(MachineState), starts: List(MachineState)) -> List(MachineState) = match destinations
+  fn repeat_accepting(routine: List(EvidenceInstruction)) -> List(MachineState) =
+    [Accepted(append_routine(routine, [EndList()]))]
+
+  fn repeat_destination_order(routine: List(EvidenceInstruction), starts: List(MachineState), lazy: Bool) -> List(MachineState) = pickup
+    lazy -> append_states(repeat_accepting(routine), enter_repeat(routine, starts))
+    else -> append_states(enter_repeat(routine, starts), repeat_accepting(routine))
+
+  fn repeat_destinations(destinations: List(MachineState), starts: List(MachineState), lazy: Bool) -> List(MachineState) = match destinations
     [] -> []
     [Accepted(routine) | rest] ->
-      [Accepted(append_routine(routine, [EndList()])) | append_states(enter_repeat(routine, starts), repeat_destinations(rest, starts))]
-    [Active(state, routine) | rest] -> [Active(state, routine) | repeat_destinations(rest, starts)]
+      append_states(repeat_destination_order(routine, starts, lazy), repeat_destinations(rest, starts, lazy))
+    [Active(state, routine) | rest] -> [Active(state, routine) | repeat_destinations(rest, starts, lazy)]
 
   fn enter_repeat(routine: List(EvidenceInstruction), starts: List(MachineState)) -> List(MachineState) = match starts
     [] -> []
@@ -273,6 +282,20 @@ mod Std.Regex
   fn alternate_machine_next(left_count: Nat, left_next: Nat -> Char -> List(MachineState), right_next: Nat -> Char -> List(MachineState), state: Nat, char: Char) -> List(MachineState) = pickup
     nat_less(state, left_count) -> mark_branch(left_next(state)(char), EmitLeft())
     else -> shift_states(left_count, mark_branch(right_next(nat_subtract(state, left_count))(char), EmitRight()))
+
+  fn alternate_machine_starts(left_count: Nat, left_starts: List(MachineState), right_starts: List(MachineState), prefer_right: Bool) -> List(MachineState) =
+    let marked_left = mark_branch(left_starts, EmitLeft())
+    let marked_right = shift_states(left_count, mark_branch(right_starts, EmitRight()))
+    pickup
+      prefer_right -> append_states(marked_right, marked_left)
+      else -> append_states(marked_left, marked_right)
+
+  fn repeat_machine_starts(starts: List(MachineState), lazy: Bool) -> List(MachineState) =
+    let empty = [Accepted([BeginList(), EndList()])]
+    let consuming = enter_repeat([BeginList()], starts)
+    pickup
+      lazy -> append_states(empty, consuming)
+      else -> append_states(consuming, empty)
 
   fn compile_pattern({shape: ShapeCode}, pattern: Pattern(shape)) -> PatternMachine = match pattern
     PatternEmpty() -> PatternMachine(Z(), [Accepted([EmitUnit()])], fn(_state, _char) -> [])
@@ -300,12 +323,27 @@ mod Std.Regex
             append_states(mark_branch(left_starts, EmitLeft()), shift_states(left_count, mark_branch(right_starts, EmitRight()))),
             fn(state, char) -> alternate_machine_next(left_count, left_next, right_next, state, char)
           )
+    PatternAlternateMode(left, right, prefer_right) -> match compile_pattern(left)
+      PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
+        PatternMachine(right_count, right_starts, right_next) ->
+          PatternMachine(
+            plus(left_count, right_count),
+            alternate_machine_starts(left_count, left_starts, right_starts, prefer_right),
+            fn(state, char) -> alternate_machine_next(left_count, left_next, right_next, state, char)
+          )
     PatternRepeat(inner) -> match compile_pattern(inner)
       PatternMachine(count, starts, next) ->
         PatternMachine(
           count,
-          [Accepted([BeginList(), EndList()]) | enter_repeat([BeginList()], starts)],
-          fn(state, char) -> repeat_destinations(next(state)(char), starts)
+          repeat_machine_starts(starts, false),
+          fn(state, char) -> repeat_destinations(next(state)(char), starts, false)
+        )
+    PatternRepeatMode(inner, lazy) -> match compile_pattern(inner)
+      PatternMachine(count, starts, next) ->
+        PatternMachine(
+          count,
+          repeat_machine_starts(starts, lazy),
+          fn(state, char) -> repeat_destinations(next(state)(char), starts, lazy)
         )
 
   fn machine_has_accept(states: List(MachineState)) -> Bool = match states
@@ -429,7 +467,20 @@ mod Std.Regex
         None() -> None()
         Some(EvidenceDecoded(rest, value, branch)) -> Some(EvidenceDecoded(rest, decoded_right_value(value), EncodesRight(branch)))
       _ -> None()
+    PatternAlternateMode(left, right, _) -> match evidence
+      [LeftEvidence() | branch_evidence] -> match decode_pattern_encoding(left, branch_evidence)
+        None() -> None()
+        Some(EvidenceDecoded(rest, value, branch)) -> Some(EvidenceDecoded(rest, decoded_left_value(value), EncodesLeft(branch)))
+      [RightEvidence() | branch_evidence] -> match decode_pattern_encoding(right, branch_evidence)
+        None() -> None()
+        Some(EvidenceDecoded(rest, value, branch)) -> Some(EvidenceDecoded(rest, decoded_right_value(value), EncodesRight(branch)))
+      _ -> None()
     PatternRepeat(inner) -> match evidence
+      [EndListEvidence() | list_evidence] -> match decode_many_evidence(inner, list_evidence)
+        None() -> None()
+        Some(ManyEvidenceDecoded(rest, values, items)) -> Some(EvidenceDecoded(rest, reverse_sem_values(values), EncodesList(items)))
+      _ -> None()
+    PatternRepeatMode(inner, _) -> match evidence
       [EndListEvidence() | list_evidence] -> match decode_many_evidence(inner, list_evidence)
         None() -> None()
         Some(ManyEvidenceDecoded(rest, values, items)) -> Some(EvidenceDecoded(rest, reverse_sem_values(values), EncodesList(items)))
@@ -592,10 +643,10 @@ mod Std.Regex
   ## Elixir-compatible literal modifiers, in `i m s x u f U` order. Repeated
   ## letters are idempotent and modifier order is irrelevant. No accepted flag
   ## is metadata-only: each one must affect parsing or machine execution.
-  type RegexOptions = RegexOptions(Bool, Bool, Bool, Bool, Bool, Bool, Bool)
+  type RegexOptions = RegexOptions(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)
 
   fn default_options() -> RegexOptions =
-    RegexOptions(false, false, false, false, false, false, false)
+    RegexOptions(false, false, false, false, false, false, false, false)
 
   type Regex indices (result: Type)
     FromPattern : (shape: ShapeCode) -> Pattern(shape) -> Regex(Sem(shape))
@@ -738,9 +789,18 @@ mod Std.Regex
       None() -> None()
       Some(BuiltRegex(shape, pattern, convert)) ->
         Some(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeat(pattern)), PrependConversion(convert)))
-    RepeatedPattern(inner, _lazy) -> compile_regex(Repeated(inner))
-    OneOrMorePattern(inner, _lazy) -> compile_regex(PlusPattern(inner))
-    OptionalLiteral(inner, _lazy) -> compile_regex(OptionalPattern(inner))
+    RepeatedPattern(inner, lazy) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(ListC(shape), PatternRepeatMode(pattern, lazy), ListConversion(convert)))
+    OneOrMorePattern(inner, lazy) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeatMode(pattern, lazy)), PrependConversion(convert)))
+    OptionalLiteral(inner, lazy) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternateMode(pattern, PatternEmpty(), lazy), ChoiceConversion(convert, unit_identity_conversion())))
     ConfiguredRegex(_options, inner) -> compile_regex(inner)
     StartAnchor() -> None()
     EndAnchor() -> None()
@@ -842,11 +902,50 @@ mod Std.Regex
 
   fn exactly(expected: Char) -> Regex(Unit) = map(predicate(exact_test(expected)), discard_char)
 
+  fn same_chars(left: String, right: String) -> Bool = match left
+    [] -> match right
+      [] -> true
+      _ -> false
+    [left_char | left_rest] -> match right
+      [] -> false
+      [right_char | right_rest] -> pickup
+        Std.Char.same(left_char, right_char) -> same_chars(left_rest, right_rest)
+        else -> false
+
+  fn caseless_same(expected: Char, actual: Char, unicode: Bool) -> Bool = pickup
+    unicode -> same_chars(Std.Char.lowercased(expected), Std.Char.lowercased(actual))
+    else -> Std.Char.same(Std.Char.ascii_lowercased(expected), Std.Char.ascii_lowercased(actual))
+
+  fn option_exact_predicate(expected: Char, caseless: Bool, unicode: Bool, actual: Char) -> Bool = pickup
+    caseless -> caseless_same(expected, actual, unicode)
+    else -> Std.Char.same(expected, actual)
+
+  fn option_exact_test(expected: Char, caseless: Bool, unicode: Bool) -> Char -> Bool =
+    fn(actual) -> option_exact_predicate(expected, caseless, unicode, actual)
+
+  fn exactly_with_options(expected: Char, caseless: Bool, unicode: Bool) -> Regex(Unit) =
+    map(predicate(option_exact_test(expected, caseless, unicode)), discard_char)
+
+  fn dot_predicate(dotall: Bool, char: Char) -> Bool = pickup
+    dotall -> true
+    Std.Char.is_newline(char) -> false
+    else -> true
+
+  fn dot_test(dotall: Bool) -> Char -> Bool = fn(char) -> dot_predicate(dotall, char)
+  fn dot_with_options(dotall: Bool) -> Regex(Char) = predicate(dot_test(dotall))
+
   fn contains_char(chars: List(Char), actual: Char) -> Bool = match chars
     [] -> false
     [head | rest] -> pickup
       Std.Char.same(head, actual) -> true
       else -> contains_char(rest, actual)
+
+  fn contains_char_with_options(chars: List(Char), actual: Char, caseless: Bool, unicode: Bool) -> Bool = match chars
+    [] -> false
+    [head | rest] -> pickup
+      caseless and caseless_same(head, actual, unicode) -> true
+      Std.Char.same(head, actual) -> true
+      else -> contains_char_with_options(rest, actual, caseless, unicode)
 
   fn set_test(chars: List(Char)) -> Char -> Bool = fn(actual) -> contains_char(chars, actual)
 
@@ -866,6 +965,20 @@ mod Std.Regex
       Std.Char.between(actual, first, last) -> true
       else -> in_ranges(rest, actual)
 
+  fn folded_range_match(first: Char, last: Char, actual: Char, unicode: Bool) -> Bool = pickup
+    Std.Char.between(actual, first, last) -> true
+    unicode -> match Std.Char.lowercased(actual)
+      [folded] -> Std.Char.between(folded, first, last)
+      _ -> false
+    else -> Std.Char.between(Std.Char.ascii_lowercased(actual), Std.Char.ascii_lowercased(first), Std.Char.ascii_lowercased(last))
+
+  fn in_ranges_with_options(ranges: List(CharacterRange), actual: Char, caseless: Bool, unicode: Bool) -> Bool = match ranges
+    [] -> false
+    [CharacterRange(first, last) | rest] -> pickup
+      caseless and folded_range_match(first, last, actual, unicode) -> true
+      Std.Char.between(actual, first, last) -> true
+      else -> in_ranges_with_options(rest, actual, caseless, unicode)
+
   fn class_predicate(chars: List(Char), ranges: List(CharacterRange), negated: Bool, actual: Char) -> Bool =
     let found = contains_char(chars, actual) or in_ranges(ranges, actual)
     pickup
@@ -877,6 +990,18 @@ mod Std.Regex
 
   fn character_class(chars: List(Char), ranges: List(CharacterRange), negated: Bool) -> Regex(Char) =
     predicate(class_test(chars, ranges, negated))
+
+  fn option_class_predicate(chars: List(Char), ranges: List(CharacterRange), negated: Bool, caseless: Bool, unicode: Bool, actual: Char) -> Bool =
+    let found = contains_char_with_options(chars, actual, caseless, unicode) or in_ranges_with_options(ranges, actual, caseless, unicode)
+    pickup
+      found == negated -> false
+      else -> true
+
+  fn option_class_test(chars: List(Char), ranges: List(CharacterRange), negated: Bool, caseless: Bool, unicode: Bool) -> Char -> Bool =
+    fn(actual) -> option_class_predicate(chars, ranges, negated, caseless, unicode, actual)
+
+  fn character_class_with_options(chars: List(Char), ranges: List(CharacterRange), negated: Bool, caseless: Bool, unicode: Bool) -> Regex(Char) =
+    predicate(option_class_test(chars, ranges, negated, caseless, unicode))
 
   fn ascii_digit(char: Char) -> Bool = Std.Char.between(char, '0', '9')
 
@@ -896,6 +1021,55 @@ mod Std.Regex
     negated -> predicate(negate_test(ascii_digit))
     else -> predicate(ascii_digit)
 
+  fn option_digit(char: Char, unicode: Bool) -> Bool = pickup
+    unicode -> Std.Char.is_unicode_digit(char)
+    else -> ascii_digit(char)
+
+  fn option_word(char: Char, unicode: Bool) -> Bool = pickup
+    unicode -> Std.Char.is_unicode_word(char)
+    else -> ascii_word(char)
+
+  fn option_space(char: Char, unicode: Bool) -> Bool = pickup
+    unicode -> Std.Char.is_unicode_space(char)
+    else -> ascii_space(char)
+
+  fn option_class_negated(test: Char -> Bool, negated: Bool, char: Char) -> Bool = pickup
+    negated -> not test(char)
+    else -> test(char)
+
+  fn digit_option_predicate(negated: Bool, unicode: Bool, char: Char) -> Bool = pickup
+    negated -> not option_digit(char, unicode)
+    else -> option_digit(char, unicode)
+
+  fn word_option_predicate(negated: Bool, unicode: Bool, char: Char) -> Bool = pickup
+    negated -> not option_word(char, unicode)
+    else -> option_word(char, unicode)
+
+  fn space_option_predicate(negated: Bool, unicode: Bool, char: Char) -> Bool = pickup
+    negated -> not option_space(char, unicode)
+    else -> option_space(char, unicode)
+
+  fn digit_options_test(negated: Bool, unicode: Bool) -> Char -> Bool = fn(char) -> digit_option_predicate(negated, unicode, char)
+  fn word_options_test(negated: Bool, unicode: Bool) -> Char -> Bool = fn(char) -> word_option_predicate(negated, unicode, char)
+  fn space_options_test(negated: Bool, unicode: Bool) -> Char -> Bool = fn(char) -> space_option_predicate(negated, unicode, char)
+
+  fn digit_class_with_options(negated: Bool, unicode: Bool) -> Regex(Char) = predicate(digit_options_test(negated, unicode))
+  fn word_class_with_options(negated: Bool, unicode: Bool) -> Regex(Char) = predicate(word_options_test(negated, unicode))
+  fn space_class_with_options(negated: Bool, unicode: Bool) -> Regex(Char) = predicate(space_options_test(negated, unicode))
+
+  fn horizontal_predicate(negated: Bool, char: Char) -> Bool = pickup
+    negated -> not Std.Char.is_horizontal_space(char)
+    else -> Std.Char.is_horizontal_space(char)
+
+  fn vertical_predicate(negated: Bool, char: Char) -> Bool = pickup
+    negated -> not Std.Char.is_vertical_space(char)
+    else -> Std.Char.is_vertical_space(char)
+
+  fn horizontal_test(negated: Bool) -> Char -> Bool = fn(char) -> horizontal_predicate(negated, char)
+  fn vertical_test(negated: Bool) -> Char -> Bool = fn(char) -> vertical_predicate(negated, char)
+  fn horizontal_class(negated: Bool) -> Regex(Char) = predicate(horizontal_test(negated))
+  fn vertical_class(negated: Bool) -> Regex(Char) = predicate(vertical_test(negated))
+
   fn word_class(negated: Bool) -> Regex(Char) = pickup
     negated -> predicate(negate_test(ascii_word))
     else -> predicate(ascii_word)
@@ -914,6 +1088,8 @@ mod Std.Regex
     | LiteralDigit(Bool)
     | LiteralWord(Bool)
     | LiteralSpace(Bool)
+    | LiteralHorizontal(Bool)
+    | LiteralVertical(Bool)
     | LiteralSequence(LiteralPattern, LiteralPattern)
     | LiteralAlternate(LiteralPattern, LiteralPattern)
     | LiteralRepeat(LiteralPattern, Bool)
@@ -943,7 +1119,7 @@ mod Std.Regex
             expand(
               call("Std.Regex.configured", [
                 emit_options(options),
-                call("Std.Regex.simplified", [emit_shape(literal_shape(parsed)), emit_literal(parsed)])
+                call("Std.Regex.simplified", [emit_shape(literal_shape(parsed)), emit_literal_with_options(parsed, options)])
               ])
             )
           _ -> reject(Failure(:UnexpectedRegexSuffix, []))
@@ -959,31 +1135,35 @@ mod Std.Regex
     ['u' | rest] -> parse_literal_flags(rest, enable_unicode(options))
     ['f' | rest] -> parse_literal_flags(rest, enable_firstline(options))
     ['U' | rest] -> parse_literal_flags(rest, enable_ungreedy(options))
+    ['E' | rest] -> parse_literal_flags(rest, enable_export(options))
     [_ | _] -> LiteralFlagsInvalid(:InvalidRegexModifier)
 
   fn enable_caseless(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(_, m, s, x, u, f, g) -> RegexOptions(true, m, s, x, u, f, g)
+    RegexOptions(_, m, s, x, u, f, g, e) -> RegexOptions(true, m, s, x, u, f, g, e)
 
   fn enable_multiline(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, _, s, x, u, f, g) -> RegexOptions(i, true, s, x, u, f, g)
+    RegexOptions(i, _, s, x, u, f, g, e) -> RegexOptions(i, true, s, x, u, f, g, e)
 
   fn enable_dotall(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, m, _, x, u, f, g) -> RegexOptions(i, m, true, x, u, f, g)
+    RegexOptions(i, m, _, x, u, f, g, e) -> RegexOptions(i, m, true, x, u, f, g, e)
 
   fn enable_extended(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, m, s, _, u, f, g) -> RegexOptions(i, m, s, true, u, f, g)
+    RegexOptions(i, m, s, _, u, f, g, e) -> RegexOptions(i, m, s, true, u, f, g, e)
 
   fn enable_unicode(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, m, s, x, _, f, g) -> RegexOptions(i, m, s, x, true, f, g)
+    RegexOptions(i, m, s, x, _, f, g, e) -> RegexOptions(i, m, s, x, true, f, g, e)
 
   fn enable_firstline(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, m, s, x, u, _, g) -> RegexOptions(i, m, s, x, u, true, g)
+    RegexOptions(i, m, s, x, u, _, g, e) -> RegexOptions(i, m, s, x, u, true, g, e)
 
   fn enable_ungreedy(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, m, s, x, u, f, _) -> RegexOptions(i, m, s, x, u, f, true)
+    RegexOptions(i, m, s, x, u, f, _, e) -> RegexOptions(i, m, s, x, u, f, true, e)
+
+  fn enable_export(options: RegexOptions) -> RegexOptions = match options
+    RegexOptions(i, m, s, x, u, f, g, _) -> RegexOptions(i, m, s, x, u, f, g, true)
 
   fn prepare_literal(pattern: String, options: RegexOptions) -> String = match options
-    RegexOptions(_, _, _, extended, _, _, _) -> pickup
+    RegexOptions(_, _, _, extended, _, _, _, _) -> pickup
       extended -> strip_extended(pattern)
       else -> pattern
 
@@ -1140,7 +1320,15 @@ mod Std.Regex
     ['W' | rest] -> LiteralParsed(LiteralWord(true), rest)
     ['s' | rest] -> LiteralParsed(LiteralSpace(false), rest)
     ['S' | rest] -> LiteralParsed(LiteralSpace(true), rest)
+    ['h' | rest] -> LiteralParsed(LiteralHorizontal(false), rest)
+    ['H' | rest] -> LiteralParsed(LiteralHorizontal(true), rest)
+    ['v' | rest] -> LiteralParsed(LiteralVertical(false), rest)
+    ['V' | rest] -> LiteralParsed(LiteralVertical(true), rest)
+    ['a' | rest] -> LiteralParsed(LiteralExact(7), rest)
+    ['e' | rest] -> LiteralParsed(LiteralExact(27), rest)
+    ['f' | rest] -> LiteralParsed(LiteralExact(12), rest)
     ['n' | rest] -> LiteralParsed(LiteralExact('\n'), rest)
+    ['r' | rest] -> LiteralParsed(LiteralExact('\r'), rest)
     ['t' | rest] -> LiteralParsed(LiteralExact('\t'), rest)
     [char | rest] -> LiteralParsed(LiteralExact(char), rest)
 
@@ -1182,6 +1370,7 @@ mod Std.Regex
     [] -> output
     [head | rest] -> reverse_ranges_into(rest, [head | output])
 
+
   fn literal_shape(pattern: LiteralPattern) -> ShapeCode = match pattern
     LiteralEmpty -> UnitC
     LiteralExact(_) -> UnitC
@@ -1190,6 +1379,8 @@ mod Std.Regex
     LiteralDigit(_) -> CharC
     LiteralWord(_) -> CharC
     LiteralSpace(_) -> CharC
+    LiteralHorizontal(_) -> CharC
+    LiteralVertical(_) -> CharC
     LiteralSequence(left, right) -> PairC(literal_shape(left), literal_shape(right))
     LiteralAlternate(left, right) -> ChoiceC(literal_shape(left), literal_shape(right))
     LiteralRepeat(inner, _) -> ListC(literal_shape(inner))
@@ -1220,6 +1411,8 @@ mod Std.Regex
     LiteralDigit(negated) -> call("Std.Regex.digit_class", [bool_literal(negated)])
     LiteralWord(negated) -> call("Std.Regex.word_class", [bool_literal(negated)])
     LiteralSpace(negated) -> call("Std.Regex.space_class", [bool_literal(negated)])
+    LiteralHorizontal(negated) -> call("Std.Regex.horizontal_class", [bool_literal(negated)])
+    LiteralVertical(negated) -> call("Std.Regex.vertical_class", [bool_literal(negated)])
     LiteralSequence(left, right) -> call("Std.Regex.concatenate", [emit_literal(left), emit_literal(right)])
     LiteralAlternate(left, right) -> call("Std.Regex.alternate", [emit_literal(left), emit_literal(right)])
     LiteralRepeat(inner, lazy) -> call("Std.Regex.repeated_pattern", [emit_literal(inner), bool_literal(lazy)])
@@ -1228,6 +1421,27 @@ mod Std.Regex
     LiteralCapture(inner) -> call("Std.Regex.captured", [emit_literal(inner)])
     LiteralStart -> call("Std.Regex.start_anchor", [])
     LiteralEnd -> call("Std.Regex.end_anchor", [])
+
+  fn emit_literal_with_options(pattern: LiteralPattern, options: RegexOptions) -> Syntax = match options
+    RegexOptions(caseless, _multiline, dotall, _extended, unicode, _firstline, ungreedy, _exported) -> match pattern
+      LiteralEmpty -> call("Std.Regex.empty", [])
+      LiteralExact(char) -> call("Std.Regex.exactly_with_options", [char_literal(char), bool_literal(caseless), bool_literal(unicode)])
+      LiteralAny -> call("Std.Regex.dot_with_options", [bool_literal(dotall)])
+      LiteralClass(chars, ranges, negated) ->
+        call("Std.Regex.character_class_with_options", [emit_chars(chars), emit_ranges(ranges), bool_literal(negated), bool_literal(caseless), bool_literal(unicode)])
+      LiteralDigit(negated) -> call("Std.Regex.digit_class_with_options", [bool_literal(negated), bool_literal(unicode)])
+      LiteralWord(negated) -> call("Std.Regex.word_class_with_options", [bool_literal(negated), bool_literal(unicode)])
+      LiteralSpace(negated) -> call("Std.Regex.space_class_with_options", [bool_literal(negated), bool_literal(unicode)])
+      LiteralHorizontal(negated) -> call("Std.Regex.horizontal_class", [bool_literal(negated)])
+      LiteralVertical(negated) -> call("Std.Regex.vertical_class", [bool_literal(negated)])
+      LiteralSequence(left, right) -> call("Std.Regex.concatenate", [emit_literal_with_options(left, options), emit_literal_with_options(right, options)])
+      LiteralAlternate(left, right) -> call("Std.Regex.alternate", [emit_literal_with_options(left, options), emit_literal_with_options(right, options)])
+      LiteralRepeat(inner, lazy) -> call("Std.Regex.repeated_pattern", [emit_literal_with_options(inner, options), bool_literal(lazy != ungreedy)])
+      LiteralPlus(inner, lazy) -> call("Std.Regex.one_or_more_pattern", [emit_literal_with_options(inner, options), bool_literal(lazy != ungreedy)])
+      LiteralOptional(inner, lazy) -> call("Std.Regex.optional_literal", [emit_literal_with_options(inner, options), bool_literal(lazy != ungreedy)])
+      LiteralCapture(inner) -> call("Std.Regex.captured", [emit_literal_with_options(inner, options)])
+      LiteralStart -> call("Std.Regex.start_anchor", [])
+      LiteralEnd -> call("Std.Regex.end_anchor", [])
 
   fn emit_chars(chars: List(Char)) -> Syntax = match chars
     [] -> list([])
@@ -1238,11 +1452,12 @@ mod Std.Regex
     [CharacterRange(first, last) | rest] ->
       prepend_syntax(call("Std.Regex.CharacterRange", [char_literal(first), char_literal(last)]), emit_ranges(rest))
 
+
   fn emit_options(options: RegexOptions) -> Syntax = match options
-    RegexOptions(i, m, s, x, u, f, g) ->
+    RegexOptions(i, m, s, x, u, f, g, e) ->
       call("Std.Regex.RegexOptions", [
         bool_literal(i), bool_literal(m), bool_literal(s), bool_literal(x),
-        bool_literal(u), bool_literal(f), bool_literal(g)
+        bool_literal(u), bool_literal(f), bool_literal(g), bool_literal(e)
       ])
 
   fn prepend_syntax(head: Syntax, tail: Syntax) -> Syntax = match tail

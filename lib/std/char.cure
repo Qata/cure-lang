@@ -114,3 +114,9 @@ mod Std.Char
 
   @extern(:cure_std_char, :unicode_space?, 1)
   fn is_unicode_space(c: Char) -> Bool
+
+  @extern(:cure_std_char, :horizontal_space?, 1)
+  fn is_horizontal_space(c: Char) -> Bool
+
+  @extern(:cure_std_char, :vertical_space?, 1)
+  fn is_vertical_space(c: Char) -> Bool
