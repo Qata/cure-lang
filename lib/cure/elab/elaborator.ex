@@ -6201,18 +6201,81 @@ defmodule Cure.Elab.Elaborator do
   defp compile_matrix([v | vs], rows) do
     col = Enum.map(rows, fn {[p | _ps], _g, _b} -> p end)
 
-    if Enum.all?(col, &match?({:variable, _m, _n}, &1)) do
-      # All-variable column: bind each row's variable to `v`, drop the column.
-      rows2 =
-        Enum.map(rows, fn {[{:variable, _m, x} | ps], g, body} ->
-          repl = {:variable, [], v}
-          {ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}
+    cond do
+      Enum.all?(col, &match?({:variable, _m, _n}, &1)) ->
+        # All-variable column: bind each row's variable to `v`, drop the column.
+        rows2 =
+          Enum.map(rows, fn {[{:variable, _m, x} | ps], g, body} ->
+            repl = {:variable, [], v}
+            {ps, subst_guard(g, x, repl), subst_surface_var(body, x, repl)}
+          end)
+
+        compile_matrix(vs, rows2)
+
+      Enum.all?(col, &match?({kind, _m, _v} when kind in [:literal, :variable], &1)) ->
+        compile_matrix_literal_split(v, vs, rows, col)
+
+      true ->
+        compile_matrix_split(v, vs, rows, col)
+    end
+  end
+
+  # Literal columns cannot become Core constructor branches, but an ordinary
+  # surface `match` already has a checked literal-dispatch path. Build that
+  # nested match directly, specializing each literal exactly as the constructor
+  # splitter does and retaining variable rows as fall-through rows. This keeps
+  # literal bodies in check mode (important for polymorphic values such as `[]`)
+  # and preserves row priority without turning matching into Equatable guards.
+  defp compile_matrix_literal_split(v, vs, rows, col) do
+    literals =
+      col
+      |> Enum.filter(&match?({:literal, _m, _value}, &1))
+      |> Enum.uniq_by(fn {:literal, meta, value} -> {Keyword.get(meta, :subtype), value} end)
+
+    with {:ok, literal_arms} <- split_literal_arms(literals, v, vs, rows) do
+      if Enum.any?(col, &match?({:variable, _m, _name}, &1)) do
+        with {:ok, default_inner} <- split_default(v, vs, rows) do
+          default = {:match_arm, [pattern: {:variable, [], v <> "_d"}], default_inner}
+          {:ok, {:pattern_match, [], [{:variable, [], v} | literal_arms ++ [default]]}}
+        end
+      else
+        {:ok, {:pattern_match, [], [{:variable, [], v} | literal_arms]}}
+      end
+    end
+  end
+
+  defp split_literal_arms(literals, v, vs, rows) do
+    Enum.reduce_while(literals, {:ok, []}, fn literal, {:ok, acc} ->
+      {:literal, literal_meta, literal_value} = literal
+      literal_key = {Keyword.get(literal_meta, :subtype), literal_value}
+
+      sub_rows =
+        Enum.flat_map(rows, fn {[p | ps], guard, body} ->
+          case p do
+            {:literal, meta, value} ->
+              if {Keyword.get(meta, :subtype), value} == literal_key,
+                do: [{ps, guard, body}],
+                else: []
+
+            {:variable, _meta, name} ->
+              replacement = {:variable, [], v}
+
+              [
+                {ps, subst_guard(guard, name, replacement),
+                 subst_surface_var(body, name, replacement)}
+              ]
+          end
         end)
 
-      compile_matrix(vs, rows2)
-    else
-      compile_matrix_split(v, vs, rows, col)
-    end
+      case compile_matrix(vs, sub_rows) do
+        {:ok, inner} ->
+          arm = {:match_arm, [pattern: literal], inner}
+          {:cont, {:ok, acc ++ [arm]}}
+
+        {:error, _} = error ->
+          {:halt, error}
+      end
+    end)
   end
 
   # Fold the rows reaching a matrix leaf into an `if`-chain. An unguarded row is

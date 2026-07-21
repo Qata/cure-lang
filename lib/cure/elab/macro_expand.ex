@@ -222,12 +222,18 @@ defmodule Cure.Elab.MacroExpand do
   defp stamp_declaration_provenance(other, _source, _chain), do: other
 
   defp stamp_canonical_provenance(meta, expansion_meta, kind) when is_list(meta) do
-    stamp_canonical_provenance_from_chain(
-      meta,
-      Keyword.get(expansion_meta, :provenance, []),
-      kind,
-      Metadata.source_info(expansion_meta)
-    )
+    meta =
+      stamp_canonical_provenance_from_chain(
+        meta,
+        Keyword.get(expansion_meta, :provenance, []),
+        kind,
+        Metadata.source_info(expansion_meta)
+      )
+
+    case Keyword.get(expansion_meta, :home_source) do
+      home when is_binary(home) -> Keyword.put(meta, :macro_home_source, home)
+      _ -> meta
+    end
   end
 
   defp stamp_canonical_provenance_from_chain(meta, chain, kind, expansion_info \\ nil)

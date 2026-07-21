@@ -9,6 +9,10 @@ mod Std.Regex
 
   use Std.Char
   use Std.Option
+  use Std.Syntax
+
+  macro RegexLiterals
+    literal regex <pattern: String> <flags: String> computed by expand_literal
 
   ## Cure does not otherwise expose a general-purpose Either in the current
   ## prelude. Keep the branch witness local to the typed regex result universe;
@@ -173,6 +177,18 @@ mod Std.Regex
   ## one-way: regex parsing does not imply an unparser.
   type OneOrMore(value: Type) = OneOrMore(value, List(value))
 
+  type CharacterRange = CharacterRange(Char, Char)
+
+  ## Elixir-compatible literal modifiers. Repeated letters are idempotent and
+  ## order-independent. `r` is parsed as the deprecated spelling of
+  ## `ungreedy`; `E` records export intent, but has no matching effect because
+  ## Cure literals already expand to portable ordinary data/code rather than an
+  ## OTP-owned compiled handle.
+  type RegexOptions = RegexOptions(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)
+
+  fn default_options() -> RegexOptions =
+    RegexOptions(false, false, false, false, false, false, false, false)
+
   type Regex indices (result: Type)
     FromPattern : (shape: ShapeCode) -> Pattern(shape) -> Regex(Sem(shape))
     Mapped : (a -> b) -> Regex(a) -> Regex(b)
@@ -185,6 +201,15 @@ mod Std.Regex
     SameAlternative : Regex(a) -> Regex(a) -> Regex(a)
     OptionalRegex : Regex(a) -> Regex(Option(a))
     OneOrMoreRegex : Regex(a) -> Regex(OneOrMore(a))
+    SimplifiedRegex : (shape: ShapeCode) -> Regex(Sem(shape)) -> Regex(Sem(Simplify(shape)))
+    OptionalPattern : Regex(a) -> Regex(Choice(a, Unit))
+    PlusPattern : Regex(a) -> Regex(List(a))
+    RepeatedPattern : Regex(a) -> Bool -> Regex(List(a))
+    OneOrMorePattern : Regex(a) -> Bool -> Regex(List(a))
+    OptionalLiteral : Regex(a) -> Bool -> Regex(Choice(a, Unit))
+    ConfiguredRegex : RegexOptions -> Regex(a) -> Regex(a)
+    StartAnchor : Regex(Unit)
+    EndAnchor : Regex(Unit)
 
   fn empty() -> Regex(Unit) = FromPattern(UnitC, PatternEmpty())
 
@@ -221,6 +246,29 @@ mod Std.Regex
 
   fn as_string({a: Type}, regex: Regex(a)) -> Regex(String) = MatchedText(regex)
 
+  fn simplified(shape: ShapeCode, regex: Regex(Sem(shape))) -> Regex(Sem(Simplify(shape))) =
+    SimplifiedRegex(shape, regex)
+
+  fn optional_pattern({a: Type}, regex: Regex(a)) -> Regex(Choice(a, Unit)) = OptionalPattern(regex)
+
+  fn plus_pattern({a: Type}, regex: Regex(a)) -> Regex(List(a)) = PlusPattern(regex)
+
+  fn repeated_pattern({a: Type}, regex: Regex(a), lazy: Bool) -> Regex(List(a)) =
+    RepeatedPattern(regex, lazy)
+
+  fn one_or_more_pattern({a: Type}, regex: Regex(a), lazy: Bool) -> Regex(List(a)) =
+    OneOrMorePattern(regex, lazy)
+
+  fn optional_literal({a: Type}, regex: Regex(a), lazy: Bool) -> Regex(Choice(a, Unit)) =
+    OptionalLiteral(regex, lazy)
+
+  fn configured({a: Type}, options: RegexOptions, regex: Regex(a)) -> Regex(a) =
+    ConfiguredRegex(options, regex)
+
+  fn start_anchor() -> Regex(Unit) = StartAnchor()
+
+  fn end_anchor() -> Regex(Unit) = EndAnchor()
+
   fn always(_char: Char) -> Bool = true
 
   fn any_char() -> Regex(Char) = predicate(always)
@@ -250,3 +298,399 @@ mod Std.Regex
     fn(actual) -> range_predicate(first, last, actual)
 
   fn range(first: Char, last: Char) -> Regex(Char) = predicate(range_test(first, last))
+
+  fn in_ranges(ranges: List(CharacterRange), actual: Char) -> Bool = match ranges
+    [] -> false
+    [CharacterRange(first, last) | rest] -> pickup
+      Std.Char.between(actual, first, last) -> true
+      else -> in_ranges(rest, actual)
+
+  fn class_predicate(chars: List(Char), ranges: List(CharacterRange), negated: Bool, actual: Char) -> Bool =
+    let found = contains_char(chars, actual) or in_ranges(ranges, actual)
+    pickup
+      found == negated -> false
+      else -> true
+
+  fn class_test(chars: List(Char), ranges: List(CharacterRange), negated: Bool) -> Char -> Bool =
+    fn(actual) -> class_predicate(chars, ranges, negated, actual)
+
+  fn character_class(chars: List(Char), ranges: List(CharacterRange), negated: Bool) -> Regex(Char) =
+    predicate(class_test(chars, ranges, negated))
+
+  fn ascii_digit(char: Char) -> Bool = Std.Char.between(char, '0', '9')
+
+  fn ascii_word(char: Char) -> Bool =
+    Std.Char.between(char, 'a', 'z') or
+      Std.Char.between(char, 'A', 'Z') or
+      Std.Char.between(char, '0', '9') or
+      Std.Char.same(char, '_')
+
+  fn ascii_space(char: Char) -> Bool =
+    Std.Char.same(char, ' ') or Std.Char.same(char, '\t') or
+      Std.Char.same(char, '\n') or Std.Char.same(char, '\r')
+
+  fn negate_test(test: Char -> Bool) -> Char -> Bool = fn(char) -> not test(char)
+
+  fn digit_class(negated: Bool) -> Regex(Char) = pickup
+    negated -> predicate(negate_test(ascii_digit))
+    else -> predicate(ascii_digit)
+
+  fn word_class(negated: Bool) -> Regex(Char) = pickup
+    negated -> predicate(negate_test(ascii_word))
+    else -> predicate(ascii_word)
+
+  fn space_class(negated: Bool) -> Regex(Char) = pickup
+    negated -> predicate(negate_test(ascii_space))
+    else -> predicate(ascii_space)
+
+  ## Compile-time-only literal syntax tree. It is consumed by `expand_literal`
+  ## and never appears in generated matching code.
+  type LiteralPattern =
+    | LiteralEmpty
+    | LiteralExact(Char)
+    | LiteralAny
+    | LiteralClass(List(Char), List(CharacterRange), Bool)
+    | LiteralDigit(Bool)
+    | LiteralWord(Bool)
+    | LiteralSpace(Bool)
+    | LiteralSequence(LiteralPattern, LiteralPattern)
+    | LiteralAlternate(LiteralPattern, LiteralPattern)
+    | LiteralRepeat(LiteralPattern, Bool)
+    | LiteralPlus(LiteralPattern, Bool)
+    | LiteralOptional(LiteralPattern, Bool)
+    | LiteralCapture(LiteralPattern)
+    | LiteralStart
+    | LiteralEnd
+
+  type LiteralParse = LiteralParsed(LiteralPattern, String) | LiteralInvalid(Atom)
+  type LiteralClassParse = LiteralClassParsed(List(Char), List(CharacterRange), String) | LiteralClassInvalid(Atom)
+  type LiteralFlags = LiteralFlagsParsed(RegexOptions) | LiteralFlagsInvalid(Atom)
+
+  fn expand_literal(input: Syntax) -> MacroResult = match children(input)
+    [pattern_syntax, flags_syntax] -> match leaf_value(pattern_syntax)
+      SStr(pattern) -> match leaf_value(flags_syntax)
+        SStr(flags) -> expand_literal_strings(pattern, flags)
+        _ -> reject(Failure(:InvalidRegexFlagsInput, []))
+      _ -> reject(Failure(:InvalidRegexPatternInput, []))
+    _ -> reject(Failure(:InvalidRegexLiteralInput, []))
+
+  fn expand_literal_strings(pattern: String, flags: String) -> MacroResult = match parse_literal_flags(flags, default_options())
+    LiteralFlagsParsed(options) ->
+      match parse_literal(prepare_literal(pattern, options))
+        LiteralParsed(parsed, rest) -> match rest
+          [] ->
+            expand(
+              call("Std.Regex.configured", [
+                emit_options(options),
+                call("Std.Regex.simplified", [emit_shape(literal_shape(parsed)), emit_literal(parsed)])
+              ])
+            )
+          _ -> reject(Failure(:UnexpectedRegexSuffix, []))
+        LiteralInvalid(reason) -> reject(Failure(reason, []))
+    LiteralFlagsInvalid(reason) -> reject(Failure(reason, []))
+
+  fn parse_literal_flags(flags: String, options: RegexOptions) -> LiteralFlags = match flags
+    [] -> LiteralFlagsParsed(options)
+    ['i' | rest] -> parse_literal_flags(rest, enable_caseless(options))
+    ['m' | rest] -> parse_literal_flags(rest, enable_multiline(options))
+    ['s' | rest] -> parse_literal_flags(rest, enable_dotall(options))
+    ['x' | rest] -> parse_literal_flags(rest, enable_extended(options))
+    ['u' | rest] -> parse_literal_flags(rest, enable_unicode(options))
+    ['f' | rest] -> parse_literal_flags(rest, enable_firstline(options))
+    ['U' | rest] -> parse_literal_flags(rest, enable_ungreedy(options))
+    ['r' | rest] -> parse_literal_flags(rest, enable_ungreedy(options))
+    ['E' | rest] -> parse_literal_flags(rest, enable_export(options))
+    [_ | _] -> LiteralFlagsInvalid(:InvalidRegexModifier)
+
+  fn enable_caseless(options: RegexOptions) -> RegexOptions = match options
+    RegexOptions(_, m, s, x, u, f, g, e) -> RegexOptions(true, m, s, x, u, f, g, e)
+
+  fn enable_multiline(options: RegexOptions) -> RegexOptions = match options
+    RegexOptions(i, _, s, x, u, f, g, e) -> RegexOptions(i, true, s, x, u, f, g, e)
+
+  fn enable_dotall(options: RegexOptions) -> RegexOptions = match options
+    RegexOptions(i, m, _, x, u, f, g, e) -> RegexOptions(i, m, true, x, u, f, g, e)
+
+  fn enable_extended(options: RegexOptions) -> RegexOptions = match options
+    RegexOptions(i, m, s, _, u, f, g, e) -> RegexOptions(i, m, s, true, u, f, g, e)
+
+  fn enable_unicode(options: RegexOptions) -> RegexOptions = match options
+    RegexOptions(i, m, s, x, _, f, g, e) -> RegexOptions(i, m, s, x, true, f, g, e)
+
+  fn enable_firstline(options: RegexOptions) -> RegexOptions = match options
+    RegexOptions(i, m, s, x, u, _, g, e) -> RegexOptions(i, m, s, x, u, true, g, e)
+
+  fn enable_ungreedy(options: RegexOptions) -> RegexOptions = match options
+    RegexOptions(i, m, s, x, u, f, _, e) -> RegexOptions(i, m, s, x, u, f, true, e)
+
+  fn enable_export(options: RegexOptions) -> RegexOptions = match options
+    RegexOptions(i, m, s, x, u, f, g, _) -> RegexOptions(i, m, s, x, u, f, g, true)
+
+  fn prepare_literal(pattern: String, options: RegexOptions) -> String = match options
+    RegexOptions(_, _, _, extended, _, _, _, _) -> pickup
+      extended -> strip_extended(pattern)
+      else -> pattern
+
+  fn strip_extended(input: String) -> String = match input
+    [] -> []
+    [char | rest] -> pickup
+      char == '\\' -> ['\\' | strip_extended_escaped(rest)]
+      char == '[' -> ['[' | strip_extended_class(rest)]
+      char == '#' -> strip_extended_comment(rest)
+      literal_extended_space(char) -> strip_extended(rest)
+      else -> [char | strip_extended(rest)]
+
+  fn literal_extended_space(char: Char) -> Bool =
+    char == ' ' or char == '\t' or char == '\n' or char == '\r' or
+      char == 12 or char == 11
+
+  fn strip_extended_escaped(input: String) -> String = match input
+    [] -> []
+    [char | rest] -> [char | strip_extended(rest)]
+
+  fn strip_extended_class(input: String) -> String = match input
+    [] -> []
+    [char | rest] -> pickup
+      char == '\\' -> ['\\' | strip_extended_class_escaped(rest)]
+      char == ']' -> [']' | strip_extended(rest)]
+      else -> [char | strip_extended_class(rest)]
+
+  fn strip_extended_class_escaped(input: String) -> String = match input
+    [] -> []
+    [char | rest] -> [char | strip_extended_class(rest)]
+
+  fn strip_extended_comment(input: String) -> String = match input
+    [] -> []
+    [char | rest] -> pickup
+      char == '\n' -> strip_extended(rest)
+      else -> strip_extended_comment(rest)
+
+  fn parse_literal(input: String) -> LiteralParse =
+    parse_literal_complete(parse_literal_alternate_fuel(input, literal_fuel(input)))
+
+  fn parse_literal_complete(result: LiteralParse) -> LiteralParse = match result
+    LiteralParsed(pattern, rest) -> match rest
+      [] -> LiteralParsed(pattern, [])
+      _ -> LiteralInvalid(:UnexpectedRegexToken)
+    LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_alternate_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match parse_literal_sequence_fuel(input, next_fuel)
+      LiteralParsed(left, rest) -> parse_literal_alternate_tail_fuel(left, rest, next_fuel)
+      LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_alternate_tail_fuel(left: LiteralPattern, input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralParsed(left, input)
+    S(next_fuel) -> match input
+      ['|' | rest] -> match parse_literal_sequence_fuel(rest, next_fuel)
+        LiteralParsed(right, tail) -> parse_literal_alternate_tail_fuel(LiteralAlternate(left, right), tail, next_fuel)
+        LiteralInvalid(reason) -> LiteralInvalid(reason)
+      _ -> LiteralParsed(left, input)
+
+  fn parse_literal_sequence_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match input
+      [] -> LiteralParsed(LiteralEmpty, [])
+      [head | _] -> pickup
+        is_literal_stop(head) -> LiteralParsed(LiteralEmpty, input)
+        else -> match parse_literal_repetition_fuel(input, next_fuel)
+          LiteralParsed(first, rest) -> parse_literal_sequence_tail_fuel(first, rest, next_fuel)
+          LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_sequence_tail_fuel(left: LiteralPattern, input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralParsed(left, input)
+    S(next_fuel) -> match input
+      [] -> LiteralParsed(left, [])
+      [head | _] -> pickup
+        is_literal_stop(head) -> LiteralParsed(left, input)
+        else -> match parse_literal_repetition_fuel(input, next_fuel)
+          LiteralParsed(right, rest) -> parse_literal_sequence_tail_fuel(LiteralSequence(left, right), rest, next_fuel)
+          LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn literal_fuel(input: String) -> Nat = match input
+    [] -> parse_fuel_step(Z())
+    [_ | rest] -> parse_fuel_step(literal_fuel(rest))
+
+  ## Recursive descent crosses several grammar layers for one consumed source
+  ## character. A fixed allowance per character keeps the proof structural while
+  ## leaving enough room for nested groups and empty alternatives.
+  fn parse_fuel_step(fuel: Nat) -> Nat =
+    S(S(S(S(S(S(S(S(S(S(S(S(S(S(S(S(fuel))))))))))))))))
+
+  fn is_literal_stop(char: Char) -> Bool =
+    char == '|' or char == ')'
+
+  fn literal_bounded_less({n: Nat}, left: Bounded(n), right: Bounded(n)) -> Bool =
+    match left
+      First() -> match right
+        First() -> false
+        Next(_) -> true
+      Next(left_rest) -> match right
+        First() -> false
+        Next(right_rest) -> literal_bounded_less(left_rest, right_rest)
+
+  fn parse_literal_repetition_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match parse_literal_atom_fuel(input, next_fuel)
+      LiteralParsed(atom, ['*', '?' | rest]) -> LiteralParsed(LiteralRepeat(atom, true), rest)
+      LiteralParsed(atom, ['+', '?' | rest]) -> LiteralParsed(LiteralPlus(atom, true), rest)
+      LiteralParsed(atom, ['?', '?' | rest]) -> LiteralParsed(LiteralOptional(atom, true), rest)
+      LiteralParsed(atom, ['*' | rest]) -> LiteralParsed(LiteralRepeat(atom, false), rest)
+      LiteralParsed(atom, ['+' | rest]) -> LiteralParsed(LiteralPlus(atom, false), rest)
+      LiteralParsed(atom, ['?' | rest]) -> LiteralParsed(LiteralOptional(atom, false), rest)
+      result -> result
+
+  fn parse_literal_atom_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match input
+      [] -> LiteralInvalid(:MissingRegexAtom)
+      ['.' | rest] -> LiteralParsed(LiteralAny, rest)
+      ['^' | rest] -> LiteralParsed(LiteralStart, rest)
+      ['$' | rest] -> LiteralParsed(LiteralEnd, rest)
+      ['(' | rest] -> parse_literal_group_fuel(rest, next_fuel)
+      ['[' | rest] -> parse_literal_class(rest)
+      ['\\' | rest] -> parse_literal_escape(rest)
+      ['*' | _] -> LiteralInvalid(:QuantifierWithoutAtom)
+      ['+' | _] -> LiteralInvalid(:QuantifierWithoutAtom)
+      ['?' | _] -> LiteralInvalid(:QuantifierWithoutAtom)
+      [char | rest] -> LiteralParsed(LiteralExact(char), rest)
+
+  fn parse_literal_group_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match input
+      ['?', ':' | rest] -> parse_literal_non_capture_fuel(rest, next_fuel)
+      _ -> parse_literal_capture_fuel(input, next_fuel)
+
+  fn parse_literal_capture_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match parse_literal_alternate_fuel(input, next_fuel)
+      LiteralParsed(pattern, [')' | rest]) -> LiteralParsed(LiteralCapture(pattern), rest)
+      LiteralParsed(_, _) -> LiteralInvalid(:UnclosedRegexGroup)
+      LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_non_capture_fuel(input: String, fuel: Nat) -> LiteralParse = match fuel
+    Z() -> LiteralInvalid(:RegexParseLimit)
+    S(next_fuel) -> match parse_literal_alternate_fuel(input, next_fuel)
+      LiteralParsed(pattern, [')' | rest]) -> LiteralParsed(pattern, rest)
+      LiteralParsed(_, _) -> LiteralInvalid(:UnclosedRegexGroup)
+      LiteralInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_escape(input: String) -> LiteralParse = match input
+    [] -> LiteralInvalid(:TrailingRegexEscape)
+    ['d' | rest] -> LiteralParsed(LiteralDigit(false), rest)
+    ['D' | rest] -> LiteralParsed(LiteralDigit(true), rest)
+    ['w' | rest] -> LiteralParsed(LiteralWord(false), rest)
+    ['W' | rest] -> LiteralParsed(LiteralWord(true), rest)
+    ['s' | rest] -> LiteralParsed(LiteralSpace(false), rest)
+    ['S' | rest] -> LiteralParsed(LiteralSpace(true), rest)
+    ['n' | rest] -> LiteralParsed(LiteralExact('\n'), rest)
+    ['t' | rest] -> LiteralParsed(LiteralExact('\t'), rest)
+    [char | rest] -> LiteralParsed(LiteralExact(char), rest)
+
+  fn parse_literal_class(input: String) -> LiteralParse = match input
+    ['^' | rest] -> finish_literal_class(parse_literal_class_items_fuel(rest, [], [], literal_fuel(input)), true)
+    _ -> finish_literal_class(parse_literal_class_items_fuel(input, [], [], literal_fuel(input)), false)
+
+  fn finish_literal_class(result: LiteralClassParse, negated: Bool) -> LiteralParse = match result
+    LiteralClassParsed(chars, ranges, rest) -> LiteralParsed(LiteralClass(reverse_chars(chars), reverse_ranges(ranges), negated), rest)
+    LiteralClassInvalid(reason) -> LiteralInvalid(reason)
+
+  fn parse_literal_class_items_fuel(input: String, chars: List(Char), ranges: List(CharacterRange), fuel: Nat) -> LiteralClassParse = match fuel
+    Z() -> LiteralClassInvalid(:RegexParseLimit)
+    S(next_fuel) -> match input
+      [] -> LiteralClassInvalid(:UnclosedRegexClass)
+      [first | rest] -> pickup
+        first == ']' -> LiteralClassParsed(chars, ranges, rest)
+        first == '\\' -> match rest
+          [] -> LiteralClassInvalid(:TrailingRegexClassEscape)
+          [escaped | tail] -> parse_literal_class_items_fuel(tail, [escaped | chars], ranges, next_fuel)
+        else -> match rest
+          [] -> parse_literal_class_items_fuel([], [first | chars], ranges, next_fuel)
+          [dash | after_dash] -> pickup
+            dash == '-' -> match after_dash
+              [] -> parse_literal_class_items_fuel(rest, [first | chars], ranges, next_fuel)
+              [last | tail] -> pickup
+                last == ']' -> LiteralClassParsed(['-' | [first | chars]], ranges, tail)
+                literal_bounded_less(last, first) -> LiteralClassInvalid(:ReversedRegexRange)
+                else -> parse_literal_class_items_fuel(tail, chars, [CharacterRange(first, last) | ranges], next_fuel)
+            else -> parse_literal_class_items_fuel(rest, [first | chars], ranges, next_fuel)
+
+  fn reverse_chars(values: List(Char)) -> List(Char) = reverse_chars_into(values, [])
+  fn reverse_chars_into(values: List(Char), output: List(Char)) -> List(Char) = match values
+    [] -> output
+    [head | rest] -> reverse_chars_into(rest, [head | output])
+
+  fn reverse_ranges(values: List(CharacterRange)) -> List(CharacterRange) = reverse_ranges_into(values, [])
+  fn reverse_ranges_into(values: List(CharacterRange), output: List(CharacterRange)) -> List(CharacterRange) = match values
+    [] -> output
+    [head | rest] -> reverse_ranges_into(rest, [head | output])
+
+  fn literal_shape(pattern: LiteralPattern) -> ShapeCode = match pattern
+    LiteralEmpty -> UnitC
+    LiteralExact(_) -> UnitC
+    LiteralAny -> CharC
+    LiteralClass(_, _, _) -> CharC
+    LiteralDigit(_) -> CharC
+    LiteralWord(_) -> CharC
+    LiteralSpace(_) -> CharC
+    LiteralSequence(left, right) -> PairC(literal_shape(left), literal_shape(right))
+    LiteralAlternate(left, right) -> ChoiceC(literal_shape(left), literal_shape(right))
+    LiteralRepeat(inner, _) -> ListC(literal_shape(inner))
+    LiteralPlus(inner, _) -> ListC(literal_shape(inner))
+    LiteralOptional(inner, _) -> ChoiceC(literal_shape(inner), UnitC)
+    LiteralCapture(_) -> StringC
+    LiteralStart -> UnitC
+    LiteralEnd -> UnitC
+
+  fn emit_shape(shape: ShapeCode) -> Syntax = match shape
+    UnitC -> call("Std.Regex.UnitC", [])
+    CharC -> call("Std.Regex.CharC", [])
+    StringC -> call("Std.Regex.StringC", [])
+    BoolC -> call("Std.Regex.BoolC", [])
+    NatC -> call("Std.Regex.NatC", [])
+    IntC -> call("Std.Regex.IntC", [])
+    PairC(left, right) -> call("Std.Regex.PairC", [emit_shape(left), emit_shape(right)])
+    ChoiceC(left, right) -> call("Std.Regex.ChoiceC", [emit_shape(left), emit_shape(right)])
+    OptionC(inner) -> call("Std.Regex.OptionC", [emit_shape(inner)])
+    ListC(inner) -> call("Std.Regex.ListC", [emit_shape(inner)])
+
+  fn emit_literal(pattern: LiteralPattern) -> Syntax = match pattern
+    LiteralEmpty -> call("Std.Regex.empty", [])
+    LiteralExact(char) -> call("Std.Regex.exactly", [char_literal(char)])
+    LiteralAny -> call("Std.Regex.any_char", [])
+    LiteralClass(chars, ranges, negated) ->
+      call("Std.Regex.character_class", [emit_chars(chars), emit_ranges(ranges), bool_literal(negated)])
+    LiteralDigit(negated) -> call("Std.Regex.digit_class", [bool_literal(negated)])
+    LiteralWord(negated) -> call("Std.Regex.word_class", [bool_literal(negated)])
+    LiteralSpace(negated) -> call("Std.Regex.space_class", [bool_literal(negated)])
+    LiteralSequence(left, right) -> call("Std.Regex.concatenate", [emit_literal(left), emit_literal(right)])
+    LiteralAlternate(left, right) -> call("Std.Regex.alternate", [emit_literal(left), emit_literal(right)])
+    LiteralRepeat(inner, lazy) -> call("Std.Regex.repeated_pattern", [emit_literal(inner), bool_literal(lazy)])
+    LiteralPlus(inner, lazy) -> call("Std.Regex.one_or_more_pattern", [emit_literal(inner), bool_literal(lazy)])
+    LiteralOptional(inner, lazy) -> call("Std.Regex.optional_literal", [emit_literal(inner), bool_literal(lazy)])
+    LiteralCapture(inner) -> call("Std.Regex.captured", [emit_literal(inner)])
+    LiteralStart -> call("Std.Regex.start_anchor", [])
+    LiteralEnd -> call("Std.Regex.end_anchor", [])
+
+  fn emit_chars(chars: List(Char)) -> Syntax = match chars
+    [] -> list([])
+    [head | rest] -> prepend_syntax(char_literal(head), emit_chars(rest))
+
+  fn emit_ranges(ranges: List(CharacterRange)) -> Syntax = match ranges
+    [] -> list([])
+    [CharacterRange(first, last) | rest] ->
+      prepend_syntax(call("Std.Regex.CharacterRange", [char_literal(first), char_literal(last)]), emit_ranges(rest))
+
+  fn emit_options(options: RegexOptions) -> Syntax = match options
+    RegexOptions(i, m, s, x, u, f, g, e) ->
+      call("Std.Regex.RegexOptions", [
+        bool_literal(i), bool_literal(m), bool_literal(s), bool_literal(x),
+        bool_literal(u), bool_literal(f), bool_literal(g), bool_literal(e)
+      ])
+
+  fn prepend_syntax(head: Syntax, tail: Syntax) -> Syntax = match tail
+    Node(tag, attrs, children) -> pickup
+      tag == :list -> Node(tag, attrs, [head | children])
+      else -> list([head])
+    _ -> list([head])

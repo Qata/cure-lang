@@ -2,6 +2,7 @@ defmodule Cure.Stdlib.RegexSourceTest do
   use ExUnit.Case, async: true
 
   alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Elab.Program
 
   test "the legacy regex engines and OTP runtime wrapper are absent" do
     legacy = Path.expand("../../../lib/cure/stdlib/cure_std_regex.ex", __DIR__)
@@ -26,21 +27,36 @@ defmodule Cure.Stdlib.RegexSourceTest do
            end)
   end
 
-  test "slash literals retain the staged Std.Regex expansion entry" do
+  test "slash literals retain the staged computed expansion entry" do
     {:ok, tokens} = Lexer.tokenize("fn f() = /[A-z]*/", emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
 
     assert {:function_def, _meta,
             [
-              {:function_call, call_meta,
+              {:computed_use, use_meta,
                [
-                 {:literal, pattern_meta, "[A-z]*"},
-                 {:literal, flags_meta, ""}
+                 {:variable, _, "expand_literal"},
+                 {:macro_input, _,
+                  [
+                    {:literal, pattern_meta, "[A-z]*"},
+                    {:literal, flags_meta, ""}
+                  ]}
                ]}
             ]} = ast
 
-    assert call_meta[:name] == "Std.Regex.literal"
+    assert use_meta[:keyword] == "regex"
+    assert use_meta[:home_source] =~ "lib/std/regex.cure"
     assert pattern_meta[:subtype] == :string
     assert flags_meta[:subtype] == :string
+  end
+
+  test "a slash literal expands and elaborates without importing Std.Regex" do
+    source = """
+    mod RegexLiteralWithoutUse
+      fn literal() = /a/
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
   end
 end

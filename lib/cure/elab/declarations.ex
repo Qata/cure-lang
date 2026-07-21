@@ -604,11 +604,22 @@ defmodule Cure.Elab.Declarations do
     with {:ok, body_expr} <-
            MacroExpand.expand(body_expr, env, callback_context: Keyword.get(meta, :callback_context)),
          {:ok, sig} <- function_signature(meta, env) do
-      ctx = build_context(env, sig.telescope)
+      # Expansion identifiers retain definition-site identity. Merge each
+      # stamped macro-home interface into the body environment so a generated
+      # fully-qualified call such as `Std.Regex.configured(...)` resolves even
+      # when the caller did not explicitly `use Std.Regex`. `merge_env/2` keeps
+      # caller declarations authoritative, while import filtering still prevents
+      # the home module's bare names from becoming caller-visible.
+      body_env =
+        body_expr
+        |> macro_home_sources()
+        |> Enum.reduce(env, &Cure.Elab.Program.env_with_macro_home(&2, &1))
+
+      ctx = build_context(body_env, sig.telescope)
       # Qualify any hole minted while elaborating THIS body by its enclosing def
       # (`hole_id/2`) — local to this call, never merged back into `final` below,
       # so it cannot leak into another def's elaboration.
-      def_env = Env.with_current_def(env, sig.name)
+      def_env = Env.with_current_def(body_env, sig.name)
 
       with {:ok, body_term, return_core, _return_value} <-
              elaborate_body_typed(body_expr, sig, ctx, def_env),
@@ -617,12 +628,12 @@ defmodule Cure.Elab.Declarations do
            # `ignore`-style constrained function): the same criterion the relevance
            # check enforces, so erasure (dropping it) stays sound. Only demotion,
            # never promotion.
-           quantities = demote_unused_dicts(env, sig, body_term),
+           quantities = demote_unused_dicts(body_env, sig, body_term),
            # {0,ω} relevance check (M8.3): erasure will drop the `:erased` parameter
            # slots, so reject any body that uses one relevantly (returned / passed
            # in a present position / scrutinised / applied). E-layer; the kernel
            # stays quantity-blind. See `Cure.Elab.Relevance`.
-           :ok <- Relevance.check(env, sig.name, quantities, body_term),
+           :ok <- Relevance.check(body_env, sig.name, quantities, body_term),
            # The Pi is the single source of truth (slice 6). `sig.pi` was built from
            # the ORIGINAL quantities; `demote_unused_dicts/3` may have lowered a dict
            # since, so rebuild the stored type from the DEMOTED vector — otherwise the
@@ -648,7 +659,7 @@ defmodule Cure.Elab.Declarations do
            # clause is the trusted backstop for an aliased effect type, §8.)
            :ok <- assert_no_erased_effect_binder(final_pi, sig.name) do
         final =
-          env
+          body_env
           |> Env.add_def(sig.name, final_pi, lambda, quantities)
           |> Env.put_labels(sig.name, param_label_vector(sig.params))
 
@@ -662,6 +673,24 @@ defmodule Cure.Elab.Declarations do
       end
     end
   end
+
+  defp macro_home_sources(ast), do: ast |> collect_macro_home_sources(MapSet.new()) |> MapSet.to_list()
+
+  defp collect_macro_home_sources({tag, meta, children}, homes)
+       when is_atom(tag) and is_list(meta) and is_list(children) do
+    homes =
+      case Keyword.get(meta, :macro_home_source) do
+        home when is_binary(home) -> MapSet.put(homes, home)
+        _ -> homes
+      end
+
+    Enum.reduce(children, homes, &collect_macro_home_sources/2)
+  end
+
+  defp collect_macro_home_sources(list, homes) when is_list(list),
+    do: Enum.reduce(list, homes, &collect_macro_home_sources/2)
+
+  defp collect_macro_home_sources(_other, homes), do: homes
 
   # Elaborate the body and settle the return type + its Core form. With a DECLARED
   # return, check the body against it (the long-standing behavior). With NONE
