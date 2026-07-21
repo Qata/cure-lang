@@ -46,7 +46,7 @@ defmodule Cure.Diagnostic.Registry do
 
   alias Cure.Diagnostic.Registry.Entry
 
-  @retired ~w[E001 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E064 E071 E072 E073 E074 E075 E079 E080 E085 H083 H084 W081 W082]
+  @retired ~w[E001 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E064 E071 E072 E073 E074 E075 E079 E080 E085 H083 H084 W081 W082 W088]
   @operational ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002 W003]
   @retirement_reasons %{
     "E001" => "No first-party producer remains; contextual E093 is the active type-mismatch path.",
@@ -87,7 +87,9 @@ defmodule Cure.Diagnostic.Registry do
     "H083" => "Formatter normalization is not emitted as a diagnostic code.",
     "H084" => "Formatter normalization is not emitted as a diagnostic code.",
     "W081" => "No first-party producer remains; pickup reachability warnings are not emitted.",
-    "W082" => "No first-party producer remains; pickup reachability warnings are not emitted."
+    "W082" => "No first-party producer remains; pickup reachability warnings are not emitted.",
+    "W088" =>
+      "The dependent-only pipeline rejects unresolved imported names as E091 before the classic codegen fallback can occur."
   }
   @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 W086 W088]
   @known_producers ~w[
@@ -1111,10 +1113,8 @@ defmodule Cure.Diagnostic.Registry do
 
     A cycle is harmless when the modules only depend on each other's
     types or qualified calls, which lower syntactically and impose no
-    order. It becomes actionable when the modules CALL each other's
-    imported functions UNQUALIFIED: resolution inside the group is
-    order-dependent, so an unqualified call may fall back to a local
-    reference and surface as W088.
+    order. An unqualified cross-module call that cannot be resolved is
+    rejected as E091 before BEAM generation.
 
     Fix: qualify the cross-module calls (`Other.fn(...)`), merge the
     mutually-recursive modules into one, or drop a redundant `use`.
@@ -1352,10 +1352,10 @@ defmodule Cure.Diagnostic.Registry do
     "W088" => """
     W088: Unresolved Import
 
-    An unqualified call matched no export of any `use`-imported module,
-    so codegen emitted a plain local call instead. This is the silent
-    fallback that classic codegen took without saying so; W088 makes it
-    visible.
+    Retired. The classic code generator used to emit a plain local call when
+    an unqualified call matched no export of any `use`-imported module. The
+    dependent-only pipeline now rejects that name as E091 before codegen, so
+    this fallback warning is no longer reachable.
 
     It most often fires inside an import cycle (W086), where the callee
     module has not been loaded yet when the caller is compiled, so its

@@ -39,6 +39,7 @@ defmodule Cure.Diagnostic.RegistryTest do
     retired_codes = Enum.map(Registry.retired(), & &1.code)
     assert "E015" in retired_codes
     assert "E018" in retired_codes
+    assert "W088" in retired_codes
     assert length(retired_codes) > 2
     refute Enum.any?(Registry.reachable(), &(&1.code in retired_codes))
     assert {:ok, _} = Cure.Compiler.Errors.explain("E015")
