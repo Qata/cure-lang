@@ -544,7 +544,14 @@ defmodule Cure.Elab.Declarations do
     if arity == present do
       :ok
     else
-      {:error, {:extern_arity_mismatch, sig.name, arity, present}}
+      {:error,
+       {:extern_arity_mismatch,
+        %{
+          name: sig.name,
+          declared: arity,
+          present: present,
+          span: sig.extern_arity_span
+        }}}
     end
   end
 
@@ -965,6 +972,7 @@ defmodule Cure.Elab.Declarations do
          scope: scope,
          return_core: return_core,
          return_span: function_return_span(meta),
+         extern_arity_span: decorator_argument_span(meta, "extern", 2),
          inferred_return: is_nil(return_expr),
          constraints: constraint_specs,
          # The PRE-REGISTRATION type, honest about the ORIGINAL quantities (implicit
@@ -979,6 +987,16 @@ defmodule Cure.Elab.Declarations do
   defp function_return_span(meta) do
     case Cure.MetaAST.Metadata.source_info(meta) do
       %Cure.MetaAST.SourceInfo{annotation: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp decorator_argument_span(meta, decorator, index) do
+    with %Cure.MetaAST.SourceInfo{decorators: decorators} <- Cure.MetaAST.Metadata.source_info(meta),
+         %{arguments: arguments} <- Map.get(decorators, decorator),
+         %Cure.Diagnostic.Span{} = span <- Enum.at(arguments, index) do
+      span
+    else
       _ -> nil
     end
   end

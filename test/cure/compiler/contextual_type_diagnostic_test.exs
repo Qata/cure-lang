@@ -301,6 +301,36 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "2 arguments"
   end
 
+  test "extern arity errors point at the target arity literal" do
+    source = """
+    mod ExternArity
+      @extern(:erlang, :hd, 2)
+      fn head({T: Type}, xs: List(T)) -> T
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "extern_arity.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "extern_arity.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E003"
+    assert diagnostic.payload.declared == 2
+    assert diagnostic.payload.present == 1
+    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {2, 25}
+    assert diagnostic.primary.message =~ "change this target arity to 1"
+    assert rendered =~ "2 |   @extern(:erlang, :hd, 2)"
+    assert rendered =~ "^ change this target arity to 1"
+    assert rendered =~ "erased parameters do not cross the FFI boundary"
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"]["start"] == %{"line" => 1, "character" => 24}
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 

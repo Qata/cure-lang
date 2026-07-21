@@ -392,6 +392,20 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert Enum.map(info.arguments, &slice(source, &1)) == ["name", "name + 1"]
   end
 
+  test "attached decorators retain their own name and argument ranges" do
+    source = "mod Demo\n  @extern(:erlang, :hd, 2)\n  fn head({T: Type}, xs: List(T)) -> T\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "decorator.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "decorator.cure", emit_events: false, prelude_macros: false)
+
+    function = find_node(ast, :function_def)
+    info = function |> elem(1) |> Metadata.source_info()
+    extern = Map.fetch!(info.decorators, "extern")
+
+    assert slice(source, extern.whole) == "@extern(:erlang, :hd, 2)"
+    assert slice(source, extern.name) == "extern"
+    assert Enum.map(extern.arguments, &slice(source, &1)) == [":erlang", ":hd", "2"]
+  end
+
   test "diagnostic metadata is excluded from semantic comparisons" do
     span = %Span{
       source_id: :one,

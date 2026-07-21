@@ -9531,21 +9531,23 @@ defmodule Cure.Compiler.Parser do
     dec_name = to_string(name_token.value)
 
     # Check if it's a call: @name(args) or @name value (bare boolean)
-    {args, state} =
+    {args, close_token, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           state = advance(state)
-          {a, _labels, state, _close_token} = parse_call_args(state, false)
-          {a, state}
+          {a, _labels, state, close_token} = parse_call_args(state, false)
+          {a, close_token, state}
 
         %Token{type: :bool, value: bval} ->
           state = advance(state)
           arg = {:literal, [subtype: :boolean], bval}
-          {[arg], state}
+          {[arg], nil, state}
 
         _ ->
-          {[], state}
+          {[], nil, state}
       end
+
+    decorator_info = decorator_source_info(token, name_token, args, close_token)
 
     state = skip_newlines(state)
 
@@ -9606,7 +9608,7 @@ defmodule Cure.Compiler.Parser do
         case peek(state) do
           %Token{type: :keyword, value: :mod} ->
             {mod_ast, state} = parse_module(state)
-            {attach_decorator(mod_ast, dec_name, args), state}
+            {attach_decorator(mod_ast, dec_name, args, decorator_info), state}
 
           _ ->
             state = emit_group_placement_deprecation(state, token, dec_name)
@@ -9614,26 +9616,26 @@ defmodule Cure.Compiler.Parser do
             {ast, state}
         end
       else
-        parse_at_attach(state, token, dec_name, args)
+        parse_at_attach(state, token, dec_name, args, decorator_info)
       end
     end
   end
 
   # Attach `@name(args)` to a following fn/rec/type declaration, or emit a
   # standalone decorator/property node when nothing attachable follows.
-  defp parse_at_attach(state, token, dec_name, args) do
+  defp parse_at_attach(state, token, dec_name, args, decorator_info) do
     # Check if the next thing is a function definition -- if so, attach decorator
     case peek(state) do
       %Token{type: :keyword, value: kw} when kw in [:fn, :local] ->
         {fn_ast, state} = parse_expr(state, 0)
-        fn_ast = attach_decorator(fn_ast, dec_name, args)
+        fn_ast = attach_decorator(fn_ast, dec_name, args, decorator_info)
         {fn_ast, state}
 
       # v0.19.0: `@derive(Show, Eq, ...) rec Name` attaches the
       # derive list to the record container.
       %Token{type: :keyword, value: :rec} ->
         {rec_ast, state} = parse_expr(state, 0)
-        rec_ast = attach_decorator(rec_ast, dec_name, args)
+        rec_ast = attach_decorator(rec_ast, dec_name, args, decorator_info)
         {rec_ast, state}
 
       # `@builtin(:key) type Name = ...` attaches the decorator to the type
@@ -9644,7 +9646,7 @@ defmodule Cure.Compiler.Parser do
       # form is still silently dropped — no attach_decorator clause today.
       %Token{type: :keyword, value: :type} ->
         {type_ast, state} = parse_type_def(state)
-        type_ast = attach_decorator(type_ast, dec_name, args)
+        type_ast = attach_decorator(type_ast, dec_name, args, decorator_info)
         {type_ast, state}
 
       # `@erases(:pid) opaque type Name` attaches the decorator to the opaque
@@ -9655,7 +9657,7 @@ defmodule Cure.Compiler.Parser do
       # carrier is left with no declared erasure.
       %Token{type: :keyword, value: :opaque} ->
         {type_ast, state} = parse_type_def(advance(state), opaque: true)
-        type_ast = attach_decorator(type_ast, dec_name, args)
+        type_ast = attach_decorator(type_ast, dec_name, args, decorator_info)
         {type_ast, state}
 
       # `@builtin(:tag) primitive Name` attaches the decorator to the primitive
@@ -9663,7 +9665,7 @@ defmodule Cure.Compiler.Parser do
       # into :decorator meta, like `@builtin(:key) type Name`).
       %Token{type: :keyword, value: :primitive} ->
         {prim_ast, state} = parse_primitive_def(state)
-        prim_ast = attach_decorator(prim_ast, dec_name, args)
+        prim_ast = attach_decorator(prim_ast, dec_name, args, decorator_info)
         {prim_ast, state}
 
       # `@prelude typealias Name = RHS` attaches the decorator to the
@@ -9672,7 +9674,7 @@ defmodule Cure.Compiler.Parser do
       # prelude at its definition site.
       %Token{type: :keyword, value: :typealias} ->
         {ta_ast, state} = parse_typealias(state)
-        ta_ast = attach_decorator(ta_ast, dec_name, args)
+        ta_ast = attach_decorator(ta_ast, dec_name, args, decorator_info)
         {ta_ast, state}
 
       _ ->
@@ -9687,9 +9689,10 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp attach_decorator(fn_ast, dec_name, args) do
+  defp attach_decorator(fn_ast, dec_name, args, decorator_info) do
     case fn_ast do
       {:container, meta, body} ->
+        meta = put_decorator_source_info(meta, dec_name, decorator_info)
         # Record container with @derive(Show, Eq, Ord).
         case Keyword.get(meta, :container_type) do
           :struct when dec_name == "derive" ->
@@ -9711,9 +9714,12 @@ defmodule Cure.Compiler.Parser do
       # program.ex's maybe_register_builtin can see it (mirrors the
       # {:container} enum-ADT clause above).
       {:indexed_type, meta, ctors} ->
+        meta = put_decorator_source_info(meta, dec_name, decorator_info)
         {:indexed_type, Keyword.put(meta, :decorator, {:decorator, [name: String.to_atom(dec_name)], args}), ctors}
 
       {:function_def, meta, body} ->
+        meta = put_decorator_source_info(meta, dec_name, decorator_info)
+
         decoration =
           case dec_name do
             "extern" ->
@@ -9736,10 +9742,51 @@ defmodule Cure.Compiler.Parser do
       # decorator into the `{:type_annotation}` meta so program.ex's prelude
       # discovery can see it (mirrors the `{:container}`/`{:indexed_type}` clauses).
       {:type_annotation, meta, rhs} ->
+        meta = put_decorator_source_info(meta, dec_name, decorator_info)
         {:type_annotation, Keyword.put(meta, :decorator, {:decorator, [name: String.to_atom(dec_name)], args}), rhs}
 
       other ->
         other
+    end
+  end
+
+  defp decorator_source_info(%Token{} = at, %Token{} = name, args, close_token) do
+    last = if match?(%Token{}, close_token), do: close_token, else: name
+
+    whole =
+      case {at.span, last.span} do
+        {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = final} ->
+          case Range.through(first, final) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    argument_spans =
+      Enum.flat_map(args, fn
+        {_tag, meta, _payload} when is_list(meta) ->
+          case Metadata.source_info(meta) do
+            %SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> [span]
+            _ -> []
+          end
+
+        _ ->
+          []
+      end)
+
+    %{whole: whole, name: name.span, arguments: argument_spans}
+  end
+
+  defp put_decorator_source_info(meta, dec_name, decorator_info) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{} = info ->
+        Keyword.put(meta, :source_info, %{info | decorators: Map.put(info.decorators, dec_name, decorator_info)})
+
+      _ ->
+        meta
     end
   end
 

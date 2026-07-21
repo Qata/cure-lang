@@ -18,6 +18,7 @@ defmodule Cure.MetaAST.SourceInfo do
             guard: nil,
             branches: [],
             fields: %{},
+            decorators: %{},
             opener: nil,
             closer: nil,
             provenance: []
@@ -39,6 +40,9 @@ defmodule Cure.MetaAST.SourceInfo do
           guard: span_or_nil(),
           branches: [Span.t()],
           fields: %{optional(term()) => Span.t()},
+          decorators: %{
+            optional(String.t()) => %{whole: span_or_nil(), name: span_or_nil(), arguments: [Span.t()]}
+          },
           opener: span_or_nil(),
           closer: span_or_nil(),
           provenance: [ProvenanceFrame.t()]

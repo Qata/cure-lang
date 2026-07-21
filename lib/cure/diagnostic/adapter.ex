@@ -1136,6 +1136,19 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:extern_arity_mismatch, name, declared, present}, opts)
       when is_integer(declared) and is_integer(present) do
+    from_error(
+      {:extern_arity_mismatch, %{name: name, declared: declared, present: present}},
+      opts
+    )
+  end
+
+  def from_error(
+        {:extern_arity_mismatch, %{name: name, declared: declared, present: present} = details},
+        opts
+      )
+      when is_integer(declared) and is_integer(present) do
+    opts = Keyword.put_new(opts, :span, Map.get(details, :span))
+
     Diagnostic.new(
       code: "E003",
       key: :arity_mismatch,
@@ -1145,8 +1158,21 @@ defmodule Cure.Diagnostic.Adapter do
         Doc.paragraph(
           "Extern `#{name_to_string(name)}` declares target arity #{declared}, but its present Cure arity is #{present}."
         ),
-      primary: primary_label(opts, "make the extern declaration match its callable arity"),
-      payload: %{name: name_to_string(name), declared: declared, present: present, kind: :extern}
+      primary:
+        primary_label(
+          opts,
+          "change this target arity to #{present} so it matches the values present at runtime"
+        ),
+      suggestions: [
+        %Suggestion{
+          message: "Use target arity #{present}; erased parameters do not cross the FFI boundary.",
+          applicability: :manual
+        }
+      ],
+      payload:
+        details
+        |> Map.put(:name, name_to_string(name))
+        |> Map.put(:kind, :extern)
     )
   end
 
