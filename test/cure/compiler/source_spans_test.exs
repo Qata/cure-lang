@@ -109,6 +109,26 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, expands.source_span) == "expands with derive_actor"
   end
 
+  test "macro failure and explanation sections retain authored ranges" do
+    source =
+      "macro Protocol\n" <>
+        "  fail ReplyBeforeRequest(state: Code)\n" <>
+        "  explain\n" <>
+        "    ReplyBeforeRequest => \"a reply needs an open request\"\n" <>
+        "  open Category\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "macro_diagnosis.cure", emit_events: false)
+
+    assert {:ok, {:macro_def, _meta, [failure, explanation, open]}} =
+             Parser.parse(tokens, file: "macro_diagnosis.cure", emit_events: false, prelude_macros: false)
+
+    assert slice(source, failure.source_span) == "fail ReplyBeforeRequest(state: Code)"
+    assert slice(source, explanation.source_span) =~ "explain\n    ReplyBeforeRequest"
+    [clause] = explanation.clauses
+    assert slice(source, clause.source_span) == "ReplyBeforeRequest => \"a reply needs an open request\""
+    assert slice(source, open.source_span) == "open Category"
+  end
+
   test "named containers retain exact declaration and qualified-name ranges" do
     source = "mod Demo.Core\n  rec Point\n    x: Int\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "containers.cure", emit_events: false)

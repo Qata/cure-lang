@@ -8198,13 +8198,25 @@ defmodule Cure.Compiler.Parser do
     {params, state} = parse_typed_params(state)
     state = expect(state, :rparen)
 
-    {%{kind: :fail, name: name, params: params, line: token.line}, state}
+    {%{
+       kind: :fail,
+       name: name,
+       params: params,
+       line: token.line,
+       source_span: macro_rule_source_span(token, state)
+     }, state}
   end
 
   defp parse_open_category(state) do
     token = peek(state)
     {name, state} = parse_dotted_name(advance(state))
-    {%{kind: :open_category, name: name, line: token.line}, state}
+
+    {%{
+       kind: :open_category,
+       name: name,
+       line: token.line,
+       source_span: macro_rule_source_span(token, state)
+     }, state}
   end
 
   defp parse_macro_rule(state) do
@@ -8561,7 +8573,12 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
-    {%{kind: :explain, clauses: clauses, line: kw.line}, state}
+    {%{
+       kind: :explain,
+       clauses: clauses,
+       line: kw.line,
+       source_span: macro_rule_source_span(kw, state)
+     }, state}
   end
 
   defp parse_explain_clauses(state, acc) do
@@ -8572,11 +8589,19 @@ defmodule Cure.Compiler.Parser do
         {Enum.reverse(acc), state}
 
       _ ->
+        clause_start = peek(state)
         {point, state} = parse_explain_point(state)
         state = expect(state, :fat_arrow)
         state = skip_macro_trivia(state)
         {body, state} = parse_expr(state, 0)
-        clause = %{point: point, body: body, line: peek(state).line}
+
+        clause = %{
+          point: point,
+          body: body,
+          line: peek(state).line,
+          source_span: macro_rule_source_span(clause_start, state)
+        }
+
         parse_explain_clauses(state, [clause | acc])
     end
   end
