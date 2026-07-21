@@ -161,6 +161,9 @@ defmodule Cure.Compiler.Errors do
   def format_error({:expected, _, :got, _, _, _} = error, file),
     do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
 
+  def format_error({:expected, _, :got, _, _, _, %Cure.Diagnostic.Span{}} = error, file),
+    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+
   def format_error({:expected_token, _, _, _, _, _} = error, file),
     do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
 
@@ -594,6 +597,7 @@ defmodule Cure.Compiler.Errors do
 
   defp embedded_span({:parse_error, [reason | _]}), do: embedded_span(reason)
   defp embedded_span({:codegen_error, reason}), do: embedded_span(reason)
+  defp embedded_span({:expected, _, :got, _, _, _, %Cure.Diagnostic.Span{} = span}), do: span
   defp embedded_span({:expected_token, _, _, _, _, _, %Cure.Diagnostic.Span{} = span}), do: span
   defp embedded_span({:source_context, _reason, %{span: %Cure.Diagnostic.Span{} = span}}), do: span
   defp embedded_span(_error), do: nil

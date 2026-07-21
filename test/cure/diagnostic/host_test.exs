@@ -114,6 +114,23 @@ defmodule Cure.Diagnostic.HostTest do
     assert binary_part(source, span.start_byte, span.end_byte - span.start_byte) == "]"
   end
 
+  test "parser-owned keyword expectation spans survive the compiler boundary" do
+    source = "fn run() = with x\n"
+    assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "keyword.cure", emit_events: false)
+    token = Enum.find(tokens, &(&1.type == :newline))
+
+    {diagnostic, _registry} =
+      Cure.Compiler.Errors.to_diagnostic(
+        {:expected, :in, :got, :newline, token.line, token.col, token.span},
+        "keyword.cure",
+        source
+      )
+
+    assert diagnostic.code == "E094"
+    assert diagnostic.primary.span.start_line == 1
+    assert diagnostic.payload.expected == :in
+  end
+
   test "blames computed macro rejection on the authored invocation" do
     source = "fn run() -> Int = actor()\n"
 
