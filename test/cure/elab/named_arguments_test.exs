@@ -135,6 +135,18 @@ defmodule Cure.Elab.NamedArgumentsTest do
     assert apply(module, :go, []) == 7
   end
 
+  test "constructor alignment preserves bidirectional checking for lambda fields" do
+    assert {:ok, _env} =
+             Program.elaborate("""
+             mod NamedConstructorLambda
+               type Token = Step
+               type Maybe(a: Type) = None | Some(a)
+               type Box(a: Type) = Box(Token -> Maybe(a))
+               fn empty() -> Box(Int) = Box(fn(_) -> None())
+             end
+             """)
+  end
+
   test "overload pruning aligns each candidate independently of source order" do
     module =
       compile!("""

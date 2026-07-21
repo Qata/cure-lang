@@ -1965,20 +1965,26 @@ defmodule Cure.Elab.Elaborator do
               error
 
             {:ok, aligned_args} ->
-              with :ok <- validate_constructor_arity(env, cres, aligned_args, name),
-                   {:ok, present} <- map_present_args(aligned_args, names, ctx, env) do
-                case elaborate_ctor_app(env, cres, present, ctx, expected_core) do
-                  {:ok, term, _type} ->
-                    {:ok, term}
-
-                  {:error, _} = orig ->
-                    # Try the bidirectional fallback, but only let it win when
-                    # it succeeds; otherwise retain the original inference error.
-                    case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
-                      {:ok, _} = ok -> ok
-                      {:error, _} -> orig
-                    end
+              inferred =
+                with :ok <- validate_constructor_arity(env, cres, aligned_args, name),
+                     {:ok, present} <- map_present_args(aligned_args, names, ctx, env),
+                     {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
+                  {:ok, term}
                 end
+
+              case inferred do
+                {:ok, _} = ok ->
+                  ok
+
+                {:error, _} = orig ->
+                  # Argument inference itself may need the constructor field's
+                  # expected type (an untyped lambda or an underdetermined nested
+                  # constructor). Keep the fallback around the whole inference
+                  # attempt, not only elaborate_ctor_app/5.
+                  case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
+                    {:ok, _} = ok -> ok
+                    {:error, _} -> orig
+                  end
               end
           end
 
