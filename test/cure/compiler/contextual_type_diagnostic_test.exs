@@ -42,6 +42,24 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "^^^^^^^^^^^^"
   end
 
+  test "an unknown function points at the authored call" do
+    source = "fn run() -> Int = missing_fn(1)\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "unknown_call.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "unknown_call.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E091"
+    assert diagnostic.primary.span.start_column == 19
+    assert rendered =~ "1 | fn run() -> Int = missing_fn(1)"
+    assert rendered =~ "^^^^^^^^^^^^^"
+  end
+
   test "a missing implicit instance retains the authored call context" do
     source = "mod M\n  fn has(x: t, y: t) -> Bool = x == y\nend\n"
 

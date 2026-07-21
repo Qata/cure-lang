@@ -647,7 +647,17 @@ defmodule Cure.Elab.Elaborator do
         end
 
       true ->
-        elaborate_named_call(meta, args, names, ctx, env)
+        case elaborate_named_call(meta, args, names, ctx, env) do
+          {:error, reason} when is_tuple(reason) ->
+            if unresolved_call_reason?(reason) do
+              {:error, attach_call_result_context(reason, {:function_call, meta, args}, env)}
+            else
+              {:error, reason}
+            end
+
+          result ->
+            result
+        end
     end
   end
 
@@ -2606,6 +2616,12 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp attach_call_result_context(reason, _expression, _env), do: reason
+
+  defp unresolved_call_reason?({:unknown_global, _}), do: true
+  defp unresolved_call_reason?({:unknown_name, _}), do: true
+  defp unresolved_call_reason?({:unknown_ctor, _}), do: true
+  defp unresolved_call_reason?({:ambiguous_name, _, _}), do: true
+  defp unresolved_call_reason?(_reason), do: false
 
   defp extern_call_mismatch?(reason, meta, env) do
     name = Keyword.get(meta, :name)
