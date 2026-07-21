@@ -63,6 +63,9 @@ defmodule Cure.Compiler.ErgonomicsBatchTest do
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert apply(module, :result, []) == 42
+    refute Enum.any?(module.module_info(:exports), fn {name, _arity} ->
+             String.contains?(Atom.to_string(name), "$helper$")
+           end)
   end
 
   test "where clause functions prepend captured parameters to every clause" do
@@ -81,6 +84,9 @@ defmodule Cure.Compiler.ErgonomicsBatchTest do
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert apply(module, :empty_result, []) == 42
     assert apply(module, :present_result, []) == 7
+    refute Enum.any?(module.module_info(:exports), fn {name, _arity} ->
+             String.contains?(Atom.to_string(name), "$helper$")
+           end)
   end
 
   test "ordinary annotation-free bindings remain accepted" do
