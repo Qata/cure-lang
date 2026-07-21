@@ -143,7 +143,7 @@ defmodule Cure.Elab.LetBindOnceTest do
           "  fn ap(f: (Int) -> Int, n: Int) -> Int = f(n)\n" <>
           "  fn f(n: Int) -> Int =\n    let g = fn(x) -> x + 1\n    ap(g, n) + ap(g, n)\n"
 
-      assert {:error, {:let_needs_annotation, "g", _}} = Program.elaborate(src)
+      assert {:error, {:source_context, {:let_needs_annotation, "g", _}, _}} = Program.elaborate(src)
     end
 
     # Zero uses: substitution DROPS the rhs, so it is never elaborated and an

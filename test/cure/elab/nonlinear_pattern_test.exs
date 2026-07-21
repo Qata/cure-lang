@@ -14,7 +14,11 @@ defmodule Cure.Elab.NonlinearPatternTest do
   defp elaborate(src) do
     {:ok, toks} = Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Parser.parse(toks, emit_events: false)
-    Program.check_ast(ast)
+
+    case Program.check_ast(ast) do
+      {:error, error} -> {:error, Program.semantic_error(error)}
+      result -> result
+    end
   end
 
   test "non-linear constructor pattern (C(x, x)) is rejected" do

@@ -1,5 +1,6 @@
 @group(:concurrency)
 mod Std.Process
+  use Std.ExitReason
   ## Raw process primitives: links, monitors, trap_exit.
   ##
   ## These wrappers call `:erlang` BIFs directly via `@extern`; they
@@ -32,11 +33,19 @@ mod Std.Process
   ## Link the calling process to `pid`. Exits from either side
   ## propagate as `:EXIT` messages.
   @extern(:erlang, :link, 1)
-  fn link(pid: Pid) -> Atom
+  local fn raw_link(pid: Pid) -> Atom
+
+  fn link(pid: Pid) -> Unit =
+    let _ = raw_link(pid)
+    ()
 
   ## Undo a previous `link/1`.
   @extern(:erlang, :unlink, 1)
-  fn unlink(pid: Pid) -> Atom
+  local fn raw_unlink(pid: Pid) -> Atom
+
+  fn unlink(pid: Pid) -> Unit =
+    let _ = raw_unlink(pid)
+    ()
 
   ## Install a process monitor. Returns the `Ref` that identifies the
   ## monitor; the caller will later receive
@@ -54,9 +63,19 @@ mod Std.Process
   @extern(Elixir.Cure.Process.Builtins, :proc_trap_exit, 1)
   fn trap_exit(flag: Bool) -> Bool
 
-  ## Send `reason` as an exit signal to `pid`.
+  local fn exit_reason_atom(reason: ExitReason) -> Atom = match reason
+    Normal()       -> :normal
+    Kill()         -> :kill
+    Shutdown()     -> :shutdown
+    Because(value) -> value
+
+  ## Send a typed exit reason as an exit signal to `pid`.
   @extern(:erlang, :exit, 2)
-  fn exit(pid: Pid, reason: Atom) -> Atom
+  local fn raw_exit(pid: Pid, reason: Atom) -> Atom
+
+  fn exit(pid: Pid, reason: ExitReason) -> Unit =
+    let _ = raw_exit(pid, exit_reason_atom(reason))
+    ()
 
   ## Return the caller's own pid.
   @extern(:erlang, :self, 0)

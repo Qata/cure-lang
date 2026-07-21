@@ -1,3 +1,0 @@
-## Transparent supervisor example.
-
-sup Cure.Motif.Orchestra children [child_spec Cure.Clock :clock, child_spec Cure.Sequencer :sequencer, child_spec Cure.Voice :voice]

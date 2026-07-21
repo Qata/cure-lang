@@ -1,9 +1,9 @@
 @group(:system)
 mod Std.App
   use Std.Syntax
+  use Std.ActorBehavior
 
-  ## The structured application surface is source-defined. Legacy forms in
-  ## AppContainers remain available through ordinary grammar fallback.
+  ## The structured application surface is source-defined.
   macro app <name: ModuleName>
     syntax family ApplicationDefinition
       root ModuleName
@@ -18,168 +18,9 @@ mod Std.App
     let start_type = call("Effect", [variable("Tuple")])
     let stop_type = call("Effect", [variable("Atom")])
     let start_body = call("Std.Otp.start_supervisor", [definition.root])
-    lift_module_isolated(module_name, :application, [
-      use_module("Std.Otp"),
-      use_module("Std.App"),
+    Std.ActorBehavior.application_module(module_name, [
       use_module("Std.Supervisor"),
       function("start", [parameter("kind", variable("t")), parameter("args", variable("a"))], start_type, start_body),
       function("stop", [parameter("state", variable("s"))], stop_type, quote :ok),
       function("start_phase", [parameter("phase", variable("Atom")), parameter("kind", variable("t")), parameter("args", variable("a"))], stop_type, quote :ok)
     ])
-
-  ## `app` is a transparent standard-library macro. The base application is
-  ## an ordinary lifted Application module; root-supervisor startup and
-  ## lifecycle phases are layered on top of this floor.
-  macro AppContainers
-    syntax app <name: ModuleName> phase <phase: Code> <phase_body: delayed raw until dedent> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple(Atom, Atom)) = %[:ok, :undefined]
-      callback stop(state: s) returns Effect(Atom) = :ok
-      callback start_phase(requested: Atom, kind: t, args: a) returns Effect(Atom) = match requested == phase
-        true -> phase_body
-        false -> :ok
-
-    syntax app <name: ModuleName> phases <phases: Code> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple(Atom, Atom)) = %[:ok, :undefined]
-      callback stop(state: s) returns Effect(Atom) = :ok
-      fn dispatch_phase(requested: Atom, remaining: List(Atom)) -> Atom = match remaining
-        [] -> :ok
-        [declared | rest] -> match rest
-          [] -> :ok
-          [result | tail] -> match requested == declared
-            true -> result
-            false -> dispatch_phase(requested, tail)
-      callback start_phase(requested: Atom, kind: t, args: a) returns Effect(Atom) = dispatch_phase(requested, phases)
-
-    syntax app <name: ModuleName> root <root: Code> with <payload: Code> <body: raw until dedent> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      use Std.Supervisor
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root payload
-      callback stop(state: s) returns Effect(Atom) = :ok
-      body
-
-    syntax app <name: ModuleName> root <root: ModuleName> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      use Std.Supervisor
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root
-      callback stop(state: s) returns Effect(Atom) = :ok
-      callback start_phase(phase: Atom, kind: t, args: a) returns Effect(Atom) = :ok
-
-    syntax app <name: ModuleName> root <root: Code> <body: raw until dedent> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      use Std.Supervisor
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root
-      callback stop(state: s) returns Effect(Atom) = :ok
-      callback start_phase(phase: Atom, kind: t, args: a) returns Effect(Atom) = :ok
-      body
-
-    syntax app <name: ModuleName> root <root: Code> contextual becomes lift module Cure.App.name
-      use Std.Otp
-      use Std.App
-      use Std.Supervisor
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple) = beam_ops start_supervisor root
-      callback stop(state: s) returns Effect(Atom) = :ok
-      callback start_phase(phase: Atom, kind: t, args: a) returns Effect(Atom) = :ok
-
-    syntax app <name: ModuleName> state <state_type: Type> with <payload: Code> <body: raw until dedent> becomes lift module Cure.App.name
-      use Std.Otp
-      behaviour application
-      typealias State = state_type
-      callback start(kind: t, args: State) returns Effect(Tuple(Atom, State)) = %[:ok, payload]
-      callback stop(state: State) returns Effect(Atom) = :ok
-      body
-
-    syntax app <name: ModuleName> state <state_type: Type> <body: raw until dedent> becomes lift module Cure.App.name
-      use Std.Otp
-      behaviour application
-      typealias State = state_type
-      callback start(kind: t, args: State) returns Effect(Tuple(Atom, State)) = %[:ok, args]
-      callback stop(state: State) returns Effect(Atom) = :ok
-      body
-
-    syntax app <name: ModuleName> (with <payload: Code>)? <body: raw until dedent> becomes lift module Cure.App.name
-      use Std.Otp
-      behaviour application
-      callback start(kind: t, args: a) returns Effect(Tuple(Atom, Atom)) = %[:ok, :undefined]
-      callback stop(state: s) returns Effect(Atom) = :ok
-      body
-
-  ## Start, stop, and inspect OTP applications from Cure.
-  ##
-  ## Each Cure `app` container compiles to a loaded BEAM module that
-  ## implements the `:application` behaviour. The functions below
-  ## delegate to `Cure.App.Builtins`, which in turn wraps the Erlang
-  ## `:application` BIFs, so Cure code sees plain atoms and values
-  ## rather than OTP's tagged-tuple return shapes.
-  ##
-  ## Application environment values are heterogeneous (OTP `term()`), so
-  ## the accessors are polymorphic in the stored/returned value type:
-  ## `get_env`/`get_env_or` return the value at the caller's expected
-  ## type, and `put_env` stores a value of any type. This is the typed
-  ## FFI boundary — the `@extern` wrapper is the trust point, exactly as
-  ## `application:get_env` returns an untyped `term()`.
-  ##
-  ## ## Examples
-  ##
-  ## ```cure
-  ## use Std.App
-  ##
-  ## ensure_all_started(:cure)
-  ## put_env(:my_app, :port, 4000)
-  ## get_env_or(:my_app, :port, 8080)         # => 4000
-  ## ```
-
-  ## Group tag consumed by `Cure.Stdlib.Preload`.
-  ## Ensure the application and all of its dependencies are started.
-  ## Returns `:ok` whether or not the application was already running.
-  @extern(Elixir.Cure.App.Builtins, :ensure_all_started, 1)
-  fn ensure_all_started(name: Atom) -> Atom
-
-  ## Start a loaded application by name. Idempotent.
-  @extern(Elixir.Cure.App.Builtins, :start, 1)
-  fn start(name: Atom) -> Atom
-
-  ## Stop a running application by name. Idempotent.
-  @extern(Elixir.Cure.App.Builtins, :stop, 1)
-  fn stop(name: Atom) -> Atom
-
-  ## Fetch an environment variable at the caller's expected type.
-  ## Returns `nil` when unset.
-  @extern(Elixir.Cure.App.Builtins, :get_env, 2)
-  fn get_env(name: Atom, key: Atom) -> a
-
-  ## Fetch an environment variable, falling back to `default` when
-  ## unset. The default and the result share the caller's value type.
-  @extern(Elixir.Cure.App.Builtins, :get_env, 3)
-  fn get_env_or(name: Atom, key: Atom, default: a) -> a
-
-  ## Set an environment variable for an application.
-  @extern(Elixir.Cure.App.Builtins, :put_env, 3)
-  fn put_env(name: Atom, key: Atom, value: a) -> Atom
-
-  ## Return a list of `%[name, description, vsn]` tuples for every
-  ## currently-running application.
-  @extern(Elixir.Cure.App.Builtins, :which_applications, 0)
-  fn which_applications() -> List(Tuple(Atom, a, b))
-
-  ## Return a list of every loaded application's name atom.
-  @extern(Elixir.Cure.App.Builtins, :loaded_applications, 0)
-  fn loaded_applications() -> List(Atom)
-
-  ## Manually invoke a start-phase callback for an application.
-  ## Normally the OTP boot script drives this; exposed here for
-  ## tests and scripted scenarios.
-  @extern(Elixir.Cure.App.Builtins, :start_phase, 3)
-  fn start_phase(name: Atom, phase: Atom, phase_args: a) -> Atom

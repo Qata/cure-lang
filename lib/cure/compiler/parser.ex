@@ -38,6 +38,9 @@ defmodule Cure.Compiler.Parser do
 
   alias Cure.Compiler.{MacroFamily, MacroRaw, Token}
   alias Cure.Compiler.Parser.{BuiltinFixity, FixityTable, FixityScan, FixityResolver, Precedence}
+  alias Cure.Compiler.Parser.Range
+  alias Cure.MetaAST.Metadata
+  alias Cure.MetaAST.SourceInfo
   alias Cure.Pipeline.Events
 
   # -- Parser State ----------------------------------------------------------
@@ -51,6 +54,10 @@ defmodule Cure.Compiler.Parser do
     :file,
     count: 0,
     pos: 0,
+    # The most recent authored token consumed by `advance/1`. Keeping this in
+    # parser state makes range endpoints ownership-preserving across nested
+    # expression parsers; callers no longer need to rescan backwards from pos.
+    last_authored: nil,
     errors: [],
     emit_events: false,
     edition: nil,
@@ -686,9 +693,16 @@ defmodule Cure.Compiler.Parser do
           syntax_fields: Map.get(rule, :syntax_fields, macro_syntax_fields(rule.segments)),
           syntax_repeated_fields: Map.get(rule, :syntax_repeated_fields, macro_syntax_repeated_fields(rule.segments)),
           syntax_field_types: Map.get(rule, :syntax_field_types, %{}),
+          file: state.file,
           line: keyword_token.line,
           col: keyword_token.col
         ]
+
+        meta =
+          case computed_use_obligations(rule, bindings) do
+            [] -> meta
+            obligations -> Keyword.put(meta, :capture_obligations, obligations)
+          end
 
         # The matched rule's segments (literals interleaved with holes). The
         # printer needs the literal separators (`state`/`messages`/…) to
@@ -761,6 +775,29 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp match_computed_rule([], state), do: {:error, %{segments: []}, 0, state}
+
+  defp computed_use_obligations(rule, bindings) do
+    Enum.flat_map(Map.get(rule, :obligations, []), fn obligation ->
+      expression =
+        case Map.get(obligation, :field) do
+          nil -> Map.get(bindings, obligation.capture)
+          field -> family_binding_field(bindings["definition"], rule.syntax_family.fields, field)
+        end
+
+      if is_nil(expression), do: [], else: [Map.put(obligation, :expression, expression)]
+    end)
+  end
+
+  defp family_binding_field({:family_input, _meta, values}, fields, field) do
+    fields
+    |> Enum.zip(values)
+    |> Enum.find_value(fn
+      {%{name: ^field}, value} -> value
+      _ -> nil
+    end)
+  end
+
+  defp family_binding_field(_binding, _fields, _field), do: nil
 
   # A computed rule may deliberately share a keyword with an older transparent
   # rule. Let the computed grammar win when it matches, but preserve the
@@ -897,6 +934,25 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp match_segments(state, [{:hole, %{name: name, kind: "Name"}} | rest], bindings, progress) do
+    case peek(state) do
+      %Token{type: :identifier} = token ->
+        name_ast = variable(token)
+        match_segments(advance(state), rest, Map.put(bindings, name, name_ast), progress + 1)
+
+      _ ->
+        {:error, progress, state}
+    end
+  end
+
+  # The production owns the surrounding parentheses. Capture their contents
+  # with Cure's ordinary parameter parser so every source-defined macro can use
+  # typed, graded, implicit, and multiple binders without a bespoke parser.
+  defp match_segments(state, [{:hole, %{name: name, kind: "Parameters"}} | rest], bindings, progress) do
+    {params, state} = parse_typed_params(state)
+    match_segments(state, rest, Map.put(bindings, name, params), progress + 1)
+  end
+
   defp match_segments(state, [{:hole, %{name: name, kind: kind}} | rest], bindings, progress)
        when kind in ["Int", "Float", "Atom", "Bool"] do
     {arg, state} = parse_expr(state, 0)
@@ -980,7 +1036,10 @@ defmodule Cure.Compiler.Parser do
             {:error, progress, state}
 
           %Token{type: :identifier, value: field_name} ->
-            if Enum.any?(family_meta.fields, &(&1.name == field_name)) do
+            if Enum.any?(family_meta.fields, fn field ->
+                 field.name == field_name or
+                   (Map.has_key?(field, :grammar) and field.cardinality in [:repeated, :one_or_more])
+               end) do
               {captured, state} = capture_family_body(state)
               {family_value, parsed_state} = parse_family_body(captured, family_meta, state)
 
@@ -1163,22 +1222,125 @@ defmodule Cure.Compiler.Parser do
       %Token{type: type} when type in [:dedent, :eof] ->
         family_value(family_meta, values, state)
 
-      %Token{type: :identifier, value: name} = token ->
-        case Enum.find(family_meta.fields, &(&1.name == name)) do
+      %Token{type: type, value: name} = token when type in [:identifier, :keyword] ->
+        field_name = to_string(name)
+
+        case Enum.find(family_meta.fields, &(&1.name == field_name)) do
           nil ->
-            state = add_error(state, {:unknown_syntax_family_field, family_meta.family, name, token.line, token.col})
-            {_ignored, state} = parse_expr_or_block(advance(state))
-            parse_family_sections(state, family_meta, values)
+            case parse_bare_family_production(state, family_meta) do
+              {:ok, field, value, state} ->
+                {values, state} = record_family_value(values, field, value, token, state)
+                parse_family_sections(state, family_meta, values)
+
+              :error ->
+                state =
+                  add_error(state, {:unknown_syntax_family_field, family_meta.family, name, token.line, token.col})
+
+                {_ignored, state} = parse_expr_or_block(advance(state))
+                parse_family_sections(state, family_meta, values)
+            end
 
           field ->
-            {value, state} = parse_family_field_value(advance(state), field)
+            # Structured family fields use declaration-style assignment in
+            # the surface language (`strategy = ...`). The family schema
+            # describes the value after the field name, so consume the
+            # optional separator here rather than making every family repeat
+            # it in its grammar.
+            state = consume_family_field_separator(advance(state))
+            {value, state} = parse_family_field_value(state, field)
             {values, state} = record_family_value(values, field, value, token, state)
             parse_family_sections(state, family_meta, values)
         end
 
       token ->
-        state = add_error(state, {:expected, :syntax_family_field, :got, token.type, token.line, token.col})
-        parse_family_sections(advance(state), family_meta, values)
+        case parse_bare_family_production(state, family_meta) do
+          {:ok, field, value, state} ->
+            {values, state} = record_family_value(values, field, value, token, state)
+            parse_family_sections(state, family_meta, values)
+
+          :error ->
+            state = add_error(state, {:expected, :syntax_family_field, :got, token.type, token.line, token.col})
+            parse_family_sections(advance(state), family_meta, values)
+        end
+    end
+  end
+
+  defp parse_bare_family_production(state, family_meta) do
+    family_meta.fields
+    |> Enum.filter(&(Map.has_key?(&1, :grammar) and &1.cardinality in [:repeated, :one_or_more]))
+    |> Enum.find_value(:error, fn field ->
+      case parse_family_production(state, field.grammar) do
+        {:ok, value, matched_state} -> {:ok, field, value, matched_state}
+        :error -> nil
+      end
+    end)
+  end
+
+  defp parse_family_production(state, grammar) do
+    Enum.find_value(grammar.productions, :error, fn production ->
+      case match_bare_family_production(state, grammar, production) do
+        {:ok, value, matched_state} ->
+          {:ok, value, matched_state}
+
+        :none ->
+          case match_segments(state, production.segments, %{}, 0) do
+            {:ok, bindings, _progress, matched_state} ->
+              case peek(matched_state) do
+                %Token{type: type} when type in [:newline, :dedent, :eof] ->
+                  production_values = Map.take(bindings, production.fields)
+                  {value, matched_state} = parse_production_body(matched_state, grammar, production_values)
+                  {:ok, value, matched_state}
+
+                _ ->
+                  nil
+              end
+
+            _ ->
+              nil
+          end
+      end
+    end)
+  end
+
+  # A family production may use the conventional `kind module as identity`
+  # spelling while allowing the kind to be omitted for the common worker case:
+  # `module as identity`. Keep this compatibility in the generic matcher so
+  # source-defined families do not need a second production with a different
+  # field prefix (which would change the generated family record shape).
+  defp match_bare_family_production(
+         state,
+         grammar,
+         %{segments: [{:hole, _}, {:hole, module_hole}, {:lit, "as"} | rest]} = production
+       ) do
+    case match_segments(state, [{:hole, module_hole}, {:lit, "as"} | rest], %{}, 0) do
+      {:ok, bindings, _progress, matched_state} ->
+        case peek(matched_state) do
+          %Token{type: type} when type in [:newline, :dedent, :eof] ->
+            production_values = Map.put(Map.take(bindings, production.fields), "kind", nil)
+            {value, matched_state} = parse_production_body(matched_state, grammar, production_values)
+            {:ok, value, matched_state}
+
+          _ ->
+            :none
+        end
+
+      _ ->
+        :none
+    end
+  end
+
+  defp match_bare_family_production(_state, _grammar, _production), do: :none
+
+  defp parse_production_body(state, grammar, values) do
+    nested_state = skip_newlines(state)
+
+    case peek(nested_state) do
+      %Token{type: :indent} ->
+        {value, nested_state} = parse_family_sections(advance(nested_state), grammar, values)
+        {value, expect_dedent(nested_state)}
+
+      _ ->
+        family_value(grammar, values, state)
     end
   end
 
@@ -1221,9 +1383,98 @@ defmodule Cure.Compiler.Parser do
     {{:declarations_block, [line: token.line, col: token.col], stmts}, state}
   end
 
+  # A named repeated production field is an indented collection of that
+  # family's rows. This is the structured spelling of the already-supported
+  # bare production form:
+  #
+  #     children
+  #       actor Counter as CounterChild
+  #       supervisor Workers as WorkersChild
+  #
+  # The parser remains domain-neutral: `children`, `actor`, and `supervisor`
+  # are merely literals from the source-defined family metadata. Each row may
+  # itself own an optional indented production body.
+  defp parse_family_field_value(
+         state,
+         %{grammar: grammar, cardinality: cardinality}
+       )
+       when cardinality in [:repeated, :one_or_more] do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :indent} ->
+        {values, state} = parse_family_production_entries(advance(state), grammar, [])
+        {{:family_repeated_values, values}, expect_dedent(state)}
+
+      # `children []` is the explicit empty spelling for a structured repeated
+      # field. It predates syntax families and remains useful for deliberately
+      # childless supervisors; do not feed it to the row grammar, where `[` is
+      # correctly not the start of a production.
+      %Token{type: :lbracket} ->
+        case peek_at(state, 1) do
+          %Token{type: :rbracket} ->
+            {{:family_repeated_values, []}, advance_n(state, 2)}
+
+          _ ->
+            token = peek(state)
+            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+            {{:family_repeated_values, []}, state}
+        end
+
+      _ ->
+        case parse_family_production(state, grammar) do
+          {:ok, value, state} ->
+            {{:family_repeated_values, [value]}, state}
+
+          :error ->
+            token = peek(state)
+            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+            {{:family_repeated_values, []}, state}
+        end
+    end
+  end
+
   defp parse_family_field_value(state, _field) do
     state = skip_newlines(state)
     parse_expr_or_block(state)
+  end
+
+  defp consume_family_field_separator(state) do
+    case peek(state) do
+      %Token{type: :assign} -> advance(state)
+      _ -> state
+    end
+  end
+
+  defp parse_family_production_entries(state, grammar, values) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(values), state}
+
+      token ->
+        case parse_family_production(state, grammar) do
+          {:ok, value, state} ->
+            parse_family_production_entries(state, grammar, [value | values])
+
+          :error ->
+            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+            {_ignored, state} = parse_expr_or_block(advance(state))
+            parse_family_production_entries(state, grammar, values)
+        end
+    end
+  end
+
+  defp record_family_value(
+         values,
+         %{name: name, cardinality: cardinality},
+         {:family_repeated_values, entries},
+         _token,
+         state
+       )
+       when cardinality in [:repeated, :one_or_more] do
+    {Map.update(values, name, entries, &(&1 ++ entries)), state}
   end
 
   defp record_family_value(values, %{name: name, cardinality: cardinality}, value, _token, state)
@@ -2066,6 +2317,9 @@ defmodule Cure.Compiler.Parser do
     end)
   end
 
+  defp subst_lift_module_value(%Cure.MetaAST.SourceInfo{} = value, _bindings, _state, _module_hole, _module_name),
+    do: value
+
   defp subst_lift_module_value(value, bindings, state, module_hole, module_name) when is_map(value) do
     value =
       Map.new(value, fn {key, item} ->
@@ -2115,6 +2369,8 @@ defmodule Cure.Compiler.Parser do
 
   defp resolve_delayed_raw(list, state, context) when is_list(list),
     do: Enum.map(list, &resolve_delayed_raw(&1, state, context))
+
+  defp resolve_delayed_raw(%Cure.MetaAST.SourceInfo{} = value, _state, _context), do: value
 
   defp resolve_delayed_raw(map, state, context) when is_map(map),
     do: Map.new(map, fn {key, value} -> {key, resolve_delayed_raw(value, state, context)} end)
@@ -2427,11 +2683,12 @@ defmodule Cure.Compiler.Parser do
   # the rest of the file is still reported.
   defp reject_incomparable_chain(state, _table, nil, _lexeme, _token), do: state
 
-  defp reject_incomparable_chain(state, table, ctx_op, lexeme, _token) do
+  defp reject_incomparable_chain(state, table, ctx_op, lexeme, token) do
     if FixityTable.incomparable?(table, ctx_op, lexeme) do
       add_error(
         state,
-        {:ambiguous_precedence, FixityTable.group_of(table, ctx_op), FixityTable.group_of(table, lexeme)}
+        {:ambiguous_precedence, FixityTable.group_of(table, ctx_op), FixityTable.group_of(table, lexeme), token.line,
+         token.col}
       )
     else
       state
@@ -2840,12 +3097,29 @@ defmodule Cure.Compiler.Parser do
   # -- Literals --------------------------------------------------------------
 
   defp literal(subtype, token) do
-    {:literal, [subtype: subtype, line: token.line, col: token.col], token.value}
+    meta = [subtype: subtype, line: token.line, col: token.col]
+    {:literal, put_token_source_info(meta, token), token.value}
   end
 
   defp variable(token) do
-    {:variable, [scope: :local, line: token.line, col: token.col], token.value}
+    meta = [scope: :local, line: token.line, col: token.col]
+    {:variable, put_token_source_info(meta, token, :name), token.value}
   end
+
+  defp type_variable(token) do
+    meta = [scope: :local, line: token.line, col: token.col]
+    {:variable, put_token_source_info(meta, token, :name), to_string(token.value)}
+  end
+
+  defp put_token_source_info(meta, token, role \\ nil)
+
+  defp put_token_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = span}, role) do
+    info = %SourceInfo{whole: span}
+    info = if role == :name, do: %{info | name: span}, else: info
+    Keyword.put(meta, :source_info, info)
+  end
+
+  defp put_token_source_info(meta, _token, _role), do: meta
 
   defp error_node(token) do
     {:literal, [subtype: :null, line: token.line, col: token.col, error: true], nil}
@@ -2874,9 +3148,47 @@ defmodule Cure.Compiler.Parser do
           expr
       end)
 
-    ast = {:string_interpolation, [line: token.line, col: token.col], parsed_parts}
+    meta = [line: token.line, col: token.col]
+    meta = put_interpolation_source_info(meta, token, parts)
+    ast = {:string_interpolation, meta, parsed_parts}
     {ast, state}
   end
+
+  defp put_interpolation_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = whole}, parts) do
+    arguments =
+      parts
+      |> Enum.flat_map(fn
+        {:expr, tokens} ->
+          case authored_token_span(tokens) do
+            %Cure.Diagnostic.Span{} = span -> [span]
+            nil -> []
+          end
+
+        _text ->
+          []
+      end)
+
+    Keyword.put(meta, :source_info, %SourceInfo{whole: whole, arguments: arguments})
+  end
+
+  defp put_interpolation_source_info(meta, _token, _parts), do: meta
+
+  defp authored_token_span(tokens) when is_list(tokens) do
+    authored = Enum.filter(tokens, &match?(%Token{span: %Cure.Diagnostic.Span{}}, &1))
+
+    case {List.first(authored), List.last(authored)} do
+      {%Token{} = first, %Token{} = last} ->
+        case Range.through(first, last) do
+          {:ok, span} -> span
+          {:error, _reason} -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp authored_token_span(_tokens), do: nil
 
   # -- Unary Operators -------------------------------------------------------
 
@@ -2886,7 +3198,9 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
     {operand, state} = parse_expr(state, rbp, lexeme_of(token))
     op = Precedence.operator_symbol(token.type)
-    ast = {:unary_op, [category: category, operator: op, line: token.line, col: token.col], [operand]}
+    meta = [category: category, operator: op, line: token.line, col: token.col]
+    meta = put_operator_source_info(meta, nil, operand, token)
+    ast = {:unary_op, meta, [operand]}
     {ast, state}
   end
 
@@ -2979,6 +3293,7 @@ defmodule Cure.Compiler.Parser do
         {right, state} = parse_expr(state, right_bp, op_lexeme)
         op = String.to_atom(token.value)
         meta = [category: :overloaded, operator: op, line: token.line, col: token.col]
+        meta = put_operator_source_info(meta, left, right, token)
         {{:binary_op, meta, [left, right]}, state}
 
       # Regular built-in binary operator (arithmetic/comparison/boolean/…):
@@ -2988,8 +3303,52 @@ defmodule Cure.Compiler.Parser do
         category = Precedence.operator_category(token.type)
         op = Precedence.operator_symbol(token.type)
         meta = [category: category, operator: op, line: token.line, col: token.col]
+        meta = put_operator_source_info(meta, left, right, token)
         {{:binary_op, meta, [left, right]}, state}
     end
+  end
+
+  defp put_operator_source_info(meta, left, right, token) do
+    operands = Enum.flat_map([left, right], &node_source_span/1)
+    operator = if match?(%Cure.Diagnostic.Span{}, token.span), do: token.span, else: nil
+
+    whole_spans = if is_nil(left) and operator, do: [operator | operands], else: operands
+
+    whole =
+      case whole_spans do
+        [first | rest] ->
+          Enum.reduce(rest, first, &merge_source_spans/2)
+
+        [] ->
+          operator
+      end
+
+    if whole || operator do
+      Keyword.put(meta, :source_info, %SourceInfo{whole: whole, operator: operator, operands: operands})
+    else
+      meta
+    end
+  end
+
+  defp node_source_span({_, node_meta, _}) when is_list(node_meta) do
+    case Metadata.source_info(node_meta) do
+      %SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> [span]
+      _ -> []
+    end
+  end
+
+  defp node_source_span(_), do: []
+
+  defp merge_source_spans(%Cure.Diagnostic.Span{} = right, %Cure.Diagnostic.Span{} = left) do
+    start = if left.start_byte <= right.start_byte, do: left, else: right
+    ending = if left.end_byte >= right.end_byte, do: left, else: right
+
+    %Cure.Diagnostic.Span{
+      start
+      | end_byte: ending.end_byte,
+        end_line: ending.end_line,
+        end_column: ending.end_column
+    }
   end
 
   # `<-|` -> :ascii, `✉` -> :unicode. Any other lexeme (unlikely, but
@@ -3027,7 +3386,7 @@ defmodule Cure.Compiler.Parser do
     # (`identifier :`), so the head's case is what disambiguates them. Only allow
     # label-grabbing for the non-constructor (function) head.
     allow_labels = not is_pascal_case?(func)
-    {args, arg_labels, state} = parse_call_args(state, allow_labels)
+    {args, arg_labels, state, close_token} = parse_call_args(state, allow_labels)
     name = extract_call_name(func)
 
     meta = [name: name, line: token.line, col: token.col]
@@ -3046,11 +3405,101 @@ defmodule Cure.Compiler.Parser do
         meta
       end
 
+    meta = put_call_source_info(meta, func, args, token, close_token)
+
     ast = {:function_call, meta, args}
     {ast, state}
   end
 
-  # Returns {args, labels, state}: `labels` is position-aligned with `args`, each
+  defp put_call_source_info(meta, func, args, open_token, close_token) do
+    callee_span =
+      case func do
+        {_, func_meta, _} when is_list(func_meta) ->
+          func_meta |> Metadata.source_info() |> source_whole()
+
+        _ ->
+          nil
+      end
+
+    argument_spans =
+      Enum.flat_map(args, fn
+        {_, argument_meta, _} when is_list(argument_meta) ->
+          case Metadata.source_info(argument_meta) do
+            %SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> [span]
+            _ -> []
+          end
+
+        _ ->
+          []
+      end)
+
+    whole =
+      case {callee_span, close_token, open_token.span} do
+        {%Cure.Diagnostic.Span{} = callee, %Token{} = close, _} ->
+          case Range.through(callee, close) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        {nil, %Token{} = close, %Cure.Diagnostic.Span{} = open} ->
+          case Range.through(open, close) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    case whole do
+      %Cure.Diagnostic.Span{} = span ->
+        Keyword.put(meta, :source_info, %SourceInfo{
+          whole: span,
+          callee: callee_span,
+          arguments: argument_spans
+        })
+
+      _ ->
+        meta
+    end
+  end
+
+  defp source_whole(%SourceInfo{whole: span}), do: span
+  defp source_whole(_), do: nil
+
+  defp put_type_application_source_info(meta, start, args, close_token) do
+    start_span =
+      case start do
+        %Token{span: %Cure.Diagnostic.Span{} = span} -> span
+        %Cure.Diagnostic.Span{} = span -> span
+        {_, node_meta, _} when is_list(node_meta) -> node_meta |> Metadata.source_info() |> source_whole()
+        _ -> nil
+      end
+
+    argument_spans = Enum.flat_map(args, &node_source_span/1)
+
+    whole =
+      case {start_span, close_token} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = close} ->
+          case Range.through(first, close) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    case whole do
+      %Cure.Diagnostic.Span{} = span ->
+        Keyword.put(meta, :source_info, %SourceInfo{whole: span, arguments: argument_spans})
+
+      _ ->
+        meta
+    end
+  end
+
+  # Returns {args, labels, state, close_token}: `labels` is position-aligned with `args`, each
   # entry the written argument label (`f(to: v)`) or `nil` when the argument is
   # positional. Callers that ignore labels bind the middle element to `_`.
   defp parse_call_args(state, allow_labels) do
@@ -3058,7 +3507,8 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :rparen} ->
-        {[], [], advance(state)}
+        close_token = peek(state)
+        {[], [], advance(state), close_token}
 
       _ ->
         {label, state} = parse_arg_label(state, allow_labels)
@@ -3067,8 +3517,14 @@ defmodule Cure.Compiler.Parser do
         state = skip_newlines(state)
         {rest, rest_labels, state} = parse_more_args(state, allow_labels)
         state = skip_newlines(state)
-        state = expect(state, :rparen)
-        {[first | rest], [label | rest_labels], state}
+
+        {state, close_token} =
+          case expect_token(state, :rparen) do
+            {:ok, token, next_state} -> {next_state, token}
+            {:error, next_state} -> {next_state, nil}
+          end
+
+        {[first | rest], [label | rest_labels], state, close_token}
     end
   end
 
@@ -3158,11 +3614,46 @@ defmodule Cure.Compiler.Parser do
 
     state = skip_newlines(state)
 
+    {layout?, state} =
+      case peek(state) do
+        %Token{type: :indent} -> {true, state |> advance() |> skip_newlines()}
+        _ -> {false, state}
+      end
+
     case peek(state) do
       %Token{type: :rbrace} ->
         # Empty construction: TypeName{}
+        close_token = peek(state)
         state = advance(state)
-        ast = {:function_call, [name: rec_name, record: true, line: line, col: col], []}
+
+        meta =
+          put_record_source_info(
+            [name: rec_name, record: true, line: line, col: col],
+            name_ast,
+            open_token,
+            state,
+            close_token,
+            []
+          )
+
+        ast = {:function_call, meta, []}
+        {ast, state}
+
+      %Token{type: :dedent} when layout? ->
+        state = close_record_layout(state, true)
+        {state, close_token} = expect_token_or_nil(state, :rbrace)
+
+        meta =
+          put_record_source_info(
+            [name: rec_name, record: true, line: line, col: col],
+            name_ast,
+            open_token,
+            state,
+            close_token,
+            []
+          )
+
+        ast = {:function_call, meta, []}
         {ast, state}
 
       _ ->
@@ -3170,6 +3661,7 @@ defmodule Cure.Compiler.Parser do
         # :bar ("|") is not an infix operator, so parse_expr stops naturally at it.
         # We save pos+errors so we can fully rewind on a non-update literal.
         saved_pos = state.pos
+        saved_last_authored = state.last_authored
         saved_errors = state.errors
         {base_expr, probe_state} = parse_expr(state, 0)
         probe_state = skip_newlines(probe_state)
@@ -3181,18 +3673,88 @@ defmodule Cure.Compiler.Parser do
             probe_state = advance(probe_state)
             probe_state = skip_newlines(probe_state)
             {fields, probe_state} = parse_map_pairs(probe_state, :rbrace)
-            probe_state = expect(probe_state, :rbrace)
-            ast = {:record_update, [name: rec_name, line: line, col: col], [base_expr | fields]}
+            probe_state = close_record_layout(probe_state, layout?)
+            {probe_state, close_token} = expect_token_or_nil(probe_state, :rbrace)
+
+            meta =
+              put_record_source_info(
+                [name: rec_name, line: line, col: col],
+                name_ast,
+                open_token,
+                probe_state,
+                close_token,
+                fields
+              )
+
+            ast = {:record_update, meta, [base_expr | fields]}
             {ast, probe_state}
 
           _ ->
             # Not update syntax: rewind completely and parse as plain construction.
-            state = %{state | pos: saved_pos, errors: saved_errors}
+            state = %{state | pos: saved_pos, last_authored: saved_last_authored, errors: saved_errors}
             {fields, state} = parse_map_pairs(state, :rbrace)
-            state = expect(state, :rbrace)
-            ast = {:function_call, [name: rec_name, record: true, line: line, col: col], fields}
+            state = close_record_layout(state, layout?)
+            {state, close_token} = expect_token_or_nil(state, :rbrace)
+
+            meta =
+              put_record_source_info(
+                [name: rec_name, record: true, line: line, col: col],
+                name_ast,
+                open_token,
+                state,
+                close_token,
+                fields
+              )
+
+            ast = {:function_call, meta, fields}
             {ast, state}
         end
+    end
+  end
+
+  defp close_record_layout(state, true), do: state |> skip_newlines() |> expect_dedent() |> skip_newlines()
+  defp close_record_layout(state, false), do: state
+
+  defp put_record_source_info(meta, name_ast, open_token, _state, close_token, fields) do
+    name_span = first_node_source_span(name_ast)
+
+    whole =
+      case {name_span || open_token.span, close_token} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = close} ->
+          case Range.through(first, close) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    field_spans =
+      Enum.reduce(fields, %{}, fn
+        {:pair, pair_meta, [key | _]}, acc ->
+          case Metadata.source_info(pair_meta) do
+            %SourceInfo{name: %Cure.Diagnostic.Span{} = field} ->
+              Map.put(acc, field_name(key), field)
+
+            _ ->
+              acc
+          end
+
+        _, acc ->
+          acc
+      end)
+
+    if whole do
+      Keyword.put(meta, :source_info, %SourceInfo{
+        whole: whole,
+        name: name_span,
+        opener: open_token.span,
+        closer: if(match?(%Token{span: %Cure.Diagnostic.Span{}}, close_token), do: close_token.span),
+        fields: field_spans
+      })
+    else
+      meta
     end
   end
 
@@ -3225,8 +3787,10 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :rbracket} ->
         # Empty list
-        {_, state} = {nil, advance(state)}
-        {{:list, [line: token.line, col: token.col], []}, state}
+        close_token = peek(state)
+        state = advance(state)
+        meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
+        {{:list, meta, []}, state}
 
       _ ->
         {first, state} = parse_expr(state, 0)
@@ -3243,8 +3807,17 @@ defmodule Cure.Compiler.Parser do
             state = skip_newlines(state)
             {tail, state} = parse_expr(state, 0)
             state = skip_newlines(state)
-            state = expect(state, :rbracket)
-            ast = {:list, [cons: true, line: token.line, col: token.col], [first, tail]}
+            {state, close_token} = expect_token_or_nil(state, :rbracket)
+
+            meta =
+              put_container_source_info(
+                [cons: true, line: token.line, col: token.col],
+                token,
+                state,
+                close_token
+              )
+
+            ast = {:list, meta, [first, tail]}
             {ast, state}
 
           # Multi-head cons or regular list: [a, b, c]  or  [a, b | rest]
@@ -3259,16 +3832,18 @@ defmodule Cure.Compiler.Parser do
                 state = skip_newlines(state)
                 {tail, state} = parse_expr(state, 0)
                 state = skip_newlines(state)
-                state = expect(state, :rbracket)
+                {state, close_token} = expect_token_or_nil(state, :rbracket)
 
                 heads = [first | rest_heads]
                 ast = build_multi_head_cons(heads, tail, token)
+                ast = put_container_source_info_ast(ast, token, state, close_token)
                 {ast, state}
 
               _ ->
                 state = skip_newlines(state)
-                state = expect(state, :rbracket)
-                ast = {:list, [line: token.line, col: token.col], [first | rest_heads]}
+                {state, close_token} = expect_token_or_nil(state, :rbracket)
+                meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
+                ast = {:list, meta, [first | rest_heads]}
                 {ast, state}
             end
         end
@@ -3311,15 +3886,20 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :rbracket} ->
-        {{:tuple, [line: token.line, col: token.col], []}, advance(state)}
+        close_token = peek(state)
+        state = advance(state)
+        meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
+        {{:tuple, meta, []}, state}
 
       _ ->
         {first, state} = parse_expr(state, 0)
         {rest, state} = parse_comma_exprs(state)
         state = skip_newlines(state)
-        state = expect(state, :rbracket)
+        {state, close_token} = expect_token_or_nil(state, :rbracket)
 
-        {:tuple, [line: token.line, col: token.col], [first | rest]}
+        meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
+
+        {:tuple, meta, [first | rest]}
         |> then(&{&1, state})
     end
   end
@@ -3332,13 +3912,17 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :rbrace} ->
-        {{:map, [line: token.line, col: token.col], []}, advance(state)}
+        close_token = peek(state)
+        state = advance(state)
+        meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
+        {{:map, meta, []}, state}
 
       _ ->
         {pairs, state} = parse_map_pairs(state, :rbrace)
         state = skip_newlines(state)
-        state = expect(state, :rbrace)
-        {{:map, [line: token.line, col: token.col], pairs}, state}
+        {state, close_token} = expect_token_or_nil(state, :rbrace)
+        meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
+        {{:map, meta, pairs}, state}
     end
   end
 
@@ -3376,7 +3960,8 @@ defmodule Cure.Compiler.Parser do
         state = advance(state) |> advance()
         state = skip_newlines(state)
         {value, state} = parse_expr(state, 0)
-        pair = {:pair, [], [{:literal, [subtype: :symbol], key_atom}, value]}
+        pair_meta = put_field_source_info([], token, state, token.span)
+        pair = {:pair, pair_meta, [{:literal, [subtype: :symbol], key_atom}, value]}
         {pair, state}
 
       # Pattern/construction field punning (v0.18.0): a bare identifier
@@ -3388,7 +3973,8 @@ defmodule Cure.Compiler.Parser do
         key_atom = String.to_atom(token.value)
         var_ast = variable(token)
         state = advance(state)
-        pair = {:pair, [pun: true], [{:literal, [subtype: :symbol], key_atom}, var_ast]}
+        pair_meta = put_field_source_info([pun: true], token, state, token.span)
+        pair = {:pair, pair_meta, [{:literal, [subtype: :symbol], key_atom}, var_ast]}
         {pair, state}
 
       true ->
@@ -3398,10 +3984,38 @@ defmodule Cure.Compiler.Parser do
         state = expect(state, :fat_arrow)
         state = skip_newlines(state)
         {value, state} = parse_expr(state, 0)
-        pair = {:pair, [], [key, value]}
+        pair_meta = put_field_source_info([field: field_name(key)], token, state, first_node_source_span(key))
+        pair = {:pair, pair_meta, [key, value]}
         {pair, state}
     end
   end
+
+  defp put_field_source_info(meta, start_token, state, field_span) do
+    close_token = authored_token(state)
+
+    whole =
+      case {start_token.span, close_token} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    if whole do
+      info = %SourceInfo{whole: whole, name: field_span}
+      Keyword.put(meta, :source_info, info)
+    else
+      meta
+    end
+  end
+
+  defp field_name({:variable, _meta, name}), do: name
+  defp field_name({:literal, _meta, name}) when is_atom(name), do: name
+  defp field_name(_), do: :unknown
 
   # Binary literal / pattern: <<seg1, seg2, ...>>
   #
@@ -3552,10 +4166,42 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
     {generators_and_filters, state} = parse_generators(state)
     state = skip_newlines(state)
-    state = expect(state, :rbracket)
-    ast = {:comprehension, [line: open_token.line, col: open_token.col], [body | generators_and_filters]}
+    {state, close_token} = expect_token_or_nil(state, :rbracket)
+
+    meta =
+      put_container_source_info(
+        [line: open_token.line, col: open_token.col],
+        open_token,
+        state,
+        close_token
+      )
+
+    ast = {:comprehension, meta, [body | generators_and_filters]}
     {ast, state}
   end
+
+  defp put_container_source_info(meta, open_token, _state, close_token) do
+    case {open_token.span, close_token} do
+      {%Cure.Diagnostic.Span{} = opener, %Token{span: %Cure.Diagnostic.Span{} = closer}} ->
+        case Range.through(opener, closer) do
+          {:ok, whole} ->
+            Keyword.put(meta, :source_info, %SourceInfo{whole: whole, opener: opener, closer: closer})
+
+          _ ->
+            meta
+        end
+
+      _ ->
+        meta
+    end
+  end
+
+  defp put_container_source_info_ast({tag, meta, children}, open_token, state, close_token)
+       when is_list(meta) do
+    {tag, put_container_source_info(meta, open_token, state, close_token), children}
+  end
+
+  defp put_container_source_info_ast(ast, _open_token, _state, _close_token), do: ast
 
   defp parse_generators(state) do
     {item, state} = parse_generator_or_filter(state)
@@ -3587,6 +4233,7 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_non_binary_generator_or_filter(state) do
     saved_pos = state.pos
+    saved_last_authored = state.last_authored
     {expr, state} = parse_expr(state, bp_above(state, "<"))
     state = skip_newlines(state)
 
@@ -3602,7 +4249,7 @@ defmodule Cure.Compiler.Parser do
           {{:generator, [], [expr, collection]}, state}
         else
           # Not a generator. Re-parse from saved position at BP 0 for full filter expression.
-          state = %{state | pos: saved_pos}
+          state = %{state | pos: saved_pos, last_authored: saved_last_authored}
           {filter_expr, state} = parse_expr(state, 0)
           {{:filter, [], [filter_expr]}, state}
         end
@@ -3613,7 +4260,7 @@ defmodule Cure.Compiler.Parser do
         token = peek(state)
 
         if FixityTable.infix_bp(fixity_table(state), lexeme_of(token)) != :not_infix do
-          state = %{state | pos: saved_pos}
+          state = %{state | pos: saved_pos, last_authored: saved_last_authored}
           {filter_expr, state} = parse_expr(state, 0)
           {{:filter, [], [filter_expr]}, state}
         else
@@ -3843,64 +4490,10 @@ defmodule Cure.Compiler.Parser do
         {[], _next} -> true
         {[{:lit, "("} | _], %Token{type: :lparen}} -> true
         {_segments, %Token{type: :lparen}} -> false
-        {_segments, _next} -> not legacy_block_ambiguity?(state, name, rule)
+        {_segments, _next} -> true
       end
     end)
   end
-
-  # A structured family and an older raw-body rule may share a keyword. If the
-  # use-site starts with the legacy rule's nested block form, let the legacy
-  # matcher own it; an inline structured field remains unambiguous. This keeps
-  # migration source-compatible without making the family parser know anything
-  # about the legacy rule's domain vocabulary.
-  defp legacy_block_ambiguity?(state, name, rule) do
-    Map.get(rule, :direct_inputs, false) and
-      (Map.has_key?(state.active_macros, name) or Map.has_key?(state.builtin_macros, name)) and
-      nested_family_block_head?(state)
-  end
-
-  defp nested_family_block_head?(state) do
-    state
-    |> tokens_from(state.pos + 1)
-    |> drop_until_newline()
-    |> case do
-      [%Token{type: :newline} | rest] ->
-        rest
-        |> drop_whitespace_tokens()
-        |> case do
-          [%Token{type: :indent} | rest] ->
-            rest
-            |> drop_whitespace_tokens()
-            |> case do
-              [%Token{type: :identifier} | rest] ->
-                rest
-                |> drop_whitespace_tokens()
-                |> starts_with_indent?()
-
-              _ ->
-                false
-            end
-
-          _ ->
-            false
-        end
-
-      _ ->
-        false
-    end
-  end
-
-  defp drop_until_newline([%Token{type: :newline} | _] = tokens), do: tokens
-  defp drop_until_newline([_token | rest]), do: drop_until_newline(rest)
-  defp drop_until_newline([]), do: []
-
-  defp drop_whitespace_tokens([%Token{type: type} | rest]) when type in [:newline],
-    do: drop_whitespace_tokens(rest)
-
-  defp drop_whitespace_tokens(tokens), do: tokens
-
-  defp starts_with_indent?([%Token{type: :indent} | _]), do: true
-  defp starts_with_indent?(_tokens), do: false
 
   # -- Let Binding -----------------------------------------------------------
 
@@ -3920,7 +4513,7 @@ defmodule Cure.Compiler.Parser do
         _ -> "let binding"
       end
 
-    {grade, type_ann, state} = parse_binder_annotation(state, let_name, [:assign])
+    {grade, type_ann, state, annotation_span} = parse_binder_annotation(state, let_name, [:assign])
 
     # A grade attaches to a SIMPLE VARIABLE binder only. A destructuring `let` lowers
     # to a `case`, whose binders take their grades from the constructor's field
@@ -3943,6 +4536,7 @@ defmodule Cure.Compiler.Parser do
     meta = [let: true, line: token.line, col: token.col]
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
     meta = if grade, do: Keyword.put(meta, :grade, grade), else: meta
+    meta = put_let_source_info(meta, token, pattern, annotation_span, state)
 
     assignment = {:assignment, meta, [pattern, value]}
 
@@ -4733,11 +5327,50 @@ defmodule Cure.Compiler.Parser do
       meta =
         if guard, do: [pattern: pattern, guard: guard, impossible: true], else: [pattern: pattern, impossible: true]
 
+      meta = put_match_arm_source_info(meta, pattern, guard, nil, state)
+
       {{:match_arm, meta, [nil]}, state}
     else
       {body, state} = parse_expr_or_block(state)
       meta = if guard, do: [pattern: pattern, guard: guard], else: [pattern: pattern]
+      meta = put_match_arm_source_info(meta, pattern, guard, body, state)
       {{:match_arm, meta, [body]}, state}
+    end
+  end
+
+  defp put_match_arm_source_info(meta, pattern, guard, body, state) do
+    pattern_span = first_node_source_span(pattern)
+    guard_span = first_node_source_span(guard)
+    body_span = first_node_source_span(body)
+
+    whole =
+      case {pattern_span, authored_token(state)} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    if whole do
+      Keyword.put(meta, :source_info, %SourceInfo{
+        whole: whole,
+        pattern: pattern_span,
+        guard: guard_span,
+        body: body_span
+      })
+    else
+      meta
+    end
+  end
+
+  defp first_node_source_span(node) do
+    case node_source_span(node) do
+      [span | _] -> span
+      _ -> nil
     end
   end
 
@@ -5049,7 +5682,9 @@ defmodule Cure.Compiler.Parser do
         {body, state} = parse_expr_or_block(state)
         {body, state} = parse_expression_let_chain_body(body, state)
 
-        meta = build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
+        meta =
+          build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects)
+
         ast = {:function_def, meta, [body]}
         {ast, state}
 
@@ -5066,7 +5701,18 @@ defmodule Cure.Compiler.Parser do
             state = expect_dedent(state)
 
             meta =
-              build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
+              build_fn_meta(
+                state,
+                fn_token,
+                name_token,
+                name,
+                params,
+                return_type,
+                visibility,
+                guard,
+                constraints,
+                effects
+              )
 
             ast = {:function_def, meta, [body]}
             {ast, state}
@@ -5077,7 +5723,18 @@ defmodule Cure.Compiler.Parser do
             state = expect_dedent(state)
 
             meta =
-              build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
+              build_fn_meta(
+                state,
+                fn_token,
+                name_token,
+                name,
+                params,
+                return_type,
+                visibility,
+                guard,
+                constraints,
+                effects
+              )
 
             meta = Keyword.put(meta, :clauses, clauses)
             ast = {:function_def, meta, []}
@@ -5086,13 +5743,15 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         # Function signature only (no body, e.g. in protocol)
-        meta = build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects)
+        meta =
+          build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects)
+
         ast = {:function_def, meta, []}
         {ast, state}
     end
   end
 
-  defp build_fn_meta(fn_token, name, params, return_type, visibility, guard, constraints, effects) do
+  defp build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects) do
     meta = [
       name: name,
       params: params,
@@ -5106,8 +5765,31 @@ defmodule Cure.Compiler.Parser do
     meta = if guard, do: Keyword.put(meta, :guards, guard), else: meta
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
     meta = if effects, do: Keyword.put(meta, :effects, effects), else: meta
-    meta
+
+    case {fn_token.span, name_token.span, authored_token(state)} do
+      {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = name_span, %Token{} = last} ->
+        case Range.through(first, last) do
+          {:ok, whole} ->
+            info = %SourceInfo{whole: whole, name: name_span, annotation: ast_source_span(return_type)}
+            Keyword.put(meta, :source_info, info)
+
+          _ ->
+            meta
+        end
+
+      _ ->
+        meta
+    end
   end
+
+  defp ast_source_span({_, meta, _}) when is_list(meta) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{whole: span} -> span
+      _ -> nil
+    end
+  end
+
+  defp ast_source_span(_), do: nil
 
   defp parse_fn_clauses(state) do
     state = skip_newlines(state)
@@ -5175,6 +5857,25 @@ defmodule Cure.Compiler.Parser do
         end
     end
   end
+
+  defp put_let_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = first}, pattern, annotation, state) do
+    case authored_token(state) do
+      %Token{span: %Cure.Diagnostic.Span{} = last} ->
+        case Range.through(first, last) do
+          {:ok, whole} ->
+            info = %SourceInfo{whole: whole, name: ast_source_span(pattern), annotation: annotation}
+            Keyword.put(meta, :source_info, info)
+
+          _ ->
+            meta
+        end
+
+      _ ->
+        meta
+    end
+  end
+
+  defp put_let_source_info(meta, _token, _pattern, _annotation, _state), do: meta
 
   # -- Typed Parameters  name: Type [= default] ------------------------------
 
@@ -5260,37 +5961,56 @@ defmodule Cure.Compiler.Parser do
   # `let` stops on `=`, because Idris's `letBinder` leaves the type optional even when
   # graded (`Idris/Parser.idr:821-824`) and `let_inferred/8` will synthesise it.
   defp parse_binder_annotation(state, name, stop_on \\ []) do
+    annotation_start = peek(state)
+
     case parse_grade(state) do
       {:none, state} ->
         case peek(state) do
           %Token{type: :colon} ->
             {type_ast, state} = parse_type_expr(advance(state))
-            {nil, type_ast, state}
+            {nil, type_ast, state, annotation_span(annotation_start, state)}
 
           _ ->
-            {nil, nil, state}
+            {nil, nil, state, nil}
         end
 
       {:unknown, bad, tok, state} ->
         # Consume the stray atom (already advanced past it) and name it, so the error
         # points at the grade rather than cascading onto the next real token.
-        {nil, nil, add_error(state, {:unknown_grade, bad, tok.line, tok.col})}
+        {nil, nil, add_error(state, {:unknown_grade, bad, tok.line, tok.col}), tok.span}
 
       {:grade, grade, state} ->
         cond do
           peek(state).type in stop_on ->
-            {grade, nil, state}
+            {grade, nil, state, annotation_span(annotation_start, state)}
 
           peek(state).type in @non_type_tokens ->
             tok = peek(state)
-            {grade, nil, add_error(state, {:grade_requires_type, name, grade, tok.line, tok.col})}
+
+            {grade, nil, add_error(state, {:grade_requires_type, name, grade, tok.line, tok.col}),
+             annotation_span(annotation_start, state)}
 
           true ->
             {type_ast, state} = parse_type_expr(state)
-            {grade, type_ast, state}
+            {grade, type_ast, state, annotation_span(annotation_start, state)}
         end
     end
   end
+
+  defp annotation_span(%Token{span: %Cure.Diagnostic.Span{} = first}, state) do
+    case authored_token(state) do
+      %Token{span: %Cure.Diagnostic.Span{} = last} ->
+        case Range.through(first, last) do
+          {:ok, span} -> span
+          _ -> nil
+        end
+
+      _ ->
+        first
+    end
+  end
+
+  defp annotation_span(_start, _state), do: nil
 
   defp put_binder_meta(meta, grade, type_ast) do
     meta = if type_ast, do: Keyword.put(meta, :type, type_ast), else: meta
@@ -5301,19 +6021,23 @@ defmodule Cure.Compiler.Parser do
   # Its type may be omitted and inferred by the elaborator from later parameter
   # types / the return type. `{name :g Type}` overrides the erased default.
   defp parse_implicit_param(state) do
+    start_token = peek(state)
     state = advance(state)
     name_token = peek(state)
     name = to_string(name_token.value)
     state = advance(state)
 
-    {grade, type_ast, state} = parse_binder_annotation(state, name)
+    {grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
 
     state = expect(state, :rbrace)
 
-    {{:param, put_binder_meta([implicit: true], grade, type_ast), name}, state}
+    meta = put_binder_meta([implicit: true], grade, type_ast)
+    {{:param, put_param_source_info(meta, start_token, name_token, state, annotation_span), name}, state}
   end
 
   defp parse_explicit_param(state) do
+    start_token = peek(state)
+
     # Check for variadic: *name or **name
     {kind, state} =
       case peek(state) do
@@ -5350,7 +6074,7 @@ defmodule Cure.Compiler.Parser do
       end
 
     # Optional type annotation `: Type`, or a graded one `:g Type`.
-    {grade, type_ast, state} = parse_binder_annotation(state, name)
+    {grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
 
     # Optional default value: = expr
     {default, state} =
@@ -5370,7 +6094,23 @@ defmodule Cure.Compiler.Parser do
     param_meta = if default, do: Keyword.put(param_meta, :default, default), else: param_meta
     param_meta = if kind != :positional, do: Keyword.put(param_meta, :kind, kind), else: param_meta
 
-    {{:param, param_meta, name}, state}
+    {{:param, put_param_source_info(param_meta, start_token, name_token, state, annotation_span), name}, state}
+  end
+
+  defp put_param_source_info(meta, %Token{} = start_token, %Token{} = name_token, state, annotation_span) do
+    case {start_token.span, name_token.span, authored_token(state)} do
+      {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = name_span, %Token{} = last} ->
+        case Range.through(first, last) do
+          {:ok, whole} ->
+            Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name_span, annotation: annotation_span})
+
+          _ ->
+            meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   # -- Lambda (anonymous fn) -------------------------------------------------
@@ -5469,6 +6209,7 @@ defmodule Cure.Compiler.Parser do
   # otherwise parse a single expression as the lambda body.
   defp parse_bare_lambda_body(state, token) do
     saved_pos = state.pos
+    saved_last_authored = state.last_authored
     {first, state} = parse_expr(state, 0)
 
     case peek(state) do
@@ -5477,7 +6218,7 @@ defmodule Cure.Compiler.Parser do
         {build_block([first], :end, token), state}
 
       %Token{type: :semicolon} ->
-        state = %{state | pos: saved_pos}
+        state = %{state | pos: saved_pos, last_authored: saved_last_authored}
         parse_end_terminated_lambda_body(state, token)
 
       _ ->
@@ -5579,7 +6320,9 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     # Parse module name (dotted path)
+    name_start = peek(state)
     {name, state} = parse_dotted_name(state)
+    name_end = authored_token(state)
     state = skip_newlines(state)
 
     # Parse indented body. Leading `##` docs immediately after `mod Name`
@@ -5588,6 +6331,7 @@ defmodule Cure.Compiler.Parser do
     {body_stmts, leading_doc, state} = parse_definition_block_with_lead_doc(state)
 
     meta = [container_type: :module, name: name, language: :cure, line: token.line, col: token.col]
+    meta = put_container_source_info(meta, token, name_start, name_end, state)
     meta = if leading_doc != "", do: Keyword.put(meta, :doc, leading_doc), else: meta
     ast = {:container, meta, body_stmts}
     {ast, state}
@@ -5602,7 +6346,9 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     state = advance(state)
 
+    name_start = peek(state)
     {name, state} = parse_dotted_name(state)
+    name_end = authored_token(state)
     state = skip_newlines(state)
     {body_stmts, state} = parse_definition_block(state)
 
@@ -5613,6 +6359,8 @@ defmodule Cure.Compiler.Parser do
       line: token.line,
       col: token.col
     ]
+
+    meta = put_container_source_info(meta, token, name_start, name_end, state)
 
     {{:container, meta, body_stmts}, state}
   end
@@ -5674,7 +6422,23 @@ defmodule Cure.Compiler.Parser do
       col: kw.col
     ]
 
+    meta = put_fixity_source_info(meta, kw, op_token, state)
+
     {{:fixity, meta, []}, state}
+  end
+
+  defp put_fixity_source_info(meta, %Token{} = first, %Token{} = operator, state) do
+    case {first.span, operator.span, authored_token(state)} do
+      {%Cure.Diagnostic.Span{} = first_span, %Cure.Diagnostic.Span{} = operator_span,
+       %Token{span: %Cure.Diagnostic.Span{} = last_span}} ->
+        case Range.through(first_span, last_span) do
+          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole, operator: operator_span})
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   defp fixity_lexeme(%Token{value: v}) when is_binary(v), do: v
@@ -5693,6 +6457,7 @@ defmodule Cure.Compiler.Parser do
 
     {fields, state} = parse_precedencegroup_body(state)
     meta = [name: name, line: kw.line, col: kw.col] ++ fields
+    meta = put_container_source_info(meta, kw, name_token, name_token, state)
     {{:precedencegroup, meta, []}, state}
   end
 
@@ -5798,8 +6563,25 @@ defmodule Cure.Compiler.Parser do
 
     meta = [container_type: :struct, name: name, line: token.line, col: token.col]
     meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
+    meta = put_container_source_info(meta, token, name_token, name_token, state)
     ast = {:container, meta, fields}
     {ast, state}
+  end
+
+  defp put_container_source_info(meta, %Token{} = first, %Token{} = name_start, %Token{} = name_end, state) do
+    case {first.span, name_start.span, name_end.span, authored_token(state)} do
+      {%Cure.Diagnostic.Span{} = first_span, %Cure.Diagnostic.Span{} = name_start_span,
+       %Cure.Diagnostic.Span{} = name_end_span, %Token{span: %Cure.Diagnostic.Span{} = last_span}} ->
+        with {:ok, whole} <- Range.through(first_span, last_span),
+             {:ok, name} <- Range.through(name_start_span, name_end_span) do
+          Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name})
+        else
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   defp parse_record_fields(state) do
@@ -5825,8 +6607,10 @@ defmodule Cure.Compiler.Parser do
       _ ->
         name_token = peek(state)
         state = advance(state)
+        annotation_start = peek(state)
         state = expect(state, :colon)
         {type_ast, state} = parse_type_expr(state)
+        field_annotation_span = annotation_span(annotation_start, state)
 
         # v0.19.0: optional `= default_expr` per record field.
         {default_ast, state} =
@@ -5844,6 +6628,15 @@ defmodule Cure.Compiler.Parser do
 
         meta = [type: type_ast]
         meta = if default_ast, do: Keyword.put(meta, :default, default_ast), else: meta
+
+        meta =
+          put_param_source_info(
+            meta,
+            name_token,
+            name_token,
+            state,
+            field_annotation_span
+          )
 
         field = {:param, meta, to_string(name_token.value)}
         {rest, state} = parse_record_field_list(state)
@@ -5886,13 +6679,13 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    {type_params, state} =
+    {head_params, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           state = advance(state)
           {tp, state} = parse_typed_params(state)
           state = expect(state, :rparen)
-          {Enum.map(tp, fn {:param, _meta, n} -> n end), state}
+          {tp, state}
 
         _ ->
           {[], state}
@@ -5907,8 +6700,11 @@ defmodule Cure.Compiler.Parser do
     # to predeclare transparent aliases without accidentally turning a
     # forward-referenced one-constructor ADT into an alias.
     meta = [name: name, line: token.line, col: token.col, typealias: true]
+    type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
     meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-    {{:type_annotation, meta, [rhs]}, state}
+    meta = if head_params != [], do: Keyword.put(meta, :params, head_params), else: meta
+    ast = {:type_annotation, meta, [rhs]}
+    {put_type_decl_source_info(ast, token, name_token, state), state}
   end
 
   # `primitive Name` → a constructor-less primitive-type container. The optional
@@ -5931,7 +6727,8 @@ defmodule Cure.Compiler.Parser do
       col: token.col
     ]
 
-    {{:container, meta, []}, state}
+    ast = {:container, meta, []}
+    {put_type_decl_source_info(ast, token, name_token, state), state}
   end
 
   defp parse_type_def(state, opts \\ []) do
@@ -5966,14 +6763,17 @@ defmodule Cure.Compiler.Parser do
         type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
         meta = [container_type: :opaque, name: name, line: token.line, col: token.col]
         meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
-        {{:container, meta, []}, state}
+        meta = if head_params != [], do: Keyword.put(meta, :params, head_params), else: meta
+        ast = {:container, meta, []}
+        {put_type_decl_source_info(ast, token, name_token, state), state}
 
       match?(%Token{type: :keyword, value: :indices}, peek(state)) ->
-        parse_indexed_family(state, name, head_params, token)
+        {ast, state} = parse_indexed_family(state, name, head_params, token)
+        {put_type_decl_source_info(ast, token, name_token, state), state}
 
       true ->
         type_params = Enum.map(head_params, fn {:param, _meta, n} -> n end)
-        parse_type_def_adt(state, name, type_params, token)
+        parse_type_def_adt(state, name, type_params, token, name_token)
     end
   end
 
@@ -6007,7 +6807,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   # Ordinary ADT / alias body: `type NAME(type_params) = …`.
-  defp parse_type_def_adt(state, name, type_params, token) do
+  defp parse_type_def_adt(state, name, type_params, token, name_token) do
     state = skip_newlines(state)
 
     {pre_assign_block, state} =
@@ -6053,7 +6853,7 @@ defmodule Cure.Compiler.Parser do
           if name == "Unit" do
             {{:container, meta, [{:variable, [variant: true], "unit"}]}, state}
           else
-            state = add_error(state, {:unit_type_reserved, name})
+            state = add_error(state, {:unit_type_reserved, name, token.line, token.col})
             {{:container, meta, []}, state}
           end
 
@@ -6143,8 +6943,15 @@ defmodule Cure.Compiler.Parser do
         _, acc -> acc
       end)
 
-    {ast, state}
+    {put_type_decl_source_info(ast, token, name_token, state), state}
   end
+
+  defp put_type_decl_source_info({tag, meta, payload}, %Token{} = token, %Token{} = name_token, state)
+       when is_list(meta) do
+    {tag, put_container_source_info(meta, token, name_token, name_token, state), payload}
+  end
+
+  defp put_type_decl_source_info(ast, _token, _name_token, _state), do: ast
 
   defp layout_block_count(opened_block, pre_assign_block) do
     Enum.count([opened_block, pre_assign_block], & &1)
@@ -6329,11 +7136,13 @@ defmodule Cure.Compiler.Parser do
           %Token{type: :lparen} ->
             state = advance(state)
             {args, state} = parse_type_atom_args(state)
-            state = expect(state, :rparen)
-            {{:function_call, [name: name], args}, state}
+            {state, close_token} = expect_token_or_nil(state, :rparen)
+            meta = [name: name, line: token.line, col: token.col]
+            meta = put_type_application_source_info(meta, token, args, close_token)
+            {{:function_call, meta, args}, state}
 
           _ ->
-            {{:variable, [scope: :local], name}, state}
+            {type_variable(token), state}
         end
     end
   end
@@ -6596,6 +7405,7 @@ defmodule Cure.Compiler.Parser do
       col: token.col
     ]
 
+    meta = put_container_source_info(meta, token, name_token, name_token, state)
     ast = {:container, meta, body}
     {ast, state}
   end
@@ -6607,7 +7417,9 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     # Protocol name
+    proto_start = peek(state)
     {proto_name, state} = parse_dotted_name(state)
+    proto_end = authored_token(state)
 
     # Expect `for`
     state = expect_keyword(state, :for)
@@ -6647,6 +7459,7 @@ defmodule Cure.Compiler.Parser do
     ]
 
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
+    meta = put_container_source_info(meta, token, proto_start, proto_end, state)
     ast = {:container, meta, body}
     {ast, state}
   end
@@ -6719,6 +7532,7 @@ defmodule Cure.Compiler.Parser do
       col: token.col
     ]
 
+    meta = put_container_source_info(meta, token, name_token, name_token, state)
     {{:interface, meta, body}, state}
   end
 
@@ -6740,7 +7554,9 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     state = advance(state)
 
+    iface_start = peek(state)
     {iface_name, state} = parse_dotted_name(state)
+    iface_end = authored_token(state)
 
     # Consume the `for` keyword.
     state = expect_keyword(state, :for)
@@ -6788,6 +7604,7 @@ defmodule Cure.Compiler.Parser do
     ]
 
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
+    meta = put_container_source_info(meta, token, iface_start, iface_end, state)
     {{:implementation, meta, body}, state}
   end
 
@@ -6798,7 +7615,9 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     # Parse module path
+    path_start = peek(state)
     {path, state} = parse_dotted_name(state)
+    path_end = authored_token(state)
 
     # Check for selective import: .{a, b, c}
     {items, state} =
@@ -6835,6 +7654,7 @@ defmodule Cure.Compiler.Parser do
     meta = [source: path, import_type: :use, language: :cure, line: token.line, col: token.col]
     meta = if items != [], do: Keyword.put(meta, :items, items), else: meta
     meta = if alias_name, do: Keyword.put(meta, :alias, alias_name), else: meta
+    meta = put_container_source_info(meta, token, path_start, path_end, state)
     ast = {:import, meta, []}
     {ast, state}
   end
@@ -6866,7 +7686,22 @@ defmodule Cure.Compiler.Parser do
       end
 
     meta = [name: name, leading_segments: leading_segments, line: token.line, col: token.col]
+    meta = put_named_declaration_source_info(meta, token, name_token, state)
     {{:macro_def, meta, rules}, state}
+  end
+
+  defp put_named_declaration_source_info(meta, %Token{} = first, %Token{} = name_token, state) do
+    case {first.span, name_token.span, authored_token(state)} do
+      {%Cure.Diagnostic.Span{} = first_span, %Cure.Diagnostic.Span{} = name_span,
+       %Token{span: %Cure.Diagnostic.Span{} = last_token_span}} ->
+        case Range.through(first_span, last_token_span) do
+          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name_span})
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   # Pure surface representation for §14's `lift module` value. The resulting
@@ -7115,7 +7950,7 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :indent} ->
-        {fields, includes, state} = parse_syntax_family_fields(advance(state), [], [])
+        {fields, includes, productions, state} = parse_syntax_family_fields(advance(state), [], [], [])
         state = expect_dedent(state)
 
         {%{
@@ -7123,6 +7958,7 @@ defmodule Cure.Compiler.Parser do
            name: name,
            fields: fields,
            includes: includes,
+           productions: productions,
            line: family_token.line,
            col: family_token.col
          }, state}
@@ -7133,17 +7969,32 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_syntax_family_fields(state, fields, includes) do
+  defp parse_syntax_family_fields(state, fields, includes, productions) do
     state = skip_macro_trivia(state)
 
     case peek(state) do
       %Token{type: type} when type in [:dedent, :eof] ->
-        {Enum.reverse(fields), Enum.reverse(includes), state}
+        {Enum.reverse(fields), Enum.reverse(includes), Enum.reverse(productions), state}
+
+      %Token{type: :identifier, value: "syntax"} = token ->
+        {segments, state} = parse_rule_segments(advance(state), [])
+        state = consume_line_end(state)
+
+        production = %{
+          kind: :family_production,
+          segments: segments,
+          fields: macro_syntax_fields(segments),
+          field_types: macro_syntax_field_types(segments),
+          line: token.line,
+          col: token.col
+        }
+
+        parse_syntax_family_fields(state, fields, includes, [production | productions])
 
       %Token{type: :identifier, value: "includes"} = token ->
         {include, state} = parse_dotted_name(advance(state))
         state = consume_line_end(state)
-        parse_syntax_family_fields(state, fields, [{include, token.line, token.col} | includes])
+        parse_syntax_family_fields(state, fields, [{include, token.line, token.col} | includes], productions)
 
       %Token{type: :identifier} = token ->
         {cardinality, state} = parse_family_cardinality(state)
@@ -7153,22 +8004,24 @@ defmodule Cure.Compiler.Parser do
         shape_token = peek(state)
         shape = to_string(shape_token.value)
         state = advance(state)
+        {obligations, state} = parse_capture_obligations(state, [field])
         state = consume_line_end(state)
 
         field_entry = %{
           kind: :family_field,
           name: field,
           shape: shape,
+          obligations: obligations,
           cardinality: cardinality,
           line: token.line,
           col: token.col
         }
 
-        parse_syntax_family_fields(state, [field_entry | fields], includes)
+        parse_syntax_family_fields(state, [field_entry | fields], includes, productions)
 
       other ->
         state = add_error(state, {:expected, :family_field, :got, other.type, other.line, other.col})
-        parse_syntax_family_fields(advance(state), fields, includes)
+        parse_syntax_family_fields(advance(state), fields, includes, productions)
     end
   end
 
@@ -7220,6 +8073,7 @@ defmodule Cure.Compiler.Parser do
 
     {segments, state} = parse_rule_segments(state, [])
     {category, state} = parse_rule_category(state)
+    {obligations, state} = parse_capture_obligations(state, macro_syntax_fields(segments))
 
     {contextual, state} =
       case peek(state) do
@@ -7229,15 +8083,40 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :identifier, value: "computed"} ->
-        parse_computed_rule(state, kw_token, keyword, segments, category, contextual)
+        parse_computed_rule(state, kw_token, keyword, segments, category, contextual, obligations)
 
       _ ->
-        parse_becomes_rule(state, kw_token, keyword, segments, category, contextual)
+        parse_becomes_rule(state, kw_token, keyword, segments, category, contextual, obligations)
+    end
+  end
+
+  defp parse_capture_obligations(state, capture_names, obligations \\ []) do
+    case peek(state) do
+      %Token{value: value} = token when value in ["where", :where] ->
+        {interface, state} = parse_dotted_name(advance(state))
+        state = expect(state, :lparen)
+        capture_token = peek(state)
+        capture = to_string(capture_token.value)
+        state = advance(state)
+        state = expect(state, :rparen)
+
+        state =
+          if capture in capture_names do
+            state
+          else
+            add_error(state, {:unknown_macro_obligation_capture, capture, token.line, token.col})
+          end
+
+        obligation = %{interface: interface, capture: capture, line: token.line, col: token.col}
+        parse_capture_obligations(state, capture_names, obligations ++ [obligation])
+
+      _ ->
+        {obligations, state}
     end
   end
 
   # Tier-2: `becomes <template>` (unchanged behaviour, just extracted).
-  defp parse_becomes_rule(state, kw_token, keyword, segments, category, contextual) do
+  defp parse_becomes_rule(state, kw_token, keyword, segments, category, contextual, obligations) do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "becomes"} -> advance(state)
@@ -7255,6 +8134,7 @@ defmodule Cure.Compiler.Parser do
       examples: examples,
       category: category,
       contextual: contextual,
+      obligations: obligations,
       module_rule: keyword == "module",
       progress: nil,
       line: kw_token.line
@@ -7267,7 +8147,7 @@ defmodule Cure.Compiler.Parser do
   # reference; running it is a later slice. NOT harvested into active_macros
   # (harvest filters kind: :syntax), so a computed macro's use-site is inert
   # until the execution slice lands.
-  defp parse_computed_rule(state, kw_token, keyword, segments, category, contextual) do
+  defp parse_computed_rule(state, kw_token, keyword, segments, category, contextual, obligations) do
     state = advance(state)
 
     # Optional `directly` opt-in: the elab fn receives each matched hole as its
@@ -7302,6 +8182,7 @@ defmodule Cure.Compiler.Parser do
       examples: examples,
       category: category,
       contextual: contextual,
+      obligations: obligations,
       module_rule: keyword == "module",
       progress: nil,
       line: kw_token.line
@@ -7604,6 +8485,9 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :identifier, value: v} when v in ["becomes", "computed", "is", "contextual"] ->
         {Enum.reverse(acc), state}
 
+      %Token{value: value} when value in ["where", :where] and mode == :rule ->
+        {Enum.reverse(acc), state}
+
       %Token{type: type} when type in [:newline, :dedent, :eof] ->
         {Enum.reverse(acc), state}
 
@@ -7885,20 +8769,22 @@ defmodule Cure.Compiler.Parser do
           match?(%Token{type: :lparen}, peek(state)) ->
             state = advance(state)
             {params, state} = parse_type_param_list(state)
-            state = expect(state, :rparen)
-            ast = {:function_call, [name: base_name], params}
+            {state, close_token} = expect_token_or_nil(state, :rparen)
+            meta = [name: base_name, line: token.line, col: token.col]
+            meta = put_type_application_source_info(meta, token, params, close_token)
+            ast = {:function_call, meta, params}
             maybe_parse_function_type(state, ast)
 
           match?(%Token{type: :arrow}, peek(state)) ->
             # A -> B  (unary function type)
             state = advance(state)
             {ret, state} = parse_type_arrow(state)
-            base = {:variable, [scope: :local], base_name}
+            base = type_variable(token)
             ast = {:function_call, [name: "Function", function_type: true], [base, ret]}
             {ast, state}
 
           true ->
-            base = {:variable, [scope: :local], base_name}
+            base = type_variable(token)
             maybe_parse_type_projection(base, state)
         end
     end
@@ -7944,8 +8830,10 @@ defmodule Cure.Compiler.Parser do
           {:ok, name} ->
             state = advance(state)
             {params, state} = parse_type_param_list(state)
-            state = expect(state, :rparen)
-            ast = {:function_call, [name: name, qualified: true], params}
+            {state, close_token} = expect_token_or_nil(state, :rparen)
+            meta = [name: name, qualified: true]
+            meta = put_type_application_source_info(meta, inner, params, close_token)
+            ast = {:function_call, meta, params}
             maybe_parse_function_type(state, ast)
 
           :error ->
@@ -8340,7 +9228,7 @@ defmodule Cure.Compiler.Parser do
       case peek(state) do
         %Token{type: :lparen} ->
           state = advance(state)
-          {a, _labels, state} = parse_call_args(state, false)
+          {a, _labels, state, _close_token} = parse_call_args(state, false)
           {a, state}
 
         %Token{type: :bool, value: bval} ->
@@ -8910,7 +9798,7 @@ defmodule Cure.Compiler.Parser do
   # Store `tokens` as a tuple + cached `count`. This is the single writer for
   # both fields; keeping them in lockstep is what makes O(1) lookup safe.
   defp put_tokens(state, tokens) when is_list(tokens) do
-    %{state | tokens: List.to_tuple(tokens), count: length(tokens)}
+    %{state | tokens: List.to_tuple(tokens), count: length(tokens), last_authored: nil}
   end
 
   # Token at an absolute index, or nil when out of range — mirroring the
@@ -8920,6 +9808,9 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp token_at(_state, _idx), do: nil
+
+  defp authored_token(%{last_authored: token}), do: token
+  defp authored_token(_state), do: nil
 
   # The tokens from `pos` to the end, as a list. Callers that scan or split the
   # remaining stream want a list; this is O(n) like the `Enum.drop/2` it
@@ -8947,7 +9838,16 @@ defmodule Cure.Compiler.Parser do
 
   defp peek_at(%{pos: pos} = state, offset), do: token_at(state, pos + offset)
 
-  defp advance(state), do: %{state | pos: state.pos + 1}
+  defp advance(state) do
+    last_authored =
+      case token_at(state, state.pos) do
+        %Token{type: type} when type in [:newline, :indent, :dedent] -> state.last_authored
+        %Token{span: %Cure.Diagnostic.Span{}} = token -> token
+        _ -> state.last_authored
+      end
+
+    %{state | pos: state.pos + 1, last_authored: last_authored}
+  end
 
   # `:line_comment` tokens are emitted by the lexer only when
   # `preserve_comments: true` is set. In that mode `parse_program/2`
@@ -8975,13 +9875,27 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp expect(state, expected_type) do
+    case expect_token(state, expected_type) do
+      {:ok, _token, state} -> state
+      {:error, state} -> state
+    end
+  end
+
+  defp expect_token_or_nil(state, expected_type) do
+    case expect_token(state, expected_type) do
+      {:ok, token, next_state} -> {next_state, token}
+      {:error, next_state} -> {next_state, nil}
+    end
+  end
+
+  defp expect_token(state, expected_type) do
     token = peek(state)
 
     if token.type == expected_type do
-      advance(state)
+      {:ok, token, advance(state)}
     else
-      error = {:expected, expected_type, :got, token.type, token.line, token.col}
-      add_error(state, error)
+      error = {:expected_token, expected_type, token.type, token.value, token.line, token.col, token.span}
+      {:error, add_error(state, error)}
     end
   end
 
@@ -8991,7 +9905,7 @@ defmodule Cure.Compiler.Parser do
     if token.type == :keyword and token.value == expected_value do
       advance(state)
     else
-      error = {:expected, expected_value, :got, token.type, token.line, token.col}
+      error = {:expected, expected_value, :got, token.type, token.line, token.col, token.span}
       add_error(state, error)
     end
   end

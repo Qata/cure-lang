@@ -368,8 +368,33 @@ defmodule Cure.Compiler do
   # never modified. `cure migrate` is the separate rewrite-and-write consumer.
   defp migrate_warn(ast, file) do
     {ast, warnings} = Cure.Migrate.run(ast, file: file, apply: :safe_only)
-    Enum.each(warnings, fn w -> IO.warn("#{w.file}:#{w.line}: #{w.message}", []) end)
+    registry = migration_source_registry(file)
+
+    sink =
+      Cure.Diagnostic.Sink.new(
+        registry: registry,
+        format: :plain,
+        output_device: :stderr,
+        width: 80
+      )
+
+    warnings
+    |> Enum.map(&Cure.Diagnostic.Operational.migration_warning/1)
+    |> then(&Cure.Diagnostic.Sink.emit_all(sink, &1))
+    |> Cure.Diagnostic.Sink.flush()
+
     {:ok, ast}
+  end
+
+  defp migration_source_registry(file) do
+    case File.read(file) do
+      {:ok, source} ->
+        Cure.Diagnostic.SourceRegistry.new()
+        |> Cure.Diagnostic.SourceRegistry.register(file, source, file)
+
+      {:error, _reason} ->
+        nil
+    end
   end
 
   defp codegen(ast, _file, _emit?, _output_dir, _declared_phases) do

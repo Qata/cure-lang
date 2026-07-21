@@ -58,6 +58,75 @@ dated status blocks under `OPEN GATE — automatic message-code derivation` (cur
 through 2026-07-15). Read those for detail; this is the map.** Where the branch
 actually stands:
 
+**Structured production update (2026-07-19).** Reusable syntax families now
+support source-defined token productions and typed indented child sections.
+`Std.Fsm` uses that generic facility for the release-facing
+`State --Event--> State` graph: it derives nominal `State` and `Event` types,
+emits direct nested callback matches, preserves data by default, and accepts a
+local edge `update` expression. No FSM token rule or runtime table interpreter
+was added to the compiler. The same nested-production mechanism is the parser
+foundation required by the `knit` algebra's section/row grammar. Focused parser,
+printer, expansion, and live `gen_statem` tests are green.
+
+**Typed FSM architecture decision (2026-07-19).** The remaining FSM work is
+specified by `../specs/2026-07-19-typed-fsm-as-constrained-actor-design.md`.
+An FSM normatively derives a finite state/event reducer and expands through the
+same source-defined `ActorBehavior` substrate as `actor`. The ordered FSM work
+is: shared actor substrate; FSM-to-actor lowering; typed event payloads; graph
+policy and verification; guards; effects/notifications; lifecycle/timers;
+optional operations; cleanup and full gates. Legacy `on_transition`, raw Atom
+events, and the opaque caller/meta/payload runtime container are not compatibility
+requirements.
+
+**Shared actor substrate update (2026-07-19).** `Std.ActorBehavior` now owns
+the transparent behavior-module construction boundary. `Std.Actor` delegates
+both its state-aliased and state-polymorphic forms to that substrate, while
+all three `Std.Fsm` emitters delegate to its constrained `gen_statem` strategy.
+Architecture guards prohibit either public macro from calling
+`lift_module_isolated` directly and prohibit host Builtins/runtime indirection
+in the substrate. The 120-module standard library and 16 focused architecture,
+actor-family, and live typed-FSM tests pass. The next ordered FSM item is typed
+event payload production; richer process APIs/lifecycle remain governed by the
+FSM specification.
+
+**Typed actor contract (2026-07-19).** The actor-first work required before
+further FSM expansion is specified by
+`../specs/2026-07-19-typed-actor-behavior-design.md`. The checked OTP carrier
+must distinguish asynchronous messages from synchronous requests on the same
+server PID; `actor` then derives nominal message/request/reply codes and thin
+typed adapters over that algebra. State remains the immutable accumulator of
+OTP's suspended mailbox loop. Universal state inspection, hidden caller state,
+the process dictionary, and a mandatory runtime registry are excluded. The
+ordered work is: honest server handle; generated actor API; modern typed
+message/query grammar; lifecycle/failures; optional capabilities; cleanup and
+the shared FSM gate.
+
+**Typed actor algebra update (2026-07-19).** Phase 1 now has an erased
+`RawServerPid(message, request, reply)` carrier and the checked
+`ActorServer`/`DepActorServer` aliases. `actor_cast`, `actor_call`,
+`actor_call_dep`, and `actor_stop` keep asynchronous and synchronous protocols
+distinct; focused negative tests prove neither code can be used in the other's
+operation. Sixty-one OTP, actor, FSM, golden, and architecture tests pass. The
+typed-startup seam is now closed by guarded `BeamTerm` observation and
+`StartResult`: only a two-tuple tagged `:ok` whose payload passes the native PID
+guard receives actor protocol indices; `:error`, `:ignore`, and malformed terms
+remain explicit outcomes. Structured actors now emit nominal Message/Request/
+Handle declarations plus validated `start`, typed `send`/`stop`, and (for the
+current uniform-reply path) typed `request`; live and negative tests cover state
+evolution and mailbox rejection. Phase 2 remains open for dependent `ReplyOf`
+query adapters and generic lifted-module declaration publication to sibling
+Cure code in the same compilation.
+
+**Typed actor grammar update (2026-07-19).** Phase 3 now accepts preferred
+`on_message` folds. Constructor heads with typed payload binders derive the
+nominal message ADT through ordinary reflection; a real BEAM test covers an
+`Add(Int)` message changing multiple record fields and a nullary reset. The
+compiler remains unaware of actor vocabulary. An explicit `reply ReplyOf`
+family now selects the dependent actor path: the generated callback and client
+adapter preserve request-indexed reply types, validated by heterogeneous live
+calls and a wrong-branch negative test. Automatic `ReplyOf` derivation and
+named query adapters remain the next Phase-3 seam.
+
 - **Transparent BEAM plan:** Phases 0, 1, 2, and 2.5 are COMPLETE. Phase 3 (`beam_ops`)
   is unblocked (2.5 done) and substantially landed. Phase 4 has replaced all four OTP
   forms — `sup`, `actor`, `fsm`, `app` each now lower through a source-defined
@@ -1788,6 +1857,17 @@ old `get_state/1` helpers, and eager source-string/container compilation have
 been removed from the migrated surfaces. Historical documentation and ordinary
 Elixir `@impl` annotations remain unrelated to compiler OTP knowledge.
 
+**Macro-only stdlib runtime surface (2026-07-19).** The final parallel
+convenience tails in `Std.Actor`, `Std.Fsm`, `Std.Supervisor`, and `Std.App`
+have been removed. Those tails called `Cure.Actor.Builtins`,
+`Cure.FSM.Builtins`, `Cure.Sup.Builtins`, and `Cure.App.Builtins` and exposed a
+second runtime architecture beside the transparent macros. The four modules now
+own only source-defined macro derivation, checked helper data/functions, and
+ordinary calls into `Std.Otp`; each generated lifted module carries its own
+`start_link`/application callback surface. A dedicated forbidden-remnant test
+requires the macro and `Std.Otp` fragments and rejects restoration of any
+`.Builtins` bridge in these active stdlib modules.
+
 Gate: no public OTP macro or compiler path can bypass parse, recursive
 expansion, elaboration, validation, and common emission, and compiling a new
 user-defined behavior/macro must not require adding an OTP-specific compiler
@@ -2519,3 +2599,25 @@ retirement (option B) is *optional* polish layered on the now-landed derivation 
 note the derive rules (`actor.cure:75` etc.) still carry `contextual`, and the
 sound way to drop it there is the same option-(B) synthetic-proof-frame. Until a
 planned slice takes it, `contextual` stays and is honest.
+
+**Structured-only OTP and constrained-capture status (2026-07-19).** The
+unreleased positional `actor`/`fsm`/`sup`/`app` compatibility rules and their
+orphaned emitters are removed (`84b83d30`), along with the generic parser
+ambiguity heuristic they required. Characterization fixtures whose only subject
+was that unreleased grammar were retired; structured-family, live OTP, and
+generic-Unix AtomVM gates remain. Structured matching now pins zero-progress and
+missing-required-field rejection (`7dac09b3`). `Expression` is a supported proof
+domain (`10fde963`). Rule and family-field obligations parse, print, preserve
+order, validate capture ownership, and resolve through the ordinary coherence
+table at the real caller-side inferred type (`0cc167ae`, `e192bd7a`).
+Obligation-bearing rules defer definition-site fuzzing because evidence is
+necessarily contextual, while positive and negative use-site tests prove
+resolution and `no_instance` rejection. `Std.Supervisor` consumes the generic
+facility through `child Module id Expression where BeamEncode(identity)` and
+emits direct `encoded_child(module, to_beam(identity))` code; the placeholder-ID
+mutation workaround is gone (`8a5eaa66`). The structured computed-use printer
+now renders family sections, so migration round-trips the new surface
+(`06fc990a`). The final structured AtomVM test passes (`6cb53670`). Full `mix
+test`: 4,961 tests, 3 failures, all three caused solely by the intentionally
+empty `examples/` directory (`examples/hello.cure` absent), matching the known
+workspace baseline.

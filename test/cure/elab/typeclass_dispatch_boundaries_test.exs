@@ -154,7 +154,7 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
           "  fn twice({f: Type -> Type}, {a: Type}, xs: f(a), g: a -> a) -> f(a) where Functor(f) =\n" <>
           "    fmap(fmap(xs, g), g)\nend\n"
 
-      assert {:error, {:no_instance, :Functor, _}} = Program.elaborate(src)
+      assert {:error, {:source_context, {:no_instance, :Functor, _}, _}} = Program.elaborate(src)
     end
 
     test "the underlying gap is method-level generics, not higher kinds" do
@@ -201,6 +201,7 @@ defmodule Cure.Elab.TypeclassDispatchBoundariesTest do
           "  fn use_it(a: Int, b: Int) -> Bool = eqs(a, b)\nend\n"
 
       assert {:ok, env} = Program.elaborate(src)
+
       assert {:ok, %{head: :"Std.Int#Int"}} =
                Coherence.lookup_anon(Env.coherence(env), :Eqs, :"Std.Int#Int")
     end

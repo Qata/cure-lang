@@ -20,7 +20,7 @@ defmodule Cure.Elab.MacroExpansionSoundnessTest do
   defp verdict(src) do
     case Program.elaborate(src) do
       {:ok, _env} -> :accept
-      {:error, term} -> {:reject, term}
+      {:error, term} -> {:reject, Program.semantic_error(term)}
     end
   end
 
@@ -61,7 +61,7 @@ defmodule Cure.Elab.MacroExpansionSoundnessTest do
   end
 
   test "the two ill-typed cases genuinely reject with a position-free error term" do
-    assert {:reject, :unknown_global} =
+    assert {:reject, {:unknown_global, :nonexistent_thing, _details}} =
              verdict(
                "mod M\n  macro Bad\n    syntax bad becomes nonexistent_thing\n      example bad expands nonexistent_thing\n    explain\n      keyword \"bad\" =>\n        \"starts with bad\"\n  fn f() -> Int = bad\n"
              )

@@ -127,7 +127,7 @@ defmodule Cure.Elab.BinarySyntaxTest do
     end
     """
 
-    assert {:error, {:unsupported_binary_segment, _}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:unsupported_binary_segment, _}, _}} = Program.elaborate(src)
   end
 
   test "a binary match with no default arm is rejected" do
@@ -140,6 +140,6 @@ defmodule Cure.Elab.BinarySyntaxTest do
     end
     """
 
-    assert {:error, {:binary_match_needs_default}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:binary_match_needs_default}, _}} = Program.elaborate(src)
   end
 end

@@ -64,7 +64,8 @@ defmodule Cure.Stdlib.ShrinkInterfaceTest do
       fn g(a: Atom) -> List(Atom) = shrink(a)
     """
 
-    assert {:error, {:no_instance, :Shrink, _}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:no_instance, :Shrink, _}, %{expectation_origin: :annotation}}} =
+             Program.elaborate(src)
   end
 
   test "the Elixir shrink/1 survives as an internal helper, not an axiom" do

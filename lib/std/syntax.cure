@@ -13,6 +13,7 @@ mod Std.Syntax
   ## losslessly. Source positions are not represented (the expansion is
   ## re-elaborated, K3 firewall).
   use Std.String
+  use Std.Option
 
   type Syntax =
     | Node(Atom, List(Attr), List(Syntax))
@@ -230,6 +231,8 @@ mod Std.Syntax
 
   fn tuple(items: List(Syntax)) -> Syntax = Node(:tuple, [], items)
 
+  fn list(items: List(Syntax)) -> Syntax = Node(:list, [], items)
+
   fn tuple_type(items: List(Syntax)) -> Syntax =
     Node(:tuple_type, [KV(:binders, parameter_names(items))], items)
 
@@ -242,6 +245,41 @@ mod Std.Syntax
 
   fn parameter(name: String, kind: Syntax) -> Syntax =
     Node(:param, [KV(:name, SStr(name)), KV(:type, SSyntax(kind))], [])
+
+  fn typed_pattern(name: String, kind: Syntax) -> Syntax =
+    Node(:typed_pattern, [], [variable(name), kind])
+
+  fn captured_parameter_name(value: Syntax) -> Option(String) = match value
+    Leaf(_, _, SStr(name)) -> match tag(value) == :param
+      true -> Some(name)
+      false -> None()
+    Node(_, values, _) -> match tag(value) == :param
+      true -> match attr(values, :name)
+        Found(SStr(name)) -> Some(name)
+        _ -> None()
+      false -> None()
+    _ -> None()
+
+  fn captured_parameter_type(value: Syntax) -> Option(Syntax) = match attr(attrs(value), :type)
+    Found(SSyntax(kind)) -> Some(kind)
+    _ -> None()
+
+  fn captured_parameter_pattern(value: Syntax) -> Option(Syntax) = match captured_parameter_name(value)
+    None() -> None()
+    Some(name) -> match captured_parameter_type(value)
+      None() -> None()
+      Some(kind) -> Some(typed_pattern(name, kind))
+
+  ## Generic identifier transformations for declaration-producing macros.
+  ## These inspect reflected identifier syntax only; domain macros decide what
+  ## generated name means (for example, an actor query adapter).
+  fn identifier_name(value: Syntax) -> Option(String) = match value
+    Leaf(_, _, SStr(name)) -> Some(name)
+    Node(_, values, _) -> match attr(values, :name)
+      Found(SStr(name)) -> Some(name)
+      _ -> None()
+    _ -> None()
+
 
   fn parameter_linear(name: String, kind: Syntax) -> Syntax =
     Node(:param, [KV(:name, SStr(name)), KV(:type, SSyntax(kind)), KV(:grade, SAtom(:linear))], [])
@@ -263,6 +301,9 @@ mod Std.Syntax
   fn let_binding(name: String, value: Syntax) -> Syntax =
     Node(:assignment, [KV(:let, SBool(true))], [variable(name), value])
 
+  fn typed_let_binding(name: String, kind: Syntax, value: Syntax) -> Syntax =
+    Node(:assignment, [KV(:let, SBool(true)), KV(:type_annotation, SSyntax(kind))], [variable(name), value])
+
   fn parameter_literals(params: List(Syntax)) -> SynLit =
     match params
       [] -> SList([])
@@ -273,6 +314,17 @@ mod Std.Syntax
   fn function(name: String, params: List(Syntax), return_type: Syntax, body: Syntax) -> Syntax =
     Node(:function_def, [
       KV(:name, SStr(name)),
+      KV(:params, parameter_literals(params)),
+      KV(:return_type, SSyntax(return_type))
+    ], [body])
+
+  ## Build a function whose name is derived from reflected identifier syntax.
+  ## The generic syntax bridge performs the requested Unicode-safe transform
+  ## while converting the compile-time Syntax value back to parser AST.
+  fn function_downcase_identifier(identifier: Syntax, params: List(Syntax), return_type: Syntax, body: Syntax) -> Syntax =
+    Node(:function_def, [
+      KV(:name_from_identifier, SSyntax(identifier)),
+      KV(:identifier_transform, SAtom(:lower_initial)),
       KV(:params, parameter_literals(params)),
       KV(:return_type, SSyntax(return_type))
     ], [body])

@@ -34,8 +34,12 @@ defmodule Cure.Elab.Slice1ConformanceTest do
   end
 
   # The spec (§6/§11) requires each negative be rejected with the *right code*.
-  defp code({:error, err}) when is_tuple(err), do: elem(err, 0)
-  defp code({:error, err}), do: err
+  defp code({:error, err}) do
+    case Program.semantic_error(err) do
+      tuple when is_tuple(tuple) -> elem(tuple, 0)
+      other -> other
+    end
+  end
 
   test "negative #1: seq with disagreeing middle indices — index-unification error" do
     # give recover an ill-typed body that composes two SFs with mismatched middle
@@ -56,8 +60,10 @@ defmodule Cure.Elab.Slice1ConformanceTest do
   end
 
   test "negative #3: a non-total function used in a type" do
-    assert {:error, {:totality_required, :"Main#andd"}} =
+    assert {:error, error} =
              negative("fn andd(x: Dec, y: Dec) -> Dec = x", "fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)")
+
+    assert {:totality_required, :"Main#andd"} = Program.semantic_error(error)
   end
 
   test "negative #4: a Sigma pair whose second component mismatches B[a/x] — Sigma type error" do

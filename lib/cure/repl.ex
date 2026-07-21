@@ -44,6 +44,7 @@ defmodule Cure.REPL do
   """
 
   alias Cure.Compiler.Printer
+  alias Cure.Diagnostic.{Sink, Operational}
   alias Cure.REPL.{Config, Docs, History, LineEditor, Markdown, Render, Search, Session, Snap, Terminal, Theme}
   alias Cure.Stdlib.Preload
 
@@ -242,10 +243,10 @@ defmodule Cure.REPL do
     end
   end
 
-  defp raw_mode_warning(state, reason) do
+  defp raw_mode_warning(state, _reason) do
     render_info(
       state,
-      "(raw-mode unavailable: #{inspect(reason)}; arrows and Ctrl+R will not work -- " <>
+      "(raw-mode unavailable; arrows and Ctrl+R will not work -- " <>
         "falling back to line-mode input)"
     )
   end
@@ -587,7 +588,7 @@ defmodule Cure.REPL do
         %{state | defs: candidate_defs}
 
       {:error, reason} ->
-        render_error(state, format_error(reason))
+        render_reason_error(state, reason)
         state
     end
   end
@@ -665,13 +666,14 @@ defmodule Cure.REPL do
           result = module.main()
           render_value(state, result)
         catch
-          kind, reason -> render_error(state, "#{kind}: #{inspect(reason)}")
+          kind, reason ->
+            render_reason_error(state, Cure.Diagnostic.Operational.command_failure("repl", {kind, reason}))
         end
 
         state
 
       {:error, reason} ->
-        render_error(state, format_error(reason))
+        render_reason_error(state, reason)
         state
     end
   end
@@ -777,11 +779,11 @@ defmodule Cure.REPL do
         {:ok, src} ->
           case Cure.Compiler.compile_and_load(src, file: path, emit_events: false) do
             {:ok, mod} -> render_info(state, "  #{path} -> #{mod}")
-            {:error, reason} -> render_error(state, "  #{path}: #{format_error(reason)}")
+            {:error, reason} -> render_reason_diagnostic(state, reason, path, src)
           end
 
         {:error, reason} ->
-          render_error(state, "  #{path}: #{reason}")
+          render_reason_error(state, Cure.Diagnostic.Operational.file_read(path, reason))
       end
     end)
 
@@ -839,7 +841,7 @@ defmodule Cure.REPL do
         suggestion -> " Did you mean '#{suggestion}'?"
       end
 
-    render_error(state, "unknown command: #{other}.#{suffix} Try :help.")
+    render_operational_error(state, "unknown command: #{other}.#{suffix} Try :help.", :usage)
     state
   end
 
@@ -857,12 +859,12 @@ defmodule Cure.REPL do
             %{state | loaded: Enum.uniq([path | state.loaded])}
 
           {:error, reason} ->
-            render_error(state, format_error(reason))
+            render_reason_error(state, reason)
             state
         end
 
       {:error, reason} ->
-        render_error(state, "cannot read #{path}: #{reason}")
+        render_reason_error(state, Cure.Diagnostic.Operational.file_read(path, reason))
         state
     end
   end
@@ -885,7 +887,12 @@ defmodule Cure.REPL do
               suggestion -> " Did you mean '#{suggestion}'?"
             end
 
-          render_error(state, "no stdlib module '#{mod}'.#{suffix} Type :stdlib to list known modules.")
+          render_operational_error(
+            state,
+            "no stdlib module '#{mod}'.#{suffix} Type :stdlib to list known modules.",
+            :usage
+          )
+
           state
         else
           state
@@ -917,7 +924,7 @@ defmodule Cure.REPL do
   defp cmd_fmt(state, expr) do
     case Cure.quote(expr) do
       {:ok, ast} -> render_info(state, Printer.quoted_to_string(ast))
-      {:error, reason} -> render_error(state, format_error(reason))
+      {:error, reason} -> render_reason_error(state, reason)
     end
 
     state
@@ -962,7 +969,7 @@ defmodule Cure.REPL do
         render_info(state, "session saved to #{path}")
 
       {:error, {:file_write_error, p, reason}} ->
-        render_error(state, "cannot write #{p}: #{:file.format_error(reason)}")
+        render_error(state, Cure.Diagnostic.Host.render({:file_write_error, p, reason}, p))
     end
 
     state
@@ -977,15 +984,15 @@ defmodule Cure.REPL do
         state
 
       {:error, :E069} ->
-        render_error(state, "snap schema incompatible (E069): re-create the snap with this version of Cure")
+        render_reason_error(state, Cure.Diagnostic.Operational.snap_schema_incompatible(path))
         state
 
       {:error, :corrupt} ->
-        render_error(state, "snap file is corrupt or truncated")
+        render_reason_error(state, Cure.Diagnostic.Operational.file_read(path, :corrupt))
         state
 
       {:error, {:file_read_error, p, reason}} ->
-        render_error(state, "cannot read #{p}: #{:file.format_error(reason)}")
+        render_error(state, Cure.Diagnostic.Host.render({:file_read_error, p, reason}, p))
         state
     end
   end
@@ -1015,7 +1022,7 @@ defmodule Cure.REPL do
 
     case File.write(path, content) do
       :ok -> render_info(state, "saved session to #{path}")
-      {:error, reason} -> render_error(state, "cannot write #{path}: #{reason}")
+      {:error, reason} -> render_reason_error(state, Cure.Diagnostic.Operational.file_write(path, reason))
     end
 
     state
@@ -1062,7 +1069,7 @@ defmodule Cure.REPL do
 
     cond do
       exit_code != 0 ->
-        render_error(state, "editor exited with status #{exit_code}; buffer discarded")
+        render_operational_error(state, "editor exited with status #{exit_code}; buffer discarded")
         %{state | input_buffer: []}
 
       String.trim(new_content) == "" ->
@@ -1121,7 +1128,7 @@ defmodule Cure.REPL do
         install_let_binding(state, name, expr_src)
 
       {:error, msg} ->
-        render_error(state, msg)
+        render_operational_error(state, msg, :usage)
         state
     end
   end
@@ -1139,7 +1146,7 @@ defmodule Cure.REPL do
             {:error, "usage: :let name = expr"}
 
           not valid_binding_ident?(name) ->
-            {:error, "invalid binding name #{inspect(name)}; use a lowercase identifier (letters, digits, '_')"}
+            {:error, "invalid binding name `#{name}`; use a lowercase identifier (letters, digits, '_')"}
 
           true ->
             {:ok, name, expr}
@@ -1183,7 +1190,7 @@ defmodule Cure.REPL do
         %{state | defs: candidate_defs}
 
       {:error, reason} ->
-        render_error(state, format_error(reason))
+        render_reason_error(state, reason)
         state
     end
   end
@@ -1233,7 +1240,7 @@ defmodule Cure.REPL do
         )
 
       {:error, reason} ->
-        render_error(state, format_error(reason))
+        render_reason_error(state, reason)
     end
 
     state
@@ -1246,7 +1253,7 @@ defmodule Cure.REPL do
         Render.write_line(pretty)
 
       {:error, reason} ->
-        render_error(state, format_error(reason))
+        render_reason_error(state, reason)
     end
 
     state
@@ -1259,7 +1266,7 @@ defmodule Cure.REPL do
   end
 
   defp cmd_theme(state, other) do
-    render_error(state, "unknown theme #{inspect(other)} (expected: dark, light, mono)")
+    render_operational_error(state, "unknown theme `#{other}` (expected: dark, light, mono)", :usage)
     state
   end
 
@@ -1270,7 +1277,7 @@ defmodule Cure.REPL do
   end
 
   defp cmd_mode(state, other) do
-    render_error(state, "unknown mode #{inspect(other)} (expected: emacs, vi)")
+    render_operational_error(state, "unknown mode `#{other}` (expected: emacs, vi)", :usage)
     state
   end
 
@@ -1289,7 +1296,7 @@ defmodule Cure.REPL do
   end
 
   defp cmd_color(state, other) do
-    render_error(state, "expected :color on|off, got #{inspect(other)}")
+    render_operational_error(state, "expected :color on|off, got `#{other}`", :usage)
     state
   end
 
@@ -1448,6 +1455,35 @@ defmodule Cure.REPL do
   defp render_error(state, msg) do
     body = state.theme.error <> "error: " <> msg <> state.theme.reset
     IO.binwrite(state.error_device, body <> "\n")
+  end
+
+  defp render_operational_error(state, message, kind \\ :command) do
+    reason =
+      case kind do
+        :usage -> {:usage_error, message}
+        :command -> {:command_failed, "repl", message}
+      end
+
+    render_reason_diagnostic(state, reason)
+  end
+
+  defp render_reason_error(state, reason), do: render_reason_diagnostic(state, reason)
+
+  defp render_reason_diagnostic(state, reason, file \\ "repl.cure", source \\ "") do
+    reason = if is_binary(reason), do: Operational.command_failure("repl", reason), else: reason
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, file, source)
+
+    Sink.new(
+      format: :terminal,
+      registry: registry,
+      output_device: state.error_device,
+      color: if(state.color, do: :always, else: :never),
+      width: 80
+    )
+    |> Sink.emit(diagnostic)
+    |> Sink.flush()
+
+    state
   end
 
   # ==========================================================================
@@ -1634,13 +1670,27 @@ defmodule Cure.REPL do
   # so we don't print the farewell twice.
   defp bye(state), do: %{state | running: false}
 
-  defp format_error(reason) when is_binary(reason), do: reason
+  defp format_error(reason) when is_binary(reason),
+    do: Cure.Diagnostic.Host.render(Operational.command_failure("repl", reason), "repl.cure")
 
   defp format_error({stage, msg, _opts}) when is_atom(stage) and is_binary(msg) do
-    "#{stage}: #{msg}"
+    Cure.Diagnostic.Host.render(Operational.command_failure("repl #{stage}", msg), "repl.cure")
   end
 
-  defp format_error(other), do: inspect(other)
+  defp format_error({:error, message}) when is_binary(message),
+    do: Cure.Diagnostic.Host.render(Operational.command_failure("repl", message), "repl.cure")
+
+  defp format_error({:error, _kind, message}) when is_binary(message),
+    do: Cure.Diagnostic.Host.render(Operational.command_failure("repl", message), "repl.cure")
+
+  defp format_error({:codegen_error, _reason} = reason),
+    do: Cure.Diagnostic.Host.render(reason, "repl.cure")
+
+  defp format_error({:source_context, _reason, _context} = reason),
+    do: Cure.Diagnostic.Host.render(reason, "repl.cure")
+
+  defp format_error(other),
+    do: Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("repl", other))
 
   @doc false
   def __format_error__(reason), do: format_error(reason)

@@ -1,3 +1,7 @@
+# Example programs are maintained separately from the 0.34 compiler suite.
+# Tests tagged `:examples` are opt-in via `mix test --include examples`.
+ExUnit.configure(exclude: [examples: true])
+
 # Ensure the Cure standard library is compiled to BEAM before the suite
 # runs.
 #

@@ -143,11 +143,24 @@ defmodule Cure.Compiler.Trivia do
           sc: sc,
           el: el,
           ec: ec,
-          container?: container?,
+          # Not every AST node with a child list is a layout container. Match
+          # arms, pairs, calls, and collection nodes are rendered inline; a
+          # comment after their final child must belong to the enclosing
+          # statement/block or the printer's span renderer will bypass it.
+          container?: container? and trivia_container?(node),
           child_spans: if(container?, do: direct_child_spans(node), else: [])
         }
     end
   end
+
+  defp trivia_container?({:block, _meta, _children}), do: true
+
+  # A zero-child `:container` is a module/header marker, not a printable
+  # statement list. Treating it as the deepest trailer target steals blanks and
+  # comments from the function or top-level block that follows it.
+  defp trivia_container?({:container, _meta, children}) when is_list(children) and children != [], do: true
+
+  defp trivia_container?(_node), do: false
 
   defp direct_child_spans({_k, _meta, ch}) when is_list(ch) do
     ch
@@ -193,7 +206,10 @@ defmodule Cure.Compiler.Trivia do
   # container's trailer) so they don't pollute the following node's leading
   # list with non-comment items.
   defp classify({:blank, _count, line}, index) do
-    trailer_target(index, line) || leading_target(index, line)
+    # A blank between sibling statements belongs to the following statement so
+    # the statement-list printer can preserve exactly one separator. If there
+    # is no following node, fall back to the enclosing container's trailer.
+    leading_target(index, line) || trailer_target(index, line)
   end
 
   defp classify({_kind, _text, line, col}, index) do

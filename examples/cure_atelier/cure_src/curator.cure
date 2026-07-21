@@ -1,4 +1,0 @@
-## Transparent actor example. Handler algebra is defined in Cure callbacks.
-
-actor Cure.Curator with %[:waiting, 0]
-  fn initial_count() -> Int = 0

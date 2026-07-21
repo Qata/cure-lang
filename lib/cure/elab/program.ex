@@ -14,15 +14,23 @@ defmodule Cure.Elab.Program do
 
   @loader_state_key {__MODULE__, :module_loader_state}
 
-  @spec elaborate(String.t()) :: {:ok, Env.t()} | {:error, term()}
-  def elaborate(source) when is_binary(source) do
+  @spec elaborate(String.t(), keyword()) :: {:ok, Env.t()} | {:error, term()}
+  def elaborate(source, opts \\ []) when is_binary(source) and is_list(opts) do
+    file = Keyword.get(opts, :file, "nofile")
+
     Cure.Elab.GuardLint.reset_warnings()
 
-    with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false),
-         {:ok, ast} <- Parser.parse(tokens, emit_events: false) do
+    with {:ok, tokens} <- Lexer.tokenize(source, file: file, emit_events: false),
+         {:ok, ast} <- Parser.parse(tokens, file: file, emit_events: false) do
       check_ast(ast)
     end
   end
+
+  @doc "Project an elaboration result's surface context away for semantic comparisons."
+  @spec semantic_error(term()) :: term()
+  def semantic_error({:source_context, reason, _context}), do: semantic_error(reason)
+  def semantic_error({:codegen_error, reason}), do: {:codegen_error, semantic_error(reason)}
+  def semantic_error(reason), do: reason
 
   @doc """
   Elaborate + totality-certify an already-parsed module/declaration AST. Unwraps
@@ -2473,9 +2481,9 @@ defmodule Cure.Elab.Program do
         # instance, THEN drain superinterface obligations against the now-complete
         # coherence table — so a hand-written `Comparable for T` may rely on the
         # auto-derived `Equatable for T` to satisfy its `requires Equatable(t)`.
-        with {:ok, env2, auto_fns} <- auto_derive_equatable(items, env_final),
+        with {:ok, env2, equatable_fns} <- auto_derive_equatable(items, env_final),
              :ok <- drain_superinterface_checks(env2, pending) do
-          {:ok, env2, fns ++ auto_fns}
+          {:ok, env2, fns ++ equatable_fns}
         else
           {:error, _} = err -> err
         end
@@ -2544,9 +2552,10 @@ defmodule Cure.Elab.Program do
     # interface so the local interface + its own implementations register against a
     # clean slate. Genuinely-shared (non-redeclared) interfaces are untouched, so
     # global coherence for stdlib interfaces is preserved.
-    redeclared = for {:interface, meta, _body} <- items, into: MapSet.new() do
-      meta |> Keyword.fetch!(:name) |> String.to_atom()
-    end
+    redeclared =
+      for {:interface, meta, _body} <- items, into: MapSet.new() do
+        meta |> Keyword.fetch!(:name) |> String.to_atom()
+      end
 
     keys_to_drop =
       self_heads ++

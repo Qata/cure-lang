@@ -47,7 +47,16 @@ defmodule Cure.Core.DefTest do
   end
 
   test "negative: a reference to an unregistered global" do
-    assert {:error, :unknown_global} =
+    assert {:error, {:unknown_global, :missing, details}} =
              Kernel.infer(Context.empty(base()), {:global, :missing})
+
+    assert details.core_term == {:global, :missing}
+    assert details.context_size == 0
+  end
+
+  test "check_def retains Core context for an unknown definition" do
+    assert {:error, {:unknown_global, :missing, details}} = Kernel.check_def(base(), :missing)
+    assert details.core_term == {:global, :missing}
+    assert is_nil(details.context_size)
   end
 end

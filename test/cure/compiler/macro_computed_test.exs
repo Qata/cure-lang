@@ -38,17 +38,24 @@ defmodule Cure.Compiler.MacroComputedTest do
       end
     end
 
-    assert {:computed_use,
-            [
-              keyword: "mk",
-              syntax_type: "MkSyntax",
-              syntax_fields: [],
-              syntax_repeated_fields: [],
-              syntax_field_types: %{},
-              line: _,
-              col: _
-            ], _} =
-             find.(find, node)
+    assert {:computed_use, meta, _} = find.(find, node)
+
+    assert Keyword.take(meta, [
+             :keyword,
+             :syntax_type,
+             :syntax_fields,
+             :syntax_repeated_fields,
+             :syntax_field_types,
+             :file
+           ]) ==
+             [
+               keyword: "mk",
+               syntax_type: "MkSyntax",
+               syntax_fields: [],
+               syntax_repeated_fields: [],
+               syntax_field_types: %{},
+               file: "nofile"
+             ]
   end
 
   test "computed rules can delimit one parsed code hole before a following literal" do
@@ -63,9 +70,7 @@ defmodule Cure.Compiler.MacroComputedTest do
   test "computed rules can capture a positional declarations block hole" do
     [rule] =
       rules(
-        parse!(
-          "macro Mk\n  syntax mk state <t: Type> <body: Declarations until dedent> computed directly by build\n"
-        )
+        parse!("macro Mk\n  syntax mk state <t: Type> <body: Declarations until dedent> computed directly by build\n")
       )
 
     assert rule.kind == :computed
@@ -193,17 +198,25 @@ defmodule Cure.Compiler.MacroComputedTest do
       end
     end
 
-    assert {:computed_use,
-            [
-              keyword: "mk",
-              syntax_type: "MkSyntax",
-              syntax_fields: [],
-              syntax_repeated_fields: [],
-              syntax_field_types: %{},
-              line: _,
-              col: _
-            ], [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
+    assert {:computed_use, meta, [{:variable, _, "build_it"}, {:macro_input, [keyword: "mk"], []}]} =
              find.(find, node)
+
+    assert Keyword.take(meta, [
+             :keyword,
+             :syntax_type,
+             :syntax_fields,
+             :syntax_repeated_fields,
+             :syntax_field_types,
+             :file
+           ]) ==
+             [
+               keyword: "mk",
+               syntax_type: "MkSyntax",
+               syntax_fields: [],
+               syntax_repeated_fields: [],
+               syntax_field_types: %{},
+               file: "nofile"
+             ]
   end
 
   test "a computed use preserves matched hole inputs in segment order" do
@@ -259,7 +272,9 @@ defmodule Cure.Compiler.MacroComputedTest do
 
   test "the direct opt-in propagates to the deferred use-site node meta" do
     node =
-      parse!("mod M\n  macro Mk\n    syntax mk <x: Code> computed directly by build_it\n  fn f(a: Int) -> Syntax = mk a\n")
+      parse!(
+        "mod M\n  macro Mk\n    syntax mk <x: Code> computed directly by build_it\n  fn f(a: Int) -> Syntax = mk a\n"
+      )
 
     find = fn find, n ->
       case n do

@@ -40,7 +40,9 @@ defmodule Cure.Stdlib.UnitTypeTest do
     assert {:error, errors} = elab("mod U\n  type Foo = ()\n")
     flat = List.wrap(errors)
 
-    assert Enum.any?(flat, fn e -> match?({:unit_type_reserved, _}, e) end),
+    assert Enum.any?(flat, fn e ->
+             match?({:unit_type_reserved, _}, e) or match?({:unit_type_reserved, _, _, _}, e)
+           end),
            "expected a :unit_type_reserved error, got: #{inspect(flat)}"
   end
 end

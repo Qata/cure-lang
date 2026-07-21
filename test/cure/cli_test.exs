@@ -33,6 +33,7 @@ defmodule Cure.CLITest do
   end
 
   describe "cure compile" do
+    @tag :examples
     test "compiles a .cure file" do
       output =
         capture_io(fn ->
@@ -76,6 +77,17 @@ defmodule Cure.CLITest do
         end)
 
       assert output =~ "Usage"
+    end
+
+    test "mix cure.compile usage diagnostics use the shared sink" do
+      output =
+        ExUnit.CaptureIO.capture_io(:stderr, fn ->
+          assert catch_exit(Mix.Tasks.Cure.Compile.run([])) == {:shutdown, 1}
+        end)
+
+      assert output =~ "[E099]"
+      assert output =~ "INVALID COMMAND USAGE"
+      refute output =~ "{:usage_error"
     end
   end
 
@@ -127,6 +139,7 @@ defmodule Cure.CLITest do
   end
 
   describe "cure check" do
+    @tag :examples
     test "valid file passes" do
       output =
         capture_io(fn ->

@@ -6,7 +6,7 @@ defmodule Cure.Compiler.MacroExplainTest do
   defp parse!(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
-    ast
+    Cure.Compiler.SourceSpans.strip_diagnostic_meta(ast)
   end
 
   defp explain_entry({:macro_def, _, rules}), do: Enum.find(rules, &(&1[:kind] == :explain))

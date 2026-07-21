@@ -37,6 +37,6 @@ defmodule Cure.Elab.ResolveHktTest do
     end
     """
 
-    assert {:error, {:no_instance, :Functor, _}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:no_instance, :Functor, _}, _}} = Program.elaborate(src)
   end
 end

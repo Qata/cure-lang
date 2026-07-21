@@ -106,6 +106,7 @@ defmodule Cure.Elab.CtorGuardTest do
   """
 
   test "a fully-guarded constructor group with no fall-through is rejected" do
-    assert {:error, {:unsupported_guard, :non_exhaustive}} = Program.elaborate(@nonexhaustive_src)
+    assert {:error, error} = Program.elaborate(@nonexhaustive_src)
+    assert {:unsupported_guard, :non_exhaustive} = Program.semantic_error(error)
   end
 end

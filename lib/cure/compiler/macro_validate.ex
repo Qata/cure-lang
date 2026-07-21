@@ -7,6 +7,7 @@ defmodule Cure.Compiler.MacroValidate do
   """
 
   alias Cure.Compiler.{MacroFuzz, MacroSyntax}
+  alias Cure.MetaAST.Metadata
 
   @type point :: {:hole_kind, String.t()} | {:keyword, String.t()} | {:failure, String.t()}
 
@@ -332,10 +333,7 @@ defmodule Cure.Compiler.MacroValidate do
 
   defp strip_pos(meta) when is_list(meta) do
     meta
-    |> Enum.reject(fn
-      {k, _} when k in [:line, :col] -> true
-      _ -> false
-    end)
+    |> Enum.reject(fn {k, _} -> Metadata.diagnostic_key?(k) end)
     |> Enum.map(fn
       {k, v} -> {k, normalize_meta_value(v)}
       other -> other

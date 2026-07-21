@@ -25,6 +25,14 @@ mod Std.Gen
   ## ```
 
   ## Group tag consumed by `Cure.Stdlib.Preload`.
+  type RandomAlgorithm = Default | Exsss | Exsplus | Exs1024
+
+  local fn random_algorithm_atom(algorithm: RandomAlgorithm) -> Atom = match algorithm
+    Default() -> :default
+    Exsss()   -> :exsss
+    Exsplus() -> :exsplus
+    Exs1024() -> :exs1024
+
   # -- Primitive randomness ---------------------------------------------------
 
   ## Private wrapper over `:rand.uniform/1`; returns an integer in
@@ -35,7 +43,10 @@ mod Std.Gen
   ## Seed the PRNG. Thin wrapper over `:rand.seed/2`; returns the new
   ## state tuple.
   @extern(:rand, :seed, 2)
-  fn seed(_alg: Atom, _seed: Tuple) -> Tuple
+  local fn raw_seed(_alg: Atom, _seed: Tuple) -> Tuple
+
+  fn seed(algorithm: RandomAlgorithm, seed_value: Tuple) -> Tuple =
+    raw_seed(random_algorithm_atom(algorithm), seed_value)
 
   # -- Scalar generators ------------------------------------------------------
 

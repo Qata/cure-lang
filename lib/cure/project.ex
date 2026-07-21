@@ -765,7 +765,7 @@ defmodule Cure.Project do
       case Cure.Compiler.prepare_files(discovered) do
         {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
           Enum.each(cycles, fn walk ->
-            Logger.warning(Cure.Compiler.Errors.format_error({:import_cycle, walk}, project.root))
+            Logger.warning(Cure.Diagnostic.Host.render({:import_cycle, walk}, project.root))
           end)
 
           {{:ok, ordered}, providers}

@@ -189,8 +189,7 @@ defmodule Cure.CLI do
           cmd_audit_trust(module, opts)
 
         ["audit" | _] ->
-          IO.puts(:stderr, "Usage: cure audit trust <Module> [--format text|json] [--strict] [--target <t>]")
-          exit({:shutdown, 1})
+          usage_error("Usage: cure audit trust <Module> [--format text|json] [--strict] [--target <t>]")
 
         ["migrate" | paths] ->
           case cmd_migrate(paths, opts) do
@@ -329,7 +328,7 @@ defmodule Cure.CLI do
 
     case Cure.Observe.Journal.load(path) do
       {:error, reason} ->
-        error("Cannot load #{path}: #{inspect(reason)}")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason))
         exit({:shutdown, 1})
 
       {:ok, entries} ->
@@ -348,7 +347,8 @@ defmodule Cure.CLI do
                 info("Replay complete.")
 
               {:error, reason} ->
-                error("Replay failed: #{inspect(reason)}")
+                error_diagnostic(Cure.Diagnostic.Operational.command_failure("Replay", reason))
+
                 exit({:shutdown, 1})
             end
           else
@@ -392,7 +392,7 @@ defmodule Cure.CLI do
         info("Trace stopped.")
 
       {:error, _} ->
-        error("Cannot parse #{inspect(target)}; expected Module.fun/arity")
+        error("Cannot parse `#{target}`; expected Module.fun/arity")
         exit({:shutdown, 1})
     end
   end
@@ -450,13 +450,13 @@ defmodule Cure.CLI do
       case Cure.Compiler.prepare_files(files) do
         {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
           Enum.each(cycles, fn walk ->
-            warn(Cure.Compiler.Errors.format_error({:import_cycle, walk}, hd(paths)))
+            warn(Cure.Diagnostic.Host.render({:import_cycle, walk}, hd(paths)))
           end)
 
           {ordered, providers}
 
         {:error, reason} ->
-          diagnostic(Cure.Compiler.Errors.format_error(reason, hd(paths)))
+          diagnostic(Cure.Diagnostic.Host.render(reason, hd(paths)))
           exit({:shutdown, 1})
       end
 
@@ -471,13 +471,15 @@ defmodule Cure.CLI do
 
     case Cure.Compiler.compile_file(path, opts) do
       {:ok, module, warnings} ->
-        Enum.each(warnings, fn w -> warn("  #{inspect(w)}") end)
+        Enum.each(warnings, fn w ->
+          warn("  " <> Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.compiler_warning(w)))
+        end)
+
         _ = Cure.Compiler.load_emitted(module, Keyword.fetch!(opts, :output_dir))
         info("  -> #{module}")
 
       {:error, reason} ->
-        source = File.read(path) |> elem(1)
-        formatted = Cure.Compiler.Errors.format_with_source(reason, path, source || "")
+        formatted = Cure.Diagnostic.Host.render(reason, path)
         # `formatted` already carries the `error: <category>` diagnostic;
         # go straight to stderr so `error/1`'s own `error: ` prefix does
         # not double-wrap the output.
@@ -514,7 +516,7 @@ defmodule Cure.CLI do
         end
 
       {:error, reason} ->
-        formatted = Cure.Compiler.Errors.format_error(reason, path)
+        formatted = Cure.Diagnostic.Host.render(reason, path)
         diagnostic(formatted)
         exit({:shutdown, 1})
     end
@@ -555,7 +557,7 @@ defmodule Cure.CLI do
         IO.puts(source)
 
       {:error, reason} ->
-        error("cannot draw #{path}: #{inspect(reason)}")
+        error_diagnostic(Cure.Diagnostic.Operational.file_write(path, reason))
         exit({:shutdown, 1})
     end
   end
@@ -610,7 +612,7 @@ defmodule Cure.CLI do
       {:error, reason} ->
         # The dependent checker returns a tagged `{:error, term}`; funnel it
         # through `format_error/2` and print the formatted string to stderr.
-        formatted = Cure.Compiler.Errors.format_error(reason, path)
+        formatted = Cure.Diagnostic.Host.render(reason, path)
         diagnostic(formatted)
         exit({:shutdown, 1})
     end
@@ -653,7 +655,7 @@ defmodule Cure.CLI do
               :ok
 
             {:error, reason} ->
-              error("  #{name}: #{inspect(reason)}")
+              error("  #{name}: #{Cure.Diagnostic.Host.render(reason, path)}")
               :error
           end
         end)
@@ -697,7 +699,7 @@ defmodule Cure.CLI do
                 info("Dependencies resolved. Cure.lock written.")
 
               {:error, reason} ->
-                error("Failed to resolve dependencies: #{inspect(reason)}")
+                error_diagnostic(Cure.Diagnostic.Operational.dependency(reason))
                 exit({:shutdown, 1})
             end
         end
@@ -707,7 +709,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error("Cannot load Cure.toml: #{inspect(reason)}")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason))
         exit({:shutdown, 1})
     end
   end
@@ -735,7 +737,7 @@ defmodule Cure.CLI do
                     :ok
 
                   {:error, reason} ->
-                    error("Failed to update dependency #{Map.get(dep, :name, "?")}: #{inspect(reason)}")
+                    error_diagnostic(Cure.Diagnostic.Operational.dependency(reason))
                     exit({:shutdown, 1})
                 end
               end
@@ -750,7 +752,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error("Cannot load Cure.toml: #{inspect(reason)}")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason))
         exit({:shutdown, 1})
     end
   end
@@ -765,7 +767,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error("Cannot load Cure.toml: #{inspect(reason)}")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason))
         exit({:shutdown, 1})
     end
   end
@@ -878,7 +880,7 @@ defmodule Cure.CLI do
           :ok
 
         {:error, reason} ->
-          warn("#{file}: #{inspect(reason)}")
+          warn(Cure.Diagnostic.Host.render(reason, file))
       end
     end)
   end
@@ -1136,7 +1138,8 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, :not_found} ->
-        IO.puts(:stderr, "no such module: #{module}")
+        error_diagnostic(Cure.Diagnostic.Operational.usage("no such module: #{module}"))
+
         exit({:shutdown, 1})
     end
   end
@@ -1172,8 +1175,8 @@ defmodule Cure.CLI do
       case plan_migration(target: target, current: project_edition) do
         {:error, :downgrade} ->
           error(
-            "refusing to downgrade: target edition #{inspect(target)} is older than " <>
-              "the project edition #{inspect(project_edition)}"
+            "refusing to downgrade: target edition `#{target}` is older than " <>
+              "the project edition `#{project_edition}`"
           )
 
           {:error, :downgrade}
@@ -1211,7 +1214,7 @@ defmodule Cure.CLI do
         {:ok, ed}
 
       {:error, {:unknown_edition, ed}} = err ->
-        error("invalid edition #{inspect(ed)} declared in #{Path.join(dir, "Cure.toml")}")
+        error("invalid edition `#{ed}` declared in #{Path.join(dir, "Cure.toml")}")
         err
 
       {:error, _} ->
@@ -1234,7 +1237,7 @@ defmodule Cure.CLI do
             {:ok, raw}
 
           {:error, {:unknown_edition, _}} = err ->
-            error("unknown edition: #{inspect(raw)}")
+            error("unknown edition: `#{raw}`")
             err
         end
     end
@@ -1538,7 +1541,8 @@ defmodule Cure.CLI do
             :ok
 
           {:error, reason} ->
-            error("could not bump project edition: #{inspect(reason)}")
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("edition bump", reason))
+
             {:error, reason}
         end
 
@@ -1756,7 +1760,13 @@ defmodule Cure.CLI do
           :ok
         else
           {:error, reason} ->
-            error("  #{file}: #{inspect(reason)}")
+            error(
+              "  " <>
+                Cure.Diagnostic.Host.render_diagnostic(
+                  Cure.Diagnostic.Operational.command_failure("compile #{file}", reason)
+                )
+            )
+
             :error
         end
       end)
@@ -1843,7 +1853,13 @@ defmodule Cure.CLI do
                   :ok
 
                 {:error, reason} ->
-                  error("  #{f}: #{inspect(reason)}")
+                  error(
+                    "  " <>
+                      Cure.Diagnostic.Host.render_diagnostic(
+                        Cure.Diagnostic.Operational.command_failure("compile #{f}", reason)
+                      )
+                  )
+
                   :error
               end
 
@@ -1934,7 +1950,8 @@ defmodule Cure.CLI do
             info("Next: `mix hex.publish package --replace` with the tarball above.")
 
           {:error, reason} ->
-            error("cure publish --hex failed: #{inspect(reason)}")
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure publish --hex", reason))
+
             exit({:shutdown, 1})
         end
 
@@ -1947,7 +1964,8 @@ defmodule Cure.CLI do
             info("  files  = #{length(Map.get(manifest, "dependencies", []))} declared deps")
 
           {:error, reason} ->
-            error("cure publish --dry-run failed: #{inspect(reason)}")
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure publish --dry-run", reason))
+
             exit({:shutdown, 1})
         end
 
@@ -1967,7 +1985,8 @@ defmodule Cure.CLI do
             info("Published: #{inspect(resp)}")
 
           {:error, reason} ->
-            error("cure publish failed: #{inspect(reason)}")
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure publish", reason))
+
             exit({:shutdown, 1})
         end
     end
@@ -1989,7 +2008,8 @@ defmodule Cure.CLI do
         end
 
       {:error, reason} ->
-        error("cure search failed: #{inspect(reason)}")
+        error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure search", reason))
+
         exit({:shutdown, 1})
     end
   end
@@ -2016,7 +2036,8 @@ defmodule Cure.CLI do
             end)
 
           {:error, reason} ->
-            error("cure info failed: #{inspect(reason)}")
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure info", reason))
+
             exit({:shutdown, 1})
         end
 
@@ -2026,7 +2047,8 @@ defmodule Cure.CLI do
             IO.puts(Cure.Project.Json.encode(manifest))
 
           {:error, reason} ->
-            error("cure info failed: #{inspect(reason)}")
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure info", reason))
+
             exit({:shutdown, 1})
         end
     end
@@ -2039,12 +2061,13 @@ defmodule Cure.CLI do
           info("Generated keypair for '#{handle}' under ~/.cure/keys/")
 
         other ->
-          error("key generation returned unexpected: #{inspect(other)}")
+          raise Cure.Diagnostic.UnhandledError, error: {:unexpected_key_generation_result, other}
           exit({:shutdown, 1})
       end
     rescue
       e ->
-        error("key generation failed: #{Exception.message(e)}")
+        error_diagnostic(Cure.Diagnostic.Operational.internal_exception(e, __STACKTRACE__, context: "key generation"))
+
         exit({:shutdown, 1})
     end
   end
@@ -2067,7 +2090,8 @@ defmodule Cure.CLI do
             info("Release built: #{dir}")
 
           {:error, reason} ->
-            error("cure release failed: #{inspect(reason)}")
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure release", reason))
+
             exit({:shutdown, 1})
         end
 
@@ -2076,7 +2100,8 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error("cure release failed: #{inspect(reason)}")
+        error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure release", reason))
+
         exit({:shutdown, 1})
     end
   end
@@ -2191,7 +2216,8 @@ defmodule Cure.CLI do
   # -- snap (v0.32.0) -----------------------------------------------------------
 
   defp cmd_snap([], _opts) do
-    IO.puts(:stderr, "Usage: cure snap <save|load|list> [options]")
+    error_diagnostic(Cure.Diagnostic.Operational.usage("Usage: cure snap <save|load|list> [options]"))
+
     exit({:shutdown, 1})
   end
 
@@ -2225,12 +2251,28 @@ defmodule Cure.CLI do
 
   defp info(msg), do: IO.puts(msg)
   defp warn(msg), do: IO.puts(:stderr, "warning: #{msg}")
-  defp error(msg), do: IO.puts(:stderr, "error: #{msg}")
+
+  defp error_diagnostic(%Cure.Diagnostic{} = diagnostic) do
+    case Cure.Diagnostic.Host.emit_diagnostic(diagnostic) do
+      {:ok, _sink} -> :ok
+      {:error, _reason} -> raise "failed to emit diagnostic"
+    end
+  end
+
+  defp error(msg) do
+    rendered = String.trim_leading(msg)
+
+    if String.starts_with?(rendered, "--") or String.contains?(rendered, "\n--") do
+      IO.puts(:stderr, msg)
+    else
+      error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure", msg))
+    end
+  end
 
   # A user-facing usage/lookup error that must fail the command: print to stderr
   # and exit non-zero, so `cure <misuse> && next` stops and CI wrappers see it.
   defp usage_error(msg) do
-    error(msg)
+    error_diagnostic(Cure.Diagnostic.Operational.usage(msg))
     exit({:shutdown, 1})
   end
 

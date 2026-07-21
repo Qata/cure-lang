@@ -117,7 +117,11 @@ defmodule Cure.Elab.Declarations do
         # positivity checks (there are none); the marker makes the kernel refuse
         # to eliminate it (Agda `postulate`).
         name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-        params = Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+
+        params =
+          Keyword.get_lazy(meta, :params, fn ->
+            Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+          end)
 
         with :ok <- reject_reserved_family_name(name),
              {:ok, erasure} <- erasure_class(meta, name),
@@ -292,17 +296,12 @@ defmodule Cure.Elab.Declarations do
   # uniformly erased `Type 0` binders, matching `elaborate_typealias/2`.
   defp register_typealias_header(meta, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    params = Keyword.get(meta, :type_params, [])
-    grade = Grade.zero()
 
-    type =
-      Enum.reduce(Enum.reverse(params), {:type, @ceiling}, fn _param, acc ->
-        {:pi, grade, {:type, 0}, acc}
-      end)
+    params = typealias_params(meta)
 
-    quantities = List.duplicate(:erased, length(params))
-
-    with :ok <- reject_reserved_family_name(name) do
+    with :ok <- reject_reserved_family_name(name),
+         {:ok, telescope, quantities, _scope} <- elaborate_param_telescope(params, env) do
+      type = wrap_binders(:pi, telescope, quantities, {:type, @ceiling})
       {:ok, Env.add_def(env, name, type, nil, quantities)}
     end
   end
@@ -355,12 +354,8 @@ defmodule Cure.Elab.Declarations do
   # `typealias U = Type` is legal and lives at `Type 1`, not `Type 0`.
   defp elaborate_typealias({:type_annotation, meta, [rhs]}, env) do
     name = meta |> Keyword.fetch!(:name) |> String.to_atom()
-    type_params = Keyword.get(meta, :type_params, [])
 
-    params =
-      Enum.map(type_params, fn p ->
-        {:param, [type: {:variable, [scope: :local], "Type"}], p}
-      end)
+    params = typealias_params(meta)
 
     with :ok <- reject_reserved_family_name(name),
          {:ok, telescope, quantities, scope} <- elaborate_param_telescope(params, env),
@@ -380,6 +375,18 @@ defmodule Cure.Elab.Declarations do
       {:ok, other} -> {:error, {:typealias_not_a_type, name, Quote.reify(other, 0)}}
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  defp typealias_params(meta) do
+    meta
+    |> Keyword.get_lazy(:params, fn ->
+      Keyword.get(meta, :type_params, []) |> Enum.map(fn p -> {:param, [], p} end)
+    end)
+    |> Enum.map(fn
+      {:param, pmeta, name} ->
+        type = Keyword.get(pmeta, :type, {:variable, [scope: :local], "Type"})
+        {:param, Keyword.put(pmeta, :type, type), name}
+    end)
   end
 
   defp maybe_certify(env, name) do
@@ -556,7 +563,7 @@ defmodule Cure.Elab.Declarations do
     case Keyword.get(meta, :clauses) do
       [_ | _] = clauses ->
         formals = Keyword.get(meta, :params, [])
-        fmeta = Keyword.take(meta, [:line, :col])
+        fmeta = generated_meta(meta)
         scrut = clause_scrutinee(formals, fmeta)
         arms = Enum.map(clauses, &clause_to_arm(&1, length(formals), fmeta))
         match_expr = {:pattern_match, fmeta, [scrut | arms]}
@@ -565,6 +572,18 @@ defmodule Cure.Elab.Declarations do
       _ ->
         decl
     end
+  end
+
+  defp generated_meta(meta) when is_list(meta) do
+    Keyword.take(meta, [
+      :line,
+      :col,
+      :column,
+      :source_info,
+      :provenance,
+      :source_provenance,
+      :expansion_provenance
+    ])
   end
 
   defp clause_scrutinee([{:param, _pm, pname}], fmeta),
@@ -665,11 +684,80 @@ defmodule Cure.Elab.Declarations do
     return_value = Eval.eval(sig.return_core, Context.env(ctx))
 
     with {:ok, body_term} <-
-           elaborate_declared_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
-         :ok <- Kernel.check(ctx, body_term, return_value) do
+           attach_source_context(
+             elaborate_declared_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
+             body_expr,
+             sig.name
+           ),
+         :ok <- attach_source_context(Kernel.check(ctx, body_term, return_value), body_expr, sig.name) do
       {:ok, body_term, sig.return_core, return_value}
     end
   end
+
+  defp attach_source_context({:error, reason}, expression, checking) do
+    {line, column, length} = expression_extent(expression)
+    meta = expression_meta(expression)
+
+    {:error,
+     {:source_context, reason,
+      %{
+        line: line,
+        column: column,
+        length: length,
+        checking: checking,
+        span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
+        expression_category: expression_category(expression),
+        expectation_origin: :annotation
+      }}}
+  end
+
+  defp attach_source_context(result, _expression, _checking), do: result
+
+  defp expression_meta({_kind, meta, _children}) when is_list(meta), do: meta
+  defp expression_meta({_kind, meta, _left, _right}) when is_list(meta), do: meta
+  defp expression_meta(_expression), do: []
+
+  defp expression_category({kind, _meta, _children}) when is_atom(kind), do: kind
+  defp expression_category({kind, _meta, _left, _right}) when is_atom(kind), do: kind
+  defp expression_category(_expression), do: :expression
+
+  defp expression_extent({:function_call, meta, arguments}) when is_list(meta) do
+    line = Keyword.get(meta, :line)
+    open_column = Keyword.get(meta, :col)
+    name = meta |> Keyword.get(:name, "") |> to_string()
+    start_column = if is_integer(open_column), do: max(1, open_column - String.length(name)), else: nil
+
+    end_column =
+      case List.last(arguments) do
+        nil ->
+          if(is_integer(open_column), do: open_column + 1, else: nil)
+
+        argument ->
+          argument |> expression_extent() |> extent_end_column() |> then(&if(is_integer(&1), do: &1 + 1, else: nil))
+      end
+
+    {line, start_column, extent_length(start_column, end_column)}
+  end
+
+  defp expression_extent({:variable, meta, name}) when is_list(meta) do
+    {Keyword.get(meta, :line), Keyword.get(meta, :col), String.length(to_string(name))}
+  end
+
+  defp expression_extent(expression) do
+    meta = expression_meta(expression)
+    {Keyword.get(meta, :line), Keyword.get(meta, :col), 1}
+  end
+
+  defp extent_end_column({_line, column, length}) when is_integer(column) and is_integer(length),
+    do: column + length
+
+  defp extent_end_column(_extent), do: nil
+
+  defp extent_length(start_column, end_column)
+       when is_integer(start_column) and is_integer(end_column),
+       do: max(1, end_column - start_column)
+
+  defp extent_length(_start_column, _end_column), do: 1
 
   defp elaborate_declared_body(body_expr, return_core, scope, ctx, env, params) do
     if Elaborator.effect_goal?(return_core, ctx) do
@@ -980,6 +1068,13 @@ defmodule Cure.Elab.Declarations do
 
     cond do
       name == "reflexive" ->
+        Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+
+      atom && Cure.Elab.Resolve.result_dispatched_method?(env, atom) ->
+        # A method such as `BeamDecode.from_beam : BeamTerm -> Result(t, E)`
+        # determines its interface head from the declared result, not an input.
+        # Keep the body in checking mode so result-directed instance selection
+        # receives that goal instead of classifying the BeamTerm argument.
         Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
       # A call whose declared return type mentions a generated anonymous-union family
@@ -1719,9 +1814,7 @@ defmodule Cure.Elab.Declarations do
     dom_exprs
     |> Enum.with_index()
     |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, [], []}, fn {dom, i},
-                                                                                       {:ok, tele,
-                                                                                        scope, names,
-                                                                                        plics} ->
+                                                                                        {:ok, tele, scope, names, plics} ->
       # A NAMED / IMPLICIT dependent binder uses its declared name (so later
       # domains and the result index can reference it); an unnamed arg keeps its
       # anonymous `_aN` name byte-for-byte. Either way the scope is threaded so
@@ -1736,8 +1829,7 @@ defmodule Cure.Elab.Declarations do
       case idx_to_core(type_expr, scope, fam, env) do
         {:ok, core} ->
           {:cont,
-           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname],
-            plics ++ [plicity]}}
+           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname], plics ++ [plicity]}}
 
         {:error, _} = err ->
           {:halt, err}
@@ -2127,7 +2219,10 @@ defmodule Cure.Elab.Declarations do
   # lowers to the builtin inductive `Sigma(D, λx:D. U)`: `body` was elaborated with
   # `bname` in scope, so it is already in the frame of one new lambda binder, and
   # wrapping it under `{:lam, Cure.Core.Grade.unrestricted(), dom, body}` is exactly that frame.
-  defp idx_to_core({:sigma_type, [binder: bname], [dom_ast, body_ast]}, scope, fam, env, _ctx) do
+  defp idx_to_core({:sigma_type, meta, [dom_ast, body_ast]}, scope, fam, env, _ctx)
+       when is_list(meta) do
+    bname = Keyword.fetch!(meta, :binder)
+
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, body} <- idx_to_core(body_ast, [bname | scope], fam, env) do
       {:ok, {:data, sigma_family_name(env), [dom, {:lam, Cure.Core.Grade.unrestricted(), dom, body}], []}}
@@ -2143,12 +2238,15 @@ defmodule Cure.Elab.Declarations do
   # before lowering — producing the same Σ as an explicit `IsTrue(φ)` clause. A
   # `Type`-valued clause (a named predicate / proposition) is left unchanged.
   defp idx_to_core(
-         {:refinement_type, [binder: bname], [dom_ast, proposition_ast]},
+         {:refinement_type, meta, [dom_ast, proposition_ast]},
          scope,
          fam,
          env,
          _ctx
-       ) do
+       )
+       when is_list(meta) do
+    bname = Keyword.fetch!(meta, :binder)
+
     with {:ok, dom} <- idx_to_core(dom_ast, scope, fam, env),
          {:ok, proposition} <-
            idx_to_core(reflect_boolean_proposition(proposition_ast), [bname | scope], fam, env) do
@@ -2173,7 +2271,8 @@ defmodule Cure.Elab.Declarations do
   # `n` in `P(n)` as the Π-bound variable (de Bruijn `{:var, 0}`). Direct analog of
   # the `sigma_type` binder threading above; `nil` binders (anonymous domains, from
   # a mixed `(a, x: B) -> …`) push a placeholder so indices stay aligned.
-  defp idx_to_core({:pi_type, [binders: names], asts}, scope, fam, env, _ctx) do
+  defp idx_to_core({:pi_type, meta, asts}, scope, fam, env, _ctx) when is_list(meta) do
+    names = Keyword.fetch!(meta, :binders)
     {domains, [ret_ast]} = Enum.split(asts, length(asts) - 1)
 
     folded =

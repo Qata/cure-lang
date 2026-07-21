@@ -49,6 +49,26 @@ mod Std.Otp.Raw
   @erases(:pid)
   opaque type RawPid(m, r, k)
 
+  ## A gen_server PID with distinct asynchronous-message, synchronous-request,
+  ## and reply indices. This is the honest carrier for actor-like behaviors;
+  ## it has the same native pid representation as RawPid and no wrapper.
+  @erases(:pid)
+  opaque type RawServerPid(m, q, r)
+
+  ## Request-indexed reply family over the same native PID. All parameters are
+  ## phantom and the carrier has no constructor or runtime wrapper.
+  @erases(:pid)
+  opaque type RawDepServerPid(m: Type, q: Type, rep: (q) -> Type)
+
+  @erases(:pid)
+  opaque type RawFsmPid(event, state, data)
+
+  ## A supervisor handle is the native supervisor pid with no message algebra
+  ## claim. Its distinct carrier prevents actor/FSM operations from being used
+  ## on it while erasing to the same pid at runtime.
+  @erases(:pid)
+  opaque type RawSupervisorPid
+
   ## An uninhabited message type. `BarePid` carries it, which is what makes a pid
   ## recovered from the registry UNSENDABLE: `tell` would demand a `NoMessage` value and
   ## no constructor produces one.
@@ -83,6 +103,72 @@ mod Std.Otp.Raw
   @extern(:erlang, :element, 2)
   fn raw_term({a: Type}, index: Int, boxed: Tuple(a, Atom)) -> RawTerm
 
+  ## Safe inbound observation floor. Predicates never refine by themselves;
+  ## the representation-preserving projections below are used only after the
+  ## corresponding predicate succeeds in Std.Beam.
+  @extern(:erlang, :is_atom, 1)
+  fn raw_term_is_atom(term: RawTerm) -> Bool
+
+  @extern(:erlang, :is_pid, 1)
+  fn raw_term_is_pid(term: RawTerm) -> Bool
+
+  @extern(:erlang, :is_tuple, 1)
+  fn raw_term_is_tuple(term: RawTerm) -> Bool
+
+  @extern(:erlang, :is_integer, 1)
+  fn raw_term_is_integer(term: RawTerm) -> Bool
+
+  @extern(:erlang, :is_float, 1)
+  fn raw_term_is_float(term: RawTerm) -> Bool
+
+  @extern(:erlang, :is_boolean, 1)
+  fn raw_term_is_boolean(term: RawTerm) -> Bool
+
+  @extern(:erlang, :is_binary, 1)
+  fn raw_term_is_binary(term: RawTerm) -> Bool
+
+  @extern(:erlang, :tuple_size, 1)
+  fn raw_term_tuple_size(term: RawTerm) -> Int
+
+  @extern(:erlang, :element, 2)
+  fn raw_term_tuple_element(index: Int, term: RawTerm) -> RawTerm
+
+  @extern(:erlang, :element, 2)
+  fn raw_term_atom(index: Int, checked: Tuple(RawTerm, Atom)) -> Atom
+
+  @extern(:erlang, :element, 2)
+  fn raw_term_pid(index: Int, checked: Tuple(RawTerm, Atom)) -> BarePid
+
+  @extern(:erlang, :element, 2)
+  fn raw_term_integer(index: Int, checked: Tuple(RawTerm, Atom)) -> Int
+
+  @extern(:erlang, :element, 2)
+  fn raw_term_float(index: Int, checked: Tuple(RawTerm, Atom)) -> Float
+
+  @extern(:erlang, :element, 2)
+  fn raw_term_boolean(index: Int, checked: Tuple(RawTerm, Atom)) -> Bool
+
+  @extern(:erlang, :element, 2)
+  fn raw_term_string(index: Int, checked: Tuple(RawTerm, Atom)) -> String
+
+  ## Attach erased actor protocol indices to an already PID-validated carrier.
+  ## This is the construction trust point used by Std.Otp.start_actor; it does
+  ## not accept an arbitrary BeamTerm.
+  @extern(:erlang, :element, 2)
+  fn raw_actor_server({m: Type}, {q: Type}, {r: Type}, index: Int, checked: Tuple(BarePid, Atom)) -> RawServerPid(m, q, r)
+
+  @extern(:erlang, :element, 2)
+  fn raw_fsm_pid({event: Type}, {state: Type}, {data: Type}, index: Int, checked: Tuple(BarePid, Atom)) -> RawFsmPid(event, state, data)
+
+  @extern(:erlang, :element, 2)
+  fn raw_supervisor_pid(index: Int, checked: Tuple(BarePid, Atom)) -> RawSupervisorPid
+
+  @extern(:erlang, :element, 2)
+  fn raw_dep_actor_server({m: Type}, {q: Type}, {rep: (q) -> Type}, index: Int, checked: Tuple(RawServerPid(m, q, Unit), Atom)) -> RawDepServerPid(m, q, rep)
+
+  @extern(:erlang, :element, 2)
+  fn raw_dep_actor_base({m: Type}, {q: Type}, {rep: (q) -> Type}, index: Int, checked: Tuple(RawDepServerPid(m, q, rep), Atom)) -> RawServerPid(m, q, Unit)
+
   ## The calling process's own pid. A process the VM spawned for us speaks no
   ## gen_server protocol, so the handle is `Plain`.
   @extern(:erlang, :self, 0)
@@ -109,6 +195,11 @@ mod Std.Otp.Raw
   @extern(:gen_server, :start_link, 3)
   fn raw_start_link_unnamed({a: Type}, module: Atom, args: a, opts: List(Atom)) -> Effect(Tuple)
 
+  ## Honest inbound form: unlike the compatibility Tuple signature, this admits
+  ## every OTP outcome (`{:ok,pid}`, `{:error,reason}`, or `:ignore`).
+  @extern(:gen_server, :start_link, 3)
+  fn raw_start_link_term({a: Type}, module: Atom, args: a, opts: List(Atom)) -> Effect(RawTerm)
+
   ## Start a gen_statem through its standard callback module. The raw return is
   ## deliberately the OTP `{ok, pid}`/error tuple; the transparent FSM macro
   ## supplies the behavior-specific callback contract.
@@ -118,8 +209,21 @@ mod Std.Otp.Raw
   @extern(:gen_statem, :start_link, 3)
   fn raw_statem_start_link_unnamed({a: Type}, module: Atom, args: a, opts: List(Atom)) -> Effect(Tuple)
 
+  @extern(:gen_statem, :start_link, 3)
+  fn raw_statem_start_link_term({a: Type}, module: Atom, args: a, opts: List(Atom)) -> Effect(RawTerm)
+
+  @extern(:gen_statem, :cast, 2)
+  fn raw_statem_cast({event: Type}, {state: Type}, {data: Type}, server: RawFsmPid(event, state, data), value: event) -> Effect(Atom)
+
   @extern(:supervisor, :start_link, 3)
   fn raw_supervisor_start_link({a: Type}, name: Tuple(Atom, Atom), module: Atom, args: List(a)) -> Effect(Tuple)
+
+  ## Honest supervisor startup result, including OTP's bare `ignore` outcome.
+  @extern(:supervisor, :start_link, 3)
+  fn raw_supervisor_start_link_term({a: Type}, name: Tuple(Atom, Atom), module: Atom, args: List(a)) -> Effect(RawTerm)
+
+  @extern(:gen_server, :stop, 3)
+  fn raw_supervisor_stop(pid: RawSupervisorPid, reason: Atom, timeout: Int) -> Effect(Atom)
 
   ## Send `msg` to `dest`. Fire-and-forget; the effect is performing the send.
   ## Tag-polymorphic: a raw send to a gen_server is legitimate — it lands in
@@ -131,6 +235,9 @@ mod Std.Otp.Raw
   ## not implement the gen_server protocol. Returns the atom `ok`.
   @extern(:gen_server, :cast, 2)
   fn raw_cast({q: Type}, {r: Type}, server: RawPid(q, r, Server), msg: q) -> Effect(Atom)
+
+  @extern(:gen_server, :cast, 2)
+  fn raw_server_cast({m: Type}, {q: Type}, {r: Type}, server: RawServerPid(m, q, r), msg: m) -> Effect(Atom)
 
   ## Synchronous `gen_server` call — the reply type is where `Std.Otp` threads
   ## the dependent `ReplyOf(req)`; here it is a free (return-polymorphic) result.
@@ -146,6 +253,12 @@ mod Std.Otp.Raw
   ## deferred (audit §6).
   @extern(:gen_server, :call, 2)
   fn raw_call({q: Type}, {r: Type}, server: RawPid(q, r, Server), req: q) -> Effect(r)
+
+  @extern(:gen_server, :call, 2)
+  fn raw_server_call({m: Type}, {q: Type}, {r: Type}, server: RawServerPid(m, q, r), req: q) -> Effect(r)
+
+  @extern(:gen_server, :call, 2)
+  fn raw_server_call_dep({m: Type}, {q: Type}, {kr: Type}, {res: Type}, server: RawServerPid(m, q, kr), req: q) -> Effect(res)
 
   ## Dependent-reply variant of `raw_call`: the server's reply-index slot `kr` and the RESULT `res` are
   ## DECOUPLED, so the caller may choose `res = ReplyOf(request)` — a function of the EXPLICIT request. Same BIF
@@ -169,6 +282,9 @@ mod Std.Otp.Raw
   ## gen_server protocol. Returns the atom `ok`.
   @extern(:gen_server, :stop, 1)
   fn raw_stop({q: Type}, {r: Type}, pid: RawPid(q, r, Server)) -> Effect(Atom)
+
+  @extern(:gen_server, :stop, 1)
+  fn raw_server_stop({m: Type}, {q: Type}, {r: Type}, pid: RawServerPid(m, q, r)) -> Effect(Atom)
 
   ## Schedule a message for a process and receive an opaque timer reference.
   @extern(:erlang, :send_after, 3)

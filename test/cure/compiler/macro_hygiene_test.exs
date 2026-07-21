@@ -5,7 +5,9 @@ defmodule Cure.Compiler.MacroHygieneTest do
 
   defp parse(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
-    Parser.parse(tokens, emit_events: false)
+
+    with {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+         do: {:ok, Cure.Compiler.SourceSpans.strip_diagnostic_meta(ast)}
   end
 
   # Find the first {:fresh_name, _, _} anywhere in an AST. A macro's rule is
@@ -230,9 +232,7 @@ defmodule Cure.Compiler.MacroHygieneTest do
     # ONLY binders — a free var like `freevar` passes through verbatim, otherwise
     # the walk would over-capture ordinary references (gap-(a) regression guard).
     {:ok, ast} =
-      parse(
-        "mod M\n  macro Fv\n    syntax fv <e: Code> becomes e + freevar\n  fn f(x: Int) -> Int = fv x\n"
-      )
+      parse("mod M\n  macro Fv\n    syntax fv <e: Code> becomes e + freevar\n  fn f(x: Int) -> Int = fv x\n")
 
     body = fn_body(ast, "f")
     {:binary_op, _, [{:variable, _, hole_ref}, {:variable, _, free_ref}]} = body
@@ -248,9 +248,7 @@ defmodule Cure.Compiler.MacroHygieneTest do
     # binds into the caller's scope on purpose (the documented opt-out). After
     # expansion the binder and its reference both stay the literal name `done`.
     {:ok, ast} =
-      parse(
-        "mod M\n  macro Cap\n    syntax cap becomes let <capture done> = true in done\n  fn f() -> Bool = cap\n"
-      )
+      parse("mod M\n  macro Cap\n    syntax cap becomes let <capture done> = true in done\n  fn f() -> Bool = cap\n")
 
     body = fn_body(ast, "f")
     {:block, _, [assign, tail]} = body
@@ -276,9 +274,11 @@ defmodule Cure.Compiler.MacroHygieneTest do
 
     body = fn_body(ast, "f")
     {:pattern_match, _, [scrutinee, arm, _none]} = body
-    {:function_call, [{:name, "some"} | _], [{:variable, _, scrut_ref}]} = scrutinee
+    {:function_call, scrut_meta, [{:variable, _, scrut_ref}]} = scrutinee
+    assert Keyword.fetch!(scrut_meta, :name) == "some"
     {:match_arm, arm_meta, [{:variable, _, arm_ref}]} = arm
-    {:function_call, [{:name, "Some"} | _], [{:variable, _, binder}]} = Keyword.fetch!(arm_meta, :pattern)
+    {:function_call, pattern_meta, [{:variable, _, binder}]} = Keyword.fetch!(arm_meta, :pattern)
+    assert Keyword.fetch!(pattern_meta, :name) == "Some"
 
     # the pattern binder is auto-freshened away from "x"
     refute binder == "x"
@@ -314,12 +314,11 @@ defmodule Cure.Compiler.MacroHygieneTest do
     # The lambda param `y` is a template binder; auto-hygiene freshens it and the
     # body reference `y`, while the hole `e` (→ use-site `y`) is preserved.
     {:ok, ast} =
-      parse(
-        "mod M\n  macro Lm\n    syntax lm <e: Code> becomes map(fn(y) -> y + e)\n  fn f(y: Int) -> Int = lm y\n"
-      )
+      parse("mod M\n  macro Lm\n    syntax lm <e: Code> becomes map(fn(y) -> y + e)\n  fn f(y: Int) -> Int = lm y\n")
 
     body = fn_body(ast, "f")
-    {:function_call, [{:name, "map"} | _], [lambda]} = body
+    {:function_call, call_meta, [lambda]} = body
+    assert Keyword.fetch!(call_meta, :name) == "map"
     {:lambda, lam_meta, [{:binary_op, _, [{:variable, _, lam_ref}, {:variable, _, hole_ref}]}]} = lambda
     [{:param, _, binder}] = Keyword.fetch!(lam_meta, :params)
 
@@ -411,9 +410,7 @@ defmodule Cure.Compiler.MacroHygieneTest do
     # (reverse scope). Auto-hygiene must freshen the generator pattern binder AND
     # the body reference `x`, leaving the collection `xs` and the hole `e` (→ `x`).
     {:ok, ast} =
-      parse(
-        "mod M\n  macro Cmp\n    syntax cmp <e: Code> becomes [x + e for x <- xs]\n  fn f(x: Int) -> Int = cmp x\n"
-      )
+      parse("mod M\n  macro Cmp\n    syntax cmp <e: Code> becomes [x + e for x <- xs]\n  fn f(x: Int) -> Int = cmp x\n")
 
     body = fn_body(ast, "f")
     {:comprehension, _, [{:binary_op, _, [{:variable, _, body_ref}, {:variable, _, hole_ref}]}, generator]} = body

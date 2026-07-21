@@ -14,7 +14,9 @@ defmodule Cure.Compiler.SP53BinderShapesTest do
 
   defp parse(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
-    Parser.parse(tokens, emit_events: false)
+
+    with {:ok, ast} <- Parser.parse(tokens, emit_events: false),
+         do: {:ok, Cure.Compiler.SourceSpans.strip_diagnostic_meta(ast)}
   end
 
   # Body AST of a single-clause fn `name` (`{:function_def, meta, [body]}`).
@@ -59,7 +61,8 @@ defmodule Cure.Compiler.SP53BinderShapesTest do
     assert {:block, _, [assign, {:variable, _, "x"}]} = body
     # binder = the {:variable} LEAF of the LHS constructor pattern (first child)
     assert {:assignment, _, [lhs, rhs]} = assign
-    assert {:function_call, [{:name, "Some"} | _], [{:variable, _, "x"}]} = lhs
+    assert {:function_call, lhs_meta, [{:variable, _, "x"}]} = lhs
+    assert Keyword.fetch!(lhs_meta, :name) == "Some"
     # RHS is an outer reference/hole, NOT a binder
     assert {:variable, _, "p"} = rhs
   end

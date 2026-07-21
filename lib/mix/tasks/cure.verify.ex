@@ -33,6 +33,8 @@ defmodule Mix.Tasks.Cure.Verify do
 
   use Mix.Task
 
+  alias Cure.Diagnostic.Sink
+
   @shortdoc "Verify .cureproof artifacts in a package tarball or dependency directory"
 
   @impl Mix.Task
@@ -56,7 +58,10 @@ defmodule Mix.Tasks.Cure.Verify do
         verify_directory(path, strict?)
 
       true ->
-        Mix.shell().error("cure.verify: #{path} is not a .tar.gz file or directory")
+        Mix.shell().error(
+          render_diagnostic(Cure.Diagnostic.Operational.artifact_error("#{path} is not a .tar.gz file or directory"))
+        )
+
         exit({:shutdown, 1})
     end
   end
@@ -98,7 +103,8 @@ defmodule Mix.Tasks.Cure.Verify do
         end
 
       {:error, reason} ->
-        Mix.shell().error("cure.verify: cannot read #{path}: #{inspect(reason)}")
+        Mix.shell().error("cure.verify: " <> render_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason)))
+
         exit({:shutdown, 1})
     end
   end
@@ -146,7 +152,10 @@ defmodule Mix.Tasks.Cure.Verify do
         Mix.shell().error("  #{label}: #{length(failures)} certificate(s) failed (E066):")
 
         Enum.each(failures, fn {mod, stmt, reason} ->
-          Mix.shell().error("    #{mod}: #{inspect(stmt)} -- #{inspect(reason)}")
+          Mix.shell().error(
+            "    #{mod}: #{inspect(stmt)} -- " <>
+              render_diagnostic(Cure.Diagnostic.Operational.command_failure("verification", reason))
+          )
         end)
 
         exit({:shutdown, 1})
@@ -154,11 +163,19 @@ defmodule Mix.Tasks.Cure.Verify do
   end
 
   defp handle_missing(true, label) do
-    Mix.shell().error("cure.verify: no .cureproof artifact found in #{label} (E065)")
+    Mix.shell().error(
+      render_diagnostic(Cure.Diagnostic.Operational.artifact_error("no .cureproof artifact found in #{label} (E065)"))
+    )
+
     exit({:shutdown, 1})
   end
 
   defp handle_missing(false, label) do
     Mix.shell().info("cure.verify: no .cureproof artifact found in #{label} (use --strict to treat as error)")
+  end
+
+  defp render_diagnostic(diagnostic) do
+    Sink.new(format: :plain, color: :auto, width: 80)
+    |> Sink.render(diagnostic)
   end
 end

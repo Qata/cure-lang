@@ -63,6 +63,8 @@ defmodule Mix.Tasks.Cure.Rewrite do
 
   use Mix.Task
 
+  alias Cure.Diagnostic.Sink
+
   alias Cure.Compiler.{Lexer, Parser, Printer}
 
   @impl Mix.Task
@@ -126,7 +128,7 @@ defmodule Mix.Tasks.Cure.Rewrite do
         rewrite_one(file, source, opts, stats)
 
       {:error, reason} ->
-        Mix.Shell.IO.error("  cannot read #{file}: #{:file.format_error(reason)}")
+        Mix.Shell.IO.error("  " <> Cure.Diagnostic.Host.render({:file_read_error, file, reason}, file))
         Map.update!(stats, :errored, &(&1 + 1))
     end
   end
@@ -158,7 +160,10 @@ defmodule Mix.Tasks.Cure.Rewrite do
       end
     else
       {:error, reason} ->
-        Mix.Shell.IO.error("  parse error in #{file}: #{inspect(reason)}")
+        Mix.Shell.IO.error(
+          "  " <> render_diagnostic(Cure.Diagnostic.Operational.command_failure("parse #{file}", reason))
+        )
+
         Map.update!(stats, :errored, &(&1 + 1))
     end
   end
@@ -166,6 +171,11 @@ defmodule Mix.Tasks.Cure.Rewrite do
   defp render(ast) do
     rendered = Printer.quoted_to_string(ast)
     if String.ends_with?(rendered, "\n"), do: rendered, else: rendered <> "\n"
+  end
+
+  defp render_diagnostic(diagnostic) do
+    Sink.new(format: :plain, color: :auto, width: 80)
+    |> Sink.render(diagnostic)
   end
 
   defp summary(%{rewritten: r, unchanged: u, errored: e, previewed: p}, opts) do

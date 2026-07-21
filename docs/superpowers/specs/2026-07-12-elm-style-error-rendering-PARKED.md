@@ -1,11 +1,10 @@
 # Elm-Style Error Rendering — PARKED Initiative Spec
 
-> **STATUS: PARKED.** Not scheduled. Recorded 2026-07-12 during the macro-facility
-> build after the operator asked whether to stage macro diagnostics behind an
-> error-system rewrite. Decision: **no** — build macro errors on the existing
-> renderer now (forward-compatible), and park the Elm-style rewrite as its own
-> future initiative. This document exists so the idea and its rationale are not
-> lost; it is NOT a commitment to build.
+> **STATUS: SUPERSEDED FOR IMPLEMENTATION.** Diagnostic opacity became a direct
+> impediment to completing the 0.34 macro work. The shared structured model,
+> caret renderer, machine output, and macro provenance are now required by
+> [`2026-07-20-structured-compiler-diagnostics-design.md`](2026-07-20-structured-compiler-diagnostics-design.md).
+> Cure-native parser self-hosting remains deferred to 0.35.
 
 ## Why parked, not staged
 

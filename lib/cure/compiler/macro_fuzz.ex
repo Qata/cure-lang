@@ -96,6 +96,23 @@ defmodule Cure.Compiler.MacroFuzz do
              ])
          }}
 
+      "Expression" ->
+        {:ok,
+         %{
+           category: category,
+           domain: :expression,
+           env: generation_env,
+           ctx: ctx,
+           goal: nil,
+           generator:
+             Gen.member_of([
+               {:raw_text, "0"},
+               {:raw_text, "1 + 2 * 3"},
+               {:raw_text, "Some(7)"},
+               {:raw_text, "%[:identity, 9]"}
+             ])
+         }}
+
       "Identifier" ->
         {:ok,
          %{
@@ -357,7 +374,7 @@ defmodule Cure.Compiler.MacroFuzz do
               keyword: rule.keyword,
               hole_kinds: rule.segments |> segment_holes() |> Enum.map(& &1.kind),
               draws: Keyword.get(opts, :draws, @default_draws),
-              status: if(rule[:contextual], do: :deferred, else: status)
+              status: if(contextual_proof?(rule), do: :deferred, else: status)
             }
           end
 
@@ -371,7 +388,7 @@ defmodule Cure.Compiler.MacroFuzz do
     seed = Keyword.get(opts, :seed, 1)
 
     rules
-    |> Enum.filter(&(&1[:kind] in [:syntax, :computed] and not &1[:contextual]))
+    |> Enum.filter(&(&1[:kind] in [:syntax, :computed] and not contextual_proof?(&1)))
     |> Enum.reduce_while(:ok, fn rule, :ok ->
       case prove_rule(rule, rules, env, draws, seed) do
         :ok -> {:cont, :ok}
@@ -379,6 +396,11 @@ defmodule Cure.Compiler.MacroFuzz do
       end
     end)
   end
+
+  # A capture obligation is resolved from the caller's inferred expression
+  # type, so a definition-site generator cannot prove it in isolation.
+  defp contextual_proof?(rule),
+    do: rule[:contextual] or Map.get(rule, :obligations, []) != []
 
   defp prove_rule(rule, rules, env, draws, seed) do
     holes = segment_holes(rule.segments)
@@ -802,6 +824,22 @@ defmodule Cure.Compiler.MacroFuzz do
 
   defp check_samples(%{domain: :raw}, terms) do
     case Enum.find(terms, &(not match?({:raw_text, text} when is_binary(text), &1))) do
+      nil -> :ok
+      bad -> {:error, {:generated_hole_not_well_typed, bad}}
+    end
+  end
+
+  defp check_samples(%{domain: :expression}, terms) do
+    case Enum.find(terms, fn
+           {:raw_text, text} ->
+             case Lexer.tokenize(text, emit_events: false) do
+               {:ok, tokens} -> match?({:ok, _}, Parser.parse(tokens, emit_events: false)) == false
+               {:error, _} -> true
+             end
+
+           _ ->
+             true
+         end) do
       nil -> :ok
       bad -> {:error, {:generated_hole_not_well_typed, bad}}
     end

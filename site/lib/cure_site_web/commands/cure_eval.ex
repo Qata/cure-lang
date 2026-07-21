@@ -85,6 +85,6 @@ defmodule CureSiteWeb.Commands.CureEval do
   end
 
   defp format_error(reason) do
-    Cure.Compiler.Errors.format_error(reason, "repl")
+    Cure.Diagnostic.Host.render(reason, "repl.cure")
   end
 end

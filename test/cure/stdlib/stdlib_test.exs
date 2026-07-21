@@ -129,12 +129,12 @@ defmodule Cure.StdlibTest do
 
     # A Cure `String` is `List(Char)` (#29), which at the Erlang boundary is a
     # charlist — so pass `~c"test"`, not the Elixir binary `"test"`.
-    test "println returns ok", %{m: m} do
-      assert m.println(~c"test") == :ok
+    test "println returns unit", %{m: m} do
+      assert m.println(~c"test") == :unit
     end
 
-    test "print returns ok", %{m: m} do
-      assert m.print(~c"test") == :ok
+    test "print returns unit", %{m: m} do
+      assert m.print(~c"test") == :unit
     end
   end
 
@@ -499,8 +499,9 @@ defmodule Cure.StdlibTest do
       assert m.to_int("42") == 42
     end
 
-    test "to_atom", %{m: m} do
-      assert m.to_atom("hello") == :hello
+    test "existing and explicitly unsafe atom conversion", %{m: m} do
+      assert m.to_existing_atom("hello") == :hello
+      assert m.unsafe_to_atom("hello") == :hello
     end
 
     test "split", %{m: m} do

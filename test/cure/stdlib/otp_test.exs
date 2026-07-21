@@ -11,6 +11,20 @@ defmodule Cure.Stdlib.OtpTest do
   alias Cure.Elab.Program
   alias Cure.Core.Env
 
+  defmodule IgnoreStart do
+    use GenServer
+    def start_link(arg), do: GenServer.start_link(__MODULE__, arg)
+    @impl true
+    def init(_arg), do: :ignore
+  end
+
+  defmodule FailedStart do
+    use GenServer
+    def start_link(arg), do: GenServer.start_link(__MODULE__, arg)
+    @impl true
+    def init(_arg), do: {:stop, :deliberate_start_failure}
+  end
+
   # A program in module `App` that `use`s Std.Otp and declares a request ADT.
   defp app(body) do
     Program.elaborate("mod App\n  use Std.Otp\n  type Cmd = Inc | Dec\n#{body}end\n")
@@ -117,7 +131,7 @@ defmodule Cure.Stdlib.OtpTest do
       use Std.Option
       fn timer(p: Pid(Atom)) -> Effect(TimerRef) = beam_ops send_after 10 p :tick
       fn cancel(r: TimerRef) -> Effect(Option(Int)) = beam_ops cancel_timer r
-      fn observe(p: Pid(Atom)) -> Effect(MonitorRef) = beam_ops monitor :process p
+      fn observe(p: Pid(Atom)) -> Effect(MonitorRef) = beam_ops monitor Process() p
       fn unobserve(r: MonitorRef) -> Effect(Unit) = beam_ops demonitor r
       fn connect(p: Pid(Atom)) -> Effect(Unit) = beam_ops link p
       fn disconnect(p: Pid(Atom)) -> Effect(Unit) = beam_ops unlink p
@@ -186,6 +200,130 @@ defmodule Cure.Stdlib.OtpTest do
       assert {:error, _} =
                app("  fn go(s: GenServer(Cmd, Int)) -> Effect(Unit) =\n    cast(s, 5)\n")
     end
+  end
+
+  describe "ActorServer(m, q, r) — distinct asynchronous and synchronous protocols" do
+    test "accepts its message and request codes independently" do
+      source = """
+      mod App
+        use Std.Otp
+        type Msg = Increment | Add(Int)
+        type Req = Value
+        fn send(server: ActorServer(Msg, Req, Int)) -> Effect(Unit) = actor_cast(server, Add(2))
+        fn query(server: ActorServer(Msg, Req, Int)) -> Effect(Int) = actor_call(server, Value())
+      """
+
+      assert {:ok, _} = Program.elaborate(source)
+    end
+
+    test "rejects using a synchronous request as an asynchronous message" do
+      source = """
+      mod App
+        use Std.Otp
+        type Msg = Increment | Add(Int)
+        type Req = Value
+        fn wrong(server: ActorServer(Msg, Req, Int)) -> Effect(Unit) = actor_cast(server, Value())
+      """
+
+      assert {:error, _} = Program.elaborate(source)
+    end
+
+    test "rejects using an asynchronous message as a synchronous request" do
+      source = """
+      mod App
+        use Std.Otp
+        type Msg = Increment | Add(Int)
+        type Req = Value
+        fn wrong(server: ActorServer(Msg, Req, Int)) -> Effect(Int) = actor_call(server, Increment())
+      """
+
+      assert {:error, _} = Program.elaborate(source)
+    end
+
+    test "checked startup decodes the OTP result and preserves protocol indices" do
+      source = """
+      mod ActorStartProof
+        use Std.Actor
+        use Std.Otp
+
+        type Msg = Increment
+        type Req = Value
+
+        actor Cure.Generated.TypedActorStart
+          state Int
+          messages Msg
+          on_cast
+            Increment -> state + 1
+
+        fn launch(module: Atom) -> Effect(StartResult(ActorServer(Msg, Req, Unit))) =
+          start_actor(module, 0)
+
+        fn increment(server: ActorServer(Msg, Req, Unit)) -> Effect(Unit) =
+          actor_cast(server, Increment())
+      """
+
+      assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+      assert {:ok, direct} = apply(:"Cure.Generated.TypedActorStart", :start_link, [0])
+      GenServer.stop(direct)
+      assert {:ok, raw} = apply(:"Cure.Std.Otp.Raw", :raw_start_link_term, [:"Cure.Generated.TypedActorStart", 0, []])
+      GenServer.stop(raw)
+      assert {:Started, pid} = apply(module, :launch, [:"Cure.Generated.TypedActorStart"])
+      assert :sys.get_state(pid) == 0
+      assert :unit = apply(module, :increment, [pid])
+      assert :sys.get_state(pid) == 1
+      GenServer.stop(pid)
+
+      assert :StartIgnored = apply(module, :launch, [IgnoreStart])
+
+      previous = Process.flag(:trap_exit, true)
+      assert :StartFailed = apply(module, :launch, [FailedStart])
+      Process.flag(:trap_exit, previous)
+    end
+  end
+
+  test "BeamTerm observations validate atoms, tuples, bounds, and pids" do
+    source = """
+    mod BeamObservationProof
+      use Std.Beam
+      use Std.Option
+
+      fn atom_view() -> Option(Atom) = atom(forget(:ready))
+      fn tuple_size_view() -> Option(Int) = tuple_arity(forget(%[:ok, 3]))
+      fn tuple_tag_view() -> Option(Atom) = match tuple_element(forget(%[:ok, 3]), 0)
+        Some(term) -> atom(term)
+        None() -> None()
+      fn out_of_bounds() -> Option(BeamTerm) = tuple_element(forget(%[:ok, 3]), 2)
+      fn pid_view(process: BarePid) -> Option(BarePid) = pid(forget(process))
+      fn tuple_pid_view(process: BarePid) -> Option(BarePid) = match tuple_element(forget(%[:ok, process]), 1)
+        Some(term) -> pid(term)
+        None() -> None()
+      fn decode_atom_value(term: BeamTerm) -> Result(Atom, BeamDecodeError) = decode_atom(term)
+      fn decode_pid_value(term: BeamTerm) -> Result(BarePid, BeamDecodeError) = decode_pid(term)
+      fn decode_int_value(term: BeamTerm) -> Result(Int, BeamDecodeError) = from_beam(term)
+      fn decode_float_value(term: BeamTerm) -> Result(Float, BeamDecodeError) = from_beam(term)
+      fn decode_bool_value(term: BeamTerm) -> Result(Bool, BeamDecodeError) = from_beam(term)
+      fn decode_string_value(term: BeamTerm) -> Result(String, BeamDecodeError) = from_beam(term)
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :atom_view, []) == {:some, :ready}
+    assert apply(module, :tuple_size_view, []) == {:some, 2}
+    assert apply(module, :tuple_tag_view, []) == {:some, :ok}
+    assert apply(module, :out_of_bounds, []) == :none
+    assert apply(module, :pid_view, [self()]) == {:some, self()}
+    assert apply(module, :tuple_pid_view, [self()]) == {:some, self()}
+    assert apply(module, :decode_atom_value, [:ready]) == {:ok, :ready}
+    assert apply(module, :decode_atom_value, [self()]) == {:error, :InvalidBeamTerm}
+    assert apply(module, :decode_pid_value, [self()]) == {:ok, self()}
+    assert apply(module, :decode_pid_value, [:ready]) == {:error, :InvalidBeamTerm}
+    assert apply(module, :decode_int_value, [7]) == {:ok, 7}
+    assert apply(module, :decode_int_value, [7.0]) == {:error, :InvalidBeamTerm}
+    assert apply(module, :decode_float_value, [7.0]) == {:ok, 7.0}
+    assert apply(module, :decode_float_value, [7]) == {:error, :InvalidBeamTerm}
+    assert apply(module, :decode_bool_value, [true]) == {:ok, true}
+    assert apply(module, :decode_bool_value, [:ready]) == {:error, :InvalidBeamTerm}
+    assert apply(module, :decode_string_value, ["beam"]) == {:ok, "beam"}
+    assert apply(module, :decode_string_value, [:beam]) == {:error, :InvalidBeamTerm}
   end
 
   test "a sequenced typed conversation elaborates (tell then call, via effect bind)" do

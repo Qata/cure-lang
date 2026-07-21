@@ -101,6 +101,6 @@ defmodule Cure.Elab.MapPatternTest do
     end
     """
 
-    assert {:error, {:map_match_needs_default}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:map_match_needs_default}, _}} = Program.elaborate(src)
   end
 end

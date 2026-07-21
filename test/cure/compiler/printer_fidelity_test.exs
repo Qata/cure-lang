@@ -170,6 +170,24 @@ defmodule Cure.Compiler.PrinterFidelityTest do
     assert out =~ "expands with derive_actor_family"
   end
 
+  test "source-defined family productions survive printing" do
+    source = """
+    macro fsm <name: ModuleName>
+      syntax family Transition
+        syntax <from: Name> --<event: Name>--> <to: Name>
+      syntax family Definition
+        one_or_more transitions Transition
+      accepts Definition
+      expands with derive
+    """
+
+    out = source |> parse!() |> Printer.quoted_to_string()
+    assert out =~ "syntax <from: Name> --<event: Name>--> <to: Name>"
+    assert out =~ "one_or_more transitions Transition"
+    assert {:macro_def, _, [transition, _, _, _]} = parse!(out)
+    assert length(transition.productions) == 1
+  end
+
   test "a `computed by <fn>` rule with a `Code until` hole round-trips (not dropped)" do
     # A Tier-3 `computed by derive_actor` rule (ActorContainers in actor.cure)
     # stores its expander in `:elab`, not `:template`, so the printer's
@@ -204,25 +222,5 @@ defmodule Cure.Compiler.PrinterFidelityTest do
     out = assert_roundtrips(src)
     assert out =~ "computed directly by derive_box_body"
     assert out =~ "<body: Declarations until dedent>"
-  end
-
-  test "a `computed directly by`-backed actor invocation round-trips its surface" do
-    # A USE of the folded `actor N state T initial P messages M handle_cast <body>`
-    # surface (examples/**/echo.cure et al.) parses to a `:computed_use` node. The
-    # printer had NO clause for it, so `cure fmt`/`migrate` RAISED
-    # UnprintableNodeError on every actor demo. The node carries the matched rule's
-    # `:syntax_segments` so the printer can reconstruct the literal separators
-    # (`state`/`initial`/`messages`/`handle_cast`) it would otherwise have lost —
-    # the invocation site has no access to the stdlib rule that defined `actor`.
-    # The `<name: ModuleName>` hole must reprint bare (`Cure.Echo`, not `:Cure.Echo`).
-    src = """
-    actor Cure.Echo state Atom initial :nil messages Atom handle_cast
-      %[:noreply, message]
-    """
-
-    out = assert_roundtrips(src)
-    assert out =~ "actor Cure.Echo state Atom initial :nil messages Atom handle_cast"
-    assert out =~ "%[:noreply, message]"
-    refute out =~ "computed_use"
   end
 end

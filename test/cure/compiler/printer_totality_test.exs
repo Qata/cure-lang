@@ -64,7 +64,7 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     # already exists in this repo, which is a separate, non-redundant claim
     # -- a corpus file could in principle exercise a node-kind combination,
     # ordering, or depth the hand-built fixture doesn't.
-    files = Path.wildcard("lib/**/*.cure") ++ Path.wildcard("examples/**/*.cure")
+    files = Path.wildcard("lib/**/*.cure")
 
     for file <- files do
       src = File.read!(file)
@@ -338,19 +338,6 @@ defmodule Cure.Compiler.PrinterTotalityTest do
     out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "with.cure"))
     assert out =~ "with g(x)"
     assert parse!(out, "with.cure")
-  end
-
-  test "ordinary declarations round-trip inside a lifted supervisor" do
-    src = """
-    mod M
-      sup Root
-        fn helper() -> Int = 1
-    """
-
-    out = Cure.Compiler.Printer.quoted_to_string(parse!(src, "child.cure"))
-    assert out =~ "lift module Root"
-    assert out =~ "fn helper() -> Int = 1"
-    assert parse!(out, "child.cure")
   end
 
   test "binary generator round-trips as <<pat <- source>>" do

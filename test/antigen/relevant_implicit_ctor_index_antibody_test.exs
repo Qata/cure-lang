@@ -83,6 +83,6 @@ defmodule Antigen.RelevantImplicitCtorIndexAntibodyTest do
   end
 
   test "CONTROL solving: an underdetermined relevant implicit rejects, not fabricated" do
-    assert {:error, {:unsolved_metavariables, _}} = Program.elaborate(unsolvable_src())
+    assert {:error, {:source_context, {:unsolved_metavariables, _}, _}} = Program.elaborate(unsolvable_src())
   end
 end

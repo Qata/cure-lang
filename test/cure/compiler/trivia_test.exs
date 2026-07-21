@@ -48,7 +48,12 @@ defmodule Cure.Compiler.TriviaTest do
     ast = attach("mod M\n\n# doc\nfn f() -> Int = 1\n", "a.cure")
 
     leadings =
-      ast |> collect_meta(:leading) |> List.flatten() |> Enum.map(&elem(&1, 1)) |> Enum.map(&String.trim/1)
+      ast
+      |> collect_meta(:leading)
+      |> List.flatten()
+      |> Enum.filter(&match?({kind, _, _, _} when kind in [:comment, :doc_comment], &1))
+      |> Enum.map(&elem(&1, 1))
+      |> Enum.map(&String.trim/1)
 
     assert "doc" in leadings
   end

@@ -129,8 +129,9 @@ defmodule Cure.REPL.Config do
               end
           end
 
-        other ->
-          warn("ignoring non-string stdlib group entry: #{inspect(other)}")
+        _other ->
+          warn("Ignoring non-string stdlib group entry")
+
           []
       end)
       |> Enum.uniq()
@@ -142,8 +143,9 @@ defmodule Cure.REPL.Config do
     end
   end
 
-  def parse_stdlib(other) do
-    warn("ignoring unrecognised `[stdlib] preload` value: #{inspect(other)}")
+  def parse_stdlib(_other) do
+    warn("Ignoring unrecognised `[stdlib] preload` value")
+
     :none
   end
 
@@ -232,6 +234,7 @@ defmodule Cure.REPL.Config do
   end
 
   defp warn(message) do
-    IO.puts(:stderr, "[cure.repl.config] " <> message)
+    diagnostic = Cure.Diagnostic.Operational.configuration_warning(message)
+    Cure.Diagnostic.Host.emit_diagnostic(diagnostic, output_device: :stderr)
   end
 end

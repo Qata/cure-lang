@@ -73,6 +73,18 @@ defmodule Mix.Tasks.AntigenTest do
     refute File.exists?(Path.join(@tmp, "latest.txt"))
   end
 
+  test "mix antigen complete checks coverage and replay without banking" do
+    corpus = Path.join(@tmp, "empty-corpus.sexp")
+
+    out =
+      capture_io(fn ->
+        Mix.Tasks.Antigen.run(["complete", "--corpus", corpus])
+      end)
+
+    assert out =~ "Antigen completion: 318/318"
+    refute File.exists?(Path.join(@tmp, "seeds.sexp"))
+  end
+
   test "the wired-in default_gen draws :typed_term challenges (Tier B is live)" do
     seeds_path = Path.join(@tmp, "seeds_tier_b.sexp")
 

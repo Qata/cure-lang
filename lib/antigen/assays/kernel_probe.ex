@@ -653,7 +653,7 @@ defmodule Antigen.Assays.KernelProbe do
   defp matches?(:infer_absurd, r), do: r == {:error, :absurd_in_reachable_position}
   defp matches?(:infer_fields_only_ctor, r), do: match?({:error, {:ctor_requires_checking_mode, _}}, r)
   defp matches?(:check_ctor_arity, r), do: r == {:error, :ctor_arity}
-  defp matches?(:check_def_unknown, r), do: r == {:error, :unknown_global}
+  defp matches?(:check_def_unknown, r), do: Cure.Diagnostic.key(r) == :unknown_global
   defp matches?(:check_def_builtin_op, r), do: r == :ok
   defp matches?(:validate_cert_builtin_op, r), do: match?({:ok, _}, r)
   defp matches?(:family_ceiling, r), do: r == {:error, :universe_ceiling}

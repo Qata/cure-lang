@@ -1,8 +1,0 @@
-/_build/
-/deps/
-/doc/
-/.cure-trace/
-/.erl.history/
-erl_crash.dump
-mix.lock
-Cure.lock

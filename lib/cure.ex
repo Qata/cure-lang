@@ -67,13 +67,13 @@ defmodule Cure do
 
   ## Examples
 
-      iex> Cure.quote("42")
-      {:ok, {:literal, [subtype: :integer, line: 1, col: 1], 42}}
+      iex> {:ok, {:literal, meta, 42}} = Cure.quote("42")
+      iex> Keyword.fetch!(meta, :subtype)
+      :integer
 
-      iex> Cure.quote("x + 1")
-      {:ok, {:binary_op, [category: :arithmetic, operator: :+, line: 1, col: 3],
-        [{:variable, [scope: :local, line: 1, col: 1], "x"},
-         {:literal, [subtype: :integer, line: 1, col: 5], 1}]}}
+      iex> {:ok, {:binary_op, meta, _}} = Cure.quote("x + 1")
+      iex> Keyword.fetch!(meta, :operator)
+      :+
   """
   @spec quote(String.t(), keyword()) :: {:ok, Parser.ast()} | {:error, term()}
   def quote(source, opts \\ []) do

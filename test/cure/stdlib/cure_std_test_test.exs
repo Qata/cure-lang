@@ -18,7 +18,7 @@ defmodule :cure_std_test_test do
   test "forall_shrunk returns Ok when the property holds" do
     gen = fn _ -> 1 end
     property = fn n -> n > 0 end
-    assert {:Ok, :ok} = :cure_std_test.forall_shrunk(gen, property, 10)
+    assert {:Ok, :unit} = :cure_std_test.forall_shrunk(gen, property, 10)
   end
 
   test "forall_shrunk returns Error carrying the shrunk counterexample" do
@@ -54,7 +54,7 @@ defmodule :cure_std_test_test do
   end
 
   test "zero runs vacuously passes" do
-    assert {:Ok, :ok} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, 0)
+    assert {:Ok, :unit} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, 0)
   end
 
   test "shrinking agrees with detection: a non-true property still minimises" do
@@ -73,7 +73,7 @@ defmodule :cure_std_test_test do
 
   test "a negative run count is vacuously Ok, not a FunctionClauseError" do
     # `runs: Int` admits negatives; `find_counterexample` only claused 0 and n>0.
-    assert {:Ok, :ok} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, -1)
+    assert {:Ok, :unit} = :cure_std_test.forall_shrunk(fn _ -> 1 end, fn _ -> false end, -1)
   end
 
   test "a property that RAISES is a failure, not a propagated exception" do

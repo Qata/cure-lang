@@ -59,7 +59,7 @@ defmodule Cure.Elab.CatchallPatternTest do
     src =
       "mod M\n  type Color = Red | Green | Blue\n  fn f(c: Color) -> Color = match c\n    x -> x\n    y -> y\nend\n"
 
-    assert {:error, {:duplicate_default_pattern, _}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:duplicate_default_pattern, _}, _}} = Program.elaborate(src)
   end
 
   test "the catch-all runs on the BEAM, covering every un-matched constructor" do

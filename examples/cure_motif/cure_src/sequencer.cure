@@ -1,6 +1,0 @@
-## Transparent sequencer actor with a typed counter payload.
-
-actor Cure.Sequencer state Int initial 0 messages Tuple(Atom, Atom) handle_cast
-  pickup
-    message.1 == :emit -> %[:noreply, state + 1]
-    else -> %[:noreply, state]

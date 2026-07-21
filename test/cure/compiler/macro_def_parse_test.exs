@@ -1,6 +1,6 @@
 defmodule Cure.Compiler.MacroDefParseTest do
   use ExUnit.Case, async: true
-  alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Compiler.{Lexer, Parser, Printer}
 
   defp parse!(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
@@ -88,6 +88,44 @@ defmodule Cure.Compiler.MacroDefParseTest do
            ]
   end
 
+  test "a syntax family records source-defined productions" do
+    node =
+      parse!("""
+      macro Machine
+        syntax family Transition
+          syntax <from: Name> --<event: Name>--> <to: Name>
+        syntax family Definition
+          one_or_more transitions Transition
+        accepts Definition
+        expands with build
+      """)
+
+    assert {:macro_def, _, [transition, definition, _, _]} = node
+    assert [%{fields: ["from", "event", "to"], segments: segments}] = transition.productions
+    assert Enum.map(segments, fn
+             {:lit, value} -> value
+             {:hole, %{name: name}} -> name
+           end) == ["from", "-", "-", "event", "-", "->", "to"]
+    assert [%{name: "transitions", shape: "Transition", cardinality: :one_or_more}] = definition.fields
+  end
+
+  test "alternative productions may add an optional typed parameter-list capture" do
+    node =
+      parse!("""
+      macro Machine
+        syntax family Event
+          syntax <name: Name>(<payload: Parameters>)
+          syntax <name: Name>
+        syntax family Definition
+          one_or_more events Event
+        accepts Definition
+        expands with build
+      """)
+
+    assert {:macro_def, _, [_event, _definition, _, _]} = node
+    assert :ok = Cure.Compiler.MacroFamily.validate(elem(node, 2))
+  end
+
   test "a structured macro header records accepts and expands with" do
     node =
       parse!("""
@@ -111,6 +149,60 @@ defmodule Cure.Compiler.MacroDefParseTest do
     assert accepts.family == "ActorDefinition"
     assert expands.kind == :expands_with
     assert {:variable, _, "derive_actor"} = expands.expander
+  end
+
+  test "a rule retains ordered obligations on expression captures" do
+    node =
+      parse!("""
+      macro Child
+        syntax child <identity: Expression> where BeamEncode(identity) where Equatable(identity) computed directly by build_child
+      """)
+
+    assert {:macro_def, _, [rule]} = node
+
+    assert Enum.map(rule.obligations, &{&1.interface, &1.capture}) == [
+             {"BeamEncode", "identity"},
+             {"Equatable", "identity"}
+           ]
+  end
+
+  test "a family field retains obligations on its semantic capture" do
+    node =
+      parse!("""
+      macro Supervisor
+        syntax family ChildDefinition
+          id Expression where BeamEncode(id)
+      """)
+
+    assert {:macro_def, _, [%{fields: [field]}]} = node
+    assert [%{interface: "BeamEncode", capture: "id"}] = field.obligations
+  end
+
+  test "an obligation must name a capture owned by its rule" do
+    {:ok, tokens} =
+      Lexer.tokenize(
+        "macro Bad\n  syntax child <identity: Expression> where BeamEncode(missing) becomes identity\n",
+        emit_events: false
+      )
+
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false, prelude_macros: false)
+    assert Enum.any?(errors, &match?({:unknown_macro_obligation_capture, "missing", _, _}, &1))
+  end
+
+  test "capture obligations survive printing and reparsing" do
+    source = """
+    macro Child
+      syntax family Definition
+        id Expression where BeamEncode(id)
+      syntax child <id: Expression> where BeamEncode(id) becomes id
+    """
+
+    printed = source |> parse!() |> Printer.quoted_to_string()
+    assert printed =~ "id Expression where BeamEncode(id)"
+    assert printed =~ "<id: Expression> where BeamEncode(id)"
+    assert {:macro_def, _, [family, rule]} = parse!(printed)
+    assert hd(family.fields).obligations != []
+    assert rule.obligations != []
   end
 
   test "a family may include another family" do

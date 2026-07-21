@@ -69,6 +69,20 @@ defmodule Cure.LSP.LspTest do
 
       {new_state, _} = Server.process_message(msg, state)
       assert new_state.initialized == true
+      assert new_state.position_encoding == :utf16
+    end
+
+    test "prefers UTF-8 when the client offers position encodings" do
+      msg = %{
+        "method" => "initialize",
+        "id" => 1,
+        "params" => %{
+          "capabilities" => %{"general" => %{"positionEncodings" => ["utf-16", "utf-8", "utf-32"]}}
+        }
+      }
+
+      {new_state, _} = Server.process_message(msg, %{initialized: false, documents: %{}})
+      assert new_state.position_encoding == :utf8
     end
   end
 
@@ -151,6 +165,34 @@ defmodule Cure.LSP.LspTest do
         assert Map.has_key?(diag, "message")
         assert diag["source"] == "cure"
       end
+    end
+
+    test "unsaved buffers receive elaboration diagnostics" do
+      source =
+        "mod X\n  type Nat = Z | S(Nat)\n  fn bad() -> Equivalent(Nat, Z, S(Z)) = reflexive(Z)\n"
+
+      [diagnostic | _] = Server.compute_diagnostics("file:///unsaved.cure", source)
+
+      assert diagnostic["source"] == "cure"
+      assert diagnostic["code"] == "E093"
+      assert diagnostic["message"] =~ "type"
+      assert diagnostic["range"]["start"]["line"] == 2
+    end
+
+    test "unsaved Unicode buffers use the negotiated position encoding" do
+      source = "mod X\n  fn bad() -> Int = \"😀\"\n"
+      uri = "file:///unsaved-unicode.cure"
+
+      utf8 = hd(Server.compute_diagnostics(uri, source, :utf8))
+      utf16 = hd(Server.compute_diagnostics(uri, source, :utf16))
+      utf32 = hd(Server.compute_diagnostics(uri, source, :utf32))
+
+      assert utf8["range"]["start"]["character"] == 20
+      assert utf16["range"]["start"]["character"] == 20
+      assert utf32["range"]["start"]["character"] == 20
+      assert utf8["range"]["end"]["character"] == 26
+      assert utf16["range"]["end"]["character"] == 24
+      assert utf32["range"]["end"]["character"] == 23
     end
   end
 
@@ -269,15 +311,6 @@ defmodule Cure.LSP.LspTest do
       {_, _} = Server.process_message(msg, state)
     end
 
-    test "classifies transparent lifted behavior modules without legacy container nodes" do
-      assert {:ok, ast} = Cure.Compiler.parse_source("actor Cure.SymbolActor with 0\n", emit_events: false)
-      [symbol] = Symbols.extract(ast)
-
-      assert symbol["name"] == "Cure.SymbolActor"
-      assert symbol["detail"] == "lifted gen_server module"
-      assert Enum.any?(symbol["children"], &(&1["name"] == "callback init/1"))
-    end
-
     test "does not synthesize retired FSM metadata from generic containers" do
       ast =
         {:container, [container_type: :module, name: "Plain", line: 1],
@@ -300,7 +333,7 @@ defmodule Cure.LSP.LspTest do
     test "suggests wildcard for non-exhaustive match" do
       diag = %{
         "message" => "match expression is not exhaustive, missing: false",
-        "range" => %{"start" => %{"line" => 3, "character" => 0}, "end" => %{"line" => 3, "character" => 999}}
+        "range" => %{"start" => %{"line" => 3, "character" => 0}, "end" => %{"line" => 3, "character" => 0}}
       }
 
       actions = Server.compute_code_actions("file:///test.cure", [diag])

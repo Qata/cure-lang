@@ -26,8 +26,8 @@ defmodule Cure.QuoteTest do
     printed
   end
 
-  # Strip `line`, `col`, `column` keys from every meta keyword list in
-  # the tree. Mirrors `Cure.Compiler.Formatter.strip_meta/1`.
+  # Strip source-location and diagnostic-provenance keys from every meta keyword
+  # list in the tree. They do not affect quoted syntax semantics or printing.
   defp strip_positions({type, meta, children}) when is_list(meta) do
     {type, drop_position_keys(meta), strip_positions(children)}
   end
@@ -45,6 +45,10 @@ defmodule Cure.QuoteTest do
     |> Keyword.delete(:line)
     |> Keyword.delete(:col)
     |> Keyword.delete(:column)
+    |> Keyword.delete(:span)
+    |> Keyword.delete(:construct_span)
+    |> Keyword.delete(:source_info)
+    |> Keyword.delete(:provenance)
     |> Enum.map(fn {k, v} -> {k, strip_positions(v)} end)
   end
 

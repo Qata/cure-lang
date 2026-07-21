@@ -66,6 +66,7 @@ defmodule Mix.Tasks.Antigen do
       cond do
         match?(["cover" | _], rest) -> :cover
         match?(["generate" | _], rest) -> :generate
+        match?(["complete" | _], rest) -> :complete
         true -> :explore
       end
 
@@ -110,12 +111,39 @@ defmodule Mix.Tasks.Antigen do
           line -> IO.puts(line)
         end
 
+      :complete ->
+        run_complete(runner_opts)
+
       :cover ->
         if opts[:record_new_coverage_baseline] do
           record_coverage_baseline()
         else
           run_cover(opts, runner_opts)
         end
+    end
+  end
+
+  @doc "Run deterministic shape coverage and corpus replay checks without banking data."
+  def run_complete(opts) do
+    summary = Antigen.CoverManifest.summary(800)
+
+    replay_violations =
+      if File.exists?(opts[:corpus_path]) do
+        Antigen.Runner.replay([opts[:corpus_path]], Antigen.Runner.replay_registry())
+        |> Enum.reject(&(&1.verdict == :ok))
+      else
+        []
+      end
+
+    cond do
+      MapSet.size(summary.missing) > 0 ->
+        Mix.raise("Antigen completion failed: uncovered shape cells #{inspect(Enum.sort(summary.missing))}")
+
+      replay_violations != [] ->
+        Mix.raise("Antigen completion failed: corpus replay violations #{inspect(replay_violations)}")
+
+      true ->
+        IO.puts("Antigen completion: #{summary.produced}/#{summary.expected} shape cells and corpus replay green")
     end
   end
 

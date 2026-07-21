@@ -26,15 +26,6 @@ defmodule Cure.Doc.MermaidTest do
     assert out =~ "stop/1 callback"
   end
 
-  test "renders a transparent lifted module from source" do
-    assert {:ok, ast} = Cure.Compiler.parse_source("sup Cure.DocSup\n", emit_events: false)
-    out = Mermaid.render(ast)
-
-    assert out =~ "classDiagram"
-    assert out =~ "Cure_DocSup"
-    assert out =~ "behaviour supervisor"
-  end
-
   test "returns nil for non-lifted input" do
     assert Mermaid.render({:literal, [], 42}) == nil
   end

@@ -64,7 +64,8 @@ defmodule Cure.Elab.MacroTypedRecordTest do
       fn build_it(a: MkSyntax) -> Syntax = a.missing
     """
 
-    assert {:error, {:unknown_field, :"M#MkSyntax", "missing"}} = Program.elaborate(source)
+    assert {:error, error} = Program.elaborate(source)
+    assert {:unknown_field, :"M#MkSyntax", "missing", [:x, :context]} = Program.semantic_error(error)
   end
 
   test "a computed elab can guard its continuation with check and fail" do

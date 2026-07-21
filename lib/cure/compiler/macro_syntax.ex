@@ -7,6 +7,8 @@ defmodule Cure.Compiler.MacroSyntax do
   maps it to Core values of `Std.Syntax` and runs the elab.
   """
 
+  alias Cure.MetaAST.Metadata
+
   @doc """
   Lower internal standard-library macro markers into ordinary parser AST.
 
@@ -271,10 +273,17 @@ defmodule Cure.Compiler.MacroSyntax do
   # meta values remain {key, synlit}; unrepresentable values become opaque.
   defp attrs(meta) when is_list(meta) do
     Enum.flat_map(meta, fn
-      {:line, value} -> [{:source_line, synlit(value)}]
-      {:col, value} -> [{:source_col, synlit(value)}]
-      {key, value} -> [{key, synlit(value)}]
-      _ -> []
+      {:line, value} ->
+        [{:source_line, synlit(value)}]
+
+      {:col, value} ->
+        [{:source_col, synlit(value)}]
+
+      {key, value} ->
+        if Metadata.diagnostic_key?(key), do: [], else: [{key, synlit(value)}]
+
+      _ ->
+        []
     end)
   end
 
@@ -320,6 +329,11 @@ defmodule Cure.Compiler.MacroSyntax do
   # -- from_syntax: repr -> parser AST ---------------------------------------
 
   @spec from_syntax(repr) :: tuple()
+  def from_syntax({:syn_node, :function_def, attrs, kids}) do
+    attrs = materialize_identifier_name(attrs)
+    {:function_def, from_attrs(attrs), Enum.map(kids, &from_syntax/1)}
+  end
+
   def from_syntax({:syn_node, tag, attrs, kids}) do
     {tag, from_attrs(attrs), Enum.map(kids, &from_syntax/1)}
   end
@@ -348,6 +362,39 @@ defmodule Cure.Compiler.MacroSyntax do
 
   def from_syntax({:syn_failure, name, args}),
     do: {:macro_failure, name, Enum.map(args, &from_syntax/1)}
+
+  defp materialize_identifier_name(attrs) do
+    source = Keyword.get(attrs, :name_from_identifier)
+    transform = Keyword.get(attrs, :identifier_transform)
+
+    name =
+      case source do
+        {:s_syntax, {:syn_leaf, _tag, _source_attrs, {:s_str, value}}} ->
+          value
+
+        {:s_syntax, {:syn_node, _tag, source_attrs, _kids}} ->
+          case Keyword.get(source_attrs, :name) do
+            {:s_str, value} -> value
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    transformed =
+      case {name, transform} do
+        {value, {:s_atom, :lower_initial}} when is_binary(value) -> lower_initial(value)
+        {value, _} when is_binary(value) -> value
+        _ -> nil
+      end
+
+    attrs = Keyword.drop(attrs, [:name_from_identifier, :identifier_transform])
+    if transformed, do: Keyword.put(attrs, :name, {:s_str, transformed}), else: attrs
+  end
+
+  defp lower_initial(<<first::utf8, rest::binary>>), do: String.downcase(<<first::utf8>>) <> rest
+  defp lower_initial(""), do: ""
 
   defp from_attrs(attrs) do
     for {key, lit} <- attrs, key not in [:pascal_case, :constructor_key, :variable_name] do
@@ -456,29 +503,47 @@ defmodule Cure.Compiler.MacroSyntax do
     end
   end
 
-  defp encode_core_record_field(kid, {:record, nested_name, nested_fields}, _repeated_fields, _field_types, _field) do
+  defp encode_core_record_field(kid, {:record, nested_name, nested_fields}, repeated_fields, _field_types, field) do
     nested_repeated =
       nested_fields
       |> Enum.filter(&(&1.cardinality in [:repeated, :one_or_more]))
       |> Enum.map(& &1.name)
 
-    to_core_record(
-      nested_name,
-      Enum.map(nested_fields, & &1.name),
-      nested_repeated,
-      kid,
-      family_field_types(nested_fields),
-      false
-    )
+    encode = fn item ->
+      to_core_record(
+        nested_name,
+        Enum.map(nested_fields, & &1.name),
+        nested_repeated,
+        item,
+        family_field_types(nested_fields),
+        false
+      )
+    end
+
+    if field in repeated_fields do
+      kid |> nested_record_items() |> Enum.map(encode) |> to_core_list()
+    else
+      encode.(kid)
+    end
   end
 
   defp encode_core_record_field(kid, {:primitive, shape}, repeated_fields, _field_types, field) do
     if field in repeated_fields, do: to_core_primitive_list(kid, shape), else: to_core_primitive(kid, shape)
   end
 
+  defp encode_core_record_field(kid, :syntax_list, _repeated_fields, _field_types, _field),
+    do: to_core_syntax_list(kid)
+
   defp encode_core_record_field(kid, _field_type, repeated_fields, _field_types, field) do
     if field in repeated_fields, do: to_core_syntax_list(kid), else: to_core(kid)
   end
+
+  defp nested_record_items({:syn_raw, {:s_list, [{:s_list, items}]}}), do: Enum.map(items, &nested_record_item/1)
+  defp nested_record_items({:syn_raw, {:s_list, items}}), do: Enum.map(items, &nested_record_item/1)
+  defp nested_record_items(item), do: [item]
+
+  defp nested_record_item({:s_syntax, repr}), do: repr
+  defp nested_record_item(lit), do: {:syn_raw, lit}
 
   defp option_kid({:syn_leaf, :option_none, _attrs, :s_opaque}, _inner, _repeated_fields, _field_types),
     do: {:ctor, option_ctor(:None), []}
@@ -496,9 +561,19 @@ defmodule Cure.Compiler.MacroSyntax do
   def family_field_types(fields) when is_list(fields) do
     Map.new(fields, fn field ->
       base =
-        case field.shape do
-          shape when shape in ["Int", "Float", "Atom", "Bool"] -> {:primitive, shape}
-          _ -> :syntax
+        case Map.get(field, :grammar) do
+          %{name: name, fields: fields} when is_atom(name) ->
+            {:record, name, fields}
+
+          %{name: name, fields: fields} ->
+            {:record, Cure.Compiler.MacroFamily.syntax_type(name), fields}
+
+          _ ->
+            case field.shape do
+              shape when shape in ["Int", "Float", "Atom", "Bool"] -> {:primitive, shape}
+              "Parameters" -> :syntax_list
+              _ -> :syntax
+            end
         end
 
       value = if field.cardinality == :optional, do: {:optional, base}, else: base

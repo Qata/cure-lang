@@ -3,6 +3,7 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
 
   alias Cure.Compiler.Errors
   alias Cure.Elab.Program
+  alias Cure.MetaAST.Metadata
 
   @source """
   mod M
@@ -23,6 +24,24 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert {:ok, module} = Cure.Compiler.compile_and_load(@source, emit_events: false)
     assert module == :"Cure.M"
     assert apply(:"Cure.DeclarationMacroActor", :init, [7]) == {:ok, 7}
+  end
+
+  test "a generated module and each declaration retain the authored macro provenance" do
+    assert {:ok, ast} = Cure.Compiler.parse_source(@source, file: "generated.cure")
+    assert {:ok, expanded} = Program.expand_declaration_uses(ast)
+    assert {:lift_module, meta, []} = find_lift_module(expanded)
+
+    assert meta[:source_provenance] == %{file: "generated.cure", line: 9, col: 3, macro: "make"}
+    assert [%{keyword: "make", line: 9, col: 3}] = meta[:expansion_provenance]
+
+    assert [%{kind: :generated_declaration, name: "generated"}, %{kind: :macro_expansion, name: "make"}] =
+             Metadata.source_info(meta).provenance
+
+    assert Enum.all?(meta[:declarations], fn {_tag, declaration_meta, _children} ->
+             declaration_meta[:source_provenance] == meta[:source_provenance] and
+               declaration_meta[:expansion_provenance] == meta[:expansion_provenance] and
+               Enum.any?(Metadata.source_info(declaration_meta).provenance, &(&1.kind == :generated_declaration))
+           end)
   end
 
   test "the declaration pass does not consume computed uses in function bodies" do
@@ -171,6 +190,94 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert apply(module, :present, []) == 7
   end
 
+  test "an optional-only family does not match without consuming a section" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro optional_only <name: ModuleName>
+        syntax family Definition
+          optional initial Expression
+        accepts Definition
+        expands with expand
+
+      fn expand(name: ModuleNameSyntax, definition: DefinitionSyntax) -> Syntax = int_literal(0)
+      fn result() -> Int = optional_only Empty
+    end
+    """
+
+    assert {:error, {:parse_error, errors}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert Enum.any?(errors, &match?({:macro_use_mismatch, "optional_only", _, _, _, _}, &1))
+  end
+
+  test "a recognized family body diagnoses a missing required section" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro complete <name: ModuleName>
+        syntax family Definition
+          state Type
+          optional initial Expression
+        accepts Definition
+        expands with expand
+
+      fn expand(name: ModuleNameSyntax, definition: DefinitionSyntax) -> Syntax = int_literal(0)
+      fn result() -> Int = complete Incomplete
+        initial 7
+    end
+    """
+
+    assert {:error, {:parse_error, errors}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+
+    assert Enum.any?(errors, fn
+             {:missing_syntax_family_field, "Definition", "state", _, _} -> true
+             _ -> false
+           end)
+  end
+
+  test "an expression obligation resolves at the macro use site" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Beam
+
+      macro Gate
+        syntax gated <value: Expression> where BeamEncode(value) computed directly by pass
+
+      fn pass(value: Syntax) -> Syntax = value
+      type Identity = Primary | Secondary deriving BeamEncode
+      fn result() -> Identity = gated Primary()
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == :Primary
+  end
+
+  test "an unsatisfied expression obligation fails before expansion" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Beam
+
+      macro Gate
+        syntax gated <value: Expression> where BeamEncode(value) computed directly by pass
+
+      fn pass(value: Syntax) -> Syntax = value
+      type Identity = Primary | Secondary
+      fn result() -> Identity = gated Primary()
+    end
+    """
+
+    assert {:error,
+            {:codegen_error, {:macro_capture_obligation_failed, "gated", "BeamEncode", "value", {:no_instance, _, _}}}} =
+             Cure.Compiler.compile_and_load(source, emit_events: false)
+  end
+
   test "repeated and one_or_more family sections are ordinary lists" do
     source = """
     mod M
@@ -199,6 +306,71 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
 
     assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
     assert apply(module, :result, []) == 3
+  end
+
+  test "a repeated custom production becomes a typed nested family record" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Option
+
+      macro machine <name: ModuleName>
+        syntax family Transition
+          syntax <from: Name> --<event: Name>--> <to: Name>
+        syntax family Definition
+          one_or_more transitions Transition
+        accepts Definition
+        expands with build
+
+      fn build(name: ModuleNameSyntax, definition: DefinitionSyntax) -> Syntax =
+        match definition.transitions
+          [first | _] -> match tag(first.from) == :variable
+            true -> int_literal(1)
+            false -> int_literal(0)
+          [] -> int_literal(0)
+
+      fn result() -> Int = machine Turnstile
+        Locked --Coin--> Unlocked
+        Unlocked --Push--> Locked
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == 1
+  end
+
+  test "a named section groups repeated nested production records" do
+    source = """
+    mod M
+      use Std.Syntax
+      use Std.Option
+
+      macro machine <name: ModuleName>
+        syntax family Transition
+          syntax <from: Name> --<event: Name>--> <to: Name>
+          optional update Expression
+        syntax family Definition
+          one_or_more transitions Transition
+        accepts Definition
+        expands with build
+
+      fn build(name: ModuleNameSyntax, definition: DefinitionSyntax) -> Syntax =
+        match definition.transitions
+          [first, second] -> match second.update
+            Some(value) -> value
+            None() -> int_literal(0)
+          _ -> int_literal(0)
+
+      fn result() -> Int = machine Turnstile
+        transitions
+          Locked --Coin--> Unlocked
+          Unlocked --Push--> Locked
+            update 7
+    end
+    """
+
+    assert {:ok, module} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    assert apply(module, :result, []) == 7
   end
 
   test "a structured expander may receive leading captures directly" do
@@ -429,4 +601,12 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
 
   defp find_computed_use(list) when is_list(list), do: Enum.any?(list, &find_computed_use/1)
   defp find_computed_use(_other), do: false
+
+  defp find_lift_module({:lift_module, _meta, _children} = node), do: node
+
+  defp find_lift_module({_tag, _meta, children}) when is_list(children),
+    do: Enum.find_value(children, &find_lift_module/1)
+
+  defp find_lift_module(list) when is_list(list), do: Enum.find_value(list, &find_lift_module/1)
+  defp find_lift_module(_other), do: nil
 end

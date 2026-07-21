@@ -62,6 +62,6 @@ defmodule Cure.Elab.MatchTest do
         Ping(value: Bool) -> 0
     """
 
-    assert {:error, {:typed_pattern_type_mismatch, _}} = Cure.Elab.Program.elaborate(src)
+    assert {:error, {:source_context, {:typed_pattern_type_mismatch, _}, _}} = Cure.Elab.Program.elaborate(src)
   end
 end

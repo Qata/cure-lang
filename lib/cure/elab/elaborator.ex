@@ -1512,7 +1512,7 @@ defmodule Cure.Elab.Elaborator do
 
               cond do
                 is_nil(idx) ->
-                  {:error, {:unknown_field, rec, field}}
+                  {:error, {:unknown_field, rec, field, Enum.map(fields, &elem(&1, 0))}}
 
                 mentions_prior_field?(ftype) ->
                   {:error, {:dependent_record_projection, rec, field}}
@@ -1593,6 +1593,9 @@ defmodule Cure.Elab.Elaborator do
              :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
           {:ok, term}
         end
+
+      Cure.Elab.Resolve.result_dispatched_method?(env, atom) ->
+        Cure.Elab.Resolve.method_call_checked(env, atom, args, expected_core, names, ctx)
 
       Inductive.get_ctor(env, cres) ->
         # Checking-mode constructor: pin erased indices from the expected type (a
@@ -2743,10 +2746,14 @@ defmodule Cure.Elab.Elaborator do
   # abstraction depth (the common goal case) cross no binder before the match, so the
   # shift is a no-op for them.
   defp abstract_term({:pi, _g, d, c}, target, depth),
-    do: {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(c, Subst.shift(target, 1, 0), depth + 1)}
+    do:
+      {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth),
+       abstract_term(c, Subst.shift(target, 1, 0), depth + 1)}
 
   defp abstract_term({:lam, _g, d, b}, target, depth),
-    do: {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth), abstract_term(b, Subst.shift(target, 1, 0), depth + 1)}
+    do:
+      {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth),
+       abstract_term(b, Subst.shift(target, 1, 0), depth + 1)}
 
   # A `:case` branch `{ctor, arity, body}` binds `arity` de Bruijn variables in
   # `body` (see `Cure.Core.Term` shift/3's `:case` clause). Mirror that here:
@@ -2928,7 +2935,9 @@ defmodule Cure.Elab.Elaborator do
         # one-parameter family before it is unified with a dependent call slot.
         {:ok, term, type} ->
           {:cont, {:ok, acc ++ [{term, Quote.reify(type, depth, env)}]}}
-        {:error, _} = err -> {:halt, err}
+
+        {:error, _} = err ->
+          {:halt, err}
       end
     end)
   end
@@ -5693,6 +5702,7 @@ defmodule Cure.Elab.Elaborator do
          carried
        ) do
     {:ok, {cname, pattern_vars}} = constructor_pattern(pattern)
+
     %{args: telescope, quantities: quantities, result_indices: result_indices, plicities: plicities} =
       Inductive.get_ctor(env, cname)
 
@@ -5734,8 +5744,9 @@ defmodule Cure.Elab.Elaborator do
         {bindings, checks} = split_named_implicits(pattern, subst, arity, telescope)
 
         tele_names =
-          Enum.reduce(bindings, branch_scope(telescope, quantities, plicities, pattern_vars), fn {name, {:variable, _, vname}},
-                                                                                      acc ->
+          Enum.reduce(bindings, branch_scope(telescope, quantities, plicities, pattern_vars), fn {name,
+                                                                                                  {:variable, _, vname}},
+                                                                                                 acc ->
             p = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
             List.replace_at(acc, arity - 1 - p, to_string(vname))
           end)
@@ -7140,7 +7151,7 @@ defmodule Cure.Elab.Elaborator do
   # `List(Char)` and reuses all of `desugar_list`'s Cons/Nil machinery. The empty
   # string yields the empty list (`Nil`).
   defp desugar_string(value, meta) when is_binary(value) do
-    loc = Keyword.take(meta, [:line, :col])
+    loc = generated_meta(meta)
     chars = Enum.map(String.to_charlist(value), fn cp -> {:literal, [subtype: :char] ++ loc, cp} end)
     {:list, meta, chars}
   end
@@ -7152,7 +7163,21 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp ctor_call(name, m, args),
-    do: {:function_call, [name: name] ++ Keyword.take(m, [:line, :col]), args}
+    do: {:function_call, [name: name] ++ generated_meta(m), args}
+
+  defp generated_meta(meta) when is_list(meta) do
+    Keyword.take(meta, [
+      :line,
+      :col,
+      :column,
+      :source_info,
+      :provenance,
+      :source_provenance,
+      :expansion_provenance
+    ])
+  end
+
+  defp generated_meta(_meta), do: []
 
   # Rewrite `:list` patterns in each match arm to the ctor-call form before any
   # downstream pattern pass runs (the pattern-position half of desugar_list/1).
@@ -7996,9 +8021,7 @@ defmodule Cure.Elab.Elaborator do
               else
                 {mctx, ph} = MetaCtx.fresh(mctx)
 
-                {:cont,
-                 {:ok, mctx, chosen ++ [{:meta, ph}], rest,
-                  deferred ++ [{ph, arg, dom, length(chosen)}]}}
+                {:cont, {:ok, mctx, chosen ++ [{:meta, ph}], rest, deferred ++ [{ph, arg, dom, length(chosen)}]}}
               end
           end
 
@@ -8676,7 +8699,12 @@ defmodule Cure.Elab.Elaborator do
     # feature), so plicity derives from quantity: erased ⇒ :implicit (meta),
     # else :explicit (positional) — preserving the pre-plicity `solve_arg`
     # behavior now that the slot carries an explicit plicity.
-    slot_plicities = Enum.map(quantities, fn :erased -> :implicit; _ -> :explicit end)
+    slot_plicities =
+      Enum.map(quantities, fn
+        :erased -> :implicit
+        _ -> :explicit
+      end)
+
     telescope = Enum.zip([Enum.map(domains, &{:_, &1}), quantities, slot_plicities])
     init = {:ok, MetaCtx.new(), [], present_args}
 

@@ -59,6 +59,6 @@ defmodule Cure.Compiler.NamedImplicitPatParseTest do
     fn f() -> Nat = {k = .m}
     """
 
-    assert {:error, {:named_implicit_not_in_pattern, _meta}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:named_implicit_not_in_pattern, _meta}, _}} = Program.elaborate(src)
   end
 end

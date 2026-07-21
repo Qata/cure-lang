@@ -230,28 +230,6 @@ defmodule Cure.Compiler.ParserStructuralTest do
   # ── Transparent FSM Definitions ─────────────────────────────────────
 
   describe "FSM definitions" do
-    test "an FSM expands to an ordinary lifted GenStatem module" do
-      source =
-        "fsm TrafficLight\n  fn helper(x: Int) -> Int = x"
-
-      ast = parse!(source)
-      assert {:lift_module, meta, []} = ast
-      assert meta[:module] == "TrafficLight"
-      assert meta[:behaviour] == :gen_statem
-      assert Enum.any?(meta[:declarations], &match?({:function_def, _, _}, &1))
-    end
-
-    test "an FSM body is reparsed by the ordinary parser" do
-      source = "fsm Counter\n  fn helper(x: Int) -> Int = x + 1"
-      ast = parse!(source)
-      assert {:lift_module, meta, []} = ast
-      assert Enum.any?(meta[:declarations], &match?({:function_def, _, _}, &1))
-    end
-  end
-
-  # ── Enhanced Type Expressions ───────────────────────────────────────
-
-  describe "type expressions" do
     test "parameterized type" do
       ast = parse!("fn id(x: List(Int)) -> List(Int) = x")
       assert {:function_def, meta, _} = ast

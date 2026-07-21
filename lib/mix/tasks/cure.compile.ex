@@ -14,6 +14,8 @@ defmodule Mix.Tasks.Cure.Compile do
 
   use Mix.Task
 
+  alias Cure.Diagnostic.Sink
+
   @shortdoc "Compiles Cure source files to BEAM bytecode"
 
   @impl Mix.Task
@@ -27,7 +29,10 @@ defmodule Mix.Tasks.Cure.Compile do
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
 
     if paths == [] do
-      Mix.shell().error("Usage: mix cure.compile <path> [--output-dir DIR]")
+      Mix.shell().error(
+        render_diagnostic(Cure.Diagnostic.Operational.usage("Usage: mix cure.compile <path> [--output-dir DIR]"))
+      )
+
       exit({:shutdown, 1})
     end
 
@@ -52,7 +57,7 @@ defmodule Mix.Tasks.Cure.Compile do
          ) do
       {:ok, summary} ->
         Enum.each(summary.cycles, fn walk ->
-          Mix.shell().info(Cure.Compiler.Errors.format_error({:import_cycle, walk}, path))
+          Mix.shell().info(Cure.Diagnostic.Host.render({:import_cycle, walk}, path))
         end)
 
         Mix.shell().info(
@@ -63,14 +68,14 @@ defmodule Mix.Tasks.Cure.Compile do
 
         unless summary.errors == [] do
           Enum.each(summary.errors, fn {target, reason} ->
-            Mix.shell().error("  #{Cure.Compiler.Errors.format_error(reason, target)}")
+            Mix.shell().error("  #{Cure.Diagnostic.Host.render(reason, target)}")
           end)
 
           exit({:shutdown, 1})
         end
 
       {:error, reason} ->
-        Mix.shell().error(Cure.Compiler.Errors.format_error(reason, path))
+        Mix.shell().error(Cure.Diagnostic.Host.render(reason, path))
         exit({:shutdown, 1})
     end
   end
@@ -81,14 +86,19 @@ defmodule Mix.Tasks.Cure.Compile do
     case Cure.Compiler.compile_file(path, output_dir: output_dir) do
       {:ok, module, warnings} ->
         Enum.each(warnings, fn w ->
-          Mix.shell().info("  warning: #{inspect(w)}")
+          Mix.shell().info("  " <> render_diagnostic(Cure.Diagnostic.Operational.compiler_warning(w)))
         end)
 
         Mix.shell().info("  -> #{module}")
 
       {:error, reason} ->
-        formatted = Cure.Compiler.Errors.format_error(reason, path)
+        formatted = Cure.Diagnostic.Host.render(reason, path)
         Mix.shell().error(formatted)
     end
+  end
+
+  defp render_diagnostic(diagnostic) do
+    Sink.new(format: :plain, color: :auto, width: 80)
+    |> Sink.render(diagnostic)
   end
 end

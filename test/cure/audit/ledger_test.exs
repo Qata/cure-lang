@@ -192,18 +192,14 @@ defmodule Cure.Audit.UnresolvedTest do
     assert Ledger.audit_source(src, "Test.Resolved").unresolved == []
   end
 
-  test "Std.Fsm audits without crashing and names every undefined type" do
+  test "Std.Fsm's macro-only surface introduces no retired FSM bridge" do
     assert {:ok, text} = CLI.run("Std.Fsm", [])
 
-    # All 17 bridge axioms are typed with names that do not exist in Core.
-    # `Pid`, `Any`, `Map` and `Tuple` are surface-only spellings the dependent
-    # pathway never defines. String is now resolved by the stdlib prelude.
-    assert text =~ "AXIOMS — CURE BRIDGE (17)"
-    assert text =~ "UNRESOLVED (4)"
-    assert text =~ "Any, Map, Pid, Tuple"
+    refute text =~ "Cure.FSM.Builtins"
+    refute text =~ "Cure.Fsm.Builtins"
   end
 
-  test "the four other bridge modules audit without crashing" do
+  test "the other OTP-facing modules audit without crashing" do
     for m <- ~w(Std.Actor Std.Supervisor Std.Process) do
       assert {:ok, _} = CLI.run(m, []), "#{m} crashed"
     end

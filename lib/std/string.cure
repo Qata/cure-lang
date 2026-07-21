@@ -129,13 +129,24 @@ mod Std.String
   ## Parse `s` as a float. Raises on bad input.
   fn to_float(s: String) -> Float = cl_to_float(as_charlist(s))
 
-  ## `:erlang.list_to_atom/1` on a normalised charlist.
+  ## `:erlang.list_to_existing_atom/1` on a normalised charlist. This never
+  ## grows the VM atom table, but raises when the atom is not already interned.
+  @extern(:erlang, :list_to_existing_atom, 1)
+  local fn cl_to_existing_atom(s: String) -> Atom
+
+  ## Convert `s` to an atom that already exists in the VM atom table.
+  ## Raises when no such atom exists; importantly, arbitrary input cannot grow
+  ## the permanent atom table.
+  fn to_existing_atom(s: String) -> Atom = cl_to_existing_atom(as_charlist(s))
+
+  ## `:erlang.list_to_atom/1` on a normalised charlist. This is the explicit
+  ## raw escape hatch for callers that really intend to intern a new atom.
   @extern(:erlang, :list_to_atom, 1)
   local fn cl_to_atom(s: String) -> Atom
 
-  ## Convert `s` to an atom. Raises on bad encoding; beware atom-table
-  ## exhaustion in long-running nodes if `s` is attacker-controlled.
-  fn to_atom(s: String) -> Atom = cl_to_atom(as_charlist(s))
+  ## UNSAFE: intern `s` as a permanent VM atom. Never pass attacker-controlled
+  ## or otherwise unbounded input; atoms are not garbage-collected.
+  fn unsafe_to_atom(s: String) -> Atom = cl_to_atom(as_charlist(s))
 
   # -- Split / Repeat / Reverse -----------------------------------------------
 

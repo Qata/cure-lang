@@ -82,7 +82,7 @@ defmodule Cure.Elab.RecordTest do
   end
 
   test "projecting an unknown field is rejected" do
-    assert {:error, {:unknown_field, :"M#Point", "z"}} =
+    assert {:error, {:source_context, {:unknown_field, :"M#Point", "z", [:x, :y]}, _}} =
              Program.elaborate(@pt <> "  fn f(p: Point) -> Nat = p.z\nend\n")
   end
 
@@ -128,18 +128,33 @@ defmodule Cure.Elab.RecordTest do
     assert apply(mod, :kepty, []) == {:S, {:S, :Z}}
   end
 
+  test "multiline record update accepts layout and multiple overrides" do
+    src =
+      @pt <>
+        "  fn bump(p: Point) -> Point = Point{\n" <>
+        "    p |\n" <>
+        "    x: S(Z()),\n" <>
+        "    y: Z()\n" <>
+        "  }\n" <>
+        "  fn result() -> Point = bump(Point{x: Z(), y: S(Z())})\nend\n"
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.MultilineRecUpdate", functions: [:bump, :result])
+    assert apply(mod, :result, []) == {:Point, {:S, :Z}, :Z}
+  end
+
   test "updating a non-field is rejected" do
-    assert {:error, {:record_field_mismatch, :Point}} =
+    assert {:error, {:source_context, {:record_field_mismatch, :Point}, _}} =
              Program.elaborate(@pt <> "  fn f(p: Point) -> Point = Point{p | z: Z()}\nend\n")
   end
 
   test "a missing record field is rejected" do
-    assert {:error, {:record_field_mismatch, :Point}} =
+    assert {:error, {:source_context, {:record_field_mismatch, :Point}, _}} =
              Program.elaborate(@pt <> "  fn g() -> Point = Point{x: S(Z())}\nend\n")
   end
 
   test "an unknown record field is rejected" do
-    assert {:error, {:record_field_mismatch, :Point}} =
+    assert {:error, {:source_context, {:record_field_mismatch, :Point}, _}} =
              Program.elaborate(@pt <> "  fn g() -> Point = Point{x: S(Z()), z: Z()}\nend\n")
   end
 end

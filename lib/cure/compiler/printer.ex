@@ -458,21 +458,22 @@ defmodule Cure.Compiler.Printer do
   defp to_string({:conditional, _meta, [condition, then_br, else_br]}, depth, indent) do
     cond_str = render(condition, depth, indent)
 
-    case {then_br, else_br} do
-      {_, {:literal, [subtype: :null], nil}} ->
-        # No else branch
-        "if #{cond_str} then #{render(then_br, depth, indent)}"
+    case else_br do
+      {:literal, meta, nil} when is_list(meta) ->
+        if Keyword.get(meta, :subtype) == :null do
+          "if #{cond_str} then #{render(then_br, depth, indent)}"
+        else
+          "if #{cond_str} then #{render(then_br, depth, indent)} else #{render(else_br, depth, indent)}"
+        end
 
-      {_, {:conditional, _, _}} ->
+      {:conditional, _, _} ->
         # elif chain
         then_str = render(then_br, depth, indent)
         elif_str = conditional_to_elif(else_br, depth, indent)
         "if #{cond_str} then #{then_str} #{elif_str}"
 
       _ ->
-        then_str = render(then_br, depth, indent)
-        else_str = render(else_br, depth, indent)
-        "if #{cond_str} then #{then_str} else #{else_str}"
+        "if #{cond_str} then #{render(then_br, depth, indent)} else #{render(else_br, depth, indent)}"
     end
   end
 
@@ -708,9 +709,15 @@ defmodule Cure.Compiler.Printer do
   defp to_string({:string_interpolation, _meta, parts}, depth, indent) do
     inner =
       Enum.map_join(parts, fn
-        {:literal, [subtype: :string], s} -> escape_string(s)
-        {:literal, _, s} when is_binary(s) -> escape_string(s)
-        expr -> "\#{#{render(expr, depth, indent)}}"
+        {:literal, meta, s} when is_list(meta) and is_binary(s) ->
+          if Keyword.get(meta, :subtype) == :string do
+            escape_string(s)
+          else
+            "\#{#{render({:literal, meta, s}, depth, indent)}}"
+          end
+
+        expr ->
+          "\#{#{render(expr, depth, indent)}}"
       end)
 
     ~s("#{inner}")
@@ -1431,10 +1438,11 @@ defmodule Cure.Compiler.Printer do
         true -> "becomes"
       end
 
+    obligations = macro_obligations_to_string(rule)
     context = if rule[:contextual], do: " contextual", else: ""
 
     head =
-      "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} #{verb} #{render(template, depth, indent)}"
+      "syntax #{keyword} #{macro_segments_to_string(segments)}#{obligations}#{context} #{verb} #{render(template, depth, indent)}"
 
     [head | macro_rule_examples(rule, depth, indent)]
   end
@@ -1444,11 +1452,12 @@ defmodule Cure.Compiler.Printer do
   # and the catch-all dropped it — silently deleting the legacy `syntax actor …
   # computed by derive_actor` rule (whence the generated `ActorSyntax` record).
   defp macro_rule_lines(%{kind: :computed, keyword: keyword, segments: segments, elab: elab} = rule, depth, indent) do
+    obligations = macro_obligations_to_string(rule)
     context = if rule[:contextual], do: " contextual", else: ""
     verb = if rule[:direct_inputs], do: "computed directly by", else: "computed by"
 
     head =
-      "syntax #{keyword} #{macro_segments_to_string(segments)}#{context} #{verb} #{render(elab, depth, indent)}"
+      "syntax #{keyword} #{macro_segments_to_string(segments)}#{obligations}#{context} #{verb} #{render(elab, depth, indent)}"
 
     [head | macro_rule_examples(rule, depth, indent)]
   end
@@ -1484,7 +1493,12 @@ defmodule Cure.Compiler.Printer do
       |> Map.get(:fields, [])
       |> Enum.map(&family_field_to_string/1)
 
-    ["syntax family #{name}\n#{pad}" <> Enum.join(include_lines ++ field_lines, "\n#{pad}")]
+    production_lines =
+      rule
+      |> Map.get(:productions, [])
+      |> Enum.map(&("syntax " <> macro_production_segments_to_string(&1.segments)))
+
+    ["syntax family #{name}\n#{pad}" <> Enum.join(include_lines ++ production_lines ++ field_lines, "\n#{pad}")]
   end
 
   defp macro_rule_lines(%{kind: :accepts, family: family}, _depth, _indent),
@@ -1515,7 +1529,15 @@ defmodule Cure.Compiler.Printer do
         _ -> ""
       end
 
-    "#{prefix}#{name} #{shape}"
+    "#{prefix}#{name} #{shape}#{macro_obligations_to_string(field)}"
+  end
+
+  defp macro_obligations_to_string(owner) do
+    owner
+    |> Map.get(:obligations, [])
+    |> Enum.map_join("", fn %{interface: interface, capture: capture} ->
+      " where #{interface}(#{capture})"
+    end)
   end
 
   # Reconstruct a `:computed_use` invocation's surface by walking the matched
@@ -1539,6 +1561,22 @@ defmodule Cure.Compiler.Printer do
   defp computed_use_segment({:hole, _}, [arg | rest], depth, indent, _pad),
     do: {" " <> render(arg, depth, indent), rest}
 
+  defp computed_use_segment(
+         {:family, %{fields: fields}},
+         [{:family_input, _meta, values} | rest],
+         depth,
+         indent,
+         pad
+       ) do
+    rendered =
+      fields
+      |> Enum.zip(values)
+      |> Enum.flat_map(fn {field, value} -> render_family_capture(field, value, depth, indent, pad) end)
+      |> Enum.join("")
+
+    {rendered, rest}
+  end
+
   defp computed_use_segment({kind, %{delimiter: "dedent"}}, [arg | rest], depth, indent, pad)
        when kind in [:code_hole, :raw_hole, :declarations_hole],
        do: {"\n" <> pad <> render(arg, depth + 1, indent), rest}
@@ -1552,7 +1590,93 @@ defmodule Cure.Compiler.Printer do
 
   defp computed_use_module_name(arg, depth, indent), do: render(arg, depth, indent)
 
+  defp render_family_capture(%{name: name, cardinality: :optional}, {:family_option, meta, values}, depth, indent, pad) do
+    if Keyword.get(meta, :present, false) do
+      Enum.flat_map(values, fn value ->
+        ["\n#{pad}#{name}" | render_family_capture_value(value, depth, indent, pad)]
+      end)
+    else
+      []
+    end
+  end
+
+  defp render_family_capture(
+         %{grammar: %{productions: [production | _], fields: grammar_fields}},
+         {:family_input, _meta, values},
+         depth,
+         indent,
+         pad
+       ) do
+    bindings = Map.new(Enum.zip(Enum.map(grammar_fields, & &1.name), values))
+    head = render_family_production(production.segments, bindings, depth, indent)
+
+    nested =
+      grammar_fields
+      |> Enum.reject(&(&1.name in production.fields))
+      |> Enum.flat_map(fn field ->
+        render_family_capture(field, Map.get(bindings, field.name), depth + 1, indent, pad <> indent)
+      end)
+      |> Enum.join("")
+
+    ["\n#{pad}#{head}#{nested}"]
+  end
+
+  defp render_family_capture(%{cardinality: cardinality} = field, values, depth, indent, pad)
+       when cardinality in [:repeated, :one_or_more] and is_list(values),
+       do: Enum.flat_map(values, &render_family_capture(field, &1, depth, indent, pad))
+
+  defp render_family_capture(%{name: name}, value, depth, indent, pad),
+    do: ["\n#{pad}#{name}" | render_family_capture_value(value, depth, indent, pad)]
+
+  defp render_family_capture_value({:case_block, _meta, arms}, depth, indent, pad) do
+    body_pad = pad <> indent
+    ["\n", body_pad, Enum.map_join(arms, "\n#{body_pad}", &render(&1, depth + 2, indent))]
+  end
+
+  defp render_family_capture_value(value, depth, indent, _pad),
+    do: [" ", render(value, depth + 1, indent)]
+
+  defp render_family_production(segments, bindings, depth, indent) do
+    {pieces, _previous} =
+      segments
+      |> Enum.with_index()
+      |> Enum.map_reduce(nil, fn {segment, index}, previous ->
+        text =
+          case segment do
+            {:lit, word} -> word
+            {:hole, %{name: name}} -> render(Map.fetch!(bindings, name), depth, indent)
+          end
+
+        separator =
+          if compact_production_boundary?(previous, segment, index), do: "", else: if(previous, do: " ", else: "")
+
+        {separator <> text, segment}
+      end)
+
+    Enum.join(pieces)
+  end
+
+  defp compact_production_boundary?({:lit, "-"}, {:lit, word}, _index) when word in ["-", "->"], do: true
+  defp compact_production_boundary?({:lit, "-"}, {:hole, _}, _index), do: true
+  defp compact_production_boundary?({:hole, _}, {:lit, "-"}, index), do: index > 1
+  defp compact_production_boundary?(_previous, _current, _index), do: false
+
   defp macro_segments_to_string(segments), do: Enum.map_join(segments, " ", &macro_segment_to_string/1)
+
+  defp macro_production_segments_to_string(segments) do
+    {pieces, _previous} =
+      segments
+      |> Enum.with_index()
+      |> Enum.map_reduce(nil, fn {segment, index}, previous ->
+        separator =
+          if compact_production_boundary?(previous, segment, index), do: "", else: if(previous, do: " ", else: "")
+
+        {separator <> macro_segment_to_string(segment), segment}
+      end)
+
+    Enum.join(pieces)
+  end
+
   defp macro_segment_to_string({:lit, word}), do: word
   defp macro_segment_to_string({:hole, %{name: name, kind: kind}}), do: "<#{name}: #{kind}>"
 
@@ -1811,8 +1935,12 @@ defmodule Cure.Compiler.Printer do
 
   defp pair_to_string(key, value, depth, indent) do
     case key do
-      {:literal, [subtype: :symbol], atom_val} when is_atom(atom_val) ->
-        "#{atom_val}: #{render(value, depth, indent)}"
+      {:literal, meta, atom_val} when is_list(meta) and is_atom(atom_val) ->
+        if Keyword.get(meta, :subtype) == :symbol do
+          "#{atom_val}: #{render(value, depth, indent)}"
+        else
+          "#{render(key, depth, indent)} => #{render(value, depth, indent)}"
+        end
 
       _ ->
         "#{render(key, depth, indent)} => #{render(value, depth, indent)}"
@@ -1849,8 +1977,12 @@ defmodule Cure.Compiler.Printer do
     then_str = render(then_br, depth, indent)
 
     case else_br do
-      {:literal, [subtype: :null], nil} ->
-        "elif #{cond_str} then #{then_str}"
+      {:literal, meta, nil} when is_list(meta) ->
+        if Keyword.get(meta, :subtype) == :null do
+          "elif #{cond_str} then #{then_str}"
+        else
+          "elif #{cond_str} then #{then_str} else #{render(else_br, depth, indent)}"
+        end
 
       {:conditional, _, _} ->
         "elif #{cond_str} then #{then_str} #{conditional_to_elif(else_br, depth, indent)}"
@@ -1960,9 +2092,13 @@ defmodule Cure.Compiler.Printer do
 
     args_str =
       case args do
-        [{:literal, [subtype: :boolean], bval}] ->
-          # Single boolean arg: emit as @name true / @name false (no parens)
-          " #{bval}"
+        [{:literal, meta, bval}] when is_list(meta) ->
+          if Keyword.get(meta, :subtype) == :boolean do
+            # Single boolean arg: emit as @name true / @name false (no parens)
+            " #{bval}"
+          else
+            "(#{render(hd(args), depth, indent)})"
+          end
 
         [] ->
           ""

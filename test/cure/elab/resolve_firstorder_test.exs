@@ -68,7 +68,7 @@ defmodule Cure.Elab.ResolveFirstOrderTest do
     end
     """
 
-    assert {:error, {:no_instance, :Eqs, _}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:no_instance, :Eqs, _}, _}} = Program.elaborate(src)
   end
 
   test "an unused dictionary is erased (quantity 0), a used one is present" do

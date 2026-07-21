@@ -10,9 +10,13 @@ defmodule Cure.Elab.MacroExpand do
 
   alias Cure.Compiler.{MacroFamily, MacroSyntax, Parser}
   alias Cure.Core.{Context, Kernel, Normalise}
-  alias Cure.Elab.{Elaborator, TotalityClosure}
+  alias Cure.Diagnostic.ProvenanceFrame
+  alias Cure.Elab.{Elaborator, Resolve, TotalityClosure}
+  alias Cure.MetaAST.{Metadata, SourceInfo}
 
   @normalise_fuel 10_000
+  @normalise_fuel_per_node 100
+  @normalise_fuel_ceiling 1_000_000
   # Termination is guaranteed by active-stack cycle detection. Production
   # expansion therefore has no arbitrary depth/size ceiling; embedders and
   # tests may still supply defensive finite limits explicitly.
@@ -58,6 +62,8 @@ defmodule Cure.Elab.MacroExpand do
 
   def contains_computed_use?(term) when is_list(term), do: Enum.any?(term, &contains_computed_use?/1)
 
+  def contains_computed_use?(term) when is_struct(term), do: false
+
   def contains_computed_use?(term) when is_map(term),
     do: Enum.any?(term, fn {k, v} -> contains_computed_use?(k) or contains_computed_use?(v) end)
 
@@ -73,6 +79,7 @@ defmodule Cure.Elab.MacroExpand do
            |> Keyword.put(:provenance, expansion_chain(state))
            |> put_expansion_context(state.context),
          {:ok, expanded, fresh_counter} <- execute(meta, elab, input, env, state.fresh_counter),
+         expanded = stamp_generated_provenance(expanded, meta),
          state = %{state | fresh_counter: fresh_counter},
          {:ok, expanded, state} <- expand_node(expanded, env, state),
          {:ok, state} <- end_expansion(node, state) do
@@ -92,6 +99,10 @@ defmodule Cure.Elab.MacroExpand do
   end
 
   defp expand_node(term, env, state) when is_list(term), do: expand_children(term, env, state)
+
+  defp expand_node(term, _env, state) when is_struct(term) do
+    with {:ok, state} <- visit_node(state), do: {:ok, term, state}
+  end
 
   defp expand_node(term, env, state) when is_map(term) do
     with {:ok, entries, state} <- expand_children(Map.to_list(term), env, state),
@@ -158,6 +169,90 @@ defmodule Cure.Elab.MacroExpand do
   defp put_expansion_context(meta, nil), do: meta
   defp put_expansion_context(meta, context), do: Keyword.put(meta, :expansion_context, context)
 
+  # Generated modules cross a later compilation-unit boundary. Stamp the
+  # authored invocation and complete expansion chain on the unit and each of
+  # its declarations now, while that information is still available.
+  defp stamp_generated_provenance({:lift_module, node_meta, children}, expansion_meta) do
+    source = %{
+      file: Keyword.get(expansion_meta, :file),
+      line: Keyword.get(expansion_meta, :line),
+      col: Keyword.get(expansion_meta, :col),
+      macro: Keyword.get(expansion_meta, :keyword)
+    }
+
+    chain = Keyword.get(expansion_meta, :provenance, [])
+
+    declarations =
+      node_meta
+      |> Keyword.get(:declarations, [])
+      |> Enum.map(&stamp_declaration_provenance(&1, source, chain))
+
+    node_meta =
+      node_meta
+      |> stamp_canonical_provenance(expansion_meta, :generated_declaration)
+      |> Keyword.put(:source_provenance, source)
+      |> Keyword.put(:expansion_provenance, chain)
+      |> Keyword.put(:declarations, declarations)
+
+    {:lift_module, node_meta, children}
+  end
+
+  defp stamp_generated_provenance({tag, meta, children}, expansion_meta)
+       when is_atom(tag) and is_list(meta) and is_list(children) do
+    meta = stamp_canonical_provenance(meta, expansion_meta, :macro_expansion)
+    {tag, meta, Enum.map(children, &stamp_generated_provenance(&1, expansion_meta))}
+  end
+
+  defp stamp_generated_provenance(list, expansion_meta) when is_list(list),
+    do: Enum.map(list, &stamp_generated_provenance(&1, expansion_meta))
+
+  defp stamp_generated_provenance(other, _expansion_meta), do: other
+
+  defp stamp_declaration_provenance({tag, meta, children}, source, chain)
+       when is_atom(tag) and is_list(meta) and is_list(children) do
+    meta =
+      meta
+      |> stamp_canonical_provenance_from_chain(chain, :generated_declaration)
+      |> Keyword.put(:source_provenance, source)
+      |> Keyword.put(:expansion_provenance, chain)
+
+    {tag, meta, children}
+  end
+
+  defp stamp_declaration_provenance(other, _source, _chain), do: other
+
+  defp stamp_canonical_provenance(meta, expansion_meta, kind) when is_list(meta) do
+    stamp_canonical_provenance_from_chain(
+      meta,
+      Keyword.get(expansion_meta, :provenance, []),
+      kind,
+      Metadata.source_info(expansion_meta)
+    )
+  end
+
+  defp stamp_canonical_provenance_from_chain(meta, chain, kind, expansion_info \\ nil)
+       when is_list(meta) and is_list(chain) do
+    info = Metadata.source_info(meta) || %SourceInfo{}
+    invocation = expansion_info && expansion_info.whole
+
+    frames =
+      Enum.map(chain, fn frame ->
+        %ProvenanceFrame{
+          kind: :macro_expansion,
+          name: Map.get(frame, :keyword, "macro"),
+          invocation: invocation,
+          parent: Map.get(frame, :parent)
+        }
+      end)
+
+    frame = %ProvenanceFrame{kind: kind, name: Keyword.get(meta, :name, "generated"), invocation: invocation}
+
+    Metadata.put_source_info(meta, %{
+      info
+      | provenance: Enum.uniq_by([frame | frames ++ info.provenance], &{&1.kind, &1.name})
+    })
+  end
+
   defp over_limit?(_value, :infinity), do: false
   defp over_limit?(value, limit) when is_integer(limit), do: value > limit
 
@@ -184,6 +279,13 @@ defmodule Cure.Elab.MacroExpand do
   defp expansion_frame(_), do: %{keyword: nil, line: nil, col: nil}
 
   defp execute(meta, elab_ast, input_ast, env, fresh_counter) do
+    with {:ok, evidence} <- check_capture_obligations(meta, env) do
+      meta = Keyword.put(meta, :resolved_obligations, evidence)
+      execute_after_obligations(meta, elab_ast, input_ast, env, fresh_counter)
+    end
+  end
+
+  defp execute_after_obligations(meta, elab_ast, input_ast, env, fresh_counter) do
     # Definition-site (ambient) macro hygiene, as a ZERO-OVERHEAD FALLBACK. A
     # stdlib computed/family macro's expander is a global of its HOME module. If
     # the use-site has `use Std.X` (or the macro is lexical), the expander already
@@ -213,10 +315,35 @@ defmodule Cure.Elab.MacroExpand do
     end
   end
 
+  defp check_capture_obligations(meta, env) do
+    ctx = Context.empty(env)
+
+    meta
+    |> Keyword.get(:capture_obligations, [])
+    |> Enum.reduce_while({:ok, []}, fn obligation, {:ok, evidence} ->
+      iface = String.to_atom(obligation.interface)
+
+      with {:ok, _term, type_value} <-
+             Elaborator.elaborate_expr_typed(obligation.expression, [], ctx, env),
+           {:ok, dictionary, dictionary_type} <-
+             Resolve.dictionary_for_type_value(env, iface, type_value, ctx) do
+        witness = Map.merge(obligation, %{dictionary: dictionary, dictionary_type: dictionary_type})
+        {:cont, {:ok, evidence ++ [witness]}}
+      else
+        {:error, reason} ->
+          {:halt,
+           {:error,
+            {:macro_capture_obligation_failed, Keyword.get(meta, :keyword), obligation.interface, obligation.capture,
+             reason}}}
+      end
+    end)
+  end
+
   # Only an unresolved-expander failure merits retrying in the definition-site
   # scope; any other computed-macro error is genuine and returned as-is.
   defp resolution_failure?(:unknown_global), do: true
   defp resolution_failure?({:unknown_global, _}), do: true
+  defp resolution_failure?({:unknown_global, _, _details}), do: true
   defp resolution_failure?(_), do: false
 
   defp execute_with_env(meta, elab_ast, input_ast, env, fresh_counter) do
@@ -279,7 +406,11 @@ defmodule Cure.Elab.MacroExpand do
 
         {field,
          {:record, Cure.Core.Env.resolve_key(env, env.ctors, name),
-          Enum.map(fields, &Map.put(&1, :repeated, &1.name in repeated))}}
+          Enum.map(fields, fn nested_field ->
+            nested_field
+            |> Map.put(:repeated, nested_field.name in repeated)
+            |> resolve_nested_grammar(env)
+          end)}}
 
       {field, value} ->
         {field, value}
@@ -287,6 +418,16 @@ defmodule Cure.Elab.MacroExpand do
   end
 
   defp resolve_field_types(_field_types, _env), do: %{}
+
+  defp resolve_nested_grammar(%{grammar: %{name: name} = grammar} = field, env) do
+    Map.put(
+      field,
+      :grammar,
+      Map.put(grammar, :name, Cure.Core.Env.resolve_key(env, env.ctors, MacroFamily.syntax_type(name)))
+    )
+  end
+
+  defp resolve_nested_grammar(field, _env), do: field
 
   defp primitive_field_types?(field_types) when is_map(field_types) do
     Enum.any?(field_types, fn {_field, type} -> match?({:primitive, _shape}, type) end)
@@ -359,7 +500,7 @@ defmodule Cure.Elab.MacroExpand do
 
     case Kernel.infer(context, application) do
       {:ok, _result_type} ->
-        result = Normalise.nf(context, application, fuel: @normalise_fuel)
+        result = Normalise.nf(context, application, fuel: normalise_fuel(application))
 
         case decode_result(result) do
           {:ok, _ast} = success ->
@@ -384,6 +525,26 @@ defmodule Cure.Elab.MacroExpand do
 
   defp execute_application(_context, _elab_core, []),
     do: {:error, :no_compatible_macro_input}
+
+  # Declaration macros receive reflected records whose Core representation is
+  # proportional to the authored declaration. A fixed expression-sized budget
+  # made valid four-row grammars fail while two-row versions passed. Scale the
+  # bounded evaluator budget with that input, retaining a hard ceiling for
+  # termination and denial-of-service resistance.
+  defp normalise_fuel(application) do
+    min(@normalise_fuel_ceiling, @normalise_fuel + @normalise_fuel_per_node * core_nodes(application))
+  end
+
+  defp core_nodes(value) when is_tuple(value) do
+    value
+    |> Tuple.to_list()
+    |> Enum.reduce(1, fn child, count -> count + core_nodes(child) end)
+  end
+
+  defp core_nodes(value) when is_list(value),
+    do: Enum.reduce(value, 1, fn child, count -> count + core_nodes(child) end)
+
+  defp core_nodes(_value), do: 1
 
   defp fallback_decode_error?({:author_failure, _name, _args}), do: false
   defp fallback_decode_error?({:author_diagnostics, _diagnostics}), do: false

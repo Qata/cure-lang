@@ -72,7 +72,7 @@ defmodule Cure.Elab.NestedPatternTest do
     src = @nat <> "  fn f(n: Nat) -> Nat = match n\n    S(S(m)) -> m\n    Z() -> Z()\nend\n"
 
     # The S(Z()) case is uncovered — reported through the lowered inner match.
-    assert {:error, {:missing_branch, :"M#Z"}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:missing_branch, :"M#Z"}, _}} = Program.elaborate(src)
   end
 
   test "COVERAGE (#17): a depth-3 nested match missing an inner case is rejected" do
@@ -82,7 +82,7 @@ defmodule Cure.Elab.NestedPatternTest do
 
     # Missing outer Z() (and nothing covers it) — coverage is enforced at every
     # nesting level, not just the top.
-    assert {:error, {:missing_branch, :"M#Z"}} = Program.elaborate(src)
+    assert {:error, {:source_context, {:missing_branch, :"M#Z"}, _}} = Program.elaborate(src)
   end
 
   test "multi-column nesting elaborates and runs (pattern-matrix compilation)" do

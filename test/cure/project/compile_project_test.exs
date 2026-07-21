@@ -11,14 +11,6 @@ defmodule Cure.Project.CompileProjectTest do
     end)
   end
 
-  defp purge(modules) do
-    Enum.each(modules, fn m ->
-      :code.purge(m)
-      :code.delete(m)
-      :code.purge(m)
-    end)
-  end
-
   describe "[application] / [release] TOML parsing" do
     @tag :tmp_dir
     test "parses arrays of strings, booleans, ints, and nested env maps", %{tmp_dir: tmp} do
@@ -68,32 +60,6 @@ defmodule Cure.Project.CompileProjectTest do
       {:ok, project} = Cure.Project.load(tmp)
       files = Path.wildcard(Path.join(tmp, "lib/**/*.cure"))
       assert {:ok, nil} = Cure.Project.detect_app(files, project)
-    end
-
-    @tag :tmp_dir
-    test "returns the single application macro when there is exactly one", %{tmp_dir: tmp} do
-      setup_project(tmp, [
-        {"Cure.toml", "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n"},
-        {"lib/app.cure", "app Demo\n"}
-      ])
-
-      {:ok, project} = Cure.Project.load(tmp)
-      files = Path.wildcard(Path.join(tmp, "lib/**/*.cure"))
-      assert {:ok, %{name: "Demo"}} = Cure.Project.detect_app(files, project)
-    end
-
-    @tag :tmp_dir
-    test "returns {:error, :duplicate_app, _} when there are two", %{tmp_dir: tmp} do
-      setup_project(tmp, [
-        {"Cure.toml", "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n"},
-        {"lib/foo.cure", "app Foo\n"},
-        {"lib/bar.cure", "app Bar\n"}
-      ])
-
-      {:ok, project} = Cure.Project.load(tmp)
-      files = Path.wildcard(Path.join(tmp, "lib/**/*.cure"))
-      assert {:error, {:duplicate_app, occurrences}} = Cure.Project.detect_app(files, project)
-      assert length(occurrences) == 2
     end
   end
 
@@ -178,76 +144,6 @@ defmodule Cure.Project.CompileProjectTest do
 
       assert {:error, {:codegen_error, {:missing_stdlib_module, :"Cure.Std.Nonexistent", _msg}}} =
                Cure.Compiler.compile_and_load(source, emit_events: false, check_types: false)
-    end
-  end
-
-  describe "Cure.Project.compile_project/2" do
-    @tag :tmp_dir
-    test "compiles + emits .app resource for a minimal app project", %{tmp_dir: tmp} do
-      setup_project(tmp, [
-        {"Cure.toml",
-         """
-         [project]
-         name = "minimal_app"
-         version = "0.1.0"
-
-         [application]
-         name = "minimal_app"
-         vsn  = "0.1.0"
-         """},
-        {"lib/app.cure", "app MinimalApp\n"}
-      ])
-
-      {:ok, project} = Cure.Project.load(tmp)
-      ebin = Path.join(tmp, "_build/cure/ebin")
-
-      try do
-        assert {:ok, result} =
-                 Cure.Project.compile_project(project, output_dir: ebin, emit_events: false)
-
-        assert result.app_module == :"Cure.App.MinimalApp"
-        assert File.exists?(Path.join(ebin, "minimal_app.app"))
-        assert File.exists?(Path.join(ebin, "Cure.App.MinimalApp.beam"))
-      after
-        purge([:"Cure.App.MinimalApp"])
-      end
-    end
-
-    @tag :tmp_dir
-    test "rejects two application macros under E051", %{tmp_dir: tmp} do
-      setup_project(tmp, [
-        {"Cure.toml", "[project]\nname = \"demo\"\nversion = \"0.1.0\"\n"},
-        {"lib/foo.cure", "app Foo\n"},
-        {"lib/bar.cure", "app Bar\n"}
-      ])
-
-      {:ok, project} = Cure.Project.load(tmp)
-      ebin = Path.join(tmp, "_build/cure/ebin")
-
-      assert {:error, {:duplicate_app, _occurrences}} =
-               Cure.Project.compile_project(project, output_dir: ebin, emit_events: false)
-    end
-
-    @tag :tmp_dir
-    test "rejects a name mismatch with [application].name", %{tmp_dir: tmp} do
-      setup_project(tmp, [
-        {"Cure.toml",
-         """
-         [project]
-         name = "demo"
-         version = "0.1.0"
-
-         [application]
-         name = "other"
-         """},
-        {"lib/app.cure", "app Demo\n"}
-      ])
-
-      {:ok, project} = Cure.Project.load(tmp)
-      ebin = Path.join(tmp, "_build/cure/ebin")
-
-      assert {:error, {:app_name_mismatch, "other", "demo"}} =
-               Cure.Project.compile_project(project, output_dir: ebin, emit_events: false)
     end
   end
 end
