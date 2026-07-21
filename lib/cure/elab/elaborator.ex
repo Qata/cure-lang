@@ -2187,7 +2187,13 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp check_tuple_against([e | rest], expected_core, names, ctx, env) do
+  defp check_tuple_against(elements, expected_core, names, ctx, env),
+    do: check_tuple_against(elements, expected_core, names, ctx, env, 0)
+
+  defp check_tuple_against([], expected_core, _names, ctx, env, _index),
+    do: check_tuple_against([], expected_core, [], ctx, env)
+
+  defp check_tuple_against([e | rest], expected_core, names, ctx, env, index) do
     sigma_fam = Inductive.builtin(env, :sigma)
 
     case Kernel.normalize(ctx, expected_core) do
@@ -2195,14 +2201,27 @@ defmodule Cure.Elab.Elaborator do
         if rest == [] and not telescope_terminator?(b_fn, ctx, env) do
           # Last element, tail is an ordinary type → e IS the whole second
           # component (a bare pair, possibly itself a nested tuple).
-          elaborate_expr_checked(e, expected_core, names, ctx, env)
+          case elaborate_expr_checked(e, expected_core, names, ctx, env) do
+            {:error, reason} ->
+              {:error, attach_expectation_context(reason, e, :element, :tuple, index)}
+
+            ok ->
+              ok
+          end
         else
           [%{name: mk_pair} | _] = Inductive.ctors_of(env, sigma_fam)
 
-          with {:ok, e_term} <- elaborate_expr_checked(e, dom, names, ctx, env),
-               cod_inst = Kernel.normalize(ctx, {:app, b_fn, e_term}),
-               {:ok, rest_term} <- check_tuple_against(rest, cod_inst, names, ctx, env) do
-            {:ok, {:ctor, mk_pair, [e_term, rest_term]}}
+          case elaborate_expr_checked(e, dom, names, ctx, env) do
+            {:error, reason} ->
+              {:error, attach_expectation_context(reason, e, :element, :tuple, index)}
+
+            {:ok, e_term} ->
+              cod_inst = Kernel.normalize(ctx, {:app, b_fn, e_term})
+
+              case check_tuple_against(rest, cod_inst, names, ctx, env, index + 1) do
+                {:ok, rest_term} -> {:ok, {:ctor, mk_pair, [e_term, rest_term]}}
+                error -> error
+              end
           end
         end
 
@@ -2210,7 +2229,13 @@ defmodule Cure.Elab.Elaborator do
         # Goal is not a Σ: only a single remaining element can inhabit it directly
         # (the bare final component of a 2-tuple). More than one is an arity error.
         if rest == [] do
-          elaborate_expr_checked(e, expected_core, names, ctx, env)
+          case elaborate_expr_checked(e, expected_core, names, ctx, env) do
+            {:error, reason} ->
+              {:error, attach_expectation_context(reason, e, :element, :tuple, index)}
+
+            ok ->
+              ok
+          end
         else
           {:error, {:tuple_arity_mismatch, :too_many, other}}
         end

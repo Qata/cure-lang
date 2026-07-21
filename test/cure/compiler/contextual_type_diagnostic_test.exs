@@ -43,7 +43,7 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
 
     assert diagnostic.code == "E093"
     assert diagnostic.payload.branches == ["FromNat", "NegativeSuccessor"]
-    assert rendered =~ "multiply_int_successor_coefficient"
+    assert rendered =~ "MULTIPLY_INT_SUCCESSOR_COEFFICIENT"
     assert rendered =~ "FromNat"
     assert rendered =~ "NegativeSuccessor"
     assert rendered =~ "proof_int_order.cure:8:5"
@@ -151,13 +151,13 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
 
   test "an operator operand conversion retains its operand origin and caret" do
     source = "fn main() -> Bool = \"bad\" == 1\n"
-    operand = raw_span(source, "\"bad\"", 1, 22)
+    operand = raw_span(source, "\"bad\"", 1, 21)
 
     reason =
       {:source_context, {:conversion_failure, "String", "Int"},
        %{
          line: 1,
-         column: 22,
+         column: 21,
          length: 5,
          span: operand,
          expectation_span: operand,
@@ -174,7 +174,7 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.payload.origin.kind == :operator_operand
     assert diagnostic.payload.origin.owner == :==
     assert diagnostic.payload.origin.index == 0
-    assert diagnostic.primary.span.start_column == 22
+    assert diagnostic.primary.span.start_column == 21
     assert rendered =~ "The `==` operator cannot use this operand type"
     assert rendered =~ "Expected: Int"
     assert rendered =~ "Found:    String"
@@ -184,13 +184,13 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
 
   test "a conditional guard conversion retains its condition origin and caret" do
     source = "fn main() -> Int = if 1 then 2 else 3\n"
-    condition = raw_span(source, "1", 1, 22)
+    condition = raw_span(source, "1", 1, 23)
 
     reason =
       {:source_context, {:conversion_failure, "Int", "Bool"},
        %{
          line: 1,
-         column: 22,
+         column: 23,
          length: 1,
          span: condition,
          expectation_span: condition,
@@ -205,12 +205,45 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.title == "Condition is not boolean"
     assert diagnostic.payload.origin.kind == :condition
     assert diagnostic.payload.origin.owner == :if
-    assert diagnostic.primary.span.start_column == 22
+    assert diagnostic.primary.span.start_column == 23
     assert rendered =~ "A condition must produce `Bool`"
     assert rendered =~ "Expected: Bool"
     assert rendered =~ "Found:    Int"
     assert rendered =~ "1 | fn main() -> Int = if 1 then 2 else 3"
     assert rendered =~ "this condition has the wrong type"
+  end
+
+  test "a tuple element conversion retains its element origin and caret" do
+    source = "fn main() -> Pair = %[1, \"bad\"]\n"
+    element = raw_span(source, "\"bad\"", 1, 26)
+
+    reason =
+      {:source_context, {:conversion_failure, "String", "Int"},
+       %{
+         line: 1,
+         column: 26,
+         length: 5,
+         span: element,
+         expectation_span: element,
+         checking: :tuple,
+         argument_index: 1,
+         expression_category: :literal,
+         expectation_origin: :element
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "tuple.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Collection element has the wrong type"
+    assert diagnostic.payload.origin.kind == :element
+    assert diagnostic.payload.origin.owner == :tuple
+    assert diagnostic.payload.origin.index == 1
+    assert diagnostic.primary.span.start_column == 26
+    assert rendered =~ "Element 2 of this collection"
+    assert rendered =~ "Expected: Int"
+    assert rendered =~ "Found:    String"
+    assert rendered =~ "1 | fn main() -> Pair = %[1, \"bad\"]"
+    assert rendered =~ "this collection element has the wrong type"
   end
 
   defp raw_span(source, needle, line, column) do
