@@ -30,4 +30,22 @@ defmodule Cure.Elab.CharPatternTest do
     assert classify(?b) == 2
     assert classify(?z) == 0
   end
+
+  test "char literal patterns unfold the ambient Std.Char alias" do
+    src = """
+    mod AmbientCharPattern
+      use Std.Char
+
+      fn classify(c: Char) -> Int = match c
+        '\\n' -> 1
+        _ -> 0
+    end
+    """
+
+    {:ok, env} = Program.elaborate(src)
+    {:ok, mod} = Emit.compile_and_load(env, module: :"Cure.AmbientCharPattern", functions: [:classify])
+
+    assert apply(mod, :classify, [?\n]) == 1
+    assert apply(mod, :classify, [?x]) == 0
+  end
 end

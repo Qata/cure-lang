@@ -770,7 +770,8 @@ defmodule Cure.Compiler.Formatter do
 
   defp scan_regex_flags(source, pos, size) do
     case :binary.at(source, pos) do
-      c when c in ?a..?z -> scan_regex_flags(source, pos + 1, size)
+      c when c in [?i, ?m, ?s, ?x, ?u, ?f, ?r, ?U, ?E] ->
+        scan_regex_flags(source, pos + 1, size)
       _ -> pos
     end
   end

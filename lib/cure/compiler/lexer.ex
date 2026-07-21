@@ -1116,83 +1116,93 @@ defmodule Cure.Compiler.Lexer do
     # Advance past opening '
     state = advance(state, 1)
 
-    case peek(state) do
-      ?\\ ->
-        state = advance(state, 1)
+    if peek(state) == ?' and peek_at(state, 1) == ?' do
+      # Three quotes are an unescaped single-quote character: the first quote
+      # opened the literal, the second is its value, and the third closes it.
+      state = advance(state, 2)
+      token = Token.new(:char, ?', state.line, start_col)
+      maybe_emit_event(state, token)
+      {:ok, %{state | tokens: [token | state.tokens]}}
+    else
+      case peek(state) do
+        ?\\ ->
+          state = advance(state, 1)
 
-        {value, state} =
-          case peek(state) do
-            ?n ->
-              {?\n, advance(state, 1)}
+          {value, state} =
+            case peek(state) do
+              ?n ->
+                {?\n, advance(state, 1)}
 
-            ?t ->
-              {?\t, advance(state, 1)}
+              ?t ->
+                {?\t, advance(state, 1)}
 
-            ?\\ ->
-              {?\\, advance(state, 1)}
+              ?r ->
+                {?\r, advance(state, 1)}
 
-            ?' ->
-              {?', advance(state, 1)}
+              ?\\ ->
+                {?\\, advance(state, 1)}
 
-            ?0 ->
-              {0, advance(state, 1)}
+              ?' ->
+                {?', advance(state, 1)}
 
-            # An unrecognized escape must NOT fall through to `decode_char_at`,
-            # which would read the byte *after* the backslash literally and
-            # silently drop the `\` — turning `'\r'` into the codepoint for `r`
-            # (114) with no diagnostic. Cure recognizes only the small escape set
-            # above (mirroring the string lexer, which likewise does not interpret
-            # `\r`/`\b`/…); anything else is a hard error rather than a silent
-            # miscompile.
-            nil ->
-              {:invalid, state}
+              ?0 ->
+                {0, advance(state, 1)}
 
-            _ ->
-              {:bad_escape, state}
+              # An unrecognized escape must NOT fall through to `decode_char_at`,
+              # which would read the byte *after* the backslash literally and
+              # silently drop the `\` and turn it into an unrelated character.
+              # Cure recognizes only the small escape set above; anything else
+              # is a hard error rather than a silent miscompile.
+              nil ->
+                {:invalid, state}
+
+              _ ->
+                {:bad_escape, state}
+            end
+
+          cond do
+            value == :invalid ->
+              {:error, {:unterminated_char, state.line, start_col}, state}
+
+            value == :bad_escape ->
+              {:error, {:invalid_char_escape, state.line, start_col}, state}
+
+            true ->
+              # Expect closing '
+              case peek(state) do
+                ?' ->
+                  state = advance(state, 1)
+                  token = Token.new(:char, value, state.line, start_col)
+                  maybe_emit_event(state, token)
+                  {:ok, %{state | tokens: [token | state.tokens]}}
+
+                _ ->
+                  {:error, {:unterminated_char, state.line, start_col}, state}
+              end
           end
 
-        cond do
-          value == :invalid ->
-            {:error, {:unterminated_char, state.line, start_col}, state}
+        nil ->
+          {:error, {:unterminated_char, state.line, start_col}, state}
 
-          value == :bad_escape ->
-            {:error, {:invalid_char_escape, state.line, start_col}, state}
+        _ ->
+          case decode_char_at(state) do
+            {cp, state} ->
+              # Expect closing '
+              case peek(state) do
+                ?' ->
+                  state = advance(state, 1)
+                  token = Token.new(:char, cp, state.line, start_col)
+                  maybe_emit_event(state, token)
+                  {:ok, %{state | tokens: [token | state.tokens]}}
 
-          true ->
-            # Expect closing '
-            case peek(state) do
-              ?' ->
-                state = advance(state, 1)
-                token = Token.new(:char, value, state.line, start_col)
-                maybe_emit_event(state, token)
-                {:ok, %{state | tokens: [token | state.tokens]}}
+                _ ->
+                  {:error, {:unterminated_char, state.line, start_col}, state}
+              end
 
-              _ ->
-                {:error, {:unterminated_char, state.line, start_col}, state}
-            end
-        end
-
-      nil ->
-        {:error, {:unterminated_char, state.line, start_col}, state}
-
-      _ ->
-        case decode_char_at(state) do
-          {cp, state} ->
-            # Expect closing '
-            case peek(state) do
-              ?' ->
-                state = advance(state, 1)
-                token = Token.new(:char, cp, state.line, start_col)
-                maybe_emit_event(state, token)
-                {:ok, %{state | tokens: [token | state.tokens]}}
-
-              _ ->
-                {:error, {:unterminated_char, state.line, start_col}, state}
-            end
-
-          :invalid ->
-            {:error, {:unterminated_char, state.line, start_col}, state}
-        end
+            :invalid ->
+              {:error, {:unterminated_char, state.line, start_col}, state}
+          end
+      end
     end
   end
 
@@ -1508,10 +1518,20 @@ defmodule Cure.Compiler.Lexer do
 
     if peek(state) == ?/ do
       state = advance(state, 1)
-      {flags, state} = consume_while(state, fn c -> c in ?a..?z end)
-      token = Token.new(:regex, {body, flags}, state.line, start_col)
-      maybe_emit_event(state, token)
-      {:ok, %{state | tokens: [token | state.tokens]}}
+      {flags, state} = consume_while(state, &regex_flag?/1)
+
+      case peek(state) do
+        c when is_integer(c) and c in ?a..?z ->
+          {:error, {:invalid_regex_modifier, c, state.line, state.col}, state}
+
+        c when is_integer(c) and c in ?A..?Z ->
+          {:error, {:invalid_regex_modifier, c, state.line, state.col}, state}
+
+        _ ->
+          token = Token.new(:regex, {body, flags}, state.line, start_col)
+          maybe_emit_event(state, token)
+          {:ok, %{state | tokens: [token | state.tokens]}}
+      end
     else
       {:error, {:unterminated_regex, state.line, start_col}, state}
     end
@@ -1538,6 +1558,11 @@ defmodule Cure.Compiler.Lexer do
         consume_regex_body(advance(state, 1), [c | acc])
     end
   end
+
+  # Elixir/PCRE's sigil modifiers. `r` is retained as the deprecated alias for
+  # `U`; `E` is the OTP 28 exported-pattern option and is intentionally accepted
+  # by the syntax even though a pure Cure value has no remote export handle.
+  defp regex_flag?(c), do: c in [?i, ?m, ?s, ?x, ?u, ?f, ?r, ?U, ?E]
 
   defp lex_slash_fixed(state) do
     start_col = state.col
@@ -1900,6 +1925,8 @@ defmodule Cure.Compiler.Lexer do
   defp authored_length(%Token{value: value}, _rest) when is_atom(value), do: value |> Atom.to_string() |> byte_size()
   defp authored_length(_token, _rest), do: 1
 
+  defp quoted_length(<<?', ?', ?', _::binary>>, ?'), do: 3
+
   defp quoted_length(<<delimiter, tail::binary>>, delimiter),
     do: 1 + scan_quoted(tail, delimiter, 0, false)
 
@@ -1945,26 +1972,28 @@ defmodule Cure.Compiler.Lexer do
   defp scan_string(<<_byte, tail::binary>>, consumed, false, depth),
     do: scan_string(tail, consumed + 1, false, depth)
 
-  defp regex_length(<<?~, ?r, ?/, tail::binary>>) do
-    body = scan_until_unescaped(tail, ?/, 0, false)
-    after_slash = binary_part(tail, min(body + 1, byte_size(tail)), max(0, byte_size(tail) - body - 1))
-    3 + body + 1 + take_while_bytes(after_slash, &(&1 in ?a..?z))
+  defp regex_length(<<?/, tail::binary>>) do
+    case scan_regex_length(tail, 1, false) do
+      {length, flags} -> length + take_while_bytes(flags, &regex_flag?/1)
+      :unterminated -> 1
+    end
   end
 
   defp regex_length(_rest), do: 1
 
-  defp scan_until_unescaped(<<>>, _delimiter, consumed, _escaped), do: consumed
+  defp scan_regex_length(<<>>, _consumed, _escaped), do: :unterminated
 
-  defp scan_until_unescaped(<<_byte, tail::binary>>, delimiter, consumed, true),
-    do: scan_until_unescaped(tail, delimiter, consumed + 1, false)
+  defp scan_regex_length(<<_byte, tail::binary>>, consumed, true),
+    do: scan_regex_length(tail, consumed + 1, false)
 
-  defp scan_until_unescaped(<<?\\, tail::binary>>, delimiter, consumed, false),
-    do: scan_until_unescaped(tail, delimiter, consumed + 1, true)
+  defp scan_regex_length(<<?\\, tail::binary>>, consumed, false),
+    do: scan_regex_length(tail, consumed + 1, true)
 
-  defp scan_until_unescaped(<<delimiter, _tail::binary>>, delimiter, consumed, false), do: consumed
+  defp scan_regex_length(<<?/, tail::binary>>, consumed, false),
+    do: {consumed + 1, tail}
 
-  defp scan_until_unescaped(<<_byte, tail::binary>>, delimiter, consumed, false),
-    do: scan_until_unescaped(tail, delimiter, consumed + 1, false)
+  defp scan_regex_length(<<_byte, tail::binary>>, consumed, false),
+    do: scan_regex_length(tail, consumed + 1, false)
 
   defp comment_length(rest) do
     if String.starts_with?(rest, "###") do

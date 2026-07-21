@@ -28,12 +28,12 @@ defmodule Cure.Compiler.CharLexerTest do
   end
 
   test "an unrecognized escape is a hard error, not a silently dropped backslash" do
-    # Before the fix, `'\r'` fell through to `decode_char_at`, which read the byte
+    # Before the fix, an unknown escape fell through to `decode_char_at`, which read the byte
     # AFTER the backslash literally — silently yielding the codepoint for `r` (114)
-    # instead of a carriage return, with no diagnostic. That corruption then
-    # round-tripped stably as `'r'`. Cure recognizes only `\n \t \\ \' \0`; any
+    # instead of reporting an error. That corruption then round-tripped stably
+    # as an ordinary character. Cure recognizes `\n \r \t \\ \' \0`; any
     # other escape must error rather than miscompile.
-    assert {:error, {:invalid_char_escape, _, _}} = Lexer.tokenize(~S"fn f() = '\r'", emit_events: false)
+    assert {:error, {:invalid_char_escape, _, _}} = Lexer.tokenize(~S"fn f() = '\b'", emit_events: false)
     assert {:error, {:invalid_char_escape, _, _}} = Lexer.tokenize(~S"fn f() = '\z'", emit_events: false)
   end
 

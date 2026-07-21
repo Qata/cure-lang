@@ -12,13 +12,13 @@ defmodule Cure.Compiler.LosslessRoundtripTest do
   end
 
   defp comments(src) do
-    src
-    |> String.split("\n")
-    |> Enum.flat_map(fn line ->
-      case Regex.run(~r/#+\s?(.*)$/, line) do
-        [_, txt] -> [String.trim(txt)]
-        _ -> []
-      end
+    {:ok, _tokens, trivia} = Lexer.tokenize(src, trivia: true, emit_events: false)
+
+    trivia
+    |> Enum.flat_map(fn
+      {:comment, text, _line, _column} -> [String.trim(text)]
+      {:doc_comment, text, _line, _column} -> [String.trim(text)]
+      _ -> []
     end)
     |> Enum.reject(&(&1 == ""))
     |> Enum.sort()
