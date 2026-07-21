@@ -23,7 +23,7 @@ defmodule Cure.REPL.Docs do
 
   alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Doc.Extractor
-  alias Cure.Diagnostic.Host
+  alias Cure.Diagnostic.{Host, Sink}
   alias Cure.REPL.{Markdown, Render}
   alias Cure.Stdlib.{Paths, Preload}
 
@@ -320,7 +320,18 @@ defmodule Cure.REPL.Docs do
   end
 
   defp render_extract_error(state, mod_name, {:source_diagnostic, reason, path, source}) do
-    Render.write_line(Host.render(reason, path, source))
+    {diagnostic, registry} = Host.to_diagnostic(reason, path, source)
+
+    Sink.new(
+      format: :terminal,
+      registry: registry,
+      output_device: Map.get(state, :error_device, :stdio),
+      color: if(Map.get(state, :color, false), do: :always, else: :never),
+      width: 80
+    )
+    |> Sink.emit(diagnostic)
+    |> Sink.flush()
+
     info(state, "(cannot extract docs for `#{mod_name}`)")
   end
 

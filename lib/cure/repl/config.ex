@@ -188,13 +188,7 @@ defmodule Cure.REPL.Config do
       {:ok, parsed}
     else
       {:error, reason} = err ->
-        warning =
-          Cure.Diagnostic.Host.render(
-            {:configuration_warning, "failed to parse `#{path}`: #{config_reason(reason)}"},
-            path
-          )
-
-        warn(warning)
+        warn("failed to parse `#{path}`: #{config_reason(reason)}")
         err
     end
   end

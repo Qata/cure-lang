@@ -146,17 +146,23 @@ defmodule Cure.REPL.DocsTest do
     test "source parse failures use the structured diagnostic renderer" do
       tmp = Path.join(System.tmp_dir!(), "cure_docs_bad_#{System.unique_integer([:positive])}")
       File.mkdir_p!(tmp)
-      File.write!(Path.join(tmp, "bad.cure"), "mod Bad\n  fn broken( ->\n")
+      File.write!(Path.join(tmp, "bad.cure"), "mod Bad\n  fn broken(] -> Int = 1\nend\n")
 
       previous = Application.get_env(:cure, :stdlib_source_dir)
 
       try do
         Application.put_env(:cure, :stdlib_source_dir, tmp)
 
-        output = ExUnit.CaptureIO.capture_io(fn -> Docs.render("Std.Bad", fake_state()) end)
+        output =
+          ExUnit.CaptureIO.capture_io(:stderr, fn ->
+            Docs.render("Std.Bad", Map.put(fake_state(), :error_device, :stderr))
+          end)
 
         assert output =~ "[E094]"
         assert output =~ "bad.cure"
+        assert output =~ "fn broken(] -> Int = 1"
+        assert output =~ "^"
+        assert length(Regex.scan(~r/-- .* \[E094\]/, output)) == 1
         refute output =~ "{:unexpected_token"
       after
         if is_nil(previous),
