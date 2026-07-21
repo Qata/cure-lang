@@ -702,6 +702,24 @@ mod Std.Regex
   type OneOrMore(value: Type) = OneOrMore(value, List(value))
 
   type CharacterRange = CharacterRange(Char, Char)
+  type ClassKinds = ClassKinds(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)
+  type ClassKind = DigitKind | NotDigitKind | WordKind | NotWordKind | SpaceKind | NotSpaceKind | HorizontalKind | NotHorizontalKind | VerticalKind | NotVerticalKind
+
+  fn no_class_kinds() -> ClassKinds =
+    ClassKinds(false, false, false, false, false, false, false, false, false, false)
+
+  fn enable_class_kind(kind: ClassKind, kinds: ClassKinds) -> ClassKinds = match kinds
+    ClassKinds(d, nd, w, nw, s, ns, h, nh, v, nv) -> match kind
+      DigitKind -> ClassKinds(true, nd, w, nw, s, ns, h, nh, v, nv)
+      NotDigitKind -> ClassKinds(d, true, w, nw, s, ns, h, nh, v, nv)
+      WordKind -> ClassKinds(d, nd, true, nw, s, ns, h, nh, v, nv)
+      NotWordKind -> ClassKinds(d, nd, w, true, s, ns, h, nh, v, nv)
+      SpaceKind -> ClassKinds(d, nd, w, nw, true, ns, h, nh, v, nv)
+      NotSpaceKind -> ClassKinds(d, nd, w, nw, s, true, h, nh, v, nv)
+      HorizontalKind -> ClassKinds(d, nd, w, nw, s, ns, true, nh, v, nv)
+      NotHorizontalKind -> ClassKinds(d, nd, w, nw, s, ns, h, true, v, nv)
+      VerticalKind -> ClassKinds(d, nd, w, nw, s, ns, h, nh, true, nv)
+      NotVerticalKind -> ClassKinds(d, nd, w, nw, s, ns, h, nh, v, true)
 
   ## Elixir-compatible literal modifiers, in `i m s x u f U` order. Repeated
   ## letters are idempotent and modifier order is irrelevant. No accepted flag
@@ -1106,6 +1124,32 @@ mod Std.Regex
   fn character_class_with_options(chars: List(Char), ranges: List(CharacterRange), negated: Bool, caseless: Bool, unicode: Bool) -> Regex(Char) =
     predicate(option_class_test(chars, ranges, negated, caseless, unicode))
 
+  fn class_kinds_match(kinds: ClassKinds, actual: Char, unicode: Bool) -> Bool = match kinds
+    ClassKinds(digit, not_digit, word, not_word, space, not_space, horizontal, not_horizontal, vertical, not_vertical) ->
+      (digit and option_digit(actual, unicode)) or
+        (not_digit and not option_digit(actual, unicode)) or
+        (word and option_word(actual, unicode)) or
+        (not_word and not option_word(actual, unicode)) or
+        (space and option_space(actual, unicode)) or
+        (not_space and not option_space(actual, unicode)) or
+        (horizontal and Std.Char.is_horizontal_space(actual)) or
+        (not_horizontal and not Std.Char.is_horizontal_space(actual)) or
+        (vertical and Std.Char.is_vertical_space(actual)) or
+        (not_vertical and not Std.Char.is_vertical_space(actual))
+
+  fn extended_class_predicate(chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, negated: Bool, caseless: Bool, unicode: Bool, actual: Char) -> Bool =
+    let found =
+      contains_char_with_options(chars, actual, caseless, unicode) or
+        in_ranges_with_options(ranges, actual, caseless, unicode) or
+        class_kinds_match(kinds, actual, unicode)
+    found != negated
+
+  fn extended_class_test(chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, negated: Bool, caseless: Bool, unicode: Bool) -> Char -> Bool =
+    fn(actual) -> extended_class_predicate(chars, ranges, kinds, negated, caseless, unicode, actual)
+
+  fn extended_character_class(chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, negated: Bool, caseless: Bool, unicode: Bool) -> Regex(Char) =
+    predicate(extended_class_test(chars, ranges, kinds, negated, caseless, unicode))
+
   fn ascii_digit(char: Char) -> Bool = Std.Char.between(char, '0', '9')
 
   fn ascii_word(char: Char) -> Bool =
@@ -1187,7 +1231,7 @@ mod Std.Regex
     | LiteralEmpty
     | LiteralExact(Char)
     | LiteralAny
-    | LiteralClass(List(Char), List(CharacterRange), Bool)
+    | LiteralClass(List(Char), List(CharacterRange), ClassKinds, Bool)
     | LiteralDigit(Bool)
     | LiteralWord(Bool)
     | LiteralSpace(Bool)
@@ -1203,7 +1247,7 @@ mod Std.Regex
     | LiteralEnd
 
   type LiteralParse = LiteralParsed(LiteralPattern, String) | LiteralInvalid(Atom)
-  type LiteralClassParse = LiteralClassParsed(List(Char), List(CharacterRange), String) | LiteralClassInvalid(Atom)
+  type LiteralClassParse = LiteralClassParsed(List(Char), List(CharacterRange), ClassKinds, String) | LiteralClassInvalid(Atom)
   type LiteralFlags = LiteralFlagsParsed(RegexOptions) | LiteralFlagsInvalid(Atom)
 
   fn expand_literal(input: Syntax) -> MacroResult = match children(input)
@@ -1436,32 +1480,55 @@ mod Std.Regex
     [char | rest] -> LiteralParsed(LiteralExact(char), rest)
 
   fn parse_literal_class(input: String) -> LiteralParse = match input
-    ['^' | rest] -> finish_literal_class(parse_literal_class_items_fuel(rest, [], [], literal_fuel(input)), true)
-    _ -> finish_literal_class(parse_literal_class_items_fuel(input, [], [], literal_fuel(input)), false)
+    ['^' | rest] -> finish_literal_class(parse_literal_class_items_fuel(rest, [], [], no_class_kinds(), literal_fuel(input)), true)
+    _ -> finish_literal_class(parse_literal_class_items_fuel(input, [], [], no_class_kinds(), literal_fuel(input)), false)
 
   fn finish_literal_class(result: LiteralClassParse, negated: Bool) -> LiteralParse = match result
-    LiteralClassParsed(chars, ranges, rest) -> LiteralParsed(LiteralClass(reverse_chars(chars), reverse_ranges(ranges), negated), rest)
+    LiteralClassParsed(chars, ranges, kinds, rest) -> LiteralParsed(LiteralClass(reverse_chars(chars), reverse_ranges(ranges), kinds, negated), rest)
     LiteralClassInvalid(reason) -> LiteralInvalid(reason)
 
-  fn parse_literal_class_items_fuel(input: String, chars: List(Char), ranges: List(CharacterRange), fuel: Nat) -> LiteralClassParse = match fuel
+  fn parse_literal_class_items_fuel(input: String, chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, fuel: Nat) -> LiteralClassParse = match fuel
     Z() -> LiteralClassInvalid(:RegexParseLimit)
-    S(next_fuel) -> match input
-      [] -> LiteralClassInvalid(:UnclosedRegexClass)
-      [first | rest] -> pickup
-        first == ']' -> LiteralClassParsed(chars, ranges, rest)
-        first == '\\' -> match rest
-          [] -> LiteralClassInvalid(:TrailingRegexClassEscape)
-          [escaped | tail] -> parse_literal_class_items_fuel(tail, [escaped | chars], ranges, next_fuel)
-        else -> match rest
-          [] -> parse_literal_class_items_fuel([], [first | chars], ranges, next_fuel)
-          [dash | after_dash] -> pickup
-            dash == '-' -> match after_dash
-              [] -> parse_literal_class_items_fuel(rest, [first | chars], ranges, next_fuel)
-              [last | tail] -> pickup
-                last == ']' -> LiteralClassParsed(['-' | [first | chars]], ranges, tail)
-                literal_bounded_less(last, first) -> LiteralClassInvalid(:ReversedRegexRange)
-                else -> parse_literal_class_items_fuel(tail, chars, [CharacterRange(first, last) | ranges], next_fuel)
-            else -> parse_literal_class_items_fuel(rest, [first | chars], ranges, next_fuel)
+    S(next_fuel) -> parse_literal_class_items_step(input, chars, ranges, kinds, next_fuel)
+
+  fn parse_literal_class_items_step(input: String, chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, fuel: Nat) -> LiteralClassParse = match input
+    [] -> LiteralClassInvalid(:UnclosedRegexClass)
+    ['\\', 'd' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(DigitKind, kinds), fuel)
+    ['\\', 'D' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotDigitKind, kinds), fuel)
+    ['\\', 'w' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(WordKind, kinds), fuel)
+    ['\\', 'W' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotWordKind, kinds), fuel)
+    ['\\', 's' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(SpaceKind, kinds), fuel)
+    ['\\', 'S' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotSpaceKind, kinds), fuel)
+    ['\\', 'h' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(HorizontalKind, kinds), fuel)
+    ['\\', 'H' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotHorizontalKind, kinds), fuel)
+    ['\\', 'v' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(VerticalKind, kinds), fuel)
+    ['\\', 'V' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotVerticalKind, kinds), fuel)
+    [first | rest] -> parse_literal_class_character(first, rest, chars, ranges, kinds, fuel)
+
+  fn parse_literal_class_character(first: Char, rest: String, chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, fuel: Nat) -> LiteralClassParse = pickup
+    first == ']' -> LiteralClassParsed(chars, ranges, kinds, rest)
+    first == '\\' -> match rest
+      [] -> LiteralClassInvalid(:TrailingRegexClassEscape)
+      [escaped | tail] -> parse_literal_class_items_fuel(tail, [escaped | chars], ranges, kinds, fuel)
+    else -> parse_literal_class_range(first, rest, chars, ranges, kinds, fuel)
+
+  fn parse_literal_class_range(first: Char, rest: String, chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, fuel: Nat) -> LiteralClassParse = match rest
+    [] -> parse_literal_class_items_fuel(empty_regex_input(), [first | chars], ranges, kinds, fuel)
+    [dash | after_dash] -> pickup
+      dash == '-' -> parse_literal_class_range_end(first, rest, after_dash, chars, ranges, kinds, fuel)
+      else -> parse_literal_class_items_fuel(rest, [first | chars], ranges, kinds, fuel)
+
+  fn parse_literal_class_range_end(first: Char, original_rest: String, after_dash: String, chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, fuel: Nat) -> LiteralClassParse = match after_dash
+    [] -> parse_literal_class_items_fuel(original_rest, [first | chars], ranges, kinds, fuel)
+    [last | tail] -> pickup
+      last == ']' -> LiteralClassParsed(prepend_literal_dash(first, chars), ranges, kinds, tail)
+      literal_bounded_less(last, first) -> LiteralClassInvalid(:ReversedRegexRange)
+      else -> parse_literal_class_items_fuel(tail, chars, [CharacterRange(first, last) | ranges], kinds, fuel)
+
+  fn prepend_literal_dash(first: Char, chars: List(Char)) -> List(Char) =
+    ['-' | [first | chars]]
+
+  fn empty_regex_input() -> String = []
 
   fn reverse_chars(values: List(Char)) -> List(Char) = reverse_chars_into(values, [])
   fn reverse_chars_into(values: List(Char), output: List(Char)) -> List(Char) = match values
@@ -1478,7 +1545,7 @@ mod Std.Regex
     LiteralEmpty -> UnitC
     LiteralExact(_) -> UnitC
     LiteralAny -> CharC
-    LiteralClass(_, _, _) -> CharC
+    LiteralClass(_, _, _, _) -> CharC
     LiteralDigit(_) -> CharC
     LiteralWord(_) -> CharC
     LiteralSpace(_) -> CharC
@@ -1509,8 +1576,8 @@ mod Std.Regex
     LiteralEmpty -> call("Std.Regex.empty", [])
     LiteralExact(char) -> call("Std.Regex.exactly", [char_literal(char)])
     LiteralAny -> call("Std.Regex.any_char", [])
-    LiteralClass(chars, ranges, negated) ->
-      call("Std.Regex.character_class", [emit_chars(chars), emit_ranges(ranges), bool_literal(negated)])
+    LiteralClass(chars, ranges, kinds, negated) ->
+      call("Std.Regex.extended_character_class", [emit_chars(chars), emit_ranges(ranges), emit_class_kinds(kinds), bool_literal(negated), bool_literal(false), bool_literal(false)])
     LiteralDigit(negated) -> call("Std.Regex.digit_class", [bool_literal(negated)])
     LiteralWord(negated) -> call("Std.Regex.word_class", [bool_literal(negated)])
     LiteralSpace(negated) -> call("Std.Regex.space_class", [bool_literal(negated)])
@@ -1530,8 +1597,8 @@ mod Std.Regex
       LiteralEmpty -> call("Std.Regex.empty", [])
       LiteralExact(char) -> call("Std.Regex.exactly_with_options", [char_literal(char), bool_literal(caseless), bool_literal(unicode)])
       LiteralAny -> call("Std.Regex.dot_with_options", [bool_literal(dotall)])
-      LiteralClass(chars, ranges, negated) ->
-        call("Std.Regex.character_class_with_options", [emit_chars(chars), emit_ranges(ranges), bool_literal(negated), bool_literal(caseless), bool_literal(unicode)])
+      LiteralClass(chars, ranges, kinds, negated) ->
+        call("Std.Regex.extended_character_class", [emit_chars(chars), emit_ranges(ranges), emit_class_kinds(kinds), bool_literal(negated), bool_literal(caseless), bool_literal(unicode)])
       LiteralDigit(negated) -> call("Std.Regex.digit_class_with_options", [bool_literal(negated), bool_literal(unicode)])
       LiteralWord(negated) -> call("Std.Regex.word_class_with_options", [bool_literal(negated), bool_literal(unicode)])
       LiteralSpace(negated) -> call("Std.Regex.space_class_with_options", [bool_literal(negated), bool_literal(unicode)])
@@ -1554,6 +1621,14 @@ mod Std.Regex
     [] -> list([])
     [CharacterRange(first, last) | rest] ->
       prepend_syntax(call("Std.Regex.CharacterRange", [char_literal(first), char_literal(last)]), emit_ranges(rest))
+
+  fn emit_class_kinds(kinds: ClassKinds) -> Syntax = match kinds
+    ClassKinds(d, nd, w, nw, s, ns, h, nh, v, nv) ->
+      call("Std.Regex.ClassKinds", [
+        bool_literal(d), bool_literal(nd), bool_literal(w), bool_literal(nw),
+        bool_literal(s), bool_literal(ns), bool_literal(h), bool_literal(nh),
+        bool_literal(v), bool_literal(nv)
+      ])
 
 
   fn emit_options(options: RegexOptions) -> Syntax = match options
