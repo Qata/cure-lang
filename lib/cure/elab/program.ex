@@ -2169,6 +2169,12 @@ defmodule Cure.Elab.Program do
   # environment. Non-function declarations are elaborated in source order in pass
   # one (a function signature may reference any type declared before it).
   defp elaborate_declarations(items, env, prelude?) do
+    with {:ok, items} <- Cure.Elab.Induction.lift_declarations(items) do
+      elaborate_lifted_declarations(items, env, prelude?)
+    end
+  end
+
+  defp elaborate_lifted_declarations(items, env, prelude?) do
     items = annotate_overload_ordinals(items)
 
     with {:ok, env1, fn_decls} <- register_pass(items, env, prelude?),

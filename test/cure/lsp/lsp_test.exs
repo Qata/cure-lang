@@ -330,6 +330,34 @@ defmodule Cure.LSP.LspTest do
   # ============================================================================
 
   describe "codeAction" do
+    test "adds every missing induction case with descriptive editable binders" do
+      source = """
+      mod MissingInductionCase
+        type Nat = Z | S(Nat)
+        fn prove(value: Nat) -> Equivalent(Nat, value, value) = induction value
+          case Z => reflexive(Z)
+      end
+      """
+
+      assert {:error, {:codegen_error, reason}} =
+               Cure.Compiler.compile_string(source, file: "missing_induction_case.cure", emit_events: false)
+
+      {diagnostic, registry} =
+        Cure.Compiler.Errors.to_diagnostic(reason, "missing_induction_case.cure", source)
+
+      lsp_diagnostic = Cure.Diagnostic.Renderer.lsp(diagnostic, registry, :utf16)
+      assert [action] = Server.compute_code_actions("file:///missing_induction_case.cure", [lsp_diagnostic])
+      assert action["title"] == "Add missing induction cases"
+
+      assert [{edit_uri, [%{"newText" => replacement, "range" => range}]}] =
+               Map.to_list(action["edit"]["changes"])
+
+      assert String.ends_with?(edit_uri, "/missing_induction_case.cure")
+      assert replacement == "\n    case S(previous, induction_hypothesis) => ???"
+      assert range["start"] == range["end"]
+      assert range["start"]["line"] == 3
+    end
+
     test "suggests wildcard for non-exhaustive match" do
       diag = %{
         "message" => "match expression is not exhaustive, missing: false",
@@ -518,6 +546,69 @@ defmodule Cure.LSP.LspTest do
       command_value = get_in(command_hover, ["contents", "value"])
       assert command_value =~ "simplify using [rule, ...]"
       assert command_value =~ "kernel-checked equality certificate"
+    end
+
+    test "structured induction vocabulary has completion and explanatory hover" do
+      source = """
+      mod InductionLsp
+        type Nat = Z | S(Nat)
+        fn proof(value: Nat) -> Equivalent(Nat, value, value) = induction value
+          case Z => reflexive(Z)
+          case S(previous, induction_hypothesis) => induction_hypothesis
+      end
+      """
+
+      hover = Server.compute_hover(source, 2, 65)
+      value = get_in(hover, ["contents", "value"])
+      assert value =~ "specialized induction hypothesis"
+      assert value =~ "ordinary total recursion"
+
+      hypothesis_hover = Server.compute_hover(source, 4, 30)
+      hypothesis_value = get_in(hypothesis_hover, ["contents", "value"])
+      assert hypothesis_value =~ "Specialized induction hypothesis"
+      assert hypothesis_value =~ "structurally smaller value"
+
+      assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, emit_events: false)
+      assert {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
+      bindings = Server.induction_binding_symbols(ast)
+      assert Enum.any?(bindings, &(&1.name == "induction_hypothesis" and &1.kind == :induction_hypothesis))
+
+      completion = Server.context_completions(source, source)
+      assert Enum.any?(completion, &(&1["label"] == "induction_hypothesis" and &1["detail"] =~ "Specialized"))
+
+      semantic = Server.compute_semantic_tokens("induction value\n  case Z => simplify")
+      assert length(semantic) == 15
+    end
+
+    test "induction completion generates every constructor with descriptive hypotheses" do
+      source = """
+      mod InductionCompletion
+        type Nat = Z | S(Nat)
+        fn proof(value: Nat) -> Equivalent(Nat, value, value) = induction value
+      """
+
+      items = Server.context_completions(source, source)
+      all = Enum.find(items, &(&1["label"] == "Generate all Nat induction cases"))
+
+      assert all["insertTextFormat"] == 2
+      assert all["insertText"] =~ "case Z =>"
+      assert all["insertText"] =~ "case S(${1:previous}, ${2:induction_hypothesis}) =>"
+      assert all["detail"] =~ "recursive induction hypotheses"
+    end
+
+    test "induction completion omits constructor cases already written" do
+      source = """
+      mod PartialInductionCompletion
+        type Nat = Z | S(Nat)
+        fn proof(value: Nat) -> Equivalent(Nat, value, value) = induction value
+          case Z => reflexive(Z)
+      """
+
+      items = Server.context_completions(source, source)
+      all = Enum.find(items, &(&1["label"] == "Generate all Nat induction cases"))
+
+      refute all["insertText"] =~ "case Z"
+      assert all["insertText"] =~ "case S("
     end
   end
 end

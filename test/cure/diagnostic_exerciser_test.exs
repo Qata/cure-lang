@@ -120,6 +120,13 @@ defmodule Cure.DiagnosticExerciserTest do
           progressed_rules: [],
           trace_ids: []
         }}},
+      {"induction failure", "E113",
+       {:induction_failed,
+        %Cure.Diagnostic.InductionProblem{
+          kind: :missing_case,
+          missing: [:S],
+          known: [:Z, :S]
+        }}},
       {"defining equation unavailable", "E114",
        {:defining_equation_unavailable,
         %Cure.Diagnostic.DefiningEquationProblem{

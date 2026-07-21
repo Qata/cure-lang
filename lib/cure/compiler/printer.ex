@@ -1321,6 +1321,26 @@ defmodule Cure.Compiler.Printer do
   defp to_string({:simplify_command, _meta, [rules]}, depth, indent),
     do: "simplify using " <> render(rules, depth, indent)
 
+  defp to_string({:induction, _meta, [subject | cases]}, depth, indent) do
+    pad = String.duplicate(indent, depth + 1)
+
+    rendered =
+      cases
+      |> Enum.map(fn {:induction_case, _case_meta, [pattern, body]} ->
+        body_text = if is_nil(body), do: "impossible", else: render(body, depth + 1, indent)
+
+        if String.contains?(body_text, "\n") do
+          nested = body_text |> String.split("\n") |> Enum.map_join("\n", &(pad <> indent <> &1))
+          "#{pad}case #{render(pattern, depth + 1, indent)} =>\n#{nested}"
+        else
+          "#{pad}case #{render(pattern, depth + 1, indent)} => #{body_text}"
+        end
+      end)
+      |> Enum.join("\n\n")
+
+    "induction #{render(subject, depth, indent)}\n#{rendered}"
+  end
+
   # -- Macro definitions -----------------------------------------------------
 
   defp to_string({:macro_def, meta, rules}, depth, indent) do

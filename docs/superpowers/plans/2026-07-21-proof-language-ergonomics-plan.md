@@ -499,35 +499,45 @@ responses fire, and complete Antigen coverage is 318/318.
 **Purpose:** introduce constructor-shaped cases and specialized induction
 hypotheses while retaining ordinary totality checking.
 
-- [ ] Before coding, pin two elaboration strategies with probes:
+- [x] Before coding, pin two elaboration strategies with probes:
   1. induction over an enclosing function parameter lowered to recursive calls
      to the current definition; and
   2. induction over a local/arbitrary expression lowered through a private,
      closure-lifted auxiliary definition.
   Choose the smallest generic representation that supports both and is visible
   to totality; do not fake local recursion with a runtime fixpoint.
-- [ ] Parse `induction subject` plus constructor-shaped `case` arms into a
+- [x] Parse `induction subject` plus constructor-shaped `case` arms into a
   distinct AST retaining subject, case, pattern-field, and body ranges.
-- [ ] Resolve the subject datatype and constructor telescopes. Bind ordinary
+- [x] Resolve the subject datatype and constructor telescopes. Bind ordinary
   fields followed by one specialized induction hypothesis for each structurally
   recursive field, in deterministic constructor-field order.
-- [ ] Reuse ordinary match motive/context refinement and coverage. Impossible
+- [x] Reuse ordinary match motive/context refinement and coverage. Impossible
   and omitted cases follow existing coverage semantics.
-- [ ] Generate Core case/recursive evidence and submit the enclosing or lifted
+- [x] Generate Core case/recursive evidence and submit the enclosing or lifted
   definition to ordinary totality closure. Add erasure/codegen tests proving no
   tactic structure remains.
-- [ ] Add E113 with constructor declaration related information and typed
+- [x] Add E113 with constructor declaration related information and typed
   payloads for non-inductive subjects, missing/duplicate/unknown/impossible
   cases, field-shape errors, and unavailable/mistyped hypotheses.
-- [ ] Add LSP complete-case code actions with descriptive editable names,
+- [x] Add LSP complete-case code actions with descriptive editable names,
   semantic tokens, hover, and formatting.
-- [ ] Cover Nat, canonical Int, multi-recursive constructors, indexed evidence,
+- [x] Cover Nat, canonical Int, multi-recursive constructors, indexed evidence,
   nested induction, local subject lifting, totality rejection, and oracle parity.
 
 **Green gate:** induction/totality/coverage/diagnostic/LSP suites, canonical
 stdlib, full suite, complete Antigen including recursion/termination antibodies.
 
 **Commit:** `feat(proofs): add structured induction`
+
+**Completed evidence (2026-07-21):** direct-recursion and closure-lift probes,
+Nat, canonical Int, multi-recursive Tree, indexed impossible evidence, nested
+and local induction, totality rejection, runtime erasure, E113, formatter, hover,
+completion, and complete-case code-action coverage are green. The combined
+focused and oracle gate passes 165 tests; compiler/meta-AST coverage passes
+1,147 tests; the canonical 122-module stdlib and warnings-as-errors compilation
+pass; diagnostic coverage is 60/60; complete Antigen is 318/318; and the full
+suite passes 5,385 tests with 0 failures and 6 excluded (164 expected immune
+responses).
 
 ## Task 9: Close dependent-pattern refinement gaps required by proofs
 

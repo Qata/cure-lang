@@ -454,12 +454,18 @@ defmodule Cure.LSP.Server do
         dotted_word = extract_dotted_word_at(target_line, char)
 
         selected =
-          if word == "simplify" do
-            %{kind: :simplify_command}
-          else
-            Enum.find(equation_symbols(ast), &(&1.name == dotted_word)) ||
-              Enum.find(proof_rule_symbols(ast), &(&1.name == word)) ||
-              Enum.find(symbols, fn s -> s.name == word end)
+          cond do
+            word == "simplify" ->
+              %{kind: :simplify_command}
+
+            word in ["induction", "case"] ->
+              %{kind: :induction_command}
+
+            true ->
+              Enum.find(induction_binding_symbols(ast), &(&1.name == word)) ||
+                Enum.find(equation_symbols(ast), &(&1.name == dotted_word)) ||
+                Enum.find(proof_rule_symbols(ast), &(&1.name == word)) ||
+                Enum.find(symbols, fn s -> s.name == word end)
           end
 
         case selected do
@@ -474,6 +480,29 @@ defmodule Cure.LSP.Server do
             """
 
             %{"contents" => %{"kind" => "markdown", "value" => String.trim(hover_text)}}
+
+          %{kind: :induction_command} ->
+            hover_text = """
+            ```cure
+            induction value
+              case Constructor(fields..., induction_hypothesis...) =>
+                proof
+            ```
+
+            *Checks one constructor case at a time and supplies a specialized induction hypothesis after each structurally recursive field. It lowers to ordinary total recursion checked by the kernel and totality checker.*
+            """
+
+            %{"contents" => %{"kind" => "markdown", "value" => String.trim(hover_text)}}
+
+          %{kind: :induction_hypothesis, name: name, constructor: constructor, recursive_field: field} ->
+            hover_text =
+              "```cure\n#{name}\n```\n\n*Specialized induction hypothesis for recursive field `#{field}` of constructor `#{constructor}`. Its proposition is the enclosing goal specialized to that structurally smaller value.*"
+
+            %{"contents" => %{"kind" => "markdown", "value" => hover_text}}
+
+          %{kind: :induction_field, name: name, constructor: constructor} ->
+            hover_text = "```cure\n#{name}\n```\n\n*Field bound by induction constructor `#{constructor}`.*"
+            %{"contents" => %{"kind" => "markdown", "value" => hover_text}}
 
           %{kind: :equation, proposition: proposition, line: fn_line, owner: owner, constructor_path: path} ->
             hover_text =
@@ -766,7 +795,7 @@ defmodule Cure.LSP.Server do
 
   defp keyword_completions do
     keywords =
-      ~w(fn mod rec actor fsm sup app proto impl type let have proof because simplify if then else elif match return throw try catch finally use local when requires where)
+      ~w(fn mod rec actor fsm sup app proto impl type let have proof because simplify induction case if then else elif match return throw try catch finally use local when requires where)
 
     Enum.map(keywords, fn kw ->
       %{
@@ -779,6 +808,8 @@ defmodule Cure.LSP.Server do
 
   @doc false
   def context_completions(text, prefix) do
+    induction_completions = induction_case_completions(text, prefix)
+
     ast_completions =
       case parse_to_ast(text) do
         {:ok, ast} ->
@@ -804,17 +835,254 @@ defmodule Cure.LSP.Server do
               %{"label" => rule.name, "kind" => 6, "detail" => "Local equality rule — #{rule.proposition}"}
             end)
 
+          induction_bindings =
+            Enum.map(induction_binding_symbols(ast), fn binding ->
+              detail =
+                if binding.kind == :induction_hypothesis,
+                  do: "Specialized induction hypothesis for #{binding.constructor}.#{binding.recursive_field}",
+                  else: "Field bound by induction case #{binding.constructor}"
+
+              %{"label" => binding.name, "kind" => 6, "detail" => detail}
+            end)
+
           cond do
-            Regex.match?(~r/simplify\s+using\s+\[[^\]]*$/s, prefix) -> local_rules ++ equations
-            Regex.match?(~r/simplify\s+using\s+[^\[\]\n]*$/s, prefix) -> local_rules ++ equations
-            true -> ordinary ++ equations
+            Regex.match?(~r/simplify\s+using\s+\[[^\]]*$/s, prefix) ->
+              local_rules ++ equations
+
+            Regex.match?(~r/simplify\s+using\s+[^\[\]\n]*$/s, prefix) ->
+              local_rules ++ equations
+
+            Regex.match?(~r/induction\s+[a-zA-Z_][a-zA-Z0-9_]*[\s\S]*case\s+[A-Z][^=]*=>[^\n]*$/s, prefix) ->
+              induction_bindings ++ local_rules ++ equations
+
+            true ->
+              ordinary ++ equations ++ induction_bindings
           end
 
         _ ->
           []
       end
 
-    ast_completions
+    induction_completions ++ ast_completions
+  end
+
+  defp induction_case_completions(text, prefix) do
+    case Regex.run(~r/induction\s+([a-zA-Z_][a-zA-Z0-9_]*)[^\n]*\n([\s\S]*)$/, prefix) do
+      [_, subject, case_text] ->
+        existing = Regex.scan(~r/\bcase\s+([A-Z][a-zA-Z0-9_]*)/, case_text, capture: :all_but_first) |> List.flatten()
+        repaired = Regex.replace(~r/induction\s+#{Regex.escape(subject)}[^\n]*\n[\s\S]*$/, text, subject)
+
+        with {:ok, ast} <- parse_to_ast(repaired),
+             type_name when is_binary(type_name) <- parameter_type_name(ast, subject),
+             %{variants: variants} <- induction_family(ast, type_name) do
+          missing = Enum.reject(variants, &(&1.name in existing))
+          induction_completion_items(type_name, missing)
+        else
+          _ -> []
+        end
+
+      _ ->
+        []
+    end
+  end
+
+  defp parameter_type_name(ast, subject) do
+    ast
+    |> collect_function_params([])
+    |> Enum.find_value(fn
+      {:param, meta, ^subject} -> surface_type_name(Keyword.get(meta, :type))
+      _ -> nil
+    end)
+  end
+
+  defp collect_function_params({:function_def, meta, body}, acc),
+    do: Keyword.get(meta, :params, []) ++ Enum.flat_map(body, &collect_function_params(&1, acc))
+
+  defp collect_function_params({_tag, _meta, children}, acc) when is_list(children),
+    do: Enum.flat_map(children, &collect_function_params(&1, acc))
+
+  defp collect_function_params(list, acc) when is_list(list), do: Enum.flat_map(list, &collect_function_params(&1, acc))
+  defp collect_function_params(_other, acc), do: acc
+
+  defp surface_type_name({:variable, _meta, name}), do: name
+  defp surface_type_name({:function_call, meta, _args}), do: Keyword.get(meta, :name)
+  defp surface_type_name(_), do: nil
+
+  defp induction_family(ast, type_name) do
+    ast
+    |> collect_induction_families([])
+    |> Enum.find(&(&1.name == type_name))
+  end
+
+  defp collect_induction_families({:container, meta, variants}, acc) do
+    own =
+      if Keyword.get(meta, :container_type) == :enum do
+        [
+          %{
+            name: Keyword.get(meta, :name),
+            variants: Enum.map(variants, &induction_variant(&1, Keyword.get(meta, :name)))
+          }
+        ]
+      else
+        []
+      end
+
+    own ++ Enum.flat_map(variants, &collect_induction_families(&1, acc))
+  end
+
+  defp collect_induction_families({_tag, _meta, children}, acc) when is_list(children),
+    do: Enum.flat_map(children, &collect_induction_families(&1, acc))
+
+  defp collect_induction_families(list, acc) when is_list(list),
+    do: Enum.flat_map(list, &collect_induction_families(&1, acc))
+
+  defp collect_induction_families(_other, acc), do: acc
+
+  defp induction_variant({:variable, _meta, name}, _family), do: %{name: name, fields: []}
+
+  defp induction_variant({:function_def, meta, _body}, family) do
+    fields = Keyword.get(meta, :params, [])
+    %{name: Keyword.get(meta, :name), fields: Enum.map(fields, &%{recursive: surface_type_name(&1) == family})}
+  end
+
+  defp induction_completion_items(_type_name, []), do: []
+
+  defp induction_completion_items(type_name, variants) do
+    rendered = variants |> Enum.map(&render_induction_case/1) |> Enum.join("\n\n")
+
+    [
+      %{
+        "label" => "Generate all #{type_name} induction cases",
+        "kind" => 15,
+        "detail" => "Complete constructor cases with recursive induction hypotheses",
+        "insertText" => rendered,
+        "insertTextFormat" => 2
+      }
+      | Enum.map(variants, fn variant ->
+          %{
+            "label" => "case #{variant.name}",
+            "kind" => 15,
+            "detail" => "#{type_name} induction case",
+            "insertText" => render_induction_case(variant),
+            "insertTextFormat" => 2
+          }
+        end)
+    ]
+  end
+
+  defp render_induction_case(%{name: name, fields: fields}) do
+    recursive_count = Enum.count(fields, & &1.recursive)
+
+    {ordinary, _} =
+      Enum.map_reduce(Enum.with_index(fields), 1, fn {field, index}, tab ->
+        base = induction_field_name(field.recursive, index, length(fields), recursive_count)
+        {"${#{tab}:#{base}}", tab + 1}
+      end)
+
+    {hypotheses, next_tab} =
+      fields
+      |> Enum.with_index()
+      |> Enum.filter(fn {field, _index} -> field.recursive end)
+      |> Enum.map_reduce(length(ordinary) + 1, fn {_field, index}, tab ->
+        base =
+          if recursive_count == 1, do: "induction_hypothesis", else: "#{induction_side(index)}_induction_hypothesis"
+
+        {"${#{tab}:#{base}}", tab + 1}
+      end)
+
+    bindings = ordinary ++ hypotheses
+    pattern = if bindings == [], do: name, else: "#{name}(#{Enum.join(bindings, ", ")})"
+    "case #{pattern} =>\n  ${#{next_tab}:proof}"
+  end
+
+  defp induction_field_name(true, 0, _total, 1), do: "previous"
+  defp induction_field_name(true, index, _total, _recursive_count), do: induction_side(index)
+
+  defp induction_field_name(false, index, _total, _recursive_count),
+    do: if(index == 0, do: "value", else: "value#{index + 1}")
+
+  defp induction_side(0), do: "left"
+  defp induction_side(1), do: "right"
+  defp induction_side(index), do: "recursive#{index + 1}"
+
+  @doc false
+  def induction_binding_symbols(ast) do
+    families = collect_induction_families(ast, [])
+    params = collect_function_params(ast, [])
+    collect_induction_bindings(ast, families, params)
+  end
+
+  defp collect_induction_bindings({:induction, _meta, [{:variable, _, subject} | cases]}, families, params) do
+    type_name =
+      Enum.find_value(params, fn
+        {:param, meta, ^subject} -> surface_type_name(Keyword.get(meta, :type))
+        _ -> nil
+      end)
+
+    family = Enum.find(families, &(&1.name == type_name))
+
+    if family do
+      Enum.flat_map(cases, &induction_case_bindings(&1, family))
+    else
+      []
+    end
+  end
+
+  defp collect_induction_bindings({_tag, _meta, children}, families, params) when is_list(children),
+    do: Enum.flat_map(children, &collect_induction_bindings(&1, families, params))
+
+  defp collect_induction_bindings(list, families, params) when is_list(list),
+    do: Enum.flat_map(list, &collect_induction_bindings(&1, families, params))
+
+  defp collect_induction_bindings(_other, _families, _params), do: []
+
+  defp induction_case_bindings({:induction_case, _meta, [pattern, _body]}, family) do
+    {constructor, args} =
+      case pattern do
+        {:function_call, meta, args} -> {Keyword.get(meta, :name), args}
+        {:variable, _meta, name} -> {name, []}
+        _ -> {nil, []}
+      end
+
+    variant = Enum.find(family.variants, &(&1.name == constructor))
+
+    if variant do
+      ordinary_count = length(variant.fields)
+      recursive = variant.fields |> Enum.with_index() |> Enum.filter(fn {field, _} -> field.recursive end)
+      {ordinary_args, hypothesis_args} = Enum.split(args, ordinary_count)
+
+      fields =
+        ordinary_args
+        |> Enum.with_index()
+        |> Enum.flat_map(fn
+          {{:variable, _meta, name}, _index} when name != "_" ->
+            [%{kind: :induction_field, name: name, constructor: constructor}]
+
+          _ ->
+            []
+        end)
+
+      hypotheses =
+        Enum.zip(hypothesis_args, recursive)
+        |> Enum.flat_map(fn
+          {{:variable, _meta, name}, {_field, field_index}} when name != "_" ->
+            [
+              %{
+                kind: :induction_hypothesis,
+                name: name,
+                constructor: constructor,
+                recursive_field: induction_side(field_index)
+              }
+            ]
+
+          _ ->
+            []
+        end)
+
+      fields ++ hypotheses
+    else
+      []
+    end
   end
 
   defp document_prefix(text, line, character) do
@@ -1215,7 +1483,7 @@ defmodule Cure.LSP.Server do
   @doc false
   def compute_semantic_tokens(text) do
     keywords =
-      ~w(fn mod rec fsm proto impl type let have proof because if then else elif match return throw try catch finally use local when requires where)
+      ~w(fn mod rec fsm proto impl type let have proof because simplify induction case if then else elif match return throw try catch finally use local when requires where)
 
     lines = String.split(text, "\n")
 

@@ -93,6 +93,36 @@ defmodule Cure.Diagnostic.SimplificationProblem do
   ]
 end
 
+defmodule Cure.Diagnostic.InductionProblem do
+  @moduledoc "Structured failure from proof induction elaboration."
+  @enforce_keys [:kind]
+  defstruct [
+    :kind,
+    :construct,
+    :subject,
+    :subject_range,
+    :type,
+    :case_range,
+    :pattern_range,
+    :constructor,
+    :constructor_range,
+    :expected_fields,
+    :observed_fields,
+    :recursive_fields,
+    :hypothesis,
+    :hypothesis_range,
+    :required,
+    :available,
+    :missing,
+    :missing_case_skeletons,
+    :insertion,
+    :case_indent,
+    :duplicate,
+    :known,
+    :cause
+  ]
+end
+
 defmodule Cure.Diagnostic.ProofChainMismatchProblem do
   @moduledoc "Structured typing failure for an equational proof-chain step."
   @enforce_keys [:kind, :step_index]

@@ -140,6 +140,7 @@ defmodule Cure.Compiler.Errors do
              :proof_chain_mismatch,
              :rewrite_failed,
              :simplification_failed,
+             :induction_failed,
              :defining_equation_unavailable
            ] do
     error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)

@@ -2014,7 +2014,11 @@ defmodule Cure.Elab.Elaborator do
           end
 
         {:error, _reason} = error ->
-          error
+          if Keyword.get(meta, :induction) do
+            Cure.Elab.Induction.wrap_match_error(error, meta, arms)
+          else
+            error
+          end
       end
     end
   end
@@ -2246,6 +2250,40 @@ defmodule Cure.Elab.Elaborator do
       {:ok, term} -> {:ok, term}
       :none -> {:ok, {:hole, Cure.Elab.Declarations.hole_id(env, meta)}}
       {:error, _} = err -> err
+    end
+  end
+
+  def elaborate_expr_checked({:variable, meta, name} = expr, expected_core, names, ctx, env) do
+    case Keyword.get(meta, :induction_hypothesis) do
+      %{recursive_fields: recursive_fields} ->
+        with {:ok, term, available} <- elaborate_expr_typed(expr, names, ctx, env) do
+          case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+            :ok ->
+              {:ok, term}
+
+            {:error, cause} ->
+              span =
+                case Cure.MetaAST.Metadata.source_info(meta) do
+                  %{whole: whole} -> whole
+                  _ -> nil
+                end
+
+              {:error,
+               {:induction_failed,
+                %Cure.Diagnostic.InductionProblem{
+                  kind: :mistyped_hypothesis,
+                  hypothesis: name,
+                  hypothesis_range: span,
+                  recursive_fields: recursive_fields,
+                  required: expected_core,
+                  available: Quote.reify(available, Context.length(ctx), Context.signature(ctx)),
+                  cause: cause
+                }}}
+          end
+        end
+
+      _ ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
     end
   end
 
@@ -6516,6 +6554,55 @@ defmodule Cure.Elab.Elaborator do
     if effect_goal?(expected, ctx),
       do: elaborate_effect_branch(expr, expected, names, ctx, env),
       else: elaborate_expr_checked(expr, expected, names, ctx, env)
+  end
+
+  defp elaborate_branch_body({:block, meta, _statements} = expr, expected, names, ctx, env) do
+    cond do
+      effect_goal?(expected, ctx) ->
+        elaborate_effect_branch(expr, expected, names, ctx, env)
+
+      Keyword.get(meta, :induction_case_body, false) ->
+        elaborate_expr_checked(expr, expected, names, ctx, env)
+
+      true ->
+        case elaborate_expr_typed(expr, names, ctx, env) do
+          {:ok, term, type} ->
+            {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+
+          {:error, _} = orig ->
+            case elaborate_expr_checked(expr, expected, names, ctx, env) do
+              {:ok, _} = ok -> ok
+              {:error, _} -> orig
+            end
+        end
+    end
+  end
+
+  # Induction hypotheses are generated at a proposition specialized to the
+  # recursive constructor field. Check a bare hypothesis body against the
+  # refined branch goal here instead of taking the ordinary infer-first path;
+  # that gives E113 the authored use range and both propositions when the user
+  # tries to use the hypothesis for a different specialization.
+  defp elaborate_branch_body({:variable, meta, _name} = expr, expected, names, ctx, env) do
+    cond do
+      effect_goal?(expected, ctx) ->
+        elaborate_effect_branch(expr, expected, names, ctx, env)
+
+      Keyword.has_key?(meta, :induction_hypothesis) ->
+        elaborate_expr_checked(expr, expected, names, ctx, env)
+
+      true ->
+        case elaborate_expr_typed(expr, names, ctx, env) do
+          {:ok, term, type} ->
+            {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+
+          {:error, _} = orig ->
+            case elaborate_expr_checked(expr, expected, names, ctx, env) do
+              {:ok, _} = ok -> ok
+              {:error, _} -> orig
+            end
+        end
+    end
   end
 
   # The general branch body: inferred FIRST. `maybe_inject_union/5` is a strict no-op unless

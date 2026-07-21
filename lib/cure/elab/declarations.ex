@@ -17,7 +17,7 @@ defmodule Cure.Elab.Declarations do
   """
 
   alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote, Term}
-  alias Cure.Elab.{Elaborator, MacroExpand, Relevance, Subst}
+  alias Cure.Elab.{Elaborator, Induction, MacroExpand, Relevance, Subst}
 
   @ceiling 2
 
@@ -603,7 +603,8 @@ defmodule Cure.Elab.Declarations do
 
     with {:ok, body_expr} <-
            MacroExpand.expand(body_expr, env, callback_context: Keyword.get(meta, :callback_context)),
-         {:ok, sig} <- function_signature(meta, env) do
+         {:ok, sig} <- function_signature(meta, env),
+         {:ok, body_expr} <- Induction.expand(body_expr, sig, env) do
       ctx = build_context(env, sig.telescope)
       # Qualify any hole minted while elaborating THIS body by its enclosing def
       # (`hole_id/2`) — local to this call, never merged back into `final` below,
@@ -1177,8 +1178,13 @@ defmodule Cure.Elab.Declarations do
     if Elaborator.special_match_arms?(arms) do
       Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
     else
-      _ = meta
-      Elaborator.elaborate_match(scrut, arms, return_core, scope, ctx, env)
+      result = Elaborator.elaborate_match(scrut, arms, return_core, scope, ctx, env)
+
+      if Keyword.get(meta, :induction) do
+        Induction.wrap_match_error(result, meta, arms)
+      else
+        result
+      end
     end
   end
 

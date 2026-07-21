@@ -281,6 +281,152 @@ defmodule Cure.Diagnostic.ProofChainDiagnosticTest do
     assert Renderer.lsp(diagnostic, registry, :utf16)["code"] == "E112"
   end
 
+  test "E113 preserves induction subject and constructor-shape data through every renderer" do
+    source = """
+    mod BadInductionFields
+      type Nat = Z | S(Nat)
+      fn bad(value: Nat) -> Equivalent(Nat, value, value) = induction value
+        case Z => reflexive(Z)
+        case S() => reflexive(Z)
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source, file: "bad_induction_fields.cure", emit_events: false)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "bad_induction_fields.cure", source)
+    assert diagnostic.code == "E113"
+    assert diagnostic.key == :induction_failed
+    assert diagnostic.payload.kind == :wrong_case_fields
+    assert diagnostic.payload.expected_fields == 2
+    assert diagnostic.payload.observed_fields == 0
+    assert diagnostic.payload.recursive_fields == [0]
+    assert diagnostic.payload.constructor_range
+
+    plain = Renderer.plain(diagnostic, registry)
+    terminal = Renderer.terminal(diagnostic, registry, color: :always, width: 80)
+    json = diagnostic |> Renderer.json() |> Jason.decode!()
+    lsp = Renderer.lsp(diagnostic, registry, :utf16)
+
+    assert plain =~ "INDUCTION CASE HAS THE WRONG FIELDS"
+    assert plain =~ "Expected 2 bindings but found 0"
+    assert terminal =~ "\e["
+    assert json["code"] == "E113"
+    assert json["payload"]["kind"] == "wrong_case_fields"
+    assert lsp["code"] == "E113"
+  end
+
+  test "E113 distinguishes non-inductive, missing, duplicate, and unknown cases" do
+    fixtures = [
+      {:non_inductive_subject,
+       """
+       mod NonInductive
+         fn bad(value: Float) -> Float = induction value
+           case Nope => value
+       end
+       """},
+      {:missing_case,
+       """
+       mod MissingInduction
+         type Nat = Z | S(Nat)
+         fn bad(value: Nat) -> Equivalent(Nat, value, value) = induction value
+           case Z => reflexive(Z)
+       end
+       """},
+      {:duplicate_case,
+       """
+       mod DuplicateInduction
+         type Nat = Z | S(Nat)
+         fn bad(value: Nat) -> Equivalent(Nat, value, value) = induction value
+           case Z => reflexive(Z)
+           case Z => reflexive(Z)
+           case S(previous, induction_hypothesis) => reflexive(S(previous))
+       end
+       """},
+      {:unknown_case,
+       """
+       mod UnknownInduction
+         type Nat = Z | S(Nat)
+         type Bit = Off | On
+         fn bad(value: Nat) -> Equivalent(Nat, value, value) = induction value
+           case Z => reflexive(Z)
+           case On => reflexive(Z)
+       end
+       """}
+    ]
+
+    for {kind, source} <- fixtures do
+      assert {:error, {:codegen_error, reason}} = Cure.Compiler.compile_string(source, emit_events: false)
+      {diagnostic, _registry} = Errors.to_diagnostic(reason, "induction.cure", source)
+      assert diagnostic.code == "E113"
+      assert diagnostic.payload.kind == kind
+      assert diagnostic.primary
+
+      if kind == :missing_case do
+        assert diagnostic.payload.constructor_range
+        assert Enum.any?(diagnostic.secondary, &(&1.message == "constructor declared here"))
+      end
+    end
+  end
+
+  test "E113 rejects an impossible marker on a reachable constructor" do
+    source = """
+    mod ReachableInductionCase
+      type Nat = Z | S(Nat)
+      fn bad(value: Nat) -> Equivalent(Nat, value, value) = induction value
+        case Z => impossible
+        case S(previous, induction_hypothesis) => reflexive(S(previous))
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} = Cure.Compiler.compile_string(source, emit_events: false)
+    {diagnostic, _registry} = Errors.to_diagnostic(reason, "reachable_induction.cure", source)
+    assert diagnostic.code == "E113"
+    assert diagnostic.payload.kind == :impossible_case
+    assert diagnostic.primary
+  end
+
+  test "E113 names an omitted recursive induction hypothesis" do
+    source = """
+    mod MissingInductionHypothesis
+      type Nat = Z | S(Nat)
+      fn bad(value: Nat) -> Equivalent(Nat, value, value) = induction value
+        case Z => reflexive(Z)
+        case S(previous) => reflexive(S(previous))
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} = Cure.Compiler.compile_string(source, emit_events: false)
+    {diagnostic, _registry} = Errors.to_diagnostic(reason, "missing_hypothesis.cure", source)
+    assert diagnostic.code == "E113"
+    assert diagnostic.payload.kind == :unavailable_hypothesis
+    assert diagnostic.payload.recursive_fields == [0]
+  end
+
+  test "E113 explains a hypothesis used at the wrong specialized proposition" do
+    source = """
+    mod MistypedInductionHypothesis
+      type Nat = Z | S(Nat)
+      fn bad(value: Nat) -> Equivalent(Nat, value, value) = induction value
+        case Z => reflexive(Z)
+        case S(previous, induction_hypothesis) => induction_hypothesis
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source, file: "mistyped_hypothesis.cure", emit_events: false)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "mistyped_hypothesis.cure", source)
+    assert diagnostic.code == "E113"
+    assert diagnostic.payload.kind == :mistyped_hypothesis
+    assert diagnostic.payload.hypothesis == "induction_hypothesis"
+    assert diagnostic.payload.hypothesis_range
+    assert diagnostic.payload.available
+    assert diagnostic.payload.required
+    assert Renderer.plain(diagnostic, registry) =~ "Available:"
+    assert Renderer.lsp(diagnostic, registry, :utf16)["code"] == "E113"
+  end
+
   test "E114 relates an unavailable equation member to its defining function" do
     source = """
     mod MissingEquation

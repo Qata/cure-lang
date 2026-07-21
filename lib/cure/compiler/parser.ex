@@ -2792,6 +2792,9 @@ defmodule Cure.Compiler.Parser do
           "simplify" ->
             parse_simplify(state, token)
 
+          "induction" ->
+            if induction_block_ahead?(state), do: parse_induction(state, token), else: {variable(token), advance(state)}
+
           # `have name [: Type] = value` is a checked local fact only at its
           # distinctive binding-shaped head. Elsewhere `have` remains an
           # ordinary identifier, just like the contextual `proof` vocabulary.
@@ -3151,6 +3154,115 @@ defmodule Cure.Compiler.Parser do
       _ ->
         meta = put_token_source_info([line: token.line, col: token.col], token)
         {{:simplify_command, meta, []}, state}
+    end
+  end
+
+  # `induction` and its `case` introducers are contextual vocabulary. Keeping
+  # them as identifiers outside this distinctive block head preserves ordinary
+  # functions and binders with those names.
+  defp induction_block_ahead?(state), do: induction_block_ahead?(state, 1, false)
+
+  defp induction_block_ahead?(state, offset, saw_subject?) do
+    case peek_at(state, offset) do
+      %Token{type: :newline} when saw_subject? ->
+        match?(%Token{type: :indent}, peek_at(state, offset + 1))
+
+      %Token{type: type} when type in [:eof, :dedent] ->
+        false
+
+      _token ->
+        induction_block_ahead?(state, offset + 1, true)
+    end
+  end
+
+  defp parse_induction(state, token) do
+    state = advance(state)
+    {subject, state} = parse_expr(state, 0)
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :indent} ->
+        state = advance(state)
+        {cases, state} = parse_induction_cases(state, [])
+        state = expect_dedent(state)
+        meta = induction_meta(token, subject, cases)
+        {{:induction, meta, [subject | cases]}, state}
+
+      observed ->
+        state = add_error(state, {:expected, :indent, observed.type, observed.line})
+        {{:induction, put_token_source_info([line: token.line, col: token.col], token), [subject]}, state}
+    end
+  end
+
+  defp parse_induction_cases(state, acc) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: type} when type in [:dedent, :eof] ->
+        {Enum.reverse(acc), state}
+
+      %Token{type: :identifier, value: "case"} = case_token ->
+        state = advance(state)
+        {pattern, state} = parse_expr(state, 0)
+        state = expect(state, :fat_arrow) |> skip_newlines()
+
+        {body, impossible?, state} =
+          if impossible_body?(state) do
+            {nil, true, advance(state)}
+          else
+            {body, state} = parse_expr_or_block(state)
+            {body, false, state}
+          end
+
+        meta =
+          [line: case_token.line, col: case_token.col]
+          |> Keyword.put(:pattern_span, ast_source_span(pattern))
+          |> Keyword.put(:body_span, ast_source_span(body))
+          |> Keyword.put(:impossible, impossible?)
+          |> put_token_source_info(case_token)
+          |> put_induction_case_span(case_token, body)
+
+        parse_induction_cases(state, [{:induction_case, meta, [pattern, body]} | acc])
+
+      observed ->
+        state = add_error(state, {:expected, :induction_case, observed.type, observed.line})
+        {Enum.reverse(acc), advance(state)}
+    end
+  end
+
+  defp put_induction_case_span(meta, %Token{span: %Cure.Diagnostic.Span{} = first}, body) do
+    case ast_source_span(body) do
+      %Cure.Diagnostic.Span{} = last ->
+        case Range.through(first, last) do
+          {:ok, whole} -> Keyword.put(meta, :construct_span, whole)
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
+  end
+
+  defp put_induction_case_span(meta, _token, _body), do: meta
+
+  defp induction_meta(token, subject, cases) do
+    last = List.last(cases)
+    last_span = ast_source_span(last) || ast_source_span(subject)
+
+    meta =
+      [line: token.line, col: token.col]
+      |> Keyword.put(:subject_span, ast_source_span(subject))
+      |> put_token_source_info(token)
+
+    case {token.span, last_span} do
+      {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = last} ->
+        case Range.through(first, last) do
+          {:ok, whole} -> Keyword.put(meta, :construct_span, whole)
+          _ -> meta
+        end
+
+      _ ->
+        meta
     end
   end
 
@@ -7655,12 +7767,13 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         {params, state} = parse_type_param_list(state)
         state = expect(state, :rparen)
-        ast = {:function_def, [name: name, params: params, variant: true], []}
+        variant_meta = put_token_source_info([name: name, params: params, variant: true], name_token)
+        ast = {:function_def, variant_meta, []}
         {ast, state}
 
       _ ->
         # Nullary constructor: None
-        {{:variable, [variant: true], name}, state}
+        {{:variable, put_token_source_info([variant: true], name_token), name}, state}
     end
   end
 
