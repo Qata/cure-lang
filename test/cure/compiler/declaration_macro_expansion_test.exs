@@ -210,7 +210,7 @@ defmodule Cure.Compiler.DeclarationMacroExpansionTest do
     assert {:error, {:parse_error, errors}} =
              Cure.Compiler.compile_and_load(source, emit_events: false)
 
-    assert Enum.any?(errors, &match?({:macro_use_mismatch, "optional_only", _, _, _, _}, &1))
+    assert Enum.any?(errors, &match?({:macro_use_mismatch, %{keyword: "optional_only"}}, &1))
   end
 
   test "a recognized family body diagnoses a missing required section" do

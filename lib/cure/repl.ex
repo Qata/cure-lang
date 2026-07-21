@@ -1587,7 +1587,7 @@ defmodule Cure.REPL do
        when got in [:eof, :dedent, :newline],
        do: true
 
-  defp error_at_eof?({:unexpected_token, type, _line, _col})
+  defp error_at_eof?({:unexpected_token, %{token_type: type}})
        when type in [:eof, :dedent, :newline],
        do: true
 

@@ -112,8 +112,24 @@ defmodule Cure.Diagnostic.HostTest do
 
   test "renders macro syntax failures as contextual syntax diagnostics" do
     source = "fn run() -> Int = say nope\n"
+    {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "demo.cure", emit_events: false)
+    mismatch = Enum.find(tokens, &(&1.value == "nope"))
 
-    rendered = Host.render({:macro_use_mismatch, "say", {:literal, "hello"}, "nope", 1, 20}, "demo.cure", source)
+    rendered =
+      Host.render(
+        {:macro_use_mismatch,
+         %{
+           keyword: "say",
+           expected: {:literal, "hello"},
+           got: "nope",
+           token_type: :identifier,
+           span: mismatch.span,
+           line: mismatch.line,
+           column: mismatch.col
+         }},
+        "demo.cure",
+        source
+      )
 
     assert rendered =~ "[E094]"
     assert rendered =~ "MACRO SYNTAX DOES NOT MATCH"
@@ -121,7 +137,16 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":macro_use_mismatch"
 
     assert Cure.Compiler.Errors.format_with_source(
-             {:macro_use_mismatch, "say", {:literal, "hello"}, "nope", 1, 20},
+             {:macro_use_mismatch,
+              %{
+                keyword: "say",
+                expected: {:literal, "hello"},
+                got: "nope",
+                token_type: :identifier,
+                span: mismatch.span,
+                line: mismatch.line,
+                column: mismatch.col
+              }},
              "demo.cure",
              source
            ) =~ "[E094]"

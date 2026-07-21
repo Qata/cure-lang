@@ -147,6 +147,32 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     end
   end
 
+  test "an otherwise-unclassified token keeps its exact source range" do
+    source = "{\n"
+    {:ok, tokens} = Lexer.tokenize(source, file: "unexpected.cure", emit_events: false)
+    assert {:error, [{:unexpected_token, details} | _]} = Parser.parse(tokens, emit_events: false)
+    assert details.observed == "{"
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [{:unexpected_token, details}]}, "unexpected.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- I GOT STUCK WHILE PARSING THIS [E094] ----------------------- unexpected.cure
+
+             '{' cannot appear at this point in the construct.
+
+             at unexpected.cure:1:1
+             1 | {
+               | ^ this syntax does not fit here
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 0, "character" => 0},
+             "end" => %{"line" => 0, "character" => 1}
+           }
+  end
+
   describe "associative operators still chain" do
     test "`a + b + c` left-associates" do
       assert {:binary_op, _, [{:binary_op, _, [_a, _b]}, _c]} = parse!("a + b + c")

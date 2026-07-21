@@ -44,7 +44,6 @@ defmodule Cure.DiagnosticExerciserTest do
       {"duplicate module", "E087", {:duplicate_module_identity, "Demo", "a.cure", "b.cure"}},
       {"ambiguous name", "E089", {:ambiguous_name, :helper, ["Demo.A", "Demo.B"]}},
       {"import cycle", "W086", {:import_cycle, [%{module: "Demo.A", path: "a.cure", line: 1}]}},
-      {"recovered parse", "E063", {:parse_recovered, :semicolon, 1, 1}},
       {"macro expansion", "E092",
        {:lift_module_error,
         %{module: "Demo.Generated", cause: {:unknown_global, :missing}, source_provenance: %{macro: :spawn}}}},

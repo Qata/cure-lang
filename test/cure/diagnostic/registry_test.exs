@@ -12,13 +12,13 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert Enum.all?(entries, &(is_atom(&1.subsystem) and &1.payload_schema == 1))
     assert Enum.all?(entries, &is_atom(&1.key))
     assert Enum.all?(entries, &(is_integer(&1.schema_version) and &1.schema_version >= 1))
-    assert Enum.all?(entries, &(is_list(&1.producers) and &1.producers != []))
+    assert Enum.all?(Registry.reachable(), &(is_list(&1.producers) and &1.producers != []))
 
     assert Enum.all?(Registry.reachable(), fn entry ->
              Map.keys(entry.producer_fixtures) |> Enum.sort() == Enum.sort(entry.producers)
            end)
 
-    assert Enum.all?(Registry.retired(), &(&1.producer_fixtures == %{}))
+    assert Enum.all?(Registry.retired(), &(&1.producers == [] and &1.producer_fixtures == %{}))
 
     assert Enum.all?(entries, fn entry ->
              is_atom(entry.converter) and is_atom(entry.converter_function) and
@@ -45,6 +45,7 @@ defmodule Cure.Diagnostic.RegistryTest do
     retired_codes = Enum.map(Registry.retired(), & &1.code)
     assert "E015" in retired_codes
     assert "E018" in retired_codes
+    assert "E063" in retired_codes
     assert "W088" in retired_codes
     assert length(retired_codes) > 2
     refute Enum.any?(Registry.reachable(), &(&1.code in retired_codes))
@@ -53,6 +54,11 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert Enum.all?(Registry.reachable(), &is_nil(&1.retirement_reason))
     assert Registry.list_all() == Cure.Compiler.Errors.list_all()
     assert Registry.explain("e015") == Cure.Compiler.Errors.explain("E015")
+
+    assert {:ok, e063} = Registry.fetch("E063")
+    assert e063.producers == []
+    assert e063.producer_fixtures == %{}
+    assert e063.retirement_reason =~ "original contextual E094 error"
   end
 
   test "registry validation rejects duplicate ownership and invalid retirement metadata" do
@@ -70,7 +76,10 @@ defmodule Cure.Diagnostic.RegistryTest do
              Registry.validate([%{entry | fixture_id: sibling.fixture_id}, sibling])
 
     assert {:error, {:retired_without_reason, ^code}} =
-             Registry.validate([%{entry | status: :retired, retirement_reason: nil}])
+             Registry.validate([%{entry | status: :retired, producers: [], retirement_reason: nil}])
+
+    assert {:error, {:retired_with_producer, ^code}} =
+             Registry.validate([%{entry | status: :retired, retirement_reason: "no longer emitted"}])
 
     assert {:error, {:reachable_with_retirement_reason, ^code}} =
              Registry.validate([%{entry | retirement_reason: "no longer emitted"}])

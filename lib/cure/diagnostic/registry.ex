@@ -48,7 +48,7 @@ defmodule Cure.Diagnostic.Registry do
 
   alias Cure.Diagnostic.Registry.Entry
 
-  @retired ~w[E001 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E064 E071 E072 E073 E074 E075 E079 E080 E085 H083 H084 W081 W082 W088]
+  @retired ~w[E001 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E063 E064 E071 E072 E073 E074 E075 E079 E080 E085 H083 H084 W081 W082 W088]
   @operational ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002 W003]
   @retirement_reasons %{
     "E001" => "No first-party producer remains; contextual E093 is the active type-mismatch path.",
@@ -77,6 +77,8 @@ defmodule Cure.Diagnostic.Registry do
     "E034" => "No first-party producer remains; let-pattern coverage is not emitted as this code.",
     "E036" => "No first-party producer remains; binary comprehension failures use generic syntax handling.",
     "E037" => "No first-party producer remains; binary segment failures use generic type checking.",
+    "E063" =>
+      "No first-party producer remains; parser recovery retains and reports the original contextual E094 error.",
     "E064" => "No first-party producer remains; monomorphisation budget warnings are not emitted.",
     "E071" => "No first-party producer remains; function payload failures use name/type diagnostics.",
     "E072" => "No first-party producer remains; multiline type layout failures use syntax diagnostics.",
@@ -93,7 +95,7 @@ defmodule Cure.Diagnostic.Registry do
     "W088" =>
       "The dependent-only pipeline rejects unresolved imported names as E091 before the classic codegen fallback can occur."
   }
-  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 W086 W088]
+  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 W086 W088]
   @known_producers ~w[
     dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
     module_loader name_resolution operational parser pattern_checker proof_checker
@@ -137,7 +139,6 @@ defmodule Cure.Diagnostic.Registry do
     "E076" => :pickup_missing_else,
     "E077" => :pickup_else_not_last,
     "E078" => :pickup_multiple_else,
-    "E063" => :parse_recovered,
     "E065" => :proof_file_missing,
     "E066" => :proof_verification_failed,
     "E067" => :proof_schema_incompatible,
@@ -966,25 +967,10 @@ defmodule Cure.Diagnostic.Registry do
     "E063" => """
     E063: Parse Error (recovered)
 
-    A statement contained a syntax error from which the parser
-    recovered by skipping tokens until the next statement boundary
-    (newline, dedent, or definition-opening keyword such as `fn`,
-    `mod`, `rec`, etc.). Subsequent definitions in the same file are
-    still reported.
-
-    A file that contains this error will also contain one or more
-    primary parse errors (e.g. `:unexpected_token`) that identify
-    the root cause. Fix those first; E063 errors will disappear once
-    the primary error is resolved.
-
-    Example:
-      mod M
-        fn foo() -> ???bad     # primary parse error here
-        fn bar() -> Int = 0    # still parsed; E063 recovery consumed
-                               # the tokens between the two fns
-
-    Fix: address the root syntax error. E063 diagnostics are
-    informational and do not indicate a new, independent bug.
+    Retired. Parser recovery now preserves and reports the original contextual
+    E094 diagnostic while continuing at the next statement boundary. Emitting a
+    second recovery code duplicated the same failure without giving the author
+    another action to take.
     """,
     "E064" => """
     E064: Monomorphisation Budget Exhausted
@@ -1630,6 +1616,8 @@ defmodule Cure.Diagnostic.Registry do
   defp converter_function(code) when code in @structured, do: :from_error
   defp converter_function(_code), do: :format_error
 
+  defp producers(code) when code in @retired, do: []
+
   defp producers(code)
        when code in ~w[E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002 W003],
        do: [:operational]
@@ -1643,7 +1631,6 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E035"), do: [:parser]
   defp producers(code) when code in ~w[E056 E057], do: [:elaboration]
   defp producers(code) when code in ~w[E076 E077 E078], do: [:parser]
-  defp producers("E063"), do: [:parser]
   defp producers("E087"), do: [:module_loader]
   defp producers("E089"), do: [:name_resolution]
   defp producers("E090"), do: [:elaboration, :kernel_conversion]
@@ -1764,8 +1751,11 @@ defmodule Cure.Diagnostic.Registry do
 
   defp validate_entry(%Entry{} = entry) do
     cond do
-      entry.producers == [] ->
+      entry.status == :reachable and entry.producers == [] ->
         {:error, {:missing_producer, entry.code}}
+
+      entry.status == :retired and entry.producers != [] ->
+        {:error, {:retired_with_producer, entry.code}}
 
       entry.status == :reachable and
           Enum.any?(entry.producers, &(&1 not in @known_producers)) ->

@@ -1971,25 +1971,13 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:with_multi_inconsistent_pattern, message, meta}, opts),
     do: contextual_type_failure(:with_multi_inconsistent_pattern, %{message: message, meta: meta}, opts)
 
-  def from_error({:unexpected_token, actual, line, column}, opts) do
+  def from_error({:unexpected_token, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
         kind: :unexpected_token,
-        observed: actual,
-        at: Keyword.get(opts, :span),
-        context: %{line: line, column: column}
-      },
-      opts
-    )
-  end
-
-  def from_error({:parse_recovered, actual, line, column}, opts) do
-    from_error(
-      %SyntaxProblem{
-        kind: :recovered_statement,
-        observed: actual,
-        at: Keyword.get(opts, :span),
-        context: %{line: line, column: column, code: "E063"}
+        observed: details.observed,
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        context: details
       },
       opts
     )
@@ -2010,15 +1998,17 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:lex_error, reason}, opts), do: from_error(lex_problem(reason, opts), opts)
 
-  def from_error({:macro_use_mismatch, keyword, expected, got, _line, _column}, opts) do
+  def from_error({:macro_use_mismatch, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
         kind: :macro_use_mismatch,
-        expected: expected,
-        observed: got,
-        at: Keyword.get(opts, :span),
+        expected: details.expected,
+        observed: details.got,
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :invocation_span),
+        within: Map.get(details, :definition_span),
         alternatives: [],
-        context: %{keyword: keyword}
+        context: details
       },
       opts
     )
@@ -3959,7 +3949,6 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_placement}), do: "Edition pragma is misplaced"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_malformed}), do: "Edition pragma is malformed"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_unknown}), do: "Edition is unknown"
-  defp syntax_problem_title(%SyntaxProblem{kind: :recovered_statement}), do: "Invalid statement"
   defp syntax_problem_title(%SyntaxProblem{expected: :explain_point}), do: "Explanation clause needs a failure point"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
@@ -3997,7 +3986,7 @@ defmodule Cure.Diagnostic.Adapter do
          observed: observed
        }) do
     "The `#{keyword}` macro invocation does not match its declared syntax. " <>
-      macro_expectation(expected, observed)
+      capitalize_sentence(macro_expectation(expected, observed))
   end
 
   defp syntax_problem_context(%SyntaxProblem{kind: :macro_literal_capture, expected: expected}),
@@ -4023,10 +4012,6 @@ defmodule Cure.Diagnostic.Adapter do
       "Unknown edition: this edition is not supported by the current compiler. " <>
         "Use one of: #{Enum.join(Cure.Edition.all(), ", ")}."
 
-  defp syntax_problem_context(%SyntaxProblem{kind: :recovered_statement, observed: observed}),
-    do:
-      "The parser could not continue this statement after #{syntax_name(observed)}, so it resumed at the next statement boundary."
-
   defp syntax_problem_context(%SyntaxProblem{expected: :explain_point, observed: observed}),
     do:
       "#{String.capitalize(syntax_name(observed))} starts an explanation message, but each clause must first name a failure category or `keyword \"...\"`."
@@ -4036,6 +4021,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{observed: observed}),
     do: "#{String.capitalize(syntax_name(observed))} cannot appear at this point in the construct."
+
+  defp capitalize_sentence(<<first::utf8, rest::binary>>), do: String.upcase(<<first::utf8>>) <> rest
+  defp capitalize_sentence(text), do: text
 
   defp syntax_expected_doc(%SyntaxProblem{expected: nil, alternatives: []}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :macro_use_mismatch}), do: Doc.empty()
@@ -4091,7 +4079,6 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda}), do: "the unclosed body reaches here"
-  defp syntax_problem_label(%SyntaxProblem{kind: :recovered_statement}), do: "parsing resumed after this token"
   defp syntax_problem_label(%SyntaxProblem{expected: :explain_point}), do: "name the failure point before this arrow"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :non_associative}),
@@ -4135,6 +4122,18 @@ defmodule Cure.Diagnostic.Adapter do
     end)
   end
 
+  defp syntax_secondary_labels(%SyntaxProblem{kind: :macro_use_mismatch} = problem, primary_span) do
+    [
+      pickup_label(problem.opener, :secondary, "this macro invocation starts here"),
+      pickup_label(problem.within, :secondary, "the matching rule is declared here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
   defp syntax_secondary_labels(%SyntaxProblem{opener: %Span{} = opener}, primary_span) when opener != primary_span,
     do: [%Label{span: opener, style: :secondary, message: "the construct starts here"}]
 
@@ -4146,6 +4145,24 @@ defmodule Cure.Diagnostic.Adapter do
     do: [%Label{span: within, style: :secondary, message: "while parsing this construct"}]
 
   defp syntax_secondary_labels(_problem, _primary_span), do: []
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :macro_use_mismatch,
+           expected: {:literal, expected},
+           context: %{token_type: token_type}
+         },
+         %Span{} = span
+       )
+       when token_type not in [:newline, :dedent, :eof] do
+    [
+      %Suggestion{
+        message: "Replace it with `#{expected}`",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: to_string(expected)}]
+      }
+    ]
+  end
 
   defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
     case syntax_insertion(expected) do

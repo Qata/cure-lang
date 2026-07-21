@@ -628,6 +628,7 @@ defmodule Cure.Compiler.Parser do
   defp parse_macro_use(state, keyword, registry) do
     rules = Map.fetch!(registry, keyword)
     # consume the keyword token
+    keyword_token = peek(state)
     state = advance(state)
 
     case match_macro_rule(rules, state) do
@@ -640,7 +641,18 @@ defmodule Cure.Compiler.Parser do
         state =
           add_error(
             state,
-            {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
+            {:macro_use_mismatch,
+             %{
+               keyword: keyword,
+               expected: macro_expected_at(rule, progress),
+               got: macro_got_desc(t),
+               token_type: t.type,
+               span: t.span,
+               invocation_span: keyword_token.span,
+               definition_span: Map.get(rule, :source_span),
+               line: t.line,
+               column: t.col
+             }}
           )
 
         # Recover: yield the bare keyword variable so the outer parse continues.
@@ -749,7 +761,18 @@ defmodule Cure.Compiler.Parser do
             state =
               add_error(
                 state,
-                {:macro_use_mismatch, keyword, macro_expected_at(rule, progress), macro_got_desc(t), t.line, t.col}
+                {:macro_use_mismatch,
+                 %{
+                   keyword: keyword,
+                   expected: macro_expected_at(rule, progress),
+                   got: macro_got_desc(t),
+                   token_type: t.type,
+                   span: t.span,
+                   invocation_span: keyword_token.span,
+                   definition_span: Map.get(rule, :source_span),
+                   line: t.line,
+                   column: t.col
+                 }}
               )
 
             {variable(%Cure.Compiler.Token{
@@ -3104,7 +3127,7 @@ defmodule Cure.Compiler.Parser do
             parse_named_implicit_pat(state, token)
 
           _ ->
-            error = {:unexpected_token, token.type, token.line, token.col}
+            error = unexpected_token_error(token)
             state = add_error(state, error)
             {error_node(token), advance(state)}
         end
@@ -3132,16 +3155,27 @@ defmodule Cure.Compiler.Parser do
             {node, state}
 
           _ ->
-            error = {:unexpected_token, token.type, token.line, token.col}
+            error = unexpected_token_error(token)
             state = add_error(state, error)
             {error_node(token), advance(state)}
         end
 
       _ ->
-        error = {:unexpected_token, token.type, token.line, token.col}
+        error = unexpected_token_error(token)
         state = add_error(state, error)
         {error_node(token), advance(state)}
     end
+  end
+
+  defp unexpected_token_error(%Token{} = token) do
+    {:unexpected_token,
+     %{
+       observed: token.value || token.type,
+       token_type: token.type,
+       span: token.span,
+       line: token.line,
+       column: token.col
+     }}
   end
 
   # -- assert_type builtin (v0.19.0) ----------------------------------------
@@ -3193,10 +3227,9 @@ defmodule Cure.Compiler.Parser do
         {{:macro_check, check_meta, [condition, {:macro_fail, failure_meta, args}]}, state}
 
       _ ->
-        state =
-          t = peek(state)
+        t = peek(state)
 
-        add_error(state, {:expected, :failure_constructor, :got, t.type, t.line, t.col, t.span})
+        state = add_error(state, {:expected, :failure_constructor, :got, t.type, t.line, t.col, t.span})
 
         {{:macro_check, [line: token.line, col: token.col], [condition, {:macro_fail, [name: "?"], []}]}, state}
     end
