@@ -95,6 +95,96 @@ defmodule Cure.DiagnosticTest do
     assert Renderer.plain(diagnostic, registry) =~ "^^ this syntax does not fit here"
   end
 
+  test "pickup grammar failures render the offending branches with stable explanations" do
+    cases = [
+      {
+        "missing_else.cure",
+        "mod Demo\n  fn bad(x: Int) -> Int = pickup\n    x > 0 -> 1\n",
+        """
+        -- PICKUP NEEDS A FALLBACK [E076] ---------------------------- missing_else.cure
+
+        A `pickup` must finish with a fallback branch so it has a result when no earlier
+        condition is true.
+
+        at missing_else.cure:3:5
+        3 |     x > 0 -> 1
+          |     ^^^^^^^^^^ this is the final branch, but it is not a fallback
+
+        Hint: Add `else -> ...` after this branch, or change the final condition to `true`
+        """
+      },
+      {
+        "else_not_last.cure",
+        "mod Demo\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    x > 0 -> 2\n",
+        """
+        -- FALLBACK BRANCH IS NOT LAST [E077] ----------------------- else_not_last.cure
+
+        An `else` branch matches every remaining case, so no branch may follow it.
+
+        at else_not_last.cure:3:5
+        3 |     else -> 1
+          |     ^^^^ this fallback matches everything that reaches it
+        4 |     x > 0 -> 2
+          |     ---------- this branch can never be reached after `else`
+
+        Hint: Move the `else` branch after every conditional branch
+        """
+      },
+      {
+        "multiple_else.cure",
+        "mod Demo\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    else -> 2\n",
+        """
+        -- PICKUP HAS MORE THAN ONE FALLBACK [E078] ----------------- multiple_else.cure
+
+        Only one `else` branch is allowed because the first fallback already matches
+        every remaining case.
+
+        at multiple_else.cure:4:5
+        3 |     else -> 1
+          |     ---- another fallback branch is here
+        4 |     else -> 2
+          |     ^^^^ this second fallback is redundant
+
+        Hint: Keep one `else` branch and remove or give conditions to the others
+        """
+      }
+    ]
+
+    for {path, source, expected} <- cases do
+      assert {:error, reason} = Cure.Compiler.compile_string(source, emit_events: false)
+      {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, path, source)
+
+      assert Renderer.plain(diagnostic, registry, width: 80) == String.trim_trailing(expected)
+      assert diagnostic.primary.span.path == path
+      assert diagnostic.primary.span.start_line in [3, 4]
+      assert diagnostic.primary.span.start_column == 5
+    end
+  end
+
+  test "pickup branch labels retain exact LSP ranges and related information" do
+    source =
+      "mod Demo\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    x > 0 -> 2\n    x < 0 -> 3\n"
+
+    assert {:error, reason} = Cure.Compiler.compile_string(source, emit_events: false)
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, "pickup.cure", source)
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 2, "character" => 4},
+             "end" => %{"line" => 2, "character" => 8}
+           }
+
+    assert Enum.map(lsp["relatedInformation"], & &1["location"]["range"]) == [
+             %{"start" => %{"line" => 3, "character" => 4}, "end" => %{"line" => 3, "character" => 14}},
+             %{"start" => %{"line" => 4, "character" => 4}, "end" => %{"line" => 4, "character" => 14}}
+           ]
+
+    assert Enum.map(lsp["relatedInformation"], & &1["message"]) == [
+             "this branch can never be reached after `else`",
+             "this branch can never be reached after `else`"
+           ]
+  end
+
   test "lexer failures explain authored syntax without exposing raw tuples" do
     source = "mod Demo\n\tfn run() = 1\n"
     error = {:lex_error, {:tab_not_allowed, 2, 1}}

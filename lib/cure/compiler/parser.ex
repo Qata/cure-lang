@@ -5632,7 +5632,7 @@ defmodule Cure.Compiler.Parser do
         state = expect(state, :arrow)
         state = skip_newlines(state)
         {body, state} = parse_expr_or_block(state)
-        meta = [line: tok.line, col: tok.col]
+        meta = put_pickup_clause_source_info([line: tok.line, col: tok.col], tok, nil, body, state)
         {{:pickup_else, meta, [body]}, state}
 
       tok ->
@@ -5641,9 +5641,33 @@ defmodule Cure.Compiler.Parser do
         state = expect(state, :arrow)
         state = skip_newlines(state)
         {body, state} = parse_expr_or_block(state)
-        meta = [line: tok.line, col: tok.col]
+        meta = put_pickup_clause_source_info([line: tok.line, col: tok.col], tok, guard, body, state)
         {{:pickup_clause, meta, [guard, body]}, state}
     end
+  end
+
+  defp put_pickup_clause_source_info(meta, token, guard, body, state) do
+    whole =
+      case {token.span, authored_token(state)} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> first
+          end
+
+        {%Cure.Diagnostic.Span{} = first, _} ->
+          first
+
+        _ ->
+          nil
+      end
+
+    Keyword.put(meta, :source_info, %SourceInfo{
+      whole: whole,
+      name: token.span,
+      condition: first_node_source_span(guard),
+      body: first_node_source_span(body)
+    })
   end
 
   # PICKUP §5.2 / §4.1 enforcement. The four well-formedness errors
@@ -5654,53 +5678,36 @@ defmodule Cure.Compiler.Parser do
   defp validate_pickup_clauses([], token, state) do
     add_error(
       state,
-      {:pickup_no_else,
-       "pickup block must contain at least one clause and a terminating `else ->` arm (E-PICKUP-NO-ELSE)",
-       [line: token.line, col: token.col]}
+      {:pickup_no_else, %{pickup: token.span, clauses: [], line: token.line, column: token.col}}
     )
   end
 
   defp validate_pickup_clauses(clauses, token, state) do
-    {else_count, _last_else?, has_terminator?, after_terminator?} =
-      clauses
-      |> Enum.with_index()
-      |> Enum.reduce({0, false, false, false}, fn {clause, idx}, {ec, last_e, term, after_t} ->
-        is_last = idx == length(clauses) - 1
-        terminator? = pickup_terminator?(clause, is_last)
+    indexed = Enum.with_index(clauses)
+    else_clauses = Enum.filter(indexed, fn {clause, _idx} -> pickup_else?(clause) end)
+    terminator_index = Enum.find_index(clauses, &pickup_terminator?(&1, false))
+    last_index = length(clauses) - 1
+    trailing_true? = pickup_terminator?(List.last(clauses), true)
+    has_terminator? = else_clauses != [] or trailing_true?
 
-        ec = if pickup_else?(clause), do: ec + 1, else: ec
-        last_e = if pickup_else?(clause), do: is_last, else: last_e
-
-        # Anything after a real terminator clause counts as `after_t`
-        # for the diagnostic below, mirroring PICKUP §4.1.
-        term = term or terminator?
-        after_t = after_t or (term and not terminator?)
-
-        {ec, last_e, term, after_t}
-      end)
+    details = %{
+      pickup: token.span,
+      clauses: Enum.map(clauses, &pickup_clause_span/1),
+      else_clauses: Enum.map(else_clauses, fn {clause, idx} -> {idx, pickup_else_span(clause)} end),
+      line: token.line,
+      column: token.col
+    }
 
     state =
       cond do
-        else_count > 1 ->
-          add_error(
-            state,
-            {:pickup_multiple_else, "pickup block has more than one `else ->` arm (E-PICKUP-MULTIPLE-ELSE)",
-             [line: token.line, col: token.col]}
-          )
+        length(else_clauses) > 1 ->
+          add_error(state, {:pickup_multiple_else, details})
 
-        after_terminator? ->
-          add_error(
-            state,
-            {:pickup_else_not_last, "pickup `else ->` must be the final clause (E-PICKUP-ELSE-NOT-LAST)",
-             [line: token.line, col: token.col]}
-          )
+        is_integer(terminator_index) and terminator_index < last_index ->
+          add_error(state, {:pickup_else_not_last, Map.put(details, :terminator_index, terminator_index)})
 
         not has_terminator? ->
-          add_error(
-            state,
-            {:pickup_no_else, "pickup block must end in `else -> ...` (or trailing `true -> ...`) (E-PICKUP-NO-ELSE)",
-             [line: token.line, col: token.col]}
-          )
+          add_error(state, {:pickup_no_else, details})
 
         true ->
           state
@@ -5711,6 +5718,22 @@ defmodule Cure.Compiler.Parser do
 
   defp pickup_else?({:pickup_else, _, _}), do: true
   defp pickup_else?(_), do: false
+
+  defp pickup_clause_span({_, meta, _}) when is_list(meta) do
+    meta |> Metadata.source_info() |> source_whole()
+  end
+
+  defp pickup_clause_span(_), do: nil
+
+  defp pickup_else_span({:pickup_else, meta, _}) when is_list(meta) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      %SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp pickup_else_span(_), do: nil
 
   defp pickup_terminator?({:pickup_else, _, _}, _is_last), do: true
 
