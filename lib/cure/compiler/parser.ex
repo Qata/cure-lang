@@ -9598,10 +9598,10 @@ defmodule Cure.Compiler.Parser do
       state =
         cond do
           not file_leading?(state) ->
-            add_error(state, {:edition_pragma_placement, token.line, token.col})
+            add_error(state, edition_pragma_error(:edition_pragma_placement, token, decorator_info, args))
 
           not valid_edition_pragma_arg?(args) ->
-            add_error(state, {:edition_pragma_malformed, token.line, token.col})
+            add_error(state, edition_pragma_error(:edition_pragma_malformed, token, decorator_info, args))
 
           not single_line_edition_pragma?(token, args) ->
             # Canonical pragma is a single line. The pre-parse resolver
@@ -9609,7 +9609,7 @@ defmodule Cure.Compiler.Parser do
             # regex, so a multi-line pragma is invisible to it — honouring it here
             # would lex under the resolver's (default) edition while accepting a
             # different declared one (F1, audit iteration 4). Reject it as malformed.
-            add_error(state, {:edition_pragma_malformed, token.line, token.col})
+            add_error(state, edition_pragma_error(:edition_pragma_malformed, token, decorator_info, args))
 
           not known_edition_pragma_arg?(args) ->
             # Well-formed "YYYY" but not a minted edition. The compile entrypoints
@@ -9619,7 +9619,7 @@ defmodule Cure.Compiler.Parser do
             # gate for DIRECT Parser.parse callers that skip resolve_edition
             # (detect_app, parse_source) — spec §3.1 ("a typo'd edition must fail
             # loudly") / §3.3 ("its argument is validated as an edition").
-            add_error(state, {:edition_pragma_unknown, token.line, token.col})
+            add_error(state, edition_pragma_error(:edition_pragma_unknown, token, decorator_info, args))
 
           true ->
             state
@@ -9804,6 +9804,39 @@ defmodule Cure.Compiler.Parser do
 
     %{whole: whole, name: name.span, arguments: argument_spans}
   end
+
+  defp edition_pragma_error(kind, token, decorator_info, args) do
+    argument_span = List.first(decorator_info.arguments)
+    single_line? = match?(%Cure.Diagnostic.Span{start_line: line, end_line: line}, decorator_info.whole)
+
+    span =
+      cond do
+        kind == :edition_pragma_placement -> decorator_info.whole
+        not single_line? -> decorator_info.whole
+        true -> argument_span || decorator_info.whole
+      end
+
+    details = %{
+      span: span,
+      pragma_span: decorator_info.whole,
+      argument_span: argument_span,
+      observed: edition_pragma_argument(args),
+      known_editions: Cure.Edition.all(),
+      single_line: single_line?,
+      line: token.line,
+      column: token.col
+    }
+
+    {kind, details}
+  end
+
+  defp edition_pragma_argument([{:literal, _meta, value}]), do: value
+  defp edition_pragma_argument([]), do: :missing
+  defp edition_pragma_argument(args), do: Enum.map(args, &edition_pragma_argument_value/1)
+
+  defp edition_pragma_argument_value({:literal, _meta, value}), do: value
+  defp edition_pragma_argument_value({:variable, _meta, value}), do: value
+  defp edition_pragma_argument_value(_argument), do: :invalid
 
   defp put_decorator_source_info(meta, dec_name, decorator_info) do
     case Metadata.source_info(meta) do

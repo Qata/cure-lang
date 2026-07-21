@@ -11,13 +11,13 @@ defmodule Cure.Compiler.EditionPragmaHardeningTest do
   end
 
   defp placement_error?(errors),
-    do: Enum.any?(errors, &match?({:edition_pragma_placement, _, _}, &1))
+    do: Enum.any?(errors, &match?({:edition_pragma_placement, %{span: %Cure.Diagnostic.Span{}}}, &1))
 
   defp malformed_error?(errors),
-    do: Enum.any?(errors, &match?({:edition_pragma_malformed, _, _}, &1))
+    do: Enum.any?(errors, &match?({:edition_pragma_malformed, %{span: %Cure.Diagnostic.Span{}}}, &1))
 
   defp unknown_error?(errors),
-    do: Enum.any?(errors, &match?({:edition_pragma_unknown, _, _}, &1))
+    do: Enum.any?(errors, &match?({:edition_pragma_unknown, %{span: %Cure.Diagnostic.Span{}}}, &1))
 
   # F1 — a decorator-led definition (@extern/@derive/@builtin...) is substantive;
   # a later @edition is therefore misplaced and must be a hard error.

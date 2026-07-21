@@ -1917,6 +1917,65 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:edition_pragma_placement, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E094",
+      key: :edition_pragma_placement,
+      severity: :error,
+      title: "Edition pragma is too late",
+      body:
+        Doc.paragraph(
+          "`@edition(...)` selects how the entire file is read, so it must be the first non-comment item in the file."
+        ),
+      primary: pickup_label(span, :primary, "the edition cannot change after parsing has started"),
+      suggestions: [
+        %Suggestion{message: "Move this pragma above every declaration and decorator", applicability: :manual}
+      ],
+      payload: details
+    )
+  end
+
+  def from_error({:edition_pragma_malformed, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E094",
+      key: :edition_pragma_malformed,
+      severity: :error,
+      title: "Malformed edition pragma",
+      body:
+        Doc.paragraph(
+          "An edition pragma must use the single-line form `@edition(\"YYYY\")` with exactly one four-digit string."
+        ),
+      primary: pickup_label(span, :primary, "this is not a valid edition argument"),
+      suggestions: edition_replacement_suggestion(details),
+      payload: details
+    )
+  end
+
+  def from_error({:edition_pragma_unknown, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+    observed = Map.get(details, :observed)
+    known = Map.get(details, :known_editions, Cure.Edition.all())
+    supported = Enum.map_join(known, ", ", &"`#{&1}`")
+
+    Diagnostic.new(
+      code: "E094",
+      key: :edition_pragma_unknown,
+      severity: :error,
+      title: "Unknown edition",
+      body:
+        Doc.paragraph(
+          "`#{name_to_string(observed)}` is not a supported Cure edition. This compiler supports #{supported}."
+        ),
+      primary: pickup_label(span, :primary, "this edition is not available"),
+      suggestions: edition_replacement_suggestion(details),
+      payload: details
+    )
+  end
+
   def from_error({kind, line, column}, opts)
       when kind in [:edition_pragma_placement, :edition_pragma_malformed, :edition_pragma_unknown] and
              is_integer(line) and is_integer(column) do
@@ -3391,6 +3450,31 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp pickup_label(%Span{} = span, style, message), do: %Label{span: span, style: style, message: message}
   defp pickup_label(_, _style, _message), do: nil
+
+  defp edition_replacement_suggestion(%{
+         argument_span: %Span{} = span,
+         known_editions: [edition],
+         single_line: true
+       }) do
+    [
+      %Suggestion{
+        message: "Use the supported edition `#{edition}`",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: inspect(edition)}]
+      }
+    ]
+  end
+
+  defp edition_replacement_suggestion(%{known_editions: editions}) when is_list(editions) do
+    [
+      %Suggestion{
+        message: "Use one of the supported editions: #{Enum.map_join(editions, ", ", &"`#{&1}`")}",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp edition_replacement_suggestion(_details), do: []
 
   defp candidate_suggestions([], _spelling, _opts), do: []
 

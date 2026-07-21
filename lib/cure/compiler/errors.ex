@@ -516,6 +516,7 @@ defmodule Cure.Compiler.Errors do
   defp embedded_span({:expected, _, :got, _, _, _, %Cure.Diagnostic.Span{} = span}), do: span
   defp embedded_span({:expected_token, _, _, _, _, _, %Cure.Diagnostic.Span{} = span}), do: span
   defp embedded_span({:source_context, _reason, %{span: %Cure.Diagnostic.Span{} = span}}), do: span
+  defp embedded_span({_kind, %{span: %Cure.Diagnostic.Span{} = span}}), do: span
   defp embedded_span(_error), do: nil
 
   defp lex_error_location(reason) when is_tuple(reason) do
