@@ -10,6 +10,7 @@ defmodule Antigen.Backend.StreamData do
   @impl true
   def interp({:return, x}), do: StreamData.constant(x)
   def interp({:member_of, xs}), do: StreamData.member_of(xs)
+  def interp({:integer, lo, hi}), do: StreamData.integer(lo..hi)
   def interp({:one_of, gs}), do: StreamData.one_of(Enum.map(gs, &interp/1))
   def interp({:frequency, ws}), do: StreamData.frequency(Enum.map(ws, fn {w, g} -> {w, interp(g)} end))
   def interp({:bind, g, f}), do: StreamData.bind(interp(g), fn x -> interp(f.(x)) end)
@@ -63,6 +64,33 @@ defmodule Antigen.Backend.StreamData do
       key |> Process.get() |> Enum.reverse()
     after
       Process.delete(key)
+    end
+  end
+
+  @doc """
+  Check a reified Antigen generator with StreamData's shrinking engine.
+
+  The callback must return `true`/`:ok` for success or `false`/an error term
+  for failure. Keeping this adapter here preserves the project's rule that no
+  test or production module references StreamData directly.
+  """
+  @spec check_all(term(), keyword(), (term() -> boolean() | :ok | term())) :: :ok | term()
+  def check_all(descr, opts \\ [], property) when is_function(property, 1) do
+    defaults = [initial_seed: {101, 102, 103}, initial_size: 1, max_runs: 100, max_run_time: :infinity]
+
+    result =
+      StreamData.check_all(interp(descr), Keyword.merge(defaults, opts), fn value ->
+        case property.(value) do
+          true -> {:ok, nil}
+          :ok -> {:ok, nil}
+          false -> {:error, {:property_failed, value}}
+          error -> {:error, error}
+        end
+      end)
+
+    case result do
+      {:ok, _metadata} -> :ok
+      error -> error
     end
   end
 end

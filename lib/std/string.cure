@@ -36,6 +36,7 @@ mod Std.String
 
   use Std.Char
   use Std.Atom
+  use Std.Option
 
   ## `String` is the value-surface charlist of Unicode code points. `@prelude`
   ## makes the bare `String` name resolve in every module without `use Std.String`
@@ -84,6 +85,75 @@ mod Std.String
   ## Upper-case `s` using Unicode case folding (`:string.uppercase/1`).
   @extern(:string, :uppercase, 1)
   fn upcase(s: String) -> String
+
+  ## Swift-style spellings retained alongside the original Cure names.
+  fn lowercased(s: String) -> String = downcase(s)
+  fn uppercased(s: String) -> String = upcase(s)
+
+  # -- Inspection -------------------------------------------------------------
+
+  fn has_prefix(s: String, prefix: String) -> Bool = has_prefix_chars(as_charlist(s), as_charlist(prefix))
+
+  local fn has_prefix_chars(s: String, prefix: String) -> Bool =
+    match prefix
+      [] -> true
+      [wanted | wanted_rest] ->
+        match s
+          [] -> false
+          [actual | actual_rest] ->
+            match Std.Char.same(actual, wanted)
+              true -> has_prefix_chars(actual_rest, wanted_rest)
+              false -> false
+
+  fn has_suffix(s: String, suffix: String) -> Bool =
+    has_prefix_chars(reverse_cl(as_charlist(s)), reverse_cl(as_charlist(suffix)))
+
+  fn contains(s: String, wanted: Char) -> Bool = contains_char(as_charlist(s), wanted)
+
+  local fn contains_char(s: String, wanted: Char) -> Bool =
+    match s
+      [] -> false
+      [head | rest] ->
+        match Std.Char.same(head, wanted)
+          true -> true
+          false -> contains_char(rest, wanted)
+
+  fn first(s: String) -> Option(Char) =
+    match as_charlist(s)
+      [] -> None()
+      [head | _] -> Some(head)
+
+  fn last(s: String) -> Option(Char) = last_char(as_charlist(s))
+
+  local fn last_char(s: String) -> Option(Char) =
+    match s
+      [] -> None()
+      [head] -> Some(head)
+      [_ | rest] -> last_char(rest)
+
+  fn prefix(s: String, count: Int) -> String = take_chars(as_charlist(s), count)
+
+  local fn take_chars(s: String, count: Int) -> String =
+    match Std.Builtin.int_lt(0, count)
+      false -> []
+      true ->
+        match s
+          [] -> []
+          [head | rest] -> [head | take_chars(rest, Std.Builtin.int_sub(count, 1))]
+
+  fn drop_first(s: String, count: Int) -> String = drop_chars(as_charlist(s), count)
+
+  local fn drop_chars(s: String, count: Int) -> String =
+    match Std.Builtin.int_lt(0, count)
+      false -> s
+      true ->
+        match s
+          [] -> []
+          [_ | rest] -> drop_chars(rest, Std.Builtin.int_sub(count, 1))
+
+  fn suffix(s: String, count: Int) -> String = reverse_cl(take_chars(reverse_cl(as_charlist(s)), count))
+
+  fn drop_last(s: String, count: Int) -> String = reverse_cl(drop_chars(reverse_cl(as_charlist(s)), count))
 
   # -- Trim -------------------------------------------------------------------
 
@@ -157,6 +227,22 @@ mod Std.String
 
   ## Split `s` on the first occurrence of `sep`.
   fn split(s: String, sep: String) -> List(String) = split_first(s, sep, :leading)
+
+  ## Split on every occurrence of one character, following Swift's default of
+  ## omitting empty subsequences.
+  fn split_on(s: String, separator: Char) -> List(String) =
+    omit_empty(split_all(as_charlist(s), [separator], :all))
+
+  @extern(:string, :split, 3)
+  local fn split_all(s: String, sep: String, where: Atom) -> List(String)
+
+  local fn omit_empty(parts: List(String)) -> List(String) =
+    match parts
+      [] -> []
+      [head | rest] ->
+        match is_empty(head)
+          true -> omit_empty(rest)
+          false -> [head | omit_empty(rest)]
 
   ## `:string.copies/2` on a normalised charlist.
   @extern(:string, :copies, 2)

@@ -93,7 +93,7 @@ the build derives them from the dependency graph (`Cure.Compiler.DepGraph`
 runtime closure), and `preload(kind:)` expands a selection to everything it
 needs at runtime, so e.g. selecting `:collections` also loads the `:core`
 modules its members call. See
-`docs/superpowers/specs/2026-07-08-auto-import-order-design.md`.
+`docs/superpowers/specs/tooling/2026-07-08-auto-import-order-design.md`.
 
 The REPL reads a `.cure.repl.toml` file at startup (project-local
 wins over the home-wide fallback) and threads the resolved kind
@@ -347,24 +347,34 @@ protocol system.
 - `impl Functor for List` delegates to `Std.List.map/2`.
 
 ## Value-shaped modules
+### Std.Char
+Unicode-scalar inspection and conversion. Unicode implementation details stay
+inside this module rather than leaking integer code-point operations into text
+consumers.
+- Classification: `is_ascii`, `is_letter`, `is_punctuation`, `is_newline`,
+  `is_whitespace`, `is_symbol`, `is_math_symbol`, `is_currency_symbol`,
+  `is_cased`, `is_uppercase`, and `is_lowercase`.
+- Numeric inspection: `is_number`, `is_whole_number`, `whole_number_value`,
+  `is_hex_digit`, `hex_digit_value`, and `ascii_value`.
+- `uppercased(c)` and `lowercased(c)` return `String`, since a Unicode scalar
+  may expand during case conversion (for example, `ß` uppercases to `SS`).
+- `same`, `less_than`, and `between` compare Unicode scalars without exposing
+  their integer representation to callers.
 ### Std.String
-Binaries in Erlang are Cure's `String`. Length is measured in bytes;
-case conversion and trimming delegate to OTP's `:string` module, which
-is Unicode-aware.
-- `length(s) -> Int`  -- byte size.
-- `is_empty(s) -> Bool`, `concat(a, b) -> String`  -- uses the `<>`
-  operator.
-- `downcase(s)`, `upcase(s)`  -- Unicode case conversion.
+Cure `String` is `List(Char)`, with raw BEAM chardata normalized at foreign
+boundaries. Length and slicing are measured in Unicode code points, not bytes.
+- `length(s) -> Int`, `is_empty(s) -> Bool`, and `concat(a, b) -> String`.
+- `downcase`/`lowercased` and `upcase`/`uppercased` perform Unicode conversion.
+- `has_prefix`, `has_suffix`, and `contains(s, char)` inspect content.
+- `first` and `last` return `Option(Char)`.
+- `prefix`, `suffix`, `drop_first`, and `drop_last` provide immutable slicing.
 - `trim(s)`, `trim_leading(s)`, `trim_trailing(s)`  -- whitespace
   trimming.
-- `from_int(n)`, `from_float(f)`, `from_atom(a)`  -- conversions to
-  binary.
-- `to_int(s)`, `to_float(s)`, `to_atom(s)`  -- parsing primitives
-  (raise on bad input, as per the underlying BIFs).
-- `split(s, sep) -> List(String)`  -- `:binary.split/2`.
-- `repeat(s, n) -> String`  -- `:binary.copy/2`.
-- `reverse(s) -> String`  -- byte-level reversal via an intermediate
-  charlist (not grapheme-aware).
+- `from_int`, `from_float`, and `from_atom` render values; `to_int`, `to_float`,
+  `to_existing_atom`, and explicit `unsafe_to_atom` parse them.
+- `split(s, sep)` splits once; `split_on(s, char)` splits throughout and omits
+  empty subsequences.
+- `repeat` and `reverse` operate by code point.
 ### Std.Math
 Integer helpers written in Cure plus `@extern` wrappers around the
 `:math` module.
@@ -373,26 +383,17 @@ Integer helpers written in Cure plus `@extern` wrappers around the
 - Pure Cure: `max(a, b)`, `min(a, b)`, `clamp(v, lo, hi)`, `sign(x)`,
   `negate(x)`, `is_even(x)`, `is_odd(x)`, `safe_div(a, b)` (returns
   `0` when the divisor is zero).
-### Std.Regex (v0.27.0)
-Thin wrapper over OTP's `:re`. The `@regex "..."` compile-time
-decorator (recognised by `Cure.Stdlib.CompileAssert`) hoists pattern
-validation into the compiler, surfacing invalid patterns as
-`E060 Regex Invalid` at build time instead of runtime.
-- `rec Regex { handle: T }`  -- opaque compiled handle.
-- `rec Matched { whole: String, groups: List(String) }`  -- capture
-  result; `groups` holds the numbered captures after the whole match.
-- `type RegexError = InvalidPattern(String) | NotMatched`.
-- `compile(pattern) -> Result(Regex, RegexError)`.
-- `compile_bang(pattern) -> Regex`  -- raises on invalid patterns;
-  prefer `compile/1` in library code.
-- `is_match(r, input) -> Bool`.
-- `run(r, input) -> Option(Matched)`.
-- `scan(r, input) -> List(Matched)`.
-- `replace(r, input, replacement) -> String`  -- supports `\1`, `\2`,
-  ... backreferences inside `replacement`.
-- `split(r, input) -> List(String)`.
-
-Runtime module: `:cure_std_regex`.
+### Std.Regex
+Pure Cure regular-expression syntax and matching. A literal such as
+`/[A-Z]*/im` expands at compile time to the typed `Regex` algebra; generated
+code contains no OTP `:re` handle, runtime parser, or regex shim.
+- `parse(pattern) -> Option(Regex)` parses the ordinary Cure syntax tree.
+- `literal(pattern, flags) -> Regex` is the compile-time literal target.
+- `is_match(r, input) -> Bool` searches at any input position.
+- `is_full_match(r, input) -> Bool` requires complete input consumption.
+- `run(r, input) -> List(String)` returns the possible unmatched suffixes.
+- Elixir modifier spellings `i`, `m`, `s`, `x`, `u`, `r`, `f`, `U`, and `E`
+  are accepted; option order is immaterial.
 ### Std.Json (v0.23.0)
 Typed JSON encoder/decoder that pairs with the v0.21.0
 `@derive(JSON)` extension.

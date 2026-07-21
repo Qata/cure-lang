@@ -23,6 +23,9 @@ mod Std.Regex
     | Any()
     | CharSet(List(Char), List(CharRange)) 
     | NegatedCharSet(List(Char), List(CharRange))
+    | DigitClass(Bool)
+    | WordClass(Bool)
+    | SpaceClass(Bool)
     | Sequence(Regex, Regex) 
     | Alternate(Regex, Regex) 
     | Repeat(Regex) 
@@ -87,12 +90,33 @@ mod Std.Regex
       Some(tree) -> Configured(tree, parse_flags(flags))
       None() -> Empty()
 
-  ## Full-string matching over the parsed tree.  `run/2` returns every
-  ## possible suffix, and the public predicate succeeds exactly when one
-  ## suffix is empty.  The implementation is deliberately expressed as pure
-  ## list recursion; the Thompson machine compilation layer will replace this
-  ## backtracking representation in the next step without changing this API.
-  fn is_match(regex: Regex, input: String) -> Bool = has_empty(run(regex, input))
+  ## Elixir-compatible search predicate: an unanchored expression may begin at
+  ## any input position. `f` limits candidate starts to the first line; a match
+  ## that starts there may still consume subsequent lines.
+  fn is_match(regex: Regex, input: String) -> Bool =
+    match regex
+      Configured(inner, options) -> search(inner, input, options, true, true)
+      _ -> search(regex, input, RawOptions([]), true, true)
+
+  ## Explicit whole-input predicate for parsers and validators that need the
+  ## semantics the first implementation exposed as `is_match/2`.
+  fn is_full_match(regex: Regex, input: String) -> Bool = has_empty(run(regex, input))
+
+  fn search(regex: Regex, input: String, options: RegexOptions, at_start: Bool, at_line_start: Bool) -> Bool =
+    match has_any(run_with(regex, input, options, at_start, at_line_start))
+      true -> true
+      false ->
+        match input
+          [] -> false
+          [head | rest] ->
+            match has_option(options, 'f') and is_newline(head)
+              true -> false
+              false -> search(regex, rest, options, false, is_newline(head))
+
+  fn has_any(values: List(String)) -> Bool =
+    match values
+      [] -> false
+      _ -> true
 
   fn has_empty(suffixes: List(String)) -> Bool =
     match suffixes
@@ -153,6 +177,9 @@ mod Std.Regex
               true -> []
               false -> [rest]
           [] -> []
+      DigitClass(negated) -> run_class(input, digit_matches(input_head(input), options), negated)
+      WordClass(negated) -> run_class(input, word_matches(input_head(input), options), negated)
+      SpaceClass(negated) -> run_class(input, space_matches(input_head(input), options), negated)
       Sequence(left, right) ->
         Std.List.flat_map(run_with(left, input, options, at_start, at_line_start),
           fn(rest) -> run_with(right, rest, options,
@@ -165,6 +192,43 @@ mod Std.Regex
           fn(rest) -> repeat_all(inner, [rest], [rest], options, false, false))
       Optional(inner) -> Std.List.append([input], run_with(inner, input, options, at_start, at_line_start))
       Capture(inner) -> run_with(inner, input, options, at_start, at_line_start)
+
+  fn input_head(input: String) -> Option(Char) =
+    match input
+      [] -> None()
+      [head | _] -> Some(head)
+
+  fn run_class(input: String, matched: Bool, negated: Bool) -> List(String) =
+    match input
+      [] -> []
+      [_ | rest] ->
+        match matched == negated
+          true -> []
+          false -> [rest]
+
+  fn digit_matches(actual: Option(Char), options: RegexOptions) -> Bool =
+    match actual
+      None() -> false
+      Some(char) ->
+        match has_option(options, 'u')
+          true -> Std.Char.is_unicode_digit(char)
+          false -> char_in_ranges(char, [Range('0', '9')], RawOptions([]))
+
+  fn word_matches(actual: Option(Char), options: RegexOptions) -> Bool =
+    match actual
+      None() -> false
+      Some(char) ->
+        match has_option(options, 'u')
+          true -> Std.Char.is_unicode_word(char)
+          false -> char_in_set(char, ['_'], [Range('a', 'z'), Range('A', 'Z'), Range('0', '9')], RawOptions([]))
+
+  fn space_matches(actual: Option(Char), options: RegexOptions) -> Bool =
+    match actual
+      None() -> false
+      Some(char) ->
+        match has_option(options, 'u')
+          true -> Std.Char.is_unicode_space(char)
+          false -> char_in_set(char, [' ', '\t', '\n', '\r'], [], RawOptions([]))
 
   fn repeat_all(inner: Regex, frontier: List(String), found: List(String), options: RegexOptions, at_start: Bool, at_line_start: Bool) -> List(String) =
     order_repeat(repeat_all_raw(inner, frontier, found, options, at_start, at_line_start), options)
@@ -199,10 +263,10 @@ mod Std.Regex
     match ranges
       [] -> false
       [Range(first, last) | tail] ->
-        match Std.Builtin.int_lt(range_code(actual, options), range_code(first, options))
+        match Std.Char.less_than(range_char(actual, options), range_char(first, options))
           true -> char_in_ranges(actual, tail, options)
           false ->
-            match Std.Builtin.int_lt(range_code(last, options), range_code(actual, options))
+            match Std.Char.less_than(range_char(last, options), range_char(actual, options))
               true -> char_in_ranges(actual, tail, options)
               false -> true
 
@@ -284,15 +348,21 @@ mod Std.Regex
     match options
       RawOptions(flags) ->
         match has_flag(flags, 'i')
-          true -> same_chars(Std.String.downcase([expected]), Std.String.downcase([actual]))
-          false -> expected == actual
+          true ->
+            match has_flag(flags, 'u')
+              true -> same_chars(Std.Char.lowercased(expected), Std.Char.lowercased(actual))
+              false -> Std.Char.same(Std.Char.ascii_lowercased(expected), Std.Char.ascii_lowercased(actual))
+          false -> Std.Char.same(expected, actual)
 
-  fn range_code(char: Char, options: RegexOptions) -> Int =
+  fn range_char(char: Char, options: RegexOptions) -> Char =
     match options
       RawOptions(flags) ->
         match has_flag(flags, 'i')
-          true -> Std.Char.code_point(Std.List.nth(Std.String.downcase([char]), 0, char))
-          false -> Std.Char.code_point(char)
+          true ->
+            match has_flag(flags, 'u')
+              true -> Std.Option.unwrap(Std.String.first(Std.Char.lowercased(char)), char)
+              false -> Std.Char.ascii_lowercased(char)
+          false -> char
 
   fn same_chars(left: String, right: String) -> Bool =
     match left
@@ -303,7 +373,7 @@ mod Std.Regex
       [left_head | left_tail] ->
         match right
           [right_head | right_tail] ->
-            left_head == right_head and same_chars(left_tail, right_tail)
+            Std.Char.same(left_head, right_head) and same_chars(left_tail, right_tail)
           [] -> false
 
   fn dot_matches(actual: Char, options: RegexOptions) -> Bool =
@@ -431,12 +501,12 @@ mod Std.Regex
 
   fn parse_escape_kind(kind: EscapeKind, head: Char, rest: String) -> Parse =
     match kind
-      DigitEscape() -> Parsed(CharSet([], [Range('0', '9')]), rest)
-      NotDigitEscape() -> Parsed(NegatedCharSet([], [Range('0', '9')]), rest)
-      WordEscape() -> Parsed(CharSet(['_'], [Range('a', 'z'), Range('A', 'Z'), Range('0', '9')]), rest)
-      NotWordEscape() -> Parsed(NegatedCharSet(['_'], [Range('a', 'z'), Range('A', 'Z'), Range('0', '9')]), rest)
-      SpaceEscape() -> Parsed(CharSet([' ', '\t', '\n'], []), rest)
-      NotSpaceEscape() -> Parsed(NegatedCharSet([' ', '\t', '\n'], []), rest)
+      DigitEscape() -> Parsed(DigitClass(false), rest)
+      NotDigitEscape() -> Parsed(DigitClass(true), rest)
+      WordEscape() -> Parsed(WordClass(false), rest)
+      NotWordEscape() -> Parsed(WordClass(true), rest)
+      SpaceEscape() -> Parsed(SpaceClass(false), rest)
+      NotSpaceEscape() -> Parsed(SpaceClass(true), rest)
       NewlineEscape() -> Parsed(Literal('\n'), rest)
       TabEscape() -> Parsed(Literal('\t'), rest)
       LiteralEscape() -> Parsed(Literal(head), rest)
