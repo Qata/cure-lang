@@ -1,5 +1,7 @@
 defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
+
+  import ExUnit.CaptureIO
 
   alias Mix.Tasks.Cure.BundleStdlibBeams
 
@@ -139,6 +141,30 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeamsTest do
     after
       :code.purge(:"Cure.Std.TcaHelper")
       :code.delete(:"Cure.Std.TcaHelper")
+      cleanup_tmps()
+    end
+
+    test "renders the underlying structured diagnostic when a module fails" do
+      src = make_tmp!()
+      dst = make_tmp!()
+
+      path =
+        write_cure!(src, "broken.cure", """
+        mod Std.Broken
+          fn broken() -> Int = Std.String.length("missing import")
+        """)
+
+      output =
+        capture_io(:stderr, fn ->
+          assert {:ok, %{errors: 1}} = BundleStdlibBeams.bundle(src, dst)
+        end)
+
+      assert output =~ "UNKNOWN VALUE [E091]"
+      assert output =~ "`Std.String.length` is not available"
+      assert output =~ path
+      assert output =~ "Std.String.length(\"missing import\")"
+      assert output =~ "^^^^^^"
+    after
       cleanup_tmps()
     end
   end

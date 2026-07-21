@@ -160,16 +160,23 @@ defmodule Mix.Tasks.Cure.BundleStdlibBeams do
         refresh_loaded_beam(module, dest_dir)
         {:ok, %{counts | compiled: counts.compiled + 1}}
 
-      {:error, _reason} ->
+      {:error, reason} ->
         # Surface the failure to the shell but keep processing the
         # remaining stdlib files so a single bad source does not
         # prevent the rest from being staged.
         if Code.ensure_loaded?(Mix) and function_exported?(Mix, :shell, 0) do
-          Mix.shell().error("cure.bundle_stdlib_beams: failed to compile #{src}")
+          Mix.shell().error(render_host_diagnostic(reason, src))
         end
 
         {:ok, %{counts | errors: counts.errors + 1}}
     end
+  end
+
+  defp render_host_diagnostic(reason, path) do
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path)
+
+    Cure.Diagnostic.Sink.new(format: :plain, color: :auto, width: 80, registry: registry)
+    |> Cure.Diagnostic.Sink.render(diagnostic)
   end
 
   # Purge any previously-loaded copy of `module` and load the beam just
