@@ -569,12 +569,17 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:variable, _meta, "Type"}, _names, _ctx, _env),
     do: {:ok, {:type, 0}, {:vtype, 1}}
 
-  def elaborate_expr_typed({:variable, _meta, name}, names, ctx, env) do
+  def elaborate_expr_typed({:variable, meta, name}, names, ctx, env) do
     case Enum.find_index(names, &(&1 == name)) do
       nil ->
-        with {:ok, term} <- resolve_free(name, env),
-             {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
+        case resolve_free(name, env) do
+          {:ok, term} ->
+            with {:ok, type} <- Kernel.infer(ctx, term) do
+              {:ok, term, type}
+            end
+
+          {:error, reason} ->
+            {:error, attach_variable_context(reason, meta, name)}
         end
 
       index ->
@@ -2168,6 +2173,14 @@ defmodule Cure.Elab.Elaborator do
       expectation_origin: origin,
       argument_index: index
     }
+  end
+
+  defp attach_variable_context(reason, meta, name),
+    do: {:source_context, reason, variable_context(meta, name)}
+
+  defp variable_context(meta, name) do
+    expression = {:variable, meta, name}
+    expectation_context(expression, :annotation, name, nil)
   end
 
   defp attach_collection_context({:source_context, reason, context}, elements)

@@ -24,6 +24,24 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert Renderer.plain(diagnostic, registry) =~ "type written in its annotation"
   end
 
+  test "an unknown variable points at the variable rather than the whole body" do
+    source = "fn run() -> Int = missing_name\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "unknown_variable.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "unknown_variable.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E091"
+    assert diagnostic.primary.span.start_column == 19
+    assert rendered =~ "1 | fn run() -> Int = missing_name"
+    assert rendered =~ "^^^^^^^^^^^^"
+  end
+
   test "a missing implicit instance retains the authored call context" do
     source = "mod M\n  fn has(x: t, y: t) -> Bool = x == y\nend\n"
 
