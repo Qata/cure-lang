@@ -4731,7 +4731,7 @@ defmodule Cure.Compiler.Parser do
         end
 
       _ ->
-        parse_multi_with_abs(scruts, proof, base_meta, state)
+        parse_multi_with_abs(scruts, proof, base_meta, token, state)
     end
   end
 
@@ -4779,7 +4779,7 @@ defmodule Cure.Compiler.Parser do
   # [scrut | arms]}` shape it already dispatches on. Combining an LHS re-match
   # (`| pat`) or a `proof` binding with multiple scrutinees is out of scope in
   # this first slice and is reported as a clean parse error.
-  defp parse_multi_with_abs(scruts, proof, base_meta, state) do
+  defp parse_multi_with_abs(scruts, proof, base_meta, token, state) do
     n = length(scruts)
 
     {arms, state} =
@@ -4809,7 +4809,8 @@ defmodule Cure.Compiler.Parser do
              base_meta}
           )
 
-        {{:with_abs, base_meta, [hd(scruts)]}, state}
+        {ast, state} = {{:with_abs, base_meta, [hd(scruts)]}, state}
+        {put_multi_with_source_info(ast, token, state), state}
 
       arms == [] ->
         state =
@@ -4818,11 +4819,19 @@ defmodule Cure.Compiler.Parser do
             {:with_multi_no_arms, "with-abstraction over multiple scrutinees requires at least one arm", base_meta}
           )
 
-        {{:with_abs, base_meta, [hd(scruts)]}, state}
+        {ast, state} = {{:with_abs, base_meta, [hd(scruts)]}, state}
+        {put_multi_with_source_info(ast, token, state), state}
 
       true ->
-        build_multi_with(scruts, arms, base_meta, state)
+        {ast, state} = build_multi_with(scruts, arms, base_meta, state)
+        {put_multi_with_source_info(ast, token, state), state}
     end
+  end
+
+  defp put_multi_with_source_info({:with_abs, meta, [scrutinee | _] = children}, token, state) do
+    arms = Enum.drop(children, 1)
+    meta = put_match_source_info(meta, token, scrutinee, arms, state)
+    {:with_abs, meta, children}
   end
 
   # Block-form arms for a multiple-with. Each arm is a list of `n` comma-
@@ -5399,7 +5408,7 @@ defmodule Cure.Compiler.Parser do
 
     branch_spans =
       arms
-      |> Enum.map(&first_node_source_span/1)
+      |> Enum.map(&match_arm_source_span/1)
       |> Enum.reject(&is_nil/1)
 
     whole =
@@ -5420,6 +5429,15 @@ defmodule Cure.Compiler.Parser do
       meta
     end
   end
+
+  defp match_arm_source_span({:match_arm, arm_meta, _}) when is_list(arm_meta) do
+    case first_node_source_span({:match_arm, arm_meta, []}) do
+      nil -> first_node_source_span(Keyword.get(arm_meta, :pattern))
+      span -> span
+    end
+  end
+
+  defp match_arm_source_span(arm), do: first_node_source_span(arm)
 
   defp put_conditional_source_info(meta, if_token, condition, then_branch, else_branch, state) do
     condition_span = first_node_source_span(condition)

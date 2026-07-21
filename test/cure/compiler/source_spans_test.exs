@@ -237,6 +237,18 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert Enum.map(info.branches, &slice(source, &1)) == ["n -> n", "_ -> 0"]
   end
 
+  test "multi-scrutinee with preserves the outer authored range" do
+    source = "fn choose(a: Int, b: Int) -> Int = with a b\n  x, y -> x\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "with_multi.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "with_multi.cure", emit_events: false, prelude_macros: false)
+
+    {:with_abs, meta, _} = find_node(ast, :with_abs)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "with a b\n  x, y -> x"
+    assert Enum.map(info.branches, &slice(source, &1)) == ["x"]
+  end
+
   test "record constructions retain authored name, delimiters, and field spans" do
     source = "fn origin() -> Point = Point{x: 0, y: 0}\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "record.cure", emit_events: false)
