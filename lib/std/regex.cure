@@ -503,6 +503,8 @@ mod Std.Regex
   type EvidenceThread = EvidenceThread(ThreadState, List(Evidence), List(CaptureFrame))
   type EvidencePrefix = EvidencePrefix(List(Evidence), String)
 
+  type Match(result: Type) = Match(result, String, String, String)
+
   fn evidence_reverse_chars(input: String) -> String = evidence_reverse_chars_into(input, [])
   fn evidence_reverse_chars_into(input: String, output: String) -> String = match input
     [] -> output
@@ -831,6 +833,23 @@ mod Std.Regex
 
   fn parse_prefix({result: Type}, regex: Regex(result), input: String) -> Option(Tuple(result, String)) =
     parse_prefix_with(regex, input, true)
+
+  fn search({result: Type}, regex: Regex(result), input: String) -> Option(Match(result)) =
+    search_from(regex, input, [])
+
+  fn search_from({result: Type}, regex: Regex(result), candidate: String, reversed_prefix: String) -> Option(Match(result)) =
+    match parse_prefix(regex, candidate)
+      Some(found) ->
+        let rest = found.2
+        let matched = Std.String.drop_last(candidate, Std.String.length(rest))
+        Some(Match(found.1, Std.String.reverse(reversed_prefix), matched, rest))
+      None() -> match candidate
+        [] -> None()
+        [char | rest] -> search_from(regex, rest, [char | reversed_prefix])
+
+  fn matches({result: Type}, regex: Regex(result), input: String) -> Bool = match search(regex, input)
+    Some(_) -> true
+    None() -> false
 
   fn empty() -> Regex(Unit) = FromPattern(UnitC, PatternEmpty())
 

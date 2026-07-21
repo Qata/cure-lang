@@ -26,6 +26,14 @@ defmodule Cure.Stdlib.DependentRegexParseTest do
       fn parsed_same_alt() -> Option(Char) = parse_full(or_same(atom('a'), atom('b')), "b")
       fn parsed_literal() -> Option(List(Char)) = parse_full(/a[bc]*/, "abcb")
       fn parsed_prefix() -> Option(Tuple(List(Char), String)) = parse_prefix(repeat(atom('a')), "aaab")
+      fn searched() -> Option(Match(String)) = search(captured(one_or_more(atom('a'))), "xxaaay")
+      fn searched_leftmost_longest() -> Option(Match(String)) =
+        search(
+          captured(or_same(as_string(concatenate(atom('a'), atom('a'))), as_string(atom('a')))),
+          "xaay"
+        )
+      fn search_matches() -> Bool = matches(atom('a'), "xxax")
+      fn search_misses() -> Bool = matches(atom('z'), "xxax")
       fn failed() -> Option(Char) = parse_full(atom('a'), "b")
     end
     """
@@ -55,6 +63,17 @@ defmodule Cure.Stdlib.DependentRegexParseTest do
 
   test "prefix parsing returns the typed value and untouched suffix", %{runtime_module: module} do
     assert apply(module, :parsed_prefix, []) == {:some, {~c"aaa", ~c"b"}}
+  end
+
+  test "search is leftmost, longest, typed, and reports all input partitions", %{runtime_module: module} do
+    assert apply(module, :searched, []) ==
+             {:some, {:Match, ~c"aaa", ~c"xx", ~c"aaa", ~c"y"}}
+
+    assert apply(module, :searched_leftmost_longest, []) ==
+             {:some, {:Match, ~c"aa", ~c"x", ~c"aa", ~c"y"}}
+
+    assert apply(module, :search_matches, [])
+    refute apply(module, :search_misses, [])
   end
 
   test "failed full parsing returns None", %{runtime_module: module} do
