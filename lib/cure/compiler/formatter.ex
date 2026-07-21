@@ -772,7 +772,9 @@ defmodule Cure.Compiler.Formatter do
     case :binary.at(source, pos) do
       c when c in [?i, ?m, ?s, ?x, ?u, ?f, ?r, ?U, ?E] ->
         scan_regex_flags(source, pos + 1, size)
-      _ -> pos
+
+      _ ->
+        pos
     end
   end
 
@@ -961,22 +963,10 @@ defmodule Cure.Compiler.Formatter do
   end
 
   defp strip({type, meta, children}) when is_list(meta) do
-    {type, strip_meta(meta), strip(children)}
+    Metadata.strip_diagnostics({type, meta, children})
   end
 
-  defp strip(list) when is_list(list), do: Enum.map(list, &strip/1)
-  defp strip(tuple) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> Enum.map(&strip/1) |> List.to_tuple()
-  defp strip(map) when is_map(map), do: Map.new(map, fn {k, v} -> {k, strip(v)} end)
-  defp strip(other), do: other
-
-  defp strip_meta(meta) do
-    meta
-    |> Metadata.drop_source_info()
-    |> Keyword.delete(:line)
-    |> Keyword.delete(:col)
-    |> Keyword.delete(:column)
-    |> Enum.map(fn {k, v} -> {k, strip(v)} end)
-  end
+  defp strip(other), do: Metadata.strip_diagnostics(other)
 
   # -- LSP edit helper ---------------------------------------------------------
 

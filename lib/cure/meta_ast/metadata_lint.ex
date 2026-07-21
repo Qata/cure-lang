@@ -68,7 +68,7 @@ defmodule Cure.MetaAST.MetadataLint do
   defp walk_clauses(clauses, file), do: Enum.flat_map(clauses, &walk(&1, false, file))
 
   defp keyword_metadata_literal?(metadata) when is_list(metadata) do
-    metadata != [] and Enum.all?(metadata, &match?({key, _} when is_atom(key), &1))
+    Enum.all?(metadata, &match?({key, _} when is_atom(key), &1))
   end
 
   defp keyword_metadata_literal?(_), do: false

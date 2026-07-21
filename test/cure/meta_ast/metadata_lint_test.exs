@@ -12,6 +12,15 @@ defmodule Cure.MetaAST.MetadataLintTest do
     assert site.node == :sigma_type
   end
 
+  test "reports exact empty metadata lists in semantic patterns" do
+    source = "def bad({:variable, [], name}), do: name\n"
+    [site] = MetadataLint.scan_source(source, "empty.ex")
+
+    assert site.file == "empty.ex"
+    assert site.line == 1
+    assert site.node == :variable
+  end
+
   test "accepts metadata bindings and ignores construction sites" do
     source = """
     def good({:sigma_type, meta, children}), do: {Keyword.fetch!(meta, :binder), children}
@@ -27,7 +36,7 @@ defmodule Cure.MetaAST.MetadataLintTest do
   end
 
   test "the elaborator and compiler semantic trees have no exact metadata patterns" do
-    paths = Path.wildcard("lib/cure/elab/**/*.ex") ++ Path.wildcard("lib/cure/compiler/**/*.ex")
+    paths = Path.wildcard("lib/cure/**/*.ex")
     assert :ok = MetadataLint.validate(paths)
   end
 end
