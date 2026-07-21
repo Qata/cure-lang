@@ -2561,6 +2561,7 @@ defmodule Cure.Diagnostic.Adapter do
         observed: Map.get(details, :observed, :eof),
         at: Map.get(details, :span) || Keyword.get(opts, :span),
         opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
         context: details
       },
       opts
@@ -5091,6 +5092,13 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{expected: :explain_point}), do: "Explanation clause needs a failure point"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :unterminated_lambda,
+         expected: :rbrace,
+         context: %{body_style: :brace}
+       }),
+       do: "This brace-delimited lambda body reaches the end of its container without the '}' that closes it."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :unterminated_lambda}),
     do: "This multi-statement lambda body reaches the end of its container without a closing delimiter."
 
@@ -5409,6 +5417,9 @@ defmodule Cure.Diagnostic.Adapter do
     |> String.replace("\t", "\\t")
   end
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda, expected: :rbrace}),
+    do: "close this lambda body with `}`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda}), do: "the unclosed body reaches here"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unrecognized_pattern, observed: :range}),
@@ -5566,11 +5577,29 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_secondary_labels(
-         %SyntaxProblem{kind: :unterminated_lambda, opener: %Span{} = opener},
+         %SyntaxProblem{
+           kind: :unterminated_lambda,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
          primary_span
-       )
-       when opener != primary_span,
-       do: [%Label{span: opener, style: :secondary, message: "this lambda starts here"}]
+       ) do
+    opener_message =
+      if Map.get(context, :body_style) == :brace,
+        do: "this lambda body starts here",
+        else: "this lambda starts here"
+
+    [
+      pickup_label(opener, :secondary, opener_message),
+      pickup_label(previous, :secondary, "the previous body expression ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
 
   defp syntax_secondary_labels(
          %SyntaxProblem{kind: :variadic_parameter_name_missing, opener: %Span{} = marker},

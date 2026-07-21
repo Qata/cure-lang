@@ -7747,7 +7747,8 @@ defmodule Cure.Compiler.Parser do
   # with newlines accepted as a synonym when the brace body happens to
   # live outside a paren scope. Empty braces compile to `:ok`.
   defp parse_brace_lambda_body(state, token) do
-    state = expect(state, :lbrace)
+    open_token = peek(state)
+    state = advance(state)
     state = skip_stmt_seps(state)
 
     case peek(state) do
@@ -7757,7 +7758,32 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         {exprs, state} = parse_brace_block_body(state, [])
-        state = expect(state, :rbrace)
+
+        state =
+          case expect_token(state, :rbrace) do
+            {:ok, _close, next_state} ->
+              next_state
+
+            {:error, next_state} ->
+              [_generic | rest] = next_state.errors
+              observed = peek(next_state)
+
+              error =
+                {:lambda_block_unterminated,
+                 %{
+                   expected: :rbrace,
+                   observed: observed.type,
+                   span: observed.span,
+                   opener_span: open_token.span,
+                   previous_span: exprs |> List.last() |> first_node_source_span(),
+                   body_style: :brace,
+                   line: observed.line,
+                   column: observed.col
+                 }}
+
+              %{next_state | errors: [error | rest]}
+          end
+
         {build_block(exprs, :brace, token), state}
     end
   end
