@@ -409,6 +409,16 @@ defmodule Cure.Elab.Program do
     end
   end
 
+  # The parser keeps a single bare RHS in the compact `:type_annotation` form
+  # until elaboration decides whether it names an alias target or a nullary
+  # constructor. Preserve the existing conservative rule used by `ctor_names/1`:
+  # a `variant: true` RHS participates in collision checks, with its exact name
+  # range, so `type Bad = Z` cannot silently erase an earlier `Z` constructor.
+  defp constructor_bindings({:type_annotation, _meta, [{_tag, rmeta, _} = rhs]})
+       when is_list(rmeta) do
+    if Keyword.get(rmeta, :variant, false), do: variant_constructor_binding(rhs), else: []
+  end
+
   defp constructor_bindings(_decl), do: []
 
   defp variant_constructor_binding({:variable, meta, name}) when is_list(meta) and is_binary(name),

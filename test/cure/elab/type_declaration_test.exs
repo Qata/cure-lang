@@ -64,8 +64,11 @@ defmodule Cure.Elab.TypeDeclarationTest do
     end
 
     test "a one-constructor enum whose constructor already exists is a duplicate" do
-      assert {:error, {:duplicate_constructor, :Z}} =
+      assert {:error, {:duplicate_constructor, %{name: :Z, spans: [first, second]}}} =
                Program.elaborate("mod M\n" <> @nat <> "  type Bad = Z\nend\n")
+
+      assert first.start_line == 2
+      assert second.start_line == 3
     end
   end
 
@@ -79,7 +82,11 @@ defmodule Cure.Elab.TypeDeclarationTest do
       end
       """
 
-      assert {:error, {:duplicate_type, :Equatable}} = Program.elaborate(src)
+      assert {:error, {:duplicate_type, %{name: :Equatable, spans: [first, second]}}} =
+               Program.elaborate(src)
+
+      assert first.start_line == 2
+      assert second.start_line == 4
     end
   end
 

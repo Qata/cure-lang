@@ -81,7 +81,9 @@ defmodule Cure.Elab.CrossModuleNamesTest do
 
     test "constructor across two types" do
       src = "mod A\n  type Foo = C | D\n  type Bar = C | E\nend\n"
-      assert {:error, {:duplicate_constructor, :C}} = check(src)
+      assert {:error, {:duplicate_constructor, %{name: :C, spans: [first, second]}}} = check(src)
+      assert first.start_line == 2
+      assert second.start_line == 3
     end
   end
 
