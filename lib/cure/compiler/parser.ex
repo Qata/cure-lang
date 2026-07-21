@@ -4614,7 +4614,7 @@ defmodule Cure.Compiler.Parser do
 
       %Token{type: :dedent} when layout? ->
         state = close_record_layout(state, true)
-        {state, close_token} = expect_token_or_nil(state, :rbrace)
+        {state, close_token} = expect_container_close(state, :rbrace, :record, open_token, [], true)
 
         meta =
           put_record_source_info(
@@ -4647,7 +4647,9 @@ defmodule Cure.Compiler.Parser do
             probe_state = skip_newlines(probe_state)
             {fields, probe_state} = parse_map_pairs(probe_state, :rbrace)
             probe_state = close_record_layout(probe_state, layout?)
-            {probe_state, close_token} = expect_token_or_nil(probe_state, :rbrace)
+
+            {probe_state, close_token} =
+              expect_container_close(probe_state, :rbrace, :record, open_token, fields, true)
 
             meta =
               put_record_source_info(
@@ -4667,7 +4669,7 @@ defmodule Cure.Compiler.Parser do
             state = %{state | pos: saved_pos, last_authored: saved_last_authored, errors: saved_errors}
             {fields, state} = parse_map_pairs(state, :rbrace)
             state = close_record_layout(state, layout?)
-            {state, close_token} = expect_token_or_nil(state, :rbrace)
+            {state, close_token} = expect_container_close(state, :rbrace, :record, open_token, fields, true)
 
             meta =
               put_record_source_info(

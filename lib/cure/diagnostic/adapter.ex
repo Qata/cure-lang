@@ -4976,6 +4976,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :map}}),
     do: "Map is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :record}}),
+    do: "Record is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :list}}),
     do: "List elements need a comma"
 
@@ -4984,6 +4987,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :map}}),
     do: "Map entries need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "Record fields need a comma"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :container_trailing_separator, context: %{container: :list}}),
     do: "List ends with an extra comma"
@@ -5111,6 +5120,13 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "This map reaches the end of the source without the '}' that closes its entries."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rbrace,
+         context: %{container: :record}
+       }),
+       do: "This record reaches the end of the source without the '}' that closes its fields."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :container_unclosed, context: %{container: container}}),
     do: "This #{container} reaches the end of the source without the ']' that closes its elements."
 
@@ -5119,6 +5135,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :map}
        }),
        do: "This map has another entry here, but consecutive entries must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "This record has another field here, but consecutive fields must be separated by a comma."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5261,6 +5283,12 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "insert a comma before this entry"
 
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "insert a comma before this field"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :container_separator_missing}),
     do: "insert a comma before this element"
 
@@ -5376,7 +5404,7 @@ defmodule Cure.Diagnostic.Adapter do
          primary_span
        )
        when kind in [:container_unclosed, :container_separator_missing, :container_trailing_separator] do
-    item = if Map.get(context, :container) == :map, do: "entry", else: "element"
+    item = container_item_name(Map.get(context, :container))
 
     [
       pickup_label(opener, :secondary, "this container starts here"),
@@ -5544,6 +5572,18 @@ defmodule Cure.Diagnostic.Adapter do
          }
        ]
 
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :record}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these fields",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
   defp syntax_insertions(%SyntaxProblem{kind: :container_separator_missing}, %Span{} = span),
     do: [
       %Suggestion{
@@ -5571,6 +5611,10 @@ defmodule Cure.Diagnostic.Adapter do
     ]
 
   defp syntax_insertions(_problem, _span), do: []
+
+  defp container_item_name(:map), do: "entry"
+  defp container_item_name(:record), do: "field"
+  defp container_item_name(_container), do: "element"
 
   defp syntax_insertion(:rparen), do: ")"
   defp syntax_insertion(:rbracket), do: "]"

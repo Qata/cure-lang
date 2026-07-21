@@ -657,6 +657,84 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
            }
   end
 
+  test "an unclosed record points from its opening brace to its last field" do
+    source = "Point{x: 1"
+    {:ok, tokens} = Lexer.tokenize(source, file: "record.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :record}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "record.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- RECORD IS NOT CLOSED [E094] ------------------------------------- record.cure
+
+             This record reaches the end of the source without the '}' that closes its
+             fields.
+
+             at record.cure:1:11
+             1 | Point{x: 1
+               |      -----^ this container starts here; the previous field ends here; close this container with `}`
+
+             Hint: Insert `}` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "}"}]}] =
+             diagnostic.suggestions
+
+    assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 2
+  end
+
+  test "adjacent record fields get a zero-width comma insertion" do
+    source = "Point{x: 1 y: 2}"
+    {:ok, tokens} = Lexer.tokenize(source, file: "record_separator.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:container_elements_syntax, %{kind: :container_separator_missing, container: :record}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "record_separator.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- RECORD FIELDS NEED A COMMA [E094] --------------------- record_separator.cure
+
+             This record has another field here, but consecutive fields must be separated by
+             a comma.
+
+             at record_separator.cure:1:12
+             1 | Point{x: 1 y: 2}
+               |      ----- ^ this container starts here; the previous field ends here; insert a comma before this field
+
+             Hint: Insert `,` between these fields
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 11
+    assert insertion.end_byte == 11
+
+    assert [%{"newText" => ", ", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 11},
+             "end" => %{"line" => 0, "character" => 11}
+           }
+  end
+
+  test "record updates use the same contextual closing-brace family" do
+    source = "Point{point | x: 1"
+    {:ok, tokens} = Lexer.tokenize(source, file: "record_update.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :record}} = error
+  end
+
   test "a trailing list comma is blamed directly and can be removed safely" do
     source = "[1,]"
     {:ok, tokens} = Lexer.tokenize(source, file: "trailing_list.cure", emit_events: false)
