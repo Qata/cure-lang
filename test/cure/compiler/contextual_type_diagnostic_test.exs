@@ -276,6 +276,11 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "NegativeSuccessor(n) -> second"
     assert rendered =~ "compare this branch with the declared result"
     assert rendered =~ "possible outlier: this branch has the incompatible type"
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert [related] = lsp["relatedInformation"]
+    assert related["message"] == "possible outlier: this branch has the incompatible type"
+    assert related["location"]["range"]["start"]["line"] == 2
   end
 
   test "a singleton branch type is called out when the other arms agree" do
