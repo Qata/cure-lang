@@ -5142,6 +5142,12 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :local_binding_assign_missing}),
     do: "Let binding needs an equals sign"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :where_block_indent_missing}),
+    do: "Local definitions must be indented"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :where_binding_assign_missing}),
+    do: "Local definition needs an equals sign"
+
   defp syntax_problem_title(%SyntaxProblem{
          kind: :map_entry_separator_missing,
          context: %{ambiguous: true, container: :record}
@@ -5623,6 +5629,15 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{family: family, declaration: name}
        }),
        do: "The `#{family}` binding for `#{name}` needs `=` before the value it binds."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :where_block_indent_missing}),
+    do: "Definitions belonging to this `where` block must be indented beneath it."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :where_binding_assign_missing,
+         context: %{declaration: name}
+       }),
+       do: "The local definition `#{name}` needs `=` between its name and value."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :map_entry_separator_missing,
@@ -6159,6 +6174,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :local_binding_assign_missing}),
     do: "insert `=` before this binding value"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :where_block_indent_missing}),
+    do: "indent this definition beneath `where`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :where_binding_assign_missing}),
+    do: "insert `=` before this local value"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :map_entry_separator_missing,
@@ -6700,6 +6721,35 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(opener, :secondary, "this #{Map.get(context, :family, :let)} binding starts here"),
       pickup_label(Map.get(context, :pattern_span), :secondary, "this is the binding pattern"),
       pickup_label(previous, :secondary, "the binding head ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :where_block_indent_missing,
+           opener: %Span{} = opener
+         },
+         primary_span
+       )
+       when opener != primary_span,
+       do: [pickup_label(opener, :secondary, "this local `where` block starts here")]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :where_binding_assign_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this local `where` block starts here"),
+      pickup_label(previous, :secondary, "this is the local definition name")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7524,6 +7574,28 @@ defmodule Cure.Diagnostic.Adapter do
     [
       %Suggestion{
         message: "Insert `=` before the binding value",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "= "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :where_block_indent_missing}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Indent each local definition beneath `where`",
+        applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :where_binding_assign_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `=` before the local value",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "= "}]
       }

@@ -7420,17 +7420,51 @@ defmodule Cure.Compiler.Parser do
 
     case peek(probe) do
       %Token{type: :keyword, value: :where} ->
+        where_token = peek(probe)
         probe = advance(probe) |> skip_newlines()
-        probe = expect(probe, :indent)
-        {bindings, probe} = parse_where_bindings(probe, [])
-        {Enum.reverse(bindings), expect_dedent(probe)}
+
+        case expect_where_block_indent(probe, where_token) do
+          {:ok, probe} ->
+            {bindings, probe} = parse_where_bindings(probe, [], where_token)
+            {Enum.reverse(bindings), expect_dedent(probe)}
+
+          {:error, probe} ->
+            {[], probe}
+        end
 
       _ ->
         {[], state}
     end
   end
 
-  defp parse_where_bindings(state, acc) do
+  defp expect_where_block_indent(state, where_token) do
+    case expect_token(state, :indent) do
+      {:ok, _indent, next_state} ->
+        {:ok, next_state}
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :where_block_indent_missing,
+             expected: :indent,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: observed.span,
+             observed_span: observed.span,
+             opener_span: where_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        {:error, %{next_state | errors: [error | rest]}}
+    end
+  end
+
+  defp parse_where_bindings(state, acc, where_token) do
     state = skip_newlines(state)
 
     case peek(state) do
@@ -7442,17 +7476,46 @@ defmodule Cure.Compiler.Parser do
 
       %Token{type: :keyword, value: :fn} = token ->
         {binding, state} = parse_fn_def(advance(state), token, :private)
-        parse_where_bindings(state, [binding | acc])
+        parse_where_bindings(state, [binding | acc], where_token)
 
       %Token{type: :identifier} = token ->
         name = to_string(token.value)
-        state = advance(state) |> expect(:assign) |> skip_newlines()
+        state = advance(state) |> expect_where_binding_assign(where_token, token, name) |> skip_newlines()
         {expr, state} = parse_expr_or_block(state)
         binding = {:where_value, [name: name, line: token.line, col: token.col], expr}
-        parse_where_bindings(state, [binding | acc])
+        parse_where_bindings(state, [binding | acc], where_token)
 
       _ ->
         {acc, state}
+    end
+  end
+
+  defp expect_where_binding_assign(state, where_token, name_token, name) do
+    case expect_token(state, :assign) do
+      {:ok, _assign, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :where_binding_assign_missing,
+             declaration: name,
+             expected: :assign,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: where_token.span,
+             previous_span: name_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
     end
   end
 
@@ -9246,7 +9309,7 @@ defmodule Cure.Compiler.Parser do
         name_token = peek(state)
         name = to_string(name_token.value)
         state = advance(state)
-        state = expect(state, :colon)
+        state = advance(state)
         {inner, state} = parse_type_atom(state)
 
         {state, _close_token} =
@@ -9271,7 +9334,7 @@ defmodule Cure.Compiler.Parser do
           name_token = peek(state)
           name = to_string(name_token.value)
           state = advance(state)
-          state = expect(state, :colon)
+          state = advance(state)
           {inner, state} = parse_type_atom(state)
 
           {state, _close_token} =
@@ -12891,13 +12954,6 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :newline} -> skip_newlines_and_comments(advance(state))
       %Token{type: t} when t in [:doc_comment, :line_comment] -> skip_newlines_and_comments(advance(state))
       _ -> state
-    end
-  end
-
-  defp expect(state, expected_type) do
-    case expect_token(state, expected_type) do
-      {:ok, _token, state} -> state
-      {:error, state} -> state
     end
   end
 
