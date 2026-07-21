@@ -8639,10 +8639,25 @@ defmodule Cure.Compiler.Parser do
   # indentation-delimited block of constructor signatures. Head-paren args are
   # parameters (uniform, never matched); the `indices (…)` clause are indices.
   defp parse_indexed_family(state, name, params, token) do
+    indices_token = peek(state)
     state = advance(state)
-    state = expect(state, :lparen)
+    {state, open_token} = expect_index_list_opener(state, name, indices_token)
     {idx_tele, state} = parse_typed_params(state)
-    state = expect(state, :rparen)
+
+    {state, _close_token} =
+      case open_token do
+        %Token{} ->
+          expect_container_close(state, :rparen, :type_indices, open_token, idx_tele, true, %{
+            declaration: name
+          })
+
+        nil ->
+          case expect_token(state, :rparen) do
+            {:ok, close_token, next_state} -> {next_state, close_token}
+            {:error, next_state} -> {next_state, nil}
+          end
+      end
+
     state = skip_newlines_and_comments(state)
 
     {opened_block, state} =
@@ -8662,6 +8677,34 @@ defmodule Cure.Compiler.Parser do
 
     meta = [name: name, params: params, indices: idx_tele, line: token.line, col: token.col]
     {{:indexed_type, meta, ctors}, state}
+  end
+
+  defp expect_index_list_opener(state, declaration, indices_token) do
+    case expect_token(state, :lparen) do
+      {:ok, open_token, next_state} ->
+        {next_state, open_token}
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:indexed_type_syntax,
+           %{
+             kind: :type_indices_opener_missing,
+             declaration: declaration,
+             expected: :lparen,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             previous_span: indices_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        {%{next_state | errors: [error | rest]}, nil}
+    end
   end
 
   # Ordinary ADT / alias body: `type NAME(type_params) = …`.

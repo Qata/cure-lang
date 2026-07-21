@@ -2555,6 +2555,20 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:indexed_type_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:invalid_parameter_name, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -5104,6 +5118,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :type_declaration_assign_missing}),
     do: "Type declaration needs an equals sign"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :type_indices_opener_missing}),
+    do: "Type indices need parentheses"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5183,6 +5200,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :type_indices}
+       }),
+       do: "Type index list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :lambda_parameters}
        }),
        do: "Lambda parameter list is not closed"
@@ -5238,6 +5261,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :type_parameters}
        }),
        do: "Type parameters need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_indices}
+       }),
+       do: "Type indices need a comma"
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5416,6 +5445,12 @@ defmodule Cure.Diagnostic.Adapter do
        do: "The type `#{name}` needs `=` between its declaration head and its constructors or aliased type."
 
   defp syntax_problem_context(%SyntaxProblem{
+         kind: :type_indices_opener_missing,
+         context: %{declaration: declaration}
+       }),
+       do: "The indexed type `#{declaration}` must put its index telescope inside parentheses after `indices`."
+
+  defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
          observed: observed,
          context: %{lambda: true}
@@ -5509,6 +5544,13 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
          expected: :rparen,
+         context: %{container: :type_indices, declaration: declaration}
+       }),
+       do: "The indexed type `#{declaration}` reaches the end of its index telescope without the closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
          context: %{container: :lambda_parameters}
        }),
        do: "This lambda's parameter list reaches the end of the source without its closing ')'."
@@ -5596,6 +5638,13 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do:
          "The declaration of `#{declaration}` has another type parameter here, but consecutive parameters must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_indices, declaration: declaration}
+       }),
+       do:
+         "The indexed type `#{declaration}` has another index here, but consecutive indices must be separated by a comma."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5782,6 +5831,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :type_declaration_assign_missing}),
     do: "insert `=` before this type body"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :type_indices_opener_missing}),
+    do: "insert `(` before the first type index"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -5816,6 +5868,13 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :type_parameters}
        }),
        do: "close these type parameters with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :type_indices}
+       }),
+       do: "close these type indices with `)`"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_unclosed,
@@ -5902,6 +5961,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :type_parameters}
        }),
        do: "insert a comma before this type parameter"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_indices}
+       }),
+       do: "insert a comma before this type index"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -6058,6 +6123,13 @@ defmodule Cure.Diagnostic.Adapter do
        )
        when previous != primary_span,
        do: [%Label{span: previous, style: :secondary, message: "this is the constructor name"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :type_indices_opener_missing, previous: %Span{} = previous},
+         primary_span
+       )
+       when previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "the index telescope follows this keyword"}]
 
   defp syntax_secondary_labels(
          %SyntaxProblem{kind: :record_field_colon_missing, previous: %Span{} = previous},
@@ -6363,6 +6435,27 @@ defmodule Cure.Diagnostic.Adapter do
          %SyntaxProblem{
            kind: kind,
            opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :type_indices}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "these type indices start here"),
+      pickup_label(previous, :secondary, "the previous type index ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
            previous: previous
          },
          primary_span
@@ -6498,6 +6591,20 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_insertions(
+         %SyntaxProblem{kind: :type_indices_opener_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen] do
+    [
+      %Suggestion{
+        message: "Insert `(` before the type indices",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "("}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
          %SyntaxProblem{kind: :record_field_colon_missing, context: %{token_type: type}},
          %Span{} = span
        )
@@ -6627,6 +6734,13 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_insertions(
          %SyntaxProblem{kind: :container_unclosed, expected: :rparen, context: %{container: :type_parameters}},
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rparen, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_unclosed, expected: :rparen, context: %{container: :type_indices}},
          %Span{} = span
        ) do
     closing_delimiter_insertion(:rparen, span)
@@ -6774,6 +6888,18 @@ defmodule Cure.Diagnostic.Adapter do
        ]
 
   defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :type_indices}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these type indices",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
          %SyntaxProblem{kind: :container_separator_missing, context: %{container: :lambda_parameters}},
          %Span{} = span
        ),
@@ -6867,6 +6993,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp container_item_name(:parameters), do: "parameter"
   defp container_item_name(:type_arguments), do: "type argument"
   defp container_item_name(:type_parameters), do: "type parameter"
+  defp container_item_name(:type_indices), do: "type index"
   defp container_item_name(:lambda_parameters), do: "lambda parameter"
 
   defp container_item_name(container) when container in [:tuple_type, :tuple_type_sigil, :grouped_type],
