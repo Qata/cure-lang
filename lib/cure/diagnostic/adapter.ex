@@ -4994,6 +4994,12 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "Function parameter list is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :type_arguments}
+       }),
+       do: "Type application is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :list}}),
     do: "List elements need a comma"
 
@@ -5014,6 +5020,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :parameters}
        }),
        do: "Function parameters need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_arguments}
+       }),
+       do: "Type arguments need a comma"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :container_trailing_separator, context: %{container: :list}}),
     do: "List ends with an extra comma"
@@ -5169,6 +5181,20 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "This function's parameter list reaches the end of the source without its closing ')'."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :type_arguments, type: type, token_type: :dedent}
+       }),
+       do: "The type application `#{type}` ends before the ')' that closes its arguments."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :type_arguments, type: type}
+       }),
+       do: "The type application `#{type}` reaches the end of the source without the ')' that closes its arguments."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :container_unclosed, context: %{container: container}}),
     do: "This #{container} reaches the end of the source without the ']' that closes its elements."
 
@@ -5189,6 +5215,13 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :parameters}
        }),
        do: "This function has another parameter here, but consecutive parameters must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_arguments, type: type}
+       }),
+       do:
+         "The type application `#{type}` has another argument here, but consecutive type arguments must be separated by a comma."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5329,6 +5362,13 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "close this parameter list with `)`"
 
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :type_arguments}
+       }),
+       do: "close these type arguments with `)`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :container_unclosed, expected: expected}),
     do: "close this container with `#{syntax_insertion(expected)}`"
 
@@ -5349,6 +5389,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :parameters}
        }),
        do: "insert a comma before this parameter"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_arguments}
+       }),
+       do: "insert a comma before this type argument"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :container_separator_missing}),
     do: "insert a comma before this element"
@@ -5460,6 +5506,27 @@ defmodule Cure.Diagnostic.Adapter do
          %SyntaxProblem{
            kind: kind,
            opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :type_arguments}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "these type arguments start here"),
+      pickup_label(previous, :secondary, "the previous type argument ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
            previous: previous
          },
          primary_span
@@ -5553,24 +5620,14 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
-    case syntax_insertion(expected) do
-      nil ->
-        []
+    closing_delimiter_insertion(expected, span)
+  end
 
-      replacement ->
-        [
-          %Suggestion{
-            message: "Insert `#{replacement}` to close the construct",
-            applicability: :machine_applicable,
-            edits: [
-              %TextEdit{
-                span: %{span | end_byte: span.start_byte, end_line: span.start_line, end_column: span.start_column},
-                replacement: replacement
-              }
-            ]
-          }
-        ]
-    end
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_unclosed, expected: expected, context: %{token_type: :dedent}},
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(expected, span)
   end
 
   defp syntax_insertions(
@@ -5678,6 +5735,18 @@ defmodule Cure.Diagnostic.Adapter do
          }
        ]
 
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :type_arguments}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these type arguments",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
   defp syntax_insertions(%SyntaxProblem{kind: :container_separator_missing}, %Span{} = span),
     do: [
       %Suggestion{
@@ -5706,11 +5775,33 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_insertions(_problem, _span), do: []
 
+  defp closing_delimiter_insertion(expected, span) do
+    case syntax_insertion(expected) do
+      nil ->
+        []
+
+      replacement ->
+        [
+          %Suggestion{
+            message: "Insert `#{replacement}` to close the construct",
+            applicability: :machine_applicable,
+            edits: [
+              %TextEdit{
+                span: %{span | end_byte: span.start_byte, end_line: span.start_line, end_column: span.start_column},
+                replacement: replacement
+              }
+            ]
+          }
+        ]
+    end
+  end
+
   defp container_item_name(:map), do: "entry"
   defp container_item_name(:record), do: "field"
   defp container_item_name(:list_cons), do: "tail expression"
   defp container_item_name(:comprehension), do: "clause"
   defp container_item_name(:parameters), do: "parameter"
+  defp container_item_name(:type_arguments), do: "type argument"
   defp container_item_name(_container), do: "element"
 
   defp syntax_insertion(:rparen), do: ")"

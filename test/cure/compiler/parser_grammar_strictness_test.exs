@@ -368,6 +368,122 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
            }
   end
 
+  test "an unclosed type application points to its argument list" do
+    source = "typealias Value = Result(Int"
+    {:ok, tokens} = Lexer.tokenize(source, file: "type_args.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :type_arguments, type: "Result"}} =
+             error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "type_args.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE APPLICATION IS NOT CLOSED [E094] ------------------------ type_args.cure
+
+             The type application `Result` reaches the end of the source without the ')' that
+             closes its arguments.
+
+             at type_args.cure:1:29
+             1 | typealias Value = Result(Int
+               |                         ----^ these type arguments start here; the previous type argument ends here; close these type arguments with `)`
+
+             Hint: Insert `)` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ")", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 28
+    assert insertion.end_byte == 28
+    assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 2
+  end
+
+  test "adjacent type arguments get a zero-width comma insertion" do
+    source = "typealias Value = Result(Int Bool)"
+    {:ok, tokens} = Lexer.tokenize(source, file: "type_arg_separator.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+
+    assert {:container_elements_syntax,
+            %{kind: :container_separator_missing, container: :type_arguments, type: "Result"}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "type_arg_separator.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE ARGUMENTS NEED A COMMA [E094] ------------------ type_arg_separator.cure
+
+             The type application `Result` has another argument here, but consecutive type
+             arguments must be separated by a comma.
+
+             at type_arg_separator.cure:1:30
+             1 | typealias Value = Result(Int Bool)
+               |                         ---- ^ these type arguments start here; the previous type argument ends here; insert a comma before this type argument
+
+             Hint: Insert `,` between these type arguments
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 29
+    assert insertion.end_byte == 29
+
+    assert [%{"newText" => ", ", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 29},
+             "end" => %{"line" => 0, "character" => 29}
+           }
+  end
+
+  test "qualified type applications use the contextual family" do
+    source = "typealias Value = Std.Result(Int"
+    {:ok, tokens} = Lexer.tokenize(source, file: "qualified_type_args.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+    error = Enum.find(errors, &match?({:container_elements_syntax, _}, &1))
+
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :type_arguments, type: "Std.Result"}} =
+             error
+  end
+
+  test "a constructor-signature application inserts its closer before dedent" do
+    source = "type SF indices (as: Type)\n  seq : SF(as"
+    {:ok, tokens} = Lexer.tokenize(source, file: "ctor_type_args.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+    error = Enum.find(errors, &match?({:container_elements_syntax, _}, &1))
+
+    assert {:container_elements_syntax,
+            %{kind: :container_unclosed, container: :type_arguments, type: "SF", token_type: :dedent}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "ctor_type_args.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE APPLICATION IS NOT CLOSED [E094] ------------------- ctor_type_args.cure
+
+             The type application `SF` ends before the ')' that closes its arguments.
+
+             at ctor_type_args.cure:2:14
+             2 |   seq : SF(as
+               |           ---^ these type arguments start here; the previous type argument ends here; close these type arguments with `)`
+
+             Hint: Insert `)` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ")", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_line == 2
+    assert insertion.start_column == 14
+    assert insertion.start_byte == insertion.end_byte
+  end
+
   test "an invalid function parameter is rejected at the authored binder token" do
     source = "fn run(42) -> Int = 1\n"
     {:ok, tokens} = Lexer.tokenize(source, file: "binder.cure", emit_events: false)

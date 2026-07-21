@@ -4946,6 +4946,10 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp expect_container_close(state, closing, container, open_token, elements, separator_allowed) do
+    expect_container_close(state, closing, container, open_token, elements, separator_allowed, %{})
+  end
+
+  defp expect_container_close(state, closing, container, open_token, elements, separator_allowed, context) do
     case expect_token(state, closing) do
       {:ok, token, next_state} ->
         {next_state, token}
@@ -4955,7 +4959,7 @@ defmodule Cure.Compiler.Parser do
 
         kind =
           cond do
-            observed.type == :eof -> :container_unclosed
+            observed.type in [:eof, :dedent] -> :container_unclosed
             separator_allowed and call_argument_start?(observed) -> :container_separator_missing
             true -> nil
           end
@@ -4976,21 +4980,22 @@ defmodule Cure.Compiler.Parser do
               observed.span
             end
 
-          error =
-            {:container_elements_syntax,
-             %{
-               kind: kind,
-               container: container,
-               expected: if(kind == :container_separator_missing, do: :comma, else: closing),
-               observed: observed.value || observed.type,
-               token_type: observed.type,
-               span: span,
-               observed_span: observed.span,
-               opener_span: open_token.span,
-               previous_span: previous,
-               line: observed.line,
-               column: observed.col
-             }}
+          details =
+            Map.merge(context, %{
+              kind: kind,
+              container: container,
+              expected: if(kind == :container_separator_missing, do: :comma, else: closing),
+              observed: observed.value || observed.type,
+              token_type: observed.type,
+              span: span,
+              observed_span: observed.span,
+              opener_span: open_token.span,
+              previous_span: previous,
+              line: observed.line,
+              column: observed.col
+            })
+
+          error = {:container_elements_syntax, details}
 
           {%{next_state | errors: [error | rest]}, nil}
         else
@@ -8647,9 +8652,13 @@ defmodule Cure.Compiler.Parser do
 
         case peek(state) do
           %Token{type: :lparen} ->
+            open_token = peek(state)
             state = advance(state)
             {args, state} = parse_type_atom_args(state)
-            {state, close_token} = expect_token_or_nil(state, :rparen)
+
+            {state, close_token} =
+              expect_container_close(state, :rparen, :type_arguments, open_token, args, true, %{type: name})
+
             meta = [name: name, line: token.line, col: token.col]
             meta = put_type_application_source_info(meta, token, args, close_token)
             {{:function_call, meta, args}, state}
@@ -10466,9 +10475,13 @@ defmodule Cure.Compiler.Parser do
             parse_tuple_type(state)
 
           match?(%Token{type: :lparen}, peek(state)) ->
+            open_token = peek(state)
             state = advance(state)
             {params, state} = parse_type_param_list(state)
-            {state, close_token} = expect_token_or_nil(state, :rparen)
+
+            {state, close_token} =
+              expect_container_close(state, :rparen, :type_arguments, open_token, params, true, %{type: base_name})
+
             meta = [name: base_name, line: token.line, col: token.col]
             meta = put_type_application_source_info(meta, token, params, close_token)
             ast = {:function_call, meta, params}
@@ -10527,9 +10540,13 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :lparen} ->
         case qualified_type_name(inner) do
           {:ok, name} ->
+            open_token = peek(state)
             state = advance(state)
             {params, state} = parse_type_param_list(state)
-            {state, close_token} = expect_token_or_nil(state, :rparen)
+
+            {state, close_token} =
+              expect_container_close(state, :rparen, :type_arguments, open_token, params, true, %{type: name})
+
             meta = [name: name, qualified: true]
             meta = put_type_application_source_info(meta, inner, params, close_token)
             ast = {:function_call, meta, params}
@@ -11655,13 +11672,6 @@ defmodule Cure.Compiler.Parser do
     case expect_token(state, expected_type) do
       {:ok, _token, state} -> state
       {:error, state} -> state
-    end
-  end
-
-  defp expect_token_or_nil(state, expected_type) do
-    case expect_token(state, expected_type) do
-      {:ok, token, next_state} -> {next_state, token}
-      {:error, next_state} -> {next_state, nil}
     end
   end
 
