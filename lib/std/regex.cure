@@ -342,6 +342,110 @@ mod Std.Regex
     | EndListEvidence
     | StringEvidence(String)
 
+  ## A suffix-indexed intrinsic grammar. `Encodes(shape, input, rest)` proves
+  ## that one value of `shape` consumes a prefix of `input` and leaves `rest`.
+  ## This is the context-threaded formulation from the thesis: concatenation and
+  ## repetition compose by sharing a middle suffix, with no append theorem or
+  ## runtime boundary witness.
+  type Encodes indices (shape: ShapeCode, input: List(Evidence), rest: List(Evidence))
+    EncodesUnit : Encodes(UnitC, Cons(UnitEvidence(), rest), rest)
+    EncodesCharacter : (char: Char) -> Encodes(CharC, Cons(CharacterEvidence(char), rest), rest)
+    EncodesString : (value: String) -> Encodes(StringC, Cons(StringEvidence(value), rest), rest)
+    EncodesPair : (right :erased Encodes(right_shape, pair_evidence, left_evidence)) -> (left :erased Encodes(left_shape, left_evidence, rest)) -> Encodes(PairC(left_shape, right_shape), Cons(PairEvidence(), pair_evidence), rest)
+    EncodesLeft : (branch :erased Encodes(left, branch_evidence, rest)) -> Encodes(ChoiceC(left, right), Cons(LeftEvidence(), branch_evidence), rest)
+    EncodesRight : (branch :erased Encodes(right, branch_evidence, rest)) -> Encodes(ChoiceC(left, right), Cons(RightEvidence(), branch_evidence), rest)
+    EncodesList : (items :erased EncodesMany(inner, items_evidence, rest)) -> Encodes(ListC(inner), Cons(EndListEvidence(), items_evidence), rest)
+
+  type EncodesMany indices (shape: ShapeCode, input: List(Evidence), rest: List(Evidence))
+    EncodesManyEmpty : EncodesMany(shape, Cons(BeginListEvidence(), rest), rest)
+    EncodesManyItem : (item :erased Encodes(shape, item_evidence, prior_evidence)) -> (prior :erased EncodesMany(shape, prior_evidence, rest)) -> EncodesMany(shape, item_evidence, rest)
+
+  ## A successful decoding existentially exposes the evidence prefix consumed
+  ## for one Pattern and proves that the untouched suffix reconstructs the
+  ## original evidence stream. This is the proof-producing boundary between
+  ## the unindexed VM representation and total, shape-indexed extraction.
+  type EvidenceDecoding indices (shape: ShapeCode, input: List(Evidence))
+    EvidenceDecoded : (rest: List(Evidence)) -> (value: Sem(shape)) -> (encoding :erased Encodes(shape, input, rest)) -> EvidenceDecoding(shape, input)
+
+  fn decode_atomic_evidence({shape: ShapeCode}, pattern: Pattern(shape), evidence: List(Evidence)) -> Option(EvidenceDecoding(shape, evidence)) = match pattern
+    PatternEmpty() -> match evidence
+      [UnitEvidence() | rest] -> Some(EvidenceDecoded(rest, (), EncodesUnit()))
+      _ -> None()
+    PatternPredicate(_) -> match evidence
+      [CharacterEvidence(char) | rest] -> Some(EvidenceDecoded(rest, char, EncodesCharacter(char)))
+      _ -> None()
+    PatternGroup(_) -> match evidence
+      [StringEvidence(value) | rest] -> Some(EvidenceDecoded(rest, value, EncodesString(value)))
+      _ -> None()
+    _ -> None()
+
+  type ManyEvidenceDecoding indices (shape: ShapeCode, input: List(Evidence))
+    ManyEvidenceDecoded : (rest: List(Evidence)) -> (values: List(Sem(shape))) -> (encoding :erased EncodesMany(shape, input, rest)) -> ManyEvidenceDecoding(shape, input)
+
+  fn decode_many_evidence({shape: ShapeCode}, pattern: Pattern(shape), evidence: List(Evidence)) -> Option(ManyEvidenceDecoding(shape, evidence)) = with evidence
+    [] -> None()
+    [BeginListEvidence() | rest] -> Some(ManyEvidenceDecoded(rest, [], EncodesManyEmpty()))
+    [head | tail] -> decode_many_item(pattern, [head | tail], decode_pattern_encoding(pattern, [head | tail]))
+
+  fn decode_many_item({shape: ShapeCode}, pattern: Pattern(shape), evidence: List(Evidence), decoded: Option(EvidenceDecoding(shape, evidence))) -> Option(ManyEvidenceDecoding(shape, evidence)) = match decoded
+    None() -> None()
+    Some(item) -> decode_many_item_tail(pattern, item)
+
+  fn decode_many_item_tail({shape: ShapeCode}, pattern: Pattern(shape), {evidence: List(Evidence)}, decoded: EvidenceDecoding(shape, evidence)) -> Option(ManyEvidenceDecoding(shape, evidence)) = match decoded
+    EvidenceDecoded(after_item, item_value, item) -> decode_many_prior(pattern, item_value, item, decode_many_evidence(pattern, after_item))
+
+  fn decode_many_prior({shape: ShapeCode}, pattern: Pattern(shape), {evidence: List(Evidence)}, {after_item: List(Evidence)}, item_value: Sem(shape), item :erased Encodes(shape, evidence, after_item), decoded: Option(ManyEvidenceDecoding(shape, after_item))) -> Option(ManyEvidenceDecoding(shape, evidence)) = match decoded
+    None() -> None()
+    Some(ManyEvidenceDecoded(final_rest, prior_values, prior)) -> Some(ManyEvidenceDecoded(final_rest, [item_value | prior_values], EncodesManyItem(item, prior)))
+
+  fn reverse_sem_values({shape: ShapeCode}, values: List(Sem(shape))) -> List(Sem(shape)) = reverse_sem_values_into(values, [])
+  fn reverse_sem_values_into({shape: ShapeCode}, values: List(Sem(shape)), output: List(Sem(shape))) -> List(Sem(shape)) = match values
+    [] -> output
+    [head | tail] -> reverse_sem_values_into(tail, [head | output])
+
+  fn decoded_left_value({left: ShapeCode}, {right: ShapeCode}, value: Sem(left)) -> Sem(ChoiceC(left, right)) =
+    let choice = assert_type ChoseLeft(value) : Choice(Sem(left), Sem(right))
+    choice
+  fn decoded_right_value({left: ShapeCode}, {right: ShapeCode}, value: Sem(right)) -> Sem(ChoiceC(left, right)) =
+    let choice = assert_type ChoseRight(value) : Choice(Sem(left), Sem(right))
+    choice
+
+  fn decode_pattern_encoding({shape: ShapeCode}, pattern: Pattern(shape), evidence: List(Evidence)) -> Option(EvidenceDecoding(shape, evidence)) = match pattern
+    PatternEmpty() -> decode_atomic_evidence(pattern, evidence)
+    PatternPredicate(_) -> decode_atomic_evidence(pattern, evidence)
+    PatternGroup(_) -> decode_atomic_evidence(pattern, evidence)
+    PatternConcat(left, right) -> match evidence
+      [PairEvidence() | pair_evidence] -> match decode_pattern_encoding(right, pair_evidence)
+        None() -> None()
+        Some(EvidenceDecoded(after_right, right_value, right_proof)) -> match decode_pattern_encoding(left, after_right)
+          None() -> None()
+          Some(EvidenceDecoded(rest, left_value, left_proof)) -> Some(EvidenceDecoded(rest, %[left_value, right_value], EncodesPair(right_proof, left_proof)))
+      _ -> None()
+    PatternAlternate(left, right) -> match evidence
+      [LeftEvidence() | branch_evidence] -> match decode_pattern_encoding(left, branch_evidence)
+        None() -> None()
+        Some(EvidenceDecoded(rest, value, branch)) -> Some(EvidenceDecoded(rest, decoded_left_value(value), EncodesLeft(branch)))
+      [RightEvidence() | branch_evidence] -> match decode_pattern_encoding(right, branch_evidence)
+        None() -> None()
+        Some(EvidenceDecoded(rest, value, branch)) -> Some(EvidenceDecoded(rest, decoded_right_value(value), EncodesRight(branch)))
+      _ -> None()
+    PatternRepeat(inner) -> match evidence
+      [EndListEvidence() | list_evidence] -> match decode_many_evidence(inner, list_evidence)
+        None() -> None()
+        Some(ManyEvidenceDecoded(rest, values, items)) -> Some(EvidenceDecoded(rest, reverse_sem_values(values), EncodesList(items)))
+      _ -> None()
+
+  fn extract_complete_encoding({shape: ShapeCode}, {evidence: List(Evidence)}, decoded: Option(EvidenceDecoding(shape, evidence))) -> Option(Sem(shape)) = match decoded
+    None() -> None()
+    Some(value) -> extract_complete_decoding(value)
+
+  fn extract_complete_decoding({shape: ShapeCode}, {evidence: List(Evidence)}, decoded: EvidenceDecoding(shape, evidence)) -> Option(Sem(shape)) = match decoded
+    EvidenceDecoded(rest, value, _) -> extract_if_no_evidence(rest, value)
+
+  fn extract_if_no_evidence({shape: ShapeCode}, rest: List(Evidence), value: Sem(shape)) -> Option(Sem(shape)) = match rest
+    [] -> Some(value)
+    _ -> None()
+
   type CaptureFrame = CaptureFrame(String, List(Evidence))
   type EvidenceExecution = EvidenceExecution(List(Evidence), List(CaptureFrame))
   type ThreadState = ThreadActive(Nat) | ThreadAccepted
@@ -474,6 +578,10 @@ mod Std.Regex
         greedy -> run_last_prefix_evidence(next, input, threads, None())
         else -> run_first_prefix_evidence(next, input, threads)
 
+  fn parse_pattern_full({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Option(Sem(shape)) = match pattern_evidence(pattern, input)
+    None() -> None()
+    Some(evidence) -> extract_complete_encoding(decode_pattern_encoding(pattern, evidence))
+
   ## Public typed combinator layer. `Mapped` is the semantic bridge from a
   ## structurally extracted Pattern value to the user-facing result type. It is
   ## one-way: regex parsing does not imply an unparser.
@@ -510,6 +618,159 @@ mod Std.Regex
     ConfiguredRegex : RegexOptions -> Regex(a) -> Regex(a)
     StartAnchor : Regex(Unit)
     EndAnchor : Regex(Unit)
+
+  type Conversion indices (raw: Type, result: Type)
+    IdentityConversion : Conversion(value, value)
+    ApplyConversion : (raw -> result) -> Conversion(raw, result)
+    ComposedConversion : Conversion(raw, middle) -> Conversion(middle, result) -> Conversion(raw, result)
+    PairConversion : Conversion(left_raw, left_result) -> Conversion(right_raw, right_result) -> Conversion(Tuple(left_raw, right_raw), Tuple(left_result, right_result))
+    ChoiceConversion : Conversion(left_raw, left_result) -> Conversion(right_raw, right_result) -> Conversion(Choice(left_raw, right_raw), Choice(left_result, right_result))
+    ListConversion : Conversion(raw, result) -> Conversion(List(raw), List(result))
+    LeftPairConversion : Conversion(left_raw, left_result) -> Conversion(right_raw, right_result) -> Conversion(Tuple(left_raw, right_raw), left_result)
+    RightPairConversion : Conversion(left_raw, left_result) -> Conversion(right_raw, right_result) -> Conversion(Tuple(left_raw, right_raw), right_result)
+    SameChoiceConversion : Conversion(left_raw, result) -> Conversion(right_raw, result) -> Conversion(Choice(left_raw, right_raw), result)
+    OptionalConversion : Conversion(raw, result) -> Conversion(Choice(raw, Unit), Option(result))
+    OneOrMoreConversion : Conversion(raw, result) -> Conversion(Tuple(raw, List(raw)), OneOrMore(result))
+    PrependConversion : Conversion(raw, result) -> Conversion(Tuple(raw, List(raw)), List(result))
+    SimplifyConversion : (shape: ShapeCode) -> Conversion(Sem(shape), Sem(Simplify(shape)))
+
+  type RegexProgram indices (result: Type)
+    BuiltRegex : (shape: ShapeCode) -> Pattern(shape) -> Conversion(Sem(shape), result) -> RegexProgram(result)
+
+  fn execute_left_choice_conversion({left_raw: Type}, {left_result: Type}, {right_raw: Type}, {right_result: Type}, left: Conversion(left_raw, left_result), _right: Conversion(right_raw, right_result), value: left_raw) -> Choice(left_result, right_result) =
+    assert_type ChoseLeft(execute_conversion(left, value)) : Choice(left_result, right_result)
+
+  fn execute_right_choice_conversion({left_raw: Type}, {left_result: Type}, {right_raw: Type}, {right_result: Type}, _left: Conversion(left_raw, left_result), right: Conversion(right_raw, right_result), value: right_raw) -> Choice(left_result, right_result) =
+    assert_type ChoseRight(execute_conversion(right, value)) : Choice(left_result, right_result)
+
+  fn execute_conversion({raw: Type}, {result: Type}, conversion: Conversion(raw, result), value: raw) -> result = match conversion
+    IdentityConversion() -> value
+    ApplyConversion(transform) -> transform(value)
+    ComposedConversion(first, second) -> execute_conversion(second, execute_conversion(first, value))
+    PairConversion(left, right) -> %[execute_conversion(left, value.1), execute_conversion(right, value.2)]
+    ChoiceConversion(left, right) -> match value
+      ChoseLeft(left_value) -> execute_left_choice_conversion(left, right, left_value)
+      ChoseRight(right_value) -> execute_right_choice_conversion(left, right, right_value)
+    ListConversion(inner) -> execute_list_conversion(inner, value)
+    LeftPairConversion(left, _right) -> execute_conversion(left, value.1)
+    RightPairConversion(_left, right) -> execute_conversion(right, value.2)
+    SameChoiceConversion(left, right) -> match value
+      ChoseLeft(left_value) -> execute_conversion(left, left_value)
+      ChoseRight(right_value) -> execute_conversion(right, right_value)
+    OptionalConversion(inner) -> match value
+      ChoseLeft(inner_value) -> Some(execute_conversion(inner, inner_value))
+      ChoseRight(_) -> None()
+    OneOrMoreConversion(inner) -> OneOrMore(execute_conversion(inner, value.1), execute_list_conversion(inner, value.2))
+    PrependConversion(inner) -> [execute_conversion(inner, value.1) | execute_list_conversion(inner, value.2)]
+    SimplifyConversion(shape) -> simplify_value(shape, value)
+
+  fn execute_list_conversion({raw: Type}, {result: Type}, conversion: Conversion(raw, result), values: List(raw)) -> List(result) = match values
+    [] -> []
+    [head | rest] -> [execute_conversion(conversion, head) | execute_list_conversion(conversion, rest)]
+
+  fn simplify_program(shape: ShapeCode, program: RegexProgram(Sem(shape))) -> RegexProgram(Sem(Simplify(shape))) = match program
+    BuiltRegex(raw_shape, pattern, conversion) ->
+      BuiltRegex(raw_shape, pattern, ComposedConversion(conversion, SimplifyConversion(shape)))
+
+  fn simplify_compiled(shape: ShapeCode, program: Option(RegexProgram(Sem(shape)))) -> Option(RegexProgram(Sem(Simplify(shape)))) = match program
+    None() -> None()
+    Some(compiled) -> Some(simplify_program(shape, compiled))
+
+  fn sem_identity_conversion(shape: ShapeCode) -> Conversion(Sem(shape), Sem(shape)) = IdentityConversion()
+  fn string_identity_conversion() -> Conversion(String, String) = IdentityConversion()
+  fn unit_identity_conversion() -> Conversion(Unit, Unit) = IdentityConversion()
+
+  fn compile_regex({result: Type}, regex: Regex(result)) -> Option(RegexProgram(result)) = match regex
+    FromPattern(shape, pattern) -> Some(BuiltRegex(shape, pattern, sem_identity_conversion(shape)))
+    Mapped(transform, inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) -> Some(BuiltRegex(shape, pattern, ComposedConversion(convert, ApplyConversion(transform))))
+    Concatenated(left, right) -> match compile_regex(left)
+      None() -> None()
+      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        None() -> None()
+        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          Some(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), PairConversion(left_convert, right_convert)))
+    Alternated(left, right) -> match compile_regex(left)
+      None() -> None()
+      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        None() -> None()
+        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          Some(BuiltRegex(ChoiceC(left_shape, right_shape), PatternAlternate(left_pattern, right_pattern), ChoiceConversion(left_convert, right_convert)))
+    Repeated(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) -> Some(BuiltRegex(ListC(shape), PatternRepeat(pattern), ListConversion(convert)))
+    MatchedText(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(_shape, pattern, _convert)) -> Some(BuiltRegex(StringC, PatternGroup(pattern), string_identity_conversion()))
+    KeptRight(left, right) -> match compile_regex(left)
+      None() -> None()
+      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        None() -> None()
+        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          Some(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), RightPairConversion(left_convert, right_convert)))
+    KeptLeft(left, right) -> match compile_regex(left)
+      None() -> None()
+      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        None() -> None()
+        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          Some(BuiltRegex(PairC(left_shape, right_shape), PatternConcat(left_pattern, right_pattern), LeftPairConversion(left_convert, right_convert)))
+    SameAlternative(left, right) -> match compile_regex(left)
+      None() -> None()
+      Some(BuiltRegex(left_shape, left_pattern, left_convert)) -> match compile_regex(right)
+        None() -> None()
+        Some(BuiltRegex(right_shape, right_pattern, right_convert)) ->
+          Some(BuiltRegex(ChoiceC(left_shape, right_shape), PatternAlternate(left_pattern, right_pattern), SameChoiceConversion(left_convert, right_convert)))
+    OptionalRegex(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternate(pattern, PatternEmpty()), OptionalConversion(convert)))
+    OneOrMoreRegex(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeat(pattern)), OneOrMoreConversion(convert)))
+    SimplifiedRegex(shape, inner) -> simplify_compiled(shape, compile_regex(inner))
+    OptionalPattern(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternate(pattern, PatternEmpty()), ChoiceConversion(convert, unit_identity_conversion())))
+    PlusPattern(inner) -> match compile_regex(inner)
+      None() -> None()
+      Some(BuiltRegex(shape, pattern, convert)) ->
+        Some(BuiltRegex(PairC(shape, ListC(shape)), PatternConcat(pattern, PatternRepeat(pattern)), PrependConversion(convert)))
+    RepeatedPattern(inner, _lazy) -> compile_regex(Repeated(inner))
+    OneOrMorePattern(inner, _lazy) -> compile_regex(PlusPattern(inner))
+    OptionalLiteral(inner, _lazy) -> compile_regex(OptionalPattern(inner))
+    ConfiguredRegex(_options, inner) -> compile_regex(inner)
+    StartAnchor() -> None()
+    EndAnchor() -> None()
+
+  fn convert_complete_extraction({shape: ShapeCode}, {result: Type}, pattern: Pattern(shape), conversion: Conversion(Sem(shape), result), evidence: List(Evidence)) -> Option(result) = match extract_complete_encoding(decode_pattern_encoding(pattern, evidence))
+    None() -> None()
+    Some(value) -> Some(execute_conversion(conversion, value))
+
+  fn parse_program_full({result: Type}, program: RegexProgram(result), input: String) -> Option(result) = match program
+    BuiltRegex(_shape, pattern, conversion) -> match pattern_evidence(pattern, input)
+      None() -> None()
+      Some(evidence) -> convert_complete_extraction(pattern, conversion, evidence)
+
+  fn parse_full({result: Type}, regex: Regex(result), input: String) -> Option(result) = match compile_regex(regex)
+    None() -> None()
+    Some(program) -> parse_program_full(program, input)
+
+  fn convert_prefix_extraction({shape: ShapeCode}, {result: Type}, pattern: Pattern(shape), conversion: Conversion(Sem(shape), result), prefix: EvidencePrefix) -> Option(Tuple(result, String)) = match prefix
+    EvidencePrefix(evidence, rest) -> match convert_complete_extraction(pattern, conversion, evidence)
+      None() -> None()
+      Some(value) -> Some(%[value, rest])
+
+  fn parse_prefix_with({result: Type}, regex: Regex(result), input: String, greedy: Bool) -> Option(Tuple(result, String)) = match compile_regex(regex)
+    None() -> None()
+    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence(pattern, input, greedy)
+      None() -> None()
+      Some(prefix) -> convert_prefix_extraction(pattern, conversion, prefix)
+
+  fn parse_prefix({result: Type}, regex: Regex(result), input: String) -> Option(Tuple(result, String)) =
+    parse_prefix_with(regex, input, true)
 
   fn empty() -> Regex(Unit) = FromPattern(UnitC, PatternEmpty())
 

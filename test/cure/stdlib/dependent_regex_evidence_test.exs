@@ -26,6 +26,19 @@ defmodule Cure.Stdlib.DependentRegexEvidenceTest do
       fn failed_evidence() -> Option(List(Evidence)) = pattern_evidence(ab(), "aa")
       fn shortest_prefix() -> Option(EvidencePrefix) = pattern_prefix_evidence(many(), "aaab", false)
       fn longest_prefix() -> Option(EvidencePrefix) = pattern_prefix_evidence(many(), "aaab", true)
+      fn parsed_pair() -> Option(Tuple(Char, Char)) = parse_pattern_full(ab(), "ab")
+      fn parsed_left() -> Option(Choice(Char, Char)) = parse_pattern_full(ambiguous(), "a")
+      fn parsed_list() -> Option(List(Char)) = parse_pattern_full(many(), "aaa")
+      fn parsed_group() -> Option(String) = parse_pattern_full(grouped(), "ab")
+      fn malformed_pair_encoding() -> Option(Tuple(Char, Char)) =
+        extract_complete_encoding(
+          decode_pattern_encoding(ab(), [PairEvidence(), CharacterEvidence('b')])
+        )
+      fn trailing_pair_encoding() -> Option(Tuple(Char, Char)) =
+        extract_complete_encoding(
+          decode_pattern_encoding(ab(), [PairEvidence(), CharacterEvidence('b'), CharacterEvidence('a'), UnitEvidence()])
+        )
+
     end
     """
 
@@ -89,5 +102,39 @@ defmodule Cure.Stdlib.DependentRegexEvidenceTest do
                  {:CharacterEvidence, ?a},
                  :BeginListEvidence
                ], ~c"b"}}
+  end
+
+  test "shape-indexed extraction returns Pattern values without runtime casts", %{runtime_module: module} do
+    assert apply(module, :parsed_pair, []) == {:some, {?a, ?b}}
+    assert apply(module, :parsed_left, []) == {:some, {:ChoseLeft, ?a}}
+    assert apply(module, :parsed_list, []) == {:some, ~c"aaa"}
+    assert apply(module, :parsed_group, []) == {:some, ~c"ab"}
+  end
+
+  test "the certified decoder rejects malformed and trailing evidence", %{runtime_module: module} do
+    assert apply(module, :malformed_pair_encoding, []) == :none
+    assert apply(module, :trailing_pair_encoding, []) == :none
+  end
+
+  test "shape certificates are erased from emitted decoder functions" do
+    module = :"Cure.Std.Regex"
+    {^module, beam, _path} = :code.get_object_code(module)
+    {:beam_file, ^module, _exports, _attrs, _info, functions} = :beam_disasm.file(beam)
+
+    decoder_names = [
+      :decode_atomic_evidence,
+      :decode_many_prior,
+      :decode_pattern_encoding,
+      :extract_complete_decoding
+    ]
+
+    decoder_code =
+      for {:function, name, _arity, _label, instructions} <- functions,
+          name in decoder_names,
+          do: instructions
+
+    binary = :erlang.term_to_binary(decoder_code)
+    refute binary =~ "Encodes"
+    refute binary =~ "EvidenceAppend"
   end
 end

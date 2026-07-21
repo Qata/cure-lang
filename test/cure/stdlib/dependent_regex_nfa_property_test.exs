@@ -53,6 +53,22 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
         kind == 7 -> evidence_present(pattern_evidence(nullable_star(), input))
         kind == 8 -> evidence_present(pattern_evidence(grouped(), input))
         else -> evidence_present(pattern_evidence(empty_then_a(), input))
+
+      fn parsed({value: Type}, result: Option(value)) -> Bool = match result
+        Some(_) -> true
+        None() -> false
+
+      fn parses(kind: Int, input: String) -> Bool = pickup
+        kind == 0 -> parsed(parse_pattern_full(empty(), input))
+        kind == 1 -> parsed(parse_pattern_full(atom('a'), input))
+        kind == 2 -> parsed(parse_pattern_full(ab(), input))
+        kind == 3 -> parsed(parse_pattern_full(either(), input))
+        kind == 4 -> parsed(parse_pattern_full(many_a(), input))
+        kind == 5 -> parsed(parse_pattern_full(many_either(), input))
+        kind == 6 -> parsed(parse_pattern_full(many_a_then_b(), input))
+        kind == 7 -> parsed(parse_pattern_full(nullable_star(), input))
+        kind == 8 -> parsed(parse_pattern_full(grouped(), input))
+        else -> parsed(parse_pattern_full(empty_then_a(), input))
     end
     """
 
@@ -93,7 +109,8 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
                accepted = apply(module, :accepts, [kind, input])
 
                accepted == reference(kind, input) and
-                 apply(module, :has_evidence, [kind, input]) == accepted
+                 apply(module, :has_evidence, [kind, input]) == accepted and
+                 apply(module, :parses, [kind, input]) == accepted
              end)
   end
 
@@ -109,6 +126,9 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
 
       assert apply(module, :has_evidence, [kind, input]) == reference(kind, input),
              "evidence kind=#{kind} input=#{inspect(input)}"
+
+      assert apply(module, :parses, [kind, input]) == reference(kind, input),
+             "typed parse kind=#{kind} input=#{inspect(input)}"
     end
   end
 end

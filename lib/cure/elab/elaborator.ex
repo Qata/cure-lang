@@ -9690,7 +9690,7 @@ defmodule Cure.Elab.Elaborator do
   # present slots unify against the supplied arguments. Returns the applied term
   # and its result type (the codomain instantiated with the solved arguments).
   defp elaborate_global_app(env, name, present_args, ctx, expected \\ nil) do
-    %{type: pi_type, quantities: quantities} = Env.get_def(env, name)
+    %{type: pi_type, quantities: quantities} = defn = Env.get_def(env, name)
     {domains, codomain} = peel_pi(pi_type, length(quantities))
 
     # A global def has no relevant-implicit surface (that is a constructor-index
@@ -9698,10 +9698,10 @@ defmodule Cure.Elab.Elaborator do
     # else :explicit (positional) — preserving the pre-plicity `solve_arg`
     # behavior now that the slot carries an explicit plicity.
     slot_plicities =
-      Enum.map(quantities, fn
-        :erased -> :implicit
-        _ -> :explicit
-      end)
+      case Map.get(defn, :plicities) do
+        ps when is_list(ps) -> ps
+        _ -> Enum.map(quantities, fn :erased -> :implicit; _ -> :explicit end)
+      end
 
     telescope = Enum.zip([Enum.map(domains, &{:_, &1}), quantities, slot_plicities])
     init = {:ok, MetaCtx.new(), [], present_args}

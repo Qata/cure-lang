@@ -1094,6 +1094,10 @@ defmodule Cure.Compiler.Printer do
 
     chain =
       Enum.map_join(elems, " -> ", fn
+        {:named_dom, dname, inner, grade} ->
+          inner_rendered = render_ctor_function_type(inner, depth, indent)
+          "(#{dname} :#{grade} #{inner_rendered})"
+
         {:named_dom, dname, inner} ->
           inner_rendered = render_ctor_function_type(inner, depth, indent)
 

@@ -418,7 +418,7 @@ defmodule Cure.Elab.Declarations do
     with {:ok, sig} <- function_signature(meta, env) do
       env1 =
         env
-        |> Env.add_def(sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities)
+        |> Env.add_def(sig.name, sig.pi, {:hole, "__pending__"}, sig.quantities, sig.plicities)
         # Labels must ride the record from the SIGNATURE pass on: overlap legality
         # (`check_overload_legality`) runs between the signature and body passes and
         # needs them to tell `move(to:)` from `move(from:)`. The body pass re-adds
@@ -455,7 +455,7 @@ defmodule Cure.Elab.Declarations do
              :ok <- check_extern_not_union(sig, env) do
           final =
             env
-            |> Env.add_def(sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)
+            |> Env.add_def(sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities, sig.plicities)
             |> Env.put_labels(sig.name, param_label_vector(sig.params))
 
           {:ok, final}
@@ -664,7 +664,7 @@ defmodule Cure.Elab.Declarations do
            :ok <- assert_no_erased_effect_binder(final_pi, sig.name) do
         final =
           body_env
-          |> Env.add_def(sig.name, final_pi, lambda, quantities)
+          |> Env.add_def(sig.name, final_pi, lambda, quantities, sig.plicities)
           |> Env.put_labels(sig.name, param_label_vector(sig.params))
 
         # Best-effort totality certification, eagerly and in declaration order, so a
@@ -979,6 +979,7 @@ defmodule Cure.Elab.Declarations do
          params: params,
          telescope: telescope,
          quantities: quantities,
+         plicities: Enum.map(params, fn {:param, pmeta, _} -> if Keyword.get(pmeta, :implicit, false), do: :implicit, else: :explicit end),
          scope: scope,
          return_core: return_core,
          inferred_return: is_nil(return_expr),
@@ -1894,7 +1895,7 @@ defmodule Cure.Elab.Declarations do
       impl_names = Enum.map(implicits, &elem(&1, 0))
 
       case build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
-        {:ok, expl_tele, expl_names, expl_plicities} ->
+        {:ok, expl_tele, expl_names, expl_plicities, expl_quantities} ->
           full_scope = Enum.reverse(impl_names ++ expl_names) ++ param_scope
           {param_exprs, index_exprs} = Enum.split(applied_exprs, param_count)
 
@@ -1914,7 +1915,7 @@ defmodule Cure.Elab.Declarations do
             # `{k:T}` — is runtime-relevant (quantity ω). See M8.3 / M9.
             quantities =
               List.duplicate(:erased, length(impl_tele)) ++
-                List.duplicate(:unrestricted, length(expl_tele))
+                expl_quantities
 
             # Plicity decouples from quantity: inferred indices AND relevant
             # implicits `{k:T}` are :implicit (non-positional); explicit doms are
@@ -1946,12 +1947,14 @@ defmodule Cure.Elab.Declarations do
   # implicit `{k: Nat}` binder by its inner type (`Nat`); the binder name itself
   # is handled as a source-position arg, not an inferred index.
   defp strip_named_dom({:named_dom, _name, inner}), do: inner
+  defp strip_named_dom({:named_dom, _name, inner, _grade}), do: inner
   defp strip_named_dom({:implicit_dom, _name, inner}), do: inner
   defp strip_named_dom(other), do: other
 
   # The name a domain binds into the constructor's local scope, or `nil` for an
   # anonymous positional argument. Both `(k: T)` and `{k: T}` bind `k`.
   defp bound_dom_name({:named_dom, name, _inner}), do: name
+  defp bound_dom_name({:named_dom, name, _inner, _grade}), do: name
   defp bound_dom_name({:implicit_dom, name, _inner}), do: name
   defp bound_dom_name(_other), do: nil
 
@@ -1989,30 +1992,31 @@ defmodule Cure.Elab.Declarations do
   defp build_explicit_tele(dom_exprs, impl_names, param_scope, fam, env) do
     dom_exprs
     |> Enum.with_index()
-    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, [], []}, fn {dom, i},
-                                                                                        {:ok, tele, scope, names, plics} ->
+    |> Enum.reduce_while({:ok, [], Enum.reverse(impl_names) ++ param_scope, [], [], []}, fn {dom, i},
+                                                                                            {:ok, tele, scope, names, plics, quantities} ->
       # A NAMED / IMPLICIT dependent binder uses its declared name (so later
       # domains and the result index can reference it); an unnamed arg keeps its
       # anonymous `_aN` name byte-for-byte. Either way the scope is threaded so
       # the next domain's de Bruijn indices resolve this binder.
-      {argname, type_expr, plicity} =
+      {argname, type_expr, plicity, quantity} =
         case dom do
-          {:named_dom, name, inner} -> {name, inner, :explicit}
-          {:implicit_dom, name, inner} -> {name, inner, :implicit}
-          _ -> {"_a#{i}", dom, :explicit}
+          {:named_dom, name, inner} -> {name, inner, :explicit, :unrestricted}
+          {:named_dom, name, inner, grade} -> {name, inner, :explicit, grade}
+          {:implicit_dom, name, inner} -> {name, inner, :implicit, :unrestricted}
+          _ -> {"_a#{i}", dom, :explicit, :unrestricted}
         end
 
       case idx_to_core(type_expr, scope, fam, env) do
         {:ok, core} ->
           {:cont,
-           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname], plics ++ [plicity]}}
+           {:ok, tele ++ [{String.to_atom(argname), core}], [argname | scope], names ++ [argname], plics ++ [plicity], quantities ++ [quantity]}}
 
         {:error, _} = err ->
           {:halt, err}
       end
     end)
     |> case do
-      {:ok, tele, _scope, names, plics} -> {:ok, tele, names, plics}
+      {:ok, tele, _scope, names, plics, quantities} -> {:ok, tele, names, plics, quantities}
       {:error, _} = err -> err
     end
   end
