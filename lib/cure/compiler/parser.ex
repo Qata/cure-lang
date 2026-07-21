@@ -5146,8 +5146,11 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         {segments, state} = parse_bin_segments(state, [])
-        state = expect(state, :binary_close)
-        ast = {:literal, [subtype: :bytes, line: token.line, col: token.col], segments}
+        {state, close_token} = expect_container_close(state, :binary_close, :binary_literal, token, segments, false)
+
+        meta = [subtype: :bytes, line: token.line, col: token.col]
+        meta = put_container_source_info(meta, token, state, close_token)
+        ast = {:literal, meta, segments}
         {ast, state}
     end
   end
@@ -5181,10 +5184,23 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
-    meta =
-      [line: start_token.line, col: start_token.col] ++ specifier_meta
+    meta = [line: start_token.line, col: start_token.col] ++ specifier_meta
+    meta = put_binary_segment_source_info(meta, start_token, state)
 
     {{:bin_segment, meta, [value]}, state}
+  end
+
+  defp put_binary_segment_source_info(meta, start_token, state) do
+    case {start_token.span, authored_token(state)} do
+      {%Cure.Diagnostic.Span{} = first, %Token{span: %Cure.Diagnostic.Span{} = last}} ->
+        case Range.through(first, last) do
+          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole})
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   defp parse_bin_specifier_chain(state, acc) do
@@ -5422,12 +5438,15 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
     {source, state} = parse_expr(state, 0)
     state = skip_newlines(state)
-    state = expect(state, :binary_close)
+
+    {state, close_token} =
+      expect_container_close(state, :binary_close, :binary_generator, open_token, [source], false)
 
     pattern =
       {:literal, [subtype: :bytes, line: open_token.line, col: open_token.col], segments}
 
     meta = [line: open_token.line, col: open_token.col]
+    meta = put_container_source_info(meta, open_token, state, close_token)
     {{:binary_generator, meta, [pattern, source]}, state}
   end
 
@@ -5487,8 +5506,8 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
-    meta =
-      [line: start_token.line, col: start_token.col] ++ specifier_meta
+    meta = [line: start_token.line, col: start_token.col] ++ specifier_meta
+    meta = put_binary_segment_source_info(meta, start_token, state)
 
     {{:bin_segment, meta, [value]}, state}
   end

@@ -25,8 +25,17 @@ defmodule Cure.Compiler.BinSegmentTest do
       ast = parse_expr!("<<1, 2, 3>>")
       assert {:literal, meta, segments} = ast
       assert Keyword.get(meta, :subtype) == :bytes
+
+      assert %Cure.MetaAST.SourceInfo{opener: %Cure.Diagnostic.Span{}, closer: %Cure.Diagnostic.Span{}} =
+               Keyword.fetch!(meta, :source_info)
+
       assert [_, _, _] = segments
-      Enum.each(segments, fn seg -> assert match?({:bin_segment, _, [_]}, seg) end)
+
+      Enum.each(segments, fn
+        {:bin_segment, segment_meta, [_]} ->
+          assert %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{}} =
+                   Keyword.fetch!(segment_meta, :source_info)
+      end)
     end
 
     test "::utf8 is recorded as a type specifier" do

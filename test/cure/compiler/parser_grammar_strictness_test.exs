@@ -621,6 +621,84 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
            end)
   end
 
+  test "an unclosed binary literal points to its opener and final segment" do
+    source = "<<tag::utf8, payload"
+    {:ok, tokens} = Lexer.tokenize(source, file: "binary.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+
+    assert {:container_elements_syntax,
+            %{kind: :container_unclosed, container: :binary_literal, expected: :binary_close}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "binary.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- BINARY LITERAL IS NOT CLOSED [E094] ----------------------------- binary.cure
+
+             This binary literal reaches the end of the source without the '>>' that closes
+             its segments.
+
+             at binary.cure:1:21
+             1 | <<tag::utf8, payload
+               | --           -------^ this binary literal starts here; the previous binary segment ends here; close this binary literal with `>>`
+
+             Hint: Insert `>>` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ">>", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 20
+    assert insertion.end_byte == 20
+    assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 2
+  end
+
+  test "an unclosed binary generator points to its source expression" do
+    source = "[b for <<b <- buf"
+    {:ok, tokens} = Lexer.tokenize(source, file: "binary_generator.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    error =
+      Enum.find(errors, fn
+        {:container_elements_syntax, %{container: :binary_generator}} -> true
+        _ -> false
+      end)
+
+    assert {:container_elements_syntax, %{kind: :container_unclosed, expected: :binary_close}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "binary_generator.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- BINARY GENERATOR IS NOT CLOSED [E094] ----------------- binary_generator.cure
+
+             This binary generator reaches the end of the source without the '>>' after its
+             source expression.
+
+             at binary_generator.cure:1:18
+             1 | [b for <<b <- buf
+               |        --     ---^ this binary generator starts here; its source expression ends here; close this binary generator with `>>`
+
+             Hint: Insert `>>` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ">>", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 17
+    assert insertion.end_byte == 17
+
+    assert [%{"newText" => ">>", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 17},
+             "end" => %{"line" => 0, "character" => 17}
+           }
+  end
+
   test "an invalid function parameter is rejected at the authored binder token" do
     source = "fn run(42) -> Int = 1\n"
     {:ok, tokens} = Lexer.tokenize(source, file: "binder.cure", emit_events: false)

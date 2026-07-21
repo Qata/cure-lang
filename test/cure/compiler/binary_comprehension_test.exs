@@ -22,7 +22,11 @@ defmodule Cure.Compiler.BinaryComprehensionTest do
     test "emits :binary_generator qualifier with a :bytes pattern" do
       ast = parse!("[b for <<b <- buf>>]")
       assert {:comprehension, _, [_body | qs]} = ast
-      assert [{:binary_generator, _, [pattern, source]}] = qs
+      assert [{:binary_generator, generator_meta, [pattern, source]}] = qs
+
+      assert %Cure.MetaAST.SourceInfo{opener: %Cure.Diagnostic.Span{}, closer: %Cure.Diagnostic.Span{}} =
+               Keyword.fetch!(generator_meta, :source_info)
+
       assert {:literal, meta, [_seg]} = pattern
       assert Keyword.get(meta, :subtype) == :bytes
       assert match?({:variable, _, "buf"}, source)

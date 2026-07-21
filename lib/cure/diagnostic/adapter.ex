@@ -5044,6 +5044,15 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "Lambda parameter list is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :binary_literal}}),
+    do: "Binary literal is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :binary_generator}
+       }),
+       do: "Binary generator is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :list}}),
     do: "List elements need a comma"
 
@@ -5273,6 +5282,20 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "This lambda's parameter list reaches the end of the source without its closing ')'."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :binary_close,
+         context: %{container: :binary_literal}
+       }),
+       do: "This binary literal reaches the end of the source without the '>>' that closes its segments."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :binary_close,
+         context: %{container: :binary_generator}
+       }),
+       do: "This binary generator reaches the end of the source without the '>>' after its source expression."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :container_unclosed, context: %{container: container}}),
     do: "This #{container} reaches the end of the source without the ']' that closes its elements."
 
@@ -5472,6 +5495,20 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "close this lambda parameter list with `)`"
 
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :binary_close,
+         context: %{container: :binary_literal}
+       }),
+       do: "close this binary literal with `>>`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :binary_close,
+         context: %{container: :binary_generator}
+       }),
+       do: "close this binary generator with `>>`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :container_unclosed, expected: expected}),
     do: "close this container with `#{syntax_insertion(expected)}`"
 
@@ -5647,6 +5684,33 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(opener, :secondary, "this parameter list starts here"),
       pickup_label(previous, :secondary, "the previous parameter ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: container}
+         },
+         primary_span
+       )
+       when container in [:binary_literal, :binary_generator] do
+    {opener_message, previous_message} =
+      case container do
+        :binary_literal -> {"this binary literal starts here", "the previous binary segment ends here"}
+        :binary_generator -> {"this binary generator starts here", "its source expression ends here"}
+      end
+
+    [
+      pickup_label(opener, :secondary, opener_message),
+      pickup_label(previous, :secondary, previous_message)
     ]
     |> Enum.reject(fn
       nil -> true
@@ -6003,11 +6067,14 @@ defmodule Cure.Diagnostic.Adapter do
   defp container_item_name(:parameters), do: "parameter"
   defp container_item_name(:type_arguments), do: "type argument"
   defp container_item_name(:lambda_parameters), do: "lambda parameter"
+  defp container_item_name(:binary_literal), do: "binary segment"
+  defp container_item_name(:binary_generator), do: "source expression"
   defp container_item_name(_container), do: "element"
 
   defp syntax_insertion(:rparen), do: ")"
   defp syntax_insertion(:rbracket), do: "]"
   defp syntax_insertion(:rbrace), do: "}"
+  defp syntax_insertion(:binary_close), do: ">>"
 
   defp syntax_insertion(:end), do: "end"
   defp syntax_insertion(:double_quote), do: "\""
