@@ -48,6 +48,7 @@ mod Std.Syntax
 
   type SynLit =
     | SInt(Int)
+    | SChar(Char)
     | SFloat(Float)
     | SStr(String)
     | SBool(Bool)
@@ -184,6 +185,9 @@ mod Std.Syntax
 
   fn string_literal(value: String) -> Syntax =
     Leaf(:literal, [KV(:subtype, SAtom(:string))], SStr(value))
+
+  fn char_literal(value: Char) -> Syntax =
+    Leaf(:literal, [KV(:subtype, SAtom(:char))], SChar(value))
 
   fn syntax_list(items: List(Syntax)) -> SynLit = match items
     [] -> SList([])

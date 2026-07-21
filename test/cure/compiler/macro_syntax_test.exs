@@ -193,6 +193,15 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert MacroSyntax.from_syntax(repr) == ast
   end
 
+  test "a character SynLit round-trips without exposing code-point conversion to Cure macros" do
+    syntax = {:syn_leaf, :literal, [{:subtype, {:s_atom, :char}}], {:s_char, ?é}}
+
+    assert {:literal, meta, ?é} = MacroSyntax.from_syntax(syntax)
+    assert meta[:subtype] == :char
+    assert MacroSyntax.to_syntax({:literal, [subtype: :char], ?é}) != syntax
+    assert :ok = MacroSyntax.validate_expansion(syntax)
+  end
+
   test "a binary-segment size expression (an AST, not a scalar) round-trips faithfully" do
     ast = expr!("<<x::size(n)>>")
     # {:literal, [subtype: :bytes,...], [{:bin_segment, [size: {:variable,...,"n"}, ...], [{:variable,...,"x"}]}]}
