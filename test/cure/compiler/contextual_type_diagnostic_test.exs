@@ -43,6 +43,25 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "2 |   fn has(x: t, y: t) -> Bool = x == y"
   end
 
+  test "a record update fallback points at the authored update" do
+    source =
+      "rec Point\n  x: Int\n  y: Int\nfn bad(p: Point) -> Point = Point{p | x: \"bad\"}\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "record_update.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record_update.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :record_update
+    assert rendered =~ "4 | fn bad(p: Point) -> Point = Point{p | x: \"bad\"}"
+    assert rendered =~ "^"
+  end
+
   test "a real conditional mismatch reports the authored guard" do
     source = "fn main() -> Int = if 1 then 2 else 3\n"
 

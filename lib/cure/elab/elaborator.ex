@@ -641,12 +641,8 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:record_update, meta, children}, names, ctx, env) do
     case desugar_record_update(meta, children, env) do
       {:ok, positional} ->
-        attach_record_field_context(
-          elaborate_expr_typed(positional, names, ctx, env),
-          meta,
-          tl(children),
-          env
-        )
+        elaborate_expr_typed(positional, names, ctx, env)
+        |> attach_record_update_context(meta, children, env)
 
       {:error, reason} ->
         {:error, reason}
@@ -1700,8 +1696,12 @@ defmodule Cure.Elab.Elaborator do
           {:ok, term()} | {:error, term()}
   def elaborate_expr_checked({:record_update, meta, children}, expected_core, names, ctx, env) do
     case desugar_record_update(meta, children, env) do
-      {:ok, positional} -> elaborate_expr_checked(positional, expected_core, names, ctx, env)
-      {:error, reason} -> {:error, attach_record_field_context(reason, meta, tl(children), env)}
+      {:ok, positional} ->
+        elaborate_expr_checked(positional, expected_core, names, ctx, env)
+        |> attach_record_update_context(meta, children, env)
+
+      {:error, reason} ->
+        {:error, attach_record_field_context(reason, meta, tl(children), env)}
     end
   end
 
@@ -2165,6 +2165,29 @@ defmodule Cure.Elab.Elaborator do
     do: {:error, attach_record_field_reason(reason, meta, field_pairs, env)}
 
   defp attach_record_field_context(result, _meta, _field_pairs, _env), do: result
+
+  defp attach_record_update_context({:error, {:source_context, reason, context}}, meta, children, env)
+       when is_map(context) do
+    field_result = attach_record_field_context({:error, {:source_context, reason, context}}, meta, tl(children), env)
+
+    case field_result do
+      {:error, {:source_context, _reason, %{expectation_origin: :record_field} = _field_context}} ->
+        field_result
+
+      {:error, {:source_context, _reason, field_context}} ->
+        {:error, {:source_context, reason, Map.merge(field_context, record_update_context(meta, children, context))}}
+    end
+  end
+
+  defp attach_record_update_context({:error, reason}, meta, children, _env),
+    do: {:error, {:source_context, reason, record_update_context(meta, children, %{})}}
+
+  defp attach_record_update_context(result, _meta, _children, _env), do: result
+
+  defp record_update_context(meta, children, context) do
+    expression = {:record_update, meta, children}
+    Map.merge(context, expectation_context(expression, :record_update, Keyword.get(meta, :name, :record_update), nil))
+  end
 
   defp attach_record_field_reason({:source_context, reason, context}, meta, field_pairs, env)
        when is_map(context) do
