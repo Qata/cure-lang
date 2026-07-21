@@ -309,4 +309,70 @@ defmodule Cure.Compiler.DeclarationSeparatorDiagnosticTest do
     assert {insertion.start_line, insertion.start_column} == {1, 12}
     assert insertion.start_byte == insertion.end_byte
   end
+
+  test "adjacent protocol type parameters retain protocol ownership" do
+    source = "proto Mapper(A B)\n"
+    {error, {diagnostic, registry}} = diagnostic(source, "proto_params.cure")
+
+    assert {:container_elements_syntax,
+            %{
+              kind: :container_separator_missing,
+              container: :type_parameters,
+              declaration: "Mapper",
+              declaration_kind: :protocol
+            }} = error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE PARAMETERS NEED A COMMA [E094] ----------------------- proto_params.cure
+
+             The declaration of `Mapper` has another type parameter here, but consecutive
+             parameters must be separated by a comma.
+
+             at proto_params.cure:1:16
+             1 | proto Mapper(A B)
+               |             -- ^ these type parameters start here; the previous type parameter ends here; insert a comma before this type parameter
+
+             Hint: Insert `,` between these type parameters
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column} == {1, 16}
+    assert insertion.start_byte == insertion.end_byte
+  end
+
+  test "adjacent interface type parameters retain interface ownership" do
+    source = "interface Functor(f a)\n"
+    {error, {diagnostic, registry}} = diagnostic(source, "interface_params.cure")
+
+    assert {:container_elements_syntax,
+            %{
+              kind: :container_separator_missing,
+              container: :type_parameters,
+              declaration: "Functor",
+              declaration_kind: :interface
+            }} = error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE PARAMETERS NEED A COMMA [E094] ------------------- interface_params.cure
+
+             The declaration of `Functor` has another type parameter here, but consecutive
+             parameters must be separated by a comma.
+
+             at interface_params.cure:1:21
+             1 | interface Functor(f a)
+               |                  -- ^ these type parameters start here; the previous type parameter ends here; insert a comma before this type parameter
+
+             Hint: Insert `,` between these type parameters
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column} == {1, 21}
+    assert insertion.start_byte == insertion.end_byte
+  end
 end
