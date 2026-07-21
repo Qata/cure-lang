@@ -234,6 +234,20 @@ defmodule Cure.Diagnostic.HostTest do
            ) =~ "[E101]"
   end
 
+  test "includes the unresolved stdlib module in E101 code-generation failures" do
+    rendered =
+      Host.render(
+        {:codegen_error,
+         {:missing_stdlib_module, :"Cure.Std.Missing",
+          "use Std.Missing: module 'Cure.Std.Missing' not found. Set CURE_LIB."}},
+        "demo.cure"
+      )
+
+    assert rendered =~ "STD LIB MODULE RESOLUTION FAILED [E101]"
+    assert rendered =~ "Cure.Std.Missing"
+    assert rendered =~ "Set CURE_LIB"
+  end
+
   test "converts BEAM writer boundary failures without exposing raw tuples" do
     assert Host.render({:write_failed, "_build/Demo.beam", :eacces}, "demo.cure") =~
              "[E096]"

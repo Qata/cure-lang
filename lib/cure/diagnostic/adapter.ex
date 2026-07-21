@@ -1917,6 +1917,14 @@ defmodule Cure.Diagnostic.Adapter do
      "The generated BEAM artifact was rejected by the BEAM validator (#{length(errors)} error(s)).", :beam_lint}
   end
 
+  defp codegen_failure_content({:missing_stdlib_module, module, message}) do
+    module_name = name_to_string(module)
+
+    {"Stdlib module resolution failed",
+     "The compiler could not resolve `#{module_name}` while generating the BEAM artifact. #{message}",
+     :missing_stdlib_module}
+  end
+
   defp codegen_failure_content(_reason) do
     {"Code generation failed", "The compiler could not produce a valid BEAM artifact for this source.", :codegen}
   end
