@@ -172,6 +172,104 @@ mod Std.Regex
     PatternAlternate : Pattern(left) -> Pattern(right) -> Pattern(ChoiceC(left, right))
     PatternRepeat : Pattern(inner) -> Pattern(ListC(inner))
 
+  ## State identifiers are naturals below `state_count`. Thompson construction
+  ## allocates disjoint contiguous ranges and preserves that invariant by
+  ## shifting the right machine by the left machine's count. `Accepted` is an
+  ## accepting edge (the paper's `Nothing`), not an allocated state. The runtime
+  ## transition relation is ordered and epsilon-free.
+  type MachineState = Active(Nat) | Accepted
+  type PatternMachine = PatternMachine(Nat, List(MachineState), Nat -> Char -> List(MachineState))
+
+  fn append_states(left: List(MachineState), right: List(MachineState)) -> List(MachineState) = match left
+    [] -> right
+    [head | rest] -> [head | append_states(rest, right)]
+
+  fn shift_states(offset: Nat, states: List(MachineState)) -> List(MachineState) = match states
+    [] -> []
+    [Accepted() | rest] -> [Accepted() | shift_states(offset, rest)]
+    [Active(state) | rest] -> [Active(plus(offset, state)) | shift_states(offset, rest)]
+
+  fn nat_less(left: Nat, right: Nat) -> Bool = match left
+    Z() -> match right
+      Z() -> false
+      S(_) -> true
+    S(left_rest) -> match right
+      Z() -> false
+      S(right_rest) -> nat_less(left_rest, right_rest)
+
+  fn nat_subtract(value: Nat, amount: Nat) -> Nat = match amount
+    Z() -> value
+    S(amount_rest) -> match value
+      Z() -> Z()
+      S(value_rest) -> nat_subtract(value_rest, amount_rest)
+
+  fn continue_with_right(offset: Nat, left_states: List(MachineState), right_starts: List(MachineState)) -> List(MachineState) = match left_states
+    [] -> []
+    [Accepted() | rest] -> append_states(shift_states(offset, right_starts), continue_with_right(offset, rest, right_starts))
+    [Active(state) | rest] -> [Active(state) | continue_with_right(offset, rest, right_starts)]
+
+  fn repeat_destinations(destinations: List(MachineState), starts: List(MachineState)) -> List(MachineState) = match destinations
+    [] -> []
+    [Accepted() | rest] -> [Accepted() | append_states(starts, repeat_destinations(rest, starts))]
+    [Active(state) | rest] -> [Active(state) | repeat_destinations(rest, starts)]
+
+  fn predicate_machine_next(test: Char -> Bool, _state: Nat, char: Char) -> List(MachineState) = pickup
+    test(char) -> [Accepted()]
+    else -> []
+
+  fn concat_machine_next(left_count: Nat, left_next: Nat -> Char -> List(MachineState), right_starts: List(MachineState), right_next: Nat -> Char -> List(MachineState), state: Nat, char: Char) -> List(MachineState) = pickup
+    nat_less(state, left_count) -> continue_with_right(left_count, left_next(state)(char), right_starts)
+    else -> shift_states(left_count, right_next(nat_subtract(state, left_count))(char))
+
+  fn alternate_machine_next(left_count: Nat, left_next: Nat -> Char -> List(MachineState), right_next: Nat -> Char -> List(MachineState), state: Nat, char: Char) -> List(MachineState) = pickup
+    nat_less(state, left_count) -> left_next(state)(char)
+    else -> shift_states(left_count, right_next(nat_subtract(state, left_count))(char))
+
+  fn compile_pattern({shape: ShapeCode}, pattern: Pattern(shape)) -> PatternMachine = match pattern
+    PatternEmpty() -> PatternMachine(Z(), [Accepted()], fn(_state, _char) -> [])
+    PatternPredicate(test) -> PatternMachine(S(Z()), [Active(Z())], fn(state, char) -> predicate_machine_next(test, state, char))
+    PatternConcat(left, right) -> match compile_pattern(left)
+      PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
+        PatternMachine(right_count, right_starts, right_next) ->
+          PatternMachine(
+            plus(left_count, right_count),
+            continue_with_right(left_count, left_starts, right_starts),
+            fn(state, char) -> concat_machine_next(left_count, left_next, right_starts, right_next, state, char)
+          )
+    PatternGroup(inner) -> compile_pattern(inner)
+    PatternAlternate(left, right) -> match compile_pattern(left)
+      PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
+        PatternMachine(right_count, right_starts, right_next) ->
+          PatternMachine(
+            plus(left_count, right_count),
+            append_states(left_starts, shift_states(left_count, right_starts)),
+            fn(state, char) -> alternate_machine_next(left_count, left_next, right_next, state, char)
+          )
+    PatternRepeat(inner) -> match compile_pattern(inner)
+      PatternMachine(count, starts, next) ->
+        PatternMachine(count, [Accepted() | starts], fn(state, char) -> repeat_destinations(next(state)(char), starts))
+
+  fn machine_has_accept(states: List(MachineState)) -> Bool = match states
+    [] -> false
+    [Accepted() | _] -> true
+    [Active(_) | rest] -> machine_has_accept(rest)
+
+  fn machine_step_one(next: Nat -> Char -> List(MachineState), char: Char, current: MachineState) -> List(MachineState) = match current
+    Accepted() -> []
+    Active(state) -> next(state)(char)
+
+  fn machine_step(next: Nat -> Char -> List(MachineState), char: Char, current: List(MachineState)) -> List(MachineState) = match current
+    [] -> []
+    [head | rest] -> append_states(machine_step_one(next, char, head), machine_step(next, char, rest))
+
+  fn machine_accepts_chars(next: Nat -> Char -> List(MachineState), input: String, current: List(MachineState)) -> Bool = match input
+    [] -> machine_has_accept(current)
+    [char | rest] -> machine_accepts_chars(next, rest, machine_step(next, char, current))
+
+  fn pattern_accepts({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Bool =
+    match compile_pattern(pattern)
+      PatternMachine(_count, starts, next) -> machine_accepts_chars(next, input, starts)
+
   ## Public typed combinator layer. `Mapped` is the semantic bridge from a
   ## structurally extracted Pattern value to the user-facing result type. It is
   ## one-way: regex parsing does not imply an unparser.
@@ -179,15 +277,13 @@ mod Std.Regex
 
   type CharacterRange = CharacterRange(Char, Char)
 
-  ## Elixir-compatible literal modifiers. Repeated letters are idempotent and
-  ## order-independent. `r` is parsed as the deprecated spelling of
-  ## `ungreedy`; `E` records export intent, but has no matching effect because
-  ## Cure literals already expand to portable ordinary data/code rather than an
-  ## OTP-owned compiled handle.
-  type RegexOptions = RegexOptions(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)
+  ## Elixir-compatible literal modifiers, in `i m s x u f U` order. Repeated
+  ## letters are idempotent and modifier order is irrelevant. No accepted flag
+  ## is metadata-only: each one must affect parsing or machine execution.
+  type RegexOptions = RegexOptions(Bool, Bool, Bool, Bool, Bool, Bool, Bool)
 
   fn default_options() -> RegexOptions =
-    RegexOptions(false, false, false, false, false, false, false, false)
+    RegexOptions(false, false, false, false, false, false, false)
 
   type Regex indices (result: Type)
     FromPattern : (shape: ShapeCode) -> Pattern(shape) -> Regex(Sem(shape))
@@ -398,36 +494,31 @@ mod Std.Regex
     ['u' | rest] -> parse_literal_flags(rest, enable_unicode(options))
     ['f' | rest] -> parse_literal_flags(rest, enable_firstline(options))
     ['U' | rest] -> parse_literal_flags(rest, enable_ungreedy(options))
-    ['r' | rest] -> parse_literal_flags(rest, enable_ungreedy(options))
-    ['E' | rest] -> parse_literal_flags(rest, enable_export(options))
     [_ | _] -> LiteralFlagsInvalid(:InvalidRegexModifier)
 
   fn enable_caseless(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(_, m, s, x, u, f, g, e) -> RegexOptions(true, m, s, x, u, f, g, e)
+    RegexOptions(_, m, s, x, u, f, g) -> RegexOptions(true, m, s, x, u, f, g)
 
   fn enable_multiline(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, _, s, x, u, f, g, e) -> RegexOptions(i, true, s, x, u, f, g, e)
+    RegexOptions(i, _, s, x, u, f, g) -> RegexOptions(i, true, s, x, u, f, g)
 
   fn enable_dotall(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, m, _, x, u, f, g, e) -> RegexOptions(i, m, true, x, u, f, g, e)
+    RegexOptions(i, m, _, x, u, f, g) -> RegexOptions(i, m, true, x, u, f, g)
 
   fn enable_extended(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, m, s, _, u, f, g, e) -> RegexOptions(i, m, s, true, u, f, g, e)
+    RegexOptions(i, m, s, _, u, f, g) -> RegexOptions(i, m, s, true, u, f, g)
 
   fn enable_unicode(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, m, s, x, _, f, g, e) -> RegexOptions(i, m, s, x, true, f, g, e)
+    RegexOptions(i, m, s, x, _, f, g) -> RegexOptions(i, m, s, x, true, f, g)
 
   fn enable_firstline(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, m, s, x, u, _, g, e) -> RegexOptions(i, m, s, x, u, true, g, e)
+    RegexOptions(i, m, s, x, u, _, g) -> RegexOptions(i, m, s, x, u, true, g)
 
   fn enable_ungreedy(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, m, s, x, u, f, _, e) -> RegexOptions(i, m, s, x, u, f, true, e)
-
-  fn enable_export(options: RegexOptions) -> RegexOptions = match options
-    RegexOptions(i, m, s, x, u, f, g, _) -> RegexOptions(i, m, s, x, u, f, g, true)
+    RegexOptions(i, m, s, x, u, f, _) -> RegexOptions(i, m, s, x, u, f, true)
 
   fn prepare_literal(pattern: String, options: RegexOptions) -> String = match options
-    RegexOptions(_, _, _, extended, _, _, _, _) -> pickup
+    RegexOptions(_, _, _, extended, _, _, _) -> pickup
       extended -> strip_extended(pattern)
       else -> pattern
 
@@ -683,10 +774,10 @@ mod Std.Regex
       prepend_syntax(call("Std.Regex.CharacterRange", [char_literal(first), char_literal(last)]), emit_ranges(rest))
 
   fn emit_options(options: RegexOptions) -> Syntax = match options
-    RegexOptions(i, m, s, x, u, f, g, e) ->
+    RegexOptions(i, m, s, x, u, f, g) ->
       call("Std.Regex.RegexOptions", [
         bool_literal(i), bool_literal(m), bool_literal(s), bool_literal(x),
-        bool_literal(u), bool_literal(f), bool_literal(g), bool_literal(e)
+        bool_literal(u), bool_literal(f), bool_literal(g)
       ])
 
   fn prepend_syntax(head: Syntax, tail: Syntax) -> Syntax = match tail

@@ -59,4 +59,15 @@ defmodule Cure.Stdlib.RegexSourceTest do
 
     assert {:ok, _env} = Program.elaborate(source)
   end
+
+  test "a slash literal does not leak Std.Regex bare names into caller scope" do
+    source = """
+    mod RegexLiteralScope
+      fn literal() = /a/
+      fn leaked() -> RegexOptions = default_options()
+    end
+    """
+
+    assert {:error, _diagnostic} = Program.elaborate(source)
+  end
 end

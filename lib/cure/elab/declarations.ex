@@ -614,6 +614,10 @@ defmodule Cure.Elab.Declarations do
         body_expr
         |> macro_home_sources()
         |> Enum.reduce(env, &Cure.Elab.Program.env_with_macro_home(&2, &1))
+        # Generated code needs definition-site declarations for qualified
+        # references, but a macro use must not open the home module in the
+        # caller. Preserve only the caller's lexical import set.
+        |> Map.put(:import_modules, env.import_modules)
 
       ctx = build_context(body_env, sig.telescope)
       # Qualify any hole minted while elaborating THIS body by its enclosing def
