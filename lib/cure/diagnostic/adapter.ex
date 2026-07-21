@@ -5124,6 +5124,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :assert_type_colon_missing}),
     do: "Type assertion needs a colon"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :named_implicit_pattern_assign_missing}),
+    do: "Named implicit pattern needs an equals sign"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5167,6 +5170,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :implicit_constructor_domain}
        }),
        do: "Implicit constructor domain is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :named_implicit_pattern}
+       }),
+       do: "Named implicit pattern is not closed"
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_unclosed,
@@ -5482,6 +5491,12 @@ defmodule Cure.Diagnostic.Adapter do
     do: "The `assert_type` expression needs `:` between the asserted value and its expected type."
 
   defp syntax_problem_context(%SyntaxProblem{
+         kind: :named_implicit_pattern_assign_missing,
+         context: %{binder: binder}
+       }),
+       do: "The named implicit pattern for `#{binder}` needs `=` before the pattern that fixes its value."
+
+  defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
          observed: observed,
          context: %{lambda: true}
@@ -5627,6 +5642,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :implicit_constructor_domain}
        }),
        do: "This implicit constructor domain reaches the end of the declaration without its closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :named_implicit_pattern, binder: binder}
+       }),
+       do: "The named implicit pattern for `#{binder}` reaches the end of its value without the closing '}'."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
@@ -5900,6 +5921,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :assert_type_colon_missing}),
     do: "insert `:` before this expected type"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :named_implicit_pattern_assign_missing}),
+    do: "insert `=` before this implicit pattern"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -6001,6 +6025,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :implicit_constructor_domain}
        }),
        do: "close this implicit constructor domain with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :named_implicit_pattern}
+       }),
+       do: "close this named implicit pattern with `}`"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_unclosed,
@@ -6236,6 +6266,25 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :named_implicit_pattern_assign_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this named implicit pattern starts here"),
+      pickup_label(previous, :secondary, "this is the implicit binder")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
          %SyntaxProblem{kind: :record_field_colon_missing, previous: %Span{} = previous},
          primary_span
        )
@@ -6369,6 +6418,27 @@ defmodule Cure.Diagnostic.Adapter do
       ),
       pickup_label(Map.get(context, :binder_span), :secondary, "this is the dependent argument binder"),
       pickup_label(previous, :secondary, "the argument type ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :named_implicit_pattern} = context
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this named implicit pattern starts here"),
+      pickup_label(Map.get(context, :binder_span), :secondary, "this is the implicit binder"),
+      pickup_label(previous, :secondary, "the implicit pattern ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -6757,6 +6827,20 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_insertions(
+         %SyntaxProblem{kind: :named_implicit_pattern_assign_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `=` before the implicit pattern",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "= "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
          %SyntaxProblem{kind: :type_indices_opener_missing, context: %{token_type: type}},
          %Span{} = span
        )
@@ -6910,6 +6994,13 @@ defmodule Cure.Diagnostic.Adapter do
          %Span{} = span
        ) do
     closing_delimiter_insertion(:rparen, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_unclosed, expected: :rbrace, context: %{container: :named_implicit_pattern}},
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rbrace, span)
   end
 
   defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do

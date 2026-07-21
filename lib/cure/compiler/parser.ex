@@ -3281,13 +3281,13 @@ defmodule Cure.Compiler.Parser do
 
       # Named-implicit dot pattern `{ name = <expr> }` in a constructor-argument
       # position — annotates an erased implicit index by name (Lean/Idris-style),
-      # e.g. `vcons({k = .m}, h, r)`. Only the `{ IDENT = … }` shape is a
-      # named-implicit; every other leading `{` in prefix position keeps its
-      # previous unexpected-token error (records use the postfix `Name{…}` form,
-      # maps use `#{…}`, blocks use indentation — none reach this clause).
+      # e.g. `vcons({k = .m}, h, r)`. A leading `{ IDENT …` is reserved for this
+      # form in prefix position, so claim it even when `=` is missing and report
+      # the exact repair. Records use postfix `Name{…}`, maps use `#{…}`, and
+      # blocks use indentation, so none of those forms reach this clause.
       :lbrace ->
-        case {peek_at(state, 1), peek_at(state, 2)} do
-          {%Token{type: :identifier}, %Token{type: :assign}} ->
+        case peek_at(state, 1) do
+          %Token{type: :identifier} ->
             parse_named_implicit_pat(state, token)
 
           _ ->
@@ -3948,11 +3948,47 @@ defmodule Cure.Compiler.Parser do
     name_token = peek(state)
     name = to_string(name_token.value)
     state = advance(state)
-    state = expect(state, :assign)
+    state = expect_named_implicit_pattern_assign(state, brace_token, name_token, name)
     {inner, state} = parse_expr(state, 0)
-    state = expect(state, :rbrace)
+
+    {state, _close_token} =
+      expect_container_close(state, :rbrace, :named_implicit_pattern, brace_token, [inner], false, %{
+        binder: name,
+        binder_span: name_token.span,
+        closing_tokens: [:comma, :rparen, :arrow]
+      })
+
     meta = [line: brace_token.line, col: brace_token.col, name: name]
     {{:named_implicit_pat, meta, [inner]}, state}
+  end
+
+  defp expect_named_implicit_pattern_assign(state, brace_token, name_token, name) do
+    case expect_token(state, :assign) do
+      {:ok, _assign, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :named_implicit_pattern_assign_missing,
+             binder: name,
+             expected: :assign,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: brace_token.span,
+             previous_span: name_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
+    end
   end
 
   # -- Literals --------------------------------------------------------------
