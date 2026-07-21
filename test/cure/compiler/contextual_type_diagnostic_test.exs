@@ -584,6 +584,33 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this actor message has the wrong type"
   end
 
+  test "typed FSM and supervisor family failures retain their family origins" do
+    source = "family declaration\n"
+    span = raw_span(source, "family", 1, 1)
+
+    for {behaviour, macro, origin} <- [
+          {:gen_statem, "fsm", :fsm},
+          {:supervisor, "sup", :supervisor}
+        ] do
+      reason =
+        {:lift_module_error,
+         %{
+           module: "Cure.Generated.Family",
+           behaviour: behaviour,
+           source_provenance: %{macro: macro},
+           expansion_provenance: [],
+           cause:
+             {:source_context, {:cannot_unify, :bool, :int},
+              %{checking: :generated_callback, expression_category: :literal, span: span}}
+         }}
+
+      {diagnostic, _registry} = Errors.to_diagnostic(reason, "family.cure", source)
+
+      assert diagnostic.code == "E093"
+      assert diagnostic.payload.origin.kind == origin
+    end
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 
