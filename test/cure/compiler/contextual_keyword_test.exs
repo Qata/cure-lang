@@ -52,11 +52,14 @@ defmodule Cure.Compiler.ContextualKeywordTest do
   end
 
   test "precedencegroup introduces a precedencegroup container at a declaration-shaped head" do
-    source = "precedencegroup Additive\n  associativity: left\n"
+    # Use a group name absent from the built-in prelude so this isolates
+    # contextual-keyword parsing, not prelude conflict detection (which would
+    # reject a redeclaration of `Additive` with a divergent body).
+    source = "precedencegroup Custom\n  associativity: left\n"
 
     assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
     assert {:ok, {:precedencegroup, meta, _body}} = Parser.parse(tokens, emit_events: false)
-    assert meta[:name] == :Additive
+    assert meta[:name] == :Custom
   end
 
   test "precedencegroup remains an ordinary parameter and value" do
@@ -102,12 +105,15 @@ defmodule Cure.Compiler.ContextualKeywordTest do
   end
 
   test "prefix introduces a fixity declaration at a declaration-shaped head" do
-    source = "prefix - : Negation\n"
+    # Use an operator absent from the built-in prelude so this isolates
+    # contextual-keyword parsing, not prelude conflict detection (the prelude
+    # already binds prefix `-` to the `Prefix` group).
+    source = "prefix `~~` : Negation\n"
 
     assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
     assert {:ok, {:fixity, meta, _body}} = Parser.parse(tokens, emit_events: false)
     assert meta[:fixity] == :prefix
-    assert meta[:operator] == "-"
+    assert meta[:operator] == "~~"
     assert meta[:group] == :Negation
   end
 

@@ -116,6 +116,7 @@ defmodule Cure.Compiler.Incremental do
     {:ok, _ordered, cycles} = DepGraph.order(graph)
     closure = DepGraph.closure_deps_map(graph)
     walk = compile_order(graph)
+    prelude_providers = DepGraph.prelude_provider_names(graph)
 
     forced_paths =
       for {path, node} <- graph.nodes,
@@ -191,7 +192,10 @@ defmodule Cure.Compiler.Incremental do
     reachable_dirty =
       for mod <- walk, into: %{} do
         deps = Map.get(closure, mod, [])
-        dirty? = Map.fetch!(base_dirty, mod) or Enum.any?(DepGraph.closure(closure, deps), &Map.get(base_dirty, &1, false))
+
+        dirty? =
+          Map.fetch!(base_dirty, mod) or Enum.any?(DepGraph.closure(closure, deps), &Map.get(base_dirty, &1, false))
+
         {mod, dirty?}
       end
 
@@ -201,7 +205,10 @@ defmodule Cure.Compiler.Incremental do
       base_dirty: base_dirty,
       reachable_dirty: reachable_dirty,
       module_paths: graph.modules,
-      compile_opts: Keyword.get(opts, :compile_opts, []),
+      compile_opts:
+        opts
+        |> Keyword.get(:compile_opts, [])
+        |> Keyword.put(:prelude_providers, prelude_providers),
       # `roots` drives BOTH deletion scoping (above) and the standalone
       # interface-hash recomputation below. `Program.module_interface/2` resolves
       # a module's `use`-dependencies through `:cure_source_roots`; without it,

@@ -283,9 +283,8 @@ defmodule Cure.Compiler.LexerTest do
                types(lex!("== != < > <= >="))
     end
 
-    test "assignment operators" do
-      assert [:assign, :plus_assign, :minus_assign, :star_assign, :slash_assign] =
-               types(lex!("= += -= *= /="))
+    test "assignment operator" do
+      assert [:assign] = types(lex!("="))
     end
 
     test "arrow and fat arrow" do

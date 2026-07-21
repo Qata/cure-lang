@@ -87,17 +87,48 @@ defmodule Cure.Compiler do
     output_dir = Keyword.get(opts, :output_dir, "_build/cure/ebin")
     emit? = Keyword.get(opts, :emit_events, true)
     declared_phases = Keyword.get(opts, :declared_phases)
+    prelude_providers = Keyword.get(opts, :prelude_providers, [])
 
     with_source_roots(file, opts, fn ->
       with {:ok, edition} <- resolve_edition(source, opts),
            {:ok, tokens} <- lex(source, file, emit?, edition),
-           {:ok, ast} <- parse(tokens, file, emit?, edition),
+           {:ok, ast} <- parse(tokens, file, emit?, edition, prelude_providers),
            {:ok, ast} <- migrate_warn(ast, file),
+           ast = inject_prelude_uses(ast, prelude_providers),
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
            {:ok, units, cg_warnings} <- codegen(ast, file, emit?, output_dir, declared_phases) do
         write_beam_units(units, output_dir, emit?, file, cg_warnings)
       end
     end)
+  end
+
+  @doc """
+  Module names of every `@prelude`-marked module in a scanned dependency graph.
+  A driver passes this list as the `:prelude_providers` compile option so a user
+  `@prelude` module's operators reach every sibling in the same run.
+  """
+  @spec prelude_provider_names(Cure.Compiler.DepGraph.t()) :: [String.t()]
+  defdelegate prelude_provider_names(graph), to: Cure.Compiler.DepGraph
+
+  @doc """
+  Scan and order a bulk Cure compilation universe, returning the ambient
+  prelude-provider names alongside the ordered paths and any tolerated cycles.
+  Bulk drivers share this entry point so parser scope and compile order cannot
+  disagree about user `@prelude` modules.
+  """
+  @spec prepare_files([Path.t()]) ::
+          {:ok, %{ordered: [Path.t()], providers: [String.t()], cycles: [list()]}}
+          | {:error, term()}
+  def prepare_files(files) when is_list(files) do
+    with {:ok, graph} <- Cure.Compiler.DepGraph.scan(files),
+         {:ok, ordered, cycles} <- Cure.Compiler.DepGraph.order(graph) do
+      {:ok,
+       %{
+         ordered: ordered,
+         providers: Cure.Compiler.DepGraph.prelude_provider_names(graph),
+         cycles: cycles
+       }}
+    end
   end
 
   # `BeamWriter.compile_forms/2` returns `{:error, errors, warnings}` (3-tuple)
@@ -178,7 +209,9 @@ defmodule Cure.Compiler do
     case Cure.Edition.resolve(%{source: source, project_dir: project_dir}) do
       {:ok, edition} ->
         with {:ok, tokens} <- lex(source, file, false, edition) do
-          parse(tokens, file, false, edition)
+          # Single-file tooling utility: no driver, so no user `@prelude`
+          # providers — falls back to the compiler-bundled prelude only.
+          parse(tokens, file, false, edition, [])
         end
 
       {:error, reason} ->
@@ -197,11 +230,13 @@ defmodule Cure.Compiler do
     file = Keyword.get(opts, :file, "nofile")
     emit? = Keyword.get(opts, :emit_events, false)
     declared_phases = Keyword.get(opts, :declared_phases)
+    prelude_providers = Keyword.get(opts, :prelude_providers, [])
 
     with_source_roots(file, opts, fn ->
       with {:ok, edition} <- resolve_edition(source, opts),
            {:ok, tokens} <- lex(source, file, emit?, edition),
-           {:ok, ast} <- parse(tokens, file, emit?, edition),
+           {:ok, ast} <- parse(tokens, file, emit?, edition, prelude_providers),
+           ast = inject_prelude_uses(ast, prelude_providers),
            {:ok, ast} <- Cure.Elab.Program.expand_declaration_uses(ast),
            {:ok, units, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
         # compile_and_load/2 intentionally does NOT persist bytecode to
@@ -246,12 +281,53 @@ defmodule Cure.Compiler do
     end
   end
 
-  defp parse(tokens, file, emit?, edition) do
-    case Parser.parse(tokens, file: file, emit_events: emit?, edition: edition) do
+  defp parse(tokens, file, emit?, edition, prelude_providers) do
+    case Parser.parse(tokens,
+           file: file,
+           emit_events: emit?,
+           edition: edition,
+           prelude_providers: prelude_providers,
+           validate_fixity_cycles: true
+         ) do
       {:ok, ast} -> {:ok, ast}
       {:error, errors} -> {:error, {:parse_error, errors}}
     end
   end
+
+  # A user `@prelude` provider is an implicit `use`, not syntax-only parser
+  # state. Inject ordinary import nodes into each source module so the existing
+  # source loader brings the provider's definitions, types, and interfaces into
+  # elaboration. Ordinary import collision/coherence checks remain authoritative.
+  defp inject_prelude_uses(ast, []), do: ast
+
+  defp inject_prelude_uses({:container, meta, body}, providers) when is_list(meta) do
+    if Keyword.get(meta, :container_type) in [:module, :proof] do
+      self = Keyword.get(meta, :name)
+
+      existing =
+        body
+        |> List.wrap()
+        |> Enum.flat_map(fn
+          {:import, import_meta, _} -> [Keyword.get(import_meta, :source)]
+          _ -> []
+        end)
+        |> MapSet.new()
+
+      imports =
+        providers
+        |> Enum.reject(&(&1 == self or MapSet.member?(existing, &1)))
+        |> Enum.map(&{:import, [source: &1, import_type: :use, language: :cure, line: 1, col: 1], []})
+
+      {:container, meta, imports ++ List.wrap(body)}
+    else
+      {:container, meta, inject_prelude_uses(body, providers)}
+    end
+  end
+
+  defp inject_prelude_uses({:block, meta, items}, providers) when is_list(items),
+    do: {:block, meta, Enum.map(items, &inject_prelude_uses(&1, providers))}
+
+  defp inject_prelude_uses(ast, _providers), do: ast
 
   # Resolve the edition this source compiles under (spec §3.2 precedence: file
   # `@edition` pragma > `Cure.toml` `[project].edition` > compiler default). The

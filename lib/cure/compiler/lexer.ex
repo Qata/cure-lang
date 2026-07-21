@@ -85,6 +85,7 @@ defmodule Cure.Compiler.Lexer do
     preserve_comments: false,
     collect_trivia: false,
     trivia: [],
+    emit_events: true,
     keyword_set: @keyword_string_set
   ]
 
@@ -138,6 +139,7 @@ defmodule Cure.Compiler.Lexer do
       file: file,
       preserve_comments: preserve?,
       collect_trivia: trivia?,
+      emit_events: emit?,
       keyword_set: keyword_set
     }
 
@@ -1313,7 +1315,7 @@ defmodule Cure.Compiler.Lexer do
   # Multi-byte symbol runs already recognised as FIXED tokens. A run in this set
   # defers to its dedicated lexer so tokenisation stays byte-identical; only a
   # run that is NOT here (and is >= 2 bytes) becomes a generic `:operator` token.
-  @fixed_op_runs MapSet.new(~w(<< <> <= >= >> == => != |> *= /=) ++ ["+="])
+  @fixed_op_runs MapSet.new(~w(<< <> <= >= >> == => != |>))
 
   # `<<` / `>>` are binary-pattern DELIMITERS, not operators. Maximal munch would
   # otherwise swallow the empty binary pattern `<<>>` (delimiter `<<` immediately
@@ -1446,27 +1448,15 @@ defmodule Cure.Compiler.Lexer do
 
   defp lex_plus_fixed(state) do
     start_col = state.col
-
-    if peek_at(state, 1) == ?= do
-      token = Token.new(:plus_assign, "+=", state.line, start_col)
-      maybe_emit_event(state, token)
-      {:ok, %{state | tokens: [token | state.tokens]} |> advance(2)}
-    else
-      token = Token.new(:plus, "+", state.line, start_col)
-      maybe_emit_event(state, token)
-      {:ok, %{state | tokens: [token | state.tokens]} |> advance(1)}
-    end
+    token = Token.new(:plus, "+", state.line, start_col)
+    maybe_emit_event(state, token)
+    {:ok, %{state | tokens: [token | state.tokens]} |> advance(1)}
   end
 
   defp lex_minus(state) do
     start_col = state.col
 
     case peek_at(state, 1) do
-      ?= ->
-        token = Token.new(:minus_assign, "-=", state.line, start_col)
-        maybe_emit_event(state, token)
-        {:ok, %{state | tokens: [token | state.tokens]} |> advance(2)}
-
       ?> ->
         token = Token.new(:arrow, "->", state.line, start_col)
         maybe_emit_event(state, token)
@@ -1493,16 +1483,9 @@ defmodule Cure.Compiler.Lexer do
 
   defp lex_star_fixed(state) do
     start_col = state.col
-
-    if peek_at(state, 1) == ?= do
-      token = Token.new(:star_assign, "*=", state.line, start_col)
-      maybe_emit_event(state, token)
-      {:ok, %{state | tokens: [token | state.tokens]} |> advance(2)}
-    else
-      token = Token.new(:star, "*", state.line, start_col)
-      maybe_emit_event(state, token)
-      {:ok, %{state | tokens: [token | state.tokens]} |> advance(1)}
-    end
+    token = Token.new(:star, "*", state.line, start_col)
+    maybe_emit_event(state, token)
+    {:ok, %{state | tokens: [token | state.tokens]} |> advance(1)}
   end
 
   defp lex_slash(state) do
@@ -1514,16 +1497,9 @@ defmodule Cure.Compiler.Lexer do
 
   defp lex_slash_fixed(state) do
     start_col = state.col
-
-    if peek_at(state, 1) == ?= do
-      token = Token.new(:slash_assign, "/=", state.line, start_col)
-      maybe_emit_event(state, token)
-      {:ok, %{state | tokens: [token | state.tokens]} |> advance(2)}
-    else
-      token = Token.new(:slash, "/", state.line, start_col)
-      maybe_emit_event(state, token)
-      {:ok, %{state | tokens: [token | state.tokens]} |> advance(1)}
-    end
+    token = Token.new(:slash, "/", state.line, start_col)
+    maybe_emit_event(state, token)
+    {:ok, %{state | tokens: [token | state.tokens]} |> advance(1)}
   end
 
   defp lex_equal(state) do

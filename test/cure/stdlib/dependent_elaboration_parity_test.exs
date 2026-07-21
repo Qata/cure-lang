@@ -45,7 +45,7 @@ defmodule Cure.Stdlib.DependentElaborationParityTest do
   # actor/app/fsm/process/supervisor were removed with the container compilers
   # (#18); concurrency is now pure `@extern` wrappers, not their own modules.
   @green ~w(
-    atom binary bool bounded char comparable core crdt decision equatable
+    atom binary bool bounded char comparable core crdt decision dynamic equatable
     equivalent float functor gen int iter json list map match math nat
     non_empty optic option proof result semigroup set show sigma string
     system telescope test time tuple unit vector

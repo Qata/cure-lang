@@ -37,7 +37,7 @@ defmodule Cure.Compiler.Parser do
   """
 
   alias Cure.Compiler.{MacroFamily, MacroRaw, Token}
-  alias Cure.Compiler.Parser.{BuiltinFixity, FixityTable, Precedence}
+  alias Cure.Compiler.Parser.{BuiltinFixity, FixityTable, FixityScan, FixityResolver, Precedence}
   alias Cure.Compiler.Parser.Range
   alias Cure.MetaAST.Metadata
   alias Cure.MetaAST.SourceInfo
@@ -144,10 +144,6 @@ defmodule Cure.Compiler.Parser do
     bsr_op: "bsr",
     dot: ".",
     assign: "=",
-    plus_assign: "+=",
-    minus_assign: "-=",
-    star_assign: "*=",
-    slash_assign: "/=",
     not_op: "not",
     bnot_op: "bnot"
   }
@@ -195,6 +191,8 @@ defmodule Cure.Compiler.Parser do
     edition = Keyword.get(opts, :edition, Cure.Edition.current())
     prelude? = Keyword.get(opts, :prelude_macros, true)
     supplied_macros = Keyword.get(opts, :builtin_macros)
+    prelude_providers = Keyword.get(opts, :prelude_providers, [])
+    validate_fixity_cycles? = Keyword.get(opts, :validate_fixity_cycles, false)
 
     # The built-in fixity table (memoized). Both passes seed from it; the
     # authoritative pass layers the module's own decls on top (collected below).
@@ -205,68 +203,105 @@ defmodule Cure.Compiler.Parser do
     # the {:macro_def, …} nodes and their (recovered) errors. This pass also
     # yields the module's `precedencegroup`/`infix`/… declaration nodes, which
     # parse context-free (no fixity table needed) — they feed the module table.
-    harvest_state =
-      put_tokens(
-        %__MODULE__{file: file, emit_events: false, edition: edition, fixity_table: builtin_fixity},
-        tokens
-      )
+    harvest_exprs = harvest(tokens, file, builtin_fixity, edition)
 
-    {harvest_exprs, _harvest_state} = parse_program(harvest_state)
+    # Assemble the module's fixity table = built-in prelude base ∪ own(M) ∪ the
+    # fixity of every module in M's transitive `use`-closure ∪ user `@prelude`
+    # providers. A same-lexeme/different-group (or same-group/different-body)
+    # clash is a hard PARSE error, raised here before the authoritative pass.
+    own_fixity = FixityScan.collect_fixity(harvest_exprs)
+    own_uses = FixityScan.collect_use_targets(harvest_exprs)
 
-    # Extend the built-in table with the current module's fixity declarations so
-    # the authoritative pass binds user-declared operators by their group.
-    module_fixity = session_extend_fixity_table(builtin_fixity, harvest_exprs)
+    module_fixity =
+      case FixityResolver.assemble(builtin_fixity, own_fixity, own_uses, prelude_providers) do
+        {:ok, table} ->
+          case {validate_fixity_cycles?, FixityTable.cyclic_groups(table)} do
+            {true, [_ | _] = groups} -> {:__fixity_error__, {:precedence_cycle, groups}}
+            _ -> table
+          end
+
+        {:error, conflict} ->
+          {:__fixity_error__, conflict}
+      end
+
     active = harvest_active_macros(harvest_exprs)
     computed = harvest_computed_macros(harvest_exprs)
     literal = harvest_literal_macros(harvest_exprs)
 
-    # Phase 2 (authoritative): parse with the macro grammars seeded so use-sites expand.
-    builtin_rules =
-      cond do
-        is_map(supplied_macros) -> supplied_macros
-        prelude? -> prelude_macros()
-        true -> %{}
-      end
+    case module_fixity do
+      {:__fixity_error__, reason} ->
+        {:error, [reason]}
 
-    state = %__MODULE__{
-      file: file,
-      emit_events: emit?,
-      edition: edition,
-      builtin_macros: syntax_macro_rules(builtin_rules),
-      builtin_computed_macros: computed_macro_rules(builtin_rules),
-      active_macros: active,
-      computed_macros: computed,
-      # Local `literal` rules always apply. In the normal (non-self-harvest)
-      # case, standard-library `literal` rules join them so a suffix like `ms`
-      # expands in ANY file, exactly as `:syntax` macros are globally active via
-      # `builtin_macros`. Local rules win on a suffix collision.
-      literal_macros:
-        cond do
-          is_map(supplied_macros) -> literal
-          prelude? -> Map.merge(prelude_literal_macros(), literal, fn _k, _p, l -> l end)
-          true -> literal
-        end,
-      fixity_table: module_fixity
-    }
+      %FixityTable{} = module_fixity ->
+        # Phase 2 (authoritative): parse with the macro grammars seeded so use-sites expand.
+        builtin_rules =
+          cond do
+            is_map(supplied_macros) -> supplied_macros
+            prelude? -> prelude_macros()
+            true -> %{}
+          end
 
-    state = put_tokens(state, tokens)
+        state = %__MODULE__{
+          file: file,
+          emit_events: emit?,
+          edition: edition,
+          builtin_macros: syntax_macro_rules(builtin_rules),
+          builtin_computed_macros: computed_macro_rules(builtin_rules),
+          active_macros: active,
+          computed_macros: computed,
+          # Local `literal` rules always apply. In the normal (non-self-harvest)
+          # case, standard-library `literal` rules join them so a suffix like `ms`
+          # expands in ANY file, exactly as `:syntax` macros are globally active via
+          # `builtin_macros`. Local rules win on a suffix collision.
+          literal_macros:
+            cond do
+              is_map(supplied_macros) -> literal
+              prelude? -> Map.merge(prelude_literal_macros(), literal, fn _k, _p, l -> l end)
+              true -> literal
+            end,
+          fixity_table: module_fixity
+        }
 
-    {exprs, state} = parse_program(state)
+        state = put_tokens(state, tokens)
 
-    ast =
-      case exprs do
-        [single] -> single
-        many -> {:block, [line: 1, col: 1], many}
-      end
+        {exprs, state} = parse_program(state)
 
-    if emit? do
-      Events.emit(:parser, :parse_complete, ast, Events.meta(file, 1))
+        ast =
+          case exprs do
+            [single] -> single
+            many -> {:block, [line: 1, col: 1], many}
+          end
+
+        if emit? do
+          Events.emit(:parser, :parse_complete, ast, Events.meta(file, 1))
+        end
+
+        case state.errors do
+          [] -> {:ok, ast}
+          errors -> {:error, Enum.reverse(errors)}
+        end
     end
+  end
 
-    case state.errors do
-      [] -> {:ok, ast}
-      errors -> {:error, Enum.reverse(errors)}
-    end
+  @doc """
+  Run the table-independent harvest pass over `tokens`: a single `parse_program`
+  seeded with `base`, with per-statement recovery. Returns the surviving
+  top-level declaration/expression nodes. Never raises — used to extract a
+  module's own fixity/`use`/`@prelude`/module-name structure without a fully
+  successful body parse.
+  """
+  @spec harvest([term()], String.t(), FixityTable.t(), term()) :: [tuple()]
+  def harvest(tokens, file, base, edition \\ nil) do
+    edition = edition || Cure.Edition.current()
+
+    harvest_state =
+      put_tokens(
+        %__MODULE__{file: file, emit_events: false, edition: edition, fixity_table: base},
+        tokens
+      )
+
+    {exprs, _state} = parse_program(harvest_state)
+    exprs
   end
 
   defp prelude_macros do
@@ -2504,11 +2539,14 @@ defmodule Cure.Compiler.Parser do
   defp fixity_table(%__MODULE__{fixity_table: nil}), do: session_builtin_fixity_table()
   defp fixity_table(%__MODULE__{fixity_table: table}), do: table
 
-  # While the built-in table is itself being built (parsing `operators.cure`),
-  # seed an EMPTY table to break the `BuiltinFixity.table` ⇄ `parse` recursion.
-  # `operators.cure` is all inert declarations — no operator expressions to bind
-  # — so an empty table parses it faithfully. Otherwise consult the built-in
-  # table, which lives in the compiler layer (`BuiltinFixity`) precisely so it is
+  # `BuiltinFixity.table/0` is a compile-time constant, so consulting it here can
+  # never recurse back into parsing. The `:cure_building_fixity_table` flag is a
+  # supported seam for parsing an operator-defining source against an EMPTY table
+  # — `operators.cure` is all inert declarations, so an empty table parses it
+  # faithfully. The compile-time bake seeds `Parser.harvest/4` with an explicit
+  # empty base directly (never this flag); the flag path is exercised by
+  # `Cure.Std.OperatorBootstrapTest` and left as a defensive escape hatch.
+  # `BuiltinFixity` lives in the compiler layer precisely so the table is
   # reachable here even while `Preload` bakes its stdlib deps at compile time.
   defp session_builtin_fixity_table do
     if Process.get(:cure_building_fixity_table) do
@@ -2517,9 +2555,6 @@ defmodule Cure.Compiler.Parser do
       BuiltinFixity.table()
     end
   end
-
-  # Layer a module's own fixity declarations onto `base`.
-  defp session_extend_fixity_table(base, ast), do: BuiltinFixity.extend(base, ast)
 
   # The lexeme string a token binds under in the fixity table, or `nil` for a
   # non-operator token.
@@ -2778,18 +2813,6 @@ defmodule Cure.Compiler.Parser do
           fixity when fixity in ["infix", "prefix", "postfix"] ->
             if fixity_decl_ahead?(state) do
               parse_fixity(state)
-            else
-              {variable(token), advance(state)}
-            end
-
-          # `builtin infix|prefix|postfix <op> : Group` (Phase 3, contextual):
-          # marks an operator as a fixed, non-overloadable syntactic operator
-          # (`.`, `|>`, `<-|`, `=`, `..`, augmented assigns) that user code may
-          # not rebind. Recognised only immediately ahead of a fixity
-          # declaration; every other `builtin` stays an ordinary identifier.
-          "builtin" ->
-            if builtin_fixity_decl_ahead?(state) do
-              parse_fixity(advance(state), builtin: true)
             else
               {variable(token), advance(state)}
             end
@@ -3261,13 +3284,6 @@ defmodule Cure.Compiler.Parser do
         {right, state} = parse_expr(state, right_bp, op_lexeme)
         {{:assignment, [line: token.line, col: token.col], [left, right]}, state}
 
-      # Augmented assignment
-      type when type in [:plus_assign, :minus_assign, :star_assign, :slash_assign] ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
-        op = augmented_op(type)
-        meta = [operator: op, line: token.line, col: token.col]
-        {{:augmented_assignment, meta, [left, right]}, state}
-
       # Generic (user-declared) overloadable operator: build a `:binary_op` node
       # tagged `category: :overloaded` and carrying the operator lexeme as its
       # `operator:` atom. The elaborator desugars it to a call on a function
@@ -3291,11 +3307,6 @@ defmodule Cure.Compiler.Parser do
         {{:binary_op, meta, [left, right]}, state}
     end
   end
-
-  defp augmented_op(:plus_assign), do: :+
-  defp augmented_op(:minus_assign), do: :-
-  defp augmented_op(:star_assign), do: :*
-  defp augmented_op(:slash_assign), do: :/
 
   defp put_operator_source_info(meta, left, right, token) do
     operands = Enum.flat_map([left, right], &node_source_span/1)
@@ -6372,21 +6383,6 @@ defmodule Cure.Compiler.Parser do
     op != nil and colon != nil and colon.type == :colon and fixity_op_token?(op)
   end
 
-  # True at `builtin infix|prefix|postfix <op> :` — a `builtin`-prefixed fixity
-  # declaration. The `builtin` marker is contextual: it is promoted only here,
-  # so a bare `builtin` (or `builtin` used as a value/binder) is untouched.
-  defp builtin_fixity_decl_ahead?(state) do
-    case peek_at(state, 1) do
-      %Token{type: :identifier, value: v} when v in ["infix", "prefix", "postfix"] ->
-        op = peek_at(state, 2)
-        colon = peek_at(state, 3)
-        op != nil and colon != nil and colon.type == :colon and fixity_op_token?(op)
-
-      _ ->
-        false
-    end
-  end
-
   # An operator lexeme is any symbolic-operator token or a word/backtick
   # identifier used as an operator name — anything that is not a delimiter.
   defp fixity_op_token?(%Token{type: type}),
@@ -6394,9 +6390,14 @@ defmodule Cure.Compiler.Parser do
 
   defp fixity_op_token?(_), do: false
 
-  # `infix|prefix|postfix <op> : Group` (optionally `builtin`-prefixed, which the
-  # caller signals with `builtin: true`).
-  defp parse_fixity(state, opts \\ []) do
+  # `infix|prefix|postfix <op> : Group`. Whether the operator conflicts with an
+  # existing declaration is not decided here — it is decided when the module's
+  # declarations are folded into `fixity(M)`
+  # (`Cure.Compiler.Parser.FixityResolver.assemble/5`): a same-lexeme
+  # different-group (or same-group-name different-body) redeclaration is a
+  # `:conflicting_operator_fixity` / `:conflicting_precedence_group` error; an
+  # identical redeclaration is a no-op.
+  defp parse_fixity(state) do
     kw = peek(state)
     fixity = String.to_atom(to_string(kw.value))
     state = advance(state)
@@ -6417,7 +6418,6 @@ defmodule Cure.Compiler.Parser do
       fixity: fixity,
       operator: lexeme,
       group: group,
-      builtin: Keyword.get(opts, :builtin, false),
       line: kw.line,
       col: kw.col
     ]
@@ -8699,6 +8699,26 @@ defmodule Cure.Compiler.Parser do
       :lbrace ->
         parse_refinement_type(state)
 
+      # Tuple type `%[A, B]` — the canonical tuple-type sigil, mirroring the value tuple `%[a, b]` and removing
+      # the value/type inconsistency where values were `%[a, b]` but their types were `(A, B)`. It produces the
+      # SAME `{:tuple_type, …}` node as `Tuple(A, B)` — including optional per-position binders `%[x: A, B(x)]`
+      # for a dependent telescope — so resolution, display, and codegen are unchanged. `%[]` is the empty tuple.
+      # (Original `%[A, B]` proposal: Aleksei Matiushkin / am-kantox; adapted here to the dependent parser.)
+      :tuple_open ->
+        state = advance(state)
+
+        case peek(state) do
+          %Token{type: :rbracket} ->
+            {{:tuple_type, [arity: 0, binders: []], []}, advance(state)}
+
+          _ ->
+            {positions, state} = parse_tuple_positions(state, [])
+            state = expect(state, :rbracket)
+            binders = Enum.map(positions, &elem(&1, 0))
+            types = Enum.map(positions, &elem(&1, 1))
+            {{:tuple_type, [arity: length(positions), binders: binders], types}, state}
+        end
+
       :lparen ->
         # Grouped/tuple type `(A, B)` or function type `(A, B) -> C`. Each element
         # may carry an optional binder name `(x: A) -> …` — a DEPENDENT arrow whose
@@ -8730,7 +8750,7 @@ defmodule Cure.Compiler.Parser do
             # Grouped type or tuple type — binders (if any) are not meaningful here.
             case Enum.map(inner, &elem(&1, 1)) do
               [single] -> {single, state}
-              many -> {{:tuple, [], many}, state}
+              many -> {{:tuple, [], many}, deprecate_paren_tuple(state, token, length(many))}
             end
         end
 
@@ -8901,6 +8921,28 @@ defmodule Cure.Compiler.Parser do
       _ -> {Enum.reverse(acc), state}
     end
   end
+
+  # Soft-deprecate the legacy parenthesised tuple type `(A, B)` in favour of the value/type-consistent `%[A, B]`
+  # sigil. Emitted only as a pipeline event (never a hard error) and only when events are on and a real file is
+  # known, so `(A, B)` keeps compiling to identical output — the only change is the hint.
+  defp deprecate_paren_tuple(%__MODULE__{emit_events: true, file: file} = state, token, arity)
+       when is_binary(file) do
+    Events.emit(
+      :parser,
+      :deprecation,
+      %{
+        code: "E-TYPE-TUPLE-PAREN",
+        arity: arity,
+        message:
+          "parenthesised tuple type `(A, B)` is deprecated; write `%[A, B]` (the tuple-type sigil matching the value tuple `%[a, b]`)"
+      },
+      Events.meta(file, token.line)
+    )
+
+    state
+  end
+
+  defp deprecate_paren_tuple(state, _token, _arity), do: state
 
   defp maybe_parse_function_type(state, left) do
     case peek(state) do

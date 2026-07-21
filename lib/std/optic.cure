@@ -24,6 +24,7 @@ mod Std.Optic
   use Std.Sigma
   use Std.Option
   use Std.List
+  use Std.Dynamic
 
   # ---- kinds --------------------------------------------------------------
 
@@ -350,6 +351,77 @@ mod Std.Optic
         MkLensO(le2) -> compose_trav(MkTravO(te1), lens_to_trav(MkLensO(le2)))
         MkAffineO(ae2) -> compose_trav(MkTravO(te1), affine_to_trav(MkAffineO(ae2)))
         MkTravO(te2) -> compose_trav(MkTravO(te1), MkTravO(te2))
+
+  # ---- List index affine --------------------------------------------------
+
+  ## Focus the element at index `i` of a `List(a)`. A bare `List` carries no
+  ## length, so the index genuinely may miss — `ix(i)` is an AFFINE, not a lens:
+  ## `preview` yields `Some(elem)` in range and `None` out of range or on `[]`,
+  ## and `set`/`over` replace in place when the index exists and are a NO-OP
+  ## otherwise (the affine miss-is-a-no-op law). Totality is available by choosing
+  ## a length-indexed container instead — a `Vector(a, n)` with a `Bounded(n)`
+  ## index is a total lens; the container is the totality declaration.
+  ##
+  ## The getter and putter are the total `Std.List.at`/`set_at`; both are ordinary
+  ## calls (not a `match`), so they inline as the affine's stored lambdas.
+  fn ix({a: Type}, i: Int) -> Optic(List(a), a, AffineKind) =
+    affine(fn(xs) -> Std.List.at(xs, i), fn(v) -> fn(xs) -> Std.List.set_at(xs, i, v))
+
+  # ---- Std.Dynamic case affines -------------------------------------------
+
+  ## One `Affine(Dynamic, T)` per constructor of `Std.Dynamic`'s typed-`Any` sum.
+  ## Narrowing a `Dynamic` to a concrete leaf is an AFFINE (it may miss), never a
+  ## cast: `preview` yields `Some` only when the tag matches, and `set`/`over`
+  ## rebuild a same-tagged `Dynamic`, leaving a mis-tagged value untouched. Each is
+  ## built from a partial getter (a `match` returning `Some`/`None`) and a setter
+  ## that re-injects through the matching constructor. This is the statically-
+  ## kinded replacement for a runtime `is_integer`/`is_map` guess over an `Any`.
+  ##
+  ## The getters are factored out because a `match` does not lower as the direct
+  ## body of the lambda `affine` stores; the setters are constant re-injections
+  ## (they ignore the old, already-narrowed structure) and inline cleanly.
+
+  fn dyn_atom_pre(d: Dynamic) -> Option(Atom) = match d
+    Atom(a) -> Some(a)
+    other -> None()
+  fn dyn_atom() -> Optic(Dynamic, Atom, AffineKind) =
+    affine(dyn_atom_pre, fn(v) -> fn(x) -> Atom(v))
+
+  fn dyn_int_pre(d: Dynamic) -> Option(Int) = match d
+    Int(n) -> Some(n)
+    other -> None()
+  fn dyn_int() -> Optic(Dynamic, Int, AffineKind) =
+    affine(dyn_int_pre, fn(v) -> fn(x) -> Int(v))
+
+  fn dyn_float_pre(d: Dynamic) -> Option(Float) = match d
+    Float(x) -> Some(x)
+    other -> None()
+  fn dyn_float() -> Optic(Dynamic, Float, AffineKind) =
+    affine(dyn_float_pre, fn(v) -> fn(x) -> Float(v))
+
+  fn dyn_str_pre(d: Dynamic) -> Option(String) = match d
+    Str(s) -> Some(s)
+    other -> None()
+  fn dyn_str() -> Optic(Dynamic, String, AffineKind) =
+    affine(dyn_str_pre, fn(v) -> fn(x) -> Str(v))
+
+  fn dyn_list_pre(d: Dynamic) -> Option(List(Dynamic)) = match d
+    List(xs) -> Some(xs)
+    other -> None()
+  fn dyn_list() -> Optic(Dynamic, List(Dynamic), AffineKind) =
+    affine(dyn_list_pre, fn(v) -> fn(x) -> List(v))
+
+  fn dyn_tuple_pre(d: Dynamic) -> Option(List(Dynamic)) = match d
+    Tuple(xs) -> Some(xs)
+    other -> None()
+  fn dyn_tuple() -> Optic(Dynamic, List(Dynamic), AffineKind) =
+    affine(dyn_tuple_pre, fn(v) -> fn(x) -> Tuple(v))
+
+  fn dyn_map_pre(d: Dynamic) -> Option(List(DynamicEntry)) = match d
+    Map(es) -> Some(es)
+    other -> None()
+  fn dyn_map() -> Optic(Dynamic, List(DynamicEntry), AffineKind) =
+    affine(dyn_map_pre, fn(v) -> fn(x) -> Map(v))
 
   ## Common tuple lenses exposed through the `lens` syntax macro. The macro is
   ## only surface sugar; these are ordinary typed Std.Optic functions.

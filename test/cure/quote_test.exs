@@ -172,10 +172,6 @@ defmodule Cure.QuoteTest do
     test "let with type annotation" do
       assert_round_trip("let x: Int = 42")
     end
-
-    test "augmented assignment" do
-      assert_round_trip("x += 1")
-    end
   end
 
   describe "Cure.quoted_to_string/2 conditionals" do

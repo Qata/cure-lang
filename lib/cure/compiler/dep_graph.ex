@@ -161,6 +161,20 @@ defmodule Cure.Compiler.DepGraph do
     end
   end
 
+  @doc """
+  Module names of every scanned node marked `@prelude`. A driver hands this set
+  to `Parser.parse/2` as `:prelude_providers` so a user `@prelude` module's
+  operators reach every sibling in the same compile run, even siblings that do
+  not `use` it.
+  """
+  @spec prelude_provider_names(t()) :: [String.t()]
+  def prelude_provider_names(%__MODULE__{nodes: nodes}) do
+    for {_path, node} <- nodes,
+        Map.get(node, :prelude_provider?, false),
+        is_binary(node.module),
+        do: node.module
+  end
+
   # -- scanning ---------------------------------------------------------------
 
   defp duplicate_module(nodes) do
@@ -199,7 +213,30 @@ defmodule Cure.Compiler.DepGraph do
         else
           case Cure.Compiler.parse_source(source, file: path) do
             {:error, reason} ->
-              %{base | parse_error: reason}
+              # A recoverable parse error (e.g. a body using an operator not
+              # bindable by a standalone table-naive parse) must not drop the
+              # file: recover module / `use` edges / `@prelude` from the
+              # tolerant harvest so its dependency edges and prelude flag
+              # survive. `parse_error` stays set, so `finalize_node/4`
+              # early-returns and `closure_deps` remains `[]` (a known,
+              # accepted gap — `order/1` reads `order_deps`, not
+              # `closure_deps`). A genuinely unrecoverable file yields
+              # `scan.module == nil` and still drops, as before.
+              scan =
+                Cure.Compiler.Parser.FixityScan.harvest_source(
+                  source,
+                  path,
+                  Cure.Compiler.Parser.BuiltinFixity.table()
+                )
+
+              %{
+                base
+                | parse_error: reason,
+                  module: scan.module,
+                  line: base.line,
+                  order_deps: Enum.map(scan.uses, fn u -> %{target: u.target, line: u.line} end)
+              }
+              |> Map.put(:prelude_provider?, scan.prelude?)
 
             {:ok, ast} ->
               {module, line} = find_module(ast)

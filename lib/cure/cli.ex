@@ -446,22 +446,23 @@ defmodule Cure.CLI do
       end)
       |> Enum.uniq()
 
-    ordered =
-      case Cure.Compiler.DepGraph.scan(files) do
-        {:ok, graph} ->
-          {:ok, ordered, cycles} = Cure.Compiler.DepGraph.order(graph)
-
+    {ordered, providers} =
+      case Cure.Compiler.prepare_files(files) do
+        {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
           Enum.each(cycles, fn walk ->
             warn(Cure.Diagnostic.Host.render({:import_cycle, walk}, hd(paths)))
           end)
 
-          ordered
+          {ordered, providers}
 
         {:error, reason} ->
           diagnostic(Cure.Diagnostic.Host.render(reason, hd(paths)))
           exit({:shutdown, 1})
       end
 
+    # A user `@prelude` module reached by the scan contributes its operators to
+    # every file compiled in this run — even siblings that do not `use` it.
+    compile_opts = Keyword.put(compile_opts, :prelude_providers, providers)
     Enum.each(ordered, &compile_one(&1, compile_opts, verbose?))
   end
 

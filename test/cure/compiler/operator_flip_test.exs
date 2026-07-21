@@ -117,8 +117,40 @@ defmodule Cure.Compiler.OperatorFlipTest do
       infix `|>` : Additive
     end
     """
+    assert_error_tag(src, :conflicting_operator_fixity)
+  end
 
-    assert {:error, {:builtin_operator_not_overloadable, :|>}} = Cure.Elab.Program.elaborate(src)
+  test "redeclaring the fixity of a stdlib operator is rejected as a conflict" do
+    # `+`'s fixity is fixed by Std.Operators (now @prelude). Redeclaring its group
+    # collides with the prelude entry present in every assembled table — the
+    # conflict is detected structurally at parse, not by a location rule.
+    src = """
+    mod M
+      use Std.Operators
+      infix `+` : Multiplicative
+    end
+    """
+
+    assert_error_tag(src, :conflicting_operator_fixity)
+  end
+
+  test "redeclaring the Melquiades envelope operator is rejected" do
+    src = """
+    mod M
+      use Std.Operators
+      infix `✉` : Additive
+    end
+    """
+
+    assert_error_tag(src, :conflicting_operator_fixity)
+  end
+
+  test "Std.Operators itself elaborates green (idempotent re-add onto its own prelude)" do
+    # `Std.Operators` is @prelude, so its own declarations are already in every
+    # assembled table's base. Re-folding them while elaborating the module is an
+    # identical redeclaration — a no-op, never a self-conflict.
+    {:ok, src} = File.read("lib/std/operators.cure")
+    assert {:ok, _env} = Cure.Elab.Program.elaborate(src)
   end
 
   test "a cyclic precedencegroup relation is rejected" do
@@ -157,5 +189,38 @@ defmodule Cure.Compiler.OperatorFlipTest do
 
     assert {:error, {:precedence_cycle, groups}} = Cure.Elab.Program.elaborate(src)
     assert :Weighted in groups
+  end
+
+  test "a precedence cycle spanning a use edge is rejected in the importer" do
+    # A declares `Ga higher_than Gb`; B `use`s A and declares `Gb higher_than Ga`.
+    # The cycle is visible only in `fixity(B)` (base + own + use-closure), so this
+    # proves the cycle check was repointed off the builtin+own-only table.
+    dir = Path.join(System.tmp_dir!(), "of_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(dir)
+
+    File.write!(
+      Path.join(dir, "a.cure"),
+      "mod A\n  precedencegroup Ga\n    associativity: left\n    higher_than: Gb\nend\n"
+    )
+
+    prev = Process.get(:cure_source_roots, [])
+    Process.put(:cure_source_roots, [dir])
+
+    src = """
+    mod B
+      use A
+      precedencegroup Gb
+        associativity: left
+        higher_than: Ga
+    end
+    """
+
+    try do
+      assert {:error, {:precedence_cycle, groups}} = Cure.Elab.Program.elaborate(src)
+      assert :Ga in groups and :Gb in groups
+    after
+      Process.put(:cure_source_roots, prev)
+      File.rm_rf!(dir)
+    end
   end
 end

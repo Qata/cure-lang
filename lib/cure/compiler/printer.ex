@@ -55,7 +55,9 @@ defmodule Cure.Compiler.Printer do
     against. Defaults to the built-in operator table, which already ranks every
     built-in operator; pass the module's assembled table to rank user-declared
     operators correctly (otherwise a custom operator is treated as unknown and
-    its operands are conservatively parenthesised).
+    its operands are conservatively parenthesised). The module-specific table is
+    the one produced by `Cure.Compiler.Parser.FixityResolver.assemble/5` — the
+    same use-propagated union the parser resolved the module against.
   """
   @spec quoted_to_string(term(), keyword()) :: String.t()
   def quoted_to_string(ast, opts \\ []) do
@@ -88,19 +90,25 @@ defmodule Cure.Compiler.Printer do
   defp render_program(exprs, meta, indent) do
     nodes = flatten_top_level(exprs)
 
+    # Rule 3 puts one blank between top-level items — EXCEPT a decorator hugs
+    # the item it decorates (no blank between them). The parser absorbs a
+    # decorator written directly above its `mod`/`def` into that node, so a
+    # decorator only survives as a standalone top-level sibling when a rule
+    # (e.g. group-hoist) relocates it; rendering it tight matches the absorbed
+    # form, so `print∘reparse∘print` is a fixpoint and `cure migrate` is
+    # text-idempotent instead of shedding a blank line on its second run.
+    #
+    # A blank precedes item `i` iff `i > 0` and its predecessor is not a
+    # decorator. Pairing each rendered line with the preceding node via a
+    # one-position shift (`[nil | nodes]`) keeps this a single O(n) pass;
+    # re-reading `Enum.at(nodes, i - 1)` per item was O(n²) in the statement
+    # count. Nodes are always tuples, so the leading `nil` marks position 0.
     body =
       nodes
       |> Enum.map(&render(&1, 0, indent))
-      |> Enum.with_index()
-      # Rule 3 puts one blank between top-level items — EXCEPT a decorator hugs
-      # the item it decorates (no blank between them). The parser absorbs a
-      # decorator written directly above its `mod`/`def` into that node, so a
-      # decorator only survives as a standalone top-level sibling when a rule
-      # (e.g. group-hoist) relocates it; rendering it tight matches the absorbed
-      # form, so `print∘reparse∘print` is a fixpoint and `cure migrate` is
-      # text-idempotent instead of shedding a blank line on its second run.
-      |> Enum.map(fn {rendered, i} ->
-        {rendered, i > 0 and not match?({:decorator, _, _}, Enum.at(nodes, i - 1))}
+      |> Enum.zip([nil | nodes])
+      |> Enum.map(fn {rendered, prev} ->
+        {rendered, prev != nil and not match?({:decorator, _, _}, prev)}
       end)
       |> join_statements("")
 
@@ -445,22 +453,6 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
-  # -- Augmented Assignment --------------------------------------------------
-
-  defp to_string({:augmented_assignment, meta, [lhs, rhs]}, depth, indent) do
-    op = Keyword.get(meta, :operator)
-
-    op_str =
-      case op do
-        :+ -> "+="
-        :- -> "-="
-        :* -> "*="
-        :/ -> "/="
-      end
-
-    "#{render(lhs, depth, indent)} #{op_str} #{render(rhs, depth, indent)}"
-  end
-
   # -- Conditional -----------------------------------------------------------
 
   defp to_string({:conditional, _meta, [condition, then_br, else_br]}, depth, indent) do
@@ -573,15 +565,17 @@ defmodule Cure.Compiler.Printer do
   # (`Tuple(n: Nat, Vector(a, n))`) round-trips losslessly.
   defp to_string({:tuple_type, meta, types}, depth, indent) do
     binders = Keyword.get(meta, :binders, [])
+    # Position-align binders with types in one O(n) pass. `binders` may be
+    # shorter than `types` (an all-anonymous telescope carries none), so pad
+    # with `nil` rather than re-reading `Enum.at(binders, i)` per position.
+    padded = binders ++ List.duplicate(nil, max(length(types) - length(binders), 0))
 
     positions =
       types
-      |> Enum.with_index()
-      |> Enum.map_join(", ", fn {t, i} ->
-        case Enum.at(binders, i) do
-          b when is_binary(b) and b != "_" -> "#{b}: #{render(t, depth, indent)}"
-          _ -> render(t, depth, indent)
-        end
+      |> Enum.zip(padded)
+      |> Enum.map_join(", ", fn
+        {t, b} when is_binary(b) and b != "_" -> "#{b}: #{render(t, depth, indent)}"
+        {t, _} -> render(t, depth, indent)
       end)
 
     "Tuple(#{positions})"
@@ -1832,7 +1826,6 @@ defmodule Cure.Compiler.Printer do
   defp child_prec({:pickup, _meta, _}), do: :lowest
   defp child_prec({:lambda, _meta, _}), do: :lowest
   defp child_prec({:assignment, _meta, _}), do: :lowest
-  defp child_prec({:augmented_assignment, _meta, _}), do: :lowest
   defp child_prec(_other), do: :atom
 
   # {binding_power, assoc} for an infix operator atom, or `:unknown`, resolved

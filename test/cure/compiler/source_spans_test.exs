@@ -122,7 +122,7 @@ defmodule Cure.Compiler.SourceSpansTest do
   end
 
   test "imports and fixity declarations retain authored source roles" do
-    source = "use Std.List as L\nprecedencegroup additive\ninfix + : additive\n"
+    source = "use Std.List as L\nprecedencegroup additive\ninfix <+> : additive\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "declarations.cure", emit_events: false)
     assert {:ok, ast} = Parser.parse(tokens, file: "declarations.cure", emit_events: false, prelude_macros: false)
 
@@ -137,8 +137,8 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, import_info.name) == "Std.List"
     assert slice(source, group_info.whole) == "precedencegroup additive"
     assert slice(source, group_info.name) == "additive"
-    assert slice(source, fixity_info.whole) == "infix + : additive"
-    assert slice(source, fixity_info.operator) == "+"
+    assert slice(source, fixity_info.whole) == "infix <+> : additive"
+    assert slice(source, fixity_info.operator) == "<+>"
   end
 
   test "protocol and interface declarations retain authored name ranges" do

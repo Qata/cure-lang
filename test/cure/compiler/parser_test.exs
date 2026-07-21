@@ -225,16 +225,6 @@ defmodule Cure.Compiler.ParserTest do
     end
   end
 
-  # ── Augmented Assignment ─────────────────────────────────────────────
-
-  describe "augmented assignment" do
-    test "plus assign" do
-      ast = parse!("x += 1")
-      assert {:augmented_assignment, meta, [{:variable, _, "x"}, {:literal, _, 1}]} = ast
-      assert Keyword.get(meta, :operator) == :+
-    end
-  end
-
   # ── Conditionals ─────────────────────────────────────────────────────
 
   describe "conditionals" do
