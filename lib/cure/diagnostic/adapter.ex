@@ -5215,6 +5215,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :binary_specifier_arguments}
+       }),
+       do: "Binary specifier argument is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :branch_block, family: :match}
        }),
        do: "Pattern branch block is not closed"
@@ -5715,6 +5721,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :binary_specifier_arguments, specifier: specifier}
+       }),
+       do: "The binary `#{specifier}` specifier reaches the end of its argument without the closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :branch_block, family: :match}
        }),
        do: "This inline `match` reaches the end of its branches without the closing '}'."
@@ -6119,6 +6131,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :implicit_parameter}
        }),
        do: "close this implicit parameter with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :binary_specifier_arguments}
+       }),
+       do: "close this binary specifier with `)`"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_unclosed,
@@ -6592,6 +6610,27 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(opener, :secondary, "this implicit parameter starts here"),
       pickup_label(Map.get(context, :binder_span), :secondary, "this is the implicit parameter name"),
       pickup_label(previous, :secondary, "the parameter annotation ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :binary_specifier_arguments} = context
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(Map.get(context, :specifier_span), :secondary, "this is the binary specifier"),
+      pickup_label(opener, :secondary, "its argument starts here"),
+      pickup_label(previous, :secondary, "the specifier argument ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7206,6 +7245,17 @@ defmodule Cure.Diagnostic.Adapter do
          %Span{} = span
        ) do
     closing_delimiter_insertion(:rbrace, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           expected: :rparen,
+           context: %{container: :binary_specifier_arguments}
+         },
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rparen, span)
   end
 
   defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do

@@ -5373,11 +5373,19 @@ defmodule Cure.Compiler.Parser do
 
         case peek(state) do
           %Token{type: :lparen} when name in ["size", "unit"] ->
+            open_token = peek(state)
             state = advance(state)
             state = skip_newlines(state)
             {arg, state} = parse_expr(state, 0)
             state = skip_newlines(state)
-            state = expect(state, :rparen)
+
+            {state, _close_token} =
+              expect_container_close(state, :rparen, :binary_specifier_arguments, open_token, [arg], false, %{
+                specifier: name,
+                specifier_span: token.span,
+                closing_tokens: [:binary_close, :minus, :comma]
+              })
+
             {{String.to_atom(name), arg}, state}
 
           _ ->
