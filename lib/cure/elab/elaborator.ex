@@ -63,13 +63,13 @@ defmodule Cure.Elab.Elaborator do
         cond do
           # A named field is not a field of this record.
           not Enum.all?(Map.keys(provided), &(&1 in order)) ->
-            {:error, {:record_field_mismatch, atom}}
+            {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
 
           # Every field must be supplied by the caller or carry a declared default
           # (`name: String = "Anonymous"`); an omitted field with no default is a
           # genuine mismatch.
           not Enum.all?(order, &(Map.has_key?(provided, &1) or Map.has_key?(defaults, &1))) ->
-            {:error, {:record_field_mismatch, atom}}
+            {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
 
           true ->
             values =
@@ -112,9 +112,20 @@ defmodule Cure.Elab.Elaborator do
 
           {:ok, {:function_call, [name: name], values}}
         else
-          {:error, {:record_field_mismatch, atom}}
+          {:error, record_field_mismatch(atom, order, Map.new(order, &{&1, :from_base}), Map.keys(overrides))}
         end
     end
+  end
+
+  defp record_field_mismatch(record, declared, defaults, provided) do
+    %{
+      record: record,
+      declared: declared,
+      provided: provided,
+      unknown: Enum.reject(provided, &(&1 in declared)),
+      missing: Enum.reject(declared, &(Enum.member?(provided, &1) or Map.has_key?(defaults, &1)))
+    }
+    |> then(&{:record_field_mismatch, &1})
   end
 
   # Normalize a constructor atom to a registry key via the resolution layer:
@@ -635,7 +646,7 @@ defmodule Cure.Elab.Elaborator do
             |> attach_record_context(meta, args)
 
           {:error, reason} ->
-            {:error, reason}
+            attach_record_context({:error, reason}, meta, args)
         end
 
       # `f(x)(y)` parses with the inner call preserved as `:callee` (and `name`
@@ -668,7 +679,7 @@ defmodule Cure.Elab.Elaborator do
         |> attach_record_update_context(meta, children, env)
 
       {:error, reason} ->
-        {:error, reason}
+        attach_record_update_context({:error, reason}, meta, children, env)
     end
   end
 
@@ -1724,7 +1735,7 @@ defmodule Cure.Elab.Elaborator do
         |> attach_record_update_context(meta, children, env)
 
       {:error, reason} ->
-        {:error, attach_record_field_context(reason, meta, tl(children), env)}
+        attach_record_update_context({:error, reason}, meta, children, env)
     end
   end
 
@@ -1745,7 +1756,7 @@ defmodule Cure.Elab.Elaborator do
             |> attach_record_context(meta, args)
 
           {:error, reason} ->
-            {:error, reason}
+            attach_record_context({:error, reason}, meta, args)
         end
 
       name == "reflexive" and length(args) == 1 ->
@@ -2278,7 +2289,16 @@ defmodule Cure.Elab.Elaborator do
 
   defp record_context(meta, args) do
     expression = {:function_call, meta, args}
+
     expectation_context(expression, :record, Keyword.get(meta, :name, :record), nil)
+    |> Map.put(:field_spans, record_field_spans(meta))
+  end
+
+  defp record_field_spans(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{fields: fields} when is_map(fields) -> fields
+      _ -> %{}
+    end
   end
 
   defp attach_record_update_context({:error, {:source_context, reason, context}}, meta, children, env)
@@ -2301,7 +2321,9 @@ defmodule Cure.Elab.Elaborator do
 
   defp record_update_context(meta, children, context) do
     expression = {:record_update, meta, children}
+
     Map.merge(context, expectation_context(expression, :record_update, Keyword.get(meta, :name, :record_update), nil))
+    |> Map.put(:field_spans, record_field_spans(meta))
   end
 
   defp attach_record_field_reason({:source_context, reason, context}, meta, field_pairs, env)

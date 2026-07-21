@@ -566,6 +566,73 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this record field has the wrong type"
   end
 
+  test "an unknown record field points at its name and suggests from the declared shape" do
+    source =
+      "mod M\n" <>
+        "  rec Point\n" <>
+        "    x: Int\n" <>
+        "    y: Int\n" <>
+        "  fn bad() -> Point = Point{xx: 1, y: 2}\n" <>
+        "end\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "record_typo.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record_typo.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E022"
+    assert diagnostic.title == "Unknown record field"
+    assert diagnostic.payload.record == :Point
+    assert diagnostic.payload.declared == [:x, :y]
+    assert diagnostic.payload.unknown == [:xx]
+    assert Enum.map(diagnostic.payload.candidates, & &1.name) == ["x", "y"]
+    assert diagnostic.primary.span.start_line == 5
+    assert diagnostic.primary.span.start_column == 29
+    assert rendered =~ "5 |   fn bad() -> Point = Point{xx: 1, y: 2}"
+    assert rendered =~ "^^ this field is not declared by the record"
+    assert rendered =~ "Did you mean `x`?"
+
+    assert [suggestion] = diagnostic.suggestions
+    assert suggestion.applicability == :machine_applicable
+    assert [%{replacement: "x", span: edit_span}] = suggestion.edits
+    assert edit_span.start_column == 29
+
+    lsp_diagnostic = Renderer.lsp(diagnostic, registry)
+    [action] = Cure.LSP.Server.compute_code_actions("file:///record_typo.cure", [lsp_diagnostic])
+    assert action["title"] == "Replace it with `x`"
+  end
+
+  test "a missing record field names the field without inventing a source range" do
+    source =
+      "mod M\n" <>
+        "  rec Point\n" <>
+        "    x: Int\n" <>
+        "    y: Int\n" <>
+        "  fn bad() -> Point = Point{x: 1}\n" <>
+        "end\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "record_missing.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record_missing.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E022"
+    assert diagnostic.title == "Missing record field"
+    assert diagnostic.payload.missing == [:y]
+    assert diagnostic.primary.span.start_column == 23
+    assert rendered =~ "missing `y`"
+    assert rendered =~ "add the missing field here"
+    assert diagnostic.suggestions == []
+  end
+
   test "a whole-record mismatch retains the authored record boundary" do
     source = "fn bad() -> Point = Point{x: value}\n"
     span = raw_span(source, "Point{x: value}", 1, 19)

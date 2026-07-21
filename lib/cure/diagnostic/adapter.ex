@@ -468,7 +468,8 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unknown_record, name}, opts),
     do: from_error({:source_context, {:unknown_record, name}, %{}}, opts)
 
-  def from_error({:source_context, {:record_field_mismatch, name}, context}, opts) when is_map(context) do
+  def from_error({:source_context, {:record_field_mismatch, name}, context}, opts)
+      when is_map(context) and not is_map(name) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
 
     Diagnostic.new(
@@ -479,6 +480,72 @@ defmodule Cure.Diagnostic.Adapter do
       body: Doc.paragraph("The fields supplied to `#{name}` do not match its declared record shape."),
       primary: primary_label(opts, "use exactly the declared record fields"),
       payload: %{record: name, checking: Map.get(context, :checking)}
+    )
+  end
+
+  def from_error({:source_context, {:record_field_mismatch, details}, context}, opts)
+      when is_map(details) and is_map(context) do
+    unknown = Map.get(details, :unknown, [])
+    missing = Map.get(details, :missing, [])
+    declared = Map.get(details, :declared, [])
+    record = Map.get(details, :record)
+    field_spans = Map.get(context, :field_spans, %{})
+    offending = List.first(unknown)
+    field_span = Map.get(field_spans, offending) || Map.get(field_spans, name_to_string(offending))
+
+    opts =
+      if field_span do
+        Keyword.put(opts, :span, field_span)
+      else
+        Keyword.put_new(opts, :span, Map.get(context, :span))
+      end
+
+    candidates = record_field_candidates(offending, declared, record)
+
+    body =
+      cond do
+        offending && candidates != [] ->
+          candidate = hd(candidates).name
+
+          Doc.paragraph(
+            "`#{name_to_string(offending)}` is not a field of `#{name_to_string(record)}`. Did you mean `#{candidate}`?"
+          )
+
+        offending ->
+          Doc.paragraph(
+            "`#{name_to_string(offending)}` is not a field of `#{name_to_string(record)}`. Available fields are #{field_list(declared)}."
+          )
+
+        missing != [] ->
+          Doc.paragraph("This `#{name_to_string(record)}` value is missing #{field_list(missing)}.")
+
+        true ->
+          Doc.paragraph("The supplied fields do not match `#{name_to_string(record)}`.")
+      end
+
+    suggestions = record_field_suggestions(offending, candidates, field_span)
+
+    Diagnostic.new(
+      code: "E022",
+      key: :record_field_mismatch,
+      severity: :error,
+      title: if(offending, do: "Unknown record field", else: "Missing record field"),
+      body: body,
+      primary:
+        primary_label(
+          opts,
+          if(offending, do: "this field is not declared by the record", else: "add the missing field here")
+        ),
+      suggestions: suggestions,
+      payload: %{
+        record: record,
+        declared: declared,
+        provided: Map.get(details, :provided, []),
+        unknown: unknown,
+        missing: missing,
+        candidates: candidates,
+        checking: Map.get(context, :checking)
+      }
     )
   end
 
@@ -2982,6 +3049,54 @@ defmodule Cure.Diagnostic.Adapter do
     do: "#{name_to_string(owner)}.#{name}"
 
   defp suggestion_name(%{name: name}), do: name
+
+  defp record_field_candidates(nil, _declared, _record), do: []
+
+  defp record_field_candidates(field, declared, record) do
+    candidates =
+      Enum.map(declared, fn name ->
+        %{
+          id: {record, name},
+          name: name_to_string(name),
+          namespace: :field,
+          owner: record,
+          visibility: :public,
+          imported: true,
+          origin: :record_shape
+        }
+      end)
+
+    Suggest.rank(candidates, name_to_string(field), :field)
+  end
+
+  defp record_field_suggestions(field, [%{name: candidate} = first | rest], %Span{} = span) do
+    unique? =
+      Enum.all?(rest, fn other ->
+        Suggest.distance(name_to_string(field), first.name) <
+          Suggest.distance(name_to_string(field), other.name)
+      end)
+
+    if unique? do
+      [
+        %Suggestion{
+          message: "Replace it with `#{candidate}`",
+          applicability: :machine_applicable,
+          edits: [%TextEdit{span: span, replacement: candidate}]
+        }
+      ]
+    else
+      []
+    end
+  end
+
+  defp record_field_suggestions(_field, _candidates, _span), do: []
+
+  defp field_list([field]), do: "`#{name_to_string(field)}`"
+
+  defp field_list(fields) do
+    fields
+    |> Enum.map_join(", ", &"`#{name_to_string(&1)}`")
+  end
 
   defp namespace_title(:value), do: "value"
   defp namespace_title(:constructor), do: "constructor"
