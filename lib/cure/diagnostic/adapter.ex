@@ -5163,6 +5163,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :binary_generator_arrow_missing}),
     do: "Binary generator needs an arrow"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :send_comma_missing}),
+    do: "Send needs a comma"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :with_rematch_separator_missing}),
     do: "With rematch needs a bar"
 
@@ -5593,6 +5596,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :binary_generator_arrow_missing}),
     do: "This binary generator needs `<-` between its byte pattern and source expression."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :send_comma_missing}),
+    do: "The keyword `send` form needs `,` between its target and message."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :with_rematch_separator_missing,
@@ -6085,6 +6091,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :binary_generator_arrow_missing}),
     do: "insert `<-` before this generator source"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :send_comma_missing}),
+    do: "insert a comma before this message"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :with_rematch_separator_missing}),
     do: "insert `|` before this with-pattern"
 
@@ -6554,6 +6563,25 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(opener, :secondary, "this binary generator starts here"),
       pickup_label(previous, :secondary, "the binary pattern ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :send_comma_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this send starts here"),
+      pickup_label(previous, :secondary, "the send target ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7293,6 +7321,20 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `<-` before the generator source",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "<- "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :send_comma_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `,` before the send message",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ", "}]
       }
     ]
   end

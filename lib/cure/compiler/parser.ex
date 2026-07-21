@@ -12338,11 +12338,39 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     state = advance(state)
     {target, state} = parse_expr(state, 0)
-    state = expect(state, :comma)
+    state = expect_send_comma(state, token, target)
     {message, state} = parse_expr(state, 0)
     meta = [line: token.line, col: token.col, melquiades_form: :keyword]
     ast = {:send, meta, [target, message]}
     {ast, state}
+  end
+
+  defp expect_send_comma(state, send_token, target) do
+    case expect_token(state, :comma) do
+      {:ok, _comma, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :send_comma_missing,
+             expected: :comma,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: send_token.span,
+             previous_span: first_node_source_span(target),
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
+    end
   end
 
   # -- Receive ---------------------------------------------------------------
