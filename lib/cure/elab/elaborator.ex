@@ -617,8 +617,12 @@ defmodule Cure.Elab.Elaborator do
       # Record construction `Point{x: .., y: ..}` desugars to the positional
       # constructor `Point(.., ..)` (fields ordered by the record's telescope).
       Keyword.get(meta, :record) ->
-        with {:ok, positional} <- desugar_record_construction(meta, args, env) do
-          elaborate_expr_typed(positional, names, ctx, env)
+        case desugar_record_construction(meta, args, env) do
+          {:ok, positional} ->
+            attach_record_field_context(elaborate_expr_typed(positional, names, ctx, env), meta, args, env)
+
+          {:error, reason} ->
+            {:error, reason}
         end
 
       # `f(x)(y)` parses with the inner call preserved as `:callee` (and `name`
@@ -635,8 +639,13 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate_expr_typed({:record_update, meta, children}, names, ctx, env) do
-    with {:ok, positional} <- desugar_record_update(meta, children, env) do
-      elaborate_expr_typed(positional, names, ctx, env)
+    case desugar_record_update(meta, children, env) do
+      {:ok, positional} ->
+        elaborate_expr_typed(positional, names, ctx, env)
+        |> attach_record_update_context(meta, children, env)
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -781,20 +790,26 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:unary_op, meta, [operand]} = expr, names, ctx, env) do
     case Keyword.fetch!(meta, :operator) do
       :not ->
-        with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
-             term = {:app, {:global, :not}, o_core},
-             {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
-        end
+        result =
+          with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
+               term = {:app, {:global, :not}, o_core},
+               {:ok, type} <- Kernel.infer(ctx, term) do
+            {:ok, term, type}
+          end
+
+        attach_unary_operand_context(result, operand, :not)
 
       # Int-only bitwise complement. `int_bnot : Int -> Int`, so the kernel
       # infer both types the operand against Int and rejects a non-Int operand.
       :bnot ->
-        with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
-             term = {:app, {:global, builtin_op_global(:int_bnot)}, o_core},
-             {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
-        end
+        result =
+          with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
+               term = {:app, {:global, builtin_op_global(:int_bnot)}, o_core},
+               {:ok, type} <- Kernel.infer(ctx, term) do
+            {:ok, term, type}
+          end
+
+        attach_unary_operand_context(result, operand, :bnot)
 
       # Numeric negation. Desugars to `negate` ONLY when it is a genuine
       # overloadable interface method (`Std.Arithmetic`'s `Additive.negate`) in
@@ -815,12 +830,15 @@ defmodule Cure.Elab.Elaborator do
         if Cure.Elab.Resolve.method?(env, :negate) do
           elaborate_expr_typed({:function_call, [name: "negate"], [operand]}, names, ctx, env)
         else
-          with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
-               {:ok, g} <- neg_global(o_type, ctx),
-               term = {:app, {:global, builtin_op_global(g)}, o_core},
-               {:ok, type} <- Kernel.infer(ctx, term) do
-            {:ok, term, type}
-          end
+          result =
+            with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
+                 {:ok, g} <- neg_global(o_type, ctx),
+                 term = {:app, {:global, builtin_op_global(g)}, o_core},
+                 {:ok, type} <- Kernel.infer(ctx, term) do
+              {:ok, term, type}
+            end
+
+          attach_unary_operand_context(result, operand, :-)
         end
 
       _ ->
@@ -1665,6 +1683,11 @@ defmodule Cure.Elab.Elaborator do
   defp mentions_prior_field?(list, depth) when is_list(list), do: Enum.any?(list, &mentions_prior_field?(&1, depth))
   defp mentions_prior_field?(_other, _depth), do: false
 
+  defp attach_unary_operand_context({:error, reason}, operand, operator),
+    do: {:error, attach_operator_operand_context(reason, operand, 0, operator)}
+
+  defp attach_unary_operand_context(result, _operand, _operator), do: result
+
   @doc """
   Checking-mode elaboration for proof forms whose Core term depends on the
   expected type. Ordinary expressions fall back to infer-then-check.
@@ -1672,8 +1695,13 @@ defmodule Cure.Elab.Elaborator do
   @spec elaborate_expr_checked(term(), term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
   def elaborate_expr_checked({:record_update, meta, children}, expected_core, names, ctx, env) do
-    with {:ok, positional} <- desugar_record_update(meta, children, env) do
-      elaborate_expr_checked(positional, expected_core, names, ctx, env)
+    case desugar_record_update(meta, children, env) do
+      {:ok, positional} ->
+        elaborate_expr_checked(positional, expected_core, names, ctx, env)
+        |> attach_record_update_context(meta, children, env)
+
+      {:error, reason} ->
+        {:error, attach_record_field_context(reason, meta, tl(children), env)}
     end
   end
 
@@ -1687,8 +1715,17 @@ defmodule Cure.Elab.Elaborator do
 
     cond do
       Keyword.get(meta, :record) ->
-        with {:ok, positional} <- desugar_record_construction(meta, args, env) do
-          elaborate_expr_checked(positional, expected_core, names, ctx, env)
+        case desugar_record_construction(meta, args, env) do
+          {:ok, positional} ->
+            attach_record_field_context(
+              elaborate_expr_checked(positional, expected_core, names, ctx, env),
+              meta,
+              args,
+              env
+            )
+
+          {:error, reason} ->
+            {:error, reason}
         end
 
       name == "reflexive" and length(args) == 1 ->
@@ -2124,6 +2161,88 @@ defmodule Cure.Elab.Elaborator do
     }
   end
 
+  defp attach_record_field_context({:error, reason}, meta, field_pairs, env),
+    do: {:error, attach_record_field_reason(reason, meta, field_pairs, env)}
+
+  defp attach_record_field_context(result, _meta, _field_pairs, _env), do: result
+
+  defp attach_record_update_context({:error, {:source_context, reason, context}}, meta, children, env)
+       when is_map(context) do
+    field_result = attach_record_field_context({:error, {:source_context, reason, context}}, meta, tl(children), env)
+
+    case field_result do
+      {:error, {:source_context, _reason, %{expectation_origin: :record_field} = _field_context}} ->
+        field_result
+
+      {:error, {:source_context, _reason, field_context}} ->
+        {:error, {:source_context, reason, Map.merge(field_context, record_update_context(meta, children, context))}}
+    end
+  end
+
+  defp attach_record_update_context({:error, reason}, meta, children, _env),
+    do: {:error, {:source_context, reason, record_update_context(meta, children, %{})}}
+
+  defp attach_record_update_context(result, _meta, _children, _env), do: result
+
+  defp record_update_context(meta, children, context) do
+    expression = {:record_update, meta, children}
+    Map.merge(context, expectation_context(expression, :record_update, Keyword.get(meta, :name, :record_update), nil))
+  end
+
+  defp attach_record_field_reason({:source_context, reason, context}, meta, field_pairs, env)
+       when is_map(context) do
+    case record_field_context(meta, field_pairs, context, env) do
+      nil -> {:source_context, reason, context}
+      details -> {:source_context, reason, Map.merge(context, details)}
+    end
+  end
+
+  defp attach_record_field_reason(reason, meta, field_pairs, env) do
+    case record_field_context(meta, field_pairs, %{}, env) do
+      nil -> reason
+      details -> {:source_context, reason, details}
+    end
+  end
+
+  defp record_field_context(meta, field_pairs, context, env) do
+    index = Map.get(context, :argument_index) || singleton_record_field_index(field_pairs)
+    name = Keyword.get(meta, :name)
+    ctor = name && Inductive.get_ctor(env, String.to_atom(name))
+
+    with index when is_integer(index) <- index,
+         %{args: fields} <- ctor,
+         {field, _type} <- Enum.at(fields, index),
+         {:ok, value} <- fetch_record_field_value(field_pairs, field),
+         %Cure.Diagnostic.Span{} = span <- surface_expression_span(value) do
+      %{
+        line: span.start_line,
+        column: span.start_column,
+        length: max(1, span.end_byte - span.start_byte),
+        span: span,
+        expectation_span: span,
+        checking: field,
+        expectation_origin: :record_field,
+        argument_index: index
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp fetch_record_field_value(field_pairs, field) do
+    Enum.find_value(field_pairs, :error, fn
+      {:pair, _meta, [{:literal, _label_meta, value_field}, value]}
+      when value_field == field ->
+        {:ok, value}
+
+      _ ->
+        false
+    end)
+  end
+
+  defp singleton_record_field_index([{:pair, _meta, [_label, _value]}]), do: 0
+  defp singleton_record_field_index(_field_pairs), do: nil
+
   # The saturated (or non-function-goal) checking-mode path for a non-constructor
   # call: try the goal-first pre-pass when the goal can inform implicit solving,
   # otherwise infer-then-recheck. Split out of the `true ->` branch of
@@ -2352,13 +2471,59 @@ defmodule Cure.Elab.Elaborator do
             term = maybe_inject_union(term, type, expected_core, ctx, env)
             term = maybe_coerce_refined_to_base(term, type, expected_core, ctx, env)
 
-            with :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
-              {:ok, term}
+            case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+              :ok ->
+                {:ok, term}
+
+              {:error, reason} ->
+                {:error, attach_call_result_context(reason, expr)}
             end
           end
       end
     end
   end
+
+  defp attach_call_result_context(
+         {:source_context, reason, context},
+         {:function_call, _meta, _args} = expression
+       )
+       when is_map(context) do
+    if Map.get(context, :expectation_origin) in [:call_argument, :operator_operand] do
+      {:source_context, reason, context}
+    else
+      {:source_context, reason, Map.merge(context, call_result_context(expression))}
+    end
+  end
+
+  defp attach_call_result_context(reason, {:function_call, _meta, _args} = expression),
+    do: {:source_context, reason, call_result_context(expression)}
+
+  defp attach_call_result_context(reason, _expression), do: reason
+
+  defp call_result_context({:function_call, meta, _args}) when is_list(meta) do
+    span = surface_expression_span({:function_call, meta, []})
+
+    {origin, owner} =
+      if Keyword.has_key?(meta, :callee) do
+        {:application, :application}
+      else
+        {:call_result, Keyword.get(meta, :name)}
+      end
+
+    %{
+      line: span && span.start_line,
+      column: span && span.start_column,
+      length: span && max(1, span.end_byte - span.start_byte),
+      span: span,
+      expectation_span: span,
+      checking: owner,
+      expression_category: :function_call,
+      expectation_origin: origin
+    }
+  end
+
+  defp call_result_context(expression),
+    do: expectation_context(expression, :call_result, :application, nil)
 
   # A checking-mode constructor whose direct check against the expected type failed
   # may still inhabit the BASE of a refinement `{x: T | φ}` = `Sigma(T, λx. φ)` —
@@ -6380,58 +6545,75 @@ defmodule Cure.Elab.Elaborator do
   # on `beam_ops self` instead of attempting unconstrained inference.
   @doc false
   def elaborate_effect_branch(expr, expected, names, ctx, env) do
-    if effect_goal?(expected, ctx) do
-      case expr do
-        {:pattern_match, _, _} ->
-          elaborate_expr_checked(expr, expected, names, ctx, env)
+    result =
+      if effect_goal?(expected, ctx) do
+        case expr do
+          {:pattern_match, _, _} ->
+            elaborate_expr_checked(expr, expected, names, ctx, env)
 
-        {:with_abs, _, _} ->
-          elaborate_expr_checked(expr, expected, names, ctx, env)
+          {:with_abs, _, _} ->
+            elaborate_expr_checked(expr, expected, names, ctx, env)
 
-        {:conditional, _, _} ->
-          elaborate_expr_checked(expr, expected, names, ctx, env)
+          {:conditional, _, _} ->
+            elaborate_expr_checked(expr, expected, names, ctx, env)
 
-        _ ->
-          case elaborate_expr_checked(expr, expected, names, ctx, env) do
-            {:ok, _term} = ok ->
-              ok
+          _ ->
+            case elaborate_expr_checked(expr, expected, names, ctx, env) do
+              {:ok, _term} = ok ->
+                ok
 
-            {:error, checked_error} ->
-              case elaborate_expr_typed(expr, names, ctx, env) do
-                {:ok, _term, {:veffect_type, _}} ->
-                  {:error, checked_error}
+              {:error, checked_error} ->
+                case elaborate_expr_typed(expr, names, ctx, env) do
+                  {:ok, _term, {:veffect_type, _}} ->
+                    {:error, checked_error}
 
-                {:ok, _term, type} ->
-                  result_type = effect_result_type(expected, ctx)
+                  {:ok, _term, type} ->
+                    result_type = effect_result_type(expected, ctx)
 
-                  with {:ok, pure_term} <- elaborate_expr_checked(expr, result_type, names, ctx, env) do
-                    {:ok, {:effect_pure, maybe_inject_union(pure_term, type, result_type, ctx, env)}}
-                  else
-                    {:error, _} -> {:error, checked_error}
-                  end
+                    with {:ok, pure_term} <- elaborate_expr_checked(expr, result_type, names, ctx, env) do
+                      {:ok, {:effect_pure, maybe_inject_union(pure_term, type, result_type, ctx, env)}}
+                    else
+                      {:error, _} -> {:error, checked_error}
+                    end
 
-                # Inference failed — but an INTRODUCTION FORM has no inference rule
-                # at all (a bare data constructor is `:ctor_requires_checking_mode`;
-                # a bare `[]` is `{:unsolved_metavariables, :Nil}`), so a pure branch
-                # body like `%[:noreply, state]` is never inferable and would never
-                # reach the lift above. Check it at the result type and lift, exactly
-                # as the trailing expression of an effectful `let`-block does.
-                {:error, _} ->
-                  result_type = effect_result_type(expected, ctx)
+                  # Inference failed — but an INTRODUCTION FORM has no inference rule
+                  # at all (a bare data constructor is `:ctor_requires_checking_mode`;
+                  # a bare `[]` is `{:unsolved_metavariables, :Nil}`), so a pure branch
+                  # body like `%[:noreply, state]` is never inferable and would never
+                  # reach the lift above. Check it at the result type and lift, exactly
+                  # as the trailing expression of an effectful `let`-block does.
+                  {:error, _} ->
+                    result_type = effect_result_type(expected, ctx)
 
-                  case elaborate_expr_checked(expr, result_type, names, ctx, env) do
-                    {:ok, pure_term} -> {:ok, effect_pure_for_bind(pure_term, result_type, ctx)}
-                    {:error, _} -> {:error, checked_error}
-                  end
-              end
-          end
+                    case elaborate_expr_checked(expr, result_type, names, ctx, env) do
+                      {:ok, pure_term} -> {:ok, effect_pure_for_bind(pure_term, result_type, ctx)}
+                      {:error, _} -> {:error, checked_error}
+                    end
+                end
+            end
+        end
+      else
+        with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
+          {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+        end
       end
+
+    attach_effect_context(result, expr)
+  end
+
+  defp attach_effect_context({:error, {:source_context, reason, context}}, expression)
+       when is_map(context) do
+    if Map.get(context, :expectation_origin) in [nil, :annotation] do
+      {:error, {:source_context, reason, Map.merge(context, expectation_context(expression, :effects, :effect, nil))}}
     else
-      with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
-        {:ok, maybe_inject_union(term, type, expected, ctx, env)}
-      end
+      {:error, {:source_context, reason, context}}
     end
   end
+
+  defp attach_effect_context({:error, reason}, expression),
+    do: {:error, {:source_context, reason, expectation_context(expression, :effects, :effect, nil)}}
+
+  defp attach_effect_context(result, _expression), do: result
 
   # A `let x = e ⏎ …` block elaborates to the Core `:let` binder:
   # `{:let, Cure.Core.Grade.unrestricted(), T, e, body}`, binding `e` EXACTLY ONCE.
@@ -7479,12 +7661,54 @@ defmodule Cure.Elab.Elaborator do
                  ) do
             {:cont, :ok}
           else
-            false -> {:halt, {:error, {:typed_pattern_type_mismatch, type_ast}}}
-            nil -> {:halt, {:error, {:typed_pattern_type_mismatch, type_ast}}}
-            {:error, reason} -> {:halt, {:error, {:typed_pattern_type_error, reason}}}
+            false ->
+              {:halt,
+               typed_pattern_annotation_error(
+                 {:typed_pattern_type_mismatch, type_ast},
+                 type_ast,
+                 position
+               )}
+
+            nil ->
+              {:halt,
+               typed_pattern_annotation_error(
+                 {:typed_pattern_type_mismatch, type_ast},
+                 type_ast,
+                 position
+               )}
+
+            {:error, reason} ->
+              {:halt,
+               typed_pattern_annotation_error(
+                 {:typed_pattern_type_error, reason},
+                 type_ast,
+                 position
+               )}
           end
       end
     end)
+  end
+
+  defp typed_pattern_annotation_error(reason, type_ast, position) do
+    case surface_expression_span(type_ast) do
+      %Cure.Diagnostic.Span{} = span ->
+        {:error,
+         {:source_context, reason,
+          %{
+            line: span.start_line,
+            column: span.start_column,
+            length: max(1, span.end_byte - span.start_byte),
+            span: span,
+            expectation_span: span,
+            checking: :pattern,
+            expression_category: :pattern,
+            expectation_origin: :pattern,
+            argument_index: position
+          }}}
+
+      _ ->
+        {:error, reason}
+    end
   end
 
   defp cname_from_pattern({:function_call, meta, _args}), do: Keyword.get(meta, :name)
@@ -8817,7 +9041,7 @@ defmodule Cure.Elab.Elaborator do
             {m, acc ++ [{:meta, id}]}
           end)
 
-        case infer_ctor_args(ctor.args, arg_asts, param_metas, [], mctx, names, ctx, env) do
+        case infer_ctor_args(ctor.args, arg_asts, param_metas, [], mctx, names, ctx, env, cname) do
           {:ok, present} -> elaborate_ctor_app(env, cname, present, ctx)
           {:error, _} = err -> err
         end
@@ -8830,10 +9054,24 @@ defmodule Cure.Elab.Elaborator do
   # *checked* against it, otherwise it is *inferred* and its type unified against
   # the field type to solve parameters. Returns `[{term, type_term}]` for
   # `elaborate_ctor_app`.
-  defp infer_ctor_args([], [], _params, acc, _mctx, _names, _ctx, _env),
+  defp infer_ctor_args(args, arg_asts, params, acc, mctx, names, ctx, env, cname),
+    do: infer_ctor_args(args, arg_asts, params, acc, mctx, names, ctx, env, cname, 0)
+
+  defp infer_ctor_args([], [], _params, acc, _mctx, _names, _ctx, _env, _cname, _index),
     do: {:ok, Enum.reverse(acc)}
 
-  defp infer_ctor_args([{_fname, ftype} | fields], [arg | args], params, acc, mctx, names, ctx, env) do
+  defp infer_ctor_args(
+         [{_fname, ftype} | fields],
+         [arg | args],
+         params,
+         acc,
+         mctx,
+         names,
+         ctx,
+         env,
+         cname,
+         index
+       ) do
     frame = params ++ (acc |> Enum.reverse() |> Enum.map(&elem(&1, 0)))
     ftype_inst = ftype |> Subst.instantiate(frame) |> Unify.zonk(mctx)
 
@@ -8852,10 +9090,10 @@ defmodule Cure.Elab.Elaborator do
 
     case step do
       {:ok, term, ty_term, mctx} ->
-        infer_ctor_args(fields, args, params, [{term, ty_term} | acc], mctx, names, ctx, env)
+        infer_ctor_args(fields, args, params, [{term, ty_term} | acc], mctx, names, ctx, env, cname, index + 1)
 
-      {:error, _} = err ->
-        err
+      {:error, reason} ->
+        {:error, attach_expectation_context(reason, arg, :constructor_argument, cname, index)}
     end
   end
 

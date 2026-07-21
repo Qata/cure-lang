@@ -24,6 +24,82 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert Renderer.plain(diagnostic, registry) =~ "type written in its annotation"
   end
 
+  test "a missing implicit instance retains the authored call context" do
+    source = "mod M\n  fn has(x: t, y: t) -> Bool = x == y\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "implicit.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "implicit.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.expectation_origin == :implicit
+    assert diagnostic.payload.checking == :==
+    assert rendered =~ "implicit"
+    assert rendered =~ "2 |   fn has(x: t, y: t) -> Bool = x == y"
+  end
+
+  test "a record update fallback points at the authored update" do
+    source =
+      "rec Point\n  x: Int\n  y: Int\nfn bad(p: Point) -> Point = Point{p | x: \"bad\"}\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "record_update.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record_update.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :record_update
+    assert rendered =~ "4 | fn bad(p: Point) -> Point = Point{p | x: \"bad\"}"
+    assert rendered =~ "^"
+  end
+
+  test "an effect result mismatch points at the effect expression" do
+    source = "fn main() -> Effect(Int) = true\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "effects.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "effects.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :effects
+    assert rendered =~ "1 | fn main() -> Effect(Int) = true"
+    assert rendered =~ "this expression has an invalid effect"
+  end
+
+  test "a real conditional mismatch reports the authored guard" do
+    source = "fn main() -> Int = if 1 then 2 else 3\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "condition.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "condition.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :condition
+    assert diagnostic.primary.span.start_column == 23
+    assert rendered =~ "CONDITION IS NOT BOOLEAN"
+    assert rendered =~ "1 | fn main() -> Int = if 1 then 2 else 3"
+    assert rendered =~ "this condition has the wrong type"
+  end
+
   test "a branch failure names the checking function and authored arms" do
     reason =
       {:source_context, :branch_type,
@@ -244,6 +320,202 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "Found:    String"
     assert rendered =~ "1 | fn main() -> Pair = %[1, \"bad\"]"
     assert rendered =~ "this collection element has the wrong type"
+  end
+
+  test "a constructor argument conversion retains its constructor origin and caret" do
+    source = "fn main() -> Maybe = Some(\"bad\")\n"
+    argument = raw_span(source, "\"bad\"", 1, 27)
+
+    reason =
+      {:source_context, {:conversion_failure, "String", "Int"},
+       %{
+         line: 1,
+         column: 27,
+         length: 5,
+         span: argument,
+         expectation_span: argument,
+         checking: :Some,
+         argument_index: 0,
+         expression_category: :literal,
+         expectation_origin: :constructor_argument
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "constructor.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Constructor argument has the wrong type"
+    assert diagnostic.payload.origin.kind == :constructor_argument
+    assert diagnostic.payload.origin.owner == :Some
+    assert diagnostic.payload.origin.index == 0
+    assert diagnostic.primary.span.start_column == 27
+    assert rendered =~ "Argument 1 of constructor `Some`"
+    assert rendered =~ "Expected: Int"
+    assert rendered =~ "Found:    String"
+    assert rendered =~ "1 | fn main() -> Maybe = Some(\"bad\")"
+    assert rendered =~ "this constructor argument has the wrong type"
+  end
+
+  test "a record field conversion retains the authored field origin and caret" do
+    source = "Point{name: \"bad\"}\n"
+    value = raw_span(source, "\"bad\"", 1, 13)
+
+    reason =
+      {:source_context, {:conversion_failure, "String", "Int"},
+       %{
+         line: 1,
+         column: 13,
+         length: 5,
+         span: value,
+         expectation_span: value,
+         checking: :name,
+         argument_index: 0,
+         expression_category: :literal,
+         expectation_origin: :record_field
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Record field has the wrong type"
+    assert diagnostic.payload.origin.kind == :record_field
+    assert diagnostic.payload.origin.owner == :name
+    assert diagnostic.primary.span.start_column == 13
+    assert rendered =~ "Field `name` does not match"
+    assert rendered =~ "Expected: Int"
+    assert rendered =~ "Found:    String"
+    assert rendered =~ "1 | Point{name: \"bad\"}"
+    assert rendered =~ "this record field has the wrong type"
+  end
+
+  test "a real one-field record mismatch points at the field value" do
+    source =
+      "mod M\n" <>
+        "  rec Point\n" <>
+        "    x: Int\n" <>
+        "  fn bad() -> Point = Point{x: \"bad\"}\n" <>
+        "end\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "record.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :record_field
+    assert diagnostic.payload.origin.owner == :x
+    assert diagnostic.primary.span.start_line == 4
+    assert rendered =~ "Field `x` does not match"
+    assert rendered =~ "4 |   fn bad() -> Point = Point{x: \"bad\"}"
+    assert rendered =~ "this record field has the wrong type"
+  end
+
+  test "a typed pattern mismatch points at the authored annotation" do
+    source = "n: Bool -> 1\n"
+    annotation = raw_span(source, "Bool", 1, 4)
+    type_ast = {:variable, [source_info: %Cure.MetaAST.SourceInfo{whole: annotation}], "Bool"}
+
+    reason =
+      {:source_context, {:typed_pattern_type_mismatch, type_ast},
+       %{
+         line: 1,
+         column: 4,
+         length: 4,
+         span: annotation,
+         expectation_span: annotation,
+         checking: :pattern,
+         expression_category: :pattern,
+         expectation_origin: :pattern,
+         argument_index: 0
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "pattern.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Pattern annotation does not match"
+    assert diagnostic.primary.span.start_column == 4
+    assert rendered =~ "This pattern's annotation is incompatible"
+    assert rendered =~ "1 | n: Bool -> 1"
+    assert rendered =~ "change the pattern or its type annotation"
+  end
+
+  test "a unary operator operand retains its source caret" do
+    source = "not 1\n"
+    operand = raw_span(source, "1", 1, 5)
+
+    reason =
+      {:source_context, {:conversion_failure, "Int", "Bool"},
+       %{
+         line: 1,
+         column: 5,
+         length: 1,
+         span: operand,
+         expectation_span: operand,
+         checking: :not,
+         expression_category: :literal,
+         expectation_origin: :operator_operand,
+         argument_index: 0
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "unary.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Operator cannot use this value"
+    assert diagnostic.payload.origin.owner == :not
+    assert diagnostic.primary.span.start_column == 5
+    assert rendered =~ "The `not` operator cannot use this operand type"
+    assert rendered =~ "1 | not 1"
+    assert rendered =~ "this operator operand has the wrong type"
+  end
+
+  test "a real call result mismatch names and highlights the call" do
+    source =
+      "fn id(x: Int) -> Int = x\n" <>
+        "fn main() -> Bool = id(1)\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "call_result.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "call_result.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :call_result
+    assert diagnostic.payload.origin.owner == "id"
+    assert diagnostic.primary.span.start_line == 2
+    assert rendered =~ "CALL RESULT HAS THE WRONG TYPE"
+    assert rendered =~ "The result of `id` does not match"
+    assert rendered =~ "2 | fn main() -> Bool = id(1)"
+    assert rendered =~ "this call result has the wrong type"
+  end
+
+  test "a real chained application reports an application result" do
+    source =
+      "fn mk() -> (Nat) -> Nat = fn(y) -> y\n" <>
+        "fn main() -> Bool = mk()(Z())\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "application.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "application.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :application
+    assert diagnostic.primary.span.start_line == 2
+    assert rendered =~ "APPLICATION HAS THE WRONG TYPE"
+    assert rendered =~ "This application"
+    assert rendered =~ "2 | fn main() -> Bool = mk()(Z())"
+    assert rendered =~ "this application has the wrong type"
   end
 
   defp raw_span(source, needle, line, column) do

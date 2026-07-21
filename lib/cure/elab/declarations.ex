@@ -699,21 +699,85 @@ defmodule Cure.Elab.Declarations do
     {line, column, length} = expression_extent(expression)
     meta = expression_meta(expression)
 
-    {:error,
-     {:source_context, reason,
-      %{
-        line: line,
-        column: column,
-        length: length,
-        checking: checking,
-        span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
-        expression_category: expression_category(expression),
-        expectation_origin: :annotation,
-        branch_patterns: branch_patterns(expression)
-      }}}
+    outer_context = %{
+      line: line,
+      column: column,
+      length: length,
+      checking: checking,
+      span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
+      expression_category: expression_category(expression),
+      expectation_origin: :annotation,
+      branch_patterns: branch_patterns(expression)
+    }
+
+    outer_context = declaration_expectation_context(expression, reason, outer_context)
+
+    case reason do
+      {:source_context, nested_reason, nested_context} when is_map(nested_context) ->
+        # A checking-site producer may already know a more precise authored span
+        # (for example the literal used as an `if` guard). Keep the declaration
+        # context as a fallback, but never let its whole-body span overwrite the
+        # nested source caret or expectation origin.
+        {:error, {:source_context, nested_reason, Map.merge(outer_context, nested_context)}}
+
+      _ ->
+        {:error, {:source_context, reason, outer_context}}
+    end
   end
 
   defp attach_source_context(result, _expression, _checking), do: result
+
+  defp declaration_expectation_context({:function_call, meta, _args}, reason, context)
+       when is_list(meta) do
+    {origin, owner} =
+      if implicit_failure?(reason) do
+        {:implicit, Keyword.get(meta, :name, context.checking)}
+      else
+        if Keyword.has_key?(meta, :callee) do
+          {:application, declaration_application_owner(meta)}
+        else
+          {:call_result, Keyword.get(meta, :name, context.checking)}
+        end
+      end
+
+    Map.merge(context, %{
+      checking: owner,
+      expectation_origin: origin,
+      expression_category: :function_call
+    })
+  end
+
+  defp declaration_expectation_context({:binary_op, meta, _args}, reason, context)
+       when is_list(meta) and is_map(context) do
+    if implicit_failure?(reason) do
+      Map.merge(context, %{
+        checking: Keyword.get(meta, :operator, context.checking),
+        expectation_origin: :implicit,
+        expression_category: :binary_op
+      })
+    else
+      context
+    end
+  end
+
+  defp declaration_expectation_context(_expression, _reason, context), do: context
+
+  defp implicit_failure?({:source_context, reason, _context}), do: implicit_failure?(reason)
+
+  defp implicit_failure?({kind, _details}) when kind in [:unsolved_metavariables, :no_instance], do: true
+  defp implicit_failure?({:no_instance, _interface, _head}), do: true
+  defp implicit_failure?({:no_named_instance, _name}), do: true
+  defp implicit_failure?(_reason), do: false
+
+  defp declaration_application_owner(meta) do
+    case Keyword.get(meta, :callee) do
+      {:function_call, inner_meta, _args} when is_list(inner_meta) ->
+        Keyword.get(inner_meta, :name, :application)
+
+      _ ->
+        :application
+    end
+  end
 
   defp expression_meta({_kind, meta, _children}) when is_list(meta), do: meta
   defp expression_meta({_kind, meta, _left, _right}) when is_list(meta), do: meta
