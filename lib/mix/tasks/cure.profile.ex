@@ -11,7 +11,7 @@ defmodule Mix.Tasks.Cure.Profile do
 
   use Mix.Task
 
-  alias Cure.Diagnostic.Sink
+  alias Cure.Diagnostic.{Host, Sink}
 
   @shortdoc "Profile compilation of a Cure source file"
 
@@ -25,8 +25,16 @@ defmodule Mix.Tasks.Cure.Profile do
           {:ok, report} ->
             IO.puts(Cure.Profiler.format_report(report))
 
+            case report.diagnostic do
+              %{diagnostic: diagnostic, registry: registry} ->
+                Mix.shell().error(render_diagnostic(diagnostic, registry))
+
+              nil ->
+                :ok
+            end
+
           {:error, reason} ->
-            Mix.shell().error(render_diagnostic(Cure.Diagnostic.Operational.command_failure("profile", reason)))
+            Mix.shell().error(Host.render(reason, path))
         end
 
       [] ->
@@ -34,8 +42,8 @@ defmodule Mix.Tasks.Cure.Profile do
     end
   end
 
-  defp render_diagnostic(diagnostic) do
-    Sink.new(format: :plain, color: :auto, width: 80)
+  defp render_diagnostic(diagnostic, registry) do
+    Sink.new(format: :plain, color: :auto, width: 80, registry: registry)
     |> Sink.render(diagnostic)
   end
 end
