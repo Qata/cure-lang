@@ -359,15 +359,21 @@ defmodule Cure.Elab.Elaborator do
           length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2 ->
         cands = Cure.Elab.Resolution.overload_candidates(env, atom)
 
-        elaborate_overloaded_app(
-          env,
-          atom,
-          args,
-          Keyword.get(meta, :arg_labels),
-          names,
-          ctx,
-          cands
-        )
+        case elaborate_overloaded_app(
+               env,
+               atom,
+               args,
+               Keyword.get(meta, :arg_labels),
+               names,
+               ctx,
+               cands
+             ) do
+          {:error, reason} ->
+            {:error, attach_expectation_context(reason, {:function_call, meta, args}, :overload, atom, nil)}
+
+          result ->
+            result
+        end
 
       # A bare name provided by ≥2 distinct re-keyed imports with no local/
       # unshadowed winner: unqualified use is ambiguous (R7). Checked before the
