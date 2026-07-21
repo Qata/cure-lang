@@ -196,12 +196,25 @@ defmodule Cure.DiagnosticTest do
     refute Renderer.plain(diagnostic, registry) =~ "{:tab_not_allowed"
   end
 
-  test "parser producer tuples retain trailing source coordinates" do
+  test "structured parser producer details retain source coordinates" do
     source = "mod Demo\n  x\n"
+
+    span =
+      Cure.Diagnostic.Span.new(
+        source_id: "demo.cure",
+        path: "demo.cure",
+        start_byte: 11,
+        end_byte: 12,
+        start_line: 2,
+        start_column: 3,
+        end_line: 2,
+        end_column: 4
+      )
 
     {diagnostic, registry} =
       Cure.Compiler.Errors.to_diagnostic(
-        {:unknown_syntax_family_field, :Expr, :field, 2, 3},
+        {:unknown_syntax_family_field,
+         %{family: :Expr, field: :field, valid_fields: [:value], span: span, line: 2, column: 3}},
         "demo.cure",
         source
       )
@@ -348,9 +361,10 @@ defmodule Cure.DiagnosticTest do
       {:accepts_without_expander, "E092"},
       {:multiple_accepts_declarations, "E092"},
       {:multiple_expands_declarations, "E092"},
-      {{:expected_literal_capture, "{name}", 1, 2}, "E094"},
-      {{:unknown_syntax_family_field, :Expr, :field, 1, 2}, "E092"},
-      {{:missing_syntax_family_field, :Expr, :field, 1, 2}, "E092"},
+      {{:expected_literal_capture, %{shape: "Int", line: 1, column: 2}}, "E094"},
+      {{:unknown_syntax_family_field, %{family: :Expr, field: :field, valid_fields: [:value], line: 1, column: 2}},
+       "E092"},
+      {{:missing_syntax_family_field, %{family: :Expr, field: :field, line: 1, column: 2}}, "E092"},
       {{:unknown_macro_obligation_capture, :capture, 1, 2}, "E092"},
       {{:graded_let_requires_variable, %{grade: :linear}}, "E093"},
       {{:unknown_grade, %{grade: :future, supported: [:erased, :linear, :affine]}}, "E093"},
@@ -366,7 +380,7 @@ defmodule Cure.DiagnosticTest do
       {{:with_multi_arity_mismatch, "arity", []}, "E093"},
       {{:with_multi_no_arms, "arms", []}, "E093"},
       {{:with_multi_inconsistent_pattern, "patterns", []}, "E093"},
-      {{:duplicate_syntax_family_field, :field, 1, 2}, "E092"},
+      {{:duplicate_syntax_family_field, %{field: :field, line: 1, column: 2}}, "E092"},
       {{:non_associative, %{operator: :==, next_operator: :==}}, "E094"},
       {{:ambiguous_precedence, %{left_group: :left, right_group: :right, operator: :"<?>"}}, "E094"}
     ]
@@ -379,11 +393,11 @@ defmodule Cure.DiagnosticTest do
   end
 
   test "literal macro captures retain a contextual syntax diagnostic" do
-    diagnostic = Adapter.from_error({:expected_literal_capture, "{name}", 1, 2})
+    diagnostic = Adapter.from_error({:expected_literal_capture, %{shape: "Int", line: 1, column: 2}})
 
     assert diagnostic.code == "E094"
-    assert diagnostic.title == "Macro literal capture is invalid"
-    assert Diagnostic.message(diagnostic) =~ "literal shape"
+    assert diagnostic.title == "Macro field needs a literal"
+    assert Diagnostic.message(diagnostic) =~ "accepts an `Int` literal"
     refute Diagnostic.message(diagnostic) =~ "{:expected_literal_capture"
   end
 

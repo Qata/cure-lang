@@ -1195,6 +1195,7 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_family_body(tokens, family_meta, parser_state) do
     target_indent = Enum.find_value(tokens, &indent_value/1) || 0
+    family_meta = Map.put(family_meta, :body_span, family_body_span(tokens))
 
     # Built against `parser_state` before its tokens are swapped out.
     family_tokens =
@@ -1238,7 +1239,17 @@ defmodule Cure.Compiler.Parser do
 
               :error ->
                 state =
-                  add_error(state, {:unknown_syntax_family_field, family_meta.family, name, token.line, token.col})
+                  add_error(state, {
+                    :unknown_syntax_family_field,
+                    %{
+                      family: family_meta.family,
+                      field: name,
+                      valid_fields: Enum.map(family_meta.fields, & &1.name),
+                      span: token.span,
+                      line: token.line,
+                      column: token.col
+                    }
+                  })
 
                 {_ignored, state} = parse_expr_or_block(advance(state))
                 parse_family_sections(state, family_meta, values)
@@ -1492,10 +1503,44 @@ defmodule Cure.Compiler.Parser do
 
   defp record_family_value(values, %{name: name}, value, token, state) do
     if Map.has_key?(values, name) do
-      {values, add_error(state, {:duplicate_syntax_family_field, name, token.line, token.col})}
+      first_span = previous_family_field_span(state, name, token.span)
+
+      {values,
+       add_error(state, {
+         :duplicate_syntax_family_field,
+         %{
+           field: name,
+           span: token.span,
+           first_span: first_span,
+           line: token.line,
+           column: token.col
+         }
+       })}
     else
       {Map.put(values, name, value), state}
     end
+  end
+
+  defp previous_family_field_span(state, name, current_span) do
+    tokens = if is_tuple(state.tokens), do: Tuple.to_list(state.tokens), else: state.tokens
+
+    tokens
+    |> Enum.take(state.pos)
+    |> Enum.reverse()
+    |> Enum.find_value(fn
+      %Token{type: type, value: value, span: %Cure.Diagnostic.Span{} = span}
+      when type in [:identifier, :keyword] ->
+        if to_string(value) == to_string(name) and span != current_span, do: span
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp family_body_span(tokens) do
+    tokens
+    |> Enum.reject(&(&1.type in [:newline, :indent, :dedent, :eof]))
+    |> authored_token_span()
   end
 
   defp family_value(family_meta, values, state) do
@@ -1512,11 +1557,31 @@ defmodule Cure.Compiler.Parser do
             {{:family_option, [present: false], []}, state}
 
           :error when field.cardinality == :one_or_more ->
-            error = {:missing_syntax_family_field, family_meta.family, field.name, field.line, field.col}
+            error =
+              {:missing_syntax_family_field,
+               %{
+                 family: family_meta.family,
+                 field: field.name,
+                 span: insertion_at_end(Map.get(family_meta, :body_span)),
+                 body_span: Map.get(family_meta, :body_span),
+                 line: field.line,
+                 column: field.col
+               }}
+
             {[], add_error(state, error)}
 
           :error ->
-            error = {:missing_syntax_family_field, family_meta.family, field.name, field.line, field.col}
+            error =
+              {:missing_syntax_family_field,
+               %{
+                 family: family_meta.family,
+                 field: field.name,
+                 span: insertion_at_end(Map.get(family_meta, :body_span)),
+                 body_span: Map.get(family_meta, :body_span),
+                 line: field.line,
+                 column: field.col
+               }}
+
             {nil, add_error(state, error)}
         end
       end)
@@ -1536,12 +1601,37 @@ defmodule Cure.Compiler.Parser do
     if Keyword.get(meta, :subtype) == expected do
       state
     else
-      add_error(state, {:expected_literal_capture, shape, Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)})
+      value = {:literal, meta, nil}
+
+      add_error(state, {
+        :expected_literal_capture,
+        %{
+          shape: shape,
+          span: first_node_source_span(value),
+          line: Keyword.get(meta, :line, 0),
+          column: Keyword.get(meta, :col, 0)
+        }
+      })
     end
   end
 
   defp validate_primitive_capture(_value, shape, state),
-    do: add_error(state, {:expected_literal_capture, shape, peek(state).line, peek(state).col})
+    do:
+      add_error(state, {
+        :expected_literal_capture,
+        %{shape: shape, span: peek(state).span, line: peek(state).line, column: peek(state).col}
+      })
+
+  defp insertion_at_end(%Cure.Diagnostic.Span{} = span) do
+    %{
+      span
+      | start_byte: span.end_byte,
+        start_line: span.end_line,
+        start_column: span.end_column
+    }
+  end
+
+  defp insertion_at_end(_span), do: nil
 
   defp advance_n(state, 0), do: state
   defp advance_n(state, count), do: advance_n(advance(state), count - 1)

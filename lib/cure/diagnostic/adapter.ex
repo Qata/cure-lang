@@ -795,79 +795,80 @@ defmodule Cure.Diagnostic.Adapter do
       do: macro_validation_failure(kind, %{}, opts)
 
   def from_error({kind, detail}, opts)
-      when kind in [
-             :invalid_packet_name,
-             :invalid_packet_endian,
-             :unknown_packet_scalar,
-             :missing_packet_endian,
-             :forward_packet_length,
-             :invalid_packet_crc_fields,
-             :invalid_packet_field,
-             :invalid_packet_field_name,
-             :duplicate_packet_field,
-             :invalid_macro_rules,
-             :accepts_without_syntax_family,
-             :accepts_without_expander,
-             :expander_without_accepts,
-             :multiple_accepts_declarations,
-             :multiple_expands_declarations,
-             :invalid_driver_base,
-             :invalid_driver_register,
-             :duplicate_driver_register,
-             :overlapping_driver_register,
-             :module_rule_not_fully_consumed,
-             :not_a_module_rule,
-             :ambiguous_macro_extension,
-             :invalid_macro_diagnostics,
-             :invalid_macro_diagnostic,
-             :invalid_syntax_list,
-             :invalid_syntax_string,
-             :invalid_syntax_literal,
-             :invalid_syntax_pair,
-             :left_recursive_parse_production,
-             :protocol_role_count,
-             :invalid_macro_segment,
-             :unsupported_surface_filler,
-             :missing_hole_filler,
-             :unsupported_hole_type,
-             :invalid_lift_module,
-             :invalid_lift_module_name,
-             :invalid_lift_callback,
-             :invalid_module_name,
-             :invalid_behaviour,
-             :invalid_lift_declaration,
-             :invalid_lift_import,
-             :invalid_lift_module_ast,
-             :lifted_module_dependency_cycle,
-             :duplicate_lifted_module,
-             :invalid_generated_syntax,
-             :unknown_syntax_family,
-             :duplicate_syntax_family,
-             :duplicate_syntax_family_field,
-             :syntax_family_cycle,
-             :primitive_missing_builtin,
-             :unknown_primitive_tag,
-             :primitive_floor_mismatch,
-             :unsupported_declaration,
-             :invalid_syntax_node,
-             :invalid_syntax_leaf,
-             :invalid_syntax_failure,
-             :unsupported_syntax_core,
-             :raw_syntax_in_expansion,
-             :quoted_syntax_in_expansion,
-             :malformed_expansion_syntax,
-             :malformed_expansion_attribute,
-             :malformed_expansion_map,
-             :malformed_expansion_literal,
-             :malformed_reflected_syntax,
-             :malformed_reflected_attribute,
-             :malformed_reflected_literal,
-             :malformed_reflected_map,
-             :invalid_syntax_attrs,
-             :unknown_reducer_constructor,
-             :incomplete_reducer,
-             :unsupported_hole_arity
-           ],
+      when not is_map(detail) and
+             kind in [
+               :invalid_packet_name,
+               :invalid_packet_endian,
+               :unknown_packet_scalar,
+               :missing_packet_endian,
+               :forward_packet_length,
+               :invalid_packet_crc_fields,
+               :invalid_packet_field,
+               :invalid_packet_field_name,
+               :duplicate_packet_field,
+               :invalid_macro_rules,
+               :accepts_without_syntax_family,
+               :accepts_without_expander,
+               :expander_without_accepts,
+               :multiple_accepts_declarations,
+               :multiple_expands_declarations,
+               :invalid_driver_base,
+               :invalid_driver_register,
+               :duplicate_driver_register,
+               :overlapping_driver_register,
+               :module_rule_not_fully_consumed,
+               :not_a_module_rule,
+               :ambiguous_macro_extension,
+               :invalid_macro_diagnostics,
+               :invalid_macro_diagnostic,
+               :invalid_syntax_list,
+               :invalid_syntax_string,
+               :invalid_syntax_literal,
+               :invalid_syntax_pair,
+               :left_recursive_parse_production,
+               :protocol_role_count,
+               :invalid_macro_segment,
+               :unsupported_surface_filler,
+               :missing_hole_filler,
+               :unsupported_hole_type,
+               :invalid_lift_module,
+               :invalid_lift_module_name,
+               :invalid_lift_callback,
+               :invalid_module_name,
+               :invalid_behaviour,
+               :invalid_lift_declaration,
+               :invalid_lift_import,
+               :invalid_lift_module_ast,
+               :lifted_module_dependency_cycle,
+               :duplicate_lifted_module,
+               :invalid_generated_syntax,
+               :unknown_syntax_family,
+               :duplicate_syntax_family,
+               :duplicate_syntax_family_field,
+               :syntax_family_cycle,
+               :primitive_missing_builtin,
+               :unknown_primitive_tag,
+               :primitive_floor_mismatch,
+               :unsupported_declaration,
+               :invalid_syntax_node,
+               :invalid_syntax_leaf,
+               :invalid_syntax_failure,
+               :unsupported_syntax_core,
+               :raw_syntax_in_expansion,
+               :quoted_syntax_in_expansion,
+               :malformed_expansion_syntax,
+               :malformed_expansion_attribute,
+               :malformed_expansion_map,
+               :malformed_expansion_literal,
+               :malformed_reflected_syntax,
+               :malformed_reflected_attribute,
+               :malformed_reflected_literal,
+               :malformed_reflected_map,
+               :invalid_syntax_attrs,
+               :unknown_reducer_constructor,
+               :incomplete_reducer,
+               :unsupported_hole_arity
+             ],
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
   def from_error({kind, first, second}, opts)
@@ -1750,34 +1751,64 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:expected_literal_capture, shape, line, column}, opts),
-    do:
-      from_error(
-        %SyntaxProblem{
-          kind: :macro_literal_capture,
-          expected: shape,
-          observed: :non_literal,
-          at: Keyword.get(opts, :span),
-          context: %{line: line, column: column, code: "E094"}
-        },
-        opts
-      )
+  def from_error({:expected_literal_capture, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+    article = article_for_kind(details.shape)
 
-  def from_error({:unknown_syntax_family_field, family, field, line, column}, opts),
-    do:
-      macro_validation_failure(
-        :unknown_syntax_family_field,
-        %{family: family, field: field, line: line, column: column},
-        opts
-      )
+    Diagnostic.new(
+      code: "E094",
+      key: :macro_literal_capture,
+      severity: :error,
+      title: "Macro field needs a literal",
+      body:
+        Doc.paragraph(
+          "This syntax-family field accepts #{article} `#{details.shape}` literal, not an expression of another shape."
+        ),
+      primary: pickup_label(span, :primary, "this is not #{article} `#{details.shape}` literal"),
+      suggestions: [
+        %Suggestion{
+          message: "Replace this value with #{article} `#{details.shape}` literal",
+          applicability: :manual
+        }
+      ],
+      payload: details
+    )
+  end
 
-  def from_error({:missing_syntax_family_field, family, field, line, column}, opts),
-    do:
-      macro_validation_failure(
-        :missing_syntax_family_field,
-        %{family: family, field: field, line: line, column: column},
-        opts
-      )
+  def from_error({:unknown_syntax_family_field, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :unknown_syntax_family_field,
+      severity: :error,
+      title: "Unknown syntax-family field",
+      body: Doc.paragraph("`#{details.field}` is not a field of the `#{details.family}` syntax family."),
+      primary: pickup_label(span, :primary, "this field is not declared by the family"),
+      suggestions: syntax_family_field_suggestions(details, span),
+      payload: details
+    )
+  end
+
+  def from_error({:missing_syntax_family_field, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :missing_syntax_family_field,
+      severity: :error,
+      title: "Syntax-family field is missing",
+      body: Doc.paragraph("The `#{details.family}` syntax family requires a `#{details.field}` section here."),
+      primary: pickup_label(span, :primary, "add `#{details.field}` here"),
+      suggestions: [
+        %Suggestion{
+          message: "Add a `#{details.field} ...` section to this family body",
+          applicability: :manual
+        }
+      ],
+      payload: details
+    )
+  end
 
   def from_error({:unknown_macro_obligation_capture, capture, line, column}, opts),
     do:
@@ -1857,8 +1888,29 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unit_type_reserved, name, line, column}, opts),
     do: macro_validation_failure(:unit_type_reserved, %{name: name, line: line, column: column}, opts)
 
-  def from_error({:duplicate_syntax_family_field, field, line, column}, opts),
-    do: macro_validation_failure(:duplicate_syntax_family_field, %{field: field, line: line, column: column}, opts)
+  def from_error({:duplicate_syntax_family_field, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    secondary =
+      case pickup_label(Map.get(details, :first_span), :secondary, "the field was first supplied here") do
+        nil -> []
+        label -> [label]
+      end
+
+    Diagnostic.new(
+      code: "E092",
+      key: :duplicate_syntax_family_field,
+      severity: :error,
+      title: "Syntax-family field is duplicated",
+      body: Doc.paragraph("The `#{details.field}` field may be supplied only once in this family body."),
+      primary: pickup_label(span, :primary, "this second `#{details.field}` field is redundant"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{message: "Keep one `#{details.field}` section", applicability: :manual}
+      ],
+      payload: details
+    )
+  end
 
   def from_error({:non_associative, details}, opts) when is_map(details),
     do:
@@ -3573,6 +3625,47 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp grade_suggestions(_details, _span), do: []
+
+  defp syntax_family_field_suggestions(%{field: field, valid_fields: fields}, %Span{} = span)
+       when is_list(fields) do
+    spelling = to_string(field)
+
+    ranked =
+      fields
+      |> Enum.map(&{to_string(&1), Suggest.distance(spelling, to_string(&1))})
+      |> Enum.sort_by(fn {candidate, distance} -> {distance, String.downcase(candidate), candidate} end)
+
+    case ranked do
+      [{candidate, distance}, {_other, next_distance} | _]
+      when distance <= 2 and distance < next_distance ->
+        [
+          %Suggestion{
+            message: "Replace it with `#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: candidate}]
+          }
+        ]
+
+      [{candidate, distance}] when distance <= 2 ->
+        [
+          %Suggestion{
+            message: "Replace it with `#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: candidate}]
+          }
+        ]
+
+      _ ->
+        [
+          %Suggestion{
+            message: "Use one of: #{Enum.map_join(fields, ", ", &"`#{&1}`")}",
+            applicability: :manual
+          }
+        ]
+    end
+  end
+
+  defp syntax_family_field_suggestions(_details, _span), do: []
 
   defp candidate_suggestions([], _spelling, _opts), do: []
 
