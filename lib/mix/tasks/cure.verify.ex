@@ -130,13 +130,22 @@ defmodule Mix.Tasks.Cure.Verify do
 
       {:error, :E067} ->
         Mix.shell().error(
-          "  #{label}: proof schema incompatible (E067) -- update Cure or ask the publisher to re-publish"
+          render_diagnostic(
+            Cure.Diagnostic.Operational.proof_schema_incompatible(
+              "#{label}: update Cure or ask the publisher to re-publish"
+            )
+          )
         )
 
         exit({:shutdown, 1})
 
       {:error, :corrupt} ->
-        Mix.shell().error("  #{label}: proof file is corrupt or truncated")
+        Mix.shell().error(
+          render_diagnostic(
+            Cure.Diagnostic.Operational.proof_verification_failed("#{label}: proof file is corrupt or truncated")
+          )
+        )
+
         exit({:shutdown, 1})
     end
   end
@@ -149,7 +158,11 @@ defmodule Mix.Tasks.Cure.Verify do
         Mix.shell().info("  #{label}: all #{count} certificate(s) verified")
 
       {:error, failures} ->
-        Mix.shell().error("  #{label}: #{length(failures)} certificate(s) failed (E066):")
+        Mix.shell().error(
+          render_diagnostic(
+            Cure.Diagnostic.Operational.proof_verification_failed("#{label}: #{length(failures)} certificate(s) failed")
+          )
+        )
 
         Enum.each(failures, fn {mod, stmt, reason} ->
           Mix.shell().error(
