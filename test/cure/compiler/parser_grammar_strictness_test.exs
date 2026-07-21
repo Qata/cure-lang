@@ -254,6 +254,48 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
            }
   end
 
+  test "a named function without a parameter list points before the return arrow" do
+    source = "fn run -> Int = 1\n"
+    {:ok, tokens} = Lexer.tokenize(source, file: "params.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:function_parameters_unparenthesized, details} = error
+    assert details.function == "run"
+    assert details.observed == "->"
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "params.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- FUNCTION PARAMETER LIST IS MISSING [E094] ----------------------- params.cure
+
+             The function `run` needs a parenthesized parameter list after its name. Write
+             `()` when it takes no parameters.
+
+             at params.cure:1:8
+             1 | fn run -> Int = 1
+               |    --- ^^ this function name needs a parameter list after it; the parameter list belongs before this token
+
+             Hint: Insert `()` after the function name
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "()", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 7
+    assert insertion.end_byte == 7
+
+    assert [%{"newText" => "()", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 7},
+             "end" => %{"line" => 0, "character" => 7}
+           }
+  end
+
   describe "associative operators still chain" do
     test "`a + b + c` left-associates" do
       assert {:binary_op, _, [{:binary_op, _, [_a, _b]}, _c]} = parse!("a + b + c")

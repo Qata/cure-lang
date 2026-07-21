@@ -6661,10 +6661,10 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    # Parse parameter list
-    state = expect(state, :lparen)
-    {params, state} = parse_typed_params(state)
-    state = expect(state, :rparen)
+    # Parse parameter list. Keep ownership here so a missing `(` does not let
+    # the generic parameter parser consume `->` or `=` as a parameter name and
+    # blame a later token for the declaration's real mistake.
+    {params, state} = parse_function_params(state, name, name_token)
 
     # Optional return type: -> Type
     {return_type, state} =
@@ -6787,6 +6787,35 @@ defmodule Cure.Compiler.Parser do
 
         ast = {:function_def, meta, []}
         {ast, state}
+    end
+  end
+
+  defp parse_function_params(state, name, name_token) do
+    case expect_token(state, :lparen) do
+      {:ok, _open, state} ->
+        {params, state} = parse_typed_params(state)
+        {state, _close} = expect_token_or_nil(state, :rparen)
+        {params, state}
+
+      {:error, state} ->
+        # Replace the generic error emitted by expect_token/2 with a declaration-
+        # specific problem while retaining the observed token's exact range.
+        [_generic | rest] = state.errors
+        observed = peek(state)
+
+        error =
+          {:function_parameters_unparenthesized,
+           %{
+             function: name,
+             name_span: name_token.span,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: observed.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        {[], %{state | errors: [error | rest]}}
     end
   end
 

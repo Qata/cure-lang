@@ -2452,6 +2452,20 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:function_parameters_unparenthesized, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :function_parameters_unparenthesized,
+        expected: :lparen,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        previous: Map.get(details, :name_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:lambda_block_unterminated, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -4881,6 +4895,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_malformed}), do: "Edition pragma is malformed"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_unknown}), do: "Edition is unknown"
   defp syntax_problem_title(%SyntaxProblem{kind: :missing_function_body}), do: "Function body is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :function_parameters_unparenthesized}),
+    do: "Function parameter list is missing"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :bare_brace_expression}), do: "Brace cannot start an expression"
   defp syntax_problem_title(%SyntaxProblem{kind: :unmatched_closer}), do: "Closing delimiter has no opener"
   defp syntax_problem_title(%SyntaxProblem{kind: :mismatched_closer}), do: "Closing delimiter does not match"
@@ -4960,6 +4978,13 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :missing_function_body}),
     do: "This function declaration ends after `=`, but every function needs a body expression."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :function_parameters_unparenthesized,
+         context: %{function: function}
+       }),
+       do:
+         "The function `#{function}` needs a parenthesized parameter list after its name. Write `()` when it takes no parameters."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :bare_brace_expression}),
     do:
       "A bare '{' does not begin a Cure expression. Write `Type{...}` for a record, `\#{...}` for a map, or use indentation for a block."
@@ -4995,6 +5020,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_expected_doc(%SyntaxProblem{expected: nil, alternatives: []}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :macro_use_mismatch}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :mismatched_closer}), do: Doc.empty()
+  defp syntax_expected_doc(%SyntaxProblem{kind: :function_parameters_unparenthesized}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{expected: :explain_point}), do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{} = problem) do
@@ -5053,6 +5079,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unrecognized_pattern}), do: "this pattern form is not supported"
   defp syntax_problem_label(%SyntaxProblem{kind: :missing_function_body}), do: "write the function body after this `=`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :function_parameters_unparenthesized}),
+    do: "the parameter list belongs before this token"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :bare_brace_expression}),
     do: "choose record, map, or block syntax here"
@@ -5129,6 +5158,13 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_secondary_labels(%SyntaxProblem{opener: %Span{} = opener}, primary_span) when opener != primary_span,
     do: [%Label{span: opener, style: :secondary, message: "the construct starts here"}]
 
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :function_parameters_unparenthesized, previous: %Span{} = name},
+         primary_span
+       )
+       when name != primary_span,
+       do: [%Label{span: name, style: :secondary, message: "this function name needs a parameter list after it"}]
+
   defp syntax_secondary_labels(%SyntaxProblem{kind: kind, previous: %Span{} = previous}, primary_span)
        when kind in [:non_associative, :ambiguous_precedence] and previous != primary_span,
        do: [%Label{span: previous, style: :secondary, message: "the conflicting operator is here"}]
@@ -5152,6 +5188,22 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Replace it with `#{expected}`",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: to_string(expected)}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :function_parameters_unparenthesized, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type in [:arrow, :assign, :newline, :eof] do
+    insertion = %{span | end_byte: span.start_byte, end_line: span.start_line, end_column: span.start_column}
+
+    [
+      %Suggestion{
+        message: "Insert `()` after the function name",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: insertion, replacement: "()"}]
       }
     ]
   end
