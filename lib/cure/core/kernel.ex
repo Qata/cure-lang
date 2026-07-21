@@ -328,8 +328,32 @@ defmodule Cure.Core.Kernel do
     end
   end
 
+  @doc "Check while retaining the first failing case branch for diagnostics."
+  @spec check_with_branch_details(Context.t(), Cure.Core.Term.t(), Cure.Core.Value.t()) ::
+          :ok | {:error, term()}
+  def check_with_branch_details(ctx, term, expected) do
+    key = {__MODULE__, :branch_details}
+    previous = Process.get(key)
+    Process.put(key, :active)
+
+    try do
+      result = check(ctx, term, expected)
+
+      case {result, Process.get(key)} do
+        {{:error, :branch_type}, details} when is_map(details) ->
+          {:error, {:branch_type, details}}
+
+        _ ->
+          result
+      end
+    after
+      if is_nil(previous), do: Process.delete(key), else: Process.put(key, previous)
+    end
+  end
+
   @doc "Check `term` against the expected type value in `ctx`."
   @spec check(Context.t(), Cure.Core.Term.t(), Cure.Core.Value.t()) :: :ok | {:error, term()}
+
   # Bidirectional rule: a lambda is checked against a Π, propagating the expected
   # domain into the body (more robust than infer when the body is not standalone).
   # A λ checks against a Π of the SAME grade. Grades are part of type identity
@@ -1171,8 +1195,24 @@ defmodule Cure.Core.Kernel do
                     |> specialize_branch_value(ctx_branch, subst)
 
                   case check(ctx_branch, body, expected) do
-                    :ok -> {:cont, :ok}
-                    {:error, _} -> {:halt, {:error, :branch_type}}
+                    :ok ->
+                      {:cont, :ok}
+
+                    {:error, _} = error ->
+                      if Process.get({__MODULE__, :branch_details}) == :active do
+                        actual =
+                          case infer(ctx_branch, body) do
+                            {:ok, value} -> value
+                            _ -> nil
+                          end
+
+                        Process.put(
+                          {__MODULE__, :branch_details},
+                          %{constructor: cname, actual: actual, expected: expected, reason: error}
+                        )
+                      end
+
+                      {:halt, {:error, :branch_type}}
                   end
               end
           end

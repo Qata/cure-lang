@@ -689,7 +689,8 @@ defmodule Cure.Elab.Declarations do
              body_expr,
              sig.name
            ),
-         :ok <- attach_source_context(Kernel.check(ctx, body_term, return_value), body_expr, sig.name) do
+         :ok <-
+           attach_source_context(Kernel.check_with_branch_details(ctx, body_term, return_value), body_expr, sig.name) do
       {:ok, body_term, sig.return_core, return_value}
     end
   end
@@ -724,8 +725,11 @@ defmodule Cure.Elab.Declarations do
 
   defp branch_patterns({:pattern_match, _meta, [_scrutinee | arms]}) do
     Enum.map(arms, fn
-      {:match_arm, arm_meta, _body} -> pattern_label(Keyword.get(arm_meta, :pattern))
-      _ -> "unknown branch"
+      {:match_arm, arm_meta, _body} ->
+        %{name: pattern_label(Keyword.get(arm_meta, :pattern)), span: arm_span(arm_meta)}
+
+      _ ->
+        %{name: "unknown branch", span: nil}
     end)
   end
 
@@ -738,6 +742,13 @@ defmodule Cure.Elab.Declarations do
   defp pattern_label({:wildcard, _meta}), do: "_"
   defp pattern_label({:literal, _meta, value}), do: inspect(value)
   defp pattern_label(_pattern), do: "pattern"
+
+  defp arm_span(meta) when is_list(meta) do
+    case Keyword.get(meta, :source_info) do
+      %Cure.MetaAST.SourceInfo{whole: span} -> span
+      _ -> nil
+    end
+  end
 
   defp expression_extent({:function_call, meta, arguments}) when is_list(meta) do
     line = Keyword.get(meta, :line)
@@ -2078,7 +2089,8 @@ defmodule Cure.Elab.Declarations do
     atom = String.to_atom(vname)
 
     cond do
-      type == nil -> acc
+      type == nil ->
+        acc
 
       MapSet.member?(seen, vname) ->
         # A constructor payload type can initially be open because an omitted
@@ -2100,12 +2112,23 @@ defmodule Cure.Elab.Declarations do
 
         {ordered2, seen}
 
-      vname == "Type" -> acc
-      atom == fam -> acc
-      Inductive.get_ctor(env, atom) -> acc
-      Inductive.family?(env, atom) -> acc
-      Env.get_def(env, atom) -> acc
-      true -> {ordered ++ [{vname, type}], MapSet.put(seen, vname)}
+      vname == "Type" ->
+        acc
+
+      atom == fam ->
+        acc
+
+      Inductive.get_ctor(env, atom) ->
+        acc
+
+      Inductive.family?(env, atom) ->
+        acc
+
+      Env.get_def(env, atom) ->
+        acc
+
+      true ->
+        {ordered ++ [{vname, type}], MapSet.put(seen, vname)}
     end
   end
 

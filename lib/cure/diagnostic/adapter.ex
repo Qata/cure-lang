@@ -354,6 +354,10 @@ defmodule Cure.Diagnostic.Adapter do
     branch_type_failure(context, opts)
   end
 
+  def from_error({:source_context, {:branch_type, details}, context}, opts) when is_map(context) do
+    branch_type_failure(Map.put(context, :branch_details, details), opts)
+  end
+
   def from_error({:source_context, {:reachable_impossible, branch}, context}, opts) when is_map(context) do
     coverage_problem(:reachable_impossible, branch, context, opts)
   end
@@ -2191,19 +2195,48 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp branch_type_failure(context, opts) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-    branches = Map.get(context, :branch_patterns, [])
+    branches = Keyword.get(opts, :branch_patterns, Map.get(context, :branch_patterns, []))
+    branch_names = Enum.map(branches, &branch_name/1)
     checking = Map.get(context, :checking)
     subject = if checking, do: " in `#{checking}`", else: ""
+    details = Map.get(context, :branch_details, %{})
+    failing = Map.get(details, :constructor)
 
     detail =
-      case branches do
-        [first, second | rest] ->
-          names = Enum.map_join([first, second | rest], ", ", &"`#{&1}`")
-
-          "The branches #{names} of this match are checked against the declared result, but at least one branch does not produce that result."
+      case {failing, Map.get(details, :actual), Map.get(details, :expected)} do
+        {constructor, actual, expected} when not is_nil(constructor) and not is_nil(actual) and not is_nil(expected) ->
+          "Possible outlier: the `#{name_to_string(constructor)}` branch has type `#{surface_type(actual)}`, but the declared result requires `#{surface_type(expected)}`."
 
         _ ->
-          "Every branch of this match is checked against the declared result type."
+          case branch_names do
+            [first, second | rest] ->
+              names = Enum.map_join([first, second | rest], ", ", &"`#{&1}`")
+
+              "The branches #{names} of this match are checked against the declared result, but at least one branch does not produce that result."
+
+            _ ->
+              "Every branch of this match is checked against the declared result type."
+          end
+      end
+
+    labels =
+      Enum.map(branches, fn branch ->
+        span = branch_span(branch)
+        name = branch_name(branch)
+
+        message =
+          if name == to_string(failing),
+            do: "possible outlier: this branch has the incompatible type",
+            else: "compare this branch with the declared result"
+
+        %Label{span: span, style: :primary, message: message}
+      end)
+      |> Enum.reject(&is_nil(&1.span))
+
+    {primary, secondary} =
+      case labels do
+        [first | rest] -> {first, rest}
+        [] -> {primary_label(opts, "make these branches return the same type"), []}
       end
 
     Diagnostic.new(
@@ -2216,16 +2249,26 @@ defmodule Cure.Diagnostic.Adapter do
           Doc.paragraph(detail),
           Doc.paragraph("Check each branch expression against the result type written after the function name.")
         ]),
-      primary: primary_label(opts, "make these branches return the same type"),
+      primary: primary,
+      secondary: secondary,
       payload: %{
         kind: :branch_type,
-        branches: branches,
+        branches: branch_names,
+        failing_branch: failing,
+        actual_surface: if(details[:actual], do: surface_type(details[:actual])),
+        expected_surface: if(details[:expected], do: surface_type(details[:expected])),
         checking: checking,
         expression_category: Map.get(context, :expression_category),
         expectation_origin: Map.get(context, :expectation_origin)
       }
     )
   end
+
+  defp branch_name(%{name: name}), do: to_string(name)
+  defp branch_name(name), do: to_string(name)
+
+  defp branch_span(%{span: %Cure.Diagnostic.Span{} = span}), do: span
+  defp branch_span(_branch), do: nil
 
   defp contextual_type_failure(kind, details, opts) do
     {title, message, label} =

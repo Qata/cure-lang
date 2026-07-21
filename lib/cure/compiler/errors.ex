@@ -423,6 +423,12 @@ defmodule Cure.Compiler.Errors do
         :error -> []
       end
 
+    opts =
+      case branch_patterns(error) do
+        [] -> opts
+        patterns -> Keyword.put(opts, :branch_patterns, remap_branch_patterns(patterns, registry, source_id))
+      end
+
     diagnostic =
       if operational_error?(error) do
         Cure.Diagnostic.Operational.from_error(error)
@@ -431,6 +437,24 @@ defmodule Cure.Compiler.Errors do
       end
 
     {diagnostic, registry}
+  end
+
+  defp branch_patterns({:source_context, _reason, context}) when is_map(context),
+    do: Map.get(context, :branch_patterns, [])
+
+  defp branch_patterns(_error), do: []
+
+  defp remap_branch_patterns(patterns, registry, source_id) do
+    Enum.map(patterns, fn
+      %{span: %Cure.Diagnostic.Span{} = span} = pattern ->
+        case Cure.Diagnostic.SourceRegistry.span(registry, source_id, span.start_byte, span.end_byte) do
+          {:ok, remapped} -> %{pattern | span: remapped}
+          {:error, _} -> pattern
+        end
+
+      pattern ->
+        pattern
+    end)
   end
 
   defp operational_error?({:file_read_error, _, _}), do: true
