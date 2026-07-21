@@ -44,4 +44,22 @@ defmodule Mix.Tasks.Cure.CompileTest do
 
     assert apply(String.to_atom("Cure.#{consumer}"), :go, []) == 41
   end
+
+  test "compile diagnostics render through the shared sink", %{dir: dir} do
+    path = Path.join(dir, "bad.cure")
+    out = Path.join(dir, "ebin")
+    File.write!(path, "fn run() -> Int = missing_name\n")
+    Mix.shell(Mix.Shell.IO)
+    Mix.Task.reenable("cure.compile")
+
+    output =
+      ExUnit.CaptureIO.capture_io(:stderr, fn ->
+        assert :ok = Mix.Task.run("cure.compile", [path, "--output-dir", out])
+      end)
+
+    assert output =~ "[E091]"
+    assert output =~ "missing_name"
+    assert output =~ "^^^^^^^^^^^^"
+    refute output =~ "{:unknown_global"
+  end
 end
