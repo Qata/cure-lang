@@ -1809,7 +1809,10 @@ defmodule Cure.Diagnostic.Registry do
   # advertise an unreachable `:kernel_conversion` producer branch.
   defp producers("E093"), do: [:elaboration, :kernel]
   defp producers("E094"), do: [:lexer, :parser]
-  defp producers("E101"), do: [:beam_writer, :operational, :kernel]
+  # The kernel is pure and returns domain errors; it does not construct internal
+  # compiler diagnostics. E101 is owned by the BEAM boundary and the host crash
+  # boundary, which are the two places that add stage/reason fingerprints.
+  defp producers("E101"), do: [:beam_writer, :operational]
   defp producers("E102"), do: [:elaboration]
   defp producers("E103"), do: [:kernel]
   defp producers("E104"), do: [:elaboration]
@@ -1856,8 +1859,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producer_fixtures("E101"),
     do: %{
       beam_writer: :internal_failure_beam_writer,
-      operational: :internal_failure_operational,
-      kernel: :internal_failure_kernel
+      operational: :internal_failure_operational
     }
 
   defp producer_fixtures("E105"),

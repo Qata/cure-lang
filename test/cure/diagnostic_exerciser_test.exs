@@ -262,7 +262,8 @@ defmodule Cure.DiagnosticExerciserTest do
       end
     end)
 
-    compiler_fixture_ids = [exercise_ambiguous_name_fixture() | compiler_fixture_ids]
+    compiler_fixture_ids =
+      [exercise_ambiguous_name_fixture(), exercise_kernel_type_mismatch_fixture() | compiler_fixture_ids]
 
     assert :ok =
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
@@ -282,6 +283,11 @@ defmodule Cure.DiagnosticExerciserTest do
     assert :ok =
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
                only_producers: [:totality_checker]
+             )
+
+    assert :ok =
+             Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
+               only_producers: [:kernel]
              )
 
     Enum.each(boundary_cases, fn {label, expected_code, reason} ->
@@ -454,5 +460,45 @@ defmodule Cure.DiagnosticExerciserTest do
 
       File.rm_rf!(tmp)
     end
+  end
+
+  defp exercise_kernel_type_mismatch_fixture do
+    source = "fn bad() -> Bool = 1\n"
+    file = "kernel type mismatch.cure"
+    ctx = Cure.Core.Context.empty(Cure.Core.Builtins.seed(Cure.Core.Env.empty()))
+
+    assert {:error, {:conversion_failure, _actual, _expected} = reason} =
+             Cure.Core.Kernel.check(ctx, {:int_lit, 1}, {:vdata, :Bool, []})
+
+    span = %Cure.Diagnostic.Span{
+      source_id: file,
+      path: file,
+      start_byte: 19,
+      end_byte: 20,
+      start_line: 1,
+      start_column: 20,
+      end_line: 1,
+      end_column: 21
+    }
+
+    contextual =
+      {:source_context, reason,
+       %{
+         span: span,
+         checking: :bad,
+         expectation_origin: :annotation,
+         expression_category: :literal
+       }}
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(contextual, file, source)
+    assert diagnostic.code == "E093"
+    assert diagnostic.primary.span == span
+
+    plain = Renderer.plain(diagnostic, registry)
+    assert plain =~ "1 | fn bad() -> Bool = 1"
+    assert plain =~ "^ this expression has the wrong type"
+    assert_no_raw_diagnostic_leaks(plain, "kernel type mismatch")
+
+    :type_mismatch_kernel
   end
 end

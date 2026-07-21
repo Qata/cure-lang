@@ -41,6 +41,11 @@ defmodule Cure.Compiler.CodegenFallbackDiagnosticTest do
     assert rendered =~ "reason: #{diagnostic.payload.reason}."
     assert rendered =~ "Diagnostic fingerprint: `#{diagnostic.payload.fingerprint}`."
     refute rendered =~ "The compiler could not produce a valid BEAM artifact for this source.\n\nNote:"
+
+    assert :ok =
+             Cure.Diagnostic.Registry.validate_exercised_producer_fixtures([:internal_failure_beam_writer],
+               only_producers: [:beam_writer]
+             )
   end
 
   test "fallback fingerprints are stable for the same failure and differ with stage" do
