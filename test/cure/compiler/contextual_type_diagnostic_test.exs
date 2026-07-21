@@ -357,6 +357,35 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this record field has the wrong type"
   end
 
+  test "a typed pattern mismatch points at the authored annotation" do
+    source = "n: Bool -> 1\n"
+    annotation = raw_span(source, "Bool", 1, 4)
+    type_ast = {:variable, [source_info: %Cure.MetaAST.SourceInfo{whole: annotation}], "Bool"}
+
+    reason =
+      {:source_context, {:typed_pattern_type_mismatch, type_ast},
+       %{
+         line: 1,
+         column: 4,
+         length: 4,
+         span: annotation,
+         expectation_span: annotation,
+         checking: :pattern,
+         expression_category: :pattern,
+         expectation_origin: :pattern,
+         argument_index: 0
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "pattern.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Pattern annotation does not match"
+    assert diagnostic.primary.span.start_column == 4
+    assert rendered =~ "This pattern's annotation is incompatible"
+    assert rendered =~ "1 | n: Bool -> 1"
+    assert rendered =~ "change the pattern or its type annotation"
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 

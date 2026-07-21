@@ -7561,12 +7561,54 @@ defmodule Cure.Elab.Elaborator do
                  ) do
             {:cont, :ok}
           else
-            false -> {:halt, {:error, {:typed_pattern_type_mismatch, type_ast}}}
-            nil -> {:halt, {:error, {:typed_pattern_type_mismatch, type_ast}}}
-            {:error, reason} -> {:halt, {:error, {:typed_pattern_type_error, reason}}}
+            false ->
+              {:halt,
+               typed_pattern_annotation_error(
+                 {:typed_pattern_type_mismatch, type_ast},
+                 type_ast,
+                 position
+               )}
+
+            nil ->
+              {:halt,
+               typed_pattern_annotation_error(
+                 {:typed_pattern_type_mismatch, type_ast},
+                 type_ast,
+                 position
+               )}
+
+            {:error, reason} ->
+              {:halt,
+               typed_pattern_annotation_error(
+                 {:typed_pattern_type_error, reason},
+                 type_ast,
+                 position
+               )}
           end
       end
     end)
+  end
+
+  defp typed_pattern_annotation_error(reason, type_ast, position) do
+    case surface_expression_span(type_ast) do
+      %Cure.Diagnostic.Span{} = span ->
+        {:error,
+         {:source_context, reason,
+          %{
+            line: span.start_line,
+            column: span.start_column,
+            length: max(1, span.end_byte - span.start_byte),
+            span: span,
+            expectation_span: span,
+            checking: :pattern,
+            expression_category: :pattern,
+            expectation_origin: :pattern,
+            argument_index: position
+          }}}
+
+      _ ->
+        {:error, reason}
+    end
   end
 
   defp cname_from_pattern({:function_call, meta, _args}), do: Keyword.get(meta, :name)
