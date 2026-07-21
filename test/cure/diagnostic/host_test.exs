@@ -93,6 +93,23 @@ defmodule Cure.Diagnostic.HostTest do
     assert Cure.Diagnostic.Renderer.plain(diagnostic, registry) =~ "2 | line two"
   end
 
+  test "Host attaches source carets to line-based compiler warnings" do
+    source = "line one\nline two\nline three\n"
+
+    {diagnostic, registry} =
+      Host.to_diagnostic(
+        {:compiler_warning, %{file: "demo.cure", line: 3, message: "check this"}},
+        "demo.cure",
+        source
+      )
+
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.message == "warning applies here"
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry)
+    assert rendered =~ "3 | line three"
+    assert rendered =~ "warning applies here"
+  end
+
   test "renders macro syntax failures as contextual syntax diagnostics" do
     source = "fn run() -> Int = say nope\n"
 

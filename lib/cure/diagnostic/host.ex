@@ -96,7 +96,33 @@ defmodule Cure.Diagnostic.Host do
     end
   end
 
+  defp remap_operational_span(
+         %Cure.Diagnostic{primary: nil, payload: %{line: line} = payload} = diagnostic,
+         registry,
+         source_id
+       )
+       when is_integer(line) and line > 0 do
+    column = Map.get(payload, :column, 1)
+
+    case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, line, column, 0) do
+      {:ok, span} ->
+        label = %Cure.Diagnostic.Label{
+          span: span,
+          style: :primary,
+          message: operational_location_message(payload)
+        }
+
+        %{diagnostic | primary: label}
+
+      {:error, _} ->
+        diagnostic
+    end
+  end
+
   defp remap_operational_span(diagnostic, _registry, _source_id), do: diagnostic
+
+  defp operational_location_message(%{rule: rule}), do: "rule #{rule} applies here"
+  defp operational_location_message(_payload), do: "warning applies here"
 
   defp operational_reason?({:file_read_error, _, _}), do: true
   defp operational_reason?({:file_write_error, _, _}), do: true

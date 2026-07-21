@@ -768,6 +768,7 @@ defmodule Cure.DiagnosticTest do
 
     assert warning.severity == :warning
     assert warning.code == "W001"
+    assert warning.primary == nil
     assert Cure.Diagnostic.Renderer.plain(warning) =~ "W001"
     assert Cure.Diagnostic.Renderer.plain(warning) =~ "use the modern form"
   end
