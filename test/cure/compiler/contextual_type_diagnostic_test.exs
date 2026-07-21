@@ -244,6 +244,63 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "or ordering rules"
   end
 
+  test "constructor calls report missing arguments at the authored call" do
+    source = """
+    mod ConstructorArity
+      type Maybe = None | Some(Int)
+      fn bad() -> Maybe = Some()
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "constructor_arity.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "constructor_arity.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E003"
+    assert diagnostic.title == "Constructor arity mismatch"
+    assert diagnostic.payload.constructor == "Some"
+    assert diagnostic.payload.expected == 1
+    assert diagnostic.payload.actual == 0
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.message == "add 1 argument to this constructor call"
+    assert rendered =~ "3 |   fn bad() -> Maybe = Some()"
+    assert rendered =~ "requires 1 argument, but this call supplies 0 arguments"
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"]["start"]["line"] == 2
+    assert lsp["message"] =~ "requires 1 argument"
+  end
+
+  test "constructor calls report excess arguments and a removal hint" do
+    source = """
+    mod ConstructorArity
+      type Maybe = None | Some(Int)
+      fn bad() -> Maybe = Some(1, 2)
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "constructor_arity_extra.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "constructor_arity_extra.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.payload.expected == 1
+    assert diagnostic.payload.actual == 2
+    assert diagnostic.primary.message == "remove 1 argument from this constructor call"
+    assert rendered =~ "3 |   fn bad() -> Maybe = Some(1, 2)"
+    assert rendered =~ "requires 1 argument, but this call supplies"
+    assert rendered =~ "2 arguments"
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 

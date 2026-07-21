@@ -1150,17 +1150,30 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:constructor_arity_mismatch, name}, opts) do
+  def from_error({:constructor_arity_mismatch, %{name: name} = details}, opts) do
+    expected = Map.get(details, :expected)
+    actual = Map.get(details, :actual)
+    display_name = Map.get(details, :display_name) || name_to_string(name)
+
     Diagnostic.new(
       code: "E003",
       key: :arity_mismatch,
       severity: :error,
       title: "Constructor arity mismatch",
-      body: Doc.paragraph("Constructor `#{name_to_string(name)}` was used with the wrong number of arguments."),
-      primary: primary_label(opts, "provide the arguments required by this constructor"),
-      payload: %{kind: :constructor, constructor: name_to_string(name)}
+      body:
+        Doc.paragraph(
+          "Constructor `#{display_name}` requires #{argument_count(expected)}, but this call supplies #{argument_count(actual)}."
+        ),
+      primary: primary_label(opts, constructor_arity_label(expected, actual)),
+      payload:
+        details
+        |> Map.put(:kind, :constructor)
+        |> Map.put(:constructor, display_name)
     )
   end
+
+  def from_error({:constructor_arity_mismatch, name}, opts),
+    do: from_error({:constructor_arity_mismatch, %{name: name}}, opts)
 
   def from_error({:tuple_arity_mismatch, direction, details}, opts) do
     Diagnostic.new(
@@ -1854,6 +1867,21 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{first: first, second: second}, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp argument_count(1), do: "1 argument"
+  defp argument_count(count) when is_integer(count), do: "#{count} arguments"
+  defp argument_count(_count), do: "a different number of arguments"
+
+  defp constructor_arity_label(expected, actual)
+       when is_integer(expected) and is_integer(actual) and actual < expected,
+       do: "add #{argument_count(expected - actual)} to this constructor call"
+
+  defp constructor_arity_label(expected, actual)
+       when is_integer(expected) and is_integer(actual) and actual > expected,
+       do: "remove #{argument_count(actual - expected)} from this constructor call"
+
+  defp constructor_arity_label(_expected, _actual),
+    do: "provide the arguments required by this constructor"
 
   # Generated OTP callbacks still represent authored family sections. Preserve
   # a real type relation at that boundary instead of presenting it as E092.

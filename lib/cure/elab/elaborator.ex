@@ -274,7 +274,8 @@ defmodule Cure.Elab.Elaborator do
 
       Inductive.get_ctor(env, resolved) ->
         result =
-          with {:ok, present} <- map_present_args(args, names, ctx, env) do
+          with :ok <- validate_constructor_arity(env, resolved, args, name),
+               {:ok, present} <- map_present_args(args, names, ctx, env) do
             elaborate_ctor_app(env, resolved, present, ctx)
           end
 
@@ -1789,7 +1790,8 @@ defmodule Cure.Elab.Elaborator do
         # The fallback is reached only when the inference path already errored, so a
         # working constructor is untouched; either way the kernel re-checks below.
         result =
-          with {:ok, present} <- map_present_args(args, names, ctx, env),
+          with :ok <- validate_constructor_arity(env, cres, args, name),
+               {:ok, present} <- map_present_args(args, names, ctx, env),
                {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
             {:ok, term}
           end
@@ -9006,7 +9008,7 @@ defmodule Cure.Elab.Elaborator do
       # before the graceful error above could fire). Positional arg count is the
       # number of EXPLICIT slots — an implicit `{k:T}` is solved, not passed.
       Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit)) != length(arg_asts) ->
-        {:error, {:constructor_arity_mismatch, cname}}
+        constructor_arity_error(ctor, cname, arg_asts)
 
       true ->
         # Fresh metas for the params ++ every argument (including erased index
@@ -9258,7 +9260,7 @@ defmodule Cure.Elab.Elaborator do
         {:error, {:bidirectional_erased_field, cname}}
 
       length(ctor.args) != length(arg_asts) ->
-        {:error, {:constructor_arity_mismatch, cname}}
+        constructor_arity_error(ctor, cname, arg_asts)
 
       true ->
         {mctx, param_metas} =
@@ -9272,6 +9274,32 @@ defmodule Cure.Elab.Elaborator do
           {:error, _} = err -> err
         end
     end
+  end
+
+  defp validate_constructor_arity(env, cname, args, display_name) do
+    case Inductive.get_ctor(env, cname) do
+      nil ->
+        :ok
+
+      ctor ->
+        expected = Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit))
+        actual = length(args)
+
+        if expected == actual,
+          do: :ok,
+          else: constructor_arity_error(ctor, cname, args, display_name)
+    end
+  end
+
+  defp constructor_arity_error(ctor, cname, args, display_name \\ nil) do
+    {:error,
+     {:constructor_arity_mismatch,
+      %{
+        name: cname,
+        display_name: display_name,
+        expected: Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit)),
+        actual: length(args)
+      }}}
   end
 
   # Elaborate each constructor argument, threading the (scratch) parameter
