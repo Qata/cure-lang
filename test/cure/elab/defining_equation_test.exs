@@ -2,7 +2,7 @@ defmodule Cure.Elab.DefiningEquationTest do
   use ExUnit.Case, async: false
 
   alias Cure.Core.{Env, Kernel, Validator}
-  alias Cure.Elab.Program
+  alias Cure.Elab.{Equation, Program}
 
   @source """
   mod EquationFixture
@@ -45,12 +45,14 @@ defmodule Cure.Elab.DefiningEquationTest do
            ]
 
     for equation <- equations do
+      metadata = Equation.source_metadata(equation)
+
       assert equation.owner == :"EquationFixture#identity"
-      assert equation.definition_span
-      assert equation.left_surface && equation.right_surface
+      assert metadata.definition_span
+      assert metadata.left_surface && metadata.right_surface
       assert equation.left_core && equation.right_core
       assert equation.visibility == :public
-      assert equation.provenance.kind == :generated_defining_equation
+      assert metadata.provenance.kind == :generated_defining_equation
       assert Env.certified?(env, equation.theorem)
       assert :ok = Kernel.check_def(env, equation.theorem)
 
@@ -60,9 +62,10 @@ defmodule Cure.Elab.DefiningEquationTest do
     end
 
     zero = Enum.find(equations, &(&1.pattern_key == "identity/Z"))
-    assert {:function_call, [name: "identity"], [{:variable, _, "Z"}]} = zero.left_surface
-    assert {:variable, _, "Z"} = zero.right_surface
-    assert zero.definition_span.start_line == 5
+    zero_metadata = Equation.source_metadata(zero)
+    assert {:function_call, [name: "identity"], [{:variable, _, "Z"}]} = zero_metadata.left_surface
+    assert {:variable, _, "Z"} = zero_metadata.right_surface
+    assert zero_metadata.definition_span.start_line == 5
   end
 
   test "friendly constructor members resolve without traversal ordinals" do
@@ -308,7 +311,7 @@ defmodule Cure.Elab.DefiningEquationTest do
     """
 
     assert {:error, {:defining_equation_unavailable, %Cure.Diagnostic.DefiningEquationProblem{} = problem}} =
-             Program.elaborate(source)
+             source |> Program.elaborate() |> Program.semantic_result()
 
     assert problem.kind == :unknown_equation
     assert problem.owner == "flip"

@@ -174,10 +174,16 @@ defmodule Cure.Elab.Program do
             end)
             |> MapSet.new()
 
-          {Keyword.get(meta, :name), methods}
+          defaults =
+            meta
+            |> Keyword.get(:defaults, %{})
+            |> Map.keys()
+            |> MapSet.new()
+
+          {Keyword.get(meta, :name), %{methods: methods, defaults: defaults}}
 
         _other ->
-          {nil, MapSet.new()}
+          {nil, %{methods: MapSet.new(), defaults: MapSet.new()}}
       end)
 
     declarations
@@ -194,17 +200,23 @@ defmodule Cure.Elab.Program do
   defp implementation_scope_details(meta, {:function_def, member_meta, _body}, interface_methods)
        when is_list(member_meta) do
     member = Keyword.get(member_meta, :name)
-    declared = Map.get(interface_methods, Keyword.get(meta, :interface), MapSet.new())
 
-    if MapSet.member?(declared, member) do
+    interface =
+      Map.get(interface_methods, Keyword.get(meta, :interface), %{methods: MapSet.new(), defaults: MapSet.new()})
+
+    if MapSet.member?(interface.methods, member) do
       misplaced_member_details(meta, member_meta)
     else
-      empty_implementation_details(meta)
+      empty_implementation_details(meta, interface)
     end
   end
 
-  defp implementation_scope_details(meta, _next_declaration, _interface_methods),
-    do: empty_implementation_details(meta)
+  defp implementation_scope_details(meta, _next_declaration, interface_methods) do
+    interface =
+      Map.get(interface_methods, Keyword.get(meta, :interface), %{methods: MapSet.new(), defaults: MapSet.new()})
+
+    empty_implementation_details(meta, interface)
+  end
 
   defp misplaced_member_details(meta, member_meta) do
     member_span = metadata_whole_span(member_meta)
@@ -221,13 +233,17 @@ defmodule Cure.Elab.Program do
     }
   end
 
-  defp empty_implementation_details(meta) do
-    %{
-      kind: :empty,
-      interface: Keyword.get(meta, :interface),
-      for: Keyword.get(meta, :for),
-      implementation_span: metadata_whole_span(meta)
-    }
+  defp empty_implementation_details(meta, interface) do
+    if MapSet.size(interface.methods) > 0 and MapSet.subset?(interface.methods, interface.defaults) do
+      nil
+    else
+      %{
+        kind: :empty,
+        interface: Keyword.get(meta, :interface),
+        for: Keyword.get(meta, :for),
+        implementation_span: metadata_whole_span(meta)
+      }
+    end
   end
 
   defp metadata_whole_span(meta) do

@@ -31,8 +31,11 @@ defmodule Cure.Compiler.Errors do
     body = [body, extras] |> Enum.reject(&(&1 == "")) |> Enum.join(" ") |> String.replace(~r/\s+/, " ")
 
     location =
-      case diagnostic.primary do
-        %Cure.Diagnostic.Label{span: %{start_line: line}} when is_integer(line) and line > 0 ->
+      case {diagnostic.primary, diagnostic.payload} do
+        {%Cure.Diagnostic.Label{span: %{start_line: line}}, _} when is_integer(line) and line > 0 ->
+          "#{file}:#{line}"
+
+        {_, %{line: line}} when is_integer(line) and line > 0 ->
           "#{file}:#{line}"
 
         _ ->
@@ -42,61 +45,7 @@ defmodule Cure.Compiler.Errors do
     "-- #{String.upcase(diagnostic.title)} [#{diagnostic.code}]\n--> #{location}\n#{body}"
   end
 
-  def format_error({:unknown_global, _name} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:unknown_global, _name, details} = error, file) when is_map(details) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:unknown_name, details} = error, file) when is_map(details) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:codegen_error, {:unknown_global, _name}} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:codegen_error, {:unknown_global, _name, details}} = error, file) when is_map(details) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:unknown_constructor, _name} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:lift_module_error, details} = error, file) when is_map(details) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:conversion_failure, _actual, _expected} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({kind, _, _} = error, file)
-      when kind in [:unbound_variable, :arity_mismatch, :ambiguous_name, :duplicate_module] do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:import_cycle, _} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:unresolved_import, _, _, _, _} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:extern_arity_mismatch, _, _, _} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  # -- Type Errors -------------------------------------------------------------
-
   def format_error(errors, file) when is_list(errors) do
-    # A bare list reaches this clause from `Cure.Types.Checker.check_module/2`,
-    # which returns `{:error, errors}` directly; joining with a blank line
-    # keeps multi-error output readable.
     Enum.map_join(errors, "\n\n", &format_error(&1, file))
   end
 
@@ -104,239 +53,28 @@ defmodule Cure.Compiler.Errors do
     format_error(errors, file)
   end
 
-  def format_error({:type_mismatch, message, meta}, file) do
-    {:type_mismatch, message, meta}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:unknown_erasure_class, name, class}, file) do
-    {:unknown_erasure_class, name, class}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:erases_on_non_opaque, name}, file) do
-    {:erases_on_non_opaque, name}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:unsupported_async, message, meta}, file) do
-    {:unsupported_async, message, meta}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:splice_outside_quote, tag, meta}, file) do
-    {:splice_outside_quote, tag, meta}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({kind, _problem} = error, file)
-      when kind in [
-             :proof_chain_syntax,
-             :proof_chain_mismatch,
-             :rewrite_failed,
-             :simplification_failed,
-             :induction_failed,
-             :defining_equation_unavailable
-           ] do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:extern_untyped_head, message, meta}, file) do
-    {:extern_untyped_head, message, meta}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:extern_has_body, message, meta}, file) do
-    {:extern_has_body, message, meta}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  # -- Parse Errors ------------------------------------------------------------
-
   def format_error({:parse_error, errors}, file) when is_list(errors) do
     format_error(errors, file)
   end
-
-  def format_error({:unexpected_token, _, _, _} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:parse_recovered, _, _, _} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:expected, _, :got, _, _, _} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:expected, _, :got, _, _, _, %Cure.Diagnostic.Span{}} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:expected_token, _, _, _, _, _} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:expected_token, _, _, _, _, _, %Cure.Diagnostic.Span{}} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:lambda_block_unterminated, _, _, _} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  # -- Lex Errors --------------------------------------------------------------
-
-  def format_error({:lex_error, _reason} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  # -- Codegen Errors ----------------------------------------------------------
-
-  def format_error({:codegen_error, {:computed_macro_error, _meta, _reason} = error}, file),
-    do: format_error(error, file)
-
-  def format_error({:codegen_error, reason}, file) do
-    {:codegen_error, reason}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:beam_lint_error, errors, warnings}, file) do
-    {:beam_lint_error, errors, warnings}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:beam_lint_error, errors}, file) do
-    {:beam_lint_error, errors}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:expected_module, _ast}, file) do
-    {:expected_module, nil}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:unsupported_container, type}, file) do
-    {:unsupported_container, type}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  # -- File Errors -------------------------------------------------------------
 
   def format_error({:file_read_error, path, reason}, _file) do
     Cure.Diagnostic.Operational.from_error({:file_read_error, path, reason})
     |> format_error(path)
   end
 
-  # -- DepGraph / Build-Order Errors -------------------------------------------
-
-  # -- Edition Errors ----------------------------------------------------------
-
-  def format_error({:edition_pragma_placement, line, col}, file) do
-    {:edition_pragma_placement, line, col}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:edition_pragma_malformed, line, col}, file) do
-    {:edition_pragma_malformed, line, col}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:edition_pragma_unknown, line, col}, file) do
-    {:edition_pragma_unknown, line, col}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:edition_error, {:unknown_edition, edition}}, file) do
-    {:edition_error, {:unknown_edition, edition}}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  # -- Macro error floor (SP1 §2) ----------------------------------------------
-
-  def format_error({:macro_use_mismatch, keyword, expected, got, line, col}, file) do
-    {:macro_use_mismatch, keyword, expected, got, line, col}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:malformed_hole, line, col}, file) do
-    {:malformed_hole, line, col}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:missing_diagnosis, points}, file) do
-    {:missing_diagnosis, points}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:rule_unpinned, keywords}, file) do
-    {:rule_unpinned, keywords}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:example_mismatch, mismatches}, file) do
-    {:example_mismatch, mismatches}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:example_type_mismatch, failures}, file) do
-    {:example_type_mismatch, failures}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:computed_example_error, failures}, file) do
-    {:computed_example_error, failures}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:computed_macro_error, meta, reason}, file) do
-    {:computed_macro_error, meta, reason}
-    |> Cure.Diagnostic.Adapter.from_error(span: macro_span(file, meta))
-    |> format_error(file)
-  end
-
-  def format_error({:expansion_ill_typed, details}, file) do
-    {:expansion_ill_typed, details}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  # -- Exhaustiveness guard ----------------------------------------------------
-
   def format_error(error, file) do
-    raise Cure.Diagnostic.UnhandledError, error: %{error: error, file: file}
+    error
+    |> structured_for_format()
+    |> format_error(file)
   end
 
-  defp macro_span(file, meta) do
-    line = Keyword.get(meta, :line, 1)
-    column = Keyword.get(meta, :col, Keyword.get(meta, :column, 1))
+  defp structured_for_format({:expected_module, _ast}),
+    do: Cure.Diagnostic.Adapter.from_error({:expected_module, nil})
 
-    %Cure.Diagnostic.Span{
-      source_id: file,
-      path: file,
-      start_byte: 0,
-      end_byte: 0,
-      start_line: max(line, 1),
-      end_line: max(line, 1),
-      start_column: max(column, 1),
-      end_column: max(column, 1)
-    }
-  end
+  defp structured_for_format({:codegen_error, {:computed_macro_error, _meta, _reason} = error}),
+    do: Cure.Diagnostic.Adapter.from_error(error)
+
+  defp structured_for_format(error), do: Cure.Diagnostic.Adapter.from_error(error)
 
   # -- "Did you mean?" Suggestions ---------------------------------------------
 
@@ -428,15 +166,13 @@ defmodule Cure.Compiler.Errors do
     registry =
       Cure.Diagnostic.SourceRegistry.new()
       |> Cure.Diagnostic.SourceRegistry.register(source_id, source, file)
+      |> register_embedded_sources(error)
 
     opts =
       case exact_error_span(error, source, source_id, registry) do
         {:ok, span} -> [span: span]
-        :error -> []
-        {:error, _reason} -> []
+        _ -> []
       end
-
-    opts = Keyword.put(opts, :source_file, file)
 
     opts =
       case branch_patterns(error) do
@@ -451,46 +187,121 @@ defmodule Cure.Compiler.Errors do
         Cure.Diagnostic.Adapter.from_error(error, opts)
       end
 
-    {remap_authored_diagnostic(diagnostic, registry, source_id), registry}
-  end
-
-  # Some internal elaboration entry points operate on an already-parsed AST and
-  # historically stamp nested context as `nofile`. At the public source boundary
-  # byte offsets are still authoritative, so project those labels and edits onto
-  # the caller's buffer. Do not remap spans owned by another real source id (for
-  # example a macro definition or generated file).
-  defp remap_authored_diagnostic(%Cure.Diagnostic{} = diagnostic, registry, source_id) do
-    %{
-      diagnostic
-      | primary: remap_authored_label(diagnostic.primary, registry, source_id),
-        secondary: Enum.map(diagnostic.secondary, &remap_authored_label(&1, registry, source_id)),
-        suggestions:
-          Enum.map(diagnostic.suggestions, fn suggestion ->
-            edits =
-              Enum.map(suggestion.edits, fn edit ->
-                %{edit | span: remap_authored_span(edit.span, registry, source_id)}
-              end)
-
-            %{suggestion | edits: edits}
-          end)
-    }
-  end
-
-  defp remap_authored_label(nil, _registry, _source_id), do: nil
-
-  defp remap_authored_label(%Cure.Diagnostic.Label{} = label, registry, source_id),
-    do: %{label | span: remap_authored_span(label.span, registry, source_id)}
-
-  defp remap_authored_span(%Cure.Diagnostic.Span{} = span, registry, source_id) do
-    if span.source_id in [nil, "nofile", source_id] do
-      case Cure.Diagnostic.SourceRegistry.span(registry, source_id, span.start_byte, span.end_byte) do
-        {:ok, remapped} -> remapped
-        {:error, _} -> span
+    diagnostic =
+      if operational_error?(error) do
+        remap_operational_span(diagnostic, registry, source_id)
+      else
+        diagnostic
       end
-    else
-      span
+
+    # `compile_string/2` intentionally uses `nofile` unless its caller supplies
+    # a file.  This presentation boundary does have the caller's source identity,
+    # so carry it through every user-visible range rather than leaving labels and
+    # edits attached to an unregistered source.
+    diagnostic = remap_diagnostic_spans(diagnostic, registry, source_id)
+
+    {diagnostic, registry}
+  end
+
+  defp register_embedded_sources(registry, error) do
+    error
+    |> embedded_sources()
+    |> Enum.reduce(registry, fn {source_id, source, path}, registry ->
+      Cure.Diagnostic.SourceRegistry.register(registry, source_id, source, path)
+    end)
+  end
+
+  defp embedded_sources(%{source: source, file: file}) when is_binary(source) and is_binary(file),
+    do: [{file, source, file}]
+
+  defp embedded_sources(%_{} = struct), do: struct |> Map.from_struct() |> embedded_sources()
+
+  defp embedded_sources(map) when is_map(map) do
+    map
+    |> Map.values()
+    |> Enum.flat_map(&embedded_sources/1)
+  end
+
+  defp embedded_sources(tuple) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> Enum.flat_map(&embedded_sources/1)
+
+  defp embedded_sources(list) when is_list(list), do: Enum.flat_map(list, &embedded_sources/1)
+  defp embedded_sources(_term), do: []
+
+  defp remap_diagnostic_spans(%Cure.Diagnostic{} = diagnostic, registry, source_id) do
+    remap_term_spans(diagnostic, registry, source_id)
+  end
+
+  defp remap_term_spans(%Cure.Diagnostic.Span{source_id: existing} = span, registry, source_id)
+       when existing in [nil, "nofile"] or existing == source_id do
+    case Cure.Diagnostic.SourceRegistry.span(registry, source_id, span.start_byte, span.end_byte) do
+      {:ok, remapped} -> remapped
+      {:error, _} -> span
     end
   end
+
+  defp remap_term_spans(%Cure.Diagnostic.Span{} = span, _registry, _source_id), do: span
+
+  defp remap_term_spans(term, registry, source_id) when is_list(term) do
+    Enum.map(term, &remap_term_spans(&1, registry, source_id))
+  end
+
+  defp remap_term_spans(term, registry, source_id) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.map(&remap_term_spans(&1, registry, source_id))
+    |> List.to_tuple()
+  end
+
+  defp remap_term_spans(term, registry, source_id) when is_map(term) do
+    term
+    |> Map.to_list()
+    |> Enum.reduce(term, fn {key, value}, remapped ->
+      Map.put(remapped, key, remap_term_spans(value, registry, source_id))
+    end)
+  end
+
+  defp remap_term_spans(term, _registry, _source_id), do: term
+
+  defp remap_operational_span(
+         %Cure.Diagnostic{primary: %Cure.Diagnostic.Label{span: %Cure.Diagnostic.Span{} = span} = label} =
+           diagnostic,
+         registry,
+         source_id
+       ) do
+    case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, span.start_line, span.start_column, 0) do
+      {:ok, remapped} -> %{diagnostic | primary: %{label | span: remapped}}
+      {:error, _} -> diagnostic
+    end
+  end
+
+  defp remap_operational_span(
+         %Cure.Diagnostic{primary: nil, payload: %{line: line} = payload} = diagnostic,
+         registry,
+         source_id
+       )
+       when is_integer(line) and line > 0 do
+    column = Map.get(payload, :column, 1)
+
+    case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, line, column, 0) do
+      {:ok, span} ->
+        label = %Cure.Diagnostic.Label{
+          span: span,
+          style: :primary,
+          message: operational_location_message(payload)
+        }
+
+        %{diagnostic | primary: label}
+
+      {:error, _} ->
+        diagnostic
+    end
+  end
+
+  defp remap_operational_span(diagnostic, _registry, _source_id), do: diagnostic
+
+  defp operational_location_message(%{rule: rule}), do: "rule #{rule} applies here"
+  defp operational_location_message(_payload), do: "warning applies here"
 
   defp branch_patterns({:source_context, _reason, context}) when is_map(context),
     do: Map.get(context, :branch_patterns, [])
@@ -564,7 +375,6 @@ defmodule Cure.Compiler.Errors do
   defp error_location({:import_cycle, [%{line: line} | _]}) when is_integer(line), do: {line, 1}
   defp error_location({:duplicate_module, _name, _paths}), do: {1, 1}
   defp error_location({:ambiguous_name, _name, _modules}), do: {1, 1}
-  defp error_location({:lambda_block_unterminated, line, col, _code}), do: {line, col}
   defp error_location({:lex_error, reason}), do: lex_error_location(reason)
   defp error_location({_, _, meta}) when is_list(meta), do: {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)}
 
@@ -574,10 +384,6 @@ defmodule Cure.Compiler.Errors do
       _ -> {0, 0}
     end
   end
-
-  defp error_location({:malformed_hole, line, col})
-       when is_integer(line) and is_integer(col),
-       do: {line, col}
 
   defp error_location({:computed_macro_error, meta, _reason}) when is_list(meta) do
     {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, Keyword.get(meta, :column, 0))}
@@ -596,6 +402,34 @@ defmodule Cure.Compiler.Errors do
        do: {line, col}
 
   defp error_location(_error), do: {0, 0}
+
+  defp span_contains_position?(%Cure.Diagnostic.Span{} = span, line, column) do
+    cond do
+      line < span.start_line or line > span.end_line ->
+        false
+
+      line == span.start_line and column < span.start_column ->
+        false
+
+      line == span.end_line and column > span.end_column ->
+        false
+
+      true ->
+        true
+    end
+  end
+
+  # Parser recovery can return several independent errors as a bare list.
+  # Search each item for the first honest source span so presentation callers
+  # do not lose the file/caret merely because the parser accumulated errors.
+  defp exact_error_span([reason | rest], source, source_id, registry) do
+    case exact_error_span(reason, source, source_id, registry) do
+      {:ok, span} -> {:ok, span}
+      :error -> exact_error_span(rest, source, source_id, registry)
+    end
+  end
+
+  defp exact_error_span([], _source, _source_id, _registry), do: :error
 
   defp exact_error_span(error, source, source_id, registry) do
     case hole_span(error, source) do
@@ -625,13 +459,20 @@ defmodule Cure.Compiler.Errors do
   defp hole_span({:codegen_error, reason}, source), do: hole_span(reason, source)
 
   # Real compiler producers carry the parser-owned token range all the way to
-  # the release boundary. Never search the source again for those diagnostics:
-  # doing so can select a different hole (or hole-looking text in a comment).
+  # the presentation boundary. Prefer it to searching the source, which can
+  # select a hole-looking comment or a different authored hole.
   defp hole_span(
          {:unfilled_hole, %{span: %Cure.Diagnostic.Span{start_byte: start_byte, end_byte: end_byte}}},
          _source
        ),
        do: {:ok, start_byte, end_byte}
+
+  defp hole_span({:unfilled_hole, _name}, source) do
+    case Regex.run(~r/\?{3}|\?{1,2}[A-Za-z_][A-Za-z0-9_]*/, source, return: :index) do
+      [{start_byte, length}] -> {:ok, start_byte, start_byte + length}
+      _ -> :error
+    end
+  end
 
   defp hole_span(_error, _source), do: :error
 
@@ -649,7 +490,7 @@ defmodule Cure.Compiler.Errors do
           with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: "diagnostic", emit_events: false) do
             Enum.find(tokens, fn
               %Cure.Compiler.Token{span: %Cure.Diagnostic.Span{} = span} ->
-                span.start_line == line and span.start_column == col
+                span_contains_position?(span, line, col)
 
               _ ->
                 false
@@ -704,6 +545,7 @@ defmodule Cure.Compiler.Errors do
     do: problem.equation_use || problem.function_definition
 
   defp embedded_span({:source_context, reason, _context}), do: embedded_span(reason)
+  defp embedded_span({_kind, %{span: %Cure.Diagnostic.Span{} = span}}), do: span
   defp embedded_span(_error), do: nil
 
   defp lex_error_location(reason) when is_tuple(reason) do

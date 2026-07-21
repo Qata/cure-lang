@@ -2430,6 +2430,7 @@ defmodule Cure.Diagnostic.Adapter do
     from_error(
       %SyntaxProblem{
         kind: :unexpected_token,
+        expected: Map.get(details, :expected),
         observed: details.observed,
         at: Map.get(details, :span) || Keyword.get(opts, :span),
         context: details
@@ -2719,7 +2720,9 @@ defmodule Cure.Diagnostic.Adapter do
           title: "#{macro_title(macro)} expansion failed",
           message: macro_failure_message(macro, details.module, cause_diagnostic),
           primary: primary_label(opts, "this `#{macro}` declaration generated the failing module"),
-          notes: ["The generated module is an implementation detail; edit the `#{macro}` declaration instead."],
+          notes: [
+            "The generated module is an implementation detail; edit the authored `#{macro}` declaration instead."
+          ],
           provenance: provenance_frames(details, opts),
           payload: %{
             macro: name_to_string(macro),
@@ -5518,6 +5521,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_name(:newline), do: "a new line"
   defp syntax_name(:indent), do: "an indented block"
   defp syntax_name(:dedent), do: "the end of this block"
+  defp syntax_name(:expression), do: "an expression"
   defp syntax_name(:identifier), do: "an identifier"
   defp syntax_name(:keyword), do: "a keyword"
   defp syntax_name(:integer), do: "an integer"

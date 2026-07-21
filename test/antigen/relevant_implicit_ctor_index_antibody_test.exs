@@ -67,7 +67,8 @@ defmodule Antigen.RelevantImplicitCtorIndexAntibodyTest do
   end
 
   test "CONTROL erasure: an erased inferred index used relevantly is still rejected" do
-    assert {:error, {:erased_used_relevantly, _}} = Program.elaborate(erased_src())
+    assert {:error, {:erased_used_relevantly, _}} =
+             erased_src() |> Program.elaborate() |> Program.semantic_result()
   end
 
   # A relevant implicit appearing in no argument / index — unsolvable at construction.

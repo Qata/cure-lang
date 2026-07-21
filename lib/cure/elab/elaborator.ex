@@ -1212,7 +1212,9 @@ defmodule Cure.Elab.Elaborator do
     env.equations
     |> Enum.find_value(fn {owner, descriptors} ->
       if Cure.Elab.Name.overload_base(owner) == function_name do
-        descriptors |> List.first() |> then(&(&1 && &1.definition_span))
+        descriptors
+        |> List.first()
+        |> then(&(&1 && Cure.Elab.Equation.source_metadata(&1)[:definition_span]))
       end
     end)
   end

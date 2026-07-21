@@ -531,7 +531,7 @@ defmodule Cure.Elab.Induction do
   defp expand_case({:induction_case, meta, [pattern, body]}, subject_name, family, sig, env) do
     with {:ok, ctor_name, fields, rebuild} <- constructor_pattern(pattern),
          ^family <- Inductive.ctor_family(env, ctor_name),
-         %{args: ctor_args} <- Inductive.get_ctor(env, ctor_name),
+         %{args: ctor_args} = ctor <- Inductive.get_ctor(env, ctor_name),
          recursive_positions <- recursive_positions(ctor_args, family),
          expected_count = length(ctor_args) + length(recursive_positions),
          :ok <- check_field_count(ctor_name, fields, expected_count, recursive_positions, meta),
@@ -540,7 +540,8 @@ defmodule Cure.Elab.Induction do
          assignments <-
            hypothesis_assignments(hypothesis_names, recursive_positions, ordinary_fields, subject_name, sig),
          body <- annotate_hypothesis_uses(body, hypothesis_names, recursive_positions),
-         pattern <- rebuild.(ordinary_fields),
+         pattern_fields <- ordinary_pattern_fields(ctor_args, Inductive.plicities_of(ctor), ordinary_fields),
+         pattern <- rebuild.(pattern_fields),
          body <- induction_case_body(body, assignments, meta),
          {:ok, body} <- expand_nested(body, sig, env) do
       arm_meta = meta |> Keyword.put(:pattern, pattern) |> Keyword.put(:induction, true)
@@ -617,6 +618,21 @@ defmodule Cure.Elab.Induction do
 
   defp recursive_type?({:data, family, _params, _indices}, family), do: true
   defp recursive_type?(_type, _family), do: false
+
+  defp ordinary_pattern_fields(ctor_args, plicities, fields) do
+    [ctor_args, plicities, fields]
+    |> Enum.zip()
+    |> Enum.map(fn
+      {{_name, _type}, :implicit, {:named_implicit_pat, _meta, _children} = field} ->
+        field
+
+      {{name, _type}, :implicit, field} ->
+        {:named_implicit_pat, [name: to_string(name)], [field]}
+
+      {{_name, _type}, :explicit, field} ->
+        field
+    end)
+  end
 
   defp check_field_count(_ctor, fields, expected, _positions, _meta) when length(fields) == expected, do: :ok
 

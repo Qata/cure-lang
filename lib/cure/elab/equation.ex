@@ -2,7 +2,7 @@ defmodule Cure.Elab.Equation do
   @moduledoc "Generates kernel-checked defining equations from certified decision trees."
 
   alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote, Term}
-  alias Cure.Elab.{Name, Rewrite, Subst}
+  alias Cure.Elab.{Name, Rewrite, SourceMetadata, Subst}
   alias Cure.MetaAST.Metadata
 
   @type descriptor :: %{
@@ -11,13 +11,9 @@ defmodule Cure.Elab.Equation do
           constructor_path: [atom()],
           pattern_key: String.t(),
           telescope: [term()],
-          left_surface: term(),
-          right_surface: term(),
           left_core: term(),
           right_core: term(),
-          visibility: atom(),
-          definition_span: Cure.Diagnostic.Span.t() | nil,
-          provenance: map()
+          visibility: atom()
         }
 
   def generate(%Env{} = env, owner, meta, body_ast \\ nil) do
@@ -28,10 +24,11 @@ defmodule Cure.Elab.Equation do
          %{type: type, body: body, quantities: quantities} <- Env.get_def(env, owner),
          {telescope, result} <- peel(type, :pi),
          {_lambda_telescope, decision_tree} <- peel(body, :lam) do
-      surfaces = surface_equations(owner, meta, body_ast)
+      {surfaces, surface_order} = surface_equations(owner, meta, body_ast)
 
       decision_tree
       |> decision_equations(length(telescope), 0, [])
+      |> order_equations(surface_order)
       |> Enum.reduce(env, fn equation, current ->
         {:ok, next} = install(current, owner, telescope, result, quantities, equation, meta, surfaces)
         next
@@ -66,7 +63,9 @@ defmodule Cure.Elab.Equation do
       owners
       |> Enum.flat_map(&Map.get(env.equations, &1, []))
 
-    candidates = matching_candidates(all_candidates, member_path)
+    diagnostic_candidates = Enum.map(all_candidates, &with_source_metadata/1)
+
+    candidates = matching_candidates(diagnostic_candidates, member_path)
     accessible = Enum.filter(candidates, &accessible?(&1, env))
 
     case accessible do
@@ -83,7 +82,8 @@ defmodule Cure.Elab.Equation do
 
       [] ->
         {:error,
-         {:defining_equation_unavailable, :unknown_equation, function_name, Enum.join(member_path, "."), all_candidates}}
+         {:defining_equation_unavailable, :unknown_equation, function_name, Enum.join(member_path, "."),
+          diagnostic_candidates}}
 
       many ->
         {:error,
@@ -119,6 +119,15 @@ defmodule Cure.Elab.Equation do
   defp decision_equations({:case, _scrutinee, _motive, _branches}, _parameter_count, _depth, _steps), do: []
   defp decision_equations(_right, _parameter_count, _depth, []), do: []
   defp decision_equations(right, _parameter_count, depth, steps), do: [%{steps: steps, arity: depth, right: right}]
+
+  defp order_equations(equations, surface_order) do
+    ranks = surface_order |> Enum.with_index() |> Map.new()
+
+    Enum.sort_by(equations, fn equation ->
+      path = Enum.map(equation.steps, &Name.base(&1.constructor))
+      {Map.get(ranks, path, map_size(ranks)), path}
+    end)
+  end
 
   defp install(env, owner, telescope, result, quantities, equation, meta, surfaces) do
     arity = equation.arity
@@ -214,22 +223,26 @@ defmodule Cure.Elab.Equation do
       info = Metadata.source_info(meta)
       surface = Map.get(surfaces, Enum.map(constructor_path, &Name.base/1), %{})
 
+      source_metadata = %{
+        left_surface:
+          Map.get(surface, :left, {:defining_equation_call, Name.base(owner), Enum.map(constructor_path, &Name.base/1)}),
+        right_surface: Map.get(surface, :right, {:compiled_branch, Enum.map(constructor_path, &Name.base/1)}),
+        definition_span: Map.get(surface, :span, info && info.whole),
+        provenance: %{kind: :generated_defining_equation, owner: owner, constructor_path: constructor_path}
+      }
+
       descriptor = %{
         owner: owner,
         theorem: canonical_theorem,
         constructor_path: constructor_path,
         pattern_key: structural_key(owner, constructor_path),
         telescope: theorem_telescope,
-        left_surface:
-          Map.get(surface, :left, {:defining_equation_call, Name.base(owner), Enum.map(constructor_path, &Name.base/1)}),
-        right_surface: Map.get(surface, :right, {:compiled_branch, Enum.map(constructor_path, &Name.base/1)}),
         left_core: left,
         right_core: right,
-        visibility: Keyword.get(meta, :visibility, :public),
-        definition_span: Map.get(surface, :span, info && info.whole),
-        provenance: %{kind: :generated_defining_equation, owner: owner, constructor_path: constructor_path}
+        visibility: Keyword.get(meta, :visibility, :public)
       }
 
+      :ok = SourceMetadata.put_equation(canonical_theorem, source_metadata)
       {:ok, Env.put_equation(certified, owner, descriptor)}
     else
       # Some compiled decision-tree branches carry convoy refinements that
@@ -238,6 +251,10 @@ defmodule Cure.Elab.Equation do
       {:error, _reason} -> {:ok, env}
     end
   end
+
+  def source_metadata(%{theorem: theorem}), do: SourceMetadata.equation(theorem)
+
+  defp with_source_metadata(descriptor), do: Map.merge(descriptor, source_metadata(descriptor))
 
   defp theorem_name(owner, constructor_path) do
     owner_module = Name.owner(owner)
@@ -557,7 +574,7 @@ defmodule Cure.Elab.Equation do
   defp equality_terms(_env, carrier, left, right),
     do: {Rewrite.mk_eq(carrier, left, right), Rewrite.mk_refl(right)}
 
-  defp surface_equations(_owner, _meta, nil), do: %{}
+  defp surface_equations(_owner, _meta, nil), do: {%{}, []}
 
   defp surface_equations(owner, meta, body) do
     params =
@@ -565,16 +582,20 @@ defmodule Cure.Elab.Equation do
       |> Keyword.get(:params, [])
       |> Enum.map(fn {:param, _param_meta, name} -> name end)
 
-    collect_surfaces(body, owner, params, %{}, [])
-    |> Map.new(fn {path, replacements, right, span} ->
-      arguments =
-        Enum.map(params, fn name ->
-          Map.get(replacements, name, {:variable, [scope: :local], name})
-        end)
+    entries = collect_surfaces(body, owner, params, %{}, [])
 
-      left = {:function_call, [name: Name.base(owner)], arguments}
-      {path, %{left: left, right: right, span: span}}
-    end)
+    surfaces =
+      Map.new(entries, fn {path, replacements, right, span} ->
+        arguments =
+          Enum.map(params, fn name ->
+            Map.get(replacements, name, {:variable, [scope: :local], name})
+          end)
+
+        left = {:function_call, [name: Name.base(owner)], arguments}
+        {path, %{left: left, right: right, span: span}}
+      end)
+
+    {surfaces, Enum.map(entries, &elem(&1, 0))}
   end
 
   defp collect_surfaces(

@@ -224,7 +224,8 @@ defmodule Cure.Elab.ProofInductionLoweringProbeTest do
     end
     """
 
-    assert {:error, {:totality_required, :"NonTotalInduction#bad"}} = Program.elaborate(source)
+    assert {:error, {:totality_required, :"NonTotalInduction#bad"}} =
+             source |> Program.elaborate() |> Program.semantic_result()
   end
 
   test "compiled induction erases to direct proof behavior with no tactic representation" do

@@ -3824,6 +3824,18 @@ defmodule Cure.Compiler.Parser do
 
   defp put_token_source_info(meta, _token, _role), do: meta
 
+  defp extend_source_info_whole(meta, %Token{span: %Cure.Diagnostic.Span{} = closing_span}) do
+    case Metadata.source_info(meta) do
+      %SourceInfo{whole: %Cure.Diagnostic.Span{} = opening_span} = info ->
+        Keyword.put(meta, :source_info, %{info | whole: merge_source_spans(opening_span, closing_span)})
+
+      _ ->
+        meta
+    end
+  end
+
+  defp extend_source_info_whole(meta, _token), do: meta
+
   defp error_node(token) do
     {:literal, [subtype: :null, line: token.line, col: token.col, error: true], nil}
   end
@@ -6555,8 +6567,31 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :assign} ->
         state = advance(state)
+        body_start = peek(state)
         state = skip_newlines(state)
-        {body, state} = parse_expr_or_block(state)
+
+        {body, state} =
+          case peek(state) do
+            %Token{type: type} when type in [:dedent, :eof] ->
+              token = if body_start.type == :newline, do: body_start, else: peek(state)
+
+              error =
+                {:unexpected_token,
+                 %{
+                   observed: token.type,
+                   token_type: token.type,
+                   expected: :expression,
+                   span: token.span,
+                   line: token.line,
+                   column: token.col
+                 }}
+
+              {error_node(token), add_error(state, error)}
+
+            _ ->
+              parse_expr_or_block(state)
+          end
+
         {body, state} = parse_expression_let_chain_body(body, state)
 
         {where_bindings, state} = parse_post_body_where(state)
@@ -8255,14 +8290,20 @@ defmodule Cure.Compiler.Parser do
         # Constructor with params: Some(T)
         state = advance(state)
         {params, state} = parse_type_param_list(state)
+        close_token = peek(state)
         state = expect(state, :rparen)
-        variant_meta = put_token_source_info([name: name, params: params, variant: true], name_token)
+
+        variant_meta =
+          [name: name, params: params, variant: true]
+          |> put_token_source_info(name_token, :name)
+          |> extend_source_info_whole(close_token)
+
         ast = {:function_def, variant_meta, []}
         {ast, state}
 
       _ ->
         # Nullary constructor: None
-        {{:variable, put_token_source_info([variant: true], name_token), name}, state}
+        {{:variable, put_token_source_info([variant: true], name_token, :name), name}, state}
     end
   end
 
