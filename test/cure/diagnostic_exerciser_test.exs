@@ -133,7 +133,7 @@ defmodule Cure.DiagnosticExerciserTest do
       {"graded let requires variable", "E093", {:graded_let_requires_variable, %{grade: :linear}}},
       {"unknown grade", "E093", {:unknown_grade, %{grade: :future, supported: [:erased, :linear, :affine]}}},
       {"grade requires type", "E093", {:grade_requires_type, %{name: :value, grade: :linear}}},
-      {"reserved unit type", "E092", {:unit_type_reserved, "ms", 1, 1}},
+      {"reserved unit type", "E092", {:unit_type_reserved, %{name: "ms", line: 1, column: 1}}},
       {"duplicate index", "E105", {:duplicate_index, :n}},
       {"multi-with proof", "E093", {:with_multi_proof_unsupported, "proof", []}},
       {"multi-with rematch", "E093", {:with_multi_rematch_unsupported, "rematch", []}},

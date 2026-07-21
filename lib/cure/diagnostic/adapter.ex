@@ -1870,11 +1870,32 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:unit_type_reserved, name}, opts),
-    do: macro_validation_failure(:unit_type_reserved, %{name: name}, opts)
+  def from_error({:unit_type_reserved, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
 
-  def from_error({:unit_type_reserved, name, line, column}, opts),
-    do: macro_validation_failure(:unit_type_reserved, %{name: name, line: line, column: column}, opts)
+    secondary =
+      case pickup_label(Map.get(details, :unit_span), :secondary, "this spelling denotes the built-in `Unit` type") do
+        nil -> []
+        label -> [label]
+      end
+
+    Diagnostic.new(
+      code: "E092",
+      key: :unit_type_reserved,
+      severity: :error,
+      title: "Unit syntax cannot define another type",
+      body: Doc.paragraph("`()` has exactly one type, `Unit`, so it cannot define the new type `#{details.name}`."),
+      primary: pickup_label(span, :primary, "this declaration must not reuse `Unit` syntax"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Give `#{details.name}` its own constructor, or rename the type to `Unit`",
+          applicability: :manual
+        }
+      ],
+      payload: details
+    )
+  end
 
   def from_error({:duplicate_syntax_family_field, details}, opts) when is_map(details) do
     span = Map.get(details, :span) || Keyword.get(opts, :span)

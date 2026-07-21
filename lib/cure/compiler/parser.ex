@@ -7255,6 +7255,12 @@ defmodule Cure.Compiler.Parser do
           # any other name declared as `()` is a hard error. When permitted, this
           # builds exactly the nullary single-`unit`-ctor family the compiler
           # seeds into every module (see program.ex seed_with_telescope_support/1).
+          unit_span =
+            case Range.through(peek(state), peek_at(state, 1)) do
+              {:ok, span} -> span
+              {:error, _reason} -> peek(state).span
+            end
+
           state = advance(advance(state))
 
           meta = [container_type: :enum, name: name, line: token.line, col: token.col]
@@ -7263,7 +7269,18 @@ defmodule Cure.Compiler.Parser do
           if name == "Unit" do
             {{:container, meta, [{:variable, [variant: true], "unit"}]}, state}
           else
-            state = add_error(state, {:unit_type_reserved, name, token.line, token.col})
+            state =
+              add_error(state, {
+                :unit_type_reserved,
+                %{
+                  name: name,
+                  span: name_token.span,
+                  unit_span: unit_span,
+                  line: name_token.line,
+                  column: name_token.col
+                }
+              })
+
             {{:container, meta, []}, state}
           end
 
