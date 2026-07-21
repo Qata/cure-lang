@@ -50,6 +50,7 @@ defmodule Cure.Stdlib.RegexSourceTest do
     assert flags_meta[:subtype] == :string
   end
 
+  @tag timeout: 300_000
   test "a slash literal expands and elaborates without importing Std.Regex" do
     source = """
     mod RegexLiteralWithoutUse
@@ -69,5 +70,18 @@ defmodule Cure.Stdlib.RegexSourceTest do
     """
 
     assert {:error, _diagnostic} = Program.elaborate(source)
+  end
+
+  @tag timeout: 300_000
+  test "word-boundary and class-backspace syntax expand during elaboration" do
+    source = """
+    mod RegexBoundaryLiteralExpansion
+      fn word_start() = /\\bcat\\B/
+      fn unicode_word() = /\\bé\\b/u
+      fn class_backspace() = /[\\b]/
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
   end
 end

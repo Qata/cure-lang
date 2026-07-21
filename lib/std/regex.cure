@@ -191,8 +191,8 @@ mod Std.Regex
     | BeginCapture
     | EndCapture
 
-  type BoundaryConstraint = SubjectStart | SubjectEnd | StrictSubjectEnd | LineStart | LineEnd
-  type Boundary = Boundary(Bool, Bool, Bool, Bool, Bool)
+  type BoundaryConstraint = BoundaryConstraint(Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool, Bool)
+  type Boundary = Boundary(Bool, Bool, Bool, Bool, Bool, Bool, Bool)
   type MachineState = Active(Nat, List(EvidenceInstruction), List(BoundaryConstraint)) | Accepted(List(EvidenceInstruction), List(BoundaryConstraint))
   type PatternMachine = PatternMachine(Nat, List(MachineState), Nat -> Char -> List(MachineState))
 
@@ -374,12 +374,36 @@ mod Std.Regex
     [head | rest] -> append_states(machine_step_one(next, char, head), machine_step(next, char, rest))
 
   fn constraint_holds(constraint: BoundaryConstraint, boundary: Boundary) -> Bool = match boundary
-    Boundary(subject_start, subject_end, strict_subject_end, line_start, line_end) -> match constraint
-      SubjectStart -> subject_start
-      SubjectEnd -> subject_end
-      StrictSubjectEnd -> strict_subject_end
-      LineStart -> line_start
-      LineEnd -> line_end
+    Boundary(subject_start, subject_end, strict_subject_end, line_start, line_end, ascii_boundary, unicode_boundary) -> match constraint
+      BoundaryConstraint(require_subject_start, require_subject_end, require_strict_end, require_line_start, require_line_end, check_ascii, expected_ascii, check_unicode, expected_unicode) ->
+        (not require_subject_start or subject_start) and
+          (not require_subject_end or subject_end) and
+          (not require_strict_end or strict_subject_end) and
+          (not require_line_start or line_start) and
+          (not require_line_end or line_end) and
+          (not check_ascii or ascii_boundary == expected_ascii) and
+          (not check_unicode or unicode_boundary == expected_unicode)
+
+  fn subject_start_constraint() -> BoundaryConstraint =
+    BoundaryConstraint(true, false, false, false, false, false, false, false, false)
+
+  fn subject_end_constraint() -> BoundaryConstraint =
+    BoundaryConstraint(false, true, false, false, false, false, false, false, false)
+
+  fn strict_end_constraint() -> BoundaryConstraint =
+    BoundaryConstraint(false, false, true, false, false, false, false, false, false)
+
+  fn line_start_constraint() -> BoundaryConstraint =
+    BoundaryConstraint(false, false, false, true, false, false, false, false, false)
+
+  fn line_end_constraint() -> BoundaryConstraint =
+    BoundaryConstraint(false, false, false, false, true, false, false, false, false)
+
+  fn ascii_word_constraint(expected: Bool) -> BoundaryConstraint =
+    BoundaryConstraint(false, false, false, false, false, true, expected, false, false)
+
+  fn unicode_word_constraint(expected: Bool) -> BoundaryConstraint =
+    BoundaryConstraint(false, false, false, false, false, false, false, true, expected)
 
   fn constraints_hold(constraints: List(BoundaryConstraint), boundary: Boundary) -> Bool = match constraints
     [] -> true
@@ -403,8 +427,24 @@ mod Std.Regex
     [char] -> Std.Char.is_newline(char)
     _ -> false
 
-  fn position_boundary(subject_start: Bool, line_start: Bool, input: String) -> Boundary =
-    Boundary(subject_start, position_subject_end(input), position_strict_subject_end(input), line_start, position_line_end(input))
+  fn next_ascii_word(input: String) -> Bool = match input
+    [] -> false
+    [char | _] -> ascii_word(char)
+
+  fn next_unicode_word(input: String) -> Bool = match input
+    [] -> false
+    [char | _] -> option_word(char, true)
+
+  fn position_boundary(subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool, input: String) -> Boundary =
+    Boundary(
+      subject_start,
+      position_subject_end(input),
+      position_strict_subject_end(input),
+      line_start,
+      position_line_end(input),
+      previous_ascii_word != next_ascii_word(input),
+      previous_unicode_word != next_unicode_word(input)
+    )
 
   fn position_strict_subject_end(input: String) -> Bool = match input
     [] -> true
@@ -413,11 +453,11 @@ mod Std.Regex
   fn machine_accepts_chars(next: Nat -> Char -> List(MachineState), input: String, current: List(MachineState)) -> Bool = match input
     [] -> machine_has_accept(current)
     [char | rest] ->
-      machine_accepts_chars(next, rest, filter_boundary_states(machine_step(next, char, current), position_boundary(false, Std.Char.is_newline(char), rest)))
+      machine_accepts_chars(next, rest, filter_boundary_states(machine_step(next, char, current), position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)))
 
   fn pattern_accepts({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Bool =
     match compile_pattern(pattern)
-      PatternMachine(_count, starts, next) -> machine_accepts_chars(next, input, filter_boundary_states(starts, position_boundary(true, true, input)))
+      PatternMachine(_count, starts, next) -> machine_accepts_chars(next, input, filter_boundary_states(starts, position_boundary(true, true, false, false, input)))
 
   ## Evidence is a postfix program result stored in reverse order, so emitting
   ## is constant-time. Pair/branch/list markers precede their operands in the
@@ -658,7 +698,7 @@ mod Std.Regex
   fn run_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread)) -> Option(List(Evidence)) = match input
     [] -> first_accepted_evidence(threads)
     [char | rest] ->
-      let boundary = position_boundary(false, Std.Char.is_newline(char), rest)
+      let boundary = position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
       run_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)))
 
   fn run_first_prefix_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
@@ -666,7 +706,7 @@ mod Std.Regex
     None() -> match input
       [] -> None()
       [char | rest] ->
-        let boundary = position_boundary(false, Std.Char.is_newline(char), rest)
+        let boundary = position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
         run_first_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)))
 
   fn remember_prefix(threads: List(EvidenceThread), rest: String, previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
@@ -680,22 +720,22 @@ mod Std.Regex
       [char | rest] -> match threads
         [] -> remembered
         _ ->
-          let boundary = position_boundary(false, Std.Char.is_newline(char), rest)
+          let boundary = position_boundary(false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), rest)
           run_last_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)), remembered)
 
   fn pattern_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Option(List(Evidence)) = match compile_pattern(pattern)
     PatternMachine(_count, starts, next) ->
-      run_evidence(next, input, distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(true, true, input)))))
+      run_evidence(next, input, distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(true, true, false, false, input)))))
 
-  fn pattern_prefix_evidence_at({shape: ShapeCode}, pattern: Pattern(shape), input: String, greedy: Bool, subject_start: Bool, line_start: Bool) -> Option(EvidencePrefix) = match compile_pattern(pattern)
+  fn pattern_prefix_evidence_at({shape: ShapeCode}, pattern: Pattern(shape), input: String, greedy: Bool, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool) -> Option(EvidencePrefix) = match compile_pattern(pattern)
     PatternMachine(_count, starts, next) ->
-      let threads = distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(subject_start, line_start, input))))
+      let threads = distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(subject_start, line_start, previous_ascii_word, previous_unicode_word, input))))
       pickup
         greedy -> run_last_prefix_evidence(next, input, threads, None())
         else -> run_first_prefix_evidence(next, input, threads)
 
   fn pattern_prefix_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: String, greedy: Bool) -> Option(EvidencePrefix) =
-    pattern_prefix_evidence_at(pattern, input, greedy, true, true)
+    pattern_prefix_evidence_at(pattern, input, greedy, true, true, false, false)
 
   fn parse_pattern_full({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Option(Sem(shape)) = match pattern_evidence(pattern, input)
     None() -> None()
@@ -890,12 +930,12 @@ mod Std.Regex
         Some(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternateMode(pattern, PatternEmpty(), lazy), ChoiceConversion(convert, unit_identity_conversion())))
     ConfiguredRegex(_options, inner) -> compile_regex(inner)
     StartAnchor(multiline) -> pickup
-      multiline -> Some(BuiltRegex(UnitC, PatternBoundary(LineStart), unit_identity_conversion()))
-      else -> Some(BuiltRegex(UnitC, PatternBoundary(SubjectStart), unit_identity_conversion()))
+      multiline -> Some(BuiltRegex(UnitC, PatternBoundary(line_start_constraint()), unit_identity_conversion()))
+      else -> Some(BuiltRegex(UnitC, PatternBoundary(subject_start_constraint()), unit_identity_conversion()))
     EndAnchor(multiline) -> pickup
-      multiline -> Some(BuiltRegex(UnitC, PatternBoundary(LineEnd), unit_identity_conversion()))
-      else -> Some(BuiltRegex(UnitC, PatternBoundary(SubjectEnd), unit_identity_conversion()))
-    StrictEndAnchor() -> Some(BuiltRegex(UnitC, PatternBoundary(StrictSubjectEnd), unit_identity_conversion()))
+      multiline -> Some(BuiltRegex(UnitC, PatternBoundary(line_end_constraint()), unit_identity_conversion()))
+      else -> Some(BuiltRegex(UnitC, PatternBoundary(subject_end_constraint()), unit_identity_conversion()))
+    StrictEndAnchor() -> Some(BuiltRegex(UnitC, PatternBoundary(strict_end_constraint()), unit_identity_conversion()))
 
   fn convert_complete_extraction({shape: ShapeCode}, {result: Type}, pattern: Pattern(shape), conversion: Conversion(Sem(shape), result), evidence: List(Evidence)) -> Option(result) = match extract_complete_encoding(decode_pattern_encoding(pattern, evidence))
     None() -> None()
@@ -921,9 +961,9 @@ mod Std.Regex
       None() -> None()
       Some(prefix) -> convert_prefix_extraction(pattern, conversion, prefix)
 
-  fn parse_prefix_at({result: Type}, regex: Regex(result), input: String, subject_start: Bool, line_start: Bool) -> Option(Tuple(result, String)) = match compile_regex(regex)
+  fn parse_prefix_at({result: Type}, regex: Regex(result), input: String, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool) -> Option(Tuple(result, String)) = match compile_regex(regex)
     None() -> None()
-    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence_at(pattern, input, true, subject_start, line_start)
+    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence_at(pattern, input, true, subject_start, line_start, previous_ascii_word, previous_unicode_word)
       None() -> None()
       Some(prefix) -> convert_prefix_extraction(pattern, conversion, prefix)
 
@@ -938,10 +978,10 @@ mod Std.Regex
     _ -> false
 
   fn search({result: Type}, regex: Regex(result), input: String) -> Option(Match(result)) =
-    search_from(regex, input, [], true, true, regex_firstline(regex))
+    search_from(regex, input, [], true, true, false, false, regex_firstline(regex))
 
-  fn search_from({result: Type}, regex: Regex(result), candidate: String, reversed_prefix: String, subject_start: Bool, line_start: Bool, firstline_only: Bool) -> Option(Match(result)) =
-    match parse_prefix_at(regex, candidate, subject_start, line_start)
+  fn search_from({result: Type}, regex: Regex(result), candidate: String, reversed_prefix: String, subject_start: Bool, line_start: Bool, previous_ascii_word: Bool, previous_unicode_word: Bool, firstline_only: Bool) -> Option(Match(result)) =
+    match parse_prefix_at(regex, candidate, subject_start, line_start, previous_ascii_word, previous_unicode_word)
       Some(found) ->
         let rest = found.2
         let matched = Std.String.drop_last(candidate, Std.String.length(rest))
@@ -950,7 +990,7 @@ mod Std.Regex
         [] -> None()
         [char | rest] -> pickup
           firstline_only and Std.Char.is_newline(char) -> None()
-          else -> search_from(regex, rest, [char | reversed_prefix], false, Std.Char.is_newline(char), firstline_only)
+          else -> search_from(regex, rest, [char | reversed_prefix], false, Std.Char.is_newline(char), ascii_word(char), option_word(char, true), firstline_only)
 
   fn matches({result: Type}, regex: Regex(result), input: String) -> Bool = match search(regex, input)
     Some(_) -> true
@@ -1019,6 +1059,14 @@ mod Std.Regex
   fn end_anchor_with_options(multiline: Bool) -> Regex(Unit) = EndAnchor(multiline)
 
   fn strict_end_anchor() -> Regex(Unit) = StrictEndAnchor()
+
+  fn word_boundary(unicode: Bool, negated: Bool) -> Regex(Unit) = pickup
+    unicode -> pickup
+      negated -> FromPattern(UnitC, PatternBoundary(unicode_word_constraint(false)))
+      else -> FromPattern(UnitC, PatternBoundary(unicode_word_constraint(true)))
+    else -> pickup
+      negated -> FromPattern(UnitC, PatternBoundary(ascii_word_constraint(false)))
+      else -> FromPattern(UnitC, PatternBoundary(ascii_word_constraint(true)))
 
   fn always(_char: Char) -> Bool = true
 
@@ -1257,6 +1305,7 @@ mod Std.Regex
     | LiteralAbsoluteStart
     | LiteralStrictEnd
     | LiteralFinalEnd
+    | LiteralWordBoundary(Bool)
 
   type LiteralParse = LiteralParsed(LiteralPattern, String) | LiteralInvalid(Atom)
   type LiteralClassParse = LiteralClassParsed(List(Char), List(CharacterRange), ClassKinds, String) | LiteralClassInvalid(Atom)
@@ -1486,6 +1535,8 @@ mod Std.Regex
     ['A' | rest] -> LiteralParsed(LiteralAbsoluteStart, rest)
     ['z' | rest] -> LiteralParsed(LiteralStrictEnd, rest)
     ['Z' | rest] -> LiteralParsed(LiteralFinalEnd, rest)
+    ['b' | rest] -> LiteralParsed(LiteralWordBoundary(false), rest)
+    ['B' | rest] -> LiteralParsed(LiteralWordBoundary(true), rest)
     ['a' | rest] -> LiteralParsed(LiteralExact(7), rest)
     ['e' | rest] -> LiteralParsed(LiteralExact(27), rest)
     ['f' | rest] -> LiteralParsed(LiteralExact(12), rest)
@@ -1518,6 +1569,7 @@ mod Std.Regex
     ['\\', 'H' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotHorizontalKind, kinds), fuel)
     ['\\', 'v' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(VerticalKind, kinds), fuel)
     ['\\', 'V' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotVerticalKind, kinds), fuel)
+    ['\\', 'b' | rest] -> parse_literal_class_items_fuel(rest, [8 | chars], ranges, kinds, fuel)
     ['\\', 'a' | rest] -> parse_literal_class_items_fuel(rest, [7 | chars], ranges, kinds, fuel)
     ['\\', 'e' | rest] -> parse_literal_class_items_fuel(rest, [27 | chars], ranges, kinds, fuel)
     ['\\', 'f' | rest] -> parse_literal_class_items_fuel(rest, [12 | chars], ranges, kinds, fuel)
@@ -1583,6 +1635,7 @@ mod Std.Regex
     LiteralAbsoluteStart -> UnitC
     LiteralStrictEnd -> UnitC
     LiteralFinalEnd -> UnitC
+    LiteralWordBoundary(_) -> UnitC
 
   fn emit_shape(shape: ShapeCode) -> Syntax = match shape
     UnitC -> call("Std.Regex.UnitC", [])
@@ -1618,6 +1671,7 @@ mod Std.Regex
     LiteralAbsoluteStart -> call("Std.Regex.start_anchor", [])
     LiteralStrictEnd -> call("Std.Regex.strict_end_anchor", [])
     LiteralFinalEnd -> call("Std.Regex.end_anchor", [])
+    LiteralWordBoundary(negated) -> call("Std.Regex.word_boundary", [bool_literal(false), bool_literal(negated)])
 
   fn emit_literal_with_options(pattern: LiteralPattern, options: RegexOptions) -> Syntax = match options
     RegexOptions(caseless, multiline, dotall, _extended, unicode, _firstline, ungreedy, _exported) -> match pattern
@@ -1642,6 +1696,7 @@ mod Std.Regex
       LiteralAbsoluteStart -> call("Std.Regex.start_anchor", [])
       LiteralStrictEnd -> call("Std.Regex.strict_end_anchor", [])
       LiteralFinalEnd -> call("Std.Regex.end_anchor", [])
+      LiteralWordBoundary(negated) -> call("Std.Regex.word_boundary", [bool_literal(unicode), bool_literal(negated)])
 
   fn emit_chars(chars: List(Char)) -> Syntax = match chars
     [] -> list([])
