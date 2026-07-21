@@ -2605,6 +2605,26 @@ defmodule Cure.Compiler.Parser do
   defp parse_infix(state, left, min_bp, ctx_op) do
     token = peek(state)
 
+    # A pipe at the start of a continuation line belongs to the expression
+    # above it.  Layout normally terminates an expression, and an indented
+    # continuation also emits an `:indent`; consume only that layout when the
+    # next significant token is `|>`.
+    {token, state} =
+      case token.type do
+        :newline ->
+          case continuation_pipe?(state) do
+            true ->
+              state = skip_pipe_continuation_layout(state)
+              {peek(state), state}
+
+            false ->
+              {token, state}
+          end
+
+        _ ->
+          {token, state}
+      end
+
     cond do
       # Postfix: function call  f(...). Function application is maximal-binding —
       # it attaches regardless of the surrounding `min_bp` (a call binds tighter
@@ -2640,6 +2660,24 @@ defmodule Cure.Compiler.Parser do
           :not_infix ->
             {left, state}
         end
+    end
+  end
+
+  defp continuation_pipe?(state) do
+    state
+    |> peek_ahead(1)
+    |> then(fn token ->
+      token.type == :pipe or
+        (token.type == :indent and peek_ahead(state, 2).type == :pipe)
+    end)
+  end
+
+  defp skip_pipe_continuation_layout(state) do
+    state = advance(state)
+
+    case peek(state).type do
+      :indent -> advance(state)
+      _ -> state
     end
   end
 
@@ -5802,9 +5840,12 @@ defmodule Cure.Compiler.Parser do
         {body, state} = parse_expr_or_block(state)
         {body, state} = parse_expression_let_chain_body(body, state)
 
+        {where_bindings, state} = parse_post_body_where(state)
+
         meta =
           build_fn_meta(state, fn_token, name_token, name, params, return_type, visibility, guard, constraints, effects)
 
+        meta = if where_bindings == [], do: meta, else: Keyword.put(meta, :where, where_bindings)
         ast = {:function_def, meta, [body]}
         {ast, state}
 
@@ -5820,6 +5861,8 @@ defmodule Cure.Compiler.Parser do
             {body, state} = parse_expression_let_chain_body(body, state)
             state = expect_dedent(state)
 
+            {where_bindings, state} = parse_post_body_where(state)
+
             meta =
               build_fn_meta(
                 state,
@@ -5833,6 +5876,8 @@ defmodule Cure.Compiler.Parser do
                 constraints,
                 effects
               )
+
+            meta = if where_bindings == [], do: meta, else: Keyword.put(meta, :where, where_bindings)
 
             ast = {:function_def, meta, [body]}
             {ast, state}
@@ -5868,6 +5913,50 @@ defmodule Cure.Compiler.Parser do
 
         ast = {:function_def, meta, []}
         {ast, state}
+    end
+  end
+
+  # A function-local `where` follows the function body at the function's own
+  # indentation.  It is kept as metadata and lowered by the dependent
+  # elaborator before signatures are registered.
+  defp parse_post_body_where(state) do
+    probe = skip_newlines(state)
+
+    case peek(probe) do
+      %Token{type: :keyword, value: :where} ->
+        probe = advance(probe) |> skip_newlines()
+        probe = expect(probe, :indent)
+        {bindings, probe} = parse_where_bindings(probe, [])
+        {Enum.reverse(bindings), expect_dedent(probe)}
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp parse_where_bindings(state, acc) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :dedent} ->
+        {acc, state}
+
+      %Token{type: :eof} ->
+        {acc, state}
+
+      %Token{type: :keyword, value: :fn} = token ->
+        {binding, state} = parse_fn_def(advance(state), token, :private)
+        parse_where_bindings(state, [binding | acc])
+
+      %Token{type: :identifier} = token ->
+        name = to_string(token.value)
+        state = advance(state) |> expect(:assign) |> skip_newlines()
+        {expr, state} = parse_expr_or_block(state)
+        binding = {:where_value, [name: name, line: token.line, col: token.col], expr}
+        parse_where_bindings(state, [binding | acc])
+
+      _ ->
+        {acc, state}
     end
   end
 

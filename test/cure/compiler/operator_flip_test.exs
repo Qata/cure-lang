@@ -55,6 +55,9 @@ defmodule Cure.Compiler.OperatorFlipTest do
 
   test "word operators resolve to their functions" do
     assert eval("true and false") == false
+    assert eval("false or true") == true
+    assert eval("true or false and false") == true
+    assert eval("false or true and false") == false
     assert eval("not true") == false
   end
 
