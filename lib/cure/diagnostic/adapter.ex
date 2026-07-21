@@ -2539,6 +2539,20 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:declaration_separator_missing, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:invalid_parameter_name, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -5067,6 +5081,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :sigma_comma_missing}), do: "Sigma type needs a separator"
   defp syntax_problem_title(%SyntaxProblem{kind: :sigma_unclosed}), do: "Sigma type is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :gadt_constructor_colon_missing}),
+    do: "Constructor signature needs a colon"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5329,6 +5346,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :sigma_unclosed}),
     do: "This Sigma type reaches the end of the source without the ')' that closes its dependent pair."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :gadt_constructor_colon_missing,
+         context: %{declaration: constructor, family: family}
+       }),
+       do: "The constructor `#{constructor}` in `#{family}` needs `:` between its name and type signature."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
@@ -5668,6 +5691,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :sigma_unclosed}),
     do: "close this Sigma type with `)`"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :gadt_constructor_colon_missing}),
+    do: "insert `:` before this constructor signature"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -5924,6 +5950,13 @@ defmodule Cure.Diagnostic.Adapter do
        )
        when previous != primary_span,
        do: [%Label{span: previous, style: :secondary, message: "this branch head ends here"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :gadt_constructor_colon_missing, previous: %Span{} = previous},
+         primary_span
+       )
+       when previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "this is the constructor name"}]
 
   defp syntax_secondary_labels(
          %SyntaxProblem{
@@ -6260,6 +6293,20 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `->` before the branch body",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "-> "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :gadt_constructor_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the constructor signature",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
       }
     ]
   end

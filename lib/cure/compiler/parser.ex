@@ -8494,7 +8494,7 @@ defmodule Cure.Compiler.Parser do
         _ -> {false, state}
       end
 
-    {ctors, state} = parse_gadt_ctors(state, [])
+    {ctors, state} = parse_gadt_ctors(state, [], name)
 
     state =
       if opened_block do
@@ -8706,7 +8706,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_gadt_ctors(state, acc) do
+  defp parse_gadt_ctors(state, acc, family) do
     state = skip_newlines(state)
 
     case peek(state) do
@@ -8718,16 +8718,45 @@ defmodule Cure.Compiler.Parser do
       # constructor can be documented in place (E5). A comment that ends the block is preceded
       # by `:dedent` and never reaches here.
       %Token{type: type} when type in [:doc_comment, :line_comment] ->
-        parse_gadt_ctors(advance(state), acc)
+        parse_gadt_ctors(advance(state), acc, family)
 
       _ ->
         cname_token = peek(state)
         cname = to_string(cname_token.value)
         state = advance(state)
-        state = expect(state, :colon)
+        state = expect_gadt_constructor_colon(state, cname_token, family)
         {sig, state} = parse_ctor_signature(state)
         meta = [name: cname, line: cname_token.line, col: cname_token.col]
-        parse_gadt_ctors(state, [{:gadt_ctor, meta, sig} | acc])
+        parse_gadt_ctors(state, [{:gadt_ctor, meta, sig} | acc], family)
+    end
+  end
+
+  defp expect_gadt_constructor_colon(state, constructor_token, family) do
+    case expect_token(state, :colon) do
+      {:ok, _colon, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :gadt_constructor_colon_missing,
+             family: family,
+             declaration: to_string(constructor_token.value),
+             expected: :colon,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             previous_span: constructor_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
     end
   end
 
