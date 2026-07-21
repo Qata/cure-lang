@@ -587,6 +587,76 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     end
   end
 
+  test "an unclosed map pairs EOF with its opener and offers a closing brace" do
+    source = "%{a: 1"
+    {:ok, tokens} = Lexer.tokenize(source, file: "map.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :map}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "map.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- MAP IS NOT CLOSED [E094] ------------------------------------------- map.cure
+
+             This map reaches the end of the source without the '}' that closes its entries.
+
+             at map.cure:1:7
+             1 | %{a: 1
+               | ------^ this container starts here; the previous entry ends here; close this container with `}`
+
+             Hint: Insert `}` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "}"}]}] =
+             diagnostic.suggestions
+
+    assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 2
+  end
+
+  test "adjacent map entries get a zero-width comma insertion" do
+    source = "%{a: 1 b: 2}"
+    {:ok, tokens} = Lexer.tokenize(source, file: "map_separator.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:container_elements_syntax, %{kind: :container_separator_missing, container: :map}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "map_separator.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- MAP ENTRIES NEED A COMMA [E094] -------------------------- map_separator.cure
+
+             This map has another entry here, but consecutive entries must be separated by a
+             comma.
+
+             at map_separator.cure:1:8
+             1 | %{a: 1 b: 2}
+               | ------ ^ this container starts here; the previous entry ends here; insert a comma before this entry
+
+             Hint: Insert `,` between these entries
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 7
+    assert insertion.end_byte == 7
+
+    assert [%{"newText" => ", ", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 7},
+             "end" => %{"line" => 0, "character" => 7}
+           }
+  end
+
   test "a trailing list comma is blamed directly and can be removed safely" do
     source = "[1,]"
     {:ok, tokens} = Lexer.tokenize(source, file: "trailing_list.cure", emit_events: false)

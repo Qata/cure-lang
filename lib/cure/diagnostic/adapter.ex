@@ -4973,11 +4973,17 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :tuple}}),
     do: "Tuple is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :map}}),
+    do: "Map is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :list}}),
     do: "List elements need a comma"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :tuple}}),
     do: "Tuple elements need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :map}}),
+    do: "Map entries need a comma"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :container_trailing_separator, context: %{container: :list}}),
     do: "List ends with an extra comma"
@@ -5098,8 +5104,21 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :call_argument_separator_missing, context: %{call: call}}),
     do: "The call to `#{call}` has another argument here, but consecutive arguments must be separated by a comma."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rbrace,
+         context: %{container: :map}
+       }),
+       do: "This map reaches the end of the source without the '}' that closes its entries."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :container_unclosed, context: %{container: container}}),
     do: "This #{container} reaches the end of the source without the ']' that closes its elements."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :map}
+       }),
+       do: "This map has another entry here, but consecutive entries must be separated by a comma."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5233,7 +5252,14 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :call_argument_separator_missing}),
     do: "insert a comma before this argument"
 
-  defp syntax_problem_label(%SyntaxProblem{kind: :container_unclosed}), do: "close this container with `]`"
+  defp syntax_problem_label(%SyntaxProblem{kind: :container_unclosed, expected: expected}),
+    do: "close this container with `#{syntax_insertion(expected)}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :map}
+       }),
+       do: "insert a comma before this entry"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :container_separator_missing}),
     do: "insert a comma before this element"
@@ -5344,14 +5370,17 @@ defmodule Cure.Diagnostic.Adapter do
          %SyntaxProblem{
            kind: kind,
            opener: %Span{} = opener,
-           previous: previous
+           previous: previous,
+           context: context
          },
          primary_span
        )
        when kind in [:container_unclosed, :container_separator_missing, :container_trailing_separator] do
+    item = if Map.get(context, :container) == :map, do: "entry", else: "element"
+
     [
       pickup_label(opener, :secondary, "this container starts here"),
-      pickup_label(previous, :secondary, "the previous element ends here")
+      pickup_label(previous, :secondary, "the previous #{item} ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -5502,6 +5531,18 @@ defmodule Cure.Diagnostic.Adapter do
         edits: [%TextEdit{span: span, replacement: ", "}]
       }
     ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :map}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these entries",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
 
   defp syntax_insertions(%SyntaxProblem{kind: :container_separator_missing}, %Span{} = span),
     do: [

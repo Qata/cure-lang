@@ -5002,7 +5002,7 @@ defmodule Cure.Compiler.Parser do
       _ ->
         {pairs, state} = parse_map_pairs(state, :rbrace)
         state = skip_newlines(state)
-        {state, close_token} = expect_token_or_nil(state, :rbrace)
+        {state, close_token} = expect_container_close(state, :rbrace, :map, token, pairs, true)
         meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
         {{:map, meta, pairs}, state}
     end
