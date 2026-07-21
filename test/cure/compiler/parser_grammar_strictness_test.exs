@@ -444,6 +444,77 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     assert parameter_meta[:kind] == :keyword_variadic
   end
 
+  test "an unclosed function call pairs EOF with its opener and offers a closing edit" do
+    source = "fetch(1"
+    {:ok, tokens} = Lexer.tokenize(source, file: "unclosed_call.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:call_arguments_syntax, %{kind: :call_unclosed}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "unclosed_call.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- FUNCTION CALL IS NOT CLOSED [E094] ----------------------- unclosed_call.cure
+
+             The call to `fetch` reaches the end of the source without the ')' that closes
+             its argument list.
+
+             at unclosed_call.cure:1:8
+             1 | fetch(1
+               |      --^ this call's argument list starts here; the previous argument ends here; close this call with `)`
+
+             Hint: Insert `)` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ")"}]}] =
+             diagnostic.suggestions
+
+    assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 2
+  end
+
+  test "adjacent call arguments point between expressions and insert a comma" do
+    source = "fetch(1 2)"
+    {:ok, tokens} = Lexer.tokenize(source, file: "call_separator.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:call_arguments_syntax, %{kind: :call_argument_separator_missing}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "call_separator.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- CALL ARGUMENTS NEED A COMMA [E094] ---------------------- call_separator.cure
+
+             The call to `fetch` has another argument here, but consecutive arguments must be
+             separated by a comma.
+
+             at call_separator.cure:1:9
+             1 | fetch(1 2)
+               |      -- ^ this call's argument list starts here; the previous argument ends here; insert a comma before this argument
+
+             Hint: Insert `,` between these arguments
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 8
+    assert insertion.end_byte == 8
+
+    assert [%{"newText" => ", ", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 8},
+             "end" => %{"line" => 0, "character" => 8}
+           }
+  end
+
   describe "associative operators still chain" do
     test "`a + b + c` left-associates" do
       assert {:binary_op, _, [{:binary_op, _, [_a, _b]}, _c]} = parse!("a + b + c")

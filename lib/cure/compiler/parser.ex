@@ -4265,14 +4265,16 @@ defmodule Cure.Compiler.Parser do
   defp parse_call(state, func) do
     token = peek(state)
     state = advance(state)
+    name = extract_call_name(func)
     # Argument labels (`f(to: v)`) are a FUNCTION-call spelling. A PascalCase head
     # is a constructor application, where `Ctor(n: T, …)` is instead a TYPED
     # PATTERN (`maybe_wrap_as/2`) — the two spellings are syntactically identical
     # (`identifier :`), so the head's case is what disambiguates them. Only allow
     # label-grabbing for the non-constructor (function) head.
     allow_labels = not is_pascal_case?(func)
-    {args, arg_labels, arg_label_spans, state, close_token} = parse_call_args(state, allow_labels)
-    name = extract_call_name(func)
+
+    {args, arg_labels, arg_label_spans, state, close_token} =
+      parse_call_args(state, allow_labels, name, token)
 
     meta = [name: name, line: token.line, col: token.col]
 
@@ -4394,7 +4396,9 @@ defmodule Cure.Compiler.Parser do
   # `label_spans` are position-aligned with `args`; each label entry is the
   # entry the written argument label (`f(to: v)`) or `nil` when the argument is
   # positional. Callers that ignore labels bind the middle element to `_`.
-  defp parse_call_args(state, allow_labels) do
+  defp parse_call_args(state, allow_labels), do: parse_call_args(state, allow_labels, nil, nil)
+
+  defp parse_call_args(state, allow_labels, call_name, open_token) do
     state = skip_newlines(state)
 
     case peek(state) do
@@ -4412,13 +4416,90 @@ defmodule Cure.Compiler.Parser do
 
         {state, close_token} =
           case expect_token(state, :rparen) do
-            {:ok, token, next_state} -> {next_state, token}
-            {:error, next_state} -> {next_state, nil}
+            {:ok, token, next_state} ->
+              {next_state, token}
+
+            {:error, next_state} ->
+              args = [first | rest]
+              {contextualize_call_close_error(next_state, call_name, open_token, args), nil}
           end
 
         {[first | rest], [label | rest_labels], [label_span | rest_label_spans], state, close_token}
     end
   end
+
+  defp contextualize_call_close_error(state, nil, nil, _args), do: state
+
+  defp contextualize_call_close_error(state, call_name, open_token, args) do
+    observed = peek(state)
+
+    kind =
+      cond do
+        observed.type == :eof -> :call_unclosed
+        call_argument_start?(observed) -> :call_argument_separator_missing
+        true -> nil
+      end
+
+    if kind do
+      [_generic | rest] = state.errors
+      previous = args |> List.last() |> first_node_source_span()
+
+      span =
+        if kind == :call_argument_separator_missing do
+          %{
+            observed.span
+            | end_byte: observed.span.start_byte,
+              end_line: observed.span.start_line,
+              end_column: observed.span.start_column
+          }
+        else
+          observed.span
+        end
+
+      error =
+        {:call_arguments_syntax,
+         %{
+           kind: kind,
+           call: call_name,
+           expected: if(kind == :call_argument_separator_missing, do: :comma, else: :rparen),
+           observed: observed.value || observed.type,
+           token_type: observed.type,
+           span: span,
+           observed_span: observed.span,
+           opener_span: open_token.span,
+           previous_span: previous,
+           line: observed.line,
+           column: observed.col
+         }}
+
+      %{state | errors: [error | rest]}
+    else
+      state
+    end
+  end
+
+  defp call_argument_start?(%Token{type: type})
+       when type in [
+              :identifier,
+              :keyword,
+              :integer,
+              :float,
+              :string,
+              :char,
+              :atom,
+              :lparen,
+              :lbracket,
+              :map_open,
+              :binary_open,
+              :fn,
+              :minus,
+              :plus,
+              :bang,
+              :question
+            ],
+       do: true
+
+  defp call_argument_start?(_token), do: false
 
   defp parse_more_args(state, allow_labels) do
     case peek(state) do

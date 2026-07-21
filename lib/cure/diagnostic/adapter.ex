@@ -2494,6 +2494,21 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:call_arguments_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:lambda_block_unterminated, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -4932,6 +4947,11 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :variadic_parameter_name_missing}),
     do: "Variadic parameter needs a name"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :call_unclosed}), do: "Function call is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :call_argument_separator_missing}),
+    do: "Call arguments need a comma"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :bare_brace_expression}), do: "Brace cannot start an expression"
   defp syntax_problem_title(%SyntaxProblem{kind: :unmatched_closer}), do: "Closing delimiter has no opener"
   defp syntax_problem_title(%SyntaxProblem{kind: :mismatched_closer}), do: "Closing delimiter does not match"
@@ -5039,6 +5059,12 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{kind: :variadic_parameter_name_missing}),
     do: "The `*` marker must be followed by the name that receives extra positional arguments, for example `*values`."
 
+  defp syntax_problem_context(%SyntaxProblem{kind: :call_unclosed, context: %{call: call}}),
+    do: "The call to `#{call}` reaches the end of the source without the ')' that closes its argument list."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :call_argument_separator_missing, context: %{call: call}}),
+    do: "The call to `#{call}` has another argument here, but consecutive arguments must be separated by a comma."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :bare_brace_expression}),
     do:
       "A bare '{' does not begin a Cure expression. Write `Type{...}` for a record, `\#{...}` for a map, or use indentation for a block."
@@ -5077,6 +5103,11 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_expected_doc(%SyntaxProblem{kind: :function_parameters_unparenthesized}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :invalid_parameter_name}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :variadic_parameter_name_missing}), do: Doc.empty()
+
+  defp syntax_expected_doc(%SyntaxProblem{kind: kind})
+       when kind in [:call_unclosed, :call_argument_separator_missing],
+       do: Doc.empty()
+
   defp syntax_expected_doc(%SyntaxProblem{expected: :explain_point}), do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{} = problem) do
@@ -5144,6 +5175,11 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :variadic_parameter_name_missing}),
     do: "write the variadic parameter name here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :call_unclosed}), do: "close this call with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :call_argument_separator_missing}),
+    do: "insert a comma before this argument"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :bare_brace_expression}),
     do: "choose record, map, or block syntax here"
@@ -5223,6 +5259,26 @@ defmodule Cure.Diagnostic.Adapter do
        )
        when marker != primary_span,
        do: [%Label{span: marker, style: :secondary, message: "this variadic marker needs a binder"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       )
+       when kind in [:call_unclosed, :call_argument_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "this call's argument list starts here"),
+      pickup_label(previous, :secondary, "the previous argument ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
 
   defp syntax_secondary_labels(%SyntaxProblem{opener: %Span{} = opener}, primary_span) when opener != primary_span,
     do: [%Label{span: opener, style: :secondary, message: "the construct starts here"}]
@@ -5355,6 +5411,15 @@ defmodule Cure.Diagnostic.Adapter do
       %Suggestion{
         message: "Add a descriptive lower-case name after the variadic marker",
         applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :call_argument_separator_missing}, %Span{} = span),
+    do: [
+      %Suggestion{
+        message: "Insert `,` between these arguments",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ", "}]
       }
     ]
 
