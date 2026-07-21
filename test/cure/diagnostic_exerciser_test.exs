@@ -11,25 +11,32 @@ defmodule Cure.DiagnosticExerciserTest do
   test "exercises every public diagnostic family and shows user output" do
     compiler_cases = [
       {"unknown global", "E091", "mod DiagnosticUnknown\n  fn run() -> Int = missing_name\n"},
-      {"syntax error", "E094", "mod DiagnosticSyntax\n  fn run(] -> Int = 1\n"},
+      {"syntax error", "E094", "mod DiagnosticSyntax\n  fn run(] -> Int = 1\n", :syntax_error_parser},
       {"type mismatch", "E093",
        "mod DiagnosticType\n  type Nat = Z | S(Nat)\n  fn bad() -> Equivalent(Nat, Z, S(Z)) = reflexive(Z)\n"},
       {"unfilled hole", "E014", "mod DiagnosticHole\n  fn bad() -> Int = ???\n"},
       {"implementation member scope", "E116",
        "mod DiagnosticImplementation\n  interface Marker(t)\n    fn mark(value: t) -> Bool\n  implementation Marker for Int\n  fn mark(value: Int) -> Bool = true\nend\n"},
-      {"unterminated lambda", "E035", "fn (x) -> x; x;"},
+      {"unterminated lambda", "E035", "fn (x) -> x; x;", :unterminated_lambda},
       {"unrecognized pattern", "E090",
        "mod DiagnosticPattern\n  fn bad(x: Int) -> Int = match x\n    1..10 -> 1\n    _ -> 0\n"},
       {"missing implicit", "E011", "mod DiagnosticImplicit\n  fn bad() -> Int = reflexive()\n"},
       {"unknown pattern constructor", "E091",
        "mod DiagnosticCtor\n  type Nat = Z | S(Nat)\n  fn bad(x: Nat) -> Nat = match x\n    Missing() -> Z\n    _ -> Z\n"},
-      {"pickup without else", "E076", "mod DiagnosticPickupNoElse\n  fn bad(x: Int) -> Int = pickup\n    x > 0 -> 1\n"},
+      {"pickup without else", "E076", "mod DiagnosticPickupNoElse\n  fn bad(x: Int) -> Int = pickup\n    x > 0 -> 1\n",
+       :pickup_missing_else},
       {"pickup else not last", "E077",
-       "mod DiagnosticPickupElseLast\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    x > 0 -> 2\n"},
+       "mod DiagnosticPickupElseLast\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    x > 0 -> 2\n",
+       :pickup_else_not_last},
       {"pickup multiple else", "E078",
-       "mod DiagnosticPickupMultipleElse\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    else -> 2\n"},
+       "mod DiagnosticPickupMultipleElse\n  fn bad(x: Int) -> Int = pickup\n    else -> 1\n    else -> 2\n",
+       :pickup_multiple_else},
       {"record field mismatch", "E022",
-       "mod DiagnosticRecord\n  type Nat = Z | S(Nat)\n  rec Point\n    x: Nat\n    y: Nat\n  fn bad() -> Point = Point{x: S(Z()), z: Z()}\nend\n"}
+       "mod DiagnosticRecord\n  type Nat = Z | S(Nat)\n  rec Point\n    x: Nat\n    y: Nat\n  fn bad() -> Point = Point{x: S(Z()), z: Z()}\nend\n"},
+      {"parser macro failure", "E092", "macro M\n  syntax m <x: X> where Eq(y) becomes x\n", :parser_macro_failure},
+      {"parser operator conflict", "E106", "mod DiagnosticFixity\n  use Std.Operators\n  infix `|>` : Additive\nend\n",
+       :operator_conflict_parser},
+      {"proof chain syntax", "E109", "proof chain\n  first\n", :proof_chain_syntax}
     ]
 
     boundary_cases = [
@@ -198,8 +205,11 @@ defmodule Cure.DiagnosticExerciserTest do
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))
+    compiler_fixture_ids = Enum.flat_map(compiler_cases, &compiler_case_fixture_ids/1)
 
-    Enum.each(compiler_cases, fn {label, expected_code, source} ->
+    Enum.each(compiler_cases, fn compiler_case ->
+      {label, expected_code, source, fixture_id} = compiler_case_parts(compiler_case)
+
       case Cure.Compiler.compile_string(source, emit_events: false) do
         {:ok, module, warnings} ->
           flunk("#{label} unexpectedly compiled as #{inspect(module)} with #{length(warnings)} warning(s)")
@@ -207,6 +217,12 @@ defmodule Cure.DiagnosticExerciserTest do
         {:error, reason} ->
           {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, "#{label}.cure", source)
           assert diagnostic.code == expected_code
+
+          if fixture_id do
+            assert {^expected_code, _producer} =
+                     Map.fetch!(Cure.Diagnostic.Registry.producer_fixture_inventory(), fixture_id)
+          end
+
           assert diagnostic.primary, "#{label} did not retain an authored source span"
           plain = Renderer.plain(diagnostic, registry)
           assert plain =~ " | ", "#{label} did not render an authored source excerpt"
@@ -226,6 +242,11 @@ defmodule Cure.DiagnosticExerciserTest do
           IO.puts(:stderr, "[#{label}]\n" <> terminal)
       end
     end)
+
+    assert :ok =
+             Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
+               only_producers: [:parser]
+             )
 
     Enum.each(boundary_cases, fn {label, expected_code, reason} ->
       {diagnostic, _registry} =
@@ -320,4 +341,10 @@ defmodule Cure.DiagnosticExerciserTest do
     refute plain =~ "lib/cure/"
     refute plain =~ "#Function<"
   end
+
+  defp compiler_case_parts({label, code, source}), do: {label, code, source, nil}
+  defp compiler_case_parts({label, code, source, fixture_id}), do: {label, code, source, fixture_id}
+
+  defp compiler_case_fixture_ids({_label, _code, _source}), do: []
+  defp compiler_case_fixture_ids({_label, _code, _source, fixture_id}), do: [fixture_id]
 end
