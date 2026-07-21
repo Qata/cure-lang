@@ -2476,7 +2476,7 @@ defmodule Cure.Elab.Elaborator do
                 {:ok, term}
 
               {:error, reason} ->
-                {:error, attach_call_result_context(reason, expr)}
+                {:error, attach_call_result_context(reason, expr, env)}
             end
           end
       end
@@ -2485,20 +2485,53 @@ defmodule Cure.Elab.Elaborator do
 
   defp attach_call_result_context(
          {:source_context, reason, context},
-         {:function_call, _meta, _args} = expression
+         {:function_call, meta, _args} = expression,
+         env
        )
        when is_map(context) do
     if Map.get(context, :expectation_origin) in [:call_argument, :operator_operand] do
       {:source_context, reason, context}
     else
-      {:source_context, reason, Map.merge(context, call_result_context(expression))}
+      origin_context =
+        if extern_call_mismatch?(reason, meta, env),
+          do: ffi_result_context(expression),
+          else: call_result_context(expression)
+
+      {:source_context, reason, Map.merge(context, origin_context)}
     end
   end
 
-  defp attach_call_result_context(reason, {:function_call, _meta, _args} = expression),
-    do: {:source_context, reason, call_result_context(expression)}
+  defp attach_call_result_context(reason, {:function_call, meta, _args} = expression, env) do
+    context =
+      if extern_call_mismatch?(reason, meta, env),
+        do: ffi_result_context(expression),
+        else: call_result_context(expression)
 
-  defp attach_call_result_context(reason, _expression), do: reason
+    {:source_context, reason, context}
+  end
+
+  defp attach_call_result_context(reason, _expression, _env), do: reason
+
+  defp extern_call_mismatch?(reason, meta, env) do
+    name = Keyword.get(meta, :name)
+    key = if is_binary(name), do: String.to_atom(name), else: name
+
+    ffi_type_mismatch?(reason) and
+      match?(%{body: {:extern, _}}, Env.get_def(env, key))
+  end
+
+  defp ffi_type_mismatch?({:source_context, reason, _context}), do: ffi_type_mismatch?(reason)
+  defp ffi_type_mismatch?({:cannot_unify, _actual, _expected}), do: true
+  defp ffi_type_mismatch?({:index_mismatch, {:cannot_unify, _actual, _expected}}), do: true
+  defp ffi_type_mismatch?({:conversion_failure, _actual, _expected}), do: true
+  defp ffi_type_mismatch?(_reason), do: false
+
+  defp ffi_result_context({:function_call, meta, _args} = expression) when is_list(meta) do
+    Map.merge(call_result_context(expression), %{
+      checking: Keyword.get(meta, :name),
+      expectation_origin: :ffi
+    })
+  end
 
   defp call_result_context({:function_call, meta, _args}) when is_list(meta) do
     span = surface_expression_span({:function_call, meta, []})

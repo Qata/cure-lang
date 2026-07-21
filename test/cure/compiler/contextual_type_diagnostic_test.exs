@@ -80,6 +80,25 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this expression has an invalid effect"
   end
 
+  test "an extern result mismatch identifies the FFI boundary" do
+    source =
+      "@extern(:erlang, :abs, 1)\nfn abs(x: Int) -> Int\nfn bad() -> Bool = abs(1)\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "ffi.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "ffi.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :ffi
+    assert rendered =~ "3 | fn bad() -> Bool = abs(1)"
+    assert rendered =~ "this FFI boundary has the wrong type"
+  end
+
   test "a real conditional mismatch reports the authored guard" do
     source = "fn main() -> Int = if 1 then 2 else 3\n"
 
