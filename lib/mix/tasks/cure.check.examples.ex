@@ -84,7 +84,11 @@ defmodule Mix.Tasks.Cure.Check.Examples do
   }
 
   @impl Mix.Task
-  def run(_args) do
+  def run(args) do
+    if args != [] do
+      usage_error("Usage: mix cure.check.examples")
+    end
+
     # Make sure stdlib beams are on the path and loaded.
     Application.ensure_all_started(:cure)
     ensure_stdlib_compiled()
@@ -96,17 +100,13 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
     passed = Enum.count(results, &match?({:pass, _}, &1))
     skipped = Enum.count(results, &match?({:skip, _}, &1))
-    failed = Enum.filter(results, &match?({:fail, _, _}, &1))
+    failed = Enum.filter(results, &match?({:fail, _}, &1))
 
     if failed == [] do
       IO.puts("\nexamples: #{passed} passed, #{skipped} skipped, 0 failed")
       :ok
     else
       IO.puts("\nexamples: #{passed} passed, #{length(failed)} failed")
-
-      Enum.each(failed, fn {:fail, name, reason} ->
-        IO.puts("  #{name}: #{reason}")
-      end)
 
       exit({:shutdown, 1})
     end
@@ -141,9 +141,9 @@ defmodule Mix.Tasks.Cure.Check.Examples do
         {:pass, name}
 
       {:error, reason} ->
-        msg = render_host_diagnostic(reason, path)
-        IO.puts("  FAIL #{pad(name)} #{msg}")
-        {:fail, name, msg}
+        IO.puts("  FAIL #{pad(name)} compilation failed")
+        emit_host_diagnostic(reason, path)
+        {:fail, name}
     end
   end
 
@@ -160,29 +160,34 @@ defmodule Mix.Tasks.Cure.Check.Examples do
                 {:pass, name}
               else
                 msg = "expected #{expected}, got #{actual}"
-                IO.puts("  FAIL #{pad(name)} #{msg}")
-                {:fail, name, msg}
+                IO.puts("  FAIL #{pad(name)} output differed")
+                emit_diagnostic(Cure.Diagnostic.Operational.command_failure("example #{name}", msg))
+                {:fail, name}
               end
             catch
               kind, reason ->
-                msg =
-                  "#{kind}: " <>
-                    render_host_diagnostic(reason, path)
+                IO.puts("  FAIL #{pad(name)} execution failed")
 
-                IO.puts("  FAIL #{pad(name)} #{msg}")
-                {:fail, name, msg}
+                emit_diagnostic(
+                  Cure.Diagnostic.Operational.command_failure(
+                    "example #{name}",
+                    Exception.format_banner(kind, reason)
+                  )
+                )
+
+                {:fail, name}
             end
 
           {:error, reason} ->
-            msg = render_host_diagnostic(reason, path)
-            IO.puts("  FAIL #{pad(name)} #{msg}")
-            {:fail, name, msg}
+            IO.puts("  FAIL #{pad(name)} compilation failed")
+            emit_host_diagnostic(reason, path, src)
+            {:fail, name}
         end
 
       {:error, reason} ->
-        msg = "read error: #{reason}"
-        IO.puts("  FAIL #{pad(name)} #{msg}")
-        {:fail, name, msg}
+        IO.puts("  FAIL #{pad(name)} could not read source")
+        emit_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason))
+        {:fail, name}
     end
   end
 
@@ -195,11 +200,23 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
   defp pad(name), do: String.pad_trailing(name, 26)
 
-  defp render_host_diagnostic(reason, path) do
-    {diagnostic, registry} = Host.to_diagnostic(reason, path)
+  defp emit_host_diagnostic(reason, path, source \\ nil) do
+    {diagnostic, registry} = Host.to_diagnostic(reason, path, source)
 
-    Sink.new(format: :plain, color: :auto, width: 80, registry: registry)
-    |> Sink.render(diagnostic)
+    emit_diagnostic(diagnostic, registry)
+  end
+
+  defp emit_diagnostic(diagnostic, registry \\ nil) do
+    rendered =
+      Sink.new(format: :plain, color: :auto, width: 80, registry: registry)
+      |> Sink.render(diagnostic)
+
+    Mix.shell().error(rendered)
+  end
+
+  defp usage_error(message) do
+    emit_diagnostic(Cure.Diagnostic.Operational.usage(message))
+    exit({:shutdown, 1})
   end
 
   # -- Stdlib preload ---------------------------------------------------------
