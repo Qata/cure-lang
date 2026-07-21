@@ -111,6 +111,19 @@ defmodule Cure.CLITest do
       assert output =~ "INVALID COMMAND USAGE"
       refute output =~ "{:usage_error"
     end
+
+    test "unknown options fail as E099 before compilation" do
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["compile", "--verbsoe", "examples/hello.cure"])) ==
+                   {:shutdown, 1}
+        end)
+
+      assert output =~ "INVALID COMMAND USAGE [E099]"
+      assert output =~ "--verbsoe"
+      refute output =~ "UNKNOWN VALUE"
+      refute output =~ "Compiling examples/hello.cure"
+    end
   end
 
   describe "cure run" do
@@ -273,6 +286,9 @@ defmodule Cure.CLITest do
       assert output =~ "[E094]"
       assert output =~ Path.basename(path)
       assert output =~ "^"
+      assert length(Regex.scan(~r/-- .* \[E094\]/, output)) == 1
+      assert output =~ "warning: `cure fmt --aggressive`"
+      refute output =~ "warning: -- I GOT STUCK"
       refute output =~ "{:expected_token"
     end
   end
@@ -478,6 +494,8 @@ defmodule Cure.CLITest do
         end)
 
       assert stderr =~ "[E098]"
+      assert length(Regex.scan(~r/-- COMMAND FAILED \[E098\]/, stderr)) == 1
+      refute stderr =~ "FAIL test/failure.cure"
       refute stderr =~ "{:"
     end
   end

@@ -29,9 +29,9 @@ defmodule Cure.CLI do
     # Ensure the application is started
     Application.ensure_all_started(:cure)
 
-    {opts, rest, _} =
+    {opts, rest, invalid} =
       OptionParser.parse(args,
-        switches: [
+        strict: [
           output_dir: :string,
           type_check: :boolean,
           optimize: :boolean,
@@ -92,6 +92,10 @@ defmodule Cure.CLI do
         ],
         aliases: [o: :output_dir, v: :verbose, h: :help, f: :filter, t: :template]
       )
+
+    if invalid != [] do
+      usage_error("Invalid command options: #{format_invalid_options(invalid)}")
+    end
 
     if opts[:help] do
       help()
@@ -450,7 +454,7 @@ defmodule Cure.CLI do
       case Cure.Compiler.prepare_files(files) do
         {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
           Enum.each(cycles, fn walk ->
-            warn(Cure.Diagnostic.Host.render({:import_cycle, walk}, hd(paths)))
+            emit_host_diagnostic({:import_cycle, walk}, hd(paths))
           end)
 
           {ordered, providers}
@@ -472,7 +476,7 @@ defmodule Cure.CLI do
     case Cure.Compiler.compile_file(path, opts) do
       {:ok, module, warnings} ->
         Enum.each(warnings, fn w ->
-          warn("  " <> Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.compiler_warning(w)))
+          emit_host_diagnostic({:compiler_warning, w}, w.file)
         end)
 
         _ = Cure.Compiler.load_emitted(module, Keyword.fetch!(opts, :output_dir))
@@ -649,7 +653,8 @@ defmodule Cure.CLI do
               :ok
 
             {:error, reason} ->
-              error("  #{name}: #{Cure.Diagnostic.Host.render(reason, path)}")
+              info("  #{name}: compilation failed")
+              emit_host_diagnostic(reason, path)
               :error
           end
         end)
@@ -822,17 +827,19 @@ defmodule Cure.CLI do
                   {:pass, "#{file}: #{name}"}
                 catch
                   kind, reason ->
-                    {:fail,
-                     Cure.Diagnostic.Host.render(
-                       {:command_failed, "test #{name}", {kind, reason}},
-                       file,
-                       source
-                     )}
+                    emit_host_diagnostic(
+                      {:command_failed, "test #{name}", {kind, reason}},
+                      file,
+                      source
+                    )
+
+                    {:fail, "#{file}: #{name}"}
                 end
               end)
 
             {:error, reason} ->
-              [{:fail, "#{file}: compilation error\n" <> Cure.Diagnostic.Host.render(reason, file, source)}]
+              emit_host_diagnostic(reason, file, source)
+              [{:fail, "#{file}: compilation failed"}]
           end
         end)
         |> List.flatten()
@@ -849,7 +856,7 @@ defmodule Cure.CLI do
 
       Enum.each(results, fn
         {:pass, name} -> info("  PASS #{name}")
-        {:fail, name} -> error("  FAIL #{name}")
+        {:fail, name} -> info("  FAIL #{name}")
       end)
 
       info("#{pass} passed, #{fail} failed")
@@ -882,7 +889,7 @@ defmodule Cure.CLI do
           :ok
 
         {:error, reason} ->
-          warn(Cure.Diagnostic.Host.render(reason, file))
+          emit_host_diagnostic(reason, file)
       end
     end)
   end
@@ -899,8 +906,13 @@ defmodule Cure.CLI do
           |> Enum.filter(fn %{name: n} -> filter == nil or String.contains?(n, filter) end)
           |> Enum.map(fn %{name: name, expr: expr, expected: expected} ->
             case Cure.Doc.Doctests.run_one(expr, expected, file) do
-              :ok -> {:pass, "#{file}: doctest #{name}"}
-              {:fail, reason} -> {:fail, "#{file}: doctest #{name} -- #{reason}"}
+              :ok ->
+                {:pass, "#{file}: doctest #{name}"}
+
+              {:fail, reason} ->
+                error_diagnostic(Cure.Diagnostic.Operational.command_failure("doctest #{name}", reason))
+
+                {:fail, "#{file}: doctest #{name}"}
             end
           end)
       end
@@ -1762,10 +1774,8 @@ defmodule Cure.CLI do
           :ok
         else
           {:error, reason} ->
-            error(
-              "  " <>
-                Cure.Diagnostic.Host.render(reason, file, source)
-            )
+            {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, file, source)
+            emit_diagnostic(diagnostic, registry)
 
             :error
         end
@@ -1853,16 +1863,13 @@ defmodule Cure.CLI do
                   :ok
 
                 {:error, reason} ->
-                  error(
-                    "  " <>
-                      Cure.Diagnostic.Host.render(reason, f, src)
-                  )
+                  emit_host_diagnostic(reason, f, src)
 
                   :error
               end
 
             {:error, reason} ->
-              error("  #{f}: #{reason}")
+              error_diagnostic(Cure.Diagnostic.Operational.file_read(f, reason))
               :error
           end
         end)
@@ -2250,20 +2257,27 @@ defmodule Cure.CLI do
   defp info(msg), do: IO.puts(msg)
   defp warn(msg), do: IO.puts(:stderr, "warning: #{msg}")
 
+  defp format_invalid_options(invalid) do
+    Enum.map_join(invalid, ", ", fn
+      {option, nil} -> to_string(option)
+      {option, value} -> "#{option}=#{value}"
+    end)
+  end
+
   defp error_diagnostic(%Cure.Diagnostic{} = diagnostic) do
-    case Cure.Diagnostic.Host.emit_diagnostic(diagnostic) do
+    emit_diagnostic(diagnostic)
+  end
+
+  defp emit_diagnostic(%Cure.Diagnostic{} = diagnostic, registry \\ nil) do
+    case Cure.Diagnostic.Host.emit_diagnostic(diagnostic, registry: registry) do
       {:ok, _sink} -> :ok
       {:error, _reason} -> raise "failed to emit diagnostic"
     end
   end
 
-  defp emit_host_diagnostic(reason, path) do
-    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path)
-
-    case Cure.Diagnostic.Host.emit_diagnostic(diagnostic, registry: registry) do
-      {:ok, _sink} -> :ok
-      {:error, emit_reason} -> raise "failed to emit diagnostic: #{inspect(emit_reason)}"
-    end
+  defp emit_host_diagnostic(reason, path, source \\ nil) do
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path, source)
+    emit_diagnostic(diagnostic, registry)
   end
 
   defp error(msg) do
