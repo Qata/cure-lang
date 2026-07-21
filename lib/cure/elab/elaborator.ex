@@ -2160,10 +2160,15 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp attach_record_field_reason(reason, _meta, _field_pairs, _env), do: reason
+  defp attach_record_field_reason(reason, meta, field_pairs, env) do
+    case record_field_context(meta, field_pairs, %{}, env) do
+      nil -> reason
+      details -> {:source_context, reason, details}
+    end
+  end
 
   defp record_field_context(meta, field_pairs, context, env) do
-    index = Map.get(context, :argument_index)
+    index = Map.get(context, :argument_index) || singleton_record_field_index(field_pairs)
     name = Keyword.get(meta, :name)
     ctor = name && Inductive.get_ctor(env, String.to_atom(name))
 
@@ -2197,6 +2202,9 @@ defmodule Cure.Elab.Elaborator do
         false
     end)
   end
+
+  defp singleton_record_field_index([{:pair, _meta, [_label, _value]}]), do: 0
+  defp singleton_record_field_index(_field_pairs), do: nil
 
   # The saturated (or non-function-goal) checking-mode path for a non-constructor
   # call: try the goal-first pre-pass when the goal can inform implicit solving,

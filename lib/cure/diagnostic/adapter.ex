@@ -562,6 +562,12 @@ defmodule Cure.Diagnostic.Adapter do
       end)
 
     case {reason, Map.get(context, :expectation_origin)} do
+      {{:index_mismatch, {:cannot_unify, actual, expected}}, origin} when not is_nil(origin) ->
+        contextual_type_problem(:index_mismatch, actual, expected, origin, context, opts)
+
+      {{:cannot_unify, actual, expected}, origin} when not is_nil(origin) ->
+        contextual_type_problem(:cannot_unify, actual, expected, origin, context, opts)
+
       {{:conversion_failure, actual, expected}, origin} when not is_nil(origin) ->
         from_error(
           %TypeProblem{
@@ -1738,6 +1744,26 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{first: first, second: second}, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  defp contextual_type_problem(kind, actual, expected, origin, context, opts) do
+    from_error(
+      %TypeProblem{
+        kind: kind,
+        actual: actual,
+        expected: expected,
+        origin: %ExpectationOrigin{
+          kind: origin,
+          span: Keyword.get(opts, :span, Map.get(context, :expectation_span)),
+          owner: Map.get(context, :checking),
+          index: Map.get(context, :argument_index)
+        },
+        expression: Map.get(context, :expression_category, :expression),
+        span: Keyword.get(opts, :span, Map.get(context, :span)),
+        debug: %{cause: {kind, actual, expected}, checking: Map.get(context, :checking)}
+      },
+      opts
+    )
+  end
 
   defp macro_expansion_failure(kind, message, frames, opts) do
     provenance =

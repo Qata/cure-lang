@@ -331,6 +331,32 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this record field has the wrong type"
   end
 
+  test "a real one-field record mismatch points at the field value" do
+    source =
+      "mod M\n" <>
+        "  rec Point\n" <>
+        "    x: Int\n" <>
+        "  fn bad() -> Point = Point{x: \"bad\"}\n" <>
+        "end\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "record.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :record_field
+    assert diagnostic.payload.origin.owner == :x
+    assert diagnostic.primary.span.start_line == 4
+    assert rendered =~ "Field `x` does not match"
+    assert rendered =~ "4 |   fn bad() -> Point = Point{x: \"bad\"}"
+    assert rendered =~ "this record field has the wrong type"
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 
