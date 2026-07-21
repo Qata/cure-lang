@@ -4814,9 +4814,13 @@ defmodule Cure.Compiler.Parser do
 
               _ ->
                 state = skip_newlines(state)
-                {state, close_token} = expect_token_or_nil(state, :rbracket)
+                elements = [first | rest_heads]
+
+                {state, close_token} =
+                  expect_container_close(state, :rbracket, :list, token, elements, true)
+
                 meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
-                ast = {:list, meta, [first | rest_heads]}
+                ast = {:list, meta, elements}
                 {ast, state}
             end
         end
@@ -4868,12 +4872,69 @@ defmodule Cure.Compiler.Parser do
         {first, state} = parse_expr(state, 0)
         {rest, state} = parse_comma_exprs(state)
         state = skip_newlines(state)
-        {state, close_token} = expect_token_or_nil(state, :rbracket)
+        elements = [first | rest]
+
+        {state, close_token} =
+          expect_container_close(state, :rbracket, :tuple, token, elements, true)
 
         meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
 
-        {:tuple, meta, [first | rest]}
+        {:tuple, meta, elements}
         |> then(&{&1, state})
+    end
+  end
+
+  defp expect_container_close(state, closing, container, open_token, elements, separator_allowed) do
+    case expect_token(state, closing) do
+      {:ok, token, next_state} ->
+        {next_state, token}
+
+      {:error, next_state} ->
+        observed = peek(next_state)
+
+        kind =
+          cond do
+            observed.type == :eof -> :container_unclosed
+            separator_allowed and call_argument_start?(observed) -> :container_separator_missing
+            true -> nil
+          end
+
+        if kind do
+          [_generic | rest] = next_state.errors
+          previous = elements |> List.last() |> first_node_source_span()
+
+          span =
+            if kind == :container_separator_missing do
+              %{
+                observed.span
+                | end_byte: observed.span.start_byte,
+                  end_line: observed.span.start_line,
+                  end_column: observed.span.start_column
+              }
+            else
+              observed.span
+            end
+
+          error =
+            {:container_elements_syntax,
+             %{
+               kind: kind,
+               container: container,
+               expected: if(kind == :container_separator_missing, do: :comma, else: closing),
+               observed: observed.value || observed.type,
+               token_type: observed.type,
+               span: span,
+               observed_span: observed.span,
+               opener_span: open_token.span,
+               previous_span: previous,
+               line: observed.line,
+               column: observed.col
+             }}
+
+          {%{next_state | errors: [error | rest]}, nil}
+        else
+          {next_state, nil}
+        end
     end
   end
 

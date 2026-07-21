@@ -203,10 +203,9 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     assert diagnostic.suggestions == []
   end
 
-  test "missing closing delimiters at EOF name the construct and offer the unique insertion" do
+  test "a missing closing parenthesis at EOF names the construct and offers the unique insertion" do
     for {source, expected, title, replacement} <- [
-          {"(1", :rparen, "Parenthesized expression is not closed", ")"},
-          {"[1", :rbracket, "Bracketed expression is not closed", "]"}
+          {"(1", :rparen, "Parenthesized expression is not closed", ")"}
         ] do
       {:ok, tokens} = Lexer.tokenize(source, file: "unclosed.cure", emit_events: false)
 
@@ -513,6 +512,79 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
              "start" => %{"line" => 0, "character" => 8},
              "end" => %{"line" => 0, "character" => 8}
            }
+  end
+
+  test "an unclosed list pairs EOF with its opener and offers a closing bracket" do
+    source = "[1"
+    {:ok, tokens} = Lexer.tokenize(source, file: "list.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :list}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "list.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- LIST IS NOT CLOSED [E094] ----------------------------------------- list.cure
+
+             This list reaches the end of the source without the ']' that closes its
+             elements.
+
+             at list.cure:1:3
+             1 | [1
+               | --^ this container starts here; the previous element ends here; close this container with `]`
+
+             Hint: Insert `]` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "]"}]}] = diagnostic.suggestions
+    assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 2
+  end
+
+  test "adjacent tuple elements get a zero-width comma insertion" do
+    source = "%[1 2]"
+    {:ok, tokens} = Lexer.tokenize(source, file: "tuple.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:container_elements_syntax, %{kind: :container_separator_missing, container: :tuple}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "tuple.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- TUPLE ELEMENTS NEED A COMMA [E094] ------------------------------- tuple.cure
+
+             This tuple has another element here, but consecutive elements must be separated
+             by a comma.
+
+             at tuple.cure:1:5
+             1 | %[1 2]
+               | --- ^ this container starts here; the previous element ends here; insert a comma before this element
+
+             Hint: Insert `,` between these elements
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 4
+    assert insertion.end_byte == 4
+  end
+
+  test "list separators and tuple closers use the same contextual container family" do
+    for {source, expected_kind, expected_container} <- [
+          {"[1 2]", :container_separator_missing, :list},
+          {"%[1", :container_unclosed, :tuple}
+        ] do
+      {:ok, tokens} = Lexer.tokenize(source, file: "container.cure", emit_events: false)
+      assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+
+      assert {:container_elements_syntax, %{kind: ^expected_kind, container: ^expected_container}} = error
+    end
   end
 
   describe "associative operators still chain" do
