@@ -98,4 +98,54 @@ defmodule Cure.Diagnostic.ProofChainDiagnosticTest do
     assert length(diagnostic.secondary) >= 1
     assert Renderer.plain(diagnostic, registry) =~ "previous endpoint"
   end
+
+  test "unfinished because blocks expose their residual goal and local facts" do
+    source = """
+    mod OpenBecause
+      use Std.Equivalent
+      fn proof(x: Int) -> Equivalent(Int, x, x) = proof chain
+        x
+          == x
+          because
+            have fact: Equivalent(Int, x, x) = reflexive(x)
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source, file: "open_because.cure", emit_events: false)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "open_because.cure", source)
+    assert diagnostic.code == "E110"
+    assert diagnostic.payload.kind == :unfinished_justification
+    assert diagnostic.payload.cause == {:open_goal, ["fact"]}
+    assert diagnostic.payload.residual_goal
+    assert Renderer.plain(diagnostic, registry) =~ "still open"
+    assert Renderer.lsp(diagnostic, registry, :utf16)["range"]["start"]["line"] == 5
+  end
+
+  test "statements after closure use E109 and label both statements" do
+    source = """
+    mod ClosedBecause
+      use Std.Equivalent
+      fn proof(x: Int) -> Equivalent(Int, x, x) = proof chain
+        x
+          == x
+          because
+            reflexive(x)
+            reflexive(x)
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source, file: "closed_because.cure", emit_events: false)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "closed_because.cure", source)
+    assert diagnostic.code == "E109"
+    assert diagnostic.payload.kind == :unreachable_proof_statement
+    assert length(diagnostic.secondary) == 1
+    plain = Renderer.plain(diagnostic, registry)
+    assert plain =~ "already closed here"
+    assert plain =~ "statement is unreachable"
+    assert Renderer.lsp(diagnostic, registry, :utf16)["relatedInformation"] != []
+  end
 end

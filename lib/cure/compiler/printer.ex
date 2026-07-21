@@ -464,12 +464,12 @@ defmodule Cure.Compiler.Printer do
       |> Enum.with_index()
       |> Enum.map(fn {{:proof_step, _step_meta, [_marker, right, justification]}, index} ->
         right = render(right, depth + 2, indent)
-        because = render(justification, depth + 2, indent)
+        because = proof_justification_to_string(justification, depth, indent)
 
         if index == 0 do
-          "#{relation_pad}== #{right}\n#{relation_pad}because #{because}"
+          "#{relation_pad}== #{right}\n#{relation_pad}#{because}"
         else
-          "#{step_pad}_ == #{right}\n#{relation_pad}because #{because}"
+          "#{step_pad}_ == #{right}\n#{relation_pad}#{because}"
         end
       end)
       |> Enum.join("\n\n")
@@ -2783,4 +2783,13 @@ defmodule Cure.Compiler.Printer do
     |> Enum.map(&grapheme_width/1)
     |> Enum.max()
   end
+
+  defp proof_justification_to_string({:proof_justification, _meta, statements}, depth, indent) do
+    command_pad = String.duplicate(indent, depth + 3)
+    rendered = Enum.map_join(statements, "\n#{command_pad}", &render(&1, depth + 3, indent))
+    "because\n#{command_pad}#{rendered}"
+  end
+
+  defp proof_justification_to_string(justification, depth, indent),
+    do: "because #{render(justification, depth + 2, indent)}"
 end

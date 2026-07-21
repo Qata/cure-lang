@@ -42,11 +42,24 @@ defmodule Cure.Elab.Erase do
 
   def erase(env, {:lam, g, dom, body}), do: {:lam, g, erase(env, dom), erase(env, body)}
 
-  # `:let` survives erasure: its whole point is that `val` is emitted ONCE and
+  # The administrative identity `let x = value in x` is exactly `value`: it
+  # neither duplicates nor drops evaluation. Proof-command facts commonly
+  # finish in this shape, so eliminating it prevents compile-time command
+  # scaffolding from becoming runtime BEAM structure. This is a general,
+  # semantics-preserving Core erasure rule, not proof-specific lowering.
+  def erase(env, {:let, _g, _ty, val, {:var, 0}}), do: erase(env, val)
+
+  # Other `:let`s survive erasure: their whole point is that `val` is emitted ONCE and
   # bound to a BEAM variable. Dropping it here would reintroduce the duplication
   # the binder exists to remove. The ascription is erased like any other type.
-  def erase(env, {:let, _g, ty, val, body}),
-    do: {:let, Cure.Core.Grade.unrestricted(), erase(env, ty), erase(env, val), erase(env, body)}
+  def erase(env, {:let, _g, ty, val, body}) do
+    erased_value = erase(env, val)
+
+    case erase(env, body) do
+      {:var, 0} -> erased_value
+      erased_body -> {:let, Cure.Core.Grade.unrestricted(), erase(env, ty), erased_value, erased_body}
+    end
+  end
 
   def erase(env, {:app, _f, _x} = app) do
     {head, args} = spine(app, [])

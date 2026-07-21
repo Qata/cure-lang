@@ -69,9 +69,27 @@ defmodule Cure.Elab.ProofChain do
     do: {:error, {:proof_chain_syntax, :malformed_step, state.index, other}}
 
   defp check_justification(justification, expected, index, meta, names, ctx, env) do
-    case Elaborator.elaborate_expr_checked(justification, expected, names, ctx, env) do
+    result =
+      case justification do
+        {:proof_justification, _just_meta, _statements} ->
+          case Cure.Elab.ProofGoal.run(justification, expected, names, ctx, env, index) do
+            {:ok, proof, _trace} -> {:ok, proof}
+            {:error, _} = error -> error
+          end
+
+        _ ->
+          Elaborator.elaborate_expr_checked(justification, expected, names, ctx, env)
+      end
+
+    case result do
       {:ok, proof} ->
         {:ok, proof}
+
+      {:error, {:proof_chain_mismatch, _} = reason} ->
+        {:error, reason}
+
+      {:error, {:proof_chain_syntax, _} = reason} ->
+        {:error, reason}
 
       {:error, reason} ->
         info = Metadata.source_info(meta)

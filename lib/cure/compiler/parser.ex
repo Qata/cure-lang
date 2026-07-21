@@ -3201,8 +3201,7 @@ defmodule Cure.Compiler.Parser do
           {token, add_error(state, {:proof_chain_syntax, problem})}
       end
 
-    state = skip_newlines(state)
-    {justification, state} = parse_expr_or_block(state)
+    {justification, state} = parse_chain_justification(state, because_token)
     state = if nested_because?, do: state |> skip_newlines() |> expect_dedent(), else: state
 
     meta =
@@ -3211,6 +3210,41 @@ defmodule Cure.Compiler.Parser do
 
     {{:proof_step, meta, [marker, right, justification]}, state}
   end
+
+  defp parse_chain_justification(state, because_token) do
+    multiline? = match?(%Token{type: :newline}, peek(state))
+    state = skip_newlines(state)
+
+    if multiline? and match?(%Token{type: :indent}, peek(state)) do
+      indent_token = peek(state)
+      state = advance(state)
+      {statements, state} = parse_block_body(state, indent_token.value)
+      state = expect_dedent(state)
+
+      meta =
+        [line: because_token.line, col: because_token.col]
+        |> proof_justification_source_info(because_token, statements)
+
+      {{:proof_justification, meta, statements}, state}
+    else
+      parse_expr(state, 0)
+    end
+  end
+
+  defp proof_justification_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = first}, statements) do
+    case statements |> List.last() |> ast_source_span() do
+      %Cure.Diagnostic.Span{} = last ->
+        case Range.through(first, last) do
+          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole, body: whole})
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
+  end
+
+  defp proof_justification_source_info(meta, _token, _statements), do: meta
 
   defp reject_first_chain_previous(state, {:variable, meta, "_"}, proof_token) do
     problem = %ProofChainSyntaxProblem{

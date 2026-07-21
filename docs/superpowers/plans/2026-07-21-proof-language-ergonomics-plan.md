@@ -281,25 +281,35 @@ failures and 6 excluded.
 **Purpose:** create the shared, compositional proof-command substrate without
 inventing a runtime or untyped tactic interpreter.
 
-- [ ] Add `{:proof_justification, meta, statements}` for indented `because`
+- [x] Add `{:proof_justification, meta, statements}` for indented `because`
   bodies while retaining inline proof expressions.
-- [ ] Implement `%Cure.Elab.ProofGoal{expected, names, context, env, source,
+- [x] Implement `%Cure.Elab.ProofGoal{expected, names, context, env, source,
   status, builders, trace}` and a command result protocol:
   `{:open, goal}` or `{:closed, core_evidence, trace}`.
-- [ ] Initially support only `have` and a final ordinary proof expression in a
+- [x] Initially support only `have` and a final ordinary proof expression in a
   block. This validates scope/closure before rewrite and simplify commands.
-- [ ] Reject end-of-block with an open goal and any statement after closure.
-- [ ] Ensure local facts extend an elaboration context and lower to nested Core
+- [x] Reject end-of-block with an open goal and any statement after closure.
+- [x] Ensure local facts extend an elaboration context and lower to nested Core
   lets around the final evidence; never substitute/evaluate commands at runtime.
-- [ ] Complete E109/E110 producer variants for unfinished and unreachable blocks
+- [x] Complete E109/E110 producer variants for unfinished and unreachable blocks
   with residual surface goal and fact inventory.
-- [ ] Add nested-block, shadowing, closure, source-range, formatter, JSON, LSP,
+- [x] Add nested-block, shadowing, closure, source-range, formatter, JSON, LSP,
   and erased-output identity tests.
 
 **Green gate:** focused proof-block and diagnostic suites, registry/catalog
 coverage, canonical stdlib, full suite, complete Antigen.
 
 **Commit:** `feat(proofs): add compositional because blocks`
+
+**Completed evidence (2026-07-21):** multiline blocks retain complete authored
+ranges and canonical formatting; `have` commands extend lexical scope and lower
+to kernel-checked nested Core lets; nested blocks, shadowing, open-goal fact
+inventory, and post-closure rejection are covered. E109/E110 retain residual
+goals and project through JSON/LSP. Administrative identity lets erase without
+duplicating evaluation, making block and inline evidence emitted-form identical.
+Focused suites and warnings-as-errors are green, the canonical 122-module stdlib
+compiles, complete Antigen is 318/318, and the full suite is 5,313 tests with 0
+failures and 6 excluded.
 
 ## Task 4: Extract rewrite infrastructure and add directed proof commands
 

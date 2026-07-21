@@ -629,6 +629,7 @@ defmodule Cure.Compiler.Errors do
   defp embedded_span({:expected, _, :got, _, _, _, %Cure.Diagnostic.Span{} = span}), do: span
   defp embedded_span({:expected_token, _, _, _, _, _, %Cure.Diagnostic.Span{} = span}), do: span
   defp embedded_span({:source_context, {:proof_chain_mismatch, _} = reason, _context}), do: embedded_span(reason)
+  defp embedded_span({:source_context, {:proof_chain_syntax, _} = reason, _context}), do: embedded_span(reason)
   defp embedded_span({:source_context, _reason, %{span: %Cure.Diagnostic.Span{} = span}}), do: span
 
   defp embedded_span({:proof_chain_syntax, %Cure.Diagnostic.ProofChainSyntaxProblem{} = problem}),
