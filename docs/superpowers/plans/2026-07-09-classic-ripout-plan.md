@@ -4,7 +4,7 @@
 
 **Goal:** Delete the classic (non-dependent) compiler pathway and every feature that exists only through it — fsm/actor/sup/app containers, proto/impl runtime protocols, classic type system, optimizer+PGO, session protocol, bless, observe/top, temporal — leaving the dependent pipeline as the sole compiler.
 
-**Architecture:** Pure removal + rewire, per the hardened spec `docs/superpowers/specs/2026-07-09-classic-ripout-design.md` (the SPEC below; its §2 tables are the authoritative cut line — this plan sequences them, it does not restate every row; where they conflict, the spec wins and the conflict is reported). Two code commits: **C1** (everything compile/test-affecting: lib, std, tests, examples, antigen) and **C2** (docs/site present-tense claims). Two NEW pin tests lock the single-pipeline behavior.
+**Architecture:** Pure removal + rewire, per the hardened spec `docs/superpowers/specs/roadmap/2026-07-09-classic-ripout-design.md` (the SPEC below; its §2 tables are the authoritative cut line — this plan sequences them, it does not restate every row; where they conflict, the spec wins and the conflict is reported). Two code commits: **C1** (everything compile/test-affecting: lib, std, tests, examples, antigen) and **C2** (docs/site present-tense claims). Two NEW pin tests lock the single-pipeline behavior.
 
 **Tech Stack:** Elixir, git. Executor: Opus.
 

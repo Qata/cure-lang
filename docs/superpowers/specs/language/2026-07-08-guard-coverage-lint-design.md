@@ -6,7 +6,7 @@
 
 ## §0 Rescope: what "match-embedded constructor guards" still means
 
-The roadmap item this initiative descends from — "match-embedded `when` (general), re-expressed on inductive-Bool `:case`" (builtin-inductive foundation spec, `docs/superpowers/specs/2026-07-03-builtin-inductive-foundation-design.md`, "Deferred / committed next" bullet, lines 306–313; roadmap row 4 of `2026-07-02-idris-parity-roadmap.md:49`) — is **mostly landed already**. Verified against the tree (dependent pipeline only):
+The roadmap item this initiative descends from — "match-embedded `when` (general), re-expressed on inductive-Bool `:case`" (builtin-inductive foundation spec, `docs/superpowers/specs/kernel/2026-07-03-builtin-inductive-foundation-design.md`, "Deferred / committed next" bullet, lines 306–313; roadmap row 4 of `2026-07-02-idris-parity-roadmap.md:49`) — is **mostly landed already**. Verified against the tree (dependent pipeline only):
 
 - Variable/catch-all guard subset: `92d11d5`, `try_guard_match` at `lib/cure/elab/elaborator.ex:2396-2497`.
 - Single-level constructor-pattern guards: `desugar_ctor_guards`/`fold_ctor_guard_groups`/`build_guard_chain`, `elaborator.ex:2664-2781`.

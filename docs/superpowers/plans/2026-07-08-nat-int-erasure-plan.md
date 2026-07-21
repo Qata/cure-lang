@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land the foundation's Phase 2 — canonical `Std.Nat` values become BEAM machine integers at emit time (`Z()`→`0`, `S(e)`→`e+1`, case-on-Nat → zero-test + predecessor bind), plus the elaborator eta-expansion that makes first-class `S` elaborate — spec `docs/superpowers/specs/2026-07-08-nat-int-erasure-design.md` (hardened `cca019b`).
+**Goal:** Land the foundation's Phase 2 — canonical `Std.Nat` values become BEAM machine integers at emit time (`Z()`→`0`, `S(e)`→`e+1`, case-on-Nat → zero-test + predecessor bind), plus the elaborator eta-expansion that makes first-class `S` elaborate — spec `docs/superpowers/specs/kernel/2026-07-08-nat-int-erasure-design.md` (hardened `cca019b`).
 
 **Architecture:** Two emit hooks in `lib/cure/elab/emit.ex` mirroring the Bool→atom precedent (registry-keyed, nominal); one elaborator fix in `resolve_free` (general bare-positive-arity-ctor eta-expansion, E-layer); a new Antigen `elab/nat_rep` representation-agreement assay (kernel certified-δ normalisation as oracle vs BEAM execution as SUT).
 
@@ -11,7 +11,7 @@
 ## Global Constraints (from the spec — every task implicitly includes these)
 
 - Working dir: `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/kernel-parity-batch`, branch `autopilot/kernel-parity-batch` (already checked out; no new branches/worktrees).
-- Files touched: `lib/cure/elab/emit.ex`, `lib/cure/elab/elaborator.ex` (Task 2 only: `resolve_free` + its stale comment), `lib/antigen/generators/elab_nat_rep.ex` (new), `lib/antigen/assays/elab.ex`, `lib/antigen/runner.ex`, `lib/antigen/challenge.ex` (Task 3 only: one `@elab_keys` whitelist entry, confirmed required — see Task 3), `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (one status sentence), new test files. **NOTHING under `lib/cure/core/` changes.** No changes to `lib/cure/elab/erase.ex`, `lib/cure/types/*`, `lib/cure/compiler/*` (two-pipeline discipline: the latter two are the NON-dependent decoy pipeline).
+- Files touched: `lib/cure/elab/emit.ex`, `lib/cure/elab/elaborator.ex` (Task 2 only: `resolve_free` + its stale comment), `lib/antigen/generators/elab_nat_rep.ex` (new), `lib/antigen/assays/elab.ex`, `lib/antigen/runner.ex`, `lib/antigen/challenge.ex` (Task 3 only: one `@elab_keys` whitelist entry, confirmed required — see Task 3), `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (one status sentence), new test files. **NOTHING under `lib/cure/core/` changes.** No changes to `lib/cure/elab/erase.ex`, `lib/cure/types/*`, `lib/cure/compiler/*` (two-pipeline discipline: the latter two are the NON-dependent decoy pipeline).
 - **Nominal rule:** the Int rep fires ONLY for the family `Inductive.builtin(env, :nat)` (the auto-prelude `Std.Nat`). Every existing test fixture declaring a LOCAL `type Nat = Z | S(Nat)` (≈46 files under `test/cure/elab/`, plus `test/cure/compiler/dependent_vec_codegen_test.exs`) keeps tuples and must pass UNMODIFIED — they are the nominal-no-op regression pins. Spec §4 (review-verified): the flip bucket is EMPTY — no existing test combines canonical Std.Nat with a runtime-shape assertion; Task 1 re-verifies with a grep and STOPs if that changed.
 - Strict red-green TDD; tests behavioral and immutable once green. ONE mix command at a time, ever (past concurrent run caused a kernel panic); scoped `mix test <file>` per step; the full gate runs ONCE, alone, in Task 4.
 - Git: commit per task; EVERY commit `--author="Made In Heaven <madeinheaven@madeinheaven.com>"`; NO Co-Authored-By/trailers; explicit-pathspec staging only.
@@ -673,19 +673,19 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 ### Task 4: roadmap note + full gate + final verification
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (§4.2 status prose)
+- Modify: `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (§4.2 status prose)
 
 - [ ] **Step 1: Roadmap status sentence**
 
-In `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`, §4.2 "Current focus + explicit deferral (2026-07-03)", the first paragraph ends "...the mechanism does double duty." (confirmed at review time — this is the paragraph's last line). Append a new paragraph immediately after it (before the "**DEFERRED to work on the above...**" paragraph): "Phase 2 landed (spec 2026-07-08-nat-int-erasure): canonical Std.Nat erases to BEAM machine ints (Z→0, S→+1, case→zero-test/predecessor-bind), nominal-only (local Nat redeclarations keep tuples); bare positive-arity constructors now eta-expand (first-class `S`, general fix); representation agreement pinned by the Antigen elab/nat_rep assay (kernel certified-δ nf vs BEAM)."
+In `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md`, §4.2 "Current focus + explicit deferral (2026-07-03)", the first paragraph ends "...the mechanism does double duty." (confirmed at review time — this is the paragraph's last line). Append a new paragraph immediately after it (before the "**DEFERRED to work on the above...**" paragraph): "Phase 2 landed (spec 2026-07-08-nat-int-erasure): canonical Std.Nat erases to BEAM machine ints (Z→0, S→+1, case→zero-test/predecessor-bind), nominal-only (local Nat redeclarations keep tuples); bare positive-arity constructors now eta-expand (first-class `S`, general fix); representation agreement pinned by the Antigen elab/nat_rep assay (kernel certified-δ nf vs BEAM)."
 
 - [ ] **Step 2: Commit the doc**
 
 ```bash
-git add -- docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+git add -- docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "docs: roadmap §4.2 — Nat->Int erasure (foundation Phase 2) landed" \
-  -- docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+  -- docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 ```
 
 - [ ] **Step 3: Full gate (ONE at a time, alone, in this order)**

@@ -6,7 +6,7 @@
 
 **Architecture:** Two green commits. C1 (Task 2) removes all lib/antigen machinery AND every test that dies with it — atomic, tree green at the boundary. C2 (Task 3) handles examples, docs, and site. Kernel (`lib/cure/core/`) and elaborator (`lib/cure/elab/`) diffs are EMPTY except the enumerated guard_lint.ex:194 comment reword AND the program.ex:220 comment reword (found during plan hardening: the spec's own §0 evidence citation — "program.ex:233 excludes `Std.Refine` from the dependent auto-prelude" — points at a comment that literally contains the string `Std.Refine`; the final grep gate (Task 4 Step 1) requires zero `Std.Refine` hits under lib/ with no exception for this file, so the comment must be reworded too).
 
-**Tech Stack:** Elixir, git. Spec: `docs/superpowers/specs/2026-07-09-refinement-removal-design.md` (hardened `eede85a` + `dc6c35f` + `6d61e1a`) — read it IN FULL first; its §1/§2 file dispositions and §3 gate are normative.
+**Tech Stack:** Elixir, git. Spec: `docs/superpowers/specs/kernel/2026-07-09-refinement-removal-design.md` (hardened `eede85a` + `dc6c35f` + `6d61e1a`) — read it IN FULL first; its §1/§2 file dispositions and §3 gate are normative.
 
 ## Global Constraints
 
@@ -22,7 +22,7 @@
 
 ### Task 1: Survey + red baseline (read-only, no commit)
 
-- [ ] **Step 1: Read the spec in full.** `docs/superpowers/specs/2026-07-09-refinement-removal-design.md`.
+- [ ] **Step 1: Read the spec in full.** `docs/superpowers/specs/kernel/2026-07-09-refinement-removal-design.md`.
 
 - [ ] **Step 2: Verify anchors still hold** (post-#17 line drift is possible — locate by NAME everywhere; spec line numbers are pre-edit hints):
 

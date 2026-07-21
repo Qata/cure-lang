@@ -8,7 +8,7 @@
 
 **Tech Stack:** Elixir, ExUnit, StreamData (new test-only dep), the existing `Cure.Core.*` kernel (`Term`, `Env`, `Context`, `Certificate`, `Kernel`, `Conv`, `Eval`, `Inductive`, `Serialize`).
 
-**Design spec:** `docs/superpowers/specs/2026-07-01-antigen-tier-a-design.md` (hardened). **Umbrella:** `docs/superpowers/specs/2026-07-01-antigen-design.md`.
+**Design spec:** `docs/superpowers/specs/antigen/2026-07-01-antigen-tier-a-design.md` (hardened). **Umbrella:** `docs/superpowers/specs/antigen/2026-07-01-antigen-design.md`.
 
 ## Global Constraints
 

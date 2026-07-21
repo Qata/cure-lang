@@ -410,7 +410,7 @@ occurs refinement, together (they are coupled — §1: B flips no verdict withou
 - (C) Σ-flattening / projection elimination (`?m (fst y) (snd y)` → pattern form).
   Do when a projection-inference oracle probe actually fails.
 - **Pruning** (Abel & Pientka §3.4, Fig 5; the roadmap's technique (B) bundles
-  this with the occurs-check refinement — `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md:56`:
+  this with the occurs-check refinement — `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md:56`:
   *"pruning … is what makes postponed/flex-rigid constraints actually solvable;
   and the occurs-check refinement fixes a latent completeness gap"*). This spec
   adopts only the occurs-check half of (B) and defers pruning: removing bound-variable

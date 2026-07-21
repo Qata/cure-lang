@@ -4,7 +4,7 @@
 
 **Goal:** Give Cure one unification-driven, context-generalizing `match`/`with` equation-compiler that subsumes today's A/B/C `with` paths and is strong enough to type-check the Sculthorpe–Nilsson Safe-FRP `SF` family (computed `++`/`∧` indices) in Cure.
 
-**Architecture:** Elaborator equation-compiler (E) emitting kernel-checked `{:case}` trees over Cure's existing five-rule `unify_indices` (already landed); carried stuck-index equalities discharged by Cure's existing `rewrite` + a type-level lemma stock; TCB touched only where a phase proves an E-only route impossible (expected: Phase 5 signature-aware `reify`). Governing spec: `docs/superpowers/specs/2026-07-02-lean-shape-matching-design.md`.
+**Architecture:** Elaborator equation-compiler (E) emitting kernel-checked `{:case}` trees over Cure's existing five-rule `unify_indices` (already landed); carried stuck-index equalities discharged by Cure's existing `rewrite` + a type-level lemma stock; TCB touched only where a phase proves an E-only route impossible (expected: Phase 5 signature-aware `reify`). Governing spec: `docs/superpowers/specs/types/2026-07-02-lean-shape-matching-design.md`.
 
 **Tech Stack:** Elixir (Cure compiler); differential oracle (`mix cure.oracle <cluster>`, `idris2` at `~/Develop/Idris2/build/exec/idris2`); Antigen (StreamData property assays under `mix test`); Lean reference at `~/Develop/lean4`.
 

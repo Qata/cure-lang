@@ -2,14 +2,15 @@
 
 **Date:** 2026-07-07
 **Branch:** `feature/idris-parity`
-**Status:** parked design — Bucket-B work, independent of the dependent-kernel
-cleanup. Not yet scheduled.
+**Status:** historical decision record — superseded as the primary effect
+architecture by `2026-07-21-cure-computation-effect-typing.md` and its
+stackless-Flow companion. The surface `!` rules remain migration guidance.
 
-> **Partially superseded (2026-07-09):** the stance that effects stay
-> surface-only and out of Core is no longer the target state. Operator
-> decision: effects become Core-representable via an inert `Effect` type
-> former — see
-> [`2026-07-09-effect-type-former-design.md`](2026-07-09-effect-type-former-design.md).
+> **Superseded (2026-07-09 and 2026-07-21):** the stance that effects stay
+> surface-only and out of Core is no longer the target state. The current
+> architecture separates values from computations and represents qualitative
+> effects as rows — see
+> [`2026-07-21-cure-computation-effect-typing.md`](2026-07-21-cure-computation-effect-typing.md).
 > The surface `!`-discipline fixes described below remain valid as an
 > independent honesty repair for the classic pathway, but "the later
 > evolution (option b)" is now the locked direction, not a someday.

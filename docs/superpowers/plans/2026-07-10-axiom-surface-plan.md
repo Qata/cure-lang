@@ -10,7 +10,7 @@
 
 **Tech Stack:** Elixir, ExUnit, `Cure.Elab.Program.elaborate/1`, `Cure.Core.Env`, `Antigen.Backend.StreamData` (test-only), `OptionParser`.
 
-**Spec:** `docs/superpowers/specs/2026-07-10-axiom-surface-design.md` — Phase 0 (§4) only. Phases 1–3 are out of scope.
+**Spec:** `docs/superpowers/specs/language/2026-07-10-axiom-surface-design.md` — Phase 0 (§4) only. Phases 1–3 are out of scope.
 
 ## Global Constraints
 
@@ -1474,7 +1474,7 @@ Expected: PASS. No concurrent suites.
 - [ ] **Step 6: Commit**
 
 ```bash
-git add test/cure/audit/trust_cli_test.exs docs/superpowers/specs/2026-07-10-axiom-surface-design.md
+git add test/cure/audit/trust_cli_test.exs docs/superpowers/specs/language/2026-07-10-axiom-surface-design.md
 git commit -m "test(audit): golden Std.List report; sort not-proven-total"
 ```
 

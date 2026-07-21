@@ -706,7 +706,7 @@ defmodule Cure.Elab.Union do
   `String | Int` produce literally the same `{:data, name}` and are definitionally
   equal with zero kernel involvement.
 
-  See `docs/superpowers/specs/2026-07-11-anonymous-adts-design.md`.
+  See `docs/superpowers/specs/types/2026-07-11-anonymous-adts-design.md`.
   """
 
   alias Cure.Core.{Context, Env, Inductive, Normalise}

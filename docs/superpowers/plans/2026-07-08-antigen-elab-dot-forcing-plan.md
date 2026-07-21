@@ -4,7 +4,7 @@
 
 **Goal:** Add a source-level dot-forcing family to the existing `:elab_program` Antigen tier so call-site wiring of the named-implicit check (the C-a defect class) is covered by randomized-tier challenges entering at `Cure.Elab.Program.elaborate/1`.
 
-**Architecture:** One new generator (`Antigen.Generators.ElabDotForcing`, fixed deterministic catalog + metamorphic variants, mirroring `ElabErasure`), two new `run/1` clauses in `Antigen.Assays.Elab` for assay `"elab/dot_forcing"` (catalog with `expect_error` head-check; `:same`/`:flip` relations), one registry line in `Antigen.Runner`, one test file. Spec: `docs/superpowers/specs/2026-07-08-antigen-elab-dot-forcing-design.md` (hardened `5bd5b7b`).
+**Architecture:** One new generator (`Antigen.Generators.ElabDotForcing`, fixed deterministic catalog + metamorphic variants, mirroring `ElabErasure`), two new `run/1` clauses in `Antigen.Assays.Elab` for assay `"elab/dot_forcing"` (catalog with `expect_error` head-check; `:same`/`:flip` relations), one registry line in `Antigen.Runner`, one test file. Spec: `docs/superpowers/specs/antigen/2026-07-08-antigen-elab-dot-forcing-design.md` (hardened `5bd5b7b`).
 
 **Tech Stack:** Elixir / ExUnit; no new deps.
 

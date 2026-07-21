@@ -22,7 +22,7 @@
 
 ## Source of truth
 
-Design spec (hardened): `docs/superpowers/specs/2026-07-02-dependent-match-surface-design.md`. Section references below (§N) point into it.
+Design spec (hardened): `docs/superpowers/specs/types/2026-07-02-dependent-match-surface-design.md`. Section references below (§N) point into it.
 
 ## File Structure
 

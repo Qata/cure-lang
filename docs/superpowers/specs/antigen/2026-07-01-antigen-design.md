@@ -301,7 +301,7 @@ Antigen's own correctness matters (its generators are oracles):
 is split into two tiers, each its own spec → plan → build cycle.
 
 - **Tier A** — the harness + the schema-directed (known-label) assays — is fully
-  designed in `docs/superpowers/specs/2026-07-01-antigen-tier-a-design.md`. It
+  designed in `docs/superpowers/specs/antigen/2026-07-01-antigen-tier-a-design.md`. It
   resolves items 3–7 below and builds the pipeline end-to-end against the *known*
   mutual-recursion hole with no dependence on the frontier generator.
 - **Tier B** — the general term generator + the differential assays (items 1–2) —

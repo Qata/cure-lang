@@ -8,7 +8,7 @@
 
 **Tech Stack:** Elixir (the Cure compiler), ExUnit, `mix test`. de Bruijn-indexed core terms; normalization-by-evaluation; Miller-pattern unification.
 
-**Spec:** `docs/superpowers/specs/2026-06-30-cure-dependent-types-frp-design.md` (hardened, commit `aa55ee2`). Read §4 (Core calculus) before any kernel task.
+**Spec:** `docs/superpowers/specs/types/2026-06-30-cure-dependent-types-frp-design.md` (hardened, commit `aa55ee2`). Read §4 (Core calculus) before any kernel task.
 
 ## Global Constraints
 

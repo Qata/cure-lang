@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Land the untrusted Z3 guard-coverage lint (trichotomy drops the catch-all; non-exhaustive stays an error; shadowed guards warn) at the `guard_chain` site, plus the stale `bool_elim` vocabulary cleanup — spec `docs/superpowers/specs/2026-07-08-guard-coverage-lint-design.md` (hardened `3b012d1`, site-scoped `f64ea78`).
+**Goal:** Land the untrusted Z3 guard-coverage lint (trichotomy drops the catch-all; non-exhaustive stays an error; shadowed guards warn) at the `guard_chain` site, plus the stale `bool_elim` vocabulary cleanup — spec `docs/superpowers/specs/language/2026-07-08-guard-coverage-lint-design.md` (hardened `3b012d1`, site-scoped `f64ea78`).
 
 **Architecture:** New E-layer module `Cure.Elab.GuardLint` (Core→SMT-LIB translator, Z3 query runner reusing `Cure.SMT.Process`, process-dictionary warnings channel) + a surgical change to `guard_chain` in `lib/cure/elab/elaborator.ex` (thread an accumulator of elaborated guard Core terms; recover a provably-exhaustive final guarded arm; shadow-warn) + an Antigen lint-soundness vertical mirroring the just-landed `ElabDotForcing`.
 
@@ -11,7 +11,7 @@
 ## Global Constraints (from the spec — every task implicitly includes these)
 
 - Working dir: `/Users/ch/Develop/esp32-beam/cure-lang/.claude/worktrees/kernel-parity-batch`, branch `autopilot/kernel-parity-batch` (already checked out; no new branches/worktrees).
-- **Layer E + Antigen only.** Files touched: `lib/cure/elab/guard_lint.ex` (new), `lib/cure/elab/elaborator.ex`, `lib/cure/elab/program.ex`, `lib/cure/elab/declarations.ex` (comment), `lib/antigen/generators/elab_guard_lint.ex` (new), `lib/antigen/assays/elab.ex`, `lib/antigen/runner.ex`, `lib/antigen/assays/dot_forcing.ex` (moduledoc), `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (one sentence), new test files. **NOTHING under `lib/cure/core/` changes** (not even comments — Task 4 verified none are stale there). No changes to `lib/cure/types/*` or `lib/cure/compiler/*` (two-pipeline discipline: those are the NON-dependent decoy pipeline; the dependent machinery is `lib/cure/elab/*` + `lib/cure/core/*` only).
+- **Layer E + Antigen only.** Files touched: `lib/cure/elab/guard_lint.ex` (new), `lib/cure/elab/elaborator.ex`, `lib/cure/elab/program.ex`, `lib/cure/elab/declarations.ex` (comment), `lib/antigen/generators/elab_guard_lint.ex` (new), `lib/antigen/assays/elab.ex`, `lib/antigen/runner.ex`, `lib/antigen/assays/dot_forcing.ex` (moduledoc), `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (one sentence), new test files. **NOTHING under `lib/cure/core/` changes** (not even comments — Task 4 verified none are stale there). No changes to `lib/cure/types/*` or `lib/cure/compiler/*` (two-pipeline discipline: those are the NON-dependent decoy pipeline; the dependent machinery is `lib/cure/elab/*` + `lib/cure/core/*` only).
 - The two constructor-group `:non_exhaustive` sites (`build_guard_chain` at `elaborator.ex:2748`, `fold_leaf_rows` at `2987`) are **byte-identical unconditionally** — spec §2.3a. Do not touch them.
 - Strict red-green TDD: write the failing test, run it, capture the exact failure, implement, re-run green, commit. Tests are behavioral and immutable once green. Existing pinned tests (`test/cure/elab/guard_test.exs`, `test/cure/elab/ctor_guard_test.exs`) must pass unmodified — the spec's pinned-fixture audit already verified no conflict.
 - **ONE mix command at a time, ever** (a past concurrent run caused a kernel panic). Scoped `mix test <file>` per step; the full gate runs ONCE, alone, in Task 4.
@@ -1081,7 +1081,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 **Files:**
 - Modify (comments/docs ONLY — zero executable-code changes): `lib/cure/elab/elaborator.ex`, `lib/cure/elab/declarations.ex`, `lib/antigen/assays/dot_forcing.ex`
-- Modify: `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (row 4, one sentence)
+- Modify: `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (row 4, one sentence)
 - Verified-no-change: `lib/std/bool.cure` (its `bool_elim` mention is historically accurate — "retiring the bespoke `bool_elim` primitive"), `lib/antigen/generators/totality.ex` (line 313 historically accurate; `diverging_bool_elim_branch`/`terminating_bool_elim_branch` are kept-forever test-pinned identifiers; `note:` strings are challenge DATA, not comments — leave all of it), `lib/cure/core/kernel.ex` (no `bool_elim` mention exists).
 
 - [ ] **Step 1: Rewrite the eight stale elaborator comments**
@@ -1105,7 +1105,7 @@ In `lib/antigen/assays/dot_forcing.ex`'s moduledoc, the sentence claiming the ca
 
 - [ ] **Step 3: Roadmap row 4 note**
 
-In `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`, append one sentence to row 4's status prose: "Z3 guard-coverage lint landed (spec 2026-07-08-guard-coverage-lint): provably-exhaustive guard chains (trichotomy-style, Int fragment) no longer need a catch-all at the `guard_chain` site — a deliberate extension beyond Idris, foundation-spec-authorized; ctor-group sites stay conservative (K13), shadowed guards warn."
+In `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md`, append one sentence to row 4's status prose: "Z3 guard-coverage lint landed (spec 2026-07-08-guard-coverage-lint): provably-exhaustive guard chains (trichotomy-style, Int fragment) no longer need a catch-all at the `guard_chain` site — a deliberate extension beyond Idris, foundation-spec-authorized; ctor-group sites stay conservative (K13), shadowed guards warn."
 
 - [ ] **Step 4: Verify the cleanup is comment/doc-only and the grep criterion holds**
 
@@ -1116,10 +1116,10 @@ Expected remaining matches ONLY: `lib/std/bool.cure` (historically accurate), `l
 - [ ] **Step 5: Commit the cleanup**
 
 ```bash
-git add -- lib/cure/elab/elaborator.ex lib/cure/elab/declarations.ex lib/antigen/assays/dot_forcing.ex docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+git add -- lib/cure/elab/elaborator.ex lib/cure/elab/declarations.ex lib/antigen/assays/dot_forcing.ex docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "docs: retire stale bool_elim vocabulary; correct dot_forcing ni03/ni07 claim; roadmap row-4 lint note" \
-  -- lib/cure/elab/elaborator.ex lib/cure/elab/declarations.ex lib/antigen/assays/dot_forcing.ex docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+  -- lib/cure/elab/elaborator.ex lib/cure/elab/declarations.ex lib/antigen/assays/dot_forcing.ex docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 ```
 
 - [ ] **Step 6: Full gate (ONE at a time, in this order, nothing else running)**

@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-_Every task's requirements implicitly include this section. Values copied verbatim from the spec (`docs/superpowers/specs/2026-07-16-actor-macro-consolidation-design.md`) and the standing operator directives._
+_Every task's requirements implicitly include this section. Values copied verbatim from the spec (`docs/superpowers/specs/macros/2026-07-16-actor-macro-consolidation-design.md`) and the standing operator directives._
 
 - **TCB delta: zero.** No change to `lib/cure/core/*`. This run touches only `lib/std/actor.cure` and test files. (The optional parser step 1c that the spec places in the P-layer is **deferred**, so no P-layer change occurs here either.)
 - **Author stdlib in `lib/std/`, never `priv/std/`** (`priv/std` is a generated bundle).

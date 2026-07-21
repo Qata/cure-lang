@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Spec:** `docs/superpowers/specs/2026-07-09-wave4-checked-body-dispatch-design.md` (hardened, commit `bbf05b5`). Read it FULLY first — esp. §1.2 (the pre-existing pinned test that MUST be flipped) and §3 (the `uncons`/`Tuple` blocker likely behind Finding A — `Std.List` may ADVANCE rather than flip; do not report "flipped" unless the disposition run shows it).
+- **Spec:** `docs/superpowers/specs/roadmap/2026-07-09-wave4-checked-body-dispatch-design.md` (hardened, commit `bbf05b5`). Read it FULLY first — esp. §1.2 (the pre-existing pinned test that MUST be flipped) and §3 (the `uncons`/`Tuple` blocker likely behind Finding A — `Std.List` may ADVANCE rather than flip; do not report "flipped" unless the disposition run shows it).
 - **Two-pipeline steer:** dependent machinery is ONLY `lib/cure/elab/*` + `lib/cure/core/*`. `lib/cure/compiler/*` + `lib/cure/types/*` are the CLASSIC decoy — do not touch or consult.
 - **Kernel-scope invariant (hard gate):** `lib/cure/core/*` stays EMPTY of changes. `git diff` under `core/` must be empty. If a `core/` change seems needed, STOP — the design broke.
 - **Diff scope:** `lib/cure/elab/declarations.ex`, `lib/cure/elab/elaborator.ex`, the new test file `test/cure/elab/checked_body_dispatch_test.exs`, the §1.2 update to `test/cure/elab/list_test.exs` (ONE pinned assertion + stale moduledoc/comments), and a comment-only refresh in `test/cure/elab/pickup_test.exs` (see Anchors — a pre-existing comment there goes stale by this wave's own change). NO other file.

@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Spec:** `docs/superpowers/specs/2026-07-09-wave1-pickup-design.md` (hardened, commit c10ed85). Read it before starting; this plan implements it exactly.
+- **Spec:** `docs/superpowers/specs/roadmap/2026-07-09-wave1-pickup-design.md` (hardened, commit c10ed85). Read it before starting; this plan implements it exactly.
 - **Diff scope:** ONLY `lib/cure/elab/elaborator.ex` + the new test file `test/cure/elab/pickup_test.exs`. `lib/cure/core/` MUST stay EMPTY of changes. No emit change. No parser change. No kernel change. (`lib/cure/elab/declarations.ex` is deliberately NOT touched — see the Anchors note below on `elaborate_body`/`elaborate_branch_body`; nothing in this plan's test corpus needs it, and there is no red test that would distinguish its presence from its absence, so adding it would violate the red-test discipline.)
 - **Two-pipeline steer:** the dependent machinery lives ONLY in `lib/cure/elab/*` + `lib/cure/core/*`. IGNORE `lib/cure/compiler/*` (`codegen.ex`, `pattern_compiler.ex`) and `lib/cure/types/*` — those are the non-dependent lowering/checker pipeline and their same-named `pickup`/`conditional` functions are decoys. `lib/cure/compiler/pickup` handling in `codegen.ex` is the ORACLE (read for behavior), never a place to edit.
 - **BUILD-LOCK ORDERING (critical):** this plan's execution runs on the SAME worktree as the in-flight #22 canonical-spelling kernel batch. Only ONE `mix` suite may run at a time (a past concurrent full-suite run caused a kernel panic). Do NOT run any `mix` command until the #22 executor has released the build lock (confirmed complete). Until then, only write code/tests. When the lock is free, run scoped tests first, and the full suite exactly ONCE at the gate.
@@ -194,7 +194,7 @@ Add the `:pickup` clause to `elaborate_expr_typed` immediately before the catch-
   # `pickup` predicate dispatch (value-surface Wave 1). Pure syntactic
   # desugaring to a right-nested `:conditional` chain; reuses the conditional
   # path's Bool-guard and branch-join checks verbatim. No kernel change.
-  # See docs/superpowers/specs/2026-07-09-wave1-pickup-design.md.
+  # See docs/superpowers/specs/roadmap/2026-07-09-wave1-pickup-design.md.
   def elaborate_expr_typed({:pickup, _meta, clauses}, names, ctx, env) do
     with {:ok, desugared} <- desugar_pickup(clauses) do
       elaborate_expr_typed(desugared, names, ctx, env)

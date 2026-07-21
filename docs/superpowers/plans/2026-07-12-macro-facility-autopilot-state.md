@@ -7,7 +7,7 @@ autopilot-worktree-preference). Cron-driven; this file is the durable resume poi
 
 ## Stage 0 — DONE (design approved, specs committed)
 - Self-proving design APPROVED by operator; specs committed:
-  - `docs/superpowers/specs/2026-07-11-self-proving-macros-design.md` (extension)
+  - `docs/superpowers/specs/macros/2026-07-11-self-proving-macros-design.md` (extension)
   - `docs/superpowers/specs/macros/2026-07-08-macro-facility-design.md` (base)
   - `docs/superpowers/specs/macros/2026-07-12-racket-syntax-parse-comparison.md`
   - `docs/superpowers/plans/2026-07-12-macro-facility-program.md` (SP decomposition)
@@ -69,7 +69,7 @@ foundation required by the `knit` algebra's section/row grammar. Focused parser,
 printer, expansion, and live `gen_statem` tests are green.
 
 **Typed FSM architecture decision (2026-07-19).** The remaining FSM work is
-specified by `../specs/2026-07-19-typed-fsm-as-constrained-actor-design.md`.
+specified by `../specs/beam/2026-07-19-typed-fsm-as-constrained-actor-design.md`.
 An FSM normatively derives a finite state/event reducer and expands through the
 same source-defined `ActorBehavior` substrate as `actor`. The ordered FSM work
 is: shared actor substrate; FSM-to-actor lowering; typed event payloads; graph
@@ -91,7 +91,7 @@ FSM specification.
 
 **Typed actor contract (2026-07-19).** The actor-first work required before
 further FSM expansion is specified by
-`../specs/2026-07-19-typed-actor-behavior-design.md`. The checked OTP carrier
+`../specs/beam/2026-07-19-typed-actor-behavior-design.md`. The checked OTP carrier
 must distinguish asynchronous messages from synchronous requests on the same
 server PID; `actor` then derives nominal message/request/reply codes and thin
 typed adapters over that algebra. State remains the immutable accumulator of
@@ -538,7 +538,7 @@ already partway to Elm (structured `severity: category` / `--> file:line` hyperl
 diagnostic routes through the ONE `format_diagnostic`, so a future Elm rewrite (source snippets + carets +
 regions) upgrades ALL errors — macro included — for free; building the floor on it now is forward-compatible,
 not throwaway. A full Elm rewrite is cross-cutting (every error site), its own initiative — PARKED at
-`docs/superpowers/specs/2026-07-12-elm-style-error-rendering-PARKED.md` (committed `82d64a8`), with a
+`docs/superpowers/specs/diagnostics/2026-07-12-elm-style-error-rendering-PARKED.md` (committed `82d64a8`), with a
 forward-compat contract the floor obeys (route through the central renderer; message content in the
 `format_error` clause).
 
@@ -728,7 +728,7 @@ M1+M3 checks coexist on one macro; use-site expansion unaffected. 668 tests, war
 checks: **M1 `missing_diagnosis`** ✅ + **M3 `rule_unpinned`** ✅. TCB delta ZERO.
 
 ## OPERATOR DESIGN DECISION (2026-07-12): SP3 generator architecture — `Generator` typeclass + middle-path engine
-Full spec: `docs/superpowers/specs/2026-07-12-generator-typeclass-pbt-architecture.md`. Decided across a design
+Full spec: `docs/superpowers/specs/tooling/2026-07-12-generator-typeclass-pbt-architecture.md`. Decided across a design
 session: (1) a `Generator(a)` TYPECLASS with stdlib conformance + `deriving` = the user-facing PBT magic
 (`forall` on any type, generator auto-resolved) — lives in Cure `Std.Gen`/`Std.Test`, RUNTIME, unaffected by
 any SP3 engine choice. (2) **MIDDLE PATH (Hegel pattern), chosen "for now":** separate ENGINE (drive-loop +
@@ -847,7 +847,7 @@ untouched.
 by <fn>` → `%{kind: :computed, elab}`, inert until execution. TCB delta ZERO.
 
 SP2 Tier-3 EXECUTION ARCHITECTURE GROUNDED (this firing) — design note committed:
-`docs/superpowers/specs/2026-07-12-tier3-computed-by-execution-design.md`. Decisions (driver, revisable):
+`docs/superpowers/specs/tooling/2026-07-12-tier3-computed-by-execution-design.md`. Decisions (driver, revisable):
 - **A: execute by ELABORATE + NORMALISE, not compile-and-load.** Elaborate the elab ref → apply to the quoted
   input → `Cure.Core.Normalise.whnf`/normalise → the normal form IS the expansion. Reuses the trusted normaliser
   (verified callable), Cure-native, terminates (elabs are total), TCB-ZERO (normaliser unchanged; output re-elaborated).
@@ -968,7 +968,7 @@ Make **every macro compile run a full Antigen-style fuzz of its own expansion**:
 thorough sample of the DSL programs the macro's grammar accepts (by filling each typed hole with a generated
 well-typed Core term of that hole's type), expand each, kernel-check the expansion, and **fail the MACRO's
 compile** (with a shrunk counterexample) if any valid parse expands to ill-typed Core. Spec = self-proving
-design **§4** (`docs/superpowers/specs/2026-07-11-self-proving-macros-design.md`, lines 174–241) — read §4.1–§4.5
+design **§4** (`docs/superpowers/specs/macros/2026-07-11-self-proving-macros-design.md`, lines 174–241) — read §4.1–§4.5
 verbatim; program-doc SP3 (`…-program.md`, "### SP3"). This is the **self-proving headline** and the clause of
 the DONE criterion that reads "generatively proven to expand to well-typed Core." SP3 is the ONLY sub-project
 that closes that clause — SP4/SP5/SP6 do not.
@@ -1112,9 +1112,9 @@ Opus. STOP + update this file + PushNotification on a hard blocker or pass-15 no
 unconverged artifact. Tests immutable once green.
 
 ### Cross-refs
-- Spec §4: `docs/superpowers/specs/2026-07-11-self-proving-macros-design.md:174-241`.
+- Spec §4: `docs/superpowers/specs/macros/2026-07-11-self-proving-macros-design.md:174-241`.
 - Program-doc SP3: `docs/superpowers/plans/2026-07-12-macro-facility-program.md` ("### SP3").
-- Tier-3 execution design (needed before SP3 can fuzz Tier-3): `docs/superpowers/specs/2026-07-12-tier3-computed-by-execution-design.md`.
+- Tier-3 execution design (needed before SP3 can fuzz Tier-3): `docs/superpowers/specs/tooling/2026-07-12-tier3-computed-by-execution-design.md`.
 - SP1 T8 expansion firewall (the single-case ancestor of SP3's fuzz): commit `3a7383d`,
   `test/cure/compiler/macro_expansion_classic_soundness_test.exs`.
 - Antigen metatheory engine + coverage discipline: project memory `[[antigen-metatheory-engine]]`,
@@ -1174,7 +1174,7 @@ Do not mark the DONE criterion complete until every item above is implemented an
 ## ORDERED TRANSPARENT BEAM PLAN — 2026-07-13
 
 Source of truth:
-`docs/superpowers/specs/2026-07-13-transparent-beam-algebra-otp-macros-design.md`.
+  `docs/superpowers/specs/macros/2026-07-13-transparent-beam-algebra-otp-macros-design.md`.
 
 This is the execution order. Do not start a later phase while an earlier phase
 has an unverified gate or uncommitted changes. Every phase ends with focused
@@ -2016,7 +2016,7 @@ carrying the callback's message code instead of leaving `m` undetermined.
 **Reconnaissance already done — do not redo it:**
 
 - **Tier-3 reflection is ALREADY BUILT**, not future work. Of the 6 slices in
-  `docs/superpowers/specs/2026-07-12-tier3-computed-by-execution-design.md`,
+  `docs/superpowers/specs/tooling/2026-07-12-tier3-computed-by-execution-design.md`,
   slices 1, 2, 3, 5, 6 are landed and slice 4 is partial. `computed by` parses;
   `Std.Syntax` is a real ADT with a reflection bridge (`macro_syntax.ex`);
   compile-time execution runs inside-out, cycle-detecting and budgeted

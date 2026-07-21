@@ -1,8 +1,9 @@
 # Effect(T) — Deferred Items Ledger
 
 **Date:** 2026-07-11
-**Status:** ledger — what the Effect program deliberately does NOT build yet, why,
-and the concrete trigger that would flip each item to "build it."
+**Status:** historical ledger — the deferred items for the earlier inert
+`Effect(T)` implementation. New deferrals belong in the implementation ledgers
+of the 2026-07-21 computation, IR, and Lean specifications.
 **Context:** the inert `Effect` former and its full pipeline landed end-to-end
 (kernel former → surface type → `let`→`bind`+`pure` → erasure rule → validator →
 direct-style emit; a real effectful program runs on generic-unix AtomVM). See

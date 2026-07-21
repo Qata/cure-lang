@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Retire the `{:prim, op, args}` Core node (and its `{:nprim}` neutral) in favor of registry-keyed builtin-op GLOBALS with literal acceleration in the certified-δ engine — surface behavior, oracle verdicts, classic-pipeline folding, and emitted runtime code all invariant — spec `docs/superpowers/specs/2026-07-09-prim-delta-globals-design.md` (hardened `8de233b`).
+**Goal:** Retire the `{:prim, op, args}` Core node (and its `{:nprim}` neutral) in favor of registry-keyed builtin-op GLOBALS with literal acceleration in the certified-δ engine — surface behavior, oracle verdicts, classic-pipeline folding, and emitted runtime code all invariant — spec `docs/superpowers/specs/kernel/2026-07-09-prim-delta-globals-design.md` (hardened `8de233b`).
 
 **Architecture:** Three phases (spec §1.7, risk R6): Phase 1 seeds the builtin-op def-kind + compute hook with `{:prim}` fully live (coexistence); Phase 2 flips every producer + retargets GuardLint/emit/Reduce; Phase 3 strips the node, flips `no_prim_node → :reject`, retargets Antigen, flips enumerated pins. K4 (absurd) is CLOSED-AS-LANDED — bookkeeping only, no code.
 

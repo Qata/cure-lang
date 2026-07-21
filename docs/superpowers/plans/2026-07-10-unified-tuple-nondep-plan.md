@@ -6,7 +6,7 @@
 
 **Architecture:** Two increments. **Increment 1 (arity-2):** `Tuple(T, U)` is a *parser alias* for the existing non-dependent `Sigma(_: T, U)` — which already elaborates and emits a flat 2-tuple `{a,b}` — so arity-2 needs zero new elaboration/emit/TCB. **Increment 2 (arity ≥ 3):** per-arity flat inductive families `Tuple3…Tuple8` (ordinary inductives, exactly how Haskell/Rust/OCaml bound tuples; zero kernel change), with `%[a,b,c]` → `mk_tupleN(a,b,c)` distinguishable from nested `%[a,%[b,c]]` → `mk_tuple2(a, mk_tuple2(b,c))`, all emitting flat `{…}`.
 
-**Tech Stack:** Elixir; Cure dependent elaborator (`lib/cure/elab/*`) + kernel (`lib/cure/core/*`); shared parser (`lib/cure/compiler/parser.ex`). Spec: `docs/superpowers/specs/2026-07-09-unified-tuple-design.md`.
+**Tech Stack:** Elixir; Cure dependent elaborator (`lib/cure/elab/*`) + kernel (`lib/cure/core/*`); shared parser (`lib/cure/compiler/parser.ex`). Spec: `docs/superpowers/specs/language/2026-07-09-unified-tuple-design.md`.
 
 ## Global Constraints
 

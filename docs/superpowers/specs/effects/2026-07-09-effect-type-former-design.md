@@ -1,18 +1,18 @@
 # `Effect` — an Inert Opaque Type Former for Core
 
 **Date:** 2026-07-09
-**Status:** design — **chosen pathway** (operator-locked). The alternative
+**Status:** historical decision record — superseded for new architecture by
+the 2026-07-21 computation/effect-row specifications. The alternative
 ("Agda-purist" effects-as-data) is specified separately in
 [`2026-07-09-effects-as-data-design.md`](2026-07-09-effects-as-data-design.md)
 so its rejection is conscious and its staging insights stay available.
 
-**Supersedes (partially):**
+**Historical decision:**
 [`2026-07-07-sound-effect-discipline-design.md`](2026-07-07-sound-effect-discipline-design.md)'s
 stance that effects are surface-only and erased before elaboration. Operator
-decision 2026-07-09: *"Ergonomics trumps purity here, we have to accept that
-we're on a BEAM VM language."* Effects become Core-representable. Other
-in-flight kernel-cleanup work may still assume the old stance — this spec is
-the authority for the new one.
+decision 2026-07-09 made effects Core-representable through an inert former.
+The later 2026-07-21 design separates value and computation typing, adds
+effect rows and latent effects, and is now authoritative for new work.
 
 **Companion to:**
 [`macros/2026-07-08-macro-facility-design.md`](macros/2026-07-08-macro-facility-design.md)

@@ -179,7 +179,7 @@ Sizes are the actual vendored files (`wc -l`, this snapshot).
 
 - **Sources:** `idris2/src/TTImp/Elab/Rewrite.idr` (154).
 - **Targets:** `lib/cure/elab/elaborator.ex` (`rewrite_plan/5` region);
-  `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`;
+  `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md`;
   `reference/` snapshot.
 - **Scope:** (a) refresh the snapshot with the three missing files (finding
   5) and record it in the manifest; (b) build `idris2` from the pinned clone

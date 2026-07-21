@@ -333,7 +333,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 ## Task 4 — Roadmap update + final verification gate
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` (§2 row #11)
+- Modify: `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` (§2 row #11)
 
 - [ ] **Step 1: Update roadmap row #11** → **landed (whnf-before-compare)**: name
   the four `whnf` probes, the meta-aware-whnf mechanism (placeholder reuse of the
@@ -349,7 +349,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 - [ ] **Step 4: Commit.**
 ```bash
-git add -- docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+git add -- docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "docs(spec): #11 whnf-before-unification landed — roadmap update"
 ```

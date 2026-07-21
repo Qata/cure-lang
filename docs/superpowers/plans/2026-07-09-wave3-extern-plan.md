@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- **Spec:** `docs/superpowers/specs/2026-07-09-wave3-extern-design.md` (hardened, commit `4eb14dd`). Read it FULLY first — especially §2.1 (marker contract + the TotalityClosure consumer), §2.2 (emit param synthesis), §4 (Claim A/B trust framing). This plan implements it exactly.
+- **Spec:** `docs/superpowers/specs/roadmap/2026-07-09-wave3-extern-design.md` (hardened, commit `4eb14dd`). Read it FULLY first — especially §2.1 (marker contract + the TotalityClosure consumer), §2.2 (emit param synthesis), §4 (Claim A/B trust framing). This plan implements it exactly.
 - **Two-pipeline steer:** the dependent machinery is ONLY `lib/cure/elab/*` + `lib/cure/core/*` + `emit.ex`. `lib/cure/compiler/*` (`codegen.ex`) and `lib/cure/types/*` are the CLASSIC decoy — read `codegen.ex`'s `compile_extern_function` ONLY as the behavioral oracle for the target BEAM form; NEVER call it or import it.
 - **Kernel-scope invariant (hard gate):** `lib/cure/core/{eval,normalise,conv,quote,kernel,term,erase,inductive,builtins}.ex` stay EMPTY of changes. `git diff` under `core/` must be empty. If you find yourself needing to edit any `core/` file, STOP and report — the design broke.
 - **Diff scope:** `lib/cure/elab/declarations.ex`, `lib/cure/elab/emit.ex`, `lib/cure/elab/totality_closure.ex`, the new test file, and `lib/cure/elab/elaborator.ex` ONLY if marker plumbing forces it. NOT `lib/std/*.cure` (the std modules already carry their `@extern` decls; this wave makes them elaborate).

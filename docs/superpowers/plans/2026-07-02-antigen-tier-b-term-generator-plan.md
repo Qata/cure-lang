@@ -38,7 +38,7 @@
 - `lib/antigen/runner.ex` — add three assay-registry entries; compute binder-usage / reduction-activity / fuel-exhausted metrics; add health floors as module attributes; stamp `:healthy`/`:vacuous`.
 - `lib/mix/tasks/antigen.ex` — extend `default_gen/0` with the three new branches.
 - `test/antigen/mix_task_test.exs` — add a red test proving Tier B is actually drawn by the wired-in `default_gen/0` (Task 10).
-- `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md` — update rows #22 / A8 / A10.
+- `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md` — update rows #22 / A8 / A10.
 
 **Verify, not modify:** `test/antigen/architecture_test.exs` already glob-enforces StreamData-freedom over `lib/antigen/{generators,assays}/**/*.ex` (confirmed against source — see Task 9), which by construction of the paths above already covers every module this plan creates; no edit to that file is needed.
 
@@ -1654,7 +1654,7 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 **Files:**
 - Modify: `lib/mix/tasks/antigen.ex`
 - Modify: `test/antigen/mix_task_test.exs` (new red test for the wiring)
-- Modify: `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`
+- Modify: `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md`
 - Commits: banked `seeds.sexp` (and any `corpus.sexp`/`reach.sexp` produced by triage)
 
 **Interfaces:**
@@ -1756,14 +1756,14 @@ git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
 
 - [ ] **Step 8: Update the parity ledger and commit**
 
-Edit `docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md`:
+Edit `docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md`:
 - Row **#22** (`Term-generator metatheory engine`): change Status from `⬜ (designed)` to `✅` (or `🟡` if any assay landed as a reach pin rather than green), and update the cell to note the three differential assays + health gate landed, referencing this plan.
 - Expansion **A8**: `🔵 biggest leverage (designed)` → `✅ done` (term generator + differential trio) with the same caveat if applicable.
 - Expansion **A10**: note partial — the typed-term stream feeds the three differential assays; feeding the *existing* known-label verticals from a generated stream remains open.
 - Update the "honest headline" tally (§2) to reflect #22 moving to parity.
 
 ```bash
-git add docs/superpowers/specs/2026-07-02-idris-parity-roadmap.md
+git add docs/superpowers/specs/roadmap/2026-07-02-idris-parity-roadmap.md
 git commit --author="Made In Heaven <madeinheaven@madeinheaven.com>" \
   -m "docs(ledger): row 22 / A8 — Tier-B term generator + differential assays landed"
 ```

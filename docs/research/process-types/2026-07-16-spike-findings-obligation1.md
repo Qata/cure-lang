@@ -66,7 +66,7 @@ inferred `{r}` — at the abstract `r`. So `v : ReplyOf(r)` never reduces to the
 branch's concrete reply type.
 
 This is exactly brief §8 roadblock #2 — dependent-match coverage / the "Lean-shape
-matching" algorithm (`docs/superpowers/specs/2026-07-02-lean-shape-matching-design.md`,
+matching" algorithm (`docs/superpowers/specs/types/2026-07-02-lean-shape-matching-design.md`,
 `2026-07-02-dependent-match-surface-design.md`), whose incompleteness the brief
 flagged as the most likely wall. It is a genuine E-layer capability gap
 (context/telescope refinement on `match`, à la Idris/Agda generalizing the whole

@@ -27,7 +27,7 @@
 
 ## Source of truth
 
-Read `docs/superpowers/plans/../specs/2026-07-18-inductive-int-design.md` (the hardened spec) before starting. This plan implements it. Where they disagree, the spec's §5 back-compat gate and §4 TCB analysis win.
+Read `docs/superpowers/plans/../specs/kernel/2026-07-18-inductive-int-design.md` (the hardened spec) before starting. This plan implements it. Where they disagree, the spec's §5 back-compat gate and §4 TCB analysis win.
 
 ## The `Nat` precedent (the template every task mirrors)
 

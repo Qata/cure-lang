@@ -1,6 +1,6 @@
 # Nat→Int Runtime Erasure — Design
 
-**Status:** approved design (operator standing batch authorization; the feature is Phase 2 of the operator-approved builtin-inductive foundation spec, `docs/superpowers/specs/2026-07-03-builtin-inductive-foundation-design.md` §3 / lines 215–284).
+**Status:** approved design (operator standing batch authorization; the feature is Phase 2 of the operator-approved builtin-inductive foundation spec, `docs/superpowers/specs/kernel/2026-07-03-builtin-inductive-foundation-design.md` §3 / lines 215–284).
 **Layer:** C (untrusted erase/emit, `lib/cure/elab/emit.ex`) + tests. **Zero changes under `lib/cure/core/`** and zero changes to `lib/cure/elab/erase.ex`'s representation behavior (Core stays inductive end-to-end; see §2.5). **Exception, scoped in §2.1:** rule 4 (first-class `S`/`Z`) additionally requires a small fix in `lib/cure/elab/elaborator.ex` (still E-layer, untrusted, not K/TCB — no gate triggered) because the gap it depends on isn't an emit-side hook at all; see §2.1's third bullet.
 **Batch:** parity queue item C-3 (task #12), worktree `kernel-parity-batch`, branch `autopilot/kernel-parity-batch`.
 
