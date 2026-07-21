@@ -31,8 +31,11 @@ defmodule Cure.Compiler.Errors do
     body = [body, extras] |> Enum.reject(&(&1 == "")) |> Enum.join(" ") |> String.replace(~r/\s+/, " ")
 
     location =
-      case diagnostic.primary do
-        %Cure.Diagnostic.Label{span: %{start_line: line}} when is_integer(line) and line > 0 ->
+      case {diagnostic.primary, diagnostic.payload} do
+        {%Cure.Diagnostic.Label{span: %{start_line: line}}, _} when is_integer(line) and line > 0 ->
+          "#{file}:#{line}"
+
+        {_, %{line: line}} when is_integer(line) and line > 0 ->
           "#{file}:#{line}"
 
         _ ->
@@ -294,7 +297,7 @@ defmodule Cure.Compiler.Errors do
 
   def format_error({:computed_macro_error, meta, reason}, file) do
     {:computed_macro_error, meta, reason}
-    |> Cure.Diagnostic.Adapter.from_error(span: macro_span(file, meta))
+    |> Cure.Diagnostic.Adapter.from_error()
     |> format_error(file)
   end
 
@@ -308,22 +311,6 @@ defmodule Cure.Compiler.Errors do
 
   def format_error(error, file) do
     raise Cure.Diagnostic.UnhandledError, error: %{error: error, file: file}
-  end
-
-  defp macro_span(file, meta) do
-    line = Keyword.get(meta, :line, 1)
-    column = Keyword.get(meta, :col, Keyword.get(meta, :column, 1))
-
-    %Cure.Diagnostic.Span{
-      source_id: file,
-      path: file,
-      start_byte: 0,
-      end_byte: 0,
-      start_line: max(line, 1),
-      end_line: max(line, 1),
-      start_column: max(column, 1),
-      end_column: max(column, 1)
-    }
   end
 
   # -- "Did you mean?" Suggestions ---------------------------------------------

@@ -1620,6 +1620,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:computed_macro_error, meta, reason}, opts) when is_list(meta) do
     keyword = Keyword.get(meta, :keyword, "computed")
+    payload = %{keyword: keyword, reason: inspect(reason)} |> maybe_put_meta_location(meta)
 
     Diagnostic.new(
       code: "E092",
@@ -1633,7 +1634,7 @@ defmodule Cure.Diagnostic.Adapter do
       primary: primary_label(opts, "this macro invocation generated the failing syntax"),
       notes: ["Edit the authored macro invocation or its rule; generated syntax is not the user-facing source."],
       provenance: Keyword.get(opts, :provenance, []),
-      payload: %{keyword: keyword, reason: inspect(reason)}
+      payload: payload
     )
   end
 
@@ -3457,6 +3458,19 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp printable_core(term), do: term
+
+  defp maybe_put_meta_location(payload, meta) do
+    case {Keyword.get(meta, :line), Keyword.get(meta, :col, Keyword.get(meta, :column))} do
+      {line, column} when is_integer(line) and is_integer(column) ->
+        Map.merge(payload, %{line: line, column: column})
+
+      {line, _column} when is_integer(line) ->
+        Map.put(payload, :line, line)
+
+      _ ->
+        payload
+    end
+  end
 
   # Parser errors retain token *kinds* for stable machine handling. Translate
   # punctuation and operators back to the spelling a user sees in the source;
