@@ -6078,7 +6078,7 @@ defmodule Cure.Compiler.Parser do
       end
 
     state = skip_newlines(state)
-    state = expect(state, :arrow)
+    state = expect_branch_arrow(state, :with_arm, List.last(patterns))
     state = skip_newlines(state)
     {body, state} = parse_expr_or_block(state)
     {{patterns, body}, state}
@@ -6261,7 +6261,7 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
     {with_pattern, state} = parse_expr(state, 0)
     state = skip_newlines(state)
-    state = expect(state, :arrow)
+    state = expect_branch_arrow(state, :with_rematch_arm, with_pattern)
     state = skip_newlines(state)
     {body, state} = parse_expr_or_block(state)
 
@@ -6496,6 +6496,39 @@ defmodule Cure.Compiler.Parser do
   # guard, the `->`, and the body (or `impossible`). Factored out so with-clause
   # arms can fall through to it once they have decided they are NOT a rematch arm
   # (see `parse_with_clause_arm`).
+  defp expect_branch_arrow(state, family, previous) do
+    case expect_token(state, :arrow) do
+      {:ok, _arrow, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        previous_span =
+          case previous do
+            %Cure.Diagnostic.Span{} = span -> span
+            node -> first_node_source_span(node)
+          end
+
+        error =
+          {:branch_arrow_missing,
+           %{
+             family: family,
+             expected: :arrow,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             previous_span: previous_span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
+    end
+  end
+
   defp parse_match_arm_tail(pattern, state) do
     state = skip_newlines(state)
 
@@ -6512,7 +6545,7 @@ defmodule Cure.Compiler.Parser do
       end
 
     # Expect ->
-    state = expect(state, :arrow)
+    state = expect_branch_arrow(state, :match_arm, guard || pattern)
     state = skip_newlines(state)
 
     # `impossible` is a soft keyword recognized only as an entire arm body
@@ -6731,7 +6764,7 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :keyword, value: :else} = tok ->
         state = advance(state)
-        state = expect(state, :arrow)
+        state = expect_branch_arrow(state, :pickup_else, tok.span)
         state = skip_newlines(state)
         {body, state} = parse_expr_or_block(state)
         meta = put_pickup_clause_source_info([line: tok.line, col: tok.col], tok, nil, body, state)
@@ -6740,7 +6773,7 @@ defmodule Cure.Compiler.Parser do
       tok ->
         {guard, state} = parse_expr(state, 0)
         state = skip_newlines(state)
-        state = expect(state, :arrow)
+        state = expect_branch_arrow(state, :pickup_clause, guard)
         state = skip_newlines(state)
         {body, state} = parse_expr_or_block(state)
         meta = put_pickup_clause_source_info([line: tok.line, col: tok.col], tok, guard, body, state)
@@ -7218,7 +7251,7 @@ defmodule Cure.Compiler.Parser do
           {nil, state}
       end
 
-    state = expect(state, :arrow)
+    state = expect_branch_arrow(state, :function_clause, guard || List.last(patterns))
     state = skip_newlines(state)
     {body, state} = parse_expr_or_block(state)
 

@@ -2495,6 +2495,20 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:branch_arrow_missing, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :branch_arrow_missing,
+        expected: :arrow,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:invalid_parameter_name, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -4992,6 +5006,20 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{kind: :lambda_arrow_missing}), do: "Lambda arrow is missing"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :match_arm}}),
+    do: "Pattern branch arrow is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: family}})
+       when family in [:pickup_clause, :pickup_else],
+       do: "Pickup branch arrow is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: :function_clause}}),
+    do: "Function clause arrow is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: family}})
+       when family in [:with_arm, :with_rematch_arm],
+       do: "With branch arrow is missing"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5190,6 +5218,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :lambda_arrow_missing}),
     do: "A lambda needs `->` between its parameter list and body expression."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: family}}),
+    do: "#{branch_family_name(family)} needs `->` between its head and body expression."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
@@ -5460,6 +5491,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :lambda_arrow_missing}),
     do: "insert `->` before the lambda body"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing}),
+    do: "insert `->` before this branch body"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -5672,6 +5706,13 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :branch_arrow_missing, previous: %Span{} = previous},
+         primary_span
+       )
+       when previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "this branch head ends here"}]
+
+  defp syntax_secondary_labels(
          %SyntaxProblem{
            kind: kind,
            opener: %Span{} = opener,
@@ -5871,6 +5912,20 @@ defmodule Cure.Diagnostic.Adapter do
     ]
   end
 
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :branch_arrow_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `->` before the branch body",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "-> "}]
+      }
+    ]
+  end
+
   defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
     closing_delimiter_insertion(expected, span)
   end
@@ -6059,6 +6114,11 @@ defmodule Cure.Diagnostic.Adapter do
         ]
     end
   end
+
+  defp branch_family_name(:match_arm), do: "A pattern branch"
+  defp branch_family_name(family) when family in [:pickup_clause, :pickup_else], do: "A pickup branch"
+  defp branch_family_name(:function_clause), do: "A function clause"
+  defp branch_family_name(family) when family in [:with_arm, :with_rematch_arm], do: "A with branch"
 
   defp container_item_name(:map), do: "entry"
   defp container_item_name(:record), do: "field"

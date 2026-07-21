@@ -699,6 +699,115 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
            }
   end
 
+  test "a pattern branch without an arrow points between its head and body" do
+    source = "match value\n  Some(x) x"
+    {:ok, tokens} = Lexer.tokenize(source, file: "match_arrow.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:branch_arrow_missing, %{family: :match_arm, token_type: :identifier}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "match_arrow.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- PATTERN BRANCH ARROW IS MISSING [E094] --------------------- match_arrow.cure
+
+             A pattern branch needs `->` between its head and body expression.
+
+             A valid continuation here starts with '->'.
+
+             at match_arrow.cure:2:11
+             2 |   Some(x) x
+               |   ------- ^ this branch head ends here; insert `->` before this branch body
+
+             Hint: Insert `->` before the branch body
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "-> ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 22
+    assert insertion.end_byte == 22
+  end
+
+  test "a pickup branch without an arrow gets the same precise repair" do
+    source = "pickup\n  true 1"
+    {:ok, tokens} = Lexer.tokenize(source, file: "pickup_arrow.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:branch_arrow_missing, %{family: :pickup_clause, token_type: :integer}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "pickup_arrow.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- PICKUP BRANCH ARROW IS MISSING [E094] --------------------- pickup_arrow.cure
+
+             A pickup branch needs `->` between its head and body expression.
+
+             A valid continuation here starts with '->'.
+
+             at pickup_arrow.cure:2:8
+             2 |   true 1
+               |   ---- ^ this branch head ends here; insert `->` before this branch body
+
+             Hint: Insert `->` before the branch body
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "-> ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 14
+    assert insertion.end_byte == 14
+
+    assert [%{"newText" => "-> ", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 1, "character" => 7},
+             "end" => %{"line" => 1, "character" => 7}
+           }
+  end
+
+  test "a multi-clause function branch identifies its missing arrow" do
+    source = "fn run(x: Int) -> Int\n  | 0 1"
+    {:ok, tokens} = Lexer.tokenize(source, file: "clause_arrow.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:branch_arrow_missing, %{family: :function_clause, token_type: :integer}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "clause_arrow.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- FUNCTION CLAUSE ARROW IS MISSING [E094] ------------------- clause_arrow.cure
+
+             A function clause needs `->` between its head and body expression.
+
+             A valid continuation here starts with '->'.
+
+             at clause_arrow.cure:2:7
+             2 |   | 0 1
+               |     - ^ this branch head ends here; insert `->` before this branch body
+
+             Hint: Insert `->` before the branch body
+             """)
+  end
+
+  test "multi-with and rematch arms retain their branch family" do
+    cases = [
+      {"with a b\n  Z(), Z() value", :with_arm},
+      {"with a\n  Z() | VZ() value", :with_rematch_arm}
+    ]
+
+    for {source, family} <- cases do
+      {:ok, tokens} = Lexer.tokenize(source, file: "with_arrow.cure", emit_events: false)
+      assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+      error = Enum.find(errors, &match?({:branch_arrow_missing, _}, &1))
+      assert {:branch_arrow_missing, %{family: ^family}} = error
+    end
+  end
+
   test "an invalid function parameter is rejected at the authored binder token" do
     source = "fn run(42) -> Int = 1\n"
     {:ok, tokens} = Lexer.tokenize(source, file: "binder.cure", emit_events: false)
