@@ -14,12 +14,27 @@ mod Std.Regex
   ## The syntax tree deliberately keeps the representation small and explicit.
   ## Captures are represented by `Capture`; matching semantics are added on top
   ## of this tree rather than hidden in a runtime regex object.
-  type Regex = Empty() | Literal(Char) | Any() | CharSet(List(Char), List(CharRange)) | Sequence(Regex, Regex) | Alternate(Regex, Regex) | Repeat(Regex) | Plus(Regex) | Optional(Regex) | Capture(Regex)
+  type Regex = 
+    | Empty() 
+    | Literal(Char) 
+    | Any() 
+    | CharSet(List(Char), List(CharRange)) 
+    | Sequence(Regex, Regex) 
+    | Alternate(Regex, Regex) 
+    | Repeat(Regex) 
+    | Plus(Regex) 
+    | Optional(Regex) 
+    | Capture(Regex)
 
-  type CharRange = Range(Char, Char)
+  type CharRange = 
+    Range(Char, Char)
 
-  type Parse = Parsed(Regex, String) | ParseFailure()
-  type ClassParse = ClassParsed(List(Char), List(CharRange), String) | ClassFailure()
+  type Parse = 
+    | Parsed(Regex, String) 
+    | ParseFailure()
+  type ClassParse = 
+    | ClassParsed(List(Char), List(CharRange), String) 
+    | ClassFailure()
 
   ## Parse a complete pattern.  `None` means that the syntax was malformed or
   ## that an opening group/class was not closed.
