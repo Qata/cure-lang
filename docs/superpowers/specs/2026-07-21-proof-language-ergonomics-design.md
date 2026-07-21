@@ -5,6 +5,9 @@
 **Status:** approved surface design; authoritative for the proof-authoring
 features specified here
 
+**Implementation ledger:**
+`../plans/2026-07-21-proof-language-ergonomics-plan.md`
+
 **Applies to:** parser, formatter, elaborator, proof diagnostics, generated
 defining equations, and editor assistance
 
