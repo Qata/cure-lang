@@ -729,11 +729,26 @@ defmodule Cure.Elab.Elaborator do
   # inference mode we infer the `then` branch's type T, check `else` against T,
   # and use the constant motive `λ_:Bool. T` (both branches share the type T).
   def elaborate_expr_typed({:conditional, _meta, [c, t, e]}, names, ctx, env) do
-    with {:ok, c_core} <- elaborate_expr_checked(c, bool_type_term(Context.signature(ctx)), names, ctx, env),
-         {:ok, t_core, t_type} <- elaborate_expr_typed(t, names, ctx, env),
-         t_type_core = Quote.reify(t_type, Context.length(ctx)),
-         {:ok, e_core} <- elaborate_expr_checked(e, t_type_core, names, ctx, env) do
-      {:ok, bool_case(c_core, t_type_core, t_core, e_core, ctx), t_type}
+    case elaborate_expr_checked(c, bool_type_term(Context.signature(ctx)), names, ctx, env) do
+      {:error, reason} ->
+        {:error, attach_expectation_context(reason, c, :condition, :if, nil)}
+
+      {:ok, c_core} ->
+        case elaborate_expr_typed(t, names, ctx, env) do
+          {:error, reason} ->
+            {:error, attach_expectation_context(reason, t, :branch, :if, 0)}
+
+          {:ok, t_core, t_type} ->
+            t_type_core = Quote.reify(t_type, Context.length(ctx))
+
+            case elaborate_expr_checked(e, t_type_core, names, ctx, env) do
+              {:error, reason} ->
+                {:error, attach_expectation_context(reason, e, :branch, :if, 1)}
+
+              {:ok, e_core} ->
+                {:ok, bool_case(c_core, t_type_core, t_core, e_core, ctx), t_type}
+            end
+        end
     end
   end
 
@@ -1952,10 +1967,24 @@ defmodule Cure.Elab.Elaborator do
         else: elaborate_expr_checked(expr, expected_core, names, ctx, env)
     end
 
-    with {:ok, c_core} <- elaborate_expr_checked(c, bool_type_term(Context.signature(ctx)), names, ctx, env),
-         {:ok, t_core} <- branch.(t),
-         {:ok, e_core} <- branch.(e) do
-      {:ok, bool_case(c_core, expected_core, t_core, e_core, ctx)}
+    case elaborate_expr_checked(c, bool_type_term(Context.signature(ctx)), names, ctx, env) do
+      {:error, reason} ->
+        {:error, attach_expectation_context(reason, c, :condition, :if, nil)}
+
+      {:ok, c_core} ->
+        case branch.(t) do
+          {:error, reason} ->
+            {:error, attach_expectation_context(reason, t, :branch, :if, 0)}
+
+          {:ok, t_core} ->
+            case branch.(e) do
+              {:error, reason} ->
+                {:error, attach_expectation_context(reason, e, :branch, :if, 1)}
+
+              {:ok, e_core} ->
+                {:ok, bool_case(c_core, expected_core, t_core, e_core, ctx)}
+            end
+        end
     end
   end
 
@@ -2069,6 +2098,31 @@ defmodule Cure.Elab.Elaborator do
 
   def elaborate_expr_checked(expr, expected_core, names, ctx, env),
     do: elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
+
+  defp attach_expectation_context({:source_context, reason, context}, expression, origin, owner, index)
+       when is_map(context) do
+    {:source_context, reason, Map.merge(context, expectation_context(expression, origin, owner, index))}
+  end
+
+  defp attach_expectation_context(reason, expression, origin, owner, index) do
+    {:source_context, reason, expectation_context(expression, origin, owner, index)}
+  end
+
+  defp expectation_context(expression, origin, owner, index) do
+    span = surface_expression_span(expression)
+
+    %{
+      line: span && span.start_line,
+      column: span && span.start_column,
+      length: span && max(1, span.end_byte - span.start_byte),
+      span: span,
+      expectation_span: span,
+      checking: owner,
+      expression_category: expression_category(expression),
+      expectation_origin: origin,
+      argument_index: index
+    }
+  end
 
   # The saturated (or non-function-goal) checking-mode path for a non-constructor
   # call: try the goal-first pre-pass when the goal can inform implicit solving,

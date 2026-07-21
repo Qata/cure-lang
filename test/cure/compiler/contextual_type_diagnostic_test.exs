@@ -182,6 +182,37 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this operator operand has the wrong type"
   end
 
+  test "a conditional guard conversion retains its condition origin and caret" do
+    source = "fn main() -> Int = if 1 then 2 else 3\n"
+    condition = raw_span(source, "1", 1, 22)
+
+    reason =
+      {:source_context, {:conversion_failure, "Int", "Bool"},
+       %{
+         line: 1,
+         column: 22,
+         length: 1,
+         span: condition,
+         expectation_span: condition,
+         checking: :if,
+         expression_category: :literal,
+         expectation_origin: :condition
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "condition.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Condition is not boolean"
+    assert diagnostic.payload.origin.kind == :condition
+    assert diagnostic.payload.origin.owner == :if
+    assert diagnostic.primary.span.start_column == 22
+    assert rendered =~ "A condition must produce `Bool`"
+    assert rendered =~ "Expected: Bool"
+    assert rendered =~ "Found:    Int"
+    assert rendered =~ "1 | fn main() -> Int = if 1 then 2 else 3"
+    assert rendered =~ "this condition has the wrong type"
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 
