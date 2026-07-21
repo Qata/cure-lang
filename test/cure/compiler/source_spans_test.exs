@@ -211,6 +211,20 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert Enum.map(info.branches, &slice(source, &1)) == ["n -> n", "_ -> 0"]
   end
 
+  test "conditionals retain condition and branch-owned spans" do
+    source = "fn choose(x: Int) -> Int = if x > 0 then x else 0\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "conditional.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "conditional.cure", emit_events: false, prelude_macros: false)
+
+    {:conditional, meta, _} = find_node(ast, :conditional)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "if x > 0 then x else 0"
+    assert slice(source, info.condition) == "x > 0"
+    assert slice(source, info.then_branch) == "x"
+    assert slice(source, info.else_branch) == "0"
+  end
+
   test "record constructions retain authored name, delimiters, and field spans" do
     source = "fn origin() -> Point = Point{x: 0, y: 0}\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "record.cure", emit_events: false)

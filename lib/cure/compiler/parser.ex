@@ -4595,7 +4595,17 @@ defmodule Cure.Compiler.Parser do
               {{:literal, [subtype: :null], nil}, state}
           end
 
-        ast = {:conditional, [line: token.line, col: token.col], [condition, then_branch, else_branch]}
+        meta =
+          put_conditional_source_info(
+            [line: token.line, col: token.col],
+            token,
+            condition,
+            then_branch,
+            else_branch,
+            state
+          )
+
+        ast = {:conditional, meta, [condition, then_branch, else_branch]}
         {ast, state}
 
       _ ->
@@ -4619,7 +4629,17 @@ defmodule Cure.Compiler.Parser do
               {{:literal, [subtype: :null], nil}, state}
           end
 
-        ast = {:conditional, [line: token.line, col: token.col], [condition, then_branch, else_branch]}
+        meta =
+          put_conditional_source_info(
+            [line: token.line, col: token.col],
+            token,
+            condition,
+            then_branch,
+            else_branch,
+            state
+          )
+
+        ast = {:conditional, meta, [condition, then_branch, else_branch]}
         {ast, state}
     end
   end
@@ -5393,6 +5413,39 @@ defmodule Cure.Compiler.Parser do
 
     if whole || branch_spans != [] do
       Keyword.put(meta, :source_info, %SourceInfo{whole: whole, branches: branch_spans})
+    else
+      meta
+    end
+  end
+
+  defp put_conditional_source_info(meta, if_token, condition, then_branch, else_branch, state) do
+    condition_span = first_node_source_span(condition)
+    then_span = first_node_source_span(then_branch)
+    else_span = first_node_source_span(else_branch)
+
+    whole =
+      case {if_token.span, authored_token(state)} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          nil
+      end
+
+    if whole || condition_span || then_span || else_span do
+      Keyword.put(
+        meta,
+        :source_info,
+        %SourceInfo{
+          whole: whole,
+          condition: condition_span,
+          then_branch: then_span,
+          else_branch: else_span
+        }
+      )
     else
       meta
     end
