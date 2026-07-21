@@ -299,6 +299,38 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this constructor argument has the wrong type"
   end
 
+  test "a record field conversion retains the authored field origin and caret" do
+    source = "Point{name: \"bad\"}\n"
+    value = raw_span(source, "\"bad\"", 1, 13)
+
+    reason =
+      {:source_context, {:conversion_failure, "String", "Int"},
+       %{
+         line: 1,
+         column: 13,
+         length: 5,
+         span: value,
+         expectation_span: value,
+         checking: :name,
+         argument_index: 0,
+         expression_category: :literal,
+         expectation_origin: :record_field
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Record field has the wrong type"
+    assert diagnostic.payload.origin.kind == :record_field
+    assert diagnostic.payload.origin.owner == :name
+    assert diagnostic.primary.span.start_column == 13
+    assert rendered =~ "Field `name` does not match"
+    assert rendered =~ "Expected: Int"
+    assert rendered =~ "Found:    String"
+    assert rendered =~ "1 | Point{name: \"bad\"}"
+    assert rendered =~ "this record field has the wrong type"
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 

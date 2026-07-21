@@ -617,8 +617,12 @@ defmodule Cure.Elab.Elaborator do
       # Record construction `Point{x: .., y: ..}` desugars to the positional
       # constructor `Point(.., ..)` (fields ordered by the record's telescope).
       Keyword.get(meta, :record) ->
-        with {:ok, positional} <- desugar_record_construction(meta, args, env) do
-          elaborate_expr_typed(positional, names, ctx, env)
+        case desugar_record_construction(meta, args, env) do
+          {:ok, positional} ->
+            attach_record_field_context(elaborate_expr_typed(positional, names, ctx, env), meta, args, env)
+
+          {:error, reason} ->
+            {:error, reason}
         end
 
       # `f(x)(y)` parses with the inner call preserved as `:callee` (and `name`
@@ -635,8 +639,17 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate_expr_typed({:record_update, meta, children}, names, ctx, env) do
-    with {:ok, positional} <- desugar_record_update(meta, children, env) do
-      elaborate_expr_typed(positional, names, ctx, env)
+    case desugar_record_update(meta, children, env) do
+      {:ok, positional} ->
+        attach_record_field_context(
+          elaborate_expr_typed(positional, names, ctx, env),
+          meta,
+          tl(children),
+          env
+        )
+
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
@@ -1672,8 +1685,9 @@ defmodule Cure.Elab.Elaborator do
   @spec elaborate_expr_checked(term(), term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
   def elaborate_expr_checked({:record_update, meta, children}, expected_core, names, ctx, env) do
-    with {:ok, positional} <- desugar_record_update(meta, children, env) do
-      elaborate_expr_checked(positional, expected_core, names, ctx, env)
+    case desugar_record_update(meta, children, env) do
+      {:ok, positional} -> elaborate_expr_checked(positional, expected_core, names, ctx, env)
+      {:error, reason} -> {:error, attach_record_field_context(reason, meta, tl(children), env)}
     end
   end
 
@@ -1687,8 +1701,17 @@ defmodule Cure.Elab.Elaborator do
 
     cond do
       Keyword.get(meta, :record) ->
-        with {:ok, positional} <- desugar_record_construction(meta, args, env) do
-          elaborate_expr_checked(positional, expected_core, names, ctx, env)
+        case desugar_record_construction(meta, args, env) do
+          {:ok, positional} ->
+            attach_record_field_context(
+              elaborate_expr_checked(positional, expected_core, names, ctx, env),
+              meta,
+              args,
+              env
+            )
+
+          {:error, reason} ->
+            {:error, reason}
         end
 
       name == "reflexive" and length(args) == 1 ->
@@ -2122,6 +2145,57 @@ defmodule Cure.Elab.Elaborator do
       expectation_origin: origin,
       argument_index: index
     }
+  end
+
+  defp attach_record_field_context({:error, reason}, meta, field_pairs, env),
+    do: {:error, attach_record_field_reason(reason, meta, field_pairs, env)}
+
+  defp attach_record_field_context(result, _meta, _field_pairs, _env), do: result
+
+  defp attach_record_field_reason({:source_context, reason, context}, meta, field_pairs, env)
+       when is_map(context) do
+    case record_field_context(meta, field_pairs, context, env) do
+      nil -> {:source_context, reason, context}
+      details -> {:source_context, reason, Map.merge(context, details)}
+    end
+  end
+
+  defp attach_record_field_reason(reason, _meta, _field_pairs, _env), do: reason
+
+  defp record_field_context(meta, field_pairs, context, env) do
+    index = Map.get(context, :argument_index)
+    name = Keyword.get(meta, :name)
+    ctor = name && Inductive.get_ctor(env, String.to_atom(name))
+
+    with index when is_integer(index) <- index,
+         %{args: fields} <- ctor,
+         {field, _type} <- Enum.at(fields, index),
+         {:ok, value} <- fetch_record_field_value(field_pairs, field),
+         %Cure.Diagnostic.Span{} = span <- surface_expression_span(value) do
+      %{
+        line: span.start_line,
+        column: span.start_column,
+        length: max(1, span.end_byte - span.start_byte),
+        span: span,
+        expectation_span: span,
+        checking: field,
+        expectation_origin: :record_field,
+        argument_index: index
+      }
+    else
+      _ -> nil
+    end
+  end
+
+  defp fetch_record_field_value(field_pairs, field) do
+    Enum.find_value(field_pairs, :error, fn
+      {:pair, _meta, [{:literal, _label_meta, value_field}, value]}
+      when value_field == field ->
+        {:ok, value}
+
+      _ ->
+        false
+    end)
   end
 
   # The saturated (or non-function-goal) checking-mode path for a non-constructor
