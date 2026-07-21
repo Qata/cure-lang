@@ -2,6 +2,8 @@
 defmodule Cure.Compiler.MacroUseTest do
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Diagnostic.ProvenanceFrame
+  alias Cure.MetaAST.Metadata
 
   defp parse!(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
@@ -45,6 +47,8 @@ defmodule Cure.Compiler.MacroUseTest do
 
   defp find_fn_body(_, _), do: nil
 
+  defp slice(source, span), do: binary_part(source, span.start_byte, span.end_byte - span.start_byte)
+
   test "a one-hole local macro use-site binds the hole and substitutes it" do
     node =
       parse!("mod M\n  macro Every\n    syntax every <t: Code> becomes Timer.repeat(t)\n  fn f() = every 500\n")
@@ -54,6 +58,52 @@ defmodule Cure.Compiler.MacroUseTest do
     assert {:function_call, meta, [arg]} = body
     assert Keyword.get(meta, :name) in ["Timer.repeat", "repeat"]
     assert {:literal, _, 500} = arg
+  end
+
+  test "template copies and substituted captures retain authored identity plus expansion provenance" do
+    source =
+      "mod M\n  macro Wrap\n    syntax wrap <x: Code> becomes id(x)\n  fn f() = wrap 42\n"
+
+    node = parse!(source)
+    {:container, _, [{:macro_def, _, [rule]}, _function]} = node
+    body = find_fn_body(node, "f")
+
+    {:function_call, body_meta, [{:literal, argument_meta, 42}]} = body
+    template_info = rule.template |> elem(1) |> Metadata.source_info()
+    body_info = Metadata.source_info(body_meta)
+    argument_info = Metadata.source_info(argument_meta)
+
+    assert %{template_info | provenance: body_info.provenance} == body_info
+    assert slice(source, body_info.whole) == "id(x)"
+    assert slice(source, argument_info.whole) == "42"
+
+    assert [%ProvenanceFrame{} = body_frame] = body_info.provenance
+    assert body_frame.name == "wrap"
+    assert slice(source, body_frame.invocation) == "wrap 42"
+    assert slice(source, body_frame.definition) == "syntax wrap <x: Code> becomes id(x)"
+
+    assert [%ProvenanceFrame{} = argument_frame] = argument_info.provenance
+    assert argument_frame.invocation == body_frame.invocation
+    assert argument_frame.definition == body_frame.definition
+  end
+
+  test "nested macro provenance links the inner expansion to its parent invocation" do
+    source = """
+    mod M
+      macro Inner
+        syntax inner <x: Code> becomes id(x)
+      macro Outer
+        syntax outer <x: Code> becomes x
+      fn f() = outer inner 1
+    """
+
+    body = source |> parse!() |> find_fn_body("f")
+    {:function_call, meta, [_argument]} = body
+
+    assert [inner, outer] = Metadata.source_info(meta).provenance
+    assert inner.name == "inner"
+    assert outer.name == "outer"
+    assert inner.parent == %{kind: :macro_expansion, name: "outer", invocation: outer.invocation}
   end
 
   test "a two-literal-segment local macro use-site matches both literals" do
@@ -83,7 +133,11 @@ defmodule Cure.Compiler.MacroUseTest do
 
     list_rule = Enum.find(rules, &(&1.keyword == "list"))
     assert {:ok, use_site} = Lexer.tokenize("list 1 2", emit_events: false)
-    assert {:list, [generated_by: :macro_repeat], [_one, _two]} = Parser.expand_example([list_rule], use_site)
+
+    assert {:list, [generated_by: :macro_repeat], [_one, _two]} =
+             [list_rule]
+             |> Parser.expand_example(use_site)
+             |> Metadata.strip_diagnostics()
 
     maybe_rule = Enum.find(rules, &(&1.keyword == "maybe"))
     assert {:ok, optional_use} = Lexer.tokenize("maybe (1)", emit_events: false)

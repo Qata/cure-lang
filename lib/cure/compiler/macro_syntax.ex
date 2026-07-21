@@ -7,7 +7,16 @@ defmodule Cure.Compiler.MacroSyntax do
   maps it to Core values of `Std.Syntax` and runs the elab.
   """
 
-  alias Cure.MetaAST.Metadata
+  alias Cure.Diagnostic.{ProvenanceFrame, Span}
+  alias Cure.MetaAST.{Metadata, SourceInfo}
+
+  @source_info_attr :cure_source_info
+  @source_info_tag :__cure_source_info_v1__
+  @span_tag :__cure_span_v1__
+  @provenance_tag :__cure_provenance_v1__
+  @map_tag :__cure_source_map_v1__
+  @list_tag :__cure_source_list_v1__
+  @tuple_tag :__cure_source_tuple_v1__
 
   @doc """
   Lower internal standard-library macro markers into ordinary parser AST.
@@ -272,19 +281,26 @@ defmodule Cure.Compiler.MacroSyntax do
   # generated-code diagnostics point back to authored syntax. Other semantic
   # meta values remain {key, synlit}; unrepresentable values become opaque.
   defp attrs(meta) when is_list(meta) do
-    Enum.flat_map(meta, fn
-      {:line, value} ->
-        [{:source_line, synlit(value)}]
+    source_attrs =
+      case Metadata.source_info(meta) do
+        %SourceInfo{} = info -> [{@source_info_attr, info |> encode_source_value() |> synlit()}]
+        _ -> []
+      end
 
-      {:col, value} ->
-        [{:source_col, synlit(value)}]
+    source_attrs ++
+      Enum.flat_map(meta, fn
+        {:line, value} ->
+          [{:source_line, synlit(value)}]
 
-      {key, value} ->
-        if Metadata.diagnostic_key?(key), do: [], else: [{key, synlit(value)}]
+        {:col, value} ->
+          [{:source_col, synlit(value)}]
 
-      _ ->
-        []
-    end)
+        {key, value} ->
+          if Metadata.diagnostic_key?(key), do: [], else: [{key, synlit(value)}]
+
+        _ ->
+          []
+      end)
   end
 
   defp attrs(_), do: []
@@ -397,14 +413,132 @@ defmodule Cure.Compiler.MacroSyntax do
   defp lower_initial(""), do: ""
 
   defp from_attrs(attrs) do
-    for {key, lit} <- attrs, key not in [:pascal_case, :constructor_key, :variable_name] do
-      case key do
-        :source_line -> {:line, from_synlit(lit)}
-        :source_col -> {:col, from_synlit(lit)}
-        _ -> {key, from_synlit(lit)}
+    {encoded_source_info, attrs} = Keyword.pop(attrs, @source_info_attr)
+
+    meta =
+      for {key, lit} <- attrs, key not in [:pascal_case, :constructor_key, :variable_name] do
+        case key do
+          :source_line -> {:line, from_synlit(lit)}
+          :source_col -> {:col, from_synlit(lit)}
+          _ -> {key, from_synlit(lit)}
+        end
       end
+
+    case encoded_source_info do
+      nil ->
+        meta
+
+      source_info ->
+        case source_info |> from_synlit() |> decode_source_value() do
+          %SourceInfo{} = info -> Keyword.put(meta, :source_info, info)
+          _ -> meta
+        end
     end
   end
+
+  defp encode_source_value(%SourceInfo{} = info) do
+    entries =
+      info
+      |> Map.from_struct()
+      |> Enum.reject(fn {_key, value} -> value in [nil, [], %{}] end)
+      |> Enum.sort_by(fn {key, _value} -> key end)
+      |> Enum.map(fn {key, value} -> [key, encode_source_value(value)] end)
+
+    [@source_info_tag, entries]
+  end
+
+  defp encode_source_value(%Span{} = span) do
+    [
+      @span_tag,
+      encode_source_value(span.source_id),
+      encode_source_value(span.path),
+      span.start_byte,
+      span.end_byte,
+      span.start_line,
+      span.start_column,
+      span.end_line,
+      span.end_column
+    ]
+  end
+
+  defp encode_source_value(%ProvenanceFrame{} = frame) do
+    [
+      @provenance_tag,
+      frame.kind,
+      encode_source_value(frame.name),
+      encode_source_value(frame.invocation),
+      encode_source_value(frame.definition),
+      encode_source_value(frame.generated),
+      encode_source_value(frame.parent)
+    ]
+  end
+
+  defp encode_source_value(map) when is_map(map) do
+    entries =
+      map
+      |> Enum.sort_by(fn {key, _value} -> inspect(key) end)
+      |> Enum.map(fn {key, value} -> [encode_source_value(key), encode_source_value(value)] end)
+
+    [@map_tag, entries]
+  end
+
+  defp encode_source_value(list) when is_list(list), do: [@list_tag, Enum.map(list, &encode_source_value/1)]
+
+  defp encode_source_value(tuple) when is_tuple(tuple),
+    do: [@tuple_tag, tuple |> Tuple.to_list() |> Enum.map(&encode_source_value/1)]
+
+  defp encode_source_value(value), do: value
+
+  defp decode_source_value([@source_info_tag, entries]) when is_list(entries) do
+    fields = Map.new(entries, fn [key, value] -> {key, decode_source_value(value)} end)
+    struct(SourceInfo, fields)
+  end
+
+  defp decode_source_value([
+         @span_tag,
+         source_id,
+         path,
+         start_byte,
+         end_byte,
+         start_line,
+         start_column,
+         end_line,
+         end_column
+       ]) do
+    %Span{
+      source_id: decode_source_value(source_id),
+      path: decode_source_value(path),
+      start_byte: start_byte,
+      end_byte: end_byte,
+      start_line: start_line,
+      start_column: start_column,
+      end_line: end_line,
+      end_column: end_column
+    }
+  end
+
+  defp decode_source_value([@provenance_tag, kind, name, invocation, definition, generated, parent]) do
+    %ProvenanceFrame{
+      kind: kind,
+      name: decode_source_value(name),
+      invocation: decode_source_value(invocation),
+      definition: decode_source_value(definition),
+      generated: decode_source_value(generated),
+      parent: decode_source_value(parent)
+    }
+  end
+
+  defp decode_source_value([@map_tag, entries]) when is_list(entries) do
+    Map.new(entries, fn [key, value] -> {decode_source_value(key), decode_source_value(value)} end)
+  end
+
+  defp decode_source_value([@list_tag, values]) when is_list(values),
+    do: Enum.map(values, &decode_source_value/1)
+
+  defp decode_source_value([@tuple_tag, values]) when is_list(values),
+    do: values |> Enum.map(&decode_source_value/1) |> List.to_tuple()
+
+  defp decode_source_value(value), do: value
 
   defp from_synlit({:s_int, n}), do: n
   defp from_synlit({:s_float, f}), do: f

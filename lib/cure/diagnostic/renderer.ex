@@ -121,12 +121,20 @@ defmodule Cure.Diagnostic.Renderer do
   def lsp(%Diagnostic{} = diagnostic, registry \\ nil, encoding \\ :utf16) do
     range = if diagnostic.primary, do: %{"range" => lsp_range(diagnostic.primary, registry, encoding)}, else: %{}
 
+    related_information =
+      diagnostic.secondary
+      |> Enum.map(&related_information(&1, registry, encoding))
+      |> Kernel.++(provenance_related_information(diagnostic, registry, encoding))
+      |> Enum.uniq_by(fn related ->
+        {get_in(related, ["location", "uri"]), get_in(related, ["location", "range"]), related["message"]}
+      end)
+
     Map.merge(range, %{
       "severity" => lsp_severity(diagnostic.severity),
       "code" => diagnostic.code,
       "source" => "cure",
       "message" => diagnostic.title <> "\n\n" <> Diagnostic.message(diagnostic),
-      "relatedInformation" => Enum.map(diagnostic.secondary, &related_information(&1, registry, encoding)),
+      "relatedInformation" => related_information,
       "data" => %{
         "key" => Atom.to_string(diagnostic.key),
         "suggestions" => Enum.map(diagnostic.suggestions, &lsp_suggestion_map(&1, registry, encoding)),
@@ -254,6 +262,28 @@ defmodule Cure.Diagnostic.Renderer do
       "message" => message || "related source"
     }
   end
+
+  defp provenance_related_information(%Diagnostic{} = diagnostic, registry, encoding) do
+    primary_span = primary_span(diagnostic)
+
+    diagnostic.provenance
+    |> Enum.flat_map(fn frame ->
+      [
+        provenance_related(frame.invocation, "`#{frame.name}` was invoked here", primary_span),
+        provenance_related(frame.definition, "`#{frame.name}` is defined here", primary_span),
+        provenance_related(frame.generated, "`#{frame.name}` generated this declaration", primary_span)
+      ]
+    end)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.map(&related_information(&1, registry, encoding))
+  end
+
+  defp provenance_related(%Span{} = span, _message, %Span{} = primary) when span == primary, do: nil
+
+  defp provenance_related(%Span{} = span, message, _primary),
+    do: %Label{span: span, style: :secondary, message: message}
+
+  defp provenance_related(_span, _message, _primary), do: nil
 
   defp primary_span(%Diagnostic{primary: %Label{span: span}}), do: span
   defp primary_span(_diagnostic), do: nil

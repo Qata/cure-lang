@@ -39,6 +39,7 @@ defmodule Cure.Compiler.Parser do
   alias Cure.Compiler.{MacroFamily, MacroRaw, Token}
   alias Cure.Compiler.Parser.{BuiltinFixity, FixityTable, FixityScan, FixityResolver, Precedence}
   alias Cure.Compiler.Parser.Range
+  alias Cure.Diagnostic.ProvenanceFrame
   alias Cure.MetaAST.Metadata
   alias Cure.MetaAST.SourceInfo
   alias Cure.Diagnostic.ProofChainSyntaxProblem
@@ -613,7 +614,17 @@ defmodule Cure.Compiler.Parser do
 
     case match_segments(state, rest, %{hole_name => num}, 1) do
       {:ok, bindings, _progress, state} ->
-        expand_rule(rule, bindings, state)
+        {expanded, state} = expand_rule(rule, bindings, state)
+
+        frame =
+          macro_expansion_frame(
+            Map.get(rule, :suffix, "literal"),
+            first_node_source_span(num),
+            Map.get(rule, :source_span),
+            state
+          )
+
+        {append_macro_provenance(expanded, frame), state}
 
       {:error, _progress, state} ->
         # Only reachable for an out-of-scope malformed literal rule with segments
@@ -634,7 +645,17 @@ defmodule Cure.Compiler.Parser do
 
     case match_macro_rule(rules, state) do
       {:ok, rule, bindings, state} ->
-        expand_rule(rule, bindings, state)
+        {expanded, state} = expand_rule(rule, bindings, state)
+
+        frame =
+          macro_expansion_frame(
+            keyword,
+            keyword_token.span,
+            Map.get(rule, :source_span),
+            state
+          )
+
+        {append_macro_provenance(expanded, frame), state}
 
       {:error, rule, progress, state} ->
         t = peek(state)
@@ -714,6 +735,8 @@ defmodule Cure.Compiler.Parser do
           line: keyword_token.line,
           col: keyword_token.col
         ]
+
+        meta = put_computed_use_source_info(meta, keyword_token, rule, state)
 
         meta =
           case computed_use_obligations(rule, bindings) do
@@ -1773,6 +1796,123 @@ defmodule Cure.Compiler.Parser do
         {expanded, state}
     end
   end
+
+  defp put_computed_use_source_info(meta, %Token{} = keyword_token, rule, state) do
+    frame =
+      macro_expansion_frame(
+        Map.get(rule, :keyword, keyword_token.value),
+        keyword_token.span,
+        Map.get(rule, :source_span),
+        state
+      )
+
+    case frame.invocation do
+      %Cure.Diagnostic.Span{} = invocation ->
+        Keyword.put(meta, :source_info, %SourceInfo{
+          whole: invocation,
+          name: keyword_token.span,
+          provenance: [frame]
+        })
+
+      _ ->
+        meta
+    end
+  end
+
+  defp macro_expansion_frame(name, %Cure.Diagnostic.Span{} = first, definition, state) do
+    invocation =
+      case authored_token(state) do
+        %Token{span: %Cure.Diagnostic.Span{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> first
+          end
+
+        _ ->
+          first
+      end
+
+    %ProvenanceFrame{
+      kind: :macro_expansion,
+      name: name || "macro",
+      invocation: invocation,
+      definition: definition
+    }
+  end
+
+  defp macro_expansion_frame(name, _first, definition, _state) do
+    %ProvenanceFrame{kind: :macro_expansion, name: name || "macro", definition: definition}
+  end
+
+  # Template expansion is a structural copy followed by substitution. Preserve
+  # every authored role on both the copied template and captured use-site nodes;
+  # provenance is additive and never replaces either node's `whole` identity.
+  # Nodes synthesized by the expansion receive provenance with `whole: nil`.
+  defp append_macro_provenance({tag, meta, children}, %ProvenanceFrame{} = frame)
+       when is_atom(tag) and is_list(meta) do
+    meta =
+      meta
+      |> Enum.map(fn
+        {:source_info, %SourceInfo{} = info} -> {:source_info, info}
+        {key, value} -> {key, append_macro_provenance_value(value, frame)}
+        other -> other
+      end)
+      |> append_source_info_provenance(frame)
+
+    {tag, meta, append_macro_provenance_value(children, frame)}
+  end
+
+  defp append_macro_provenance(value, %ProvenanceFrame{} = frame),
+    do: append_macro_provenance_value(value, frame)
+
+  defp append_macro_provenance_value({tag, meta, _children} = node, frame)
+       when is_atom(tag) and is_list(meta),
+       do: append_macro_provenance(node, frame)
+
+  defp append_macro_provenance_value(tuple, frame) when is_tuple(tuple) do
+    tuple
+    |> Tuple.to_list()
+    |> Enum.map(&append_macro_provenance_value(&1, frame))
+    |> List.to_tuple()
+  end
+
+  defp append_macro_provenance_value(list, frame) when is_list(list),
+    do: Enum.map(list, &append_macro_provenance_value(&1, frame))
+
+  defp append_macro_provenance_value(%_{} = struct, _frame), do: struct
+
+  defp append_macro_provenance_value(map, frame) when is_map(map) do
+    Map.new(map, fn {key, value} ->
+      {append_macro_provenance_value(key, frame), append_macro_provenance_value(value, frame)}
+    end)
+  end
+
+  defp append_macro_provenance_value(other, _frame), do: other
+
+  defp append_source_info_provenance(meta, frame) do
+    info = Metadata.source_info(meta) || %SourceInfo{}
+    parent = provenance_parent(frame)
+
+    inherited =
+      Enum.map(info.provenance, fn
+        %ProvenanceFrame{parent: nil} = existing -> %{existing | parent: parent}
+        existing -> existing
+      end)
+
+    provenance =
+      (inherited ++ [frame])
+      |> Enum.uniq_by(&provenance_identity/1)
+
+    Keyword.put(meta, :source_info, %{info | provenance: provenance})
+  end
+
+  defp provenance_parent(%ProvenanceFrame{} = frame),
+    do: %{kind: frame.kind, name: frame.name, invocation: frame.invocation}
+
+  defp provenance_identity(%ProvenanceFrame{} = frame),
+    do: {frame.kind, frame.name, frame.invocation, frame.definition, frame.generated}
+
+  defp provenance_identity(other), do: other
 
   defp attach_lexical_imports({:lift_module, meta, children}, imports) when is_list(meta) and is_list(imports) do
     declarations = Keyword.get(meta, :declarations, [])
@@ -8815,7 +8955,9 @@ defmodule Cure.Compiler.Parser do
   defp parse_lift_module(state, token) do
     state = advance(state)
     state = advance(state)
+    name_token = peek(state)
     {name, state} = parse_dotted_name(state)
+    name_end_token = authored_token(state)
 
     name =
       case macro_module_marker(name) do
@@ -8845,7 +8987,22 @@ defmodule Cure.Compiler.Parser do
       col: token.col
     ]
 
+    meta = put_lift_module_source_info(meta, token, name_token, name_end_token, state)
+
     {{:lift_module, meta, []}, state}
+  end
+
+  defp put_lift_module_source_info(meta, first, name_start, name_end, state) do
+    with %Token{span: %Cure.Diagnostic.Span{} = first_span} <- first,
+         %Token{span: %Cure.Diagnostic.Span{} = name_start_span} <- name_start,
+         %Token{span: %Cure.Diagnostic.Span{} = name_end_span} <- name_end,
+         %Token{span: %Cure.Diagnostic.Span{} = last_span} <- authored_token(state),
+         {:ok, whole} <- Range.through(first_span, last_span),
+         {:ok, name} <- Range.through(name_start_span, name_end_span) do
+      Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name})
+    else
+      _ -> meta
+    end
   end
 
   # A lower-case single-segment name in a macro template is a substituted

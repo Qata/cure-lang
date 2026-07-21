@@ -1,6 +1,7 @@
 defmodule Cure.Compiler.MacroSyntaxTest do
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser, MacroSyntax, Token}
+  alias Cure.MetaAST.Metadata
 
   # Parse the RHS of `fn f() = <expr>` to get a real expression AST.
   defp expr!(src) do
@@ -90,6 +91,19 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:source_col, {:s_int, 7}} in attrs
 
     assert MacroSyntax.from_syntax(MacroSyntax.to_syntax(ast)) == ast
+  end
+
+  test "canonical authored ranges survive syntax and Core reflection" do
+    ast = expr!("g(1, x + 2)")
+    reflected = ast |> MacroSyntax.to_syntax() |> MacroSyntax.to_core() |> MacroSyntax.from_core()
+    round_tripped = MacroSyntax.from_syntax(reflected)
+
+    assert Metadata.source_info(elem(round_tripped, 1)) == Metadata.source_info(elem(ast, 1))
+
+    assert Enum.zip(elem(round_tripped, 2), elem(ast, 2))
+           |> Enum.all?(fn {left, right} ->
+             Metadata.source_info(elem(left, 1)) == Metadata.source_info(elem(right, 1))
+           end)
   end
 
   test "to_syntax reflects a raw lexer Token without crashing" do

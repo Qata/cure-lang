@@ -112,4 +112,56 @@ defmodule Cure.Diagnostic.SinkTest do
              }
            ]
   end
+
+  test "LSP exposes cross-file macro provenance as related source locations" do
+    registry =
+      Cure.Diagnostic.SourceRegistry.new()
+      |> Cure.Diagnostic.SourceRegistry.register(:use, "fn run() = build 1\n", "/project/use.cure")
+      |> Cure.Diagnostic.SourceRegistry.register(
+        :definition,
+        "syntax build <x: Code> becomes x\n",
+        "/project/macros.cure"
+      )
+      |> Cure.Diagnostic.SourceRegistry.register(:generated, "fn run() = bad\n", "/project/generated.cure")
+
+    {:ok, invocation} = Cure.Diagnostic.SourceRegistry.span(registry, :use, 11, 18)
+    {:ok, definition} = Cure.Diagnostic.SourceRegistry.span(registry, :definition, 0, 32)
+    {:ok, generated} = Cure.Diagnostic.SourceRegistry.span(registry, :generated, 11, 14)
+
+    diagnostic =
+      Cure.Diagnostic.new(
+        code: "E092",
+        key: :macro_expansion_failed,
+        severity: :error,
+        title: "Macro expansion failed",
+        message: "generated code is invalid",
+        primary: %Cure.Diagnostic.Label{span: generated, style: :primary},
+        provenance: [
+          %Cure.Diagnostic.ProvenanceFrame{
+            kind: :macro_expansion,
+            name: "build",
+            invocation: invocation,
+            definition: definition,
+            generated: generated
+          }
+        ]
+      )
+
+    rendered = Cure.Diagnostic.Renderer.lsp(diagnostic, registry, :utf16)
+
+    assert Enum.map(rendered["relatedInformation"], fn related ->
+             {related["message"], related["location"]["uri"], related["location"]["range"]}
+           end) == [
+             {"`build` was invoked here", "file:///project/use.cure",
+              %{
+                "start" => %{"line" => 0, "character" => 11},
+                "end" => %{"line" => 0, "character" => 18}
+              }},
+             {"`build` is defined here", "file:///project/macros.cure",
+              %{
+                "start" => %{"line" => 0, "character" => 0},
+                "end" => %{"line" => 0, "character" => 32}
+              }}
+           ]
+  end
 end
