@@ -386,6 +386,35 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "change the pattern or its type annotation"
   end
 
+  test "a unary operator operand retains its source caret" do
+    source = "not 1\n"
+    operand = raw_span(source, "1", 1, 5)
+
+    reason =
+      {:source_context, {:conversion_failure, "Int", "Bool"},
+       %{
+         line: 1,
+         column: 5,
+         length: 1,
+         span: operand,
+         expectation_span: operand,
+         checking: :not,
+         expression_category: :literal,
+         expectation_origin: :operator_operand,
+         argument_index: 0
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "unary.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Operator cannot use this value"
+    assert diagnostic.payload.origin.owner == :not
+    assert diagnostic.primary.span.start_column == 5
+    assert rendered =~ "The `not` operator cannot use this operand type"
+    assert rendered =~ "1 | not 1"
+    assert rendered =~ "this operator operand has the wrong type"
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 

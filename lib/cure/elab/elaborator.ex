@@ -794,20 +794,26 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:unary_op, meta, [operand]} = expr, names, ctx, env) do
     case Keyword.fetch!(meta, :operator) do
       :not ->
-        with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
-             term = {:app, {:global, :not}, o_core},
-             {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
-        end
+        result =
+          with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
+               term = {:app, {:global, :not}, o_core},
+               {:ok, type} <- Kernel.infer(ctx, term) do
+            {:ok, term, type}
+          end
+
+        attach_unary_operand_context(result, operand, :not)
 
       # Int-only bitwise complement. `int_bnot : Int -> Int`, so the kernel
       # infer both types the operand against Int and rejects a non-Int operand.
       :bnot ->
-        with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
-             term = {:app, {:global, builtin_op_global(:int_bnot)}, o_core},
-             {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
-        end
+        result =
+          with {:ok, o_core, _ot} <- elaborate_expr_typed(operand, names, ctx, env),
+               term = {:app, {:global, builtin_op_global(:int_bnot)}, o_core},
+               {:ok, type} <- Kernel.infer(ctx, term) do
+            {:ok, term, type}
+          end
+
+        attach_unary_operand_context(result, operand, :bnot)
 
       # Numeric negation. Desugars to `negate` ONLY when it is a genuine
       # overloadable interface method (`Std.Arithmetic`'s `Additive.negate`) in
@@ -828,12 +834,15 @@ defmodule Cure.Elab.Elaborator do
         if Cure.Elab.Resolve.method?(env, :negate) do
           elaborate_expr_typed({:function_call, [name: "negate"], [operand]}, names, ctx, env)
         else
-          with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
-               {:ok, g} <- neg_global(o_type, ctx),
-               term = {:app, {:global, builtin_op_global(g)}, o_core},
-               {:ok, type} <- Kernel.infer(ctx, term) do
-            {:ok, term, type}
-          end
+          result =
+            with {:ok, o_core, o_type} <- elaborate_expr_typed(operand, names, ctx, env),
+                 {:ok, g} <- neg_global(o_type, ctx),
+                 term = {:app, {:global, builtin_op_global(g)}, o_core},
+                 {:ok, type} <- Kernel.infer(ctx, term) do
+              {:ok, term, type}
+            end
+
+          attach_unary_operand_context(result, operand, :-)
         end
 
       _ ->
@@ -1677,6 +1686,11 @@ defmodule Cure.Elab.Elaborator do
 
   defp mentions_prior_field?(list, depth) when is_list(list), do: Enum.any?(list, &mentions_prior_field?(&1, depth))
   defp mentions_prior_field?(_other, _depth), do: false
+
+  defp attach_unary_operand_context({:error, reason}, operand, operator),
+    do: {:error, attach_operator_operand_context(reason, operand, 0, operator)}
+
+  defp attach_unary_operand_context(result, _operand, _operator), do: result
 
   @doc """
   Checking-mode elaboration for proof forms whose Core term depends on the
