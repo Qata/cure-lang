@@ -3045,6 +3045,17 @@ defmodule Cure.Compiler.Parser do
   # position.
   defp parse_rewrite(state, token) do
     state = advance(state)
+
+    case peek(state) do
+      %Token{type: :identifier, value: value} when value in ["using", "backwards"] ->
+        parse_directed_rewrite(state, token)
+
+      _ ->
+        parse_legacy_rewrite(state, token)
+    end
+  end
+
+  defp parse_legacy_rewrite(state, token) do
     {proof, state} = parse_expr(state, 0)
     # `in` may sit on the next line for a multi-line `rewrite … in …` chain, and the BODY may
     # likewise start on the line after `in`. `rewrite` always requires both, so skipping newlines
@@ -3055,6 +3066,70 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
     {body, state} = parse_expr(state, 0)
     {{:rewrite_expr, [line: token.line, col: token.col], [proof, body]}, state}
+  end
+
+  defp parse_directed_rewrite(state, rewrite_token) do
+    {direction, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "backwards"} -> {:backwards, advance(state)}
+        _ -> {:forward, state}
+      end
+
+    state =
+      case peek(state) do
+        %Token{type: :identifier, value: "using"} -> advance(state)
+        token -> add_error(state, {:expected, :using, :got, token.type, token.line, token.col})
+      end
+
+    {proof, state} = parse_expr(state, 0)
+
+    {target, state, last_span} =
+      case peek(state) do
+        %Token{type: :identifier, value: "at"} ->
+          state = advance(state)
+
+          case peek(state) do
+            %Token{type: :integer, value: occurrence, span: span} when occurrence > 0 ->
+              {{:at, occurrence}, advance(state), span}
+
+            token ->
+              state = add_error(state, {:expected, :positive_integer, :got, token.type, token.line, token.col})
+              {{:at, 0}, state, token.span}
+          end
+
+        %Token{type: :keyword, value: :in} ->
+          state = advance(state)
+
+          case peek(state) do
+            %Token{type: :identifier, value: name, span: span} ->
+              {{:in, name}, advance(state), span}
+
+            token ->
+              state = add_error(state, {:expected, :identifier, :got, token.type, token.line, token.col})
+              {{:in, "?"}, state, token.span}
+          end
+
+        _ ->
+          {:goal, state, ast_source_span(proof)}
+      end
+
+    meta = [line: rewrite_token.line, col: rewrite_token.col, direction: direction, target: target]
+
+    meta =
+      with %Cure.Diagnostic.Span{} = first <- rewrite_token.span,
+           %Cure.Diagnostic.Span{} = last <- last_span,
+           {:ok, whole} <- Range.through(first, last) do
+        Keyword.put(meta, :source_info, %SourceInfo{
+          whole: whole,
+          operator: rewrite_token.span,
+          body: ast_source_span(proof),
+          operands: [ast_source_span(proof)]
+        })
+      else
+        _ -> meta
+      end
+
+    {{:rewrite_command, meta, [proof]}, state}
   end
 
   # -- Equational proof chains ----------------------------------------------

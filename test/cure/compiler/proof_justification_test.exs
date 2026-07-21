@@ -36,4 +36,38 @@ defmodule Cure.Compiler.ProofJustificationTest do
     assert SourceSpans.strip_diagnostic_meta(parse!(printed)) ==
              SourceSpans.strip_diagnostic_meta(ast)
   end
+
+  test "directed rewrite commands parse, retain selectors, and print canonically" do
+    source = """
+    proof chain
+      x
+        == y
+        because
+          rewrite using forward_proof
+          rewrite backwards using reverse_proof at 2
+          rewrite using local_proof in hypothesis
+          final_proof
+    """
+
+    assert {:proof_chain, _, [_, {:proof_step, _, [_, _, {:proof_justification, _, statements}]}]} =
+             ast = parse!(source)
+
+    assert [forward_command, backward_command, local_command, {:variable, _, "final_proof"}] = statements
+    assert {:rewrite_command, forward, [_]} = forward_command
+    assert {:rewrite_command, backward, [_]} = backward_command
+    assert {:rewrite_command, local, [_]} = local_command
+
+    assert forward[:direction] == :forward and forward[:target] == :goal
+    assert backward[:direction] == :backwards and backward[:target] == {:at, 2}
+    assert local[:direction] == :forward and local[:target] == {:in, "hypothesis"}
+
+    assert Enum.all?(
+             [forward, backward, local],
+             &match?(%SourceInfo{whole: %Cure.Diagnostic.Span{}}, Metadata.source_info(&1))
+           )
+
+    printed = Printer.quoted_to_string(ast)
+    assert printed == String.trim_trailing(source)
+    assert SourceSpans.strip_diagnostic_meta(parse!(printed)) == SourceSpans.strip_diagnostic_meta(ast)
+  end
 end

@@ -10,6 +10,7 @@ defmodule Cure.Diagnostic.Adapter do
     ProvenanceFrame,
     ProofChainMismatchProblem,
     ProofChainSyntaxProblem,
+    RewriteProblem,
     Span,
     Suggestion,
     SyntaxProblem,
@@ -330,6 +331,53 @@ defmodule Cure.Diagnostic.Adapter do
       body: Doc.paragraph(message),
       primary: primary_label(opts, label),
       secondary: proof_chain_mismatch_labels(problem, Keyword.get(opts, :span)),
+      payload: problem
+    )
+  end
+
+  def from_error({:rewrite_failed, %RewriteProblem{} = problem}, opts) do
+    {title, message, label} =
+      case problem.kind do
+        :no_occurrence ->
+          {"Rewrite has no matching occurrence",
+           "The selected side of this equality does not occur in the current proof goal.",
+           "nothing in this goal matches the rewrite"}
+
+        :ambiguous_occurrence ->
+          {"Rewrite matches more than once",
+           "This equality matches multiple places. Select one of the numbered occurrences with `at n`.",
+           "choose which occurrence to rewrite"}
+
+        :invalid_occurrence ->
+          {"Rewrite occurrence does not exist",
+           "The requested occurrence number is outside the candidates in the current goal.",
+           "this occurrence number is not available"}
+
+        :bad_target ->
+          {"Rewrite target is not a local hypothesis",
+           "The name after `in` must identify a local proof hypothesis in this justification.",
+           "this rewrite target is unavailable"}
+
+        :reverse_only ->
+          {"Rewrite only matches in the opposite direction",
+           "The other side of this equality occurs in the goal. Add or remove `backwards` to use that direction.",
+           "this direction has no match"}
+
+        _ ->
+          {"Rewrite theorem is not an equality",
+           "The expression after `using` must prove Cure's `Equivalent` proposition.",
+           "this expression is not equality evidence"}
+      end
+
+    Diagnostic.new(
+      code: "E111",
+      key: :rewrite_failed,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      secondary: rewrite_labels(problem, Keyword.get(opts, :span)),
+      suggestions: rewrite_suggestions(problem),
       payload: problem
     )
   end
@@ -2987,6 +3035,70 @@ defmodule Cure.Diagnostic.Adapter do
       _ -> []
     end)
   end
+
+  defp rewrite_labels(problem, primary) do
+    [
+      {problem.command, "rewrite command"},
+      {problem.theorem, "equality supplied here"},
+      {problem.goal, "current proof goal"}
+    ]
+    |> Enum.flat_map(fn
+      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
+      _ -> []
+    end)
+  end
+
+  defp rewrite_suggestions(%RewriteProblem{kind: :ambiguous_occurrence, command: %Span{} = command} = problem) do
+    insertion = %Span{
+      command
+      | start_byte: command.end_byte,
+        start_line: command.end_line,
+        start_column: command.end_column
+    }
+
+    Enum.map(problem.occurrences || [], fn occurrence ->
+      %Suggestion{
+        message: "Rewrite occurrence #{occurrence.number}",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: insertion, replacement: " at #{occurrence.number}"}]
+      }
+    end)
+  end
+
+  defp rewrite_suggestions(%RewriteProblem{kind: :reverse_only, command: %Span{} = command, direction: direction}) do
+    {span, replacement} =
+      case direction do
+        :forward ->
+          {%Span{
+             command
+             | start_byte: command.start_byte + 7,
+               end_byte: command.start_byte + 7,
+               start_column: command.start_column + 7,
+               end_line: command.start_line,
+               end_column: command.start_column + 7
+           }, " backwards"}
+
+        :backwards ->
+          {%Span{
+             command
+             | start_byte: command.start_byte + 7,
+               end_byte: command.start_byte + 17,
+               start_column: command.start_column + 7,
+               end_line: command.start_line,
+               end_column: command.start_column + 17
+           }, ""}
+      end
+
+    [
+      %Suggestion{
+        message: "Use the opposite rewrite direction",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: replacement}]
+      }
+    ]
+  end
+
+  defp rewrite_suggestions(_problem), do: []
 
   defp candidate_suggestions([]), do: []
 

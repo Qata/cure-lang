@@ -89,7 +89,7 @@ defmodule Cure.Diagnostic.Registry do
     "W081" => "No first-party producer remains; pickup reachability warnings are not emitted.",
     "W082" => "No first-party producer remains; pickup reachability warnings are not emitted."
   }
-  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 W086 W088]
+  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 W086 W088]
   @known_producers ~w[
     dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
     module_loader name_resolution operational parser pattern_checker proof_checker
@@ -163,6 +163,7 @@ defmodule Cure.Diagnostic.Registry do
     "E108" => :splice_outside_quote,
     "E109" => :proof_chain_syntax,
     "E110" => :proof_chain_mismatch,
+    "E111" => :rewrite_failed,
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
     "W002" => :configuration_warning,
@@ -1349,6 +1350,17 @@ defmodule Cure.Diagnostic.Registry do
     Supply evidence of exactly the proposition displayed for that step, or
     correct the adjacent endpoint.
     """,
+    "E111" => """
+    E111: Directed Rewrite Failed
+
+    A `rewrite using` command could not apply its equality to the selected goal
+    or local hypothesis. The diagnostic distinguishes missing, ambiguous, and
+    invalid occurrences, unavailable targets, and an equality that only matches
+    in the opposite direction.
+
+    Use the displayed `at n` occurrence, correct the target, or switch between
+    forward and `backwards` rewriting.
+    """,
     "W000" => """
     W000: Compiler Warning
 
@@ -1607,6 +1619,7 @@ defmodule Cure.Diagnostic.Registry do
   defp stable_key("E108", _title), do: :splice_outside_quote
   defp stable_key("E109", _title), do: :proof_chain_syntax
   defp stable_key("E110", _title), do: :proof_chain_mismatch
+  defp stable_key("E111", _title), do: :rewrite_failed
 
   defp stable_key(_code, title) do
     title
@@ -1655,6 +1668,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E108"), do: [:elaboration]
   defp producers("E109"), do: [:parser]
   defp producers("E110"), do: [:elaboration]
+  defp producers("E111"), do: [:elaboration]
   defp producers("E008"), do: [:doctor]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
@@ -1670,6 +1684,7 @@ defmodule Cure.Diagnostic.Registry do
   defp subsystem("E108"), do: :elaboration
   defp subsystem("E109"), do: :parser
   defp subsystem("E110"), do: :elaboration
+  defp subsystem("E111"), do: :elaboration
   defp subsystem("E091"), do: :resolution
   defp subsystem("E092"), do: :macros
   defp subsystem("E093"), do: :elaboration

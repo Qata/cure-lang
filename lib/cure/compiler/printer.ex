@@ -1304,6 +1304,19 @@ defmodule Cure.Compiler.Printer do
     "rewrite " <> render(proof, depth, indent) <> " in " <> render(body, depth, indent)
   end
 
+  defp to_string({:rewrite_command, meta, [proof]}, depth, indent) do
+    direction = if Keyword.get(meta, :direction) == :backwards, do: " backwards", else: ""
+
+    target =
+      case Keyword.get(meta, :target, :goal) do
+        :goal -> ""
+        {:at, occurrence} -> " at #{occurrence}"
+        {:in, name} -> " in #{name}"
+      end
+
+    "rewrite#{direction} using " <> render(proof, depth, indent) <> target
+  end
+
   # -- Macro definitions -----------------------------------------------------
 
   defp to_string({:macro_def, meta, rules}, depth, indent) do

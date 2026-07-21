@@ -99,6 +99,24 @@ defmodule Cure.Diagnostic.ProofChainMismatchProblem do
         }
 end
 
+defmodule Cure.Diagnostic.RewriteProblem do
+  @moduledoc "Structured failure for a directed proof rewrite command."
+  @enforce_keys [:kind]
+  defstruct [:kind, :command, :theorem, :goal, :occurrences, :target, :direction, :searched, :cause]
+
+  @type t :: %__MODULE__{
+          kind: atom(),
+          command: Cure.Diagnostic.Span.t() | nil,
+          theorem: Cure.Diagnostic.Span.t() | nil,
+          goal: Cure.Diagnostic.Span.t() | nil,
+          occurrences: [term()],
+          target: term(),
+          direction: :forward | :backwards,
+          searched: term(),
+          cause: term()
+        }
+end
+
 defmodule Cure.Diagnostic.TypeProblem do
   @moduledoc "A contextual type disagreement independent of presentation."
 

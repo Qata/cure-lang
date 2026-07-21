@@ -91,6 +91,9 @@ defmodule Cure.Elab.ProofChain do
       {:error, {:proof_chain_syntax, _} = reason} ->
         {:error, reason}
 
+      {:error, {:rewrite_failed, _} = reason} ->
+        {:error, reason}
+
       {:error, reason} ->
         info = Metadata.source_info(meta)
 

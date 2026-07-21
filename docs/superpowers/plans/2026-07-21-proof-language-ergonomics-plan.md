@@ -316,29 +316,29 @@ failures and 6 excluded.
 **Purpose:** support `rewrite using`, `rewrite backwards using`, `in name`, and
 `at n` while preserving legacy expression rewrite.
 
-- [ ] Move `eq_parts`, motive construction, occurrence matching, symmetry, and
+- [x] Move `eq_parts`, motive construction, occurrence matching, symmetry, and
   transport assembly from private elaborator helpers into
   `Cure.Elab.Rewrite`. First pin legacy `rewrite p in body` Core/verdict tests;
   extraction must be behavior-identical.
-- [ ] Represent rewrite occurrences with normalized term, authored/source path,
+- [x] Represent rewrite occurrences with normalized term, authored/source path,
   traversal path, and stable left-to-right display number. Enumeration must not
   depend on map order or Core pretty-print order.
-- [ ] Parse proof-block commands:
+- [x] Parse proof-block commands:
   - `rewrite using proof`;
   - `rewrite backwards using proof`;
   - either form followed by `at positive_integer`;
   - either form followed by `in local_name`.
-- [ ] A unique occurrence transforms the goal and records a transport builder;
+- [x] A unique occurrence transforms the goal and records a transport builder;
   zero/many return E111. Never choose the first match silently.
-- [ ] Generate congruence automatically by abstracting the matched subterm into
+- [x] Generate congruence automatically by abstracting the matched subterm into
   the rewrite motive. Cover nested unary/binary/function/constructor arguments
   and dependent occurrences; reject contexts for which a sound motive cannot be
   synthesized.
-- [ ] Rewriting `in hypothesis` creates a new checked local proof binding for the
+- [x] Rewriting `in hypothesis` creates a new checked local proof binding for the
   remainder of the block and preserves the immutable source binding.
-- [ ] Add reverse-only detection and a machine edit inserting `backwards`.
+- [x] Add reverse-only detection and a machine edit inserting `backwards`.
   Ambiguity supplies one edit per `at n` candidate.
-- [ ] Add E111 completely to registry/catalog/renderers/JSON/LSP and prove all
+- [x] Add E111 completely to registry/catalog/renderers/JSON/LSP and prove all
   primary spans are authored proof-command spans.
 
 **Red gate:** command syntax rejects; legacy rewrite baseline remains green.
@@ -347,6 +347,16 @@ failures and 6 excluded.
 stdlib, full-suite, and Antigen gates.
 
 **Commit:** `feat(proofs): add directed goal rewriting`
+
+**Completed evidence (2026-07-21):** legacy expression-rewrite verdicts and
+baseline Core hashes remain unchanged after extraction into `Cure.Elab.Rewrite`;
+forward, backward, selected, nested-application, binder-aware, and local-
+hypothesis rewrites kernel-check through ordinary `Equivalent` elimination.
+E111's five planned variants project through plain, ANSI, JSON, and LSP, with
+machine edits for direction and every numbered ambiguity candidate. The
+canonical 122-module stdlib compiles, all changed files are formatted,
+the full suite is 5,321 tests with 0 failures and 6 excluded, 147 expected
+immune responses fire, and complete Antigen coverage is 318/318.
 
 ## Task 5: Generate certified defining equations
 

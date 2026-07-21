@@ -120,4 +120,62 @@ defmodule Cure.Elab.ProofGoalTest do
              _context}} =
              Program.elaborate(source)
   end
+
+  test "directed rewrite commands transform and close forward and backward goals" do
+    source = """
+    mod DirectedRewrite
+      use Std.Equivalent
+
+      fn forward(x: Int, y: Int, equality: Equivalent(Int, x, y)) -> Equivalent(Int, x, y) = proof chain
+        x
+          == y
+          because
+            rewrite using equality
+            reflexive(y)
+
+      fn backward(x: Int, y: Int, equality: Equivalent(Int, x, y)) -> Equivalent(Int, y, x) = proof chain
+        y
+          == x
+          because
+            rewrite backwards using equality
+            reflexive(x)
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
+
+  test "at selects one stable left-to-right occurrence" do
+    source = """
+    mod SelectedRewrite
+      use Std.Equivalent
+
+      fn selected(x: Int, y: Int, equality: Equivalent(Int, x, y)) -> Equivalent(Int, x, x) = proof chain
+        x
+          == x
+          because
+            rewrite using equality at 2
+            equality
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
+
+  test "in creates a refined, shadowing local proof binding" do
+    source = """
+    mod HypothesisRewrite
+      use Std.Equivalent
+
+      fn refined(x: Int, y: Int, z: Int, equality: Equivalent(Int, x, y), hypothesis: Equivalent(Int, x, z)) -> Equivalent(Int, y, z) = proof chain
+        y
+          == z
+          because
+            rewrite using equality in hypothesis
+            hypothesis
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
 end

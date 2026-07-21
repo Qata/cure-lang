@@ -148,4 +148,64 @@ defmodule Cure.Diagnostic.ProofChainDiagnosticTest do
     assert plain =~ "statement is unreachable"
     assert Renderer.lsp(diagnostic, registry, :utf16)["relatedInformation"] != []
   end
+
+  test "E111 preserves directed rewrite failures through plain, JSON, and LSP renderers" do
+    source = """
+    mod AmbiguousRewrite
+      use Std.Equivalent
+      fn proof(x: Int, y: Int, equality: Equivalent(Int, x, y)) -> Equivalent(Int, x, x) = proof chain
+        x
+          == x
+          because
+            rewrite using equality
+            equality
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source, file: "ambiguous_rewrite.cure", emit_events: false)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "ambiguous_rewrite.cure", source)
+    assert diagnostic.code == "E111"
+    assert diagnostic.key == :rewrite_failed
+    assert diagnostic.payload.kind == :ambiguous_occurrence
+    assert Enum.map(diagnostic.payload.occurrences, & &1.number) == [1, 2]
+    assert Enum.map(diagnostic.suggestions, &(&1.edits |> hd() |> Map.fetch!(:replacement))) == [" at 1", " at 2"]
+    assert Renderer.plain(diagnostic, registry) =~ "at n"
+    assert (diagnostic |> Renderer.json() |> Jason.decode!())["code"] == "E111"
+    assert Renderer.lsp(diagnostic, registry, :utf16)["code"] == "E111"
+  end
+
+  test "E111 assigns stable variants to every directed rewrite selection failure" do
+    fixtures = [
+      {:no_occurrence, "z", "z", "rewrite using equality"},
+      {:reverse_only, "y", "z", "rewrite using equality"},
+      {:invalid_occurrence, "x", "x", "rewrite using equality at 3"},
+      {:bad_target, "x", "y", "rewrite using equality in missing"}
+    ]
+
+    for {kind, left, right, command} <- fixtures do
+      source = """
+      mod Rewrite#{kind}
+        use Std.Equivalent
+        fn proof(x: Int, y: Int, z: Int, equality: Equivalent(Int, x, y)) -> Equivalent(Int, #{left}, #{right}) = proof chain
+          #{left}
+            == #{right}
+            because
+              #{command}
+              equality
+      end
+      """
+
+      assert {:error, {:codegen_error, reason}} =
+               Cure.Compiler.compile_string(source, file: "#{kind}.cure", emit_events: false)
+
+      {diagnostic, _registry} = Errors.to_diagnostic(reason, "#{kind}.cure", source)
+      assert diagnostic.code == "E111"
+      assert diagnostic.payload.kind == kind
+      assert diagnostic.payload.command
+      assert diagnostic.payload.theorem
+      assert diagnostic.payload.goal
+    end
+  end
 end

@@ -135,7 +135,7 @@ defmodule Cure.Compiler.Errors do
   end
 
   def format_error({kind, _problem} = error, file)
-      when kind in [:proof_chain_syntax, :proof_chain_mismatch] do
+      when kind in [:proof_chain_syntax, :proof_chain_mismatch, :rewrite_failed] do
     error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
   end
 
@@ -630,6 +630,7 @@ defmodule Cure.Compiler.Errors do
   defp embedded_span({:expected_token, _, _, _, _, _, %Cure.Diagnostic.Span{} = span}), do: span
   defp embedded_span({:source_context, {:proof_chain_mismatch, _} = reason, _context}), do: embedded_span(reason)
   defp embedded_span({:source_context, {:proof_chain_syntax, _} = reason, _context}), do: embedded_span(reason)
+  defp embedded_span({:source_context, {:rewrite_failed, _} = reason, _context}), do: embedded_span(reason)
   defp embedded_span({:source_context, _reason, %{span: %Cure.Diagnostic.Span{} = span}}), do: span
 
   defp embedded_span({:proof_chain_syntax, %Cure.Diagnostic.ProofChainSyntaxProblem{} = problem}),
@@ -637,6 +638,9 @@ defmodule Cure.Compiler.Errors do
 
   defp embedded_span({:proof_chain_mismatch, %Cure.Diagnostic.ProofChainMismatchProblem{} = problem}),
     do: problem.justification || problem.current_step
+
+  defp embedded_span({:rewrite_failed, %Cure.Diagnostic.RewriteProblem{} = problem}),
+    do: problem.command || problem.theorem || problem.goal
 
   defp embedded_span({:source_context, reason, _context}), do: embedded_span(reason)
   defp embedded_span(_error), do: nil

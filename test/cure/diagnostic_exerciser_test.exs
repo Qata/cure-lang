@@ -104,6 +104,13 @@ defmodule Cure.DiagnosticExerciserTest do
           expected: :equivalent,
           actual: :reflexive
         }}},
+      {"directed rewrite failure", "E111",
+       {:rewrite_failed,
+        %Cure.Diagnostic.RewriteProblem{
+          kind: :no_occurrence,
+          direction: :forward,
+          occurrences: []
+        }}},
       {"beam write failure", "E096", {:write_failed, "_build/Demo.beam", :eacces}},
       {"beam load failure", "E098", {:load_failed, :badfile}},
       {"beam compilation failure", "E098", {:compilation_failed, [{:bad_form, :detail}]}},

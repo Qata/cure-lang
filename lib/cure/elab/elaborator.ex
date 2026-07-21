@@ -14,7 +14,10 @@ defmodule Cure.Elab.Elaborator do
   """
 
   alias Cure.Core.{Context, Conv, Env, Eval, Grade, Inductive, Kernel, Normalise, Quote}
-  alias Cure.Elab.{GuardLint, MetaCtx, Subst, Unify}
+  alias Cure.Elab.{GuardLint, MetaCtx, Rewrite, Subst, Unify}
+
+  import Cure.Elab.Rewrite,
+    only: [abstract_term: 3, contains_term?: 2, mk_eq: 3, mk_refl: 1, replace_term: 3, transport_case: 4]
 
   # Placeholder body for a `:case` branch the join point will fill (see
   # `join_point?/5`, `elaborate_join/6`, `wrap_join/2`). Never reaches the kernel:
@@ -1890,12 +1893,12 @@ defmodule Cure.Elab.Elaborator do
     depth = Context.length(ctx)
 
     with {:ok, proof_term, proof_type} <- elaborate_expr_typed(proof_ast, names, ctx, env),
-         {:ok, ty_value, a_value, b_value} <- eq_parts(proof_type, Context.signature(ctx)),
+         {:ok, ty_value, a_value, b_value} <- Rewrite.eq_parts(proof_type, Context.signature(ctx)),
          ty = Kernel.normalize(ctx, Quote.reify(ty_value, depth)),
          a = Kernel.normalize(ctx, Quote.reify(a_value, depth)),
          b = Kernel.normalize(ctx, Quote.reify(b_value, depth)),
          normalized_expected = Kernel.normalize(ctx, expected_core),
-         {:ok, build, body_expected} <- rewrite_plan(ctx, proof_term, ty, a, b, normalized_expected),
+         {:ok, build, body_expected} <- Rewrite.legacy_plan(proof_term, ty, a, b, normalized_expected),
          {:ok, body_term} <- elaborate_expr_checked(body_ast, body_expected, names, ctx, env),
          term = build.(body_term),
          :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
@@ -3068,210 +3071,7 @@ defmodule Cure.Elab.Elaborator do
   defp call_placeholder?({:variable, _meta, "_"}), do: true
   defp call_placeholder?(_arg), do: false
 
-  # A `rewrite` proof's type. The inductive identity type `Equivalent(a,x,y)` (spec
-  # 2026-07-04) infers to `{:vdata, :Equivalent, [a, x, y]}` (1 param + 2 indices);
-  # its `ty`/endpoints are that param and the two indices. The primitive `{:veq}`
-  # form is still produced by the internal transport machinery (retired later), so
-  # both are accepted.
-  defp eq_parts({:vdata, family, [ty, a, b]}, sig) do
-    if family == Inductive.builtin(sig, :eq), do: {:ok, ty, a, b}, else: {:error, :rewrite_proof_not_equality}
-  end
-
-  defp eq_parts(_other, _sig), do: {:error, :rewrite_proof_not_equality}
-
-  # Build the inductive identity type `Equivalent(ty, a, b)` and its `reflexive(x)`
-  # proof (spec 2026-07-04). The elaborator's transport/motive machinery constructs
-  # these — not the retired primitive `{:eq}`/`{:refl}` — so that every
-  # Equivalent/reflexive which can reach user code (a `with … proof pf` binder, a
-  # returned equality) shares the single inductive representation user signatures
-  # elaborate to. As of Phase B the `{:rewrite}` eliminator node has NO producers
-  # left: every transport is the J/subst `transport_case` below (the kernel's
-  # `{:rewrite}` rule and elab traversal clauses are stripped in Phase C).
-  defp mk_eq(ty, a, b), do: {:data, :"Std.Equivalent#Equivalent", [ty], [a, b]}
-  # Checking-position reflexive: fields-only spine; the expected type supplies the
-  # parameter (M8.3 checking mode). (The inference-position params-on-spine form
-  # `{:ctor, :reflexive, [ty, x]}` — K6 §E.1 — lost its last elaborator consumer
-  # when bridge_step was deleted (B2); the kernel capability remains.)
-  defp mk_refl(x), do: {:ctor, :"Std.Equivalent#reflexive", [x]}
-
-  # Env-gated tracing for the rewrite-planning path (`CURE_REWRITE_LOG=1`). Off by
-  # default so ordinary elaboration is untouched; used to diagnose non-termination
-  # / mis-planning in the `rewrite_plan` occurrence matching.
-  defp rwlog(fun) do
-    if System.get_env("CURE_REWRITE_LOG"), do: IO.puts(:stderr, "[rw] " <> fun.())
-    :ok
-  end
-
-  defp rw_ins(t), do: t |> inspect(limit: 14, printable_limit: 240) |> String.slice(0, 300)
-
-  # Phase-B adopted encoding (spec "Phase-B encoding amendment", 2026-07-08): the
-  # standard J/subst transport, exactly how Agda/Lean derive `subst`/`Eq.mpr`
-  # from J. Given `proof : Equivalent(ty, l, r)` and a single-endpoint motive
-  # `M = {:lam, Cure.Core.Grade.unrestricted(), ty, …}`, build
-  #
-  #     {:case, proof,
-  #       λ(x:ty). λ(y:ty). λ(p : Equivalent(ty,x,y)). (M@x) -> (M@y),
-  #       [reflexive(w) -> λ(h : M@l). h]}
-  #
-  # whose kernel-inferred type at the use site is `(M@l) -> (M@r)` (the kernel
-  # applies the motive at the scrutinee's ACTUAL indices, kernel.ex
-  # `infer {:case,…}`), while the reflexive branch is checked at the ctor's own
-  # indices `[w,w]` with `w := l` bound by the index unifier, i.e. at
-  # `(M@l) -> (M@l)` — which the identity inhabits. Applying the case to a body
-  # elaborated OUTSIDE at `M@l` yields `M@r`: no de Bruijn body shift, and no
-  # in-branch endpoint collapse (the in-branch re-elaboration route was
-  # empirically disproven during B1 — `build_motive` abstracts BOTH endpoints,
-  # demanding `l ≡ r` definitionally in-branch, false exactly when a rewrite is
-  # needed).
-  #
-  # The identity branch's lam domain is annotated `M@l` (shifted into the
-  # 1-binder branch frame), NOT `M@w`: `Kernel.check(lam, vpi)` converts the
-  # annotation against the expected domain, and the branch's expected domain
-  # after `specialize_branch_value` is `M@l`, not the fresh witness neutral.
-  # Sound for every producer site here because each site's motive never
-  # mentions the proof's second endpoint (it is abstracted away by
-  # `motive_for`/`symmetry_proof`, or the motive is constant for the bridge),
-  # so the branch substitution cannot touch anything the annotation's
-  # evaluation sees.
-  defp transport_case(proof, ty, motive, l) do
-    # Motive binders outside-in: x (Equivalent's first index), y (second), then
-    # the scrutinee p. Under x,y the scrutinee annotation's param shifts by 2;
-    # under x,y,p the arrow domain sees x at de Bruijn 2; the (non-dependent)
-    # codomain sits under one more binder, so y is also at de Bruijn 2 there.
-    scrut_ty = {:data, :"Std.Equivalent#Equivalent", [Subst.shift(ty, 2, 0)], [{:var, 1}, {:var, 0}]}
-
-    arrow =
-      {:pi, Cure.Core.Grade.unrestricted(), {:app, Subst.shift(motive, 3, 0), {:var, 2}},
-       {:app, Subst.shift(motive, 4, 0), {:var, 2}}}
-
-    arrow_motive =
-      {:lam, Cure.Core.Grade.unrestricted(), ty,
-       {:lam, Cure.Core.Grade.unrestricted(), Subst.shift(ty, 1, 0),
-        {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
-
-    id_dom = {:app, Subst.shift(motive, 1, 0), Subst.shift(l, 1, 0)}
-
-    {:case, proof, arrow_motive,
-     [{:"Std.Equivalent#reflexive", 1, {:lam, Cure.Core.Grade.unrestricted(), id_dom, {:var, 0}}}]}
-  end
-
-  # Plan a `rewrite p in t` whose proof `p : Eq(ty, a, b)` transports along the
-  # goal `expected`. Returns `{:ok, build, body_expected}`: `body_expected` is
-  # the goal the surface body `t` must satisfy, and `build.(body_core)` assembles
-  # the transport-`:case` application around the checked body. (A builder —
-  # rather than a fixed `proof`/`motive` pair — lets the bridge case below nest
-  # an outer transport around the original one.)
-  #
-  # The transport takes M[a] -> M[b]. Idris-style source `rewrite p in t`
-  # checks `t` under the rewritten goal and returns the original goal, so when
-  # the expected type contains the proof's left endpoint we synthesize symmetry.
-  defp rewrite_plan(_ctx, proof, ty, a, b, expected) do
-    rwlog(fn ->
-      "plan a=#{rw_ins(a)} b=#{rw_ins(b)} | contains_a=#{contains_term?(expected, a)} " <>
-        "contains_b=#{contains_term?(expected, b)} expected=#{rw_ins(expected)}"
-    end)
-
-    cond do
-      contains_term?(expected, a) ->
-        with {:ok, sym_proof} <- symmetry_proof(proof, ty, a, b),
-             {:ok, motive} <- motive_for(expected, a, ty) do
-          # sym_proof : Eq(ty, b, a), so the transport's left endpoint is `b`:
-          # (M@b) -> (M@a) applied to the body checked at M@b = expected[a↦b].
-          {:ok, fn body -> {:app, transport_case(sym_proof, ty, motive, b), body} end, replace_term(expected, a, b)}
-        end
-
-      # NOTE (B2): the former `find_bridge`/`bridge_step` cond arm — the
-      # definitional-occurrence bridge built for rw07 (2ac4add) — was deleted as
-      # dead code, not migrated. `expected` is always normalized before entry,
-      # and since lazy δ-unfolding (ef3e958) + the nf idempotence fix, every
-      # subterm of a normal form re-normalizes to itself, so the bridge's firing
-      # condition (`normalize(s) != s` for a goal subterm `s`) is unsatisfiable.
-      # Evidence (corpus trace + structural argument) recorded in
-      # test/cure/elab/rewrite_as_case_test.exs, test (e).
-      contains_term?(expected, b) ->
-        {:ok, motive} = motive_for(expected, b, ty)
-        # proof : Eq(ty, a, b): (M@a) -> (M@b) applied to the body checked at
-        # M@a = expected[b↦a].
-        {:ok, fn body -> {:app, transport_case(proof, ty, motive, a), body} end, replace_term(expected, b, a)}
-
-      true ->
-        {:error, {:rewrite_no_match, a, b, expected}}
-    end
-  end
-
-  defp symmetry_proof(proof, ty, a, _b) do
-    # M = λz. Eq(ty, z, a); proof : Eq(ty, a, b). The transport is
-    # (M@a) -> (M@b) = Eq(ty,a,a) -> Eq(ty,b,a), applied to refl(a).
-    motive_body = mk_eq(Subst.shift(ty, 1, 0), {:var, 0}, Subst.shift(a, 1, 0))
-    motive = {:lam, Cure.Core.Grade.unrestricted(), ty, motive_body}
-    {:ok, {:app, transport_case(proof, ty, motive, a), mk_refl(a)}}
-  end
-
-  defp motive_for(expected, target, ty),
-    do: {:ok, {:lam, Cure.Core.Grade.unrestricted(), ty, abstract_term(expected, target, 0)}}
-
-  defp contains_term?(term, target), do: term == target or Enum.any?(children(term), &contains_term?(&1, target))
-
-  defp replace_term(term, target, replacement) when term == target, do: replacement
-
-  defp replace_term(term, target, replacement) when is_list(term),
-    do: Enum.map(term, &replace_term(&1, target, replacement))
-
-  defp replace_term(term, target, replacement) do
-    if term == target do
-      replacement
-    else
-      rebuild(term, Enum.map(children(term), &replace_term(&1, target, replacement)))
-    end
-  end
-
-  defp abstract_term(term, target, depth) when term == target, do: {:var, depth}
-  defp abstract_term({:var, i}, _target, depth) when i >= depth, do: {:var, i + 1}
-  defp abstract_term({:var, _} = var, _target, _depth), do: var
-
-  # Descending a binder shifts every free de Bruijn variable — including any in
-  # `target` — up by one, so the target must be shifted to keep matching the SAME
-  # occurrence one binder deeper. Without this, abstracting a scrutinee that occurs
-  # under a binder (e.g. a Π/λ-typed SIBLING like `g : (b = T) -> (c = T)`) both
-  # MISSES the real occurrence (now at `target+1`) and spuriously matches whatever
-  # else sits at the un-shifted index (`c`). Callers whose target occurs only at the
-  # abstraction depth (the common goal case) cross no binder before the match, so the
-  # shift is a no-op for them.
-  defp abstract_term({:pi, _g, d, c}, target, depth),
-    do:
-      {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth),
-       abstract_term(c, Subst.shift(target, 1, 0), depth + 1)}
-
-  defp abstract_term({:lam, _g, d, b}, target, depth),
-    do:
-      {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth),
-       abstract_term(b, Subst.shift(target, 1, 0), depth + 1)}
-
-  # A `:case` branch `{ctor, arity, body}` binds `arity` de Bruijn variables in
-  # `body` (see `Cure.Core.Term` shift/3's `:case` clause). Mirror that here:
-  # abstract the scrutinee and motive at `depth`, but each branch body at
-  # `depth + arity`, so branch-bound variables in `[depth, depth+arity)` are not
-  # spuriously shifted by the `{:var, i} when i >= depth` clause. Without this,
-  # the generic tuple clause below recurses into branch bodies at the wrong
-  # depth and corrupts the motive (P0 Task 5, rewrite goals with a stuck `case`).
-  defp abstract_term({:case, scrut, motive, branches}, target, depth) do
-    {:case, abstract_term(scrut, target, depth), abstract_term(motive, target, depth),
-     Enum.map(branches, fn {ctor, arity, body} ->
-       {ctor, arity, abstract_term(body, Subst.shift(target, arity, 0), depth + arity)}
-     end)}
-  end
-
-  defp abstract_term(term, target, depth) when is_tuple(term),
-    do: rebuild(term, Enum.map(children(term), &abstract_term(&1, target, depth)))
-
-  defp abstract_term(term, target, depth) when is_list(term),
-    do: Enum.map(term, &abstract_term(&1, target, depth))
-
-  defp abstract_term(term, _target, _depth), do: term
-
   defp children(term) when is_tuple(term), do: term |> Tuple.to_list() |> tl()
-  defp children(term) when is_list(term), do: term
-  defp children(_term), do: []
 
   # Free de Bruijn indices in `term`, counted from `depth` binders in (binder-
   # aware for Π/λ/Σ/case, mirroring abstract_term). Used to check convoy sibling
@@ -3331,8 +3131,6 @@ defmodule Cure.Elab.Elaborator do
   defp rebuild(term, children) when is_tuple(term) do
     [elem(term, 0) | children] |> List.to_tuple()
   end
-
-  defp rebuild(term, _children), do: term
 
   defp implicit_def?(env, atom) do
     case Env.get_def(env, atom) do
