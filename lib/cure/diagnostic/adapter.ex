@@ -5093,6 +5093,12 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :grouped_type}}),
     do: "Grouped type is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :grouped_expression}
+       }),
+       do: "Parenthesized expression is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :map}}),
     do: "Map is not closed"
 
@@ -5421,6 +5427,13 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :grouped_expression}
+       }),
+       do: "This parenthesized expression reaches the end of the source without its closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
          expected: :binary_close,
          context: %{container: :binary_literal}
        }),
@@ -5694,6 +5707,12 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "close this grouped type with `)`"
 
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :grouped_expression}
+       }),
+       do: "close this parenthesized expression with `)`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :container_unclosed, expected: expected}),
     do: "close this container with `#{syntax_insertion(expected)}`"
 
@@ -5889,6 +5908,26 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(opener, :secondary, "this refinement type starts here"),
       pickup_label(Map.get(context, :binder_span), :secondary, "this is the refinement binder"),
       pickup_label(previous, :secondary, refinement_previous_label(kind))
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :grouped_expression}
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this parenthesized expression starts here"),
+      pickup_label(previous, :secondary, "the grouped expression ends here")
     ]
     |> Enum.reject(fn
       nil -> true

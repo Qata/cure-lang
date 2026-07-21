@@ -4096,7 +4096,10 @@ defmodule Cure.Compiler.Parser do
       _ ->
         {expr, state} = parse_expr(state, 0)
         state = skip_newlines(state)
-        state = expect(state, :rparen)
+
+        {state, _close_token} =
+          expect_container_close(state, :rparen, :grouped_expression, open, [expr], false)
+
         {expr, state}
     end
   end

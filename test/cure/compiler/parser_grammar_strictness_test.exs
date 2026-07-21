@@ -204,30 +204,43 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
   end
 
   test "a missing closing parenthesis at EOF names the construct and offers the unique insertion" do
-    for {source, expected, title, replacement} <- [
-          {"(1", :rparen, "Parenthesized expression is not closed", ")"}
-        ] do
-      {:ok, tokens} = Lexer.tokenize(source, file: "unclosed.cure", emit_events: false)
+    source = "(1"
+    {:ok, tokens} = Lexer.tokenize(source, file: "unclosed.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
 
-      assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :grouped_expression, expected: :rparen}} =
+             error = hd(errors)
 
-      assert {:expected_token, ^expected, :eof, nil, _line, _column, _span} =
-               Enum.find(errors, &match?({:expected_token, ^expected, _, _, _, _, _}, &1))
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "unclosed.cure", source)
 
-      {diagnostic, registry} =
-        Cure.Compiler.Errors.to_diagnostic({:parse_error, errors}, "unclosed.cure", source)
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- PARENTHESIZED EXPRESSION IS NOT CLOSED [E094] ----------------- unclosed.cure
 
-      rendered = Renderer.plain(diagnostic, registry, width: 80)
-      assert rendered =~ "-- #{String.upcase(title)} [E094]"
-      assert rendered =~ "the closing delimiter belongs here"
-      assert rendered =~ "Hint: Insert `#{replacement}` to close the construct"
+             This parenthesized expression reaches the end of the source without its closing
+             ')'.
 
-      assert [%{applicability: :machine_applicable, edits: [%{replacement: ^replacement}]}] =
-               diagnostic.suggestions
+             at unclosed.cure:1:3
+             1 | (1
+               | --^ this parenthesized expression starts here; the grouped expression ends here; close this parenthesized expression with `)`
 
-      assert [%{"newText" => ^replacement}] =
-               Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
-    end
+             Hint: Insert `)` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ")", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 2
+    assert insertion.end_byte == 2
+
+    assert [%{"newText" => ")", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 2},
+             "end" => %{"line" => 0, "character" => 2}
+           }
   end
 
   test "the real parser path replaces a mismatched closing delimiter" do
