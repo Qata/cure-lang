@@ -664,6 +664,11 @@ defmodule Cure.Diagnostic.Adapter do
       when kind in [:invalid_unit, :unknown_unit, :invalid_board_name],
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
+  # Some trusted checking paths can return the bare verdict after their
+  # declaration wrapper has been stripped. Keep that verdict contextual rather
+  # than falling through to the unhelpful generic "Elaboration failed" title.
+  def from_error(:branch_type, opts), do: branch_type_failure(%{}, opts)
+
   def from_error(kind, opts)
       when kind in [
              :invalid_board_pins,
@@ -789,7 +794,6 @@ defmodule Cure.Diagnostic.Adapter do
              :not_a_function,
              :coverage,
              :branch_arity,
-             :branch_type,
              :index_arity
            ],
       do: contextual_type_failure(kind, %{}, opts)
@@ -1695,24 +1699,31 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:lift_module_error, details}, opts) when is_map(details) do
     macro = get_in(details, [:source_provenance, :macro]) || :macro
     cause = Map.get(details, :cause)
-    cause_diagnostic = from_error(cause)
 
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_expansion_failed,
-      severity: :error,
-      title: "#{macro_title(macro)} expansion failed",
-      message: macro_failure_message(macro, details.module, cause_diagnostic),
-      primary: primary_label(opts, "this `#{macro}` declaration generated the failing module"),
-      notes: ["The generated module is an implementation detail; edit the `#{macro}` declaration instead."],
-      provenance: provenance_frames(details, opts),
-      payload: %{
-        macro: name_to_string(macro),
-        module: name_to_string(details.module),
-        behaviour: Map.get(details, :behaviour),
-        cause: %{code: cause_diagnostic.code, key: cause_diagnostic.key, payload: cause_diagnostic.payload}
-      }
-    )
+    case family_type_failure(cause, details, opts) do
+      {:ok, diagnostic} ->
+        diagnostic
+
+      :error ->
+        cause_diagnostic = from_error(cause)
+
+        Diagnostic.new(
+          code: "E092",
+          key: :macro_expansion_failed,
+          severity: :error,
+          title: "#{macro_title(macro)} expansion failed",
+          message: macro_failure_message(macro, details.module, cause_diagnostic),
+          primary: primary_label(opts, "this `#{macro}` declaration generated the failing module"),
+          notes: ["The generated module is an implementation detail; edit the authored `#{macro}` declaration instead."],
+          provenance: provenance_frames(details, opts),
+          payload: %{
+            macro: name_to_string(macro),
+            module: name_to_string(details.module),
+            behaviour: Map.get(details, :behaviour),
+            cause: %{code: cause_diagnostic.code, key: cause_diagnostic.key, payload: cause_diagnostic.payload}
+          }
+        )
+    end
   end
 
   def from_error({kind, detail}, opts)
@@ -1744,6 +1755,77 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{first: first, second: second}, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  # Generated OTP callbacks still represent authored family sections. Preserve
+  # a real type relation at that boundary instead of presenting it as E092.
+  defp family_type_failure({:source_context, reason, context}, details, opts)
+       when is_map(context) do
+    with origin when not is_nil(origin) <- family_origin(details) do
+      context =
+        context
+        |> Map.put(:expectation_origin, origin)
+        |> Map.put(:checking, Map.get(details, :module))
+
+      if reason_kind?(reason) do
+        {:ok, from_error({:source_context, reason, context}, opts)}
+      else
+        if family_boundary_reason?(reason) do
+          {:ok, family_boundary_failure(origin, details, reason, opts)}
+        else
+          :error
+        end
+      end
+    else
+      _ -> :error
+    end
+  end
+
+  defp family_type_failure(_cause, _details, _opts), do: :error
+
+  defp reason_kind?({:cannot_unify, _, _}), do: true
+  defp reason_kind?({:index_mismatch, {:cannot_unify, _, _}}), do: true
+  defp reason_kind?({:conversion_failure, _, _}), do: true
+  defp reason_kind?(_reason), do: false
+
+  defp family_boundary_reason?({:foreign_ctor, _}), do: true
+  defp family_boundary_reason?({:unknown_ctor, _}), do: true
+  defp family_boundary_reason?(_reason), do: false
+
+  defp family_boundary_failure(origin, details, reason, opts) do
+    family = family_origin_name(origin)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "#{family} callback has the wrong type",
+      body:
+        Doc.paragraph(
+          "This authored #{String.downcase(family)} callback does not produce the protocol value required by its generated module."
+        ),
+      primary: primary_label(opts, "this #{String.downcase(family)} callback has the wrong type"),
+      provenance: provenance_frames(details, opts),
+      payload: %{
+        origin: %{kind: origin, owner: Map.get(details, :module)},
+        cause: inspect(reason),
+        module: Map.get(details, :module),
+        behaviour: Map.get(details, :behaviour)
+      }
+    )
+  end
+
+  defp family_origin_name(:actor), do: "Actor"
+  defp family_origin_name(:fsm), do: "FSM"
+  defp family_origin_name(:supervisor), do: "Supervisor"
+
+  defp family_origin(details) do
+    case Map.get(details, :behaviour) do
+      :gen_server -> :actor
+      :gen_statem -> :fsm
+      :supervisor -> :supervisor
+      _ -> nil
+    end
+  end
 
   defp contextual_type_problem(kind, actual, expected, origin, context, opts) do
     from_error(
@@ -2593,6 +2675,20 @@ defmodule Cure.Diagnostic.Adapter do
           {"Multiple with patterns disagree",
            "Multiple-scrutinee `with` arms must use structurally consistent outer patterns.",
            "make the outer patterns agree or split the match"}
+
+        :branch_arity ->
+          {"Pattern branch has the wrong arity",
+           "A pattern branch does not bind the number of values required by the matched constructor.",
+           "make the branch pattern match the constructor's arguments"}
+
+        :coverage ->
+          {"Pattern match is not exhaustive", "This pattern match does not cover every constructor that can reach it.",
+           "add the missing branch or a final wildcard branch"}
+
+        :index_arity ->
+          {"Indexed type has the wrong arity",
+           "The number of indices supplied to this indexed type does not match its declaration.",
+           "supply exactly the declared indices"}
 
         _ ->
           {"Elaboration failed", "This expression or declaration is not valid in the current checking context.",

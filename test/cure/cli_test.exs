@@ -79,6 +79,28 @@ defmodule Cure.CLITest do
       assert output =~ "Usage"
     end
 
+    test "compile failures use the structured sink with source carets" do
+      path = Path.join(System.tmp_dir!(), "cure_cli_diagnostic_#{System.unique_integer([:positive])}.cure")
+      output_dir = Path.join(System.tmp_dir!(), "cure_cli_diagnostic_#{System.unique_integer([:positive])}")
+
+      File.write!(path, "fn run() -> Int = missing_name\n")
+
+      on_exit(fn ->
+        File.rm(path)
+        File.rm_rf(output_dir)
+      end)
+
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["compile", path, "-o", output_dir])) == {:shutdown, 1}
+        end)
+
+      assert output =~ "[E091]"
+      assert output =~ "missing_name"
+      assert output =~ "^^^^^^^^^^^^"
+      refute output =~ "{:unknown_global"
+    end
+
     test "mix cure.compile usage diagnostics use the shared sink" do
       output =
         ExUnit.CaptureIO.capture_io(:stderr, fn ->

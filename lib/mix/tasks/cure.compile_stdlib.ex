@@ -80,14 +80,14 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
               end)
               |> Enum.uniq_by(&elem(&1, 0))
               |> Enum.each(fn {_fingerprint, reason, path} ->
-                Mix.shell().error("  #{Cure.Diagnostic.Host.render(reason, path)}")
+                Mix.shell().error("  " <> render_host_diagnostic(reason, path))
               end)
 
               exit({:shutdown, 1})
             end
 
           {:error, reason} ->
-            Mix.shell().error(Cure.Diagnostic.Host.render(reason, stdlib_dir))
+            Mix.shell().error(render_host_diagnostic(reason, stdlib_dir))
             exit({:shutdown, 1})
         end
     end
@@ -96,6 +96,13 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
   defp compiler_available? do
     Code.ensure_loaded?(Cure.Compiler) and
       function_exported?(Cure.Compiler, :compile_file, 2)
+  end
+
+  defp render_host_diagnostic(reason, path) do
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path)
+
+    Cure.Diagnostic.Sink.new(format: :plain, color: :auto, width: 80, registry: registry)
+    |> Cure.Diagnostic.Sink.render(diagnostic)
   end
 
   defp source_path_for(target, files) do

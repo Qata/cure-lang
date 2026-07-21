@@ -359,15 +359,21 @@ defmodule Cure.Elab.Elaborator do
           length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2 ->
         cands = Cure.Elab.Resolution.overload_candidates(env, atom)
 
-        elaborate_overloaded_app(
-          env,
-          atom,
-          args,
-          Keyword.get(meta, :arg_labels),
-          names,
-          ctx,
-          cands
-        )
+        case elaborate_overloaded_app(
+               env,
+               atom,
+               args,
+               Keyword.get(meta, :arg_labels),
+               names,
+               ctx,
+               cands
+             ) do
+          {:error, reason} ->
+            {:error, attach_expectation_context(reason, {:function_call, meta, args}, :overload, atom, nil)}
+
+          result ->
+            result
+        end
 
       # A bare name provided by ≥2 distinct re-keyed imports with no local/
       # unshadowed winner: unqualified use is ambiguous (R7). Checked before the
@@ -563,12 +569,17 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:variable, _meta, "Type"}, _names, _ctx, _env),
     do: {:ok, {:type, 0}, {:vtype, 1}}
 
-  def elaborate_expr_typed({:variable, _meta, name}, names, ctx, env) do
+  def elaborate_expr_typed({:variable, meta, name}, names, ctx, env) do
     case Enum.find_index(names, &(&1 == name)) do
       nil ->
-        with {:ok, term} <- resolve_free(name, env),
-             {:ok, type} <- Kernel.infer(ctx, term) do
-          {:ok, term, type}
+        case resolve_free(name, env) do
+          {:ok, term} ->
+            with {:ok, type} <- Kernel.infer(ctx, term) do
+              {:ok, term, type}
+            end
+
+          {:error, reason} ->
+            {:error, attach_variable_context(reason, meta, name)}
         end
 
       index ->
@@ -619,7 +630,9 @@ defmodule Cure.Elab.Elaborator do
       Keyword.get(meta, :record) ->
         case desugar_record_construction(meta, args, env) do
           {:ok, positional} ->
-            attach_record_field_context(elaborate_expr_typed(positional, names, ctx, env), meta, args, env)
+            elaborate_expr_typed(positional, names, ctx, env)
+            |> attach_record_field_context(meta, args, env)
+            |> attach_record_context(meta, args)
 
           {:error, reason} ->
             {:error, reason}
@@ -634,7 +647,17 @@ defmodule Cure.Elab.Elaborator do
         end
 
       true ->
-        elaborate_named_call(meta, args, names, ctx, env)
+        case elaborate_named_call(meta, args, names, ctx, env) do
+          {:error, reason} when is_tuple(reason) ->
+            if unresolved_call_reason?(reason) do
+              {:error, attach_call_result_context(reason, {:function_call, meta, args}, env)}
+            else
+              {:error, reason}
+            end
+
+          result ->
+            result
+        end
     end
   end
 
@@ -1717,12 +1740,9 @@ defmodule Cure.Elab.Elaborator do
       Keyword.get(meta, :record) ->
         case desugar_record_construction(meta, args, env) do
           {:ok, positional} ->
-            attach_record_field_context(
-              elaborate_expr_checked(positional, expected_core, names, ctx, env),
-              meta,
-              args,
-              env
-            )
+            elaborate_expr_checked(positional, expected_core, names, ctx, env)
+            |> attach_record_field_context(meta, args, env)
+            |> attach_record_context(meta, args)
 
           {:error, reason} ->
             {:error, reason}
@@ -2035,8 +2055,12 @@ defmodule Cure.Elab.Elaborator do
 
   # Wave-2 List sugar in checked position: desugar to Nil/Cons and re-check
   # against the same expected type.
-  def elaborate_expr_checked({:list, _, _} = node, expected_core, names, ctx, env),
-    do: elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env)
+  def elaborate_expr_checked({:list, _meta, elements} = node, expected_core, names, ctx, env) do
+    case elaborate_expr_checked(desugar_list(node), expected_core, names, ctx, env) do
+      {:error, reason} -> {:error, attach_collection_context(reason, elements)}
+      result -> result
+    end
+  end
 
   # Map literal in checked position: desugar to the `put`/`new` chain and re-check
   # against the expected type. This is what lets an empty `%{}` (a bare `new()`
@@ -2161,10 +2185,91 @@ defmodule Cure.Elab.Elaborator do
     }
   end
 
+  defp attach_variable_context(reason, meta, name),
+    do: {:source_context, reason, variable_context(meta, name)}
+
+  defp variable_context(meta, name) do
+    expression = {:variable, meta, name}
+    expectation_context(expression, :annotation, name, nil)
+  end
+
+  defp attach_collection_context({:source_context, reason, context}, elements)
+       when is_map(context) do
+    case collection_offender(reason, elements) do
+      {element, index} ->
+        {:source_context, reason, Map.merge(context, expectation_context(element, :collection, :list, index))}
+
+      nil ->
+        {:source_context, reason, context}
+    end
+  end
+
+  defp attach_collection_context(reason, elements) do
+    case collection_offender(reason, elements) do
+      {element, index} -> {:source_context, reason, expectation_context(element, :collection, :list, index)}
+      nil -> reason
+    end
+  end
+
+  defp collection_offender({:source_context, reason, _context}, elements),
+    do: collection_offender(reason, elements)
+
+  defp collection_offender({:index_mismatch, {:cannot_unify, actual, expected}}, elements) do
+    elements
+    |> Enum.with_index()
+    |> Enum.reverse()
+    |> Enum.find(fn {element, _index} ->
+      literal_matches_type?(element, actual) or literal_matches_type?(element, expected)
+    end)
+  end
+
+  defp collection_offender(_reason, _elements), do: nil
+
+  defp literal_matches_type?({:literal, _meta, value}, type) when is_boolean(value),
+    do: type_family?(type, "Bool")
+
+  defp literal_matches_type?({:literal, _meta, value}, type) when is_integer(value),
+    do: type_family?(type, "Int") or type_family?(type, "Nat")
+
+  defp literal_matches_type?({:literal, _meta, value}, type) when is_float(value),
+    do: type_family?(type, "Float")
+
+  defp literal_matches_type?(_element, _type), do: false
+
+  defp type_family?({:data, name, _params, _indices}, suffix),
+    do: String.ends_with?(Atom.to_string(name), "##{suffix}")
+
+  defp type_family?(_type, _suffix), do: false
+
   defp attach_record_field_context({:error, reason}, meta, field_pairs, env),
     do: {:error, attach_record_field_reason(reason, meta, field_pairs, env)}
 
   defp attach_record_field_context(result, _meta, _field_pairs, _env), do: result
+
+  # A record literal is a semantic shape boundary. Keep a more precise field
+  # or constructor-argument producer when one was identified, but give a
+  # whole-record failure the authored record expression and its declared name.
+  defp attach_record_context(
+         {:error, {:source_context, _reason, %{expectation_origin: origin} = _context}} = result,
+         _meta,
+         _args
+       )
+       when origin in [:record_field, :constructor_argument],
+       do: result
+
+  defp attach_record_context({:error, {:source_context, reason, context}}, meta, args)
+       when is_map(context),
+       do: {:error, {:source_context, reason, Map.merge(record_context(meta, args), context)}}
+
+  defp attach_record_context({:error, reason}, meta, args),
+    do: {:error, {:source_context, reason, record_context(meta, args)}}
+
+  defp attach_record_context(result, _meta, _args), do: result
+
+  defp record_context(meta, args) do
+    expression = {:function_call, meta, args}
+    expectation_context(expression, :record, Keyword.get(meta, :name, :record), nil)
+  end
 
   defp attach_record_update_context({:error, {:source_context, reason, context}}, meta, children, env)
        when is_map(context) do
@@ -2476,7 +2581,7 @@ defmodule Cure.Elab.Elaborator do
                 {:ok, term}
 
               {:error, reason} ->
-                {:error, attach_call_result_context(reason, expr)}
+                {:error, attach_call_result_context(reason, expr, env)}
             end
           end
       end
@@ -2485,20 +2590,59 @@ defmodule Cure.Elab.Elaborator do
 
   defp attach_call_result_context(
          {:source_context, reason, context},
-         {:function_call, _meta, _args} = expression
+         {:function_call, meta, _args} = expression,
+         env
        )
        when is_map(context) do
     if Map.get(context, :expectation_origin) in [:call_argument, :operator_operand] do
       {:source_context, reason, context}
     else
-      {:source_context, reason, Map.merge(context, call_result_context(expression))}
+      origin_context =
+        if extern_call_mismatch?(reason, meta, env),
+          do: ffi_result_context(expression),
+          else: call_result_context(expression)
+
+      {:source_context, reason, Map.merge(context, origin_context)}
     end
   end
 
-  defp attach_call_result_context(reason, {:function_call, _meta, _args} = expression),
-    do: {:source_context, reason, call_result_context(expression)}
+  defp attach_call_result_context(reason, {:function_call, meta, _args} = expression, env) do
+    context =
+      if extern_call_mismatch?(reason, meta, env),
+        do: ffi_result_context(expression),
+        else: call_result_context(expression)
 
-  defp attach_call_result_context(reason, _expression), do: reason
+    {:source_context, reason, context}
+  end
+
+  defp attach_call_result_context(reason, _expression, _env), do: reason
+
+  defp unresolved_call_reason?({:unknown_global, _}), do: true
+  defp unresolved_call_reason?({:unknown_name, _}), do: true
+  defp unresolved_call_reason?({:unknown_ctor, _}), do: true
+  defp unresolved_call_reason?({:ambiguous_name, _, _}), do: true
+  defp unresolved_call_reason?(_reason), do: false
+
+  defp extern_call_mismatch?(reason, meta, env) do
+    name = Keyword.get(meta, :name)
+    key = if is_binary(name), do: String.to_atom(name), else: name
+
+    ffi_type_mismatch?(reason) and
+      match?(%{body: {:extern, _}}, Env.get_def(env, key))
+  end
+
+  defp ffi_type_mismatch?({:source_context, reason, _context}), do: ffi_type_mismatch?(reason)
+  defp ffi_type_mismatch?({:cannot_unify, _actual, _expected}), do: true
+  defp ffi_type_mismatch?({:index_mismatch, {:cannot_unify, _actual, _expected}}), do: true
+  defp ffi_type_mismatch?({:conversion_failure, _actual, _expected}), do: true
+  defp ffi_type_mismatch?(_reason), do: false
+
+  defp ffi_result_context({:function_call, meta, _args} = expression) when is_list(meta) do
+    Map.merge(call_result_context(expression), %{
+      checking: Keyword.get(meta, :name),
+      expectation_origin: :ffi
+    })
+  end
 
   defp call_result_context({:function_call, meta, _args}) when is_list(meta) do
     span = surface_expression_span({:function_call, meta, []})

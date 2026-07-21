@@ -24,6 +24,42 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert Renderer.plain(diagnostic, registry) =~ "type written in its annotation"
   end
 
+  test "an unknown variable points at the variable rather than the whole body" do
+    source = "fn run() -> Int = missing_name\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "unknown_variable.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "unknown_variable.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E091"
+    assert diagnostic.primary.span.start_column == 19
+    assert rendered =~ "1 | fn run() -> Int = missing_name"
+    assert rendered =~ "^^^^^^^^^^^^"
+  end
+
+  test "an unknown function points at the authored call" do
+    source = "fn run() -> Int = missing_fn(1)\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "unknown_call.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "unknown_call.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E091"
+    assert diagnostic.primary.span.start_column == 19
+    assert rendered =~ "1 | fn run() -> Int = missing_fn(1)"
+    assert rendered =~ "^^^^^^^^^^^^^"
+  end
+
   test "a missing implicit instance retains the authored call context" do
     source = "mod M\n  fn has(x: t, y: t) -> Bool = x == y\nend\n"
 
@@ -78,6 +114,45 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.payload.origin.kind == :effects
     assert rendered =~ "1 | fn main() -> Effect(Int) = true"
     assert rendered =~ "this expression has an invalid effect"
+  end
+
+  test "an extern result mismatch identifies the FFI boundary" do
+    source =
+      "@extern(:erlang, :abs, 1)\nfn abs(x: Int) -> Int\nfn bad() -> Bool = abs(1)\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "ffi.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "ffi.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :ffi
+    assert rendered =~ "3 | fn bad() -> Bool = abs(1)"
+    assert rendered =~ "this FFI boundary has the wrong type"
+  end
+
+  test "a list element mismatch retains its authored element context" do
+    source = "mod M\n  use Std.List\n  fn bad() -> List(Int) = [1, true]\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "list.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "list.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :collection
+    assert diagnostic.payload.origin.owner == :list
+    assert diagnostic.payload.origin.index == 1
+    assert rendered =~ "3 |   fn bad() -> List(Int) = [1, true]"
+    assert rendered =~ "this collection element has the wrong type"
   end
 
   test "a real conditional mismatch reports the authored guard" do
@@ -413,6 +488,24 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this record field has the wrong type"
   end
 
+  test "a whole-record mismatch retains the authored record boundary" do
+    source = "fn bad() -> Point = Point{x: value}\n"
+    span = raw_span(source, "Point{x: value}", 1, 19)
+
+    reason =
+      {:source_context, {:cannot_unify, :actual_point, :expected_point},
+       %{span: span, checking: :bad, expression_category: :function_call, expectation_origin: :record}}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record_shape.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :record
+    assert diagnostic.payload.origin.owner == :bad
+    assert rendered =~ "RECORD HAS THE WRONG TYPE"
+    assert rendered =~ "this record has the wrong type"
+  end
+
   test "a typed pattern mismatch points at the authored annotation" do
     source = "n: Bool -> 1\n"
     annotation = raw_span(source, "Bool", 1, 4)
@@ -516,6 +609,81 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "This application"
     assert rendered =~ "2 | fn main() -> Bool = mk()(Z())"
     assert rendered =~ "this application has the wrong type"
+  end
+
+  test "typed actor family failures retain a family-specific type origin" do
+    source = "actor Cure.Generated.BadActor\n"
+    span = raw_span(source, "actor", 1, 1)
+
+    reason =
+      {:lift_module_error,
+       %{
+         module: "Cure.Generated.BadActor",
+         behaviour: :gen_server,
+         source_provenance: %{macro: "actor"},
+         expansion_provenance: [],
+         cause:
+           {:source_context, {:cannot_unify, :bool, :int},
+            %{checking: :handle_cast, expression_category: :literal, span: span}}
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "actor.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :actor
+    assert diagnostic.payload.origin.owner == "Cure.Generated.BadActor"
+    assert diagnostic.primary.span.start_column == 1
+    assert rendered =~ "ACTOR MESSAGE HAS THE WRONG TYPE"
+    assert rendered =~ "this actor message has the wrong type"
+  end
+
+  test "a real actor family callback failure renders at its authored invocation" do
+    source = """
+    mod BadActorDefinition
+      use Std.Actor
+      actor Cure.Generated.BadActor
+        state Int
+        on_cast
+          Inc -> true
+    """
+
+    assert {:error, reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "actor_real.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :actor
+    assert diagnostic.primary.span.start_line == 3
+    assert rendered =~ "ACTOR CALLBACK HAS THE WRONG TYPE"
+    assert rendered =~ "3 |   actor Cure.Generated.BadActor"
+  end
+
+  test "typed FSM and supervisor family failures retain their family origins" do
+    source = "family declaration\n"
+    span = raw_span(source, "family", 1, 1)
+
+    for {behaviour, macro, origin} <- [
+          {:gen_statem, "fsm", :fsm},
+          {:supervisor, "sup", :supervisor}
+        ] do
+      reason =
+        {:lift_module_error,
+         %{
+           module: "Cure.Generated.Family",
+           behaviour: behaviour,
+           source_provenance: %{macro: macro},
+           expansion_provenance: [],
+           cause:
+             {:source_context, {:cannot_unify, :bool, :int},
+              %{checking: :generated_callback, expression_category: :literal, span: span}}
+         }}
+
+      {diagnostic, _registry} = Errors.to_diagnostic(reason, "family.cure", source)
+
+      assert diagnostic.code == "E093"
+      assert diagnostic.payload.origin.kind == origin
+    end
   end
 
   defp raw_span(source, needle, line, column) do

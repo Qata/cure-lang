@@ -75,14 +75,14 @@ defmodule Mix.Tasks.Cure.Compile do
           end)
           |> Enum.uniq_by(&elem(&1, 0))
           |> Enum.each(fn {_fingerprint, reason, path} ->
-            Mix.shell().error("  #{Cure.Diagnostic.Host.render(reason, path)}")
+            Mix.shell().error("  " <> render_host_diagnostic(reason, path))
           end)
 
           exit({:shutdown, 1})
         end
 
       {:error, reason} ->
-        Mix.shell().error(Cure.Diagnostic.Host.render(reason, path))
+        Mix.shell().error(render_host_diagnostic(reason, path))
         exit({:shutdown, 1})
     end
   end
@@ -99,13 +99,17 @@ defmodule Mix.Tasks.Cure.Compile do
         Mix.shell().info("  -> #{module}")
 
       {:error, reason} ->
-        formatted = Cure.Diagnostic.Host.render(reason, path)
-        Mix.shell().error(formatted)
+        Mix.shell().error(render_host_diagnostic(reason, path))
     end
   end
 
-  defp render_diagnostic(diagnostic) do
-    Sink.new(format: :plain, color: :auto, width: 80)
+  defp render_host_diagnostic(reason, path) do
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path)
+    render_diagnostic(diagnostic, registry)
+  end
+
+  defp render_diagnostic(diagnostic, registry \\ nil) do
+    Sink.new(format: :plain, color: :auto, width: 80, registry: registry)
     |> Sink.render(diagnostic)
   end
 

@@ -687,15 +687,21 @@ defmodule Cure.Elab.Declarations do
            attach_source_context(
              elaborate_declared_body(body_expr, sig.return_core, sig.scope, ctx, env, sig.params),
              body_expr,
-             sig.name
+             sig.name,
+             env
            ),
          :ok <-
-           attach_source_context(Kernel.check_with_branch_details(ctx, body_term, return_value), body_expr, sig.name) do
+           attach_source_context(
+             Kernel.check_with_branch_details(ctx, body_term, return_value),
+             body_expr,
+             sig.name,
+             env
+           ) do
       {:ok, body_term, sig.return_core, return_value}
     end
   end
 
-  defp attach_source_context({:error, reason}, expression, checking) do
+  defp attach_source_context({:error, reason}, expression, checking, env) do
     {line, column, length} = expression_extent(expression)
     meta = expression_meta(expression)
 
@@ -710,7 +716,7 @@ defmodule Cure.Elab.Declarations do
       branch_patterns: branch_patterns(expression)
     }
 
-    outer_context = declaration_expectation_context(expression, reason, outer_context)
+    outer_context = declaration_expectation_context(expression, reason, outer_context, env)
 
     case reason do
       {:source_context, nested_reason, nested_context} when is_map(nested_context) ->
@@ -718,25 +724,43 @@ defmodule Cure.Elab.Declarations do
         # (for example the literal used as an `if` guard). Keep the declaration
         # context as a fallback, but never let its whole-body span overwrite the
         # nested source caret or expectation origin.
-        {:error, {:source_context, nested_reason, Map.merge(outer_context, nested_context)}}
+        merged_context = Map.merge(outer_context, nested_context)
+
+        merged_context =
+          if Map.get(outer_context, :expectation_origin) == :ffi and
+               Map.get(nested_context, :expectation_origin) in [:call_result, :application] do
+            Map.merge(merged_context, %{
+              checking: Map.get(outer_context, :checking),
+              expectation_origin: :ffi,
+              expression_category: :function_call
+            })
+          else
+            merged_context
+          end
+
+        {:error, {:source_context, nested_reason, merged_context}}
 
       _ ->
         {:error, {:source_context, reason, outer_context}}
     end
   end
 
-  defp attach_source_context(result, _expression, _checking), do: result
+  defp attach_source_context(result, _expression, _checking, _env), do: result
 
-  defp declaration_expectation_context({:function_call, meta, _args}, reason, context)
+  defp declaration_expectation_context({:function_call, meta, _args}, reason, context, env)
        when is_list(meta) do
     {origin, owner} =
-      if implicit_failure?(reason) do
-        {:implicit, Keyword.get(meta, :name, context.checking)}
+      if ffi_call_failure?(reason, meta, env) do
+        {:ffi, Keyword.get(meta, :name, context.checking)}
       else
-        if Keyword.has_key?(meta, :callee) do
-          {:application, declaration_application_owner(meta)}
+        if implicit_failure?(reason) do
+          {:implicit, Keyword.get(meta, :name, context.checking)}
         else
-          {:call_result, Keyword.get(meta, :name, context.checking)}
+          if Keyword.has_key?(meta, :callee) do
+            {:application, declaration_application_owner(meta)}
+          else
+            {:call_result, Keyword.get(meta, :name, context.checking)}
+          end
         end
       end
 
@@ -747,7 +771,7 @@ defmodule Cure.Elab.Declarations do
     })
   end
 
-  defp declaration_expectation_context({:binary_op, meta, _args}, reason, context)
+  defp declaration_expectation_context({:binary_op, meta, _args}, reason, context, _env)
        when is_list(meta) and is_map(context) do
     if implicit_failure?(reason) do
       Map.merge(context, %{
@@ -760,7 +784,22 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp declaration_expectation_context(_expression, _reason, context), do: context
+  defp declaration_expectation_context(_expression, _reason, context, _env), do: context
+
+  defp ffi_call_failure?({:source_context, reason, _context}, meta, env),
+    do: ffi_call_failure?(reason, meta, env)
+
+  defp ffi_call_failure?(reason, meta, env) do
+    name = Keyword.get(meta, :name)
+    key = if is_binary(name), do: String.to_atom(name), else: name
+
+    ffi_type_mismatch?(reason) and match?(%{body: {:extern, _}}, Env.get_def(env, key))
+  end
+
+  defp ffi_type_mismatch?({:cannot_unify, _actual, _expected}), do: true
+  defp ffi_type_mismatch?({:index_mismatch, {:cannot_unify, _actual, _expected}}), do: true
+  defp ffi_type_mismatch?({:conversion_failure, _actual, _expected}), do: true
+  defp ffi_type_mismatch?(_reason), do: false
 
   defp implicit_failure?({:source_context, reason, _context}), do: implicit_failure?(reason)
 
