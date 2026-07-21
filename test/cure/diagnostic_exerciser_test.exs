@@ -10,7 +10,7 @@ defmodule Cure.DiagnosticExerciserTest do
 
   test "exercises every public diagnostic family and shows user output" do
     compiler_cases = [
-      {"unknown global", "E091", "mod DiagnosticUnknown\n  fn run() -> Int = missing_name\n"},
+      {"unknown global", "E091", "mod DiagnosticUnknown\n  fn run() -> Int = missing_name\n", :unknown_name_resolution},
       {"syntax error", "E094", "mod DiagnosticSyntax\n  fn run(] -> Int = 1\n", :syntax_error_parser},
       {"lexer syntax error", "E094", "mod DiagnosticLexer\n  fn run() -> String = \"not closed\n", :syntax_error_lexer},
       {"type mismatch", "E093",
@@ -23,7 +23,8 @@ defmodule Cure.DiagnosticExerciserTest do
        "mod DiagnosticPattern\n  fn bad(x: Int) -> Int = match x\n    1..10 -> 1\n    _ -> 0\n"},
       {"missing implicit", "E011", "mod DiagnosticImplicit\n  fn bad() -> Int = reflexive()\n"},
       {"unknown pattern constructor", "E091",
-       "mod DiagnosticCtor\n  type Nat = Z | S(Nat)\n  fn bad(x: Nat) -> Nat = match x\n    Missing() -> Z\n    _ -> Z\n"},
+       "mod DiagnosticCtor\n  type Nat = Z | S(Nat)\n  fn bad(x: Nat) -> Nat = match x\n    Missing() -> Z\n    _ -> Z\n",
+       :unknown_pattern_name},
       {"pickup without else", "E076", "mod DiagnosticPickupNoElse\n  fn bad(x: Int) -> Int = pickup\n    x > 0 -> 1\n",
        :pickup_missing_else},
       {"pickup else not last", "E077",
@@ -249,6 +250,8 @@ defmodule Cure.DiagnosticExerciserTest do
       end
     end)
 
+    compiler_fixture_ids = [exercise_ambiguous_name_fixture() | compiler_fixture_ids]
+
     assert :ok =
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
                only_producers: [:parser]
@@ -257,6 +260,11 @@ defmodule Cure.DiagnosticExerciserTest do
     assert :ok =
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
                only_producers: [:lexer]
+             )
+
+    assert :ok =
+             Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
+               only_producers: [:name_resolution]
              )
 
     Enum.each(boundary_cases, fn {label, expected_code, reason} ->
@@ -358,4 +366,76 @@ defmodule Cure.DiagnosticExerciserTest do
 
   defp compiler_case_fixture_ids({_label, _code, _source}), do: []
   defp compiler_case_fixture_ids({_label, _code, _source, fixture_id}), do: [fixture_id]
+
+  defp exercise_ambiguous_name_fixture do
+    real_src = Cure.Stdlib.Paths.source_dir()
+    tmp = Path.join(System.tmp_dir!(), "cure_diagnostic_ambiguity_#{System.unique_integer([:positive])}")
+    File.mkdir_p!(tmp)
+    File.cp_r!(real_src, tmp)
+
+    File.write!(Path.join(tmp, "fixture_left.cure"), """
+    mod Std.FixtureLeft
+      fn shared(value: Int) -> Int = value
+    end
+    """)
+
+    File.write!(Path.join(tmp, "fixture_right.cure"), """
+    mod Std.FixtureRight
+      fn shared(value: Int) -> Int = value
+    end
+    """)
+
+    previous = Application.get_env(:cure, :stdlib_source_dir)
+    Application.put_env(:cure, :stdlib_source_dir, tmp)
+
+    for fixture <- ["fixture_left.cure", "fixture_right.cure"] do
+      path = Path.join(tmp, fixture)
+
+      assert {:ok, module} =
+               Cure.Compiler.compile_and_load(File.read!(path),
+                 file: path,
+                 source_roots: [tmp],
+                 emit_events: false
+               )
+
+      assert module in [:"Cure.Std.FixtureLeft", :"Cure.Std.FixtureRight"]
+    end
+
+    source =
+      "mod DiagnosticAmbiguous\n  use Std.FixtureLeft\n  use Std.FixtureRight\n" <>
+        "  fn apply(g: (Int) -> Int, value: Int) -> Int = g(value)\n" <>
+        "  fn run() -> Int = apply(shared, 1)\nend\n"
+
+    try do
+      assert {:error, {:codegen_error, reason}} =
+               Cure.Compiler.compile_string(source,
+                 file: "ambiguous name.cure",
+                 emit_events: false
+               )
+
+      {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, "ambiguous name.cure", source)
+      assert diagnostic.code == "E089"
+      assert diagnostic.primary.span.start_line == 5
+      assert diagnostic.primary.span.start_column == 27
+
+      plain = Renderer.plain(diagnostic, registry)
+      assert plain =~ "5 |   fn run() -> Int = apply(shared, 1)"
+      assert plain =~ "qualification is required here"
+      assert plain =~ "Std.FixtureLeft.shared"
+      assert_no_raw_diagnostic_leaks(plain, "ambiguous name")
+
+      :ambiguous_name
+    after
+      if previous == nil,
+        do: Application.delete_env(:cure, :stdlib_source_dir),
+        else: Application.put_env(:cure, :stdlib_source_dir, previous)
+
+      for module <- [:"Cure.Std.FixtureLeft", :"Cure.Std.FixtureRight"] do
+        :code.purge(module)
+        :code.delete(module)
+      end
+
+      File.rm_rf!(tmp)
+    end
+  end
 end
