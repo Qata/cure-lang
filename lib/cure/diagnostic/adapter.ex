@@ -1783,14 +1783,73 @@ defmodule Cure.Diagnostic.Adapter do
     do:
       macro_validation_failure(:unknown_macro_obligation_capture, %{capture: capture, line: line, column: column}, opts)
 
-  def from_error({:graded_let_requires_variable, grade, line, column}, opts),
-    do: contextual_type_failure(:graded_let_requires_variable, %{grade: grade, line: line, column: column}, opts)
+  def from_error({:graded_let_requires_variable, details}, opts) when is_map(details) do
+    pattern_span = Map.get(details, :pattern_span) || Keyword.get(opts, :span)
+    grade_span = Map.get(details, :grade_span)
 
-  def from_error({:unknown_grade, grade, line, column}, opts),
-    do: contextual_type_failure(:unknown_grade, %{grade: grade, line: line, column: column}, opts)
+    secondary =
+      case pickup_label(grade_span, :secondary, "this grade applies to the binding") do
+        nil -> []
+        label -> [label]
+      end
 
-  def from_error({:grade_requires_type, name, grade, line, column}, opts),
-    do: contextual_type_failure(:grade_requires_type, %{name: name, grade: grade, line: line, column: column}, opts)
+    Diagnostic.new(
+      code: "E093",
+      key: :graded_let_requires_variable,
+      severity: :error,
+      title: "Graded binding needs a variable",
+      body:
+        Doc.paragraph(
+          "A `#{details.grade}` grade controls one Core binder, but this pattern introduces multiple or destructured bindings."
+        ),
+      primary: pickup_label(pattern_span, :primary, "this pattern is not a single variable binding"),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Bind the value to one graded variable, then destructure it in a separate `let`",
+          applicability: :manual
+        }
+      ],
+      payload: details
+    )
+  end
+
+  def from_error({:unknown_grade, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+    supported = Map.get(details, :supported, [:erased, :linear, :affine])
+    supported_text = Enum.map_join(supported, ", ", &"`:#{&1}`")
+
+    Diagnostic.new(
+      code: "E093",
+      key: :unknown_grade,
+      severity: :error,
+      title: "Unknown relevance grade",
+      body: Doc.paragraph("`:#{details.grade}` is not a relevance grade. Cure supports #{supported_text}."),
+      primary: pickup_label(span, :primary, "this grade is not defined"),
+      suggestions: grade_suggestions(details, span),
+      payload: details
+    )
+  end
+
+  def from_error({:grade_requires_type, details}, opts) when is_map(details) do
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :grade_requires_type,
+      severity: :error,
+      title: "Graded parameter needs a type",
+      body:
+        Doc.paragraph(
+          "The `:#{details.grade}` grade on `#{details.name}` controls how a value may be used, but no value type follows it."
+        ),
+      primary: pickup_label(span, :primary, "add the parameter type after this grade"),
+      suggestions: [
+        %Suggestion{message: "Write `#{details.name} :#{details.grade} TypeName`", applicability: :manual}
+      ],
+      payload: details
+    )
+  end
 
   def from_error({:unit_type_reserved, name}, opts),
     do: macro_validation_failure(:unit_type_reserved, %{name: name}, opts)
@@ -3475,6 +3534,45 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp edition_replacement_suggestion(_details), do: []
+
+  defp grade_suggestions(%{grade: grade, supported: supported}, %Span{} = span) do
+    spelling = to_string(grade)
+
+    ranked =
+      supported
+      |> Enum.map(&{&1, Suggest.distance(spelling, to_string(&1))})
+      |> Enum.sort_by(fn {candidate, distance} -> {distance, to_string(candidate)} end)
+
+    case ranked do
+      [{candidate, distance}, {_other, next_distance} | _] when distance <= 2 and distance < next_distance ->
+        [
+          %Suggestion{
+            message: "Replace it with `:#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: ":#{candidate}"}]
+          }
+        ]
+
+      [{candidate, distance}] when distance <= 2 ->
+        [
+          %Suggestion{
+            message: "Replace it with `:#{candidate}`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: span, replacement: ":#{candidate}"}]
+          }
+        ]
+
+      _ ->
+        [
+          %Suggestion{
+            message: "Use `:erased`, `:linear`, `:affine`, or omit the grade for unrestricted use",
+            applicability: :manual
+          }
+        ]
+    end
+  end
+
+  defp grade_suggestions(_details, _span), do: []
 
   defp candidate_suggestions([], _spelling, _opts), do: []
 

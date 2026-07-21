@@ -4580,7 +4580,16 @@ defmodule Cure.Compiler.Parser do
     # it here rather than parse it and silently ignore the annotation.
     state =
       if grade && not match?({:variable, _, _}, pattern) do
-        add_error(state, {:graded_let_requires_variable, grade, token.line, token.col})
+        add_error(state, {
+          :graded_let_requires_variable,
+          %{
+            grade: grade,
+            pattern_span: first_node_source_span(pattern),
+            grade_span: annotation_span,
+            line: token.line,
+            column: token.col
+          }
+        })
       else
         state
       end
@@ -6215,7 +6224,19 @@ defmodule Cure.Compiler.Parser do
       {:unknown, bad, tok, state} ->
         # Consume the stray atom (already advanced past it) and name it, so the error
         # points at the grade rather than cascading onto the next real token.
-        {nil, nil, add_error(state, {:unknown_grade, bad, tok.line, tok.col}), tok.span}
+        state =
+          if peek(state).type in @non_type_tokens do
+            state
+          else
+            {_discarded_type, state} = parse_type_expr(state)
+            state
+          end
+
+        {nil, nil,
+         add_error(state, {
+           :unknown_grade,
+           %{grade: bad, span: tok.span, supported: @grade_atoms, line: tok.line, column: tok.col}
+         }), tok.span}
 
       {:grade, grade, state} ->
         cond do
@@ -6225,8 +6246,18 @@ defmodule Cure.Compiler.Parser do
           peek(state).type in @non_type_tokens ->
             tok = peek(state)
 
-            {grade, nil, add_error(state, {:grade_requires_type, name, grade, tok.line, tok.col}),
-             annotation_span(annotation_start, state)}
+            {grade, nil,
+             add_error(state, {
+               :grade_requires_type,
+               %{
+                 name: name,
+                 grade: grade,
+                 span: annotation_span(annotation_start, state),
+                 observed_span: tok.span,
+                 line: tok.line,
+                 column: tok.col
+               }
+             }), annotation_span(annotation_start, state)}
 
           true ->
             {type_ast, state} = parse_type_expr(state)

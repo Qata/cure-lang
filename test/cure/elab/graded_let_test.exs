@@ -32,6 +32,7 @@ defmodule Cure.Elab.GradedLetTest do
 
   alias Cure.Compiler
   alias Cure.Core.{Env, Validator}
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.Program
 
   # `mk/0` is inferable; `sink/1` consumes linearly; `use2/2` consumes at omega.
@@ -107,6 +108,59 @@ defmodule Cure.Elab.GradedLetTest do
       # constructor's field quantities, so there is no binder for this grade.
       src = "mod L\n  fn f(xs: List(Int)) -> Int =\n    let [h | _t] :linear = xs\n    h\nend\n"
       assert {:error, _} = Compiler.parse_source(src)
+    end
+
+    test "a graded destructuring let labels the pattern and its grade" do
+      src = "mod L\n  fn f(xs: List(Int)) -> Int =\n    let [h | _t] :linear = xs\n    h\nend\n"
+
+      assert {:error, {:parse_error, [{:graded_let_requires_variable, details}]}} =
+               Compiler.parse_source(src, file: "graded_let.cure")
+
+      {diagnostic, registry} =
+        Cure.Compiler.Errors.to_diagnostic(
+          {:parse_error, [{:graded_let_requires_variable, details}]},
+          "graded_let.cure",
+          src
+        )
+
+      rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+      assert diagnostic.code == "E093"
+      assert diagnostic.key == :graded_let_requires_variable
+      assert diagnostic.primary.span.start_line == 3
+      assert diagnostic.primary.span.start_column == 9
+      assert diagnostic.primary.span.end_column == 17
+
+      assert rendered ==
+               String.trim_trailing("""
+               -- GRADED BINDING NEEDS A VARIABLE [E093] ---------------------- graded_let.cure
+
+               A `linear` grade controls one Core binder, but this pattern introduces multiple
+               or destructured bindings.
+
+               at graded_let.cure:3:9
+               3 |     let [h | _t] :linear = xs
+                 |         ^^^^^^^^ ------- this pattern is not a single variable binding; this grade applies to the binding
+
+               Hint: Bind the value to one graded variable, then destructure it in a separate `let`
+               """)
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 2, "character" => 8},
+               "end" => %{"line" => 2, "character" => 16}
+             }
+
+      assert [%{"location" => %{"range" => grade_range}, "message" => message}] =
+               lsp["relatedInformation"]
+
+      assert grade_range == %{
+               "start" => %{"line" => 2, "character" => 17},
+               "end" => %{"line" => 2, "character" => 24}
+             }
+
+      assert message == "this grade applies to the binding"
     end
 
     test "an ungraded destructuring let still parses" do

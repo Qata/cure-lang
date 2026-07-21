@@ -352,9 +352,9 @@ defmodule Cure.DiagnosticTest do
       {{:unknown_syntax_family_field, :Expr, :field, 1, 2}, "E092"},
       {{:missing_syntax_family_field, :Expr, :field, 1, 2}, "E092"},
       {{:unknown_macro_obligation_capture, :capture, 1, 2}, "E092"},
-      {{:graded_let_requires_variable, :linear, 1, 2}, "E093"},
-      {{:unknown_grade, :future, 1, 2}, "E093"},
-      {{:grade_requires_type, :value, :linear, 1, 2}, "E093"},
+      {{:graded_let_requires_variable, %{grade: :linear}}, "E093"},
+      {{:unknown_grade, %{grade: :future, supported: [:erased, :linear, :affine]}}, "E093"},
+      {{:grade_requires_type, %{name: :value, grade: :linear}}, "E093"},
       {{:unit_type_reserved, "ms"}, "E092"},
       {{:unit_type_reserved, "ms", 1, 2}, "E092"},
       {{:duplicate_index, :n}, "E105"},
@@ -388,7 +388,9 @@ defmodule Cure.DiagnosticTest do
   end
 
   test "new elaboration producers retain contextual E093 explanations" do
-    assert Diagnostic.message(Adapter.from_error({:unknown_grade, :future, 1, 2})) =~
+    assert Diagnostic.message(
+             Adapter.from_error({:unknown_grade, %{grade: :future, supported: [:erased, :linear, :affine]}})
+           ) =~
              "relevance grade"
 
     assert Diagnostic.message(Adapter.from_error({:with_multi_no_arms, "arms", []})) =~

@@ -42,6 +42,7 @@ defmodule Cure.Elab.GradeSyntaxTest do
 
   alias Cure.Compiler
   alias Cure.Core.Env
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.Program
 
   defp params(src) do
@@ -193,31 +194,114 @@ defmodule Cure.Elab.GradeSyntaxTest do
       errs
     end
 
+    defp diagnostic(src, file \\ "grade.cure") do
+      assert {:error, reason} = Compiler.parse_source(src, file: file)
+      Cure.Compiler.Errors.to_diagnostic(reason, file, src)
+    end
+
     test "a grade with a missing required type names the grade, not `expected rparen`" do
       errs = errors("mod G\n  fn f(c :linear) -> Int = 0\nend\n")
 
-      assert Enum.any?(errs, &match?({:grade_requires_type, "c", :linear, _, _}, &1)),
+      assert Enum.any?(errs, &match?({:grade_requires_type, %{name: "c", grade: :linear}}, &1)),
              "expected a {:grade_requires_type, …}, got #{inspect(errs)}"
     end
 
     test "an implicit graded binder with a missing type also names the grade" do
       errs = errors("mod G\n  fn f({n :erased}) -> Int = 0\nend\n")
 
-      assert Enum.any?(errs, &match?({:grade_requires_type, "n", :erased, _, _}, &1)),
+      assert Enum.any?(errs, &match?({:grade_requires_type, %{name: "n", grade: :erased}}, &1)),
              "expected a {:grade_requires_type, …}, got #{inspect(errs)}"
     end
 
     test "an unknown grade atom names the offending atom" do
       errs = errors("mod G\n  fn f(x :bogus Int) -> Int = 0\nend\n")
 
-      assert Enum.any?(errs, &match?({:unknown_grade, :bogus, _, _}, &1)),
+      assert Enum.any?(errs, &match?({:unknown_grade, %{grade: :bogus}}, &1)),
              "expected a {:unknown_grade, :bogus, …}, got #{inspect(errs)}"
+    end
+
+    test "an unknown grade owns its token, suggests a unique typo repair, and does not cascade" do
+      src = "mod G\n  fn f(x :liner Int) -> Int = x\nend\n"
+
+      assert {:error, {:parse_error, [{:unknown_grade, details}]}} =
+               Compiler.parse_source(src, file: "grade.cure")
+
+      assert details.span.start_line == 2
+      assert details.span.start_column == 10
+      assert details.span.end_line == 2
+      assert details.span.end_column == 16
+
+      {diagnostic, registry} = diagnostic(src)
+      rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+      assert diagnostic.code == "E093"
+      assert diagnostic.key == :unknown_grade
+
+      assert rendered ==
+               String.trim_trailing("""
+               -- UNKNOWN RELEVANCE GRADE [E093] ----------------------------------- grade.cure
+
+               `:liner` is not a relevance grade. Cure supports `:erased`, `:linear`,
+               `:affine`.
+
+               at grade.cure:2:10
+               2 |   fn f(x :liner Int) -> Int = x
+                 |          ^^^^^^ this grade is not defined
+
+               Hint: Replace it with `:linear`
+               """)
+
+      assert [suggestion] = diagnostic.suggestions
+      assert suggestion.applicability == :machine_applicable
+      expected_span = details.span
+      assert [%{replacement: ":linear", span: ^expected_span}] = suggestion.edits
+
+      lsp = Renderer.lsp(diagnostic, registry)
+
+      assert lsp["range"] == %{
+               "start" => %{"line" => 1, "character" => 9},
+               "end" => %{"line" => 1, "character" => 15}
+             }
+
+      assert [edit] = lsp["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+      assert edit["newText"] == ":linear"
+      assert edit["range"] == lsp["range"]
+    end
+
+    test "a missing grade type points at the complete authored grade" do
+      src = "mod G\n  fn f(c :linear) -> Int = 0\nend\n"
+      {diagnostic, registry} = diagnostic(src, "missing.cure")
+      rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+      assert diagnostic.key == :grade_requires_type
+      assert diagnostic.primary.span.start_line == 2
+      assert diagnostic.primary.span.start_column == 10
+      assert diagnostic.primary.span.end_column == 17
+
+      assert rendered ==
+               String.trim_trailing("""
+               -- GRADED PARAMETER NEEDS A TYPE [E093] --------------------------- missing.cure
+
+               The `:linear` grade on `c` controls how a value may be used, but no value type
+               follows it.
+
+               at missing.cure:2:10
+               2 |   fn f(c :linear) -> Int = 0
+                 |          ^^^^^^^ add the parameter type after this grade
+
+               Hint: Write `c :linear TypeName`
+               """)
+
+      assert Renderer.lsp(diagnostic, registry)["range"] == %{
+               "start" => %{"line" => 1, "character" => 9},
+               "end" => %{"line" => 1, "character" => 16}
+             }
     end
 
     test ":unrestricted is reported as an unknown grade (it has no spelling)" do
       errs = errors("mod G\n  fn f(x :unrestricted Int) -> Int = 0\nend\n")
 
-      assert Enum.any?(errs, &match?({:unknown_grade, :unrestricted, _, _}, &1)),
+      assert Enum.any?(errs, &match?({:unknown_grade, %{grade: :unrestricted}}, &1)),
              "expected a {:unknown_grade, :unrestricted, …}, got #{inspect(errs)}"
     end
 
