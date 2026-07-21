@@ -2892,6 +2892,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp namespace_title(other), do: to_string(other)
 
   defp type_problem_title(%ExpectationOrigin{kind: :annotation}), do: "Annotation does not match"
+  defp type_problem_title(%ExpectationOrigin{kind: :local_fact}), do: "Local fact does not match"
   defp type_problem_title(%ExpectationOrigin{kind: :call_result}), do: "Call result has the wrong type"
   defp type_problem_title(%ExpectationOrigin{kind: :branch}), do: "Branches have different types"
   defp type_problem_title(%ExpectationOrigin{kind: :condition}), do: "Condition is not boolean"
@@ -3176,6 +3177,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_context(%ExpectationOrigin{kind: :annotation}),
     do: "This expression does not match the type written in its annotation."
 
+  defp type_problem_context(%ExpectationOrigin{kind: :local_fact, owner: owner}),
+    do: "The evidence for local fact `#{name_to_string(owner)}` does not match its stated type."
+
   defp type_problem_context(%ExpectationOrigin{kind: :call_result, owner: owner}),
     do: "The result of `#{name_to_string(owner || "this call")}` does not match the surrounding expectation."
 
@@ -3324,6 +3328,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp plain_type_doc(type), do: Doc.text(print_core(type))
 
   defp type_problem_label(%ExpectationOrigin{kind: :condition}), do: "this condition has the wrong type"
+  defp type_problem_label(%ExpectationOrigin{kind: :local_fact}), do: "this evidence has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :call_result}), do: "this call result has the wrong type"
   defp type_problem_label(%ExpectationOrigin{kind: :branch}), do: "this branch disagrees with another branch"
   defp type_problem_label(%ExpectationOrigin{kind: :call_argument}), do: "this argument has the wrong type"

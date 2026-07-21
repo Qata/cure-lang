@@ -78,6 +78,11 @@ defmodule Cure.LSP.ServerV17Test do
   end
 
   describe "compute_semantic_tokens/1" do
+    test "classifies contextual have at a local-fact head as a keyword" do
+      # One token encoded as [delta line, delta column, UTF-16 length, keyword, modifiers].
+      assert [0, 0, 4, 0, 0 | _] = Server.compute_semantic_tokens("have fact = 1")
+    end
+
     test "produces an LSP token integer stream" do
       tokens = Server.compute_semantic_tokens(@sample)
       assert is_list(tokens)

@@ -199,22 +199,22 @@ LSP suites; then `mix test` if the baseline merge changed.
 **Purpose:** establish the smallest proof statement and reuse the real Core-let
 path before introducing goal-transforming blocks.
 
-- [ ] Write parser failures/successes for inferred and annotated `have`, nested
+- [x] Write parser failures/successes for inferred and annotated `have`, nested
   blocks, shadowing, use after binding, and ordinary identifiers named `have` in
   non-distinctive positions.
-- [ ] Inspect prototype object `8c42c17d...`; manually port only its useful
+- [x] Inspect prototype object `8c42c17d...`; manually port only its useful
   parser/printer shape. Do not apply the stash.
-- [ ] Parse `have` contextually into the existing assignment node with
+- [x] Parse `have` contextually into the existing assignment node with
   `let: true, have: true`, preserving whole/name/annotation/body ranges.
-- [ ] Print canonical `have`; add metadata traversal, quote/syntax-builder, and
+- [x] Print canonical `have`; add metadata traversal, quote/syntax-builder, and
   macro hygiene coverage for the metadata flag.
-- [ ] Route it through `elaborate_let_block/5` and real Core `:let`. Prove the
+- [x] Route it through `elaborate_let_block/5` and real Core `:let`. Prove the
   RHS is evaluated/bound once, dependent annotations remain transparent, and
   relevance/erasure are unchanged.
-- [ ] Add `ExpectationOrigin.kind = :local_fact` so
+- [x] Add `ExpectationOrigin.kind = :local_fact` so
   an annotation mismatch is contextual E093 naming the fact rather than a
   generic body mismatch.
-- [ ] Add completion, semantic token, and formatting tests.
+- [x] Add completion, semantic token, and formatting tests.
 
 **Red gate:** parser does not recognize `have`; the canonical proof fixture
 rejects.
@@ -223,6 +223,12 @@ rejects.
 stdlib compilation, full suite, complete Antigen.
 
 **Commit:** `feat(proofs): add checked local facts with have`
+
+**Completed evidence (2026-07-21):** 51 focused tests green; canonical 122-module
+stdlib compile green; warnings-as-errors compile green; complete Antigen
+318/318 green; full suite 5,288 tests, 0 failures, 6 excluded. The repository-wide
+format check remains blocked only by pre-existing formatting drift in unrelated
+files; every Task 1 file is formatted.
 
 ## Task 2: Implement inline `proof chain ... because ...`
 

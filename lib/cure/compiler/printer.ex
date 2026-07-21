@@ -447,7 +447,8 @@ defmodule Cure.Compiler.Printer do
     rhs = rhs_to_string(value, depth, indent)
 
     if Keyword.get(meta, :let) do
-      "let #{lhs}#{type_ann} = #{rhs}"
+      keyword = if Keyword.get(meta, :have), do: "have", else: "let"
+      "#{keyword} #{lhs}#{type_ann} = #{rhs}"
     else
       "#{lhs} = #{rhs}"
     end

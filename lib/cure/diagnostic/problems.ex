@@ -25,6 +25,7 @@ defmodule Cure.Diagnostic.ExpectationOrigin do
 
   @type kind ::
           :annotation
+          | :local_fact
           | :call_argument
           | :call_result
           | :application

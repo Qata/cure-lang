@@ -6845,7 +6845,7 @@ defmodule Cure.Elab.Elaborator do
 
       case Keyword.get(meta, :type_annotation) do
         nil -> let_inferred(name, rhs, meta, grade, rest, expected_core, names, ctx, env)
-        ann -> let_ascribed(name, rhs, ann, grade, rest, expected_core, names, ctx, env)
+        ann -> let_ascribed(name, rhs, ann, meta, grade, rest, expected_core, names, ctx, env)
       end
     end
   end
@@ -6930,19 +6930,19 @@ defmodule Cure.Elab.Elaborator do
   # check-only rhs cannot synthesise, so the rhs is elaborated in CHECKING mode
   # (exactly what surface substitution did at each use site) and bound ONCE.
   # This is the general escape from the check-only residual.
-  defp let_ascribed(name, rhs, ann, grade, rest, expected_core, names, ctx, env) do
+  defp let_ascribed(name, rhs, ann, meta, grade, rest, expected_core, names, ctx, env) do
     with {:ok, ty_core} <- elaborate_type(ann, names, env),
          ty_value = Eval.eval(ty_core, Context.env(ctx)) do
       case Normalise.whnf_value(ty_value, Context.signature(ctx)) do
         {:veffect_type, _} ->
-          with {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
+          with {:ok, rhs_core} <- check_local_binding_rhs(rhs, ty_core, name, meta, names, ctx, env) do
             bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env)
           end
 
         _ ->
           effect_type = {:effect_type, ty_core}
 
-          case elaborate_expr_checked(rhs, effect_type, names, ctx, env) do
+          case check_local_binding_rhs(rhs, effect_type, name, meta, names, ctx, env) do
             {:ok, rhs_core} ->
               effectful_let_bind(
                 name,
@@ -6957,11 +6957,25 @@ defmodule Cure.Elab.Elaborator do
               )
 
             {:error, _} ->
-              with {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
+              with {:ok, rhs_core} <- check_local_binding_rhs(rhs, ty_core, name, meta, names, ctx, env) do
                 bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env)
               end
           end
       end
+    end
+  end
+
+  defp check_local_binding_rhs(rhs, expected, name, meta, names, ctx, env) do
+    case elaborate_expr_checked(rhs, expected, names, ctx, env) do
+      {:error, reason} = error ->
+        if Keyword.get(meta, :have, false) do
+          {:error, attach_expectation_context(reason, rhs, :local_fact, name, nil)}
+        else
+          error
+        end
+
+      result ->
+        result
     end
   end
 

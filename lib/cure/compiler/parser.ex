@@ -103,7 +103,7 @@ defmodule Cure.Compiler.Parser do
   # collision would silently disable the existing form for the rest of the
   # module with no error raised. Reserved names simply keep today's
   # soft-keyword behavior; they are never macro-usable.
-  @reserved_macro_keywords ~w(assert_type rewrite with macro)
+  @reserved_macro_keywords ~w(assert_type rewrite with macro have)
 
   # Decorators that describe the *module*, not the declaration that follows.
   # A `@name(...)` in this set NEVER attaches to the next `fn`/`rec`/`type`;
@@ -2788,6 +2788,16 @@ defmodule Cure.Compiler.Parser do
           "rewrite" ->
             parse_rewrite(state, token)
 
+          # `have name [: Type] = value` is a checked local fact only at its
+          # distinctive binding-shaped head. Elsewhere `have` remains an
+          # ordinary identifier, just like the contextual `proof` vocabulary.
+          "have" ->
+            if local_fact_ahead?(state) do
+              parse_local_binding(state, :have)
+            else
+              {variable(token), advance(state)}
+            end
+
           # `proof` is contextual: at a declaration-shaped head it introduces
           # a proof container; in every other expression/binder position it is
           # an ordinary identifier. The lexer deliberately does not decide.
@@ -4497,7 +4507,9 @@ defmodule Cure.Compiler.Parser do
 
   # -- Let Binding -----------------------------------------------------------
 
-  defp parse_let(state) do
+  defp parse_let(state), do: parse_local_binding(state, :let)
+
+  defp parse_local_binding(state, kind) when kind in [:let, :have] do
     token = peek(state)
     state = advance(state)
 
@@ -4534,9 +4546,10 @@ defmodule Cure.Compiler.Parser do
     {value, state} = parse_expr_or_block(state)
 
     meta = [let: true, line: token.line, col: token.col]
+    meta = if kind == :have, do: Keyword.put(meta, :have, true), else: meta
     meta = if type_ann, do: Keyword.put(meta, :type_annotation, type_ann), else: meta
     meta = if grade, do: Keyword.put(meta, :grade, grade), else: meta
-    meta = put_let_source_info(meta, token, pattern, annotation_span, state)
+    meta = put_let_source_info(meta, token, pattern, value, annotation_span, state)
 
     assignment = {:assignment, meta, [pattern, value]}
 
@@ -4556,6 +4569,13 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         {assignment, state}
+    end
+  end
+
+  defp local_fact_ahead?(state) do
+    case peek_at(state, 1) do
+      %Token{type: type} when type in [:identifier, :quoted_identifier] -> true
+      _ -> false
     end
   end
 
@@ -5852,12 +5872,18 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp put_let_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = first}, pattern, annotation, state) do
+  defp put_let_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = first}, pattern, body, annotation, state) do
     case authored_token(state) do
       %Token{span: %Cure.Diagnostic.Span{} = last} ->
         case Range.through(first, last) do
           {:ok, whole} ->
-            info = %SourceInfo{whole: whole, name: ast_source_span(pattern), annotation: annotation}
+            info = %SourceInfo{
+              whole: whole,
+              name: ast_source_span(pattern),
+              annotation: annotation,
+              body: ast_source_span(body)
+            }
+
             Keyword.put(meta, :source_info, info)
 
           _ ->
@@ -5869,7 +5895,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp put_let_source_info(meta, _token, _pattern, _annotation, _state), do: meta
+  defp put_let_source_info(meta, _token, _pattern, _body, _annotation, _state), do: meta
 
   # -- Typed Parameters  name: Type [= default] ------------------------------
 
