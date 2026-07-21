@@ -75,7 +75,16 @@ defmodule Cure.Compiler.Parser do
     # `precedencegroup`/`infix`/… decls (collected in the harvest pass). `nil`
     # in sub-parsers that build `%__MODULE__{}` directly — `fixity_table/1`
     # falls back to the built-in table there.
-    fixity_table: nil
+    fixity_table: nil,
+    # Indent levels of the infix continuations currently open, innermost first.
+    # A trailing (or leading) infix operator lets its operand sit on the next
+    # line, and the lexer marks that line with an `:indent`/`:dedent` pair like
+    # any other block. The pair is layout the operand introduced rather than a
+    # block boundary, so the Pratt loop opens the level when it steps over the
+    # `:indent` and closes it by dropping the matching `:dedent`.
+    # Levels nest LIFO, and only the innermost is ever eligible to close, so an
+    # operand containing a real block still hands that block its own `:dedent`.
+    continuation_levels: []
   ]
 
   # Keywords that can open a new top-level definition. Used by the
@@ -262,10 +271,6 @@ defmodule Cure.Compiler.Parser do
           fixity_table: module_fixity
         }
 
-        # Layout is lexical, while operatorhood is declaration-driven. Only
-        # after the module/import fixity table has been assembled can we erase
-        # layout introduced solely by a trailing infix continuation.
-        tokens = normalize_infix_continuation_layout(tokens, module_fixity)
         state = put_tokens(state, tokens)
 
         {exprs, state} = parse_program(state)
@@ -2570,70 +2575,61 @@ defmodule Cure.Compiler.Parser do
   defp lexeme_of(%Token{type: :operator, value: v}) when is_binary(v), do: v
   defp lexeme_of(%Token{type: type}), do: Map.get(@token_lexemes, type)
 
-  # Remove only layout whose preceding token is an infix operator in the
-  # ACTIVE declaration-derived table. The lexer deliberately has no operator
-  # inventory: stdlib, imported, and locally-declared operators all follow the
-  # same path. An indented continuation creates a lexical indent/dedent pair;
-  # track its exact level so real nested blocks inside the operand survive.
-  defp normalize_infix_continuation_layout(tokens, table) do
-    normalize_infix_continuation_layout(tokens, table, [], [])
-  end
-
-  defp normalize_infix_continuation_layout(
-         [
-           %Token{} = operator,
-           %Token{type: :newline} = newline,
-           %Token{type: :indent, value: level} = indent | rest
-         ],
-         table,
-         continuation_levels,
-         acc
-       ) do
-    if infix_token?(table, operator) do
-      normalize_infix_continuation_layout(rest, table, [level | continuation_levels], [operator | acc])
-    else
-      normalize_infix_continuation_layout(
-        [newline, indent | rest],
-        table,
-        continuation_levels,
-        [operator | acc]
-      )
-    end
-  end
-
-  defp normalize_infix_continuation_layout(
-         [%Token{} = operator, %Token{type: :newline} = newline | rest],
-         table,
-         continuation_levels,
-         acc
-       ) do
-    if infix_token?(table, operator) do
-      normalize_infix_continuation_layout(rest, table, continuation_levels, [operator | acc])
-    else
-      normalize_infix_continuation_layout(rest, table, continuation_levels, [
-        newline,
-        operator | acc
-      ])
-    end
-  end
-
-  defp normalize_infix_continuation_layout(
-         [%Token{type: :dedent, value: level} | rest],
-         table,
-         [level | continuation_levels],
-         acc
-       ) do
-    normalize_infix_continuation_layout(rest, table, continuation_levels, acc)
-  end
-
-  defp normalize_infix_continuation_layout([token | rest], table, continuation_levels, acc) do
-    normalize_infix_continuation_layout(rest, table, continuation_levels, [token | acc])
-  end
-
-  defp normalize_infix_continuation_layout([], _table, _continuation_levels, acc), do: Enum.reverse(acc)
-
   defp infix_token?(table, token),
     do: FixityTable.infix_bp(table, lexeme_of(token)) != :not_infix
+
+  # Step over the `:indent` opening an infix continuation, recording its level
+  # so `close_continuations/1` can drop the matching `:dedent`.
+  #
+  # Operatorhood is declaration-driven while layout is lexical, so the two can
+  # only be reconciled where the fixity table AND the parse position are both
+  # known — that is, here, in operand position. Deciding it earlier over the
+  # raw token stream cannot tell a trailing comparison from the `>` closing a
+  # `<name: Type>` macro binder, and erasing that binder's layout deletes the
+  # `:indent` opening the macro body.
+  defp open_continuation(%__MODULE__{} = state) do
+    case peek(state) do
+      %Token{type: :indent, value: level} ->
+        %__MODULE__{state | continuation_levels: [level | state.continuation_levels]}
+        |> advance()
+
+      _ ->
+        state
+    end
+  end
+
+  # Drop the `:dedent` closing each continuation the operand has now finished,
+  # innermost first. The dedent is deleted rather than stepped over because the
+  # `:newline` ending the operand's line sits in front of it and has to stay: it
+  # still separates this statement from the next, while the dedent — which would
+  # close the enclosing block — was never a block boundary to begin with.
+  # Layout no continuation opened is left alone.
+  defp close_continuations(%__MODULE__{continuation_levels: []} = state), do: state
+
+  defp close_continuations(%__MODULE__{continuation_levels: [level | rest]} = state) do
+    case continuation_dedent_index(state, state.pos, level) do
+      nil ->
+        state
+
+      idx ->
+        %__MODULE__{drop_token_at(state, idx) | continuation_levels: rest}
+        |> close_continuations()
+    end
+  end
+
+  # Index of the `:dedent` closing `level`, looking past the newline(s) that end
+  # the operand's line; `nil` when the operand has not dedented out yet.
+  defp continuation_dedent_index(state, idx, level) do
+    case token_at(state, idx) do
+      %Token{type: :newline} -> continuation_dedent_index(state, idx + 1, level)
+      %Token{type: :dedent, value: ^level} -> idx
+      _ -> nil
+    end
+  end
+
+  defp drop_token_at(%__MODULE__{tokens: tokens, count: count} = state, idx) do
+    %__MODULE__{state | tokens: Tuple.delete_at(tokens, idx), count: count - 1}
+  end
 
   # A `min_bp` that stops a bounded sub-parse just above built-in operator
   # `lexeme` — i.e. one past its left binding power in the active fixity table,
@@ -2677,6 +2673,10 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp parse_infix(state, left, min_bp, ctx_op) do
+    # The operand may have sat on its own line. Retire that continuation's
+    # layout here, at the loop that opened it, rather than letting a `:dedent`
+    # nobody claims reach `parse_program/2` and end the enclosing block.
+    state = close_continuations(state)
     token = peek(state)
 
     # Any declared infix operator at the start of a continuation line belongs
@@ -2747,12 +2747,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp skip_infix_continuation_layout(state) do
-    state = advance(state)
-
-    case peek(state).type do
-      :indent -> advance(state)
-      _ -> state
-    end
+    state |> advance() |> open_continuation()
   end
 
   # `a == b == c`, `a..b..c`, `a <-| b <-| c`: the spec's operator table and
@@ -3407,12 +3402,12 @@ defmodule Cure.Compiler.Parser do
   # -- Infix Operators -------------------------------------------------------
 
   defp parse_infix_rhs(state, right_bp, op_lexeme) do
-    state = skip_newlines(state)
+    state = state |> skip_newlines() |> open_continuation()
     parse_expr(state, right_bp, op_lexeme)
   end
 
   defp take_infix_rhs_token(state) do
-    state = skip_newlines(state)
+    state = state |> skip_newlines() |> open_continuation()
     token = peek(state)
     state = advance(state)
     {token, state}
