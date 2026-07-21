@@ -409,6 +409,13 @@ defmodule Cure.Compiler.Lexer do
         [current | _] = state.indent_stack
 
         cond do
+          infix_continuation?(state.tokens) ->
+            # A line following a trailing infix operator is part of the same
+            # expression. Its visual indentation is continuation alignment,
+            # not a new layout block; keeping it out of the indent stack also
+            # lets a chain continue across several equally-indented lines.
+            {:ok, %{state | at_line_start: false}}
+
           indent > current ->
             state = push_indent(state, indent)
             {:ok, %{state | at_line_start: false}}
@@ -422,6 +429,44 @@ defmodule Cure.Compiler.Lexer do
         end
     end
   end
+
+  @infix_continuation_tokens [
+    :plus,
+    :minus,
+    :star,
+    :slash,
+    :percent,
+    :eq,
+    :neq,
+    :lt,
+    :gt,
+    :lte,
+    :gte,
+    :and_op,
+    :or_op,
+    :band_op,
+    :bor_op,
+    :bxor_op,
+    :bsl_op,
+    :bsr_op,
+    :string_concat,
+    :range,
+    :range_inclusive,
+    :pipe,
+    :dot,
+    :melquiades,
+    :operator
+  ]
+
+  defp infix_continuation?([%Token{type: :newline} | tokens]),
+    do: previous_significant_token_is_infix?(tokens)
+
+  defp infix_continuation?(_tokens), do: false
+
+  defp previous_significant_token_is_infix?([%Token{type: type} | _]),
+    do: type in @infix_continuation_tokens
+
+  defp previous_significant_token_is_infix?([]), do: false
 
   defp measure_indent(state) do
     measure_indent(state, 0)

@@ -3337,16 +3337,27 @@ defmodule Cure.Compiler.Parser do
 
   # -- Infix Operators -------------------------------------------------------
 
+  defp parse_infix_rhs(state, right_bp, op_lexeme) do
+    state = skip_newlines(state)
+    parse_expr(state, right_bp, op_lexeme)
+  end
+
+  defp take_infix_rhs_token(state) do
+    state = skip_newlines(state)
+    token = peek(state)
+    state = advance(state)
+    {token, state}
+  end
+
   # Build the node for one infix operator whose left operand is already parsed. The
   # caller resumes the Pratt loop, so it can see the token that follows.
   defp build_infix_op(state, left, token, right_bp, op_lexeme) do
     case token.type do
       # Pipe desugaring: a |> f  or  a |> f(b, c). A trailing `|>` may sit at the end of a line with its
       # right operand on the next line (`a |> \n f() |> \n g()`); `|>` always demands an operand, so skipping
-      # the intervening newline to find it is unambiguous (skip_newlines skips only `:newline`).
+      # the intervening newline to find it is unambiguous.
       :pipe ->
-        state = skip_newlines(state)
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_infix_rhs(state, right_bp, op_lexeme)
         {desugar_pipe(left, right, token), state}
 
       # Melquiades operator: `pid <-| message` or `pid ✉ message`.
@@ -3354,28 +3365,27 @@ defmodule Cure.Compiler.Parser do
       # author's choice of ASCII vs unicode form in `:melquiades_form` so
       # the printer can round-trip it.
       :melquiades ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_infix_rhs(state, right_bp, op_lexeme)
         form = melquiades_form(token.value)
         meta = [line: token.line, col: token.col, melquiades_form: form]
         {{:send, meta, [left, right]}, state}
 
       # Dot access: obj.field -> {:attribute_access, ...}
       :dot ->
-        field_token = peek(state)
-        state = advance(state)
+        {field_token, state} = take_infix_rhs_token(state)
         field_name = to_string(field_token.value)
         meta = [attribute: field_name, line: token.line, col: token.col]
         {{:attribute_access, meta, [left]}, state}
 
       # Range operators
       type when type in [:range, :range_inclusive] ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_infix_rhs(state, right_bp, op_lexeme)
         inclusive = type == :range_inclusive
         {{:range, [inclusive: inclusive, line: token.line, col: token.col], [left, right]}, state}
 
       # Assignment
       :assign ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_infix_rhs(state, right_bp, op_lexeme)
         {{:assignment, [line: token.line, col: token.col], [left, right]}, state}
 
       # Generic (user-declared) overloadable operator: build a `:binary_op` node
@@ -3384,7 +3394,7 @@ defmodule Cure.Compiler.Parser do
       # named by the lexeme (`Resolve.method_call`/`Overload.resolve`), keeping
       # the Phase-2 primitive/`struct_eq`/`combine` fast paths for the built-ins.
       :operator ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_infix_rhs(state, right_bp, op_lexeme)
         op = String.to_atom(token.value)
         meta = [category: :overloaded, operator: op, line: token.line, col: token.col]
         meta = put_operator_source_info(meta, left, right, token)
@@ -3393,7 +3403,7 @@ defmodule Cure.Compiler.Parser do
       # Regular built-in binary operator (arithmetic/comparison/boolean/…):
       # dedicated node with its historical category + symbol, unchanged.
       _ ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_infix_rhs(state, right_bp, op_lexeme)
         category = Precedence.operator_category(token.type)
         op = Precedence.operator_symbol(token.type)
         meta = [category: category, operator: op, line: token.line, col: token.col]
