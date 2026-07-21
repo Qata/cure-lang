@@ -8042,7 +8042,14 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     state = advance(state)
     {family, state} = parse_dotted_name(state)
-    {%{kind: :accepts, family: family, line: token.line, col: token.col}, state}
+
+    {%{
+       kind: :accepts,
+       family: family,
+       line: token.line,
+       col: token.col,
+       source_span: macro_rule_source_span(token, state)
+     }, state}
   end
 
   defp parse_macro_expands_with(state) do
@@ -8056,10 +8063,18 @@ defmodule Cure.Compiler.Parser do
       end
 
     {expander, state} = parse_expr(state, 0)
-    {%{kind: :expands_with, expander: expander, line: token.line, col: token.col}, state}
+
+    {%{
+       kind: :expands_with,
+       expander: expander,
+       line: token.line,
+       col: token.col,
+       source_span: macro_rule_source_span(token, state)
+     }, state}
   end
 
   defp parse_syntax_family(state) do
+    syntax_token = peek(state)
     family_token = peek_at(state, 1)
     state = advance(state)
     state = advance(state)
@@ -8080,12 +8095,21 @@ defmodule Cure.Compiler.Parser do
            includes: includes,
            productions: productions,
            line: family_token.line,
-           col: family_token.col
+           col: family_token.col,
+           source_span: macro_rule_source_span(syntax_token, state)
          }, state}
 
       t ->
         state = add_error(state, {:expected, :indent, :got, t.type, t.line, t.col})
-        {%{kind: :syntax_family, name: name, fields: [], line: family_token.line, col: family_token.col}, state}
+
+        {%{
+           kind: :syntax_family,
+           name: name,
+           fields: [],
+           line: family_token.line,
+           col: family_token.col,
+           source_span: macro_rule_source_span(syntax_token, state)
+         }, state}
     end
   end
 

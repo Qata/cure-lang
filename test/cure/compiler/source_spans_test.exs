@@ -91,6 +91,24 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, rule.source_span) == "syntax every becomes Clock.now()"
   end
 
+  test "structured macro sections retain authored entry ranges" do
+    source =
+      "macro actor <name: ModuleName>\n" <>
+        "  syntax family ActorDefinition\n" <>
+        "    state Type\n" <>
+        "  accepts ActorDefinition\n" <>
+        "  expands with derive_actor\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "macro_sections.cure", emit_events: false)
+
+    assert {:ok, {:macro_def, _meta, [family, accepts, expands]}} =
+             Parser.parse(tokens, file: "macro_sections.cure", emit_events: false, prelude_macros: false)
+
+    assert slice(source, family.source_span) == "syntax family ActorDefinition\n    state Type"
+    assert slice(source, accepts.source_span) == "accepts ActorDefinition"
+    assert slice(source, expands.source_span) == "expands with derive_actor"
+  end
+
   test "named containers retain exact declaration and qualified-name ranges" do
     source = "mod Demo.Core\n  rec Point\n    x: Int\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "containers.cure", emit_events: false)
