@@ -456,6 +456,26 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "define a Cure body"
   end
 
+  test "unsupported spawn points at the complete authored operation" do
+    source = "mod SpawnUnsupported\n  fn bad() -> Int = spawn 1\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "spawn.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "spawn.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E107"
+    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {2, 21}
+    assert diagnostic.primary.span.end_column == 28
+    assert rendered =~ "2 |   fn bad() -> Int = spawn 1"
+    assert rendered =~ "^^^^^^^ use a supported asynchronous boundary"
+    assert rendered =~ "`spawn` is not supported by the dependent runtime yet"
+  end
+
   test "under-saturated calls report the callee arity without rejecting valid partial application" do
     source = """
     mod CallArity

@@ -43,6 +43,7 @@ defmodule Cure.DiagnosticExerciserTest do
        "mod DiagnosticExternUntyped\n  @extern(:erlang, :hd, 1)\n  fn head(xs) -> Int\nend\n", :extern_untyped_head},
       {"extern has body", "E057",
        "mod DiagnosticExternBody\n  @extern(:erlang, :self, 0)\n  fn me() -> Atom = :oops\nend\n", :extern_has_body},
+      {"unsupported spawn", "E107", "mod DiagnosticSpawn\n  fn bad() -> Int = spawn 1\nend\n", :unsupported_async},
       {"erasure declaration", "E102", "mod DiagnosticErasure\n  @erases(:banana)\n  opaque type Handle\nend\n",
        :erasure_violation},
       {"relevant use of erased value", "E104",

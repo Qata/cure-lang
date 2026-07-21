@@ -391,6 +391,23 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert Enum.map(info.operands, &slice(source, &1)) == ["1", "10"]
   end
 
+  test "keyword-unary expressions own the keyword through their operand" do
+    for {keyword, tag} <- [{"return", :early_return}, {"throw", :throw}, {"yield", :yield}, {"spawn", :async_operation}] do
+      source = "fn value() -> Int = #{keyword} 1\n"
+      assert {:ok, tokens} = Lexer.tokenize(source, file: "#{keyword}.cure", emit_events: false)
+
+      assert {:ok, ast} =
+               Parser.parse(tokens, file: "#{keyword}.cure", emit_events: false, prelude_macros: false)
+
+      {^tag, meta, [_operand]} = find_node(ast, tag)
+      info = Metadata.source_info(meta)
+
+      assert slice(source, info.whole) == "#{keyword} 1"
+      assert slice(source, info.name) == keyword
+      assert slice(source, info.body) == "1"
+    end
+  end
+
   test "string interpolation retains its whole and embedded expression ranges" do
     source = ~S|fn message(name: String) -> String = "hello #{name}! #{name + 1}"| <> "\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "interpolation.cure", emit_events: false)

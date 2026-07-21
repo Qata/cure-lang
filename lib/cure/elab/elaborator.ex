@@ -1157,6 +1157,9 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:quoted_syntax, _meta, [inner]}, names, ctx, env),
     do: elaborate_expr_typed(Cure.Compiler.MacroSyntax.lower_quote(inner), names, ctx, env)
 
+  def elaborate_expr_typed({:async_operation, meta, _children}, _names, _ctx, _env),
+    do: {:error, {:unsupported_async, "`spawn` is not supported by the dependent runtime yet.", meta}}
+
   def elaborate_expr_typed({tag, meta, _}, _names, _ctx, _env) when tag in [:splice, :splice_group],
     do: {:error, {:splice_outside_quote, tag, meta}}
 
@@ -10035,6 +10038,9 @@ defmodule Cure.Elab.Elaborator do
   # ordinary elaborator (TCB delta 0).
   def elaborate_expr({:quoted_syntax, _meta, [inner]}, scope, env),
     do: elaborate_expr(Cure.Compiler.MacroSyntax.lower_quote(inner), scope, env)
+
+  def elaborate_expr({:async_operation, meta, _children}, _scope, _env),
+    do: {:error, {:unsupported_async, "`spawn` is not supported by the dependent runtime yet.", meta}}
 
   # A `$(e)` / `$(e ...)` splice reaching the elaborator as a bare node means it
   # sits outside any enclosing `quote` — a category error. Inside a quote,
