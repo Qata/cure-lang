@@ -2676,6 +2676,20 @@ defmodule Cure.Diagnostic.Adapter do
            "Multiple-scrutinee `with` arms must use structurally consistent outer patterns.",
            "make the outer patterns agree or split the match"}
 
+        :branch_arity ->
+          {"Pattern branch has the wrong arity",
+           "A pattern branch does not bind the number of values required by the matched constructor.",
+           "make the branch pattern match the constructor's arguments"}
+
+        :coverage ->
+          {"Pattern match is not exhaustive", "This pattern match does not cover every constructor that can reach it.",
+           "add the missing branch or a final wildcard branch"}
+
+        :index_arity ->
+          {"Indexed type has the wrong arity",
+           "The number of indices supplied to this indexed type does not match its declaration.",
+           "supply exactly the declared indices"}
+
         _ ->
           {"Elaboration failed", "This expression or declaration is not valid in the current checking context.",
            "change the source construct or add an annotation"}

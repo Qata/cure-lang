@@ -557,6 +557,12 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ "ELABORATION FAILED"
   end
 
+  test "bare trusted verdicts retain actionable type-checking titles" do
+    assert Host.render(:branch_arity, "patterns.cure") =~ "PATTERN BRANCH HAS THE WRONG ARITY"
+    assert Host.render(:coverage, "patterns.cure") =~ "PATTERN MATCH IS NOT EXHAUSTIVE"
+    assert Host.render(:index_arity, "types.cure") =~ "INDEXED TYPE HAS THE WRONG ARITY"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 
