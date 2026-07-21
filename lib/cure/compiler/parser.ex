@@ -2652,9 +2652,9 @@ defmodule Cure.Compiler.Parser do
   # left-associate. So the table's "non-assoc" entries parsed as plain left-associative
   # operators, and `a <-| b <-| c` quietly fanned out into two sends.
   #
-  # Reject the chain outright, as Haskell (`infix 4 ==`), Rust, and Agda/Idris all do. The
-  # error is recorded rather than raised, so the parser keeps going and reports the rest of
-  # the file's problems in the same pass.
+  # Reject the chain outright, as Haskell (`infix 4 ==`), Rust, and Agda/Idris all do.
+  # The error is recorded rather than raised, so the parser keeps going and reports the
+  # rest of the file's problems in the same pass.
   defp reject_non_assoc_chain(state, table, token, lexeme, left_bp) do
     next = peek(state)
     next_lexeme = lexeme_of(next)
@@ -3847,6 +3847,7 @@ defmodule Cure.Compiler.Parser do
         name = Keyword.get(meta, :name, "unknown")
         new_meta = Keyword.merge(meta, pipe: true, line: token.line, col: token.col)
         new_meta = Keyword.put(new_meta, :name, name)
+        new_meta = prepend_pipe_label_metadata(new_meta)
         {:function_call, new_meta, [left | args]}
 
       {:variable, _meta, name} ->
@@ -3854,6 +3855,18 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         {:function_call, [name: "unknown", pipe: true, line: token.line, col: token.col], [left, right]}
+    end
+  end
+
+  defp prepend_pipe_label_metadata(meta) do
+    case Keyword.get(meta, :arg_labels) do
+      labels when is_list(labels) ->
+        meta
+        |> Keyword.put(:arg_labels, [nil | labels])
+        |> Keyword.update(:arg_label_spans, [nil], &[nil | &1])
+
+      _ ->
+        meta
     end
   end
 
@@ -3868,7 +3881,7 @@ defmodule Cure.Compiler.Parser do
     # (`identifier :`), so the head's case is what disambiguates them. Only allow
     # label-grabbing for the non-constructor (function) head.
     allow_labels = not is_pascal_case?(func)
-    {args, arg_labels, state, close_token} = parse_call_args(state, allow_labels)
+    {args, arg_labels, arg_label_spans, state, close_token} = parse_call_args(state, allow_labels)
     name = extract_call_name(func)
 
     meta = [name: name, line: token.line, col: token.col]
@@ -3876,7 +3889,13 @@ defmodule Cure.Compiler.Parser do
     # Carry written argument labels only when at least one is present, so the
     # common all-positional call keeps its exact historical meta shape.
     meta =
-      if Enum.any?(arg_labels), do: Keyword.put(meta, :arg_labels, arg_labels), else: meta
+      if Enum.any?(arg_labels) do
+        meta
+        |> Keyword.put(:arg_labels, arg_labels)
+        |> Keyword.put(:arg_label_spans, arg_label_spans)
+      else
+        meta
+      end
 
     # When the callee is an expression (e.g. f(x)(y)), preserve it so
     # the codegen can compile it as an expression-based call.
@@ -3981,7 +4000,8 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  # Returns {args, labels, state, close_token}: `labels` is position-aligned with `args`, each
+  # Returns {args, labels, label_spans, state, close_token}: `labels` and
+  # `label_spans` are position-aligned with `args`; each label entry is the
   # entry the written argument label (`f(to: v)`) or `nil` when the argument is
   # positional. Callers that ignore labels bind the middle element to `_`.
   defp parse_call_args(state, allow_labels) do
@@ -3990,14 +4010,14 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :rparen} ->
         close_token = peek(state)
-        {[], [], advance(state), close_token}
+        {[], [], [], advance(state), close_token}
 
       _ ->
-        {label, state} = parse_arg_label(state, allow_labels)
+        {label, label_span, state} = parse_arg_label(state, allow_labels)
         {first, state} = parse_expr(state, 0)
         {first, state} = maybe_wrap_as(first, state)
         state = skip_newlines(state)
-        {rest, rest_labels, state} = parse_more_args(state, allow_labels)
+        {rest, rest_labels, rest_label_spans, state} = parse_more_args(state, allow_labels)
         state = skip_newlines(state)
 
         {state, close_token} =
@@ -4006,7 +4026,7 @@ defmodule Cure.Compiler.Parser do
             {:error, next_state} -> {next_state, nil}
           end
 
-        {[first | rest], [label | rest_labels], state, close_token}
+        {[first | rest], [label | rest_labels], [label_span | rest_label_spans], state, close_token}
     end
   end
 
@@ -4015,15 +4035,15 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :comma} ->
         state = advance(state)
         state = skip_newlines(state)
-        {label, state} = parse_arg_label(state, allow_labels)
+        {label, label_span, state} = parse_arg_label(state, allow_labels)
         {expr, state} = parse_expr(state, 0)
         {expr, state} = maybe_wrap_as(expr, state)
         state = skip_newlines(state)
-        {rest, rest_labels, state} = parse_more_args(state, allow_labels)
-        {[expr | rest], [label | rest_labels], state}
+        {rest, rest_labels, rest_label_spans, state} = parse_more_args(state, allow_labels)
+        {[expr | rest], [label | rest_labels], [label_span | rest_label_spans], state}
 
       _ ->
-        {[], [], state}
+        {[], [], [], state}
     end
   end
 
@@ -4031,7 +4051,7 @@ defmodule Cure.Compiler.Parser do
   # label (`f(to: v)`). This spelling is otherwise a parse error in a paren call
   # — `:colon` has no infix binding power — so recognising it here is purely
   # additive and never reinterprets valid existing syntax. Consumes the
-  # identifier and the colon; returns {nil, state} when no label is present.
+  # identifier and the colon; returns {nil, nil, state} when no label is present.
   #
   # `allow_labels` is false under a PascalCase (constructor) head, where the same
   # `identifier :` spelling is a TYPED PATTERN (`Cons(n: Int, rest)`) that must
@@ -4041,9 +4061,9 @@ defmodule Cure.Compiler.Parser do
     next = peek_at(state, 1)
 
     if allow_labels && tok && tok.type == :identifier && next && next.type == :colon do
-      {to_string(tok.value), state |> advance() |> advance()}
+      {to_string(tok.value), tok.span, state |> advance() |> advance()}
     else
-      {nil, state}
+      {nil, nil, state}
     end
   end
 
@@ -9721,7 +9741,7 @@ defmodule Cure.Compiler.Parser do
       case peek(state) do
         %Token{type: :lparen} ->
           state = advance(state)
-          {a, _labels, state, _close_token} = parse_call_args(state, false)
+          {a, _labels, _label_spans, state, _close_token} = parse_call_args(state, false)
           {a, state}
 
         %Token{type: :bool, value: bval} ->

@@ -201,6 +201,8 @@ defmodule Cure.Elab.Elaborator do
           end
       end
 
+    {meta, args} = normalize_constructor_named_args(meta, args, Inductive.get_ctor(env, resolved))
+
     # Ph2 label enforcement for a SINGLE call target. An overloaded name (≥2
     # candidates) is handled by the pruner clause below, which tie-breaks on
     # exact label agreement; a lone target instead only enforces its declared
@@ -211,18 +213,90 @@ defmodule Cure.Elab.Elaborator do
       not String.contains?(name, ".") and
         length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2
 
-    label_check =
-      if overloaded?,
-        do: :ok,
-        else: Cure.Elab.Overload.check_labels(env, resolved, Keyword.get(meta, :arg_labels))
+    alignment =
+      if overloaded? do
+        {:ok, args}
+      else
+        if ctor = Inductive.get_ctor(env, resolved) do
+          align_constructor_args(resolved, ctor, meta, args)
+        else
+          if Cure.Elab.Resolve.method?(env, atom) do
+            descriptor = Cure.Elab.Interface.for_method(env, atom)
+            method = Map.fetch!(descriptor.methods, atom)
 
-    case label_check do
-      {:error, _} = err ->
-        err
+            labels =
+              Enum.map(method.params, fn {:param, parameter_meta, internal} ->
+                case Keyword.get(parameter_meta, :label) do
+                  nil -> {:optional, to_string(internal)}
+                  external -> {:required, to_string(external)}
+                end
+              end)
 
-      :ok ->
-        elaborate_named_call_resolved(meta, name, atom, args, names, resolved, ctx, env)
+            Cure.Elab.Overload.align_labels(atom, labels, args, Keyword.get(meta, :arg_labels), call_label_opts(meta))
+          else
+            Cure.Elab.Overload.align(
+              env,
+              resolved,
+              args,
+              Keyword.get(meta, :arg_labels),
+              call_label_opts(meta)
+            )
+          end
+        end
+      end
+
+    case alignment do
+      {:error, _} = err -> err
+      {:ok, aligned_args} -> elaborate_named_call_resolved(meta, name, atom, aligned_args, names, resolved, ctx, env)
     end
+  end
+
+  defp normalize_constructor_named_args(meta, args, nil), do: {meta, args}
+
+  defp normalize_constructor_named_args(meta, args, _ctor) do
+    converted =
+      Enum.map(args, fn
+        {:typed_pattern, pattern_meta, [name, value]} ->
+          span =
+            case Cure.MetaAST.Metadata.source_info(pattern_meta) do
+              %Cure.MetaAST.SourceInfo{whole: whole} -> whole
+              _ -> nil
+            end
+
+          {value, to_string(name), span}
+
+        value ->
+          {value, nil, nil}
+      end)
+
+    if Enum.any?(converted, fn {_value, label, _span} -> not is_nil(label) end) do
+      values = Enum.map(converted, &elem(&1, 0))
+      labels = Enum.map(converted, &elem(&1, 1))
+      spans = Enum.map(converted, &elem(&1, 2))
+      {meta |> Keyword.put(:arg_labels, labels) |> Keyword.put(:arg_label_spans, spans), values}
+    else
+      {meta, args}
+    end
+  end
+
+  defp align_constructor_args(key, ctor, meta, args) do
+    labels =
+      Enum.zip(ctor.args, Inductive.plicities_of(ctor))
+      |> Enum.flat_map(fn
+        {{parameter_name, _type}, :explicit} -> [{:optional, to_string(parameter_name)}]
+        _ -> []
+      end)
+
+    Cure.Elab.Overload.align_labels(key, labels, args, Keyword.get(meta, :arg_labels), call_label_opts(meta))
+  end
+
+  defp call_label_opts(meta) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    [
+      argument_spans: if(info, do: info.arguments, else: []),
+      label_spans: Keyword.get(meta, :arg_label_spans, [])
+    ]
   end
 
   defp elaborate_named_call_resolved(meta, name, atom, args, names, resolved, ctx, env) do
@@ -353,8 +427,9 @@ defmodule Cure.Elab.Elaborator do
       # providers with no unique winner. `overload_candidates/2` already applies
       # local-then-direct precedence, so a name with a single local/direct winner
       # (a local `map` shadowing imports) collapses to one candidate and never
-      # reaches here — only a genuine set of ≥2 does. Infer the argument types
-      # once, prune by first-order convertibility, and dispatch the survivor.
+      # reaches here — only a genuine set of ≥2 does. Align the authored
+      # arguments against each candidate, bidirectionally elaborate each aligned
+      # call, and dispatch the unique survivor.
       # Placed after the ctor/method/constrained/qualified special cases and
       # before the generic ambiguity/def paths; the `not String.contains?` guard
       # keeps it disjoint from the dotted-qualified clause.
@@ -369,7 +444,8 @@ defmodule Cure.Elab.Elaborator do
                Keyword.get(meta, :arg_labels),
                names,
                ctx,
-               cands
+               cands,
+               call_label_opts(meta)
              ) do
           {:error, reason} ->
             {:error, attach_expectation_context(reason, {:function_call, meta, args}, :overload, atom, nil)}
@@ -1810,13 +1886,16 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr_checked({:function_call, meta, args} = expr, expected_core, names, ctx, env) do
+  def elaborate_expr_checked({:function_call, meta, args}, expected_core, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
     # Resolve a qualified (`Std.Nat.S`) or bare-shadowed (`S` under a local `Nat`
     # shadow, present only as `:"Std.Nat#S"`) constructor to its registry key
     # (spec §3.3); a non-dotted, registry-present name maps to itself.
     cres = resolve_ctor_key(env, atom)
+    ctor = Inductive.get_ctor(env, cres)
+    {meta, args} = normalize_constructor_named_args(meta, args, ctor)
+    expr = {:function_call, meta, args}
 
     cond do
       Keyword.get(meta, :record) ->
@@ -1845,7 +1924,7 @@ defmodule Cure.Elab.Elaborator do
       Cure.Elab.Resolve.result_dispatched_method?(env, atom) ->
         Cure.Elab.Resolve.method_call_checked(env, atom, args, expected_core, names, ctx)
 
-      Inductive.get_ctor(env, cres) ->
+      ctor ->
         # Checking-mode constructor: pin erased indices from the expected type (a
         # reconstructed dependent-match branch body like `prim()`/`seq(l,r)` whose
         # indices no present argument determines), then let the kernel re-check the
@@ -1860,24 +1939,30 @@ defmodule Cure.Elab.Elaborator do
         # The fallback is reached only when the inference path already errored, so a
         # working constructor is untouched; either way the kernel re-checks below.
         result =
-          with {:ok, present} <- map_present_args(args, names, ctx, env),
-               {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
-            {:ok, term}
-          end
+          case align_constructor_args(cres, ctor, meta, args) do
+            {:error, _} = error ->
+              error
 
-        result =
-          case result do
-            {:ok, _} = ok ->
-              ok
+            {:ok, aligned_args} ->
+              inferred =
+                with {:ok, present} <- map_present_args(aligned_args, names, ctx, env),
+                     {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
+                  {:ok, term}
+                end
 
-            {:error, _} = orig ->
-              # Try the bidirectional fallback, but only let it *win when it
-              # succeeds*: if it also fails, surface the original inference error
-              # (e.g. a GADT `seq`'s genuine `:index_mismatch`), so the fallback is
-              # strictly additive and never masks a real diagnostic.
-              case elaborate_ctor_app_bidirectional(env, cres, args, names, ctx, expected_core) do
-                {:ok, _} = ok -> ok
-                {:error, _} -> orig
+              case inferred do
+                {:ok, _} = ok ->
+                  ok
+
+                {:error, _} = orig ->
+                  # Try the bidirectional fallback, but only let it *win when it
+                  # succeeds*: if it also fails, surface the original inference error
+                  # (e.g. a GADT `seq`'s genuine `:index_mismatch`), so the fallback is
+                  # strictly additive and never masks a real diagnostic.
+                  case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
+                    {:ok, _} = ok -> ok
+                    {:error, _} -> orig
+                  end
               end
           end
 
@@ -1939,18 +2024,42 @@ defmodule Cure.Elab.Elaborator do
         # ordinary saturated path. Idris elaborates an under-applied function
         # checked against a function type exactly this way; the kernel re-checks the
         # synthesized lambda, so only eta-equivalent well-typed terms are accepted.
-        residual = residual_explicit_arity(env, resolved, length(args))
+        overloaded? =
+          not String.contains?(name, ".") and
+            length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2
 
-        if residual > 0 and match?({:pi, _, _, _}, Kernel.normalize(ctx, expected_core)) do
-          elaborate_expr_checked(
-            eta_expand_call(meta, args, residual),
-            expected_core,
-            names,
-            ctx,
-            env
-          )
-        else
-          elaborate_checked_call_saturated(expr, resolved, expected_core, args, names, ctx, env)
+        alignment =
+          if overloaded?,
+            do: {:ok, args},
+            else: Cure.Elab.Overload.align(env, resolved, args, Keyword.get(meta, :arg_labels), call_label_opts(meta))
+
+        case alignment do
+          {:error, _} = error ->
+            error
+
+          {:ok, aligned_args} ->
+            aligned_expr = {:function_call, meta, aligned_args}
+            residual = residual_explicit_arity(env, resolved, length(aligned_args))
+
+            if residual > 0 and match?({:pi, _, _, _}, Kernel.normalize(ctx, expected_core)) do
+              elaborate_expr_checked(
+                eta_expand_call(meta, aligned_args, residual),
+                expected_core,
+                names,
+                ctx,
+                env
+              )
+            else
+              elaborate_checked_call_saturated(
+                aligned_expr,
+                resolved,
+                expected_core,
+                aligned_args,
+                names,
+                ctx,
+                env
+              )
+            end
         end
     end
   end
@@ -3303,16 +3412,17 @@ defmodule Cure.Elab.Elaborator do
   @doc """
   Resolve and elaborate an applied call to a bare OVERLOADED name (a set of ≥2
   members sharing one spelling — same-module discriminated members, or
-  cross-module providers with no unique winner) by inferring the argument types,
-  pruning candidates by first-order convertibility, and dispatching the survivor.
+  cross-module providers with no unique winner). Arguments are first aligned to
+  each candidate's telescope, then the aligned calls are elaborated
+  bidirectionally and the unique survivor is dispatched.
 
   Shared verbatim by TERM-position elaboration (`elaborate_named_call_resolved`)
   and dependent-INDEX-position lowering (`declarations.ex:lower_applied_type`) so
   both disambiguate identically — index position previously ran the pre-overload
   resolver and either mis-picked an ambient same-name provider (crashing in ι) or
   reported `:ambiguous_name`. Returns the standard `{:ok, term, type}` on a unique
-  survivor, or `Overload.resolve`'s `{:error, {:no_matching_overload | :ambiguous_overload, …}}`.
-  `candidates` is the caller's already-computed `overload_candidates/2` (≥2).
+  survivor, or a structured named-argument/overload error. `candidates` is the
+  caller's already-computed `overload_candidates/2` (≥2).
   """
   @spec elaborate_overloaded_app(
           Env.t(),
@@ -3321,13 +3431,56 @@ defmodule Cure.Elab.Elaborator do
           [String.t()] | nil,
           [String.t()],
           Context.t(),
-          [atom()]
+          [atom()],
+          keyword()
         ) :: {:ok, term(), term()} | {:error, term()}
-  def elaborate_overloaded_app(env, atom, args, arg_labels, names, ctx, candidates) do
-    with {:ok, present} <- map_present_args(args, names, ctx, env),
-         arg_types = Enum.map(present, fn {_term, ty} -> ty end),
-         {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, arg_labels, candidates) do
-      elaborate_global_app(env, winner, present, ctx)
+  def elaborate_overloaded_app(env, atom, args, arg_labels, names, ctx, candidates, opts \\ []) do
+    case Cure.Elab.Overload.align_candidates(env, candidates, args, arg_labels, opts) do
+      {:error, _} = error ->
+        error
+
+      aligned ->
+        survivors =
+          Enum.flat_map(aligned, fn {key, reordered} ->
+            case elaborate_implicit_app_bidirectional(env, key, reordered, names, ctx) do
+              {:ok, term, type} ->
+                [{key, term, type}]
+
+              {:error, _} ->
+                []
+            end
+          end)
+
+        case survivors do
+          [{_winner, term, type}] ->
+            {:ok, term, type}
+
+          [] ->
+            {:error, {:no_matching_overload, atom, []}}
+
+          many ->
+            keys = Enum.map(many, &elem(&1, 0))
+
+            if is_list(arg_labels) do
+              {:error,
+               {:named_argument_mismatch, :ambiguous_label,
+                %{
+                  key: atom,
+                  label: nil,
+                  written: arg_labels,
+                  candidates: keys,
+                  owners: Cure.Elab.Overload.candidate_owners(keys),
+                  argument_spans: Keyword.get(opts, :argument_spans, []),
+                  label_spans: Keyword.get(opts, :label_spans, []),
+                  parameter_spans:
+                    Enum.flat_map(keys, fn key ->
+                      Cure.Elab.SourceMetadata.parameter_spans(key) |> Enum.reject(&is_nil/1)
+                    end)
+                }}}
+            else
+              {:error, {:ambiguous_overload, atom, Cure.Elab.Overload.candidate_owners(keys)}}
+            end
+        end
     end
   end
 
@@ -9549,11 +9702,28 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_named_call_scoped(meta, args, scope, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
+    resolved_ctor = resolve_ctor_key(env, atom)
+    ctor = Inductive.get_ctor(env, resolved_ctor)
+    resolved_def = resolve_def_key(env, name, atom)
+    {meta, args} = normalize_constructor_named_args(meta, args, ctor)
 
-    with {:ok, core_args} <- map_elaborate(args, scope, env, &elaborate_expr/3) do
+    alignment =
       cond do
-        Inductive.get_ctor(env, atom) ->
-          ctor_key = Env.resolve_key(env, env.ctors, atom)
+        ctor ->
+          align_constructor_args(resolved_ctor, ctor, meta, args)
+
+        Env.get_def(env, resolved_def) ->
+          Cure.Elab.Overload.align(env, resolved_def, args, Keyword.get(meta, :arg_labels))
+
+        true ->
+          {:ok, args}
+      end
+
+    with {:ok, args} <- alignment,
+         {:ok, core_args} <- map_elaborate(args, scope, env, &elaborate_expr/3) do
+      cond do
+        ctor ->
+          ctor_key = resolved_ctor
 
           # A constructor head applied to arguments is a saturated constructor, not
           # a chain of `{:app, …}`. Mirror `elaborate_type/3`'s ctor-aware clause:

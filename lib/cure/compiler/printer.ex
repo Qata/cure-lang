@@ -604,8 +604,13 @@ defmodule Cure.Compiler.Printer do
     "Tuple(#{positions})"
   end
 
+  defp to_string({:named_call_argument, meta, [arg]}, depth, indent) do
+    "#{Keyword.fetch!(meta, :label)}: #{render(arg, depth, indent)}"
+  end
+
   defp to_string({:function_call, meta, args}, depth, indent) do
     name = Keyword.get(meta, :name, "unknown")
+    labels = Keyword.get(meta, :arg_labels)
 
     cond do
       # Record construction: Name{field: val}
@@ -614,13 +619,13 @@ defmodule Cure.Compiler.Printer do
         "#{name}{#{fields_str}}"
 
       # Send: send target, message
-      name == "send" and not Keyword.has_key?(meta, :pipe) ->
+      name == "send" and not Keyword.has_key?(meta, :pipe) and is_nil(labels) ->
         case args do
           [target, message] ->
             "send #{render(target, depth, indent)}, #{render(message, depth, indent)}"
 
           _ ->
-            "#{name}(#{call_args_to_string(args, depth, indent)})"
+            "#{name}(#{call_args_to_string(args, depth, indent, labels)})"
         end
 
       # Pipe call. `|>` binds loosely (the `Pipe` group), so a left operand
@@ -631,7 +636,9 @@ defmodule Cure.Compiler.Printer do
 
         case args do
           [piped | rest] when rest != [] ->
-            "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}(#{call_args_to_string(rest, depth, indent)})"
+            rest_labels = if is_list(labels), do: Enum.drop(labels, 1), else: nil
+
+            "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}(#{call_args_to_string(rest, depth, indent, rest_labels)})"
 
           [piped] ->
             "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}"
@@ -641,7 +648,7 @@ defmodule Cure.Compiler.Printer do
         end
 
       true ->
-        "#{quote_if_reserved(name)}(#{call_args_to_string(args, depth, indent)})"
+        "#{quote_if_reserved(name)}(#{call_args_to_string(args, depth, indent, labels)})"
     end
   end
 
@@ -1935,13 +1942,26 @@ defmodule Cure.Compiler.Printer do
   # the argument list is rendered one-per-line -- the only layout that both keeps
   # the comment and reparses. With no argument comment, this is byte-for-byte the
   # single-line span, so the common path is untouched.
-  defp call_args_to_string(args, depth, indent) do
-    if Enum.any?(args, &has_comment_trivia?/1) do
+  defp call_args_to_string(args, depth, indent, labels) do
+    multiline? = Enum.any?(args, &has_comment_trivia?/1)
+    args = labelled_call_args(args, labels)
+
+    if multiline? do
       render_call_args_multiline(args, depth, indent)
     else
       render_span(args, ",", depth, indent)
     end
   end
+
+  defp labelled_call_args(args, labels) when is_list(labels) and length(args) == length(labels) do
+    Enum.zip(args, labels)
+    |> Enum.map(fn
+      {arg, nil} -> arg
+      {arg, label} -> {:named_call_argument, [label: label], [arg]}
+    end)
+  end
+
+  defp labelled_call_args(args, _labels), do: args
 
   defp has_comment_trivia?(node) do
     meta = trivia_meta(node)

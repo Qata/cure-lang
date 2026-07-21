@@ -424,6 +424,7 @@ defmodule Cure.Elab.Declarations do
         # needs them to tell `move(to:)` from `move(from:)`. The body pass re-adds
         # the def (dropping this) and re-attaches its own copy.
         |> Env.put_labels(sig.name, param_label_vector(sig.params))
+        |> register_parameter_spans(sig.name, sig.params)
         |> maybe_register_lemma(sig, meta)
 
       env2 =
@@ -457,6 +458,7 @@ defmodule Cure.Elab.Declarations do
             env
             |> Env.add_def(sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)
             |> Env.put_labels(sig.name, param_label_vector(sig.params))
+            |> register_parameter_spans(sig.name, sig.params)
 
           {:ok, final}
         end
@@ -652,6 +654,7 @@ defmodule Cure.Elab.Declarations do
           env
           |> Env.add_def(sig.name, final_pi, lambda, quantities)
           |> Env.put_labels(sig.name, param_label_vector(sig.params))
+          |> register_parameter_spans(sig.name, sig.params)
 
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
@@ -1693,6 +1696,23 @@ defmodule Cure.Elab.Declarations do
         label -> {:required, to_string(label)}
       end
     end)
+  end
+
+  defp param_label_span_vector([]), do: nil
+
+  defp param_label_span_vector(params) do
+    Enum.map(params, fn {:param, meta, _name} ->
+      case Cure.MetaAST.Metadata.source_info(meta) do
+        %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+        %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+        _ -> nil
+      end
+    end)
+  end
+
+  defp register_parameter_spans(env, name, params) do
+    :ok = Cure.Elab.SourceMetadata.put_parameter_spans(Env.owned_name(env, name), param_label_span_vector(params) || [])
+    env
   end
 
   defp param_name_string(n) when is_binary(n), do: n

@@ -583,25 +583,25 @@ failures and 6 excluded (138 expected immune responses).
 **Purpose:** finish item 10 by extending, not replacing, Cure's existing
 declaration-order label system.
 
-- [ ] Amend the older overloading/argument-label design to state that the July
+- [x] Amend the older overloading/argument-label design to state that the July
   21 proof-language design supersedes its “no reordering” v1 non-goal.
-- [ ] Extend call metadata so each argument retains label plus its own range;
+- [x] Extend call metadata so each argument retains label plus its own range;
   preserve the all-positional historical AST shape.
-- [ ] Resolve labels against the chosen declaration's present parameter
+- [x] Resolve labels against the chosen declaration's present parameter
   telescope, then reorder surface arguments into telescope order before
   bidirectional implicit/dependent solving. Lock the general mixing rule:
   positional arguments must precede every named argument and fill the leftmost
   present parameters in declaration order; following named arguments may appear
   in any order and fill the remaining parameters. Reject every
   positional-after-named call.
-- [ ] Ensure overload pruning considers label sets independent of source order,
+- [x] Ensure overload pruning considers label sets independent of source order,
   while types are checked only after arguments are aligned to each candidate.
-- [ ] Reject unknown, duplicate, missing-required, misplaced, and
+- [x] Reject unknown, duplicate, missing-required, misplaced, and
   overload-ambiguous labels with E115. Retain declaration and per-argument
   ranges, implicitness, and candidate owners.
-- [ ] Update printer stability, formatter, signature help, inlay hints, and code
+- [x] Update printer stability, formatter, signature help, inlay hints, and code
   actions. Named arguments remain a general language facility, not proof-only.
-- [ ] Cover dependent telescopes where a later-written named argument determines
+- [x] Cover dependent telescopes where a later-written named argument determines
   an earlier implicit, typeclasses/dictionaries, overloads, partial application,
   runtime arity, erasure, macros/reflection, and constructor-call disambiguation.
 
@@ -609,6 +609,26 @@ declaration-order label system.
 complete Antigen.
 
 **Commit:** `feat(language): support reorderable named arguments`
+
+**Completed evidence (2026-07-21):** call metadata retains an aligned label and
+label-range vector while all-positional calls preserve their historical AST.
+Every ordinary, overloaded, constructor, interface-method, constrained, checked,
+partial, and piped call path aligns authored arguments against its present
+telescope before Core construction; overload candidates are aligned and checked
+independently. E115 covers positional-after-named, unknown, duplicate, missing,
+and ambiguous labels with authored primary ranges, declaration secondaries, and
+safe edits. Completion, label hover, reordered signature help, inlay hints, and
+generic code actions share the same source metadata. Dedicated tests prove
+dependent implicit solving, dictionary insertion, constructor disambiguation,
+overload order independence, reflection hygiene, formatter stability, and exact
+Core/erasure equivalence with positional calls. No trusted Core module changed;
+frontend-only declaration ranges do not enter `Cure.Core.Env`, artifact hashes,
+or emitted forms. Changed-file formatting and warnings-as-errors compilation
+pass, the canonical 122-module stdlib compiles, diagnostic coverage is 61/61,
+complete Antigen is 318/318, and the full suite passes 5,413 tests with 0
+failures and 6 excluded (135 expected immune responses). A first loaded run had
+one 8-second prelude-scan timeout; the isolated test passed 1/1 and the clean
+full rerun above passed unchanged.
 
 ## Task 11: Restore and finish verified-LIA Task 4 using the new language
 

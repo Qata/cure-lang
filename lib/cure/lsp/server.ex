@@ -462,7 +462,8 @@ defmodule Cure.LSP.Server do
               %{kind: :induction_command}
 
             true ->
-              Enum.find(induction_binding_symbols(ast), &(&1.name == word)) ||
+              named_argument_at(symbols, target_line, char, word) ||
+                Enum.find(induction_binding_symbols(ast), &(&1.name == word)) ||
                 Enum.find(equation_symbols(ast), &(&1.name == dotted_word)) ||
                 Enum.find(proof_rule_symbols(ast), &(&1.name == word)) ||
                 Enum.find(symbols, fn s -> s.name == word end)
@@ -512,6 +513,12 @@ defmodule Cure.LSP.Server do
 
           %{kind: :function, signature: sig, line: fn_line} ->
             hover_text = "```cure\n#{sig}\n```\n\n*Defined at line #{fn_line}*"
+            %{"contents" => %{"kind" => "markdown", "value" => hover_text}}
+
+          %{kind: :named_argument, label: label, parameter: parameter, type: type, function: function} ->
+            hover_text =
+              "```cure\n#{function}(#{label}: value)\n```\n\n*Named argument `#{label}` fills parameter `#{parameter}: #{type}`. Named arguments may be reordered after any positional prefix.*"
+
             %{"contents" => %{"kind" => "markdown", "value" => hover_text}}
 
           %{kind: :proof_rule, proposition: proposition, line: rule_line} ->
@@ -814,6 +821,7 @@ defmodule Cure.LSP.Server do
       case parse_to_ast(text) do
         {:ok, ast} ->
           symbols = build_symbol_table(ast)
+          named_arguments = named_argument_completions(symbols, prefix)
 
           ordinary =
             Enum.map(symbols, fn s ->
@@ -856,7 +864,7 @@ defmodule Cure.LSP.Server do
               induction_bindings ++ local_rules ++ equations
 
             true ->
-              ordinary ++ equations ++ induction_bindings
+              named_arguments ++ ordinary ++ equations ++ induction_bindings
           end
 
         _ ->
@@ -1274,7 +1282,18 @@ defmodule Cure.LSP.Server do
 
     sig = "fn #{name}(#{param_str})"
     info = Metadata.source_info(meta)
-    [%{name: name, kind: :function, line: line, signature: sig, span: info && info.whole} | acc]
+
+    [
+      %{
+        name: name,
+        kind: :function,
+        line: line,
+        signature: sig,
+        parameters: Enum.map(params, &parameter_info/1),
+        span: info && info.whole
+      }
+      | acc
+    ]
   end
 
   defp extract_symbols(_, acc, _source, _encoding), do: acc
@@ -1285,9 +1304,12 @@ defmodule Cure.LSP.Server do
   # rendered with a safe fallback so inlay-hint / symbol requests cannot
   # crash the LSP server.
   defp format_param({:param, pm, pn}) when is_list(pm) do
+    external = Keyword.get(pm, :label)
+    name = to_string(pn)
+
     case Keyword.get(pm, :type) do
-      nil -> to_string(pn)
-      type -> "#{pn}: #{format_type(type)}"
+      nil -> if(external, do: "#{external} #{name}", else: name)
+      type -> if(external, do: "#{external} #{name}: #{format_type(type)}", else: "#{name}: #{format_type(type)}")
     end
   end
 
@@ -1296,6 +1318,17 @@ defmodule Cure.LSP.Server do
   defp format_param(name) when is_binary(name), do: name
   defp format_param(name) when is_atom(name), do: Atom.to_string(name)
   defp format_param(other), do: inspect(other)
+
+  defp parameter_info({:param, meta, name}) do
+    %{
+      label: to_string(Keyword.get(meta, :label) || name),
+      name: to_string(name),
+      required: not is_nil(Keyword.get(meta, :label)),
+      type: format_type(Keyword.get(meta, :type))
+    }
+  end
+
+  defp parameter_info(other), do: %{label: format_param(other), name: format_param(other), required: false, type: "Any"}
 
   defp format_type({:variable, _, name}) when is_binary(name), do: name
   defp format_type({:variable, _, name}) when is_atom(name), do: Atom.to_string(name)
@@ -1307,35 +1340,127 @@ defmodule Cure.LSP.Server do
   defp format_type(other) when is_atom(other), do: Atom.to_string(other)
   defp format_type(_), do: "Any"
 
+  defp named_argument_at(symbols, line, _char, word) when is_binary(word) and word != "" do
+    escaped = Regex.escape(word)
+
+    case Regex.run(~r/([a-z_][a-zA-Z0-9_]*)\s*\([^)]*\b#{escaped}\s*:/, line) do
+      [_, function] ->
+        with %{parameters: parameters} <- Enum.find(symbols, &(&1.kind == :function and &1.name == function)),
+             %{label: ^word, name: name, type: type} <- Enum.find(parameters, &(&1.label == word)) do
+          %{kind: :named_argument, label: word, parameter: name, type: type, function: function}
+        else
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp named_argument_at(_symbols, _line, _char, _word), do: nil
+
+  defp named_argument_completions(symbols, prefix) do
+    case Regex.scan(~r/([a-z_][a-zA-Z0-9_]*)\s*\(([^()]*)$/s, prefix) |> List.last() do
+      [_, function, written] ->
+        supplied = Regex.scan(~r/\b([a-z_][a-zA-Z0-9_]*)\s*:/, written, capture: :all_but_first) |> List.flatten()
+
+        case Enum.find(symbols, &(&1.kind == :function and &1.name == function)) do
+          %{parameters: parameters} ->
+            parameters
+            |> Enum.reject(&(&1.label in supplied))
+            |> Enum.map(fn parameter ->
+              %{
+                "label" => parameter.label <> ":",
+                "kind" => 5,
+                "detail" => "Named argument for #{parameter.name}: #{parameter.type}",
+                "insertText" => parameter.label <> ": ${1:value}",
+                "insertTextFormat" => 2
+              }
+            end)
+
+          _ ->
+            []
+        end
+
+      _ ->
+        []
+    end
+  end
+
   # -- Inlay hints --------------------------------------------------------------
 
   @doc false
   def compute_inlay_hints(text) do
     case parse_to_ast(text) do
       {:ok, ast} ->
-        ast
-        |> build_symbol_table()
-        |> Enum.flat_map(fn s ->
-          case s do
-            %{kind: :function, line: l, signature: sig} ->
-              [
-                %{
-                  "position" => %{"line" => l - 1, "character" => 0},
-                  "label" => "# " <> sig,
-                  "kind" => 2,
-                  "paddingRight" => true
-                }
-              ]
+        symbols = build_symbol_table(ast)
 
-            _ ->
-              []
-          end
-        end)
+        declaration_hints =
+          Enum.flat_map(symbols, fn s ->
+            case s do
+              %{kind: :function, line: l, signature: sig} ->
+                [
+                  %{
+                    "position" => %{"line" => l - 1, "character" => 0},
+                    "label" => "# " <> sig,
+                    "kind" => 2,
+                    "paddingRight" => true
+                  }
+                ]
+
+              _ ->
+                []
+            end
+          end)
+
+        declaration_hints ++ named_call_inlay_hints(ast, symbols)
 
       _ ->
         []
     end
   end
+
+  defp named_call_inlay_hints(ast, symbols) do
+    ast
+    |> collect_function_calls()
+    |> Enum.flat_map(fn {:function_call, meta, _args} ->
+      name = Keyword.get(meta, :name)
+      labels = Keyword.get(meta, :arg_labels)
+      info = Metadata.source_info(meta)
+
+      with %{parameters: parameters} <- Enum.find(symbols, &(&1.kind == :function and &1.name == name)),
+           %Cure.MetaAST.SourceInfo{arguments: spans} <- info do
+        labels = labels || List.duplicate(nil, length(spans))
+
+        Enum.zip([spans, labels, parameters])
+        |> Enum.flat_map(fn
+          {%Cure.Diagnostic.Span{} = span, nil, parameter} ->
+            [
+              %{
+                "position" => %{"line" => span.start_line - 1, "character" => span.start_column - 1},
+                "label" => parameter.label <> ":",
+                "kind" => 2,
+                "paddingRight" => true
+              }
+            ]
+
+          _ ->
+            []
+        end)
+      else
+        _ -> []
+      end
+    end)
+  end
+
+  defp collect_function_calls({:function_call, _meta, args} = call),
+    do: [call | Enum.flat_map(args, &collect_function_calls/1)]
+
+  defp collect_function_calls({_tag, _meta, children}) when is_list(children),
+    do: Enum.flat_map(children, &collect_function_calls/1)
+
+  defp collect_function_calls(list) when is_list(list), do: Enum.flat_map(list, &collect_function_calls/1)
+  defp collect_function_calls(_other), do: []
 
   # -- Signature help -----------------------------------------------------------
 
@@ -1345,18 +1470,31 @@ defmodule Cure.LSP.Server do
     target = Enum.at(lines, line, "")
     prefix = String.slice(target, 0, char)
 
-    case Regex.run(~r/([a-z_][a-zA-Z0-9_]*)\s*\(/, prefix |> String.reverse() |> String.reverse()) do
-      [_, name] ->
+    case Regex.scan(~r/([a-z_][a-zA-Z0-9_]*)\s*\(([^()]*)$/s, prefix) |> List.last() do
+      [_, name, written] ->
         case parse_to_ast(text) do
           {:ok, ast} ->
             symbols = build_symbol_table(ast)
 
             case Enum.find(symbols, fn s -> s.name == name and s.kind == :function end) do
-              %{signature: sig} ->
+              %{signature: sig, parameters: parameters} ->
+                active = active_named_parameter(parameters, written)
+
                 %{
-                  "signatures" => [%{"label" => sig, "parameters" => []}],
+                  "signatures" => [
+                    %{
+                      "label" => sig,
+                      "parameters" =>
+                        Enum.map(parameters, fn parameter ->
+                          %{
+                            "label" => parameter.label,
+                            "documentation" => "#{parameter.name}: #{parameter.type}"
+                          }
+                        end)
+                    }
+                  ],
                   "activeSignature" => 0,
-                  "activeParameter" => 0
+                  "activeParameter" => active
                 }
 
               _ ->
@@ -1369,6 +1507,15 @@ defmodule Cure.LSP.Server do
 
       _ ->
         nil
+    end
+  end
+
+  defp active_named_parameter(parameters, written) do
+    current = written |> String.split(",") |> List.last() |> String.trim()
+
+    case Regex.run(~r/^([a-z_][a-zA-Z0-9_]*)\s*:/, current) do
+      [_, label] -> Enum.find_index(parameters, &(&1.label == label)) || 0
+      _ -> min(length(String.split(written, ",")) - 1, max(length(parameters) - 1, 0))
     end
   end
 

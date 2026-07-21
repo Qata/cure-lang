@@ -30,6 +30,13 @@ defmodule Cure.Compiler.FormatterTest do
       {:ok, twice} = Formatter.format(once)
       assert once == twice
     end
+
+    test "named-argument order and labels survive formatting at a fixed point" do
+      source = "mod NamedFmt\n  fn f(a: Int, b: Int) -> Int = a + b\n  fn g() -> Int = f(b: 2, a: 1)\n"
+      assert {:ok, once} = Formatter.format(source)
+      assert once =~ "f(b: 2, a: 1)"
+      assert {:ok, ^once} = Formatter.format(once)
+    end
   end
 
   describe "format/2 -- trailing whitespace" do

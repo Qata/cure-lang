@@ -12,6 +12,7 @@ defmodule Cure.MetaAST.Metadata do
     :operator_span,
     :operand_spans,
     :argument_spans,
+    :arg_label_spans,
     :annotation_span,
     :body_span,
     :pattern_span,

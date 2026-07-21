@@ -135,6 +135,9 @@ defmodule Cure.DiagnosticExerciserTest do
           member: "Missing",
           candidate_equations: []
         }}},
+      {"named argument mismatch", "E115",
+       {:named_argument_mismatch, :unknown_label,
+        %{label: "nope", written: ["nope"], argument_spans: [], label_spans: [], parameter_spans: []}}},
       {"beam write failure", "E096", {:write_failed, "_build/Demo.beam", :eacces}},
       {"beam load failure", "E098", {:load_failed, :badfile}},
       {"beam compilation failure", "E098", {:compilation_failed, [{:bad_form, :detail}]}},
