@@ -553,4 +553,58 @@ defmodule Cure.Compiler.IncrementalTest do
     refute Enum.any?(Cure.Elab.Program.prelude_manifest(), &(&1.source == "P")),
            "stale @prelude manifest: P still marked after its marker was removed and it recompiled"
   end
+
+  # Regression (cold-clone bootstrap): a `@prelude` provider under `Std.*` is
+  # injected as an ambient `use` into EVERY sibling module (`inject_prelude_uses/2`),
+  # but `compile_order/1` deliberately follows the acyclic `order_deps` graph, which
+  # does NOT carry those ambient edges — the prelude closure is cyclic, so no order
+  # can place every provider first. A provider therefore routinely compiles AFTER its
+  # ambient consumers. `validate_stdlib_imports/1` must not demand a loadable BEAM for
+  # such an injected import: on a cold `_build` (fresh clone) no stdlib beam exists
+  # yet, so requiring one fails EVERY module with `{:missing_stdlib_module, ...}` and
+  # the stdlib can never bootstrap itself. Explicit `use` edges keep the beam
+  # guarantee — those ARE `order_deps` edges, so the dep is always built first.
+  @std_ambient_provider """
+  @prelude
+  mod Std.AmbientFixture
+    fn ambient() -> Int = 7
+  """
+
+  @std_ambient_consumer """
+  mod Std.AlphaFixture
+    fn alpha() -> Int = 1
+  """
+
+  test "an injected ambient @prelude provider does not require a prebuilt beam (cold bootstrap)" do
+    root = Path.join(System.tmp_dir!(), "cure_cold_#{:erlang.unique_integer([:positive])}")
+    src = Path.join(root, "std")
+    out = Path.join(root, "ebin")
+    File.mkdir_p!(src)
+    on_exit(fn -> File.rm_rf!(root) end)
+
+    File.write!(Path.join(src, "ambient_fixture.cure"), @std_ambient_provider)
+    File.write!(Path.join(src, "alpha_fixture.cure"), @std_ambient_consumer)
+    paths = Path.wildcard(Path.join(src, "*.cure"))
+
+    prior = Application.get_env(:cure, :stdlib_source_dir)
+    Application.put_env(:cure, :stdlib_source_dir, src)
+
+    on_exit(fn ->
+      if prior, do: Application.put_env(:cure, :stdlib_source_dir, prior),
+        else: Application.delete_env(:cure, :stdlib_source_dir)
+    end)
+
+    {:ok, graph} = DepGraph.scan(paths)
+    pos = Incremental.compile_order(graph) |> Enum.with_index() |> Map.new()
+
+    assert pos["Std.AlphaFixture"] < pos["Std.AmbientFixture"],
+           "precondition: the consumer must be scheduled BEFORE the ambient provider"
+
+    assert {:ok, s} = Incremental.compile_dir(paths, out, source_roots: [src])
+
+    assert s.errors == [],
+           "cold build must not require a prebuilt beam for an injected @prelude import"
+
+    assert Enum.sort(s.compiled) == ["Std.AlphaFixture", "Std.AmbientFixture"]
+  end
 end

@@ -40,11 +40,25 @@ defmodule Cure.Elab.Program do
   @spec check_ast(tuple() | list()) :: {:ok, Env.t()} | {:error, term()}
   def check_ast(ast), do: check_ast(ast, [])
 
-  @doc "Validate that every `use Std.X` import names an available stdlib source."
+  @doc """
+  Validate that every author-written `use Std.X` import names an available stdlib
+  source whose module is loadable.
+
+  Compiler-injected ambient `@prelude` imports are exempt. They are not
+  `order_deps` edges, so `Incremental.compile_order/1` cannot schedule the
+  provider before its ambient consumers (the prelude closure is cyclic — no such
+  order exists). Requiring a loadable beam for them makes the stdlib unable to
+  bootstrap itself: on a cold `_build`, every module fails with
+  `{:missing_stdlib_module, ...}` because no stdlib beam has been built yet.
+  An explicit `use` keeps the beam requirement — that IS an `order_deps` edge, so
+  its dependency is always compiled first.
+  """
   @spec validate_stdlib_imports(tuple() | list()) :: :ok | {:error, term()}
   def validate_stdlib_imports(ast) do
     ast
-    |> imports()
+    |> import_entries()
+    |> Enum.reject(fn {_sources, meta} -> Keyword.get(meta, :prelude_injected, false) end)
+    |> Enum.flat_map(fn {sources, _meta} -> sources end)
     |> Enum.find_value(:ok, fn source ->
       case import_source_path(source) do
         {:ok, module_name, _path} ->
@@ -1418,12 +1432,18 @@ defmodule Cure.Elab.Program do
     end
   end
 
-  defp imports({:block, _meta, items}) when is_list(items),
-    do: Enum.flat_map(items, &imports/1)
+  defp imports(ast), do: ast |> import_entries() |> Enum.flat_map(fn {sources, _meta} -> sources end)
 
-  defp imports({:container, meta, body}) when is_list(meta) do
+  # Same walk as `imports/1`, but each import's sources are paired with the import
+  # node's meta so a caller can tell an author-written `use` from a compiler-injected
+  # ambient `@prelude` one (`Cure.Compiler.inject_prelude_uses/2` tags those
+  # `prelude_injected: true`). `imports/1` discards the meta and is unchanged.
+  defp import_entries({:block, _meta, items}) when is_list(items),
+    do: Enum.flat_map(items, &import_entries/1)
+
+  defp import_entries({:container, meta, body}) when is_list(meta) do
     if module_like_container?(meta) do
-      body |> List.wrap() |> Enum.flat_map(&imports/1)
+      body |> List.wrap() |> Enum.flat_map(&import_entries/1)
     else
       []
     end
@@ -1435,20 +1455,23 @@ defmodule Cure.Elab.Program do
   # (`:exposing` — the selective-name form `use M exposing (a, b)` — is a filter on
   # WHICH of the module's names come in unqualified, not a different module list, so
   # it does not affect the source expansion here.)
-  defp imports({:import, meta, _}) when is_list(meta) do
+  defp import_entries({:import, meta, _}) when is_list(meta) do
     source = Keyword.fetch!(meta, :source)
 
-    case Keyword.get(meta, :items, []) do
-      [] -> [source]
-      items -> Enum.map(items, &(source <> "." <> to_string(&1)))
-    end
+    sources =
+      case Keyword.get(meta, :items, []) do
+        [] -> [source]
+        items -> Enum.map(items, &(source <> "." <> to_string(&1)))
+      end
+
+    [{sources, meta}]
   end
 
-  defp imports({_tag, _meta, children}) when is_list(children),
-    do: Enum.flat_map(children, &imports/1)
+  defp import_entries({_tag, _meta, children}) when is_list(children),
+    do: Enum.flat_map(children, &import_entries/1)
 
-  defp imports(list) when is_list(list), do: Enum.flat_map(list, &imports/1)
-  defp imports(_other), do: []
+  defp import_entries(list) when is_list(list), do: Enum.flat_map(list, &import_entries/1)
+  defp import_entries(_other), do: []
 
   # Distinct {module_id, path} for every DIRECT import source, deduped by
   # module_id. Used for the merged-slice list (§3.2 re-keying/merging operates

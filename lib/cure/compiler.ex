@@ -316,7 +316,14 @@ defmodule Cure.Compiler do
       imports =
         providers
         |> Enum.reject(&(&1 == self or MapSet.member?(existing, &1)))
-        |> Enum.map(&{:import, [source: &1, import_type: :use, language: :cure, line: 1, col: 1], []})
+        # `prelude_injected: true` marks these as COMPILER-SYNTHESIZED, not lines the
+        # author wrote. `Cure.Elab.Program.validate_stdlib_imports/1` keys off it: an
+        # ambient provider is NOT an `order_deps` edge, so the compile order cannot
+        # guarantee its beam exists yet (see `Incremental.compile_order/1`), and
+        # demanding one breaks a cold build of the stdlib itself.
+        |> Enum.map(
+          &{:import, [source: &1, import_type: :use, language: :cure, line: 1, col: 1, prelude_injected: true], []}
+        )
 
       {:container, meta, imports ++ List.wrap(body)}
     else
