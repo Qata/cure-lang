@@ -1070,34 +1070,79 @@ defmodule Cure.Elab.Elaborator do
   # typeclass method desugar (Phase 2). Extracted verbatim from the former
   # `{:binary_op}` body so the `:overloaded` and `<>` routes sit beside it.
   defp elaborate_binop(op, l, r, expr, names, ctx, env) do
-    with {:ok, l_core, l_type} <- elaborate_expr_typed(l, names, ctx, env),
-         {:ok, r_core, _rt} <- elaborate_expr_typed(r, names, ctx, env),
-         {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
-         {:ok, type} <- Kernel.infer(ctx, term) do
-      {:ok, term, type}
-    else
-      {:error, {:unsupported_operand_type, :+}} ->
-        combine_call(l, r, names, ctx, env)
+    case elaborate_expr_typed(l, names, ctx, env) do
+      {:error, reason} ->
+        {:error, attach_operator_operand_context(reason, l, 0, op)}
 
-      {:error, {:unsupported_operand_type, cmp}}
-      when cmp in [:<, :>, :<=, :>=] ->
-        op_method_call(cmp, l, r, names, ctx, env)
+      {:ok, l_core, l_type} ->
+        case elaborate_expr_typed(r, names, ctx, env) do
+          {:error, reason} ->
+            {:error, attach_operator_operand_context(reason, r, 1, op)}
 
-      # `==`/`!=` on a non-primitive operand (String, ADT, abstract/rigid type
-      # variable) — `build_binop`'s `{:==,:!=}` clause reports the operand has no
-      # primitive twin, and the SOLE route is the `Equatable` method desugar. A
-      # rigid type variable with no in-scope dictionary rejects here as
-      # `{:no_instance, :Equatable, {:rigid, _}}`, the intended sole-route error.
-      {:error, {:unsupported_operand_type, eq}}
-      when eq in [:==, :!=] ->
-        op_method_call(eq, l, r, names, ctx, env)
+          {:ok, r_core, _rt} ->
+            with {:ok, term} <- build_binop(op, l_core, r_core, l_type, ctx),
+                 {:ok, type} <- Kernel.infer(ctx, term) do
+              {:ok, term, type}
+            else
+              {:error, {:unsupported_operand_type, :+}} ->
+                combine_call(l, r, names, ctx, env)
 
-      :unsupported_op ->
-        {:error, {:unsupported_expression, expr}}
+              {:error, {:unsupported_operand_type, cmp}}
+              when cmp in [:<, :>, :<=, :>=] ->
+                op_method_call(cmp, l, r, names, ctx, env)
 
-      other ->
-        other
+              # `==`/`!=` on a non-primitive operand (String, ADT, abstract/rigid type
+              # variable) — `build_binop`'s `{:==,:!=}` clause reports the operand has no
+              # primitive twin, and the SOLE route is the `Equatable` method desugar. A
+              # rigid type variable with no in-scope dictionary rejects here as
+              # `{:no_instance, :Equatable, {:rigid, _}}`, the intended sole-route error.
+              {:error, {:unsupported_operand_type, eq}}
+              when eq in [:==, :!=] ->
+                op_method_call(eq, l, r, names, ctx, env)
+
+              :unsupported_op ->
+                {:error, {:unsupported_expression, expr}}
+
+              {:error, reason} ->
+                {:error, attach_operator_operand_context(reason, r, 1, op)}
+
+              other ->
+                other
+            end
+        end
     end
+  end
+
+  defp attach_operator_operand_context({:source_context, reason, context}, operand, index, op)
+       when is_map(context) do
+    {:source_context, reason, Map.merge(context, operator_operand_context(operand, index, op))}
+  end
+
+  # Nested operators use these values as internal dispatch signals. Preserve
+  # them so the enclosing operator can still lower to its method-call route.
+  defp attach_operator_operand_context({:unsupported_operand_type, operator}, _operand, _index, _op),
+    do: {:unsupported_operand_type, operator}
+
+  defp attach_operator_operand_context(:unsupported_op, _operand, _index, _op), do: :unsupported_op
+
+  defp attach_operator_operand_context(reason, operand, index, op) do
+    {:source_context, reason, operator_operand_context(operand, index, op)}
+  end
+
+  defp operator_operand_context(operand, index, op) do
+    span = surface_expression_span(operand)
+
+    %{
+      line: span && span.start_line,
+      column: span && span.start_column,
+      length: span && max(1, span.end_byte - span.start_byte),
+      span: span,
+      expectation_span: span,
+      checking: op,
+      expression_category: expression_category(operand),
+      expectation_origin: :operator_operand,
+      argument_index: index
+    }
   end
 
   # A user-declared overloadable operator (`x <?> y`) is sugar for a call on the

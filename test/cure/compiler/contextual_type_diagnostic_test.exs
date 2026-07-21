@@ -149,6 +149,39 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this argument has the wrong type"
   end
 
+  test "an operator operand conversion retains its operand origin and caret" do
+    source = "fn main() -> Bool = \"bad\" == 1\n"
+    operand = raw_span(source, "\"bad\"", 1, 22)
+
+    reason =
+      {:source_context, {:conversion_failure, "String", "Int"},
+       %{
+         line: 1,
+         column: 22,
+         length: 5,
+         span: operand,
+         expectation_span: operand,
+         checking: :==,
+         argument_index: 0,
+         expression_category: :literal,
+         expectation_origin: :operator_operand
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "operator.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Operator cannot use this value"
+    assert diagnostic.payload.origin.kind == :operator_operand
+    assert diagnostic.payload.origin.owner == :==
+    assert diagnostic.payload.origin.index == 0
+    assert diagnostic.primary.span.start_column == 22
+    assert rendered =~ "The `==` operator cannot use this operand type"
+    assert rendered =~ "Expected: Int"
+    assert rendered =~ "Found:    String"
+    assert rendered =~ "1 | fn main() -> Bool = \"bad\" == 1"
+    assert rendered =~ "this operator operand has the wrong type"
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 
