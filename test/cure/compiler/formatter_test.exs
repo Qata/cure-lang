@@ -132,7 +132,7 @@ defmodule Cure.Compiler.FormatterTest do
     end
 
     test "leaves content inside regex alone" do
-      src = "mod Demo\n  fn f() -> Regex = ~r/a+b/i\n"
+      src = "mod Demo\n  fn f() -> Regex = /a+b/i\n"
       assert {:ok, ^src} = Formatter.format(src)
     end
 

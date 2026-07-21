@@ -48,7 +48,7 @@ defmodule Cure.Compiler.ParserTest do
     end
 
     test "regex" do
-      assert {:function_call, meta, [pattern, flags]} = parse!("~r/[a-z]+/i")
+      assert {:function_call, meta, [pattern, flags]} = parse!("/[a-z]+/i")
       assert meta[:name] == "Std.Regex.literal"
       assert {:literal, pattern_meta, "[a-z]+"} = pattern
       assert pattern_meta[:subtype] == :string

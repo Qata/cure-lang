@@ -167,20 +167,18 @@ defmodule Cure.Compiler.MacroErrorFloorTest do
     refute rendered =~ ":malformed_hole"
   end
 
-  test "a macro-use mismatch against a structured-value token (regex) yields a diagnostic, not a crash" do
-    # A :regex token's value is a `{body, flags}` TUPLE; match_segments'
-    # `{:lit, w}` literal comparison used `to_string(tok.value)`, which RAISES
-    # on a tuple — so `say ~r/foo/` (rule `say hello`) crashed the parser
-    # instead of producing a mismatch. Must yield the friendly diagnostic.
+  test "a macro-use mismatch against a regex expression yields a diagnostic, not a crash" do
+    # A regex expression after `say` is not a macro literal match, so the
+    # invocation must produce the friendly mismatch diagnostic.
     errors =
-      errors_of("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say ~r/foo/\n")
+      errors_of("mod M\n  macro Say\n    syntax say hello becomes Clock.now()\n  fn f() = say /foo/\n")
 
     mismatch = Enum.find(errors, &match?({:macro_use_mismatch, "say", _, _, _, _}, &1))
     assert mismatch, "expected a :macro_use_mismatch error"
 
     rendered = Errors.format_error(mismatch, "f.cure")
     assert rendered =~ "say"
-    assert rendered =~ "regex"
+    assert rendered =~ "/"
   end
 
   test "a macro-use mismatch against an interpolated string (list value) yields a diagnostic, not a crash" do

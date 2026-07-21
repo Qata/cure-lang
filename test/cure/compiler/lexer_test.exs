@@ -262,11 +262,11 @@ defmodule Cure.Compiler.LexerTest do
 
   describe "regex literals" do
     test "simple regex" do
-      assert [%Token{type: :regex, value: {"[a-z]+", "i"}}, _] = lex!("~r/[a-z]+/i")
+      assert [%Token{type: :regex, value: {"[a-z]+", "i"}}, _] = lex!("/[a-z]+/i")
     end
 
     test "regex without flags" do
-      assert [%Token{type: :regex, value: {"\\d+", ""}}, _] = lex!("~r/\\d+/")
+      assert [%Token{type: :regex, value: {"\\d+", ""}}, _] = lex!("/\\d+/")
     end
 
     test "bare slash regex is recognized where an expression starts" do

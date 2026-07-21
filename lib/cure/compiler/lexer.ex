@@ -233,10 +233,6 @@ defmodule Cure.Compiler.Lexer do
       ?: ->
         lex_atom_or_colon(state)
 
-      # Regex sigil
-      ?~ ->
-        lex_regex(state)
-
       # Binary literal << >>
       ?< ->
         lex_angle_or_op(state)
@@ -1281,30 +1277,6 @@ defmodule Cure.Compiler.Lexer do
         token = Token.new(:colon, ":", state.line, start_col)
         maybe_emit_event(state, token)
         {:ok, %{state | tokens: [token | state.tokens]} |> advance(1)}
-    end
-  end
-
-  # -- Regex -----------------------------------------------------------------
-
-  defp lex_regex(state) do
-    start_col = state.col
-
-    if peek_at(state, 1) == ?r and peek_at(state, 2) == ?/ do
-      state = advance(state, 3)
-      {body, state} = consume_regex_body(state)
-
-      if peek(state) == ?/ do
-        state = advance(state, 1)
-        # Read flags
-        {flags, state} = consume_while(state, fn c -> c in ?a..?z end)
-        token = Token.new(:regex, {body, flags}, state.line, start_col)
-        maybe_emit_event(state, token)
-        {:ok, %{state | tokens: [token | state.tokens]}}
-      else
-        {:error, {:unterminated_regex, state.line, start_col}, state}
-      end
-    else
-      {:error, {:unexpected_character, ?~, state.line, state.col}, state}
     end
   end
 
