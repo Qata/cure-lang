@@ -98,7 +98,7 @@ defmodule Cure.Diagnostic.Registry do
   }
   @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 E116 W086 W088]
   @known_producers ~w[
-    beam_writer dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
+    beam_writer dependency_graph doctor elaboration kernel lexer macro_expansion
     module_loader name_resolution operational parser pattern_checker proof_checker
     totality_checker
   ]a
@@ -108,7 +108,6 @@ defmodule Cure.Diagnostic.Registry do
     doctor: Cure.Doctor,
     elaboration: Cure.Elab.Program,
     kernel: Cure.Core.Kernel,
-    kernel_conversion: Cure.Elab.TypeConv,
     lexer: Cure.Compiler.Lexer,
     macro_expansion: Cure.Elab.MacroExpand,
     module_loader: Cure.Compiler.Incremental,
@@ -1804,7 +1803,11 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E090"), do: [:elaboration]
   defp producers("E091"), do: [:name_resolution, :pattern_checker]
   defp producers("E092"), do: [:macro_expansion, :parser]
-  defp producers("E093"), do: [:elaboration, :kernel, :kernel_conversion]
+  # `Cure.Elab.TypeConv.convertible?/3` is a boolean query over `Core.Conv`; it
+  # cannot emit a diagnostic. Conversion failures reported as E093 are produced
+  # either by the surface elaborator or directly by `Cure.Core.Kernel`, so do not
+  # advertise an unreachable `:kernel_conversion` producer branch.
+  defp producers("E093"), do: [:elaboration, :kernel]
   defp producers("E094"), do: [:lexer, :parser]
   defp producers("E101"), do: [:beam_writer, :operational, :kernel]
   defp producers("E102"), do: [:elaboration]
@@ -1844,8 +1847,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producer_fixtures("E093"),
     do: %{
       elaboration: :type_mismatch_elaboration,
-      kernel: :type_mismatch_kernel,
-      kernel_conversion: :type_mismatch_kernel_conversion
+      kernel: :type_mismatch_kernel
     }
 
   defp producer_fixtures("E094"),
