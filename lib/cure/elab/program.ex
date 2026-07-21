@@ -295,21 +295,6 @@ defmodule Cure.Elab.Program do
 
   defp top_modules(_), do: []
 
-  # Runs `extract` over each module's declarations independently; the first
-  # within-module duplicate becomes {:error, {tag, norm.(name)}}.
-  defp first_dup_per_module(ast, extract, tag, norm) do
-    ast
-    |> module_decl_groups()
-    |> Enum.reduce_while(:ok, fn decls, :ok ->
-      names = Enum.flat_map(decls, extract)
-
-      case names -- Enum.uniq(names) do
-        [] -> {:cont, :ok}
-        [dup | _] -> {:halt, {:error, {tag, norm.(dup)}}}
-      end
-    end)
-  end
-
   # A module must not declare the same type name twice: `env.families` is a silent
   # `Map.put`, so the second would overwrite the first.
   @spec check_no_duplicate_types(tuple() | list()) :: :ok | {:error, term()}
@@ -379,7 +364,62 @@ defmodule Cure.Elab.Program do
   # since Cure has no type-directed constructor disambiguation).
   @spec check_no_duplicate_ctors(tuple() | list()) :: :ok | {:error, term()}
   defp check_no_duplicate_ctors(ast) do
-    first_dup_per_module(ast, &ctor_names/1, :duplicate_constructor, & &1)
+    ast
+    |> module_decl_groups()
+    |> Enum.reduce_while(:ok, fn decls, :ok ->
+      case first_duplicate_constructor(decls) do
+        nil -> {:cont, :ok}
+        details -> {:halt, {:error, {:duplicate_constructor, details}}}
+      end
+    end)
+  end
+
+  defp first_duplicate_constructor(decls) do
+    decls
+    |> Enum.flat_map(&constructor_bindings/1)
+    |> Enum.reduce_while(%{}, fn {name, span}, seen ->
+      case Map.fetch(seen, name) do
+        {:ok, first_span} ->
+          {:halt, {:duplicate, %{name: name, spans: Enum.reject([first_span, span], &is_nil/1)}}}
+
+        :error ->
+          {:cont, Map.put(seen, name, span)}
+      end
+    end)
+    |> case do
+      {:duplicate, details} -> details
+      _seen -> nil
+    end
+  end
+
+  defp constructor_bindings({:container, meta, variants}) when is_list(meta) do
+    case Keyword.get(meta, :container_type) do
+      :enum ->
+        Enum.flat_map(variants, &variant_constructor_binding/1)
+
+      :struct ->
+        [{meta |> Keyword.fetch!(:name) |> String.to_atom(), declaration_name_span({:container, meta, variants})}]
+
+      _ ->
+        []
+    end
+  end
+
+  defp constructor_bindings(_decl), do: []
+
+  defp variant_constructor_binding({:variable, meta, name}) when is_list(meta) and is_binary(name),
+    do: [{String.to_atom(name), metadata_name_span(meta)}]
+
+  defp variant_constructor_binding({:function_def, meta, _body}) when is_list(meta),
+    do: [{meta |> Keyword.fetch!(:name) |> String.to_atom(), metadata_name_span(meta)}]
+
+  defp variant_constructor_binding(_variant), do: []
+
+  defp metadata_name_span(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
   end
 
   # A module must not bind one name as BOTH a constructor and a top-level function.

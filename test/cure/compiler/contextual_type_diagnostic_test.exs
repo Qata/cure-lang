@@ -118,6 +118,32 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "type has a unique identity"
   end
 
+  test "a duplicate constructor labels both authored variants" do
+    source = "mod DupCtor\n  type First = Shared | Other\n  type Second = Shared | Last\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "duplicate_constructor.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "duplicate_constructor.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E105"
+    assert diagnostic.title == "Duplicate constructor"
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.span.start_column == 17
+    assert diagnostic.primary.message == "this constructor repeats an earlier declaration"
+    assert [%{span: first, message: "the name was first declared here"}] = diagnostic.secondary
+    assert {first.start_line, first.start_column} == {2, 16}
+    assert rendered =~ "2 |   type First = Shared | Other"
+    assert rendered =~ "3 |   type Second = Shared | Last"
+    assert rendered =~ "this constructor repeats an earlier declaration"
+    assert rendered =~ "the name was first declared here"
+    assert rendered =~ "pattern matching stays unambiguous"
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 

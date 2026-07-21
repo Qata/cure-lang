@@ -182,6 +182,24 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, enum_info.name) == "Color"
   end
 
+  test "ADT variants retain exact constructor names and extents" do
+    source = "type Maybe = None | Some(Int)\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "variants.cure", emit_events: false)
+
+    assert {:ok, {:container, _meta, [none, some]}} =
+             Parser.parse(tokens, file: "variants.cure", emit_events: false, prelude_macros: false)
+
+    {:variable, none_meta, "None"} = none
+    {:function_def, some_meta, []} = some
+    none_info = Metadata.source_info(none_meta)
+    some_info = Metadata.source_info(some_meta)
+
+    assert slice(source, none_info.name) == "None"
+    assert slice(source, none_info.whole) == "None"
+    assert slice(source, some_info.name) == "Some"
+    assert slice(source, some_info.whole) == "Some(Int)"
+  end
+
   test "imports and fixity declarations retain authored source roles" do
     source = "use Std.List as L\nprecedencegroup additive\ninfix <+> : additive\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "declarations.cure", emit_events: false)

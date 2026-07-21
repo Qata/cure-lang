@@ -7484,14 +7484,34 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         {params, state} = parse_type_param_list(state)
         state = expect(state, :rparen)
-        ast = {:function_def, [name: name, params: params, variant: true], []}
+        meta = put_variant_source_info([name: name, params: params, variant: true], name_token, state)
+        ast = {:function_def, meta, []}
         {ast, state}
 
       _ ->
         # Nullary constructor: None
-        {{:variable, [variant: true], name}, state}
+        meta = put_variant_source_info([variant: true], name_token, state)
+        {{:variable, meta, name}, state}
     end
   end
+
+  defp put_variant_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = name}, state) do
+    whole =
+      case authored_token(state) do
+        %Token{span: %Cure.Diagnostic.Span{} = last} ->
+          case Range.through(name, last) do
+            {:ok, span} -> span
+            _ -> name
+          end
+
+        _ ->
+          name
+      end
+
+    Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: name})
+  end
+
+  defp put_variant_source_info(meta, _name_token, _state), do: meta
 
   # v0.21.0: skip any newlines before peeking for the next `|` so multi-line
   # ADT declarations parse identically to their single-line counterparts.

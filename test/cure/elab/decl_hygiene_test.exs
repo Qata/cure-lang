@@ -28,12 +28,18 @@ defmodule Cure.Elab.DeclHygieneTest do
 
   test "duplicate constructor within one type is rejected" do
     src = "mod DupCtor\n  type Foo = A | A\nend\n"
-    assert {:error, {:duplicate_constructor, :A}} = elaborate(src)
+
+    assert {:error, {:duplicate_constructor, %{name: :A, spans: [first, second]}}} = elaborate(src)
+    assert {first.start_line, first.start_column} == {2, 14}
+    assert {second.start_line, second.start_column} == {2, 18}
   end
 
   test "constructor name shared across two types in a module is rejected (no ctor namespacing)" do
     src = "mod DupCtorX\n  type Foo = C | D\n  type Bar = C | E\nend\n"
-    assert {:error, {:duplicate_constructor, :C}} = elaborate(src)
+
+    assert {:error, {:duplicate_constructor, %{name: :C, spans: [first, second]}}} = elaborate(src)
+    assert {first.start_line, first.start_column} == {2, 14}
+    assert {second.start_line, second.start_column} == {3, 14}
   end
 
   test "distinct types and constructors still elaborate" do
