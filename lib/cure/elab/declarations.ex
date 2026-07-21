@@ -717,6 +717,7 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp attach_source_context({:error, reason}, expression, checking, env, expectation_span) do
+    reason = Elaborator.contextualize_call_arity(reason, expression, env)
     {line, column, length} = expression_extent(expression)
     meta = expression_meta(expression)
 

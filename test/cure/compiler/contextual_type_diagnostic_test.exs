@@ -331,6 +331,66 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert lsp["range"]["start"] == %{"line" => 1, "character" => 24}
   end
 
+  test "under-saturated calls report the callee arity without rejecting valid partial application" do
+    source = """
+    mod CallArity
+      fn id(x: Int) -> Int = x
+      fn bad() -> Int = id()
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "call_arity_few.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "call_arity_few.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E003"
+    assert diagnostic.title == "Function arity mismatch"
+    assert diagnostic.payload == %{kind: :function, name: "id", expected: 1, actual: 0, direction: :too_few}
+    assert diagnostic.primary.message == "add 1 argument to this call"
+    assert rendered =~ "3 |   fn bad() -> Int = id()"
+    assert rendered =~ "`id` accepts 1 argument, but this call supplies 0 arguments"
+    assert rendered =~ "use this partial application where a function is expected"
+  end
+
+  test "over-saturated calls report excess arguments but permit callable results" do
+    source = """
+    mod CallArity
+      fn id(x: Int) -> Int = x
+      fn bad() -> Int = id(1, 2)
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "call_arity_many.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "call_arity_many.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.payload.expected == 1
+    assert diagnostic.payload.actual == 2
+    assert diagnostic.payload.direction == :too_many
+    assert diagnostic.primary.message == "remove 1 argument from this call"
+    assert rendered =~ "3 |   fn bad() -> Int = id(1, 2)"
+    assert rendered =~ "call the returned function separately"
+
+    callable_result = """
+    mod CallableResult
+      fn add_from(x: Int) -> (Int) -> Int = fn(y) -> x + y
+      fn good() -> Int = add_from(1, 2)
+    end
+    """
+
+    assert {:ok, _env} = Cure.Elab.Program.elaborate(callable_result)
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 

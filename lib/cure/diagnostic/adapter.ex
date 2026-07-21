@@ -1142,6 +1142,34 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:call_arity_mismatch, %{name: name, expected: expected, actual: actual} = details}, opts)
+      when is_integer(expected) and is_integer(actual) do
+    difference = abs(expected - actual)
+
+    {label, hint} =
+      if actual < expected do
+        {"add #{argument_count(difference)} to this call",
+         "Supply the remaining #{argument_count(difference)}, or use this partial application where a function is expected."}
+      else
+        {"remove #{argument_count(difference)} from this call",
+         "Remove the extra #{argument_count(difference)}, or call the returned function separately if that was intended."}
+      end
+
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Function arity mismatch",
+      body:
+        Doc.paragraph(
+          "`#{name_to_string(name)}` accepts #{argument_count(expected)}, but this call supplies #{argument_count(actual)}."
+        ),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, :function)
+    )
+  end
+
   def from_error(
         {:extern_arity_mismatch, %{name: name, declared: declared, present: present} = details},
         opts

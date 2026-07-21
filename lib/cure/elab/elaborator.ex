@@ -2628,6 +2628,8 @@ defmodule Cure.Elab.Elaborator do
          env
        )
        when is_map(context) do
+    reason = contextualize_call_arity(reason, expression, env)
+
     if Map.get(context, :expectation_origin) in [:call_argument, :operator_operand] do
       {:source_context, reason, context}
     else
@@ -2641,6 +2643,8 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp attach_call_result_context(reason, {:function_call, meta, _args} = expression, env) do
+    reason = contextualize_call_arity(reason, expression, env)
+
     context =
       if extern_call_mismatch?(reason, meta, env),
         do: ffi_result_context(expression),
@@ -2650,6 +2654,52 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp attach_call_result_context(reason, _expression, _env), do: reason
+
+  @doc false
+  def contextualize_call_arity({:source_context, reason, context}, expression, env) when is_map(context) do
+    {:source_context, contextualize_call_arity(reason, expression, env), context}
+  end
+
+  def contextualize_call_arity(reason, {:function_call, meta, args}, env) do
+    name = Keyword.get(meta, :name)
+
+    with name when is_binary(name) <- name,
+         key <- resolve_def_key(env, name, String.to_atom(name)),
+         %{type: type, quantities: quantities} when is_list(quantities) <- Env.get_def(env, key),
+         expected when is_integer(expected) <- callable_surface_arity(type, quantities),
+         actual = length(args),
+         true <- call_arity_reason?(reason, expected, actual) do
+      {:call_arity_mismatch,
+       %{
+         name: name,
+         expected: expected,
+         actual: actual,
+         direction: if(actual < expected, do: :too_few, else: :too_many)
+       }}
+    else
+      _ -> reason
+    end
+  end
+
+  def contextualize_call_arity(reason, _expression, _env), do: reason
+
+  defp callable_surface_arity(type, quantities) do
+    {_declared_domains, codomain} = peel_pi(type, length(quantities))
+    Enum.count(quantities, &Grade.present?/1) + residual_pi_arity(codomain)
+  end
+
+  defp residual_pi_arity({:pi, _grade, _domain, codomain}), do: 1 + residual_pi_arity(codomain)
+  defp residual_pi_arity(_type), do: 0
+
+  defp call_arity_reason?(_reason, expected, actual) when expected == actual, do: false
+  defp call_arity_reason?(:not_a_function, expected, actual), do: actual > expected
+  defp call_arity_reason?(:too_many_arguments, expected, actual), do: actual > expected
+  defp call_arity_reason?(:too_few_arguments, expected, actual), do: actual < expected
+
+  defp call_arity_reason?({:conversion_failure, {:pi, _, _, _}, _expected}, expected, actual),
+    do: actual < expected
+
+  defp call_arity_reason?(_reason, _expected, _actual), do: false
 
   defp unresolved_call_reason?({:unknown_global, _}), do: true
   defp unresolved_call_reason?({:unknown_global, _, _}), do: true
@@ -2745,9 +2795,6 @@ defmodule Cure.Elab.Elaborator do
       expectation_origin: origin
     }
   end
-
-  defp call_result_context(expression),
-    do: expectation_context(expression, :call_result, :application, nil)
 
   # A checking-mode constructor whose direct check against the expected type failed
   # may still inhabit the BASE of a refinement `{x: T | φ}` = `Sigma(T, λx. φ)` —
