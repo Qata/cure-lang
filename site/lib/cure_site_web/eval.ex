@@ -24,6 +24,8 @@ defmodule CureSiteWeb.Eval do
   similar isolated environment.
   """
 
+  alias Cure.Diagnostic.{Host, Operational}
+
   @timeout_ms 2_000
   @max_heap_words 8_000_000
 
@@ -90,7 +92,7 @@ defmodule CureSiteWeb.Eval do
         {:error, "Internal eval timeout"}
     end
   rescue
-    e -> {:error, "Evaluation error: #{Exception.message(e)}"}
+    e -> {:error, render_exception(e, __STACKTRACE__)}
   end
 
   # Lightweight stdout capture that does not depend on ExUnit (which is not
@@ -141,10 +143,10 @@ defmodule CureSiteWeb.Eval do
         load_bytecode(mod_atom, bytecode)
 
       {:error, errors, _warnings} ->
-        {:error, inspect(errors)}
+        {:error, render_operational("BEAM compiler", errors)}
 
       :error ->
-        {:error, "Unknown compile error"}
+        {:error, render_operational("BEAM compiler", :unknown_error)}
     end
   end
 
@@ -170,13 +172,24 @@ defmodule CureSiteWeb.Eval do
       {:ok, :no_main}
     end
   rescue
-    e -> {:error, "Runtime error: #{Exception.message(e)}"}
+    e -> {:error, render_exception(e, __STACKTRACE__)}
   end
 
   defp format_compile_error(reason) when is_binary(reason), do: reason
   defp format_compile_error(reason), do: Cure.Diagnostic.Host.render(reason, "playground.cure")
 
   defp format_exit_reason(:normal), do: {:ok, "", ":ok"}
-  defp format_exit_reason(:killed), do: {:error, "Process killed (memory limit exceeded)"}
-  defp format_exit_reason(reason), do: {:error, "Process exited: #{inspect(reason)}"}
+  defp format_exit_reason(:killed), do: {:error, render_operational("playground evaluation", :killed)}
+  defp format_exit_reason(reason), do: {:error, render_operational("playground evaluation", reason)}
+
+  defp render_exception(exception, stacktrace) do
+    exception
+    |> Operational.internal_exception(stacktrace, context: "playground evaluation")
+    |> Host.render_diagnostic(color: :never)
+  end
+
+  defp render_operational(command, reason) do
+    Operational.command_failure(command, reason)
+    |> Host.render_diagnostic(color: :never)
+  end
 end
