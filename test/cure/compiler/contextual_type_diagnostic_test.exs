@@ -402,6 +402,60 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert lsp["range"]["start"] == %{"line" => 1, "character" => 24}
   end
 
+  test "an extern without a fully typed head points at the missing annotation" do
+    source = "mod ExternUntyped\n  @extern(:erlang, :hd, 1)\n  fn head(xs) -> Int\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "extern_untyped.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "extern_untyped.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E056"
+    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {3, 11}
+    assert rendered =~ "3 |   fn head(xs) -> Int"
+    assert rendered =~ "Every `@extern` parameter needs an explicit type"
+
+    missing_result = "mod ExternResult\n  @extern(:erlang, :self, 0)\n  fn me()\nend\n"
+
+    assert {:error, {:codegen_error, result_reason}} =
+             Cure.Compiler.compile_string(missing_result,
+               file: "extern_result.cure",
+               emit_events: false
+             )
+
+    {result_diagnostic, result_registry} =
+      Errors.to_diagnostic(result_reason, "extern_result.cure", missing_result)
+
+    assert result_diagnostic.code == "E056"
+    assert {result_diagnostic.primary.span.start_line, result_diagnostic.primary.span.start_column} == {3, 6}
+
+    assert Renderer.plain(result_diagnostic, result_registry) =~
+             "Every `@extern` function needs an explicit result type"
+  end
+
+  test "an extern with a Cure body points at that body" do
+    source = "mod ExternBody\n  @extern(:erlang, :self, 0)\n  fn me() -> Atom = :oops\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "extern_body.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "extern_body.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E057"
+    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {3, 21}
+    assert rendered =~ "3 |   fn me() -> Atom = :oops"
+    assert rendered =~ "cannot also"
+    assert rendered =~ "define a Cure body"
+  end
+
   test "under-saturated calls report the callee arity without rejecting valid partial application" do
     source = """
     mod CallArity
