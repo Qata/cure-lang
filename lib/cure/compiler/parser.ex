@@ -10674,7 +10674,7 @@ defmodule Cure.Compiler.Parser do
 
         cond do
           base_name == "Sigma" and match?(%Token{type: :lparen}, peek(state)) ->
-            parse_sigma_type(state)
+            parse_sigma_type(state, token)
 
           base_name == "Tuple" and match?(%Token{type: :lparen}, peek(state)) ->
             parse_tuple_type(state, token)
@@ -10917,17 +10917,139 @@ defmodule Cure.Compiler.Parser do
 
   # Sigma(x: DomType, BodyType) — a dependent-pair type (design spec §4.7). The
   # body type may mention the binder `x`.
-  defp parse_sigma_type(state) do
+  defp parse_sigma_type(state, sigma_token) do
+    open_token = peek(state)
     state = advance(state)
-    name_token = peek(state)
-    binder = to_string(name_token.value)
-    state = advance(state)
-    state = expect(state, :colon)
+    binder_token = peek(state)
+
+    {binder, state} =
+      case binder_token do
+        %Token{type: :identifier} ->
+          {to_string(binder_token.value), advance(state)}
+
+        %Token{} ->
+          error =
+            {:sigma_type_syntax,
+             %{
+               kind: :sigma_binder_invalid,
+               expected: :identifier,
+               observed: binder_token.value || binder_token.type,
+               token_type: binder_token.type,
+               span: binder_token.span,
+               opener_span: open_token.span,
+               line: binder_token.line,
+               column: binder_token.col
+             }}
+
+          {"_invalid_sigma_binder", state |> add_error(error) |> advance()}
+      end
+
+    state = expect_sigma_separator(state, :sigma_colon_missing, :colon, open_token, binder_token.span)
     {dom_type, state} = parse_type_expr(state)
-    state = expect(state, :comma)
+
+    state =
+      expect_sigma_separator(
+        state,
+        :sigma_comma_missing,
+        :comma,
+        open_token,
+        binder_token.span,
+        first_node_source_span(dom_type)
+      )
+
     {body_type, state} = parse_type_expr(state)
-    state = expect(state, :rparen)
-    {{:sigma_type, [binder: binder], [dom_type, body_type]}, state}
+
+    {state, close_token} =
+      case expect_token(state, :rparen) do
+        {:ok, close, next_state} ->
+          {next_state, close}
+
+        {:error, next_state} ->
+          observed = peek(next_state)
+
+          if observed.type in [:eof, :dedent] do
+            [_generic | rest] = next_state.errors
+
+            error =
+              {:sigma_type_syntax,
+               %{
+                 kind: :sigma_unclosed,
+                 expected: :rparen,
+                 observed: observed.value || observed.type,
+                 token_type: observed.type,
+                 span: observed.span,
+                 observed_span: observed.span,
+                 opener_span: open_token.span,
+                 binder_span: binder_token.span,
+                 previous_span: first_node_source_span(body_type),
+                 line: observed.line,
+                 column: observed.col
+               }}
+
+            {%{next_state | errors: [error | rest]}, nil}
+          else
+            {next_state, nil}
+          end
+      end
+
+    meta = [binder: binder]
+    meta = put_sigma_source_info(meta, sigma_token, open_token, close_token, binder_token, dom_type, body_type)
+    {{:sigma_type, meta, [dom_type, body_type]}, state}
+  end
+
+  defp expect_sigma_separator(state, kind, expected, open_token, binder_span, previous_span \\ nil) do
+    case expect_token(state, expected) do
+      {:ok, _token, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:sigma_type_syntax,
+           %{
+             kind: kind,
+             expected: expected,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: open_token.span,
+             binder_span: binder_span,
+             previous_span: previous_span || binder_span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
+    end
+  end
+
+  defp put_sigma_source_info(meta, sigma_token, open_token, close_token, binder_token, dom_type, body_type) do
+    case {sigma_token.span, open_token.span, close_token} do
+      {%Cure.Diagnostic.Span{} = name, %Cure.Diagnostic.Span{} = opener,
+       %Token{span: %Cure.Diagnostic.Span{} = closer} = close} ->
+        with {:ok, whole} <- Range.through(name, close) do
+          info = %SourceInfo{
+            whole: whole,
+            name: name,
+            opener: opener,
+            closer: closer,
+            arguments: Enum.flat_map([dom_type, body_type], &node_source_span/1),
+            annotation: first_node_source_span(dom_type),
+            body: first_node_source_span(body_type),
+            fields: %{"binder" => binder_token.span}
+          }
+
+          Keyword.put(meta, :source_info, info)
+        else
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   # Tuple(T1, …, Tn) — the honest surface tuple (spec 2026-07-09-unified-tuple §3).

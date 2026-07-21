@@ -2524,6 +2524,21 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:sigma_type_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:invalid_parameter_name, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -5047,6 +5062,11 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :refinement_unclosed}),
     do: "Refinement type is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :sigma_binder_invalid}), do: "Sigma binder needs a name"
+  defp syntax_problem_title(%SyntaxProblem{kind: :sigma_colon_missing}), do: "Sigma binder needs a colon"
+  defp syntax_problem_title(%SyntaxProblem{kind: :sigma_comma_missing}), do: "Sigma type needs a separator"
+  defp syntax_problem_title(%SyntaxProblem{kind: :sigma_unclosed}), do: "Sigma type is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5278,6 +5298,19 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :refinement_unclosed}),
     do: "This refinement type reaches the end of its container without the '}' that closes its proposition."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :sigma_binder_invalid, observed: observed}),
+    do:
+      "#{String.capitalize(syntax_name(observed))} cannot name the first value in this dependent pair. Use a lower-case binder such as `value`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :sigma_colon_missing}),
+    do: "A Sigma binder must be followed by `:` and the type of its first value."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :sigma_comma_missing}),
+    do: "A Sigma type uses `,` between the first value's type and the dependent type of its second value."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :sigma_unclosed}),
+    do: "This Sigma type reaches the end of the source without the ')' that closes its dependent pair."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
@@ -5586,6 +5619,18 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :refinement_unclosed}),
     do: "close this refinement type with `}`"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :sigma_binder_invalid}),
+    do: "write a lower-case Sigma binder here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :sigma_colon_missing}),
+    do: "insert `:` before the first value's type"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :sigma_comma_missing}),
+    do: "insert `,` before the dependent result type"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :sigma_unclosed}),
+    do: "close this Sigma type with `)`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -5844,6 +5889,28 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(opener, :secondary, "this refinement type starts here"),
       pickup_label(Map.get(context, :binder_span), :secondary, "this is the refinement binder"),
       pickup_label(previous, :secondary, refinement_previous_label(kind))
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
+         primary_span
+       )
+       when kind in [:sigma_binder_invalid, :sigma_colon_missing, :sigma_comma_missing, :sigma_unclosed] do
+    [
+      pickup_label(opener, :secondary, "this Sigma type starts here"),
+      pickup_label(Map.get(context, :binder_span), :secondary, "this is the Sigma binder"),
+      pickup_label(previous, :secondary, sigma_previous_label(kind))
     ]
     |> Enum.reject(fn
       nil -> true
@@ -6127,6 +6194,42 @@ defmodule Cure.Diagnostic.Adapter do
       }
     ]
 
+  defp syntax_insertions(%SyntaxProblem{kind: :sigma_binder_invalid}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Replace this with a descriptive lower-case Sigma binder",
+        applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :sigma_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the first value's type",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :sigma_comma_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen] do
+    [
+      %Suggestion{
+        message: "Insert `,` before the dependent result type",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ", "}]
+      }
+    ]
+  end
+
   defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
     closing_delimiter_insertion(expected, span)
   end
@@ -6337,6 +6440,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp refinement_previous_label(:refinement_bar_missing), do: "the base type ends here"
   defp refinement_previous_label(:refinement_unclosed), do: "the proposition ends here"
   defp refinement_previous_label(_kind), do: "this is the refinement binder"
+
+  defp sigma_previous_label(:sigma_comma_missing), do: "the first value's type ends here"
+  defp sigma_previous_label(:sigma_unclosed), do: "the dependent result type ends here"
+  defp sigma_previous_label(_kind), do: "this is the Sigma binder"
 
   defp container_item_name(:map), do: "entry"
   defp container_item_name(:record), do: "field"
