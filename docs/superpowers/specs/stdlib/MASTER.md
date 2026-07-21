@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-21
 
-Scope: condensed authority for standard-library-driven language/library designs under this folder. Currently one design: **`Std.Optic`** — the well-typed lens/prism/traversal library replacing the deleted `Std.Access` (removed 2026-07-11, commit `28efda0`), plus its companion `Std.Dynamic` escape-hatch sum. Status: **design approved** (brainstorming complete), ready for implementation planning; a GADT-core keystone has since landed (see memory: single family `Optic(s,a) indices (k)`, `f6075b6`).
+Scope: condensed authority for standard-library-driven language/library designs under this folder. Current designs include **`Std.Optic`** and the clean replacement of `Std.Regex` with a dependently typed TyRE parser.
 
 ## Motivation and replacement mandate
 
@@ -88,3 +88,4 @@ Layer E + `lib/std/optic.cure`; escalates to K only if the large-elimination pro
 ## Source specs
 
 - `2026-07-11-std-optic-design.md` — full `Std.Optic` design: motivation, prior art, kernel constraints, 2A kind-indexed representation, dot-path surface, `Std.Dynamic`, migration table, test/oracle plan.
+- `2026-07-21-dependently-typed-regex-design.md` — breaking replacement of the current unindexed recursive matcher with shape-indexed TyRE, compile-time literals, Thompson NFA, evidence VM, proofs, typed extraction, properties, and ordered implementation phases.

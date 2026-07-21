@@ -384,16 +384,15 @@ Integer helpers written in Cure plus `@extern` wrappers around the
   `negate(x)`, `is_even(x)`, `is_odd(x)`, `safe_div(a, b)` (returns
   `0` when the divisor is zero).
 ### Std.Regex
-Pure Cure regular-expression syntax and matching. A literal such as
-`/[A-Z]*/im` expands at compile time to the typed `Regex` algebra; generated
-code contains no OTP `:re` handle, runtime parser, or regex shim.
-- `parse(pattern) -> Option(Regex)` parses the ordinary Cure syntax tree.
-- `literal(pattern, flags) -> Regex` is the compile-time literal target.
-- `is_match(r, input) -> Bool` searches at any input position.
-- `is_full_match(r, input) -> Bool` requires complete input consumption.
-- `run(r, input) -> List(String)` returns the possible unmatched suffixes.
-- Elixir modifier spellings `i`, `m`, `s`, `x`, `u`, `r`, `f`, `U`, and `E`
-  are accepted; option order is immaterial.
+`Std.Regex` is being rebuilt as a dependently typed parser. The old unindexed
+syntax tree, runtime pattern parser, recursive suffix matcher, and OTP regex
+shim have been removed. A literal such as `/[A-Z]*/im` remains source syntax,
+but its completed implementation must expand at compile time to an indexed
+`TyRE(result)` and direct compiled machine behavior.
+
+The authoritative API, semantics, proof obligations, and implementation order
+are specified in
+`docs/superpowers/specs/stdlib/2026-07-21-dependently-typed-regex-design.md`.
 ### Std.Json (v0.23.0)
 Typed JSON encoder/decoder that pairs with the v0.21.0
 `@derive(JSON)` extension.

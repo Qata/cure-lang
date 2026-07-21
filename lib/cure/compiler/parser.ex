@@ -3140,9 +3140,9 @@ defmodule Cure.Compiler.Parser do
   end
 
   # Regex syntax is a compile-time literal macro, not a runtime OTP handle.
-  # Preserve the source pattern as a normal string argument to the pure Cure
-  # `Std.Regex.literal/2` entry point; elaboration therefore infers `Regex` from
-  # its typed signature and generated code contains no `:re` dispatch.
+  # Preserve the source pattern and flags for the staged `Std.Regex.literal/2`
+  # expansion entry. It computes an indexed TyRE and must not leave a runtime
+  # pattern parser or `:re` dispatch in generated code.
   defp regex_literal_macro(%Token{value: {body, flags}, line: line, col: col}) do
     {
       :function_call,
