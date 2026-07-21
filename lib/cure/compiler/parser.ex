@@ -4795,7 +4795,7 @@ defmodule Cure.Compiler.Parser do
 
           # Multi-head cons or regular list: [a, b, c]  or  [a, b | rest]
           _ ->
-            {rest_heads, state} = parse_multi_head_list_rest(state)
+            {rest_heads, state} = parse_multi_head_list_rest(state, token, first)
 
             case peek(state) do
               %Token{type: :bar} ->
@@ -4828,17 +4828,24 @@ defmodule Cure.Compiler.Parser do
   end
 
   # Parse `, expr` repeatedly, stopping before `|` or `]`.
-  defp parse_multi_head_list_rest(state) do
+  defp parse_multi_head_list_rest(state, open_token, previous) do
     state = skip_newlines(state)
 
     case peek(state) do
-      %Token{type: :comma} ->
+      %Token{type: :comma} = comma ->
         state = advance(state)
         state = skip_newlines(state)
-        {expr, state} = parse_expr(state, 0)
-        state = skip_newlines(state)
-        {rest, state} = parse_multi_head_list_rest(state)
-        {[expr | rest], state}
+
+        case peek(state) do
+          %Token{type: :rbracket} ->
+            {[], add_container_trailing_separator(state, :list, open_token, previous, comma)}
+
+          _ ->
+            {expr, state} = parse_expr(state, 0)
+            state = skip_newlines(state)
+            {rest, state} = parse_multi_head_list_rest(state, open_token, expr)
+            {[expr | rest], state}
+        end
 
       _ ->
         {[], state}
@@ -4870,7 +4877,7 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         {first, state} = parse_expr(state, 0)
-        {rest, state} = parse_comma_exprs(state)
+        {rest, state} = parse_container_comma_exprs(state, :tuple, token, first)
         state = skip_newlines(state)
         elements = [first | rest]
 
@@ -4882,6 +4889,47 @@ defmodule Cure.Compiler.Parser do
         {:tuple, meta, elements}
         |> then(&{&1, state})
     end
+  end
+
+  defp parse_container_comma_exprs(state, container, open_token, previous) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :comma} = comma ->
+        state = advance(state) |> skip_newlines()
+
+        case peek(state) do
+          %Token{type: :rbracket} ->
+            {[], add_container_trailing_separator(state, container, open_token, previous, comma)}
+
+          _ ->
+            {expr, state} = parse_expr(state, 0)
+            {rest, state} = parse_container_comma_exprs(state, container, open_token, expr)
+            {[expr | rest], state}
+        end
+
+      _ ->
+        {[], state}
+    end
+  end
+
+  defp add_container_trailing_separator(state, container, open_token, previous, comma) do
+    error =
+      {:container_elements_syntax,
+       %{
+         kind: :container_trailing_separator,
+         container: container,
+         expected: :element,
+         observed: comma.value || comma.type,
+         token_type: comma.type,
+         span: comma.span,
+         opener_span: open_token.span,
+         previous_span: first_node_source_span(previous),
+         line: comma.line,
+         column: comma.col
+       }}
+
+    add_error(state, error)
   end
 
   defp expect_container_close(state, closing, container, open_token, elements, separator_allowed) do
@@ -11483,24 +11531,6 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         true
-    end
-  end
-
-  # -- Comma-separated expressions -------------------------------------------
-
-  defp parse_comma_exprs(state) do
-    state = skip_newlines(state)
-
-    case peek(state) do
-      %Token{type: :comma} ->
-        state = advance(state)
-        state = skip_newlines(state)
-        {expr, state} = parse_expr(state, 0)
-        {rest, state} = parse_comma_exprs(state)
-        {[expr | rest], state}
-
-      _ ->
-        {[], state}
     end
   end
 

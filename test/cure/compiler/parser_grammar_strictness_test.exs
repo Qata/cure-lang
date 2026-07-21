@@ -587,6 +587,60 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     end
   end
 
+  test "a trailing list comma is blamed directly and can be removed safely" do
+    source = "[1,]"
+    {:ok, tokens} = Lexer.tokenize(source, file: "trailing_list.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+
+    assert {:container_elements_syntax, %{kind: :container_trailing_separator, container: :list}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "trailing_list.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- LIST ENDS WITH AN EXTRA COMMA [E094] --------------------- trailing_list.cure
+
+             This list ends immediately after a comma, but every comma must be followed by
+             another element.
+
+             at trailing_list.cure:1:3
+             1 | [1,]
+               | --^ this container starts here; the previous element ends here; this comma has no following element
+
+             Hint: Remove the trailing comma
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "", span: comma_span}]}] =
+             diagnostic.suggestions
+
+    assert binary_part(source, comma_span.start_byte, comma_span.end_byte - comma_span.start_byte) == ","
+
+    assert [%{"newText" => "", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 2},
+             "end" => %{"line" => 0, "character" => 3}
+           }
+  end
+
+  test "a trailing tuple comma uses the tuple-specific title and complete marker range" do
+    source = "%[1,]"
+    {:ok, tokens} = Lexer.tokenize(source, file: "trailing_tuple.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+
+    assert {:container_elements_syntax, %{kind: :container_trailing_separator, container: :tuple}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "trailing_tuple.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) =~ "-- TUPLE ENDS WITH AN EXTRA COMMA [E094]"
+    assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 2
+  end
+
   describe "associative operators still chain" do
     test "`a + b + c` left-associates" do
       assert {:binary_op, _, [{:binary_op, _, [_a, _b]}, _c]} = parse!("a + b + c")

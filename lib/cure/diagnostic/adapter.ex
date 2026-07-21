@@ -4979,6 +4979,12 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :tuple}}),
     do: "Tuple elements need a comma"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_trailing_separator, context: %{container: :list}}),
+    do: "List ends with an extra comma"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_trailing_separator, context: %{container: :tuple}}),
+    do: "Tuple ends with an extra comma"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :bare_brace_expression}), do: "Brace cannot start an expression"
   defp syntax_problem_title(%SyntaxProblem{kind: :unmatched_closer}), do: "Closing delimiter has no opener"
   defp syntax_problem_title(%SyntaxProblem{kind: :mismatched_closer}), do: "Closing delimiter does not match"
@@ -5101,6 +5107,12 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "This #{container} has another element here, but consecutive elements must be separated by a comma."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_trailing_separator,
+         context: %{container: container}
+       }),
+       do: "This #{container} ends immediately after a comma, but every comma must be followed by another element."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :bare_brace_expression}),
     do:
       "A bare '{' does not begin a Cure expression. Write `Type{...}` for a record, `\#{...}` for a map, or use indentation for a block."
@@ -5145,7 +5157,7 @@ defmodule Cure.Diagnostic.Adapter do
        do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{kind: kind})
-       when kind in [:container_unclosed, :container_separator_missing],
+       when kind in [:container_unclosed, :container_separator_missing, :container_trailing_separator],
        do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{expected: :explain_point}), do: Doc.empty()
@@ -5225,6 +5237,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :container_separator_missing}),
     do: "insert a comma before this element"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :container_trailing_separator}),
+    do: "this comma has no following element"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :bare_brace_expression}),
     do: "choose record, map, or block syntax here"
@@ -5333,7 +5348,7 @@ defmodule Cure.Diagnostic.Adapter do
          },
          primary_span
        )
-       when kind in [:container_unclosed, :container_separator_missing] do
+       when kind in [:container_unclosed, :container_separator_missing, :container_trailing_separator] do
     [
       pickup_label(opener, :secondary, "this container starts here"),
       pickup_label(previous, :secondary, "the previous element ends here")
@@ -5494,6 +5509,15 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `,` between these elements",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: ", "}]
+      }
+    ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :container_trailing_separator}, %Span{} = span),
+    do: [
+      %Suggestion{
+        message: "Remove the trailing comma",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ""}]
       }
     ]
 
