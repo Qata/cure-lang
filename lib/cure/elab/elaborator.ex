@@ -6545,58 +6545,75 @@ defmodule Cure.Elab.Elaborator do
   # on `beam_ops self` instead of attempting unconstrained inference.
   @doc false
   def elaborate_effect_branch(expr, expected, names, ctx, env) do
-    if effect_goal?(expected, ctx) do
-      case expr do
-        {:pattern_match, _, _} ->
-          elaborate_expr_checked(expr, expected, names, ctx, env)
+    result =
+      if effect_goal?(expected, ctx) do
+        case expr do
+          {:pattern_match, _, _} ->
+            elaborate_expr_checked(expr, expected, names, ctx, env)
 
-        {:with_abs, _, _} ->
-          elaborate_expr_checked(expr, expected, names, ctx, env)
+          {:with_abs, _, _} ->
+            elaborate_expr_checked(expr, expected, names, ctx, env)
 
-        {:conditional, _, _} ->
-          elaborate_expr_checked(expr, expected, names, ctx, env)
+          {:conditional, _, _} ->
+            elaborate_expr_checked(expr, expected, names, ctx, env)
 
-        _ ->
-          case elaborate_expr_checked(expr, expected, names, ctx, env) do
-            {:ok, _term} = ok ->
-              ok
+          _ ->
+            case elaborate_expr_checked(expr, expected, names, ctx, env) do
+              {:ok, _term} = ok ->
+                ok
 
-            {:error, checked_error} ->
-              case elaborate_expr_typed(expr, names, ctx, env) do
-                {:ok, _term, {:veffect_type, _}} ->
-                  {:error, checked_error}
+              {:error, checked_error} ->
+                case elaborate_expr_typed(expr, names, ctx, env) do
+                  {:ok, _term, {:veffect_type, _}} ->
+                    {:error, checked_error}
 
-                {:ok, _term, type} ->
-                  result_type = effect_result_type(expected, ctx)
+                  {:ok, _term, type} ->
+                    result_type = effect_result_type(expected, ctx)
 
-                  with {:ok, pure_term} <- elaborate_expr_checked(expr, result_type, names, ctx, env) do
-                    {:ok, {:effect_pure, maybe_inject_union(pure_term, type, result_type, ctx, env)}}
-                  else
-                    {:error, _} -> {:error, checked_error}
-                  end
+                    with {:ok, pure_term} <- elaborate_expr_checked(expr, result_type, names, ctx, env) do
+                      {:ok, {:effect_pure, maybe_inject_union(pure_term, type, result_type, ctx, env)}}
+                    else
+                      {:error, _} -> {:error, checked_error}
+                    end
 
-                # Inference failed — but an INTRODUCTION FORM has no inference rule
-                # at all (a bare data constructor is `:ctor_requires_checking_mode`;
-                # a bare `[]` is `{:unsolved_metavariables, :Nil}`), so a pure branch
-                # body like `%[:noreply, state]` is never inferable and would never
-                # reach the lift above. Check it at the result type and lift, exactly
-                # as the trailing expression of an effectful `let`-block does.
-                {:error, _} ->
-                  result_type = effect_result_type(expected, ctx)
+                  # Inference failed — but an INTRODUCTION FORM has no inference rule
+                  # at all (a bare data constructor is `:ctor_requires_checking_mode`;
+                  # a bare `[]` is `{:unsolved_metavariables, :Nil}`), so a pure branch
+                  # body like `%[:noreply, state]` is never inferable and would never
+                  # reach the lift above. Check it at the result type and lift, exactly
+                  # as the trailing expression of an effectful `let`-block does.
+                  {:error, _} ->
+                    result_type = effect_result_type(expected, ctx)
 
-                  case elaborate_expr_checked(expr, result_type, names, ctx, env) do
-                    {:ok, pure_term} -> {:ok, effect_pure_for_bind(pure_term, result_type, ctx)}
-                    {:error, _} -> {:error, checked_error}
-                  end
-              end
-          end
+                    case elaborate_expr_checked(expr, result_type, names, ctx, env) do
+                      {:ok, pure_term} -> {:ok, effect_pure_for_bind(pure_term, result_type, ctx)}
+                      {:error, _} -> {:error, checked_error}
+                    end
+                end
+            end
+        end
+      else
+        with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
+          {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+        end
       end
+
+    attach_effect_context(result, expr)
+  end
+
+  defp attach_effect_context({:error, {:source_context, reason, context}}, expression)
+       when is_map(context) do
+    if Map.get(context, :expectation_origin) in [nil, :annotation] do
+      {:error, {:source_context, reason, Map.merge(context, expectation_context(expression, :effects, :effect, nil))}}
     else
-      with {:ok, term, type} <- elaborate_expr_typed(expr, names, ctx, env) do
-        {:ok, maybe_inject_union(term, type, expected, ctx, env)}
-      end
+      {:error, {:source_context, reason, context}}
     end
   end
+
+  defp attach_effect_context({:error, reason}, expression),
+    do: {:error, {:source_context, reason, expectation_context(expression, :effects, :effect, nil)}}
+
+  defp attach_effect_context(result, _expression), do: result
 
   # A `let x = e ⏎ …` block elaborates to the Core `:let` binder:
   # `{:let, Cure.Core.Grade.unrestricted(), T, e, body}`, binding `e` EXACTLY ONCE.

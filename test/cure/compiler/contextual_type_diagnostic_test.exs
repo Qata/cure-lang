@@ -62,6 +62,24 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "^"
   end
 
+  test "an effect result mismatch points at the effect expression" do
+    source = "fn main() -> Effect(Int) = true\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "effects.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "effects.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :effects
+    assert rendered =~ "1 | fn main() -> Effect(Int) = true"
+    assert rendered =~ "this expression has an invalid effect"
+  end
+
   test "a real conditional mismatch reports the authored guard" do
     source = "fn main() -> Int = if 1 then 2 else 3\n"
 
