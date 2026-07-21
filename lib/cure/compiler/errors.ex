@@ -375,7 +375,6 @@ defmodule Cure.Compiler.Errors do
   defp error_location({:import_cycle, [%{line: line} | _]}) when is_integer(line), do: {line, 1}
   defp error_location({:duplicate_module, _name, _paths}), do: {1, 1}
   defp error_location({:ambiguous_name, _name, _modules}), do: {1, 1}
-  defp error_location({:lambda_block_unterminated, line, col, _code}), do: {line, col}
   defp error_location({:lex_error, reason}), do: lex_error_location(reason)
   defp error_location({_, _, meta}) when is_list(meta), do: {Keyword.get(meta, :line, 0), Keyword.get(meta, :col, 0)}
 

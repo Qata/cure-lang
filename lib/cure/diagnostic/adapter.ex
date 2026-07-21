@@ -1643,7 +1643,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(%SyntaxProblem{} = problem, opts) do
     span = problem.at || Keyword.get(opts, :span)
-    code = Map.get(problem.context, :code, "E094")
+    code = Map.get(problem.context, :code, syntax_problem_code(problem.kind))
 
     primary =
       if span do
@@ -1983,14 +1983,15 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:lambda_block_unterminated, line, column, code}, opts) do
+  def from_error({:lambda_block_unterminated, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
         kind: :unterminated_lambda,
-        expected: :rbrace,
-        observed: :eof,
-        at: Keyword.get(opts, :span),
-        context: %{line: line, column: column, code: code}
+        expected: Map.get(details, :expected, :end),
+        observed: Map.get(details, :observed, :eof),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        context: details
       },
       opts
     )
@@ -3932,6 +3933,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_title(%ExpectationOrigin{kind: :operator_operand}), do: "Operator cannot use this value"
   defp type_problem_title(_origin), do: "Type mismatch"
 
+  defp syntax_problem_code(:unterminated_lambda), do: "E035"
+  defp syntax_problem_code(_kind), do: "E094"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_lambda}), do: "Lambda body is not closed"
   defp syntax_problem_title(%SyntaxProblem{kind: :tab_not_allowed}), do: "Tabs are not valid indentation"
   defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_string}), do: "String is not closed"
@@ -4133,6 +4137,13 @@ defmodule Cure.Diagnostic.Adapter do
     end)
     |> Enum.uniq_by(& &1.span)
   end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :unterminated_lambda, opener: %Span{} = opener},
+         primary_span
+       )
+       when opener != primary_span,
+       do: [%Label{span: opener, style: :secondary, message: "this lambda starts here"}]
 
   defp syntax_secondary_labels(%SyntaxProblem{opener: %Span{} = opener}, primary_span) when opener != primary_span,
     do: [%Label{span: opener, style: :secondary, message: "the construct starts here"}]

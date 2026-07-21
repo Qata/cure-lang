@@ -6680,10 +6680,18 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         {build_block(exprs, :end, token), state}
 
-      other ->
-        line = if is_nil(other), do: token.line, else: other.line
-        col = if is_nil(other), do: token.col, else: other.col
-        error = {:lambda_block_unterminated, line, col, "E035"}
+      %Token{} = other ->
+        error =
+          {:lambda_block_unterminated,
+           %{
+             expected: :end,
+             observed: other.type,
+             span: other.span,
+             opener_span: token.span,
+             line: other.line,
+             column: other.col
+           }}
+
         state = add_error(state, error)
         {build_block(exprs, :end, token), state}
     end
