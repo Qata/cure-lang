@@ -287,6 +287,22 @@ defmodule Cure.DiagnosticTest do
              "multiple-scrutinee"
   end
 
+  test "unclassified contextual failures retain checking context and source carets", %{registry: registry, span: span} do
+    diagnostic =
+      Adapter.from_error(:not_a_function,
+        span: span,
+        checking: :run,
+        expectation_origin: :annotation
+      )
+
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Expression does not match its annotation"
+    assert Diagnostic.message(diagnostic) =~ "while checking `run`"
+    assert rendered =~ "^^^^^^^"
+    refute rendered =~ "Elaboration failed"
+  end
+
   test "unique missing lexer delimiters provide an insertion edit" do
     source = "\"not closed"
     error = {:lex_error, {:unterminated_string, 1, 1}}

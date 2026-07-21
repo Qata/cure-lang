@@ -2700,8 +2700,7 @@ defmodule Cure.Diagnostic.Adapter do
            "supply exactly the declared indices"}
 
         _ ->
-          {"Elaboration failed", "This expression or declaration is not valid in the current checking context.",
-           "change the source construct or add an annotation"}
+          contextual_type_fallback(kind, opts)
       end
 
     Diagnostic.new(
@@ -2713,6 +2712,42 @@ defmodule Cure.Diagnostic.Adapter do
       primary: primary_label(opts, label),
       payload: Map.put(details, :kind, kind)
     )
+  end
+
+  defp contextual_type_fallback(_kind, opts) do
+    checking = Keyword.get(opts, :checking)
+    origin = Keyword.get(opts, :expectation_origin)
+
+    context_suffix =
+      case checking do
+        nil -> ""
+        checking -> " while checking `#{name_to_string(checking)}`"
+      end
+
+    {title, message, label} =
+      case origin do
+        :annotation ->
+          {"Expression does not match its annotation",
+           "This expression does not satisfy the type required by its annotation#{context_suffix}.",
+           "change the expression or its annotation"}
+
+        :branch ->
+          {"Branches have different types",
+           "The branches of this match do not produce one compatible type#{context_suffix}.",
+           "make the branches produce the same type"}
+
+        :condition ->
+          {"Condition has the wrong type",
+           "This condition does not produce the type required by the conditional expression#{context_suffix}.",
+           "make the condition produce `Bool`"}
+
+        _ ->
+          {"Cannot determine this expression's type",
+           "Cure could not determine a valid type for this expression in its current checking context#{context_suffix}.",
+           "add an annotation or revise this expression"}
+      end
+
+    {title, message, label}
   end
 
   defp ambiguous_member(method, interfaces, opts) do
