@@ -1229,6 +1229,38 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:constructor_arity_mismatch, name}, opts),
     do: from_error({:constructor_arity_mismatch, %{name: name}}, opts)
 
+  def from_error(
+        {:pattern_arity_mismatch, %{constructor: constructor, expected: expected, actual: actual} = details},
+        opts
+      ) do
+    opts = Keyword.put(opts, :span, Map.get(details, :span))
+    difference = abs(expected - actual)
+    display_name = Map.get(details, :display_name) || name_to_string(constructor)
+
+    {label, hint} =
+      if actual < expected do
+        {"add #{argument_count(difference)} to this pattern",
+         "Bind the remaining constructor field#{if difference == 1, do: "", else: "s"}, or use `_` for fields you do not need."}
+      else
+        {"remove #{argument_count(difference)} from this pattern",
+         "Remove the extra pattern field#{if difference == 1, do: "", else: "s"}; this constructor does not contain them."}
+      end
+
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Pattern arity mismatch",
+      body:
+        Doc.paragraph(
+          "Constructor `#{display_name}` has #{argument_count(expected)}, but this pattern matches #{argument_count(actual)}."
+        ),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, :pattern)
+    )
+  end
+
   def from_error({:tuple_arity_mismatch, direction, details}, opts) do
     Diagnostic.new(
       code: "E003",

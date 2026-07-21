@@ -1278,22 +1278,31 @@ defmodule Cure.Elab.Elaborator do
   # inference-position match's result type. Variable/wildcard (default) arms are
   # skipped; if no constructor arm exists the match cannot be synthesised here.
   defp first_constructor_arm(arms, env) do
-    Enum.find_value(arms, {:error, {:cannot_infer_match_type, :no_constructor_arm}}, fn
-      {:match_arm, arm_meta, body} ->
-        case constructor_pattern(Keyword.fetch!(arm_meta, :pattern)) do
+    Enum.reduce_while(arms, {:error, {:cannot_infer_match_type, :no_constructor_arm}}, fn
+      {:match_arm, arm_meta, body}, acc ->
+        pattern = Keyword.fetch!(arm_meta, :pattern)
+
+        case constructor_pattern(pattern) do
           {:ok, {cname0, pattern_vars}} ->
             cname = resolve_ctor_key(env, cname0)
 
-            if Inductive.get_ctor(env, cname),
-              do: {:ok, {cname, pattern_vars, single_body(body)}},
-              else: false
+            case Inductive.get_ctor(env, cname) do
+              nil ->
+                {:cont, acc}
+
+              ctor ->
+                case validate_constructor_pattern_arity(pattern, ctor, cname, pattern_vars) do
+                  :ok -> {:halt, {:ok, {cname, pattern_vars, single_body(body)}}}
+                  {:error, _} = error -> {:halt, error}
+                end
+            end
 
           {:error, _} ->
-            false
+            {:cont, acc}
         end
 
-      _other ->
-        false
+      _other, acc ->
+        {:cont, acc}
     end)
   end
 
@@ -6135,14 +6144,19 @@ defmodule Cure.Elab.Elaborator do
 
             {:ok, {cname0, _vars}} ->
               cname = resolve_ctor_key(env, cname0)
+              ctor = Inductive.get_ctor(env, cname)
+              arity_check = if ctor, do: validate_constructor_pattern_arity(pattern, ctor, cname), else: :ok
               pattern = rekey_pattern_name(pattern, cname)
 
               cond do
-                Inductive.get_ctor(env, cname) == nil ->
+                ctor == nil ->
                   {:halt, {:error, {:unknown_pattern_constructor, cname}}}
 
                 Inductive.ctor_family(sig, cname) != dname ->
                   {:halt, shadowed_or_foreign_ctor(env, sig, cname0, cname, dname)}
+
+                match?({:error, _}, arity_check) ->
+                  {:halt, arity_check}
 
                 Map.has_key?(acc, cname) ->
                   {:halt, {:error, {:duplicate_branch, cname}}}
@@ -8201,6 +8215,43 @@ defmodule Cure.Elab.Elaborator do
 
     Enum.reverse(names_in_order)
   end
+
+  defp validate_constructor_pattern_arity(pattern, ctor, cname, pattern_vars \\ nil) do
+    pattern_vars =
+      case pattern_vars do
+        nil ->
+          case constructor_pattern(pattern) do
+            {:ok, {_name, vars}} -> vars
+            _ -> []
+          end
+
+        vars ->
+          vars
+      end
+
+    expected = Enum.count(Inductive.plicities_of(ctor), &(&1 == :explicit))
+    actual = length(pattern_vars)
+
+    if expected == actual do
+      :ok
+    else
+      {:error,
+       {:pattern_arity_mismatch,
+        %{
+          constructor: cname,
+          display_name: pattern_display_name(pattern, cname),
+          expected: expected,
+          actual: actual,
+          direction: if(actual < expected, do: :too_few, else: :too_many),
+          span: surface_expression_span(pattern)
+        }}}
+    end
+  end
+
+  defp pattern_display_name({:function_call, meta, _args}, fallback) when is_list(meta),
+    do: Keyword.get(meta, :name, to_string(fallback))
+
+  defp pattern_display_name(_pattern, fallback), do: to_string(fallback)
 
   # Shared branch-goal refinement (Task 3.4) — ONE equation-compiler refinement
   # behind two front-ends (plain `match` `elaborate_matched_branch` and

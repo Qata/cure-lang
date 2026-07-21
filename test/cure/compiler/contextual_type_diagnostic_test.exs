@@ -391,6 +391,63 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert {:ok, _env} = Cure.Elab.Program.elaborate(callable_result)
   end
 
+  test "constructor patterns with missing fields report E003 instead of crashing" do
+    source = """
+    mod PatternArity
+      type Pair = MkPair(Int, Int)
+      fn first(pair: Pair) -> Int = match pair
+        MkPair(x) -> x
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "pattern_arity_few.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "pattern_arity_few.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E003"
+    assert diagnostic.title == "Pattern arity mismatch"
+    assert diagnostic.payload.display_name == "MkPair"
+    assert diagnostic.payload.expected == 2
+    assert diagnostic.payload.actual == 1
+    assert diagnostic.primary.span.start_line == 4
+    assert diagnostic.primary.message == "add 1 argument to this pattern"
+    assert rendered =~ "4 |     MkPair(x) -> x"
+    assert rendered =~ "use `_` for fields you do not need"
+
+    assert Renderer.lsp(diagnostic, registry)["range"]["start"]["line"] == 3
+  end
+
+  test "constructor patterns with excess fields identify the exact pattern" do
+    source = """
+    mod PatternArity
+      type Pair = MkPair(Int, Int)
+      fn first(pair: Pair) -> Int = match pair
+        MkPair(x, y, z) -> x
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "pattern_arity_many.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "pattern_arity_many.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.payload.expected == 2
+    assert diagnostic.payload.actual == 3
+    assert diagnostic.payload.direction == :too_many
+    assert diagnostic.primary.message == "remove 1 argument from this pattern"
+    assert rendered =~ "4 |     MkPair(x, y, z) -> x"
+    assert rendered =~ "this constructor does not contain them"
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 
