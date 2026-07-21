@@ -59,7 +59,7 @@ defmodule CureSiteWeb.Commands.CureEval do
         {:ok, "Loaded: #{inspect(mod)}"}
 
       {:error, reason} ->
-        {:error, format_error(reason)}
+        {:error, format_error(reason, source)}
     end
   end
 
@@ -82,12 +82,12 @@ defmodule CureSiteWeb.Commands.CureEval do
         {:ok, "=> #{result}"}
 
       {:error, reason} ->
-        {:error, format_error(reason)}
+        {:error, format_error(reason, wrapped)}
     end
   end
 
-  defp format_error(reason) do
-    Cure.Diagnostic.Host.render(reason, "repl.cure")
+  defp format_error(reason, source) do
+    Cure.Diagnostic.Host.render(reason, "repl.cure", source)
   end
 
   defp render_exception(exception, stacktrace) do
