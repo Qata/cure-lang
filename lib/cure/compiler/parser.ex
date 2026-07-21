@@ -7061,8 +7061,25 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_single_typed_param(state) do
     case peek(state) do
-      %Token{type: :lbrace} -> parse_implicit_param(state)
-      _ -> parse_explicit_param(state)
+      %Token{type: :lbrace} ->
+        parse_implicit_param(state)
+
+      %Token{type: type} when type in [:identifier, :keyword, :star] ->
+        parse_explicit_param(state)
+
+      %Token{} = token ->
+        error =
+          {:invalid_parameter_name,
+           %{
+             observed: token.value || token.type,
+             token_type: token.type,
+             span: token.span,
+             line: token.line,
+             column: token.col
+           }}
+
+        placeholder = {:param, [invalid: true], "_invalid_parameter"}
+        {placeholder, state |> add_error(error) |> advance()}
     end
   end
 

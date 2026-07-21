@@ -2466,6 +2466,19 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:invalid_parameter_name, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :invalid_parameter_name,
+        expected: :identifier,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:lambda_block_unterminated, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -4899,6 +4912,8 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :function_parameters_unparenthesized}),
     do: "Function parameter list is missing"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name}), do: "Function parameter needs a name"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :bare_brace_expression}), do: "Brace cannot start an expression"
   defp syntax_problem_title(%SyntaxProblem{kind: :unmatched_closer}), do: "Closing delimiter has no opener"
   defp syntax_problem_title(%SyntaxProblem{kind: :mismatched_closer}), do: "Closing delimiter does not match"
@@ -4985,6 +5000,10 @@ defmodule Cure.Diagnostic.Adapter do
        do:
          "The function `#{function}` needs a parenthesized parameter list after its name. Write `()` when it takes no parameters."
 
+  defp syntax_problem_context(%SyntaxProblem{kind: :invalid_parameter_name, observed: observed}),
+    do:
+      "#{String.capitalize(syntax_name(observed))} cannot name a function parameter. Use a lower-case name such as `value`, optionally followed by `: Type`."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :bare_brace_expression}),
     do:
       "A bare '{' does not begin a Cure expression. Write `Type{...}` for a record, `\#{...}` for a map, or use indentation for a block."
@@ -5021,6 +5040,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_expected_doc(%SyntaxProblem{kind: :macro_use_mismatch}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :mismatched_closer}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :function_parameters_unparenthesized}), do: Doc.empty()
+  defp syntax_expected_doc(%SyntaxProblem{kind: :invalid_parameter_name}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{expected: :explain_point}), do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{} = problem) do
@@ -5082,6 +5102,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :function_parameters_unparenthesized}),
     do: "the parameter list belongs before this token"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name}),
+    do: "write a parameter name here"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :bare_brace_expression}),
     do: "choose record, map, or block syntax here"
@@ -5269,6 +5292,14 @@ defmodule Cure.Diagnostic.Adapter do
     do: [
       %Suggestion{
         message: "Write an expression after `=`",
+        applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :invalid_parameter_name}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Replace this with a descriptive lower-case parameter name",
         applicability: :manual
       }
     ]

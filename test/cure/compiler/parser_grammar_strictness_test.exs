@@ -296,6 +296,40 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
            }
   end
 
+  test "an invalid function parameter is rejected at the authored binder token" do
+    source = "fn run(42) -> Int = 1\n"
+    {:ok, tokens} = Lexer.tokenize(source, file: "binder.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:invalid_parameter_name, details} = error
+    assert details.observed == 42
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "binder.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- FUNCTION PARAMETER NEEDS A NAME [E094] -------------------------- binder.cure
+
+             42 cannot name a function parameter. Use a lower-case name such as `value`,
+             optionally followed by `: Type`.
+
+             at binder.cure:1:8
+             1 | fn run(42) -> Int = 1
+               |        ^^ write a parameter name here
+
+             Hint: Replace this with a descriptive lower-case parameter name
+             """)
+
+    assert [%{applicability: :manual, edits: []}] = diagnostic.suggestions
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 0, "character" => 7},
+             "end" => %{"line" => 0, "character" => 9}
+           }
+  end
+
   describe "associative operators still chain" do
     test "`a + b + c` left-associates" do
       assert {:binary_op, _, [{:binary_op, _, [_a, _b]}, _c]} = parse!("a + b + c")
