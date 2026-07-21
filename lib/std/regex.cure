@@ -48,3 +48,40 @@ mod Std.Regex
 
   fn sem_nested_witness(value: Char) -> Sem(PairC(CharC, ListC(UnitC))) =
     %[value, [(), ()]]
+
+  ## Minimal regular-language algebra. Every constructor fixes its result shape
+  ## definitionally, so Thompson construction and evidence extraction cannot
+  ## disagree later about what a successful path produces.
+  type Pattern indices (shape: ShapeCode)
+    PatternPredicate : (Char -> Bool) -> Pattern(CharC)
+    PatternEmpty : Pattern(UnitC)
+    PatternConcat : Pattern(left) -> Pattern(right) -> Pattern(PairC(left, right))
+    PatternGroup : Pattern(inner) -> Pattern(StringC)
+    PatternAlternate : Pattern(left) -> Pattern(right) -> Pattern(ChoiceC(left, right))
+    PatternRepeat : Pattern(inner) -> Pattern(ListC(inner))
+
+  ## Public typed combinator layer. `Mapped` is the semantic bridge from a
+  ## structurally extracted Pattern value to the user-facing result type. It is
+  ## one-way: regex parsing does not imply an unparser.
+  type Regex indices (result: Type)
+    FromPattern : (shape: ShapeCode) -> Pattern(shape) -> Regex(Sem(shape))
+    Mapped : (a -> b) -> Regex(a) -> Regex(b)
+    Concatenated : Regex(a) -> Regex(b) -> Regex(Tuple(a, b))
+    Alternated : Regex(a) -> Regex(b) -> Regex(Choice(a, b))
+    Repeated : Regex(a) -> Regex(List(a))
+
+  fn empty() -> Regex(Unit) = FromPattern(UnitC, PatternEmpty())
+
+  fn predicate(test: Char -> Bool) -> Regex(Char) =
+    FromPattern(CharC, PatternPredicate(test))
+
+  fn concatenate({a: Type}, {b: Type}, left: Regex(a), right: Regex(b)) -> Regex(Tuple(a, b)) =
+    Concatenated(left, right)
+
+  fn alternate({a: Type}, {b: Type}, left: Regex(a), right: Regex(b)) -> Regex(Choice(a, b)) =
+    Alternated(left, right)
+
+  fn repeat({a: Type}, regex: Regex(a)) -> Regex(List(a)) = Repeated(regex)
+
+  fn map({a: Type}, {b: Type}, regex: Regex(a), transform: a -> b) -> Regex(b) =
+    Mapped(transform, regex)

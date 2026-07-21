@@ -23,6 +23,11 @@ finished system. It must be removed and replaced from scratch by a
 dependently-typed regex parser based on the TyRE architecture described in the
 reference thesis.
 
+The thesis names its two indexed representations `CoreRE` and `TyRE`. Cure uses
+the user-facing names `Pattern(shape)` and `Regex(result)` respectively. The
+paper names are used only when discussing the reference; they are not public
+Cure type names.
+
 In particular, the finished implementation must not retain:
 
 - the current unindexed `Regex` syntax tree;
@@ -89,9 +94,9 @@ literal source
     ↓ compile-time syntax parser
 surface RE + normalized shape
     ↓ checked compilation
-indexed TyRE
+indexed Regex(result)
     ↓ erase conversions / retain typed conversion program
-indexed CoreRE
+indexed Pattern(shape)
     ↓ Thompson construction
 ordered NFA + evidence program
     ↓ execute
@@ -108,13 +113,13 @@ vocabulary or matching logic.
 The intended source layout is:
 
 ```text
-lib/std/regex.cure                 public TyRE API and literal-facing exports
+lib/std/regex.cure                 public Regex API and literal-facing exports
 lib/std/regex/shape.cure           ShapeCode, interpretation, simplification
 lib/std/regex/syntax.cure          compile-time literal grammar and diagnostics
-lib/std/regex/core.cure            indexed CoreRE
-lib/std/regex/tyre.cure            TyRE and typed combinators
+lib/std/regex/core.cure            indexed Pattern
+lib/std/regex/typed.cure           Regex and typed combinators
 lib/std/regex/nfa.cure             finite ordered NFA
-lib/std/regex/thompson.cure        CoreRE-to-NFA construction
+lib/std/regex/thompson.cure        Pattern-to-NFA construction
 lib/std/regex/evidence.cure        evidence language and typed extraction
 lib/std/regex/vm.cure              ordered thread VM
 lib/std/regex/proof.cure           soundness/completeness obligations
@@ -190,18 +195,18 @@ unproved cast between raw and simplified interpretations.
 
 ## 6. Indexed regex representations
 
-### 6.1 CoreRE
+### 6.1 Pattern
 
-`CoreRE(shape)` is the minimal regular-language algebra consumed by Thompson
+`Pattern(shape)` is the minimal regular-language algebra consumed by Thompson
 construction. Its constructors determine the index definitionally:
 
 ```text
-Pred      : (Char -> Bool) -> CoreRE(CharC)
-Empty     : CoreRE(UnitC)
-Concat    : CoreRE(a) -> CoreRE(b) -> CoreRE(PairC(a,b))
-Group     : CoreRE(a) -> CoreRE(StringC)
-Alt       : CoreRE(a) -> CoreRE(b) -> CoreRE(EitherC(a,b))
-Star      : CoreRE(a) -> CoreRE(ListC(a))
+PatternPredicate : (Char -> Bool) -> Pattern(CharC)
+PatternEmpty     : Pattern(UnitC)
+PatternConcat    : Pattern(a) -> Pattern(b) -> Pattern(PairC(a,b))
+PatternGroup     : Pattern(a) -> Pattern(StringC)
+PatternAlternate : Pattern(a) -> Pattern(b) -> Pattern(EitherC(a,b))
+PatternRepeat    : Pattern(a) -> Pattern(ListC(a))
 ```
 
 The final Cure declaration syntax may differ, but these indices and result
@@ -216,7 +221,7 @@ Derived constructors are compiled into the core:
 ```text
 Plus(r)      = Concat(r, Star(r))
 Optional(r)  = Alt(r, Empty)
-Exactly(c)   = predicate equal to c, converted to Unit at the TyRE layer
+Exactly(c)   = predicate equal to c, converted to Unit at the Regex layer
 Any          = Pred(always true)
 OneOf        = Pred(character membership)
 Range        = Pred(character range membership)
@@ -226,16 +231,16 @@ Anchors are input-position constraints, not character predicates. They require
 an explicit boundary-aware extension to the NFA transition model and must not
 be encoded as fake characters.
 
-### 6.2 TyRE
+### 6.2 Regex
 
-`TyRE(result_type)` is the public indexed combinator type:
+`Regex(result_type)` is the public indexed combinator type:
 
 ```text
-Untyped : CoreRE(code) -> TyRE(Sem(code))
-Concat  : TyRE(a) -> TyRE(b) -> TyRE(Tuple(a,b))
-Conv    : (a -> b) -> TyRE(a) -> TyRE(b)
-Alt     : TyRE(a) -> TyRE(b) -> TyRE(Either(a,b))
-Rep     : TyRE(a) -> TyRE(List(a))
+FromPattern  : Pattern(code) -> Regex(Sem(code))
+Concatenated : Regex(a) -> Regex(b) -> Regex(Tuple(a,b))
+Mapped       : (a -> b) -> Regex(a) -> Regex(b)
+Alternated   : Regex(a) -> Regex(b) -> Regex(Either(a,b))
+Repeated     : Regex(a) -> Regex(List(a))
 ```
 
 `Conv` is one-way. Unparsing is not part of this design.
@@ -244,16 +249,16 @@ Required smart constructors include:
 
 - `discard_left`, equivalent to `<*`;
 - `discard_right`, equivalent to `*>`;
-- `or_same : TyRE(a) -> TyRE(a) -> TyRE(a)`;
-- `optional : TyRE(a) -> TyRE(Option(a))`;
-- `one_or_more : TyRE(a) -> TyRE(NonEmpty(a))` or another explicitly non-empty
+- `or_same : Regex(a) -> Regex(a) -> Regex(a)`;
+- `optional : Regex(a) -> Regex(Option(a))`;
+- `one_or_more : Regex(a) -> Regex(NonEmpty(a))` or another explicitly non-empty
   result type;
-- `exactly : Char -> TyRE(Unit)`;
+- `exactly : Char -> Regex(Unit)`;
 - `char`, `one_of`, `range`, and `any_char`;
-- `digit : TyRE(Int)` using `Std.Char` numeric APIs rather than leaked code-point
+- `digit : Regex(Int)` using `Std.Char` numeric APIs rather than leaked code-point
   arithmetic;
-- `captured : TyRE(a) -> TyRE(String)`;
-- `as_string : TyRE(a) -> TyRE(String)` when the matched extent is required.
+- `captured : Regex(a) -> Regex(String)`;
+- `as_string : Regex(a) -> Regex(String)` when the matched extent is required.
 
 Combinator names and operators must follow Cure naming conventions. The semantic
 types above are normative.
@@ -294,17 +299,17 @@ typed meaning and NFA behavior are implemented.
 2. validate flags and reject duplicates or incompatible settings as specified;
 3. build the surface RE;
 4. compute and normalize its shape;
-5. produce an indexed TyRE expression;
-6. compile its CoreRE into an ordinary Cure machine representation where
+5. produce an indexed Regex expression;
+6. compile its Pattern into an ordinary Cure machine representation where
    staging is possible;
 7. attach source spans and expansion provenance to every diagnostic;
 8. emit no runtime call that reparses the pattern text.
 
-The inferred type of a literal is `TyRE(Sem(simplified_shape))`. Users must be
+The inferred type of a literal is `Regex(Sem(simplified_shape))`. Users must be
 able to inspect this type in holes and diagnostics.
 
 Dynamic pattern strings are not literals. If supported later, they must return
-an existential package such as `Sigma(code : ShapeCode, TyRE(Sem(code)))`, never
+an existential package such as `Sigma(code : ShapeCode, Regex(Sem(code)))`, never
 pretend to have a statically known result type.
 
 ## 8. NFA and Thompson construction
@@ -326,7 +331,7 @@ state identifiers are forbidden.
 
 ### 8.2 Construction
 
-Implement Thompson construction structurally for every `CoreRE` constructor.
+Implement Thompson construction structurally for every `Pattern` constructor.
 The construction returns the NFA and its evidence program together so state
 renaming and routine attachment cannot drift.
 
@@ -344,7 +349,7 @@ The following cases require explicit proofs and tests:
 
 ### 9.1 Evidence
 
-Evidence markers mirror the typed CoreRE structure:
+Evidence markers mirror the typed Pattern structure:
 
 ```text
 CharMark(Char)
@@ -402,10 +407,10 @@ This policy must be tested against ambiguous expressions such as `a|a`,
 The public API is typed and value-producing:
 
 ```text
-parse_full   : TyRE(a) -> String -> Option(a)
-parse_prefix : TyRE(a) -> String -> Option(Tuple(a, String))
-search       : TyRE(a) -> String -> Option(Match(a))
-matches      : TyRE(a) -> String -> Bool
+parse_full   : Regex(a) -> String -> Option(a)
+parse_prefix : Regex(a) -> String -> Option(Tuple(a, String))
+search       : Regex(a) -> String -> Option(Match(a))
+matches      : Regex(a) -> String -> Bool
 ```
 
 `Match(a)` contains at least:
@@ -428,9 +433,9 @@ The proof layer must establish the following.
 
 ### 11.1 Language correctness
 
-- Thompson soundness: every accepting path denotes a word in the CoreRE
+- Thompson soundness: every accepting path denotes a word in the Pattern
   language.
-- Thompson completeness: every word in the CoreRE language has an accepting
+- Thompson completeness: every word in the Pattern language has an accepting
   path.
 - Full parsing accepts exactly when the entire input is recognized.
 - Prefix parsing returns exactly an accepted prefix.
@@ -446,7 +451,7 @@ Encodes : Evidence -> List(ShapeCode) -> Type
 Then prove:
 
 - executing the routine extracted from an accepting path appends evidence
-  encoding the CoreRE shape;
+  encoding the Pattern shape;
 - evidence accumulated before a submachine remains valid;
 - concatenation composes evidence contexts correctly;
 - alternatives mark the selected branch;
@@ -565,7 +570,7 @@ Counterexamples must shrink to a regex and input pair.
 ### 15.3 Exhaustive small models
 
 Enumerate all regexes up to a small depth over a two- or three-character
-alphabet and all words up to a small length. Compare CoreRE denotation, NFA
+alphabet and all words up to a small length. Compare Pattern denotation, NFA
 acceptance, VM acceptance, and typed parse success.
 
 ### 15.4 Proof and trust gates
@@ -606,18 +611,18 @@ API documentation.
 Gate: `Sem(PairC(CharC,ListC(UnitC)))` computes definitionally to the expected
 type and can be used in function signatures and pattern matches.
 
-### Phase 2 — indexed CoreRE and shape simplification
+### Phase 2 — indexed Pattern and shape simplification
 
-1. Implement indexed CoreRE constructors.
+1. Implement indexed Pattern constructors.
 2. Implement raw shape, `Simplify`, and value conversion.
 3. Add constructor and simplification laws.
 4. Add exhaustive small shape tests.
 
 Gate: no cast or runtime shape dispatch; all constructor indices kernel-check.
 
-### Phase 3 — TyRE combinators
+### Phase 3 — Regex combinators
 
-1. Implement `TyRE(a)`, `Untyped`, `Conv`, concatenation, alternation, and
+1. Implement `Regex(a)`, `FromPattern`, `Mapped`, concatenation, alternation, and
    repetition.
 2. Implement required smart constructors.
 3. Build room-number and time-parser examples from the thesis.
@@ -629,17 +634,17 @@ types; no parsing engine is needed yet.
 ### Phase 4 — literal parser and compile-time macro
 
 1. Implement the literal grammar as compile-time Cure code.
-2. Compute simplified shape and produce a TyRE expression.
+2. Compute simplified shape and produce a Regex expression.
 3. Implement structured literal diagnostics.
 4. Prove expansion leaves no runtime parser.
 
-Gate: literals infer their TyRE result type and malformed literals fail during
+Gate: literals infer their Regex result type and malformed literals fail during
 compilation with precise spans.
 
 ### Phase 5 — finite ordered NFA and Thompson construction
 
 1. Implement finite states, ordered transitions, and acceptance.
-2. Implement Thompson construction for all CoreRE constructors.
+2. Implement Thompson construction for all Pattern constructors.
 3. Implement nullable analysis and epsilon-cycle handling.
 4. Verify against exhaustive structural denotation.
 
@@ -662,7 +667,7 @@ Gate: evidence traces match fixed examples and ambiguity properties.
 3. Implement total typed extraction.
 4. Verify proof erasure and totality closure.
 
-Gate: `parse_full` and `parse_prefix` return `Option(a)` for `TyRE(a)` with no
+Gate: `parse_full` and `parse_prefix` return `Option(a)` for `Regex(a)` with no
 runtime type test or impossible extraction branch.
 
 ### Phase 8 — public API and search
@@ -691,7 +696,7 @@ proofs erased; literal artifact contains direct compiled behavior.
 The work is complete only when all of the following are true:
 
 - the old unindexed Regex and recursive matcher are deleted;
-- `/.../flags` infers a typed `TyRE(result)`;
+- `/.../flags` infers a typed `Regex(result)`;
 - parsing returns that result type;
 - groups produce real typed evidence;
 - literal parsing is compile-time-only;
@@ -712,7 +717,7 @@ These questions are resolved during the named phase, not by weakening the
 design:
 
 1. Whether `Sem` requires a generic large-elimination extension (Phase 1).
-2. The most convenient Cure syntax for indexed CoreRE constructors (Phase 2).
+2. The most convenient Cure syntax for indexed Pattern constructors (Phase 2).
 3. Whether `one_or_more` returns `NonEmpty(a)` or a proof-indexed list (Phase 3).
 4. The finite-state representation best suited to both BEAM and AtomVM
    (Phase 5).

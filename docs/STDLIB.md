@@ -388,7 +388,7 @@ Integer helpers written in Cure plus `@extern` wrappers around the
 syntax tree, runtime pattern parser, recursive suffix matcher, and OTP regex
 shim have been removed. A literal such as `/[A-Z]*/im` remains source syntax,
 but its completed implementation must expand at compile time to an indexed
-`TyRE(result)` and direct compiled machine behavior.
+`Regex(result)` and direct compiled machine behavior.
 
 The authoritative API, semantics, proof obligations, and implementation order
 are specified in
