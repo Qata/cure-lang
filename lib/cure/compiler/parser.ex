@@ -12313,11 +12313,16 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :ellipsis} ->
         state = advance(state)
-        state = expect(state, :rparen)
+
+        {state, _close_token} =
+          expect_container_close(state, :rparen, :splice_group, open_token, [expr], false)
+
         {{:splice_group, meta, [expr]}, state}
 
       _ ->
-        state = expect(state, :rparen)
+        {state, _close_token} =
+          expect_container_close(state, :rparen, :splice, open_token, [expr], false)
+
         {{:splice, meta, [expr]}, state}
     end
   end

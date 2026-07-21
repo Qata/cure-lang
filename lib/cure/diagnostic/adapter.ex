@@ -5236,6 +5236,13 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: container}
+       })
+       when container in [:splice, :splice_group],
+       do: "Syntax splice is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :branch_block, family: :match}
        }),
        do: "Pattern branch block is not closed"
@@ -5766,6 +5773,15 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: container}
+       })
+       when container in [:splice, :splice_group] do
+    form = if container == :splice_group, do: "group splice", else: "splice"
+    "This #{form} reaches the end of its expression without the closing ')'."
+  end
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :branch_block, family: :match}
        }),
        do: "This inline `match` reaches the end of its branches without the closing '}'."
@@ -6197,6 +6213,13 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :selective_import}
        }),
        do: "close these imported names with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: container}
+       })
+       when container in [:splice, :splice_group],
+       do: "close this syntax splice with `)`"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_unclosed,
@@ -6641,6 +6664,27 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(opener, :secondary, "this refinement type starts here"),
       pickup_label(Map.get(context, :binder_span), :secondary, "this is the refinement binder"),
       pickup_label(previous, :secondary, refinement_previous_label(kind))
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: container}
+         },
+         primary_span
+       )
+       when container in [:splice, :splice_group] do
+    [
+      pickup_label(opener, :secondary, "the syntax splice starts here"),
+      pickup_label(previous, :secondary, "the spliced expression ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7457,6 +7501,18 @@ defmodule Cure.Diagnostic.Adapter do
          %Span{} = span
        ) do
     closing_delimiter_insertion(:rbrace, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           expected: :rparen,
+           context: %{container: container}
+         },
+         %Span{} = span
+       )
+       when container in [:splice, :splice_group] do
+    closing_delimiter_insertion(:rparen, span)
   end
 
   defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
