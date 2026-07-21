@@ -5168,6 +5168,19 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "Implicit constructor domain is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :branch_block, family: :match}
+       }),
+       do: "Pattern branch block is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :branch_block, family: family}
+       })
+       when family in [:with, :multi_with],
+       do: "With branch block is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :map}}),
     do: "Map is not closed"
 
@@ -5617,6 +5630,24 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :branch_block, family: :match}
+       }),
+       do: "This inline `match` reaches the end of its branches without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :branch_block, family: :with}
+       }),
+       do: "This inline `with` reaches the end of its branches without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :branch_block, family: :multi_with}
+       }),
+       do: "This multi-scrutinee `with` reaches the end of its branches without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
          expected: :binary_close,
          context: %{container: :binary_literal}
        }),
@@ -5970,6 +6001,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :implicit_constructor_domain}
        }),
        do: "close this implicit constructor domain with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :branch_block}
+       }),
+       do: "close this branch block with `}`"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :container_unclosed, expected: expected}),
     do: "close this container with `#{syntax_insertion(expected)}`"
@@ -6511,6 +6548,33 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(opener, :secondary, "this constructor's parameter list starts here"),
       pickup_label(previous, :secondary, "the previous constructor parameter ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :branch_block, family: family}
+         },
+         primary_span
+       ) do
+    opener_message =
+      case family do
+        :match -> "this inline match's branch block starts here"
+        :with -> "this inline with's branch block starts here"
+        :multi_with -> "this multi-scrutinee with's branch block starts here"
+      end
+
+    [
+      pickup_label(opener, :secondary, opener_message),
+      pickup_label(previous, :secondary, "the final branch ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7108,6 +7172,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp container_item_name(:type_arguments), do: "type argument"
   defp container_item_name(:type_parameters), do: "type parameter"
   defp container_item_name(:constructor_parameters), do: "constructor parameter"
+  defp container_item_name(:branch_block), do: "branch"
   defp container_item_name(:type_indices), do: "type index"
   defp container_item_name(:lambda_parameters), do: "lambda parameter"
 

@@ -5029,7 +5029,8 @@ defmodule Cure.Compiler.Parser do
           [_generic | rest] = next_state.errors
 
           previous =
-            elements |> List.last() |> first_node_source_span() ||
+            Map.get(context, :previous_span) ||
+              elements |> List.last() |> first_node_source_span() ||
               case authored_token(next_state) do
                 %Token{span: %Cure.Diagnostic.Span{} = span} -> span
                 _ -> nil
@@ -5885,10 +5886,13 @@ defmodule Cure.Compiler.Parser do
     # Inline form: match x { pat -> body, ... }
     # Block form: match x <newline> <indent> arms <dedent>
     case peek(state) do
-      %Token{type: :lbrace} ->
+      %Token{type: :lbrace} = open_token ->
         state = advance(state)
         {arms, state} = parse_inline_match_arms(state)
-        state = expect(state, :rbrace)
+
+        {state, _close_token} =
+          expect_container_close(state, :rbrace, :branch_block, open_token, arms, false, %{family: :match})
+
         meta = put_match_source_info([line: token.line, col: token.col], token, scrutinee, arms, state)
         ast = {:pattern_match, meta, [scrutinee | arms]}
         {ast, state}
@@ -5939,10 +5943,13 @@ defmodule Cure.Compiler.Parser do
     case scruts do
       [single] ->
         case peek(state) do
-          %Token{type: :lbrace} ->
+          %Token{type: :lbrace} = open_token ->
             state = advance(state)
             {arms, state} = parse_inline_match_arms(state)
-            state = expect(state, :rbrace)
+
+            {state, _close_token} =
+              expect_container_close(state, :rbrace, :branch_block, open_token, arms, false, %{family: :with})
+
             meta = put_match_source_info(meta, token, single, arms, state)
             {{:with_abs, meta, [single | arms]}, state}
 
@@ -6012,10 +6019,16 @@ defmodule Cure.Compiler.Parser do
 
     {arms, state} =
       case peek(state) do
-        %Token{type: :lbrace} ->
+        %Token{type: :lbrace} = open_token ->
           state = advance(state)
           {arms, state} = parse_multi_with_inline_arms(state, n)
-          state = expect(state, :rbrace)
+
+          {state, _close_token} =
+            expect_container_close(state, :rbrace, :branch_block, open_token, arms, false, %{
+              family: :multi_with,
+              previous_span: arms |> List.last() |> multi_with_arm_span()
+            })
+
           {arms, state}
 
         %Token{type: :indent} ->
@@ -6150,6 +6163,18 @@ defmodule Cure.Compiler.Parser do
     {body, state} = parse_expr_or_block(state)
     {{patterns, body}, state}
   end
+
+  defp multi_with_arm_span({patterns, body}) do
+    first = patterns |> List.first() |> first_node_source_span()
+    last = first_node_source_span(body)
+
+    case Range.through(first, last) do
+      {:ok, span} -> span
+      _ -> last || first
+    end
+  end
+
+  defp multi_with_arm_span(_), do: nil
 
   # Comma-separated pattern list for one multiple-with arm. A top-level `,` never
   # occurs inside a single pattern (tuples are parenthesised), so it reliably
