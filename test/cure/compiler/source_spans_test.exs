@@ -225,6 +225,18 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.else_branch) == "0"
   end
 
+  test "single-scrutinee with expressions retain whole and branch spans" do
+    source = "fn choose(x: Int) -> Int = with x\n  n -> n\n  _ -> 0\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "with.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "with.cure", emit_events: false, prelude_macros: false)
+
+    {:with_abs, meta, _} = find_node(ast, :with_abs)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "with x\n  n -> n\n  _ -> 0"
+    assert Enum.map(info.branches, &slice(source, &1)) == ["n -> n", "_ -> 0"]
+  end
+
   test "record constructions retain authored name, delimiters, and field spans" do
     source = "fn origin() -> Point = Point{x: 0, y: 0}\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "record.cure", emit_events: false)

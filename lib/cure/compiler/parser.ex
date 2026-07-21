@@ -4715,15 +4715,18 @@ defmodule Cure.Compiler.Parser do
             state = advance(state)
             {arms, state} = parse_inline_match_arms(state)
             state = expect(state, :rbrace)
+            meta = put_match_source_info(meta, token, single, arms, state)
             {{:with_abs, meta, [single | arms]}, state}
 
           %Token{type: :indent} ->
             state = advance(state)
             {arms, state} = parse_with_block_arms(state)
             state = expect_dedent(state)
+            meta = put_match_source_info(meta, token, single, arms, state)
             {{:with_abs, meta, [single | arms]}, state}
 
           _ ->
+            meta = put_match_source_info(meta, token, single, [], state)
             {{:with_abs, meta, [single]}, state}
         end
 
