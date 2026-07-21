@@ -126,7 +126,16 @@ defmodule Cure.Diagnostic.Adapter do
              :constructor_function_collision,
              :duplicate_definition
            ] do
-    declaration_conflict(kind, %{name: name}, opts)
+    if is_map(name) do
+      declaration_conflict(kind, name, opts)
+    else
+      declaration_conflict(kind, %{name: name}, opts)
+    end
+  end
+
+  def from_error({kind, %{name: _name} = details}, opts)
+      when kind in [:duplicate_parameter, :duplicate_field, :duplicate_index] do
+    declaration_conflict(kind, details, opts)
   end
 
   def from_error({:overlapping_overload, name, arity}, opts) do
@@ -2057,16 +2066,50 @@ defmodule Cure.Diagnostic.Adapter do
           ""
       end
 
+    spans = Map.get(details, :spans, [])
+    {primary, secondary} = conflict_labels(spans, opts, kind)
+
     Diagnostic.new(
       code: "E105",
       key: :declaration_conflict,
       severity: :error,
-      title: "Declaration conflict",
-      body: Doc.paragraph("The declaration `#{name}` conflicts with another visible declaration#{detail}."),
-      primary: primary_label(opts, "rename this declaration or make its identity unique"),
+      title: declaration_conflict_title(kind),
+      body: Doc.paragraph(declaration_conflict_message(kind, name, detail)),
+      primary: primary,
+      secondary: secondary,
       payload: Map.put(details, :kind, kind)
     )
   end
+
+  defp conflict_labels([first, second | rest], _opts, kind) do
+    primary = %Label{span: second, style: :primary, message: duplicate_primary_label(kind)}
+
+    secondary =
+      [%Label{span: first, style: :secondary, message: "the name was first declared here"}] ++
+        Enum.map(rest, &%Label{span: &1, style: :secondary, message: "another duplicate is here"})
+
+    {primary, secondary}
+  end
+
+  defp conflict_labels(_spans, opts, kind),
+    do: {primary_label(opts, duplicate_primary_label(kind)), []}
+
+  defp declaration_conflict_title(:duplicate_parameter), do: "Duplicate parameter"
+  defp declaration_conflict_title(:duplicate_field), do: "Duplicate field"
+  defp declaration_conflict_title(:duplicate_index), do: "Duplicate index"
+  defp declaration_conflict_title(_kind), do: "Declaration conflict"
+
+  defp declaration_conflict_message(:duplicate_parameter, name, _detail),
+    do:
+      "The parameter `#{name}` is declared more than once. Rename or remove one occurrence so every parameter has a unique name."
+
+  defp declaration_conflict_message(_kind, name, detail),
+    do: "The declaration `#{name}` conflicts with another visible declaration#{detail}."
+
+  defp duplicate_primary_label(:duplicate_parameter), do: "this parameter repeats an earlier name"
+  defp duplicate_primary_label(:duplicate_field), do: "this field repeats an earlier name"
+  defp duplicate_primary_label(:duplicate_index), do: "this index repeats an earlier name"
+  defp duplicate_primary_label(_kind), do: "rename this declaration or make its identity unique"
 
   defp interface_failure(kind, details, opts) do
     {title, message, label} =

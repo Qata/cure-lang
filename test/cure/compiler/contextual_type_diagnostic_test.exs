@@ -35,6 +35,38 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert related["location"]["range"]["start"]["character"] == 15
   end
 
+  test "a duplicate parameter labels both authored binders" do
+    source = "mod DupParam\n  fn f(x: Int, x: Int) -> Int = x\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "duplicate_parameter.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "duplicate_parameter.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E105"
+    assert diagnostic.title == "Duplicate parameter"
+    assert diagnostic.payload.name == :x
+    assert diagnostic.primary.span.start_column == 16
+    assert diagnostic.primary.message == "this parameter repeats an earlier name"
+
+    assert [%{span: first, message: "the name was first declared here", style: :secondary}] =
+             diagnostic.secondary
+
+    assert first.start_column == 8
+    assert rendered =~ "2 |   fn f(x: Int, x: Int) -> Int = x"
+    assert rendered =~ "this parameter repeats an earlier name"
+    assert rendered =~ "the name was first declared here"
+    assert rendered =~ "Rename or remove one occurrence"
+
+    [related] = Renderer.lsp(diagnostic, registry)["relatedInformation"]
+    assert related["message"] == "the name was first declared here"
+    assert related["location"]["range"]["start"]["character"] == 7
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 

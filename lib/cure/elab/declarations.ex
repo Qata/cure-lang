@@ -1629,11 +1629,26 @@ defmodule Cure.Elab.Declarations do
 
     case pnames -- Enum.uniq(pnames) do
       [dup | _] ->
-        {:error, {:duplicate_parameter, String.to_atom(dup)}}
+        {:error, {:duplicate_parameter, duplicate_binder_details(params, dup)}}
 
       [] ->
         elaborate_param_telescope_rec(params, env)
     end
+  end
+
+  defp duplicate_binder_details(params, duplicate) do
+    spans =
+      params
+      |> Enum.filter(fn {:param, _meta, name} -> name == duplicate end)
+      |> Enum.map(fn {:param, meta, _name} ->
+        case Cure.MetaAST.Metadata.source_info(meta) do
+          %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+          _ -> nil
+        end
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    %{name: String.to_atom(duplicate), spans: spans}
   end
 
   # The telescope-aligned external-label vector for a signature's parameters

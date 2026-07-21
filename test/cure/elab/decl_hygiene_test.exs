@@ -40,7 +40,10 @@ defmodule Cure.Elab.DeclHygieneTest do
 
   test "duplicate parameter name in a function is rejected" do
     src = "mod DupParam\n  fn f(x: Int, x: Int) -> Int = x\nend\n"
-    assert {:error, {:duplicate_parameter, :x}} = elaborate(src)
+
+    assert {:error, {:duplicate_parameter, %{name: :x, spans: [first, second]}}} = elaborate(src)
+    assert {first.start_line, first.start_column} == {2, 8}
+    assert {second.start_line, second.start_column} == {2, 16}
   end
 
   test "distinct parameter names still elaborate" do
