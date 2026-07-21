@@ -177,15 +177,20 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert :ok = MacroSyntax.validate_expansion(reflected)
   end
 
-  test "an exotic scalar value (regex tuple) reflects opaquely without crashing" do
+  test "a regex literal reflects as its typed pure Cure constructor call" do
     ast = expr!("~r/foo/")
-    # Node tag is :literal (subtype: :regex in meta), NOT a bare :regex tag —
-    # only the scalar VALUE ({body, flags}) is exotic.
     repr = MacroSyntax.to_syntax(ast)
-    assert {:syn_leaf, :literal, attrs, :s_opaque} = repr
-    assert {:subtype, {:s_atom, :regex}} in attrs
-    # round-trips to a literal leaf (value not faithfully recovered — opaque this slice)
-    assert {:literal, _, nil} = MacroSyntax.from_syntax(repr)
+
+    assert {:syn_node, :function_call, attrs,
+            [
+              {:syn_leaf, :literal, pattern_attrs, {:s_str, "foo"}},
+              {:syn_leaf, :literal, flags_attrs, {:s_str, ""}}
+            ]} = repr
+
+    assert {:name, {:s_str, "Std.Regex.literal"}} in attrs
+    assert {:subtype, {:s_atom, :string}} in pattern_attrs
+    assert {:subtype, {:s_atom, :string}} in flags_attrs
+    assert MacroSyntax.from_syntax(repr) == ast
   end
 
   test "a binary-segment size expression (an AST, not a scalar) round-trips faithfully" do
