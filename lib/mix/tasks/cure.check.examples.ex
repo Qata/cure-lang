@@ -27,7 +27,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
   use Mix.Task
 
-  alias Cure.Diagnostic.Sink
+  alias Cure.Diagnostic.{Host, Sink}
 
   @shortdoc "Compile and run every .cure example and check their output"
 
@@ -141,7 +141,7 @@ defmodule Mix.Tasks.Cure.Check.Examples do
         {:pass, name}
 
       {:error, reason} ->
-        msg = render_diagnostic(Cure.Diagnostic.Operational.command_failure("example compile", reason))
+        msg = render_host_diagnostic(reason, path)
         IO.puts("  FAIL #{pad(name)} #{msg}")
         {:fail, name, msg}
     end
@@ -167,14 +167,14 @@ defmodule Mix.Tasks.Cure.Check.Examples do
               kind, reason ->
                 msg =
                   "#{kind}: " <>
-                    render_diagnostic(Cure.Diagnostic.Operational.command_failure("example compile", reason))
+                    render_host_diagnostic(reason, path)
 
                 IO.puts("  FAIL #{pad(name)} #{msg}")
                 {:fail, name, msg}
             end
 
           {:error, reason} ->
-            msg = render_diagnostic(Cure.Diagnostic.Operational.command_failure("example compile", reason))
+            msg = render_host_diagnostic(reason, path)
             IO.puts("  FAIL #{pad(name)} #{msg}")
             {:fail, name, msg}
         end
@@ -195,8 +195,10 @@ defmodule Mix.Tasks.Cure.Check.Examples do
 
   defp pad(name), do: String.pad_trailing(name, 26)
 
-  defp render_diagnostic(diagnostic) do
-    Sink.new(format: :plain, color: :auto, width: 80)
+  defp render_host_diagnostic(reason, path) do
+    {diagnostic, registry} = Host.to_diagnostic(reason, path)
+
+    Sink.new(format: :plain, color: :auto, width: 80, registry: registry)
     |> Sink.render(diagnostic)
   end
 

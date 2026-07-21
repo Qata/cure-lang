@@ -18,7 +18,7 @@ defmodule Mix.Tasks.Cure.Check.Stdlib do
 
   use Mix.Task
 
-  alias Cure.Diagnostic.Sink
+  alias Cure.Diagnostic.{Host, Sink}
 
   @shortdoc "Compile every Std.* module and reject errors or warnings"
 
@@ -45,7 +45,7 @@ defmodule Mix.Tasks.Cure.Check.Stdlib do
             {:fail, name, msg}
 
           {:error, reason} ->
-            msg = render_diagnostic(Cure.Diagnostic.Operational.command_failure("stdlib compile", reason))
+            msg = render_host_diagnostic(reason, path)
             IO.puts("  FAIL #{pad(name)} #{msg}")
             {:fail, name, msg}
         end
@@ -65,8 +65,10 @@ defmodule Mix.Tasks.Cure.Check.Stdlib do
 
   defp pad(name), do: String.pad_trailing(name, 20)
 
-  defp render_diagnostic(diagnostic) do
-    Sink.new(format: :plain, color: :auto, width: 80)
+  defp render_host_diagnostic(reason, path) do
+    {diagnostic, registry} = Host.to_diagnostic(reason, path)
+
+    Sink.new(format: :plain, color: :auto, width: 80, registry: registry)
     |> Sink.render(diagnostic)
   end
 end
