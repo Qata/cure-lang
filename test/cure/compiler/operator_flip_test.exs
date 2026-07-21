@@ -7,6 +7,7 @@ defmodule Cure.Compiler.OperatorFlipTest do
   """
   use ExUnit.Case, async: true
 
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.{Emit, Program}
 
   # -- real evaluation harness (mirrors the Phase-2 differential test) --------
@@ -93,7 +94,44 @@ defmodule Cure.Compiler.OperatorFlipTest do
     end
     """
 
-    assert_error_tag(src, :ambiguous_precedence)
+    error = assert_error_tag(src, :ambiguous_precedence)
+    assert {:ambiguous_precedence, details} = error
+    assert details.operator_span.start_line == 11
+    assert details.operator_span.start_column == 23
+    assert details.span.start_line == 11
+    assert details.span.start_column == 29
+
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "precedence.cure", src)
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- OPERATOR PRECEDENCE IS AMBIGUOUS [E094] --------------------- precedence.cure
+
+             These operators have no declared relative precedence; add parentheses to choose
+             the grouping.
+
+             at precedence.cure:11:29
+             11 |   fn bad() -> Int = 1 <?> 2 <!> 3
+                |                       ---   ^^^ the conflicting operator is here; this operator has no precedence relative to the surrounding one
+
+             Hint: Add parentheses around the operation that should happen first
+             """)
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 10, "character" => 28},
+             "end" => %{"line" => 10, "character" => 31}
+           }
+
+    assert [%{"location" => %{"range" => first_range}, "message" => "the conflicting operator is here"}] =
+             lsp["relatedInformation"]
+
+    assert first_range == %{
+             "start" => %{"line" => 10, "character" => 22},
+             "end" => %{"line" => 10, "character" => 25}
+           }
   end
 
   test "a fixity declaration with no function errors at use" do

@@ -1860,28 +1860,28 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:duplicate_syntax_family_field, field, line, column}, opts),
     do: macro_validation_failure(:duplicate_syntax_family_field, %{field: field, line: line, column: column}, opts)
 
-  def from_error({:non_associative, operator, :chained_with, next_operator, line, column}, opts),
+  def from_error({:non_associative, details}, opts) when is_map(details),
     do:
       from_error(
         %SyntaxProblem{
           kind: :non_associative,
-          expected: :parentheses,
-          observed: next_operator,
-          at: Keyword.get(opts, :span),
-          context: %{line: line, column: column, operator: operator}
+          observed: details.next_operator,
+          at: Map.get(details, :span) || Keyword.get(opts, :span),
+          previous: Map.get(details, :operator_span),
+          context: details
         },
         opts
       )
 
-  def from_error({:ambiguous_precedence, left_group, right_group, line, column}, opts),
+  def from_error({:ambiguous_precedence, details}, opts) when is_map(details),
     do:
       from_error(
         %SyntaxProblem{
           kind: :ambiguous_precedence,
-          expected: :parentheses,
-          observed: right_group,
-          at: Keyword.get(opts, :span),
-          context: %{line: line, column: column, left_group: left_group}
+          observed: details.operator,
+          at: Map.get(details, :span) || Keyword.get(opts, :span),
+          previous: Map.get(details, :operator_span),
+          context: details
         },
         opts
       )
@@ -3765,7 +3765,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: "This macro capture must match the literal shape `#{syntax_name(expected)}`."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :non_associative, context: %{operator: operator}}),
-    do: "The `#{syntax_name(operator)}` operator cannot be chained without parentheses."
+    do: "The #{syntax_name(operator)} operator cannot be chained without parentheses."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :ambiguous_precedence}),
     do: "These operators have no declared relative precedence; add parentheses to choose the grouping."
@@ -3848,6 +3848,13 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda}), do: "the unclosed body reaches here"
   defp syntax_problem_label(%SyntaxProblem{kind: :recovered_statement}), do: "parsing resumed after this token"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :non_associative}),
+    do: "this second operator makes the chain ambiguous"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :ambiguous_precedence}),
+    do: "this operator has no precedence relative to the surrounding one"
+
   defp syntax_problem_label(_problem), do: "this syntax does not fit here"
 
   defp computed_macro_reason({:invalid_generated_syntax, {:raw_syntax_in_expansion, path}}),
@@ -3886,6 +3893,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_secondary_labels(%SyntaxProblem{opener: %Span{} = opener}, primary_span) when opener != primary_span,
     do: [%Label{span: opener, style: :secondary, message: "the construct starts here"}]
 
+  defp syntax_secondary_labels(%SyntaxProblem{kind: kind, previous: %Span{} = previous}, primary_span)
+       when kind in [:non_associative, :ambiguous_precedence] and previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "the conflicting operator is here"}]
+
   defp syntax_secondary_labels(%SyntaxProblem{within: %Span{} = within}, primary_span) when within != primary_span,
     do: [%Label{span: within, style: :secondary, message: "while parsing this construct"}]
 
@@ -3911,6 +3922,15 @@ defmodule Cure.Diagnostic.Adapter do
         ]
     end
   end
+
+  defp syntax_insertions(%SyntaxProblem{kind: kind}, %Span{})
+       when kind in [:non_associative, :ambiguous_precedence],
+       do: [
+         %Suggestion{
+           message: "Add parentheses around the operation that should happen first",
+           applicability: :manual
+         }
+       ]
 
   defp syntax_insertions(_problem, _span), do: []
 

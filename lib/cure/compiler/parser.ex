@@ -2659,7 +2659,7 @@ defmodule Cure.Compiler.Parser do
             state = advance(state)
             {ast, state} = build_infix_op(state, left, token, right_bp, lexeme)
             state = reject_non_assoc_chain(state, table, token, lexeme, left_bp)
-            parse_infix(state, ast, min_bp, lexeme)
+            parse_infix(state, ast, min_bp, {lexeme, token.span})
 
           :not_infix ->
             {left, state}
@@ -2707,7 +2707,15 @@ defmodule Cure.Compiler.Parser do
 
     if chained? do
       error =
-        {:non_associative, operator_display(token), :chained_with, operator_display(next), next.line, next.col}
+        {:non_associative,
+         %{
+           operator: operator_display(token),
+           next_operator: operator_display(next),
+           operator_span: token.span,
+           span: next.span,
+           line: next.line,
+           column: next.col
+         }}
 
       add_error(state, error)
     else
@@ -2725,12 +2733,28 @@ defmodule Cure.Compiler.Parser do
   # the rest of the file is still reported.
   defp reject_incomparable_chain(state, _table, nil, _lexeme, _token), do: state
 
+  defp reject_incomparable_chain(state, table, {ctx_op, ctx_span}, lexeme, token) do
+    reject_incomparable_chain(state, table, ctx_op, ctx_span, lexeme, token)
+  end
+
   defp reject_incomparable_chain(state, table, ctx_op, lexeme, token) do
+    reject_incomparable_chain(state, table, ctx_op, nil, lexeme, token)
+  end
+
+  defp reject_incomparable_chain(state, table, ctx_op, ctx_span, lexeme, token) do
     if FixityTable.incomparable?(table, ctx_op, lexeme) do
       add_error(
         state,
-        {:ambiguous_precedence, FixityTable.group_of(table, ctx_op), FixityTable.group_of(table, lexeme), token.line,
-         token.col}
+        {:ambiguous_precedence,
+         %{
+           left_group: FixityTable.group_of(table, ctx_op),
+           right_group: FixityTable.group_of(table, lexeme),
+           operator: operator_display(token),
+           operator_span: ctx_span,
+           span: token.span,
+           line: token.line,
+           column: token.col
+         }}
       )
     else
       state
@@ -3253,7 +3277,7 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
     rbp = prefix_rbp(state, token)
     state = advance(state)
-    {operand, state} = parse_expr(state, rbp, lexeme_of(token))
+    {operand, state} = parse_expr(state, rbp, {lexeme_of(token), token.span})
     op = Precedence.operator_symbol(token.type)
     meta = [category: category, operator: op, line: token.line, col: token.col]
     meta = put_operator_source_info(meta, nil, operand, token)
@@ -3309,7 +3333,7 @@ defmodule Cure.Compiler.Parser do
       # the intervening newline to find it is unambiguous (skip_newlines skips only `:newline`).
       :pipe ->
         state = skip_newlines(state)
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         {desugar_pipe(left, right, token), state}
 
       # Melquiades operator: `pid <-| message` or `pid ✉ message`.
@@ -3317,7 +3341,7 @@ defmodule Cure.Compiler.Parser do
       # author's choice of ASCII vs unicode form in `:melquiades_form` so
       # the printer can round-trip it.
       :melquiades ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         form = melquiades_form(token.value)
         meta = [line: token.line, col: token.col, melquiades_form: form]
         {{:send, meta, [left, right]}, state}
@@ -3332,7 +3356,7 @@ defmodule Cure.Compiler.Parser do
 
       # Range operators
       type when type in [:range, :range_inclusive] ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         inclusive = type == :range_inclusive
         meta = [inclusive: inclusive, line: token.line, col: token.col]
         meta = put_operator_source_info(meta, left, right, token)
@@ -3340,7 +3364,7 @@ defmodule Cure.Compiler.Parser do
 
       # Assignment
       :assign ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         {{:assignment, [line: token.line, col: token.col], [left, right]}, state}
 
       # Generic (user-declared) overloadable operator: build a `:binary_op` node
@@ -3349,7 +3373,7 @@ defmodule Cure.Compiler.Parser do
       # named by the lexeme (`Resolve.method_call`/`Overload.resolve`), keeping
       # the Phase-2 primitive/`struct_eq`/`combine` fast paths for the built-ins.
       :operator ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         op = String.to_atom(token.value)
         meta = [category: :overloaded, operator: op, line: token.line, col: token.col]
         meta = put_operator_source_info(meta, left, right, token)
@@ -3358,7 +3382,7 @@ defmodule Cure.Compiler.Parser do
       # Regular built-in binary operator (arithmetic/comparison/boolean/…):
       # dedicated node with its historical category + symbol, unchanged.
       _ ->
-        {right, state} = parse_expr(state, right_bp, op_lexeme)
+        {right, state} = parse_expr(state, right_bp, {op_lexeme, token.span})
         category = Precedence.operator_category(token.type)
         op = Precedence.operator_symbol(token.type)
         meta = [category: category, operator: op, line: token.line, col: token.col]

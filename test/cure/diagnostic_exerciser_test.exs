@@ -137,8 +137,9 @@ defmodule Cure.DiagnosticExerciserTest do
       {"multi-with no arms", "E093", {:with_multi_no_arms, "arms", []}},
       {"multi-with inconsistent pattern", "E093", {:with_multi_inconsistent_pattern, "patterns", []}},
       {"duplicate syntax family field", "E092", {:duplicate_syntax_family_field, :field, 1, 2}},
-      {"non-associative operator", "E094", {:non_associative, :==, :chained_with, :==, 1, 2}},
-      {"ambiguous precedence", "E094", {:ambiguous_precedence, :left, :right, 1, 2}}
+      {"non-associative operator", "E094", {:non_associative, %{operator: :==, next_operator: :==}}},
+      {"ambiguous precedence", "E094",
+       {:ambiguous_precedence, %{left_group: :left, right_group: :right, operator: :"<?>"}}}
     ]
 
     compiler_codes = Enum.map(compiler_cases ++ boundary_cases, &elem(&1, 1))
