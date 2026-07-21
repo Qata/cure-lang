@@ -2938,13 +2938,20 @@ defmodule Cure.Diagnostic.Adapter do
   defp candidate_suggestions(candidates) do
     names = Enum.map(candidates, &suggestion_name/1)
 
+    qualification_hint =
+      if Enum.any?(candidates, &requires_qualification?/1), do: " Qualify it or import its module.", else: ""
+
     [
       %Suggestion{
-        message: "Did you mean #{Enum.map_join(names, ", ", &"`#{&1}`")}?",
+        message: "Did you mean #{Enum.map_join(names, ", ", &"`#{&1}`")}?#{qualification_hint}",
         applicability: :maybe_incorrect
       }
     ]
   end
+
+  defp requires_qualification?(%{imported: false}), do: true
+  defp requires_qualification?(%{requires_import: true}), do: true
+  defp requires_qualification?(_candidate), do: false
 
   defp rank_candidates(candidates, spelling, namespace, opts) do
     Suggest.rank(candidates, spelling, namespace, opts)

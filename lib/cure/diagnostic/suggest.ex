@@ -13,6 +13,8 @@ defmodule Cure.Diagnostic.Suggest do
           optional(:arity) => non_neg_integer() | nil,
           optional(:owner) => term(),
           optional(:imported) => boolean(),
+          optional(:qualification) => term(),
+          optional(:requires_import) => boolean(),
           optional(:origin) => term(),
           optional(:candidate_id) => term()
         }
@@ -116,6 +118,8 @@ defmodule Cure.Diagnostic.Suggest do
       arity: Map.get(candidate, :arity, Map.get(candidate, "arity")),
       owner: Map.get(candidate, :owner, Map.get(candidate, "owner")),
       imported: Map.get(candidate, :imported, Map.get(candidate, "imported", true)),
+      qualification: Map.get(candidate, :qualification, Map.get(candidate, "qualification")),
+      requires_import: Map.get(candidate, :requires_import, Map.get(candidate, "requires_import")),
       origin: Map.get(candidate, :origin, Map.get(candidate, "origin")),
       candidate_id: Map.get(candidate, :id, Map.get(candidate, "id", Map.get(candidate, :name))),
       rich?: true
@@ -130,6 +134,8 @@ defmodule Cure.Diagnostic.Suggest do
       arity: nil,
       owner: nil,
       imported: true,
+      qualification: nil,
+      requires_import: false,
       origin: nil,
       candidate_id: candidate,
       rich?: false

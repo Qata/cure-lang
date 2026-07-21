@@ -400,6 +400,33 @@ defmodule Cure.DiagnosticTest do
     assert hd(diagnostic.payload.candidate_details).arity == 2
   end
 
+  test "name suggestions preserve qualification and import requirements" do
+    diagnostic =
+      Adapter.unknown_name(:value, "prnt",
+        candidates: [
+          %{
+            id: :qualified_print,
+            name: "print",
+            namespace: :value,
+            owner: "Std.Io",
+            imported: false,
+            qualification: "Std.Io",
+            requires_import: true,
+            visibility: :public
+          }
+        ]
+      )
+
+    [candidate] = diagnostic.payload.candidate_details
+    assert candidate.candidate_id == :qualified_print
+    assert candidate.owner == "Std.Io"
+    assert candidate.qualification == "Std.Io"
+    assert candidate.requires_import
+    assert [%Cure.Diagnostic.Suggestion{message: message}] = diagnostic.suggestions
+    assert message =~ "`Std.Io.print`"
+    assert message =~ "Qualify it or import its module"
+  end
+
   test "name ranking is case-insensitive and recognizes adjacent transpositions" do
     diagnostic =
       Adapter.unknown_name(:value, "Nmae",
