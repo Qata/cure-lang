@@ -1,6 +1,7 @@
 # Proof-authoring elaborator ergonomics — a living catalog
 
-*Status: LIVING (append as encountered). Opened 2026-07-17 while dogfooding the OTP
+*Status: LIVING (append as encountered; the July 21 implementation batch is closed).
+Opened 2026-07-17 while dogfooding the OTP
 metatheory in Cure (`Std.Otp.*`). Layer tags per `cure-porting`: **K** = trusted kernel
 (`lib/cure/core/*`, HARD-STOP), **E** = elaborator (`lib/cure/elab/*`), **C** = codegen/erase,
 **P** = parser.*
@@ -10,6 +11,14 @@ metatheory in Cure (`Std.Otp.*`). Layer tags per `cure-porting`: **K** = trusted
 > design for proof authoring is now
 > `2026-07-21-proof-language-ergonomics-design.md`. Suggestions in older catalog
 > entries must be interpreted through that specification.
+
+**2026-07-21 completion note.** The implementation batch closed the planned
+proof-language substrate: dependent sibling refinement, checked `have`, `proof
+chain`, `because`, directed rewrite, certified equations, simplification,
+structured induction, reorderable named arguments, and the restored affine
+semantic/fold workload. The corresponding commits are recorded in the
+authoritative July 21 ledger; unresolved entries below remain historical kernel
+investigations rather than acceptance blockers.
 
 ## Why this exists
 

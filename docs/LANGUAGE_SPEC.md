@@ -266,6 +266,22 @@ design and Core has internal equality/rewrite support. The public Cure
 surface is not fully wired through the trusted dependent compiler yet;
 `Std.Equal` remains an `Atom`-returning compatibility module.
 
+### Proof authoring
+
+The proof surface is implemented as ordinary, kernel-checked Cure terms. Use
+`have name = expression` for a checked local fact, `proof chain` for readable
+equality composition, and an indented `because` block for directed rewrites,
+`simplify`, and `induction` commands. Proof commands are elaboration-only and
+never appear in runtime Core or BEAM output.
+
+Generated defining equations are certified theorem members and can be found
+after `function.` in completion and hover. Named arguments may be written in
+any order after a positional prefix (`label: value`); the compiler aligns them
+to the declaration telescope before dependent solving. Unknown, duplicate,
+missing, misplaced, and ambiguous labels use E115 with authored ranges and
+machine-safe code actions. Proof-language diagnostics E109–E114 follow the
+same terminal, JSON, and LSP structured-diagnostic path.
+
 ### Implicit arguments
 
 ```cure

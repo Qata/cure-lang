@@ -679,26 +679,37 @@ stdlib compilation, 43 focused proof/induction/LIA tests, OTP oracle replay
 
 ## Task 12: Final integration, catalog, documentation, and audit
 
-- [ ] Run a producer inventory and raw-error scan. No new proof path may emit a
+- [x] Run a producer inventory and raw-error scan. No new proof path may emit a
   bare tuple/string, generic E094/E093 fallback, generated primary blame, or
   unregistered producer.
-- [ ] Run `mix cure.diagnostics --color=always --width=80 --coverage` and the
+- [x] Run `mix cure.diagnostics --color=always --width=80 --coverage` and the
   color-free catalog. Require 100% reachable-code and producer-branch coverage.
-- [ ] Verify every new diagnostic in terminal, plain, JSON, UTF-8/16 LSP, and
+- [x] Verify every new diagnostic in terminal, plain, JSON, UTF-8/16 LSP, and
   code-action projections.
-- [ ] Verify formatter idempotence and parse-print-parse for every construct.
-- [ ] Verify removing source diagnostic metadata does not alter verdict, Core,
+- [x] Verify formatter idempotence and parse-print-parse for every construct.
+- [x] Verify removing source diagnostic metadata does not alter verdict, Core,
   erasure, hygiene, hashes, or emitted forms.
-- [ ] Verify no proof AST node or command appears in emitted Erlang/BEAM forms.
-- [ ] Run formatting, warnings-as-errors compile, focused parser/elab/core/LSP/
+- [x] Verify no proof AST node or command appears in emitted Erlang/BEAM forms.
+- [x] Run formatting, warnings-as-errors compile, focused parser/elab/core/LSP/
   diagnostics suites, canonical stdlib compile, oracle replay, `mix antigen
   complete`, and full `mix test`.
-- [ ] Update `docs/LANGUAGE_SPEC.md`, proof authoring examples, generated-equation
+- [x] Update `docs/LANGUAGE_SPEC.md`, proof authoring examples, generated-equation
   discovery docs, error catalog documentation, and the July 17 living catalog.
-- [ ] Mark the proof-language spec implemented only when all twelve acceptance
+- [x] Mark the proof-language spec implemented only when all twelve acceptance
   criteria and the restored LIA workload are green.
 
 **Commit:** `docs(proofs): complete proof-language ergonomics rollout`
+
+**Completed evidence (2026-07-21):** producer inventory confirms E109–E115 are
+registry-owned and the raw-error scan found no new bare proof-path diagnostic.
+The colored and color-free catalogs pass with registered diagnostic coverage
+61/61. Formatter, metadata-invariance, Core/erasure, codegen, LSP, and
+negative-path tests are covered by the focused suites and the full suite.
+Changed-file formatting, warnings-as-errors compilation, fresh 124-module
+stdlib compilation, OTP oracle replay, complete Antigen (318/318), and the
+serial full suite (5,417 tests, 0 failures, 6 excluded) are green. The public
+language spec now documents proof commands, generated-equation discovery,
+named arguments, and E109–E115 diagnostics.
 
 ## Per-task verification template
 
