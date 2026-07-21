@@ -501,7 +501,8 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.primary.span.start_column == 6
     assert diagnostic.primary.span.end_column == 8
     assert rendered =~ "3 |     1..10 -> 1"
-    assert rendered =~ "  ^^ this syntax does not fit here"
+    assert rendered =~ "^^ a range operator cannot be used in a pattern"
+    assert rendered =~ "test the range in a guard instead"
     refute rendered =~ "2 |   fn bad"
 
     assert Renderer.lsp(diagnostic, registry)["range"] == %{

@@ -322,19 +322,38 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:source_context, {:unsolved_metavariables, name}, context}, opts) when is_map(context) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+    primary = primary_label(opts, "these hidden arguments cannot be inferred")
+
+    secondary =
+      case {Map.get(context, :expectation_span), primary} do
+        {%Span{} = span, %Label{span: primary_span}} when span != primary_span ->
+          [%Label{span: span, style: :secondary, message: "this result annotation still leaves them unknown"}]
+
+        _ ->
+          []
+      end
 
     Diagnostic.new(
       code: "E011",
       key: :missing_implicit_argument,
       severity: :error,
       title: "Missing implicit argument",
-      body: Doc.paragraph("Cure could not infer every implicit argument for `#{name}` at this call site."),
-      primary: primary_label(opts, "the implicit argument cannot be inferred"),
-      payload: %{
-        name: name,
-        checking: Map.get(context, :checking),
-        expectation_origin: Map.get(context, :expectation_origin)
-      }
+      body:
+        Doc.stack([
+          Doc.paragraph("Cure could not infer every implicit argument for `#{name}` at this call site."),
+          Doc.paragraph(
+            "The call leaves hidden type or index values unconstrained. Provide arguments that determine them, or use the result where its dependent type is known."
+          )
+        ]),
+      primary: primary,
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Provide arguments or a result type that determines the hidden values",
+          applicability: :manual
+        }
+      ],
+      payload: Map.put(context, :name, name)
     )
   end
 
