@@ -13,6 +13,7 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:command_failed, command, reason}, _opts), do: command_failure(command, reason)
   def from_error({:unknown_watch_action, action}, _opts), do: unknown_watch_action(action)
   def from_error({:migration_warning, details}, _opts) when is_map(details), do: migration_warning(details)
+  def from_error({:migration_failed, kind, details}, _opts) when is_map(details), do: migration_failure(kind, details)
   def from_error({:compiler_warning, details}, _opts) when is_map(details), do: compiler_warning(details)
   def from_error({:export_unmappable, reason}, _opts), do: export_unmappable(reason)
   def from_error({:snap_missing, path}, _opts), do: snap_missing(path)
@@ -117,6 +118,40 @@ defmodule Cure.Diagnostic.Operational do
         command: command,
         reason: inspect(reason)
       })
+
+  def migration_failure(kind, details) when is_atom(kind) and is_map(details) do
+    message =
+      case {kind, details} do
+        {:project_downgrade, %{target: target, current: current}} ->
+          "Cannot migrate to edition `#{target}` because the project uses newer edition `#{current}`."
+
+        {:invalid_project_edition, %{edition: edition, path: path}} ->
+          "The edition `#{edition}` declared in `#{path}` is not supported."
+
+        {:unknown_target_edition, %{edition: edition}} ->
+          "The migration target edition `#{edition}` is not supported."
+
+        {:git_guard, %{path: path, reason: reason}} ->
+          "Cannot migrate `#{path}` because it is #{migration_guard_reason(reason)}."
+
+        {:file_downgrade, %{path: path, from: from, target: target}} ->
+          "Cannot migrate `#{path}` from edition `#{from}` to older edition `#{target}`."
+
+        {:preflight, %{path: path}} ->
+          "Could not migrate `#{path}` without producing invalid syntax or changing its comments."
+
+        {:manual_required, %{path: path, rules: rules}} ->
+          "`#{path}` needs a manual migration for #{format_rules(rules)}."
+
+        {:strict_warning, %{path: path, rules: rules}} ->
+          "`#{path}` has fixable migration warnings rejected by `--strict`: #{format_rules(rules)}."
+
+        _ ->
+          "Migration failed (#{kind})."
+      end
+
+    diagnostic("E098", :command_failure, message, Map.put(details, :kind, kind))
+  end
 
   def unknown_watch_action(action),
     do: diagnostic("E098", :command_failure, "unknown watch action `#{display_value(action)}`", %{action: action})
@@ -312,6 +347,12 @@ defmodule Cure.Diagnostic.Operational do
   defp title(:registry_hash_mismatch), do: "Registry hash mismatch"
   defp title(:registry_package_not_found), do: "Registry package not found"
   defp title(:package_version_conflict), do: "Package version conflict"
+
+  defp migration_guard_reason(:dirty), do: "modified"
+  defp migration_guard_reason(:untracked), do: "not tracked by git"
+  defp migration_guard_reason(reason), do: display_value(reason)
+
+  defp format_rules(rules), do: Enum.map_join(rules, ", ", &"`#{&1}`")
 
   defp fingerprint(term) do
     term

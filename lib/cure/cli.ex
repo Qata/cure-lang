@@ -1201,10 +1201,7 @@ defmodule Cure.CLI do
          {:ok, project_edition} <- migrate_project_edition(".") do
       case plan_migration(target: target, current: project_edition) do
         {:error, :downgrade} ->
-          error(
-            "refusing to downgrade: target edition `#{target}` is older than " <>
-              "the project edition `#{project_edition}`"
-          )
+          migration_error(:project_downgrade, %{target: target, current: project_edition})
 
           {:error, :downgrade}
 
@@ -1241,7 +1238,11 @@ defmodule Cure.CLI do
         {:ok, ed}
 
       {:error, {:unknown_edition, ed}} = err ->
-        error("invalid edition `#{ed}` declared in #{Path.join(dir, "Cure.toml")}")
+        migration_error(:invalid_project_edition, %{
+          edition: ed,
+          path: Path.join(dir, "Cure.toml")
+        })
+
         err
 
       {:error, _} ->
@@ -1264,7 +1265,7 @@ defmodule Cure.CLI do
             {:ok, raw}
 
           {:error, {:unknown_edition, _}} = err ->
-            error("unknown edition: `#{raw}`")
+            migration_error(:unknown_target_edition, %{edition: raw})
             err
         end
     end
@@ -1379,7 +1380,10 @@ defmodule Cure.CLI do
         :ok
 
       {:error, reasons} ->
-        Enum.each(reasons, fn {path, reason} -> error("#{path}: #{reason}") end)
+        Enum.each(reasons, fn {path, reason} ->
+          migration_error(:git_guard, %{path: path, reason: reason})
+        end)
+
         {:error, {:git_guard_failed, reasons}}
     end
   end
@@ -1405,21 +1409,21 @@ defmodule Cure.CLI do
         # rather than silently downgrade any file (Finding 2), mirroring the
         # project-level downgrade guard in plan_migration/1.
         Enum.each(downgraded, fn {path, from, tgt} ->
-          error("#{path}: edition #{from} is newer than the migration target #{tgt} — refusing to downgrade")
+          migration_error(:file_downgrade, %{path: path, from: from, target: tgt})
         end)
 
         {:error, {:downgrade, downgraded}}
 
       failed != [] ->
         Enum.each(failed, fn path ->
-          error("#{path}: could not be migrated cleanly (parse/reparse/comment check failed)")
+          migration_error(:preflight, %{path: path})
         end)
 
         {:error, {:preflight_failed, failed}}
 
       blocked != [] ->
         Enum.each(blocked, fn {path, ids} ->
-          error("#{path}: manual migration required — #{Enum.map_join(ids, ", ", &to_string/1)}")
+          migration_error(:manual_required, %{path: path, rules: ids})
         end)
 
         {:error, {:blocked, blocked}}
@@ -1489,7 +1493,7 @@ defmodule Cure.CLI do
       :ok
     else
       Enum.each(violators, fn {path, ids} ->
-        error("#{path}: fixable migration warnings present (--strict) — #{Enum.map_join(ids, ", ", &to_string/1)}")
+        migration_error(:strict_warning, %{path: path, rules: ids})
       end)
 
       {:error, {:strict_violation, violators}}
@@ -1709,7 +1713,13 @@ defmodule Cure.CLI do
     if changed == 0 do
       info("All files are formatted")
     else
-      error("#{changed} file(s) would be reformatted")
+      error_diagnostic(
+        Cure.Diagnostic.Operational.command_failure(
+          "cure fmt --diff",
+          "#{changed} file(s) would be reformatted"
+        )
+      )
+
       exit({:shutdown, 1})
     end
   end
@@ -2281,6 +2291,10 @@ defmodule Cure.CLI do
     emit_diagnostic(diagnostic)
   end
 
+  defp migration_error(kind, details) do
+    error_diagnostic(Cure.Diagnostic.Operational.migration_failure(kind, details))
+  end
+
   defp emit_diagnostic(%Cure.Diagnostic{} = diagnostic, registry \\ nil) do
     case Cure.Diagnostic.Host.emit_diagnostic(diagnostic, registry: registry) do
       {:ok, _sink} -> :ok
@@ -2291,16 +2305,6 @@ defmodule Cure.CLI do
   defp emit_host_diagnostic(reason, path, source \\ nil) do
     {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path, source)
     emit_diagnostic(diagnostic, registry)
-  end
-
-  defp error(msg) do
-    rendered = String.trim_leading(msg)
-
-    if String.starts_with?(rendered, "--") or String.contains?(rendered, "\n--") do
-      IO.puts(:stderr, msg)
-    else
-      error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure", msg))
-    end
   end
 
   # A user-facing usage/lookup error that must fail the command: print to stderr

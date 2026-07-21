@@ -773,6 +773,33 @@ defmodule Cure.DiagnosticTest do
     assert Cure.Diagnostic.Renderer.plain(warning) =~ "use the modern form"
   end
 
+  test "migration failures preserve their variant data and render actionable messages" do
+    cases = [
+      {:project_downgrade, %{target: "2026", current: "2027"}, "project uses newer edition `2027`"},
+      {:invalid_project_edition, %{edition: "1999", path: "Cure.toml"}, "declared in `Cure.toml`"},
+      {:unknown_target_edition, %{edition: "1999"}, "target edition `1999` is not supported"},
+      {:git_guard, %{path: "lib/a.cure", reason: :dirty}, "because it is modified"},
+      {:file_downgrade, %{path: "lib/a.cure", from: "2027", target: "2026"},
+       "from edition `2027` to older edition `2026`"},
+      {:preflight, %{path: "lib/a.cure"}, "without producing invalid syntax"},
+      {:manual_required, %{path: "lib/a.cure", rules: [:W_removed_module]}, "manual migration for `W_removed_module`"},
+      {:strict_warning, %{path: "lib/a.cure", rules: [:W_if_elif_pickup]}, "rejected by `--strict`"}
+    ]
+
+    for {kind, details, expected} <- cases do
+      diagnostic = Cure.Diagnostic.Operational.migration_failure(kind, details)
+      rendered = Cure.Diagnostic.Renderer.plain(diagnostic)
+
+      assert diagnostic.code == "E098"
+      assert diagnostic.key == :command_failure
+      assert diagnostic.payload.kind == kind
+      assert Map.drop(diagnostic.payload, [:kind]) == details
+      assert rendered =~ expected
+      if kind == :strict_warning, do: assert(rendered =~ "`W_if_elif_pickup`")
+      refute rendered =~ inspect({kind, details})
+    end
+  end
+
   test "specialized operational warnings retain stable codes" do
     assert Cure.Diagnostic.Operational.export_unmappable("dependent").code == "E068"
     assert Cure.Diagnostic.Operational.snap_missing("missing.cure").code == "E070"
