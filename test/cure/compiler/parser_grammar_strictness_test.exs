@@ -366,6 +366,84 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     assert diagnostic.primary.span == details.span
   end
 
+  test "a variadic marker without a binder points at the insertion boundary" do
+    source = "fn run(*) -> Int = 1\n"
+    {:ok, tokens} = Lexer.tokenize(source, file: "variadic.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:variadic_parameter_name_missing, %{kind: :variadic} = details} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "variadic.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- VARIADIC PARAMETER NEEDS A NAME [E094] ------------------------ variadic.cure
+
+             The `*` marker must be followed by the name that receives extra positional
+             arguments, for example `*values`.
+
+             at variadic.cure:1:9
+             1 | fn run(*) -> Int = 1
+               |        -^ this variadic marker needs a binder; write the variadic parameter name here
+
+             Hint: Add a descriptive lower-case name after the variadic marker
+             """)
+
+    assert [%{applicability: :manual, edits: []}] = diagnostic.suggestions
+
+    assert diagnostic.primary.span.start_byte == 8
+    assert diagnostic.primary.span.end_byte == 8
+    assert details.marker_span.start_byte == 7
+    assert details.marker_span.end_byte == 8
+
+    lsp = Renderer.lsp(diagnostic, registry)
+
+    assert lsp["range"] == %{
+             "start" => %{"line" => 0, "character" => 8},
+             "end" => %{"line" => 0, "character" => 8}
+           }
+
+    assert [%{"message" => "this variadic marker needs a binder"}] = lsp["relatedInformation"]
+  end
+
+  test "a keyword-variadic marker retains the complete two-star range" do
+    source = "fn run(**) -> Int = 1\n"
+    {:ok, tokens} = Lexer.tokenize(source, file: "keyword_variadic.cure", emit_events: false)
+    assert {:error, [{:variadic_parameter_name_missing, details} | _]} = Parser.parse(tokens, emit_events: false)
+    assert details.kind == :keyword_variadic
+    assert details.marker_span.start_byte == 7
+    assert details.marker_span.end_byte == 9
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(
+        {:parse_error, [{:variadic_parameter_name_missing, details}]},
+        "keyword_variadic.cure",
+        source
+      )
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- VARIADIC PARAMETER NEEDS A NAME [E094] ---------------- keyword_variadic.cure
+
+             The `**` marker must be followed by the name that receives extra named
+             arguments, for example `**options`.
+
+             at keyword_variadic.cure:1:10
+             1 | fn run(**) -> Int = 1
+               |        --^ this variadic marker needs a binder; write the variadic parameter name here
+
+             Hint: Add a descriptive lower-case name after the variadic marker
+             """)
+  end
+
+  test "a named keyword-variadic parameter reaches the intended AST form" do
+    assert {:function_def, meta, _body} = parse!("fn run(**options) = 1")
+    assert [{:param, parameter_meta, "options"}] = meta[:params]
+    assert parameter_meta[:kind] == :keyword_variadic
+  end
+
   describe "associative operators still chain" do
     test "`a + b + c` left-associates" do
       assert {:binary_op, _, [{:binary_op, _, [_a, _b]}, _c]} = parse!("a + b + c")

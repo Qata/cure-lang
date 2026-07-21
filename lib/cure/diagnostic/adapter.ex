@@ -2480,6 +2480,20 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:variadic_parameter_name_missing, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :variadic_parameter_name_missing,
+        expected: :identifier,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :marker_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:lambda_block_unterminated, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -4915,6 +4929,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name}), do: "Function parameter needs a name"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :variadic_parameter_name_missing}),
+    do: "Variadic parameter needs a name"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :bare_brace_expression}), do: "Brace cannot start an expression"
   defp syntax_problem_title(%SyntaxProblem{kind: :unmatched_closer}), do: "Closing delimiter has no opener"
   defp syntax_problem_title(%SyntaxProblem{kind: :mismatched_closer}), do: "Closing delimiter does not match"
@@ -5013,6 +5030,15 @@ defmodule Cure.Diagnostic.Adapter do
     do:
       "#{String.capitalize(syntax_name(observed))} cannot name a function parameter. Use a lower-case name such as `value`, optionally followed by `: Type`."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :variadic_parameter_name_missing,
+         context: %{kind: :keyword_variadic}
+       }),
+       do: "The `**` marker must be followed by the name that receives extra named arguments, for example `**options`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :variadic_parameter_name_missing}),
+    do: "The `*` marker must be followed by the name that receives extra positional arguments, for example `*values`."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :bare_brace_expression}),
     do:
       "A bare '{' does not begin a Cure expression. Write `Type{...}` for a record, `\#{...}` for a map, or use indentation for a block."
@@ -5050,6 +5076,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_expected_doc(%SyntaxProblem{kind: :mismatched_closer}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :function_parameters_unparenthesized}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :invalid_parameter_name}), do: Doc.empty()
+  defp syntax_expected_doc(%SyntaxProblem{kind: :variadic_parameter_name_missing}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{expected: :explain_point}), do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{} = problem) do
@@ -5114,6 +5141,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name}),
     do: "write a parameter name here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :variadic_parameter_name_missing}),
+    do: "write the variadic parameter name here"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :bare_brace_expression}),
     do: "choose record, map, or block syntax here"
@@ -5186,6 +5216,13 @@ defmodule Cure.Diagnostic.Adapter do
        )
        when opener != primary_span,
        do: [%Label{span: opener, style: :secondary, message: "this lambda starts here"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :variadic_parameter_name_missing, opener: %Span{} = marker},
+         primary_span
+       )
+       when marker != primary_span,
+       do: [%Label{span: marker, style: :secondary, message: "this variadic marker needs a binder"}]
 
   defp syntax_secondary_labels(%SyntaxProblem{opener: %Span{} = opener}, primary_span) when opener != primary_span,
     do: [%Label{span: opener, style: :secondary, message: "the construct starts here"}]
@@ -5309,6 +5346,14 @@ defmodule Cure.Diagnostic.Adapter do
     do: [
       %Suggestion{
         message: "Replace this with a descriptive lower-case parameter name",
+        applicability: :manual
+      }
+    ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :variadic_parameter_name_missing}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Add a descriptive lower-case name after the variadic marker",
         applicability: :manual
       }
     ]

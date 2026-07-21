@@ -7067,6 +7067,9 @@ defmodule Cure.Compiler.Parser do
       %Token{type: type} when type in [:identifier, :keyword, :star] ->
         parse_explicit_param(state)
 
+      %Token{type: :operator, value: "**"} ->
+        parse_explicit_param(state)
+
       %Token{} = token ->
         error =
           {:invalid_parameter_name,
@@ -7256,6 +7259,9 @@ defmodule Cure.Compiler.Parser do
     # Check for variadic: *name or **name
     {kind, state} =
       case peek(state) do
+        %Token{type: :operator, value: "**"} ->
+          {:keyword_variadic, advance(state)}
+
         %Token{type: :star} ->
           next = peek_at(state, 1)
 
@@ -7272,8 +7278,43 @@ defmodule Cure.Compiler.Parser do
       end
 
     name_token = peek(state)
-    name = to_string(name_token.value)
-    state = advance(state)
+
+    {name, state} =
+      case name_token do
+        %Token{type: type} when type in [:identifier, :keyword] ->
+          {to_string(name_token.value), advance(state)}
+
+        %Token{} when kind in [:variadic, :keyword_variadic] ->
+          marker_end = authored_token(state) || start_token
+
+          marker_span =
+            case Range.through(start_token.span, marker_end.span) do
+              {:ok, span} -> span
+              _ -> start_token.span
+            end
+
+          error =
+            {:variadic_parameter_name_missing,
+             %{
+               kind: kind,
+               observed: name_token.value || name_token.type,
+               token_type: name_token.type,
+               marker_span: marker_span,
+               observed_span: name_token.span,
+               span: parameter_name_site(name_token),
+               line: name_token.line,
+               column: name_token.col
+             }}
+
+          state = add_error(state, error)
+
+          state =
+            if name_token.type in [:rparen, :rbracket, :rbrace, :comma, :newline, :eof],
+              do: state,
+              else: advance(state)
+
+          {"_missing_variadic_parameter", state}
+      end
 
     # Two-name label form `label internal: T` (Swift). A second identifier before
     # the annotation means the first name was the EXTERNAL caller-facing label and
@@ -7311,6 +7352,12 @@ defmodule Cure.Compiler.Parser do
 
     {{:param, put_param_source_info(param_meta, start_token, name_token, state, annotation_span), name}, state}
   end
+
+  defp parameter_name_site(%Token{type: type, span: %Cure.Diagnostic.Span{} = span})
+       when type in [:rparen, :rbracket, :rbrace, :comma, :newline, :eof],
+       do: %{span | end_byte: span.start_byte, end_line: span.start_line, end_column: span.start_column}
+
+  defp parameter_name_site(%Token{span: span}), do: span
 
   defp put_param_source_info(meta, %Token{} = start_token, %Token{} = name_token, state, annotation_span) do
     case {start_token.span, name_token.span, authored_token(state)} do
