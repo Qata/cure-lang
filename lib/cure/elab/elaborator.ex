@@ -8071,7 +8071,42 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  defp constructor_pattern(other), do: {:error, {:unsupported_pattern, pattern_shape(other)}}
+  defp constructor_pattern(other), do: unsupported_pattern_error(other)
+
+  defp unsupported_pattern_error(pattern) do
+    reason = {:unsupported_pattern, pattern_shape(pattern)}
+
+    span =
+      case pattern do
+        {:range, meta, _children} when is_list(meta) ->
+          case Cure.MetaAST.Metadata.source_info(meta) do
+            %Cure.MetaAST.SourceInfo{operator: %Cure.Diagnostic.Span{} = operator} -> operator
+            %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = whole} -> whole
+            _ -> nil
+          end
+
+        _ ->
+          surface_expression_span(pattern)
+      end
+
+    case span do
+      %Cure.Diagnostic.Span{} ->
+        {:error,
+         {:source_context, reason,
+          %{
+            line: span.start_line,
+            column: span.start_column,
+            length: max(1, span.end_byte - span.start_byte),
+            span: span,
+            checking: :pattern,
+            expression_category: :pattern,
+            expectation_origin: :pattern
+          }}}
+
+      _ ->
+        {:error, reason}
+    end
+  end
 
   defp named_implicit_arg?({:named_implicit_pat, _m, _children}), do: true
   defp named_implicit_arg?(_), do: false

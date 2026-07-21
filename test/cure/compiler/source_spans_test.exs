@@ -378,6 +378,19 @@ defmodule Cure.Compiler.SourceSpansTest do
     end
   end
 
+  test "range expressions retain their exact operator and operand ranges" do
+    source = "fn values() = 1..=10\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "range.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "range.cure", emit_events: false, prelude_macros: false)
+
+    {:range, meta, _operands} = find_node(ast, :range)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "1..=10"
+    assert slice(source, info.operator) == "..="
+    assert Enum.map(info.operands, &slice(source, &1)) == ["1", "10"]
+  end
+
   test "string interpolation retains its whole and embedded expression ranges" do
     source = ~S|fn message(name: String) -> String = "hello #{name}! #{name + 1}"| <> "\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "interpolation.cure", emit_events: false)

@@ -3334,7 +3334,9 @@ defmodule Cure.Compiler.Parser do
       type when type in [:range, :range_inclusive] ->
         {right, state} = parse_expr(state, right_bp, op_lexeme)
         inclusive = type == :range_inclusive
-        {{:range, [inclusive: inclusive, line: token.line, col: token.col], [left, right]}, state}
+        meta = [inclusive: inclusive, line: token.line, col: token.col]
+        meta = put_operator_source_info(meta, left, right, token)
+        {{:range, meta, [left, right]}, state}
 
       # Assignment
       :assign ->

@@ -478,6 +478,38 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert lsp["range"]["start"] == %{"line" => 2, "character" => 4}
   end
 
+  test "an unsupported range pattern points only at its operator" do
+    source = """
+    mod RangePattern
+      fn bad(x: Int) -> Int = match x
+        1..10 -> 1
+        _ -> 0
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "range_pattern.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "range_pattern.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E090"
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.span.start_column == 6
+    assert diagnostic.primary.span.end_column == 8
+    assert rendered =~ "3 |     1..10 -> 1"
+    assert rendered =~ "  ^^ this syntax does not fit here"
+    refute rendered =~ "2 |   fn bad"
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 2, "character" => 5},
+             "end" => %{"line" => 2, "character" => 7}
+           }
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 
