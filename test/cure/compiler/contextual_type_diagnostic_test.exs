@@ -24,6 +24,20 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert Renderer.plain(diagnostic, registry) =~ "type written in its annotation"
   end
 
+  test "declaration context derives its extent from the parser-owned span" do
+    source = "fn bad() -> Int = \"é\"\n"
+
+    assert {:error, {:codegen_error, {:source_context, _reason, context}}} =
+             Cure.Compiler.compile_string(source,
+               file: "extent.cure",
+               emit_events: false
+             )
+
+    assert context.span.start_column == 19
+    assert context.span.end_column == 22
+    assert context.length == context.span.end_column - context.span.start_column
+  end
+
   test "an unknown variable points at the variable rather than the whole body" do
     source = "fn run() -> Int = missing_name\n"
 

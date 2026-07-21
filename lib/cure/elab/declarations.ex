@@ -853,7 +853,29 @@ defmodule Cure.Elab.Declarations do
     end
   end
 
-  defp expression_extent({:function_call, meta, arguments}) when is_list(meta) do
+  defp expression_extent({_, meta, _} = expression) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} ->
+        {span.start_line, span.start_column, max(1, span.end_column - span.start_column)}
+
+      _ ->
+        legacy_expression_extent(expression)
+    end
+  end
+
+  defp expression_extent({_, meta, _, _} = expression) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} ->
+        {span.start_line, span.start_column, max(1, span.end_column - span.start_column)}
+
+      _ ->
+        legacy_expression_extent(expression)
+    end
+  end
+
+  defp expression_extent(expression), do: legacy_expression_extent(expression)
+
+  defp legacy_expression_extent({:function_call, meta, arguments}) when is_list(meta) do
     line = Keyword.get(meta, :line)
     open_column = Keyword.get(meta, :col)
     name = meta |> Keyword.get(:name, "") |> to_string()
@@ -871,11 +893,11 @@ defmodule Cure.Elab.Declarations do
     {line, start_column, extent_length(start_column, end_column)}
   end
 
-  defp expression_extent({:variable, meta, name}) when is_list(meta) do
+  defp legacy_expression_extent({:variable, meta, name}) when is_list(meta) do
     {Keyword.get(meta, :line), Keyword.get(meta, :col), String.length(to_string(name))}
   end
 
-  defp expression_extent(expression) do
+  defp legacy_expression_extent(expression) do
     meta = expression_meta(expression)
     {Keyword.get(meta, :line), Keyword.get(meta, :col), 1}
   end
