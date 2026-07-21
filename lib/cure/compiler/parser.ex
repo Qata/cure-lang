@@ -8189,20 +8189,20 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
     state = skip_newlines(state)
 
-    {fields, state} = parse_precedencegroup_body(state)
+    {fields, state} = parse_precedencegroup_body(state, name, name_token)
     meta = [name: name, line: kw.line, col: kw.col] ++ fields
     meta = put_container_source_info(meta, kw, name_token, name_token, state)
     {{:precedencegroup, meta, []}, state}
   end
 
-  defp parse_precedencegroup_body(state) do
+  defp parse_precedencegroup_body(state, group, group_token) do
     case peek(state) do
-      %Token{type: :indent} -> collect_precedencegroup_fields(advance(state), [])
+      %Token{type: :indent} -> collect_precedencegroup_fields(advance(state), [], group, group_token)
       _ -> {[], state}
     end
   end
 
-  defp collect_precedencegroup_fields(state, acc) do
+  defp collect_precedencegroup_fields(state, acc, group, group_token) do
     state = skip_newlines(state)
 
     case peek(state) do
@@ -8213,7 +8213,8 @@ defmodule Cure.Compiler.Parser do
         {Enum.reverse(acc), state}
 
       %Token{type: :identifier, value: field} ->
-        state = expect(advance(state), :colon)
+        field_token = peek(state)
+        state = expect_precedencegroup_field_colon(advance(state), field_token, group, group_token)
         {value, state} = parse_precedencegroup_value(field, state)
 
         acc =
@@ -8222,11 +8223,41 @@ defmodule Cure.Compiler.Parser do
             key -> [{key, value} | acc]
           end
 
-        collect_precedencegroup_fields(state, acc)
+        collect_precedencegroup_fields(state, acc, group, group_token)
 
       _ ->
         # Unrecognised line: skip to the block's end rather than loop.
         {Enum.reverse(acc), skip_to_dedent(state)}
+    end
+  end
+
+  defp expect_precedencegroup_field_colon(state, field_token, group, group_token) do
+    case expect_token(state, :colon) do
+      {:ok, _colon, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :precedencegroup_field_colon_missing,
+             family: group,
+             declaration: to_string(field_token.value),
+             expected: :colon,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: group_token.span,
+             previous_span: field_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
     end
   end
 

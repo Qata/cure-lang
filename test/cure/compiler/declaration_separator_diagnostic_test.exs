@@ -124,4 +124,40 @@ defmodule Cure.Compiler.DeclarationSeparatorDiagnosticTest do
     {:ok, tokens} = Lexer.tokenize(ordinary, emit_events: false)
     assert {:ok, _ast} = Parser.parse(tokens, emit_events: false)
   end
+
+  test "a precedence-group setting labels both its group and field name" do
+    source = "precedencegroup Custom\n  associativity left\n"
+    {error, {diagnostic, registry}} = diagnostic(source, "group_colon.cure")
+
+    assert {:declaration_separator_missing,
+            %{
+              kind: :precedencegroup_field_colon_missing,
+              family: :Custom,
+              declaration: "associativity"
+            }} = error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- PRECEDENCE GROUP FIELD NEEDS A COLON [E094] ---------------- group_colon.cure
+
+             The `associativity` setting in precedence group `Custom` needs `:` before its
+             value.
+
+             A valid continuation here starts with ':'.
+
+             at group_colon.cure:2:17
+             1 | precedencegroup Custom
+               |                 ------ this is the precedence group
+             2 |   associativity left
+               |   ------------- ^ this is the setting name; insert `:` before this setting value
+
+             Hint: Insert `:` before the setting value
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ": ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column} == {2, 17}
+    assert insertion.start_byte == insertion.end_byte
+  end
 end
