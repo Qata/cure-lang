@@ -2473,6 +2473,7 @@ defmodule Cure.Diagnostic.Adapter do
         expected: :identifier,
         observed: Map.get(details, :observed),
         at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
         context: details
       },
       opts
@@ -4999,6 +5000,14 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do:
          "The function `#{function}` needs a parenthesized parameter list after its name. Write `()` when it takes no parameters."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :invalid_parameter_name,
+         observed: observed,
+         context: %{implicit: true}
+       }),
+       do:
+         "#{String.capitalize(syntax_name(observed))} cannot name an implicit parameter. Write a lower-case binder such as `{type}` or `{type: Type}`."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :invalid_parameter_name, observed: observed}),
     do:

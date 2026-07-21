@@ -7218,8 +7218,29 @@ defmodule Cure.Compiler.Parser do
     start_token = peek(state)
     state = advance(state)
     name_token = peek(state)
-    name = to_string(name_token.value)
-    state = advance(state)
+
+    {name, state} =
+      case name_token do
+        %Token{type: type} when type in [:identifier, :keyword] ->
+          {to_string(name_token.value), advance(state)}
+
+        %Token{} ->
+          error =
+            {:invalid_parameter_name,
+             %{
+               implicit: true,
+               observed: name_token.value || name_token.type,
+               token_type: name_token.type,
+               opener_span: start_token.span,
+               span: name_token.span,
+               line: name_token.line,
+               column: name_token.col
+             }}
+
+          state = add_error(state, error)
+          state = if name_token.type == :rbrace, do: state, else: advance(state)
+          {"_invalid_implicit_parameter", state}
+      end
 
     {grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
 

@@ -330,6 +330,42 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
            }
   end
 
+  test "an invalid implicit parameter keeps both the brace and binder ranges" do
+    source = "fn run({42}) -> Int = 1\n"
+    {:ok, tokens} = Lexer.tokenize(source, file: "implicit.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:invalid_parameter_name, %{implicit: true} = details} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "implicit.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- FUNCTION PARAMETER NEEDS A NAME [E094] ------------------------ implicit.cure
+
+             42 cannot name an implicit parameter. Write a lower-case binder such as `{type}`
+             or `{type: Type}`.
+
+             at implicit.cure:1:9
+             1 | fn run({42}) -> Int = 1
+               |        -^^ the construct starts here; write a parameter name here
+
+             Hint: Replace this with a descriptive lower-case parameter name
+             """)
+
+    assert [related] = Renderer.lsp(diagnostic, registry)["relatedInformation"]
+    assert related["message"] == "the construct starts here"
+
+    assert related["location"]["range"] == %{
+             "start" => %{"line" => 0, "character" => 7},
+             "end" => %{"line" => 0, "character" => 8}
+           }
+
+    assert diagnostic.primary.span == details.span
+  end
+
   describe "associative operators still chain" do
     test "`a + b + c` left-associates" do
       assert {:binary_op, _, [{:binary_op, _, [_a, _b]}, _c]} = parse!("a + b + c")
