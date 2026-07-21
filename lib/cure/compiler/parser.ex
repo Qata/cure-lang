@@ -5570,15 +5570,7 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
     {segments, state} = parse_binary_generator_segments(state, [])
 
-    # Consume `<-` (lexed as `:lt` + `:minus`).
-    state =
-      case {peek(state), peek_at(state, 1)} do
-        {%Token{type: :lt}, %Token{type: :minus}} ->
-          state |> advance() |> advance()
-
-        _ ->
-          expect(state, :lt) |> expect(:minus)
-      end
+    state = expect_binary_generator_arrow(state, open_token, segments)
 
     state = skip_newlines(state)
     {source, state} = parse_expr(state, 0)
@@ -5593,6 +5585,33 @@ defmodule Cure.Compiler.Parser do
     meta = [line: open_token.line, col: open_token.col]
     meta = put_container_source_info(meta, open_token, state, close_token)
     {{:binary_generator, meta, [pattern, source]}, state}
+  end
+
+  defp expect_binary_generator_arrow(state, open_token, segments) do
+    case {peek(state), peek_at(state, 1)} do
+      {%Token{type: :lt}, %Token{type: :minus}} ->
+        state |> advance() |> advance()
+
+      _ ->
+        observed = peek(state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :binary_generator_arrow_missing,
+             expected: "<-",
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: open_token.span,
+             previous_span: segments |> List.last() |> first_node_source_span(),
+             line: observed.line,
+             column: observed.col
+           }}
+
+        add_error(state, error)
+    end
   end
 
   # Parse `seg1, seg2, ...` inside a binary-generator, stopping when the
