@@ -97,16 +97,27 @@ Define:
 
 Prove, under the selected shape evidence:
 
-- [ ] zero coefficients evaluate to zero;
-- [ ] pointwise coefficient addition evaluates to integer addition;
-- [ ] natural coefficient scaling evaluates to `scale_nat_int` of the dot product;
-- [ ] atom normalization preserves its proposition;
-- [ ] combining two holding atoms yields a holding combined atom;
-- [ ] folding aligned atoms/witnesses preserves evaluation.
+- [x] zero coefficients evaluate to zero;
+- [x] pointwise coefficient addition evaluates to integer addition;
+- [x] natural coefficient scaling evaluates to `scale_nat_int` of the dot product;
+- [x] atom normalization preserves its proposition;
+- [x] combining two holding atoms yields a holding combined atom;
+- [x] folding aligned atoms/witnesses preserves evaluation.
 
 This task is the load-bearing syntactic-to-semantic bridge. Do not proceed to
 checker soundness if any fold step is justified only by computation on closed
 examples rather than a theorem quantified over valuations.
+
+**Completed evidence (2026-07-21):** `Std.Proof.LinearArithmetic.Semantics`
+proves all six obligations over symbolic lists, valuations, coefficients, and
+fold witnesses. `ZeroCoefficientsAt`, `AddedCoefficientsAt`, and
+`ScaledCoefficientsAt` carry the shape evidence; `WeightedAffineFold` carries
+the recursive fold alignment. The proofs use generated `dot_empty`/`dot_cons`
+equations, `have`, `proof chain`, directed `rewrite`, `simplify using`, and
+structured induction. The paired `linear_arithmetic_semantics` oracle accepts
+in both Cure and Idris, while `linear_arithmetic_semantics_wrong` rejects in
+both. The focused proof gate is 43 tests with 0 failures; the full suite is
+5,417 tests with 0 failures and 6 excluded; complete Antigen is 318/318.
 
 ## Task 5: Prove list and negation reflection
 

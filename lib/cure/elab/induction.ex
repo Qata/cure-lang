@@ -642,6 +642,9 @@ defmodule Cure.Elab.Induction do
       {:variable, _meta, name}, {:ok, acc} when name != "_" ->
         {:cont, {:ok, [name | acc]}}
 
+      {:variable, _meta, "_"}, {:ok, acc} ->
+        {:cont, {:ok, [nil | acc]}}
+
       hypothesis, _ ->
         {:halt, {:error, induction_error(:unavailable_hypothesis, [], constructor: ctor, hypothesis: hypothesis)}}
     end)
@@ -653,25 +656,29 @@ defmodule Cure.Elab.Induction do
 
   defp hypothesis_assignments(names, positions, fields, subject_name, sig) do
     Enum.zip(names, positions)
-    |> Enum.map(fn {hypothesis, position} ->
-      {:variable, _meta, recursive_name} = Enum.at(fields, position)
+    |> Enum.flat_map(fn
+      {nil, _position} ->
+        []
 
-      args =
-        sig.params
-        |> Enum.reject(fn {:param, meta, _name} -> Keyword.get(meta, :implicit, false) end)
-        |> Enum.map(fn {:param, _meta, name} ->
-          value = if name == subject_name, do: recursive_name, else: name
-          {:variable, [scope: :local], value}
-        end)
+      {hypothesis, position} ->
+        {:variable, _meta, recursive_name} = Enum.at(fields, position)
 
-      call = {:function_call, [name: Atom.to_string(sig.name)], args}
-      binder = {:variable, [scope: :local], hypothesis}
-      {:assignment, [let: true, have: true, generated_induction_hypothesis: true], [binder, call]}
+        args =
+          sig.params
+          |> Enum.reject(fn {:param, meta, _name} -> Keyword.get(meta, :implicit, false) end)
+          |> Enum.map(fn {:param, _meta, name} ->
+            value = if name == subject_name, do: recursive_name, else: name
+            {:variable, [scope: :local], value}
+          end)
+
+        call = {:function_call, [name: Atom.to_string(sig.name)], args}
+        binder = {:variable, [scope: :local], hypothesis}
+        [{:assignment, [let: true, have: true, generated_induction_hypothesis: true], [binder, call]}]
     end)
   end
 
   defp annotate_hypothesis_uses(body, names, recursive_positions) do
-    names = MapSet.new(names)
+    names = names |> Enum.reject(&is_nil/1) |> MapSet.new()
 
     transform_surface(body, fn
       {:variable, meta, name} = variable ->

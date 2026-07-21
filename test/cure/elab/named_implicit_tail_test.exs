@@ -156,6 +156,21 @@ defmodule Cure.Elab.NamedImplicitTailTest do
     end
   end
 
+  test "a forced relevant implicit can still be pattern-bound as a value" do
+    src = """
+    mod ForcedRelevantImplicit
+      type Nat = Z | S(Nat)
+      type Indexed indices (index: Nat)
+        MkIndexed : {value: Nat} -> Indexed(value)
+
+      fn reveal({index: Nat}, item: Indexed(index)) -> Nat = match item
+        MkIndexed({value = revealed}) -> revealed
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
+
   defp semantic_elaborate(src) do
     case Program.elaborate(src) do
       {:error, error} -> {:error, Program.semantic_error(error)}

@@ -6301,7 +6301,7 @@ defmodule Cure.Elab.Elaborator do
         # forms that keep the `{:named_implicit_unforced,…}` reject). Compute the
         # split and the renamed branch scope ONCE, before the carried/plain
         # dispatch, so BOTH paths honor the binding.
-        {bindings, checks} = split_named_implicits(pattern, subst, arity, telescope)
+        {bindings, checks} = split_named_implicits(pattern, subst, arity, telescope, quantities)
 
         tele_names =
           Enum.reduce(bindings, branch_scope(telescope, quantities, plicities, pattern_vars), fn {name,
@@ -8059,18 +8059,20 @@ defmodule Cure.Elab.Elaborator do
 
   defp constructor_named_implicits(_), do: []
 
-  # Split a pattern's named implicits per spec 2026-07-08 §2.3: an UNFORCED
-  # position written as a bare variable BINDS (Idris quantity-0 pattern
-  # variable — probe evidence in the spec); everything else stays on the
-  # check path (forced positions check convertibility; unforced dot/non-var
-  # forms keep the `{:named_implicit_unforced,…}` reject).
-  defp split_named_implicits(pattern, subst, arity, telescope) do
+  # Split a pattern's named implicits per spec 2026-07-08 §2.3. A bare variable
+  # binds an unforced position, and also binds a FORCED relevant implicit: the
+  # latter is retained at runtime, so hiding it merely because the result index
+  # also determines it would make `{k : T}` less usable than an ordinary field.
+  # Forced erased positions remain check-only, preserving the quantity-0 rule.
+  defp split_named_implicits(pattern, subst, arity, telescope, quantities) do
     pattern
     |> constructor_named_implicits()
     |> Enum.split_with(fn {name, inner} ->
-      match?({:variable, _, _}, inner) and
-        named_implicit_forced_value(name, subst, arity, telescope) == :error and
-        Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end) != nil
+      position = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
+
+      match?({:variable, _, _}, inner) and position != nil and
+        (named_implicit_forced_value(name, subst, arity, telescope) == :error or
+           not Grade.erased?(Enum.at(quantities, position)))
     end)
   end
 

@@ -1,0 +1,15 @@
+mod LinearArithmeticSemanticsWrong
+  use Std.Nat
+  use Std.Int
+  use Std.List
+  use Std.Equivalent
+  use Std.Proof.IntOrder
+  use Std.Proof.LinearArithmetic
+  use Std.Proof.LinearArithmetic.Semantics
+
+  fn forged(
+    {coefficients: List(Int)}, {valuation: List(Int)},
+    shape: ZeroCoefficientsAt(coefficients, valuation)
+  ) -> Equivalent(Int, dot(coefficients, valuation), FromNat(S(Z()))) =
+    dot_zero_coefficients(shape)
+end

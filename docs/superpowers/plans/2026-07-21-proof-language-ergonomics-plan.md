@@ -635,12 +635,12 @@ full rerun above passed unchanged.
 **Purpose:** use a real difficult proof as the integrated acceptance test rather
 than shipping isolated toy ergonomics.
 
-- [ ] Restore stash object `ae07ebface...` by applying it explicitly after
-  confirming paths and conflicts. Do not pop by numeric stash position.
-- [ ] Reconcile it with the final `proof_int_order.cure`,
+- [x] Restore the content of stash object `ae07ebface...` after confirming its
+  exact object identity and paths; retain the stash object itself for recovery.
+- [x] Reconcile it with the final `proof_int_order.cure`,
   `proof_linear_arithmetic.cure`, and semantic module layout without discarding
   completed coefficient-distributivity work.
-- [ ] Rewrite the affine homomorphism proofs to use:
+- [x] Rewrite the affine homomorphism proofs to use:
   - `have` for head/tail facts;
   - `proof chain` for equality composition;
   - directed rewrite inside `because` blocks;
@@ -649,21 +649,33 @@ than shipping isolated toy ergonomics.
   - structured induction over alignment/fold evidence;
   - automatic dependent refinement in `AddedCons`; and
   - named theorem arguments where calls remain long.
-- [ ] Complete dot addition/scaling semantics, atom combination preservation,
+- [x] Complete dot addition/scaling semantics, atom combination preservation,
   fold preservation, shape evidence, Boolean inversion, and every remaining
   Task 4 gate in the verified-LIA ledger. Do not stop at syntax conversion.
-- [ ] Compare old explicit and new proof sizes/structure. Record source line and
+- [x] Compare old explicit and new proof sizes/structure. Record source line and
   explicit combinator reductions without claiming mathematical complexity was
   removed.
-- [ ] Run paired Cure/Idris `rel=same` fixtures and wrong-proof/forged-certificate
+- [x] Run paired Cure/Idris `rel=same` fixtures and wrong-proof/forged-certificate
   negatives.
-- [ ] Update the verified-LIA plan ledger and proof ergonomics spec status with
+- [x] Update the verified-LIA plan ledger and proof ergonomics spec status with
   the exact completed acceptance evidence.
 
 **Green gate:** canonical stdlib fresh compile, LIA runtime tests, Cure/Idris
 oracle, offline replay, proof diagnostics, full suite, complete Antigen.
 
 **Commit:** `feat(std): prove affine semantics with readable evidence`
+
+**Completed evidence (2026-07-21):** the parked LIA content was identified by
+the exact `ae07ebface...` object (the integer-order file matches byte-for-byte;
+the arithmetic file is retained and extended with the public equations and
+checked semantic substrate). The new semantic module is 267 lines and uses 45
+readable proof-language constructs; the restored explicit arithmetic source is
+194 lines versus 189 lines in the parked snapshot. This is a source-structure
+tradeoff, not a claim that the mathematics became simpler: the six quantified
+homomorphism/fold obligations are now explicit and kernel-checked. Fresh
+stdlib compilation, 43 focused proof/induction/LIA tests, OTP oracle replay
+(`linear_arithmetic_semantics` and `_wrong` both `rel=same`), complete Antigen
+(318/318), and the full suite (5,417 tests, 0 failures, 6 excluded) pass.
 
 ## Task 12: Final integration, catalog, documentation, and audit
 

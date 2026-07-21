@@ -76,6 +76,26 @@ defmodule Cure.Elab.ProofInductionLoweringProbeTest do
     refute Enum.any?(nodes, &match?({:induction, _, _}, &1))
   end
 
+  test "indexed evidence induction can suppress an unused generated hypothesis" do
+    source = """
+    mod IndexedEvidenceInduction
+      type Nat = Z | S(Nat)
+      type ListNat = Nil | Cons(Nat, ListNat)
+      type Evidence indices (values: ListNat)
+        Empty : Evidence(Nil())
+        More : {tail: ListNat} -> {head: Nat} -> Evidence(tail) -> Evidence(Cons(head, tail))
+
+      fn rebuild({values: ListNat}, proof: Evidence(values)) -> Evidence(values) = induction proof
+        case Empty => Empty()
+        case More({tail = tail}, {head = head}, rest, _) => More(rest)
+    end
+    """
+
+    assert {:ok, env} = Program.elaborate(source)
+    assert Env.certified?(env, :rebuild)
+    assert :ok = Kernel.check_def(env, Env.resolve_key(env, env.defs, :rebuild))
+  end
+
   test "an arbitrary constructor expression is closure-lifted to a private total helper" do
     source = """
     mod LiftedExpressionInduction

@@ -2,8 +2,13 @@
 
 **Date:** 2026-07-21
 
-**Status:** approved surface design; authoritative for the proof-authoring
-features specified here
+**Status:** implemented; authoritative for the proof-authoring features
+specified here
+
+The complete implementation ledger and acceptance evidence are recorded in
+`../plans/2026-07-21-proof-language-ergonomics-plan.md`. The restored affine
+semantics workload is kernel-checked through `Std.Proof.LinearArithmetic.Semantics`
+and has paired Cure/Idris oracle coverage.
 
 **Implementation ledger:**
 `../plans/2026-07-21-proof-language-ergonomics-plan.md`
