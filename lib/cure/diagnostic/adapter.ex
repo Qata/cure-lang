@@ -5160,6 +5160,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :binary_generator_arrow_missing}),
     do: "Binary generator needs an arrow"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :with_rematch_separator_missing}),
+    do: "With rematch needs a bar"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5565,6 +5568,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :binary_generator_arrow_missing}),
     do: "This binary generator needs `<-` between its byte pattern and source expression."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :with_rematch_separator_missing,
+         context: %{parent_pattern_count: count}
+       }),
+       do: "These #{count} restated parent patterns need `|` before the pattern for the `with` value."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
@@ -6027,6 +6036,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :binary_generator_arrow_missing}),
     do: "insert `<-` before this generator source"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :with_rematch_separator_missing}),
+    do: "insert `|` before this with-pattern"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -6454,6 +6466,25 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(opener, :secondary, "this binary generator starts here"),
       pickup_label(previous, :secondary, "the binary pattern ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :with_rematch_separator_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "the restated parent patterns start here"),
+      pickup_label(previous, :secondary, "the final parent pattern ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7115,6 +7146,20 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `<-` before the generator source",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "<- "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :with_rematch_separator_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :arrow, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `|` before the with-pattern",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "| "}]
       }
     ]
   end

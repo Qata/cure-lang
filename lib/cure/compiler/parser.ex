@@ -6476,7 +6476,7 @@ defmodule Cure.Compiler.Parser do
   # faithful first slice). Produces `{:with_rematch_arm, meta, [body]}` with the
   # restated `:parent_patterns` and the with-`:pattern` in meta.
   defp finish_with_rematch_arm(parent_patterns, state) do
-    state = expect(state, :bar)
+    state = expect_with_rematch_separator(state, parent_patterns)
     state = skip_newlines(state)
     {with_pattern, state} = parse_expr(state, 0)
     state = skip_newlines(state)
@@ -6486,6 +6486,35 @@ defmodule Cure.Compiler.Parser do
 
     meta = [parent_patterns: parent_patterns, pattern: with_pattern]
     {{:with_rematch_arm, meta, [body]}, state}
+  end
+
+  defp expect_with_rematch_separator(state, parent_patterns) do
+    case expect_token(state, :bar) do
+      {:ok, _bar, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :with_rematch_separator_missing,
+             expected: :bar,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: parent_patterns |> List.first() |> first_node_source_span(),
+             previous_span: parent_patterns |> List.last() |> first_node_source_span(),
+             parent_pattern_count: length(parent_patterns),
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
+    end
   end
 
   # `proof <ident>` after a with-scrutinee. Returns `{name, state}` (name a
