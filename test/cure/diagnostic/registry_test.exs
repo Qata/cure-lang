@@ -152,6 +152,40 @@ defmodule Cure.Diagnostic.RegistryTest do
              Registry.validate_producer_catalog([without_lexer])
   end
 
+  test "exercised producer validation rejects missing, duplicate, and invented fixture IDs" do
+    operational_ids =
+      Registry.producer_fixture_inventory()
+      |> Enum.flat_map(fn
+        {id, {_code, :operational}} -> [id]
+        _ -> []
+      end)
+      |> Enum.sort()
+
+    assert operational_ids != []
+
+    assert :ok =
+             Registry.validate_exercised_producer_fixtures(operational_ids,
+               only_producers: [:operational]
+             )
+
+    [missing | incomplete] = operational_ids
+
+    assert {:error, {:unexercised_producer_fixtures, [^missing]}} =
+             Registry.validate_exercised_producer_fixtures(incomplete,
+               only_producers: [:operational]
+             )
+
+    assert {:error, {:duplicate_exercised_producer_fixture, [^missing]}} =
+             Registry.validate_exercised_producer_fixtures([missing | operational_ids],
+               only_producers: [:operational]
+             )
+
+    assert {:error, {:unknown_exercised_producer_fixture, [:invented_fixture]}} =
+             Registry.validate_exercised_producer_fixtures([:invented_fixture | operational_ids],
+               only_producers: [:operational]
+             )
+  end
+
   test "inventory rejects new production calls to the legacy compiler formatter" do
     inventory = %{
       error_constructors: [],

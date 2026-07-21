@@ -1666,6 +1666,54 @@ defmodule Cure.Diagnostic.Registry do
     end
   end
 
+  @doc "Return fixture identity mapped to its owning diagnostic code and producer."
+  @spec producer_fixture_inventory([Entry.t()]) :: %{atom() => {String.t(), atom()}}
+  def producer_fixture_inventory(entries \\ reachable()) do
+    entries
+    |> Enum.filter(&(&1.status == :reachable))
+    |> Enum.flat_map(fn entry ->
+      Enum.map(entry.producer_fixtures || %{}, fn {producer, fixture_id} ->
+        {fixture_id, {entry.code, producer}}
+      end)
+    end)
+    |> Map.new()
+  end
+
+  @doc "Validate that catalog execution reached every fixture in the requested producer scope."
+  @spec validate_exercised_producer_fixtures([atom()], keyword()) :: :ok | {:error, term()}
+  def validate_exercised_producer_fixtures(fixture_ids, opts \\ []) when is_list(fixture_ids) do
+    inventory = producer_fixture_inventory(Keyword.get(opts, :entries, reachable()))
+    producer_scope = Keyword.get(opts, :only_producers)
+
+    expected =
+      inventory
+      |> Enum.filter(fn {_id, {_code, producer}} ->
+        is_nil(producer_scope) or producer in producer_scope
+      end)
+      |> Map.new()
+
+    duplicates = fixture_ids -- Enum.uniq(fixture_ids)
+    supplied = MapSet.new(fixture_ids)
+    known = inventory |> Map.keys() |> MapSet.new()
+    expected_ids = expected |> Map.keys() |> MapSet.new()
+    unknown = supplied |> MapSet.difference(known) |> Enum.sort()
+    missing = expected_ids |> MapSet.difference(supplied) |> Enum.sort()
+
+    cond do
+      duplicates != [] ->
+        {:error, {:duplicate_exercised_producer_fixture, duplicates |> Enum.uniq() |> Enum.sort()}}
+
+      unknown != [] ->
+        {:error, {:unknown_exercised_producer_fixture, unknown}}
+
+      missing != [] ->
+        {:error, {:unexercised_producer_fixtures, missing}}
+
+      true ->
+        :ok
+    end
+  end
+
   @doc "Validate stable diagnostic codes referenced by first-party source files."
   @spec validate_sources([Path.t()]) :: :ok | {:error, {:unregistered_source_codes, [String.t()]}}
   def validate_sources(paths \\ default_source_paths()) when is_list(paths) do

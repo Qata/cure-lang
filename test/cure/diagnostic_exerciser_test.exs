@@ -240,33 +240,39 @@ defmodule Cure.DiagnosticExerciserTest do
     end)
 
     diagnostics = [
-      Operational.file_read("demo.cure", :enoent),
-      Operational.file_write("demo.cure", :eacces),
-      Operational.dependency(:locked),
-      Operational.command_failure("compile", :failed),
-      Operational.migration_warning(%{rule: :legacy, file: "demo.cure", line: 2, message: "migrate this"}),
-      Operational.compiler_warning(%{file: "demo.cure", line: 3, message: "check this"}),
-      Operational.export_unmappable("dependent type"),
-      Operational.snap_missing("gone.cure"),
-      Operational.proof_file_missing("demo.cureproof"),
-      Operational.proof_verification_failed("Demo#lemma"),
-      Operational.proof_schema_incompatible("version 2"),
-      Operational.snap_schema_incompatible("version 9"),
-      Operational.registry_signature_invalid("Demo@1.0.0"),
-      Operational.transparency_log_unreachable(:econnrefused),
-      Operational.registry_fetch_failed(:timeout),
-      Operational.registry_hash_mismatch("Demo@1.0.0"),
-      Operational.registry_package_not_found("Demo@1.0.0"),
-      Operational.package_version_conflict("Demo", [">= 1.0", "< 0.9"]),
-      Operational.undocumented_public_function("demo.cure", 3),
-      Operational.configuration_warning("invalid setting"),
-      Operational.destructive_format_warning(%{files: ["demo.cure"]}),
-      Operational.usage("Usage: cure compile FILE"),
-      Operational.artifact_error("artifact is invalid"),
-      Operational.internal_exception(%ArgumentError{message: "boom"}, [])
+      {:file_read, Operational.file_read("demo.cure", :enoent)},
+      {:file_write, Operational.file_write("demo.cure", :eacces)},
+      {:dependency, Operational.dependency(:locked)},
+      {:command, Operational.command_failure("compile", :failed)},
+      {:migration_warning,
+       Operational.migration_warning(%{rule: :legacy, file: "demo.cure", line: 2, message: "migrate this"})},
+      {:compiler_warning, Operational.compiler_warning(%{file: "demo.cure", line: 3, message: "check this"})},
+      {:export_unmappable, Operational.export_unmappable("dependent type")},
+      {:snap_missing, Operational.snap_missing("gone.cure")},
+      {:proof_file_missing, Operational.proof_file_missing("demo.cureproof")},
+      {:proof_verification_failed, Operational.proof_verification_failed("Demo#lemma")},
+      {:proof_schema_incompatible, Operational.proof_schema_incompatible("version 2")},
+      {:snap_schema_incompatible, Operational.snap_schema_incompatible("version 9")},
+      {:registry_signature_invalid, Operational.registry_signature_invalid("Demo@1.0.0")},
+      {:transparency_log_unreachable, Operational.transparency_log_unreachable(:econnrefused)},
+      {:registry_fetch_failed, Operational.registry_fetch_failed(:timeout)},
+      {:registry_hash_mismatch, Operational.registry_hash_mismatch("Demo@1.0.0")},
+      {:registry_package_not_found, Operational.registry_package_not_found("Demo@1.0.0")},
+      {:package_version_conflict, Operational.package_version_conflict("Demo", [">= 1.0", "< 0.9"])},
+      {:undocumented_public_function, Operational.undocumented_public_function("demo.cure", 3)},
+      {:configuration_warning, Operational.configuration_warning("invalid setting")},
+      {:destructive_format_warning, Operational.destructive_format_warning(%{files: ["demo.cure"]})},
+      {:usage, Operational.usage("Usage: cure compile FILE")},
+      {:artifact, Operational.artifact_error("artifact is invalid")},
+      {:internal_failure_operational, Operational.internal_exception(%ArgumentError{message: "boom"}, [])}
     ]
 
-    Enum.each(diagnostics, fn diagnostic ->
+    fixture_inventory = Cure.Diagnostic.Registry.producer_fixture_inventory()
+
+    Enum.each(diagnostics, fn {fixture_id, diagnostic} ->
+      assert {expected_code, _producer} = Map.fetch!(fixture_inventory, fixture_id)
+      assert diagnostic.code == expected_code
+
       IO.puts(
         :stderr,
         Renderer.terminal(
@@ -277,7 +283,13 @@ defmodule Cure.DiagnosticExerciserTest do
       )
     end)
 
-    operational_codes = Enum.map(diagnostics, & &1.code)
+    operational_codes = Enum.map(diagnostics, fn {_fixture_id, diagnostic} -> diagnostic.code end)
+    exercised_fixture_ids = Enum.map(diagnostics, &elem(&1, 0))
+
+    assert :ok =
+             Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(exercised_fixture_ids,
+               only_producers: [:operational]
+             )
 
     assert operational_codes ==
              ~w[E095 E096 E097 E098 W001 W000 E068 E070 E065 E066 E067 E069 E041 E042 E038 E039 E040 E030 E008 W002 W003 E099 E100 E101]
