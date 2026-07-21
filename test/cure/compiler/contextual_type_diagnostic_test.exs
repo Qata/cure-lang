@@ -36,7 +36,7 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
          branch_patterns: ["FromNat", "NegativeSuccessor"]
        }}
 
-    source = "\n\n\n\n\n\n\n\nmatch coefficient\n"
+    source = "\n\n\n\n\n\n\n    match coefficient\n"
     {diagnostic, registry} = Errors.to_diagnostic(reason, "proof_int_order.cure", source)
     rendered = Renderer.plain(diagnostic, registry)
 
@@ -46,5 +46,7 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "FromNat"
     assert rendered =~ "NegativeSuccessor"
     assert rendered =~ "proof_int_order.cure:8:5"
+    assert rendered =~ "8 |     match coefficient"
+    assert rendered =~ "|     ^"
   end
 end
