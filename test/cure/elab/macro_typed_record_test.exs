@@ -65,7 +65,7 @@ defmodule Cure.Elab.MacroTypedRecordTest do
     """
 
     assert {:error, error} = Program.elaborate(source)
-    assert {:unknown_field, :"M#MkSyntax", "missing"} = Program.semantic_error(error)
+    assert {:unknown_field, :"M#MkSyntax", "missing", [:x, :context]} = Program.semantic_error(error)
   end
 
   test "a computed elab can guard its continuation with check and fail" do
