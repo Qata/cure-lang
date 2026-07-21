@@ -173,6 +173,7 @@ mod Std.Regex
     PatternAlternateMode : Pattern(left) -> Pattern(right) -> Bool -> Pattern(ChoiceC(left, right))
     PatternRepeat : Pattern(inner) -> Pattern(ListC(inner))
     PatternRepeatMode : Pattern(inner) -> Bool -> Pattern(ListC(inner))
+    PatternBoundary : BoundaryConstraint -> Pattern(UnitC)
 
   ## State identifiers are naturals below `state_count`. Thompson construction
   ## allocates disjoint contiguous ranges and preserves that invariant by
@@ -190,7 +191,9 @@ mod Std.Regex
     | BeginCapture
     | EndCapture
 
-  type MachineState = Active(Nat, List(EvidenceInstruction)) | Accepted(List(EvidenceInstruction))
+  type BoundaryConstraint = SubjectStart | SubjectEnd | LineStart | LineEnd
+  type Boundary = Boundary(Bool, Bool, Bool, Bool)
+  type MachineState = Active(Nat, List(EvidenceInstruction), List(BoundaryConstraint)) | Accepted(List(EvidenceInstruction), List(BoundaryConstraint))
   type PatternMachine = PatternMachine(Nat, List(MachineState), Nat -> Char -> List(MachineState))
 
   fn append_routine(left: List(EvidenceInstruction), right: List(EvidenceInstruction)) -> List(EvidenceInstruction) = match left
@@ -201,10 +204,14 @@ mod Std.Regex
     [] -> right
     [head | rest] -> [head | append_states(rest, right)]
 
+  fn append_constraints(left: List(BoundaryConstraint), right: List(BoundaryConstraint)) -> List(BoundaryConstraint) = match left
+    [] -> right
+    [head | rest] -> [head | append_constraints(rest, right)]
+
   fn shift_states(offset: Nat, states: List(MachineState)) -> List(MachineState) = match states
     [] -> []
-    [Accepted(routine) | rest] -> [Accepted(routine) | shift_states(offset, rest)]
-    [Active(state, routine) | rest] -> [Active(plus(offset, state), routine) | shift_states(offset, rest)]
+    [Accepted(routine, constraints) | rest] -> [Accepted(routine, constraints) | shift_states(offset, rest)]
+    [Active(state, routine, constraints) | rest] -> [Active(plus(offset, state), routine, constraints) | shift_states(offset, rest)]
 
   fn nat_less(left: Nat, right: Nat) -> Bool = match left
     Z() -> match right
@@ -220,59 +227,65 @@ mod Std.Regex
       Z() -> Z()
       S(value_rest) -> nat_subtract(value_rest, amount_rest)
 
-  fn enter_right(offset: Nat, left_routine: List(EvidenceInstruction), right_starts: List(MachineState)) -> List(MachineState) = match right_starts
+  fn enter_right_with_constraints(offset: Nat, left_routine: List(EvidenceInstruction), left_constraints: List(BoundaryConstraint), right_starts: List(MachineState)) -> List(MachineState) = match right_starts
     [] -> []
-    [Accepted(right_routine) | rest] ->
-      [Accepted(append_routine(append_routine(left_routine, right_routine), [EmitPair()])) | enter_right(offset, left_routine, rest)]
-    [Active(state, right_routine) | rest] ->
-      [Active(plus(offset, state), append_routine(left_routine, right_routine)) | enter_right(offset, left_routine, rest)]
+    [Accepted(right_routine, right_constraints) | rest] ->
+      [Accepted(append_routine(append_routine(left_routine, right_routine), [EmitPair()]), append_constraints(left_constraints, right_constraints)) | enter_right_with_constraints(offset, left_routine, left_constraints, rest)]
+    [Active(state, right_routine, right_constraints) | rest] ->
+      [Active(plus(offset, state), append_routine(left_routine, right_routine), append_constraints(left_constraints, right_constraints)) | enter_right_with_constraints(offset, left_routine, left_constraints, rest)]
+
+  fn enter_right(offset: Nat, left_routine: List(EvidenceInstruction), right_starts: List(MachineState)) -> List(MachineState) =
+    enter_right_with_constraints(offset, left_routine, [], right_starts)
 
   fn continue_with_right(offset: Nat, left_states: List(MachineState), right_starts: List(MachineState)) -> List(MachineState) = match left_states
     [] -> []
-    [Accepted(left_routine) | rest] -> append_states(enter_right(offset, left_routine, right_starts), continue_with_right(offset, rest, right_starts))
-    [Active(state, routine) | rest] -> [Active(state, routine) | continue_with_right(offset, rest, right_starts)]
+    [Accepted(left_routine, constraints) | rest] -> append_states(enter_right_with_constraints(offset, left_routine, constraints, right_starts), continue_with_right(offset, rest, right_starts))
+    [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | continue_with_right(offset, rest, right_starts)]
 
   fn finish_pair(states: List(MachineState)) -> List(MachineState) = match states
     [] -> []
-    [Accepted(routine) | rest] -> [Accepted(append_routine(routine, [EmitPair()])) | finish_pair(rest)]
-    [Active(state, routine) | rest] -> [Active(state, routine) | finish_pair(rest)]
+    [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [EmitPair()]), constraints) | finish_pair(rest)]
+    [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | finish_pair(rest)]
 
   fn mark_branch(states: List(MachineState), marker: EvidenceInstruction) -> List(MachineState) = match states
     [] -> []
-    [Accepted(routine) | rest] -> [Accepted(append_routine(routine, [marker])) | mark_branch(rest, marker)]
-    [Active(state, routine) | rest] -> [Active(state, routine) | mark_branch(rest, marker)]
+    [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [marker]), constraints) | mark_branch(rest, marker)]
+    [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | mark_branch(rest, marker)]
 
   fn prefix_routine(instruction: EvidenceInstruction, states: List(MachineState)) -> List(MachineState) = match states
     [] -> []
-    [Accepted(routine) | rest] -> [Accepted([instruction | routine]) | prefix_routine(instruction, rest)]
-    [Active(state, routine) | rest] -> [Active(state, [instruction | routine]) | prefix_routine(instruction, rest)]
+    [Accepted(routine, constraints) | rest] -> [Accepted([instruction | routine], constraints) | prefix_routine(instruction, rest)]
+    [Active(state, routine, constraints) | rest] -> [Active(state, [instruction | routine], constraints) | prefix_routine(instruction, rest)]
 
   fn finish_capture(states: List(MachineState)) -> List(MachineState) = match states
     [] -> []
-    [Accepted(routine) | rest] -> [Accepted(append_routine(routine, [EndCapture()])) | finish_capture(rest)]
-    [Active(state, routine) | rest] -> [Active(state, routine) | finish_capture(rest)]
+    [Accepted(routine, constraints) | rest] -> [Accepted(append_routine(routine, [EndCapture()]), constraints) | finish_capture(rest)]
+    [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | finish_capture(rest)]
 
-  fn repeat_accepting(routine: List(EvidenceInstruction)) -> List(MachineState) =
-    [Accepted(append_routine(routine, [EndList()]))]
+  fn repeat_accepting(routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint)) -> List(MachineState) =
+    [Accepted(append_routine(routine, [EndList()]), constraints)]
 
-  fn repeat_destination_order(routine: List(EvidenceInstruction), starts: List(MachineState), lazy: Bool) -> List(MachineState) = pickup
-    lazy -> append_states(repeat_accepting(routine), enter_repeat(routine, starts))
-    else -> append_states(enter_repeat(routine, starts), repeat_accepting(routine))
+  fn repeat_destination_order(routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState), lazy: Bool) -> List(MachineState) = pickup
+    lazy -> append_states(repeat_accepting(routine, constraints), enter_repeat_with_constraints(routine, constraints, starts))
+    else -> append_states(enter_repeat_with_constraints(routine, constraints, starts), repeat_accepting(routine, constraints))
 
   fn repeat_destinations(destinations: List(MachineState), starts: List(MachineState), lazy: Bool) -> List(MachineState) = match destinations
     [] -> []
-    [Accepted(routine) | rest] ->
-      append_states(repeat_destination_order(routine, starts, lazy), repeat_destinations(rest, starts, lazy))
-    [Active(state, routine) | rest] -> [Active(state, routine) | repeat_destinations(rest, starts, lazy)]
+    [Accepted(routine, constraints) | rest] ->
+      append_states(repeat_destination_order(routine, constraints, starts, lazy), repeat_destinations(rest, starts, lazy))
+    [Active(state, routine, constraints) | rest] -> [Active(state, routine, constraints) | repeat_destinations(rest, starts, lazy)]
 
-  fn enter_repeat(routine: List(EvidenceInstruction), starts: List(MachineState)) -> List(MachineState) = match starts
+  fn enter_repeat_with_constraints(routine: List(EvidenceInstruction), constraints: List(BoundaryConstraint), starts: List(MachineState)) -> List(MachineState) = match starts
     [] -> []
-    [Accepted(next_routine) | rest] -> enter_repeat(routine, rest)
-    [Active(state, next_routine) | rest] ->
-      [Active(state, append_routine(routine, next_routine)) | enter_repeat(routine, rest)]
+    [Accepted(_, _) | rest] -> enter_repeat_with_constraints(routine, constraints, rest)
+    [Active(state, next_routine, next_constraints) | rest] ->
+      [Active(state, append_routine(routine, next_routine), append_constraints(constraints, next_constraints)) | enter_repeat_with_constraints(routine, constraints, rest)]
+
+  fn enter_repeat(routine: List(EvidenceInstruction), starts: List(MachineState)) -> List(MachineState) =
+    enter_repeat_with_constraints(routine, [], starts)
 
   fn predicate_machine_next(test: Char -> Bool, _state: Nat, char: Char) -> List(MachineState) = pickup
-    test(char) -> [Accepted([EmitChar(char)])]
+    test(char) -> [Accepted([EmitChar(char)], [])]
     else -> []
 
   fn concat_machine_next(left_count: Nat, left_next: Nat -> Char -> List(MachineState), right_starts: List(MachineState), right_next: Nat -> Char -> List(MachineState), state: Nat, char: Char) -> List(MachineState) = pickup
@@ -291,15 +304,16 @@ mod Std.Regex
       else -> append_states(marked_left, marked_right)
 
   fn repeat_machine_starts(starts: List(MachineState), lazy: Bool) -> List(MachineState) =
-    let empty = [Accepted([BeginList(), EndList()])]
+    let empty = [Accepted([BeginList(), EndList()], [])]
     let consuming = enter_repeat([BeginList()], starts)
     pickup
       lazy -> append_states(empty, consuming)
       else -> append_states(consuming, empty)
 
   fn compile_pattern({shape: ShapeCode}, pattern: Pattern(shape)) -> PatternMachine = match pattern
-    PatternEmpty() -> PatternMachine(Z(), [Accepted([EmitUnit()])], fn(_state, _char) -> [])
-    PatternPredicate(test) -> PatternMachine(S(Z()), [Active(Z(), [])], fn(state, char) -> predicate_machine_next(test, state, char))
+    PatternEmpty() -> PatternMachine(Z(), [Accepted([EmitUnit()], [])], fn(_state, _char) -> [])
+    PatternPredicate(test) -> PatternMachine(S(Z()), [Active(Z(), [], [])], fn(state, char) -> predicate_machine_next(test, state, char))
+    PatternBoundary(constraint) -> PatternMachine(Z(), [Accepted([EmitUnit()], [constraint])], fn(_state, _char) -> [])
     PatternConcat(left, right) -> match compile_pattern(left)
       PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
         PatternMachine(right_count, right_starts, right_next) ->
@@ -348,24 +362,57 @@ mod Std.Regex
 
   fn machine_has_accept(states: List(MachineState)) -> Bool = match states
     [] -> false
-    [Accepted(_) | _] -> true
-    [Active(_, _) | rest] -> machine_has_accept(rest)
+    [Accepted(_, _) | _] -> true
+    [Active(_, _, _) | rest] -> machine_has_accept(rest)
 
   fn machine_step_one(next: Nat -> Char -> List(MachineState), char: Char, current: MachineState) -> List(MachineState) = match current
-    Accepted(_) -> []
-    Active(state, _) -> next(state)(char)
+    Accepted(_, _) -> []
+    Active(state, _, _) -> next(state)(char)
 
   fn machine_step(next: Nat -> Char -> List(MachineState), char: Char, current: List(MachineState)) -> List(MachineState) = match current
     [] -> []
     [head | rest] -> append_states(machine_step_one(next, char, head), machine_step(next, char, rest))
 
+  fn constraint_holds(constraint: BoundaryConstraint, boundary: Boundary) -> Bool = match boundary
+    Boundary(subject_start, subject_end, line_start, line_end) -> match constraint
+      SubjectStart -> subject_start
+      SubjectEnd -> subject_end
+      LineStart -> line_start
+      LineEnd -> line_end
+
+  fn constraints_hold(constraints: List(BoundaryConstraint), boundary: Boundary) -> Bool = match constraints
+    [] -> true
+    [head | rest] -> constraint_holds(head, boundary) and constraints_hold(rest, boundary)
+
+  fn filter_boundary_states(states: List(MachineState), boundary: Boundary) -> List(MachineState) = match states
+    [] -> []
+    [Accepted(routine, constraints) | rest] -> pickup
+      constraints_hold(constraints, boundary) -> [Accepted(routine, []) | filter_boundary_states(rest, boundary)]
+      else -> filter_boundary_states(rest, boundary)
+    [Active(state, routine, constraints) | rest] -> pickup
+      constraints_hold(constraints, boundary) -> [Active(state, routine, []) | filter_boundary_states(rest, boundary)]
+      else -> filter_boundary_states(rest, boundary)
+
+  fn position_line_end(input: String) -> Bool = match input
+    [] -> true
+    [char | _] -> Std.Char.is_newline(char)
+
+  fn position_subject_end(input: String) -> Bool = match input
+    [] -> true
+    [char] -> Std.Char.is_newline(char)
+    _ -> false
+
+  fn position_boundary(subject_start: Bool, line_start: Bool, input: String) -> Boundary =
+    Boundary(subject_start, position_subject_end(input), line_start, position_line_end(input))
+
   fn machine_accepts_chars(next: Nat -> Char -> List(MachineState), input: String, current: List(MachineState)) -> Bool = match input
     [] -> machine_has_accept(current)
-    [char | rest] -> machine_accepts_chars(next, rest, machine_step(next, char, current))
+    [char | rest] ->
+      machine_accepts_chars(next, rest, filter_boundary_states(machine_step(next, char, current), position_boundary(false, Std.Char.is_newline(char), rest)))
 
   fn pattern_accepts({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Bool =
     match compile_pattern(pattern)
-      PatternMachine(_count, starts, next) -> machine_accepts_chars(next, input, starts)
+      PatternMachine(_count, starts, next) -> machine_accepts_chars(next, input, filter_boundary_states(starts, position_boundary(true, true, input)))
 
   ## Evidence is a postfix program result stored in reverse order, so emitting
   ## is constant-time. Pair/branch/list markers precede their operands in the
@@ -415,6 +462,9 @@ mod Std.Regex
     PatternGroup(_) -> match evidence
       [StringEvidence(value) | rest] -> Some(EvidenceDecoded(rest, value, EncodesString(value)))
       _ -> None()
+    PatternBoundary(_) -> match evidence
+      [UnitEvidence() | rest] -> Some(EvidenceDecoded(rest, (), EncodesUnit()))
+      _ -> None()
     _ -> None()
 
   type ManyEvidenceDecoding indices (shape: ShapeCode, input: List(Evidence))
@@ -452,6 +502,7 @@ mod Std.Regex
     PatternEmpty() -> decode_atomic_evidence(pattern, evidence)
     PatternPredicate(_) -> decode_atomic_evidence(pattern, evidence)
     PatternGroup(_) -> decode_atomic_evidence(pattern, evidence)
+    PatternBoundary(_) -> decode_atomic_evidence(pattern, evidence)
     PatternConcat(left, right) -> match evidence
       [PairEvidence() | pair_evidence] -> match decode_pattern_encoding(right, pair_evidence)
         None() -> None()
@@ -533,9 +584,9 @@ mod Std.Regex
       EvidenceExecution(next_evidence, next_captures) -> execute_routine(rest, next_evidence, next_captures)
 
   fn initial_thread(destination: MachineState) -> EvidenceThread = match destination
-    Active(state, routine) -> match execute_routine(routine, [], [])
+    Active(state, routine, _) -> match execute_routine(routine, [], [])
       EvidenceExecution(evidence, captures) -> EvidenceThread(ThreadActive(state), evidence, captures)
-    Accepted(routine) -> match execute_routine(routine, [], [])
+    Accepted(routine, _) -> match execute_routine(routine, [], [])
       EvidenceExecution(evidence, captures) -> EvidenceThread(ThreadAccepted(), evidence, captures)
 
   fn initial_threads(starts: List(MachineState)) -> List(EvidenceThread) = match starts
@@ -543,27 +594,27 @@ mod Std.Regex
     [head | rest] -> [initial_thread(head) | initial_threads(rest)]
 
   fn destination_thread(destination: MachineState, evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceThread = match destination
-    Active(state, routine) -> match execute_routine(routine, evidence, captures)
+    Active(state, routine, _) -> match execute_routine(routine, evidence, captures)
       EvidenceExecution(next_evidence, next_captures) -> EvidenceThread(ThreadActive(state), next_evidence, next_captures)
-    Accepted(routine) -> match execute_routine(routine, evidence, captures)
+    Accepted(routine, _) -> match execute_routine(routine, evidence, captures)
       EvidenceExecution(next_evidence, next_captures) -> EvidenceThread(ThreadAccepted(), next_evidence, next_captures)
 
   fn destination_threads(destinations: List(MachineState), evidence: List(Evidence), captures: List(CaptureFrame)) -> List(EvidenceThread) = match destinations
     [] -> []
     [head | rest] -> [destination_thread(head, evidence, captures) | destination_threads(rest, evidence, captures)]
 
-  fn step_evidence_thread(next: Nat -> Char -> List(MachineState), char: Char, thread: EvidenceThread) -> List(EvidenceThread) = match thread
+  fn step_evidence_thread(next: Nat -> Char -> List(MachineState), char: Char, boundary: Boundary, thread: EvidenceThread) -> List(EvidenceThread) = match thread
     EvidenceThread(ThreadAccepted(), _, _) -> []
     EvidenceThread(ThreadActive(state), evidence, captures) ->
-      destination_threads(next(state)(char), evidence, record_capture_char(captures, char))
+      destination_threads(filter_boundary_states(next(state)(char), boundary), evidence, record_capture_char(captures, char))
 
   fn append_threads(left: List(EvidenceThread), right: List(EvidenceThread)) -> List(EvidenceThread) = match left
     [] -> right
     [head | rest] -> [head | append_threads(rest, right)]
 
-  fn step_evidence_threads(next: Nat -> Char -> List(MachineState), char: Char, threads: List(EvidenceThread)) -> List(EvidenceThread) = match threads
+  fn step_evidence_threads(next: Nat -> Char -> List(MachineState), char: Char, boundary: Boundary, threads: List(EvidenceThread)) -> List(EvidenceThread) = match threads
     [] -> []
-    [head | rest] -> append_threads(step_evidence_thread(next, char, head), step_evidence_threads(next, char, rest))
+    [head | rest] -> append_threads(step_evidence_thread(next, char, boundary, head), step_evidence_threads(next, char, boundary, rest))
 
   fn nat_same(left: Nat, right: Nat) -> Bool = match left
     Z() -> match right
@@ -601,13 +652,17 @@ mod Std.Regex
 
   fn run_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread)) -> Option(List(Evidence)) = match input
     [] -> first_accepted_evidence(threads)
-    [char | rest] -> run_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, threads)))
+    [char | rest] ->
+      let boundary = position_boundary(false, Std.Char.is_newline(char), rest)
+      run_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)))
 
   fn run_first_prefix_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
     Some(evidence) -> Some(EvidencePrefix(evidence, input))
     None() -> match input
       [] -> None()
-      [char | rest] -> run_first_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, threads)))
+      [char | rest] ->
+        let boundary = position_boundary(false, Std.Char.is_newline(char), rest)
+        run_first_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)))
 
   fn remember_prefix(threads: List(EvidenceThread), rest: String, previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
     Some(evidence) -> Some(EvidencePrefix(evidence, rest))
@@ -619,17 +674,23 @@ mod Std.Regex
       [] -> remembered
       [char | rest] -> match threads
         [] -> remembered
-        _ -> run_last_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, threads)), remembered)
+        _ ->
+          let boundary = position_boundary(false, Std.Char.is_newline(char), rest)
+          run_last_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, boundary, threads)), remembered)
 
   fn pattern_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Option(List(Evidence)) = match compile_pattern(pattern)
-    PatternMachine(_count, starts, next) -> run_evidence(next, input, distinct_threads(initial_threads(starts)))
-
-  fn pattern_prefix_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: String, greedy: Bool) -> Option(EvidencePrefix) = match compile_pattern(pattern)
     PatternMachine(_count, starts, next) ->
-      let threads = distinct_threads(initial_threads(starts))
+      run_evidence(next, input, distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(true, true, input)))))
+
+  fn pattern_prefix_evidence_at({shape: ShapeCode}, pattern: Pattern(shape), input: String, greedy: Bool, subject_start: Bool, line_start: Bool) -> Option(EvidencePrefix) = match compile_pattern(pattern)
+    PatternMachine(_count, starts, next) ->
+      let threads = distinct_threads(initial_threads(filter_boundary_states(starts, position_boundary(subject_start, line_start, input))))
       pickup
         greedy -> run_last_prefix_evidence(next, input, threads, None())
         else -> run_first_prefix_evidence(next, input, threads)
+
+  fn pattern_prefix_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: String, greedy: Bool) -> Option(EvidencePrefix) =
+    pattern_prefix_evidence_at(pattern, input, greedy, true, true)
 
   fn parse_pattern_full({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Option(Sem(shape)) = match pattern_evidence(pattern, input)
     None() -> None()
@@ -669,8 +730,8 @@ mod Std.Regex
     OneOrMorePattern : Regex(a) -> Bool -> Regex(List(a))
     OptionalLiteral : Regex(a) -> Bool -> Regex(Choice(a, Unit))
     ConfiguredRegex : RegexOptions -> Regex(a) -> Regex(a)
-    StartAnchor : Regex(Unit)
-    EndAnchor : Regex(Unit)
+    StartAnchor : Bool -> Regex(Unit)
+    EndAnchor : Bool -> Regex(Unit)
 
   type Conversion indices (raw: Type, result: Type)
     IdentityConversion : Conversion(value, value)
@@ -804,8 +865,12 @@ mod Std.Regex
       Some(BuiltRegex(shape, pattern, convert)) ->
         Some(BuiltRegex(ChoiceC(shape, UnitC), PatternAlternateMode(pattern, PatternEmpty(), lazy), ChoiceConversion(convert, unit_identity_conversion())))
     ConfiguredRegex(_options, inner) -> compile_regex(inner)
-    StartAnchor() -> None()
-    EndAnchor() -> None()
+    StartAnchor(multiline) -> pickup
+      multiline -> Some(BuiltRegex(UnitC, PatternBoundary(LineStart), unit_identity_conversion()))
+      else -> Some(BuiltRegex(UnitC, PatternBoundary(SubjectStart), unit_identity_conversion()))
+    EndAnchor(multiline) -> pickup
+      multiline -> Some(BuiltRegex(UnitC, PatternBoundary(LineEnd), unit_identity_conversion()))
+      else -> Some(BuiltRegex(UnitC, PatternBoundary(SubjectEnd), unit_identity_conversion()))
 
   fn convert_complete_extraction({shape: ShapeCode}, {result: Type}, pattern: Pattern(shape), conversion: Conversion(Sem(shape), result), evidence: List(Evidence)) -> Option(result) = match extract_complete_encoding(decode_pattern_encoding(pattern, evidence))
     None() -> None()
@@ -831,21 +896,36 @@ mod Std.Regex
       None() -> None()
       Some(prefix) -> convert_prefix_extraction(pattern, conversion, prefix)
 
+  fn parse_prefix_at({result: Type}, regex: Regex(result), input: String, subject_start: Bool, line_start: Bool) -> Option(Tuple(result, String)) = match compile_regex(regex)
+    None() -> None()
+    Some(BuiltRegex(_shape, pattern, conversion)) -> match pattern_prefix_evidence_at(pattern, input, true, subject_start, line_start)
+      None() -> None()
+      Some(prefix) -> convert_prefix_extraction(pattern, conversion, prefix)
+
   fn parse_prefix({result: Type}, regex: Regex(result), input: String) -> Option(Tuple(result, String)) =
     parse_prefix_with(regex, input, true)
 
-  fn search({result: Type}, regex: Regex(result), input: String) -> Option(Match(result)) =
-    search_from(regex, input, [])
+  fn options_firstline(options: RegexOptions) -> Bool = match options
+    RegexOptions(_, _, _, _, _, firstline, _, _) -> firstline
 
-  fn search_from({result: Type}, regex: Regex(result), candidate: String, reversed_prefix: String) -> Option(Match(result)) =
-    match parse_prefix(regex, candidate)
+  fn regex_firstline({result: Type}, regex: Regex(result)) -> Bool = match regex
+    ConfiguredRegex(options, _) -> options_firstline(options)
+    _ -> false
+
+  fn search({result: Type}, regex: Regex(result), input: String) -> Option(Match(result)) =
+    search_from(regex, input, [], true, true, regex_firstline(regex))
+
+  fn search_from({result: Type}, regex: Regex(result), candidate: String, reversed_prefix: String, subject_start: Bool, line_start: Bool, firstline_only: Bool) -> Option(Match(result)) =
+    match parse_prefix_at(regex, candidate, subject_start, line_start)
       Some(found) ->
         let rest = found.2
         let matched = Std.String.drop_last(candidate, Std.String.length(rest))
         Some(Match(found.1, Std.String.reverse(reversed_prefix), matched, rest))
       None() -> match candidate
         [] -> None()
-        [char | rest] -> search_from(regex, rest, [char | reversed_prefix])
+        [char | rest] -> pickup
+          firstline_only and Std.Char.is_newline(char) -> None()
+          else -> search_from(regex, rest, [char | reversed_prefix], false, Std.Char.is_newline(char), firstline_only)
 
   fn matches({result: Type}, regex: Regex(result), input: String) -> Bool = match search(regex, input)
     Some(_) -> true
@@ -905,9 +985,13 @@ mod Std.Regex
   fn configured({a: Type}, options: RegexOptions, regex: Regex(a)) -> Regex(a) =
     ConfiguredRegex(options, regex)
 
-  fn start_anchor() -> Regex(Unit) = StartAnchor()
+  fn start_anchor() -> Regex(Unit) = StartAnchor(false)
 
-  fn end_anchor() -> Regex(Unit) = EndAnchor()
+  fn start_anchor_with_options(multiline: Bool) -> Regex(Unit) = StartAnchor(multiline)
+
+  fn end_anchor() -> Regex(Unit) = EndAnchor(false)
+
+  fn end_anchor_with_options(multiline: Bool) -> Regex(Unit) = EndAnchor(multiline)
 
   fn always(_char: Char) -> Bool = true
 
@@ -1442,7 +1526,7 @@ mod Std.Regex
     LiteralEnd -> call("Std.Regex.end_anchor", [])
 
   fn emit_literal_with_options(pattern: LiteralPattern, options: RegexOptions) -> Syntax = match options
-    RegexOptions(caseless, _multiline, dotall, _extended, unicode, _firstline, ungreedy, _exported) -> match pattern
+    RegexOptions(caseless, multiline, dotall, _extended, unicode, _firstline, ungreedy, _exported) -> match pattern
       LiteralEmpty -> call("Std.Regex.empty", [])
       LiteralExact(char) -> call("Std.Regex.exactly_with_options", [char_literal(char), bool_literal(caseless), bool_literal(unicode)])
       LiteralAny -> call("Std.Regex.dot_with_options", [bool_literal(dotall)])
@@ -1459,8 +1543,8 @@ mod Std.Regex
       LiteralPlus(inner, lazy) -> call("Std.Regex.one_or_more_pattern", [emit_literal_with_options(inner, options), bool_literal(lazy != ungreedy)])
       LiteralOptional(inner, lazy) -> call("Std.Regex.optional_literal", [emit_literal_with_options(inner, options), bool_literal(lazy != ungreedy)])
       LiteralCapture(inner) -> call("Std.Regex.captured", [emit_literal_with_options(inner, options)])
-      LiteralStart -> call("Std.Regex.start_anchor", [])
-      LiteralEnd -> call("Std.Regex.end_anchor", [])
+      LiteralStart -> call("Std.Regex.start_anchor_with_options", [bool_literal(multiline)])
+      LiteralEnd -> call("Std.Regex.end_anchor_with_options", [bool_literal(multiline)])
 
   fn emit_chars(chars: List(Char)) -> Syntax = match chars
     [] -> list([])

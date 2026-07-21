@@ -33,6 +33,12 @@ defmodule Cure.Stdlib.DependentRegexModifierTest do
       fn vertical_escape(input: String) -> Option(Char) = parse_full(/\\v/, input)
       fn not_vertical_escape(input: String) -> Option(Char) = parse_full(/\\V/, input)
 
+      fn anchored_full(input: String) -> Option(Unit) = parse_full(/^abc$/, input)
+      fn anchored_search(input: String) -> Option(Match(Unit)) = search(/^abc$/, input)
+      fn multiline_anchored_search(input: String) -> Option(Match(Unit)) = search(/^abc$/m, input)
+      fn ordinary_later_line_search(input: String) -> Option(Match(Unit)) = search(/abc/, input)
+      fn firstline_search(input: String) -> Option(Match(Unit)) = search(/abc/f, input)
+
       fn same(expected: Char) -> Char -> Bool =
         fn(actual) -> Std.Char.same(expected, actual)
 
@@ -106,6 +112,27 @@ defmodule Cure.Stdlib.DependentRegexModifierTest do
     assert apply(module, :vertical_escape, [[0x2028]]) == {:some, 0x2028}
     assert apply(module, :vertical_escape, [[?a]]) == :none
     assert apply(module, :not_vertical_escape, [[?a]]) == {:some, ?a}
+  end
+
+  test "anchors use subject boundaries by default and line boundaries under m", %{runtime_module: module} do
+    assert apply(module, :anchored_full, [~c"abc"]) == {:some, :unit}
+    assert apply(module, :anchored_full, [~c"xabc"]) == :none
+    assert apply(module, :anchored_search, [~c"x\nabc\ny"]) == :none
+
+    assert apply(module, :multiline_anchored_search, [~c"x\nabc\ny"]) ==
+             {:some, {:Match, :unit, ~c"x\n", ~c"abc", ~c"\ny"}}
+
+    assert apply(module, :anchored_search, [~c"abc\n"]) ==
+             {:some, {:Match, :unit, ~c"", ~c"abc", ~c"\n"}}
+  end
+
+  test "f restricts possible match starts to the first line", %{runtime_module: module} do
+    assert apply(module, :ordinary_later_line_search, [~c"x\nabc"]) ==
+             {:some, {:Match, :unit, ~c"x\n", ~c"abc", ~c""}}
+
+    assert apply(module, :firstline_search, [~c"x\nabc"]) == :none
+    assert apply(module, :firstline_search, [~c"xabc\nrest"]) ==
+             {:some, {:Match, :unit, ~c"x", ~c"abc", ~c"\nrest"}}
   end
 
   test "greedy and lazy repetition preserve ordered Thompson preference", %{runtime_module: module} do
