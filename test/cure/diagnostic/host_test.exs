@@ -287,6 +287,26 @@ defmodule Cure.Diagnostic.HostTest do
            ) =~ "[E101]"
   end
 
+  test "E101 fallback describes structured reasons containing source spans without crashing" do
+    span = %Cure.Diagnostic.Span{
+      source_id: "demo.cure",
+      path: "demo.cure",
+      start_byte: 0,
+      end_byte: 2,
+      start_line: 1,
+      start_column: 1,
+      end_line: 1,
+      end_column: 3
+    }
+
+    rendered = Host.render({:codegen_error, {:unexpected_backend_state, %{span: span}}}, "demo.cure")
+
+    assert rendered =~ "CODE GENERATION FAILED [E101]"
+    assert rendered =~ "unexpected_backend_state"
+    assert rendered =~ "end_line=1"
+    refute rendered =~ "Protocol.UndefinedError"
+  end
+
   test "includes the unresolved stdlib module in E101 code-generation failures" do
     rendered =
       Host.render(

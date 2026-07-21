@@ -177,6 +177,10 @@ defmodule Cure.Diagnostic.Adapter do
     declaration_conflict(:sibling_module_collision, %{name: name, owners: owners}, opts)
   end
 
+  def from_error({:sibling_module_collision, %{name: _name} = details}, opts) do
+    declaration_conflict(:sibling_module_collision, details, opts)
+  end
+
   def from_error({:precedence_cycle, %{groups: groups} = details}, opts) when is_list(groups) do
     operator_conflict(:precedence_cycle, details, opts)
   end
@@ -622,6 +626,23 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:codegen_error, {:unfilled_hole, _} = reason}, opts), do: from_error(reason, opts)
 
   def from_error({:codegen_error, {:implementation_scope, _} = reason}, opts), do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:sibling_module_collision, _} = reason}, opts),
+    do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {kind, _} = reason}, opts)
+      when kind in [
+             :duplicate_type,
+             :duplicate_ctor,
+             :duplicate_constructor,
+             :duplicate_field,
+             :duplicate_parameter,
+             :duplicate_index,
+             :reserved_union_type_name,
+             :constructor_function_collision,
+             :duplicate_definition
+           ],
+      do: from_error(reason, opts)
 
   def from_error({:codegen_failure, details}, opts) when is_map(details) do
     opts =
@@ -3178,6 +3199,8 @@ defmodule Cure.Diagnostic.Adapter do
     value |> Tuple.to_list() |> Enum.take(4) |> Enum.map_join(": ", &human_reason/1)
   end
 
+  defp human_reason(%_{} = value), do: value |> Map.from_struct() |> human_reason()
+
   defp human_reason(value) when is_map(value) do
     value
     |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
@@ -3331,6 +3354,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp declaration_conflict_title(:duplicate_index), do: "Duplicate index"
   defp declaration_conflict_title(:duplicate_type), do: "Duplicate type declaration"
   defp declaration_conflict_title(:duplicate_constructor), do: "Duplicate constructor"
+  defp declaration_conflict_title(:sibling_module_collision), do: "Name repeated across sibling modules"
   defp declaration_conflict_title(_kind), do: "Declaration conflict"
 
   defp declaration_conflict_message(:duplicate_parameter, name, _detail),
@@ -3349,6 +3373,10 @@ defmodule Cure.Diagnostic.Adapter do
     do:
       "The constructor `#{name}` is declared more than once in this module. Rename or remove one declaration so pattern matching stays unambiguous."
 
+  defp declaration_conflict_message(:sibling_module_collision, name, detail),
+    do:
+      "The name `#{name}` is declared#{detail}. Sibling modules in one source file currently share an elaboration namespace, so one declaration would overwrite the other. Rename one declaration or move the modules into separate source files."
+
   defp declaration_conflict_message(_kind, name, detail),
     do: "The declaration `#{name}` conflicts with another visible declaration#{detail}."
 
@@ -3357,6 +3385,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp duplicate_primary_label(:duplicate_index), do: "this index repeats an earlier name"
   defp duplicate_primary_label(:duplicate_type), do: "this type repeats an earlier declaration"
   defp duplicate_primary_label(:duplicate_constructor), do: "this constructor repeats an earlier declaration"
+
+  defp duplicate_primary_label(:sibling_module_collision),
+    do: "this name is already declared in another sibling module"
+
   defp duplicate_primary_label(_kind), do: "rename this declaration or make its identity unique"
 
   defp interface_failure(kind, details, opts) do
