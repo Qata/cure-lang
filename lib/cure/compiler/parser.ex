@@ -4641,18 +4641,21 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         {arms, state} = parse_inline_match_arms(state)
         state = expect(state, :rbrace)
-        ast = {:pattern_match, [line: token.line, col: token.col], [scrutinee | arms]}
+        meta = put_match_source_info([line: token.line, col: token.col], token, scrutinee, arms, state)
+        ast = {:pattern_match, meta, [scrutinee | arms]}
         {ast, state}
 
       %Token{type: :indent} ->
         state = advance(state)
         {arms, state} = parse_block_match_arms(state)
         state = expect_dedent(state)
-        ast = {:pattern_match, [line: token.line, col: token.col], [scrutinee | arms]}
+        meta = put_match_source_info([line: token.line, col: token.col], token, scrutinee, arms, state)
+        ast = {:pattern_match, meta, [scrutinee | arms]}
         {ast, state}
 
       _ ->
-        ast = {:pattern_match, [line: token.line, col: token.col], [scrutinee]}
+        meta = put_match_source_info([line: token.line, col: token.col], token, scrutinee, [], state)
+        ast = {:pattern_match, meta, [scrutinee]}
         {ast, state}
     end
   end
@@ -5362,6 +5365,34 @@ defmodule Cure.Compiler.Parser do
         guard: guard_span,
         body: body_span
       })
+    else
+      meta
+    end
+  end
+
+  defp put_match_source_info(meta, match_token, scrutinee, arms, state) do
+    match_span = if match_token.span, do: match_token.span, else: nil
+    scrutinee_span = first_node_source_span(scrutinee)
+
+    branch_spans =
+      arms
+      |> Enum.map(&first_node_source_span/1)
+      |> Enum.reject(&is_nil/1)
+
+    whole =
+      case {match_span || scrutinee_span, authored_token(state)} do
+        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
+          case Range.through(first, last) do
+            {:ok, span} -> span
+            _ -> nil
+          end
+
+        _ ->
+          scrutinee_span
+      end
+
+    if whole || branch_spans != [] do
+      Keyword.put(meta, :source_info, %SourceInfo{whole: whole, branches: branch_spans})
     else
       meta
     end

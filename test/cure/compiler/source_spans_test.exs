@@ -199,6 +199,18 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.body) == "n"
   end
 
+  test "match expressions retain their whole and branch-owned spans" do
+    source = "fn choose(x: Int) -> Int = match x\n  n -> n\n  _ -> 0\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "match.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "match.cure", emit_events: false, prelude_macros: false)
+
+    {:pattern_match, meta, _} = find_node(ast, :pattern_match)
+    info = Metadata.source_info(meta)
+
+    assert slice(source, info.whole) == "match x\n  n -> n\n  _ -> 0"
+    assert Enum.map(info.branches, &slice(source, &1)) == ["n -> n", "_ -> 0"]
+  end
+
   test "record constructions retain authored name, delimiters, and field spans" do
     source = "fn origin() -> Point = Point{x: 0, y: 0}\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "record.cure", emit_events: false)
