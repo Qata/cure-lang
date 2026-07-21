@@ -8500,7 +8500,12 @@ defmodule Cure.Compiler.Parser do
           {{:expansion, ast}, state}
       end
 
-    {%{use_site: Enum.reverse(use_site), expected: expected, line: kw.line}, state}
+    {%{
+       use_site: Enum.reverse(use_site),
+       expected: expected,
+       line: kw.line,
+       source_span: macro_rule_source_span(kw, state)
+     }, state}
   end
 
   # Collect the filled use-site tokens up to the `expands` keyword (or end of

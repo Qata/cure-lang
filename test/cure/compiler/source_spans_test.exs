@@ -129,6 +129,21 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, open.source_span) == "open Category"
   end
 
+  test "macro examples retain their authored range" do
+    source =
+      "macro Every\n" <>
+        "  syntax every <t: Duration> becomes Timer.repeat(t)\n" <>
+        "    example every 500 expands Timer.repeat(500)\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "macro_example.cure", emit_events: false)
+
+    assert {:ok, {:macro_def, _meta, [rule]}} =
+             Parser.parse(tokens, file: "macro_example.cure", emit_events: false, prelude_macros: false)
+
+    [example] = rule.examples
+    assert slice(source, example.source_span) == "example every 500 expands Timer.repeat(500)"
+  end
+
   test "named containers retain exact declaration and qualified-name ranges" do
     source = "mod Demo.Core\n  rec Point\n    x: Int\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "containers.cure", emit_events: false)
