@@ -7662,7 +7662,12 @@ defmodule Cure.Compiler.Parser do
 
     {grade, type_ast, state, annotation_span} = parse_binder_annotation(state, name)
 
-    state = expect(state, :rbrace)
+    {state, _close_token} =
+      expect_container_close(state, :rbrace, :implicit_parameter, start_token, [type_ast], false, %{
+        binder: name,
+        binder_span: name_token.span,
+        closing_tokens: [:comma, :rparen]
+      })
 
     meta = put_binder_meta([implicit: true], grade, type_ast)
     {{:param, put_param_source_info(meta, start_token, name_token, state, annotation_span), name}, state}

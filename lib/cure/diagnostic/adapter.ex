@@ -5179,6 +5179,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :implicit_parameter}
+       }),
+       do: "Implicit parameter is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :branch_block, family: :match}
        }),
        do: "Pattern branch block is not closed"
@@ -5651,6 +5657,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :implicit_parameter, binder: binder}
+       }),
+       do: "The implicit parameter `#{binder}` reaches the end of its annotation without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :branch_block, family: :match}
        }),
        do: "This inline `match` reaches the end of its branches without the closing '}'."
@@ -6031,6 +6043,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :named_implicit_pattern}
        }),
        do: "close this named implicit pattern with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :implicit_parameter}
+       }),
+       do: "close this implicit parameter with `}`"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_unclosed,
@@ -6439,6 +6457,27 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(opener, :secondary, "this named implicit pattern starts here"),
       pickup_label(Map.get(context, :binder_span), :secondary, "this is the implicit binder"),
       pickup_label(previous, :secondary, "the implicit pattern ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :implicit_parameter} = context
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this implicit parameter starts here"),
+      pickup_label(Map.get(context, :binder_span), :secondary, "this is the implicit parameter name"),
+      pickup_label(previous, :secondary, "the parameter annotation ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -6998,6 +7037,13 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_insertions(
          %SyntaxProblem{kind: :container_unclosed, expected: :rbrace, context: %{container: :named_implicit_pattern}},
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rbrace, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_unclosed, expected: :rbrace, context: %{container: :implicit_parameter}},
          %Span{} = span
        ) do
     closing_delimiter_insertion(:rbrace, span)
