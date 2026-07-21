@@ -135,7 +135,7 @@ defmodule Cure.Compiler.Errors do
   end
 
   def format_error({kind, _problem} = error, file)
-      when kind in [:proof_chain_syntax, :proof_chain_mismatch, :rewrite_failed] do
+      when kind in [:proof_chain_syntax, :proof_chain_mismatch, :rewrite_failed, :defining_equation_unavailable] do
     error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
   end
 
@@ -631,6 +631,10 @@ defmodule Cure.Compiler.Errors do
   defp embedded_span({:source_context, {:proof_chain_mismatch, _} = reason, _context}), do: embedded_span(reason)
   defp embedded_span({:source_context, {:proof_chain_syntax, _} = reason, _context}), do: embedded_span(reason)
   defp embedded_span({:source_context, {:rewrite_failed, _} = reason, _context}), do: embedded_span(reason)
+
+  defp embedded_span({:source_context, {:defining_equation_unavailable, _} = reason, _context}),
+    do: embedded_span(reason)
+
   defp embedded_span({:source_context, _reason, %{span: %Cure.Diagnostic.Span{} = span}}), do: span
 
   defp embedded_span({:proof_chain_syntax, %Cure.Diagnostic.ProofChainSyntaxProblem{} = problem}),
@@ -641,6 +645,9 @@ defmodule Cure.Compiler.Errors do
 
   defp embedded_span({:rewrite_failed, %Cure.Diagnostic.RewriteProblem{} = problem}),
     do: problem.command || problem.theorem || problem.goal
+
+  defp embedded_span({:defining_equation_unavailable, %Cure.Diagnostic.DefiningEquationProblem{} = problem}),
+    do: problem.equation_use || problem.function_definition
 
   defp embedded_span({:source_context, reason, _context}), do: embedded_span(reason)
   defp embedded_span(_error), do: nil

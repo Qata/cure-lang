@@ -22,7 +22,7 @@ defmodule Cure.LSP.Server do
 
   alias Cure.LSP.Transport
   alias Cure.LSP.Positions
-  alias Cure.Compiler.{Formatter, Lexer, Parser}
+  alias Cure.Compiler.{Formatter, Lexer, Parser, Printer}
   alias Cure.MetaAST.Metadata
 
   defstruct [
@@ -448,8 +448,14 @@ defmodule Cure.LSP.Server do
         lines = String.split(text, "\n")
         target_line = Enum.at(lines, line, "")
         word = extract_word_at(target_line, char)
+        dotted_word = extract_dotted_word_at(target_line, char)
 
-        case Enum.find(symbols, fn s -> s.name == word end) do
+        case Enum.find(equation_symbols(ast), &(&1.name == dotted_word)) ||
+               Enum.find(symbols, fn s -> s.name == word end) do
+          %{kind: :equation, proposition: proposition, line: fn_line} ->
+            hover_text = "```cure\n#{proposition}\n```\n\n*Certified from the definition at line #{fn_line}*"
+            %{"contents" => %{"kind" => "markdown", "value" => hover_text}}
+
           %{kind: :function, signature: sig, line: fn_line} ->
             hover_text = "```cure\n#{sig}\n```\n\n*Defined at line #{fn_line}*"
             %{"contents" => %{"kind" => "markdown", "value" => hover_text}}
@@ -528,6 +534,7 @@ defmodule Cure.LSP.Server do
     lines = String.split(text, "\n")
     target_line = Enum.at(lines, line, "")
     word = extract_word_at(target_line, char)
+    dotted_word = extract_dotted_word_at(target_line, char)
 
     if word != "" do
       # Try AST-based symbol table first
@@ -536,7 +543,8 @@ defmodule Cure.LSP.Server do
           {:ok, ast} ->
             symbols = build_symbol_table(ast, text, encoding)
 
-            case Enum.find(symbols, fn s -> s.name == word and s.kind == :function end) do
+            case Enum.find(equation_symbols(ast), &(&1.name == dotted_word)) ||
+                   Enum.find(symbols, fn s -> s.name == word and s.kind == :function end) do
               %{line: l} -> l - 1
               _ -> nil
             end
@@ -602,6 +610,15 @@ defmodule Cure.LSP.Server do
 
     word = prefix <> suffix
     if word == "", do: extract_word(line), else: word
+  end
+
+  defp extract_dotted_word_at(line, char) do
+    graphemes = String.graphemes(line)
+    {before, after_cursor} = Enum.split(graphemes, min(char, length(graphemes)))
+    allowed = &(&1 =~ ~r/[a-zA-Z0-9_.]/)
+    prefix = before |> Enum.reverse() |> Enum.take_while(allowed) |> Enum.reverse() |> Enum.join()
+    suffix = after_cursor |> Enum.take_while(allowed) |> Enum.join()
+    prefix <> suffix
   end
 
   # -- Document Symbols --------------------------------------------------------
@@ -735,10 +752,18 @@ defmodule Cure.LSP.Server do
         {:ok, ast} ->
           symbols = build_symbol_table(ast)
 
-          Enum.map(symbols, fn s ->
-            kind = if s.kind == :function, do: 3, else: 2
-            %{"label" => s.name, "kind" => kind, "detail" => s.signature}
-          end)
+          ordinary =
+            Enum.map(symbols, fn s ->
+              kind = if s.kind == :function, do: 3, else: 2
+              %{"label" => s.name, "kind" => kind, "detail" => s.signature}
+            end)
+
+          equations =
+            Enum.map(equation_symbols(ast), fn equation ->
+              %{"label" => equation.name, "kind" => 3, "detail" => equation.proposition}
+            end)
+
+          ordinary ++ equations
 
         _ ->
           []
@@ -746,6 +771,105 @@ defmodule Cure.LSP.Server do
 
     ast_completions
   end
+
+  @doc false
+  def equation_symbols(ast) do
+    ast
+    |> collect_equation_symbols([])
+    |> Enum.group_by(& &1.name)
+    |> Enum.flat_map(fn
+      {_name, [only]} -> [only]
+      {_name, collisions} -> Enum.map(collisions, &%{&1 | name: &1.structural_name})
+    end)
+    |> Enum.sort_by(& &1.name)
+  end
+
+  defp collect_equation_symbols(list, acc) when is_list(list),
+    do: Enum.flat_map(list, &collect_equation_symbols(&1, acc))
+
+  defp collect_equation_symbols({:function_def, meta, body}, _acc) do
+    name = Keyword.get(meta, :name, "?")
+
+    params =
+      meta
+      |> Keyword.get(:params, [])
+      |> Enum.map(fn {:param, _param_meta, param_name} -> param_name end)
+
+    info = Metadata.source_info(meta)
+    collect_equation_paths(body, name, params, %{}, [], Keyword.get(meta, :line, 1), info && info.whole)
+  end
+
+  defp collect_equation_symbols({_tag, _meta, children}, acc) when is_list(children),
+    do: Enum.flat_map(children, &collect_equation_symbols(&1, acc))
+
+  defp collect_equation_symbols(_other, _acc), do: []
+
+  defp collect_equation_paths([single], name, params, replacements, path, line, span),
+    do: collect_equation_paths(single, name, params, replacements, path, line, span)
+
+  defp collect_equation_paths(
+         {:pattern_match, _meta, [{:variable, _scrutinee_meta, scrutinee} | arms]},
+         name,
+         params,
+         replacements,
+         path,
+         line,
+         span
+       ) do
+    Enum.flat_map(arms, fn
+      {:match_arm, arm_meta, body} ->
+        pattern = Keyword.get(arm_meta, :pattern)
+
+        case equation_pattern_name(pattern) do
+          nil ->
+            []
+
+          constructor ->
+            info = Metadata.source_info(arm_meta)
+
+            collect_equation_paths(
+              body,
+              name,
+              params,
+              Map.put(replacements, scrutinee, pattern),
+              path ++ [constructor],
+              (info && info.whole.start_line) || line,
+              (info && info.whole) || span
+            )
+        end
+
+      _ ->
+        []
+    end)
+  end
+
+  defp collect_equation_paths(_leaf, _name, _params, _replacements, [], _line, _span), do: []
+
+  defp collect_equation_paths(leaf, name, params, replacements, path, line, span) do
+    member = List.last(path)
+    full_name = "#{name}.#{member}"
+    arguments = Enum.map(params, &Map.get(replacements, &1, {:variable, [scope: :local], &1}))
+    left = Printer.quoted_to_string({:function_call, [name: name], arguments})
+    right = leaf |> single_equation_body() |> Printer.quoted_to_string()
+
+    [
+      %{
+        name: full_name,
+        structural_name: name <> "/" <> Enum.join(path, "/"),
+        kind: :equation,
+        line: line,
+        span: span,
+        proposition: "#{full_name} : Equivalent(_, #{left}, #{right})"
+      }
+    ]
+  end
+
+  defp single_equation_body([body]), do: body
+  defp single_equation_body(body), do: body
+
+  defp equation_pattern_name({:variable, _meta, name}) when is_binary(name), do: name
+  defp equation_pattern_name({:function_call, meta, _args}), do: Keyword.get(meta, :name)
+  defp equation_pattern_name(_pattern), do: nil
 
   # -- AST Helpers for LSP -------------------------------------------------------
 

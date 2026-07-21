@@ -3607,6 +3607,16 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         field_name = to_string(field_token.value)
         meta = [attribute: field_name, line: token.line, col: token.col]
+
+        meta =
+          with %Cure.Diagnostic.Span{} = first <- ast_source_span(left),
+               %Cure.Diagnostic.Span{} = last <- field_token.span,
+               {:ok, whole} <- Range.through(first, last) do
+            Keyword.put(meta, :source_info, %SourceInfo{whole: whole, name: last, operator: token.span})
+          else
+            _ -> meta
+          end
+
         {{:attribute_access, meta, [left]}, state}
 
       # Range operators

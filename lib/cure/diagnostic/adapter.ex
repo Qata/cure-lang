@@ -5,6 +5,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   alias Cure.Diagnostic.{
     Doc,
+    DefiningEquationProblem,
     ExpectationOrigin,
     Label,
     ProvenanceFrame,
@@ -378,6 +379,36 @@ defmodule Cure.Diagnostic.Adapter do
       primary: primary_label(opts, label),
       secondary: rewrite_labels(problem, Keyword.get(opts, :span)),
       suggestions: rewrite_suggestions(problem),
+      payload: problem
+    )
+  end
+
+  def from_error({:defining_equation_unavailable, %DefiningEquationProblem{} = problem}, opts) do
+    {title, message, label} =
+      case problem.kind do
+        :inaccessible_equation ->
+          {"Defining equation is private", "This generated equation follows its function's private visibility.",
+           "this equation is not visible here"}
+
+        :friendly_name_collision ->
+          {"Defining equation name is ambiguous",
+           "More than one certified branch has this friendly constructor name. Select its structural pattern key.",
+           "this friendly equation name is ambiguous"}
+
+        _ ->
+          {"Defining equation is unavailable",
+           "This function has no certified defining equation with the requested constructor path.",
+           "no such defining equation is available"}
+      end
+
+    Diagnostic.new(
+      code: "E114",
+      key: :defining_equation_unavailable,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      secondary: defining_equation_labels(problem, Keyword.get(opts, :span)),
       payload: problem
     )
   end
@@ -3099,6 +3130,15 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp rewrite_suggestions(_problem), do: []
+
+  defp defining_equation_labels(problem, primary) do
+    ([{problem.function_definition, "function is defined here"}] ++
+       Enum.map(problem.candidate_equations || [], &{&1, "candidate defining equation"}))
+    |> Enum.flat_map(fn
+      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
+      _ -> []
+    end)
+  end
 
   defp candidate_suggestions([]), do: []
 

@@ -427,5 +427,28 @@ defmodule Cure.LSP.LspTest do
       {_, _} = Server.process_message(msg, state)
       # Verifies no crash and response is sent
     end
+
+    test "defining-equation members expose propositions and structural collision names" do
+      source = """
+      mod EquationLsp
+        type Bit = Off | On
+        fn both(left: Bit, right: Bit) -> Bit = match left
+          Off -> Off
+          On -> match right
+            Off -> Off
+            On -> On
+      end
+      """
+
+      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, emit_events: false)
+      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
+      equations = Server.equation_symbols(ast)
+
+      assert Enum.map(equations, & &1.name) == ["both.On", "both/Off", "both/On/Off"]
+      assert Enum.all?(equations, &(&1.proposition =~ "Equivalent"))
+      assert Enum.any?(equations, &(&1.proposition =~ "both(On, Off), Off"))
+      assert Enum.map(equations, & &1.line) == [7, 4, 6]
+      assert Enum.all?(equations, & &1.span)
+    end
   end
 end

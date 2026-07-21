@@ -658,7 +658,8 @@ defmodule Cure.Elab.Declarations do
         # kernel's totality check simply stays uncertified — opaque to δ, never a
         # soundness hole (§7). Whole-program enforcement of the *required* set still
         # happens in TotalityClosure.certify_type_level.
-        {:ok, maybe_certify(final, sig.name)}
+        final = maybe_certify(final, sig.name)
+        Cure.Elab.Equation.generate(final, sig.name, meta, body_expr)
       end
     end
   end

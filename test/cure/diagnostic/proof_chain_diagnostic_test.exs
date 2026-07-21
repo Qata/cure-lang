@@ -208,4 +208,28 @@ defmodule Cure.Diagnostic.ProofChainDiagnosticTest do
       assert diagnostic.payload.goal
     end
   end
+
+  test "E114 relates an unavailable equation member to its defining function" do
+    source = """
+    mod MissingEquation
+      type Nat = Z | S(Nat)
+      fn identity(n: Nat) -> Nat = match n
+        Z -> Z
+        S(previous) -> S(previous)
+      fn bad() = identity.Missing
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source, file: "missing_equation.cure", emit_events: false)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "missing_equation.cure", source)
+    assert diagnostic.code == "E114"
+    assert diagnostic.payload.kind == :unknown_equation
+    assert diagnostic.payload.equation_use
+    assert diagnostic.payload.function_definition
+    assert Renderer.plain(diagnostic, registry) =~ "function is defined here"
+    assert (diagnostic |> Renderer.json() |> Jason.decode!())["code"] == "E114"
+    assert Renderer.lsp(diagnostic, registry, :utf16)["code"] == "E114"
+  end
 end

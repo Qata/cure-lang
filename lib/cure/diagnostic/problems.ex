@@ -117,6 +117,12 @@ defmodule Cure.Diagnostic.RewriteProblem do
         }
 end
 
+defmodule Cure.Diagnostic.DefiningEquationProblem do
+  @moduledoc "Structured failure to resolve a generated defining equation."
+  @enforce_keys [:kind]
+  defstruct [:kind, :equation_use, :function_definition, :candidate_equations, :owner, :member]
+end
+
 defmodule Cure.Diagnostic.TypeProblem do
   @moduledoc "A contextual type disagreement independent of presentation."
 

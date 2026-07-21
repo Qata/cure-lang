@@ -363,34 +363,48 @@ immune responses fire, and complete Antigen coverage is 318/318.
 **Purpose:** eliminate handwritten `dot_empty`, `dot_cons`, and nested-match
 equation boilerplate while making equations discoverable and stable.
 
-- [ ] Define an equation descriptor containing owner key, complete constructor
+- [x] Define an equation descriptor containing owner key, complete constructor
   path, structural pattern key, telescope, left/right surface/Core terms,
   visibility, definition span, and provenance.
-- [ ] Capture complete decision-tree paths from function clauses and nested
+- [x] Capture complete decision-tree paths from function clauses and nested
   matches without using traversal ordinals as public identity.
-- [ ] Generate equations only after the owner body is installed and totality
+- [x] Generate equations only after the owner body is installed and totality
   certified, so open-term reflexivity may use its certified delta rule. Build
   each as an ordinary `Equivalent` definition and kernel-check it.
-- [ ] Register descriptors in the elaboration environment and exported module
+- [x] Register descriptors in the elaboration environment and exported module
   interface. Public/private visibility follows the owner.
-- [ ] Resolve unique friendly members (`dot.Empty`, `dot.NonEmpty`, nested
+- [x] Resolve unique friendly members (`dot.Empty`, `dot.NonEmpty`, nested
   constructor paths). For short-name collisions, omit the ambiguous alias and
   retain selectable structural pattern keys; do not reject the function or add
   `eq_1` suffixes.
-- [ ] Ensure generated theorem definitions participate in totality closure,
+- [x] Ensure generated theorem definitions participate in totality closure,
   relevance, erasure, incremental interface hashes, imports, qualification,
   docs/reflection policy, and no runtime emission unless ordinarily reachable
   at a present grade.
-- [ ] Add E114 for unavailable/inaccessible/colliding friendly equation names,
+- [x] Add E114 for unavailable/inaccessible/colliding friendly equation names,
   including defining-clause related information.
-- [ ] Add member completion after `function.`, hover proposition, go-to-definition
+- [x] Add member completion after `function.`, hover proposition, go-to-definition
   provenance, and cross-module tests.
-- [ ] Cover flat clauses, nested matches, multiple arguments, impossible paths,
+- [x] Cover flat clauses, nested matches, multiple arguments, impossible paths,
   private owners, guarded collisions, recompilation stability, and forged
   equation rejection.
 
 **Green gate:** equation, incremental/export, diagnostic/LSP, stdlib, full-suite,
 oracle, and complete Antigen gates.
+
+**Completed evidence (2026-07-21):** defining equations are extracted from
+certified decision trees after totality closure and installed as ordinary
+kernel-checked definitions. The registry preserves complete structural paths,
+source propositions and spans, visibility, import/export identity, and stable
+interface hashes; ambiguous short names fail with E114 while exact nested paths
+remain selectable. Dependent, sequential, polymorphic, and type-valued results
+are covered (the latter by the predicative `TypeEquivalent` family), as are
+impossible indexed branches and guarded same-constructor clauses. A trace over
+all 122 canonical stdlib modules found zero rejected generated definitions;
+oracle replay and the focused equation/diagnostic/LSP gates pass. Final suite
+and Antigen gates pass: 5,336 tests with 0 failures and 6 excluded, 144
+expected immune responses, diagnostic coverage 58/58, and complete Antigen
+coverage 318/318.
 
 **Commit:** `feat(proofs): expose certified defining equations`
 

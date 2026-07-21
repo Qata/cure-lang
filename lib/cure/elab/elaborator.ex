@@ -688,12 +688,21 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr_typed({:attribute_access, meta, [inner]}, names, ctx, env) do
+  def elaborate_expr_typed({:attribute_access, meta, [inner]} = expr, names, ctx, env) do
     attr = Keyword.fetch!(meta, :attribute)
 
-    case parse_positional_index(attr) do
-      {:ok, i} -> positional_projection(i, inner, names, ctx, env)
-      :error -> record_projection(inner, attr, names, ctx, env)
+    case equation_member(inner, attr, surface_expression_span(expr), ctx, env) do
+      {:ok, _term, _type} = equation ->
+        equation
+
+      :not_equation ->
+        case parse_positional_index(attr) do
+          {:ok, i} -> positional_projection(i, inner, names, ctx, env)
+          :error -> record_projection(inner, attr, names, ctx, env)
+        end
+
+      {:error, _} = error ->
+        error
     end
   end
 
@@ -1061,6 +1070,70 @@ defmodule Cure.Elab.Elaborator do
     do: {:error, {:splice_outside_quote, tag, meta}}
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  defp equation_member(inner, member_name, use_span, ctx, env) do
+    with {:ok, function_name, members} <- equation_reference(inner, member_name) do
+      resolve_equation_member(env, function_name, members, use_span, ctx)
+    else
+      :error -> :not_equation
+    end
+  end
+
+  defp resolve_equation_member(env, function_name, members, use_span, ctx) do
+    case Cure.Elab.Equation.resolve_path(env, function_name, members) do
+      {:ok, descriptor} ->
+        term = {:global, descriptor.theorem}
+
+        case Kernel.infer(ctx, term) do
+          {:ok, type} -> {:ok, term, type}
+          {:error, _} = error -> error
+        end
+
+      {:error, {:defining_equation_unavailable, kind, _function, _member, details}} ->
+        {:error,
+         {:defining_equation_unavailable,
+          %Cure.Diagnostic.DefiningEquationProblem{
+            kind: kind,
+            equation_use: use_span,
+            function_definition: equation_definition_span(env, function_name),
+            candidate_equations: equation_candidate_spans(details),
+            owner: function_name,
+            member: Enum.join(members, ".")
+          }}}
+
+      :not_equation ->
+        :not_equation
+    end
+  end
+
+  defp equation_reference({:variable, _meta, function_name}, member_name),
+    do: {:ok, function_name, [member_name]}
+
+  defp equation_reference({:attribute_access, meta, [inner]}, member_name) do
+    with {:ok, function_name, members} <- equation_reference(inner, Keyword.fetch!(meta, :attribute)) do
+      {:ok, function_name, members ++ [member_name]}
+    end
+  end
+
+  defp equation_reference(_inner, _member_name), do: :error
+
+  defp equation_definition_span(env, function_name) do
+    env.equations
+    |> Enum.find_value(fn {owner, descriptors} ->
+      if Cure.Elab.Name.overload_base(owner) == function_name do
+        descriptors |> List.first() |> then(&(&1 && &1.definition_span))
+      end
+    end)
+  end
+
+  defp equation_candidate_spans(details) when is_list(details) do
+    Enum.flat_map(details, fn
+      %{definition_span: %Cure.Diagnostic.Span{} = span} -> [span]
+      _ -> []
+    end)
+  end
+
+  defp equation_candidate_spans(_details), do: []
 
   # Synthesise each element of a tuple literal to `{core, type_term}` (the inferred
   # type reified to a Core term at the current depth).

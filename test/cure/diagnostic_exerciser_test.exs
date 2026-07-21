@@ -111,6 +111,14 @@ defmodule Cure.DiagnosticExerciserTest do
           direction: :forward,
           occurrences: []
         }}},
+      {"defining equation unavailable", "E114",
+       {:defining_equation_unavailable,
+        %Cure.Diagnostic.DefiningEquationProblem{
+          kind: :unknown_equation,
+          owner: "identity",
+          member: "Missing",
+          candidate_equations: []
+        }}},
       {"beam write failure", "E096", {:write_failed, "_build/Demo.beam", :eacces}},
       {"beam load failure", "E098", {:load_failed, :badfile}},
       {"beam compilation failure", "E098", {:compilation_failed, [{:bad_form, :detail}]}},

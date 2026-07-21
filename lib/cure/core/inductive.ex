@@ -31,6 +31,7 @@ defmodule Cure.Core.Env do
             primitives: %{},
             import_modules: MapSet.new(),
             lemmas: %{},
+            equations: %{},
             module_owner: nil,
             current_def: nil
 
@@ -59,6 +60,9 @@ defmodule Cure.Core.Env do
           # theorems keyed by their conclusion-head atom, for auto proof-search
           # (see `Cure.Elab.ProofSearch`). Same status as `interfaces`/`coherence`.
           lemmas: %{atom() => [map()]},
+          # Inert elaborator metadata describing kernel-checked defining
+          # equations. The kernel never consults this index.
+          equations: %{atom() => [map()]},
           # Inert elaborator metadata (the kernel never reads it): the name of the
           # def whose body is currently being elaborated, set for the duration of
           # `Declarations.elaborate_real_body/3`. Consumed ONLY by
@@ -276,6 +280,18 @@ defmodule Cure.Core.Env do
   @doc "The `@lemma` entries filed under conclusion head `head`, or `[]`."
   @spec lemmas(t(), atom()) :: [map()]
   def lemmas(%__MODULE__{lemmas: ls}, head) when is_atom(head), do: Map.get(ls, head, [])
+
+  @doc "Register a certified defining-equation descriptor for its owner."
+  @spec put_equation(t(), atom(), map()) :: t()
+  def put_equation(%__MODULE__{equations: equations} = env, owner, descriptor),
+    do: %{env | equations: Map.update(equations, owner, [descriptor], &(&1 ++ [descriptor]))}
+
+  @doc "Return the defining equations registered for a function owner."
+  @spec equations(t(), atom()) :: [map()]
+  def equations(%__MODULE__{} = env, owner) do
+    key = resolve_key(env, env.defs, owner)
+    Map.get(env.equations, key, [])
+  end
 
   @doc "Replace the coherence registry (instance table) carried in the env."
   @spec put_coherence(t(), term()) :: t()
@@ -586,7 +602,11 @@ defmodule Cure.Core.Inductive do
   # Back-compat plicity default: an erased argument was always an inferred index
   # (implicit); everything runtime-relevant was positional (explicit).
   defp derive_plicities(quantities),
-    do: Enum.map(quantities, fn :erased -> :implicit; _ -> :explicit end)
+    do:
+      Enum.map(quantities, fn
+        :erased -> :implicit
+        _ -> :explicit
+      end)
 
   @doc "Register a family and its constructors in the env."
   @spec declare(Env.t(), family(), [ctor()]) :: Env.t()

@@ -39,6 +39,12 @@ mod Std.Equivalent
   type Equivalent(a: Type) indices (x: a, y: a)
     reflexive : Equivalent(a, w, w)
 
+  ## Equality between small types themselves. `Equivalent(Type, A, B)` would
+  ## require `Type 0 : Type 0`, violating Cure's predicative hierarchy, so
+  ## type-valued defining equations use this ordinary indexed family instead.
+  type TypeEquivalent indices (x: Type, y: Type)
+    type_reflexive : TypeEquivalent(w, w)
+
   ## Symmetry: from `x = y` derive `y = x`.
   fn sym({a: Type}, {x: a}, {y: a}, p: Equivalent(a, x, y)) -> Equivalent(a, y, x) = 
     match p
