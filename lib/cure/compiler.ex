@@ -142,7 +142,7 @@ defmodule Cure.Compiler do
       case BeamWriter.compile_forms(forms) do
         {:ok, module, binary, beam_warnings} ->
           case BeamWriter.write_beam(module, binary, output_dir, emit_events: emit?, file: file) do
-            :ok -> {:cont, {:ok, main, warnings ++ beam_warnings}}
+            :ok -> {:cont, {:ok, main, warnings ++ BeamWriter.normalize_warnings(beam_warnings, file)}}
             {:error, _} = err -> {:halt, err}
           end
 
