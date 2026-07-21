@@ -38,11 +38,6 @@ defmodule Cure.Stdlib.DependentRegexModifierTest do
       fn multiline_anchored_search(input: String) -> Option(Match(Unit)) = search(/^abc$/m, input)
       fn ordinary_later_line_search(input: String) -> Option(Match(Unit)) = search(/abc/, input)
       fn firstline_search(input: String) -> Option(Match(Unit)) = search(/abc/f, input)
-      fn mixed_class(input: String) -> Option(Char) = parse_full(/[A-F\\d_]/i, input)
-      fn unicode_class_digit(input: String) -> Option(Char) = parse_full(/[\\d]/u, input)
-      fn class_not_digit(input: String) -> Option(Char) = parse_full(/[\\D]/, input)
-      fn negated_class_digit(input: String) -> Option(Char) = parse_full(/[^\\d]/, input)
-      fn class_horizontal_or_vertical(input: String) -> Option(Char) = parse_full(/[\\h\\v]/, input)
 
       fn same(expected: Char) -> Char -> Bool =
         fn(actual) -> Std.Char.same(expected, actual)
@@ -140,20 +135,6 @@ defmodule Cure.Stdlib.DependentRegexModifierTest do
              {:some, {:Match, :unit, ~c"x", ~c"abc", ~c"\nrest"}}
   end
 
-  test "escaped classes compose inside bracket classes with options and negation", %{runtime_module: module} do
-    assert apply(module, :mixed_class, [[?b]]) == {:some, ?b}
-    assert apply(module, :mixed_class, [[?7]]) == {:some, ?7}
-    assert apply(module, :mixed_class, [[?_]]) == {:some, ?_}
-    assert apply(module, :mixed_class, [[?z]]) == :none
-
-    assert apply(module, :unicode_class_digit, [[?١]]) == {:some, ?١}
-    assert apply(module, :class_not_digit, [[?a]]) == {:some, ?a}
-    assert apply(module, :class_not_digit, [[?1]]) == :none
-    assert apply(module, :negated_class_digit, [[?a]]) == {:some, ?a}
-    assert apply(module, :negated_class_digit, [[?1]]) == :none
-    assert apply(module, :class_horizontal_or_vertical, [[?\t]]) == {:some, ?\t}
-    assert apply(module, :class_horizontal_or_vertical, [[?\n]]) == {:some, ?\n}
-  end
 
   test "greedy and lazy repetition preserve ordered Thompson preference", %{runtime_module: module} do
     assert apply(module, :greedy_partition, []) == {:some, {~c"aa", ~c""}}

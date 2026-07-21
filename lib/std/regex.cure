@@ -191,8 +191,8 @@ mod Std.Regex
     | BeginCapture
     | EndCapture
 
-  type BoundaryConstraint = SubjectStart | SubjectEnd | LineStart | LineEnd
-  type Boundary = Boundary(Bool, Bool, Bool, Bool)
+  type BoundaryConstraint = SubjectStart | SubjectEnd | StrictSubjectEnd | LineStart | LineEnd
+  type Boundary = Boundary(Bool, Bool, Bool, Bool, Bool)
   type MachineState = Active(Nat, List(EvidenceInstruction), List(BoundaryConstraint)) | Accepted(List(EvidenceInstruction), List(BoundaryConstraint))
   type PatternMachine = PatternMachine(Nat, List(MachineState), Nat -> Char -> List(MachineState))
 
@@ -374,9 +374,10 @@ mod Std.Regex
     [head | rest] -> append_states(machine_step_one(next, char, head), machine_step(next, char, rest))
 
   fn constraint_holds(constraint: BoundaryConstraint, boundary: Boundary) -> Bool = match boundary
-    Boundary(subject_start, subject_end, line_start, line_end) -> match constraint
+    Boundary(subject_start, subject_end, strict_subject_end, line_start, line_end) -> match constraint
       SubjectStart -> subject_start
       SubjectEnd -> subject_end
+      StrictSubjectEnd -> strict_subject_end
       LineStart -> line_start
       LineEnd -> line_end
 
@@ -403,7 +404,11 @@ mod Std.Regex
     _ -> false
 
   fn position_boundary(subject_start: Bool, line_start: Bool, input: String) -> Boundary =
-    Boundary(subject_start, position_subject_end(input), line_start, position_line_end(input))
+    Boundary(subject_start, position_subject_end(input), position_strict_subject_end(input), line_start, position_line_end(input))
+
+  fn position_strict_subject_end(input: String) -> Bool = match input
+    [] -> true
+    _ -> false
 
   fn machine_accepts_chars(next: Nat -> Char -> List(MachineState), input: String, current: List(MachineState)) -> Bool = match input
     [] -> machine_has_accept(current)
@@ -750,6 +755,7 @@ mod Std.Regex
     ConfiguredRegex : RegexOptions -> Regex(a) -> Regex(a)
     StartAnchor : Bool -> Regex(Unit)
     EndAnchor : Bool -> Regex(Unit)
+    StrictEndAnchor : Regex(Unit)
 
   type Conversion indices (raw: Type, result: Type)
     IdentityConversion : Conversion(value, value)
@@ -889,6 +895,7 @@ mod Std.Regex
     EndAnchor(multiline) -> pickup
       multiline -> Some(BuiltRegex(UnitC, PatternBoundary(LineEnd), unit_identity_conversion()))
       else -> Some(BuiltRegex(UnitC, PatternBoundary(SubjectEnd), unit_identity_conversion()))
+    StrictEndAnchor() -> Some(BuiltRegex(UnitC, PatternBoundary(StrictSubjectEnd), unit_identity_conversion()))
 
   fn convert_complete_extraction({shape: ShapeCode}, {result: Type}, pattern: Pattern(shape), conversion: Conversion(Sem(shape), result), evidence: List(Evidence)) -> Option(result) = match extract_complete_encoding(decode_pattern_encoding(pattern, evidence))
     None() -> None()
@@ -1010,6 +1017,8 @@ mod Std.Regex
   fn end_anchor() -> Regex(Unit) = EndAnchor(false)
 
   fn end_anchor_with_options(multiline: Bool) -> Regex(Unit) = EndAnchor(multiline)
+
+  fn strict_end_anchor() -> Regex(Unit) = StrictEndAnchor()
 
   fn always(_char: Char) -> Bool = true
 
@@ -1245,6 +1254,9 @@ mod Std.Regex
     | LiteralCapture(LiteralPattern)
     | LiteralStart
     | LiteralEnd
+    | LiteralAbsoluteStart
+    | LiteralStrictEnd
+    | LiteralFinalEnd
 
   type LiteralParse = LiteralParsed(LiteralPattern, String) | LiteralInvalid(Atom)
   type LiteralClassParse = LiteralClassParsed(List(Char), List(CharacterRange), ClassKinds, String) | LiteralClassInvalid(Atom)
@@ -1471,6 +1483,9 @@ mod Std.Regex
     ['H' | rest] -> LiteralParsed(LiteralHorizontal(true), rest)
     ['v' | rest] -> LiteralParsed(LiteralVertical(false), rest)
     ['V' | rest] -> LiteralParsed(LiteralVertical(true), rest)
+    ['A' | rest] -> LiteralParsed(LiteralAbsoluteStart, rest)
+    ['z' | rest] -> LiteralParsed(LiteralStrictEnd, rest)
+    ['Z' | rest] -> LiteralParsed(LiteralFinalEnd, rest)
     ['a' | rest] -> LiteralParsed(LiteralExact(7), rest)
     ['e' | rest] -> LiteralParsed(LiteralExact(27), rest)
     ['f' | rest] -> LiteralParsed(LiteralExact(12), rest)
@@ -1503,6 +1518,12 @@ mod Std.Regex
     ['\\', 'H' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotHorizontalKind, kinds), fuel)
     ['\\', 'v' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(VerticalKind, kinds), fuel)
     ['\\', 'V' | rest] -> parse_literal_class_items_fuel(rest, chars, ranges, enable_class_kind(NotVerticalKind, kinds), fuel)
+    ['\\', 'a' | rest] -> parse_literal_class_items_fuel(rest, [7 | chars], ranges, kinds, fuel)
+    ['\\', 'e' | rest] -> parse_literal_class_items_fuel(rest, [27 | chars], ranges, kinds, fuel)
+    ['\\', 'f' | rest] -> parse_literal_class_items_fuel(rest, [12 | chars], ranges, kinds, fuel)
+    ['\\', 'n' | rest] -> parse_literal_class_items_fuel(rest, ['\n' | chars], ranges, kinds, fuel)
+    ['\\', 'r' | rest] -> parse_literal_class_items_fuel(rest, ['\r' | chars], ranges, kinds, fuel)
+    ['\\', 't' | rest] -> parse_literal_class_items_fuel(rest, ['\t' | chars], ranges, kinds, fuel)
     [first | rest] -> parse_literal_class_character(first, rest, chars, ranges, kinds, fuel)
 
   fn parse_literal_class_character(first: Char, rest: String, chars: List(Char), ranges: List(CharacterRange), kinds: ClassKinds, fuel: Nat) -> LiteralClassParse = pickup
@@ -1559,6 +1580,9 @@ mod Std.Regex
     LiteralCapture(_) -> StringC
     LiteralStart -> UnitC
     LiteralEnd -> UnitC
+    LiteralAbsoluteStart -> UnitC
+    LiteralStrictEnd -> UnitC
+    LiteralFinalEnd -> UnitC
 
   fn emit_shape(shape: ShapeCode) -> Syntax = match shape
     UnitC -> call("Std.Regex.UnitC", [])
@@ -1591,6 +1615,9 @@ mod Std.Regex
     LiteralCapture(inner) -> call("Std.Regex.captured", [emit_literal(inner)])
     LiteralStart -> call("Std.Regex.start_anchor", [])
     LiteralEnd -> call("Std.Regex.end_anchor", [])
+    LiteralAbsoluteStart -> call("Std.Regex.start_anchor", [])
+    LiteralStrictEnd -> call("Std.Regex.strict_end_anchor", [])
+    LiteralFinalEnd -> call("Std.Regex.end_anchor", [])
 
   fn emit_literal_with_options(pattern: LiteralPattern, options: RegexOptions) -> Syntax = match options
     RegexOptions(caseless, multiline, dotall, _extended, unicode, _firstline, ungreedy, _exported) -> match pattern
@@ -1612,6 +1639,9 @@ mod Std.Regex
       LiteralCapture(inner) -> call("Std.Regex.captured", [emit_literal_with_options(inner, options)])
       LiteralStart -> call("Std.Regex.start_anchor_with_options", [bool_literal(multiline)])
       LiteralEnd -> call("Std.Regex.end_anchor_with_options", [bool_literal(multiline)])
+      LiteralAbsoluteStart -> call("Std.Regex.start_anchor", [])
+      LiteralStrictEnd -> call("Std.Regex.strict_end_anchor", [])
+      LiteralFinalEnd -> call("Std.Regex.end_anchor", [])
 
   fn emit_chars(chars: List(Char)) -> Syntax = match chars
     [] -> list([])
