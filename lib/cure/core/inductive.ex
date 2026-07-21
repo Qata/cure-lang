@@ -148,6 +148,17 @@ defmodule Cure.Core.Env do
     }
   end
 
+  @doc "Attach inert authored-hole metadata to a definition for release-boundary diagnostics."
+  @spec put_source_holes(t(), atom(), map()) :: t()
+  def put_source_holes(%__MODULE__{} = env, name, source_holes) when is_map(source_holes) do
+    key = resolve_key(env, env.defs, name)
+
+    case Map.fetch(env.defs, key) do
+      {:ok, definition} -> %{env | defs: Map.put(env.defs, key, Map.put(definition, :source_holes, source_holes))}
+      :error -> env
+    end
+  end
+
   @doc "The global definition `%{name, type, body}` for `name`, or nil."
   @spec get_def(t(), atom()) :: map() | nil
   def get_def(%__MODULE__{} = env, name), do: Map.get(env.defs, resolve_key(env, env.defs, name))

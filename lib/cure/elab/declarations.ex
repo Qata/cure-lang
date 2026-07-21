@@ -660,6 +660,7 @@ defmodule Cure.Elab.Declarations do
         final =
           env
           |> Env.add_def(sig.name, final_pi, lambda, quantities)
+          |> Env.put_source_holes(sig.name, collect_source_holes(body_expr, def_env, sig.return_span))
           |> Env.put_labels(sig.name, param_label_vector(sig.params))
           |> register_parameter_spans(sig.name, sig.params)
 
@@ -674,6 +675,40 @@ defmodule Cure.Elab.Declarations do
       end
     end
   end
+
+  defp collect_source_holes(ast, env, annotation_span) do
+    collect_source_holes(ast, env, annotation_span, %{})
+  end
+
+  defp collect_source_holes({:hole, meta, children}, env, annotation_span, acc) when is_list(meta) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+    span = if info, do: info.whole
+
+    acc =
+      Map.put(acc, hole_id(env, meta), %{
+        span: span,
+        annotation_span: annotation_span
+      })
+
+    collect_source_holes(children, env, annotation_span, acc)
+  end
+
+  defp collect_source_holes({tag, meta, children}, env, annotation_span, acc)
+       when is_atom(tag) and is_list(meta) do
+    acc = collect_source_holes(meta, env, annotation_span, acc)
+    collect_source_holes(children, env, annotation_span, acc)
+  end
+
+  defp collect_source_holes(list, env, annotation_span, acc) when is_list(list),
+    do: Enum.reduce(list, acc, &collect_source_holes(&1, env, annotation_span, &2))
+
+  defp collect_source_holes(tuple, env, annotation_span, acc) when is_tuple(tuple),
+    do: tuple |> Tuple.to_list() |> collect_source_holes(env, annotation_span, acc)
+
+  defp collect_source_holes(map, env, annotation_span, acc) when is_map(map) and not is_struct(map),
+    do: map |> Map.values() |> collect_source_holes(env, annotation_span, acc)
+
+  defp collect_source_holes(_other, _env, _annotation_span, acc), do: acc
 
   # Elaborate the body and settle the return type + its Core form. With a DECLARED
   # return, check the body against it (the long-standing behavior). With NONE

@@ -89,13 +89,14 @@ defmodule Cure.Diagnostic.Registry do
     "W081" => "No first-party producer remains; pickup reachability warnings are not emitted.",
     "W082" => "No first-party producer remains; pickup reachability warnings are not emitted."
   }
-  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 W086 W088]
+  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 E116 W086 W088]
   @known_producers ~w[
-    dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
+    beam_writer dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
     module_loader name_resolution operational parser pattern_checker proof_checker
     totality_checker
   ]a
   @producer_modules %{
+    beam_writer: Cure.Compiler.BeamWriter,
     dependency_graph: Cure.Compiler.DepGraph,
     doctor: Cure.Doctor,
     elaboration: Cure.Elab.Program,
@@ -168,6 +169,7 @@ defmodule Cure.Diagnostic.Registry do
     "E113" => :induction_failed,
     "E114" => :defining_equation_unavailable,
     "E115" => :named_argument_mismatch,
+    "E116" => :implementation_scope,
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
     "W002" => :configuration_warning,
@@ -1406,6 +1408,16 @@ defmodule Cure.Diagnostic.Registry do
     Put positional arguments first, then use each declared parameter label at
     most once; named arguments may otherwise appear in any order.
     """,
+    "E116" => """
+    E116: Invalid Implementation Scope
+
+    An implementation has no nested members, usually because an intended member
+    is aligned with the `implementation` declaration instead of indented beneath
+    it. The diagnostic labels both declarations and offers an indentation edit
+    when the following function is the likely member.
+
+    Indent every implementation member beneath its `implementation` declaration.
+    """,
     "W000" => """
     W000: Compiler Warning
 
@@ -1669,6 +1681,7 @@ defmodule Cure.Diagnostic.Registry do
   defp stable_key("E113", _title), do: :induction_failed
   defp stable_key("E114", _title), do: :defining_equation_unavailable
   defp stable_key("E115", _title), do: :named_argument_mismatch
+  defp stable_key("E116", _title), do: :implementation_scope
 
   defp stable_key(_code, title) do
     title
@@ -1707,7 +1720,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E092"), do: [:macro_expansion, :parser]
   defp producers("E093"), do: [:elaboration, :kernel, :kernel_conversion]
   defp producers("E094"), do: [:lexer, :parser]
-  defp producers("E101"), do: [:operational, :kernel]
+  defp producers("E101"), do: [:beam_writer, :operational, :kernel]
   defp producers("E102"), do: [:elaboration]
   defp producers("E103"), do: [:kernel]
   defp producers("E104"), do: [:elaboration]
@@ -1722,6 +1735,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E112"), do: [:elaboration]
   defp producers("E113"), do: [:elaboration]
   defp producers("E115"), do: [:elaboration]
+  defp producers("E116"), do: [:elaboration]
   defp producers("E008"), do: [:doctor]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
@@ -1742,6 +1756,7 @@ defmodule Cure.Diagnostic.Registry do
   defp subsystem("E112"), do: :elaboration
   defp subsystem("E113"), do: :elaboration
   defp subsystem("E115"), do: :elaboration
+  defp subsystem("E116"), do: :elaboration
   defp subsystem("E091"), do: :resolution
   defp subsystem("E092"), do: :macros
   defp subsystem("E093"), do: :elaboration

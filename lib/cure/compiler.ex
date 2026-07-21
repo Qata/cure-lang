@@ -138,7 +138,7 @@ defmodule Cure.Compiler do
   # downstream consumers (CLI, `cure check`, `mix cure.check.examples`, test
   # suites) can rely on the 2-tuple shape without `CaseClauseError` crashes.
   defp write_beam_units([{main_module, _main_forms} | _] = units, output_dir, emit?, file, cg_warnings) do
-    Enum.reduce_while(units, {:ok, main_module, cg_warnings}, fn {_module, forms}, {:ok, main, warnings} ->
+    Enum.reduce_while(units, {:ok, main_module, cg_warnings}, fn {expected_module, forms}, {:ok, main, warnings} ->
       case BeamWriter.compile_forms(forms) do
         {:ok, module, binary, beam_warnings} ->
           case BeamWriter.write_beam(module, binary, output_dir, emit_events: emit?, file: file) do
@@ -147,10 +147,21 @@ defmodule Cure.Compiler do
           end
 
         {:error, errors, _beam_warnings} when warnings != [] ->
-          {:halt, {:error, {:beam_lint_error, errors, warnings}}}
+          {:halt,
+           {:error,
+            {:codegen_failure,
+             %{
+               stage: :beam_writer,
+               module: expected_module,
+               file: file,
+               reason: {:beam_lint, errors, warnings}
+             }}}}
 
         {:error, errors, _beam_warnings} ->
-          {:halt, {:error, {:beam_lint_error, errors}}}
+          {:halt,
+           {:error,
+            {:codegen_failure,
+             %{stage: :beam_writer, module: expected_module, file: file, reason: {:beam_lint, errors}}}}}
       end
     end)
   end
@@ -158,16 +169,22 @@ defmodule Cure.Compiler do
   defp write_beam_units([], _output_dir, _emit?, _file, _warnings),
     do: {:error, {:codegen_error, :no_compilation_units}}
 
-  defp compile_and_load_units([{main_module, _main_forms} | _] = units) do
-    Enum.reduce_while(units, {:ok, main_module}, fn {_module, forms}, {:ok, main} ->
+  defp compile_and_load_units([{main_module, _main_forms} | _] = units, file) do
+    Enum.reduce_while(units, {:ok, main_module}, fn {expected_module, forms}, {:ok, main} ->
       case BeamWriter.compile_and_load(forms) do
-        {:ok, _loaded} -> {:cont, {:ok, main}}
-        {:error, _} = error -> {:halt, error}
+        {:ok, _loaded} ->
+          {:cont, {:ok, main}}
+
+        {:error, reason} ->
+          stage = if match?({:load_failed, _}, reason), do: :beam_loader, else: :beam_writer
+
+          {:halt, {:error, {:codegen_failure, %{stage: stage, module: expected_module, file: file, reason: reason}}}}
       end
     end)
   end
 
-  defp compile_and_load_units([]), do: {:error, {:codegen_error, :no_compilation_units}}
+  defp compile_and_load_units([], file),
+    do: {:error, {:codegen_failure, %{stage: :codegen, module: nil, file: file, reason: :no_compilation_units}}}
 
   @doc """
   Lex and parse a Cure source string into its raw parser AST.
@@ -241,7 +258,7 @@ defmodule Cure.Compiler do
            {:ok, units, _cg_warnings} <- codegen(ast, file, emit?, nil, declared_phases) do
         # compile_and_load/2 intentionally does NOT persist bytecode to
         # disk -- it only loads into the current VM.
-        compile_and_load_units(units)
+        compile_and_load_units(units, file)
       end
     end)
   end

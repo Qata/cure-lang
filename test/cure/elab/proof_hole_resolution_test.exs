@@ -68,8 +68,11 @@ defmodule Cure.Elab.ProofHoleResolutionTest do
 
     # The surviving hole type-checks but must NOT be emittable: the codegen gate
     # refuses the whole program until the hole is filled.
-    assert {:error, {:unfilled_hole, name}} = Program.check_codegen_ready(env)
-    assert to_string(name) |> String.contains?("demo")
+    assert {:error, {:unfilled_hole, details}} = Program.check_codegen_ready(env)
+    assert to_string(details.definition) |> String.contains?("demo")
+
+    assert binary_part(@red, details.span.start_byte, details.span.end_byte - details.span.start_byte) ==
+             "?"
   end
 
   # Identical to @red but the local lemma is TAGGED @lemma. Now the hole must be

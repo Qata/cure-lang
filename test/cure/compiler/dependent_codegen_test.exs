@@ -49,7 +49,12 @@ defmodule Cure.Compiler.DependentCodegenTest do
   """
 
   test "a dependent module with an unfilled hole is refused by the compiler" do
-    assert {:error, {:codegen_error, {:unfilled_hole, :sketch}}} =
+    assert {:error, {:codegen_error, {:unfilled_hole, details}}} =
              Cure.Compiler.compile_and_load(@holed, emit_events: false)
+
+    assert details.definition == :sketch
+
+    assert binary_part(@holed, details.span.start_byte, details.span.end_byte - details.span.start_byte) ==
+             "?todo"
   end
 end

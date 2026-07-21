@@ -263,8 +263,9 @@ defmodule Cure.Elab.Emit do
   # validator descends into erased subterms (rewrite proof/motive, eq/refl args)
   # that `Erase.erase` drops, so a hole hidden in an erased position is caught
   # here rather than shipped silently (#102). A `no_hole` rejection maps to the
-  # public `{:unfilled_hole, name}` contract; any other release-clause rejection
-  # surfaces as a `{:final_core_violation, name, _}` rather than crashing codegen.
+  # public E014 reason (with exact authored metadata when available); any other
+  # release-clause rejection surfaces as a `{:final_core_violation, name, _}`
+  # rather than crashing codegen.
   defp reject_holes(env, names) do
     Enum.reduce_while(names, :ok, fn name, :ok ->
       case Validator.validate(def_body(env, name), Validator.release_config()) do
@@ -272,11 +273,21 @@ defmodule Cure.Elab.Emit do
           {:cont, :ok}
 
         {:error, rejections} ->
-          if Enum.any?(rejections, &(&1.clause == :no_hole)),
-            do: {:halt, {:error, {:unfilled_hole, name}}},
-            else: {:halt, {:error, {:final_core_violation, name, rejections}}}
+          case Enum.find(rejections, &(&1.clause == :no_hole)) do
+            nil -> {:halt, {:error, {:final_core_violation, name, rejections}}}
+            rejection -> {:halt, {:error, unfilled_hole_error(env, name, rejection)}}
+          end
       end
     end)
+  end
+
+  defp unfilled_hole_error(env, name, %{node: {:hole, hole_id}}) do
+    source = env |> Env.get_def(name) |> then(&if(&1, do: Map.get(&1, :source_holes, %{}), else: %{}))
+
+    case Map.get(source, hole_id) do
+      nil -> {:unfilled_hole, name}
+      details -> {:unfilled_hole, Map.merge(%{definition: name, hole_id: hole_id}, details)}
+    end
   end
 
   defp def_body(env, name) do
@@ -521,8 +532,7 @@ defmodule Cure.Elab.Emit do
             lower(env, n, ctx)
 
           :NegativeSuccessor ->
-            {:op, @line, :-, {:op, @line, :-, {:integer, @line, 0}, lower(env, n, ctx)},
-             {:integer, @line, 1}}
+            {:op, @line, :-, {:op, @line, :-, {:integer, @line, 0}, lower(env, n, ctx)}, {:integer, @line, 1}}
         end
 
       true ->
@@ -1010,9 +1020,7 @@ defmodule Cure.Elab.Emit do
 
         :NegativeSuccessor ->
           # field = -N - 1 = 0 - N - 1
-          {:<,
-           {:op, @line, :-, {:op, @line, :-, {:integer, @line, 0}, {:var, @line, n}},
-            {:integer, @line, 1}}}
+          {:<, {:op, @line, :-, {:op, @line, :-, {:integer, @line, 0}, {:var, @line, n}}, {:integer, @line, 1}}}
       end
 
     guard = [[{:op, @line, guard_cmp, {:var, @line, n}, {:integer, @line, 0}}]]

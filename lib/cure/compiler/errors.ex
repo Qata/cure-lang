@@ -436,6 +436,8 @@ defmodule Cure.Compiler.Errors do
         {:error, _reason} -> []
       end
 
+    opts = Keyword.put(opts, :source_file, file)
+
     opts =
       case branch_patterns(error) do
         [] -> opts
@@ -449,7 +451,45 @@ defmodule Cure.Compiler.Errors do
         Cure.Diagnostic.Adapter.from_error(error, opts)
       end
 
-    {diagnostic, registry}
+    {remap_authored_diagnostic(diagnostic, registry, source_id), registry}
+  end
+
+  # Some internal elaboration entry points operate on an already-parsed AST and
+  # historically stamp nested context as `nofile`. At the public source boundary
+  # byte offsets are still authoritative, so project those labels and edits onto
+  # the caller's buffer. Do not remap spans owned by another real source id (for
+  # example a macro definition or generated file).
+  defp remap_authored_diagnostic(%Cure.Diagnostic{} = diagnostic, registry, source_id) do
+    %{
+      diagnostic
+      | primary: remap_authored_label(diagnostic.primary, registry, source_id),
+        secondary: Enum.map(diagnostic.secondary, &remap_authored_label(&1, registry, source_id)),
+        suggestions:
+          Enum.map(diagnostic.suggestions, fn suggestion ->
+            edits =
+              Enum.map(suggestion.edits, fn edit ->
+                %{edit | span: remap_authored_span(edit.span, registry, source_id)}
+              end)
+
+            %{suggestion | edits: edits}
+          end)
+    }
+  end
+
+  defp remap_authored_label(nil, _registry, _source_id), do: nil
+
+  defp remap_authored_label(%Cure.Diagnostic.Label{} = label, registry, source_id),
+    do: %{label | span: remap_authored_span(label.span, registry, source_id)}
+
+  defp remap_authored_span(%Cure.Diagnostic.Span{} = span, registry, source_id) do
+    if span.source_id in [nil, "nofile", source_id] do
+      case Cure.Diagnostic.SourceRegistry.span(registry, source_id, span.start_byte, span.end_byte) do
+        {:ok, remapped} -> remapped
+        {:error, _} -> span
+      end
+    else
+      span
+    end
   end
 
   defp branch_patterns({:source_context, _reason, context}) when is_map(context),
@@ -584,12 +624,14 @@ defmodule Cure.Compiler.Errors do
 
   defp hole_span({:codegen_error, reason}, source), do: hole_span(reason, source)
 
-  defp hole_span({:unfilled_hole, _name}, source) do
-    case Regex.run(~r/\?{3}|\?{1,2}[A-Za-z_][A-Za-z0-9_]*/, source, return: :index) do
-      [{start_byte, length}] -> {:ok, start_byte, start_byte + length}
-      _ -> :error
-    end
-  end
+  # Real compiler producers carry the parser-owned token range all the way to
+  # the release boundary. Never search the source again for those diagnostics:
+  # doing so can select a different hole (or hole-looking text in a comment).
+  defp hole_span(
+         {:unfilled_hole, %{span: %Cure.Diagnostic.Span{start_byte: start_byte, end_byte: end_byte}}},
+         _source
+       ),
+       do: {:ok, start_byte, end_byte}
 
   defp hole_span(_error, _source), do: :error
 

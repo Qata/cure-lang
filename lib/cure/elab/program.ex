@@ -121,7 +121,8 @@ defmodule Cure.Elab.Program do
   # through two doors they never covered.
   @spec check_declarations(tuple() | list()) :: :ok | {:error, term()}
   defp check_declarations(ast) do
-    with :ok <- check_no_duplicate_defs(ast),
+    with :ok <- check_implementation_structure(ast),
+         :ok <- check_no_duplicate_defs(ast),
          :ok <- check_no_duplicate_types(ast),
          :ok <- check_no_duplicate_ctors(ast),
          :ok <- check_no_fn_ctor_collision(ast),
@@ -130,6 +131,108 @@ defmodule Cure.Elab.Program do
       check_no_sibling_collision(ast)
     end
   end
+
+  # Indentation owns implementation membership. An empty implementation followed
+  # by a sibling function is otherwise accepted as two top-level declarations,
+  # losing the programmer's intended member relationship until a much later
+  # missing-method or BEAM failure. Reject the malformed structure while both
+  # authored ranges are still available.
+  defp check_implementation_structure(ast) do
+    ast
+    |> module_decl_groups()
+    |> Enum.reduce_while(:ok, fn declarations, :ok ->
+      case first_invalid_implementation(declarations) do
+        nil -> {:cont, :ok}
+        details -> {:halt, {:error, {:implementation_scope, details}}}
+      end
+    end)
+  end
+
+  defp first_invalid_implementation(declarations) do
+    interface_methods =
+      Map.new(declarations, fn
+        {:interface, meta, body} when is_list(meta) and is_list(body) ->
+          methods =
+            body
+            |> Enum.flat_map(fn
+              {:function_def, method_meta, _body} -> [Keyword.get(method_meta, :name)]
+              _other -> []
+            end)
+            |> MapSet.new()
+
+          {Keyword.get(meta, :name), methods}
+
+        _other ->
+          {nil, MapSet.new()}
+      end)
+
+    declarations
+    |> Enum.with_index()
+    |> Enum.find_value(fn
+      {{:implementation, meta, []}, index} when is_list(meta) ->
+        implementation_scope_details(meta, Enum.at(declarations, index + 1), interface_methods)
+
+      _other ->
+        nil
+    end)
+  end
+
+  defp implementation_scope_details(meta, {:function_def, member_meta, _body}, interface_methods)
+       when is_list(member_meta) do
+    member = Keyword.get(member_meta, :name)
+    declared = Map.get(interface_methods, Keyword.get(meta, :interface), MapSet.new())
+
+    if MapSet.member?(declared, member) do
+      misplaced_member_details(meta, member_meta)
+    else
+      empty_implementation_details(meta)
+    end
+  end
+
+  defp implementation_scope_details(meta, _next_declaration, _interface_methods),
+    do: empty_implementation_details(meta)
+
+  defp misplaced_member_details(meta, member_meta) do
+    member_span = metadata_whole_span(member_meta)
+
+    %{
+      kind: :member_outside,
+      interface: Keyword.get(meta, :interface),
+      for: Keyword.get(meta, :for),
+      member: Keyword.get(member_meta, :name),
+      implementation_span: metadata_whole_span(meta),
+      member_span: member_span,
+      insertion_span: insertion_span(member_span),
+      indentation: "  "
+    }
+  end
+
+  defp empty_implementation_details(meta) do
+    %{
+      kind: :empty,
+      interface: Keyword.get(meta, :interface),
+      for: Keyword.get(meta, :for),
+      implementation_span: metadata_whole_span(meta)
+    }
+  end
+
+  defp metadata_whole_span(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+      _ -> nil
+    end
+  end
+
+  defp insertion_span(%Cure.Diagnostic.Span{} = span) do
+    %{
+      span
+      | end_byte: span.start_byte,
+        end_line: span.start_line,
+        end_column: span.start_column
+    }
+  end
+
+  defp insertion_span(_span), do: nil
 
   # A module's `precedencegroup` declarations may not describe a cyclic order —
   # two groups that each claim to bind tighter than the other (directly, through
@@ -1488,10 +1591,11 @@ defmodule Cure.Elab.Program do
 
   @doc """
   Codegen gate (§6 negative #5): a program with an unfilled hole typechecks but
-  must not be emitted. Returns `{:error, {:unfilled_hole, name}}` for the first
-  definition that still carries a hole.
+  must not be emitted. Authored definitions return exact source metadata for the
+  rejected hole; synthetic Core environments retain the legacy definition name.
   """
-  @spec check_codegen_ready(Env.t()) :: :ok | {:error, {:unfilled_hole, atom()}}
+  @spec check_codegen_ready(Env.t()) ::
+          :ok | {:error, {:unfilled_hole, atom() | %{required(:definition) => atom()}}}
   def check_codegen_ready(%Env{defs: defs}) do
     # Route through the single Final-Core enforcement point (K3): the validator
     # descends into every node (prim args, rewrite proof/motive, eq/refl args)
@@ -1508,8 +1612,24 @@ defmodule Cure.Elab.Program do
       end)
 
     case finding do
-      nil -> :ok
-      {name, _rejections} -> {:error, {:unfilled_hole, name}}
+      nil ->
+        :ok
+
+      {name, rejections} ->
+        rejection = Enum.find(rejections, &(&1.clause == :no_hole))
+
+        hole_id =
+          case rejection do
+            %{node: {:hole, id}} -> id
+            _ -> nil
+          end
+
+        source_holes = defs |> Map.fetch!(name) |> Map.get(:source_holes, %{})
+
+        case Map.get(source_holes, hole_id) do
+          nil -> {:error, {:unfilled_hole, name}}
+          source -> {:error, {:unfilled_hole, Map.merge(%{definition: name, hole_id: hole_id}, source)}}
+        end
     end
   end
 

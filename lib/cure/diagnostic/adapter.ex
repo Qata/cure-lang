@@ -621,6 +621,18 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:codegen_error, {:unfilled_hole, _} = reason}, opts), do: from_error(reason, opts)
 
+  def from_error({:codegen_error, {:implementation_scope, _} = reason}, opts), do: from_error(reason, opts)
+
+  def from_error({:codegen_failure, details}, opts) when is_map(details) do
+    opts =
+      opts
+      |> Keyword.put(:codegen_stage, Map.get(details, :stage))
+      |> Keyword.put(:codegen_module, Map.get(details, :module))
+      |> Keyword.put(:source_file, Map.get(details, :file, Keyword.get(opts, :source_file)))
+
+    codegen_failure(Map.get(details, :reason), opts)
+  end
+
   def from_error({:codegen_error, reason}, opts), do: codegen_failure(reason, opts)
 
   def from_error({:parse_error, [reason | _]}, opts), do: from_error(reason, opts)
@@ -938,6 +950,81 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:unknown_interface_method, interface, method}, opts),
     do: unknown_name(:member, method, Keyword.put(opts, :checking, interface))
+
+  def from_error({:implementation_scope, %{kind: :member_outside} = details}, opts) do
+    implementation = "#{name_to_string(details.interface)} for #{name_to_string(details.for)}"
+    primary_span = Map.get(details, :member_span) || Keyword.get(opts, :span)
+
+    secondary =
+      case Map.get(details, :implementation_span) do
+        %Span{} = span ->
+          [%Label{span: span, style: :secondary, message: "this implementation has no nested members"}]
+
+        _ ->
+          []
+      end
+
+    suggestions =
+      case Map.get(details, :insertion_span) do
+        %Span{} = span ->
+          [
+            %Suggestion{
+              message: "Indent `#{name_to_string(details.member)}` beneath the implementation",
+              applicability: :machine_applicable,
+              edits: [%TextEdit{span: span, replacement: Map.get(details, :indentation, "  ")}]
+            }
+          ]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E116",
+      key: :implementation_scope,
+      severity: :error,
+      title: "Implementation member is outside its implementation scope",
+      body:
+        Doc.paragraph(
+          "`#{name_to_string(details.member)}` appears to implement `#{implementation}`, but it is aligned outside that implementation. Implementation members must be indented beneath their `implementation` declaration."
+        ),
+      primary:
+        primary_label(
+          Keyword.put(opts, :span, primary_span),
+          "indent this member so it belongs to the implementation"
+        ),
+      secondary: secondary,
+      suggestions: suggestions,
+      payload: details
+    )
+  end
+
+  def from_error({:implementation_scope, %{kind: :empty} = details}, opts) do
+    span = Map.get(details, :implementation_span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E116",
+      key: :implementation_scope,
+      severity: :error,
+      title: "Implementation has no members",
+      body:
+        Doc.paragraph(
+          "The implementation of `#{name_to_string(details.interface)}` for `#{name_to_string(details.for)}` is empty. Every implementation must contain at least one nested member."
+        ),
+      primary:
+        primary_label(
+          Keyword.put(opts, :span, span),
+          "add the implementation's members beneath this declaration"
+        ),
+      suggestions: [
+        %Suggestion{
+          message: "Add and indent the required interface members beneath this implementation",
+          applicability: :manual
+        }
+      ],
+      payload: details
+    )
+  end
 
   def from_error({:missing_method, interface, method}, opts),
     do: interface_failure(:missing_method, %{interface: interface, method: method}, opts)
@@ -1462,6 +1549,37 @@ defmodule Cure.Diagnostic.Adapter do
       message: message,
       primary: primary_label(opts, "this variable is not bound here"),
       payload: %{line: Keyword.get(meta, :line), column: Keyword.get(meta, :col)}
+    )
+  end
+
+  def from_error({:unfilled_hole, details}, opts) when is_map(details) do
+    opts = Keyword.put_new(opts, :span, Map.get(details, :span))
+    primary = primary_label(opts, "replace this hole with an expression")
+
+    secondary =
+      case {Map.get(details, :annotation_span), primary} do
+        {%Span{} = span, %Label{span: primary_span}} when span != primary_span ->
+          [%Label{span: span, style: :secondary, message: "this function's result type is declared here"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E014",
+      key: :unfilled_hole,
+      severity: :error,
+      title: "Unfilled hole",
+      body: Doc.paragraph("The definition `#{name_to_string(details.definition)}` still contains an unfinished hole."),
+      primary: primary,
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Replace the hole with an expression that satisfies its surrounding type",
+          applicability: :manual
+        }
+      ],
+      payload: details
     )
   end
 
@@ -2775,17 +2893,114 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp codegen_failure(reason, opts) do
     {title, body, kind} = codegen_failure_content(reason)
+    stage = Keyword.get(opts, :codegen_stage) || codegen_stage(reason)
+    module = Keyword.get(opts, :codegen_module)
+    file = Keyword.get(opts, :source_file)
+    reason_text = codegen_reason_text(reason)
+    fingerprint = diagnostic_fingerprint({stage, module, file, reason})
+
+    context =
+      [
+        "Stage: `#{name_to_string(stage)}`.",
+        if(module, do: "Module: `#{name_to_string(module)}`."),
+        if(file, do: "Source: `#{file}`."),
+        "Underlying reason: #{reason_text}.",
+        "Diagnostic fingerprint: `#{fingerprint}`."
+      ]
+      |> Enum.reject(&is_nil/1)
+      |> Enum.join(" ")
 
     Diagnostic.new(
       code: "E101",
       key: :internal_compiler_error,
       severity: :error,
       title: title,
-      body: Doc.paragraph(body),
+      body: Doc.stack([Doc.paragraph(body), Doc.paragraph(context)]),
       primary: primary_label(opts, "code generation failed here"),
       notes: ["This is an internal compiler failure; report it with the diagnostic fingerprint."],
-      payload: %{kind: kind, debug_reason: inspect(reason)}
+      payload: %{
+        kind: kind,
+        stage: stage,
+        module: module,
+        file: file,
+        reason: reason_text,
+        fingerprint: fingerprint
+      }
     )
+  end
+
+  defp codegen_stage({:beam_lint, _errors}), do: :beam_writer
+  defp codegen_stage({:beam_lint, _errors, _warnings}), do: :beam_writer
+  defp codegen_stage({:missing_stdlib_module, _module, _message}), do: :module_resolution
+  defp codegen_stage(_reason), do: :codegen
+
+  defp codegen_reason_text({:beam_lint, errors}), do: beam_diagnostics_text(errors)
+
+  defp codegen_reason_text({:beam_lint, errors, warnings}) do
+    errors_text = beam_diagnostics_text(errors)
+    warnings_text = beam_diagnostics_text(warnings)
+
+    if warnings_text == "no details", do: errors_text, else: errors_text <> "; warnings: " <> warnings_text
+  end
+
+  defp codegen_reason_text({:compilation_failed, errors}), do: beam_diagnostics_text(errors)
+  defp codegen_reason_text(reason), do: human_reason(reason)
+
+  defp beam_diagnostics_text(diagnostics) do
+    diagnostics
+    |> List.wrap()
+    |> Enum.flat_map(fn
+      {_file, entries} when is_list(entries) -> entries
+      entry -> [entry]
+    end)
+    |> Enum.take(3)
+    |> Enum.map_join("; ", &beam_diagnostic_text/1)
+    |> case do
+      "" -> "no details"
+      text -> text
+    end
+  end
+
+  defp beam_diagnostic_text({location, formatter, detail}) when is_atom(formatter) do
+    message =
+      try do
+        formatter.format_error(detail) |> IO.iodata_to_binary() |> String.trim()
+      rescue
+        _ -> human_reason(detail)
+      end
+
+    "#{human_reason(location)}: #{message}"
+  end
+
+  defp beam_diagnostic_text(other), do: human_reason(other)
+
+  defp human_reason(value) when is_binary(value), do: value
+  defp human_reason(value) when is_atom(value), do: Atom.to_string(value)
+  defp human_reason(value) when is_number(value), do: to_string(value)
+
+  defp human_reason(value) when is_list(value) do
+    value |> Enum.take(3) |> Enum.map_join(", ", &human_reason/1)
+  end
+
+  defp human_reason(value) when is_tuple(value) do
+    value |> Tuple.to_list() |> Enum.take(4) |> Enum.map_join(": ", &human_reason/1)
+  end
+
+  defp human_reason(value) when is_map(value) do
+    value
+    |> Enum.sort_by(fn {key, _value} -> to_string(key) end)
+    |> Enum.take(4)
+    |> Enum.map_join(", ", fn {key, nested} -> "#{key}=#{human_reason(nested)}" end)
+  end
+
+  defp human_reason(value), do: inspect(value, limit: 4, printable_limit: 120)
+
+  defp diagnostic_fingerprint(term) do
+    term
+    |> :erlang.term_to_binary()
+    |> then(&:crypto.hash(:sha256, &1))
+    |> Base.encode16(case: :lower)
+    |> binary_part(0, 12)
   end
 
   defp codegen_failure_content(:expected_module) do

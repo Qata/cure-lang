@@ -78,6 +78,8 @@ defmodule Cure.Elab.Slice1ConformanceTest do
 
   test "negative #5: the program has an unfilled hole and is refused for codegen" do
     {:ok, env} = Program.elaborate(File.read!(@fixture))
-    assert {:error, {:unfilled_hole, :"Main#sketch"}} = Program.check_codegen_ready(env)
+    assert {:error, {:unfilled_hole, details}} = Program.check_codegen_ready(env)
+    assert details.definition == :"Main#sketch"
+    assert %Cure.Diagnostic.Span{} = details.span
   end
 end
