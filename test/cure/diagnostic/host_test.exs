@@ -148,6 +148,21 @@ defmodule Cure.Diagnostic.HostTest do
     refute rendered =~ ":computed_macro_error"
   end
 
+  test "computed macro source context does not fabricate a byte-zero span" do
+    source = "fn run() -> Int = actor()\n"
+
+    {diagnostic, _registry} =
+      Host.to_diagnostic(
+        {:computed_macro_error, [keyword: "actor", line: 1, col: 20],
+         {:invalid_generated_syntax, {:raw_syntax_in_expansion, []}}},
+        "demo.cure",
+        source
+      )
+
+    assert diagnostic.primary.span.start_byte == :binary.match(source, "actor") |> elem(0)
+    refute diagnostic.primary.span.start_byte == 0
+  end
+
   test "converts code generation and BEAM lint failures to a stable internal code" do
     assert Host.render({:codegen_error, :bad_artifact}, "demo.cure") =~
              "[E101]"

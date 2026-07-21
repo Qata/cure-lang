@@ -531,6 +531,22 @@ defmodule Cure.Compiler.Errors do
 
   defp error_location(_error), do: {0, 0}
 
+  defp span_contains_position?(%Cure.Diagnostic.Span{} = span, line, column) do
+    cond do
+      line < span.start_line or line > span.end_line ->
+        false
+
+      line == span.start_line and column < span.start_column ->
+        false
+
+      line == span.end_line and column > span.end_column ->
+        false
+
+      true ->
+        true
+    end
+  end
+
   # Parser recovery can return several independent errors as a bare list.
   # Search each item for the first honest source span so presentation callers
   # do not lose the file/caret merely because the parser accumulated errors.
@@ -593,7 +609,7 @@ defmodule Cure.Compiler.Errors do
           with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: "diagnostic", emit_events: false) do
             Enum.find(tokens, fn
               %Cure.Compiler.Token{span: %Cure.Diagnostic.Span{} = span} ->
-                span.start_line == line and span.start_column == col
+                span_contains_position?(span, line, col)
 
               _ ->
                 false
