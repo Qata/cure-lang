@@ -50,17 +50,36 @@ defmodule Cure.Elab.AppliedDefResolutionTest do
   end
 
   test "a BARE ambiguous applied def in a type annotation is a clean :ambiguous_overload error" do
-    # `plus` is defined in ≥2 imported/prelude modules with no unique winner: reject it as
+    # `plus` is defined by ≥2 DIRECTLY imported modules with no unique winner: reject it as
     # ambiguous (the SAME clean error term position gives), not as a silent conversion failure.
     # Post-E11 the index path routes through the overload resolver, so this is the precise
     # `:ambiguous_overload` (identical to term position) rather than the older `:ambiguous_name`.
     src = """
     mod C
       use Std.Otp.EffAlgebra
+      use Std.Nat
       fn h() -> Equivalent(Nat, plus(S(Z()), Z()), S(Z())) = reflexive(S(Z()))
     end
     """
 
     assert {:error, {:ambiguous_overload, :plus, _}} = verdict(src)
+  end
+
+  test "an AMBIENT prelude def does not make a directly imported bare name ambiguous" do
+    # `Std.Nat#plus` reaches this module only through the `@prelude` slice, which is merged
+    # UNDER explicit imports — so the `use Std.Otp.EffAlgebra` spelling is the unique winner
+    # and `plus` resolves. Regression lock: `restrict_env_to(env, :all)` used to pass a whole-
+    # module provider's OWN `import_modules` through, which made every dependency of a prelude
+    # provider (`Std.Equatable`'s `use Std.Nat`, …) count as a DIRECT import of every module.
+    # `Resolution.prefer_direct/2` then saw two directs and reported a false ambiguity here —
+    # and, for `map`, silently pushed `use Std.List` calls onto the overload path.
+    src = """
+    mod D
+      use Std.Otp.EffAlgebra
+      fn h() -> Equivalent(Nat, plus(S(Z()), Z()), S(Z())) = reflexive(S(Z()))
+    end
+    """
+
+    assert verdict(src) == :accept
   end
 end

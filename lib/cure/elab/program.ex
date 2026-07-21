@@ -745,7 +745,17 @@ defmodule Cure.Elab.Program do
     keep_keys = reachable_global_closure(env.defs, owned_def_keys)
     kept_defs = Map.take(env.defs, keep_keys)
 
-    %Env{env | defs: kept_defs}
+    # `import_modules` is the DIRECTNESS set `Resolution.prefer_direct/2` uses to
+    # let an explicit `use` shadow a transitive re-export. Passing this provider's
+    # OWN import list through would make ITS dependencies count as direct imports
+    # of every module the slice lands in — so `Std.Equatable`'s `use Std.Option`
+    # would make `Std.Option#map` a direct provider of `map` everywhere, tying
+    # with `Std.List#map` under an explicit `use Std.List` and pushing a
+    # previously unambiguous call onto the overload path. The prelude is merged
+    # UNDER explicit imports precisely so a `use` still wins, so the slice
+    # confers NO directness — not even the provider's own name, which would make
+    # ambient `Std.Bounded#Next` tie with an explicitly imported `Std.Fsm#Next`.
+    %Env{env | defs: kept_defs, import_modules: MapSet.new()}
   end
 
   defp restrict_env_to(%Env{} = env, :all), do: env

@@ -75,15 +75,21 @@ defmodule Cure.Stdlib.DependentEmitRuntimeTest do
 
   test "Std.Option runs correctly with the dependent constructor representation" do
     m = load_std("option")
-    some = apply(m, :some, [42])
-    none = apply(m, :none, [])
+    # `Std.Option` exposes no `some`/`none` wrappers — `Some`/`None` are the
+    # constructors and erase inline — so the erased terms are written directly
+    # here. `map`/`filter` cover the CONSTRUCTION side of the representation
+    # (their bodies build `Some(...)` / `None()`), `is_some`/`unwrap` the
+    # matching side.
+    some = {:some, 42}
+    none = :none
 
-    assert some == {:some, 42}
-    assert none == :none
     assert apply(m, :is_some, [some]) == true
     assert apply(m, :is_none, [none]) == true
     assert apply(m, :unwrap, [some, 0]) == 42
     assert apply(m, :unwrap, [none, 99]) == 99
+    assert apply(m, :map, [some, fn x -> x * 2 end]) == {:some, 84}
+    assert apply(m, :map, [none, fn x -> x * 2 end]) == :none
+    assert apply(m, :filter, [some, fn x -> x > 100 end]) == :none
   end
 
   test "Std.Result runs correctly with the dependent constructor representation" do
