@@ -160,4 +160,60 @@ defmodule Cure.Compiler.DeclarationSeparatorDiagnosticTest do
     assert {insertion.start_line, insertion.start_column} == {2, 17}
     assert insertion.start_byte == insertion.end_byte
   end
+
+  test "a type alias gets an exact equals-sign insertion" do
+    source = "typealias P Int"
+    {error, {diagnostic, registry}} = diagnostic(source, "alias_assign.cure")
+
+    assert {:declaration_separator_missing,
+            %{kind: :type_declaration_assign_missing, family: :typealias, declaration: "P"}} = error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE ALIAS NEEDS AN EQUALS SIGN [E094] -------------------- alias_assign.cure
+
+             The type alias `P` needs `=` between its name and the type it expands to.
+
+             A valid continuation here starts with '='.
+
+             at alias_assign.cure:1:13
+             1 | typealias P Int
+               | --------- - ^ this starts the type declaration; the declaration head ends here; insert `=` before this type body
+
+             Hint: Insert `=` before the type body
+             """)
+
+    assert [%{edits: [%{replacement: "= ", span: insertion}]}] = diagnostic.suggestions
+    assert {insertion.start_line, insertion.start_column} == {1, 13}
+  end
+
+  test "an algebraic type declaration gets an exact equals-sign insertion" do
+    source = "type Color Red | Blue"
+    {error, {diagnostic, registry}} = diagnostic(source, "type_assign.cure")
+
+    assert {:declaration_separator_missing,
+            %{kind: :type_declaration_assign_missing, family: :type, declaration: "Color"}} = error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE DECLARATION NEEDS AN EQUALS SIGN [E094] --------------- type_assign.cure
+
+             The type `Color` needs `=` between its declaration head and its constructors or
+             aliased type.
+
+             A valid continuation here starts with '='.
+
+             at type_assign.cure:1:12
+             1 | type Color Red | Blue
+               | ---- ----- ^ this starts the type declaration; the declaration head ends here; insert `=` before this type body
+
+             Hint: Insert `=` before the type body
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "= ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 11
+    assert insertion.end_byte == 11
+  end
 end

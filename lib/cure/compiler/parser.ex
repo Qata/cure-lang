@@ -8485,7 +8485,7 @@ defmodule Cure.Compiler.Parser do
           {[], state}
       end
 
-    state = expect(state, :assign)
+    state = expect_type_declaration_assign(state, :typealias, token, name_token, name)
     state = skip_newlines(state)
     {rhs, state} = parse_type_expr(state)
 
@@ -8499,6 +8499,42 @@ defmodule Cure.Compiler.Parser do
     meta = if head_params != [], do: Keyword.put(meta, :params, head_params), else: meta
     ast = {:type_annotation, meta, [rhs]}
     {put_type_decl_source_info(ast, token, name_token, state), state}
+  end
+
+  defp expect_type_declaration_assign(state, family, keyword_token, name_token, name) do
+    case expect_token(state, :assign) do
+      {:ok, _assign, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        previous =
+          case authored_token(next_state) do
+            %Token{span: %Cure.Diagnostic.Span{} = span} -> span
+            _ -> name_token.span
+          end
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :type_declaration_assign_missing,
+             family: family,
+             declaration: name,
+             expected: :assign,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: keyword_token.span,
+             previous_span: previous,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
+    end
   end
 
   # `primitive Name` → a constructor-less primitive-type container. The optional
@@ -8610,7 +8646,7 @@ defmodule Cure.Compiler.Parser do
         _ -> {false, state}
       end
 
-    state = expect(state, :assign)
+    state = expect_type_declaration_assign(state, :type, token, name_token, name)
     state = skip_newlines(state)
 
     # v0.21.0: allow the RHS to live inside an indented block so the

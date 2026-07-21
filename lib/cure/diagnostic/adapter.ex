@@ -5095,6 +5095,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :precedencegroup_field_colon_missing}),
     do: "Precedence group field needs a colon"
 
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :type_declaration_assign_missing,
+         context: %{family: :typealias}
+       }),
+       do: "Type alias needs an equals sign"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :type_declaration_assign_missing}),
+    do: "Type declaration needs an equals sign"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5381,6 +5390,18 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{declaration: field, family: group}
        }),
        do: "The `#{field}` setting in precedence group `#{group}` needs `:` before its value."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :type_declaration_assign_missing,
+         context: %{declaration: name, family: :typealias}
+       }),
+       do: "The type alias `#{name}` needs `=` between its name and the type it expands to."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :type_declaration_assign_missing,
+         context: %{declaration: name}
+       }),
+       do: "The type `#{name}` needs `=` between its declaration head and its constructors or aliased type."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
@@ -5732,6 +5753,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :precedencegroup_field_colon_missing}),
     do: "insert `:` before this setting value"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :type_declaration_assign_missing}),
+    do: "insert `=` before this type body"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -6033,6 +6057,25 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(opener, :secondary, "this is the precedence group"),
       pickup_label(previous, :secondary, "this is the setting name")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :type_declaration_assign_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this starts the type declaration"),
+      pickup_label(previous, :secondary, "the declaration head ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -6432,6 +6475,20 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `:` before the setting value",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :type_declaration_assign_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent] do
+    [
+      %Suggestion{
+        message: "Insert `=` before the type body",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "= "}]
       }
     ]
   end
