@@ -95,6 +95,7 @@ defmodule Cure.Compiler.SourceSpansTest do
     source =
       "macro actor <name: ModuleName>\n" <>
         "  syntax family ActorDefinition\n" <>
+        "    syntax actor <name: ModuleName>\n" <>
         "    state Type\n" <>
         "  accepts ActorDefinition\n" <>
         "  expands with derive_actor\n"
@@ -104,9 +105,15 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert {:ok, {:macro_def, _meta, [family, accepts, expands]}} =
              Parser.parse(tokens, file: "macro_sections.cure", emit_events: false, prelude_macros: false)
 
-    assert slice(source, family.source_span) == "syntax family ActorDefinition\n    state Type"
+    assert slice(source, family.source_span) ==
+             "syntax family ActorDefinition\n    syntax actor <name: ModuleName>\n    state Type"
+
     assert slice(source, accepts.source_span) == "accepts ActorDefinition"
     assert slice(source, expands.source_span) == "expands with derive_actor"
+    assert [field] = family.fields
+    assert slice(source, field.source_span) == "state Type"
+    assert [production] = family.productions
+    assert slice(source, production.source_span) == "syntax actor <name: ModuleName>"
   end
 
   test "macro failure and explanation sections retain authored ranges" do

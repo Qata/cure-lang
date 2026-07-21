@@ -8130,7 +8130,8 @@ defmodule Cure.Compiler.Parser do
           fields: macro_syntax_fields(segments),
           field_types: macro_syntax_field_types(segments),
           line: token.line,
-          col: token.col
+          col: token.col,
+          source_span: macro_rule_source_span(token, state)
         }
 
         parse_syntax_family_fields(state, fields, includes, [production | productions])
@@ -8158,7 +8159,8 @@ defmodule Cure.Compiler.Parser do
           obligations: obligations,
           cardinality: cardinality,
           line: token.line,
-          col: token.col
+          col: token.col,
+          source_span: macro_rule_source_span(token, state)
         }
 
         parse_syntax_family_fields(state, [field_entry | fields], includes, productions)
