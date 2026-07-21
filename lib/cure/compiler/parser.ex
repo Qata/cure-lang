@@ -7018,9 +7018,9 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_function_params(state, name, name_token) do
     case expect_token(state, :lparen) do
-      {:ok, _open, state} ->
+      {:ok, open, state} ->
         {params, state} = parse_typed_params(state)
-        {state, _close} = expect_token_or_nil(state, :rparen)
+        {state, _close} = expect_container_close(state, :rparen, :parameters, open, params, true)
         {params, state}
 
       {:error, state} ->

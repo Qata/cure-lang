@@ -295,6 +295,79 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
            }
   end
 
+  test "an unclosed function parameter list points to its opener and final parameter" do
+    source = "fn run(x: Int"
+    {:ok, tokens} = Lexer.tokenize(source, file: "params.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    error = Enum.find(errors, &match?({:container_elements_syntax, _}, &1))
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :parameters}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "params.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- FUNCTION PARAMETER LIST IS NOT CLOSED [E094] -------------------- params.cure
+
+             This function's parameter list reaches the end of the source without its closing
+             ')'.
+
+             at params.cure:1:14
+             1 | fn run(x: Int
+               |       -------^ this parameter list starts here; the previous parameter ends here; close this parameter list with `)`
+
+             Hint: Insert `)` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ")", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 13
+    assert insertion.end_byte == 13
+    assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 2
+  end
+
+  test "adjacent function parameters get a zero-width comma insertion" do
+    source = "fn run(x: Int y: Int) -> Int = 1"
+    {:ok, tokens} = Lexer.tokenize(source, file: "param_separator.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    error = Enum.find(errors, &match?({:container_elements_syntax, _}, &1))
+    assert {:container_elements_syntax, %{kind: :container_separator_missing, container: :parameters}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "param_separator.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- FUNCTION PARAMETERS NEED A COMMA [E094] ---------------- param_separator.cure
+
+             This function has another parameter here, but consecutive parameters must be
+             separated by a comma.
+
+             at param_separator.cure:1:15
+             1 | fn run(x: Int y: Int) -> Int = 1
+               |       ------- ^ this parameter list starts here; the previous parameter ends here; insert a comma before this parameter
+
+             Hint: Insert `,` between these parameters
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 14
+    assert insertion.end_byte == 14
+
+    assert [%{"newText" => ", ", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 14},
+             "end" => %{"line" => 0, "character" => 14}
+           }
+  end
+
   test "an invalid function parameter is rejected at the authored binder token" do
     source = "fn run(42) -> Int = 1\n"
     {:ok, tokens} = Lexer.tokenize(source, file: "binder.cure", emit_events: false)

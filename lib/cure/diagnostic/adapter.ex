@@ -4988,6 +4988,12 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "List comprehension is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :parameters}
+       }),
+       do: "Function parameter list is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :list}}),
     do: "List elements need a comma"
 
@@ -5002,6 +5008,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :record}
        }),
        do: "Record fields need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :parameters}
+       }),
+       do: "Function parameters need a comma"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :container_trailing_separator, context: %{container: :list}}),
     do: "List ends with an extra comma"
@@ -5150,6 +5162,13 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "This list comprehension reaches the end of the source without the ']' that closes its clauses."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :parameters}
+       }),
+       do: "This function's parameter list reaches the end of the source without its closing ')'."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :container_unclosed, context: %{container: container}}),
     do: "This #{container} reaches the end of the source without the ']' that closes its elements."
 
@@ -5164,6 +5183,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :record}
        }),
        do: "This record has another field here, but consecutive fields must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :parameters}
+       }),
+       do: "This function has another parameter here, but consecutive parameters must be separated by a comma."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5297,6 +5322,13 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :call_argument_separator_missing}),
     do: "insert a comma before this argument"
 
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :parameters}
+       }),
+       do: "close this parameter list with `)`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :container_unclosed, expected: expected}),
     do: "close this container with `#{syntax_insertion(expected)}`"
 
@@ -5311,6 +5343,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :record}
        }),
        do: "insert a comma before this field"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :parameters}
+       }),
+       do: "insert a comma before this parameter"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :container_separator_missing}),
     do: "insert a comma before this element"
@@ -5396,6 +5434,27 @@ defmodule Cure.Diagnostic.Adapter do
        )
        when marker != primary_span,
        do: [%Label{span: marker, style: :secondary, message: "this variadic marker needs a binder"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :parameters}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "this parameter list starts here"),
+      pickup_label(previous, :secondary, "the previous parameter ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
 
   defp syntax_secondary_labels(
          %SyntaxProblem{
@@ -5607,6 +5666,18 @@ defmodule Cure.Diagnostic.Adapter do
          }
        ]
 
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :parameters}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these parameters",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
   defp syntax_insertions(%SyntaxProblem{kind: :container_separator_missing}, %Span{} = span),
     do: [
       %Suggestion{
@@ -5639,6 +5710,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp container_item_name(:record), do: "field"
   defp container_item_name(:list_cons), do: "tail expression"
   defp container_item_name(:comprehension), do: "clause"
+  defp container_item_name(:parameters), do: "parameter"
   defp container_item_name(_container), do: "element"
 
   defp syntax_insertion(:rparen), do: ")"
