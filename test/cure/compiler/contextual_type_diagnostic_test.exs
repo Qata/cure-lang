@@ -584,6 +584,27 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this actor message has the wrong type"
   end
 
+  test "a real actor family callback failure renders at its authored invocation" do
+    source = """
+    mod BadActorDefinition
+      use Std.Actor
+      actor Cure.Generated.BadActor
+        state Int
+        on_cast
+          Inc -> true
+    """
+
+    assert {:error, reason} = Cure.Compiler.compile_and_load(source, emit_events: false)
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "actor_real.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :actor
+    assert diagnostic.primary.span.start_line == 3
+    assert rendered =~ "ACTOR CALLBACK HAS THE WRONG TYPE"
+    assert rendered =~ "3 |   actor Cure.Generated.BadActor"
+  end
+
   test "typed FSM and supervisor family failures retain their family origins" do
     source = "family declaration\n"
     span = raw_span(source, "family", 1, 1)

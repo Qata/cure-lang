@@ -1756,14 +1756,21 @@ defmodule Cure.Diagnostic.Adapter do
   # a real type relation at that boundary instead of presenting it as E092.
   defp family_type_failure({:source_context, reason, context}, details, opts)
        when is_map(context) do
-    with true <- reason_kind?(reason),
-         origin when not is_nil(origin) <- family_origin(details) do
+    with origin when not is_nil(origin) <- family_origin(details) do
       context =
         context
         |> Map.put(:expectation_origin, origin)
         |> Map.put(:checking, Map.get(details, :module))
 
-      {:ok, from_error({:source_context, reason, context}, opts)}
+      if reason_kind?(reason) do
+        {:ok, from_error({:source_context, reason, context}, opts)}
+      else
+        if family_boundary_reason?(reason) do
+          {:ok, family_boundary_failure(origin, details, reason, opts)}
+        else
+          :error
+        end
+      end
     else
       _ -> :error
     end
@@ -1775,6 +1782,37 @@ defmodule Cure.Diagnostic.Adapter do
   defp reason_kind?({:index_mismatch, {:cannot_unify, _, _}}), do: true
   defp reason_kind?({:conversion_failure, _, _}), do: true
   defp reason_kind?(_reason), do: false
+
+  defp family_boundary_reason?({:foreign_ctor, _}), do: true
+  defp family_boundary_reason?({:unknown_ctor, _}), do: true
+  defp family_boundary_reason?(_reason), do: false
+
+  defp family_boundary_failure(origin, details, reason, opts) do
+    family = family_origin_name(origin)
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "#{family} callback has the wrong type",
+      body:
+        Doc.paragraph(
+          "This authored #{String.downcase(family)} callback does not produce the protocol value required by its generated module."
+        ),
+      primary: primary_label(opts, "this #{String.downcase(family)} callback has the wrong type"),
+      provenance: provenance_frames(details, opts),
+      payload: %{
+        origin: %{kind: origin, owner: Map.get(details, :module)},
+        cause: inspect(reason),
+        module: Map.get(details, :module),
+        behaviour: Map.get(details, :behaviour)
+      }
+    )
+  end
+
+  defp family_origin_name(:actor), do: "Actor"
+  defp family_origin_name(:fsm), do: "FSM"
+  defp family_origin_name(:supervisor), do: "Supervisor"
 
   defp family_origin(details) do
     case Map.get(details, :behaviour) do
