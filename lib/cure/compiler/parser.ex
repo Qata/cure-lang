@@ -3358,10 +3358,38 @@ defmodule Cure.Compiler.Parser do
     # Parse the expression being asserted. Stop above assignment so a trailing
     # `:`/`=` stays for us; let binding uses the same trick.
     {expr, state} = parse_expr(state, bp_above(state, "="))
-    state = expect(state, :colon)
+    state = expect_assert_type_colon(state, token, expr)
     {type_ast, state} = parse_type_expr(state)
     ast = {:assert_type, [line: token.line, col: token.col], [expr, type_ast]}
     {ast, state}
+  end
+
+  defp expect_assert_type_colon(state, assert_token, expr) do
+    case expect_token(state, :colon) do
+      {:ok, _colon, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :assert_type_colon_missing,
+             expected: :colon,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: assert_token.span,
+             previous_span: first_node_source_span(expr),
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
+    end
   end
 
   # Tier-3 semantic guard: `check predicate else fail Name(args)`. The guard is

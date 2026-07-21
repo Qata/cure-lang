@@ -375,4 +375,52 @@ defmodule Cure.Compiler.DeclarationSeparatorDiagnosticTest do
     assert {insertion.start_line, insertion.start_column} == {1, 21}
     assert insertion.start_byte == insertion.end_byte
   end
+
+  test "assert_type gets an exact colon insertion between its expression and type" do
+    source = "fn checked() -> Int = assert_type 42 Int"
+    {error, {diagnostic, registry}} = diagnostic(source, "assert_type_colon.cure")
+
+    assert {:declaration_separator_missing, %{kind: :assert_type_colon_missing, expected: :colon, observed: "Int"}} =
+             error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE ASSERTION NEEDS A COLON [E094] ------------------ assert_type_colon.cure
+
+             The `assert_type` expression needs `:` between the asserted value and its
+             expected type.
+
+             A valid continuation here starts with ':'.
+
+             at assert_type_colon.cure:1:38
+             1 | fn checked() -> Int = assert_type 42 Int
+               |                       ----------- -- ^ this type assertion starts here; the asserted expression ends here; insert `:` before this expected type
+
+             Hint: Insert `:` before the expected type
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ": ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column} == {1, 38}
+    assert insertion.start_byte == insertion.end_byte
+
+    assert [%{"newText" => ": ", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 37},
+             "end" => %{"line" => 0, "character" => 37}
+           }
+  end
+
+  test "assert_type does not offer a partial machine edit when the expected type is absent" do
+    source = "fn checked() -> Int = assert_type 42"
+    {error, {diagnostic, _registry}} = diagnostic(source, "assert_type_eof.cure")
+
+    assert {:declaration_separator_missing, %{kind: :assert_type_colon_missing, observed: :eof, token_type: :eof}} =
+             error
+
+    assert diagnostic.suggestions == []
+  end
 end
