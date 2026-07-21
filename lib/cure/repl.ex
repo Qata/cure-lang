@@ -969,7 +969,7 @@ defmodule Cure.REPL do
         render_info(state, "session saved to #{path}")
 
       {:error, {:file_write_error, p, reason}} ->
-        render_error(state, Cure.Diagnostic.Host.render({:file_write_error, p, reason}, p))
+        render_reason_error(state, {:file_write_error, p, reason})
     end
 
     state
@@ -992,7 +992,7 @@ defmodule Cure.REPL do
         state
 
       {:error, {:file_read_error, p, reason}} ->
-        render_error(state, Cure.Diagnostic.Host.render({:file_read_error, p, reason}, p))
+        render_reason_error(state, {:file_read_error, p, reason})
         state
     end
   end
@@ -1452,11 +1452,6 @@ defmodule Cure.REPL do
     end
   end
 
-  defp render_error(state, msg) do
-    body = state.theme.error <> "error: " <> msg <> state.theme.reset
-    IO.binwrite(state.error_device, body <> "\n")
-  end
-
   defp render_operational_error(state, message, kind \\ :command) do
     reason =
       case kind do
@@ -1670,34 +1665,9 @@ defmodule Cure.REPL do
   # so we don't print the farewell twice.
   defp bye(state), do: %{state | running: false}
 
-  defp format_error(reason) when is_binary(reason),
-    do: Cure.Diagnostic.Host.render(Operational.command_failure("repl", reason), "repl.cure")
-
-  defp format_error({stage, msg, _opts}) when is_atom(stage) and is_binary(msg) do
-    Cure.Diagnostic.Host.render(Operational.command_failure("repl #{stage}", msg), "repl.cure")
-  end
-
-  defp format_error({:error, message}) when is_binary(message),
-    do: Cure.Diagnostic.Host.render(Operational.command_failure("repl", message), "repl.cure")
-
-  defp format_error({:error, _kind, message}) when is_binary(message),
-    do: Cure.Diagnostic.Host.render(Operational.command_failure("repl", message), "repl.cure")
-
-  defp format_error({:codegen_error, _reason} = reason),
-    do: Cure.Diagnostic.Host.render(reason, "repl.cure")
-
-  defp format_error({:source_context, _reason, _context} = reason),
-    do: Cure.Diagnostic.Host.render(reason, "repl.cure")
-
-  defp format_error(other),
-    do: Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("repl", other))
-
   @doc false
-  def __format_error__(reason), do: format_error(reason)
-
-  @doc false
-  def __render_error__(%__MODULE__{} = state, msg) when is_binary(msg) do
-    render_error(state, msg)
+  def __render_reason_error__(%__MODULE__{} = state, reason, file \\ "repl.cure", source \\ "") do
+    render_reason_diagnostic(state, reason, file, source)
   end
 
   @doc false
