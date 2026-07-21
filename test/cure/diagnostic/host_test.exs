@@ -243,7 +243,7 @@ defmodule Cure.Diagnostic.HostTest do
         "demo.cure"
       )
 
-    assert rendered =~ "STD LIB MODULE RESOLUTION FAILED [E101]"
+    assert rendered =~ "STDLIB MODULE RESOLUTION FAILED [E101]"
     assert rendered =~ "Cure.Std.Missing"
     assert rendered =~ "Set CURE_LIB"
   end

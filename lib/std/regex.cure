@@ -9,6 +9,7 @@ mod Std.Regex
   use Std.Char
   use Std.List
   use Std.Option
+  use Std.String
 
   ## The syntax tree deliberately keeps the representation small and explicit.
   ## Captures are represented by `Capture`; matching semantics are added on top
@@ -174,9 +175,7 @@ mod Std.Regex
       ['*' | _] -> ParseFailure()
       ['+' | _] -> ParseFailure()
       ['?' | _] -> ParseFailure()
-      _ ->
-        match input
-          [literal | rest] -> Parsed(Literal(literal), rest)
+      [literal | rest] -> Parsed(Literal(literal), rest)
 
   fn parse_group(input: String) -> Parse =
     match parse_alternate(input)

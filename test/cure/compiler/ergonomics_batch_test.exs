@@ -20,7 +20,9 @@ defmodule Cure.Compiler.ErgonomicsBatchTest do
       """)
 
     assert {:container, _, [{:function_def, _, [body]}]} = ast
-    assert {:function_call, [name: "add", pipe: true, line: 5, col: 5], [_arg, _]} = body
+    assert {:function_call, meta, [_arg, _]} = body
+    assert Keyword.take(meta, [:name, :pipe, :line, :col]) == [name: "add", pipe: true, line: 5, col: 5]
+    assert %Cure.MetaAST.SourceInfo{} = meta[:source_info]
   end
 
   test "where functions attach to the enclosing function" do

@@ -3,7 +3,7 @@ defmodule Cure.Stdlib.RegexSourceTest do
 
   alias Cure.Compiler.{Lexer, Parser}
 
-  @regex_source Path.expand("../../../../lib/std/regex.cure", __DIR__)
+  @regex_source Path.expand("../../../lib/std/regex.cure", __DIR__)
 
   test "the Regex standard library is a pure Cure implementation" do
     source = File.read!(@regex_source)
