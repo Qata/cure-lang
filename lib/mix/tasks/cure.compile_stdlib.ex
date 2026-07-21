@@ -72,8 +72,15 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
             Mix.shell().info("  Output: #{output_dir}")
 
             unless summary.errors == [] do
-              Enum.each(summary.errors, fn {target, reason} ->
-                Mix.shell().error("  #{Cure.Diagnostic.Host.render(reason, source_path_for(target, cure_files))}")
+              summary.errors
+              |> Enum.map(fn {target, reason} ->
+                path = source_path_for(target, cure_files)
+                {diagnostic, _registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path)
+                {diagnostic_fingerprint(diagnostic), reason, path}
+              end)
+              |> Enum.uniq_by(&elem(&1, 0))
+              |> Enum.each(fn {_fingerprint, reason, path} ->
+                Mix.shell().error("  #{Cure.Diagnostic.Host.render(reason, path)}")
               end)
 
               exit({:shutdown, 1})
@@ -103,5 +110,18 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
         basename == stem or String.ends_with?(basename, "_" <> stem)
       end)
     end
+  end
+
+  defp diagnostic_fingerprint(%Cure.Diagnostic{} = diagnostic) do
+    payload = diagnostic.payload
+
+    {
+      diagnostic.code,
+      diagnostic.key,
+      Cure.Diagnostic.message(diagnostic),
+      Map.get(payload, :checking),
+      Map.get(payload, :failing_branch),
+      Map.get(payload, :kind)
+    }
   end
 end
