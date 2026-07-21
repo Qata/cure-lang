@@ -2509,6 +2509,21 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:refinement_type_syntax, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: Map.fetch!(details, :kind),
+        expected: Map.get(details, :expected),
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:invalid_parameter_name, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -5020,6 +5035,18 @@ defmodule Cure.Diagnostic.Adapter do
        when family in [:with_arm, :with_rematch_arm],
        do: "With branch arrow is missing"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :refinement_binder_invalid}),
+    do: "Refinement binder needs a name"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :refinement_colon_missing}),
+    do: "Refinement binder needs a colon"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :refinement_bar_missing}),
+    do: "Refinement type needs a separator"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :refinement_unclosed}),
+    do: "Refinement type is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5221,6 +5248,19 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :branch_arrow_missing, context: %{family: family}}),
     do: "#{branch_family_name(family)} needs `->` between its head and body expression."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :refinement_binder_invalid, observed: observed}),
+    do:
+      "#{String.capitalize(syntax_name(observed))} cannot name the value refined by this type. Use a lower-case name such as `value`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :refinement_colon_missing}),
+    do: "A refinement binder must be followed by `:` and the base type whose values it describes."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :refinement_bar_missing}),
+    do: "A refinement type uses `|` between its base type and the proposition values must satisfy."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :refinement_unclosed}),
+    do: "This refinement type reaches the end of its container without the '}' that closes its proposition."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
@@ -5494,6 +5534,18 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :branch_arrow_missing}),
     do: "insert `->` before this branch body"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :refinement_binder_invalid}),
+    do: "write a lower-case refinement binder here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :refinement_colon_missing}),
+    do: "insert `:` before the base type"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :refinement_bar_missing}),
+    do: "insert `|` before the proposition"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :refinement_unclosed}),
+    do: "close this refinement type with `}`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -5717,6 +5769,33 @@ defmodule Cure.Diagnostic.Adapter do
            kind: kind,
            opener: %Span{} = opener,
            previous: previous,
+           context: context
+         },
+         primary_span
+       )
+       when kind in [
+              :refinement_binder_invalid,
+              :refinement_colon_missing,
+              :refinement_bar_missing,
+              :refinement_unclosed
+            ] do
+    [
+      pickup_label(opener, :secondary, "this refinement type starts here"),
+      pickup_label(Map.get(context, :binder_span), :secondary, "this is the refinement binder"),
+      pickup_label(previous, :secondary, refinement_previous_label(kind))
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
            context: %{container: :parameters}
          },
          primary_span
@@ -5926,6 +6005,42 @@ defmodule Cure.Diagnostic.Adapter do
     ]
   end
 
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :refinement_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the refinement's base type",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :refinement_bar_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `|` before the refinement proposition",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "| "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(%SyntaxProblem{kind: :refinement_binder_invalid}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Replace this with a descriptive lower-case binder",
+        applicability: :manual
+      }
+    ]
+
   defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
     closing_delimiter_insertion(expected, span)
   end
@@ -6119,6 +6234,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp branch_family_name(family) when family in [:pickup_clause, :pickup_else], do: "A pickup branch"
   defp branch_family_name(:function_clause), do: "A function clause"
   defp branch_family_name(family) when family in [:with_arm, :with_rematch_arm], do: "A with branch"
+
+  defp refinement_previous_label(:refinement_bar_missing), do: "the base type ends here"
+  defp refinement_previous_label(:refinement_unclosed), do: "the proposition ends here"
+  defp refinement_previous_label(_kind), do: "this is the refinement binder"
 
   defp container_item_name(:map), do: "entry"
   defp container_item_name(:record), do: "field"

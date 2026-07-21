@@ -10671,17 +10671,146 @@ defmodule Cure.Compiler.Parser do
   # parsed with the non-union arrow parser because this form owns the `|` token.
   # The proposition remains ordinary Cure syntax and may refer to `value`.
   defp parse_refinement_type(state) do
+    open_token = peek(state)
     state = advance(state)
     binder_token = peek(state)
-    binder = to_string(binder_token.value)
-    state = advance(state)
-    state = expect(state, :colon)
-    {base_type, state} = parse_type_arrow(state)
-    state = expect(state, :bar) |> skip_newlines()
-    {proposition, state} = parse_expr(state, 0)
-    state = expect(state, :rbrace)
 
-    {{:refinement_type, [binder: binder], [base_type, proposition]}, state}
+    {binder, state} =
+      case binder_token do
+        %Token{type: :identifier} ->
+          {to_string(binder_token.value), advance(state)}
+
+        %Token{} ->
+          error =
+            {:refinement_type_syntax,
+             %{
+               kind: :refinement_binder_invalid,
+               expected: :identifier,
+               observed: binder_token.value || binder_token.type,
+               token_type: binder_token.type,
+               span: binder_token.span,
+               opener_span: open_token.span,
+               line: binder_token.line,
+               column: binder_token.col
+             }}
+
+          {"_invalid_refinement_binder", state |> add_error(error) |> advance()}
+      end
+
+    state =
+      expect_refinement_separator(
+        state,
+        :refinement_colon_missing,
+        :colon,
+        open_token,
+        binder_token.span,
+        binder_token.span
+      )
+
+    {base_type, state} = parse_type_arrow(state)
+
+    state =
+      expect_refinement_separator(
+        state,
+        :refinement_bar_missing,
+        :bar,
+        open_token,
+        binder_token.span,
+        first_node_source_span(base_type)
+      )
+      |> skip_newlines()
+
+    {proposition, state} = parse_expr(state, 0)
+
+    {state, close_token} =
+      case expect_token(state, :rbrace) do
+        {:ok, close, next_state} ->
+          {next_state, close}
+
+        {:error, next_state} ->
+          observed = peek(next_state)
+
+          if observed.type in [:eof, :dedent] do
+            [_generic | rest] = next_state.errors
+
+            error =
+              {:refinement_type_syntax,
+               %{
+                 kind: :refinement_unclosed,
+                 expected: :rbrace,
+                 observed: observed.value || observed.type,
+                 token_type: observed.type,
+                 span: observed.span,
+                 observed_span: observed.span,
+                 opener_span: open_token.span,
+                 binder_span: binder_token.span,
+                 previous_span: first_node_source_span(proposition),
+                 line: observed.line,
+                 column: observed.col
+               }}
+
+            {%{next_state | errors: [error | rest]}, nil}
+          else
+            {next_state, nil}
+          end
+      end
+
+    meta = [binder: binder]
+    meta = put_refinement_source_info(meta, open_token, close_token, binder_token, base_type, proposition)
+
+    {{:refinement_type, meta, [base_type, proposition]}, state}
+  end
+
+  defp expect_refinement_separator(state, kind, expected, open_token, binder_span, previous_span) do
+    case expect_token(state, expected) do
+      {:ok, _token, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:refinement_type_syntax,
+           %{
+             kind: kind,
+             expected: expected,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: open_token.span,
+             binder_span: binder_span,
+             previous_span: previous_span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
+    end
+  end
+
+  defp put_refinement_source_info(meta, open_token, close_token, binder_token, base_type, proposition) do
+    case {open_token.span, close_token} do
+      {%Cure.Diagnostic.Span{} = opener, %Token{span: %Cure.Diagnostic.Span{} = closer}} ->
+        with {:ok, whole} <- Range.through(opener, closer) do
+          info = %SourceInfo{
+            whole: whole,
+            opener: opener,
+            closer: closer,
+            name: binder_token.span,
+            annotation: first_node_source_span(base_type),
+            body: first_node_source_span(proposition)
+          }
+
+          Keyword.put(meta, :source_info, info)
+        else
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
   end
 
   # A type-position projection `p.1` / `p.2` (used in dependent index positions,
