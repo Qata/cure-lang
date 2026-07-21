@@ -423,8 +423,29 @@ defmodule Cure.Compiler.Errors do
         Cure.Diagnostic.Adapter.from_error(error, opts)
       end
 
+    diagnostic =
+      if operational_error?(error) do
+        remap_operational_span(diagnostic, registry, source_id)
+      else
+        diagnostic
+      end
+
     {diagnostic, registry}
   end
+
+  defp remap_operational_span(
+         %Cure.Diagnostic{primary: %Cure.Diagnostic.Label{span: %Cure.Diagnostic.Span{} = span} = label} =
+           diagnostic,
+         registry,
+         source_id
+       ) do
+    case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, span.start_line, span.start_column, 0) do
+      {:ok, remapped} -> %{diagnostic | primary: %{label | span: remapped}}
+      {:error, _} -> diagnostic
+    end
+  end
+
+  defp remap_operational_span(diagnostic, _registry, _source_id), do: diagnostic
 
   defp branch_patterns({:source_context, _reason, context}) when is_map(context),
     do: Map.get(context, :branch_patterns, [])

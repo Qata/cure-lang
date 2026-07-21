@@ -60,6 +60,24 @@ defmodule Cure.Diagnostic.HostTest do
     refute contextual =~ "| fn run"
   end
 
+  test "source-aware migration warnings resolve their reported line" do
+    source = "line one\nline two\nline three\n"
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(
+        {:migration_warning, %{rule: :legacy, file: "demo.cure", line: 2, message: "migrate this"}},
+        "demo.cure",
+        source
+      )
+
+    assert diagnostic.primary.span.start_line == 2
+    assert diagnostic.primary.span.start_byte == byte_size("line one\n")
+
+    rendered = Cure.Diagnostic.Renderer.plain(diagnostic, registry)
+    assert rendered =~ "2 | line two"
+    assert rendered =~ "^"
+  end
+
   test "renders macro syntax failures as contextual syntax diagnostics" do
     source = "fn run() -> Int = say nope\n"
 
