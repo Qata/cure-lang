@@ -5136,6 +5136,27 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :local_binding_assign_missing}),
     do: "Let binding needs an equals sign"
 
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{ambiguous: true, container: :record}
+       }),
+       do: "Record fields need a separator"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{ambiguous: true}
+       }),
+       do: "Map entries need a separator"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "Record entry needs an arrow"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :map_entry_separator_missing}),
+    do: "Map entry needs an arrow"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5516,6 +5537,22 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{family: family, declaration: name}
        }),
        do: "The `#{family}` binding for `#{name}` needs `=` before the value it binds."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{ambiguous: true, container: container, key: key}
+       }),
+       do:
+         "After `#{key}`, this could be another punned #{container} entry needing `,`, or the value of `#{key}` needing `=>`."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "This explicit record entry needs `=>` between its key and value."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :map_entry_separator_missing}),
+    do: "This explicit map entry needs `=>` between its key and value."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
@@ -5954,6 +5991,21 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :local_binding_assign_missing}),
     do: "insert `=` before this binding value"
 
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{ambiguous: true}
+       }),
+       do: "separate these entries with `,`, or make this the value with `=>`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :map_entry_separator_missing,
+         context: %{container: :record}
+       }),
+       do: "insert `=>` before this record value"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :map_entry_separator_missing}),
+    do: "insert `=>` before this map value"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -6333,6 +6385,29 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(opener, :secondary, "this #{Map.get(context, :family, :let)} binding starts here"),
       pickup_label(Map.get(context, :pattern_span), :secondary, "this is the binding pattern"),
       pickup_label(previous, :secondary, "the binding head ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :map_entry_separator_missing,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
+         primary_span
+       ) do
+    container = Map.get(context, :container, :map)
+
+    [
+      pickup_label(opener, :secondary, "this #{container} starts here"),
+      pickup_label(Map.get(context, :entry_span), :secondary, "this #{container} entry starts here"),
+      pickup_label(previous, :secondary, "the #{container} key ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -6928,6 +7003,37 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `=` before the binding value",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "= "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :map_entry_separator_missing, context: %{ambiguous: true}},
+         %Span{}
+       ) do
+    [
+      %Suggestion{
+        message: "Choose `,` for two punned entries or `=>` for a key-value entry",
+        applicability: :manual
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :map_entry_separator_missing,
+           context: %{token_type: type} = context
+         },
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    container = Map.get(context, :container, :map)
+
+    [
+      %Suggestion{
+        message: "Insert `=>` before the #{container} value",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "=> "}]
       }
     ]
   end

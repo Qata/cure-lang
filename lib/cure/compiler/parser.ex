@@ -4738,7 +4738,7 @@ defmodule Cure.Compiler.Parser do
             # consume "|"
             probe_state = advance(probe_state)
             probe_state = skip_newlines(probe_state)
-            {fields, probe_state} = parse_map_pairs(probe_state, :rbrace)
+            {fields, probe_state} = parse_map_pairs(probe_state, :rbrace, open_token, :record)
             probe_state = close_record_layout(probe_state, layout?)
 
             {probe_state, close_token} =
@@ -4760,7 +4760,7 @@ defmodule Cure.Compiler.Parser do
           _ ->
             # Not update syntax: rewind completely and parse as plain construction.
             state = %{state | pos: saved_pos, last_authored: saved_last_authored, errors: saved_errors}
-            {fields, state} = parse_map_pairs(state, :rbrace)
+            {fields, state} = parse_map_pairs(state, :rbrace, open_token, :record)
             state = close_record_layout(state, layout?)
             {state, close_token} = expect_container_close(state, :rbrace, :record, open_token, fields, true)
 
@@ -5122,7 +5122,7 @@ defmodule Cure.Compiler.Parser do
         {{:map, meta, []}, state}
 
       _ ->
-        {pairs, state} = parse_map_pairs(state, :rbrace)
+        {pairs, state} = parse_map_pairs(state, :rbrace, token, :map)
         state = skip_newlines(state)
         {state, close_token} = expect_container_close(state, :rbrace, :map, token, pairs, true)
         meta = put_container_source_info([line: token.line, col: token.col], token, state, close_token)
@@ -5130,7 +5130,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_map_pairs(state, closing) do
+  defp parse_map_pairs(state, closing, open_token, container) do
     state = skip_newlines(state)
 
     case peek(state) do
@@ -5138,13 +5138,13 @@ defmodule Cure.Compiler.Parser do
         {[], state}
 
       _ ->
-        {pair, state} = parse_map_pair(state)
+        {pair, state} = parse_map_pair(state, open_token, container)
         state = skip_newlines(state)
 
         case peek(state) do
           %Token{type: :comma} ->
             state = advance(state)
-            {rest, state} = parse_map_pairs(state, closing)
+            {rest, state} = parse_map_pairs(state, closing, open_token, container)
             {[pair | rest], state}
 
           _ ->
@@ -5153,7 +5153,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_map_pair(state) do
+  defp parse_map_pair(state, open_token, container) do
     token = peek(state)
     next = peek_at(state, 1)
 
@@ -5185,12 +5185,45 @@ defmodule Cure.Compiler.Parser do
         # Explicit: key => value
         {key, state} = parse_expr(state, 0)
         state = skip_newlines(state)
-        state = expect(state, :fat_arrow)
+        state = expect_map_entry_separator(state, open_token, token, key, container)
         state = skip_newlines(state)
         {value, state} = parse_expr(state, 0)
         pair_meta = put_field_source_info([field: field_name(key)], token, state, first_node_source_span(key))
         pair = {:pair, pair_meta, [key, value]}
         {pair, state}
+    end
+  end
+
+  defp expect_map_entry_separator(state, open_token, entry_token, key, container) do
+    case expect_token(state, :fat_arrow) do
+      {:ok, _arrow, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+        ambiguous? = match?({:variable, _, _}, key) and call_argument_start?(observed)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :map_entry_separator_missing,
+             container: container,
+             ambiguous: ambiguous?,
+             expected: if(ambiguous?, do: nil, else: :fat_arrow),
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: open_token.span,
+             previous_span: first_node_source_span(key),
+             entry_span: entry_token.span,
+             key: field_name(key),
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
     end
   end
 
