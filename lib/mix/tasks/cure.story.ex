@@ -31,9 +31,9 @@ defmodule Mix.Tasks.Cure.Story do
 
   @impl Mix.Task
   def run(args) do
-    {opts, _rest, _invalid} =
+    {opts, rest, invalid} =
       OptionParser.parse(args,
-        switches: [
+        strict: [
           out: :string,
           stdout: :boolean,
           diagrams: :boolean,
@@ -41,6 +41,10 @@ defmodule Mix.Tasks.Cure.Story do
           project_name: :string
         ]
       )
+
+    if rest != [] or invalid != [] do
+      usage_error("Invalid arguments for mix cure.story: #{inspect(rest ++ invalid)}")
+    end
 
     Application.ensure_all_started(:cure)
 
@@ -64,13 +68,22 @@ defmodule Mix.Tasks.Cure.Story do
 
       {:error, {:file_write_error, path, reason}} ->
         diagnostic = Cure.Diagnostic.Operational.file_write(path, reason)
-        Mix.shell().error("cure.story: " <> render_diagnostic(diagnostic))
+        Mix.shell().error(render_diagnostic(diagnostic))
         exit({:shutdown, 1})
     end
   end
 
   defp parse_format("html"), do: :html
-  defp parse_format(_), do: :md
+  defp parse_format("md"), do: :md
+
+  defp parse_format(other) do
+    usage_error("Unknown story format '#{other}'. Supported formats: md, html")
+  end
+
+  defp usage_error(message) do
+    Mix.shell().error(render_diagnostic(Cure.Diagnostic.Operational.usage(message)))
+    exit({:shutdown, 1})
+  end
 
   defp maybe_put(opts, _key, nil), do: opts
   defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
