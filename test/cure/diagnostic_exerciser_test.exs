@@ -155,6 +155,7 @@ defmodule Cure.DiagnosticExerciserTest do
           assert diagnostic.primary, "#{label} did not retain an authored source span"
           plain = Renderer.plain(diagnostic, registry)
           assert plain =~ " | ", "#{label} did not render an authored source excerpt"
+          assert_no_raw_diagnostic_leaks(plain, label)
 
           assert Cure.Compiler.Errors.format_with_source(reason, "#{label}.cure", source) =~ expected_code,
                  "#{label} still uses the legacy formatter path"
@@ -176,6 +177,7 @@ defmodule Cure.DiagnosticExerciserTest do
         Cure.Compiler.Errors.to_diagnostic(reason, "#{label}.cure", "fn run() -> Int = 1\n")
 
       assert diagnostic.code == expected_code
+      assert_no_raw_diagnostic_leaks(Renderer.plain(diagnostic), label)
 
       assert Cure.Compiler.Errors.format_with_source(reason, "#{label}.cure", "fn run() -> Int = 1\n") =~
                expected_code,
@@ -239,5 +241,15 @@ defmodule Cure.DiagnosticExerciserTest do
     if Keyword.get(Application.get_env(:cure, :diagnostics_exerciser, []), :coverage, false) do
       assert missing_codes == [], "diagnostic coverage is incomplete"
     end
+  end
+
+  defp assert_no_raw_diagnostic_leaks(plain, label) do
+    assert is_binary(plain), "#{label} did not produce plain diagnostic text"
+    refute plain =~ "{:"
+    refute plain =~ "%{"
+    refute plain =~ "Cure.Core."
+    refute plain =~ "** ("
+    refute plain =~ "lib/cure/"
+    refute plain =~ "#Function<"
   end
 end
