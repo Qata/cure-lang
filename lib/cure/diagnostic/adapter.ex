@@ -2477,42 +2477,58 @@ defmodule Cure.Diagnostic.Adapter do
     do: "The macro does not explain every declared failure point: #{macro_failure_points(points)}."
 
   defp macro_validation_message(:rule_unpinned, keywords),
-    do: "These macro rules have no worked example: #{inspect(keywords)}."
+    do: "These macro rules have no worked example: #{Enum.join(Enum.map(keywords, &name_to_string/1), ", ")}."
 
   defp macro_validation_message(:example_mismatch, mismatches),
-    do: "These macro examples do not match their actual expansions: #{inspect(mismatches)}."
+    do: "Macro example(s) do not match their actual expansions: #{macro_example_names(mismatches)}."
 
   defp macro_validation_message(:example_type_mismatch, failures),
-    do: "These macro examples have the wrong type: #{inspect(failures)}."
+    do: "Macro example(s) have the wrong type: #{macro_example_names(failures)}."
 
   defp macro_validation_message(:computed_example_error, failures),
-    do: "A computed macro example failed while being checked: #{inspect(failures)}."
+    do: "A computed macro example failed while being checked: #{macro_example_names(failures)}."
 
-  defp macro_validation_message(:invalid_macro_family, reason),
-    do: "The macro's syntax-family declarations are inconsistent: #{inspect(reason)}."
+  defp macro_validation_message(:invalid_macro_family, _reason),
+    do: "The macro's syntax-family declarations are inconsistent."
 
-  defp macro_validation_message(:generated_hole_not_well_typed, details),
-    do: "A generated hole is not well typed: #{inspect(details)}."
+  defp macro_validation_message(:generated_hole_not_well_typed, _details),
+    do: "A generated hole is not well typed."
 
   defp macro_validation_message(:example_use_site_not_fully_consumed, _details),
     do: "A macro example did not consume the complete use site."
 
-  defp macro_validation_message(:closed_category_extension, details),
-    do: "A closed macro category was extended unexpectedly: #{inspect(details)}."
+  defp macro_validation_message(:closed_category_extension, _details),
+    do: "A closed macro category was extended unexpectedly."
 
-  defp macro_validation_message(:duplicate_unit, details),
-    do: "A macro literal unit was declared more than once: #{inspect(details)}."
+  defp macro_validation_message(:duplicate_unit, _details),
+    do: "A macro literal unit was declared more than once."
 
-  defp macro_validation_message(kind, details),
-    do: "Macro validation failed for #{inspect(kind)}: #{inspect(details)}."
+  defp macro_validation_message(kind, _details),
+    do: "Macro validation failed for #{name_to_string(kind)}."
 
   defp macro_failure_points(points) do
     Enum.map_join(points, ", ", fn
       {:failure, name} -> "author failure `#{name}`"
       {:hole_kind, kind} -> "#{kind} hole"
       {:keyword, keyword} -> "keyword `#{keyword}`"
-      point -> inspect(point)
+      _point -> "an additional declared failure point"
     end)
+  end
+
+  defp macro_example_names(values) when is_list(values) do
+    names =
+      values
+      |> Enum.map(fn
+        %{keyword: keyword} -> name_to_string(keyword)
+        %{"keyword" => keyword} -> name_to_string(keyword)
+        _ -> nil
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    case names do
+      [] -> "the affected examples"
+      names -> Enum.join(names, ", ")
+    end
   end
 
   @spec unknown_name(atom(), term(), keyword()) :: Diagnostic.t()
@@ -2771,16 +2787,16 @@ defmodule Cure.Diagnostic.Adapter do
     do:
       "invalid macro expansion: quoted syntax must be unquoted before it is emitted as Cure code (#{format_syntax_path(path)})"
 
-  defp computed_macro_reason({:invalid_generated_syntax, {reason, path}}),
-    do: "invalid macro expansion: #{inspect(reason)} (#{format_syntax_path(path)})"
+  defp computed_macro_reason({:invalid_generated_syntax, {_reason, path}}),
+    do: "invalid macro expansion at #{format_syntax_path(path)}"
 
   defp computed_macro_reason({:author_diagnostics, diagnostics}) when is_list(diagnostics),
-    do: "macro rejected expansion: the macro reported #{length(diagnostics)} diagnostic(s): #{inspect(diagnostics)}"
+    do: "macro rejected expansion: it reported #{length(diagnostics)} diagnostic(s)"
 
   defp computed_macro_reason({:author_failure, name, args}) when is_list(args),
-    do: "macro rejected expansion: the macro reported `#{name}`: #{inspect(args)}"
+    do: "macro rejected expansion: the macro reported `#{name}`"
 
-  defp computed_macro_reason(reason), do: inspect(reason)
+  defp computed_macro_reason(_reason), do: "the generated expansion was rejected by the compiler"
 
   defp format_syntax_path(path) do
     path
