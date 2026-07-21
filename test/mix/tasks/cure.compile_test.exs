@@ -62,4 +62,29 @@ defmodule Mix.Tasks.Cure.CompileTest do
     assert output =~ "^^^^^^^^^^^^"
     refute output =~ "{:unknown_global"
   end
+
+  test "bare branch verdicts keep their branch-specific title in the Mix task", %{dir: dir} do
+    path = Path.join(dir, "bad_branch.cure")
+    out = Path.join(dir, "ebin_branch")
+
+    File.write!(path, """
+    mod BadBranch
+      type Flag = On | Off
+      fn run(flag: Flag) -> Int = match flag
+        On -> 1
+        Off -> true
+    end
+    """)
+
+    Mix.shell(Mix.Shell.IO)
+    Mix.Task.reenable("cure.compile")
+
+    output =
+      ExUnit.CaptureIO.capture_io(:stderr, fn ->
+        assert :ok = Mix.Task.run("cure.compile", [path, "--output-dir", out])
+      end)
+
+    assert output =~ "PATTERN BRANCHES DISAGREE"
+    refute output =~ "ELABORATION FAILED"
+  end
 end
