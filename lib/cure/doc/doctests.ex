@@ -114,8 +114,8 @@ defmodule Cure.Doc.Doctests do
   Returns `:ok` if the expression's value matches the expected text
   via `inspect/1`. Returns `{:fail, reason}` otherwise.
   """
-  @spec run_one(String.t(), String.t()) :: :ok | {:fail, String.t()}
-  def run_one(expr, expected) do
+  @spec run_one(String.t(), String.t(), String.t()) :: :ok | {:fail, String.t()}
+  def run_one(expr, expected, file \\ "doctest.cure") do
     mod = "Doctest_#{:erlang.unique_integer([:positive])}"
 
     source = """
@@ -138,7 +138,7 @@ defmodule Cure.Doc.Doctests do
         end
 
       {:error, reason} ->
-        {:fail, "compile error: #{inspect(reason)}"}
+        {:fail, "compile error:\n" <> Cure.Diagnostic.Host.render(reason, file)}
     end
   end
 end

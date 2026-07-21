@@ -892,7 +892,7 @@ defmodule Cure.CLI do
           cases
           |> Enum.filter(fn %{name: n} -> filter == nil or String.contains?(n, filter) end)
           |> Enum.map(fn %{name: name, expr: expr, expected: expected} ->
-            case Cure.Doc.Doctests.run_one(expr, expected) do
+            case Cure.Doc.Doctests.run_one(expr, expected, file) do
               :ok -> {:pass, "#{file}: doctest #{name}"}
               {:fail, reason} -> {:fail, "#{file}: doctest #{name} -- #{reason}"}
             end

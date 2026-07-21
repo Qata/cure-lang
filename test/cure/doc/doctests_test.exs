@@ -47,4 +47,10 @@ defmodule Cure.Doc.DoctestsTest do
       assert [] = Doctests.extract_from_source(src)
     end
   end
+
+  test "compile failures use a diagnostic code instead of exposing the raw reason" do
+    assert {:fail, message} = Doctests.run_one("missing_name", "0", "doctest.cure")
+    assert message =~ "[E091]"
+    refute message =~ "{:unknown_global"
+  end
 end
