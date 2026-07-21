@@ -1406,7 +1406,7 @@ defmodule Cure.Elab.Program do
   # carries the reflected expansion context (`MacroSyntax.record_fields/1`).
   defp declarations({:macro_def, meta, rules}) when is_list(meta) and is_list(rules) do
     MacroFamily.lowered_rules(meta, rules)
-    |> Enum.filter(&(&1[:kind] == :computed))
+    |> Enum.filter(&(&1[:kind] in [:computed, :computed_literal]))
     |> Enum.uniq_by(&Map.get(&1, :syntax_type))
     |> Enum.flat_map(fn rule ->
       MacroFamily.generated_record_declarations(meta, rule)

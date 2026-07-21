@@ -53,6 +53,7 @@ defmodule Cure.Compiler.MacroSyntax do
 
   @type synlit ::
           {:s_int, integer}
+          | {:s_char, non_neg_integer()}
           | {:s_float, float}
           | {:s_str, String.t()}
           | {:s_bool, boolean}
@@ -202,6 +203,7 @@ defmodule Cure.Compiler.MacroSyntax do
   defp segments_to_ast([{:group, inner} | rest]), do: qq_append(inner, segments_to_ast(rest))
 
   defp synlit_ast({:s_int, n}), do: qq_call("SInt", [qq_lit(:integer, n)])
+  defp synlit_ast({:s_char, n}), do: qq_call("SChar", [qq_lit(:char, n)])
   defp synlit_ast({:s_float, f}), do: qq_call("SFloat", [qq_lit(:float, f)])
   defp synlit_ast({:s_str, s}), do: qq_call("SStr", [qq_lit(:string, s)])
   defp synlit_ast({:s_bool, b}), do: qq_call("SBool", [qq_lit(:boolean, b)])
@@ -407,6 +409,7 @@ defmodule Cure.Compiler.MacroSyntax do
   end
 
   defp from_synlit({:s_int, n}), do: n
+  defp from_synlit({:s_char, n}), do: n
   defp from_synlit({:s_float, f}), do: f
   defp from_synlit({:s_str, s}), do: s
   defp from_synlit({:s_bool, b}), do: b
@@ -801,6 +804,7 @@ defmodule Cure.Compiler.MacroSyntax do
   end
 
   defp validate_synlit({:s_int, value}, _path) when is_integer(value), do: :ok
+  defp validate_synlit({:s_char, value}, _path) when is_integer(value) and value >= 0 and value <= 0x10FFFF, do: :ok
   defp validate_synlit({:s_float, value}, _path) when is_float(value), do: :ok
   defp validate_synlit({:s_str, value}, _path) when is_binary(value), do: :ok
   defp validate_synlit({:s_bool, value}, _path) when is_boolean(value), do: :ok
@@ -891,6 +895,9 @@ defmodule Cure.Compiler.MacroSyntax do
     do: Enum.reduce_while(pairs, :ok, &validate_reflected_pair(&1, &2, path))
 
   defp validate_reflected_literal(:ok, {:s_int, value}, _path) when is_integer(value), do: :ok
+  defp validate_reflected_literal(:ok, {:s_char, value}, _path)
+       when is_integer(value) and value >= 0 and value <= 0x10FFFF,
+       do: :ok
   defp validate_reflected_literal(:ok, {:s_float, value}, _path) when is_float(value), do: :ok
   defp validate_reflected_literal(:ok, {:s_str, value}, _path) when is_binary(value), do: :ok
   defp validate_reflected_literal(:ok, {:s_bool, value}, _path) when is_boolean(value), do: :ok
@@ -952,6 +959,7 @@ defmodule Cure.Compiler.MacroSyntax do
         :Failure,
         :KV,
         :SInt,
+        :SChar,
         :SFloat,
         :SStr,
         :SBool,
@@ -975,6 +983,7 @@ defmodule Cure.Compiler.MacroSyntax do
   defp to_core_list(items), do: Enum.reduce(Enum.reverse(items), ctor(:Nil, []), &ctor(:Cons, [&1, &2]))
 
   defp to_core_synlit({:s_int, n}), do: ctor(:SInt, [{:int_lit, n}])
+  defp to_core_synlit({:s_char, n}), do: ctor(:SChar, [{:bounded_lit, n}])
   defp to_core_synlit({:s_float, f}), do: ctor(:SFloat, [{:float_lit, f}])
 
   defp to_core_synlit({:s_str, s}),
@@ -1018,6 +1027,7 @@ defmodule Cure.Compiler.MacroSyntax do
   defp from_core_list(_), do: {:error, :invalid_syntax_list}
 
   defp from_core_synlit({:ctor, :"Std.Syntax#SInt", [{:int_lit, n}]}), do: {:ok, {:s_int, n}}
+  defp from_core_synlit({:ctor, :"Std.Syntax#SChar", [{:bounded_lit, n}]}), do: {:ok, {:s_char, n}}
   defp from_core_synlit({:ctor, :"Std.Syntax#SFloat", [{:float_lit, f}]}), do: {:ok, {:s_float, f}}
 
   defp from_core_synlit({:ctor, :"Std.Syntax#SStr", [chars]}) do
