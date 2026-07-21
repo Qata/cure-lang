@@ -1791,7 +1791,7 @@ defmodule Cure.Diagnostic.Adapter do
     body =
       case kind do
         :unknown_erasure_class ->
-          "`@erases(#{inspect(details.class)})` on `#{name_to_string(details.name)}` is not a supported erasure class. Supported classes: #{known_erasure_classes_hint()}."
+          "`@erases(#{name_to_string(details.class)})` on `#{name_to_string(details.name)}` is not a supported erasure class. Supported classes: #{known_erasure_classes_hint()}."
 
         :erases_on_non_opaque ->
           "`#{name_to_string(details.name)}` has constructors, so its runtime erasure is already determined. `@erases` is only valid on a constructor-less opaque type."
@@ -1817,7 +1817,7 @@ defmodule Cure.Diagnostic.Adapter do
           " with arity #{Map.get(details, :arity)}"
 
         :sibling_module_collision ->
-          " across modules #{inspect(Map.get(details, :owners))}"
+          " across modules #{Enum.map_join(Map.get(details, :owners, []), ", ", &name_to_string/1)}"
 
         :overlapping_instance ->
           " for interface `#{name_to_string(Map.get(details, :interface))}` and head `#{surface_type(Map.get(details, :head))}`"
@@ -1952,7 +1952,7 @@ defmodule Cure.Diagnostic.Adapter do
     body =
       case kind do
         :precedence_cycle ->
-          "The operator precedence declarations contain a cycle: #{inspect(details.groups)}."
+          "The operator precedence declarations contain a cycle among #{Enum.map_join(details.groups, ", ", &name_to_string/1)}."
 
         :builtin_operator_not_overloadable ->
           "The built-in operator `#{details.operator}` cannot be overloaded."
