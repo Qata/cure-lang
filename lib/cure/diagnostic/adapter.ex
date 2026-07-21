@@ -5200,6 +5200,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :constructor_parameters}
+       }),
+       do: "Constructor parameter list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :type_indices}
        }),
        do: "Type index list is not closed"
@@ -5261,6 +5267,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :type_parameters}
        }),
        do: "Type parameters need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :constructor_parameters}
+       }),
+       do: "Constructor parameters need a comma"
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5544,6 +5556,13 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
          expected: :rparen,
+         context: %{container: :constructor_parameters, constructor: constructor}
+       }),
+       do: "The constructor `#{constructor}` reaches the end of its parameter list without the closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
          context: %{container: :type_indices, declaration: declaration}
        }),
        do: "The indexed type `#{declaration}` reaches the end of its index telescope without the closing ')'."
@@ -5638,6 +5657,13 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do:
          "The declaration of `#{declaration}` has another type parameter here, but consecutive parameters must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :constructor_parameters, constructor: constructor}
+       }),
+       do:
+         "The constructor `#{constructor}` has another parameter type here, but consecutive parameters must be separated by a comma."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5872,6 +5898,13 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_unclosed,
          expected: :rparen,
+         context: %{container: :constructor_parameters}
+       }),
+       do: "close this constructor's parameters with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
          context: %{container: :type_indices}
        }),
        do: "close these type indices with `)`"
@@ -5961,6 +5994,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :type_parameters}
        }),
        do: "insert a comma before this type parameter"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :constructor_parameters}
+       }),
+       do: "insert a comma before this constructor parameter"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -6436,6 +6475,27 @@ defmodule Cure.Diagnostic.Adapter do
            kind: kind,
            opener: %Span{} = opener,
            previous: previous,
+           context: %{container: :constructor_parameters}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "this constructor's parameter list starts here"),
+      pickup_label(previous, :secondary, "the previous constructor parameter ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
            context: %{container: :type_indices}
          },
          primary_span
@@ -6888,6 +6948,18 @@ defmodule Cure.Diagnostic.Adapter do
        ]
 
   defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :constructor_parameters}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these constructor parameters",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
          %SyntaxProblem{kind: :container_separator_missing, context: %{container: :type_indices}},
          %Span{} = span
        ),
@@ -6993,6 +7065,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp container_item_name(:parameters), do: "parameter"
   defp container_item_name(:type_arguments), do: "type argument"
   defp container_item_name(:type_parameters), do: "type parameter"
+  defp container_item_name(:constructor_parameters), do: "constructor parameter"
   defp container_item_name(:type_indices), do: "type index"
   defp container_item_name(:lambda_parameters), do: "lambda parameter"
 

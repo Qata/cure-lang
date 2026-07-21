@@ -9239,10 +9239,14 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :lparen} ->
         # Constructor with params: Some(T)
+        open_token = peek(state)
         state = advance(state)
         {params, state} = parse_type_param_list(state)
-        close_token = peek(state)
-        state = expect(state, :rparen)
+
+        {state, close_token} =
+          expect_container_close(state, :rparen, :constructor_parameters, open_token, params, true, %{
+            constructor: name
+          })
 
         variant_meta =
           [name: name, params: params, variant: true]
