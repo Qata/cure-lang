@@ -6388,9 +6388,9 @@ defmodule Cure.Compiler.Parser do
   # sub-arms have the grouped-on first pattern removed.
   defp group_arms_by_first(arms) do
     Enum.reduce(arms, [], fn {[p1 | rest_pats], body}, groups ->
-      key = strip_meta(p1)
+      key = Metadata.semantic_key(p1)
 
-      case Enum.find_index(groups, fn {gp, _} -> strip_meta(gp) == key end) do
+      case Enum.find_index(groups, fn {gp, _} -> Metadata.semantic_key(gp) == key end) do
         nil ->
           groups ++ [{p1, [{rest_pats, body}]}]
 
@@ -6425,21 +6425,6 @@ defmodule Cure.Compiler.Parser do
 
   defp pattern_ctor_head({:function_call, meta, _args}), do: {:ctor, Keyword.get(meta, :name)}
   defp pattern_ctor_head(_), do: :other
-
-  # Structural-equality normaliser for pattern ASTs: drop the metadata slot of
-  # every `{tag, meta, payload}` node so patterns compare on constructor head and
-  # argument structure (including variable names) only.
-  defp strip_meta({tag, meta, payload}) when is_atom(tag) and is_list(meta) do
-    {tag, strip_meta(payload)}
-  end
-
-  defp strip_meta(list) when is_list(list), do: Enum.map(list, &strip_meta/1)
-
-  defp strip_meta(tuple) when is_tuple(tuple) do
-    tuple |> Tuple.to_list() |> Enum.map(&strip_meta/1) |> List.to_tuple()
-  end
-
-  defp strip_meta(other), do: other
 
   # Block-form with-clause arms. Distinct from `parse_block_match_arms` (used by
   # plain `match`) because a with-clause arm may RESTATE the parent LHS patterns
