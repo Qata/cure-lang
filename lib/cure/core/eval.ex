@@ -17,6 +17,15 @@ defmodule Cure.Core.Eval do
   # We define a local `apply/2`; keep it from clashing with Kernel.apply/2.
   import Kernel, except: [apply: 2]
 
+  @builtin_ctor_aliases %{
+    Z: :"Std.Nat#Z",
+    S: :"Std.Nat#S",
+    FromNat: :"Std.Int#FromNat",
+    NegativeSuccessor: :"Std.Int#NegativeSuccessor",
+    First: :"Std.Bounded#First",
+    Next: :"Std.Bounded#Next"
+  }
+
   @doc "Evaluate `term` under `env` (a `[value]` indexed by de Bruijn index)."
   @spec eval(Cure.Core.Term.t(), [Cure.Core.Value.t()]) :: Cure.Core.Value.t()
   def eval({:type, level}, _env), do: {:vtype, level}
@@ -62,7 +71,20 @@ defmodule Cure.Core.Eval do
   def eval({:data, name, params, indices}, env),
     do: {:vdata, name, Enum.map(params ++ indices, &eval(&1, env))}
 
-  def eval({:ctor, name, args}, env), do: {:vctor, name, Enum.map(args, &eval(&1, env))}
+  def eval({:ctor, name, args}, env) do
+    values = Enum.map(args, &eval(&1, env))
+
+    case {name, values} do
+      {first, [_erased_bound]} when first in [:First, :"Std.Bounded#First"] ->
+        {:vbounded, 0}
+
+      {next, [_erased_bound, {:vbounded, predecessor}]} when next in [:Next, :"Std.Bounded#Next"] ->
+        {:vbounded, predecessor + 1}
+
+      _ ->
+        {:vctor, name, values}
+    end
+  end
 
   # Primitive Int/Float literals. Arithmetic is builtin-op GLOBALS (K2, spec
   # 2026-07-09): Eval leaves every global neutral; the certified-δ engine
@@ -121,7 +143,7 @@ defmodule Cure.Core.Eval do
     # steps, never an n-node heap tower); every other value passes through.
     case int_to_ctor_if(nat_to_ctor_if(eval(scrut, env))) do
       {:vctor, cname, args} ->
-        case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
+        case Enum.find(branches, fn {c, _ar, _b} -> constructor_name_matches?(c, cname) end) do
           {_cname, arity, body} ->
             reduce_branch_body(body, env, args, arity)
 
@@ -141,7 +163,7 @@ defmodule Cure.Core.Eval do
         # peeled constructor died with an opaque `MatchError` on `nil` instead of
         # naming the coverage violation. Both arms must fail the same, legible way:
         # reaching here at all means an ill-typed term slipped past `check_coverage`.
-        case Enum.find(branches, fn {c, _ar, _b} -> c == cname end) do
+        case Enum.find(branches, fn {c, _ar, _b} -> constructor_name_matches?(c, cname) end) do
           {_cname, arity, body} ->
             fields = drop_leading_params(args, arity)
             eval(body, Enum.reverse(fields) ++ env)
@@ -273,6 +295,18 @@ defmodule Cure.Core.Eval do
   def int_to_ctor_if({:vint, _} = int), do: int_to_ctor(int)
   def int_to_ctor_if(value), do: value
 
+  # Compact literal peeling uses the builtin constructor basename (`:S`,
+  # `:FromNat`, `:Next`), while source-elaborated branches carry canonical
+  # owner-qualified identities. They denote the same constructor.
+  @doc false
+  def constructor_name_matches?(left, right) do
+    left == right or builtin_constructor_alias?(left, right) or builtin_constructor_alias?(right, left)
+  end
+
+  defp builtin_constructor_alias?(bare, qualified) do
+    Map.get(@builtin_ctor_aliases, bare) == qualified
+  end
+
   # -- compact Bounded peeling ------------------------------------------------
 
   # Peel one layer of a compact `Bounded` literal into its `First`/`Next`
@@ -336,9 +370,11 @@ defmodule Cure.Core.Eval do
   def fold(:eq, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a == b)}
   def fold(:eq, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a == b)}
   def fold(:eq, [{:vatom, a}, {:vatom, b}]), do: {:ok, vbool(a == b)}
+  def fold(:eq, [{:vbounded, a}, {:vbounded, b}]), do: {:ok, vbool(a == b)}
   def fold(:ne, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a != b)}
   def fold(:ne, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a != b)}
   def fold(:ne, [{:vatom, a}, {:vatom, b}]), do: {:ok, vbool(a != b)}
+  def fold(:ne, [{:vbounded, a}, {:vbounded, b}]), do: {:ok, vbool(a != b)}
   def fold(:lt, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a < b)}
   def fold(:lt, [{:vfloat, a}, {:vfloat, b}]), do: {:ok, vbool(a < b)}
   def fold(:le, [{:vint, a}, {:vint, b}]), do: {:ok, vbool(a <= b)}

@@ -348,7 +348,7 @@ defmodule Cure.Compiler.IncrementalTest do
     fn qval() -> Int = 42
   """
 
-  test "a closure-only ambient-prelude dependency's cascaded interface change is not missed by the not-yet-visited fallback" do
+  test "a closure-only ambient-prelude dependency observes a provider's cascaded interface change" do
     root = Path.join(System.tmp_dir!(), "cure_ambient_#{:erlang.unique_integer([:positive])}")
     src = Path.join(root, "src")
     out = Path.join(root, "ebin")
@@ -363,11 +363,12 @@ defmodule Cure.Compiler.IncrementalTest do
     assert {:ok, s0} = Incremental.compile_dir(paths, out, source_roots: [src])
     assert Enum.sort(s0.compiled) == ["P", "Q", "R"]
 
-    # Precondition: Q really is scheduled before P in this graph -- otherwise
-    # this test isn't exercising the not-yet-visited fallback at all.
+    # Prelude providers are prioritized once their explicit dependencies are
+    # ready, so P is now visited before its ambient consumer Q without adding a
+    # synthetic graph edge.
     {:ok, graph} = DepGraph.scan(paths)
     pos = Incremental.compile_order(graph) |> Enum.with_index() |> Map.new()
-    assert pos["Q"] < pos["P"]
+    assert pos["P"] < pos["Q"]
 
     File.write!(Path.join(src, "r.cure"), @r_v2)
     assert {:ok, s} = Incremental.compile_dir(paths, out, source_roots: [src])

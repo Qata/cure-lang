@@ -1312,6 +1312,26 @@ defmodule Cure.Elab.Declarations do
   defp elaborate_body({:literal, _meta, _value} = expr, return_core, scope, ctx, env, _params),
     do: Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
 
+  # A negative integer spelling parses as unary `-` over a positive literal.
+  # Keep this whole-body form in checking mode so the declared result can select
+  # `ExpressibleByIntegerLiteral`; inference would prematurely default the
+  # operand and the negation to Int.
+  defp elaborate_body(
+         {:unary_op, meta, [{:literal, literal_meta, value}]} = expr,
+         return_core,
+         scope,
+         ctx,
+         env,
+         _params
+       )
+       when is_integer(value) and value >= 0 do
+    if Keyword.get(meta, :operator) == :- and Keyword.get(literal_meta, :subtype) == :integer do
+      Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
+    else
+      elaborate_body_infer(expr, return_core, scope, ctx, env)
+    end
+  end
+
   # The general body: elaborated in INFER mode. `coerce_union/5` is a strict no-op
   # unless the declared return type is a generated anonymous-union family — in which
   # case the inferred term is injected into the matching member constructor. Without
@@ -2563,14 +2583,16 @@ defmodule Cure.Elab.Declarations do
   defp index_binop_global(op, _), do: {:error, {:unsupported_index_operator, op}}
 
   # Wrap a `Bool`-typed refinement clause in `IsTrue(·)` (§3a level 1). Only
-  # comparison and boolean-connective operators reflect (they produce `Bool`);
+  # operators with a Bool-producing index lowering reflect;
   # every other clause — a `Type`-valued predicate application, an already-explicit
   # `IsTrue(…)`, or an arithmetic misuse that should be rejected as ill-sorted —
   # passes through untouched. The wrapper node is exactly what the parser yields
   # for an explicit `IsTrue(φ)`, so lowering (and `IsTrue` name resolution) is
   # shared verbatim.
   defp reflect_boolean_proposition({:binary_op, meta, _} = prop) do
-    if Keyword.get(meta, :category) in [:comparison, :boolean] do
+    op = Keyword.fetch!(meta, :operator)
+
+    if match?({:ok, _global}, index_binop_global(op, false)) do
       {:function_call, [name: "IsTrue"], [prop]}
     else
       prop

@@ -54,6 +54,21 @@ defmodule Cure.Core.CompactNatTest do
       assert Conv.conv?(tower(3), {:nat_lit, 3}, [], 0, s)
     end
 
+    test "compact Nat is convertible with owner-qualified constructor towers" do
+      qualified =
+        {:ctor, :"Std.Nat#S", [{:ctor, :"Std.Nat#S", [{:ctor, :"Std.Nat#Z", []}]}]}
+
+      assert Conv.conv?({:nat_lit, 2}, qualified, [], 0, sig())
+      assert Conv.conv?(qualified, {:nat_lit, 2}, [], 0, sig())
+    end
+
+    test "constructor basename matching never equates different qualified owners" do
+      left = {:ctor, :"Left#S", [{:nat_lit, 0}]}
+      right = {:ctor, :"Right#S", [{:nat_lit, 0}]}
+
+      refute Conv.conv?(left, right, [], 0, sig())
+    end
+
     test "lit n ≡ lit n by O(1) equality; distinct literals differ" do
       s = sig()
       assert Conv.conv?({:nat_lit, 9}, {:nat_lit, 9}, [], 0, s)
@@ -78,6 +93,13 @@ defmodule Cure.Core.CompactNatTest do
 
     test "case on lit (n+1) selects the S branch and binds the COMPACT predecessor" do
       assert {:vnat, 4} == Eval.eval(pred_case({:nat_lit, 5}), [])
+    end
+
+    test "compact literals select owner-qualified Nat branches" do
+      qualified =
+        {:case, {:nat_lit, 2}, {:type, 0}, [{:"Std.Nat#Z", 0, {:nat_lit, 42}}, {:"Std.Nat#S", 1, {:var, 0}}]}
+
+      assert {:vnat, 1} == Eval.eval(qualified, [])
     end
 
     test "peeling agrees (up to conversion) with the same case run on the S/Z tower" do

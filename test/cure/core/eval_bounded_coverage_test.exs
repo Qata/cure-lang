@@ -19,6 +19,17 @@ defmodule Cure.Core.EvalBoundedCoverageTest do
 
   alias Cure.Core.Eval
 
+  test "First/Next constructor values normalize to the compact Bounded representation" do
+    tower =
+      {:ctor, :"Std.Bounded#Next",
+       [
+         {:nat_lit, 2},
+         {:ctor, :"Std.Bounded#Next", [{:nat_lit, 1}, {:ctor, :"Std.Bounded#First", [{:nat_lit, 0}]}]}
+       ]}
+
+    assert Eval.eval(tower, []) == {:vbounded, 2}
+  end
+
   test "case-ι on a Bounded scrutinee with no matching branch raises the descriptive coverage error" do
     # {:bounded_lit, 1} peels to :Next; the branches only cover :First.
     case_term = {:case, {:bounded_lit, 1}, {:type, 0}, [{:First, 1, {:bounded_lit, 42}}]}
@@ -33,5 +44,16 @@ defmodule Cure.Core.EvalBoundedCoverageTest do
       {:case, {:bounded_lit, 0}, {:type, 0}, [{:First, 1, {:bounded_lit, 42}}, {:Next, 2, {:bounded_lit, 99}}]}
 
     assert Eval.eval(case_term, []) == {:vbounded, 42}
+  end
+
+  test "compact Bounded literals select owner-qualified branches" do
+    case_term =
+      {:case, {:bounded_lit, 1}, {:type, 0},
+       [
+         {:"Std.Bounded#First", 1, {:bounded_lit, 42}},
+         {:"Std.Bounded#Next", 2, {:var, 0}}
+       ]}
+
+    assert Eval.eval(case_term, []) == {:vbounded, 0}
   end
 end
