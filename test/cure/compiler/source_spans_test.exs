@@ -249,6 +249,20 @@ defmodule Cure.Compiler.SourceSpansTest do
     end
   end
 
+  test "string interpolation retains its whole and embedded expression ranges" do
+    source = ~S|fn message(name: String) -> String = "hello #{name}! #{name + 1}"| <> "\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "interpolation.cure", emit_events: false)
+
+    assert {:ok, ast} =
+             Parser.parse(tokens, file: "interpolation.cure", emit_events: false, prelude_macros: false)
+
+    interpolation = find_node(ast, :string_interpolation)
+    info = Metadata.source_info(elem(interpolation, 1))
+
+    assert slice(source, info.whole) == ~S|"hello #{name}! #{name + 1}"|
+    assert Enum.map(info.arguments, &slice(source, &1)) == ["name", "name + 1"]
+  end
+
   test "diagnostic metadata is excluded from semantic comparisons" do
     span = %Span{
       source_id: :one,

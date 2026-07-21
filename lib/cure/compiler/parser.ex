@@ -3125,9 +3125,47 @@ defmodule Cure.Compiler.Parser do
           expr
       end)
 
-    ast = {:string_interpolation, [line: token.line, col: token.col], parsed_parts}
+    meta = [line: token.line, col: token.col]
+    meta = put_interpolation_source_info(meta, token, parts)
+    ast = {:string_interpolation, meta, parsed_parts}
     {ast, state}
   end
+
+  defp put_interpolation_source_info(meta, %Token{span: %Cure.Diagnostic.Span{} = whole}, parts) do
+    arguments =
+      parts
+      |> Enum.flat_map(fn
+        {:expr, tokens} ->
+          case authored_token_span(tokens) do
+            %Cure.Diagnostic.Span{} = span -> [span]
+            nil -> []
+          end
+
+        _text ->
+          []
+      end)
+
+    Keyword.put(meta, :source_info, %SourceInfo{whole: whole, arguments: arguments})
+  end
+
+  defp put_interpolation_source_info(meta, _token, _parts), do: meta
+
+  defp authored_token_span(tokens) when is_list(tokens) do
+    authored = Enum.filter(tokens, &match?(%Token{span: %Cure.Diagnostic.Span{}}, &1))
+
+    case {List.first(authored), List.last(authored)} do
+      {%Token{} = first, %Token{} = last} ->
+        case Range.through(first, last) do
+          {:ok, span} -> span
+          {:error, _reason} -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp authored_token_span(_tokens), do: nil
 
   # -- Unary Operators -------------------------------------------------------
 
