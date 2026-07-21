@@ -134,7 +134,10 @@ defmodule Cure.Doc.Doctests do
             {:fail, "expected #{expected}, got #{actual}"}
           end
         catch
-          kind, reason -> {:fail, "#{kind}: #{inspect(reason)}"}
+          kind, reason ->
+            {:fail,
+             "doctest evaluation failed:\n" <>
+               Cure.Diagnostic.Host.render({:command_failed, "doctest", {kind, reason}}, file)}
         end
 
       {:error, reason} ->
