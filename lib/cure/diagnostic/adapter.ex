@@ -609,6 +609,7 @@ defmodule Cure.Diagnostic.Adapter do
       opts
       |> Keyword.put_new(:span, Map.get(context, :span))
       |> Keyword.put(:candidates, Map.get(context, :name_candidates, []))
+      |> Keyword.put(:available_candidates, Map.get(context, :name_candidates, []))
       |> Keyword.put(:arity, Map.get(context, :name_arity))
 
     namespace = if kind == :unknown_family, do: :type, else: :constructor
@@ -3619,22 +3620,55 @@ defmodule Cure.Diagnostic.Adapter do
     spelling = name_to_string(name)
     candidate_details = rank_candidates(Keyword.get(opts, :candidates, []), spelling, namespace, opts)
     candidates = Enum.map(candidate_details, & &1.name)
+    available_candidates = Keyword.get(opts, :available_candidates, [])
+    available_names = available_candidates |> Enum.map(&suggestion_name/1) |> Enum.uniq()
+
+    body =
+      case available_names do
+        [] ->
+          Doc.paragraph(
+            "`#{Keyword.get(opts, :display_name, spelling)}` is not available in this #{namespace} namespace."
+          )
+
+        names ->
+          Doc.stack([
+            Doc.paragraph(
+              "`#{Keyword.get(opts, :display_name, spelling)}` is not available in this #{namespace} namespace."
+            ),
+            Doc.paragraph("The matched type provides #{Enum.map_join(names, ", ", &"`#{&1}`")}.")
+          ])
+      end
+
+    suggestions =
+      case {candidate_suggestions(candidate_details, spelling, opts), available_names} do
+        {[], [_ | _] = names} ->
+          [
+            %Suggestion{
+              message: "Use one of the matched type's constructors: #{Enum.map_join(names, ", ", &"`#{&1}`")}",
+              applicability: :manual
+            }
+          ]
+
+        {ranked, _names} ->
+          ranked
+      end
 
     Diagnostic.new(
       code: @unknown_name_code,
       key: :unknown_name,
       severity: :error,
       title: "Unknown #{namespace_title(namespace)}",
-      message: "`#{Keyword.get(opts, :display_name, spelling)}` is not available in this #{namespace} namespace.",
+      body: body,
       primary: primary_label(opts, "`#{spelling}` was not found"),
       notes: Keyword.get(opts, :notes, []),
-      suggestions: candidate_suggestions(candidate_details, spelling, opts),
+      suggestions: suggestions,
       provenance: Keyword.get(opts, :provenance, []),
       payload: %{
         namespace: namespace,
         name: spelling,
         candidates: candidates,
         candidate_details: candidate_details,
+        available_candidates: available_candidates,
         owner: Keyword.get(opts, :owner),
         record: Keyword.get(opts, :record),
         checking: Keyword.get(opts, :checking),
