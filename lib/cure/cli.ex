@@ -1137,9 +1137,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, :not_found} ->
-        diagnostic(
-          Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.usage("no such module: #{module}"))
-        )
+        error_diagnostic(Cure.Diagnostic.Operational.usage("no such module: #{module}"))
 
         exit({:shutdown, 1})
     end
@@ -1542,11 +1540,7 @@ defmodule Cure.CLI do
             :ok
 
           {:error, reason} ->
-            error(
-              Cure.Diagnostic.Host.render_diagnostic(
-                Cure.Diagnostic.Operational.command_failure("edition bump", reason)
-              )
-            )
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("edition bump", reason))
 
             {:error, reason}
         end
@@ -1955,11 +1949,7 @@ defmodule Cure.CLI do
             info("Next: `mix hex.publish package --replace` with the tarball above.")
 
           {:error, reason} ->
-            error(
-              Cure.Diagnostic.Host.render_diagnostic(
-                Cure.Diagnostic.Operational.command_failure("cure publish --hex", reason)
-              )
-            )
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure publish --hex", reason))
 
             exit({:shutdown, 1})
         end
@@ -1973,11 +1963,7 @@ defmodule Cure.CLI do
             info("  files  = #{length(Map.get(manifest, "dependencies", []))} declared deps")
 
           {:error, reason} ->
-            error(
-              Cure.Diagnostic.Host.render_diagnostic(
-                Cure.Diagnostic.Operational.command_failure("cure publish --dry-run", reason)
-              )
-            )
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure publish --dry-run", reason))
 
             exit({:shutdown, 1})
         end
@@ -1998,11 +1984,7 @@ defmodule Cure.CLI do
             info("Published: #{inspect(resp)}")
 
           {:error, reason} ->
-            error(
-              Cure.Diagnostic.Host.render_diagnostic(
-                Cure.Diagnostic.Operational.command_failure("cure publish", reason)
-              )
-            )
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure publish", reason))
 
             exit({:shutdown, 1})
         end
@@ -2025,9 +2007,7 @@ defmodule Cure.CLI do
         end
 
       {:error, reason} ->
-        error(
-          Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("cure search", reason))
-        )
+        error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure search", reason))
 
         exit({:shutdown, 1})
     end
@@ -2055,9 +2035,7 @@ defmodule Cure.CLI do
             end)
 
           {:error, reason} ->
-            error(
-              Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("cure info", reason))
-            )
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure info", reason))
 
             exit({:shutdown, 1})
         end
@@ -2068,9 +2046,7 @@ defmodule Cure.CLI do
             IO.puts(Cure.Project.Json.encode(manifest))
 
           {:error, reason} ->
-            error(
-              Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("cure info", reason))
-            )
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure info", reason))
 
             exit({:shutdown, 1})
         end
@@ -2112,11 +2088,7 @@ defmodule Cure.CLI do
             info("Release built: #{dir}")
 
           {:error, reason} ->
-            error(
-              Cure.Diagnostic.Host.render_diagnostic(
-                Cure.Diagnostic.Operational.command_failure("cure release", reason)
-              )
-            )
+            error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure release", reason))
 
             exit({:shutdown, 1})
         end
@@ -2126,9 +2098,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error(
-          Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("cure release", reason))
-        )
+        error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure release", reason))
 
         exit({:shutdown, 1})
     end
@@ -2244,11 +2214,7 @@ defmodule Cure.CLI do
   # -- snap (v0.32.0) -----------------------------------------------------------
 
   defp cmd_snap([], _opts) do
-    diagnostic(
-      Cure.Diagnostic.Host.render_diagnostic(
-        Cure.Diagnostic.Operational.usage("Usage: cure snap <save|load|list> [options]")
-      )
-    )
+    error_diagnostic(Cure.Diagnostic.Operational.usage("Usage: cure snap <save|load|list> [options]"))
 
     exit({:shutdown, 1})
   end
@@ -2287,7 +2253,7 @@ defmodule Cure.CLI do
   defp error_diagnostic(%Cure.Diagnostic{} = diagnostic) do
     case Cure.Diagnostic.Host.emit_diagnostic(diagnostic) do
       {:ok, _sink} -> :ok
-      {:error, reason} -> raise "failed to emit diagnostic: #{inspect(reason)}"
+      {:error, _reason} -> raise "failed to emit diagnostic"
     end
   end
 
@@ -2297,14 +2263,14 @@ defmodule Cure.CLI do
     if String.starts_with?(rendered, "--") or String.contains?(rendered, "\n--") do
       IO.puts(:stderr, msg)
     else
-      diagnostic(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("cure", msg)))
+      error_diagnostic(Cure.Diagnostic.Operational.command_failure("cure", msg))
     end
   end
 
   # A user-facing usage/lookup error that must fail the command: print to stderr
   # and exit non-zero, so `cure <misuse> && next` stops and CI wrappers see it.
   defp usage_error(msg) do
-    diagnostic(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.usage(msg)))
+    error_diagnostic(Cure.Diagnostic.Operational.usage(msg))
     exit({:shutdown, 1})
   end
 
