@@ -2225,7 +2225,7 @@ defmodule Cure.Diagnostic.Adapter do
         name = branch_name(branch)
 
         message =
-          if name == to_string(failing),
+          if same_branch?(name, failing),
             do: "possible outlier: this branch has the incompatible type",
             else: "compare this branch with the declared result"
 
@@ -2266,6 +2266,14 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp branch_name(%{name: name}), do: to_string(name)
   defp branch_name(name), do: to_string(name)
+
+  defp same_branch?(_name, nil), do: false
+
+  defp same_branch?(name, failing) do
+    name = to_string(name)
+    failing = to_string(failing)
+    failing == name or String.ends_with?(failing, "#" <> name) or String.ends_with?(failing, "." <> name)
+  end
 
   defp branch_span(%{span: %Cure.Diagnostic.Span{} = span}), do: span
   defp branch_span(_branch), do: nil
