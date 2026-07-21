@@ -24,6 +24,26 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert Renderer.plain(diagnostic, registry) =~ "type written in its annotation"
   end
 
+  test "a real conditional mismatch reports the authored guard" do
+    source = "fn main() -> Int = if 1 then 2 else 3\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "condition.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "condition.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :condition
+    assert diagnostic.primary.span.start_column == 23
+    assert rendered =~ "CONDITION IS NOT BOOLEAN"
+    assert rendered =~ "1 | fn main() -> Int = if 1 then 2 else 3"
+    assert rendered =~ "this condition has the wrong type"
+  end
+
   test "a branch failure names the checking function and authored arms" do
     reason =
       {:source_context, :branch_type,

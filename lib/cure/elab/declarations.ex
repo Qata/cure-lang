@@ -699,18 +699,28 @@ defmodule Cure.Elab.Declarations do
     {line, column, length} = expression_extent(expression)
     meta = expression_meta(expression)
 
-    {:error,
-     {:source_context, reason,
-      %{
-        line: line,
-        column: column,
-        length: length,
-        checking: checking,
-        span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
-        expression_category: expression_category(expression),
-        expectation_origin: :annotation,
-        branch_patterns: branch_patterns(expression)
-      }}}
+    outer_context = %{
+      line: line,
+      column: column,
+      length: length,
+      checking: checking,
+      span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
+      expression_category: expression_category(expression),
+      expectation_origin: :annotation,
+      branch_patterns: branch_patterns(expression)
+    }
+
+    case reason do
+      {:source_context, nested_reason, nested_context} when is_map(nested_context) ->
+        # A checking-site producer may already know a more precise authored span
+        # (for example the literal used as an `if` guard). Keep the declaration
+        # context as a fallback, but never let its whole-body span overwrite the
+        # nested source caret or expectation origin.
+        {:error, {:source_context, nested_reason, Map.merge(outer_context, nested_context)}}
+
+      _ ->
+        {:error, {:source_context, reason, outer_context}}
+    end
   end
 
   defp attach_source_context(result, _expression, _checking), do: result
