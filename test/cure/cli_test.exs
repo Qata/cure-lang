@@ -454,6 +454,34 @@ defmodule Cure.CLITest do
     end
   end
 
+  describe "cure test" do
+    test "runtime failures use an operational diagnostic" do
+      root = Path.join(System.tmp_dir!(), "cure_cli_test_#{System.unique_integer([:positive])}")
+      test_dir = Path.join(root, "test")
+      File.mkdir_p!(test_dir)
+
+      File.write!(Path.join(test_dir, "failure.cure"), """
+      mod FailingCureTest
+        @extern(:erlang, :error, 1)
+        local fn explode(reason: Atom) -> Unit
+        fn test_failure() -> Unit = explode(:boom)
+      end
+      """)
+
+      on_exit(fn -> File.rm_rf!(root) end)
+
+      stderr =
+        capture_io(:stderr, fn ->
+          File.cd!(root, fn ->
+            assert catch_exit(Cure.CLI.main(["test"])) == {:shutdown, 1}
+          end)
+        end)
+
+      assert stderr =~ "[E098]"
+      refute stderr =~ "{:"
+    end
+  end
+
   describe "unknown-command suggestions" do
     # `migrate` is a real dispatch command (cli.ex) but was absent from the
     # known_commands list the "did you mean" suggester searches, so a near-miss

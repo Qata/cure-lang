@@ -821,7 +821,13 @@ defmodule Cure.CLI do
                   apply(mod, name, [])
                   {:pass, "#{file}: #{name}"}
                 catch
-                  _, reason -> {:fail, "#{file}: #{name} -- #{inspect(reason)}"}
+                  kind, reason ->
+                    {:fail,
+                     Cure.Diagnostic.Host.render(
+                       {:command_failed, "test #{name}", {kind, reason}},
+                       file,
+                       source
+                     )}
                 end
               end)
 
