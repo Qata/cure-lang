@@ -9848,9 +9848,16 @@ defmodule Cure.Compiler.Parser do
           next = peek_at(state, 1)
 
           if next && next.type == :lbrace do
+            open_token = next
             state = advance(state) |> advance()
             {names, state} = parse_name_list(state, :rbrace)
-            state = expect(state, :rbrace)
+
+            {state, _close_token} =
+              expect_container_close(state, :rbrace, :selective_import, open_token, names, true, %{
+                module: path,
+                closing_values: [:as]
+              })
+
             {names, state}
           else
             {[], state}

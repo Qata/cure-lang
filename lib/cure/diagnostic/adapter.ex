@@ -5230,6 +5230,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :selective_import}
+       }),
+       do: "Selective import is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :branch_block, family: :match}
        }),
        do: "Pattern branch block is not closed"
@@ -5361,6 +5367,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :lambda_parameters}
        }),
        do: "Lambda parameters need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :selective_import}
+       }),
+       do: "Imported names need a comma"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :container_trailing_separator, context: %{container: :list}}),
     do: "List ends with an extra comma"
@@ -5748,6 +5760,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :selective_import, module: module}
+       }),
+       do: "The selective import from `#{module}` reaches the end of its names without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :branch_block, family: :match}
        }),
        do: "This inline `match` reaches the end of its branches without the closing '}'."
@@ -5832,6 +5850,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :lambda_parameters}
        }),
        do: "This lambda has another parameter here, but consecutive parameters must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :selective_import, module: module}
+       }),
+       do: "The import from `#{module}` has another name here, but imported names must be separated by a comma."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -6170,6 +6194,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :selective_import}
+       }),
+       do: "close these imported names with `}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :branch_block}
        }),
        do: "close this branch block with `}`"
@@ -6224,6 +6254,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :lambda_parameters}
        }),
        do: "insert a comma before this lambda parameter"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :selective_import}
+       }),
+       do: "insert a comma before this imported name"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -6719,6 +6755,27 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(Map.get(context, :specifier_span), :secondary, "this is the binary specifier"),
       pickup_label(opener, :secondary, "its argument starts here"),
       pickup_label(previous, :secondary, "the specifier argument ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :selective_import}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "the selective import list starts here"),
+      pickup_label(previous, :secondary, "the previous imported name ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7391,6 +7448,17 @@ defmodule Cure.Diagnostic.Adapter do
     closing_delimiter_insertion(:rparen, span)
   end
 
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           expected: :rbrace,
+           context: %{container: :selective_import}
+         },
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rbrace, span)
+  end
+
   defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
     closing_delimiter_insertion(expected, span)
   end
@@ -7569,6 +7637,18 @@ defmodule Cure.Diagnostic.Adapter do
        ]
 
   defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :selective_import}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these imported names",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
          %SyntaxProblem{kind: :container_separator_missing, context: %{container: container}},
          %Span{} = span
        )
@@ -7652,6 +7732,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp container_item_name(:type_parameters), do: "type parameter"
   defp container_item_name(:constructor_parameters), do: "constructor parameter"
   defp container_item_name(:branch_block), do: "branch"
+  defp container_item_name(:selective_import), do: "imported name"
   defp container_item_name(:type_indices), do: "type index"
   defp container_item_name(:lambda_parameters), do: "lambda parameter"
 
