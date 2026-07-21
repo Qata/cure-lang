@@ -8,6 +8,8 @@ defmodule Cure.Diagnostic.Adapter do
     ExpectationOrigin,
     Label,
     ProvenanceFrame,
+    ProofChainMismatchProblem,
+    ProofChainSyntaxProblem,
     Span,
     Suggestion,
     SyntaxProblem,
@@ -235,6 +237,80 @@ defmodule Cure.Diagnostic.Adapter do
       body: Doc.paragraph("The `#{form}` splice has no surrounding quote to receive generated syntax."),
       primary: primary_label(opts, "place this splice inside a quote"),
       payload: %{tag: tag, meta: meta}
+    )
+  end
+
+  def from_error({:proof_chain_syntax, %ProofChainSyntaxProblem{} = problem}, opts) do
+    {title, message, label} =
+      case problem.kind do
+        :empty_chain ->
+          {"Proof chain is empty", "A proof chain needs a first expression and at least one justified equality step.",
+           "add the first expression and an equality step"}
+
+        :missing_relation ->
+          {"Proof chain step is missing `==`",
+           "Every chain step must relate the previous endpoint to a new endpoint with `==`.",
+           "add `==` and the next endpoint"}
+
+        :missing_right_side ->
+          {"Proof chain step has no endpoint",
+           "The `==` relation must be followed by the expression reached by this step.",
+           "add the right-hand expression"}
+
+        :missing_because ->
+          {"Proof chain step needs a reason",
+           "Every equality step must include `because` followed by checked evidence.", "add `because` and its evidence"}
+
+        :first_step_previous ->
+          {"Proof chain cannot start with `_`", "There is no previous endpoint at the beginning of a proof chain.",
+           "write the first expression explicitly"}
+
+        _ ->
+          {"Malformed proof chain", "This proof chain does not have the required equational structure.",
+           "repair this proof-chain step"}
+      end
+
+    suggestions =
+      if problem.kind == :missing_because and match?(%Span{}, problem.insertion) do
+        [
+          %Suggestion{
+            message: "Insert `because`",
+            applicability: :machine_applicable,
+            edits: [%TextEdit{span: problem.insertion, replacement: "because "}]
+          }
+        ]
+      else
+        []
+      end
+
+    Diagnostic.new(
+      code: "E109",
+      key: :proof_chain_syntax,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      secondary: proof_chain_syntax_labels(problem, Keyword.get(opts, :span)),
+      suggestions: suggestions,
+      payload: problem
+    )
+  end
+
+  def from_error({:proof_chain_mismatch, %ProofChainMismatchProblem{} = problem}, opts) do
+    displayed = problem.step_index + 1
+
+    Diagnostic.new(
+      code: "E110",
+      key: :proof_chain_mismatch,
+      severity: :error,
+      title: "Proof does not justify chain step #{displayed}",
+      body:
+        Doc.paragraph(
+          "The evidence after `because` does not prove the equality required by step #{displayed}. Each step is checked independently before the chain is composed."
+        ),
+      primary: primary_label(opts, "this evidence proves a different proposition"),
+      secondary: proof_chain_mismatch_labels(problem, Keyword.get(opts, :span)),
+      payload: problem
     )
   end
 
@@ -2859,6 +2935,28 @@ defmodule Cure.Diagnostic.Adapter do
       nil ->
         nil
     end
+  end
+
+  defp proof_chain_syntax_labels(problem, primary) do
+    [
+      {problem.construct, "this proof chain starts here"},
+      {problem.step, "this step is incomplete"}
+    ]
+    |> Enum.flat_map(fn
+      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
+      _ -> []
+    end)
+  end
+
+  defp proof_chain_mismatch_labels(problem, primary) do
+    [
+      {problem.current_step, "step #{problem.step_index + 1} requires this equality"},
+      {problem.previous_step, "the previous endpoint is established here"}
+    ]
+    |> Enum.flat_map(fn
+      {%Span{} = span, message} when span != primary -> [%Label{span: span, style: :secondary, message: message}]
+      _ -> []
+    end)
   end
 
   defp candidate_suggestions([]), do: []

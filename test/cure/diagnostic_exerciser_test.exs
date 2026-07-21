@@ -89,6 +89,21 @@ defmodule Cure.DiagnosticExerciserTest do
       {"operator conflict", "E106", {:builtin_operator_not_overloadable, :|>}},
       {"unsupported async", "E107", {:unsupported_async, "async primitive is unavailable", [line: 2]}},
       {"splice outside quote", "E108", {:splice_outside_quote, :splice, [line: 2]}},
+      {"proof chain syntax", "E109",
+       {:proof_chain_syntax,
+        %Cure.Diagnostic.ProofChainSyntaxProblem{
+          kind: :empty_chain,
+          observed: :eof,
+          expected: :first_expression
+        }}},
+      {"proof chain mismatch", "E110",
+       {:proof_chain_mismatch,
+        %Cure.Diagnostic.ProofChainMismatchProblem{
+          kind: :wrong_justification,
+          step_index: 0,
+          expected: :equivalent,
+          actual: :reflexive
+        }}},
       {"beam write failure", "E096", {:write_failed, "_build/Demo.beam", :eacces}},
       {"beam load failure", "E098", {:load_failed, :badfile}},
       {"beam compilation failure", "E098", {:compilation_failed, [{:bad_form, :detail}]}},

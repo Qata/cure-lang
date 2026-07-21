@@ -134,6 +134,11 @@ defmodule Cure.Compiler.Errors do
     |> format_error(file)
   end
 
+  def format_error({kind, _problem} = error, file)
+      when kind in [:proof_chain_syntax, :proof_chain_mismatch] do
+    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
+  end
+
   def format_error({:extern_untyped_head, message, meta}, file) do
     {:extern_untyped_head, message, meta}
     |> Cure.Diagnostic.Adapter.from_error()
@@ -623,7 +628,16 @@ defmodule Cure.Compiler.Errors do
   defp embedded_span({:codegen_error, reason}), do: embedded_span(reason)
   defp embedded_span({:expected, _, :got, _, _, _, %Cure.Diagnostic.Span{} = span}), do: span
   defp embedded_span({:expected_token, _, _, _, _, _, %Cure.Diagnostic.Span{} = span}), do: span
+  defp embedded_span({:source_context, {:proof_chain_mismatch, _} = reason, _context}), do: embedded_span(reason)
   defp embedded_span({:source_context, _reason, %{span: %Cure.Diagnostic.Span{} = span}}), do: span
+
+  defp embedded_span({:proof_chain_syntax, %Cure.Diagnostic.ProofChainSyntaxProblem{} = problem}),
+    do: problem.step || problem.construct || problem.insertion
+
+  defp embedded_span({:proof_chain_mismatch, %Cure.Diagnostic.ProofChainMismatchProblem{} = problem}),
+    do: problem.justification || problem.current_step
+
+  defp embedded_span({:source_context, reason, _context}), do: embedded_span(reason)
   defp embedded_span(_error), do: nil
 
   defp lex_error_location(reason) when is_tuple(reason) do

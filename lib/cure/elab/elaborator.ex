@@ -697,6 +697,9 @@ defmodule Cure.Elab.Elaborator do
   def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
     do: {:error, :rewrite_requires_expected_type}
 
+  def elaborate_expr_typed({:proof_chain, _meta, _children} = chain, names, ctx, env),
+    do: Cure.Elab.ProofChain.elaborate(chain, names, ctx, env)
+
   # `assert_type expr : T` — a compile-time ascription. Lower `T`, then elaborate
   # `expr` in CHECKING mode against it (so the assertion can also steer inference).
   # The wrapper carries no runtime content: the result IS the checked term at type
@@ -1895,6 +1898,13 @@ defmodule Cure.Elab.Elaborator do
          {:ok, build, body_expected} <- rewrite_plan(ctx, proof_term, ty, a, b, normalized_expected),
          {:ok, body_term} <- elaborate_expr_checked(body_ast, body_expected, names, ctx, env),
          term = build.(body_term),
+         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      {:ok, term}
+    end
+  end
+
+  def elaborate_expr_checked({:proof_chain, _meta, _children} = chain, expected_core, names, ctx, env) do
+    with {:ok, term, _type} <- Cure.Elab.ProofChain.elaborate(chain, names, ctx, env),
          :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
       {:ok, term}
     end

@@ -89,7 +89,7 @@ defmodule Cure.Diagnostic.Registry do
     "W081" => "No first-party producer remains; pickup reachability warnings are not emitted.",
     "W082" => "No first-party producer remains; pickup reachability warnings are not emitted."
   }
-  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 W086 W088]
+  @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 W086 W088]
   @known_producers ~w[
     dependency_graph doctor elaboration kernel kernel_conversion lexer macro_expansion
     module_loader name_resolution operational parser pattern_checker proof_checker
@@ -161,6 +161,8 @@ defmodule Cure.Diagnostic.Registry do
     "E106" => :operator_declaration_conflict,
     "E107" => :unsupported_async,
     "E108" => :splice_outside_quote,
+    "E109" => :proof_chain_syntax,
+    "E110" => :proof_chain_mismatch,
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
     "W002" => :configuration_warning,
@@ -1325,6 +1327,28 @@ defmodule Cure.Diagnostic.Registry do
 
     Fix: place the splice inside a quote or use an ordinary expression.
     """,
+    "E109" => """
+    E109: Proof Chain Syntax Error
+
+    A `proof chain` is empty or one of its equality steps is missing `==`, a
+    right-hand endpoint, or `because` evidence. The structured payload retains
+    the construct, step, observed token, expected continuation, and insertion
+    position when a machine-applicable repair is available.
+
+    Write an explicit first expression, then one or more `_ == endpoint`
+    steps, each followed by `because` and checked evidence.
+    """,
+    "E110" => """
+    E110: Proof Chain Mismatch
+
+    A chain endpoint has the wrong carrier or a `because` expression does not
+    prove the equality required by its authored step. The diagnostic identifies
+    the one-based displayed step and labels authored endpoints and evidence;
+    generated transitivity applications are never blamed.
+
+    Supply evidence of exactly the proposition displayed for that step, or
+    correct the adjacent endpoint.
+    """,
     "W000" => """
     W000: Compiler Warning
 
@@ -1581,6 +1605,8 @@ defmodule Cure.Diagnostic.Registry do
   defp stable_key("E106", _title), do: :operator_declaration_conflict
   defp stable_key("E107", _title), do: :unsupported_async
   defp stable_key("E108", _title), do: :splice_outside_quote
+  defp stable_key("E109", _title), do: :proof_chain_syntax
+  defp stable_key("E110", _title), do: :proof_chain_mismatch
 
   defp stable_key(_code, title) do
     title
@@ -1627,6 +1653,8 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E106"), do: [:parser, :elaboration]
   defp producers("E107"), do: [:elaboration]
   defp producers("E108"), do: [:elaboration]
+  defp producers("E109"), do: [:parser]
+  defp producers("E110"), do: [:elaboration]
   defp producers("E008"), do: [:doctor]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
@@ -1640,6 +1668,8 @@ defmodule Cure.Diagnostic.Registry do
   defp subsystem("E106"), do: :elaboration
   defp subsystem("E107"), do: :elaboration
   defp subsystem("E108"), do: :elaboration
+  defp subsystem("E109"), do: :parser
+  defp subsystem("E110"), do: :elaboration
   defp subsystem("E091"), do: :resolution
   defp subsystem("E092"), do: :macros
   defp subsystem("E093"), do: :elaboration

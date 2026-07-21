@@ -235,28 +235,28 @@ files; every Task 1 file is formatted.
 **Purpose:** replace nested `trans` terms while keeping each step independently
 typed and diagnosed.
 
-- [ ] Add source AST nodes with complete ranges:
+- [x] Add source AST nodes with complete ranges:
   - `{:proof_chain, meta, [first | steps]}`;
   - `{:proof_step, meta, [left_marker, right, justification]}`;
   - distinguish the first expression from continuation `_` without creating a
     hole/metavariable.
-- [ ] In `parse_prefix/1`, recognize `proof chain` only when `proof` is followed
+- [x] In `parse_prefix/1`, recognize `proof chain` only when `proof` is followed
   by identifier `chain` and a valid block boundary. Preserve the existing proof
   container and ordinary identifier behavior elsewhere.
-- [ ] Parse steps with a dedicated `==` consumer so global non-associative
+- [x] Parse steps with a dedicated `==` consumer so global non-associative
   operator behavior remains unchanged. Require `because`; recover at the next
   equally-indented relation/step.
-- [ ] Add canonical printer layout and parse-print-parse equality tests.
-- [ ] Implement `Cure.Elab.ProofChain`: infer the carrier and first endpoint,
+- [x] Add canonical printer layout and parse-print-parse equality tests.
+- [x] Implement `Cure.Elab.ProofChain`: infer the carrier and first endpoint,
   check each right endpoint at the carrier, check each inline justification at
   `Equivalent(carrier, left, right)`, and compose with the certified
   `Std.Equivalent#trans` definition.
-- [ ] Kernel-check the completed chain against both its synthesized proposition
+- [x] Kernel-check the completed chain against both its synthesized proposition
   and any enclosing expected type. No special Core node survives elaboration.
-- [ ] Add E109 and E110 registry entries, typed payloads, adapters, prose,
+- [x] Add E109 and E110 registry entries, typed payloads, adapters, prose,
   source labels, catalog programs, ANSI/plain/JSON/LSP snapshots, and coverage.
   Chain mismatches must point to adjacent source steps, not generated `trans`.
-- [ ] Add tests for empty chain, missing pieces, first `_`, wrong carrier,
+- [x] Add tests for empty chain, missing pieces, first `_`, wrong carrier,
   endpoint mismatch, wrong proof, two/three/fifty steps, and nested expression
   use.
 
@@ -267,6 +267,14 @@ falls to E094 or lacks the required ranges.
 canonical stdlib, full suite, complete Antigen.
 
 **Commit:** `feat(proofs): add typed equational proof chains`
+
+**Completed evidence (2026-07-21):** dedicated AST/source roles and canonical
+round-trip formatting are green; one-, two-, three-, and fifty-step chains
+kernel-check and erase without a chain Core node; all inline E109 variants and
+E110 carrier/justification variants project through ANSI, plain, JSON, and LSP.
+Focused suites and warnings-as-errors are green, the canonical 122-module stdlib
+compiles, complete Antigen is 318/318, and the full suite is 5,303 tests with 0
+failures and 6 excluded.
 
 ## Task 3: Add typed multiline `because` blocks
 

@@ -1180,6 +1180,7 @@ defmodule Cure.Elab.Program do
   def dependent?({:sigma_type, _meta, _body}), do: true
   def dependent?({:refinement_type, _meta, _body}), do: true
   def dependent?({:rewrite_expr, _meta, _body}), do: true
+  def dependent?({:proof_chain, _meta, _body}), do: true
 
   # An anonymous union (`Int | String`) and its elimination form (`n: Int -> …`) are
   # DEPENDENT-pipeline constructs: they elaborate to a generated inductive family whose

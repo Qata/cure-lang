@@ -83,6 +83,11 @@ defmodule Cure.LSP.ServerV17Test do
       assert [0, 0, 4, 0, 0 | _] = Server.compute_semantic_tokens("have fact = 1")
     end
 
+    test "classifies proof-chain vocabulary as keywords" do
+      data = Server.compute_semantic_tokens("proof chain\n  x == x because evidence")
+      assert Enum.chunk_every(data, 5) |> Enum.count(fn [_dl, _dc, length, 0, 0] -> length in [5, 7] end) >= 2
+    end
+
     test "produces an LSP token integer stream" do
       tokens = Server.compute_semantic_tokens(@sample)
       assert is_list(tokens)

@@ -454,6 +454,29 @@ defmodule Cure.Compiler.Printer do
     end
   end
 
+  defp to_string({:proof_chain, _meta, [first | steps]}, depth, indent) do
+    first_pad = String.duplicate(indent, depth + 1)
+    relation_pad = String.duplicate(indent, depth + 2)
+    step_pad = String.duplicate(indent, depth + 1)
+
+    rendered_steps =
+      steps
+      |> Enum.with_index()
+      |> Enum.map(fn {{:proof_step, _step_meta, [_marker, right, justification]}, index} ->
+        right = render(right, depth + 2, indent)
+        because = render(justification, depth + 2, indent)
+
+        if index == 0 do
+          "#{relation_pad}== #{right}\n#{relation_pad}because #{because}"
+        else
+          "#{step_pad}_ == #{right}\n#{relation_pad}because #{because}"
+        end
+      end)
+      |> Enum.join("\n\n")
+
+    "proof chain\n#{first_pad}#{render(first, depth + 1, indent)}\n#{rendered_steps}"
+  end
+
   # -- Conditional -----------------------------------------------------------
 
   defp to_string({:conditional, _meta, [condition, then_br, else_br]}, depth, indent) do

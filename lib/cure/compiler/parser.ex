@@ -41,6 +41,7 @@ defmodule Cure.Compiler.Parser do
   alias Cure.Compiler.Parser.Range
   alias Cure.MetaAST.Metadata
   alias Cure.MetaAST.SourceInfo
+  alias Cure.Diagnostic.ProofChainSyntaxProblem
   alias Cure.Pipeline.Events
 
   # -- Parser State ----------------------------------------------------------
@@ -2803,8 +2804,14 @@ defmodule Cure.Compiler.Parser do
           # an ordinary identifier. The lexer deliberately does not decide.
           "proof" ->
             case peek_at(state, 1) do
-              %Token{type: :identifier} -> parse_proof_container(state)
-              _ -> {variable(token), advance(state)}
+              %Token{type: :identifier, value: "chain"} ->
+                if proof_chain_boundary?(state), do: parse_proof_chain(state), else: {variable(token), advance(state)}
+
+              %Token{type: :identifier} ->
+                parse_proof_container(state)
+
+              _ ->
+                {variable(token), advance(state)}
             end
 
           # `precedencegroup Name` (Phase 3, contextual): declares a precedence
@@ -3048,6 +3055,216 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
     {body, state} = parse_expr(state, 0)
     {{:rewrite_expr, [line: token.line, col: token.col], [proof, body]}, state}
+  end
+
+  # -- Equational proof chains ----------------------------------------------
+
+  defp proof_chain_boundary?(state) do
+    match?(%Token{type: :newline}, peek_at(state, 2))
+  end
+
+  defp parse_proof_chain(state) do
+    proof_token = peek(state)
+    state = state |> advance() |> advance() |> skip_newlines()
+
+    case peek(state) do
+      %Token{type: :indent} ->
+        state = advance(state) |> skip_newlines()
+        {first, state} = parse_expr(state, bp_above(state, "=="))
+        state = reject_first_chain_previous(state, first, proof_token)
+        state = skip_newlines(state)
+        {steps, state} = parse_proof_chain_steps(state, [], true, ast_source_span(first))
+        state = expect_dedent(state)
+        meta = proof_chain_source_info([line: proof_token.line, col: proof_token.col], proof_token, first, steps)
+        {{:proof_chain, meta, [first | steps]}, state}
+
+      token ->
+        problem = %ProofChainSyntaxProblem{
+          kind: :empty_chain,
+          construct: proof_token.span,
+          observed: token.type,
+          expected: :first_expression
+        }
+
+        state = add_error(state, {:proof_chain_syntax, problem})
+        {{:proof_chain, [line: proof_token.line, col: proof_token.col], []}, state}
+    end
+  end
+
+  defp parse_proof_chain_steps(state, acc, first?, previous_span) do
+    state = skip_newlines(state)
+
+    case peek(state) do
+      %Token{type: :indent} when first? ->
+        state = advance(state) |> skip_newlines()
+        {step, state} = parse_proof_chain_step(state, :implicit)
+        state = state |> skip_newlines() |> expect_dedent() |> skip_newlines()
+        parse_proof_chain_steps(state, [step | acc], false, proof_step_right_span(step))
+
+      %Token{type: :identifier, value: "_"} ->
+        {step, state} = parse_proof_chain_step(state, :continuation)
+        parse_proof_chain_steps(state, [step | acc], false, proof_step_right_span(step))
+
+      _ ->
+        if acc == [] do
+          token = peek(state)
+
+          problem = %ProofChainSyntaxProblem{
+            kind: :missing_relation,
+            step: previous_span,
+            observed: token.type,
+            expected: :equality_step
+          }
+
+          state = add_error(state, {:proof_chain_syntax, problem})
+          {[], state}
+        else
+          {Enum.reverse(acc), state}
+        end
+    end
+  end
+
+  defp proof_step_right_span({:proof_step, _meta, [_marker, right, _justification]}), do: ast_source_span(right)
+
+  defp parse_proof_chain_step(state, marker_kind) do
+    {marker, relation_token, state} =
+      case marker_kind do
+        :implicit ->
+          token = peek(state)
+          {{:proof_chain_previous, [implicit: true, line: token.line, col: token.col], []}, token, state}
+
+        :continuation ->
+          token = peek(state)
+          marker = {:proof_chain_previous, put_token_source_info([line: token.line, col: token.col], token), []}
+          {marker, peek_at(state, 1), advance(state)}
+      end
+
+    state =
+      case peek(state) do
+        %Token{type: :eq} ->
+          advance(state)
+
+        token ->
+          problem = %ProofChainSyntaxProblem{
+            kind: :missing_relation,
+            step: token.span,
+            observed: token.type,
+            expected: :eq,
+            insertion: token.span
+          }
+
+          add_error(state, {:proof_chain_syntax, problem})
+      end
+
+    state = skip_newlines(state)
+
+    {right, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "because"} = token ->
+          problem = %ProofChainSyntaxProblem{
+            kind: :missing_right_side,
+            step: token.span,
+            observed: :because,
+            expected: :expression,
+            insertion: token.span
+          }
+
+          {{:variable, [line: token.line, col: token.col], "_missing_chain_endpoint"},
+           add_error(state, {:proof_chain_syntax, problem})}
+
+        _ ->
+          parse_expr(state, bp_above(state, "=="))
+      end
+
+    state = skip_newlines(state)
+
+    {nested_because?, state} =
+      case peek(state) do
+        %Token{type: :indent} -> {true, advance(state) |> skip_newlines()}
+        _ -> {false, state}
+      end
+
+    {because_token, state} =
+      case peek(state) do
+        %Token{type: :identifier, value: "because"} = token ->
+          {token, advance(state)}
+
+        token ->
+          problem = %ProofChainSyntaxProblem{
+            kind: :missing_because,
+            step: ast_source_span(right),
+            observed: token.type,
+            expected: :because,
+            insertion: token.span
+          }
+
+          {token, add_error(state, {:proof_chain_syntax, problem})}
+      end
+
+    state = skip_newlines(state)
+    {justification, state} = parse_expr_or_block(state)
+    state = if nested_because?, do: state |> skip_newlines() |> expect_dedent(), else: state
+
+    meta =
+      [line: relation_token.line, col: relation_token.col]
+      |> proof_step_source_info(marker, right, justification, relation_token, because_token)
+
+    {{:proof_step, meta, [marker, right, justification]}, state}
+  end
+
+  defp reject_first_chain_previous(state, {:variable, meta, "_"}, proof_token) do
+    problem = %ProofChainSyntaxProblem{
+      kind: :first_step_previous,
+      construct: proof_token.span,
+      step: ast_source_span({:variable, meta, "_"}),
+      observed: :previous,
+      expected: :first_expression
+    }
+
+    add_error(state, {:proof_chain_syntax, problem})
+  end
+
+  defp reject_first_chain_previous(state, _first, _proof_token), do: state
+
+  defp proof_chain_source_info(meta, %Token{span: first}, first_expr, steps) do
+    last = List.last(steps) || first_expr
+
+    case {first, ast_source_span(last)} do
+      {%Cure.Diagnostic.Span{} = start, %Cure.Diagnostic.Span{} = finish} ->
+        case Range.through(start, finish) do
+          {:ok, whole} -> Keyword.put(meta, :source_info, %SourceInfo{whole: whole, body: ast_source_span(first_expr)})
+          _ -> meta
+        end
+
+      _ ->
+        meta
+    end
+  end
+
+  defp proof_step_source_info(meta, marker, right, justification, relation, because) do
+    marker_span = ast_source_span(marker)
+    right_span = ast_source_span(right)
+    spans = [marker_span, right_span, ast_source_span(justification)] |> Enum.reject(&is_nil/1)
+
+    case spans do
+      [] ->
+        meta
+
+      _ ->
+        with %Token{span: %Cure.Diagnostic.Span{} = rel_span} <- relation,
+             %Token{span: %Cure.Diagnostic.Span{} = because_span} <- because,
+             {:ok, whole} <- Range.through(marker_span || rel_span, List.last(spans)) do
+          Keyword.put(meta, :source_info, %SourceInfo{
+            whole: whole,
+            operator: rel_span,
+            body: ast_source_span(justification),
+            operands: Enum.reject([marker_span, right_span], &is_nil/1),
+            opener: because_span
+          })
+        else
+          _ -> meta
+        end
+    end
   end
 
   # -- Pin Operator (pattern position) ---------------------------------------

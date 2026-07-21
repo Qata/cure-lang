@@ -56,6 +56,49 @@ defmodule Cure.Diagnostic.ExpectationOrigin do
         }
 end
 
+defmodule Cure.Diagnostic.ProofChainSyntaxProblem do
+  @moduledoc "Structured syntax failure for an equational proof chain."
+  @enforce_keys [:kind]
+  defstruct [:kind, :construct, :step, :observed, :expected, :insertion]
+
+  @type t :: %__MODULE__{
+          kind: atom(),
+          construct: Cure.Diagnostic.Span.t() | nil,
+          step: Cure.Diagnostic.Span.t() | nil,
+          observed: term(),
+          expected: term(),
+          insertion: Cure.Diagnostic.Span.t() | nil
+        }
+end
+
+defmodule Cure.Diagnostic.ProofChainMismatchProblem do
+  @moduledoc "Structured typing failure for an equational proof-chain step."
+  @enforce_keys [:kind, :step_index]
+  defstruct [
+    :kind,
+    :step_index,
+    :previous_step,
+    :current_step,
+    :justification,
+    :expected,
+    :actual,
+    :cause,
+    :residual_goal
+  ]
+
+  @type t :: %__MODULE__{
+          kind: atom(),
+          step_index: non_neg_integer(),
+          previous_step: Cure.Diagnostic.Span.t() | nil,
+          current_step: Cure.Diagnostic.Span.t() | nil,
+          justification: Cure.Diagnostic.Span.t() | nil,
+          expected: term(),
+          actual: term(),
+          cause: term(),
+          residual_goal: term()
+        }
+end
+
 defmodule Cure.Diagnostic.TypeProblem do
   @moduledoc "A contextual type disagreement independent of presentation."
 
