@@ -10830,7 +10830,7 @@ defmodule Cure.Compiler.Parser do
       _ ->
         clause_start = peek(state)
         {point, state} = parse_explain_point(state)
-        state = expect(state, :fat_arrow)
+        state = expect_explain_clause_arrow(state, clause_start)
         state = skip_macro_trivia(state)
         {body, state} = parse_expr(state, 0)
 
@@ -10842,6 +10842,46 @@ defmodule Cure.Compiler.Parser do
         }
 
         parse_explain_clauses(state, [clause | acc])
+    end
+  end
+
+  defp expect_explain_clause_arrow(state, clause_start) do
+    case expect_token(state, :fat_arrow) do
+      {:ok, _arrow, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        point_span =
+          case authored_token(next_state) do
+            %Token{span: last_span} ->
+              case Range.through(clause_start.span, last_span) do
+                {:ok, span} -> span
+                _ -> clause_start.span
+              end
+
+            _ ->
+              clause_start.span
+          end
+
+        error =
+          {:branch_arrow_missing,
+           %{
+             family: :explain_clause,
+             expected: :fat_arrow,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: clause_start.span,
+             previous_span: point_span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
     end
   end
 
