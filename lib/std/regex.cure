@@ -1,0 +1,50 @@
+@group(:text)
+mod Std.Regex
+  ## Dependently typed regular expressions.
+  ##
+  ## This module is intentionally a new implementation. It does not contain the
+  ## deleted unindexed Regex tree, runtime pattern parser, or suffix-list matcher.
+  ## The first checked layer is the closed universe describing the value produced
+  ## by a successful typed parse.
+
+  use Std.Option
+
+  ## Cure does not otherwise expose a general-purpose Either in the current
+  ## prelude. Keep the branch witness local to the typed regex result universe;
+  ## alternatives preserve which branch accepted.
+  type Choice(left: Type, right: Type) =
+    | ChoseLeft(left)
+    | ChoseRight(right)
+
+  type ShapeCode =
+    | UnitC
+    | CharC
+    | StringC
+    | BoolC
+    | IntC
+    | PairC(ShapeCode, ShapeCode)
+    | ChoiceC(ShapeCode, ShapeCode)
+    | OptionC(ShapeCode)
+    | ListC(ShapeCode)
+
+  ## Genuine large elimination: each value-level shape computes to its Cure
+  ## result type. No runtime tag, Dynamic value, cast, or postulate is involved.
+  fn Sem(shape: ShapeCode) -> Type = match shape
+    UnitC -> Unit
+    CharC -> Char
+    StringC -> String
+    BoolC -> Bool
+    IntC -> Int
+    PairC(left, right) -> Tuple(Sem(left), Sem(right))
+    ChoiceC(left, right) -> Choice(Sem(left), Sem(right))
+    OptionC(inner) -> Option(Sem(inner))
+    ListC(inner) -> List(Sem(inner))
+
+  ## Phase-1 reduction witnesses. These bodies only check if Sem computes at
+  ## constructor applications rather than behaving as an opaque type function.
+  fn sem_unit_witness() -> Sem(UnitC) = ()
+
+  fn sem_char_witness(value: Char) -> Sem(CharC) = value
+
+  fn sem_nested_witness(value: Char) -> Sem(PairC(CharC, ListC(UnitC))) =
+    %[value, [(), ()]]
