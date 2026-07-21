@@ -1364,7 +1364,7 @@ defmodule Cure.Diagnostic.Adapter do
         kind: :unexpected_token,
         expected: expected,
         observed: actual,
-        at: span,
+        at: Keyword.get(opts, :span, span),
         context: %{line: line, column: column}
       },
       opts
@@ -1390,7 +1390,7 @@ defmodule Cure.Diagnostic.Adapter do
         kind: :unexpected_token,
         expected: expected,
         observed: if(is_nil(actual_value), do: actual_type, else: actual_value),
-        at: span,
+        at: Keyword.get(opts, :span, span),
         context: %{line: line, column: column, token_type: actual_type}
       },
       opts
