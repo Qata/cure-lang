@@ -2342,6 +2342,14 @@ defmodule Cure.Elab.Declarations do
       Keyword.get(fmeta, :function_type) ->
         arrow_to_pi(args, scope, fam, env)
 
+      Keyword.fetch!(fmeta, :name) == "Tuple" ->
+        build_telescope_type(
+          Enum.zip(List.duplicate("_", length(args)), args),
+          scope,
+          fam,
+          env
+        )
+
       Keyword.fetch!(fmeta, :name) == "Effect" ->
         lower_effect_former(args, scope, fam, env, ctx)
 

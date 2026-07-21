@@ -108,4 +108,17 @@ defmodule Cure.Elab.LargeEliminationTest do
 
     assert {:ok, _env} = Program.elaborate(src)
   end
+
+  test "a tuple type lowers when nested as a dependent family index" do
+    src = """
+    mod LETupleIndex
+      type Box indices (content: Type)
+        boxed : Box(content)
+
+      fn witness() -> Box(Tuple(Int, Bool)) = boxed()
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(src)
+  end
 end
