@@ -176,6 +176,20 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
+  # In a Type-returning expression body the parser represents `Tuple(A, B)` as
+  # an ordinary call rather than the annotation-only `:tuple_type` node. Lower
+  # it through the canonical tuple-type path and synthesize `Type`, just as we
+  # already do for first-class primitive and inductive types.
+  defp elaborate_named_call([{:name, "Tuple"} | _], args, names, ctx, env) do
+    tuple_ast =
+      {:tuple_type, [arity: length(args), binders: List.duplicate("_", length(args))], args}
+
+    with {:ok, term} <- elaborate_type(tuple_ast, names, env),
+         {:ok, type} <- Kernel.infer(ctx, term) do
+      {:ok, term, type}
+    end
+  end
+
   defp elaborate_named_call(meta, args, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
@@ -968,7 +982,7 @@ defmodule Cure.Elab.Elaborator do
   # nullary `unit` constructor of the seeded `Unit` family; the same node emit
   # already understands as the empty-telescope terminator.
   def elaborate_expr_typed({:unit_value, _meta}, _names, _ctx, env) do
-    {:ok, {:ctor, unit_ctor_name(env), []}, {:data, unit_family_name(env), [], []}}
+    {:ok, {:ctor, unit_ctor_name(env), []}, {:vdata, unit_family_name(env), []}}
   end
 
   def elaborate_expr_typed({:list, _, _} = node, names, ctx, env),
@@ -3505,6 +3519,7 @@ defmodule Cure.Elab.Elaborator do
     # no `:list` node survives. One-deep only; a nested list pattern desugars to a
     # nested ctor pattern that `constructor_pattern/1` rejects (:nested_constructor_arg).
     arms0 = arms0 |> desugar_list_patterns() |> desugar_typed_constructor_args()
+    {scrut_expr, arms0} = desugar_single_refutable_tuple_column(scrut_expr, arms0)
     {scrut_expr, arms0} = desugar_tuple_scrutinee(scrut_expr, arms0)
 
     if hoist_named_default?(scrut_expr, arms0) do
@@ -4970,6 +4985,101 @@ defmodule Cure.Elab.Elaborator do
   defp strip_tuple_args_in_ctor(other), do: {:ok, other, []}
 
   # --- tuple-scrutinee matching (parity #6) ----------------------------------
+  # Multi-parameter function clauses are represented as a match over a flat
+  # tuple of arguments. When exactly one parameter column contains structural
+  # patterns, project that column and turn the rows into an ordinary
+  # single-scrutinee match. The other columns are irrefutable variables or
+  # wildcards; substitute their tuple projections into each body. This preserves
+  # source-order fallthrough and lets the existing List/constructor/literal
+  # match machinery handle the selected column without teaching tuple matching
+  # every data family.
+  defp desugar_single_refutable_tuple_column(
+         {:variable, _meta, _name} = scrut,
+         [{:match_arm, _, _} | _] = arms
+       ) do
+    with {:ok, rows, arity} <- flat_tuple_rows(arms),
+         [column] <- refutable_tuple_columns(rows, arity),
+         projections = Enum.map(1..arity, &tuple_proj(scrut, Integer.to_string(&1))),
+         {:ok, projected_arms} <- project_tuple_column_rows(rows, projections, column) do
+      {tuple_proj(scrut, Integer.to_string(column + 1)), desugar_list_patterns(projected_arms)}
+    else
+      _ -> {scrut, arms}
+    end
+  end
+
+  defp desugar_single_refutable_tuple_column(
+         {:tuple, _meta, elems} = scrut,
+         [{:match_arm, _, _} | _] = arms
+       )
+       when length(elems) >= 2 do
+    with {:ok, rows, arity} <- flat_tuple_rows(arms),
+         true <- arity == length(elems),
+         true <- Enum.all?(elems, &match?({:variable, _, _}, &1)),
+         [column] <- refutable_tuple_columns(rows, arity),
+         {:ok, projected_arms} <- project_tuple_column_rows(rows, elems, column) do
+      {Enum.at(elems, column), desugar_list_patterns(projected_arms)}
+    else
+      _ -> {scrut, arms}
+    end
+  end
+
+  defp desugar_single_refutable_tuple_column(scrut, arms), do: {scrut, arms}
+
+  defp flat_tuple_rows(arms) do
+    Enum.reduce_while(arms, {:ok, [], nil}, fn
+      {:match_arm, meta, body}, {:ok, rows, arity} ->
+        case Keyword.fetch!(meta, :pattern) do
+          {:tuple, _tm, pats} when length(pats) >= 2 and (is_nil(arity) or length(pats) == arity) ->
+            {:cont, {:ok, rows ++ [{pats, meta, body}], length(pats)}}
+
+          _ ->
+            {:halt, :not_applicable}
+        end
+
+      _other, _acc ->
+        {:halt, :not_applicable}
+    end)
+  end
+
+  defp refutable_tuple_columns(rows, arity) do
+    Enum.filter(0..(arity - 1), fn column ->
+      Enum.any?(rows, fn {pats, _meta, _body} -> not catchall_pat?(Enum.at(pats, column)) end)
+    end)
+  end
+
+  defp project_tuple_column_rows(rows, projections, selected) do
+    Enum.reduce_while(rows, {:ok, []}, fn {pats, meta, body}, {:ok, acc} ->
+      other_refutable? =
+        pats
+        |> Enum.with_index()
+        |> Enum.any?(fn {pat, column} -> column != selected and not catchall_pat?(pat) end)
+
+      if other_refutable? do
+        {:halt, :not_applicable}
+      else
+        subs =
+          pats
+          |> Enum.with_index(1)
+          |> Enum.flat_map(fn
+            {{:variable, _m, "_"}, _column} -> []
+            {{:variable, _m, name}, column} -> [{name, Enum.at(projections, column - 1)}]
+            {_structural, _column} -> []
+          end)
+
+        b = single_body(body)
+
+        if binds_any?(b, Enum.map(subs, &elem(&1, 0))) do
+          {:halt, {:error, {:unsupported_pattern, :shadowed_tuple}}}
+        else
+          b2 = Enum.reduce(subs, b, fn {name, replacement}, expr -> subst_surface_var(expr, name, replacement) end)
+          selected_pat = Enum.at(pats, selected)
+          meta2 = Keyword.put(meta, :pattern, selected_pat)
+          {:cont, {:ok, acc ++ [{:match_arm, meta2, [b2]}]}}
+        end
+      end
+    end)
+  end
+
   #
   # `match %[e₀, e₁, …] | %[p₀, p₁, …] -> body` (simultaneous / Idris'
   # `case (e₀, e₁) of`) is desugared, ONE column at a time, into a nested
@@ -9656,6 +9766,19 @@ defmodule Cure.Elab.Elaborator do
   defp unit_family_name(env), do: Env.resolve_key(env, env.families, :Unit)
 
   defp unit_ctor_name(env), do: Env.resolve_key(env, env.ctors, :unit)
+
+  # `Tuple(A, B, ...)` is parsed as a dedicated `:tuple_type` in annotation
+  # position, but as an ordinary call when it occurs in the body of a
+  # Type-returning function. Types are first-class there too: route the call
+  # through the same tuple-type lowering used by annotations instead of trying
+  # to resolve a nonexistent runtime value named `Tuple`.
+  defp elaborate_named_call_scoped([{:name, "Tuple"} | _], args, scope, env) do
+    elaborate_type(
+      {:tuple_type, [arity: length(args), binders: List.duplicate("_", length(args))], args},
+      scope,
+      env
+    )
+  end
 
   defp elaborate_named_call_scoped(meta, args, scope, env) do
     name = Keyword.fetch!(meta, :name)
