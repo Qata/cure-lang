@@ -710,7 +710,7 @@ defmodule Cure.Elab.Declarations do
       branch_patterns: branch_patterns(expression)
     }
 
-    outer_context = declaration_expectation_context(expression, outer_context)
+    outer_context = declaration_expectation_context(expression, reason, outer_context)
 
     case reason do
       {:source_context, nested_reason, nested_context} when is_map(nested_context) ->
@@ -727,12 +727,17 @@ defmodule Cure.Elab.Declarations do
 
   defp attach_source_context(result, _expression, _checking), do: result
 
-  defp declaration_expectation_context({:function_call, meta, _args}, context) when is_list(meta) do
+  defp declaration_expectation_context({:function_call, meta, _args}, reason, context)
+       when is_list(meta) do
     {origin, owner} =
-      if Keyword.has_key?(meta, :callee) do
-        {:application, declaration_application_owner(meta)}
+      if implicit_failure?(reason) do
+        {:implicit, Keyword.get(meta, :name, context.checking)}
       else
-        {:call_result, Keyword.get(meta, :name, context.checking)}
+        if Keyword.has_key?(meta, :callee) do
+          {:application, declaration_application_owner(meta)}
+        else
+          {:call_result, Keyword.get(meta, :name, context.checking)}
+        end
       end
 
     Map.merge(context, %{
@@ -742,7 +747,14 @@ defmodule Cure.Elab.Declarations do
     })
   end
 
-  defp declaration_expectation_context(_expression, context), do: context
+  defp declaration_expectation_context(_expression, _reason, context), do: context
+
+  defp implicit_failure?({:source_context, reason, _context}), do: implicit_failure?(reason)
+
+  defp implicit_failure?({kind, _details}) when kind in [:unsolved_metavariables, :no_instance], do: true
+  defp implicit_failure?({:no_instance, _interface, _head}), do: true
+  defp implicit_failure?({:no_named_instance, _name}), do: true
+  defp implicit_failure?(_reason), do: false
 
   defp declaration_application_owner(meta) do
     case Keyword.get(meta, :callee) do
