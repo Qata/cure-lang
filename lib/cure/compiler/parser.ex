@@ -371,7 +371,7 @@ defmodule Cure.Compiler.Parser do
                prelude_macros: false,
                builtin_macros: builtin_macros
              ) do
-        Map.merge(acc, harvest_literal_macros(ast), fn _k, v1, v2 -> v1 ++ v2 end)
+        Map.merge(acc, harvest_literal_macros(ast, path), fn _k, v1, v2 -> v1 ++ v2 end)
       else
         _ -> acc
       end
@@ -525,13 +525,18 @@ defmodule Cure.Compiler.Parser do
 
   # Sibling of harvest_active_macros for Tier-1 `literal` rules, keyed by their
   # dispatch suffix. Malformed literal rules (no suffix) are skipped.
-  defp harvest_literal_macros(exprs) do
+  defp harvest_literal_macros(exprs, source_path \\ nil) do
     exprs
     |> collect_macro_defs_with_scope()
     |> Enum.reduce(%{}, fn {:macro_def, _meta, rules}, acc ->
       Enum.reduce(rules, acc, fn
         %{kind: :literal, suffix: s} = rule, acc2 when is_binary(s) ->
-          Map.update(acc2, s, [rule], &(&1 ++ [rule]))
+          tagged = if source_path, do: Map.put(rule, :source_path, source_path), else: rule
+          Map.update(acc2, s, [tagged], &(&1 ++ [tagged]))
+
+        %{kind: :computed_literal, token_kind: kind} = rule, acc2 when is_atom(kind) ->
+          tagged = if source_path, do: Map.put(rule, :source_path, source_path), else: rule
+          Map.update(acc2, {:token, kind}, [tagged], &(&1 ++ [tagged]))
 
         _rule, acc2 ->
           acc2
@@ -2765,7 +2770,7 @@ defmodule Cure.Compiler.Parser do
         {literal(:symbol, token), advance(state)}
 
       :regex ->
-        {regex_literal_macro(token), advance(state)}
+        maybe_token_literal_macro(advance(state), token)
 
       :char ->
         {literal(:char, token), advance(state)}
@@ -3152,6 +3157,42 @@ defmodule Cure.Compiler.Parser do
         {:literal, [subtype: :string, line: line, col: col], flags}
       ]
     }
+  end
+
+  # A source-defined computed `literal regex ...` rule receives the regex token's
+  # opaque body and flags as two ordinary string-literal children. The parser
+  # knows only the token class; grammar, options, result shape, and expansion all
+  # belong to the rule's Cure expander. If no rule is registered, retain the
+  # legacy call-shaped node as a recovery form so parsing remains total.
+  defp maybe_token_literal_macro(state, %Token{type: type, value: {body, flags}} = token) do
+    case Map.get(state.literal_macros, {:token, type}, []) do
+      [rule | _] ->
+        pattern = literal(:string, %Token{token | type: :string, value: body})
+        options = literal(:string, %Token{token | type: :string, value: flags})
+        input = {:macro_input, [keyword: Atom.to_string(type)], [pattern, options]}
+
+        meta =
+          [
+            keyword: Atom.to_string(type),
+            syntax_fields: ["pattern", "flags"],
+            syntax_field_types: %{},
+            file: state.file,
+            line: token.line,
+            col: token.col
+          ]
+          |> put_expansion_context(state.expansion_context)
+          |> then(fn meta ->
+            case Map.get(rule, :source_path) do
+              nil -> meta
+              home -> Keyword.put(meta, :home_source, home)
+            end
+          end)
+
+        {{:computed_use, meta, [rule.elab, input]}, state}
+
+      [] ->
+        {regex_literal_macro(token), state}
+    end
   end
 
   defp variable(token) do
@@ -8635,26 +8676,59 @@ defmodule Cure.Compiler.Parser do
 
     {segments, state} = parse_rule_segments(state, [])
 
-    state =
-      case peek(state) do
-        %Token{type: :identifier, value: "becomes"} -> advance(state)
-        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col})
-      end
+    case peek(state) do
+      %Token{type: :identifier, value: "computed"} ->
+        state = advance(state)
 
-    {template, state} = parse_expr(state, 0)
+        state =
+          case peek(state) do
+            %Token{type: :identifier, value: "directly"} -> advance(state)
+            _ -> state
+          end
 
-    rule = %{
-      kind: :literal,
-      keyword: nil,
-      segments: segments,
-      suffix: literal_suffix(segments),
-      template: template,
-      progress: nil,
-      line: kw_token.line,
-      source_span: macro_rule_source_span(kw_token, state)
-    }
+        state =
+          case peek(state) do
+            %Token{type: :identifier, value: "by"} -> advance(state)
+            t -> add_error(state, {:expected, :by, :got, t.type, t.line, t.col})
+          end
 
-    {rule, state}
+        {elab, state} = parse_expr(state, 0)
+
+        rule = %{
+          kind: :computed_literal,
+          keyword: nil,
+          token_kind: literal_token_kind(segments),
+          segments: segments,
+          elab: elab,
+          progress: nil,
+          line: kw_token.line,
+          source_span: macro_rule_source_span(kw_token, state)
+        }
+
+        {rule, state}
+
+      _ ->
+        state =
+          case peek(state) do
+            %Token{type: :identifier, value: "becomes"} -> advance(state)
+            t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col})
+          end
+
+        {template, state} = parse_expr(state, 0)
+
+        rule = %{
+          kind: :literal,
+          keyword: nil,
+          segments: segments,
+          suffix: literal_suffix(segments),
+          template: template,
+          progress: nil,
+          line: kw_token.line,
+          source_span: macro_rule_source_span(kw_token, state)
+        }
+
+        {rule, state}
+    end
   end
 
   # The dispatch suffix is the first literal segment following the leading
@@ -8663,6 +8737,9 @@ defmodule Cure.Compiler.Parser do
   # skips it, Task 2); T4 does not diagnose that (error-floor task).
   defp literal_suffix([{:hole, _}, {:lit, s} | _]), do: s
   defp literal_suffix(_), do: nil
+
+  defp literal_token_kind([{:lit, name} | _]) when is_binary(name), do: String.to_atom(name)
+  defp literal_token_kind(_), do: nil
 
   # `explain` <INDENT> (<point> => <message>)+ <DEDENT> — the author's failure
   # descriptions (self-proving §3.2). Attached to the macro_def as one entry;
