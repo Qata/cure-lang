@@ -8075,13 +8075,16 @@ defmodule Cure.Compiler.Parser do
   # nothing downstream consumes them, and the static `Precedence` table still
   # governs how expressions bind.
 
-  # True at the distinctive `<op> :` shape a fixity declaration takes, so
-  # `infix`/`prefix`/`postfix` are promoted only there and stay ordinary
-  # identifiers everywhere else (`prefix + 1`, `prefix: x`, a bare `infix`).
+  # True at the distinctive `<op> : Group` shape a fixity declaration takes.
+  # The missing-colon spelling `<op> Group` is also recognized so it can receive
+  # the declaration-specific repair; `prefix + 1`, `prefix: x`, and a bare
+  # `infix` still remain ordinary identifiers.
   defp fixity_decl_ahead?(state) do
     op = peek_at(state, 1)
-    colon = peek_at(state, 2)
-    op != nil and colon != nil and colon.type == :colon and fixity_op_token?(op)
+    separator_or_group = peek_at(state, 2)
+
+    op != nil and separator_or_group != nil and
+      separator_or_group.type in [:colon, :identifier] and fixity_op_token?(op)
   end
 
   # An operator lexeme is any symbolic-operator token or a word/backtick
@@ -8107,7 +8110,7 @@ defmodule Cure.Compiler.Parser do
     lexeme = fixity_lexeme(op_token)
     state = advance(state)
 
-    state = expect(state, :colon)
+    state = expect_fixity_colon(state, kw, op_token, fixity, lexeme)
 
     {group, state} =
       case peek(state) do
@@ -8126,6 +8129,36 @@ defmodule Cure.Compiler.Parser do
     meta = put_fixity_source_info(meta, kw, op_token, state)
 
     {{:fixity, meta, []}, state}
+  end
+
+  defp expect_fixity_colon(state, keyword_token, operator_token, fixity, operator) do
+    case expect_token(state, :colon) do
+      {:ok, _colon, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :fixity_colon_missing,
+             family: fixity,
+             declaration: operator,
+             expected: :colon,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: keyword_token.span,
+             previous_span: operator_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
+    end
   end
 
   defp put_fixity_source_info(meta, %Token{} = first, %Token{} = operator, state) do

@@ -86,4 +86,42 @@ defmodule Cure.Compiler.DeclarationSeparatorDiagnosticTest do
     assert {insertion.start_line, insertion.start_column} == {2, 8}
     assert insertion.start_byte == insertion.end_byte
   end
+
+  test "a fixity declaration gets an exact colon insertion without stealing ordinary prefix expressions" do
+    source = "precedencegroup Custom\n  associativity: left\ninfix `<?>` Custom\n"
+    {error, {diagnostic, registry}} = diagnostic(source, "fixity_colon.cure")
+
+    assert {:declaration_separator_missing,
+            %{
+              kind: :fixity_colon_missing,
+              family: :infix,
+              declaration: "<?>"
+            }} = error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- FIXITY DECLARATION NEEDS A COLON [E094] ------------------- fixity_colon.cure
+
+             The `infix` declaration for `<?>` needs `:` between the operator and its
+             precedence group.
+
+             A valid continuation here starts with ':'.
+
+             at fixity_colon.cure:3:13
+             3 | infix `<?>` Custom
+               | ----- ----- ^ this starts the fixity declaration; this is the operator being declared; insert `:` before this precedence group
+
+             Hint: Insert `:` before the precedence group
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ": ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column} == {3, 13}
+    assert insertion.start_byte == insertion.end_byte
+
+    ordinary = "fn keep(prefix: Int) -> Int = prefix + 1\n"
+    {:ok, tokens} = Lexer.tokenize(ordinary, emit_events: false)
+    assert {:ok, _ast} = Parser.parse(tokens, emit_events: false)
+  end
 end

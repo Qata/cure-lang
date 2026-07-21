@@ -2502,6 +2502,7 @@ defmodule Cure.Diagnostic.Adapter do
         expected: :arrow,
         observed: Map.get(details, :observed),
         at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
         previous: Map.get(details, :previous_span),
         context: details
       },
@@ -2546,6 +2547,7 @@ defmodule Cure.Diagnostic.Adapter do
         expected: Map.get(details, :expected),
         observed: Map.get(details, :observed),
         at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :opener_span),
         previous: Map.get(details, :previous_span),
         context: details
       },
@@ -5087,6 +5089,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :record_field_colon_missing}),
     do: "Record field needs a colon"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :fixity_colon_missing}),
+    do: "Fixity declaration needs a colon"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5361,6 +5366,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{declaration: field, family: record}
        }),
        do: "The field `#{field}` in record `#{record}` needs `:` between its name and declared type."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :fixity_colon_missing,
+         context: %{declaration: operator, family: fixity}
+       }),
+       do: "The `#{fixity}` declaration for `#{operator}` needs `:` between the operator and its precedence group."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
@@ -5706,6 +5717,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :record_field_colon_missing}),
     do: "insert `:` before this field type"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :fixity_colon_missing}),
+    do: "insert `:` before this precedence group"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -5976,6 +5990,25 @@ defmodule Cure.Diagnostic.Adapter do
        )
        when previous != primary_span,
        do: [%Label{span: previous, style: :secondary, message: "this is the record field name"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :fixity_colon_missing,
+           opener: %Span{} = opener,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this starts the fixity declaration"),
+      pickup_label(previous, :secondary, "this is the operator being declared")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
 
   defp syntax_secondary_labels(
          %SyntaxProblem{
@@ -6338,6 +6371,20 @@ defmodule Cure.Diagnostic.Adapter do
     [
       %Suggestion{
         message: "Insert `:` before the field type",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :fixity_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the precedence group",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: ": "}]
       }
