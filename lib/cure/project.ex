@@ -765,7 +765,7 @@ defmodule Cure.Project do
       case Cure.Compiler.prepare_files(discovered) do
         {:ok, %{ordered: ordered, providers: providers, cycles: cycles}} ->
           Enum.each(cycles, fn walk ->
-            Logger.warning(Cure.Diagnostic.Host.render({:import_cycle, walk}, project.root))
+            Logger.warning(render_host_diagnostic({:import_cycle, walk}, project.root))
           end)
 
           {{:ok, ordered}, providers}
@@ -790,6 +790,13 @@ defmodule Cure.Project do
          :ok <- maybe_write_app_resource(app_info, modules, project, output_dir) do
       {:ok, %{modules: modules, app_module: app_module(app_info)}}
     end
+  end
+
+  defp render_host_diagnostic(reason, path) do
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path)
+
+    Cure.Diagnostic.Sink.new(format: :plain, color: :never, width: 80, registry: registry)
+    |> Cure.Diagnostic.Sink.render(diagnostic)
   end
 
   @doc false

@@ -57,7 +57,7 @@ defmodule Mix.Tasks.Cure.Compile do
          ) do
       {:ok, summary} ->
         Enum.each(summary.cycles, fn walk ->
-          Mix.shell().info(Cure.Diagnostic.Host.render({:import_cycle, walk}, path))
+          Mix.shell().error(render_host_diagnostic({:import_cycle, walk}, path))
         end)
 
         Mix.shell().info(
