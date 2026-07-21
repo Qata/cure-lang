@@ -159,8 +159,7 @@ defmodule Cure.CLI do
         # offender and fail, not fall through to the generic catch-all (which
         # would bind `unknown = "deps"`, blame a valid command, and exit 0).
         ["deps" | rest] ->
-          error("Unknown deps subcommand: #{Enum.join(rest, " ")}. Known: update, tree.")
-          exit({:shutdown, 1})
+          usage_error("Unknown deps subcommand: #{Enum.join(rest, " ")}. Known: update, tree.")
 
         ["test"] ->
           cmd_test(opts)
@@ -256,8 +255,7 @@ defmodule Cure.CLI do
         # must give a keys-specific usage error and fail — not fall through to the
         # generic catch-all, which would misblame `keys` as an unknown command.
         ["keys" | _rest] ->
-          error("Usage: cure keys generate <handle> | cure keys list")
-          exit({:shutdown, 1})
+          usage_error("Usage: cure keys generate <handle> | cure keys list")
 
         ["release" | rest] ->
           cmd_release(rest, opts)
@@ -322,8 +320,7 @@ defmodule Cure.CLI do
   # -- replay (v0.28.0) --------------------------------------------------------
 
   defp cmd_replay([], _opts) do
-    error("Usage: cure replay <path.journal> [--module ModuleName] [--step]")
-    exit({:shutdown, 1})
+    usage_error("Usage: cure replay <path.journal> [--module ModuleName] [--step]")
   end
 
   defp cmd_replay([path | _], opts) do
@@ -502,8 +499,12 @@ defmodule Cure.CLI do
 
     source =
       case File.read(path) do
-        {:ok, s} -> s
-        {:error, reason} -> error("Cannot read #{path}: #{reason}") && exit({:shutdown, 1})
+        {:ok, s} ->
+          s
+
+        {:error, reason} ->
+          error_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason))
+          exit({:shutdown, 1})
       end
 
     case Cure.Compiler.compile_and_load(source, file: path, emit_events: false) do
@@ -524,8 +525,7 @@ defmodule Cure.CLI do
   # -- draw (v0.31.0) ----------------------------------------------------------
 
   defp cmd_draw([], _opts) do
-    error("Usage: cure draw <path.cure> [--filter lifted|all]")
-    exit({:shutdown, 1})
+    usage_error("Usage: cure draw <path.cure> [--filter lifted|all]")
   end
 
   defp cmd_draw([kind, path], opts) when kind in ["lifted", "all"] do
@@ -599,8 +599,12 @@ defmodule Cure.CLI do
   defp cmd_check(path, _opts) do
     source =
       case File.read(path) do
-        {:ok, s} -> s
-        {:error, reason} -> error("Cannot read #{path}: #{reason}") && exit({:shutdown, 1})
+        {:ok, s} ->
+          s
+
+        {:error, reason} ->
+          error_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason))
+          exit({:shutdown, 1})
       end
 
     with {:ok, tokens} <- Cure.Compiler.Lexer.tokenize(source, file: path, emit_events: false),
@@ -704,7 +708,7 @@ defmodule Cure.CLI do
         end
 
       {:error, :no_project_file} ->
-        error("No Cure.toml found in current directory. Run `cure new <name>` first.")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", :enoent))
         exit({:shutdown, 1})
 
       {:error, reason} ->
@@ -747,7 +751,7 @@ defmodule Cure.CLI do
         end
 
       {:error, :no_project_file} ->
-        error("No Cure.toml found in current directory.")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", :enoent))
         exit({:shutdown, 1})
 
       {:error, reason} ->
@@ -762,7 +766,7 @@ defmodule Cure.CLI do
         IO.puts(Cure.Project.dep_tree(project))
 
       {:error, :no_project_file} ->
-        error("No Cure.toml found in current directory.")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", :enoent))
         exit({:shutdown, 1})
 
       {:error, reason} ->
@@ -1057,7 +1061,10 @@ defmodule Cure.CLI do
         end)
 
       missing ->
-        error("Cannot read #{Enum.join(missing, ", ")}: no such file or directory")
+        Enum.each(missing, fn path ->
+          error_diagnostic(Cure.Diagnostic.Operational.file_read(path, :enoent))
+        end)
+
         exit({:shutdown, 1})
     end
   end
@@ -1070,8 +1077,12 @@ defmodule Cure.CLI do
   # need a tolerant read. Mirrors how run/check/compile read with File.read.
   defp read_source_or_exit(file) do
     case File.read(file) do
-      {:ok, source} -> source
-      {:error, reason} -> error("Cannot read #{file}: #{reason}") && exit({:shutdown, 1})
+      {:ok, source} ->
+        source
+
+      {:error, reason} ->
+        error_diagnostic(Cure.Diagnostic.Operational.file_read(file, reason))
+        exit({:shutdown, 1})
     end
   end
 

@@ -157,6 +157,20 @@ defmodule Cure.CLITest do
       :code.delete(:"Cure.CliRun")
     end
 
+    test "a missing source is an E095 file-read diagnostic" do
+      path = "/no/such/cure_cli_run_missing.cure"
+
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["run", path])) == {:shutdown, 1}
+        end)
+
+      assert output =~ "COULD NOT READ FILE [E095]"
+      assert output =~ path
+      refute output =~ "[E098]"
+      refute output =~ "1 |"
+    end
+
     test "compiles module without main" do
       path = Path.join(System.tmp_dir!(), "cure_cli_nomain.cure")
 
@@ -182,6 +196,20 @@ defmodule Cure.CLITest do
         end)
 
       assert output =~ "OK"
+    end
+
+    test "a missing source is an E095 file-read diagnostic" do
+      path = "/no/such/cure_cli_check_missing.cure"
+
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["check", path])) == {:shutdown, 1}
+        end)
+
+      assert output =~ "COULD NOT READ FILE [E095]"
+      assert output =~ path
+      refute output =~ "[E098]"
+      refute output =~ "1 |"
     end
   end
 
@@ -332,7 +360,8 @@ defmodule Cure.CLITest do
           assert catch_exit(Cure.CLI.main(["deps"])) == {:shutdown, 1}
         end)
 
-      assert stderr =~ "No Cure.toml found"
+      assert stderr =~ "COULD NOT READ FILE [E095]"
+      assert stderr =~ "Cannot read `Cure.toml`"
     end
 
     test "an unknown deps subcommand names the bad subcommand and exits nonzero", %{tmp: tmp} do
@@ -348,7 +377,9 @@ defmodule Cure.CLITest do
         end)
 
       assert stderr =~ "Unknown deps subcommand: frobnicate"
+      assert stderr =~ "INVALID COMMAND USAGE [E099]"
       refute stderr =~ "Unknown command: deps"
+      refute stderr =~ "[E098]"
     end
   end
 
@@ -371,7 +402,26 @@ defmodule Cure.CLITest do
           end)
 
         assert stderr =~ "keys"
+        assert stderr =~ "INVALID COMMAND USAGE [E099]"
         refute stderr =~ "Unknown command: keys"
+        refute stderr =~ "[E098]"
+      end
+    end
+  end
+
+  describe "positional command usage diagnostics" do
+    for command <- ~w(replay draw) do
+      @command command
+
+      test "cure #{command} without a path is E099" do
+        stderr =
+          capture_io(:stderr, fn ->
+            assert catch_exit(Cure.CLI.main([@command])) == {:shutdown, 1}
+          end)
+
+        assert stderr =~ "INVALID COMMAND USAGE [E099]"
+        assert stderr =~ "Usage: cure #{@command}"
+        refute stderr =~ "[E098]"
       end
     end
   end
@@ -382,10 +432,16 @@ defmodule Cure.CLITest do
     # missing file — unlike run/check/compile, which report + exit 1. A missing
     # explicit target must be a clean non-zero exit, never a crash.
     test "cure fmt on a missing file exits 1 without crashing" do
-      capture_io(:stderr, fn ->
-        assert catch_exit(Cure.CLI.main(["fmt", "/no/such/missing_fmt_xyz.cure"])) ==
-                 {:shutdown, 1}
-      end)
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["fmt", "/no/such/missing_fmt_xyz.cure"])) ==
+                   {:shutdown, 1}
+        end)
+
+      assert output =~ "COULD NOT READ FILE [E095]"
+      assert output =~ "/no/such/missing_fmt_xyz.cure"
+      refute output =~ "[E098]"
+      refute output =~ "1 |"
     end
 
     test "cure fmt --check on a missing file exits 1 without crashing" do
@@ -396,10 +452,16 @@ defmodule Cure.CLITest do
     end
 
     test "cure doc on a missing file exits 1 without crashing" do
-      capture_io(:stderr, fn ->
-        assert catch_exit(Cure.CLI.main(["doc", "/no/such/missing_doc_xyz.cure"])) ==
-                 {:shutdown, 1}
-      end)
+      output =
+        capture_io(:stderr, fn ->
+          assert catch_exit(Cure.CLI.main(["doc", "/no/such/missing_doc_xyz.cure"])) ==
+                   {:shutdown, 1}
+        end)
+
+      assert output =~ "COULD NOT READ FILE [E095]"
+      assert output =~ "/no/such/missing_doc_xyz.cure"
+      refute output =~ "[E098]"
+      refute output =~ "1 |"
     end
 
     # `File.exists?` returns true for a file that exists but is unreadable
