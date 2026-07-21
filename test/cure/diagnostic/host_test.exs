@@ -411,7 +411,7 @@ defmodule Cure.Diagnostic.HostTest do
 
     assert diagnostic.suggestions == [
              %Cure.Diagnostic.Suggestion{
-               message: "Did you mean `println`, `Std.Io.print`?",
+               message: "Did you mean `println`, `Std.Io.print`? Qualify it or import its module.",
                applicability: :maybe_incorrect
              }
            ]
