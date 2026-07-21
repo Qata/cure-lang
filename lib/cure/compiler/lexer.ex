@@ -1550,15 +1550,20 @@ defmodule Cure.Compiler.Lexer do
   # semantics; the lexer only has to find the closing delimiter safely.
   defp consume_regex_body(state, acc \\ []) do
     case peek(state) do
-      nil -> {IO.iodata_to_binary(Enum.reverse(acc)), state}
-      ?/ -> {IO.iodata_to_binary(Enum.reverse(acc)), state}
+      nil ->
+        {IO.iodata_to_binary(Enum.reverse(acc)), state}
+
+      ?/ ->
+        {IO.iodata_to_binary(Enum.reverse(acc)), state}
+
       ?\\ ->
         case peek_at(state, 1) do
           nil -> {IO.iodata_to_binary(Enum.reverse([?\\ | acc])), advance(state, 1)}
           escaped -> consume_regex_body(advance(state, 2), [escaped, ?\\ | acc])
         end
 
-      c -> consume_regex_body(advance(state, 1), [c | acc])
+      c ->
+        consume_regex_body(advance(state, 1), [c | acc])
     end
   end
 

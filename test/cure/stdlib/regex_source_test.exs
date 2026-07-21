@@ -19,12 +19,14 @@ defmodule Cure.Stdlib.RegexSourceTest do
     {:ok, tokens} = Lexer.tokenize("fn f() -> Regex = /[A-z]*/", emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
 
-    assert {:function_def, _meta, [
-             {:function_call, call_meta, [
-               {:literal, pattern_meta, "[A-z]*"},
-               {:literal, flags_meta, ""}
-             ]}
-           ]} = ast
+    assert {:function_def, _meta,
+            [
+              {:function_call, call_meta,
+               [
+                 {:literal, pattern_meta, "[A-z]*"},
+                 {:literal, flags_meta, ""}
+               ]}
+            ]} = ast
 
     assert call_meta[:name] == "Std.Regex.literal"
     assert pattern_meta[:subtype] == :string
