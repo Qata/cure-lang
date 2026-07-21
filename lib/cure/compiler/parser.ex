@@ -4995,7 +4995,13 @@ defmodule Cure.Compiler.Parser do
 
         if kind do
           [_generic | rest] = next_state.errors
-          previous = elements |> List.last() |> first_node_source_span()
+
+          previous =
+            elements |> List.last() |> first_node_source_span() ||
+              case authored_token(next_state) do
+                %Token{span: %Cure.Diagnostic.Span{} = span} -> span
+                _ -> nil
+              end
 
           span =
             if kind == :container_separator_missing do
@@ -8823,6 +8829,7 @@ defmodule Cure.Compiler.Parser do
         parse_refinement_type(state)
 
       :lparen ->
+        open_token = token
         state = advance(state)
         # Reuse the constructor-domain parser inside the group as well. This
         # admits a named dependent domain in a higher-order field type:
@@ -8837,7 +8844,10 @@ defmodule Cure.Compiler.Parser do
         # to separate fields from the result index). `parse_type_atom` stays
         # arrow-free everywhere else.
         {inner, state} = parse_paren_arrow_tail(state, inner)
-        state = expect(state, :rparen)
+
+        {state, _close_token} =
+          expect_container_close(state, :rparen, :grouped_type, open_token, [inner], false)
+
         {inner, state}
 
       _ ->

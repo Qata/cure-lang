@@ -114,4 +114,31 @@ defmodule Cure.Compiler.TupleTypeDiagnosticTest do
              Hint: Insert `,` between these type positions
              """)
   end
+
+  test "a grouped higher-order constructor type retains its GADT source context" do
+    source = "mod M\n  type A = MkA\n  type Box indices ()\n    MkBox : ((A) -> A -> Box\n"
+    {error, {diagnostic, registry}} = diagnostic(source, "gadt_group.cure")
+
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :grouped_type, token_type: :dedent}} =
+             error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- GROUPED TYPE IS NOT CLOSED [E094] --------------------------- gadt_group.cure
+
+             This grouped type reaches the end of the source without the ')' that closes its
+             positions.
+
+             at gadt_group.cure:5:1
+             4 |     MkBox : ((A) -> A -> Box
+               |             -            --- this grouped type starts here; the previous type position ends here
+             5 |#{" "}
+               | ^ close this grouped type with `)`
+
+             Hint: Insert `)` to close the construct
+             """)
+
+    assert [%{edits: [%{replacement: ")", span: insertion}]}] = diagnostic.suggestions
+    assert {insertion.start_line, insertion.start_column} == {5, 1}
+  end
 end
