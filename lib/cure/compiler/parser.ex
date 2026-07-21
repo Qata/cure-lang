@@ -4986,9 +4986,13 @@ defmodule Cure.Compiler.Parser do
       {:error, next_state} ->
         observed = peek(next_state)
 
+        closing_boundary? =
+          observed.type in Map.get(context, :closing_tokens, []) or
+            observed.value in Map.get(context, :closing_values, [])
+
         kind =
           cond do
-            observed.type in [:eof, :dedent, :newline] -> :container_unclosed
+            observed.type in [:eof, :dedent, :newline] or closing_boundary? -> :container_unclosed
             separator_allowed and call_argument_start?(observed) -> :container_separator_missing
             true -> nil
           end
@@ -5004,7 +5008,7 @@ defmodule Cure.Compiler.Parser do
               end
 
           span =
-            if kind == :container_separator_missing or observed.type == :newline do
+            if kind == :container_separator_missing or observed.type == :newline or closing_boundary? do
               %{
                 observed.span
                 | end_byte: observed.span.start_byte,
@@ -8476,9 +8480,17 @@ defmodule Cure.Compiler.Parser do
     {head_params, state} =
       case peek(state) do
         %Token{type: :lparen} ->
+          open_token = peek(state)
           state = advance(state)
           {tp, state} = parse_typed_params(state)
-          state = expect(state, :rparen)
+
+          {state, _close_token} =
+            expect_container_close(state, :rparen, :type_parameters, open_token, tp, true, %{
+              declaration: name,
+              declaration_kind: :typealias,
+              closing_tokens: [:assign]
+            })
+
           {tp, state}
 
         _ ->
@@ -8576,9 +8588,18 @@ defmodule Cure.Compiler.Parser do
     {head_params, state} =
       case peek(state) do
         %Token{type: :lparen} ->
+          open_token = peek(state)
           state = advance(state)
           {tp, state} = parse_typed_params(state)
-          state = expect(state, :rparen)
+
+          {state, _close_token} =
+            expect_container_close(state, :rparen, :type_parameters, open_token, tp, true, %{
+              declaration: name,
+              declaration_kind: :type,
+              closing_tokens: [:assign],
+              closing_values: [:indices]
+            })
+
           {tp, state}
 
         _ ->

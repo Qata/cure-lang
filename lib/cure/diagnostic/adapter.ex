@@ -5177,6 +5177,12 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :type_parameters}
+       }),
+       do: "Type parameter list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
          context: %{container: :lambda_parameters}
        }),
        do: "Lambda parameter list is not closed"
@@ -5226,6 +5232,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :type_arguments}
        }),
        do: "Type arguments need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_parameters}
+       }),
+       do: "Type parameters need a comma"
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5490,6 +5502,13 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
          expected: :rparen,
+         context: %{container: :type_parameters, declaration: declaration}
+       }),
+       do: "The declaration of `#{declaration}` reaches the end of its type parameter list without the closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
          context: %{container: :lambda_parameters}
        }),
        do: "This lambda's parameter list reaches the end of the source without its closing ')'."
@@ -5570,6 +5589,13 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do:
          "The type application `#{type}` has another argument here, but consecutive type arguments must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_parameters, declaration: declaration}
+       }),
+       do:
+         "The declaration of `#{declaration}` has another type parameter here, but consecutive parameters must be separated by a comma."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5787,6 +5813,13 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_unclosed,
          expected: :rparen,
+         context: %{container: :type_parameters}
+       }),
+       do: "close these type parameters with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
          context: %{container: :lambda_parameters}
        }),
        do: "close this lambda parameter list with `)`"
@@ -5863,6 +5896,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :type_arguments}
        }),
        do: "insert a comma before this type argument"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :type_parameters}
+       }),
+       do: "insert a comma before this type parameter"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -6303,6 +6342,27 @@ defmodule Cure.Diagnostic.Adapter do
          %SyntaxProblem{
            kind: kind,
            opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :type_parameters}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "these type parameters start here"),
+      pickup_label(previous, :secondary, "the previous type parameter ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
            previous: previous
          },
          primary_span
@@ -6565,6 +6625,13 @@ defmodule Cure.Diagnostic.Adapter do
     ]
   end
 
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_unclosed, expected: :rparen, context: %{container: :type_parameters}},
+         %Span{} = span
+       ) do
+    closing_delimiter_insertion(:rparen, span)
+  end
+
   defp syntax_insertions(%SyntaxProblem{observed: :eof, expected: expected}, %Span{} = span) do
     closing_delimiter_insertion(expected, span)
   end
@@ -6695,6 +6762,18 @@ defmodule Cure.Diagnostic.Adapter do
        ]
 
   defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :type_parameters}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these type parameters",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
+  defp syntax_insertions(
          %SyntaxProblem{kind: :container_separator_missing, context: %{container: :lambda_parameters}},
          %Span{} = span
        ),
@@ -6787,6 +6866,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp container_item_name(:comprehension), do: "clause"
   defp container_item_name(:parameters), do: "parameter"
   defp container_item_name(:type_arguments), do: "type argument"
+  defp container_item_name(:type_parameters), do: "type parameter"
   defp container_item_name(:lambda_parameters), do: "lambda parameter"
 
   defp container_item_name(container) when container in [:tuple_type, :tuple_type_sigil, :grouped_type],

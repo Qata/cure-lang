@@ -7,8 +7,16 @@ defmodule Cure.Compiler.DeclarationSeparatorDiagnosticTest do
   defp diagnostic(source, file) do
     {:ok, tokens} = Lexer.tokenize(source, file: file, emit_events: false)
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
-    error = Enum.find(errors, &match?({:declaration_separator_missing, _}, &1))
-    assert {:declaration_separator_missing, _} = error
+
+    error =
+      Enum.find(errors, fn
+        {:declaration_separator_missing, _} -> true
+        {:container_elements_syntax, _} -> true
+        _ -> false
+      end)
+
+    assert {tag, _} = error
+    assert tag in [:declaration_separator_missing, :container_elements_syntax]
     {error, Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, file, source)}
   end
 
@@ -215,5 +223,59 @@ defmodule Cure.Compiler.DeclarationSeparatorDiagnosticTest do
 
     assert insertion.start_byte == 11
     assert insertion.end_byte == 11
+  end
+
+  test "an unclosed type parameter list owns its opener and final parameter" do
+    source = "typealias Pair(a: Type = Int"
+    {error, {diagnostic, registry}} = diagnostic(source, "type_params_close.cure")
+
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :type_parameters, declaration: "Pair"}} =
+             error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE PARAMETER LIST IS NOT CLOSED [E094] ------------- type_params_close.cure
+
+             The declaration of `Pair` reaches the end of its type parameter list without the
+             closing ')'.
+
+             at type_params_close.cure:1:29
+             1 | typealias Pair(a: Type = Int
+               |               --------------^ these type parameters start here; the previous type parameter ends here; close these type parameters with `)`
+
+             Hint: Insert `)` to close the construct
+             """)
+
+    assert [%{edits: [%{replacement: ")", span: insertion}]}] = diagnostic.suggestions
+    assert insertion.start_byte == byte_size(source)
+    assert insertion.end_byte == byte_size(source)
+  end
+
+  test "adjacent type parameters get a zero-width comma insertion" do
+    source = "type Pair(a: Type b: Type) = Mk"
+    {error, {diagnostic, registry}} = diagnostic(source, "type_params_comma.cure")
+
+    assert {:container_elements_syntax,
+            %{kind: :container_separator_missing, container: :type_parameters, declaration: "Pair"}} = error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE PARAMETERS NEED A COMMA [E094] ------------------ type_params_comma.cure
+
+             The declaration of `Pair` has another type parameter here, but consecutive
+             parameters must be separated by a comma.
+
+             at type_params_comma.cure:1:19
+             1 | type Pair(a: Type b: Type) = Mk
+               |          -------- ^ these type parameters start here; the previous type parameter ends here; insert a comma before this type parameter
+
+             Hint: Insert `,` between these type parameters
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column} == {1, 19}
+    assert insertion.start_byte == insertion.end_byte
   end
 end
