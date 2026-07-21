@@ -4392,6 +4392,31 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp put_tuple_type_source_info(meta, name_token, open_token, types, close_token) do
+    argument_spans = Enum.flat_map(types, &node_source_span/1)
+
+    case {name_token, open_token, close_token} do
+      {%Token{span: %Cure.Diagnostic.Span{} = name}, %Token{span: %Cure.Diagnostic.Span{} = opener},
+       %Token{span: %Cure.Diagnostic.Span{} = closer} = close} ->
+        case Range.through(name, close) do
+          {:ok, whole} ->
+            Keyword.put(meta, :source_info, %SourceInfo{
+              whole: whole,
+              name: name,
+              opener: opener,
+              closer: closer,
+              arguments: argument_spans
+            })
+
+          _ ->
+            meta
+        end
+
+      _ ->
+        meta
+    end
+  end
+
   # Returns {args, labels, label_spans, state, close_token}: `labels` and
   # `label_spans` are position-aligned with `args`; each label entry is the
   # entry the written argument label (`f(to: v)`) or `nil` when the argument is
@@ -4489,6 +4514,7 @@ defmodule Cure.Compiler.Parser do
               :atom,
               :lparen,
               :lbracket,
+              :tuple_open,
               :map_open,
               :binary_open,
               :fn,
@@ -10578,6 +10604,7 @@ defmodule Cure.Compiler.Parser do
       # for a dependent telescope — so resolution, display, and codegen are unchanged. `%[]` is the empty tuple.
       # (Original `%[A, B]` proposal: Aleksei Matiushkin / am-kantox; adapted here to the dependent parser.)
       :tuple_open ->
+        open_token = token
         state = advance(state)
 
         case peek(state) do
@@ -10586,19 +10613,28 @@ defmodule Cure.Compiler.Parser do
 
           _ ->
             {positions, state} = parse_tuple_positions(state, [])
-            state = expect(state, :rbracket)
             binders = Enum.map(positions, &elem(&1, 0))
             types = Enum.map(positions, &elem(&1, 1))
-            {{:tuple_type, [arity: length(positions), binders: binders], types}, state}
+
+            {state, close_token} =
+              expect_container_close(state, :rbracket, :tuple_type_sigil, open_token, types, true)
+
+            meta = [arity: length(positions), binders: binders]
+            meta = put_container_source_info(meta, open_token, state, close_token)
+            {{:tuple_type, meta, types}, state}
         end
 
       :lparen ->
         # Grouped/tuple type `(A, B)` or function type `(A, B) -> C`. Each element
         # may carry an optional binder name `(x: A) -> …` — a DEPENDENT arrow whose
         # codomain (and later domains) may mention `x`.
+        open_token = token
         state = advance(state)
         {inner, state} = parse_paren_type_list(state)
-        state = expect(state, :rparen)
+        inner_types = Enum.map(inner, &elem(&1, 1))
+
+        {state, close_token} =
+          expect_container_close(state, :rparen, :grouped_type, open_token, inner_types, true)
 
         case peek(state) do
           %Token{type: :arrow} ->
@@ -10622,8 +10658,12 @@ defmodule Cure.Compiler.Parser do
           _ ->
             # Grouped type or tuple type — binders (if any) are not meaningful here.
             case Enum.map(inner, &elem(&1, 1)) do
-              [single] -> {single, state}
-              many -> {{:tuple, [], many}, deprecate_paren_tuple(state, token, length(many))}
+              [single] ->
+                {single, state}
+
+              many ->
+                meta = put_container_source_info([], open_token, state, close_token)
+                {{:tuple, meta, many}, deprecate_paren_tuple(state, token, length(many))}
             end
         end
 
@@ -10637,7 +10677,7 @@ defmodule Cure.Compiler.Parser do
             parse_sigma_type(state)
 
           base_name == "Tuple" and match?(%Token{type: :lparen}, peek(state)) ->
-            parse_tuple_type(state)
+            parse_tuple_type(state, token)
 
           match?(%Token{type: :lparen}, peek(state)) ->
             open_token = peek(state)
@@ -10900,14 +10940,20 @@ defmodule Cure.Compiler.Parser do
   # spine" from "this element is itself a nested tuple". Per-position binders are
   # retained so a later position may depend on an earlier one (dependent telescope);
   # an anonymous position is binder `"_"`.
-  defp parse_tuple_type(state) do
+  defp parse_tuple_type(state, name_token) do
+    open_token = peek(state)
     state = advance(state)
     {positions, state} = parse_tuple_positions(state, [])
-    state = expect(state, :rparen)
 
     binders = Enum.map(positions, &elem(&1, 0))
     types = Enum.map(positions, &elem(&1, 1))
-    ast = {:tuple_type, [arity: length(positions), binders: binders], types}
+
+    {state, close_token} =
+      expect_container_close(state, :rparen, :tuple_type, open_token, types, true)
+
+    meta = [arity: length(positions), binders: binders]
+    meta = put_tuple_type_source_info(meta, name_token, open_token, types, close_token)
+    ast = {:tuple_type, meta, types}
 
     {ast, state}
   end

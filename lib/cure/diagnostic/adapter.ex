@@ -5066,6 +5066,13 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :tuple}}),
     do: "Tuple is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: container}})
+       when container in [:tuple_type, :tuple_type_sigil],
+       do: "Tuple type is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :grouped_type}}),
+    do: "Grouped type is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :map}}),
     do: "Map is not closed"
 
@@ -5113,6 +5120,16 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :tuple}}),
     do: "Tuple elements need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: container}})
+       when container in [:tuple_type, :tuple_type_sigil],
+       do: "Tuple type positions need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :grouped_type}
+       }),
+       do: "Grouped type positions need a comma"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :map}}),
     do: "Map entries need a comma"
@@ -5355,6 +5372,22 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
+         expected: expected,
+         context: %{container: container}
+       })
+       when container in [:tuple_type, :tuple_type_sigil] and expected in [:rparen, :rbracket],
+       do:
+         "This tuple type reaches the end of the source without the '#{syntax_insertion(expected)}' that closes its positions."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :grouped_type}
+       }),
+       do: "This grouped type reaches the end of the source without the ')' that closes its positions."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
          expected: :binary_close,
          context: %{container: :binary_literal}
        }),
@@ -5400,6 +5433,13 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :lambda_parameters}
        }),
        do: "This lambda has another parameter here, but consecutive parameters must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: container}
+       })
+       when container in [:tuple_type, :tuple_type_sigil, :grouped_type],
+       do: "This type has another position here, but consecutive type positions must be separated by a comma."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5595,6 +5635,20 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "close this binary generator with `>>`"
 
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: expected,
+         context: %{container: container}
+       })
+       when container in [:tuple_type, :tuple_type_sigil],
+       do: "close this tuple type with `#{syntax_insertion(expected)}`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :grouped_type}
+       }),
+       do: "close this grouped type with `)`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :container_unclosed, expected: expected}),
     do: "close this container with `#{syntax_insertion(expected)}`"
 
@@ -5627,6 +5681,13 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :lambda_parameters}
        }),
        do: "insert a comma before this lambda parameter"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: container}
+       })
+       when container in [:tuple_type, :tuple_type_sigil, :grouped_type],
+       do: "insert a comma before this type position"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :container_separator_missing}),
     do: "insert a comma before this element"
@@ -5783,6 +5844,31 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(opener, :secondary, "this refinement type starts here"),
       pickup_label(Map.get(context, :binder_span), :secondary, "this is the refinement binder"),
       pickup_label(previous, :secondary, refinement_previous_label(kind))
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: container}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] and
+              container in [:tuple_type, :tuple_type_sigil, :grouped_type] do
+    opener_message =
+      if container == :grouped_type, do: "this grouped type starts here", else: "this tuple type starts here"
+
+    [
+      pickup_label(opener, :secondary, opener_message),
+      pickup_label(previous, :secondary, "the previous type position ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -6181,6 +6267,19 @@ defmodule Cure.Diagnostic.Adapter do
          }
        ]
 
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: container}},
+         %Span{} = span
+       )
+       when container in [:tuple_type, :tuple_type_sigil, :grouped_type],
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these type positions",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
   defp syntax_insertions(%SyntaxProblem{kind: :container_separator_missing}, %Span{} = span),
     do: [
       %Suggestion{
@@ -6246,6 +6345,10 @@ defmodule Cure.Diagnostic.Adapter do
   defp container_item_name(:parameters), do: "parameter"
   defp container_item_name(:type_arguments), do: "type argument"
   defp container_item_name(:lambda_parameters), do: "lambda parameter"
+
+  defp container_item_name(container) when container in [:tuple_type, :tuple_type_sigil, :grouped_type],
+    do: "type position"
+
   defp container_item_name(:binary_literal), do: "binary segment"
   defp container_item_name(:binary_generator), do: "source expression"
   defp container_item_name(_container), do: "element"
