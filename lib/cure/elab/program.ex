@@ -144,8 +144,12 @@ defmodule Cure.Elab.Program do
     case Cure.Compiler.Parser.FixityResolver.assemble(base, own_fixity, own_uses, []) do
       {:ok, table} ->
         case Cure.Compiler.Parser.FixityTable.cyclic_groups(table) do
-          [] -> :ok
-          groups -> {:error, {:precedence_cycle, groups}}
+          [] ->
+            :ok
+
+          groups ->
+            {:error,
+             {:precedence_cycle, %{groups: groups, spans: Cure.Compiler.Parser.FixityScan.group_spans(ast, groups)}}}
         end
 
       # A fixity conflict is already reported at parse time (the module never

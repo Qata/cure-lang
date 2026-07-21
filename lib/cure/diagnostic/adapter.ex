@@ -159,8 +159,20 @@ defmodule Cure.Diagnostic.Adapter do
     declaration_conflict(:sibling_module_collision, %{name: name, owners: owners}, opts)
   end
 
-  def from_error({:precedence_cycle, groups}, opts) do
+  def from_error({:precedence_cycle, %{groups: groups} = details}, opts) when is_list(groups) do
+    operator_conflict(:precedence_cycle, details, opts)
+  end
+
+  def from_error({:precedence_cycle, groups}, opts) when is_list(groups) do
     operator_conflict(:precedence_cycle, %{groups: groups}, opts)
+  end
+
+  def from_error({:conflicting_operator_fixity, details}, opts) when is_map(details) do
+    operator_conflict(:conflicting_operator_fixity, details, opts)
+  end
+
+  def from_error({:conflicting_precedence_group, details}, opts) when is_map(details) do
+    operator_conflict(:conflicting_precedence_group, details, opts)
   end
 
   def from_error({:builtin_operator_not_overloadable, operator}, opts) do
@@ -2237,25 +2249,59 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp operator_conflict(kind, details, opts) do
-    body =
+    {title, body, primary_message, secondary_message} =
       case kind do
         :precedence_cycle ->
-          "The operator precedence declarations contain a cycle among #{Enum.map_join(details.groups, ", ", &name_to_string/1)}."
+          {"Cyclic operator precedence",
+           "The precedence groups #{Enum.map_join(details.groups, ", ", &"`#{name_to_string(&1)}`")} form a cycle, so the compiler cannot decide which operators bind tighter. Remove or reverse one `higher_than`/`lower_than` relation to break the cycle.",
+           "this precedence group participates in the cycle", "this precedence group also participates in the cycle"}
+
+        :conflicting_operator_fixity ->
+          {"Conflicting operator fixity",
+           "The #{details.fixity} operator `#{details.operator}` is assigned to both `#{name_to_string(details.existing_group)}` and `#{name_to_string(details.new_group)}`. Keep one precedence group for this operator, or choose a different operator spelling.",
+           "this declaration assigns `#{details.operator}` to `#{name_to_string(details.new_group)}`",
+           "the conflicting assignment is here"}
+
+        :conflicting_precedence_group ->
+          {"Conflicting precedence group",
+           "The precedence group `#{name_to_string(details.name)}` is declared with incompatible associativity or ordering rules. Give the declarations identical bodies, or rename one group.",
+           "this declaration conflicts with the earlier group", "the incompatible group declaration is here"}
 
         :builtin_operator_not_overloadable ->
-          "The built-in operator `#{details.operator}` cannot be overloaded."
+          {"Operator declaration conflict", "The built-in operator `#{details.operator}` cannot be overloaded.",
+           "adjust this operator declaration", nil}
       end
+
+    {primary, secondary} =
+      operator_conflict_labels(Map.get(details, :spans, []), opts, primary_message, secondary_message)
 
     Diagnostic.new(
       code: "E106",
       key: :operator_declaration_conflict,
       severity: :error,
-      title: "Operator declaration conflict",
+      title: title,
       body: Doc.paragraph(body),
-      primary: primary_label(opts, "adjust this operator declaration"),
+      primary: primary,
+      secondary: secondary,
       payload: Map.put(details, :kind, kind)
     )
   end
+
+  defp operator_conflict_labels([first, second | rest], _opts, primary_message, secondary_message) do
+    primary = %Label{span: second, style: :primary, message: primary_message}
+
+    secondary =
+      [%Label{span: first, style: :secondary, message: secondary_message}] ++
+        Enum.map(rest, &%Label{span: &1, style: :secondary, message: secondary_message})
+
+    {primary, secondary}
+  end
+
+  defp operator_conflict_labels([span], _opts, primary_message, _secondary_message),
+    do: {%Label{span: span, style: :primary, message: primary_message}, []}
+
+  defp operator_conflict_labels([], opts, primary_message, _secondary_message),
+    do: {primary_label(opts, primary_message), []}
 
   defp coverage_problem(kind, branch, context, opts) do
     opts = Keyword.put_new(opts, :span, Map.get(context, :span))

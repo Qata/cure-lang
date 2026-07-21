@@ -216,8 +216,12 @@ defmodule Cure.Compiler.Parser do
       case FixityResolver.assemble(builtin_fixity, own_fixity, own_uses, prelude_providers) do
         {:ok, table} ->
           case {validate_fixity_cycles?, FixityTable.cyclic_groups(table)} do
-            {true, [_ | _] = groups} -> {:__fixity_error__, {:precedence_cycle, groups}}
-            _ -> table
+            {true, [_ | _] = groups} ->
+              {:__fixity_error__,
+               {:precedence_cycle, %{groups: groups, spans: FixityScan.group_spans(harvest_exprs, groups)}}}
+
+            _ ->
+              table
           end
 
         {:error, conflict} ->

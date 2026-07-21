@@ -120,6 +120,7 @@ defmodule Cure.Compiler.OperatorFlipTest do
       infix `|>` : Additive
     end
     """
+
     assert_error_tag(src, :conflicting_operator_fixity)
   end
 
@@ -171,8 +172,11 @@ defmodule Cure.Compiler.OperatorFlipTest do
     end
     """
 
-    assert {:error, {:precedence_cycle, groups}} = Cure.Elab.Program.elaborate(src)
+    assert {:error, {:precedence_cycle, %{groups: groups, spans: spans}}} =
+             Cure.Elab.Program.elaborate(src)
+
     assert Enum.sort(groups) == [:Loop, :Ring]
+    assert Enum.map(spans, & &1.start_line) == [3, 6]
   end
 
   test "a group closing a cycle through the built-in tower is rejected" do
@@ -190,7 +194,9 @@ defmodule Cure.Compiler.OperatorFlipTest do
     end
     """
 
-    assert {:error, {:precedence_cycle, groups}} = Cure.Elab.Program.elaborate(src)
+    assert {:error, {:precedence_cycle, %{groups: groups, spans: [_weighted]}}} =
+             Cure.Elab.Program.elaborate(src)
+
     assert :Weighted in groups
   end
 
@@ -219,7 +225,9 @@ defmodule Cure.Compiler.OperatorFlipTest do
     """
 
     try do
-      assert {:error, {:precedence_cycle, groups}} = Cure.Elab.Program.elaborate(src)
+      assert {:error, {:precedence_cycle, %{groups: groups, spans: [_gb]}}} =
+               Cure.Elab.Program.elaborate(src)
+
       assert :Ga in groups and :Gb in groups
     after
       Process.put(:cure_source_roots, prev)

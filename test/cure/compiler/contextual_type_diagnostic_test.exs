@@ -144,6 +144,106 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "pattern matching stays unambiguous"
   end
 
+  test "conflicting operator declarations label both authored operators" do
+    source = """
+    mod FixityConflict
+      precedencegroup Loose
+      precedencegroup Tight
+      infix `<?>` : Loose
+      infix `<?>` : Tight
+    end
+    """
+
+    assert {:error, {:parse_error, [reason]}} =
+             Cure.Compiler.compile_string(source,
+               file: "fixity_conflict.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "fixity_conflict.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E106"
+    assert diagnostic.title == "Conflicting operator fixity"
+    assert {diagnostic.primary.span.start_line, diagnostic.primary.span.start_column} == {5, 9}
+    assert [%{span: first, message: "the conflicting assignment is here"}] = diagnostic.secondary
+    assert {first.start_line, first.start_column} == {4, 9}
+    assert rendered =~ "4 |   infix `<?>` : Loose"
+    assert rendered =~ "5 |   infix `<?>` : Tight"
+    assert rendered =~ "assigned to both `Loose` and `Tight`"
+
+    [related] = Renderer.lsp(diagnostic, registry)["relatedInformation"]
+    assert related["message"] == "the conflicting assignment is here"
+  end
+
+  test "precedence cycles label every authored participating group" do
+    source = """
+    mod PrecedenceCycle
+      precedencegroup Ring
+        higher_than: Loop
+      precedencegroup Loop
+        higher_than: Ring
+    end
+    """
+
+    assert {:error, {:parse_error, [reason]}} =
+             Cure.Compiler.compile_string(source,
+               file: "precedence_cycle.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "precedence_cycle.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E106"
+    assert diagnostic.title == "Cyclic operator precedence"
+    assert diagnostic.primary.span.start_line == 4
+
+    assert [%{span: first, message: "this precedence group also participates in the cycle"}] =
+             diagnostic.secondary
+
+    assert first.start_line == 2
+    assert rendered =~ "2 |   precedencegroup Ring"
+    assert rendered =~ "4 |   precedencegroup Loop"
+    assert rendered =~ "Remove or reverse one `higher_than`/`lower_than`"
+    assert rendered =~ "relation to break the cycle"
+  end
+
+  test "incompatible precedence group bodies label both group names" do
+    source = """
+    mod GroupConflict
+      precedencegroup CustomBinding
+        associativity: left
+      precedencegroup CustomBinding
+        associativity: none
+    end
+    """
+
+    assert {:error, {:parse_error, [reason]}} =
+             Cure.Compiler.compile_string(source,
+               file: "group_conflict.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "group_conflict.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E106"
+    assert diagnostic.title == "Conflicting precedence group"
+    assert diagnostic.payload.existing.assoc == :left
+    assert diagnostic.payload.new.assoc == :none
+    assert diagnostic.primary.span.start_line == 4
+
+    assert [%{span: first, message: "the incompatible group declaration is here"}] =
+             diagnostic.secondary
+
+    assert first.start_line == 2
+    assert rendered =~ "2 |   precedencegroup CustomBinding"
+    assert rendered =~ "4 |   precedencegroup CustomBinding"
+    assert rendered =~ "incompatible associativity"
+    assert rendered =~ "or ordering rules"
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 
