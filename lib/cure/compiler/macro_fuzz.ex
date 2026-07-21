@@ -13,6 +13,7 @@ defmodule Cure.Compiler.MacroFuzz do
   alias Cure.Compiler.{Lexer, LiftModule, Parser, Token}
   alias Cure.Core.{Context, Env, Eval, Inductive, Kernel, Normalise}
   alias Cure.Elab.{Elaborator, MacroExpand, Program}
+  alias Cure.MetaAST.Metadata
 
   @default_draws 32
   @cache_key :cure_macro_fuzz_cache_state
@@ -357,7 +358,7 @@ defmodule Cure.Compiler.MacroFuzz do
   end
 
   defp cached_proof({:macro_def, _meta, rules} = macro_def, env, opts) do
-    key = :erlang.phash2({macro_def, env, Keyword.get(opts, :draws, @default_draws), Keyword.get(opts, :seed, 1)})
+    key = proof_cache_key(macro_def, env, opts)
     cache = :persistent_term.get(@cache_key, %{})
 
     case Map.fetch(cache, key) do
@@ -381,6 +382,13 @@ defmodule Cure.Compiler.MacroFuzz do
         :persistent_term.put(@cache_key, Map.put(cache, key, {result, manifest}))
         {result, manifest, false}
     end
+  end
+
+  @doc false
+  def proof_cache_key(macro_def, env, opts \\ []) do
+    :erlang.phash2(
+      {Metadata.semantic_key(macro_def), env, Keyword.get(opts, :draws, @default_draws), Keyword.get(opts, :seed, 1)}
+    )
   end
 
   defp run_expansion_proof(rules, env, opts) do

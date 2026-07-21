@@ -118,6 +118,23 @@ defmodule Cure.Compiler.MacroFuzzTest do
     assert [%{category: "Missing", status: :unsupported}] = report.unsupported
   end
 
+  test "proof cache identity ignores recursive source decoration" do
+    source = "macro M\n  syntax m <value: Code> becomes value\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
+    assert {:ok, {:macro_def, _, _} = macro_def} = Parser.parse(tokens, emit_events: false)
+
+    decorated = Cure.MetaAST.SourceDecorator.decorate(macro_def)
+    stripped = Cure.MetaAST.Metadata.strip_diagnostics(decorated)
+    env = Cure.Core.Env.empty()
+    opts = [draws: 7, seed: 19]
+
+    assert MacroFuzz.proof_cache_key(macro_def, env, opts) ==
+             MacroFuzz.proof_cache_key(decorated, env, opts)
+
+    assert MacroFuzz.proof_cache_key(macro_def, env, opts) ==
+             MacroFuzz.proof_cache_key(stripped, env, opts)
+  end
+
   test "generated scalar fillers assemble into fully consumed macro uses" do
     source = """
     macro Inc
