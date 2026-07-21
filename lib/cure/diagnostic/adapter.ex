@@ -1695,24 +1695,31 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:lift_module_error, details}, opts) when is_map(details) do
     macro = get_in(details, [:source_provenance, :macro]) || :macro
     cause = Map.get(details, :cause)
-    cause_diagnostic = from_error(cause)
 
-    Diagnostic.new(
-      code: "E092",
-      key: :macro_expansion_failed,
-      severity: :error,
-      title: "#{macro_title(macro)} expansion failed",
-      message: macro_failure_message(macro, details.module, cause_diagnostic),
-      primary: primary_label(opts, "this `#{macro}` declaration generated the failing module"),
-      notes: ["The generated module is an implementation detail; edit the `#{macro}` declaration instead."],
-      provenance: provenance_frames(details, opts),
-      payload: %{
-        macro: name_to_string(macro),
-        module: name_to_string(details.module),
-        behaviour: Map.get(details, :behaviour),
-        cause: %{code: cause_diagnostic.code, key: cause_diagnostic.key, payload: cause_diagnostic.payload}
-      }
-    )
+    case family_type_failure(cause, details, opts) do
+      {:ok, diagnostic} ->
+        diagnostic
+
+      :error ->
+        cause_diagnostic = from_error(cause)
+
+        Diagnostic.new(
+          code: "E092",
+          key: :macro_expansion_failed,
+          severity: :error,
+          title: "#{macro_title(macro)} expansion failed",
+          message: macro_failure_message(macro, details.module, cause_diagnostic),
+          primary: primary_label(opts, "this `#{macro}` declaration generated the failing module"),
+          notes: ["The generated module is an implementation detail; edit the authored `#{macro}` declaration instead."],
+          provenance: provenance_frames(details, opts),
+          payload: %{
+            macro: name_to_string(macro),
+            module: name_to_string(details.module),
+            behaviour: Map.get(details, :behaviour),
+            cause: %{code: cause_diagnostic.code, key: cause_diagnostic.key, payload: cause_diagnostic.payload}
+          }
+        )
+    end
   end
 
   def from_error({kind, detail}, opts)
@@ -1744,6 +1751,39 @@ defmodule Cure.Diagnostic.Adapter do
       do: contextual_type_failure(kind, %{first: first, second: second}, opts)
 
   def from_error(error, _opts), do: raise(Cure.Diagnostic.UnhandledError, error: error)
+
+  # Generated OTP callbacks still represent authored family sections. Preserve
+  # a real type relation at that boundary instead of presenting it as E092.
+  defp family_type_failure({:source_context, reason, context}, details, opts)
+       when is_map(context) do
+    with true <- reason_kind?(reason),
+         origin when not is_nil(origin) <- family_origin(details) do
+      context =
+        context
+        |> Map.put(:expectation_origin, origin)
+        |> Map.put(:checking, Map.get(details, :module))
+
+      {:ok, from_error({:source_context, reason, context}, opts)}
+    else
+      _ -> :error
+    end
+  end
+
+  defp family_type_failure(_cause, _details, _opts), do: :error
+
+  defp reason_kind?({:cannot_unify, _, _}), do: true
+  defp reason_kind?({:index_mismatch, {:cannot_unify, _, _}}), do: true
+  defp reason_kind?({:conversion_failure, _, _}), do: true
+  defp reason_kind?(_reason), do: false
+
+  defp family_origin(details) do
+    case Map.get(details, :behaviour) do
+      :gen_server -> :actor
+      :gen_statem -> :fsm
+      :supervisor -> :supervisor
+      _ -> nil
+    end
+  end
 
   defp contextual_type_problem(kind, actual, expected, origin, context, opts) do
     from_error(

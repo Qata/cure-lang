@@ -557,6 +557,33 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this application has the wrong type"
   end
 
+  test "typed actor family failures retain a family-specific type origin" do
+    source = "actor Cure.Generated.BadActor\n"
+    span = raw_span(source, "actor", 1, 1)
+
+    reason =
+      {:lift_module_error,
+       %{
+         module: "Cure.Generated.BadActor",
+         behaviour: :gen_server,
+         source_provenance: %{macro: "actor"},
+         expansion_provenance: [],
+         cause:
+           {:source_context, {:cannot_unify, :bool, :int},
+            %{checking: :handle_cast, expression_category: :literal, span: span}}
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "actor.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :actor
+    assert diagnostic.payload.origin.owner == "Cure.Generated.BadActor"
+    assert diagnostic.primary.span.start_column == 1
+    assert rendered =~ "ACTOR MESSAGE HAS THE WRONG TYPE"
+    assert rendered =~ "this actor message has the wrong type"
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 
