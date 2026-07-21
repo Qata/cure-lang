@@ -177,8 +177,23 @@ mod Std.Regex
   ## shifting the right machine by the left machine's count. `Accepted` is an
   ## accepting edge (the paper's `Nothing`), not an allocated state. The runtime
   ## transition relation is ordered and epsilon-free.
-  type MachineState = Active(Nat) | Accepted
+  type EvidenceInstruction =
+    | EmitChar(Char)
+    | EmitUnit
+    | EmitPair
+    | EmitLeft
+    | EmitRight
+    | BeginList
+    | EndList
+    | BeginCapture
+    | EndCapture
+
+  type MachineState = Active(Nat, List(EvidenceInstruction)) | Accepted(List(EvidenceInstruction))
   type PatternMachine = PatternMachine(Nat, List(MachineState), Nat -> Char -> List(MachineState))
+
+  fn append_routine(left: List(EvidenceInstruction), right: List(EvidenceInstruction)) -> List(EvidenceInstruction) = match left
+    [] -> right
+    [head | rest] -> [head | append_routine(rest, right)]
 
   fn append_states(left: List(MachineState), right: List(MachineState)) -> List(MachineState) = match left
     [] -> right
@@ -186,8 +201,8 @@ mod Std.Regex
 
   fn shift_states(offset: Nat, states: List(MachineState)) -> List(MachineState) = match states
     [] -> []
-    [Accepted() | rest] -> [Accepted() | shift_states(offset, rest)]
-    [Active(state) | rest] -> [Active(plus(offset, state)) | shift_states(offset, rest)]
+    [Accepted(routine) | rest] -> [Accepted(routine) | shift_states(offset, rest)]
+    [Active(state, routine) | rest] -> [Active(plus(offset, state), routine) | shift_states(offset, rest)]
 
   fn nat_less(left: Nat, right: Nat) -> Bool = match left
     Z() -> match right
@@ -203,31 +218,65 @@ mod Std.Regex
       Z() -> Z()
       S(value_rest) -> nat_subtract(value_rest, amount_rest)
 
+  fn enter_right(offset: Nat, left_routine: List(EvidenceInstruction), right_starts: List(MachineState)) -> List(MachineState) = match right_starts
+    [] -> []
+    [Accepted(right_routine) | rest] ->
+      [Accepted(append_routine(append_routine(left_routine, right_routine), [EmitPair()])) | enter_right(offset, left_routine, rest)]
+    [Active(state, right_routine) | rest] ->
+      [Active(plus(offset, state), append_routine(left_routine, right_routine)) | enter_right(offset, left_routine, rest)]
+
   fn continue_with_right(offset: Nat, left_states: List(MachineState), right_starts: List(MachineState)) -> List(MachineState) = match left_states
     [] -> []
-    [Accepted() | rest] -> append_states(shift_states(offset, right_starts), continue_with_right(offset, rest, right_starts))
-    [Active(state) | rest] -> [Active(state) | continue_with_right(offset, rest, right_starts)]
+    [Accepted(left_routine) | rest] -> append_states(enter_right(offset, left_routine, right_starts), continue_with_right(offset, rest, right_starts))
+    [Active(state, routine) | rest] -> [Active(state, routine) | continue_with_right(offset, rest, right_starts)]
+
+  fn finish_pair(states: List(MachineState)) -> List(MachineState) = match states
+    [] -> []
+    [Accepted(routine) | rest] -> [Accepted(append_routine(routine, [EmitPair()])) | finish_pair(rest)]
+    [Active(state, routine) | rest] -> [Active(state, routine) | finish_pair(rest)]
+
+  fn mark_branch(states: List(MachineState), marker: EvidenceInstruction) -> List(MachineState) = match states
+    [] -> []
+    [Accepted(routine) | rest] -> [Accepted(append_routine(routine, [marker])) | mark_branch(rest, marker)]
+    [Active(state, routine) | rest] -> [Active(state, routine) | mark_branch(rest, marker)]
+
+  fn prefix_routine(instruction: EvidenceInstruction, states: List(MachineState)) -> List(MachineState) = match states
+    [] -> []
+    [Accepted(routine) | rest] -> [Accepted([instruction | routine]) | prefix_routine(instruction, rest)]
+    [Active(state, routine) | rest] -> [Active(state, [instruction | routine]) | prefix_routine(instruction, rest)]
+
+  fn finish_capture(states: List(MachineState)) -> List(MachineState) = match states
+    [] -> []
+    [Accepted(routine) | rest] -> [Accepted(append_routine(routine, [EndCapture()])) | finish_capture(rest)]
+    [Active(state, routine) | rest] -> [Active(state, routine) | finish_capture(rest)]
 
   fn repeat_destinations(destinations: List(MachineState), starts: List(MachineState)) -> List(MachineState) = match destinations
     [] -> []
-    [Accepted() | rest] -> [Accepted() | append_states(starts, repeat_destinations(rest, starts))]
-    [Active(state) | rest] -> [Active(state) | repeat_destinations(rest, starts)]
+    [Accepted(routine) | rest] ->
+      [Accepted(append_routine(routine, [EndList()])) | append_states(enter_repeat(routine, starts), repeat_destinations(rest, starts))]
+    [Active(state, routine) | rest] -> [Active(state, routine) | repeat_destinations(rest, starts)]
+
+  fn enter_repeat(routine: List(EvidenceInstruction), starts: List(MachineState)) -> List(MachineState) = match starts
+    [] -> []
+    [Accepted(next_routine) | rest] -> enter_repeat(routine, rest)
+    [Active(state, next_routine) | rest] ->
+      [Active(state, append_routine(routine, next_routine)) | enter_repeat(routine, rest)]
 
   fn predicate_machine_next(test: Char -> Bool, _state: Nat, char: Char) -> List(MachineState) = pickup
-    test(char) -> [Accepted()]
+    test(char) -> [Accepted([EmitChar(char)])]
     else -> []
 
   fn concat_machine_next(left_count: Nat, left_next: Nat -> Char -> List(MachineState), right_starts: List(MachineState), right_next: Nat -> Char -> List(MachineState), state: Nat, char: Char) -> List(MachineState) = pickup
     nat_less(state, left_count) -> continue_with_right(left_count, left_next(state)(char), right_starts)
-    else -> shift_states(left_count, right_next(nat_subtract(state, left_count))(char))
+    else -> shift_states(left_count, finish_pair(right_next(nat_subtract(state, left_count))(char)))
 
   fn alternate_machine_next(left_count: Nat, left_next: Nat -> Char -> List(MachineState), right_next: Nat -> Char -> List(MachineState), state: Nat, char: Char) -> List(MachineState) = pickup
-    nat_less(state, left_count) -> left_next(state)(char)
-    else -> shift_states(left_count, right_next(nat_subtract(state, left_count))(char))
+    nat_less(state, left_count) -> mark_branch(left_next(state)(char), EmitLeft())
+    else -> shift_states(left_count, mark_branch(right_next(nat_subtract(state, left_count))(char), EmitRight()))
 
   fn compile_pattern({shape: ShapeCode}, pattern: Pattern(shape)) -> PatternMachine = match pattern
-    PatternEmpty() -> PatternMachine(Z(), [Accepted()], fn(_state, _char) -> [])
-    PatternPredicate(test) -> PatternMachine(S(Z()), [Active(Z())], fn(state, char) -> predicate_machine_next(test, state, char))
+    PatternEmpty() -> PatternMachine(Z(), [Accepted([EmitUnit()])], fn(_state, _char) -> [])
+    PatternPredicate(test) -> PatternMachine(S(Z()), [Active(Z(), [])], fn(state, char) -> predicate_machine_next(test, state, char))
     PatternConcat(left, right) -> match compile_pattern(left)
       PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
         PatternMachine(right_count, right_starts, right_next) ->
@@ -236,27 +285,37 @@ mod Std.Regex
             continue_with_right(left_count, left_starts, right_starts),
             fn(state, char) -> concat_machine_next(left_count, left_next, right_starts, right_next, state, char)
           )
-    PatternGroup(inner) -> compile_pattern(inner)
+    PatternGroup(inner) -> match compile_pattern(inner)
+      PatternMachine(count, starts, next) ->
+        PatternMachine(
+          count,
+          finish_capture(prefix_routine(BeginCapture(), starts)),
+          fn(state, char) -> finish_capture(next(state)(char))
+        )
     PatternAlternate(left, right) -> match compile_pattern(left)
       PatternMachine(left_count, left_starts, left_next) -> match compile_pattern(right)
         PatternMachine(right_count, right_starts, right_next) ->
           PatternMachine(
             plus(left_count, right_count),
-            append_states(left_starts, shift_states(left_count, right_starts)),
+            append_states(mark_branch(left_starts, EmitLeft()), shift_states(left_count, mark_branch(right_starts, EmitRight()))),
             fn(state, char) -> alternate_machine_next(left_count, left_next, right_next, state, char)
           )
     PatternRepeat(inner) -> match compile_pattern(inner)
       PatternMachine(count, starts, next) ->
-        PatternMachine(count, [Accepted() | starts], fn(state, char) -> repeat_destinations(next(state)(char), starts))
+        PatternMachine(
+          count,
+          [Accepted([BeginList(), EndList()]) | enter_repeat([BeginList()], starts)],
+          fn(state, char) -> repeat_destinations(next(state)(char), starts)
+        )
 
   fn machine_has_accept(states: List(MachineState)) -> Bool = match states
     [] -> false
-    [Accepted() | _] -> true
-    [Active(_) | rest] -> machine_has_accept(rest)
+    [Accepted(_) | _] -> true
+    [Active(_, _) | rest] -> machine_has_accept(rest)
 
   fn machine_step_one(next: Nat -> Char -> List(MachineState), char: Char, current: MachineState) -> List(MachineState) = match current
-    Accepted() -> []
-    Active(state) -> next(state)(char)
+    Accepted(_) -> []
+    Active(state, _) -> next(state)(char)
 
   fn machine_step(next: Nat -> Char -> List(MachineState), char: Char, current: List(MachineState)) -> List(MachineState) = match current
     [] -> []
@@ -269,6 +328,151 @@ mod Std.Regex
   fn pattern_accepts({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Bool =
     match compile_pattern(pattern)
       PatternMachine(_count, starts, next) -> machine_accepts_chars(next, input, starts)
+
+  ## Evidence is a postfix program result stored in reverse order, so emitting
+  ## is constant-time. Pair/branch/list markers precede their operands in the
+  ## final list, which lets the total extractor consume it in one pass.
+  type Evidence =
+    | CharacterEvidence(Char)
+    | UnitEvidence
+    | PairEvidence
+    | LeftEvidence
+    | RightEvidence
+    | BeginListEvidence
+    | EndListEvidence
+    | StringEvidence(String)
+
+  type CaptureFrame = CaptureFrame(String, List(Evidence))
+  type EvidenceExecution = EvidenceExecution(List(Evidence), List(CaptureFrame))
+  type ThreadState = ThreadActive(Nat) | ThreadAccepted
+  type EvidenceThread = EvidenceThread(ThreadState, List(Evidence), List(CaptureFrame))
+  type EvidencePrefix = EvidencePrefix(List(Evidence), String)
+
+  fn evidence_reverse_chars(input: String) -> String = evidence_reverse_chars_into(input, [])
+  fn evidence_reverse_chars_into(input: String, output: String) -> String = match input
+    [] -> output
+    [head | rest] -> evidence_reverse_chars_into(rest, [head | output])
+
+  fn record_capture_char(frames: List(CaptureFrame), char: Char) -> List(CaptureFrame) = match frames
+    [] -> []
+    [CaptureFrame(chars, saved) | rest] -> [CaptureFrame([char | chars], saved) | record_capture_char(rest, char)]
+
+  fn execute_instruction(instruction: EvidenceInstruction, evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceExecution = match instruction
+    EmitChar(char) -> EvidenceExecution([CharacterEvidence(char) | evidence], captures)
+    EmitUnit() -> EvidenceExecution([UnitEvidence() | evidence], captures)
+    EmitPair() -> EvidenceExecution([PairEvidence() | evidence], captures)
+    EmitLeft() -> EvidenceExecution([LeftEvidence() | evidence], captures)
+    EmitRight() -> EvidenceExecution([RightEvidence() | evidence], captures)
+    BeginList() -> EvidenceExecution([BeginListEvidence() | evidence], captures)
+    EndList() -> EvidenceExecution([EndListEvidence() | evidence], captures)
+    BeginCapture() -> EvidenceExecution(evidence, [CaptureFrame([], evidence) | captures])
+    EndCapture() -> match captures
+      [] -> EvidenceExecution(evidence, [])
+      [CaptureFrame(chars, saved) | rest] -> EvidenceExecution([StringEvidence(evidence_reverse_chars(chars)) | saved], rest)
+
+  fn execute_routine(routine: List(EvidenceInstruction), evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceExecution = match routine
+    [] -> EvidenceExecution(evidence, captures)
+    [instruction | rest] -> match execute_instruction(instruction, evidence, captures)
+      EvidenceExecution(next_evidence, next_captures) -> execute_routine(rest, next_evidence, next_captures)
+
+  fn initial_thread(destination: MachineState) -> EvidenceThread = match destination
+    Active(state, routine) -> match execute_routine(routine, [], [])
+      EvidenceExecution(evidence, captures) -> EvidenceThread(ThreadActive(state), evidence, captures)
+    Accepted(routine) -> match execute_routine(routine, [], [])
+      EvidenceExecution(evidence, captures) -> EvidenceThread(ThreadAccepted(), evidence, captures)
+
+  fn initial_threads(starts: List(MachineState)) -> List(EvidenceThread) = match starts
+    [] -> []
+    [head | rest] -> [initial_thread(head) | initial_threads(rest)]
+
+  fn destination_thread(destination: MachineState, evidence: List(Evidence), captures: List(CaptureFrame)) -> EvidenceThread = match destination
+    Active(state, routine) -> match execute_routine(routine, evidence, captures)
+      EvidenceExecution(next_evidence, next_captures) -> EvidenceThread(ThreadActive(state), next_evidence, next_captures)
+    Accepted(routine) -> match execute_routine(routine, evidence, captures)
+      EvidenceExecution(next_evidence, next_captures) -> EvidenceThread(ThreadAccepted(), next_evidence, next_captures)
+
+  fn destination_threads(destinations: List(MachineState), evidence: List(Evidence), captures: List(CaptureFrame)) -> List(EvidenceThread) = match destinations
+    [] -> []
+    [head | rest] -> [destination_thread(head, evidence, captures) | destination_threads(rest, evidence, captures)]
+
+  fn step_evidence_thread(next: Nat -> Char -> List(MachineState), char: Char, thread: EvidenceThread) -> List(EvidenceThread) = match thread
+    EvidenceThread(ThreadAccepted(), _, _) -> []
+    EvidenceThread(ThreadActive(state), evidence, captures) ->
+      destination_threads(next(state)(char), evidence, record_capture_char(captures, char))
+
+  fn append_threads(left: List(EvidenceThread), right: List(EvidenceThread)) -> List(EvidenceThread) = match left
+    [] -> right
+    [head | rest] -> [head | append_threads(rest, right)]
+
+  fn step_evidence_threads(next: Nat -> Char -> List(MachineState), char: Char, threads: List(EvidenceThread)) -> List(EvidenceThread) = match threads
+    [] -> []
+    [head | rest] -> append_threads(step_evidence_thread(next, char, head), step_evidence_threads(next, char, rest))
+
+  fn nat_same(left: Nat, right: Nat) -> Bool = match left
+    Z() -> match right
+      Z() -> true
+      S(_) -> false
+    S(left_rest) -> match right
+      Z() -> false
+      S(right_rest) -> nat_same(left_rest, right_rest)
+
+  fn same_thread_state(left: ThreadState, right: ThreadState) -> Bool = match left
+    ThreadAccepted() -> match right
+      ThreadAccepted() -> true
+      ThreadActive(_) -> false
+    ThreadActive(left_state) -> match right
+      ThreadAccepted() -> false
+      ThreadActive(right_state) -> nat_same(left_state, right_state)
+
+  fn contains_thread_state(state: ThreadState, threads: List(EvidenceThread)) -> Bool = match threads
+    [] -> false
+    [EvidenceThread(other, _, _) | rest] -> pickup
+      same_thread_state(state, other) -> true
+      else -> contains_thread_state(state, rest)
+
+  fn distinct_threads(threads: List(EvidenceThread)) -> List(EvidenceThread) = distinct_threads_seen(threads, [])
+  fn distinct_threads_seen(threads: List(EvidenceThread), seen: List(EvidenceThread)) -> List(EvidenceThread) = match threads
+    [] -> []
+    [EvidenceThread(state, evidence, captures) | rest] -> pickup
+      contains_thread_state(state, seen) -> distinct_threads_seen(rest, seen)
+      else -> [EvidenceThread(state, evidence, captures) | distinct_threads_seen(rest, [EvidenceThread(state, evidence, captures) | seen])]
+
+  fn first_accepted_evidence(threads: List(EvidenceThread)) -> Option(List(Evidence)) = match threads
+    [] -> None()
+    [EvidenceThread(ThreadAccepted(), evidence, _) | _] -> Some(evidence)
+    [_ | rest] -> first_accepted_evidence(rest)
+
+  fn run_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread)) -> Option(List(Evidence)) = match input
+    [] -> first_accepted_evidence(threads)
+    [char | rest] -> run_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, threads)))
+
+  fn run_first_prefix_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
+    Some(evidence) -> Some(EvidencePrefix(evidence, input))
+    None() -> match input
+      [] -> None()
+      [char | rest] -> run_first_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, threads)))
+
+  fn remember_prefix(threads: List(EvidenceThread), rest: String, previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) = match first_accepted_evidence(threads)
+    Some(evidence) -> Some(EvidencePrefix(evidence, rest))
+    None() -> previous
+
+  fn run_last_prefix_evidence(next: Nat -> Char -> List(MachineState), input: String, threads: List(EvidenceThread), previous: Option(EvidencePrefix)) -> Option(EvidencePrefix) =
+    let remembered = remember_prefix(threads, input, previous)
+    match input
+      [] -> remembered
+      [char | rest] -> match threads
+        [] -> remembered
+        _ -> run_last_prefix_evidence(next, rest, distinct_threads(step_evidence_threads(next, char, threads)), remembered)
+
+  fn pattern_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: String) -> Option(List(Evidence)) = match compile_pattern(pattern)
+    PatternMachine(_count, starts, next) -> run_evidence(next, input, distinct_threads(initial_threads(starts)))
+
+  fn pattern_prefix_evidence({shape: ShapeCode}, pattern: Pattern(shape), input: String, greedy: Bool) -> Option(EvidencePrefix) = match compile_pattern(pattern)
+    PatternMachine(_count, starts, next) ->
+      let threads = distinct_threads(initial_threads(starts))
+      pickup
+        greedy -> run_last_prefix_evidence(next, input, threads, None())
+        else -> run_first_prefix_evidence(next, input, threads)
 
   ## Public typed combinator layer. `Mapped` is the semantic bridge from a
   ## structurally extracted Pattern value to the user-facing result type. It is

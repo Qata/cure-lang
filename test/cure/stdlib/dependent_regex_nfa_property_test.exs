@@ -37,6 +37,22 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
         kind == 7 -> pattern_accepts(nullable_star(), input)
         kind == 8 -> pattern_accepts(grouped(), input)
         else -> pattern_accepts(empty_then_a(), input)
+
+      fn evidence_present(value: Option(List(Evidence))) -> Bool = match value
+        Some(_) -> true
+        None() -> false
+
+      fn has_evidence(kind: Int, input: String) -> Bool = pickup
+        kind == 0 -> evidence_present(pattern_evidence(empty(), input))
+        kind == 1 -> evidence_present(pattern_evidence(atom('a'), input))
+        kind == 2 -> evidence_present(pattern_evidence(ab(), input))
+        kind == 3 -> evidence_present(pattern_evidence(either(), input))
+        kind == 4 -> evidence_present(pattern_evidence(many_a(), input))
+        kind == 5 -> evidence_present(pattern_evidence(many_either(), input))
+        kind == 6 -> evidence_present(pattern_evidence(many_a_then_b(), input))
+        kind == 7 -> evidence_present(pattern_evidence(nullable_star(), input))
+        kind == 8 -> evidence_present(pattern_evidence(grouped(), input))
+        else -> evidence_present(pattern_evidence(empty_then_a(), input))
     end
     """
 
@@ -74,7 +90,10 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
   test "Thompson acceptance agrees with structural denotation on generated words", %{runtime_module: module} do
     assert :ok =
              Property.check_all(case_gen(), @runs, fn {kind, input} ->
-               apply(module, :accepts, [kind, input]) == reference(kind, input)
+               accepted = apply(module, :accepts, [kind, input])
+
+               accepted == reference(kind, input) and
+                 apply(module, :has_evidence, [kind, input]) == accepted
              end)
   end
 
@@ -87,6 +106,9 @@ defmodule Cure.Stdlib.DependentRegexNfaPropertyTest do
     for kind <- 0..9, input <- words do
       assert apply(module, :accepts, [kind, input]) == reference(kind, input),
              "kind=#{kind} input=#{inspect(input)}"
+
+      assert apply(module, :has_evidence, [kind, input]) == reference(kind, input),
+             "evidence kind=#{kind} input=#{inspect(input)}"
     end
   end
 end
