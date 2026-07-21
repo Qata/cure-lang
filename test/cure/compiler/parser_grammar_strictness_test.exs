@@ -464,6 +464,74 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
              error
   end
 
+  test "constraint applications preserve their type and exact comma insertion" do
+    source = "fn sort(xs: List) -> List requires Ord(Int Bool) = xs"
+    {:ok, tokens} = Lexer.tokenize(source, file: "constraint_args.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+    error = Enum.find(errors, &match?({:container_elements_syntax, _}, &1))
+
+    assert {:container_elements_syntax, %{kind: :container_separator_missing, container: :type_arguments, type: "Ord"}} =
+             error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "constraint_args.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE ARGUMENTS NEED A COMMA [E094] --------------------- constraint_args.cure
+
+             The type application `Ord` has another argument here, but consecutive type
+             arguments must be separated by a comma.
+
+             at constraint_args.cure:1:44
+             1 | fn sort(xs: List) -> List requires Ord(Int Bool) = xs
+               |                                       ---- ^ these type arguments start here; the previous type argument ends here; insert a comma before this type argument
+
+             Hint: Insert `,` between these type arguments
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column} == {1, 44}
+    assert insertion.start_byte == insertion.end_byte
+  end
+
+  test "qualified pattern type applications preserve their exact comma insertion" do
+    source =
+      "mod M\n  fn f(x: Int) -> Int = match x\n    n: Std.Pair.Pair(Int Bool) -> 1\n    _ -> 2\nend"
+
+    {:ok, tokens} = Lexer.tokenize(source, file: "pattern_type_args.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+    error = Enum.find(errors, &match?({:container_elements_syntax, _}, &1))
+
+    assert {:container_elements_syntax,
+            %{kind: :container_separator_missing, container: :type_arguments, type: "Std.Pair.Pair"}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "pattern_type_args.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE ARGUMENTS NEED A COMMA [E094] ------------------- pattern_type_args.cure
+
+             The type application `Std.Pair.Pair` has another argument here, but consecutive
+             type arguments must be separated by a comma.
+
+             at pattern_type_args.cure:3:26
+             3 |     n: Std.Pair.Pair(Int Bool) -> 1
+               |                     ---- ^ these type arguments start here; the previous type argument ends here; insert a comma before this type argument
+
+             Hint: Insert `,` between these type arguments
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column} == {3, 26}
+    assert insertion.start_byte == insertion.end_byte
+  end
+
   test "a constructor-signature application inserts its closer before dedent" do
     source = "type SF indices (as: Type)\n  seq : SF(as"
     {:ok, tokens} = Lexer.tokenize(source, file: "ctor_type_args.cure", emit_events: false)

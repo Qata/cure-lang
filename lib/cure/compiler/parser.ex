@@ -6517,9 +6517,13 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :lparen} ->
         case qualified_type_name(inner) do
           {:ok, name} ->
+            open_token = peek(state)
             state = advance(state)
             {params, state} = parse_type_atom_args(state)
-            state = expect(state, :rparen)
+
+            {state, _close_token} =
+              expect_container_close(state, :rparen, :type_arguments, open_token, params, true, %{type: name})
+
             {{:function_call, [name: name, qualified: true], params}, state}
 
           :error ->
@@ -11509,9 +11513,13 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :lparen} ->
+        open_token = peek(state)
         state = advance(state)
         {params, state} = parse_type_param_list(state)
-        state = expect(state, :rparen)
+
+        {state, _close_token} =
+          expect_container_close(state, :rparen, :type_arguments, open_token, params, true, %{type: name})
+
         {{:function_call, [name: name, constraint: true], params}, state}
 
       _ ->
