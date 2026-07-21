@@ -71,14 +71,14 @@ defmodule Cure.Diagnostic.Operational do
 
   def from_error({:release_build_failed, details}, _opts),
     do:
-      diagnostic("E098", :command_failure, "Release script generation failed: #{inspect(details)}", %{
+      diagnostic("E098", :command_failure, "Release script generation failed.", %{
         kind: :release_build,
         details: details
       })
 
   def from_error({:release_app_missing, app, reason}, _opts),
     do:
-      diagnostic("E100", :artifact_error, "Release application `#{app}` is missing: #{inspect(reason)}", %{
+      diagnostic("E100", :artifact_error, "Release application `#{app}` is missing: #{file_reason(reason)}", %{
         kind: :release_app_missing,
         app: app,
         reason: reason
@@ -119,7 +119,7 @@ defmodule Cure.Diagnostic.Operational do
       })
 
   def unknown_watch_action(action),
-    do: diagnostic("E098", :command_failure, "unknown watch action: #{inspect(action)}", %{action: action})
+    do: diagnostic("E098", :command_failure, "unknown watch action `#{display_value(action)}`", %{action: action})
 
   def migration_warning(%{rule: rule, file: file, line: line, message: message}) do
     Diagnostic.new(
@@ -199,10 +199,15 @@ defmodule Cure.Diagnostic.Operational do
 
   def package_version_conflict(name, constraints),
     do:
-      diagnostic("E030", :package_version_conflict, "Package version conflict for #{name}: #{inspect(constraints)}", %{
-        package: name,
-        constraints: constraints
-      })
+      diagnostic(
+        "E030",
+        :package_version_conflict,
+        "Package version conflict for #{name}: #{display_constraints(constraints)}",
+        %{
+          package: name,
+          constraints: constraints
+        }
+      )
 
   defp dependency_failure(kind, details) do
     message =
@@ -211,7 +216,7 @@ defmodule Cure.Diagnostic.Operational do
           "Dependency `#{details.name}` has an invalid source declaration."
 
         :invalid_constraint ->
-          "Dependency `#{details.name}` has an invalid version constraint: #{inspect(details.reason)}."
+          "Dependency `#{details.name}` has an invalid version constraint: #{file_reason(details.reason)}."
 
         :no_versions ->
           "No published versions are available for dependency `#{details.name}`."
@@ -220,7 +225,7 @@ defmodule Cure.Diagnostic.Operational do
           "Cloning dependency `#{details.name}` failed: #{details.output}."
 
         :dependency_edition_error ->
-          "Dependency `#{details.name}` declares an unsupported edition: #{inspect(details.reason)}."
+          "Dependency `#{details.name}` declares an unsupported edition: #{file_reason(details.reason)}."
       end
 
     diagnostic("E097", :dependency_resolution, message, Map.put(details, :kind, kind))
@@ -230,7 +235,7 @@ defmodule Cure.Diagnostic.Operational do
     message =
       case kind do
         :duplicate_app ->
-          "The project contains more than one application module: #{inspect(details.applications)}."
+          "The project contains more than one application module: #{display_names(details.applications)}."
 
         :app_name_mismatch ->
           "The application module name `#{details.actual}` does not match the project name `#{details.expected}`."
@@ -336,5 +341,20 @@ defmodule Cure.Diagnostic.Operational do
   defp file_reason(reason) when is_atom(reason), do: :file.format_error(reason)
   defp file_reason({kind, detail}) when is_atom(kind), do: "#{kind}: #{file_reason(detail)}"
   defp file_reason(reason) when is_binary(reason), do: reason
-  defp file_reason(reason), do: inspect(reason)
+  defp file_reason(_reason), do: "an unexpected operating-system error"
+
+  defp display_value(value) when is_binary(value), do: value
+  defp display_value(value) when is_atom(value), do: Atom.to_string(value)
+  defp display_value(value) when is_number(value), do: to_string(value)
+  defp display_value(_value), do: "an unsupported value"
+
+  defp display_constraints(values) when is_list(values),
+    do: Enum.map_join(values, ", ", &display_value/1)
+
+  defp display_constraints(value), do: display_value(value)
+
+  defp display_names(values) when is_list(values),
+    do: Enum.map_join(values, ", ", &display_value/1)
+
+  defp display_names(value), do: display_value(value)
 end
