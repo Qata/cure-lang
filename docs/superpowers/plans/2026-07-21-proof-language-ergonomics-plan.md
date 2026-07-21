@@ -17,10 +17,9 @@ rules are certified definitions in the ordinary environment. The existing
 kernel independently checks every result; no proof command or interpreter
 reaches runtime code.
 
-**Baseline:** `otp-metatheory` at `66f2dec1`, after merge commit `d2219191`
-(`elaborator-gaps` at `9b97ebbb`). Baseline verification: 5,259 tests, 0
-failures, 6 excluded; 153 expected Antigen immune responses; 318/318 Antigen
-shape coverage.
+**Baseline:** refreshed at merge commit `2a350d1d` (`elaborator-gaps` at
+`8dab525d`). Baseline verification: 5,275 tests, 0 failures, 6 excluded; 135
+expected Antigen immune responses; 318/318 Antigen shape coverage.
 
 ## Global constraints
 
@@ -177,17 +176,17 @@ in the same preliminary commit. Never create two authorities for a code.
 **Purpose:** prevent implementation from being judged only by the final LIA
 proof and ensure later diagnostics preserve the merged contextual information.
 
-- [ ] Confirm the worktree is clean and the two stash object IDs still resolve.
-- [ ] Check whether `elaborator-gaps` advanced beyond `9b97ebbb`; merge only a
+- [x] Confirm the worktree is clean and the two stash object IDs still resolve.
+- [x] Check whether `elaborator-gaps` advanced beyond `9b97ebbb`; merge only a
   clean committed tip and repeat focused/full verification if it did.
-- [ ] Record the current parser AST, formatted output, elaboration verdict, Core
+- [x] Record the current parser AST, formatted output, elaboration verdict, Core
   hash, erased form, and diagnostic payload for representative explicit proofs:
   nested `trans`, `sym`, legacy `rewrite ... in ...`, congruence under a
   function, hand-written defining equations, and recursive match proofs.
-- [ ] Add rejected fixtures for every E109-E115 producer variant to a planning
+- [x] Add rejected fixtures for every E109-E115 producer variant to a planning
   manifest. They may be marked pending until their task, but each must name the
   eventual public catalog case and exact expected primary/secondary ranges.
-- [ ] Add one small explicit proof used by every later equivalence test, proving
+- [x] Add one small explicit proof used by every later equivalence test, proving
   that new syntax changes source authoring but not kernel verdict or erasure.
 
 **Verification:** focused parser, rewrite, contextual diagnostic, registry, and

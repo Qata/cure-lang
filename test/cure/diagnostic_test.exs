@@ -658,8 +658,9 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.payload.cause.code == "E091"
     assert diagnostic.payload.cause.payload.name == "MissingMessage"
     refute Diagnostic.message(diagnostic) =~ "{:unknown_global"
-    assert Renderer.plain(diagnostic) =~ "edit the `actor`"
-    assert Renderer.plain(diagnostic) =~ "declaration instead"
+    rendered = Renderer.plain(diagnostic)
+    assert rendered =~ "edit the authored"
+    assert rendered =~ "`actor` declaration instead"
 
     machine = Jason.decode!(Renderer.json(diagnostic))
     assert machine["payload"]["cause"]["code"] == "E091"
