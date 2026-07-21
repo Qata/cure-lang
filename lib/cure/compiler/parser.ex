@@ -9852,7 +9852,7 @@ defmodule Cure.Compiler.Parser do
     if token.type == expected_type do
       {:ok, token, advance(state)}
     else
-      error = {:expected_token, expected_type, token.type, token.value, token.line, token.col}
+      error = {:expected_token, expected_type, token.type, token.value, token.line, token.col, token.span}
       {:error, add_error(state, error)}
     end
   end
