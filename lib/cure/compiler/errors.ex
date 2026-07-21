@@ -193,8 +193,49 @@ defmodule Cure.Compiler.Errors do
         diagnostic
       end
 
+    # `compile_string/2` intentionally uses `nofile` unless its caller supplies
+    # a file.  This presentation boundary does have the caller's source identity,
+    # so carry it through every user-visible range rather than leaving labels and
+    # edits attached to an unregistered source.
+    diagnostic = remap_diagnostic_spans(diagnostic, registry, source_id)
+
     {diagnostic, registry}
   end
+
+  defp remap_diagnostic_spans(%Cure.Diagnostic{} = diagnostic, registry, source_id) do
+    remap_term_spans(diagnostic, registry, source_id)
+  end
+
+  defp remap_term_spans(%Cure.Diagnostic.Span{source_id: existing} = span, registry, source_id)
+       when existing in [nil, "nofile"] or existing == source_id do
+    case Cure.Diagnostic.SourceRegistry.span(registry, source_id, span.start_byte, span.end_byte) do
+      {:ok, remapped} -> remapped
+      {:error, _} -> span
+    end
+  end
+
+  defp remap_term_spans(%Cure.Diagnostic.Span{} = span, _registry, _source_id), do: span
+
+  defp remap_term_spans(term, registry, source_id) when is_list(term) do
+    Enum.map(term, &remap_term_spans(&1, registry, source_id))
+  end
+
+  defp remap_term_spans(term, registry, source_id) when is_tuple(term) do
+    term
+    |> Tuple.to_list()
+    |> Enum.map(&remap_term_spans(&1, registry, source_id))
+    |> List.to_tuple()
+  end
+
+  defp remap_term_spans(term, registry, source_id) when is_map(term) do
+    term
+    |> Map.to_list()
+    |> Enum.reduce(term, fn {key, value}, remapped ->
+      Map.put(remapped, key, remap_term_spans(value, registry, source_id))
+    end)
+  end
+
+  defp remap_term_spans(term, _registry, _source_id), do: term
 
   defp remap_operational_span(
          %Cure.Diagnostic{primary: %Cure.Diagnostic.Label{span: %Cure.Diagnostic.Span{} = span} = label} =

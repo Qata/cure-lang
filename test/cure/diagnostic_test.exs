@@ -122,6 +122,24 @@ defmodule Cure.DiagnosticTest do
     assert Renderer.plain(diagnostic, registry) =~ "2 |   x"
   end
 
+  test "presentation remaps nested nofile context onto the caller's authored source" do
+    source =
+      "mod DiagnosticRecord\n  type Nat = Z | S(Nat)\n  rec Point\n    x: Nat\n    y: Nat\n  fn bad() -> Point = Point{x: S(Z()), z: Z()}\nend\n"
+
+    assert {:error, reason} = Cure.Compiler.compile_string(source, emit_events: false)
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic(reason, "record_field_mismatch.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.primary.span.source_id == "record_field_mismatch.cure"
+    assert diagnostic.primary.span.path == "record_field_mismatch.cure"
+    assert rendered =~ "6 |   fn bad() -> Point = Point{x: S(Z()), z: Z()}"
+    assert rendered =~ "^ this field is not declared by the record"
+    refute rendered =~ "at nofile:"
+  end
+
   test "operational failure tuples use the declared registry converter" do
     entry = Cure.Diagnostic.Registry.fetch!("E095")
     diagnostic = apply(entry.converter, entry.converter_function, [{:file_read_error, "demo.cure", :enoent}, []])
