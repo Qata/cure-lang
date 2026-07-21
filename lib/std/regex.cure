@@ -1,0 +1,198 @@
+@group(:text)
+mod Std.Regex
+  ## Pure Cure regular-expression syntax.
+  ##
+  ## This is the first layer of the TyRE-inspired implementation: a regex
+  ## pattern is parsed into an ordinary Cure value.  No OTP regex engine, NIF,
+  ## opaque handle, or foreign parser is involved.
+
+  use Std.Char
+  use Std.List
+  use Std.Option
+
+  ## The syntax tree deliberately keeps the representation small and explicit.
+  ## Captures are represented by `Capture`; matching semantics are added on top
+  ## of this tree rather than hidden in a runtime regex object.
+  type Regex = Empty() | Literal(Char) | Any() | CharSet(List(Char), List(CharRange)) | Sequence(Regex, Regex) | Alternate(Regex, Regex) | Repeat(Regex) | Plus(Regex) | Optional(Regex) | Capture(Regex)
+
+  type CharRange = Range(Char, Char)
+
+  type Parse = Parsed(Regex, String) | ParseFailure()
+  type ClassParse = ClassParsed(List(Char), List(CharRange), String) | ClassFailure()
+
+  ## Parse a complete pattern.  `None` means that the syntax was malformed or
+  ## that an opening group/class was not closed.
+  fn parse(pattern: String) -> Option(Regex) =
+    match parse_alternate(pattern)
+      Parsed(tree, []) -> Some(tree)
+      _ -> None()
+
+  ## Compile-time literal expansion target.  The compiler's regex literal macro
+  ## emits this ordinary typed call, so `/.../` has the inferred type `Regex`
+  ## while the parser and resulting value remain Cure definitions.
+  fn literal(pattern: String, _flags: String) -> Regex =
+    match parse(pattern)
+      Some(tree) -> tree
+      None() -> Empty()
+
+  ## Full-string matching over the parsed tree.  `run/2` returns every
+  ## possible suffix, and the public predicate succeeds exactly when one
+  ## suffix is empty.  The implementation is deliberately expressed as pure
+  ## list recursion; the Thompson machine compilation layer will replace this
+  ## backtracking representation in the next step without changing this API.
+  fn is_match(regex: Regex, input: String) -> Bool = has_empty(run(regex, input))
+
+  fn has_empty(suffixes: List(String)) -> Bool =
+    match suffixes
+      [] -> false
+      [head | tail] ->
+        match head
+          [] -> true
+          _ -> has_empty(tail)
+
+  fn run(regex: Regex, input: String) -> List(String) =
+    match regex
+      Empty() -> [input]
+      Literal(expected) ->
+        match input
+          [actual | rest] ->
+            match Std.Builtin.int_eq(Std.Char.code_point(expected), Std.Char.code_point(actual))
+              True() -> [rest]
+              False() -> []
+          [] -> []
+      Any() ->
+        match input
+          [_ | rest] -> [rest]
+          [] -> []
+      CharSet(chars, ranges) ->
+        match input
+          [actual | rest] ->
+            match char_in_set(actual, chars, ranges)
+              true -> [rest]
+              false -> []
+          [] -> []
+      Sequence(left, right) ->
+        Std.List.flat_map(run(left, input), fn(rest) -> run(right, rest))
+      Alternate(left, right) -> Std.List.append(run(left, input), run(right, input))
+      Repeat(inner) -> repeat_all(inner, [input], [input])
+      Plus(inner) ->
+        Std.List.flat_map(run(inner, input), fn(rest) -> repeat_all(inner, [rest], [rest]))
+      Optional(inner) -> Std.List.append([input], run(inner, input))
+      Capture(inner) -> run(inner, input)
+
+  fn repeat_all(inner: Regex, frontier: List(String), found: List(String)) -> List(String) =
+    match frontier
+      [] -> found
+      [candidate | rest] ->
+        let next =
+          Std.List.filter(
+            run(inner, candidate),
+            fn(suffix) -> Std.Builtin.int_lt(Std.String.length(suffix), Std.String.length(candidate))
+          )
+        repeat_all(inner, Std.List.append(rest, next), Std.List.append(found, next))
+
+  fn char_in_set(actual: Char, chars: List(Char), ranges: List(CharRange)) -> Bool =
+    match chars
+      [] -> char_in_ranges(actual, ranges)
+      [head | tail] ->
+        match Std.Builtin.int_eq(Std.Char.code_point(actual), Std.Char.code_point(head))
+          True() -> true
+          False() -> char_in_set(actual, tail, ranges)
+
+  fn char_in_ranges(actual: Char, ranges: List(CharRange)) -> Bool =
+    match ranges
+      [] -> false
+      [Range(first, last) | tail] ->
+        match Std.Builtin.int_lt(Std.Char.code_point(actual), Std.Char.code_point(first))
+          true -> char_in_ranges(actual, tail)
+          false ->
+            match Std.Builtin.int_lt(Std.Char.code_point(last), Std.Char.code_point(actual))
+              true -> char_in_ranges(actual, tail)
+              false -> true
+
+  fn parse_alternate(input: String) -> Parse =
+    match parse_sequence(input)
+      ParseFailure() -> ParseFailure()
+      Parsed(left, rest) -> parse_alternate_tail(left, rest)
+
+  fn parse_alternate_tail(left: Regex, input: String) -> Parse =
+    match input
+      ['|' | rest] ->
+        match parse_sequence(rest)
+          ParseFailure() -> ParseFailure()
+          Parsed(right, tail) -> parse_alternate_tail(Alternate(left, right), tail)
+      _ -> Parsed(left, input)
+
+  ## A sequence ends before `|`, `)`, `]`, or end-of-input.  An empty sequence
+  ## is the identity element required by `*`, `?`, and empty alternatives.
+  fn parse_sequence(input: String) -> Parse =
+    match input
+      [] -> Parsed(Empty(), [])
+      ['|' | _] -> Parsed(Empty(), input)
+      [')' | _] -> Parsed(Empty(), input)
+      [']' | _] -> Parsed(Empty(), input)
+      _ ->
+        match parse_repetition(input)
+          ParseFailure() -> ParseFailure()
+          Parsed(first, rest) -> parse_sequence_tail(first, rest)
+
+  fn parse_sequence_tail(left: Regex, input: String) -> Parse =
+    match input
+      [] -> Parsed(left, [])
+      ['|' | _] -> Parsed(left, input)
+      [')' | _] -> Parsed(left, input)
+      [']' | _] -> Parsed(left, input)
+      _ ->
+        match parse_repetition(input)
+          ParseFailure() -> ParseFailure()
+          Parsed(right, rest) -> parse_sequence_tail(Sequence(left, right), rest)
+
+  fn parse_repetition(input: String) -> Parse =
+    match parse_atom(input)
+      ParseFailure() -> ParseFailure()
+      Parsed(atom, rest) ->
+        match rest
+          ['*' | tail] -> Parsed(Repeat(atom), tail)
+          ['+' | tail] -> Parsed(Plus(atom), tail)
+          ['?' | tail] -> Parsed(Optional(atom), tail)
+          _ -> Parsed(atom, rest)
+
+  fn parse_atom(input: String) -> Parse =
+    match input
+      [] -> ParseFailure()
+      ['.' | rest] -> Parsed(Any(), rest)
+      ['(' | rest] -> parse_group(rest)
+      ['[' | rest] -> parse_class_atom(rest)
+      ['!' | rest] ->
+        match parse_atom(rest)
+          ParseFailure() -> ParseFailure()
+          Parsed(tree, tail) -> Parsed(Capture(tree), tail)
+      ['\\' | rest] ->
+        match rest
+          [] -> ParseFailure()
+          [escaped | tail] -> Parsed(Literal(escaped), tail)
+      ['*' | _] -> ParseFailure()
+      ['+' | _] -> ParseFailure()
+      ['?' | _] -> ParseFailure()
+      _ ->
+        match input
+          [literal | rest] -> Parsed(Literal(literal), rest)
+
+  fn parse_group(input: String) -> Parse =
+    match parse_alternate(input)
+      ParseFailure() -> ParseFailure()
+      Parsed(tree, [')' | rest]) -> Parsed(tree, rest)
+      _ -> ParseFailure()
+
+  fn parse_class_atom(input: String) -> Parse =
+    match parse_class_items(input, [], [])
+      ClassFailure() -> ParseFailure()
+      ClassParsed(chars, ranges, rest) -> Parsed(CharSet(chars, ranges), rest)
+
+  fn parse_class_items(input: String, chars: List(Char), ranges: List(CharRange)) -> ClassParse =
+    match input
+      [] -> ClassFailure()
+      [']' | rest] -> ClassParsed(reverse(chars), reverse(ranges), rest)
+      [first, '-', last | rest] ->
+        parse_class_items(rest, chars, [Range(first, last) | ranges])
+      [first | rest] -> parse_class_items(rest, [first | chars], ranges)

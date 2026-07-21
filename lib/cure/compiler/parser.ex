@@ -2727,7 +2727,7 @@ defmodule Cure.Compiler.Parser do
         {literal(:symbol, token), advance(state)}
 
       :regex ->
-        {literal(:regex, token), advance(state)}
+        {regex_literal_macro(token), advance(state)}
 
       :char ->
         {literal(:char, token), advance(state)}
@@ -3099,6 +3099,21 @@ defmodule Cure.Compiler.Parser do
   defp literal(subtype, token) do
     meta = [subtype: subtype, line: token.line, col: token.col]
     {:literal, put_token_source_info(meta, token), token.value}
+  end
+
+  # Regex syntax is a compile-time literal macro, not a runtime OTP handle.
+  # Preserve the source pattern as a normal string argument to the pure Cure
+  # `Std.Regex.literal/2` entry point; elaboration therefore infers `Regex` from
+  # its typed signature and generated code contains no `:re` dispatch.
+  defp regex_literal_macro(%Token{value: {body, flags}, line: line, col: col}) do
+    {
+      :function_call,
+      [name: "Std.Regex.literal", line: line, col: col],
+      [
+        {:literal, [subtype: :string, line: line, col: col], body},
+        {:literal, [subtype: :string, line: line, col: col], flags}
+      ]
+    }
   end
 
   defp variable(token) do

@@ -1291,13 +1291,18 @@ defmodule Cure.Compiler.Lexer do
 
     if peek_at(state, 1) == ?r and peek_at(state, 2) == ?/ do
       state = advance(state, 3)
-      {body, state} = consume_while(state, fn c -> c != ?/ end)
-      state = advance(state, 1)
-      # Read flags
-      {flags, state} = consume_while(state, fn c -> c in ?a..?z end)
-      token = Token.new(:regex, {body, flags}, state.line, start_col)
-      maybe_emit_event(state, token)
-      {:ok, %{state | tokens: [token | state.tokens]}}
+      {body, state} = consume_regex_body(state)
+
+      if peek(state) == ?/ do
+        state = advance(state, 1)
+        # Read flags
+        {flags, state} = consume_while(state, fn c -> c in ?a..?z end)
+        token = Token.new(:regex, {body, flags}, state.line, start_col)
+        maybe_emit_event(state, token)
+        {:ok, %{state | tokens: [token | state.tokens]}}
+      else
+        {:error, {:unterminated_regex, state.line, start_col}, state}
+      end
     else
       {:error, {:unexpected_character, ?~, state.line, state.col}, state}
     end
@@ -1489,9 +1494,71 @@ defmodule Cure.Compiler.Lexer do
   end
 
   defp lex_slash(state) do
-    case generic_operator(state) do
-      {:operator, run} -> emit_operator(state, run)
-      :fixed -> lex_slash_fixed(state)
+    if regex_literal_start?(state) do
+      lex_bare_regex(state)
+    else
+      case generic_operator(state) do
+        {:operator, run} -> emit_operator(state, run)
+        :fixed -> lex_slash_fixed(state)
+      end
+    end
+  end
+
+  # A slash is a regex delimiter only where an expression can begin.  Keeping
+  # division and regex literals in one lexer is intentional: `/` remains the
+  # ordinary arithmetic operator after a completed expression.
+  defp regex_literal_start?(%{tokens: []}), do: true
+
+  defp regex_literal_start?(%{tokens: [%Token{type: type} | _]}) do
+    type in [
+      :assign,
+      :arrow,
+      :fat_arrow,
+      :lparen,
+      :lbracket,
+      :lbrace,
+      :comma,
+      :colon,
+      :bar,
+      :pipe,
+      :semicolon,
+      :at,
+      :return
+    ]
+  end
+
+  defp regex_literal_start?(_), do: false
+
+  defp lex_bare_regex(state) do
+    start_col = state.col
+    state = advance(state, 1)
+    {body, state} = consume_regex_body(state)
+
+    if peek(state) == ?/ do
+      state = advance(state, 1)
+      {flags, state} = consume_while(state, fn c -> c in ?a..?z end)
+      token = Token.new(:regex, {body, flags}, state.line, start_col)
+      maybe_emit_event(state, token)
+      {:ok, %{state | tokens: [token | state.tokens]}}
+    else
+      {:error, {:unterminated_regex, state.line, start_col}, state}
+    end
+  end
+
+  # Consume a regex body while treating an escaped delimiter as pattern data.
+  # The body is kept verbatim because the pure Cure parser owns escape
+  # semantics; the lexer only has to find the closing delimiter safely.
+  defp consume_regex_body(state, acc \\ []) do
+    case peek(state) do
+      nil -> {IO.iodata_to_binary(Enum.reverse(acc)), state}
+      ?/ -> {IO.iodata_to_binary(Enum.reverse(acc)), state}
+      ?\\ ->
+        case peek_at(state, 1) do
+          nil -> {IO.iodata_to_binary(Enum.reverse([?\\ | acc])), advance(state, 1)}
+          escaped -> consume_regex_body(advance(state, 2), [escaped, ?\\ | acc])
+        end
+
+      c -> consume_regex_body(advance(state, 1), [c | acc])
     end
   end
 

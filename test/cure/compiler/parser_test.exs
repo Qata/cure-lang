@@ -52,6 +52,14 @@ defmodule Cure.Compiler.ParserTest do
       assert meta[:subtype] == :regex
     end
 
+    test "bare slash regex expands to the pure Cure Regex literal macro" do
+      assert {:function_call, [name: "Std.Regex.literal"], [pattern, flags]} =
+               parse!("/[A-z]*/")
+
+      assert {:literal, [subtype: :string], "[A-z]*"} = pattern
+      assert {:literal, [subtype: :string], ""} = flags
+    end
+
     test "char" do
       assert {:literal, meta, ?x} = parse!("'x'")
       assert meta[:subtype] == :char
