@@ -625,7 +625,9 @@ defmodule Cure.Elab.Elaborator do
       Keyword.get(meta, :record) ->
         case desugar_record_construction(meta, args, env) do
           {:ok, positional} ->
-            attach_record_field_context(elaborate_expr_typed(positional, names, ctx, env), meta, args, env)
+            elaborate_expr_typed(positional, names, ctx, env)
+            |> attach_record_field_context(meta, args, env)
+            |> attach_record_context(meta, args)
 
           {:error, reason} ->
             {:error, reason}
@@ -1723,12 +1725,9 @@ defmodule Cure.Elab.Elaborator do
       Keyword.get(meta, :record) ->
         case desugar_record_construction(meta, args, env) do
           {:ok, positional} ->
-            attach_record_field_context(
-              elaborate_expr_checked(positional, expected_core, names, ctx, env),
-              meta,
-              args,
-              env
-            )
+            elaborate_expr_checked(positional, expected_core, names, ctx, env)
+            |> attach_record_field_context(meta, args, env)
+            |> attach_record_context(meta, args)
 
           {:error, reason} ->
             {:error, reason}
@@ -2223,6 +2222,31 @@ defmodule Cure.Elab.Elaborator do
     do: {:error, attach_record_field_reason(reason, meta, field_pairs, env)}
 
   defp attach_record_field_context(result, _meta, _field_pairs, _env), do: result
+
+  # A record literal is a semantic shape boundary. Keep a more precise field
+  # or constructor-argument producer when one was identified, but give a
+  # whole-record failure the authored record expression and its declared name.
+  defp attach_record_context(
+         {:error, {:source_context, _reason, %{expectation_origin: origin} = _context}} = result,
+         _meta,
+         _args
+       )
+       when origin in [:record_field, :constructor_argument],
+       do: result
+
+  defp attach_record_context({:error, {:source_context, reason, context}}, meta, args)
+       when is_map(context),
+       do: {:error, {:source_context, reason, Map.merge(record_context(meta, args), context)}}
+
+  defp attach_record_context({:error, reason}, meta, args),
+    do: {:error, {:source_context, reason, record_context(meta, args)}}
+
+  defp attach_record_context(result, _meta, _args), do: result
+
+  defp record_context(meta, args) do
+    expression = {:function_call, meta, args}
+    expectation_context(expression, :record, Keyword.get(meta, :name, :record), nil)
+  end
 
   defp attach_record_update_context({:error, {:source_context, reason, context}}, meta, children, env)
        when is_map(context) do

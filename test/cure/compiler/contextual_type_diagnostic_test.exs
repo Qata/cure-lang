@@ -452,6 +452,24 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this record field has the wrong type"
   end
 
+  test "a whole-record mismatch retains the authored record boundary" do
+    source = "fn bad() -> Point = Point{x: value}\n"
+    span = raw_span(source, "Point{x: value}", 1, 19)
+
+    reason =
+      {:source_context, {:cannot_unify, :actual_point, :expected_point},
+       %{span: span, checking: :bad, expression_category: :function_call, expectation_origin: :record}}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "record_shape.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.payload.origin.kind == :record
+    assert diagnostic.payload.origin.owner == :bad
+    assert rendered =~ "RECORD HAS THE WRONG TYPE"
+    assert rendered =~ "this record has the wrong type"
+  end
+
   test "a typed pattern mismatch points at the authored annotation" do
     source = "n: Bool -> 1\n"
     annotation = raw_span(source, "Bool", 1, 4)
