@@ -53,7 +53,10 @@ defmodule Cure.Elab.DeclHygieneTest do
 
   test "duplicate record field is rejected" do
     src = "mod DupField\n  rec Point\n    x: Int\n    x: Int\nend\n"
-    assert {:error, {:duplicate_field, :x}} = elaborate(src)
+
+    assert {:error, {:duplicate_field, %{name: :x, spans: [first, second]}}} = elaborate(src)
+    assert {first.start_line, first.start_column} == {3, 5}
+    assert {second.start_line, second.start_column} == {4, 5}
   end
 
   test "distinct record fields still elaborate" do

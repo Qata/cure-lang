@@ -2103,6 +2103,10 @@ defmodule Cure.Diagnostic.Adapter do
     do:
       "The parameter `#{name}` is declared more than once. Rename or remove one occurrence so every parameter has a unique name."
 
+  defp declaration_conflict_message(:duplicate_field, name, _detail),
+    do:
+      "The field `#{name}` is declared more than once. Rename or remove one occurrence so every record field has a unique name."
+
   defp declaration_conflict_message(_kind, name, detail),
     do: "The declaration `#{name}` conflicts with another visible declaration#{detail}."
 

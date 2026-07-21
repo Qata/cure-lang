@@ -1593,7 +1593,7 @@ defmodule Cure.Elab.Declarations do
 
     case names -- Enum.uniq(names) do
       [] -> :ok
-      [dup | _] -> {:error, {:duplicate_field, String.to_atom(dup)}}
+      [dup | _] -> {:error, {:duplicate_field, duplicate_binder_details(fields, dup)}}
     end
   end
 

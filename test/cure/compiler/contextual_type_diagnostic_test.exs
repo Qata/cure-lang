@@ -67,6 +67,31 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert related["location"]["range"]["start"]["character"] == 7
   end
 
+  test "a duplicate record field labels both authored declarations" do
+    source = "mod DupField\n  rec Point\n    x: Int\n    x: Bool\nend\n"
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "duplicate_field.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "duplicate_field.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E105"
+    assert diagnostic.title == "Duplicate field"
+    assert diagnostic.primary.span.start_line == 4
+    assert diagnostic.primary.message == "this field repeats an earlier name"
+    assert [%{span: first, message: "the name was first declared here"}] = diagnostic.secondary
+    assert first.start_line == 3
+    assert rendered =~ "3 |     x: Int"
+    assert rendered =~ "4 |     x: Bool"
+    assert rendered =~ "this field repeats an earlier name"
+    assert rendered =~ "the name was first declared here"
+    assert rendered =~ "every record field has a unique name"
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 
