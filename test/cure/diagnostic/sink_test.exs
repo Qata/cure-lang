@@ -81,4 +81,35 @@ defmodule Cure.Diagnostic.SinkTest do
     rendered = Sink.render(Sink.new(format: :lsp), diagnostic)
     refute Map.has_key?(rendered, "range")
   end
+
+  test "JSON normalizes nested provenance values" do
+    diagnostic =
+      Cure.Diagnostic.new(
+        code: "E092",
+        key: :macro_expansion_failed,
+        severity: :error,
+        title: "Macro expansion failed",
+        message: "the macro could not expand",
+        provenance: [
+          %Cure.Diagnostic.ProvenanceFrame{
+            kind: :macro_expansion,
+            name: "every",
+            parent: {:expansion, %{phase: :parser}}
+          }
+        ]
+      )
+
+    rendered = diagnostic |> Cure.Diagnostic.Renderer.json() |> Jason.decode!()
+
+    assert rendered["provenance"] == [
+             %{
+               "kind" => "macro_expansion",
+               "name" => "every",
+               "invocation" => nil,
+               "definition" => nil,
+               "generated" => nil,
+               "parent" => ["expansion", %{"phase" => "parser"}]
+             }
+           ]
+  end
 end

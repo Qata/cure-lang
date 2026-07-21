@@ -222,12 +222,12 @@ defmodule Cure.Diagnostic.Renderer do
       "invocation" => optional_span(frame.invocation),
       "definition" => optional_span(frame.definition),
       "generated" => optional_span(frame.generated),
-      "parent" => frame.parent
+      "parent" => stringify_keys(frame.parent)
     }
   end
 
   defp optional_span(%Span{} = span), do: span_map(span)
-  defp optional_span(other), do: other
+  defp optional_span(other), do: stringify_keys(other)
 
   defp lsp_range(nil, _registry, _encoding),
     do: %{"start" => %{"line" => 0, "character" => 0}, "end" => %{"line" => 0, "character" => 0}}
@@ -287,6 +287,7 @@ defmodule Cure.Diagnostic.Renderer do
   defp lsp_severity(:information), do: 3
   defp lsp_severity(:hint), do: 4
 
+  defp stringify_keys(nil), do: nil
   defp stringify_keys(%Diagnostic{} = diagnostic), do: to_map(diagnostic)
   defp stringify_keys(%Span{} = span), do: span_map(span)
 
