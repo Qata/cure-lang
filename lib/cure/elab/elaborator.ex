@@ -4250,7 +4250,7 @@ defmodule Cure.Elab.Elaborator do
   # `{:absurd}` branch; coverage is enforced by the kernel's check_coverage.
   defp elaborate_with_branches(arms, %{ctx: ctx, env: env, dname: dname} = cfg) do
     with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname),
-         :ok <- reject_with_default(default) do
+         {:ok, arm_map} <- expand_dependent_default(arm_map, default, dname, env) do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
         {_cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
@@ -4266,10 +4266,43 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  # A `with`/`with`-rematch clause refines by restating constructor patterns; a
-  # bare variable/wildcard catch-all has no refinement to offer here.
-  defp reject_with_default(nil), do: :ok
-  defp reject_with_default({vname, _body}), do: {:error, {:unsupported_pattern, {:default_in_with, vname}}}
+  # A dependent case has no Core-level default branch. Expand a source catch-all
+  # into one explicit arm for every uncovered constructor so each copy receives
+  # the constructor-specific motive and sibling refinement. A named catch-all
+  # binds the whole scrutinee, reconstructed from that arm's explicit fields;
+  # `_` needs no substitution. This is the dependent counterpart of the ordinary
+  # match default expansion and avoids rejecting valid `_ -> ...` clauses merely
+  # because another parameter's type mentions the scrutinee.
+  defp expand_dependent_default(arm_map, nil, _dname, _env), do: {:ok, arm_map}
+
+  defp expand_dependent_default(arm_map, {vname, body}, dname, env) do
+    expanded =
+      Inductive.ctors_of(env, dname)
+      |> Enum.reject(&Map.has_key?(arm_map, &1.name))
+      |> Enum.reduce(arm_map, fn ctor, acc ->
+        vars =
+          ctor.plicities
+          |> Enum.with_index()
+          |> Enum.flat_map(fn
+            {:explicit, index} -> ["$default_#{index}_#{map_size(acc)}"]
+            {:implicit, _index} -> []
+          end)
+
+        args = Enum.map(vars, &{:variable, [], &1})
+        pattern = {:function_call, [name: Atom.to_string(ctor.name)], args}
+
+        branch_body =
+          if vname == "_" do
+            body
+          else
+            subst_surface_var(body, vname, pattern)
+          end
+
+        Map.put(acc, ctor.name, {:matched, pattern, branch_body})
+      end)
+
+    {:ok, expanded}
+  end
 
   defp elaborate_with_branch(cname, pattern, body_expr, cfg) do
     %{
@@ -4457,7 +4490,7 @@ defmodule Cure.Elab.Elaborator do
   # convoy `(case e …) cap`.
   defp elaborate_with_motivegen_branches(arms, %{ctx: ctx, env: env, dname: dname} = cfg) do
     with {:ok, {arm_map, default}} <- partition_arms(arms, ctx, env, dname),
-         :ok <- reject_with_default(default) do
+         {:ok, arm_map} <- expand_dependent_default(arm_map, default, dname, env) do
       arm_map
       |> Enum.reduce_while({:ok, []}, fn
         {_cname, {:impossible_marked, _pattern}}, {:ok, acc} ->
