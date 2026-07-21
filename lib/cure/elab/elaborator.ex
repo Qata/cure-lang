@@ -8817,7 +8817,7 @@ defmodule Cure.Elab.Elaborator do
             {m, acc ++ [{:meta, id}]}
           end)
 
-        case infer_ctor_args(ctor.args, arg_asts, param_metas, [], mctx, names, ctx, env) do
+        case infer_ctor_args(ctor.args, arg_asts, param_metas, [], mctx, names, ctx, env, cname) do
           {:ok, present} -> elaborate_ctor_app(env, cname, present, ctx)
           {:error, _} = err -> err
         end
@@ -8830,10 +8830,24 @@ defmodule Cure.Elab.Elaborator do
   # *checked* against it, otherwise it is *inferred* and its type unified against
   # the field type to solve parameters. Returns `[{term, type_term}]` for
   # `elaborate_ctor_app`.
-  defp infer_ctor_args([], [], _params, acc, _mctx, _names, _ctx, _env),
+  defp infer_ctor_args(args, arg_asts, params, acc, mctx, names, ctx, env, cname),
+    do: infer_ctor_args(args, arg_asts, params, acc, mctx, names, ctx, env, cname, 0)
+
+  defp infer_ctor_args([], [], _params, acc, _mctx, _names, _ctx, _env, _cname, _index),
     do: {:ok, Enum.reverse(acc)}
 
-  defp infer_ctor_args([{_fname, ftype} | fields], [arg | args], params, acc, mctx, names, ctx, env) do
+  defp infer_ctor_args(
+         [{_fname, ftype} | fields],
+         [arg | args],
+         params,
+         acc,
+         mctx,
+         names,
+         ctx,
+         env,
+         cname,
+         index
+       ) do
     frame = params ++ (acc |> Enum.reverse() |> Enum.map(&elem(&1, 0)))
     ftype_inst = ftype |> Subst.instantiate(frame) |> Unify.zonk(mctx)
 
@@ -8852,10 +8866,10 @@ defmodule Cure.Elab.Elaborator do
 
     case step do
       {:ok, term, ty_term, mctx} ->
-        infer_ctor_args(fields, args, params, [{term, ty_term} | acc], mctx, names, ctx, env)
+        infer_ctor_args(fields, args, params, [{term, ty_term} | acc], mctx, names, ctx, env, cname, index + 1)
 
-      {:error, _} = err ->
-        err
+      {:error, reason} ->
+        {:error, attach_expectation_context(reason, arg, :constructor_argument, cname, index)}
     end
   end
 
