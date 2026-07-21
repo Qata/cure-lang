@@ -2065,7 +2065,8 @@ defmodule Cure.CLI do
       end
     rescue
       e ->
-        error("key generation failed: #{Exception.message(e)}")
+        error_diagnostic(Cure.Diagnostic.Operational.internal_exception(e, __STACKTRACE__, context: "key generation"))
+
         exit({:shutdown, 1})
     end
   end
