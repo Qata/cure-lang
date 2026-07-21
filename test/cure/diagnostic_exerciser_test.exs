@@ -44,6 +44,31 @@ defmodule Cure.DiagnosticExerciserTest do
       {"extern has body", "E057",
        "mod DiagnosticExternBody\n  @extern(:erlang, :self, 0)\n  fn me() -> Atom = :oops\nend\n", :extern_has_body},
       {"unsupported spawn", "E107", "mod DiagnosticSpawn\n  fn bad() -> Int = spawn 1\nend\n", :unsupported_async},
+      {"call arity mismatch", "E003",
+       "mod DiagnosticArity\n  fn id(value: Int) -> Int = value\n  fn bad() -> Int = id()\nend\n",
+       :arity_mismatch_elaboration},
+      {"unknown record", "E021", "mod DiagnosticUnknownRecord\n  fn bad() = Missing{value: 1}\nend\n", :unknown_record},
+      {"splice outside quote", "E108",
+       "mod DiagnosticSplice\n  use Std.Syntax\n  fn bad(value: Syntax) -> Syntax = consume($(value))\nend\n",
+       :splice_outside_quote},
+      {"named argument mismatch", "E115",
+       "mod DiagnosticNamedArgument\n  fn pair(left: Int, right: Int) -> Int = left\n  fn bad() -> Int = pair(left: 1, 2)\nend\n",
+       :named_argument_mismatch},
+      {"proof chain mismatch", "E110",
+       "mod DiagnosticProofMismatch\n  use Std.Equivalent\n  fn proof(x: Int) -> Equivalent(Int, x, x) = proof chain\n    x\n      == 1\n      because reflexive(x)\nend\n",
+       :proof_chain_mismatch},
+      {"directed rewrite failure", "E111",
+       "mod DiagnosticRewrite\n  use Std.Equivalent\n  fn proof(x: Int, y: Int, equality: Equivalent(Int, x, y)) -> Equivalent(Int, x, x) = proof chain\n    x\n      == x\n      because\n        rewrite using equality\n        equality\nend\n",
+       :rewrite_failed},
+      {"simplification failure", "E112",
+       "mod DiagnosticSimplify\n  type Nat = Z | S(Nat)\n  fn bad(x: Nat) -> Equivalent(Nat, x, S(x)) = proof chain\n    x == S(x)\n    because simplify\nend\n",
+       :simplification_failed},
+      {"induction failure", "E113",
+       "mod DiagnosticInduction\n  type Nat = Z | S(Nat)\n  fn bad(value: Nat) -> Equivalent(Nat, value, value) = induction value\n    case Z => reflexive(Z)\n    case S() => reflexive(Z)\nend\n",
+       :induction_failed},
+      {"defining equation unavailable", "E114",
+       "mod DiagnosticEquation\n  type Bit = Off | On\n  fn flip(bit: Bit) -> Bit = match bit\n    Off -> On\n    On -> Off\n  fn bad() = flip.Missing\nend\n",
+       :defining_equation_unavailable},
       {"erasure declaration", "E102", "mod DiagnosticErasure\n  @erases(:banana)\n  opaque type Handle\nend\n",
        :erasure_violation},
       {"relevant use of erased value", "E104",
@@ -304,6 +329,11 @@ defmodule Cure.DiagnosticExerciserTest do
     assert :ok =
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
                only_producers: [:macro_expansion]
+             )
+
+    assert :ok =
+             Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
+               only_producers: [:elaboration]
              )
 
     Enum.each(boundary_cases, fn {label, expected_code, reason} ->

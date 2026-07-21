@@ -644,6 +644,19 @@ defmodule Cure.Diagnostic.Adapter do
            ],
       do: from_error(reason, opts)
 
+  def from_error({:codegen_error, {kind, _} = reason}, opts)
+      when kind in [
+             :proof_chain_mismatch,
+             :rewrite_failed,
+             :simplification_failed,
+             :induction_failed,
+             :defining_equation_unavailable
+           ],
+      do: from_error(reason, opts)
+
+  def from_error({:codegen_error, {:named_argument_mismatch, _, _} = reason}, opts),
+    do: from_error(reason, opts)
+
   def from_error({:codegen_failure, details}, opts) when is_map(details) do
     opts =
       opts
