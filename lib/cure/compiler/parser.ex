@@ -3334,6 +3334,7 @@ defmodule Cure.Compiler.Parser do
   defp unexpected_token_error(%Token{} = token) do
     {:unexpected_token,
      %{
+       kind: unexpected_token_kind(token.type),
        observed: token.value || token.type,
        token_type: token.type,
        span: token.span,
@@ -3341,6 +3342,10 @@ defmodule Cure.Compiler.Parser do
        column: token.col
      }}
   end
+
+  defp unexpected_token_kind(:lbrace), do: :bare_brace_expression
+  defp unexpected_token_kind(type) when type in [:rparen, :rbracket, :rbrace], do: :unmatched_closer
+  defp unexpected_token_kind(_type), do: :unexpected_token
 
   # -- assert_type builtin (v0.19.0) ----------------------------------------
   #

@@ -2429,7 +2429,7 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:unexpected_token, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
-        kind: :unexpected_token,
+        kind: Map.get(details, :kind, :unexpected_token),
         expected: Map.get(details, :expected),
         observed: details.observed,
         at: Map.get(details, :span) || Keyword.get(opts, :span),
@@ -4881,6 +4881,8 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_malformed}), do: "Edition pragma is malformed"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_unknown}), do: "Edition is unknown"
   defp syntax_problem_title(%SyntaxProblem{kind: :missing_function_body}), do: "Function body is missing"
+  defp syntax_problem_title(%SyntaxProblem{kind: :bare_brace_expression}), do: "Brace cannot start an expression"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unmatched_closer}), do: "Closing delimiter has no opener"
   defp syntax_problem_title(%SyntaxProblem{expected: :explain_point}), do: "Explanation clause needs a failure point"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
@@ -4953,6 +4955,13 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :missing_function_body}),
     do: "This function declaration ends after `=`, but every function needs a body expression."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :bare_brace_expression}),
+    do:
+      "A bare '{' does not begin a Cure expression. Write `Type{...}` for a record, `\#{...}` for a map, or use indentation for a block."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unmatched_closer, observed: observed}),
+    do: "#{syntax_name(observed)} closes a construct, but there is no matching opener here."
 
   defp syntax_problem_context(%SyntaxProblem{expected: :explain_point, observed: observed}),
     do:
@@ -5027,6 +5036,11 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unrecognized_pattern}), do: "this pattern form is not supported"
   defp syntax_problem_label(%SyntaxProblem{kind: :missing_function_body}), do: "write the function body after this `=`"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :bare_brace_expression}),
+    do: "choose record, map, or block syntax here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unmatched_closer}), do: "this delimiter has nothing to close"
   defp syntax_problem_label(%SyntaxProblem{expected: :explain_point}), do: "name the failure point before this arrow"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :non_associative}),

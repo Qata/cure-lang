@@ -147,7 +147,7 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     end
   end
 
-  test "an otherwise-unclassified token keeps its exact source range" do
+  test "a bare brace explains the valid expression forms and keeps its exact source range" do
     source = "{\n"
     {:ok, tokens} = Lexer.tokenize(source, file: "unexpected.cure", emit_events: false)
     assert {:error, [{:unexpected_token, details} | _]} = Parser.parse(tokens, emit_events: false)
@@ -158,19 +158,49 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
 
     assert Renderer.plain(diagnostic, registry, width: 80) ==
              String.trim_trailing("""
-             -- I GOT STUCK WHILE PARSING THIS [E094] ----------------------- unexpected.cure
+             -- BRACE CANNOT START AN EXPRESSION [E094] --------------------- unexpected.cure
 
-             '{' cannot appear at this point in the construct.
+             A bare '{' does not begin a Cure expression. Write `Type{...}` for a record,
+             `\#{...}` for a map, or use indentation for a block.
 
              at unexpected.cure:1:1
              1 | {
-               | ^ this syntax does not fit here
+               | ^ choose record, map, or block syntax here
              """)
 
     assert Renderer.lsp(diagnostic, registry)["range"] == %{
              "start" => %{"line" => 0, "character" => 0},
              "end" => %{"line" => 0, "character" => 1}
            }
+
+    json = diagnostic |> Renderer.json() |> Jason.decode!()
+    assert json["code"] == "E094"
+    assert json["title"] == "Brace cannot start an expression"
+    assert json["payload"]["kind"] == "bare_brace_expression"
+    assert json["suggestions"] == []
+  end
+
+  test "an unmatched closing delimiter says that its opener is missing" do
+    source = ")\n"
+    {:ok, tokens} = Lexer.tokenize(source, file: "closer.cure", emit_events: false)
+    assert {:error, [{:unexpected_token, details} | _]} = Parser.parse(tokens, emit_events: false)
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [{:unexpected_token, details}]}, "closer.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- CLOSING DELIMITER HAS NO OPENER [E094] -------------------------- closer.cure
+
+             ')' closes a construct, but there is no matching opener here.
+
+             at closer.cure:1:1
+             1 | )
+               | ^ this delimiter has nothing to close
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["data"]["key"] == "unmatched_closer"
+    assert diagnostic.suggestions == []
   end
 
   describe "associative operators still chain" do
