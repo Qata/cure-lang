@@ -4988,7 +4988,7 @@ defmodule Cure.Compiler.Parser do
 
         kind =
           cond do
-            observed.type in [:eof, :dedent] -> :container_unclosed
+            observed.type in [:eof, :dedent, :newline] -> :container_unclosed
             separator_allowed and call_argument_start?(observed) -> :container_separator_missing
             true -> nil
           end
@@ -5004,7 +5004,7 @@ defmodule Cure.Compiler.Parser do
               end
 
           span =
-            if kind == :container_separator_missing do
+            if kind == :container_separator_missing or observed.type == :newline do
               %{
                 observed.span
                 | end_byte: observed.span.start_byte,
@@ -8766,13 +8766,19 @@ defmodule Cure.Compiler.Parser do
 
     case {peek(state), la2} do
       {%Token{type: :lparen}, %Token{type: :colon}} ->
+        open_token = peek(state)
         state = advance(state)
         name_token = peek(state)
         name = to_string(name_token.value)
         state = advance(state)
         state = expect(state, :colon)
         {inner, state} = parse_type_atom(state)
-        state = expect(state, :rparen)
+
+        {state, _close_token} =
+          expect_container_close(state, :rparen, :named_constructor_domain, open_token, [inner], false, %{
+            binder_span: name_token.span
+          })
+
         {{:named_dom, name, inner}, state}
 
       # A RELEVANT IMPLICIT domain `{k: Type}` (Idris `{k : Nat}`): implicit at
@@ -8785,13 +8791,19 @@ defmodule Cure.Compiler.Parser do
       # bar, so a bar-less `{ident: …}` is never a valid refinement here.
       {%Token{type: :lbrace}, %Token{type: :colon}} ->
         if implicit_dom_brace?(state) do
+          open_token = peek(state)
           state = advance(state)
           name_token = peek(state)
           name = to_string(name_token.value)
           state = advance(state)
           state = expect(state, :colon)
           {inner, state} = parse_type_atom(state)
-          state = expect(state, :rbrace)
+
+          {state, _close_token} =
+            expect_container_close(state, :rbrace, :implicit_constructor_domain, open_token, [inner], false, %{
+              binder_span: name_token.span
+            })
+
           {{:implicit_dom, name, inner}, state}
         else
           parse_type_atom(state)

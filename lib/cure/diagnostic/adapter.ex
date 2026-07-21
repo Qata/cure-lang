@@ -5099,6 +5099,18 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "Parenthesized expression is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :named_constructor_domain}
+       }),
+       do: "Named constructor domain is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :implicit_constructor_domain}
+       }),
+       do: "Implicit constructor domain is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :map}}),
     do: "Map is not closed"
 
@@ -5434,6 +5446,18 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
+         context: %{container: :named_constructor_domain}
+       }),
+       do: "This named constructor domain reaches the end of the declaration without its closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :implicit_constructor_domain}
+       }),
+       do: "This implicit constructor domain reaches the end of the declaration without its closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
          expected: :binary_close,
          context: %{container: :binary_literal}
        }),
@@ -5713,6 +5737,18 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "close this parenthesized expression with `)`"
 
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :named_constructor_domain}
+       }),
+       do: "close this named constructor domain with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :implicit_constructor_domain}
+       }),
+       do: "close this implicit constructor domain with `}`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :container_unclosed, expected: expected}),
     do: "close this container with `#{syntax_insertion(expected)}`"
 
@@ -5928,6 +5964,37 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(opener, :secondary, "this parenthesized expression starts here"),
       pickup_label(previous, :secondary, "the grouped expression ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: container} = context
+         },
+         primary_span
+       )
+       when container in [:named_constructor_domain, :implicit_constructor_domain] do
+    implicit? = container == :implicit_constructor_domain
+
+    [
+      pickup_label(
+        opener,
+        :secondary,
+        if(implicit?,
+          do: "this implicit constructor domain starts here",
+          else: "this named constructor domain starts here"
+        )
+      ),
+      pickup_label(Map.get(context, :binder_span), :secondary, "this is the dependent argument binder"),
+      pickup_label(previous, :secondary, "the argument type ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -6274,9 +6341,10 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_insertions(
-         %SyntaxProblem{kind: :container_unclosed, expected: expected, context: %{token_type: :dedent}},
+         %SyntaxProblem{kind: :container_unclosed, expected: expected, context: %{token_type: token_type}},
          %Span{} = span
-       ) do
+       )
+       when token_type in [:dedent, :newline] do
     closing_delimiter_insertion(expected, span)
   end
 
