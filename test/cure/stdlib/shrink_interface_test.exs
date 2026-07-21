@@ -64,7 +64,7 @@ defmodule Cure.Stdlib.ShrinkInterfaceTest do
       fn g(a: Atom) -> List(Atom) = shrink(a)
     """
 
-    assert {:error, {:source_context, {:no_instance, :Shrink, _}, %{expectation_origin: :annotation}}} =
+    assert {:error, {:source_context, {:no_instance, :Shrink, _}, %{expectation_origin: :implicit}}} =
              Program.elaborate(src)
   end
 

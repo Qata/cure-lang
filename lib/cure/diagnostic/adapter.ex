@@ -1714,7 +1714,7 @@ defmodule Cure.Diagnostic.Adapter do
           title: "#{macro_title(macro)} expansion failed",
           message: macro_failure_message(macro, details.module, cause_diagnostic),
           primary: primary_label(opts, "this `#{macro}` declaration generated the failing module"),
-          notes: ["The generated module is an implementation detail; edit the authored `#{macro}` declaration instead."],
+          notes: ["The generated module is an implementation detail; edit the `#{macro}` declaration instead."],
           provenance: provenance_frames(details, opts),
           payload: %{
             macro: name_to_string(macro),
