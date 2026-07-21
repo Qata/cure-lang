@@ -484,23 +484,72 @@ defmodule Cure.Elab.Elaborator do
   def apply_checked_args(term, type, args, names, ctx, env),
     do: check_app_args(term, type, args, names, ctx, env)
 
-  defp check_app_args(term, type, [], _names, _ctx, _env), do: {:ok, term, type}
+  defp check_app_args(term, type, args, names, ctx, env),
+    do: check_app_args(term, type, args, names, ctx, env, 0)
 
-  defp check_app_args(term, type, [arg | rest], names, ctx, env) do
+  defp check_app_args(term, type, [], _names, _ctx, _env, _index), do: {:ok, term, type}
+
+  defp check_app_args(term, type, [arg | rest], names, ctx, env, index) do
     case type do
       {:vpi, _g, dom_value, cod_closure} ->
         dom_term = resplit_data(Quote.reify(dom_value, Context.length(ctx)), env)
 
-        with {:ok, arg_term} <- elaborate_expr_checked(arg, dom_term, names, ctx, env) do
-          arg_value = Eval.eval(arg_term, Context.env(ctx))
-          next_type = Eval.apply_closure(cod_closure, arg_value)
-          check_app_args({:app, term, arg_term}, next_type, rest, names, ctx, env)
+        case elaborate_expr_checked(arg, dom_term, names, ctx, env) do
+          {:ok, arg_term} ->
+            arg_value = Eval.eval(arg_term, Context.env(ctx))
+            next_type = Eval.apply_closure(cod_closure, arg_value)
+            check_app_args({:app, term, arg_term}, next_type, rest, names, ctx, env, index + 1)
+
+          {:error, reason} ->
+            {:error, attach_call_argument_context(reason, arg, index, term)}
         end
 
       _ ->
         {:error, :applied_non_function}
     end
   end
+
+  defp attach_call_argument_context({:source_context, reason, context}, arg, index, term)
+       when is_map(context) do
+    {:source_context, reason, Map.merge(context, call_argument_context(arg, index, term))}
+  end
+
+  defp attach_call_argument_context(reason, arg, index, term) do
+    {:source_context, reason, call_argument_context(arg, index, term)}
+  end
+
+  defp call_argument_context(arg, index, term) do
+    span = surface_expression_span(arg)
+
+    %{
+      line: span && span.start_line,
+      column: span && span.start_column,
+      length: span && max(1, span.end_byte - span.start_byte),
+      span: span,
+      expectation_span: span,
+      checking: call_owner(term),
+      expression_category: expression_category(arg),
+      expectation_origin: :call_argument,
+      argument_index: index
+    }
+  end
+
+  defp surface_expression_span({_kind, meta, _children}) when is_list(meta) do
+    case Cure.MetaAST.Metadata.source_info(meta) do
+      %Cure.MetaAST.SourceInfo{whole: span} -> span
+      _ -> nil
+    end
+  end
+
+  defp surface_expression_span(_expression), do: nil
+
+  defp expression_category({kind, _meta, _children}) when is_atom(kind), do: kind
+  defp expression_category({kind, _meta, _left, _right}) when is_atom(kind), do: kind
+  defp expression_category(_expression), do: :expression
+
+  defp call_owner({:global, name}), do: name
+  defp call_owner({:app, head, _argument}), do: call_owner(head)
+  defp call_owner(_term), do: nil
 
   @doc """
   Context-aware expression elaboration: elaborate `expr` to `{term, type_value}`

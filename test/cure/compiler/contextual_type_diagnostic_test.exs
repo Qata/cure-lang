@@ -116,6 +116,39 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.payload.branch_types |> Enum.map(& &1.branch) == [:A, :B, :C]
   end
 
+  test "a call argument conversion retains its argument origin and caret" do
+    source = "fn main() -> Int = use(1, \"bad\")\n"
+    argument = raw_span(source, "\"bad\"", 1, 27)
+
+    reason =
+      {:source_context, {:conversion_failure, "String", "Int"},
+       %{
+         line: 1,
+         column: 27,
+         length: 5,
+         span: argument,
+         expectation_span: argument,
+         checking: :use,
+         argument_index: 1,
+         expression_category: :literal,
+         expectation_origin: :call_argument
+       }}
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "call.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.title == "Argument has the wrong type"
+    assert diagnostic.payload.origin.kind == :call_argument
+    assert diagnostic.payload.origin.owner == :use
+    assert diagnostic.payload.origin.index == 1
+    assert diagnostic.primary.span.start_column == 27
+    assert rendered =~ "Argument 2 of `use`"
+    assert rendered =~ "Expected: Int"
+    assert rendered =~ "Found:    String"
+    assert rendered =~ "1 | fn main() -> Int = use(1, \"bad\")"
+    assert rendered =~ "this argument has the wrong type"
+  end
+
   defp raw_span(source, needle, line, column) do
     {start_byte, byte_length} = :binary.match(source, needle)
 
