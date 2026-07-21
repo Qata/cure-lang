@@ -1261,6 +1261,32 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:tuple_arity_mismatch, expected, actual}, opts)
+      when is_integer(expected) and is_integer(actual) do
+    difference = abs(expected - actual)
+
+    {label, hint} =
+      if actual < expected do
+        {"add #{argument_count(difference)} to this tuple pattern",
+         "Add #{argument_count(difference)} to match all #{expected} tuple elements; use `_` for values you do not need."}
+      else
+        {"remove #{argument_count(difference)} from this tuple pattern",
+         "Remove #{argument_count(difference)}; this value has only #{argument_count(expected)}."}
+      end
+
+    Diagnostic.new(
+      code: "E003",
+      key: :arity_mismatch,
+      severity: :error,
+      title: "Tuple pattern has the wrong size",
+      body:
+        Doc.paragraph("This value has #{argument_count(expected)}, but the pattern contains #{argument_count(actual)}."),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{kind: :tuple_pattern, expected: expected, actual: actual}
+    )
+  end
+
   def from_error({:tuple_arity_mismatch, direction, details}, opts) do
     Diagnostic.new(
       code: "E003",

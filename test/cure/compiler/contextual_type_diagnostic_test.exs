@@ -448,6 +448,36 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert rendered =~ "this constructor does not contain them"
   end
 
+  test "tuple pattern arity reports the expected and authored sizes with a pattern caret" do
+    source = """
+    mod TuplePatternArity
+      fn first(pair: Tuple(Int, Int)) -> Int = match pair
+        %[x, y, ignored] -> x
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source,
+               file: "tuple_pattern_arity.cure",
+               emit_events: false
+             )
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "tuple_pattern_arity.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E003"
+    assert diagnostic.title == "Tuple pattern has the wrong size"
+    assert diagnostic.payload == %{kind: :tuple_pattern, expected: 2, actual: 3}
+    assert diagnostic.primary.span.start_line == 3
+    assert diagnostic.primary.message == "remove 1 argument from this tuple pattern"
+    assert rendered =~ "3 |     %[x, y, ignored] -> x"
+    assert rendered =~ "^^^^^^^^^^^^^^^^ remove 1 argument from this tuple pattern"
+    assert rendered =~ "this value has only 2 arguments"
+
+    lsp = Renderer.lsp(diagnostic, registry)
+    assert lsp["range"]["start"] == %{"line" => 2, "character" => 4}
+  end
+
   test "declaration context derives its extent from the parser-owned span" do
     source = "fn bad() -> Int = \"é\"\n"
 

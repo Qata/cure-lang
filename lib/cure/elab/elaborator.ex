@@ -5153,12 +5153,15 @@ defmodule Cure.Elab.Elaborator do
   # destructures. Lower it to the (already-supported) projections `.1`/`.2`:
   # `body[x ↦ p.1, y ↦ p.2]`, elaborated directly. Restricted to a VARIABLE
   # scrutinee (so the projections are cheap and re-evaluation-free) and a flat
-  # 2-element tuple of variables/wildcards; anything else falls through to the
-  # ordinary (`{:vdata}`) dispatch and its clean error.
+  # tuple of variables/wildcards. The scrutinee type owns the arity: checking it
+  # here prevents unused extra binders from making a malformed pattern appear to
+  # work merely because their out-of-bounds projections are never elaborated.
   defp try_tuple_match({:variable, _sm, _sn} = scrut, [{:match_arm, meta, body}], expected, names, ctx, env) do
     case Keyword.fetch!(meta, :pattern) do
-      {:tuple, _tm, [_, _ | _] = elems} ->
-        with {:ok, subs} <- tuple_subs(elems, scrut) do
+      {:tuple, _tm, elems} = pattern when is_list(elems) ->
+        with {:ok, tuple_arity} <- tuple_pattern_arity(scrut, names, ctx, env),
+             :ok <- validate_tuple_pattern_arity(pattern, tuple_arity, length(elems)),
+             {:ok, subs} <- tuple_subs(elems, scrut) do
           b = single_body(body)
 
           if binds_any?(b, Enum.map(subs, &elem(&1, 0))) do
@@ -5175,6 +5178,41 @@ defmodule Cure.Elab.Elaborator do
   end
 
   defp try_tuple_match(_scrut, _arms, _expected, _names, _ctx, _env), do: :not_applicable
+
+  defp tuple_pattern_arity(scrut, names, ctx, env) do
+    with {:ok, _term, type_value} <- elaborate_expr_typed(scrut, names, ctx, env),
+         sigma_fam when not is_nil(sigma_fam) <- Inductive.builtin(env, :sigma) do
+      type_term = Quote.reify(type_value, Context.length(ctx), Context.signature(ctx))
+      unit_fam = unit_family_name(env)
+      unit_ctor = unit_ctor_name(env)
+
+      case count_tele(type_term, ctx, sigma_fam, unit_fam, unit_ctor, 0) do
+        {:telescope, arity} -> {:ok, arity}
+        :not_telescope -> bare_pair_arity(type_term, ctx, sigma_fam)
+      end
+    else
+      _ -> :not_applicable
+    end
+  end
+
+  defp bare_pair_arity(type_term, ctx, sigma_fam) do
+    case Kernel.normalize(ctx, type_term) do
+      {:data, ^sigma_fam, [_domain, _codomain], []} -> {:ok, 2}
+      _ -> :not_applicable
+    end
+  end
+
+  defp validate_tuple_pattern_arity(_pattern, arity, arity), do: :ok
+
+  defp validate_tuple_pattern_arity(pattern, expected, actual) do
+    {:error,
+     {:source_context, {:tuple_arity_mismatch, expected, actual},
+      %{
+        span: surface_expression_span(pattern),
+        expectation_origin: :pattern,
+        expression_category: :tuple_pattern
+      }}}
+  end
 
   # A single variable/wildcard arm ignores the scrutinee's structure — an
   # irrefutable bind valid at ANY scrutinee type (Σ, primitive, data), not just
