@@ -735,6 +735,68 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     assert {:container_elements_syntax, %{kind: :container_unclosed, container: :record}} = error
   end
 
+  test "an unclosed list cons points to its tail expression" do
+    source = "[head | tail"
+    {:ok, tokens} = Lexer.tokenize(source, file: "cons.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :list_cons}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "cons.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- LIST CONS IS NOT CLOSED [E094] ------------------------------------ cons.cure
+
+             This list cons reaches the end of the source without the ']' after its tail
+             expression.
+
+             at cons.cure:1:13
+             1 | [head | tail
+               | -       ----^ this container starts here; the previous tail expression ends here; close this container with `]`
+
+             Hint: Insert `]` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "]"}]}] =
+             diagnostic.suggestions
+
+    assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 2
+  end
+
+  test "an unclosed comprehension points to its final generator clause" do
+    source = "[x for x <- xs"
+    {:ok, tokens} = Lexer.tokenize(source, file: "comprehension.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :comprehension}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "comprehension.cure", source)
+
+    rendered = Renderer.plain(diagnostic, registry, width: 80)
+
+    assert rendered ==
+             String.trim_trailing("""
+             -- LIST COMPREHENSION IS NOT CLOSED [E094] ------------------ comprehension.cure
+
+             This list comprehension reaches the end of the source without the ']' that
+             closes its clauses.
+
+             at comprehension.cure:1:15
+             1 | [x for x <- xs
+               | -      -------^ this container starts here; the previous clause ends here; close this container with `]`
+
+             Hint: Insert `]` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "]"}]}] =
+             diagnostic.suggestions
+
+    assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 2
+  end
+
   test "a trailing list comma is blamed directly and can be removed safely" do
     source = "[1,]"
     {:ok, tokens} = Lexer.tokenize(source, file: "trailing_list.cure", emit_events: false)

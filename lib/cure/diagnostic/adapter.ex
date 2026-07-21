@@ -4979,6 +4979,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :record}}),
     do: "Record is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :container_unclosed, context: %{container: :list_cons}}),
+    do: "List cons is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :comprehension}
+       }),
+       do: "List comprehension is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :list}}),
     do: "List elements need a comma"
 
@@ -5126,6 +5135,20 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :record}
        }),
        do: "This record reaches the end of the source without the '}' that closes its fields."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rbracket,
+         context: %{container: :list_cons}
+       }),
+       do: "This list cons reaches the end of the source without the ']' after its tail expression."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rbracket,
+         context: %{container: :comprehension}
+       }),
+       do: "This list comprehension reaches the end of the source without the ']' that closes its clauses."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :container_unclosed, context: %{container: container}}),
     do: "This #{container} reaches the end of the source without the ']' that closes its elements."
@@ -5614,6 +5637,8 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp container_item_name(:map), do: "entry"
   defp container_item_name(:record), do: "field"
+  defp container_item_name(:list_cons), do: "tail expression"
+  defp container_item_name(:comprehension), do: "clause"
   defp container_item_name(_container), do: "element"
 
   defp syntax_insertion(:rparen), do: ")"

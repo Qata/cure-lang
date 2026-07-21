@@ -4782,7 +4782,9 @@ defmodule Cure.Compiler.Parser do
             state = skip_newlines(state)
             {tail, state} = parse_expr(state, 0)
             state = skip_newlines(state)
-            {state, close_token} = expect_token_or_nil(state, :rbracket)
+
+            {state, close_token} =
+              expect_container_close(state, :rbracket, :list_cons, token, [first, tail], false)
 
             meta =
               put_container_source_info(
@@ -4807,7 +4809,16 @@ defmodule Cure.Compiler.Parser do
                 state = skip_newlines(state)
                 {tail, state} = parse_expr(state, 0)
                 state = skip_newlines(state)
-                {state, close_token} = expect_token_or_nil(state, :rbracket)
+
+                {state, close_token} =
+                  expect_container_close(
+                    state,
+                    :rbracket,
+                    :list_cons,
+                    token,
+                    [first | rest_heads] ++ [tail],
+                    false
+                  )
 
                 heads = [first | rest_heads]
                 ast = build_multi_head_cons(heads, tail, token)
@@ -5250,7 +5261,16 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
     {generators_and_filters, state} = parse_generators(state)
     state = skip_newlines(state)
-    {state, close_token} = expect_token_or_nil(state, :rbracket)
+
+    {state, close_token} =
+      expect_container_close(
+        state,
+        :rbracket,
+        :comprehension,
+        open_token,
+        [body | generators_and_filters],
+        false
+      )
 
     meta =
       put_container_source_info(
@@ -5330,12 +5350,14 @@ defmodule Cure.Compiler.Parser do
           state = advance(state) |> advance()
           state = skip_newlines(state)
           {collection, state} = parse_expr(state, 0)
-          {{:generator, [], [expr, collection]}, state}
+          meta = put_clause_source_info([], expr, collection)
+          {{:generator, meta, [expr, collection]}, state}
         else
           # Not a generator. Re-parse from saved position at BP 0 for full filter expression.
           state = %{state | pos: saved_pos, last_authored: saved_last_authored}
           {filter_expr, state} = parse_expr(state, 0)
-          {{:filter, [], [filter_expr]}, state}
+          meta = put_clause_source_info([], filter_expr, filter_expr)
+          {{:filter, meta, [filter_expr]}, state}
         end
 
       _ ->
@@ -5346,10 +5368,22 @@ defmodule Cure.Compiler.Parser do
         if FixityTable.infix_bp(fixity_table(state), lexeme_of(token)) != :not_infix do
           state = %{state | pos: saved_pos, last_authored: saved_last_authored}
           {filter_expr, state} = parse_expr(state, 0)
-          {{:filter, [], [filter_expr]}, state}
+          meta = put_clause_source_info([], filter_expr, filter_expr)
+          {{:filter, meta, [filter_expr]}, state}
         else
-          {{:filter, [], [expr]}, state}
+          meta = put_clause_source_info([], expr, expr)
+          {{:filter, meta, [expr]}, state}
         end
+    end
+  end
+
+  defp put_clause_source_info(meta, first_node, last_node) do
+    with %Cure.Diagnostic.Span{} = first <- first_node_source_span(first_node),
+         %Cure.Diagnostic.Span{} = last <- first_node_source_span(last_node),
+         {:ok, whole} <- Range.through(first, last) do
+      Keyword.put(meta, :source_info, %SourceInfo{whole: whole})
+    else
+      _ -> meta
     end
   end
 
