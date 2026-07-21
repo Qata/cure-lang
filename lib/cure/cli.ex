@@ -309,10 +309,7 @@ defmodule Cure.CLI do
               suggestion -> " Did you mean '#{suggestion}'?"
             end
 
-          error("Unknown command: #{unknown}.#{suffix} Run 'cure help' for usage.")
-          # A mistyped command must not exit 0, or `cure <typo> && next` proceeds
-          # and CI wrappers cannot detect the mistake.
-          exit({:shutdown, 1})
+          usage_error("Unknown command: #{unknown}.#{suffix} Run 'cure help' for usage.")
       end
     end
   end
@@ -353,7 +350,13 @@ defmodule Cure.CLI do
                 exit({:shutdown, 1})
             end
           else
-            error("Module #{mod_str} not loaded. Run 'cure compile' first.")
+            error_diagnostic(
+              Cure.Diagnostic.Operational.artifact_error(
+                "Module `#{mod_str}` is not loaded. Run `cure compile` first.",
+                %{kind: :module_not_loaded, module: mod_str}
+              )
+            )
+
             exit({:shutdown, 1})
           end
         end
@@ -393,8 +396,7 @@ defmodule Cure.CLI do
         info("Trace stopped.")
 
       {:error, _} ->
-        error("Cannot parse `#{target}`; expected Module.fun/arity")
-        exit({:shutdown, 1})
+        usage_error("Cannot parse `#{target}`; expected Module.fun/arity")
     end
   end
 
@@ -2112,7 +2114,7 @@ defmodule Cure.CLI do
         end
 
       {:error, :no_project_file} ->
-        error("No Cure.toml found in current directory.")
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", :enoent))
         exit({:shutdown, 1})
 
       {:error, reason} ->

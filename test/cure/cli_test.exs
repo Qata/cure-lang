@@ -241,7 +241,9 @@ defmodule Cure.CLITest do
           assert catch_exit(Cure.CLI.main(["foobar"])) == {:shutdown, 1}
         end)
 
-      assert stderr =~ "Unknown command"
+      assert stderr =~ "INVALID COMMAND USAGE [E099]"
+      assert stderr =~ "Unknown command: foobar"
+      refute stderr =~ "[E098]"
     end
   end
 
