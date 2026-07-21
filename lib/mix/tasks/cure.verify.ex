@@ -39,8 +39,12 @@ defmodule Mix.Tasks.Cure.Verify do
 
   @impl Mix.Task
   def run(args) do
-    {opts, rest, _invalid} =
-      OptionParser.parse(args, switches: [strict: :boolean])
+    {opts, rest, invalid} =
+      OptionParser.parse(args, strict: [strict: :boolean])
+
+    if invalid != [] or length(rest) > 1 do
+      usage_error("Usage: mix cure.verify [path] [--strict]")
+    end
 
     strict? = Keyword.get(opts, :strict, false)
     path = List.first(rest)
@@ -103,7 +107,7 @@ defmodule Mix.Tasks.Cure.Verify do
         end
 
       {:error, reason} ->
-        Mix.shell().error("cure.verify: " <> render_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason)))
+        Mix.shell().error(render_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason)))
 
         exit({:shutdown, 1})
     end
@@ -164,10 +168,13 @@ defmodule Mix.Tasks.Cure.Verify do
           )
         )
 
-        Enum.each(failures, fn {mod, stmt, reason} ->
+        Enum.each(failures, fn {mod, _statement, reason} ->
           Mix.shell().error(
-            "    #{mod}: #{inspect(stmt)} -- " <>
-              render_diagnostic(Cure.Diagnostic.Operational.command_failure("verification", reason))
+            render_diagnostic(
+              Cure.Diagnostic.Operational.proof_verification_failed(
+                "#{label}: certificate from #{mod} failed: #{verification_reason(reason)}"
+              )
+            )
           )
         end)
 
@@ -191,4 +198,14 @@ defmodule Mix.Tasks.Cure.Verify do
     Sink.new(format: :plain, color: :auto, width: 80)
     |> Sink.render(diagnostic)
   end
+
+  defp usage_error(message) do
+    Mix.shell().error(render_diagnostic(Cure.Diagnostic.Operational.usage(message)))
+    exit({:shutdown, 1})
+  end
+
+  defp verification_reason(reason) when is_binary(reason), do: reason
+  defp verification_reason(reason) when is_atom(reason), do: reason |> Atom.to_string() |> String.replace("_", " ")
+  defp verification_reason(%{__exception__: true} = reason), do: Exception.message(reason)
+  defp verification_reason(_reason), do: "the certificate witness was rejected"
 end

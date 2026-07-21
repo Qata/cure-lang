@@ -80,7 +80,7 @@ defmodule Mix.Tasks.Cure.CompileStdlib do
               end)
               |> Enum.uniq_by(&elem(&1, 0))
               |> Enum.each(fn {_fingerprint, reason, path} ->
-                Mix.shell().error("  " <> render_host_diagnostic(reason, path))
+                Mix.shell().error(render_host_diagnostic(reason, path))
               end)
 
               exit({:shutdown, 1})
