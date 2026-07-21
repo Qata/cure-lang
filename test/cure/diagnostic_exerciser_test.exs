@@ -14,14 +14,15 @@ defmodule Cure.DiagnosticExerciserTest do
       {"syntax error", "E094", "mod DiagnosticSyntax\n  fn run(] -> Int = 1\n", :syntax_error_parser},
       {"lexer syntax error", "E094", "mod DiagnosticLexer\n  fn run() -> String = \"not closed\n", :syntax_error_lexer},
       {"type mismatch", "E093",
-       "mod DiagnosticType\n  type Nat = Z | S(Nat)\n  fn bad() -> Equivalent(Nat, Z, S(Z)) = reflexive(Z)\n"},
+       "mod DiagnosticType\n  type Nat = Z | S(Nat)\n  fn bad() -> Equivalent(Nat, Z, S(Z)) = reflexive(Z)\n",
+       :type_mismatch_elaboration},
       {"unfilled hole", "E014", "mod DiagnosticHole\n  fn bad() -> Int = ???\n"},
       {"implementation member scope", "E116",
        "mod DiagnosticImplementation\n  interface Marker(t)\n    fn mark(value: t) -> Bool\n  implementation Marker for Int\n  fn mark(value: Int) -> Bool = true\nend\n"},
       {"unterminated lambda", "E035", "fn (x) -> x; x;", :unterminated_lambda},
       {"unrecognized pattern", "E090",
        "mod DiagnosticPattern\n  fn bad(x: Int) -> Int = match x\n    1..10 -> 1\n    _ -> 0\n"},
-      {"missing implicit", "E011", "mod DiagnosticImplicit\n  fn bad() -> Int = reflexive()\n"},
+      {"missing implicit", "E011", "mod DiagnosticImplicit\n  fn bad() -> Int = reflexive()\n", :missing_implicit},
       {"unknown pattern constructor", "E091",
        "mod DiagnosticCtor\n  type Nat = Z | S(Nat)\n  fn bad(x: Nat) -> Nat = match x\n    Missing() -> Z\n    _ -> Z\n",
        :unknown_pattern_name},
@@ -35,6 +36,17 @@ defmodule Cure.DiagnosticExerciserTest do
        :pickup_multiple_else},
       {"record field mismatch", "E022",
        "mod DiagnosticRecord\n  type Nat = Z | S(Nat)\n  rec Point\n    x: Nat\n    y: Nat\n  fn bad() -> Point = Point{x: S(Z()), z: Z()}\nend\n"},
+      {"erasure declaration", "E102", "mod DiagnosticErasure\n  @erases(:banana)\n  opaque type Handle\nend\n",
+       :erasure_violation},
+      {"relevant use of erased value", "E104",
+       "mod DiagnosticRelevance\n  type Nat = Z | S(Nat)\n  type SNat indices (n: Nat)\n    szero : SNat(Z)\n    ssuc : SNat(n) -> SNat(S(n))\n  type NV indices (n: Nat)\n    vz : NV(Z)\n    vs : SNat(n) -> NV(S(n))\n  fn bad({n: Nat}, value: NV(n)) -> Nat = n\nend\n",
+       :erased_value_used_relevantly},
+      {"non-positive recursive type", "E103",
+       "mod DiagnosticPositivity\n  type Nat = Z | S(Nat)\n  type Bad = MkBad((Bad) -> Nat)\nend\n",
+       :non_strictly_positive_type},
+      {"type-level function is not total", "E013",
+       "mod DiagnosticTotality\n  type Dec = Dcoupled | Causal\n  type Sig = CSig | ESig\n  type SVDesc = SVNil | SVCons(Sig, SVDesc)\n  fn andd(x: Dec, y: Dec) -> Dec = andd(x, y)\n  type SF indices (as: SVDesc, bs: SVDesc, d: Dec)\n    prim : SF(as, bs, Causal)\n    seq : SF(as, bs, d1) -> SF(bs, cs, d2) -> SF(as, cs, andd(d1, d2))\nend\n",
+       :totality_failure},
       {"duplicate parameter", "E105", "mod DiagnosticDuplicate\n  fn bad(value: Int, value: Int) -> Int = value\nend\n",
        :declaration_conflict_elaboration},
       {"sibling module collision", "E105",
@@ -265,6 +277,11 @@ defmodule Cure.DiagnosticExerciserTest do
     assert :ok =
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
                only_producers: [:name_resolution]
+             )
+
+    assert :ok =
+             Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
+               only_producers: [:totality_checker]
              )
 
     Enum.each(boundary_cases, fn {label, expected_code, reason} ->
