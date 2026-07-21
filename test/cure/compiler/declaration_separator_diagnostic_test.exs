@@ -278,4 +278,35 @@ defmodule Cure.Compiler.DeclarationSeparatorDiagnosticTest do
     assert {insertion.start_line, insertion.start_column} == {1, 19}
     assert insertion.start_byte == insertion.end_byte
   end
+
+  test "record type parameters use the same contextual comma diagnostic" do
+    source = "rec Pair(A B)\n  first: A\n"
+    {error, {diagnostic, registry}} = diagnostic(source, "record_params.cure")
+
+    assert {:container_elements_syntax,
+            %{
+              kind: :container_separator_missing,
+              container: :type_parameters,
+              declaration: "Pair",
+              declaration_kind: :record
+            }} = error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- TYPE PARAMETERS NEED A COMMA [E094] ---------------------- record_params.cure
+
+             The declaration of `Pair` has another type parameter here, but consecutive
+             parameters must be separated by a comma.
+
+             at record_params.cure:1:12
+             1 | rec Pair(A B)
+               |         -- ^ these type parameters start here; the previous type parameter ends here; insert a comma before this type parameter
+
+             Hint: Insert `,` between these type parameters
+             """)
+
+    assert [%{edits: [%{replacement: ", ", span: insertion}]}] = diagnostic.suggestions
+    assert {insertion.start_line, insertion.start_column} == {1, 12}
+    assert insertion.start_byte == insertion.end_byte
+  end
 end

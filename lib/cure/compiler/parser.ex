@@ -8316,9 +8316,16 @@ defmodule Cure.Compiler.Parser do
     {type_params, state} =
       case peek(state) do
         %Token{type: :lparen} ->
+          open_token = peek(state)
           state = advance(state)
           {tp, state} = parse_name_list(state, :rparen)
-          state = expect(state, :rparen)
+
+          {state, _close_token} =
+            expect_container_close(state, :rparen, :type_parameters, open_token, tp, true, %{
+              declaration: name,
+              declaration_kind: :record
+            })
+
           {tp, state}
 
         _ ->
