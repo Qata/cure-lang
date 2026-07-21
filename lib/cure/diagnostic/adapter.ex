@@ -5127,6 +5127,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :named_implicit_pattern_assign_missing}),
     do: "Named implicit pattern needs an equals sign"
 
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :local_binding_assign_missing,
+         context: %{family: :have}
+       }),
+       do: "Have binding needs an equals sign"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :local_binding_assign_missing}),
+    do: "Let binding needs an equals sign"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5501,6 +5510,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{binder: binder}
        }),
        do: "The named implicit pattern for `#{binder}` needs `=` before the pattern that fixes its value."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :local_binding_assign_missing,
+         context: %{family: family, declaration: name}
+       }),
+       do: "The `#{family}` binding for `#{name}` needs `=` before the value it binds."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
@@ -5936,6 +5951,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :named_implicit_pattern_assign_missing}),
     do: "insert `=` before this implicit pattern"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :local_binding_assign_missing}),
+    do: "insert `=` before this binding value"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -6294,6 +6312,27 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(opener, :secondary, "this named implicit pattern starts here"),
       pickup_label(previous, :secondary, "this is the implicit binder")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :local_binding_assign_missing,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this #{Map.get(context, :family, :let)} binding starts here"),
+      pickup_label(Map.get(context, :pattern_span), :secondary, "this is the binding pattern"),
+      pickup_label(previous, :secondary, "the binding head ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -6873,6 +6912,20 @@ defmodule Cure.Diagnostic.Adapter do
     [
       %Suggestion{
         message: "Insert `=` before the implicit pattern",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "= "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :local_binding_assign_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `=` before the binding value",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: "= "}]
       }

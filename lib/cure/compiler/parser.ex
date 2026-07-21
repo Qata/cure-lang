@@ -5783,8 +5783,7 @@ defmodule Cure.Compiler.Parser do
         state
       end
 
-    # Expect =
-    state = expect(state, :assign)
+    state = expect_local_binding_assign(state, token, pattern, annotation_span, kind, let_name)
     state = skip_newlines(state)
 
     # Parse value (RHS) -- might be an indented block
@@ -5814,6 +5813,38 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         {assignment, state}
+    end
+  end
+
+  defp expect_local_binding_assign(state, binding_token, pattern, annotation_span, kind, name) do
+    case expect_token(state, :assign) do
+      {:ok, _assign, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :local_binding_assign_missing,
+             family: kind,
+             declaration: name,
+             expected: :assign,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: binding_token.span,
+             previous_span: annotation_span || first_node_source_span(pattern),
+             pattern_span: first_node_source_span(pattern),
+             annotation_span: annotation_span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
     end
   end
 
