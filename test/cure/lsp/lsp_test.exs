@@ -330,6 +330,42 @@ defmodule Cure.LSP.LspTest do
   # ============================================================================
 
   describe "codeAction" do
+    test "turns machine-applicable diagnostic edits into a workspace edit" do
+      source = "fn run() -> Int = missng\n"
+
+      registry =
+        Cure.Diagnostic.SourceRegistry.new()
+        |> Cure.Diagnostic.SourceRegistry.register("file:///test.cure", source, "file:///test.cure")
+
+      {:ok, span} = Cure.Diagnostic.SourceRegistry.span(registry, "file:///test.cure", 18, 24)
+
+      diagnostic =
+        Cure.Diagnostic.new(
+          code: "E091",
+          key: :unknown_name,
+          severity: :error,
+          title: "Unknown value",
+          message: "`missng` was not found",
+          primary: %Cure.Diagnostic.Label{span: span, style: :primary},
+          suggestions: [
+            %Cure.Diagnostic.Suggestion{
+              message: "Did you mean `missing`?",
+              applicability: :machine_applicable,
+              edits: [%Cure.Diagnostic.TextEdit{span: span, replacement: "missing"}]
+            }
+          ]
+        )
+
+      lsp = Cure.Diagnostic.Renderer.lsp(diagnostic, registry, :utf16)
+      [action] = Server.compute_code_actions("file:///test.cure", [lsp])
+
+      assert action["title"] == "Did you mean `missing`?"
+
+      assert action["edit"]["changes"]["file:///test.cure"] == [
+               %{"range" => lsp["range"], "newText" => "missing"}
+             ]
+    end
+
     test "suggests wildcard for non-exhaustive match" do
       diag = %{
         "message" => "match expression is not exhaustive, missing: false",
