@@ -456,7 +456,7 @@ defmodule Cure.CLI do
           {ordered, providers}
 
         {:error, reason} ->
-          diagnostic(Cure.Diagnostic.Host.render(reason, hd(paths)))
+          emit_host_diagnostic(reason, hd(paths))
           exit({:shutdown, 1})
       end
 
@@ -479,11 +479,7 @@ defmodule Cure.CLI do
         info("  -> #{module}")
 
       {:error, reason} ->
-        formatted = Cure.Diagnostic.Host.render(reason, path)
-        # `formatted` already carries the `error: <category>` diagnostic;
-        # go straight to stderr so `error/1`'s own `error: ` prefix does
-        # not double-wrap the output.
-        diagnostic(formatted)
+        emit_host_diagnostic(reason, path)
         exit({:shutdown, 1})
     end
   end
@@ -516,8 +512,7 @@ defmodule Cure.CLI do
         end
 
       {:error, reason} ->
-        formatted = Cure.Diagnostic.Host.render(reason, path)
-        diagnostic(formatted)
+        emit_host_diagnostic(reason, path)
         exit({:shutdown, 1})
     end
   end
@@ -611,9 +606,8 @@ defmodule Cure.CLI do
     else
       {:error, reason} ->
         # The dependent checker returns a tagged `{:error, term}`; funnel it
-        # through `format_error/2` and print the formatted string to stderr.
-        formatted = Cure.Diagnostic.Host.render(reason, path)
-        diagnostic(formatted)
+        # through the shared structured sink.
+        emit_host_diagnostic(reason, path)
         exit({:shutdown, 1})
     end
   end
@@ -2259,6 +2253,15 @@ defmodule Cure.CLI do
     end
   end
 
+  defp emit_host_diagnostic(reason, path) do
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path)
+
+    case Cure.Diagnostic.Host.emit_diagnostic(diagnostic, registry: registry) do
+      {:ok, _sink} -> :ok
+      {:error, emit_reason} -> raise "failed to emit diagnostic: #{inspect(emit_reason)}"
+    end
+  end
+
   defp error(msg) do
     rendered = String.trim_leading(msg)
 
@@ -2275,9 +2278,4 @@ defmodule Cure.CLI do
     error_diagnostic(Cure.Diagnostic.Operational.usage(msg))
     exit({:shutdown, 1})
   end
-
-  # Print a pre-formatted multi-line diagnostic (e.g. from
-  # `Cure.Compiler.Errors`) verbatim. The string already contains its own
-  # `error: <category>` header, so avoid the extra prefix from `error/1`.
-  defp diagnostic(msg), do: IO.puts(:stderr, msg)
 end
