@@ -82,6 +82,11 @@ defmodule Cure.Diagnostic.SimplificationProblem do
     :after_goal,
     :before_surface,
     :after_surface,
+    :supplied_proposition,
+    :simplified_supplied,
+    :simplified_goal,
+    :supplied_surface,
+    :simplified_supplied_surface,
     :progressed_rules,
     :trace_ids,
     :cause

@@ -804,9 +804,11 @@ defmodule Cure.LSP.Server do
               %{"label" => rule.name, "kind" => 6, "detail" => "Local equality rule — #{rule.proposition}"}
             end)
 
-          if Regex.match?(~r/simplify\s+using\s+\[[^\]]*$/s, prefix),
-            do: local_rules ++ equations,
-            else: ordinary ++ equations
+          cond do
+            Regex.match?(~r/simplify\s+using\s+\[[^\]]*$/s, prefix) -> local_rules ++ equations
+            Regex.match?(~r/simplify\s+using\s+[^\[\]\n]*$/s, prefix) -> local_rules ++ equations
+            true -> ordinary ++ equations
+          end
 
         _ ->
           []

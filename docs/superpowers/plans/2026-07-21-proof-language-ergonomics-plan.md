@@ -465,18 +465,32 @@ and complete Antigen coverage is 318/318.
 **Purpose:** cover the former `simpa using` use case without adding a second
 simplification language.
 
-- [ ] Parse bare `simplify using proof_expression` distinctly from bracketed
+- [x] Parse bare `simplify using proof_expression` distinctly from bracketed
   additional-rule syntax.
-- [ ] Infer the supplied proof's `Equivalent` proposition; simplify both it and
+- [x] Infer the supplied proof's `Equivalent` proposition; simplify both it and
   the current goal with the same admitted rules and deterministic configuration.
-- [ ] If normalized propositions agree, bridge the supplied proof to the goal
+- [x] If normalized propositions agree, bridge the supplied proof to the goal
   with the recorded simplification evidence and close the block.
-- [ ] If they do not, emit E112 with supplied/original/simplified propositions
+- [x] If they do not, emit E112 with supplied/original/simplified propositions
   and trace IDs; never degrade to a final E093 on an internal bridge term.
-- [ ] Cover reverse endpoints, local facts, generated equations, no-progress,
+- [x] Cover reverse endpoints, local facts, generated equations, no-progress,
   wrong carrier, non-equality evidence, and nested chains.
 
 **Green gate:** focused proof adaptation plus all Task 6 gates.
+
+**Completed evidence (2026-07-21):** parser metadata distinguishes bare proof
+adaptation from bracketed rule lists without name-based guessing. The elaborator
+infers ordinary local/global equality evidence or specializes a certified
+generated equation against the authored goal, normalizes supplied and required
+propositions under the same audited defaults, and kernel-checks either the
+direct evidence or an explicit symmetry bridge. E112 retains supplied,
+simplified-supplied, original, and simplified-goal representations and never
+leaks an internal E093. Focused coverage includes direct and reverse endpoints,
+local facts, nested chains, generated equations, mismatches, wrong carriers,
+and non-equality evidence; LSP completion covers both bare proof and bracketed
+rule contexts. The 122-module stdlib and 5,358-test full suite pass with 0
+failures and 6 excluded; diagnostic coverage is 59/59, 151 expected immune
+responses fire, and complete Antigen coverage is 318/318.
 
 **Commit:** `feat(proofs): simplify existing evidence into goals`
 

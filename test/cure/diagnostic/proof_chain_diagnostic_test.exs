@@ -232,7 +232,7 @@ defmodule Cure.Diagnostic.ProofChainDiagnosticTest do
     assert diagnostic.payload.after_surface =~ "Equivalent"
     plain = Renderer.plain(diagnostic, registry)
     assert plain =~ "RESIDUAL GOAL"
-    assert plain =~ "Before: Equivalent"
+    assert plain =~ ~r/Before:\s+Equivalent/
     assert plain =~ "After:"
     assert (diagnostic |> Renderer.json() |> Jason.decode!())["code"] == "E112"
     assert Renderer.lsp(diagnostic, registry, :utf16)["code"] == "E112"
@@ -254,6 +254,31 @@ defmodule Cure.Diagnostic.ProofChainDiagnosticTest do
     refute compact_text =~ "equation-1"
     assert expanded_text =~ "equation-1"
     assert expanded_text =~ "explicit-2"
+  end
+
+  test "E112 proof adaptation renders the supplied and required simplified propositions" do
+    source = """
+    mod AdaptDiagnostic
+      type Nat = Z | S(Nat)
+      fn bad(x: Nat, y: Nat, equality: Equivalent(Nat, x, y)) -> Equivalent(Nat, x, S(y)) = proof chain
+        x == S(y)
+        because simplify using equality
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source, file: "adapt_mismatch.cure", emit_events: false)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "adapt_mismatch.cure", source)
+    assert diagnostic.code == "E112"
+    assert diagnostic.payload.kind == :proof_mismatch
+    assert diagnostic.payload.simplified_supplied
+    assert diagnostic.payload.simplified_goal
+    plain = Renderer.plain(diagnostic, registry)
+    assert plain =~ ~r/Supplied proof\s+simplifies to:/
+    assert plain =~ ~r/Before:\s+Equivalent/
+    assert (diagnostic |> Renderer.json() |> Jason.decode!())["payload"]["simplified_supplied"]
+    assert Renderer.lsp(diagnostic, registry, :utf16)["code"] == "E112"
   end
 
   test "E114 relates an unavailable equation member to its defining function" do

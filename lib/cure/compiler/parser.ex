@@ -3143,9 +3143,10 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :identifier, value: "using"} ->
         state = advance(state)
+        mode = if match?(%Token{type: :lbracket}, peek(state)), do: :rules, else: :proof
         {rules, state} = parse_expr(state, 0)
         meta = put_token_source_info([line: token.line, col: token.col], token)
-        {{:simplify_command, Keyword.put(meta, :using, true), [rules]}, state}
+        {{:simplify_command, Keyword.put(meta, :using, mode), [rules]}, state}
 
       _ ->
         meta = put_token_source_info([line: token.line, col: token.col], token)

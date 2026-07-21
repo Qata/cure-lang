@@ -3130,11 +3130,18 @@ defmodule Cure.Diagnostic.Adapter do
         ""
       end
 
+    supplied =
+      if problem.kind == :proof_mismatch and problem.simplified_supplied_surface do
+        "\nSupplied proof simplifies to: #{problem.simplified_supplied_surface}"
+      else
+        ""
+      end
+
     if Keyword.get(opts, :trace) == :expanded and (problem.trace_ids || []) != [] do
       ids = Enum.map_join(problem.trace_ids, ", ", &to_string/1)
-      Doc.paragraph(message <> goals <> "\n\nSimplification trace: " <> ids)
+      Doc.paragraph(message <> goals <> supplied <> "\n\nSimplification trace: " <> ids)
     else
-      Doc.paragraph(message <> goals)
+      Doc.paragraph(message <> goals <> supplied)
     end
   end
 

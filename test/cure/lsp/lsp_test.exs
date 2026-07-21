@@ -505,6 +505,10 @@ defmodule Cure.LSP.LspTest do
       assert %{"label" => "equality", "detail" => "Local equality rule — " <> detail} = hd(items)
       assert detail =~ "Equivalent(Nat, S(x), y)"
 
+      bare_prefix = source |> String.split("[equality]") |> hd()
+      bare_items = Server.context_completions(source, bare_prefix)
+      assert Enum.any?(bare_items, &(&1["label"] == "equality"))
+
       hover = Server.compute_hover(source, 4, 30)
       value = get_in(hover, ["contents", "value"])
       assert value =~ "Local equality proof"

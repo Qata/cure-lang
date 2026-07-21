@@ -162,7 +162,7 @@ defmodule Cure.Elab.Rewrite do
      [{:"Std.Equivalent#reflexive", 1, {:lam, Grade.unrestricted(), identity_domain, {:var, 0}}}]}
   end
 
-  defp symmetry_proof(proof, ty, a) do
+  def symmetry_proof(proof, ty, a) do
     motive_body = mk_eq(Subst.shift(ty, 1, 0), {:var, 0}, Subst.shift(a, 1, 0))
     motive = {:lam, Grade.unrestricted(), ty, motive_body}
     {:ok, {:app, transport_case(proof, ty, motive, a), mk_refl(a)}}

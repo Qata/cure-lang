@@ -103,10 +103,21 @@ defmodule Cure.Elab.ProofGoal do
   end
 
   defp command({:simplify_command, meta, rules}, goal) do
+    if Keyword.get(meta, :using) == :proof do
+      adapt_existing_proof(hd(rules), meta, goal)
+    else
+      simplify_command_rules(meta, rules, goal)
+    end
+  end
+
+  defp command(statement, goal), do: close_with_expression(statement, goal)
+
+  defp simplify_command_rules(meta, rules, goal) do
     with {:ok, simplified} <- simplify_rules(rules, goal, meta),
          {:ok, evidence, trace} <-
            Cure.Elab.Simplifier.solve(simplified.expected, simplified.context, surface_span(meta)) do
-      evidence = Enum.reduce(Enum.reverse(simplified.builders), evidence, &apply_builder/2)
+      transports = Enum.reject(simplified.builders, &match?({:assignment, _, _}, &1))
+      evidence = Enum.reduce(Enum.reverse(transports), evidence, &apply_builder/2)
       {:closed, evidence, simplified.trace ++ trace}
     else
       {:error, {:simplification_failed, problem}} ->
@@ -117,14 +128,105 @@ defmodule Cure.Elab.ProofGoal do
     end
   end
 
-  defp command(statement, goal), do: close_with_expression(statement, goal)
-
   defp enrich_simplification(problem, names) do
     %{
       problem
       | before_surface: Cure.Elab.ProofDisplay.format(problem.before_goal, names),
         after_surface: Cure.Elab.ProofDisplay.format(problem.after_goal, names)
     }
+  end
+
+  defp adapt_existing_proof(proof_ast, meta, goal) do
+    surface_builders = Enum.filter(goal.builders, &match?({:assignment, _, _}, &1))
+    proof_block = {:block, [], surface_builders ++ [proof_ast]}
+    original_names = Enum.drop(goal.names, length(surface_builders))
+    depth = Context.length(goal.context)
+    expected_value = Eval.eval(goal.expected, Context.env(goal.context))
+
+    with {:ok, proof, proof_type} <-
+           Elaborator.elaborate_expr_typed(proof_block, original_names, goal.context, goal.env),
+         {:ok, proof, carrier, left, right} <- adaptation_evidence(proof, proof_type, goal, depth) do
+      supplied = Rewrite.mk_eq(carrier, left, right)
+      simplified_supplied = Kernel.normalize(goal.context, supplied)
+      simplified_goal = Kernel.normalize(goal.context, goal.expected)
+
+      cond do
+        Kernel.check(goal.context, proof, expected_value) == :ok ->
+          transports = Enum.reject(goal.builders, &match?({:assignment, _, _}, &1))
+          evidence = Enum.reduce(Enum.reverse(transports), proof, &apply_builder/2)
+
+          {:closed, evidence,
+           goal.trace ++ [%{id: "adapt-direct", kind: :proof_adaptation, rule: surface_span(proof_ast)}]}
+
+        true ->
+          {:ok, symmetric} = Rewrite.symmetry_proof(proof, carrier, left)
+
+          if Kernel.check(goal.context, symmetric, expected_value) == :ok do
+            transports = Enum.reject(goal.builders, &match?({:assignment, _, _}, &1))
+            evidence = Enum.reduce(Enum.reverse(transports), symmetric, &apply_builder/2)
+
+            {:closed, evidence,
+             goal.trace ++ [%{id: "adapt-symmetric", kind: :proof_adaptation, rule: surface_span(proof_ast)}]}
+          else
+            adaptation_error(meta, proof_ast, goal, supplied, simplified_supplied, simplified_goal, :proof_mismatch)
+          end
+      end
+    else
+      {:error, cause} ->
+        adaptation_error(meta, proof_ast, goal, nil, nil, Kernel.normalize(goal.context, goal.expected), cause)
+
+      :no_match ->
+        adaptation_error(
+          meta,
+          proof_ast,
+          goal,
+          nil,
+          nil,
+          Kernel.normalize(goal.context, goal.expected),
+          :no_matching_equation_instance
+        )
+    end
+  end
+
+  defp adaptation_evidence(proof, proof_type, goal, depth) do
+    case generated_rule(proof, goal.env) do
+      {:ok, theorem_type} ->
+        instantiate_generated_rule(theorem_type, proof, goal.expected, goal)
+
+      :ordinary ->
+        with {:ok, ty_value, left_value, right_value} <-
+               Rewrite.eq_parts(proof_type, Context.signature(goal.context)) do
+          {:ok, proof, Kernel.normalize(goal.context, Quote.reify(ty_value, depth)),
+           Kernel.normalize(goal.context, Quote.reify(left_value, depth)),
+           Kernel.normalize(goal.context, Quote.reify(right_value, depth))}
+        end
+
+      {:error, cause} ->
+        {:error, cause}
+    end
+  end
+
+  defp adaptation_error(meta, proof_ast, goal, supplied, simplified_supplied, simplified_goal, cause) do
+    {:error,
+     {:simplification_failed,
+      %Cure.Diagnostic.SimplificationProblem{
+        kind: :proof_mismatch,
+        command: surface_span(meta),
+        rule: surface_span(proof_ast),
+        before_goal: goal.expected,
+        after_goal: simplified_goal,
+        before_surface: Cure.Elab.ProofDisplay.format(goal.expected, goal.names),
+        after_surface: Cure.Elab.ProofDisplay.format(simplified_goal, goal.names),
+        supplied_proposition: supplied,
+        simplified_supplied: simplified_supplied,
+        simplified_goal: simplified_goal,
+        supplied_surface: supplied && Cure.Elab.ProofDisplay.format(supplied, goal.names),
+        simplified_supplied_surface:
+          simplified_supplied && Cure.Elab.ProofDisplay.format(simplified_supplied, goal.names),
+        progressed_rules: [],
+        trace_ids: [],
+        cause: cause
+      }}}
   end
 
   defp simplify_rules([], goal, _meta), do: {:ok, goal}
@@ -252,13 +354,18 @@ defmodule Cure.Elab.ProofGoal do
           |> core_subterms()
           |> Enum.find_value(:no_match, fn candidate ->
             case match_rule(left, candidate, count, %{}) do
-              {:ok, bindings} when map_size(bindings) == count ->
-                args = for position <- 0..(count - 1), count > 0, do: Map.fetch!(bindings, count - 1 - position)
-                specialized_carrier = Subst.instantiate(carrier, args)
-                specialized_left = Subst.instantiate(left, args)
-                specialized_right = Subst.instantiate(right, args)
-                specialized_proof = Enum.reduce(args, proof, fn argument, call -> {:app, call, argument} end)
-                {:ok, specialized_proof, specialized_carrier, specialized_left, specialized_right}
+              {:ok, bindings} ->
+                case complete_rule_args(telescope, bindings, goal_term, goal) do
+                  {:ok, args} ->
+                    specialized_carrier = Subst.instantiate(carrier, args)
+                    specialized_left = Subst.instantiate(left, args)
+                    specialized_right = Subst.instantiate(right, args)
+                    specialized_proof = Enum.reduce(args, proof, fn argument, call -> {:app, call, argument} end)
+                    {:ok, specialized_proof, specialized_carrier, specialized_left, specialized_right}
+
+                  :no_match ->
+                    false
+                end
 
               _ ->
                 false
@@ -273,7 +380,31 @@ defmodule Cure.Elab.ProofGoal do
     end
   end
 
-  defp peel_pi({:pi, _grade, domain, body}, acc), do: peel_pi(body, acc ++ [domain])
+  defp complete_rule_args(telescope, bindings, goal_term, goal) do
+    count = length(telescope)
+
+    telescope
+    |> Enum.with_index()
+    |> Enum.reduce_while({:ok, []}, fn {{_grade, domain}, position}, {:ok, args} ->
+      index = count - 1 - position
+
+      case Map.fetch(bindings, index) do
+        {:ok, argument} ->
+          {:cont, {:ok, args ++ [argument]}}
+
+        :error ->
+          instantiated_domain = Subst.instantiate(domain, args)
+          expected = Eval.eval(instantiated_domain, Context.env(goal.context))
+
+          case Enum.find(core_subterms(goal_term), &(Kernel.check(goal.context, &1, expected) == :ok)) do
+            nil -> {:halt, :no_match}
+            argument -> {:cont, {:ok, args ++ [argument]}}
+          end
+      end
+    end)
+  end
+
+  defp peel_pi({:pi, grade, domain, body}, acc), do: peel_pi(body, acc ++ [{grade, domain}])
   defp peel_pi(body, acc), do: {acc, body}
 
   defp match_rule({:var, index}, candidate, count, bindings) when index < count do
