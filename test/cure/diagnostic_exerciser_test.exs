@@ -53,6 +53,9 @@ defmodule Cure.DiagnosticExerciserTest do
        "mod DiagnosticLeft\n  fn shared(value: Int) -> Int = value\nend\nmod DiagnosticRight\n  fn shared(value: Int) -> Int = value\nend\n",
        :declaration_conflict_name_resolution},
       {"parser macro failure", "E092", "macro M\n  syntax m <x: X> where Eq(y) becomes x\n", :parser_macro_failure},
+      {"macro expansion failure", "E092",
+       "mod DiagnosticExpansion\n  use Std.Syntax\n  use Std.Syntax.Raw\n  macro Bad\n    syntax bad computed by build\n  fn build(input: Syntax) -> Syntax = unsafe_raw(SInt(1))\n  fn result() -> Int = bad\nend\n",
+       :macro_expansion_failure},
       {"parser operator conflict", "E106", "mod DiagnosticFixity\n  use Std.Operators\n  infix `|>` : Additive\nend\n",
        :operator_conflict_parser},
       {"proof chain syntax", "E109", "proof chain\n  first\n", :proof_chain_syntax}
@@ -288,6 +291,11 @@ defmodule Cure.DiagnosticExerciserTest do
     assert :ok =
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
                only_producers: [:kernel]
+             )
+
+    assert :ok =
+             Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
+               only_producers: [:macro_expansion]
              )
 
     Enum.each(boundary_cases, fn {label, expected_code, reason} ->

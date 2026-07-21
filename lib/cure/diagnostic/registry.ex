@@ -1817,7 +1817,10 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E103"), do: [:kernel]
   defp producers("E104"), do: [:elaboration]
   defp producers("E105"), do: [:elaboration, :name_resolution]
-  defp producers("E106"), do: [:parser, :elaboration]
+  # Fixity resolution rejects conflicts and cycles while parsing. Program keeps
+  # a defensive cycle check for externally supplied/generated ASTs, but no
+  # first-party source path reaches it, so parser is the sole reachable producer.
+  defp producers("E106"), do: [:parser]
   defp producers("E107"), do: [:elaboration]
   defp producers("E108"), do: [:elaboration]
   defp producers("E109"), do: [:parser]
@@ -1865,8 +1868,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producer_fixtures("E105"),
     do: %{elaboration: :declaration_conflict_elaboration, name_resolution: :declaration_conflict_name_resolution}
 
-  defp producer_fixtures("E106"),
-    do: %{parser: :operator_conflict_parser, elaboration: :operator_conflict_elaboration}
+  defp producer_fixtures("E106"), do: %{parser: :operator_conflict_parser}
 
   defp producer_fixtures(code) do
     case {producers(code), Map.get(@catalog_cases, code)} do
