@@ -7809,6 +7809,21 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
+  defp macro_rule_source_span(%Token{span: %Cure.Diagnostic.Span{} = first}, state) do
+    case authored_token(state) do
+      %Token{span: %Cure.Diagnostic.Span{} = last} ->
+        case Range.through(first, last) do
+          {:ok, span} -> span
+          _ -> nil
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp macro_rule_source_span(_token, _state), do: nil
+
   # Pure surface representation for §14's `lift module` value. The resulting
   # node contains quoted callback bodies and declarations; the generic module
   # collector validates and emits it later, with the compiler as the only
@@ -8242,7 +8257,8 @@ defmodule Cure.Compiler.Parser do
       obligations: obligations,
       module_rule: keyword == "module",
       progress: nil,
-      line: kw_token.line
+      line: kw_token.line,
+      source_span: macro_rule_source_span(kw_token, state)
     }
 
     {rule, state}
@@ -8290,7 +8306,8 @@ defmodule Cure.Compiler.Parser do
       obligations: obligations,
       module_rule: keyword == "module",
       progress: nil,
-      line: kw_token.line
+      line: kw_token.line,
+      source_span: macro_rule_source_span(kw_token, state)
     }
 
     {rule, state}
@@ -8486,7 +8503,8 @@ defmodule Cure.Compiler.Parser do
       suffix: literal_suffix(segments),
       template: template,
       progress: nil,
-      line: kw_token.line
+      line: kw_token.line,
+      source_span: macro_rule_source_span(kw_token, state)
     }
 
     {rule, state}

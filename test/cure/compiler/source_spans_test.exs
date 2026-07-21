@@ -82,12 +82,13 @@ defmodule Cure.Compiler.SourceSpansTest do
     source = "macro Every\n  syntax every becomes Clock.now()\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "macro.cure", emit_events: false)
 
-    assert {:ok, {:macro_def, meta, _rules}} =
+    assert {:ok, {:macro_def, meta, [rule]}} =
              Parser.parse(tokens, file: "macro.cure", emit_events: false, prelude_macros: false)
 
     info = Metadata.source_info(meta)
     assert slice(source, info.whole) == "macro Every\n  syntax every becomes Clock.now()"
     assert slice(source, info.name) == "Every"
+    assert slice(source, rule.source_span) == "syntax every becomes Clock.now()"
   end
 
   test "named containers retain exact declaration and qualified-name ranges" do
