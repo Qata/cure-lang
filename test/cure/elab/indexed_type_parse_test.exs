@@ -1,11 +1,12 @@
 defmodule Cure.Elab.IndexedTypeParseTest do
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.MetaAST.Metadata
 
   defp parse(src) do
     {:ok, toks} = Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Parser.parse(toks, emit_events: false)
-    Cure.Compiler.SourceSpans.strip_diagnostic_meta(ast)
+    Metadata.strip_diagnostics(ast)
   end
 
   test "parses an indexed type declaration with constructor signatures" do

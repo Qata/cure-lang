@@ -1,12 +1,13 @@
 defmodule Cure.Compiler.ParserIndexedTypeTest do
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.MetaAST.Metadata
 
   defp parse_decl(src) do
     {:ok, toks} = Lexer.tokenize(src, emit_events: false)
 
     with {:ok, ast} <- Parser.parse(toks, emit_events: false),
-         do: {:ok, Cure.Compiler.SourceSpans.strip_diagnostic_meta(ast)}
+         do: {:ok, Metadata.strip_diagnostics(ast)}
   end
 
   # Collect every {tag, meta, children} 3-tuple in the AST.

@@ -3,11 +3,12 @@ defmodule Cure.Compiler.MacroExplainTest do
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Errors, Lexer, Parser}
   alias Cure.Diagnostic.Renderer
+  alias Cure.MetaAST.Metadata
 
   defp parse!(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
     {:ok, ast} = Parser.parse(tokens, emit_events: false)
-    Cure.Compiler.SourceSpans.strip_diagnostic_meta(ast)
+    Metadata.strip_diagnostics(ast)
   end
 
   defp explain_entry({:macro_def, _, rules}), do: Enum.find(rules, &(&1[:kind] == :explain))

@@ -1,6 +1,7 @@
 defmodule Cure.Compiler.ComparisonTypeArgParseTest do
   use ExUnit.Case, async: true
   alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.MetaAST.Metadata
 
   # A decidable-boolean reflection type like `IsTrue(claim: Bool)` is applied to
   # a *comparison* in ordinary type positions: `-> IsTrue(5 > 0)`. Comparison and
@@ -12,7 +13,7 @@ defmodule Cure.Compiler.ComparisonTypeArgParseTest do
     {:ok, toks} = Lexer.tokenize(src, emit_events: false)
 
     with {:ok, ast} <- Parser.parse(toks, emit_events: false),
-         do: {:ok, Cure.Compiler.SourceSpans.strip_diagnostic_meta(ast)}
+         do: {:ok, Metadata.strip_diagnostics(ast)}
   end
 
   defp collect(node, acc) do

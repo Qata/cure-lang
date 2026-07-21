@@ -1,7 +1,7 @@
 defmodule Cure.Compiler.SourceSpansTest do
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Lexer, Parser, SourceSpans}
+  alias Cure.Compiler.{Lexer, Parser}
   alias Cure.Diagnostic.Span
   alias Cure.Elab.MacroExpand
   alias Cure.MetaAST.Metadata
@@ -434,7 +434,7 @@ defmodule Cure.Compiler.SourceSpansTest do
     plain = {:variable, [line: 1, col: 1, scope: :local], "x"}
     located = {:variable, [line: 1, col: 1, scope: :local, span: span, construct_span: span], "x"}
 
-    assert SourceSpans.strip_diagnostic_meta(plain) == SourceSpans.strip_diagnostic_meta(located)
+    assert Metadata.strip_diagnostics(plain) == Metadata.strip_diagnostics(located)
     refute MacroExpand.contains_computed_use?(located)
   end
 
