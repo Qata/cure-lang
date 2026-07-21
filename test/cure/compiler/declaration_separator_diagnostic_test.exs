@@ -52,4 +52,38 @@ defmodule Cure.Compiler.DeclarationSeparatorDiagnosticTest do
              "end" => %{"line" => 3, "character" => 7}
            }
   end
+
+  test "a record field declaration gets an exact colon insertion" do
+    source = "rec Person\n  name String\n"
+    {error, {diagnostic, registry}} = diagnostic(source, "record_colon.cure")
+
+    assert {:declaration_separator_missing,
+            %{
+              kind: :record_field_colon_missing,
+              family: "Person",
+              declaration: "name"
+            }} = error
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- RECORD FIELD NEEDS A COLON [E094] ------------------------- record_colon.cure
+
+             The field `name` in record `Person` needs `:` between its name and declared
+             type.
+
+             A valid continuation here starts with ':'.
+
+             at record_colon.cure:2:8
+             2 |   name String
+               |   ---- ^ this is the record field name; insert `:` before this field type
+
+             Hint: Insert `:` before the field type
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ": ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert {insertion.start_line, insertion.start_column} == {2, 8}
+    assert insertion.start_byte == insertion.end_byte
+  end
 end

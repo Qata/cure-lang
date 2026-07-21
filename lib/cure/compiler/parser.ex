@@ -8260,7 +8260,7 @@ defmodule Cure.Compiler.Parser do
     state = skip_newlines(state)
 
     # Parse indented fields: name: Type
-    {fields, state} = parse_record_fields(state)
+    {fields, state} = parse_record_fields(state, name)
 
     meta = [container_type: :struct, name: name, line: token.line, col: token.col]
     meta = if type_params != [], do: Keyword.put(meta, :type_params, type_params), else: meta
@@ -8285,11 +8285,11 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_record_fields(state) do
+  defp parse_record_fields(state, record) do
     case peek(state) do
       %Token{type: :indent} ->
         state = advance(state)
-        {fields, state} = parse_record_field_list(state)
+        {fields, state} = parse_record_field_list(state, record)
         state = expect_dedent(state)
         {fields, state}
 
@@ -8298,7 +8298,7 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp parse_record_field_list(state) do
+  defp parse_record_field_list(state, record) do
     state = skip_newlines(state)
 
     case peek(state) do
@@ -8309,7 +8309,7 @@ defmodule Cure.Compiler.Parser do
         name_token = peek(state)
         state = advance(state)
         annotation_start = peek(state)
-        state = expect(state, :colon)
+        state = expect_record_field_colon(state, name_token, record)
         {type_ast, state} = parse_type_expr(state)
         field_annotation_span = annotation_span(annotation_start, state)
 
@@ -8340,8 +8340,37 @@ defmodule Cure.Compiler.Parser do
           )
 
         field = {:param, meta, to_string(name_token.value)}
-        {rest, state} = parse_record_field_list(state)
+        {rest, state} = parse_record_field_list(state, record)
         {[field | rest], state}
+    end
+  end
+
+  defp expect_record_field_colon(state, field_token, record) do
+    case expect_token(state, :colon) do
+      {:ok, _colon, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :record_field_colon_missing,
+             family: record,
+             declaration: to_string(field_token.value),
+             expected: :colon,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             previous_span: field_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
     end
   end
 

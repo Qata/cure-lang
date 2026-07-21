@@ -5084,6 +5084,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :gadt_constructor_colon_missing}),
     do: "Constructor signature needs a colon"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :record_field_colon_missing}),
+    do: "Record field needs a colon"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "Lambda parameter needs a name"
 
@@ -5352,6 +5355,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{declaration: constructor, family: family}
        }),
        do: "The constructor `#{constructor}` in `#{family}` needs `:` between its name and type signature."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :record_field_colon_missing,
+         context: %{declaration: field, family: record}
+       }),
+       do: "The field `#{field}` in record `#{record}` needs `:` between its name and declared type."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
@@ -5694,6 +5703,9 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :gadt_constructor_colon_missing}),
     do: "insert `:` before this constructor signature"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :record_field_colon_missing}),
+    do: "insert `:` before this field type"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
     do: "write a lambda parameter name here"
 
@@ -5957,6 +5969,13 @@ defmodule Cure.Diagnostic.Adapter do
        )
        when previous != primary_span,
        do: [%Label{span: previous, style: :secondary, message: "this is the constructor name"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :record_field_colon_missing, previous: %Span{} = previous},
+         primary_span
+       )
+       when previous != primary_span,
+       do: [%Label{span: previous, style: :secondary, message: "this is the record field name"}]
 
   defp syntax_secondary_labels(
          %SyntaxProblem{
@@ -6305,6 +6324,20 @@ defmodule Cure.Diagnostic.Adapter do
     [
       %Suggestion{
         message: "Insert `:` before the constructor signature",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: ": "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :record_field_colon_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline] do
+    [
+      %Suggestion{
+        message: "Insert `:` before the field type",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: span, replacement: ": "}]
       }
