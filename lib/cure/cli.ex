@@ -1756,9 +1756,7 @@ defmodule Cure.CLI do
           {:error, reason} ->
             error(
               "  " <>
-                Cure.Diagnostic.Host.render_diagnostic(
-                  Cure.Diagnostic.Operational.command_failure("compile #{file}", reason)
-                )
+                Cure.Diagnostic.Host.render(reason, file, source)
             )
 
             :error
@@ -1849,9 +1847,7 @@ defmodule Cure.CLI do
                 {:error, reason} ->
                   error(
                     "  " <>
-                      Cure.Diagnostic.Host.render_diagnostic(
-                        Cure.Diagnostic.Operational.command_failure("compile #{f}", reason)
-                      )
+                      Cure.Diagnostic.Host.render(reason, f, src)
                   )
 
                   :error

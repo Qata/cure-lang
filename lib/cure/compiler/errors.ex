@@ -544,6 +544,18 @@ defmodule Cure.Compiler.Errors do
 
   defp error_location(_error), do: {0, 0}
 
+  # Parser recovery can return several independent errors as a bare list.
+  # Search each item for the first honest source span so presentation callers
+  # do not lose the file/caret merely because the parser accumulated errors.
+  defp exact_error_span([reason | rest], source, source_id, registry) do
+    case exact_error_span(reason, source, source_id, registry) do
+      {:ok, span} -> {:ok, span}
+      :error -> exact_error_span(rest, source, source_id, registry)
+    end
+  end
+
+  defp exact_error_span([], _source, _source_id, _registry), do: :error
+
   defp exact_error_span(error, source, source_id, registry) do
     case hole_span(error, source) do
       {:ok, start_byte, end_byte} ->

@@ -270,7 +270,10 @@ defmodule Cure.CLITest do
           assert catch_exit(Cure.CLI.main(["fmt", "--aggressive", path])) == {:shutdown, 1}
         end)
 
+      assert output =~ "[E094]"
       assert output =~ Path.basename(path)
+      assert output =~ "^"
+      refute output =~ "{:expected_token"
     end
   end
 
