@@ -7,6 +7,7 @@ mod Std.Regex
   ## The first checked layer is the closed universe describing the value produced
   ## by a successful typed parse.
 
+  use Std.Char
   use Std.Option
 
   ## Cure does not otherwise expose a general-purpose Either in the current
@@ -170,12 +171,20 @@ mod Std.Regex
   ## Public typed combinator layer. `Mapped` is the semantic bridge from a
   ## structurally extracted Pattern value to the user-facing result type. It is
   ## one-way: regex parsing does not imply an unparser.
+  type OneOrMore(value: Type) = OneOrMore(value, List(value))
+
   type Regex indices (result: Type)
     FromPattern : (shape: ShapeCode) -> Pattern(shape) -> Regex(Sem(shape))
     Mapped : (a -> b) -> Regex(a) -> Regex(b)
     Concatenated : Regex(a) -> Regex(b) -> Regex(Tuple(a, b))
     Alternated : Regex(a) -> Regex(b) -> Regex(Choice(a, b))
     Repeated : Regex(a) -> Regex(List(a))
+    MatchedText : Regex(a) -> Regex(String)
+    KeptRight : Regex(a) -> Regex(b) -> Regex(b)
+    KeptLeft : Regex(a) -> Regex(b) -> Regex(a)
+    SameAlternative : Regex(a) -> Regex(a) -> Regex(a)
+    OptionalRegex : Regex(a) -> Regex(Option(a))
+    OneOrMoreRegex : Regex(a) -> Regex(OneOrMore(a))
 
   fn empty() -> Regex(Unit) = FromPattern(UnitC, PatternEmpty())
 
@@ -192,3 +201,52 @@ mod Std.Regex
 
   fn map({a: Type}, {b: Type}, regex: Regex(a), transform: a -> b) -> Regex(b) =
     Mapped(transform, regex)
+
+  fn discard_left({a: Type}, {b: Type}, left: Regex(a), right: Regex(b)) -> Regex(b) =
+    KeptRight(left, right)
+
+  fn discard_right({a: Type}, {b: Type}, left: Regex(a), right: Regex(b)) -> Regex(a) =
+    KeptLeft(left, right)
+
+  fn or_same({a: Type}, left: Regex(a), right: Regex(a)) -> Regex(a) =
+    SameAlternative(left, right)
+
+  fn optional({a: Type}, regex: Regex(a)) -> Regex(Option(a)) =
+    OptionalRegex(regex)
+
+  fn one_or_more({a: Type}, regex: Regex(a)) -> Regex(OneOrMore(a)) =
+    OneOrMoreRegex(regex)
+
+  fn captured({a: Type}, regex: Regex(a)) -> Regex(String) = MatchedText(regex)
+
+  fn as_string({a: Type}, regex: Regex(a)) -> Regex(String) = MatchedText(regex)
+
+  fn always(_char: Char) -> Bool = true
+
+  fn any_char() -> Regex(Char) = predicate(always)
+
+  fn exact_predicate(expected: Char, actual: Char) -> Bool = Std.Char.same(expected, actual)
+
+  fn exact_test(expected: Char) -> Char -> Bool = fn(actual) -> exact_predicate(expected, actual)
+
+  fn discard_char(_char: Char) -> Unit = ()
+
+  fn exactly(expected: Char) -> Regex(Unit) = map(predicate(exact_test(expected)), discard_char)
+
+  fn contains_char(chars: List(Char), actual: Char) -> Bool = match chars
+    [] -> false
+    [head | rest] -> pickup
+      Std.Char.same(head, actual) -> true
+      else -> contains_char(rest, actual)
+
+  fn set_test(chars: List(Char)) -> Char -> Bool = fn(actual) -> contains_char(chars, actual)
+
+  fn one_of(chars: List(Char)) -> Regex(Char) = predicate(set_test(chars))
+
+  fn range_predicate(first: Char, last: Char, actual: Char) -> Bool =
+    Std.Char.between(actual, first, last)
+
+  fn range_test(first: Char, last: Char) -> Char -> Bool =
+    fn(actual) -> range_predicate(first, last, actual)
+
+  fn range(first: Char, last: Char) -> Regex(Char) = predicate(range_test(first, last))

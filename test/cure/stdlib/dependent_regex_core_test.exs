@@ -53,4 +53,24 @@ defmodule Cure.Stdlib.DependentRegexCoreTest do
 
     assert {:ok, _env} = Program.elaborate(source)
   end
+
+  test "smart constructors expose ergonomic result types" do
+    source = """
+    mod RegexSmartConstructors
+      use Std.Regex
+
+      fn exact_x() -> Regex(Unit) = exactly('x')
+      fn char() -> Regex(Char) = range('a', 'z')
+      fn chars() -> Regex(Char) = one_of(['a', 'b'])
+      fn either() -> Regex(Char) = or_same(char(), chars())
+      fn maybe() -> Regex(Option(Char)) = optional(char())
+      fn many() -> Regex(OneOrMore(Char)) = one_or_more(char())
+      fn right() -> Regex(Char) = discard_left(exact_x(), char())
+      fn left() -> Regex(Char) = discard_right(char(), exact_x())
+      fn text() -> Regex(String) = captured(many())
+    end
+    """
+
+    assert {:ok, _env} = Program.elaborate(source)
+  end
 end
