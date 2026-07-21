@@ -10559,12 +10559,38 @@ defmodule Cure.Compiler.Parser do
   defp parse_capture_obligations(state, capture_names, obligations \\ []) do
     case peek(state) do
       %Token{value: value} = token when value in ["where", :where] ->
+        interface_start = peek_at(state, 1)
         {interface, state} = parse_dotted_name(advance(state))
-        state = expect(state, :lparen)
+        interface_end = authored_token(state)
+
+        interface_span =
+          case {interface_start, interface_end} do
+            {%Token{span: first}, %Token{span: last}} ->
+              case Range.through(first, last) do
+                {:ok, span} -> span
+                _ -> first
+              end
+
+            _ ->
+              nil
+          end
+
+        {open_token, state} =
+          expect_macro_obligation_open(state, token, interface, interface_span)
+
         capture_token = peek(state)
         capture = to_string(capture_token.value)
         state = advance(state)
-        state = expect(state, :rparen)
+
+        state =
+          close_macro_obligation(
+            state,
+            token,
+            open_token,
+            interface,
+            interface_span,
+            capture_token
+          )
 
         state =
           if capture in capture_names do
@@ -10589,6 +10615,56 @@ defmodule Cure.Compiler.Parser do
       _ ->
         {obligations, state}
     end
+  end
+
+  defp expect_macro_obligation_open(state, where_token, interface, interface_span) do
+    case expect_token(state, :lparen) do
+      {:ok, open_token, next_state} ->
+        {open_token, next_state}
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:container_elements_syntax,
+           %{
+             kind: :container_opener_missing,
+             container: :macro_obligation_capture,
+             interface: interface,
+             expected: :lparen,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: where_token.span,
+             owner_span: where_token.span,
+             previous_span: interface_span,
+             interface_span: interface_span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        {nil, %{next_state | errors: [error | rest]}}
+    end
+  end
+
+  defp close_macro_obligation(state, _where_token, nil, _interface, _interface_span, _capture_token) do
+    if peek(state).type == :rparen, do: advance(state), else: state
+  end
+
+  defp close_macro_obligation(state, where_token, open_token, interface, interface_span, capture_token) do
+    {state, _close_token} =
+      expect_container_close(state, :rparen, :macro_obligation_capture, open_token, [], false, %{
+        interface: interface,
+        owner_span: where_token.span,
+        interface_span: interface_span,
+        previous_span: capture_token.span,
+        capture: to_string(capture_token.value),
+        closing_values: ["where", "computed", "contextual", "becomes"]
+      })
+
+    state
   end
 
   # Tier-2: `becomes <template>` (unchanged behaviour, just extracted).

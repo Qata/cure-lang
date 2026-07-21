@@ -5185,6 +5185,12 @@ defmodule Cure.Diagnostic.Adapter do
        when container in [:failure_parameters, :lift_callback_parameters],
        do: "Macro parameter list is missing"
 
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: :macro_obligation_capture}
+       }),
+       do: "Macro obligation needs parentheses"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :with_rematch_separator_missing}),
     do: "With rematch needs a bar"
 
@@ -5267,6 +5273,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :lift_callback_parameters}
        }),
        do: "Lifted callback parameter list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :macro_obligation_capture}
+       }),
+       do: "Macro obligation is not closed"
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_unclosed,
@@ -5654,6 +5666,12 @@ defmodule Cure.Diagnostic.Adapter do
        do: "The macro declaration `#{declaration}` must put its parameters inside parentheses."
 
   defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: :macro_obligation_capture, interface: interface}
+       }),
+       do: "The `#{interface}` obligation must put the capture it constrains inside parentheses."
+
+  defp syntax_problem_context(%SyntaxProblem{
          kind: :with_rematch_separator_missing,
          context: %{parent_pattern_count: count}
        }),
@@ -5836,6 +5854,12 @@ defmodule Cure.Diagnostic.Adapter do
        })
        when container in [:failure_parameters, :lift_callback_parameters],
        do: "The parameter list for `#{declaration}` reaches its body without the closing ')'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :macro_obligation_capture, interface: interface, capture: capture}
+       }),
+       do: "The `#{interface}` obligation for `#{capture}` is missing the ')' that closes its capture."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
@@ -6173,6 +6197,12 @@ defmodule Cure.Diagnostic.Adapter do
        when container in [:failure_parameters, :lift_callback_parameters],
        do: "open this parameter list with `(`"
 
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: :macro_obligation_capture}
+       }),
+       do: "insert `(` before this capture"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :with_rematch_separator_missing}),
     do: "insert `|` before this with-pattern"
 
@@ -6239,6 +6269,13 @@ defmodule Cure.Diagnostic.Adapter do
        })
        when container in [:failure_parameters, :lift_callback_parameters],
        do: "close this macro parameter list with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :macro_obligation_capture}
+       }),
+       do: "close this obligation with `)`"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_unclosed,
@@ -6450,6 +6487,34 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(problem.opener, :secondary, "this macro invocation starts here"),
       pickup_label(problem.within, :secondary, "the matching rule is declared here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: opener,
+           previous: previous,
+           context: %{container: :macro_obligation_capture} = context
+         },
+         primary_span
+       )
+       when kind in [:container_opener_missing, :container_unclosed] do
+    open_label =
+      if kind == :container_unclosed do
+        pickup_label(opener, :secondary, "the capture starts here")
+      end
+
+    [
+      pickup_label(Map.get(context, :owner_span), :secondary, "this obligation starts here"),
+      pickup_label(Map.get(context, :interface_span) || previous, :secondary, "this is the required interface"),
+      open_label,
+      pickup_label(previous, :secondary, "the capture ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -7567,6 +7632,22 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_opener_missing,
+           context: %{container: :macro_obligation_capture}
+         },
+         %Span{} = span
+       ) do
+    [
+      %Suggestion{
+        message: "Insert `(` before the constrained capture",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "("}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
          %SyntaxProblem{kind: :with_rematch_separator_missing, context: %{token_type: type}},
          %Span{} = span
        )
@@ -7793,6 +7874,17 @@ defmodule Cure.Diagnostic.Adapter do
          %Span{} = span
        )
        when container in [:failure_parameters, :lift_callback_parameters] do
+    closing_delimiter_insertion(:rparen, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           expected: :rparen,
+           context: %{container: :macro_obligation_capture}
+         },
+         %Span{} = span
+       ) do
     closing_delimiter_insertion(:rparen, span)
   end
 
