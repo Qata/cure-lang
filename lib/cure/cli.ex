@@ -394,7 +394,7 @@ defmodule Cure.CLI do
         info("Trace stopped.")
 
       {:error, _} ->
-        error("Cannot parse #{inspect(target)}; expected Module.fun/arity")
+        error("Cannot parse `#{target}`; expected Module.fun/arity")
         exit({:shutdown, 1})
     end
   end
@@ -1178,8 +1178,8 @@ defmodule Cure.CLI do
       case plan_migration(target: target, current: project_edition) do
         {:error, :downgrade} ->
           error(
-            "refusing to downgrade: target edition #{inspect(target)} is older than " <>
-              "the project edition #{inspect(project_edition)}"
+            "refusing to downgrade: target edition `#{target}` is older than " <>
+              "the project edition `#{project_edition}`"
           )
 
           {:error, :downgrade}
@@ -1217,7 +1217,7 @@ defmodule Cure.CLI do
         {:ok, ed}
 
       {:error, {:unknown_edition, ed}} = err ->
-        error("invalid edition #{inspect(ed)} declared in #{Path.join(dir, "Cure.toml")}")
+        error("invalid edition `#{ed}` declared in #{Path.join(dir, "Cure.toml")}")
         err
 
       {:error, _} ->
@@ -1240,7 +1240,7 @@ defmodule Cure.CLI do
             {:ok, raw}
 
           {:error, {:unknown_edition, _}} = err ->
-            error("unknown edition: #{inspect(raw)}")
+            error("unknown edition: `#{raw}`")
             err
         end
     end

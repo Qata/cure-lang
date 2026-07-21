@@ -243,10 +243,10 @@ defmodule Cure.REPL do
     end
   end
 
-  defp raw_mode_warning(state, reason) do
+  defp raw_mode_warning(state, _reason) do
     render_info(
       state,
-      "(raw-mode unavailable: #{inspect(reason)}; arrows and Ctrl+R will not work -- " <>
+      "(raw-mode unavailable; arrows and Ctrl+R will not work -- " <>
         "falling back to line-mode input)"
     )
   end
@@ -1146,7 +1146,7 @@ defmodule Cure.REPL do
             {:error, "usage: :let name = expr"}
 
           not valid_binding_ident?(name) ->
-            {:error, "invalid binding name #{inspect(name)}; use a lowercase identifier (letters, digits, '_')"}
+            {:error, "invalid binding name `#{name}`; use a lowercase identifier (letters, digits, '_')"}
 
           true ->
             {:ok, name, expr}
@@ -1266,7 +1266,7 @@ defmodule Cure.REPL do
   end
 
   defp cmd_theme(state, other) do
-    render_operational_error(state, "unknown theme #{inspect(other)} (expected: dark, light, mono)", :usage)
+    render_operational_error(state, "unknown theme `#{other}` (expected: dark, light, mono)", :usage)
     state
   end
 
@@ -1277,7 +1277,7 @@ defmodule Cure.REPL do
   end
 
   defp cmd_mode(state, other) do
-    render_operational_error(state, "unknown mode #{inspect(other)} (expected: emacs, vi)", :usage)
+    render_operational_error(state, "unknown mode `#{other}` (expected: emacs, vi)", :usage)
     state
   end
 
@@ -1296,7 +1296,7 @@ defmodule Cure.REPL do
   end
 
   defp cmd_color(state, other) do
-    render_operational_error(state, "expected :color on|off, got #{inspect(other)}", :usage)
+    render_operational_error(state, "expected :color on|off, got `#{other}`", :usage)
     state
   end
 
