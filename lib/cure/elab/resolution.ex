@@ -68,12 +68,9 @@ defmodule Cure.Elab.Resolution do
   end
 
   defp resolve_canonical_suffix(env, bare) do
-    b = Atom.to_string(bare)
-
     matches =
       [env.ctors, env.families, env.defs]
-      |> Enum.flat_map(&Map.keys/1)
-      |> Enum.filter(fn key -> is_atom(key) and provides_bare?(Atom.to_string(key), b) end)
+      |> Enum.flat_map(&Env.provider_keys(&1, bare))
       |> Enum.uniq()
       |> Enum.map(fn key -> {Cure.Elab.Name.owner(key), key} end)
       |> prefer_direct(env.import_modules)
@@ -83,19 +80,6 @@ defmodule Cure.Elab.Resolution do
       [] -> :none
       many -> {:ambiguous, Enum.map(many, &elem(&1, 0)) |> Enum.uniq()}
     end
-  end
-
-  # A key provides bare name `b` iff its base is exactly `b` (size-one: the atom
-  # ends with "#b" or is the bare atom `b`) or an overload member of `b` (base
-  # "b~<ord>", so the atom contains "#b~" or starts "b~"). Cheap string ops, no
-  # split — this runs for every table key on every unresolved bare lookup.
-  defp provides_bare?(s, b) do
-    exact = "##{b}"
-    ovl = "##{b}~"
-    bare_ovl = "#{b}~"
-
-    s == b or String.ends_with?(s, exact) or String.contains?(s, ovl) or
-      String.starts_with?(s, bare_ovl)
   end
 
   @doc """
@@ -113,10 +97,8 @@ defmodule Cure.Elab.Resolution do
   """
   @spec overload_candidates(Env.t(), atom()) :: [atom()]
   def overload_candidates(%Env{} = env, bare) do
-    b = Atom.to_string(bare)
-
-    Map.keys(env.defs)
-    |> Enum.filter(fn key -> is_atom(key) and provides_bare?(Atom.to_string(key), b) end)
+    env.defs
+    |> Env.provider_keys(bare)
     |> Enum.map(fn key -> {Cure.Elab.Name.owner(key), key} end)
     |> prefer_local(env.module_owner)
     |> prefer_direct(env.import_modules)
@@ -155,13 +137,9 @@ defmodule Cure.Elab.Resolution do
         :error
 
       :none ->
-        b = Atom.to_string(bare)
-
         Enum.find_value([env.ctors, env.families, env.defs], fn table ->
-          Enum.find_value(Map.keys(table), fn key ->
-            if is_atom(key) and provides_bare?(Atom.to_string(key), b) do
-              {:ok, Cure.Elab.Name.owner(key), key}
-            end
+          Enum.find_value(Env.provider_keys(table, bare), fn key ->
+            {:ok, Cure.Elab.Name.owner(key), key}
           end)
         end) || :error
     end
@@ -178,12 +156,9 @@ defmodule Cure.Elab.Resolution do
         []
 
       :none ->
-        b = Atom.to_string(bare)
-
         owners =
           [env.ctors, env.families, env.defs]
-          |> Enum.flat_map(&Map.keys/1)
-          |> Enum.filter(fn key -> is_atom(key) and provides_bare?(Atom.to_string(key), b) end)
+          |> Enum.flat_map(&Env.provider_keys(&1, bare))
           |> Enum.map(&Cure.Elab.Name.owner/1)
           |> Enum.uniq()
 

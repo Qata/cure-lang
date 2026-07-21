@@ -29,6 +29,22 @@ defmodule Cure.Elab.ResolutionOverloadTest do
     assert Resolution.overload_candidates(env_with_overloads(), :nope) == []
   end
 
+  test "provider index follows immutable table versions without stale candidates" do
+    env = env_with_overloads()
+
+    assert Enum.sort(Resolution.overload_candidates(env, :plus)) == [:"M#plus~0", :"M#plus~1"]
+
+    extended = put_def(env, :"M#plus~2")
+
+    assert Enum.sort(Resolution.overload_candidates(extended, :plus)) == [
+             :"M#plus~0",
+             :"M#plus~1",
+             :"M#plus~2"
+           ]
+
+    assert Enum.sort(Resolution.overload_candidates(env, :plus)) == [:"M#plus~0", :"M#plus~1"]
+  end
+
   test "ambiguous_modules still finds an overloaded name's owner (structural recovery)" do
     # A bare unapplied reference must still surface an actionable owner list,
     # never a silent :none. (Same owner twice collapses to one entry.)
