@@ -21,7 +21,18 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
     assert diagnostic.payload.origin.owner == :answer
     assert diagnostic.payload.expression_category == :literal
     assert diagnostic.primary.span.start_column == 22
-    assert Renderer.plain(diagnostic, registry) =~ "type written in its annotation"
+    assert [%{span: annotation, message: "the expectation comes from here"}] = diagnostic.secondary
+    assert annotation.start_column == 16
+    assert annotation.end_column == 19
+
+    rendered = Renderer.plain(diagnostic, registry)
+    assert rendered =~ "type written in its annotation"
+    assert rendered =~ "the expectation comes from here"
+    assert rendered =~ "this expression has the wrong type"
+
+    [related] = Renderer.lsp(diagnostic, registry)["relatedInformation"]
+    assert related["message"] == "the expectation comes from here"
+    assert related["location"]["range"]["start"]["character"] == 15
   end
 
   test "declaration context derives its extent from the parser-owned span" do

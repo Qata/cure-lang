@@ -585,7 +585,7 @@ defmodule Cure.Diagnostic.Adapter do
             expected: expected,
             origin: %ExpectationOrigin{
               kind: origin,
-              span: Keyword.get(opts, :span, Map.get(context, :expectation_span)),
+              span: Map.get(context, :expectation_span),
               owner: Map.get(context, :checking),
               index: Map.get(context, :argument_index)
             },
@@ -1845,7 +1845,7 @@ defmodule Cure.Diagnostic.Adapter do
         expected: expected,
         origin: %ExpectationOrigin{
           kind: origin,
-          span: Keyword.get(opts, :span, Map.get(context, :expectation_span)),
+          span: Map.get(context, :expectation_span),
           owner: Map.get(context, :checking),
           index: Map.get(context, :argument_index)
         },
