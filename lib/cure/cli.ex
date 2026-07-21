@@ -328,7 +328,7 @@ defmodule Cure.CLI do
 
     case Cure.Observe.Journal.load(path) do
       {:error, reason} ->
-        error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason)))
+        error_diagnostic(Cure.Diagnostic.Operational.file_read(path, reason))
         exit({:shutdown, 1})
 
       {:ok, entries} ->
@@ -347,9 +347,7 @@ defmodule Cure.CLI do
                 info("Replay complete.")
 
               {:error, reason} ->
-                error(
-                  Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.command_failure("Replay", reason))
-                )
+                error_diagnostic(Cure.Diagnostic.Operational.command_failure("Replay", reason))
 
                 exit({:shutdown, 1})
             end
@@ -558,7 +556,7 @@ defmodule Cure.CLI do
         IO.puts(source)
 
       {:error, reason} ->
-        error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_write(path, reason)))
+        error_diagnostic(Cure.Diagnostic.Operational.file_write(path, reason))
         exit({:shutdown, 1})
     end
   end
@@ -700,7 +698,7 @@ defmodule Cure.CLI do
                 info("Dependencies resolved. Cure.lock written.")
 
               {:error, reason} ->
-                error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.dependency(reason)))
+                error_diagnostic(Cure.Diagnostic.Operational.dependency(reason))
                 exit({:shutdown, 1})
             end
         end
@@ -710,7 +708,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason))
         exit({:shutdown, 1})
     end
   end
@@ -738,7 +736,7 @@ defmodule Cure.CLI do
                     :ok
 
                   {:error, reason} ->
-                    error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.dependency(reason)))
+                    error_diagnostic(Cure.Diagnostic.Operational.dependency(reason))
                     exit({:shutdown, 1})
                 end
               end
@@ -753,7 +751,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason))
         exit({:shutdown, 1})
     end
   end
@@ -768,7 +766,7 @@ defmodule Cure.CLI do
         exit({:shutdown, 1})
 
       {:error, reason} ->
-        error(Cure.Diagnostic.Host.render_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason)))
+        error_diagnostic(Cure.Diagnostic.Operational.file_read("Cure.toml", reason))
         exit({:shutdown, 1})
     end
   end
@@ -2285,6 +2283,13 @@ defmodule Cure.CLI do
 
   defp info(msg), do: IO.puts(msg)
   defp warn(msg), do: IO.puts(:stderr, "warning: #{msg}")
+
+  defp error_diagnostic(%Cure.Diagnostic{} = diagnostic) do
+    case Cure.Diagnostic.Host.emit_diagnostic(diagnostic) do
+      {:ok, _sink} -> :ok
+      {:error, reason} -> raise "failed to emit diagnostic: #{inspect(reason)}"
+    end
+  end
 
   defp error(msg) do
     rendered = String.trim_leading(msg)
