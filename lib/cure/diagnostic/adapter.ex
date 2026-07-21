@@ -5169,6 +5169,22 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :send_comma_missing}),
     do: "Send needs a comma"
 
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :lift_callback_body_separator_missing,
+         context: %{annotated: true}
+       }),
+       do: "Lifted callback needs an equals sign"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :lift_callback_body_separator_missing}),
+    do: "Lifted callback needs an arrow"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: container}
+       })
+       when container in [:failure_parameters, :lift_callback_parameters],
+       do: "Macro parameter list is missing"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :with_rematch_separator_missing}),
     do: "With rematch needs a bar"
 
@@ -5239,6 +5255,18 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :selective_import}
        }),
        do: "Selective import is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :failure_parameters}
+       }),
+       do: "Failure parameter list is not closed"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :lift_callback_parameters}
+       }),
+       do: "Lifted callback parameter list is not closed"
 
   defp syntax_problem_title(%SyntaxProblem{
          kind: :container_unclosed,
@@ -5607,6 +5635,25 @@ defmodule Cure.Diagnostic.Adapter do
     do: "The keyword `send` form needs `,` between its target and message."
 
   defp syntax_problem_context(%SyntaxProblem{
+         kind: :lift_callback_body_separator_missing,
+         context: %{declaration: name, annotated: true}
+       }),
+       do: "The lifted callback `#{name}` needs `=` between its declared return type and body."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :lift_callback_body_separator_missing,
+         context: %{declaration: name}
+       }),
+       do: "The lifted callback `#{name}` needs `->` between its parameter list and body."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: container, declaration: declaration}
+       })
+       when container in [:failure_parameters, :lift_callback_parameters],
+       do: "The macro declaration `#{declaration}` must put its parameters inside parentheses."
+
+  defp syntax_problem_context(%SyntaxProblem{
          kind: :with_rematch_separator_missing,
          context: %{parent_pattern_count: count}
        }),
@@ -5782,6 +5829,13 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :selective_import, module: module}
        }),
        do: "The selective import from `#{module}` reaches the end of its names without the closing '}'."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: container, declaration: declaration}
+       })
+       when container in [:failure_parameters, :lift_callback_parameters],
+       do: "The parameter list for `#{declaration}` reaches its body without the closing ')'."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_unclosed,
@@ -6103,6 +6157,22 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :send_comma_missing}),
     do: "insert a comma before this message"
 
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :lift_callback_body_separator_missing,
+         context: %{annotated: true}
+       }),
+       do: "insert `=` before this callback body"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :lift_callback_body_separator_missing}),
+    do: "insert `->` before this callback body"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_opener_missing,
+         context: %{container: container}
+       })
+       when container in [:failure_parameters, :lift_callback_parameters],
+       do: "open this parameter list with `(`"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :with_rematch_separator_missing}),
     do: "insert `|` before this with-pattern"
 
@@ -6161,6 +6231,14 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :lambda_parameters}
        }),
        do: "close this lambda parameter list with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: container}
+       })
+       when container in [:failure_parameters, :lift_callback_parameters],
+       do: "close this macro parameter list with `)`"
 
   defp syntax_problem_label(%SyntaxProblem{
          kind: :container_unclosed,
@@ -6628,6 +6706,27 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_secondary_labels(
          %SyntaxProblem{
+           kind: :lift_callback_body_separator_missing,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: context
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(opener, :secondary, "this lifted callback starts here"),
+      pickup_label(Map.get(context, :name_span), :secondary, "this is the callback name"),
+      pickup_label(previous, :secondary, "the callback head ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
            kind: :with_rematch_separator_missing,
            opener: %Span{} = opener,
            previous: previous
@@ -6885,6 +6984,39 @@ defmodule Cure.Diagnostic.Adapter do
       pickup_label(opener, :secondary, "the selective import list starts here"),
       pickup_label(previous, :secondary, "the previous imported name ends here")
     ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: opener,
+           previous: previous,
+           context: %{container: container} = context
+         },
+         primary_span
+       )
+       when kind in [:container_opener_missing, :container_unclosed] and
+              container in [:failure_parameters, :lift_callback_parameters] do
+    owner = if container == :failure_parameters, do: "failure declaration", else: "lifted callback"
+
+    opener_labels =
+      if kind == :container_unclosed do
+        [pickup_label(opener, :secondary, "the parameter list starts here")]
+      else
+        []
+      end
+
+    (opener_labels ++
+       [
+         pickup_label(Map.get(context, :owner_span), :secondary, "this #{owner} starts here"),
+         pickup_label(Map.get(context, :name_span), :secondary, "this is its name"),
+         pickup_label(previous, :secondary, "the previous parameter ends here")
+       ])
     |> Enum.reject(fn
       nil -> true
       %Label{span: span} -> span == primary_span
@@ -7393,6 +7525,48 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :lift_callback_body_separator_missing,
+           expected: expected,
+           context: %{token_type: type}
+         },
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    separator = if expected == :assign, do: "=", else: "->"
+
+    [
+      %Suggestion{
+        message: "Insert `#{separator}` before the callback body",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "#{separator} "}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_opener_missing,
+           observed: observed,
+           context: %{container: container, token_type: type}
+         },
+         %Span{} = span
+       )
+       when container in [:failure_parameters, :lift_callback_parameters] do
+    empty? = type in [:arrow, :assign, :newline, :dedent, :eof] or observed in ["returns", :returns]
+    insertion = if empty?, do: "()", else: "("
+    message = if empty?, do: "Insert an empty `()` parameter list", else: "Insert `(` before the first parameter"
+
+    [
+      %Suggestion{
+        message: message,
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: insertion}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
          %SyntaxProblem{kind: :with_rematch_separator_missing, context: %{token_type: type}},
          %Span{} = span
        )
@@ -7607,6 +7781,18 @@ defmodule Cure.Diagnostic.Adapter do
          %Span{} = span
        )
        when container in [:splice, :splice_group] do
+    closing_delimiter_insertion(:rparen, span)
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{
+           kind: :container_unclosed,
+           expected: :rparen,
+           context: %{container: container}
+         },
+         %Span{} = span
+       )
+       when container in [:failure_parameters, :lift_callback_parameters] do
     closing_delimiter_insertion(:rparen, span)
   end
 

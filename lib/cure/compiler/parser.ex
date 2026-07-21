@@ -10137,9 +10137,9 @@ defmodule Cure.Compiler.Parser do
     name_token = peek(state)
     name = String.to_atom(to_string(name_token.value))
     state = advance(state)
-    state = expect(state, :lparen)
-    {params, state} = parse_typed_params(state)
-    state = expect(state, :rparen)
+
+    {params, state} =
+      parse_macro_typed_parameters(state, token, name_token, :lift_callback_parameters, name)
 
     {return_type, state} =
       case peek(state) do
@@ -10151,7 +10151,7 @@ defmodule Cure.Compiler.Parser do
           {nil, state}
       end
 
-    state = if return_type, do: expect(state, :assign), else: expect(state, :arrow)
+    state = expect_lift_callback_body_separator(state, token, name_token, name, return_type)
     state = skip_newlines(state)
     {body, state} = parse_expr_or_block(state)
 
@@ -10177,6 +10177,39 @@ defmodule Cure.Compiler.Parser do
     }
 
     {callback, state}
+  end
+
+  defp expect_lift_callback_body_separator(state, callback_token, name_token, name, return_type) do
+    expected = if return_type, do: :assign, else: :arrow
+
+    case expect_token(state, expected) do
+      {:ok, _separator, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:declaration_separator_missing,
+           %{
+             kind: :lift_callback_body_separator_missing,
+             declaration: name,
+             annotated: not is_nil(return_type),
+             expected: expected,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: callback_token.span,
+             previous_span: first_node_source_span(return_type) || name_token.span,
+             name_span: name_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
+    end
   end
 
   defp parse_macro_block(state) do
@@ -10418,9 +10451,9 @@ defmodule Cure.Compiler.Parser do
     name_token = peek(state)
     name = to_string(name_token.value)
     state = advance(state)
-    state = expect(state, :lparen)
-    {params, state} = parse_typed_params(state)
-    state = expect(state, :rparen)
+
+    {params, state} =
+      parse_macro_typed_parameters(state, token, name_token, :failure_parameters, name)
 
     {%{
        kind: :fail,
@@ -10430,6 +10463,59 @@ defmodule Cure.Compiler.Parser do
        source_span: macro_rule_source_span(token, state)
      }, state}
   end
+
+  defp parse_macro_typed_parameters(state, owner_token, name_token, container, declaration) do
+    case expect_token(state, :lparen) do
+      {:ok, open_token, next_state} ->
+        {params, next_state} = parse_typed_params(next_state)
+
+        context =
+          %{
+            declaration: declaration,
+            owner_span: owner_token.span,
+            name_span: name_token.span
+          }
+          |> Map.merge(macro_parameter_boundaries(container))
+
+        {next_state, _close_token} =
+          expect_container_close(next_state, :rparen, container, open_token, params, true, context)
+
+        {params, next_state}
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:container_elements_syntax,
+           %{
+             kind: :container_opener_missing,
+             container: container,
+             declaration: declaration,
+             expected: :lparen,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             opener_span: owner_token.span,
+             owner_span: owner_token.span,
+             previous_span: name_token.span,
+             name_span: name_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        next_state = %{next_state | errors: [error | rest]}
+        {params, next_state} = parse_typed_params(next_state)
+        next_state = if peek(next_state).type == :rparen, do: advance(next_state), else: next_state
+        {params, next_state}
+    end
+  end
+
+  defp macro_parameter_boundaries(:lift_callback_parameters),
+    do: %{closing_tokens: [:arrow, :assign], closing_values: ["returns"]}
+
+  defp macro_parameter_boundaries(_container), do: %{}
 
   defp parse_open_category(state) do
     token = peek(state)
