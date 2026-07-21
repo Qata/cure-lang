@@ -484,6 +484,143 @@ defmodule Cure.Compiler.ParserGrammarStrictnessTest do
     assert insertion.start_byte == insertion.end_byte
   end
 
+  test "an invalid lambda parameter is rejected at its authored token" do
+    source = "fn(42) -> 1"
+    {:ok, tokens} = Lexer.tokenize(source, file: "lambda_binder.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:invalid_parameter_name, %{lambda: true}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "lambda_binder.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- LAMBDA PARAMETER NEEDS A NAME [E094] --------------------- lambda_binder.cure
+
+             42 cannot name a lambda parameter. Use a lower-case name such as `value`.
+
+             at lambda_binder.cure:1:4
+             1 | fn(42) -> 1
+               |    ^^ write a lambda parameter name here
+
+             Hint: Replace this with a descriptive lower-case parameter name
+             """)
+
+    assert [%{applicability: :manual, edits: []}] = diagnostic.suggestions
+  end
+
+  test "adjacent lambda parameters get a zero-width comma insertion" do
+    source = "fn(x y) -> x"
+    {:ok, tokens} = Lexer.tokenize(source, file: "lambda_separator.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+
+    assert {:container_elements_syntax, %{kind: :container_separator_missing, container: :lambda_parameters}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "lambda_separator.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- LAMBDA PARAMETERS NEED A COMMA [E094] ----------------- lambda_separator.cure
+
+             This lambda has another parameter here, but consecutive parameters must be
+             separated by a comma.
+
+             at lambda_separator.cure:1:6
+             1 | fn(x y) -> x
+               |   -- ^ this lambda parameter list starts here; the previous lambda parameter ends here; insert a comma before this lambda parameter
+
+             Hint: Insert `,` between these lambda parameters
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ", ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 5
+    assert insertion.end_byte == 5
+  end
+
+  test "an unclosed lambda parameter list points to its final parameter" do
+    source = "fn(x"
+    {:ok, tokens} = Lexer.tokenize(source, file: "lambda_close.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:container_elements_syntax, %{kind: :container_unclosed, container: :lambda_parameters}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "lambda_close.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- LAMBDA PARAMETER LIST IS NOT CLOSED [E094] ---------------- lambda_close.cure
+
+             This lambda's parameter list reaches the end of the source without its closing
+             ')'.
+
+             at lambda_close.cure:1:5
+             1 | fn(x
+               |   --^ this lambda parameter list starts here; the previous lambda parameter ends here; close this lambda parameter list with `)`
+
+             Hint: Insert `)` to close the construct
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: ")", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 4
+    assert insertion.end_byte == 4
+    assert length(Renderer.lsp(diagnostic, registry)["relatedInformation"]) == 2
+  end
+
+  test "a lambda without an arrow points between its header and body" do
+    source = "fn(x) x"
+    {:ok, tokens} = Lexer.tokenize(source, file: "lambda_arrow.cure", emit_events: false)
+    assert {:error, [error | _]} = Parser.parse(tokens, emit_events: false)
+    assert {:lambda_arrow_missing, %{token_type: :identifier}} = error
+
+    {diagnostic, registry} =
+      Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "lambda_arrow.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- LAMBDA ARROW IS MISSING [E094] ---------------------------- lambda_arrow.cure
+
+             A lambda needs `->` between its parameter list and body expression.
+
+             A valid continuation here starts with '->'.
+
+             at lambda_arrow.cure:1:7
+             1 | fn(x) x
+               | --  - ^ this lambda starts here; its parameter list ends here; insert `->` before the lambda body
+
+             Hint: Insert `->` before the lambda body
+             """)
+
+    assert [%{applicability: :machine_applicable, edits: [%{replacement: "-> ", span: insertion}]}] =
+             diagnostic.suggestions
+
+    assert insertion.start_byte == 6
+    assert insertion.end_byte == 6
+
+    assert [%{"newText" => "-> ", "range" => edit_range}] =
+             Renderer.lsp(diagnostic, registry)["data"]["suggestions"] |> hd() |> Map.fetch!("edits")
+
+    assert edit_range == %{
+             "start" => %{"line" => 0, "character" => 6},
+             "end" => %{"line" => 0, "character" => 6}
+           }
+  end
+
+  test "the malformed lambda fallback contextualizes a missing opening parenthesis" do
+    source = "fn 42) -> 1"
+    {:ok, tokens} = Lexer.tokenize(source, file: "lambda_open.cure", emit_events: false)
+    assert {:error, errors} = Parser.parse(tokens, emit_events: false)
+
+    assert Enum.any?(errors, fn
+             {:lambda_parameters_unparenthesized, %{expected: :lparen}} -> true
+             _ -> false
+           end)
+  end
+
   test "an invalid function parameter is rejected at the authored binder token" do
     source = "fn run(42) -> Int = 1\n"
     {:ok, tokens} = Lexer.tokenize(source, file: "binder.cure", emit_events: false)

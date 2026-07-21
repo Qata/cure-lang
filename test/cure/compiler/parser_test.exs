@@ -456,7 +456,8 @@ defmodule Cure.Compiler.ParserTest do
     test "simple lambda" do
       ast = parse!("fn(x) -> x")
       assert {:lambda, meta, [{:variable, _, "x"}]} = ast
-      assert [{:param, [], "x"}] = Keyword.get(meta, :params)
+      assert [{:param, param_meta, "x"}] = Keyword.get(meta, :params)
+      assert %Cure.MetaAST.SourceInfo{} = Keyword.fetch!(param_meta, :source_info)
     end
 
     test "multi-param lambda" do

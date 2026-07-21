@@ -2466,6 +2466,35 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:lambda_parameters_unparenthesized, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :lambda_parameters_unparenthesized,
+        expected: :lparen,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :lambda_span),
+        context: details
+      },
+      opts
+    )
+  end
+
+  def from_error({:lambda_arrow_missing, details}, opts) when is_map(details) do
+    from_error(
+      %SyntaxProblem{
+        kind: :lambda_arrow_missing,
+        expected: :arrow,
+        observed: Map.get(details, :observed),
+        at: Map.get(details, :span) || Keyword.get(opts, :span),
+        opener: Map.get(details, :lambda_span),
+        previous: Map.get(details, :previous_span),
+        context: details
+      },
+      opts
+    )
+  end
+
   def from_error({:invalid_parameter_name, details}, opts) when is_map(details) do
     from_error(
       %SyntaxProblem{
@@ -4957,6 +4986,14 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :function_parameters_unparenthesized}),
     do: "Function parameter list is missing"
 
+  defp syntax_problem_title(%SyntaxProblem{kind: :lambda_parameters_unparenthesized}),
+    do: "Lambda parameter list is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :lambda_arrow_missing}), do: "Lambda arrow is missing"
+
+  defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
+    do: "Lambda parameter needs a name"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :invalid_parameter_name}), do: "Function parameter needs a name"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :variadic_parameter_name_missing}),
@@ -5000,6 +5037,12 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "Type application is not closed"
 
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_unclosed,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "Lambda parameter list is not closed"
+
   defp syntax_problem_title(%SyntaxProblem{kind: :container_separator_missing, context: %{container: :list}}),
     do: "List elements need a comma"
 
@@ -5026,6 +5069,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :type_arguments}
        }),
        do: "Type arguments need a comma"
+
+  defp syntax_problem_title(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "Lambda parameters need a comma"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :container_trailing_separator, context: %{container: :list}}),
     do: "List ends with an extra comma"
@@ -5119,6 +5168,20 @@ defmodule Cure.Diagnostic.Adapter do
        do:
          "The function `#{function}` needs a parenthesized parameter list after its name. Write `()` when it takes no parameters."
 
+  defp syntax_problem_context(%SyntaxProblem{kind: :lambda_parameters_unparenthesized}),
+    do: "An anonymous function must put its parameters inside parentheses immediately after `fn`."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :lambda_arrow_missing}),
+    do: "A lambda needs `->` between its parameter list and body expression."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :invalid_parameter_name,
+         observed: observed,
+         context: %{lambda: true}
+       }),
+       do:
+         "#{String.capitalize(syntax_name(observed))} cannot name a lambda parameter. Use a lower-case name such as `value`."
+
   defp syntax_problem_context(%SyntaxProblem{
          kind: :invalid_parameter_name,
          observed: observed,
@@ -5195,6 +5258,13 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do: "The type application `#{type}` reaches the end of the source without the ')' that closes its arguments."
 
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "This lambda's parameter list reaches the end of the source without its closing ')'."
+
   defp syntax_problem_context(%SyntaxProblem{kind: :container_unclosed, context: %{container: container}}),
     do: "This #{container} reaches the end of the source without the ']' that closes its elements."
 
@@ -5222,6 +5292,12 @@ defmodule Cure.Diagnostic.Adapter do
        }),
        do:
          "The type application `#{type}` has another argument here, but consecutive type arguments must be separated by a comma."
+
+  defp syntax_problem_context(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "This lambda has another parameter here, but consecutive parameters must be separated by a comma."
 
   defp syntax_problem_context(%SyntaxProblem{
          kind: :container_separator_missing,
@@ -5344,6 +5420,15 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_label(%SyntaxProblem{kind: :function_parameters_unparenthesized}),
     do: "the parameter list belongs before this token"
 
+  defp syntax_problem_label(%SyntaxProblem{kind: :lambda_parameters_unparenthesized}),
+    do: "insert `(` before the first parameter"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :lambda_arrow_missing}),
+    do: "insert `->` before the lambda body"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name, context: %{lambda: true}}),
+    do: "write a lambda parameter name here"
+
   defp syntax_problem_label(%SyntaxProblem{kind: :invalid_parameter_name}),
     do: "write a parameter name here"
 
@@ -5368,6 +5453,13 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :type_arguments}
        }),
        do: "close these type arguments with `)`"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_unclosed,
+         expected: :rparen,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "close this lambda parameter list with `)`"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :container_unclosed, expected: expected}),
     do: "close this container with `#{syntax_insertion(expected)}`"
@@ -5395,6 +5487,12 @@ defmodule Cure.Diagnostic.Adapter do
          context: %{container: :type_arguments}
        }),
        do: "insert a comma before this type argument"
+
+  defp syntax_problem_label(%SyntaxProblem{
+         kind: :container_separator_missing,
+         context: %{container: :lambda_parameters}
+       }),
+       do: "insert a comma before this lambda parameter"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :container_separator_missing}),
     do: "insert a comma before this element"
@@ -5482,6 +5580,32 @@ defmodule Cure.Diagnostic.Adapter do
        do: [%Label{span: marker, style: :secondary, message: "this variadic marker needs a binder"}]
 
   defp syntax_secondary_labels(
+         %SyntaxProblem{kind: :lambda_parameters_unparenthesized, opener: %Span{} = lambda},
+         primary_span
+       )
+       when lambda != primary_span,
+       do: [%Label{span: lambda, style: :secondary, message: "this lambda starts here"}]
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: :lambda_arrow_missing,
+           opener: %Span{} = lambda,
+           previous: previous
+         },
+         primary_span
+       ) do
+    [
+      pickup_label(lambda, :secondary, "this lambda starts here"),
+      pickup_label(previous, :secondary, "its parameter list ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
          %SyntaxProblem{
            kind: kind,
            opener: %Span{} = opener,
@@ -5494,6 +5618,27 @@ defmodule Cure.Diagnostic.Adapter do
     [
       pickup_label(opener, :secondary, "this parameter list starts here"),
       pickup_label(previous, :secondary, "the previous parameter ends here")
+    ]
+    |> Enum.reject(fn
+      nil -> true
+      %Label{span: span} -> span == primary_span
+    end)
+    |> Enum.uniq_by(& &1.span)
+  end
+
+  defp syntax_secondary_labels(
+         %SyntaxProblem{
+           kind: kind,
+           opener: %Span{} = opener,
+           previous: previous,
+           context: %{container: :lambda_parameters}
+         },
+         primary_span
+       )
+       when kind in [:container_unclosed, :container_separator_missing] do
+    [
+      pickup_label(opener, :secondary, "this lambda parameter list starts here"),
+      pickup_label(previous, :secondary, "the previous lambda parameter ends here")
     ]
     |> Enum.reject(fn
       nil -> true
@@ -5615,6 +5760,20 @@ defmodule Cure.Diagnostic.Adapter do
         message: "Insert `()` after the function name",
         applicability: :machine_applicable,
         edits: [%TextEdit{span: insertion, replacement: "()"}]
+      }
+    ]
+  end
+
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :lambda_arrow_missing, context: %{token_type: type}},
+         %Span{} = span
+       )
+       when type not in [:eof, :dedent, :newline, :rparen, :rbracket, :rbrace] do
+    [
+      %Suggestion{
+        message: "Insert `->` before the lambda body",
+        applicability: :machine_applicable,
+        edits: [%TextEdit{span: span, replacement: "-> "}]
       }
     ]
   end
@@ -5747,6 +5906,18 @@ defmodule Cure.Diagnostic.Adapter do
          }
        ]
 
+  defp syntax_insertions(
+         %SyntaxProblem{kind: :container_separator_missing, context: %{container: :lambda_parameters}},
+         %Span{} = span
+       ),
+       do: [
+         %Suggestion{
+           message: "Insert `,` between these lambda parameters",
+           applicability: :machine_applicable,
+           edits: [%TextEdit{span: span, replacement: ", "}]
+         }
+       ]
+
   defp syntax_insertions(%SyntaxProblem{kind: :container_separator_missing}, %Span{} = span),
     do: [
       %Suggestion{
@@ -5802,6 +5973,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp container_item_name(:comprehension), do: "clause"
   defp container_item_name(:parameters), do: "parameter"
   defp container_item_name(:type_arguments), do: "type argument"
+  defp container_item_name(:lambda_parameters), do: "lambda parameter"
   defp container_item_name(_container), do: "element"
 
   defp syntax_insertion(:rparen), do: ")"

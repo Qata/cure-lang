@@ -7623,17 +7623,83 @@ defmodule Cure.Compiler.Parser do
   # where the lexer suppresses newlines and `:indent`/`:dedent` are
   # never emitted.
   defp parse_lambda_body(state, token) do
-    state = expect(state, :lparen)
+    {open_token, state} = expect_lambda_open(state, token)
     {params, state} = parse_lambda_params(state)
-    state = expect(state, :rparen)
-    state = expect(state, :arrow)
+
+    {state, close_token} =
+      if open_token do
+        expect_container_close(state, :rparen, :lambda_parameters, open_token, params, true)
+      else
+        case expect_token(state, :rparen) do
+          {:ok, close, next_state} -> {next_state, close}
+          {:error, next_state} -> {next_state, nil}
+        end
+      end
+
+    state = if close_token, do: expect_lambda_arrow(state, token, close_token), else: state
     state = skip_newlines(state)
     {body, state} = parse_lambda_block_body(state, token)
 
-    param_nodes = Enum.map(params, fn name -> {:param, [], name} end)
-    ast = {:lambda, [params: param_nodes, line: token.line, col: token.col], [body]}
+    ast = {:lambda, [params: params, line: token.line, col: token.col], [body]}
     {ast, state}
   end
+
+  defp expect_lambda_open(state, lambda_token) do
+    case expect_token(state, :lparen) do
+      {:ok, open, next_state} ->
+        {open, next_state}
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+        insertion = zero_width_start(observed.span)
+
+        error =
+          {:lambda_parameters_unparenthesized,
+           %{
+             expected: :lparen,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: insertion,
+             observed_span: observed.span,
+             lambda_span: lambda_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        {nil, %{next_state | errors: [error | rest]}}
+    end
+  end
+
+  defp expect_lambda_arrow(state, lambda_token, close_token) do
+    case expect_token(state, :arrow) do
+      {:ok, _arrow, next_state} ->
+        next_state
+
+      {:error, next_state} ->
+        [_generic | rest] = next_state.errors
+        observed = peek(next_state)
+
+        error =
+          {:lambda_arrow_missing,
+           %{
+             expected: :arrow,
+             observed: observed.value || observed.type,
+             token_type: observed.type,
+             span: zero_width_start(observed.span),
+             observed_span: observed.span,
+             lambda_span: lambda_token.span,
+             previous_span: close_token.span,
+             line: observed.line,
+             column: observed.col
+           }}
+
+        %{next_state | errors: [error | rest]}
+    end
+  end
+
+  defp zero_width_start(%Cure.Diagnostic.Span{} = span),
+    do: %{span | end_byte: span.start_byte, end_line: span.start_line, end_column: span.start_column}
 
   # Route the lambda body to one of four shapes: indented block, brace
   # block, end-terminated block, or single expression. The brace and end
@@ -7798,18 +7864,39 @@ defmodule Cure.Compiler.Parser do
         {[], state}
 
       _ ->
-        name = peek(state).value
-        state = advance(state)
+        token = peek(state)
+
+        {param, state} =
+          case token do
+            %Token{type: :identifier} ->
+              meta = put_token_source_info([], token, :name)
+              {{:param, meta, to_string(token.value)}, advance(state)}
+
+            %Token{} ->
+              error =
+                {:invalid_parameter_name,
+                 %{
+                   lambda: true,
+                   observed: token.value || token.type,
+                   token_type: token.type,
+                   span: token.span,
+                   line: token.line,
+                   column: token.col
+                 }}
+
+              placeholder = {:param, [invalid: true], "_invalid_lambda_parameter"}
+              {placeholder, state |> add_error(error) |> advance()}
+          end
 
         case peek(state) do
           %Token{type: :comma} ->
             state = advance(state)
             state = skip_newlines(state)
             {rest, state} = parse_lambda_params(state)
-            {[to_string(name) | rest], state}
+            {[param | rest], state}
 
           _ ->
-            {[to_string(name)], state}
+            {[param], state}
         end
     end
   end
