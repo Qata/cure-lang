@@ -262,6 +262,10 @@ defmodule Cure.Compiler.Parser do
           fixity_table: module_fixity
         }
 
+        # Layout is lexical, while operatorhood is declaration-driven. Only
+        # after the module/import fixity table has been assembled can we erase
+        # layout introduced solely by a trailing infix continuation.
+        tokens = normalize_infix_continuation_layout(tokens, module_fixity)
         state = put_tokens(state, tokens)
 
         {exprs, state} = parse_program(state)
@@ -2566,6 +2570,71 @@ defmodule Cure.Compiler.Parser do
   defp lexeme_of(%Token{type: :operator, value: v}) when is_binary(v), do: v
   defp lexeme_of(%Token{type: type}), do: Map.get(@token_lexemes, type)
 
+  # Remove only layout whose preceding token is an infix operator in the
+  # ACTIVE declaration-derived table. The lexer deliberately has no operator
+  # inventory: stdlib, imported, and locally-declared operators all follow the
+  # same path. An indented continuation creates a lexical indent/dedent pair;
+  # track its exact level so real nested blocks inside the operand survive.
+  defp normalize_infix_continuation_layout(tokens, table) do
+    normalize_infix_continuation_layout(tokens, table, [], [])
+  end
+
+  defp normalize_infix_continuation_layout(
+         [
+           %Token{} = operator,
+           %Token{type: :newline} = newline,
+           %Token{type: :indent, value: level} = indent | rest
+         ],
+         table,
+         continuation_levels,
+         acc
+       ) do
+    if infix_token?(table, operator) do
+      normalize_infix_continuation_layout(rest, table, [level | continuation_levels], [operator | acc])
+    else
+      normalize_infix_continuation_layout(
+        [newline, indent | rest],
+        table,
+        continuation_levels,
+        [operator | acc]
+      )
+    end
+  end
+
+  defp normalize_infix_continuation_layout(
+         [%Token{} = operator, %Token{type: :newline} = newline | rest],
+         table,
+         continuation_levels,
+         acc
+       ) do
+    if infix_token?(table, operator) do
+      normalize_infix_continuation_layout(rest, table, continuation_levels, [operator | acc])
+    else
+      normalize_infix_continuation_layout(rest, table, continuation_levels, [
+        newline,
+        operator | acc
+      ])
+    end
+  end
+
+  defp normalize_infix_continuation_layout(
+         [%Token{type: :dedent, value: level} | rest],
+         table,
+         [level | continuation_levels],
+         acc
+       ) do
+    normalize_infix_continuation_layout(rest, table, continuation_levels, acc)
+  end
+
+  defp normalize_infix_continuation_layout([token | rest], table, continuation_levels, acc) do
+    normalize_infix_continuation_layout(rest, table, continuation_levels, [token | acc])
+  end
+
+  defp normalize_infix_continuation_layout([], _table, _continuation_levels, acc), do: Enum.reverse(acc)
+
+  defp infix_token?(table, token),
+    do: FixityTable.infix_bp(table, lexeme_of(token)) != :not_infix
+
   # A `min_bp` that stops a bounded sub-parse just above built-in operator
   # `lexeme` — i.e. one past its left binding power in the active fixity table,
   # so the loop stops before `lexeme` and everything looser. This replaces the
@@ -2610,16 +2679,15 @@ defmodule Cure.Compiler.Parser do
   defp parse_infix(state, left, min_bp, ctx_op) do
     token = peek(state)
 
-    # A pipe at the start of a continuation line belongs to the expression
-    # above it.  Layout normally terminates an expression, and an indented
-    # continuation also emits an `:indent`; consume only that layout when the
-    # next significant token is `|>`.
+    # Any declared infix operator at the start of a continuation line belongs
+    # to the expression above it. Operatorhood comes exclusively from the
+    # active fixity table; `|>`, `<-|`, and user operators share this path.
     {token, state} =
       case token.type do
         :newline ->
-          case continuation_pipe?(state) do
+          case continuation_infix?(state) do
             true ->
-              state = skip_pipe_continuation_layout(state)
+              state = skip_infix_continuation_layout(state)
               {peek(state), state}
 
             false ->
@@ -2668,16 +2736,17 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp continuation_pipe?(state) do
-    state
-    |> peek_ahead(1)
-    |> then(fn token ->
-      token.type == :pipe or
-        (token.type == :indent and peek_ahead(state, 2).type == :pipe)
-    end)
+  defp continuation_infix?(state) do
+    candidate =
+      case peek_ahead(state, 1) do
+        %Token{type: :indent} -> peek_ahead(state, 2)
+        token -> token
+      end
+
+    infix_token?(fixity_table(state), candidate)
   end
 
-  defp skip_pipe_continuation_layout(state) do
+  defp skip_infix_continuation_layout(state) do
     state = advance(state)
 
     case peek(state).type do

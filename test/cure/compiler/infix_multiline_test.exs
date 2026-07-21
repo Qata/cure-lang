@@ -5,7 +5,7 @@ defmodule Cure.Compiler.InfixMultilineTest do
 
   defp parse(source) do
     with {:ok, tokens} <- Lexer.tokenize(source, emit_events: false) do
-      Parser.parse(tokens, emit_events: false)
+      Parser.parse(tokens, emit_events: false, prelude_macros: false)
     end
   end
 
@@ -16,7 +16,8 @@ defmodule Cure.Compiler.InfixMultilineTest do
           "1 +\n  2",
           "1 ==\n  2",
           "1 ..\n  2",
-          "value.\n  field"
+          "value.\n  field",
+          "mailbox <-|\n  message"
         ] do
       assert {:ok, _ast} = parse(source), "failed to parse:\n#{source}"
     end
@@ -40,6 +41,20 @@ defmodule Cure.Compiler.InfixMultilineTest do
              fn combine(left: Int, right: Int) -> Int = left
              fn example() -> Int = 1 <?>
                2
+             """)
+  end
+
+  test "operators beginning a continuation line are also declaration-driven" do
+    assert {:ok, _ast} = parse("mailbox\n  <-| message")
+
+    assert {:ok, _ast} =
+             parse("""
+             precedencegroup Join
+               associativity: left
+             infix `<?>` : Join
+             fn combine(left: Int, right: Int) -> Int = left
+             fn example() -> Int = 1
+               <?> 2
              """)
   end
 end
