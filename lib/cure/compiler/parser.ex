@@ -7436,6 +7436,12 @@ defmodule Cure.Compiler.Parser do
     token = peek(state)
 
     case token.type do
+      # Constructor result indices use this arrow-free parser rather than the
+      # general type-expression ladder. Preserve character terms here as well;
+      # otherwise `Witness('a')` becomes the Nat-shaped name "97".
+      :char ->
+        {literal(:char, token), advance(state)}
+
       :lbrace ->
         parse_refinement_type(state)
 
@@ -9135,6 +9141,13 @@ defmodule Cure.Compiler.Parser do
 
   defp parse_type_arrow_dispatch(state, token) do
     case token.type do
+      # Character literals in dependent indices are terms, not type names. The
+      # generic simple-type branch stringifies the decoded codepoint (`'a'` ->
+      # "97"), which loses the literal kind and later lowers it as Nat. Preserve
+      # the literal AST so index elaboration can produce `:bounded_lit`.
+      :char ->
+        {literal(:char, token), advance(state)}
+
       :lbrace ->
         parse_refinement_type(state)
 

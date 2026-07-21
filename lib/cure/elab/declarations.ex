@@ -2575,6 +2575,12 @@ defmodule Cure.Elab.Declarations do
     case Keyword.get(meta, :subtype) do
       :integer -> {:ok, {:int_lit, value}}
       :float -> {:ok, {:float_lit, value}}
+      :char when is_integer(value) and value >= 0 and value <= 0x10FFFF ->
+        {:ok, {:bounded_lit, value}}
+
+      :char ->
+        {:error, {:char_literal_out_of_range, value}}
+
       other -> {:error, {:unsupported_index_literal, other}}
     end
   end
