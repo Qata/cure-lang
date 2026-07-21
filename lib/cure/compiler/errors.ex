@@ -45,61 +45,7 @@ defmodule Cure.Compiler.Errors do
     "-- #{String.upcase(diagnostic.title)} [#{diagnostic.code}]\n--> #{location}\n#{body}"
   end
 
-  def format_error({:unknown_global, _name} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:unknown_global, _name, details} = error, file) when is_map(details) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:unknown_name, details} = error, file) when is_map(details) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:codegen_error, {:unknown_global, _name}} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:codegen_error, {:unknown_global, _name, details}} = error, file) when is_map(details) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:unknown_constructor, _name} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:lift_module_error, details} = error, file) when is_map(details) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:conversion_failure, _actual, _expected} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({kind, _, _} = error, file)
-      when kind in [:unbound_variable, :arity_mismatch, :ambiguous_name, :duplicate_module] do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:import_cycle, _} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:unresolved_import, _, _, _, _} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  def format_error({:extern_arity_mismatch, _, _, _} = error, file) do
-    error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-  end
-
-  # -- Type Errors -------------------------------------------------------------
-
   def format_error(errors, file) when is_list(errors) do
-    # A bare list reaches this clause from `Cure.Types.Checker.check_module/2`,
-    # which returns `{:error, errors}` directly; joining with a blank line
-    # keeps multi-error output readable.
     Enum.map_join(errors, "\n\n", &format_error(&1, file))
   end
 
@@ -107,211 +53,28 @@ defmodule Cure.Compiler.Errors do
     format_error(errors, file)
   end
 
-  def format_error({:type_mismatch, message, meta}, file) do
-    {:type_mismatch, message, meta}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:unknown_erasure_class, name, class}, file) do
-    {:unknown_erasure_class, name, class}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:erases_on_non_opaque, name}, file) do
-    {:erases_on_non_opaque, name}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:unsupported_async, message, meta}, file) do
-    {:unsupported_async, message, meta}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:splice_outside_quote, tag, meta}, file) do
-    {:splice_outside_quote, tag, meta}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:extern_untyped_head, message, meta}, file) do
-    {:extern_untyped_head, message, meta}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:extern_has_body, message, meta}, file) do
-    {:extern_has_body, message, meta}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  # -- Parse Errors ------------------------------------------------------------
-
   def format_error({:parse_error, errors}, file) when is_list(errors) do
     format_error(errors, file)
   end
-
-  def format_error({:unexpected_token, _, _, _} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:parse_recovered, _, _, _} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:expected, _, :got, _, _, _} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:expected, _, :got, _, _, _, %Cure.Diagnostic.Span{}} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:expected_token, _, _, _, _, _} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:expected_token, _, _, _, _, _, %Cure.Diagnostic.Span{}} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  def format_error({:lambda_block_unterminated, _, _, _} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  # -- Lex Errors --------------------------------------------------------------
-
-  def format_error({:lex_error, _reason} = error, file),
-    do: error |> Cure.Diagnostic.Adapter.from_error() |> format_error(file)
-
-  # -- Codegen Errors ----------------------------------------------------------
-
-  def format_error({:codegen_error, {:computed_macro_error, _meta, _reason} = error}, file),
-    do: format_error(error, file)
-
-  def format_error({:codegen_error, reason}, file) do
-    {:codegen_error, reason}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:beam_lint_error, errors, warnings}, file) do
-    {:beam_lint_error, errors, warnings}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:beam_lint_error, errors}, file) do
-    {:beam_lint_error, errors}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:expected_module, _ast}, file) do
-    {:expected_module, nil}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:unsupported_container, type}, file) do
-    {:unsupported_container, type}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  # -- File Errors -------------------------------------------------------------
 
   def format_error({:file_read_error, path, reason}, _file) do
     Cure.Diagnostic.Operational.from_error({:file_read_error, path, reason})
     |> format_error(path)
   end
 
-  # -- DepGraph / Build-Order Errors -------------------------------------------
-
-  # -- Edition Errors ----------------------------------------------------------
-
-  def format_error({:edition_pragma_placement, line, col}, file) do
-    {:edition_pragma_placement, line, col}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:edition_pragma_malformed, line, col}, file) do
-    {:edition_pragma_malformed, line, col}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:edition_pragma_unknown, line, col}, file) do
-    {:edition_pragma_unknown, line, col}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:edition_error, {:unknown_edition, edition}}, file) do
-    {:edition_error, {:unknown_edition, edition}}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  # -- Macro error floor (SP1 §2) ----------------------------------------------
-
-  def format_error({:macro_use_mismatch, keyword, expected, got, line, col}, file) do
-    {:macro_use_mismatch, keyword, expected, got, line, col}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:malformed_hole, line, col}, file) do
-    {:malformed_hole, line, col}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:missing_diagnosis, points}, file) do
-    {:missing_diagnosis, points}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:rule_unpinned, keywords}, file) do
-    {:rule_unpinned, keywords}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:example_mismatch, mismatches}, file) do
-    {:example_mismatch, mismatches}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:example_type_mismatch, failures}, file) do
-    {:example_type_mismatch, failures}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:computed_example_error, failures}, file) do
-    {:computed_example_error, failures}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:computed_macro_error, meta, reason}, file) do
-    {:computed_macro_error, meta, reason}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  def format_error({:expansion_ill_typed, details}, file) do
-    {:expansion_ill_typed, details}
-    |> Cure.Diagnostic.Adapter.from_error()
-    |> format_error(file)
-  end
-
-  # -- Exhaustiveness guard ----------------------------------------------------
-
   def format_error(error, file) do
-    raise Cure.Diagnostic.UnhandledError, error: %{error: error, file: file}
+    error
+    |> structured_for_format()
+    |> format_error(file)
   end
+
+  defp structured_for_format({:expected_module, _ast}),
+    do: Cure.Diagnostic.Adapter.from_error({:expected_module, nil})
+
+  defp structured_for_format({:codegen_error, {:computed_macro_error, _meta, _reason} = error}),
+    do: Cure.Diagnostic.Adapter.from_error(error)
+
+  defp structured_for_format(error), do: Cure.Diagnostic.Adapter.from_error(error)
 
   # -- "Did you mean?" Suggestions ---------------------------------------------
 
