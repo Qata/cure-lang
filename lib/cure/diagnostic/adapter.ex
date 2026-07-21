@@ -664,6 +664,11 @@ defmodule Cure.Diagnostic.Adapter do
       when kind in [:invalid_unit, :unknown_unit, :invalid_board_name],
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
+  # Some trusted checking paths can return the bare verdict after their
+  # declaration wrapper has been stripped. Keep that verdict contextual rather
+  # than falling through to the unhelpful generic "Elaboration failed" title.
+  def from_error(:branch_type, opts), do: branch_type_failure(%{}, opts)
+
   def from_error(kind, opts)
       when kind in [
              :invalid_board_pins,
@@ -789,7 +794,6 @@ defmodule Cure.Diagnostic.Adapter do
              :not_a_function,
              :coverage,
              :branch_arity,
-             :branch_type,
              :index_arity
            ],
       do: contextual_type_failure(kind, %{}, opts)

@@ -550,6 +550,13 @@ defmodule Cure.Diagnostic.HostTest do
     end
   end
 
+  test "bare branch verdicts do not fall back to generic elaboration failure" do
+    rendered = Host.render(:branch_type, "branches.cure")
+
+    assert rendered =~ "PATTERN BRANCHES DISAGREE"
+    refute rendered =~ "ELABORATION FAILED"
+  end
+
   test "renders declaration conflicts with their authored identity" do
     rendered = Host.render({:overlapping_overload, :move, 1}, "demo.cure")
 
