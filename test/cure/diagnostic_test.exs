@@ -285,9 +285,13 @@ defmodule Cure.DiagnosticTest do
 
     assert Diagnostic.message(Adapter.from_error({:with_multi_no_arms, "arms", []})) =~
              "multiple-scrutinee"
+
+    assert Diagnostic.message(Adapter.from_error(:not_total)) =~ "does not terminate"
+    assert Diagnostic.message(Adapter.from_error(:not_a_function)) =~ "not callable"
+    assert Diagnostic.message(Adapter.from_error(:opaque_not_eliminable)) =~ "opaque value"
   end
 
-  test "unclassified contextual failures retain checking context and source carets", %{registry: registry, span: span} do
+  test "contextual failures retain checking context and source carets", %{registry: registry, span: span} do
     diagnostic =
       Adapter.from_error(:not_a_function,
         span: span,
@@ -297,8 +301,8 @@ defmodule Cure.DiagnosticTest do
 
     rendered = Renderer.plain(diagnostic, registry)
 
-    assert diagnostic.title == "Expression does not match its annotation"
-    assert Diagnostic.message(diagnostic) =~ "while checking `run`"
+    assert diagnostic.title == "Application target is not callable"
+    assert Diagnostic.message(diagnostic) =~ "not callable"
     assert rendered =~ "^^^^^^^"
     refute rendered =~ "Elaboration failed"
   end

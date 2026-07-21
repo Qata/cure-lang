@@ -2686,6 +2686,33 @@ defmodule Cure.Diagnostic.Adapter do
            "Multiple-scrutinee `with` arms must use structurally consistent outer patterns.",
            "make the outer patterns agree or split the match"}
 
+        :bounded_family_unregistered ->
+          {"Bounded type family is not registered",
+           "This bounded type family is not available in the current checking environment.",
+           "declare or import the bounded family before using it"}
+
+        :absurd_in_reachable_position ->
+          {"Absurd branch is reachable", "This branch claims an impossible value, but the scrutinee can reach it.",
+           "refine the index or handle the reachable constructor"}
+
+        :opaque_not_eliminable ->
+          {"Opaque value cannot be eliminated",
+           "This opaque value cannot be inspected in the current checking context.",
+           "use its public interface instead of matching on its representation"}
+
+        :case_scrutinee_not_data ->
+          {"Case scrutinee is not data", "This case expression scrutinizes a value without data constructors.",
+           "match a data-valued expression"}
+
+        :not_total ->
+          {"Definition is not total",
+           "This definition does not cover every input or does not terminate by the required measure.",
+           "add the missing cases or provide a decreasing recursive argument"}
+
+        :not_a_function ->
+          {"Application target is not callable", "This value is used as a function, but its type is not callable.",
+           "apply a function or constructor value"}
+
         :branch_arity ->
           {"Pattern branch has the wrong arity",
            "A pattern branch does not bind the number of values required by the matched constructor.",
