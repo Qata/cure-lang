@@ -2,7 +2,7 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
   use ExUnit.Case, async: false
 
   alias Cure.Compiler.{Lexer, Parser}
-  alias Cure.Elab.Program
+  alias Cure.Elab.{Emit, Erase, Program}
   alias Cure.MetaAST.{Metadata, SourceDecorator}
 
   test "recursive source decoration preserves an accepted program verdict and semantics" do
@@ -16,6 +16,36 @@ defmodule Cure.MetaAST.MetadataInvarianceTest do
     assert {:ok, stripped_env} = Program.check_ast(stripped)
     assert plain_env == decorated_env
     assert plain_env == stripped_env
+
+    module = Program.module_atom(ast)
+
+    function =
+      Enum.find_value(plain_env.defs, fn {_key, %{name: name}} ->
+        if String.ends_with?(to_string(name), "#id"), do: name
+      end)
+
+    assert function
+    assert {:ok, plain_forms} = Emit.compile_forms(plain_env, module, [function])
+    assert {:ok, decorated_forms} = Emit.compile_forms(decorated_env, module, [function])
+    assert {:ok, stripped_forms} = Emit.compile_forms(stripped_env, module, [function])
+    assert plain_forms == decorated_forms
+    assert plain_forms == stripped_forms
+
+    plain_def =
+      Enum.find_value(plain_env.defs, fn {_key, %{name: name} = definition} -> if name == function, do: definition end)
+
+    decorated_def =
+      Enum.find_value(decorated_env.defs, fn {_key, %{name: name} = definition} ->
+        if name == function, do: definition
+      end)
+
+    stripped_def =
+      Enum.find_value(stripped_env.defs, fn {_key, %{name: name} = definition} ->
+        if name == function, do: definition
+      end)
+
+    assert Erase.erase(plain_env, plain_def.body) == Erase.erase(decorated_env, decorated_def.body)
+    assert Erase.erase(plain_env, plain_def.body) == Erase.erase(stripped_env, stripped_def.body)
   end
 
   test "recursive source decoration preserves a rejected program category" do
