@@ -317,8 +317,11 @@ defmodule Cure.CLITest do
       assert output =~ Path.basename(path)
       assert output =~ "^"
       assert length(Regex.scan(~r/-- .* \[E094\]/, output)) == 1
-      assert output =~ "warning: `cure fmt --aggressive`"
-      refute output =~ "warning: -- I GOT STUCK"
+      assert output =~ "FORMATTING MAY DISCARD SOURCE DETAILS [W003]"
+      assert output =~ "`cure fmt --aggressive`"
+      assert output =~ "Commit or copy these files before continuing"
+      assert length(Regex.scan(~r/-- .* \[W003\]/, output)) == 1
+      assert :binary.match(output, "[W003]") < :binary.match(output, "[E094]")
       refute output =~ "{:expected_token"
     end
   end

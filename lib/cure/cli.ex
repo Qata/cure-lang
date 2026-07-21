@@ -1779,11 +1779,7 @@ defmodule Cure.CLI do
   end
 
   defp fmt_aggressive(files) do
-    warn(
-      "`cure fmt --aggressive` rewrites from the AST: plain `#` comments " <>
-        "and non-canonical whitespace will be stripped. Make sure the target " <>
-        "files are committed before continuing."
-    )
+    error_diagnostic(Cure.Diagnostic.Operational.destructive_format_warning(%{files: files}))
 
     outcomes =
       Enum.map(files, fn file ->
@@ -2278,7 +2274,6 @@ defmodule Cure.CLI do
   # -- Output helpers ----------------------------------------------------------
 
   defp info(msg), do: IO.puts(msg)
-  defp warn(msg), do: IO.puts(:stderr, "warning: #{msg}")
 
   defp format_invalid_options(invalid) do
     Enum.map_join(invalid, ", ", fn

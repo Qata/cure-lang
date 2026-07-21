@@ -47,7 +47,7 @@ defmodule Cure.Diagnostic.Registry do
   alias Cure.Diagnostic.Registry.Entry
 
   @retired ~w[E001 E004 E005 E006 E007 E009 E010 E012 E015 E016 E017 E018 E019 E020 E023 E024 E025 E027 E028 E029 E031 E032 E033 E034 E036 E037 E064 E071 E072 E073 E074 E075 E079 E080 E085 H083 H084 W081 W082]
-  @operational ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002]
+  @operational ~w[E008 E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 E101 W000 W001 W002 W003]
   @retirement_reasons %{
     "E001" => "No first-party producer remains; contextual E093 is the active type-mismatch path.",
     "E004" => "No first-party producer remains; match coverage is not emitted as this catalog code.",
@@ -164,6 +164,7 @@ defmodule Cure.Diagnostic.Registry do
     "W000" => :compiler_warning,
     "W001" => :migration_warning,
     "W002" => :configuration_warning,
+    "W003" => :destructive_format_warning,
     "W086" => :import_cycle,
     "W088" => :unresolved_import
   }
@@ -1341,6 +1342,13 @@ defmodule Cure.Diagnostic.Registry do
 
     A configuration value was ignored because it is not valid in its setting.
     """,
+    "W003" => """
+    W003: Formatting May Discard Source Details
+
+    An explicitly requested formatting mode reconstructs source from the AST,
+    so comments or non-canonical layout that are not represented there may be
+    discarded. Commit or copy the source before continuing.
+    """,
     "W088" => """
     W088: Unresolved Import
 
@@ -1599,7 +1607,7 @@ defmodule Cure.Diagnostic.Registry do
   defp converter_function(_code), do: :format_error
 
   defp producers(code)
-       when code in ~w[E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002],
+       when code in ~w[E030 E038 E039 E040 E041 E042 E065 E066 E067 E068 E069 E070 E095 E096 E097 E098 E099 E100 W000 W001 W002 W003],
        do: [:operational]
 
   defp producers(code) when code in ~w[E011 E014], do: [:elaboration]

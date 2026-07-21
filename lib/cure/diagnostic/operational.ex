@@ -18,6 +18,10 @@ defmodule Cure.Diagnostic.Operational do
   def from_error({:export_unmappable, reason}, _opts), do: export_unmappable(reason)
   def from_error({:snap_missing, path}, _opts), do: snap_missing(path)
   def from_error({:configuration_warning, message}, _opts), do: configuration_warning(message)
+
+  def from_error({:destructive_format_warning, details}, _opts) when is_map(details),
+    do: destructive_format_warning(details)
+
   def from_error({:usage_error, message}, _opts), do: usage(message)
   def from_error({:artifact_error, message}, _opts), do: artifact_error(message)
   def from_error({:artifact_error, message, details}, _opts), do: artifact_error(message, details)
@@ -185,6 +189,20 @@ defmodule Cure.Diagnostic.Operational do
     do: diagnostic("E070", :snap_path_missing, "Snap loaded path no longer exists: #{path}", %{path: path})
 
   def configuration_warning(message), do: diagnostic("W002", :configuration_warning, message, %{})
+
+  def destructive_format_warning(details \\ %{}) when is_map(details) do
+    Diagnostic.new(
+      code: "W003",
+      key: :destructive_format_warning,
+      severity: :warning,
+      title: title(:destructive_format_warning),
+      message:
+        "`cure fmt --aggressive` rebuilds source from the AST, so plain `#` comments and non-canonical whitespace may be removed.",
+      notes: [Cure.Diagnostic.Doc.paragraph("Commit or copy these files before continuing.")],
+      payload: Map.put_new(details, :mode, :aggressive)
+    )
+  end
+
   def usage(message), do: diagnostic("E099", :usage_error, message, %{})
 
   def artifact_error(message, details \\ %{}) when is_map(details),
@@ -335,6 +353,7 @@ defmodule Cure.Diagnostic.Operational do
   defp title(:export_type_unmappable), do: "Type cannot cross this boundary"
   defp title(:snap_path_missing), do: "Saved path is missing"
   defp title(:configuration_warning), do: "Invalid configuration"
+  defp title(:destructive_format_warning), do: "Formatting may discard source details"
   defp title(:usage_error), do: "Invalid command usage"
   defp title(:artifact_error), do: "Invalid build artifact"
   defp title(:proof_file_missing), do: "Proof file missing"

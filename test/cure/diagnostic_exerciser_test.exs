@@ -205,6 +205,7 @@ defmodule Cure.DiagnosticExerciserTest do
       Operational.package_version_conflict("Demo", [">= 1.0", "< 0.9"]),
       Operational.undocumented_public_function("demo.cure", 3),
       Operational.configuration_warning("invalid setting"),
+      Operational.destructive_format_warning(%{files: ["demo.cure"]}),
       Operational.usage("Usage: cure compile FILE"),
       Operational.artifact_error("artifact is invalid"),
       Operational.internal_exception(%ArgumentError{message: "boom"}, [])
@@ -224,7 +225,7 @@ defmodule Cure.DiagnosticExerciserTest do
     operational_codes = Enum.map(diagnostics, & &1.code)
 
     assert operational_codes ==
-             ~w[E095 E096 E097 E098 W001 W000 E068 E070 E065 E066 E067 E069 E041 E042 E038 E039 E040 E030 E008 W002 E099 E100 E101]
+             ~w[E095 E096 E097 E098 W001 W000 E068 E070 E065 E066 E067 E069 E041 E042 E038 E039 E040 E030 E008 W002 W003 E099 E100 E101]
 
     registered_codes = Cure.Diagnostic.Registry.reachable() |> Enum.map(& &1.code) |> MapSet.new()
     covered_codes = MapSet.new(compiler_codes ++ operational_codes)
