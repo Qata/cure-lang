@@ -321,10 +321,31 @@ defmodule Cure.Elab.Program do
       else
         name = Keyword.get(meta, :name)
 
-        {:error,
-         {:proof_shape_mismatch,
-          "E026: binding '#{name}' in a proof container must inhabit a " <>
-            "propositional-equality type Equivalent(T, a, b)", name}}
+        span =
+          case Cure.MetaAST.Metadata.source_info(meta) do
+            %Cure.MetaAST.SourceInfo{annotation: %Cure.Diagnostic.Span{} = annotation} -> annotation
+            %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = name_span} -> name_span
+            %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = whole} -> whole
+            _ -> nil
+          end
+
+        reason =
+          {:proof_shape_mismatch,
+           "E026: binding '#{name}' in a proof container must inhabit a " <>
+             "propositional-equality type Equivalent(T, a, b)", name}
+
+        if span do
+          {:error,
+           {:source_context, reason,
+            %{
+              span: span,
+              checking: name,
+              expectation_origin: :proof_container,
+              expression_category: :proof_binding
+            }}}
+        else
+          {:error, reason}
+        end
       end
     end)
   end

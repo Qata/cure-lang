@@ -91,7 +91,8 @@ defmodule Cure.DiagnosticExerciserTest do
        :macro_expansion_failure},
       {"parser operator conflict", "E106", "mod DiagnosticFixity\n  use Std.Operators\n  infix `|>` : Additive\nend\n",
        :operator_conflict_parser},
-      {"proof chain syntax", "E109", "proof chain\n  first\n", :proof_chain_syntax}
+      {"proof chain syntax", "E109", "proof chain\n  first\n", :proof_chain_syntax},
+      {"proof container shape", "E026", "proof InvalidProof\n  fn bad() -> Int = 1\n", :proof_shape_mismatch}
     ]
 
     boundary_cases = [
@@ -334,6 +335,11 @@ defmodule Cure.DiagnosticExerciserTest do
     assert :ok =
              Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
                only_producers: [:elaboration]
+             )
+
+    assert :ok =
+             Cure.Diagnostic.Registry.validate_exercised_producer_fixtures(compiler_fixture_ids,
+               only_producers: [:pattern_checker, :proof_checker]
              )
 
     Enum.each(boundary_cases, fn {label, expected_code, reason} ->

@@ -35,9 +35,9 @@ defmodule Cure.Diagnostic.RegistryTest do
     assert Cure.Compiler.Errors.catalog_entries() == Registry.catalog_entries()
   end
 
-  test "registry records the real producer for operational documentation warnings" do
+  test "registry records the operational producer for documentation warnings" do
     assert {:ok, entry} = Registry.fetch("E008")
-    assert entry.producers == [:doctor]
+    assert entry.producers == [:operational]
     assert entry.converter == Cure.Diagnostic.Operational
   end
 

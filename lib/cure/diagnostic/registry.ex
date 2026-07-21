@@ -98,19 +98,17 @@ defmodule Cure.Diagnostic.Registry do
   }
   @structured ~w[E002 E003 E011 E013 E014 E021 E022 E026 E035 E056 E057 E063 E076 E077 E078 E087 E089 E090 E091 E092 E093 E094 E102 E103 E104 E105 E106 E107 E108 E109 E110 E111 E112 E113 E114 E115 E116 W086 W088]
   @known_producers ~w[
-    beam_writer dependency_graph doctor elaboration kernel lexer macro_expansion
-    module_loader name_resolution operational parser pattern_checker proof_checker
+    beam_writer dependency_graph elaboration kernel lexer macro_expansion
+    name_resolution operational parser pattern_checker proof_checker
     totality_checker
   ]a
   @producer_modules %{
     beam_writer: Cure.Compiler.BeamWriter,
     dependency_graph: Cure.Compiler.DepGraph,
-    doctor: Cure.Doctor,
     elaboration: Cure.Elab.Program,
     kernel: Cure.Core.Kernel,
     lexer: Cure.Compiler.Lexer,
     macro_expansion: Cure.Elab.MacroExpand,
-    module_loader: Cure.Compiler.Incremental,
     name_resolution: Cure.Elab.Resolution,
     operational: Cure.Diagnostic.Operational,
     parser: Cure.Compiler.Parser,
@@ -1798,7 +1796,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers(code) when code in ~w[E056 E057], do: [:elaboration]
   defp producers(code) when code in ~w[E076 E077 E078], do: [:parser]
   defp producers("E063"), do: [:parser]
-  defp producers("E087"), do: [:module_loader]
+  defp producers("E087"), do: [:dependency_graph]
   defp producers("E089"), do: [:name_resolution]
   defp producers("E090"), do: [:elaboration]
   defp producers("E091"), do: [:name_resolution, :pattern_checker]
@@ -1831,7 +1829,7 @@ defmodule Cure.Diagnostic.Registry do
   defp producers("E113"), do: [:elaboration]
   defp producers("E115"), do: [:elaboration]
   defp producers("E116"), do: [:elaboration]
-  defp producers("E008"), do: [:doctor]
+  defp producers("E008"), do: [:operational]
   defp producers("W086"), do: [:dependency_graph]
   defp producers("W088"), do: [:name_resolution]
   defp producers(_code), do: [:compiler_errors]

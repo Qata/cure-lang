@@ -657,6 +657,9 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:codegen_error, {:named_argument_mismatch, _, _} = reason}, opts),
     do: from_error(reason, opts)
 
+  def from_error({:codegen_error, {:proof_shape_mismatch, _, _} = reason}, opts),
+    do: from_error(reason, opts)
+
   def from_error({:codegen_failure, details}, opts) when is_map(details) do
     opts =
       opts
