@@ -350,6 +350,10 @@ defmodule Cure.Diagnostic.Adapter do
     coverage_problem(:missing_branch, branch, context, opts)
   end
 
+  def from_error({:source_context, :branch_type, context}, opts) when is_map(context) do
+    branch_type_failure(context, opts)
+  end
+
   def from_error({:source_context, {:reachable_impossible, branch}, context}, opts) when is_map(context) do
     coverage_problem(:reachable_impossible, branch, context, opts)
   end
@@ -2182,6 +2186,44 @@ defmodule Cure.Diagnostic.Adapter do
       body: Doc.paragraph(message),
       primary: primary_label(opts, label),
       payload: %{kind: kind}
+    )
+  end
+
+  defp branch_type_failure(context, opts) do
+    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
+    branches = Map.get(context, :branch_patterns, [])
+    checking = Map.get(context, :checking)
+    subject = if checking, do: " in `#{checking}`", else: ""
+
+    detail =
+      case branches do
+        [first, second | rest] ->
+          names = Enum.map_join([first, second | rest], ", ", &"`#{&1}`")
+
+          "The branches #{names} of this match are checked against the declared result, but at least one branch does not produce that result."
+
+        _ ->
+          "Every branch of this match is checked against the declared result type."
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Pattern branches disagree#{subject}",
+      body:
+        Doc.stack([
+          Doc.paragraph(detail),
+          Doc.paragraph("Check each branch expression against the result type written after the function name.")
+        ]),
+      primary: primary_label(opts, "make these branches return the same type"),
+      payload: %{
+        kind: :branch_type,
+        branches: branches,
+        checking: checking,
+        expression_category: Map.get(context, :expression_category),
+        expectation_origin: Map.get(context, :expectation_origin)
+      }
     )
   end
 

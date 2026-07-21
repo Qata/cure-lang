@@ -68,7 +68,7 @@ defmodule Mix.Tasks.Cure.Compile do
 
         unless summary.errors == [] do
           Enum.each(summary.errors, fn {target, reason} ->
-            Mix.shell().error("  #{Cure.Diagnostic.Host.render(reason, target)}")
+            Mix.shell().error("  #{Cure.Diagnostic.Host.render(reason, source_path_for(target, files))}")
           end)
 
           exit({:shutdown, 1})
@@ -100,5 +100,19 @@ defmodule Mix.Tasks.Cure.Compile do
   defp render_diagnostic(diagnostic) do
     Sink.new(format: :plain, color: :auto, width: 80)
     |> Sink.render(diagnostic)
+  end
+
+  defp source_path_for(target, files) do
+    if File.exists?(target) do
+      target
+    else
+      module = target |> to_string() |> String.split(".") |> List.last()
+      stem = module |> Macro.underscore()
+
+      Enum.find(files, target, fn path ->
+        basename = Path.basename(path, ".cure")
+        basename == stem or String.ends_with?(basename, "_" <> stem)
+      end)
+    end
   end
 end

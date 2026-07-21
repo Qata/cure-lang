@@ -707,7 +707,8 @@ defmodule Cure.Elab.Declarations do
         checking: checking,
         span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
         expression_category: expression_category(expression),
-        expectation_origin: :annotation
+        expectation_origin: :annotation,
+        branch_patterns: branch_patterns(expression)
       }}}
   end
 
@@ -720,6 +721,23 @@ defmodule Cure.Elab.Declarations do
   defp expression_category({kind, _meta, _children}) when is_atom(kind), do: kind
   defp expression_category({kind, _meta, _left, _right}) when is_atom(kind), do: kind
   defp expression_category(_expression), do: :expression
+
+  defp branch_patterns({:pattern_match, _meta, [_scrutinee | arms]}) do
+    Enum.map(arms, fn
+      {:match_arm, arm_meta, _body} -> pattern_label(Keyword.get(arm_meta, :pattern))
+      _ -> "unknown branch"
+    end)
+  end
+
+  defp branch_patterns(_expression), do: []
+
+  defp pattern_label({:function_call, meta, _args}) when is_list(meta),
+    do: meta |> Keyword.get(:name, "constructor") |> to_string()
+
+  defp pattern_label({:variable, _meta, name}), do: to_string(name)
+  defp pattern_label({:wildcard, _meta}), do: "_"
+  defp pattern_label({:literal, _meta, value}), do: inspect(value)
+  defp pattern_label(_pattern), do: "pattern"
 
   defp expression_extent({:function_call, meta, arguments}) when is_list(meta) do
     line = Keyword.get(meta, :line)
@@ -2061,6 +2079,7 @@ defmodule Cure.Elab.Declarations do
 
     cond do
       type == nil -> acc
+
       MapSet.member?(seen, vname) ->
         # A constructor payload type can initially be open because an omitted
         # implicit slot precedes it in the constructor telescope (`Cons`'s head
