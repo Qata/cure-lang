@@ -11,7 +11,7 @@ defmodule Mix.Tasks.Cure.Profile do
 
   use Mix.Task
 
-  alias Cure.Diagnostic.{Host, Sink}
+  alias Cure.Diagnostic.Sink
 
   @shortdoc "Profile compilation of a Cure source file"
 
@@ -34,12 +34,19 @@ defmodule Mix.Tasks.Cure.Profile do
             end
 
           {:error, reason} ->
-            Mix.shell().error(Host.render(reason, path))
+            Mix.shell().error(render_host_diagnostic(reason, path))
         end
 
       [] ->
-        Mix.shell().error("Usage: mix cure.profile <file.cure>")
+        Mix.shell().error(
+          render_diagnostic(Cure.Diagnostic.Operational.usage("Usage: mix cure.profile <file.cure>"), nil)
+        )
     end
+  end
+
+  defp render_host_diagnostic(reason, path) do
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, path)
+    render_diagnostic(diagnostic, registry)
   end
 
   defp render_diagnostic(diagnostic, registry) do
