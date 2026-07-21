@@ -83,6 +83,6 @@ mod Std.Show
   # -- Convenience functions -----------------------------------------
 
   ## Same as `show/1` but append a trailing newline. Useful for logging.
-  ## The `where Show(t)` constraint threads the dictionary that
+  ## The `requires Show(t)` constraint threads the dictionary that
   ## dispatches `show` at the caller's type.
-  fn show_line(x: t) -> String where Show(t) = show(x) <> "\n"
+  fn show_line(x: t) -> String requires Show(t) = show(x) <> "\n"

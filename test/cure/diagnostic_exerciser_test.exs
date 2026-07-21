@@ -89,6 +89,55 @@ defmodule Cure.DiagnosticExerciserTest do
       {"operator conflict", "E106", {:builtin_operator_not_overloadable, :|>}},
       {"unsupported async", "E107", {:unsupported_async, "async primitive is unavailable", [line: 2]}},
       {"splice outside quote", "E108", {:splice_outside_quote, :splice, [line: 2]}},
+      {"proof chain syntax", "E109",
+       {:proof_chain_syntax,
+        %Cure.Diagnostic.ProofChainSyntaxProblem{
+          kind: :empty_chain,
+          observed: :eof,
+          expected: :first_expression
+        }}},
+      {"proof chain mismatch", "E110",
+       {:proof_chain_mismatch,
+        %Cure.Diagnostic.ProofChainMismatchProblem{
+          kind: :wrong_justification,
+          step_index: 0,
+          expected: :equivalent,
+          actual: :reflexive
+        }}},
+      {"directed rewrite failure", "E111",
+       {:rewrite_failed,
+        %Cure.Diagnostic.RewriteProblem{
+          kind: :no_occurrence,
+          direction: :forward,
+          occurrences: []
+        }}},
+      {"simplification failure", "E112",
+       {:simplification_failed,
+        %Cure.Diagnostic.SimplificationProblem{
+          kind: :residual_goal,
+          before_goal: :before,
+          after_goal: :after,
+          progressed_rules: [],
+          trace_ids: []
+        }}},
+      {"induction failure", "E113",
+       {:induction_failed,
+        %Cure.Diagnostic.InductionProblem{
+          kind: :missing_case,
+          missing: [:S],
+          known: [:Z, :S]
+        }}},
+      {"defining equation unavailable", "E114",
+       {:defining_equation_unavailable,
+        %Cure.Diagnostic.DefiningEquationProblem{
+          kind: :unknown_equation,
+          owner: "identity",
+          member: "Missing",
+          candidate_equations: []
+        }}},
+      {"named argument mismatch", "E115",
+       {:named_argument_mismatch, :unknown_label,
+        %{label: "nope", written: ["nope"], argument_spans: [], label_spans: [], parameter_spans: []}}},
       {"beam write failure", "E096", {:write_failed, "_build/Demo.beam", :eacces}},
       {"beam load failure", "E098", {:load_failed, :badfile}},
       {"beam compilation failure", "E098", {:compilation_failed, [{:bad_form, :detail}]}},

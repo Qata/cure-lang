@@ -498,13 +498,13 @@ defmodule Cure.Elab.Program do
          {:ok, base} <- merge_env(seeded, prelude),
          {:ok, env0} <- merge_env(base, imported),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
-         :ok <- MacroValidate.check_program(ast, env) do
-      with {:ok, certified} <- certify_type_level_with_source(ast, env) do
-        # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
-        # defs so their intra-module uses keep inlining; any other module name
-        # is a no-op here (its hinted imports were marked slice-side).
-        {:ok, mark_inline_hints(certified, find_module_name(ast))}
-      end
+         :ok <- MacroValidate.check_program(ast, env),
+         {:ok, certified} <- certify_type_level_with_source(ast, env),
+         {:ok, certified} <- Cure.Elab.Equation.generate_all(certified, ast) do
+      # Self-compilation of a hinted module (Std.Bool/Std.Sigma) marks its own
+      # defs so their intra-module uses keep inlining; any other module name
+      # is a no-op here (its hinted imports were marked slice-side).
+      {:ok, mark_inline_hints(certified, find_module_name(ast))}
     end
   end
 
@@ -895,14 +895,17 @@ defmodule Cure.Elab.Program do
     fam_names = Enum.map(name_list, &Env.resolve_key(env, env.families, &1))
     fam_names = Enum.filter(fam_names, &Map.has_key?(env.families, &1))
     kept_ctors = for {c, f} <- env.ctor_to_family, f in fam_names, into: %{}, do: {c, f}
+    kept_equations = Map.take(env.equations, def_names)
+    equation_defs = kept_equations |> Map.values() |> List.flatten() |> Enum.map(& &1.theorem)
 
     %Env{
       Env.empty()
-      | defs: Map.take(env.defs, def_names ++ Map.keys(kept_ctors)),
+      | defs: Map.take(env.defs, def_names ++ equation_defs ++ Map.keys(kept_ctors)),
         families: Map.take(env.families, fam_names),
         ctors: Map.take(env.ctors, Map.keys(kept_ctors)),
         ctor_to_family: kept_ctors,
         primitives: Map.take(env.primitives, name_list),
+        equations: kept_equations,
         certified: env.certified,
         module_owner: env.module_owner
     }
@@ -1333,6 +1336,7 @@ defmodule Cure.Elab.Program do
   def dependent?({:sigma_type, _meta, _body}), do: true
   def dependent?({:refinement_type, _meta, _body}), do: true
   def dependent?({:rewrite_expr, _meta, _body}), do: true
+  def dependent?({:proof_chain, _meta, _body}), do: true
 
   # An anonymous union (`Int | String`) and its elimination form (`n: Int -> …`) are
   # DEPENDENT-pipeline constructs: they elaborate to a generated inductive family whose
@@ -1914,7 +1918,8 @@ defmodule Cure.Elab.Program do
          {:ok, env0_base} <- merge_env(base, imported),
          env0 = Map.put(env0_base, :import_modules, direct_import_ids(dependencies)),
          {:ok, env} <- elaborate_declarations(declarations(ast), env0, prelude_source?(ast)),
-         {:ok, certified} <- certify_type_level_with_source(ast, env, source: source, file: path) do
+         {:ok, certified} <- certify_type_level_with_source(ast, env, source: source, file: path),
+         {:ok, certified} <- Cure.Elab.Equation.generate_all(certified, ast) do
       direct_ids = direct_import_ids(imports(ast))
 
       export_env =
@@ -2241,7 +2246,7 @@ defmodule Cure.Elab.Program do
   # and quietly breaking global coherence. The assertion below turns the next such
   # omission into a compile error rather than a runtime mystery.
   @merged_env_keys ~w(families ctors ctor_to_family defs certified builtins
-                      primitives interfaces coherence constrained import_modules lemmas module_owner
+                      primitives interfaces coherence constrained import_modules lemmas equations module_owner
                       current_def)a
 
   @env_keys Map.keys(Map.from_struct(%Env{}))
@@ -2271,6 +2276,7 @@ defmodule Cure.Elab.Program do
          constrained: Map.merge(left.constrained, right.constrained),
          import_modules: MapSet.union(left.import_modules, right.import_modules),
          lemmas: Map.merge(left.lemmas, right.lemmas, fn _head, ls, rs -> Enum.uniq(ls ++ rs) end),
+         equations: Map.merge(left.equations, right.equations, fn _owner, ls, rs -> Enum.uniq(ls ++ rs) end),
          module_owner: left.module_owner || right.module_owner,
          # Transient (set only for the duration of one def's body elaboration in
          # `Declarations.elaborate_real_body/3`, never part of a stored/merged
@@ -2315,10 +2321,12 @@ defmodule Cure.Elab.Program do
   # environment. Non-function declarations are elaborated in source order in pass
   # one (a function signature may reference any type declared before it).
   defp elaborate_declarations(items, env, prelude?) do
-    # Function-local `where` bindings are surface sugar.  Lambda-lift them to
-    # private sibling definitions before the normal signature pass so forward
-    # references, recursion, and ordinary name resolution remain unchanged.
-    items = expand_where_declarations(items)
+    with {:ok, items} <- Cure.Elab.Induction.lift_declarations(items) do
+      elaborate_lifted_declarations(expand_where_declarations(items), env, prelude?)
+    end
+  end
+
+  defp elaborate_lifted_declarations(items, env, prelude?) do
     items = annotate_overload_ordinals(items)
 
     result =

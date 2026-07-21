@@ -497,7 +497,7 @@ mod Std.Fsm
       [] -> fallback
       [Row(from, _, _) | _] -> from
 
-  fn dispatch({s: Type}, {e: Type}, transitions: List(Transition(s, e)), state: s, event: e, data: a) -> Tuple(Atom, s, a) where Equatable(s), Equatable(e) =
+  fn dispatch({s: Type}, {e: Type}, transitions: List(Transition(s, e)), state: s, event: e, data: a) -> Tuple(Atom, s, a) requires Equatable(s), Equatable(e) =
     match transitions
       [] -> %[:next_state, state, data]
       [Row(from, expected, next) | rest] -> match state == from

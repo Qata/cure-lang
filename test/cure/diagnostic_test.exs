@@ -272,7 +272,7 @@ defmodule Cure.DiagnosticTest do
       {{:extern_union_indistinct, "foreign", :duplicate}, "E093"},
       {{:cannot_infer_dependent_match, :branch}, "E093"},
       {{:bidirectional_erased_field, "Ctor"}, "E093"},
-      {{:label_mismatch, :label, [:declared], [:written]}, "E093"},
+      {{:named_argument_mismatch, :unknown_label, %{label: "bad", written: ["bad"]}}, "E115"},
       {{:forced_pattern_not_in_pattern, :name}, "E093"},
       {{:named_implicit_not_in_pattern, :implicit}, "E093"},
       {{:unsolved_parameters, :Ctor}, "E093"},
@@ -836,8 +836,9 @@ defmodule Cure.DiagnosticTest do
     assert diagnostic.payload.cause.code == "E091"
     assert diagnostic.payload.cause.payload.name == "MissingMessage"
     refute Diagnostic.message(diagnostic) =~ "{:unknown_global"
-    assert Renderer.plain(diagnostic) =~ "edit the `actor`"
-    assert Renderer.plain(diagnostic) =~ "declaration instead"
+    rendered = Renderer.plain(diagnostic)
+    assert rendered =~ "edit the authored"
+    assert rendered =~ "`actor` declaration instead"
 
     machine = Jason.decode!(Renderer.json(diagnostic))
     assert machine["payload"]["cause"]["code"] == "E091"

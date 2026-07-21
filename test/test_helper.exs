@@ -67,7 +67,7 @@ Mix.Task.run("cure.compile_stdlib")
 
    # Completeness: every module DECLARED in lib/std/*.cure must be resident, or a
    # consumer could hit a not-loaded module the sticky set never covered.
-   mod_regex = ~r/^\s*(?:mod|proof|actor|fsm|sup|app)\s+([A-Za-z_][\w\.]*)/m
+   mod_regex = ~r/^\s*(?:mod|actor|fsm|sup|app)\s+([A-Za-z_][\w\.]*)/m
 
    declared =
      "lib/std/*.cure"

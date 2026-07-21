@@ -182,13 +182,14 @@ Then, with the head key in hand:
 
 ### 3.5 Constraints as implicit dictionary parameters
 
-A constrained signature is written with Cure's existing `where` constraint
-clause, which comes **after** the return type (`parse_fn_def`, `parser.ex`
-~2310-2318 parses `-> ReturnType` before ~2345-2354 parses `where`) —
-`fn f{a: Type}(x: a) -> Bool where Equatable(a) = …` (parsed today by
+A constrained signature is written with Cure's contextual `requires` clause,
+which comes **after** the return type —
+`fn f{a: Type}(x: a) -> Bool requires Equatable(a) = …` (parsed by
 `parse_constraint_list`/`parse_single_constraint`, `parser.ex` ~2345-2354 /
-~4505-4536, into a `{:function_call, [constraint: true], [a]}` AST node; no new
-constraint syntax is introduced). Elaborating this clause introduces an
+~4505-4536, into a `{:function_call, [constraint: true], [a]}` AST node).
+Constraint-position `where` is retained temporarily as a deprecated migration
+spelling; `where` now denotes function-local definitions. Elaborating the
+`requires` clause introduces an
 **implicit parameter** `{dict : Equatable(a)}` immediately after the type
 parameter `a`.
 

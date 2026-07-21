@@ -17,7 +17,7 @@ defmodule Cure.Elab.Declarations do
   """
 
   alias Cure.Core.{Context, Env, Eval, Grade, Inductive, Kernel, Quote, Term}
-  alias Cure.Elab.{Elaborator, MacroExpand, Relevance, Subst}
+  alias Cure.Elab.{Elaborator, Induction, MacroExpand, Relevance, Subst}
 
   @ceiling 2
 
@@ -424,6 +424,7 @@ defmodule Cure.Elab.Declarations do
         # needs them to tell `move(to:)` from `move(from:)`. The body pass re-adds
         # the def (dropping this) and re-attaches its own copy.
         |> Env.put_labels(sig.name, param_label_vector(sig.params))
+        |> register_parameter_spans(sig.name, sig.params)
         |> maybe_register_lemma(sig, meta)
 
       env2 =
@@ -457,6 +458,7 @@ defmodule Cure.Elab.Declarations do
             env
             |> Env.add_def(sig.name, sig.pi, {:extern, {mod, fun, arity}}, sig.quantities)
             |> Env.put_labels(sig.name, param_label_vector(sig.params))
+            |> register_parameter_spans(sig.name, sig.params)
 
           {:ok, final}
         end
@@ -610,7 +612,8 @@ defmodule Cure.Elab.Declarations do
 
     with {:ok, body_expr} <-
            MacroExpand.expand(body_expr, env, callback_context: Keyword.get(meta, :callback_context)),
-         {:ok, sig} <- function_signature(meta, env) do
+         {:ok, sig} <- function_signature(meta, env),
+         {:ok, body_expr} <- Induction.expand(body_expr, sig, env) do
       ctx = build_context(env, sig.telescope)
       # Qualify any hole minted while elaborating THIS body by its enclosing def
       # (`hole_id/2`) — local to this call, never merged back into `final` below,
@@ -658,6 +661,7 @@ defmodule Cure.Elab.Declarations do
           env
           |> Env.add_def(sig.name, final_pi, lambda, quantities)
           |> Env.put_labels(sig.name, param_label_vector(sig.params))
+          |> register_parameter_spans(sig.name, sig.params)
 
         # Best-effort totality certification, eagerly and in declaration order, so a
         # later def's type may δ-reduce this one (e.g. `plus` in `Vec(a, plus(m,n))`
@@ -665,7 +669,8 @@ defmodule Cure.Elab.Declarations do
         # kernel's totality check simply stays uncertified — opaque to δ, never a
         # soundness hole (§7). Whole-program enforcement of the *required* set still
         # happens in TotalityClosure.certify_type_level.
-        {:ok, maybe_certify(final, sig.name)}
+        final = maybe_certify(final, sig.name)
+        Cure.Elab.Equation.generate(final, sig.name, meta, body_expr)
       end
     end
   end
@@ -721,6 +726,11 @@ defmodule Cure.Elab.Declarations do
     {line, column, length} = expression_extent(expression)
     meta = expression_meta(expression)
 
+    expectation_origin =
+      if branch_type_reason?(reason) and dependent_match?(expression, env),
+        do: :dependent_branch,
+        else: :annotation
+
     outer_context = %{
       line: line,
       column: column,
@@ -729,7 +739,7 @@ defmodule Cure.Elab.Declarations do
       span: Cure.MetaAST.Metadata.source_info(meta) |> then(&if(&1, do: &1.whole)),
       expectation_span: expectation_span,
       expression_category: expression_category(expression),
-      expectation_origin: :annotation,
+      expectation_origin: expectation_origin,
       branch_patterns: branch_patterns(expression)
     }
 
@@ -861,6 +871,40 @@ defmodule Cure.Elab.Declarations do
   end
 
   defp branch_patterns(_expression), do: []
+
+  defp branch_type_reason?(:branch_type), do: true
+  defp branch_type_reason?({:branch_type, _details}), do: true
+  defp branch_type_reason?({:source_context, reason, _context}), do: branch_type_reason?(reason)
+  defp branch_type_reason?(_reason), do: false
+
+  defp dependent_match?({:pattern_match, _meta, [_scrutinee | arms]}, env) do
+    Enum.any?(arms, fn
+      {:match_arm, arm_meta, _body} ->
+        with name when not is_nil(name) <- pattern_constructor(Keyword.get(arm_meta, :pattern)),
+             key <- Env.resolve_key(env, env.ctors, name),
+             family when not is_nil(family) <- Inductive.ctor_family(env, key),
+             %{indices: indices} <- Inductive.get_family(env, family) do
+          indices != []
+        else
+          _ -> false
+        end
+
+      _ ->
+        false
+    end)
+  end
+
+  defp dependent_match?(_expression, _env), do: false
+
+  defp pattern_constructor({:function_call, meta, _args}) when is_list(meta) do
+    case Keyword.get(meta, :name) do
+      name when is_binary(name) -> String.to_atom(name)
+      name -> name
+    end
+  end
+
+  defp pattern_constructor({:variable, _meta, name}) when is_binary(name), do: String.to_atom(name)
+  defp pattern_constructor(_pattern), do: nil
 
   defp pattern_label({:function_call, meta, _args}) when is_list(meta),
     do: meta |> Keyword.get(:name, "constructor") |> to_string()
@@ -1210,8 +1254,13 @@ defmodule Cure.Elab.Declarations do
     if Elaborator.special_match_arms?(arms) do
       Elaborator.elaborate_expr_checked(expr, return_core, scope, ctx, env)
     else
-      _ = meta
-      Elaborator.elaborate_match(scrut, arms, return_core, scope, ctx, env)
+      result = Elaborator.elaborate_match(scrut, arms, return_core, scope, ctx, env)
+
+      if Keyword.get(meta, :induction) do
+        Induction.wrap_match_error(result, meta, arms)
+      else
+        result
+      end
     end
   end
 
@@ -1696,6 +1745,23 @@ defmodule Cure.Elab.Declarations do
         label -> {:required, to_string(label)}
       end
     end)
+  end
+
+  defp param_label_span_vector([]), do: nil
+
+  defp param_label_span_vector(params) do
+    Enum.map(params, fn {:param, meta, _name} ->
+      case Cure.MetaAST.Metadata.source_info(meta) do
+        %Cure.MetaAST.SourceInfo{name: %Cure.Diagnostic.Span{} = span} -> span
+        %Cure.MetaAST.SourceInfo{whole: %Cure.Diagnostic.Span{} = span} -> span
+        _ -> nil
+      end
+    end)
+  end
+
+  defp register_parameter_spans(env, name, params) do
+    :ok = Cure.Elab.SourceMetadata.put_parameter_spans(Env.owned_name(env, name), param_label_span_vector(params) || [])
+    env
   end
 
   defp param_name_string(n) when is_binary(n), do: n

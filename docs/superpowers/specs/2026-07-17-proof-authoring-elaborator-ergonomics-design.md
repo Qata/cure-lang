@@ -1,9 +1,24 @@
 # Proof-authoring elaborator ergonomics — a living catalog
 
-*Status: LIVING (append as encountered). Opened 2026-07-17 while dogfooding the OTP
+*Status: LIVING (append as encountered; the July 21 implementation batch is closed).
+Opened 2026-07-17 while dogfooding the OTP
 metatheory in Cure (`Std.Otp.*`). Layer tags per `cure-porting`: **K** = trusted kernel
 (`lib/cure/core/*`, HARD-STOP), **E** = elaborator (`lib/cure/elab/*`), **C** = codegen/erase,
 **P** = parser.*
+
+> **2026-07-21 surface-design note.** This file remains the historical and
+> ongoing catalog of implementation gaps. The approved, authoritative surface
+> design for proof authoring is now
+> `2026-07-21-proof-language-ergonomics-design.md`. Suggestions in older catalog
+> entries must be interpreted through that specification.
+
+**2026-07-21 completion note.** The implementation batch closed the planned
+proof-language substrate: dependent sibling refinement, checked `have`, `proof
+chain`, `because`, directed rewrite, certified equations, simplification,
+structured induction, reorderable named arguments, and the restored affine
+semantic/fold workload. The corresponding commits are recorded in the
+authoritative July 21 ledger; unresolved entries below remain historical kernel
+investigations rather than acceptance blockers.
 
 ## Why this exists
 
@@ -393,8 +408,12 @@ match `acc` directly and mutually recurse with `deriv_sound`; the sum index then
 extra top-level lemma per shape, and mutual recursion (which the kernel's termination cert accepts
 here on structural descent).
 
-**Status.** OPEN (worked around). Same fix as E1/E2 — full context-refinement / simultaneous
-matching closes it.
+**Status.** ✅ FIXED. Whole-context branch substitution now composes through nested and
+sequential matches, and constructor-headed indices with computed subterms stay on the
+structural-inversion path instead of losing sibling substitutions in the carried-equation
+detour (`3d9f6b1a`). The proof-language acceptance probe exercises the original `AddedCons`
+shape below an earlier independent match; the direct reconstruction checks without a helper.
+Wrong-result and impossible-coverage controls remain rejecting.
 
 ---
 
@@ -420,8 +439,13 @@ the inversion proofs.
 **Workaround.** None clean — the completeness directions are deferred. (The SOUNDNESS directions
 avoid inversion entirely and are proved.)
 
-**Status.** OPEN. Distinct from E8: E8 is refinement not *composing*; E9 is the index equation not
-*existing* as a term even for a single match.
+**Status.** ✅ FIXED. A stuck computed constructor index is retained as an ordinary local
+`Equivalent` premise in the case motive (`b32702bf`, `c6c98e93`). Branch elaboration checks under
+that premise and uses equality elimination to transport every affected sibling; the kernel
+independently checks the resulting lambda/case term. Reconstruction and sibling-use probes cover
+the positive path, while swapped constructor fields, wrong-family siblings, unrelated indices,
+and unreachable constructors remain rejecting. This evidence is elaboration-local and erases by
+the ordinary proof grade; no new Core or kernel rule was introduced.
 
 ---
 

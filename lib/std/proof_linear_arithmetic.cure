@@ -8,7 +8,9 @@ mod Std.Proof.LinearArithmetic
   use Std.Int
   use Std.List
   use Std.Option
+  use Std.Equivalent
   use Std.Proof.IntOrder
+  use Std.Proof.IntDiscrete
 
   type Relation = LessOrEqual | LessThan
 
@@ -20,6 +22,11 @@ mod Std.Proof.LinearArithmetic
   typealias Hypotheses = List(LinearAtom)
   typealias FarkasWitness = List(Nat)
   typealias Valuation = List(Int)
+
+  fn linear_atom(
+    coefficients: List(Int), constant: Int, relation: Relation
+  ) -> LinearAtom = LinearAtom{
+    coefficients: coefficients, constant: constant, relation: relation}
 
   fn nat_length({a: Type}, values: List(a)) -> Nat =
     match values
@@ -45,7 +52,7 @@ mod Std.Proof.LinearArithmetic
         coefficients_match_dimension(atom.coefficients, dimension),
         atoms_match_dimension(rest, dimension))
 
-  fn dot(coefficients: List(Int), valuation: Valuation) -> Int =
+  fn dot(coefficients: List(Int), valuation: List(Int)) -> Int =
     match coefficients
       [] -> int_zero()
       [coefficient | coefficient_rest] -> match valuation
@@ -54,10 +61,37 @@ mod Std.Proof.LinearArithmetic
           multiply_int(coefficient, value),
           dot(coefficient_rest, value_rest))
 
+  ## Public defining equations: downstream proof modules consume these instead
+  ## of relying on eager δ-unfolding of the recursive global on open terms.
+  fn dot_empty(valuation: List(Int)) -> Equivalent(Int, dot(Nil(), valuation), int_zero()) =
+    reflexive(int_zero())
+
+  fn dot_cons(coefficient: Int, coefficients: List(Int), value: Int, valuation: List(Int)) -> Equivalent(Int,
+    dot(Cons(coefficient, coefficients), Cons(value, valuation)),
+    add_int(multiply_int(coefficient, value), dot(coefficients, valuation))) =
+    reflexive(add_int(multiply_int(coefficient, value), dot(coefficients, valuation)))
+
+  fn evaluate_relation(relation: Relation, left: Int, right: Int) -> Bool =
+    match relation
+      LessOrEqual() -> le_int(left, right)
+      LessThan() -> lt_int(left, right)
+
+  fn evaluate_normalized_relation(relation: Relation, left: Int, right: Int) -> Bool =
+    match relation
+      LessOrEqual() -> le_int(left, right)
+      LessThan() -> le_int(left, pred_int(right))
+
+  fn normalize_relation_preserves_evaluation(
+    relation: Relation, left: Int, right: Int
+  ) -> Equivalent(Bool,
+    evaluate_normalized_relation(relation, left, right),
+    evaluate_relation(relation, left, right)) =
+    match relation
+      LessOrEqual() -> reflexive(le_int(left, right))
+      LessThan() -> sym(lt_int_is_le_predecessor(left, right))
+
   fn evaluate_atom(atom: LinearAtom, valuation: Valuation) -> Bool =
-    match atom.relation
-      LessOrEqual() -> le_int(dot(atom.coefficients, valuation), atom.constant)
-      LessThan() -> lt_int(dot(atom.coefficients, valuation), atom.constant)
+    evaluate_relation(atom.relation, dot(atom.coefficients, valuation), atom.constant)
 
   fn evaluate_atom_checked(atom: LinearAtom, valuation: Valuation) -> Option(Bool) =
     match coefficients_match_dimension(atom.coefficients, nat_length(valuation))

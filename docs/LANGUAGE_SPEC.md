@@ -13,6 +13,18 @@ indentation level, not by keywords like `do`/`end` or braces.
 `and`, `or`, `not`, `spawn`, `send`, `receive`, `after`, `proof`, `extern`,
 `end`, `do`
 
+`requires` is contextual in function and implementation signatures. It lists
+interface obligations without reserving the word as an ordinary identifier:
+
+```cure
+fn show_both(a: t, b: t) -> String requires Show(t) =
+  show(a) <> show(b)
+```
+
+`where` is reserved for declaration-local definition blocks. The former
+constraint spelling `fn ... where Interface(t)` is deprecated; the parser still
+accepts it during migration and the printer canonicalizes it to `requires`.
+
 `sup` is a *contextual* soft keyword (v0.25.0): at the lexer level it is
 an ordinary identifier so legacy code that uses it as a field or variable
 name keeps compiling; the parser dispatches `sup <Name>` to the
@@ -253,6 +265,22 @@ refl(x) : Eq(T, x, x)
 design and Core has internal equality/rewrite support. The public Cure
 surface is not fully wired through the trusted dependent compiler yet;
 `Std.Equal` remains an `Atom`-returning compatibility module.
+
+### Proof authoring
+
+The proof surface is implemented as ordinary, kernel-checked Cure terms. Use
+`have name = expression` for a checked local fact, `proof chain` for readable
+equality composition, and an indented `because` block for directed rewrites,
+`simplify`, and `induction` commands. Proof commands are elaboration-only and
+never appear in runtime Core or BEAM output.
+
+Generated defining equations are certified theorem members and can be found
+after `function.` in completion and hover. Named arguments may be written in
+any order after a positional prefix (`label: value`); the compiler aligns them
+to the declaration telescope before dependent solving. Unknown, duplicate,
+missing, misplaced, and ambiguous labels use E115 with authored ranges and
+machine-safe code actions. Proof-language diagnostics E109–E114 follow the
+same terminal, JSON, and LSP structured-diagnostic path.
 
 ### Implicit arguments
 

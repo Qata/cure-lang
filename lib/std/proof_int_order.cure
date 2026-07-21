@@ -327,6 +327,16 @@ mod Std.Proof.IntOrder
     scale_nat_int(Z(), value), int_zero()) =
     reflexive(int_zero())
 
+  fn scale_nat_int_value_zero(scalar: Nat) -> Equivalent(Int,
+    scale_nat_int(scalar, int_zero()), int_zero()) =
+    match scalar
+      Z() -> reflexive(int_zero())
+      S(k) -> trans(
+        add_int_cong_right(
+          int_zero(), scale_nat_int(k, int_zero()), int_zero(),
+          scale_nat_int_value_zero(k)),
+        reflexive(int_zero()))
+
   fn scale_nat_int_successor(scalar: Nat, value: Int) -> Equivalent(Int,
     scale_nat_int(S(scalar), value), add_int(value, scale_nat_int(scalar, value))) =
     reflexive(add_int(value, scale_nat_int(scalar, value)))
@@ -420,6 +430,238 @@ mod Std.Proof.IntOrder
           add_int(scale_nat_int(k, left), scale_nat_int(k, right)),
           scale_nat_int_distributes_over_add(k, left, right)),
         add_int_rearrange_four(left, right, scale_nat_int(k, left), scale_nat_int(k, right)))
+
+  ## Canonical cancellation spines used to establish the additive inverse laws.
+  fn successors_cancel_matching_negative(count: Nat) -> Equivalent(Int,
+    add_nat_succ(count, NegativeSuccessor(count)), int_negative_one()) =
+    match count
+      Z() -> reflexive(int_negative_one())
+      S(k) -> trans(
+        sym(add_nat_succ_right_succ(k, NegativeSuccessor(S(k)))),
+        successors_cancel_matching_negative(k))
+
+  fn predecessors_cancel_matching_positive(count: Nat) -> Equivalent(Int,
+    add_nat_pred(S(count), FromNat(S(count))), int_zero()) =
+    match count
+      Z() -> reflexive(int_zero())
+      S(k) -> trans(
+        sym(add_nat_pred_right_pred(S(k), FromNat(S(S(k))))),
+        predecessors_cancel_matching_positive(k))
+
+  fn add_int_right_inverse(value: Int) -> Equivalent(Int,
+    add_int(value, negate(value)), int_zero()) =
+    match value
+      FromNat(n) -> match n
+        Z() -> reflexive(int_zero())
+        S(k) -> rewrite successors_cancel_matching_negative(k) in reflexive(int_zero())
+      NegativeSuccessor(k) -> predecessors_cancel_matching_positive(k)
+
+  fn add_int_left_inverse(value: Int) -> Equivalent(Int,
+    add_int(negate(value), value), int_zero()) =
+    trans(add_int_commutative(negate(value), value), add_int_right_inverse(value))
+
+  ## Addition in the natural scalar (coefficient) is represented by Nat.plus.
+  fn scale_nat_int_add_scalars(left: Nat, right: Nat, value: Int) -> Equivalent(Int,
+    scale_nat_int(plus(left, right), value),
+    add_int(scale_nat_int(left, value), scale_nat_int(right, value))) =
+    match left
+      Z() -> sym(add_int_zero_left(scale_nat_int(right, value)))
+      S(k) -> trans(
+        add_int_cong_right(
+          value,
+          scale_nat_int(plus(k, right), value),
+          add_int(scale_nat_int(k, value), scale_nat_int(right, value)),
+          scale_nat_int_add_scalars(k, right, value)),
+        add_int_associative(value, scale_nat_int(k, value), scale_nat_int(right, value)))
+
+  fn add_int_right_inverse_is_unique(value: Int, candidate: Int,
+    proof: Equivalent(Int, add_int(value, candidate), int_zero())) -> Equivalent(Int,
+    candidate, negate(value)) =
+    trans(
+      sym(add_int_zero_left(candidate)),
+      trans(
+        add_int_cong_left(
+          int_zero(), add_int(negate(value), value), candidate,
+          sym(add_int_left_inverse(value))),
+        trans(
+          sym(add_int_associative(negate(value), value, candidate)),
+          trans(
+            add_int_cong_right(
+              negate(value), add_int(value, candidate), int_zero(), proof),
+            add_int_zero_right(negate(value))))))
+
+  fn negate_distributes_over_add(left: Int, right: Int) -> Equivalent(Int,
+    negate(add_int(left, right)),
+    add_int(negate(left), negate(right))) =
+    sym(add_int_right_inverse_is_unique(
+      add_int(left, right),
+      add_int(negate(left), negate(right)),
+      trans(
+        add_int_rearrange_four(left, right, negate(left), negate(right)),
+        trans(
+          add_int_cong_left(
+            add_int(left, negate(left)), int_zero(),
+            add_int(right, negate(right)), add_int_right_inverse(left)),
+          trans(
+            add_int_cong_right(
+              int_zero(), add_int(right, negate(right)), int_zero(),
+              add_int_right_inverse(right)),
+            reflexive(int_zero()))))))
+
+  fn add_value_to_negated_successor_scale(count: Nat, value: Int) -> Equivalent(Int,
+    add_int(value, negate(scale_nat_int(S(count), value))),
+    negate(scale_nat_int(count, value))) =
+    match count
+      Z() -> trans(
+        add_int_cong_right(
+          value,
+          negate(scale_nat_int(S(Z()), value)), negate(value),
+          cong(fn(x) -> negate(x), add_int_zero_right(value))),
+        add_int_right_inverse(value))
+      S(k) -> trans(
+        add_int_cong_right(
+          value,
+          negate(scale_nat_int(S(S(k)), value)),
+          add_int(negate(value), negate(scale_nat_int(S(k), value))),
+          negate_distributes_over_add(value, scale_nat_int(S(k), value))),
+        trans(
+          add_int_associative(value, negate(value), negate(scale_nat_int(S(k), value))),
+          trans(
+            add_int_cong_left(
+              add_int(value, negate(value)), int_zero(),
+              negate(scale_nat_int(S(k), value)), add_int_right_inverse(value)),
+            add_int_zero_left(negate(scale_nat_int(S(k), value))))))
+
+  fn multiply_int_successor_coefficient(coefficient: Int, value: Int) -> Equivalent(Int,
+    multiply_int(succ_int(coefficient), value),
+    add_int(value, multiply_int(coefficient, value))) =
+    match coefficient
+      FromNat(n) -> reflexive(add_int(value, scale_nat_int(n, value)))
+      NegativeSuccessor(n) -> match n
+        Z() -> sym(add_value_to_negated_successor_scale(Z(), value))
+        S(k) -> sym(add_value_to_negated_successor_scale(S(k), value))
+
+  fn multiply_int_cong_coefficient(left: Int, right: Int, value: Int,
+    proof: Equivalent(Int, left, right)) -> Equivalent(Int,
+    multiply_int(left, value), multiply_int(right, value)) =
+    match proof
+      reflexive() -> reflexive(multiply_int(left, value))
+
+  fn multiply_int_predecessor_coefficient(coefficient: Int, value: Int) -> Equivalent(Int,
+    multiply_int(pred_int(coefficient), value),
+    add_int(negate(value), multiply_int(coefficient, value))) =
+    trans(
+      sym(add_int_zero_left(multiply_int(pred_int(coefficient), value))),
+      trans(
+        add_int_cong_left(
+          int_zero(), add_int(negate(value), value),
+          multiply_int(pred_int(coefficient), value),
+          sym(add_int_left_inverse(value))),
+        trans(
+          sym(add_int_associative(
+            negate(value), value, multiply_int(pred_int(coefficient), value))),
+          add_int_cong_right(
+            negate(value),
+            add_int(value, multiply_int(pred_int(coefficient), value)),
+            multiply_int(coefficient, value),
+            trans(
+              sym(multiply_int_successor_coefficient(pred_int(coefficient), value)),
+              multiply_int_cong_coefficient(
+                succ_int(pred_int(coefficient)), coefficient, value,
+                succ_pred_int(coefficient)))))))
+
+  fn multiply_int_distributes_over_from_nat_add(
+    count: Nat, right: Int, value: Int
+  ) -> Equivalent(Int,
+    multiply_int(add_int(FromNat(count), right), value),
+    add_int(multiply_int(FromNat(count), value), multiply_int(right, value))) =
+    match count
+      Z() -> sym(add_int_zero_left(multiply_int(right, value)))
+      S(k) -> trans(
+        multiply_int_cong_coefficient(
+          add_int(FromNat(S(k)), right),
+          succ_int(add_int(FromNat(k), right)), value,
+          add_int_left_succ(FromNat(k), right)),
+        trans(
+          multiply_int_successor_coefficient(add_int(FromNat(k), right), value),
+          trans(
+            add_int_cong_right(
+              value,
+              multiply_int(add_int(FromNat(k), right), value),
+              add_int(multiply_int(FromNat(k), value), multiply_int(right, value)),
+              multiply_int_distributes_over_from_nat_add(k, right, value)),
+            trans(
+              add_int_associative(
+                value, multiply_int(FromNat(k), value), multiply_int(right, value)),
+              add_int_cong_left(
+                add_int(value, multiply_int(FromNat(k), value)),
+                multiply_int(FromNat(S(k)), value),
+                multiply_int(right, value),
+                sym(multiply_int_successor_coefficient(FromNat(k), value)))))))
+
+  fn multiply_int_distributes_over_negative_add(
+    count: Nat, right: Int, value: Int
+  ) -> Equivalent(Int,
+    multiply_int(add_int(NegativeSuccessor(count), right), value),
+    add_int(multiply_int(NegativeSuccessor(count), value), multiply_int(right, value))) =
+    match count
+      Z() -> trans(
+        multiply_int_predecessor_coefficient(right, value),
+        add_int_cong_left(
+          negate(value), multiply_int(NegativeSuccessor(Z()), value),
+          multiply_int(right, value),
+          sym(cong(fn(x) -> negate(x), add_int_zero_right(value)))))
+      S(k) -> trans(
+        multiply_int_cong_coefficient(
+          add_int(NegativeSuccessor(S(k)), right),
+          pred_int(add_int(NegativeSuccessor(k), right)), value,
+          add_int_left_pred(NegativeSuccessor(k), right)),
+        trans(
+          multiply_int_predecessor_coefficient(
+            add_int(NegativeSuccessor(k), right), value),
+          trans(
+            add_int_cong_right(
+              negate(value),
+              multiply_int(add_int(NegativeSuccessor(k), right), value),
+              add_int(
+                multiply_int(NegativeSuccessor(k), value),
+                multiply_int(right, value)),
+              multiply_int_distributes_over_negative_add(k, right, value)),
+            trans(
+              add_int_associative(
+                negate(value), multiply_int(NegativeSuccessor(k), value),
+                multiply_int(right, value)),
+              add_int_cong_left(
+                add_int(negate(value), multiply_int(NegativeSuccessor(k), value)),
+                multiply_int(NegativeSuccessor(S(k)), value),
+                multiply_int(right, value),
+                sym(multiply_int_predecessor_coefficient(
+                  NegativeSuccessor(k), value)))))))
+
+  fn multiply_int_distributes_over_coefficient_add(
+    left: Int, right: Int, value: Int
+  ) -> Equivalent(Int,
+    multiply_int(add_int(left, right), value),
+    add_int(multiply_int(left, value), multiply_int(right, value))) =
+    match left
+      FromNat(n) -> multiply_int_distributes_over_from_nat_add(n, right, value)
+      NegativeSuccessor(n) -> multiply_int_distributes_over_negative_add(n, right, value)
+
+  fn multiply_int_scale_nat_coefficient(
+    scalar: Nat, coefficient: Int, value: Int
+  ) -> Equivalent(Int,
+    multiply_int(scale_nat_int(scalar, coefficient), value),
+    scale_nat_int(scalar, multiply_int(coefficient, value))) =
+    match scalar
+      Z() -> reflexive(int_zero())
+      S(k) -> trans(
+        multiply_int_distributes_over_coefficient_add(
+          coefficient, scale_nat_int(k, coefficient), value),
+        add_int_cong_right(
+          multiply_int(coefficient, value),
+          multiply_int(scale_nat_int(k, coefficient), value),
+          scale_nat_int(k, multiply_int(coefficient, value)),
+          multiply_int_scale_nat_coefficient(k, coefficient, value)))
 
   ## Evidence that one integer is ≤ another: the reflected proposition that the
   ## decidable Boolean test `le_int` returns `True`.
@@ -631,6 +873,17 @@ mod Std.Proof.IntOrder
     match ab
       AtMost(ab_evidence) -> match cd
         AtMost(cd_evidence) -> AtMost(add_int_is_monotone_both(a, b, c, d, ab_evidence, cd_evidence))
+
+  fn less_than_or_equal_transport(
+    left: Int, left2: Int, right: Int, right2: Int,
+    left_equal: Equivalent(Int, left, left2),
+    right_equal: Equivalent(Int, right, right2),
+    proof: IsLessThanOrEqual(left, right)
+  ) -> IsLessThanOrEqual(left2, right2) =
+    match proof
+      AtMost(evidence) -> AtMost(le_int_transport(
+        left, left2, right, right2,
+        left_equal, right_equal, evidence))
 
   ## Natural scaling preserves order for arbitrary signed operands. The
   ## successor case combines the original inequality with the induction result.

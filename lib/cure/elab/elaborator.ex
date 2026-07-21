@@ -14,7 +14,10 @@ defmodule Cure.Elab.Elaborator do
   """
 
   alias Cure.Core.{Context, Conv, Env, Eval, Grade, Inductive, Kernel, Normalise, Quote}
-  alias Cure.Elab.{GuardLint, MetaCtx, Subst, Unify}
+  alias Cure.Elab.{GuardLint, MetaCtx, Rewrite, Subst, Unify}
+
+  import Cure.Elab.Rewrite,
+    only: [abstract_term: 3, contains_term?: 2, mk_eq: 3, mk_refl: 1, replace_term: 3, transport_case: 4]
 
   # Placeholder body for a `:case` branch the join point will fill (see
   # `join_point?/5`, `elaborate_join/6`, `wrap_join/2`). Never reaches the kernel:
@@ -209,6 +212,8 @@ defmodule Cure.Elab.Elaborator do
           end
       end
 
+    {meta, args} = normalize_constructor_named_args(meta, args, Inductive.get_ctor(env, resolved))
+
     # Ph2 label enforcement for a SINGLE call target. An overloaded name (≥2
     # candidates) is handled by the pruner clause below, which tie-breaks on
     # exact label agreement; a lone target instead only enforces its declared
@@ -219,18 +224,90 @@ defmodule Cure.Elab.Elaborator do
       not String.contains?(name, ".") and
         length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2
 
-    label_check =
-      if overloaded?,
-        do: :ok,
-        else: Cure.Elab.Overload.check_labels(env, resolved, Keyword.get(meta, :arg_labels))
+    alignment =
+      if overloaded? do
+        {:ok, args}
+      else
+        if ctor = Inductive.get_ctor(env, resolved) do
+          align_constructor_args(resolved, ctor, meta, args)
+        else
+          if Cure.Elab.Resolve.method?(env, atom) do
+            descriptor = Cure.Elab.Interface.for_method(env, atom)
+            method = Map.fetch!(descriptor.methods, atom)
 
-    case label_check do
-      {:error, _} = err ->
-        err
+            labels =
+              Enum.map(method.params, fn {:param, parameter_meta, internal} ->
+                case Keyword.get(parameter_meta, :label) do
+                  nil -> {:optional, to_string(internal)}
+                  external -> {:required, to_string(external)}
+                end
+              end)
 
-      :ok ->
-        elaborate_named_call_resolved(meta, name, atom, args, names, resolved, ctx, env)
+            Cure.Elab.Overload.align_labels(atom, labels, args, Keyword.get(meta, :arg_labels), call_label_opts(meta))
+          else
+            Cure.Elab.Overload.align(
+              env,
+              resolved,
+              args,
+              Keyword.get(meta, :arg_labels),
+              call_label_opts(meta)
+            )
+          end
+        end
+      end
+
+    case alignment do
+      {:error, _} = err -> err
+      {:ok, aligned_args} -> elaborate_named_call_resolved(meta, name, atom, aligned_args, names, resolved, ctx, env)
     end
+  end
+
+  defp normalize_constructor_named_args(meta, args, nil), do: {meta, args}
+
+  defp normalize_constructor_named_args(meta, args, _ctor) do
+    converted =
+      Enum.map(args, fn
+        {:typed_pattern, pattern_meta, [name, value]} ->
+          span =
+            case Cure.MetaAST.Metadata.source_info(pattern_meta) do
+              %Cure.MetaAST.SourceInfo{whole: whole} -> whole
+              _ -> nil
+            end
+
+          {value, to_string(name), span}
+
+        value ->
+          {value, nil, nil}
+      end)
+
+    if Enum.any?(converted, fn {_value, label, _span} -> not is_nil(label) end) do
+      values = Enum.map(converted, &elem(&1, 0))
+      labels = Enum.map(converted, &elem(&1, 1))
+      spans = Enum.map(converted, &elem(&1, 2))
+      {meta |> Keyword.put(:arg_labels, labels) |> Keyword.put(:arg_label_spans, spans), values}
+    else
+      {meta, args}
+    end
+  end
+
+  defp align_constructor_args(key, ctor, meta, args) do
+    labels =
+      Enum.zip(ctor.args, Inductive.plicities_of(ctor))
+      |> Enum.flat_map(fn
+        {{parameter_name, _type}, :explicit} -> [{:optional, to_string(parameter_name)}]
+        _ -> []
+      end)
+
+    Cure.Elab.Overload.align_labels(key, labels, args, Keyword.get(meta, :arg_labels), call_label_opts(meta))
+  end
+
+  defp call_label_opts(meta) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    [
+      argument_spans: if(info, do: info.arguments, else: []),
+      label_spans: Keyword.get(meta, :arg_label_spans, [])
+    ]
   end
 
   defp elaborate_named_call_resolved(meta, name, atom, args, names, resolved, ctx, env) do
@@ -362,8 +439,9 @@ defmodule Cure.Elab.Elaborator do
       # providers with no unique winner. `overload_candidates/2` already applies
       # local-then-direct precedence, so a name with a single local/direct winner
       # (a local `map` shadowing imports) collapses to one candidate and never
-      # reaches here — only a genuine set of ≥2 does. Infer the argument types
-      # once, prune by first-order convertibility, and dispatch the survivor.
+      # reaches here — only a genuine set of ≥2 does. Align the authored
+      # arguments against each candidate, bidirectionally elaborate each aligned
+      # call, and dispatch the unique survivor.
       # Placed after the ctor/method/constrained/qualified special cases and
       # before the generic ambiguity/def paths; the `not String.contains?` guard
       # keeps it disjoint from the dotted-qualified clause.
@@ -378,7 +456,8 @@ defmodule Cure.Elab.Elaborator do
                Keyword.get(meta, :arg_labels),
                names,
                ctx,
-               cands
+               cands,
+               call_label_opts(meta)
              ) do
           {:error, reason} ->
             {:error, attach_expectation_context(reason, {:function_call, meta, args}, :overload, atom, nil)}
@@ -697,17 +776,32 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr_typed({:attribute_access, meta, [inner]}, names, ctx, env) do
+  def elaborate_expr_typed({:attribute_access, meta, [inner]} = expr, names, ctx, env) do
     attr = Keyword.fetch!(meta, :attribute)
 
-    case parse_positional_index(attr) do
-      {:ok, i} -> positional_projection(i, inner, names, ctx, env)
-      :error -> record_projection(inner, attr, names, ctx, env)
+    case equation_member(inner, attr, surface_expression_span(expr), ctx, env) do
+      {:ok, _term, _type} = equation ->
+        equation
+
+      :not_equation ->
+        case parse_positional_index(attr) do
+          {:ok, i} -> positional_projection(i, inner, names, ctx, env)
+          :error -> record_projection(inner, attr, names, ctx, env)
+        end
+
+      {:error, _} = error ->
+        error
     end
   end
 
   def elaborate_expr_typed({:rewrite_expr, _meta, _children}, _names, _ctx, _env),
     do: {:error, :rewrite_requires_expected_type}
+
+  def elaborate_expr_typed({:proof_chain, _meta, _children} = chain, names, ctx, env),
+    do: Cure.Elab.ProofChain.elaborate(chain, names, ctx, env)
+
+  def elaborate_expr_typed({:simplify_command, meta, _rules}, _names, _ctx, _env),
+    do: simplify_outside_justification(meta)
 
   # `assert_type expr : T` — a compile-time ascription. Lower `T`, then elaborate
   # `expr` in CHECKING mode against it (so the assertion can also steer inference).
@@ -1067,6 +1161,70 @@ defmodule Cure.Elab.Elaborator do
     do: {:error, {:splice_outside_quote, tag, meta}}
 
   def elaborate_expr_typed(other, _names, _ctx, _env), do: {:error, {:unsupported_expression, other}}
+
+  defp equation_member(inner, member_name, use_span, ctx, env) do
+    with {:ok, function_name, members} <- equation_reference(inner, member_name) do
+      resolve_equation_member(env, function_name, members, use_span, ctx)
+    else
+      :error -> :not_equation
+    end
+  end
+
+  defp resolve_equation_member(env, function_name, members, use_span, ctx) do
+    case Cure.Elab.Equation.resolve_path(env, function_name, members) do
+      {:ok, descriptor} ->
+        term = {:global, descriptor.theorem}
+
+        case Kernel.infer(ctx, term) do
+          {:ok, type} -> {:ok, term, type}
+          {:error, _} = error -> error
+        end
+
+      {:error, {:defining_equation_unavailable, kind, _function, _member, details}} ->
+        {:error,
+         {:defining_equation_unavailable,
+          %Cure.Diagnostic.DefiningEquationProblem{
+            kind: kind,
+            equation_use: use_span,
+            function_definition: equation_definition_span(env, function_name),
+            candidate_equations: equation_candidate_spans(details),
+            owner: function_name,
+            member: Enum.join(members, ".")
+          }}}
+
+      :not_equation ->
+        :not_equation
+    end
+  end
+
+  defp equation_reference({:variable, _meta, function_name}, member_name),
+    do: {:ok, function_name, [member_name]}
+
+  defp equation_reference({:attribute_access, meta, [inner]}, member_name) do
+    with {:ok, function_name, members} <- equation_reference(inner, Keyword.fetch!(meta, :attribute)) do
+      {:ok, function_name, members ++ [member_name]}
+    end
+  end
+
+  defp equation_reference(_inner, _member_name), do: :error
+
+  defp equation_definition_span(env, function_name) do
+    env.equations
+    |> Enum.find_value(fn {owner, descriptors} ->
+      if Cure.Elab.Name.overload_base(owner) == function_name do
+        descriptors |> List.first() |> then(&(&1 && &1.definition_span))
+      end
+    end)
+  end
+
+  defp equation_candidate_spans(details) when is_list(details) do
+    Enum.flat_map(details, fn
+      %{definition_span: %Cure.Diagnostic.Span{} = span} -> [span]
+      _ -> []
+    end)
+  end
+
+  defp equation_candidate_spans(_details), do: []
 
   # Synthesise each element of a tuple literal to `{core, type_term}` (the inferred
   # type reified to a Core term at the current depth).
@@ -1749,13 +1907,16 @@ defmodule Cure.Elab.Elaborator do
     end
   end
 
-  def elaborate_expr_checked({:function_call, meta, args} = expr, expected_core, names, ctx, env) do
+  def elaborate_expr_checked({:function_call, meta, args}, expected_core, names, ctx, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
     # Resolve a qualified (`Std.Nat.S`) or bare-shadowed (`S` under a local `Nat`
     # shadow, present only as `:"Std.Nat#S"`) constructor to its registry key
     # (spec §3.3); a non-dotted, registry-present name maps to itself.
     cres = resolve_ctor_key(env, atom)
+    ctor = Inductive.get_ctor(env, cres)
+    {meta, args} = normalize_constructor_named_args(meta, args, ctor)
+    expr = {:function_call, meta, args}
 
     cond do
       Keyword.get(meta, :record) ->
@@ -1784,7 +1945,7 @@ defmodule Cure.Elab.Elaborator do
       Cure.Elab.Resolve.result_dispatched_method?(env, atom) ->
         Cure.Elab.Resolve.method_call_checked(env, atom, args, expected_core, names, ctx)
 
-      Inductive.get_ctor(env, cres) ->
+      ctor ->
         # Checking-mode constructor: pin erased indices from the expected type (a
         # reconstructed dependent-match branch body like `prim()`/`seq(l,r)` whose
         # indices no present argument determines), then let the kernel re-check the
@@ -1799,25 +1960,25 @@ defmodule Cure.Elab.Elaborator do
         # The fallback is reached only when the inference path already errored, so a
         # working constructor is untouched; either way the kernel re-checks below.
         result =
-          with :ok <- validate_constructor_arity(env, cres, args, name),
-               {:ok, present} <- map_present_args(args, names, ctx, env),
-               {:ok, term, _type} <- elaborate_ctor_app(env, cres, present, ctx, expected_core) do
-            {:ok, term}
-          end
+          case align_constructor_args(cres, ctor, meta, args) do
+            {:error, _} = error ->
+              error
 
-        result =
-          case result do
-            {:ok, _} = ok ->
-              ok
+            {:ok, aligned_args} ->
+              with :ok <- validate_constructor_arity(env, cres, aligned_args, name),
+                   {:ok, present} <- map_present_args(aligned_args, names, ctx, env) do
+                case elaborate_ctor_app(env, cres, present, ctx, expected_core) do
+                  {:ok, term, _type} ->
+                    {:ok, term}
 
-            {:error, _} = orig ->
-              # Try the bidirectional fallback, but only let it *win when it
-              # succeeds*: if it also fails, surface the original inference error
-              # (e.g. a GADT `seq`'s genuine `:index_mismatch`), so the fallback is
-              # strictly additive and never masks a real diagnostic.
-              case elaborate_ctor_app_bidirectional(env, cres, args, names, ctx, expected_core) do
-                {:ok, _} = ok -> ok
-                {:error, _} -> orig
+                  {:error, _} = orig ->
+                    # Try the bidirectional fallback, but only let it win when
+                    # it succeeds; otherwise retain the original inference error.
+                    case elaborate_ctor_app_bidirectional(env, cres, aligned_args, names, ctx, expected_core) do
+                      {:ok, _} = ok -> ok
+                      {:error, _} -> orig
+                    end
+                end
               end
           end
 
@@ -1879,28 +2040,50 @@ defmodule Cure.Elab.Elaborator do
         # ordinary saturated path. Idris elaborates an under-applied function
         # checked against a function type exactly this way; the kernel re-checks the
         # synthesized lambda, so only eta-equivalent well-typed terms are accepted.
-        residual = residual_explicit_arity(env, resolved, length(args))
+        overloaded? =
+          not String.contains?(name, ".") and
+            length(Cure.Elab.Resolution.overload_candidates(env, atom)) >= 2
 
-        if residual > 0 and match?({:pi, _, _, _}, Kernel.normalize(ctx, expected_core)) do
-          elaborate_expr_checked(
-            eta_expand_call(meta, args, residual),
-            expected_core,
-            names,
-            ctx,
-            env
-          )
-        else
-          case elaborate_checked_call_saturated(expr, resolved, expected_core, args, names, ctx, env) do
-            {:error, reason} when is_tuple(reason) ->
-              if unresolved_call_reason?(reason) do
-                {:error, attach_unresolved_call_context(reason, expr, env)}
-              else
-                {:error, reason}
+        alignment =
+          if overloaded?,
+            do: {:ok, args},
+            else: Cure.Elab.Overload.align(env, resolved, args, Keyword.get(meta, :arg_labels), call_label_opts(meta))
+
+        case alignment do
+          {:error, _} = error ->
+            error
+
+          {:ok, aligned_args} ->
+            aligned_expr = {:function_call, meta, aligned_args}
+            residual = residual_explicit_arity(env, resolved, length(aligned_args))
+
+            if residual > 0 and match?({:pi, _, _, _}, Kernel.normalize(ctx, expected_core)) do
+              elaborate_expr_checked(
+                eta_expand_call(meta, aligned_args, residual),
+                expected_core,
+                names,
+                ctx,
+                env
+              )
+            else
+              case elaborate_checked_call_saturated(
+                     aligned_expr,
+                     resolved,
+                     expected_core,
+                     aligned_args,
+                     names,
+                     ctx,
+                     env
+                   ) do
+                {:error, reason} when is_tuple(reason) ->
+                  if unresolved_call_reason?(reason),
+                    do: {:error, attach_unresolved_call_context(reason, aligned_expr, env)},
+                    else: {:error, reason}
+
+                result ->
+                  result
               end
-
-            result ->
-              result
-          end
+            end
         end
     end
   end
@@ -1919,18 +2102,28 @@ defmodule Cure.Elab.Elaborator do
     depth = Context.length(ctx)
 
     with {:ok, proof_term, proof_type} <- elaborate_expr_typed(proof_ast, names, ctx, env),
-         {:ok, ty_value, a_value, b_value} <- eq_parts(proof_type, Context.signature(ctx)),
+         {:ok, ty_value, a_value, b_value} <- Rewrite.eq_parts(proof_type, Context.signature(ctx)),
          ty = Kernel.normalize(ctx, Quote.reify(ty_value, depth)),
          a = Kernel.normalize(ctx, Quote.reify(a_value, depth)),
          b = Kernel.normalize(ctx, Quote.reify(b_value, depth)),
          normalized_expected = Kernel.normalize(ctx, expected_core),
-         {:ok, build, body_expected} <- rewrite_plan(ctx, proof_term, ty, a, b, normalized_expected),
+         {:ok, build, body_expected} <- Rewrite.legacy_plan(proof_term, ty, a, b, normalized_expected),
          {:ok, body_term} <- elaborate_expr_checked(body_ast, body_expected, names, ctx, env),
          term = build.(body_term),
          :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
       {:ok, term}
     end
   end
+
+  def elaborate_expr_checked({:proof_chain, _meta, _children} = chain, expected_core, names, ctx, env) do
+    with {:ok, term, _type} <- Cure.Elab.ProofChain.elaborate(chain, names, ctx, env),
+         :ok <- Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+      {:ok, term}
+    end
+  end
+
+  def elaborate_expr_checked({:simplify_command, meta, _rules}, _expected_core, _names, _ctx, _env),
+    do: simplify_outside_justification(meta)
 
   # A `match` in nested expression position, in checking mode: the expected type
   # IS the result type its motive needs, so hand it straight to `elaborate_match`
@@ -1954,7 +2147,11 @@ defmodule Cure.Elab.Elaborator do
           end
 
         {:error, _reason} = error ->
-          error
+          if Keyword.get(meta, :induction) do
+            Cure.Elab.Induction.wrap_match_error(error, meta, arms)
+          else
+            error
+          end
       end
     end
   end
@@ -2186,6 +2383,40 @@ defmodule Cure.Elab.Elaborator do
       {:ok, term} -> {:ok, term}
       :none -> {:ok, {:hole, Cure.Elab.Declarations.hole_id(env, meta)}}
       {:error, _} = err -> err
+    end
+  end
+
+  def elaborate_expr_checked({:variable, meta, name} = expr, expected_core, names, ctx, env) do
+    case Keyword.get(meta, :induction_hypothesis) do
+      %{recursive_fields: recursive_fields} ->
+        with {:ok, term, available} <- elaborate_expr_typed(expr, names, ctx, env) do
+          case Kernel.check(ctx, term, Eval.eval(expected_core, Context.env(ctx))) do
+            :ok ->
+              {:ok, term}
+
+            {:error, cause} ->
+              span =
+                case Cure.MetaAST.Metadata.source_info(meta) do
+                  %{whole: whole} -> whole
+                  _ -> nil
+                end
+
+              {:error,
+               {:induction_failed,
+                %Cure.Diagnostic.InductionProblem{
+                  kind: :mistyped_hypothesis,
+                  hypothesis: name,
+                  hypothesis_range: span,
+                  recursive_fields: recursive_fields,
+                  required: expected_core,
+                  available: Quote.reify(available, Context.length(ctx), Context.signature(ctx)),
+                  cause: cause
+                }}}
+          end
+        end
+
+      _ ->
+        elaborate_expr_checked_fallback(expr, expected_core, names, ctx, env)
     end
   end
 
@@ -3194,210 +3425,7 @@ defmodule Cure.Elab.Elaborator do
   defp call_placeholder?({:variable, _meta, "_"}), do: true
   defp call_placeholder?(_arg), do: false
 
-  # A `rewrite` proof's type. The inductive identity type `Equivalent(a,x,y)` (spec
-  # 2026-07-04) infers to `{:vdata, :Equivalent, [a, x, y]}` (1 param + 2 indices);
-  # its `ty`/endpoints are that param and the two indices. The primitive `{:veq}`
-  # form is still produced by the internal transport machinery (retired later), so
-  # both are accepted.
-  defp eq_parts({:vdata, family, [ty, a, b]}, sig) do
-    if family == Inductive.builtin(sig, :eq), do: {:ok, ty, a, b}, else: {:error, :rewrite_proof_not_equality}
-  end
-
-  defp eq_parts(_other, _sig), do: {:error, :rewrite_proof_not_equality}
-
-  # Build the inductive identity type `Equivalent(ty, a, b)` and its `reflexive(x)`
-  # proof (spec 2026-07-04). The elaborator's transport/motive machinery constructs
-  # these — not the retired primitive `{:eq}`/`{:refl}` — so that every
-  # Equivalent/reflexive which can reach user code (a `with … proof pf` binder, a
-  # returned equality) shares the single inductive representation user signatures
-  # elaborate to. As of Phase B the `{:rewrite}` eliminator node has NO producers
-  # left: every transport is the J/subst `transport_case` below (the kernel's
-  # `{:rewrite}` rule and elab traversal clauses are stripped in Phase C).
-  defp mk_eq(ty, a, b), do: {:data, :"Std.Equivalent#Equivalent", [ty], [a, b]}
-  # Checking-position reflexive: fields-only spine; the expected type supplies the
-  # parameter (M8.3 checking mode). (The inference-position params-on-spine form
-  # `{:ctor, :reflexive, [ty, x]}` — K6 §E.1 — lost its last elaborator consumer
-  # when bridge_step was deleted (B2); the kernel capability remains.)
-  defp mk_refl(x), do: {:ctor, :"Std.Equivalent#reflexive", [x]}
-
-  # Env-gated tracing for the rewrite-planning path (`CURE_REWRITE_LOG=1`). Off by
-  # default so ordinary elaboration is untouched; used to diagnose non-termination
-  # / mis-planning in the `rewrite_plan` occurrence matching.
-  defp rwlog(fun) do
-    if System.get_env("CURE_REWRITE_LOG"), do: IO.puts(:stderr, "[rw] " <> fun.())
-    :ok
-  end
-
-  defp rw_ins(t), do: t |> inspect(limit: 14, printable_limit: 240) |> String.slice(0, 300)
-
-  # Phase-B adopted encoding (spec "Phase-B encoding amendment", 2026-07-08): the
-  # standard J/subst transport, exactly how Agda/Lean derive `subst`/`Eq.mpr`
-  # from J. Given `proof : Equivalent(ty, l, r)` and a single-endpoint motive
-  # `M = {:lam, Cure.Core.Grade.unrestricted(), ty, …}`, build
-  #
-  #     {:case, proof,
-  #       λ(x:ty). λ(y:ty). λ(p : Equivalent(ty,x,y)). (M@x) -> (M@y),
-  #       [reflexive(w) -> λ(h : M@l). h]}
-  #
-  # whose kernel-inferred type at the use site is `(M@l) -> (M@r)` (the kernel
-  # applies the motive at the scrutinee's ACTUAL indices, kernel.ex
-  # `infer {:case,…}`), while the reflexive branch is checked at the ctor's own
-  # indices `[w,w]` with `w := l` bound by the index unifier, i.e. at
-  # `(M@l) -> (M@l)` — which the identity inhabits. Applying the case to a body
-  # elaborated OUTSIDE at `M@l` yields `M@r`: no de Bruijn body shift, and no
-  # in-branch endpoint collapse (the in-branch re-elaboration route was
-  # empirically disproven during B1 — `build_motive` abstracts BOTH endpoints,
-  # demanding `l ≡ r` definitionally in-branch, false exactly when a rewrite is
-  # needed).
-  #
-  # The identity branch's lam domain is annotated `M@l` (shifted into the
-  # 1-binder branch frame), NOT `M@w`: `Kernel.check(lam, vpi)` converts the
-  # annotation against the expected domain, and the branch's expected domain
-  # after `specialize_branch_value` is `M@l`, not the fresh witness neutral.
-  # Sound for every producer site here because each site's motive never
-  # mentions the proof's second endpoint (it is abstracted away by
-  # `motive_for`/`symmetry_proof`, or the motive is constant for the bridge),
-  # so the branch substitution cannot touch anything the annotation's
-  # evaluation sees.
-  defp transport_case(proof, ty, motive, l) do
-    # Motive binders outside-in: x (Equivalent's first index), y (second), then
-    # the scrutinee p. Under x,y the scrutinee annotation's param shifts by 2;
-    # under x,y,p the arrow domain sees x at de Bruijn 2; the (non-dependent)
-    # codomain sits under one more binder, so y is also at de Bruijn 2 there.
-    scrut_ty = {:data, :"Std.Equivalent#Equivalent", [Subst.shift(ty, 2, 0)], [{:var, 1}, {:var, 0}]}
-
-    arrow =
-      {:pi, Cure.Core.Grade.unrestricted(), {:app, Subst.shift(motive, 3, 0), {:var, 2}},
-       {:app, Subst.shift(motive, 4, 0), {:var, 2}}}
-
-    arrow_motive =
-      {:lam, Cure.Core.Grade.unrestricted(), ty,
-       {:lam, Cure.Core.Grade.unrestricted(), Subst.shift(ty, 1, 0),
-        {:lam, Cure.Core.Grade.unrestricted(), scrut_ty, arrow}}}
-
-    id_dom = {:app, Subst.shift(motive, 1, 0), Subst.shift(l, 1, 0)}
-
-    {:case, proof, arrow_motive,
-     [{:"Std.Equivalent#reflexive", 1, {:lam, Cure.Core.Grade.unrestricted(), id_dom, {:var, 0}}}]}
-  end
-
-  # Plan a `rewrite p in t` whose proof `p : Eq(ty, a, b)` transports along the
-  # goal `expected`. Returns `{:ok, build, body_expected}`: `body_expected` is
-  # the goal the surface body `t` must satisfy, and `build.(body_core)` assembles
-  # the transport-`:case` application around the checked body. (A builder —
-  # rather than a fixed `proof`/`motive` pair — lets the bridge case below nest
-  # an outer transport around the original one.)
-  #
-  # The transport takes M[a] -> M[b]. Idris-style source `rewrite p in t`
-  # checks `t` under the rewritten goal and returns the original goal, so when
-  # the expected type contains the proof's left endpoint we synthesize symmetry.
-  defp rewrite_plan(_ctx, proof, ty, a, b, expected) do
-    rwlog(fn ->
-      "plan a=#{rw_ins(a)} b=#{rw_ins(b)} | contains_a=#{contains_term?(expected, a)} " <>
-        "contains_b=#{contains_term?(expected, b)} expected=#{rw_ins(expected)}"
-    end)
-
-    cond do
-      contains_term?(expected, a) ->
-        with {:ok, sym_proof} <- symmetry_proof(proof, ty, a, b),
-             {:ok, motive} <- motive_for(expected, a, ty) do
-          # sym_proof : Eq(ty, b, a), so the transport's left endpoint is `b`:
-          # (M@b) -> (M@a) applied to the body checked at M@b = expected[a↦b].
-          {:ok, fn body -> {:app, transport_case(sym_proof, ty, motive, b), body} end, replace_term(expected, a, b)}
-        end
-
-      # NOTE (B2): the former `find_bridge`/`bridge_step` cond arm — the
-      # definitional-occurrence bridge built for rw07 (2ac4add) — was deleted as
-      # dead code, not migrated. `expected` is always normalized before entry,
-      # and since lazy δ-unfolding (ef3e958) + the nf idempotence fix, every
-      # subterm of a normal form re-normalizes to itself, so the bridge's firing
-      # condition (`normalize(s) != s` for a goal subterm `s`) is unsatisfiable.
-      # Evidence (corpus trace + structural argument) recorded in
-      # test/cure/elab/rewrite_as_case_test.exs, test (e).
-      contains_term?(expected, b) ->
-        {:ok, motive} = motive_for(expected, b, ty)
-        # proof : Eq(ty, a, b): (M@a) -> (M@b) applied to the body checked at
-        # M@a = expected[b↦a].
-        {:ok, fn body -> {:app, transport_case(proof, ty, motive, a), body} end, replace_term(expected, b, a)}
-
-      true ->
-        {:error, {:rewrite_no_match, a, b, expected}}
-    end
-  end
-
-  defp symmetry_proof(proof, ty, a, _b) do
-    # M = λz. Eq(ty, z, a); proof : Eq(ty, a, b). The transport is
-    # (M@a) -> (M@b) = Eq(ty,a,a) -> Eq(ty,b,a), applied to refl(a).
-    motive_body = mk_eq(Subst.shift(ty, 1, 0), {:var, 0}, Subst.shift(a, 1, 0))
-    motive = {:lam, Cure.Core.Grade.unrestricted(), ty, motive_body}
-    {:ok, {:app, transport_case(proof, ty, motive, a), mk_refl(a)}}
-  end
-
-  defp motive_for(expected, target, ty),
-    do: {:ok, {:lam, Cure.Core.Grade.unrestricted(), ty, abstract_term(expected, target, 0)}}
-
-  defp contains_term?(term, target), do: term == target or Enum.any?(children(term), &contains_term?(&1, target))
-
-  defp replace_term(term, target, replacement) when term == target, do: replacement
-
-  defp replace_term(term, target, replacement) when is_list(term),
-    do: Enum.map(term, &replace_term(&1, target, replacement))
-
-  defp replace_term(term, target, replacement) do
-    if term == target do
-      replacement
-    else
-      rebuild(term, Enum.map(children(term), &replace_term(&1, target, replacement)))
-    end
-  end
-
-  defp abstract_term(term, target, depth) when term == target, do: {:var, depth}
-  defp abstract_term({:var, i}, _target, depth) when i >= depth, do: {:var, i + 1}
-  defp abstract_term({:var, _} = var, _target, _depth), do: var
-
-  # Descending a binder shifts every free de Bruijn variable — including any in
-  # `target` — up by one, so the target must be shifted to keep matching the SAME
-  # occurrence one binder deeper. Without this, abstracting a scrutinee that occurs
-  # under a binder (e.g. a Π/λ-typed SIBLING like `g : (b = T) -> (c = T)`) both
-  # MISSES the real occurrence (now at `target+1`) and spuriously matches whatever
-  # else sits at the un-shifted index (`c`). Callers whose target occurs only at the
-  # abstraction depth (the common goal case) cross no binder before the match, so the
-  # shift is a no-op for them.
-  defp abstract_term({:pi, _g, d, c}, target, depth),
-    do:
-      {:pi, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth),
-       abstract_term(c, Subst.shift(target, 1, 0), depth + 1)}
-
-  defp abstract_term({:lam, _g, d, b}, target, depth),
-    do:
-      {:lam, Cure.Core.Grade.unrestricted(), abstract_term(d, target, depth),
-       abstract_term(b, Subst.shift(target, 1, 0), depth + 1)}
-
-  # A `:case` branch `{ctor, arity, body}` binds `arity` de Bruijn variables in
-  # `body` (see `Cure.Core.Term` shift/3's `:case` clause). Mirror that here:
-  # abstract the scrutinee and motive at `depth`, but each branch body at
-  # `depth + arity`, so branch-bound variables in `[depth, depth+arity)` are not
-  # spuriously shifted by the `{:var, i} when i >= depth` clause. Without this,
-  # the generic tuple clause below recurses into branch bodies at the wrong
-  # depth and corrupts the motive (P0 Task 5, rewrite goals with a stuck `case`).
-  defp abstract_term({:case, scrut, motive, branches}, target, depth) do
-    {:case, abstract_term(scrut, target, depth), abstract_term(motive, target, depth),
-     Enum.map(branches, fn {ctor, arity, body} ->
-       {ctor, arity, abstract_term(body, Subst.shift(target, arity, 0), depth + arity)}
-     end)}
-  end
-
-  defp abstract_term(term, target, depth) when is_tuple(term),
-    do: rebuild(term, Enum.map(children(term), &abstract_term(&1, target, depth)))
-
-  defp abstract_term(term, target, depth) when is_list(term),
-    do: Enum.map(term, &abstract_term(&1, target, depth))
-
-  defp abstract_term(term, _target, _depth), do: term
-
   defp children(term) when is_tuple(term), do: term |> Tuple.to_list() |> tl()
-  defp children(term) when is_list(term), do: term
-  defp children(_term), do: []
 
   # Free de Bruijn indices in `term`, counted from `depth` binders in (binder-
   # aware for Π/λ/Σ/case, mirroring abstract_term). Used to check convoy sibling
@@ -3458,8 +3486,6 @@ defmodule Cure.Elab.Elaborator do
     [elem(term, 0) | children] |> List.to_tuple()
   end
 
-  defp rebuild(term, _children), do: term
-
   defp implicit_def?(env, atom) do
     case Env.get_def(env, atom) do
       %{quantities: q} when is_list(q) -> :erased in q
@@ -3514,16 +3540,17 @@ defmodule Cure.Elab.Elaborator do
   @doc """
   Resolve and elaborate an applied call to a bare OVERLOADED name (a set of ≥2
   members sharing one spelling — same-module discriminated members, or
-  cross-module providers with no unique winner) by inferring the argument types,
-  pruning candidates by first-order convertibility, and dispatching the survivor.
+  cross-module providers with no unique winner). Arguments are first aligned to
+  each candidate's telescope, then the aligned calls are elaborated
+  bidirectionally and the unique survivor is dispatched.
 
   Shared verbatim by TERM-position elaboration (`elaborate_named_call_resolved`)
   and dependent-INDEX-position lowering (`declarations.ex:lower_applied_type`) so
   both disambiguate identically — index position previously ran the pre-overload
   resolver and either mis-picked an ambient same-name provider (crashing in ι) or
   reported `:ambiguous_name`. Returns the standard `{:ok, term, type}` on a unique
-  survivor, or `Overload.resolve`'s `{:error, {:no_matching_overload | :ambiguous_overload, …}}`.
-  `candidates` is the caller's already-computed `overload_candidates/2` (≥2).
+  survivor, or a structured named-argument/overload error. `candidates` is the
+  caller's already-computed `overload_candidates/2` (≥2).
   """
   @spec elaborate_overloaded_app(
           Env.t(),
@@ -3532,13 +3559,56 @@ defmodule Cure.Elab.Elaborator do
           [String.t()] | nil,
           [String.t()],
           Context.t(),
-          [atom()]
+          [atom()],
+          keyword()
         ) :: {:ok, term(), term()} | {:error, term()}
-  def elaborate_overloaded_app(env, atom, args, arg_labels, names, ctx, candidates) do
-    with {:ok, present} <- map_present_args(args, names, ctx, env),
-         arg_types = Enum.map(present, fn {_term, ty} -> ty end),
-         {:ok, winner} <- Cure.Elab.Overload.resolve(env, atom, arg_types, arg_labels, candidates) do
-      elaborate_global_app(env, winner, present, ctx)
+  def elaborate_overloaded_app(env, atom, args, arg_labels, names, ctx, candidates, opts \\ []) do
+    case Cure.Elab.Overload.align_candidates(env, candidates, args, arg_labels, opts) do
+      {:error, _} = error ->
+        error
+
+      aligned ->
+        survivors =
+          Enum.flat_map(aligned, fn {key, reordered} ->
+            case elaborate_implicit_app_bidirectional(env, key, reordered, names, ctx) do
+              {:ok, term, type} ->
+                [{key, term, type}]
+
+              {:error, _} ->
+                []
+            end
+          end)
+
+        case survivors do
+          [{_winner, term, type}] ->
+            {:ok, term, type}
+
+          [] ->
+            {:error, {:no_matching_overload, atom, []}}
+
+          many ->
+            keys = Enum.map(many, &elem(&1, 0))
+
+            if is_list(arg_labels) do
+              {:error,
+               {:named_argument_mismatch, :ambiguous_label,
+                %{
+                  key: atom,
+                  label: nil,
+                  written: arg_labels,
+                  candidates: keys,
+                  owners: Cure.Elab.Overload.candidate_owners(keys),
+                  argument_spans: Keyword.get(opts, :argument_spans, []),
+                  label_spans: Keyword.get(opts, :label_spans, []),
+                  parameter_spans:
+                    Enum.flat_map(keys, fn key ->
+                      Cure.Elab.SourceMetadata.parameter_spans(key) |> Enum.reject(&is_nil/1)
+                    end)
+                }}}
+            else
+              {:error, {:ambiguous_overload, atom, Cure.Elab.Overload.candidate_owners(keys)}}
+            end
+        end
     end
   end
 
@@ -6406,7 +6476,7 @@ defmodule Cure.Elab.Elaborator do
         # forms that keep the `{:named_implicit_unforced,…}` reject). Compute the
         # split and the renamed branch scope ONCE, before the carried/plain
         # dispatch, so BOTH paths honor the binding.
-        {bindings, checks} = split_named_implicits(pattern, subst, arity, telescope)
+        {bindings, checks} = split_named_implicits(pattern, subst, arity, telescope, quantities)
 
         tele_names =
           Enum.reduce(bindings, branch_scope(telescope, quantities, plicities, pattern_vars), fn {name,
@@ -6814,6 +6884,55 @@ defmodule Cure.Elab.Elaborator do
       else: elaborate_expr_checked(expr, expected, names, ctx, env)
   end
 
+  defp elaborate_branch_body({:block, meta, _statements} = expr, expected, names, ctx, env) do
+    cond do
+      effect_goal?(expected, ctx) ->
+        elaborate_effect_branch(expr, expected, names, ctx, env)
+
+      Keyword.get(meta, :induction_case_body, false) ->
+        elaborate_expr_checked(expr, expected, names, ctx, env)
+
+      true ->
+        case elaborate_expr_typed(expr, names, ctx, env) do
+          {:ok, term, type} ->
+            {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+
+          {:error, _} = orig ->
+            case elaborate_expr_checked(expr, expected, names, ctx, env) do
+              {:ok, _} = ok -> ok
+              {:error, _} -> orig
+            end
+        end
+    end
+  end
+
+  # Induction hypotheses are generated at a proposition specialized to the
+  # recursive constructor field. Check a bare hypothesis body against the
+  # refined branch goal here instead of taking the ordinary infer-first path;
+  # that gives E113 the authored use range and both propositions when the user
+  # tries to use the hypothesis for a different specialization.
+  defp elaborate_branch_body({:variable, meta, _name} = expr, expected, names, ctx, env) do
+    cond do
+      effect_goal?(expected, ctx) ->
+        elaborate_effect_branch(expr, expected, names, ctx, env)
+
+      Keyword.has_key?(meta, :induction_hypothesis) ->
+        elaborate_expr_checked(expr, expected, names, ctx, env)
+
+      true ->
+        case elaborate_expr_typed(expr, names, ctx, env) do
+          {:ok, term, type} ->
+            {:ok, maybe_inject_union(term, type, expected, ctx, env)}
+
+          {:error, _} = orig ->
+            case elaborate_expr_checked(expr, expected, names, ctx, env) do
+              {:ok, _} = ok -> ok
+              {:error, _} -> orig
+            end
+        end
+    end
+  end
+
   # The general branch body: inferred FIRST. `maybe_inject_union/5` is a strict no-op unless
   # this branch's goal is a generated anonymous-union family — in which case the
   # inferred body is injected (a member value) or widened (a narrower union, as
@@ -7028,7 +7147,7 @@ defmodule Cure.Elab.Elaborator do
 
       case Keyword.get(meta, :type_annotation) do
         nil -> let_inferred(name, rhs, meta, grade, rest, expected_core, names, ctx, env)
-        ann -> let_ascribed(name, rhs, ann, grade, rest, expected_core, names, ctx, env)
+        ann -> let_ascribed(name, rhs, ann, meta, grade, rest, expected_core, names, ctx, env)
       end
     end
   end
@@ -7113,19 +7232,19 @@ defmodule Cure.Elab.Elaborator do
   # check-only rhs cannot synthesise, so the rhs is elaborated in CHECKING mode
   # (exactly what surface substitution did at each use site) and bound ONCE.
   # This is the general escape from the check-only residual.
-  defp let_ascribed(name, rhs, ann, grade, rest, expected_core, names, ctx, env) do
+  defp let_ascribed(name, rhs, ann, meta, grade, rest, expected_core, names, ctx, env) do
     with {:ok, ty_core} <- elaborate_type(ann, names, env),
          ty_value = Eval.eval(ty_core, Context.env(ctx)) do
       case Normalise.whnf_value(ty_value, Context.signature(ctx)) do
         {:veffect_type, _} ->
-          with {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
+          with {:ok, rhs_core} <- check_local_binding_rhs(rhs, ty_core, name, meta, names, ctx, env) do
             bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env)
           end
 
         _ ->
           effect_type = {:effect_type, ty_core}
 
-          case elaborate_expr_checked(rhs, effect_type, names, ctx, env) do
+          case check_local_binding_rhs(rhs, effect_type, name, meta, names, ctx, env) do
             {:ok, rhs_core} ->
               effectful_let_bind(
                 name,
@@ -7140,11 +7259,25 @@ defmodule Cure.Elab.Elaborator do
               )
 
             {:error, _} ->
-              with {:ok, rhs_core} <- elaborate_expr_checked(rhs, ty_core, names, ctx, env) do
+              with {:ok, rhs_core} <- check_local_binding_rhs(rhs, ty_core, name, meta, names, ctx, env) do
                 bind_once_let(name, rhs_core, ty_core, ty_value, grade, rest, expected_core, names, ctx, env)
               end
           end
       end
+    end
+  end
+
+  defp check_local_binding_rhs(rhs, expected, name, meta, names, ctx, env) do
+    case elaborate_expr_checked(rhs, expected, names, ctx, env) do
+      {:error, reason} = error ->
+        if Keyword.get(meta, :have, false) do
+          {:error, attach_expectation_context(reason, rhs, :local_fact, name, nil)}
+        else
+          error
+        end
+
+      result ->
+        result
     end
   end
 
@@ -8197,18 +8330,20 @@ defmodule Cure.Elab.Elaborator do
 
   defp constructor_named_implicits(_), do: []
 
-  # Split a pattern's named implicits per spec 2026-07-08 §2.3: an UNFORCED
-  # position written as a bare variable BINDS (Idris quantity-0 pattern
-  # variable — probe evidence in the spec); everything else stays on the
-  # check path (forced positions check convertibility; unforced dot/non-var
-  # forms keep the `{:named_implicit_unforced,…}` reject).
-  defp split_named_implicits(pattern, subst, arity, telescope) do
+  # Split a pattern's named implicits per spec 2026-07-08 §2.3. A bare variable
+  # binds an unforced position, and also binds a FORCED relevant implicit: the
+  # latter is retained at runtime, so hiding it merely because the result index
+  # also determines it would make `{k : T}` less usable than an ordinary field.
+  # Forced erased positions remain check-only, preserving the quantity-0 rule.
+  defp split_named_implicits(pattern, subst, arity, telescope, quantities) do
     pattern
     |> constructor_named_implicits()
     |> Enum.split_with(fn {name, inner} ->
-      match?({:variable, _, _}, inner) and
-        named_implicit_forced_value(name, subst, arity, telescope) == :error and
-        Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end) != nil
+      position = Enum.find_index(telescope, fn {n, _t} -> n == String.to_atom(name) end)
+
+      match?({:variable, _, _}, inner) and position != nil and
+        (named_implicit_forced_value(name, subst, arity, telescope) == :error or
+           not Grade.erased?(Enum.at(quantities, position)))
     end)
   end
 
@@ -9909,11 +10044,28 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_named_call_scoped(meta, args, scope, env) do
     name = Keyword.fetch!(meta, :name)
     atom = String.to_atom(name)
+    resolved_ctor = resolve_ctor_key(env, atom)
+    ctor = Inductive.get_ctor(env, resolved_ctor)
+    resolved_def = resolve_def_key(env, name, atom)
+    {meta, args} = normalize_constructor_named_args(meta, args, ctor)
 
-    with {:ok, core_args} <- map_elaborate(args, scope, env, &elaborate_expr/3) do
+    alignment =
       cond do
-        Inductive.get_ctor(env, atom) ->
-          ctor_key = Env.resolve_key(env, env.ctors, atom)
+        ctor ->
+          align_constructor_args(resolved_ctor, ctor, meta, args)
+
+        Env.get_def(env, resolved_def) ->
+          Cure.Elab.Overload.align(env, resolved_def, args, Keyword.get(meta, :arg_labels))
+
+        true ->
+          {:ok, args}
+      end
+
+    with {:ok, args} <- alignment,
+         {:ok, core_args} <- map_elaborate(args, scope, env, &elaborate_expr/3) do
+      cond do
+        ctor ->
+          ctor_key = resolved_ctor
 
           # A constructor head applied to arguments is a saturated constructor, not
           # a chain of `{:app, …}`. Mirror `elaborate_type/3`'s ctor-aware clause:
@@ -10030,6 +10182,20 @@ defmodule Cure.Elab.Elaborator do
   defp elaborate_type(ast, scope, env), do: Cure.Elab.Declarations.lower_type(ast, scope, env)
 
   # -- helpers ----------------------------------------------------------------
+
+  defp simplify_outside_justification(meta) do
+    info = Cure.MetaAST.Metadata.source_info(meta)
+
+    {:error,
+     {:simplification_failed,
+      %Cure.Diagnostic.SimplificationProblem{
+        kind: :inadmissible_rule,
+        command: info && info.whole,
+        before_goal: nil,
+        after_goal: nil,
+        cause: :outside_justification
+      }}}
+  end
 
   defp map_elaborate(asts, scope, env, fun) do
     Enum.reduce_while(asts, {:ok, []}, fn ast, {:ok, acc} ->

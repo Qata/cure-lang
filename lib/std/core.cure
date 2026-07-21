@@ -98,22 +98,22 @@ mod Std.Core
   # `==`/`!=`/`<`/`<=`/`>`/`>=` are the surface. Equality/inequality are
   # polymorphic (structural), and the ordering operators resolve through the
   # `Std.Comparable` interface, so `min`/`max`/`clamp` carry a
-  # `where Comparable(t)` constraint that threads the ordering dictionary.
+  # `requires Comparable(t)` constraint that threads the ordering dictionary.
 
   ## Pointwise minimum under the `Comparable` ordering.
-  fn min(x: t, y: t) -> t where Comparable(t) =
+  fn min(x: t, y: t) -> t requires Comparable(t) =
     pickup
       x <= y -> x
       else   -> y
 
   ## Pointwise maximum under the `Comparable` ordering.
-  fn max(x: t, y: t) -> t where Comparable(t) =
+  fn max(x: t, y: t) -> t requires Comparable(t) =
     pickup
       x >= y -> x
       else   -> y
 
   ## Clamp `value` into the inclusive range `[lo, hi]`.
-  fn clamp(value: t, lo: t, hi: t) -> t where Comparable(t) =
+  fn clamp(value: t, lo: t, hi: t) -> t requires Comparable(t) =
     pickup
       value < lo -> lo
       value > hi -> hi

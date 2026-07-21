@@ -92,6 +92,6 @@ mod Std.Equatable
     ## Structural Peano equality (matches a derived ADT `struct_eq` lowering).
     fn `==`(a: Nat, b: Nat) -> Bool = Std.Builtin.struct_eq(Nat, a, b)
 
-  ## Inequality derived from `` `==` ``. The `where Equatable(t)` constraint
+  ## Inequality derived from `` `==` ``. The `requires Equatable(t)` constraint
   ## threads the dictionary that dispatches `` `==` `` at the caller's type.
-  fn `!=`(a: t, b: t) -> Bool where Equatable(t) = Std.Bool.`not`(`==`(a, b))
+  fn `!=`(a: t, b: t) -> Bool requires Equatable(t) = Std.Bool.`not`(`==`(a, b))

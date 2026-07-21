@@ -447,10 +447,33 @@ defmodule Cure.Compiler.Printer do
     rhs = rhs_to_string(value, depth, indent)
 
     if Keyword.get(meta, :let) do
-      "let #{lhs}#{type_ann} = #{rhs}"
+      keyword = if Keyword.get(meta, :have), do: "have", else: "let"
+      "#{keyword} #{lhs}#{type_ann} = #{rhs}"
     else
       "#{lhs} = #{rhs}"
     end
+  end
+
+  defp to_string({:proof_chain, _meta, [first | steps]}, depth, indent) do
+    first_pad = String.duplicate(indent, depth + 1)
+    step_pad = String.duplicate(indent, depth + 1)
+
+    rendered_steps =
+      steps
+      |> Enum.with_index()
+      |> Enum.map(fn {{:proof_step, _step_meta, [_marker, right, justification]}, index} ->
+        right = render(right, depth + 1, indent)
+        because = proof_justification_to_string(justification, depth, indent)
+
+        if index == 0 do
+          "#{first_pad}#{render(first, depth + 1, indent)} == #{right}\n#{first_pad}#{because}"
+        else
+          "#{step_pad}_ == #{right}\n#{step_pad}#{because}"
+        end
+      end)
+      |> Enum.join("\n\n")
+
+    "proof chain\n#{rendered_steps}"
   end
 
   # -- Conditional -----------------------------------------------------------
@@ -581,8 +604,13 @@ defmodule Cure.Compiler.Printer do
     "Tuple(#{positions})"
   end
 
+  defp to_string({:named_call_argument, meta, [arg]}, depth, indent) do
+    "#{Keyword.fetch!(meta, :label)}: #{render(arg, depth, indent)}"
+  end
+
   defp to_string({:function_call, meta, args}, depth, indent) do
     name = Keyword.get(meta, :name, "unknown")
+    labels = Keyword.get(meta, :arg_labels)
 
     cond do
       # Record construction: Name{field: val}
@@ -591,13 +619,13 @@ defmodule Cure.Compiler.Printer do
         "#{name}{#{fields_str}}"
 
       # Send: send target, message
-      name == "send" and not Keyword.has_key?(meta, :pipe) ->
+      name == "send" and not Keyword.has_key?(meta, :pipe) and is_nil(labels) ->
         case args do
           [target, message] ->
             "send #{render(target, depth, indent)}, #{render(message, depth, indent)}"
 
           _ ->
-            "#{name}(#{call_args_to_string(args, depth, indent)})"
+            "#{name}(#{call_args_to_string(args, depth, indent, labels)})"
         end
 
       # Pipe call. `|>` binds loosely (the `Pipe` group), so a left operand
@@ -608,7 +636,9 @@ defmodule Cure.Compiler.Printer do
 
         case args do
           [piped | rest] when rest != [] ->
-            "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}(#{call_args_to_string(rest, depth, indent)})"
+            rest_labels = if is_list(labels), do: Enum.drop(labels, 1), else: nil
+
+            "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}(#{call_args_to_string(rest, depth, indent, rest_labels)})"
 
           [piped] ->
             "#{operand_str(piped, depth, indent, pipe_parent, :left)} |> #{name}"
@@ -618,7 +648,7 @@ defmodule Cure.Compiler.Printer do
         end
 
       true ->
-        "#{quote_if_reserved(name)}(#{call_args_to_string(args, depth, indent)})"
+        "#{quote_if_reserved(name)}(#{call_args_to_string(args, depth, indent, labels)})"
     end
   end
 
@@ -1210,7 +1240,7 @@ defmodule Cure.Compiler.Printer do
 
   # -- Implementation (typeclass instance) -----------------------------------
   #
-  # `implementation Iface for Type [as Name] [where constraints]` followed by
+  # `implementation Iface for Type [as Name] [requires constraints]` followed by
   # an indented block of method definitions.
 
   defp to_string({:implementation, meta, body}, depth, indent) do
@@ -1221,9 +1251,9 @@ defmodule Cure.Compiler.Printer do
 
     as_str = if as_name, do: " as #{as_name}", else: ""
 
-    where_str =
+    requirements_str =
       if constraints != [] do
-        " where " <> Enum.map_join(constraints, ", ", &render(&1, depth, indent))
+        " requires " <> Enum.map_join(constraints, ", ", &render(&1, depth, indent))
       else
         ""
       end
@@ -1236,7 +1266,7 @@ defmodule Cure.Compiler.Printer do
       |> Enum.join("\n#{pad}")
 
     head =
-      "implementation #{iface} for #{render(for_type, depth, indent)}#{as_str}#{where_str}"
+      "implementation #{iface} for #{render(for_type, depth, indent)}#{as_str}#{requirements_str}"
 
     "#{head}\n#{pad}#{body_str}"
   end
@@ -1278,6 +1308,44 @@ defmodule Cure.Compiler.Printer do
 
   defp to_string({:rewrite_expr, _meta, [proof, body]}, depth, indent) do
     "rewrite " <> render(proof, depth, indent) <> " in " <> render(body, depth, indent)
+  end
+
+  defp to_string({:rewrite_command, meta, [proof]}, depth, indent) do
+    direction = if Keyword.get(meta, :direction) == :backwards, do: " backwards", else: ""
+
+    target =
+      case Keyword.get(meta, :target, :goal) do
+        :goal -> ""
+        {:at, occurrence} -> " at #{occurrence}"
+        {:in, name} -> " in #{name}"
+      end
+
+    "rewrite#{direction} using " <> render(proof, depth, indent) <> target
+  end
+
+  defp to_string({:simplify_command, _meta, []}, _depth, _indent), do: "simplify"
+
+  defp to_string({:simplify_command, _meta, [rules]}, depth, indent),
+    do: "simplify using " <> render(rules, depth, indent)
+
+  defp to_string({:induction, _meta, [subject | cases]}, depth, indent) do
+    pad = String.duplicate(indent, depth + 1)
+
+    rendered =
+      cases
+      |> Enum.map(fn {:induction_case, _case_meta, [pattern, body]} ->
+        body_text = if is_nil(body), do: "impossible", else: render(body, depth + 1, indent)
+
+        if String.contains?(body_text, "\n") do
+          nested = body_text |> String.split("\n") |> Enum.map_join("\n", &(pad <> indent <> &1))
+          "#{pad}case #{render(pattern, depth + 1, indent)} =>\n#{nested}"
+        else
+          "#{pad}case #{render(pattern, depth + 1, indent)} => #{body_text}"
+        end
+      end)
+      |> Enum.join("\n\n")
+
+    "induction #{render(subject, depth, indent)}\n#{rendered}"
   end
 
   # -- Macro definitions -----------------------------------------------------
@@ -1874,13 +1942,26 @@ defmodule Cure.Compiler.Printer do
   # the argument list is rendered one-per-line -- the only layout that both keeps
   # the comment and reparses. With no argument comment, this is byte-for-byte the
   # single-line span, so the common path is untouched.
-  defp call_args_to_string(args, depth, indent) do
-    if Enum.any?(args, &has_comment_trivia?/1) do
+  defp call_args_to_string(args, depth, indent, labels) do
+    multiline? = Enum.any?(args, &has_comment_trivia?/1)
+    args = labelled_call_args(args, labels)
+
+    if multiline? do
       render_call_args_multiline(args, depth, indent)
     else
       render_span(args, ",", depth, indent)
     end
   end
+
+  defp labelled_call_args(args, labels) when is_list(labels) and length(args) == length(labels) do
+    Enum.zip(args, labels)
+    |> Enum.map(fn
+      {arg, nil} -> arg
+      {arg, label} -> {:named_call_argument, [label: label], [arg]}
+    end)
+  end
+
+  defp labelled_call_args(args, _labels), do: args
 
   defp has_comment_trivia?(node) do
     meta = trivia_meta(node)
@@ -2035,7 +2116,7 @@ defmodule Cure.Compiler.Printer do
     constraints_str =
       if constraints != [] do
         cs = Enum.map_join(constraints, ", ", &render(&1, depth, indent))
-        " where #{cs}"
+        " requires #{cs}"
       else
         ""
       end
@@ -2359,7 +2440,7 @@ defmodule Cure.Compiler.Printer do
     constraints_str =
       if constraints != [] do
         cs = Enum.map_join(constraints, ", ", &render(&1, depth, indent))
-        " where #{cs}"
+        " requires #{cs}"
       else
         ""
       end
@@ -2759,4 +2840,13 @@ defmodule Cure.Compiler.Printer do
     |> Enum.map(&grapheme_width/1)
     |> Enum.max()
   end
+
+  defp proof_justification_to_string({:proof_justification, _meta, statements}, depth, indent) do
+    command_pad = String.duplicate(indent, depth + 2)
+    rendered = Enum.map_join(statements, "\n#{command_pad}", &render(&1, depth + 2, indent))
+    "because\n#{command_pad}#{rendered}"
+  end
+
+  defp proof_justification_to_string(justification, depth, indent),
+    do: "because #{render(justification, depth + 1, indent)}"
 end

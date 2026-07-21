@@ -5,6 +5,29 @@ defmodule Cure.Compiler.ContextualTypeDiagnosticTest do
   alias Cure.Diagnostic.Span
   alias Cure.Diagnostic.Renderer
 
+  test "an annotated local fact mismatch names the fact" do
+    source = """
+    mod HaveError
+      use Std.Equivalent
+      fn answer() -> Equivalent(Int, 1, 1) =
+        have useful: Int = 1.0
+        reflexive(1)
+    end
+    """
+
+    assert {:error, {:codegen_error, reason}} =
+             Cure.Compiler.compile_string(source, file: "have_error.cure", emit_events: false)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "have_error.cure", source)
+    rendered = Renderer.plain(diagnostic, registry)
+
+    assert diagnostic.code == "E093"
+    assert diagnostic.title == "Local fact does not match"
+    assert diagnostic.payload.origin.kind == :local_fact
+    assert diagnostic.payload.origin.owner == "useful"
+    assert rendered =~ "local fact `useful`"
+  end
+
   test "a declared return mismatch retains its authored checking context" do
     source = "fn answer() -> Int = 1.0\n"
 

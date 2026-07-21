@@ -14,7 +14,7 @@ defmodule Cure.Compiler.ArgumentLabelsParseTest do
   """
   use ExUnit.Case, async: true
 
-  alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Compiler.{Lexer, Parser, Printer}
 
   defp parse!(source) do
     {:ok, tokens} = Lexer.tokenize(source, emit_events: false)
@@ -41,6 +41,9 @@ defmodule Cure.Compiler.ArgumentLabelsParseTest do
     assert Keyword.get(meta, :arg_labels) == ["to", "from"]
     # Argument expressions are the plain values, unchanged.
     assert [{:variable, _, "p"}, {:variable, _, "q"}] = args
+    assert [to_span, from_span] = Keyword.fetch!(meta, :arg_label_spans)
+    assert to_span.start_column == 6
+    assert from_span.start_column == 13
   end
 
   test "a mix of labelled and positional args aligns labels by position with nil" do
@@ -52,6 +55,12 @@ defmodule Cure.Compiler.ArgumentLabelsParseTest do
   test "an all-positional call carries no arg_labels key" do
     {:function_call, meta, _args} = parse!("h(a, b)")
     assert Keyword.get(meta, :arg_labels) == nil
+    refute Keyword.has_key?(meta, :arg_label_spans)
+  end
+
+  test "printer preserves authored named-argument order and labels" do
+    ast = parse!("move(from: q, to: p)")
+    assert Printer.quoted_to_string(ast) == "move(from: q, to: p)"
   end
 
   test "a qualified constructor pattern's typed field binder is not mistaken for a label" do

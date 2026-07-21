@@ -330,40 +330,32 @@ defmodule Cure.LSP.LspTest do
   # ============================================================================
 
   describe "codeAction" do
-    test "turns machine-applicable diagnostic edits into a workspace edit" do
-      source = "fn run() -> Int = missng\n"
+    test "adds every missing induction case with descriptive editable binders" do
+      source = """
+      mod MissingInductionCase
+        type Nat = Z | S(Nat)
+        fn prove(value: Nat) -> Equivalent(Nat, value, value) = induction value
+          case Z => reflexive(Z)
+      end
+      """
 
-      registry =
-        Cure.Diagnostic.SourceRegistry.new()
-        |> Cure.Diagnostic.SourceRegistry.register("file:///test.cure", source, "file:///test.cure")
+      assert {:error, {:codegen_error, reason}} =
+               Cure.Compiler.compile_string(source, file: "missing_induction_case.cure", emit_events: false)
 
-      {:ok, span} = Cure.Diagnostic.SourceRegistry.span(registry, "file:///test.cure", 18, 24)
+      {diagnostic, registry} =
+        Cure.Compiler.Errors.to_diagnostic(reason, "missing_induction_case.cure", source)
 
-      diagnostic =
-        Cure.Diagnostic.new(
-          code: "E091",
-          key: :unknown_name,
-          severity: :error,
-          title: "Unknown value",
-          message: "`missng` was not found",
-          primary: %Cure.Diagnostic.Label{span: span, style: :primary},
-          suggestions: [
-            %Cure.Diagnostic.Suggestion{
-              message: "Did you mean `missing`?",
-              applicability: :machine_applicable,
-              edits: [%Cure.Diagnostic.TextEdit{span: span, replacement: "missing"}]
-            }
-          ]
-        )
+      lsp_diagnostic = Cure.Diagnostic.Renderer.lsp(diagnostic, registry, :utf16)
+      assert [action] = Server.compute_code_actions("file:///missing_induction_case.cure", [lsp_diagnostic])
+      assert action["title"] == "Add missing induction cases"
 
-      lsp = Cure.Diagnostic.Renderer.lsp(diagnostic, registry, :utf16)
-      [action] = Server.compute_code_actions("file:///test.cure", [lsp])
+      assert [{edit_uri, [%{"newText" => replacement, "range" => range}]}] =
+               Map.to_list(action["edit"]["changes"])
 
-      assert action["title"] == "Did you mean `missing`?"
-
-      assert action["edit"]["changes"]["file:///test.cure"] == [
-               %{"range" => lsp["range"], "newText" => "missing"}
-             ]
+      assert String.ends_with?(edit_uri, "/missing_induction_case.cure")
+      assert replacement == "\n    case S(previous, induction_hypothesis) => ???"
+      assert range["start"] == range["end"]
+      assert range["start"]["line"] == 3
     end
 
     test "suggests wildcard for non-exhaustive match" do
@@ -462,6 +454,161 @@ defmodule Cure.LSP.LspTest do
 
       {_, _} = Server.process_message(msg, state)
       # Verifies no crash and response is sent
+    end
+
+    test "defining-equation members expose propositions and structural collision names" do
+      source = """
+      mod EquationLsp
+        type Bit = Off | On
+        fn both(left: Bit, right: Bit) -> Bit = match left
+          Off -> Off
+          On -> match right
+            Off -> Off
+            On -> On
+      end
+      """
+
+      {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, emit_events: false)
+      {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
+      equations = Server.equation_symbols(ast)
+
+      assert Enum.map(equations, & &1.name) == ["both.On", "both/Off", "both/On/Off"]
+      assert Enum.all?(equations, &(&1.proposition =~ "Equivalent"))
+      assert Enum.any?(equations, &(&1.proposition =~ "both(On, Off), Off"))
+      assert Enum.map(equations, & &1.line) == [7, 4, 6]
+      assert Enum.all?(equations, & &1.span)
+    end
+
+    test "simplification rule completion offers defining equations with rule-specific detail" do
+      source = """
+      mod SimplifyLsp
+        type Bit = Off | On
+        fn flip(bit: Bit) -> Bit = match bit
+          Off -> On
+          On -> Off
+        fn proof(bit: Bit) -> Equivalent(Bit, flip(flip(bit)), bit) = proof chain
+          flip(flip(bit)) == bit
+          because simplify using []
+      end
+      """
+
+      prefix = String.replace(source, "[]", "[")
+      items = Server.context_completions(source, prefix)
+
+      assert Enum.map(items, & &1["label"]) == ["flip.Off", "flip.On"]
+      assert Enum.all?(items, &String.starts_with?(&1["detail"], "Defining equation rule —"))
+    end
+
+    test "defining-equation hover identifies a function case rather than a module" do
+      source = """
+      mod EquationHover
+        type Bit = Off | On
+        fn flip(bit: Bit) -> Bit = match bit
+          Off -> On
+          On -> Off
+        fn use() = flip.Off
+      end
+      """
+
+      hover = Server.compute_hover(source, 5, 20)
+      value = get_in(hover, ["contents", "value"])
+      assert value =~ "defining equation for function `flip`"
+      assert value =~ "constructor case `Off`"
+      assert value =~ "not a module"
+      assert value =~ "Equivalent"
+    end
+
+    test "simplification completion and hover include local equality proofs" do
+      source = """
+      mod LocalRuleHover
+        type Nat = Z | S(Nat)
+        fn adapt(x: Nat, y: Nat, equality: Equivalent(Nat, S(x), y)) -> Equivalent(Nat, S(S(x)), S(y)) = proof chain
+          S(S(x)) == S(y)
+          because simplify using [equality]
+      end
+      """
+
+      prefix = source |> String.split("equality]") |> hd()
+      items = Server.context_completions(source, prefix)
+      assert %{"label" => "equality", "detail" => "Local equality rule — " <> detail} = hd(items)
+      assert detail =~ "Equivalent(Nat, S(x), y)"
+
+      bare_prefix = source |> String.split("[equality]") |> hd()
+      bare_items = Server.context_completions(source, bare_prefix)
+      assert Enum.any?(bare_items, &(&1["label"] == "equality"))
+
+      hover = Server.compute_hover(source, 4, 30)
+      value = get_in(hover, ["contents", "value"])
+      assert value =~ "Local equality proof"
+      assert value =~ "explicit simplification rule"
+
+      command_hover = Server.compute_hover(source, 4, 12)
+      command_value = get_in(command_hover, ["contents", "value"])
+      assert command_value =~ "simplify using [rule, ...]"
+      assert command_value =~ "kernel-checked equality certificate"
+    end
+
+    test "structured induction vocabulary has completion and explanatory hover" do
+      source = """
+      mod InductionLsp
+        type Nat = Z | S(Nat)
+        fn proof(value: Nat) -> Equivalent(Nat, value, value) = induction value
+          case Z => reflexive(Z)
+          case S(previous, induction_hypothesis) => induction_hypothesis
+      end
+      """
+
+      hover = Server.compute_hover(source, 2, 65)
+      value = get_in(hover, ["contents", "value"])
+      assert value =~ "specialized induction hypothesis"
+      assert value =~ "ordinary total recursion"
+
+      hypothesis_hover = Server.compute_hover(source, 4, 30)
+      hypothesis_value = get_in(hypothesis_hover, ["contents", "value"])
+      assert hypothesis_value =~ "Specialized induction hypothesis"
+      assert hypothesis_value =~ "structurally smaller value"
+
+      assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, emit_events: false)
+      assert {:ok, ast} = Cure.Compiler.Parser.parse(tokens, emit_events: false)
+      bindings = Server.induction_binding_symbols(ast)
+      assert Enum.any?(bindings, &(&1.name == "induction_hypothesis" and &1.kind == :induction_hypothesis))
+
+      completion = Server.context_completions(source, source)
+      assert Enum.any?(completion, &(&1["label"] == "induction_hypothesis" and &1["detail"] =~ "Specialized"))
+
+      semantic = Server.compute_semantic_tokens("induction value\n  case Z => simplify")
+      assert length(semantic) == 15
+    end
+
+    test "induction completion generates every constructor with descriptive hypotheses" do
+      source = """
+      mod InductionCompletion
+        type Nat = Z | S(Nat)
+        fn proof(value: Nat) -> Equivalent(Nat, value, value) = induction value
+      """
+
+      items = Server.context_completions(source, source)
+      all = Enum.find(items, &(&1["label"] == "Generate all Nat induction cases"))
+
+      assert all["insertTextFormat"] == 2
+      assert all["insertText"] =~ "case Z =>"
+      assert all["insertText"] =~ "case S(${1:previous}, ${2:induction_hypothesis}) =>"
+      assert all["detail"] =~ "recursive induction hypotheses"
+    end
+
+    test "induction completion omits constructor cases already written" do
+      source = """
+      mod PartialInductionCompletion
+        type Nat = Z | S(Nat)
+        fn proof(value: Nat) -> Equivalent(Nat, value, value) = induction value
+          case Z => reflexive(Z)
+      """
+
+      items = Server.context_completions(source, source)
+      all = Enum.find(items, &(&1["label"] == "Generate all Nat induction cases"))
+
+      refute all["insertText"] =~ "case Z"
+      assert all["insertText"] =~ "case S("
     end
   end
 end

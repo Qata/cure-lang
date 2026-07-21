@@ -104,10 +104,13 @@ separate).
 
 ### Ordering
 
-Labelled arguments must appear in **declaration order**. Labels are annotations,
-not a reordering mechanism (Swift semantics, not OCaml's). This keeps
-resolution positional under the hood and avoids surprising permutation
-semantics.
+**Superseded on 2026-07-21.** The proof-language ergonomics design upgrades
+labels into reorderable named arguments. Positional arguments must form a
+prefix and fill the leftmost present parameters; after the first named argument,
+every argument is named and those names may appear in any order. Elaboration
+aligns them to the chosen declaration's telescope before dependent solving and
+Core construction. This section records the original v1 constraint only; the
+July 21 design is authoritative.
 
 ## 5. Surface syntax
 
@@ -157,7 +160,8 @@ it mirrors the existing named-function-type-argument handling already present in
 
 ## 7. Pinned decisions
 
-1. **Declaration order required** for labelled arguments (no reordering).
+1. **SUPERSEDED:** declaration-order-only labels were the v1 rule; the July 21
+   named-argument design permits reordering after a positional prefix.
 2. **Elaborate-and-prune resolution** keyed by `(name, arity, arg types,
    labels)`, Idris2-style; qualified `Mod.f` is the always-available escape
    hatch.
@@ -171,7 +175,8 @@ it mirrors the existing named-function-type-argument handling already present in
 - Return-type-directed overloading beyond what falls out of the existing
   bidirectional `expected`-type threading (we do not add a dedicated
   return-type dispatch pass in this feature).
-- Reordering labelled arguments.
+- ~~Reordering labelled arguments.~~ Superseded and brought into scope by the
+  July 21 proof-language ergonomics design.
 - Labels on constructor fields beyond the record-construction syntax that
   already exists.
 

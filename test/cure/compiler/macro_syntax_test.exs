@@ -53,6 +53,16 @@ defmodule Cure.Compiler.MacroSyntaxTest do
     assert {:syn_leaf, :variable, _, {:s_str, "x"}} = arg2
   end
 
+  test "syntax reflection preserves reorderable named-argument labels without source-range opacity" do
+    ast = expr!("move(from: old, to: next)")
+    assert {:syn_node, :function_call, attrs, [_old, _next]} = MacroSyntax.to_syntax(ast)
+    assert {:arg_labels, {:s_list, [{:s_str, "from"}, {:s_str, "to"}]}} in attrs
+    refute Keyword.has_key?(attrs, :arg_label_spans)
+
+    assert {:function_call, roundtrip_meta, _args} = MacroSyntax.from_syntax(MacroSyntax.to_syntax(ast))
+    assert Keyword.fetch!(roundtrip_meta, :arg_labels) == ["from", "to"]
+  end
+
   test "to_syntax records generic constructor spelling and arity metadata" do
     repr = MacroSyntax.to_syntax(expr!("Ping(value)"))
 

@@ -59,7 +59,7 @@ defmodule Cure.Compiler.Lexer do
   # fixity grammar (Phase 3). They are common English words, so reserving them
   # unconditionally would steal ordinary identifier names; they are kept
   # contextual and the parser promotes them only at a declaration-shaped head.
-  @contextual_keywords ~w(proof requires precedencegroup infix prefix postfix)a
+  @contextual_keywords ~w(proof have requires precedencegroup infix prefix postfix)a
 
   @keyword_strings Enum.map(@keywords, &Atom.to_string/1)
 

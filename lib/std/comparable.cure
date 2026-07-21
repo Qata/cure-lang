@@ -15,14 +15,14 @@ mod Std.Comparable
   ##
   ## The sole primitive obligation is `` `<` ``; `` `<=` ``, `` `>` ``,
   ## `` `>=` `` and the three-way `compare` (returning an `Ordering`) are derived
-  ## `where Comparable(t)` top-level functions, each expressed with `` `<` ``
+  ## `requires Comparable(t)` top-level functions, each expressed with `` `<` ``
   ## alone (a total order is trichotomous in `` `<` ``). `Comparable(t)` requires
   ## `Equatable(t)`, so every comparable type is also equatable.
   ##
-  ## The derived operations are standalone `where`-constrained functions rather
+  ## The derived operations are standalone `requires`-constrained functions rather
   ## than interface defaults: an instance-specialised default re-dispatching a
   ## sibling method at a concrete operand cannot be elaborated for every leaf
-  ## today, whereas a `where`-constrained function stays polymorphic and is
+  ## today, whereas a `requires`-constrained function stays polymorphic and is
   ## resolved per call site (the same idiom `Std.Equatable.` `` `!=` `` uses).
   ##
   ## ## Examples
@@ -93,18 +93,18 @@ mod Std.Comparable
     fn `<`(a: String, b: String) -> Bool = string_lt(a, b)
 
   ## `` `<=` `` derived: `a <= b` iff `not (b < a)`.
-  fn `<=`(a: t, b: t) -> Bool where Comparable(t) = Std.Bool.`not`(`<`(b, a))
+  fn `<=`(a: t, b: t) -> Bool requires Comparable(t) = Std.Bool.`not`(`<`(b, a))
 
   ## `` `>` `` derived by flipping the operands: `a > b` iff `b < a`.
-  fn `>`(a: t, b: t) -> Bool where Comparable(t) = `<`(b, a)
+  fn `>`(a: t, b: t) -> Bool requires Comparable(t) = `<`(b, a)
 
   ## `` `>=` `` derived: `a >= b` iff `not (a < b)`.
-  fn `>=`(a: t, b: t) -> Bool where Comparable(t) = Std.Bool.`not`(`<`(a, b))
+  fn `>=`(a: t, b: t) -> Bool requires Comparable(t) = Std.Bool.`not`(`<`(a, b))
 
   ## Derived tripartite `compare`, generated from `` `<` `` alone (trichotomy of
   ## a total order). Kept present and named `compare` so `compare_op_call` and
   ## `min`/`max`/`clamp` (which dispatch to `compare`) keep working.
-  fn compare(a: t, b: t) -> Ordering where Comparable(t) =
+  fn compare(a: t, b: t) -> Ordering requires Comparable(t) =
     pickup
       `<`(a, b) -> LessThan
       `<`(b, a) -> GreaterThan

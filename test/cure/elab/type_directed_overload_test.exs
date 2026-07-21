@@ -245,7 +245,7 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     """
 
     assert {:error, err} = compile_and_load_error(src)
-    assert match?({:no_matching_overload, :pick, _}, unwrap_inner(err))
+    assert match?({:named_argument_mismatch, :missing_label, _}, unwrap_inner(err))
   end
 
   # A wrong label matches no member either: `pick(via: 5)` names a label neither
@@ -260,7 +260,7 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     """
 
     assert {:error, err} = compile_and_load_error(src)
-    assert match?({:no_matching_overload, :pick, _}, unwrap_inner(err))
+    assert match?({:named_argument_mismatch, :unknown_label, _}, unwrap_inner(err))
   end
 
   # Slice E — a two-name parameter declares a MANDATORY external label even on a
@@ -290,7 +290,7 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     """
 
     assert {:error, err} = compile_and_load_error(src)
-    assert match?({:label_mismatch, _, _, _}, unwrap_inner(err))
+    assert match?({:named_argument_mismatch, :missing_label, _}, unwrap_inner(err))
   end
 
   # A written label that names no parameter of a non-overloaded function is
@@ -304,7 +304,7 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     """
 
     assert {:error, err} = compile_and_load_error(src)
-    assert match?({:label_mismatch, _, _, _}, unwrap_inner(err))
+    assert match?({:named_argument_mismatch, :unknown_label, _}, unwrap_inner(err))
   end
 
   # A single-name parameter's label is OPTIONAL: the caller may write it or omit
@@ -335,7 +335,7 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
     """
 
     assert {:error, err} = compile_and_load_error(src)
-    assert match?({:label_mismatch, _, _, _}, unwrap_inner(err))
+    assert match?({:named_argument_mismatch, :unknown_label, _}, unwrap_inner(err))
   end
 
   # Slice F — a mixed mandatory/optional overload set of the SAME type. Without
@@ -409,6 +409,24 @@ defmodule Cure.Elab.TypeDirectedOverloadTest do
 
     assert {:error, err} = compile_multi_error(dir, files)
     assert match?({:ambiguous_overload, :foo, _}, unwrap_inner(err))
+  end
+
+  @tag :tmp_dir
+  test "a named call that still fits multiple providers reports E115 ambiguity", %{tmp_dir: dir} do
+    files = %{
+      "a.cure" => "mod OvlNamedAmbA\n  fn foo(x: Int) -> Int = 1\nend\n",
+      "b.cure" => "mod OvlNamedAmbB\n  fn foo(x: Int) -> Int = 2\nend\n",
+      "main.cure" => """
+      mod OvlNamedAmbC
+        use OvlNamedAmbA
+        use OvlNamedAmbB
+        fn pick() -> Int = foo(x: 1)
+      end
+      """
+    }
+
+    assert {:error, err} = compile_multi_error(dir, files)
+    assert match?({:named_argument_mismatch, :ambiguous_label, _}, unwrap_inner(err))
   end
 
   # The dot-qualified escape hatch names the provider directly, routed through the
