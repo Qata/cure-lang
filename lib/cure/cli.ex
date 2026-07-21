@@ -800,7 +800,9 @@ defmodule Cure.CLI do
     else
       results =
         Enum.map(test_files, fn file ->
-          case Cure.Compiler.compile_and_load(File.read!(file), file: file, emit_events: false) do
+          source = File.read!(file)
+
+          case Cure.Compiler.compile_and_load(source, file: file, emit_events: false) do
             {:ok, mod} ->
               # Run all test_ functions
               exports = mod.module_info(:exports)
@@ -823,8 +825,8 @@ defmodule Cure.CLI do
                 end
               end)
 
-            {:error, _} ->
-              [{:fail, "#{file}: compilation error"}]
+            {:error, reason} ->
+              [{:fail, "#{file}: compilation error\n" <> Cure.Diagnostic.Host.render(reason, file, source)}]
           end
         end)
         |> List.flatten()
