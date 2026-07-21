@@ -63,7 +63,7 @@ defmodule Mix.Tasks.Cure.Rewrite do
 
   use Mix.Task
 
-  alias Cure.Diagnostic.Host
+  alias Cure.Diagnostic.Sink
 
   alias Cure.Compiler.{Lexer, Parser, Printer}
 
@@ -71,11 +71,15 @@ defmodule Mix.Tasks.Cure.Rewrite do
   def run(args) do
     Application.ensure_all_started(:cure)
 
-    {opts, paths, _} =
+    {opts, paths, invalid} =
       OptionParser.parse(args,
-        switches: [check: :boolean, print: :boolean, write: :boolean],
+        strict: [check: :boolean, print: :boolean, write: :boolean],
         aliases: [c: :check, p: :print, w: :write]
       )
+
+    if invalid != [] do
+      usage_error("Invalid options for mix cure.rewrite: #{inspect(invalid)}")
+    end
 
     files = expand_paths(paths)
 
@@ -128,7 +132,7 @@ defmodule Mix.Tasks.Cure.Rewrite do
         rewrite_one(file, source, opts, stats)
 
       {:error, reason} ->
-        Mix.Shell.IO.error("  " <> Cure.Diagnostic.Host.render({:file_read_error, file, reason}, file))
+        Mix.shell().error(render_host_diagnostic({:file_read_error, file, reason}, file))
         Map.update!(stats, :errored, &(&1 + 1))
     end
   end
@@ -160,7 +164,7 @@ defmodule Mix.Tasks.Cure.Rewrite do
       end
     else
       {:error, reason} ->
-        Mix.Shell.IO.error("  " <> Host.render(reason, file, source))
+        Mix.shell().error(render_host_diagnostic(reason, file, source))
 
         Map.update!(stats, :errored, &(&1 + 1))
     end
@@ -169,6 +173,23 @@ defmodule Mix.Tasks.Cure.Rewrite do
   defp render(ast) do
     rendered = Printer.quoted_to_string(ast)
     if String.ends_with?(rendered, "\n"), do: rendered, else: rendered <> "\n"
+  end
+
+  defp render_host_diagnostic(reason, file, source \\ nil) do
+    {diagnostic, registry} = Cure.Diagnostic.Host.to_diagnostic(reason, file, source)
+
+    Sink.new(format: :plain, color: :auto, width: 80, registry: registry)
+    |> Sink.render(diagnostic)
+  end
+
+  defp usage_error(message) do
+    diagnostic = Cure.Diagnostic.Operational.usage(message)
+
+    Sink.new(format: :plain, color: :auto, width: 80)
+    |> Sink.render(diagnostic)
+    |> Mix.shell().error()
+
+    exit({:shutdown, 1})
   end
 
   defp summary(%{rewritten: r, unchanged: u, errored: e, previewed: p}, opts) do
