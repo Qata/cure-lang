@@ -39,7 +39,7 @@ defmodule Cure.Compiler.MacroDefParseTest do
   test "a body line that isn't a recognized rule keyword records a parse error" do
     {:ok, tokens} = Lexer.tokenize("macro Bad\n  oops\n", emit_events: false)
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
-    assert Enum.any?(errors, &match?({:expected, :syntax_rule, :got, _, _, _}, &1))
+    assert Enum.any?(errors, &match?({:expected, :syntax_rule, :got, _, _, _, %Cure.Diagnostic.Span{}}, &1))
   end
 
   test "a syntax rule with a typed hole captures name + kind in order" do

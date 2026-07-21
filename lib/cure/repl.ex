@@ -1583,7 +1583,7 @@ defmodule Cure.REPL do
   # `{:unexpected_token, :eof, ...}` (and the dedent/newline variants
   # the lexer emits at the synthetic end of input) are the parser's
   # way of saying "more tokens would have satisfied this rule".
-  defp error_at_eof?({:expected, _expected, :got, got, _line, _col})
+  defp error_at_eof?({:expected, _expected, :got, got, _line, _col, %Cure.Diagnostic.Span{}})
        when got in [:eof, :dedent, :newline],
        do: true
 

@@ -1215,7 +1215,9 @@ defmodule Cure.Compiler.Parser do
         {value, family_state}
 
       token ->
-        family_state = add_error(family_state, {:expected, :indent, :got, token.type, token.line, token.col})
+        family_state =
+          add_error(family_state, {:expected, :indent, :got, token.type, token.line, token.col, token.span})
+
         family_value(family_meta, %{}, family_state)
     end
   end
@@ -1274,7 +1276,12 @@ defmodule Cure.Compiler.Parser do
             parse_family_sections(state, family_meta, values)
 
           :error ->
-            state = add_error(state, {:expected, :syntax_family_field, :got, token.type, token.line, token.col})
+            state =
+              add_error(
+                state,
+                {:expected, :syntax_family_field, :got, token.type, token.line, token.col, token.span}
+              )
+
             parse_family_sections(advance(state), family_meta, values)
         end
     end
@@ -1432,7 +1439,13 @@ defmodule Cure.Compiler.Parser do
 
           _ ->
             token = peek(state)
-            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+
+            state =
+              add_error(
+                state,
+                {:expected, :syntax_family_production, :got, token.type, token.line, token.col, token.span}
+              )
+
             {{:family_repeated_values, []}, state}
         end
 
@@ -1443,7 +1456,13 @@ defmodule Cure.Compiler.Parser do
 
           :error ->
             token = peek(state)
-            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+
+            state =
+              add_error(
+                state,
+                {:expected, :syntax_family_production, :got, token.type, token.line, token.col, token.span}
+              )
+
             {{:family_repeated_values, []}, state}
         end
     end
@@ -1474,7 +1493,12 @@ defmodule Cure.Compiler.Parser do
             parse_family_production_entries(state, grammar, [value | values])
 
           :error ->
-            state = add_error(state, {:expected, :syntax_family_production, :got, token.type, token.line, token.col})
+            state =
+              add_error(
+                state,
+                {:expected, :syntax_family_production, :got, token.type, token.line, token.col, token.span}
+              )
+
             {_ignored, state} = parse_expr_or_block(advance(state))
             parse_family_production_entries(state, grammar, values)
         end
@@ -3150,7 +3174,7 @@ defmodule Cure.Compiler.Parser do
           advance(state)
 
         t ->
-          add_error(state, {:expected, :else, :got, t.type, t.line, t.col})
+          add_error(state, {:expected, :else, :got, t.type, t.line, t.col, t.span})
       end
 
     {failure_kw, state} =
@@ -3170,7 +3194,9 @@ defmodule Cure.Compiler.Parser do
 
       _ ->
         state =
-          add_error(state, {:expected, :failure_constructor, :got, peek(state).type, peek(state).line, peek(state).col})
+          t = peek(state)
+
+        add_error(state, {:expected, :failure_constructor, :got, t.type, t.line, t.col, t.span})
 
         {{:macro_check, [line: token.line, col: token.col], [condition, {:macro_fail, [name: "?"], []}]}, state}
     end
@@ -5918,7 +5944,8 @@ defmodule Cure.Compiler.Parser do
         end
 
       _ ->
-        error = {:expected, :fn, :got, peek(state).type, token.line, token.col}
+        observed = peek(state)
+        error = {:expected, :fn, :got, observed.type, observed.line, observed.col, observed.span}
         state = add_error(state, error)
         {error_node(token), state}
     end
@@ -8330,7 +8357,9 @@ defmodule Cure.Compiler.Parser do
         parse_macro_rules(state, [entry | acc])
 
       other ->
-        state = add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col})
+        state =
+          add_error(state, {:expected, :syntax_rule, :got, other.type, other.line, other.col, other.span})
+
         # Recover: skip a token so one bad line does not eat the block.
         parse_macro_rules(advance(state), acc)
     end
@@ -8357,7 +8386,7 @@ defmodule Cure.Compiler.Parser do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "with"} -> advance(state)
-        t -> add_error(state, {:expected, :with, :got, t.type, t.line, t.col})
+        t -> add_error(state, {:expected, :with, :got, t.type, t.line, t.col, t.span})
       end
 
     {expander, state} = parse_expr(state, 0)
@@ -8398,7 +8427,7 @@ defmodule Cure.Compiler.Parser do
          }, state}
 
       t ->
-        state = add_error(state, {:expected, :indent, :got, t.type, t.line, t.col})
+        state = add_error(state, {:expected, :indent, :got, t.type, t.line, t.col, t.span})
 
         {%{
            kind: :syntax_family,
@@ -8464,7 +8493,9 @@ defmodule Cure.Compiler.Parser do
         parse_syntax_family_fields(state, [field_entry | fields], includes, productions)
 
       other ->
-        state = add_error(state, {:expected, :family_field, :got, other.type, other.line, other.col})
+        state =
+          add_error(state, {:expected, :family_field, :got, other.type, other.line, other.col, other.span})
+
         parse_syntax_family_fields(advance(state), fields, includes, productions)
     end
   end
@@ -8586,7 +8617,7 @@ defmodule Cure.Compiler.Parser do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "becomes"} -> advance(state)
-        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col})
+        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col, t.span})
       end
 
     {template, state} = parse_expr(state, 0)
@@ -8630,7 +8661,7 @@ defmodule Cure.Compiler.Parser do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "by"} -> advance(state)
-        t -> add_error(state, {:expected, :by, :got, t.type, t.line, t.col})
+        t -> add_error(state, {:expected, :by, :got, t.type, t.line, t.col, t.span})
       end
 
     {elab, state} = parse_expr(state, 0)
@@ -8777,7 +8808,7 @@ defmodule Cure.Compiler.Parser do
         parse_example_lines(state, [ex | acc])
 
       other ->
-        state = add_error(state, {:expected, :example, :got, other.type, other.line, other.col})
+        state = add_error(state, {:expected, :example, :got, other.type, other.line, other.col, other.span})
         # Recover: skip one token so a bad line does not eat the block.
         parse_example_lines(advance(state), acc)
     end
@@ -8796,7 +8827,7 @@ defmodule Cure.Compiler.Parser do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "expands"} -> advance(state)
-        t -> add_error(state, {:expected, :expands, :got, t.type, t.line, t.col})
+        t -> add_error(state, {:expected, :expands, :got, t.type, t.line, t.col, t.span})
       end
 
     {expected, state} =
@@ -8842,7 +8873,7 @@ defmodule Cure.Compiler.Parser do
     state =
       case peek(state) do
         %Token{type: :identifier, value: "becomes"} -> advance(state)
-        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col})
+        t -> add_error(state, {:expected, :becomes, :got, t.type, t.line, t.col, t.span})
       end
 
     {template, state} = parse_expr(state, 0)
@@ -8939,7 +8970,7 @@ defmodule Cure.Compiler.Parser do
         {{:category, cat}, advance(state)}
 
       other ->
-        error = {:expected, :explain_point, :got, other.type, other.line, other.col}
+        error = {:expected, :explain_point, :got, other.type, other.line, other.col, other.span}
         state = add_error(state, error)
         {{:category, "?"}, state}
     end

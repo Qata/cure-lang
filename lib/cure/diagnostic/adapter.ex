@@ -1699,19 +1699,6 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
-  def from_error({:expected, expected, :got, actual, line, column}, opts) do
-    from_error(
-      %SyntaxProblem{
-        kind: :unexpected_token,
-        expected: expected,
-        observed: actual,
-        at: Keyword.get(opts, :span),
-        context: %{line: line, column: column}
-      },
-      opts
-    )
-  end
-
   def from_error({:expected, expected, :got, actual, line, column, %Span{} = span}, opts) do
     from_error(
       %SyntaxProblem{
@@ -1720,19 +1707,6 @@ defmodule Cure.Diagnostic.Adapter do
         observed: actual,
         at: Keyword.get(opts, :span, span),
         context: %{line: line, column: column}
-      },
-      opts
-    )
-  end
-
-  def from_error({:expected_token, expected, actual_type, actual_value, line, column}, opts) do
-    from_error(
-      %SyntaxProblem{
-        kind: :unexpected_token,
-        expected: expected,
-        observed: if(is_nil(actual_value), do: actual_type, else: actual_value),
-        at: Keyword.get(opts, :span),
-        context: %{line: line, column: column, token_type: actual_type}
       },
       opts
     )
@@ -3908,6 +3882,7 @@ defmodule Cure.Diagnostic.Adapter do
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_malformed}), do: "Edition pragma is malformed"
   defp syntax_problem_title(%SyntaxProblem{kind: :edition_pragma_unknown}), do: "Edition is unknown"
   defp syntax_problem_title(%SyntaxProblem{kind: :recovered_statement}), do: "Invalid statement"
+  defp syntax_problem_title(%SyntaxProblem{expected: :explain_point}), do: "Explanation clause needs a failure point"
   defp syntax_problem_title(_problem), do: "I got stuck while parsing this"
 
   defp syntax_problem_context(%SyntaxProblem{kind: :unterminated_lambda}),
@@ -3974,6 +3949,10 @@ defmodule Cure.Diagnostic.Adapter do
     do:
       "The parser could not continue this statement after #{syntax_name(observed)}, so it resumed at the next statement boundary."
 
+  defp syntax_problem_context(%SyntaxProblem{expected: :explain_point, observed: observed}),
+    do:
+      "#{String.capitalize(syntax_name(observed))} starts an explanation message, but each clause must first name a failure category or `keyword \"...\"`."
+
   defp syntax_problem_context(%SyntaxProblem{observed: :eof}),
     do: "The source ended while I was still parsing this construct."
 
@@ -3982,6 +3961,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_expected_doc(%SyntaxProblem{expected: nil, alternatives: []}), do: Doc.empty()
   defp syntax_expected_doc(%SyntaxProblem{kind: :macro_use_mismatch}), do: Doc.empty()
+  defp syntax_expected_doc(%SyntaxProblem{expected: :explain_point}), do: Doc.empty()
 
   defp syntax_expected_doc(%SyntaxProblem{} = problem) do
     expected = [problem.expected | problem.alternatives] |> Enum.reject(&is_nil/1) |> Enum.map(&syntax_name/1)
@@ -4034,6 +4014,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda}), do: "the unclosed body reaches here"
   defp syntax_problem_label(%SyntaxProblem{kind: :recovered_statement}), do: "parsing resumed after this token"
+  defp syntax_problem_label(%SyntaxProblem{expected: :explain_point}), do: "name the failure point before this arrow"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :non_associative}),
     do: "this second operator makes the chain ambiguous"
@@ -4117,6 +4098,14 @@ defmodule Cure.Diagnostic.Adapter do
            applicability: :manual
          }
        ]
+
+  defp syntax_insertions(%SyntaxProblem{expected: :explain_point}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Write `Category => message` or `keyword \"word\" => message`",
+        applicability: :manual
+      }
+    ]
 
   defp syntax_insertions(_problem, _span), do: []
 

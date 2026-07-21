@@ -129,10 +129,12 @@ defmodule Cure.Diagnostic.HostTest do
 
   test "expected-token syntax failures retain the authored token spelling" do
     source = "fn run(] -> Int = 1\n"
+    assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "syntax.cure", emit_events: false)
+    token = Enum.find(tokens, &(&1.type == :rbracket))
 
     {diagnostic, registry} =
       Cure.Compiler.Errors.to_diagnostic(
-        {:expected_token, :rparen, :rbracket, "]", 1, 8},
+        {:expected_token, :rparen, :rbracket, "]", token.line, token.col, token.span},
         "syntax.cure",
         source
       )

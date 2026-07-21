@@ -1,7 +1,8 @@
 # test/cure/compiler/macro_explain_test.exs
 defmodule Cure.Compiler.MacroExplainTest do
   use ExUnit.Case, async: true
-  alias Cure.Compiler.{Lexer, Parser}
+  alias Cure.Compiler.{Errors, Lexer, Parser}
+  alias Cure.Diagnostic.Renderer
 
   defp parse!(src) do
     {:ok, tokens} = Lexer.tokenize(src, emit_events: false)
@@ -27,17 +28,47 @@ defmodule Cure.Compiler.MacroExplainTest do
   end
 
   test "a malformed explain point (stray '=>' with no preceding point) is a recorded parse error, not a crash" do
+    source =
+      "macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n  explain\n    => \"oops\"\n"
+
     {:ok, tokens} =
       Lexer.tokenize(
-        "macro Every\n  syntax every <t: Duration> becomes Timer.repeat(t)\n  explain\n    => \"oops\"\n",
+        source,
+        file: "explain.cure",
         emit_events: false
       )
 
     assert {:error, errors} = Parser.parse(tokens, emit_events: false)
-    assert Enum.any?(errors, &match?({:expected, :explain_point, :got, _, _, _}, &1))
+
+    assert [{:expected, :explain_point, :got, :fat_arrow, 4, 5, %Cure.Diagnostic.Span{} = span} = error] =
+             errors
+
+    assert span.start_column == 5
+    assert span.end_column == 7
+
+    {diagnostic, registry} = Errors.to_diagnostic({:parse_error, [error]}, "explain.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- EXPLANATION CLAUSE NEEDS A FAILURE POINT [E094] ---------------- explain.cure
+
+             '=>' starts an explanation message, but each clause must first name a failure
+             category or `keyword "..."`.
+
+             at explain.cure:4:5
+             4 |     => "oops"
+               |     ^^ name the failure point before this arrow
+
+             Hint: Write `Category => message` or `keyword "word" => message`
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 3, "character" => 4},
+             "end" => %{"line" => 3, "character" => 6}
+           }
   end
 
-  alias Cure.Compiler.{MacroValidate, Errors}
+  alias Cure.Compiler.MacroValidate
 
   defp macro_def!(src) do
     node = parse!(src)

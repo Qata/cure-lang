@@ -63,7 +63,9 @@ defmodule Cure.DiagnosticTest do
 
   test "parser diagnostics underline the full unexpected token" do
     source = "mod Demo\n  fn run(] -> Int = 1\n"
-    error = {:parse_error, [{:expected, :rparen, :got, :arrow, 2, 12}]}
+    assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "demo.cure", emit_events: false)
+    token = Enum.find(tokens, &(&1.type == :arrow))
+    error = {:parse_error, [{:expected, :rparen, :got, :arrow, token.line, token.col, token.span}]}
     {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
 
     assert diagnostic.primary.span.end_column - diagnostic.primary.span.start_column == 2
@@ -78,8 +80,11 @@ defmodule Cure.DiagnosticTest do
   end
 
   test "parser diagnostics quote binary token spellings with single quotes" do
-    error = {:parse_error, [{:expected, :rparen, :got, "->", 2, 12}]}
-    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", "fn f( -> Int = 1\n")
+    source = "fn f( -> Int = 1\n"
+    assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "demo.cure", emit_events: false)
+    token = Enum.find(tokens, &(&1.type == :arrow))
+    error = {:parse_error, [{:expected, :rparen, :got, "->", token.line, token.col, token.span}]}
+    {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
 
     assert Renderer.plain(diagnostic, registry) =~ "'->' cannot appear"
     refute Renderer.plain(diagnostic, registry) =~ "\"->\""
@@ -87,7 +92,9 @@ defmodule Cure.DiagnosticTest do
 
   test "parser diagnostic widths come from lexer spans rather than a token-width table" do
     source = "mod Demo\n  fn run(x) => Int = x\n"
-    error = {:parse_error, [{:expected, :arrow, :got, :fat_arrow, 2, 13}]}
+    assert {:ok, tokens} = Cure.Compiler.Lexer.tokenize(source, file: "demo.cure", emit_events: false)
+    token = Enum.find(tokens, &(&1.type == :fat_arrow))
+    error = {:parse_error, [{:expected, :arrow, :got, :fat_arrow, token.line, token.col, token.span}]}
     {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(error, "demo.cure", source)
 
     assert diagnostic.primary.span.end_byte - diagnostic.primary.span.start_byte == 2
