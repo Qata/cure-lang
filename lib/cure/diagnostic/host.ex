@@ -55,7 +55,19 @@ defmodule Cure.Diagnostic.Host do
 
   defp convert(reason, file, source) do
     if operational_reason?(reason) do
-      {:ok, Operational.from_error(reason), nil}
+      diagnostic = Operational.from_error(reason)
+
+      case source do
+        source when is_binary(source) and byte_size(source) > 0 ->
+          registry =
+            Cure.Diagnostic.SourceRegistry.new()
+            |> Cure.Diagnostic.SourceRegistry.register(file, source, file)
+
+          {:ok, remap_operational_span(diagnostic, registry, file), registry}
+
+        _ ->
+          {:ok, diagnostic, nil}
+      end
     else
       {diagnostic, registry} = Cure.Compiler.Errors.to_diagnostic(reason, file, source)
       {:ok, diagnostic, registry}
@@ -71,6 +83,20 @@ defmodule Cure.Diagnostic.Host do
       {:error, _reason} -> ""
     end
   end
+
+  defp remap_operational_span(
+         %Cure.Diagnostic{primary: %Cure.Diagnostic.Label{span: %Cure.Diagnostic.Span{} = span} = label} =
+           diagnostic,
+         registry,
+         source_id
+       ) do
+    case Cure.Diagnostic.SourceRegistry.span_at(registry, source_id, span.start_line, span.start_column, 0) do
+      {:ok, remapped} -> %{diagnostic | primary: %{label | span: remapped}}
+      {:error, _} -> diagnostic
+    end
+  end
+
+  defp remap_operational_span(diagnostic, _registry, _source_id), do: diagnostic
 
   defp operational_reason?({:file_read_error, _, _}), do: true
   defp operational_reason?({:file_write_error, _, _}), do: true

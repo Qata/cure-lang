@@ -78,6 +78,21 @@ defmodule Cure.Diagnostic.HostTest do
     assert rendered =~ "^"
   end
 
+  test "Host preserves a source registry for operational warning carets" do
+    source = "line one\nline two\nline three\n"
+
+    {diagnostic, registry} =
+      Host.to_diagnostic(
+        {:migration_warning, %{rule: :legacy, file: "demo.cure", line: 2, message: "migrate this"}},
+        "demo.cure",
+        source
+      )
+
+    assert registry != nil
+    assert diagnostic.primary.span.start_line == 2
+    assert Cure.Diagnostic.Renderer.plain(diagnostic, registry) =~ "2 | line two"
+  end
+
   test "renders macro syntax failures as contextual syntax diagnostics" do
     source = "fn run() -> Int = say nope\n"
 
