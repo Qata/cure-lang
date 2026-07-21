@@ -3934,9 +3934,11 @@ defmodule Cure.Diagnostic.Adapter do
   defp type_problem_title(_origin), do: "Type mismatch"
 
   defp syntax_problem_code(:unterminated_lambda), do: "E035"
+  defp syntax_problem_code(:unrecognized_pattern), do: "E090"
   defp syntax_problem_code(_kind), do: "E094"
 
   defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_lambda}), do: "Lambda body is not closed"
+  defp syntax_problem_title(%SyntaxProblem{kind: :unrecognized_pattern}), do: "Pattern is not supported"
   defp syntax_problem_title(%SyntaxProblem{kind: :tab_not_allowed}), do: "Tabs are not valid indentation"
   defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_string}), do: "String is not closed"
   defp syntax_problem_title(%SyntaxProblem{kind: :unterminated_char}), do: "Character is not closed"
@@ -3958,6 +3960,13 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_context(%SyntaxProblem{kind: :unterminated_lambda}),
     do: "This multi-statement lambda body reaches the end of its container without a closing delimiter."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unrecognized_pattern, observed: :range}),
+    do:
+      "A range describes many values, but a pattern must describe a shape Cure can deconstruct. Bind the value and test the range in a guard instead."
+
+  defp syntax_problem_context(%SyntaxProblem{kind: :unrecognized_pattern, observed: observed}),
+    do: "#{String.capitalize(syntax_name(observed))} is not a pattern form Cure can deconstruct here."
 
   defp syntax_problem_context(%SyntaxProblem{kind: :tab_not_allowed}),
     do: "Cure indentation uses spaces so that block structure is the same in every editor."
@@ -4083,6 +4092,11 @@ defmodule Cure.Diagnostic.Adapter do
   end
 
   defp syntax_problem_label(%SyntaxProblem{kind: :unterminated_lambda}), do: "the unclosed body reaches here"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unrecognized_pattern, observed: :range}),
+    do: "a range operator cannot be used in a pattern"
+
+  defp syntax_problem_label(%SyntaxProblem{kind: :unrecognized_pattern}), do: "this pattern form is not supported"
   defp syntax_problem_label(%SyntaxProblem{expected: :explain_point}), do: "name the failure point before this arrow"
 
   defp syntax_problem_label(%SyntaxProblem{kind: :non_associative}),
@@ -4204,6 +4218,14 @@ defmodule Cure.Diagnostic.Adapter do
            applicability: :manual
          }
        ]
+
+  defp syntax_insertions(%SyntaxProblem{kind: :unrecognized_pattern, observed: :range}, %Span{}),
+    do: [
+      %Suggestion{
+        message: "Bind the value, then test its bounds with `when`",
+        applicability: :manual
+      }
+    ]
 
   defp syntax_insertions(%SyntaxProblem{expected: :explain_point}, %Span{}),
     do: [
