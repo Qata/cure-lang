@@ -602,6 +602,15 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:source_context, {:rule_unpinned, keywords}, context}, opts) when is_map(context),
     do: macro_validation_failure(:rule_unpinned, keywords, opts, context)
 
+  def from_error({:source_context, {:example_mismatch, mismatches}, context}, opts) when is_map(context),
+    do: macro_validation_failure(:example_mismatch, mismatches, opts, context)
+
+  def from_error({:source_context, {:example_type_mismatch, failures}, context}, opts) when is_map(context),
+    do: macro_validation_failure(:example_type_mismatch, failures, opts, context)
+
+  def from_error({:source_context, {:computed_example_error, failures}, context}, opts) when is_map(context),
+    do: macro_validation_failure(:computed_example_error, failures, opts, context)
+
   def from_error({:example_mismatch, mismatches}, opts),
     do: macro_validation_failure(:example_mismatch, mismatches, opts)
 
@@ -4421,10 +4430,16 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp macro_validation_title(:missing_diagnosis), do: "Macro explanations are incomplete"
   defp macro_validation_title(:rule_unpinned), do: "Macro rule needs a worked example"
+  defp macro_validation_title(:example_mismatch), do: "Macro example has the wrong expansion"
+  defp macro_validation_title(:example_type_mismatch), do: "Macro example has the wrong type"
+  defp macro_validation_title(:computed_example_error), do: "Computed macro example failed"
   defp macro_validation_title(_kind), do: "Macro validation failed"
 
   defp macro_validation_primary_label(:missing_diagnosis), do: "add clauses for the unexplained failure points"
   defp macro_validation_primary_label(:rule_unpinned), do: "add a worked example beneath this rule"
+  defp macro_validation_primary_label(:example_mismatch), do: "this pin does not match the actual expansion"
+  defp macro_validation_primary_label(:example_type_mismatch), do: "this pinned type does not accept the expansion"
+  defp macro_validation_primary_label(:computed_example_error), do: "this computed example could not be checked"
   defp macro_validation_primary_label(_kind), do: "this macro declaration is incomplete or inconsistent"
 
   defp macro_validation_secondary_labels(:missing_diagnosis, context, primary_span) do
@@ -4442,6 +4457,14 @@ defmodule Cure.Diagnostic.Adapter do
     |> Enum.reject(&(&1.span == primary_span))
   end
 
+  defp macro_validation_secondary_labels(kind, context, primary_span)
+       when kind in [:example_mismatch, :example_type_mismatch, :computed_example_error] do
+    context
+    |> Map.get(:rule_spans, [])
+    |> Enum.map(&pickup_label(&1, :secondary, "this rule owns the failing example"))
+    |> Enum.reject(&(&1.span == primary_span))
+  end
+
   defp macro_validation_secondary_labels(_kind, _context, _primary_span), do: []
 
   defp macro_validation_suggestions(:missing_diagnosis),
@@ -4451,6 +4474,15 @@ defmodule Cure.Diagnostic.Adapter do
     do: [
       %Suggestion{message: "Add `example use_site expands expected` beneath each listed rule", applicability: :manual}
     ]
+
+  defp macro_validation_suggestions(:example_mismatch),
+    do: [%Suggestion{message: "Update the pinned expansion or fix the macro rule", applicability: :manual}]
+
+  defp macro_validation_suggestions(:example_type_mismatch),
+    do: [%Suggestion{message: "Use the expansion's actual type or fix the macro rule", applicability: :manual}]
+
+  defp macro_validation_suggestions(:computed_example_error),
+    do: [%Suggestion{message: "Fix the computed expander or its worked example", applicability: :manual}]
 
   defp macro_validation_suggestions(_kind), do: []
 

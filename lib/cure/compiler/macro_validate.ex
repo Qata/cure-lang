@@ -45,7 +45,7 @@ defmodule Cure.Compiler.MacroValidate do
            :ok <- check_expansion_proof(macro_def, env) do
         {:cont, :ok}
       else
-        {:error, _} = error -> {:halt, error}
+        {:error, _} = error -> {:halt, contextualize_validation(error, macro_def)}
       end
     end)
   end
@@ -72,9 +72,20 @@ defmodule Cure.Compiler.MacroValidate do
 
   defp contextualize_validation(:ok, _macro_def), do: :ok
 
-  defp contextualize_validation({:error, reason}, {:macro_def, meta, rules}) do
+  defp contextualize_validation({:error, {:source_context, _reason, _context}} = error, _macro_def), do: error
+
+  defp contextualize_validation({:error, {kind, _details} = reason}, {:macro_def, meta, rules})
+       when kind in [
+              :missing_diagnosis,
+              :rule_unpinned,
+              :example_mismatch,
+              :example_type_mismatch,
+              :computed_example_error
+            ] do
     {:error, {:source_context, reason, validation_source_context(reason, meta, rules)}}
   end
+
+  defp contextualize_validation({:error, _reason} = error, _macro_def), do: error
 
   defp validation_source_context({:missing_diagnosis, points}, meta, rules) do
     explain_span =
@@ -119,6 +130,23 @@ defmodule Cure.Compiler.MacroValidate do
       related_spans: Enum.drop(rule_spans, 1),
       macro: Keyword.get(meta, :name),
       expression_category: :macro_validation
+    }
+  end
+
+  defp validation_source_context({kind, details}, meta, _rules)
+       when kind in [:example_mismatch, :example_type_mismatch, :computed_example_error] and is_list(details) do
+    example_spans = details |> Enum.map(&Map.get(&1, :source_span)) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    rule_spans = details |> Enum.map(&Map.get(&1, :rule_span)) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    macro_span = macro_source_span(meta)
+
+    %{
+      span: List.first(example_spans) || List.first(rule_spans) || macro_span,
+      macro_span: macro_span,
+      example_spans: example_spans,
+      rule_spans: rule_spans,
+      related_spans: rule_spans ++ Enum.drop(example_spans, 1),
+      macro: Keyword.get(meta, :name),
+      expression_category: :macro_example_validation
     }
   end
 
@@ -292,9 +320,12 @@ defmodule Cure.Compiler.MacroValidate do
       rules
       |> Enum.filter(&(&1[:kind] == :syntax))
       |> Enum.flat_map(fn rule ->
-        Enum.map(Map.get(rule, :examples, []), fn %{use_site: use_site, expected: expected} ->
+        Enum.map(Map.get(rule, :examples, []), fn %{use_site: use_site, expected: expected} = example ->
           actual = Parser.expand_example(rules, use_site)
-          check_example_pin(rule.keyword, actual, expected, env)
+
+          rule.keyword
+          |> check_example_pin(actual, expected, env)
+          |> attach_example_source(example, rule)
         end)
       end)
 
@@ -334,6 +365,17 @@ defmodule Cure.Compiler.MacroValidate do
     end
   end
 
+  defp attach_example_source(:ok, _example, _rule), do: :ok
+
+  defp attach_example_source({status, details}, example, rule) when status in [:mismatch, :type_failure, :failure] do
+    {status,
+     details
+     |> Map.put(:source_span, Map.get(example, :source_span))
+     |> Map.put(:use_site_span, Map.get(example, :use_site_span))
+     |> Map.put(:expected_span, Map.get(example, :expected_span))
+     |> Map.put(:rule_span, Map.get(rule, :head_span) || Map.get(rule, :source_span))}
+  end
+
   @doc """
   Execute expansion pins attached to `computed by` rules in a module environment.
 
@@ -351,20 +393,23 @@ defmodule Cure.Compiler.MacroValidate do
       rules
       |> Enum.filter(&(&1[:kind] == :computed))
       |> Enum.flat_map(fn rule ->
-        for %{use_site: use_site, expected: {:expansion, expected}} <- Map.get(rule, :examples, []) do
+        for %{use_site: use_site, expected: {:expansion, expected}} = example <- Map.get(rule, :examples, []) do
           actual = Parser.expand_example(rules, use_site)
 
-          case MacroExpand.expand(actual, env) do
-            {:ok, expanded} ->
-              if normalize_for_comparison(expanded) == normalize_for_comparison(expected) do
-                :ok
-              else
-                {:mismatch, %{keyword: rule.keyword, expected: expected, actual: expanded}}
-              end
+          result =
+            case MacroExpand.expand(actual, env) do
+              {:ok, expanded} ->
+                if normalize_for_comparison(expanded) == normalize_for_comparison(expected) do
+                  :ok
+                else
+                  {:mismatch, %{keyword: rule.keyword, expected: expected, actual: expanded}}
+                end
 
-            {:error, reason} ->
-              {:failure, %{keyword: rule.keyword, reason: reason}}
-          end
+              {:error, reason} ->
+                {:failure, %{keyword: rule.keyword, reason: reason}}
+            end
+
+          attach_example_source(result, example, rule)
         end
       end)
 

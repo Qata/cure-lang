@@ -1,6 +1,8 @@
 defmodule Cure.Elab.MacroValidationWiringTest do
   use ExUnit.Case, async: true
 
+  alias Cure.Compiler.Errors
+  alias Cure.Diagnostic.Renderer
   alias Cure.Elab.Program
 
   test "compilation rejects a macro with an uncovered diagnosis point" do
@@ -13,7 +15,9 @@ defmodule Cure.Elab.MacroValidationWiringTest do
             "starts with every"
     """
 
-    assert {:error, {:missing_diagnosis, points}} = Program.elaborate(source)
+    assert {:error, {:source_context, {:missing_diagnosis, points}, %{span: %Cure.Diagnostic.Span{}}}} =
+             Program.elaborate(source)
+
     assert {:hole_kind, "Duration"} in points
   end
 
@@ -27,7 +31,8 @@ defmodule Cure.Elab.MacroValidationWiringTest do
             "starts with now"
     """
 
-    assert {:error, {:rule_unpinned, ["now"]}} = Program.elaborate(source)
+    assert {:error, {:source_context, {:rule_unpinned, ["now"]}, %{span: %Cure.Diagnostic.Span{}}}} =
+             Program.elaborate(source)
   end
 
   test "compilation rejects a mismatched syntax expansion pin" do
@@ -41,7 +46,32 @@ defmodule Cure.Elab.MacroValidationWiringTest do
             "starts with now"
     """
 
-    assert {:error, {:example_mismatch, [%{keyword: "now"}]}} = Program.elaborate(source)
+    assert {:error,
+            {:source_context, {:example_mismatch, [%{keyword: "now", source_span: %Cure.Diagnostic.Span{}}]},
+             %{span: %Cure.Diagnostic.Span{}, rule_spans: [%Cure.Diagnostic.Span{}]}} = reason} =
+             Program.elaborate(source)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "example_pin.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO EXAMPLE HAS THE WRONG EXPANSION [E092] --------------- example_pin.cure
+
+             Macro example(s) do not match their actual expansions: now.
+
+             at example_pin.cure:4:7
+             3 |     syntax now becomes 0
+               |     -------------------- this rule owns the failing example
+             4 |       example now expands 1
+               |       ^^^^^^^^^^^^^^^^^^^^^ this pin does not match the actual expansion
+
+             Hint: Update the pinned expansion or fix the macro rule
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 3, "character" => 6},
+             "end" => %{"line" => 3, "character" => 27}
+           }
   end
 
   test "compilation accepts a fully pinned computed rule" do
@@ -89,7 +119,32 @@ defmodule Cure.Elab.MacroValidationWiringTest do
             "starts with one"
     """
 
-    assert {:error, {:example_type_mismatch, [%{keyword: "one"}]}} = Program.elaborate(source)
+    assert {:error,
+            {:source_context, {:example_type_mismatch, [%{keyword: "one", source_span: %Cure.Diagnostic.Span{}}]},
+             %{span: %Cure.Diagnostic.Span{}, rule_spans: [%Cure.Diagnostic.Span{}]}} = reason} =
+             Program.elaborate(source)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "example_type.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO EXAMPLE HAS THE WRONG TYPE [E092] ------------------- example_type.cure
+
+             Macro example(s) have the wrong type: one.
+
+             at example_type.cure:4:7
+             3 |     syntax one becomes 1
+               |     -------------------- this rule owns the failing example
+             4 |       example one expands : String
+               |       ^^^^^^^^^^^^^^^^^^^^^^^^^^^^ this pinned type does not accept the expansion
+
+             Hint: Use the expansion's actual type or fix the macro rule
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 3, "character" => 6},
+             "end" => %{"line" => 3, "character" => 34}
+           }
   end
 
   test "compilation rejects a macro whose generated expansion is ill-typed" do

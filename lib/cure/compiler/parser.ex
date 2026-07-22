@@ -11575,6 +11575,7 @@ defmodule Cure.Compiler.Parser do
       module_rule: keyword == "module",
       progress: nil,
       line: kw_token.line,
+      head_span: macro_rule_source_span(kw_token, ast_source_span(template)),
       source_span: macro_rule_source_span(kw_token, terminal_span)
     }
 
@@ -11621,6 +11622,7 @@ defmodule Cure.Compiler.Parser do
       module_rule: keyword == "module",
       progress: nil,
       line: kw_token.line,
+      head_span: macro_rule_source_span(kw_token, ast_source_span(elab)),
       source_span: macro_rule_source_span(kw_token, terminal_span)
     }
 
@@ -11776,6 +11778,13 @@ defmodule Cure.Compiler.Parser do
     kw = peek(state)
     state = advance(state)
     {use_site, state} = collect_until_expands(state, [])
+    use_site = Enum.reverse(use_site)
+
+    use_site_span =
+      case use_site do
+        [] -> nil
+        tokens -> through_spans(List.first(tokens).span, List.last(tokens).span) || List.first(tokens).span
+      end
 
     state = expect_macro_rule_keyword(state, :expands, :macro_example_expands_missing, kw)
 
@@ -11790,11 +11799,16 @@ defmodule Cure.Compiler.Parser do
           {{:expansion, ast}, state}
       end
 
+    expected_span = expected |> elem(1) |> ast_source_span()
+
     {%{
-       use_site: Enum.reverse(use_site),
+       use_site: use_site,
        expected: expected,
        line: kw.line,
-       source_span: macro_rule_source_span(kw, expected |> elem(1) |> ast_source_span())
+       keyword_span: kw.span,
+       use_site_span: use_site_span,
+       expected_span: expected_span,
+       source_span: macro_rule_source_span(kw, expected_span)
      }, state}
   end
 
