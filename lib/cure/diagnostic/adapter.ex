@@ -1167,6 +1167,10 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  def from_error({:source_context, {:record_update_base_mismatch, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: record_update_base_failure(details, context, opts)
+
   def from_error({:source_context, {kind, name}, context}, opts)
       when kind in [:unknown_ctor, :foreign_ctor, :unknown_pattern_constructor, :unknown_family] and
              is_map(context) do
@@ -3776,6 +3780,55 @@ defmodule Cure.Diagnostic.Adapter do
     )
   end
 
+  defp record_update_base_failure(details, context, opts) do
+    record = Map.fetch!(details, :record)
+    actual = Map.fetch!(details, :actual)
+    record_surface = surface_declaration_name(record)
+    actual_surface = if(is_atom(actual), do: surface_declaration_name(actual), else: surface_type(actual))
+    base_span = Map.get(context, :base_span) || Map.get(context, :span)
+    record_span = Map.get(context, :record_name_span)
+
+    secondary =
+      case record_span do
+        %Span{} = span when span != base_span ->
+          [%Label{span: span, style: :secondary, message: "this update constructs `#{record_surface}`"}]
+
+        _ ->
+          []
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "`#{record_surface}` update needs a `#{record_surface}` value",
+      body:
+        Doc.paragraph(
+          "The value before `|` has type `#{actual_surface}`, but a `#{record_surface}` update must start from another `#{record_surface}` value."
+        ),
+      primary:
+        if(base_span,
+          do: %Label{span: base_span, style: :primary, message: "this value has type `#{actual_surface}`"},
+          else: primary_label(opts, "use a `#{record_surface}` value here")
+        ),
+      secondary: secondary,
+      suggestions: [
+        %Suggestion{
+          message: "Use a `#{record_surface}` value before `|`",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :record_update_base_mismatch,
+        record: record,
+        record_surface: record_surface,
+        actual: actual,
+        actual_surface: actual_surface,
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
   defp record_owner(name) do
     case name_to_string(name) |> String.split("#", parts: 2) do
       [owner, _name] -> owner
@@ -4507,32 +4560,38 @@ defmodule Cure.Diagnostic.Adapter do
       end
 
     spans = Map.get(details, :spans, [])
-    {primary, secondary} = conflict_labels(spans, opts, kind)
+    {primary, secondary} = conflict_labels(spans, opts, kind, details)
 
     Diagnostic.new(
       code: "E105",
       key: :declaration_conflict,
       severity: :error,
       title: declaration_conflict_title(kind),
-      body: Doc.paragraph(declaration_conflict_message(kind, name, detail)),
+      body: Doc.paragraph(declaration_conflict_message(kind, name, conflict_message_detail(kind, details, detail))),
       primary: primary,
       secondary: secondary,
+      suggestions: declaration_conflict_suggestions(kind, details),
       payload: Map.put(details, :kind, kind)
     )
   end
 
-  defp conflict_labels([first, second | rest], _opts, kind) do
-    primary = %Label{span: second, style: :primary, message: duplicate_primary_label(kind)}
+  defp conflict_labels([first, second | rest], _opts, kind, details) do
+    primary = %Label{span: second, style: :primary, message: duplicate_primary_label(kind, details)}
+
+    first_message =
+      if Map.get(details, :operation),
+        do: "this field was first supplied here",
+        else: "the name was first declared here"
 
     secondary =
-      [%Label{span: first, style: :secondary, message: "the name was first declared here"}] ++
+      [%Label{span: first, style: :secondary, message: first_message}] ++
         Enum.map(rest, &%Label{span: &1, style: :secondary, message: "another duplicate is here"})
 
     {primary, secondary}
   end
 
-  defp conflict_labels(_spans, opts, kind),
-    do: {primary_label(opts, duplicate_primary_label(kind)), []}
+  defp conflict_labels(_spans, opts, kind, details),
+    do: {primary_label(opts, duplicate_primary_label(kind, details)), []}
 
   defp declaration_conflict_title(:duplicate_parameter), do: "Duplicate parameter"
   defp declaration_conflict_title(:duplicate_field), do: "Duplicate field"
@@ -4542,9 +4601,21 @@ defmodule Cure.Diagnostic.Adapter do
   defp declaration_conflict_title(:sibling_module_collision), do: "Name repeated across sibling modules"
   defp declaration_conflict_title(_kind), do: "Declaration conflict"
 
+  defp conflict_message_detail(:duplicate_field, %{operation: operation} = details, _detail)
+       when operation in [:construction, :update],
+       do: details
+
+  defp conflict_message_detail(_kind, _details, detail), do: detail
+
   defp declaration_conflict_message(:duplicate_parameter, name, _detail),
     do:
       "The parameter `#{name}` is declared more than once. Rename or remove one occurrence so every parameter has a unique name."
+
+  defp declaration_conflict_message(:duplicate_field, name, %{operation: operation, record: record}) do
+    action = if(operation == :update, do: "updating", else: "constructing")
+
+    "The field `#{name}` is supplied more than once while #{action} `#{surface_declaration_name(record)}`. A record value can provide each field only once."
+  end
 
   defp declaration_conflict_message(:duplicate_field, name, _detail),
     do:
@@ -4565,16 +4636,26 @@ defmodule Cure.Diagnostic.Adapter do
   defp declaration_conflict_message(_kind, name, detail),
     do: "The declaration `#{name}` conflicts with another visible declaration#{detail}."
 
-  defp duplicate_primary_label(:duplicate_parameter), do: "this parameter repeats an earlier name"
-  defp duplicate_primary_label(:duplicate_field), do: "this field repeats an earlier name"
-  defp duplicate_primary_label(:duplicate_index), do: "this index repeats an earlier name"
-  defp duplicate_primary_label(:duplicate_type), do: "this type repeats an earlier declaration"
-  defp duplicate_primary_label(:duplicate_constructor), do: "this constructor repeats an earlier declaration"
+  defp duplicate_primary_label(:duplicate_field, %{operation: operation}) when operation in [:construction, :update],
+    do: "this field is supplied again"
 
-  defp duplicate_primary_label(:sibling_module_collision),
+  defp duplicate_primary_label(:duplicate_parameter, _details), do: "this parameter repeats an earlier name"
+  defp duplicate_primary_label(:duplicate_field, _details), do: "this field repeats an earlier name"
+  defp duplicate_primary_label(:duplicate_index, _details), do: "this index repeats an earlier name"
+  defp duplicate_primary_label(:duplicate_type, _details), do: "this type repeats an earlier declaration"
+  defp duplicate_primary_label(:duplicate_constructor, _details), do: "this constructor repeats an earlier declaration"
+
+  defp duplicate_primary_label(:sibling_module_collision, _details),
     do: "this name is already declared in another sibling module"
 
-  defp duplicate_primary_label(_kind), do: "rename this declaration or make its identity unique"
+  defp duplicate_primary_label(_kind, _details), do: "rename this declaration or make its identity unique"
+
+  defp declaration_conflict_suggestions(:duplicate_field, %{operation: operation, name: name})
+       when operation in [:construction, :update] do
+    [%Suggestion{message: "Remove one `#{name}` field", applicability: :manual}]
+  end
+
+  defp declaration_conflict_suggestions(_kind, _details), do: []
 
   defp interface_failure(kind, details, opts) do
     {title, message, label} =

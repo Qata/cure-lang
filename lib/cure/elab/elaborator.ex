@@ -59,31 +59,33 @@ defmodule Cure.Elab.Elaborator do
         {:error, {:unknown_record, atom}}
 
       ctor ->
-        order = Enum.map(ctor.args, fn {n, _t} -> n end)
-        defaults = Map.get(ctor, :field_defaults, %{})
-        provided = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
+        with :ok <- reject_duplicate_record_fields(field_pairs, atom, :construction) do
+          order = Enum.map(ctor.args, fn {n, _t} -> n end)
+          defaults = Map.get(ctor, :field_defaults, %{})
+          provided = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
 
-        cond do
-          # A named field is not a field of this record.
-          not Enum.all?(Map.keys(provided), &(&1 in order)) ->
-            {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
+          cond do
+            # A named field is not a field of this record.
+            not Enum.all?(Map.keys(provided), &(&1 in order)) ->
+              {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
 
-          # Every field must be supplied by the caller or carry a declared default
-          # (`name: String = "Anonymous"`); an omitted field with no default is a
-          # genuine mismatch.
-          not Enum.all?(order, &(Map.has_key?(provided, &1) or Map.has_key?(defaults, &1))) ->
-            {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
+            # Every field must be supplied by the caller or carry a declared default
+            # (`name: String = "Anonymous"`); an omitted field with no default is a
+            # genuine mismatch.
+            not Enum.all?(order, &(Map.has_key?(provided, &1) or Map.has_key?(defaults, &1))) ->
+              {:error, record_field_mismatch(atom, order, defaults, Map.keys(provided))}
 
-          true ->
-            values =
-              Enum.map(order, fn f ->
-                case Map.fetch(provided, f) do
-                  {:ok, val} -> val
-                  :error -> Map.fetch!(defaults, f)
-                end
-              end)
+            true ->
+              values =
+                Enum.map(order, fn f ->
+                  case Map.fetch(provided, f) do
+                    {:ok, val} -> val
+                    :error -> Map.fetch!(defaults, f)
+                  end
+                end)
 
-            {:ok, {:function_call, [name: name], values}}
+              {:ok, {:function_call, [name: name], values}}
+          end
         end
     end
   end
@@ -101,21 +103,23 @@ defmodule Cure.Elab.Elaborator do
         {:error, {:unknown_record, atom}}
 
       ctor ->
-        order = Enum.map(ctor.args, fn {n, _t} -> n end)
-        overrides = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
+        with :ok <- reject_duplicate_record_fields(field_pairs, atom, :update) do
+          order = Enum.map(ctor.args, fn {n, _t} -> n end)
+          overrides = Map.new(field_pairs, fn {:pair, _m, [{:literal, _s, f}, val]} -> {f, val} end)
 
-        if Enum.all?(Map.keys(overrides), &(&1 in order)) do
-          values =
-            Enum.map(order, fn f ->
-              case Map.fetch(overrides, f) do
-                {:ok, val} -> val
-                :error -> {:attribute_access, [attribute: Atom.to_string(f)], [base]}
-              end
-            end)
+          if Enum.all?(Map.keys(overrides), &(&1 in order)) do
+            values =
+              Enum.map(order, fn f ->
+                case Map.fetch(overrides, f) do
+                  {:ok, val} -> val
+                  :error -> {:attribute_access, [attribute: Atom.to_string(f)], [base]}
+                end
+              end)
 
-          {:ok, {:function_call, [name: name], values}}
-        else
-          {:error, record_field_mismatch(atom, order, Map.new(order, &{&1, :from_base}), Map.keys(overrides))}
+            {:ok, {:function_call, [name: name], values}}
+          else
+            {:error, record_field_mismatch(atom, order, Map.new(order, &{&1, :from_base}), Map.keys(overrides))}
+          end
         end
     end
   end
@@ -129,6 +133,44 @@ defmodule Cure.Elab.Elaborator do
       missing: Enum.reject(declared, &(Enum.member?(provided, &1) or Map.has_key?(defaults, &1)))
     }
     |> then(&{:record_field_mismatch, &1})
+  end
+
+  defp reject_duplicate_record_fields(field_pairs, record, operation) do
+    occurrences =
+      Enum.map(field_pairs, fn {:pair, meta, [{:literal, _symbol_meta, field}, _value]} ->
+        source_info = Cure.MetaAST.Metadata.source_info(meta)
+        {field, source_info && source_info.name}
+      end)
+
+    case Enum.find(occurrences, fn {field, _span} -> Enum.count(occurrences, &(elem(&1, 0) == field)) > 1 end) do
+      nil ->
+        :ok
+
+      {duplicate, _span} ->
+        spans = for {^duplicate, %Cure.Diagnostic.Span{} = span} <- occurrences, do: span
+
+        {:error, {:duplicate_field, %{name: duplicate, record: record, operation: operation, spans: spans}}}
+    end
+  end
+
+  defp validate_record_update_base(meta, [base | _fields], names, ctx, env) do
+    record = meta |> Keyword.fetch!(:name) |> String.to_atom()
+    expected = Inductive.ctor_family(env, record)
+
+    with {:ok, _term, type} <- elaborate_expr_typed(base, names, ctx, env) do
+      actual = Quote.reify(type, Context.length(ctx))
+
+      case actual do
+        {:data, ^expected, _parameters, _indices} ->
+          :ok
+
+        {:data, actual_record, _parameters, _indices} ->
+          {:error, {:record_update_base_mismatch, %{record: expected || record, actual: actual_record}}}
+
+        other ->
+          {:error, {:record_update_base_mismatch, %{record: expected || record, actual: other}}}
+      end
+    end
   end
 
   defp available_record_names(%Env{} = env) do
@@ -772,11 +814,11 @@ defmodule Cure.Elab.Elaborator do
   end
 
   def elaborate_expr_typed({:record_update, meta, children}, names, ctx, env) do
-    case desugar_record_update(meta, children, env) do
-      {:ok, positional} ->
-        elaborate_expr_typed(positional, names, ctx, env)
-        |> attach_record_update_context(meta, children, env)
-
+    with {:ok, positional} <- desugar_record_update(meta, children, env),
+         :ok <- validate_record_update_base(meta, children, names, ctx, env) do
+      elaborate_expr_typed(positional, names, ctx, env)
+      |> attach_record_update_context(meta, children, env)
+    else
       {:error, reason} ->
         attach_record_update_context({:error, reason}, meta, children, env)
     end
@@ -2004,11 +2046,11 @@ defmodule Cure.Elab.Elaborator do
   @spec elaborate_expr_checked(term(), term(), [String.t()], Context.t(), Env.t()) ::
           {:ok, term()} | {:error, term()}
   def elaborate_expr_checked({:record_update, meta, children}, expected_core, names, ctx, env) do
-    case desugar_record_update(meta, children, env) do
-      {:ok, positional} ->
-        elaborate_expr_checked(positional, expected_core, names, ctx, env)
-        |> attach_record_update_context(meta, children, env)
-
+    with {:ok, positional} <- desugar_record_update(meta, children, env),
+         :ok <- validate_record_update_base(meta, children, names, ctx, env) do
+      elaborate_expr_checked(positional, expected_core, names, ctx, env)
+      |> attach_record_update_context(meta, children, env)
+    else
       {:error, reason} ->
         attach_record_update_context({:error, reason}, meta, children, env)
     end
