@@ -506,9 +506,11 @@ defmodule Cure.Diagnostic.HostTest do
       )
 
     assert rendered =~ "[E093]"
-    assert rendered =~ "NO INSTANCE FOUND"
+    assert rendered =~ "NO `COMPARABLE` IMPLEMENTATION FOUND"
     assert rendered =~ "Comparable"
-    assert rendered =~ "{:rigid, 0}"
+    assert rendered =~ "type variable"
+    assert rendered =~ "where Comparable(...)"
+    refute rendered =~ "{:rigid, 0}"
     refute rendered =~ ":no_instance"
   end
 

@@ -887,30 +887,7 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:source_context, {:no_instance, interface, head}, context}, opts)
       when is_map(context) do
-    opts = Keyword.put_new(opts, :span, Map.get(context, :span))
-    origin = Map.get(context, :expectation_origin, :implicit)
-
-    Diagnostic.new(
-      code: "E093",
-      key: :type_mismatch,
-      severity: :error,
-      title: "No instance found",
-      body:
-        Doc.stack([
-          Doc.paragraph(
-            "Cure could not find an implementation of `#{name_to_string(interface)}` for the required type `#{surface_type(head)}`."
-          ),
-          Doc.paragraph("Add an instance, import the module that provides it, or change the expression's type.")
-        ]),
-      primary: primary_label(opts, "this implicit constraint has no available instance"),
-      payload: %{
-        kind: :no_instance,
-        interface: interface,
-        head: head,
-        expectation_origin: origin,
-        checking: Map.get(context, :checking)
-      }
-    )
+    no_instance_failure(interface, head, context, Keyword.put_new(opts, :span, Map.get(context, :span)))
   end
 
   def from_error({:source_context, {:no_named_instance, name}, context}, opts) when is_map(context) do
@@ -2002,7 +1979,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: kernel_type_failure(:occurs_check, Keyword.put(opts, :variable, id))
 
   def from_error({:no_instance, interface, head}, opts),
-    do: contextual_type_failure(:no_instance, %{interface: interface, head: head}, opts)
+    do: no_instance_failure(interface, head, %{}, opts)
 
   def from_error({:ambiguous_instance_for_expected_type, interface, expected}, opts),
     do: contextual_type_failure(:ambiguous_instance, %{interface: interface, expected: expected}, opts)
@@ -5323,6 +5300,61 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp branch_span(%{span: %Cure.Diagnostic.Span{} = span}), do: span
   defp branch_span(_branch), do: nil
+
+  defp no_instance_failure(interface, head, context, opts) do
+    interface = name_to_string(interface)
+    head_details = instance_head_details(head)
+
+    {body, label, hint} =
+      case head_details.kind do
+        :type_variable ->
+          {
+            "This expression uses `#{interface}` operations on a type variable, but the surrounding function does not require `#{interface}` for that type.",
+            "this operation requires `#{interface}` for its type variable",
+            "Add a `where #{interface}(...)` constraint using this parameter's type variable"
+          }
+
+        :concrete ->
+          {
+            "No implementation of `#{interface}` is available for `#{head_details.surface}`. Cure needs one here to choose the behavior of this operation.",
+            "this operation requires `#{interface}` for `#{head_details.surface}`",
+            "Add or import `implementation #{interface} for #{head_details.surface}`"
+          }
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "No `#{interface}` implementation found",
+      body: Doc.paragraph(body),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: %{
+        kind: :no_instance,
+        interface: interface,
+        head_kind: head_details.kind,
+        head_surface: head_details.surface,
+        head_id: head_details.id,
+        expectation_origin: Map.get(context, :expectation_origin, :implicit),
+        checking: Map.get(context, :checking)
+      }
+    )
+  end
+
+  defp instance_head_details({:rigid, index}) when is_integer(index),
+    do: %{kind: :type_variable, surface: "a type variable", id: "rigid:#{index}"}
+
+  defp instance_head_details(head) when is_atom(head) or is_binary(head) do
+    canonical = name_to_string(head)
+    surface = Cure.Elab.Name.base(head) || canonical
+    %{kind: :concrete, surface: name_to_string(surface), id: canonical}
+  end
+
+  defp instance_head_details(head) do
+    surface = surface_type(head)
+    %{kind: :concrete, surface: surface, id: surface}
+  end
 
   defp contextual_type_failure(kind, details, opts) do
     {title, message, label} =
