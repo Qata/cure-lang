@@ -10014,26 +10014,33 @@ defmodule Cure.Compiler.Parser do
     state = advance(state)
 
     iface_start = peek(state)
-    {iface_name, state} = parse_dotted_name(state)
-    iface_end = authored_token(state)
+    {iface_name, iface_end, state} = parse_dotted_name_owned(state)
 
     # Consume the `for` keyword.
+    for_token = peek(state)
     state = expect_keyword(state, :for)
 
     {for_type, state} = parse_type_expr(state)
 
-    {as_name, state} =
+    {as_name, as_keyword_token, as_name_token, state} =
       case peek(state) do
-        %Token{type: :keyword, value: :as} ->
+        %Token{type: :keyword, value: :as} = as_keyword_token ->
           s = advance(state)
           as_token = peek(s)
-          {to_string(as_token.value), advance(s)}
+          {to_string(as_token.value), as_keyword_token, as_token, advance(s)}
 
         _ ->
-          {nil, state}
+          {nil, nil, nil, state}
       end
 
+    requirements_token = peek(state)
     {constraints, state} = parse_requirements_clause(state)
+
+    requirements_span =
+      case constraints |> List.last() |> ast_source_span() do
+        %Cure.Diagnostic.Span{} = last -> through_spans(requirements_token.span, last)
+        _ -> nil
+      end
 
     state = skip_newlines(state)
     {body, state} = parse_definition_block(state)
@@ -10055,7 +10062,33 @@ defmodule Cure.Compiler.Parser do
     ]
 
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
-    meta = put_container_source_info(meta, token, iface_start, iface_end, state)
+
+    interface_span = through_spans(iface_start.span, iface_end.span) || iface_start.span
+    for_type_span = ast_source_span(for_type)
+    branches = body |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
+
+    terminal_span =
+      List.last(branches) || requirements_span || (as_name_token && as_name_token.span) || for_type_span ||
+        interface_span
+
+    source_fields =
+      %{}
+      |> maybe_put_source_field(:for_keyword, for_token)
+      |> maybe_put_source_field(:for_type, for_type_span)
+      |> maybe_put_source_field(:as_keyword, as_keyword_token)
+      |> maybe_put_source_field(:as_name, as_name_token)
+      |> maybe_put_source_field(:requirements, requirements_span)
+
+    meta =
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: through_spans(token.span, terminal_span) || token.span,
+        opener: token.span,
+        name: interface_span,
+        annotation: for_type_span,
+        branches: branches,
+        fields: source_fields
+      })
+
     {{:implementation, meta, body}, state}
   end
 

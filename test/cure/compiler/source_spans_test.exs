@@ -358,6 +358,45 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert info.branches == []
   end
 
+  test "interface implementations own their header roles, requirements, and members" do
+    source =
+      "implementation Std.Eq for Option(Int) as IntOption requires Show(Int)\n" <>
+        "  fn eq(x: Option(Int), y: Option(Int)) -> Bool = true\n"
+
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "implementation.cure", emit_events: false)
+
+    assert {:ok, {:implementation, meta, [_member]}} =
+             Parser.parse(tokens, file: "implementation.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == String.trim_trailing(source)
+    assert slice(source, info.opener) == "implementation"
+    assert slice(source, info.name) == "Std.Eq"
+    assert slice(source, info.annotation) == "Option(Int)"
+    assert slice(source, Map.fetch!(info.fields, :for_keyword)) == "for"
+    assert slice(source, Map.fetch!(info.fields, :for_type)) == "Option(Int)"
+    assert slice(source, Map.fetch!(info.fields, :as_keyword)) == "as"
+    assert slice(source, Map.fetch!(info.fields, :as_name)) == "IntOption"
+    assert slice(source, Map.fetch!(info.fields, :requirements)) == "requires Show(Int)"
+
+    assert Enum.map(info.branches, &slice(source, &1)) == [
+             "fn eq(x: Option(Int), y: Option(Int)) -> Bool = true"
+           ]
+  end
+
+  test "an empty implementation range ends at its implemented type" do
+    source = "implementation Eq for Int\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "empty_implementation.cure", emit_events: false)
+
+    assert {:ok, {:implementation, meta, []}} =
+             Parser.parse(tokens, file: "empty_implementation.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == "implementation Eq for Int"
+    assert slice(source, info.annotation) == "Int"
+    assert info.branches == []
+  end
+
   test "record declaration fields retain authored parameter ranges" do
     source = "rec Point\n  x: Int = 0\n  y: String\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "record_decl.cure", emit_events: false)
