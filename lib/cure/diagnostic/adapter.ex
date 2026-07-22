@@ -1247,6 +1247,47 @@ defmodule Cure.Diagnostic.Adapter do
         opts
       )
 
+  def from_error(
+        {:missing_superinterface,
+         %{interface: interface, superinterface: super_interface, head: canonical_head} = details},
+        opts
+      ) do
+    interface = name_to_string(interface)
+    super_interface = name_to_string(super_interface)
+    head = name_to_string(Map.get(details, :for, Cure.Elab.Name.base(canonical_head)))
+    span = Map.get(details, :span) || Keyword.get(opts, :span)
+
+    Diagnostic.new(
+      code: "E105",
+      key: :declaration_conflict,
+      severity: :error,
+      title: "Required implementation is missing",
+      body:
+        Doc.paragraph(
+          "`#{interface}` requires `#{super_interface}`, so implementing `#{interface}` for `#{head}` also requires an implementation of `#{super_interface}` for `#{head}`."
+        ),
+      primary:
+        pickup_label(
+          span,
+          :primary,
+          "this implementation also needs `#{super_interface}` for `#{head}`"
+        ),
+      suggestions: [
+        %Suggestion{
+          message: "Add `implementation #{super_interface} for #{head}`",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :missing_superinterface,
+        interface: interface,
+        superinterface: super_interface,
+        head: head,
+        head_id: name_to_string(canonical_head)
+      }
+    )
+  end
+
   def from_error({:union_member_not_ground, member}, opts),
     do: union_declaration_failure(:union_member_not_ground, %{member: member}, opts)
 

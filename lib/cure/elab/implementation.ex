@@ -44,7 +44,7 @@ defmodule Cure.Elab.Implementation do
          {:ok, env1} <- register_instance(env, iface, head, as_name, ref),
          {:ok, env2} <- register_signatures(mangled_fns, env1),
          {:ok, env3} <- bind_named_instance(env2, desc, iface, head, as_name, ref) do
-      {:ok, env3, mangled_fns, superinterface_obligations(iface, desc, head)}
+      {:ok, env3, mangled_fns, superinterface_obligations(iface, desc, head, for_name, implementation_span)}
     else
       nil ->
         {:error, {:no_such_interface, iface}}
@@ -188,10 +188,18 @@ defmodule Cure.Elab.Implementation do
   # precede `implementation Small for T` (order-independent, matching Idris). An
   # interface with no `requires` clause has `super: []`, so this yields no
   # obligations. Older descriptors without the key default to `[]`.
-  defp superinterface_obligations(iface, desc, head) do
+  defp superinterface_obligations(iface, desc, head, for_name, span) do
     desc
     |> Map.get(:super, [])
-    |> Enum.map(fn super_interface -> {iface, super_interface, head} end)
+    |> Enum.map(fn super_interface ->
+      %{
+        interface: iface,
+        superinterface: super_interface,
+        head: head,
+        for: for_name,
+        span: span
+      }
+    end)
   end
 
   # -- methods ----------------------------------------------------------------

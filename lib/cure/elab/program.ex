@@ -3592,22 +3592,24 @@ defmodule Cure.Elab.Program do
     end)
   end
 
-  # Verify every recorded `{iface, super_interface, head}` obligation against the
+  # Verify every recorded superinterface obligation against the
   # FINAL coherence table, now that all implementations in the module are
   # registered. Each `interface Big(t) requires Small(t)` obliges every
   # `implementation Big for T` to have an `implementation Small for T` present —
   # in EITHER source order. On the first unmet obligation, report
-  # `{:missing_superinterface, iface, super_interface, head}` (unchanged shape).
+  # structured `:missing_superinterface` diagnostic with its implementation source.
   defp drain_superinterface_checks(env, pending) do
     coherence = Env.coherence(env) || Coherence.new()
 
-    Enum.reduce_while(pending, :ok, fn {iface, super_interface, head}, :ok ->
+    Enum.reduce_while(pending, :ok, fn obligation, :ok ->
+      %{superinterface: super_interface, head: head} = obligation
+
       case Coherence.lookup_anon(coherence, super_interface, head) do
         {:ok, _ref} ->
           {:cont, :ok}
 
         {:error, _} ->
-          {:halt, {:error, {:missing_superinterface, iface, super_interface, head}}}
+          {:halt, {:error, {:missing_superinterface, obligation}}}
       end
     end)
   end

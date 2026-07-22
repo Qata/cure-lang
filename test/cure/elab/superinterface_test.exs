@@ -20,7 +20,15 @@ defmodule Cure.Elab.SuperinterfaceTest do
     # `head_key` (Tasks 1.1/1.2) keys the coherence head on the module-qualified
     # type name, so `Color` in `mod M` keys as `:"M#Color"`. Both anon instances
     # key identically, which is why the success path (test below) resolves.
-    assert {:error, {:missing_superinterface, :Big, :Small, :"M#Color"}} =
+    assert {:error,
+            {:missing_superinterface,
+             %{
+               interface: :Big,
+               superinterface: :Small,
+               head: :"M#Color",
+               for: "Color",
+               span: %Cure.Diagnostic.Span{}
+             }}} =
              Program.elaborate(src)
   end
 
