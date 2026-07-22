@@ -1565,13 +1565,14 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error(kind, opts)
       when kind in [
-             :no_compatible_macro_input,
-             :normalization_fuel_exhausted,
              :invalid_driver_register,
              :duplicate_driver_register,
              :overlapping_driver_register
            ],
       do: macro_validation_failure(kind, %{}, opts)
+
+  def from_error(kind, opts) when kind in [:no_compatible_macro_input, :normalization_fuel_exhausted],
+    do: from_error({:computed_macro_error, [], kind}, opts)
 
   def from_error(kind, opts) when kind in [:invalid_macro_diagnostics, :invalid_macro_diagnostic],
     do: macro_diagnostic_schema_failure(kind, opts)
@@ -3141,22 +3142,20 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:computed_macro_error, meta, reason}, opts) when is_list(meta) do
     keyword = Keyword.get(meta, :keyword, "computed")
-    payload = %{keyword: keyword, reason: inspect(reason)} |> maybe_put_meta_location(meta)
+    payload = %{keyword: keyword, reason: computed_macro_payload(reason)} |> maybe_put_meta_location(meta)
     source_info = Metadata.source_info(meta)
     span = (source_info && source_info.whole) || Keyword.get(opts, :span)
     provenance = ((source_info && source_info.provenance) || []) ++ Keyword.get(opts, :provenance, [])
+    {title, message, primary_message, note} = computed_macro_content(keyword, reason)
 
     Diagnostic.new(
       code: "E092",
       key: :macro_expansion_failed,
       severity: :error,
-      title: "Computed macro expansion failed",
-      body:
-        Doc.paragraph(
-          "The `#{keyword}` computed macro could not produce valid Cure syntax: #{computed_macro_reason(reason)}"
-        ),
-      primary: pickup_label(span, :primary, "this macro invocation generated the failing syntax"),
-      notes: ["Edit the authored macro invocation or its rule; generated syntax is not the user-facing source."],
+      title: title,
+      body: Doc.paragraph(message),
+      primary: pickup_label(span, :primary, primary_message),
+      notes: [note],
       suggestions: computed_macro_suggestions(reason),
       provenance: provenance,
       payload: payload
@@ -9161,6 +9160,54 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp syntax_problem_label(_problem), do: "this syntax does not fit here"
 
+  defp computed_macro_content(keyword, :no_compatible_macro_input) do
+    {
+      "Computed macro expander does not accept its input",
+      "The `#{keyword}` macro's expander cannot be applied to any supported reflection of this invocation. Its parameter type must accept the macro's generated syntax record, its direct captured fields, or generic `Syntax`.",
+      "this invocation cannot be passed to its expander",
+      "The invocation is authored source; change the expander's input type or the macro rule that constructs it."
+    }
+  end
+
+  defp computed_macro_content(keyword, :normalization_fuel_exhausted) do
+    {
+      "Computed macro expansion did not terminate",
+      "The `#{keyword}` macro's expander exceeded the compiler's bounded evaluation budget before producing syntax. This usually means the expander recurses without reaching a smaller input or performs unexpectedly large compile-time work.",
+      "this invocation exhausted the expansion budget",
+      "The compiler stopped evaluation safely; no partial generated syntax was accepted."
+    }
+  end
+
+  defp computed_macro_content(keyword, reason) do
+    {
+      "Computed macro expansion failed",
+      "The `#{keyword}` computed macro could not produce valid Cure syntax: #{computed_macro_reason(reason)}",
+      "this macro invocation generated the failing syntax",
+      "Edit the authored macro invocation or its rule; generated syntax is not the user-facing source."
+    }
+  end
+
+  defp computed_macro_payload(:no_compatible_macro_input), do: %{kind: :incompatible_input}
+  defp computed_macro_payload(:normalization_fuel_exhausted), do: %{kind: :evaluation_budget_exhausted}
+
+  defp computed_macro_payload({:author_failure, name, _args}),
+    do: %{kind: :author_failure, name: name}
+
+  defp computed_macro_payload({:author_diagnostics, diagnostics}),
+    do: %{kind: :author_diagnostics, names: author_diagnostic_names(diagnostics)}
+
+  defp computed_macro_payload({:invalid_generated_syntax, {kind, path}}),
+    do: %{kind: :invalid_generated_syntax, syntax_problem: kind, path: path}
+
+  defp computed_macro_payload({:host_exception, exception}),
+    do: %{kind: :host_exception, exception: exception}
+
+  defp computed_macro_payload(reason), do: %{kind: :expansion_rejected, category: computed_macro_category(reason)}
+
+  defp computed_macro_category(reason) when is_atom(reason), do: reason
+  defp computed_macro_category(reason) when is_tuple(reason) and tuple_size(reason) > 0, do: elem(reason, 0)
+  defp computed_macro_category(_reason), do: :unknown
+
   defp computed_macro_reason({:invalid_generated_syntax, {:raw_syntax_in_expansion, path}}),
     do:
       "invalid macro expansion: raw syntax is only valid for reflection, not generated Cure code at #{syntax_path_phrase(path)}"
@@ -9213,6 +9260,23 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp computed_macro_suggestions({:author_failure, name, _args}),
     do: [%Suggestion{message: "Fix the `#{name}` condition reported by this macro", applicability: :manual}]
+
+  defp computed_macro_suggestions(:no_compatible_macro_input),
+    do: [
+      %Suggestion{
+        message: "Make the expander accept its generated syntax record, captured fields, or generic `Syntax`",
+        applicability: :manual
+      }
+    ]
+
+  defp computed_macro_suggestions(:normalization_fuel_exhausted),
+    do: [
+      %Suggestion{
+        message:
+          "Make recursive expansion calls structurally smaller, or move large work out of compile-time evaluation",
+        applicability: :manual
+      }
+    ]
 
   defp computed_macro_suggestions(_reason),
     do: [%Suggestion{message: "Fix this invocation or the computed macro's expander", applicability: :manual}]
