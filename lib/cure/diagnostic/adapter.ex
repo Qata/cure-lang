@@ -1361,6 +1361,12 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:left_recursive_parse_production, names}, opts),
     do: macro_parse_failure(:left_recursive_parse_production, %{names: names}, opts)
 
+  def from_error({:unknown_reducer_constructor, constructors}, opts),
+    do: macro_reducer_failure(:unknown_reducer_constructor, %{constructors: constructors}, opts)
+
+  def from_error({:incomplete_reducer, constructors}, opts),
+    do: macro_reducer_failure(:incomplete_reducer, %{constructors: constructors}, opts)
+
   # Some trusted checking paths can return the bare verdict after their
   # declaration wrapper has been stripped. Keep that verdict contextual rather
   # than falling through to the unhelpful generic "Elaboration failed" title.
@@ -1434,9 +1440,7 @@ defmodule Cure.Diagnostic.Adapter do
                :malformed_reflected_attribute,
                :malformed_reflected_literal,
                :malformed_reflected_map,
-               :invalid_syntax_attrs,
-               :unknown_reducer_constructor,
-               :incomplete_reducer
+               :invalid_syntax_attrs
              ],
       do: macro_validation_failure(kind, %{detail: detail}, opts)
 
@@ -1459,12 +1463,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: Operational.artifact_error("Core artifact contains an ill-formed term", %{kind: :ill_formed_term, term: term})
 
   def from_error({:reducer_arity, constructor, actual, expected}, opts),
-    do:
-      macro_validation_failure(
-        :reducer_arity,
-        %{constructor: constructor, actual: actual, expected: expected},
-        opts
-      )
+    do: macro_reducer_failure(:reducer_arity, %{constructor: constructor, actual: actual, expected: expected}, opts)
 
   def from_error({:primitive_floor_mismatch, name, node, other}, opts),
     do: macro_validation_failure(:primitive_floor_mismatch, %{name: name, node: node, other: other}, opts)
@@ -1494,7 +1493,6 @@ defmodule Cure.Diagnostic.Adapter do
              :invalid_syntax_string,
              :invalid_syntax_literal,
              :invalid_syntax_pair,
-             :duplicate_reducer_constructor,
              :not_a_nat,
              :invalid_lift_module_ast,
              :invalid_lift_callback,
@@ -1519,6 +1517,10 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error(kind, opts)
       when kind in [:invalid_parse_productions, :invalid_parse_production, :duplicate_parse_production],
       do: macro_parse_failure(kind, %{}, opts)
+
+  def from_error(kind, opts)
+      when kind in [:invalid_reducer_arms, :invalid_reducer_arm, :duplicate_reducer_constructor],
+      do: macro_reducer_failure(kind, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -5089,6 +5091,64 @@ defmodule Cure.Diagnostic.Adapter do
       payload: Map.put(details, :kind, kind)
     )
   end
+
+  defp macro_reducer_failure(kind, details, opts) do
+    {title, message, label, hint} = macro_reducer_content(kind, details)
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_reducer_validation,
+      severity: :error,
+      title: title,
+      body: Doc.paragraph(message),
+      primary: primary_label(opts, label),
+      suggestions: [%Suggestion{message: hint, applicability: :manual}],
+      payload: Map.put(details, :kind, kind)
+    )
+  end
+
+  defp macro_reducer_content(:invalid_reducer_arms, _details),
+    do:
+      {"Reducer arms are malformed", "Reducer arms must be provided as a list with one arm for every constructor.",
+       "rewrite this reducer arm list", "Provide a list of constructor arms"}
+
+  defp macro_reducer_content(:invalid_reducer_arm, _details),
+    do:
+      {"Reducer arm is malformed",
+       "Every reducer arm needs a constructor, an optional list of text bindings, and a body expression.",
+       "rewrite this reducer arm", "Provide `constructor`, `bindings`, and `body` for this arm"}
+
+  defp macro_reducer_content(:duplicate_reducer_constructor, _details),
+    do:
+      {"Reducer constructor is repeated",
+       "Two reducer arms match the same constructor, so one arm can never be selected.",
+       "remove or change this duplicate arm", "Keep exactly one arm for each constructor"}
+
+  defp macro_reducer_content(:unknown_reducer_constructor, %{constructors: constructors}) do
+    rendered = Enum.map_join(constructors, ", ", &"`#{name_to_string(&1)}`")
+    verb = if length(constructors) == 1, do: "does", else: "do"
+
+    {"Reducer uses an unknown constructor",
+     "The reducer refers to #{constructor_phrase(constructors, rendered)}, which #{verb} not belong to the reflected data type.",
+     "replace this unknown constructor", "Use only constructors declared by the reduced data type"}
+  end
+
+  defp macro_reducer_content(:incomplete_reducer, %{constructors: constructors}) do
+    rendered = Enum.map_join(constructors, ", ", &"`#{name_to_string(&1)}`")
+
+    {"Reducer does not cover every constructor",
+     "The reducer has no arm for #{constructor_phrase(constructors, rendered)}.", "add the missing constructor arm",
+     "Add one arm for every listed constructor"}
+  end
+
+  defp macro_reducer_content(:reducer_arity, %{constructor: constructor, actual: actual, expected: expected}),
+    do:
+      {"Reducer arm has the wrong number of bindings",
+       "The `#{name_to_string(constructor)}` arm binds #{actual} values, but its constructor carries #{expected}.",
+       "make these bindings match the constructor", "Use exactly #{expected} bindings in this arm"}
+
+  defp constructor_phrase([_one], rendered), do: "constructor #{rendered}"
+  defp constructor_phrase(_many, rendered), do: "constructors #{rendered}"
 
   defp macro_parse_content(:invalid_parse_name, %{name: name}),
     do:

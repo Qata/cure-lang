@@ -21,17 +21,23 @@ defmodule Cure.Compiler.MacroReducer do
   def build_match(type_name, scrutinee, arm_specs, %Env{} = env) when is_list(arm_specs),
     do: build_dispatch(:macro_reducer, type_name, scrutinee, arm_specs, env)
 
+  def build_match(_type_name, _scrutinee, _arm_specs, %Env{}), do: {:error, :invalid_reducer_arms}
+
   @doc "Build exhaustive constructor dispatch for a view-style macro."
   @spec build_view(String.t() | atom(), term(), [arm_spec()], Env.t()) ::
           {:ok, term()} | {:error, term()}
   def build_view(type_name, scrutinee, arm_specs, %Env{} = env) when is_list(arm_specs),
     do: build_dispatch(:macro_view, type_name, scrutinee, arm_specs, env)
 
+  def build_view(_type_name, _scrutinee, _arm_specs, %Env{}), do: {:error, :invalid_reducer_arms}
+
   @doc "Build exhaustive constructor dispatch for a flow-style macro."
   @spec build_flow(String.t() | atom(), term(), [arm_spec()], Env.t()) ::
           {:ok, term()} | {:error, term()}
   def build_flow(type_name, scrutinee, arm_specs, %Env{} = env) when is_list(arm_specs),
     do: build_dispatch(:macro_flow, type_name, scrutinee, arm_specs, env)
+
+  def build_flow(_type_name, _scrutinee, _arm_specs, %Env{}), do: {:error, :invalid_reducer_arms}
 
   @doc "Build the reducer/view/flow dispatch bundle used by declaration macros."
   @spec build_bundle(String.t() | atom(), term(), [arm_spec()], Env.t()) ::
@@ -44,14 +50,31 @@ defmodule Cure.Compiler.MacroReducer do
     end
   end
 
+  def build_bundle(_type_name, _scrutinee, _arm_specs, %Env{}), do: {:error, :invalid_reducer_arms}
+
   defp build_dispatch(generated_by, type_name, scrutinee, arm_specs, env) do
-    with {:ok, constructors} <- MacroReflection.constructors(env, type_name),
+    with :ok <- validate_arm_specs(arm_specs),
+         {:ok, constructors} <- MacroReflection.constructors(env, type_name),
          arm_specs <- canonicalize_arm_specs(arm_specs, env),
          :ok <- validate_arm_set(constructors, arm_specs),
          {:ok, arms} <- build_arms(constructors, arm_specs) do
       {:ok, {:pattern_match, [generated_by: generated_by], [scrutinee | arms]}}
     end
   end
+
+  defp validate_arm_specs(arm_specs) do
+    if Enum.all?(arm_specs, &valid_arm_spec?/1), do: :ok, else: {:error, :invalid_reducer_arm}
+  end
+
+  defp valid_arm_spec?(%{constructor: constructor, body: _body} = spec)
+       when is_atom(constructor) or is_binary(constructor) do
+    case Map.fetch(spec, :bindings) do
+      :error -> true
+      {:ok, bindings} -> is_list(bindings) and Enum.all?(bindings, &is_binary/1)
+    end
+  end
+
+  defp valid_arm_spec?(_spec), do: false
 
   defp canonicalize_arm_specs(arm_specs, env) do
     Enum.map(arm_specs, fn spec ->
