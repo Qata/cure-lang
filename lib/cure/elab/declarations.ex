@@ -2237,13 +2237,15 @@ defmodule Cure.Elab.Declarations do
   # §5.3: reject an `:erased` binder whose domain is `Effect`-headed — erasure
   # would delete a computation the type says must run. Walks the Pi spine like
   # `grade_spine_mismatch`; a non-Pi tail (the return type) ends the walk.
-  defp assert_no_erased_effect_binder({:pi, g, dom, cod}, name) do
+  defp assert_no_erased_effect_binder(pi, name), do: assert_no_erased_effect_binder(pi, name, 0)
+
+  defp assert_no_erased_effect_binder({:pi, g, dom, cod}, name, index) do
     if Grade.erased?(g) and effect_headed?(dom),
-      do: {:error, {:effect_binder_erased, name}},
-      else: assert_no_erased_effect_binder(cod, name)
+      do: {:error, {:effect_binder_erased, %{def: name, binder: index}}},
+      else: assert_no_erased_effect_binder(cod, name, index + 1)
   end
 
-  defp assert_no_erased_effect_binder(_non_pi, _name), do: :ok
+  defp assert_no_erased_effect_binder(_non_pi, _name, _index), do: :ok
 
   defp effect_headed?({:effect_type, _}), do: true
   defp effect_headed?(_), do: false

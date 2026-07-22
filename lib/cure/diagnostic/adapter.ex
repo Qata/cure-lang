@@ -1623,6 +1623,10 @@ defmodule Cure.Diagnostic.Adapter do
       when is_map(context),
       do: erasure_failure(:erases_on_non_opaque, %{name: name}, context, opts)
 
+  def from_error({:source_context, {:effect_binder_erased, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: erased_effect_binder_failure(details, context, opts)
+
   def from_error({:source_context, {:forced_pattern_not_in_pattern, _meta}, context}, opts)
       when is_map(context),
       do: pattern_only_syntax(:forced_pattern, context, opts)
@@ -2004,6 +2008,9 @@ defmodule Cure.Diagnostic.Adapter do
 
   def from_error({:applied_non_function, details}, opts) when is_map(details),
     do: non_callable_application(details, %{}, opts)
+
+  def from_error({:effect_binder_erased, details}, opts) when is_map(details),
+    do: erased_effect_binder_failure(details, %{}, opts)
 
   def from_error(kind, opts)
       when kind in [
@@ -5108,6 +5115,66 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp erasure_suggestions(:erases_on_non_opaque, _details) do
     [%Suggestion{message: "Remove `@erases`, or make this a constructor-less `opaque type`", applicability: :manual}]
+  end
+
+  defp erased_effect_binder_failure(details, context, opts) do
+    name = Map.get(context, :binder_name)
+    type_span = Map.get(context, :span) || Keyword.get(opts, :span)
+    binder_span = Map.get(context, :binder_span)
+    opener = Map.get(context, :opener_span)
+    closer = Map.get(context, :closer_span)
+
+    binder_text = if name, do: " `#{name_to_string(name)}`", else: ""
+
+    secondary =
+      case binder_span do
+        %Span{} = span when span != type_span ->
+          [pickup_label(span, :secondary, "this parameter is declared inside erased implicit braces")]
+
+        _ ->
+          []
+      end
+
+    suggestions =
+      case {opener, closer} do
+        {%Span{} = open, %Span{} = close} ->
+          [
+            %Suggestion{
+              message: "Make#{binder_text} a present parameter by removing the implicit braces",
+              applicability: :machine_applicable,
+              edits: [%TextEdit{span: open, replacement: ""}, %TextEdit{span: close, replacement: ""}]
+            }
+          ]
+
+        _ ->
+          [
+            %Suggestion{
+              message: "Make#{binder_text} a present parameter; an effect value cannot be erased",
+              applicability: :manual
+            }
+          ]
+      end
+
+    Diagnostic.new(
+      code: "E093",
+      key: :type_mismatch,
+      severity: :error,
+      title: "Effect parameter cannot be erased",
+      body:
+        Doc.paragraph(
+          "The parameter#{binder_text} carries an `Effect` value, but implicit braces mark it for erasure. Removing that parameter at runtime could discard a computation the type says must remain available."
+        ),
+      primary: pickup_label(type_span, :primary, "this `Effect` type requires a runtime-present parameter"),
+      secondary: secondary,
+      suggestions: suggestions,
+      payload: %{
+        kind: :effect_binder_erased,
+        definition: Map.get(details, :def),
+        binder_index: Map.get(details, :binder),
+        binder: name,
+        expression_category: Map.get(context, :expression_category, :effect_binder)
+      }
+    )
   end
 
   defp declaration_conflict(kind, details, opts) do

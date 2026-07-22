@@ -2827,6 +2827,9 @@ defmodule Cure.Elab.Program do
   defp trusted_declaration_span({:erases_on_non_opaque, name}, items),
     do: erasure_source_context(items, name)
 
+  defp trusted_declaration_span({:effect_binder_erased, %{def: name, binder: binder}}, items),
+    do: effect_binder_source_context(items, name, binder)
+
   defp trusted_declaration_span({:non_strictly_positive, constructor}, items),
     do: positivity_source_context(items, constructor)
 
@@ -3096,6 +3099,34 @@ defmodule Cure.Elab.Program do
               declaration_span: info.whole,
               checking: qualified_name,
               expression_category: :erasure_annotation
+            }
+          end
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp effect_binder_source_context(items, qualified_name, binder) do
+    bare_name = qualified_name |> to_string() |> String.split("#") |> List.last()
+
+    Enum.find_value(items, fn
+      {:function_def, meta, _body} when is_list(meta) ->
+        if to_string(Keyword.get(meta, :name)) == bare_name do
+          parameter = meta |> Keyword.get(:params, []) |> Enum.at(binder)
+          info = parameter && parameter |> elem(1) |> Cure.MetaAST.Metadata.source_info()
+
+          if info do
+            %{
+              span: info.annotation || info.whole,
+              parameter_span: info.whole,
+              binder_span: info.name,
+              opener_span: info.opener,
+              closer_span: info.closer,
+              binder_name: parameter && param_name(parameter),
+              checking: qualified_name,
+              expression_category: :effect_binder
             }
           end
         end
