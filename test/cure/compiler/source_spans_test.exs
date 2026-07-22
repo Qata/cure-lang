@@ -98,6 +98,11 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, implicit_info.closer) == "}"
 
     labelled_info = labelled |> elem(1) |> Metadata.source_info()
+    variadic_info = variadic |> elem(1) |> Metadata.source_info()
+    keyword_variadic_info = keyword_variadic |> elem(1) |> Metadata.source_info()
+
+    assert slice(source, Map.fetch!(variadic_info.fields, :variadic_marker)) == "*"
+    assert slice(source, Map.fetch!(keyword_variadic_info.fields, :variadic_marker)) == "**"
     assert slice(source, Map.fetch!(labelled_info.fields, :label)) == "to"
     assert slice(source, labelled_info.operator) == "="
   end

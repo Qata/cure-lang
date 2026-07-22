@@ -7921,8 +7921,8 @@ defmodule Cure.Compiler.Parser do
   # `{:unknown_grade, …}` rather than a silent no-op that desyncs the param list.
   defp parse_grade(state) do
     case peek(state) do
-      %Token{type: :atom, value: g} when g in @grade_atoms ->
-        {:grade, g, advance(state)}
+      %Token{type: :atom, value: g} = token when g in @grade_atoms ->
+        {:grade, g, token, advance(state)}
 
       %Token{type: :atom, value: bad} = tok ->
         {:unknown, bad, tok, advance(state)}
@@ -7974,10 +7974,12 @@ defmodule Cure.Compiler.Parser do
            %{grade: bad, span: tok.span, supported: @grade_atoms, line: tok.line, column: tok.col}
          }), tok.span}
 
-      {:grade, grade, state} ->
+      {:grade, grade, grade_token, state} ->
+        grade_span = through_spans(annotation_start.span, grade_token.span) || grade_token.span
+
         cond do
           peek(state).type in stop_on ->
-            {grade, nil, state, annotation_span(annotation_start, state)}
+            {grade, nil, state, grade_span}
 
           peek(state).type in @non_type_tokens ->
             tok = peek(state)
@@ -7988,12 +7990,12 @@ defmodule Cure.Compiler.Parser do
                %{
                  name: name,
                  grade: grade,
-                 span: annotation_span(annotation_start, state),
+                 span: grade_span,
                  observed_span: tok.span,
                  line: tok.line,
                  column: tok.col
                }
-             }), annotation_span(annotation_start, state)}
+             }), grade_span}
 
           true ->
             {type_ast, state} = parse_type_expr(state)
@@ -8002,25 +8004,10 @@ defmodule Cure.Compiler.Parser do
     end
   end
 
-  defp annotation_span(%Token{span: %Cure.Diagnostic.Span{} = first}, state) do
-    case authored_token(state) do
-      %Token{span: %Cure.Diagnostic.Span{} = last} ->
-        case Range.through(first, last) do
-          {:ok, span} -> span
-          _ -> nil
-        end
-
-      _ ->
-        first
-    end
-  end
-
-  defp annotation_span(_start, _state), do: nil
-
-  defp annotation_span(%Token{span: %Cure.Diagnostic.Span{} = first} = start, type_ast, state) do
+  defp annotation_span(%Token{span: %Cure.Diagnostic.Span{} = first}, type_ast, _state) do
     case ast_source_span(type_ast) do
       %Cure.Diagnostic.Span{} = last -> through_spans(first, last) || first
-      _ -> annotation_span(start, state)
+      _ -> first
     end
   end
 
@@ -8088,24 +8075,25 @@ defmodule Cure.Compiler.Parser do
     start_token = peek(state)
 
     # Check for variadic: *name or **name
-    {kind, state} =
+    {kind, marker_span, state} =
       case peek(state) do
-        %Token{type: :operator, value: "**"} ->
-          {:keyword_variadic, advance(state)}
+        %Token{type: :operator, value: "**"} = marker ->
+          {:keyword_variadic, marker.span, advance(state)}
 
-        %Token{type: :star} ->
+        %Token{type: :star} = marker ->
           next = peek_at(state, 1)
 
           if next && next.type == :star do
             {_, state} = {nil, advance(state) |> advance()}
-            {:keyword_variadic, state}
+            span = through_spans(marker.span, next.span) || marker.span
+            {:keyword_variadic, span, state}
           else
             {_, state} = {nil, advance(state)}
-            {:variadic, state}
+            {:variadic, marker.span, state}
           end
 
         _ ->
-          {:positional, state}
+          {:positional, nil, state}
       end
 
     name_token = peek(state)
@@ -8116,14 +8104,6 @@ defmodule Cure.Compiler.Parser do
           {to_string(name_token.value), advance(state)}
 
         %Token{} when kind in [:variadic, :keyword_variadic] ->
-          marker_end = authored_token(state) || start_token
-
-          marker_span =
-            case Range.through(start_token.span, marker_end.span) do
-              {:ok, span} -> span
-              _ -> start_token.span
-            end
-
           error =
             {:variadic_parameter_name_missing,
              %{
@@ -8188,7 +8168,8 @@ defmodule Cure.Compiler.Parser do
         annotation_span: annotation_span,
         terminal_span: terminal_span,
         label_span: label_span,
-        operator: assign_token && assign_token.span
+        operator: assign_token && assign_token.span,
+        marker_span: marker_span
       )
 
     {{:param, param_meta, name}, state}
@@ -8206,6 +8187,8 @@ defmodule Cure.Compiler.Parser do
         %Cure.Diagnostic.Span{} = span -> %{label: span}
         _ -> %{}
       end
+
+    fields = maybe_put_source_field(fields, :variadic_marker, Keyword.get(roles, :marker_span))
 
     Metadata.put_source_info(meta, %SourceInfo{
       whole: through_spans(start_token.span, Keyword.get(roles, :terminal_span)) || name_token.span,
