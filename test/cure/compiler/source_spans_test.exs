@@ -326,7 +326,10 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, Map.fetch!(proto_info.fields, :type_parameters)) == "(T)"
     assert Enum.map(proto_info.branches, &slice(source, &1)) == ["fn show(x: T) -> String"]
     assert slice(source, interface_info.whole) == "interface Eq(T)\n  fn eq(x: T, y: T) -> Bool"
+    assert slice(source, interface_info.opener) == "interface"
     assert slice(source, interface_info.name) == "Eq"
+    assert slice(source, Map.fetch!(interface_info.fields, :type_parameters)) == "(T)"
+    assert Enum.map(interface_info.branches, &slice(source, &1)) == ["fn eq(x: T, y: T) -> Bool"]
   end
 
   test "an empty protocol range ends at its authored header" do
@@ -339,6 +342,19 @@ defmodule Cure.Compiler.SourceSpansTest do
     info = Metadata.source_info(meta)
     assert slice(source, info.whole) == "proto Empty(T)"
     assert slice(source, Map.fetch!(info.fields, :type_parameters)) == "(T)"
+    assert info.branches == []
+  end
+
+  test "an interface requires clause owns its exact range even without methods" do
+    source = "interface Ordered(T) requires Eq(T), Show(T)\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "required_interface.cure", emit_events: false)
+
+    assert {:ok, {:interface, meta, []}} =
+             Parser.parse(tokens, file: "required_interface.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == "interface Ordered(T) requires Eq(T), Show(T)"
+    assert slice(source, Map.fetch!(info.fields, :requires)) == "requires Eq(T), Show(T)"
     assert info.branches == []
   end
 

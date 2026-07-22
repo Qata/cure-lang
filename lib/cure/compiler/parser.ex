@@ -6971,6 +6971,7 @@ defmodule Cure.Compiler.Parser do
 
   defp maybe_put_source_field(fields, _role, nil), do: fields
   defp maybe_put_source_field(fields, role, %Token{span: span}), do: Map.put(fields, role, span)
+  defp maybe_put_source_field(fields, role, %Cure.Diagnostic.Span{} = span), do: Map.put(fields, role, span)
 
   defp first_node_source_span(node) do
     case node_source_span(node) do
@@ -9914,23 +9915,24 @@ defmodule Cure.Compiler.Parser do
     name = to_string(name_token.value)
     state = advance(state)
 
-    {params, state} =
+    {params, type_parameter_span, state} =
       case peek(state) do
         %Token{type: :lparen} ->
           open_token = peek(state)
           state = advance(state)
           {tp, state} = parse_name_list(state, :rparen)
 
-          {state, _close_token} =
+          {state, close_token} =
             expect_container_close(state, :rparen, :type_parameters, open_token, tp, true, %{
               declaration: name,
               declaration_kind: :interface
             })
 
-          {tp, state}
+          span = through_spans(open_token.span, close_token && close_token.span) || open_token.span
+          {tp, span, state}
 
         _ ->
-          {[], state}
+          {[], nil, state}
       end
 
     # `requires` is a CONTEXTUAL keyword: it lexes as an ordinary identifier and
@@ -9940,15 +9942,17 @@ defmodule Cure.Compiler.Parser do
     # — every `implementation Big for T` must then already have an `implementation
     # Small for T`. We reuse the constraint parser and keep only the interface
     # names (the descriptor does not need the type variables).
-    {requires, state} =
+    {requires, requires_span, state} =
       case peek(state) do
-        %Token{type: :identifier, value: "requires"} ->
+        %Token{type: :identifier, value: "requires"} = requires_token ->
           state = advance(state)
           {constraints, state} = parse_constraint_list(state)
-          {superinterface_names(constraints), state}
+          last_span = constraints |> List.last() |> ast_source_span()
+          span = through_spans(requires_token.span, last_span) || requires_token.span
+          {superinterface_names(constraints), span, state}
 
         _ ->
-          {[], state}
+          {[], nil, state}
       end
 
     state = skip_newlines(state)
@@ -9971,7 +9975,23 @@ defmodule Cure.Compiler.Parser do
       col: token.col
     ]
 
-    meta = put_container_source_info(meta, token, name_token, name_token, state)
+    branches = body |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
+    terminal_span = List.last(branches) || requires_span || type_parameter_span || name_token.span
+
+    source_fields =
+      %{}
+      |> maybe_put_source_field(:type_parameters, type_parameter_span)
+      |> maybe_put_source_field(:requires, requires_span)
+
+    meta =
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: through_spans(token.span, terminal_span) || token.span,
+        opener: token.span,
+        name: name_token.span,
+        branches: branches,
+        fields: source_fields
+      })
+
     {{:interface, meta, body}, state}
   end
 
@@ -12191,13 +12211,30 @@ defmodule Cure.Compiler.Parser do
         state = advance(state)
         {params, state} = parse_type_param_list(state)
 
-        {state, _close_token} =
+        {state, close_token} =
           expect_container_close(state, :rparen, :type_arguments, open_token, params, true, %{type: name})
 
-        {{:function_call, [name: name, constraint: true], params}, state}
+        whole = through_spans(name_token.span, close_token && close_token.span) || name_token.span
+
+        meta =
+          Metadata.put_source_info([name: name, constraint: true], %SourceInfo{
+            whole: whole,
+            name: name_token.span,
+            opener: open_token.span,
+            closer: close_token && close_token.span,
+            arguments: params |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
+          })
+
+        {{:function_call, meta, params}, state}
 
       _ ->
-        {{:variable, [constraint: true], name}, state}
+        meta =
+          Metadata.put_source_info([constraint: true], %SourceInfo{
+            whole: name_token.span,
+            name: name_token.span
+          })
+
+        {{:variable, meta, name}, state}
     end
   end
 
