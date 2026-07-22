@@ -3593,23 +3593,22 @@ defmodule Cure.Compiler.Parser do
       %Token{type: :identifier, value: "case"} = case_token ->
         state = advance(state)
         {pattern, state} = parse_expr(state, 0)
-        state = expect_induction_case_arrow(state, case_token, pattern) |> skip_newlines()
+        {arrow_token, state} = expect_induction_case_arrow(state, case_token, pattern)
+        state = skip_newlines(state)
 
-        {body, impossible?, state} =
+        {body, terminal_span, impossible?, state} =
           if impossible_body?(state) do
-            {nil, true, advance(state)}
+            impossible_token = peek(state)
+            {nil, impossible_token.span, true, advance(state)}
           else
             {body, state} = parse_expr_or_block(state)
-            {body, false, state}
+            {body, ast_source_span(body), false, state}
           end
 
         meta =
           [line: case_token.line, col: case_token.col]
-          |> Keyword.put(:pattern_span, ast_source_span(pattern))
-          |> Keyword.put(:body_span, ast_source_span(body))
           |> Keyword.put(:impossible, impossible?)
-          |> put_token_source_info(case_token)
-          |> put_induction_case_span(case_token, body)
+          |> put_induction_case_source_info(case_token, arrow_token, pattern, terminal_span)
 
         parse_induction_cases(state, [{:induction_case, meta, [pattern, body]} | acc])
 
@@ -3621,8 +3620,8 @@ defmodule Cure.Compiler.Parser do
 
   defp expect_induction_case_arrow(state, case_token, pattern) do
     case expect_token(state, :fat_arrow) do
-      {:ok, _arrow, next_state} ->
-        next_state
+      {:ok, arrow, next_state} ->
+        {arrow, next_state}
 
       {:error, next_state} ->
         [_generic | rest] = next_state.errors
@@ -3643,45 +3642,42 @@ defmodule Cure.Compiler.Parser do
              column: observed.col
            }}
 
-        %{next_state | errors: [error | rest]}
+        {nil, %{next_state | errors: [error | rest]}}
     end
   end
 
-  defp put_induction_case_span(meta, %Token{span: %Cure.Diagnostic.Span{} = first}, body) do
-    case ast_source_span(body) do
-      %Cure.Diagnostic.Span{} = last ->
-        case Range.through(first, last) do
-          {:ok, whole} -> Keyword.put(meta, :construct_span, whole)
-          _ -> meta
-        end
-
-      _ ->
-        meta
-    end
+  defp put_induction_case_source_info(meta, case_token, arrow_token, pattern, terminal_span) do
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: through_spans(case_token.span, terminal_span) || case_token.span,
+      opener: case_token.span,
+      operator: arrow_token && arrow_token.span,
+      pattern: ast_source_span(pattern),
+      body: terminal_span
+    })
   end
-
-  defp put_induction_case_span(meta, _token, _body), do: meta
 
   defp induction_meta(token, subject, cases) do
     last = List.last(cases)
     last_span = ast_source_span(last) || ast_source_span(subject)
 
-    meta =
-      [line: token.line, col: token.col]
-      |> Keyword.put(:subject_span, ast_source_span(subject))
-      |> put_token_source_info(token)
+    info = %SourceInfo{
+      whole: through_spans(token.span, last_span) || token.span,
+      opener: token.span,
+      operands: Enum.filter([ast_source_span(subject)], & &1),
+      branches: cases |> Enum.map(&ast_source_span/1) |> Enum.filter(& &1)
+    }
 
-    case {token.span, last_span} do
-      {%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = last} ->
-        case Range.through(first, last) do
-          {:ok, whole} -> Keyword.put(meta, :construct_span, whole)
-          _ -> meta
-        end
+    Metadata.put_source_info([line: token.line, col: token.col], info)
+  end
 
-      _ ->
-        meta
+  defp through_spans(%Cure.Diagnostic.Span{} = first, %Cure.Diagnostic.Span{} = last) do
+    case Range.through(first, last) do
+      {:ok, whole} -> whole
+      _ -> nil
     end
   end
+
+  defp through_spans(_, _), do: nil
 
   defp proof_chain_boundary?(state) do
     match?(%Token{type: :newline}, peek_at(state, 2))

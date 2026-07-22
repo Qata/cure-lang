@@ -24,11 +24,22 @@ defmodule Cure.Compiler.ProofInductionTest do
 
   test "induction has distinct subject, case, pattern, and body nodes" do
     assert {:induction, meta, [{:variable, _, "count"}, zero, successor]} = parse!(@source)
-    assert meta[:subject_span]
+    info = Metadata.source_info(meta)
+    assert source_slice(@source, info.whole) =~ "induction count"
+    assert Enum.map(info.operands, &source_slice(@source, &1)) == ["count"]
+    assert length(info.branches) == 2
+    refute Keyword.has_key?(meta, :construct_span)
+    refute Keyword.has_key?(meta, :subject_span)
 
     assert {:induction_case, zero_meta, [{:variable, _, "Z"}, {:simplify_command, _, []}]} = zero
-    assert zero_meta[:pattern_span]
-    assert zero_meta[:body_span]
+    zero_info = Metadata.source_info(zero_meta)
+    assert source_slice(@source, zero_info.whole) == "case Z =>\n    simplify"
+    assert source_slice(@source, zero_info.opener) == "case"
+    assert source_slice(@source, zero_info.operator) == "=>"
+    assert source_slice(@source, zero_info.pattern) == "Z"
+    assert source_slice(@source, zero_info.body) == "simplify"
+    refute Keyword.has_key?(zero_meta, :pattern_span)
+    refute Keyword.has_key?(zero_meta, :body_span)
 
     assert {:induction_case, successor_meta,
             [
@@ -36,8 +47,10 @@ defmodule Cure.Compiler.ProofInductionTest do
               {:proof_chain, _, _}
             ]} = successor
 
-    assert successor_meta[:pattern_span]
-    assert successor_meta[:body_span]
+    successor_info = Metadata.source_info(successor_meta)
+    assert source_slice(@source, successor_info.pattern) == "S(previous, induction_hypothesis)"
+    assert source_slice(@source, successor_info.operator) == "=>"
+    assert source_slice(@source, successor_info.body) =~ "proof chain"
   end
 
   test "canonical printing round-trips induction blocks" do
@@ -59,6 +72,9 @@ defmodule Cure.Compiler.ProofInductionTest do
 
     assert {:induction, _, [_, {:induction_case, meta, [_pattern, nil]}]} = parse!(source)
     assert meta[:impossible]
+    info = Metadata.source_info(meta)
+    assert source_slice(source, info.whole) == "case only => impossible"
+    assert source_slice(source, info.body) == "impossible"
     assert Printer.quoted_to_string(parse!(source)) =~ "case only => impossible"
   end
 
@@ -119,4 +135,6 @@ defmodule Cure.Compiler.ProofInductionTest do
     {diagnostic, _registry} = Cure.Compiler.Errors.to_diagnostic({:parse_error, [error]}, "nofile", source)
     assert diagnostic.suggestions == []
   end
+
+  defp source_slice(source, span), do: binary_part(source, span.start_byte, span.end_byte - span.start_byte)
 end
