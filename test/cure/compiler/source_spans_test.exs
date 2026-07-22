@@ -397,6 +397,36 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert info.branches == []
   end
 
+  test "protocol implementations own dotted heads, requirements, and member ranges" do
+    source = "impl Std.Show for Option(Int) requires Eq(Int)\n  fn show(x: Option(Int)) -> String = \"x\"\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "protocol_impl.cure", emit_events: false)
+
+    assert {:ok, {:container, meta, [_member]}} =
+             Parser.parse(tokens, file: "protocol_impl.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == String.trim_trailing(source)
+    assert slice(source, info.opener) == "impl"
+    assert slice(source, info.name) == "Std.Show"
+    assert slice(source, info.annotation) == "Option(Int)"
+    assert slice(source, Map.fetch!(info.fields, :for_keyword)) == "for"
+    assert slice(source, Map.fetch!(info.fields, :requirements)) == "requires Eq(Int)"
+    assert Enum.map(info.branches, &slice(source, &1)) == ["fn show(x: Option(Int)) -> String = \"x\""]
+  end
+
+  test "an empty protocol implementation range ends at its implemented type" do
+    source = "impl Show for Int\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "empty_protocol_impl.cure", emit_events: false)
+
+    assert {:ok, {:container, meta, []}} =
+             Parser.parse(tokens, file: "empty_protocol_impl.cure", emit_events: false, prelude_macros: false)
+
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == "impl Show for Int"
+    assert slice(source, info.annotation) == "Int"
+    assert info.branches == []
+  end
+
   test "record declaration fields retain authored parameter ranges" do
     source = "rec Point\n  x: Int = 0\n  y: String\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "record_decl.cure", emit_events: false)

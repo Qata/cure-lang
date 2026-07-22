@@ -9859,17 +9859,24 @@ defmodule Cure.Compiler.Parser do
 
     # Protocol name
     proto_start = peek(state)
-    {proto_name, state} = parse_dotted_name(state)
-    proto_end = authored_token(state)
+    {proto_name, proto_end, state} = parse_dotted_name_owned(state)
 
     # Expect `for`
+    for_token = peek(state)
     state = expect_keyword(state, :for)
 
     # Type being implemented
     {for_type, state} = parse_type_expr(state)
 
     # Optional implementation requirements.
+    requirements_token = peek(state)
     {constraints, state} = parse_requirements_clause(state)
+
+    requirements_span =
+      case constraints |> List.last() |> ast_source_span() do
+        %Cure.Diagnostic.Span{} = last -> through_spans(requirements_token.span, last)
+        _ -> nil
+      end
 
     state = skip_newlines(state)
     {body, state} = parse_definition_block(state)
@@ -9892,7 +9899,28 @@ defmodule Cure.Compiler.Parser do
     ]
 
     meta = if constraints != [], do: Keyword.put(meta, :constraints, constraints), else: meta
-    meta = put_container_source_info(meta, token, proto_start, proto_end, state)
+
+    protocol_span = through_spans(proto_start.span, proto_end.span) || proto_start.span
+    for_type_span = ast_source_span(for_type)
+    branches = body |> Enum.map(&ast_source_span/1) |> Enum.reject(&is_nil/1)
+    terminal_span = List.last(branches) || requirements_span || for_type_span || protocol_span
+
+    source_fields =
+      %{}
+      |> maybe_put_source_field(:for_keyword, for_token)
+      |> maybe_put_source_field(:for_type, for_type_span)
+      |> maybe_put_source_field(:requirements, requirements_span)
+
+    meta =
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: through_spans(token.span, terminal_span) || token.span,
+        opener: token.span,
+        name: protocol_span,
+        annotation: for_type_span,
+        branches: branches,
+        fields: source_fields
+      })
+
     ast = {:container, meta, body}
     {ast, state}
   end
