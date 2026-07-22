@@ -323,6 +323,30 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.body) == "impossible"
   end
 
+  test "pickup expressions and clauses retain exact branch and arrow ranges" do
+    source = "fn choose(flag: Bool) -> Int = pickup\n  flag -> 1\n  else -> 0\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "pickup.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "pickup.cure", emit_events: false, prelude_macros: false)
+
+    {:pickup, pickup_meta, [clause, fallback]} = find_node(ast, :pickup)
+    pickup_info = Metadata.source_info(pickup_meta)
+    assert slice(source, pickup_info.whole) == "pickup\n  flag -> 1\n  else -> 0"
+    assert slice(source, pickup_info.opener) == "pickup"
+    assert Enum.map(pickup_info.branches, &slice(source, &1)) == ["flag -> 1", "else -> 0"]
+
+    {:pickup_clause, clause_meta, _} = clause
+    clause_info = Metadata.source_info(clause_meta)
+    assert slice(source, clause_info.condition) == "flag"
+    assert slice(source, clause_info.operator) == "->"
+    assert slice(source, clause_info.body) == "1"
+
+    {:pickup_else, fallback_meta, _} = fallback
+    fallback_info = Metadata.source_info(fallback_meta)
+    assert slice(source, fallback_info.name) == "else"
+    assert slice(source, fallback_info.operator) == "->"
+    assert slice(source, fallback_info.body) == "0"
+  end
+
   test "match expressions retain their whole and branch-owned spans" do
     source = "fn choose(x: Int) -> Int = match x\n  n -> n\n  _ -> 0\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "match.cure", emit_events: false)

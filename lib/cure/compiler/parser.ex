@@ -7029,7 +7029,15 @@ defmodule Cure.Compiler.Parser do
 
     state = validate_pickup_clauses(clauses, token, state)
 
-    meta = [line: token.line, col: token.col]
+    branches = clauses |> Enum.map(&pickup_clause_span/1) |> Enum.reject(&is_nil/1)
+
+    meta =
+      Metadata.put_source_info([line: token.line, col: token.col], %SourceInfo{
+        whole: through_spans(token.span, List.last(branches)) || token.span,
+        opener: token.span,
+        branches: branches
+      })
+
     {{:pickup, meta, clauses}, state}
   end
 
@@ -7057,44 +7065,50 @@ defmodule Cure.Compiler.Parser do
     case peek(state) do
       %Token{type: :keyword, value: :else} = tok ->
         state = advance(state)
-        state = expect_branch_arrow(state, :pickup_else, tok.span)
+        {arrow_token, state} = expect_branch_arrow_token(state, :pickup_else, tok.span)
         state = skip_newlines(state)
         {body, state} = parse_expr_or_block(state)
-        meta = put_pickup_clause_source_info([line: tok.line, col: tok.col], tok, nil, body, state)
+
+        meta =
+          put_pickup_clause_source_info(
+            [line: tok.line, col: tok.col],
+            tok,
+            nil,
+            arrow_token,
+            body
+          )
+
         {{:pickup_else, meta, [body]}, state}
 
       tok ->
         {guard, state} = parse_expr(state, 0)
         state = skip_newlines(state)
-        state = expect_branch_arrow(state, :pickup_clause, guard)
+        {arrow_token, state} = expect_branch_arrow_token(state, :pickup_clause, guard)
         state = skip_newlines(state)
         {body, state} = parse_expr_or_block(state)
-        meta = put_pickup_clause_source_info([line: tok.line, col: tok.col], tok, guard, body, state)
+
+        meta =
+          put_pickup_clause_source_info(
+            [line: tok.line, col: tok.col],
+            tok,
+            guard,
+            arrow_token,
+            body
+          )
+
         {{:pickup_clause, meta, [guard, body]}, state}
     end
   end
 
-  defp put_pickup_clause_source_info(meta, token, guard, body, state) do
-    whole =
-      case {token.span, authored_token(state)} do
-        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
-          case Range.through(first, last) do
-            {:ok, span} -> span
-            _ -> first
-          end
+  defp put_pickup_clause_source_info(meta, token, guard, arrow_token, body) do
+    body_span = first_node_source_span(body)
 
-        {%Cure.Diagnostic.Span{} = first, _} ->
-          first
-
-        _ ->
-          nil
-      end
-
-    Keyword.put(meta, :source_info, %SourceInfo{
-      whole: whole,
+    Metadata.put_source_info(meta, %SourceInfo{
+      whole: through_spans(token.span, body_span) || token.span,
       name: token.span,
+      operator: arrow_token && arrow_token.span,
       condition: first_node_source_span(guard),
-      body: first_node_source_span(body)
+      body: body_span
     })
   end
 
