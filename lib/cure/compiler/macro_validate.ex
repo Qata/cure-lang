@@ -80,7 +80,8 @@ defmodule Cure.Compiler.MacroValidate do
               :rule_unpinned,
               :example_mismatch,
               :example_type_mismatch,
-              :computed_example_error
+              :computed_example_error,
+              :expansion_ill_typed
             ] do
     {:error, {:source_context, reason, validation_source_context(reason, meta, rules)}}
   end
@@ -178,6 +179,25 @@ defmodule Cure.Compiler.MacroValidate do
       related_spans: rule_spans ++ Enum.drop(hole_spans, 1),
       macro: Keyword.get(meta, :name),
       expression_category: :macro_validation
+    }
+  end
+
+  defp validation_source_context({:expansion_ill_typed, details}, meta, rules) do
+    keyword = Map.get(details, :keyword)
+    rule = Enum.find(rules, &(&1[:kind] in [:syntax, :computed] and &1[:keyword] == keyword))
+    macro_span = macro_source_span(meta)
+    rule_span = rule && (rule[:head_span] || rule[:source_span])
+    authored_span = rule && (rule[:body_span] || rule_span)
+
+    %{
+      span: authored_span || rule_span || macro_span,
+      macro_span: macro_span,
+      rule_span: rule_span,
+      related_spans: Enum.reject([rule_span], &is_nil/1),
+      macro: Keyword.get(meta, :name),
+      rule_kind: rule && rule[:kind],
+      keyword: keyword,
+      expression_category: :macro_expansion_proof
     }
   end
 

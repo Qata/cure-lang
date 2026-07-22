@@ -157,7 +157,12 @@ defmodule Cure.Compiler.Errors do
   @doc "Convert an error at the compiler presentation boundary."
   @spec to_diagnostic(term(), String.t(), String.t()) ::
           {Cure.Diagnostic.t(), Cure.Diagnostic.SourceRegistry.t()}
-  def to_diagnostic(error, file, source) do
+  def to_diagnostic(error, file, source), do: to_diagnostic(error, file, source, [])
+
+  @doc "Convert an error with presentation options such as `debug: true`."
+  @spec to_diagnostic(term(), String.t(), String.t(), keyword()) ::
+          {Cure.Diagnostic.t(), Cure.Diagnostic.SourceRegistry.t()}
+  def to_diagnostic(error, file, source, presentation_opts) do
     # The source identity is the same identity carried by lexer/parser spans.
     # Keeping it stable lets unsaved LSP buffers and generated source registries
     # resolve exact UTF-8/16/32 positions without a scalar-column fallback.
@@ -179,6 +184,11 @@ defmodule Cure.Compiler.Errors do
         [] -> opts
         patterns -> Keyword.put(opts, :branch_patterns, remap_branch_patterns(patterns, registry, source_id))
       end
+
+    opts =
+      if Keyword.get(presentation_opts, :debug, false),
+        do: Keyword.put(opts, :debug, true),
+        else: opts
 
     diagnostic =
       if operational_error?(error) do

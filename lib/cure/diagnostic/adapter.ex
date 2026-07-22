@@ -614,6 +614,10 @@ defmodule Cure.Diagnostic.Adapter do
   def from_error({:source_context, {:reserved_syntax_field, field, keywords}, context}, opts) when is_map(context),
     do: macro_validation_failure(:reserved_syntax_field, %{first: field, second: keywords}, opts, context)
 
+  def from_error({:source_context, {:expansion_ill_typed, details}, context}, opts)
+      when is_map(details) and is_map(context),
+      do: expansion_proof_failure(details, context, opts)
+
   def from_error({:example_mismatch, mismatches}, opts),
     do: macro_validation_failure(:example_mismatch, mismatches, opts)
 
@@ -4411,6 +4415,55 @@ defmodule Cure.Diagnostic.Adapter do
   defp known_erasure_classes_hint do
     [:pid, :reference, :integer, :float, :binary, :atom, :boolean, :list]
     |> Enum.map_join(", ", &Atom.to_string/1)
+  end
+
+  defp expansion_proof_failure(details, context, opts) do
+    keyword = Map.get(details, :keyword, Map.get(context, :keyword, "computed"))
+    rule_kind = Map.get(context, :rule_kind)
+
+    source =
+      case rule_kind do
+        :computed -> "computed expander"
+        _ -> "expansion template"
+      end
+
+    payload = %{
+      keyword: keyword,
+      macro: Map.get(context, :macro),
+      rule_kind: rule_kind,
+      shrunk_hole: Map.get(details, :shrunk_hole)
+    }
+
+    payload =
+      if Keyword.get(opts, :debug, false) do
+        Map.merge(payload, %{
+          generated_input: Map.get(details, :input),
+          generated_bindings: Map.get(details, :generated_bindings),
+          expansion: Map.get(details, :expansion),
+          internal_reason: Map.get(details, :kernel_error) || Map.get(details, :reason)
+        })
+      else
+        payload
+      end
+
+    Diagnostic.new(
+      code: "E092",
+      key: :macro_expansion_failed,
+      severity: :error,
+      title: "Macro rule can generate ill-typed code",
+      body:
+        Doc.paragraph("The `#{keyword}` rule has a generated counterexample that the dependent elaborator rejects."),
+      primary: pickup_label(Map.get(context, :span), :primary, "this #{source} produces the invalid expansion"),
+      suggestions: [
+        %Suggestion{
+          message: "Fix the `#{keyword}` rule so every accepted input produces well-typed Cure code",
+          applicability: :manual
+        }
+      ],
+      notes: ["The generated counterexample and internal elaboration reason are available in debug output."],
+      provenance: Keyword.get(opts, :provenance, []),
+      payload: payload
+    )
   end
 
   defp macro_validation_failure(kind, details, opts), do: macro_validation_failure(kind, details, opts, %{})

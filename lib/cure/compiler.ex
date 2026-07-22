@@ -544,6 +544,7 @@ defmodule Cure.Compiler do
            ) do
       {:ok, forms}
     else
+      {:error, {:source_context, {:expansion_ill_typed, _details}, _context} = reason} -> {:error, reason}
       {:error, reason} -> {:error, {:codegen_error, reason}}
     end
   end

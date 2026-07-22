@@ -200,7 +200,40 @@ defmodule Cure.Elab.MacroValidationWiringTest do
             "starts with bad"
     """
 
-    assert {:error, {:expansion_ill_typed, %{keyword: "bad", shrunk_term: _}}} =
-             Program.elaborate(source)
+    assert {:error,
+            {:source_context, {:expansion_ill_typed, %{keyword: "bad"}},
+             %{
+               span: %Cure.Diagnostic.Span{start_line: 3, start_column: 34},
+               rule_kind: :syntax
+             }} = reason} = Program.elaborate(source)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "expansion_proof.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO RULE CAN GENERATE ILL-TYPED CODE [E092] ---------- expansion_proof.cure
+
+             The `bad` rule has a generated counterexample that the dependent elaborator
+             rejects.
+
+             at expansion_proof.cure:3:34
+             3 |     syntax bad <n: Code> becomes n + true
+               |                                  ^^^^^^^^ this expansion template produces the invalid expansion
+
+             Note: The generated counterexample and internal elaboration reason are available
+                   in debug output.
+
+             Hint: Fix the `bad` rule so every accepted input produces well-typed Cure code
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 2, "character" => 33},
+             "end" => %{"line" => 2, "character" => 41}
+           }
+
+    refute Map.has_key?(diagnostic.payload, :internal_reason)
+    {debug_diagnostic, _registry} = Errors.to_diagnostic(reason, "expansion_proof.cure", source, debug: true)
+    assert Map.has_key?(debug_diagnostic.payload, :internal_reason)
+    assert Map.has_key?(debug_diagnostic.payload, :expansion)
   end
 end
