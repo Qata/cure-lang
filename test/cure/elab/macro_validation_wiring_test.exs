@@ -35,6 +35,46 @@ defmodule Cure.Elab.MacroValidationWiringTest do
              Program.elaborate(source)
   end
 
+  test "compilation points at a computed hole that claims the reserved context field" do
+    source = """
+    mod M
+      use Std.Syntax
+
+      macro Mk
+        syntax mk <context: Code> contextual computed by build_it
+
+      fn build_it(input: MkSyntax) -> Syntax = input.context
+    """
+
+    assert {:error,
+            {:source_context, {:reserved_syntax_field, "context", ["mk"]},
+             %{
+               span: %Cure.Diagnostic.Span{start_line: 5, start_column: 15},
+               rule_spans: [%Cure.Diagnostic.Span{}]
+             }} = reason} = Program.elaborate(source)
+
+    {diagnostic, registry} = Errors.to_diagnostic(reason, "reserved_context.cure", source)
+
+    assert Renderer.plain(diagnostic, registry, width: 80) ==
+             String.trim_trailing("""
+             -- MACRO HOLE USES A RESERVED NAME [E092] ---------------- reserved_context.cure
+
+             The hole `context` in the `mk` rule conflicts with the reflected expansion
+             context supplied to computed rules.
+
+             at reserved_context.cure:5:15
+             5 |     syntax mk <context: Code> contextual computed by build_it
+               |               ^^^^^^^^^^^^^^^ this hole name is reserved for expansion context
+
+             Hint: Rename this hole; `context` is supplied automatically
+             """)
+
+    assert Renderer.lsp(diagnostic, registry)["range"] == %{
+             "start" => %{"line" => 4, "character" => 14},
+             "end" => %{"line" => 4, "character" => 29}
+           }
+  end
+
   test "compilation rejects a mismatched syntax expansion pin" do
     source = """
     mod M

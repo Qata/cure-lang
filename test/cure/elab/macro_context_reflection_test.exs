@@ -91,7 +91,9 @@ defmodule Cure.Elab.MacroContextReflectionTest do
       fn build_it(input: MkSyntax) -> Syntax = input.context
     """
 
-    assert {:error, {:reserved_syntax_field, "context", ["mk"]}} = Program.elaborate(source)
+    assert {:error,
+            {:source_context, {:reserved_syntax_field, "context", ["mk"]},
+             %{span: %Cure.Diagnostic.Span{start_line: 5, start_column: 15}}}} = Program.elaborate(source)
   end
 
   test "the generic syntax input carries no context attribute outside a callback" do

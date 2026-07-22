@@ -11413,7 +11413,9 @@ defmodule Cure.Compiler.Parser do
     keyword = to_string(keyword_token.value)
     state = advance(state)
 
+    segment_start = state.pos
     {segments, _segment_span, state} = parse_rule_segments(state, [])
+    field_spans = macro_rule_field_spans(state, segment_start, state.pos)
     {category, state} = parse_rule_category(state)
     {obligations, state} = parse_capture_obligations(state, macro_syntax_fields(segments))
 
@@ -11425,10 +11427,10 @@ defmodule Cure.Compiler.Parser do
 
     case peek(state) do
       %Token{type: :identifier, value: "computed"} ->
-        parse_computed_rule(state, kw_token, keyword, segments, category, contextual, obligations)
+        parse_computed_rule(state, kw_token, keyword, segments, field_spans, category, contextual, obligations)
 
       _ ->
-        parse_becomes_rule(state, kw_token, keyword, segments, category, contextual, obligations)
+        parse_becomes_rule(state, kw_token, keyword, segments, field_spans, category, contextual, obligations)
     end
   end
 
@@ -11556,7 +11558,7 @@ defmodule Cure.Compiler.Parser do
   end
 
   # Tier-2: `becomes <template>` (unchanged behaviour, just extracted).
-  defp parse_becomes_rule(state, kw_token, keyword, segments, category, contextual, obligations) do
+  defp parse_becomes_rule(state, kw_token, keyword, segments, field_spans, category, contextual, obligations) do
     state = expect_macro_rule_keyword(state, :becomes, :macro_rule_becomes_missing, kw_token)
 
     {template, state} = parse_expr(state, 0)
@@ -11567,6 +11569,7 @@ defmodule Cure.Compiler.Parser do
       kind: :syntax,
       keyword: keyword,
       segments: segments,
+      field_spans: field_spans,
       template: template,
       examples: examples,
       category: category,
@@ -11586,7 +11589,7 @@ defmodule Cure.Compiler.Parser do
   # reference; running it is a later slice. NOT harvested into active_macros
   # (harvest filters kind: :syntax), so a computed macro's use-site is inert
   # until the execution slice lands.
-  defp parse_computed_rule(state, kw_token, keyword, segments, category, contextual, obligations) do
+  defp parse_computed_rule(state, kw_token, keyword, segments, field_spans, category, contextual, obligations) do
     state = advance(state)
 
     # Optional `directly` opt-in: the elab fn receives each matched hole as its
@@ -11611,6 +11614,7 @@ defmodule Cure.Compiler.Parser do
       segments: segments,
       syntax_type: macro_syntax_type(keyword),
       syntax_fields: macro_syntax_fields(segments),
+      field_spans: field_spans,
       syntax_repeated_fields: macro_syntax_repeated_fields(segments),
       syntax_field_types: macro_syntax_field_types(segments),
       direct_inputs: direct_inputs,
@@ -11630,6 +11634,35 @@ defmodule Cure.Compiler.Parser do
   end
 
   defp macro_syntax_type(keyword), do: MacroFamily.syntax_type(keyword)
+
+  defp macro_rule_field_spans(state, start_pos, end_pos) when end_pos > start_pos do
+    Enum.reduce(start_pos..(end_pos - 1), %{}, fn index, spans ->
+      case {token_at(state, index), token_at(state, index + 1), token_at(state, index + 2)} do
+        {%Token{type: :lt} = opener, %Token{type: :identifier, value: name}, %Token{type: :colon}} ->
+          closer =
+            Enum.find_value(Elixir.Range.new(index + 3, end_pos - 1, 1), fn closer_index ->
+              case token_at(state, closer_index) do
+                %Token{type: :gt} = token -> token
+                _ -> nil
+              end
+            end)
+
+          span = closer && (through_spans(opener.span, closer.span) || opener.span)
+
+          if span do
+            Map.update(spans, to_string(name), [span], &[span | &1])
+          else
+            spans
+          end
+
+        _ ->
+          spans
+      end
+    end)
+    |> Map.new(fn {name, spans} -> {name, Enum.reverse(spans)} end)
+  end
+
+  defp macro_rule_field_spans(_state, _start_pos, _end_pos), do: %{}
 
   # A rule may optionally declare the category it produces. Categories are
   # metadata for the macro grammar; expansion remains ordinary AST rewriting.

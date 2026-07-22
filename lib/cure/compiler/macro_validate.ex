@@ -85,6 +85,13 @@ defmodule Cure.Compiler.MacroValidate do
     {:error, {:source_context, reason, validation_source_context(reason, meta, rules)}}
   end
 
+  defp contextualize_validation(
+         {:error, {:reserved_syntax_field, _field, _keywords} = reason},
+         {:macro_def, meta, rules}
+       ) do
+    {:error, {:source_context, reason, validation_source_context(reason, meta, rules)}}
+  end
+
   defp contextualize_validation({:error, _reason} = error, _macro_def), do: error
 
   defp validation_source_context({:missing_diagnosis, points}, meta, rules) do
@@ -147,6 +154,30 @@ defmodule Cure.Compiler.MacroValidate do
       related_spans: rule_spans ++ Enum.drop(example_spans, 1),
       macro: Keyword.get(meta, :name),
       expression_category: :macro_example_validation
+    }
+  end
+
+  defp validation_source_context({:reserved_syntax_field, field, keywords}, meta, rules) do
+    offending =
+      for rule <- rules,
+          rule[:kind] == :computed,
+          rule.keyword in keywords,
+          hole_span <- List.wrap(get_in(rule, [:field_spans, field])) do
+        %{hole_span: hole_span, rule_span: rule[:head_span] || rule[:source_span]}
+      end
+
+    hole_spans = offending |> Enum.map(& &1.hole_span) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    rule_spans = offending |> Enum.map(& &1.rule_span) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+    macro_span = macro_source_span(meta)
+
+    %{
+      span: List.first(hole_spans) || List.first(rule_spans) || macro_span,
+      macro_span: macro_span,
+      hole_spans: hole_spans,
+      rule_spans: rule_spans,
+      related_spans: rule_spans ++ Enum.drop(hole_spans, 1),
+      macro: Keyword.get(meta, :name),
+      expression_category: :macro_validation
     }
   end
 
