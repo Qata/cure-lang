@@ -267,6 +267,18 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.annotation) == "Tuple(a, b)"
   end
 
+  test "primitive declarations end exactly at their authored names" do
+    source = "primitive Word\nfn next(x: Word) -> Word = x\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "primitive.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "primitive.cure", emit_events: false, prelude_macros: false)
+
+    {:block, _, [{:container, meta, []}, _function]} = ast
+    info = Metadata.source_info(meta)
+    assert slice(source, info.whole) == "primitive Word"
+    assert slice(source, info.opener) == "primitive"
+    assert slice(source, info.name) == "Word"
+  end
+
   test "ADT variants retain exact constructor names and extents" do
     source = "type Maybe = None | Some(Int)\n"
     assert {:ok, tokens} = Lexer.tokenize(source, file: "variants.cure", emit_events: false)

@@ -9037,8 +9037,14 @@ defmodule Cure.Compiler.Parser do
       col: token.col
     ]
 
-    ast = {:container, meta, []}
-    {put_type_decl_source_info(ast, token, name_token, state), state}
+    meta =
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: through_spans(token.span, name_token.span) || token.span,
+        opener: token.span,
+        name: name_token.span
+      })
+
+    {{:container, meta, []}, state}
   end
 
   defp parse_type_def(state, opts \\ []) do
