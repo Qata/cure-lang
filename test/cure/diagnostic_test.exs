@@ -260,7 +260,7 @@ defmodule Cure.DiagnosticTest do
 
   test "kernel, module, extern, and macro rejection families have structured verdicts" do
     cases = [
-      {{:hole_in_inference_position, "h"}, "E093"},
+      {{:hole_in_inference_position, "h"}, "E014"},
       {{:ctor_requires_checking_mode, "Nat"}, "E093"},
       {{:bounded_bound_not_concrete, {:literal, 10}}, "E093"},
       {{:cyclic_typealiases, ["A", "B"]}, "E105"},

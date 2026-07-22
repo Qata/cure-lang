@@ -736,8 +736,9 @@ defmodule Cure.Compiler.Lexer do
       end)
 
     {name, state} =
-      if name == "" and peek(state) == ?? do
-        {"?", advance(state, 1)}
+      if name == "" do
+        {questions, state} = consume_while(state, &(&1 == ??))
+        {if(questions == "", do: "", else: "?"), state}
       else
         {name, state}
       end

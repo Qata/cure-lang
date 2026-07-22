@@ -126,7 +126,7 @@ defmodule Cure.DiagnosticExerciserTest do
       {"union runtime collision", "E105", {:same_runtime_shape, [:Left, :Right]}},
       {"deriving failure", "E105", {:cannot_derive, :Show}},
       {"kernel index mismatch", "E093", {:index_mismatch, :different_index}},
-      {"kernel inference hole", "E093", {:hole_in_inference_position, "h"}},
+      {"kernel inference hole", "E014", {:hole_in_inference_position, "h"}},
       {"constructor needs checking", "E093", {:ctor_requires_checking_mode, :Nat}},
       {"non-concrete bound", "E093", {:bounded_bound_not_concrete, {:var, 0}}},
       {"cyclic type aliases", "E105", {:cyclic_typealiases, ["A", "B", "A"]}},

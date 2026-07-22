@@ -1153,6 +1153,14 @@ defmodule Cure.Diagnostic.Adapter do
     final_core_failure(name, rejections, opts)
   end
 
+  def from_error(
+        {:source_context, {:unsupported_expression, {:hole, meta, _children}}, context},
+        opts
+      )
+      when is_list(meta) and is_map(context) do
+    inferred_hole_failure(Keyword.get(meta, :name), context, opts)
+  end
+
   def from_error({:source_context, reason, context}, opts) when is_map(context) do
     opts =
       opts
@@ -1218,7 +1226,7 @@ defmodule Cure.Diagnostic.Adapter do
     do: kernel_type_failure(:escaping_variable, opts)
 
   def from_error({:hole_in_inference_position, name}, opts),
-    do: kernel_type_failure(:hole_in_inference_position, Keyword.put(opts, :name, name))
+    do: inferred_hole_failure(name, %{}, opts)
 
   def from_error({:ctor_requires_checking_mode, family}, opts),
     do: kernel_type_failure(:ctor_requires_checking_mode, Keyword.put(opts, :family, family))
@@ -3817,6 +3825,37 @@ defmodule Cure.Diagnostic.Adapter do
 
   defp totality_labels([], _definition, opts) do
     {primary_label(opts, "this definition is used in a type and must always terminate"), []}
+  end
+
+  defp inferred_hole_failure(name, context, opts) do
+    opts =
+      case Map.get(context, :span) do
+        %Span{} = span -> Keyword.put_new(opts, :span, span)
+        _ -> opts
+      end
+
+    Diagnostic.new(
+      code: "E014",
+      key: :unfilled_hole,
+      severity: :error,
+      title: "Hole needs a type annotation",
+      body:
+        Doc.paragraph(
+          "Cure cannot infer what this hole should contain because the surrounding definition has no declared result type."
+        ),
+      primary: primary_label(opts, "this hole has no expected type"),
+      suggestions: [
+        %Suggestion{
+          message: "Declare the result type after `->`, then replace the hole with an expression of that type",
+          applicability: :manual
+        }
+      ],
+      payload: %{
+        kind: :inference_position,
+        name: name,
+        checking: Map.get(context, :checking, Keyword.get(opts, :checking))
+      }
+    )
   end
 
   defp coverage_problem(kind, branch, context, opts) do
