@@ -10,20 +10,25 @@ defmodule Cure.Compiler.ErgonomicsBatchTest do
   end
 
   test "leading pipes continue an expression across lines" do
-    ast =
-      parse!("""
+    source = """
       mod Pipe
         fn value() -> Int =
           1
           |> add(2)
           |> add(3)
-      """)
+    """
+
+    ast = parse!(source)
 
     assert {:container, _, [{:function_def, _, [body]}]} = ast
     assert {:function_call, meta, [_arg, _]} = body
-    assert Keyword.take(meta, [:name, :pipe, :line, :col]) == [name: "add", pipe: true, line: 5, col: 5]
-    assert %Cure.MetaAST.SourceInfo{} = meta[:source_info]
+    assert Keyword.take(meta, [:name, :pipe]) == [name: "add", pipe: true]
+    assert %Cure.MetaAST.SourceInfo{whole: whole, operator: operator} = meta[:source_info]
+    assert source_slice(source, whole) == "1\n      |> add(2)\n      |> add(3)"
+    assert source_slice(source, operator) == "|>"
   end
+
+  defp source_slice(source, span), do: binary_part(source, span.start_byte, span.end_byte - span.start_byte)
 
   test "where functions attach to the enclosing function" do
     ast =
