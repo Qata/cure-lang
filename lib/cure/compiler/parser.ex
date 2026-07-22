@@ -5222,10 +5222,11 @@ defmodule Cure.Compiler.Parser do
       # Shorthand: identifier followed by colon  =>  atom key
       token.type == :identifier and next != nil and next.type == :colon ->
         key_atom = String.to_atom(token.value)
+        separator_token = next
         state = advance(state) |> advance()
         state = skip_newlines(state)
         {value, state} = parse_expr(state, 0)
-        pair_meta = put_field_source_info([], token, state, token.span)
+        pair_meta = put_field_source_info([], token, token.span, separator_token, value)
         pair = {:pair, pair_meta, [{:literal, [subtype: :symbol], key_atom}, value]}
         {pair, state}
 
@@ -5238,7 +5239,7 @@ defmodule Cure.Compiler.Parser do
         key_atom = String.to_atom(token.value)
         var_ast = variable(token)
         state = advance(state)
-        pair_meta = put_field_source_info([pun: true], token, state, token.span)
+        pair_meta = put_field_source_info([pun: true], token, token.span, nil, var_ast)
         pair = {:pair, pair_meta, [{:literal, [subtype: :symbol], key_atom}, var_ast]}
         {pair, state}
 
@@ -5246,10 +5247,19 @@ defmodule Cure.Compiler.Parser do
         # Explicit: key => value
         {key, state} = parse_expr(state, 0)
         state = skip_newlines(state)
-        state = expect_map_entry_separator(state, open_token, token, key, container)
+        {separator_token, state} = expect_map_entry_separator(state, open_token, token, key, container)
         state = skip_newlines(state)
         {value, state} = parse_expr(state, 0)
-        pair_meta = put_field_source_info([field: field_name(key)], token, state, first_node_source_span(key))
+
+        pair_meta =
+          put_field_source_info(
+            [field: field_name(key)],
+            token,
+            first_node_source_span(key),
+            separator_token,
+            value
+          )
+
         pair = {:pair, pair_meta, [key, value]}
         {pair, state}
     end
@@ -5257,8 +5267,8 @@ defmodule Cure.Compiler.Parser do
 
   defp expect_map_entry_separator(state, open_token, entry_token, key, container) do
     case expect_token(state, :fat_arrow) do
-      {:ok, _arrow, next_state} ->
-        next_state
+      {:ok, arrow, next_state} ->
+        {arrow, next_state}
 
       {:error, next_state} ->
         [_generic | rest] = next_state.errors
@@ -5284,28 +5294,21 @@ defmodule Cure.Compiler.Parser do
              column: observed.col
            }}
 
-        %{next_state | errors: [error | rest]}
+        {nil, %{next_state | errors: [error | rest]}}
     end
   end
 
-  defp put_field_source_info(meta, start_token, state, field_span) do
-    close_token = authored_token(state)
-
-    whole =
-      case {start_token.span, close_token} do
-        {%Cure.Diagnostic.Span{} = first, %Token{} = last} ->
-          case Range.through(first, last) do
-            {:ok, span} -> span
-            _ -> nil
-          end
-
-        _ ->
-          nil
-      end
+  defp put_field_source_info(meta, start_token, field_span, separator_token, value) do
+    value_span = ast_source_span(value)
+    whole = through_spans(start_token.span, value_span) || start_token.span
 
     if whole do
-      info = %SourceInfo{whole: whole, name: field_span}
-      Keyword.put(meta, :source_info, info)
+      Metadata.put_source_info(meta, %SourceInfo{
+        whole: whole,
+        name: field_span,
+        operator: separator_token && separator_token.span,
+        body: value_span
+      })
     else
       meta
     end

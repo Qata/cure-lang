@@ -446,7 +446,7 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert {:ok, tokens} = Lexer.tokenize(source, file: "record.cure", emit_events: false)
     assert {:ok, ast} = Parser.parse(tokens, file: "record.cure", emit_events: false, prelude_macros: false)
 
-    {:function_call, meta, _fields} = find_node(ast, :function_call)
+    {:function_call, meta, fields} = find_node(ast, :function_call)
     info = Metadata.source_info(meta)
 
     assert slice(source, info.whole) == "Point{x: 0, y: 0}"
@@ -455,6 +455,40 @@ defmodule Cure.Compiler.SourceSpansTest do
     assert slice(source, info.closer) == "}"
     assert slice(source, Map.fetch!(info.fields, :x)) == "x"
     assert slice(source, Map.fetch!(info.fields, :y)) == "y"
+
+    assert [x_pair, y_pair] = fields
+
+    for {pair, expected_name, expected_value} <- [{x_pair, "x", "0"}, {y_pair, "y", "0"}] do
+      {:pair, pair_meta, _} = pair
+      pair_info = Metadata.source_info(pair_meta)
+      assert slice(source, pair_info.whole) == "#{expected_name}: #{expected_value}"
+      assert slice(source, pair_info.name) == expected_name
+      assert slice(source, pair_info.operator) == ":"
+      assert slice(source, pair_info.body) == expected_value
+    end
+  end
+
+  test "explicit map entries and field puns retain exact source roles" do
+    source = "fn fields(x: Int) = %{:answer => 42, x}\n"
+    assert {:ok, tokens} = Lexer.tokenize(source, file: "map.cure", emit_events: false)
+    assert {:ok, ast} = Parser.parse(tokens, file: "map.cure", emit_events: false, prelude_macros: false)
+
+    pairs = collect_nodes(ast, :pair)
+    assert [explicit, pun] = pairs
+
+    {:pair, explicit_meta, _} = explicit
+    explicit_info = Metadata.source_info(explicit_meta)
+    assert slice(source, explicit_info.whole) == ":answer => 42"
+    assert slice(source, explicit_info.name) == ":answer"
+    assert slice(source, explicit_info.operator) == "=>"
+    assert slice(source, explicit_info.body) == "42"
+
+    {:pair, pun_meta, _} = pun
+    pun_info = Metadata.source_info(pun_meta)
+    assert slice(source, pun_info.whole) == "x"
+    assert slice(source, pun_info.name) == "x"
+    assert pun_info.operator == nil
+    assert slice(source, pun_info.body) == "x"
   end
 
   test "operators and containers retain token-owned focused ranges" do
@@ -608,6 +642,15 @@ defmodule Cure.Compiler.SourceSpansTest do
 
   defp find_node(tuple, tag) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> find_node(tag)
   defp find_node(_, _), do: nil
+
+  defp collect_nodes({node_tag, _, payload} = node, wanted_tag) do
+    own = if node_tag == wanted_tag, do: [node], else: []
+    own ++ collect_nodes(payload, wanted_tag)
+  end
+
+  defp collect_nodes(list, tag) when is_list(list), do: Enum.flat_map(list, &collect_nodes(&1, tag))
+  defp collect_nodes(tuple, tag) when is_tuple(tuple), do: tuple |> Tuple.to_list() |> collect_nodes(tag)
+  defp collect_nodes(_, _), do: []
 
   defp slice(source, span), do: binary_part(source, span.start_byte, span.end_byte - span.start_byte)
 end
